@@ -20,6 +20,48 @@ Greenfield at `~/wash`, AGPL-3.0. Two-stage build: frontend → brotli →
 `go build` with `//go:embed`; dev mode serves the frontend from Vite, prod
 serves it from the binary. Cross-compile targets include arm64.
 
+## v0.0 — Walking skeleton (first milestone)
+
+Goal: a desktop with a single floating "About" window — implemented as a
+**separate app**. The smallness of the feature surface is the point; the
+separateness of About from the session app is what makes this a real
+milestone.
+
+What v0.0 must prove, end to end, in one running binary set:
+
+- Router spawns the session app over an inherited-fd Unix socket.
+- The session app's web component is mounted by the shell runtime **as the
+  root desktop surface** (not a floating window) — the first concrete
+  realization of "the DE chrome is the session app's web component."
+- Discovery of installed apps via the **real `--wash-manifest` probe** at
+  router load (not a hardcoded list).
+- The session app uses the **spawn capability** to launch the About app on
+  user click in a minimal launcher.
+- The About app handshakes, serves its embedded web-component bundle via the
+  **asset-pull** path, and renders in a **floating window** with a titlebar,
+  drag, focus-on-click, and a close button. Opening About twice yields two
+  windows that focus/raise correctly.
+- The X-style **close handshake** completes (router CLOSE_REQUESTED →
+  `wash_confirm_close` → teardown).
+
+Out of scope in v0.0 (deferred to later phases): raw channels, splice,
+credit/backpressure, pty, fs, dialogs, window resize/min/max, taskbar,
+persistence/reattach.
+
+The wire spec drafted for v0.0 covers framing, channel 0 (handshake /
+identity / asset pull) and the event channel (a handful of window/lifecycle
+messages + the spawn request) — about a third of the full wire — and is
+designed so the deferred parts slot in without rework. See
+[WIRE.md](WIRE.md).
+
+**Exit:** click the launcher → an About window appears, drags, focuses, closes.
+Opening About again opens a second window. Killing the router cleanly tears
+down the children.
+
+---
+
+## Toward v1
+
 ## Phase 0 — Spec & scaffold (the gate)
 
 Write the wire spec — the contract both halves and the SDK compile against:
@@ -37,6 +79,10 @@ embed+brotli pipeline, cross-compile setup.
 
 **Exit:** the spec document exists and a frame codec passes round-trip tests in
 both Go and C.
+
+v0.0 ships a scoped slice of this spec (see above); Phase 0 completes the
+rest — raw-channel discipline, credit/backpressure encoding, splice
+attach/detach, dialog request/response, fs messages.
 
 ## Phase 1 — Walking skeleton
 
@@ -81,6 +127,9 @@ Now it becomes a desktop.
 
 **Exit:** menu → launch terminal → a focused, draggable, resizable floating
 window; close/min/restore work.
+
+Widens v0.0's minimal WM (drag / focus-raise / close) to add resize, min/max/
+restore, z-order rules, and the taskbar.
 
 ## Phase 4 — fs service + file manager + dialogs
 
