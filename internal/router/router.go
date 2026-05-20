@@ -43,6 +43,11 @@ type Config struct {
 	// app it spawns, so children (including shells in wash-term) can
 	// invoke launches without re-discovering it.
 	ControlSocket string
+
+	// ScreenshotDir is where POST /screenshot writes PNG files. Empty
+	// disables the endpoint. Files are named with the timestamp at
+	// upload time.
+	ScreenshotDir string
 }
 
 // Logger is a minimal sink; cmd/wash-router supplies a real one.

@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/coder/websocket"
@@ -37,8 +40,56 @@ type HTTPServer struct {
 func NewHTTPServer(r *Router, assets http.FileSystem) *HTTPServer {
 	s := &HTTPServer{router: r, assets: assets, mux: http.NewServeMux()}
 	s.mux.HandleFunc("/ws", s.handleWS)
+	s.mux.HandleFunc("/screenshot", s.handleScreenshot)
 	s.mux.HandleFunc("/", s.handleRoot)
 	return s
+}
+
+// MaxScreenshotBytes caps the size of one uploaded PNG. Plenty for
+// 4K desktops; rejects mistakes / abuse.
+const MaxScreenshotBytes = 32 * 1024 * 1024
+
+// handleScreenshot accepts a PNG body and writes it to
+// cfg.ScreenshotDir as <RFC3339-ish timestamp>.png. The directory is
+// created on first use. Response body is the saved filename (basename
+// only — the client never sees the absolute path).
+func (s *HTTPServer) handleScreenshot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	dir := s.router.cfg.ScreenshotDir
+	if dir == "" {
+		http.Error(w, "screenshot capture disabled", http.StatusServiceUnavailable)
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		s.router.log("screenshot mkdir %s: %v", dir, err)
+		http.Error(w, "save failed", http.StatusInternalServerError)
+		return
+	}
+	body := http.MaxBytesReader(w, r.Body, MaxScreenshotBytes)
+	defer body.Close()
+	data, err := io.ReadAll(body)
+	if err != nil {
+		http.Error(w, "read failed", http.StatusBadRequest)
+		return
+	}
+	if len(data) < 8 || string(data[:8]) != "\x89PNG\r\n\x1a\n" {
+		http.Error(w, "not a png", http.StatusUnsupportedMediaType)
+		return
+	}
+	name := time.Now().UTC().Format("2006-01-02T15-04-05.000Z") + ".png"
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		s.router.log("screenshot write %s: %v", path, err)
+		http.Error(w, "save failed", http.StatusInternalServerError)
+		return
+	}
+	s.router.log("screenshot saved %s (%d bytes)", path, len(data))
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = io.WriteString(w, name)
 }
 
 func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {

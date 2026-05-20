@@ -68,6 +68,7 @@ func main() {
 	initialApp := flag.String("initial-app", "", "spawn this app full-screen on first shell connect (kiosk)")
 	showHidden := flag.Bool("show-hidden", false, "include manifest.hidden apps in the catalog (e2e / debug)")
 	controlSocket := flag.String("control-socket", "", "Unix socket for wash-launch (default: /tmp/wash-<uid>.sock; \"none\" disables)")
+	screenshotDir := flag.String("screenshot-dir", "", "directory for POST /screenshot uploads (overrides WASH_SCREENSHOT_DIR; default: /tmp/wash-screenshots; \"none\" disables)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -84,6 +85,11 @@ func main() {
 		cs = ""
 	}
 
+	sd := firstNonEmpty(*screenshotDir, os.Getenv("WASH_SCREENSHOT_DIR"), "/tmp/wash-screenshots")
+	if sd == "none" {
+		sd = ""
+	}
+
 	cfg := router.Config{
 		Listen:        firstNonEmpty(*listen, os.Getenv("WASH_LISTEN"), defaultListen),
 		AppsDirs:      router.SplitAppsDir(firstNonEmpty(*appsDir, os.Getenv("WASH_APPS_DIR"), defaultAppsDir())),
@@ -92,6 +98,7 @@ func main() {
 		InitialAppID:  *initialApp,
 		ShowHidden:    *showHidden,
 		ControlSocket: cs,
+		ScreenshotDir: sd,
 	}
 
 	logger := log.New(os.Stderr, "wash-router ", log.LstdFlags|log.Lmsgprefix)

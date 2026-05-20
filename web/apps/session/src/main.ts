@@ -2,6 +2,8 @@
 // background, a bottom taskbar (start menu / open-window list / clock),
 // and bridges launcher clicks back to the BE half via app_msg.
 
+import { toBlob } from 'html-to-image';
+
 interface CatalogApp {
   id: string;
   name: string;
@@ -42,9 +44,11 @@ class WashAppSession extends HTMLElement {
   private windowList!: HTMLDivElement;
   private clock!: HTMLSpanElement;
   private startBtn!: HTMLButtonElement;
+  private screenshotStatus!: HTMLSpanElement;
   private menu: HTMLDivElement | null = null;
   private palette: PaletteState | null = null;
   private cleanups: Array<() => void> = [];
+  private screenshotStatusTimer = 0;
 
   connectedCallback() {
     this.instance = this.getAttribute('data-wash-instance') ?? '';
@@ -169,11 +173,79 @@ class WashAppSession extends HTMLElement {
     ].join(';');
     bar.appendChild(this.windowList);
 
+    this.screenshotStatus = document.createElement('span');
+    this.screenshotStatus.dataset.testid = 'screenshot-status';
+    this.screenshotStatus.style.cssText = [
+      'font-size:12px',
+      'opacity:0',
+      'transition:opacity 0.25s',
+      'color:#9aa',
+      'white-space:nowrap',
+      'pointer-events:none',
+    ].join(';');
+    bar.appendChild(this.screenshotStatus);
+
+    const shotBtn = this.buildIconButton(cameraSVG(), 'Screenshot');
+    shotBtn.dataset.testid = 'screenshot-btn';
+    shotBtn.addEventListener('click', () => {
+      shotBtn.blur(); // get the :hover/:active state off before capture
+      void this.captureScreenshot();
+    });
+    bar.appendChild(shotBtn);
+
     this.clock = document.createElement('span');
     this.clock.style.cssText = 'padding:0 14px;font-variant-numeric:tabular-nums;opacity:0.7;font-size:13px;';
     bar.appendChild(this.clock);
 
     return bar;
+  }
+
+  // ---- screenshot ----
+
+  private async captureScreenshot() {
+    this.setScreenshotStatus('capturing…', 0);
+    try {
+      // toBlob renders the live DOM (foreign-object SVG path); canvas
+      // elements get inlined via toDataURL. xterm.js canvas renderer
+      // is captured; the WebGL renderer would taint and fail —
+      // wash-term uses the default canvas renderer, so we're fine.
+      const blob = await toBlob(document.documentElement, {
+        cacheBust: false,
+        pixelRatio: window.devicePixelRatio || 1,
+      });
+      if (!blob) {
+        this.setScreenshotStatus('capture failed', 4_000);
+        return;
+      }
+      const resp = await fetch('/screenshot', { method: 'POST', body: blob });
+      if (!resp.ok) {
+        const msg = await resp.text();
+        this.setScreenshotStatus(`save failed: ${msg}`, 5_000);
+        return;
+      }
+      const name = (await resp.text()).trim();
+      this.setScreenshotStatus(`saved ${name}`, 4_000);
+    } catch (err) {
+      this.setScreenshotStatus(`error: ${err instanceof Error ? err.message : String(err)}`, 5_000);
+    }
+  }
+
+  // setScreenshotStatus shows `text` next to the screenshot button.
+  // hideAfterMs=0 keeps it shown (used during the capture). Otherwise
+  // it fades out after the given delay.
+  private setScreenshotStatus(text: string, hideAfterMs: number) {
+    this.screenshotStatus.textContent = text;
+    this.screenshotStatus.style.opacity = '1';
+    if (this.screenshotStatusTimer) {
+      clearTimeout(this.screenshotStatusTimer);
+      this.screenshotStatusTimer = 0;
+    }
+    if (hideAfterMs > 0) {
+      this.screenshotStatusTimer = window.setTimeout(() => {
+        this.screenshotStatus.style.opacity = '0';
+        this.screenshotStatusTimer = 0;
+      }, hideAfterMs);
+    }
   }
 
   private buildIconButton(svg: string, title: string): HTMLButtonElement {
@@ -571,6 +643,15 @@ function searchSVG(): string {
     "<svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round'>",
     "<circle cx='11' cy='11' r='7'/>",
     "<line x1='16.5' y1='16.5' x2='21' y2='21'/>",
+    '</svg>',
+  ].join('');
+}
+
+function cameraSVG(): string {
+  return [
+    "<svg width='17' height='17' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>",
+    "<path d='M3 8 H7 L9 5 H15 L17 8 H21 V19 H3 Z'/>",
+    "<circle cx='12' cy='13' r='4'/>",
     '</svg>',
   ].join('');
 }

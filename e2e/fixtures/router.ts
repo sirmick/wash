@@ -31,6 +31,8 @@ export interface RouterHandle {
   launchBin: string;
   /** the control socket path this router was started with */
   controlSocket: string;
+  /** the directory POST /screenshot writes to */
+  screenshotDir: string;
   log(): string;
   waitForLog(pattern: RegExp, timeout?: number): Promise<string>;
   proc: ChildProcess;
@@ -93,6 +95,7 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   // Each test gets its own control-socket path so concurrent test
   // runs don't trample each other.
   const controlSocket = join(appsDir, 'control.sock');
+  const screenshotDir = join(appsDir, 'screenshots');
   const args = [
     '--listen',
     `127.0.0.1:${port}`,
@@ -100,6 +103,8 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
     appsDir,
     '--control-socket',
     controlSocket,
+    '--screenshot-dir',
+    screenshotDir,
   ];
   if (opts.kiosk) {
     args.push('--no-session', `--initial-app=${opts.kiosk}`);
@@ -133,6 +138,7 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
     url: `http://127.0.0.1:${port}/`,
     launchBin: LAUNCH_BIN,
     controlSocket,
+    screenshotDir,
     log: () => logBuf,
     waitForLog: (re, timeout = 5_000) => waitForRegex(() => logBuf, re, timeout),
     proc,
