@@ -106,7 +106,12 @@ func (s *HTTPServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(fallbackIndexHTML))
 		return
 	}
-	// Real serving (with brotli accept handling) lands in C5.
+	// Iterating fast: tell browsers not to heuristic-cache the
+	// shell bundle so a regular reload always picks up the latest
+	// build. Add a long-lived cache path later when versioning lands.
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 	http.FileServer(s.assets).ServeHTTP(w, r)
 }
 

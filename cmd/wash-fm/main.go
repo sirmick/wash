@@ -107,6 +107,15 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		return
 	}
 	switch kind, _ := m["kind"].(string); kind {
+	case "request_initial":
+		// FE asks for the home listing on mount when it has no
+		// restored path. Repeated calls are harmless — just a fresh
+		// listing each time.
+		home, err := os.UserHomeDir()
+		if err != nil {
+			home = "/"
+		}
+		sendList(c, home)
 	case "list":
 		path, _ := m["path"].(string)
 		sendList(c, path)

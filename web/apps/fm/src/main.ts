@@ -116,10 +116,17 @@ class WashAppFM extends HTMLElement {
     this.addEventListener('wash:msg', (ev) => {
       this.handleBE((ev as CustomEvent).detail as BEMessage);
     });
-    // Restore previously-saved state on (re)mount. Null = first launch.
+    // Restore previously-saved state on (re)mount. Null = first launch
+    // OR a re-mount after refresh where no state was ever saved — in
+    // either case we need to ask the BE for the home listing because
+    // OnReady only fires once per process lifetime.
     this.addEventListener('wash:state', (ev) => {
       const s = (ev as CustomEvent).detail as PersistedState | null;
-      if (s) this.restoreFrom(s);
+      if (s) {
+        this.restoreFrom(s);
+      } else {
+        window.wash.sendAppMsg(this.instance, { kind: 'request_initial' });
+      }
     });
     // Close any open context menu when clicking elsewhere.
     document.addEventListener('mousedown', (ev) => {
@@ -620,6 +627,10 @@ class WashAppFM extends HTMLElement {
   // navigates to the saved path so listings populate. Pre-fills the
   // expanded set BEFORE the navigation so its ancestors render the
   // saved subtree state, not a fresh cascade.
+  //
+  // If no path is saved, asks the BE for the home listing — without
+  // this the FE sits on "Loading" because the BE's OnReady only fires
+  // on first launch, not on browser refresh.
   private restoreFrom(s: PersistedState) {
     if (s.sort_key) this.sortKey = s.sort_key;
     if (typeof s.sort_desc === 'boolean') this.sortDesc = s.sort_desc;
@@ -637,6 +648,8 @@ class WashAppFM extends HTMLElement {
     if (s.path) {
       // selectPath will request listings for any unloaded ancestors.
       this.selectPath(s.path, false);
+    } else {
+      window.wash.sendAppMsg(this.instance, { kind: 'request_initial' });
     }
   }
 
@@ -1027,9 +1040,12 @@ function menuItem(label: string): HTMLButtonElement {
 }
 
 function iconFor(e: Entry): string {
+  // The expand triangle in the tree row already telegraphs "dir";
+  // we use a folder glyph here to distinguish dirs from files at a
+  // glance without duplicating the triangle.
   switch (e.type) {
     case 'dir':
-      return '▸';
+      return '📁';
     case 'symlink':
       return '↪';
     case 'file':

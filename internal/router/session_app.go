@@ -56,9 +56,11 @@ func (r *Router) EnsureSessionRunning(ctx context.Context) error {
 		return fmt.Errorf("spawn session: %w", err)
 	}
 	t := NewStreamTransport(parent)
-	// Drive HandleApp in a goroutine; it owns t for its lifetime.
+	// Drive HandleApp on a router-lifetime context — the shell's ctx
+	// would cancel on browser refresh and kill the session app,
+	// leaving the next shell without a chrome to declare.
 	go func() {
-		if err := r.HandleApp(ctx, t, entry.Manifest, cmd); err != nil {
+		if err := r.HandleApp(context.Background(), t, entry.Manifest, cmd); err != nil {
 			r.log("session app: %v", err)
 		}
 		_ = cmd.Wait()
@@ -101,7 +103,9 @@ func (r *Router) EnsureInitialAppRunning(ctx context.Context) error {
 	}
 	t := NewStreamTransport(parent)
 	go func() {
-		if err := r.HandleAppKiosk(ctx, t, entry.Manifest, cmd); err != nil {
+		// Router-lifetime context — kiosk apps must survive shell
+		// reconnects, same reasoning as the session app above.
+		if err := r.HandleAppKiosk(context.Background(), t, entry.Manifest, cmd); err != nil {
 			r.log("initial app: %v", err)
 		}
 		_ = cmd.Wait()
