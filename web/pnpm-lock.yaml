@@ -9,6 +9,10 @@ importers:
   .: {}
 
   apps/about:
+    dependencies:
+      solid-js:
+        specifier: ^1.9.13
+        version: 1.9.13
     devDependencies:
       typescript:
         specifier: ^5.5.4
@@ -16,6 +20,9 @@ importers:
       vite:
         specifier: ^5.4.10
         version: 5.4.21
+      vite-plugin-solid:
+        specifier: ^2.10.2
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
 
   apps/fm:
     devDependencies:
