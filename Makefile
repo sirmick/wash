@@ -29,6 +29,9 @@ ROUTER_STAMP   := $(ROUTER_ASSETS)/.stamp
 SESSION_ASSETS := cmd/wash-session/assets
 SESSION_STAMP  := $(SESSION_ASSETS)/.stamp
 
+ABOUT_ASSETS   := cmd/wash-about/assets
+ABOUT_STAMP    := $(ABOUT_ASSETS)/.stamp
+
 .PHONY: all
 all: $(TARGETS)
 
@@ -50,6 +53,10 @@ web-shell: web-deps
 web-session: web-deps
 	@cd web && $(PNPM) --filter @wash/app-session run build
 
+.PHONY: web-about
+web-about: web-deps
+	@cd web && $(PNPM) --filter @wash/app-about run build
+
 # embed-into-cmd helper. Usage: $(call embed,<src dist dir>,<dst assets dir>)
 define embed_dist
 	rm -rf $(2)
@@ -69,6 +76,9 @@ $(ROUTER_STAMP): web-shell
 $(SESSION_STAMP): web-session
 	$(call embed_dist,web/apps/session/dist,$(SESSION_ASSETS))
 
+$(ABOUT_STAMP): web-about
+	$(call embed_dist,web/apps/about/dist,$(ABOUT_ASSETS))
+
 # ----- go stage -----
 
 $(OUT)/wash-router: $(ROUTER_STAMP) | $(OUT)
@@ -77,7 +87,7 @@ $(OUT)/wash-router: $(ROUTER_STAMP) | $(OUT)
 $(OUT)/wash-session: $(SESSION_STAMP) | $(OUT)
 	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-session
 
-$(OUT)/wash-about: | $(OUT)
+$(OUT)/wash-about: $(ABOUT_STAMP) | $(OUT)
 	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-about
 
 # ----- meta -----
