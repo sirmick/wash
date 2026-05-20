@@ -259,6 +259,7 @@ class WashAppSession extends HTMLElement {
       return;
     }
     const menu = document.createElement('div');
+    menu.dataset.testid = 'start-menu';
     menu.style.cssText = [
       'position:absolute',
       'left:6px',

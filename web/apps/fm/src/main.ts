@@ -200,6 +200,13 @@ class WashAppFM extends HTMLElement {
       'padding:4px 0',
       'border-right:1px solid #2a2a3a',
     ].join(';');
+    this.treeEl.addEventListener('dragover', (ev) => {
+      if (ev.dataTransfer?.types.includes('application/x-wash-path')) {
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = 'copy';
+      }
+    });
+    this.treeEl.addEventListener('drop', (ev) => this.onDrop(ev));
     grid.appendChild(this.treeEl);
 
     const right = document.createElement('div');
@@ -751,6 +758,28 @@ class WashAppFM extends HTMLElement {
     this.navigateTo(target);
   }
 
+  // ---- drag-and-drop ----
+
+  private onDragStart(ev: DragEvent, path: string) {
+    if (!ev.dataTransfer) return;
+    ev.dataTransfer.effectAllowed = 'copy';
+    ev.dataTransfer.setData('application/x-wash-path', path);
+    // Plain-text fallback so the path is useful in non-wash drop
+    // targets (terminal pastes, etc.).
+    ev.dataTransfer.setData('text/plain', path);
+  }
+
+  private onDrop(ev: DragEvent) {
+    if (!ev.dataTransfer) return;
+    const path = ev.dataTransfer.getData('application/x-wash-path');
+    if (!path) return;
+    ev.preventDefault();
+    // v1: no real file ops yet; just surface the drop so the user
+    // (and tests) see something happened.
+    this.statusEl.textContent = `Dropped: ${path}`;
+    this.statusEl.dataset.dropPath = path;
+  }
+
   // ---- tree render ----
 
   private renderTree() {
@@ -778,6 +807,8 @@ class WashAppFM extends HTMLElement {
     row.dataset.testid = `fm-entry-${e.name}`;
     row.dataset.type = e.type;
     row.dataset.path = path;
+    row.draggable = true;
+    row.addEventListener('dragstart', (ev) => this.onDragStart(ev, path));
     const isSelected = this.selectedPath === path;
     row.style.cssText = [
       'display:flex',
