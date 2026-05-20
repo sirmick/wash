@@ -40,7 +40,7 @@ clean:
 	rm -rf cmd/*/assets
 
 .PHONY: verify
-verify:
+verify: all
 	go vet ./...
 	go test ./...
 	@for f in $(TARGETS); do \

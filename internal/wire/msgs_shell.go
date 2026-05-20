@@ -1,0 +1,142 @@
+package wire
+
+import "encoding/json"
+
+// WS shell channel 0 vocabulary (WIRE.md §8). Encoding: JSON.
+//
+// "Shell" here means the browser shell runtime — the compositor that
+// hosts web components. The router speaks this vocabulary directly to
+// it; the router translates between this and the per-app event
+// channel (§9) as needed.
+//
+// Type names are prefixed Shell to disambiguate from event-channel
+// types (§9) that use overlapping names like window.focus.
+const (
+	// Router → shell.
+	TShellAppDeclared   = "app.declared"
+	TShellWindowCreate  = "window.create"
+	TShellWindowDestroy = "window.destroy"
+	TShellWindowTitle   = "window.title"
+	TShellAssetDeliver  = "asset.deliver"
+
+	// Shell → router.
+	TShellAssetFetch         = "asset.fetch"
+	TShellWindowCloseClicked = "window.close_clicked"
+	TShellWindowFocus        = "window.focus"
+	TShellAppMsgSend         = "app_msg.send"
+)
+
+// ShellAppDeclared tells the shell a new app instance has been
+// accepted by the router and is ready to be mounted. The shell should
+// fetch the bundle and prepare to host the element.
+type ShellAppDeclared struct {
+	T          string          `json:"t"`
+	InstanceID string          `json:"instance_id"`
+	Element    string          `json:"element"`
+	Surface    string          `json:"surface"` // "window" | "desktop"
+	Manifest   json.RawMessage `json:"manifest"`
+}
+
+func NewShellAppDeclared(instanceID, element, surface string, manifest json.RawMessage) ShellAppDeclared {
+	return ShellAppDeclared{T: TShellAppDeclared, InstanceID: instanceID, Element: element, Surface: surface, Manifest: manifest}
+}
+
+// ShellWindowCreate asks the shell to create a floating window and
+// mount the instance's element inside it. Not emitted for
+// surface:"desktop"; the shell mounts at the root surface instead.
+type ShellWindowCreate struct {
+	T          string `json:"t"`
+	WindowID   uint32 `json:"window_id"`
+	InstanceID string `json:"instance_id"`
+	Title      string `json:"title"`
+	W          uint32 `json:"w"`
+	H          uint32 `json:"h"`
+}
+
+func NewShellWindowCreate(windowID uint32, instanceID, title string, w, h uint32) ShellWindowCreate {
+	return ShellWindowCreate{T: TShellWindowCreate, WindowID: windowID, InstanceID: instanceID, Title: title, W: w, H: h}
+}
+
+// ShellWindowDestroy tears down a window in the shell.
+type ShellWindowDestroy struct {
+	T        string `json:"t"`
+	WindowID uint32 `json:"window_id"`
+}
+
+func NewShellWindowDestroy(windowID uint32) ShellWindowDestroy {
+	return ShellWindowDestroy{T: TShellWindowDestroy, WindowID: windowID}
+}
+
+// ShellWindowTitle updates a window's titlebar text.
+type ShellWindowTitle struct {
+	T        string `json:"t"`
+	WindowID uint32 `json:"window_id"`
+	Title    string `json:"title"`
+}
+
+func NewShellWindowTitle(windowID uint32, title string) ShellWindowTitle {
+	return ShellWindowTitle{T: TShellWindowTitle, WindowID: windowID, Title: title}
+}
+
+// ShellAssetDeliver carries a bundle chunk back to the shell. Mirrors
+// AssetData on the app side; the router glues the two streams.
+type ShellAssetDeliver struct {
+	T          string `json:"t"`
+	InstanceID string `json:"instance_id"`
+	Name       string `json:"name"`
+	Bytes      string `json:"bytes"` // base64
+	End        bool   `json:"end"`
+	MIME       string `json:"mime,omitempty"`
+}
+
+func NewShellAssetDeliver(instanceID, name, b64Bytes string, end bool, mime string) ShellAssetDeliver {
+	return ShellAssetDeliver{T: TShellAssetDeliver, InstanceID: instanceID, Name: name, Bytes: b64Bytes, End: end, MIME: mime}
+}
+
+// ShellAssetFetch is the shell asking for an instance's bundle file.
+// The router translates this into a channel 0 AssetRead on the owning
+// app's socket.
+type ShellAssetFetch struct {
+	T          string `json:"t"`
+	InstanceID string `json:"instance_id"`
+	Name       string `json:"name"`
+}
+
+func NewShellAssetFetch(instanceID, name string) ShellAssetFetch {
+	return ShellAssetFetch{T: TShellAssetFetch, InstanceID: instanceID, Name: name}
+}
+
+// ShellWindowCloseClicked is the user clicking a titlebar close.
+type ShellWindowCloseClicked struct {
+	T        string `json:"t"`
+	WindowID uint32 `json:"window_id"`
+}
+
+func NewShellWindowCloseClicked(windowID uint32) ShellWindowCloseClicked {
+	return ShellWindowCloseClicked{T: TShellWindowCloseClicked, WindowID: windowID}
+}
+
+// ShellWindowFocus is the user clicking/focusing a window; the shell
+// also raises it. The router relays a corresponding EvtWindowFocus to
+// the owning app on its event channel.
+type ShellWindowFocus struct {
+	T        string `json:"t"`
+	WindowID uint32 `json:"window_id"`
+}
+
+func NewShellWindowFocus(windowID uint32) ShellWindowFocus {
+	return ShellWindowFocus{T: TShellWindowFocus, WindowID: windowID}
+}
+
+// ShellAppMsgSend is the FE half of an app sending an APP_MSG to its
+// BE half. Data is intentionally opaque to the router; it carries
+// whatever the app uses domain-side.
+type ShellAppMsgSend struct {
+	T          string          `json:"t"`
+	InstanceID string          `json:"instance_id"`
+	Data       json.RawMessage `json:"data"`
+}
+
+func NewShellAppMsgSend(instanceID string, data json.RawMessage) ShellAppMsgSend {
+	return ShellAppMsgSend{T: TShellAppMsgSend, InstanceID: instanceID, Data: data}
+}
