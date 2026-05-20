@@ -1,10 +1,13 @@
 # wash — top-level build
 #
-# Two stages:
-#   1. web   — Vite library builds + brotli precompress, copied into cmd/<bin>/assets/
-#   2. go    — CGO_ENABLED=0 go build -trimpath -ldflags="-s -w"
+# Two stages, wired together:
+#   1. web — Vite library builds; brotli precompress (if installed);
+#            output copied into cmd/<bin>/assets/ for //go:embed.
+#   2. go  — CGO_ENABLED=0 go build -trimpath -ldflags="-s -w".
 #
-# Both must run for a release build; `make verify` enforces static-ELF output.
+# `make verify` enforces static-ELF output. If the web stage is
+# skipped, the go stage's //go:embed pattern errors and the build
+# fails — a stale or unbuilt frontend cannot silently ship.
 
 GOOS    ?= linux
 GOARCH  ?= amd64
@@ -16,18 +19,58 @@ TARGETS := $(addprefix $(OUT)/,$(BINS))
 
 GO_ENV  := CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH)
 
+PNPM    := pnpm
+
+# Per-binary embed stamps. Each binary's go build depends on its stamp
+# so the web stage runs first and updates assets/ if anything changed.
+ROUTER_ASSETS  := cmd/wash-router/assets
+ROUTER_STAMP   := $(ROUTER_ASSETS)/.stamp
+
 .PHONY: all
 all: $(TARGETS)
 
 $(OUT):
 	mkdir -p $(OUT)
 
-# Pattern rule: out/wash-X depends on the matching cmd/wash-X/ source tree.
-$(OUT)/%: $(OUT) FORCE
-	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/$*
+# ----- web stage -----
 
-.PHONY: FORCE
-FORCE:
+# pnpm install once; subsequent runs are fast no-ops.
+.PHONY: web-deps
+web-deps:
+	@cd web && $(PNPM) install --silent
+
+.PHONY: web-shell
+web-shell: web-deps
+	@cd web && $(PNPM) --filter @wash/shell run build
+
+# embed-into-cmd helper. Usage: $(call embed,<src dist dir>,<dst assets dir>)
+define embed_dist
+	rm -rf $(2)
+	mkdir -p $(2)
+	cp -R $(1)/. $(2)/
+	@if command -v brotli >/dev/null 2>&1; then \
+		find $(2) -type f \( -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.svg' -o -name '*.json' \) -exec brotli -k -q 11 -f {} + ; \
+	else \
+		echo "brotli not installed: skipping precompress under $(2)"; \
+	fi
+	touch $(2)/.stamp
+endef
+
+$(ROUTER_STAMP): web-shell
+	$(call embed_dist,web/shell/dist,$(ROUTER_ASSETS))
+
+# ----- go stage -----
+
+$(OUT)/wash-router: $(ROUTER_STAMP) | $(OUT)
+	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-router
+
+$(OUT)/wash-session: | $(OUT)
+	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-session
+
+$(OUT)/wash-about: | $(OUT)
+	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-about
+
+# ----- meta -----
 
 .PHONY: linux-arm64
 linux-arm64:

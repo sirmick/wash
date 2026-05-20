@@ -7,10 +7,13 @@ package main
 
 import (
 	"context"
+	"embed"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"os/user"
@@ -29,6 +32,9 @@ const (
 	defaultSessionAppID = "com.wash.session"
 )
 
+//go:embed all:assets
+var assetsFS embed.FS
+
 // defaultAppsDir returns the colon-separated default for
 // WASH_APPS_DIR (WIRE.md §5). User dir first; system dir second.
 func defaultAppsDir() string {
@@ -42,6 +48,16 @@ func defaultAppsDir() string {
 	}
 	parts = append(parts, "/usr/share/wash/apps")
 	return strings.Join(parts, ":")
+}
+
+// shellAssets exposes the embedded shell-runtime directory rooted at
+// the "assets" subtree as the HTTP server's filesystem.
+func shellAssets() (http.FileSystem, error) {
+	sub, err := fs.Sub(assetsFS, "assets")
+	if err != nil {
+		return nil, err
+	}
+	return http.FS(sub), nil
 }
 
 func main() {
@@ -88,12 +104,17 @@ func main() {
 		}
 	}
 
+	assets, err := shellAssets()
+	if err != nil {
+		logger.Fatalf("embedded assets: %v", err)
+	}
+
 	r := router.NewRouter(cfg, reg, logf)
-	srv := router.NewHTTPServer(r, nil) // no embedded shell yet (C5 wires it)
+	srv := router.NewHTTPServer(r, assets)
 
 	if !strings.HasPrefix(cfg.Listen, "127.0.0.1:") && !strings.HasPrefix(cfg.Listen, "[::1]:") {
-		host, _, err := net.SplitHostPort(cfg.Listen)
-		if err == nil && host != "localhost" {
+		host, _, splitErr := net.SplitHostPort(cfg.Listen)
+		if splitErr == nil && host != "localhost" {
 			logf("WARNING: binding to non-loopback address %s; ensure trusted-network exposure", cfg.Listen)
 		}
 	}
