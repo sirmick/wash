@@ -82,10 +82,14 @@ export function FloatingWindow(props: WindowProps) {
       >
         <span style={{ flex: 1 }}>{props.win.title}</span>
         <button
+          // Stop pointerdown from bubbling so the titlebar's drag
+          // handler does not capture the pointer and swallow the click.
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
             props.onClose(props.win.windowID);
           }}
+          data-testid="window-close"
           style={{
             background: 'transparent',
             color: '#eee',

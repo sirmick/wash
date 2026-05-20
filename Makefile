@@ -116,6 +116,14 @@ $(OUT)/wash-test: $(TEST_STAMP) | $(OUT)
 test-app:
 	$(MAKE) TEST_APP=1 all
 
+# Full-stack e2e: builds everything (incl. test app), then runs the
+# Playwright suite. Browser binary download is one-time and cached.
+.PHONY: e2e
+e2e: test-app
+	cd e2e && $(PNPM) install --silent
+	cd e2e && $(PNPM) exec playwright install chromium
+	cd e2e && $(PNPM) test
+
 # ----- meta -----
 
 .PHONY: linux-arm64

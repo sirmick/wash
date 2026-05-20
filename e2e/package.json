@@ -1,0 +1,16 @@
+{
+  "name": "@wash/e2e",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "ui": "playwright test --ui",
+    "install-browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.5.4"
+  }
+}
