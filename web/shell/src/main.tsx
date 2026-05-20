@@ -8,9 +8,12 @@ import { fetchAndImport, onAssetDeliver } from './assets';
 import {
   addWindow,
   focused,
+  maximize,
+  minimize,
   mountDesktop,
   raise,
   removeWindow,
+  restoreWin,
   setTitle,
   windows,
 } from './wm';
@@ -130,6 +133,7 @@ createEffect(() => {
       element: w.element,
       title: w.title,
       focused: focusedID === w.windowID,
+      state: w.state,
     })),
   );
 });
@@ -198,6 +202,9 @@ declare global {
       focusWindow(id: number): void;
       closeWindow(id: number): void;
       resizeWindow(id: number, w: number, h: number): void;
+      minimizeWindow(id: number): void;
+      maximizeWindow(id: number): void;
+      restoreWindow(id: number): void;
       log(level: 'error' | 'warn' | 'info' | 'debug', source: string, msg: string, stack?: string): void;
     };
   }
@@ -232,6 +239,21 @@ window.wash = {
   },
   resizeWindow(id, w, h) {
     conn.sendCtrl({ t: 'window.resize', window_id: id, w, h });
+  },
+  minimizeWindow(id) {
+    minimize(id);
+    conn.sendCtrl({ t: 'window.state', window_id: id, state: 'minimized' });
+  },
+  maximizeWindow(id) {
+    maximize(id);
+    conn.sendCtrl({ t: 'window.state', window_id: id, state: 'maximized' });
+  },
+  restoreWindow(id) {
+    restoreWin(id);
+    conn.sendCtrl({ t: 'window.state', window_id: id, state: 'normal' });
+    // Restoring also brings to front + grabs focus.
+    raise(id);
+    conn.sendCtrl({ t: 'window.focus', window_id: id });
   },
   log(level, source, msg, stack) {
     shellLog(level, source, msg, stack);

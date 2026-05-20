@@ -41,6 +41,7 @@ type AppDef struct {
 	OnFocus   func(c *Conn, win uint32)
 	OnUnfocus func(c *Conn, win uint32)
 	OnResize  func(c *Conn, win uint32, w, h uint32)
+	OnState   func(c *Conn, win uint32, state string) // "normal" | "minimized" | "maximized"
 
 	// OnCloseRequested is the X-style WM_DELETE analogue. Return true
 	// to allow close; return false to veto. If nil, the SDK confirms

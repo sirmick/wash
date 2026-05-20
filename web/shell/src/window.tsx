@@ -84,29 +84,64 @@ export function FloatingWindow(props: WindowProps) {
     target.addEventListener('pointerup', onUp);
   };
 
+  // Frame geometry depends on state. Maximized = top-left of viewport
+  // minus the chrome's bottom taskbar (40 px hardcoded; will become
+  // negotiable when the chrome publishes a workarea).
+  const frameStyle = () => {
+    const base = {
+      position: 'absolute' as const,
+      background: '#222',
+      border:
+        focused() === props.win.windowID
+          ? '1px solid #66c'
+          : '1px solid #444',
+      'box-shadow': '0 6px 24px rgba(0,0,0,0.4)',
+      display: 'flex',
+      'flex-direction': 'column' as const,
+      color: '#eee',
+      'box-sizing': 'border-box' as const,
+      'z-index': props.win.z,
+    };
+    if (props.win.state === 'minimized') {
+      return { ...base, display: 'none' };
+    }
+    if (props.win.state === 'maximized') {
+      return {
+        ...base,
+        left: '0',
+        top: '0',
+        width: '100vw',
+        height: 'calc(100vh - 40px)',
+      };
+    }
+    return {
+      ...base,
+      left: `${props.win.x}px`,
+      top: `${props.win.y}px`,
+      width: `${props.win.w}px`,
+      height: `${props.win.h}px`,
+    };
+  };
+
+  // Double-click the titlebar toggles maximize ↔ normal.
+  const onTitlebarDblClick = () => {
+    if (props.win.state === 'maximized') {
+      window.wash.restoreWindow(props.win.windowID);
+    } else {
+      window.wash.maximizeWindow(props.win.windowID);
+    }
+  };
+
   return (
     <div
       class="wash-window"
       onPointerDown={onWindowPointerDown}
-      style={{
-        position: 'absolute',
-        left: `${props.win.x}px`,
-        top: `${props.win.y}px`,
-        width: `${props.win.w}px`,
-        height: `${props.win.h}px`,
-        'z-index': props.win.z,
-        background: '#222',
-        border: focused() === props.win.windowID ? '1px solid #66c' : '1px solid #444',
-        'box-shadow': '0 6px 24px rgba(0,0,0,0.4)',
-        display: 'flex',
-        'flex-direction': 'column',
-        color: '#eee',
-        'box-sizing': 'border-box',
-      }}
+      style={frameStyle()}
     >
       <div
         class="wash-titlebar"
         onPointerDown={onTitlebarPointerDown}
+        onDblClick={onTitlebarDblClick}
         style={{
           display: 'flex',
           'align-items': 'center',
@@ -118,6 +153,34 @@ export function FloatingWindow(props: WindowProps) {
         }}
       >
         <span style={{ flex: 1 }}>{props.win.title}</span>
+        <button
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            window.wash.minimizeWindow(props.win.windowID);
+          }}
+          data-testid="window-minimize"
+          aria-label="Minimize window"
+          style={titlebarBtnStyle}
+        >
+          _
+        </button>
+        <button
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (props.win.state === 'maximized') {
+              window.wash.restoreWindow(props.win.windowID);
+            } else {
+              window.wash.maximizeWindow(props.win.windowID);
+            }
+          }}
+          data-testid="window-maximize"
+          aria-label={props.win.state === 'maximized' ? 'Restore window' : 'Maximize window'}
+          style={titlebarBtnStyle}
+        >
+          {props.win.state === 'maximized' ? '❐' : '□'}
+        </button>
         <button
           // Stop pointerdown from bubbling so the titlebar's drag
           // handler does not capture the pointer and swallow the click.
@@ -167,3 +230,13 @@ export function FloatingWindow(props: WindowProps) {
 export function destroyWindow(windowID: number) {
   removeWindow(windowID);
 }
+
+const titlebarBtnStyle = {
+  background: 'transparent',
+  color: '#eee',
+  border: 'none',
+  'font-size': '12px',
+  cursor: 'pointer',
+  padding: '0 8px',
+  'line-height': '16px',
+};

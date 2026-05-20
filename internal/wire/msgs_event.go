@@ -15,6 +15,7 @@ const (
 	TEvtWindowFocus          = "window.focus"
 	TEvtWindowUnfocus        = "window.unfocus"
 	TEvtWindowResize         = "window.resize"
+	TEvtWindowState          = "window.state"
 	TEvtWindowCloseRequested = "window.close_requested"
 	TEvtShutdown             = "shutdown"
 
@@ -71,6 +72,19 @@ type EvtWindowResize struct {
 
 func NewEvtWindowResize(win, w, h uint32) EvtWindowResize {
 	return EvtWindowResize{T: TEvtWindowResize, Win: win, W: w, H: h}
+}
+
+// EvtWindowState: router → app, the user changed min/max/restore.
+// State is one of WindowStateNormal / WindowStateMinimized /
+// WindowStateMaximized (string-equal to shared constants on the wire).
+type EvtWindowState struct {
+	T     string `cbor:"t"`
+	Win   uint32 `cbor:"win"`
+	State string `cbor:"state"`
+}
+
+func NewEvtWindowState(win uint32, state string) EvtWindowState {
+	return EvtWindowState{T: TEvtWindowState, Win: win, State: state}
 }
 
 // EvtWindowCloseRequested: router → app, X WM_DELETE analogue. App
@@ -193,6 +207,9 @@ func DecodeEvt(data []byte) (any, error) {
 		return m, cbor.Unmarshal(data, &m)
 	case TEvtWindowResize:
 		var m EvtWindowResize
+		return m, cbor.Unmarshal(data, &m)
+	case TEvtWindowState:
+		var m EvtWindowState
 		return m, cbor.Unmarshal(data, &m)
 	case TEvtWindowCloseRequested:
 		var m EvtWindowCloseRequested

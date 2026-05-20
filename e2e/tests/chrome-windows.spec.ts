@@ -110,6 +110,62 @@ test.describe('chrome (test app via --show-hidden)', () => {
     await expect(app).toHaveCount(0);
   });
 
+  test('minimize hides window, taskbar pill restores it', async ({ page, router }) => {
+    await page.goto(router.url);
+    await launchTestApp(page);
+    const app = page.locator('wash-app-test');
+    await expect(app).toBeVisible();
+
+    await page.getByRole('button', { name: 'Minimize window' }).click();
+    // wash-app-test is still in the DOM (so its state isn't lost) but
+    // its containing window has display:none, so it isn't visible.
+    await expect(app).toBeHidden();
+    await expect(app.locator('[data-testid="window-state"] b')).toHaveText('minimized');
+
+    // The taskbar pill still lists the window — click it to restore.
+    const pill = page.locator('wash-app-session button', { hasText: /^wash test$/ });
+    await pill.click();
+    await expect(app).toBeVisible();
+    await expect(app.locator('[data-testid="window-state"] b')).toHaveText('normal');
+    await expect(app.locator('[data-testid="focused"] b')).toHaveText('yes');
+  });
+
+  test('maximize fills viewport; restore returns to pre-max size', async ({ page, router }) => {
+    await page.goto(router.url);
+    await launchTestApp(page);
+    const app = page.locator('wash-app-test');
+    await expect(app).toBeVisible();
+
+    // Maximize via the titlebar button.
+    await page.getByRole('button', { name: 'Maximize window' }).click();
+    await expect(app.locator('[data-testid="window-state"] b')).toHaveText('maximized');
+
+    const frame = page.locator('.wash-window').first();
+    const box = await frame.boundingBox();
+    if (!box) throw new Error('no frame bbox');
+    // Should fill viewport minus the 40 px taskbar.
+    expect(box.x).toBeLessThanOrEqual(1);
+    expect(box.y).toBeLessThanOrEqual(1);
+    expect(box.width).toBeGreaterThanOrEqual(500);
+
+    // Restore via the same button (now labeled "Restore window").
+    await page.getByRole('button', { name: 'Restore window' }).click();
+    await expect(app.locator('[data-testid="window-state"] b')).toHaveText('normal');
+  });
+
+  test('double-clicking titlebar toggles maximize', async ({ page, router }) => {
+    await page.goto(router.url);
+    await launchTestApp(page);
+    const app = page.locator('wash-app-test');
+    await expect(app).toBeVisible();
+
+    const titlebar = page.locator('.wash-window').first().locator('.wash-titlebar');
+    await titlebar.dblclick({ position: { x: 100, y: 6 } });
+    await expect(app.locator('[data-testid="window-state"] b')).toHaveText('maximized');
+    await titlebar.dblclick({ position: { x: 100, y: 6 } });
+    await expect(app.locator('[data-testid="window-state"] b')).toHaveText('normal');
+  });
+
   test('drag resize handle commits new geometry to BE', async ({ page, router }) => {
     await page.goto(router.url);
     await launchTestApp(page);

@@ -111,6 +111,14 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 		if c.def.OnResize != nil {
 			c.def.OnResize(c, m.Win, m.W, m.H)
 		}
+	case wire.TEvtWindowState:
+		var m wire.EvtWindowState
+		if err := cbor.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		if c.def.OnState != nil {
+			c.def.OnState(c, m.Win, m.State)
+		}
 	case wire.TEvtWindowCloseRequested:
 		var m wire.EvtWindowCloseRequested
 		if err := cbor.Unmarshal(payload, &m); err != nil {

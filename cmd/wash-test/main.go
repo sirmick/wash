@@ -55,6 +55,7 @@ func main() {
 		OnFocus:          onFocus,
 		OnUnfocus:        onUnfocus,
 		OnResize:         onResize,
+		OnState:          onState,
 		OnCloseRequested: onCloseRequested,
 		OnAppMsg:         onAppMsg,
 		OnSpawnResult:    onSpawnResult,
@@ -87,6 +88,11 @@ func onUnfocus(c *sdk.Conn, win uint32) {
 func onResize(c *sdk.Conn, win uint32, w, h uint32) {
 	log.Printf("wash-test resize win=%d %dx%d", win, w, h)
 	sendEvent(c, map[string]any{"kind": "event", "type": "resize", "win": win, "w": w, "h": h})
+}
+
+func onState(c *sdk.Conn, win uint32, state string) {
+	log.Printf("wash-test state win=%d %s", win, state)
+	sendEvent(c, map[string]any{"kind": "event", "type": "state", "win": win, "state": state})
 }
 
 // onCloseRequested honors the veto-next-close flag (single-shot — the

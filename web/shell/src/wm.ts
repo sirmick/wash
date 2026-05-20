@@ -8,6 +8,8 @@
 import { createSignal } from 'solid-js';
 import { createStore } from 'solid-js/store';
 
+export type WinState = 'normal' | 'minimized' | 'maximized';
+
 export interface Win {
   windowID: number;
   instanceID: string;
@@ -18,6 +20,12 @@ export interface Win {
   w: number;
   h: number;
   z: number;
+  state: WinState;
+  // Pre-min/max geometry so restore returns to the user-set frame.
+  restoreX?: number;
+  restoreY?: number;
+  restoreW?: number;
+  restoreH?: number;
 }
 
 export interface DesktopMount {
@@ -34,11 +42,13 @@ export { windows, focused, desktop };
 
 let nextOffset = 0;
 
-export function addWindow(w: Omit<Win, 'x' | 'y' | 'z'> & { x?: number; y?: number }): Win {
+export function addWindow(
+  w: Omit<Win, 'x' | 'y' | 'z' | 'state'> & { x?: number; y?: number },
+): Win {
   const x = w.x ?? 40 + nextOffset;
   const y = w.y ?? 40 + nextOffset;
   nextOffset = (nextOffset + 24) % 200;
-  const win: Win = { ...w, x, y, z: ++nextZ };
+  const win: Win = { ...w, x, y, z: ++nextZ, state: 'normal' };
   setWindows((prev) => [...prev, win]);
   setFocused(win.windowID);
   return win;
@@ -64,6 +74,48 @@ export function move(windowID: number, x: number, y: number): void {
 
 export function resize(windowID: number, w: number, h: number): void {
   setWindows((win) => win.windowID === windowID, { w, h });
+}
+
+// Saving geometry before min/max happens inside these setters so a
+// double-min or chained max → max keeps the original normal frame.
+function saveRestoreFrom(w: Win): Partial<Win> {
+  return { restoreX: w.x, restoreY: w.y, restoreW: w.w, restoreH: w.h };
+}
+
+export function minimize(windowID: number): void {
+  setWindows(
+    (w) => w.windowID === windowID && w.state !== 'minimized',
+    (w) =>
+      w.state === 'normal'
+        ? { ...w, ...saveRestoreFrom(w), state: 'minimized' }
+        : { ...w, state: 'minimized' },
+  );
+  if (focused() === windowID) setFocused(null);
+}
+
+export function maximize(windowID: number): void {
+  setWindows(
+    (w) => w.windowID === windowID && w.state !== 'maximized',
+    (w) =>
+      w.state === 'normal'
+        ? { ...w, ...saveRestoreFrom(w), state: 'maximized' }
+        : { ...w, state: 'maximized' },
+  );
+}
+
+// restoreWin returns a window to "normal" with its pre-min/max frame.
+export function restoreWin(windowID: number): void {
+  setWindows(
+    (w) => w.windowID === windowID && w.state !== 'normal',
+    (w) => ({
+      ...w,
+      state: 'normal',
+      x: w.restoreX ?? w.x,
+      y: w.restoreY ?? w.y,
+      w: w.restoreW ?? w.w,
+      h: w.restoreH ?? w.h,
+    }),
+  );
 }
 
 export function mountDesktop(d: DesktopMount): void {

@@ -25,6 +25,7 @@ const (
 	TShellWindowCloseClicked = "window.close_clicked"
 	TShellWindowFocus        = "window.focus"
 	TShellWindowResize       = "window.resize"
+	TShellWindowState        = "window.state"
 	TShellAppMsgSend         = "app_msg.send"
 	TShellLog                = "log"
 
@@ -200,6 +201,26 @@ type ShellWindowResize struct {
 
 func NewShellWindowResize(windowID, w, h uint32) ShellWindowResize {
 	return ShellWindowResize{T: TShellWindowResize, WindowID: windowID, W: w, H: h}
+}
+
+// Window state values for ShellWindowState / EvtWindowState.
+const (
+	WindowStateNormal    = "normal"
+	WindowStateMinimized = "minimized"
+	WindowStateMaximized = "maximized"
+)
+
+// ShellWindowState is the user changing min/max/restore. The router
+// relays EvtWindowState to the owning app so apps can react (e.g. a
+// terminal pausing redraws when minimized).
+type ShellWindowState struct {
+	T        string `json:"t"`
+	WindowID uint32 `json:"window_id"`
+	State    string `json:"state"`
+}
+
+func NewShellWindowState(windowID uint32, state string) ShellWindowState {
+	return ShellWindowState{T: TShellWindowState, WindowID: windowID, State: state}
 }
 
 // ShellAppMsgSend is the FE half of an app sending an APP_MSG to its

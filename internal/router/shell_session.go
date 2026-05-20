@@ -190,6 +190,8 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		return s.handleWindowFocus(m)
 	case wire.ShellWindowResize:
 		return s.handleWindowResize(m)
+	case wire.ShellWindowState:
+		return s.handleWindowState(m)
 	case wire.ShellAppMsgSend:
 		return s.handleAppMsgSend(m)
 	case wire.ShellLog:
@@ -281,6 +283,22 @@ func (s *ShellSession) handleWindowResize(m wire.ShellWindowResize) error {
 		return nil
 	}
 	return inst.WriteEvt(wire.NewEvtWindowResize(m.WindowID, m.W, m.H))
+}
+
+func (s *ShellSession) handleWindowState(m wire.ShellWindowState) error {
+	switch m.State {
+	case wire.WindowStateNormal, wire.WindowStateMinimized, wire.WindowStateMaximized:
+	default:
+		s.router.log("shell: invalid window.state %q", m.State)
+		return nil
+	}
+	s.router.mu.Lock()
+	inst := s.router.byWin[m.WindowID]
+	s.router.mu.Unlock()
+	if inst == nil {
+		return nil
+	}
+	return inst.WriteEvt(wire.NewEvtWindowState(m.WindowID, m.State))
 }
 
 func (s *ShellSession) handleAppMsgSend(m wire.ShellAppMsgSend) error {

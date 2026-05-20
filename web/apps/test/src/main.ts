@@ -79,6 +79,7 @@ class WashAppTest extends HTMLElement {
         <span data-testid="focused" style="opacity:0.8;">focused: <b>no</b></span>
         <span data-testid="title" style="opacity:0.8;">title: <b>(none)</b></span>
         <span data-testid="geometry" style="opacity:0.8;">geometry: <b>?x?</b></span>
+        <span data-testid="window-state" style="opacity:0.8;">state: <b>normal</b></span>
       </header>
 
       <section style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px 14px;margin:8px 0 14px;">
@@ -239,6 +240,10 @@ class WashAppTest extends HTMLElement {
           case 'resize':
             this.set('geometry', `${m.w}x${m.h}`);
             this.logEvent('resize', `${m.w}x${m.h}`);
+            break;
+          case 'state':
+            this.set('window-state', String(m.state));
+            this.logEvent('state', String(m.state));
             break;
           default:
             this.logEvent(type);

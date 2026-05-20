@@ -19,6 +19,7 @@ export interface WindowInfo {
   element: string;
   title: string;
   focused: boolean;
+  state: 'normal' | 'minimized' | 'maximized';
 }
 
 export type Listener<T> = (v: T) => void;

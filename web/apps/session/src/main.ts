@@ -18,6 +18,7 @@ interface WindowInfo {
   element: string;
   title: string;
   focused: boolean;
+  state: 'normal' | 'minimized' | 'maximized';
 }
 
 declare global {
@@ -30,6 +31,7 @@ declare global {
       onWindowsChanged(cb: (windows: WindowInfo[]) => void): () => void;
       focusWindow(id: number): void;
       closeWindow(id: number): void;
+      restoreWindow(id: number): void;
     };
   }
 }
@@ -180,7 +182,9 @@ class WashAppSession extends HTMLElement {
   private buildWindowTab(w: WindowInfo): HTMLElement {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.title = w.title + ' — right-click to close';
+    const minimized = w.state === 'minimized';
+    btn.title =
+      (minimized ? '[minimized] ' : '') + w.title + ' — right-click to close';
     btn.textContent = w.title;
     btn.style.cssText = [
       `background:${w.focused ? '#33387a' : 'rgba(255,255,255,0.04)'}`,
@@ -196,8 +200,17 @@ class WashAppSession extends HTMLElement {
       'white-space:nowrap',
       'font:13px system-ui,sans-serif',
       'flex-shrink:0',
+      `opacity:${minimized ? '0.6' : '1'}`,
+      `font-style:${minimized ? 'italic' : 'normal'}`,
     ].join(';');
-    btn.addEventListener('click', () => window.wash.focusWindow(w.windowID));
+    btn.addEventListener('click', () => {
+      // Click a minimized pill → restore + focus. Otherwise → focus.
+      if (w.state === 'minimized') {
+        window.wash.restoreWindow(w.windowID);
+      } else {
+        window.wash.focusWindow(w.windowID);
+      }
+    });
     btn.addEventListener('contextmenu', (ev) => {
       ev.preventDefault();
       window.wash.closeWindow(w.windowID);
