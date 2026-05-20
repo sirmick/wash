@@ -20,8 +20,11 @@ type sessionState struct {
 // EnsureSessionRunning spawns the configured session app if it has
 // not yet been spawned. Idempotent — safe to call on every shell
 // connect. Returns ErrNoSessionApp if the configured id is missing
-// from the registry.
+// from the registry. A no-op when Config.NoSession is set.
 func (r *Router) EnsureSessionRunning(ctx context.Context) error {
+	if r.cfg.NoSession {
+		return nil
+	}
 	r.sessionMu.Lock()
 	if r.session.started {
 		r.sessionMu.Unlock()
@@ -64,6 +67,47 @@ func (r *Router) EnsureSessionRunning(ctx context.Context) error {
 		r.sessionMu.Lock()
 		r.session.started = false
 		r.sessionMu.Unlock()
+	}()
+	return nil
+}
+
+// EnsureInitialAppRunning spawns Config.InitialAppID, if set, in kiosk
+// mode. Idempotent. Called from HandleShell.
+func (r *Router) EnsureInitialAppRunning(ctx context.Context) error {
+	if r.cfg.InitialAppID == "" {
+		return nil
+	}
+	r.initialMu.Lock()
+	if r.initial.started {
+		r.initialMu.Unlock()
+		return nil
+	}
+	r.initial.started = true
+	r.initialMu.Unlock()
+
+	entry := r.reg.ByID(r.cfg.InitialAppID)
+	if entry == nil || !entry.Enabled() {
+		r.initialMu.Lock()
+		r.initial.started = false
+		r.initialMu.Unlock()
+		return fmt.Errorf("initial app %q not registered or disabled", r.cfg.InitialAppID)
+	}
+	cmd, parent, err := Spawn(entry.Path, entry.Manifest.ID, "", nil)
+	if err != nil {
+		r.initialMu.Lock()
+		r.initial.started = false
+		r.initialMu.Unlock()
+		return fmt.Errorf("spawn initial: %w", err)
+	}
+	t := NewStreamTransport(parent)
+	go func() {
+		if err := r.HandleAppKiosk(ctx, t, entry.Manifest, cmd); err != nil {
+			r.log("initial app: %v", err)
+		}
+		_ = cmd.Wait()
+		r.initialMu.Lock()
+		r.initial.started = false
+		r.initialMu.Unlock()
 	}()
 	return nil
 }

@@ -26,6 +26,9 @@ const (
 	TShellWindowFocus        = "window.focus"
 	TShellAppMsgSend         = "app_msg.send"
 	TShellLog                = "log"
+
+	// Router → shell (BE → FE relay).
+	TShellAppMsgDeliver = "app_msg.deliver"
 )
 
 // ShellLog levels.
@@ -194,4 +197,17 @@ type ShellAppMsgSend struct {
 
 func NewShellAppMsgSend(instanceID string, data json.RawMessage) ShellAppMsgSend {
 	return ShellAppMsgSend{T: TShellAppMsgSend, InstanceID: instanceID, Data: data}
+}
+
+// ShellAppMsgDeliver is the reverse: a BE → FE message, relayed to
+// the shell. The shell forwards it to the matching mounted element
+// as a CustomEvent.
+type ShellAppMsgDeliver struct {
+	T          string          `json:"t"`
+	InstanceID string          `json:"instance_id"`
+	Data       json.RawMessage `json:"data"`
+}
+
+func NewShellAppMsgDeliver(instanceID string, data json.RawMessage) ShellAppMsgDeliver {
+	return ShellAppMsgDeliver{T: TShellAppMsgDeliver, InstanceID: instanceID, Data: data}
 }

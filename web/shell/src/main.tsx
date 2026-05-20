@@ -60,6 +60,12 @@ interface ShellAssetDeliver {
   mime?: string;
 }
 
+interface ShellAppMsgDeliver {
+  t: 'app_msg.deliver';
+  instance_id: string;
+  data: unknown;
+}
+
 // Track declared instances so window.create can resolve element by id.
 const instances = new Map<string, { element: string; surface: string }>();
 
@@ -92,8 +98,23 @@ const conn = new Conn(wsURL(), (msg) => {
     case 'asset.deliver':
       onAssetDeliver(msg as ShellAssetDeliver);
       break;
+    case 'app_msg.deliver':
+      deliverAppMsg(msg as ShellAppMsgDeliver);
+      break;
   }
 });
+
+// deliverAppMsg dispatches a BE→FE message as a CustomEvent on the
+// mounted element with the matching data-wash-instance.
+function deliverAppMsg(msg: ShellAppMsgDeliver) {
+  const sel = `[data-wash-instance="${CSS.escape(msg.instance_id)}"]`;
+  const el = document.querySelector(sel);
+  if (!el) {
+    console.warn('wash: app_msg.deliver for unmounted instance', msg.instance_id);
+    return;
+  }
+  el.dispatchEvent(new CustomEvent('wash:msg', { detail: msg.data, bubbles: false }));
+}
 
 // Mirror Solid's windows store into the cross-element Sub so vanilla
 // custom elements (the session chrome) can subscribe without taking

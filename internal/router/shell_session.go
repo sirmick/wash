@@ -24,6 +24,12 @@ type ShellSession struct {
 	// declare and any follow-on relay are observed in order by the
 	// receiver.
 	declared map[string]bool
+
+	// lastFocused is the window currently believed to hold focus on
+	// this shell. Used to emit EvtWindowUnfocus on the previous
+	// window when focus moves. Touched only from the shell's frame
+	// loop goroutine.
+	lastFocused uint32
 }
 
 // declareInstance sends ShellAppDeclared (and ShellWindowCreate for
@@ -53,10 +59,14 @@ func (s *ShellSession) declareInstanceLocked(inst *AppInstance) error {
 	if err != nil {
 		return err
 	}
+	surface := inst.Manifest.Surface
+	if inst.Kiosk {
+		surface = SurfaceDesktop
+	}
 	if err := s.writeCtrlLocked(wire.NewShellAppDeclared(
 		inst.InstanceID,
 		inst.Manifest.Element,
-		inst.Manifest.Surface,
+		surface,
 		manifestJSON,
 	)); err != nil {
 		return err
@@ -121,6 +131,9 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 
 	if err := r.EnsureSessionRunning(ctx); err != nil {
 		r.log("ensure session: %v", err)
+	}
+	if err := r.EnsureInitialAppRunning(ctx); err != nil {
+		r.log("ensure initial: %v", err)
 	}
 	return sess.loop(ctx)
 }
@@ -236,9 +249,22 @@ func (s *ShellSession) handleWindowCloseClicked(m wire.ShellWindowCloseClicked) 
 }
 
 func (s *ShellSession) handleWindowFocus(m wire.ShellWindowFocus) error {
+	if m.WindowID == s.lastFocused {
+		return nil
+	}
+	prev := s.lastFocused
+	s.lastFocused = m.WindowID
+
 	s.router.mu.Lock()
 	inst := s.router.byWin[m.WindowID]
+	prevInst := s.router.byWin[prev]
 	s.router.mu.Unlock()
+
+	if prev != 0 && prevInst != nil {
+		if err := prevInst.WriteEvt(wire.NewEvtWindowUnfocus(prev)); err != nil {
+			s.router.log("unfocus relay: %v", err)
+		}
+	}
 	if inst == nil {
 		return nil
 	}

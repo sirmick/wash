@@ -27,6 +27,11 @@ type Manifest struct {
 	Instancing      string       `json:"instancing"`
 	Capabilities    []string     `json:"capabilities"`
 	Window          *WindowHints `json:"window,omitempty"`
+
+	// Hidden keeps the app out of the launcher catalog. It is still
+	// spawnable (by --initial-app or by another app's
+	// spawn.request).
+	Hidden bool `json:"hidden,omitempty"`
 }
 
 // WindowHints mirrors router.WindowHints. v0.0 honors width/height.

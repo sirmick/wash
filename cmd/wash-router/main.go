@@ -64,6 +64,8 @@ func main() {
 	listen := flag.String("listen", "", "host:port to bind (overrides WASH_LISTEN)")
 	appsDir := flag.String("apps-dir", "", "colon-separated apps dirs (overrides WASH_APPS_DIR)")
 	sessionID := flag.String("session-app-id", "", "id of the desktop-surface app (overrides WASH_SESSION_APP_ID)")
+	noSession := flag.Bool("no-session", false, "do not spawn the session app (kiosk / e2e)")
+	initialApp := flag.String("initial-app", "", "spawn this app full-screen on first shell connect (kiosk)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -76,6 +78,8 @@ func main() {
 		Listen:       firstNonEmpty(*listen, os.Getenv("WASH_LISTEN"), defaultListen),
 		AppsDirs:     router.SplitAppsDir(firstNonEmpty(*appsDir, os.Getenv("WASH_APPS_DIR"), defaultAppsDir())),
 		SessionAppID: firstNonEmpty(*sessionID, os.Getenv("WASH_SESSION_APP_ID"), defaultSessionAppID),
+		NoSession:    *noSession,
+		InitialAppID: *initialApp,
 	}
 
 	logger := log.New(os.Stderr, "wash-router ", log.LstdFlags|log.Lmsgprefix)

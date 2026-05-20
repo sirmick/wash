@@ -60,6 +60,7 @@ func TestShellRoundTrip(t *testing.T) {
 		NewShellWindowCloseClicked(42),
 		NewShellWindowFocus(42),
 		NewShellAppMsgSend("inst-1", data),
+		NewShellAppMsgDeliver("inst-1", data),
 		NewShellLog(LogLevelError, "wash-app-about", "boom", "Error: boom\n    at foo (...)"),
 	}
 	for _, c := range cases {

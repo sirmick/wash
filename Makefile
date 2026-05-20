@@ -17,6 +17,14 @@ OUT     := out
 BINS    := wash-router wash-session wash-about
 TARGETS := $(addprefix $(OUT)/,$(BINS))
 
+# Test app: not part of the default build; built explicitly with
+# `make test-app` (or `make TEST_APP=1`). Hidden from the prod
+# catalog at runtime via manifest.Hidden.
+TEST_APP ?=
+ifneq ($(TEST_APP),)
+TARGETS += $(OUT)/wash-test
+endif
+
 GO_ENV  := CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH)
 
 PNPM    := pnpm
@@ -31,6 +39,9 @@ SESSION_STAMP  := $(SESSION_ASSETS)/.stamp
 
 ABOUT_ASSETS   := cmd/wash-about/assets
 ABOUT_STAMP    := $(ABOUT_ASSETS)/.stamp
+
+TEST_ASSETS    := cmd/wash-test/assets
+TEST_STAMP     := $(TEST_ASSETS)/.stamp
 
 .PHONY: all
 all: $(TARGETS)
@@ -57,6 +68,10 @@ web-session: web-deps
 web-about: web-deps
 	@cd web && $(PNPM) --filter @wash/app-about run build
 
+.PHONY: web-test
+web-test: web-deps
+	@cd web && $(PNPM) --filter @wash/app-test run build
+
 # embed-into-cmd helper. Usage: $(call embed,<src dist dir>,<dst assets dir>)
 define embed_dist
 	rm -rf $(2)
@@ -79,6 +94,9 @@ $(SESSION_STAMP): web-session
 $(ABOUT_STAMP): web-about
 	$(call embed_dist,web/apps/about/dist,$(ABOUT_ASSETS))
 
+$(TEST_STAMP): web-test
+	$(call embed_dist,web/apps/test/dist,$(TEST_ASSETS))
+
 # ----- go stage -----
 
 $(OUT)/wash-router: $(ROUTER_STAMP) | $(OUT)
@@ -89,6 +107,14 @@ $(OUT)/wash-session: $(SESSION_STAMP) | $(OUT)
 
 $(OUT)/wash-about: $(ABOUT_STAMP) | $(OUT)
 	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-about
+
+$(OUT)/wash-test: $(TEST_STAMP) | $(OUT)
+	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-test
+
+# Convenience target: build the test app + everything else.
+.PHONY: test-app
+test-app:
+	$(MAKE) TEST_APP=1 all
 
 # ----- meta -----
 

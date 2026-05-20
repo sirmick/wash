@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,9 +25,15 @@ type AppInstance struct {
 	Transport  FrameTransport
 	AppID      string
 	InstanceID string
-	WindowID   uint32 // 0 if surface=desktop
+	WindowID   uint32 // 0 if surface=desktop OR Kiosk
 	Manifest   *Manifest
 	Cmd        *exec.Cmd // nil for in-process tests
+
+	// Kiosk is set for the --initial-app instance. It forces the
+	// shell to mount the element at the root surface regardless of
+	// the manifest's declared surface, and suppresses the window
+	// id so per-window plumbing (set_title etc.) is skipped.
+	Kiosk bool
 
 	router *Router
 
@@ -58,11 +65,24 @@ type pendingAsset struct {
 // declare (surface=window) or the element is mounted as the root
 // (surface=desktop).
 func (r *Router) HandleApp(ctx context.Context, t FrameTransport, manifest *Manifest, cmd *exec.Cmd) error {
+	return r.handleAppOpts(ctx, t, manifest, cmd, false)
+}
+
+// HandleAppKiosk is like HandleApp but marks the instance as the
+// kiosk root: surface forced to desktop, no window id, declared as
+// the root surface regardless of the manifest. Used by --initial-app
+// for full-screen single-app deployments and e2e tests.
+func (r *Router) HandleAppKiosk(ctx context.Context, t FrameTransport, manifest *Manifest, cmd *exec.Cmd) error {
+	return r.handleAppOpts(ctx, t, manifest, cmd, true)
+}
+
+func (r *Router) handleAppOpts(ctx context.Context, t FrameTransport, manifest *Manifest, cmd *exec.Cmd, kiosk bool) error {
 	inst := &AppInstance{
 		Transport: t,
 		AppID:     manifest.ID,
 		Manifest:  manifest,
 		Cmd:       cmd,
+		Kiosk:     kiosk,
 		router:    r,
 		pending:   make(map[uint64]*pendingAsset),
 	}
@@ -135,7 +155,7 @@ func (inst *AppInstance) handshake(ctx context.Context) error {
 	}
 
 	inst.InstanceID = inst.router.allocInstanceID()
-	if inst.Manifest.Surface == SurfaceWindow {
+	if inst.Manifest.Surface == SurfaceWindow && !inst.Kiosk {
 		inst.WindowID = inst.router.allocWindowID()
 	}
 	ack := wire.NewIdentityAck(inst.InstanceID, inst.WindowID)
@@ -254,22 +274,53 @@ func (inst *AppInstance) handleEvt(payload []byte) error {
 }
 
 // relayAppMsgToShell forwards an APP_MSG from BE to its FE half.
+// CBOR-decoded values (often map[any]any) are converted to a JSON-
+// friendly shape so the shell can decode without a CBOR runtime.
 func (inst *AppInstance) relayAppMsgToShell(m wire.EvtAppMsg) error {
-	// Re-encode data through CBOR → JSON for shell delivery. The
-	// shell receives base64-encoded CBOR; the SDK on the FE side
-	// will decode it the same way.
-	cbor, err := cbor.Marshal(m.Data)
+	dataJSON, err := json.Marshal(toJSON(m.Data))
 	if err != nil {
-		return fmt.Errorf("re-marshal app_msg data: %w", err)
+		return fmt.Errorf("marshal app_msg data: %w", err)
 	}
-	b64 := base64.StdEncoding.EncodeToString(cbor)
-	send := wire.NewShellAppMsgSend(inst.InstanceID, []byte(fmt.Sprintf("{\"cbor_b64\":%q}", b64)))
+	send := wire.NewShellAppMsgDeliver(inst.InstanceID, dataJSON)
 	for _, s := range inst.router.shellList() {
 		if err := s.WriteCtrl(send); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// toJSON walks a CBOR-decoded value and produces a JSON-marshalable
+// version. Maps with non-string keys (CBOR allows any) are
+// stringified; byte slices become base64 strings.
+func toJSON(v any) any {
+	switch x := v.(type) {
+	case map[any]any:
+		out := make(map[string]any, len(x))
+		for k, vv := range x {
+			ks, ok := k.(string)
+			if !ok {
+				ks = fmt.Sprint(k)
+			}
+			out[ks] = toJSON(vv)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, vv := range x {
+			out[k] = toJSON(vv)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, vv := range x {
+			out[i] = toJSON(vv)
+		}
+		return out
+	case []byte:
+		return base64.StdEncoding.EncodeToString(x)
+	}
+	return v
 }
 
 func (inst *AppInstance) relayWindowTitle(m wire.EvtWindowSetTitle) error {

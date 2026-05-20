@@ -19,9 +19,18 @@ const (
 // Config is the runtime configuration the caller (cmd/wash-router)
 // derives from env + flags.
 type Config struct {
-	Listen        string   // host:port
-	AppsDirs      []string // ordered; first occurrence wins
-	SessionAppID  string   // which manifest is the desktop surface
+	Listen       string   // host:port
+	AppsDirs     []string // ordered; first occurrence wins
+	SessionAppID string   // which manifest is the desktop surface
+
+	// NoSession suppresses the autoboot session app. Combine with
+	// InitialAppID to run a single app full-screen ("kiosk" mode).
+	NoSession bool
+
+	// InitialAppID is the app spawned on first shell connect (instead
+	// of, or alongside, the session). Its FE element mounts at the
+	// root surface regardless of its manifest's declared surface.
+	InitialAppID string
 }
 
 // Logger is a minimal sink; cmd/wash-router supplies a real one.
@@ -46,6 +55,9 @@ type Router struct {
 
 	sessionMu sync.Mutex
 	session   sessionState
+
+	initialMu sync.Mutex
+	initial   sessionState
 }
 
 // NewRouter constructs a router; cfg.AppsDirs are expected to already
@@ -70,8 +82,9 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 func (r *Router) Registry() *Registry { return r.reg }
 
 // catalog builds the snapshot the shell sees on connect. Surface=
-// desktop apps are filtered out — they don't belong in launchers (the
-// session app is autoboot, not user-launchable).
+// desktop apps and Hidden apps are filtered out — they don't belong
+// in launchers (the session app is autoboot; hidden apps are
+// test/utility).
 func (r *Router) catalog() []wire.ShellCatalogApp {
 	entries := r.reg.Entries()
 	out := make([]wire.ShellCatalogApp, 0, len(entries))
@@ -82,6 +95,9 @@ func (r *Router) catalog() []wire.ShellCatalogApp {
 			continue
 		}
 		if e.Manifest.Surface == SurfaceDesktop {
+			continue
+		}
+		if e.Manifest.Hidden {
 			continue
 		}
 		out = append(out, wire.ShellCatalogApp{
