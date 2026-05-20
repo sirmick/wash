@@ -4,13 +4,15 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "build": "vite build",
+    "build": "vite build && node build-icons.mjs",
     "dev": "vite"
   },
   "dependencies": {
+    "lucide-solid": "^1.16.0",
     "solid-js": "^1.9.13"
   },
   "devDependencies": {
+    "lucide-static": "^1.16.0",
     "typescript": "^5.5.4",
     "vite": "^5.4.10",
     "vite-plugin-solid": "^2.10.2"

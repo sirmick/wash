@@ -26,6 +26,9 @@ importers:
 
   apps/fm:
     dependencies:
+      lucide-solid:
+        specifier: ^1.16.0
+        version: 1.16.0(solid-js@1.9.13)
       solid-js:
         specifier: ^1.9.13
         version: 1.9.13
@@ -45,6 +48,9 @@ importers:
       html-to-image:
         specifier: ^1.11.13
         version: 1.11.13
+      lucide-solid:
+        specifier: ^1.16.0
+        version: 1.16.0(solid-js@1.9.13)
       solid-js:
         specifier: ^1.9.13
         version: 1.9.13
@@ -67,6 +73,9 @@ importers:
       '@xterm/xterm':
         specifier: ^5.5.0
         version: 5.5.0
+      lucide-solid:
+        specifier: ^1.16.0
+        version: 1.16.0(solid-js@1.9.13)
       solid-js:
         specifier: ^1.9.13
         version: 1.9.13
@@ -92,10 +101,16 @@ importers:
 
   shell:
     dependencies:
+      lucide-solid:
+        specifier: ^1.16.0
+        version: 1.16.0(solid-js@1.9.13)
       solid-js:
         specifier: ^1.9.13
         version: 1.9.13
     devDependencies:
+      lucide-static:
+        specifier: ^1.16.0
+        version: 1.16.0
       typescript:
         specifier: ^5.5.4
         version: 5.9.3
@@ -596,6 +611,14 @@ packages:
 
   lru-cache@5.1.1:
     resolution: {integrity: sha512-KpNARQA3Iwv+jTA0utUVVbrh+Jlrr1Fv0e56GGzAFOXN7dk/FviaDW8LHmK52DlcH4WP2n6gI8vN1aesBFgo9w==}
+
+  lucide-solid@1.16.0:
+    resolution: {integrity: sha512-GNmq56033vcjPnmFYwzji+8wkRZxBhDT1p+dzSI7+DeFQXzitStLovrtiC4l61Kbk7X2R+abIDIYAJM99ONKMQ==}
+    peerDependencies:
+      solid-js: ^1.4.7
+
+  lucide-static@1.16.0:
+    resolution: {integrity: sha512-/EH96rDLRLNKaxuhqHHbmUPx3+qHS/kQRzI1ZGZqnxmh6ljX9yX0xC2UZlQSfBE/n84eNIaxKsv9P8sMiOdCww==}
 
   merge-anything@5.1.7:
     resolution: {integrity: sha512-eRtbOb1N5iyH0tkQDAoQ4Ipsp/5qSR79Dzrz8hEPxRX10RWWR/iQXdoKmBSRCThY1Fh5EhISDtpSc93fpxUniQ==}
@@ -1109,6 +1132,12 @@ snapshots:
   lru-cache@5.1.1:
     dependencies:
       yallist: 3.1.1
+
+  lucide-solid@1.16.0(solid-js@1.9.13):
+    dependencies:
+      solid-js: 1.9.13
+
+  lucide-static@1.16.0: {}
 
   merge-anything@5.1.7:
     dependencies:

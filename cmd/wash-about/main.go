@@ -47,4 +47,6 @@ func main() {
 	})
 }
 
-const washIcon = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='none' stroke='white' stroke-width='1.5'/><circle cx='8' cy='5.5' r='0.8' fill='white'/><rect x='7.3' y='7.5' width='1.4' height='4' fill='white'/></svg>"
+// washIcon — Lucide sprite symbol name. See cmd/wash-fm/main.go's
+// fmIcon for the resolution scheme.
+const washIcon = "info"

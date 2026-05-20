@@ -14,6 +14,7 @@ import xtermCSS from '@xterm/xterm/css/xterm.css?inline';
 import { For, createSignal, onCleanup, onMount } from 'solid-js';
 import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
+import { Plus, X } from 'lucide-solid';
 
 declare global {
   interface Window {
@@ -293,13 +294,19 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 </span>
                 <span
                   data-testid={`term-tab-close-${tab.channelID}`}
-                  style={{ opacity: 0.6, 'font-size': '13px', cursor: 'pointer', padding: '0 4px' }}
+                  style={{
+                    opacity: 0.6,
+                    cursor: 'pointer',
+                    padding: '0 4px',
+                    display: 'inline-flex',
+                    'align-items': 'center',
+                  }}
                   onClick={(ev) => {
                     ev.stopPropagation();
                     requestCloseTab(tab.channelID);
                   }}
                 >
-                  ×
+                  <X size={12} />
                 </span>
               </button>
             );
@@ -312,7 +319,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           style={addBtnStyle}
           onClick={openNewTab}
         >
-          +
+          <Plus size={14} />
         </button>
       </div>
       <div style={{ flex: 1, position: 'relative', 'min-height': 0 }}>

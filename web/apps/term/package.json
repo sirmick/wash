@@ -9,6 +9,7 @@
   "dependencies": {
     "@xterm/xterm": "^5.5.0",
     "@xterm/addon-fit": "^0.10.0",
+    "lucide-solid": "^1.16.0",
     "solid-js": "^1.9.13"
   },
   "devDependencies": {

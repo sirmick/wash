@@ -42,10 +42,10 @@ func main() {
 	})
 }
 
-// washIcon is the inline SVG "W" mark used in catalog/launcher
-// rendering. Kept short so the inline-data-URI cap (64 KiB) is not in
-// play.
-const washIcon = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text x='2' y='13' font-family='system-ui' font-size='13' font-weight='bold' fill='white'>W</text></svg>"
+// washIcon — Lucide sprite symbol name. Session is surface=desktop
+// so it's filtered from the launcher catalog anyway; this is only
+// surfaced in --show-hidden / debug paths.
+const washIcon = "layout-dashboard"
 
 // onAppMsg interprets the FE's launcher click: data is the
 // (CBOR-decoded) JSON the FE sent via app_msg.send. v0.0 expects a

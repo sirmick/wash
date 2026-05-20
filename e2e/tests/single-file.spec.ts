@@ -26,14 +26,15 @@ interface AppBundle {
 
 const APPS: AppBundle[] = [
   // Session bundle hosts the chrome (taskbar, start menu, palette,
-  // screenshot button via bundled html-to-image) on top of Solid.
-  // Keep an eye on growth but the budget can flex as features land.
-  { name: 'session', dir: 'web/apps/session/dist', maxBytes: 55_000 },
+  // screenshot button via bundled html-to-image) on top of Solid +
+  // lucide-solid for chrome icons. Keep an eye on growth but the
+  // budget can flex as features land.
+  { name: 'session', dir: 'web/apps/session/dist', maxBytes: 70_000 },
   { name: 'about',   dir: 'web/apps/about/dist',   maxBytes: 10_000 },
   { name: 'test',    dir: 'web/apps/test/dist',    maxBytes: 30_000 },
   // wash-term bundles xterm.js + the fit addon + xterm CSS.
   { name: 'term',    dir: 'web/apps/term/dist',    maxBytes: 600_000 },
-  { name: 'fm',      dir: 'web/apps/fm/dist',      maxBytes: 50_000 },
+  { name: 'fm',      dir: 'web/apps/fm/dist',      maxBytes: 70_000 },
 ];
 
 for (const app of APPS) {

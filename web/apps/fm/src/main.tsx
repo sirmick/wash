@@ -19,6 +19,21 @@ import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-j
 import { createStore, produce } from 'solid-js/store';
 import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
+import {
+  ArrowLeft,
+  ArrowUp,
+  ArrowUpDown,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  File as FileIcon,
+  Folder as FolderIcon,
+  Home as HomeIcon,
+  Link2,
+  RotateCw,
+  Square,
+} from 'lucide-solid';
 
 declare global {
   interface Window {
@@ -501,9 +516,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     <>
       {/* toolbar */}
       <div style={toolbarStyle}>
-        <button type="button" data-testid="fm-home" title="Home" style={iconBtnStyle} onClick={goHome}>⌂</button>
-        <button type="button" data-testid="fm-back" title="Back" style={iconBtnStyle} onClick={goBack}>←</button>
-        <button type="button" data-testid="fm-up" title="Up" style={iconBtnStyle} onClick={goUp}>↑</button>
+        <button type="button" data-testid="fm-home" title="Home" style={iconBtnStyle} onClick={goHome}>
+          <HomeIcon size={14} />
+        </button>
+        <button type="button" data-testid="fm-back" title="Back" style={iconBtnStyle} onClick={goBack}>
+          <ArrowLeft size={14} />
+        </button>
+        <button type="button" data-testid="fm-up" title="Up" style={iconBtnStyle} onClick={goUp}>
+          <ArrowUp size={14} />
+        </button>
         <input
           ref={pathInputEl!}
           type="text"
@@ -522,8 +543,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           title="Reload"
           style={iconBtnStyle}
           onClick={() => { if (path()) invalidateAndList(parentPath(path())); }}
-        >↻</button>
-        <button type="button" data-testid="fm-sort" title="Sort" style={iconBtnStyle} onClick={openSortMenu}>⇅</button>
+        >
+          <RotateCw size={14} />
+        </button>
+        <button type="button" data-testid="fm-sort" title="Sort" style={iconBtnStyle} onClick={openSortMenu}>
+          <ArrowUpDown size={14} />
+        </button>
       </div>
 
       {/* body: tree + preview/info */}
@@ -684,7 +709,7 @@ const TreeRow: Component<{
       }}
     >
       <span
-        style={{ width: '12px', 'text-align': 'center', opacity: 0.6, display: 'inline-block', cursor: 'pointer' }}
+        style={{ width: '12px', display: 'inline-flex', 'align-items': 'center', 'justify-content': 'center', opacity: 0.6, cursor: 'pointer' }}
         onClick={(ev) => {
           if (props.entry.type === 'dir') {
             ev.stopPropagation();
@@ -692,9 +717,13 @@ const TreeRow: Component<{
           }
         }}
       >
-        {props.entry.type === 'dir' ? (props.expanded ? '▾' : '▸') : ' '}
+        <Show when={props.entry.type === 'dir'}>
+          {props.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </Show>
       </span>
-      <span style={{ width: '14px', 'text-align': 'center', opacity: 0.8 }}>{iconFor(props.entry)}</span>
+      <span style={{ width: '14px', display: 'inline-flex', 'align-items': 'center', 'justify-content': 'center', opacity: 0.8 }}>
+        <EntryIcon entry={props.entry} />
+      </span>
       <span style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
         {props.entry.name}
       </span>
@@ -734,10 +763,11 @@ const InfoSection: Component<{
       <button
         type="button"
         data-testid="fm-info-toggle"
-        style={infoToggleStyle}
+        style={{ ...infoToggleStyle, display: 'flex', 'align-items': 'center', gap: '6px' }}
         onClick={props.onToggle}
       >
-        {props.open ? '▾ Info' : '▸ Info'}
+        {props.open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        <span>Info</span>
       </button>
       <Show when={props.open}>
         <div data-testid="fm-info" style={infoBodyStyle}>
@@ -779,17 +809,21 @@ const SortMenu: Component<{
   onPick: (k: SortKey) => void;
   onToggleHidden: () => void;
 }> = (props) => {
-  const arrow = (k: SortKey) => (props.sortKey === k ? (props.sortDesc ? ' ▾' : ' ▴') : '');
+  const arrow = (k: SortKey): JSX.Element => {
+    if (props.sortKey !== k) return null;
+    return props.sortDesc ? <ChevronDown size={12} /> : <ChevronUp size={12} />;
+  };
   return (
     <div data-testid="fm-sort-menu" style={{ ...menuBoxStyle, left: `${props.left}px`, top: `${props.top}px` }}>
-      <MenuItem testid="fm-sort-name" label={`Name${arrow('name')}`} onClick={() => props.onPick('name')} />
-      <MenuItem testid="fm-sort-mtime" label={`Modified${arrow('mtime')}`} onClick={() => props.onPick('mtime')} />
-      <MenuItem testid="fm-sort-size" label={`Size${arrow('size')}`} onClick={() => props.onPick('size')} />
-      <MenuItem testid="fm-sort-type" label={`Type${arrow('type')}`} onClick={() => props.onPick('type')} />
+      <MenuItem testid="fm-sort-name" label="Name" trailing={arrow('name')} onClick={() => props.onPick('name')} />
+      <MenuItem testid="fm-sort-mtime" label="Modified" trailing={arrow('mtime')} onClick={() => props.onPick('mtime')} />
+      <MenuItem testid="fm-sort-size" label="Size" trailing={arrow('size')} onClick={() => props.onPick('size')} />
+      <MenuItem testid="fm-sort-type" label="Type" trailing={arrow('type')} onClick={() => props.onPick('type')} />
       <div style={{ height: '1px', background: '#2a2a3a', margin: '4px 0' }} />
       <MenuItem
         testid="fm-show-hidden"
-        label={`${props.showHidden ? '☑' : '☐'} Show hidden`}
+        label="Show hidden"
+        trailing={props.showHidden ? <Check size={12} /> : <Square size={12} />}
         onClick={props.onToggleHidden}
       />
     </div>
@@ -814,7 +848,12 @@ const ContextMenu: Component<{
   );
 };
 
-const MenuItem: Component<{ testid?: string; label: string; onClick: () => void }> = (props) => {
+const MenuItem: Component<{
+  testid?: string;
+  label: string;
+  trailing?: JSX.Element;
+  onClick: () => void;
+}> = (props) => {
   const [hover, setHover] = createSignal(false);
   return (
     <button
@@ -824,7 +863,8 @@ const MenuItem: Component<{ testid?: string; label: string; onClick: () => void 
       onMouseLeave={() => setHover(false)}
       onClick={props.onClick}
       style={{
-        display: 'block',
+        display: 'flex',
+        'align-items': 'center',
         width: '100%',
         'text-align': 'left',
         background: hover() ? '#23233a' : 'transparent',
@@ -835,7 +875,8 @@ const MenuItem: Component<{ testid?: string; label: string; onClick: () => void 
         font: '13px ui-sans-serif,system-ui,sans-serif',
       }}
     >
-      {props.label}
+      <span style={{ flex: 1 }}>{props.label}</span>
+      <Show when={props.trailing}>{props.trailing}</Show>
     </button>
   );
 };
@@ -995,18 +1036,18 @@ const statusStyle: JSX.CSSProperties = {
 
 // ---- helpers ----
 
-function iconFor(e: Entry): string {
-  switch (e.type) {
+const EntryIcon: Component<{ entry: Entry }> = (props) => {
+  switch (props.entry.type) {
     case 'dir':
-      return '📁';
+      return <FolderIcon size={12} />;
     case 'symlink':
-      return '↪';
+      return <Link2 size={12} />;
     case 'file':
-      return '·';
+      return <FileIcon size={12} />;
     default:
-      return '?';
+      return <FileIcon size={12} />;
   }
-}
+};
 
 function joinPath(parent: string, name: string): string {
   if (parent.endsWith('/')) return parent + name;

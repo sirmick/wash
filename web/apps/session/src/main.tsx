@@ -12,6 +12,7 @@ import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-j
 import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
 import { toBlob } from 'html-to-image';
+import { Camera, Menu as MenuIcon, Search } from 'lucide-solid';
 
 interface CatalogApp {
   id: string;
@@ -215,16 +216,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       <div style={taskbarStyle}>
         <IconButton
           ref={(el) => (startBtnEl = el)}
-          svg={hamburgerSVG()}
           title="Apps"
           onClick={toggleMenu}
-        />
+        >
+          <MenuIcon size={18} />
+        </IconButton>
         <IconButton
           testid="palette-open"
-          svg={searchSVG()}
           title="Search apps (Ctrl+Space)"
           onClick={togglePalette}
-        />
+        >
+          <Search size={16} />
+        </IconButton>
         <div style={separatorStyle} />
         <div style={windowListStyle}>
           <For each={windows()}>{(w) => <WindowPill win={w} />}</For>
@@ -237,13 +240,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         </span>
         <IconButton
           testid="screenshot-btn"
-          svg={cameraSVG()}
           title="Screenshot"
           onClick={(ev) => {
             (ev.currentTarget as HTMLButtonElement).blur();
             void captureScreenshot();
           }}
-        />
+        >
+          <Camera size={17} />
+        </IconButton>
         <span style={clockStyle}>{clock()}</span>
       </div>
 
@@ -279,6 +283,24 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
 // ---- sub-components ----
 
+// SpriteIcon renders a Lucide icon from the router-served sprite at
+// /icons.svg (built by web/shell/build-icons.mjs). The manifest icon
+// field is just the lucide name, e.g. "folder".
+const SpriteIcon: Component<{ name: string; size: number }> = (props) => (
+  <svg
+    width={props.size}
+    height={props.size}
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    style={{ display: 'block' }}
+  >
+    <use href={`/icons.svg#${props.name}`} />
+  </svg>
+);
+
 const Banner: Component = () => (
   <div
     style={{
@@ -295,11 +317,11 @@ const Banner: Component = () => (
 );
 
 const IconButton: Component<{
-  svg: string;
   title: string;
   testid?: string;
   ref?: (el: HTMLButtonElement) => void;
   onClick: (ev: MouseEvent) => void;
+  children: JSX.Element;
 }> = (props) => {
   const [hover, setHover] = createSignal(false);
   return (
@@ -311,7 +333,6 @@ const IconButton: Component<{
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       onClick={props.onClick}
-      innerHTML={props.svg}
       style={{
         background: hover() ? 'rgba(255,255,255,0.08)' : 'transparent',
         color: '#eee',
@@ -325,7 +346,9 @@ const IconButton: Component<{
         'justify-content': 'center',
         'flex-shrink': 0,
       }}
-    />
+    >
+      {props.children}
+    </button>
   );
 };
 
@@ -416,7 +439,7 @@ const MenuEntry: Component<{ app: CatalogApp; onPick: () => void }> = (props) =>
         }}
       >
         <Show when={props.app.icon}>
-          <img src={props.app.icon} width="22" height="22" alt="" />
+          <SpriteIcon name={props.app.icon!} size={20} />
         </Show>
       </span>
       <span>{props.app.name}</span>
@@ -542,9 +565,18 @@ const PaletteRow: Component<{
         font: '14px system-ui,sans-serif',
       }}
     >
-      <span style={{ width: '20px', height: '20px', 'flex-shrink': 0 }}>
+      <span
+        style={{
+          width: '20px',
+          height: '20px',
+          'flex-shrink': 0,
+          display: 'inline-flex',
+          'align-items': 'center',
+          'justify-content': 'center',
+        }}
+      >
         <Show when={props.app.icon}>
-          <img src={props.app.icon} width="20" height="20" />
+          <SpriteIcon name={props.app.icon!} size={18} />
         </Show>
       </span>
       <span style={{ flex: 1 }}>{props.app.name}</span>
@@ -552,36 +584,6 @@ const PaletteRow: Component<{
     </button>
   );
 };
-
-// ---- icons ----
-
-function hamburgerSVG(): string {
-  return [
-    "<svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round'>",
-    "<line x1='4' y1='7' x2='20' y2='7'/>",
-    "<line x1='4' y1='12' x2='20' y2='12'/>",
-    "<line x1='4' y1='17' x2='20' y2='17'/>",
-    '</svg>',
-  ].join('');
-}
-
-function searchSVG(): string {
-  return [
-    "<svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round'>",
-    "<circle cx='11' cy='11' r='7'/>",
-    "<line x1='16.5' y1='16.5' x2='21' y2='21'/>",
-    '</svg>',
-  ].join('');
-}
-
-function cameraSVG(): string {
-  return [
-    "<svg width='17' height='17' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>",
-    "<path d='M3 8 H7 L9 5 H15 L17 8 H21 V19 H3 Z'/>",
-    "<circle cx='12' cy='13' r='4'/>",
-    '</svg>',
-  ].join('');
-}
 
 function formatClock(): string {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });

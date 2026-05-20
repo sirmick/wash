@@ -269,5 +269,6 @@ func userShell() string {
 	return "/bin/bash"
 }
 
-// termIcon — a small ">_" prompt-style mark.
-const termIcon = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23eee' stroke-width='1.5' stroke-linecap='round'><polyline points='3,5 6,8 3,11'/><line x1='8' y1='11' x2='13' y2='11'/></svg>"
+// termIcon — Lucide sprite symbol name. See fmIcon for the
+// resolution scheme.
+const termIcon = "terminal"

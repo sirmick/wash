@@ -251,5 +251,6 @@ func sendEvent(c *sdk.Conn, payload map[string]any) {
 	}
 }
 
-// testIcon — small "T" mark to distinguish the test app from About.
-const testIcon = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='2' y='3' width='12' height='2' fill='%23eee'/><rect x='7' y='3' width='2' height='10' fill='%23eee'/></svg>"
+// testIcon — Lucide sprite symbol name (lab-glassware-themed since
+// this is the test harness app).
+const testIcon = "flask-conical"

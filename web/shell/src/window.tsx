@@ -10,6 +10,7 @@
 import { createSignal, onCleanup, onMount } from 'solid-js';
 import { registerMountedElement, unregisterMountedElement } from './api';
 import { focused, moveLocal, raiseLocal, resizeLocal, Win } from './wm';
+import { Maximize2, Minimize2, Minus, X } from 'lucide-solid';
 
 export interface WindowProps {
   win: Win;
@@ -193,7 +194,7 @@ export function FloatingWindow(props: WindowProps) {
           aria-label="Minimize window"
           style={titlebarBtnStyle}
         >
-          _
+          <Minus size={14} />
         </button>
         <button
           onPointerDown={(e) => e.stopPropagation()}
@@ -209,7 +210,7 @@ export function FloatingWindow(props: WindowProps) {
           aria-label={props.win.state === 'maximized' ? 'Restore window' : 'Maximize window'}
           style={titlebarBtnStyle}
         >
-          {props.win.state === 'maximized' ? '❐' : '□'}
+          {props.win.state === 'maximized' ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
         </button>
         <button
           // Stop pointerdown from bubbling so the titlebar's drag
@@ -220,17 +221,10 @@ export function FloatingWindow(props: WindowProps) {
             props.onClose(props.win.windowID);
           }}
           data-testid="window-close"
-          style={{
-            background: 'transparent',
-            color: '#eee',
-            border: 'none',
-            'font-size': '14px',
-            cursor: 'pointer',
-            padding: '0 6px',
-          }}
+          style={titlebarBtnStyle}
           aria-label="Close window"
         >
-          ×
+          <X size={14} />
         </button>
       </div>
       <div ref={slot} style={{ flex: 1, overflow: 'auto' }} />

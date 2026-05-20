@@ -383,4 +383,7 @@ func formatPerm(m os.FileMode) string {
 	return string(out)
 }
 
-const fmIcon = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23eee' stroke-width='1.4' stroke-linejoin='round'><path d='M2 4 H6 L7.5 5.5 H14 V12 H2 Z'/></svg>"
+// fmIcon — Lucide sprite symbol name. The shell renders this via
+// <svg><use href="/icons.svg#folder"/></svg>; the sprite is built
+// from lucide-static at shell build time. See web/shell/build-icons.mjs.
+const fmIcon = "folder"
