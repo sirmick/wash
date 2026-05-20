@@ -77,10 +77,15 @@ type Router struct {
 	clipboard clipboardState
 
 	sessionMu sync.Mutex
-	session   sessionState
+	session   sessionAppState
 
 	initialMu sync.Mutex
-	initial   sessionState
+	initial   sessionAppState
+
+	// windowSession is the canonical state for windows the shell
+	// renders. Sent as a snapshot on shell connect; mutated by router
+	// or shell actions, with patches broadcast to every shell.
+	winSession windowSession
 }
 
 // NewRouter constructs a router; cfg.AppsDirs are expected to already
@@ -258,8 +263,23 @@ func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*Ap
 		return nil, fmt.Errorf("handshake %s: %w", entry.Manifest.ID, err)
 	}
 	r.registerApp(inst)
-	if err := r.declareAppToAllShells(ctx, inst); err != nil {
-		r.log("declare: %v", err)
+	if inst.WindowID != 0 {
+		var defW, defH uint32
+		if inst.Manifest.Window != nil {
+			defW = inst.Manifest.Window.DefaultWidth
+			defH = inst.Manifest.Window.DefaultHeight
+		}
+		patches := r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Name, defW, defH)
+		// Declare the app to shells BEFORE the patch so they have the
+		// bundle in flight when window.upsert lands.
+		if err := r.declareAppToAllShells(ctx, inst); err != nil {
+			r.log("declare: %v", err)
+		}
+		r.broadcastPatches(patches)
+	} else {
+		if err := r.declareAppToAllShells(ctx, inst); err != nil {
+			r.log("declare: %v", err)
+		}
 	}
 	if inst.WindowID != 0 {
 		_ = inst.WriteEvt(wire.NewEvtWindowMapped(inst.WindowID))
@@ -271,9 +291,7 @@ func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*Ap
 		r.unregisterApp(inst)
 		r.closeChannelsForApp(inst, "app exited")
 		if inst.WindowID != 0 {
-			for _, s := range r.shellList() {
-				_ = s.WriteCtrl(wire.NewShellWindowDestroy(inst.WindowID))
-			}
+			r.broadcastPatches(r.winSession.destroyWindow(inst.WindowID))
 		}
 		_ = transport.Close()
 		_ = cmd.Wait()
@@ -366,5 +384,19 @@ func (r *Router) declareAppToAllShells(ctx context.Context, inst *AppInstance) e
 		return ctx.Err()
 	}
 	return nil
+}
+
+// broadcastPatches sends a single session.patch frame to every
+// connected shell. No-op if patches is empty.
+func (r *Router) broadcastPatches(patches []wire.SessionPatch) {
+	if len(patches) == 0 {
+		return
+	}
+	msg := wire.NewShellSessionPatch(patches...)
+	for _, s := range r.shellList() {
+		if err := s.WriteCtrl(msg); err != nil {
+			r.log("broadcast patch: %v", err)
+		}
+	}
 }
 

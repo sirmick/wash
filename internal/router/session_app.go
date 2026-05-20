@@ -11,8 +11,8 @@ import (
 // missing or disabled.
 var ErrNoSessionApp = errors.New("session app not available")
 
-// sessionState tracks the (single) session app's lifecycle.
-type sessionState struct {
+// sessionAppState tracks the (single) session app's lifecycle.
+type sessionAppState struct {
 	mu      sync.Mutex
 	started bool
 }

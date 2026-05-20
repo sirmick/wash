@@ -94,19 +94,20 @@ func (r *Router) handleAppOpts(ctx context.Context, t FrameTransport, manifest *
 	if err := r.declareAppToAllShells(ctx, inst); err != nil {
 		r.log("declare to shell: %v", err)
 	}
-	// Tell the app its window is mapped (if it has one). For
-	// surface=desktop, no window event.
 	if inst.WindowID != 0 {
+		var defW, defH uint32
+		if inst.Manifest.Window != nil {
+			defW = inst.Manifest.Window.DefaultWidth
+			defH = inst.Manifest.Window.DefaultHeight
+		}
+		r.broadcastPatches(r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Name, defW, defH))
 		_ = inst.WriteEvt(wire.NewEvtWindowMapped(inst.WindowID))
 	}
 	err := inst.loop(ctx)
 	r.unregisterApp(inst)
 	r.closeChannelsForApp(inst, "app exited")
-	// Tell shells the window is gone.
 	if inst.WindowID != 0 {
-		for _, s := range r.shellList() {
-			_ = s.WriteCtrl(wire.NewShellWindowDestroy(inst.WindowID))
-		}
+		r.broadcastPatches(r.winSession.destroyWindow(inst.WindowID))
 	}
 	_ = t.Close()
 	return err
@@ -396,12 +397,7 @@ func (inst *AppInstance) relayWindowTitle(m wire.EvtWindowSetTitle) error {
 	if m.Win != inst.WindowID {
 		return nil
 	}
-	msg := wire.NewShellWindowTitle(m.Win, m.Title)
-	for _, s := range inst.router.shellList() {
-		if err := s.WriteCtrl(msg); err != nil {
-			return err
-		}
-	}
+	inst.router.broadcastPatches(inst.router.winSession.setTitle(m.Win, m.Title))
 	return nil
 }
 

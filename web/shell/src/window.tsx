@@ -1,10 +1,15 @@
 // Floating window component. Mounts the app's custom element in a
 // shadow-DOM-free slot (the element itself owns Shadow DOM); the
 // frame owns titlebar, drag, focus-raise, and close.
+//
+// Geometry, focus, and state come from the WM store, which mirrors
+// router state. Pointer interactions emit window.move / window.resize
+// / window.focus / window.state on the wire; the router applies them
+// and broadcasts a session.patch back, which lands in the store.
 
-import { onCleanup, onMount } from 'solid-js';
+import { createSignal, onCleanup, onMount } from 'solid-js';
 import { registerMountedElement, unregisterMountedElement } from './api';
-import { focused, move, raise, removeWindow, resize, Win } from './wm';
+import { focused, raiseLocal, Win } from './wm';
 
 export interface WindowProps {
   win: Win;
@@ -14,14 +19,21 @@ export interface WindowProps {
 export function FloatingWindow(props: WindowProps) {
   let slot!: HTMLDivElement;
 
+  // Local "drag override" so the visible position tracks the cursor
+  // at 60Hz without round-tripping every frame. On pointer-up we
+  // send window.move once; the store catches up via the broadcast
+  // patch a moment later and we clear the override.
+  const [dragX, setDragX] = createSignal<number | null>(null);
+  const [dragY, setDragY] = createSignal<number | null>(null);
+  // Same idea for resize.
+  const [resizeW, setResizeW] = createSignal<number | null>(null);
+  const [resizeH, setResizeH] = createSignal<number | null>(null);
+
   onMount(() => {
     const el = document.createElement(props.win.element);
     el.setAttribute('data-wash-instance', props.win.instanceID);
     slot.appendChild(el);
-    // Register with the BE→FE message dispatcher; any messages that
-    // arrived during the render gap are flushed here.
     registerMountedElement(props.win.instanceID, el);
-    // Tell the router the window has focus so the BE sees it.
     window.wash.focusWindow(props.win.windowID);
   });
   onCleanup(() => {
@@ -30,7 +42,7 @@ export function FloatingWindow(props: WindowProps) {
 
   const onTitlebarPointerDown = (ev: PointerEvent) => {
     ev.preventDefault();
-    raise(props.win.windowID);
+    window.wash.focusWindow(props.win.windowID);
     const startX = ev.clientX;
     const startY = ev.clientY;
     const origX = props.win.x;
@@ -38,31 +50,32 @@ export function FloatingWindow(props: WindowProps) {
     const target = ev.currentTarget as HTMLElement;
     target.setPointerCapture(ev.pointerId);
     const onMove = (m: PointerEvent) => {
-      move(props.win.windowID, origX + (m.clientX - startX), origY + (m.clientY - startY));
+      setDragX(Math.round(origX + (m.clientX - startX)));
+      setDragY(Math.round(origY + (m.clientY - startY)));
     };
     const onUp = () => {
       target.removeEventListener('pointermove', onMove);
       target.removeEventListener('pointerup', onUp);
       target.releasePointerCapture(ev.pointerId);
+      const x = dragX();
+      const y = dragY();
+      setDragX(null);
+      setDragY(null);
+      if (x != null && y != null && (x !== origX || y !== origY)) {
+        window.wash.moveWindow(props.win.windowID, x, y);
+      }
     };
     target.addEventListener('pointermove', onMove);
     target.addEventListener('pointerup', onUp);
   };
 
-  // Local raise + notify the router so the app's BE gets a focus event.
-  const focusWindow = () => {
-    raise(props.win.windowID);
-    window.wash.focusWindow(props.win.windowID);
-  };
-  const onWindowPointerDown = () => focusWindow();
+  const onWindowPointerDown = () => window.wash.focusWindow(props.win.windowID);
 
-  // Bottom-right resize: drag updates the WM state locally; on commit
-  // (pointerup) we tell the router so the BE gets EvtWindowResize.
-  // Live-resize for terminal-style apps is a later opt-in.
+  // Bottom-right resize: track override locally, commit on release.
   const onResizeHandlePointerDown = (ev: PointerEvent) => {
     ev.preventDefault();
     ev.stopPropagation();
-    raise(props.win.windowID);
+    window.wash.focusWindow(props.win.windowID);
     const target = ev.currentTarget as HTMLElement;
     target.setPointerCapture(ev.pointerId);
     const startX = ev.clientX;
@@ -70,17 +83,22 @@ export function FloatingWindow(props: WindowProps) {
     const origW = props.win.w;
     const origH = props.win.h;
     const onMove = (m: PointerEvent) => {
-      // Round — HiDPI / browser zoom can make clientX/Y fractional,
-      // and the wire types are uint32.
       const newW = Math.max(160, Math.round(origW + (m.clientX - startX)));
       const newH = Math.max(80, Math.round(origH + (m.clientY - startY)));
-      resize(props.win.windowID, newW, newH);
+      setResizeW(newW);
+      setResizeH(newH);
     };
     const onUp = () => {
       target.removeEventListener('pointermove', onMove);
       target.removeEventListener('pointerup', onUp);
       target.releasePointerCapture(ev.pointerId);
-      window.wash.resizeWindow(props.win.windowID, props.win.w, props.win.h);
+      const w = resizeW();
+      const h = resizeH();
+      setResizeW(null);
+      setResizeH(null);
+      if (w != null && h != null && (w !== origW || h !== origH)) {
+        window.wash.resizeWindow(props.win.windowID, w, h);
+      }
     };
     target.addEventListener('pointermove', onMove);
     target.addEventListener('pointerup', onUp);
@@ -116,12 +134,16 @@ export function FloatingWindow(props: WindowProps) {
         height: 'calc(100vh - 40px)',
       };
     }
+    const x = dragX() ?? props.win.x;
+    const y = dragY() ?? props.win.y;
+    const w = resizeW() ?? props.win.w;
+    const h = resizeH() ?? props.win.h;
     return {
       ...base,
-      left: `${props.win.x}px`,
-      top: `${props.win.y}px`,
-      width: `${props.win.w}px`,
-      height: `${props.win.h}px`,
+      left: `${x}px`,
+      top: `${y}px`,
+      width: `${w}px`,
+      height: `${h}px`,
     };
   };
 
@@ -219,7 +241,6 @@ export function FloatingWindow(props: WindowProps) {
           height: '14px',
           cursor: 'nwse-resize',
           'z-index': '1',
-          // Light hint via a corner triangle of gradient.
           background:
             'linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0.18) 70%, transparent 70%)',
         }}
@@ -228,10 +249,9 @@ export function FloatingWindow(props: WindowProps) {
   );
 }
 
-// Convenience for the desktop button click path.
-export function destroyWindow(windowID: number) {
-  removeWindow(windowID);
-}
+// Keep the symbol around even though raise* is gone — older callers
+// (the desktop button click path) reach for it.
+export { raiseLocal };
 
 const titlebarBtnStyle = {
   background: 'transparent',

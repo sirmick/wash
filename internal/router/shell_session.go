@@ -24,12 +24,6 @@ type ShellSession struct {
 	// declare and any follow-on relay are observed in order by the
 	// receiver.
 	declared map[string]bool
-
-	// lastFocused is the window currently believed to hold focus on
-	// this shell. Used to emit EvtWindowUnfocus on the previous
-	// window when focus moves. Touched only from the shell's frame
-	// loop goroutine.
-	lastFocused uint32
 }
 
 // declareInstance sends ShellAppDeclared (and ShellWindowCreate for
@@ -46,6 +40,10 @@ func (s *ShellSession) declareInstance(inst *AppInstance) error {
 }
 
 // declareInstanceLocked assumes writeMu is held by the caller.
+//
+// Sends app.declared so the shell starts fetching the bundle. The
+// window itself comes via session.snapshot / session.patch — the
+// router owns geometry, not declare.
 func (s *ShellSession) declareInstanceLocked(inst *AppInstance) error {
 	if s.declared == nil {
 		s.declared = make(map[string]bool)
@@ -63,25 +61,12 @@ func (s *ShellSession) declareInstanceLocked(inst *AppInstance) error {
 	if inst.Kiosk {
 		surface = SurfaceDesktop
 	}
-	if err := s.writeCtrlLocked(wire.NewShellAppDeclared(
+	return s.writeCtrlLocked(wire.NewShellAppDeclared(
 		inst.InstanceID,
 		inst.Manifest.Element,
 		surface,
 		manifestJSON,
-	)); err != nil {
-		return err
-	}
-	if inst.WindowID != 0 {
-		var w, h uint32
-		if inst.Manifest.Window != nil {
-			w = inst.Manifest.Window.DefaultWidth
-			h = inst.Manifest.Window.DefaultHeight
-		}
-		return s.writeCtrlLocked(wire.NewShellWindowCreate(
-			inst.WindowID, inst.InstanceID, inst.Manifest.Name, w, h,
-		))
-	}
-	return nil
+	))
 }
 
 // undeclareInstance forgets inst so a future declare can fire again
@@ -114,7 +99,9 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 
 	// Snapshot apps under the router lock; declare them while we
 	// still hold writeMu so any racing HandleApp is correctly
-	// deduped.
+	// deduped. Order matters: app.declared (one per app) must arrive
+	// before the session.snapshot so the shell has bundles in flight
+	// by the time it sees window upserts.
 	r.mu.Lock()
 	snapshot := make([]*AppInstance, 0, len(r.apps))
 	for _, inst := range r.apps {
@@ -126,6 +113,10 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 			sess.writeMu.Unlock()
 			return err
 		}
+	}
+	if err := sess.writeCtrlLocked(wire.NewShellSessionSnapshot(r.winSession.snapshot())); err != nil {
+		sess.writeMu.Unlock()
+		return err
 	}
 	sess.writeMu.Unlock()
 
@@ -194,6 +185,8 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		return s.handleWindowCloseClicked(m)
 	case wire.ShellWindowFocus:
 		return s.handleWindowFocus(m)
+	case wire.ShellWindowMove:
+		return s.handleWindowMove(m)
 	case wire.ShellWindowResize:
 		return s.handleWindowResize(m)
 	case wire.ShellWindowState:
@@ -245,10 +238,10 @@ func (s *ShellSession) handleWindowCloseClicked(m wire.ShellWindowCloseClicked) 
 			return
 		}
 		if allowed {
-			for _, sh := range s.router.shellList() {
-				_ = sh.WriteCtrl(wire.NewShellWindowDestroy(m.WindowID))
-			}
-			// teardown is handled by the loop when the app exits.
+			// Tell shells the window is gone now. The app's loop
+			// teardown will also call destroyWindow when it exits;
+			// the second call is a no-op (already deleted).
+			s.router.broadcastPatches(s.router.winSession.destroyWindow(m.WindowID))
 			if inst.Cmd != nil && inst.Cmd.Process != nil {
 				// Send SIGTERM gracefully; loop will detect EOF.
 				_ = inst.Cmd.Process.Signal(stopSignal())
@@ -258,30 +251,47 @@ func (s *ShellSession) handleWindowCloseClicked(m wire.ShellWindowCloseClicked) 
 	return nil
 }
 
+// handleWindowFocus updates router state and tells the affected apps
+// about focus/unfocus on their event channels. Focus state is global
+// to the session — flipping it in one shell propagates to all shells
+// via the broadcast patch.
 func (s *ShellSession) handleWindowFocus(m wire.ShellWindowFocus) error {
-	if m.WindowID == s.lastFocused {
+	// Snapshot previous focused window before the mutation so we can
+	// emit EvtWindowUnfocus to whoever lost it.
+	prev := s.router.winSession.focusedWindowID()
+	patches := s.router.winSession.focus(m.WindowID)
+	if len(patches) == 0 {
 		return nil
 	}
-	prev := s.lastFocused
-	s.lastFocused = m.WindowID
-
-	s.router.mu.Lock()
-	inst := s.router.byWin[m.WindowID]
-	prevInst := s.router.byWin[prev]
-	s.router.mu.Unlock()
-
-	if prev != 0 && prevInst != nil {
-		if err := prevInst.WriteEvt(wire.NewEvtWindowUnfocus(prev)); err != nil {
-			s.router.log("unfocus relay: %v", err)
+	s.router.broadcastPatches(patches)
+	if prev != 0 && prev != m.WindowID {
+		s.router.mu.Lock()
+		prevInst := s.router.byWin[prev]
+		s.router.mu.Unlock()
+		if prevInst != nil {
+			if err := prevInst.WriteEvt(wire.NewEvtWindowUnfocus(prev)); err != nil {
+				s.router.log("unfocus relay: %v", err)
+			}
 		}
 	}
+	s.router.mu.Lock()
+	inst := s.router.byWin[m.WindowID]
+	s.router.mu.Unlock()
 	if inst == nil {
 		return nil
 	}
 	return inst.WriteEvt(wire.NewEvtWindowFocus(m.WindowID))
 }
 
+func (s *ShellSession) handleWindowMove(m wire.ShellWindowMove) error {
+	s.router.broadcastPatches(s.router.winSession.move(m.WindowID, m.X, m.Y))
+	// No EvtWindowMove on the app side yet — apps that care about
+	// position would need a new event; nothing requests it today.
+	return nil
+}
+
 func (s *ShellSession) handleWindowResize(m wire.ShellWindowResize) error {
+	s.router.broadcastPatches(s.router.winSession.resize(m.WindowID, m.W, m.H))
 	s.router.mu.Lock()
 	inst := s.router.byWin[m.WindowID]
 	s.router.mu.Unlock()
@@ -298,6 +308,7 @@ func (s *ShellSession) handleWindowState(m wire.ShellWindowState) error {
 		s.router.log("shell: invalid window.state %q", m.State)
 		return nil
 	}
+	s.router.broadcastPatches(s.router.winSession.setState(m.WindowID, m.State))
 	s.router.mu.Lock()
 	inst := s.router.byWin[m.WindowID]
 	s.router.mu.Unlock()

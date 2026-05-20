@@ -73,13 +73,16 @@ func TestSpine(t *testing.T) {
 
 	// Wire the real SDK on the app side. Manifest.OnMapped sets the
 	// title; OnCloseRequested defaults to allow=true.
+	// OnMapped sets a title distinct from the manifest Name so the
+	// router-side title patch isn't optimized away as a no-op.
+	const mappedTitle = "About wash — ready"
 	titleSet := make(chan string, 1)
 	def := &sdk.AppDef{
 		Manifest: aboutManifest,
 		Assets:   fstest.MapFS{"index.js": &fstest.MapFile{Data: []byte(bundleBody)}},
 		OnMapped: func(c *sdk.Conn, win uint32) {
-			_ = c.SetTitle("About wash")
-			titleSet <- "About wash"
+			_ = c.SetTitle(mappedTitle)
+			titleSet <- mappedTitle
 		},
 	}
 	c, err := sdk.ConnectWith(appPair.EndB(), def)
@@ -92,45 +95,66 @@ func TestSpine(t *testing.T) {
 	// The fake shell side reads frames as a real shell would.
 	shell := shellPair.EndB()
 
-	// 0. Catalog goes out first on shell connect. The registry is
-	//    empty here, so apps is empty too.
+	// 0. Catalog goes out first on shell connect.
 	if _, ok := readCtrl(t, shell).(wire.ShellCatalog); !ok {
 		t.Fatalf("expected ShellCatalog first")
 	}
 
-	// 1. Receive ShellAppDeclared.
-	msg1 := readCtrl(t, shell)
-	declared, ok := msg1.(wire.ShellAppDeclared)
-	if !ok {
-		t.Fatalf("expected ShellAppDeclared, got %T %+v", msg1, msg1)
+	// 1. Drain frames until we have both app.declared and a window
+	// upsert. They arrive in either order depending on whether the
+	// shell registered before or after the app finished handshake —
+	// declares can come from the HandleShell setup loop or from the
+	// HandleApp broadcast.
+	var declared *wire.ShellAppDeclared
+	var window *wire.SessionWindow
+	for declared == nil || window == nil {
+		switch m := readCtrl(t, shell).(type) {
+		case wire.ShellAppDeclared:
+			d := m
+			declared = &d
+		case wire.ShellSessionSnapshot:
+			for i := range m.Windows {
+				w := m.Windows[i]
+				window = &w
+			}
+		case wire.ShellSessionPatch:
+			for _, p := range m.Patches {
+				if p.Op == wire.SessionPatchWindowUpsert && p.Window != nil {
+					w := *p.Window
+					window = &w
+				}
+			}
+		}
 	}
 	if declared.Element != "wash-app-about" || declared.Surface != router.SurfaceWindow {
 		t.Fatalf("bad declared: %+v", declared)
 	}
-
-	// 2. Receive ShellWindowCreate.
-	winCreate, ok := readCtrl(t, shell).(wire.ShellWindowCreate)
-	if !ok {
-		t.Fatalf("expected ShellWindowCreate")
+	if window.W != 480 || window.H != 320 {
+		t.Fatalf("window geometry: %+v", window)
 	}
-	if winCreate.W != 480 || winCreate.H != 320 {
-		t.Fatalf("window create geometry: %+v", winCreate)
-	}
+	winID := window.WindowID
 
-	// 3. The SDK's OnMapped fires; OnMapped also calls SetTitle.
+	// 2. The SDK's OnMapped fires; OnMapped also calls SetTitle.
 	select {
 	case <-titleSet:
 	case <-time.After(2 * time.Second):
 		t.Fatal("OnMapped never fired")
 	}
-	// 4. ShellWindowTitle arrives on the shell from the relayed
-	//    EvtWindowSetTitle.
-	titleMsg, ok := readCtrl(t, shell).(wire.ShellWindowTitle)
-	if !ok || titleMsg.Title != "About wash" {
-		t.Fatalf("expected window.title 'About wash', got %+v", titleMsg)
+	// 3. A session.patch arrives with the new title. May be preceded
+	//    by other in-flight frames; drain until we see it.
+	for {
+		switch m := readCtrl(t, shell).(type) {
+		case wire.ShellSessionPatch:
+			for _, p := range m.Patches {
+				if p.Op == wire.SessionPatchWindowUpsert && p.Window != nil && p.Window.WindowID == winID && p.Window.Title == mappedTitle {
+					goto titlePatchFound
+				}
+			}
+		}
 	}
+titlePatchFound:
 
-	// 5. Shell asks for the bundle; SDK serves it; router relays.
+	// 4. Shell asks for the bundle; SDK serves it; router relays.
 	writeCtrl(t, shell, wire.NewShellAssetFetch(declared.InstanceID, "index.js"))
 	deliver, ok := readCtrl(t, shell).(wire.ShellAssetDeliver)
 	if !ok || !deliver.End {
@@ -144,17 +168,21 @@ func TestSpine(t *testing.T) {
 		t.Fatalf("bundle bytes mismatch: %q", string(gotBundle))
 	}
 
-	// 6. Close handshake: user clicks the titlebar close. Router →
-	//    EvtWindowCloseRequested → SDK auto-confirms → router →
-	//    ShellWindowDestroy.
-	writeCtrl(t, shell, wire.NewShellWindowCloseClicked(winCreate.WindowID))
-	destroyed, ok := readCtrl(t, shell).(wire.ShellWindowDestroy)
-	if !ok {
-		t.Fatalf("expected ShellWindowDestroy, got %T", destroyed)
+	// 5. Close handshake: shell sends close_clicked → router runs the
+	//    close handshake with the app (which auto-confirms) → router
+	//    broadcasts session.patch with window.delete.
+	writeCtrl(t, shell, wire.NewShellWindowCloseClicked(winID))
+	for {
+		switch m := readCtrl(t, shell).(type) {
+		case wire.ShellSessionPatch:
+			for _, p := range m.Patches {
+				if p.Op == wire.SessionPatchWindowDelete && p.WindowID == winID {
+					goto deletePatchFound
+				}
+			}
+		}
 	}
-	if destroyed.WindowID != winCreate.WindowID {
-		t.Fatalf("destroyed wrong window: %+v", destroyed)
-	}
+deletePatchFound:
 
 	// Tear down.
 	cancel()

@@ -13,17 +13,17 @@ import "encoding/json"
 // types (§9) that use overlapping names like window.focus.
 const (
 	// Router → shell.
-	TShellCatalog       = "catalog"
-	TShellAppDeclared   = "app.declared"
-	TShellWindowCreate  = "window.create"
-	TShellWindowDestroy = "window.destroy"
-	TShellWindowTitle   = "window.title"
-	TShellAssetDeliver  = "asset.deliver"
+	TShellCatalog          = "catalog"
+	TShellAppDeclared      = "app.declared"
+	TShellSessionSnapshot  = "session.snapshot"
+	TShellSessionPatch     = "session.patch"
+	TShellAssetDeliver     = "asset.deliver"
 
 	// Shell → router.
 	TShellAssetFetch         = "asset.fetch"
 	TShellWindowCloseClicked = "window.close_clicked"
 	TShellWindowFocus        = "window.focus"
+	TShellWindowMove         = "window.move"
 	TShellWindowResize       = "window.resize"
 	TShellWindowState        = "window.state"
 	TShellAppMsgSend         = "app_msg.send"
@@ -110,41 +110,72 @@ func NewShellAppDeclared(instanceID, element, surface string, manifest json.RawM
 	return ShellAppDeclared{T: TShellAppDeclared, InstanceID: instanceID, Element: element, Surface: surface, Manifest: manifest}
 }
 
-// ShellWindowCreate asks the shell to create a floating window and
-// mount the instance's element inside it. Not emitted for
-// surface:"desktop"; the shell mounts at the root surface instead.
-type ShellWindowCreate struct {
-	T          string `json:"t"`
+// SessionWindow is the router-canonical state for one window. The
+// router owns geometry, z-order, focus, and lifecycle state; shells
+// are observers that emit pointer events back as wire messages.
+//
+// X/Y are int32 so a window can sit partially off-screen (negative)
+// without overflow. W/H/Z are uint32.
+type SessionWindow struct {
 	WindowID   uint32 `json:"window_id"`
 	InstanceID string `json:"instance_id"`
+	Element    string `json:"element"`
 	Title      string `json:"title"`
+	X          int32  `json:"x"`
+	Y          int32  `json:"y"`
 	W          uint32 `json:"w"`
 	H          uint32 `json:"h"`
+	Z          uint32 `json:"z"`
+	State      string `json:"state"` // normal | minimized | maximized
+	Focused    bool   `json:"focused"`
+	// Pre-min/max geometry; preserved so restoreWindow returns to the
+	// user-set frame even after a chain of min → max → restore.
+	RestoreX int32  `json:"restore_x,omitempty"`
+	RestoreY int32  `json:"restore_y,omitempty"`
+	RestoreW uint32 `json:"restore_w,omitempty"`
+	RestoreH uint32 `json:"restore_h,omitempty"`
 }
 
-func NewShellWindowCreate(windowID uint32, instanceID, title string, w, h uint32) ShellWindowCreate {
-	return ShellWindowCreate{T: TShellWindowCreate, WindowID: windowID, InstanceID: instanceID, Title: title, W: w, H: h}
+// ShellSessionSnapshot is the router's "here is everything you need
+// to render" message, sent on shell connect immediately after the
+// catalog. After this, all state changes arrive as ShellSessionPatch.
+type ShellSessionSnapshot struct {
+	T       string          `json:"t"`
+	Windows []SessionWindow `json:"windows"`
 }
 
-// ShellWindowDestroy tears down a window in the shell.
-type ShellWindowDestroy struct {
-	T        string `json:"t"`
-	WindowID uint32 `json:"window_id"`
+func NewShellSessionSnapshot(wins []SessionWindow) ShellSessionSnapshot {
+	if wins == nil {
+		wins = []SessionWindow{}
+	}
+	return ShellSessionSnapshot{T: TShellSessionSnapshot, Windows: wins}
 }
 
-func NewShellWindowDestroy(windowID uint32) ShellWindowDestroy {
-	return ShellWindowDestroy{T: TShellWindowDestroy, WindowID: windowID}
+// SessionPatchOp values.
+const (
+	SessionPatchWindowUpsert = "window.upsert"
+	SessionPatchWindowDelete = "window.delete"
+)
+
+// SessionPatch is one change to the session state. For upsert, Window
+// carries the full new state. For delete, only WindowID is meaningful.
+type SessionPatch struct {
+	Op       string         `json:"op"`
+	Window   *SessionWindow `json:"window,omitempty"`
+	WindowID uint32         `json:"window_id,omitempty"`
 }
 
-// ShellWindowTitle updates a window's titlebar text.
-type ShellWindowTitle struct {
-	T        string `json:"t"`
-	WindowID uint32 `json:"window_id"`
-	Title    string `json:"title"`
+// ShellSessionPatch is a batched set of state mutations the shell
+// applies in order. Batching matters for atomic-feeling updates (e.g.
+// focus change clears Focused on the old window AND sets it on the
+// new one — both upserts in one patch).
+type ShellSessionPatch struct {
+	T       string         `json:"t"`
+	Patches []SessionPatch `json:"patches"`
 }
 
-func NewShellWindowTitle(windowID uint32, title string) ShellWindowTitle {
-	return ShellWindowTitle{T: TShellWindowTitle, WindowID: windowID, Title: title}
+func NewShellSessionPatch(patches ...SessionPatch) ShellSessionPatch {
+	return ShellSessionPatch{T: TShellSessionPatch, Patches: patches}
 }
 
 // ShellAssetDeliver carries a bundle chunk back to the shell. Mirrors
@@ -195,6 +226,20 @@ type ShellWindowFocus struct {
 
 func NewShellWindowFocus(windowID uint32) ShellWindowFocus {
 	return ShellWindowFocus{T: TShellWindowFocus, WindowID: windowID}
+}
+
+// ShellWindowMove is the user committing a new position (drag-move
+// end). v0.1 only emits this on drag completion; live position
+// streaming would be a future opt-in (multi-cursor coordination etc).
+type ShellWindowMove struct {
+	T        string `json:"t"`
+	WindowID uint32 `json:"window_id"`
+	X        int32  `json:"x"`
+	Y        int32  `json:"y"`
+}
+
+func NewShellWindowMove(windowID uint32, x, y int32) ShellWindowMove {
+	return ShellWindowMove{T: TShellWindowMove, WindowID: windowID, X: x, Y: y}
 }
 
 // ShellWindowResize is the user committing a new size (drag-resize

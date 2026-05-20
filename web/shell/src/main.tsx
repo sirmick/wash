@@ -1,20 +1,23 @@
 // Browser shell runtime entrypoint. Connects to ws://<host>/ws and
 // drives the WM via the messages in WIRE.md §8.
+//
+// WM state is server-authoritative: the router sends a session.snapshot
+// on connect and session.patch on every change. The shell stores the
+// state and renders from it. Local pointer interactions emit
+// window.move/resize/state/focus back to the router, which applies
+// the mutation and broadcasts the patch to all attached shells —
+// keeping every browser viewing the session in sync.
 
 import { render } from 'solid-js/web';
 import { For, createEffect } from 'solid-js';
 import { Conn } from './ws';
 import { fetchAndImport, onAssetDeliver } from './assets';
 import {
-  addWindow,
+  applySessionPatch,
+  applySessionSnapshot,
   focused,
-  maximize,
-  minimize,
   mountDesktop,
-  raise,
-  removeWindow,
-  restoreWin,
-  setTitle,
+  raiseLocal,
   windows,
 } from './wm';
 import { Desktop } from './desktop';
@@ -43,24 +46,38 @@ interface ShellAppDeclared {
   manifest: any;
 }
 
-interface ShellWindowCreate {
-  t: 'window.create';
+export interface SessionWindow {
   window_id: number;
   instance_id: string;
+  element: string;
   title: string;
+  x: number;
+  y: number;
   w: number;
   h: number;
+  z: number;
+  state: 'normal' | 'minimized' | 'maximized';
+  focused: boolean;
+  restore_x?: number;
+  restore_y?: number;
+  restore_w?: number;
+  restore_h?: number;
 }
 
-interface ShellWindowDestroy {
-  t: 'window.destroy';
-  window_id: number;
+interface ShellSessionSnapshot {
+  t: 'session.snapshot';
+  windows: SessionWindow[];
 }
 
-interface ShellWindowTitle {
-  t: 'window.title';
-  window_id: number;
-  title: string;
+export interface SessionPatch {
+  op: 'window.upsert' | 'window.delete';
+  window?: SessionWindow;
+  window_id?: number;
+}
+
+interface ShellSessionPatch {
+  t: 'session.patch';
+  patches: SessionPatch[];
 }
 
 interface ShellAssetDeliver {
@@ -132,14 +149,11 @@ const conn = new Conn(
       case 'app.declared':
         handleAppDeclared(msg as ShellAppDeclared);
         break;
-      case 'window.create':
-        handleWindowCreate(msg as ShellWindowCreate);
+      case 'session.snapshot':
+        handleSnapshot(msg as ShellSessionSnapshot);
         break;
-      case 'window.destroy':
-        removeWindow((msg as ShellWindowDestroy).window_id);
-        break;
-      case 'window.title':
-        setTitle((msg as ShellWindowTitle).window_id, (msg as ShellWindowTitle).title);
+      case 'session.patch':
+        handlePatch(msg as ShellSessionPatch);
         break;
       case 'asset.deliver':
         onAssetDeliver(msg as ShellAssetDeliver);
@@ -206,28 +220,25 @@ function handleAppDeclared(msg: ShellAppDeclared): void {
       console.error('wash: desktop bundle:', err),
     );
   }
-  // For surface=window, handleWindowCreate awaits bundleReady before
-  // adding the window so the custom element class is defined by the
-  // time onMount runs createElement.
+  // surface=window apps are mounted when their session.upsert lands;
+  // we wait for bundleReady there so the element class is defined
+  // before onMount calls createElement.
 }
 
-function handleWindowCreate(msg: ShellWindowCreate): void {
-  const inst = instances.get(msg.instance_id);
-  if (!inst) {
-    console.warn('wash: window.create for unknown instance', msg.instance_id);
-    return;
-  }
-  const p = bundleReady.get(msg.instance_id) ?? Promise.resolve();
-  p.then(() => {
-    addWindow({
-      windowID: msg.window_id,
-      instanceID: msg.instance_id,
-      element: inst.element,
-      title: msg.title || 'wash',
-      w: msg.w || 480,
-      h: msg.h || 320,
-    });
-  }).catch((err) => console.error('wash: window mount blocked on bundle:', err));
+// handleSnapshot rebuilds the local WM state from the router's
+// canonical view. Sent on connect/reconnect. Each window waits for
+// its bundle to be ready before being added to the store so onMount
+// can resolve the custom element.
+function handleSnapshot(msg: ShellSessionSnapshot): void {
+  applySessionSnapshot(msg.windows, waitForBundle);
+}
+
+function handlePatch(msg: ShellSessionPatch): void {
+  applySessionPatch(msg.patches, waitForBundle);
+}
+
+function waitForBundle(instanceID: string): Promise<void> {
+  return bundleReady.get(instanceID) ?? Promise.resolve();
 }
 
 // Bridge a window's close-button click into the WS protocol.
@@ -260,6 +271,7 @@ declare global {
       onWindowsChanged(cb: (windows: WindowInfo[]) => void): () => void;
       focusWindow(id: number): void;
       closeWindow(id: number): void;
+      moveWindow(id: number, x: number, y: number): void;
       resizeWindow(id: number, w: number, h: number): void;
       minimizeWindow(id: number): void;
       maximizeWindow(id: number): void;
@@ -292,28 +304,29 @@ window.wash = {
   windows: () => windowsSub.value,
   onWindowsChanged: (cb) => windowsSub.on(cb),
   focusWindow(id) {
-    raise(id);
+    // Local raise gives instant visual focus feedback; the router's
+    // patch will confirm the z bump moments later.
+    raiseLocal(id);
     conn.sendCtrl({ t: 'window.focus', window_id: id });
   },
   closeWindow(id) {
     conn.sendCtrl({ t: 'window.close_clicked', window_id: id });
   },
+  moveWindow(id, x, y) {
+    conn.sendCtrl({ t: 'window.move', window_id: id, x, y });
+  },
   resizeWindow(id, w, h) {
     conn.sendCtrl({ t: 'window.resize', window_id: id, w, h });
   },
   minimizeWindow(id) {
-    minimize(id);
     conn.sendCtrl({ t: 'window.state', window_id: id, state: 'minimized' });
   },
   maximizeWindow(id) {
-    maximize(id);
     conn.sendCtrl({ t: 'window.state', window_id: id, state: 'maximized' });
   },
   restoreWindow(id) {
-    restoreWin(id);
     conn.sendCtrl({ t: 'window.state', window_id: id, state: 'normal' });
     // Restoring also brings to front + grabs focus.
-    raise(id);
     conn.sendCtrl({ t: 'window.focus', window_id: id });
   },
   log(level, source, msg, stack) {

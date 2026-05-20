@@ -104,20 +104,37 @@ func TestHandshakeAndAssetPull(t *testing.T) {
 		t.Fatalf("expected empty catalog, got %+v", cat.Apps)
 	}
 
-	// Then ShellAppDeclared + ShellWindowCreate.
-	declared, ok := readCtrl(t, shellPair.EndB()).(wire.ShellAppDeclared)
-	if !ok {
-		t.Fatalf("expected ShellAppDeclared")
+	// Drain frames until we have both app.declared and a window
+	// upsert for our app. They can arrive in either order because the
+	// shell-setup loop and the HandleApp broadcast race.
+	var declared *wire.ShellAppDeclared
+	var window *wire.SessionWindow
+	for declared == nil || window == nil {
+		switch m := readCtrl(t, shellPair.EndB()).(type) {
+		case wire.ShellAppDeclared:
+			d := m
+			declared = &d
+		case wire.ShellSessionSnapshot:
+			for i := range m.Windows {
+				if m.Windows[i].WindowID == ack.WindowID {
+					w := m.Windows[i]
+					window = &w
+				}
+			}
+		case wire.ShellSessionPatch:
+			for _, p := range m.Patches {
+				if p.Op == wire.SessionPatchWindowUpsert && p.Window != nil && p.Window.WindowID == ack.WindowID {
+					w := *p.Window
+					window = &w
+				}
+			}
+		}
 	}
 	if declared.InstanceID != ack.InstanceID || declared.Surface != SurfaceWindow {
 		t.Fatalf("declared mismatch: %+v", declared)
 	}
-	winCreate, ok := readCtrl(t, shellPair.EndB()).(wire.ShellWindowCreate)
-	if !ok {
-		t.Fatalf("expected ShellWindowCreate")
-	}
-	if winCreate.WindowID != ack.WindowID || winCreate.W != 480 || winCreate.H != 320 {
-		t.Fatalf("window_create mismatch: %+v", winCreate)
+	if window.W != 480 || window.H != 320 {
+		t.Fatalf("window geometry: %+v", window)
 	}
 
 	// App side: expect EvtWindowMapped on channel 1.

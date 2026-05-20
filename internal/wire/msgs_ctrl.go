@@ -264,14 +264,11 @@ func DecodeCtrl(data []byte) (any, error) {
 	case TShellAppDeclared:
 		var m ShellAppDeclared
 		return m, json.Unmarshal(data, &m)
-	case TShellWindowCreate:
-		var m ShellWindowCreate
+	case TShellSessionSnapshot:
+		var m ShellSessionSnapshot
 		return m, json.Unmarshal(data, &m)
-	case TShellWindowDestroy:
-		var m ShellWindowDestroy
-		return m, json.Unmarshal(data, &m)
-	case TShellWindowTitle:
-		var m ShellWindowTitle
+	case TShellSessionPatch:
+		var m ShellSessionPatch
 		return m, json.Unmarshal(data, &m)
 	case TShellAssetDeliver:
 		var m ShellAssetDeliver
@@ -284,6 +281,9 @@ func DecodeCtrl(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TShellWindowFocus:
 		var m ShellWindowFocus
+		return m, json.Unmarshal(data, &m)
+	case TShellWindowMove:
+		var m ShellWindowMove
 		return m, json.Unmarshal(data, &m)
 	case TShellWindowResize:
 		var m ShellWindowResize
