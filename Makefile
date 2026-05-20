@@ -101,7 +101,18 @@ verify: all
 	done
 	@echo "verify: ok"
 
+# Dev mode: Vite serves the shell with HMR at :5173 and proxies /ws to
+# the router at 127.0.0.1:7681. Open http://localhost:5173/ in a
+# browser. Editing files under web/shell/src triggers HMR; editing
+# Go or app sources still requires re-running `make dev`.
+DEV_APPS := /tmp/wash-dev-apps
+
 .PHONY: dev
-dev:
-	@echo "dev mode not implemented yet"
-	@exit 1
+dev: $(OUT)/wash-router $(OUT)/wash-session $(OUT)/wash-about
+	mkdir -p $(DEV_APPS)
+	cp -f $(OUT)/wash-session $(OUT)/wash-about $(DEV_APPS)/
+	@echo "wash dev: router :7681 + Vite :5173 — open http://localhost:5173/"
+	@trap 'kill 0' INT TERM EXIT; \
+	  ( WASH_APPS_DIR=$(DEV_APPS) $(OUT)/wash-router ) & \
+	  ( cd web && $(PNPM) --filter @wash/shell run dev ) & \
+	  wait
