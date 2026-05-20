@@ -289,14 +289,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       }
       case 'fs_event': {
         // A watched dir saw a change. The watched dir is the
-        // PARENT of m.path (per fswatch: events name the file
-        // that changed). For dir-level events (the watched dir
-        // itself was removed) we'd see m.path === watched dir;
-        // then refresh its parent if we have it listed.
+        // PARENT of m.path (fsnotify names the file that
+        // changed). If the watched dir ITSELF was removed,
+        // m.path is the dir — schedule both paths so the parent
+        // listing (which now lacks that dir) refreshes too.
         const evtPath = String(m.path);
         scheduleRefresh(parentPath(evtPath));
-        // Also try the path itself in case it's a watched dir
-        // that's now gone — its own listing should clear.
         scheduleRefresh(evtPath);
         return;
       }
@@ -328,7 +326,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const selectPath = (p: string, pushHistory: boolean) => {
     setStatusOverride(null);
     const par = parentPath(p);
-    if (!listings[par] && par !== p) {
+    // Block on the parent listing only when we have no listing for
+    // p itself either — otherwise (e.g. navigating Home to the
+    // sandbox root, whose parent is outside WASH_FM_ROOT and will
+    // never list) we stall in pendingSelectAfter forever.
+    if (!listings[par] && !listings[p] && par !== p) {
       sendList(par);
       pendingSelectAfter = { path: p, pushHistory };
       return;
@@ -595,21 +597,107 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   // ---- drag-and-drop ----
+  //
+  // Move semantics only in v1 (per docs/ARCHITECTURE.md and the
+  // [[wash-fm-dnd-plan]] memory). Drop on a folder row → move into
+  // that folder. Drop on the empty list pane → move into the
+  // currently-selected dir. Drop on a file row is rejected by the
+  // browser (no preventDefault → no drop allowed). Copy needs a
+  // dedicated BE op + bulk-ops semantics; that lives in a future
+  // app.
+  //
+  // Cross-window works for free: the target window's fm BE owns
+  // the rename syscall, and both windows learn of the change via
+  // fs.watch — source row vanishes, dest row appears, no explicit
+  // coordination protocol needed.
+
+  // dropTargetPath is the path of the folder row currently being
+  // hovered as a drop target, or "" if no row is targeted (drop
+  // would land in the list pane = current dir). TreeRows read it
+  // to render their dropTarget highlight.
+  const [dropTargetPath, setDropTargetPath] = createSignal('');
 
   const onDragStart = (ev: DragEvent, p: string) => {
     if (!ev.dataTransfer) return;
-    ev.dataTransfer.effectAllowed = 'copy';
+    ev.dataTransfer.effectAllowed = 'move';
     ev.dataTransfer.setData('application/x-wash-path', p);
     ev.dataTransfer.setData('text/plain', p);
   };
 
-  const onDrop = (ev: DragEvent) => {
-    if (!ev.dataTransfer) return;
-    const p = ev.dataTransfer.getData('application/x-wash-path');
-    if (!p) return;
+  const onDragEnd = () => {
+    // Source-side bookkeeping. fs.watch handles the actual
+    // refresh — see commitMove. Just clear the highlight.
+    setDropTargetPath('');
+  };
+
+  // onRowDragOver is wired on directory rows only. preventDefault
+  // tells the browser "this is a valid drop target," and
+  // stopPropagation keeps the list-pane onDragOver from also
+  // claiming the event (which would clear dropTargetPath).
+  const onRowDragOver = (ev: DragEvent, rowPath: string) => {
+    if (!ev.dataTransfer || !ev.dataTransfer.types.includes('application/x-wash-path')) return;
     ev.preventDefault();
-    setStatusOverride(`Dropped: ${p}`);
-    setStatusDropPath(p);
+    ev.stopPropagation();
+    ev.dataTransfer.dropEffect = 'move';
+    if (dropTargetPath() !== rowPath) setDropTargetPath(rowPath);
+  };
+
+  const onRowDrop = (ev: DragEvent, rowPath: string) => {
+    if (!ev.dataTransfer) return;
+    const src = ev.dataTransfer.getData('application/x-wash-path');
+    if (!src) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    setDropTargetPath('');
+    void commitMove(src, rowPath);
+  };
+
+  // onListDragOver / onListDrop are the fallback when the user
+  // drops on empty space in the list pane (no row hit). The
+  // intent there is "move into the currently-selected directory."
+  const onListDragOver = (ev: DragEvent) => {
+    if (!ev.dataTransfer || !ev.dataTransfer.types.includes('application/x-wash-path')) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = 'move';
+    if (dropTargetPath() !== '') setDropTargetPath('');
+  };
+
+  const onListDrop = (ev: DragEvent) => {
+    if (!ev.dataTransfer) return;
+    const src = ev.dataTransfer.getData('application/x-wash-path');
+    if (!src) return;
+    ev.preventDefault();
+    setDropTargetPath('');
+    void commitMove(src, dirOfSelection());
+  };
+
+  // commitMove is the actual move operation. Skips trivial cases
+  // (same-parent drop, dropping onto self or a descendant) before
+  // sending the rename, then lets fs.watch drive the refresh.
+  const commitMove = async (src: string, targetDir: string) => {
+    if (!src || !targetDir) return;
+    const srcParent = parentPath(src);
+    if (srcParent === targetDir) return; // already there — silent no-op
+    // Refuse moving a dir into itself or its own descendant — the BE
+    // would error with EINVAL, but a friendly early reject saves a
+    // round trip and gives the user immediate visible feedback.
+    if (targetDir === src || targetDir.startsWith(src + '/')) {
+      setStatusOverride('move: cannot move a folder into itself');
+      return;
+    }
+    const dest = joinPath(targetDir, baseName(src));
+    const reply = await sendWithReply({ kind: 'rename', from: src, to: dest });
+    if (reply.kind === 'rename_ok') {
+      // fs.watch fires on both source and target dirs → tree
+      // updates automatically. We just move selection to follow
+      // the file to its new home (if we were sitting on it).
+      if (path() === src) {
+        setPath(dest);
+        setPathInputValue(dest);
+      }
+    } else {
+      setStatusOverride(`move: ${String(reply.msg ?? reply.code ?? 'failed')}`);
+    }
   };
 
   // ---- state persistence ----
@@ -847,13 +935,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         <div
           data-testid="fm-list"
           style={treeStyle}
-          onDragOver={(ev) => {
-            if (ev.dataTransfer?.types.includes('application/x-wash-path')) {
-              ev.preventDefault();
-              ev.dataTransfer.dropEffect = 'copy';
-            }
-          }}
-          onDrop={onDrop}
+          onDragOver={onListDragOver}
+          onDrop={onListDrop}
         >
           <Show when={pendingNew()}>
             <PendingNewRow
@@ -899,6 +982,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 onToggle={() => toggleExpand(row.path)}
                 onContextMenu={(ev) => openContextMenu(ev, row.entry, row.path)}
                 onDragStart={(ev) => onDragStart(ev, row.path)}
+                onDragEnd={onDragEnd}
+                isDropTarget={dropTargetPath() === row.path}
+                onDragOver={row.entry.type === 'dir' ? (ev) => onRowDragOver(ev, row.path) : undefined}
+                onDrop={row.entry.type === 'dir' ? (ev) => onRowDrop(ev, row.path) : undefined}
               />;
             }}
           </For>
@@ -1021,6 +1108,12 @@ const TreeRow: Component<{
   onToggle: () => void;
   onContextMenu: (ev: MouseEvent) => void;
   onDragStart: (ev: DragEvent) => void;
+  onDragEnd?: () => void;
+  // Drop-target handlers. Only wired on directory rows; file rows
+  // omit them so the browser auto-rejects drops with not-allowed.
+  isDropTarget?: boolean;
+  onDragOver?: (ev: DragEvent) => void;
+  onDrop?: (ev: DragEvent) => void;
 }> = (props) => {
   const [hover, setHover] = createSignal(false);
   return (
@@ -1028,8 +1121,12 @@ const TreeRow: Component<{
       data-testid={`fm-entry-${props.entry.name}`}
       data-type={props.entry.type}
       data-path={props.path}
+      data-drop-target={props.isDropTarget ? 'true' : undefined}
       draggable="true"
       onDragStart={props.onDragStart}
+      onDragEnd={props.onDragEnd}
+      onDragOver={props.onDragOver}
+      onDrop={props.onDrop}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       onClick={props.onClick}
@@ -1039,11 +1136,18 @@ const TreeRow: Component<{
         'align-items': 'center',
         gap: '4px',
         padding: `3px 8px 3px ${8 + props.depth * 16}px`,
-        background: props.selected ? '#23234a' : hover() ? '#1d1d30' : 'transparent',
+        background: props.isDropTarget
+          ? '#2a3a5a'
+          : props.selected
+          ? '#23234a'
+          : hover()
+          ? '#1d1d30'
+          : 'transparent',
         color: '#eee',
         cursor: 'pointer',
         'user-select': 'none',
         font: '13px ui-sans-serif,system-ui,sans-serif',
+        outline: props.isDropTarget ? '1px solid #4a6ab0' : 'none',
       }}
     >
       <span

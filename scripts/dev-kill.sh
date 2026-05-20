@@ -16,6 +16,19 @@
 
 set -euo pipefail
 
+# Sweep three buckets:
+#   1. The live dev router and its app children (matched by the
+#      /tmp/wash-dev-apps/ prefix and the wash-router pathname).
+#   2. Per-test e2e processes whose paths contain wash-e2e-apps-* —
+#      these accumulate alarmingly if a test run is interrupted
+#      (each adds an inotify instance; the default per-user limit
+#      is ~128, after which fsnotify watchers silently fail).
+#   3. The `tee` wrapper around /tmp/wash-router.log.
+#
+# Use -f to match by full command line — wash binaries are named
+# after their app role, so a bare process-name pkill misses
+# e2e-spawned copies whose paths differ from the dev tree.
+
 pkill -9 -f 'out/wash-router'                      2>/dev/null || true
 pkill -9 -f 'wash-(session|fm|term|about|test)'    2>/dev/null || true
 pkill -9 -f 'wash-e2e-apps'                        2>/dev/null || true
@@ -23,10 +36,24 @@ pkill -9 -f 'tee.*wash-router\.log'                2>/dev/null || true
 
 sleep 2
 
+# Final verification: any wash- binary running for this user must
+# now be gone. If something survived, surface it loudly — the
+# accumulation pattern silently breaks the next test run.
 remaining=$(pgrep -af 'wash-(router|session|fm|term|about|test)' || true)
 if [[ -n "$remaining" ]]; then
   echo "dev-kill: still running after pkill -9 + sleep:" >&2
   echo "$remaining" >&2
   exit 1
+fi
+
+# Sanity check on per-user inotify pressure. The Linux default is
+# 128 instances; each running fm Manager holds one. We print a
+# warning at >50% so a slow leak gets caught before the limit hits.
+if [[ -r /proc/sys/fs/inotify/max_user_instances ]]; then
+  limit=$(cat /proc/sys/fs/inotify/max_user_instances)
+  used=$(find /proc/*/fd -lname 'anon_inode:inotify' 2>/dev/null | wc -l)
+  if (( used * 2 > limit )); then
+    echo "dev-kill: warning: $used/$limit inotify instances in use" >&2
+  fi
 fi
 echo "dev-kill: all wash processes terminated"
