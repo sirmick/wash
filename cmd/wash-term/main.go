@@ -194,6 +194,16 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		return
 	}
 	switch kind, _ := m["kind"].(string); kind {
+	case "save_state":
+		// FE-originated persistence — BE is the single writer to
+		// the router's app_state store.
+		state, ok := m["state"]
+		if !ok {
+			return
+		}
+		if err := c.SaveState(state); err != nil {
+			log.Printf("wash-term save_state: %v", err)
+		}
 	case "resize":
 		chID := toUint(m["channel_id"])
 		cols := toUint(m["cols"])

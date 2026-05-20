@@ -15,7 +15,6 @@ declare global {
   interface Window {
     wash: {
       sendAppMsg(instanceID: string, data: unknown): void;
-      saveState(instanceID: string, state: unknown): void;
     };
   }
 }
@@ -620,7 +619,10 @@ class WashAppFM extends HTMLElement {
       show_hidden: this.showHidden,
       info_open: this.infoOpen,
     };
-    window.wash.saveState(this.instance, s);
+    // BE owns persistence — single writer to the router's app_state
+    // store, no echo-skip headaches. The BE's OnAppMsg routes
+    // {kind:"save_state",...} to c.SaveState.
+    window.wash.sendAppMsg(this.instance, { kind: 'save_state', state: s });
   }
 
   // restoreFrom rehydrates the visible-but-non-server state, then

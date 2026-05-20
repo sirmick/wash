@@ -358,6 +358,7 @@ func (inst *AppInstance) handleEvt(payload []byte) error {
 			inst.router.log("app %s: app_state.set with invalid JSON, dropping", inst.AppID)
 			return nil
 		}
+		inst.router.log("app_state.set instance=%s bytes=%d", inst.InstanceID, len(state))
 		inst.router.broadcastPatches(inst.router.winSession.setAppState(inst.InstanceID, state))
 		return nil
 	}

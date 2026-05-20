@@ -93,18 +93,20 @@ export function registerMountedElement(instanceID: string, el: HTMLElement): voi
   }
 }
 
-// setSavedState updates the cached blob for an instance and, if the
-// element is mounted, dispatches wash:state immediately so live tabs
-// react to cross-browser updates without waiting for a remount.
+// setSavedState updates the cached blob for an instance. We do NOT
+// dispatch wash:state to a live element — that would echo the app's
+// own writes back to itself (the BE save → router patch → setSavedState
+// chain runs on every persist) and trigger a feedback loop. wash:state
+// fires only on (re)mount via registerMountedElement.
+//
+// Tradeoff: a second browser tab viewing the same session sees
+// app-state changes only on its next refresh, not in realtime. Worth
+// it for the much simpler single-writer story.
 export function setSavedState(instanceID: string, state: unknown): void {
   if (state == null) {
     savedStates.delete(instanceID);
   } else {
     savedStates.set(instanceID, state);
-  }
-  const el = mountedElements.get(instanceID);
-  if (el) {
-    el.dispatchEvent(new CustomEvent('wash:state', { detail: state ?? null, bubbles: false }));
   }
 }
 

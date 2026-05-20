@@ -466,22 +466,11 @@ func (r *Router) declareAppToAllShells(ctx context.Context, inst *AppInstance) e
 // broadcastPatches sends a single session.patch frame to every
 // connected shell. No-op if patches is empty.
 func (r *Router) broadcastPatches(patches []wire.SessionPatch) {
-	r.broadcastPatchesExcept(patches, nil)
-}
-
-// broadcastPatchesExcept sends to every connected shell *except*
-// `skip`. Used for echoes the originator doesn't need back — most
-// notably app_state.save, where bouncing the save back to its origin
-// would re-apply state and feed back into the next save.
-func (r *Router) broadcastPatchesExcept(patches []wire.SessionPatch, skip *ShellSession) {
 	if len(patches) == 0 {
 		return
 	}
 	msg := wire.NewShellSessionPatch(patches...)
 	for _, s := range r.shellList() {
-		if s == skip {
-			continue
-		}
 		if err := s.WriteCtrl(msg); err != nil {
 			r.log("broadcast patch: %v", err)
 		}

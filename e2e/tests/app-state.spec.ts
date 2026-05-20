@@ -41,7 +41,7 @@ test.describe('app state opt-in', () => {
     // Wait for the router log line confirming the most-recent save
     // round-trip — without this the refresh can land before the
     // persisted state reaches the router.
-    await router.waitForLog(/app_state\.save instance=/, 5_000);
+    await router.waitForLog(/app_state\.set instance=/, 5_000);
 
     // Refresh. The router keeps the wash-fm process running and the
     // app_state blob; the shell re-subscribes via session.snapshot.

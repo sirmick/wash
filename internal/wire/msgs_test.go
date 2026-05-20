@@ -65,7 +65,6 @@ func TestShellRoundTrip(t *testing.T) {
 			SessionPatch{Op: SessionPatchWindowDelete, WindowID: 43},
 			SessionPatch{Op: SessionPatchAppState, InstanceID: "inst-1", State: json.RawMessage(`{"path":"/etc"}`)},
 		),
-		NewShellAppStateSave("inst-1", json.RawMessage(`{"path":"/home","expanded":["/home","/home/mick"]}`)),
 		NewShellAssetDeliver("inst-1", "index.js", "aGVsbG8=", true, "application/javascript"),
 		NewShellAssetFetch("inst-1", "index.js"),
 		NewShellWindowCloseClicked(42),

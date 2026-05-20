@@ -26,7 +26,6 @@ const (
 	TShellWindowMove         = "window.move"
 	TShellWindowResize       = "window.resize"
 	TShellWindowState        = "window.state"
-	TShellAppStateSave       = "app_state.save"
 	TShellAppMsgSend         = "app_msg.send"
 	TShellLog                = "log"
 
@@ -288,23 +287,6 @@ type ShellWindowState struct {
 
 func NewShellWindowState(windowID uint32, state string) ShellWindowState {
 	return ShellWindowState{T: TShellWindowState, WindowID: windowID, State: state}
-}
-
-// ShellAppStateSave is the FE half asking the router to persist
-// the given opaque blob as this instance's "FE state". The blob
-// comes back as a wash:state event on every (re)mount of the same
-// instance — surviving browser refresh, multi-tab viewing, etc.
-//
-// State is intentionally a json.RawMessage: the router never
-// inspects it; the app owns the schema.
-type ShellAppStateSave struct {
-	T          string          `json:"t"`
-	InstanceID string          `json:"instance_id"`
-	State      json.RawMessage `json:"state"`
-}
-
-func NewShellAppStateSave(instanceID string, state json.RawMessage) ShellAppStateSave {
-	return ShellAppStateSave{T: TShellAppStateSave, InstanceID: instanceID, State: state}
 }
 
 // ShellAppMsgSend is the FE half of an app sending an APP_MSG to its

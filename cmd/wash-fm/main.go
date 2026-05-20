@@ -116,6 +116,16 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 			home = "/"
 		}
 		sendList(c, home)
+	case "save_state":
+		// FE sends its persisted blob through here so the BE owns
+		// the only path into the router's app_state store.
+		state, ok := m["state"]
+		if !ok {
+			return
+		}
+		if err := c.SaveState(state); err != nil {
+			log.Printf("wash-fm save_state: %v", err)
+		}
 	case "list":
 		path, _ := m["path"].(string)
 		sendList(c, path)

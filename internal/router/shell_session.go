@@ -204,8 +204,6 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		return s.handleWindowResize(m)
 	case wire.ShellWindowState:
 		return s.handleWindowState(m)
-	case wire.ShellAppStateSave:
-		return s.handleAppStateSave(m)
 	case wire.ShellAppMsgSend:
 		return s.handleAppMsgSend(m)
 	case wire.ShellLog:
@@ -331,27 +329,6 @@ func (s *ShellSession) handleWindowState(m wire.ShellWindowState) error {
 		return nil
 	}
 	return inst.WriteEvt(wire.NewEvtWindowState(m.WindowID, m.State))
-}
-
-// handleAppStateSave persists the blob and broadcasts a patch so
-// every connected shell — including other browser tabs viewing the
-// same session — refreshes its wash:state for the instance.
-//
-// The instance must exist. We don't validate by app_id (apps don't
-// have authority to mutate each other's state because the shell
-// hands the message to the router on behalf of a known instance,
-// and the router doesn't accept saves for unknown instances).
-func (s *ShellSession) handleAppStateSave(m wire.ShellAppStateSave) error {
-	if s.router.appByInstance(m.InstanceID) == nil {
-		s.router.log("app_state.save for unknown instance %q", m.InstanceID)
-		return nil
-	}
-	s.router.log("app_state.save instance=%s bytes=%d", m.InstanceID, len(m.State))
-	// Skip echoing back to the saver — it already has the state.
-	// Other shells (e.g. another browser tab viewing the same session)
-	// still get the patch so their view stays in sync.
-	s.router.broadcastPatchesExcept(s.router.winSession.setAppState(m.InstanceID, m.State), s)
-	return nil
 }
 
 func (s *ShellSession) handleAppMsgSend(m wire.ShellAppMsgSend) error {

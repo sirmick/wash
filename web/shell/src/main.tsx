@@ -292,7 +292,6 @@ declare global {
       minimizeWindow(id: number): void;
       maximizeWindow(id: number): void;
       restoreWindow(id: number): void;
-      saveState(instanceID: string, state: unknown): void;
       log(level: 'error' | 'warn' | 'info' | 'debug', source: string, msg: string, stack?: string): void;
       openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
       writeRaw(channelID: number, bytes: Uint8Array): void;
@@ -345,9 +344,6 @@ window.wash = {
     conn.sendCtrl({ t: 'window.state', window_id: id, state: 'normal' });
     // Restoring also brings to front + grabs focus.
     conn.sendCtrl({ t: 'window.focus', window_id: id });
-  },
-  saveState(instanceID, state) {
-    conn.sendCtrl({ t: 'app_state.save', instance_id: instanceID, state });
   },
   log(level, source, msg, stack) {
     shellLog(level, source, msg, stack);

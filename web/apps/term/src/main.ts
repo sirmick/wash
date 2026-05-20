@@ -13,7 +13,6 @@ declare global {
       sendAppMsg(instanceID: string, data: unknown): void;
       openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
       writeRaw(channelID: number, bytes: Uint8Array): void;
-      saveState(instanceID: string, state: unknown): void;
     };
   }
 }
@@ -257,7 +256,8 @@ class WashAppTerm extends HTMLElement {
       shell: t.shell,
     }));
     const state: PersistedState = { tabs, active: this.active || undefined };
-    window.wash.saveState(this.instance, state);
+    // BE owns persistence — routes through onAppMsg → c.SaveState.
+    window.wash.sendAppMsg(this.instance, { kind: 'save_state', state });
   }
 
   // restoreFrom recreates xterm tabs for the channels we previously
