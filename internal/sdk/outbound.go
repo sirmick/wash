@@ -1,6 +1,8 @@
 package sdk
 
 import (
+	"context"
+
 	"github.com/sirmick/wash/internal/wire"
 )
 
@@ -44,4 +46,39 @@ func (c *Conn) Notify(title, body, level string) error {
 		level = wire.NotifyLevelInfo
 	}
 	return c.writeEvt(wire.NewEvtNotify(title, body, level))
+}
+
+// ClipboardSet stores (mime, data) in the router-held clipboard and
+// implicitly broadcasts an OnClipboardChanged to every other app.
+// Re-setting with the same content is allowed.
+func (c *Conn) ClipboardSet(mime string, data []byte) error {
+	return c.writeEvt(wire.NewEvtClipboardSet(mime, data))
+}
+
+// ClipboardGet fetches the current clipboard contents. Blocks until
+// the router replies or ctx cancels. Like OpenChannel, MUST NOT be
+// called from an SDK dispatch callback — the response comes back on
+// the same read goroutine and would deadlock.
+func (c *Conn) ClipboardGet(ctx context.Context) (string, []byte, error) {
+	reqID := c.nextReqID.Add(1)
+	wait := make(chan clipboardResult, 1)
+	c.clipMu.Lock()
+	c.pendingClipboardGet[reqID] = wait
+	c.clipMu.Unlock()
+
+	if err := c.writeEvt(wire.NewEvtClipboardGet(reqID)); err != nil {
+		c.clipMu.Lock()
+		delete(c.pendingClipboardGet, reqID)
+		c.clipMu.Unlock()
+		return "", nil, err
+	}
+	select {
+	case <-ctx.Done():
+		c.clipMu.Lock()
+		delete(c.pendingClipboardGet, reqID)
+		c.clipMu.Unlock()
+		return "", nil, ctx.Err()
+	case r := <-wait:
+		return r.mime, r.data, r.err
+	}
 }

@@ -66,6 +66,22 @@ class WashAppSession extends HTMLElement {
     this.cleanups.push(window.wash.onCatalog(() => this.onCatalogChange()));
     this.cleanups.push(window.wash.onWindowsChanged((w) => this.renderWindowList(w)));
 
+    // Single outside-click handler that re-reads current menu state.
+    // Don't capture menuEl in a closure — re-opening would leave stale
+    // closures from prior opens still listening and erroneously
+    // closing the new menu mid-click.
+    const onDocMouseDown = (ev: MouseEvent) => {
+      const t = ev.target as Node;
+      if (this.menu && !this.menu.contains(t) && !this.startBtn.contains(t)) {
+        this.closeMenu();
+      }
+      if (this.palette && !this.palette.root.contains(t)) {
+        this.closePalette();
+      }
+    };
+    document.addEventListener('mousedown', onDocMouseDown);
+    this.cleanups.push(() => document.removeEventListener('mousedown', onDocMouseDown));
+
     const tick = () => {
       this.clock.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     };
@@ -269,16 +285,9 @@ class WashAppSession extends HTMLElement {
 
     this.appendChild(menu);
     this.menu = menu;
-
-    // Close on outside click. Bind on the next tick so the click that
-    // opened the menu doesn't immediately close it.
-    const onOutside = (ev: MouseEvent) => {
-      if (!menu.contains(ev.target as Node) && ev.target !== this.startBtn && !this.startBtn.contains(ev.target as Node)) {
-        this.closeMenu();
-      }
-    };
-    setTimeout(() => document.addEventListener('mousedown', onOutside), 0);
-    this.cleanups.push(() => document.removeEventListener('mousedown', onOutside));
+    // Outside-click closure is handled by the single document
+    // listener installed in connectedCallback (which re-reads
+    // this.menu each time and avoids the stale-closure bug).
   }
 
   private closeMenu() {
@@ -363,6 +372,12 @@ class WashAppSession extends HTMLElement {
 
     input.addEventListener('input', () => this.renderPaletteResults(input.value));
     input.addEventListener('keydown', (ev) => this.onPaletteKey(ev));
+    // Backdrop click closes the palette (kept here because the
+    // root.click listener is specifically for backdrop, distinct
+    // from the document mousedown handler that closes both).
+    root.addEventListener('click', (ev) => {
+      if (ev.target === root) this.closePalette();
+    });
 
     this.renderPaletteResults('');
   }

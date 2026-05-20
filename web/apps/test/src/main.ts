@@ -53,6 +53,7 @@ class WashAppTest extends HTMLElement {
     echoSent: 0,
     echoReceived: 0,
     echoTextReceived: '',
+    clipboardChanges: 0,
   };
   private titleSeq = 0;
 
@@ -110,9 +111,17 @@ class WashAppTest extends HTMLElement {
         ${actionBtn('ping',           'Ping BE (round-trip)')}
         ${actionBtn('notify',         'Send notification')}
         ${actionBtn('open-echo',      'Open echo channel')}
+        ${actionBtn('clipboard-set',  'Set clipboard (test value)')}
+        ${actionBtn('clipboard-get',  'Get clipboard')}
         ${actionBtn('throw',          'Throw uncaught')}
         ${actionBtn('console-error',  'console.error')}
         ${actionBtn('reject-promise', 'Reject unhandled')}
+      </section>
+
+      <section style="margin:10px 0;display:flex;gap:18px;flex-wrap:wrap;">
+        <span>clipboard mime: <b data-testid="clipboard-mime">none</b></span>
+        <span>clipboard text: <b data-testid="clipboard-text">(none)</b></span>
+        <span>clipboard changes: <b data-testid="clipboard-changes">0</b></span>
       </section>
 
       <section style="margin:10px 0;display:flex;gap:18px;flex-wrap:wrap;">
@@ -187,6 +196,12 @@ class WashAppTest extends HTMLElement {
     });
     this.querySelector('[data-testid="action-open-echo"]')?.addEventListener('click', () => {
       this.send({ kind: 'open_echo' });
+    });
+    this.querySelector('[data-testid="action-clipboard-set"]')?.addEventListener('click', () => {
+      this.send({ kind: 'clipboard_set', mime: 'text/plain', text: 'hello from wash-test' });
+    });
+    this.querySelector('[data-testid="action-clipboard-get"]')?.addEventListener('click', () => {
+      this.send({ kind: 'clipboard_get' });
     });
     this.querySelector('[data-testid="action-throw"]')?.addEventListener('click', () => {
       // Defer so this handler doesn't swallow the throw.
@@ -265,6 +280,17 @@ class WashAppTest extends HTMLElement {
           case 'state':
             this.set('window-state', String(m.state));
             this.logEvent('state', String(m.state));
+            break;
+          case 'clipboard_changed':
+            this.state.clipboardChanges += 1;
+            this.set('clipboard-changes', String(this.state.clipboardChanges));
+            this.set('clipboard-mime', String(m.mime ?? 'unknown'));
+            this.logEvent('clipboard_changed', String(m.mime ?? ''));
+            break;
+          case 'clipboard_get_ok':
+            this.set('clipboard-mime', String(m.mime ?? ''));
+            this.set('clipboard-text', String(m.text ?? ''));
+            this.logEvent('clipboard_get_ok', String(m.text ?? ''));
             break;
           case 'echo_opened': {
             const id = Number(m.channel_id);

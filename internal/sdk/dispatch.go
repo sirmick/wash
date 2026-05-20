@@ -187,6 +187,28 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 		if c.def.OnSpawnResult != nil {
 			c.def.OnSpawnResult(c, m.AppID, "", fmt.Errorf("%s: %s", m.Code, m.Msg))
 		}
+	case wire.TEvtClipboardData:
+		var m wire.EvtClipboardData
+		if err := cbor.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		c.clipMu.Lock()
+		ch, ok := c.pendingClipboardGet[m.ReqID]
+		if ok {
+			delete(c.pendingClipboardGet, m.ReqID)
+		}
+		c.clipMu.Unlock()
+		if ok {
+			ch <- clipboardResult{mime: m.Mime, data: m.Data}
+		}
+	case wire.TEvtClipboardChanged:
+		var m wire.EvtClipboardChanged
+		if err := cbor.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		if c.def.OnClipboardChanged != nil {
+			c.def.OnClipboardChanged(c, m.Mime)
+		}
 	}
 	// Unknown event types: ignore for forward compat.
 	return nil

@@ -29,6 +29,13 @@ const (
 
 	// Both directions.
 	TEvtAppMsg = "app_msg"
+
+	// Clipboard — router holds a single in-memory entry. Apps set,
+	// fetch, and observe changes.
+	TEvtClipboardSet     = "clipboard.set"
+	TEvtClipboardGet     = "clipboard.get"
+	TEvtClipboardData    = "clipboard.data"
+	TEvtClipboardChanged = "clipboard.changed"
 )
 
 // EvtWindowMapped: router → app, "the window is now visible".
@@ -186,6 +193,55 @@ func NewEvtNotify(title, body, level string) EvtNotify {
 	return EvtNotify{T: TEvtNotify, Title: title, Body: body, Level: level}
 }
 
+// EvtClipboardSet writes new content to the router-held clipboard.
+// The router broadcasts EvtClipboardChanged to every connected app
+// (except the sender) so they can react.
+type EvtClipboardSet struct {
+	T    string `cbor:"t"`
+	Mime string `cbor:"mime"`
+	Data []byte `cbor:"data"`
+}
+
+func NewEvtClipboardSet(mime string, data []byte) EvtClipboardSet {
+	return EvtClipboardSet{T: TEvtClipboardSet, Mime: mime, Data: data}
+}
+
+// EvtClipboardGet requests the current clipboard contents. The router
+// replies with EvtClipboardData. req_id correlates response with caller.
+type EvtClipboardGet struct {
+	T     string `cbor:"t"`
+	ReqID uint64 `cbor:"req_id"`
+}
+
+func NewEvtClipboardGet(reqID uint64) EvtClipboardGet {
+	return EvtClipboardGet{T: TEvtClipboardGet, ReqID: reqID}
+}
+
+// EvtClipboardData is the router → app response containing the
+// clipboard's current mime and bytes.
+type EvtClipboardData struct {
+	T     string `cbor:"t"`
+	ReqID uint64 `cbor:"req_id"`
+	Mime  string `cbor:"mime"`
+	Data  []byte `cbor:"data"`
+}
+
+func NewEvtClipboardData(reqID uint64, mime string, data []byte) EvtClipboardData {
+	return EvtClipboardData{T: TEvtClipboardData, ReqID: reqID, Mime: mime, Data: data}
+}
+
+// EvtClipboardChanged is broadcast by the router to every app
+// (excluding the setter) when the clipboard changes. Apps re-get
+// content if interested.
+type EvtClipboardChanged struct {
+	T    string `cbor:"t"`
+	Mime string `cbor:"mime"`
+}
+
+func NewEvtClipboardChanged(mime string) EvtClipboardChanged {
+	return EvtClipboardChanged{T: TEvtClipboardChanged, Mime: mime}
+}
+
 // EvtAppMsg is the FE↔BE app-private pipe. Data is intentionally
 // opaque; the router never inspects it.
 type EvtAppMsg struct {
@@ -259,6 +315,18 @@ func DecodeEvt(data []byte) (any, error) {
 		return m, cbor.Unmarshal(data, &m)
 	case TEvtNotify:
 		var m EvtNotify
+		return m, cbor.Unmarshal(data, &m)
+	case TEvtClipboardSet:
+		var m EvtClipboardSet
+		return m, cbor.Unmarshal(data, &m)
+	case TEvtClipboardGet:
+		var m EvtClipboardGet
+		return m, cbor.Unmarshal(data, &m)
+	case TEvtClipboardData:
+		var m EvtClipboardData
+		return m, cbor.Unmarshal(data, &m)
+	case TEvtClipboardChanged:
+		var m EvtClipboardChanged
 		return m, cbor.Unmarshal(data, &m)
 	}
 	return nil, fmt.Errorf("evt decode: unknown t %q", t)

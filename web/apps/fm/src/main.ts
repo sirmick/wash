@@ -109,6 +109,17 @@ class WashAppFM extends HTMLElement {
         this.closeMenu();
       }
     });
+    // Ctrl-C on the selected row copies its path to the wash clipboard.
+    this.addEventListener('keydown', (ev) => {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key === 'c' && this.selectedPath && document.activeElement !== this.pathInput) {
+        ev.preventDefault();
+        window.wash.sendAppMsg(this.instance, { kind: 'clipboard_copy_path', path: this.selectedPath });
+      }
+    });
+    // The host needs focus to receive keydown reliably; tabindex makes it focusable.
+    if (!this.hasAttribute('tabindex')) {
+      this.tabIndex = 0;
+    }
   }
 
   // ---- DOM construction ----
@@ -709,7 +720,7 @@ class WashAppFM extends HTMLElement {
     copy.dataset.testid = 'fm-ctx-copy';
     copy.addEventListener('click', () => {
       this.closeMenu();
-      void navigator.clipboard?.writeText(path);
+      window.wash.sendAppMsg(this.instance, { kind: 'clipboard_copy_path', path });
     });
     menu.appendChild(copy);
     const info = menuItem('Show info');

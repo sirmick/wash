@@ -60,6 +60,11 @@ type AppDef struct {
 	// instanceID is non-empty on success; err is non-nil on failure.
 	OnSpawnResult func(c *Conn, appID, instanceID string, err error)
 
+	// OnClipboardChanged fires when another app set the clipboard.
+	// mime is the new content type. Apps that care should follow up
+	// with ClipboardGet.
+	OnClipboardChanged func(c *Conn, mime string)
+
 	// OnShutdown fires when the router sends "shutdown". The SDK
 	// continues to receive frames until the underlying socket closes.
 	OnShutdown func(c *Conn)
@@ -83,6 +88,17 @@ type Conn struct {
 	openMu       sync.Mutex
 	pendingOpens map[uint64]chan openResult
 	nextReqID    atomic.Uint64
+
+	// pendingClipboardGet correlates ClipboardGet req_id with the
+	// waiting goroutine in ClipboardGet.
+	clipMu             sync.Mutex
+	pendingClipboardGet map[uint64]chan clipboardResult
+}
+
+type clipboardResult struct {
+	mime string
+	data []byte
+	err  error
 }
 
 type openResult struct {
@@ -171,10 +187,11 @@ func Connect(def *AppDef) (*Conn, error) {
 // in-process loopback test (C8) and the SDK's own tests use this.
 func ConnectWith(t wire.FrameTransport, def *AppDef) (*Conn, error) {
 	c := &Conn{
-		transport:    t,
-		def:          def,
-		channels:     make(map[uint32]*RawChannel),
-		pendingOpens: make(map[uint64]chan openResult),
+		transport:           t,
+		def:                 def,
+		channels:            make(map[uint32]*RawChannel),
+		pendingOpens:        make(map[uint64]chan openResult),
+		pendingClipboardGet: make(map[uint64]chan clipboardResult),
 	}
 	if err := c.handshake(); err != nil {
 		_ = t.Close()

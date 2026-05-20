@@ -116,6 +116,14 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 	case "complete":
 		partial, _ := m["partial"].(string)
 		sendCompletions(c, partial)
+	case "clipboard_copy_path":
+		path, _ := m["path"].(string)
+		if path == "" {
+			return
+		}
+		if err := c.ClipboardSet("text/plain", []byte(path)); err != nil {
+			log.Printf("wash-fm clipboard set: %v", err)
+		}
 	}
 }
 

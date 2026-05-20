@@ -145,6 +145,10 @@ func TestEvtRoundTrip(t *testing.T) {
 		NewEvtSpawnOk("com.wash.about", "inst-2"),
 		NewEvtSpawnErr("com.wash.about", ErrCodeForbidden, "no capability"),
 		NewEvtNotify("hello", "world", NotifyLevelInfo),
+		NewEvtClipboardSet("text/plain", []byte("hi")),
+		NewEvtClipboardGet(42),
+		NewEvtClipboardData(42, "text/plain", []byte("hi")),
+		NewEvtClipboardChanged("text/plain"),
 	}
 	for _, c := range cases {
 		c := c

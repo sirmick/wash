@@ -69,6 +69,8 @@ type Router struct {
 	channelsMu sync.Mutex
 	channels   map[uint32]*channelBinding
 
+	clipboard clipboardState
+
 	sessionMu sync.Mutex
 	session   sessionState
 

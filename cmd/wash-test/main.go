@@ -53,15 +53,16 @@ func main() {
 			Hidden:          true,
 		},
 		Assets:        sub,
-		OnReady:          onReady,
-		OnMapped:         onMapped,
-		OnFocus:          onFocus,
-		OnUnfocus:        onUnfocus,
-		OnResize:         onResize,
-		OnState:          onState,
-		OnCloseRequested: onCloseRequested,
-		OnAppMsg:         onAppMsg,
-		OnSpawnResult:    onSpawnResult,
+		OnReady:            onReady,
+		OnMapped:           onMapped,
+		OnFocus:            onFocus,
+		OnUnfocus:          onUnfocus,
+		OnResize:           onResize,
+		OnState:            onState,
+		OnCloseRequested:   onCloseRequested,
+		OnAppMsg:           onAppMsg,
+		OnSpawnResult:      onSpawnResult,
+		OnClipboardChanged: onClipboardChanged,
 	})
 }
 
@@ -96,6 +97,11 @@ func onResize(c *sdk.Conn, win uint32, w, h uint32) {
 func onState(c *sdk.Conn, win uint32, state string) {
 	log.Printf("wash-test state win=%d %s", win, state)
 	sendEvent(c, map[string]any{"kind": "event", "type": "state", "win": win, "state": state})
+}
+
+func onClipboardChanged(c *sdk.Conn, mime string) {
+	log.Printf("wash-test clipboard.changed mime=%s", mime)
+	sendEvent(c, map[string]any{"kind": "event", "type": "clipboard_changed", "mime": mime})
 }
 
 // onCloseRequested honors the veto-next-close flag (single-shot — the
@@ -165,6 +171,29 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		if err := c.Notify(title, "Hello from the test app", "info"); err != nil {
 			log.Printf("wash-test notify: %v", err)
 		}
+	case "clipboard_set":
+		mime, _ := m["mime"].(string)
+		text, _ := m["text"].(string)
+		if mime == "" {
+			mime = "text/plain"
+		}
+		if err := c.ClipboardSet(mime, []byte(text)); err != nil {
+			log.Printf("wash-test clipboard_set: %v", err)
+		}
+	case "clipboard_get":
+		go func() {
+			mime, data, err := c.ClipboardGet(context.Background())
+			if err != nil {
+				log.Printf("wash-test clipboard_get: %v", err)
+				return
+			}
+			sendEvent(c, map[string]any{
+				"kind": "event",
+				"type": "clipboard_get_ok",
+				"mime": mime,
+				"text": string(data),
+			})
+		}()
 	case "open_echo":
 		// OpenChannel must NOT be called from a callback that runs on
 		// the SDK's read goroutine — the response arrives on that

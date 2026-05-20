@@ -313,6 +313,18 @@ func (inst *AppInstance) handleEvt(payload []byte) error {
 			return err
 		}
 		return inst.relayNotify(m)
+	case wire.TEvtClipboardSet:
+		var m wire.EvtClipboardSet
+		if err := cbor.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.handleClipboardSet(m)
+	case wire.TEvtClipboardGet:
+		var m wire.EvtClipboardGet
+		if err := cbor.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.handleClipboardGet(m)
 	}
 	inst.router.log("app %s: unexpected evt %q", inst.AppID, t)
 	return nil
