@@ -210,14 +210,26 @@ func (inst *AppInstance) dispatch(f wire.Frame) error {
 	case ChannelEvent:
 		return inst.handleEvt(f.Payload)
 	default:
-		// Channel ≥ 2: raw byte stream. Forward to the bound shell
-		// verbatim on the same channel id.
+		// Channel ≥ 2: raw byte stream. Tee into the scrollback ring
+		// buffer (so a future reattaching shell can replay them) and
+		// forward to the currently-attached shell, if any.
 		b := inst.router.lookupChannel(f.Channel)
 		if b == nil || b.app != inst {
 			inst.router.log("app %s: drop raw frame on unbound channel %d", inst.AppID, f.Channel)
 			return nil
 		}
-		return b.shell.WriteRawFrame(f.Channel, f.Payload)
+		b.shellMu.Lock()
+		if b.buf != nil {
+			b.buf.Write(f.Payload)
+		}
+		sh := b.shell
+		b.shellMu.Unlock()
+		if sh == nil {
+			// Shell detached — bytes already captured in the buffer;
+			// the next attached shell will replay them.
+			return nil
+		}
+		return sh.WriteRawFrame(f.Channel, f.Payload)
 	}
 }
 
@@ -269,7 +281,13 @@ func (inst *AppInstance) handleChannelOpen(m wire.ChannelOpen) error {
 	}
 	shell := shells[0]
 	id := inst.router.allocChannelID()
-	b := &channelBinding{channelID: id, app: inst, shell: shell, windowID: m.WindowID}
+	b := &channelBinding{
+		channelID: id,
+		app:       inst,
+		shell:     shell,
+		windowID:  m.WindowID,
+		buf:       newRingBuffer(ChannelScrollbackBytes),
+	}
 	inst.router.registerChannel(b)
 	if err := shell.WriteCtrl(wire.NewShellChannelBind(id, m.WindowID)); err != nil {
 		inst.router.closeChannel(id, "shell bind failed")

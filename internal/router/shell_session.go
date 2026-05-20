@@ -121,6 +121,11 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	}
 	sess.writeMu.Unlock()
 
+	// After the snapshot, take ownership of every still-detached raw
+	// channel (PTYs from a previous shell session, etc.) and replay
+	// the scrollback so the user lands on their pre-refresh terminal.
+	r.reattachChannelsToShell(sess)
+
 	if err := r.EnsureSessionRunning(ctx); err != nil {
 		r.log("ensure session: %v", err)
 	}
@@ -169,8 +174,15 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		// Channel ≥ 1 on WS: raw byte stream. Forward to the bound
 		// app verbatim on the same channel id.
 		b := s.router.lookupChannel(f.Channel)
-		if b == nil || b.shell != s {
+		if b == nil {
 			s.router.log("shell: drop raw frame on unbound channel %d", f.Channel)
+			return nil
+		}
+		b.shellMu.Lock()
+		owner := b.shell
+		b.shellMu.Unlock()
+		if owner != s {
+			s.router.log("shell: drop raw frame on channel %d (owned by another shell)", f.Channel)
 			return nil
 		}
 		return b.app.writeRawFrame(f.Channel, f.Payload)

@@ -13,8 +13,17 @@ declare global {
       sendAppMsg(instanceID: string, data: unknown): void;
       openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
       writeRaw(channelID: number, bytes: Uint8Array): void;
+      saveState(instanceID: string, state: unknown): void;
     };
   }
+}
+
+// Persisted across browser refresh. Tab channels are kept alive by
+// the router (their bound app stays running), so restoring is just
+// "recreate UI for the channels I previously had".
+interface PersistedState {
+  tabs?: Array<{ channel_id: number; shell: string }>;
+  active?: number;
 }
 
 interface BEMessage {
@@ -105,6 +114,14 @@ class WashAppTerm extends HTMLElement {
     this.addEventListener('wash:msg', (ev) => {
       this.handleBE((ev as CustomEvent).detail as BEMessage);
     });
+    // Restore tab list on (re)mount. The BE keeps the ptys alive
+    // across refresh; the router rebinds the raw channels and
+    // replays scrollback. The FE just needs to recreate xterm
+    // hosts for the channels it previously had.
+    this.addEventListener('wash:state', (ev) => {
+      const s = (ev as CustomEvent).detail as PersistedState | null;
+      if (s) this.restoreFrom(s);
+    });
 
     // Window/element resize → fit the active terminal.
     this.resizeObs = new ResizeObserver(() => {
@@ -183,6 +200,7 @@ class WashAppTerm extends HTMLElement {
     const tab: Tab = { channelID, shell: shellPath, host, term, fit, unsub, tabEl };
     this.tabs.set(channelID, tab);
     this.activate(channelID);
+    this.persist();
   }
 
   private removeTab(channelID: number) {
@@ -206,9 +224,11 @@ class WashAppTerm extends HTMLElement {
         // sessions map empty.
       }
     }
+    this.persist();
   }
 
   private activate(channelID: number) {
+    const changed = this.active !== channelID;
     this.active = channelID;
     for (const tab of this.tabs.values()) {
       const isActive = tab.channelID === channelID;
@@ -224,6 +244,33 @@ class WashAppTerm extends HTMLElement {
         tab.term.focus();
         this.sendResize(tab);
       });
+    }
+    if (changed) this.persist();
+  }
+
+  // ---- state persistence (refresh resilience) ----
+
+  private persist() {
+    if (!this.instance) return;
+    const tabs = Array.from(this.tabs.values()).map((t) => ({
+      channel_id: t.channelID,
+      shell: t.shell,
+    }));
+    const state: PersistedState = { tabs, active: this.active || undefined };
+    window.wash.saveState(this.instance, state);
+  }
+
+  // restoreFrom recreates xterm tabs for the channels we previously
+  // owned. The BE keeps the ptys alive; the router has already
+  // rebound the channels to this shell and queued any scrollback
+  // bytes for us. openRawChannel inside addTab will drain that queue.
+  private restoreFrom(s: PersistedState) {
+    if (!s.tabs?.length) return;
+    for (const t of s.tabs) {
+      this.addTab(t.channel_id, t.shell);
+    }
+    if (s.active && this.tabs.has(s.active)) {
+      this.activate(s.active);
     }
   }
 

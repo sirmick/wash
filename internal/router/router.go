@@ -177,14 +177,30 @@ func (r *Router) spawnEnv() []string {
 	return env
 }
 
+// ChannelScrollbackBytes is the per-channel ring-buffer capacity for
+// bytes flowing app → shell. Sized to comfortably hold a few
+// thousand lines of terminal output so a reattaching shell can replay
+// the recent scrollback.
+const ChannelScrollbackBytes = 256 * 1024
+
 // channelBinding is a router-side raw channel — paired writers on
 // each transport plus enough state to clean up when either end goes
 // away. Bytes on channel id ChannelID flow app ↔ shell verbatim.
+//
+// shell may be nil after the bound shell disconnects (refresh, network
+// drop). bytes from app are then captured in the ring buffer only;
+// the next shell that attaches receives the buffered scrollback as
+// a single replay frame, followed by live bytes.
 type channelBinding struct {
 	channelID uint32
 	app       *AppInstance
-	shell     *ShellSession
 	windowID  uint32 // the shell-side window the channel is rooted at
+
+	// shellMu guards shell + buf. Held briefly during forward and
+	// rebind paths.
+	shellMu sync.Mutex
+	shell   *ShellSession
+	buf     *ringBuffer
 }
 
 func (r *Router) registerChannel(b *channelBinding) {
@@ -212,8 +228,11 @@ func (r *Router) closeChannel(id uint32, reason string) {
 	if b.app != nil {
 		_ = b.app.writeCtrl(wire.NewChannelClosed(id, reason))
 	}
-	if b.shell != nil {
-		_ = b.shell.WriteCtrl(wire.NewShellChannelUnbind(id, reason))
+	b.shellMu.Lock()
+	sh := b.shell
+	b.shellMu.Unlock()
+	if sh != nil {
+		_ = sh.WriteCtrl(wire.NewShellChannelUnbind(id, reason))
 	}
 }
 
@@ -364,8 +383,65 @@ func (r *Router) registerShell(s *ShellSession) {
 
 func (r *Router) unregisterShell(s *ShellSession) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	delete(r.shells, s)
+	r.mu.Unlock()
+
+	// Detach any channels owned by this shell. The channel itself
+	// stays alive (the app keeps writing, bytes accumulate in the
+	// ring buffer); a future shell that attaches gets a fresh bind
+	// + scrollback replay.
+	r.channelsMu.Lock()
+	bindings := make([]*channelBinding, 0)
+	for _, b := range r.channels {
+		bindings = append(bindings, b)
+	}
+	r.channelsMu.Unlock()
+	for _, b := range bindings {
+		b.shellMu.Lock()
+		if b.shell == s {
+			b.shell = nil
+		}
+		b.shellMu.Unlock()
+	}
+}
+
+// reattachChannelsToShell takes ownership of every currently-detached
+// channel binding, sending ShellChannelBind + a scrollback replay
+// frame so the new shell can rebuild any terminal-style state.
+//
+// Called once per shell session, immediately after the snapshot.
+func (r *Router) reattachChannelsToShell(s *ShellSession) {
+	r.channelsMu.Lock()
+	bindings := make([]*channelBinding, 0, len(r.channels))
+	for _, b := range r.channels {
+		bindings = append(bindings, b)
+	}
+	r.channelsMu.Unlock()
+
+	for _, b := range bindings {
+		b.shellMu.Lock()
+		if b.shell != nil {
+			b.shellMu.Unlock()
+			continue
+		}
+		b.shell = s
+		var replay []byte
+		if b.buf != nil {
+			replay = b.buf.Snapshot()
+		}
+		id := b.channelID
+		win := b.windowID
+		b.shellMu.Unlock()
+		if err := s.WriteCtrl(wire.NewShellChannelBind(id, win)); err != nil {
+			r.log("reattach bind: %v", err)
+			continue
+		}
+		if len(replay) > 0 {
+			if err := s.WriteRawFrame(id, replay); err != nil {
+				r.log("reattach replay channel %d: %v", id, err)
+			}
+		}
+	}
 }
 
 // declareAppToAllShells announces inst to every attached shell via
