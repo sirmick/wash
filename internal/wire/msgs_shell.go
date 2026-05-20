@@ -34,6 +34,12 @@ const (
 
 	// Router → shell, relayed notification.
 	TShellNotify = "notify"
+
+	// Router → shell, raw channel bound / unbound. The shell uses
+	// these to route incoming raw frames to the matching window's
+	// element and to know when a channel id is dead.
+	TShellChannelBind   = "channel.bind"
+	TShellChannelUnbind = "channel.unbind"
 )
 
 // ShellLog levels.
@@ -266,4 +272,28 @@ type ShellNotify struct {
 
 func NewShellNotify(instanceID, title, body, level string) ShellNotify {
 	return ShellNotify{T: TShellNotify, InstanceID: instanceID, Title: title, Body: body, Level: level}
+}
+
+// ShellChannelBind: the router tells the shell that a new raw channel
+// id has been opened for one of its windows. The shell then knows
+// where to route incoming raw frames on that channel.
+type ShellChannelBind struct {
+	T         string `json:"t"`
+	ChannelID uint32 `json:"channel_id"`
+	WindowID  uint32 `json:"window_id"`
+}
+
+func NewShellChannelBind(channelID, windowID uint32) ShellChannelBind {
+	return ShellChannelBind{T: TShellChannelBind, ChannelID: channelID, WindowID: windowID}
+}
+
+// ShellChannelUnbind: the channel is gone.
+type ShellChannelUnbind struct {
+	T         string `json:"t"`
+	ChannelID uint32 `json:"channel_id"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+func NewShellChannelUnbind(channelID uint32, reason string) ShellChannelUnbind {
+	return ShellChannelUnbind{T: TShellChannelUnbind, ChannelID: channelID, Reason: reason}
 }

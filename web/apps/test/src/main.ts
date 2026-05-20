@@ -23,7 +23,9 @@ declare global {
     wash: {
       sendAppMsg(instanceID: string, data: unknown): void;
       log(level: 'error' | 'warn' | 'info' | 'debug', source: string, msg: string, stack?: string): void;
-      // (other members exist but the test app doesn't use them)
+      openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
+      writeRaw(channelID: number, bytes: Uint8Array): void;
+      // (other members exist but the test app doesn't use them here)
     };
   }
 }
@@ -47,6 +49,10 @@ class WashAppTest extends HTMLElement {
     title: '(no title)',
     focused: false,
     vetoNextClose: false,
+    echoChannelID: 0,
+    echoSent: 0,
+    echoReceived: 0,
+    echoTextReceived: '',
   };
   private titleSeq = 0;
 
@@ -103,9 +109,17 @@ class WashAppTest extends HTMLElement {
         ${actionBtn('toggle-veto',    'Toggle veto close')}
         ${actionBtn('ping',           'Ping BE (round-trip)')}
         ${actionBtn('notify',         'Send notification')}
+        ${actionBtn('open-echo',      'Open echo channel')}
         ${actionBtn('throw',          'Throw uncaught')}
         ${actionBtn('console-error',  'console.error')}
         ${actionBtn('reject-promise', 'Reject unhandled')}
+      </section>
+
+      <section style="margin:10px 0;display:flex;gap:18px;flex-wrap:wrap;">
+        <span>echo ch: <b data-testid="echo-channel">none</b></span>
+        <span>sent: <b data-testid="echo-sent">0</b></span>
+        <span>received: <b data-testid="echo-received">0</b></span>
+        <span>echoed text: <b data-testid="echo-text-received">(none)</b></span>
       </section>
 
       <section>
@@ -170,6 +184,9 @@ class WashAppTest extends HTMLElement {
     });
     this.querySelector('[data-testid="action-notify"]')?.addEventListener('click', () => {
       this.send({ kind: 'notify' });
+    });
+    this.querySelector('[data-testid="action-open-echo"]')?.addEventListener('click', () => {
+      this.send({ kind: 'open_echo' });
     });
     this.querySelector('[data-testid="action-throw"]')?.addEventListener('click', () => {
       // Defer so this handler doesn't swallow the throw.
@@ -249,6 +266,19 @@ class WashAppTest extends HTMLElement {
             this.set('window-state', String(m.state));
             this.logEvent('state', String(m.state));
             break;
+          case 'echo_opened': {
+            const id = Number(m.channel_id);
+            this.state.echoChannelID = id;
+            this.set('echo-channel', String(id));
+            this.logEvent('echo_opened', `ch=${id}`);
+            // Subscribe + send the canonical "hello" probe.
+            window.wash.openRawChannel(id, (bytes) => this.onEchoBytes(bytes));
+            const payload = new TextEncoder().encode('hello');
+            window.wash.writeRaw(id, payload);
+            this.state.echoSent += payload.length;
+            this.set('echo-sent', String(this.state.echoSent));
+            break;
+          }
           default:
             this.logEvent(type);
         }
@@ -261,6 +291,14 @@ class WashAppTest extends HTMLElement {
 
   private send(data: unknown) {
     window.wash.sendAppMsg(this.instance, data);
+  }
+
+  private onEchoBytes(bytes: Uint8Array) {
+    this.state.echoReceived += bytes.length;
+    this.set('echo-received', String(this.state.echoReceived));
+    this.state.echoTextReceived += new TextDecoder().decode(bytes);
+    this.set('echo-text-received', this.state.echoTextReceived);
+    this.logEvent('raw_in', `len=${bytes.length}`);
   }
 
   private set(testid: string, value: string) {

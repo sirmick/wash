@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"sync"
+	"sync/atomic"
 
 	"github.com/sirmick/wash/internal/wire"
 )
@@ -69,6 +71,22 @@ type Conn struct {
 
 	instanceID string
 	windowID   uint32
+
+	// channels is the live raw channel registry. Keyed by router-
+	// allocated channel id. Mutated only by dispatch + OpenChannel.
+	chanMu   sync.Mutex
+	channels map[uint32]*RawChannel
+
+	// pendingOpens correlates ChannelOpen req_id ↔ the goroutine
+	// waiting for the response (in OpenChannel).
+	openMu       sync.Mutex
+	pendingOpens map[uint64]chan openResult
+	nextReqID    atomic.Uint64
+}
+
+type openResult struct {
+	ch  *RawChannel
+	err error
 }
 
 // InstanceID returns the router-assigned instance id (empty until
@@ -144,7 +162,12 @@ func Connect(def *AppDef) (*Conn, error) {
 // ConnectWith uses a caller-supplied transport instead of fd 3. The
 // in-process loopback test (C8) and the SDK's own tests use this.
 func ConnectWith(t wire.FrameTransport, def *AppDef) (*Conn, error) {
-	c := &Conn{transport: t, def: def}
+	c := &Conn{
+		transport:    t,
+		def:          def,
+		channels:     make(map[uint32]*RawChannel),
+		pendingOpens: make(map[uint64]chan openResult),
+	}
 	if err := c.handshake(); err != nil {
 		_ = t.Close()
 		return nil, err

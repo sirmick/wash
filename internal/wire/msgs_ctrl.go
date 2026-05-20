@@ -21,6 +21,18 @@ const (
 
 	// Errors (§13). Either side may send before closing.
 	TError = "error"
+
+	// Dynamic raw channels (app socket channel 0 + WS channel 0 share
+	// these tags). An app initiates the open by sending ChannelOpen on
+	// its channel 0; the router allocates a channel id, replies with
+	// ChannelOpened, and tells the shell about the binding via
+	// ShellChannelBind. Bytes then flow on the allocated channel id
+	// (≥ 2 on app socket, ≥ 1 on WS) as bare-byte frames.
+	TChannelOpen    = "channel.open"
+	TChannelOpened  = "channel.opened"
+	TChannelOpenErr = "channel.open.err"
+	TChannelClose   = "channel.close"
+	TChannelClosed  = "channel.closed"
 )
 
 // Error codes carried in Error.Code (§13).
@@ -121,6 +133,68 @@ func NewError(code, msg string) Error {
 	return Error{T: TError, Code: code, Msg: msg}
 }
 
+// ChannelOpen — app → router — requests a new raw channel bound to
+// the app's window. The router replies with ChannelOpened on success
+// or ChannelOpenErr on failure; matching is via req_id.
+type ChannelOpen struct {
+	T        string `json:"t"`
+	ReqID    uint64 `json:"req_id"`
+	WindowID uint32 `json:"window_id"`
+}
+
+func NewChannelOpen(reqID uint64, windowID uint32) ChannelOpen {
+	return ChannelOpen{T: TChannelOpen, ReqID: reqID, WindowID: windowID}
+}
+
+// ChannelOpened — router → app — the channel is live. Raw bytes can
+// now flow on channel id ChannelID until either side sends
+// ChannelClose (or it dies underneath).
+type ChannelOpened struct {
+	T         string `json:"t"`
+	ReqID     uint64 `json:"req_id"`
+	ChannelID uint32 `json:"channel_id"`
+}
+
+func NewChannelOpened(reqID uint64, channelID uint32) ChannelOpened {
+	return ChannelOpened{T: TChannelOpened, ReqID: reqID, ChannelID: channelID}
+}
+
+// ChannelOpenErr — router → app — the open failed; codes mirror §13.
+type ChannelOpenErr struct {
+	T     string `json:"t"`
+	ReqID uint64 `json:"req_id"`
+	Code  string `json:"code"`
+	Msg   string `json:"msg"`
+}
+
+func NewChannelOpenErr(reqID uint64, code, msg string) ChannelOpenErr {
+	return ChannelOpenErr{T: TChannelOpenErr, ReqID: reqID, Code: code, Msg: msg}
+}
+
+// ChannelClose — either side — half-closes a channel. After sending,
+// the sender MUST NOT write more bytes on that channel; the peer
+// receives bytes already in flight, then ChannelClosed.
+type ChannelClose struct {
+	T         string `json:"t"`
+	ChannelID uint32 `json:"channel_id"`
+}
+
+func NewChannelClose(channelID uint32) ChannelClose {
+	return ChannelClose{T: TChannelClose, ChannelID: channelID}
+}
+
+// ChannelClosed — router → app (or peer) — confirms the channel is
+// dead in both directions. Reason is best-effort human text.
+type ChannelClosed struct {
+	T         string `json:"t"`
+	ChannelID uint32 `json:"channel_id"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+func NewChannelClosed(channelID uint32, reason string) ChannelClosed {
+	return ChannelClosed{T: TChannelClosed, ChannelID: channelID, Reason: reason}
+}
+
 // PeekType returns the value of the "t" string field of a JSON
 // object, without otherwise parsing it. Returns an empty string if
 // the field is missing or not a string.
@@ -166,6 +240,21 @@ func DecodeCtrl(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TError:
 		var m Error
+		return m, json.Unmarshal(data, &m)
+	case TChannelOpen:
+		var m ChannelOpen
+		return m, json.Unmarshal(data, &m)
+	case TChannelOpened:
+		var m ChannelOpened
+		return m, json.Unmarshal(data, &m)
+	case TChannelOpenErr:
+		var m ChannelOpenErr
+		return m, json.Unmarshal(data, &m)
+	case TChannelClose:
+		var m ChannelClose
+		return m, json.Unmarshal(data, &m)
+	case TChannelClosed:
+		var m ChannelClosed
 		return m, json.Unmarshal(data, &m)
 	// Shell-channel tags (§8) are dispatched alongside; they share
 	// the same JSON channel 0 discipline.
@@ -213,6 +302,12 @@ func DecodeCtrl(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TShellLog:
 		var m ShellLog
+		return m, json.Unmarshal(data, &m)
+	case TShellChannelBind:
+		var m ShellChannelBind
+		return m, json.Unmarshal(data, &m)
+	case TShellChannelUnbind:
+		var m ShellChannelUnbind
 		return m, json.Unmarshal(data, &m)
 	}
 	return nil, fmt.Errorf("ctrl decode: unknown t %q", t)

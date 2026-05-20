@@ -101,6 +101,7 @@ func (r *Router) handleAppOpts(ctx context.Context, t FrameTransport, manifest *
 	}
 	err := inst.loop(ctx)
 	r.unregisterApp(inst)
+	r.closeChannelsForApp(inst, "app exited")
 	// Tell shells the window is gone.
 	if inst.WindowID != 0 {
 		for _, s := range r.shellList() {
@@ -207,9 +208,14 @@ func (inst *AppInstance) dispatch(f wire.Frame) error {
 	case ChannelEvent:
 		return inst.handleEvt(f.Payload)
 	default:
-		// v0.0 channels ≥ 2 are reserved; drop with a log.
-		inst.router.log("app %s: drop frame on reserved channel %d", inst.AppID, f.Channel)
-		return nil
+		// Channel ≥ 2: raw byte stream. Forward to the bound shell
+		// verbatim on the same channel id.
+		b := inst.router.lookupChannel(f.Channel)
+		if b == nil || b.app != inst {
+			inst.router.log("app %s: drop raw frame on unbound channel %d", inst.AppID, f.Channel)
+			return nil
+		}
+		return b.shell.WriteRawFrame(f.Channel, f.Payload)
 	}
 }
 
@@ -228,6 +234,11 @@ func (inst *AppInstance) handleCtrl(payload []byte) error {
 		inst.router.log("app %s: asset.read.err id=%d code=%s: %s", inst.AppID, m.ID, m.Code, m.Msg)
 		inst.closePending(m.ID)
 		return nil
+	case wire.ChannelOpen:
+		return inst.handleChannelOpen(m)
+	case wire.ChannelClose:
+		inst.router.closeChannel(m.ChannelID, "app requested close")
+		return nil
 	case wire.Error:
 		inst.router.log("app %s: error code=%s: %s", inst.AppID, m.Code, m.Msg)
 		return nil
@@ -235,6 +246,34 @@ func (inst *AppInstance) handleCtrl(payload []byte) error {
 	// Other ctrl messages on app side are not expected post-handshake.
 	inst.router.log("app %s: unexpected ctrl msg %T", inst.AppID, msg)
 	return nil
+}
+
+// handleChannelOpen processes the app's channel.open request: validates
+// the window belongs to this app (kiosk root counts), allocates an id,
+// records the binding, tells both sides.
+func (inst *AppInstance) handleChannelOpen(m wire.ChannelOpen) error {
+	// For kiosk / desktop-surface apps the app has WindowID=0; the
+	// app must request windowID=0 as well (we treat that as "the
+	// root surface of this app"). For windowed apps, the requested
+	// window must match the app's window.
+	if m.WindowID != inst.WindowID {
+		return inst.writeCtrl(wire.NewChannelOpenErr(m.ReqID, wire.ErrCodeForbidden, "window not owned by app"))
+	}
+	// v0.1: one shell. Pick it (any). For multi-shell we'd need the
+	// app to specify, or open one channel per shell.
+	shells := inst.router.shellList()
+	if len(shells) == 0 {
+		return inst.writeCtrl(wire.NewChannelOpenErr(m.ReqID, wire.ErrCodeInternal, "no shell attached"))
+	}
+	shell := shells[0]
+	id := inst.router.allocChannelID()
+	b := &channelBinding{channelID: id, app: inst, shell: shell, windowID: m.WindowID}
+	inst.router.registerChannel(b)
+	if err := shell.WriteCtrl(wire.NewShellChannelBind(id, m.WindowID)); err != nil {
+		inst.router.closeChannel(id, "shell bind failed")
+		return inst.writeCtrl(wire.NewChannelOpenErr(m.ReqID, wire.ErrCodeInternal, err.Error()))
+	}
+	return inst.writeCtrl(wire.NewChannelOpened(m.ReqID, id))
 }
 
 func (inst *AppInstance) handleEvt(payload []byte) error {
@@ -564,4 +603,10 @@ func (inst *AppInstance) writeFrame(f wire.Frame) error {
 	inst.writeMu.Lock()
 	defer inst.writeMu.Unlock()
 	return inst.Transport.WriteFrame(f)
+}
+
+// writeRawFrame forwards bare bytes back to the app on a dynamic
+// channel. Mirror of ShellSession.WriteRawFrame.
+func (inst *AppInstance) writeRawFrame(channelID uint32, payload []byte) error {
+	return inst.writeFrame(wire.Frame{Flags: wire.FlagEnd, Channel: channelID, Payload: payload})
 }

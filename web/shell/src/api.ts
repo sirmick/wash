@@ -61,6 +61,16 @@ export class Sub<T> {
 const mountedElements = new Map<string, HTMLElement>();
 const pendingMessages = new Map<string, unknown[]>();
 
+// rawSubscribers maps channel id → callback for incoming raw bytes.
+// Elements register via window.wash.openRawChannel; the shell's WS
+// handler dispatches matching frames through.
+const rawSubscribers = new Map<number, (bytes: Uint8Array) => void>();
+// pendingRaw queues bytes that arrive on a channel before any
+// subscriber registers (the BE typically writes its first byte the
+// moment the router binds the channel, ahead of the BE → FE
+// app_msg that tells the FE the channel id).
+const pendingRaw = new Map<number, Uint8Array[]>();
+
 export function registerMountedElement(instanceID: string, el: HTMLElement): void {
   mountedElements.set(instanceID, el);
   const q = pendingMessages.get(instanceID);
@@ -89,4 +99,41 @@ export function deliverToInstance(instanceID: string, data: unknown): void {
     pendingMessages.set(instanceID, q);
   }
   q.push(data);
+}
+
+// Raw channel API exposed via window.wash.openRawChannel /
+// writeRaw. v0.1 uses one-callback-per-channel; if a future need
+// arises we can move to a small EventTarget per channel.
+
+export function deliverRaw(channelID: number, bytes: Uint8Array): void {
+  const cb = rawSubscribers.get(channelID);
+  if (cb) {
+    cb(bytes);
+    return;
+  }
+  let q = pendingRaw.get(channelID);
+  if (!q) {
+    q = [];
+    pendingRaw.set(channelID, q);
+  }
+  q.push(bytes);
+}
+
+export function subscribeRaw(channelID: number, cb: (bytes: Uint8Array) => void): () => void {
+  rawSubscribers.set(channelID, cb);
+  const q = pendingRaw.get(channelID);
+  if (q) {
+    pendingRaw.delete(channelID);
+    for (const b of q) cb(b);
+  }
+  return () => {
+    if (rawSubscribers.get(channelID) === cb) {
+      rawSubscribers.delete(channelID);
+    }
+  };
+}
+
+export function closeRawSubscriber(channelID: number): void {
+  rawSubscribers.delete(channelID);
+  pendingRaw.delete(channelID);
 }

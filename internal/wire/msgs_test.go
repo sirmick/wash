@@ -34,6 +34,11 @@ func TestCtrlRoundTrip(t *testing.T) {
 		NewAssetData(17, "d29ybGQ=", true),
 		NewAssetReadErr(17, ErrCodeNotFound, "no such asset"),
 		NewError(ErrCodeBadFrame, "bad frame"),
+		NewChannelOpen(7, 42),
+		NewChannelOpened(7, 5),
+		NewChannelOpenErr(7, ErrCodeForbidden, "no"),
+		NewChannelClose(5),
+		NewChannelClosed(5, "peer hung up"),
 	}
 	for _, c := range cases {
 		c := c
@@ -64,6 +69,8 @@ func TestShellRoundTrip(t *testing.T) {
 		NewShellAppMsgSend("inst-1", data),
 		NewShellAppMsgDeliver("inst-1", data),
 		NewShellNotify("inst-1", "hello", "world", NotifyLevelWarn),
+		NewShellChannelBind(5, 1),
+		NewShellChannelUnbind(5, "eof"),
 		NewShellLog(LogLevelError, "wash-app-about", "boom", "Error: boom\n    at foo (...)"),
 	}
 	for _, c := range cases {

@@ -5,8 +5,10 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"sync"
@@ -163,6 +165,28 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		if err := c.Notify(title, "Hello from the test app", "info"); err != nil {
 			log.Printf("wash-test notify: %v", err)
 		}
+	case "open_echo":
+		// OpenChannel must NOT be called from a callback that runs on
+		// the SDK's read goroutine — the response arrives on that
+		// same goroutine, so blocking it deadlocks. Hand off to a
+		// fresh goroutine.
+		go func() {
+			ch, err := c.OpenChannel(context.Background(), c.WindowID())
+			if err != nil {
+				log.Printf("wash-test open_echo: %v", err)
+				return
+			}
+			log.Printf("wash-test echo channel open id=%d", ch.ID())
+			sendEvent(c, map[string]any{
+				"kind":       "event",
+				"type":       "echo_opened",
+				"channel_id": uint64(ch.ID()),
+			})
+			defer ch.Close()
+			if _, err := io.Copy(ch, ch); err != nil && err != io.EOF {
+				log.Printf("wash-test echo io.Copy: %v", err)
+			}
+		}()
 	case "set_title":
 		title, _ := m["title"].(string)
 		if title != "" {

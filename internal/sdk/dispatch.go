@@ -53,7 +53,18 @@ func (c *Conn) dispatch(f wire.Frame) error {
 	case channelEvent:
 		return c.dispatchEvt(f.Payload)
 	}
-	// v0.0 reserves channels ≥ 2; drop unknown.
+	// Channel ≥ 2: raw bytes for a dynamic channel.
+	rc := c.lookupChannel(f.Channel)
+	if rc == nil {
+		// Bytes for a channel we no longer track — drop. Happens
+		// briefly between local Close and the router's ChannelClosed.
+		return nil
+	}
+	// Copy the payload — the frame's buffer may be reused on the
+	// next read.
+	b := make([]byte, len(f.Payload))
+	copy(b, f.Payload)
+	rc.deliver(b)
 	return nil
 }
 
@@ -65,6 +76,25 @@ func (c *Conn) dispatchCtrl(payload []byte) error {
 	switch m := msg.(type) {
 	case wire.AssetRead:
 		return c.serveAsset(m)
+	case wire.ChannelOpened:
+		rc := newRawChannel(m.ChannelID, c)
+		c.registerChannel(rc)
+		if !c.resolveOpen(m.ReqID, openResult{ch: rc}) {
+			// Open was abandoned (ctx cancelled). Release the id.
+			c.removeChannel(m.ChannelID)
+			_ = c.writeCtrl(wire.NewChannelClose(m.ChannelID))
+		}
+		return nil
+	case wire.ChannelOpenErr:
+		c.resolveOpen(m.ReqID, openResult{err: channelOpenErrFromMsg(m)})
+		return nil
+	case wire.ChannelClosed:
+		rc := c.lookupChannel(m.ChannelID)
+		if rc != nil {
+			c.removeChannel(m.ChannelID)
+			rc.teardown(fmt.Errorf("router closed channel: %s", m.Reason))
+		}
+		return nil
 	case wire.Error:
 		return fmt.Errorf("router error: %s (%s)", m.Msg, m.Code)
 	}

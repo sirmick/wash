@@ -19,7 +19,15 @@ import {
 } from './wm';
 import { Desktop } from './desktop';
 import { FloatingWindow } from './window';
-import { CatalogApp, Sub, WindowInfo, deliverToInstance } from './api';
+import {
+  CatalogApp,
+  Sub,
+  WindowInfo,
+  closeRawSubscriber,
+  deliverRaw,
+  deliverToInstance,
+  subscribeRaw,
+} from './api';
 import { showToast } from './notify';
 
 interface ShellCatalog {
@@ -70,6 +78,23 @@ interface ShellAppMsgDeliver {
   data: unknown;
 }
 
+interface ShellChannelBind {
+  t: 'channel.bind';
+  channel_id: number;
+  window_id: number;
+}
+
+interface ShellChannelUnbind {
+  t: 'channel.unbind';
+  channel_id: number;
+  reason?: string;
+}
+
+// channelOwner records which window an open raw channel is rooted at,
+// so the shell can clean up subscribers when the window goes away or
+// the router unbinds the channel.
+const channelOwner = new Map<number, number>(); // channel_id → window_id
+
 interface ShellNotify {
   t: 'notify';
   instance_id: string;
@@ -97,41 +122,56 @@ function wsURL(): string {
   return `${proto}://${window.location.host}/ws`;
 }
 
-const conn = new Conn(wsURL(), (msg) => {
-  switch (msg.t) {
-    case 'catalog':
-      catalogSub.set((msg as ShellCatalog).apps);
-      break;
-    case 'app.declared':
-      handleAppDeclared(msg as ShellAppDeclared);
-      break;
-    case 'window.create':
-      handleWindowCreate(msg as ShellWindowCreate);
-      break;
-    case 'window.destroy':
-      removeWindow((msg as ShellWindowDestroy).window_id);
-      break;
-    case 'window.title':
-      setTitle((msg as ShellWindowTitle).window_id, (msg as ShellWindowTitle).title);
-      break;
-    case 'asset.deliver':
-      onAssetDeliver(msg as ShellAssetDeliver);
-      break;
-    case 'app_msg.deliver':
-      deliverAppMsg(msg as ShellAppMsgDeliver);
-      break;
-    case 'notify': {
-      const n = msg as ShellNotify;
-      showToast({
-        instanceID: n.instance_id,
-        title: n.title,
-        body: n.body,
-        level: n.level,
-      });
-      break;
+const conn = new Conn(
+  wsURL(),
+  (msg) => {
+    switch (msg.t) {
+      case 'catalog':
+        catalogSub.set((msg as ShellCatalog).apps);
+        break;
+      case 'app.declared':
+        handleAppDeclared(msg as ShellAppDeclared);
+        break;
+      case 'window.create':
+        handleWindowCreate(msg as ShellWindowCreate);
+        break;
+      case 'window.destroy':
+        removeWindow((msg as ShellWindowDestroy).window_id);
+        break;
+      case 'window.title':
+        setTitle((msg as ShellWindowTitle).window_id, (msg as ShellWindowTitle).title);
+        break;
+      case 'asset.deliver':
+        onAssetDeliver(msg as ShellAssetDeliver);
+        break;
+      case 'app_msg.deliver':
+        deliverAppMsg(msg as ShellAppMsgDeliver);
+        break;
+      case 'notify': {
+        const n = msg as ShellNotify;
+        showToast({
+          instanceID: n.instance_id,
+          title: n.title,
+          body: n.body,
+          level: n.level,
+        });
+        break;
+      }
+      case 'channel.bind': {
+        const b = msg as ShellChannelBind;
+        channelOwner.set(b.channel_id, b.window_id);
+        break;
+      }
+      case 'channel.unbind': {
+        const u = msg as ShellChannelUnbind;
+        channelOwner.delete(u.channel_id);
+        closeRawSubscriber(u.channel_id);
+        break;
+      }
     }
-  }
-});
+  },
+  (channelID, bytes) => deliverRaw(channelID, bytes),
+);
 
 // deliverAppMsg routes a BE→FE message to its element, queuing if the
 // element hasn't mounted yet (Solid's onMount can run after the next
@@ -225,6 +265,8 @@ declare global {
       maximizeWindow(id: number): void;
       restoreWindow(id: number): void;
       log(level: 'error' | 'warn' | 'info' | 'debug', source: string, msg: string, stack?: string): void;
+      openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
+      writeRaw(channelID: number, bytes: Uint8Array): void;
     };
   }
 }
@@ -276,6 +318,12 @@ window.wash = {
   },
   log(level, source, msg, stack) {
     shellLog(level, source, msg, stack);
+  },
+  openRawChannel(channelID, onBytes) {
+    return subscribeRaw(channelID, onBytes);
+  },
+  writeRaw(channelID, bytes) {
+    conn.sendRaw(channelID, bytes);
   },
 };
 

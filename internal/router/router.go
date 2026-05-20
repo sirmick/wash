@@ -57,6 +57,10 @@ type Router struct {
 	nextWindow   atomic.Uint32
 	nextInstance atomic.Uint64
 	nextAsset    atomic.Uint64
+	nextChannel  atomic.Uint32 // starts at 1, returns 2+ via allocChannelID
+
+	channelsMu sync.Mutex
+	channels   map[uint32]*channelBinding
 
 	sessionMu sync.Mutex
 	session   sessionState
@@ -73,12 +77,13 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		log = func(string, ...any) {}
 	}
 	return &Router{
-		cfg:    cfg,
-		reg:    reg,
-		log:    log,
-		apps:   make(map[string]*AppInstance),
-		byWin:  make(map[uint32]*AppInstance),
-		shells: make(map[*ShellSession]struct{}),
+		cfg:      cfg,
+		reg:      reg,
+		log:      log,
+		apps:     make(map[string]*AppInstance),
+		byWin:    make(map[uint32]*AppInstance),
+		shells:   make(map[*ShellSession]struct{}),
+		channels: make(map[uint32]*channelBinding),
 	}
 }
 
@@ -134,6 +139,85 @@ func (r *Router) allocWindowID() uint32 {
 
 func (r *Router) allocAssetID() uint64 {
 	return r.nextAsset.Add(1)
+}
+
+// allocChannelID returns a fresh raw-channel id. v0.1 uses the same
+// id space on the app socket and the WS; the allocator starts at 2
+// so it's safe on both (channel 0 = ctrl, channel 1 = app-side event).
+func (r *Router) allocChannelID() uint32 {
+	return r.nextChannel.Add(1) + 1
+}
+
+// channelBinding is a router-side raw channel — paired writers on
+// each transport plus enough state to clean up when either end goes
+// away. Bytes on channel id ChannelID flow app ↔ shell verbatim.
+type channelBinding struct {
+	channelID uint32
+	app       *AppInstance
+	shell     *ShellSession
+	windowID  uint32 // the shell-side window the channel is rooted at
+}
+
+func (r *Router) registerChannel(b *channelBinding) {
+	r.channelsMu.Lock()
+	r.channels[b.channelID] = b
+	r.channelsMu.Unlock()
+}
+
+func (r *Router) lookupChannel(id uint32) *channelBinding {
+	r.channelsMu.Lock()
+	defer r.channelsMu.Unlock()
+	return r.channels[id]
+}
+
+// closeChannel removes the binding and (best-effort) tells both sides
+// it is gone. Idempotent — repeated calls for the same id are no-ops.
+func (r *Router) closeChannel(id uint32, reason string) {
+	r.channelsMu.Lock()
+	b := r.channels[id]
+	delete(r.channels, id)
+	r.channelsMu.Unlock()
+	if b == nil {
+		return
+	}
+	if b.app != nil {
+		_ = b.app.writeCtrl(wire.NewChannelClosed(id, reason))
+	}
+	if b.shell != nil {
+		_ = b.shell.WriteCtrl(wire.NewShellChannelUnbind(id, reason))
+	}
+}
+
+// closeChannelsForApp tears down every channel owned by inst. Called
+// when an app exits.
+func (r *Router) closeChannelsForApp(inst *AppInstance, reason string) {
+	r.channelsMu.Lock()
+	var ids []uint32
+	for id, b := range r.channels {
+		if b.app == inst {
+			ids = append(ids, id)
+		}
+	}
+	r.channelsMu.Unlock()
+	for _, id := range ids {
+		r.closeChannel(id, reason)
+	}
+}
+
+// closeChannelsForWindow tears down every channel rooted at the given
+// window id. Called from window.destroy paths.
+func (r *Router) closeChannelsForWindow(windowID uint32, reason string) {
+	r.channelsMu.Lock()
+	var ids []uint32
+	for id, b := range r.channels {
+		if b.windowID == windowID {
+			ids = append(ids, id)
+		}
+	}
+	r.channelsMu.Unlock()
+	for _, id := range ids {
+		r.closeChannel(id, reason)
+	}
 }
 
 // shellList returns a snapshot of attached shell sessions.

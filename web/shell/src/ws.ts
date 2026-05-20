@@ -4,14 +4,17 @@
 import { decodeFrame, encodeCtrl, encodeFrame, FLAG_END, decodeCtrl } from './wire';
 
 export type CtrlHandler = (msg: any) => void;
+export type RawHandler = (channelID: number, bytes: Uint8Array) => void;
 
 export class Conn {
   private ws!: WebSocket;
   private handler: CtrlHandler;
+  private rawHandler: RawHandler;
   private opening: Promise<void>;
 
-  constructor(url: string, handler: CtrlHandler) {
+  constructor(url: string, handler: CtrlHandler, rawHandler: RawHandler) {
     this.handler = handler;
+    this.rawHandler = rawHandler;
     this.opening = new Promise((resolve, reject) => {
       this.ws = new WebSocket(url);
       this.ws.binaryType = 'arraybuffer';
@@ -31,7 +34,8 @@ export class Conn {
   private onMessage(ev: MessageEvent) {
     const f = decodeFrame(new Uint8Array(ev.data));
     if (f.channel !== 0) {
-      // v0.0 reserves WS channels ≥ 1; ignore.
+      // Channel ≥ 1: bare bytes on a dynamic raw channel.
+      this.rawHandler(f.channel, f.payload);
       return;
     }
     let msg: any;
@@ -47,5 +51,9 @@ export class Conn {
   sendCtrl(msg: unknown): void {
     const payload = encodeCtrl(msg);
     this.ws.send(encodeFrame({ flags: FLAG_END, channel: 0, payload }));
+  }
+
+  sendRaw(channelID: number, payload: Uint8Array): void {
+    this.ws.send(encodeFrame({ flags: FLAG_END, channel: channelID, payload }));
   }
 }

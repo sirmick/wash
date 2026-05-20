@@ -174,8 +174,14 @@ func (s *ShellSession) loop(ctx context.Context) error {
 
 func (s *ShellSession) dispatch(f wire.Frame) error {
 	if f.Channel != ChannelControl {
-		// v0.0 reserves ≥ 1 on the WS side.
-		return nil
+		// Channel ≥ 1 on WS: raw byte stream. Forward to the bound
+		// app verbatim on the same channel id.
+		b := s.router.lookupChannel(f.Channel)
+		if b == nil || b.shell != s {
+			s.router.log("shell: drop raw frame on unbound channel %d", f.Channel)
+			return nil
+		}
+		return b.app.writeRawFrame(f.Channel, f.Payload)
 	}
 	msg, err := wire.DecodeCtrl(f.Payload)
 	if err != nil {
@@ -330,4 +336,13 @@ func (s *ShellSession) writeCtrlLocked(m any) error {
 		return err
 	}
 	return s.Transport.WriteFrame(wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: data})
+}
+
+// WriteRawFrame writes a bare-byte frame on a dynamic channel. The
+// router calls this when forwarding raw bytes from an app to its
+// bound shell.
+func (s *ShellSession) WriteRawFrame(channelID uint32, payload []byte) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.Transport.WriteFrame(wire.Frame{Flags: wire.FlagEnd, Channel: channelID, Payload: payload})
 }
