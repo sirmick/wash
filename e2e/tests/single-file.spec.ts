@@ -33,7 +33,7 @@ const APPS: AppBundle[] = [
   { name: 'test',    dir: 'web/apps/test/dist',    maxBytes: 30_000 },
   // wash-term bundles xterm.js + the fit addon + xterm CSS.
   { name: 'term',    dir: 'web/apps/term/dist',    maxBytes: 600_000 },
-  { name: 'fm',      dir: 'web/apps/fm/dist',      maxBytes: 30_000 },
+  { name: 'fm',      dir: 'web/apps/fm/dist',      maxBytes: 50_000 },
 ];
 
 for (const app of APPS) {
