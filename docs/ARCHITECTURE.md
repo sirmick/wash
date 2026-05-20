@@ -153,11 +153,24 @@ boundary.** Two layers:
    directory). The requesting app's `startDir`/filters are *hints* the trusted
    session app may ignore (prevents social-engineering navigation). Only the
    owning app's connection may redeem its token.
-2. **Raw fs API** (list/stat/ranged-read/write/mkdir/delete/move/copy;
-   `watch` may defer). For the DE (to implement dialogs), the file manager
-   (which can't dialog its way to being a file browser), and declared power
-   apps. Deliberately **not POSIX-complete** — no mmap/locking/fcntl; the
-   escape hatch for full power is "be a BE and syscall directly."
+2. **Raw fs API** (list/stat/ranged-read/write/mkdir/delete/move/copy).
+   For the DE (to implement dialogs), the file manager (which can't dialog
+   its way to being a file browser), and declared power apps. Deliberately
+   **not POSIX-complete** — no mmap/locking/fcntl; the escape hatch for
+   full power is "be a BE and syscall directly."
+
+**Watch is a shared library, not a service.** `internal/fswatch` wraps
+`fsnotify` with refcounted per-path subscriptions and clean lifecycle.
+Each consumer (file manager, session-app dialog provider, etc.) imports
+it into its own BE and owns its own `Manager`; the router is not
+involved. The decision rule: **a router-side service exists only when
+consumers need cross-process coordination** (shared state, dedup,
+single-system-resource pooling, capability gating that survives in-app
+trust changes). Watch needs none of these — each app watches what it
+cares about with independent lifetimes — so it's a library. pty is the
+inverse: lifetime survival across shell reconnects genuinely demands
+shared state in the router, so it stays a service. Prefer libraries;
+reach for a service only when coordination is the actual need.
 
 Backends are not required to use the fs service; they run as the user and may
 syscall directly (an optional path-resolution helper library is *ergonomics,

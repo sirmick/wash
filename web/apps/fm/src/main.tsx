@@ -127,6 +127,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   let lastClickPath = '';
   let lastClickTime = 0;
   let pathInputEl!: HTMLInputElement;
+  // Tracks which paths we've asked the BE to watch. The BE's watch
+  // op is idempotent so duplicates are safe, but keeping the set
+  // FE-side avoids the chatter. Cleared on collapse / unmount.
+  const watching = new Set<string>();
+  // Per-dir debounce timer for fs_event-driven refreshes. fsnotify
+  // can emit several events for one logical save (write + chmod);
+  // we coalesce them into a single re-list with a small delay so
+  // the tree doesn't flicker mid-write.
+  const refreshTimers = new Map<string, number>();
   // BE-reply correlation: each outgoing request that wants a typed
   // ack gets a fresh id; the BE echoes the id on its response and
   // the resolver in this map gets the message. Resolvers self-clear
@@ -170,6 +179,49 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     send({ kind: 'read', path: p });
   };
 
+  // expandDir marks a path as visually expanded AND asks the BE to
+  // watch it. collapseDir is the inverse. Use these instead of
+  // setExpanded() directly so the watch state stays in sync with
+  // the tree — they're the only places that touch fmWatch.
+  const expandDir = (p: string) => {
+    if (expanded[p]) return;
+    setExpanded(p, true);
+    if (!watching.has(p)) {
+      watching.add(p);
+      send({ kind: 'watch', path: p });
+    }
+  };
+
+  const collapseDir = (p: string) => {
+    if (!expanded[p]) return;
+    setExpanded(produce((s) => { delete s[p]; }));
+    if (watching.has(p)) {
+      watching.delete(p);
+      send({ kind: 'unwatch', path: p });
+    }
+  };
+
+  // scheduleRefresh debounces a re-list of dir by 100ms. Coalesces
+  // bursts of fs_events for the same directory (one save can fire
+  // write+chmod in close succession).
+  //
+  // We skip refreshes for dirs that aren't currently expanded —
+  // even if listings[dir] still has stale data. Otherwise an
+  // fs_event on a dir's mtime (from its parent's watch) would
+  // re-list it, and the list_ok handler's auto-expand would
+  // resurrect the row the user just collapsed.
+  const scheduleRefresh = (dir: string) => {
+    if (!listings[dir]) return;
+    if (!expanded[dir]) return;
+    const prev = refreshTimers.get(dir);
+    if (prev) window.clearTimeout(prev);
+    const tok = window.setTimeout(() => {
+      refreshTimers.delete(dir);
+      if (listings[dir] && expanded[dir]) invalidateAndList(dir);
+    }, 100);
+    refreshTimers.set(dir, tok);
+  };
+
   const handleBE = (m: BEMessage) => {
     // request_id correlation: if the BE echoes an id we issued via
     // sendWithReply, resolve the matching promise and stop. Any
@@ -187,7 +239,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         const p = String(m.path);
         const entries = m.entries as Entry[];
         setListings(p, entries);
-        setExpanded(p, true);
+        expandDir(p);
         if (!rootInitialized()) {
           setRootInitialized(true);
           setHome(p);
@@ -235,6 +287,19 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         setCompleteOpen(matches.length > 0);
         return;
       }
+      case 'fs_event': {
+        // A watched dir saw a change. The watched dir is the
+        // PARENT of m.path (per fswatch: events name the file
+        // that changed). For dir-level events (the watched dir
+        // itself was removed) we'd see m.path === watched dir;
+        // then refresh its parent if we have it listed.
+        const evtPath = String(m.path);
+        scheduleRefresh(parentPath(evtPath));
+        // Also try the path itself in case it's a watched dir
+        // that's now gone — its own listing should clear.
+        scheduleRefresh(evtPath);
+        return;
+      }
     }
   };
 
@@ -251,11 +316,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const expandPath = (p: string) => {
     const parts = p.split('/').filter(Boolean);
     let acc = '/';
-    setExpanded(acc, true);
+    expandDir(acc);
     if (!listings[acc]) sendList(acc);
     for (const part of parts) {
       acc = acc === '/' ? '/' + part : acc + '/' + part;
-      setExpanded(acc, true);
+      expandDir(acc);
       if (!listings[acc]) sendList(acc);
     }
   };
@@ -287,7 +352,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         sendList(p);
         return;
       }
-      setExpanded(p, true);
+      expandDir(p);
     } else if (entry?.type === 'file') {
       sendRead(p);
     }
@@ -325,9 +390,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   const toggleExpand = (p: string) => {
     if (expanded[p]) {
-      setExpanded(produce((s) => { delete s[p]; }));
+      collapseDir(p);
     } else {
-      setExpanded(p, true);
+      expandDir(p);
       if (!listings[p]) sendList(p);
     }
     persist();
@@ -568,7 +633,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     if (typeof s.show_hidden === 'boolean') setShowHidden(s.show_hidden);
     if (typeof s.info_open === 'boolean') setInfoOpen(s.info_open);
     if (s.expanded) {
-      for (const p of s.expanded) setExpanded(p, true);
+      for (const p of s.expanded) expandDir(p);
     }
     if (s.path) selectPath(s.path, false);
     else send({ kind: 'request_initial' });
@@ -982,6 +1047,7 @@ const TreeRow: Component<{
       }}
     >
       <span
+        data-testid={`fm-chevron-${props.entry.name}`}
         style={{ width: '12px', display: 'inline-flex', 'align-items': 'center', 'justify-content': 'center', opacity: 0.6, cursor: 'pointer' }}
         onClick={(ev) => {
           if (props.entry.type === 'dir') {

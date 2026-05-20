@@ -134,8 +134,9 @@ restore, z-order rules, and the taskbar.
 ## Phase 4 — fs service + file manager + dialogs
 
 - Router native **fs service**: list/stat/ranged-read/write
-  (atomic: temp+fsync+rename)/mkdir/delete/move/copy. `watch` may defer if it
-  threatens the phase.
+  (atomic: temp+fsync+rename)/mkdir/delete/move/copy. Watch is provided
+  by `internal/fswatch` as a shared library — see ARCHITECTURE.md
+  §Filesystem.
 - File manager app: FE web component (tree + listing +
   move/copy/rename/delete) over the raw fs API.
 - Session app implements the **dialog provider** (open/save/folder UI) using

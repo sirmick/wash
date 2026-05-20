@@ -30,7 +30,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
+	"github.com/sirmick/wash/internal/fswatch"
 	"github.com/sirmick/wash/internal/sdk"
 )
 
@@ -56,6 +58,22 @@ const (
 // fmRoot is the configured sandbox root, or "" if unconfined. Set
 // once at startup from WASH_FM_ROOT.
 var fmRoot string
+
+// watchState owns the fswatch.Manager and the per-path subscription
+// table. fm's FE asks the BE to watch a directory while it's
+// expanded in the tree; the BE keeps one Sub per path and tears it
+// down when the FE sends unwatch (or when the BE exits). The map
+// makes the protocol idempotent — repeated watch requests for the
+// same path keep one Sub, and an unwatch on an unknown path is a
+// no-op rather than an error.
+type watchState struct {
+	mu      sync.Mutex
+	mgr     *fswatch.Manager
+	subs    map[string]*fswatch.Sub
+	conn    *sdk.Conn
+}
+
+var fmWatch *watchState
 
 type entry struct {
 	Name    string `json:"name" cbor:"name"`
@@ -117,6 +135,24 @@ type errResult struct {
 	Msg  string `json:"msg"`
 }
 
+// fsEvent is the watch-fired message the BE pushes to the FE
+// whenever a fswatch.Sub reports a change. There's no id field:
+// these are unsolicited, not request/response.
+type fsEvent struct {
+	Kind string `json:"kind"`
+	Op   string `json:"op"`   // "created" | "modified" | "deleted"
+	Path string `json:"path"` // the file/dir that changed
+}
+
+// watchOK is the reply to a successful watch request. ID echoes the
+// FE's request id so the FE can correlate; Path is the (cleaned)
+// path the BE is now watching.
+type watchOK struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id,omitempty"`
+	Path string `json:"path"`
+}
+
 func main() {
 	sub, err := fs.Sub(assetsFS, "assets")
 	if err != nil {
@@ -163,6 +199,15 @@ func initialPath() string {
 
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-fm ready instance=%s window=%d", instanceID, windowID)
+	mgr, err := fswatch.New()
+	if err != nil {
+		// Watching is best-effort — if fsnotify is unavailable
+		// (resource limits, unusual platform) fm keeps working
+		// without live refresh.
+		log.Printf("wash-fm: fswatch unavailable: %v", err)
+	} else {
+		fmWatch = &watchState{mgr: mgr, subs: make(map[string]*fswatch.Sub), conn: c}
+	}
 	sendList(c, "", initialPath())
 }
 
@@ -218,7 +263,94 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		path, _ := m["path"].(string)
 		content, _ := m["content"].(string)
 		doWrite(c, id, path, content)
+	case "watch":
+		path, _ := m["path"].(string)
+		doWatch(c, id, path)
+	case "unwatch":
+		path, _ := m["path"].(string)
+		doUnwatch(c, id, path)
 	}
+}
+
+// doWatch subscribes to fs events under path and starts (lazily, on
+// first watch) a goroutine that forwards Sub events as fs_event
+// app_msgs. Sandbox is enforced via confine(); the FE can only ever
+// watch dirs it's allowed to see anyway.
+func doWatch(c *sdk.Conn, id, path string) {
+	if fmWatch == nil {
+		sendErr(c, "watch_err", id, path, "unavailable", "fswatch unavailable")
+		return
+	}
+	if path == "" {
+		sendErr(c, "watch_err", id, path, "bad_request", "missing path")
+		return
+	}
+	abs, err := confine(path)
+	if err != nil {
+		sendErr(c, "watch_err", id, path, confineErrCode(err), err.Error())
+		return
+	}
+	fmWatch.mu.Lock()
+	if _, exists := fmWatch.subs[abs]; exists {
+		// Idempotent: a second watch for the same path is a no-op.
+		fmWatch.mu.Unlock()
+		_ = c.SendAppMsg(watchOK{Kind: "watch_ok", ID: id, Path: abs})
+		return
+	}
+	sub, err := fmWatch.mgr.Watch(abs)
+	if err != nil {
+		fmWatch.mu.Unlock()
+		sendErr(c, "watch_err", id, abs, "io", err.Error())
+		return
+	}
+	fmWatch.subs[abs] = sub
+	fmWatch.mu.Unlock()
+
+	// One goroutine per Sub. Exits when the Sub's events channel
+	// closes — which happens on unwatch (Sub.Close) or on manager
+	// shutdown (Manager.Close). Either way the goroutine is bound
+	// to the Sub's lifetime, no manual coordination needed.
+	go func(s *fswatch.Sub) {
+		for ev := range s.Events() {
+			payload := fsEvent{Kind: "fs_event", Op: ev.Op.String(), Path: ev.Path}
+			if err := c.SendAppMsg(payload); err != nil {
+				log.Printf("wash-fm send fs_event: %v", err)
+				return
+			}
+		}
+	}(sub)
+
+	_ = c.SendAppMsg(watchOK{Kind: "watch_ok", ID: id, Path: abs})
+}
+
+// doUnwatch releases the Sub for path. Idempotent: an unwatch on a
+// path that wasn't being watched returns watch_ok (it's already in
+// the desired state) — same UX-shape as the FE asking the BE to
+// "stop watching", and the BE confirming it's not.
+func doUnwatch(c *sdk.Conn, id, path string) {
+	if fmWatch == nil {
+		_ = c.SendAppMsg(watchOK{Kind: "unwatch_ok", ID: id, Path: path})
+		return
+	}
+	if path == "" {
+		sendErr(c, "unwatch_err", id, path, "bad_request", "missing path")
+		return
+	}
+	abs, err := confine(path)
+	if err != nil {
+		sendErr(c, "unwatch_err", id, path, confineErrCode(err), err.Error())
+		return
+	}
+	fmWatch.mu.Lock()
+	sub, ok := fmWatch.subs[abs]
+	if ok {
+		delete(fmWatch.subs, abs)
+	}
+	fmWatch.mu.Unlock()
+	if sub != nil {
+		sub.Close()
+	}
+	_ = c.SendAppMsg(watchOK{Kind: "unwatch_ok", ID: id, Path: abs})
 }
 
 // confine resolves p to an absolute, cleaned path and verifies it is
