@@ -17,6 +17,15 @@ importers:
         specifier: ^5.4.10
         version: 5.4.21
 
+  apps/fm:
+    devDependencies:
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+      vite:
+        specifier: ^5.4.10
+        version: 5.4.21
+
   apps/session:
     devDependencies:
       typescript:

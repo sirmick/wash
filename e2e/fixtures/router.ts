@@ -23,6 +23,7 @@ const ABOUT_BIN = join(REPO_ROOT, 'out', 'wash-about');
 const TEST_BIN = join(REPO_ROOT, 'out', 'wash-test');
 const TERM_BIN = join(REPO_ROOT, 'out', 'wash-term');
 const LAUNCH_BIN = join(REPO_ROOT, 'out', 'wash-launch');
+const FM_BIN = join(REPO_ROOT, 'out', 'wash-fm');
 
 export interface RouterHandle {
   url: string;
@@ -38,8 +39,8 @@ export interface RouterHandle {
 export interface RouterOptions {
   /** kiosk mode: --no-session + --initial-app=<appID>. */
   kiosk?: string;
-  /** include these binaries in the apps dir; defaults to all four. */
-  apps?: ('session' | 'about' | 'test' | 'term')[];
+  /** include these binaries in the apps dir; defaults to all five. */
+  apps?: ('session' | 'about' | 'test' | 'term' | 'fm')[];
   /** include manifest.hidden apps in the catalog. */
   showHidden?: boolean;
   /** extra wash-router args. */
@@ -74,17 +75,18 @@ function stageApps(binaries: string[]): string {
 }
 
 export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandle> {
-  for (const b of [ROUTER_BIN, SESSION_BIN, ABOUT_BIN, TEST_BIN, TERM_BIN, LAUNCH_BIN]) {
+  for (const b of [ROUTER_BIN, SESSION_BIN, ABOUT_BIN, TEST_BIN, TERM_BIN, FM_BIN, LAUNCH_BIN]) {
     if (!existsSync(b)) {
       throw new Error(`missing binary: ${b}\n(make TEST_APP=1 from the repo root)`);
     }
   }
-  const wanted = opts.apps ?? ['session', 'about', 'test', 'term'];
+  const wanted = opts.apps ?? ['session', 'about', 'test', 'term', 'fm'];
   const bins: string[] = [];
   if (wanted.includes('session')) bins.push(SESSION_BIN);
   if (wanted.includes('about')) bins.push(ABOUT_BIN);
   if (wanted.includes('test')) bins.push(TEST_BIN);
   if (wanted.includes('term')) bins.push(TERM_BIN);
+  if (wanted.includes('fm')) bins.push(FM_BIN);
   const appsDir = stageApps(bins);
 
   const port = await freePort();
