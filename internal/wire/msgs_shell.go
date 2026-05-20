@@ -24,6 +24,7 @@ const (
 	TShellAssetFetch         = "asset.fetch"
 	TShellWindowCloseClicked = "window.close_clicked"
 	TShellWindowFocus        = "window.focus"
+	TShellWindowResize       = "window.resize"
 	TShellAppMsgSend         = "app_msg.send"
 	TShellLog                = "log"
 
@@ -184,6 +185,21 @@ type ShellWindowFocus struct {
 
 func NewShellWindowFocus(windowID uint32) ShellWindowFocus {
 	return ShellWindowFocus{T: TShellWindowFocus, WindowID: windowID}
+}
+
+// ShellWindowResize is the user committing a new size (drag-resize
+// end). The router relays EvtWindowResize to the owning app. v0.1
+// only emits this on resize completion; live-resize for apps that
+// need it (e.g. a terminal) is a deferred opt-in.
+type ShellWindowResize struct {
+	T        string `json:"t"`
+	WindowID uint32 `json:"window_id"`
+	W        uint32 `json:"w"`
+	H        uint32 `json:"h"`
+}
+
+func NewShellWindowResize(windowID, w, h uint32) ShellWindowResize {
+	return ShellWindowResize{T: TShellWindowResize, WindowID: windowID, W: w, H: h}
 }
 
 // ShellAppMsgSend is the FE half of an app sending an APP_MSG to its

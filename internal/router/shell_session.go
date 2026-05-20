@@ -188,6 +188,8 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		return s.handleWindowCloseClicked(m)
 	case wire.ShellWindowFocus:
 		return s.handleWindowFocus(m)
+	case wire.ShellWindowResize:
+		return s.handleWindowResize(m)
 	case wire.ShellAppMsgSend:
 		return s.handleAppMsgSend(m)
 	case wire.ShellLog:
@@ -269,6 +271,16 @@ func (s *ShellSession) handleWindowFocus(m wire.ShellWindowFocus) error {
 		return nil
 	}
 	return inst.WriteEvt(wire.NewEvtWindowFocus(m.WindowID))
+}
+
+func (s *ShellSession) handleWindowResize(m wire.ShellWindowResize) error {
+	s.router.mu.Lock()
+	inst := s.router.byWin[m.WindowID]
+	s.router.mu.Unlock()
+	if inst == nil {
+		return nil
+	}
+	return inst.WriteEvt(wire.NewEvtWindowResize(m.WindowID, m.W, m.H))
 }
 
 func (s *ShellSession) handleAppMsgSend(m wire.ShellAppMsgSend) error {

@@ -110,6 +110,27 @@ test.describe('chrome (test app via --show-hidden)', () => {
     await expect(app).toHaveCount(0);
   });
 
+  test('drag resize handle commits new geometry to BE', async ({ page, router }) => {
+    await page.goto(router.url);
+    await launchTestApp(page);
+    const app = page.locator('wash-app-test');
+    await expect(app).toBeVisible();
+    // Test app's manifest default is 560×480.
+
+    const handle = page.locator('[data-testid="window-resize"]').first();
+    const box = await handle.boundingBox();
+    if (!box) throw new Error('no resize handle bbox');
+    // Drag the handle 100 px right and 60 px down.
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 100, box.y + box.height / 2 + 60, { steps: 4 });
+    await page.mouse.up();
+
+    // BE receives EvtWindowResize on commit and echoes geometry to FE.
+    await expect(app.locator('[data-testid="geometry"] b')).toHaveText('660x540');
+    await expect(app.locator('[data-testid="event-row-resize"]').first()).toContainText('660x540');
+  });
+
   test('spawn nonexistent surfaces spawn_err event', async ({ page, router }) => {
     await page.goto(router.url);
     await launchTestApp(page);

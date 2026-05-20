@@ -4,7 +4,7 @@
 
 import { onCleanup, onMount } from 'solid-js';
 import { registerMountedElement, unregisterMountedElement } from './api';
-import { focused, move, raise, removeWindow, Win } from './wm';
+import { focused, move, raise, removeWindow, resize, Win } from './wm';
 
 export interface WindowProps {
   win: Win;
@@ -55,6 +55,34 @@ export function FloatingWindow(props: WindowProps) {
     window.wash.focusWindow(props.win.windowID);
   };
   const onWindowPointerDown = () => focusWindow();
+
+  // Bottom-right resize: drag updates the WM state locally; on commit
+  // (pointerup) we tell the router so the BE gets EvtWindowResize.
+  // Live-resize for terminal-style apps is a later opt-in.
+  const onResizeHandlePointerDown = (ev: PointerEvent) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    raise(props.win.windowID);
+    const target = ev.currentTarget as HTMLElement;
+    target.setPointerCapture(ev.pointerId);
+    const startX = ev.clientX;
+    const startY = ev.clientY;
+    const origW = props.win.w;
+    const origH = props.win.h;
+    const onMove = (m: PointerEvent) => {
+      const newW = Math.max(160, origW + (m.clientX - startX));
+      const newH = Math.max(80, origH + (m.clientY - startY));
+      resize(props.win.windowID, newW, newH);
+    };
+    const onUp = () => {
+      target.removeEventListener('pointermove', onMove);
+      target.removeEventListener('pointerup', onUp);
+      target.releasePointerCapture(ev.pointerId);
+      window.wash.resizeWindow(props.win.windowID, props.win.w, props.win.h);
+    };
+    target.addEventListener('pointermove', onMove);
+    target.addEventListener('pointerup', onUp);
+  };
 
   return (
     <div
@@ -113,6 +141,24 @@ export function FloatingWindow(props: WindowProps) {
         </button>
       </div>
       <div ref={slot} style={{ flex: 1, overflow: 'auto' }} />
+      <div
+        class="wash-resize-handle"
+        data-testid="window-resize"
+        onPointerDown={onResizeHandlePointerDown}
+        title="Resize"
+        style={{
+          position: 'absolute',
+          right: '0',
+          bottom: '0',
+          width: '14px',
+          height: '14px',
+          cursor: 'nwse-resize',
+          'z-index': '1',
+          // Light hint via a corner triangle of gradient.
+          background:
+            'linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0.18) 70%, transparent 70%)',
+        }}
+      />
     </div>
   );
 }

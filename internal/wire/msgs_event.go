@@ -14,6 +14,7 @@ const (
 	TEvtWindowMapped         = "window.mapped"
 	TEvtWindowFocus          = "window.focus"
 	TEvtWindowUnfocus        = "window.unfocus"
+	TEvtWindowResize         = "window.resize"
 	TEvtWindowCloseRequested = "window.close_requested"
 	TEvtShutdown             = "shutdown"
 
@@ -56,6 +57,20 @@ type EvtWindowUnfocus struct {
 
 func NewEvtWindowUnfocus(win uint32) EvtWindowUnfocus {
 	return EvtWindowUnfocus{T: TEvtWindowUnfocus, Win: win}
+}
+
+// EvtWindowResize: router → app, the window's pixel size changed
+// (typically at drag-resize end). v0.1 emits this once per commit;
+// live-resize is deferred.
+type EvtWindowResize struct {
+	T   string `cbor:"t"`
+	Win uint32 `cbor:"win"`
+	W   uint32 `cbor:"w"`
+	H   uint32 `cbor:"h"`
+}
+
+func NewEvtWindowResize(win, w, h uint32) EvtWindowResize {
+	return EvtWindowResize{T: TEvtWindowResize, Win: win, W: w, H: h}
 }
 
 // EvtWindowCloseRequested: router → app, X WM_DELETE analogue. App
@@ -175,6 +190,9 @@ func DecodeEvt(data []byte) (any, error) {
 		return m, cbor.Unmarshal(data, &m)
 	case TEvtWindowUnfocus:
 		var m EvtWindowUnfocus
+		return m, cbor.Unmarshal(data, &m)
+	case TEvtWindowResize:
+		var m EvtWindowResize
 		return m, cbor.Unmarshal(data, &m)
 	case TEvtWindowCloseRequested:
 		var m EvtWindowCloseRequested

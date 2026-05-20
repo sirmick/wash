@@ -197,6 +197,7 @@ declare global {
       onWindowsChanged(cb: (windows: WindowInfo[]) => void): () => void;
       focusWindow(id: number): void;
       closeWindow(id: number): void;
+      resizeWindow(id: number, w: number, h: number): void;
       log(level: 'error' | 'warn' | 'info' | 'debug', source: string, msg: string, stack?: string): void;
     };
   }
@@ -228,6 +229,9 @@ window.wash = {
   },
   closeWindow(id) {
     conn.sendCtrl({ t: 'window.close_clicked', window_id: id });
+  },
+  resizeWindow(id, w, h) {
+    conn.sendCtrl({ t: 'window.resize', window_id: id, w, h });
   },
   log(level, source, msg, stack) {
     shellLog(level, source, msg, stack);

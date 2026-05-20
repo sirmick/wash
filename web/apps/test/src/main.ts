@@ -73,11 +73,12 @@ class WashAppTest extends HTMLElement {
     this.tabIndex = 0; // accept keyboard focus
 
     this.innerHTML = `
-      <header style="display:flex;gap:18px;align-items:baseline;margin-bottom:8px;">
+      <header style="display:flex;gap:18px;align-items:baseline;flex-wrap:wrap;margin-bottom:8px;">
         <span style="font-weight:600;">wash-app-test</span>
         <span data-testid="instance" style="opacity:0.6;">${this.instance}</span>
         <span data-testid="focused" style="opacity:0.8;">focused: <b>no</b></span>
         <span data-testid="title" style="opacity:0.8;">title: <b>(none)</b></span>
+        <span data-testid="geometry" style="opacity:0.8;">geometry: <b>?x?</b></span>
       </header>
 
       <section style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px 14px;margin:8px 0 14px;">
@@ -234,6 +235,10 @@ class WashAppTest extends HTMLElement {
             this.state.vetoNextClose = !!m.on;
             this.set('veto-next-close', m.on ? 'on' : 'off');
             this.logEvent('veto_changed', m.on ? 'on' : 'off');
+            break;
+          case 'resize':
+            this.set('geometry', `${m.w}x${m.h}`);
+            this.logEvent('resize', `${m.w}x${m.h}`);
             break;
           default:
             this.logEvent(type);

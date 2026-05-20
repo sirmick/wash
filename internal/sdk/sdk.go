@@ -40,6 +40,7 @@ type AppDef struct {
 	OnMapped  func(c *Conn, win uint32)
 	OnFocus   func(c *Conn, win uint32)
 	OnUnfocus func(c *Conn, win uint32)
+	OnResize  func(c *Conn, win uint32, w, h uint32)
 
 	// OnCloseRequested is the X-style WM_DELETE analogue. Return true
 	// to allow close; return false to veto. If nil, the SDK confirms

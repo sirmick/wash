@@ -62,6 +62,10 @@ export function move(windowID: number, x: number, y: number): void {
   setWindows((w) => w.windowID === windowID, { x, y });
 }
 
+export function resize(windowID: number, w: number, h: number): void {
+  setWindows((win) => win.windowID === windowID, { w, h });
+}
+
 export function mountDesktop(d: DesktopMount): void {
   setDesktop(d);
 }
