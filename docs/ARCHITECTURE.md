@@ -111,8 +111,18 @@ program plus an embedded frontend (FE) web-component bundle.
 - Resolved as **one service contract with two transport bindings** (in-router
   goroutine vs. out-of-process app over the Unix socket) — indistinguishable to
   the SDK, shell, and registry. An external app can shadow a builtin by id.
-- **pty** = native router service, **router-owned lifetime** (forced by the
-  reattach/survive-disconnect requirement, not by speed).
+- **pty** — originally specified as a native router service with
+  router-owned lifetime, motivated by reattach/survive-disconnect. The
+  **v0.1 implementation** keeps pty *inside the terminal app process*
+  (`cmd/wash-term` imports `creack/pty` directly) because v0.1 does
+  not ship reattach (Phase 5) and the splice argument is thinner across
+  the WS framing layer than a literal `splice(2)` call would be.
+  Bytes still flow pty ↔ wash-term ↔ router ↔ WS verbatim; raw
+  channels mean the router is bytes-in-bytes-out, no decode. Reattach
+  in a later phase will revisit this: either move pty to a router
+  service then, or add a reattach-to-existing-instance protocol that
+  serves AI chat sessions and any long-lived stateful app at the same
+  time (probably the latter).
 - **fs** = native router service (see below).
 - The **Terminal** is a normal app *process* that consumes the pty service;
   the router **splices** the pty stream directly to the window's WS channel, so

@@ -14,7 +14,7 @@ GOARCH  ?= amd64
 GOFLAGS := -trimpath -ldflags=-s\ -w -tags netgo,osusergo
 
 OUT     := out
-BINS    := wash-router wash-session wash-about
+BINS    := wash-router wash-session wash-about wash-term
 TARGETS := $(addprefix $(OUT)/,$(BINS))
 
 # Test app: not part of the default build; built explicitly with
@@ -42,6 +42,9 @@ ABOUT_STAMP    := $(ABOUT_ASSETS)/.stamp
 
 TEST_ASSETS    := cmd/wash-test/assets
 TEST_STAMP     := $(TEST_ASSETS)/.stamp
+
+TERM_ASSETS    := cmd/wash-term/assets
+TERM_STAMP     := $(TERM_ASSETS)/.stamp
 
 .PHONY: all
 all: $(TARGETS)
@@ -72,6 +75,10 @@ web-about: web-deps
 web-test: web-deps
 	@cd web && $(PNPM) --filter @wash/app-test run build
 
+.PHONY: web-term
+web-term: web-deps
+	@cd web && $(PNPM) --filter @wash/app-term run build
+
 # embed-into-cmd helper. Usage: $(call embed,<src dist dir>,<dst assets dir>)
 define embed_dist
 	rm -rf $(2)
@@ -97,6 +104,9 @@ $(ABOUT_STAMP): web-about
 $(TEST_STAMP): web-test
 	$(call embed_dist,web/apps/test/dist,$(TEST_ASSETS))
 
+$(TERM_STAMP): web-term
+	$(call embed_dist,web/apps/term/dist,$(TERM_ASSETS))
+
 # ----- go stage -----
 
 $(OUT)/wash-router: $(ROUTER_STAMP) | $(OUT)
@@ -110,6 +120,9 @@ $(OUT)/wash-about: $(ABOUT_STAMP) | $(OUT)
 
 $(OUT)/wash-test: $(TEST_STAMP) | $(OUT)
 	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-test
+
+$(OUT)/wash-term: $(TERM_STAMP) | $(OUT)
+	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-term
 
 # Convenience target: build the test app + everything else.
 .PHONY: test-app
