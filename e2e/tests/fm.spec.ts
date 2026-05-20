@@ -132,6 +132,35 @@ test.describe('file manager', () => {
     await expect(page.locator('[data-testid="fm-entry-inside.txt"]')).toBeVisible();
   });
 
+  test('path bar autocompletes from BE matches', async ({ page, router }) => {
+    const root = mkdtempSync(join(tmpdir(), 'wash-fm-auto-'));
+    mkdirSync(join(root, 'apples'));
+    mkdirSync(join(root, 'apricot'));
+    writeFileSync(join(root, 'banana.txt'), 'b\n');
+
+    await page.goto(router.url);
+    await page.locator('button[title="Apps"]').click();
+    await page.getByRole('button', { name: /Files/ }).click();
+    await expect(page.locator('wash-app-fm')).toBeVisible();
+
+    // Type fixture + "/ap" → completions for apples + apricot.
+    const input = page.locator('[data-testid="fm-path"]');
+    await input.click();
+    await input.fill(root + '/ap');
+
+    // Dropdown should show both ap*-prefix dirs.
+    const dropdown = page.locator('[data-testid="fm-complete"]');
+    await expect(dropdown).toBeVisible();
+    await expect(page.locator('[data-testid="fm-complete-0"]')).toBeVisible();
+    // Two matches (apples/, apricot/) — banana doesn't match prefix.
+    await expect(dropdown.locator('[data-testid^="fm-complete-"]')).toHaveCount(2);
+
+    // ArrowDown to second, Enter picks + navigates.
+    await input.press('ArrowDown');
+    await input.press('Enter');
+    await expect(page.locator('[data-testid="fm-path"]')).toHaveValue(join(root, 'apricot'));
+  });
+
   test('up button: walks the selection to the parent', async ({ page, router }) => {
     const root = mkdtempSync(join(tmpdir(), 'wash-fm-up-'));
     mkdirSync(join(root, 'inner'));

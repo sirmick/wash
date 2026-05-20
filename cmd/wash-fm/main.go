@@ -113,6 +113,9 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 	case "read":
 		path, _ := m["path"].(string)
 		sendRead(c, path)
+	case "complete":
+		partial, _ := m["partial"].(string)
+		sendCompletions(c, partial)
 	}
 }
 
@@ -236,6 +239,71 @@ func sendRead(c *sdk.Conn, path string) {
 func sendErr(c *sdk.Conn, kind, path, code, msg string) {
 	if err := c.SendAppMsg(errResult{Kind: kind, Path: path, Code: code, Msg: msg}); err != nil {
 		log.Printf("wash-fm send %s: %v", kind, err)
+	}
+}
+
+// maxCompletions caps the autocomplete suggestion count.
+const maxCompletions = 50
+
+// sendCompletions returns paths matching `partial`. Rules:
+//   - empty / "/"          → entries in /
+//   - trailing "/"         → entries in the directory
+//   - otherwise            → entries in dirname(partial) starting with basename(partial)
+//
+// Directory matches get a trailing "/" so subsequent typing extends
+// naturally.
+func sendCompletions(c *sdk.Conn, partial string) {
+	var dir, prefix string
+	switch {
+	case partial == "":
+		dir, prefix = "/", ""
+	case strings.HasSuffix(partial, "/"):
+		dir, prefix = partial, ""
+	default:
+		dir = filepath.Dir(partial)
+		if dir == "" {
+			dir = "/"
+		}
+		prefix = filepath.Base(partial)
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		_ = c.SendAppMsg(map[string]any{"kind": "complete_ok", "partial": partial, "matches": []string{}})
+		return
+	}
+	d, err := os.Open(abs)
+	if err != nil {
+		_ = c.SendAppMsg(map[string]any{"kind": "complete_ok", "partial": partial, "matches": []string{}})
+		return
+	}
+	defer d.Close()
+	infos, err := d.Readdir(-1)
+	if err != nil {
+		_ = c.SendAppMsg(map[string]any{"kind": "complete_ok", "partial": partial, "matches": []string{}})
+		return
+	}
+	matches := make([]string, 0, 16)
+	for _, fi := range infos {
+		name := fi.Name()
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		full := filepath.Join(abs, name)
+		if fi.IsDir() {
+			full += "/"
+		}
+		matches = append(matches, full)
+		if len(matches) >= maxCompletions {
+			break
+		}
+	}
+	sort.Strings(matches)
+	if err := c.SendAppMsg(map[string]any{
+		"kind":    "complete_ok",
+		"partial": partial,
+		"matches": matches,
+	}); err != nil {
+		log.Printf("wash-fm send complete_ok: %v", err)
 	}
 }
 

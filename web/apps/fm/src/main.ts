@@ -63,6 +63,12 @@ class WashAppFM extends HTMLElement {
   // discarded between the two clicks; the state lives on the host.
   private lastClickPath = '';
   private lastClickTime = 0;
+  // Autocomplete state (path bar dropdown).
+  private completeDropdown: HTMLDivElement | null = null;
+  private completeMatches: string[] = [];
+  private completeIdx = -1;
+  private completeTimer: number | null = null;
+  private completePartial = '';
 
   // ---- dom refs ----
   private treeEl!: HTMLDivElement;
@@ -87,6 +93,7 @@ class WashAppFM extends HTMLElement {
       'color:#eee',
       'font:13px ui-sans-serif,system-ui,sans-serif',
       'box-sizing:border-box',
+      'position:relative', // anchor absolute-positioned overlays (menus, dropdowns)
     ].join(';');
 
     this.appendChild(this.buildToolbar());
@@ -143,11 +150,11 @@ class WashAppFM extends HTMLElement {
       'font:12px ui-monospace,Menlo,Consolas,monospace',
       'outline:none',
     ].join(';');
-    this.pathInput.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter') {
-        ev.preventDefault();
-        this.navigateTo(this.pathInput.value);
-      }
+    this.pathInput.addEventListener('keydown', (ev) => this.onPathKey(ev));
+    this.pathInput.addEventListener('input', () => this.onPathInput());
+    this.pathInput.addEventListener('blur', () => {
+      // Defer close so a mousedown on a dropdown item can fire first.
+      setTimeout(() => this.closeCompleteDropdown(), 100);
     });
     bar.appendChild(this.pathInput);
 
@@ -306,7 +313,149 @@ class WashAppFM extends HTMLElement {
       case 'read_err':
         this.previewEl.textContent = `error: ${String(m.msg)}`;
         return;
+      case 'complete_ok': {
+        const partial = String(m.partial);
+        const matches = (m.matches as string[]) ?? [];
+        // Ignore late responses for a query we no longer care about.
+        if (partial !== this.completePartial) return;
+        this.completeMatches = matches;
+        this.completeIdx = matches.length > 0 ? 0 : -1;
+        this.renderCompleteDropdown();
+        return;
+      }
     }
+  }
+
+  // ---- autocomplete ----
+
+  private onPathInput() {
+    const value = this.pathInput.value;
+    if (this.completeTimer != null) {
+      window.clearTimeout(this.completeTimer);
+    }
+    this.completeTimer = window.setTimeout(() => {
+      this.completePartial = value;
+      window.wash.sendAppMsg(this.instance, { kind: 'complete', partial: value });
+    }, 120);
+  }
+
+  private onPathKey(ev: KeyboardEvent) {
+    if (this.completeDropdown && this.completeMatches.length > 0) {
+      if (ev.key === 'ArrowDown') {
+        ev.preventDefault();
+        this.completeIdx = (this.completeIdx + 1) % this.completeMatches.length;
+        this.renderCompleteDropdown();
+        return;
+      }
+      if (ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        this.completeIdx =
+          (this.completeIdx - 1 + this.completeMatches.length) % this.completeMatches.length;
+        this.renderCompleteDropdown();
+        return;
+      }
+      if (ev.key === 'Tab') {
+        ev.preventDefault();
+        this.pickCompletion(this.completeIdx, false);
+        return;
+      }
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        this.closeCompleteDropdown();
+        return;
+      }
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        this.pickCompletion(this.completeIdx, true);
+        return;
+      }
+    } else if (ev.key === 'Enter') {
+      ev.preventDefault();
+      this.navigateTo(this.pathInput.value);
+    } else if (ev.key === 'Escape') {
+      this.closeCompleteDropdown();
+    }
+  }
+
+  private pickCompletion(idx: number, alsoNavigate: boolean) {
+    if (idx < 0 || idx >= this.completeMatches.length) return;
+    const pick = this.completeMatches[idx];
+    this.pathInput.value = pick;
+    this.closeCompleteDropdown();
+    if (alsoNavigate) {
+      // For directories the picker added a trailing "/"; navigate
+      // either way (the BE accepts both).
+      this.navigateTo(pick.endsWith('/') ? pick.slice(0, -1) : pick);
+    }
+  }
+
+  private renderCompleteDropdown() {
+    // Drop only the DOM element here — the data drives this render.
+    if (this.completeDropdown) {
+      this.completeDropdown.remove();
+      this.completeDropdown = null;
+    }
+    if (this.completeMatches.length === 0) return;
+    const drop = document.createElement('div');
+    drop.dataset.testid = 'fm-complete';
+    drop.style.cssText = [
+      'position:absolute',
+      'background:#15152a',
+      'border:1px solid #2a2a3a',
+      'border-radius:4px',
+      'padding:2px 0',
+      'min-width:240px',
+      'max-height:280px',
+      'overflow-y:auto',
+      'box-shadow:0 8px 20px rgba(0,0,0,0.5)',
+      'z-index:1500',
+      'font:12px ui-monospace,Menlo,Consolas,monospace',
+    ].join(';');
+    const rect = this.pathInput.getBoundingClientRect();
+    const my = this.getBoundingClientRect();
+    drop.style.left = `${rect.left - my.left}px`;
+    drop.style.top = `${rect.bottom - my.top + 2}px`;
+    drop.style.width = `${rect.width}px`;
+    this.completeMatches.forEach((match, i) => {
+      const row = document.createElement('div');
+      row.dataset.testid = `fm-complete-${i}`;
+      row.textContent = match;
+      row.style.cssText = [
+        'padding:4px 8px',
+        'cursor:pointer',
+        'color:#eee',
+        `background:${i === this.completeIdx ? '#23234a' : 'transparent'}`,
+        'white-space:nowrap',
+        'overflow:hidden',
+        'text-overflow:ellipsis',
+      ].join(';');
+      row.addEventListener('mouseenter', () => {
+        this.completeIdx = i;
+        this.renderCompleteDropdown();
+      });
+      // Use mousedown so it fires before the input's blur handler
+      // closes the dropdown.
+      row.addEventListener('mousedown', (ev) => {
+        ev.preventDefault();
+        this.pickCompletion(i, true);
+      });
+      drop.appendChild(row);
+    });
+    this.completeDropdown = drop;
+    this.appendChild(drop);
+  }
+
+  // closeCompleteDropdown drops the DOM AND the candidate list — used
+  // after picking, on Escape, on blur. While typing, only the DOM is
+  // removed by renderCompleteDropdown so the next response can append
+  // afresh without racing with the data we just received.
+  private closeCompleteDropdown() {
+    if (this.completeDropdown) {
+      this.completeDropdown.remove();
+      this.completeDropdown = null;
+    }
+    this.completeMatches = [];
+    this.completeIdx = -1;
   }
 
   // ---- navigation / state ----
