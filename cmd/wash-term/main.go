@@ -157,6 +157,25 @@ func cleanupSession(c *sdk.Conn, chID uint32, reason string) {
 	}
 }
 
+// toUint accepts the various concrete number types CBOR may produce
+// when a JSON number traverses JSON → router → CBOR → SDK. JSON's
+// Unmarshal lands integers in float64; re-encoding through CBOR
+// keeps them as float64. We accept whatever the wire delivered.
+func toUint(v any) uint64 {
+	switch x := v.(type) {
+	case uint64:
+		return x
+	case int64:
+		if x < 0 {
+			return 0
+		}
+		return uint64(x)
+	case float64:
+		return uint64(x)
+	}
+	return 0
+}
+
 func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 	m, ok := data.(map[any]any)
 	if !ok {
@@ -164,9 +183,9 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 	}
 	switch kind, _ := m["kind"].(string); kind {
 	case "resize":
-		chID, _ := m["channel_id"].(uint64)
-		cols, _ := m["cols"].(uint64)
-		rows, _ := m["rows"].(uint64)
+		chID := toUint(m["channel_id"])
+		cols := toUint(m["cols"])
+		rows := toUint(m["rows"])
 		if chID == 0 || cols == 0 || rows == 0 {
 			return
 		}
@@ -178,6 +197,30 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		}
 		if err := pty.Setsize(sess.pty, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}); err != nil {
 			log.Printf("wash-term resize ch=%d: %v", chID, err)
+		}
+	case "new_tab":
+		cols := toUint(m["cols"])
+		rows := toUint(m["rows"])
+		if cols == 0 {
+			cols = 80
+		}
+		if rows == 0 {
+			rows = 24
+		}
+		go openTab(c, c.WindowID(), uint16(cols), uint16(rows))
+	case "close_tab":
+		chID := toUint(m["channel_id"])
+		if chID == 0 {
+			return
+		}
+		// Closing the channel will let io.Copy goroutines see EOF
+		// and cleanupSession finish the job.
+		st.mu.Lock()
+		sess := st.sessions[uint32(chID)]
+		st.mu.Unlock()
+		if sess != nil {
+			_ = sess.pty.Close()
+			_ = sess.cmd.Process.Kill()
 		}
 	}
 }
