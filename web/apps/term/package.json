@@ -8,10 +8,12 @@
   },
   "dependencies": {
     "@xterm/xterm": "^5.5.0",
-    "@xterm/addon-fit": "^0.10.0"
+    "@xterm/addon-fit": "^0.10.0",
+    "solid-js": "^1.9.13"
   },
   "devDependencies": {
     "typescript": "^5.5.4",
-    "vite": "^5.4.10"
+    "vite": "^5.4.10",
+    "vite-plugin-solid": "^2.10.2"
   }
 }
