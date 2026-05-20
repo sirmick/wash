@@ -9,7 +9,7 @@
 
 import { createSignal, onCleanup, onMount } from 'solid-js';
 import { registerMountedElement, unregisterMountedElement } from './api';
-import { focused, raiseLocal, Win } from './wm';
+import { focused, moveLocal, raiseLocal, resizeLocal, Win } from './wm';
 
 export interface WindowProps {
   win: Win;
@@ -59,11 +59,16 @@ export function FloatingWindow(props: WindowProps) {
       target.releasePointerCapture(ev.pointerId);
       const x = dragX();
       const y = dragY();
-      setDragX(null);
-      setDragY(null);
       if (x != null && y != null && (x !== origX || y !== origY)) {
+        // Optimistic: commit to the store BEFORE clearing the
+        // override so frameStyle reads the new position the next
+        // frame, not the stale props.win.x while waiting for the
+        // router's session.patch to land.
+        moveLocal(props.win.windowID, x, y);
         window.wash.moveWindow(props.win.windowID, x, y);
       }
+      setDragX(null);
+      setDragY(null);
     };
     target.addEventListener('pointermove', onMove);
     target.addEventListener('pointerup', onUp);
@@ -94,11 +99,12 @@ export function FloatingWindow(props: WindowProps) {
       target.releasePointerCapture(ev.pointerId);
       const w = resizeW();
       const h = resizeH();
-      setResizeW(null);
-      setResizeH(null);
       if (w != null && h != null && (w !== origW || h !== origH)) {
+        resizeLocal(props.win.windowID, w, h);
         window.wash.resizeWindow(props.win.windowID, w, h);
       }
+      setResizeW(null);
+      setResizeH(null);
     };
     target.addEventListener('pointermove', onMove);
     target.addEventListener('pointerup', onUp);

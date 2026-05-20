@@ -57,6 +57,19 @@ export function raiseLocal(windowID: number): void {
   setFocused(windowID);
 }
 
+// moveLocal / resizeLocal write x/y/w/h to the store immediately so
+// the FloatingWindow can clear its drag-or-resize override without
+// snapping back to the pre-commit position while waiting for the
+// router's session.patch. The router's patch is canonical and will
+// overwrite these moments later — usually with the same values.
+export function moveLocal(windowID: number, x: number, y: number): void {
+  setWindows((w) => w.windowID === windowID, { x, y });
+}
+
+export function resizeLocal(windowID: number, w: number, h: number): void {
+  setWindows((win) => win.windowID === windowID, { w, h });
+}
+
 export function mountDesktop(d: DesktopMount): void {
   setDesktop(d);
 }

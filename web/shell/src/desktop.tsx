@@ -37,13 +37,14 @@ export function Desktop() {
       ref={host}
       class="wash-desktop"
       style={{
-        position: 'fixed',
+        // position:absolute (not fixed) — `position:fixed` always
+        // creates a stacking context, which would trap the session
+        // app's taskbar (z-index:10000) beneath floating windows.
+        // #root is already position:fixed full-viewport so absolute
+        // inset:0 here covers the same area without the context.
+        position: 'absolute',
         inset: '0',
         background: '#111',
-        // No z-index — letting wash-desktop stack at 'auto' avoids
-        // creating a stacking context, so the session app's taskbar
-        // (z-index:10000 in its own DOM) can render above floating
-        // windows instead of being trapped beneath them.
       }}
     />
   );
