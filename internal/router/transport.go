@@ -4,48 +4,18 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 
 	"github.com/coder/websocket"
 	"github.com/sirmick/wash/internal/wire"
 )
 
-// FrameTransport carries wash frames in both directions. Three
-// implementations exist:
-//
-//   - StreamTransport over an io.ReadWriteCloser (the app-side
-//     inherited-fd Unix socket; bytes are a length-prefixed series of
-//     frames).
-//   - WSTransport over a coder/websocket.Conn (the browser shell
-//     transport; one wash frame per binary WS message per WIRE.md §1).
-//   - The pipe-based transport in the loopback test (C8).
-type FrameTransport interface {
-	ReadFrame() (wire.Frame, error)
-	WriteFrame(wire.Frame) error
-	Close() error
-}
+// FrameTransport is an alias for wire.FrameTransport — the router
+// uses it pervasively, so re-exporting keeps call sites readable.
+type FrameTransport = wire.FrameTransport
 
-// StreamTransport is the app-socket transport: a stream of
-// length-prefixed wash frames.
-type StreamTransport struct {
-	rwc io.ReadWriteCloser
-}
-
-func NewStreamTransport(rwc io.ReadWriteCloser) *StreamTransport {
-	return &StreamTransport{rwc: rwc}
-}
-
-func (s *StreamTransport) ReadFrame() (wire.Frame, error) {
-	return wire.DecodeFrame(s.rwc)
-}
-
-func (s *StreamTransport) WriteFrame(f wire.Frame) error {
-	return wire.EncodeFrame(s.rwc, f)
-}
-
-func (s *StreamTransport) Close() error {
-	return s.rwc.Close()
-}
+// NewStreamTransport is re-exported from wire so existing call sites
+// stay short.
+var NewStreamTransport = wire.NewStreamTransport
 
 // WSTransport is the shell transport over a WebSocket. Each binary WS
 // message carries exactly one wash frame (WIRE.md §1). Text frames
