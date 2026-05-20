@@ -70,8 +70,10 @@ export function FloatingWindow(props: WindowProps) {
     const origW = props.win.w;
     const origH = props.win.h;
     const onMove = (m: PointerEvent) => {
-      const newW = Math.max(160, origW + (m.clientX - startX));
-      const newH = Math.max(80, origH + (m.clientY - startY));
+      // Round — HiDPI / browser zoom can make clientX/Y fractional,
+      // and the wire types are uint32.
+      const newW = Math.max(160, Math.round(origW + (m.clientX - startX)));
+      const newH = Math.max(80, Math.round(origH + (m.clientY - startY)));
       resize(props.win.windowID, newW, newH);
     };
     const onUp = () => {

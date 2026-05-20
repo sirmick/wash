@@ -11,16 +11,28 @@ package main
 import (
 	"context"
 	"embed"
+	"errors"
 	"io"
 	"io/fs"
 	"log"
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 
 	"github.com/creack/pty"
 	"github.com/sirmick/wash/internal/sdk"
 )
+
+// isPtyTerm reports whether err is the kind of error you see when a
+// pty's slave side has gone away. On Linux, reading the master after
+// the slave closes (process exit / pty.Close) returns EIO; on Close,
+// further reads can also be ErrClosed. Both mean "session ended,"
+// not "something went wrong."
+func isPtyTerm(err error) bool {
+	return err == nil || errors.Is(err, io.EOF) ||
+		errors.Is(err, syscall.EIO) || errors.Is(err, os.ErrClosed)
+}
 
 //go:embed all:assets
 var assetsFS embed.FS
@@ -108,7 +120,7 @@ func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
 	// pty → channel
 	go func() {
 		_, copyErr := io.Copy(ch, f)
-		if copyErr != nil && copyErr != io.EOF {
+		if !isPtyTerm(copyErr) {
 			log.Printf("wash-term pty→ch ch=%d: %v", ch.ID(), copyErr)
 		}
 		// pty closed — clean up.
@@ -117,7 +129,7 @@ func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
 	// channel → pty
 	go func() {
 		_, copyErr := io.Copy(f, ch)
-		if copyErr != nil && copyErr != io.EOF {
+		if !isPtyTerm(copyErr) {
 			log.Printf("wash-term ch→pty ch=%d: %v", ch.ID(), copyErr)
 		}
 		// Channel torn down — kill the shell so the other goroutine exits.
