@@ -114,6 +114,7 @@ func (r *Router) handleAppOpts(ctx context.Context, t FrameTransport, manifest *
 	err := inst.loop(ctx)
 	r.unregisterApp(inst)
 	r.closeChannelsForApp(inst, "app exited")
+	r.dropAppMsgWatchers(inst.InstanceID)
 	r.winSession.dropAppState(inst.InstanceID)
 	if inst.WindowID != 0 {
 		r.broadcastPatches(r.winSession.destroyWindow(inst.WindowID))
@@ -417,8 +418,18 @@ func (inst *AppInstance) handleEvt(payload []byte) error {
 // relayAppMsgToShell forwards an APP_MSG from BE to its FE half.
 // CBOR-decoded values (often map[any]any) are converted to a JSON-
 // friendly shape so the shell can decode without a CBOR runtime.
+// Side effect: if the normalized data is a map carrying a string
+// "id" field, any control-socket watcher registered for (instance,
+// id) gets delivered the data before shell relay. This is how the
+// `wash-launch msg --await` path correlates BE replies.
 func (inst *AppInstance) relayAppMsgToShell(m wire.EvtAppMsg) error {
-	dataJSON, err := json.Marshal(toJSON(m.Data))
+	normalized := toJSON(m.Data)
+	if asMap, ok := normalized.(map[string]any); ok {
+		if msgID, _ := asMap["id"].(string); msgID != "" {
+			inst.router.dispatchAppMsgWatchers(inst.InstanceID, msgID, asMap)
+		}
+	}
+	dataJSON, err := json.Marshal(normalized)
 	if err != nil {
 		return fmt.Errorf("marshal app_msg data: %w", err)
 	}

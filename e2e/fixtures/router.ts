@@ -7,11 +7,11 @@
 
 import { test as base, expect } from '@playwright/test';
 import { spawn, ChildProcess } from 'node:child_process';
-import { mkdtempSync, copyFileSync, existsSync, chmodSync } from 'node:fs';
+import { mkdtempSync, copyFileSync, existsSync, chmodSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createServer } from 'node:net';
+import { createServer, createConnection } from 'node:net';
 
 // Repo root: e2e/fixtures/router.ts → up two.
 const __filename = fileURLToPath(import.meta.url);
@@ -33,8 +33,24 @@ export interface RouterHandle {
   controlSocket: string;
   /** the directory POST /screenshot writes to */
   screenshotDir: string;
+  /** per-test fm sandbox root. Empty when fmRoot wasn't requested. */
+  fmRoot: string;
   log(): string;
   waitForLog(pattern: RegExp, timeout?: number): Promise<string>;
+  /**
+   * Round-trip a single JSON request over the control socket. Used
+   * by BE-driven tests to launch/spawn apps and drive APP_MSGs into
+   * them without going through the browser. The reply is whatever
+   * the router writes back as one JSON line — caller inspects "t".
+   */
+  controlRequest(req: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>;
+  /**
+   * Convenience: send an APP_MSG to instanceID and (if data has a
+   * string `id` field) wait for the matching BE reply. Returns the
+   * raw reply payload; caller inspects .kind. Throws on router-side
+   * errors (timeout, unknown instance).
+   */
+  sendAppMsg(instanceID: string, data: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>;
   proc: ChildProcess;
 }
 
@@ -47,6 +63,19 @@ export interface RouterOptions {
   showHidden?: boolean;
   /** extra wash-router args. */
   extraArgs?: string[];
+  /**
+   * If true, create a per-test sandbox dir, seed it (via fmSeed if
+   * provided, otherwise leave empty), and pass it to the spawned
+   * router as WASH_FM_ROOT. The fm BE then refuses any path outside
+   * the dir, so a wayward test can't touch the user's filesystem.
+   */
+  fmRoot?: boolean;
+  /**
+   * Optional seeder for the fm sandbox. Called with the absolute
+   * path of the just-created sandbox dir; populate it with the
+   * fixture tree your test needs. Implies fmRoot:true.
+   */
+  fmSeed?: (root: string) => void;
 }
 
 async function freePort(): Promise<number> {
@@ -114,7 +143,19 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   }
   if (opts.extraArgs) args.push(...opts.extraArgs);
 
-  const proc = spawn(ROUTER_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  // Optional fm sandbox: a per-test tmpdir gets created (and
+  // seeded) and passed via WASH_FM_ROOT. The fm BE then refuses
+  // any path outside this dir, so an off-by-one test path can't
+  // touch the user's files.
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  let fmRoot = '';
+  if (opts.fmRoot || opts.fmSeed) {
+    fmRoot = mkdtempSync(join(tmpdir(), 'wash-e2e-fm-'));
+    if (opts.fmSeed) opts.fmSeed(fmRoot);
+    env.WASH_FM_ROOT = fmRoot;
+  }
+
+  const proc = spawn(ROUTER_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'], env });
   let logBuf = '';
   proc.stdout.on('data', (chunk: Buffer) => {
     logBuf += chunk.toString('utf8');
@@ -134,15 +175,115 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
     }),
   ]);
 
-  return {
+  const handle: RouterHandle = {
     url: `http://127.0.0.1:${port}/`,
     launchBin: LAUNCH_BIN,
     controlSocket,
     screenshotDir,
+    fmRoot,
     log: () => logBuf,
     waitForLog: (re, timeout = 5_000) => waitForRegex(() => logBuf, re, timeout),
+    controlRequest: (req, timeoutMs = 5_000) => controlRoundtrip(controlSocket, req, timeoutMs),
+    async sendAppMsg(instanceID, data, timeoutMs = 5_000) {
+      const req: Record<string, unknown> = {
+        t: 'msg',
+        instance_id: instanceID,
+        data,
+      };
+      // If the caller tagged the data with an id, ask the router
+      // to wait for the matching BE reply and hand it back. This
+      // is how BE-only tests assert "the BE actually saw and
+      // responded to my request" without going through a browser.
+      if (typeof data.id === 'string' && data.id !== '') {
+        req.await_id = data.id;
+        req.timeout_ms = timeoutMs;
+      }
+      const resp = await controlRoundtrip(controlSocket, req, timeoutMs + 1_000);
+      if (resp.t === 'error') {
+        throw new Error(`sendAppMsg: ${resp.code}: ${resp.msg}`);
+      }
+      if (resp.t === 'msg.ok') {
+        return {};
+      }
+      if (resp.t === 'msg.reply') {
+        return (resp.data ?? {}) as Record<string, unknown>;
+      }
+      throw new Error(`sendAppMsg: unexpected response t=${resp.t}`);
+    },
     proc,
   };
+  return handle;
+}
+
+// controlRoundtrip dials the control socket, writes one JSON
+// request as a line, reads one JSON response line, and returns it
+// parsed. Helper used by RouterHandle.{controlRequest,sendAppMsg}.
+function controlRoundtrip(
+  socketPath: string,
+  req: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<Record<string, unknown>> {
+  return new Promise((resolveP, rejectP) => {
+    const conn = createConnection(socketPath);
+    let buf = '';
+    let settled = false;
+    const finish = (err: Error | null, payload?: Record<string, unknown>) => {
+      if (settled) return;
+      settled = true;
+      try { conn.destroy(); } catch { /* ignore */ }
+      if (err) rejectP(err);
+      else resolveP(payload!);
+    };
+    const timer = setTimeout(() => finish(new Error(`control socket timeout after ${timeoutMs}ms`)), timeoutMs);
+    conn.once('connect', () => {
+      conn.write(JSON.stringify(req) + '\n');
+    });
+    conn.on('data', (chunk: Buffer) => {
+      buf += chunk.toString('utf8');
+      const nl = buf.indexOf('\n');
+      if (nl < 0) return;
+      const line = buf.slice(0, nl);
+      try {
+        clearTimeout(timer);
+        finish(null, JSON.parse(line));
+      } catch (err) {
+        clearTimeout(timer);
+        finish(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+    conn.on('error', (err) => {
+      clearTimeout(timer);
+      finish(err);
+    });
+    conn.on('end', () => {
+      // The router writes one line and closes — if we haven't
+      // settled by now it's because the line lacked a \n.
+      if (!settled) {
+        clearTimeout(timer);
+        finish(new Error('control socket closed without complete line'));
+      }
+    });
+  });
+}
+
+/**
+ * seedSimpleTree — a canned fmSeed populating a useful starter tree
+ * for fm tests:
+ *
+ *   <root>/
+ *     hello.txt           "hello world\n"
+ *     binary.bin          \x00\x01\x02\x03\x00\x04
+ *     docs/
+ *       readme.md         "# readme\n"
+ *
+ * Tests that need different shapes write their own seeder; this
+ * exists so the common case is one line.
+ */
+export function seedSimpleTree(root: string): void {
+  writeFileSync(join(root, 'hello.txt'), 'hello world\n');
+  writeFileSync(join(root, 'binary.bin'), Buffer.from([0, 1, 2, 3, 0, 4]));
+  mkdirSync(join(root, 'docs'));
+  writeFileSync(join(root, 'docs', 'readme.md'), '# readme\n');
 }
 
 async function waitForRegex(read: () => string, re: RegExp, timeout: number): Promise<string> {

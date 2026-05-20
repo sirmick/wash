@@ -3,10 +3,26 @@
 // than going through a router-side fs service. When other apps
 // (text editor, image viewer) need fs access we'll add the dialog
 // provider pattern; for v0.1 wash-fm owns its access.
+//
+// Path confinement (WASH_FM_ROOT): if set, every path argument is
+// resolved (Clean+Abs) and required to be inside the root by
+// lexical containment. Outside paths get an "outside_root" error.
+// Set by the e2e harness to a per-test tmpdir; unset in production
+// (full filesystem access, no sandbox). It's a safety net for
+// tests, not a security boundary.
+//
+// Request/response correlation: every request may include an "id"
+// string field; responses echo it. Tests use it to await matched
+// replies via the control socket's `msg` op (see internal/router/
+// control.go). The existing FE list/read/complete flows still work
+// without an id — it's optional, additive, and a precedent for
+// future ops that need it.
 package main
 
 import (
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"io/fs"
 	"log"
@@ -31,7 +47,15 @@ const (
 	// Cap on directory listing size — huge dirs (e.g. /usr/bin) get
 	// truncated with a flag so the FE doesn't lock up rendering.
 	maxListEntries = 5_000
+
+	// Cap on write size. The atomic-write path holds the whole
+	// payload in memory; this keeps mistakes bounded.
+	maxWriteBytes = 8 * 1024 * 1024
 )
+
+// fmRoot is the configured sandbox root, or "" if unconfined. Set
+// once at startup from WASH_FM_ROOT.
+var fmRoot string
 
 type entry struct {
 	Name    string `json:"name" cbor:"name"`
@@ -44,8 +68,12 @@ type entry struct {
 	LinkErr string `json:"link_err,omitempty" cbor:"link_err,omitempty"`
 }
 
+// All response structs carry an optional ID that echoes the
+// request's id when present. CBOR omitempty on the request side
+// keeps the wire small for FE list/read traffic where id is unused.
 type listResult struct {
 	Kind      string  `json:"kind"`
+	ID        string  `json:"id,omitempty"`
 	Path      string  `json:"path"`
 	Entries   []entry `json:"entries"`
 	Truncated bool    `json:"truncated"`
@@ -53,6 +81,7 @@ type listResult struct {
 
 type readResult struct {
 	Kind      string `json:"kind"`
+	ID        string `json:"id,omitempty"`
 	Path      string `json:"path"`
 	Content   string `json:"content"`
 	Truncated bool   `json:"truncated"`
@@ -60,9 +89,30 @@ type readResult struct {
 	Size      int64  `json:"size"`
 }
 
+type pathOK struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id,omitempty"`
+	Path string `json:"path"`
+}
+
+type renameOK struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id,omitempty"`
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+type writeOK struct {
+	Kind  string `json:"kind"`
+	ID    string `json:"id,omitempty"`
+	Path  string `json:"path"`
+	Bytes int    `json:"bytes"`
+}
+
 type errResult struct {
 	Kind string `json:"kind"`
-	Path string `json:"path"`
+	ID   string `json:"id,omitempty"`
+	Path string `json:"path,omitempty"`
 	Code string `json:"code"`
 	Msg  string `json:"msg"`
 }
@@ -71,6 +121,14 @@ func main() {
 	sub, err := fs.Sub(assetsFS, "assets")
 	if err != nil {
 		log.Fatalf("wash-fm: assets: %v", err)
+	}
+	if root := os.Getenv("WASH_FM_ROOT"); root != "" {
+		abs, err := filepath.Abs(root)
+		if err != nil {
+			log.Fatalf("wash-fm: WASH_FM_ROOT=%q: %v", root, err)
+		}
+		fmRoot = filepath.Clean(abs)
+		log.Printf("wash-fm: sandbox WASH_FM_ROOT=%s", fmRoot)
 	}
 	sdk.Main(&sdk.AppDef{
 		Manifest: sdk.Manifest{
@@ -90,15 +148,22 @@ func main() {
 	})
 }
 
+// initialPath is the directory fm shows on first paint. With a
+// sandbox root configured we list the root; otherwise $HOME (or "/"
+// as a last-ditch fallback).
+func initialPath() string {
+	if fmRoot != "" {
+		return fmRoot
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return home
+	}
+	return "/"
+}
+
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-fm ready instance=%s window=%d", instanceID, windowID)
-	// Send initial home-directory listing so the FE has something
-	// to show on first paint.
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "/"
-	}
-	sendList(c, home)
+	sendList(c, "", initialPath())
 }
 
 func onAppMsg(c *sdk.Conn, _ uint32, data any) {
@@ -106,19 +171,12 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 	if !ok {
 		return
 	}
-	switch kind, _ := m["kind"].(string); kind {
+	kind, _ := m["kind"].(string)
+	id, _ := m["id"].(string)
+	switch kind {
 	case "request_initial":
-		// FE asks for the home listing on mount when it has no
-		// restored path. Repeated calls are harmless — just a fresh
-		// listing each time.
-		home, err := os.UserHomeDir()
-		if err != nil {
-			home = "/"
-		}
-		sendList(c, home)
+		sendList(c, id, initialPath())
 	case "save_state":
-		// FE sends its persisted blob through here so the BE owns
-		// the only path into the router's app_state store.
 		state, ok := m["state"]
 		if !ok {
 			return
@@ -128,13 +186,13 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		}
 	case "list":
 		path, _ := m["path"].(string)
-		sendList(c, path)
+		sendList(c, id, path)
 	case "read":
 		path, _ := m["path"].(string)
-		sendRead(c, path)
+		sendRead(c, id, path)
 	case "complete":
 		partial, _ := m["partial"].(string)
-		sendCompletions(c, partial)
+		sendCompletions(c, id, partial)
 	case "clipboard_copy_path":
 		path, _ := m["path"].(string)
 		if path == "" {
@@ -143,31 +201,73 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		if err := c.ClipboardSet("text/plain", []byte(path)); err != nil {
 			log.Printf("wash-fm clipboard set: %v", err)
 		}
+	case "rename":
+		from, _ := m["from"].(string)
+		to, _ := m["to"].(string)
+		doRename(c, id, from, to)
+	case "delete":
+		path, _ := m["path"].(string)
+		doDelete(c, id, path)
+	case "create_file":
+		path, _ := m["path"].(string)
+		doCreateFile(c, id, path)
+	case "create_dir":
+		path, _ := m["path"].(string)
+		doCreateDir(c, id, path)
+	case "write":
+		path, _ := m["path"].(string)
+		content, _ := m["content"].(string)
+		doWrite(c, id, path, content)
 	}
 }
+
+// confine resolves p to an absolute, cleaned path and verifies it is
+// inside fmRoot when the sandbox is active. The lexical check is
+// sufficient for the threat model (test bug passes wrong path);
+// symlink-escape is a known v1 limitation — we don't create
+// symlinks and tests own the fixture tree.
+func confine(p string) (string, error) {
+	if p == "" {
+		return "", errors.New("missing path")
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+	cleaned := filepath.Clean(abs)
+	if fmRoot == "" {
+		return cleaned, nil
+	}
+	if cleaned != fmRoot && !strings.HasPrefix(cleaned, fmRoot+string(filepath.Separator)) {
+		return "", errOutsideRoot
+	}
+	return cleaned, nil
+}
+
+var errOutsideRoot = errors.New("path is outside the configured WASH_FM_ROOT")
 
 // sendList lists the directory at path and sends list_ok / list_err.
 // Symlinks are reported but not followed; the FE can re-list the
 // target on demand.
-func sendList(c *sdk.Conn, path string) {
+func sendList(c *sdk.Conn, id, path string) {
 	if path == "" {
-		sendErr(c, "list_err", path, "bad_request", "missing path")
+		sendErr(c, "list_err", id, path, "bad_request", "missing path")
 		return
 	}
-	abs, err := filepath.Abs(path)
+	abs, err := confine(path)
 	if err != nil {
-		sendErr(c, "list_err", path, "bad_path", err.Error())
+		sendErr(c, "list_err", id, path, confineErrCode(err), err.Error())
 		return
 	}
 	dir, err := os.Open(abs)
 	if err != nil {
-		sendErr(c, "list_err", abs, fsErrCode(err), err.Error())
+		sendErr(c, "list_err", id, abs, fsErrCode(err), err.Error())
 		return
 	}
 	defer dir.Close()
 	infos, err := dir.Readdir(-1)
 	if err != nil {
-		sendErr(c, "list_err", abs, "io", err.Error())
+		sendErr(c, "list_err", id, abs, "io", err.Error())
 		return
 	}
 	truncated := false
@@ -204,7 +304,7 @@ func sendList(c *sdk.Conn, path string) {
 		}
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
-	res := listResult{Kind: "list_ok", Path: abs, Entries: out, Truncated: truncated}
+	res := listResult{Kind: "list_ok", ID: id, Path: abs, Entries: out, Truncated: truncated}
 	if err := c.SendAppMsg(res); err != nil {
 		log.Printf("wash-fm send list_ok: %v", err)
 	}
@@ -212,28 +312,28 @@ func sendList(c *sdk.Conn, path string) {
 
 // sendRead reads up to maxReadBytes of path. If the bytes look
 // binary, content is empty and Binary=true.
-func sendRead(c *sdk.Conn, path string) {
+func sendRead(c *sdk.Conn, id, path string) {
 	if path == "" {
-		sendErr(c, "read_err", path, "bad_request", "missing path")
+		sendErr(c, "read_err", id, path, "bad_request", "missing path")
 		return
 	}
-	abs, err := filepath.Abs(path)
+	abs, err := confine(path)
 	if err != nil {
-		sendErr(c, "read_err", path, "bad_path", err.Error())
+		sendErr(c, "read_err", id, path, confineErrCode(err), err.Error())
 		return
 	}
 	st, err := os.Stat(abs)
 	if err != nil {
-		sendErr(c, "read_err", abs, fsErrCode(err), err.Error())
+		sendErr(c, "read_err", id, abs, fsErrCode(err), err.Error())
 		return
 	}
 	if st.IsDir() {
-		sendErr(c, "read_err", abs, "is_dir", "path is a directory")
+		sendErr(c, "read_err", id, abs, "is_dir", "path is a directory")
 		return
 	}
 	f, err := os.Open(abs)
 	if err != nil {
-		sendErr(c, "read_err", abs, fsErrCode(err), err.Error())
+		sendErr(c, "read_err", id, abs, fsErrCode(err), err.Error())
 		return
 	}
 	defer f.Close()
@@ -242,7 +342,7 @@ func sendRead(c *sdk.Conn, path string) {
 	if err != nil && err.Error() != "EOF" {
 		// io.EOF on empty file is fine; other read errors propagate.
 		if n == 0 {
-			sendErr(c, "read_err", abs, "io", err.Error())
+			sendErr(c, "read_err", id, abs, "io", err.Error())
 			return
 		}
 	}
@@ -250,6 +350,7 @@ func sendRead(c *sdk.Conn, path string) {
 	binary := looksBinary(chunk)
 	res := readResult{
 		Kind:      "read_ok",
+		ID:        id,
 		Path:      abs,
 		Size:      st.Size(),
 		Truncated: int64(n) < st.Size(),
@@ -263,8 +364,191 @@ func sendRead(c *sdk.Conn, path string) {
 	}
 }
 
-func sendErr(c *sdk.Conn, kind, path, code, msg string) {
-	if err := c.SendAppMsg(errResult{Kind: kind, Path: path, Code: code, Msg: msg}); err != nil {
+// doRename moves from→to. Refuses to overwrite an existing target
+// (would be silent data loss). Both paths must be inside the root
+// when the sandbox is active.
+func doRename(c *sdk.Conn, id, from, to string) {
+	if from == "" || to == "" {
+		sendErr(c, "rename_err", id, from, "bad_request", "missing from or to")
+		return
+	}
+	src, err := confine(from)
+	if err != nil {
+		sendErr(c, "rename_err", id, from, confineErrCode(err), err.Error())
+		return
+	}
+	dst, err := confine(to)
+	if err != nil {
+		sendErr(c, "rename_err", id, to, confineErrCode(err), err.Error())
+		return
+	}
+	if _, err := os.Lstat(src); err != nil {
+		sendErr(c, "rename_err", id, src, fsErrCode(err), err.Error())
+		return
+	}
+	if _, err := os.Lstat(dst); err == nil {
+		sendErr(c, "rename_err", id, dst, "exists", "destination already exists")
+		return
+	} else if !errors.Is(err, os.ErrNotExist) {
+		sendErr(c, "rename_err", id, dst, fsErrCode(err), err.Error())
+		return
+	}
+	if err := os.Rename(src, dst); err != nil {
+		code := fsErrCode(err)
+		// Cross-device rename surfaces as syscall.EXDEV underneath
+		// — give it a stable code so the FE can render a useful
+		// hint instead of os.LinkError noise.
+		if strings.Contains(err.Error(), "cross-device") {
+			code = "cross_device"
+		}
+		sendErr(c, "rename_err", id, src, code, err.Error())
+		return
+	}
+	if err := c.SendAppMsg(renameOK{Kind: "rename_ok", ID: id, From: src, To: dst}); err != nil {
+		log.Printf("wash-fm send rename_ok: %v", err)
+	}
+}
+
+// doDelete removes a single file or empty directory. Non-empty
+// directories error with code=not_empty; recursive delete is a
+// future op (intentional — easier to add power than take it back).
+func doDelete(c *sdk.Conn, id, path string) {
+	if path == "" {
+		sendErr(c, "delete_err", id, path, "bad_request", "missing path")
+		return
+	}
+	abs, err := confine(path)
+	if err != nil {
+		sendErr(c, "delete_err", id, path, confineErrCode(err), err.Error())
+		return
+	}
+	// Refuse to delete the configured sandbox root itself. Outside
+	// the sandbox this guard is inactive; a user with a destructive
+	// click is on their own (matches `rm` and existing fm scope).
+	if fmRoot != "" && abs == fmRoot {
+		sendErr(c, "delete_err", id, abs, "forbidden", "cannot delete the sandbox root")
+		return
+	}
+	if err := os.Remove(abs); err != nil {
+		code := fsErrCode(err)
+		if strings.Contains(err.Error(), "directory not empty") {
+			code = "not_empty"
+		}
+		sendErr(c, "delete_err", id, abs, code, err.Error())
+		return
+	}
+	if err := c.SendAppMsg(pathOK{Kind: "delete_ok", ID: id, Path: abs}); err != nil {
+		log.Printf("wash-fm send delete_ok: %v", err)
+	}
+}
+
+// doCreateFile creates an empty file. O_EXCL avoids silently
+// truncating an existing path — overwrites must go through `write`.
+func doCreateFile(c *sdk.Conn, id, path string) {
+	if path == "" {
+		sendErr(c, "create_file_err", id, path, "bad_request", "missing path")
+		return
+	}
+	abs, err := confine(path)
+	if err != nil {
+		sendErr(c, "create_file_err", id, path, confineErrCode(err), err.Error())
+		return
+	}
+	f, err := os.OpenFile(abs, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		code := fsErrCode(err)
+		if errors.Is(err, os.ErrExist) {
+			code = "exists"
+		}
+		sendErr(c, "create_file_err", id, abs, code, err.Error())
+		return
+	}
+	_ = f.Close()
+	if err := c.SendAppMsg(pathOK{Kind: "create_file_ok", ID: id, Path: abs}); err != nil {
+		log.Printf("wash-fm send create_file_ok: %v", err)
+	}
+}
+
+// doCreateDir creates a single directory level. Use MkdirAll-equiv
+// later if there's demand; v1 is one-level to match the principle of
+// least power.
+func doCreateDir(c *sdk.Conn, id, path string) {
+	if path == "" {
+		sendErr(c, "create_dir_err", id, path, "bad_request", "missing path")
+		return
+	}
+	abs, err := confine(path)
+	if err != nil {
+		sendErr(c, "create_dir_err", id, path, confineErrCode(err), err.Error())
+		return
+	}
+	if err := os.Mkdir(abs, 0o755); err != nil {
+		code := fsErrCode(err)
+		if errors.Is(err, os.ErrExist) {
+			code = "exists"
+		}
+		sendErr(c, "create_dir_err", id, abs, code, err.Error())
+		return
+	}
+	if err := c.SendAppMsg(pathOK{Kind: "create_dir_ok", ID: id, Path: abs}); err != nil {
+		log.Printf("wash-fm send create_dir_ok: %v", err)
+	}
+}
+
+// doWrite writes content to path atomically: write to a sibling
+// temp file, fsync, rename into place. Overwrites an existing
+// target by design — this IS the save path. No FE call site yet;
+// exposed for BE-driven tests and future editor integration.
+func doWrite(c *sdk.Conn, id, path, content string) {
+	if path == "" {
+		sendErr(c, "write_err", id, path, "bad_request", "missing path")
+		return
+	}
+	if len(content) > maxWriteBytes {
+		sendErr(c, "write_err", id, path, "too_large", "content exceeds maxWriteBytes")
+		return
+	}
+	abs, err := confine(path)
+	if err != nil {
+		sendErr(c, "write_err", id, path, confineErrCode(err), err.Error())
+		return
+	}
+	dir := filepath.Dir(abs)
+	suffixBytes := make([]byte, 6)
+	if _, err := rand.Read(suffixBytes); err != nil {
+		sendErr(c, "write_err", id, abs, "io", err.Error())
+		return
+	}
+	tmp := filepath.Join(dir, ".wash-fm.tmp."+hex.EncodeToString(suffixBytes))
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		sendErr(c, "write_err", id, abs, fsErrCode(err), err.Error())
+		return
+	}
+	n, werr := f.Write([]byte(content))
+	if werr == nil {
+		werr = f.Sync()
+	}
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		_ = os.Remove(tmp)
+		sendErr(c, "write_err", id, abs, "io", werr.Error())
+		return
+	}
+	if err := os.Rename(tmp, abs); err != nil {
+		_ = os.Remove(tmp)
+		sendErr(c, "write_err", id, abs, fsErrCode(err), err.Error())
+		return
+	}
+	if err := c.SendAppMsg(writeOK{Kind: "write_ok", ID: id, Path: abs, Bytes: n}); err != nil {
+		log.Printf("wash-fm send write_ok: %v", err)
+	}
+}
+
+func sendErr(c *sdk.Conn, kind, id, path, code, msg string) {
+	if err := c.SendAppMsg(errResult{Kind: kind, ID: id, Path: path, Code: code, Msg: msg}); err != nil {
 		log.Printf("wash-fm send %s: %v", kind, err)
 	}
 }
@@ -278,8 +562,10 @@ const maxCompletions = 50
 //   - otherwise            → entries in dirname(partial) starting with basename(partial)
 //
 // Directory matches get a trailing "/" so subsequent typing extends
-// naturally.
-func sendCompletions(c *sdk.Conn, partial string) {
+// naturally. With the sandbox active, the searched directory must
+// be inside the root; outside-root partials silently return no
+// matches (autocomplete is a UX path, not a place for errors).
+func sendCompletions(c *sdk.Conn, id, partial string) {
 	var dir, prefix string
 	switch {
 	case partial == "":
@@ -293,20 +579,21 @@ func sendCompletions(c *sdk.Conn, partial string) {
 		}
 		prefix = filepath.Base(partial)
 	}
-	abs, err := filepath.Abs(dir)
+	empty := map[string]any{"kind": "complete_ok", "id": id, "partial": partial, "matches": []string{}}
+	abs, err := confine(dir)
 	if err != nil {
-		_ = c.SendAppMsg(map[string]any{"kind": "complete_ok", "partial": partial, "matches": []string{}})
+		_ = c.SendAppMsg(empty)
 		return
 	}
 	d, err := os.Open(abs)
 	if err != nil {
-		_ = c.SendAppMsg(map[string]any{"kind": "complete_ok", "partial": partial, "matches": []string{}})
+		_ = c.SendAppMsg(empty)
 		return
 	}
 	defer d.Close()
 	infos, err := d.Readdir(-1)
 	if err != nil {
-		_ = c.SendAppMsg(map[string]any{"kind": "complete_ok", "partial": partial, "matches": []string{}})
+		_ = c.SendAppMsg(empty)
 		return
 	}
 	matches := make([]string, 0, 16)
@@ -327,6 +614,7 @@ func sendCompletions(c *sdk.Conn, partial string) {
 	sort.Strings(matches)
 	if err := c.SendAppMsg(map[string]any{
 		"kind":    "complete_ok",
+		"id":      id,
 		"partial": partial,
 		"matches": matches,
 	}); err != nil {
@@ -356,8 +644,19 @@ func fsErrCode(err error) string {
 		return "not_found"
 	case errors.Is(err, os.ErrPermission):
 		return "denied"
+	case errors.Is(err, os.ErrExist):
+		return "exists"
 	}
 	return "io"
+}
+
+// confineErrCode promotes the sentinel to a stable code; falls
+// through to fsErrCode for any other path-resolution failure.
+func confineErrCode(err error) string {
+	if errors.Is(err, errOutsideRoot) {
+		return "outside_root"
+	}
+	return fsErrCode(err)
 }
 
 // looksBinary inspects the first chunk for NUL bytes. Cheap and

@@ -73,6 +73,13 @@ type Router struct {
 	channelsMu sync.Mutex
 	channels   map[uint32]*channelBinding
 
+	// appMsgWatchers lets a non-shell caller (e.g. the control
+	// socket's `msg` op) wait for a specific outbound app_msg keyed
+	// by the request-id convention in the payload. Stored as
+	// instanceID → matchID → one-shot channel.
+	appMsgMu       sync.Mutex
+	appMsgWatchers map[string]map[string]chan map[string]any
+
 	clipboard clipboardState
 
 	sessionMu sync.Mutex
@@ -95,13 +102,90 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		log = func(string, ...any) {}
 	}
 	return &Router{
-		cfg:      cfg,
-		reg:      reg,
-		log:      log,
-		apps:     make(map[string]*AppInstance),
-		byWin:    make(map[uint32]*AppInstance),
-		shells:   make(map[*ShellSession]struct{}),
-		channels: make(map[uint32]*channelBinding),
+		cfg:            cfg,
+		reg:            reg,
+		log:            log,
+		apps:           make(map[string]*AppInstance),
+		byWin:          make(map[uint32]*AppInstance),
+		shells:         make(map[*ShellSession]struct{}),
+		channels:       make(map[uint32]*channelBinding),
+		appMsgWatchers: make(map[string]map[string]chan map[string]any),
+	}
+}
+
+// SubscribeAppMsg registers a one-shot watcher for the next outbound
+// app_msg from instanceID whose data has "id" == matchID. The
+// returned channel receives the (already JSON-normalized) data map;
+// the watcher is removed after delivery or when cancel() is called.
+// Used by the control socket's `msg` op to await BE replies; not on
+// the hot path.
+func (r *Router) SubscribeAppMsg(instanceID, matchID string) (<-chan map[string]any, func()) {
+	ch := make(chan map[string]any, 1)
+	r.appMsgMu.Lock()
+	byMatch := r.appMsgWatchers[instanceID]
+	if byMatch == nil {
+		byMatch = make(map[string]chan map[string]any)
+		r.appMsgWatchers[instanceID] = byMatch
+	}
+	// One-shot per (instance, matchID). A late re-subscribe replaces
+	// any earlier waiter — the previous channel is closed so its
+	// caller sees a nil receive and can tell the slot was stolen.
+	if prev, ok := byMatch[matchID]; ok {
+		close(prev)
+	}
+	byMatch[matchID] = ch
+	r.appMsgMu.Unlock()
+	cancel := func() {
+		r.appMsgMu.Lock()
+		if cur, ok := r.appMsgWatchers[instanceID][matchID]; ok && cur == ch {
+			delete(r.appMsgWatchers[instanceID], matchID)
+			if len(r.appMsgWatchers[instanceID]) == 0 {
+				delete(r.appMsgWatchers, instanceID)
+			}
+		}
+		r.appMsgMu.Unlock()
+	}
+	return ch, cancel
+}
+
+// dispatchAppMsgWatchers delivers data to any waiter registered for
+// (instanceID, matchID) and removes the entry. Best-effort — if the
+// channel is already gone (cancelled) or the buffer is full, the
+// data is dropped. Returns true if a watcher was matched.
+func (r *Router) dispatchAppMsgWatchers(instanceID, matchID string, data map[string]any) bool {
+	r.appMsgMu.Lock()
+	byMatch := r.appMsgWatchers[instanceID]
+	if byMatch == nil {
+		r.appMsgMu.Unlock()
+		return false
+	}
+	ch, ok := byMatch[matchID]
+	if !ok {
+		r.appMsgMu.Unlock()
+		return false
+	}
+	delete(byMatch, matchID)
+	if len(byMatch) == 0 {
+		delete(r.appMsgWatchers, instanceID)
+	}
+	r.appMsgMu.Unlock()
+	select {
+	case ch <- data:
+	default:
+	}
+	return true
+}
+
+// dropAppMsgWatchers tears down all waiters for an instance. Called
+// when an app exits so blocked subscribers don't hang. A nil-data
+// send tells callers the instance is gone.
+func (r *Router) dropAppMsgWatchers(instanceID string) {
+	r.appMsgMu.Lock()
+	byMatch := r.appMsgWatchers[instanceID]
+	delete(r.appMsgWatchers, instanceID)
+	r.appMsgMu.Unlock()
+	for _, ch := range byMatch {
+		close(ch)
 	}
 }
 
@@ -310,6 +394,7 @@ func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*Ap
 		}
 		r.unregisterApp(inst)
 		r.closeChannelsForApp(inst, "app exited")
+		r.dropAppMsgWatchers(inst.InstanceID)
 		r.winSession.dropAppState(inst.InstanceID)
 		if inst.WindowID != 0 {
 			r.broadcastPatches(r.winSession.destroyWindow(inst.WindowID))

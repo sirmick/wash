@@ -28,11 +28,15 @@ import {
   ChevronRight,
   ChevronUp,
   File as FileIcon,
+  FilePlus,
   Folder as FolderIcon,
+  FolderPlus,
   Home as HomeIcon,
   Link2,
+  Pencil,
   RotateCw,
   Square,
+  Trash2,
 } from 'lucide-solid';
 
 declare global {
@@ -105,6 +109,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [completeIdx, setCompleteIdx] = createSignal(-1);
   const [completeOpen, setCompleteOpen] = createSignal(false);
 
+  // Mutation state. Each represents a transient FE-only UI mode:
+  //   renaming  — a row is showing an inline editable name input
+  //   pendingNew — a synthetic row at the top of `parent` is awaiting
+  //                the user's name input for create_file / create_dir
+  //   confirmDelete — modal overlay asking the user to confirm
+  // Each clears on commit / cancel / Escape.
+  const [renaming, setRenaming] = createSignal<{ path: string; draft: string } | null>(null);
+  const [pendingNew, setPendingNew] = createSignal<{ parent: string; kind: 'file' | 'folder'; draft: string } | null>(null);
+  const [confirmDelete, setConfirmDelete] = createSignal<{ path: string; name: string } | null>(null);
+
   // Refs / latched state (no reactivity needed)
   let pendingNav: string | null = null;
   let pendingSelectAfter: { path: string; pushHistory: boolean } | null = null;
@@ -113,8 +127,37 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   let lastClickPath = '';
   let lastClickTime = 0;
   let pathInputEl!: HTMLInputElement;
+  // BE-reply correlation: each outgoing request that wants a typed
+  // ack gets a fresh id; the BE echoes the id on its response and
+  // the resolver in this map gets the message. Resolvers self-clear
+  // when matched. Failure paths are dispatched by the resolver too
+  // (it inspects the kind suffix to know).
+  let nextReqID = 0;
+  const pendingReplies = new Map<string, (m: BEMessage) => void>();
 
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
+
+  // sendWithReply tags a request with a fresh id and returns a
+  // promise that resolves with whatever BE message bears that id.
+  // Caller inspects msg.kind to discriminate ok / err. Times out
+  // after `timeoutMs` (default 5s) to keep the FE from leaking
+  // resolvers if the BE never replies.
+  const sendWithReply = (req: Record<string, unknown>, timeoutMs = 5000): Promise<BEMessage> => {
+    nextReqID += 1;
+    const id = `f-${nextReqID}`;
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(() => {
+        if (pendingReplies.delete(id)) {
+          resolve({ kind: 'timeout_err', id, code: 'timeout', msg: `no reply within ${timeoutMs}ms` });
+        }
+      }, timeoutMs);
+      pendingReplies.set(id, (m) => {
+        window.clearTimeout(timer);
+        resolve(m);
+      });
+      send({ ...req, id });
+    });
+  };
 
   // ---- BE comms ----
 
@@ -128,6 +171,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   const handleBE = (m: BEMessage) => {
+    // request_id correlation: if the BE echoes an id we issued via
+    // sendWithReply, resolve the matching promise and stop. Any
+    // remaining branches handle messages without an id — the
+    // existing FE list/read/complete flows.
+    const replyID = typeof m.id === 'string' ? m.id : undefined;
+    if (replyID && pendingReplies.has(replyID)) {
+      const resolver = pendingReplies.get(replyID)!;
+      pendingReplies.delete(replyID);
+      resolver(m);
+      return;
+    }
     switch (m.kind) {
       case 'list_ok': {
         const p = String(m.path);
@@ -156,7 +210,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         return;
       }
       case 'list_err':
-        setStatusOverride(`error: ${String(m.msg)}`);
+        // outside_root is expected in sandbox mode when expandPath
+        // probes ancestors above WASH_FM_ROOT. Don't pollute the
+        // status bar with that — it's the BE doing its job.
+        if (m.code !== 'outside_root') {
+          setStatusOverride(`error: ${String(m.msg)}`);
+        }
         pendingNav = null;
         return;
       case 'read_ok': {
@@ -246,9 +305,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
   const goUp = () => {
-    if (!path()) return;
-    const p = parentPath(path());
-    if (p !== path()) navigateTo(p);
+    const p = path();
+    if (!p) return;
+    // Don't walk above the tree root. In production this is "/"
+    // and the parentPath("/") === "/" check below would already
+    // no-op; in sandbox mode the tree root is WASH_FM_ROOT and
+    // going above it gets rejected by the BE as outside_root,
+    // leaving navigation stuck in pendingSelectAfter — so we
+    // short-circuit here.
+    if (p === treeRoot()) return;
+    const par = parentPath(p);
+    if (par !== p) navigateTo(par);
   };
 
   const invalidateAndList = (p: string) => {
@@ -275,6 +342,127 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     if (!e.link_to) return;
     const target = e.link_to.startsWith('/') ? e.link_to : joinPath(parentPath(p), e.link_to);
     navigateTo(target);
+  };
+
+  // ---- mutations: rename, delete, create_file, create_dir ----
+  //
+  // Each helper drives a small FE state machine: open an input UI,
+  // collect the user's name/confirm, send the request with id, and
+  // on success invalidate the affected directory listing so the
+  // tree re-renders fresh entries.
+
+  const dirOfSelection = (): string => {
+    const p = path();
+    if (!p) return home();
+    // If we've successfully listed this path, it IS a directory —
+    // create children inside it. (findEntry can't tell us this at
+    // the sandbox root because we don't have the root's parent
+    // listing, so checking listings[p] is the reliable signal.)
+    if (listings[p]) return p;
+    const entry = findEntry(p);
+    if (entry?.type === 'dir') return p;
+    return parentPath(p);
+  };
+
+  // startRename swaps the selected row into inline-edit mode. The
+  // user types a new name; Enter commits, Escape cancels.
+  const startRename = (p: string) => {
+    const name = baseName(p);
+    setRenaming({ path: p, draft: name });
+  };
+
+  const cancelRename = () => setRenaming(null);
+
+  const commitRename = async () => {
+    const r = renaming();
+    if (!r) return;
+    const draft = r.draft.trim();
+    if (draft === '' || draft === baseName(r.path)) {
+      setRenaming(null);
+      return;
+    }
+    if (draft.includes('/')) {
+      setStatusOverride(`rename: name cannot contain '/'`);
+      setRenaming(null);
+      return;
+    }
+    const parent = parentPath(r.path);
+    const to = joinPath(parent, draft);
+    setRenaming(null);
+    const reply = await sendWithReply({ kind: 'rename', from: r.path, to });
+    if (reply.kind === 'rename_ok') {
+      invalidateAndList(parent);
+      // Re-select under the new name so the path bar and preview
+      // follow the rename.
+      setPath(to);
+      setPathInputValue(to);
+    } else {
+      setStatusOverride(`rename: ${String(reply.msg ?? reply.code ?? 'failed')}`);
+    }
+  };
+
+  // startNewFile / startNewFolder render a synthetic row at the top
+  // of the current dir's listing with a focused input. commitNew
+  // creates the entry; cancelNew discards.
+  const startNewFile = () => setPendingNew({ parent: dirOfSelection(), kind: 'file', draft: '' });
+  const startNewFolder = () => setPendingNew({ parent: dirOfSelection(), kind: 'folder', draft: '' });
+  const cancelNew = () => setPendingNew(null);
+
+  const commitNew = async () => {
+    const n = pendingNew();
+    if (!n) return;
+    const draft = n.draft.trim();
+    if (draft === '') {
+      setPendingNew(null);
+      return;
+    }
+    if (draft.includes('/')) {
+      setStatusOverride(`create: name cannot contain '/'`);
+      setPendingNew(null);
+      return;
+    }
+    const target = joinPath(n.parent, draft);
+    const kind = n.kind === 'file' ? 'create_file' : 'create_dir';
+    setPendingNew(null);
+    const reply = await sendWithReply({ kind, path: target });
+    const okKind = kind + '_ok';
+    if (reply.kind === okKind) {
+      // Refresh the parent so the new entry appears and select it.
+      invalidateAndList(n.parent);
+      setPath(target);
+      setPathInputValue(target);
+    } else {
+      setStatusOverride(`${kind}: ${String(reply.msg ?? reply.code ?? 'failed')}`);
+    }
+  };
+
+  // requestDelete opens the confirm overlay; the user clicks Delete
+  // in the overlay to actually proceed. Two-step because rm is
+  // not undoable here yet.
+  const requestDelete = (p: string) => {
+    if (!p) return;
+    setConfirmDelete({ path: p, name: baseName(p) });
+  };
+
+  const cancelDelete = () => setConfirmDelete(null);
+
+  const performDelete = async () => {
+    const d = confirmDelete();
+    if (!d) return;
+    setConfirmDelete(null);
+    const reply = await sendWithReply({ kind: 'delete', path: d.path });
+    if (reply.kind === 'delete_ok') {
+      const par = parentPath(d.path);
+      invalidateAndList(par);
+      // Move selection to the parent so the preview isn't pointing
+      // at a now-vanished entry.
+      setPath(par);
+      setPathInputValue(par);
+      setSelectedEntry(null);
+      setPreviewContent(null);
+    } else {
+      setStatusOverride(`delete: ${String(reply.msg ?? reply.code ?? 'failed')}`);
+    }
   };
 
   // ---- autocomplete ----
@@ -420,6 +608,25 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     return out;
   };
 
+  // treeRoot is the highest path the FE has actually been able to
+  // list. In production fm lists "/" successfully and treeRoot stays
+  // there; in WASH_FM_ROOT mode "/" returns outside_root, so the
+  // tree visibly starts at the deepest reachable ancestor of the
+  // current path (the sandbox root, in practice).
+  const treeRoot = createMemo<string>(() => {
+    if (listings['/']) return '/';
+    const target = path() || home();
+    if (!target) return '/';
+    let acc = '/';
+    const parts = target.split('/').filter(Boolean);
+    let bestSoFar = '/';
+    for (const part of parts) {
+      acc = acc === '/' ? '/' + part : acc + '/' + part;
+      if (listings[acc]) bestSoFar = acc;
+    }
+    return bestSoFar;
+  });
+
   // Flatten the visible tree into a list of {entry, path, depth} rows
   // — Solid's <For> renders the list; toggling expand triggers a fresh
   // computation here automatically.
@@ -436,7 +643,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         }
       }
     };
-    if (listings['/']) walk('/', 0);
+    const start = treeRoot();
+    if (listings[start]) walk(start, 0);
     return rows;
   });
 
@@ -546,6 +754,24 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         >
           <RotateCw size={14} />
         </button>
+        <button
+          type="button"
+          data-testid="fm-new-file"
+          title="New file"
+          style={iconBtnStyle}
+          onClick={startNewFile}
+        >
+          <FilePlus size={14} />
+        </button>
+        <button
+          type="button"
+          data-testid="fm-new-folder"
+          title="New folder"
+          style={iconBtnStyle}
+          onClick={startNewFolder}
+        >
+          <FolderPlus size={14} />
+        </button>
         <button type="button" data-testid="fm-sort" title="Sort" style={iconBtnStyle} onClick={openSortMenu}>
           <ArrowUpDown size={14} />
         </button>
@@ -564,28 +790,52 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           }}
           onDrop={onDrop}
         >
-          <For each={visibleRows()}>
-            {(row) => <TreeRow
-              entry={row.entry}
-              path={row.path}
-              depth={row.depth}
-              selected={path() === row.path}
-              expanded={!!expanded[row.path]}
-              onClick={() => {
-                const now = Date.now();
-                const isDouble = row.path === lastClickPath && now - lastClickTime < 400;
-                lastClickPath = row.path;
-                lastClickTime = now;
-                if (isDouble && row.entry.type === 'symlink') {
-                  followSymlink(row.entry, row.path);
-                  return;
-                }
-                selectPath(row.path, true);
+          <Show when={pendingNew()}>
+            <PendingNewRow
+              kind={pendingNew()!.kind}
+              parent={pendingNew()!.parent}
+              draft={pendingNew()!.draft}
+              onInput={(v) => {
+                const cur = pendingNew();
+                if (cur) setPendingNew({ ...cur, draft: v });
               }}
-              onToggle={() => toggleExpand(row.path)}
-              onContextMenu={(ev) => openContextMenu(ev, row.entry, row.path)}
-              onDragStart={(ev) => onDragStart(ev, row.path)}
-            />}
+              onCommit={commitNew}
+              onCancel={cancelNew}
+            />
+          </Show>
+          <For each={visibleRows()}>
+            {(row) => {
+              const isRenaming = () => renaming()?.path === row.path;
+              return <TreeRow
+                entry={row.entry}
+                path={row.path}
+                depth={row.depth}
+                selected={path() === row.path}
+                expanded={!!expanded[row.path]}
+                renaming={isRenaming() ? { draft: renaming()!.draft } : null}
+                onRenameInput={(v) => {
+                  const r = renaming();
+                  if (r) setRenaming({ ...r, draft: v });
+                }}
+                onRenameCommit={commitRename}
+                onRenameCancel={cancelRename}
+                onClick={() => {
+                  if (isRenaming()) return;
+                  const now = Date.now();
+                  const isDouble = row.path === lastClickPath && now - lastClickTime < 400;
+                  lastClickPath = row.path;
+                  lastClickTime = now;
+                  if (isDouble && row.entry.type === 'symlink') {
+                    followSymlink(row.entry, row.path);
+                    return;
+                  }
+                  selectPath(row.path, true);
+                }}
+                onToggle={() => toggleExpand(row.path)}
+                onContextMenu={(ev) => openContextMenu(ev, row.entry, row.path)}
+                onDragStart={(ev) => onDragStart(ev, row.path)}
+              />;
+            }}
           </For>
         </div>
         <div style={{ display: 'grid', 'grid-template-rows': '1fr auto', overflow: 'hidden' }}>
@@ -642,30 +892,46 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       </Show>
 
       <Show when={menu()?.kind === 'context'}>
-        {(() => {
-          const m = menu() as { kind: 'context'; left: number; top: number; entry: Entry; path: string };
-          return (
-            <ContextMenu
-              left={m.left}
-              top={m.top}
-              entry={m.entry}
-              path={m.path}
-              onOpen={() => {
-                closeMenu();
-                if (m.entry.type === 'symlink') followSymlink(m.entry, m.path);
-                else selectPath(m.path, true);
-              }}
-              onCopy={() => {
-                closeMenu();
-                send({ kind: 'clipboard_copy_path', path: m.path });
-              }}
-              onInfo={() => {
-                closeMenu();
-                if (!infoOpen()) toggleInfo();
-              }}
-            />
-          );
-        })()}
+        <ContextMenu
+          left={(menu() as { left: number }).left}
+          top={(menu() as { top: number }).top}
+          entry={(menu() as { entry: Entry }).entry}
+          path={(menu() as { path: string }).path}
+          onOpen={() => {
+            const m = menu() as { entry: Entry; path: string };
+            closeMenu();
+            if (m.entry.type === 'symlink') followSymlink(m.entry, m.path);
+            else selectPath(m.path, true);
+          }}
+          onCopy={() => {
+            const m = menu() as { path: string };
+            closeMenu();
+            send({ kind: 'clipboard_copy_path', path: m.path });
+          }}
+          onInfo={() => {
+            closeMenu();
+            if (!infoOpen()) toggleInfo();
+          }}
+          onRename={() => {
+            const m = menu() as { path: string };
+            closeMenu();
+            startRename(m.path);
+          }}
+          onDelete={() => {
+            const m = menu() as { path: string };
+            closeMenu();
+            requestDelete(m.path);
+          }}
+        />
+      </Show>
+
+      <Show when={confirmDelete()}>
+        <ConfirmDeleteOverlay
+          name={confirmDelete()!.name}
+          path={confirmDelete()!.path}
+          onCancel={cancelDelete}
+          onConfirm={performDelete}
+        />
       </Show>
     </>
   );
@@ -679,6 +945,13 @@ const TreeRow: Component<{
   depth: number;
   selected: boolean;
   expanded: boolean;
+  // When `renaming` is set, the name span becomes a focused input
+  // bound to `renaming.draft`. Enter commits, Escape cancels, blur
+  // commits. Clicks on the row are suppressed while editing.
+  renaming?: { draft: string } | null;
+  onRenameInput?: (val: string) => void;
+  onRenameCommit?: () => void;
+  onRenameCancel?: () => void;
   onClick: () => void;
   onToggle: () => void;
   onContextMenu: (ev: MouseEvent) => void;
@@ -725,13 +998,101 @@ const TreeRow: Component<{
         <EntryIcon entry={props.entry} />
       </span>
       <span style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
-        {props.entry.name}
+        <Show
+          when={props.renaming}
+          fallback={props.entry.name}
+        >
+          <input
+            data-testid="fm-rename-input"
+            ref={(el) => setTimeout(() => { el.focus(); el.select(); }, 0)}
+            type="text"
+            value={props.renaming!.draft}
+            onInput={(e) => props.onRenameInput?.(e.currentTarget.value)}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                props.onRenameCommit?.();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                props.onRenameCancel?.();
+              }
+            }}
+            onBlur={() => props.onRenameCommit?.()}
+            style={inlineInputStyle}
+          />
+        </Show>
       </span>
       <span style={{ opacity: 0.5, font: '11px ui-monospace,Menlo,Consolas,monospace' }}>
-        {props.entry.type === 'file' ? humanSize(props.entry.size) : ''}
+        {props.entry.type === 'file' && !props.renaming ? humanSize(props.entry.size) : ''}
       </span>
     </div>
   );
+};
+
+// PendingNewRow — synthetic row rendered above the tree when the
+// user has clicked New File / New Folder. It mirrors the look of a
+// real row but only carries an input; on commit the BE creates the
+// real entry and this row is replaced with the actual TreeRow.
+const PendingNewRow: Component<{
+  kind: 'file' | 'folder';
+  parent: string;
+  draft: string;
+  onInput: (val: string) => void;
+  onCommit: () => void;
+  onCancel: () => void;
+}> = (props) => {
+  return (
+    <div
+      data-testid={`fm-pending-new-${props.kind}`}
+      data-parent={props.parent}
+      style={{
+        display: 'flex',
+        'align-items': 'center',
+        gap: '4px',
+        padding: '3px 8px 3px 8px',
+        background: '#1d1d40',
+        color: '#eee',
+        font: '13px ui-sans-serif,system-ui,sans-serif',
+      }}
+    >
+      <span style={{ width: '12px' }} />
+      <span style={{ width: '14px', display: 'inline-flex', 'align-items': 'center', 'justify-content': 'center', opacity: 0.8 }}>
+        {props.kind === 'folder' ? <FolderIcon size={12} /> : <FileIcon size={12} />}
+      </span>
+      <input
+        data-testid="fm-pending-new-input"
+        ref={(el) => setTimeout(() => el.focus(), 0)}
+        type="text"
+        value={props.draft}
+        placeholder={props.kind === 'folder' ? 'new folder name' : 'new file name'}
+        onInput={(e) => props.onInput(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            props.onCommit();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            props.onCancel();
+          }
+        }}
+        style={{ ...inlineInputStyle, flex: 1 }}
+      />
+    </div>
+  );
+};
+
+const inlineInputStyle: JSX.CSSProperties = {
+  background: '#10101a',
+  color: '#eee',
+  border: '1px solid #3a3a6a',
+  'border-radius': '3px',
+  padding: '2px 6px',
+  font: '12px ui-monospace,Menlo,Consolas,monospace',
+  outline: 'none',
+  width: '100%',
+  'box-sizing': 'border-box',
 };
 
 type PreviewContent = { binary: boolean; size: number; text: string; truncated: boolean };
@@ -838,15 +1199,108 @@ const ContextMenu: Component<{
   onOpen: () => void;
   onCopy: () => void;
   onInfo: () => void;
+  onRename: () => void;
+  onDelete: () => void;
 }> = (props) => {
   return (
     <div data-testid="fm-context-menu" style={{ ...menuBoxStyle, left: `${props.left}px`, top: `${props.top}px` }}>
       <MenuItem testid="fm-ctx-open" label="Open" onClick={props.onOpen} />
       <MenuItem testid="fm-ctx-copy" label="Copy path" onClick={props.onCopy} />
       <MenuItem testid="fm-ctx-info" label="Show info" onClick={props.onInfo} />
+      <div style={{ height: '1px', background: '#2a2a3a', margin: '4px 0' }} />
+      <MenuItem testid="fm-ctx-rename" label="Rename" onClick={props.onRename} />
+      <MenuItem testid="fm-ctx-delete" label="Delete" onClick={props.onDelete} />
     </div>
   );
 };
+
+// ConfirmDeleteOverlay — a centered modal asking the user to
+// confirm an irreversible delete. v0.1 doesn't have a real
+// modal-for window relationship yet (Phase 3 plan item), so we
+// just float a positioned div inside the host. Clicking the
+// backdrop OR pressing Escape (handled by the underlying host's
+// keydown) cancels.
+const ConfirmDeleteOverlay: Component<{
+  name: string;
+  path: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}> = (props) => {
+  return (
+    <div
+      data-testid="fm-confirm-delete"
+      style={{
+        position: 'absolute',
+        inset: 0,
+        background: 'rgba(0,0,0,0.45)',
+        display: 'flex',
+        'align-items': 'center',
+        'justify-content': 'center',
+        'z-index': 2000,
+      }}
+      onClick={(ev) => {
+        if (ev.target === ev.currentTarget) props.onCancel();
+      }}
+    >
+      <div
+        style={{
+          background: '#181828',
+          border: '1px solid #2a2a3a',
+          'border-radius': '6px',
+          padding: '16px 18px',
+          'min-width': '280px',
+          'max-width': '420px',
+          'box-shadow': '0 12px 28px rgba(0,0,0,0.5)',
+          font: '13px ui-sans-serif,system-ui,sans-serif',
+          color: '#eee',
+        }}
+      >
+        <div style={{ 'font-weight': 600, 'margin-bottom': '6px' }}>Delete?</div>
+        <div
+          data-testid="fm-confirm-delete-name"
+          style={{
+            font: '12px ui-monospace,Menlo,Consolas,monospace',
+            opacity: 0.8,
+            'word-break': 'break-all',
+            'margin-bottom': '14px',
+          }}
+        >
+          {props.path}
+        </div>
+        <div style={{ display: 'flex', gap: '8px', 'justify-content': 'flex-end' }}>
+          <button
+            type="button"
+            data-testid="fm-confirm-delete-cancel"
+            style={confirmBtnStyle()}
+            onClick={props.onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-testid="fm-confirm-delete-yes"
+            style={confirmBtnStyle(true)}
+            onClick={props.onConfirm}
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+function confirmBtnStyle(danger = false): JSX.CSSProperties {
+  return {
+    background: danger ? '#7a1f1f' : 'transparent',
+    color: '#eee',
+    border: '1px solid ' + (danger ? '#a02d2d' : '#2a2a3a'),
+    'border-radius': '3px',
+    padding: '5px 12px',
+    cursor: 'pointer',
+    font: '13px ui-sans-serif,system-ui,sans-serif',
+  };
+}
 
 const MenuItem: Component<{
   testid?: string;

@@ -5,11 +5,24 @@
 // is chmod 0600; "anyone with the path is the same user."
 //
 // Protocol is intentionally tiny: line-delimited JSON, one request
-// per connection. v0.1 supports a single message type.
+// per connection. v0.1 supports two message types:
 //
 //   request:  {"t":"launch","app_id":"com.wash.about"}
 //   response: {"t":"launched","instance_id":"i-5","window_id":3}
-//          or {"t":"error","code":"not_found","msg":"..."}
+//   error:    {"t":"error","code":"not_found","msg":"..."}
+//
+//   request:  {"t":"msg","instance_id":"i-5","data":{...}}
+//              (optionally) "await_id":"r1","timeout_ms":3000
+//   response: {"t":"msg.ok"}                    when fire-and-forget
+//   response: {"t":"msg.reply","data":{...}}    when await_id matched
+//   error:    {"t":"error","code":"timeout"...}
+//
+// `msg` relays the data verbatim as an APP_MSG event to the named
+// instance — semantically identical to a shell `app_msg.send`, but
+// reachable from a CLI / test harness. When the request includes
+// `await_id`, the router installs a one-shot watcher matching that
+// id against the BE's outbound app_msg `data.id` field; the matched
+// reply is returned over the same socket.
 //
 // We do not extend the wash wire protocol for this — it's a
 // separate, simpler transport. Keeps the architecture's "trust by
@@ -26,7 +39,15 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"time"
+
+	"github.com/sirmick/wash/internal/wire"
 )
+
+// defaultMsgAwaitTimeout is the wait cap when a `msg` request set
+// await_id without an explicit timeout_ms. Keep it tight so a
+// non-responsive BE doesn't block the caller forever.
+const defaultMsgAwaitTimeout = 5 * time.Second
 
 // ListenControl opens the control socket and serves it until ctx
 // cancels. A no-op (returns nil) when cfg.ControlSocket is empty.
@@ -67,6 +88,17 @@ func (r *Router) ListenControl(ctx context.Context) error {
 	}
 }
 
+// controlReq is the union of fields any v0.1 control message may
+// carry. Unused fields stay zero for a given op.
+type controlReq struct {
+	T          string          `json:"t"`
+	AppID      string          `json:"app_id,omitempty"`
+	InstanceID string          `json:"instance_id,omitempty"`
+	Data       json.RawMessage `json:"data,omitempty"`
+	AwaitID    string          `json:"await_id,omitempty"`
+	TimeoutMs  int             `json:"timeout_ms,omitempty"`
+}
+
 func (r *Router) handleControl(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	rd := bufio.NewReader(conn)
@@ -74,10 +106,7 @@ func (r *Router) handleControl(ctx context.Context, conn net.Conn) {
 	if err != nil {
 		return
 	}
-	var req struct {
-		T     string `json:"t"`
-		AppID string `json:"app_id"`
-	}
+	var req controlReq
 	if err := json.Unmarshal(line, &req); err != nil {
 		writeControlResponse(conn, map[string]any{
 			"t": "error", "code": "bad_request", "msg": err.Error(),
@@ -87,6 +116,8 @@ func (r *Router) handleControl(ctx context.Context, conn net.Conn) {
 	switch req.T {
 	case "launch":
 		r.controlLaunch(ctx, conn, req.AppID)
+	case "msg":
+		r.controlMsg(ctx, conn, req)
 	default:
 		writeControlResponse(conn, map[string]any{
 			"t": "error", "code": "bad_request", "msg": "unknown t",
@@ -128,6 +159,90 @@ func (r *Router) controlLaunch(ctx context.Context, conn net.Conn, appID string)
 		"instance_id": inst.InstanceID,
 		"window_id":   uint64(inst.WindowID),
 	})
+}
+
+// controlMsg relays the JSON `data` payload into the named instance
+// as an APP_MSG event. With await_id set, it subscribes for the
+// matching reply on the instance's outbound app_msg stream and
+// returns it over the socket; without, it acks immediately.
+func (r *Router) controlMsg(ctx context.Context, conn net.Conn, req controlReq) {
+	if req.InstanceID == "" {
+		writeControlResponse(conn, map[string]any{
+			"t": "error", "code": "bad_request", "msg": "missing instance_id",
+		})
+		return
+	}
+	if len(req.Data) == 0 {
+		writeControlResponse(conn, map[string]any{
+			"t": "error", "code": "bad_request", "msg": "missing data",
+		})
+		return
+	}
+	inst := r.appByInstance(req.InstanceID)
+	if inst == nil {
+		writeControlResponse(conn, map[string]any{
+			"t": "error", "code": "not_found", "msg": req.InstanceID,
+		})
+		return
+	}
+	var parsed any
+	if err := json.Unmarshal(req.Data, &parsed); err != nil {
+		writeControlResponse(conn, map[string]any{
+			"t": "error", "code": "bad_request", "msg": "data is not valid JSON: " + err.Error(),
+		})
+		return
+	}
+
+	// Subscribe BEFORE sending — the BE could reply on a fast loop
+	// (in-process tests, synchronous handlers) and we don't want to
+	// miss the dispatch.
+	var (
+		replyCh <-chan map[string]any
+		cancel  func()
+	)
+	if req.AwaitID != "" {
+		replyCh, cancel = r.SubscribeAppMsg(req.InstanceID, req.AwaitID)
+		defer cancel()
+	}
+
+	if err := inst.WriteEvt(wire.NewEvtAppMsg(inst.WindowID, parsed)); err != nil {
+		writeControlResponse(conn, map[string]any{
+			"t": "error", "code": "internal", "msg": "send: " + err.Error(),
+		})
+		return
+	}
+
+	if replyCh == nil {
+		writeControlResponse(conn, map[string]any{"t": "msg.ok"})
+		return
+	}
+
+	timeout := time.Duration(req.TimeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = defaultMsgAwaitTimeout
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case data, ok := <-replyCh:
+		if !ok {
+			// channel closed without delivery — instance died, or
+			// a later subscriber to the same matchID stole the slot.
+			writeControlResponse(conn, map[string]any{
+				"t": "error", "code": "cancelled", "msg": "watcher cancelled",
+			})
+			return
+		}
+		writeControlResponse(conn, map[string]any{"t": "msg.reply", "data": data})
+	case <-timer.C:
+		writeControlResponse(conn, map[string]any{
+			"t": "error", "code": "timeout", "msg": fmt.Sprintf("no reply for id=%s within %s", req.AwaitID, timeout),
+		})
+	case <-ctx.Done():
+		writeControlResponse(conn, map[string]any{
+			"t": "error", "code": "shutdown", "msg": "router shutting down",
+		})
+	}
 }
 
 func writeControlResponse(conn net.Conn, payload map[string]any) {
