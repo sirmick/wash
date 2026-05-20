@@ -200,6 +200,18 @@ func ConnectWith(t wire.FrameTransport, def *AppDef) (*Conn, error) {
 	if def.OnReady != nil {
 		def.OnReady(c, c.instanceID, c.windowID)
 	}
+	// Ship the embedded bundle in a background goroutine. uploadBundle
+	// opens a kind=bundle channel and writes the bytes; the
+	// router caches them and replays to every (re)attaching shell.
+	// The goroutine's OpenChannel call needs Run to be reading
+	// replies — Main starts Run immediately after ConnectWith, and
+	// tests invoke c.Run in a goroutine right after. The buffered
+	// transport keeps the ChannelOpen frame around until then.
+	go func() {
+		if err := c.uploadBundle(); err != nil {
+			fmt.Fprintf(os.Stderr, "wash sdk: bundle upload: %v\n", err)
+		}
+	}()
 	return c, nil
 }
 

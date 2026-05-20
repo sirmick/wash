@@ -2,7 +2,6 @@ package sdk
 
 import (
 	"context"
-	"encoding/base64"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -140,78 +139,6 @@ func TestHandshakeFailsOnRouterError(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("hang")
-	}
-}
-
-func TestServeAsset(t *testing.T) {
-	pp := wiretest.NewPipePair()
-	def := aboutDef(map[string]string{"index.js": "console.log('hi');"})
-
-	ch := make(chan *Conn, 1)
-	go func() {
-		c, err := ConnectWith(pp.EndA(), def)
-		if err != nil {
-			t.Errorf("connect: %v", err)
-			ch <- nil
-			return
-		}
-		ch <- c
-		_ = c.Run(context.Background())
-	}()
-
-	_ = readCtrl(t, pp.EndB()) // identity
-	writeCtrl(t, pp.EndB(), wire.NewIdentityAck("i-1", 1))
-
-	c := <-ch
-	if c == nil {
-		t.Fatal("connect failed")
-	}
-
-	// Router side: request the asset.
-	writeCtrl(t, pp.EndB(), wire.NewAssetRead(42, "index.js"))
-
-	ok, _ := readCtrl(t, pp.EndB()).(wire.AssetReadOK)
-	if ok.ID != 42 || ok.Len != int64(len("console.log('hi');")) {
-		t.Fatalf("asset.read.ok mismatch: %+v", ok)
-	}
-	if !strings.Contains(ok.MIME, "javascript") {
-		t.Fatalf("mime %q has no javascript", ok.MIME)
-	}
-
-	data, _ := readCtrl(t, pp.EndB()).(wire.AssetData)
-	if data.ID != 42 || !data.End {
-		t.Fatalf("asset.data mismatch: %+v", data)
-	}
-	raw, err := base64.StdEncoding.DecodeString(data.Bytes)
-	if err != nil || string(raw) != "console.log('hi');" {
-		t.Fatalf("bytes mismatch: %q (err=%v)", string(raw), err)
-	}
-}
-
-func TestServeAssetMissing(t *testing.T) {
-	pp := wiretest.NewPipePair()
-	def := aboutDef(map[string]string{}) // empty fs
-
-	go func() {
-		c, err := ConnectWith(pp.EndA(), def)
-		if err != nil {
-			t.Errorf("connect: %v", err)
-			return
-		}
-		_ = c.Run(context.Background())
-	}()
-
-	_ = readCtrl(t, pp.EndB())
-	writeCtrl(t, pp.EndB(), wire.NewIdentityAck("i-1", 1))
-	writeCtrl(t, pp.EndB(), wire.NewAssetRead(7, "nope.js"))
-
-	got := readCtrl(t, pp.EndB())
-	errMsg, ok := got.(wire.AssetReadErr)
-	if !ok {
-		t.Fatalf("expected AssetReadErr, got %T (%+v)", got, got)
-	}
-	if errMsg.Code != wire.ErrCodeNotFound {
-		t.Fatalf("code mismatch: %+v", errMsg)
 	}
 }
 

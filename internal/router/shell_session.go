@@ -126,6 +126,13 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	// the scrollback so the user lands on their pre-refresh terminal.
 	r.reattachChannelsToShell(sess)
 
+	// Replay any already-uploaded bundles to the new shell. Bundles
+	// in flight (bundleReady not yet closed) will be fanned out
+	// from the ChannelClose handler when they complete.
+	for _, inst := range snapshot {
+		r.replayBundleToShell(sess, inst)
+	}
+
 	if err := r.EnsureSessionRunning(ctx); err != nil {
 		r.log("ensure session: %v", err)
 	}
@@ -192,8 +199,6 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		return fmt.Errorf("shell ctrl decode: %w", err)
 	}
 	switch m := msg.(type) {
-	case wire.ShellAssetFetch:
-		return s.handleAssetFetch(m)
 	case wire.ShellWindowCloseClicked:
 		return s.handleWindowCloseClicked(m)
 	case wire.ShellWindowFocus:
@@ -224,15 +229,6 @@ func (s *ShellSession) handleShellLog(m wire.ShellLog) error {
 		s.router.log("browser/%s [%s] %s", src, m.Level, m.Msg)
 	}
 	return nil
-}
-
-func (s *ShellSession) handleAssetFetch(m wire.ShellAssetFetch) error {
-	inst := s.router.appByInstance(m.InstanceID)
-	if inst == nil {
-		s.router.log("shell asset.fetch for unknown instance %q", m.InstanceID)
-		return nil
-	}
-	return inst.requestAsset(m.Name, m.InstanceID)
 }
 
 func (s *ShellSession) handleWindowCloseClicked(m wire.ShellWindowCloseClicked) error {

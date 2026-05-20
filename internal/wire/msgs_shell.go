@@ -13,14 +13,12 @@ import "encoding/json"
 // types (§9) that use overlapping names like window.focus.
 const (
 	// Router → shell.
-	TShellCatalog          = "catalog"
-	TShellAppDeclared      = "app.declared"
-	TShellSessionSnapshot  = "session.snapshot"
-	TShellSessionPatch     = "session.patch"
-	TShellAssetDeliver     = "asset.deliver"
+	TShellCatalog         = "catalog"
+	TShellAppDeclared     = "app.declared"
+	TShellSessionSnapshot = "session.snapshot"
+	TShellSessionPatch    = "session.patch"
 
 	// Shell → router.
-	TShellAssetFetch         = "asset.fetch"
 	TShellWindowCloseClicked = "window.close_clicked"
 	TShellWindowFocus        = "window.focus"
 	TShellWindowMove         = "window.move"
@@ -190,34 +188,6 @@ func NewShellSessionPatch(patches ...SessionPatch) ShellSessionPatch {
 	return ShellSessionPatch{T: TShellSessionPatch, Patches: patches}
 }
 
-// ShellAssetDeliver carries a bundle chunk back to the shell. Mirrors
-// AssetData on the app side; the router glues the two streams.
-type ShellAssetDeliver struct {
-	T          string `json:"t"`
-	InstanceID string `json:"instance_id"`
-	Name       string `json:"name"`
-	Bytes      string `json:"bytes"` // base64
-	End        bool   `json:"end"`
-	MIME       string `json:"mime,omitempty"`
-}
-
-func NewShellAssetDeliver(instanceID, name, b64Bytes string, end bool, mime string) ShellAssetDeliver {
-	return ShellAssetDeliver{T: TShellAssetDeliver, InstanceID: instanceID, Name: name, Bytes: b64Bytes, End: end, MIME: mime}
-}
-
-// ShellAssetFetch is the shell asking for an instance's bundle file.
-// The router translates this into a channel 0 AssetRead on the owning
-// app's socket.
-type ShellAssetFetch struct {
-	T          string `json:"t"`
-	InstanceID string `json:"instance_id"`
-	Name       string `json:"name"`
-}
-
-func NewShellAssetFetch(instanceID, name string) ShellAssetFetch {
-	return ShellAssetFetch{T: TShellAssetFetch, InstanceID: instanceID, Name: name}
-}
-
 // ShellWindowCloseClicked is the user clicking a titlebar close.
 type ShellWindowCloseClicked struct {
 	T        string `json:"t"`
@@ -334,14 +304,29 @@ func NewShellNotify(instanceID, title, body, level string) ShellNotify {
 // ShellChannelBind: the router tells the shell that a new raw channel
 // id has been opened for one of its windows. The shell then knows
 // where to route incoming raw frames on that channel.
+//
+// Kind="bundle" signals a one-shot bundle delivery for InstanceID:
+// the shell accumulates bytes until ChannelUnbind, then blob-URL-
+// imports the result to instantiate the app's custom element.
 type ShellChannelBind struct {
-	T         string `json:"t"`
-	ChannelID uint32 `json:"channel_id"`
-	WindowID  uint32 `json:"window_id"`
+	T          string `json:"t"`
+	ChannelID  uint32 `json:"channel_id"`
+	WindowID   uint32 `json:"window_id"`
+	Kind       string `json:"kind,omitempty"`
+	InstanceID string `json:"instance_id,omitempty"`
 }
 
 func NewShellChannelBind(channelID, windowID uint32) ShellChannelBind {
 	return ShellChannelBind{T: TShellChannelBind, ChannelID: channelID, WindowID: windowID}
+}
+
+func NewShellChannelBindBundle(channelID uint32, instanceID string) ShellChannelBind {
+	return ShellChannelBind{
+		T:          TShellChannelBind,
+		ChannelID:  channelID,
+		Kind:       ChannelKindBundle,
+		InstanceID: instanceID,
+	}
 }
 
 // ShellChannelUnbind: the channel is gone.

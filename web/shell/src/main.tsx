@@ -11,7 +11,7 @@
 import { render } from 'solid-js/web';
 import { For, createEffect } from 'solid-js';
 import { Conn } from './ws';
-import { fetchAndImport, onAssetDeliver } from './assets';
+import { beginBundle, finishBundle, pushBundleBytes } from './assets';
 import {
   applySessionPatch,
   applySessionSnapshot,
@@ -85,15 +85,6 @@ interface ShellSessionPatch {
   patches: SessionPatch[];
 }
 
-interface ShellAssetDeliver {
-  t: 'asset.deliver';
-  instance_id: string;
-  name: string;
-  bytes: string;
-  end: boolean;
-  mime?: string;
-}
-
 interface ShellAppMsgDeliver {
   t: 'app_msg.deliver';
   instance_id: string;
@@ -104,6 +95,8 @@ interface ShellChannelBind {
   t: 'channel.bind';
   channel_id: number;
   window_id: number;
+  kind?: string;
+  instance_id?: string;
 }
 
 interface ShellChannelUnbind {
@@ -160,9 +153,6 @@ const conn = new Conn(
       case 'session.patch':
         handlePatch(msg as ShellSessionPatch);
         break;
-      case 'asset.deliver':
-        onAssetDeliver(msg as ShellAssetDeliver);
-        break;
       case 'app_msg.deliver':
         deliverAppMsg(msg as ShellAppMsgDeliver);
         break;
@@ -178,18 +168,33 @@ const conn = new Conn(
       }
       case 'channel.bind': {
         const b = msg as ShellChannelBind;
-        channelOwner.set(b.channel_id, b.window_id);
+        if (b.kind === 'bundle' && b.instance_id) {
+          // Bundle delivery channel — start accumulating until the
+          // matching channel.unbind triggers the dynamic import.
+          bundleReady.set(b.instance_id, beginBundle(b.channel_id, b.instance_id));
+        } else {
+          channelOwner.set(b.channel_id, b.window_id);
+        }
         break;
       }
       case 'channel.unbind': {
         const u = msg as ShellChannelUnbind;
+        // If it's a bundle channel, finalize the import; otherwise
+        // drop any raw-channel subscriber waiting on the id.
+        finishBundle(u.channel_id);
         channelOwner.delete(u.channel_id);
         closeRawSubscriber(u.channel_id);
         break;
       }
     }
   },
-  (channelID, bytes) => deliverRaw(channelID, bytes),
+  (channelID, bytes) => {
+    // Bundle-channel bytes (a one-shot upload of an app's JS) get
+    // accumulated; everything else flows to the per-channel raw
+    // subscriber (xterm's pty, etc.).
+    if (pushBundleBytes(channelID, bytes)) return;
+    deliverRaw(channelID, bytes);
+  },
 );
 
 // deliverAppMsg routes a BE→FE message to its element, queuing if the
@@ -218,16 +223,46 @@ createEffect(() => {
 
 function handleAppDeclared(msg: ShellAppDeclared): void {
   instances.set(msg.instance_id, { element: msg.element, surface: msg.surface });
-  const p = fetchAndImport(conn.sendCtrl.bind(conn), msg.instance_id, 'index.js');
-  bundleReady.set(msg.instance_id, p);
+  // Bundle bytes arrive on a kind=bundle raw channel: channel.bind
+  // calls beginBundle() (which records the in-flight promise) and
+  // channel.unbind calls finishBundle() (which imports and resolves).
+  // For desktop-surface apps we mount the desktop element once the
+  // import has completed.
   if (msg.surface === 'desktop') {
-    p.then(() => mountDesktop({ instanceID: msg.instance_id, element: msg.element })).catch((err) =>
-      console.error('wash: desktop bundle:', err),
-    );
+    waitForBundleByInstance(msg.instance_id)
+      .then(() => mountDesktop({ instanceID: msg.instance_id, element: msg.element }))
+      .catch((err) => console.error('wash: desktop bundle:', err));
   }
-  // surface=window apps are mounted when their session.upsert lands;
-  // we wait for bundleReady there so the element class is defined
-  // before onMount calls createElement.
+  // surface=window apps mount on their session.window upsert; the
+  // window-create path awaits the bundle promise the same way.
+}
+
+// waitForBundleByInstance polls bundleReady — the channel.bind for
+// the bundle may arrive slightly after the app.declared, so we wait
+// briefly for it to land.
+function waitForBundleByInstance(instanceID: string): Promise<void> {
+  const existing = bundleReady.get(instanceID);
+  if (existing) return existing;
+  // The channel.bind {kind:bundle} may not have arrived yet — poll
+  // the map until it does. This loop runs ~zero times in practice
+  // because the router sends app.declared then ChannelBind back-to-
+  // back, but it's defensive against frame-order surprises.
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const check = () => {
+      const p = bundleReady.get(instanceID);
+      if (p) {
+        p.then(resolve, reject);
+        return;
+      }
+      if (Date.now() - start > 10_000) {
+        reject(new Error(`bundle for ${instanceID} not announced within 10s`));
+        return;
+      }
+      setTimeout(check, 25);
+    };
+    check();
+  });
 }
 
 // handleSnapshot rebuilds the local WM state from the router's
@@ -254,7 +289,7 @@ function handlePatch(msg: ShellSessionPatch): void {
 }
 
 function waitForBundle(instanceID: string): Promise<void> {
-  return bundleReady.get(instanceID) ?? Promise.resolve();
+  return waitForBundleByInstance(instanceID);
 }
 
 // Bridge a window's close-button click into the WS protocol.

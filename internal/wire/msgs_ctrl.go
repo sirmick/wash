@@ -13,12 +13,6 @@ const (
 	TIdentity    = "identity"
 	TIdentityAck = "identity.ack"
 
-	// Asset pull (§7), app socket only.
-	TAssetRead    = "asset.read"
-	TAssetReadOK  = "asset.read.ok"
-	TAssetReadErr = "asset.read.err"
-	TAssetData    = "asset.data"
-
 	// Errors (§13). Either side may send before closing.
 	TError = "error"
 
@@ -73,55 +67,6 @@ func NewIdentityAck(instanceID string, windowID uint32) IdentityAck {
 	return IdentityAck{T: TIdentityAck, InstanceID: instanceID, WindowID: windowID}
 }
 
-// AssetRead is router → app: "please serve me your bundle file <name>".
-type AssetRead struct {
-	T    string `json:"t"`
-	ID   uint64 `json:"id"`
-	Name string `json:"name"`
-}
-
-func NewAssetRead(id uint64, name string) AssetRead {
-	return AssetRead{T: TAssetRead, ID: id, Name: name}
-}
-
-// AssetReadOK is app → router: headers announce; bytes follow in AssetData.
-type AssetReadOK struct {
-	T    string `json:"t"`
-	ID   uint64 `json:"id"`
-	Len  int64  `json:"len"`
-	MIME string `json:"mime"`
-}
-
-func NewAssetReadOK(id uint64, length int64, mime string) AssetReadOK {
-	return AssetReadOK{T: TAssetReadOK, ID: id, Len: length, MIME: mime}
-}
-
-// AssetData is one chunk of the bundle, base64 in JSON for v0.0. The
-// last chunk MUST set End=true. Note: base64 inside JSON is the v0.0
-// stopgap — replaced by a per-asset raw side-channel in v0.1.
-type AssetData struct {
-	T     string `json:"t"`
-	ID    uint64 `json:"id"`
-	Bytes string `json:"bytes"`
-	End   bool   `json:"end"`
-}
-
-func NewAssetData(id uint64, b64Bytes string, end bool) AssetData {
-	return AssetData{T: TAssetData, ID: id, Bytes: b64Bytes, End: end}
-}
-
-// AssetReadErr is app → router on failure.
-type AssetReadErr struct {
-	T    string `json:"t"`
-	ID   uint64 `json:"id"`
-	Code string `json:"code"`
-	Msg  string `json:"msg"`
-}
-
-func NewAssetReadErr(id uint64, code, msg string) AssetReadErr {
-	return AssetReadErr{T: TAssetReadErr, ID: id, Code: code, Msg: msg}
-}
-
 // Error is the generic protocol-level error on channel 0 (§13).
 type Error struct {
 	T    string `json:"t"`
@@ -133,6 +78,16 @@ func NewError(code, msg string) Error {
 	return Error{T: TError, Code: code, Msg: msg}
 }
 
+// Channel "kinds" — extra hint on ChannelOpen so the router and
+// shell can give certain channels special semantics. Empty is the
+// default (a normal bidirectional byte pipe forwarded to the bound
+// shell). "bundle" is an upload-only pipe: bytes are cached
+// router-side and replayed to every shell that attaches.
+const (
+	ChannelKindGeneric = ""
+	ChannelKindBundle  = "bundle"
+)
+
 // ChannelOpen — app → router — requests a new raw channel bound to
 // the app's window. The router replies with ChannelOpened on success
 // or ChannelOpenErr on failure; matching is via req_id.
@@ -140,10 +95,15 @@ type ChannelOpen struct {
 	T        string `json:"t"`
 	ReqID    uint64 `json:"req_id"`
 	WindowID uint32 `json:"window_id"`
+	Kind     string `json:"kind,omitempty"`
 }
 
 func NewChannelOpen(reqID uint64, windowID uint32) ChannelOpen {
 	return ChannelOpen{T: TChannelOpen, ReqID: reqID, WindowID: windowID}
+}
+
+func NewChannelOpenKind(reqID uint64, windowID uint32, kind string) ChannelOpen {
+	return ChannelOpen{T: TChannelOpen, ReqID: reqID, WindowID: windowID, Kind: kind}
 }
 
 // ChannelOpened — router → app — the channel is live. Raw bytes can
@@ -226,18 +186,6 @@ func DecodeCtrl(data []byte) (any, error) {
 	case TIdentityAck:
 		var m IdentityAck
 		return m, json.Unmarshal(data, &m)
-	case TAssetRead:
-		var m AssetRead
-		return m, json.Unmarshal(data, &m)
-	case TAssetReadOK:
-		var m AssetReadOK
-		return m, json.Unmarshal(data, &m)
-	case TAssetData:
-		var m AssetData
-		return m, json.Unmarshal(data, &m)
-	case TAssetReadErr:
-		var m AssetReadErr
-		return m, json.Unmarshal(data, &m)
 	case TError:
 		var m Error
 		return m, json.Unmarshal(data, &m)
@@ -269,12 +217,6 @@ func DecodeCtrl(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TShellSessionPatch:
 		var m ShellSessionPatch
-		return m, json.Unmarshal(data, &m)
-	case TShellAssetDeliver:
-		var m ShellAssetDeliver
-		return m, json.Unmarshal(data, &m)
-	case TShellAssetFetch:
-		var m ShellAssetFetch
 		return m, json.Unmarshal(data, &m)
 	case TShellWindowCloseClicked:
 		var m ShellWindowCloseClicked

@@ -2,7 +2,6 @@ package loopback
 
 import (
 	"context"
-	"encoding/base64"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -154,18 +153,41 @@ func TestSpine(t *testing.T) {
 	}
 titlePatchFound:
 
-	// 4. Shell asks for the bundle; SDK serves it; router relays.
-	writeCtrl(t, shell, wire.NewShellAssetFetch(declared.InstanceID, "index.js"))
-	deliver, ok := readCtrl(t, shell).(wire.ShellAssetDeliver)
-	if !ok || !deliver.End {
-		t.Fatalf("expected complete ShellAssetDeliver, got %+v", deliver)
+	// 4. Bundle delivery: the SDK ships the embedded bundle on a
+	// kind=bundle raw channel right after handshake. Router caches
+	// the bytes and replays them to every attached shell via
+	// ShellChannelBind{kind:bundle} + raw frames + ShellChannelUnbind.
+	var bundleChannelID uint32
+	bundleBytes := []byte{}
+	bundleDone := false
+	for !bundleDone {
+		f, err := shell.ReadFrame()
+		if err != nil {
+			t.Fatalf("read frame: %v", err)
+		}
+		if f.Channel == 0 {
+			m, derr := wire.DecodeCtrl(f.Payload)
+			if derr != nil {
+				t.Fatalf("decode ctrl: %v", derr)
+			}
+			switch v := m.(type) {
+			case wire.ShellChannelBind:
+				if v.Kind == wire.ChannelKindBundle && v.InstanceID == declared.InstanceID {
+					bundleChannelID = v.ChannelID
+				}
+			case wire.ShellChannelUnbind:
+				if v.ChannelID == bundleChannelID {
+					bundleDone = true
+				}
+			}
+			continue
+		}
+		if f.Channel == bundleChannelID {
+			bundleBytes = append(bundleBytes, f.Payload...)
+		}
 	}
-	gotBundle, err := base64.StdEncoding.DecodeString(deliver.Bytes)
-	if err != nil {
-		t.Fatalf("decode bundle: %v", err)
-	}
-	if string(gotBundle) != bundleBody {
-		t.Fatalf("bundle bytes mismatch: %q", string(gotBundle))
+	if string(bundleBytes) != bundleBody {
+		t.Fatalf("bundle bytes mismatch: %q", string(bundleBytes))
 	}
 
 	// 5. Close handshake: shell sends close_clicked → router runs the

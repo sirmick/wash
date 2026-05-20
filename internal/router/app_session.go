@@ -39,20 +39,29 @@ type AppInstance struct {
 
 	writeMu sync.Mutex
 
-	pmu     sync.Mutex
-	pending map[uint64]*pendingAsset // by per-app asset id
-
 	// awaiting close confirmation. nil when no close is pending.
 	closeMu      sync.Mutex
 	closeConfirm chan bool
+
+	// bundleMu guards bundleBytes + bundleChannel + bundleReady.
+	// bundleBytes accumulates the JS bundle the SDK uploads
+	// post-handshake on the bundle channel. The full bytes are
+	// retained for the instance lifetime so every (re)attaching
+	// shell can replay them — no second BE round-trip needed.
+	bundleMu      sync.Mutex
+	bundleBytes   []byte
+	bundleChannel uint32        // channel id reserved for app-side upload
+	bundleReady   chan struct{} // closed when the upload completes
 }
 
-// pendingAsset is the per-asset state the router tracks while a
-// bundle file is in flight from this app back to the shell.
-type pendingAsset struct {
-	ShellInstance string // the originating ShellAssetFetch's instance_id
-	Name          string
-	MIME          string
+// newBundleReady returns a fresh signaling channel; bundleReady is
+// lazy-init'd so AppInstance{} stays zero-valued.
+func (inst *AppInstance) ensureBundleReady() {
+	inst.bundleMu.Lock()
+	if inst.bundleReady == nil {
+		inst.bundleReady = make(chan struct{})
+	}
+	inst.bundleMu.Unlock()
 }
 
 // HandleApp is the entrypoint for a freshly-spawned app: it owns the
@@ -84,7 +93,6 @@ func (r *Router) handleAppOpts(ctx context.Context, t FrameTransport, manifest *
 		Cmd:       cmd,
 		Kiosk:     kiosk,
 		router:    r,
-		pending:   make(map[uint64]*pendingAsset),
 	}
 	if err := inst.handshake(ctx); err != nil {
 		_ = t.Close()
@@ -210,14 +218,24 @@ func (inst *AppInstance) dispatch(f wire.Frame) error {
 	case ChannelEvent:
 		return inst.handleEvt(f.Payload)
 	default:
-		// Channel ≥ 2: raw byte stream. Tee into the scrollback ring
-		// buffer (so a future reattaching shell can replay them) and
-		// forward to the currently-attached shell, if any.
+		// Channel ≥ 2: raw byte stream.
 		b := inst.router.lookupChannel(f.Channel)
 		if b == nil || b.app != inst {
 			inst.router.log("app %s: drop raw frame on unbound channel %d", inst.AppID, f.Channel)
 			return nil
 		}
+		if b.kind == wire.ChannelKindBundle {
+			// Bundle bytes from SDK during handshake — append to
+			// the instance's bundle cache. No shell forwarding;
+			// per-shell replay channels handle delivery.
+			inst.bundleMu.Lock()
+			inst.bundleBytes = append(inst.bundleBytes, f.Payload...)
+			inst.bundleMu.Unlock()
+			return nil
+		}
+		// Tee into the scrollback ring buffer (so a future
+		// reattaching shell can replay them) and forward to the
+		// currently-attached shell, if any.
 		b.shellMu.Lock()
 		if b.buf != nil {
 			b.buf.Write(f.Payload)
@@ -239,19 +257,27 @@ func (inst *AppInstance) handleCtrl(payload []byte) error {
 		return fmt.Errorf("ctrl decode: %w", err)
 	}
 	switch m := msg.(type) {
-	case wire.AssetReadOK:
-		inst.setPendingMIME(m.ID, m.MIME)
-		return nil
-	case wire.AssetData:
-		return inst.deliverAssetChunk(m)
-	case wire.AssetReadErr:
-		inst.router.log("app %s: asset.read.err id=%d code=%s: %s", inst.AppID, m.ID, m.Code, m.Msg)
-		inst.closePending(m.ID)
-		return nil
 	case wire.ChannelOpen:
 		return inst.handleChannelOpen(m)
 	case wire.ChannelClose:
+		// If the closing channel was the bundle uploader, the
+		// bundle is now complete — flip bundleReady and fan it
+		// out to every currently-attached shell.
+		inst.bundleMu.Lock()
+		isBundle := inst.bundleChannel == m.ChannelID && inst.bundleReady != nil
+		if isBundle {
+			select {
+			case <-inst.bundleReady:
+				// already closed
+			default:
+				close(inst.bundleReady)
+			}
+		}
+		inst.bundleMu.Unlock()
 		inst.router.closeChannel(m.ChannelID, "app requested close")
+		if isBundle {
+			inst.router.fanOutBundleToAttachedShells(inst)
+		}
 		return nil
 	case wire.Error:
 		inst.router.log("app %s: error code=%s: %s", inst.AppID, m.Code, m.Msg)
@@ -266,6 +292,28 @@ func (inst *AppInstance) handleCtrl(payload []byte) error {
 // the window belongs to this app (kiosk root counts), allocates an id,
 // records the binding, tells both sides.
 func (inst *AppInstance) handleChannelOpen(m wire.ChannelOpen) error {
+	// Bundle channels are special — they're an upload-only pipe
+	// from the SDK to the router used during/right after handshake
+	// to ship the embedded bundle. No shell forwarding; bytes go
+	// straight into inst.bundleBytes. The router replays them to
+	// every (re)attaching shell on a per-shell channel.
+	if m.Kind == wire.ChannelKindBundle {
+		id := inst.router.allocChannelID()
+		b := &channelBinding{
+			channelID: id,
+			app:       inst,
+			windowID:  inst.WindowID,
+			kind:      wire.ChannelKindBundle,
+		}
+		inst.router.registerChannel(b)
+		inst.bundleMu.Lock()
+		inst.bundleChannel = id
+		if inst.bundleReady == nil {
+			inst.bundleReady = make(chan struct{})
+		}
+		inst.bundleMu.Unlock()
+		return inst.writeCtrl(wire.NewChannelOpened(m.ReqID, id))
+	}
 	// For kiosk / desktop-surface apps the app has WindowID=0; the
 	// app must request windowID=0 as well (we treat that as "the
 	// root surface of this app"). For windowed apps, the requested
@@ -516,69 +564,6 @@ func (inst *AppInstance) deliverCloseConfirm(allow bool) {
 		default:
 		}
 	}
-}
-
-// pending-asset bookkeeping ---------------------------------------------------
-
-func (inst *AppInstance) addPending(id uint64, p *pendingAsset) {
-	inst.pmu.Lock()
-	inst.pending[id] = p
-	inst.pmu.Unlock()
-}
-
-func (inst *AppInstance) setPendingMIME(id uint64, mime string) {
-	inst.pmu.Lock()
-	if p, ok := inst.pending[id]; ok {
-		p.MIME = mime
-	}
-	inst.pmu.Unlock()
-}
-
-func (inst *AppInstance) closePending(id uint64) {
-	inst.pmu.Lock()
-	delete(inst.pending, id)
-	inst.pmu.Unlock()
-}
-
-func (inst *AppInstance) getPending(id uint64) *pendingAsset {
-	inst.pmu.Lock()
-	defer inst.pmu.Unlock()
-	if p, ok := inst.pending[id]; ok {
-		// return a copy to avoid races on caller writes
-		cp := *p
-		return &cp
-	}
-	return nil
-}
-
-// deliverAssetChunk translates AssetData into ShellAssetDeliver and
-// pushes it to every attached shell. On end=true the pending entry is
-// removed.
-func (inst *AppInstance) deliverAssetChunk(m wire.AssetData) error {
-	pa := inst.getPending(m.ID)
-	if pa == nil {
-		inst.router.log("app %s: asset.data for unknown id %d (ignored)", inst.AppID, m.ID)
-		return nil
-	}
-	out := wire.NewShellAssetDeliver(inst.InstanceID, pa.Name, m.Bytes, m.End, pa.MIME)
-	for _, s := range inst.router.shellList() {
-		if err := s.WriteCtrl(out); err != nil {
-			return err
-		}
-	}
-	if m.End {
-		inst.closePending(m.ID)
-	}
-	return nil
-}
-
-// requestAsset is called by the shell session to ask this app for a
-// bundle file. It allocates an asset id, records the request, and
-// emits AssetRead on the app's channel 0.
-func (inst *AppInstance) requestAsset(name string, fromInstance string) error {
-	id := inst.router.allocAssetID()
-	inst.addPending(id, &pendingAsset{ShellInstance: fromInstance, Name: name})
-	return inst.writeCtrl(wire.NewAssetRead(id, name))
 }
 
 // writeCtrl encodes m as JSON and writes a control-channel frame.

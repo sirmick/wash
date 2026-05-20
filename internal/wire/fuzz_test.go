@@ -41,7 +41,7 @@ func FuzzDecodeCtrl(f *testing.F) {
 	for _, m := range []any{
 		NewIdentity("com.wash.about", 1, "0.0.1"),
 		NewError(ErrCodeBadFrame, "x"),
-		NewAssetData(7, "aGVsbG8=", true),
+		NewChannelOpenKind(1, 0, ChannelKindBundle),
 	} {
 		b, _ := EncodeCtrl(m)
 		f.Add(b)

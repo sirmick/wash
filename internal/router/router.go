@@ -68,7 +68,6 @@ type Router struct {
 
 	nextWindow   atomic.Uint32
 	nextInstance atomic.Uint64
-	nextAsset    atomic.Uint64
 	nextChannel  atomic.Uint32 // starts at 1, returns 2+ via allocChannelID
 
 	channelsMu sync.Mutex
@@ -156,10 +155,6 @@ func (r *Router) allocWindowID() uint32 {
 	return r.nextWindow.Add(1)
 }
 
-func (r *Router) allocAssetID() uint64 {
-	return r.nextAsset.Add(1)
-}
-
 // allocChannelID returns a fresh raw-channel id. v0.1 uses the same
 // id space on the app socket and the WS; the allocator starts at 2
 // so it's safe on both (channel 0 = ctrl, channel 1 = app-side event).
@@ -191,10 +186,17 @@ const ChannelScrollbackBytes = 256 * 1024
 // drop). bytes from app are then captured in the ring buffer only;
 // the next shell that attaches receives the buffered scrollback as
 // a single replay frame, followed by live bytes.
+//
+// Kind=="bundle" gives the channel different semantics: bytes from
+// app are accumulated into app.bundleBytes (no shell forwarding, no
+// ring buffer), and on ChannelClose the bundle is marked ready.
+// Per-shell bundle replay channels are spawned separately via
+// reattachChannelsToShell.
 type channelBinding struct {
 	channelID uint32
 	app       *AppInstance
 	windowID  uint32 // the shell-side window the channel is rooted at
+	kind      string // wire.ChannelKindGeneric or wire.ChannelKindBundle
 
 	// shellMu guards shell + buf. Held briefly during forward and
 	// rebind paths.
@@ -273,7 +275,6 @@ func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*Ap
 		Cmd:       cmd,
 		Kiosk:     kiosk,
 		router:    r,
-		pending:   make(map[uint64]*pendingAsset),
 	}
 	if err := inst.handshake(ctx); err != nil {
 		_ = transport.Close()
@@ -405,6 +406,65 @@ func (r *Router) unregisterShell(s *ShellSession) {
 	}
 }
 
+// replayBundleToShell sends the cached JS bundle for inst over a
+// freshly-allocated, per-shell raw channel. The shell uses kind=
+// "bundle" on the bind to recognize the channel as a one-shot
+// bundle upload, accumulates bytes until the unbind, and then
+// blob-URL-imports the result.
+//
+// No-op if the bundle hasn't finished uploading yet. The caller is
+// expected to invoke this again from the ChannelClose handler when
+// the bundle becomes ready.
+func (r *Router) replayBundleToShell(s *ShellSession, inst *AppInstance) {
+	inst.bundleMu.Lock()
+	bytes := inst.bundleBytes
+	ready := inst.bundleReady
+	inst.bundleMu.Unlock()
+	if ready == nil {
+		return
+	}
+	select {
+	case <-ready:
+	default:
+		// Bundle still uploading; the ChannelClose handler will
+		// re-fan-out to attached shells when it completes.
+		return
+	}
+	if len(bytes) == 0 {
+		return
+	}
+	id := r.allocChannelID()
+	if err := s.WriteCtrl(wire.NewShellChannelBindBundle(id, inst.InstanceID)); err != nil {
+		r.log("bundle bind %s: %v", inst.InstanceID, err)
+		return
+	}
+	// Chunk the write so very large bundles don't pin a giant
+	// allocation in the WS layer.
+	const chunkSize = 256 * 1024
+	for off := 0; off < len(bytes); off += chunkSize {
+		end := off + chunkSize
+		if end > len(bytes) {
+			end = len(bytes)
+		}
+		if err := s.WriteRawFrame(id, bytes[off:end]); err != nil {
+			r.log("bundle frame %s: %v", inst.InstanceID, err)
+			return
+		}
+	}
+	if err := s.WriteCtrl(wire.NewShellChannelUnbind(id, "bundle complete")); err != nil {
+		r.log("bundle unbind %s: %v", inst.InstanceID, err)
+	}
+}
+
+// fanOutBundleToAttachedShells sends the bundle for inst to every
+// currently-connected shell. Called when the SDK finishes uploading
+// the bundle (i.e., the bundle channel's ChannelClose arrives).
+func (r *Router) fanOutBundleToAttachedShells(inst *AppInstance) {
+	for _, s := range r.shellList() {
+		r.replayBundleToShell(s, inst)
+	}
+}
+
 // reattachChannelsToShell takes ownership of every currently-detached
 // channel binding, sending ShellChannelBind + a scrollback replay
 // frame so the new shell can rebuild any terminal-style state.
@@ -446,13 +506,16 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 
 // declareAppToAllShells announces inst to every attached shell via
 // ShellSession.declareInstance, which dedupes against a parallel
-// declareExistingAppsTo run on the same shell.
+// declareExistingAppsTo run on the same shell. Also replays the
+// instance's bundle if it's already cached — for new apps spawned
+// after the shell connected (e.g. via the launcher).
 func (r *Router) declareAppToAllShells(ctx context.Context, inst *AppInstance) error {
 	var firstErr error
 	for _, s := range r.shellList() {
 		if err := s.declareInstance(inst); err != nil && firstErr == nil {
 			firstErr = err
 		}
+		r.replayBundleToShell(s, inst)
 	}
 	if firstErr != nil {
 		return firstErr

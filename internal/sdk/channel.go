@@ -147,13 +147,20 @@ var ErrChannelOpen = errors.New("wash: channel open failed")
 // reply. Calling from a callback deadlocks. Hand off to a fresh
 // goroutine if you're inside a callback.
 func (c *Conn) OpenChannel(ctx context.Context, windowID uint32) (*RawChannel, error) {
+	return c.openChannelKind(ctx, windowID, wire.ChannelKindGeneric)
+}
+
+// openChannelKind is OpenChannel with an explicit channel kind hint
+// for the router. Internal — bundle channels are the only non-
+// generic kind today.
+func (c *Conn) openChannelKind(ctx context.Context, windowID uint32, kind string) (*RawChannel, error) {
 	reqID := c.nextReqID.Add(1)
 	waitCh := make(chan openResult, 1)
 	c.openMu.Lock()
 	c.pendingOpens[reqID] = waitCh
 	c.openMu.Unlock()
 
-	if err := c.writeCtrl(wire.NewChannelOpen(reqID, windowID)); err != nil {
+	if err := c.writeCtrl(wire.NewChannelOpenKind(reqID, windowID, kind)); err != nil {
 		c.openMu.Lock()
 		delete(c.pendingOpens, reqID)
 		c.openMu.Unlock()

@@ -74,8 +74,6 @@ func (c *Conn) dispatchCtrl(payload []byte) error {
 		return fmt.Errorf("ctrl decode: %w", err)
 	}
 	switch m := msg.(type) {
-	case wire.AssetRead:
-		return c.serveAsset(m)
 	case wire.ChannelOpened:
 		rc := newRawChannel(m.ChannelID, c)
 		c.registerChannel(rc)

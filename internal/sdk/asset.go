@@ -1,70 +1,61 @@
 package sdk
 
 import (
-	"encoding/base64"
+	"context"
 	"fmt"
 	"io"
 	"io/fs"
-	"mime"
-	"path/filepath"
-
-	"github.com/sirmick/wash/internal/wire"
 )
 
-// assetChunkBytes is the raw chunk size for asset.data frames. Base64
-// inflation gives ~256 KiB per frame, far under the 16 MiB cap and
-// small enough not to pin large allocations on the SDK side.
-const assetChunkBytes = 192 * 1024
-
-// serveAsset opens the named asset from AppDef.Assets and streams it
-// back to the router as AssetReadOK + AssetData chunks (WIRE.md §7).
-// Missing assets reply with AssetReadErr.
-func (c *Conn) serveAsset(req wire.AssetRead) error {
+// uploadBundle ships the embedded JS bundle (index.js) to the router
+// via a one-shot raw channel marked Kind=bundle. The router caches
+// the bytes per-instance and replays them to every (re)attaching
+// shell — replacing the old base64-in-JSON asset.fetch / asset.deliver
+// pipeline.
+//
+// Called from sdk.Main in a goroutine after handshake. No-op if the
+// app has no embedded assets (e.g. tests that pass a nil Assets).
+func (c *Conn) uploadBundle() error {
 	if c.def.Assets == nil {
-		return c.writeCtrl(wire.NewAssetReadErr(req.ID, wire.ErrCodeNotFound, "app has no embedded assets"))
+		return nil
 	}
-	data, mtype, err := readAsset(c.def.Assets, req.Name)
+	data, err := readBundleBytes(c.def.Assets)
 	if err != nil {
-		return c.writeCtrl(wire.NewAssetReadErr(req.ID, wire.ErrCodeNotFound, err.Error()))
+		return fmt.Errorf("read bundle: %w", err)
 	}
-	if err := c.writeCtrl(wire.NewAssetReadOK(req.ID, int64(len(data)), mtype)); err != nil {
-		return err
+	if len(data) == 0 {
+		return nil
 	}
-	// Chunked base64.
-	for off := 0; off < len(data) || off == 0; {
-		end := off + assetChunkBytes
+	ch, err := c.openChannelKind(context.Background(), c.windowID, bundleChannelKind)
+	if err != nil {
+		return fmt.Errorf("open bundle channel: %w", err)
+	}
+	// Chunk on app→router side too, mostly to keep the per-frame
+	// memory copy small.
+	const chunkSize = 256 * 1024
+	for off := 0; off < len(data); off += chunkSize {
+		end := off + chunkSize
 		if end > len(data) {
 			end = len(data)
 		}
-		b64 := base64.StdEncoding.EncodeToString(data[off:end])
-		last := end == len(data)
-		if err := c.writeCtrl(wire.NewAssetData(req.ID, b64, last)); err != nil {
-			return err
+		if _, werr := ch.Write(data[off:end]); werr != nil {
+			_ = ch.Close()
+			return fmt.Errorf("write bundle: %w", werr)
 		}
-		if last {
-			return nil
-		}
-		off = end
 	}
-	return nil
+	return ch.Close()
 }
 
-// readAsset reads name from fsys and returns the bytes plus a MIME
-// type derived from the extension. Backed by io/fs so apps can pass
-// an embed.FS, an os.DirFS, or anything else.
-func readAsset(fsys fs.FS, name string) ([]byte, string, error) {
-	f, err := fsys.Open(name)
+// bundleChannelKind mirrors wire.ChannelKindBundle — imported as a
+// constant here so callers don't have to reach into wire.
+const bundleChannelKind = "bundle"
+
+// readBundleBytes loads index.js from the app's embedded fs.
+func readBundleBytes(fsys fs.FS) ([]byte, error) {
+	f, err := fsys.Open("index.js")
 	if err != nil {
-		return nil, "", fmt.Errorf("open %s: %w", name, err)
+		return nil, err
 	}
 	defer f.Close()
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return nil, "", fmt.Errorf("read %s: %w", name, err)
-	}
-	mtype := mime.TypeByExtension(filepath.Ext(name))
-	if mtype == "" {
-		mtype = "application/octet-stream"
-	}
-	return data, mtype, nil
+	return io.ReadAll(f)
 }
