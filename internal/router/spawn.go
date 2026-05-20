@@ -24,11 +24,16 @@ func Spawn(binary, appID, instanceID string, extraEnv []string) (*exec.Cmd, *os.
 
 	cmd := exec.Command(binary)
 	cmd.ExtraFiles = []*os.File{child}
-	cmd.Env = append([]string{
+	// Apps inherit the router's environment (HOME, PATH, $SHELL, …)
+	// so a terminal can run real shell sessions and a launched
+	// program can find its own files. The wash-specific env vars
+	// are layered on top. Probe.go uses its own stripped env.
+	cmd.Env = append(os.Environ(),
 		"WASH_PROTO=1",
-		"WASH_APP_ID=" + appID,
-		"WASH_INSTANCE_ID=" + instanceID,
-	}, extraEnv...)
+		"WASH_APP_ID="+appID,
+		"WASH_INSTANCE_ID="+instanceID,
+	)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 

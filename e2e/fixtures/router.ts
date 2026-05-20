@@ -22,9 +22,14 @@ const SESSION_BIN = join(REPO_ROOT, 'out', 'wash-session');
 const ABOUT_BIN = join(REPO_ROOT, 'out', 'wash-about');
 const TEST_BIN = join(REPO_ROOT, 'out', 'wash-test');
 const TERM_BIN = join(REPO_ROOT, 'out', 'wash-term');
+const LAUNCH_BIN = join(REPO_ROOT, 'out', 'wash-launch');
 
 export interface RouterHandle {
   url: string;
+  /** absolute path to wash-launch on this host (for tests that invoke it from a shell) */
+  launchBin: string;
+  /** the control socket path this router was started with */
+  controlSocket: string;
   log(): string;
   waitForLog(pattern: RegExp, timeout?: number): Promise<string>;
   proc: ChildProcess;
@@ -69,7 +74,7 @@ function stageApps(binaries: string[]): string {
 }
 
 export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandle> {
-  for (const b of [ROUTER_BIN, SESSION_BIN, ABOUT_BIN, TEST_BIN, TERM_BIN]) {
+  for (const b of [ROUTER_BIN, SESSION_BIN, ABOUT_BIN, TEST_BIN, TERM_BIN, LAUNCH_BIN]) {
     if (!existsSync(b)) {
       throw new Error(`missing binary: ${b}\n(make TEST_APP=1 from the repo root)`);
     }
@@ -83,7 +88,17 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   const appsDir = stageApps(bins);
 
   const port = await freePort();
-  const args = ['--listen', `127.0.0.1:${port}`, '--apps-dir', appsDir];
+  // Each test gets its own control-socket path so concurrent test
+  // runs don't trample each other.
+  const controlSocket = join(appsDir, 'control.sock');
+  const args = [
+    '--listen',
+    `127.0.0.1:${port}`,
+    '--apps-dir',
+    appsDir,
+    '--control-socket',
+    controlSocket,
+  ];
   if (opts.kiosk) {
     args.push('--no-session', `--initial-app=${opts.kiosk}`);
   }
@@ -114,6 +129,8 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
 
   return {
     url: `http://127.0.0.1:${port}/`,
+    launchBin: LAUNCH_BIN,
+    controlSocket,
     log: () => logBuf,
     waitForLog: (re, timeout = 5_000) => waitForRegex(() => logBuf, re, timeout),
     proc,

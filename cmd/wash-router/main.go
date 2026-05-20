@@ -67,6 +67,7 @@ func main() {
 	noSession := flag.Bool("no-session", false, "do not spawn the session app (kiosk / e2e)")
 	initialApp := flag.String("initial-app", "", "spawn this app full-screen on first shell connect (kiosk)")
 	showHidden := flag.Bool("show-hidden", false, "include manifest.hidden apps in the catalog (e2e / debug)")
+	controlSocket := flag.String("control-socket", "", "Unix socket for wash-launch (default: /tmp/wash-<uid>.sock; \"none\" disables)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -75,13 +76,22 @@ func main() {
 		return
 	}
 
+	cs := *controlSocket
+	if cs == "" {
+		cs = fmt.Sprintf("/tmp/wash-%d.sock", os.Getuid())
+	}
+	if cs == "none" {
+		cs = ""
+	}
+
 	cfg := router.Config{
-		Listen:       firstNonEmpty(*listen, os.Getenv("WASH_LISTEN"), defaultListen),
-		AppsDirs:     router.SplitAppsDir(firstNonEmpty(*appsDir, os.Getenv("WASH_APPS_DIR"), defaultAppsDir())),
-		SessionAppID: firstNonEmpty(*sessionID, os.Getenv("WASH_SESSION_APP_ID"), defaultSessionAppID),
-		NoSession:    *noSession,
-		InitialAppID: *initialApp,
-		ShowHidden:   *showHidden,
+		Listen:        firstNonEmpty(*listen, os.Getenv("WASH_LISTEN"), defaultListen),
+		AppsDirs:      router.SplitAppsDir(firstNonEmpty(*appsDir, os.Getenv("WASH_APPS_DIR"), defaultAppsDir())),
+		SessionAppID:  firstNonEmpty(*sessionID, os.Getenv("WASH_SESSION_APP_ID"), defaultSessionAppID),
+		NoSession:     *noSession,
+		InitialAppID:  *initialApp,
+		ShowHidden:    *showHidden,
+		ControlSocket: cs,
 	}
 
 	logger := log.New(os.Stderr, "wash-router ", log.LstdFlags|log.Lmsgprefix)
@@ -129,6 +139,13 @@ func main() {
 	defer cancel()
 
 	logf("listening on %s (apps dirs: %s; session: %s)", cfg.Listen, strings.Join(cfg.AppsDirs, ":"), cfg.SessionAppID)
+	if cfg.ControlSocket != "" {
+		go func() {
+			if err := r.ListenControl(ctx); err != nil {
+				logf("control socket: %v", err)
+			}
+		}()
+	}
 
 	if err := srv.Run(ctx); err != nil {
 		logger.Fatalf("http: %v", err)

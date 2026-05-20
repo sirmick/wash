@@ -36,6 +36,13 @@ type Config struct {
 	// the shell sees. Off by default — used by e2e tests and
 	// debugging to surface the test app in the chrome launcher.
 	ShowHidden bool
+
+	// ControlSocket is the Unix-socket path the router listens on for
+	// the wash-launch CLI and similar tools. Empty disables. The
+	// router exports this as WASH_CONTROL_SOCKET in the env of every
+	// app it spawns, so children (including shells in wash-term) can
+	// invoke launches without re-discovering it.
+	ControlSocket string
 }
 
 // Logger is a minimal sink; cmd/wash-router supplies a real one.
@@ -148,6 +155,16 @@ func (r *Router) allocChannelID() uint32 {
 	return r.nextChannel.Add(1) + 1
 }
 
+// spawnEnv builds the env additions every spawned app receives on top
+// of the router's process environment.
+func (r *Router) spawnEnv() []string {
+	var env []string
+	if r.cfg.ControlSocket != "" {
+		env = append(env, "WASH_CONTROL_SOCKET="+r.cfg.ControlSocket)
+	}
+	return env
+}
+
 // channelBinding is a router-side raw channel — paired writers on
 // each transport plus enough state to clean up when either end goes
 // away. Bytes on channel id ChannelID flow app ↔ shell verbatim.
@@ -202,6 +219,59 @@ func (r *Router) closeChannelsForApp(inst *AppInstance, reason string) {
 	for _, id := range ids {
 		r.closeChannel(id, reason)
 	}
+}
+
+// spawnAndRun spawns the given app, runs its handshake, registers it,
+// declares it to attached shells, sends the initial mapped event for
+// windowed apps, and runs the app's frame loop in a goroutine. The
+// goroutine handles cleanup on exit (close channels, unregister, tell
+// shells the window is gone, reap the process).
+//
+// All three caller paths — spawn.request from an app, the control
+// socket, and the initial / session bootstraps — go through here.
+func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*AppInstance, error) {
+	cmd, parent, err := Spawn(entry.Path, entry.Manifest.ID, "", r.spawnEnv())
+	if err != nil {
+		return nil, fmt.Errorf("spawn %s: %w", entry.Manifest.ID, err)
+	}
+	transport := NewStreamTransport(parent)
+	inst := &AppInstance{
+		Transport: transport,
+		AppID:     entry.Manifest.ID,
+		Manifest:  entry.Manifest,
+		Cmd:       cmd,
+		Kiosk:     kiosk,
+		router:    r,
+		pending:   make(map[uint64]*pendingAsset),
+	}
+	if err := inst.handshake(ctx); err != nil {
+		_ = transport.Close()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, fmt.Errorf("handshake %s: %w", entry.Manifest.ID, err)
+	}
+	r.registerApp(inst)
+	if err := r.declareAppToAllShells(ctx, inst); err != nil {
+		r.log("declare: %v", err)
+	}
+	if inst.WindowID != 0 {
+		_ = inst.WriteEvt(wire.NewEvtWindowMapped(inst.WindowID))
+	}
+	go func() {
+		if err := inst.loop(context.Background()); err != nil {
+			r.log("app %s loop: %v", inst.AppID, err)
+		}
+		r.unregisterApp(inst)
+		r.closeChannelsForApp(inst, "app exited")
+		if inst.WindowID != 0 {
+			for _, s := range r.shellList() {
+				_ = s.WriteCtrl(wire.NewShellWindowDestroy(inst.WindowID))
+			}
+		}
+		_ = transport.Close()
+		_ = cmd.Wait()
+	}()
+	return inst, nil
 }
 
 // closeChannelsForWindow tears down every channel rooted at the given

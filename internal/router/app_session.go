@@ -414,58 +414,15 @@ func (inst *AppInstance) handleSpawnRequest(m wire.EvtSpawnRequest) error {
 
 // spawnChild execs target and runs HandleApp on the resulting transport.
 // On success, sends EvtSpawnOk to the requester; on failure,
-// EvtSpawnErr.
+// EvtSpawnErr. Backed by the shared spawnAndRun.
 func (r *Router) spawnChild(target *Entry, requester *AppInstance) {
-	cmd, parent, err := Spawn(target.Path, target.Manifest.ID, "", nil)
+	inst, err := r.spawnAndRun(context.Background(), target, false)
 	if err != nil {
 		r.log("spawn %s: %v", target.Manifest.ID, err)
 		_ = requester.WriteEvt(wire.NewEvtSpawnErr(target.Manifest.ID, wire.ErrCodeInternal, err.Error()))
 		return
 	}
-	t := NewStreamTransport(parent)
-	// We need the new instance's id before reporting success. Spawn
-	// the HandleApp goroutine and have it signal back. The simplest
-	// scheme: do handshake here synchronously to get the instance id,
-	// then hand off to a loop goroutine.
-	inst := &AppInstance{
-		Transport: t,
-		AppID:     target.Manifest.ID,
-		Manifest:  target.Manifest,
-		Cmd:       cmd,
-		router:    r,
-		pending:   make(map[uint64]*pendingAsset),
-	}
-	if err := inst.handshake(context.Background()); err != nil {
-		_ = t.Close()
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		r.log("spawn handshake %s: %v", target.Manifest.ID, err)
-		_ = requester.WriteEvt(wire.NewEvtSpawnErr(target.Manifest.ID, wire.ErrCodeInternal, err.Error()))
-		return
-	}
-	r.registerApp(inst)
-	if err := r.declareAppToAllShells(context.Background(), inst); err != nil {
-		r.log("declare: %v", err)
-	}
-	if inst.WindowID != 0 {
-		_ = inst.WriteEvt(wire.NewEvtWindowMapped(inst.WindowID))
-	}
 	_ = requester.WriteEvt(wire.NewEvtSpawnOk(target.Manifest.ID, inst.InstanceID))
-	// Run the loop until the child exits.
-	go func() {
-		err := inst.loop(context.Background())
-		if err != nil {
-			r.log("app %s loop: %v", inst.AppID, err)
-		}
-		r.unregisterApp(inst)
-		if inst.WindowID != 0 {
-			for _, s := range r.shellList() {
-				_ = s.WriteCtrl(wire.NewShellWindowDestroy(inst.WindowID))
-			}
-		}
-		_ = t.Close()
-		_ = cmd.Wait()
-	}()
 }
 
 // requestClose initiates the X-style close handshake (WIRE.md §10).

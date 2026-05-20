@@ -14,7 +14,7 @@ GOARCH  ?= amd64
 GOFLAGS := -trimpath -ldflags=-s\ -w -tags netgo,osusergo
 
 OUT     := out
-BINS    := wash-router wash-session wash-about wash-term
+BINS    := wash-router wash-session wash-about wash-term wash-launch
 TARGETS := $(addprefix $(OUT)/,$(BINS))
 
 # Test app: not part of the default build; built explicitly with
@@ -123,6 +123,10 @@ $(OUT)/wash-test: $(TEST_STAMP) | $(OUT)
 
 $(OUT)/wash-term: $(TERM_STAMP) | $(OUT)
 	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-term
+
+# wash-launch is a CLI, not an app. No FE bundle, no embedded assets.
+$(OUT)/wash-launch: | $(OUT)
+	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-launch
 
 # Convenience target: build the test app + everything else.
 .PHONY: test-app
