@@ -2,7 +2,8 @@
 // shadow-DOM-free slot (the element itself owns Shadow DOM); the
 // frame owns titlebar, drag, focus-raise, and close.
 
-import { onMount } from 'solid-js';
+import { onCleanup, onMount } from 'solid-js';
+import { registerMountedElement, unregisterMountedElement } from './api';
 import { focused, move, raise, removeWindow, Win } from './wm';
 
 export interface WindowProps {
@@ -17,6 +18,14 @@ export function FloatingWindow(props: WindowProps) {
     const el = document.createElement(props.win.element);
     el.setAttribute('data-wash-instance', props.win.instanceID);
     slot.appendChild(el);
+    // Register with the BE→FE message dispatcher; any messages that
+    // arrived during the render gap are flushed here.
+    registerMountedElement(props.win.instanceID, el);
+    // Tell the router the window has focus so the BE sees it.
+    window.wash.focusWindow(props.win.windowID);
+  });
+  onCleanup(() => {
+    unregisterMountedElement(props.win.instanceID);
   });
 
   const onTitlebarPointerDown = (ev: PointerEvent) => {

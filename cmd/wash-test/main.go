@@ -85,14 +85,19 @@ func onUnfocus(c *sdk.Conn, win uint32) {
 
 // onCloseRequested honors the veto-next-close flag (single-shot — the
 // flag is cleared after one use, so a second close click still
-// dismisses the window).
+// dismisses the window). On consumption, the FE is told via a
+// veto_changed event so its UI mirrors the BE's source of truth.
 func onCloseRequested(c *sdk.Conn, win uint32) bool {
 	st.mu.Lock()
-	allow := !st.vetoNextClose
+	wasVeto := st.vetoNextClose
 	st.vetoNextClose = false
-	st.closeReqAllow = allow
+	st.closeReqAllow = !wasVeto
 	st.mu.Unlock()
+	allow := !wasVeto
 	log.Printf("wash-test close_requested win=%d allow=%v", win, allow)
+	if wasVeto {
+		sendEvent(c, map[string]any{"kind": "event", "type": "veto_changed", "on": false})
+	}
 	sendEvent(c, map[string]any{"kind": "event", "type": "close_requested", "win": win, "allow": allow})
 	return allow
 }
@@ -150,6 +155,7 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		st.vetoNextClose = on
 		st.mu.Unlock()
 		log.Printf("wash-test veto_next_close=%v", on)
+		sendEvent(c, map[string]any{"kind": "event", "type": "veto_changed", "on": on})
 	case "spawn":
 		appID, _ := m["app_id"].(string)
 		if appID != "" {

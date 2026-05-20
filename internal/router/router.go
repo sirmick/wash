@@ -31,6 +31,11 @@ type Config struct {
 	// of, or alongside, the session). Its FE element mounts at the
 	// root surface regardless of its manifest's declared surface.
 	InitialAppID string
+
+	// ShowHidden includes apps marked manifest.Hidden in the catalog
+	// the shell sees. Off by default — used by e2e tests and
+	// debugging to surface the test app in the chrome launcher.
+	ShowHidden bool
 }
 
 // Logger is a minimal sink; cmd/wash-router supplies a real one.
@@ -97,7 +102,7 @@ func (r *Router) catalog() []wire.ShellCatalogApp {
 		if e.Manifest.Surface == SurfaceDesktop {
 			continue
 		}
-		if e.Manifest.Hidden {
+		if e.Manifest.Hidden && !r.cfg.ShowHidden {
 			continue
 		}
 		out = append(out, wire.ShellCatalogApp{

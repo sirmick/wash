@@ -66,6 +66,7 @@ func main() {
 	sessionID := flag.String("session-app-id", "", "id of the desktop-surface app (overrides WASH_SESSION_APP_ID)")
 	noSession := flag.Bool("no-session", false, "do not spawn the session app (kiosk / e2e)")
 	initialApp := flag.String("initial-app", "", "spawn this app full-screen on first shell connect (kiosk)")
+	showHidden := flag.Bool("show-hidden", false, "include manifest.hidden apps in the catalog (e2e / debug)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -80,6 +81,7 @@ func main() {
 		SessionAppID: firstNonEmpty(*sessionID, os.Getenv("WASH_SESSION_APP_ID"), defaultSessionAppID),
 		NoSession:    *noSession,
 		InitialAppID: *initialApp,
+		ShowHidden:   *showHidden,
 	}
 
 	logger := log.New(os.Stderr, "wash-router ", log.LstdFlags|log.Lmsgprefix)

@@ -51,3 +51,41 @@ export class Sub<T> {
     };
   }
 }
+
+// mountedElements tracks the live custom element for each declared
+// instance id. registerMountedElement is called from Desktop /
+// FloatingWindow once an element is in the DOM; deliverToInstance
+// queues messages that arrive before the element mounts so nothing is
+// dropped during the race between addWindow and Solid's onMount.
+const mountedElements = new Map<string, HTMLElement>();
+const pendingMessages = new Map<string, unknown[]>();
+
+export function registerMountedElement(instanceID: string, el: HTMLElement): void {
+  mountedElements.set(instanceID, el);
+  const q = pendingMessages.get(instanceID);
+  if (q) {
+    pendingMessages.delete(instanceID);
+    for (const data of q) {
+      el.dispatchEvent(new CustomEvent('wash:msg', { detail: data, bubbles: false }));
+    }
+  }
+}
+
+export function unregisterMountedElement(instanceID: string): void {
+  mountedElements.delete(instanceID);
+  pendingMessages.delete(instanceID);
+}
+
+export function deliverToInstance(instanceID: string, data: unknown): void {
+  const el = mountedElements.get(instanceID);
+  if (el) {
+    el.dispatchEvent(new CustomEvent('wash:msg', { detail: data, bubbles: false }));
+    return;
+  }
+  let q = pendingMessages.get(instanceID);
+  if (!q) {
+    q = [];
+    pendingMessages.set(instanceID, q);
+  }
+  q.push(data);
+}

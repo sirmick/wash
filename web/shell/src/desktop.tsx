@@ -3,6 +3,7 @@
 // windows are absolutely positioned on top.
 
 import { createEffect } from 'solid-js';
+import { registerMountedElement, unregisterMountedElement } from './api';
 import { desktop } from './wm';
 
 export function Desktop() {
@@ -12,18 +13,22 @@ export function Desktop() {
   createEffect(() => {
     const d = desktop();
     if (!d) {
-      // teardown if the desktop instance went away
+      if (mountedFor) {
+        unregisterMountedElement(mountedFor);
+      }
       host.replaceChildren();
       mountedFor = null;
       return;
     }
     if (mountedFor === d.instanceID) return;
+    if (mountedFor) {
+      unregisterMountedElement(mountedFor);
+    }
     host.replaceChildren();
     const el = document.createElement(d.element);
-    // Tell the app's element which instance it is so it can address
-    // its BE half via window.wash.sendAppMsg.
     el.setAttribute('data-wash-instance', d.instanceID);
     host.appendChild(el);
+    registerMountedElement(d.instanceID, el);
     mountedFor = d.instanceID;
   });
 

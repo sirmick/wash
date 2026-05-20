@@ -16,7 +16,7 @@ import {
 } from './wm';
 import { Desktop } from './desktop';
 import { FloatingWindow } from './window';
-import { CatalogApp, Sub, WindowInfo } from './api';
+import { CatalogApp, Sub, WindowInfo, deliverToInstance } from './api';
 
 interface ShellCatalog {
   t: 'catalog';
@@ -69,6 +69,13 @@ interface ShellAppMsgDeliver {
 // Track declared instances so window.create can resolve element by id.
 const instances = new Map<string, { element: string; surface: string }>();
 
+// bundleReady is the promise that resolves once an instance's bundle
+// has been imported (and customElements.define has run). The
+// router can race ShellWindowCreate ahead of the bundle finishing,
+// so handleWindowCreate must wait — otherwise document.createElement
+// produces an HTMLUnknownElement and connectedCallback never fires.
+const bundleReady = new Map<string, Promise<void>>();
+
 // Reactive subs the chrome (mounted via window.wash) listens to.
 const catalogSub = new Sub<CatalogApp[]>([]);
 const windowsSub = new Sub<WindowInfo[]>([]);
@@ -104,16 +111,11 @@ const conn = new Conn(wsURL(), (msg) => {
   }
 });
 
-// deliverAppMsg dispatches a BE→FE message as a CustomEvent on the
-// mounted element with the matching data-wash-instance.
+// deliverAppMsg routes a BE→FE message to its element, queuing if the
+// element hasn't mounted yet (Solid's onMount can run after the next
+// WS message is processed).
 function deliverAppMsg(msg: ShellAppMsgDeliver) {
-  const sel = `[data-wash-instance="${CSS.escape(msg.instance_id)}"]`;
-  const el = document.querySelector(sel);
-  if (!el) {
-    console.warn('wash: app_msg.deliver for unmounted instance', msg.instance_id);
-    return;
-  }
-  el.dispatchEvent(new CustomEvent('wash:msg', { detail: msg.data, bubbles: false }));
+  deliverToInstance(msg.instance_id, msg.data);
 }
 
 // Mirror Solid's windows store into the cross-element Sub so vanilla
@@ -134,17 +136,16 @@ createEffect(() => {
 
 function handleAppDeclared(msg: ShellAppDeclared): void {
   instances.set(msg.instance_id, { element: msg.element, surface: msg.surface });
+  const p = fetchAndImport(conn.sendCtrl.bind(conn), msg.instance_id, 'index.js');
+  bundleReady.set(msg.instance_id, p);
   if (msg.surface === 'desktop') {
-    // Fetch the bundle, then mount.
-    fetchAndImport(conn.sendCtrl.bind(conn), msg.instance_id, 'index.js')
-      .then(() => mountDesktop({ instanceID: msg.instance_id, element: msg.element }))
-      .catch((err) => console.error('wash: desktop bundle:', err));
-  } else {
-    // surface=window: wait for window.create, but pre-fetch the bundle.
-    fetchAndImport(conn.sendCtrl.bind(conn), msg.instance_id, 'index.js').catch((err) =>
-      console.error('wash: window bundle:', err),
+    p.then(() => mountDesktop({ instanceID: msg.instance_id, element: msg.element })).catch((err) =>
+      console.error('wash: desktop bundle:', err),
     );
   }
+  // For surface=window, handleWindowCreate awaits bundleReady before
+  // adding the window so the custom element class is defined by the
+  // time onMount runs createElement.
 }
 
 function handleWindowCreate(msg: ShellWindowCreate): void {
@@ -153,14 +154,17 @@ function handleWindowCreate(msg: ShellWindowCreate): void {
     console.warn('wash: window.create for unknown instance', msg.instance_id);
     return;
   }
-  addWindow({
-    windowID: msg.window_id,
-    instanceID: msg.instance_id,
-    element: inst.element,
-    title: msg.title || 'wash',
-    w: msg.w || 480,
-    h: msg.h || 320,
-  });
+  const p = bundleReady.get(msg.instance_id) ?? Promise.resolve();
+  p.then(() => {
+    addWindow({
+      windowID: msg.window_id,
+      instanceID: msg.instance_id,
+      element: inst.element,
+      title: msg.title || 'wash',
+      w: msg.w || 480,
+      h: msg.h || 320,
+    });
+  }).catch((err) => console.error('wash: window mount blocked on bundle:', err));
 }
 
 // Bridge a window's close-button click into the WS protocol.

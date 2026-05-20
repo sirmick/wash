@@ -34,6 +34,8 @@ export interface RouterOptions {
   kiosk?: string;
   /** include these binaries in the apps dir; defaults to all three. */
   apps?: ('session' | 'about' | 'test')[];
+  /** include manifest.hidden apps in the catalog. */
+  showHidden?: boolean;
   /** extra wash-router args. */
   extraArgs?: string[];
 }
@@ -82,6 +84,9 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   const args = ['--listen', `127.0.0.1:${port}`, '--apps-dir', appsDir];
   if (opts.kiosk) {
     args.push('--no-session', `--initial-app=${opts.kiosk}`);
+  }
+  if (opts.showHidden) {
+    args.push('--show-hidden');
   }
   if (opts.extraArgs) args.push(...opts.extraArgs);
 

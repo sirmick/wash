@@ -230,6 +230,11 @@ class WashAppTest extends HTMLElement {
           case 'spawn_err':
             this.logEvent('spawn_err', `${m.app_id} ${m.code}: ${m.msg}`);
             break;
+          case 'veto_changed':
+            this.state.vetoNextClose = !!m.on;
+            this.set('veto-next-close', m.on ? 'on' : 'off');
+            this.logEvent('veto_changed', m.on ? 'on' : 'off');
+            break;
           default:
             this.logEvent(type);
         }
