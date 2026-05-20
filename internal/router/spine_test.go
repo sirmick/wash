@@ -5,68 +5,14 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/internal/wiretest"
 )
 
-// pipePair is an in-memory FrameTransport pair used to drive the
-// router in tests without sockets — the same plumbing used by the
-// loopback spine test in commit C8.
-type pipePair struct {
-	aToB chan wire.Frame
-	bToA chan wire.Frame
-	done chan struct{}
-	once sync.Once
-}
-
-func newPipePair() *pipePair {
-	return &pipePair{
-		aToB: make(chan wire.Frame, 32),
-		bToA: make(chan wire.Frame, 32),
-		done: make(chan struct{}),
-	}
-}
-
-func (p *pipePair) closeBoth() { p.once.Do(func() { close(p.done) }) }
-
-type pipeEnd struct {
-	in  <-chan wire.Frame
-	out chan<- wire.Frame
-	pp  *pipePair
-}
-
-func (e *pipeEnd) ReadFrame() (wire.Frame, error) {
-	select {
-	case f := <-e.in:
-		return f, nil
-	case <-e.pp.done:
-		return wire.Frame{}, io.EOF
-	}
-}
-
-func (e *pipeEnd) WriteFrame(f wire.Frame) error {
-	select {
-	case e.out <- f:
-		return nil
-	case <-e.pp.done:
-		return io.ErrClosedPipe
-	}
-}
-
-func (e *pipeEnd) Close() error {
-	e.pp.closeBoth()
-	return nil
-}
-
-func (p *pipePair) endA() *pipeEnd { return &pipeEnd{in: p.bToA, out: p.aToB, pp: p} }
-func (p *pipePair) endB() *pipeEnd { return &pipeEnd{in: p.aToB, out: p.bToA, pp: p} }
-
-// helpers for fake app/shell sides ---------------------------------
-
-func readCtrl(t *testing.T, e *pipeEnd) any {
+func readCtrl(t *testing.T, e wire.FrameTransport) any {
 	t.Helper()
 	f, err := e.ReadFrame()
 	if err != nil {
@@ -82,7 +28,7 @@ func readCtrl(t *testing.T, e *pipeEnd) any {
 	return m
 }
 
-func writeCtrl(t *testing.T, e *pipeEnd, m any) {
+func writeCtrl(t *testing.T, e wire.FrameTransport, m any) {
 	t.Helper()
 	b, err := wire.EncodeCtrl(m)
 	if err != nil {
@@ -121,25 +67,25 @@ func TestHandshakeAndAssetPull(t *testing.T) {
 		t.Logf("router: "+format, args...)
 	})
 
-	appPair := newPipePair()
-	shellPair := newPipePair()
+	appPair := wiretest.NewPipePair()
+	shellPair := wiretest.NewPipePair()
 
 	manifest := aboutManifest()
 	appDone := make(chan struct{})
 	go func() {
 		defer close(appDone)
-		_ = r.HandleApp(context.Background(), appPair.endA(), manifest, nil)
+		_ = r.HandleApp(context.Background(), appPair.EndA(), manifest, nil)
 	}()
 
 	shellDone := make(chan struct{})
 	go func() {
 		defer close(shellDone)
-		_ = r.HandleShell(context.Background(), shellPair.endA())
+		_ = r.HandleShell(context.Background(), shellPair.EndA())
 	}()
 
 	// App side: send Identity, expect IdentityAck.
-	writeCtrl(t, appPair.endB(), wire.NewIdentity("com.wash.about", 1, "0.0.0"))
-	ack, ok := readCtrl(t, appPair.endB()).(wire.IdentityAck)
+	writeCtrl(t, appPair.EndB(), wire.NewIdentity("com.wash.about", 1, "0.0.0"))
+	ack, ok := readCtrl(t, appPair.EndB()).(wire.IdentityAck)
 	if !ok {
 		t.Fatalf("expected IdentityAck")
 	}
@@ -151,14 +97,14 @@ func TestHandshakeAndAssetPull(t *testing.T) {
 	}
 
 	// Shell side: expect ShellAppDeclared then ShellWindowCreate.
-	declared, ok := readCtrl(t, shellPair.endB()).(wire.ShellAppDeclared)
+	declared, ok := readCtrl(t, shellPair.EndB()).(wire.ShellAppDeclared)
 	if !ok {
 		t.Fatalf("expected ShellAppDeclared")
 	}
 	if declared.InstanceID != ack.InstanceID || declared.Surface != SurfaceWindow {
 		t.Fatalf("declared mismatch: %+v", declared)
 	}
-	winCreate, ok := readCtrl(t, shellPair.endB()).(wire.ShellWindowCreate)
+	winCreate, ok := readCtrl(t, shellPair.EndB()).(wire.ShellWindowCreate)
 	if !ok {
 		t.Fatalf("expected ShellWindowCreate")
 	}
@@ -167,7 +113,7 @@ func TestHandshakeAndAssetPull(t *testing.T) {
 	}
 
 	// App side: expect EvtWindowMapped on channel 1.
-	if f, err := appPair.endB().ReadFrame(); err != nil {
+	if f, err := appPair.EndB().ReadFrame(); err != nil {
 		t.Fatalf("read mapped: %v", err)
 	} else if f.Channel != ChannelEvent {
 		t.Fatalf("mapped on channel %d", f.Channel)
@@ -183,10 +129,10 @@ func TestHandshakeAndAssetPull(t *testing.T) {
 	}
 
 	// Shell side: send ShellAssetFetch.
-	writeCtrl(t, shellPair.endB(), wire.NewShellAssetFetch(ack.InstanceID, "index.js"))
+	writeCtrl(t, shellPair.EndB(), wire.NewShellAssetFetch(ack.InstanceID, "index.js"))
 
 	// App side: should receive AssetRead.
-	readMsg := readCtrl(t, appPair.endB())
+	readMsg := readCtrl(t, appPair.EndB())
 	read, ok := readMsg.(wire.AssetRead)
 	if !ok {
 		t.Fatalf("expected AssetRead, got %T (%v)", readMsg, readMsg)
@@ -196,12 +142,12 @@ func TestHandshakeAndAssetPull(t *testing.T) {
 	}
 
 	// App side: reply with AssetReadOK + AssetData(end=true).
-	writeCtrl(t, appPair.endB(), wire.NewAssetReadOK(read.ID, 5, "application/javascript"))
+	writeCtrl(t, appPair.EndB(), wire.NewAssetReadOK(read.ID, 5, "application/javascript"))
 	body := base64.StdEncoding.EncodeToString([]byte("hello"))
-	writeCtrl(t, appPair.endB(), wire.NewAssetData(read.ID, body, true))
+	writeCtrl(t, appPair.EndB(), wire.NewAssetData(read.ID, body, true))
 
 	// Shell side: expect ShellAssetDeliver.
-	delivered, ok := readCtrl(t, shellPair.endB()).(wire.ShellAssetDeliver)
+	delivered, ok := readCtrl(t, shellPair.EndB()).(wire.ShellAssetDeliver)
 	if !ok {
 		t.Fatalf("expected ShellAssetDeliver")
 	}
@@ -213,8 +159,8 @@ func TestHandshakeAndAssetPull(t *testing.T) {
 	}
 
 	// Tear down by closing the app side; router will exit HandleApp.
-	appPair.closeBoth()
-	shellPair.closeBoth()
+	appPair.Close()
+	shellPair.Close()
 	waitClose(t, appDone)
 	waitClose(t, shellDone)
 }
@@ -224,16 +170,16 @@ func TestHandshakeAndAssetPull(t *testing.T) {
 func TestHandshakeRejectsBadAppID(t *testing.T) {
 	reg := NewRegistry()
 	r := NewRouter(Config{}, reg, nil)
-	pp := newPipePair()
+	pp := wiretest.NewPipePair()
 	manifest := aboutManifest()
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- r.HandleApp(context.Background(), pp.endA(), manifest, nil) }()
+	go func() { errCh <- r.HandleApp(context.Background(), pp.EndA(), manifest, nil) }()
 
-	writeCtrl(t, pp.endB(), wire.NewIdentity("com.evil.imposter", 1, "0.0.0"))
+	writeCtrl(t, pp.EndB(), wire.NewIdentity("com.evil.imposter", 1, "0.0.0"))
 
 	// Router will close after sending Error. Drain.
-	msg := readCtrl(t, pp.endB())
+	msg := readCtrl(t, pp.EndB())
 	if e, ok := msg.(wire.Error); !ok || e.Code != wire.ErrCodeBadIdentity {
 		t.Fatalf("expected bad_identity error, got %+v", msg)
 	}
@@ -253,15 +199,15 @@ func TestHandshakeRejectsBadAppID(t *testing.T) {
 func TestHandshakeRejectsBadProto(t *testing.T) {
 	reg := NewRegistry()
 	r := NewRouter(Config{}, reg, nil)
-	pp := newPipePair()
+	pp := wiretest.NewPipePair()
 	manifest := aboutManifest()
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- r.HandleApp(context.Background(), pp.endA(), manifest, nil) }()
+	go func() { errCh <- r.HandleApp(context.Background(), pp.EndA(), manifest, nil) }()
 
-	writeCtrl(t, pp.endB(), wire.NewIdentity("com.wash.about", 99, "0.0.0"))
+	writeCtrl(t, pp.EndB(), wire.NewIdentity("com.wash.about", 99, "0.0.0"))
 
-	msg := readCtrl(t, pp.endB())
+	msg := readCtrl(t, pp.EndB())
 	if e, ok := msg.(wire.Error); !ok || e.Code != wire.ErrCodeProtoMismatch {
 		t.Fatalf("expected proto_mismatch error, got %+v", msg)
 	}

@@ -3,65 +3,16 @@ package sdk
 import (
 	"context"
 	"encoding/base64"
-	"io"
 	"strings"
-	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
 
 	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/internal/wiretest"
 )
 
-// In-memory pipe pair; duplicated from router/spine_test.go until the
-// loopback consolidation in C8.
-type pipePair struct {
-	aToB chan wire.Frame
-	bToA chan wire.Frame
-	done chan struct{}
-	once sync.Once
-}
-
-func newPipePair() *pipePair {
-	return &pipePair{
-		aToB: make(chan wire.Frame, 32),
-		bToA: make(chan wire.Frame, 32),
-		done: make(chan struct{}),
-	}
-}
-
-func (p *pipePair) closeBoth() { p.once.Do(func() { close(p.done) }) }
-
-type pipeEnd struct {
-	in  <-chan wire.Frame
-	out chan<- wire.Frame
-	pp  *pipePair
-}
-
-func (e *pipeEnd) ReadFrame() (wire.Frame, error) {
-	select {
-	case f := <-e.in:
-		return f, nil
-	case <-e.pp.done:
-		return wire.Frame{}, io.EOF
-	}
-}
-func (e *pipeEnd) WriteFrame(f wire.Frame) error {
-	select {
-	case e.out <- f:
-		return nil
-	case <-e.pp.done:
-		return io.ErrClosedPipe
-	}
-}
-func (e *pipeEnd) Close() error {
-	e.pp.closeBoth()
-	return nil
-}
-func (p *pipePair) endA() *pipeEnd { return &pipeEnd{in: p.bToA, out: p.aToB, pp: p} }
-func (p *pipePair) endB() *pipeEnd { return &pipeEnd{in: p.aToB, out: p.bToA, pp: p} }
-
-func readCtrl(t *testing.T, e *pipeEnd) any {
+func readCtrl(t *testing.T, e wire.FrameTransport) any {
 	t.Helper()
 	f, err := e.ReadFrame()
 	if err != nil {
@@ -74,7 +25,7 @@ func readCtrl(t *testing.T, e *pipeEnd) any {
 	return m
 }
 
-func writeCtrl(t *testing.T, e *pipeEnd, m any) {
+func writeCtrl(t *testing.T, e wire.FrameTransport, m any) {
 	t.Helper()
 	b, err := wire.EncodeCtrl(m)
 	if err != nil {
@@ -85,7 +36,7 @@ func writeCtrl(t *testing.T, e *pipeEnd, m any) {
 	}
 }
 
-func writeEvt(t *testing.T, e *pipeEnd, m any) {
+func writeEvt(t *testing.T, e wire.FrameTransport, m any) {
 	t.Helper()
 	b, err := wire.EncodeEvt(m)
 	if err != nil {
@@ -96,7 +47,7 @@ func writeEvt(t *testing.T, e *pipeEnd, m any) {
 	}
 }
 
-func readEvt(t *testing.T, e *pipeEnd) any {
+func readEvt(t *testing.T, e wire.FrameTransport) any {
 	t.Helper()
 	f, err := e.ReadFrame()
 	if err != nil {
@@ -136,7 +87,7 @@ func aboutDef(assets map[string]string) *AppDef {
 }
 
 func TestHandshakeSendsIdentityAndAcceptsAck(t *testing.T) {
-	pp := newPipePair()
+	pp := wiretest.NewPipePair()
 	def := aboutDef(nil)
 
 	// Run Connect concurrently with the fake router.
@@ -146,12 +97,12 @@ func TestHandshakeSendsIdentityAndAcceptsAck(t *testing.T) {
 	}
 	ch := make(chan connResult, 1)
 	go func() {
-		c, err := ConnectWith(pp.endA(), def)
+		c, err := ConnectWith(pp.EndA(), def)
 		ch <- connResult{c, err}
 	}()
 
 	// Router side: read identity, send identity.ack.
-	got := readCtrl(t, pp.endB())
+	got := readCtrl(t, pp.EndB())
 	ident, ok := got.(wire.Identity)
 	if !ok {
 		t.Fatalf("expected Identity, got %T", got)
@@ -159,7 +110,7 @@ func TestHandshakeSendsIdentityAndAcceptsAck(t *testing.T) {
 	if ident.AppID != "com.wash.about" || ident.Proto != 1 {
 		t.Fatalf("identity mismatch: %+v", ident)
 	}
-	writeCtrl(t, pp.endB(), wire.NewIdentityAck("i-42", 7))
+	writeCtrl(t, pp.EndB(), wire.NewIdentityAck("i-42", 7))
 
 	res := <-ch
 	if res.err != nil {
@@ -172,16 +123,16 @@ func TestHandshakeSendsIdentityAndAcceptsAck(t *testing.T) {
 }
 
 func TestHandshakeFailsOnRouterError(t *testing.T) {
-	pp := newPipePair()
+	pp := wiretest.NewPipePair()
 	def := aboutDef(nil)
 
 	ch := make(chan error, 1)
 	go func() {
-		_, err := ConnectWith(pp.endA(), def)
+		_, err := ConnectWith(pp.EndA(), def)
 		ch <- err
 	}()
-	_ = readCtrl(t, pp.endB())
-	writeCtrl(t, pp.endB(), wire.NewError(wire.ErrCodeBadIdentity, "no"))
+	_ = readCtrl(t, pp.EndB())
+	writeCtrl(t, pp.EndB(), wire.NewError(wire.ErrCodeBadIdentity, "no"))
 	select {
 	case err := <-ch:
 		if err == nil || !strings.Contains(err.Error(), "router refused") {
@@ -193,12 +144,12 @@ func TestHandshakeFailsOnRouterError(t *testing.T) {
 }
 
 func TestServeAsset(t *testing.T) {
-	pp := newPipePair()
+	pp := wiretest.NewPipePair()
 	def := aboutDef(map[string]string{"index.js": "console.log('hi');"})
 
 	ch := make(chan *Conn, 1)
 	go func() {
-		c, err := ConnectWith(pp.endA(), def)
+		c, err := ConnectWith(pp.EndA(), def)
 		if err != nil {
 			t.Errorf("connect: %v", err)
 			ch <- nil
@@ -208,8 +159,8 @@ func TestServeAsset(t *testing.T) {
 		_ = c.Run(context.Background())
 	}()
 
-	_ = readCtrl(t, pp.endB()) // identity
-	writeCtrl(t, pp.endB(), wire.NewIdentityAck("i-1", 1))
+	_ = readCtrl(t, pp.EndB()) // identity
+	writeCtrl(t, pp.EndB(), wire.NewIdentityAck("i-1", 1))
 
 	c := <-ch
 	if c == nil {
@@ -217,9 +168,9 @@ func TestServeAsset(t *testing.T) {
 	}
 
 	// Router side: request the asset.
-	writeCtrl(t, pp.endB(), wire.NewAssetRead(42, "index.js"))
+	writeCtrl(t, pp.EndB(), wire.NewAssetRead(42, "index.js"))
 
-	ok, _ := readCtrl(t, pp.endB()).(wire.AssetReadOK)
+	ok, _ := readCtrl(t, pp.EndB()).(wire.AssetReadOK)
 	if ok.ID != 42 || ok.Len != int64(len("console.log('hi');")) {
 		t.Fatalf("asset.read.ok mismatch: %+v", ok)
 	}
@@ -227,7 +178,7 @@ func TestServeAsset(t *testing.T) {
 		t.Fatalf("mime %q has no javascript", ok.MIME)
 	}
 
-	data, _ := readCtrl(t, pp.endB()).(wire.AssetData)
+	data, _ := readCtrl(t, pp.EndB()).(wire.AssetData)
 	if data.ID != 42 || !data.End {
 		t.Fatalf("asset.data mismatch: %+v", data)
 	}
@@ -238,11 +189,11 @@ func TestServeAsset(t *testing.T) {
 }
 
 func TestServeAssetMissing(t *testing.T) {
-	pp := newPipePair()
+	pp := wiretest.NewPipePair()
 	def := aboutDef(map[string]string{}) // empty fs
 
 	go func() {
-		c, err := ConnectWith(pp.endA(), def)
+		c, err := ConnectWith(pp.EndA(), def)
 		if err != nil {
 			t.Errorf("connect: %v", err)
 			return
@@ -250,11 +201,11 @@ func TestServeAssetMissing(t *testing.T) {
 		_ = c.Run(context.Background())
 	}()
 
-	_ = readCtrl(t, pp.endB())
-	writeCtrl(t, pp.endB(), wire.NewIdentityAck("i-1", 1))
-	writeCtrl(t, pp.endB(), wire.NewAssetRead(7, "nope.js"))
+	_ = readCtrl(t, pp.EndB())
+	writeCtrl(t, pp.EndB(), wire.NewIdentityAck("i-1", 1))
+	writeCtrl(t, pp.EndB(), wire.NewAssetRead(7, "nope.js"))
 
-	got := readCtrl(t, pp.endB())
+	got := readCtrl(t, pp.EndB())
 	errMsg, ok := got.(wire.AssetReadErr)
 	if !ok {
 		t.Fatalf("expected AssetReadErr, got %T (%+v)", got, got)
@@ -265,7 +216,7 @@ func TestServeAssetMissing(t *testing.T) {
 }
 
 func TestCallbackOnMappedAndCloseConfirm(t *testing.T) {
-	pp := newPipePair()
+	pp := wiretest.NewPipePair()
 	def := aboutDef(nil)
 	mapped := make(chan uint32, 1)
 	closeAsked := make(chan uint32, 1)
@@ -276,7 +227,7 @@ func TestCallbackOnMappedAndCloseConfirm(t *testing.T) {
 	}
 
 	go func() {
-		c, err := ConnectWith(pp.endA(), def)
+		c, err := ConnectWith(pp.EndA(), def)
 		if err != nil {
 			t.Errorf("connect: %v", err)
 			return
@@ -284,10 +235,10 @@ func TestCallbackOnMappedAndCloseConfirm(t *testing.T) {
 		_ = c.Run(context.Background())
 	}()
 
-	_ = readCtrl(t, pp.endB())
-	writeCtrl(t, pp.endB(), wire.NewIdentityAck("i-1", 9))
+	_ = readCtrl(t, pp.EndB())
+	writeCtrl(t, pp.EndB(), wire.NewIdentityAck("i-1", 9))
 
-	writeEvt(t, pp.endB(), wire.NewEvtWindowMapped(9))
+	writeEvt(t, pp.EndB(), wire.NewEvtWindowMapped(9))
 	select {
 	case w := <-mapped:
 		if w != 9 {
@@ -297,7 +248,7 @@ func TestCallbackOnMappedAndCloseConfirm(t *testing.T) {
 		t.Fatal("OnMapped didn't fire")
 	}
 
-	writeEvt(t, pp.endB(), wire.NewEvtWindowCloseRequested(9))
+	writeEvt(t, pp.EndB(), wire.NewEvtWindowCloseRequested(9))
 	select {
 	case w := <-closeAsked:
 		if w != 9 {
@@ -307,7 +258,7 @@ func TestCallbackOnMappedAndCloseConfirm(t *testing.T) {
 		t.Fatal("OnCloseRequested didn't fire")
 	}
 
-	got, _ := readEvt(t, pp.endB()).(wire.EvtWindowConfirmClose)
+	got, _ := readEvt(t, pp.EndB()).(wire.EvtWindowConfirmClose)
 	if got.Win != 9 || !got.Allow {
 		t.Fatalf("confirm_close mismatch: %+v", got)
 	}
