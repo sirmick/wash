@@ -15,6 +15,7 @@ export function FloatingWindow(props: WindowProps) {
 
   onMount(() => {
     const el = document.createElement(props.win.element);
+    el.setAttribute('data-wash-instance', props.win.instanceID);
     slot.appendChild(el);
   });
 

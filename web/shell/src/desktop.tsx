@@ -20,6 +20,9 @@ export function Desktop() {
     if (mountedFor === d.instanceID) return;
     host.replaceChildren();
     const el = document.createElement(d.element);
+    // Tell the app's element which instance it is so it can address
+    // its BE half via window.wash.sendAppMsg.
+    el.setAttribute('data-wash-instance', d.instanceID);
     host.appendChild(el);
     mountedFor = d.instanceID;
   });
