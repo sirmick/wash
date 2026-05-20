@@ -43,6 +43,7 @@ class WashAppSession extends HTMLElement {
   private clock!: HTMLSpanElement;
   private startBtn!: HTMLButtonElement;
   private menu: HTMLDivElement | null = null;
+  private palette: PaletteState | null = null;
   private cleanups: Array<() => void> = [];
 
   connectedCallback() {
@@ -71,6 +72,17 @@ class WashAppSession extends HTMLElement {
     tick();
     const id = window.setInterval(tick, 30_000);
     this.cleanups.push(() => clearInterval(id));
+
+    // Global hotkey: Ctrl+Space opens the palette. Document-level so
+    // it works regardless of which window has focus.
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.ctrlKey && (ev.key === ' ' || ev.code === 'Space')) {
+        ev.preventDefault();
+        this.togglePalette();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    this.cleanups.push(() => document.removeEventListener('keydown', onKey));
   }
 
   disconnectedCallback() {
@@ -119,6 +131,11 @@ class WashAppSession extends HTMLElement {
     this.startBtn = this.buildIconButton(hamburgerSVG(), 'Apps');
     this.startBtn.addEventListener('click', () => this.toggleMenu());
     bar.appendChild(this.startBtn);
+
+    const paletteBtn = this.buildIconButton(searchSVG(), 'Search apps (Ctrl+Space)');
+    paletteBtn.dataset.testid = 'palette-open';
+    paletteBtn.addEventListener('click', () => this.togglePalette());
+    bar.appendChild(paletteBtn);
 
     const sep = document.createElement('div');
     sep.style.cssText = 'width:1px;height:22px;background:#2a2a4a;margin:0 4px;flex-shrink:0;';
@@ -277,6 +294,193 @@ class WashAppSession extends HTMLElement {
       this.closeMenu();
       this.toggleMenu();
     }
+    if (this.palette) {
+      this.renderPaletteResults('');
+    }
+  }
+
+  // ---- command palette ----
+
+  private togglePalette() {
+    if (this.palette) {
+      this.closePalette();
+      return;
+    }
+    const root = document.createElement('div');
+    root.dataset.testid = 'palette';
+    root.style.cssText = [
+      'position:absolute',
+      'inset:0',
+      'display:flex',
+      'align-items:flex-start',
+      'justify-content:center',
+      'padding-top:14vh',
+      'background:rgba(0,0,0,0.35)',
+      'z-index:10002',
+    ].join(';');
+    // Click backdrop (but not inner box) to close.
+    root.addEventListener('click', (ev) => {
+      if (ev.target === root) this.closePalette();
+    });
+
+    const box = document.createElement('div');
+    box.style.cssText = [
+      'background:#181828',
+      'border:1px solid #2a2a4a',
+      'border-radius:8px',
+      'min-width:380px',
+      'max-width:520px',
+      'box-shadow:0 16px 48px rgba(0,0,0,0.6)',
+      'overflow:hidden',
+    ].join(';');
+    root.appendChild(box);
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'Search apps…';
+    input.dataset.testid = 'palette-input';
+    input.style.cssText = [
+      'width:100%',
+      'box-sizing:border-box',
+      'padding:14px 16px',
+      'background:transparent',
+      'color:#eee',
+      'border:none',
+      'border-bottom:1px solid #2a2a4a',
+      'outline:none',
+      'font:15px system-ui,sans-serif',
+    ].join(';');
+    box.appendChild(input);
+
+    const list = document.createElement('div');
+    list.dataset.testid = 'palette-list';
+    list.style.cssText = 'max-height:50vh;overflow:auto;';
+    box.appendChild(list);
+
+    this.palette = { root, input, list, apps: [], selected: 0 };
+    this.appendChild(root);
+    input.focus();
+
+    input.addEventListener('input', () => this.renderPaletteResults(input.value));
+    input.addEventListener('keydown', (ev) => this.onPaletteKey(ev));
+
+    this.renderPaletteResults('');
+  }
+
+  private closePalette() {
+    if (!this.palette) return;
+    this.palette.root.remove();
+    this.palette = null;
+  }
+
+  private renderPaletteResults(query: string) {
+    if (!this.palette) return;
+    const q = query.trim().toLowerCase();
+    const apps = window.wash.catalog().filter((a) => !a.disabled);
+    const filtered = q
+      ? apps.filter((a) => a.id.toLowerCase().includes(q) || a.name.toLowerCase().includes(q))
+      : apps;
+    this.palette.apps = filtered;
+    this.palette.selected = filtered.length > 0 ? 0 : -1;
+    this.palette.list.replaceChildren();
+    if (filtered.length === 0) {
+      const empty = document.createElement('div');
+      empty.textContent = 'no matches';
+      empty.style.cssText = 'padding:10px 16px;color:#888;font-size:13px;';
+      this.palette.list.appendChild(empty);
+      return;
+    }
+    filtered.forEach((a, i) => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.dataset.testid = `palette-item-${a.id}`;
+      const isSel = i === this.palette!.selected;
+      row.style.cssText = [
+        'display:flex',
+        'align-items:center',
+        'gap:10px',
+        'width:100%',
+        'padding:8px 16px',
+        `background:${isSel ? '#2a2a4a' : 'transparent'}`,
+        'color:#eee',
+        'border:none',
+        'text-align:left',
+        'cursor:pointer',
+        'font:14px system-ui,sans-serif',
+      ].join(';');
+      const iconBox = document.createElement('span');
+      iconBox.style.cssText = 'width:20px;height:20px;flex-shrink:0;';
+      if (a.icon) {
+        const img = document.createElement('img');
+        img.src = a.icon;
+        img.width = 20;
+        img.height = 20;
+        iconBox.appendChild(img);
+      }
+      row.appendChild(iconBox);
+      const name = document.createElement('span');
+      name.textContent = a.name;
+      name.style.cssText = 'flex:1;';
+      row.appendChild(name);
+      const id = document.createElement('span');
+      id.textContent = a.id;
+      id.style.cssText = 'opacity:0.55;font-size:12px;';
+      row.appendChild(id);
+      row.addEventListener('mouseenter', () => {
+        if (!this.palette) return;
+        this.palette.selected = i;
+        this.highlightSelection();
+      });
+      row.addEventListener('click', () => this.launchSelected());
+      this.palette!.list.appendChild(row);
+    });
+  }
+
+  private highlightSelection() {
+    if (!this.palette) return;
+    const rows = this.palette.list.querySelectorAll<HTMLElement>('button');
+    rows.forEach((row, i) => {
+      row.style.background = i === this.palette!.selected ? '#2a2a4a' : 'transparent';
+    });
+  }
+
+  private onPaletteKey(ev: KeyboardEvent) {
+    if (!this.palette) return;
+    switch (ev.key) {
+      case 'Escape':
+        ev.preventDefault();
+        this.closePalette();
+        return;
+      case 'Enter':
+        ev.preventDefault();
+        this.launchSelected();
+        return;
+      case 'ArrowDown':
+        ev.preventDefault();
+        if (this.palette.apps.length > 0) {
+          this.palette.selected = (this.palette.selected + 1) % this.palette.apps.length;
+          this.highlightSelection();
+          this.palette.list.children[this.palette.selected]?.scrollIntoView({ block: 'nearest' });
+        }
+        return;
+      case 'ArrowUp':
+        ev.preventDefault();
+        if (this.palette.apps.length > 0) {
+          this.palette.selected =
+            (this.palette.selected - 1 + this.palette.apps.length) % this.palette.apps.length;
+          this.highlightSelection();
+          this.palette.list.children[this.palette.selected]?.scrollIntoView({ block: 'nearest' });
+        }
+        return;
+    }
+  }
+
+  private launchSelected() {
+    if (!this.palette) return;
+    const app = this.palette.apps[this.palette.selected];
+    if (!app) return;
+    this.closePalette();
+    window.wash.sendAppMsg(this.instance, { action: 'launch', app_id: app.id });
   }
 
   private buildMenuEntry(app: CatalogApp): HTMLElement {
@@ -344,6 +548,23 @@ function hamburgerSVG(): string {
     "<line x1='4' y1='17' x2='20' y2='17'/>",
     '</svg>',
   ].join('');
+}
+
+function searchSVG(): string {
+  return [
+    "<svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round'>",
+    "<circle cx='11' cy='11' r='7'/>",
+    "<line x1='16.5' y1='16.5' x2='21' y2='21'/>",
+    '</svg>',
+  ].join('');
+}
+
+interface PaletteState {
+  root: HTMLDivElement;
+  input: HTMLInputElement;
+  list: HTMLDivElement;
+  apps: CatalogApp[];
+  selected: number;
 }
 
 if (!customElements.get('wash-app-session')) {

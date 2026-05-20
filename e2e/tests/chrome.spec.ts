@@ -32,6 +32,54 @@ test.describe('chrome', () => {
     await expect(aboutEl).toContainText('Web Application SHell');
   });
 
+  test('palette: Ctrl+Space opens, type filters, Enter launches', async ({ page, router }) => {
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+
+    await page.keyboard.press('Control+Space');
+    const palette = page.locator('[data-testid="palette"]');
+    await expect(palette).toBeVisible();
+    const input = page.locator('[data-testid="palette-input"]');
+    await expect(input).toBeFocused();
+
+    await input.fill('about');
+    await expect(page.locator('[data-testid="palette-item-com.wash.about"]')).toBeVisible();
+    // Test app is hidden by default → no entry, even with a matching filter.
+    await input.fill('test');
+    await expect(page.locator('[data-testid="palette-item-com.wash.test"]')).toHaveCount(0);
+
+    await input.fill('about');
+    await page.keyboard.press('Enter');
+    await expect(palette).toBeHidden();
+    await expect(page.locator('wash-app-about')).toBeVisible();
+  });
+
+  test('palette: Escape closes it', async ({ page, router }) => {
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+
+    await page.keyboard.press('Control+Space');
+    await expect(page.locator('[data-testid="palette"]')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[data-testid="palette"]')).toBeHidden();
+  });
+
+  test('palette: clicking the search button opens it; backdrop click closes', async ({
+    page,
+    router,
+  }) => {
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+
+    await page.locator('[data-testid="palette-open"]').click();
+    const palette = page.locator('[data-testid="palette"]');
+    await expect(palette).toBeVisible();
+
+    // Click the backdrop (a corner well outside the inner box).
+    await palette.click({ position: { x: 5, y: 5 } });
+    await expect(palette).toBeHidden();
+  });
+
   test('clicking the titlebar X dismisses the window', async ({ page, router }) => {
     await page.goto(router.url);
     await expect(page.locator('wash-app-session')).toBeVisible();

@@ -25,7 +25,9 @@ interface AppBundle {
 }
 
 const APPS: AppBundle[] = [
-  { name: 'session', dir: 'web/apps/session/dist', maxBytes: 10_000 },
+  // Session bundle hosts the chrome (taskbar, start menu, palette).
+  // Keep an eye on growth but the budget can flex as features land.
+  { name: 'session', dir: 'web/apps/session/dist', maxBytes: 20_000 },
   { name: 'about',   dir: 'web/apps/about/dist',   maxBytes: 10_000 },
   { name: 'test',    dir: 'web/apps/test/dist',    maxBytes: 30_000 },
 ];
