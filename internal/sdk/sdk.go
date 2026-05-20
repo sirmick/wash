@@ -9,6 +9,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
 
 	"github.com/sirmick/wash/internal/wire"
 )
@@ -155,6 +156,13 @@ func Connect(def *AppDef) (*Conn, error) {
 	if f == nil {
 		return nil, fmt.Errorf("fd %d not present (was this binary spawned by the router?)", fdSocket)
 	}
+	// Mark the wash socket CLOEXEC so anything this app forks (a
+	// shell in wash-term, a subprocess in any app) does NOT inherit
+	// it. Without this an arbitrary command run in the app's shell
+	// could speak the wash protocol on this app's connection,
+	// clobbering it. Go's exec strips CLOEXEC on inherited fds, so
+	// the fd we got from the router does not have it.
+	syscall.CloseOnExec(int(f.Fd()))
 	t := wire.NewStreamTransport(f)
 	return ConnectWith(t, def)
 }
