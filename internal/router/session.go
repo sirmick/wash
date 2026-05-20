@@ -1,6 +1,7 @@
 package router
 
 import (
+	"encoding/json"
 	"sync"
 
 	"github.com/sirmick/wash/internal/wire"
@@ -17,20 +18,54 @@ import (
 type windowSession struct {
 	mu         sync.Mutex
 	windows    map[uint32]*wire.SessionWindow
+	appState   map[string]json.RawMessage // by instance_id; opaque to router
 	nextZ      uint32
 	nextOffset int32
 }
 
-// snapshot returns a stable, lock-released copy of all windows. The
-// order is unspecified — shells must key by window_id.
-func (s *windowSession) snapshot() []wire.SessionWindow {
+// snapshot returns a stable, lock-released copy of the windows
+// plus the saved app-state blobs. Shells use this to seed their
+// view on (re)connect.
+func (s *windowSession) snapshot() ([]wire.SessionWindow, map[string]json.RawMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]wire.SessionWindow, 0, len(s.windows))
 	for _, w := range s.windows {
 		out = append(out, *w)
 	}
-	return out
+	var st map[string]json.RawMessage
+	if len(s.appState) > 0 {
+		st = make(map[string]json.RawMessage, len(s.appState))
+		for k, v := range s.appState {
+			st[k] = v
+		}
+	}
+	return out, st
+}
+
+// setAppState replaces (or clears, when state is nil) the FE-state
+// blob for instance_id and returns the patch to broadcast.
+func (s *windowSession) setAppState(instanceID string, state json.RawMessage) []wire.SessionPatch {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.appState == nil {
+		s.appState = make(map[string]json.RawMessage)
+	}
+	if state == nil {
+		delete(s.appState, instanceID)
+	} else {
+		s.appState[instanceID] = state
+	}
+	return []wire.SessionPatch{{Op: wire.SessionPatchAppState, InstanceID: instanceID, State: state}}
+}
+
+// dropAppState removes the state for instance_id. Called when the
+// instance exits — no patch is broadcast since the instance is
+// also being torn down (the window.delete patch covers cleanup).
+func (s *windowSession) dropAppState(instanceID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.appState, instanceID)
 }
 
 // focusedWindowID returns the id of the focused window, or 0 if none.

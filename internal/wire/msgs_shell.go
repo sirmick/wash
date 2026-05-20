@@ -26,6 +26,7 @@ const (
 	TShellWindowMove         = "window.move"
 	TShellWindowResize       = "window.resize"
 	TShellWindowState        = "window.state"
+	TShellAppStateSave       = "app_state.save"
 	TShellAppMsgSend         = "app_msg.send"
 	TShellLog                = "log"
 
@@ -139,30 +140,42 @@ type SessionWindow struct {
 // ShellSessionSnapshot is the router's "here is everything you need
 // to render" message, sent on shell connect immediately after the
 // catalog. After this, all state changes arrive as ShellSessionPatch.
+//
+// AppState carries each instance's saved FE state blob (per
+// app_state.save); the shell delivers it as wash:state to the
+// matching mounted element on (re)mount.
 type ShellSessionSnapshot struct {
-	T       string          `json:"t"`
-	Windows []SessionWindow `json:"windows"`
+	T        string                     `json:"t"`
+	Windows  []SessionWindow            `json:"windows"`
+	AppState map[string]json.RawMessage `json:"app_state,omitempty"`
 }
 
-func NewShellSessionSnapshot(wins []SessionWindow) ShellSessionSnapshot {
+func NewShellSessionSnapshot(wins []SessionWindow, appState map[string]json.RawMessage) ShellSessionSnapshot {
 	if wins == nil {
 		wins = []SessionWindow{}
 	}
-	return ShellSessionSnapshot{T: TShellSessionSnapshot, Windows: wins}
+	return ShellSessionSnapshot{T: TShellSessionSnapshot, Windows: wins, AppState: appState}
 }
 
 // SessionPatchOp values.
 const (
 	SessionPatchWindowUpsert = "window.upsert"
 	SessionPatchWindowDelete = "window.delete"
+	SessionPatchAppState     = "app_state"
 )
 
-// SessionPatch is one change to the session state. For upsert, Window
-// carries the full new state. For delete, only WindowID is meaningful.
+// SessionPatch is one change to the session state. The active fields
+// depend on Op:
+//
+//	window.upsert  → Window
+//	window.delete  → WindowID
+//	app_state      → InstanceID, State
 type SessionPatch struct {
-	Op       string         `json:"op"`
-	Window   *SessionWindow `json:"window,omitempty"`
-	WindowID uint32         `json:"window_id,omitempty"`
+	Op         string          `json:"op"`
+	Window     *SessionWindow  `json:"window,omitempty"`
+	WindowID   uint32          `json:"window_id,omitempty"`
+	InstanceID string          `json:"instance_id,omitempty"`
+	State      json.RawMessage `json:"state,omitempty"`
 }
 
 // ShellSessionPatch is a batched set of state mutations the shell
@@ -275,6 +288,23 @@ type ShellWindowState struct {
 
 func NewShellWindowState(windowID uint32, state string) ShellWindowState {
 	return ShellWindowState{T: TShellWindowState, WindowID: windowID, State: state}
+}
+
+// ShellAppStateSave is the FE half asking the router to persist
+// the given opaque blob as this instance's "FE state". The blob
+// comes back as a wash:state event on every (re)mount of the same
+// instance — surviving browser refresh, multi-tab viewing, etc.
+//
+// State is intentionally a json.RawMessage: the router never
+// inspects it; the app owns the schema.
+type ShellAppStateSave struct {
+	T          string          `json:"t"`
+	InstanceID string          `json:"instance_id"`
+	State      json.RawMessage `json:"state"`
+}
+
+func NewShellAppStateSave(instanceID string, state json.RawMessage) ShellAppStateSave {
+	return ShellAppStateSave{T: TShellAppStateSave, InstanceID: instanceID, State: state}
 }
 
 // ShellAppMsgSend is the FE half of an app sending an APP_MSG to its

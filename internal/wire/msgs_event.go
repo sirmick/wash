@@ -36,6 +36,12 @@ const (
 	TEvtClipboardGet     = "clipboard.get"
 	TEvtClipboardData    = "clipboard.data"
 	TEvtClipboardChanged = "clipboard.changed"
+
+	// App state persistence — apps can save an opaque per-instance
+	// blob router-side. The shell delivers it as a wash:state event
+	// on every (re)mount, restoring FE state across browser refresh
+	// and multi-tab viewing.
+	TEvtAppStateSet = "app_state.set"
 )
 
 // EvtWindowMapped: router → app, "the window is now visible".
@@ -254,6 +260,20 @@ func NewEvtAppMsg(win uint32, data any) EvtAppMsg {
 	return EvtAppMsg{T: TEvtAppMsg, Win: win, Data: data}
 }
 
+// EvtAppStateSet — app → router — persist `State` as this app's
+// FE-state blob (router stores keyed by instance_id). The blob is
+// JSON bytes; the router never inspects them. Used by SDK.SaveState
+// for apps whose state lives BE-side or is computed in Go. FE-only
+// apps can use the shell's window.wash.saveState instead.
+type EvtAppStateSet struct {
+	T     string `cbor:"t"`
+	State []byte `cbor:"state"`
+}
+
+func NewEvtAppStateSet(state []byte) EvtAppStateSet {
+	return EvtAppStateSet{T: TEvtAppStateSet, State: state}
+}
+
 // PeekEvtType returns the t field of a CBOR map without otherwise
 // decoding it.
 func PeekEvtType(data []byte) (string, error) {
@@ -327,6 +347,9 @@ func DecodeEvt(data []byte) (any, error) {
 		return m, cbor.Unmarshal(data, &m)
 	case TEvtClipboardChanged:
 		var m EvtClipboardChanged
+		return m, cbor.Unmarshal(data, &m)
+	case TEvtAppStateSet:
+		var m EvtAppStateSet
 		return m, cbor.Unmarshal(data, &m)
 	}
 	return nil, fmt.Errorf("evt decode: unknown t %q", t)

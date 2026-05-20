@@ -59,11 +59,13 @@ func TestShellRoundTrip(t *testing.T) {
 		NewShellAppDeclared("inst-1", "wash-app-about", "window", manifest),
 		NewShellSessionSnapshot([]SessionWindow{
 			{WindowID: 42, InstanceID: "inst-1", Element: "wash-app-about", Title: "About wash", X: 40, Y: 40, W: 480, H: 320, Z: 1, State: WindowStateNormal, Focused: true},
-		}),
+		}, map[string]json.RawMessage{"inst-1": json.RawMessage(`{"path":"/home"}`)}),
 		NewShellSessionPatch(
 			SessionPatch{Op: SessionPatchWindowUpsert, Window: &SessionWindow{WindowID: 42, InstanceID: "inst-1", Element: "wash-app-about", Title: "About wash", X: 60, Y: 60, W: 480, H: 320, Z: 2, State: WindowStateNormal, Focused: true}},
 			SessionPatch{Op: SessionPatchWindowDelete, WindowID: 43},
+			SessionPatch{Op: SessionPatchAppState, InstanceID: "inst-1", State: json.RawMessage(`{"path":"/etc"}`)},
 		),
+		NewShellAppStateSave("inst-1", json.RawMessage(`{"path":"/home","expanded":["/home","/home/mick"]}`)),
 		NewShellAssetDeliver("inst-1", "index.js", "aGVsbG8=", true, "application/javascript"),
 		NewShellAssetFetch("inst-1", "index.js"),
 		NewShellWindowCloseClicked(42),
@@ -154,6 +156,7 @@ func TestEvtRoundTrip(t *testing.T) {
 		NewEvtClipboardGet(42),
 		NewEvtClipboardData(42, "text/plain", []byte("hi")),
 		NewEvtClipboardChanged("text/plain"),
+		NewEvtAppStateSet([]byte(`{"path":"/home","expanded":["/home"]}`)),
 	}
 	for _, c := range cases {
 		c := c

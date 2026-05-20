@@ -61,6 +61,11 @@ export class Sub<T> {
 const mountedElements = new Map<string, HTMLElement>();
 const pendingMessages = new Map<string, unknown[]>();
 
+// Latest saved FE-state blob per instance. Delivered to the element
+// as a `wash:state` CustomEvent on (re)mount. Updated by router's
+// session.snapshot / session.patch deliveries.
+const savedStates = new Map<string, unknown>();
+
 // rawSubscribers maps channel id → callback for incoming raw bytes.
 // Elements register via window.wash.openRawChannel; the shell's WS
 // handler dispatches matching frames through.
@@ -73,11 +78,49 @@ const pendingRaw = new Map<number, Uint8Array[]>();
 
 export function registerMountedElement(instanceID: string, el: HTMLElement): void {
   mountedElements.set(instanceID, el);
+  // Deliver the latest saved state first — apps initialize by listening
+  // for wash:state, so it must arrive before any subsequent wash:msg.
+  // null means "no prior state": apps should treat it as first launch.
+  const state = savedStates.has(instanceID) ? savedStates.get(instanceID) : null;
+  el.dispatchEvent(new CustomEvent('wash:state', { detail: state, bubbles: false }));
+
   const q = pendingMessages.get(instanceID);
   if (q) {
     pendingMessages.delete(instanceID);
     for (const data of q) {
       el.dispatchEvent(new CustomEvent('wash:msg', { detail: data, bubbles: false }));
+    }
+  }
+}
+
+// setSavedState updates the cached blob for an instance and, if the
+// element is mounted, dispatches wash:state immediately so live tabs
+// react to cross-browser updates without waiting for a remount.
+export function setSavedState(instanceID: string, state: unknown): void {
+  if (state == null) {
+    savedStates.delete(instanceID);
+  } else {
+    savedStates.set(instanceID, state);
+  }
+  const el = mountedElements.get(instanceID);
+  if (el) {
+    el.dispatchEvent(new CustomEvent('wash:state', { detail: state ?? null, bubbles: false }));
+  }
+}
+
+// clearSavedState drops the cached blob (instance destroyed).
+export function clearSavedState(instanceID: string): void {
+  savedStates.delete(instanceID);
+}
+
+// replaceSavedStates replaces the entire cache. Used on snapshot
+// processing to drop any stale entries from instances the router no
+// longer knows about.
+export function replaceSavedStates(states: Record<string, unknown> | undefined): void {
+  savedStates.clear();
+  if (states) {
+    for (const [k, v] of Object.entries(states)) {
+      if (v != null) savedStates.set(k, v);
     }
   }
 }

@@ -29,6 +29,8 @@ import {
   closeRawSubscriber,
   deliverRaw,
   deliverToInstance,
+  replaceSavedStates,
+  setSavedState,
   subscribeRaw,
 } from './api';
 import { showToast } from './notify';
@@ -67,12 +69,15 @@ export interface SessionWindow {
 interface ShellSessionSnapshot {
   t: 'session.snapshot';
   windows: SessionWindow[];
+  app_state?: Record<string, unknown>;
 }
 
 export interface SessionPatch {
-  op: 'window.upsert' | 'window.delete';
+  op: 'window.upsert' | 'window.delete' | 'app_state';
   window?: SessionWindow;
   window_id?: number;
+  instance_id?: string;
+  state?: unknown;
 }
 
 interface ShellSessionPatch {
@@ -226,15 +231,26 @@ function handleAppDeclared(msg: ShellAppDeclared): void {
 }
 
 // handleSnapshot rebuilds the local WM state from the router's
-// canonical view. Sent on connect/reconnect. Each window waits for
-// its bundle to be ready before being added to the store so onMount
-// can resolve the custom element.
+// canonical view. Sent on connect/reconnect. The app_state cache is
+// replaced wholesale so stale entries from no-longer-running
+// instances don't linger.
 function handleSnapshot(msg: ShellSessionSnapshot): void {
+  replaceSavedStates(msg.app_state);
   applySessionSnapshot(msg.windows, waitForBundle);
 }
 
 function handlePatch(msg: ShellSessionPatch): void {
-  applySessionPatch(msg.patches, waitForBundle);
+  // Apply app_state ops first so when a window upsert in the same
+  // patch triggers a remount, wash:state carries the latest blob.
+  for (const p of msg.patches) {
+    if (p.op === 'app_state' && typeof p.instance_id === 'string') {
+      setSavedState(p.instance_id, p.state ?? null);
+    }
+  }
+  applySessionPatch(
+    msg.patches.filter((p) => p.op !== 'app_state'),
+    waitForBundle,
+  );
 }
 
 function waitForBundle(instanceID: string): Promise<void> {
@@ -276,6 +292,7 @@ declare global {
       minimizeWindow(id: number): void;
       maximizeWindow(id: number): void;
       restoreWindow(id: number): void;
+      saveState(instanceID: string, state: unknown): void;
       log(level: 'error' | 'warn' | 'info' | 'debug', source: string, msg: string, stack?: string): void;
       openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
       writeRaw(channelID: number, bytes: Uint8Array): void;
@@ -328,6 +345,9 @@ window.wash = {
     conn.sendCtrl({ t: 'window.state', window_id: id, state: 'normal' });
     // Restoring also brings to front + grabs focus.
     conn.sendCtrl({ t: 'window.focus', window_id: id });
+  },
+  saveState(instanceID, state) {
+    conn.sendCtrl({ t: 'app_state.save', instance_id: instanceID, state });
   },
   log(level, source, msg, stack) {
     shellLog(level, source, msg, stack);

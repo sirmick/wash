@@ -15,8 +15,21 @@ declare global {
   interface Window {
     wash: {
       sendAppMsg(instanceID: string, data: unknown): void;
+      saveState(instanceID: string, state: unknown): void;
     };
   }
+}
+
+// Persisted FE state — saved via window.wash.saveState and restored
+// from the wash:state event on (re)mount. Schema is private to the
+// app; rev it freely.
+interface PersistedState {
+  path?: string;
+  expanded?: string[];
+  sort_key?: SortKey;
+  sort_desc?: boolean;
+  show_hidden?: boolean;
+  info_open?: boolean;
 }
 
 interface Entry {
@@ -102,6 +115,11 @@ class WashAppFM extends HTMLElement {
 
     this.addEventListener('wash:msg', (ev) => {
       this.handleBE((ev as CustomEvent).detail as BEMessage);
+    });
+    // Restore previously-saved state on (re)mount. Null = first launch.
+    this.addEventListener('wash:state', (ev) => {
+      const s = (ev as CustomEvent).detail as PersistedState | null;
+      if (s) this.restoreFrom(s);
     });
     // Close any open context menu when clicking elsewhere.
     document.addEventListener('mousedown', (ev) => {
@@ -536,6 +554,7 @@ class WashAppFM extends HTMLElement {
     this.renderTree();
     this.updatePathInput();
     this.renderInfo();
+    this.persist();
   }
 
   private pendingSelectAfter: { path: string; pushHistory: boolean } | null = null;
@@ -582,6 +601,45 @@ class WashAppFM extends HTMLElement {
     this.pathInput.value = this.selectedPath || '';
   }
 
+  // ---- state persistence (refresh / cross-tab) ----
+
+  private persist() {
+    if (!this.instance) return;
+    const s: PersistedState = {
+      path: this.selectedPath || undefined,
+      expanded: [...this.expanded],
+      sort_key: this.sortKey,
+      sort_desc: this.sortDesc,
+      show_hidden: this.showHidden,
+      info_open: this.infoOpen,
+    };
+    window.wash.saveState(this.instance, s);
+  }
+
+  // restoreFrom rehydrates the visible-but-non-server state, then
+  // navigates to the saved path so listings populate. Pre-fills the
+  // expanded set BEFORE the navigation so its ancestors render the
+  // saved subtree state, not a fresh cascade.
+  private restoreFrom(s: PersistedState) {
+    if (s.sort_key) this.sortKey = s.sort_key;
+    if (typeof s.sort_desc === 'boolean') this.sortDesc = s.sort_desc;
+    if (typeof s.show_hidden === 'boolean') this.showHidden = s.show_hidden;
+    if (typeof s.info_open === 'boolean') {
+      this.infoOpen = s.info_open;
+      if (this.infoBody) {
+        this.infoBody.style.display = this.infoOpen ? 'block' : 'none';
+        this.infoToggleEl.textContent = this.infoOpen ? '▾ Info' : '▸ Info';
+      }
+    }
+    if (s.expanded) {
+      for (const p of s.expanded) this.expanded.add(p);
+    }
+    if (s.path) {
+      // selectPath will request listings for any unloaded ancestors.
+      this.selectPath(s.path, false);
+    }
+  }
+
   // ---- toggle on tree row ----
 
   private toggleExpand(path: string) {
@@ -595,6 +653,7 @@ class WashAppFM extends HTMLElement {
       }
     }
     this.renderTree();
+    this.persist();
   }
 
   // ---- preview / info ----
@@ -647,6 +706,7 @@ class WashAppFM extends HTMLElement {
     this.infoOpen = !this.infoOpen;
     this.infoBody.style.display = this.infoOpen ? 'block' : 'none';
     this.infoToggleEl.textContent = this.infoOpen ? '▾ Info' : '▸ Info';
+    this.persist();
   }
 
   // ---- sort menu ----
@@ -668,6 +728,7 @@ class WashAppFM extends HTMLElement {
         }
         this.closeMenu();
         this.renderTree();
+        this.persist();
       });
       return it;
     };
@@ -684,6 +745,7 @@ class WashAppFM extends HTMLElement {
       this.showHidden = !this.showHidden;
       this.closeMenu();
       this.renderTree();
+      this.persist();
     });
     menu.appendChild(showHidden);
 

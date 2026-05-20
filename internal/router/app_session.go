@@ -106,6 +106,7 @@ func (r *Router) handleAppOpts(ctx context.Context, t FrameTransport, manifest *
 	err := inst.loop(ctx)
 	r.unregisterApp(inst)
 	r.closeChannelsForApp(inst, "app exited")
+	r.winSession.dropAppState(inst.InstanceID)
 	if inst.WindowID != 0 {
 		r.broadcastPatches(r.winSession.destroyWindow(inst.WindowID))
 	}
@@ -326,6 +327,21 @@ func (inst *AppInstance) handleEvt(payload []byte) error {
 			return err
 		}
 		return inst.handleClipboardGet(m)
+	case wire.TEvtAppStateSet:
+		var m wire.EvtAppStateSet
+		if err := cbor.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		// State is JSON bytes; pass straight through. RawMessage
+		// validates that it's well-formed JSON; on bad bytes we
+		// drop silently — apps that mis-encode get a no-op.
+		var state json.RawMessage = m.State
+		if !json.Valid(state) {
+			inst.router.log("app %s: app_state.set with invalid JSON, dropping", inst.AppID)
+			return nil
+		}
+		inst.router.broadcastPatches(inst.router.winSession.setAppState(inst.InstanceID, state))
+		return nil
 	}
 	inst.router.log("app %s: unexpected evt %q", inst.AppID, t)
 	return nil
