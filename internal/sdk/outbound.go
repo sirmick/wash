@@ -35,3 +35,13 @@ func (c *Conn) ConfirmClose(win uint32, allow bool) error {
 func (c *Conn) SpawnRequest(appID string) error {
 	return c.writeEvt(wire.NewEvtSpawnRequest(appID))
 }
+
+// Notify asks the chrome to show a toast. level is one of "info",
+// "warn", "error" (empty defaults to "info"). v0.1 has no capability
+// gate; the router relays for any app.
+func (c *Conn) Notify(title, body, level string) error {
+	if level == "" {
+		level = wire.NotifyLevelInfo
+	}
+	return c.writeEvt(wire.NewEvtNotify(title, body, level))
+}

@@ -63,6 +63,7 @@ func TestShellRoundTrip(t *testing.T) {
 		NewShellWindowState(42, WindowStateMaximized),
 		NewShellAppMsgSend("inst-1", data),
 		NewShellAppMsgDeliver("inst-1", data),
+		NewShellNotify("inst-1", "hello", "world", NotifyLevelWarn),
 		NewShellLog(LogLevelError, "wash-app-about", "boom", "Error: boom\n    at foo (...)"),
 	}
 	for _, c := range cases {
@@ -136,6 +137,7 @@ func TestEvtRoundTrip(t *testing.T) {
 		NewEvtSpawnRequest("com.wash.about"),
 		NewEvtSpawnOk("com.wash.about", "inst-2"),
 		NewEvtSpawnErr("com.wash.about", ErrCodeForbidden, "no capability"),
+		NewEvtNotify("hello", "world", NotifyLevelInfo),
 	}
 	for _, c := range cases {
 		c := c

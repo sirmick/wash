@@ -20,6 +20,7 @@ import {
 import { Desktop } from './desktop';
 import { FloatingWindow } from './window';
 import { CatalogApp, Sub, WindowInfo, deliverToInstance } from './api';
+import { showToast } from './notify';
 
 interface ShellCatalog {
   t: 'catalog';
@@ -69,6 +70,14 @@ interface ShellAppMsgDeliver {
   data: unknown;
 }
 
+interface ShellNotify {
+  t: 'notify';
+  instance_id: string;
+  title: string;
+  body?: string;
+  level?: 'info' | 'warn' | 'error';
+}
+
 // Track declared instances so window.create can resolve element by id.
 const instances = new Map<string, { element: string; surface: string }>();
 
@@ -111,6 +120,16 @@ const conn = new Conn(wsURL(), (msg) => {
     case 'app_msg.deliver':
       deliverAppMsg(msg as ShellAppMsgDeliver);
       break;
+    case 'notify': {
+      const n = msg as ShellNotify;
+      showToast({
+        instanceID: n.instance_id,
+        title: n.title,
+        body: n.body,
+        level: n.level,
+      });
+      break;
+    }
   }
 });
 

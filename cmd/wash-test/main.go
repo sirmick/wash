@@ -6,6 +6,7 @@ package main
 
 import (
 	"embed"
+	"fmt"
 	"io/fs"
 	"log"
 	"sync"
@@ -153,6 +154,15 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		st.mu.Unlock()
 		log.Printf("wash-test ping → pong seq=%d", seq)
 		sendEvent(c, map[string]any{"kind": "pong", "seq": seq})
+	case "notify":
+		st.mu.Lock()
+		st.pingSeq++
+		seq := st.pingSeq
+		st.mu.Unlock()
+		title := fmt.Sprintf("wash-test #%d", seq)
+		if err := c.Notify(title, "Hello from the test app", "info"); err != nil {
+			log.Printf("wash-test notify: %v", err)
+		}
 	case "set_title":
 		title, _ := m["title"].(string)
 		if title != "" {

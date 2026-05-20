@@ -187,6 +187,36 @@ test.describe('chrome (test app via --show-hidden)', () => {
     await expect(app.locator('[data-testid="event-row-resize"]').first()).toContainText('660x540');
   });
 
+  test('notify button shows a toast that auto-dismisses', async ({ page, router }) => {
+    await page.goto(router.url);
+    await launchTestApp(page);
+    const app = page.locator('wash-app-test');
+    await expect(app).toBeVisible();
+
+    await app.locator('[data-testid="action-notify"]').click();
+    const toast = page.locator('[data-testid="notification"]').first();
+    await expect(toast).toBeVisible();
+    await expect(toast.locator('[data-testid="notification-title"]')).toContainText(/wash-test #/);
+    await expect(toast.locator('[data-testid="notification-body"]')).toHaveText(
+      'Hello from the test app',
+    );
+    // Toast auto-dismisses after a few seconds.
+    await expect(toast).toBeHidden({ timeout: 8_000 });
+  });
+
+  test('clicking a toast dismisses it', async ({ page, router }) => {
+    await page.goto(router.url);
+    await launchTestApp(page);
+    const app = page.locator('wash-app-test');
+    await expect(app).toBeVisible();
+
+    await app.locator('[data-testid="action-notify"]').click();
+    const toast = page.locator('[data-testid="notification"]').first();
+    await expect(toast).toBeVisible();
+    await toast.click();
+    await expect(toast).toBeHidden({ timeout: 2_000 });
+  });
+
   test('spawn nonexistent surfaces spawn_err event', async ({ page, router }) => {
     await page.goto(router.url);
     await launchTestApp(page);

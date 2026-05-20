@@ -25,6 +25,7 @@ const (
 	TEvtSpawnRequest       = "spawn.request"
 	TEvtSpawnOk            = "spawn.ok"
 	TEvtSpawnErr           = "spawn.err"
+	TEvtNotify             = "notify"
 
 	// Both directions.
 	TEvtAppMsg = "app_msg"
@@ -164,6 +165,27 @@ func NewEvtSpawnErr(appID, code, msg string) EvtSpawnErr {
 	return EvtSpawnErr{T: TEvtSpawnErr, AppID: appID, Code: code, Msg: msg}
 }
 
+// Notification levels.
+const (
+	NotifyLevelInfo  = "info"
+	NotifyLevelWarn  = "warn"
+	NotifyLevelError = "error"
+)
+
+// EvtNotify is app → router. The router relays as ShellNotify so
+// the shell can render a toast. v0.1 has no capability gate; spamming
+// the chrome with notifications is a future concern.
+type EvtNotify struct {
+	T     string `cbor:"t"`
+	Title string `cbor:"title"`
+	Body  string `cbor:"body,omitempty"`
+	Level string `cbor:"level,omitempty"`
+}
+
+func NewEvtNotify(title, body, level string) EvtNotify {
+	return EvtNotify{T: TEvtNotify, Title: title, Body: body, Level: level}
+}
+
 // EvtAppMsg is the FE↔BE app-private pipe. Data is intentionally
 // opaque; the router never inspects it.
 type EvtAppMsg struct {
@@ -234,6 +256,9 @@ func DecodeEvt(data []byte) (any, error) {
 		return m, cbor.Unmarshal(data, &m)
 	case TEvtAppMsg:
 		var m EvtAppMsg
+		return m, cbor.Unmarshal(data, &m)
+	case TEvtNotify:
+		var m EvtNotify
 		return m, cbor.Unmarshal(data, &m)
 	}
 	return nil, fmt.Errorf("evt decode: unknown t %q", t)

@@ -31,6 +31,9 @@ const (
 
 	// Router → shell (BE → FE relay).
 	TShellAppMsgDeliver = "app_msg.deliver"
+
+	// Router → shell, relayed notification.
+	TShellNotify = "notify"
 )
 
 // ShellLog levels.
@@ -247,4 +250,20 @@ type ShellAppMsgDeliver struct {
 
 func NewShellAppMsgDeliver(instanceID string, data json.RawMessage) ShellAppMsgDeliver {
 	return ShellAppMsgDeliver{T: TShellAppMsgDeliver, InstanceID: instanceID, Data: data}
+}
+
+// ShellNotify is a notification the shell should display. Originates
+// in an app's EvtNotify; the router stamps the source instance id
+// so the chrome can attribute / route per-app (e.g. "do not disturb
+// from app X").
+type ShellNotify struct {
+	T          string `json:"t"`
+	InstanceID string `json:"instance_id"`
+	Title      string `json:"title"`
+	Body       string `json:"body,omitempty"`
+	Level      string `json:"level,omitempty"`
+}
+
+func NewShellNotify(instanceID, title, body, level string) ShellNotify {
+	return ShellNotify{T: TShellNotify, InstanceID: instanceID, Title: title, Body: body, Level: level}
 }

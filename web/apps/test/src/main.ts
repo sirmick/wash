@@ -102,6 +102,7 @@ class WashAppTest extends HTMLElement {
         ${actionBtn('spawn-bad',      'Spawn nonexistent (err)')}
         ${actionBtn('toggle-veto',    'Toggle veto close')}
         ${actionBtn('ping',           'Ping BE (round-trip)')}
+        ${actionBtn('notify',         'Send notification')}
         ${actionBtn('throw',          'Throw uncaught')}
         ${actionBtn('console-error',  'console.error')}
         ${actionBtn('reject-promise', 'Reject unhandled')}
@@ -166,6 +167,9 @@ class WashAppTest extends HTMLElement {
     });
     this.querySelector('[data-testid="action-ping"]')?.addEventListener('click', () => {
       this.send({ kind: 'ping' });
+    });
+    this.querySelector('[data-testid="action-notify"]')?.addEventListener('click', () => {
+      this.send({ kind: 'notify' });
     });
     this.querySelector('[data-testid="action-throw"]')?.addEventListener('click', () => {
       // Defer so this handler doesn't swallow the throw.

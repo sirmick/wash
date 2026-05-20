@@ -268,6 +268,12 @@ func (inst *AppInstance) handleEvt(payload []byte) error {
 			return err
 		}
 		return inst.handleSpawnRequest(m)
+	case wire.TEvtNotify:
+		var m wire.EvtNotify
+		if err := cbor.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.relayNotify(m)
 	}
 	inst.router.log("app %s: unexpected evt %q", inst.AppID, t)
 	return nil
@@ -321,6 +327,18 @@ func toJSON(v any) any {
 		return base64.StdEncoding.EncodeToString(x)
 	}
 	return v
+}
+
+// relayNotify forwards an app's notification to every attached shell.
+// v0.1 is open — any app can notify, no capability gate.
+func (inst *AppInstance) relayNotify(m wire.EvtNotify) error {
+	out := wire.NewShellNotify(inst.InstanceID, m.Title, m.Body, m.Level)
+	for _, s := range inst.router.shellList() {
+		if err := s.WriteCtrl(out); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (inst *AppInstance) relayWindowTitle(m wire.EvtWindowSetTitle) error {
