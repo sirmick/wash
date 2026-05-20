@@ -47,6 +47,10 @@ func TestShellRoundTrip(t *testing.T) {
 	manifest := json.RawMessage(`{"id":"com.wash.about","name":"About wash"}`)
 	data := json.RawMessage(`{"action":"launch","app_id":"com.wash.about"}`)
 	cases := []any{
+		NewShellCatalog([]ShellCatalogApp{
+			{ID: "com.wash.about", Name: "About wash", Icon: "data:,", Surface: "window", Instancing: "multi"},
+			{ID: "com.wash.session", Name: "wash session", Icon: "", Surface: "desktop", Instancing: "single", Disabled: true, Reason: "test"},
+		}),
 		NewShellAppDeclared("inst-1", "wash-app-about", "window", manifest),
 		NewShellWindowCreate(42, "inst-1", "About wash", 480, 320),
 		NewShellWindowDestroy(42),
@@ -56,6 +60,7 @@ func TestShellRoundTrip(t *testing.T) {
 		NewShellWindowCloseClicked(42),
 		NewShellWindowFocus(42),
 		NewShellAppMsgSend("inst-1", data),
+		NewShellLog(LogLevelError, "wash-app-about", "boom", "Error: boom\n    at foo (...)"),
 	}
 	for _, c := range cases {
 		c := c

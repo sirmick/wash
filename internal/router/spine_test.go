@@ -96,7 +96,15 @@ func TestHandshakeAndAssetPull(t *testing.T) {
 		t.Fatal("window_id should be set for surface=window")
 	}
 
-	// Shell side: expect ShellAppDeclared then ShellWindowCreate.
+	// Shell side: catalog goes out first on connect (currently empty
+	// in this test — no apps in the registry).
+	if cat, ok := readCtrl(t, shellPair.EndB()).(wire.ShellCatalog); !ok {
+		t.Fatalf("expected ShellCatalog first")
+	} else if len(cat.Apps) != 0 {
+		t.Fatalf("expected empty catalog, got %+v", cat.Apps)
+	}
+
+	// Then ShellAppDeclared + ShellWindowCreate.
 	declared, ok := readCtrl(t, shellPair.EndB()).(wire.ShellAppDeclared)
 	if !ok {
 		t.Fatalf("expected ShellAppDeclared")

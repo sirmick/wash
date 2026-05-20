@@ -2,7 +2,6 @@ package router
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -69,6 +68,34 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 // Registry exposes the catalog for callers that want to surface it
 // (e.g. cmd/wash-router for a /catalog endpoint).
 func (r *Router) Registry() *Registry { return r.reg }
+
+// catalog builds the snapshot the shell sees on connect. Surface=
+// desktop apps are filtered out — they don't belong in launchers (the
+// session app is autoboot, not user-launchable).
+func (r *Router) catalog() []wire.ShellCatalogApp {
+	entries := r.reg.Entries()
+	out := make([]wire.ShellCatalogApp, 0, len(entries))
+	for _, e := range entries {
+		if e.Manifest == nil {
+			// Listed-disabled with no parsable manifest: skip; we
+			// have no name to render.
+			continue
+		}
+		if e.Manifest.Surface == SurfaceDesktop {
+			continue
+		}
+		out = append(out, wire.ShellCatalogApp{
+			ID:         e.Manifest.ID,
+			Name:       e.Manifest.Name,
+			Icon:       e.Manifest.Icon,
+			Surface:    e.Manifest.Surface,
+			Instancing: e.Manifest.Instancing,
+			Disabled:   !e.Enabled(),
+			Reason:     e.Reason,
+		})
+	}
+	return out
+}
 
 // Config returns the active configuration.
 func (r *Router) Config() Config { return r.cfg }
@@ -140,38 +167,14 @@ func (r *Router) unregisterShell(s *ShellSession) {
 	delete(r.shells, s)
 }
 
-// declareAppToAllShells emits ShellAppDeclared + (if windowed)
-// ShellWindowCreate to every attached shell. Called after a successful
-// handshake.
+// declareAppToAllShells announces inst to every attached shell via
+// ShellSession.declareInstance, which dedupes against a parallel
+// declareExistingAppsTo run on the same shell.
 func (r *Router) declareAppToAllShells(ctx context.Context, inst *AppInstance) error {
-	manifestJSON, err := json.Marshal(inst.Manifest)
-	if err != nil {
-		return fmt.Errorf("marshal manifest: %w", err)
-	}
-	declared := wire.NewShellAppDeclared(
-		inst.InstanceID,
-		inst.Manifest.Element,
-		inst.Manifest.Surface,
-		json.RawMessage(manifestJSON),
-	)
-	var createMsg any
-	if inst.Manifest.Surface == SurfaceWindow {
-		w, h := uint32(0), uint32(0)
-		if inst.Manifest.Window != nil {
-			w = inst.Manifest.Window.DefaultWidth
-			h = inst.Manifest.Window.DefaultHeight
-		}
-		createMsg = wire.NewShellWindowCreate(inst.WindowID, inst.InstanceID, inst.Manifest.Name, w, h)
-	}
 	var firstErr error
 	for _, s := range r.shellList() {
-		if err := s.WriteCtrl(declared); err != nil && firstErr == nil {
+		if err := s.declareInstance(inst); err != nil && firstErr == nil {
 			firstErr = err
-		}
-		if createMsg != nil {
-			if err := s.WriteCtrl(createMsg); err != nil && firstErr == nil {
-				firstErr = err
-			}
 		}
 	}
 	if firstErr != nil {

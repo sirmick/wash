@@ -18,6 +18,68 @@ type ShellSession struct {
 
 	router  *Router
 	writeMu sync.Mutex
+
+	// declared is guarded by writeMu (set when announcing, cleared
+	// when undeclaring) — kept under the same lock as writes so a
+	// declare and any follow-on relay are observed in order by the
+	// receiver.
+	declared map[string]bool
+}
+
+// declareInstance sends ShellAppDeclared (and ShellWindowCreate for
+// windowed apps) for inst, exactly once per ShellSession. Concurrent
+// callers race safely — the second is a no-op.
+//
+// The dedupe and the writes both run under writeMu, so a parallel
+// declareExistingAppsTo holding the lock keeps relays from squeezing
+// in between declared+create and any follow-on title/focus relay.
+func (s *ShellSession) declareInstance(inst *AppInstance) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.declareInstanceLocked(inst)
+}
+
+// declareInstanceLocked assumes writeMu is held by the caller.
+func (s *ShellSession) declareInstanceLocked(inst *AppInstance) error {
+	if s.declared == nil {
+		s.declared = make(map[string]bool)
+	}
+	if s.declared[inst.InstanceID] {
+		return nil
+	}
+	s.declared[inst.InstanceID] = true
+
+	manifestJSON, err := json.Marshal(inst.Manifest)
+	if err != nil {
+		return err
+	}
+	if err := s.writeCtrlLocked(wire.NewShellAppDeclared(
+		inst.InstanceID,
+		inst.Manifest.Element,
+		inst.Manifest.Surface,
+		manifestJSON,
+	)); err != nil {
+		return err
+	}
+	if inst.WindowID != 0 {
+		var w, h uint32
+		if inst.Manifest.Window != nil {
+			w = inst.Manifest.Window.DefaultWidth
+			h = inst.Manifest.Window.DefaultHeight
+		}
+		return s.writeCtrlLocked(wire.NewShellWindowCreate(
+			inst.WindowID, inst.InstanceID, inst.Manifest.Name, w, h,
+		))
+	}
+	return nil
+}
+
+// undeclareInstance forgets inst so a future declare can fire again
+// (e.g. if instancing logic permits a fresh handshake).
+func (s *ShellSession) undeclareInstance(instanceID string) {
+	s.writeMu.Lock()
+	delete(s.declared, instanceID)
+	s.writeMu.Unlock()
 }
 
 // HandleShell takes ownership of t for the lifetime of a browser
@@ -26,27 +88,23 @@ type ShellSession struct {
 // the world), then runs the frame loop.
 func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	sess := &ShellSession{Transport: t, router: r}
-	r.registerShell(sess)
-	defer r.unregisterShell(sess)
 	defer t.Close()
 
-	if err := r.EnsureSessionRunning(ctx); err != nil {
-		r.log("ensure session: %v", err)
-		// continue — a shell with no session is still useful for
-		// debugging in commits where the session app does not
-		// exist yet.
-	}
-
-	if err := r.declareExistingAppsTo(sess); err != nil {
+	// Hold writeMu for the whole setup. While we hold it, any
+	// concurrent HandleApp.declareInstance blocks at the same mutex,
+	// so the receiver sees catalog → declared → create in order
+	// regardless of which goroutine got there first.
+	sess.writeMu.Lock()
+	if err := sess.writeCtrlLocked(wire.NewShellCatalog(r.catalog())); err != nil {
+		sess.writeMu.Unlock()
 		return err
 	}
-	return sess.loop(ctx)
-}
+	r.registerShell(sess)
+	defer r.unregisterShell(sess)
 
-// declareExistingAppsTo emits ShellAppDeclared + ShellWindowCreate for
-// every currently-registered app to one shell. Called on shell connect
-// so a late join sees existing windows.
-func (r *Router) declareExistingAppsTo(s *ShellSession) error {
+	// Snapshot apps under the router lock; declare them while we
+	// still hold writeMu so any racing HandleApp is correctly
+	// deduped.
 	r.mu.Lock()
 	snapshot := make([]*AppInstance, 0, len(r.apps))
 	for _, inst := range r.apps {
@@ -54,25 +112,19 @@ func (r *Router) declareExistingAppsTo(s *ShellSession) error {
 	}
 	r.mu.Unlock()
 	for _, inst := range snapshot {
-		manifestJSON, err := json.Marshal(inst.Manifest)
-		if err != nil {
+		if err := sess.declareInstanceLocked(inst); err != nil {
+			sess.writeMu.Unlock()
 			return err
-		}
-		if err := s.WriteCtrl(wire.NewShellAppDeclared(inst.InstanceID, inst.Manifest.Element, inst.Manifest.Surface, manifestJSON)); err != nil {
-			return err
-		}
-		if inst.WindowID != 0 {
-			var w, h uint32
-			if inst.Manifest.Window != nil {
-				w, h = inst.Manifest.Window.DefaultWidth, inst.Manifest.Window.DefaultHeight
-			}
-			if err := s.WriteCtrl(wire.NewShellWindowCreate(inst.WindowID, inst.InstanceID, inst.Manifest.Name, w, h)); err != nil {
-				return err
-			}
 		}
 	}
-	return nil
+	sess.writeMu.Unlock()
+
+	if err := r.EnsureSessionRunning(ctx); err != nil {
+		r.log("ensure session: %v", err)
+	}
+	return sess.loop(ctx)
 }
+
 
 func (s *ShellSession) loop(ctx context.Context) error {
 	type readResult struct {
@@ -125,8 +177,23 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		return s.handleWindowFocus(m)
 	case wire.ShellAppMsgSend:
 		return s.handleAppMsgSend(m)
+	case wire.ShellLog:
+		return s.handleShellLog(m)
 	}
 	s.router.log("shell: unexpected ctrl msg %T", msg)
+	return nil
+}
+
+func (s *ShellSession) handleShellLog(m wire.ShellLog) error {
+	src := m.Source
+	if src == "" {
+		src = "shell"
+	}
+	if m.Stack != "" {
+		s.router.log("browser/%s [%s] %s\n%s", src, m.Level, m.Msg, m.Stack)
+	} else {
+		s.router.log("browser/%s [%s] %s", src, m.Level, m.Msg)
+	}
 	return nil
 }
 
@@ -195,11 +262,16 @@ func (s *ShellSession) handleAppMsgSend(m wire.ShellAppMsgSend) error {
 
 // WriteCtrl encodes m as JSON and writes a shell control-channel frame.
 func (s *ShellSession) WriteCtrl(m any) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.writeCtrlLocked(m)
+}
+
+// writeCtrlLocked assumes writeMu is held by the caller.
+func (s *ShellSession) writeCtrlLocked(m any) error {
 	data, err := wire.EncodeCtrl(m)
 	if err != nil {
 		return err
 	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 	return s.Transport.WriteFrame(wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: data})
 }

@@ -40,7 +40,12 @@ export function FloatingWindow(props: WindowProps) {
     target.addEventListener('pointerup', onUp);
   };
 
-  const onWindowPointerDown = () => raise(props.win.windowID);
+  // Local raise + notify the router so the app's BE gets a focus event.
+  const focusWindow = () => {
+    raise(props.win.windowID);
+    window.wash.focusWindow(props.win.windowID);
+  };
+  const onWindowPointerDown = () => focusWindow();
 
   return (
     <div

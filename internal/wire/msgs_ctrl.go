@@ -169,6 +169,9 @@ func DecodeCtrl(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	// Shell-channel tags (§8) are dispatched alongside; they share
 	// the same JSON channel 0 discipline.
+	case TShellCatalog:
+		var m ShellCatalog
+		return m, json.Unmarshal(data, &m)
 	case TShellAppDeclared:
 		var m ShellAppDeclared
 		return m, json.Unmarshal(data, &m)
@@ -195,6 +198,9 @@ func DecodeCtrl(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TShellAppMsgSend:
 		var m ShellAppMsgSend
+		return m, json.Unmarshal(data, &m)
+	case TShellLog:
+		var m ShellLog
 		return m, json.Unmarshal(data, &m)
 	}
 	return nil, fmt.Errorf("ctrl decode: unknown t %q", t)

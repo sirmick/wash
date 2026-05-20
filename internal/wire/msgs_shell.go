@@ -13,6 +13,7 @@ import "encoding/json"
 // types (§9) that use overlapping names like window.focus.
 const (
 	// Router → shell.
+	TShellCatalog       = "catalog"
 	TShellAppDeclared   = "app.declared"
 	TShellWindowCreate  = "window.create"
 	TShellWindowDestroy = "window.destroy"
@@ -24,7 +25,61 @@ const (
 	TShellWindowCloseClicked = "window.close_clicked"
 	TShellWindowFocus        = "window.focus"
 	TShellAppMsgSend         = "app_msg.send"
+	TShellLog                = "log"
 )
+
+// ShellLog levels.
+const (
+	LogLevelError = "error"
+	LogLevelWarn  = "warn"
+	LogLevelInfo  = "info"
+	LogLevelDebug = "debug"
+)
+
+// ShellLog is a browser-side log line forwarded to the router so
+// stdout can show what the browser sees. The shell wires window.onerror
+// and unhandledrejection to this; apps can opt in via window.wash.log.
+//
+// Intentionally untyped beyond level/msg/source/stack — anything
+// fancier (structured fields, breadcrumbs) belongs in a real
+// telemetry pipeline, not on the WS.
+type ShellLog struct {
+	T      string `json:"t"`
+	Level  string `json:"level"`
+	Msg    string `json:"msg"`
+	Source string `json:"source,omitempty"`
+	Stack  string `json:"stack,omitempty"`
+}
+
+func NewShellLog(level, source, msg, stack string) ShellLog {
+	return ShellLog{T: TShellLog, Level: level, Msg: msg, Source: source, Stack: stack}
+}
+
+// ShellCatalogApp is one row of the launchable-apps catalog sent from
+// the router to the shell on connect. Mirrors the manifest fields the
+// chrome needs to render menus and quick-launches; full manifest
+// inspection still happens via app.declared when an instance is
+// actually created.
+type ShellCatalogApp struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Icon       string `json:"icon,omitempty"`
+	Surface    string `json:"surface"`
+	Instancing string `json:"instancing"`
+	Disabled   bool   `json:"disabled,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+// ShellCatalog is the router's "here is what is launchable" snapshot.
+// Sent once on shell connect; v0.1 will revisit live updates.
+type ShellCatalog struct {
+	T    string            `json:"t"`
+	Apps []ShellCatalogApp `json:"apps"`
+}
+
+func NewShellCatalog(apps []ShellCatalogApp) ShellCatalog {
+	return ShellCatalog{T: TShellCatalog, Apps: apps}
+}
 
 // ShellAppDeclared tells the shell a new app instance has been
 // accepted by the router and is ready to be mounted. The shell should

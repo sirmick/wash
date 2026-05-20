@@ -2,19 +2,26 @@
 // drives the WM via the messages in WIRE.md §8.
 
 import { render } from 'solid-js/web';
-import { For } from 'solid-js';
+import { For, createEffect } from 'solid-js';
 import { Conn } from './ws';
 import { fetchAndImport, onAssetDeliver } from './assets';
 import {
   addWindow,
+  focused,
   mountDesktop,
+  raise,
   removeWindow,
   setTitle,
-  unmountDesktop,
   windows,
 } from './wm';
 import { Desktop } from './desktop';
 import { FloatingWindow } from './window';
+import { CatalogApp, Sub, WindowInfo } from './api';
+
+interface ShellCatalog {
+  t: 'catalog';
+  apps: CatalogApp[];
+}
 
 interface ShellAppDeclared {
   t: 'app.declared';
@@ -56,6 +63,10 @@ interface ShellAssetDeliver {
 // Track declared instances so window.create can resolve element by id.
 const instances = new Map<string, { element: string; surface: string }>();
 
+// Reactive subs the chrome (mounted via window.wash) listens to.
+const catalogSub = new Sub<CatalogApp[]>([]);
+const windowsSub = new Sub<WindowInfo[]>([]);
+
 function wsURL(): string {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
   return `${proto}://${window.location.host}/ws`;
@@ -63,6 +74,9 @@ function wsURL(): string {
 
 const conn = new Conn(wsURL(), (msg) => {
   switch (msg.t) {
+    case 'catalog':
+      catalogSub.set((msg as ShellCatalog).apps);
+      break;
     case 'app.declared':
       handleAppDeclared(msg as ShellAppDeclared);
       break;
@@ -79,6 +93,22 @@ const conn = new Conn(wsURL(), (msg) => {
       onAssetDeliver(msg as ShellAssetDeliver);
       break;
   }
+});
+
+// Mirror Solid's windows store into the cross-element Sub so vanilla
+// custom elements (the session chrome) can subscribe without taking
+// a Solid dep.
+createEffect(() => {
+  const focusedID = focused();
+  windowsSub.set(
+    windows.map((w) => ({
+      windowID: w.windowID,
+      instanceID: w.instanceID,
+      element: w.element,
+      title: w.title,
+      focused: focusedID === w.windowID,
+    })),
+  );
 });
 
 function handleAppDeclared(msg: ShellAppDeclared): void {
@@ -136,7 +166,26 @@ declare global {
   interface Window {
     wash: {
       sendAppMsg(instanceID: string, data: unknown): void;
+      catalog(): CatalogApp[];
+      onCatalog(cb: (apps: CatalogApp[]) => void): () => void;
+      windows(): WindowInfo[];
+      onWindowsChanged(cb: (windows: WindowInfo[]) => void): () => void;
+      focusWindow(id: number): void;
+      closeWindow(id: number): void;
+      log(level: 'error' | 'warn' | 'info' | 'debug', source: string, msg: string, stack?: string): void;
     };
+  }
+}
+
+type LogLevel = 'error' | 'warn' | 'info' | 'debug';
+
+function shellLog(level: LogLevel, source: string, msg: string, stack?: string) {
+  // Best-effort — drop silently if the WS isn't open. Avoid recursing
+  // through console.error since we wrap it below.
+  try {
+    conn.sendCtrl({ t: 'log', level, source, msg, ...(stack ? { stack } : {}) });
+  } catch {
+    /* ignore */
   }
 }
 
@@ -144,4 +193,61 @@ window.wash = {
   sendAppMsg(instanceID, data) {
     conn.sendCtrl({ t: 'app_msg.send', instance_id: instanceID, data });
   },
+  catalog: () => catalogSub.value,
+  onCatalog: (cb) => catalogSub.on(cb),
+  windows: () => windowsSub.value,
+  onWindowsChanged: (cb) => windowsSub.on(cb),
+  focusWindow(id) {
+    raise(id);
+    conn.sendCtrl({ t: 'window.focus', window_id: id });
+  },
+  closeWindow(id) {
+    conn.sendCtrl({ t: 'window.close_clicked', window_id: id });
+  },
+  log(level, source, msg, stack) {
+    shellLog(level, source, msg, stack);
+  },
 };
+
+// Auto-capture browser errors so they show up server-side.
+window.addEventListener('error', (ev: ErrorEvent) => {
+  const stack = ev.error && ev.error.stack ? String(ev.error.stack) : '';
+  const where = ev.filename ? `${ev.filename}:${ev.lineno}:${ev.colno}` : '';
+  shellLog('error', 'shell', `${ev.message}${where ? ' @ ' + where : ''}`, stack);
+});
+window.addEventListener('unhandledrejection', (ev: PromiseRejectionEvent) => {
+  const reason = ev.reason as unknown;
+  let msg: string;
+  let stack = '';
+  if (reason instanceof Error) {
+    msg = reason.message;
+    stack = reason.stack ?? '';
+  } else {
+    msg = typeof reason === 'string' ? reason : JSON.stringify(reason);
+  }
+  shellLog('error', 'shell', 'unhandled rejection: ' + msg, stack);
+});
+
+// Mirror console.error / console.warn so app code's complaints land
+// server-side too. We keep the original console output so the dev
+// tools view is unchanged.
+const origError = console.error.bind(console);
+console.error = (...args: unknown[]) => {
+  origError(...args);
+  shellLog('error', 'console', args.map(stringifyArg).join(' '));
+};
+const origWarn = console.warn.bind(console);
+console.warn = (...args: unknown[]) => {
+  origWarn(...args);
+  shellLog('warn', 'console', args.map(stringifyArg).join(' '));
+};
+
+function stringifyArg(a: unknown): string {
+  if (a instanceof Error) return a.stack ?? a.message;
+  if (typeof a === 'string') return a;
+  try {
+    return JSON.stringify(a);
+  } catch {
+    return String(a);
+  }
+}

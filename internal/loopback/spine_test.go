@@ -92,10 +92,17 @@ func TestSpine(t *testing.T) {
 	// The fake shell side reads frames as a real shell would.
 	shell := shellPair.EndB()
 
+	// 0. Catalog goes out first on shell connect. The registry is
+	//    empty here, so apps is empty too.
+	if _, ok := readCtrl(t, shell).(wire.ShellCatalog); !ok {
+		t.Fatalf("expected ShellCatalog first")
+	}
+
 	// 1. Receive ShellAppDeclared.
-	declared, ok := readCtrl(t, shell).(wire.ShellAppDeclared)
+	msg1 := readCtrl(t, shell)
+	declared, ok := msg1.(wire.ShellAppDeclared)
 	if !ok {
-		t.Fatalf("expected ShellAppDeclared, got %T", declared)
+		t.Fatalf("expected ShellAppDeclared, got %T %+v", msg1, msg1)
 	}
 	if declared.Element != "wash-app-about" || declared.Surface != router.SurfaceWindow {
 		t.Fatalf("bad declared: %+v", declared)
