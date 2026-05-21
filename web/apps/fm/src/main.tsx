@@ -123,6 +123,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [renaming, setRenaming] = createSignal<{ path: string; draft: string } | null>(null);
   const [pendingNew, setPendingNew] = createSignal<{ parent: string; kind: 'file' | 'folder'; draft: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = createSignal<{ path: string | string[]; name: string } | null>(null);
+  // replaceConfirm holds the in-flight Replace prompt. The
+  // resolver returns whether the user clicked Replace (true) or
+  // Cancel (false), unblocking the pending withReplacePrompt
+  // continuation. Only one prompt is active at a time.
+  const [replaceConfirm, setReplaceConfirm] = createSignal<{
+    dst: string;
+    entry: Entry | null;
+    resolve: (replace: boolean) => void;
+  } | null>(null);
 
   // Multi-selection state. `selection` is the set of paths the user
   // has selected via plain-click / Ctrl-click / Shift-click; actions
@@ -186,6 +195,41 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       });
       send({ ...req, id });
     });
+  };
+
+  // askReplace shows the Replace confirm overlay for `dst` and
+  // resolves with the user's choice. Used by withReplacePrompt
+  // below; the overlay reads the matching listings entry for
+  // type/size display.
+  const askReplace = (dst: string): Promise<boolean> => {
+    const par = parentPath(dst);
+    const name = baseName(dst);
+    const entry = listings[par]?.find((e) => e.name === name) ?? null;
+    return new Promise<boolean>((resolve) => {
+      setReplaceConfirm({ dst, entry, resolve });
+    });
+  };
+
+  // withReplacePrompt wraps a sendWithReply call with conflict
+  // handling: if the first try comes back with `*_err exists`,
+  // we open the Replace overlay; on user-Replace we retry with
+  // `replace: true`. Returns a synthetic `cancelled` kind if the
+  // user dismissed the overlay so the caller can stay silent
+  // instead of showing an error.
+  const withReplacePrompt = async (
+    req: Record<string, unknown>,
+    destPath: string,
+    errKind: string,
+  ): Promise<BEMessage> => {
+    let reply = await sendWithReply(req);
+    if (reply.kind === errKind && reply.code === 'exists') {
+      const confirmed = await askReplace(destPath);
+      if (!confirmed) {
+        return { kind: 'cancelled' };
+      }
+      reply = await sendWithReply({ ...req, replace: true });
+    }
+    return reply;
   };
 
   // ---- BE comms ----
@@ -539,13 +583,19 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const parent = parentPath(r.path);
     const to = joinPath(parent, draft);
     setRenaming(null);
-    const reply = await sendWithReply({ kind: 'rename', from: r.path, to });
+    const reply = await withReplacePrompt(
+      { kind: 'rename', from: r.path, to },
+      to,
+      'rename_err',
+    );
     if (reply.kind === 'rename_ok') {
       invalidateAndList(parent);
-      // Re-select under the new name so the path bar and preview
-      // follow the rename.
       setPath(to);
       setPathInputValue(to);
+    } else if (reply.kind === 'cancelled') {
+      // User dismissed the Replace prompt — silent no-op.
+    } else if (reply.kind === 'rename_err' && reply.code === 'not_empty_dir') {
+      setStatusOverride(`rename: ${String(reply.msg)}`);
     } else {
       setStatusOverride(`rename: ${String(reply.msg ?? reply.code ?? 'failed')}`);
     }
@@ -859,10 +909,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       setStatusOverride('symlink: link path equals target');
       return;
     }
-    const reply = await sendWithReply({ kind: 'symlink', target: src, link_path: linkPath });
+    const reply = await withReplacePrompt(
+      { kind: 'symlink', target: src, link_path: linkPath },
+      linkPath,
+      'symlink_err',
+    );
     if (reply.kind === 'symlink_ok') {
       expandDir(targetDir);
       invalidateAndList(targetDir);
+    } else if (reply.kind === 'cancelled') {
+      // user dismissed Replace prompt — silent no-op.
+    } else if (reply.kind === 'symlink_err' && reply.code === 'not_empty_dir') {
+      setStatusOverride(`symlink: ${String(reply.msg)}`);
     } else {
       setStatusOverride(`symlink: ${String(reply.msg ?? reply.code ?? 'failed')}`);
     }
@@ -944,7 +1002,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       return;
     }
     const dest = joinPath(targetDir, baseName(src));
-    const reply = await sendWithReply({ kind: 'rename', from: src, to: dest });
+    const reply = await withReplacePrompt(
+      { kind: 'rename', from: src, to: dest },
+      dest,
+      'rename_err',
+    );
     if (reply.kind === 'rename_ok') {
       // Refresh both ends ourselves rather than waiting for
       // fs.watch — for a drop into a collapsed target dir, the
@@ -957,6 +1019,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         setPath(dest);
         setPathInputValue(dest);
       }
+    } else if (reply.kind === 'cancelled') {
+      // user dismissed Replace prompt — silent no-op.
+    } else if (reply.kind === 'rename_err' && reply.code === 'not_empty_dir') {
+      setStatusOverride(`move: ${String(reply.msg)}`);
     } else {
       setStatusOverride(`move: ${String(reply.msg ?? reply.code ?? 'failed')}`);
     }
@@ -1457,6 +1523,23 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           path={confirmDelete()!.path}
           onCancel={cancelDelete}
           onConfirm={performDelete}
+        />
+      </Show>
+
+      <Show when={replaceConfirm()}>
+        <ReplaceConfirmOverlay
+          dst={replaceConfirm()!.dst}
+          entry={replaceConfirm()!.entry}
+          onConfirm={() => {
+            const c = replaceConfirm();
+            setReplaceConfirm(null);
+            c?.resolve(true);
+          }}
+          onCancel={() => {
+            const c = replaceConfirm();
+            setReplaceConfirm(null);
+            c?.resolve(false);
+          }}
         />
       </Show>
 
@@ -1986,6 +2069,102 @@ const ConfirmDeleteOverlay: Component<{
             onClick={props.onConfirm}
           >
             Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ReplaceConfirmOverlay — same modal style as the delete confirm,
+// shown when rename / move / symlink would overwrite an existing
+// entry. Surfaces the dst path AND the entry's type+size so the
+// user knows what they're about to lose; that detail is the whole
+// reason the prompt exists. Returns Replace (destructive) or
+// Cancel (silent no-op).
+const ReplaceConfirmOverlay: Component<{
+  dst: string;
+  entry: Entry | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}> = (props) => {
+  const detail = () => {
+    const e = props.entry;
+    if (!e) return '';
+    if (e.type === 'dir') return 'folder';
+    if (e.type === 'symlink') return 'symlink';
+    if (e.type === 'file') return `file, ${humanSize(e.size)}`;
+    return e.type;
+  };
+  return (
+    <div
+      data-testid="fm-confirm-replace"
+      style={{
+        position: 'absolute',
+        inset: 0,
+        background: 'rgba(0,0,0,0.45)',
+        display: 'flex',
+        'align-items': 'center',
+        'justify-content': 'center',
+        'z-index': 2000,
+      }}
+      onClick={(ev) => {
+        if (ev.target === ev.currentTarget) props.onCancel();
+      }}
+    >
+      <div
+        style={{
+          background: '#181828',
+          border: '1px solid #2a2a3a',
+          'border-radius': '6px',
+          padding: '16px 18px',
+          'min-width': '280px',
+          'max-width': '420px',
+          'box-shadow': '0 12px 28px rgba(0,0,0,0.5)',
+          font: '13px ui-sans-serif,system-ui,sans-serif',
+          color: '#eee',
+        }}
+      >
+        <div style={{ 'font-weight': 600, 'margin-bottom': '6px' }}>Replace?</div>
+        <div
+          data-testid="fm-confirm-replace-path"
+          style={{
+            font: '12px ui-monospace,Menlo,Consolas,monospace',
+            opacity: 0.8,
+            'word-break': 'break-all',
+            'margin-bottom': '4px',
+          }}
+        >
+          {props.dst}
+        </div>
+        <Show when={props.entry}>
+          <div
+            data-testid="fm-confirm-replace-detail"
+            style={{
+              'font-size': '11px',
+              opacity: 0.6,
+              'margin-bottom': '14px',
+            }}
+          >
+            {detail()}
+          </div>
+        </Show>
+        <div style={{ display: 'flex', gap: '8px', 'justify-content': 'flex-end' }}>
+          <button
+            type="button"
+            data-testid="fm-confirm-replace-cancel"
+            style={confirmBtnStyle()}
+            onClick={props.onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-testid="fm-confirm-replace-yes"
+            style={confirmBtnStyle(true)}
+            onClick={props.onConfirm}
+          >
+            Replace
           </button>
         </div>
       </div>

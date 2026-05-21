@@ -322,7 +322,8 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 	case "rename":
 		from, _ := m["from"].(string)
 		to, _ := m["to"].(string)
-		doRename(c, id, from, to)
+		replace, _ := m["replace"].(bool)
+		doRename(c, id, from, to, replace)
 	case "delete":
 		path, _ := m["path"].(string)
 		doDelete(c, id, path)
@@ -354,7 +355,8 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 	case "symlink":
 		target, _ := m["target"].(string)
 		linkPath, _ := m["link_path"].(string)
-		doSymlink(c, id, target, linkPath)
+		replace, _ := m["replace"].(bool)
+		doSymlink(c, id, target, linkPath, replace)
 	case "clipboard_files_set":
 		op, _ := m["op"].(string)
 		paths := toPathSlice(m["paths"])
@@ -578,8 +580,10 @@ func resolveGID(spec string) (int, error) {
 // doSymlink creates a symlink at link_path pointing at target. Only
 // link_path is sandboxed — target is stored verbatim (symlinks
 // can legitimately point outside the browsable area, and the
-// target string is not dereferenced at creation time).
-func doSymlink(c *sdk.Conn, id, target, linkPath string) {
+// target string is not dereferenced at creation time). With
+// `replace`, an existing simple dst (file / symlink / empty dir)
+// is removed first; populated dirs are refused with not_empty_dir.
+func doSymlink(c *sdk.Conn, id, target, linkPath string, replace bool) {
 	if target == "" || linkPath == "" {
 		sendErr(c, "symlink_err", id, linkPath, "bad_request", "missing target or link_path")
 		return
@@ -588,6 +592,22 @@ func doSymlink(c *sdk.Conn, id, target, linkPath string) {
 	if err != nil {
 		sendErr(c, "symlink_err", id, linkPath, confineErrCode(err), err.Error())
 		return
+	}
+	if replace {
+		if dstInfo, err := os.Lstat(link); err == nil {
+			if err := os.Remove(link); err != nil {
+				if dstInfo.IsDir() && strings.Contains(err.Error(), "directory not empty") {
+					sendErr(c, "symlink_err", id, link, "not_empty_dir",
+						"target is a non-empty directory; delete it via the queue first")
+					return
+				}
+				sendErr(c, "symlink_err", id, link, fsErrCode(err), err.Error())
+				return
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			sendErr(c, "symlink_err", id, link, fsErrCode(err), err.Error())
+			return
+		}
 	}
 	if err := os.Symlink(target, link); err != nil {
 		code := fsErrCode(err)
@@ -837,10 +857,14 @@ func sendRead(c *sdk.Conn, id, path string) {
 	}
 }
 
-// doRename moves from→to. Refuses to overwrite an existing target
-// (would be silent data loss). Both paths must be inside the root
-// when the sandbox is active.
-func doRename(c *sdk.Conn, id, from, to string) {
+// doRename moves from→to. Without `replace`, refuses to overwrite
+// an existing target (silent data loss is bad). With `replace`,
+// removes a simple dst (file / symlink / empty dir) first via
+// os.Remove and then renames; refuses with not_empty_dir if dst is
+// a populated directory (those go through bulk-ops). Always
+// refuses from == to (would otherwise delete the source under
+// `replace` — see [[wash-fm-dnd-plan]] guardrails).
+func doRename(c *sdk.Conn, id, from, to string, replace bool) {
 	if from == "" || to == "" {
 		sendErr(c, "rename_err", id, from, "bad_request", "missing from or to")
 		return
@@ -855,22 +879,38 @@ func doRename(c *sdk.Conn, id, from, to string) {
 		sendErr(c, "rename_err", id, to, confineErrCode(err), err.Error())
 		return
 	}
+	if src == dst {
+		sendErr(c, "rename_err", id, src, "same_path", "from and to resolve to the same path")
+		return
+	}
 	if _, err := os.Lstat(src); err != nil {
 		sendErr(c, "rename_err", id, src, fsErrCode(err), err.Error())
 		return
 	}
-	if _, err := os.Lstat(dst); err == nil {
-		sendErr(c, "rename_err", id, dst, "exists", "destination already exists")
-		return
+	if dstInfo, err := os.Lstat(dst); err == nil {
+		if !replace {
+			sendErr(c, "rename_err", id, dst, "exists", "destination already exists")
+			return
+		}
+		// Replace: remove dst first. We refuse populated dirs
+		// (Remove fails on those with "directory not empty") so
+		// fm-direct stays a fast-path; recursive replace lives in
+		// bulk-ops.
+		if err := os.Remove(dst); err != nil {
+			if dstInfo.IsDir() && strings.Contains(err.Error(), "directory not empty") {
+				sendErr(c, "rename_err", id, dst, "not_empty_dir",
+					"target is a non-empty directory; delete it via the queue first")
+				return
+			}
+			sendErr(c, "rename_err", id, dst, fsErrCode(err), err.Error())
+			return
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		sendErr(c, "rename_err", id, dst, fsErrCode(err), err.Error())
 		return
 	}
 	if err := os.Rename(src, dst); err != nil {
 		code := fsErrCode(err)
-		// Cross-device rename surfaces as syscall.EXDEV underneath
-		// — give it a stable code so the FE can render a useful
-		// hint instead of os.LinkError noise.
 		if strings.Contains(err.Error(), "cross-device") {
 			code = "cross_device"
 		}

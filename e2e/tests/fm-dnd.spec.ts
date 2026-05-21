@@ -168,10 +168,11 @@ test.describe('fm DnD: within-window move', () => {
     await expect(fmB.locator('[data-testid="fm-entry-hello.txt"]')).toBeVisible({ timeout: 3_000 });
   });
 
-  test('move collision: dest already exists → rename_err exists, source untouched', async ({ page, router }) => {
-    // Create a folder with the same-named file already inside,
-    // then try to drag the root hello.txt onto that folder.
-    // BE should reject with exists; the file stays at root.
+  test('move collision: dest already exists → Replace prompt; Cancel preserves both files', async ({ page, router }) => {
+    // Drag onto a folder that already contains a same-named file.
+    // The Replace overlay appears; Cancel leaves both files
+    // untouched. (The Replace-clobbers path is covered in
+    // fm-replace.spec.ts.)
     mkdirSync(join(router.fmRoot, 'taken'));
     writeFileSync(join(router.fmRoot, 'taken', 'hello.txt'), 'preexisting\n');
 
@@ -180,7 +181,9 @@ test.describe('fm DnD: within-window move', () => {
     const dst = page.locator('[data-testid="fm-entry-taken"]');
     await src.dragTo(dst);
 
-    await expect(page.locator('[data-testid="fm-status"]')).toContainText(/move:.*exists/);
+    await expect(page.locator('[data-testid="fm-confirm-replace"]')).toBeVisible({ timeout: 3_000 });
+    await page.locator('[data-testid="fm-confirm-replace-cancel"]').click();
+
     expect(existsSync(join(router.fmRoot, 'hello.txt'))).toBe(true);
     expect(readFileSync(join(router.fmRoot, 'taken', 'hello.txt'), 'utf8')).toBe('preexisting\n');
   });

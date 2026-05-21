@@ -141,9 +141,11 @@ test.describe('fm FE mutations', () => {
     expect(existsSync(join(router.fmRoot, 'aborted.txt'))).toBe(false);
   });
 
-  test('error surfaces in status bar: rename onto existing target', async ({ page, router }) => {
+  test('rename onto existing target opens the Replace prompt (covered fully in fm-replace.spec.ts)', async ({ page, router }) => {
     // Seed an extra file alongside hello.txt so a rename collision
-    // path is reachable.
+    // path is reachable. The full Replace / Cancel branches live
+    // in fm-replace.spec.ts; here we just confirm the overlay
+    // appears for the inline-rename entry point.
     writeFileSync(join(router.fmRoot, 'taken.txt'), 'taken\n');
     await openFm(page, router);
 
@@ -153,9 +155,8 @@ test.describe('fm FE mutations', () => {
     await input.fill('taken.txt');
     await input.press('Enter');
 
-    // Status bar should now carry the rename error. Both files
-    // remain untouched.
-    await expect(page.locator('[data-testid="fm-status"]')).toContainText(/rename/);
+    await expect(page.locator('[data-testid="fm-confirm-replace"]')).toBeVisible();
+    await page.locator('[data-testid="fm-confirm-replace-cancel"]').click();
     expect(existsSync(join(router.fmRoot, 'hello.txt'))).toBe(true);
     expect(readFileSync(join(router.fmRoot, 'taken.txt'), 'utf8')).toBe('taken\n');
   });
