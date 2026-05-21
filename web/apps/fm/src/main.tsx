@@ -63,6 +63,7 @@ interface Entry {
   type: 'dir' | 'file' | 'symlink' | 'other';
   size: number;
   mod_unix: number;
+  created_unix: number;
   perm: string;
   mode: number;
   uid: number;
@@ -78,7 +79,7 @@ interface BEMessage {
   [k: string]: unknown;
 }
 
-type SortKey = 'name' | 'mtime' | 'size' | 'type';
+type SortKey = 'name' | 'mtime' | 'ctime' | 'size' | 'type';
 
 type MenuState =
   | { kind: 'sort'; left: number; top: number }
@@ -1160,6 +1161,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         case 'mtime':
           cmp = a.mod_unix - b.mod_unix;
           break;
+        case 'ctime':
+          cmp = a.created_unix - b.created_unix;
+          break;
         case 'size':
           cmp = a.size - b.size;
           break;
@@ -1201,14 +1205,23 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // Flatten the visible tree into a list of {entry, path, depth} rows
   // — Solid's <For> renders the list; toggling expand triggers a fresh
   // computation here automatically.
-  const visibleRows = createMemo<Array<{ entry: Entry; path: string; depth: number }>>(() => {
-    const rows: Array<{ entry: Entry; path: string; depth: number }> = [];
+  const visibleRows = createMemo<Array<{ entry: Entry; path: string; depth: number; childCount?: number }>>(() => {
+    const rows: Array<{ entry: Entry; path: string; depth: number; childCount?: number }> = [];
     const walk = (p: string, depth: number) => {
       const entries = listings[p];
       if (!entries) return;
       for (const e of sortedFiltered(entries)) {
         const childPath = joinPath(p, e.name);
-        rows.push({ entry: e, path: childPath, depth });
+        // For listed dirs, expose the entry count so the row's
+        // size column can render "12 items" instead of blank. We
+        // count ALL entries (including hidden) — Windows-explorer-
+        // style. "show hidden" only affects what's rendered, not
+        // the total.
+        let childCount: number | undefined;
+        if (e.type === 'dir' && listings[childPath]) {
+          childCount = listings[childPath].length;
+        }
+        rows.push({ entry: e, path: childPath, depth, childCount });
         if (e.type === 'dir' && expanded[childPath] && listings[childPath]) {
           walk(childPath, depth + 1);
         }
@@ -1439,6 +1452,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           onDragOver={onListDragOver}
           onDrop={onListDrop}
         >
+          <ColumnHeader
+            sortKey={sortKey()}
+            sortDesc={sortDesc()}
+            onSort={(k) => {
+              if (sortKey() === k) setSortDesc(!sortDesc());
+              else { setSortKey(k); setSortDesc(false); }
+              persist();
+            }}
+          />
           <Show when={pendingNew()}>
             <PendingNewRow
               kind={pendingNew()!.kind}
@@ -1472,6 +1494,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 entry={row.entry}
                 path={row.path}
                 depth={row.depth}
+                childCount={row.childCount}
                 selected={selection().has(row.path) || path() === row.path}
                 expanded={!!expanded[row.path]}
                 renaming={isRenaming() ? { draft: renaming()!.draft } : null}
@@ -1666,10 +1689,79 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
 // ---- sub-components ----
 
+// rowGridCols defines the 4-column layout shared by ColumnHeader
+// and each TreeRow. Tuned so the standard human-size (e.g.
+// "999.9 KB") + date strings ("Dec 15 14:32") fit without
+// truncating in a typical fm window. Column geometry stays
+// fm-specific (don't extract to @wash/ui — apps with different
+// shapes shouldn't share these widths).
+const COL_DATE_W = 96;
+const COL_SIZE_W = 76;
+const rowGridCols = `1fr ${COL_DATE_W}px ${COL_DATE_W}px ${COL_SIZE_W}px`;
+
+// ColumnHeader is the sticky header strip above the tree: Name |
+// Modified | Created | Size. Clicking a header sorts by that
+// column; clicking the active one toggles direction. Stays in
+// sync with the sort menu since both drive the same
+// sortKey/sortDesc state.
+const ColumnHeader: Component<{
+  sortKey: SortKey;
+  sortDesc: boolean;
+  onSort: (k: SortKey) => void;
+}> = (props) => {
+  const arrow = (k: SortKey): JSX.Element => {
+    if (props.sortKey !== k) return null;
+    return props.sortDesc ? <ChevronDown size={11} /> : <ChevronUp size={11} />;
+  };
+  const cell = (label: string, k: SortKey, align: 'left' | 'right'): JSX.Element => (
+    <button
+      type="button"
+      data-testid={`fm-header-${k}`}
+      onClick={() => props.onSort(k)}
+      style={{
+        background: 'transparent',
+        border: 'none',
+        color: '#aaa',
+        font: '11px ui-sans-serif,system-ui,sans-serif',
+        cursor: 'pointer',
+        padding: '4px 8px',
+        display: 'flex',
+        'align-items': 'center',
+        gap: '4px',
+        'justify-content': align === 'right' ? 'flex-end' : 'flex-start',
+      }}
+    >
+      <span>{label}</span>
+      {arrow(k)}
+    </button>
+  );
+  return (
+    <div
+      data-testid="fm-column-header"
+      style={{
+        position: 'sticky',
+        top: 0,
+        background: '#10101a',
+        'border-bottom': '1px solid #2a2a3a',
+        display: 'grid',
+        'grid-template-columns': rowGridCols,
+        'z-index': 2,
+        'user-select': 'none',
+      }}
+    >
+      {cell('Name', 'name', 'left')}
+      {cell('Modified', 'mtime', 'right')}
+      {cell('Created', 'ctime', 'right')}
+      {cell('Size', 'size', 'right')}
+    </div>
+  );
+};
+
 const TreeRow: Component<{
   entry: Entry;
   path: string;
   depth: number;
+  childCount?: number;
   selected: boolean;
   expanded: boolean;
   // When `renaming` is set, the name span becomes a focused input
@@ -1710,10 +1802,10 @@ const TreeRow: Component<{
       onDblClick={() => props.onDblClick?.()}
       onContextMenu={props.onContextMenu}
       style={{
-        display: 'flex',
+        display: 'grid',
+        'grid-template-columns': rowGridCols,
         'align-items': 'center',
-        gap: '4px',
-        padding: `3px 8px 3px ${8 + props.depth * 12}px`,
+        padding: '3px 8px',
         background: props.isDropTarget
           ? '#2a3a5a'
           : props.selected
@@ -1728,9 +1820,17 @@ const TreeRow: Component<{
         outline: props.isDropTarget ? '1px solid #4a6ab0' : 'none',
       }}
     >
+      {/* name cell — chevron + icon + name, indented by depth */}
+      <span style={{
+        display: 'flex',
+        'align-items': 'center',
+        gap: '4px',
+        'padding-left': `${props.depth * 12}px`,
+        overflow: 'hidden',
+      }}>
       <span
         data-testid={`fm-chevron-${props.entry.name}`}
-        style={{ width: '12px', display: 'inline-flex', 'align-items': 'center', 'justify-content': 'center', opacity: 0.6, cursor: 'pointer' }}
+        style={{ width: '12px', display: 'inline-flex', 'align-items': 'center', 'justify-content': 'center', opacity: 0.6, cursor: 'pointer', 'flex-shrink': 0 }}
         onClick={(ev) => {
           if (props.entry.type === 'dir') {
             ev.stopPropagation();
@@ -1742,7 +1842,7 @@ const TreeRow: Component<{
           {props.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         </Show>
       </span>
-      <span style={{ width: '14px', display: 'inline-flex', 'align-items': 'center', 'justify-content': 'center', opacity: 0.8 }}>
+      <span style={{ width: '14px', display: 'inline-flex', 'align-items': 'center', 'justify-content': 'center', opacity: 0.8, 'flex-shrink': 0 }}>
         <EntryIcon entry={props.entry} />
       </span>
       <span style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
@@ -1772,12 +1872,39 @@ const TreeRow: Component<{
           />
         </Show>
       </span>
-      <span style={{ opacity: 0.5, font: '11px ui-monospace,Menlo,Consolas,monospace' }}>
-        {props.entry.type === 'file' && !props.renaming ? humanSize(props.entry.size) : ''}
+      </span>
+      {/* Modified */}
+      <span style={cellNumStyle}>
+        {!props.renaming ? formatDate(props.entry.mod_unix) : ''}
+      </span>
+      {/* Created */}
+      <span style={cellNumStyle}>
+        {!props.renaming ? formatDate(props.entry.created_unix) : ''}
+      </span>
+      {/* Size / item count */}
+      <span style={cellNumStyle}>
+        {props.renaming ? '' : sizeOrCount(props.entry, props.childCount)}
       </span>
     </div>
   );
 };
+
+const cellNumStyle: JSX.CSSProperties = {
+  opacity: 0.6,
+  font: '11px ui-monospace,Menlo,Consolas,monospace',
+  'text-align': 'right',
+  'white-space': 'nowrap',
+  overflow: 'hidden',
+};
+
+function sizeOrCount(entry: Entry, childCount?: number): string {
+  if (entry.type === 'file') return humanSize(entry.size);
+  if (entry.type === 'dir') {
+    if (childCount === undefined) return '';
+    return childCount === 1 ? '1 item' : `${childCount} items`;
+  }
+  return '';
+}
 
 // PendingNewRow — synthetic row rendered above the tree when the
 // user has clicked New File / New Folder. It mirrors the look of a
@@ -2060,6 +2187,7 @@ const SortMenu: Component<{
     <Menu data-testid="fm-sort-menu" x={props.left} y={props.top} onDismiss={props.onDismiss}>
       <MenuItem data-testid="fm-sort-name" label="Name" trailing={arrow('name')} onClick={() => props.onPick('name')} />
       <MenuItem data-testid="fm-sort-mtime" label="Modified" trailing={arrow('mtime')} onClick={() => props.onPick('mtime')} />
+      <MenuItem data-testid="fm-sort-ctime" label="Created" trailing={arrow('ctime')} onClick={() => props.onPick('ctime')} />
       <MenuItem data-testid="fm-sort-size" label="Size" trailing={arrow('size')} onClick={() => props.onPick('size')} />
       <MenuItem data-testid="fm-sort-type" label="Type" trailing={arrow('type')} onClick={() => props.onPick('type')} />
       <MenuSeparator />
@@ -2388,6 +2516,26 @@ function humanSize(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// formatDate renders a unix seconds timestamp in the compact
+// ls-style: "Dec 15 14:32" for this year, "Dec 15  2024" for
+// older entries. Returns "" for 0/missing values so the row
+// stays clean.
+function formatDate(unix: number): string {
+  if (!unix) return '';
+  const d = new Date(unix * 1000);
+  const now = new Date();
+  const month = MONTHS[d.getMonth()];
+  const day = String(d.getDate()).padStart(2, ' ');
+  if (d.getFullYear() === now.getFullYear()) {
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    return `${month} ${day} ${hh}:${mm}`;
+  }
+  return `${month} ${day}  ${d.getFullYear()}`;
 }
 
 function octalPerm(mode: number): string {

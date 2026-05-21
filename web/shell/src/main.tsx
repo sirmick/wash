@@ -9,8 +9,9 @@
 // keeping every browser viewing the session in sync.
 
 import { render } from 'solid-js/web';
-import { For, createEffect } from 'solid-js';
-import { Conn } from './ws';
+import { For, Show, createEffect, createSignal } from 'solid-js';
+import type { Component } from 'solid-js';
+import { Conn, type ConnState } from './ws';
 import { beginBundle, finishBundle, pushBundleBytes } from './assets';
 import {
   applySessionPatch,
@@ -309,11 +310,49 @@ function onWindowClose(windowID: number): void {
   // The actual removal happens when the router sends window.destroy.
 }
 
+const [connState, setConnState] = createSignal<ConnState>('connecting');
+conn.onState(setConnState);
+
 const App = () => (
   <>
     <Desktop />
     <For each={windows}>{(w) => <FloatingWindow win={w} onClose={onWindowClose} />}</For>
+    <ConnectionBanner state={connState()} />
   </>
+);
+
+// ConnectionBanner shows a transient status overlay when the WS
+// is anything other than open. Lives in the shell (not in an app)
+// because if the WS is down, the apps are unreachable anyway.
+// Top-center placement so it's visible without covering taskbar
+// or window chrome.
+const ConnectionBanner: Component<{ state: ConnState }> = (props) => (
+  <Show when={props.state !== 'open'}>
+    <div
+      data-testid="wash-connection-banner"
+      data-state={props.state}
+      style={{
+        position: 'fixed',
+        top: '10px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        background: props.state === 'closed' ? '#5a1a1a' : '#3a2a1a',
+        color: '#eee',
+        border: `1px solid ${props.state === 'closed' ? '#a04040' : '#a07040'}`,
+        'border-radius': '6px',
+        padding: '6px 14px',
+        font: '12px ui-sans-serif,system-ui,sans-serif',
+        'box-shadow': '0 6px 16px rgba(0,0,0,0.5)',
+        'z-index': 100000,
+        'pointer-events': 'none',
+        animation: 'wash-fade-in 200ms ease-out',
+      }}
+    >
+      {props.state === 'connecting' && 'connecting…'}
+      {props.state === 'reconnecting' && 'router unreachable — reconnecting…'}
+      {props.state === 'closed' && 'disconnected'}
+    </div>
+  </Show>
 );
 
 void conn.ready();

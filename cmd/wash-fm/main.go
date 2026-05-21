@@ -38,9 +38,26 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/sirmick/wash/internal/fswatch"
 	"github.com/sirmick/wash/internal/sdk"
 )
+
+// birthtime returns the file's creation time (Unix seconds), or
+// the fallback if statx(STATX_BTIME) doesn't report one. Older
+// filesystems (or pre-4.11 kernels) leave btime unset; we fall
+// back to mtime so the column always has a sortable value.
+func birthtime(absPath string, fallback int64) int64 {
+	var stx unix.Statx_t
+	if err := unix.Statx(unix.AT_FDCWD, absPath, unix.AT_SYMLINK_NOFOLLOW, unix.STATX_BTIME, &stx); err != nil {
+		return fallback
+	}
+	if stx.Mask&unix.STATX_BTIME == 0 {
+		return fallback
+	}
+	return stx.Btime.Sec
+}
 
 //go:embed all:assets
 var assetsFS embed.FS
@@ -82,18 +99,24 @@ type watchState struct {
 var fmWatch *watchState
 
 type entry struct {
-	Name    string `json:"name" cbor:"name"`
-	Type    string `json:"type" cbor:"type"` // "dir" | "file" | "symlink" | "other"
-	Size    int64  `json:"size" cbor:"size"`
-	ModUnix int64  `json:"mod_unix" cbor:"mod_unix"`
-	Perm    string `json:"perm" cbor:"perm"` // "rwxr-xr--" 9-char human form
-	Mode    uint32 `json:"mode" cbor:"mode"` // raw octal-style bits
-	UID     uint32 `json:"uid" cbor:"uid"`
-	GID     uint32 `json:"gid" cbor:"gid"`
-	Owner   string `json:"owner,omitempty" cbor:"owner,omitempty"`
-	Group   string `json:"group,omitempty" cbor:"group,omitempty"`
-	LinkTo  string `json:"link_to,omitempty" cbor:"link_to,omitempty"`
-	LinkErr string `json:"link_err,omitempty" cbor:"link_err,omitempty"`
+	Name string `json:"name" cbor:"name"`
+	Type string `json:"type" cbor:"type"` // "dir" | "file" | "symlink" | "other"
+	Size int64  `json:"size" cbor:"size"`
+	// ModUnix is the last-modified time. CreatedUnix is the
+	// file's birth time when the kernel + filesystem support
+	// statx(STATX_BTIME) (Linux 4.11+, ext4 / btrfs / xfs in
+	// modern configs). Falls back to mtime when btime isn't
+	// available so callers always have a sortable value.
+	ModUnix     int64  `json:"mod_unix" cbor:"mod_unix"`
+	CreatedUnix int64  `json:"created_unix" cbor:"created_unix"`
+	Perm        string `json:"perm" cbor:"perm"` // "rwxr-xr--" 9-char human form
+	Mode        uint32 `json:"mode" cbor:"mode"` // raw octal-style bits
+	UID         uint32 `json:"uid" cbor:"uid"`
+	GID         uint32 `json:"gid" cbor:"gid"`
+	Owner       string `json:"owner,omitempty" cbor:"owner,omitempty"`
+	Group       string `json:"group,omitempty" cbor:"group,omitempty"`
+	LinkTo      string `json:"link_to,omitempty" cbor:"link_to,omitempty"`
+	LinkErr     string `json:"link_err,omitempty" cbor:"link_err,omitempty"`
 }
 
 // All response structs carry an optional ID that echoes the
@@ -765,12 +788,13 @@ func sendList(c *sdk.Conn, id, path string) {
 	groups := map[uint32]string{}
 	for _, fi := range infos {
 		e := entry{
-			Name:    fi.Name(),
-			Type:    typeOf(fi),
-			Size:    fi.Size(),
-			ModUnix: fi.ModTime().Unix(),
-			Perm:    formatPerm(fi.Mode()),
-			Mode:    uint32(fi.Mode().Perm()),
+			Name:        fi.Name(),
+			Type:        typeOf(fi),
+			Size:        fi.Size(),
+			ModUnix:     fi.ModTime().Unix(),
+			CreatedUnix: birthtime(filepath.Join(abs, fi.Name()), fi.ModTime().Unix()),
+			Perm:        formatPerm(fi.Mode()),
+			Mode:        uint32(fi.Mode().Perm()),
 		}
 		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
 			e.UID = st.Uid
