@@ -56,6 +56,12 @@ type Config struct {
 	// router-binary change triggers self re-exec. Off in
 	// production; on for `wash-router --dev` or dev-restart.sh.
 	Dev bool
+
+	// FSRoot is the filesystem sandbox the router ships to every
+	// app in the handshake's Session bag. Empty means unconfined.
+	// Apps that touch the filesystem (wash-fm, wash-fs) treat all
+	// paths as relative to this prefix when non-empty.
+	FSRoot string
 }
 
 // Logger is a minimal sink; cmd/wash-router supplies a real one.
@@ -290,6 +296,17 @@ func (r *Router) catalog() []wire.ShellCatalogApp {
 
 // Config returns the active configuration.
 func (r *Router) Config() Config { return r.cfg }
+
+// handshakeSession builds the Session bag the router ships to every
+// app in the IdentityAck. Returns nil when nothing's configured so
+// the field stays omitempty on the wire. Named distinctly from
+// r.session (the desktop-session app state).
+func (r *Router) handshakeSession() *wire.Session {
+	if r.cfg.FSRoot == "" {
+		return nil
+	}
+	return &wire.Session{Root: r.cfg.FSRoot}
+}
 
 // allocInstanceID returns a fresh per-process instance id. The format
 // is intentionally opaque — apps must treat it as a string token.

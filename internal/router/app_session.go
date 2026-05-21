@@ -171,6 +171,7 @@ func (inst *AppInstance) handshake(ctx context.Context) error {
 		inst.WindowID = inst.router.allocWindowID()
 	}
 	ack := wire.NewIdentityAck(inst.InstanceID, inst.WindowID)
+	ack.Session = inst.router.handshakeSession()
 	if err := inst.writeCtrl(ack); err != nil {
 		return fmt.Errorf("write identity.ack: %w", err)
 	}

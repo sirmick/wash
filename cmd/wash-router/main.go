@@ -88,6 +88,7 @@ func main() {
 	initialApp := flag.String("initial-app", "", "spawn this app full-screen on first shell connect (kiosk)")
 	showHidden := flag.Bool("show-hidden", false, "include manifest.hidden apps in the catalog (e2e / debug)")
 	dev := flag.Bool("dev", false, "watch apps dir + router binary; auto-kill instances and broadcast shell.reload on change")
+	fsRoot := flag.String("fs-root", "", "filesystem sandbox shipped to every app in the handshake (overrides WASH_FS_ROOT; legacy WASH_FM_ROOT honored if neither set)")
 	controlSocket := flag.String("control-socket", "", "Unix socket for wash-launch (default: /tmp/wash-<uid>.sock; \"none\" disables)")
 	screenshotDir := flag.String("screenshot-dir", "", "directory for POST /screenshot uploads (overrides WASH_SCREENSHOT_DIR; default: /tmp/wash-screenshots; \"none\" disables)")
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -111,6 +112,14 @@ func main() {
 		sd = ""
 	}
 
+	rawRoot := firstNonEmpty(*fsRoot, os.Getenv("WASH_FS_ROOT"), os.Getenv("WASH_FM_ROOT"))
+	normRoot := rawRoot
+	if rawRoot != "" {
+		if abs, err := filepath.Abs(rawRoot); err == nil {
+			normRoot = filepath.Clean(abs)
+		}
+	}
+
 	cfg := router.Config{
 		Listen:        firstNonEmpty(*listen, os.Getenv("WASH_LISTEN"), defaultListen),
 		AppsDirs:      router.SplitAppsDir(firstNonEmpty(*appsDir, os.Getenv("WASH_APPS_DIR"), defaultAppsDir())),
@@ -121,6 +130,7 @@ func main() {
 		ControlSocket: cs,
 		ScreenshotDir: sd,
 		Dev:           *dev || os.Getenv("WASH_DEV") != "",
+		FSRoot:        normRoot,
 	}
 
 	logger := log.New(os.Stderr, "wash-router ", log.LstdFlags|log.Lmsgprefix)
@@ -168,6 +178,9 @@ func main() {
 	defer cancel()
 
 	logf("listening on %s (apps dirs: %s; session: %s)", cfg.Listen, strings.Join(cfg.AppsDirs, ":"), cfg.SessionAppID)
+	if cfg.FSRoot != "" {
+		logf("fs sandbox root: %s", cfg.FSRoot)
+	}
 	if cfg.ControlSocket != "" {
 		go func() {
 			if err := r.ListenControl(ctx); err != nil {

@@ -1,15 +1,14 @@
-// wash-fm — a single-pane file manager. The BE syscalls directly
-// (architecture's "BEs run as the user, may syscall" path) rather
-// than going through a router-side fs service. When other apps
-// (text editor, image viewer) need fs access we'll add the dialog
-// provider pattern; for v0.1 wash-fm owns its access.
+// wash-fm — a single-pane file manager. Mutations + reads happen
+// in-process (architecture's "BEs run as the user, may syscall"
+// path); read primitives are factored into internal/fs so wash-fs
+// — the singleton service for dialog consumers — shares them.
 //
-// Path confinement (WASH_FM_ROOT): if set, every path argument is
-// resolved (Clean+Abs) and required to be inside the root by
-// lexical containment. Outside paths get an "outside_root" error.
-// Set by the e2e harness to a per-test tmpdir; unset in production
-// (full filesystem access, no sandbox). It's a safety net for
-// tests, not a security boundary.
+// Path confinement: the sandbox root is shipped by the router in
+// the IdentityAck Session bag (Session.Root) and applied by every
+// path-taking operation via internal/fs.Confine. Outside paths get
+// an "outside_root" error. Empty root means unconfined. Set in dev
+// by `wash-router --fs-root <path>`; unset in production (full
+// filesystem access, no sandbox).
 //
 // Request/response correlation: every request may include an "id"
 // string field; responses echo it. Tests use it to await matched
@@ -31,33 +30,15 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
-	"golang.org/x/sys/unix"
-
+	wfs "github.com/sirmick/wash/internal/fs"
 	"github.com/sirmick/wash/internal/fswatch"
 	"github.com/sirmick/wash/internal/sdk"
 )
-
-// birthtime returns the file's creation time (Unix seconds), or
-// the fallback if statx(STATX_BTIME) doesn't report one. Older
-// filesystems (or pre-4.11 kernels) leave btime unset; we fall
-// back to mtime so the column always has a sortable value.
-func birthtime(absPath string, fallback int64) int64 {
-	var stx unix.Statx_t
-	if err := unix.Statx(unix.AT_FDCWD, absPath, unix.AT_SYMLINK_NOFOLLOW, unix.STATX_BTIME, &stx); err != nil {
-		return fallback
-	}
-	if stx.Mask&unix.STATX_BTIME == 0 {
-		return fallback
-	}
-	return stx.Btime.Sec
-}
 
 //go:embed all:assets
 var assetsFS embed.FS
@@ -78,9 +59,15 @@ const (
 	maxWriteBytes = 8 * 1024 * 1024
 )
 
-// fmRoot is the configured sandbox root, or "" if unconfined. Set
-// once at startup from WASH_FM_ROOT.
+// fmRoot is the configured sandbox root, or "" if unconfined.
+// Populated in onReady from the SDK Session bag the router ships
+// at handshake time — fm never reads WASH_FM_ROOT itself.
 var fmRoot string
+
+// fmFS is the read-side filesystem accessor. Wraps internal/fs with
+// the configured root. Created once in onReady so the rest of the
+// BE doesn't need to thread fmRoot through every call.
+var fmFS *wfs.FS
 
 // watchState owns the fswatch.Manager and the per-path subscription
 // table. fm's FE asks the BE to watch a directory while it's
@@ -98,36 +85,16 @@ type watchState struct {
 
 var fmWatch *watchState
 
-type entry struct {
-	Name string `json:"name" cbor:"name"`
-	Type string `json:"type" cbor:"type"` // "dir" | "file" | "symlink" | "other"
-	Size int64  `json:"size" cbor:"size"`
-	// ModUnix is the last-modified time. CreatedUnix is the
-	// file's birth time when the kernel + filesystem support
-	// statx(STATX_BTIME) (Linux 4.11+, ext4 / btrfs / xfs in
-	// modern configs). Falls back to mtime when btime isn't
-	// available so callers always have a sortable value.
-	ModUnix     int64  `json:"mod_unix" cbor:"mod_unix"`
-	CreatedUnix int64  `json:"created_unix" cbor:"created_unix"`
-	Perm        string `json:"perm" cbor:"perm"` // "rwxr-xr--" 9-char human form
-	Mode        uint32 `json:"mode" cbor:"mode"` // raw octal-style bits
-	UID         uint32 `json:"uid" cbor:"uid"`
-	GID         uint32 `json:"gid" cbor:"gid"`
-	Owner       string `json:"owner,omitempty" cbor:"owner,omitempty"`
-	Group       string `json:"group,omitempty" cbor:"group,omitempty"`
-	LinkTo      string `json:"link_to,omitempty" cbor:"link_to,omitempty"`
-	LinkErr     string `json:"link_err,omitempty" cbor:"link_err,omitempty"`
-}
 
 // All response structs carry an optional ID that echoes the
 // request's id when present. CBOR omitempty on the request side
 // keeps the wire small for FE list/read traffic where id is unused.
 type listResult struct {
-	Kind      string  `json:"kind"`
-	ID        string  `json:"id,omitempty"`
-	Path      string  `json:"path"`
-	Entries   []entry `json:"entries"`
-	Truncated bool    `json:"truncated"`
+	Kind      string      `json:"kind"`
+	ID        string      `json:"id,omitempty"`
+	Path      string      `json:"path"`
+	Entries   []wfs.Entry `json:"entries"`
+	Truncated bool        `json:"truncated"`
 }
 
 type readResult struct {
@@ -198,14 +165,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("wash-fm: assets: %v", err)
 	}
-	if root := os.Getenv("WASH_FM_ROOT"); root != "" {
-		abs, err := filepath.Abs(root)
-		if err != nil {
-			log.Fatalf("wash-fm: WASH_FM_ROOT=%q: %v", root, err)
-		}
-		fmRoot = filepath.Clean(abs)
-		log.Printf("wash-fm: sandbox WASH_FM_ROOT=%s", fmRoot)
-	}
 	sdk.Main(&sdk.AppDef{
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.fm",
@@ -240,6 +199,11 @@ func initialPath() string {
 
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-fm ready instance=%s window=%d", instanceID, windowID)
+	if root := c.Session().Root; root != "" {
+		fmRoot = root
+		log.Printf("wash-fm: sandbox root=%s (from router session)", fmRoot)
+	}
+	fmFS = wfs.New(fmRoot)
 	mgr, err := fswatch.New()
 	if err != nil {
 		// Watching is best-effort — if fsnotify is unavailable
@@ -475,37 +439,6 @@ func toUint32(v any) (uint32, bool) {
 	return 0, false
 }
 
-// lookupOwner / lookupGroup resolve numeric ids to names with a
-// per-list-call cache. We use os/user.LookupId which reads
-// /etc/passwd directly on glibc-less builds (matches the wash
-// CGO_ENABLED=0 posture). A lookup miss caches the empty string
-// so we don't retry the same failure thousands of times.
-func lookupOwner(cache map[uint32]string, uid uint32) string {
-	if name, ok := cache[uid]; ok {
-		return name
-	}
-	u, err := user.LookupId(strconv.FormatUint(uint64(uid), 10))
-	if err != nil {
-		cache[uid] = ""
-		return ""
-	}
-	cache[uid] = u.Username
-	return u.Username
-}
-
-func lookupGroup(cache map[uint32]string, gid uint32) string {
-	if name, ok := cache[gid]; ok {
-		return name
-	}
-	g, err := user.LookupGroupId(strconv.FormatUint(uint64(gid), 10))
-	if err != nil {
-		cache[gid] = ""
-		return ""
-	}
-	cache[gid] = g.Name
-	return g.Name
-}
-
 // doChmod sets the permission bits on path. Only the low 12 bits
 // (suid/sgid/sticky + rwx*3) are kept — apps that want to mess
 // with mode_t flags can shell out. Refuses outside-sandbox paths.
@@ -514,13 +447,13 @@ func doChmod(c *sdk.Conn, id, path string, mode uint32) {
 		sendErr(c, "chmod_err", id, path, "bad_request", "missing path")
 		return
 	}
-	abs, err := confine(path)
+	abs, err := fmFS.Confine(path)
 	if err != nil {
-		sendErr(c, "chmod_err", id, path, confineErrCode(err), err.Error())
+		sendErr(c, "chmod_err", id, path, wfs.ErrCode(err), err.Error())
 		return
 	}
 	if err := os.Chmod(abs, os.FileMode(mode&0o7777)); err != nil {
-		sendErr(c, "chmod_err", id, abs, fsErrCode(err), err.Error())
+		sendErr(c, "chmod_err", id, abs, wfs.ErrCode(err), err.Error())
 		return
 	}
 	if err := c.SendAppMsg(pathOK{Kind: "chmod_ok", ID: id, Path: abs}); err != nil {
@@ -544,9 +477,9 @@ func doChown(c *sdk.Conn, id, path, owner, group string) {
 		sendErr(c, "chown_err", id, path, "bad_request", "missing owner and group")
 		return
 	}
-	abs, err := confine(path)
+	abs, err := fmFS.Confine(path)
 	if err != nil {
-		sendErr(c, "chown_err", id, path, confineErrCode(err), err.Error())
+		sendErr(c, "chown_err", id, path, wfs.ErrCode(err), err.Error())
 		return
 	}
 	uid := -1
@@ -568,7 +501,7 @@ func doChown(c *sdk.Conn, id, path, owner, group string) {
 		gid = n
 	}
 	if err := os.Chown(abs, uid, gid); err != nil {
-		sendErr(c, "chown_err", id, abs, fsErrCode(err), err.Error())
+		sendErr(c, "chown_err", id, abs, wfs.ErrCode(err), err.Error())
 		return
 	}
 	if err := c.SendAppMsg(pathOK{Kind: "chown_ok", ID: id, Path: abs}); err != nil {
@@ -611,9 +544,9 @@ func doSymlink(c *sdk.Conn, id, target, linkPath string, replace bool) {
 		sendErr(c, "symlink_err", id, linkPath, "bad_request", "missing target or link_path")
 		return
 	}
-	link, err := confine(linkPath)
+	link, err := fmFS.Confine(linkPath)
 	if err != nil {
-		sendErr(c, "symlink_err", id, linkPath, confineErrCode(err), err.Error())
+		sendErr(c, "symlink_err", id, linkPath, wfs.ErrCode(err), err.Error())
 		return
 	}
 	if replace {
@@ -624,16 +557,16 @@ func doSymlink(c *sdk.Conn, id, target, linkPath string, replace bool) {
 						"target is a non-empty directory; delete it via the queue first")
 					return
 				}
-				sendErr(c, "symlink_err", id, link, fsErrCode(err), err.Error())
+				sendErr(c, "symlink_err", id, link, wfs.ErrCode(err), err.Error())
 				return
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
-			sendErr(c, "symlink_err", id, link, fsErrCode(err), err.Error())
+			sendErr(c, "symlink_err", id, link, wfs.ErrCode(err), err.Error())
 			return
 		}
 	}
 	if err := os.Symlink(target, link); err != nil {
-		code := fsErrCode(err)
+		code := wfs.ErrCode(err)
 		if errors.Is(err, os.ErrExist) {
 			code = "exists"
 		}
@@ -647,7 +580,7 @@ func doSymlink(c *sdk.Conn, id, target, linkPath string, replace bool) {
 
 // doWatch subscribes to fs events under path and starts (lazily, on
 // first watch) a goroutine that forwards Sub events as fs_event
-// app_msgs. Sandbox is enforced via confine(); the FE can only ever
+// app_msgs. Sandbox is enforced via fmFS.Confine(); the FE can only ever
 // watch dirs it's allowed to see anyway.
 func doWatch(c *sdk.Conn, id, path string) {
 	if fmWatch == nil {
@@ -658,9 +591,9 @@ func doWatch(c *sdk.Conn, id, path string) {
 		sendErr(c, "watch_err", id, path, "bad_request", "missing path")
 		return
 	}
-	abs, err := confine(path)
+	abs, err := fmFS.Confine(path)
 	if err != nil {
-		sendErr(c, "watch_err", id, path, confineErrCode(err), err.Error())
+		sendErr(c, "watch_err", id, path, wfs.ErrCode(err), err.Error())
 		return
 	}
 	fmWatch.mu.Lock()
@@ -709,9 +642,9 @@ func doUnwatch(c *sdk.Conn, id, path string) {
 		sendErr(c, "unwatch_err", id, path, "bad_request", "missing path")
 		return
 	}
-	abs, err := confine(path)
+	abs, err := fmFS.Confine(path)
 	if err != nil {
-		sendErr(c, "unwatch_err", id, path, confineErrCode(err), err.Error())
+		sendErr(c, "unwatch_err", id, path, wfs.ErrCode(err), err.Error())
 		return
 	}
 	fmWatch.mu.Lock()
@@ -726,31 +659,6 @@ func doUnwatch(c *sdk.Conn, id, path string) {
 	_ = c.SendAppMsg(watchOK{Kind: "unwatch_ok", ID: id, Path: abs})
 }
 
-// confine resolves p to an absolute, cleaned path and verifies it is
-// inside fmRoot when the sandbox is active. The lexical check is
-// sufficient for the threat model (test bug passes wrong path);
-// symlink-escape is a known v1 limitation — we don't create
-// symlinks and tests own the fixture tree.
-func confine(p string) (string, error) {
-	if p == "" {
-		return "", errors.New("missing path")
-	}
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return "", err
-	}
-	cleaned := filepath.Clean(abs)
-	if fmRoot == "" {
-		return cleaned, nil
-	}
-	if cleaned != fmRoot && !strings.HasPrefix(cleaned, fmRoot+string(filepath.Separator)) {
-		return "", errOutsideRoot
-	}
-	return cleaned, nil
-}
-
-var errOutsideRoot = errors.New("path is outside the configured WASH_FM_ROOT")
-
 // sendList lists the directory at path and sends list_ok / list_err.
 // Symlinks are reported but not followed; the FE can re-list the
 // target on demand.
@@ -759,69 +667,12 @@ func sendList(c *sdk.Conn, id, path string) {
 		sendErr(c, "list_err", id, path, "bad_request", "missing path")
 		return
 	}
-	abs, err := confine(path)
+	entries, abs, truncated, err := fmFS.List(path, maxListEntries)
 	if err != nil {
-		sendErr(c, "list_err", id, path, confineErrCode(err), err.Error())
+		sendErr(c, "list_err", id, path, wfs.ErrCode(err), err.Error())
 		return
 	}
-	dir, err := os.Open(abs)
-	if err != nil {
-		sendErr(c, "list_err", id, abs, fsErrCode(err), err.Error())
-		return
-	}
-	defer dir.Close()
-	infos, err := dir.Readdir(-1)
-	if err != nil {
-		sendErr(c, "list_err", id, abs, "io", err.Error())
-		return
-	}
-	truncated := false
-	if len(infos) > maxListEntries {
-		infos = infos[:maxListEntries]
-		truncated = true
-	}
-	out := make([]entry, 0, len(infos))
-	// Per-call cache so a directory of many files owned by the same
-	// user/group only resolves each name once. Empty string in the
-	// cache means "lookup failed, don't retry."
-	owners := map[uint32]string{}
-	groups := map[uint32]string{}
-	for _, fi := range infos {
-		e := entry{
-			Name:        fi.Name(),
-			Type:        typeOf(fi),
-			Size:        fi.Size(),
-			ModUnix:     fi.ModTime().Unix(),
-			CreatedUnix: birthtime(filepath.Join(abs, fi.Name()), fi.ModTime().Unix()),
-			Perm:        formatPerm(fi.Mode()),
-			Mode:        uint32(fi.Mode().Perm()),
-		}
-		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-			e.UID = st.Uid
-			e.GID = st.Gid
-			e.Owner = lookupOwner(owners, st.Uid)
-			e.Group = lookupGroup(groups, st.Gid)
-		}
-		if e.Type == "symlink" {
-			full := filepath.Join(abs, fi.Name())
-			if target, err := os.Readlink(full); err == nil {
-				e.LinkTo = target
-			} else {
-				e.LinkErr = err.Error()
-			}
-		}
-		out = append(out, e)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		// Directories first, then alphabetical.
-		di := out[i].Type == "dir"
-		dj := out[j].Type == "dir"
-		if di != dj {
-			return di
-		}
-		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
-	})
-	res := listResult{Kind: "list_ok", ID: id, Path: abs, Entries: out, Truncated: truncated}
+	res := listResult{Kind: "list_ok", ID: id, Path: abs, Entries: entries, Truncated: truncated}
 	if err := c.SendAppMsg(res); err != nil {
 		log.Printf("wash-fm send list_ok: %v", err)
 	}
@@ -834,14 +685,14 @@ func sendRead(c *sdk.Conn, id, path string) {
 		sendErr(c, "read_err", id, path, "bad_request", "missing path")
 		return
 	}
-	abs, err := confine(path)
+	abs, err := fmFS.Confine(path)
 	if err != nil {
-		sendErr(c, "read_err", id, path, confineErrCode(err), err.Error())
+		sendErr(c, "read_err", id, path, wfs.ErrCode(err), err.Error())
 		return
 	}
 	st, err := os.Stat(abs)
 	if err != nil {
-		sendErr(c, "read_err", id, abs, fsErrCode(err), err.Error())
+		sendErr(c, "read_err", id, abs, wfs.ErrCode(err), err.Error())
 		return
 	}
 	if st.IsDir() {
@@ -850,7 +701,7 @@ func sendRead(c *sdk.Conn, id, path string) {
 	}
 	f, err := os.Open(abs)
 	if err != nil {
-		sendErr(c, "read_err", id, abs, fsErrCode(err), err.Error())
+		sendErr(c, "read_err", id, abs, wfs.ErrCode(err), err.Error())
 		return
 	}
 	defer f.Close()
@@ -893,14 +744,14 @@ func doRename(c *sdk.Conn, id, from, to string, replace bool) {
 		sendErr(c, "rename_err", id, from, "bad_request", "missing from or to")
 		return
 	}
-	src, err := confine(from)
+	src, err := fmFS.Confine(from)
 	if err != nil {
-		sendErr(c, "rename_err", id, from, confineErrCode(err), err.Error())
+		sendErr(c, "rename_err", id, from, wfs.ErrCode(err), err.Error())
 		return
 	}
-	dst, err := confine(to)
+	dst, err := fmFS.Confine(to)
 	if err != nil {
-		sendErr(c, "rename_err", id, to, confineErrCode(err), err.Error())
+		sendErr(c, "rename_err", id, to, wfs.ErrCode(err), err.Error())
 		return
 	}
 	if src == dst {
@@ -908,7 +759,7 @@ func doRename(c *sdk.Conn, id, from, to string, replace bool) {
 		return
 	}
 	if _, err := os.Lstat(src); err != nil {
-		sendErr(c, "rename_err", id, src, fsErrCode(err), err.Error())
+		sendErr(c, "rename_err", id, src, wfs.ErrCode(err), err.Error())
 		return
 	}
 	if dstInfo, err := os.Lstat(dst); err == nil {
@@ -926,15 +777,15 @@ func doRename(c *sdk.Conn, id, from, to string, replace bool) {
 					"target is a non-empty directory; delete it via the queue first")
 				return
 			}
-			sendErr(c, "rename_err", id, dst, fsErrCode(err), err.Error())
+			sendErr(c, "rename_err", id, dst, wfs.ErrCode(err), err.Error())
 			return
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		sendErr(c, "rename_err", id, dst, fsErrCode(err), err.Error())
+		sendErr(c, "rename_err", id, dst, wfs.ErrCode(err), err.Error())
 		return
 	}
 	if err := os.Rename(src, dst); err != nil {
-		code := fsErrCode(err)
+		code := wfs.ErrCode(err)
 		if strings.Contains(err.Error(), "cross-device") {
 			code = "cross_device"
 		}
@@ -954,9 +805,9 @@ func doDelete(c *sdk.Conn, id, path string) {
 		sendErr(c, "delete_err", id, path, "bad_request", "missing path")
 		return
 	}
-	abs, err := confine(path)
+	abs, err := fmFS.Confine(path)
 	if err != nil {
-		sendErr(c, "delete_err", id, path, confineErrCode(err), err.Error())
+		sendErr(c, "delete_err", id, path, wfs.ErrCode(err), err.Error())
 		return
 	}
 	// Refuse to delete the configured sandbox root itself. Outside
@@ -967,7 +818,7 @@ func doDelete(c *sdk.Conn, id, path string) {
 		return
 	}
 	if err := os.Remove(abs); err != nil {
-		code := fsErrCode(err)
+		code := wfs.ErrCode(err)
 		if strings.Contains(err.Error(), "directory not empty") {
 			code = "not_empty"
 		}
@@ -986,14 +837,14 @@ func doCreateFile(c *sdk.Conn, id, path string) {
 		sendErr(c, "create_file_err", id, path, "bad_request", "missing path")
 		return
 	}
-	abs, err := confine(path)
+	abs, err := fmFS.Confine(path)
 	if err != nil {
-		sendErr(c, "create_file_err", id, path, confineErrCode(err), err.Error())
+		sendErr(c, "create_file_err", id, path, wfs.ErrCode(err), err.Error())
 		return
 	}
 	f, err := os.OpenFile(abs, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
-		code := fsErrCode(err)
+		code := wfs.ErrCode(err)
 		if errors.Is(err, os.ErrExist) {
 			code = "exists"
 		}
@@ -1014,13 +865,13 @@ func doCreateDir(c *sdk.Conn, id, path string) {
 		sendErr(c, "create_dir_err", id, path, "bad_request", "missing path")
 		return
 	}
-	abs, err := confine(path)
+	abs, err := fmFS.Confine(path)
 	if err != nil {
-		sendErr(c, "create_dir_err", id, path, confineErrCode(err), err.Error())
+		sendErr(c, "create_dir_err", id, path, wfs.ErrCode(err), err.Error())
 		return
 	}
 	if err := os.Mkdir(abs, 0o755); err != nil {
-		code := fsErrCode(err)
+		code := wfs.ErrCode(err)
 		if errors.Is(err, os.ErrExist) {
 			code = "exists"
 		}
@@ -1045,9 +896,9 @@ func doWrite(c *sdk.Conn, id, path, content string) {
 		sendErr(c, "write_err", id, path, "too_large", "content exceeds maxWriteBytes")
 		return
 	}
-	abs, err := confine(path)
+	abs, err := fmFS.Confine(path)
 	if err != nil {
-		sendErr(c, "write_err", id, path, confineErrCode(err), err.Error())
+		sendErr(c, "write_err", id, path, wfs.ErrCode(err), err.Error())
 		return
 	}
 	dir := filepath.Dir(abs)
@@ -1059,7 +910,7 @@ func doWrite(c *sdk.Conn, id, path, content string) {
 	tmp := filepath.Join(dir, ".wash-fm.tmp."+hex.EncodeToString(suffixBytes))
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
-		sendErr(c, "write_err", id, abs, fsErrCode(err), err.Error())
+		sendErr(c, "write_err", id, abs, wfs.ErrCode(err), err.Error())
 		return
 	}
 	n, werr := f.Write([]byte(content))
@@ -1076,7 +927,7 @@ func doWrite(c *sdk.Conn, id, path, content string) {
 	}
 	if err := os.Rename(tmp, abs); err != nil {
 		_ = os.Remove(tmp)
-		sendErr(c, "write_err", id, abs, fsErrCode(err), err.Error())
+		sendErr(c, "write_err", id, abs, wfs.ErrCode(err), err.Error())
 		return
 	}
 	if err := c.SendAppMsg(writeOK{Kind: "write_ok", ID: id, Path: abs, Bytes: n}); err != nil {
@@ -1090,65 +941,15 @@ func sendErr(c *sdk.Conn, kind, id, path, code, msg string) {
 	}
 }
 
-// maxCompletions caps the autocomplete suggestion count.
-const maxCompletions = 50
-
-// sendCompletions returns paths matching `partial`. Rules:
-//   - empty / "/"          → entries in /
-//   - trailing "/"         → entries in the directory
-//   - otherwise            → entries in dirname(partial) starting with basename(partial)
-//
-// Directory matches get a trailing "/" so subsequent typing extends
-// naturally. With the sandbox active, the searched directory must
-// be inside the root; outside-root partials silently return no
-// matches (autocomplete is a UX path, not a place for errors).
+// sendCompletions returns paths matching `partial` via the shared
+// internal/fs Complete helper. Out-of-sandbox or unreadable dirs
+// silently surface as zero matches — autocomplete is a UX path, not
+// an error surface.
 func sendCompletions(c *sdk.Conn, id, partial string) {
-	var dir, prefix string
-	switch {
-	case partial == "":
-		dir, prefix = "/", ""
-	case strings.HasSuffix(partial, "/"):
-		dir, prefix = partial, ""
-	default:
-		dir = filepath.Dir(partial)
-		if dir == "" {
-			dir = "/"
-		}
-		prefix = filepath.Base(partial)
+	matches := fmFS.Complete(partial, 0)
+	if matches == nil {
+		matches = []string{}
 	}
-	empty := map[string]any{"kind": "complete_ok", "id": id, "partial": partial, "matches": []string{}}
-	abs, err := confine(dir)
-	if err != nil {
-		_ = c.SendAppMsg(empty)
-		return
-	}
-	d, err := os.Open(abs)
-	if err != nil {
-		_ = c.SendAppMsg(empty)
-		return
-	}
-	defer d.Close()
-	infos, err := d.Readdir(-1)
-	if err != nil {
-		_ = c.SendAppMsg(empty)
-		return
-	}
-	matches := make([]string, 0, 16)
-	for _, fi := range infos {
-		name := fi.Name()
-		if !strings.HasPrefix(name, prefix) {
-			continue
-		}
-		full := filepath.Join(abs, name)
-		if fi.IsDir() {
-			full += "/"
-		}
-		matches = append(matches, full)
-		if len(matches) >= maxCompletions {
-			break
-		}
-	}
-	sort.Strings(matches)
 	if err := c.SendAppMsg(map[string]any{
 		"kind":    "complete_ok",
 		"id":      id,
@@ -1157,43 +958,6 @@ func sendCompletions(c *sdk.Conn, id, partial string) {
 	}); err != nil {
 		log.Printf("wash-fm send complete_ok: %v", err)
 	}
-}
-
-// typeOf returns the entry type tag for a fs.FileInfo.
-func typeOf(fi os.FileInfo) string {
-	m := fi.Mode()
-	switch {
-	case m.IsDir():
-		return "dir"
-	case m&os.ModeSymlink != 0:
-		return "symlink"
-	case m.IsRegular():
-		return "file"
-	default:
-		return "other"
-	}
-}
-
-// fsErrCode maps common os errors to short codes the FE can render.
-func fsErrCode(err error) string {
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return "not_found"
-	case errors.Is(err, os.ErrPermission):
-		return "denied"
-	case errors.Is(err, os.ErrExist):
-		return "exists"
-	}
-	return "io"
-}
-
-// confineErrCode promotes the sentinel to a stable code; falls
-// through to fsErrCode for any other path-resolution failure.
-func confineErrCode(err error) string {
-	if errors.Is(err, errOutsideRoot) {
-		return "outside_root"
-	}
-	return fsErrCode(err)
 }
 
 // looksBinary inspects the first chunk for NUL bytes. Cheap and
@@ -1205,18 +969,6 @@ func looksBinary(b []byte) bool {
 		}
 	}
 	return false
-}
-
-// formatPerm renders a 9-char rwx string for a Unix file mode.
-func formatPerm(m os.FileMode) string {
-	const set = "rwxrwxrwx"
-	out := []byte("---------")
-	for i := 0; i < 9; i++ {
-		if m&(1<<uint(8-i)) != 0 {
-			out[i] = set[i]
-		}
-	}
-	return string(out)
 }
 
 // fmIcon — Lucide sprite symbol name. The shell renders this via

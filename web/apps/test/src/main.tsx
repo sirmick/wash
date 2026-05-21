@@ -18,10 +18,15 @@
 // Custom element: <wash-app-test>. Receives BE messages as the
 // CustomEvent "wash:msg" on itself; receives DOM input events as usual.
 
+import { createSignal } from 'solid-js';
+import { render } from 'solid-js/web';
+import { FilePicker } from '@wash/ui';
+
 declare global {
   interface Window {
     wash: {
       sendAppMsg(instanceID: string, data: unknown): void;
+      sendAppMsgTo(recipient: { app_id: string } | { instance_id: string }, data: unknown): void;
       log(level: 'error' | 'warn' | 'info' | 'debug', source: string, msg: string, stack?: string): void;
       openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
       writeRaw(channelID: number, bytes: Uint8Array): void;
@@ -124,6 +129,15 @@ class WashAppTest extends HTMLElement {
         <span>clipboard changes: <b data-testid="clipboard-changes">0</b></span>
       </section>
 
+      <section style="margin:10px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        ${actionBtn('picker-open', 'Open file…')}
+        ${actionBtn('picker-save', 'Save as…')}
+        <span style="opacity:0.7;">last picker result:</span>
+        <b data-testid="picker-result">(none)</b>
+      </section>
+
+      <div data-testid="picker-mount"></div>
+
       <section style="margin:10px 0;display:flex;gap:18px;flex-wrap:wrap;">
         <span>echo ch: <b data-testid="echo-channel">none</b></span>
         <span>sent: <b data-testid="echo-sent">0</b></span>
@@ -222,6 +236,60 @@ class WashAppTest extends HTMLElement {
     this.addEventListener('wash:msg', (ev) => {
       const m = (ev as CustomEvent).detail as BEMessage;
       this.handleBE(m);
+    });
+
+    this.bindPicker();
+  }
+
+  // bindPicker mounts a single Solid root that renders <FilePicker>
+  // when pickerState() is non-null. Open/Save buttons set the state;
+  // the picker's callbacks clear it and stamp the chosen path into
+  // the picker-result label. The BE's fs.* forwarder routes
+  // wash-fs replies onto this element's wash:msg, which the picker
+  // listens for internally (host prop = this element).
+  private bindPicker() {
+    const mount = this.querySelector('[data-testid="picker-mount"]') as HTMLDivElement | null;
+    if (!mount) return;
+
+    const [pickerState, setPickerState] = createSignal<{ mode: 'open' | 'save' } | null>(null);
+    const self = this;
+
+    // Mount FilePicker as a Solid root. We always mount it but
+    // toggle visibility via the `open` prop — early-returning null
+    // from the render callback would set up an empty tree that
+    // signal changes can't repopulate (Solid render is fine-grained,
+    // not React-style top-down re-render). The picker's internal
+    // <Show when={props.open}> handles the actual conditional.
+    render(() => (
+      <FilePicker
+        open={pickerState() !== null}
+        mode={pickerState()?.mode ?? 'open'}
+        host={self}
+        hostInstanceID={self.instance}
+        defaultName={pickerState()?.mode === 'save' ? 'untitled.txt' : undefined}
+        filters={[
+          { label: 'All files', re: '.*' },
+          { label: 'Text (.txt, .md)', re: '\\.(txt|md)$' },
+        ]}
+        onConfirm={(path) => {
+          setPickerState(null);
+          self.set('picker-result', path);
+        }}
+        onCancel={() => {
+          setPickerState(null);
+          self.set('picker-result', '(cancelled)');
+        }}
+        data-testid="picker"
+      />
+    ), mount);
+
+    this.querySelector('[data-testid="action-picker-open"]')?.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      setPickerState({ mode: 'open' });
+    });
+    this.querySelector('[data-testid="action-picker-save"]')?.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      setPickerState({ mode: 'save' });
     });
   }
 

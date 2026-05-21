@@ -131,6 +131,7 @@ func (r *Router) acceptIdentity(inst *AppInstance) error {
 		inst.WindowID = r.allocWindowID()
 	}
 	ack := wire.NewIdentityAck(inst.InstanceID, inst.WindowID)
+	ack.Session = r.handshakeSession()
 	if err := inst.writeCtrl(ack); err != nil {
 		return fmt.Errorf("write identity.ack: %w", err)
 	}

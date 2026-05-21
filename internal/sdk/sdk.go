@@ -78,6 +78,7 @@ type Conn struct {
 
 	instanceID string
 	windowID   uint32
+	session    wire.Session
 
 	// channels is the live raw channel registry. Keyed by router-
 	// allocated channel id. Mutated only by dispatch + OpenChannel.
@@ -114,6 +115,12 @@ func (c *Conn) InstanceID() string { return c.instanceID }
 // WindowID returns the router-assigned window id; zero for
 // surface=desktop apps.
 func (c *Conn) WindowID() uint32 { return c.windowID }
+
+// Session returns the router-supplied session bag set at handshake
+// time. Fields default to the zero value when the router didn't ship
+// one (e.g. test harnesses), so apps can call Session().Root and get
+// "" for "unconfined" without nil-checking.
+func (c *Conn) Session() wire.Session { return c.session }
 
 // Manifest exposes the app's manifest.
 func (c *Conn) Manifest() *Manifest { return &c.def.Manifest }
@@ -263,6 +270,9 @@ func (c *Conn) handshake() error {
 	case wire.IdentityAck:
 		c.instanceID = m.InstanceID
 		c.windowID = m.WindowID
+		if m.Session != nil {
+			c.session = *m.Session
+		}
 		return nil
 	case wire.Error:
 		return fmt.Errorf("router refused: %s (%s)", m.Msg, m.Code)

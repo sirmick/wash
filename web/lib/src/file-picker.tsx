@@ -1,0 +1,748 @@
+// FilePicker — open/save modal that any wash app can drop in.
+//
+// Architecture
+//
+// The picker sends fs.list / fs.stat / fs.complete / fs.root via
+// window.wash.sendAppMsg(hostInstanceID, …) — i.e., to the host's
+// OWN BE. The host opts in by calling `sdk.EnableFilePicker(c)` in
+// its OnReady; that helper dispatches fs.* messages through
+// internal/fs (sandboxed by Session.Root) and replies via
+// c.SendAppMsg. No cross-app routing, no separate service. The
+// host BE keeps using internal/fs directly for its other work; the
+// picker just shares the same in-process accessor through a tiny
+// dispatch helper.
+//
+// Replies arrive on the host element's wash:msg event (same path
+// every BE→FE message takes); the picker correlates by `id`.
+//
+// Layout (flat / Finder style):
+//
+//   ┌──── Open File ─────────────────────────────────┐
+//   │ [breadcrumb / path input]              [Up ↑]  │
+//   │ ┌─ Name ─────────────── Size ── Modified ──┐  │
+//   │ │ 📁 docs                       —  Apr 14   │  │
+//   │ │ 📄 hello.txt                12 B  Apr 14   │  │
+//   │ │ 📄 plan.md                 1 KB  Apr 12   │  │
+//   │ └────────────────────────────────────────────┘  │
+//   │ [filter ▾]              [Cancel]  [Open]       │
+//   └─────────────────────────────────────────────────┘
+//
+// (Save mode adds a name input above the action row.)
+
+import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import type { Component, JSX } from 'solid-js';
+import { tokens } from './tokens';
+import { Overlay, ConfirmDialog } from './overlay';
+
+// FilterSpec is the user-facing filter shape. `re` is a JavaScript
+// regex source string (no slashes); the picker compiles it once per
+// activation and tests entry.name against it. Folders are always
+// shown regardless of filter — navigation can't be blocked.
+export interface FilterSpec {
+  label: string;
+  re: string;
+}
+
+export interface FilePickerProps {
+  open: boolean;
+  mode: 'open' | 'save';
+  // Host element for delivering BE replies. The picker installs a
+  // `wash:msg` listener here and correlates replies by id.
+  host: HTMLElement;
+  // The host's instance id — the picker sends requests to its own
+  // BE via window.wash.sendAppMsg(hostInstanceID, …). The host BE
+  // dispatches them through sdk.EnableFilePicker, which calls
+  // internal/fs and replies via c.SendAppMsg back to this element.
+  // No cross-app routing, no separate service.
+  hostInstanceID: string;
+  // Initial directory. Empty / undefined falls back to "/" which
+  // the host's confine downshifts to the sandbox root automatically
+  // via the outside_root recovery path.
+  start?: string;
+  // Save-mode default filename, prefilled into the name input.
+  defaultName?: string;
+  filters?: FilterSpec[];
+  defaultFilter?: number;
+  onConfirm: (path: string) => void;
+  onCancel: () => void;
+  // Testids — exposed so e2e tests can address the picker without
+  // colliding with the host app's own elements.
+  'data-testid'?: string;
+}
+
+// Entry mirrors the shape wash-fs returns in `list_ok.entries`. We
+// only declare what the picker reads — adding fields is forward-
+// compatible because we never destructure exhaustively.
+interface Entry {
+  name: string;
+  type: 'dir' | 'file' | 'symlink' | 'other';
+  size: number;
+  mod_unix: number;
+}
+
+type SortKey = 'name' | 'size' | 'mtime';
+
+interface ListOK {
+  kind: 'fs.list_ok';
+  id: string;
+  path: string;
+  entries: Entry[];
+  truncated: boolean;
+}
+
+interface ListErr {
+  kind: 'fs.list_err';
+  id: string;
+  code: string;
+  msg: string;
+}
+
+interface StatOK {
+  kind: 'fs.stat_ok';
+  id: string;
+  path: string;
+  entry: Entry;
+}
+
+interface StatErr {
+  kind: 'fs.stat_err';
+  id: string;
+  code: string;
+  msg: string;
+}
+
+interface RootOK {
+  kind: 'fs.root_ok';
+  id: string;
+  root: string;
+}
+
+type AnyReply = ListOK | ListErr | StatOK | StatErr | RootOK;
+
+// We don't redeclare the global Window.wash here — every consuming
+// app already does that and TypeScript merges declarations, so a
+// second declaration with a narrower shape would conflict. Instead
+// the lib calls into window.wash via a single typed helper that
+// asserts the minimum shape it needs.
+type WashGlobal = {
+  sendAppMsg(instanceID: string, data: unknown): void;
+};
+const washAPI = (): WashGlobal => (window as unknown as { wash: WashGlobal }).wash;
+
+export const FilePicker: Component<FilePickerProps> = (props) => {
+  // ---- reactive state ----
+  const [cwd, setCwd] = createSignal(props.start || '/');
+  const [pathInput, setPathInput] = createSignal(props.start || '/');
+  const [entries, setEntries] = createSignal<Entry[]>([]);
+  const [loading, setLoading] = createSignal(true);
+  const [errorMsg, setErrorMsg] = createSignal<string>('');
+  const [selectedName, setSelectedName] = createSignal<string>('');
+  const [saveName, setSaveName] = createSignal(props.defaultName ?? '');
+  const [sortKey, setSortKey] = createSignal<SortKey>('name');
+  const [sortDesc, setSortDesc] = createSignal(false);
+  const [filterIdx, setFilterIdx] = createSignal(
+    typeof props.defaultFilter === 'number' ? props.defaultFilter : 0,
+  );
+  const [replacePrompt, setReplacePrompt] = createSignal<string>('');
+
+  // ---- BE I/O ----
+
+  let nextReqID = 0;
+  const pending = new Map<string, (m: AnyReply) => void>();
+
+  // send addresses the host's own BE. The host opts into the
+  // picker by calling sdk.EnableFilePicker(c) in its OnReady,
+  // which registers fs.* dispatch on the conn and replies via
+  // c.SendAppMsg — same path every other host→FE message takes.
+  // No cross-app routing.
+  const send = (req: Record<string, unknown>): Promise<AnyReply> => {
+    nextReqID += 1;
+    const id = `fs-${nextReqID}`;
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(() => {
+        if (pending.delete(id)) {
+          resolve({ kind: 'fs.list_err', id, code: 'timeout', msg: 'no reply from host BE — is sdk.EnableFilePicker called?' });
+        }
+      }, 5000);
+      pending.set(id, (m) => {
+        window.clearTimeout(timer);
+        resolve(m);
+      });
+      washAPI().sendAppMsg(props.hostInstanceID, { ...req, id });
+    });
+  };
+
+  // Listen for fs.* replies from the host BE (delivered as wash:msg
+  // events on the host element, like any other BE→FE message).
+  // EnableFilePicker tags replies with kinds starting "fs.".
+  const onWashMsg = (ev: Event) => {
+    const detail = (ev as CustomEvent).detail as AnyReply | undefined;
+    if (!detail || typeof detail.kind !== 'string' || !detail.kind.startsWith('fs.')) {
+      return;
+    }
+    const id = (detail as { id?: string }).id;
+    if (!id) return;
+    const resolver = pending.get(id);
+    if (!resolver) return;
+    pending.delete(id);
+    resolver(detail);
+  };
+
+  onMount(() => {
+    props.host.addEventListener('wash:msg', onWashMsg);
+    void loadDir(cwd());
+  });
+  onCleanup(() => {
+    props.host.removeEventListener('wash:msg', onWashMsg);
+  });
+
+  // loadDir asks wash-fs to list `p`. On success, updates the
+  // picker's view to that directory; on outside_root, asks wash-fs
+  // for the configured root and retries there so the user lands
+  // somewhere usable instead of staring at an error (this is the
+  // common case when the picker starts at "/" but wash-fs has a
+  // sandbox). Any other error surfaces beneath the path bar and
+  // keeps the previous listing on screen.
+  const loadDir = async (p: string, recovering = false) => {
+    setLoading(true);
+    setErrorMsg('');
+    const reply = await send({ kind: 'fs.list', path: p });
+    if (reply.kind === 'fs.list_ok') {
+      setLoading(false);
+      setCwd(reply.path);
+      setPathInput(reply.path);
+      setEntries(reply.entries ?? []);
+      setSelectedName('');
+      return;
+    }
+    if (reply.kind === 'fs.list_err' && reply.code === 'outside_root' && !recovering) {
+      // Ask wash-fs where the sandbox actually is, then re-list
+      // there. `recovering` guards against an infinite bounce if
+      // the root call itself goes wrong.
+      const rootReply = await send({ kind: 'fs.root' });
+      if (rootReply.kind === 'fs.root_ok' && rootReply.root) {
+        void loadDir(rootReply.root, true);
+        return;
+      }
+    }
+    setLoading(false);
+    if (reply.kind === 'fs.list_err') {
+      setErrorMsg(`${reply.code}: ${reply.msg}`);
+    }
+  };
+
+  // ---- derived: sort + filter ----
+
+  const filterRE = createMemo<RegExp | null>(() => {
+    const f = props.filters?.[filterIdx()];
+    if (!f) return null;
+    try {
+      return new RegExp(f.re);
+    } catch {
+      return null;
+    }
+  });
+
+  const visibleEntries = createMemo<Entry[]>(() => {
+    const re = filterRE();
+    let list = entries();
+    if (re) list = list.filter((e) => e.type === 'dir' || re.test(e.name));
+    const out = list.slice();
+    const desc = sortDesc();
+    const key = sortKey();
+    out.sort((a, b) => {
+      // Folders first regardless of column, then within-type sort.
+      if (a.type === 'dir' && b.type !== 'dir') return -1;
+      if (a.type !== 'dir' && b.type === 'dir') return 1;
+      let cmp = 0;
+      switch (key) {
+        case 'name':
+          cmp = a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+          break;
+        case 'size':
+          cmp = a.size - b.size;
+          break;
+        case 'mtime':
+          cmp = a.mod_unix - b.mod_unix;
+          break;
+      }
+      return desc ? -cmp : cmp;
+    });
+    return out;
+  });
+
+  // ---- actions ----
+
+  const goUp = () => {
+    const p = cwd();
+    if (!p || p === '/') return;
+    const i = p.lastIndexOf('/');
+    void loadDir(i <= 0 ? '/' : p.slice(0, i));
+  };
+
+  const navigateToInput = () => {
+    void loadDir(pathInput());
+  };
+
+  const onRowClick = (e: Entry) => {
+    setSelectedName(e.name);
+    if (props.mode === 'save' && e.type === 'file') {
+      setSaveName(e.name);
+    }
+  };
+
+  const onRowDblClick = (e: Entry) => {
+    const target = joinPath(cwd(), e.name);
+    if (e.type === 'dir') {
+      void loadDir(target);
+      return;
+    }
+    if (e.type === 'file' && props.mode === 'open') {
+      props.onConfirm(target);
+    }
+  };
+
+  const onConfirmClick = async () => {
+    if (props.mode === 'open') {
+      const sel = selectedName();
+      if (!sel) return;
+      const e = entries().find((x) => x.name === sel);
+      if (!e) return;
+      const path = joinPath(cwd(), sel);
+      if (e.type === 'dir') {
+        void loadDir(path);
+        return;
+      }
+      props.onConfirm(path);
+      return;
+    }
+    // save mode
+    const name = saveName().trim();
+    if (!name) return;
+    if (name.includes('/')) {
+      setErrorMsg('save: name cannot contain /');
+      return;
+    }
+    const target = joinPath(cwd(), name);
+    const reply = await send({ kind: 'fs.stat', path: target });
+    if (reply.kind === 'fs.stat_ok') {
+      // Exists — prompt to replace.
+      setReplacePrompt(target);
+      return;
+    }
+    // stat_err with code=not_found is the happy path: filename is free.
+    props.onConfirm(target);
+  };
+
+  const onReplaceConfirm = () => {
+    const p = replacePrompt();
+    setReplacePrompt('');
+    if (p) props.onConfirm(p);
+  };
+  const onReplaceCancel = () => setReplacePrompt('');
+
+  // ---- keyboard ----
+
+  const onPickerKey = (ev: KeyboardEvent) => {
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      props.onCancel();
+    }
+  };
+
+  // ---- view ----
+  //
+  // We wrap the picker body in <Show when={props.open}> rather
+  // than `if (!props.open) return null;` at the top. Solid
+  // component bodies run once — early-return means the reactive
+  // tree never mounts, and toggling `open` from outside can't
+  // bring it back. <Show> is the reactive equivalent.
+
+  return (
+    <>
+    <Show when={props.open}>
+      <Overlay
+        onDismiss={props.onCancel}
+        data-testid={props['data-testid']}
+        innerStyle={{
+          // `width: calc(100% - 32px)` leaves 16px of breathing room
+          // on each side of the host window so the picker never
+          // visually touches the edge. The min/max clamp keeps the
+          // box readable on tiny + huge windows respectively.
+          width: 'calc(100% - 32px)',
+          'min-width': '320px',
+          'max-width': '760px',
+          padding: '0',
+          // Inner panel handles its own padding so the column rows
+          // can extend edge-to-edge inside the box.
+        }}
+      >
+        <div
+          onKeyDown={onPickerKey}
+          style={{
+            display: 'flex',
+            'flex-direction': 'column',
+            'min-height': '420px',
+            'max-height': '70vh',
+          }}
+        >
+          {/* title */}
+          <div style={titleStyle}>
+            {props.mode === 'open' ? 'Open File' : 'Save As'}
+          </div>
+
+          {/* path bar */}
+          <div style={pathBarStyle}>
+            <button
+              type="button"
+              data-testid="fp-up"
+              onClick={goUp}
+              style={iconBtnStyle}
+              title="Up one directory"
+            >
+              ↑
+            </button>
+            <input
+              type="text"
+              data-testid="fp-path"
+              spellcheck={false}
+              value={pathInput()}
+              onInput={(e) => setPathInput(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  navigateToInput();
+                }
+              }}
+              style={pathInputStyle}
+            />
+          </div>
+
+          {/* error line — only when something went wrong */}
+          <Show when={errorMsg()}>
+            <div data-testid="fp-error" style={errorStyle}>
+              {errorMsg()}
+            </div>
+          </Show>
+
+          {/* column header */}
+          <div style={headerRowStyle}>
+            {(['name', 'size', 'mtime'] as SortKey[]).map((k) => (
+              <button
+                type="button"
+                data-testid={`fp-col-${k}`}
+                onClick={() => {
+                  if (sortKey() === k) setSortDesc(!sortDesc());
+                  else { setSortKey(k); setSortDesc(false); }
+                }}
+                style={headerCellStyle(k)}
+              >
+                {k === 'name' ? 'Name' : k === 'size' ? 'Size' : 'Modified'}
+                <Show when={sortKey() === k}>
+                  <span style={{ 'margin-left': '4px', opacity: 0.6 }}>
+                    {sortDesc() ? '▼' : '▲'}
+                  </span>
+                </Show>
+              </button>
+            ))}
+          </div>
+
+          {/* entry list */}
+          <div data-testid="fp-list" style={listStyle}>
+            <Show when={loading()}>
+              <div style={mutedRowStyle}>loading…</div>
+            </Show>
+            <Show when={!loading() && visibleEntries().length === 0}>
+              <div style={mutedRowStyle}>(empty)</div>
+            </Show>
+            <For each={visibleEntries()}>
+              {(e) => {
+                const sel = () => selectedName() === e.name;
+                return (
+                  <div
+                    data-testid={`fp-entry-${e.name}`}
+                    data-type={e.type}
+                    data-selected={sel() ? 'true' : undefined}
+                    onClick={() => onRowClick(e)}
+                    onDblClick={() => onRowDblClick(e)}
+                    style={rowStyle(sel())}
+                  >
+                    <span style={rowNameCellStyle}>
+                      <span style={{ 'margin-right': '6px', opacity: 0.8 }}>
+                        {e.type === 'dir' ? '📁' : '📄'}
+                      </span>
+                      {e.name}
+                    </span>
+                    <span style={rowNumCellStyle}>
+                      {e.type === 'file' ? humanSize(e.size) : ''}
+                    </span>
+                    <span style={rowNumCellStyle}>{formatDate(e.mod_unix)}</span>
+                  </div>
+                );
+              }}
+            </For>
+          </div>
+
+          {/* save-mode name input */}
+          <Show when={props.mode === 'save'}>
+            <div style={nameInputRowStyle}>
+              <label style={{ color: tokens.fgMuted }}>Save as:</label>
+              <input
+                type="text"
+                data-testid="fp-save-name"
+                spellcheck={false}
+                value={saveName()}
+                onInput={(e) => setSaveName(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void onConfirmClick();
+                  }
+                }}
+                style={{ ...pathInputStyle, flex: 1 }}
+              />
+            </div>
+          </Show>
+
+          {/* footer: filter + action buttons */}
+          <div style={footerStyle}>
+            <Show when={props.filters && props.filters.length > 0}>
+              <select
+                data-testid="fp-filter"
+                value={filterIdx()}
+                onChange={(e) => setFilterIdx(parseInt(e.currentTarget.value, 10))}
+                style={selectStyle}
+              >
+                <For each={props.filters!}>
+                  {(f, i) => <option value={i()}>{f.label}</option>}
+                </For>
+              </select>
+            </Show>
+            <div style={{ flex: 1 }} />
+            <button
+              type="button"
+              data-testid="fp-cancel"
+              onClick={props.onCancel}
+              style={actionBtnStyle(false)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              data-testid="fp-confirm"
+              onClick={() => void onConfirmClick()}
+              disabled={
+                (props.mode === 'open' && !selectedName()) ||
+                (props.mode === 'save' && !saveName().trim())
+              }
+              style={actionBtnStyle(true)}
+            >
+              {props.mode === 'open' ? 'Open' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </Overlay>
+    </Show>
+
+      {/* overwrite prompt — only fires in save mode */}
+      <Show when={replacePrompt()}>
+        <ConfirmDialog
+          title="Replace existing file?"
+          confirmLabel="Replace"
+          danger
+          onCancel={onReplaceCancel}
+          onConfirm={onReplaceConfirm}
+          data-testid="fp-replace-dialog"
+          confirmTestid="fp-replace-confirm"
+          cancelTestid="fp-replace-cancel"
+        >
+          <div style={{ color: tokens.fgMuted, 'font-size': tokens.fontSizeMd }}>
+            {replacePrompt()}
+          </div>
+        </ConfirmDialog>
+      </Show>
+    </>
+  );
+};
+
+// ---- styles ----
+
+const titleStyle: JSX.CSSProperties = {
+  padding: '12px 16px 10px',
+  font: `600 ${tokens.fontSizeBase} ${tokens.fontSans}`,
+  'border-bottom': `1px solid ${tokens.borderWindow}`,
+};
+
+const pathBarStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'center',
+  gap: '6px',
+  padding: '8px 12px',
+};
+
+const iconBtnStyle: JSX.CSSProperties = {
+  background: 'transparent',
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}px`,
+  width: '26px',
+  height: '26px',
+  cursor: 'pointer',
+  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+};
+
+const pathInputStyle: JSX.CSSProperties = {
+  flex: 1,
+  background: '#10101a',
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}px`,
+  padding: '4px 8px',
+  font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
+  outline: 'none',
+};
+
+const errorStyle: JSX.CSSProperties = {
+  padding: '4px 12px',
+  color: '#ff8080',
+  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+};
+
+const HEADER_ROW_H = 24;
+
+const headerRowStyle: JSX.CSSProperties = {
+  display: 'grid',
+  'grid-template-columns': '1fr 90px 110px',
+  'background': tokens.bgMenu,
+  'border-top': `1px solid ${tokens.borderMenu}`,
+  'border-bottom': `1px solid ${tokens.borderMenu}`,
+  'user-select': 'none',
+};
+
+function headerCellStyle(_k: SortKey): JSX.CSSProperties {
+  return {
+    background: 'transparent',
+    border: 'none',
+    color: tokens.fgMuted,
+    font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+    cursor: 'pointer',
+    padding: '0 8px',
+    height: `${HEADER_ROW_H}px`,
+    'box-sizing': 'border-box',
+    display: 'flex',
+    'align-items': 'center',
+    'justify-content': _k === 'name' ? 'flex-start' : 'flex-end',
+  };
+}
+
+const listStyle: JSX.CSSProperties = {
+  flex: 1,
+  overflow: 'auto',
+  background: '#181828',
+};
+
+const mutedRowStyle: JSX.CSSProperties = {
+  padding: '20px 16px',
+  color: tokens.fgDim,
+  'font-style': 'italic',
+  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+};
+
+function rowStyle(selected: boolean): JSX.CSSProperties {
+  return {
+    display: 'grid',
+    'grid-template-columns': '1fr 90px 110px',
+    'align-items': 'center',
+    padding: '4px 8px',
+    background: selected ? tokens.bgRowSelected : 'transparent',
+    color: tokens.fg,
+    cursor: 'pointer',
+    'user-select': 'none',
+    font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  };
+}
+
+const rowNameCellStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'center',
+  overflow: 'hidden',
+  'text-overflow': 'ellipsis',
+  'white-space': 'nowrap',
+};
+
+const rowNumCellStyle: JSX.CSSProperties = {
+  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  color: tokens.fgMuted,
+  'text-align': 'right',
+  'white-space': 'nowrap',
+};
+
+const nameInputRowStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'center',
+  gap: '8px',
+  padding: '8px 12px',
+  'border-top': `1px solid ${tokens.borderMenu}`,
+  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+};
+
+const footerStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'center',
+  gap: '8px',
+  padding: '10px 12px',
+  'border-top': `1px solid ${tokens.borderMenu}`,
+  background: tokens.bgMenu,
+};
+
+const selectStyle: JSX.CSSProperties = {
+  background: '#10101a',
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}px`,
+  padding: '3px 8px',
+  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+};
+
+function actionBtnStyle(primary: boolean): JSX.CSSProperties {
+  return {
+    background: primary ? '#2a3a6a' : 'transparent',
+    color: tokens.fg,
+    border: `1px solid ${primary ? '#3a4a8a' : tokens.borderMenu}`,
+    'border-radius': `${tokens.radiusSm}px`,
+    padding: '5px 14px',
+    cursor: 'pointer',
+    font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  };
+}
+
+// ---- helpers ----
+
+function joinPath(parent: string, name: string): string {
+  if (parent.endsWith('/')) return parent + name;
+  return parent + '/' + name;
+}
+
+function humanSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function formatDate(unix: number): string {
+  if (!unix) return '';
+  const d = new Date(unix * 1000);
+  const now = new Date();
+  const day = String(d.getDate()).padStart(2, ' ');
+  const month = MONTHS[d.getMonth()];
+  if (d.getFullYear() === now.getFullYear()) {
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    return `${month} ${day} ${hh}:${mm}`;
+  }
+  return `${month} ${day}  ${d.getFullYear()}`;
+}
+

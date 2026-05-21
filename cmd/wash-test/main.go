@@ -66,11 +66,15 @@ func main() {
 	})
 }
 
-// onReady captures the Conn so callbacks can write back.
+// onReady captures the Conn so callbacks can write back. Also opts
+// the test app into the FilePicker bridge — one call registers fs.*
+// handlers that the picker FE addresses via sendAppMsg to this BE.
+// No per-message plumbing required.
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	st.mu.Lock()
 	st.conn = c
 	st.mu.Unlock()
+	sdk.EnableFilePicker(c)
 	log.Printf("wash-test ready instance=%s window=%d", instanceID, windowID)
 }
 

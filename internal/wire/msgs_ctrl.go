@@ -72,12 +72,28 @@ func NewIdentityWithPID(appID string, proto int, version string, pid int) Identi
 	return Identity{T: TIdentity, AppID: appID, Proto: proto, Version: version, PID: pid}
 }
 
+// Session is the bag of session-scoped facts the router ships once
+// at handshake time. Fields are omitempty so old SDKs (or apps that
+// don't care) see no JSON noise. Future additions (Locale, Timezone,
+// Theme, …) drop in here as new optional fields; no protocol bump
+// needed as long as we only add — never rename or remove.
+type Session struct {
+	// Root is the fs sandbox; "" means unconfined. Apps that
+	// touch the filesystem (wash-fm, wash-fs) MUST treat every
+	// path as relative to this prefix when it's non-empty.
+	Root string `json:"root,omitempty"`
+}
+
 // IdentityAck is the router's reply (§6 step 3). WindowID is omitted
 // for surface:"desktop" apps — the element mounts as the root surface.
+// Session carries router-supplied session facts; pointer + omitempty
+// so old IdentityAck producers (tests, future minimal mocks) don't
+// emit a noisy "session": {} on the wire.
 type IdentityAck struct {
-	T          string `json:"t"`
-	InstanceID string `json:"instance_id"`
-	WindowID   uint32 `json:"window_id,omitempty"`
+	T          string   `json:"t"`
+	InstanceID string   `json:"instance_id"`
+	WindowID   uint32   `json:"window_id,omitempty"`
+	Session    *Session `json:"session,omitempty"`
 }
 
 func NewIdentityAck(instanceID string, windowID uint32) IdentityAck {

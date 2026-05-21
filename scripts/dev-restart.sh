@@ -108,11 +108,14 @@ args=(
 if [[ "$no_session" == "1" ]]; then
   args+=(--no-session)
 fi
+if [[ -n "$fm_root" ]]; then
+  # Router now owns the fs sandbox and ships it to apps via the
+  # handshake's Session bag. wash-fm no longer reads WASH_FM_ROOT
+  # directly — only the router does, and only as a legacy fallback.
+  args+=(--fs-root "$fm_root")
+fi
 
 env_kv=()
-if [[ -n "$fm_root" ]]; then
-  env_kv+=("WASH_FM_ROOT=$fm_root")
-fi
 
 : > "$LOG"
 
