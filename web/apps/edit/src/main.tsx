@@ -34,6 +34,13 @@ import { markdown } from '@codemirror/lang-markdown';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import xtermCSS from '@xterm/xterm/css/xterm.css?inline';
+import {
+  ChevronDown,
+  ChevronRight,
+  File as FileIcon,
+  Folder as FolderIcon,
+  Link2,
+} from 'lucide-solid';
 
 declare global {
   interface Window {
@@ -1177,15 +1184,37 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                     style={rowStyle(sel(), row.depth)}
                     onClick={() => onRowClick(row)}
                   >
-                    <span style={{ width: '12px', 'flex-shrink': 0, opacity: 0.6 }}>
-                      <Show when={row.entry.type === 'dir'} fallback="">
-                        {isExpanded() ? '▾' : '▸'}
+                    {/* chevron + icon + name — same visual contract as
+                        wash-fm's TreeRow: 12px chevron slot, 14px icon
+                        slot, lucide-solid glyphs. Empty chevron slot
+                        keeps file rows' icons aligned with folders'. */}
+                    <span
+                      data-testid={`edit-chevron-${row.entry.name}`}
+                      style={{
+                        width: '12px',
+                        display: 'inline-flex',
+                        'align-items': 'center',
+                        'justify-content': 'center',
+                        opacity: 0.6,
+                        'flex-shrink': 0,
+                      }}
+                    >
+                      <Show when={row.entry.type === 'dir'}>
+                        {isExpanded() ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                       </Show>
                     </span>
-                    <span style={{ 'margin-right': '4px', opacity: 0.8 }}>
-                      {row.entry.type === 'dir' ? '📁' : '📄'}
+                    <span style={{
+                      width: '14px',
+                      display: 'inline-flex',
+                      'align-items': 'center',
+                      'justify-content': 'center',
+                      opacity: 0.8,
+                      'flex-shrink': 0,
+                    }}>
+                      <EntryIcon type={row.entry.type} />
                     </span>
                     <span style={{
+                      flex: 1,
                       overflow: 'hidden',
                       'text-overflow': 'ellipsis',
                       'white-space': 'nowrap',
@@ -1357,6 +1386,22 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   );
 };
 
+// EntryIcon picks the lucide glyph for a given entry type. Mirrors
+// the helper of the same name in wash-fm so the sidebar tree looks
+// identical to fm's: folder, file, symlink, or fallback file.
+const EntryIcon: Component<{ type: Entry['type'] }> = (props) => {
+  switch (props.type) {
+    case 'dir':
+      return <FolderIcon size={12} />;
+    case 'symlink':
+      return <Link2 size={12} />;
+    case 'file':
+      return <FileIcon size={12} />;
+    default:
+      return <FileIcon size={12} />;
+  }
+};
+
 // ---- menu bar pieces ----
 
 // langChoices is the Syntax menu list. Adding a new language pack
@@ -1507,16 +1552,18 @@ const sidebarListStyle: JSX.CSSProperties = {
 };
 
 function rowStyle(selected: boolean, depth: number): JSX.CSSProperties {
+  // Match wash-fm's TreeRow visual: 4px gap between chevron / icon /
+  // name, depth-indented via padding-left, 3px row vertical pad.
   return {
     display: 'flex',
     'align-items': 'center',
-    padding: `2px 8px 2px ${4 + depth * 12}px`,
+    gap: '4px',
+    padding: `3px 8px 3px ${8 + depth * 12}px`,
     background: selected ? tokens.bgRowSelected : 'transparent',
     color: tokens.fg,
     cursor: 'pointer',
     'user-select': 'none',
     font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
-    gap: '2px',
   };
 }
 
