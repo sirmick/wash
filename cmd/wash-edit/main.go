@@ -154,6 +154,17 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		path, _ := m["path"].(string)
 		content, _ := m["content"].(string)
 		doWrite(c, id, path, content)
+	case "save_state":
+		// Persist the FE's state blob via the SDK's SaveState. The
+		// router stores it keyed by this instance's id and replays
+		// to the FE on next mount as a `wash:state` event.
+		state, ok := m["state"]
+		if !ok {
+			return
+		}
+		if err := c.SaveState(state); err != nil {
+			log.Printf("wash-edit save_state: %v", err)
+		}
 	}
 }
 
@@ -161,6 +172,13 @@ func doList(c *sdk.Conn, id, path string) {
 	if path == "" {
 		sendErr(c, "list_err", id, path, "bad_request", "missing path")
 		return
+	}
+	// When a sandbox is configured and the caller asks for "/", they
+	// mean the sandbox root — same affordance the FilePicker gets
+	// via fs.root recovery, just applied at the BE so the FE boot
+	// doesn't have to chain calls.
+	if path == "/" && root != "" {
+		path = root
 	}
 	entries, abs, truncated, err := editFS.List(path, maxListEntries)
 	if err != nil {

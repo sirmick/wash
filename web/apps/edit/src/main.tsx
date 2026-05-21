@@ -15,7 +15,7 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount }
 import { createStore, produce } from 'solid-js/store';
 import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
-import { Splitter, StatusBar, tokens } from '@wash/ui';
+import { FilePicker, Splitter, StatusBar, tokens } from '@wash/ui';
 import { EditorState, Compartment } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
@@ -52,6 +52,33 @@ interface BEMessage {
   [k: string]: unknown;
 }
 
+// PersistedState is what we write to SaveState and read back on
+// mount. Only saved tabs (with a real path) are persisted —
+// Untitled buffers are ephemeral, lost on reload. Cursor/scroll
+// per tab can be added later; for v1 the file list + active +
+// splitter are enough.
+interface PersistedState {
+  paths?: string[];
+  active?: string;
+  split_pct?: number;
+}
+
+// Tab is one open file (or one Untitled buffer). Path is "" for
+// Untitled tabs that haven't been saved yet — they'll trigger the
+// Save dialog on first Ctrl+S. baseline is the on-disk content the
+// last write produced; the editor compares against it to set the
+// dirty flag. state is the captured CM EditorState the last time
+// this tab was the active one — we restore it on tab switch so
+// each tab carries its own undo history, cursor, scroll.
+interface Tab {
+  id: string;
+  path: string;
+  displayName: string;
+  baseline: string;
+  state: EditorState | null;
+  binary: boolean;
+}
+
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ---- reactive state ----
 
@@ -64,12 +91,29 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [selectedPath, setSelectedPath] = createSignal('');
   const [splitPct, setSplitPct] = createSignal(25);
 
-  // openContent is the text of the currently-open file, populated
-  // by a read response. Empty when nothing's open or the file was
-  // binary. openMeta carries the per-file status (size, binary,
-  // truncated) for the status bar.
-  const [openContent, setOpenContent] = createSignal('');
-  const [openMeta, setOpenMeta] = createSignal<{ binary: boolean; truncated: boolean; size: number } | null>(null);
+  // tabs / activeID drive the editor pane. tabs is ordered; the
+  // tab bar renders left-to-right. activeID points at one of them
+  // (or '' when no tabs are open). dirtyIDs is a derived signal
+  // that tracks which tabs have unsaved changes.
+  const [tabs, setTabs] = createSignal<Tab[]>([]);
+  const [activeID, setActiveID] = createSignal('');
+  const [dirtyIDs, setDirtyIDs] = createSignal<Set<string>>(new Set());
+  // picker drives the FilePicker overlay. null = closed; otherwise
+  // mode + savePayload (for Save-As, the tab whose content we'll
+  // write once the user picks a destination).
+  const [picker, setPicker] = createSignal<
+    | null
+    | { mode: 'open' }
+    | { mode: 'save'; tabID: string; suggestedName: string }
+  >(null);
+  // untitledCounter — monotonically increasing index for naming
+  // fresh Untitled-N buffers. Resets only on app remount.
+  let untitledCounter = 0;
+
+  const activeTab = (): Tab | undefined => {
+    const id = activeID();
+    return tabs().find((t) => t.id === id);
+  };
 
   // Per-request id counter for the message correlator. Each list /
   // read / write gets a fresh id so we can pair the reply.
@@ -107,18 +151,190 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
-  const loadFile = async (path: string) => {
-    const reply = await sendWithReply({ kind: 'read', path });
-    if (reply.kind === 'read_ok') {
-      const binary = !!reply.binary;
-      const size = Number(reply.size ?? 0);
-      const truncated = !!reply.truncated;
-      setOpenMeta({ binary, truncated, size });
-      setOpenContent(binary ? '' : String(reply.content ?? ''));
-    } else {
-      setOpenMeta(null);
-      setOpenContent('');
+  // openInTab focuses an existing tab for `path`, or reads the
+  // file and creates a fresh tab if there isn't one. Same tab
+  // can't appear twice — opening twice converges on a single tab.
+  const openInTab = async (path: string) => {
+    captureActiveState();
+    const existing = tabs().find((t) => t.path === path);
+    if (existing) {
+      setActiveID(existing.id);
+      return;
     }
+    const reply = await sendWithReply({ kind: 'read', path });
+    if (reply.kind !== 'read_ok') return;
+    const binary = !!reply.binary;
+    const content = binary ? '' : String(reply.content ?? '');
+    const tab: Tab = {
+      id: path,
+      path,
+      displayName: baseName(path) || path,
+      baseline: content,
+      state: null,
+      binary,
+    };
+    setTabs([...tabs(), tab]);
+    setActiveID(tab.id);
+  };
+
+  // newUntitled creates a fresh empty buffer. The path stays ""
+  // until the user saves it via the FilePicker.
+  const newUntitled = () => {
+    captureActiveState();
+    untitledCounter += 1;
+    const id = `untitled-${untitledCounter}`;
+    const tab: Tab = {
+      id,
+      path: '',
+      displayName: `Untitled-${untitledCounter}`,
+      baseline: '',
+      state: null,
+      binary: false,
+    };
+    setTabs([...tabs(), tab]);
+    setActiveID(tab.id);
+  };
+
+  // closeTab drops the tab and picks a sensible neighbor for the
+  // new active. Dirty-state confirmation will be added when the
+  // app gets a "really close?" dialog; for now closes are silent.
+  const closeTab = (id: string) => {
+    const cur = tabs();
+    const idx = cur.findIndex((t) => t.id === id);
+    if (idx < 0) return;
+    const next = cur.slice(0, idx).concat(cur.slice(idx + 1));
+    setTabs(next);
+    setDirtyIDs((s) => {
+      if (!s.has(id)) return s;
+      const out = new Set(s);
+      out.delete(id);
+      return out;
+    });
+    if (activeID() === id) {
+      const neighbor = next[idx] ?? next[idx - 1];
+      setActiveID(neighbor ? neighbor.id : '');
+    }
+  };
+
+  // saveActive writes the active tab's current content to disk.
+  // If the tab is Untitled (no path yet) it routes through the
+  // FilePicker in save mode and writes once the user picks one.
+  const saveActive = async () => {
+    const t = activeTab();
+    if (!t || !editorView) return;
+    if (!t.path) {
+      setPicker({ mode: 'save', tabID: t.id, suggestedName: t.displayName });
+      return;
+    }
+    const content = editorView.state.doc.toString();
+    const reply = await sendWithReply({ kind: 'write', path: t.path, content });
+    if (reply.kind === 'write_ok') {
+      // Refresh baseline + clear dirty marker. The tab's path may
+      // have changed if write canonicalized it (filepath.Clean).
+      setTabs(tabs().map((x) => x.id === t.id ? { ...x, baseline: content, path: String(reply.path ?? x.path) } : x));
+      setDirtyIDs((s) => {
+        if (!s.has(t.id)) return s;
+        const out = new Set(s);
+        out.delete(t.id);
+        return out;
+      });
+    }
+  };
+
+  // saveAsActive forces the picker open for the active tab, no
+  // matter whether it already has a path. Bound to Ctrl+Shift+S.
+  const saveAsActive = () => {
+    const t = activeTab();
+    if (!t) return;
+    setPicker({
+      mode: 'save',
+      tabID: t.id,
+      suggestedName: baseName(t.path) || t.displayName,
+    });
+  };
+
+  // pickerConfirm dispatches the picker's chosen path. In open
+  // mode we just route through openInTab. In save mode we write
+  // the source tab's current doc to the chosen path, then
+  // canonicalize the tab (path, displayName, baseline).
+  const pickerConfirm = async (chosen: string) => {
+    const cur = picker();
+    setPicker(null);
+    if (!cur) return;
+    if (cur.mode === 'open') {
+      void openInTab(chosen);
+      return;
+    }
+    if (!editorView) return;
+    const src = tabs().find((t) => t.id === cur.tabID);
+    if (!src) return;
+    const content = src.id === activeID() ? editorView.state.doc.toString() : (src.state ? src.state.doc.toString() : src.baseline);
+    const reply = await sendWithReply({ kind: 'write', path: chosen, content });
+    if (reply.kind !== 'write_ok') return;
+    const newPath = String(reply.path ?? chosen);
+    // Update the tab: new id (the path), new display name, fresh
+    // baseline. If another tab already pointed at newPath, drop
+    // it — converging on a single tab per path matches openInTab.
+    const dupeIdx = tabs().findIndex((t) => t.path === newPath && t.id !== src.id);
+    const updated = tabs()
+      .filter((_, i) => i !== dupeIdx)
+      .map((x) => x.id === src.id
+        ? { ...x, id: newPath, path: newPath, displayName: baseName(newPath) || newPath, baseline: content }
+        : x);
+    setTabs(updated);
+    setActiveID(newPath);
+    setDirtyIDs((s) => {
+      if (!s.has(src.id)) return s;
+      const out = new Set(s);
+      out.delete(src.id);
+      return out;
+    });
+  };
+
+  // ---- state persistence ----
+
+  // persist is debounced so a flurry of tab switches doesn't slam
+  // the router. The state blob is small (handful of paths) so
+  // the cost is negligible per call; the debounce just collapses
+  // bursts.
+  let persistTimer: number | null = null;
+  const persist = () => {
+    if (!props.instance) return;
+    if (persistTimer != null) window.clearTimeout(persistTimer);
+    persistTimer = window.setTimeout(() => {
+      persistTimer = null;
+      const state: PersistedState = {
+        paths: tabs().filter((t) => t.path).map((t) => t.path),
+        active: activeTab()?.path || undefined,
+        split_pct: splitPct(),
+      };
+      send({ kind: 'save_state', state });
+    }, 250);
+  };
+
+  const restoreFrom = async (s: PersistedState) => {
+    if (typeof s.split_pct === 'number') {
+      setSplitPct(Math.max(15, Math.min(85, s.split_pct)));
+    }
+    if (s.paths && s.paths.length > 0) {
+      for (const p of s.paths) {
+        await openInTab(p);
+      }
+      if (s.active) {
+        const t = tabs().find((x) => x.path === s.active);
+        if (t) setActiveID(t.id);
+      }
+    }
+  };
+
+  // captureActiveState snapshots the live CM state into the
+  // outgoing tab right before a switch. Without this, switching
+  // away from a tab loses its undo history and cursor.
+  const captureActiveState = () => {
+    const t = activeTab();
+    if (!t || !editorView) return;
+    if (t.state === editorView.state) return;
+    setTabs(tabs().map((x) => x.id === t.id ? { ...x, state: editorView!.state } : x));
   };
 
   const handleBE = (m: BEMessage) => {
@@ -176,7 +392,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
     if (row.entry.type === 'file') {
       setSelectedPath(row.path);
-      void loadFile(row.path);
+      void openInTab(row.path);
     }
   };
 
@@ -194,6 +410,26 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   let editorView: EditorView | undefined;
   const langCompartment = new Compartment();
 
+  // dirtyListener compares the live doc against the active tab's
+  // baseline after every doc-changing transaction. The Set update
+  // is cheap (constant-time membership check) so this is fine on
+  // every keystroke.
+  const dirtyListener = EditorView.updateListener.of((u) => {
+    if (!u.docChanged) return;
+    const t = activeTab();
+    if (!t) return;
+    const text = u.state.doc.toString();
+    const isDirty = text !== t.baseline;
+    setDirtyIDs((s) => {
+      const has = s.has(t.id);
+      if (has === isDirty) return s;
+      const out = new Set(s);
+      if (isDirty) out.add(t.id);
+      else out.delete(t.id);
+      return out;
+    });
+  });
+
   const baseExtensions = () => [
     lineNumbers(),
     foldGutter(),
@@ -205,6 +441,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     indentOnInput(),
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     langCompartment.of([]),
+    dirtyListener,
     keymap.of([
       ...defaultKeymap,
       ...historyKeymap,
@@ -260,6 +497,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   onMount(() => {
     const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail as BEMessage);
     props.host.addEventListener('wash:msg', onMsg);
+    const onState = (ev: Event) => {
+      const s = (ev as CustomEvent).detail as PersistedState | null;
+      if (s) void restoreFrom(s);
+    };
+    props.host.addEventListener('wash:state', onState);
 
     // Create the EditorView once. Doc + language reconfigure on
     // file open via dispatch + compartment.
@@ -271,28 +513,97 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       parent: editorMountEl,
     });
 
+    // App-level keyboard shortcuts. We bind on the host element
+    // (not document) so they only fire when this editor window is
+    // focused. CodeMirror's own keymaps already cover in-editor
+    // shortcuts (find, undo, etc.); these handle file-level acts.
+    const onKey = (ev: KeyboardEvent) => {
+      const cmd = ev.ctrlKey || ev.metaKey;
+      if (!cmd) return;
+      // Ctrl+S: save active tab.
+      if ((ev.key === 's' || ev.key === 'S') && !ev.shiftKey) {
+        ev.preventDefault();
+        void saveActive();
+        return;
+      }
+      // Ctrl+Shift+S: save-as on active tab.
+      if ((ev.key === 's' || ev.key === 'S') && ev.shiftKey) {
+        ev.preventDefault();
+        saveAsActive();
+        return;
+      }
+      // Ctrl+O: open file via picker.
+      if (ev.key === 'o' || ev.key === 'O') {
+        ev.preventDefault();
+        setPicker({ mode: 'open' });
+        return;
+      }
+      // Ctrl+N: new Untitled buffer.
+      if (ev.key === 'n' || ev.key === 'N') {
+        ev.preventDefault();
+        newUntitled();
+        return;
+      }
+      // Ctrl+W: close active tab.
+      if (ev.key === 'w' || ev.key === 'W') {
+        ev.preventDefault();
+        const id = activeID();
+        if (id) closeTab(id);
+        return;
+      }
+    };
+    props.host.addEventListener('keydown', onKey);
+    if (!props.host.hasAttribute('tabindex')) props.host.setAttribute('tabindex', '0');
+
     // Boot with a list of "/" — the BE's Confine downshifts to
     // the sandbox root automatically when one is configured.
     void loadDir('/');
     onCleanup(() => {
       props.host.removeEventListener('wash:msg', onMsg);
+      props.host.removeEventListener('wash:state', onState);
+      props.host.removeEventListener('keydown', onKey);
       editorView?.destroy();
       editorView = undefined;
     });
   });
 
-  // When openContent / selectedPath changes, push the new doc and
-  // matching language into the CodeMirror view. Untracked
-  // editorView access is safe — the ref is set by onMount before
-  // any signal change in normal user flows.
+  // Trigger persist whenever the persisted slice changes. The
+  // debounce inside persist() coalesces tab-switch bursts.
   createEffect(() => {
-    const text = openContent();
-    const path = selectedPath();
+    // Track the dependencies explicitly so Solid re-runs only on
+    // these.
+    tabs();
+    activeID();
+    splitPct();
+    persist();
+  });
+
+  // When the active tab changes, swap CM's whole state. We
+  // capture-then-restore each tab's EditorState so undo, cursor,
+  // and scroll are per-tab. First activation of a tab seeds a
+  // fresh state from its baseline + the language matching its
+  // path; subsequent activations reuse the captured state.
+  createEffect(() => {
+    const id = activeID();
     if (!editorView) return;
-    editorView.dispatch({
-      changes: { from: 0, to: editorView.state.doc.length, insert: text },
-      effects: langCompartment.reconfigure(langForPath(path)),
-    });
+    const t = tabs().find((x) => x.id === id);
+    if (!t) {
+      // No active tab — leave the view empty.
+      editorView.setState(EditorState.create({ doc: '', extensions: baseExtensions() }));
+      return;
+    }
+    if (t.state) {
+      editorView.setState(t.state);
+      editorView.dispatch({ effects: langCompartment.reconfigure(langForPath(t.path)) });
+    } else {
+      const fresh = EditorState.create({
+        doc: t.baseline,
+        extensions: baseExtensions(),
+      });
+      editorView.setState(fresh);
+      editorView.dispatch({ effects: langCompartment.reconfigure(langForPath(t.path)) });
+    }
+    editorView.focus();
   });
 
   // ---- render ----
@@ -343,43 +654,87 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
         <Splitter container={bodyEl} onChange={setSplitPct} data-testid="edit-splitter" />
 
-        {/* editor area — CodeMirror mounts into editorMountEl. The
-            placeholder layer sits on top when nothing is open OR
-            the file is binary, since the CM view is created with
-            an empty doc and shouldn't visually claim the pane in
-            those states. */}
+        {/* editor area — tab bar above, CodeMirror below */}
         <div data-testid="edit-pane" style={editorPaneStyle}>
-          <div
-            ref={editorMountEl!}
-            data-testid="edit-cm"
-            style={{ position: 'absolute', inset: 0 }}
-          />
-          <Show when={!selectedPath() || openMeta()?.binary}>
-            <div data-testid="edit-placeholder" style={placeholderOverlayStyle}>
-              <Show when={!selectedPath()}>Pick a file from the sidebar.</Show>
-              <Show when={openMeta()?.binary}>
-                <div>{selectedPath()}</div>
-                <div style={{ color: tokens.fgDim, 'margin-top': '6px' }}>
-                  Binary file — not displayed.
-                </div>
-              </Show>
-            </div>
-          </Show>
+          {/* tab bar */}
+          <div data-testid="edit-tabs" style={tabBarStyle}>
+            <For each={tabs()}>
+              {(t) => {
+                const isActive = () => activeID() === t.id;
+                const isDirty = () => dirtyIDs().has(t.id);
+                return (
+                  <div
+                    data-testid={`edit-tab-${t.id}`}
+                    data-active={isActive() ? 'true' : undefined}
+                    data-dirty={isDirty() ? 'true' : undefined}
+                    onClick={() => { captureActiveState(); setActiveID(t.id); }}
+                    style={tabStyle(isActive())}
+                  >
+                    <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis' }}>
+                      {t.displayName}
+                    </span>
+                    <span
+                      data-testid={`edit-tab-close-${t.id}`}
+                      onClick={(ev) => { ev.stopPropagation(); closeTab(t.id); }}
+                      style={tabCloseStyle}
+                      title="Close (Ctrl+W)"
+                    >
+                      <Show when={isDirty()} fallback="×">●</Show>
+                    </span>
+                  </div>
+                );
+              }}
+            </For>
+          </div>
+
+          {/* CM mount + placeholder overlays */}
+          <div style={editorBodyStyle}>
+            <div
+              ref={editorMountEl!}
+              data-testid="edit-cm"
+              style={{ position: 'absolute', inset: 0 }}
+            />
+            <Show when={!activeTab() || activeTab()?.binary}>
+              <div data-testid="edit-placeholder" style={placeholderOverlayStyle}>
+                <Show when={!activeTab()}>
+                  Pick a file from the sidebar, or Ctrl+N for an empty buffer.
+                </Show>
+                <Show when={activeTab()?.binary}>
+                  <div>{activeTab()?.path}</div>
+                  <div style={{ color: tokens.fgDim, 'margin-top': '6px' }}>
+                    Binary file — not displayed.
+                  </div>
+                </Show>
+              </div>
+            </Show>
+          </div>
         </div>
       </div>
 
       <StatusBar data-testid="edit-status">
-        <Show when={selectedPath()} fallback={`${visibleRows().length} entries`}>
-          <span>{selectedPath()}</span>
-          <Show when={openMeta()}>
-            <span style={{ 'margin-left': '12px', color: tokens.fgDim }}>
-              {humanSize(openMeta()!.size)}
-              <Show when={openMeta()!.truncated}> · truncated</Show>
-              <Show when={openMeta()!.binary}> · binary</Show>
-            </span>
+        <Show when={activeTab()} fallback={`${tabs().length} tabs`}>
+          <span>
+            {activeTab()!.path || activeTab()!.displayName}
+          </span>
+          <Show when={dirtyIDs().has(activeTab()!.id)}>
+            <span style={{ 'margin-left': '8px', color: tokens.fgDim }}>· modified</span>
+          </Show>
+          <Show when={activeTab()!.binary}>
+            <span style={{ 'margin-left': '8px', color: tokens.fgDim }}>· binary</span>
           </Show>
         </Show>
       </StatusBar>
+
+      <FilePicker
+        open={picker() !== null}
+        mode={picker()?.mode ?? 'open'}
+        host={props.host}
+        hostInstanceID={props.instance}
+        defaultName={picker()?.mode === 'save' ? (picker() as { suggestedName: string }).suggestedName : undefined}
+        onConfirm={(p) => void pickerConfirm(p)}
+        onCancel={() => setPicker(null)}
+        data-testid="edit-picker"
+      />
     </>
   );
 };
@@ -391,11 +746,9 @@ function joinPath(parent: string, name: string): string {
   return parent + '/' + name;
 }
 
-function humanSize(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+function baseName(p: string): string {
+  const i = p.lastIndexOf('/');
+  return i < 0 ? p : p.slice(i + 1);
 }
 
 // ---- styles ----
@@ -448,13 +801,54 @@ function rowStyle(selected: boolean, depth: number): JSX.CSSProperties {
 const editorPaneStyle: JSX.CSSProperties = {
   background: tokens.bgWindow,
   overflow: 'hidden',
-  position: 'relative',
+  display: 'flex',
+  'flex-direction': 'column',
 };
 
-const placeholderStyle: JSX.CSSProperties = {
-  padding: '20px 24px',
+const editorBodyStyle: JSX.CSSProperties = {
+  flex: 1,
+  position: 'relative',
+  overflow: 'hidden',
+};
+
+const tabBarStyle: JSX.CSSProperties = {
+  display: 'flex',
+  overflow: 'auto',
+  background: tokens.bgMenu,
+  'border-bottom': `1px solid ${tokens.borderMenu}`,
+  'min-height': '26px',
+  'flex-shrink': 0,
+};
+
+function tabStyle(active: boolean): JSX.CSSProperties {
+  return {
+    display: 'flex',
+    'align-items': 'center',
+    gap: '6px',
+    padding: '0 8px',
+    height: '26px',
+    'border-right': `1px solid ${tokens.borderMenu}`,
+    background: active ? tokens.bgWindow : 'transparent',
+    color: active ? tokens.fg : tokens.fgMuted,
+    cursor: 'pointer',
+    font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+    'user-select': 'none',
+    'max-width': '200px',
+    overflow: 'hidden',
+    'white-space': 'nowrap',
+    'flex-shrink': 0,
+  };
+}
+
+const tabCloseStyle: JSX.CSSProperties = {
+  width: '14px',
+  height: '14px',
+  display: 'inline-flex',
+  'align-items': 'center',
+  'justify-content': 'center',
+  'border-radius': '2px',
+  font: '11px ui-monospace,Menlo,Consolas,monospace',
   color: tokens.fgMuted,
-  font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
 };
 
 const placeholderOverlayStyle: JSX.CSSProperties = {
