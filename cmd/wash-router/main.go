@@ -34,6 +34,21 @@ const (
 //go:embed all:assets
 var assetsFS embed.FS
 
+// resolveRouterExe returns the EvalSymlinks-resolved path of the
+// running wash-router binary, or "" on failure. Same dance as
+// defaultAppsDir so the dev-reload watcher's path comparisons
+// canonicalize identically.
+func resolveRouterExe() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		return resolved
+	}
+	return exe
+}
+
 // defaultAppsDir returns the directory of the wash-router binary
 // itself — so `out/wash-router` finds its siblings in `out/`
 // with no further config. The system / user share dirs we used to
@@ -72,6 +87,7 @@ func main() {
 	noSession := flag.Bool("no-session", false, "do not spawn the session app (kiosk / e2e)")
 	initialApp := flag.String("initial-app", "", "spawn this app full-screen on first shell connect (kiosk)")
 	showHidden := flag.Bool("show-hidden", false, "include manifest.hidden apps in the catalog (e2e / debug)")
+	dev := flag.Bool("dev", false, "watch apps dir + router binary; auto-kill instances and broadcast shell.reload on change")
 	controlSocket := flag.String("control-socket", "", "Unix socket for wash-launch (default: /tmp/wash-<uid>.sock; \"none\" disables)")
 	screenshotDir := flag.String("screenshot-dir", "", "directory for POST /screenshot uploads (overrides WASH_SCREENSHOT_DIR; default: /tmp/wash-screenshots; \"none\" disables)")
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -104,6 +120,7 @@ func main() {
 		ShowHidden:    *showHidden,
 		ControlSocket: cs,
 		ScreenshotDir: sd,
+		Dev:           *dev || os.Getenv("WASH_DEV") != "",
 	}
 
 	logger := log.New(os.Stderr, "wash-router ", log.LstdFlags|log.Lmsgprefix)
@@ -157,6 +174,13 @@ func main() {
 				logf("control socket: %v", err)
 			}
 		}()
+	}
+
+	// Dev mode: watch binaries + apps dir for change events.
+	// resolveRouterExe pulls the resolved-symlink path so the
+	// watcher's later EvalSymlinks comparison matches.
+	if cfg.Dev {
+		r.StartDevReload(resolveRouterExe())
 	}
 
 	if err := srv.Run(ctx); err != nil {

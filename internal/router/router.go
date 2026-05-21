@@ -49,6 +49,13 @@ type Config struct {
 	// disables the endpoint. Files are named with the timestamp at
 	// upload time.
 	ScreenshotDir string
+
+	// Dev enables the binary-watcher loop: fsnotify on each apps
+	// dir + the router binary itself. On change, matching app
+	// instances are killed and shells are told to reload; a
+	// router-binary change triggers self re-exec. Off in
+	// production; on for `wash-router --dev` or dev-restart.sh.
+	Dev bool
 }
 
 // Logger is a minimal sink; cmd/wash-router supplies a real one.

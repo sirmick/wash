@@ -43,6 +43,12 @@ const (
 	// element and to know when a channel id is dead.
 	TShellChannelBind   = "channel.bind"
 	TShellChannelUnbind = "channel.unbind"
+
+	// Router → shell, "reload your page now." Used by --dev mode
+	// when a watched binary changes — the embedded shell/app
+	// bundles are stale and customElements is one-shot per tab.
+	// Shell handles this by calling window.location.reload().
+	TShellReload = "shell.reload"
 )
 
 // ShellLog levels.
@@ -318,6 +324,19 @@ type ShellNotify struct {
 
 func NewShellNotify(instanceID, title, body, level string) ShellNotify {
 	return ShellNotify{T: TShellNotify, InstanceID: instanceID, Title: title, Body: body, Level: level}
+}
+
+// ShellReload is the router → shell "reload your page" signal,
+// used by --dev mode after a binary changes. The Reason field is
+// informational only; the shell calls window.location.reload()
+// regardless.
+type ShellReload struct {
+	T      string `json:"t"`
+	Reason string `json:"reason,omitempty"`
+}
+
+func NewShellReload(reason string) ShellReload {
+	return ShellReload{T: TShellReload, Reason: reason}
 }
 
 // ShellChannelBind: the router tells the shell that a new raw channel

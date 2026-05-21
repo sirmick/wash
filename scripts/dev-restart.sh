@@ -95,9 +95,13 @@ if [[ "$bulk_seed" == "1" ]]; then
 fi
 
 # 4. Launch. Apps are auto-discovered as siblings of the
-# wash-router binary; no copy-to-tmp step needed.
+# wash-router binary; no copy-to-tmp step needed. --dev enables
+# the fsnotify watcher so re-running `make TEST_APP=1 …` after
+# editing source picks up automatically (apps respawn, browsers
+# auto-reload, router self-re-execs when its own binary changes).
 args=(
   --listen "$listen"
+  --dev
   --show-hidden
   --screenshot-dir "$SCREENSHOT_DIR"
 )

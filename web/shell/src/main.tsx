@@ -166,6 +166,17 @@ const conn = new Conn(
         });
         break;
       }
+      case 'shell.reload': {
+        // Dev-mode signal from the router: a watched binary
+        // changed and our embedded bundles are stale. Reload
+        // the page so the next shell.js + app bundles fetch
+        // fresh. The router's re-exec / app respawn happens
+        // independently; we just need to drop our cached state.
+        // eslint-disable-next-line no-console
+        console.info('wash shell: reload requested by router');
+        window.location.reload();
+        break;
+      }
       case 'channel.bind': {
         const b = msg as ShellChannelBind;
         if (b.kind === 'bundle' && b.instance_id) {
