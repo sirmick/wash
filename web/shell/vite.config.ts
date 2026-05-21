@@ -3,7 +3,7 @@ import solid from 'vite-plugin-solid';
 
 // Dev: `pnpm dev` (or `make dev`) runs Vite at :5173 with HMR. The
 // shell still does `new WebSocket(/ws)` relative to its origin, so we
-// proxy /ws to the live router at 127.0.0.1:7681. Prod is unaffected
+// proxy /ws to the live router at 127.0.0.1:11000. Prod is unaffected
 // — the router serves the embedded build directly and there is no
 // dev server in the loop.
 export default defineConfig({
@@ -13,7 +13,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/ws': {
-        target: 'ws://127.0.0.1:7681',
+        target: 'ws://127.0.0.1:11000',
         ws: true,
       },
     },

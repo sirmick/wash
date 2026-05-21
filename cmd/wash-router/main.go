@@ -27,7 +27,7 @@ import (
 const version = "0.0.0"
 
 const (
-	defaultListen       = "127.0.0.1:7681"
+	defaultListen       = "0.0.0.0:11000"
 	defaultSessionAppID = "com.wash.session"
 )
 
