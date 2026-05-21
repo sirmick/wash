@@ -20,16 +20,13 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"embed"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"log"
 	"os"
 	"os/user"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -740,56 +737,13 @@ func sendRead(c *sdk.Conn, id, path string) {
 // refuses from == to (would otherwise delete the source under
 // `replace` — see [[wash-fm-dnd-plan]] guardrails).
 func doRename(c *sdk.Conn, id, from, to string, replace bool) {
-	if from == "" || to == "" {
-		sendErr(c, "rename_err", id, from, "bad_request", "missing from or to")
-		return
-	}
-	src, err := fmFS.Confine(from)
+	src, dst, err := fmFS.Rename(from, to, replace)
 	if err != nil {
-		sendErr(c, "rename_err", id, from, wfs.ErrCode(err), err.Error())
-		return
-	}
-	dst, err := fmFS.Confine(to)
-	if err != nil {
-		sendErr(c, "rename_err", id, to, wfs.ErrCode(err), err.Error())
-		return
-	}
-	if src == dst {
-		sendErr(c, "rename_err", id, src, "same_path", "from and to resolve to the same path")
-		return
-	}
-	if _, err := os.Lstat(src); err != nil {
-		sendErr(c, "rename_err", id, src, wfs.ErrCode(err), err.Error())
-		return
-	}
-	if dstInfo, err := os.Lstat(dst); err == nil {
-		if !replace {
-			sendErr(c, "rename_err", id, dst, "exists", "destination already exists")
-			return
+		path := src
+		if path == "" {
+			path = from
 		}
-		// Replace: remove dst first. We refuse populated dirs
-		// (Remove fails on those with "directory not empty") so
-		// fm-direct stays a fast-path; recursive replace lives in
-		// bulk-ops.
-		if err := os.Remove(dst); err != nil {
-			if dstInfo.IsDir() && strings.Contains(err.Error(), "directory not empty") {
-				sendErr(c, "rename_err", id, dst, "not_empty_dir",
-					"target is a non-empty directory; delete it via the queue first")
-				return
-			}
-			sendErr(c, "rename_err", id, dst, wfs.ErrCode(err), err.Error())
-			return
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		sendErr(c, "rename_err", id, dst, wfs.ErrCode(err), err.Error())
-		return
-	}
-	if err := os.Rename(src, dst); err != nil {
-		code := wfs.ErrCode(err)
-		if strings.Contains(err.Error(), "cross-device") {
-			code = "cross_device"
-		}
-		sendErr(c, "rename_err", id, src, code, err.Error())
+		sendErr(c, "rename_err", id, path, wfs.ErrCode(err), err.Error())
 		return
 	}
 	if err := c.SendAppMsg(renameOK{Kind: "rename_ok", ID: id, From: src, To: dst}); err != nil {
@@ -801,28 +755,13 @@ func doRename(c *sdk.Conn, id, from, to string, replace bool) {
 // directories error with code=not_empty; recursive delete is a
 // future op (intentional — easier to add power than take it back).
 func doDelete(c *sdk.Conn, id, path string) {
-	if path == "" {
-		sendErr(c, "delete_err", id, path, "bad_request", "missing path")
-		return
-	}
-	abs, err := fmFS.Confine(path)
+	abs, err := fmFS.Delete(path)
 	if err != nil {
-		sendErr(c, "delete_err", id, path, wfs.ErrCode(err), err.Error())
-		return
-	}
-	// Refuse to delete the configured sandbox root itself. Outside
-	// the sandbox this guard is inactive; a user with a destructive
-	// click is on their own (matches `rm` and existing fm scope).
-	if fmRoot != "" && abs == fmRoot {
-		sendErr(c, "delete_err", id, abs, "forbidden", "cannot delete the sandbox root")
-		return
-	}
-	if err := os.Remove(abs); err != nil {
-		code := wfs.ErrCode(err)
-		if strings.Contains(err.Error(), "directory not empty") {
-			code = "not_empty"
+		p := abs
+		if p == "" {
+			p = path
 		}
-		sendErr(c, "delete_err", id, abs, code, err.Error())
+		sendErr(c, "delete_err", id, p, wfs.ErrCode(err), err.Error())
 		return
 	}
 	if err := c.SendAppMsg(pathOK{Kind: "delete_ok", ID: id, Path: abs}); err != nil {
@@ -830,28 +769,19 @@ func doDelete(c *sdk.Conn, id, path string) {
 	}
 }
 
-// doCreateFile creates an empty file. O_EXCL avoids silently
-// truncating an existing path — overwrites must go through `write`.
+// doCreateFile creates an empty file. fmFS.CreateFile uses O_EXCL
+// so it refuses to clobber an existing path — overwrites must go
+// through `write`.
 func doCreateFile(c *sdk.Conn, id, path string) {
-	if path == "" {
-		sendErr(c, "create_file_err", id, path, "bad_request", "missing path")
-		return
-	}
-	abs, err := fmFS.Confine(path)
+	abs, err := fmFS.CreateFile(path)
 	if err != nil {
-		sendErr(c, "create_file_err", id, path, wfs.ErrCode(err), err.Error())
-		return
-	}
-	f, err := os.OpenFile(abs, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-	if err != nil {
-		code := wfs.ErrCode(err)
-		if errors.Is(err, os.ErrExist) {
-			code = "exists"
+		p := abs
+		if p == "" {
+			p = path
 		}
-		sendErr(c, "create_file_err", id, abs, code, err.Error())
+		sendErr(c, "create_file_err", id, p, wfs.ErrCode(err), err.Error())
 		return
 	}
-	_ = f.Close()
 	if err := c.SendAppMsg(pathOK{Kind: "create_file_ok", ID: id, Path: abs}); err != nil {
 		log.Printf("wash-fm send create_file_ok: %v", err)
 	}
@@ -861,21 +791,13 @@ func doCreateFile(c *sdk.Conn, id, path string) {
 // later if there's demand; v1 is one-level to match the principle of
 // least power.
 func doCreateDir(c *sdk.Conn, id, path string) {
-	if path == "" {
-		sendErr(c, "create_dir_err", id, path, "bad_request", "missing path")
-		return
-	}
-	abs, err := fmFS.Confine(path)
+	abs, err := fmFS.CreateDir(path)
 	if err != nil {
-		sendErr(c, "create_dir_err", id, path, wfs.ErrCode(err), err.Error())
-		return
-	}
-	if err := os.Mkdir(abs, 0o755); err != nil {
-		code := wfs.ErrCode(err)
-		if errors.Is(err, os.ErrExist) {
-			code = "exists"
+		p := abs
+		if p == "" {
+			p = path
 		}
-		sendErr(c, "create_dir_err", id, abs, code, err.Error())
+		sendErr(c, "create_dir_err", id, p, wfs.ErrCode(err), err.Error())
 		return
 	}
 	if err := c.SendAppMsg(pathOK{Kind: "create_dir_ok", ID: id, Path: abs}); err != nil {
@@ -883,51 +805,18 @@ func doCreateDir(c *sdk.Conn, id, path string) {
 	}
 }
 
-// doWrite writes content to path atomically: write to a sibling
-// temp file, fsync, rename into place. Overwrites an existing
-// target by design — this IS the save path. No FE call site yet;
-// exposed for BE-driven tests and future editor integration.
+// doWrite writes content to path atomically (tmp file + fsync +
+// rename). Overwrites an existing target by design — this is the
+// save path. The editor uses the same internal/fs.Write from its
+// own BE.
 func doWrite(c *sdk.Conn, id, path, content string) {
-	if path == "" {
-		sendErr(c, "write_err", id, path, "bad_request", "missing path")
-		return
-	}
-	if len(content) > maxWriteBytes {
-		sendErr(c, "write_err", id, path, "too_large", "content exceeds maxWriteBytes")
-		return
-	}
-	abs, err := fmFS.Confine(path)
+	abs, n, err := fmFS.Write(path, []byte(content), maxWriteBytes)
 	if err != nil {
-		sendErr(c, "write_err", id, path, wfs.ErrCode(err), err.Error())
-		return
-	}
-	dir := filepath.Dir(abs)
-	suffixBytes := make([]byte, 6)
-	if _, err := rand.Read(suffixBytes); err != nil {
-		sendErr(c, "write_err", id, abs, "io", err.Error())
-		return
-	}
-	tmp := filepath.Join(dir, ".wash-fm.tmp."+hex.EncodeToString(suffixBytes))
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-	if err != nil {
-		sendErr(c, "write_err", id, abs, wfs.ErrCode(err), err.Error())
-		return
-	}
-	n, werr := f.Write([]byte(content))
-	if werr == nil {
-		werr = f.Sync()
-	}
-	if cerr := f.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
-		_ = os.Remove(tmp)
-		sendErr(c, "write_err", id, abs, "io", werr.Error())
-		return
-	}
-	if err := os.Rename(tmp, abs); err != nil {
-		_ = os.Remove(tmp)
-		sendErr(c, "write_err", id, abs, wfs.ErrCode(err), err.Error())
+		p := abs
+		if p == "" {
+			p = path
+		}
+		sendErr(c, "write_err", id, p, wfs.ErrCode(err), err.Error())
 		return
 	}
 	if err := c.SendAppMsg(writeOK{Kind: "write_ok", ID: id, Path: abs, Bytes: n}); err != nil {

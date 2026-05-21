@@ -19,7 +19,7 @@ import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-j
 import { createStore, produce } from 'solid-js/store';
 import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
-import { ConfirmDialog, Menu, MenuItem, MenuSeparator, StatusBar } from '@wash/ui';
+import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Splitter, StatusBar } from '@wash/ui';
 import {
   ArrowLeft,
   ArrowRight,
@@ -1120,34 +1120,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
-  // ---- body splitter ----
-  //
-  // The body grid is `splitPct()% 4px (rest)`. mousedown on the
-  // splitter captures window-level mousemove/mouseup so the drag
-  // survives fast cursor moves out of the splitter bar. We clamp
-  // to [15,85] so neither pane can be dragged into nonexistence,
-  // and persist on mouseup so the layout survives a reload.
-  const onSplitterMouseDown = (ev: MouseEvent) => {
-    ev.preventDefault();
-    const rect = bodyEl.getBoundingClientRect();
-    const width = rect.width;
-    const leftEdge = rect.left;
-    const onMove = (e: MouseEvent) => {
-      const pct = ((e.clientX - leftEdge) / width) * 100;
-      setSplitPct(Math.max(15, Math.min(85, pct)));
-    };
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      document.body.style.userSelect = '';
-      document.body.style.cursor = '';
-      persist();
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    document.body.style.userSelect = 'none';
-    document.body.style.cursor = 'col-resize';
-  };
+  // Body splitter: drag-to-resize between tree and preview/info
+  // panes. The Splitter primitive (@wash/ui) owns the gesture; we
+  // own splitPct, the body grid template, and persistence.
 
   // ---- state persistence ----
 
@@ -1577,10 +1552,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             }}
           </For>
         </div>
-        <div
+        <Splitter
+          container={bodyEl}
+          onChange={setSplitPct}
+          onCommit={persist}
           data-testid="fm-splitter"
-          style={splitterStyle}
-          onMouseDown={onSplitterMouseDown}
         />
         <div style={{ display: 'grid', 'grid-template-rows': 'auto 1fr', overflow: 'hidden' }}>
           <InfoSection
@@ -2504,15 +2480,6 @@ const treeStyle: JSX.CSSProperties = {
   overflow: 'auto',
   background: '#181828',
   padding: '0 0 4px 0',
-};
-
-// splitterStyle paints the 4px draggable column between the tree
-// pane and the preview/info pane. Visually it stands in for the
-// border-right we used to draw on the tree pane.
-const splitterStyle: JSX.CSSProperties = {
-  background: '#2a2a3a',
-  cursor: 'col-resize',
-  'user-select': 'none',
 };
 
 const previewStyle: JSX.CSSProperties = {

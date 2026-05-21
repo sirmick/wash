@@ -10,3 +10,5 @@ export { StatusBar } from './status-bar';
 export type { StatusBarProps } from './status-bar';
 export { FilePicker } from './file-picker';
 export type { FilePickerProps, FilterSpec } from './file-picker';
+export { Splitter } from './splitter';
+export type { SplitterProps } from './splitter';

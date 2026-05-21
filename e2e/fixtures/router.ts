@@ -25,6 +25,7 @@ const TERM_BIN = join(REPO_ROOT, 'out', 'wash-term');
 const LAUNCH_BIN = join(REPO_ROOT, 'out', 'wash-launch');
 const FM_BIN = join(REPO_ROOT, 'out', 'wash-fm');
 const BULK_BIN = join(REPO_ROOT, 'out', 'wash-bulk');
+const EDIT_BIN = join(REPO_ROOT, 'out', 'wash-edit');
 
 export interface RouterHandle {
   url: string;
@@ -111,12 +112,12 @@ function stageApps(binaries: string[]): string {
 }
 
 export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandle> {
-  for (const b of [ROUTER_BIN, SESSION_BIN, ABOUT_BIN, TEST_BIN, TERM_BIN, FM_BIN, BULK_BIN, LAUNCH_BIN]) {
+  for (const b of [ROUTER_BIN, SESSION_BIN, ABOUT_BIN, TEST_BIN, TERM_BIN, FM_BIN, BULK_BIN, EDIT_BIN, LAUNCH_BIN]) {
     if (!existsSync(b)) {
       throw new Error(`missing binary: ${b}\n(make TEST_APP=1 from the repo root)`);
     }
   }
-  const wanted = opts.apps ?? ['session', 'about', 'test', 'term', 'fm', 'bulk'];
+  const wanted = opts.apps ?? ['session', 'about', 'test', 'term', 'fm', 'bulk', 'edit'];
   const bins: string[] = [];
   if (wanted.includes('session')) bins.push(SESSION_BIN);
   if (wanted.includes('about')) bins.push(ABOUT_BIN);
@@ -124,6 +125,7 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   if (wanted.includes('term')) bins.push(TERM_BIN);
   if (wanted.includes('fm')) bins.push(FM_BIN);
   if (wanted.includes('bulk')) bins.push(BULK_BIN);
+  if (wanted.includes('edit')) bins.push(EDIT_BIN);
   const appsDir = stageApps(bins);
 
   const port = await freePort();

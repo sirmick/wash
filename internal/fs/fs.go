@@ -217,9 +217,9 @@ func (f *FS) Complete(partial string, maxMatches int) []string {
 	return matches
 }
 
-// ErrCode maps a List/Stat/Complete error to a short, stable string
-// suitable for inclusion in app-msg error replies. Callers wrap this
-// into their own protocol's error envelope.
+// ErrCode maps an error from any FS method (read- or mutation-side)
+// to a short, stable string for app-msg error replies. Callers wrap
+// this into their own protocol's error envelope.
 func ErrCode(err error) string {
 	switch {
 	case errors.Is(err, ErrOutsideRoot):
@@ -230,6 +230,18 @@ func ErrCode(err error) string {
 		return "denied"
 	case errors.Is(err, os.ErrExist):
 		return "exists"
+	case errors.Is(err, ErrTooLarge):
+		return "too_large"
+	case errors.Is(err, ErrSamePath):
+		return "same_path"
+	case errors.Is(err, ErrNotEmpty):
+		return "not_empty"
+	case errors.Is(err, ErrNotEmptyDir):
+		return "not_empty_dir"
+	case errors.Is(err, ErrCrossDevice):
+		return "cross_device"
+	case errors.Is(err, ErrForbidden):
+		return "forbidden"
 	}
 	return "io"
 }
