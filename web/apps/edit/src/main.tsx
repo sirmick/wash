@@ -15,11 +15,11 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount }
 import { createStore, produce } from 'solid-js/store';
 import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
-import { FilePicker, Splitter, StatusBar, tokens } from '@wash/ui';
+import { FilePicker, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, tokens } from '@wash/ui';
 import { EditorState, Compartment } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
-import { searchKeymap, search } from '@codemirror/search';
+import { defaultKeymap, history, historyKeymap, redo, undo } from '@codemirror/commands';
+import { openSearchPanel, searchKeymap, search } from '@codemirror/search';
 import {
   bracketMatching,
   defaultHighlightStyle,
@@ -106,6 +106,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     | { mode: 'open' }
     | { mode: 'save'; tabID: string; suggestedName: string }
   >(null);
+
+  // openMenu is the open dropdown's id ('' = none). It's set when
+  // the user clicks a menubar button; menubarOffsets stores each
+  // button's x,y so the Menu component knows where to drop.
+  const [openMenu, setOpenMenu] = createSignal<'' | 'file' | 'edit' | 'syntax'>('');
+  const [menuAnchor, setMenuAnchor] = createSignal<{ x: number; y: number }>({ x: 0, y: 0 });
+  // Per-active-tab language override. Null = derive from path.
+  const [langOverride, setLangOverride] = createSignal<string | null>(null);
+  // Word-wrap toggle. Recompiled into the langCompartment so we
+  // don't need a second compartment for it.
+  const [wordWrap, setWordWrap] = createSignal(false);
   // untitledCounter — monotonically increasing index for naming
   // fresh Untitled-N buffers. Resets only on app remount.
   let untitledCounter = 0;
@@ -327,6 +338,77 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
+  // ---- menu commands ----
+  //
+  // Most menu items either call into CodeMirror via its command
+  // API or replay one of the keyboard handlers we already wired
+  // (saveActive, newUntitled, etc). We always focus the editor
+  // before commanding so the command lands in the right view.
+
+  const cmdUndo = () => {
+    if (!editorView) return;
+    editorView.focus();
+    undo(editorView);
+  };
+  const cmdRedo = () => {
+    if (!editorView) return;
+    editorView.focus();
+    redo(editorView);
+  };
+  const cmdFind = () => {
+    if (!editorView) return;
+    editorView.focus();
+    openSearchPanel(editorView);
+  };
+  // Cut/Copy/Paste route through document.execCommand, which is
+  // technically deprecated but is the only path that lets a menu
+  // click drive the clipboard (programmatic Clipboard API needs a
+  // user gesture on the menu item — it has one, but Permissions
+  // around 'clipboard-write' are inconsistent across browsers).
+  // CodeMirror's own keybindings remain the recommended path.
+  const cmdClipboard = (op: 'cut' | 'copy' | 'paste') => {
+    if (!editorView) return;
+    editorView.focus();
+    try { document.execCommand(op); } catch { /* ignore — best effort */ }
+  };
+
+  const setLang = (k: string | null) => {
+    setLangOverride(k);
+    editorView?.focus();
+  };
+  const toggleWrap = () => {
+    setWordWrap(!wordWrap());
+    editorView?.focus();
+  };
+
+  // ---- menu bar plumbing ----
+  //
+  // openMenuFor toggles a menu open against its trigger button.
+  // The Menu component owns dismissal (click-outside via document
+  // listener), so we just toggle openMenu signal and set the
+  // anchor coordinates relative to the host element so the menu
+  // hangs below the button regardless of where the window is.
+
+  const openMenuFor = (id: 'file' | 'edit' | 'syntax', ev: MouseEvent) => {
+    if (openMenu() === id) {
+      setOpenMenu('');
+      return;
+    }
+    const btn = ev.currentTarget as HTMLElement;
+    const btnRect = btn.getBoundingClientRect();
+    const hostRect = props.host.getBoundingClientRect();
+    setMenuAnchor({
+      x: btnRect.left - hostRect.left,
+      y: btnRect.bottom - hostRect.top + 2,
+    });
+    setOpenMenu(id);
+  };
+  const closeMenu = () => setOpenMenu('');
+  // run wraps a menu-item action so the menu closes before the
+  // action fires — focuses look right (no menu flashing during
+  // CM dispatch).
+  const run = (fn: () => void) => () => { closeMenu(); fn(); };
+
   // captureActiveState snapshots the live CM state into the
   // outgoing tab right before a switch. Without this, switching
   // away from a tab loses its undo history and cursor.
@@ -466,28 +548,69 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }, { dark: true }),
   ];
 
-  // langForPath maps a file's extension to a CM6 language pack.
-  // Unknown extensions get plain text (no highlighting); add more
-  // packs by importing the package and extending the switch.
-  const langForPath = (path: string) => {
-    const ext = path.toLowerCase().split('.').pop() ?? '';
-    switch (ext) {
-      case 'js':
+  // langForKey returns a CM6 language pack for an explicit key.
+  // Used by both the path-derived default (langForPath) and the
+  // Syntax menu's manual override.
+  const langForKey = (key: string) => {
+    switch (key) {
+      case 'javascript':
+        return javascript();
       case 'jsx':
-      case 'mjs':
-      case 'cjs':
-        return javascript({ jsx: ext === 'jsx' });
-      case 'ts':
+        return javascript({ jsx: true });
+      case 'typescript':
+        return javascript({ typescript: true });
       case 'tsx':
-        return javascript({ typescript: true, jsx: ext === 'tsx' });
+        return javascript({ typescript: true, jsx: true });
       case 'json':
         return json();
-      case 'md':
       case 'markdown':
         return markdown();
       default:
         return [];
     }
+  };
+
+  // langKeyForPath picks a language key from the file extension.
+  // Unknown extensions fall through to plain text.
+  const langKeyForPath = (path: string): string => {
+    const ext = path.toLowerCase().split('.').pop() ?? '';
+    switch (ext) {
+      case 'js':
+      case 'mjs':
+      case 'cjs':
+        return 'javascript';
+      case 'jsx':
+        return 'jsx';
+      case 'ts':
+        return 'typescript';
+      case 'tsx':
+        return 'tsx';
+      case 'json':
+        return 'json';
+      case 'md':
+      case 'markdown':
+        return 'markdown';
+      default:
+        return 'plain';
+    }
+  };
+
+  // currentLang is what's actually configured in the editor right
+  // now: the manual override if set, else the path-derived key.
+  const currentLang = (): string => {
+    const o = langOverride();
+    if (o) return o;
+    const t = activeTab();
+    return t ? langKeyForPath(t.path) : 'plain';
+  };
+
+  // langExtensions builds the compartmented payload — language
+  // pack + line-wrap flag. Recompiling both together keeps us to
+  // one compartment.
+  const langExtensions = () => {
+    const ext: any[] = [langForKey(currentLang())];
+    if (wordWrap()) ext.push(EditorView.lineWrapping);
+    return ext;
   };
 
   // ---- lifecycle ----
@@ -583,9 +706,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // and scroll are per-tab. First activation of a tab seeds a
   // fresh state from its baseline + the language matching its
   // path; subsequent activations reuse the captured state.
+  //
+  // Language override clears on tab switch — it's a "treat THIS
+  // tab as X" rather than a permanent setting.
+  let lastTabID = '';
   createEffect(() => {
     const id = activeID();
     if (!editorView) return;
+    if (id !== lastTabID) {
+      lastTabID = id;
+      setLangOverride(null);
+    }
     const t = tabs().find((x) => x.id === id);
     if (!t) {
       // No active tab — leave the view empty.
@@ -594,22 +725,83 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
     if (t.state) {
       editorView.setState(t.state);
-      editorView.dispatch({ effects: langCompartment.reconfigure(langForPath(t.path)) });
     } else {
       const fresh = EditorState.create({
         doc: t.baseline,
         extensions: baseExtensions(),
       });
       editorView.setState(fresh);
-      editorView.dispatch({ effects: langCompartment.reconfigure(langForPath(t.path)) });
     }
+    editorView.dispatch({ effects: langCompartment.reconfigure(langExtensions()) });
     editorView.focus();
+  });
+
+  // Reactively reconfigure the language compartment whenever the
+  // override or wordWrap change. Tab-switch already handles its
+  // own reconfigure above.
+  createEffect(() => {
+    langOverride();
+    wordWrap();
+    if (!editorView) return;
+    editorView.dispatch({ effects: langCompartment.reconfigure(langExtensions()) });
   });
 
   // ---- render ----
 
   return (
     <>
+      {/* menu bar */}
+      <div data-testid="edit-menubar" style={menuBarStyle}>
+        <MenuBarButton id="file" label="File" active={openMenu() === 'file'} onClick={openMenuFor} />
+        <MenuBarButton id="edit" label="Edit" active={openMenu() === 'edit'} onClick={openMenuFor} />
+        <MenuBarButton id="syntax" label="Syntax" active={openMenu() === 'syntax'} onClick={openMenuFor} />
+        <Show when={openMenu() === 'file'}>
+          <Menu x={menuAnchor().x} y={menuAnchor().y} onDismiss={closeMenu} data-testid="edit-menu-file">
+            <MenuItem label="New" trailing={<kbd style={kbdStyle}>Ctrl+N</kbd>} onClick={run(newUntitled)} data-testid="edit-menu-new" />
+            <MenuItem label="Open…" trailing={<kbd style={kbdStyle}>Ctrl+O</kbd>} onClick={run(() => setPicker({ mode: 'open' }))} data-testid="edit-menu-open" />
+            <MenuSeparator />
+            <MenuItem label="Save" trailing={<kbd style={kbdStyle}>Ctrl+S</kbd>} disabled={!activeTab()} onClick={run(() => void saveActive())} data-testid="edit-menu-save" />
+            <MenuItem label="Save As…" trailing={<kbd style={kbdStyle}>Ctrl+Shift+S</kbd>} disabled={!activeTab()} onClick={run(saveAsActive)} data-testid="edit-menu-save-as" />
+            <MenuSeparator />
+            <MenuItem label="Close Tab" trailing={<kbd style={kbdStyle}>Ctrl+W</kbd>} disabled={!activeTab()} onClick={run(() => closeTab(activeID()))} data-testid="edit-menu-close-tab" />
+          </Menu>
+        </Show>
+        <Show when={openMenu() === 'edit'}>
+          <Menu x={menuAnchor().x} y={menuAnchor().y} onDismiss={closeMenu} data-testid="edit-menu-edit">
+            <MenuItem label="Undo" trailing={<kbd style={kbdStyle}>Ctrl+Z</kbd>} onClick={run(cmdUndo)} data-testid="edit-menu-undo" />
+            <MenuItem label="Redo" trailing={<kbd style={kbdStyle}>Ctrl+Shift+Z</kbd>} onClick={run(cmdRedo)} data-testid="edit-menu-redo" />
+            <MenuSeparator />
+            <MenuItem label="Cut" trailing={<kbd style={kbdStyle}>Ctrl+X</kbd>} onClick={run(() => cmdClipboard('cut'))} data-testid="edit-menu-cut" />
+            <MenuItem label="Copy" trailing={<kbd style={kbdStyle}>Ctrl+C</kbd>} onClick={run(() => cmdClipboard('copy'))} data-testid="edit-menu-copy" />
+            <MenuItem label="Paste" trailing={<kbd style={kbdStyle}>Ctrl+V</kbd>} onClick={run(() => cmdClipboard('paste'))} data-testid="edit-menu-paste" />
+            <MenuSeparator />
+            <MenuItem label="Find" trailing={<kbd style={kbdStyle}>Ctrl+F</kbd>} onClick={run(cmdFind)} data-testid="edit-menu-find" />
+            <MenuItem label="Find & Replace" trailing={<kbd style={kbdStyle}>Ctrl+H</kbd>} onClick={run(cmdFind)} data-testid="edit-menu-replace" />
+          </Menu>
+        </Show>
+        <Show when={openMenu() === 'syntax'}>
+          <Menu x={menuAnchor().x} y={menuAnchor().y} onDismiss={closeMenu} data-testid="edit-menu-syntax">
+            <For each={langChoices}>
+              {(l) => (
+                <MenuItem
+                  label={l.label}
+                  trailing={currentLang() === l.key ? <span style={{ color: tokens.fgMuted }}>✓</span> : undefined}
+                  onClick={run(() => setLang(l.key === langKeyForPath(activeTab()?.path ?? '') ? null : l.key))}
+                  data-testid={`edit-menu-lang-${l.key}`}
+                />
+              )}
+            </For>
+            <MenuSeparator />
+            <MenuItem
+              label="Word Wrap"
+              trailing={wordWrap() ? <span style={{ color: tokens.fgMuted }}>✓</span> : undefined}
+              onClick={run(toggleWrap)}
+              data-testid="edit-menu-wrap"
+            />
+          </Menu>
+        </Show>
+      </div>
+
       <div
         ref={bodyEl!}
         style={{ ...bodyStyle, 'grid-template-columns': `${splitPct()}% 4px 1fr` }}
@@ -739,6 +931,39 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   );
 };
 
+// ---- menu bar pieces ----
+
+// langChoices is the Syntax menu list. Adding a new language pack
+// is two lines: import the package, append a row here, and the
+// menu picks it up. langForKey resolves the actual extension.
+const langChoices = [
+  { key: 'plain', label: 'Plain Text' },
+  { key: 'javascript', label: 'JavaScript' },
+  { key: 'jsx', label: 'JavaScript (JSX)' },
+  { key: 'typescript', label: 'TypeScript' },
+  { key: 'tsx', label: 'TypeScript (TSX)' },
+  { key: 'json', label: 'JSON' },
+  { key: 'markdown', label: 'Markdown' },
+];
+
+const MenuBarButton: Component<{
+  id: 'file' | 'edit' | 'syntax';
+  label: string;
+  active: boolean;
+  onClick: (id: 'file' | 'edit' | 'syntax', ev: MouseEvent) => void;
+}> = (props) => {
+  return (
+    <button
+      type="button"
+      data-testid={`edit-menubar-${props.id}`}
+      onClick={(ev) => props.onClick(props.id, ev)}
+      style={menuBarButtonStyle(props.active)}
+    >
+      {props.label}
+    </button>
+  );
+};
+
 // ---- helpers ----
 
 function joinPath(parent: string, name: string): string {
@@ -759,6 +984,36 @@ const bodyStyle: JSX.CSSProperties = {
   overflow: 'hidden',
   height: '100%',
   'border-bottom': `1px solid ${tokens.borderWindow}`,
+};
+
+const menuBarStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'center',
+  background: tokens.bgMenu,
+  'border-bottom': `1px solid ${tokens.borderMenu}`,
+  'min-height': '24px',
+  'flex-shrink': 0,
+  position: 'relative',
+  'user-select': 'none',
+};
+
+function menuBarButtonStyle(active: boolean): JSX.CSSProperties {
+  return {
+    background: active ? tokens.bgRowSelected : 'transparent',
+    color: tokens.fg,
+    border: 'none',
+    padding: '2px 10px',
+    height: '24px',
+    cursor: 'pointer',
+    font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  };
+}
+
+const kbdStyle: JSX.CSSProperties = {
+  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  color: tokens.fgMuted,
+  background: 'transparent',
+  padding: '0 4px',
 };
 
 const sidebarStyle: JSX.CSSProperties = {
@@ -872,11 +1127,17 @@ class WashAppEdit extends HTMLElement {
     const instance = this.getAttribute('data-wash-instance') ?? '';
     this.style.cssText = [
       'display:grid',
-      'grid-template-rows:1fr auto',
+      // menubar (auto) | body (1fr) | status bar (auto). The
+      // menubar row carries `position: relative` so the absolute-
+      // positioned <Menu> dropdowns inside it anchor relative to
+      // it rather than escaping to the closest positioned
+      // ancestor.
+      'grid-template-rows:auto 1fr auto',
       'height:100%',
       'background:' + tokens.bgWindow,
       'color:' + tokens.fg,
       'overflow:hidden',
+      'position:relative',
     ].join(';');
     this.dispose = render(() => <App instance={instance} host={this} />, this);
   }
