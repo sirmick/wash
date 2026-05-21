@@ -446,11 +446,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   // onRowClick threads click+modifier semantics through the tree.
-  //   plain click  → selection = {path}, navigate (current behavior)
-  //   Ctrl/Cmd-click → toggle path in/out of selection; no navigate
-  //   Shift-click  → range-select from anchor to path; no navigate
-  // For non-plain clicks we still update path() so the path bar
-  // reflects the focused entry, but skip sendList/sendRead.
+  //   plain click  → selection = {path}; for files preview; for
+  //                  folders just select (no auto-navigate-in —
+  //                  use double-click or the chevron for that)
+  //   Ctrl/Cmd-click → toggle path in/out of selection
+  //   Shift-click  → range-select from anchor to path
+  // No path-bar push to history on a plain click; that's reserved
+  // for double-click (= explicit "open"). Reduces accidental
+  // drilling-in when the user is just picking files.
   const onRowClick = (rowPath: string, entry: Entry, ev: MouseEvent) => {
     if (ev.shiftKey && selectionAnchor) {
       const rows = visibleRows().map((r) => r.path);
@@ -464,6 +467,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       }
       setPath(rowPath);
       setPathInputValue(rowPath);
+      setSelectedEntry(entry);
       return;
     }
     if (ev.ctrlKey || ev.metaKey) {
@@ -474,12 +478,20 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       selectionAnchor = rowPath;
       setPath(rowPath);
       setPathInputValue(rowPath);
+      setSelectedEntry(entry);
       return;
     }
+    // Plain click: focus + select. Files get a preview; folders
+    // wait for double-click before navigating in.
     setSelection(new Set([rowPath]));
     selectionAnchor = rowPath;
-    void entry; // silence the lint until the helper grows entry-aware branches
-    selectPath(rowPath, true);
+    setPath(rowPath);
+    setPathInputValue(rowPath);
+    setSelectedEntry(entry);
+    setStatusOverride(null);
+    if (entry.type === 'file') {
+      sendRead(rowPath);
+    }
   };
 
   const navigateTo = (p: string) => selectPath(p || '/', true);
@@ -818,23 +830,56 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [dropTargetPath, setDropTargetPath] = createSignal('');
 
   // dropMenu, when non-null, renders a small overlay at the drop
-  // position offering Move / Symlink. Set when the user held Alt
-  // during the drop; cleared when they pick an option or click
-  // outside. (Why Alt, not right-mouse? Firefox and Chromium both
-  // gate HTML5 dragstart to the left button — right-button never
-  // initiates a drag in the first place, so a modifier on the
-  // left-button drag is the only mechanism that works in both.)
-  const [dropMenu, setDropMenu] = createSignal<{ x: number; y: number; src: string; targetDir: string } | null>(null);
+  // position offering Move / Copy / Symlink. Set when the user
+  // held Alt during the drop; cleared when they pick an option
+  // or click outside. (Why Alt, not right-mouse? Firefox and
+  // Chromium both gate HTML5 dragstart to the left button —
+  // right-button never initiates a drag in the first place, so a
+  // modifier on the left-button drag is the only mechanism that
+  // works in both.) srcs is the full set of dragged paths;
+  // length>1 means we route through bulk-ops for everything.
+  const [dropMenu, setDropMenu] = createSignal<{ x: number; y: number; srcs: string[]; targetDir: string } | null>(null);
+
+  // Drag payload format. We carry a JSON array of source paths
+  // under application/x-wash-paths (plural — distinct from the
+  // singular MIME the old shell-pre-multi-select code used). A
+  // single drag from an unselected row carries one path; dragging
+  // a row that's part of a multi-selection carries every selected
+  // path. Drop handlers branch on length: n>1 always routes to
+  // bulk-ops because the BE rename op is single-shot — the queue
+  // is where Replace All / Skip All live.
+  const DRAG_MIME = 'application/x-wash-paths';
 
   const onDragStart = (ev: DragEvent, p: string) => {
     if (!ev.dataTransfer) return;
     ev.dataTransfer.effectAllowed = 'move';
-    ev.dataTransfer.setData('application/x-wash-path', p);
-    ev.dataTransfer.setData('text/plain', p);
+    const paths = selection().has(p) ? Array.from(selection()) : [p];
+    ev.dataTransfer.setData(DRAG_MIME, JSON.stringify(paths));
+    // text/plain is a friendly fallback for drops onto non-wash
+    // targets (terminals, editors). Newline-joined matches what
+    // most apps expect for multi-path copy.
+    ev.dataTransfer.setData('text/plain', paths.join('\n'));
   };
 
   const onDragEnd = () => {
     setDropTargetPath('');
+  };
+
+  // readDragPaths pulls our JSON-array payload out of a drag
+  // event. Returns [] if the drag doesn't carry our MIME so
+  // non-wash drags (text drops from other apps, etc.) are ignored
+  // cleanly.
+  const readDragPaths = (ev: DragEvent): string[] => {
+    if (!ev.dataTransfer) return [];
+    const json = ev.dataTransfer.getData(DRAG_MIME);
+    if (!json) return [];
+    try {
+      const arr = JSON.parse(json);
+      if (Array.isArray(arr)) return arr.filter((s) => typeof s === 'string');
+    } catch {
+      /* ignore */
+    }
+    return [];
   };
 
   // onRowDragOver is wired on directory rows only. preventDefault
@@ -842,7 +887,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // stopPropagation keeps the list-pane onDragOver from also
   // claiming the event (which would clear dropTargetPath).
   const onRowDragOver = (ev: DragEvent, rowPath: string) => {
-    if (!ev.dataTransfer || !ev.dataTransfer.types.includes('application/x-wash-path')) return;
+    if (!ev.dataTransfer || !ev.dataTransfer.types.includes(DRAG_MIME)) return;
     ev.preventDefault();
     ev.stopPropagation();
     ev.dataTransfer.dropEffect = 'move';
@@ -850,46 +895,57 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   const onRowDrop = (ev: DragEvent, rowPath: string) => {
-    if (!ev.dataTransfer) return;
-    const src = ev.dataTransfer.getData('application/x-wash-path');
-    if (!src) return;
+    const paths = readDragPaths(ev);
+    if (paths.length === 0) return;
     ev.preventDefault();
     ev.stopPropagation();
     setDropTargetPath('');
     if (ev.altKey) {
-      // Offset the menu down-and-right of the cursor so the first
-      // item isn't directly under the pointer — otherwise the
-      // cursor was *already inside* when the menu mounts and no
-      // mouseenter fires, making the item look unhoverable.
       const my = props.host.getBoundingClientRect();
-      setDropMenu({ x: ev.clientX - my.left + 8, y: ev.clientY - my.top + 8, src, targetDir: rowPath });
+      setDropMenu({ x: ev.clientX - my.left + 8, y: ev.clientY - my.top + 8, srcs: paths, targetDir: rowPath });
       return;
     }
-    void commitMove(src, rowPath);
+    handleMoveDrop(paths, rowPath);
   };
 
-  // onListDragOver / onListDrop are the fallback when the user
-  // drops on empty space in the list pane (no row hit). The
-  // intent there is "move into the currently-selected directory."
   const onListDragOver = (ev: DragEvent) => {
-    if (!ev.dataTransfer || !ev.dataTransfer.types.includes('application/x-wash-path')) return;
+    if (!ev.dataTransfer || !ev.dataTransfer.types.includes(DRAG_MIME)) return;
     ev.preventDefault();
     ev.dataTransfer.dropEffect = 'move';
     if (dropTargetPath() !== '') setDropTargetPath('');
   };
 
   const onListDrop = (ev: DragEvent) => {
-    if (!ev.dataTransfer) return;
-    const src = ev.dataTransfer.getData('application/x-wash-path');
-    if (!src) return;
+    const paths = readDragPaths(ev);
+    if (paths.length === 0) return;
     ev.preventDefault();
     setDropTargetPath('');
     if (ev.altKey) {
       const my = props.host.getBoundingClientRect();
-      setDropMenu({ x: ev.clientX - my.left + 8, y: ev.clientY - my.top + 8, src, targetDir: dirOfSelection() });
+      setDropMenu({ x: ev.clientX - my.left + 8, y: ev.clientY - my.top + 8, srcs: paths, targetDir: dirOfSelection() });
       return;
     }
-    void commitMove(src, dirOfSelection());
+    handleMoveDrop(paths, dirOfSelection());
+  };
+
+  // handleMoveDrop routes a plain (no-alt) drop: single path uses
+  // fm-direct rename (fast, Replace prompt on conflict); multi
+  // paths always go through bulk-ops where Replace All / Skip All
+  // exist. Caller has already filtered to ≥1 path.
+  const handleMoveDrop = (paths: string[], targetDir: string) => {
+    if (paths.length === 1) {
+      void commitMove(paths[0], targetDir);
+      return;
+    }
+    dispatchBulkMove(paths, targetDir);
+  };
+
+  const dispatchBulkMove = (paths: string[], targetDir: string) => {
+    if (!targetDir) return;
+    window.wash.sendAppMsgTo(
+      { app_id: 'com.wash.bulk' },
+      { kind: 'enqueue', op: 'move', paths, dest: targetDir },
+    );
   };
 
   // commitSymlink creates a symlink at targetDir/basename(src)
@@ -974,16 +1030,19 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // large dirs and the queue UI is the right place to surface
   // progress — fm has no business owning that affordance.
   // fs.watch in fm picks up the new entry in the target dir as
-  // bulk-ops creates files.
-  const commitBulkCopy = (src: string, targetDir: string) => {
-    if (!src || !targetDir) return;
-    if (targetDir === src || targetDir.startsWith(src + '/')) {
-      setStatusOverride('copy: cannot copy a folder into itself');
-      return;
+  // bulk-ops creates files. Accepts an array so multi-select
+  // alt-drag-Copy works in one job.
+  const commitBulkCopy = (srcs: string[], targetDir: string) => {
+    if (srcs.length === 0 || !targetDir) return;
+    for (const src of srcs) {
+      if (targetDir === src || targetDir.startsWith(src + '/')) {
+        setStatusOverride('copy: cannot copy a folder into itself');
+        return;
+      }
     }
     window.wash.sendAppMsgTo(
       { app_id: 'com.wash.bulk' },
-      { kind: 'enqueue', op: 'copy', paths: [src], dest: targetDir },
+      { kind: 'enqueue', op: 'copy', paths: srcs, dest: targetDir },
     );
   };
 
@@ -1404,9 +1463,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                   const isDouble = row.path === lastClickPath && now - lastClickTime < 400;
                   lastClickPath = row.path;
                   lastClickTime = now;
-                  if (isDouble && row.entry.type === 'symlink') {
-                    followSymlink(row.entry, row.path);
-                    return;
+                  if (isDouble) {
+                    if (row.entry.type === 'symlink') {
+                      followSymlink(row.entry, row.path);
+                      return;
+                    }
+                    if (row.entry.type === 'dir') {
+                      // Explicit "open folder" — drill in.
+                      selectPath(row.path, true);
+                      return;
+                    }
                   }
                   onRowClick(row.path, row.entry, ev);
                 }}
@@ -1547,22 +1613,27 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         <DropMenu
           x={dropMenu()!.x}
           y={dropMenu()!.y}
-          src={dropMenu()!.src}
+          srcs={dropMenu()!.srcs}
           targetDir={dropMenu()!.targetDir}
           onMove={() => {
             const dm = dropMenu()!;
             setDropMenu(null);
-            void commitMove(dm.src, dm.targetDir);
+            handleMoveDrop(dm.srcs, dm.targetDir);
           }}
           onCopy={() => {
             const dm = dropMenu()!;
             setDropMenu(null);
-            commitBulkCopy(dm.src, dm.targetDir);
+            commitBulkCopy(dm.srcs, dm.targetDir);
           }}
           onSymlink={() => {
             const dm = dropMenu()!;
             setDropMenu(null);
-            void commitSymlink(dm.src, dm.targetDir);
+            // Single-shot symlink stays fm-direct (Replace prompt
+            // per item). For multi, iterate — each goes through
+            // its own commitSymlink with its own Replace prompt.
+            for (const src of dm.srcs) {
+              void commitSymlink(src, dm.targetDir);
+            }
           }}
           onCancel={() => setDropMenu(null)}
         />
@@ -1618,7 +1689,7 @@ const TreeRow: Component<{
         display: 'flex',
         'align-items': 'center',
         gap: '4px',
-        padding: `3px 8px 3px ${8 + props.depth * 16}px`,
+        padding: `3px 8px 3px ${8 + props.depth * 12}px`,
         background: props.isDropTarget
           ? '#2a3a5a'
           : props.selected
@@ -2187,7 +2258,7 @@ const ReplaceConfirmOverlay: Component<{
 const DropMenu: Component<{
   x: number;
   y: number;
-  src: string;
+  srcs: string[];
   targetDir: string;
   onMove: () => void;
   onCopy: () => void;

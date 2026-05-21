@@ -84,8 +84,9 @@ test.describe('fm DnD: within-window move', () => {
     writeFileSync(join(router.fmRoot, 'sub', 'inner.txt'), 'inner\n');
 
     await openFm(page, router);
-    // Expand sub by clicking it; inner.txt should appear.
-    await page.locator('[data-testid="fm-entry-sub"]').click();
+    // Open sub via double-click (single click only selects);
+    // inner.txt should then appear under the now-expanded row.
+    await page.locator('[data-testid="fm-entry-sub"]').dblclick();
     await expect(page.locator('[data-testid="fm-entry-inner.txt"]')).toBeVisible();
 
     // Navigate to root so dirOfSelection() == root.
@@ -100,6 +101,35 @@ test.describe('fm DnD: within-window move', () => {
     // File now in root.
     expect(existsSync(join(router.fmRoot, 'inner.txt'))).toBe(true);
     expect(existsSync(join(router.fmRoot, 'sub', 'inner.txt'))).toBe(false);
+  });
+
+  test('multi-select drag: dragging any selected row moves the whole selection via bulk-ops', async ({ page, router }) => {
+    // Three siblings selected; dragging any one carries all three
+    // in dataTransfer. Drop on a folder routes to bulk-ops (since
+    // n>1) which moves the whole set.
+    writeFileSync(join(router.fmRoot, 'multi-a.txt'), 'a');
+    writeFileSync(join(router.fmRoot, 'multi-b.txt'), 'b');
+    writeFileSync(join(router.fmRoot, 'multi-c.txt'), 'c');
+    mkdirSync(join(router.fmRoot, 'target'));
+    await openFm(page, router);
+
+    // Select all three with ctrl-click.
+    await page.locator('[data-testid="fm-entry-multi-a.txt"]').click();
+    await page.locator('[data-testid="fm-entry-multi-b.txt"]').click({ modifiers: ['Control'] });
+    await page.locator('[data-testid="fm-entry-multi-c.txt"]').click({ modifiers: ['Control'] });
+    await expect(page.locator('[data-testid="fm-status"]')).toContainText(/3 of \d+ selected/);
+
+    // Drag one of the selected rows; the dataTransfer payload
+    // includes all three (bulk-ops handles the rest).
+    await page.locator('[data-testid="fm-entry-multi-b.txt"]')
+      .dragTo(page.locator('[data-testid="fm-entry-target"]'));
+
+    // bulk-ops move job runs through to done.
+    await router.waitForLog(/bulk-ops job=\S+ op=move status=done/, 5_000);
+    for (const name of ['multi-a.txt', 'multi-b.txt', 'multi-c.txt']) {
+      expect(existsSync(join(router.fmRoot, name))).toBe(false);
+      expect(existsSync(join(router.fmRoot, 'target', name))).toBe(true);
+    }
   });
 
   test('drop from window A onto a folder row in window B: file moves', async ({ page, router }) => {

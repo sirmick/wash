@@ -44,9 +44,9 @@ test.describe('file manager', () => {
     await expect(page.locator('[data-testid="fm-entry-top.txt"]')).toBeVisible();
     await expect(page.locator('[data-testid="fm-entry-sub"]')).toBeVisible();
 
-    // Click into sub to expand inline. note.txt appears beneath sub
-    // WITHOUT top.txt disappearing.
-    await page.locator('[data-testid="fm-entry-sub"]').click();
+    // Double-click sub to navigate in (single click only selects;
+    // dirs require an explicit open gesture).
+    await page.locator('[data-testid="fm-entry-sub"]').dblclick();
     await expect(page.locator('[data-testid="fm-entry-note.txt"]')).toBeVisible();
     await expect(page.locator('[data-testid="fm-entry-top.txt"]')).toBeVisible();
 
@@ -172,7 +172,7 @@ test.describe('file manager', () => {
     await expect(page.locator('wash-app-fm')).toBeVisible();
     await navigate(page, root);
 
-    await page.locator('[data-testid="fm-entry-inner"]').click();
+    await page.locator('[data-testid="fm-entry-inner"]').dblclick();
     await page.locator('[data-testid="fm-entry-leaf.txt"]').click();
     await expect(page.locator('[data-testid="fm-path"]')).toHaveValue(join(root, 'inner', 'leaf.txt'));
 

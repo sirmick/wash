@@ -61,8 +61,9 @@ test.describe('fm keyboard shortcuts', () => {
   test('Forward button is disabled at the end of history; Back enables it', async ({ page, router }) => {
     mkdirSync(join(router.fmRoot, 'sub'));
     await openFm(page, router);
-    // Navigate into sub then back to root, expect Forward to bring us back.
-    await page.locator('[data-testid="fm-entry-sub"]').click();
+    // Navigate into sub (double-click; single click only selects)
+    // then back to root, expect Forward to bring us back.
+    await page.locator('[data-testid="fm-entry-sub"]').dblclick();
     await expect(page.locator('[data-testid="fm-path"]')).toHaveValue(join(router.fmRoot, 'sub'));
     await page.locator('[data-testid="fm-back"]').click();
     await expect(page.locator('[data-testid="fm-path"]')).toHaveValue(router.fmRoot);
@@ -175,14 +176,15 @@ test.describe('fm clipboard cross-window sync', () => {
     const fmA = page.locator('wash-app-fm').nth(0);
     const fmB = page.locator('wash-app-fm').nth(1);
 
-    // Window A: navigate to a-side, copy shared.txt.
-    await fmA.locator('[data-testid="fm-entry-a-side"]').click();
+    // Window A: navigate to a-side (double-click; single click
+    // only selects), copy shared.txt.
+    await fmA.locator('[data-testid="fm-entry-a-side"]').dblclick();
     await expect(fmA.locator('[data-testid="fm-entry-shared.txt"]')).toBeVisible();
     await fmA.locator('[data-testid="fm-entry-shared.txt"]').click();
     await fmA.press('Control+c');
 
     // Window B: navigate to b-side, paste.
-    await fmB.locator('[data-testid="fm-entry-b-side"]').click();
+    await fmB.locator('[data-testid="fm-entry-b-side"]').dblclick();
     await expect(fmB.locator('[data-testid="fm-path"]')).toHaveValue(join(router.fmRoot, 'b-side'));
     // Window B must focus before Ctrl+V routes there.
     await fmB.click();
