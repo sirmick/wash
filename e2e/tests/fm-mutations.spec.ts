@@ -165,8 +165,9 @@ test.describe('fm FE mutations', () => {
     mkdirSync(join(router.fmRoot, 'target'));
     await openFm(page, router);
 
-    // Click into the target dir so it becomes "current path".
-    await page.locator('[data-testid="fm-entry-target"]').click();
+    // Open the target dir so it becomes "current path"
+    // (single-click only selects; dblclick navigates).
+    await page.locator('[data-testid="fm-entry-target"]').dblclick();
     await expect(page.locator('[data-testid="fm-path"]')).toHaveValue(join(router.fmRoot, 'target'));
 
     await page.locator('[data-testid="fm-new-file"]').click();

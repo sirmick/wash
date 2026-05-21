@@ -19,6 +19,7 @@ import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-j
 import { createStore, produce } from 'solid-js/store';
 import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
+import { Menu, MenuItem, MenuSeparator } from '@wash/ui';
 import {
   ArrowLeft,
   ArrowRight,
@@ -407,6 +408,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   const selectPath = (p: string, pushHistory: boolean) => {
     setStatusOverride(null);
+    // Navigation resets the multi-selection. Without this the
+    // "Home → drag file to empty pane" path would target the
+    // still-selected previous folder rather than the current
+    // location (dirOfSelection prefers the selection over path()).
+    setSelection(new Set());
+    selectionAnchor = null;
     const par = parentPath(p);
     // Block on the parent listing only when we have no listing for
     // p itself either — otherwise (e.g. navigating Home to the
@@ -1349,24 +1356,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         }
       }
     };
-    const onDocMouseDown = (ev: MouseEvent) => {
-      if (menu()) {
-        // Solid renders menus inside the host; clicks outside close.
-        const target = ev.target as Node;
-        const menuEl = props.host.querySelector('[data-testid="fm-sort-menu"], [data-testid="fm-context-menu"]');
-        if (menuEl && !menuEl.contains(target)) closeMenu();
-      }
-    };
+    // Click-outside dismissal is owned by the Menu component
+    // itself ([[@wash/ui menu]]); we no longer need a host-level
+    // handler.
     props.host.addEventListener('wash:msg', onMsg);
     props.host.addEventListener('wash:state', onState);
     props.host.addEventListener('keydown', onKey);
-    document.addEventListener('mousedown', onDocMouseDown);
     if (!props.host.hasAttribute('tabindex')) props.host.setAttribute('tabindex', '0');
     onCleanup(() => {
       props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('wash:state', onState);
       props.host.removeEventListener('keydown', onKey);
-      document.removeEventListener('mousedown', onDocMouseDown);
     });
   });
 
@@ -1555,6 +1555,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           sortKey={sortKey()}
           sortDesc={sortDesc()}
           showHidden={showHidden()}
+          onDismiss={closeMenu}
           onPick={(k) => {
             if (sortKey() === k) setSortDesc(!sortDesc());
             else { setSortKey(k); setSortDesc(false); }
@@ -1575,6 +1576,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           top={(menu() as { top: number }).top}
           entry={(menu() as { entry: Entry }).entry}
           path={(menu() as { path: string }).path}
+          onDismiss={closeMenu}
           onOpen={() => {
             const m = menu() as { entry: Entry; path: string };
             closeMenu();
@@ -2055,25 +2057,26 @@ const SortMenu: Component<{
   showHidden: boolean;
   onPick: (k: SortKey) => void;
   onToggleHidden: () => void;
+  onDismiss: () => void;
 }> = (props) => {
   const arrow = (k: SortKey): JSX.Element => {
     if (props.sortKey !== k) return null;
     return props.sortDesc ? <ChevronDown size={12} /> : <ChevronUp size={12} />;
   };
   return (
-    <div data-testid="fm-sort-menu" style={{ ...menuBoxStyle, left: `${props.left}px`, top: `${props.top}px` }}>
-      <MenuItem testid="fm-sort-name" label="Name" trailing={arrow('name')} onClick={() => props.onPick('name')} />
-      <MenuItem testid="fm-sort-mtime" label="Modified" trailing={arrow('mtime')} onClick={() => props.onPick('mtime')} />
-      <MenuItem testid="fm-sort-size" label="Size" trailing={arrow('size')} onClick={() => props.onPick('size')} />
-      <MenuItem testid="fm-sort-type" label="Type" trailing={arrow('type')} onClick={() => props.onPick('type')} />
-      <div style={{ height: '1px', background: '#2a2a3a', margin: '4px 0' }} />
+    <Menu data-testid="fm-sort-menu" x={props.left} y={props.top} onDismiss={props.onDismiss}>
+      <MenuItem data-testid="fm-sort-name" label="Name" trailing={arrow('name')} onClick={() => props.onPick('name')} />
+      <MenuItem data-testid="fm-sort-mtime" label="Modified" trailing={arrow('mtime')} onClick={() => props.onPick('mtime')} />
+      <MenuItem data-testid="fm-sort-size" label="Size" trailing={arrow('size')} onClick={() => props.onPick('size')} />
+      <MenuItem data-testid="fm-sort-type" label="Type" trailing={arrow('type')} onClick={() => props.onPick('type')} />
+      <MenuSeparator />
       <MenuItem
-        testid="fm-show-hidden"
+        data-testid="fm-show-hidden"
         label="Show hidden"
         trailing={props.showHidden ? <Check size={12} /> : <Square size={12} />}
         onClick={props.onToggleHidden}
       />
-    </div>
+    </Menu>
   );
 };
 
@@ -2087,16 +2090,17 @@ const ContextMenu: Component<{
   onInfo: () => void;
   onRename: () => void;
   onDelete: () => void;
+  onDismiss: () => void;
 }> = (props) => {
   return (
-    <div data-testid="fm-context-menu" style={{ ...menuBoxStyle, left: `${props.left}px`, top: `${props.top}px` }}>
-      <MenuItem testid="fm-ctx-open" label="Open" onClick={props.onOpen} />
-      <MenuItem testid="fm-ctx-copy" label="Copy path" onClick={props.onCopy} />
-      <MenuItem testid="fm-ctx-info" label="Show info" onClick={props.onInfo} />
-      <div style={{ height: '1px', background: '#2a2a3a', margin: '4px 0' }} />
-      <MenuItem testid="fm-ctx-rename" label="Rename" onClick={props.onRename} />
-      <MenuItem testid="fm-ctx-delete" label="Delete" onClick={props.onDelete} />
-    </div>
+    <Menu data-testid="fm-context-menu" x={props.left} y={props.top} onDismiss={props.onDismiss}>
+      <MenuItem data-testid="fm-ctx-open" label="Open" onClick={props.onOpen} />
+      <MenuItem data-testid="fm-ctx-copy" label="Copy path" onClick={props.onCopy} />
+      <MenuItem data-testid="fm-ctx-info" label="Show info" onClick={props.onInfo} />
+      <MenuSeparator />
+      <MenuItem data-testid="fm-ctx-rename" label="Rename" onClick={props.onRename} />
+      <MenuItem data-testid="fm-ctx-delete" label="Delete" onClick={props.onDelete} />
+    </Menu>
   );
 };
 
@@ -2298,38 +2302,17 @@ const DropMenu: Component<{
   onSymlink: () => void;
   onCancel: () => void;
 }> = (props) => {
-  let menuEl!: HTMLDivElement;
-  onMount(() => {
-    const onDocDown = (ev: MouseEvent) => {
-      if (!menuEl) return;
-      if (!menuEl.contains(ev.target as Node)) props.onCancel();
-    };
-    // Defer one tick so the click that opened the menu doesn't
-    // immediately close it. (Drag-end and the would-be drop click
-    // fire before mousedown in practice, but the defer is cheap
-    // insurance against subtle event ordering on different
-    // browsers.)
-    setTimeout(() => document.addEventListener('mousedown', onDocDown), 0);
-    onCleanup(() => document.removeEventListener('mousedown', onDocDown));
-  });
+  // zIndex 1950 — above the in-flight drop area, below modal
+  // confirms. (Tokens names the value as zDropMenu; this matches
+  // the historic layering decisions documented in [[wash fm DnD]].)
   return (
-    <div
-      ref={menuEl}
-      data-testid="fm-drop-menu"
-      style={{
-        ...menuBoxStyle,
-        left: `${props.x}px`,
-        top: `${props.y}px`,
-        'z-index': 1950,
-      }}
-      onContextMenu={(ev) => ev.preventDefault()}
-    >
-      <MenuItem testid="fm-drop-move" label="Move here" onClick={props.onMove} />
-      <MenuItem testid="fm-drop-copy" label="Copy here" onClick={props.onCopy} />
-      <MenuItem testid="fm-drop-symlink" label="Create symlink here" onClick={props.onSymlink} />
-      <div style={{ height: '1px', background: '#2a2a3a', margin: '4px 0' }} />
-      <MenuItem testid="fm-drop-cancel" label="Cancel" onClick={props.onCancel} />
-    </div>
+    <Menu data-testid="fm-drop-menu" x={props.x} y={props.y} zIndex={1950} onDismiss={props.onCancel}>
+      <MenuItem data-testid="fm-drop-move" label="Move here" onClick={props.onMove} />
+      <MenuItem data-testid="fm-drop-copy" label="Copy here" onClick={props.onCopy} />
+      <MenuItem data-testid="fm-drop-symlink" label="Create symlink here" onClick={props.onSymlink} />
+      <MenuSeparator />
+      <MenuItem data-testid="fm-drop-cancel" label="Cancel" onClick={props.onCancel} />
+    </Menu>
   );
 };
 
@@ -2344,40 +2327,6 @@ function confirmBtnStyle(danger = false): JSX.CSSProperties {
     font: '13px ui-sans-serif,system-ui,sans-serif',
   };
 }
-
-const MenuItem: Component<{
-  testid?: string;
-  label: string;
-  trailing?: JSX.Element;
-  onClick: () => void;
-}> = (props) => {
-  const [hover, setHover] = createSignal(false);
-  return (
-    <button
-      type="button"
-      data-testid={props.testid}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      onClick={props.onClick}
-      style={{
-        display: 'flex',
-        'align-items': 'center',
-        width: '100%',
-        'text-align': 'left',
-        background: hover() ? '#3a3a5a' : 'transparent',
-        color: '#eee',
-        border: 'none',
-        padding: '6px 14px',
-        cursor: 'pointer',
-        font: '13px ui-sans-serif,system-ui,sans-serif',
-        transition: 'background 0.05s',
-      }}
-    >
-      <span style={{ flex: 1 }}>{props.label}</span>
-      <Show when={props.trailing}>{props.trailing}</Show>
-    </button>
-  );
-};
 
 const AutocompleteDropdown: Component<{
   host: HTMLElement;
@@ -2511,19 +2460,6 @@ const infoBodyStyle: JSX.CSSProperties = {
   padding: '8px 12px 12px',
   font: '12px ui-monospace,Menlo,Consolas,monospace',
   'border-top': '1px solid #2a2a3a',
-};
-
-const menuBoxStyle: JSX.CSSProperties = {
-  position: 'absolute',
-  background: '#15152a',
-  border: '1px solid #2a2a3a',
-  'border-radius': '4px',
-  padding: '4px 0',
-  'min-width': '160px',
-  'box-shadow': '0 6px 16px rgba(0,0,0,0.5)',
-  'z-index': 1000,
-  'transform-origin': 'top left',
-  animation: 'wash-pop-in 100ms ease-out',
 };
 
 const statusStyle: JSX.CSSProperties = {

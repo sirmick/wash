@@ -11,6 +11,7 @@
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
+import { Menu, MenuItem, tokens } from '@wash/ui';
 import { toBlob } from 'html-to-image';
 import { Camera, Menu as MenuIcon, Search } from 'lucide-solid';
 
@@ -174,15 +175,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const offCat = window.wash.onCatalog(setCatalog);
     const offWin = window.wash.onWindowsChanged(setWindows);
 
-    // Outside-click closes menus/palette.
+    // Outside-click closes the palette. The start menu owns its
+    // own dismissal via @wash/ui Menu.
     const onDocMouseDown = (ev: MouseEvent) => {
       const t = ev.target as Node;
-      if (menuOpen()) {
-        const menuEl = props.host.querySelector('[data-testid="start-menu"]');
-        if (menuEl && !menuEl.contains(t) && startBtnEl && !startBtnEl.contains(t)) {
-          setMenuOpen(false);
-        }
-      }
       if (paletteOpen()) {
         const root = props.host.querySelector('[data-testid="palette"]');
         if (root && !root.contains(t)) closePalette();
@@ -254,6 +250,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       <Show when={menuOpen()}>
         <StartMenu
           apps={catalog()}
+          onDismiss={() => setMenuOpen(false)}
           onPick={(id) => {
             setMenuOpen(false);
             launchApp(id);
@@ -392,65 +389,37 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
 const StartMenu: Component<{
   apps: CatalogApp[];
   onPick: (id: string) => void;
+  onDismiss: () => void;
 }> = (props) => (
-  <div data-testid="start-menu" style={menuBoxStyle}>
+  <Menu
+    data-testid="start-menu"
+    anchor="bottom-left"
+    animation="slide-up"
+    zIndex={tokens.zStartMenu}
+    onDismiss={props.onDismiss}
+    style={{ 'min-width': '240px', padding: '4px' }}
+  >
     <Show when={props.apps.length > 0} fallback={<div style={emptyStyle}>no apps registered</div>}>
       <For each={props.apps}>
-        {(app) => <MenuEntry app={app} onPick={() => props.onPick(app.id)} />}
+        {(app) => (
+          <MenuItem
+            label={app.name}
+            disabled={app.disabled}
+            icon={app.icon ? <SpriteIcon name={app.icon} size={20} /> : undefined}
+            trailing={
+              app.disabled ? (
+                <span style={{ color: tokens.fgMuted, 'font-size': tokens.fontSizeMd }}>
+                  {app.reason ? '· ' + app.reason : '· disabled'}
+                </span>
+              ) : undefined
+            }
+            onClick={() => props.onPick(app.id)}
+          />
+        )}
       </For>
     </Show>
-  </div>
+  </Menu>
 );
-
-const MenuEntry: Component<{ app: CatalogApp; onPick: () => void }> = (props) => {
-  const [hover, setHover] = createSignal(false);
-  return (
-    <button
-      type="button"
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      onClick={() => {
-        if (!props.app.disabled) props.onPick();
-      }}
-      style={{
-        display: 'flex',
-        'align-items': 'center',
-        gap: '10px',
-        width: '100%',
-        padding: '8px 12px',
-        background: !props.app.disabled && hover() ? '#2a2a4a' : 'transparent',
-        color: '#eee',
-        border: 'none',
-        'border-radius': '4px',
-        cursor: props.app.disabled ? 'not-allowed' : 'pointer',
-        opacity: props.app.disabled ? 0.5 : 1,
-        'text-align': 'left',
-        font: '14px system-ui,sans-serif',
-      }}
-    >
-      <span
-        style={{
-          width: '22px',
-          height: '22px',
-          'flex-shrink': 0,
-          display: 'inline-flex',
-          'align-items': 'center',
-          'justify-content': 'center',
-        }}
-      >
-        <Show when={props.app.icon}>
-          <SpriteIcon name={props.app.icon!} size={20} />
-        </Show>
-      </span>
-      <span>{props.app.name}</span>
-      <Show when={props.app.disabled}>
-        <span style={{ 'margin-left': 'auto', color: '#888', 'font-size': '12px' }}>
-          {props.app.reason ? '· ' + props.app.reason : '· disabled'}
-        </span>
-      </Show>
-    </button>
-  );
-};
 
 const Palette: Component<{
   inputRef: (el: HTMLInputElement) => void;
@@ -642,21 +611,6 @@ const clockStyle: JSX.CSSProperties = {
   'font-variant-numeric': 'tabular-nums',
   opacity: 0.7,
   'font-size': '13px',
-};
-
-const menuBoxStyle: JSX.CSSProperties = {
-  position: 'absolute',
-  left: '6px',
-  bottom: '46px',
-  background: '#15152a',
-  border: '1px solid #2a2a4a',
-  'border-radius': '8px',
-  padding: '4px',
-  'min-width': '240px',
-  'box-shadow': '0 8px 24px rgba(0,0,0,0.5)',
-  'z-index': 10001,
-  'transform-origin': 'bottom left',
-  animation: 'wash-slide-up 140ms ease-out',
 };
 
 const emptyStyle: JSX.CSSProperties = {
