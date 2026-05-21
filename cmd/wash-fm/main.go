@@ -27,10 +27,13 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"os/user"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/sirmick/wash/internal/fswatch"
 	"github.com/sirmick/wash/internal/sdk"
@@ -80,8 +83,12 @@ type entry struct {
 	Type    string `json:"type" cbor:"type"` // "dir" | "file" | "symlink" | "other"
 	Size    int64  `json:"size" cbor:"size"`
 	ModUnix int64  `json:"mod_unix" cbor:"mod_unix"`
-	Perm    string `json:"perm" cbor:"perm"`              // "rwxr-xr--" 9-char human form
-	Mode    uint32 `json:"mode" cbor:"mode"`              // raw octal-style bits
+	Perm    string `json:"perm" cbor:"perm"` // "rwxr-xr--" 9-char human form
+	Mode    uint32 `json:"mode" cbor:"mode"` // raw octal-style bits
+	UID     uint32 `json:"uid" cbor:"uid"`
+	GID     uint32 `json:"gid" cbor:"gid"`
+	Owner   string `json:"owner,omitempty" cbor:"owner,omitempty"`
+	Group   string `json:"group,omitempty" cbor:"group,omitempty"`
 	LinkTo  string `json:"link_to,omitempty" cbor:"link_to,omitempty"`
 	LinkErr string `json:"link_err,omitempty" cbor:"link_err,omitempty"`
 }
@@ -125,6 +132,13 @@ type writeOK struct {
 	ID    string `json:"id,omitempty"`
 	Path  string `json:"path"`
 	Bytes int    `json:"bytes"`
+}
+
+type symlinkOK struct {
+	Kind     string `json:"kind"`
+	ID       string `json:"id,omitempty"`
+	Target   string `json:"target"`
+	LinkPath string `json:"link_path"`
 }
 
 type errResult struct {
@@ -269,6 +283,201 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 	case "unwatch":
 		path, _ := m["path"].(string)
 		doUnwatch(c, id, path)
+	case "chmod":
+		path, _ := m["path"].(string)
+		mode, _ := toUint32(m["mode"])
+		doChmod(c, id, path, mode)
+	case "chown":
+		path, _ := m["path"].(string)
+		owner, _ := m["owner"].(string)
+		group, _ := m["group"].(string)
+		doChown(c, id, path, owner, group)
+	case "symlink":
+		target, _ := m["target"].(string)
+		linkPath, _ := m["link_path"].(string)
+		doSymlink(c, id, target, linkPath)
+	}
+}
+
+// toUint32 normalizes whatever the FE sent us (number, string, or
+// other) into a permission-bit mode. JSON over the wire ends up as
+// float64 once decoded; CBOR can deliver a uint64 directly. We
+// accept both plus a string (octal or decimal) so an FE that wants
+// to send "0755" verbatim from the input field works too.
+func toUint32(v any) (uint32, bool) {
+	switch x := v.(type) {
+	case uint64:
+		return uint32(x), true
+	case int64:
+		return uint32(x), true
+	case float64:
+		return uint32(x), true
+	case string:
+		// Allow "0755", "0o755", or "755". Strip a leading "0o"
+		// and let strconv pick base from the leading 0.
+		s := strings.TrimPrefix(x, "0o")
+		n, err := strconv.ParseUint(s, 0, 32)
+		if err != nil {
+			// Try as decimal.
+			n, err = strconv.ParseUint(x, 10, 32)
+			if err != nil {
+				return 0, false
+			}
+		}
+		return uint32(n), true
+	}
+	return 0, false
+}
+
+// lookupOwner / lookupGroup resolve numeric ids to names with a
+// per-list-call cache. We use os/user.LookupId which reads
+// /etc/passwd directly on glibc-less builds (matches the wash
+// CGO_ENABLED=0 posture). A lookup miss caches the empty string
+// so we don't retry the same failure thousands of times.
+func lookupOwner(cache map[uint32]string, uid uint32) string {
+	if name, ok := cache[uid]; ok {
+		return name
+	}
+	u, err := user.LookupId(strconv.FormatUint(uint64(uid), 10))
+	if err != nil {
+		cache[uid] = ""
+		return ""
+	}
+	cache[uid] = u.Username
+	return u.Username
+}
+
+func lookupGroup(cache map[uint32]string, gid uint32) string {
+	if name, ok := cache[gid]; ok {
+		return name
+	}
+	g, err := user.LookupGroupId(strconv.FormatUint(uint64(gid), 10))
+	if err != nil {
+		cache[gid] = ""
+		return ""
+	}
+	cache[gid] = g.Name
+	return g.Name
+}
+
+// doChmod sets the permission bits on path. Only the low 12 bits
+// (suid/sgid/sticky + rwx*3) are kept — apps that want to mess
+// with mode_t flags can shell out. Refuses outside-sandbox paths.
+func doChmod(c *sdk.Conn, id, path string, mode uint32) {
+	if path == "" {
+		sendErr(c, "chmod_err", id, path, "bad_request", "missing path")
+		return
+	}
+	abs, err := confine(path)
+	if err != nil {
+		sendErr(c, "chmod_err", id, path, confineErrCode(err), err.Error())
+		return
+	}
+	if err := os.Chmod(abs, os.FileMode(mode&0o7777)); err != nil {
+		sendErr(c, "chmod_err", id, abs, fsErrCode(err), err.Error())
+		return
+	}
+	if err := c.SendAppMsg(pathOK{Kind: "chmod_ok", ID: id, Path: abs}); err != nil {
+		log.Printf("wash-fm send chmod_ok: %v", err)
+	}
+}
+
+// doChown changes owner/group. Either may be empty (then unchanged
+// — represented as uid/gid = -1 to os.Chown). Names or numeric ids
+// are accepted; we resolve via os/user.Lookup.
+//
+// Permission notes: a non-root user can typically only change the
+// group to one they belong to, and cannot change the owner at all.
+// We surface the OS error rather than guess.
+func doChown(c *sdk.Conn, id, path, owner, group string) {
+	if path == "" {
+		sendErr(c, "chown_err", id, path, "bad_request", "missing path")
+		return
+	}
+	if owner == "" && group == "" {
+		sendErr(c, "chown_err", id, path, "bad_request", "missing owner and group")
+		return
+	}
+	abs, err := confine(path)
+	if err != nil {
+		sendErr(c, "chown_err", id, path, confineErrCode(err), err.Error())
+		return
+	}
+	uid := -1
+	if owner != "" {
+		n, lerr := resolveUID(owner)
+		if lerr != nil {
+			sendErr(c, "chown_err", id, abs, "bad_user", lerr.Error())
+			return
+		}
+		uid = n
+	}
+	gid := -1
+	if group != "" {
+		n, lerr := resolveGID(group)
+		if lerr != nil {
+			sendErr(c, "chown_err", id, abs, "bad_group", lerr.Error())
+			return
+		}
+		gid = n
+	}
+	if err := os.Chown(abs, uid, gid); err != nil {
+		sendErr(c, "chown_err", id, abs, fsErrCode(err), err.Error())
+		return
+	}
+	if err := c.SendAppMsg(pathOK{Kind: "chown_ok", ID: id, Path: abs}); err != nil {
+		log.Printf("wash-fm send chown_ok: %v", err)
+	}
+}
+
+// resolveUID accepts a username or numeric uid and returns the int.
+func resolveUID(spec string) (int, error) {
+	if n, err := strconv.Atoi(spec); err == nil {
+		return n, nil
+	}
+	u, err := user.Lookup(spec)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(u.Uid)
+}
+
+// resolveGID accepts a group name or numeric gid and returns the int.
+func resolveGID(spec string) (int, error) {
+	if n, err := strconv.Atoi(spec); err == nil {
+		return n, nil
+	}
+	g, err := user.LookupGroup(spec)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(g.Gid)
+}
+
+// doSymlink creates a symlink at link_path pointing at target. Only
+// link_path is sandboxed — target is stored verbatim (symlinks
+// can legitimately point outside the browsable area, and the
+// target string is not dereferenced at creation time).
+func doSymlink(c *sdk.Conn, id, target, linkPath string) {
+	if target == "" || linkPath == "" {
+		sendErr(c, "symlink_err", id, linkPath, "bad_request", "missing target or link_path")
+		return
+	}
+	link, err := confine(linkPath)
+	if err != nil {
+		sendErr(c, "symlink_err", id, linkPath, confineErrCode(err), err.Error())
+		return
+	}
+	if err := os.Symlink(target, link); err != nil {
+		code := fsErrCode(err)
+		if errors.Is(err, os.ErrExist) {
+			code = "exists"
+		}
+		sendErr(c, "symlink_err", id, link, code, err.Error())
+		return
+	}
+	if err := c.SendAppMsg(symlinkOK{Kind: "symlink_ok", ID: id, Target: target, LinkPath: link}); err != nil {
+		log.Printf("wash-fm send symlink_ok: %v", err)
 	}
 }
 
@@ -408,6 +617,11 @@ func sendList(c *sdk.Conn, id, path string) {
 		truncated = true
 	}
 	out := make([]entry, 0, len(infos))
+	// Per-call cache so a directory of many files owned by the same
+	// user/group only resolves each name once. Empty string in the
+	// cache means "lookup failed, don't retry."
+	owners := map[uint32]string{}
+	groups := map[uint32]string{}
 	for _, fi := range infos {
 		e := entry{
 			Name:    fi.Name(),
@@ -416,6 +630,12 @@ func sendList(c *sdk.Conn, id, path string) {
 			ModUnix: fi.ModTime().Unix(),
 			Perm:    formatPerm(fi.Mode()),
 			Mode:    uint32(fi.Mode().Perm()),
+		}
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+			e.UID = st.Uid
+			e.GID = st.Gid
+			e.Owner = lookupOwner(owners, st.Uid)
+			e.Group = lookupGroup(groups, st.Gid)
 		}
 		if e.Type == "symlink" {
 			full := filepath.Join(abs, fi.Name())

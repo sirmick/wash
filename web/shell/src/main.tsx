@@ -410,19 +410,22 @@ window.addEventListener('unhandledrejection', (ev: PromiseRejectionEvent) => {
   shellLog('error', 'shell', 'unhandled rejection: ' + msg, stack);
 });
 
-// Mirror console.error / console.warn so app code's complaints land
-// server-side too. We keep the original console output so the dev
-// tools view is unchanged.
-const origError = console.error.bind(console);
-console.error = (...args: unknown[]) => {
-  origError(...args);
-  shellLog('error', 'console', args.map(stringifyArg).join(' '));
-};
-const origWarn = console.warn.bind(console);
-console.warn = (...args: unknown[]) => {
-  origWarn(...args);
-  shellLog('warn', 'console', args.map(stringifyArg).join(' '));
-};
+// Mirror every console.* level so app code's traces land server-side
+// too — invaluable when debugging an FE flow whose only visible
+// symptom is "nothing happened." The original console output is kept
+// so the dev tools view is unchanged.
+function mirrorConsole(method: 'error' | 'warn' | 'log' | 'info' | 'debug', level: LogLevel): void {
+  const orig = (console[method] as (...a: unknown[]) => void).bind(console);
+  console[method] = (...args: unknown[]) => {
+    orig(...args);
+    shellLog(level, 'console', args.map(stringifyArg).join(' '));
+  };
+}
+mirrorConsole('error', 'error');
+mirrorConsole('warn', 'warn');
+mirrorConsole('log', 'info');
+mirrorConsole('info', 'info');
+mirrorConsole('debug', 'debug');
 
 function stringifyArg(a: unknown): string {
   if (a instanceof Error) return a.stack ?? a.message;

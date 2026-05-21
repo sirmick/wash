@@ -63,6 +63,10 @@ interface Entry {
   mod_unix: number;
   perm: string;
   mode: number;
+  uid: number;
+  gid: number;
+  owner?: string;
+  group?: string;
   link_to?: string;
   link_err?: string;
 }
@@ -532,6 +536,37 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
+  // commitChmod / commitChown wire the Info section's inline-edit
+  // commits to the BE. fs.watch fires on CHMOD/CHOWN events, so we
+  // don't need to manually refresh the listing — but we do need to
+  // be patient: the watch debounces for 100ms and the BE's reply
+  // race the event. Status carries any error verbatim.
+  const commitChmod = async (target: string, modeText: string) => {
+    const cleaned = modeText.trim();
+    if (cleaned === '') return;
+    const reply = await sendWithReply({ kind: 'chmod', path: target, mode: cleaned });
+    if (reply.kind === 'chmod_ok') {
+      // Refresh the parent so the entry's mode/perm display
+      // updates without waiting for fs.watch.
+      invalidateAndList(parentPath(target));
+    } else {
+      setStatusOverride(`chmod: ${String(reply.msg ?? reply.code ?? 'failed')}`);
+    }
+  };
+
+  const commitChown = async (target: string, field: 'owner' | 'group', value: string) => {
+    const cleaned = value.trim();
+    if (cleaned === '') return;
+    const req: Record<string, unknown> = { kind: 'chown', path: target };
+    req[field] = cleaned;
+    const reply = await sendWithReply(req);
+    if (reply.kind === 'chown_ok') {
+      invalidateAndList(parentPath(target));
+    } else {
+      setStatusOverride(`chown: ${String(reply.msg ?? reply.code ?? 'failed')}`);
+    }
+  };
+
   // ---- autocomplete ----
 
   const onPathInput = (value: string) => {
@@ -617,6 +652,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // to render their dropTarget highlight.
   const [dropTargetPath, setDropTargetPath] = createSignal('');
 
+  // dropMenu, when non-null, renders a small overlay at the drop
+  // position offering Move / Symlink. Set when the user held Alt
+  // during the drop; cleared when they pick an option or click
+  // outside. (Why Alt, not right-mouse? Firefox and Chromium both
+  // gate HTML5 dragstart to the left button — right-button never
+  // initiates a drag in the first place, so a modifier on the
+  // left-button drag is the only mechanism that works in both.)
+  const [dropMenu, setDropMenu] = createSignal<{ x: number; y: number; src: string; targetDir: string } | null>(null);
+
   const onDragStart = (ev: DragEvent, p: string) => {
     if (!ev.dataTransfer) return;
     ev.dataTransfer.effectAllowed = 'move';
@@ -625,8 +669,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   const onDragEnd = () => {
-    // Source-side bookkeeping. fs.watch handles the actual
-    // refresh — see commitMove. Just clear the highlight.
     setDropTargetPath('');
   };
 
@@ -649,6 +691,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     ev.preventDefault();
     ev.stopPropagation();
     setDropTargetPath('');
+    if (ev.altKey) {
+      // Offset the menu down-and-right of the cursor so the first
+      // item isn't directly under the pointer — otherwise the
+      // cursor was *already inside* when the menu mounts and no
+      // mouseenter fires, making the item look unhoverable.
+      const my = props.host.getBoundingClientRect();
+      setDropMenu({ x: ev.clientX - my.left + 8, y: ev.clientY - my.top + 8, src, targetDir: rowPath });
+      return;
+    }
     void commitMove(src, rowPath);
   };
 
@@ -668,7 +719,38 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     if (!src) return;
     ev.preventDefault();
     setDropTargetPath('');
+    if (ev.altKey) {
+      const my = props.host.getBoundingClientRect();
+      setDropMenu({ x: ev.clientX - my.left + 8, y: ev.clientY - my.top + 8, src, targetDir: dirOfSelection() });
+      return;
+    }
     void commitMove(src, dirOfSelection());
+  };
+
+  // commitSymlink creates a symlink at targetDir/basename(src)
+  // pointing at src. Same trivial-skip rules as commitMove except
+  // we allow same-parent (linking next to the original is a fine
+  // use case: shorter handy alias for a path).
+  //
+  // On success, immediately expand + invalidate the target dir so
+  // the new symlink row shows without waiting for fs.watch (which
+  // only fires for dirs the user had already expanded — for a
+  // brand-new drop into a collapsed folder, that's never).
+  const commitSymlink = async (src: string, targetDir: string) => {
+    if (!src || !targetDir) return;
+    const linkPath = joinPath(targetDir, baseName(src));
+    if (linkPath === src) {
+      // No-op: would create a circular self-link. Refuse politely.
+      setStatusOverride('symlink: link path equals target');
+      return;
+    }
+    const reply = await sendWithReply({ kind: 'symlink', target: src, link_path: linkPath });
+    if (reply.kind === 'symlink_ok') {
+      expandDir(targetDir);
+      invalidateAndList(targetDir);
+    } else {
+      setStatusOverride(`symlink: ${String(reply.msg ?? reply.code ?? 'failed')}`);
+    }
   };
 
   // commitMove is the actual move operation. Skips trivial cases
@@ -688,9 +770,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const dest = joinPath(targetDir, baseName(src));
     const reply = await sendWithReply({ kind: 'rename', from: src, to: dest });
     if (reply.kind === 'rename_ok') {
-      // fs.watch fires on both source and target dirs → tree
-      // updates automatically. We just move selection to follow
-      // the file to its new home (if we were sitting on it).
+      // Refresh both ends ourselves rather than waiting for
+      // fs.watch — for a drop into a collapsed target dir, the
+      // watch never fires (we only subscribe to expanded dirs).
+      // Expanding the target also makes the moved file visible.
+      invalidateAndList(srcParent);
+      expandDir(targetDir);
+      invalidateAndList(targetDir);
       if (path() === src) {
         setPath(dest);
         setPathInputValue(dest);
@@ -990,14 +1076,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             }}
           </For>
         </div>
-        <div style={{ display: 'grid', 'grid-template-rows': '1fr auto', overflow: 'hidden' }}>
-          <PreviewPane content={previewContent()} />
+        <div style={{ display: 'grid', 'grid-template-rows': 'auto 1fr', overflow: 'hidden' }}>
           <InfoSection
             open={infoOpen()}
             onToggle={toggleInfo}
             entry={selectedEntry()}
             path={path()}
+            onChmod={commitChmod}
+            onChown={commitChown}
           />
+          <PreviewPane content={previewContent()} />
         </div>
       </div>
 
@@ -1083,6 +1171,26 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           path={confirmDelete()!.path}
           onCancel={cancelDelete}
           onConfirm={performDelete}
+        />
+      </Show>
+
+      <Show when={dropMenu()}>
+        <DropMenu
+          x={dropMenu()!.x}
+          y={dropMenu()!.y}
+          src={dropMenu()!.src}
+          targetDir={dropMenu()!.targetDir}
+          onMove={() => {
+            const dm = dropMenu()!;
+            setDropMenu(null);
+            void commitMove(dm.src, dm.targetDir);
+          }}
+          onSymlink={() => {
+            const dm = dropMenu()!;
+            setDropMenu(null);
+            void commitSymlink(dm.src, dm.targetDir);
+          }}
+          onCancel={() => setDropMenu(null)}
         />
       </Show>
     </>
@@ -1288,9 +1396,38 @@ const InfoSection: Component<{
   onToggle: () => void;
   entry: Entry | null;
   path: string;
+  onChmod: (path: string, modeText: string) => void;
+  onChown: (path: string, field: 'owner' | 'group', value: string) => void;
 }> = (props) => {
+  // Tracks which field is currently in edit mode. Only one field
+  // editable at a time keeps the UX simple — Enter/Escape on the
+  // input close it; clicking another field implicitly cancels.
+  const [editing, setEditing] = createSignal<'perm' | 'owner' | 'group' | null>(null);
+  const [draft, setDraft] = createSignal('');
+
+  const startEdit = (field: 'perm' | 'owner' | 'group', initial: string) => {
+    setEditing(field);
+    setDraft(initial);
+  };
+
+  const cancel = () => setEditing(null);
+
+  const commit = () => {
+    const e = props.entry;
+    if (!e) {
+      setEditing(null);
+      return;
+    }
+    const which = editing();
+    const value = draft();
+    setEditing(null);
+    if (!which) return;
+    if (which === 'perm') props.onChmod(props.path, value);
+    else props.onChown(props.path, which, value);
+  };
+
   return (
-    <div style={{ 'border-top': '1px solid #2a2a3a', background: '#15152a' }}>
+    <div style={{ 'border-bottom': '1px solid #2a2a3a', background: '#15152a' }}>
       <button
         type="button"
         data-testid="fm-info-toggle"
@@ -1305,27 +1442,131 @@ const InfoSection: Component<{
           <Show when={props.entry} fallback="(no selection)">
             {(e) => {
               const entry = e();
-              const rows: Array<[string, string]> = [
-                ['Path', props.path],
-                ['Type', entry.type],
-                ['Size', humanSize(entry.size)],
-                ['Modified', new Date(entry.mod_unix * 1000).toLocaleString()],
-                ['Permissions', entry.perm + ` (${octalPerm(entry.mode)})`],
-              ];
-              if (entry.type === 'symlink') {
-                rows.push(['Link target', entry.link_to ?? `(${entry.link_err ?? 'unresolved'})`]);
-              }
-              return <For each={rows}>
-                {([k, v]) => (
-                  <div style={{ display: 'flex', gap: '10px', padding: '2px 0' }}>
-                    <span style={{ width: '110px', opacity: 0.6, 'flex-shrink': 0 }}>{k}</span>
-                    <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{v}</span>
-                  </div>
-                )}
-              </For>;
+              const ownerDisplay = entry.owner ? `${entry.owner} (${entry.uid})` : String(entry.uid);
+              const groupDisplay = entry.group ? `${entry.group} (${entry.gid})` : String(entry.gid);
+              return (
+                <>
+                  <StaticRow k="Path" v={props.path} />
+                  <StaticRow k="Type" v={entry.type} />
+                  <StaticRow k="Size" v={humanSize(entry.size)} />
+                  <StaticRow k="Modified" v={new Date(entry.mod_unix * 1000).toLocaleString()} />
+                  <EditableRow
+                    testid="fm-info-perm"
+                    label="Permissions"
+                    display={`${entry.perm} (${octalPerm(entry.mode)})`}
+                    editing={editing() === 'perm'}
+                    draft={editing() === 'perm' ? draft() : ''}
+                    placeholder="octal e.g. 0755"
+                    onStart={() => startEdit('perm', octalPerm(entry.mode))}
+                    onDraft={setDraft}
+                    onCommit={commit}
+                    onCancel={cancel}
+                  />
+                  <EditableRow
+                    testid="fm-info-owner"
+                    label="Owner"
+                    display={ownerDisplay}
+                    editing={editing() === 'owner'}
+                    draft={editing() === 'owner' ? draft() : ''}
+                    placeholder="username or uid"
+                    onStart={() => startEdit('owner', entry.owner || String(entry.uid))}
+                    onDraft={setDraft}
+                    onCommit={commit}
+                    onCancel={cancel}
+                  />
+                  <EditableRow
+                    testid="fm-info-group"
+                    label="Group"
+                    display={groupDisplay}
+                    editing={editing() === 'group'}
+                    draft={editing() === 'group' ? draft() : ''}
+                    placeholder="group name or gid"
+                    onStart={() => startEdit('group', entry.group || String(entry.gid))}
+                    onDraft={setDraft}
+                    onCommit={commit}
+                    onCancel={cancel}
+                  />
+                  <Show when={entry.type === 'symlink'}>
+                    <StaticRow k="Link target" v={entry.link_to ?? `(${entry.link_err ?? 'unresolved'})`} />
+                  </Show>
+                </>
+              );
             }}
           </Show>
         </div>
+      </Show>
+    </div>
+  );
+};
+
+// StaticRow is the non-editable row used for path/type/size/etc.
+const StaticRow: Component<{ k: string; v: string }> = (props) => (
+  <div style={{ display: 'flex', gap: '10px', padding: '2px 0' }}>
+    <span style={{ width: '110px', opacity: 0.6, 'flex-shrink': 0 }}>{props.k}</span>
+    <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{props.v}</span>
+  </div>
+);
+
+// EditableRow renders a key/value pair where the value swaps into
+// an input on click. Enter commits, Escape cancels, blur commits.
+// Same UX as inline rename in the tree; consistent for the user.
+const EditableRow: Component<{
+  testid: string;
+  label: string;
+  display: string;
+  editing: boolean;
+  draft: string;
+  placeholder: string;
+  onStart: () => void;
+  onDraft: (val: string) => void;
+  onCommit: () => void;
+  onCancel: () => void;
+}> = (props) => {
+  return (
+    <div data-testid={props.testid} style={{ display: 'flex', gap: '10px', padding: '2px 0', 'align-items': 'center' }}>
+      <span style={{ width: '110px', opacity: 0.6, 'flex-shrink': 0 }}>{props.label}</span>
+      <Show
+        when={props.editing}
+        fallback={
+          <span
+            data-testid={`${props.testid}-value`}
+            onClick={props.onStart}
+            style={{
+              flex: 1,
+              cursor: 'pointer',
+              overflow: 'hidden',
+              'text-overflow': 'ellipsis',
+              'white-space': 'nowrap',
+              padding: '1px 4px',
+              'border-radius': '3px',
+              'border-bottom': '1px dashed #2a2a3a',
+            }}
+            title="click to edit"
+          >
+            {props.display}
+          </span>
+        }
+      >
+        <input
+          data-testid={`${props.testid}-input`}
+          ref={(el) => setTimeout(() => { el.focus(); el.select(); }, 0)}
+          type="text"
+          value={props.draft}
+          placeholder={props.placeholder}
+          onInput={(e) => props.onDraft(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              props.onCommit();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              props.onCancel();
+            }
+          }}
+          onBlur={() => props.onCommit()}
+          style={inlineInputStyle}
+        />
       </Show>
     </div>
   );
@@ -1460,6 +1701,61 @@ const ConfirmDeleteOverlay: Component<{
   );
 };
 
+// DropMenu — the small context menu that appears when the user
+// holds Alt while dropping a drag. Offers Move and Symlink (copy
+// lives in the future bulk-ops app per [[wash-fm-dnd-plan]]).
+//
+// No backdrop overlay. The instrumentation pass revealed that a
+// full-host backdrop at z-index 1900 was intercepting every mouse
+// event despite the menu's higher z-index 1950 — the wash-app-fm
+// host uses `display:grid`, and absolute-positioned children inside
+// a grid container don't honor z-index against grid-placed
+// siblings the way they do in a normal-flow container. We now use
+// a document-level mousedown listener (same pattern the sort and
+// context menus use) to close on outside click.
+const DropMenu: Component<{
+  x: number;
+  y: number;
+  src: string;
+  targetDir: string;
+  onMove: () => void;
+  onSymlink: () => void;
+  onCancel: () => void;
+}> = (props) => {
+  let menuEl!: HTMLDivElement;
+  onMount(() => {
+    const onDocDown = (ev: MouseEvent) => {
+      if (!menuEl) return;
+      if (!menuEl.contains(ev.target as Node)) props.onCancel();
+    };
+    // Defer one tick so the click that opened the menu doesn't
+    // immediately close it. (Drag-end and the would-be drop click
+    // fire before mousedown in practice, but the defer is cheap
+    // insurance against subtle event ordering on different
+    // browsers.)
+    setTimeout(() => document.addEventListener('mousedown', onDocDown), 0);
+    onCleanup(() => document.removeEventListener('mousedown', onDocDown));
+  });
+  return (
+    <div
+      ref={menuEl}
+      data-testid="fm-drop-menu"
+      style={{
+        ...menuBoxStyle,
+        left: `${props.x}px`,
+        top: `${props.y}px`,
+        'z-index': 1950,
+      }}
+      onContextMenu={(ev) => ev.preventDefault()}
+    >
+      <MenuItem testid="fm-drop-move" label="Move here" onClick={props.onMove} />
+      <MenuItem testid="fm-drop-symlink" label="Create symlink here" onClick={props.onSymlink} />
+      <div style={{ height: '1px', background: '#2a2a3a', margin: '4px 0' }} />
+      <MenuItem testid="fm-drop-cancel" label="Cancel" onClick={props.onCancel} />
+    </div>
+  );
+};
+
 function confirmBtnStyle(danger = false): JSX.CSSProperties {
   return {
     background: danger ? '#7a1f1f' : 'transparent',
@@ -1491,12 +1787,13 @@ const MenuItem: Component<{
         'align-items': 'center',
         width: '100%',
         'text-align': 'left',
-        background: hover() ? '#23233a' : 'transparent',
+        background: hover() ? '#3a3a5a' : 'transparent',
         color: '#eee',
         border: 'none',
         padding: '6px 14px',
         cursor: 'pointer',
         font: '13px ui-sans-serif,system-ui,sans-serif',
+        transition: 'background 0.05s',
       }}
     >
       <span style={{ flex: 1 }}>{props.label}</span>
