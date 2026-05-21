@@ -19,7 +19,7 @@ import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-j
 import { createStore, produce } from 'solid-js/store';
 import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
-import { ConfirmDialog, Menu, MenuItem, MenuSeparator } from '@wash/ui';
+import { ConfirmDialog, Menu, MenuItem, MenuSeparator, StatusBar } from '@wash/ui';
 import {
   ArrowLeft,
   ArrowRight,
@@ -107,7 +107,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // While non-null it wins over the auto-derived visible-entry count.
   // Navigation / clicks clear it so the auto status resumes.
   const [statusOverride, setStatusOverride] = createSignal<string | null>(null);
-  const [statusDropPath, setStatusDropPath] = createSignal('');
   const [menu, setMenu] = createSignal<MenuState>(null);
 
   // Autocomplete
@@ -1528,13 +1527,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       </div>
 
       {/* status */}
-      <div
-        data-testid="fm-status"
-        data-drop-path={statusDropPath() || undefined}
-        style={statusStyle}
-      >
-        {statusBar()}
-      </div>
+      <StatusBar data-testid="fm-status">{statusBar()}</StatusBar>
 
       {/* overlays */}
       <Show when={completeOpen() && completeMatches().length > 0}>
@@ -2356,14 +2349,6 @@ const infoBodyStyle: JSX.CSSProperties = {
   padding: '8px 12px 12px',
   font: '12px ui-monospace,Menlo,Consolas,monospace',
   'border-top': '1px solid #2a2a3a',
-};
-
-const statusStyle: JSX.CSSProperties = {
-  padding: '0 10px',
-  font: '11px ui-monospace,Menlo,Consolas,monospace',
-  opacity: 0.6,
-  display: 'flex',
-  'align-items': 'center',
 };
 
 // ---- helpers ----
