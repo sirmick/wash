@@ -26,6 +26,9 @@ importers:
 
   apps/bulk:
     dependencies:
+      '@wash/ui':
+        specifier: workspace:*
+        version: link:../../lib
       solid-js:
         specifier: ^1.9.13
         version: 1.9.13
@@ -42,6 +45,9 @@ importers:
 
   apps/fm:
     dependencies:
+      '@wash/ui':
+        specifier: workspace:*
+        version: link:../../lib
       lucide-solid:
         specifier: ^1.16.0
         version: 1.16.0(solid-js@1.9.13)
@@ -61,6 +67,9 @@ importers:
 
   apps/session:
     dependencies:
+      '@wash/ui':
+        specifier: workspace:*
+        version: link:../../lib
       html-to-image:
         specifier: ^1.11.13
         version: 1.11.13
@@ -114,6 +123,12 @@ importers:
       vite:
         specifier: ^5.4.10
         version: 5.4.21
+
+  lib:
+    dependencies:
+      solid-js:
+        specifier: ^1.9.13
+        version: 1.9.13
 
   shell:
     dependencies:

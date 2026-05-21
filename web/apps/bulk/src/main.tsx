@@ -8,6 +8,7 @@ import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { render } from 'solid-js/web';
 import type { Component } from 'solid-js';
+import { Button } from '@wash/ui';
 
 declare global {
   interface Window {
@@ -279,43 +280,22 @@ const JobRow: Component<{
               when={isDirVsDir(props.conflict!)}
               fallback={
                 <>
-                  <ConflictBtn testid={`bulk-conflict-replace-${props.job.job_id}`} label="Replace" danger onClick={() => props.onResolveConflict('replace')} />
-                  <ConflictBtn testid={`bulk-conflict-replace-all-${props.job.job_id}`} label="Replace All" danger onClick={() => props.onResolveConflict('replace_all')} />
+                  <Button data-testid={`bulk-conflict-replace-${props.job.job_id}`} variant="danger" size="sm" onClick={() => props.onResolveConflict('replace')}>Replace</Button>
+                  <Button data-testid={`bulk-conflict-replace-all-${props.job.job_id}`} variant="danger" size="sm" onClick={() => props.onResolveConflict('replace_all')}>Replace All</Button>
                 </>
               }
             >
-              <ConflictBtn testid={`bulk-conflict-merge-${props.job.job_id}`} label="Merge" onClick={() => props.onResolveConflict('merge')} />
-              <ConflictBtn testid={`bulk-conflict-merge-all-${props.job.job_id}`} label="Merge All" onClick={() => props.onResolveConflict('merge_all')} />
-              <ConflictBtn testid={`bulk-conflict-replace-${props.job.job_id}`} label="Replace" danger onClick={() => props.onResolveConflict('replace')} />
+              <Button data-testid={`bulk-conflict-merge-${props.job.job_id}`} variant="ghost" size="sm" onClick={() => props.onResolveConflict('merge')}>Merge</Button>
+              <Button data-testid={`bulk-conflict-merge-all-${props.job.job_id}`} variant="ghost" size="sm" onClick={() => props.onResolveConflict('merge_all')}>Merge All</Button>
+              <Button data-testid={`bulk-conflict-replace-${props.job.job_id}`} variant="danger" size="sm" onClick={() => props.onResolveConflict('replace')}>Replace</Button>
             </Show>
-            <ConflictBtn testid={`bulk-conflict-skip-${props.job.job_id}`} label="Skip" onClick={() => props.onResolveConflict('skip')} />
-            <ConflictBtn testid={`bulk-conflict-skip-all-${props.job.job_id}`} label="Skip All" onClick={() => props.onResolveConflict('skip_all')} />
-            <ConflictBtn testid={`bulk-conflict-cancel-${props.job.job_id}`} label="Cancel" onClick={() => props.onResolveConflict('cancel')} />
+            <Button data-testid={`bulk-conflict-skip-${props.job.job_id}`} variant="ghost" size="sm" onClick={() => props.onResolveConflict('skip')}>Skip</Button>
+            <Button data-testid={`bulk-conflict-skip-all-${props.job.job_id}`} variant="ghost" size="sm" onClick={() => props.onResolveConflict('skip_all')}>Skip All</Button>
+            <Button data-testid={`bulk-conflict-cancel-${props.job.job_id}`} variant="ghost" size="sm" onClick={() => props.onResolveConflict('cancel')}>Cancel</Button>
           </div>
         </div>
       </Show>
     </div>
-  );
-};
-
-const ConflictBtn: Component<{ testid: string; label: string; danger?: boolean; onClick: () => void }> = (props) => {
-  return (
-    <button
-      type="button"
-      data-testid={props.testid}
-      onClick={props.onClick}
-      style={{
-        background: props.danger ? '#7a1f1f' : 'transparent',
-        color: '#eee',
-        border: '1px solid ' + (props.danger ? '#a02d2d' : '#2a2a3a'),
-        'border-radius': '3px',
-        padding: '3px 10px',
-        cursor: 'pointer',
-        font: '12px ui-sans-serif,system-ui,sans-serif',
-      }}
-    >
-      {props.label}
-    </button>
   );
 };
 

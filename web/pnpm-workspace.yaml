@@ -1,5 +1,6 @@
 packages:
   - "shell"
   - "apps/*"
+  - "lib"
 allowBuilds:
   esbuild: true
