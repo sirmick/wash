@@ -23,12 +23,18 @@
 package main
 
 import (
+	"context"
 	"embed"
+	"errors"
+	"io"
 	"io/fs"
 	"log"
 	"os"
+	"os/exec"
 	"sync"
+	"syscall"
 
+	"github.com/creack/pty"
 	wfs "github.com/sirmick/wash/internal/fs"
 	"github.com/sirmick/wash/internal/sdk"
 )
@@ -61,6 +67,36 @@ var (
 	editFS *wfs.FS
 	root   string
 )
+
+// termSession is one PTY+raw-channel pair. The editor opens a new
+// one per terminal tab and tears it down on tab close. Channel id
+// is the natural session id since the FE addresses raw bytes by
+// channel.
+type termSession struct {
+	pty *os.File
+	cmd *exec.Cmd
+	ch  *sdk.RawChannel
+}
+
+var (
+	termMu       sync.Mutex
+	termSessions = map[uint32]*termSession{}
+)
+
+// isPtyTerm — same heuristic as wash-term. The pty's slave going
+// away on Linux yields EIO; closing the master yields ErrClosed;
+// EOF is the clean exit. None of those are real errors.
+func isPtyTerm(err error) bool {
+	return err == nil || errors.Is(err, io.EOF) ||
+		errors.Is(err, syscall.EIO) || errors.Is(err, os.ErrClosed)
+}
+
+func userShell() string {
+	if s := os.Getenv("SHELL"); s != "" {
+		return s
+	}
+	return "/bin/bash"
+}
 
 func main() {
 	sub, err := fs.Sub(assetsFS, "assets")
@@ -165,7 +201,137 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		if err := c.SaveState(state); err != nil {
 			log.Printf("wash-edit save_state: %v", err)
 		}
+	case "term.open":
+		cols := toUint(m["cols"])
+		rows := toUint(m["rows"])
+		if cols == 0 {
+			cols = 80
+		}
+		if rows == 0 {
+			rows = 24
+		}
+		// OpenChannel must not run on the read goroutine; hand off.
+		go openTerm(c, id, uint16(cols), uint16(rows))
+	case "term.resize":
+		chID := toUint(m["channel_id"])
+		cols := toUint(m["cols"])
+		rows := toUint(m["rows"])
+		if chID == 0 || cols == 0 || rows == 0 {
+			return
+		}
+		termMu.Lock()
+		sess := termSessions[uint32(chID)]
+		termMu.Unlock()
+		if sess == nil {
+			return
+		}
+		if err := pty.Setsize(sess.pty, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}); err != nil {
+			log.Printf("wash-edit term.resize ch=%d: %v", chID, err)
+		}
+	case "term.close":
+		chID := toUint(m["channel_id"])
+		if chID == 0 {
+			return
+		}
+		termMu.Lock()
+		sess := termSessions[uint32(chID)]
+		termMu.Unlock()
+		if sess != nil {
+			_ = sess.pty.Close()
+			_ = sess.cmd.Process.Kill()
+		}
 	}
+}
+
+// toUint normalizes CBOR's mixed numeric shapes (int64 / uint64 /
+// float64) into uint64 for size + channel id fields.
+func toUint(v any) uint64 {
+	switch x := v.(type) {
+	case uint64:
+		return x
+	case int64:
+		if x < 0 {
+			return 0
+		}
+		return uint64(x)
+	case float64:
+		return uint64(x)
+	}
+	return 0
+}
+
+// openTerm spawns a shell, opens a raw channel, and io.Copy's the
+// two ends together. Once both directions are flowing the FE sees
+// `term.opened` { id, channel_id } and can wire xterm into the
+// channel. Mirrors wash-term's openTab almost exactly — when the
+// pty/term primitives are extracted to internal/pty/ both apps
+// will collapse onto the same code.
+func openTerm(c *sdk.Conn, replyID string, cols, rows uint16) {
+	ch, err := c.OpenChannel(context.Background(), c.WindowID())
+	if err != nil {
+		log.Printf("wash-edit term open channel: %v", err)
+		_ = c.SendAppMsg(map[string]any{"kind": "term.open_err", "id": replyID, "msg": err.Error()})
+		return
+	}
+	shell := userShell()
+	cmd := exec.Command(shell)
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	f, startErr := pty.StartWithSize(cmd, &pty.Winsize{Cols: cols, Rows: rows})
+	if startErr != nil {
+		log.Printf("wash-edit term pty.Start %s: %v", shell, startErr)
+		_ = ch.Close()
+		_ = c.SendAppMsg(map[string]any{"kind": "term.open_err", "id": replyID, "msg": startErr.Error()})
+		return
+	}
+	sess := &termSession{pty: f, cmd: cmd, ch: ch}
+	termMu.Lock()
+	termSessions[ch.ID()] = sess
+	termMu.Unlock()
+
+	log.Printf("wash-edit term opened ch=%d shell=%s pid=%d", ch.ID(), shell, cmd.Process.Pid)
+	_ = c.SendAppMsg(map[string]any{
+		"kind":       "term.opened",
+		"id":         replyID,
+		"channel_id": uint64(ch.ID()),
+		"shell":      shell,
+	})
+
+	// pty → channel
+	go func() {
+		_, copyErr := io.Copy(ch, f)
+		if !isPtyTerm(copyErr) {
+			log.Printf("wash-edit term pty→ch ch=%d: %v", ch.ID(), copyErr)
+		}
+		cleanupTerm(c, ch.ID(), "pty eof")
+	}()
+	// channel → pty
+	go func() {
+		_, copyErr := io.Copy(f, ch)
+		if !isPtyTerm(copyErr) {
+			log.Printf("wash-edit term ch→pty ch=%d: %v", ch.ID(), copyErr)
+		}
+		_ = cmd.Process.Kill()
+	}()
+	go func() {
+		_ = cmd.Wait()
+	}()
+}
+
+func cleanupTerm(c *sdk.Conn, chID uint32, reason string) {
+	termMu.Lock()
+	sess, ok := termSessions[chID]
+	delete(termSessions, chID)
+	termMu.Unlock()
+	if !ok {
+		return
+	}
+	_ = sess.pty.Close()
+	_ = sess.ch.Close()
+	_ = c.SendAppMsg(map[string]any{
+		"kind":       "term.closed",
+		"channel_id": uint64(chID),
+		"reason":     reason,
+	})
 }
 
 func doList(c *sdk.Conn, id, path string) {

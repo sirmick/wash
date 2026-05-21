@@ -72,6 +72,12 @@ importers:
       '@wash/ui':
         specifier: workspace:*
         version: link:../../lib
+      '@xterm/addon-fit':
+        specifier: ^0.10.0
+        version: 0.10.0(@xterm/xterm@5.5.0)
+      '@xterm/xterm':
+        specifier: ^5.5.0
+        version: 5.5.0
       solid-js:
         specifier: ^1.9.13
         version: 1.9.13

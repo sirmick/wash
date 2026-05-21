@@ -31,11 +31,16 @@ import {
 import { javascript } from '@codemirror/lang-javascript';
 import { json } from '@codemirror/lang-json';
 import { markdown } from '@codemirror/lang-markdown';
+import { Terminal as XTerm } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import xtermCSS from '@xterm/xterm/css/xterm.css?inline';
 
 declare global {
   interface Window {
     wash: {
       sendAppMsg(instanceID: string, data: unknown): void;
+      openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
+      writeRaw(channelID: number, bytes: Uint8Array): void;
     } & Record<string, unknown>;
   }
 }
@@ -61,6 +66,26 @@ interface PersistedState {
   paths?: string[];
   active?: string;
   split_pct?: number;
+  // Terminal pane geometry. term_open toggles the panel; edit_pct
+  // is the editor row's vertical share when the panel is visible.
+  // Terminal tabs themselves aren't persisted — PTYs die with the
+  // editor process; restoring a "terminal tab" would be a fresh
+  // shell anyway.
+  term_open?: boolean;
+  edit_pct?: number;
+}
+
+// TermTab is one terminal session. Local id is assigned eagerly;
+// the channelID arrives from the BE on term.opened. Bytes that
+// land before the FE has mounted xterm are queued in `pending`
+// and flushed at mount time so we never lose initial output.
+interface TermTab {
+  id: string;
+  channelID: number;
+  title: string;
+  // Map state, not class members — xterm is imperative so we
+  // keep references outside Solid's reactive system. Filled in
+  // by mountTerm.
 }
 
 // Tab is one open file (or one Untitled buffer). Path is "" for
@@ -107,10 +132,34 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     | { mode: 'save'; tabID: string; suggestedName: string }
   >(null);
 
+  // Terminal pane state. termTabs is ordered; activeTermID points
+  // at one of them (or '' when no terminals). termOpen toggles the
+  // panel visibility (Ctrl+` / menu). editPct is the editor row's
+  // vertical share when the terminal panel is visible.
+  const [termTabs, setTermTabs] = createSignal<TermTab[]>([]);
+  const [activeTermID, setActiveTermID] = createSignal('');
+  const [termOpen, setTermOpen] = createSignal(false);
+  const [editPct, setEditPct] = createSignal(70);
+  // Pending term.open requests waiting for term.opened so we can
+  // pair channelID with the FE's local term id. Keyed by reply id.
+  const pendingTermOpens = new Map<string, string>(); // reply id -> local id
+  // Per-channel state: xterm + fit + bytes-queue + cleanup. We
+  // keep this outside Solid's reactive system because xterm is
+  // imperative and a Map is the cleanest fit. Map keyed by
+  // channelID; created at term.opened; populated at mount.
+  type TermRefs = {
+    xterm: XTerm | null;
+    fit: FitAddon | null;
+    unsub?: () => void;
+    pending: Uint8Array[];
+  };
+  const termRefs = new Map<number, TermRefs>();
+  let nextTermLocalID = 0;
+
   // openMenu is the open dropdown's id ('' = none). It's set when
   // the user clicks a menubar button; menubarOffsets stores each
   // button's x,y so the Menu component knows where to drop.
-  const [openMenu, setOpenMenu] = createSignal<'' | 'file' | 'edit' | 'syntax'>('');
+  const [openMenu, setOpenMenu] = createSignal<'' | 'file' | 'edit' | 'syntax' | 'terminal'>('');
   const [menuAnchor, setMenuAnchor] = createSignal<{ x: number; y: number }>({ x: 0, y: 0 });
   // Per-active-tab language override. Null = derive from path.
   const [langOverride, setLangOverride] = createSignal<string | null>(null);
@@ -318,6 +367,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         paths: tabs().filter((t) => t.path).map((t) => t.path),
         active: activeTab()?.path || undefined,
         split_pct: splitPct(),
+        term_open: termOpen(),
+        edit_pct: editPct(),
       };
       send({ kind: 'save_state', state });
     }, 250);
@@ -327,6 +378,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     if (typeof s.split_pct === 'number') {
       setSplitPct(Math.max(15, Math.min(85, s.split_pct)));
     }
+    if (typeof s.edit_pct === 'number') {
+      setEditPct(Math.max(20, Math.min(90, s.edit_pct)));
+    }
+    // Restore term_open without auto-spawning a terminal — the
+    // user can recreate via Ctrl+Shift+` if they want one. PTYs
+    // don't survive process exit so re-spawning silently would
+    // surprise them.
+    if (typeof s.term_open === 'boolean') setTermOpen(s.term_open);
     if (s.paths && s.paths.length > 0) {
       for (const p of s.paths) {
         await openInTab(p);
@@ -389,7 +448,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // anchor coordinates relative to the host element so the menu
   // hangs below the button regardless of where the window is.
 
-  const openMenuFor = (id: 'file' | 'edit' | 'syntax', ev: MouseEvent) => {
+  const openMenuFor = (id: 'file' | 'edit' | 'syntax' | 'terminal', ev: MouseEvent) => {
     if (openMenu() === id) {
       setOpenMenu('');
       return;
@@ -420,12 +479,144 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   const handleBE = (m: BEMessage) => {
+    // Terminal lifecycle messages: term.opened pairs the
+    // server-assigned channel with a pending local term tab;
+    // term.closed cleans up state when a PTY ends (user typed
+    // exit, or wash-edit BE killed it on close).
+    if (m.kind === 'term.opened') {
+      const replyID = String(m.id ?? '');
+      const localID = pendingTermOpens.get(replyID);
+      if (!localID) return;
+      pendingTermOpens.delete(replyID);
+      const channelID = Number(m.channel_id ?? 0);
+      if (!channelID) return;
+      setTermTabs(termTabs().map((t) => t.id === localID ? { ...t, channelID } : t));
+      // Initialize refs so mountTerm can queue bytes that arrive
+      // before the xterm host element is in the DOM.
+      termRefs.set(channelID, { xterm: null, fit: null, pending: [] });
+      // Subscribe to bytes immediately so we don't lose anything
+      // between term.opened and the host element being created.
+      const unsub = window.wash.openRawChannel(channelID, (bytes) => {
+        const ref = termRefs.get(channelID);
+        if (!ref) return;
+        if (ref.xterm) ref.xterm.write(bytes);
+        else ref.pending.push(bytes);
+      });
+      const ref = termRefs.get(channelID)!;
+      ref.unsub = unsub;
+      // Mount xterm into the host element. Solid has already
+      // rendered the host since termOpen()+termTabs() were set
+      // before the BE replied; queueMicrotask defers one tick so
+      // a freshly-toggled-open panel has its DOM in place.
+      queueMicrotask(() => {
+        const hostEl = props.host.querySelector(`[data-testid="edit-term-host-${localID}"]`) as HTMLDivElement | null;
+        if (hostEl) mountTerm(channelID, hostEl);
+      });
+      return;
+    }
+    if (m.kind === 'term.closed') {
+      const channelID = Number(m.channel_id ?? 0);
+      if (!channelID) return;
+      const tab = termTabs().find((t) => t.channelID === channelID);
+      const ref = termRefs.get(channelID);
+      if (ref) {
+        ref.unsub?.();
+        ref.xterm?.dispose();
+        termRefs.delete(channelID);
+      }
+      if (tab) {
+        setTermTabs(termTabs().filter((t) => t.id !== tab.id));
+        if (activeTermID() === tab.id) {
+          const remaining = termTabs().filter((t) => t.id !== tab.id);
+          setActiveTermID(remaining[0]?.id ?? '');
+        }
+      }
+      return;
+    }
     const replyID = typeof m.id === 'string' ? m.id : undefined;
     if (replyID && pendingReplies.has(replyID)) {
       const resolver = pendingReplies.get(replyID)!;
       pendingReplies.delete(replyID);
       resolver(m);
     }
+  };
+
+  // ---- terminal pane ops ----
+
+  // openNewTerm asks the BE to spawn a new shell + PTY. The reply
+  // (term.opened) carries the channel_id; until then we have a
+  // placeholder tab without a channel. We send `cols`/`rows` from
+  // the host's current size as a reasonable initial guess; the
+  // FitAddon will refine after the xterm element mounts.
+  const openNewTerm = () => {
+    setTermOpen(true);
+    nextTermLocalID += 1;
+    const localID = `t-${nextTermLocalID}`;
+    const replyID = `to-${nextTermLocalID}`;
+    pendingTermOpens.set(replyID, localID);
+    setTermTabs([...termTabs(), { id: localID, channelID: 0, title: `Terminal ${nextTermLocalID}` }]);
+    setActiveTermID(localID);
+    send({ kind: 'term.open', id: replyID, cols: 80, rows: 24 });
+  };
+
+  const closeTerm = (id: string) => {
+    const tab = termTabs().find((t) => t.id === id);
+    if (!tab) return;
+    if (tab.channelID) {
+      // BE will fire term.closed once the pty winds down; handleBE
+      // handles the tab removal there to keep the path single.
+      send({ kind: 'term.close', channel_id: tab.channelID });
+    } else {
+      // No channel yet — local-only cleanup.
+      setTermTabs(termTabs().filter((t) => t.id !== tab.id));
+      if (activeTermID() === tab.id) setActiveTermID('');
+    }
+  };
+
+  const toggleTermPanel = () => {
+    setTermOpen(!termOpen());
+    if (termOpen() && termTabs().length === 0) openNewTerm();
+  };
+
+  // mountTerm wires xterm into a host div for the given channel.
+  // Bytes queued before mount are flushed at the end so initial
+  // shell output isn't dropped if the user opens then quickly
+  // switches tabs.
+  const mountTerm = (channelID: number, host: HTMLDivElement) => {
+    const ref = termRefs.get(channelID);
+    if (!ref) return;
+    const term = new XTerm({
+      fontFamily: tokens.fontMono,
+      fontSize: 13,
+      theme: { background: '#000000' },
+      cursorBlink: true,
+      allowProposedApi: true,
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(host);
+    ref.xterm = term;
+    ref.fit = fit;
+    // Expose the live Terminal on the host element so e2e tests
+    // can read the buffer without going through internal refs.
+    // Same pattern wash-term uses.
+    (host as unknown as { __washTerm: XTerm }).__washTerm = term;
+    const encoder = new TextEncoder();
+    term.onData((s) => window.wash.writeRaw(channelID, encoder.encode(s)));
+    // Flush bytes that arrived between term.opened and mount.
+    for (const b of ref.pending) term.write(b);
+    ref.pending = [];
+    // Initial fit + announce size after layout settles.
+    requestAnimationFrame(() => {
+      fit.fit();
+      term.focus();
+      send({
+        kind: 'term.resize',
+        channel_id: channelID,
+        cols: term.cols,
+        rows: term.rows,
+      });
+    });
   };
 
   // ---- tree ops ----
@@ -616,8 +807,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ---- lifecycle ----
 
   let bodyEl!: HTMLDivElement;
+  let mainEl!: HTMLDivElement;
 
   onMount(() => {
+    // Inject xterm's CSS once (shared across all editor windows
+    // — the document-level style is idempotent).
+    if (!document.querySelector('style[data-wash-edit-xterm]')) {
+      const style = document.createElement('style');
+      style.dataset.washEditXterm = '1';
+      style.textContent = xtermCSS;
+      document.head.appendChild(style);
+    }
+
     const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail as BEMessage);
     props.host.addEventListener('wash:msg', onMsg);
     const onState = (ev: Event) => {
@@ -625,6 +826,19 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       if (s) void restoreFrom(s);
     };
     props.host.addEventListener('wash:state', onState);
+
+    // Window-resize → refit every mounted terminal + announce
+    // the new size. The active terminal is what the user sees,
+    // but background tabs still need fits so they're ready when
+    // activated. fit.fit() is cheap on a hidden element.
+    const ro = new ResizeObserver(() => {
+      for (const [chID, ref] of termRefs) {
+        if (!ref.fit || !ref.xterm) continue;
+        ref.fit.fit();
+        send({ kind: 'term.resize', channel_id: chID, cols: ref.xterm.cols, rows: ref.xterm.rows });
+      }
+    });
+    ro.observe(props.host);
 
     // Create the EditorView once. Doc + language reconfigure on
     // file open via dispatch + compartment.
@@ -674,6 +888,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         if (id) closeTab(id);
         return;
       }
+      // Ctrl+` (VSCode parity): toggle terminal panel.
+      if (ev.key === '`' && !ev.shiftKey) {
+        ev.preventDefault();
+        toggleTermPanel();
+        return;
+      }
+      // Ctrl+Shift+`: new terminal (opening the panel if closed).
+      if (ev.key === '~' || (ev.key === '`' && ev.shiftKey)) {
+        ev.preventDefault();
+        openNewTerm();
+        return;
+      }
     };
     props.host.addEventListener('keydown', onKey);
     if (!props.host.hasAttribute('tabindex')) props.host.setAttribute('tabindex', '0');
@@ -685,6 +911,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('wash:state', onState);
       props.host.removeEventListener('keydown', onKey);
+      ro.disconnect();
+      // Dispose every live terminal — pty cleanup is on the BE
+      // side via the channel close path, but we still want to
+      // drop xterm DOM + listeners.
+      for (const ref of termRefs.values()) {
+        ref.unsub?.();
+        ref.xterm?.dispose();
+      }
+      termRefs.clear();
       editorView?.destroy();
       editorView = undefined;
     });
@@ -698,6 +933,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     tabs();
     activeID();
     splitPct();
+    termOpen();
+    editPct();
     persist();
   });
 
@@ -755,6 +992,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         <MenuBarButton id="file" label="File" active={openMenu() === 'file'} onClick={openMenuFor} />
         <MenuBarButton id="edit" label="Edit" active={openMenu() === 'edit'} onClick={openMenuFor} />
         <MenuBarButton id="syntax" label="Syntax" active={openMenu() === 'syntax'} onClick={openMenuFor} />
+        <MenuBarButton id="terminal" label="Terminal" active={openMenu() === 'terminal'} onClick={openMenuFor} />
         <Show when={openMenu() === 'file'}>
           <Menu x={menuAnchor().x} y={menuAnchor().y} onDismiss={closeMenu} data-testid="edit-menu-file">
             <MenuItem label="New" trailing={<kbd style={kbdStyle}>Ctrl+N</kbd>} onClick={run(newUntitled)} data-testid="edit-menu-new" />
@@ -777,6 +1015,29 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             <MenuSeparator />
             <MenuItem label="Find" trailing={<kbd style={kbdStyle}>Ctrl+F</kbd>} onClick={run(cmdFind)} data-testid="edit-menu-find" />
             <MenuItem label="Find & Replace" trailing={<kbd style={kbdStyle}>Ctrl+H</kbd>} onClick={run(cmdFind)} data-testid="edit-menu-replace" />
+          </Menu>
+        </Show>
+        <Show when={openMenu() === 'terminal'}>
+          <Menu x={menuAnchor().x} y={menuAnchor().y} onDismiss={closeMenu} data-testid="edit-menu-terminal">
+            <MenuItem
+              label="New Terminal"
+              trailing={<kbd style={kbdStyle}>Ctrl+Shift+`</kbd>}
+              onClick={run(openNewTerm)}
+              data-testid="edit-menu-term-new"
+            />
+            <MenuItem
+              label="Close Terminal"
+              disabled={!activeTermID()}
+              onClick={run(() => closeTerm(activeTermID()))}
+              data-testid="edit-menu-term-close"
+            />
+            <MenuSeparator />
+            <MenuItem
+              label={termOpen() ? 'Hide Panel' : 'Show Panel'}
+              trailing={<kbd style={kbdStyle}>Ctrl+`</kbd>}
+              onClick={run(toggleTermPanel)}
+              data-testid="edit-menu-term-toggle"
+            />
           </Menu>
         </Show>
         <Show when={openMenu() === 'syntax'}>
@@ -802,6 +1063,20 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         </Show>
       </div>
 
+      <div
+        ref={mainEl!}
+        style={{
+          display: 'grid',
+          // Vertical split: editor row on top, optional terminal
+          // pane on the bottom. When the pane is closed the whole
+          // cell is the editor.
+          'grid-template-rows': termOpen()
+            ? `${editPct()}% 4px ${100 - editPct()}%`
+            : '1fr',
+          overflow: 'hidden',
+          'border-bottom': `1px solid ${tokens.borderWindow}`,
+        }}
+      >
       <div
         ref={bodyEl!}
         style={{ ...bodyStyle, 'grid-template-columns': `${splitPct()}% 4px 1fr` }}
@@ -903,6 +1178,77 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         </div>
       </div>
 
+      {/* terminal pane (toggleable) */}
+      <Show when={termOpen()}>
+        <Splitter
+          orientation="horizontal"
+          container={mainEl}
+          min={20}
+          max={90}
+          onChange={setEditPct}
+          onCommit={persist}
+          data-testid="edit-vsplit"
+        />
+        <div data-testid="edit-term-pane" style={termPaneStyle}>
+          {/* tab bar */}
+          <div data-testid="edit-term-tabs" style={termTabBarStyle}>
+            <For each={termTabs()}>
+              {(t) => {
+                const isActive = () => activeTermID() === t.id;
+                return (
+                  <div
+                    data-testid={`edit-term-tab-${t.id}`}
+                    data-active={isActive() ? 'true' : undefined}
+                    onClick={() => setActiveTermID(t.id)}
+                    style={tabStyle(isActive())}
+                  >
+                    <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis' }}>
+                      {t.title}
+                    </span>
+                    <span
+                      data-testid={`edit-term-tab-close-${t.id}`}
+                      onClick={(ev) => { ev.stopPropagation(); closeTerm(t.id); }}
+                      style={tabCloseStyle}
+                      title="Close terminal"
+                    >
+                      ×
+                    </span>
+                  </div>
+                );
+              }}
+            </For>
+            <button
+              type="button"
+              data-testid="edit-term-new"
+              onClick={openNewTerm}
+              style={termNewBtnStyle}
+              title="New Terminal (Ctrl+Shift+`)"
+            >
+              +
+            </button>
+          </div>
+          {/* terminal hosts — one DOM element per channel, only
+              the active one is visible. We keep them mounted (not
+              just rendered behind a Show) so xterm doesn't lose
+              its host element on tab switch. */}
+          <div style={termBodyStyle}>
+            <For each={termTabs()}>
+              {(t) => (
+                <div
+                  data-testid={`edit-term-host-${t.id}`}
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    display: activeTermID() === t.id ? 'block' : 'none',
+                  }}
+                />
+              )}
+            </For>
+          </div>
+        </div>
+      </Show>
+      </div>
+
       <StatusBar data-testid="edit-status">
         <Show when={activeTab()} fallback={`${tabs().length} tabs`}>
           <span>
@@ -946,11 +1292,13 @@ const langChoices = [
   { key: 'markdown', label: 'Markdown' },
 ];
 
+type MenuID = 'file' | 'edit' | 'syntax' | 'terminal';
+
 const MenuBarButton: Component<{
-  id: 'file' | 'edit' | 'syntax';
+  id: MenuID;
   label: string;
   active: boolean;
-  onClick: (id: 'file' | 'edit' | 'syntax', ev: MouseEvent) => void;
+  onClick: (id: MenuID, ev: MouseEvent) => void;
 }> = (props) => {
   return (
     <button
@@ -1014,6 +1362,38 @@ const kbdStyle: JSX.CSSProperties = {
   color: tokens.fgMuted,
   background: 'transparent',
   padding: '0 4px',
+};
+
+const termPaneStyle: JSX.CSSProperties = {
+  background: '#000',
+  display: 'flex',
+  'flex-direction': 'column',
+  overflow: 'hidden',
+};
+
+const termTabBarStyle: JSX.CSSProperties = {
+  display: 'flex',
+  background: tokens.bgMenu,
+  'border-bottom': `1px solid ${tokens.borderMenu}`,
+  'min-height': '26px',
+  'flex-shrink': 0,
+};
+
+const termBodyStyle: JSX.CSSProperties = {
+  flex: 1,
+  position: 'relative',
+  overflow: 'hidden',
+  background: '#000',
+};
+
+const termNewBtnStyle: JSX.CSSProperties = {
+  background: 'transparent',
+  color: tokens.fgMuted,
+  border: 'none',
+  padding: '0 10px',
+  height: '26px',
+  cursor: 'pointer',
+  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
 };
 
 const sidebarStyle: JSX.CSSProperties = {
