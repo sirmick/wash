@@ -153,8 +153,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   let pendingSelectAfter: { path: string; pushHistory: boolean } | null = null;
   let completePartial = '';
   let completeTimer: number | null = null;
-  let lastClickPath = '';
-  let lastClickTime = 0;
+  // (no manual click-timer state — we lean on native dblclick.)
   let pathInputEl!: HTMLInputElement;
   // Tracks which paths we've asked the BE to watch. The BE's watch
   // op is idempotent so duplicates are safe, but keeping the set
@@ -446,15 +445,26 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   // onRowClick threads click+modifier semantics through the tree.
-  //   plain click  → selection = {path}; for files preview; for
-  //                  folders just select (no auto-navigate-in —
-  //                  use double-click or the chevron for that)
+  //   plain click  → select the row. For files we ALSO update path
+  //                  (so the path bar reflects the file) and load
+  //                  a preview. For folders we DON'T touch path —
+  //                  doing so makes the path bar read like the
+  //                  user navigated into the folder, even though
+  //                  it was just a select. Use double-click to
+  //                  actually navigate in.
   //   Ctrl/Cmd-click → toggle path in/out of selection
   //   Shift-click  → range-select from anchor to path
-  // No path-bar push to history on a plain click; that's reserved
-  // for double-click (= explicit "open"). Reduces accidental
-  // drilling-in when the user is just picking files.
+  // Selection drives action targets (Delete, Ctrl+V paste-dest,
+  // etc.) — `path()` is reserved for the explicit "where am I"
+  // cursor that only moves on double-click or path-bar navigation.
   const onRowClick = (rowPath: string, entry: Entry, ev: MouseEvent) => {
+    const focusForFile = (p: string) => {
+      // For a file, single click DOES update path + preview —
+      // there's no "navigate into a file" so this is the normal
+      // file-selection feedback users expect.
+      setPath(p);
+      setPathInputValue(p);
+    };
     if (ev.shiftKey && selectionAnchor) {
       const rows = visibleRows().map((r) => r.path);
       const a = rows.indexOf(selectionAnchor);
@@ -465,9 +475,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       } else {
         setSelection(new Set([rowPath]));
       }
-      setPath(rowPath);
-      setPathInputValue(rowPath);
       setSelectedEntry(entry);
+      if (entry.type === 'file') focusForFile(rowPath);
       return;
     }
     if (ev.ctrlKey || ev.metaKey) {
@@ -476,20 +485,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       else next.add(rowPath);
       setSelection(next);
       selectionAnchor = rowPath;
-      setPath(rowPath);
-      setPathInputValue(rowPath);
       setSelectedEntry(entry);
+      if (entry.type === 'file') focusForFile(rowPath);
       return;
     }
-    // Plain click: focus + select. Files get a preview; folders
-    // wait for double-click before navigating in.
+    // Plain click: select + (for files) focus + preview.
     setSelection(new Set([rowPath]));
     selectionAnchor = rowPath;
-    setPath(rowPath);
-    setPathInputValue(rowPath);
     setSelectedEntry(entry);
     setStatusOverride(null);
     if (entry.type === 'file') {
+      focusForFile(rowPath);
       sendRead(rowPath);
     }
   };
@@ -557,13 +563,26 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // on success invalidate the affected directory listing so the
   // tree re-renders fresh entries.
 
+  // dirOfSelection picks the target directory for actions that
+  // need a "where to put the thing" (Ctrl+V paste, New File / New
+  // Folder, list-pane drop). It prefers the SELECTION over path()
+  // because plain-clicking a folder now only selects it — path()
+  // doesn't follow. Order:
+  //   - single folder selected → that folder
+  //   - single file selected   → that file's parent
+  //   - empty / multi-select   → path() ("where am I" cursor) or
+  //                              the file's parent / home() fallback
   const dirOfSelection = (): string => {
+    const sel = selection();
+    if (sel.size === 1) {
+      const p = Array.from(sel)[0];
+      if (listings[p]) return p;
+      const entry = findEntry(p);
+      if (entry?.type === 'dir') return p;
+      return parentPath(p);
+    }
     const p = path();
     if (!p) return home();
-    // If we've successfully listed this path, it IS a directory —
-    // create children inside it. (findEntry can't tell us this at
-    // the sandbox root because we don't have the root's parent
-    // listing, so checking listings[p] is the reliable signal.)
     if (listings[p]) return p;
     const entry = findEntry(p);
     if (entry?.type === 'dir') return p;
@@ -1148,23 +1167,29 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     return out;
   };
 
-  // treeRoot is the highest path the FE has actually been able to
-  // list. In production fm lists "/" successfully and treeRoot stays
-  // there; in WASH_FM_ROOT mode "/" returns outside_root, so the
-  // tree visibly starts at the deepest reachable ancestor of the
-  // current path (the sandbox root, in practice).
+  // treeRoot is the SHALLOWEST ancestor of path() that the FE has
+  // successfully listed — i.e. the highest reachable directory in
+  // the current confinement. In production fm lists "/" so
+  // treeRoot is "/"; in WASH_FM_ROOT mode "/" returns
+  // outside_root, so the loop stops at the sandbox root (the
+  // first ancestor with a listing). Crucially we do NOT pick the
+  // deepest listed ancestor — that would re-root the tree every
+  // time the user clicked a file in an already-expanded subdir,
+  // making the rest of the tree disappear. The user explicitly
+  // expands subfolders by double-click / chevron; the tree stays
+  // anchored at the highest reachable point and they navigate via
+  // expansion + the path bar.
   const treeRoot = createMemo<string>(() => {
     if (listings['/']) return '/';
     const target = path() || home();
     if (!target) return '/';
     let acc = '/';
     const parts = target.split('/').filter(Boolean);
-    let bestSoFar = '/';
     for (const part of parts) {
       acc = acc === '/' ? '/' + part : acc + '/' + part;
-      if (listings[acc]) bestSoFar = acc;
+      if (listings[acc]) return acc;
     }
-    return bestSoFar;
+    return '/';
   });
 
   // Flatten the visible tree into a list of {entry, path, depth} rows
@@ -1459,22 +1484,24 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 onRenameCancel={cancelRename}
                 onClick={(ev) => {
                   if (isRenaming()) return;
-                  const now = Date.now();
-                  const isDouble = row.path === lastClickPath && now - lastClickTime < 400;
-                  lastClickPath = row.path;
-                  lastClickTime = now;
-                  if (isDouble) {
-                    if (row.entry.type === 'symlink') {
-                      followSymlink(row.entry, row.path);
-                      return;
-                    }
-                    if (row.entry.type === 'dir') {
-                      // Explicit "open folder" — drill in.
-                      selectPath(row.path, true);
-                      return;
-                    }
-                  }
                   onRowClick(row.path, row.entry, ev);
+                }}
+                onDblClick={() => {
+                  // Native dblclick — browser's timing window is
+                  // stricter than the timer-based heuristic we
+                  // used to keep here, which sometimes caught
+                  // pairs of intentional single clicks as
+                  // double-clicks on slow input. Single-click
+                  // navigation never happens here; this is the
+                  // only path that calls selectPath for a row.
+                  if (row.entry.type === 'symlink') {
+                    followSymlink(row.entry, row.path);
+                    return;
+                  }
+                  if (row.entry.type === 'dir') {
+                    selectPath(row.path, true);
+                    return;
+                  }
                 }}
                 onToggle={() => toggleExpand(row.path)}
                 onContextMenu={(ev) => openContextMenu(ev, row.entry, row.path)}
@@ -1658,6 +1685,7 @@ const TreeRow: Component<{
   onRenameCommit?: () => void;
   onRenameCancel?: () => void;
   onClick: (ev: MouseEvent) => void;
+  onDblClick?: () => void;
   onToggle: () => void;
   onContextMenu: (ev: MouseEvent) => void;
   onDragStart: (ev: DragEvent) => void;
@@ -1684,6 +1712,7 @@ const TreeRow: Component<{
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       onClick={(ev) => props.onClick(ev)}
+      onDblClick={() => props.onDblClick?.()}
       onContextMenu={props.onContextMenu}
       style={{
         display: 'flex',
