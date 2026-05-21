@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/sirmick/wash/internal/wire"
 )
@@ -88,6 +89,13 @@ type Router struct {
 	// lookup stays consistent with the live instance map.
 	singletons map[string]*AppInstance
 
+	// pendingAttach tracks router-spawned children awaiting their
+	// dial-back. Keyed by pid; the spawn caller blocks on the
+	// channel, and the control-socket's attach handler resolves it
+	// when the matching Identity arrives.
+	pendingMu     sync.Mutex
+	pendingAttach map[int]chan attachResult
+
 	clipboard clipboardState
 
 	sessionMu sync.Mutex
@@ -119,7 +127,46 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		channels:       make(map[uint32]*channelBinding),
 		appMsgWatchers: make(map[string]map[string]chan map[string]any),
 		singletons:     make(map[string]*AppInstance),
+		pendingAttach:  make(map[int]chan attachResult),
 	}
+}
+
+// attachResult is what spawnAndRun reads from a pending-attach
+// channel: either the connected AppInstance (handshake complete,
+// caller takes over the registerApp / declare / loop steps), or
+// an error if the attach was refused (proto mismatch, app_id
+// mismatch, validation failure).
+type attachResult struct {
+	inst *AppInstance
+	err  error
+}
+
+// registerPendingAttach reserves the pid slot before Spawn returns
+// — the child could in principle dial fast enough that the
+// control-socket handler runs before spawnAndRun reaches its
+// select. Caller MUST unregister via takePendingAttach (or via
+// the deferred cleanup) once the spawn completes one way or the
+// other so stale entries don't leak.
+func (r *Router) registerPendingAttach(pid int) chan attachResult {
+	ch := make(chan attachResult, 1)
+	r.pendingMu.Lock()
+	r.pendingAttach[pid] = ch
+	r.pendingMu.Unlock()
+	return ch
+}
+
+// takePendingAttach claims and removes the pending entry for pid.
+// Returns (ch, true) if found. The caller is responsible for
+// writing the attach result before another goroutine starts a
+// new spawn that could reuse the pid (unlikely but possible).
+func (r *Router) takePendingAttach(pid int) (chan attachResult, bool) {
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
+	ch, ok := r.pendingAttach[pid]
+	if ok {
+		delete(r.pendingAttach, pid)
+	}
+	return ch, ok
 }
 
 // SubscribeAppMsg registers a one-shot watcher for the next outbound
@@ -366,25 +413,49 @@ func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*Ap
 			return existing, nil
 		}
 	}
-	cmd, parent, err := Spawn(entry.Path, entry.Manifest.ID, "", r.spawnEnv())
+	if r.cfg.ControlSocket == "" {
+		return nil, fmt.Errorf("spawn %s: control socket disabled (apps dial WASH_DISPLAY)", entry.Manifest.ID)
+	}
+	cmd, err := Spawn(entry.Path, entry.Manifest.ID, "", r.cfg.ControlSocket, r.spawnEnv())
 	if err != nil {
 		return nil, fmt.Errorf("spawn %s: %w", entry.Manifest.ID, err)
 	}
-	transport := NewStreamTransport(parent)
-	inst := &AppInstance{
-		Transport: transport,
-		AppID:     entry.Manifest.ID,
-		Manifest:  entry.Manifest,
-		Cmd:       cmd,
-		Kiosk:     kiosk,
-		router:    r,
-	}
-	if err := inst.handshake(ctx); err != nil {
-		_ = transport.Close()
+	pid := cmd.Process.Pid
+	// Register the pending channel BEFORE the spawn could plausibly
+	// dial back; cmd.Start has already returned, so the child may
+	// already be running. takePendingAttach in the control-socket
+	// handler will only match this pid if registerPendingAttach
+	// has been called first. The lock keeps the operations ordered.
+	ch := r.registerPendingAttach(pid)
+	defer func() {
+		// Best-effort: in case of timeout/cancel the channel still
+		// hangs around if we leave it. takePendingAttach is safe to
+		// call even if it was already taken.
+		_, _ = r.takePendingAttach(pid)
+	}()
+	timeout := time.NewTimer(10 * time.Second)
+	defer timeout.Stop()
+	var inst *AppInstance
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return nil, fmt.Errorf("attach %s: %w", entry.Manifest.ID, res.err)
+		}
+		inst = res.inst
+		inst.Cmd = cmd
+		inst.Kiosk = kiosk
+	case <-timeout.C:
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		return nil, fmt.Errorf("handshake %s: %w", entry.Manifest.ID, err)
+		return nil, fmt.Errorf("attach timeout for %s (pid %d)", entry.Manifest.ID, pid)
+	case <-ctx.Done():
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, ctx.Err()
 	}
+	transport := inst.Transport
 	r.registerApp(inst)
 	if inst.WindowID != 0 {
 		var defW, defH uint32

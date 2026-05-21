@@ -4,31 +4,28 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"syscall"
 )
 
-// Spawn fork+execs an app binary with a socketpair attached as fd 3
-// (WIRE.md §1). It returns the parent end of the socket as an
-// *os.File and the *exec.Cmd whose Wait() will reap the child.
+// Spawn launches an app binary. There is no inherited socket pair
+// anymore: the child dials the router's wash socket (passed via
+// WASH_DISPLAY env) and sends an Identity frame. The router
+// matches incoming Identity to a pending-attach record by pid and
+// hands the conn back to the spawn caller as the app's transport.
 //
-// The caller owns both: it should Close() the file when done routing
-// frames and call Cmd.Wait() to reap the process. extraEnv is
-// appended to the minimum environment.
-func Spawn(binary, appID, instanceID string, extraEnv []string) (*exec.Cmd, *os.File, error) {
-	pair, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
-	if err != nil {
-		return nil, nil, fmt.Errorf("socketpair: %w", err)
+// Caller owns the returned Cmd: it must wait on the matching
+// pendingAttach channel for the real AppInstance, and reap the
+// process via Cmd.Wait() when the app exits.
+func Spawn(binary, appID, instanceID, display string, extraEnv []string) (*exec.Cmd, error) {
+	if display == "" {
+		return nil, fmt.Errorf("spawn %s: WASH_DISPLAY (control socket) is required — was the router started with --control-socket none?", appID)
 	}
-	parent := os.NewFile(uintptr(pair[0]), binary+"#parent")
-	child := os.NewFile(uintptr(pair[1]), binary+"#child")
-
 	cmd := exec.Command(binary)
-	cmd.ExtraFiles = []*os.File{child}
 	// Apps inherit the router's environment (HOME, PATH, $SHELL, …)
 	// so a terminal can run real shell sessions and a launched
 	// program can find its own files. The wash-specific env vars
 	// are layered on top. Probe.go uses its own stripped env.
 	cmd.Env = append(os.Environ(),
+		"WASH_DISPLAY="+display,
 		"WASH_PROTO=1",
 		"WASH_APP_ID="+appID,
 		"WASH_INSTANCE_ID="+instanceID,
@@ -36,14 +33,8 @@ func Spawn(binary, appID, instanceID string, extraEnv []string) (*exec.Cmd, *os.
 	cmd.Env = append(cmd.Env, extraEnv...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-
 	if err := cmd.Start(); err != nil {
-		_ = parent.Close()
-		_ = child.Close()
-		return nil, nil, fmt.Errorf("start %s: %w", binary, err)
+		return nil, fmt.Errorf("start %s: %w", binary, err)
 	}
-	// The child has its own fd 3; we close our end so EOF propagates
-	// when only one side remains.
-	_ = child.Close()
-	return cmd, parent, nil
+	return cmd, nil
 }

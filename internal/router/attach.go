@@ -1,0 +1,225 @@
+// Attach: control-socket path for apps to register themselves
+// with the router. Router-spawned apps and terminal-launched
+// apps go through the same code — there's no inherited-fd
+// special case anymore.
+//
+// Flow:
+//   1. App dials the control socket (path from WASH_DISPLAY env).
+//   2. App writes its Identity frame on channel 0. Includes pid.
+//   3. Router checks the pending-attach map by pid:
+//        - If pending: this is the dial-back from a spawn the
+//          router started. The conn becomes the AppInstance's
+//          transport; the spawn caller receives the inst.
+//        - If not pending: this is a fresh attach (terminal-
+//          launched or external tool). Router validates that the
+//          claimed app_id is in the registry AND /proc/<pid>/exe
+//          matches the registered binary, then accepts.
+//   4. Router writes IdentityAck with the assigned instance/window
+//      ids and registers the app exactly the same way as today.
+//
+// Auth model: registry-only. A binary that isn't in the registry
+// cannot attach. A registered binary cannot claim a different
+// app_id than its own (binary-path check).
+
+package router
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+
+	"github.com/sirmick/wash/internal/wire"
+)
+
+// handleAttach is the wash-frame branch of the control-socket
+// dispatcher. The conn is wrapped in a stream transport that
+// reads from `rd` (preserving the byte peeked by handleControl);
+// after a successful attach the conn lifetime is owned by the
+// AppInstance loop, so we DON'T close conn on success.
+func (r *Router) handleAttach(ctx context.Context, conn net.Conn, rd *bufio.Reader) {
+	transport := wire.NewStreamTransport(&bufferedReadWriter{r: rd, w: conn, c: conn})
+	f, err := transport.ReadFrame()
+	if err != nil {
+		_ = conn.Close()
+		return
+	}
+	if f.Channel != ChannelControl {
+		_ = transport.WriteFrame(controlFrame(wire.NewError(wire.ErrCodeBadIdentity, "identity must be on channel 0")))
+		_ = conn.Close()
+		return
+	}
+	msg, err := wire.DecodeCtrl(f.Payload)
+	if err != nil {
+		_ = transport.WriteFrame(controlFrame(wire.NewError(wire.ErrCodeBadIdentity, "decode identity: "+err.Error())))
+		_ = conn.Close()
+		return
+	}
+	ident, ok := msg.(wire.Identity)
+	if !ok {
+		_ = transport.WriteFrame(controlFrame(wire.NewError(wire.ErrCodeBadIdentity, fmt.Sprintf("expected identity, got %T", msg))))
+		_ = conn.Close()
+		return
+	}
+	if ident.Proto != ProtocolVersion {
+		_ = transport.WriteFrame(controlFrame(wire.NewError(wire.ErrCodeProtoMismatch, "protocol version mismatch")))
+		_ = conn.Close()
+		return
+	}
+
+	// Spawn-completion branch — router started a child and is
+	// blocked waiting for it to dial back.
+	if ch, found := r.takePendingAttach(ident.PID); found {
+		entry := r.reg.ByID(ident.AppID)
+		if entry == nil {
+			ch <- attachResult{err: fmt.Errorf("attach: app_id %q not in registry", ident.AppID)}
+			_ = conn.Close()
+			return
+		}
+		inst := &AppInstance{
+			Transport: transport,
+			AppID:     ident.AppID,
+			Manifest:  entry.Manifest,
+			router:    r,
+		}
+		if err := r.acceptIdentity(inst); err != nil {
+			ch <- attachResult{err: err}
+			_ = conn.Close()
+			return
+		}
+		ch <- attachResult{inst: inst}
+		return
+	}
+
+	// Fresh-attach branch — process wasn't spawned by us. Validate
+	// it's a registered binary that's allowed to claim ident.AppID.
+	entry := r.reg.ByID(ident.AppID)
+	if entry == nil {
+		_ = transport.WriteFrame(controlFrame(wire.NewError("forbidden", "app_id not registered")))
+		_ = conn.Close()
+		return
+	}
+	if !validateAttachBinary(ident.PID, entry.Path) {
+		_ = transport.WriteFrame(controlFrame(wire.NewError("forbidden", "binary does not match registered app_id")))
+		_ = conn.Close()
+		return
+	}
+	inst := &AppInstance{
+		Transport: transport,
+		AppID:     ident.AppID,
+		Manifest:  entry.Manifest,
+		router:    r,
+	}
+	if err := r.acceptIdentity(inst); err != nil {
+		_ = conn.Close()
+		return
+	}
+	// No spawn caller to hand the inst to — we own the full
+	// lifecycle from here (declare to attached shells, broadcast
+	// the window patch, start the loop).
+	go r.startFreshAttach(ctx, inst)
+}
+
+// acceptIdentity assigns instance/window ids and writes the
+// IdentityAck. Shared by the spawn-completion and fresh-attach
+// branches so both produce identical AppInstance state.
+func (r *Router) acceptIdentity(inst *AppInstance) error {
+	inst.InstanceID = r.allocInstanceID()
+	if inst.Manifest.Surface == SurfaceWindow && !inst.Kiosk {
+		inst.WindowID = r.allocWindowID()
+	}
+	ack := wire.NewIdentityAck(inst.InstanceID, inst.WindowID)
+	if err := inst.writeCtrl(ack); err != nil {
+		return fmt.Errorf("write identity.ack: %w", err)
+	}
+	return nil
+}
+
+// validateAttachBinary resolves /proc/<pid>/exe and checks that
+// it matches the registered binary path. EvalSymlinks on both
+// sides so distro-managed installs (binary symlinked into PATH)
+// still match. Returns false on any error — defense in depth.
+func validateAttachBinary(pid int, registeredPath string) bool {
+	if pid <= 0 {
+		return false
+	}
+	procExe := fmt.Sprintf("/proc/%d/exe", pid)
+	actual, err := os.Readlink(procExe)
+	if err != nil {
+		return false
+	}
+	actualResolved, err := filepath.EvalSymlinks(actual)
+	if err != nil {
+		actualResolved = actual
+	}
+	regResolved, err := filepath.EvalSymlinks(registeredPath)
+	if err != nil {
+		regResolved = registeredPath
+	}
+	return actualResolved == regResolved
+}
+
+// controlFrame helps build a one-off ctrl-channel frame from an
+// outbound message. Used to write Error frames to a conn before
+// it has an AppInstance wrapper.
+func controlFrame(m any) wire.Frame {
+	b, err := wire.EncodeCtrl(m)
+	if err != nil {
+		return wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: nil}
+	}
+	return wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: b}
+}
+
+// startFreshAttach runs the same post-handshake work as
+// spawnAndRun for an app that attached without being spawned by
+// the router. The split exists because spawnAndRun handles
+// process reaping via cmd.Wait — for fresh attaches there's no
+// Cmd; the conn closure IS the process-exit signal.
+func (r *Router) startFreshAttach(ctx context.Context, inst *AppInstance) {
+	r.registerApp(inst)
+	if inst.WindowID != 0 {
+		var defW, defH uint32
+		if inst.Manifest.Window != nil {
+			defW = inst.Manifest.Window.DefaultWidth
+			defH = inst.Manifest.Window.DefaultHeight
+		}
+		patches := r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Name, defW, defH)
+		if err := r.declareAppToAllShells(ctx, inst); err != nil {
+			r.log("declare: %v", err)
+		}
+		r.broadcastPatches(patches)
+		_ = inst.WriteEvt(wire.NewEvtWindowMapped(inst.WindowID))
+	} else {
+		if err := r.declareAppToAllShells(ctx, inst); err != nil {
+			r.log("declare: %v", err)
+		}
+	}
+	if err := inst.loop(context.Background()); err != nil {
+		r.log("app %s loop: %v", inst.AppID, err)
+	}
+	r.unregisterApp(inst)
+	r.closeChannelsForApp(inst, "app exited")
+	r.dropAppMsgWatchers(inst.InstanceID)
+	r.winSession.dropAppState(inst.InstanceID)
+	if inst.WindowID != 0 {
+		r.broadcastPatches(r.winSession.destroyWindow(inst.WindowID))
+	}
+	_ = inst.Transport.Close()
+}
+
+// bufferedReadWriter adapts (*bufio.Reader + net.Conn) into an
+// io.ReadWriteCloser so wire.NewStreamTransport can wrap it. The
+// reader path goes through the buffer (which already holds the
+// peeked-then-not-consumed byte); writes go straight to the
+// conn; close closes the conn.
+type bufferedReadWriter struct {
+	r *bufio.Reader
+	w net.Conn
+	c net.Conn
+}
+
+func (b *bufferedReadWriter) Read(p []byte) (int, error)  { return b.r.Read(p) }
+func (b *bufferedReadWriter) Write(p []byte) (int, error) { return b.w.Write(p) }
+func (b *bufferedReadWriter) Close() error                { return b.c.Close() }

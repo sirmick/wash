@@ -97,6 +97,11 @@ func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
 	}
 	shell := userShell()
 	cmd := exec.Command(shell)
+	// Pass WASH_DISPLAY through to the shell so binaries the user
+	// runs (e.g. `wash-fm` in a wash-term tab) attach to this
+	// session via the X-style env var. os.Environ() already
+	// carries it through because the router seeded the env, but
+	// being explicit here documents the contract.
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 	f, startErr := pty.StartWithSize(cmd, &pty.Winsize{Cols: cols, Rows: rows})
 	if startErr != nil {

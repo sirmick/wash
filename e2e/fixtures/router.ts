@@ -30,6 +30,10 @@ export interface RouterHandle {
   url: string;
   /** absolute path to wash-launch on this host (for tests that invoke it from a shell) */
   launchBin: string;
+  /** the per-test apps dir (where the staged binaries live). Tests that
+   *  exec apps directly (e.g. terminal-attach tests) must use binaries
+   *  from here so /proc/<pid>/exe matches the registered path. */
+  appsDir: string;
   /** the control socket path this router was started with */
   controlSocket: string;
   /** the directory POST /screenshot writes to */
@@ -180,6 +184,7 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   const handle: RouterHandle = {
     url: `http://127.0.0.1:${port}/`,
     launchBin: LAUNCH_BIN,
+    appsDir,
     controlSocket,
     screenshotDir,
     fmRoot,

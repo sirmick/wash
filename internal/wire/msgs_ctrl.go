@@ -44,16 +44,32 @@ const (
 	ErrCodeBadRequest           = "bad_request"
 )
 
-// Identity is the app's first frame on channel 0 after spawn (§6 step 1).
+// Identity is the app's first frame on channel 0 after the wash
+// socket opens (§6 step 1). PID lets the router check that the
+// connecting process is actually the registered binary for AppID
+// — auth at the protocol level rather than relying on inherited
+// fds. It's intended to be os.Getpid() at the SDK; the router
+// resolves /proc/<pid>/exe and compares against the registered
+// binary path. Omitted on transports where the check doesn't
+// apply (in-process test loopback).
 type Identity struct {
 	T       string `json:"t"`
 	AppID   string `json:"app_id"`
 	Proto   int    `json:"proto"`
 	Version string `json:"version"`
+	PID     int    `json:"pid,omitempty"`
 }
 
 func NewIdentity(appID string, proto int, version string) Identity {
 	return Identity{T: TIdentity, AppID: appID, Proto: proto, Version: version}
+}
+
+// NewIdentityWithPID is the variant the SDK uses to identify
+// itself when dialing the control socket from outside the
+// router's spawn loop. The router validates pid → registered
+// binary.
+func NewIdentityWithPID(appID string, proto int, version string, pid int) Identity {
+	return Identity{T: TIdentity, AppID: appID, Proto: proto, Version: version, PID: pid}
 }
 
 // IdentityAck is the router's reply (§6 step 3). WindowID is omitted

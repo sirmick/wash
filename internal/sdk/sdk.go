@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -156,30 +157,50 @@ func maybePrintManifest(def *AppDef) bool {
 	return false
 }
 
-// fdSocket is the inherited descriptor passed by the router (WIRE.md §1).
-const fdSocket = 3
+// EnvDisplay is the env var that points apps at a running
+// router's wash socket. Router-spawned apps inherit it; programs
+// run from a terminal (or anywhere else) can attach by setting it
+// themselves. Analogous to X11's DISPLAY.
+const EnvDisplay = "WASH_DISPLAY"
 
 // ErrConnClosed is returned when the transport has closed cleanly.
 var ErrConnClosed = errors.New("wash sdk: connection closed")
 
-// Connect adopts fd 3, performs the handshake, and returns a ready
-// Conn. Closing the returned Conn closes the socket.
+// Connect dials the wash socket pointed to by WASH_DISPLAY,
+// performs the handshake, and returns a ready Conn. Closing the
+// returned Conn closes the socket.
+//
+// The handshake's Identity message carries os.Getpid(); the
+// router validates that against /proc/<pid>/exe matching the
+// registered binary for AppID, so a random binary can't
+// impersonate a registered app.
 func Connect(def *AppDef) (*Conn, error) {
 	if def == nil {
 		return nil, errors.New("AppDef is nil")
 	}
-	f := os.NewFile(fdSocket, "wash-router-socket")
-	if f == nil {
-		return nil, fmt.Errorf("fd %d not present (was this binary spawned by the router?)", fdSocket)
+	display := os.Getenv(EnvDisplay)
+	if display == "" {
+		return nil, fmt.Errorf("%s not set (run via the router or set %s=/path/to/wash.sock)", EnvDisplay, EnvDisplay)
 	}
-	// Mark the wash socket CLOEXEC so anything this app forks (a
-	// shell in wash-term, a subprocess in any app) does NOT inherit
-	// it. Without this an arbitrary command run in the app's shell
+	conn, err := net.Dial("unix", display)
+	if err != nil {
+		return nil, fmt.Errorf("dial %s: %w", display, err)
+	}
+	// Mark the socket CLOEXEC so anything this app forks (a shell
+	// in wash-term, a subprocess in any app) does NOT inherit it.
+	// Without this an arbitrary command run in the app's shell
 	// could speak the wash protocol on this app's connection,
-	// clobbering it. Go's exec strips CLOEXEC on inherited fds, so
-	// the fd we got from the router does not have it.
-	syscall.CloseOnExec(int(f.Fd()))
-	t := wire.NewStreamTransport(f)
+	// clobbering it.
+	if uc, ok := conn.(*net.UnixConn); ok {
+		if f, ferr := uc.File(); ferr == nil {
+			syscall.CloseOnExec(int(f.Fd()))
+			// Don't close f — File() dup'd the fd; we want the
+			// dup alive only long enough to flip CLOEXEC. Close
+			// it now; the original conn fd retains the flag.
+			_ = f.Close()
+		}
+	}
+	t := wire.NewStreamTransport(conn)
 	return ConnectWith(t, def)
 }
 
@@ -220,9 +241,10 @@ func (c *Conn) Close() error {
 	return c.transport.Close()
 }
 
-// handshake sends identity and reads identity.ack.
+// handshake sends identity (with pid for router-side auth) and
+// reads identity.ack.
 func (c *Conn) handshake() error {
-	ident := wire.NewIdentity(c.def.Manifest.ID, ProtocolVersion, c.def.Manifest.Version)
+	ident := wire.NewIdentityWithPID(c.def.Manifest.ID, ProtocolVersion, c.def.Manifest.Version, os.Getpid())
 	if err := c.writeCtrl(ident); err != nil {
 		return fmt.Errorf("write identity: %w", err)
 	}

@@ -100,8 +100,24 @@ type controlReq struct {
 }
 
 func (r *Router) handleControl(ctx context.Context, conn net.Conn) {
-	defer conn.Close()
 	rd := bufio.NewReader(conn)
+	// First-byte demux: JSON (`{`) is a CLI request; anything else
+	// is a wash-frame attach from a router-spawned or terminal-
+	// launched app. The frame format starts with a flags byte
+	// (currently 0x01) — never `{` — so the discriminator is
+	// unambiguous.
+	first, err := rd.Peek(1)
+	if err != nil {
+		_ = conn.Close()
+		return
+	}
+	if first[0] != '{' {
+		// App attach. The conn lifetime is now owned by the
+		// instance loop (or released here on failure).
+		r.handleAttach(ctx, conn, rd)
+		return
+	}
+	defer conn.Close()
 	line, err := rd.ReadBytes('\n')
 	if err != nil {
 		return

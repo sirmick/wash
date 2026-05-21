@@ -48,27 +48,16 @@ func (r *Router) EnsureSessionRunning(ctx context.Context) error {
 		return fmt.Errorf("session app %q has surface=%q (must be desktop)", r.cfg.SessionAppID, entry.Manifest.Surface)
 	}
 
-	cmd, parent, err := Spawn(entry.Path, entry.Manifest.ID, "", nil)
-	if err != nil {
-		r.sessionMu.Lock()
-		r.session.started = false
-		r.sessionMu.Unlock()
-		return fmt.Errorf("spawn session: %w", err)
-	}
-	t := NewStreamTransport(parent)
-	// Drive HandleApp on a router-lifetime context — the shell's ctx
+	// Spawn-and-run on a router-lifetime context — the shell's ctx
 	// would cancel on browser refresh and kill the session app,
 	// leaving the next shell without a chrome to declare.
 	go func() {
-		if err := r.HandleApp(context.Background(), t, entry.Manifest, cmd); err != nil {
+		if _, err := r.spawnAndRun(context.Background(), entry, false); err != nil {
 			r.log("session app: %v", err)
+			r.sessionMu.Lock()
+			r.session.started = false
+			r.sessionMu.Unlock()
 		}
-		_ = cmd.Wait()
-		// If the session exits we mark it down; a future shell
-		// connect could (currently does not) restart it.
-		r.sessionMu.Lock()
-		r.session.started = false
-		r.sessionMu.Unlock()
 	}()
 	return nil
 }
@@ -94,24 +83,15 @@ func (r *Router) EnsureInitialAppRunning(ctx context.Context) error {
 		r.initialMu.Unlock()
 		return fmt.Errorf("initial app %q not registered or disabled", r.cfg.InitialAppID)
 	}
-	cmd, parent, err := Spawn(entry.Path, entry.Manifest.ID, "", nil)
-	if err != nil {
-		r.initialMu.Lock()
-		r.initial.started = false
-		r.initialMu.Unlock()
-		return fmt.Errorf("spawn initial: %w", err)
-	}
-	t := NewStreamTransport(parent)
 	go func() {
 		// Router-lifetime context — kiosk apps must survive shell
 		// reconnects, same reasoning as the session app above.
-		if err := r.HandleAppKiosk(context.Background(), t, entry.Manifest, cmd); err != nil {
+		if _, err := r.spawnAndRun(context.Background(), entry, true); err != nil {
 			r.log("initial app: %v", err)
+			r.initialMu.Lock()
+			r.initial.started = false
+			r.initialMu.Unlock()
 		}
-		_ = cmd.Wait()
-		r.initialMu.Lock()
-		r.initial.started = false
-		r.initialMu.Unlock()
 	}()
 	return nil
 }
