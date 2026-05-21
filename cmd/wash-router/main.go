@@ -16,7 +16,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"os/user"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -35,19 +34,25 @@ const (
 //go:embed all:assets
 var assetsFS embed.FS
 
-// defaultAppsDir returns the colon-separated default for
-// WASH_APPS_DIR (WIRE.md §5). User dir first; system dir second.
+// defaultAppsDir returns the directory of the wash-router binary
+// itself — so `out/wash-router` finds its siblings in `out/`
+// with no further config. The system / user share dirs we used to
+// fall back to (~/.local/share/wash/apps, /usr/share/wash/apps)
+// can be wired back when packaging matters; for now the goal is a
+// single-step dev story: build the binaries, run wash-router from
+// its own dir.
 func defaultAppsDir() string {
-	var userDir string
-	if u, err := user.Current(); err == nil && u.HomeDir != "" {
-		userDir = filepath.Join(u.HomeDir, ".local", "share", "wash", "apps")
+	exe, err := os.Executable()
+	if err != nil {
+		return "."
 	}
-	parts := []string{}
-	if userDir != "" {
-		parts = append(parts, userDir)
+	// Resolve symlinks so symlinked installs still find the real
+	// neighbors. Best-effort: if EvalSymlinks fails, fall back to
+	// the literal path.
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
 	}
-	parts = append(parts, "/usr/share/wash/apps")
-	return strings.Join(parts, ":")
+	return filepath.Dir(exe)
 }
 
 // shellAssets exposes the embedded shell-runtime directory rooted at

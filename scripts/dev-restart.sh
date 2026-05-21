@@ -8,7 +8,7 @@
 # Sequence:
 #   1. make TEST_APP=1 all      (unless --no-build)
 #   2. dev-kill.sh
-#   3. cp $REPO/out/* /tmp/wash-dev-apps/
+#   3. (apps auto-discovered next to the wash-router binary)
 #   4. (optionally) fm-seed.sh into the sandbox root
 #   5. spawn wash-router in background, tee-ing /tmp/wash-router.log
 #   6. wait for "listening on" line, then return
@@ -27,7 +27,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-APPS_DIR="${WASH_DEV_APPS:-/tmp/wash-dev-apps}"
+# (apps live next to the wash-router binary now; no apps-dir var)
 SCREENSHOT_DIR="${WASH_SCREENSHOT_DIR:-/tmp/wash-screenshots}"
 LOG=/tmp/wash-router.log
 
@@ -85,11 +85,8 @@ fi
 # 2. Kill any running wash processes.
 "$REPO/scripts/dev-kill.sh"
 
-# 3. Stage the freshly-built binaries.
-mkdir -p "$APPS_DIR" "$SCREENSHOT_DIR"
-cp "$REPO/out/"* "$APPS_DIR/"
-
-# 4. Optional sandbox seed.
+# 3. Optional sandbox seed.
+mkdir -p "$SCREENSHOT_DIR"
 if [[ "$fm_seed" == "1" ]]; then
   "$REPO/scripts/fm-seed.sh" "$fm_root"
 fi
@@ -97,10 +94,10 @@ if [[ "$bulk_seed" == "1" ]]; then
   "$REPO/scripts/seed-bulk-fixture.sh" "$fm_root"
 fi
 
-# 5. Launch.
+# 4. Launch. Apps are auto-discovered as siblings of the
+# wash-router binary; no copy-to-tmp step needed.
 args=(
   --listen "$listen"
-  --apps-dir "$APPS_DIR"
   --show-hidden
   --screenshot-dir "$SCREENSHOT_DIR"
 )
