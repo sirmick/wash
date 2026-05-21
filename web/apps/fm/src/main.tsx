@@ -2123,6 +2123,7 @@ const ConfirmDeleteOverlay: Component<{
         'align-items': 'center',
         'justify-content': 'center',
         'z-index': 2000,
+        animation: 'wash-fade-in 120ms ease-out',
       }}
       onClick={(ev) => {
         if (ev.target === ev.currentTarget) props.onCancel();
@@ -2139,6 +2140,7 @@ const ConfirmDeleteOverlay: Component<{
           'box-shadow': '0 12px 28px rgba(0,0,0,0.5)',
           font: '13px ui-sans-serif,system-ui,sans-serif',
           color: '#eee',
+          animation: 'wash-pop-in 140ms ease-out',
         }}
       >
         <div style={{ 'font-weight': 600, 'margin-bottom': '6px' }}>Delete?</div>
@@ -2207,6 +2209,7 @@ const ReplaceConfirmOverlay: Component<{
         'align-items': 'center',
         'justify-content': 'center',
         'z-index': 2000,
+        animation: 'wash-fade-in 120ms ease-out',
       }}
       onClick={(ev) => {
         if (ev.target === ev.currentTarget) props.onCancel();
@@ -2223,6 +2226,7 @@ const ReplaceConfirmOverlay: Component<{
           'box-shadow': '0 12px 28px rgba(0,0,0,0.5)',
           font: '13px ui-sans-serif,system-ui,sans-serif',
           color: '#eee',
+          animation: 'wash-pop-in 140ms ease-out',
         }}
       >
         <div style={{ 'font-weight': 600, 'margin-bottom': '6px' }}>Replace?</div>
@@ -2518,6 +2522,8 @@ const menuBoxStyle: JSX.CSSProperties = {
   'min-width': '160px',
   'box-shadow': '0 6px 16px rgba(0,0,0,0.5)',
   'z-index': 1000,
+  'transform-origin': 'top left',
+  animation: 'wash-pop-in 100ms ease-out',
 };
 
 const statusStyle: JSX.CSSProperties = {

@@ -478,6 +478,7 @@ const Palette: Component<{
         'padding-top': '14vh',
         background: 'rgba(0,0,0,0.35)',
         'z-index': 10002,
+        animation: 'wash-fade-in 120ms ease-out',
       }}
     >
       <div
@@ -489,6 +490,7 @@ const Palette: Component<{
           'max-width': '520px',
           'box-shadow': '0 16px 48px rgba(0,0,0,0.6)',
           overflow: 'hidden',
+          animation: 'wash-pop-in 140ms ease-out',
         }}
       >
         <input
@@ -653,6 +655,8 @@ const menuBoxStyle: JSX.CSSProperties = {
   'min-width': '240px',
   'box-shadow': '0 8px 24px rgba(0,0,0,0.5)',
   'z-index': 10001,
+  'transform-origin': 'bottom left',
+  animation: 'wash-slide-up 140ms ease-out',
 };
 
 const emptyStyle: JSX.CSSProperties = {

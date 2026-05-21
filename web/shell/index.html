@@ -8,6 +8,22 @@
   <style>
     html, body { margin: 0; height: 100%; background: #111; color: #eee; font: 14px system-ui, sans-serif; overflow: hidden; }
     #root { position: fixed; inset: 0; }
+
+    /* Global enter animations — apps use these via `animation:`
+       on overlay/menu roots. Defined here in the shell document so
+       all light-DOM-mounted apps can reference them by name. */
+    @keyframes wash-fade-in {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    @keyframes wash-pop-in {
+      from { opacity: 0; transform: scale(0.96); }
+      to   { opacity: 1; transform: scale(1); }
+    }
+    @keyframes wash-slide-up {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
   </style>
 </head>
 <body>

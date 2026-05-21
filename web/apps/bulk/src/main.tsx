@@ -43,7 +43,25 @@ const AUTO_CLEAR_MS = 5_000;
 
 interface Conflict {
   src: string;
+  src_type: string; // "file" | "dir" | "symlink"
   dst: string;
+  dst_type: string;
+}
+
+// Helpers for the conflict prompt — branch text + button set on
+// the (src_type, dst_type) pair, matching Windows Explorer's
+// language: "Merge?" for dir-vs-dir, "Replace?" for file-vs-file,
+// destructive phrasing on type mismatch.
+function isDirVsDir(c: Conflict): boolean {
+  return c.src_type === 'dir' && c.dst_type === 'dir';
+}
+
+function conflictTitle(c: Conflict): string {
+  if (isDirVsDir(c)) return 'Merge with existing folder?';
+  if (c.src_type === c.dst_type) return 'Replace existing?';
+  // Type mismatch — explicit, scary.
+  const kind = (t: string) => (t === 'dir' ? 'folder' : t || 'item');
+  return `Replace existing ${kind(c.dst_type)} with ${kind(c.src_type)}?`;
 }
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
@@ -79,7 +97,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       }
       case 'job.conflict': {
         const jobID = String(m.job_id);
-        setConflicts(jobID, { src: String(m.src), dst: String(m.dst) });
+        setConflicts(jobID, {
+          src: String(m.src),
+          src_type: String(m.src_type ?? ''),
+          dst: String(m.dst),
+          dst_type: String(m.dst_type ?? ''),
+        });
         return;
       }
       case 'list_ok': {
@@ -235,10 +258,11 @@ const JobRow: Component<{
             'border-radius': '4px',
             padding: '8px 10px',
             'margin-top': '4px',
+            animation: 'wash-pop-in 140ms ease-out',
           }}
         >
           <div style={{ 'margin-bottom': '6px', font: '12px ui-sans-serif,system-ui,sans-serif' }}>
-            Replace existing?
+            {conflictTitle(props.conflict!)}
           </div>
           <div
             style={{
@@ -251,8 +275,19 @@ const JobRow: Component<{
             {props.conflict!.dst}
           </div>
           <div style={{ display: 'flex', gap: '6px', 'flex-wrap': 'wrap' }}>
-            <ConflictBtn testid={`bulk-conflict-replace-${props.job.job_id}`} label="Replace" danger onClick={() => props.onResolveConflict('replace')} />
-            <ConflictBtn testid={`bulk-conflict-replace-all-${props.job.job_id}`} label="Replace All" danger onClick={() => props.onResolveConflict('replace_all')} />
+            <Show
+              when={isDirVsDir(props.conflict!)}
+              fallback={
+                <>
+                  <ConflictBtn testid={`bulk-conflict-replace-${props.job.job_id}`} label="Replace" danger onClick={() => props.onResolveConflict('replace')} />
+                  <ConflictBtn testid={`bulk-conflict-replace-all-${props.job.job_id}`} label="Replace All" danger onClick={() => props.onResolveConflict('replace_all')} />
+                </>
+              }
+            >
+              <ConflictBtn testid={`bulk-conflict-merge-${props.job.job_id}`} label="Merge" onClick={() => props.onResolveConflict('merge')} />
+              <ConflictBtn testid={`bulk-conflict-merge-all-${props.job.job_id}`} label="Merge All" onClick={() => props.onResolveConflict('merge_all')} />
+              <ConflictBtn testid={`bulk-conflict-replace-${props.job.job_id}`} label="Replace" danger onClick={() => props.onResolveConflict('replace')} />
+            </Show>
             <ConflictBtn testid={`bulk-conflict-skip-${props.job.job_id}`} label="Skip" onClick={() => props.onResolveConflict('skip')} />
             <ConflictBtn testid={`bulk-conflict-skip-all-${props.job.job_id}`} label="Skip All" onClick={() => props.onResolveConflict('skip_all')} />
             <ConflictBtn testid={`bulk-conflict-cancel-${props.job.job_id}`} label="Cancel" onClick={() => props.onResolveConflict('cancel')} />

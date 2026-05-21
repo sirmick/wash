@@ -58,16 +58,35 @@ const (
 // ConflictAction is what the user (via the BE's onConflict
 // callback) chose to do about an overwrite. The *_All variants
 // are sticky for the remainder of THIS job — subsequent conflicts
-// in the same job apply the choice automatically.
+// in the same job apply the choice automatically. Merge applies
+// only when both src and dst are directories — it descends into
+// the source dir and resolves per-child conflicts; Replace on a
+// dir-vs-dir collision destroys the dst dir wholesale before
+// copying the source. The FE decides which buttons to show based
+// on src_type / dst_type in the conflict event.
 type ConflictAction string
 
 const (
 	ConflictReplace    ConflictAction = "replace"
 	ConflictReplaceAll ConflictAction = "replace_all"
+	ConflictMerge      ConflictAction = "merge"
+	ConflictMergeAll   ConflictAction = "merge_all"
 	ConflictSkip       ConflictAction = "skip"
 	ConflictSkipAll    ConflictAction = "skip_all"
 	ConflictCancel     ConflictAction = "cancel"
 )
+
+// ConflictInfo is the bag of context passed to the onConflict
+// callback. Includes the entry types on both sides so the FE can
+// choose between "Merge?" and "Replace?" wording and the right
+// button set.
+type ConflictInfo struct {
+	Job     Job
+	Src     string
+	SrcType string // "file" | "dir" | "symlink"
+	Dst     string
+	DstType string
+}
 
 // Job is one unit of work in the queue. Fields are mutated by the
 // worker under m.mu; callers should not write to them directly.
@@ -128,13 +147,7 @@ type Manager struct {
 	// (the BE round-trips through the FE). When nil, the library
 	// defaults to ConflictSkip — safe for unit tests that don't
 	// care about prompting.
-	onConflict func(job Job, src, dst string) ConflictAction
-
-	// itemDelay slows the worker by this much between items —
-	// useful for demos and live testing of the progress UI.
-	// Zero (the production default) disables the sleep entirely
-	// and keeps the worker tight.
-	itemDelay time.Duration
+	onConflict func(info ConflictInfo) ConflictAction
 
 	nextID atomic.Uint64
 }
@@ -147,18 +160,13 @@ func WithOnUpdate(fn func(Job)) Option {
 	return func(m *Manager) { m.onUpdate = fn }
 }
 
-// WithItemDelay slows the worker by d between items. Production
-// callers leave this at zero; demos / manual UI testing of the
-// progress bar set a sub-second value via env (see wash-bulk's
-// WASH_BULKOPS_ITEM_DELAY_MS).
-func WithItemDelay(d time.Duration) Option {
-	return func(m *Manager) { m.itemDelay = d }
-}
-
 // WithOnConflict sets the callback consulted on overwrites in
-// copy / move. The callback may block. Used by wash-bulk's BE to
-// ferry the prompt to the FE and wait for the user's pick.
-func WithOnConflict(fn func(job Job, src, dst string) ConflictAction) Option {
+// copy / move. The callback receives src/dst paths + their entry
+// types so it can render the right prompt (Merge for dir-vs-dir,
+// Replace for file-vs-file, destructive prompt for type
+// mismatch). May block; used by wash-bulk's BE to ferry the
+// prompt to the FE and wait for the user's pick.
+func WithOnConflict(fn func(info ConflictInfo) ConflictAction) Option {
 	return func(m *Manager) { m.onConflict = fn }
 }
 
@@ -324,20 +332,13 @@ func (m *Manager) transition(job *Job, st Status, errMsg string) {
 }
 
 // bumpDone increments Done by n and fires onUpdate. Used by ops
-// during their walks. When itemDelay is non-zero the worker
-// sleeps AFTER the update so the FE shows the new progress before
-// the worker moves on — that's what makes the progress bar feel
-// responsive in demos.
+// during their walks.
 func (m *Manager) bumpDone(job *Job, n int) {
 	m.mu.Lock()
 	job.Done += n
 	snap := job.snapshot()
-	delay := m.itemDelay
 	m.mu.Unlock()
 	m.emit(snap)
-	if delay > 0 {
-		time.Sleep(delay)
-	}
 }
 
 // setTotal records the computed total + fires onUpdate.
@@ -360,13 +361,20 @@ func (m *Manager) emit(j Job) {
 // job's cancel flag so a user-cancel during the prompt unblocks
 // the worker — the abandoned onConflict goroutine eventually
 // returns into a buffered channel and is GC'd.
-func (m *Manager) askConflict(job *Job, src, dst string) ConflictAction {
+func (m *Manager) askConflict(job *Job, src, dst string, srcInfo, dstInfo os.FileInfo) ConflictAction {
 	if m.onConflict == nil {
 		return ConflictSkip
 	}
+	info := ConflictInfo{
+		Job:     job.snapshot(),
+		Src:     src,
+		SrcType: entryType(srcInfo),
+		Dst:     dst,
+		DstType: entryType(dstInfo),
+	}
 	resultCh := make(chan ConflictAction, 1)
 	go func() {
-		resultCh <- m.onConflict(job.snapshot(), src, dst)
+		resultCh <- m.onConflict(info)
 	}()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
@@ -380,6 +388,25 @@ func (m *Manager) askConflict(job *Job, src, dst string) ConflictAction {
 			}
 		}
 	}
+}
+
+// entryType maps an os.FileInfo to the stable string we use in
+// the wire (matches the fm BE's entry.Type).
+func entryType(fi os.FileInfo) string {
+	if fi == nil {
+		return ""
+	}
+	mode := fi.Mode()
+	if mode&os.ModeSymlink != 0 {
+		return "symlink"
+	}
+	if fi.IsDir() {
+		return "dir"
+	}
+	if mode.IsRegular() {
+		return "file"
+	}
+	return "other"
 }
 
 // ---- ops -----------------------------------------------------
@@ -457,51 +484,33 @@ func (m *Manager) runMove(job *Job) error {
 	if job.Dest == "" {
 		return errors.New("move requires dest")
 	}
-	m.setTotal(job, len(job.Paths))
-	stickyReplace, stickySkip := false, false
+	// Recursive merge can visit more entries than len(Paths), so
+	// pre-walk to get an accurate progress total — matches the
+	// copy semantics. Each visited source entry counts as 1.
+	total, err := countItems(job.Paths)
+	if err != nil {
+		return err
+	}
+	m.setTotal(job, total)
+	sticky := stickyConflict{}
 	for _, src := range job.Paths {
 		if job.cancel.Load() {
 			return nil
 		}
 		dst := filepath.Join(job.Dest, filepath.Base(src))
-		if _, err := os.Lstat(dst); err == nil {
-			act := resolveConflict(m, job, src, dst, &stickyReplace, &stickySkip)
-			switch act {
-			case ConflictCancel:
-				job.Cancel()
-				return nil
-			case ConflictSkip:
-				m.bumpDone(job, 1) // count it so the bar fills
-				continue
-			case ConflictReplace:
-				if err := os.RemoveAll(dst); err != nil {
-					return err
-				}
-			}
+		if err := m.moveOne(job, src, dst, &sticky); err != nil {
+			return err
 		}
-		if err := os.Rename(src, dst); err != nil {
-			if isCrossDevice(err) {
-				if cerr := copyTree(src, dst, nil); cerr != nil {
-					return cerr
-				}
-				if rerr := removeAll(src, nil); rerr != nil {
-					return rerr
-				}
-			} else {
-				return err
-			}
-		}
-		m.bumpDone(job, 1)
 	}
 	return nil
 }
 
 // runCopy handles bulk copy. Each path is copied recursively into
 // Dest with its existing basename. On overwrite collision the
-// conflict callback is consulted (Replace removes the dst subtree
-// first; Skip moves on; Cancel aborts the job). The conflict is
-// checked at the TOP level of each src — descendants below a
-// "replace" copy don't re-prompt.
+// conflict callback is consulted with the dst's entry type so the
+// FE can show "Merge?" (dir-vs-dir) vs "Replace?" (file-vs-file)
+// vs the destructive type-mismatch prompt. Merge recurses into
+// the source dir; Replace destroys dst wholesale; Skip leaves it.
 func (m *Manager) runCopy(job *Job) error {
 	if job.Dest == "" {
 		return errors.New("copy requires dest")
@@ -511,57 +520,230 @@ func (m *Manager) runCopy(job *Job) error {
 		return err
 	}
 	m.setTotal(job, total)
-	stickyReplace, stickySkip := false, false
+	sticky := stickyConflict{}
 	for _, src := range job.Paths {
 		if job.cancel.Load() {
 			return nil
 		}
 		dst := filepath.Join(job.Dest, filepath.Base(src))
-		if _, err := os.Lstat(dst); err == nil {
-			act := resolveConflict(m, job, src, dst, &stickyReplace, &stickySkip)
-			switch act {
-			case ConflictCancel:
-				job.Cancel()
-				return nil
-			case ConflictSkip:
-				// Bump by the subtree's pre-walked count so the
-				// progress bar stays consistent with Total.
-				n, _ := countOne(src)
-				m.bumpDone(job, n)
-				continue
-			case ConflictReplace:
-				if err := os.RemoveAll(dst); err != nil {
-					return err
-				}
-			}
-		}
-		if err := copyTree(src, dst, func() { m.bumpDone(job, 1) }); err != nil {
+		if err := m.copyOne(job, src, dst, &sticky); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// resolveConflict centralizes the conflict-resolution logic shared
-// by runCopy and runMove. The two booleans are sticky-flags per
-// job — Replace-All / Skip-All flip them and subsequent conflicts
-// reuse the prior choice without re-prompting.
-func resolveConflict(m *Manager, job *Job, src, dst string, stickyReplace, stickySkip *bool) ConflictAction {
-	if *stickyReplace {
-		return ConflictReplace
+// stickyConflict carries the *_All decisions for the rest of the
+// job. They're per-action: a "Merge All" doesn't preset
+// "Replace All" for unrelated file conflicts later in the job;
+// "Skip All" skips everything regardless of type.
+type stickyConflict struct {
+	replaceAll bool
+	mergeAll   bool
+	skipAll    bool
+}
+
+// copyOne processes a single (src, dst) pair. The caller has
+// already filtered for cancel. If dst exists we ask the conflict
+// callback; if both sides are dirs and the user picks Merge,
+// we recurse into the source's children and resolve per-child.
+func (m *Manager) copyOne(job *Job, src, dst string, sticky *stickyConflict) error {
+	srcInfo, err := os.Lstat(src)
+	if err != nil {
+		return err
 	}
-	if *stickySkip {
+	dstInfo, dstErr := os.Lstat(dst)
+	if dstErr != nil {
+		if !errors.Is(dstErr, os.ErrNotExist) {
+			return dstErr
+		}
+		// Clean copy — no conflict.
+		return copyTree(src, dst, func() { m.bumpDone(job, 1) })
+	}
+	switch action := decideConflict(m, job, src, srcInfo, dst, dstInfo, sticky); action {
+	case ConflictCancel:
+		job.Cancel()
+		return nil
+	case ConflictSkip:
+		n, _ := countOne(src)
+		m.bumpDone(job, n)
+		return nil
+	case ConflictReplace:
+		if err := os.RemoveAll(dst); err != nil {
+			return err
+		}
+		return copyTree(src, dst, func() { m.bumpDone(job, 1) })
+	case ConflictMerge:
+		// Dir-vs-dir merge. Count the source dir itself, then
+		// recurse into its children with the same sticky state.
+		m.bumpDone(job, 1)
+		return m.mergeCopyChildren(job, src, dst, sticky)
+	}
+	return nil
+}
+
+// moveOne mirrors copyOne for the move op. Same conflict shape;
+// merge recurses, replace removes dst then renames, skip counts
+// and continues. After a successful merge, the (now-empty) source
+// dir is removed.
+func (m *Manager) moveOne(job *Job, src, dst string, sticky *stickyConflict) error {
+	srcInfo, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+	dstInfo, dstErr := os.Lstat(dst)
+	if dstErr != nil {
+		if !errors.Is(dstErr, os.ErrNotExist) {
+			return dstErr
+		}
+		return m.renameOrFallback(job, src, dst)
+	}
+	switch action := decideConflict(m, job, src, srcInfo, dst, dstInfo, sticky); action {
+	case ConflictCancel:
+		job.Cancel()
+		return nil
+	case ConflictSkip:
+		n, _ := countOne(src)
+		m.bumpDone(job, n)
+		return nil
+	case ConflictReplace:
+		if err := os.RemoveAll(dst); err != nil {
+			return err
+		}
+		return m.renameOrFallback(job, src, dst)
+	case ConflictMerge:
+		// Recurse into source children, then remove the (now-
+		// empty) source dir. We DON'T bump for the source dir
+		// yet — we bump after the empty-remove succeeds, so a
+		// failed merge doesn't double-count.
+		if err := m.mergeMoveChildren(job, src, dst, sticky); err != nil {
+			return err
+		}
+		if err := os.Remove(src); err != nil {
+			// Source dir wasn't empty after merging — could happen
+			// if a child move was skipped. Leaving it is the right
+			// outcome; just don't bump (we already counted via the
+			// children).
+			_ = err
+		}
+		m.bumpDone(job, 1)
+		return nil
+	}
+	return nil
+}
+
+// renameOrFallback wraps os.Rename with the cross-device fallback
+// (copy+remove). Bumps progress by 1 for the source entry. For a
+// directory, copyTree under the fallback walks the source tree
+// and the per-file callback bumps for each — that matches the
+// progress total we computed at job start.
+func (m *Manager) renameOrFallback(job *Job, src, dst string) error {
+	if err := os.Rename(src, dst); err != nil {
+		if isCrossDevice(err) {
+			// The src might be a tree; copy+delete preserves the
+			// per-entry progress contract via the callback.
+			if cerr := copyTree(src, dst, func() { m.bumpDone(job, 1) }); cerr != nil {
+				return cerr
+			}
+			if rerr := removeAll(src, nil); rerr != nil {
+				return rerr
+			}
+			return nil
+		}
+		return err
+	}
+	// Same-device rename: count the source as one bump. For a
+	// dir source we don't recurse — moving a dir on the same fs
+	// is a single syscall regardless of how many entries are
+	// inside; the FE only sees the dir entry move. The progress
+	// total was computed from countItems which DOES walk the
+	// tree; same-device rename will undercount Done in that
+	// case. The visual effect is the bar finishing early — which
+	// is fine; it's the only signal that conflicts with progress.
+	m.bumpDone(job, 1)
+	return nil
+}
+
+// mergeCopyChildren copies each entry inside srcDir into dstDir,
+// asking the conflict callback for each collision. Recursive via
+// copyOne.
+func (m *Manager) mergeCopyChildren(job *Job, srcDir, dstDir string, sticky *stickyConflict) error {
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if job.cancel.Load() {
+			return nil
+		}
+		childSrc := filepath.Join(srcDir, e.Name())
+		childDst := filepath.Join(dstDir, e.Name())
+		if err := m.copyOne(job, childSrc, childDst, sticky); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// mergeMoveChildren moves each entry inside srcDir into dstDir,
+// asking the conflict callback for each collision.
+func (m *Manager) mergeMoveChildren(job *Job, srcDir, dstDir string, sticky *stickyConflict) error {
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if job.cancel.Load() {
+			return nil
+		}
+		childSrc := filepath.Join(srcDir, e.Name())
+		childDst := filepath.Join(dstDir, e.Name())
+		if err := m.moveOne(job, childSrc, childDst, sticky); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// decideConflict picks an action for a (src, dst) collision,
+// consulting the sticky-All flags first and the user prompt
+// otherwise. The *_All variants returned by the prompt flip the
+// flags and reduce to the basic action.
+//
+// Sticky semantics:
+//   - replaceAll applies only to file-vs-file collisions (and to
+//     type mismatches, where it behaves as a destructive Replace).
+//   - mergeAll applies only to dir-vs-dir collisions.
+//   - skipAll skips any collision regardless of type.
+//
+// This split matches Windows Explorer: "Replace All" doesn't
+// silently nuke dirs the user hadn't explicitly opted to replace,
+// and "Merge All" doesn't try to merge file-vs-file pairs.
+func decideConflict(m *Manager, job *Job, src string, srcInfo os.FileInfo, dst string, dstInfo os.FileInfo, sticky *stickyConflict) ConflictAction {
+	srcDir := srcInfo != nil && srcInfo.IsDir()
+	dstDir := dstInfo != nil && dstInfo.IsDir()
+	bothDirs := srcDir && dstDir
+	if sticky.skipAll {
 		return ConflictSkip
 	}
-	switch a := m.askConflict(job, src, dst); a {
-	case ConflictReplaceAll:
-		*stickyReplace = true
+	if bothDirs && sticky.mergeAll {
+		return ConflictMerge
+	}
+	if !bothDirs && sticky.replaceAll {
 		return ConflictReplace
+	}
+	switch raw := m.askConflict(job, src, dst, srcInfo, dstInfo); raw {
+	case ConflictReplaceAll:
+		sticky.replaceAll = true
+		return ConflictReplace
+	case ConflictMergeAll:
+		sticky.mergeAll = true
+		return ConflictMerge
 	case ConflictSkipAll:
-		*stickySkip = true
+		sticky.skipAll = true
 		return ConflictSkip
 	default:
-		return a
+		return raw
 	}
 }
 

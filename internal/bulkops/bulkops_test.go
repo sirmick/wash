@@ -198,7 +198,7 @@ func TestCopyConflictReplace(t *testing.T) {
 	c := &collector{}
 	m := New(
 		WithOnUpdate(c.onUpdate),
-		WithOnConflict(func(_ Job, _, _ string) ConflictAction { return ConflictReplace }),
+		WithOnConflict(func(_ ConflictInfo) ConflictAction { return ConflictReplace }),
 	)
 	defer m.Close()
 
@@ -231,7 +231,7 @@ func TestCopyConflictReplaceAllSticky(t *testing.T) {
 	c := &collector{}
 	m := New(
 		WithOnUpdate(c.onUpdate),
-		WithOnConflict(func(_ Job, _, _ string) ConflictAction {
+		WithOnConflict(func(_ ConflictInfo) ConflictAction {
 			atomic.AddInt32(&calls, 1)
 			return ConflictReplaceAll
 		}),
@@ -251,6 +251,173 @@ func TestCopyConflictReplaceAllSticky(t *testing.T) {
 	}
 }
 
+func TestCopyConflictMergeDirs(t *testing.T) {
+	// Source dir A has {x.txt, y.txt}; dest dir A has {y.txt, z.txt}.
+	// User picks Merge:
+	//   - x.txt is copied in (no collision).
+	//   - y.txt collides → Skip (preserve dest version).
+	//   - z.txt is left alone (only in dest).
+	root := t.TempDir()
+	srcA := filepath.Join(root, "src", "A")
+	dstA := filepath.Join(root, "dst", "A")
+	mustMkdir(t, srcA)
+	mustMkdir(t, dstA)
+	mustWrite(t, filepath.Join(srcA, "x.txt"), "src-x")
+	mustWrite(t, filepath.Join(srcA, "y.txt"), "src-y")
+	mustWrite(t, filepath.Join(dstA, "y.txt"), "dst-y")
+	mustWrite(t, filepath.Join(dstA, "z.txt"), "dst-z")
+
+	c := &collector{}
+	calls := 0
+	m := New(
+		WithOnUpdate(c.onUpdate),
+		WithOnConflict(func(info ConflictInfo) ConflictAction {
+			calls++
+			if info.SrcType == "dir" && info.DstType == "dir" {
+				return ConflictMerge
+			}
+			// File-vs-file collision (y.txt): keep dst.
+			return ConflictSkip
+		}),
+	)
+	defer m.Close()
+
+	id := m.Enqueue(OpCopy, []string{srcA}, filepath.Dir(dstA))
+	st, _ := waitForStatus(t, c, id, 2*time.Second)
+	if st != StatusDone {
+		t.Fatalf("status=%s, want done", st)
+	}
+	if got := readAll(t, filepath.Join(dstA, "x.txt")); got != "src-x" {
+		t.Fatalf("x.txt: %q", got)
+	}
+	if got := readAll(t, filepath.Join(dstA, "y.txt")); got != "dst-y" {
+		t.Fatalf("y.txt got clobbered: %q", got)
+	}
+	if got := readAll(t, filepath.Join(dstA, "z.txt")); got != "dst-z" {
+		t.Fatalf("z.txt got lost: %q", got)
+	}
+	// Two prompts: dir-vs-dir (merge), then y.txt file-vs-file (skip).
+	if calls != 2 {
+		t.Fatalf("onConflict called %d times, want 2", calls)
+	}
+}
+
+func TestCopyConflictMergeAllSticky(t *testing.T) {
+	// Two dir-vs-dir collisions in one job; user picks MergeAll on
+	// the first. The second is auto-merged. File-vs-file inside
+	// uses default Skip from sticky.skipAll if we'd set that — here
+	// we never see a file collision since names differ.
+	root := t.TempDir()
+	dstParent := filepath.Join(root, "dst")
+	mustMkdir(t, dstParent)
+	for _, name := range []string{"A", "B"} {
+		mustMkdir(t, filepath.Join(root, name))
+		mustMkdir(t, filepath.Join(dstParent, name))
+		mustWrite(t, filepath.Join(root, name, "leaf.txt"), name)
+	}
+	srcs := []string{filepath.Join(root, "A"), filepath.Join(root, "B")}
+
+	c := &collector{}
+	var calls int32
+	m := New(
+		WithOnUpdate(c.onUpdate),
+		WithOnConflict(func(_ ConflictInfo) ConflictAction {
+			atomic.AddInt32(&calls, 1)
+			return ConflictMergeAll
+		}),
+	)
+	defer m.Close()
+	id := m.Enqueue(OpCopy, srcs, dstParent)
+	waitForStatus(t, c, id, 2*time.Second)
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("onConflict called %d times, want 1 (MergeAll sticks)", got)
+	}
+	if got := readAll(t, filepath.Join(dstParent, "A", "leaf.txt")); got != "A" {
+		t.Fatalf("A/leaf.txt: %q", got)
+	}
+	if got := readAll(t, filepath.Join(dstParent, "B", "leaf.txt")); got != "B" {
+		t.Fatalf("B/leaf.txt: %q", got)
+	}
+}
+
+func TestCopyConflictReplaceDirsDestructive(t *testing.T) {
+	// Dir-vs-dir, user picks Replace (not Merge): the whole dst
+	// subtree is wiped before the copy.
+	root := t.TempDir()
+	srcA := filepath.Join(root, "src", "A")
+	dstA := filepath.Join(root, "dst", "A")
+	mustMkdir(t, srcA)
+	mustMkdir(t, dstA)
+	mustWrite(t, filepath.Join(srcA, "new.txt"), "new")
+	mustWrite(t, filepath.Join(dstA, "old.txt"), "old")
+
+	c := &collector{}
+	m := New(
+		WithOnUpdate(c.onUpdate),
+		WithOnConflict(func(_ ConflictInfo) ConflictAction { return ConflictReplace }),
+	)
+	defer m.Close()
+	id := m.Enqueue(OpCopy, []string{srcA}, filepath.Dir(dstA))
+	waitForStatus(t, c, id, 2*time.Second)
+	if got := readAll(t, filepath.Join(dstA, "new.txt")); got != "new" {
+		t.Fatalf("new.txt: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dstA, "old.txt")); err == nil {
+		t.Fatal("old.txt should have been wiped by Replace")
+	}
+}
+
+func TestMoveConflictMergeDirs(t *testing.T) {
+	// Move version of merge: source A has {x.txt, y.txt}; dst A
+	// has {y.txt, z.txt}. User picks Merge then Skip on the y.txt
+	// file collision. x.txt moves over; y.txt stays as the dst
+	// version; the source's y.txt stays in source (because the
+	// child was skipped, the source dir is non-empty post-merge);
+	// z.txt is untouched.
+	root := t.TempDir()
+	srcA := filepath.Join(root, "src", "A")
+	dstA := filepath.Join(root, "dst", "A")
+	mustMkdir(t, srcA)
+	mustMkdir(t, dstA)
+	mustWrite(t, filepath.Join(srcA, "x.txt"), "src-x")
+	mustWrite(t, filepath.Join(srcA, "y.txt"), "src-y")
+	mustWrite(t, filepath.Join(dstA, "y.txt"), "dst-y")
+	mustWrite(t, filepath.Join(dstA, "z.txt"), "dst-z")
+
+	c := &collector{}
+	m := New(
+		WithOnUpdate(c.onUpdate),
+		WithOnConflict(func(info ConflictInfo) ConflictAction {
+			if info.SrcType == "dir" && info.DstType == "dir" {
+				return ConflictMerge
+			}
+			return ConflictSkip
+		}),
+	)
+	defer m.Close()
+	id := m.Enqueue(OpMove, []string{srcA}, filepath.Dir(dstA))
+	waitForStatus(t, c, id, 2*time.Second)
+
+	if got := readAll(t, filepath.Join(dstA, "x.txt")); got != "src-x" {
+		t.Fatalf("dst x.txt: %q", got)
+	}
+	if got := readAll(t, filepath.Join(dstA, "y.txt")); got != "dst-y" {
+		t.Fatalf("dst y.txt clobbered: %q", got)
+	}
+	if got := readAll(t, filepath.Join(dstA, "z.txt")); got != "dst-z" {
+		t.Fatalf("dst z.txt lost: %q", got)
+	}
+	// Source y.txt should still exist (was skipped); src/A itself
+	// should still exist because it's not empty.
+	if got := readAll(t, filepath.Join(srcA, "y.txt")); got != "src-y" {
+		t.Fatalf("src y.txt should remain after skip: %q", got)
+	}
+	// Source x.txt moved out — gone.
+	if _, err := os.Stat(filepath.Join(srcA, "x.txt")); err == nil {
+		t.Fatal("src x.txt should have moved out")
+	}
+}
+
 func TestCopyConflictCancel(t *testing.T) {
 	root := t.TempDir()
 	src := filepath.Join(root, "a.txt")
@@ -262,7 +429,7 @@ func TestCopyConflictCancel(t *testing.T) {
 	c := &collector{}
 	m := New(
 		WithOnUpdate(c.onUpdate),
-		WithOnConflict(func(_ Job, _, _ string) ConflictAction { return ConflictCancel }),
+		WithOnConflict(func(_ ConflictInfo) ConflictAction { return ConflictCancel }),
 	)
 	defer m.Close()
 

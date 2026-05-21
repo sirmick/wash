@@ -112,12 +112,6 @@ env_kv=()
 if [[ -n "$fm_root" ]]; then
   env_kv+=("WASH_FM_ROOT=$fm_root")
 fi
-# Pass through WASH_BULKOPS_ITEM_DELAY_MS if the caller exported it
-# in their shell — handy for ad-hoc UI testing (see wash-bulk's
-# main.go). No script flag for this; it's a one-off knob.
-if [[ -n "${WASH_BULKOPS_ITEM_DELAY_MS:-}" ]]; then
-  env_kv+=("WASH_BULKOPS_ITEM_DELAY_MS=$WASH_BULKOPS_ITEM_DELAY_MS")
-fi
 
 : > "$LOG"
 
