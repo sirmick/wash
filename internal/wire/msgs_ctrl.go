@@ -41,6 +41,7 @@ const (
 	ErrCodeInternal             = "internal"
 	ErrCodeNotFound             = "not_found"
 	ErrCodeIncompatibleProtocol = "incompatible_protocol"
+	ErrCodeBadRequest           = "bad_request"
 )
 
 // Identity is the app's first frame on channel 0 after spawn (§6 step 1).
@@ -235,6 +236,9 @@ func DecodeCtrl(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TShellAppMsgSend:
 		var m ShellAppMsgSend
+		return m, json.Unmarshal(data, &m)
+	case TShellAppMsgSendTo:
+		var m ShellAppMsgSendTo
 		return m, json.Unmarshal(data, &m)
 	case TShellAppMsgDeliver:
 		var m ShellAppMsgDeliver

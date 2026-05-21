@@ -30,6 +30,13 @@ const (
 	// Both directions.
 	TEvtAppMsg = "app_msg"
 
+	// App → router. Cross-app messaging: deliver data as an EvtAppMsg
+	// to a *different* instance. Recipient is addressed by either
+	// instance_id (any app) or app_id (singleton only — the router
+	// resolves the sentinel to the running instance, spawning the
+	// singleton on demand if none exists).
+	TEvtAppMsgSendTo = "app_msg.send.to"
+
 	// Clipboard — router holds a single in-memory entry. Apps set,
 	// fetch, and observe changes.
 	TEvtClipboardSet     = "clipboard.set"
@@ -260,6 +267,30 @@ func NewEvtAppMsg(win uint32, data any) EvtAppMsg {
 	return EvtAppMsg{T: TEvtAppMsg, Win: win, Data: data}
 }
 
+// Recipient is the address used by EvtAppMsgSendTo and the shell's
+// ShellAppMsgSendTo. Exactly one of AppID / InstanceID should be
+// set: AppID resolves via the singleton table (failing if the
+// named app isn't singleton-instancing); InstanceID is a direct
+// reference to an already-running app.
+type Recipient struct {
+	AppID      string `cbor:"app_id,omitempty" json:"app_id,omitempty"`
+	InstanceID string `cbor:"instance_id,omitempty" json:"instance_id,omitempty"`
+}
+
+// EvtAppMsgSendTo: an app asking the router to relay data as an
+// EvtAppMsg to another instance. The router is a message broker for
+// this one path — no app capability gate yet (v0.1 single-user
+// trust model).
+type EvtAppMsgSendTo struct {
+	T         string    `cbor:"t"`
+	Recipient Recipient `cbor:"recipient"`
+	Data      any       `cbor:"data"`
+}
+
+func NewEvtAppMsgSendTo(r Recipient, data any) EvtAppMsgSendTo {
+	return EvtAppMsgSendTo{T: TEvtAppMsgSendTo, Recipient: r, Data: data}
+}
+
 // EvtAppStateSet — app → router — persist `State` as this app's
 // FE-state blob (router stores keyed by instance_id). The blob is
 // JSON bytes; the router never inspects them. Used by SDK.SaveState
@@ -332,6 +363,9 @@ func DecodeEvt(data []byte) (any, error) {
 		return m, cbor.Unmarshal(data, &m)
 	case TEvtAppMsg:
 		var m EvtAppMsg
+		return m, cbor.Unmarshal(data, &m)
+	case TEvtAppMsgSendTo:
+		var m EvtAppMsgSendTo
 		return m, cbor.Unmarshal(data, &m)
 	case TEvtNotify:
 		var m EvtNotify

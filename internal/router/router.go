@@ -80,6 +80,14 @@ type Router struct {
 	appMsgMu       sync.Mutex
 	appMsgWatchers map[string]map[string]chan map[string]any
 
+	// singletons maps a singleton manifest's app_id to its currently-
+	// running instance, or absent if none. Used to (a) refuse a
+	// second spawn of a singleton, and (b) resolve sentinel addresses
+	// in EvtAppMsgSendTo / ShellAppMsgSendTo. Mutations always happen
+	// while r.mu is held — same lock that guards r.apps — so the
+	// lookup stays consistent with the live instance map.
+	singletons map[string]*AppInstance
+
 	clipboard clipboardState
 
 	sessionMu sync.Mutex
@@ -110,6 +118,7 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		shells:         make(map[*ShellSession]struct{}),
 		channels:       make(map[uint32]*channelBinding),
 		appMsgWatchers: make(map[string]map[string]chan map[string]any),
+		singletons:     make(map[string]*AppInstance),
 	}
 }
 
@@ -346,7 +355,17 @@ func (r *Router) closeChannelsForApp(inst *AppInstance, reason string) {
 //
 // All three caller paths — spawn.request from an app, the control
 // socket, and the initial / session bootstraps — go through here.
+//
+// Singleton short-circuit: if entry's manifest declares
+// instancing:"singleton" and an instance is already running, return
+// THAT instance instead of starting a second one. This is how
+// sentinel addressing converges every dispatch on the same process.
 func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*AppInstance, error) {
+	if entry.Manifest.Instancing == InstancingSingleton {
+		if existing := r.singletonInstance(entry.Manifest.ID); existing != nil {
+			return existing, nil
+		}
+	}
 	cmd, parent, err := Spawn(entry.Path, entry.Manifest.ID, "", r.spawnEnv())
 	if err != nil {
 		return nil, fmt.Errorf("spawn %s: %w", entry.Manifest.ID, err)
@@ -441,6 +460,9 @@ func (r *Router) registerApp(inst *AppInstance) {
 	if inst.WindowID != 0 {
 		r.byWin[inst.WindowID] = inst
 	}
+	if inst.Manifest != nil && inst.Manifest.Instancing == InstancingSingleton {
+		r.singletons[inst.Manifest.ID] = inst
+	}
 }
 
 // unregisterApp removes inst from the maps. Idempotent.
@@ -451,6 +473,59 @@ func (r *Router) unregisterApp(inst *AppInstance) {
 	if inst.WindowID != 0 {
 		delete(r.byWin, inst.WindowID)
 	}
+	if inst.Manifest != nil && inst.Manifest.Instancing == InstancingSingleton {
+		if cur, ok := r.singletons[inst.Manifest.ID]; ok && cur == inst {
+			delete(r.singletons, inst.Manifest.ID)
+		}
+	}
+}
+
+// singletonInstance returns the currently-running instance for a
+// singleton app_id, or nil if none. Caller must NOT hold r.mu.
+func (r *Router) singletonInstance(appID string) *AppInstance {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.singletons[appID]
+}
+
+// resolveRecipient turns a wire.Recipient into a concrete
+// *AppInstance, spawning a singleton on demand when addressed by
+// app_id. Returns a structured error code so callers can surface it
+// without leaking error formatting.
+//
+//   recipient.instance_id set  →  direct lookup
+//   recipient.app_id set       →  must be a singleton manifest;
+//                                  spawned on first reference
+//   both / neither set         →  bad_request
+func (r *Router) resolveRecipient(ctx context.Context, rec wire.Recipient) (*AppInstance, string, error) {
+	if (rec.InstanceID == "") == (rec.AppID == "") {
+		return nil, wire.ErrCodeBadRequest, fmt.Errorf("recipient must set exactly one of instance_id or app_id")
+	}
+	if rec.InstanceID != "" {
+		inst := r.appByInstance(rec.InstanceID)
+		if inst == nil {
+			return nil, wire.ErrCodeNotFound, fmt.Errorf("no instance %q", rec.InstanceID)
+		}
+		return inst, "", nil
+	}
+	// Sentinel: only valid for singletons.
+	entry := r.reg.ByID(rec.AppID)
+	if entry == nil || !entry.Enabled() {
+		return nil, wire.ErrCodeNotFound, fmt.Errorf("no app %q", rec.AppID)
+	}
+	if entry.Manifest.Instancing != InstancingSingleton {
+		return nil, wire.ErrCodeForbidden, fmt.Errorf("app %q is not singleton; address by instance_id", rec.AppID)
+	}
+	if inst := r.singletonInstance(rec.AppID); inst != nil {
+		return inst, "", nil
+	}
+	// Spawn-on-demand. spawnAndRun will short-circuit if a sibling
+	// spawn raced us and won, so the worst case is one extra check.
+	inst, err := r.spawnAndRun(ctx, entry, false)
+	if err != nil {
+		return nil, wire.ErrCodeInternal, fmt.Errorf("spawn %s: %w", rec.AppID, err)
+	}
+	return inst, "", nil
 }
 
 // appByInstance returns the AppInstance for an instance id, or nil.

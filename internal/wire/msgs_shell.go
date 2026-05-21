@@ -25,7 +25,12 @@ const (
 	TShellWindowResize       = "window.resize"
 	TShellWindowState        = "window.state"
 	TShellAppMsgSend         = "app_msg.send"
-	TShellLog                = "log"
+	// Shell → router. Cross-app send: relay to a different instance
+	// (peer to EvtAppMsgSendTo on the event channel). Same Recipient
+	// addressing rules: app_id for singletons, instance_id for any
+	// running app.
+	TShellAppMsgSendTo = "app_msg.send.to"
+	TShellLog          = "log"
 
 	// Router → shell (BE → FE relay).
 	TShellAppMsgDeliver = "app_msg.deliver"
@@ -270,6 +275,20 @@ type ShellAppMsgSend struct {
 
 func NewShellAppMsgSend(instanceID string, data json.RawMessage) ShellAppMsgSend {
 	return ShellAppMsgSend{T: TShellAppMsgSend, InstanceID: instanceID, Data: data}
+}
+
+// ShellAppMsgSendTo is the FE → router cross-app send. Mirrors
+// EvtAppMsgSendTo on the event channel; lets a FE (e.g. fm)
+// dispatch a job to a singleton service (e.g. wash-bulk) without
+// going through its own BE.
+type ShellAppMsgSendTo struct {
+	T         string          `json:"t"`
+	Recipient Recipient       `json:"recipient"`
+	Data      json.RawMessage `json:"data"`
+}
+
+func NewShellAppMsgSendTo(r Recipient, data json.RawMessage) ShellAppMsgSendTo {
+	return ShellAppMsgSendTo{T: TShellAppMsgSendTo, Recipient: r, Data: data}
 }
 
 // ShellAppMsgDeliver is the reverse: a BE → FE message, relayed to

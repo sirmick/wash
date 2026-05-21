@@ -15,6 +15,16 @@ func (c *Conn) SendAppMsg(data any) error {
 	return c.writeEvt(wire.NewEvtAppMsg(c.windowID, data))
 }
 
+// SendAppMsgTo dispatches data as an APP_MSG to a *different*
+// instance — the router resolves the recipient and relays. The
+// recipient is either {AppID:"com.wash.bulk"} (singleton sentinel —
+// spawned on demand if not running) or {InstanceID:"i-5"} (direct).
+// Used by apps that need to queue work in a system service, e.g.
+// fm enqueueing a bulk-delete job into wash-bulk.
+func (c *Conn) SendAppMsgTo(recipient wire.Recipient, data any) error {
+	return c.writeEvt(wire.NewEvtAppMsgSendTo(recipient, data))
+}
+
 // SetTitle requests a titlebar text change for this app's window.
 // No-op for surface=desktop apps (the router will ignore a frame
 // referencing window 0).

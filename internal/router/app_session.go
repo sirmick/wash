@@ -357,6 +357,12 @@ func (inst *AppInstance) handleEvt(payload []byte) error {
 			return err
 		}
 		return inst.relayAppMsgToShell(m)
+	case wire.TEvtAppMsgSendTo:
+		var m wire.EvtAppMsgSendTo
+		if err := cbor.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.relayAppMsgCrossInstance(m)
 	case wire.TEvtWindowSetTitle:
 		var m wire.EvtWindowSetTitle
 		if err := cbor.Unmarshal(payload, &m); err != nil {
@@ -413,6 +419,20 @@ func (inst *AppInstance) handleEvt(payload []byte) error {
 	}
 	inst.router.log("app %s: unexpected evt %q", inst.AppID, t)
 	return nil
+}
+
+// relayAppMsgCrossInstance forwards data to a different running
+// instance as that instance's normal EvtAppMsg event. v0.1 trust
+// model has no capability gate — anyone can address anyone, single-
+// user assumption. The router still validates the recipient
+// (existence, singleton-vs-sentinel rules) and logs failures.
+func (inst *AppInstance) relayAppMsgCrossInstance(m wire.EvtAppMsgSendTo) error {
+	target, _, err := inst.router.resolveRecipient(context.Background(), m.Recipient)
+	if err != nil {
+		inst.router.log("app %s app_msg.send.to: %v", inst.AppID, err)
+		return nil
+	}
+	return target.WriteEvt(wire.NewEvtAppMsg(target.WindowID, m.Data))
 }
 
 // relayAppMsgToShell forwards an APP_MSG from BE to its FE half.

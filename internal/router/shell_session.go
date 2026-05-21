@@ -211,6 +211,8 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		return s.handleWindowState(m)
 	case wire.ShellAppMsgSend:
 		return s.handleAppMsgSend(m)
+	case wire.ShellAppMsgSendTo:
+		return s.handleAppMsgSendTo(m)
 	case wire.ShellLog:
 		return s.handleShellLog(m)
 	}
@@ -340,6 +342,23 @@ func (s *ShellSession) handleAppMsgSend(m wire.ShellAppMsgSend) error {
 		return fmt.Errorf("app_msg.send data: %w", err)
 	}
 	return inst.WriteEvt(wire.NewEvtAppMsg(inst.WindowID, raw))
+}
+
+// handleAppMsgSendTo resolves the recipient (instance_id direct, or
+// app_id sentinel for singletons — spawning on demand), then relays
+// the JSON data as that instance's normal EvtAppMsg event. Same
+// transport-not-interpreter discipline as ShellAppMsgSend.
+func (s *ShellSession) handleAppMsgSendTo(m wire.ShellAppMsgSendTo) error {
+	target, code, err := s.router.resolveRecipient(context.Background(), m.Recipient)
+	if err != nil {
+		s.router.log("shell app_msg.send.to: %s: %v", code, err)
+		return nil
+	}
+	var raw any
+	if err := json.Unmarshal(m.Data, &raw); err != nil {
+		return fmt.Errorf("app_msg.send.to data: %w", err)
+	}
+	return target.WriteEvt(wire.NewEvtAppMsg(target.WindowID, raw))
 }
 
 // WriteCtrl encodes m as JSON and writes a shell control-channel frame.

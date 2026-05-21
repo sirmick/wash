@@ -34,18 +34,15 @@ test.describe('fm DnD: within-window move', () => {
     const dst = page.locator('[data-testid="fm-entry-docs"]');
     await src.dragTo(dst);
 
-    // hello.txt left the root tree and appeared inside docs/.
-    // fs.watch is the refresh path — no manual reload.
+    // commitMove auto-expands the target dir on success, so the
+    // moved row appears inside docs. We wait for that as the
+    // sync barrier (it implies the BE rename + the refresh have
+    // both landed), then assert filesystem state.
+    const movedRow = page.locator('[data-testid="fm-entry-docs"] ~ [data-testid="fm-entry-hello.txt"]');
+    await expect(movedRow).toBeVisible({ timeout: 3_000 });
     expect(existsSync(join(router.fmRoot, 'hello.txt'))).toBe(false);
     expect(existsSync(join(router.fmRoot, 'docs', 'hello.txt'))).toBe(true);
     expect(readFileSync(join(router.fmRoot, 'docs', 'hello.txt'), 'utf8')).toBe('hello world\n');
-
-    // Tree assertion: original row vanishes; once docs is expanded,
-    // hello.txt shows up underneath. Expand docs so the new row
-    // becomes visible in the tree.
-    await expect(page.locator('[data-testid="fm-entry-hello.txt"]')).toHaveCount(0, { timeout: 3_000 });
-    await page.locator('[data-testid="fm-entry-docs"]').click();
-    await expect(page.locator('[data-testid="fm-entry-hello.txt"]')).toBeVisible({ timeout: 3_000 });
   });
 
   test('drop into the same parent dir: no-op (move not attempted)', async ({ page, router }) => {

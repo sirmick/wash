@@ -17,10 +17,20 @@ const (
 	SurfaceDesktop = "desktop"
 )
 
-// Instancing values (WIRE.md §5.1).
+// Instancing values (WIRE.md §5.1, extended).
 const (
-	InstancingMulti  = "multi"
+	// InstancingMulti — independent process per spawn (default).
+	InstancingMulti = "multi"
+	// InstancingSingle — one process serves many windows. Semantics
+	// still deferred in the wire; reserved for future use.
 	InstancingSingle = "single"
+	// InstancingSingleton — at most one running instance globally,
+	// addressable by app_id as a sentinel. Spawn requests for an
+	// already-running singleton return its existing instance instead
+	// of starting a second one. Suited for system-service apps
+	// (wash-bulk, future desktop chrome) where having two would be
+	// either pointless or actively wrong.
+	InstancingSingleton = "singleton"
 )
 
 // Capability strings recognized by v0.0.
@@ -102,7 +112,7 @@ func (m *Manifest) Validate() error {
 		return fmt.Errorf("invalid surface %q", m.Surface)
 	}
 	switch m.Instancing {
-	case InstancingMulti, InstancingSingle:
+	case InstancingMulti, InstancingSingle, InstancingSingleton:
 	default:
 		return fmt.Errorf("invalid instancing %q", m.Instancing)
 	}

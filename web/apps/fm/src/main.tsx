@@ -21,6 +21,7 @@ import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
 import {
   ArrowLeft,
+  ArrowRight,
   ArrowUp,
   ArrowUpDown,
   Check,
@@ -121,7 +122,22 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // Each clears on commit / cancel / Escape.
   const [renaming, setRenaming] = createSignal<{ path: string; draft: string } | null>(null);
   const [pendingNew, setPendingNew] = createSignal<{ parent: string; kind: 'file' | 'folder'; draft: string } | null>(null);
-  const [confirmDelete, setConfirmDelete] = createSignal<{ path: string; name: string } | null>(null);
+  const [confirmDelete, setConfirmDelete] = createSignal<{ path: string | string[]; name: string } | null>(null);
+
+  // Multi-selection state. `selection` is the set of paths the user
+  // has selected via plain-click / Ctrl-click / Shift-click; actions
+  // (Delete, future Copy/Move) operate on this set when its size
+  // exceeds 1. `selectionAnchor` is the most-recently-clicked path
+  // used as one end of a Shift-click range.
+  const [selection, setSelection] = createSignal<Set<string>>(new Set());
+  let selectionAnchor: string | null = null;
+
+  // Files clipboard — mirrors the router clipboard's
+  // application/x-wash-paths slot, kept in sync by the BE pushing
+  // clipboard_files_state on every change (and at fm startup). Two
+  // fm windows therefore share one clipboard: cut in window A,
+  // paste in window B works naturally.
+  const [filesClipboard, setFilesClipboard] = createSignal<{ op: 'copy' | 'cut'; paths: string[] } | null>(null);
 
   // Refs / latched state (no reactivity needed)
   let pendingNav: string | null = null;
@@ -302,6 +318,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         scheduleRefresh(evtPath);
         return;
       }
+      case 'clipboard_files_state': {
+        const op = String(m.op || '');
+        const paths = (m.paths as string[]) ?? [];
+        if ((op === 'copy' || op === 'cut') && paths.length > 0) {
+          setFilesClipboard({ op: op as 'copy' | 'cut', paths });
+        } else {
+          setFilesClipboard(null);
+        }
+        return;
+      }
     }
   };
 
@@ -320,8 +346,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     let acc = '/';
     expandDir(acc);
     if (!listings[acc]) sendList(acc);
-    for (const part of parts) {
-      acc = acc === '/' ? '/' + part : acc + '/' + part;
+    for (let i = 0; i < parts.length; i++) {
+      acc = acc === '/' ? '/' + parts[i] : acc + '/' + parts[i];
+      // Don't sendList the last segment if it's a file/symlink —
+      // BE's list errors with "not a directory" and the status bar
+      // would carry that user-visible error. The leaf-file case is
+      // legitimate when the user clicks a file row; we already
+      // sendRead for that elsewhere.
+      if (i === parts.length - 1) {
+        const entry = findEntry(acc);
+        if (entry && entry.type !== 'dir') return;
+      }
       expandDir(acc);
       if (!listings[acc]) sendList(acc);
     }
@@ -366,11 +401,55 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     persist();
   };
 
+  // onRowClick threads click+modifier semantics through the tree.
+  //   plain click  → selection = {path}, navigate (current behavior)
+  //   Ctrl/Cmd-click → toggle path in/out of selection; no navigate
+  //   Shift-click  → range-select from anchor to path; no navigate
+  // For non-plain clicks we still update path() so the path bar
+  // reflects the focused entry, but skip sendList/sendRead.
+  const onRowClick = (rowPath: string, entry: Entry, ev: MouseEvent) => {
+    if (ev.shiftKey && selectionAnchor) {
+      const rows = visibleRows().map((r) => r.path);
+      const a = rows.indexOf(selectionAnchor);
+      const b = rows.indexOf(rowPath);
+      if (a >= 0 && b >= 0) {
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        setSelection(new Set(rows.slice(lo, hi + 1)));
+      } else {
+        setSelection(new Set([rowPath]));
+      }
+      setPath(rowPath);
+      setPathInputValue(rowPath);
+      return;
+    }
+    if (ev.ctrlKey || ev.metaKey) {
+      const next = new Set(selection());
+      if (next.has(rowPath)) next.delete(rowPath);
+      else next.add(rowPath);
+      setSelection(next);
+      selectionAnchor = rowPath;
+      setPath(rowPath);
+      setPathInputValue(rowPath);
+      return;
+    }
+    setSelection(new Set([rowPath]));
+    selectionAnchor = rowPath;
+    void entry; // silence the lint until the helper grows entry-aware branches
+    selectPath(rowPath, true);
+  };
+
   const navigateTo = (p: string) => selectPath(p || '/', true);
   const goHome = () => navigateTo(home());
   const goBack = () => {
     if (historyIdx() > 0) {
       const newIdx = historyIdx() - 1;
+      setHistoryIdx(newIdx);
+      selectPath(history()[newIdx], false);
+    }
+  };
+  const goForward = () => {
+    if (historyIdx() < history().length - 1) {
+      const newIdx = historyIdx() + 1;
       setHistoryIdx(newIdx);
       selectPath(history()[newIdx], false);
     }
@@ -507,30 +586,66 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
-  // requestDelete opens the confirm overlay; the user clicks Delete
-  // in the overlay to actually proceed. Two-step because rm is
-  // not undoable here yet.
+  // requestDelete opens the confirm overlay. The user clicks Delete
+  // in the overlay to actually proceed. Path is the single path for
+  // single-row context-menu Delete; when the user multi-selects 2+
+  // rows, requestBulkDelete is invoked instead and the overlay
+  // carries the whole selection.
   const requestDelete = (p: string) => {
     if (!p) return;
     setConfirmDelete({ path: p, name: baseName(p) });
   };
 
+  const requestBulkDelete = (paths: string[]) => {
+    if (paths.length === 0) return;
+    setConfirmDelete({
+      path: paths,
+      name: paths.length === 1 ? baseName(paths[0]) : `${paths.length} items`,
+    });
+  };
+
   const cancelDelete = () => setConfirmDelete(null);
+
+  // dispatchBulkDelete hands `paths` to wash-bulk via the sentinel
+  // address. The router spawns the singleton on demand if it's not
+  // running; bulk-ops then walks and removes recursively. fs.watch
+  // in fm picks up the changes in real time so the tree clears as
+  // the job progresses.
+  const dispatchBulkDelete = (paths: string[]) => {
+    const recipient: { app_id: string } = { app_id: 'com.wash.bulk' };
+    window.wash.sendAppMsgTo(recipient, {
+      kind: 'enqueue',
+      op: 'delete',
+      paths,
+    });
+    setSelection(new Set());
+    setSelectedEntry(null);
+  };
 
   const performDelete = async () => {
     const d = confirmDelete();
     if (!d) return;
     setConfirmDelete(null);
-    const reply = await sendWithReply({ kind: 'delete', path: d.path });
+    // Multi-path delete → straight to bulk-ops.
+    if (Array.isArray(d.path)) {
+      dispatchBulkDelete(d.path);
+      return;
+    }
+    // Single-path delete: try fm direct first. If the target is a
+    // non-empty dir the BE returns `not_empty`; we transparently
+    // re-route through bulk-ops so the user gets the recursive
+    // delete without a separate UI step.
+    const target = d.path;
+    const reply = await sendWithReply({ kind: 'delete', path: target });
     if (reply.kind === 'delete_ok') {
-      const par = parentPath(d.path);
+      const par = parentPath(target);
       invalidateAndList(par);
-      // Move selection to the parent so the preview isn't pointing
-      // at a now-vanished entry.
       setPath(par);
       setPathInputValue(par);
       setSelectedEntry(null);
       setPreviewContent(null);
+    } else if (reply.kind === 'delete_err' && reply.code === 'not_empty') {
+      dispatchBulkDelete([target]);
     } else {
       setStatusOverride(`delete: ${String(reply.msg ?? reply.code ?? 'failed')}`);
     }
@@ -753,6 +868,67 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
+  // pickSelectionPaths returns the current selection (if non-empty)
+  // or the focused row's path as a one-element list. Used by
+  // shortcuts so Ctrl+C without an explicit multi-select still
+  // operates on the currently-focused row.
+  const pickSelectionPaths = (): string[] => {
+    const sel = selection();
+    if (sel.size > 0) return Array.from(sel);
+    const p = path();
+    return p ? [p] : [];
+  };
+
+  // putFilesOnClipboard tells the BE to set the router clipboard
+  // with `op` + `paths`. The BE echoes back a clipboard_files_state
+  // event which updates filesClipboard reactively — so the status
+  // bar reflects the cut/copy without us tracking it FE-locally.
+  const putFilesOnClipboard = (op: 'copy' | 'cut', paths: string[]) => {
+    if (paths.length === 0) return;
+    send({ kind: 'clipboard_files_set', op, paths });
+  };
+
+  // pasteFilesClipboard reads the current files-clipboard state
+  // (mirrored from BE) and dispatches the matching bulk-ops job.
+  // For "cut", we clear the clipboard after dispatching so a
+  // second paste doesn't try to re-move already-moved paths.
+  const pasteFilesClipboard = () => {
+    const cb = filesClipboard();
+    if (!cb || cb.paths.length === 0) return;
+    const dest = dirOfSelection();
+    if (!dest) return;
+    const bulkOp = cb.op === 'cut' ? 'move' : 'copy';
+    window.wash.sendAppMsgTo(
+      { app_id: 'com.wash.bulk' },
+      { kind: 'enqueue', op: bulkOp, paths: cb.paths, dest },
+    );
+    if (cb.op === 'cut') {
+      // Clear the clipboard so a second Ctrl+V doesn't try to
+      // re-move paths that no longer exist at the source.
+      send({ kind: 'clipboard_files_set', op: 'copy', paths: [] });
+      setFilesClipboard(null);
+    }
+  };
+
+  // commitBulkCopy enqueues a recursive copy job in wash-bulk via
+  // the singleton sentinel. We deliberately route ALL copies
+  // through bulk-ops (even a single file): copy can be slow on
+  // large dirs and the queue UI is the right place to surface
+  // progress — fm has no business owning that affordance.
+  // fs.watch in fm picks up the new entry in the target dir as
+  // bulk-ops creates files.
+  const commitBulkCopy = (src: string, targetDir: string) => {
+    if (!src || !targetDir) return;
+    if (targetDir === src || targetDir.startsWith(src + '/')) {
+      setStatusOverride('copy: cannot copy a folder into itself');
+      return;
+    }
+    window.wash.sendAppMsgTo(
+      { app_id: 'com.wash.bulk' },
+      { kind: 'enqueue', op: 'copy', paths: [src], dest: targetDir },
+    );
+  };
+
   // commitMove is the actual move operation. Skips trivial cases
   // (same-parent drop, dropping onto self or a descendant) before
   // sending the rename, then lets fs.watch drive the refresh.
@@ -898,6 +1074,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const override = statusOverride();
     if (override) return override;
     if (!rootInitialized()) return 'loading…';
+    const sel = selection().size;
+    if (sel > 1) return `${sel} of ${visibleCount()} selected`;
     return `${visibleCount()} entries`;
   });
 
@@ -916,6 +1094,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     setSelectedEntry(entry);
     setPath(p);
     setPathInputValue(p);
+    // Native FM convention: right-clicking an unselected row
+    // implicitly replaces the selection with just that row, so the
+    // menu action operates on what was clicked, not on a stale
+    // selection elsewhere.
+    if (!selection().has(p)) setSelection(new Set([p]));
     if (entry.type === 'file') sendRead(p);
     const my = props.host.getBoundingClientRect();
     setMenu({ kind: 'context', left: ev.clientX - my.left, top: ev.clientY - my.top, entry, path: p });
@@ -930,10 +1113,90 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       if (s) restoreFrom(s);
       else send({ kind: 'request_initial' });
     };
+    // Don't fire shortcuts when the user is typing in an input —
+    // path bar, rename input, new-file input, info-edit input.
+    // The shell's wash-app-fm host has tabindex=0, so plain rows
+    // can receive keydown without an input being focused.
+    const isTypingFocused = (): boolean => {
+      const el = document.activeElement;
+      if (!el) return false;
+      const tag = el.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || (el as HTMLElement).isContentEditable;
+    };
+
     const onKey = (ev: KeyboardEvent) => {
-      if ((ev.ctrlKey || ev.metaKey) && ev.key === 'c' && path() && document.activeElement !== pathInputEl) {
-        ev.preventDefault();
-        send({ kind: 'clipboard_copy_path', path: path() });
+      if (isTypingFocused()) return;
+      const sel = selection();
+      const cmd = ev.ctrlKey || ev.metaKey;
+
+      // Plain keys.
+      if (!cmd && !ev.altKey) {
+        if (ev.key === 'F2' && sel.size === 1) {
+          ev.preventDefault();
+          startRename(Array.from(sel)[0]);
+          return;
+        }
+        if ((ev.key === 'Delete' || ev.key === 'Backspace') && sel.size > 0) {
+          ev.preventDefault();
+          const paths = Array.from(sel);
+          if (paths.length === 1) requestDelete(paths[0]);
+          else requestBulkDelete(paths);
+          return;
+        }
+        if (ev.key === 'Enter' && sel.size === 1) {
+          ev.preventDefault();
+          selectPath(Array.from(sel)[0], true);
+          return;
+        }
+        if (ev.key === 'Escape' && sel.size > 0) {
+          ev.preventDefault();
+          setSelection(new Set());
+          return;
+        }
+      }
+
+      // Ctrl/Cmd shortcuts.
+      if (cmd && !ev.altKey) {
+        if (ev.key === 'a' || ev.key === 'A') {
+          // Select-all = every currently-visible row in the tree.
+          ev.preventDefault();
+          setSelection(new Set(visibleRows().map((r) => r.path)));
+          return;
+        }
+        if ((ev.key === 'N' || ev.key === 'n') && ev.shiftKey) {
+          // Ctrl+Shift+N = new folder, matching Chrome's "new
+          // incognito window" muscle memory in reverse.
+          ev.preventDefault();
+          startNewFolder();
+          return;
+        }
+        // Ctrl+C / Ctrl+X / Ctrl+V — files clipboard. The
+        // "copy path text" affordance moved to the right-click
+        // context menu's "Copy path" item, freeing Ctrl+C for
+        // the native file-clipboard meaning.
+        if (ev.key === 'c' || ev.key === 'C') {
+          const paths = pickSelectionPaths();
+          if (paths.length === 0) return;
+          ev.preventDefault();
+          putFilesOnClipboard('copy', paths);
+          setStatusOverride(`copied ${paths.length} to clipboard`);
+          return;
+        }
+        if (ev.key === 'x' || ev.key === 'X') {
+          const paths = pickSelectionPaths();
+          if (paths.length === 0) return;
+          ev.preventDefault();
+          putFilesOnClipboard('cut', paths);
+          setStatusOverride(`cut ${paths.length} to clipboard`);
+          return;
+        }
+        if (ev.key === 'v' || ev.key === 'V') {
+          const cb = filesClipboard();
+          if (!cb || cb.paths.length === 0) return;
+          ev.preventDefault();
+          pasteFilesClipboard();
+          return;
+        }
       }
     };
     const onDocMouseDown = (ev: MouseEvent) => {
@@ -968,6 +1231,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         </button>
         <button type="button" data-testid="fm-back" title="Back" style={iconBtnStyle} onClick={goBack}>
           <ArrowLeft size={14} />
+        </button>
+        <button type="button" data-testid="fm-forward" title="Forward" style={iconBtnStyle} onClick={goForward}>
+          <ArrowRight size={14} />
         </button>
         <button type="button" data-testid="fm-up" title="Up" style={iconBtnStyle} onClick={goUp}>
           <ArrowUp size={14} />
@@ -1037,6 +1303,19 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               onCancel={cancelNew}
             />
           </Show>
+          <Show when={rootInitialized() && visibleRows().length === 0 && !pendingNew()}>
+            <div
+              data-testid="fm-empty"
+              style={{
+                padding: '20px 16px',
+                color: '#666',
+                'font-style': 'italic',
+                'font-size': '13px',
+              }}
+            >
+              (empty folder)
+            </div>
+          </Show>
           <For each={visibleRows()}>
             {(row) => {
               const isRenaming = () => renaming()?.path === row.path;
@@ -1044,7 +1323,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 entry={row.entry}
                 path={row.path}
                 depth={row.depth}
-                selected={path() === row.path}
+                selected={selection().has(row.path) || path() === row.path}
                 expanded={!!expanded[row.path]}
                 renaming={isRenaming() ? { draft: renaming()!.draft } : null}
                 onRenameInput={(v) => {
@@ -1053,7 +1332,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 }}
                 onRenameCommit={commitRename}
                 onRenameCancel={cancelRename}
-                onClick={() => {
+                onClick={(ev) => {
                   if (isRenaming()) return;
                   const now = Date.now();
                   const isDouble = row.path === lastClickPath && now - lastClickTime < 400;
@@ -1063,7 +1342,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                     followSymlink(row.entry, row.path);
                     return;
                   }
-                  selectPath(row.path, true);
+                  onRowClick(row.path, row.entry, ev);
                 }}
                 onToggle={() => toggleExpand(row.path)}
                 onContextMenu={(ev) => openContextMenu(ev, row.entry, row.path)}
@@ -1160,7 +1439,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           onDelete={() => {
             const m = menu() as { path: string };
             closeMenu();
-            requestDelete(m.path);
+            // If the right-clicked row is part of a 2+ selection,
+            // act on the whole selection; otherwise just the row.
+            const sel = selection();
+            if (sel.size >= 2 && sel.has(m.path)) {
+              requestBulkDelete(Array.from(sel));
+            } else {
+              requestDelete(m.path);
+            }
           }}
         />
       </Show>
@@ -1184,6 +1470,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             const dm = dropMenu()!;
             setDropMenu(null);
             void commitMove(dm.src, dm.targetDir);
+          }}
+          onCopy={() => {
+            const dm = dropMenu()!;
+            setDropMenu(null);
+            commitBulkCopy(dm.src, dm.targetDir);
           }}
           onSymlink={() => {
             const dm = dropMenu()!;
@@ -1212,7 +1503,7 @@ const TreeRow: Component<{
   onRenameInput?: (val: string) => void;
   onRenameCommit?: () => void;
   onRenameCancel?: () => void;
-  onClick: () => void;
+  onClick: (ev: MouseEvent) => void;
   onToggle: () => void;
   onContextMenu: (ev: MouseEvent) => void;
   onDragStart: (ev: DragEvent) => void;
@@ -1229,6 +1520,7 @@ const TreeRow: Component<{
       data-testid={`fm-entry-${props.entry.name}`}
       data-type={props.entry.type}
       data-path={props.path}
+      data-selected={props.selected ? 'true' : undefined}
       data-drop-target={props.isDropTarget ? 'true' : undefined}
       draggable="true"
       onDragStart={props.onDragStart}
@@ -1237,7 +1529,7 @@ const TreeRow: Component<{
       onDrop={props.onDrop}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      onClick={props.onClick}
+      onClick={(ev) => props.onClick(ev)}
       onContextMenu={props.onContextMenu}
       style={{
         display: 'flex',
@@ -1719,6 +2011,7 @@ const DropMenu: Component<{
   src: string;
   targetDir: string;
   onMove: () => void;
+  onCopy: () => void;
   onSymlink: () => void;
   onCancel: () => void;
 }> = (props) => {
@@ -1749,6 +2042,7 @@ const DropMenu: Component<{
       onContextMenu={(ev) => ev.preventDefault()}
     >
       <MenuItem testid="fm-drop-move" label="Move here" onClick={props.onMove} />
+      <MenuItem testid="fm-drop-copy" label="Copy here" onClick={props.onCopy} />
       <MenuItem testid="fm-drop-symlink" label="Create symlink here" onClick={props.onSymlink} />
       <div style={{ height: '1px', background: '#2a2a3a', margin: '4px 0' }} />
       <MenuItem testid="fm-drop-cancel" label="Cancel" onClick={props.onCancel} />

@@ -37,6 +37,7 @@ fm_seed=0
 no_session=0
 tail_log=0
 listen="0.0.0.0:11000"
+bulk_seed=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -54,6 +55,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-session)  no_session=1; shift;;
     --tail)        tail_log=1; shift;;
+    --bulk-seed)
+      bulk_seed=1
+      if [[ $# -ge 2 && "${2:-}" != --* ]]; then
+        fm_root="$2"; shift 2
+      else
+        fm_root="${fm_root:-/tmp/wash-fm-smoke}"; shift
+      fi
+      ;;
     --port)        listen="0.0.0.0:$2"; shift 2;;
     --listen)      listen="$2"; shift 2;;
     -h|--help)
@@ -84,6 +93,9 @@ cp "$REPO/out/"* "$APPS_DIR/"
 if [[ "$fm_seed" == "1" ]]; then
   "$REPO/scripts/fm-seed.sh" "$fm_root"
 fi
+if [[ "$bulk_seed" == "1" ]]; then
+  "$REPO/scripts/seed-bulk-fixture.sh" "$fm_root"
+fi
 
 # 5. Launch.
 args=(
@@ -99,6 +111,12 @@ fi
 env_kv=()
 if [[ -n "$fm_root" ]]; then
   env_kv+=("WASH_FM_ROOT=$fm_root")
+fi
+# Pass through WASH_BULKOPS_ITEM_DELAY_MS if the caller exported it
+# in their shell — handy for ad-hoc UI testing (see wash-bulk's
+# main.go). No script flag for this; it's a one-off knob.
+if [[ -n "${WASH_BULKOPS_ITEM_DELAY_MS:-}" ]]; then
+  env_kv+=("WASH_BULKOPS_ITEM_DELAY_MS=$WASH_BULKOPS_ITEM_DELAY_MS")
 fi
 
 : > "$LOG"

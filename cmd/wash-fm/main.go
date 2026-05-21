@@ -20,9 +20,11 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"log"
@@ -34,6 +36,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/sirmick/wash/internal/fswatch"
 	"github.com/sirmick/wash/internal/sdk"
@@ -192,9 +195,10 @@ func main() {
 			Instancing:      sdk.InstancingMulti,
 			Window:          &sdk.WindowHints{DefaultWidth: 760, DefaultHeight: 520},
 		},
-		Assets:   sub,
-		OnReady:  onReady,
-		OnAppMsg: onAppMsg,
+		Assets:             sub,
+		OnReady:            onReady,
+		OnAppMsg:           onAppMsg,
+		OnClipboardChanged: onClipboardChanged,
 	})
 }
 
@@ -223,6 +227,61 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		fmWatch = &watchState{mgr: mgr, subs: make(map[string]*fswatch.Sub), conn: c}
 	}
 	sendList(c, "", initialPath())
+	// Seed the FE's file-clipboard view from whatever's already on
+	// the router clipboard (covers the "another fm window did a
+	// copy before this one opened" case). OnClipboardChanged
+	// handles updates after startup.
+	go pushFilesClipboardToFE(c)
+}
+
+// fileClipboardMime is the mime fm uses to round-trip a multi-path
+// cut/copy state through the router clipboard service. Cross-fm-
+// window sync comes free because every fm instance subscribes to
+// clipboard.changed.
+const fileClipboardMime = "application/x-wash-paths"
+
+// filesClipboardPayload is the JSON shape we store at fileClipboardMime.
+type filesClipboardPayload struct {
+	Op    string   `json:"op"` // "copy" | "cut"
+	Paths []string `json:"paths"`
+}
+
+// onClipboardChanged fires when ANOTHER app updates the clipboard.
+// If the mime is ours, fetch + push to FE. If it's anything else
+// (a text clipboard from another tab), still push a "cleared"
+// state so the FE drops any stale cut/copy badge.
+func onClipboardChanged(c *sdk.Conn, mime string) {
+	if mime == fileClipboardMime {
+		go pushFilesClipboardToFE(c)
+		return
+	}
+	// A non-files clipboard set means our previous cut/copy is
+	// no longer the active clipboard content. Tell the FE.
+	_ = c.SendAppMsg(map[string]any{"kind": "clipboard_files_state", "op": "", "paths": []string{}})
+}
+
+// pushFilesClipboardToFE fetches the current router clipboard and,
+// if it's our mime, pushes the parsed payload to the FE. Called on
+// startup + on every clipboard.changed event matching our mime.
+func pushFilesClipboardToFE(c *sdk.Conn) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	mime, data, err := c.ClipboardGet(ctx)
+	if err != nil {
+		return
+	}
+	if mime != fileClipboardMime {
+		return
+	}
+	var p filesClipboardPayload
+	if err := json.Unmarshal(data, &p); err != nil {
+		return
+	}
+	_ = c.SendAppMsg(map[string]any{
+		"kind":  "clipboard_files_state",
+		"op":    p.Op,
+		"paths": p.Paths,
+	})
 }
 
 func onAppMsg(c *sdk.Conn, _ uint32, data any) {
@@ -296,7 +355,69 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		target, _ := m["target"].(string)
 		linkPath, _ := m["link_path"].(string)
 		doSymlink(c, id, target, linkPath)
+	case "clipboard_files_set":
+		op, _ := m["op"].(string)
+		paths := toPathSlice(m["paths"])
+		doClipboardFilesSet(c, id, op, paths)
+	case "clipboard_files_get":
+		// On-demand fetch (FE asks at paste time without relying
+		// on the cached state). Reuses the push path.
+		go pushFilesClipboardToFE(c)
 	}
+}
+
+// toPathSlice converts a CBOR []any of strings into []string.
+// Skips non-string entries silently — defensive against malformed
+// inputs without strict validation.
+func toPathSlice(v any) []string {
+	switch x := v.(type) {
+	case []any:
+		out := make([]string, 0, len(x))
+		for _, e := range x {
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []string:
+		return x
+	}
+	return nil
+}
+
+// doClipboardFilesSet stores op + paths on the router clipboard
+// under our private mime. Every other fm window subscribed to
+// clipboard.changed gets pushed a clipboard_files_state event.
+// We don't confine paths here because the clipboard is a
+// transport, not a write — confinement happens when bulk-ops
+// actually moves/copies the files.
+func doClipboardFilesSet(c *sdk.Conn, id, op string, paths []string) {
+	if op != "copy" && op != "cut" {
+		sendErr(c, "clipboard_files_err", id, "", "bad_request", "op must be copy or cut")
+		return
+	}
+	if len(paths) == 0 {
+		// Treat empty as "clear" — write a non-files clipboard so
+		// fm windows drop their state. Use an empty payload at our
+		// own mime; consumers parse and see Paths=[].
+	}
+	data, err := json.Marshal(filesClipboardPayload{Op: op, Paths: paths})
+	if err != nil {
+		sendErr(c, "clipboard_files_err", id, "", "internal", err.Error())
+		return
+	}
+	if err := c.ClipboardSet(fileClipboardMime, data); err != nil {
+		sendErr(c, "clipboard_files_err", id, "", "io", err.Error())
+		return
+	}
+	// Echo state to THIS fm's FE immediately — the setter doesn't
+	// receive its own OnClipboardChanged (router suppresses).
+	_ = c.SendAppMsg(map[string]any{
+		"kind":  "clipboard_files_state",
+		"op":    op,
+		"paths": paths,
+	})
+	_ = c.SendAppMsg(map[string]any{"kind": "clipboard_files_set_ok", "id": id, "op": op, "paths": paths})
 }
 
 // toUint32 normalizes whatever the FE sent us (number, string, or

@@ -312,10 +312,16 @@ render(App, document.getElementById('root')!);
 // to their BE half. The session app uses this to send the "launch"
 // action. Exposed as window.wash so app bundles can find it without
 // import gymnastics.
+// Recipient mirrors wire.Recipient — exactly one field set. AppID
+// works only for singleton-instancing apps (router spawns on demand
+// when not yet running); InstanceID is a direct address.
+export type Recipient = { app_id: string } | { instance_id: string };
+
 declare global {
   interface Window {
     wash: {
       sendAppMsg(instanceID: string, data: unknown): void;
+      sendAppMsgTo(recipient: Recipient, data: unknown): void;
       catalog(): CatalogApp[];
       onCatalog(cb: (apps: CatalogApp[]) => void): () => void;
       windows(): WindowInfo[];
@@ -349,6 +355,9 @@ function shellLog(level: LogLevel, source: string, msg: string, stack?: string) 
 window.wash = {
   sendAppMsg(instanceID, data) {
     conn.sendCtrl({ t: 'app_msg.send', instance_id: instanceID, data });
+  },
+  sendAppMsgTo(recipient, data) {
+    conn.sendCtrl({ t: 'app_msg.send.to', recipient, data });
   },
   catalog: () => catalogSub.value,
   onCatalog: (cb) => catalogSub.on(cb),

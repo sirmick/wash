@@ -14,7 +14,7 @@ GOARCH  ?= amd64
 GOFLAGS := -trimpath -ldflags=-s\ -w -tags netgo,osusergo
 
 OUT     := out
-BINS    := wash-router wash-session wash-about wash-term wash-fm wash-launch
+BINS    := wash-router wash-session wash-about wash-term wash-fm wash-bulk wash-launch
 TARGETS := $(addprefix $(OUT)/,$(BINS))
 
 # Test app: not part of the default build; built explicitly with
@@ -48,6 +48,9 @@ TERM_STAMP     := $(TERM_ASSETS)/.stamp
 
 FM_ASSETS      := cmd/wash-fm/assets
 FM_STAMP       := $(FM_ASSETS)/.stamp
+
+BULK_ASSETS    := cmd/wash-bulk/assets
+BULK_STAMP     := $(BULK_ASSETS)/.stamp
 
 .PHONY: all
 all: $(TARGETS)
@@ -86,6 +89,10 @@ web-term: web-deps
 web-fm: web-deps
 	@cd web && $(PNPM) --filter @wash/app-fm run build
 
+.PHONY: web-bulk
+web-bulk: web-deps
+	@cd web && $(PNPM) --filter @wash/app-bulk run build
+
 # embed-into-cmd helper. Usage: $(call embed,<src dist dir>,<dst assets dir>)
 define embed_dist
 	rm -rf $(2)
@@ -117,6 +124,9 @@ $(TERM_STAMP): web-term
 $(FM_STAMP): web-fm
 	$(call embed_dist,web/apps/fm/dist,$(FM_ASSETS))
 
+$(BULK_STAMP): web-bulk
+	$(call embed_dist,web/apps/bulk/dist,$(BULK_ASSETS))
+
 # ----- go stage -----
 
 $(OUT)/wash-router: $(ROUTER_STAMP) | $(OUT)
@@ -136,6 +146,9 @@ $(OUT)/wash-term: $(TERM_STAMP) | $(OUT)
 
 $(OUT)/wash-fm: $(FM_STAMP) | $(OUT)
 	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-fm
+
+$(OUT)/wash-bulk: $(BULK_STAMP) | $(OUT)
+	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-bulk
 
 # wash-launch is a CLI, not an app. No FE bundle, no embedded assets.
 $(OUT)/wash-launch: | $(OUT)

@@ -30,7 +30,7 @@ set -euo pipefail
 # e2e-spawned copies whose paths differ from the dev tree.
 
 pkill -9 -f 'out/wash-router'                      2>/dev/null || true
-pkill -9 -f 'wash-(session|fm|term|about|test)'    2>/dev/null || true
+pkill -9 -f 'wash-(session|fm|term|about|test|bulk)'    2>/dev/null || true
 pkill -9 -f 'wash-e2e-apps'                        2>/dev/null || true
 pkill -9 -f 'tee.*wash-router\.log'                2>/dev/null || true
 

@@ -8,8 +8,9 @@ const (
 	SurfaceWindow  = "window"
 	SurfaceDesktop = "desktop"
 
-	InstancingMulti  = "multi"
-	InstancingSingle = "single"
+	InstancingMulti     = "multi"
+	InstancingSingle    = "single"
+	InstancingSingleton = "singleton"
 
 	CapSpawn = "spawn"
 )
