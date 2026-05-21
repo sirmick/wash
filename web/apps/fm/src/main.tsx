@@ -19,7 +19,7 @@ import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-j
 import { createStore, produce } from 'solid-js/store';
 import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
-import { Menu, MenuItem, MenuSeparator } from '@wash/ui';
+import { ConfirmDialog, Menu, MenuItem, MenuSeparator } from '@wash/ui';
 import {
   ArrowLeft,
   ArrowRight,
@@ -2104,12 +2104,7 @@ const ContextMenu: Component<{
   );
 };
 
-// ConfirmDeleteOverlay — a centered modal asking the user to
-// confirm an irreversible delete. v0.1 doesn't have a real
-// modal-for window relationship yet (Phase 3 plan item), so we
-// just float a positioned div inside the host. Clicking the
-// backdrop OR pressing Escape (handled by the underlying host's
-// keydown) cancels.
+// ConfirmDeleteOverlay — destructive-delete confirm modal.
 const ConfirmDeleteOverlay: Component<{
   name: string;
   path: string;
@@ -2117,77 +2112,35 @@ const ConfirmDeleteOverlay: Component<{
   onConfirm: () => void;
 }> = (props) => {
   return (
-    <div
+    <ConfirmDialog
       data-testid="fm-confirm-delete"
-      style={{
-        position: 'absolute',
-        inset: 0,
-        background: 'rgba(0,0,0,0.45)',
-        display: 'flex',
-        'align-items': 'center',
-        'justify-content': 'center',
-        'z-index': 2000,
-        animation: 'wash-fade-in 120ms ease-out',
-      }}
-      onClick={(ev) => {
-        if (ev.target === ev.currentTarget) props.onCancel();
-      }}
+      title="Delete?"
+      confirmLabel="Delete"
+      confirmTestid="fm-confirm-delete-yes"
+      cancelTestid="fm-confirm-delete-cancel"
+      danger
+      onCancel={props.onCancel}
+      onConfirm={props.onConfirm}
     >
       <div
+        data-testid="fm-confirm-delete-name"
         style={{
-          background: '#181828',
-          border: '1px solid #2a2a3a',
-          'border-radius': '6px',
-          padding: '16px 18px',
-          'min-width': '280px',
-          'max-width': '420px',
-          'box-shadow': '0 12px 28px rgba(0,0,0,0.5)',
-          font: '13px ui-sans-serif,system-ui,sans-serif',
-          color: '#eee',
-          animation: 'wash-pop-in 140ms ease-out',
+          font: '12px ui-monospace,Menlo,Consolas,monospace',
+          opacity: 0.8,
+          'word-break': 'break-all',
         }}
       >
-        <div style={{ 'font-weight': 600, 'margin-bottom': '6px' }}>Delete?</div>
-        <div
-          data-testid="fm-confirm-delete-name"
-          style={{
-            font: '12px ui-monospace,Menlo,Consolas,monospace',
-            opacity: 0.8,
-            'word-break': 'break-all',
-            'margin-bottom': '14px',
-          }}
-        >
-          {props.path}
-        </div>
-        <div style={{ display: 'flex', gap: '8px', 'justify-content': 'flex-end' }}>
-          <button
-            type="button"
-            data-testid="fm-confirm-delete-cancel"
-            style={confirmBtnStyle()}
-            onClick={props.onCancel}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            data-testid="fm-confirm-delete-yes"
-            style={confirmBtnStyle(true)}
-            onClick={props.onConfirm}
-          >
-            Delete
-          </button>
-        </div>
+        {props.path}
       </div>
-    </div>
+    </ConfirmDialog>
   );
 };
 
-// ReplaceConfirmOverlay — same modal style as the delete confirm,
+// ReplaceConfirmOverlay — same modal scaffold as delete-confirm,
 // shown when rename / move / symlink would overwrite an existing
 // entry. Surfaces the dst path AND the entry's type+size so the
-// user knows what they're about to lose; that detail is the whole
-// reason the prompt exists. Returns Replace (destructive) or
-// Cancel (silent no-op).
+// user knows what they're about to lose; that detail is the
+// whole reason the prompt exists.
 const ReplaceConfirmOverlay: Component<{
   dst: string;
   entry: Entry | null;
@@ -2203,80 +2156,35 @@ const ReplaceConfirmOverlay: Component<{
     return e.type;
   };
   return (
-    <div
+    <ConfirmDialog
       data-testid="fm-confirm-replace"
-      style={{
-        position: 'absolute',
-        inset: 0,
-        background: 'rgba(0,0,0,0.45)',
-        display: 'flex',
-        'align-items': 'center',
-        'justify-content': 'center',
-        'z-index': 2000,
-        animation: 'wash-fade-in 120ms ease-out',
-      }}
-      onClick={(ev) => {
-        if (ev.target === ev.currentTarget) props.onCancel();
-      }}
+      title="Replace?"
+      confirmLabel="Replace"
+      confirmTestid="fm-confirm-replace-yes"
+      cancelTestid="fm-confirm-replace-cancel"
+      danger
+      onCancel={props.onCancel}
+      onConfirm={props.onConfirm}
     >
       <div
+        data-testid="fm-confirm-replace-path"
         style={{
-          background: '#181828',
-          border: '1px solid #2a2a3a',
-          'border-radius': '6px',
-          padding: '16px 18px',
-          'min-width': '280px',
-          'max-width': '420px',
-          'box-shadow': '0 12px 28px rgba(0,0,0,0.5)',
-          font: '13px ui-sans-serif,system-ui,sans-serif',
-          color: '#eee',
-          animation: 'wash-pop-in 140ms ease-out',
+          font: '12px ui-monospace,Menlo,Consolas,monospace',
+          opacity: 0.8,
+          'word-break': 'break-all',
         }}
       >
-        <div style={{ 'font-weight': 600, 'margin-bottom': '6px' }}>Replace?</div>
-        <div
-          data-testid="fm-confirm-replace-path"
-          style={{
-            font: '12px ui-monospace,Menlo,Consolas,monospace',
-            opacity: 0.8,
-            'word-break': 'break-all',
-            'margin-bottom': '4px',
-          }}
-        >
-          {props.dst}
-        </div>
-        <Show when={props.entry}>
-          <div
-            data-testid="fm-confirm-replace-detail"
-            style={{
-              'font-size': '11px',
-              opacity: 0.6,
-              'margin-bottom': '14px',
-            }}
-          >
-            {detail()}
-          </div>
-        </Show>
-        <div style={{ display: 'flex', gap: '8px', 'justify-content': 'flex-end' }}>
-          <button
-            type="button"
-            data-testid="fm-confirm-replace-cancel"
-            style={confirmBtnStyle()}
-            onClick={props.onCancel}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            data-testid="fm-confirm-replace-yes"
-            style={confirmBtnStyle(true)}
-            onClick={props.onConfirm}
-          >
-            Replace
-          </button>
-        </div>
+        {props.dst}
       </div>
-    </div>
+      <Show when={props.entry}>
+        <div
+          data-testid="fm-confirm-replace-detail"
+          style={{ 'font-size': '11px', opacity: 0.6, 'margin-top': '4px' }}
+        >
+          {detail()}
+        </div>
+      </Show>
+    </ConfirmDialog>
   );
 };
 
@@ -2315,18 +2223,6 @@ const DropMenu: Component<{
     </Menu>
   );
 };
-
-function confirmBtnStyle(danger = false): JSX.CSSProperties {
-  return {
-    background: danger ? '#7a1f1f' : 'transparent',
-    color: '#eee',
-    border: '1px solid ' + (danger ? '#a02d2d' : '#2a2a3a'),
-    'border-radius': '3px',
-    padding: '5px 12px',
-    cursor: 'pointer',
-    font: '13px ui-sans-serif,system-ui,sans-serif',
-  };
-}
 
 const AutocompleteDropdown: Component<{
   host: HTMLElement;
