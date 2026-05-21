@@ -29,7 +29,7 @@
 //
 // (Save mode adds a name input above the action row.)
 
-import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
 import { Overlay, ConfirmDialog } from './overlay';
@@ -129,6 +129,12 @@ type WashGlobal = {
 };
 const washAPI = (): WashGlobal => (window as unknown as { wash: WashGlobal }).wash;
 
+// Debounce window for fs.watch_event refreshes. fsnotify can fire a
+// handful of events for one logical save (write + chmod); the
+// picker doesn't need to re-list each time. 100ms collapses bursts
+// without making the UI feel stale.
+const REFRESH_DEBOUNCE_MS = 100;
+
 export const FilePicker: Component<FilePickerProps> = (props) => {
   // ---- reactive state ----
   const [cwd, setCwd] = createSignal(props.start || '/');
@@ -172,12 +178,24 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
     });
   };
 
-  // Listen for fs.* replies from the host BE (delivered as wash:msg
-  // events on the host element, like any other BE→FE message).
-  // EnableFilePicker tags replies with kinds starting "fs.".
+  // Listen for fs.* replies + fs.watch_event pushes from the host
+  // BE. Replies (with an id) resolve a pending promise; watch
+  // events are unsolicited and trigger a debounced re-list when
+  // they fire under the picker's cwd.
   const onWashMsg = (ev: Event) => {
-    const detail = (ev as CustomEvent).detail as AnyReply | undefined;
+    const detail = (ev as CustomEvent).detail as
+      | (AnyReply & { id?: string })
+      | { kind: 'fs.watch_event'; op: string; path: string }
+      | undefined;
     if (!detail || typeof detail.kind !== 'string' || !detail.kind.startsWith('fs.')) {
+      return;
+    }
+    if (detail.kind === 'fs.watch_event') {
+      // The BE only sends events for paths we're subscribed to,
+      // so any event under our cwd warrants a refresh. We don't
+      // try to be smart about which sub-path changed — re-listing
+      // the dir is cheap.
+      scheduleRefresh();
       return;
     }
     const id = (detail as { id?: string }).id;
@@ -185,8 +203,57 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
     const resolver = pending.get(id);
     if (!resolver) return;
     pending.delete(id);
-    resolver(detail);
+    resolver(detail as AnyReply);
   };
+
+  // ---- fs.watch wiring ----
+  //
+  // The picker subscribes to fs.watch on exactly one path: the
+  // currently-displayed cwd, AND only while the picker is open.
+  // Three leak surfaces and how we handle each:
+  //
+  //   1. cwd navigation: a createEffect transitions the
+  //      subscription — releases the old path before subscribing
+  //      to the new one. One watch per picker, always.
+  //   2. picker close (props.open → false): the same effect sees
+  //      open=false and unsubscribes.
+  //   3. component teardown: onCleanup unsubscribes whatever's
+  //      still active. The host is responsible for tearing the
+  //      picker down (the component dies with its parent element).
+  //
+  // The BE's fs.unwatch is idempotent — duplicate unwatch is fine.
+
+  let watchedPath = '';
+  let refreshTimer: number | null = null;
+
+  const sendUnwatch = (p: string) => {
+    if (!p) return;
+    washAPI().sendAppMsg(props.hostInstanceID, { kind: 'fs.unwatch', path: p });
+  };
+  const sendWatch = (p: string) => {
+    if (!p) return;
+    washAPI().sendAppMsg(props.hostInstanceID, { kind: 'fs.watch', path: p });
+  };
+
+  const scheduleRefresh = () => {
+    if (refreshTimer != null) window.clearTimeout(refreshTimer);
+    refreshTimer = window.setTimeout(() => {
+      refreshTimer = null;
+      const p = cwd();
+      if (p && props.open) void loadDir(p);
+    }, REFRESH_DEBOUNCE_MS);
+  };
+
+  // Subscription effect: whenever (props.open, cwd) changes, swap
+  // the active watch. The diff vs. watchedPath ensures we never
+  // hold more than one subscription and never strand one open.
+  createEffect(() => {
+    const want = props.open ? cwd() : '';
+    if (want === watchedPath) return;
+    if (watchedPath) sendUnwatch(watchedPath);
+    watchedPath = want;
+    if (want) sendWatch(want);
+  });
 
   onMount(() => {
     props.host.addEventListener('wash:msg', onWashMsg);
@@ -194,6 +261,14 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
   });
   onCleanup(() => {
     props.host.removeEventListener('wash:msg', onWashMsg);
+    if (watchedPath) {
+      sendUnwatch(watchedPath);
+      watchedPath = '';
+    }
+    if (refreshTimer != null) {
+      window.clearTimeout(refreshTimer);
+      refreshTimer = null;
+    }
   });
 
   // loadDir asks wash-fs to list `p`. On success, updates the

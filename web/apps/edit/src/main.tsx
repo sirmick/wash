@@ -207,7 +207,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       const abs = String(reply.path);
       const entries = (reply.entries as Entry[]) ?? [];
       setListings(abs, entries);
-      if (!root()) setRoot(abs);
+      if (!root()) {
+        setRoot(abs);
+        // Watch the root the first time we see it — the sidebar
+        // always shows root-level entries, so we always want
+        // fresh data there. Other dirs subscribe on expand.
+        sendFsWatch(abs);
+      }
     }
   };
 
@@ -479,6 +485,20 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   const handleBE = (m: BEMessage) => {
+    // fs.watch_event arrives unsolicited when a subscribed dir
+    // sees a change. We refresh both the parent of the changed
+    // path (the watch reports children, so the parent is the
+    // watched dir) AND the changed path itself if it happens to
+    // be a tracked dir — covers "the watched dir got deleted, my
+    // grandparent's watcher saw it" cases. scheduleRefresh
+    // no-ops for paths we don't have listings for.
+    if (m.kind === 'fs.watch_event') {
+      const evPath = String(m.path ?? '');
+      if (!evPath) return;
+      scheduleRefresh(parentPath(evPath));
+      scheduleRefresh(evPath);
+      return;
+    }
     // Terminal lifecycle messages: term.opened pairs the
     // server-assigned channel with a pending local term tab;
     // term.closed cleans up state when a PTY ends (user typed
@@ -619,14 +639,65 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     });
   };
 
-  // ---- tree ops ----
+  // ---- tree ops + fs.watch ----
+  //
+  // watching is the set of dirs we currently hold an fs.watch on.
+  // Every expand subscribes (idempotent BE-side), every collapse
+  // releases. The root gets watched at boot via loadDir's first
+  // success path. onCleanup tears every remaining sub down so a
+  // closed editor window doesn't strand watchers in the BE.
+  //
+  // refreshTimers is the per-dir debounce: fsnotify can fire
+  // multiple events for one logical save (write + chmod); 100ms
+  // collapses bursts without making the tree feel stale.
+
+  const watching = new Set<string>();
+  const refreshTimers = new Map<string, number>();
+
+  const sendFsWatch = (p: string) => {
+    if (!p || watching.has(p)) return;
+    watching.add(p);
+    send({ kind: 'fs.watch', path: p });
+  };
+  const sendFsUnwatch = (p: string) => {
+    if (!p || !watching.has(p)) return;
+    watching.delete(p);
+    send({ kind: 'fs.unwatch', path: p });
+  };
+
+  const scheduleRefresh = (dir: string) => {
+    if (!listings[dir]) return;
+    const prev = refreshTimers.get(dir);
+    if (prev != null) window.clearTimeout(prev);
+    const tok = window.setTimeout(() => {
+      refreshTimers.delete(dir);
+      // Only re-list if we still care about this dir — closing the
+      // editor or collapsing the parent could have happened during
+      // the debounce.
+      if (listings[dir]) void loadDir(dir);
+    }, 100);
+    refreshTimers.set(dir, tok);
+  };
 
   const toggleExpand = (path: string) => {
     if (expanded[path]) {
-      setExpanded(produce((s) => { delete s[path]; }));
+      // Collapsing — also collapse + unwatch the whole subtree
+      // so a deep tree doesn't strand watches when the user
+      // closes the top. The trade-off is that re-expanding shows
+      // the children collapsed again, but that beats leaking.
+      const prefix = path === '/' ? '/' : path + '/';
+      setExpanded(produce((s) => {
+        for (const k of Object.keys(s)) {
+          if (k === path || k.startsWith(prefix)) delete s[k];
+        }
+      }));
+      for (const w of Array.from(watching)) {
+        if (w === path || w.startsWith(prefix)) sendFsUnwatch(w);
+      }
     } else {
       setExpanded(path, true);
       if (!listings[path]) void loadDir(path);
+      sendFsWatch(path);
     }
   };
 
@@ -912,6 +983,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       props.host.removeEventListener('wash:state', onState);
       props.host.removeEventListener('keydown', onKey);
       ro.disconnect();
+      // Release every active fs.watch so the BE doesn't strand
+      // them after the editor window closes. Idempotent BE-side,
+      // so we don't need to know which subs survived the run.
+      for (const p of Array.from(watching)) {
+        send({ kind: 'fs.unwatch', path: p });
+      }
+      watching.clear();
+      for (const t of refreshTimers.values()) window.clearTimeout(t);
+      refreshTimers.clear();
       // Dispose every live terminal — pty cleanup is on the BE
       // side via the channel close path, but we still want to
       // drop xterm DOM + listeners.
@@ -1322,6 +1402,13 @@ function joinPath(parent: string, name: string): string {
 function baseName(p: string): string {
   const i = p.lastIndexOf('/');
   return i < 0 ? p : p.slice(i + 1);
+}
+
+function parentPath(p: string): string {
+  if (!p || p === '/') return '/';
+  const i = p.lastIndexOf('/');
+  if (i <= 0) return '/';
+  return p.slice(0, i);
 }
 
 // ---- styles ----
