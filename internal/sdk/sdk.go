@@ -55,11 +55,33 @@ type AppDef struct {
 	// OnAppMsg is the FE → BE pipe for this app's own halves. data is
 	// whatever the FE sent via app_msg.send; the SDK leaves CBOR
 	// decoding to the app since the format is app-private.
+	//
+	// Called only when no From envelope is present — i.e. the message
+	// arrived from this app's own FE, not from another app. Cross-app
+	// deliveries go to OnAppMsgFrom; if OnAppMsgFrom is nil, OnAppMsg
+	// also receives cross-app deliveries (with no way to learn the
+	// sender) so existing apps keep working unchanged.
 	OnAppMsg func(c *Conn, win uint32, data any)
+
+	// OnAppMsgFrom delivers an app_msg sent by *another* instance via
+	// SendAppMsgTo. The sender is router-attested — populated from
+	// the routing envelope, never from the payload. Use this in apps
+	// that act on cross-app requests (wash-priv, wash-bulk-style
+	// services) where the requester's identity matters.
+	OnAppMsgFrom func(c *Conn, win uint32, data any, from wire.Sender)
 
 	// OnSpawnResult delivers the router's reply to a SpawnRequest.
 	// instanceID is non-empty on success; err is non-nil on failure.
 	OnSpawnResult func(c *Conn, appID, instanceID string, err error)
+
+	// OnPrepareSpawnResult delivers the router's reply to a
+	// PrepareSpawn call. On success, the app receives the minted
+	// instance id, the attach token to pass through to the child
+	// (via WASH_ATTACH_TOKEN env), and the registered binary path
+	// to exec. On failure, err is non-nil and other fields are zero.
+	// Used by wash-priv to drive an external (sudo) spawn while the
+	// router still tracks lifecycle.
+	OnPrepareSpawnResult func(c *Conn, reqID uint64, instanceID, attachToken, binary string, err error)
 
 	// OnClipboardChanged fires when another app set the clipboard.
 	// mime is the new content type. Apps that care should follow up
@@ -250,8 +272,18 @@ func (c *Conn) Close() error {
 
 // handshake sends identity (with pid for router-side auth) and
 // reads identity.ack.
+//
+// If WASH_ATTACH_TOKEN is set, the SDK adds it to the identity. The
+// router uses the token to match the dial-back to a pending record
+// minted via EvtPrepareSpawn — required when this process was forked
+// by something other than the router itself (e.g. wash-priv → sudo).
 func (c *Conn) handshake() error {
-	ident := wire.NewIdentityWithPID(c.def.Manifest.ID, ProtocolVersion, c.def.Manifest.Version, os.Getpid())
+	var ident wire.Identity
+	if tok := os.Getenv("WASH_ATTACH_TOKEN"); tok != "" {
+		ident = wire.NewIdentityWithToken(c.def.Manifest.ID, ProtocolVersion, c.def.Manifest.Version, os.Getpid(), tok)
+	} else {
+		ident = wire.NewIdentityWithPID(c.def.Manifest.ID, ProtocolVersion, c.def.Manifest.Version, os.Getpid())
+	}
 	if err := c.writeCtrl(ident); err != nil {
 		return fmt.Errorf("write identity: %w", err)
 	}

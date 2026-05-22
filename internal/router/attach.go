@@ -30,9 +30,34 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/sirmick/wash/internal/wire"
 )
+
+// readPeerUID returns the kernel-attested uid of the connected peer,
+// or UIDNoPeer if conn isn't a unix socket or SO_PEERCRED fails. The
+// router uses this exclusively for the IsRoot decision; on Linux
+// SO_PEERCRED is set at connect time (server side reads it on the
+// accepted socket).
+func readPeerUID(conn net.Conn) uint32 {
+	uc, ok := conn.(*net.UnixConn)
+	if !ok {
+		return UIDNoPeer
+	}
+	raw, err := uc.SyscallConn()
+	if err != nil {
+		return UIDNoPeer
+	}
+	var ucred *syscall.Ucred
+	var ucredErr error
+	if err := raw.Control(func(fd uintptr) {
+		ucred, ucredErr = syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
+	}); err != nil || ucredErr != nil || ucred == nil {
+		return UIDNoPeer
+	}
+	return ucred.Uid
+}
 
 // handleAttach is the wash-frame branch of the control-socket
 // dispatcher. The conn is wrapped in a stream transport that
@@ -40,6 +65,7 @@ import (
 // after a successful attach the conn lifetime is owned by the
 // AppInstance loop, so we DON'T close conn on success.
 func (r *Router) handleAttach(ctx context.Context, conn net.Conn, rd *bufio.Reader) {
+	peerUID := readPeerUID(conn)
 	transport := wire.NewStreamTransport(&bufferedReadWriter{r: rd, w: conn, c: conn})
 	f, err := transport.ReadFrame()
 	if err != nil {
@@ -69,6 +95,56 @@ func (r *Router) handleAttach(ctx context.Context, conn net.Conn, rd *bufio.Read
 		return
 	}
 
+	// Token-attach branch — the child was forked by an external
+	// spawner (e.g. wash-priv under sudo). The token must match a
+	// live pending record; the dialing app_id must match what the
+	// token was bound to; and /proc/<pid>/exe must match the
+	// registered binary path. Token check first because tokens are
+	// the strong signal — pid match is secondary defense.
+	if ident.AttachToken != "" {
+		rec := r.takeTokenPending(ident.AttachToken)
+		if rec == nil {
+			_ = transport.WriteFrame(controlFrame(wire.NewError("forbidden", "attach token expired or unknown")))
+			_ = conn.Close()
+			return
+		}
+		if rec.appID != ident.AppID {
+			_ = transport.WriteFrame(controlFrame(wire.NewError("forbidden", "attach token bound to a different app_id")))
+			_ = conn.Close()
+			return
+		}
+		if !validateAttachBinary(ident.PID, rec.binary) {
+			_ = transport.WriteFrame(controlFrame(wire.NewError("forbidden", "binary does not match the prepared spawn")))
+			_ = conn.Close()
+			return
+		}
+		entry := r.reg.ByID(ident.AppID)
+		if entry == nil {
+			_ = transport.WriteFrame(controlFrame(wire.NewError("forbidden", "app_id no longer in registry")))
+			_ = conn.Close()
+			return
+		}
+		inst := &AppInstance{
+			Transport:  transport,
+			AppID:      ident.AppID,
+			Manifest:   entry.Manifest,
+			PeerUID:    peerUID,
+			InstanceID: rec.instanceID,
+			router:     r,
+		}
+		if inst.Manifest.Surface == SurfaceWindow {
+			inst.WindowID = r.allocWindowID()
+		}
+		ack := wire.NewIdentityAck(inst.InstanceID, inst.WindowID)
+		ack.Session = r.handshakeSession()
+		if err := inst.writeCtrl(ack); err != nil {
+			_ = conn.Close()
+			return
+		}
+		go r.startFreshAttach(ctx, inst)
+		return
+	}
+
 	// Spawn-completion branch — router started a child and is
 	// blocked waiting for it to dial back.
 	if ch, found := r.takePendingAttach(ident.PID); found {
@@ -82,6 +158,7 @@ func (r *Router) handleAttach(ctx context.Context, conn net.Conn, rd *bufio.Read
 			Transport: transport,
 			AppID:     ident.AppID,
 			Manifest:  entry.Manifest,
+			PeerUID:   peerUID,
 			router:    r,
 		}
 		if err := r.acceptIdentity(inst); err != nil {
@@ -110,6 +187,7 @@ func (r *Router) handleAttach(ctx context.Context, conn net.Conn, rd *bufio.Read
 		Transport: transport,
 		AppID:     ident.AppID,
 		Manifest:  entry.Manifest,
+		PeerUID:   peerUID,
 		router:    r,
 	}
 	if err := r.acceptIdentity(inst); err != nil {
@@ -186,7 +264,7 @@ func (r *Router) startFreshAttach(ctx context.Context, inst *AppInstance) {
 			defW = inst.Manifest.Window.DefaultWidth
 			defH = inst.Manifest.Window.DefaultHeight
 		}
-		patches := r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon, inst.Manifest.Name, defW, defH)
+		patches := r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon, inst.Manifest.Name, defW, defH, inst.IsRoot())
 		if err := r.declareAppToAllShells(ctx, inst); err != nil {
 			r.log("declare: %v", err)
 		}

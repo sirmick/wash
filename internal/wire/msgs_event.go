@@ -27,6 +27,16 @@ const (
 	TEvtSpawnErr           = "spawn.err"
 	TEvtNotify             = "notify"
 
+	// EvtPrepareSpawn / .ok / .err — external-spawner protocol used
+	// by wash-priv. The app asks the router to mint a pending-attach
+	// record (instance_id + attach_token) for a given app_id; the
+	// app then fork+exec's the registered binary with sudo, wrapping
+	// it in env vars that include the token. The dial-back is matched
+	// by token, not pid (sudo's exec semantics make pid unreliable).
+	TEvtPrepareSpawn    = "prepare_spawn"
+	TEvtPrepareSpawnOk  = "prepare_spawn.ok"
+	TEvtPrepareSpawnErr = "prepare_spawn.err"
+
 	// Both directions.
 	TEvtAppMsg = "app_msg"
 
@@ -185,6 +195,55 @@ func NewEvtSpawnErr(appID, code, msg string) EvtSpawnErr {
 	return EvtSpawnErr{T: TEvtSpawnErr, AppID: appID, Code: code, Msg: msg}
 }
 
+// EvtPrepareSpawn: app → router. Request the router prepare for a
+// dial-back from a process the *caller* will fork+exec. The router
+// allocates an instance id and an opaque attach token; the caller
+// passes both via env when spawning the binary (under sudo, in
+// wash-priv's case). Token-matched attaches do not collide with
+// pid-matched ones — sudo's fork/exec semantics make pid unreliable.
+//
+// Gated by the "prepare_spawn" capability — wash-priv has it.
+type EvtPrepareSpawn struct {
+	T     string `cbor:"t"`
+	ReqID uint64 `cbor:"req_id"`
+	AppID string `cbor:"app_id"`
+}
+
+func NewEvtPrepareSpawn(reqID uint64, appID string) EvtPrepareSpawn {
+	return EvtPrepareSpawn{T: TEvtPrepareSpawn, ReqID: reqID, AppID: appID}
+}
+
+// EvtPrepareSpawnOk: router → app. Carries the minted instance id,
+// the attach token, and the registered binary path. The caller
+// should exec the binary (or a wrapper such as sudo that ultimately
+// exec's it) with env including WASH_DISPLAY, WASH_PROTO,
+// WASH_APP_ID, WASH_INSTANCE_ID, and WASH_ATTACH_TOKEN.
+type EvtPrepareSpawnOk struct {
+	T           string `cbor:"t"`
+	ReqID       uint64 `cbor:"req_id"`
+	InstanceID  string `cbor:"instance_id"`
+	AttachToken string `cbor:"attach_token"`
+	Binary      string `cbor:"binary"`
+}
+
+func NewEvtPrepareSpawnOk(reqID uint64, instanceID, token, binary string) EvtPrepareSpawnOk {
+	return EvtPrepareSpawnOk{T: TEvtPrepareSpawnOk, ReqID: reqID, InstanceID: instanceID, AttachToken: token, Binary: binary}
+}
+
+// EvtPrepareSpawnErr: router → app. Codes: forbidden (cap missing),
+// not_found (unknown app_id), bad_request (disabled / reserved-id
+// refusal in registry), internal.
+type EvtPrepareSpawnErr struct {
+	T     string `cbor:"t"`
+	ReqID uint64 `cbor:"req_id"`
+	Code  string `cbor:"code"`
+	Msg   string `cbor:"msg"`
+}
+
+func NewEvtPrepareSpawnErr(reqID uint64, code, msg string) EvtPrepareSpawnErr {
+	return EvtPrepareSpawnErr{T: TEvtPrepareSpawnErr, ReqID: reqID, Code: code, Msg: msg}
+}
+
 // Notification levels.
 const (
 	NotifyLevelInfo  = "info"
@@ -255,16 +314,41 @@ func NewEvtClipboardChanged(mime string) EvtClipboardChanged {
 	return EvtClipboardChanged{T: TEvtClipboardChanged, Mime: mime}
 }
 
+// Sender identifies the originating app instance of a relayed
+// app_msg. The router populates it when delivering an EvtAppMsg
+// that arrived via app_msg.send.to (cross-app BE→BE). For ordinary
+// FE→BE deliveries (a window's own FE messaging its own BE) the
+// field is nil — there is no other app to name.
+//
+// Receivers MUST treat From as authoritative; the value comes from
+// the router's view of the sending socket, not from anything the
+// sender wrote into the payload. This is what makes the field
+// unforgeable and the basis for capability prompts in apps like
+// wash-priv.
+type Sender struct {
+	AppID      string `cbor:"app_id,omitempty"`
+	InstanceID string `cbor:"instance_id,omitempty"`
+}
+
 // EvtAppMsg is the FE↔BE app-private pipe. Data is intentionally
-// opaque; the router never inspects it.
+// opaque; the router never inspects it. From is set only on
+// cross-app deliveries — see Sender.
 type EvtAppMsg struct {
-	T    string `cbor:"t"`
-	Win  uint32 `cbor:"win"`
-	Data any    `cbor:"data"`
+	T    string  `cbor:"t"`
+	Win  uint32  `cbor:"win"`
+	Data any     `cbor:"data"`
+	From *Sender `cbor:"from,omitempty"`
 }
 
 func NewEvtAppMsg(win uint32, data any) EvtAppMsg {
 	return EvtAppMsg{T: TEvtAppMsg, Win: win, Data: data}
+}
+
+// NewEvtAppMsgFrom builds an EvtAppMsg whose From field identifies
+// the originating instance. Only the router constructs these — it
+// is the relay path for cross-app app_msg.send.to.
+func NewEvtAppMsgFrom(win uint32, data any, from Sender) EvtAppMsg {
+	return EvtAppMsg{T: TEvtAppMsg, Win: win, Data: data, From: &from}
 }
 
 // Recipient is the address used by EvtAppMsgSendTo and the shell's
@@ -384,6 +468,15 @@ func DecodeEvt(data []byte) (any, error) {
 		return m, cbor.Unmarshal(data, &m)
 	case TEvtAppStateSet:
 		var m EvtAppStateSet
+		return m, cbor.Unmarshal(data, &m)
+	case TEvtPrepareSpawn:
+		var m EvtPrepareSpawn
+		return m, cbor.Unmarshal(data, &m)
+	case TEvtPrepareSpawnOk:
+		var m EvtPrepareSpawnOk
+		return m, cbor.Unmarshal(data, &m)
+	case TEvtPrepareSpawnErr:
+		var m EvtPrepareSpawnErr
 		return m, cbor.Unmarshal(data, &m)
 	}
 	return nil, fmt.Errorf("evt decode: unknown t %q", t)

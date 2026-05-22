@@ -166,7 +166,9 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 		if err := cbor.Unmarshal(payload, &m); err != nil {
 			return err
 		}
-		if c.def.OnAppMsg != nil {
+		if m.From != nil && c.def.OnAppMsgFrom != nil {
+			c.def.OnAppMsgFrom(c, m.Win, m.Data, *m.From)
+		} else if c.def.OnAppMsg != nil {
 			c.def.OnAppMsg(c, m.Win, m.Data)
 		}
 	case wire.TEvtSpawnOk:
@@ -184,6 +186,22 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 		}
 		if c.def.OnSpawnResult != nil {
 			c.def.OnSpawnResult(c, m.AppID, "", fmt.Errorf("%s: %s", m.Code, m.Msg))
+		}
+	case wire.TEvtPrepareSpawnOk:
+		var m wire.EvtPrepareSpawnOk
+		if err := cbor.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		if c.def.OnPrepareSpawnResult != nil {
+			c.def.OnPrepareSpawnResult(c, m.ReqID, m.InstanceID, m.AttachToken, m.Binary, nil)
+		}
+	case wire.TEvtPrepareSpawnErr:
+		var m wire.EvtPrepareSpawnErr
+		if err := cbor.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		if c.def.OnPrepareSpawnResult != nil {
+			c.def.OnPrepareSpawnResult(c, m.ReqID, "", "", "", fmt.Errorf("%s: %s", m.Code, m.Msg))
 		}
 	case wire.TEvtClipboardData:
 		var m wire.EvtClipboardData

@@ -138,6 +138,13 @@ type SessionWindow struct {
 	Z          uint32 `json:"z"`
 	State      string `json:"state"` // normal | minimized | maximized
 	Focused    bool   `json:"focused"`
+	// IsRoot is true when the owning app process runs as uid 0, or
+	// when the app id is reserved as part of the privilege chain
+	// (com.wash.priv). The shell's WM paints a red stripe and ROOT
+	// label on the titlebar of such windows. The router fills this
+	// from SO_PEERCRED at attach time and from the reserved-id
+	// list — never from anything the app declares.
+	IsRoot bool `json:"is_root,omitempty"`
 	// Pre-min/max geometry; preserved so restoreWindow returns to the
 	// user-set frame even after a chain of min → max → restore.
 	RestoreX int32  `json:"restore_x,omitempty"`

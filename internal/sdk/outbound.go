@@ -50,6 +50,27 @@ func (c *Conn) SpawnRequest(appID string) error {
 	return c.writeEvt(wire.NewEvtSpawnRequest(appID))
 }
 
+// PrepareSpawn asks the router to mint a pending-attach record for a
+// child the *caller* will fork+exec itself (typical use: wash-priv
+// launching a binary under sudo). The reply arrives asynchronously
+// via OnPrepareSpawnResult, identified by the caller-chosen reqID.
+//
+// Requires the "prepare_spawn" capability. On success the caller
+// receives (instance_id, attach_token, binary) and is responsible
+// for exec'ing the binary with at least these env vars:
+//
+//	WASH_DISPLAY=<inherited>
+//	WASH_PROTO=1
+//	WASH_APP_ID=<the target app_id>
+//	WASH_INSTANCE_ID=<minted instance_id>
+//	WASH_ATTACH_TOKEN=<minted token>
+//
+// The dial-back from the child is matched by token; /proc/<pid>/exe
+// is verified against the binary path before the attach is accepted.
+func (c *Conn) PrepareSpawn(reqID uint64, appID string) error {
+	return c.writeEvt(wire.NewEvtPrepareSpawn(reqID, appID))
+}
+
 // Notify asks the chrome to show a toast. level is one of "info",
 // "warn", "error" (empty defaults to "info"). v0.1 has no capability
 // gate; the router relays for any app.

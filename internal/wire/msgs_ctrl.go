@@ -52,12 +52,20 @@ const (
 // resolves /proc/<pid>/exe and compares against the registered
 // binary path. Omitted on transports where the check doesn't
 // apply (in-process test loopback).
+//
+// AttachToken is set when the process was forked by an external
+// spawner (e.g. wash-priv launching an app under sudo) that called
+// EvtPrepareSpawn ahead of time. The router matches by token in
+// that case, not pid — sudo's fork/exec semantics make the
+// dialing pid unreliable. Token-matched attaches still go through
+// the /proc/<pid>/exe binary check before being accepted.
 type Identity struct {
-	T       string `json:"t"`
-	AppID   string `json:"app_id"`
-	Proto   int    `json:"proto"`
-	Version string `json:"version"`
-	PID     int    `json:"pid,omitempty"`
+	T           string `json:"t"`
+	AppID       string `json:"app_id"`
+	Proto       int    `json:"proto"`
+	Version     string `json:"version"`
+	PID         int    `json:"pid,omitempty"`
+	AttachToken string `json:"attach_token,omitempty"`
 }
 
 func NewIdentity(appID string, proto int, version string) Identity {
@@ -70,6 +78,13 @@ func NewIdentity(appID string, proto int, version string) Identity {
 // binary.
 func NewIdentityWithPID(appID string, proto int, version string, pid int) Identity {
 	return Identity{T: TIdentity, AppID: appID, Proto: proto, Version: version, PID: pid}
+}
+
+// NewIdentityWithToken identifies the SDK to the router for an
+// externally-spawned attach. Token must match a live pending-attach
+// record minted via EvtPrepareSpawn on the spawner's connection.
+func NewIdentityWithToken(appID string, proto int, version string, pid int, token string) Identity {
+	return Identity{T: TIdentity, AppID: appID, Proto: proto, Version: version, PID: pid, AttachToken: token}
 }
 
 // Session is the bag of session-scoped facts the router ships once

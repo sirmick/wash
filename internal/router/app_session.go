@@ -2,7 +2,9 @@ package router
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +21,25 @@ import (
 // window.close_requested before the router force-kills (WIRE.md §10).
 const closeGrace = 5 * time.Second
 
+// UIDNoPeer is the sentinel uid value used when SO_PEERCRED can't be
+// read — in-process test transports, non-unix sockets. Distinct from
+// uid 0 (root) so IsRoot logic can't mistake an unknown uid for root.
+const UIDNoPeer = ^uint32(0)
+
+// IsRoot reports whether the WM should treat this app instance as
+// part of the privilege chain. True if (a) the process runs as uid 0,
+// or (b) the app id is one of the privilege-chain reserved ids
+// (com.wash.priv). The reserved-id branch exists so wash-priv's own
+// window — which runs as the regular user — still wears the red
+// stripe; safe because reserved ids are gated by the registry to
+// trusted binaries only.
+func (inst *AppInstance) IsRoot() bool {
+	if inst.PeerUID == 0 {
+		return true
+	}
+	return inst.AppID == "com.wash.priv"
+}
+
 // AppInstance is one running app's connection state. The router holds
 // one per spawned process (and one per in-process app in tests).
 type AppInstance struct {
@@ -28,6 +49,13 @@ type AppInstance struct {
 	WindowID   uint32 // 0 if surface=desktop OR Kiosk
 	Manifest   *Manifest
 	Cmd        *exec.Cmd // nil for in-process tests
+
+	// PeerUID is the kernel-attested uid of the connected app process,
+	// read via SO_PEERCRED at attach time. Zero means root; uidNoPeer
+	// (^uint32(0)) means we couldn't determine it (in-process tests,
+	// non-unix transports). The router fills this once at attach and
+	// never mutates it; consumers MUST treat it as authoritative.
+	PeerUID uint32
 
 	// Kiosk is set for the --initial-app instance. It forces the
 	// shell to mount the element at the root surface regardless of
@@ -92,6 +120,7 @@ func (r *Router) handleAppOpts(ctx context.Context, t FrameTransport, manifest *
 		Manifest:  manifest,
 		Cmd:       cmd,
 		Kiosk:     kiosk,
+		PeerUID:   UIDNoPeer,
 		router:    r,
 	}
 	if err := inst.handshake(ctx); err != nil {
@@ -108,7 +137,7 @@ func (r *Router) handleAppOpts(ctx context.Context, t FrameTransport, manifest *
 			defW = inst.Manifest.Window.DefaultWidth
 			defH = inst.Manifest.Window.DefaultHeight
 		}
-		r.broadcastPatches(r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon, inst.Manifest.Name, defW, defH))
+		r.broadcastPatches(r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon, inst.Manifest.Name, defW, defH, inst.IsRoot()))
 		_ = inst.WriteEvt(wire.NewEvtWindowMapped(inst.WindowID))
 	}
 	err := inst.loop(ctx)
@@ -383,6 +412,12 @@ func (inst *AppInstance) handleEvt(payload []byte) error {
 			return err
 		}
 		return inst.handleSpawnRequest(m)
+	case wire.TEvtPrepareSpawn:
+		var m wire.EvtPrepareSpawn
+		if err := cbor.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.handlePrepareSpawn(m)
 	case wire.TEvtNotify:
 		var m wire.EvtNotify
 		if err := cbor.Unmarshal(payload, &m); err != nil {
@@ -433,7 +468,13 @@ func (inst *AppInstance) relayAppMsgCrossInstance(m wire.EvtAppMsgSendTo) error 
 		inst.router.log("app %s app_msg.send.to: %v", inst.AppID, err)
 		return nil
 	}
-	return target.WriteEvt(wire.NewEvtAppMsg(target.WindowID, m.Data))
+	// From identifies the sending instance to the receiver. The
+	// router is the only party that can fill it accurately —
+	// trust-by-relay. wash-priv's approval UI uses this for the
+	// "App <X> wants to run <Y>" prompt; payload-claimed identity
+	// would be spoofable.
+	from := wire.Sender{AppID: inst.AppID, InstanceID: inst.InstanceID}
+	return target.WriteEvt(wire.NewEvtAppMsgFrom(target.WindowID, m.Data, from))
 }
 
 // relayAppMsgToShell forwards an APP_MSG from BE to its FE half.
@@ -533,6 +574,76 @@ func (inst *AppInstance) handleSpawnRequest(m wire.EvtSpawnRequest) error {
 	// the child's handshake.
 	go inst.router.spawnChild(target, inst)
 	return nil
+}
+
+// handlePrepareSpawn enforces the prepare_spawn capability, mints an
+// instance id + attach token, and replies with EvtPrepareSpawnOk so
+// the calling app can fork+exec the registered binary itself. The
+// router does NOT spawn the binary — that's the caller's job, by
+// design (the caller may want to wrap the exec in sudo, a uid switch,
+// or a cgroup move). The dial-back is matched in handleAttach by
+// AttachToken, and /proc/<pid>/exe is still checked against the
+// registered binary path.
+func (inst *AppInstance) handlePrepareSpawn(m wire.EvtPrepareSpawn) error {
+	if !inst.Manifest.HasCapability(CapPrepareSpawn) {
+		return inst.WriteEvt(wire.NewEvtPrepareSpawnErr(m.ReqID, wire.ErrCodeForbidden, "prepare_spawn capability not declared"))
+	}
+	target := inst.router.reg.ByID(m.AppID)
+	if target == nil || !target.Enabled() {
+		return inst.WriteEvt(wire.NewEvtPrepareSpawnErr(m.ReqID, wire.ErrCodeNotFound, "unknown app id"))
+	}
+	if target.Manifest.ProtocolVersion != ProtocolVersion {
+		return inst.WriteEvt(wire.NewEvtPrepareSpawnErr(m.ReqID, wire.ErrCodeIncompatibleProtocol, "protocol mismatch"))
+	}
+	tok, err := mintAttachToken()
+	if err != nil {
+		return inst.WriteEvt(wire.NewEvtPrepareSpawnErr(m.ReqID, wire.ErrCodeInternal, err.Error()))
+	}
+	instanceID := inst.router.allocInstanceID()
+	inst.router.pendingMu.Lock()
+	inst.router.pendingByToken[tok] = &tokenPending{
+		appID:      target.Manifest.ID,
+		instanceID: instanceID,
+		binary:     target.Path,
+		spawner:    inst,
+		expires:    time.Now().Add(60 * time.Second),
+	}
+	inst.router.pendingMu.Unlock()
+	return inst.WriteEvt(wire.NewEvtPrepareSpawnOk(m.ReqID, instanceID, tok, target.Path))
+}
+
+// mintAttachToken returns a 32-byte cryptographic-random hex string.
+// The token is the only secret the router relies on to bind a
+// dial-back to a pending prepare-spawn record; collisions would let
+// an attacker redeem someone else's pending attach. crypto/rand is
+// required.
+func mintAttachToken() (string, error) {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
+// takeTokenPending consumes the pending record for the given token,
+// or returns nil if the token is unknown or expired. Expiry is
+// checked at lookup time so we don't need a separate reaper goroutine
+// for the common case.
+func (r *Router) takeTokenPending(token string) *tokenPending {
+	if token == "" {
+		return nil
+	}
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
+	rec, ok := r.pendingByToken[token]
+	if !ok {
+		return nil
+	}
+	delete(r.pendingByToken, token)
+	if time.Now().After(rec.expires) {
+		return nil
+	}
+	return rec
 }
 
 // spawnChild execs target and runs HandleApp on the resulting transport.

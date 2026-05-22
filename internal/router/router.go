@@ -109,6 +109,15 @@ type Router struct {
 	pendingMu     sync.Mutex
 	pendingAttach map[int]chan attachResult
 
+	// pendingByToken tracks dial-backs from externally-spawned
+	// children (wash-priv's "spawn under sudo" path). Keyed by the
+	// attach token the router minted in EvtPrepareSpawnOk. The
+	// record carries the binary path expected at handshake — the
+	// same /proc/<pid>/exe check used by pid-matched attaches — and
+	// the app_id the token was bound to, so a token leaked to a
+	// different app can't be redeemed.
+	pendingByToken map[string]*tokenPending
+
 	clipboard clipboardState
 
 	sessionMu sync.Mutex
@@ -141,7 +150,22 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		appMsgWatchers: make(map[string]map[string]chan map[string]any),
 		singletons:     make(map[string]*AppInstance),
 		pendingAttach:  make(map[int]chan attachResult),
+		pendingByToken: make(map[string]*tokenPending),
 	}
+}
+
+// tokenPending is a pending-attach record keyed by attach token
+// (Identity.AttachToken). Differs from pendingAttach (pid-keyed) in
+// that the spawner is the one driving fork+exec — the router only
+// validates the eventual dial-back. The record is consumed at
+// successful attach OR by the spawner's connection going away
+// (orphan tokens are reaped in cleanupPendingByToken).
+type tokenPending struct {
+	appID      string         // the token may only be redeemed for this app id
+	instanceID string         // pre-minted; the attaching child gets this back in IdentityAck
+	binary     string         // /proc/<pid>/exe must match this path at attach
+	spawner    *AppInstance   // the app that called PrepareSpawn — used for orphan reap
+	expires    time.Time      // 60s grace; expired tokens are refused
 }
 
 // attachResult is what spawnAndRun reads from a pending-attach
@@ -487,7 +511,7 @@ func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*Ap
 			defW = inst.Manifest.Window.DefaultWidth
 			defH = inst.Manifest.Window.DefaultHeight
 		}
-		patches := r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon, inst.Manifest.Name, defW, defH)
+		patches := r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon, inst.Manifest.Name, defW, defH, inst.IsRoot())
 		// Declare the app to shells BEFORE the patch so they have the
 		// bundle in flight when window.upsert lands.
 		if err := r.declareAppToAllShells(ctx, inst); err != nil {

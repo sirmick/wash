@@ -10,7 +10,21 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 )
+
+// reservedIDs are app ids the router refuses to serve from an
+// untrusted (user-writable) binary. v0.1 has exactly one entry —
+// com.wash.priv, whose red-stripe titlebar treatment depends on no
+// other binary being able to claim that id. A user-writable shadow
+// would let any local app inherit wash-priv's "this is the
+// privilege chain" trust signal.
+//
+// To add a reserved id later, append it here and document the
+// reason at the call site that depends on the guarantee.
+var reservedIDs = map[string]bool{
+	"com.wash.priv": true,
+}
 
 // Entry is one row of the catalog.
 //
@@ -33,11 +47,33 @@ type Registry struct {
 	mu      sync.RWMutex
 	byID    map[string]*Entry
 	entries []*Entry // stable order; user dir wins on id collision
+
+	// trustedDirs are paths under which a binary's uid-0 ownership
+	// requirement is relaxed: the binary still must not be world- or
+	// group-writable, but its owner may be the user running the
+	// router. Used for dev environments where wash-priv is built into
+	// the same out/ dir as wash-router. Empty in production.
+	trustedDirs []string
 }
 
 // NewRegistry returns an empty registry.
 func NewRegistry() *Registry {
 	return &Registry{byID: make(map[string]*Entry)}
+}
+
+// SetTrustedDirs declares additional directories under which binaries
+// are accepted as "trusted" for the purpose of serving reservedIDs,
+// even when not owned by uid 0. Must be called before Scan. Pass
+// absolute paths; relative paths are silently dropped.
+func (r *Registry) SetTrustedDirs(dirs []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.trustedDirs = nil
+	for _, d := range dirs {
+		if filepath.IsAbs(d) {
+			r.trustedDirs = append(r.trustedDirs, filepath.Clean(d))
+		}
+	}
 }
 
 // Scan walks dirs in order, probes every +x regular file, and
@@ -79,6 +115,12 @@ func (r *Registry) probeAndRegister(ctx context.Context, bin string) {
 
 func (r *Registry) appendEntry(e *Entry) {
 	if e.Manifest != nil {
+		// Reserved-id gate: a user-writable binary cannot claim a
+		// reserved id. Mark listed-disabled (never silently dropped)
+		// so the operator can see why the launcher entry is missing.
+		if reservedIDs[e.Manifest.ID] && !r.isTrustedBinary(e.Path) {
+			e.Reason = fmt.Sprintf("reserved id %q requires a trusted binary (root-owned, or under a trusted dir; not world/group-writable)", e.Manifest.ID)
+		}
 		if existing, ok := r.byID[e.Manifest.ID]; ok {
 			// First registration wins (user dir scanned first).
 			_ = existing
@@ -87,6 +129,39 @@ func (r *Registry) appendEntry(e *Entry) {
 		r.byID[e.Manifest.ID] = e
 	}
 	r.entries = append(r.entries, e)
+}
+
+// isTrustedBinary reports whether path is acceptable as a host for a
+// reservedID. Rules: (a) the file MUST NOT be world- or group-
+// writable; (b) either it is owned by uid 0, OR it lives under one of
+// the registry's trustedDirs. Stat failures fail closed.
+func (r *Registry) isTrustedBinary(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return false
+	}
+	sys, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false
+	}
+	if sys.Uid == 0 {
+		return true
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	abs = filepath.Clean(abs)
+	dir := filepath.Dir(abs)
+	for _, td := range r.trustedDirs {
+		if dir == td {
+			return true
+		}
+	}
+	return false
 }
 
 // ByID returns the entry for the given id or nil.

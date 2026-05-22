@@ -137,6 +137,13 @@ func main() {
 	logf := func(format string, args ...any) { logger.Printf(format, args...) }
 
 	reg := router.NewRegistry()
+	// In dev mode, treat the apps dirs themselves as trusted so a
+	// developer-owned wash-priv binary in out/ can serve its reserved
+	// id without a chown root. Production runs (no --dev) require
+	// reserved-id binaries to be uid-0 owned.
+	if cfg.Dev {
+		reg.SetTrustedDirs(cfg.AppsDirs)
+	}
 	scanCtx, scanCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := reg.Scan(scanCtx, cfg.AppsDirs); err != nil {
 		scanCancel()

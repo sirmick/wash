@@ -87,7 +87,7 @@ func (s *windowSession) focusedWindowID() uint32 {
 // calls window.focus on mount, which goes through the normal focus
 // path (router emits Evt events to the affected apps). This keeps
 // one canonical focus-change codepath.
-func (s *windowSession) createWindow(windowID uint32, instanceID, element, icon, title string, defaultW, defaultH uint32) []wire.SessionPatch {
+func (s *windowSession) createWindow(windowID uint32, instanceID, element, icon, title string, defaultW, defaultH uint32, isRoot bool) []wire.SessionPatch {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.windows == nil {
@@ -118,6 +118,7 @@ func (s *windowSession) createWindow(windowID uint32, instanceID, element, icon,
 		Z:          s.nextZ,
 		State:      wire.WindowStateNormal,
 		Focused:    false,
+		IsRoot:     isRoot,
 	}
 	s.windows[windowID] = w
 	return []wire.SessionPatch{{Op: wire.SessionPatchWindowUpsert, Window: w}}

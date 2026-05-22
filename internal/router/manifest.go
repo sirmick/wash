@@ -36,6 +36,15 @@ const (
 // Capability strings recognized by v0.0.
 const (
 	CapSpawn = "spawn"
+
+	// CapPrepareSpawn lets an app ask the router to mint a
+	// pending-attach record (instance_id + attach_token) for an
+	// app_id, after which the calling app is responsible for the
+	// fork+exec itself (e.g. wash-priv launching a registered binary
+	// under sudo). Distinct from CapSpawn because the trust grant
+	// is bigger: the spawner controls how the binary is launched,
+	// including its uid.
+	CapPrepareSpawn = "prepare_spawn"
 )
 
 // MaxIconBytes is the cap on the inline icon data URI per WIRE.md §5.1.
