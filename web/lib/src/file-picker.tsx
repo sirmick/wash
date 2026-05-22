@@ -454,11 +454,11 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
         onDismiss={props.onCancel}
         data-testid={props['data-testid']}
         innerStyle={{
-          // `width: calc(100% - 32px)` leaves 16px of breathing room
-          // on each side of the host window so the picker never
-          // visually touches the edge. The min/max clamp keeps the
-          // box readable on tiny + huge windows respectively.
+          // 16px breathing room on each side and top/bottom of the
+          // host window — matches Overlay defaults but stated here
+          // explicitly so the picker reads self-contained.
           width: 'calc(100% - 32px)',
+          height: 'calc(100% - 32px)',
           'min-width': '320px',
           'max-width': '760px',
           padding: '0',
@@ -471,8 +471,8 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
           style={{
             display: 'flex',
             'flex-direction': 'column',
-            'min-height': '420px',
-            'max-height': '70vh',
+            flex: 1,
+            'min-height': 0,
           }}
         >
           {/* title */}

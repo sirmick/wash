@@ -17,6 +17,15 @@ import (
 //go:embed all:assets
 var assetsFS embed.FS
 
+// defaultWallpaper is the fallback image used when desktop.json has
+// no wallpaper.path set (or the file at that path is missing). Source
+// is "04. Catppuccin Mocha" from github.com/fr0st-xyz/wallz (GPL-3.0,
+// compatible with wash's AGPL-3.0). Adds ~360 KB to the session
+// binary — acceptable for a singleton that ships once per install.
+//
+//go:embed default-wallpaper.png
+var defaultWallpaper []byte
+
 const version = "0.0.0"
 
 func main() {
@@ -38,8 +47,16 @@ func main() {
 			Window:          &sdk.WindowHints{},
 		},
 		Assets:   sub,
+		OnReady:  onReady,
 		OnAppMsg: onAppMsg,
 	})
+}
+
+// onReady ships the initial desktop config and starts watching the
+// config file for live updates from wash-settings.
+func onReady(c *sdk.Conn, _ string, _ uint32) {
+	sendDesktopConfig(c)
+	startConfigWatcher(c)
 }
 
 // washIcon — Lucide sprite symbol name. Session is surface=desktop
@@ -47,12 +64,19 @@ func main() {
 // surfaced in --show-hidden / debug paths.
 const washIcon = "layout-dashboard"
 
-// onAppMsg interprets the FE's launcher click: data is the
-// (CBOR-decoded) JSON the FE sent via app_msg.send. v0.0 expects a
-// {"action":"launch","app_id":"..."} object.
+// onAppMsg interprets the FE's launcher click + desktop-config
+// requests. data is the (CBOR-decoded) JSON the FE sent via
+// app_msg.send.
+//
+//   {"action":"launch","app_id":"…"}    — spawn an app
+//   {"kind":"desktop.request"}          — re-ship desktop.config
 func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 	m, ok := data.(map[any]any)
 	if !ok {
+		return
+	}
+	if kind, _ := m["kind"].(string); kind == "desktop.request" {
+		sendDesktopConfig(c)
 		return
 	}
 	action, _ := m["action"].(string)

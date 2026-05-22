@@ -47,7 +47,15 @@ export const Overlay: ParentComponent<OverlayProps> = (props) => {
           'border-radius': `${tokens.radiusLg}px`,
           padding: `${tokens.spaceXl}px ${tokens.spaceXxl}px`,
           'min-width': '280px',
-          'max-width': '420px',
+          'max-width': 'calc(100% - 32px)',
+          // 16px breathing room top + bottom so the modal never
+          // clips against a short host window. Overrides via
+          // innerStyle still win, but the default already fits.
+          'max-height': 'calc(100% - 32px)',
+          'box-sizing': 'border-box',
+          display: 'flex',
+          'flex-direction': 'column',
+          overflow: 'hidden',
           'box-shadow': tokens.shadowModal,
           font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
           color: tokens.fg,

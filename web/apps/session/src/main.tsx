@@ -29,9 +29,30 @@ interface WindowInfo {
   windowID: number;
   instanceID: string;
   element: string;
+  icon?: string;
   title: string;
   focused: boolean;
   state: 'normal' | 'minimized' | 'maximized';
+}
+
+// DesktopConfigMsg mirrors the BE's desktop.config app_msg. Bytes
+// arrive as base64 — the router CBOR→JSON normalizer encodes byte
+// strings that way (see internal/router/app_session.go toJSON).
+interface DesktopConfigMsg {
+  kind: 'desktop.config';
+  wallpaper: {
+    mode?: 'cover' | 'contain' | 'tile' | 'center' | '';
+    fallback_color?: string;
+    mime?: string;
+    bytes?: string | null;
+  };
+  clock: {
+    format?: '12h' | '24h' | '';
+    show_seconds?: boolean;
+  };
+  taskbar: {
+    position?: 'top' | 'bottom' | '';
+  };
 }
 
 declare global {
@@ -57,10 +78,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [paletteOpen, setPaletteOpen] = createSignal(false);
   const [paletteQuery, setPaletteQuery] = createSignal('');
   const [paletteSelected, setPaletteSelected] = createSignal(0);
-  const [clock, setClock] = createSignal(formatClock());
+  // Desktop config arrives from the BE as desktop.config app_msg
+  // (initial push on connect + every fswatch fire). Defaults below
+  // = "no config file yet", matching the BE's zero-value reply.
+  const [clockFormat, setClockFormat] = createSignal<'12h' | '24h'>('24h');
+  const [showSeconds, setShowSeconds] = createSignal(false);
+  const [taskbarPosition, setTaskbarPosition] = createSignal<'top' | 'bottom'>('bottom');
+  const [clock, setClock] = createSignal(formatClock(clockFormat(), showSeconds()));
   const [screenshotStatus, setScreenshotStatus] = createSignal('');
   const [screenshotVisible, setScreenshotVisible] = createSignal(false);
   let screenshotTimer = 0;
+  let currentObjectURL: string | null = null;
 
   let paletteInputEl: HTMLInputElement | undefined;
   let startBtnEl: HTMLButtonElement | undefined;
@@ -75,6 +103,48 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   const launchApp = (appID: string) => {
     window.wash.sendAppMsg(props.instance, { action: 'launch', app_id: appID });
+  };
+
+  // ---- desktop config ----
+
+  // applyDesktopConfig pushes wallpaper bytes + mode + fallback color
+  // onto the host element's inline style and updates clock/taskbar
+  // signals. Object URLs are revoked when they're replaced — the
+  // browser keeps the blob alive until the URL is gone, and a long
+  // session with many wallpaper changes would otherwise leak memory.
+  const applyDesktopConfig = (cfg: DesktopConfigMsg) => {
+    const wp = cfg.wallpaper || {};
+    const fallback = wp.fallback_color || 'radial-gradient(circle at 30% 20%, #1a1a32 0, #0a0a18 75%)';
+    const mode = wp.mode || 'cover';
+    let imageCSS: string | null = null;
+    let nextURL: string | null = null;
+    if (wp.bytes) {
+      const bytes = decodeBase64(wp.bytes);
+      const blob = new Blob([bytes], { type: wp.mime || 'application/octet-stream' });
+      nextURL = URL.createObjectURL(blob);
+      imageCSS = `url("${nextURL}")`;
+    }
+    // Apply to host. Always set fallback as background-color so an
+    // image with transparency still shows it; image overlays on top.
+    const host = props.host;
+    if (imageCSS) {
+      host.style.background = `${imageCSS} center/cover no-repeat ${fallback.startsWith('radial-') ? '#0a0a18' : fallback}`;
+      host.style.backgroundSize = mode === 'tile' ? 'auto' : mode === 'center' ? 'auto' : mode; // 'cover' | 'contain'
+      host.style.backgroundRepeat = mode === 'tile' ? 'repeat' : 'no-repeat';
+      host.style.backgroundPosition = 'center';
+    } else {
+      host.style.background = fallback;
+      host.style.backgroundSize = '';
+      host.style.backgroundRepeat = '';
+      host.style.backgroundPosition = '';
+    }
+    if (currentObjectURL) URL.revokeObjectURL(currentObjectURL);
+    currentObjectURL = nextURL;
+
+    setClockFormat(cfg.clock?.format === '12h' ? '12h' : '24h');
+    setShowSeconds(!!cfg.clock?.show_seconds);
+    setTaskbarPosition(cfg.taskbar?.position === 'top' ? 'top' : 'bottom');
+    setClock(formatClock(clockFormat(), showSeconds()));
   };
 
   // ---- screenshot ----
@@ -175,6 +245,19 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const offCat = window.wash.onCatalog(setCatalog);
     const offWin = window.wash.onWindowsChanged(setWindows);
 
+    // BE → FE: desktop.config arrives once at startup and again
+    // on every fswatch fire (wash-settings rewrote the file).
+    const onMsg = (ev: Event) => {
+      const data = (ev as CustomEvent).detail as { kind?: string };
+      if (!data || data.kind !== 'desktop.config') return;
+      applyDesktopConfig(data as DesktopConfigMsg);
+    };
+    props.host.addEventListener('wash:msg', onMsg);
+    // Belt + braces: ask for current state in case the BE's initial
+    // push raced our listener install (the SDK runs OnReady before
+    // the FE's connectedCallback in some orderings).
+    window.wash.sendAppMsg(props.instance, { kind: 'desktop.request' });
+
     // Outside-click closes the palette. The start menu owns its
     // own dismissal via @wash/ui Menu.
     const onDocMouseDown = (ev: MouseEvent) => {
@@ -194,22 +277,37 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
     document.addEventListener('mousedown', onDocMouseDown);
     document.addEventListener('keydown', onKey);
-    const clockId = window.setInterval(() => setClock(formatClock()), 30_000);
+    // 30s tick when minutes-only; 1s when seconds are shown.
+    const tickClock = () => setClock(formatClock(clockFormat(), showSeconds()));
+    let clockId = window.setInterval(tickClock, showSeconds() ? 1_000 : 30_000);
+    const offClockSwap = (() => {
+      let lastSecs = showSeconds();
+      return setInterval(() => {
+        if (showSeconds() !== lastSecs) {
+          lastSecs = showSeconds();
+          clearInterval(clockId);
+          clockId = window.setInterval(tickClock, lastSecs ? 1_000 : 30_000);
+        }
+      }, 1_000);
+    })();
 
     onCleanup(() => {
       offCat();
       offWin();
+      props.host.removeEventListener('wash:msg', onMsg);
       document.removeEventListener('mousedown', onDocMouseDown);
       document.removeEventListener('keydown', onKey);
       clearInterval(clockId);
+      clearInterval(offClockSwap);
       if (screenshotTimer) clearTimeout(screenshotTimer);
+      if (currentObjectURL) URL.revokeObjectURL(currentObjectURL);
     });
   });
 
   return (
     <>
       <Banner />
-      <div style={taskbarStyle}>
+      <div style={taskbarPosition() === 'top' ? taskbarStyleTop : taskbarStyle}>
         <IconButton
           ref={(el) => (startBtnEl = el)}
           title="Apps"
@@ -372,16 +470,19 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
         'border-radius': '4px',
         cursor: 'pointer',
         'max-width': '220px',
-        overflow: 'hidden',
-        'text-overflow': 'ellipsis',
-        'white-space': 'nowrap',
         font: '13px system-ui,sans-serif',
         'flex-shrink': 0,
         opacity: minimized() ? 0.6 : 1,
         'font-style': minimized() ? 'italic' : 'normal',
+        display: 'inline-flex',
+        'align-items': 'center',
+        gap: '6px',
       }}
     >
-      {props.win.title}
+      <Show when={props.win.icon}>
+        <SpriteIcon name={props.win.icon!} size={14} />
+      </Show>
+      <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{props.win.title}</span>
     </button>
   );
 };
@@ -556,8 +657,23 @@ const PaletteRow: Component<{
   );
 };
 
-function formatClock(): string {
-  return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+function formatClock(format: '12h' | '24h', showSeconds: boolean): string {
+  const opts: Intl.DateTimeFormatOptions = {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: format === '12h',
+  };
+  if (showSeconds) opts.second = '2-digit';
+  return new Date().toLocaleTimeString([], opts);
+}
+
+// decodeBase64 returns a Uint8Array from the router's base64 string
+// form of CBOR byte data (see internal/router/app_session.go toJSON).
+function decodeBase64(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 // ---- styles ----
@@ -578,6 +694,16 @@ const taskbarStyle: JSX.CSSProperties = {
   padding: '0 6px',
   'z-index': 10000,
   'box-sizing': 'border-box',
+};
+
+// Top-anchored variant: same chrome, bottom-border instead of top-
+// border so the separating line still sits between bar and content.
+const taskbarStyleTop: JSX.CSSProperties = {
+  ...taskbarStyle,
+  bottom: undefined,
+  top: 0,
+  'border-top': undefined,
+  'border-bottom': '1px solid #2a2a4a',
 };
 
 const separatorStyle: JSX.CSSProperties = {
