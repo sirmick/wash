@@ -181,6 +181,29 @@ func (r *Registry) ByID(id string) *Entry {
 	return r.byID[id]
 }
 
+// FindByBasename returns the enabled entry whose binary's basename
+// matches name, or nil. Used by the wash-sudo bare-invocation
+// heuristic: `wash-sudo wash-term` auto-promotes to spawn mode when
+// "wash-term" is the basename of a registered wash app binary.
+// First match wins; the registry's stable scan order makes that
+// deterministic per session.
+func (r *Registry) FindByBasename(name string) *Entry {
+	if name == "" {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, e := range r.entries {
+		if !e.Enabled() {
+			continue
+		}
+		if filepath.Base(e.Path) == name {
+			return e
+		}
+	}
+	return nil
+}
+
 // Entries returns a stable snapshot of all entries (enabled + disabled).
 func (r *Registry) Entries() []*Entry {
 	r.mu.RLock()

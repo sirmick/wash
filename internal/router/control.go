@@ -299,10 +299,22 @@ func writeControlResponse(conn net.Conn, payload map[string]any) {
 // path). The handler closes the conn on return — the outer
 // defer in handleControl actually does this.
 func (r *Router) controlPrivRun(ctx context.Context, conn net.Conn, rd *bufio.Reader, first controlReq) {
+	// Bare-invocation heuristic: `wash-sudo wash-term` (one
+	// positional, no flags, basename matches a registered app's
+	// binary) auto-promotes to spawn mode. Saves the user from
+	// having to know wash-priv's flag surface — wash-term IS a
+	// wash app, treat it as one.
+	if first.AppID == "" && !first.Window && len(first.Argv) == 1 {
+		if entry := r.reg.FindByBasename(first.Argv[0]); entry != nil {
+			first.AppID = entry.Manifest.ID
+			first.Argv = nil
+			r.log("priv.run heuristic: %s → spawn app_id=%s", entry.Path, first.AppID)
+		}
+	}
 	// One ops-friendly log line per CLI invocation. Audit details
 	// land in wash-priv's audit log; this is just "router saw a
 	// wash-sudo invocation arrive."
-	r.log("priv.run req_id=%s argv=%v", first.ReqID, first.Argv)
+	r.log("priv.run req_id=%s argv=%v app_id=%s", first.ReqID, first.Argv, first.AppID)
 	if first.ReqID == "" {
 		writeControlResponse(conn, map[string]any{
 			"t": "error", "code": "bad_request", "msg": "priv.run requires req_id",
@@ -332,33 +344,57 @@ func (r *Router) controlPrivRun(ctx context.Context, conn net.Conn, rd *bufio.Re
 		return
 	}
 
-	// Build the run-inline payload (or window mode if first.Window).
-	// wash-priv reads it via OnAppMsgFrom with from = cli session.
+	// Build the payload kind from the priv.run flags:
+	//
+	//   AppID set        → kind:"spawn" (launch a registered wash app
+	//                       as root via PrepareSpawn — long-running UI)
+	//   Window + argv    → kind:"run"   (wash-term --exec argv as root,
+	//                       new terminal window with the output)
+	//   plain argv       → kind:"run_inline" (sudo argv with streamed
+	//                       stdin/stdout/stderr back to wash-sudo)
 	//
 	// cli_origin carries router-attested peer info (pid + uid +
 	// resolved tty + comm). The fields are derived from
 	// SO_PEERCRED + /proc, so wash-sudo can't spoof them — by the
 	// time the payload reaches wash-priv, the values are the
 	// router's view, not anything the client wrote.
-	kind := "run_inline"
-	if first.Window {
-		kind = "run"
-	}
 	info := readProcInfo(session.peerPID)
-	payload := map[string]any{
-		"kind":      kind,
-		"req_id":    first.ReqID,
-		"argv":      first.Argv,
-		"cwd":       first.Cwd,
-		"reason":    first.Reason,
-		"env":       first.Env,
-		"no_prompt": first.NoPrompt,
-		"cli_origin": map[string]any{
-			"pid":  int64(info.PID),
-			"uid":  int64(info.UID),
-			"comm": info.Comm,
-			"tty":  info.TTY,
-		},
+	originMap := map[string]any{
+		"pid":  int64(info.PID),
+		"uid":  int64(info.UID),
+		"comm": info.Comm,
+		"tty":  info.TTY,
+	}
+	var payload map[string]any
+	switch {
+	case first.AppID != "":
+		payload = map[string]any{
+			"kind":       "spawn",
+			"req_id":     first.ReqID,
+			"app_id":     first.AppID,
+			"args":       first.Argv,
+			"reason":     first.Reason,
+			"cli_origin": originMap,
+		}
+	case first.Window:
+		payload = map[string]any{
+			"kind":       "run",
+			"req_id":     first.ReqID,
+			"argv":       first.Argv,
+			"reason":     first.Reason,
+			"cli_origin": originMap,
+		}
+	default:
+		payload = map[string]any{
+			"kind":       "run_inline",
+			"req_id":     first.ReqID,
+			"argv":       first.Argv,
+			"cwd":        first.Cwd,
+			"reason":     first.Reason,
+			"env":        first.Env,
+			"no_prompt":  first.NoPrompt,
+			"cli_origin": originMap,
+		}
 	}
 	from := wire.Sender{AppID: "cli.wash.sudo", InstanceID: session.instanceID}
 	if err := target.WriteEvt(wire.NewEvtAppMsgFrom(target.WindowID, payload, from)); err != nil {

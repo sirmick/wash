@@ -185,9 +185,9 @@ func runCommand(sock string, argv []string, reason string, window bool, noPrompt
 }
 
 // runApp is --app: spawn a registered wash app as root via the
-// existing wash-priv spawn path. We tell the router this is a
-// window-mode invocation (no inline streaming makes sense for a
-// long-lived wash app) and exit as soon as the spawn fires.
+// existing wash-priv spawn path. We exit as soon as the spawn fires
+// — the launched app is long-running and has its own window; there's
+// nothing for wash-sudo to wait on once PrepareSpawn returns.
 func runApp(sock string, appID, reason string, noPrompt bool) int {
 	conn, err := dial(sock)
 	if err != nil {
@@ -198,20 +198,17 @@ func runApp(sock string, appID, reason string, noPrompt bool) int {
 	req := map[string]any{
 		"t":         "priv.run",
 		"req_id":    newReqID(),
-		"argv":      []string{}, // unused
 		"app_id":    appID,
-		"window":    true,
 		"no_prompt": noPrompt,
 		"reason":    reason,
 	}
-	// For --app we'd ideally have a dedicated control op; reusing
-	// priv.run with app_id requires a small extension on the router
-	// side. For now this path is documented but not exercised; the
-	// e2e and demos use the positional-argv path.
 	if err := writeJSON(conn, req); err != nil {
 		fmt.Fprintf(os.Stderr, "wash-sudo: write request: %v\n", err)
 		return 1
 	}
+	// inline=false: wash-sudo returns on the first "spawned" event
+	// rather than waiting for a priv.result (the spawned app stays
+	// alive in its own window).
 	return drive(conn, req["req_id"].(string), false)
 }
 
@@ -274,7 +271,7 @@ func drive(conn net.Conn, reqID string, inline bool) int {
 				} else {
 					_, _ = os.Stdout.Write(b)
 				}
-			case "priv.result":
+			case "priv.result", "result":
 				exit := toInt(data["exit_code"])
 				if errMsg, _ := data["error"].(string); errMsg != "" {
 					fmt.Fprintf(os.Stderr, "wash-sudo: %s\n", errMsg)
@@ -288,11 +285,13 @@ func drive(conn net.Conn, reqID string, inline bool) int {
 				fmt.Fprintf(os.Stderr, "wash-sudo: %s\n", reason)
 				return 1
 			case "spawned":
-				// --window path: target instance launched; we don't
-				// wait for its exit (the user has a window for that).
-				if !inline {
-					return 0
-				}
+				// Spawn-style requests (explicit --app, or bare argv
+				// that the router heuristically promoted to spawn)
+				// finish here — the launched app owns its lifecycle
+				// in its own window. inline=true requests that get a
+				// spawned event are the auto-promotion case; same
+				// success semantics.
+				return 0
 			case "error":
 				code, _ := data["code"].(string)
 				msg, _ := data["msg"].(string)
