@@ -173,6 +173,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // Word-wrap toggle. Recompiled into the langCompartment so we
   // don't need a second compartment for it.
   const [wordWrap, setWordWrap] = createSignal(false);
+
+  // Sidebar drag/drop. dropTargetPath drives the visual highlight
+  // on the hovered folder row ('' = no target = drop lands in
+  // root). dropMenu is non-null while the alt-drop overlay is up.
+  // renaming holds the inline-edit draft when the user picks
+  // Rename from the alt-menu.
+  const [dropTargetPath, setDropTargetPath] = createSignal('');
+  const [dropMenu, setDropMenu] = createSignal<
+    | null
+    | { x: number; y: number; src: string; destDir: string }
+  >(null);
+  const [renaming, setRenaming] = createSignal<{ path: string; draft: string } | null>(null);
   // untitledCounter — monotonically increasing index for naming
   // fresh Untitled-N buffers. Resets only on app remount.
   let untitledCounter = 0;
@@ -644,6 +656,159 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         rows: term.rows,
       });
     });
+  };
+
+  // ---- sidebar drag / drop / rename / delete ----
+  //
+  // Single-file scope: drag a row, drop on a folder = move. Hold
+  // Alt during the drop to pop a menu (Move / Copy / Rename /
+  // Delete). Move uses the editor BE's rename op (in-process fast
+  // path); Copy + recursive Delete go through wash-bulk for the
+  // queueing + progress + conflict-prompt UX. Cross-window drags
+  // (fm → editor or vice versa) work for free because both apps
+  // use the same MIME constant.
+  //
+  // fs.watch refreshes the affected dirs on completion, so we
+  // don't need to manually re-list after rename/delete.
+
+  const DRAG_MIME = 'application/x-wash-paths';
+
+  const readDragPaths = (ev: DragEvent): string[] => {
+    if (!ev.dataTransfer) return [];
+    const json = ev.dataTransfer.getData(DRAG_MIME);
+    if (!json) return [];
+    try {
+      const arr = JSON.parse(json);
+      if (Array.isArray(arr)) return arr.filter((s) => typeof s === 'string');
+    } catch {
+      /* ignore */
+    }
+    return [];
+  };
+
+  const onRowDragStart = (ev: DragEvent, p: string) => {
+    if (!ev.dataTransfer) return;
+    ev.dataTransfer.effectAllowed = 'copyMove';
+    // JSON array with one path keeps the wire format identical to
+    // fm's multi-select payload — future-proofs cross-window drops.
+    ev.dataTransfer.setData(DRAG_MIME, JSON.stringify([p]));
+    ev.dataTransfer.setData('text/plain', p);
+  };
+  const onRowDragEnd = () => setDropTargetPath('');
+
+  const onRowDragOver = (ev: DragEvent, rowPath: string) => {
+    if (!ev.dataTransfer || !ev.dataTransfer.types.includes(DRAG_MIME)) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.dataTransfer.dropEffect = ev.altKey ? 'copy' : 'move';
+    if (dropTargetPath() !== rowPath) setDropTargetPath(rowPath);
+  };
+  const onRowDrop = (ev: DragEvent, rowPath: string) => {
+    const paths = readDragPaths(ev);
+    if (paths.length === 0) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    setDropTargetPath('');
+    if (ev.altKey) {
+      const rect = props.host.getBoundingClientRect();
+      setDropMenu({
+        x: ev.clientX - rect.left + 8,
+        y: ev.clientY - rect.top + 8,
+        src: paths[0],
+        destDir: rowPath,
+      });
+      return;
+    }
+    void commitMove(paths[0], rowPath);
+  };
+
+  const onListDragOver = (ev: DragEvent) => {
+    if (!ev.dataTransfer || !ev.dataTransfer.types.includes(DRAG_MIME)) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = ev.altKey ? 'copy' : 'move';
+    if (dropTargetPath() !== '') setDropTargetPath('');
+  };
+  const onListDrop = (ev: DragEvent) => {
+    const paths = readDragPaths(ev);
+    if (paths.length === 0) return;
+    ev.preventDefault();
+    setDropTargetPath('');
+    const dest = root();
+    if (!dest) return;
+    if (ev.altKey) {
+      const rect = props.host.getBoundingClientRect();
+      setDropMenu({
+        x: ev.clientX - rect.left + 8,
+        y: ev.clientY - rect.top + 8,
+        src: paths[0],
+        destDir: dest,
+      });
+      return;
+    }
+    void commitMove(paths[0], dest);
+  };
+
+  // commitMove uses the editor BE's rename op — single-path,
+  // in-process, fast. fm-direct semantics: same-parent drops are
+  // silent no-ops, dropping a dir onto itself / a descendant is
+  // refused.
+  const commitMove = async (src: string, destDir: string) => {
+    if (!src || !destDir) return;
+    if (parentPath(src) === destDir) return;
+    if (destDir === src || destDir.startsWith(src + '/')) return;
+    const to = joinPath(destDir, baseName(src));
+    await sendWithReply({ kind: 'rename', from: src, to });
+    // fs.watch on the parents catches up automatically.
+  };
+
+  // commitCopy always routes through wash-bulk. Copy has no
+  // in-process fast path because recursive directory copies need
+  // queueing + progress + Replace prompts that the bulk-ops UI
+  // already provides.
+  const commitCopy = (src: string, destDir: string) => {
+    if (!src || !destDir) return;
+    if (destDir === src || destDir.startsWith(src + '/')) return;
+    window.wash.sendAppMsgTo(
+      { app_id: 'com.wash.bulk' },
+      { kind: 'enqueue', op: 'copy', paths: [src], dest: destDir },
+    );
+  };
+
+  // commitDelete tries the editor BE's fast-path single-file
+  // delete first. If the path is a non-empty dir, the BE returns
+  // not_empty and we re-route through wash-bulk for the recursive
+  // walk + queued progress.
+  const commitDelete = async (path: string) => {
+    if (!path) return;
+    const reply = await sendWithReply({ kind: 'delete', path });
+    if (reply.kind === 'delete_err' && (reply as { code?: string }).code === 'not_empty') {
+      window.wash.sendAppMsgTo(
+        { app_id: 'com.wash.bulk' },
+        { kind: 'enqueue', op: 'delete', paths: [path] },
+      );
+    }
+  };
+
+  // Inline rename — the same flow fm has. Picking Rename from
+  // the alt-drop menu pops an inline input on the row at the
+  // dragged path; Enter commits, Escape cancels.
+  const startRename = (p: string) => {
+    setRenaming({ path: p, draft: baseName(p) });
+  };
+  const cancelRename = () => setRenaming(null);
+  const commitRenameDraft = async () => {
+    const r = renaming();
+    if (!r) return;
+    const draft = r.draft.trim();
+    setRenaming(null);
+    if (draft === '' || draft === baseName(r.path)) return;
+    if (draft.includes('/')) return;
+    const to = joinPath(parentPath(r.path), draft);
+    await sendWithReply({ kind: 'rename', from: r.path, to });
+  };
+
+  const openInFm = () => {
+    send({ kind: 'spawn', app_id: 'com.wash.fm' });
   };
 
   // ---- tree ops + fs.watch ----
@@ -1170,8 +1335,28 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       >
         {/* sidebar */}
         <div data-testid="edit-sidebar" style={sidebarStyle}>
-          <div style={sidebarHeaderStyle}>{root() || 'loading…'}</div>
-          <div style={sidebarListStyle}>
+          <div style={sidebarHeaderStyle}>
+            <span style={{
+              flex: 1,
+              overflow: 'hidden',
+              'text-overflow': 'ellipsis',
+              'white-space': 'nowrap',
+            }}>{root() || 'loading…'}</span>
+            <button
+              type="button"
+              data-testid="edit-open-in-fm"
+              title="Open in fm"
+              onClick={openInFm}
+              style={sidebarHeaderBtnStyle}
+            >
+              <FolderIcon size={12} />
+            </button>
+          </div>
+          <div
+            style={sidebarListStyle}
+            onDragOver={onListDragOver}
+            onDrop={onListDrop}
+          >
             <For each={visibleRows()}>
               {(row) => {
                 const sel = () => selectedPath() === row.path;
@@ -1181,8 +1366,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                     data-testid={`edit-entry-${row.entry.name}`}
                     data-type={row.entry.type}
                     data-selected={sel() ? 'true' : undefined}
-                    style={rowStyle(sel(), row.depth)}
-                    onClick={() => onRowClick(row)}
+                    data-drop-target={dropTargetPath() === row.path ? 'true' : undefined}
+                    draggable="true"
+                    onDragStart={(ev) => onRowDragStart(ev, row.path)}
+                    onDragEnd={onRowDragEnd}
+                    onDragOver={row.entry.type === 'dir' ? (ev) => onRowDragOver(ev, row.path) : undefined}
+                    onDrop={row.entry.type === 'dir' ? (ev) => onRowDrop(ev, row.path) : undefined}
+                    style={rowStyleDropAware(sel(), dropTargetPath() === row.path, row.depth)}
+                    onClick={() => {
+                      if (renaming()?.path === row.path) return;
+                      onRowClick(row);
+                    }}
                   >
                     {/* chevron + icon + name — same visual contract as
                         wash-fm's TreeRow: 12px chevron slot, 14px icon
@@ -1219,7 +1413,34 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                       'text-overflow': 'ellipsis',
                       'white-space': 'nowrap',
                     }}>
-                      {row.entry.name}
+                      <Show
+                        when={renaming()?.path === row.path}
+                        fallback={row.entry.name}
+                      >
+                        <input
+                          data-testid="edit-rename-input"
+                          ref={(el) => setTimeout(() => { el.focus(); el.select(); }, 0)}
+                          type="text"
+                          value={renaming()!.draft}
+                          onInput={(e) => {
+                            const r = renaming();
+                            if (r) setRenaming({ ...r, draft: e.currentTarget.value });
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => {
+                            e.stopPropagation();
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              void commitRenameDraft();
+                            } else if (e.key === 'Escape') {
+                              e.preventDefault();
+                              cancelRename();
+                            }
+                          }}
+                          onBlur={() => void commitRenameDraft()}
+                          style={renameInputStyle}
+                        />
+                      </Show>
                     </span>
                   </div>
                 );
@@ -1382,6 +1603,56 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         onCancel={() => setPicker(null)}
         data-testid="edit-picker"
       />
+
+      {/* alt-drop menu — appears when the user drops with Alt held.
+          Move + Copy use the drop target; Rename + Delete operate
+          on the dragged path. */}
+      <Show when={dropMenu()}>
+        <Menu
+          x={dropMenu()!.x}
+          y={dropMenu()!.y}
+          onDismiss={() => setDropMenu(null)}
+          data-testid="edit-drop-menu"
+        >
+          <MenuItem
+            label="Move here"
+            onClick={() => {
+              const d = dropMenu()!;
+              setDropMenu(null);
+              void commitMove(d.src, d.destDir);
+            }}
+            data-testid="edit-drop-move"
+          />
+          <MenuItem
+            label="Copy here"
+            onClick={() => {
+              const d = dropMenu()!;
+              setDropMenu(null);
+              commitCopy(d.src, d.destDir);
+            }}
+            data-testid="edit-drop-copy"
+          />
+          <MenuSeparator />
+          <MenuItem
+            label="Rename"
+            onClick={() => {
+              const d = dropMenu()!;
+              setDropMenu(null);
+              startRename(d.src);
+            }}
+            data-testid="edit-drop-rename"
+          />
+          <MenuItem
+            label="Delete"
+            onClick={() => {
+              const d = dropMenu()!;
+              setDropMenu(null);
+              void commitDelete(d.src);
+            }}
+            data-testid="edit-drop-delete"
+          />
+        </Menu>
+      </Show>
     </>
   );
 };
@@ -1536,13 +1807,38 @@ const sidebarStyle: JSX.CSSProperties = {
 };
 
 const sidebarHeaderStyle: JSX.CSSProperties = {
-  padding: '6px 10px',
+  display: 'flex',
+  'align-items': 'center',
+  gap: '6px',
+  padding: '4px 6px 4px 10px',
   font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
   color: tokens.fgMuted,
   'border-bottom': `1px solid ${tokens.borderMenu}`,
-  overflow: 'hidden',
-  'text-overflow': 'ellipsis',
-  'white-space': 'nowrap',
+};
+
+const sidebarHeaderBtnStyle: JSX.CSSProperties = {
+  background: 'transparent',
+  color: tokens.fgMuted,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}px`,
+  width: '22px',
+  height: '22px',
+  display: 'inline-flex',
+  'align-items': 'center',
+  'justify-content': 'center',
+  cursor: 'pointer',
+  'flex-shrink': 0,
+};
+
+const renameInputStyle: JSX.CSSProperties = {
+  width: '100%',
+  background: '#10101a',
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderFocus}`,
+  'border-radius': `${tokens.radiusSm}px`,
+  padding: '0 4px',
+  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  outline: 'none',
 };
 
 const sidebarListStyle: JSX.CSSProperties = {
@@ -1550,6 +1846,19 @@ const sidebarListStyle: JSX.CSSProperties = {
   overflow: 'auto',
   padding: '4px 0',
 };
+
+function rowStyleDropAware(selected: boolean, dropTarget: boolean, depth: number): JSX.CSSProperties {
+  // Drop-target highlight takes precedence over selected so the
+  // user always sees where the drop will land. Same colour scheme
+  // wash-fm uses for visual consistency between the two trees.
+  const base = rowStyle(selected, depth);
+  if (!dropTarget) return base;
+  return {
+    ...base,
+    background: '#2a3a5a',
+    outline: '1px solid #4a6ab0',
+  };
+}
 
 function rowStyle(selected: boolean, depth: number): JSX.CSSProperties {
   // Match wash-fm's TreeRow visual: 4px gap between chevron / icon /

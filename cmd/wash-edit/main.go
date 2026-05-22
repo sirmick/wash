@@ -114,6 +114,10 @@ func main() {
 			Icon:            editIcon,
 			Instancing:      sdk.InstancingMulti,
 			Window:          &sdk.WindowHints{DefaultWidth: 900, DefaultHeight: 600},
+			// Declared so the FE's "Open in fm" button can ask the
+			// router to spawn fm via SpawnRequest. The router checks
+			// this capability before honoring the request.
+			Capabilities: []string{sdk.CapSpawn},
 		},
 		Assets:   sub,
 		OnReady:  onReady,
@@ -190,6 +194,25 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		path, _ := m["path"].(string)
 		content, _ := m["content"].(string)
 		doWrite(c, id, path, content)
+	case "rename":
+		from, _ := m["from"].(string)
+		to, _ := m["to"].(string)
+		replace, _ := m["replace"].(bool)
+		doRename(c, id, from, to, replace)
+	case "delete":
+		path, _ := m["path"].(string)
+		doDelete(c, id, path)
+	case "spawn":
+		// FE-driven app spawn (e.g. the "Open in fm" button). The
+		// router validates CapSpawn on the manifest; without it,
+		// SpawnRequest returns ErrCodeForbidden.
+		appID, _ := m["app_id"].(string)
+		if appID == "" {
+			return
+		}
+		if err := c.SpawnRequest(appID); err != nil {
+			log.Printf("wash-edit spawn %s: %v", appID, err)
+		}
 	case "save_state":
 		// Persist the FE's state blob via the SDK's SaveState. The
 		// router stores it keyed by this instance's id and replays
@@ -403,6 +426,44 @@ func doRead(c *sdk.Conn, id, path string) {
 		Size:      info.Size(),
 		Binary:    binary,
 		Truncated: truncated,
+	})
+}
+
+// doRename wraps internal/fs.Rename. Mirrors wash-fm's protocol:
+// reply with rename_ok { from, to } on success, rename_err on
+// failure. `replace=true` removes a clobber-able destination
+// first; non-empty dirs return code=not_empty_dir.
+func doRename(c *sdk.Conn, id, from, to string, replace bool) {
+	src, dst, err := editFS.Rename(from, to, replace)
+	if err != nil {
+		path := src
+		if path == "" {
+			path = from
+		}
+		sendErr(c, "rename_err", id, path, wfs.ErrCode(err), err.Error())
+		return
+	}
+	_ = c.SendAppMsg(map[string]any{
+		"kind": "rename_ok", "id": id, "from": src, "to": dst,
+	})
+}
+
+// doDelete wraps internal/fs.Delete for single-path deletes. The
+// editor's FE routes recursive deletes (non-empty dirs, multi)
+// through wash-bulk instead — fm-direct is the synchronous fast
+// path for the easy case.
+func doDelete(c *sdk.Conn, id, path string) {
+	abs, err := editFS.Delete(path)
+	if err != nil {
+		p := abs
+		if p == "" {
+			p = path
+		}
+		sendErr(c, "delete_err", id, p, wfs.ErrCode(err), err.Error())
+		return
+	}
+	_ = c.SendAppMsg(map[string]any{
+		"kind": "delete_ok", "id": id, "path": abs,
 	})
 }
 
