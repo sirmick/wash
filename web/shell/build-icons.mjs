@@ -27,6 +27,7 @@ const ICONS = [
   'list-checks',    // wash-bulk
   'file-pen',       // wash-edit
   'settings',       // wash-settings
+  'activity',       // wash-top
 ];
 
 // Resolve via require so pnpm's nested layout is fine.
