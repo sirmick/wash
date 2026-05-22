@@ -14,7 +14,7 @@ GOARCH  ?= amd64
 GOFLAGS := -trimpath -ldflags=-s\ -w -tags netgo,osusergo
 
 OUT     := out
-BINS    := wash-router wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-settings wash-top wash-launch
+BINS    := wash-router wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-settings wash-top wash-priv wash-launch
 TARGETS := $(addprefix $(OUT)/,$(BINS))
 
 # Test app: not part of the default build; built explicitly with
@@ -60,6 +60,9 @@ SETTINGS_STAMP  := $(SETTINGS_ASSETS)/.stamp
 
 TOP_ASSETS      := cmd/wash-top/assets
 TOP_STAMP       := $(TOP_ASSETS)/.stamp
+
+PRIV_ASSETS     := cmd/wash-priv/assets
+PRIV_STAMP      := $(PRIV_ASSETS)/.stamp
 
 .PHONY: all
 all: $(TARGETS)
@@ -114,6 +117,10 @@ web-settings: web-deps
 web-top: web-deps
 	@cd web && $(PNPM) --filter @wash/app-top run build
 
+.PHONY: web-priv
+web-priv: web-deps
+	@cd web && $(PNPM) --filter @wash/app-priv run build
+
 # embed-into-cmd helper. Usage: $(call embed,<src dist dir>,<dst assets dir>)
 define embed_dist
 	rm -rf $(2)
@@ -157,6 +164,9 @@ $(SETTINGS_STAMP): web-settings
 $(TOP_STAMP): web-top
 	$(call embed_dist,web/apps/top/dist,$(TOP_ASSETS))
 
+$(PRIV_STAMP): web-priv
+	$(call embed_dist,web/apps/priv/dist,$(PRIV_ASSETS))
+
 # ----- go stage -----
 
 $(OUT)/wash-router: $(ROUTER_STAMP) | $(OUT)
@@ -188,6 +198,9 @@ $(OUT)/wash-settings: $(SETTINGS_STAMP) | $(OUT)
 
 $(OUT)/wash-top: $(TOP_STAMP) | $(OUT)
 	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-top
+
+$(OUT)/wash-priv: $(PRIV_STAMP) | $(OUT)
+	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-priv
 
 # wash-launch is a CLI, not an app. No FE bundle, no embedded assets.
 $(OUT)/wash-launch: | $(OUT)

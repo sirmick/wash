@@ -72,6 +72,10 @@ export interface SessionWindow {
   restore_y?: number;
   restore_w?: number;
   restore_h?: number;
+  // is_root is router-attested (SO_PEERCRED uid==0, or app_id is in
+  // the privilege-chain reserved set). When true the WM paints a red
+  // stripe + ROOT label on the titlebar. Never set by the app itself.
+  is_root?: boolean;
 }
 
 interface ShellSessionSnapshot {

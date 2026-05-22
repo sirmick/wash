@@ -33,6 +33,9 @@ export interface Win {
   restoreY?: number;
   restoreW?: number;
   restoreH?: number;
+  // isRoot is router-attested; renders the red ROOT stripe in the
+  // titlebar. See SessionWindow.is_root in main.tsx.
+  isRoot?: boolean;
 }
 
 export interface DesktopMount {
@@ -164,6 +167,7 @@ function fromSessionWindow(sw: SessionWindow): Win {
     restoreY: sw.restore_y,
     restoreW: sw.restore_w,
     restoreH: sw.restore_h,
+    isRoot: sw.is_root,
   };
 }
 

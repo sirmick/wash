@@ -12,7 +12,8 @@ const (
 	InstancingSingle    = "single"
 	InstancingSingleton = "singleton"
 
-	CapSpawn = "spawn"
+	CapSpawn        = "spawn"
+	CapPrepareSpawn = "prepare_spawn"
 )
 
 // Manifest is the manifest schema from WIRE.md §5.1, kept here so

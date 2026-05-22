@@ -6,12 +6,23 @@
 //
 // One pty session per raw channel. Layer 3 (tabs) adds multiple
 // channels per window; for now: one tab per window.
+//
+// CLI:
+//
+//	wash-term                # spawn the user's $SHELL
+//	wash-term --exec ARGS... # spawn ARGS instead; tab closes on exit
+//
+// --exec is what wash-priv uses to run a single command as root in a
+// real terminal window — sudo doesn't need to live in this app
+// because the privilege escalation already happened at wash-priv's
+// fork+exec; wash-term just receives the args and runs them.
 package main
 
 import (
 	"context"
 	"embed"
 	"errors"
+	"flag"
 	"io"
 	"io/fs"
 	"log"
@@ -23,6 +34,11 @@ import (
 	"github.com/creack/pty"
 	"github.com/sirmick/wash/internal/sdk"
 )
+
+// execArgv is the user-supplied --exec ARGS... When non-nil, openTab
+// runs argv directly instead of $SHELL, and the tab autocloses on
+// exit. Parsed once in main; immutable thereafter.
+var execArgv []string
 
 // isPtyTerm reports whether err is the kind of error you see when a
 // pty's slave side has gone away. On Linux, reading the master after
@@ -53,6 +69,21 @@ type state struct {
 var st state
 
 func main() {
+	// Parse our flags before sdk.Main; --wash-manifest is intercepted
+	// in sdk.Main before any of our code runs, so flag parsing only
+	// matters for normal startup. ContinueOnError lets unknown flags
+	// pass through unscathed.
+	flags := flag.NewFlagSet("wash-term", flag.ContinueOnError)
+	useExec := flags.Bool("exec", false, "treat all positional args as the command to run instead of $SHELL")
+	flags.SetOutput(io.Discard)
+	_ = flags.Parse(os.Args[1:])
+	if *useExec {
+		execArgv = flags.Args()
+		if len(execArgv) == 0 {
+			log.Fatal("wash-term: --exec requires at least one positional argument")
+		}
+	}
+
 	sub, err := fs.Sub(assetsFS, "assets")
 	if err != nil {
 		log.Fatalf("wash-term: assets: %v", err)
@@ -95,8 +126,19 @@ func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
 		_ = c.SendAppMsg(map[string]any{"kind": "tab_error", "msg": err.Error()})
 		return
 	}
-	shell := userShell()
-	cmd := exec.Command(shell)
+	var cmd *exec.Cmd
+	var shell string
+	if len(execArgv) > 0 {
+		// --exec mode: run the requested argv. argv[0] is resolved
+		// via $PATH (exec.Command does that). The tab autocloses on
+		// exit so wash-priv → wash-term --exec apt-update flows
+		// finish naturally.
+		cmd = exec.Command(execArgv[0], execArgv[1:]...)
+		shell = execArgv[0]
+	} else {
+		shell = userShell()
+		cmd = exec.Command(shell)
+	}
 	// Pass WASH_DISPLAY through to the shell so binaries the user
 	// runs (e.g. `wash-fm` in a wash-term tab) attach to this
 	// session via the X-style env var. os.Environ() already

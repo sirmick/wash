@@ -191,9 +191,24 @@ export function FloatingWindow(props: WindowProps) {
     }
   };
 
+  // Titlebar background tracks focus, EXCEPT for windows whose backing
+  // process is uid 0 (or one of the privilege-chain reserved ids): a
+  // dark red stripe identifies the privilege scope at a glance, and
+  // the value comes from router-attested SessionWindow.is_root — apps
+  // cannot self-declare it. The non-focused tone is a darker maroon
+  // so focus is still distinguishable.
+  const titlebarBackground = () => {
+    if (props.win.isRoot) {
+      return focused() === props.win.windowID ? '#7a1f1f' : '#5a1818';
+    }
+    return focused() === props.win.windowID ? '#33387a' : '#2a2a2a';
+  };
+
   return (
     <div
       class="wash-window"
+      classList={{ 'wash-window-root': !!props.win.isRoot }}
+      data-is-root={props.win.isRoot ? 'true' : undefined}
       onPointerDown={onWindowPointerDown}
       style={frameStyle()}
     >
@@ -205,7 +220,7 @@ export function FloatingWindow(props: WindowProps) {
           display: 'flex',
           'align-items': 'center',
           padding: '6px 8px',
-          background: focused() === props.win.windowID ? '#33387a' : '#2a2a2a',
+          background: titlebarBackground(),
           cursor: 'move',
           'user-select': 'none',
           'font-size': '13px',
@@ -225,6 +240,26 @@ export function FloatingWindow(props: WindowProps) {
           >
             <use href={`/icons.svg#${props.win.icon}`} />
           </svg>
+        )}
+        {props.win.isRoot && (
+          <span
+            data-testid="window-root-badge"
+            aria-label="Privileged window"
+            title="This window's process runs with root privileges"
+            style={{
+              'font-size': '10px',
+              'font-weight': 700,
+              'letter-spacing': '0.06em',
+              padding: '1px 5px',
+              'margin-right': '6px',
+              'border-radius': '3px',
+              background: '#fff',
+              color: '#7a1f1f',
+              'flex-shrink': 0,
+            }}
+          >
+            ROOT
+          </span>
         )}
         <span style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{props.win.title}</span>
         <button
