@@ -17,9 +17,19 @@ export interface WindowInfo {
   windowID: number;
   instanceID: string;
   element: string;
+  icon?: string;
   title: string;
   focused: boolean;
   state: 'normal' | 'minimized' | 'maximized';
+  // Global (3W×3H plane) coords and dimensions. The pager renders
+  // window outlines from these; the rest of the chrome ignores them.
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  // viewport cell that owns this window (derived from center). The
+  // taskbar pill uses this for dblclick snap-to-viewport.
+  viewport: { vx: number; vy: number };
 }
 
 export type Listener<T> = (v: T) => void;

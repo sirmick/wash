@@ -13,7 +13,7 @@ import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
 import { Menu, MenuItem, tokens } from '@wash/ui';
 import { toBlob } from 'html-to-image';
-import { Camera, Menu as MenuIcon, Search } from 'lucide-solid';
+import { Camera, Search } from 'lucide-solid';
 
 interface CatalogApp {
   id: string;
@@ -33,6 +33,11 @@ interface WindowInfo {
   title: string;
   focused: boolean;
   state: 'normal' | 'minimized' | 'maximized';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  viewport: { vx: number; vy: number };
 }
 
 // DesktopConfigMsg mirrors the BE's desktop.config app_msg. Bytes
@@ -66,6 +71,11 @@ declare global {
       focusWindow(id: number): void;
       closeWindow(id: number): void;
       restoreWindow(id: number): void;
+      viewports(): { perAxis: number };
+      getViewport(): { vx: number; vy: number };
+      setViewport(vx: number, vy: number): void;
+      onViewport(cb: (vp: { vx: number; vy: number }) => void): () => void;
+      onScreenSize(cb: (s: { w: number; h: number }) => void): () => void;
     };
   }
 }
@@ -74,6 +84,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ---- reactive state ----
   const [catalog, setCatalog] = createSignal<CatalogApp[]>(window.wash.catalog());
   const [windows, setWindows] = createSignal<WindowInfo[]>(window.wash.windows());
+  // Pager subscribes to viewport + screen size so it can highlight the
+  // active cell and scale window outlines correctly when the user
+  // resizes the browser.
+  const [vp, setVp] = createSignal(window.wash.getViewport());
+  const [screen, setScreen] = createSignal({ w: window.innerWidth, h: window.innerHeight });
   const [menuOpen, setMenuOpen] = createSignal(false);
   const [paletteOpen, setPaletteOpen] = createSignal(false);
   const [paletteQuery, setPaletteQuery] = createSignal('');
@@ -244,6 +259,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   onMount(() => {
     const offCat = window.wash.onCatalog(setCatalog);
     const offWin = window.wash.onWindowsChanged(setWindows);
+    const offVp = window.wash.onViewport(setVp);
+    const offScreen = window.wash.onScreenSize(setScreen);
 
     // BE → FE: desktop.config arrives once at startup and again
     // on every fswatch fire (wash-settings rewrote the file).
@@ -294,6 +311,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     onCleanup(() => {
       offCat();
       offWin();
+      offVp();
+      offScreen();
       props.host.removeEventListener('wash:msg', onMsg);
       document.removeEventListener('mousedown', onDocMouseDown);
       document.removeEventListener('keydown', onKey);
@@ -307,13 +326,19 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   return (
     <>
       <Banner />
+      <Pager
+        windows={windows}
+        vp={vp}
+        screen={screen}
+        taskbarPos={taskbarPosition}
+      />
       <div style={taskbarPosition() === 'top' ? taskbarStyleTop : taskbarStyle}>
         <IconButton
           ref={(el) => (startBtnEl = el)}
           title="Apps"
           onClick={toggleMenu}
         >
-          <MenuIcon size={18} />
+          <img src="/wash-logo.svg" width="20" height="20" alt="wash" style={{ display: 'block' }} />
         </IconButton>
         <IconButton
           testid="palette-open"
@@ -411,6 +436,202 @@ const Banner: Component = () => (
   </div>
 );
 
+// Pager renders the 3x3 virtual-desktop overview as a panel parked
+// just above the taskbar. Each cell is a scaled-down rect of the
+// real viewport; window outlines inside each cell preview where
+// they live across the plane. Click a cell to pan; click a window
+// to pan + focus.
+const PAGER_CELL_W = 56;
+const PAGER_GAP = 3;
+const PAGER_PAD = 6;
+
+const Pager: Component<{
+  windows: () => WindowInfo[];
+  vp: () => { vx: number; vy: number };
+  screen: () => { w: number; h: number };
+  taskbarPos: () => 'top' | 'bottom';
+}> = (props) => {
+  const perAxis = window.wash.viewports().perAxis;
+  const cellH = () => {
+    const s = props.screen();
+    const aspect = s.h / Math.max(1, s.w);
+    return Math.round(PAGER_CELL_W * aspect);
+  };
+  const panelW = () => perAxis * PAGER_CELL_W + (perAxis - 1) * PAGER_GAP + PAGER_PAD * 2;
+  const panelH = () => perAxis * cellH() + (perAxis - 1) * PAGER_GAP + PAGER_PAD * 2;
+  const containerStyle = () => {
+    const s: JSX.CSSProperties = {
+      position: 'absolute',
+      right: '14px',
+      width: `${panelW()}px`,
+      height: `${panelH()}px`,
+      background: 'rgba(15,15,30,0.75)',
+      'backdrop-filter': 'blur(10px)',
+      '-webkit-backdrop-filter': 'blur(10px)',
+      border: '1px solid #2a2a4a',
+      'border-radius': '8px',
+      padding: `${PAGER_PAD}px`,
+      'box-sizing': 'border-box',
+      'box-shadow': '0 4px 14px rgba(0,0,0,0.4)',
+      'z-index': 9999, // just below the taskbar (10000) so the bar wins on overlap
+      'user-select': 'none',
+    };
+    // 16px gap from the taskbar on whichever edge it lives.
+    if (props.taskbarPos() === 'top') s.top = '56px';
+    else s.bottom = '56px';
+    return s;
+  };
+  const cells = () => {
+    const out: { vx: number; vy: number }[] = [];
+    for (let y = 0; y < perAxis; y++) {
+      for (let x = 0; x < perAxis; x++) out.push({ vx: x, vy: y });
+    }
+    return out;
+  };
+  return (
+    <div data-testid="pager" style={containerStyle()}>
+      <div
+        style={{
+          position: 'relative',
+          width: '100%',
+          height: '100%',
+        }}
+      >
+        <For each={cells()}>
+          {(c) => {
+            // createMemo makes the filter reactive: it re-runs when
+            // any of props.windows / props.screen change, and the
+            // result is a stable accessor that PagerCell can read.
+            // Without this, the filter was a one-shot snapshot taken
+            // at child-mount time — windows that landed in the store
+            // after the cell mounted (snapshot replay, drags, new
+            // spawns) never showed up, producing the "random" outlines
+            // the user saw on browser refresh.
+            const visible = createMemo(() => {
+              const s = props.screen();
+              const cl = c.vx * s.w;
+              const cr = (c.vx + 1) * s.w;
+              const ct = c.vy * s.h;
+              const cb = (c.vy + 1) * s.h;
+              return props.windows().filter((w) => {
+                if (w.state === 'minimized') return false;
+                const wr = w.x + w.w;
+                const wb = w.y + w.h;
+                return wr > cl && w.x < cr && wb > ct && w.y < cb;
+              });
+            });
+            return (
+              <PagerCell
+                cell={c}
+                cellH={cellH()}
+                active={props.vp().vx === c.vx && props.vp().vy === c.vy}
+                windows={visible()}
+                screen={props.screen()}
+              />
+            );
+          }}
+        </For>
+      </div>
+    </div>
+  );
+};
+
+const PagerCell: Component<{
+  cell: { vx: number; vy: number };
+  cellH: number;
+  active: boolean;
+  windows: WindowInfo[];
+  screen: { w: number; h: number };
+}> = (props) => {
+  const left = () => props.cell.vx * (PAGER_CELL_W + PAGER_GAP);
+  const top = () => props.cell.vy * (props.cellH + PAGER_GAP);
+  const cellStyle = (): JSX.CSSProperties => ({
+    position: 'absolute',
+    left: `${left()}px`,
+    top: `${top()}px`,
+    width: `${PAGER_CELL_W}px`,
+    height: `${props.cellH}px`,
+    background: props.active ? 'rgba(80,90,180,0.28)' : 'rgba(255,255,255,0.04)',
+    border: props.active ? '1.5px solid #6a7adf' : '1px solid #2a2a4a',
+    'border-radius': '3px',
+    cursor: 'pointer',
+    overflow: 'hidden',
+    'box-sizing': 'border-box',
+  });
+  const onCellClick = (ev: MouseEvent) => {
+    // Only fire if the click landed on the cell background (not on
+    // a window-rect — those have their own handler that
+    // stopPropagation()s).
+    if (ev.currentTarget !== ev.target) return;
+    window.wash.setViewport(props.cell.vx, props.cell.vy);
+  };
+  return (
+    <div
+      data-testid={`pager-cell-${props.cell.vx}-${props.cell.vy}`}
+      style={cellStyle()}
+      onClick={onCellClick}
+    >
+      <For each={props.windows}>
+        {(w) => <PagerWindow win={w} cell={props.cell} cellH={props.cellH} screen={props.screen} />}
+      </For>
+    </div>
+  );
+};
+
+const PagerWindow: Component<{
+  win: WindowInfo;
+  cell: { vx: number; vy: number };
+  cellH: number;
+  screen: { w: number; h: number };
+}> = (props) => {
+  // Map a window's global-plane (x,y,w,h) into the pager cell's local
+  // coords. The window's center decides its owning cell, but its
+  // body may straddle neighbors — clipping at cell overflow:hidden
+  // keeps the visual tidy without dropping the rect entirely.
+  const rect = () => {
+    const s = props.screen;
+    const cellOriginX = props.cell.vx * s.w;
+    const cellOriginY = props.cell.vy * s.h;
+    const scaleX = PAGER_CELL_W / Math.max(1, s.w);
+    const scaleY = props.cellH / Math.max(1, s.h);
+    return {
+      left: Math.round((props.win.x - cellOriginX) * scaleX),
+      top: Math.round((props.win.y - cellOriginY) * scaleY),
+      width: Math.max(2, Math.round(props.win.w * scaleX)),
+      height: Math.max(2, Math.round(props.win.h * scaleY)),
+    };
+  };
+  const style = (): JSX.CSSProperties => {
+    const r = rect();
+    return {
+      position: 'absolute',
+      left: `${r.left}px`,
+      top: `${r.top}px`,
+      width: `${r.width}px`,
+      height: `${r.height}px`,
+      background: props.win.focused ? 'rgba(120,140,240,0.55)' : 'rgba(200,210,240,0.18)',
+      border: `1px solid ${props.win.focused ? '#a0b0ff' : '#5a6090'}`,
+      'border-radius': '1.5px',
+      'box-sizing': 'border-box',
+      cursor: 'pointer',
+    };
+  };
+  const onClick = (ev: MouseEvent) => {
+    ev.stopPropagation();
+    window.wash.setViewport(props.cell.vx, props.cell.vy);
+    if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID);
+    else window.wash.focusWindow(props.win.windowID);
+  };
+  return (
+    <div
+      data-testid={`pager-window-${props.win.windowID}-${props.cell.vx}-${props.cell.vy}`}
+      style={style()}
+      onClick={onClick}
+      title={props.win.title}
+    />
+  );
+};
+
 const IconButton: Component<{
   title: string;
   testid?: string;
@@ -452,8 +673,18 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
   return (
     <button
       type="button"
-      title={`${minimized() ? '[minimized] ' : ''}${props.win.title} — right-click to close`}
+      title={`${minimized() ? '[minimized] ' : ''}${props.win.title} — dblclick to jump to its viewport, right-click to close`}
       onClick={() => {
+        if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID);
+        else window.wash.focusWindow(props.win.windowID);
+      }}
+      onDblClick={() => {
+        // Snap the camera to the cell holding this window, then focus
+        // (or restore-and-focus if minimized). Single-click already
+        // fires first and is idempotent with the dblclick action —
+        // both end states converge on "focused & visible".
+        const v = props.win.viewport;
+        window.wash.setViewport(v.vx, v.vy);
         if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID);
         else window.wash.focusWindow(props.win.windowID);
       }}

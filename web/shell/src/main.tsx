@@ -14,11 +14,17 @@ import type { Component } from 'solid-js';
 import { Conn, type ConnState } from './ws';
 import { beginBundle, finishBundle, pushBundleBytes } from './assets';
 import {
+  VIEWPORTS_PER_AXIS,
   applySessionPatch,
   applySessionSnapshot,
   focused,
   mountDesktop,
+  moveLocal,
   raiseLocal,
+  screenSize,
+  setViewport,
+  viewport,
+  viewportFor,
   windows,
 } from './wm';
 import { Desktop } from './desktop';
@@ -53,6 +59,7 @@ export interface SessionWindow {
   window_id: number;
   instance_id: string;
   element: string;
+  icon?: string;
   title: string;
   x: number;
   y: number;
@@ -132,6 +139,13 @@ const bundleReady = new Map<string, Promise<void>>();
 // Reactive subs the chrome (mounted via window.wash) listens to.
 const catalogSub = new Sub<CatalogApp[]>([]);
 const windowsSub = new Sub<WindowInfo[]>([]);
+// viewportSub mirrors the Solid viewport signal into the cross-element
+// pub/sub the session app subscribes to via window.wash.onViewport.
+// We also publish per-window viewport assignments here so the pager
+// can draw window outlines in the right cell without re-deriving
+// the math FE-side.
+const viewportSub = new Sub<{ vx: number; vy: number }>({ vx: 0, vy: 0 });
+const screenSub = new Sub<{ w: number; h: number }>({ w: window.innerWidth, h: window.innerHeight });
 
 function wsURL(): string {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -221,16 +235,34 @@ function deliverAppMsg(msg: ShellAppMsgDeliver) {
 // a Solid dep.
 createEffect(() => {
   const focusedID = focused();
+  const s = screenSize();
   windowsSub.set(
     windows.map((w) => ({
       windowID: w.windowID,
       instanceID: w.instanceID,
       element: w.element,
+      icon: w.icon,
       title: w.title,
       focused: focusedID === w.windowID,
       state: w.state,
+      x: w.x,
+      y: w.y,
+      w: w.w,
+      h: w.h,
+      // viewport: cell where the window's center lives; convenient
+      // for the pager + taskbar dblclick snap-to.
+      viewport: viewportFor(w),
     })),
   );
+  // screenSub also updates here because window list rendering for
+  // the pager depends on cell dimensions; cheaper than its own effect.
+  if (screenSub.value.w !== s.w || screenSub.value.h !== s.h) {
+    screenSub.set(s);
+  }
+});
+
+createEffect(() => {
+  viewportSub.set(viewport());
 });
 
 function handleAppDeclared(msg: ShellAppDeclared): void {
@@ -294,10 +326,33 @@ function handlePatch(msg: ShellSessionPatch): void {
       setSavedState(p.instance_id, p.state ?? null);
     }
   }
+  // First-sight detection for viewport auto-relocation: any
+  // window.upsert whose id isn't in the store yet is a new spawn.
+  // The router cascades new windows from (40, 40); if the user is
+  // looking at a non-(0,0) viewport, we re-issue a window.move so
+  // the window appears where they're actually looking. Otherwise
+  // new windows silently land off-screen in cell (0,0).
+  const seen = new Set(windows.map((w) => w.windowID));
+  const fresh: SessionWindow[] = [];
+  for (const p of msg.patches) {
+    if (p.op === 'window.upsert' && p.window && !seen.has(p.window.window_id)) {
+      fresh.push(p.window);
+    }
+  }
   applySessionPatch(
     msg.patches.filter((p) => p.op !== 'app_state'),
     waitForBundle,
   );
+  const vp = viewport();
+  if (fresh.length > 0 && (vp.vx !== 0 || vp.vy !== 0)) {
+    const s = screenSize();
+    for (const w of fresh) {
+      const nx = w.x + vp.vx * s.w;
+      const ny = w.y + vp.vy * s.h;
+      moveLocal(w.window_id, nx, ny);
+      conn.sendCtrl({ t: 'window.move', window_id: w.window_id, x: nx, y: ny });
+    }
+  }
 }
 
 function waitForBundle(instanceID: string): Promise<void> {
@@ -313,10 +368,63 @@ function onWindowClose(windowID: number): void {
 const [connState, setConnState] = createSignal<ConnState>('connecting');
 conn.onState(setConnState);
 
+// Ctrl+Alt+Arrows pan one viewport. Listening at the document level
+// means the chord works regardless of which (if any) window has focus.
+// Apps inside windows that want to swallow these keys can preventDefault
+// on their own keydown handler — keypresses bubble up to here only when
+// nobody else stops them.
+window.addEventListener('keydown', (ev: KeyboardEvent) => {
+  if (!ev.ctrlKey || !ev.altKey || ev.shiftKey || ev.metaKey) return;
+  const vp = viewport();
+  let dx = 0;
+  let dy = 0;
+  switch (ev.key) {
+    case 'ArrowLeft':
+      dx = -1;
+      break;
+    case 'ArrowRight':
+      dx = 1;
+      break;
+    case 'ArrowUp':
+      dy = -1;
+      break;
+    case 'ArrowDown':
+      dy = 1;
+      break;
+    default:
+      return;
+  }
+  ev.preventDefault();
+  setViewport(vp.vx + dx, vp.vy + dy);
+});
+
+// Viewport pan: the cam div translates the windows layer by
+// (-vx*W, -vy*H) screen pixels so the user "moves" across a
+// VIEWPORTS_PER_AXIS² grid without the router knowing. The Desktop
+// surface (taskbar, wallpaper) sits outside this container — it
+// stays fixed across viewports, matching X11 viewport semantics.
+// pointer-events:none on the cam lets clicks fall through to the
+// desktop surface in empty space; floating windows re-enable
+// pointer-events on their own frames.
+const camStyle = () => {
+  const vp = viewport();
+  const s = screenSize();
+  return {
+    position: 'absolute' as const,
+    inset: '0',
+    transform: `translate(${-vp.vx * s.w}px, ${-vp.vy * s.h}px)`,
+    transition: 'transform 260ms cubic-bezier(.2,.7,.2,1)',
+    'will-change': 'transform' as const,
+    'pointer-events': 'none' as const,
+  };
+};
+
 const App = () => (
   <>
     <Desktop />
-    <For each={windows}>{(w) => <FloatingWindow win={w} onClose={onWindowClose} />}</For>
+    <div style={camStyle()}>
+      <For each={windows}>{(w) => <FloatingWindow win={w} onClose={onWindowClose} />}</For>
+    </div>
     <ConnectionBanner state={connState()} />
   </>
 );
@@ -383,6 +491,15 @@ declare global {
       minimizeWindow(id: number): void;
       maximizeWindow(id: number): void;
       restoreWindow(id: number): void;
+      // Virtual-desktop viewport API. The shell pans a viewport-sized
+      // camera over a VIEWPORTS_PER_AXIS² plane; setViewport switches
+      // cells with a CSS transition. viewportFor returns the cell
+      // owning a given window's center (used for taskbar dblclick).
+      viewports(): { perAxis: number };
+      getViewport(): { vx: number; vy: number };
+      setViewport(vx: number, vy: number): void;
+      onViewport(cb: (vp: { vx: number; vy: number }) => void): () => void;
+      onScreenSize(cb: (s: { w: number; h: number }) => void): () => void;
       log(level: 'error' | 'warn' | 'info' | 'debug', source: string, msg: string, stack?: string): void;
       openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
       writeRaw(channelID: number, bytes: Uint8Array): void;
@@ -439,6 +556,11 @@ window.wash = {
     // Restoring also brings to front + grabs focus.
     conn.sendCtrl({ t: 'window.focus', window_id: id });
   },
+  viewports: () => ({ perAxis: VIEWPORTS_PER_AXIS }),
+  getViewport: () => viewportSub.value,
+  setViewport: (vx, vy) => setViewport(vx, vy),
+  onViewport: (cb) => viewportSub.on(cb),
+  onScreenSize: (cb) => screenSub.on(cb),
   log(level, source, msg, stack) {
     shellLog(level, source, msg, stack);
   },

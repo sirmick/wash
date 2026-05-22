@@ -18,6 +18,7 @@ export interface Win {
   windowID: number;
   instanceID: string;
   element: string;
+  icon?: string;
   title: string;
   x: number;
   y: number;
@@ -43,7 +44,74 @@ const [windows, setWindows] = createStore<Win[]>([]);
 const [focused, setFocused] = createSignal<number | null>(null);
 const [desktop, setDesktop] = createSignal<DesktopMount | null>(null);
 
-export { windows, focused, desktop };
+// Virtual desktop is a VIEWPORTS_PER_AXIS² grid of viewports — windows
+// live in one big plane (W*VIEWPORTS × H*VIEWPORTS in screen-pixel
+// coords) and the shell pans a viewport-sized camera over it. Router-
+// side window x/y is unaware of viewports; this is a pure shell-side
+// projection so the router doesn't need to grow a "workspace" concept.
+export const VIEWPORTS_PER_AXIS = 3;
+
+const [screenSize, setScreenSize] = createSignal({
+  w: window.innerWidth,
+  h: window.innerHeight,
+});
+window.addEventListener('resize', () => {
+  setScreenSize({ w: window.innerWidth, h: window.innerHeight });
+});
+
+// Viewport persists across reloads so the user comes back to whichever
+// cell they were on. LocalStorage is per-origin and tab-shared; if a
+// second tab on the same shell switches cells, this tab stays where it
+// is (no cross-tab sync; that would require StorageEvent listening and
+// isn't worth the complexity for v1).
+const VIEWPORT_STORAGE_KEY = 'wash.viewport';
+function loadStoredViewport(): { vx: number; vy: number } {
+  try {
+    const raw = localStorage.getItem(VIEWPORT_STORAGE_KEY);
+    if (!raw) return { vx: 0, vy: 0 };
+    const parsed = JSON.parse(raw) as { vx?: unknown; vy?: unknown };
+    const max = VIEWPORTS_PER_AXIS - 1;
+    const vx = typeof parsed.vx === 'number' ? Math.max(0, Math.min(max, Math.round(parsed.vx))) : 0;
+    const vy = typeof parsed.vy === 'number' ? Math.max(0, Math.min(max, Math.round(parsed.vy))) : 0;
+    return { vx, vy };
+  } catch {
+    return { vx: 0, vy: 0 };
+  }
+}
+const [viewport, setViewportSignal] = createSignal(loadStoredViewport());
+
+export { windows, focused, desktop, viewport, screenSize };
+
+export function setViewport(vx: number, vy: number): void {
+  const max = VIEWPORTS_PER_AXIS - 1;
+  const cvx = Math.max(0, Math.min(max, Math.round(vx)));
+  const cvy = Math.max(0, Math.min(max, Math.round(vy)));
+  const cur = viewport();
+  if (cur.vx === cvx && cur.vy === cvy) return;
+  setViewportSignal({ vx: cvx, vy: cvy });
+  try {
+    localStorage.setItem(VIEWPORT_STORAGE_KEY, JSON.stringify({ vx: cvx, vy: cvy }));
+  } catch {
+    // Storage quota / disabled — viewport just won't persist this run.
+  }
+}
+
+// viewportFor maps a window to the viewport that "owns" its center.
+// Used by the pager's window-click handler and the taskbar pill's
+// dblclick handler to snap to the cell where a given window lives.
+export function viewportFor(w: { x: number; y: number; w: number; h: number }): {
+  vx: number;
+  vy: number;
+} {
+  const s = screenSize();
+  const cx = w.x + w.w / 2;
+  const cy = w.y + w.h / 2;
+  const max = VIEWPORTS_PER_AXIS - 1;
+  return {
+    vx: Math.max(0, Math.min(max, Math.floor(cx / s.w))),
+    vy: Math.max(0, Math.min(max, Math.floor(cy / s.h))),
+  };
+}
 
 // raiseLocal bumps a window to the front locally; the router's patch
 // confirms the change moments later. Kept as a separate export for
@@ -84,6 +152,7 @@ function fromSessionWindow(sw: SessionWindow): Win {
     windowID: sw.window_id,
     instanceID: sw.instance_id,
     element: sw.element,
+    icon: sw.icon,
     title: sw.title,
     x: sw.x,
     y: sw.y,

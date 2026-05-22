@@ -9,7 +9,15 @@
 
 import { createSignal, onCleanup, onMount } from 'solid-js';
 import { registerMountedElement, unregisterMountedElement } from './api';
-import { focused, moveLocal, raiseLocal, resizeLocal, Win } from './wm';
+import {
+  VIEWPORTS_PER_AXIS,
+  focused,
+  moveLocal,
+  raiseLocal,
+  resizeLocal,
+  screenSize,
+  Win,
+} from './wm';
 import { Maximize2, Minimize2, Minus, X } from 'lucide-solid';
 
 export interface WindowProps {
@@ -51,8 +59,18 @@ export function FloatingWindow(props: WindowProps) {
     const target = ev.currentTarget as HTMLElement;
     target.setPointerCapture(ev.pointerId);
     const onMove = (m: PointerEvent) => {
-      setDragX(Math.round(origX + (m.clientX - startX)));
-      setDragY(Math.round(origY + (m.clientY - startY)));
+      // Clamp drag to the virtual-desktop plane (VIEWPORTS_PER_AXIS²
+      // cells). Windows that escape would still be reachable via the
+      // pager, but a window with its titlebar dragged past the right
+      // edge of cell (2,*) would be orphaned for everyone without a
+      // pager open. Clamping keeps the titlebar grabbable.
+      const s = screenSize();
+      const maxX = s.w * VIEWPORTS_PER_AXIS - props.win.w;
+      const maxY = s.h * VIEWPORTS_PER_AXIS - props.win.h;
+      const rawX = origX + (m.clientX - startX);
+      const rawY = origY + (m.clientY - startY);
+      setDragX(Math.round(Math.max(0, Math.min(maxX, rawX))));
+      setDragY(Math.round(Math.max(0, Math.min(maxY, rawY))));
     };
     const onUp = () => {
       target.removeEventListener('pointermove', onMove);
@@ -128,6 +146,10 @@ export function FloatingWindow(props: WindowProps) {
       color: '#eee',
       'box-sizing': 'border-box' as const,
       'z-index': props.win.z,
+      // Re-enable pointer events inside the viewport cam container,
+      // which sets pointer-events:none so clicks in empty space fall
+      // through to the desktop surface (taskbar, wallpaper).
+      'pointer-events': 'auto' as const,
     };
     if (props.win.state === 'minimized') {
       return { ...base, display: 'none' };
@@ -145,12 +167,18 @@ export function FloatingWindow(props: WindowProps) {
     const y = dragY() ?? props.win.y;
     const w = resizeW() ?? props.win.w;
     const h = resizeH() ?? props.win.h;
+    // Fade the frame slightly while dragging so the user can see
+    // what's behind the window without releasing the pointer —
+    // useful when dragging into a viewport boundary to gauge how
+    // far you've moved.
+    const dragging = dragX() !== null;
     return {
       ...base,
       left: `${x}px`,
       top: `${y}px`,
       width: `${w}px`,
       height: `${h}px`,
+      opacity: dragging ? 0.72 : 1,
     };
   };
 
@@ -183,7 +211,22 @@ export function FloatingWindow(props: WindowProps) {
           'font-size': '13px',
         }}
       >
-        <span style={{ flex: 1 }}>{props.win.title}</span>
+        {props.win.icon && (
+          <svg
+            width="13"
+            height="13"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            style={{ 'flex-shrink': 0, 'margin-right': '6px', opacity: 0.85 }}
+            aria-hidden="true"
+          >
+            <use href={`/icons.svg#${props.win.icon}`} />
+          </svg>
+        )}
+        <span style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{props.win.title}</span>
         <button
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
