@@ -25,6 +25,7 @@ const ICONS = [
   'layout-dashboard', // wash-session (mostly hidden in catalog)
   'flask-conical',  // wash-test (hidden by default)
   'list-checks',    // wash-bulk
+  'file-pen',       // wash-edit
 ];
 
 // Resolve via require so pnpm's nested layout is fine.
