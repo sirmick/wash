@@ -31,6 +31,7 @@
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
+import { File as FileIcon, Folder as FolderIcon, Link2 } from 'lucide-solid';
 import { tokens } from './tokens';
 import { Overlay, ConfirmDialog } from './overlay';
 
@@ -457,10 +458,19 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
           // 16px breathing room on each side and top/bottom of the
           // host window — matches Overlay defaults but stated here
           // explicitly so the picker reads self-contained.
+          //
+          // No explicit `height`: that pinned the modal to viewport
+          // minus 32px on every render, which in narrow / short
+          // windows fought the inner list's natural size and made
+          // the box flicker between layout passes (content
+          // overflow → scrollbar → width recompute → re-layout).
+          // max-height + content-driven height settles in one pass.
           width: 'calc(100% - 32px)',
-          height: 'calc(100% - 32px)',
+          height: 'auto',
           'min-width': '320px',
+          'min-height': '320px',
           'max-width': '760px',
+          'max-height': 'calc(100% - 32px)',
           padding: '0',
           // Inner panel handles its own padding so the column rows
           // can extend edge-to-edge inside the box.
@@ -557,8 +567,8 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
                     style={rowStyle(sel())}
                   >
                     <span style={rowNameCellStyle}>
-                      <span style={{ 'margin-right': '6px', opacity: 0.8 }}>
-                        {e.type === 'dir' ? '📁' : '📄'}
+                      <span style={{ 'margin-right': '6px', opacity: 0.8, display: 'inline-flex', 'align-items': 'center', 'flex-shrink': 0 }}>
+                        <EntryIcon type={e.type} />
                       </span>
                       {e.name}
                     </span>
@@ -804,6 +814,22 @@ function actionBtnStyle(primary: boolean): JSX.CSSProperties {
     font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
   };
 }
+
+// EntryIcon mirrors wash-fm's tree-row icon contract: 12px lucide
+// glyph for dir / file / symlink. Keeping the same sizes + same
+// icon set so the picker reads as part of the same UI surface.
+const EntryIcon: Component<{ type: Entry['type'] }> = (props) => {
+  switch (props.type) {
+    case 'dir':
+      return <FolderIcon size={12} />;
+    case 'symlink':
+      return <Link2 size={12} />;
+    case 'file':
+      return <FileIcon size={12} />;
+    default:
+      return <FileIcon size={12} />;
+  }
+};
 
 // ---- helpers ----
 

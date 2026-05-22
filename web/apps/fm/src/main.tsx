@@ -1537,7 +1537,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 path={row.path}
                 depth={row.depth}
                 childCount={row.childCount}
-                selected={selection().has(row.path) || path() === row.path}
+                selected={selection().has(row.path)}
+                isCurrent={path() === row.path}
                 expanded={!!expanded[row.path]}
                 renaming={isRenaming() ? { draft: renaming()!.draft } : null}
                 onRenameInput={(v) => {
@@ -1818,6 +1819,7 @@ const TreeRow: Component<{
   depth: number;
   childCount?: number;
   selected: boolean;
+  isCurrent: boolean;
   expanded: boolean;
   // When `renaming` is set, the name span becomes a focused input
   // bound to `renaming.draft`. Enter commits, Escape cancels, blur
@@ -1900,7 +1902,7 @@ const TreeRow: Component<{
       <span style={{ width: '14px', display: 'inline-flex', 'align-items': 'center', 'justify-content': 'center', opacity: 0.8, 'flex-shrink': 0 }}>
         <EntryIcon entry={props.entry} />
       </span>
-      <span style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+      <span style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap', 'font-weight': props.isCurrent ? 'bold' : 'normal' }}>
         <Show
           when={props.renaming}
           fallback={props.entry.name}

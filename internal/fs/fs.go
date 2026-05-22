@@ -76,6 +76,18 @@ func New(root string) *FS {
 // Root returns the configured sandbox root ("" means unconfined).
 func (f *FS) Root() string { return f.root }
 
+// DefaultStart picks the "where do we land on first paint" path
+// for an unconfined FS. Today: $HOME when available, "/" as a
+// last-ditch fallback. Sandboxed apps should use Root() instead —
+// this helper is for the unsandboxed case where "/" would dump
+// the user at the filesystem root instead of somewhere useful.
+func DefaultStart() string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return home
+	}
+	return "/"
+}
+
 // Confine resolves p to its absolute, cleaned form and verifies it
 // sits inside f.Root when configured. Returns ErrOutsideRoot on
 // escape.

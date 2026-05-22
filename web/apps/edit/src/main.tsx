@@ -16,7 +16,7 @@ import { createStore, produce } from 'solid-js/store';
 import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
 import { FilePicker, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, tokens } from '@wash/ui';
-import { EditorState, Compartment } from '@codemirror/state';
+import { EditorSelection, EditorState, Compartment } from '@codemirror/state';
 import {
   EditorView,
   crosshairCursor,
@@ -30,7 +30,8 @@ import {
   rectangularSelection,
 } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab, redo, undo } from '@codemirror/commands';
-import { highlightSelectionMatches, openSearchPanel, searchKeymap, search } from '@codemirror/search';
+import { getSearchQuery, highlightSelectionMatches, openSearchPanel, searchKeymap, searchPanelOpen, SearchQuery, setSearchQuery, search } from '@codemirror/search';
+import { unifiedMergeView } from '@codemirror/merge';
 import {
   autocompletion,
   closeBrackets,
@@ -93,7 +94,19 @@ interface BEMessage {
 // Untitled buffers are ephemeral, lost on reload. Cursor/scroll
 // per tab can be added later; for v1 the file list + active +
 // splitter are enough.
+interface PersistedTab {
+  // Empty/missing path means an Untitled buffer; content + display_name
+  // are required for those (no on-disk source to read back).
+  path?: string;
+  display_name?: string;
+  content?: string;
+  selection?: { anchor: number; head: number };
+  scroll?: number;
+}
+
 interface PersistedState {
+  // Legacy fields — older blobs may only have these. Still written
+  // for one-way back-compat; new restores prefer `tabs` when present.
   paths?: string[];
   active?: string;
   split_pct?: number;
@@ -104,6 +117,22 @@ interface PersistedState {
   // shell anyway.
   term_open?: boolean;
   edit_pct?: number;
+  // Find/replace panel — open state + query so a reload returns
+  // the user to the exact same search context. Empty `search`
+  // string means no active query (CM6's default).
+  find_open?: boolean;
+  find_query?: {
+    search: string;
+    replace?: string;
+    case_sensitive?: boolean;
+    regexp?: boolean;
+    whole_word?: boolean;
+    literal?: boolean;
+  };
+  // Full per-tab snapshot: includes Untitled buffer contents +
+  // cursor selection + scroll. Wins over `paths` on restore.
+  tabs?: PersistedTab[];
+  active_idx?: number;
 }
 
 // TermTab is one terminal session. Local id is assigned eagerly;
@@ -133,6 +162,16 @@ interface Tab {
   baseline: string;
   state: EditorState | null;
   binary: boolean;
+  // Last-seen vertical scroll for this tab; captured at tab-switch.
+  // Restored on switch back so each tab keeps its scroll position
+  // alongside its EditorState (which already holds cursor/undo).
+  scrollTop?: number;
+  // When set, this tab is a unified-diff view. The doc is the
+  // "new" side (typically the currently-active file at diff time);
+  // `diff.otherContent` is the "original" side passed to
+  // unifiedMergeView. Diff tabs are read-only by convention — the
+  // user clicks Accept/Reject on each chunk to mutate.
+  diff?: { otherPath: string; otherDisplayName: string; otherContent: string };
 }
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
@@ -295,6 +334,42 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     setActiveID(tab.id);
   };
 
+  // openDiffTab reads `otherPath` from disk and creates a tab that
+  // diffs it against the active tab's current content (the "new"
+  // side). The tab's doc is the new content; unifiedMergeView
+  // overlays inline diff markers showing changes vs `otherPath`.
+  // No-op if there is no active file tab to diff against.
+  const openDiffTab = async (otherPath: string) => {
+    const cur = activeTab();
+    if (!cur || !editorView) return;
+    // Use the live editor content for the "new" side so unsaved
+    // edits show up in the diff. baseline is what's on disk.
+    const newContent = editorView.state.doc.toString();
+    const reply = await sendWithReply({ kind: 'read', path: otherPath });
+    if (reply.kind !== 'read_ok' || reply.binary) return;
+    const otherContent = String(reply.content ?? '');
+    captureActiveState();
+    const id = `diff-${otherPath}-vs-${cur.path || cur.displayName}`;
+    const existing = tabs().find((t) => t.id === id);
+    if (existing) {
+      setActiveID(existing.id);
+      return;
+    }
+    const otherName = baseName(otherPath) || otherPath;
+    const curName = cur.path ? (baseName(cur.path) || cur.path) : cur.displayName;
+    const tab: Tab = {
+      id,
+      path: '',
+      displayName: `Diff: ${otherName} ↔ ${curName}`,
+      baseline: newContent,
+      state: null,
+      binary: false,
+      diff: { otherPath, otherDisplayName: otherName, otherContent },
+    };
+    setTabs([...tabs(), tab]);
+    setActiveID(tab.id);
+  };
+
   // newUntitled creates a fresh empty buffer. The path stays ""
   // until the user saves it via the FilePicker.
   const newUntitled = () => {
@@ -421,13 +496,60 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     if (persistTimer != null) window.clearTimeout(persistTimer);
     persistTimer = window.setTimeout(() => {
       persistTimer = null;
+      const tabsNow = tabs();
+      const activeNow = activeID();
+      const tabList: PersistedTab[] = [];
+      let activeIdx = -1;
+      tabsNow.forEach((t, i) => {
+        if (t.id === activeNow) activeIdx = i;
+        // For the active tab, the freshest selection/scroll/content
+        // lives in editorView; cached t.state is whatever was last
+        // captured on tab-switch.
+        const isActive = t.id === activeNow;
+        const liveState = isActive ? editorView?.state : t.state;
+        const scrollTop = isActive ? editorView?.scrollDOM.scrollTop : t.scrollTop;
+        const pt: PersistedTab = {};
+        if (t.path) {
+          pt.path = t.path;
+        } else {
+          pt.display_name = t.displayName;
+          pt.content = liveState ? liveState.doc.toString() : t.baseline;
+        }
+        if (liveState) {
+          const sel = liveState.selection.main;
+          if (sel.anchor !== 0 || sel.head !== 0) {
+            pt.selection = { anchor: sel.anchor, head: sel.head };
+          }
+        }
+        if (scrollTop && scrollTop > 0) pt.scroll = scrollTop;
+        tabList.push(pt);
+      });
       const state: PersistedState = {
-        paths: tabs().filter((t) => t.path).map((t) => t.path),
+        // Legacy fields, written for older clients that don't read `tabs`.
+        paths: tabsNow.filter((t) => t.path).map((t) => t.path),
         active: activeTab()?.path || undefined,
         split_pct: splitPct(),
         term_open: termOpen(),
         edit_pct: editPct(),
+        tabs: tabList,
+        active_idx: activeIdx >= 0 ? activeIdx : undefined,
       };
+      if (editorView) {
+        const q = getSearchQuery(editorView.state);
+        state.find_open = searchPanelOpen(editorView.state);
+        // Only persist a query if there's something to restore.
+        // CM6's default-constructed SearchQuery has search="".
+        if (q.search) {
+          state.find_query = {
+            search: q.search,
+            replace: q.replace || undefined,
+            case_sensitive: q.caseSensitive || undefined,
+            regexp: q.regexp || undefined,
+            whole_word: q.wholeWord || undefined,
+            literal: q.literal || undefined,
+          };
+        }
+      }
       send({ kind: 'save_state', state });
     }, 250);
   };
@@ -444,7 +566,55 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // don't survive process exit so re-spawning silently would
     // surprise them.
     if (typeof s.term_open === 'boolean') setTermOpen(s.term_open);
-    if (s.paths && s.paths.length > 0) {
+    // Prefer the richer `tabs` array (cursor/scroll/untitled
+    // content); fall back to the legacy `paths` list for older
+    // saved blobs that pre-date this shape.
+    if (s.tabs && s.tabs.length > 0) {
+      for (const pt of s.tabs) {
+        if (pt.path) {
+          await openInTab(pt.path);
+          const tab = tabs().find((x) => x.path === pt.path);
+          if (tab && (pt.selection || pt.scroll)) {
+            const fresh = EditorState.create({
+              doc: tab.baseline,
+              extensions: baseExtensions(),
+              selection: pt.selection
+                ? EditorSelection.single(pt.selection.anchor, pt.selection.head)
+                : undefined,
+            });
+            setTabs(tabs().map((x) => x.id === tab.id ? { ...x, state: fresh, scrollTop: pt.scroll } : x));
+          }
+        } else {
+          // Untitled — reconstruct the buffer in place. untitledCounter
+          // bumps so a subsequent New keeps a distinct name even when
+          // a saved Untitled-N is back on screen.
+          untitledCounter += 1;
+          const id = `untitled-${untitledCounter}`;
+          const content = pt.content || '';
+          const fresh = EditorState.create({
+            doc: content,
+            extensions: baseExtensions(),
+            selection: pt.selection
+              ? EditorSelection.single(pt.selection.anchor, pt.selection.head)
+              : undefined,
+          });
+          const tab: Tab = {
+            id,
+            path: '',
+            displayName: pt.display_name || `Untitled-${untitledCounter}`,
+            baseline: '',
+            state: fresh,
+            binary: false,
+            scrollTop: pt.scroll,
+          };
+          setTabs([...tabs(), tab]);
+        }
+      }
+      if (typeof s.active_idx === 'number') {
+        const tab = tabs()[s.active_idx];
+        if (tab) setActiveID(tab.id);
+      }
+    } else if (s.paths && s.paths.length > 0) {
       for (const p of s.paths) {
         await openInTab(p);
       }
@@ -452,6 +622,31 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         const t = tabs().find((x) => x.path === s.active);
         if (t) setActiveID(t.id);
       }
+    }
+    // Scroll for the active tab is applied after the createEffect
+    // below has run editorView.setState(t.state); a microtask is
+    // late enough that scrollDOM has the new doc laid out.
+    queueMicrotask(() => {
+      const t = activeTab();
+      if (t?.scrollTop && editorView) editorView.scrollDOM.scrollTop = t.scrollTop;
+    });
+    // Find/replace restore happens after tabs so the editor view is
+    // mounted with the active document. Query first (so an open
+    // panel paints with the right input), then panel.
+    if (editorView) {
+      if (s.find_query?.search) {
+        editorView.dispatch({
+          effects: setSearchQuery.of(new SearchQuery({
+            search: s.find_query.search,
+            replace: s.find_query.replace || '',
+            caseSensitive: !!s.find_query.case_sensitive,
+            regexp: !!s.find_query.regexp,
+            wholeWord: !!s.find_query.whole_word,
+            literal: !!s.find_query.literal,
+          })),
+        });
+      }
+      if (s.find_open) openSearchPanel(editorView);
     }
   };
 
@@ -532,11 +727,47 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const captureActiveState = () => {
     const t = activeTab();
     if (!t || !editorView) return;
-    if (t.state === editorView.state) return;
-    setTabs(tabs().map((x) => x.id === t.id ? { ...x, state: editorView!.state } : x));
+    const scrollTop = editorView.scrollDOM.scrollTop;
+    if (t.state === editorView.state && t.scrollTop === scrollTop) return;
+    setTabs(tabs().map((x) => x.id === t.id ? { ...x, state: editorView!.state, scrollTop } : x));
   };
 
   const handleBE = (m: BEMessage) => {
+    // ---- headless control commands ----
+    //
+    // External drivers (tests, other apps) send these via app_msg
+    // to drive the editor without keyboard/mouse synthesis. The BE
+    // forwards anything kind=cmd.* straight to the FE; the FE does
+    // the actual UI work below.
+    if (m.kind === 'cmd.open_file') {
+      const path = String(m.path ?? '');
+      if (path) void openInTab(path);
+      return;
+    }
+    if (m.kind === 'cmd.set_root') {
+      const path = String(m.path ?? '');
+      if (!path) return;
+      setRoot(path);
+      setListings({});
+      setExpanded({});
+      void loadDir(path);
+      sendFsWatch(path);
+      return;
+    }
+    if (m.kind === 'cmd.open_diff') {
+      const other = String(m.other ?? m.path ?? '');
+      if (!other) return;
+      // Optional: caller can supply `against` to set the active
+      // tab first. Otherwise diff uses whatever tab is active.
+      const against = String(m.against ?? '');
+      (async () => {
+        if (against) {
+          await openInTab(against);
+        }
+        await openDiffTab(other);
+      })();
+      return;
+    }
     // fs.watch_event arrives unsolicited when a subscribed dir
     // sees a change. We refresh both the parent of the changed
     // path (the watch reports children, so the parent is the
@@ -1051,6 +1282,24 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     });
   });
 
+  // searchListener triggers state persist when the find panel
+  // opens / closes or its query changes. The persist() debounce
+  // coalesces rapid keystrokes inside the search field.
+  const searchListener = EditorView.updateListener.of((u) => {
+    const openChanged = searchPanelOpen(u.startState) !== searchPanelOpen(u.state);
+    const queryChanged = !getSearchQuery(u.startState).eq(getSearchQuery(u.state));
+    if (openChanged || queryChanged) persist();
+  });
+
+  // selectionListener persists when the cursor / selection moves
+  // (arrow keys, click, search-jump). docChanged also counts
+  // because doc edits move the cursor — but the existing dirty
+  // tracking already triggers persist via the reactive effect on
+  // tabs(). Just selectionSet is enough here.
+  const selectionListener = EditorView.updateListener.of((u) => {
+    if (u.selectionSet && !u.docChanged) persist();
+  });
+
   const baseExtensions = () => [
     // Display
     lineNumbers(),
@@ -1086,6 +1335,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     syntaxHighlighting(washHighlightStyle, { fallback: true }),
     langCompartment.of([]),
     dirtyListener,
+    searchListener,
+    selectionListener,
+    EditorView.domEventHandlers({
+      // Scroll fires fast while wheeling — persist() is debounced
+      // 250ms so the wire stays quiet. We read scroll out of the
+      // live view at persist-time; no per-event capture needed.
+      scroll() { persist(); return false; },
+    }),
 
     keymap.of([
       ...closeBracketsKeymap,
@@ -1128,12 +1385,19 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         gap: '6px',
         'align-items': 'center',
       },
+      // All search-panel children share the same height so flex
+      // align-items:center on the panel lines their visual centers
+      // up. Otherwise input/button/label heights diverge by a few
+      // pixels and the labels read as too high.
       '.cm-textfield': {
         background: '#10101a',
         color: tokens.fg,
         border: `1px solid ${tokens.borderMenu}`,
         borderRadius: `${tokens.radiusSm}px`,
-        padding: '3px 6px',
+        padding: '0 6px',
+        height: '22px',
+        lineHeight: '20px',
+        boxSizing: 'border-box',
         font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
       },
       '.cm-textfield:focus': { outline: 'none', borderColor: tokens.borderFocus },
@@ -1142,13 +1406,56 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         color: tokens.fg,
         border: `1px solid ${tokens.borderMenu}`,
         borderRadius: `${tokens.radiusSm}px`,
-        padding: '3px 10px',
+        padding: '0 10px',
+        height: '22px',
+        boxSizing: 'border-box',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        lineHeight: 1,
         cursor: 'pointer',
         font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
         backgroundImage: 'none',
       },
       '.cm-button:hover': { background: tokens.bgRowHover },
       '.cm-panel.cm-search [name="close"]': { color: tokens.fg, opacity: 0.6, fontSize: '16px' },
+
+      // Themed checkboxes for the search-panel options (match case,
+      // regexp, by word). CM6's default theme shrinks labels to 80%
+      // and lays out checkbox + text inline, which throws off both
+      // font and vertical centering. Override: full wash font on the
+      // label, inline-flex with gap for clean centering, and a
+      // Lucide-Check on a wash-bordered box for the checkbox itself.
+      '.cm-panel.cm-search label': {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '4px',
+        cursor: 'pointer',
+        font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+        height: '22px',
+        lineHeight: 1,
+      },
+      '.cm-panel.cm-search input[type="checkbox"]': {
+        appearance: 'none',
+        '-webkit-appearance': 'none',
+        width: '13px',
+        height: '13px',
+        background: tokens.bgWindow,
+        border: `1px solid ${tokens.borderMenu}`,
+        borderRadius: `${tokens.radiusSm}px`,
+        cursor: 'pointer',
+        margin: 0,
+        padding: 0,
+        backgroundRepeat: 'no-repeat',
+        backgroundPosition: 'center',
+        backgroundSize: '11px 11px',
+        flexShrink: 0,
+      },
+      '.cm-panel.cm-search input[type="checkbox"]:hover': { borderColor: tokens.borderFocus },
+      '.cm-panel.cm-search input[type="checkbox"]:focus': { outline: 'none', borderColor: tokens.borderFocus },
+      '.cm-panel.cm-search input[type="checkbox"]:checked': {
+        backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23eeeeeed9' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E")`,
+      },
 
       // Match highlights inside the document.
       '.cm-searchMatch': {
@@ -1174,6 +1481,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       },
     }, { dark: true }),
   ];
+
+  // extensionsForTab layers tab-specific extensions on top of
+  // baseExtensions. Today: unifiedMergeView for diff tabs (doc =
+  // the "new" side, otherContent = the "original"). Regular tabs
+  // get exactly baseExtensions() — same behavior as before.
+  const extensionsForTab = (t: Tab | null) => {
+    const base = baseExtensions();
+    if (t?.diff) return [...base, unifiedMergeView({ original: t.diff.otherContent })];
+    return base;
+  };
 
   // washHighlightStyle replaces CM6's defaultHighlightStyle with a
   // palette tuned to wash's dark theme — soft purples for keywords,
@@ -1503,7 +1820,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     } else {
       const fresh = EditorState.create({
         doc: t.baseline,
-        extensions: baseExtensions(),
+        extensions: extensionsForTab(t),
       });
       editorView.setState(fresh);
     }
@@ -1682,6 +1999,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                         'justify-content': 'center',
                         opacity: 0.6,
                         'flex-shrink': 0,
+                        cursor: row.entry.type === 'dir' ? 'pointer' : 'default',
+                      }}
+                      onClick={(ev) => {
+                        if (row.entry.type === 'dir') {
+                          ev.stopPropagation();
+                          toggleExpand(row.path);
+                        }
                       }}
                     >
                       <Show when={row.entry.type === 'dir'}>
@@ -1921,6 +2245,25 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             }}
             data-testid="edit-ctx-copy-path"
           />
+          {/* Diff against the currently-active file. Only shown when
+              there's an active tab whose path differs from the
+              right-clicked file (no point diffing a file to itself). */}
+          <Show when={
+            ctxMenu()!.entry.type === 'file'
+            && activeTab()
+            && (activeTab()!.path || activeTab()!.displayName)
+            && activeTab()!.path !== ctxMenu()!.path
+          }>
+            <MenuItem
+              label={`Diff to ${activeTab()!.path ? (baseName(activeTab()!.path) || activeTab()!.path) : activeTab()!.displayName}`}
+              onClick={() => {
+                const c = ctxMenu()!;
+                closeCtxMenu();
+                void openDiffTab(c.path);
+              }}
+              data-testid="edit-ctx-diff"
+            />
+          </Show>
           <MenuSeparator />
           <MenuItem
             label="Rename"

@@ -108,7 +108,7 @@ func (r *Router) handleAppOpts(ctx context.Context, t FrameTransport, manifest *
 			defW = inst.Manifest.Window.DefaultWidth
 			defH = inst.Manifest.Window.DefaultHeight
 		}
-		r.broadcastPatches(r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Name, defW, defH))
+		r.broadcastPatches(r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon, inst.Manifest.Name, defW, defH))
 		_ = inst.WriteEvt(wire.NewEvtWindowMapped(inst.WindowID))
 	}
 	err := inst.loop(ctx)

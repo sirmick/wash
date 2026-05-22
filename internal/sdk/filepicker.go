@@ -107,6 +107,13 @@ func dispatchPicker(c *Conn, fsa *wfs.FS, ws *watchState, data any) bool {
 		})
 	case "fs.list":
 		path, _ := m["path"].(string)
+		// Unconfined picker boots with "/", which would dump the
+		// user at the filesystem root. Resolve to $HOME instead so
+		// the picker opens somewhere useful. Sandboxed apps already
+		// have fsa.Root() set and the Confine path handles that.
+		if path == "/" && fsa.Root() == "" {
+			path = wfs.DefaultStart()
+		}
 		entries, abs, truncated, err := fsa.List(path, 0)
 		if err != nil {
 			pickerReply(c, "fs.list_err", id, map[string]any{

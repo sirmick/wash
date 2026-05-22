@@ -487,7 +487,7 @@ func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*Ap
 			defW = inst.Manifest.Window.DefaultWidth
 			defH = inst.Manifest.Window.DefaultHeight
 		}
-		patches := r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Name, defW, defH)
+		patches := r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon, inst.Manifest.Name, defW, defH)
 		// Declare the app to shells BEFORE the patch so they have the
 		// bundle in flight when window.upsert lands.
 		if err := r.declareAppToAllShells(ctx, inst); err != nil {

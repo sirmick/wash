@@ -31,6 +31,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -183,6 +184,20 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 	}
 	kind, _ := m["kind"].(string)
 	id, _ := m["id"].(string)
+	// Headless control commands (cmd.*) are owned by the FE; the BE
+	// just passes them through unchanged. Callers that have a
+	// direct line to the FE can skip this hop; the BE-side forward
+	// is here so test drivers and other apps can target either side.
+	if strings.HasPrefix(kind, "cmd.") {
+		out := map[string]any{}
+		for k, v := range m {
+			if ks, ok := k.(string); ok {
+				out[ks] = v
+			}
+		}
+		_ = c.SendAppMsg(out)
+		return
+	}
 	switch kind {
 	case "list":
 		path, _ := m["path"].(string)
@@ -362,12 +377,17 @@ func doList(c *sdk.Conn, id, path string) {
 		sendErr(c, "list_err", id, path, "bad_request", "missing path")
 		return
 	}
-	// When a sandbox is configured and the caller asks for "/", they
-	// mean the sandbox root — same affordance the FilePicker gets
-	// via fs.root recovery, just applied at the BE so the FE boot
-	// doesn't have to chain calls.
-	if path == "/" && root != "" {
-		path = root
+	// "/" gets resolved to a useful default so the FE boot doesn't
+	// have to chain calls. With a sandbox configured it means the
+	// sandbox root; without one it means $HOME (DefaultStart) — the
+	// unconfined editor lands the user in their home dir instead of
+	// the filesystem root. Path-bar navigation still works above it.
+	if path == "/" {
+		if root != "" {
+			path = root
+		} else {
+			path = wfs.DefaultStart()
+		}
 	}
 	entries, abs, truncated, err := editFS.List(path, maxListEntries)
 	if err != nil {

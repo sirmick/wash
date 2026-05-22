@@ -186,7 +186,7 @@ func (r *Router) startFreshAttach(ctx context.Context, inst *AppInstance) {
 			defW = inst.Manifest.Window.DefaultWidth
 			defH = inst.Manifest.Window.DefaultHeight
 		}
-		patches := r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Name, defW, defH)
+		patches := r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon, inst.Manifest.Name, defW, defH)
 		if err := r.declareAppToAllShells(ctx, inst); err != nil {
 			r.log("declare: %v", err)
 		}

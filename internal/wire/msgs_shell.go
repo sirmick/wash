@@ -129,6 +129,7 @@ type SessionWindow struct {
 	WindowID   uint32 `json:"window_id"`
 	InstanceID string `json:"instance_id"`
 	Element    string `json:"element"`
+	Icon       string `json:"icon,omitempty"`
 	Title      string `json:"title"`
 	X          int32  `json:"x"`
 	Y          int32  `json:"y"`
