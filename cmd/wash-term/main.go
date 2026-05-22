@@ -28,6 +28,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -139,12 +140,14 @@ func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
 		shell = userShell()
 		cmd = exec.Command(shell)
 	}
-	// Pass WASH_DISPLAY through to the shell so binaries the user
-	// runs (e.g. `wash-fm` in a wash-term tab) attach to this
-	// session via the X-style env var. os.Environ() already
-	// carries it through because the router seeded the env, but
-	// being explicit here documents the contract.
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	// The shell inherits:
+	//   - WASH_DISPLAY (router-set in os.Environ) so a `wash-fm` or
+	//     `wash-launch` invocation finds the live router — the
+	//     xterm-loads-DISPLAY analogue.
+	//   - WASH_BIN_DIR (router-published) prepended to PATH so
+	//     sibling tools resolve by bare name.
+	// TERM is set explicitly; everything else flows through.
+	cmd.Env = withWashEnv(os.Environ())
 	f, startErr := pty.StartWithSize(cmd, &pty.Winsize{Cols: cols, Rows: rows})
 	if startErr != nil {
 		log.Printf("wash-term pty.Start %s: %v", shell, startErr)
@@ -314,6 +317,76 @@ func userShell() string {
 		return s
 	}
 	return "/bin/bash"
+}
+
+// withWashEnv returns env with wash-specific tweaks applied:
+//
+//   - TERM=xterm-256color (always — the shell side renders via xterm.js)
+//   - PATH prefixed with $WASH_BIN_DIR when set, deduped — so the user
+//     can run sibling wash CLIs (wash-launch, wash-fm, …) without an
+//     absolute path. The router publishes WASH_BIN_DIR; if absent,
+//     PATH is left alone.
+//
+// Note: WASH_APP_ID / WASH_INSTANCE_ID / WASH_ATTACH_TOKEN leak
+// through unchanged. The SDK reads instance_id from the IdentityAck
+// and ATTACH_TOKEN's pending-record is single-use, so leakage is
+// harmless. A future tighten could strip them here.
+func withWashEnv(env []string) []string {
+	binDir := lookupEnv(env, "WASH_BIN_DIR")
+	out := make([]string, 0, len(env)+1)
+	termSet := false
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "PATH=") && binDir != "" {
+			cur := kv[len("PATH="):]
+			out = append(out, "PATH="+prependPath(cur, binDir))
+			continue
+		}
+		if strings.HasPrefix(kv, "TERM=") {
+			out = append(out, "TERM=xterm-256color")
+			termSet = true
+			continue
+		}
+		out = append(out, kv)
+	}
+	if !termSet {
+		out = append(out, "TERM=xterm-256color")
+	}
+	// If PATH was absent altogether, seed it from WASH_BIN_DIR so
+	// the shell has something to find tools in.
+	if binDir != "" && lookupEnv(out, "PATH") == "" {
+		out = append(out, "PATH="+binDir)
+	}
+	return out
+}
+
+// lookupEnv finds the first KEY=… entry in env and returns the value
+// portion, or "" if absent.
+func lookupEnv(env []string, key string) string {
+	prefix := key + "="
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			return kv[len(prefix):]
+		}
+	}
+	return ""
+}
+
+// prependPath puts dir at the head of a colon-separated PATH-style
+// value, removing any later duplicate of dir so PATH-walkers stop at
+// our copy.
+func prependPath(path, dir string) string {
+	if path == "" {
+		return dir
+	}
+	sep := string(os.PathListSeparator)
+	parts := strings.Split(path, sep)
+	out := []string{dir}
+	for _, p := range parts {
+		if p != dir {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, sep)
 }
 
 // termIcon — Lucide sprite symbol name. See fmIcon for the

@@ -97,6 +97,18 @@ type controlReq struct {
 	Data       json.RawMessage `json:"data,omitempty"`
 	AwaitID    string          `json:"await_id,omitempty"`
 	TimeoutMs  int             `json:"timeout_ms,omitempty"`
+
+	// Fields used by priv.run (wash-sudo). The control handler
+	// promotes the connection to a streaming cliSession and routes
+	// these into wash-priv as a normal cross-app message.
+	ReqID        string            `json:"req_id,omitempty"`
+	Argv         []string          `json:"argv,omitempty"`
+	Cwd          string            `json:"cwd,omitempty"`
+	Reason       string            `json:"reason,omitempty"`
+	Env          map[string]string `json:"env,omitempty"`
+	Window       bool              `json:"window,omitempty"`
+	NoPrompt     bool              `json:"no_prompt,omitempty"`
+	StreamBytes  string            `json:"bytes,omitempty"` // priv.stdin, base64
 }
 
 func (r *Router) handleControl(ctx context.Context, conn net.Conn) {
@@ -134,6 +146,11 @@ func (r *Router) handleControl(ctx context.Context, conn net.Conn) {
 		r.controlLaunch(ctx, conn, req.AppID)
 	case "msg":
 		r.controlMsg(ctx, conn, req)
+	case "priv.run":
+		// priv.run upgrades the conn to a streaming session — do NOT
+		// defer close here, the handler owns the lifetime now.
+		r.controlPrivRun(ctx, conn, rd, req)
+		return
 	default:
 		writeControlResponse(conn, map[string]any{
 			"t": "error", "code": "bad_request", "msg": "unknown t",
@@ -268,4 +285,122 @@ func writeControlResponse(conn net.Conn, payload map[string]any) {
 	}
 	b = append(b, '\n')
 	_, _ = conn.Write(b)
+}
+
+// controlPrivRun is the wash-sudo bridge. The control conn becomes a
+// streaming cliSession; the initial priv.run request is dispatched
+// to wash-priv as a cross-app message with from = the cli session;
+// further JSON lines from wash-sudo (priv.stdin, priv.cancel, ...)
+// are forwarded as additional app_msgs to wash-priv.
+//
+// Lifetime: returns when wash-sudo closes the conn OR wash-priv has
+// finished the request (signalled by writing the priv.result back
+// out, which wash-priv triggers via its stream → cliSession.writeJSON
+// path). The handler closes the conn on return — the outer
+// defer in handleControl actually does this.
+func (r *Router) controlPrivRun(ctx context.Context, conn net.Conn, rd *bufio.Reader, first controlReq) {
+	// One ops-friendly log line per CLI invocation. Audit details
+	// land in wash-priv's audit log; this is just "router saw a
+	// wash-sudo invocation arrive."
+	r.log("priv.run req_id=%s argv=%v", first.ReqID, first.Argv)
+	if first.ReqID == "" {
+		writeControlResponse(conn, map[string]any{
+			"t": "error", "code": "bad_request", "msg": "priv.run requires req_id",
+		})
+		return
+	}
+	// Resolve the wash-priv singleton (spawning on demand).
+	target, code, err := r.resolveRecipient(ctx, wire.Recipient{AppID: "com.wash.priv"})
+	if err != nil {
+		writeControlResponse(conn, map[string]any{
+			"t": "error", "code": code, "msg": err.Error(),
+		})
+		return
+	}
+
+	session := r.registerCliSession(conn)
+	defer r.unregisterCliSession(session)
+
+	// Ack the registration to wash-sudo so it knows the request has
+	// at least reached the router. Subsequent traffic from wash-priv
+	// (priv.event envelopes) lands on the same conn via writeJSON.
+	if err := session.writeJSON(map[string]any{
+		"t":              "priv.registered",
+		"req_id":         first.ReqID,
+		"cli_instance":   session.instanceID,
+	}); err != nil {
+		return
+	}
+
+	// Build the run-inline payload (or window mode if first.Window).
+	// wash-priv reads it via OnAppMsgFrom with from = cli session.
+	//
+	// cli_origin carries router-attested peer info (pid + uid +
+	// resolved tty + comm). The fields are derived from
+	// SO_PEERCRED + /proc, so wash-sudo can't spoof them — by the
+	// time the payload reaches wash-priv, the values are the
+	// router's view, not anything the client wrote.
+	kind := "run_inline"
+	if first.Window {
+		kind = "run"
+	}
+	info := readProcInfo(session.peerPID)
+	payload := map[string]any{
+		"kind":      kind,
+		"req_id":    first.ReqID,
+		"argv":      first.Argv,
+		"cwd":       first.Cwd,
+		"reason":    first.Reason,
+		"env":       first.Env,
+		"no_prompt": first.NoPrompt,
+		"cli_origin": map[string]any{
+			"pid":  int64(info.PID),
+			"uid":  int64(info.UID),
+			"comm": info.Comm,
+			"tty":  info.TTY,
+		},
+	}
+	from := wire.Sender{AppID: "cli.wash.sudo", InstanceID: session.instanceID}
+	if err := target.WriteEvt(wire.NewEvtAppMsgFrom(target.WindowID, payload, from)); err != nil {
+		_ = session.writeJSON(map[string]any{
+			"t": "priv.error", "req_id": first.ReqID, "code": "internal", "msg": err.Error(),
+		})
+		return
+	}
+
+	// Loop reading further JSON lines from wash-sudo. priv.stdin
+	// (and priv.cancel) get forwarded as app_msgs to wash-priv on
+	// the same session. EOF on the conn = wash-sudo went away; the
+	// defer'd unregister tells wash-priv (via the next write-attempt
+	// failing) that the back-channel is gone.
+	for {
+		line, err := rd.ReadBytes('\n')
+		if err != nil {
+			// Notify wash-priv that the CLI side hung up so it can
+			// kill any in-flight subprocess.
+			_ = target.WriteEvt(wire.NewEvtAppMsgFrom(target.WindowID,
+				map[string]any{"kind": "cli.disconnect", "req_id": first.ReqID},
+				from))
+			return
+		}
+		var next controlReq
+		if err := json.Unmarshal(line, &next); err != nil {
+			continue // tolerate junk lines rather than tear the session down
+		}
+		switch next.T {
+		case "priv.stdin":
+			fwd := map[string]any{
+				"kind":   "stdin",
+				"req_id": first.ReqID,
+				"bytes":  next.StreamBytes, // base64; wash-priv decodes
+			}
+			_ = target.WriteEvt(wire.NewEvtAppMsgFrom(target.WindowID, fwd, from))
+		case "priv.stdin.close":
+			fwd := map[string]any{"kind": "stdin_close", "req_id": first.ReqID}
+			_ = target.WriteEvt(wire.NewEvtAppMsgFrom(target.WindowID, fwd, from))
+		case "priv.cancel":
+			fwd := map[string]any{"kind": "cancel", "req_id": first.ReqID}
+			_ = target.WriteEvt(wire.NewEvtAppMsgFrom(target.WindowID, fwd, from))
+		}
+	}
 }

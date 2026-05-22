@@ -165,6 +165,30 @@ func onAppMsgFrom(c *sdk.Conn, _ uint32, data any, from wire.Sender) {
 		args := toStringSlice(m["args"])
 		reason := toString(m["reason"])
 		st.EnqueueSpawn(c, from, reqID, appID, args, reason)
+	case "run_inline":
+		// Originates from the wash-sudo CLI via the control socket's
+		// priv.run op. The sender is a synthetic cli-* instance and
+		// stays the addressee for stream/stdin/result envelopes.
+		argv := toStringSlice(m["argv"])
+		cwd := toString(m["cwd"])
+		reason := toString(m["reason"])
+		noPrompt, _ := m["no_prompt"].(bool)
+		envMap := toStringMap(m["env"])
+		origin := parseCliOrigin(m["cli_origin"])
+		st.EnqueueRunInline(c, from, reqID, argv, cwd, envMap, reason, noPrompt, origin)
+	case "stdin":
+		// Forwarded bytes for the running subprocess of reqID.
+		raw, _ := m["bytes"].(string)
+		b := decodeBase64(raw)
+		if len(b) > 0 {
+			st.HandleInlineStdin(reqID, b)
+		}
+	case "stdin_close":
+		st.HandleInlineStdinClose(reqID)
+	case "cancel", "cli.disconnect":
+		// cli.disconnect comes from the router when the wash-sudo
+		// side hangs up; semantically the same as a cancel.
+		st.HandleInlineCancel(reqID)
 	default:
 		_ = c.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
 			"kind":   "error",
@@ -173,6 +197,65 @@ func onAppMsgFrom(c *sdk.Conn, _ uint32, data any, from wire.Sender) {
 			"msg":    "unknown kind " + kind,
 		})
 	}
+}
+
+// parseCliOrigin pulls the router-attested pid/uid/comm/tty fields
+// out of the cli_origin sub-map. Returns nil when the message
+// didn't carry one (i.e. the sender wasn't a cli session). All
+// fields are best-effort — a missing tty just shows blank.
+func parseCliOrigin(v any) *CliOrigin {
+	m, ok := v.(map[any]any)
+	if !ok {
+		return nil
+	}
+	return &CliOrigin{
+		PID:  toInt64(m["pid"]),
+		UID:  toInt64(m["uid"]),
+		Comm: toString(m["comm"]),
+		TTY:  toString(m["tty"]),
+	}
+}
+
+func toInt64(v any) int64 {
+	switch x := v.(type) {
+	case int64:
+		return x
+	case uint64:
+		return int64(x)
+	case float64:
+		return int64(x)
+	case int:
+		return int64(x)
+	}
+	return 0
+}
+
+// toStringMap coerces a CBOR-decoded map-of-strings (map[any]any with
+// string keys + string values) into Go's idiomatic map[string]string.
+// Mixed or empty maps yield an empty result.
+func toStringMap(v any) map[string]string {
+	out := map[string]string{}
+	switch x := v.(type) {
+	case map[any]any:
+		for k, vv := range x {
+			ks, _ := k.(string)
+			vs, _ := vv.(string)
+			if ks != "" {
+				out[ks] = vs
+			}
+		}
+	case map[string]any:
+		for k, vv := range x {
+			if s, ok := vv.(string); ok {
+				out[k] = s
+			}
+		}
+	case map[string]string:
+		for k, v := range x {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // onPrepareSpawnResult dispatches to the per-req handler that called

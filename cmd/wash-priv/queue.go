@@ -28,32 +28,49 @@ const (
 	StatusError    Status = "error"    // internal failure (no exec)
 )
 
-// Kind discriminates between {kind:"run"} sugar and {kind:"spawn"}
-// general spawn-as-root. Kept on the request so the FE can render
-// each clearly and the audit log preserves the distinction.
+// Kind discriminates between {kind:"run"} sugar, {kind:"spawn"}
+// general spawn-as-root, and {kind:"run_inline"} CLI-bridged inline
+// exec. Kept on the request so the FE can render each clearly and
+// the audit log preserves the distinction.
 type Kind string
 
 const (
-	KindRun   Kind = "run"
-	KindSpawn Kind = "spawn"
+	KindRun        Kind = "run"         // spawn wash-term --exec argv (window)
+	KindSpawn      Kind = "spawn"       // spawn a registered wash app as root
+	KindRunInline  Kind = "run_inline"  // sudo argv directly, stream io to wash-sudo
 )
 
 // Request is one approval-queue entry. Fields here are also what the
 // audit log records and what the FE renders, so add carefully.
 type Request struct {
-	ReqID      string    // requester-chosen
-	Kind       Kind      // run | spawn
+	ReqID      string      // requester-chosen
+	Kind       Kind        // run | spawn | run_inline
 	Sender     wire.Sender // router-attested
-	AppID      string    // for KindSpawn: target app to launch
-	Argv       []string  // for KindRun: command to wrap in wash-term --exec; for KindSpawn: positional args
-	Reason     string    // freeform explanation, escape-stripped before FE render
+	AppID      string      // for KindSpawn: target app to launch
+	Argv       []string    // for KindRun: command for wash-term --exec; for KindSpawn: positional args; for KindRunInline: argv to sudo
+	Cwd        string      // for KindRunInline: working dir
+	Env        map[string]string // for KindRunInline: caller-allowlisted env vars passed via sudo --preserve-env
+	Reason     string      // freeform explanation, escape-stripped before FE render
+	NoPrompt   bool        // KindRunInline: refuse if password cache is empty
+	CliOrigin  *CliOrigin  // router-attested origin metadata (pid/uid/tty/comm) when sender is a cli-* session
 	Status     Status
 	CreatedAt  time.Time
 	StartedAt  time.Time
 	FinishedAt time.Time
 	ExitCode   int
 	ErrorMsg   string
-	SpawnedInst string // populated once the child handshakes
+	SpawnedInst string // populated once a spawn-style child handshakes
+}
+
+// CliOrigin is the router-attested identity of a wash-sudo caller.
+// PID + UID come from SO_PEERCRED; Comm + TTY are read by the router
+// from /proc/<pid>/. The shape mirrors what the router writes into
+// the payload's cli_origin field — wash-priv copies it verbatim.
+type CliOrigin struct {
+	PID  int64  `json:"pid"`
+	UID  int64  `json:"uid"`
+	Comm string `json:"comm"`
+	TTY  string `json:"tty"`
 }
 
 // pendingPrepareSpawn is the in-flight book-keeping for a request
@@ -90,12 +107,18 @@ type State struct {
 	// at 1.
 	nextWireReqID uint64
 	pendingPrep   map[uint64]*pendingPrepareSpawn
+
+	// inlineProcs tracks live KindRunInline subprocesses by req_id
+	// so cli-originated stdin / cancel / disconnect messages can
+	// address them. Mutated under mu.
+	inlineProcs map[string]*inlineProc
 }
 
 func NewState() *State {
 	return &State{
 		queue:       []*Request{},
 		pendingPrep: map[uint64]*pendingPrepareSpawn{},
+		inlineProcs: map[string]*inlineProc{},
 	}
 }
 
@@ -190,13 +213,14 @@ func renderQueue(q []*Request) []map[string]any {
 }
 
 func requestView(r *Request) map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"req_id":          r.ReqID,
 		"kind":            string(r.Kind),
 		"sender_app_id":   r.Sender.AppID,
 		"sender_inst_id":  r.Sender.InstanceID,
 		"app_id":          r.AppID,
 		"argv":            r.Argv,
+		"cwd":             r.Cwd,
 		"reason":          stripControl(r.Reason),
 		"status":          string(r.Status),
 		"created_ms":      r.CreatedAt.UnixMilli(),
@@ -206,6 +230,15 @@ func requestView(r *Request) map[string]any {
 		"error":           r.ErrorMsg,
 		"spawned_inst_id": r.SpawnedInst,
 	}
+	if r.CliOrigin != nil {
+		out["cli_origin"] = map[string]any{
+			"pid":  r.CliOrigin.PID,
+			"uid":  r.CliOrigin.UID,
+			"comm": r.CliOrigin.Comm,
+			"tty":  r.CliOrigin.TTY,
+		}
+	}
+	return out
 }
 
 func asMillis(t time.Time) int64 {
@@ -244,6 +277,43 @@ func (s *State) EnqueueRun(c *sdk.Conn, from wire.Sender, reqID string, argv []s
 		Sender:    from,
 		Argv:      argv,
 		Reason:    reason,
+		Status:    StatusQueued,
+		CreatedAt: time.Now(),
+	})
+}
+
+// EnqueueRunInline records a {kind:"run_inline"} request from the
+// wash-sudo CLI. argv goes straight to sudo (no wash-term wrap); the
+// subprocess's stdin/stdout/stderr are piped through the cliSession
+// bridge so wash-sudo behaves like a normal `sudo cmd`.
+func (s *State) EnqueueRunInline(c *sdk.Conn, from wire.Sender, reqID string, argv []string, cwd string, env map[string]string, reason string, noPrompt bool, origin *CliOrigin) {
+	if len(argv) == 0 {
+		_ = c.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
+			"kind": "priv.result", "req_id": reqID, "exit_code": 2, "error": "argv is empty",
+		})
+		return
+	}
+	if noPrompt {
+		s.mu.Lock()
+		locked := s.password == nil
+		s.mu.Unlock()
+		if locked {
+			_ = c.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
+				"kind": "priv.result", "req_id": reqID, "exit_code": 1, "error": "no_prompt set and password cache is empty",
+			})
+			return
+		}
+	}
+	s.enqueue(c, &Request{
+		ReqID:     reqID,
+		Kind:      KindRunInline,
+		Sender:    from,
+		Argv:      argv,
+		Cwd:       cwd,
+		Env:       env,
+		Reason:    reason,
+		NoPrompt:  noPrompt,
+		CliOrigin: origin,
 		Status:    StatusQueued,
 		CreatedAt: time.Now(),
 	})
@@ -431,9 +501,112 @@ func (s *State) executeApproved(c *sdk.Conn, r *Request) {
 		s.executeRun(c, r)
 	case KindSpawn:
 		s.executeSpawn(c, r)
+	case KindRunInline:
+		s.executeRunInline(c, r)
 	default:
 		s.finishWithError(c, r, "bad_kind", "unknown kind "+string(r.Kind))
 	}
+}
+
+// executeRunInline runs argv directly under sudo with piped
+// stdin/stdout/stderr, and ferries the bytes to the cli session via
+// SendAppMsgTo. No PrepareSpawn dance — the target isn't a wash app,
+// it's a plain command line.
+func (s *State) executeRunInline(c *sdk.Conn, r *Request) {
+	s.mu.Lock()
+	pw := append([]byte(nil), s.password...)
+	s.mu.Unlock()
+
+	// Snapshot the sender's instance id; we use it to write streams
+	// back. The whole point of EnqueueRunInline is that this is a
+	// cli-... synthetic instance.
+	cliInst := r.Sender.InstanceID
+
+	proc, startErr := startInlineRun(cfg.SudoBin, r.Argv, r.Cwd, r.Env, pw, func(stream string, b []byte) {
+		_ = c.SendAppMsgTo(wire.Recipient{InstanceID: cliInst}, map[string]any{
+			"kind":   "priv.stream",
+			"req_id": r.ReqID,
+			"stream": stream,
+			"bytes":  base64.StdEncoding.EncodeToString(b),
+		})
+	})
+	wipe(pw)
+	if startErr != nil {
+		s.finishInline(c, r, -1, startErr.Error())
+		return
+	}
+	s.mu.Lock()
+	s.inlineProcs[r.ReqID] = proc
+	s.mu.Unlock()
+
+	exit := proc.Wait()
+	s.mu.Lock()
+	delete(s.inlineProcs, r.ReqID)
+	s.mu.Unlock()
+	s.finishInline(c, r, exit, "")
+}
+
+// finishInline records the terminal state on the request, audits,
+// and sends the final priv.result to the cli session.
+func (s *State) finishInline(c *sdk.Conn, r *Request, exit int, errMsg string) {
+	s.mu.Lock()
+	r.FinishedAt = time.Now()
+	r.ExitCode = exit
+	if errMsg != "" {
+		r.Status = StatusError
+		r.ErrorMsg = errMsg
+	} else {
+		r.Status = StatusDone
+	}
+	view := requestView(r)
+	s.appendAudit(auditRecordFromRequest(r, "approve"))
+	s.mu.Unlock()
+	_ = c.SendAppMsg(map[string]any{"kind": "req.update", "req": view})
+	_ = c.SendAppMsgTo(wire.Recipient{InstanceID: r.Sender.InstanceID}, map[string]any{
+		"kind":      "priv.result",
+		"req_id":    r.ReqID,
+		"exit_code": exit,
+		"error":     errMsg,
+	})
+}
+
+// HandleInlineStdin forwards bytes the cli session sent to the
+// running subprocess's stdin pipe. Best-effort — if the process is
+// gone (already exited / cancelled) we silently drop.
+func (s *State) HandleInlineStdin(reqID string, bytes []byte) {
+	s.mu.Lock()
+	proc := s.inlineProcs[reqID]
+	s.mu.Unlock()
+	if proc == nil {
+		return
+	}
+	proc.WriteStdin(bytes)
+}
+
+// HandleInlineStdinClose closes the stdin pipe to the subprocess —
+// the conventional way to signal "no more input." Used by wash-sudo
+// when its own stdin reaches EOF.
+func (s *State) HandleInlineStdinClose(reqID string) {
+	s.mu.Lock()
+	proc := s.inlineProcs[reqID]
+	s.mu.Unlock()
+	if proc == nil {
+		return
+	}
+	proc.CloseStdin()
+}
+
+// HandleInlineCancel kills a running inline subprocess. Used by
+// wash-sudo Ctrl-C and by the router when the cli session conn
+// closes unexpectedly.
+func (s *State) HandleInlineCancel(reqID string) {
+	s.mu.Lock()
+	proc := s.inlineProcs[reqID]
+	s.mu.Unlock()
+	if proc == nil {
+		return
+	}
+	proc.Cancel()
 }
 
 // executeRun spawns wash-term with --exec ARGV as root via the

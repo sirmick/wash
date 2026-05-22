@@ -43,6 +43,7 @@ interface ReqView {
   sender_inst_id: string;
   app_id: string;
   argv: string[];
+  cwd?: string;
   reason: string;
   status: Status;
   created_ms: number;
@@ -51,6 +52,15 @@ interface ReqView {
   exit_code: number;
   error: string;
   spawned_inst_id: string;
+  // Router-attested metadata when this request came from the
+  // wash-sudo CLI (sender_app_id == "cli.wash.sudo"). Fields are
+  // unforgeable — read from SO_PEERCRED + /proc by the router.
+  cli_origin?: {
+    pid: number;
+    uid: number;
+    comm: string;
+    tty: string;
+  };
 }
 
 interface BEMessage {
@@ -375,7 +385,22 @@ const ReqRow: Component<{
       <div>
         <div style={{ font: '11px ui-monospace,Menlo,Consolas,monospace', opacity: 0.7 }}>
           <span data-testid={`priv-req-sender-${props.req.req_id}`}>
-            {props.req.sender_app_id || '(unknown)'}
+            <Show
+              when={props.req.cli_origin}
+              fallback={<>{props.req.sender_app_id || '(unknown)'}</>}
+            >
+              Terminal{' '}
+              <Show when={props.req.cli_origin!.tty}>
+                <span style={{ opacity: 0.85 }}>{props.req.cli_origin!.tty}</span>{' '}
+              </Show>
+              <span style={{ opacity: 0.6 }}>
+                (pid {props.req.cli_origin!.pid}
+                <Show when={props.req.cli_origin!.comm}>
+                  , {props.req.cli_origin!.comm}
+                </Show>
+                )
+              </span>
+            </Show>
           </span>
           <span style={{ opacity: 0.5 }}> · {props.req.kind}</span>
         </div>

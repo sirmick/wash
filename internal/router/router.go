@@ -3,6 +3,8 @@ package router
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -118,6 +120,14 @@ type Router struct {
 	// different app can't be redeemed.
 	pendingByToken map[string]*tokenPending
 
+	// cliSessions are control-socket connections promoted to a
+	// streaming back-channel for wash-priv inline ops (wash-sudo
+	// CLI). Each has a synthetic instance_id of the form "cli-<n>";
+	// SendAppMsgTo from any app to that id is routed to the
+	// connection by writing the payload as a JSON envelope.
+	cliMu       sync.Mutex
+	cliSessions map[string]*cliSession
+
 	clipboard clipboardState
 
 	sessionMu sync.Mutex
@@ -151,6 +161,7 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		singletons:     make(map[string]*AppInstance),
 		pendingAttach:  make(map[int]chan attachResult),
 		pendingByToken: make(map[string]*tokenPending),
+		cliSessions:    make(map[string]*cliSession),
 	}
 }
 
@@ -356,6 +367,18 @@ func (r *Router) spawnEnv() []string {
 	var env []string
 	if r.cfg.ControlSocket != "" {
 		env = append(env, "WASH_CONTROL_SOCKET="+r.cfg.ControlSocket)
+	}
+	// WASH_BIN_DIR points at the directory the wash-router binary
+	// lives in — in dev, that's where wash-launch and every wash app
+	// sit; in prod packagings it depends on the install layout.
+	// Consumers like wash-term prepend it to the shell's PATH so the
+	// in-terminal experience is "type wash-launch and it works" —
+	// the xterm-loads-DISPLAY analogue but for the wash CLI tools.
+	if exe, err := os.Executable(); err == nil {
+		if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
+			exe = resolved
+		}
+		env = append(env, "WASH_BIN_DIR="+filepath.Dir(exe))
 	}
 	return env
 }

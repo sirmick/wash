@@ -14,7 +14,7 @@ GOARCH  ?= amd64
 GOFLAGS := -trimpath -ldflags=-s\ -w -tags netgo,osusergo
 
 OUT     := out
-BINS    := wash-router wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-settings wash-top wash-priv wash-launch
+BINS    := wash-router wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-settings wash-top wash-priv wash-launch wash-sudo
 TARGETS := $(addprefix $(OUT)/,$(BINS))
 
 # Test app: not part of the default build; built explicitly with
@@ -205,6 +205,10 @@ $(OUT)/wash-priv: $(PRIV_STAMP) | $(OUT)
 # wash-launch is a CLI, not an app. No FE bundle, no embedded assets.
 $(OUT)/wash-launch: | $(OUT)
 	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-launch
+
+# wash-sudo is also a CLI — the privilege-aware shell wrapper.
+$(OUT)/wash-sudo: | $(OUT)
+	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-sudo
 
 # fakesudo: tiny sudo stub for wash-priv e2e tests. Not part of the
 # default build; only the e2e harness should ever invoke it. Lives

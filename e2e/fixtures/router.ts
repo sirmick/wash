@@ -28,6 +28,7 @@ const BULK_BIN = join(REPO_ROOT, 'out', 'wash-bulk');
 const EDIT_BIN = join(REPO_ROOT, 'out', 'wash-edit');
 const PRIV_BIN = join(REPO_ROOT, 'out', 'wash-priv');
 const FAKESUDO_BIN = join(REPO_ROOT, 'out', 'wash-priv-fakesudo');
+export const SUDO_BIN = join(REPO_ROOT, 'out', 'wash-sudo');
 
 export interface RouterHandle {
   url: string;

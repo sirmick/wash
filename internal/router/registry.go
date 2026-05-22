@@ -132,23 +132,33 @@ func (r *Registry) appendEntry(e *Entry) {
 }
 
 // isTrustedBinary reports whether path is acceptable as a host for a
-// reservedID. Rules: (a) the file MUST NOT be world- or group-
-// writable; (b) either it is owned by uid 0, OR it lives under one of
-// the registry's trustedDirs. Stat failures fail closed.
+// reservedID. Two branches:
+//
+//   (a) Root-owned strict path: file owned by uid 0 AND not group- or
+//       world-writable. This is the production posture — root install
+//       under /usr/share/wash/apps/.
+//   (b) Trusted-dir relaxed path: the file lives directly under one
+//       of the registry's trustedDirs and is not world-writable. The
+//       dir declaration IS the trust statement; group-writability is
+//       accepted because dev-mode binaries built with default umask
+//       (0775) would otherwise be unusable. World-write is still a
+//       hard fail — that's the "anyone on the box" case.
+//
+// Stat failures fail closed.
 func (r *Registry) isTrustedBinary(path string) bool {
 	info, err := os.Stat(path)
 	if err != nil {
-		return false
-	}
-	if info.Mode().Perm()&0o022 != 0 {
 		return false
 	}
 	sys, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
 		return false
 	}
-	if sys.Uid == 0 {
+	if sys.Uid == 0 && info.Mode().Perm()&0o022 == 0 {
 		return true
+	}
+	if info.Mode().Perm()&0o002 != 0 {
+		return false
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {

@@ -463,17 +463,25 @@ func (inst *AppInstance) handleEvt(payload []byte) error {
 // user assumption. The router still validates the recipient
 // (existence, singleton-vs-sentinel rules) and logs failures.
 func (inst *AppInstance) relayAppMsgCrossInstance(m wire.EvtAppMsgSendTo) error {
-	target, _, err := inst.router.resolveRecipient(context.Background(), m.Recipient)
-	if err != nil {
-		inst.router.log("app %s app_msg.send.to: %v", inst.AppID, err)
-		return nil
-	}
 	// From identifies the sending instance to the receiver. The
 	// router is the only party that can fill it accurately —
 	// trust-by-relay. wash-priv's approval UI uses this for the
 	// "App <X> wants to run <Y>" prompt; payload-claimed identity
 	// would be spoofable.
 	from := wire.Sender{AppID: inst.AppID, InstanceID: inst.InstanceID}
+	// CLI session fast-path: SendAppMsgTo({InstanceID:"cli-..."})
+	// targets a control-socket connection promoted to a streaming
+	// back-channel, not a registered app. Used by wash-priv to
+	// stream stdout/stderr/exit back to wash-sudo. The session
+	// renders the payload as a JSON envelope on the conn.
+	if cli := inst.router.findCliSession(m.Recipient.InstanceID); cli != nil {
+		return cli.writeAppMsg(&Sender{AppID: from.AppID, InstanceID: from.InstanceID}, m.Data)
+	}
+	target, _, err := inst.router.resolveRecipient(context.Background(), m.Recipient)
+	if err != nil {
+		inst.router.log("app %s app_msg.send.to: %v", inst.AppID, err)
+		return nil
+	}
 	return target.WriteEvt(wire.NewEvtAppMsgFrom(target.WindowID, m.Data, from))
 }
 

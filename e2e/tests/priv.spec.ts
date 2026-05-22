@@ -28,9 +28,10 @@
 // browser, target wash-term --exec (which auto-exits), and assert
 // the {kind:"result"} reply + exit-code-populated audit row.
 
-import { test, expect } from '../fixtures/router';
+import { test, expect, SUDO_BIN } from '../fixtures/router';
 import { readFileSync, existsSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
+import { spawn } from 'node:child_process';
 
 const PASSWORD = 'test123';
 const HKDF_INFO = 'wash-priv/password/v1';
@@ -224,6 +225,71 @@ test('cross-app spawn: enqueue → approve → unlock → fakesudo exec → resu
   // path is covered by the wrong-password test (which records
   // "password_failed") and would also fire on a target like wash-
   // term --exec that auto-exits in a future Playwright follow-up.
+});
+
+// wash-sudo CLI: full streaming inline flow. The CLI sends priv.run
+// on the control socket, the headless approve+unlock drives wash-
+// priv, fakesudo exec's whoami, the byte stream comes back through
+// the cli session, wash-sudo prints to stdout and exits 0.
+test('wash-sudo inline flow streams stdout and propagates exit', async ({ router }) => {
+  if (!existsSync(SUDO_BIN)) test.skip(true, 'wash-sudo binary missing');
+  const { privInst } = await drivePriv(router);
+
+  // Fire wash-sudo as a subprocess. WASH_CONTROL_SOCKET is the only
+  // env it needs. We capture stdout/stderr to assert the streamed
+  // bytes landed.
+  const proc = spawn(SUDO_BIN, ['whoami'], {
+    env: { ...process.env, WASH_CONTROL_SOCKET: router.controlSocket },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  proc.stdout.on('data', (b: Buffer) => { stdout += b.toString('utf8'); });
+  proc.stderr.on('data', (b: Buffer) => { stderr += b.toString('utf8'); });
+
+  // Router logs every CLI invocation with the requester-supplied
+  // req_id. We use that as the sync point before approving.
+  const m = await router.waitForLog(/priv\.run req_id=(ws-[a-f0-9]+)/, 5000);
+  const reqMatch = m.match(/req_id=(ws-[a-f0-9]+)/);
+  expect(reqMatch, 'log carries a req_id').toBeTruthy();
+  const reqID = reqMatch![1];
+
+  // Approve via the control socket (delivers as OnAppMsg — own-FE
+  // path — which is what HandleApprove expects).
+  await router.controlRequest({
+    t: 'msg', instance_id: privInst,
+    data: { kind: 'approve', req_id: reqID },
+  });
+
+  // wash-priv replies need_password; sniff the BE pubkey from the
+  // log and ship a real unlock with the FAKESUDO_PASSWORD.
+  const km = await router.waitForLog(/wash-priv: need_password be_pubkey=([A-Za-z0-9+/=]+)/, 5000);
+  const bePub = b64decode(km.replace(/^.*be_pubkey=/, ''));
+  const enc = await encryptPassword(PASSWORD, bePub);
+  await router.controlRequest({
+    t: 'msg', instance_id: privInst,
+    data: {
+      kind: 'unlock',
+      ciphertext: enc.ciphertext, fe_pubkey: enc.fe_pubkey, nonce: enc.nonce,
+    },
+  });
+
+  // Wait for the process to exit. The streamed "mick\n" (or whatever
+  // whoami prints on this box) should be on stdout by then.
+  const exitCode: number = await new Promise((resolve) => {
+    proc.on('exit', (code) => resolve(code ?? -1));
+  });
+  expect(exitCode, `wash-sudo exit (stderr: ${stderr})`).toBe(0);
+  expect(stdout.trim().length, 'whoami produced some output').toBeGreaterThan(0);
+
+  // fakesudo's log proves the right binary was invoked with the
+  // right argv on the sudo boundary. exec.exit==-1 is fakesudo's
+  // "dispatched before c.Run returned" sentinel — for fast commands
+  // like whoami it may also have a real exit code, so we just
+  // check the exec line exists.
+  const entries = fakesudoEntries(router.fakesudoLog);
+  const exec = entries.find((e) => e.mode === 'exec' && e.target === 'whoami');
+  expect(exec, 'fakesudo dispatched whoami').toBeTruthy();
 });
 
 test('wrong password rejects the unlock without touching the cache', async ({ router }) => {
