@@ -885,7 +885,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   const onDragStart = (ev: DragEvent, p: string) => {
     if (!ev.dataTransfer) return;
-    ev.dataTransfer.effectAllowed = 'move';
+    // effectAllowed = 'copyMove' (not 'move') so the browser
+    // accepts Alt/Option-drag as a copy gesture on macOS — when
+    // the user holds Option, the OS shifts the drag cursor to
+    // the "+ copy" badge, and the drop event still fires with
+    // altKey=true. With 'move' alone, some browsers reject
+    // Option-drag entirely. We don't include 'link' because
+    // create-symlink lives behind the Alt menu, not the cursor
+    // badge.
+    ev.dataTransfer.effectAllowed = 'copyMove';
     const paths = selection().has(p) ? Array.from(selection()) : [p];
     ev.dataTransfer.setData(DRAG_MIME, JSON.stringify(paths));
     // text/plain is a friendly fallback for drops onto non-wash
@@ -919,11 +927,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // tells the browser "this is a valid drop target," and
   // stopPropagation keeps the list-pane onDragOver from also
   // claiming the event (which would clear dropTargetPath).
+  // dropEffect mirrors the alt/option modifier so the OS cursor
+  // shows the right hint (+copy when Option held, regular move
+  // otherwise) — without this, Mac users get no feedback that
+  // the modifier is actually doing something.
   const onRowDragOver = (ev: DragEvent, rowPath: string) => {
     if (!ev.dataTransfer || !ev.dataTransfer.types.includes(DRAG_MIME)) return;
     ev.preventDefault();
     ev.stopPropagation();
-    ev.dataTransfer.dropEffect = 'move';
+    ev.dataTransfer.dropEffect = ev.altKey ? 'copy' : 'move';
     if (dropTargetPath() !== rowPath) setDropTargetPath(rowPath);
   };
 
@@ -944,7 +956,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const onListDragOver = (ev: DragEvent) => {
     if (!ev.dataTransfer || !ev.dataTransfer.types.includes(DRAG_MIME)) return;
     ev.preventDefault();
-    ev.dataTransfer.dropEffect = 'move';
+    ev.dataTransfer.dropEffect = ev.altKey ? 'copy' : 'move';
     if (dropTargetPath() !== '') setDropTargetPath('');
   };
 
