@@ -247,12 +247,26 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
   // Subscription effect: whenever (props.open, cwd) changes, swap
   // the active watch. The diff vs. watchedPath ensures we never
   // hold more than one subscription and never strand one open.
+  //
+  // Also: on each false → true open transition, force-reload the
+  // current cwd. While closed we hold no watch (we unsubscribe to
+  // free the BE), so any disk changes that happened in the gap
+  // are invisible to the watcher. A re-list closes that gap so
+  // the user never sees a stale picker.
+  let prevOpen = false;
   createEffect(() => {
-    const want = props.open ? cwd() : '';
-    if (want === watchedPath) return;
-    if (watchedPath) sendUnwatch(watchedPath);
-    watchedPath = want;
-    if (want) sendWatch(want);
+    const open = props.open;
+    const c = cwd();
+    const want = open ? c : '';
+    if (want !== watchedPath) {
+      if (watchedPath) sendUnwatch(watchedPath);
+      watchedPath = want;
+      if (want) sendWatch(want);
+    }
+    if (open && !prevOpen) {
+      void loadDir(c);
+    }
+    prevOpen = open;
   });
 
   onMount(() => {
