@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/internal/wire"
 )
 
 //go:embed all:assets
@@ -241,6 +242,25 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			if err := c.SpawnRequest(appID); err != nil {
 				log.Printf("wash-test spawn err: %v", err)
 			}
+		}
+	case "send_to":
+		// Cross-app messaging exerciser for e2e tests. The harness
+		// uses it to drive wash-test into sending an arbitrary
+		// payload to wash-priv (or any singleton), so the receiver
+		// sees a router-attested sender of "com.wash.test" — the
+		// path payload-claimed identity would never produce.
+		targetAppID, _ := m["target_app"].(string)
+		targetInstID, _ := m["target_inst"].(string)
+		payload, ok := m["payload"]
+		if !ok {
+			log.Printf("wash-test send_to: missing payload")
+			return
+		}
+		recip := wire.Recipient{AppID: targetAppID, InstanceID: targetInstID}
+		if err := c.SendAppMsgTo(recip, payload); err != nil {
+			log.Printf("wash-test send_to err: %v", err)
+		} else {
+			log.Printf("wash-test send_to ok target_app=%s target_inst=%s", targetAppID, targetInstID)
 		}
 	case "fe_event":
 		log.Printf("wash-test fe_event %v", m["type"])

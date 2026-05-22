@@ -307,6 +307,10 @@ func (s *State) HandleApprove(c *sdk.Conn, reqID string) {
 		}
 		s.handshake = hs
 		s.mu.Unlock()
+		// Pubkey is public by definition — logging it gives the e2e
+		// harness a way to drive the password flow without a browser.
+		// In prod this is one harmless log line per unlock attempt.
+		log.Printf("wash-priv: need_password be_pubkey=%s", base64.StdEncoding.EncodeToString(pub))
 		_ = c.SendAppMsg(map[string]any{
 			"kind":      "need_password",
 			"be_pubkey": pub,

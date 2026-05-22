@@ -206,9 +206,15 @@ $(OUT)/wash-priv: $(PRIV_STAMP) | $(OUT)
 $(OUT)/wash-launch: | $(OUT)
 	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-launch
 
+# fakesudo: tiny sudo stub for wash-priv e2e tests. Not part of the
+# default build; only the e2e harness should ever invoke it. Lives
+# in cmd/ so it shares the go module + GOFLAGS settings.
+$(OUT)/wash-priv-fakesudo: | $(OUT)
+	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-priv-fakesudo
+
 # Convenience target: build the test app + everything else.
 .PHONY: test-app
-test-app:
+test-app: $(OUT)/wash-priv-fakesudo
 	$(MAKE) TEST_APP=1 all
 
 # Full-stack e2e: builds everything (incl. test app), then runs the

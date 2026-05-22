@@ -26,6 +26,8 @@ const LAUNCH_BIN = join(REPO_ROOT, 'out', 'wash-launch');
 const FM_BIN = join(REPO_ROOT, 'out', 'wash-fm');
 const BULK_BIN = join(REPO_ROOT, 'out', 'wash-bulk');
 const EDIT_BIN = join(REPO_ROOT, 'out', 'wash-edit');
+const PRIV_BIN = join(REPO_ROOT, 'out', 'wash-priv');
+const FAKESUDO_BIN = join(REPO_ROOT, 'out', 'wash-priv-fakesudo');
 
 export interface RouterHandle {
   url: string;
@@ -41,6 +43,12 @@ export interface RouterHandle {
   screenshotDir: string;
   /** per-test fm sandbox root. Empty when fmRoot wasn't requested. */
   fmRoot: string;
+  /**
+   * Path to the fakesudo audit log when fakesudo:true was set;
+   * empty otherwise. Tests read this to assert which targets
+   * wash-priv invoked, with what argv, after which password.
+   */
+  fakesudoLog: string;
   log(): string;
   waitForLog(pattern: RegExp, timeout?: number): Promise<string>;
   /**
@@ -64,11 +72,21 @@ export interface RouterOptions {
   /** kiosk mode: --no-session + --initial-app=<appID>. */
   kiosk?: string;
   /** include these binaries in the apps dir; defaults to all five. */
-  apps?: ('session' | 'about' | 'test' | 'term' | 'fm' | 'bulk')[];
+  apps?: ('session' | 'about' | 'test' | 'term' | 'fm' | 'bulk' | 'priv')[];
   /** include manifest.hidden apps in the catalog. */
   showHidden?: boolean;
   /** extra wash-router args. */
   extraArgs?: string[];
+  /**
+   * If true, wire the wash-priv fakesudo binary into wash-priv's env
+   * via WASH_PRIV_SUDO_BIN, and create a temp FAKESUDO_LOG file the
+   * test can read back. Implies apps:['priv', ...]. The fakesudo
+   * accepts FAKESUDO_PASSWORD (default "test123") and otherwise
+   * exec's whatever target was passed after `--`.
+   */
+  fakesudo?: boolean;
+  /** override the password fakesudo accepts. Default "test123". */
+  fakesudoPassword?: string;
   /**
    * If true, create a per-test sandbox dir, seed it (via fmSeed if
    * provided, otherwise leave empty), and pass it to the spawned
@@ -118,6 +136,12 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
     }
   }
   const wanted = opts.apps ?? ['session', 'about', 'test', 'term', 'fm', 'bulk', 'edit'];
+  // fakesudo:true implies wash-priv in the apps dir — the BE is what
+  // reads WASH_PRIV_SUDO_BIN, so without it the test wires the env
+  // var into a process that never receives it.
+  if (opts.fakesudo && !wanted.includes('priv')) {
+    wanted.push('priv');
+  }
   const bins: string[] = [];
   if (wanted.includes('session')) bins.push(SESSION_BIN);
   if (wanted.includes('about')) bins.push(ABOUT_BIN);
@@ -126,7 +150,18 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   if (wanted.includes('fm')) bins.push(FM_BIN);
   if (wanted.includes('bulk')) bins.push(BULK_BIN);
   if (wanted.includes('edit')) bins.push(EDIT_BIN);
+  if (wanted.includes('priv')) {
+    if (!existsSync(PRIV_BIN)) {
+      throw new Error(`missing wash-priv: ${PRIV_BIN}`);
+    }
+    bins.push(PRIV_BIN);
+  }
   const appsDir = stageApps(bins);
+  // wash-priv claims a reservedID (com.wash.priv) which the registry
+  // refuses from a non-root-owned binary by default. The e2e dir is
+  // owned by the test runner; opt it into the trusted list so the
+  // priv binary registers correctly.
+  const trustForPriv = wanted.includes('priv') ? appsDir : '';
 
   const port = await freePort();
   // Each test gets its own control-socket path so concurrent test
@@ -162,6 +197,28 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
     if (opts.fmSeed) opts.fmSeed(fmRoot);
     env.WASH_FM_ROOT = fmRoot;
   }
+  if (trustForPriv) {
+    env.WASH_TRUSTED_APPS_DIRS = trustForPriv;
+  }
+  // fakesudo wiring: WASH_PRIV_SUDO_BIN is read by wash-priv at
+  // startup; FAKESUDO_LOG is read by fakesudo on every invocation
+  // so tests can prove which targets it was asked to exec. We add
+  // them to the router's env, which is inherited by every app the
+  // router spawns (including wash-priv).
+  let fakesudoLog = '';
+  if (opts.fakesudo) {
+    if (!existsSync(FAKESUDO_BIN)) {
+      throw new Error(`missing wash-priv-fakesudo: ${FAKESUDO_BIN}\n(make out/wash-priv-fakesudo)`);
+    }
+    fakesudoLog = join(appsDir, 'fakesudo.log');
+    env.WASH_PRIV_SUDO_BIN = FAKESUDO_BIN;
+    env.FAKESUDO_LOG = fakesudoLog;
+    if (opts.fakesudoPassword) env.FAKESUDO_PASSWORD = opts.fakesudoPassword;
+    // Disable idle timer so e2e doesn't race the password expiry.
+    env.WASH_PRIV_IDLE = '0';
+    // Point the audit log somewhere bounded.
+    env.WASH_PRIV_AUDIT_PATH = join(appsDir, 'priv-audit.log');
+  }
 
   const proc = spawn(ROUTER_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'], env });
   let logBuf = '';
@@ -190,6 +247,7 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
     controlSocket,
     screenshotDir,
     fmRoot,
+    fakesudoLog,
     log: () => logBuf,
     waitForLog: (re, timeout = 5_000) => waitForRegex(() => logBuf, re, timeout),
     controlRequest: (req, timeoutMs = 5_000) => controlRoundtrip(controlSocket, req, timeoutMs),

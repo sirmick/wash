@@ -137,12 +137,22 @@ func main() {
 	logf := func(format string, args ...any) { logger.Printf(format, args...) }
 
 	reg := router.NewRegistry()
-	// In dev mode, treat the apps dirs themselves as trusted so a
-	// developer-owned wash-priv binary in out/ can serve its reserved
-	// id without a chown root. Production runs (no --dev) require
-	// reserved-id binaries to be uid-0 owned.
+	// Trust gate for reservedIDs (e.g. com.wash.priv). Two opt-in
+	// paths: --dev opts the apps dirs into trusted by virtue of "this
+	// is a dev box," and WASH_TRUSTED_APPS_DIRS lets e2e tests +
+	// non-dev integration setups declare specific dirs as trusted
+	// without inheriting --dev's fsnotify + auto-restart behavior.
+	// Production runs (no --dev, no env) require reserved-id binaries
+	// to be uid-0 owned.
+	var trustedDirs []string
 	if cfg.Dev {
-		reg.SetTrustedDirs(cfg.AppsDirs)
+		trustedDirs = append(trustedDirs, cfg.AppsDirs...)
+	}
+	if v := os.Getenv("WASH_TRUSTED_APPS_DIRS"); v != "" {
+		trustedDirs = append(trustedDirs, router.SplitAppsDir(v)...)
+	}
+	if len(trustedDirs) > 0 {
+		reg.SetTrustedDirs(trustedDirs)
 	}
 	scanCtx, scanCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := reg.Scan(scanCtx, cfg.AppsDirs); err != nil {
