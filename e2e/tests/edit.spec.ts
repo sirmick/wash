@@ -37,23 +37,25 @@ test.describe('wash-edit', () => {
     await expect(editor.locator('[data-testid="edit-entry-hello.md"]')).toBeVisible();
     await expect(editor.locator('[data-testid="edit-entry-config.json"]')).toBeVisible();
 
-    // Click hello.md — a tab appears, content lands in CM.
-    await editor.locator('[data-testid="edit-entry-hello.md"]').click();
+    // Double-click hello.md — single click selects, double click
+    // opens (matches fm). A tab appears, content lands in CM.
+    await editor.locator('[data-testid="edit-entry-hello.md"]').dblclick();
     await expect(editor.locator('[data-testid="edit-tab-' + join(router.fmRoot, 'hello.md') + '"]')).toBeVisible();
     await expect(editor.locator('.cm-content')).toContainText('first line');
   });
 
   test('expand folder, open nested file', async ({ page, router }) => {
     const editor = await openEditor(page, router);
-    await editor.locator('[data-testid="edit-entry-src"]').click();
+    // Double-click folder to expand; double-click file to open.
+    await editor.locator('[data-testid="edit-entry-src"]').dblclick();
     await expect(editor.locator('[data-testid="edit-entry-index.js"]')).toBeVisible();
-    await editor.locator('[data-testid="edit-entry-index.js"]').click();
+    await editor.locator('[data-testid="edit-entry-index.js"]').dblclick();
     await expect(editor.locator('.cm-content')).toContainText('export const x = 1');
   });
 
   test('edit then Ctrl+S writes to disk', async ({ page, router }) => {
     const editor = await openEditor(page, router);
-    await editor.locator('[data-testid="edit-entry-hello.md"]').click();
+    await editor.locator('[data-testid="edit-entry-hello.md"]').dblclick();
     await expect(editor.locator('.cm-content')).toContainText('first line');
 
     // Focus the editor and type a new line.
@@ -128,7 +130,7 @@ test.describe('wash-edit', () => {
 
   test('Ctrl+W closes the active tab', async ({ page, router }) => {
     const editor = await openEditor(page, router);
-    await editor.locator('[data-testid="edit-entry-hello.md"]').click();
+    await editor.locator('[data-testid="edit-entry-hello.md"]').dblclick();
     const tab = editor.locator('[data-testid="edit-tab-' + join(router.fmRoot, 'hello.md') + '"]');
     await expect(tab).toBeVisible();
     await editor.click();
@@ -138,9 +140,9 @@ test.describe('wash-edit', () => {
 
   test('opening the same file twice converges on one tab', async ({ page, router }) => {
     const editor = await openEditor(page, router);
-    await editor.locator('[data-testid="edit-entry-hello.md"]').click();
-    await editor.locator('[data-testid="edit-entry-config.json"]').click();
-    await editor.locator('[data-testid="edit-entry-hello.md"]').click();
+    await editor.locator('[data-testid="edit-entry-hello.md"]').dblclick();
+    await editor.locator('[data-testid="edit-entry-config.json"]').dblclick();
+    await editor.locator('[data-testid="edit-entry-hello.md"]').dblclick();
     // Exactly two tabs total. The close ✕ element shares the
     // edit-tab- prefix (edit-tab-close-…), so scope the count to
     // tabs whose id matches a real path (starts with "/").

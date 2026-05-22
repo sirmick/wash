@@ -57,6 +57,11 @@ interface Entry {
   type: 'dir' | 'file' | 'symlink' | 'other';
   size: number;
   mod_unix: number;
+  // link_to / link_err carry the symlink target as returned by
+  // the BE (internal/fs.Entry). Used by the double-click handler
+  // to follow links — same affordance fm has.
+  link_to?: string;
+  link_err?: string;
 }
 
 interface BEMessage {
@@ -185,6 +190,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     | { x: number; y: number; src: string; destDir: string }
   >(null);
   const [renaming, setRenaming] = createSignal<{ path: string; draft: string } | null>(null);
+
+  // ctxMenu drives the right-click context menu on sidebar rows.
+  // Same pattern as fm: right-clicking implicitly selects the row
+  // so the menu's actions operate on what was clicked, not a
+  // stale selection elsewhere.
+  const [ctxMenu, setCtxMenu] = createSignal<
+    | null
+    | { x: number; y: number; entry: Entry; path: string }
+  >(null);
   // untitledCounter — monotonically increasing index for naming
   // fresh Untitled-N buffers. Resets only on app remount.
   let untitledCounter = 0;
@@ -733,7 +747,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     if (paths.length === 0) return;
     ev.preventDefault();
     setDropTargetPath('');
-    const dest = root();
+    // Empty-pane drop lands in the user's notion of "current dir"
+    // — mirrors fm's dirOfSelection, so dropping while a folder
+    // is selected drops INTO that folder rather than always the
+    // project root.
+    const dest = dirOfSelection();
     if (!dest) return;
     if (ev.altKey) {
       const rect = props.host.getBoundingClientRect();
@@ -899,16 +917,84 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     return rows;
   });
 
-  // ---- row click ----
+  // ---- row click semantics ----
+  //
+  // Single click = SELECT (matches fm). Double click = ACT —
+  // expand folder / open file / follow symlink. The split exists
+  // so right-click context-menu actions land on a clean target
+  // without the row also opening underneath them.
 
   const onRowClick = (row: { entry: Entry; path: string }) => {
+    setSelectedPath(row.path);
+  };
+
+  const onRowDblClick = (row: { entry: Entry; path: string }) => {
     if (row.entry.type === 'dir') {
       toggleExpand(row.path);
       return;
     }
+    if (row.entry.type === 'symlink') {
+      followSymlink(row.entry, row.path);
+      return;
+    }
     if (row.entry.type === 'file') {
-      setSelectedPath(row.path);
       void openInTab(row.path);
+    }
+  };
+
+  // followSymlink resolves the link target (absolute or relative
+  // to the link's parent) and decides what to do with it: a dir
+  // gets expanded and selected; a file opens in a tab. Same logic
+  // fm uses for navigation.
+  const followSymlink = (e: Entry, p: string) => {
+    if (!e.link_to) return;
+    const target = e.link_to.startsWith('/')
+      ? e.link_to
+      : joinPath(parentPath(p), e.link_to);
+    setSelectedPath(target);
+    // We don't know the target's type without statting. Try as
+    // both: openInTab is a no-op for dirs (the read returns
+    // is_dir and openInTab silently exits) and loadDir is a
+    // no-op for files. One of them lands.
+    void openInTab(target);
+    if (!listings[target]) {
+      void loadDir(target);
+    }
+    setExpanded(target, true);
+  };
+
+  // dirOfSelection picks the target directory for an empty-pane
+  // drop or a "create file here" action. Order matches fm's
+  // pattern: single folder selected → that folder; single file
+  // selected → its parent; nothing → root.
+  const dirOfSelection = (): string => {
+    const p = selectedPath();
+    if (!p) return root();
+    const par = parentPath(p);
+    const entries = listings[par];
+    const entry = entries?.find((x) => x.name === baseName(p));
+    if (entry?.type === 'dir') return p;
+    return par || root();
+  };
+
+  // ---- context menu ----
+
+  const openCtxMenu = (ev: MouseEvent, entry: Entry, p: string) => {
+    ev.preventDefault();
+    setSelectedPath(p);
+    const rect = props.host.getBoundingClientRect();
+    setCtxMenu({ x: ev.clientX - rect.left, y: ev.clientY - rect.top, entry, path: p });
+  };
+  const closeCtxMenu = () => setCtxMenu(null);
+
+  // ctxCopyPath drops the selected row's path on the host
+  // clipboard so the user can paste it elsewhere (terminal,
+  // chat, etc). Mirrors fm's "Copy path" item.
+  const ctxCopyPath = async (p: string) => {
+    try {
+      await navigator.clipboard.writeText(p);
+    } catch {
+      /* ignore — best effort, no UX feedback needed in v1 */
     }
   };
 
@@ -1097,8 +1183,55 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // (not document) so they only fire when this editor window is
     // focused. CodeMirror's own keymaps already cover in-editor
     // shortcuts (find, undo, etc.); these handle file-level acts.
+    // isTypingInEditor returns true when CodeMirror (or any input
+    // / textarea / contenteditable, including the picker's path
+    // input and the inline rename) has focus. Used to guard plain
+    // keystrokes like F2 / Delete / Escape so they only fire when
+    // the sidebar is the active surface — fm's same discipline.
+    const isTypingInEditor = (): boolean => {
+      const el = document.activeElement as HTMLElement | null;
+      if (!el) return false;
+      if (editorMountEl && editorMountEl.contains(el)) return true;
+      const tag = el.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return true;
+      if (el.isContentEditable) return true;
+      return false;
+    };
+
     const onKey = (ev: KeyboardEvent) => {
       const cmd = ev.ctrlKey || ev.metaKey;
+
+      // Sidebar-only plain keys: F2, Delete, Backspace, Escape.
+      // Guarded so CM's own bindings (Backspace = delete char,
+      // Escape = close search panel) still win when CM is focused.
+      if (!cmd && !ev.altKey && !isTypingInEditor()) {
+        if (ev.key === 'F2' && selectedPath()) {
+          ev.preventDefault();
+          startRename(selectedPath());
+          return;
+        }
+        if ((ev.key === 'Delete' || ev.key === 'Backspace') && selectedPath()) {
+          ev.preventDefault();
+          void commitDelete(selectedPath());
+          return;
+        }
+        if (ev.key === 'Escape' && selectedPath()) {
+          ev.preventDefault();
+          setSelectedPath('');
+          return;
+        }
+        // Enter mimics fm: act on the selected row (open file /
+        // expand folder / follow symlink). Same logic as
+        // onRowDblClick so behavior is identical to double-click.
+        if (ev.key === 'Enter' && selectedPath()) {
+          ev.preventDefault();
+          const par = parentPath(selectedPath());
+          const entry = listings[par]?.find((x) => x.name === baseName(selectedPath()));
+          if (entry) onRowDblClick({ entry, path: selectedPath() });
+          return;
+        }
+      }
+
       if (!cmd) return;
       // Ctrl+S: save active tab.
       if ((ev.key === 's' || ev.key === 'S') && !ev.shiftKey) {
@@ -1377,6 +1510,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                       if (renaming()?.path === row.path) return;
                       onRowClick(row);
                     }}
+                    onDblClick={() => {
+                      if (renaming()?.path === row.path) return;
+                      onRowDblClick(row);
+                    }}
+                    onContextMenu={(ev) => openCtxMenu(ev, row.entry, row.path)}
                   >
                     {/* chevron + icon + name — same visual contract as
                         wash-fm's TreeRow: 12px chevron slot, 14px icon
@@ -1603,6 +1741,54 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         onCancel={() => setPicker(null)}
         data-testid="edit-picker"
       />
+
+      {/* right-click context menu — fires on row right-click. */}
+      <Show when={ctxMenu()}>
+        <Menu
+          x={ctxMenu()!.x}
+          y={ctxMenu()!.y}
+          onDismiss={closeCtxMenu}
+          data-testid="edit-ctx-menu"
+        >
+          <MenuItem
+            label={ctxMenu()!.entry.type === 'dir' ? 'Expand' : 'Open'}
+            onClick={() => {
+              const c = ctxMenu()!;
+              closeCtxMenu();
+              onRowDblClick({ entry: c.entry, path: c.path });
+            }}
+            data-testid="edit-ctx-open"
+          />
+          <MenuItem
+            label="Copy path"
+            onClick={() => {
+              const c = ctxMenu()!;
+              closeCtxMenu();
+              void ctxCopyPath(c.path);
+            }}
+            data-testid="edit-ctx-copy-path"
+          />
+          <MenuSeparator />
+          <MenuItem
+            label="Rename"
+            onClick={() => {
+              const c = ctxMenu()!;
+              closeCtxMenu();
+              startRename(c.path);
+            }}
+            data-testid="edit-ctx-rename"
+          />
+          <MenuItem
+            label="Delete"
+            onClick={() => {
+              const c = ctxMenu()!;
+              closeCtxMenu();
+              void commitDelete(c.path);
+            }}
+            data-testid="edit-ctx-delete"
+          />
+        </Menu>
+      </Show>
 
       {/* alt-drop menu — appears when the user drops with Alt held.
           Move + Copy use the drop target; Rename + Delete operate

@@ -53,8 +53,10 @@ test.describe('wash-edit live refresh', () => {
 
   test('sidebar: expanded folder picks up child changes', async ({ page, router }) => {
     const editor = await openEditor(page, router);
-    // Expand the src/ folder; subscribes the BE to it.
-    await editor.locator('[data-testid="edit-entry-src"]').click();
+    // Expand the src/ folder; subscribes the BE to it. (Single
+    // click only selects now — double-click is the expand
+    // gesture to match fm.)
+    await editor.locator('[data-testid="edit-entry-src"]').dblclick();
     await expect(editor.locator('[data-testid="edit-entry-index.js"]')).toBeVisible();
     // Add a file under src/ — the expanded folder's watch fires.
     writeFileSync(join(router.fmRoot, 'src', 'new.js'), '// x\n');
