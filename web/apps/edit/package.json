@@ -7,6 +7,7 @@
     "build": "vite build"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.18.0",
     "@codemirror/commands": "^6.7.1",
     "@codemirror/lang-javascript": "^6.2.2",
     "@codemirror/lang-json": "^6.0.1",
@@ -15,6 +16,7 @@
     "@codemirror/search": "^6.5.8",
     "@codemirror/state": "^6.5.0",
     "@codemirror/view": "^6.36.1",
+    "@lezer/highlight": "^1.2.0",
     "@wash/ui": "workspace:*",
     "@xterm/xterm": "^5.5.0",
     "@xterm/addon-fit": "^0.10.0",

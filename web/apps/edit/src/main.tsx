@@ -17,17 +17,35 @@ import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
 import { FilePicker, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, tokens } from '@wash/ui';
 import { EditorState, Compartment } from '@codemirror/state';
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap, redo, undo } from '@codemirror/commands';
-import { openSearchPanel, searchKeymap, search } from '@codemirror/search';
 import {
+  EditorView,
+  crosshairCursor,
+  dropCursor,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  highlightSpecialChars,
+  keymap,
+  lineNumbers,
+  placeholder,
+  rectangularSelection,
+} from '@codemirror/view';
+import { defaultKeymap, history, historyKeymap, indentWithTab, redo, undo } from '@codemirror/commands';
+import { highlightSelectionMatches, openSearchPanel, searchKeymap, search } from '@codemirror/search';
+import {
+  autocompletion,
+  closeBrackets,
+  closeBracketsKeymap,
+  completionKeymap,
+} from '@codemirror/autocomplete';
+import {
+  HighlightStyle,
   bracketMatching,
-  defaultHighlightStyle,
   foldGutter,
   foldKeymap,
   indentOnInput,
   syntaxHighlighting,
 } from '@codemirror/language';
+import { tags as t } from '@lezer/highlight';
 import { javascript } from '@codemirror/lang-javascript';
 import { json } from '@codemirror/lang-json';
 import { markdown } from '@codemirror/lang-markdown';
@@ -1033,23 +1051,51 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   });
 
   const baseExtensions = () => [
+    // Display
     lineNumbers(),
     foldGutter(),
     highlightActiveLine(),
     highlightActiveLineGutter(),
-    history(),
-    search(),
+    highlightSpecialChars(),
+    highlightSelectionMatches(),
+    placeholder('Empty file'),
+    dropCursor(),
+
+    // Selection / multi-cursor / Alt-drag block selection.
+    EditorState.allowMultipleSelections.of(true),
+    rectangularSelection(),
+    crosshairCursor(),
+
+    // Editing helpers — bracket pairs auto-close, indents
+    // propagate on Enter, language-aware bracket matching.
+    closeBrackets(),
     bracketMatching(),
     indentOnInput(),
-    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+
+    // History + search.
+    history(),
+    search(),
+
+    // Autocomplete: word completions from the buffer for free;
+    // language packs (lang-javascript, lang-html, …) layer
+    // semantic completions on top when active.
+    autocompletion(),
+
+    // Syntax highlighting — wash-tuned palette in washHighlightStyle.
+    syntaxHighlighting(washHighlightStyle, { fallback: true }),
     langCompartment.of([]),
     dirtyListener,
+
     keymap.of([
+      ...closeBracketsKeymap,
       ...defaultKeymap,
       ...historyKeymap,
       ...searchKeymap,
       ...foldKeymap,
+      ...completionKeymap,
+      indentWithTab,
     ]),
+
     EditorView.theme({
       '&': { height: '100%', background: tokens.bgWindow, color: tokens.fg },
       '.cm-scroller': { font: `${tokens.fontSizeBase} ${tokens.fontMono}` },
@@ -1065,8 +1111,114 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       },
       '.cm-selectionBackground, ::selection': { background: tokens.bgRowSelected },
       '.cm-focused .cm-selectionBackground, .cm-focused ::selection': { background: tokens.bgRowSelected },
+
+      // Search panel — match wash menus / overlays.
+      '.cm-panels': {
+        background: tokens.bgWindow,
+        color: tokens.fg,
+        borderTop: `1px solid ${tokens.borderMenu}`,
+        font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+      },
+      '.cm-panel.cm-search': {
+        padding: '6px 8px',
+        background: tokens.bgMenu,
+        display: 'flex',
+        'flex-wrap': 'wrap',
+        gap: '6px',
+        'align-items': 'center',
+      },
+      '.cm-textfield': {
+        background: '#10101a',
+        color: tokens.fg,
+        border: `1px solid ${tokens.borderMenu}`,
+        borderRadius: `${tokens.radiusSm}px`,
+        padding: '3px 6px',
+        font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
+      },
+      '.cm-textfield:focus': { outline: 'none', borderColor: tokens.borderFocus },
+      '.cm-button': {
+        background: 'transparent',
+        color: tokens.fg,
+        border: `1px solid ${tokens.borderMenu}`,
+        borderRadius: `${tokens.radiusSm}px`,
+        padding: '3px 10px',
+        cursor: 'pointer',
+        font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+        backgroundImage: 'none',
+      },
+      '.cm-button:hover': { background: tokens.bgRowHover },
+      '.cm-panel.cm-search [name="close"]': { color: tokens.fg, opacity: 0.6, fontSize: '16px' },
+
+      // Match highlights inside the document.
+      '.cm-searchMatch': {
+        background: 'rgba(180,180,80,0.25)',
+        outline: '1px solid rgba(180,180,80,0.5)',
+      },
+      '.cm-searchMatch-selected': { background: 'rgba(180,180,80,0.5)' },
+      '.cm-selectionMatch': { background: 'rgba(120,120,180,0.2)' },
+
+      // Autocomplete popup — match menu styling.
+      '.cm-tooltip.cm-tooltip-autocomplete': {
+        background: tokens.bgMenu,
+        border: `1px solid ${tokens.borderMenu}`,
+        borderRadius: `${tokens.radiusMd}px`,
+        boxShadow: tokens.shadowMenu,
+        color: tokens.fg,
+        font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
+      },
+      '.cm-tooltip.cm-tooltip-autocomplete > ul > li': { padding: '3px 8px' },
+      '.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]': {
+        background: tokens.bgRowSelected,
+        color: tokens.fg,
+      },
     }, { dark: true }),
   ];
+
+  // washHighlightStyle replaces CM6's defaultHighlightStyle with a
+  // palette tuned to wash's dark theme — soft purples for keywords,
+  // light greens for strings, warm orange for numbers. Tag set is
+  // the @lezer/highlight standard so every existing lang pack
+  // (javascript / json / markdown + any future @codemirror/lang-*)
+  // hits these styles automatically.
+  const washHighlightStyle = HighlightStyle.define([
+    { tag: t.keyword, color: '#c084fc' },
+    { tag: t.controlKeyword, color: '#c084fc' },
+    { tag: t.moduleKeyword, color: '#c084fc' },
+    { tag: [t.string, t.special(t.string)], color: '#a3e635' },
+    { tag: [t.number, t.bool, t.null, t.atom], color: '#fb923c' },
+    { tag: t.comment, color: tokens.fgMuted, fontStyle: 'italic' },
+    { tag: t.lineComment, color: tokens.fgMuted, fontStyle: 'italic' },
+    { tag: t.blockComment, color: tokens.fgMuted, fontStyle: 'italic' },
+    { tag: t.docComment, color: tokens.fgMuted, fontStyle: 'italic' },
+    { tag: t.regexp, color: '#22d3ee' },
+    { tag: t.escape, color: '#22d3ee' },
+    { tag: t.operator, color: '#94a3b8' },
+    { tag: t.compareOperator, color: '#94a3b8' },
+    { tag: t.logicOperator, color: '#94a3b8' },
+    { tag: t.arithmeticOperator, color: '#94a3b8' },
+    { tag: t.punctuation, color: '#94a3b8' },
+    { tag: t.bracket, color: '#cbd5e1' },
+    { tag: t.brace, color: '#cbd5e1' },
+    { tag: t.paren, color: '#cbd5e1' },
+    { tag: [t.variableName, t.propertyName], color: '#e2e8f0' },
+    { tag: [t.function(t.variableName), t.function(t.propertyName)], color: '#60a5fa' },
+    { tag: t.typeName, color: '#34d399' },
+    { tag: t.className, color: '#34d399' },
+    { tag: t.namespace, color: '#34d399' },
+    { tag: t.tagName, color: '#f472b6' },
+    { tag: t.attributeName, color: '#fbbf24' },
+    { tag: t.heading, color: '#c084fc', fontWeight: 'bold' },
+    { tag: t.heading1, color: '#c084fc', fontWeight: 'bold' },
+    { tag: t.heading2, color: '#c084fc', fontWeight: 'bold' },
+    { tag: t.heading3, color: '#c084fc', fontWeight: 'bold' },
+    { tag: t.link, color: '#60a5fa', textDecoration: 'underline' },
+    { tag: t.url, color: '#60a5fa' },
+    { tag: t.emphasis, fontStyle: 'italic' },
+    { tag: t.strong, fontWeight: 'bold' },
+    { tag: t.strikethrough, textDecoration: 'line-through' },
+    { tag: t.meta, color: tokens.fgMuted },
+    { tag: t.invalid, color: '#ef4444' },
+  ]);
 
   // langForKey returns a CM6 language pack for an explicit key.
   // Used by both the path-derived default (langForPath) and the

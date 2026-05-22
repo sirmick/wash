@@ -45,6 +45,9 @@ importers:
 
   apps/edit:
     dependencies:
+      '@codemirror/autocomplete':
+        specifier: ^6.18.0
+        version: 6.20.2
       '@codemirror/commands':
         specifier: ^6.7.1
         version: 6.10.3
@@ -69,6 +72,9 @@ importers:
       '@codemirror/view':
         specifier: ^6.36.1
         version: 6.43.0
+      '@lezer/highlight':
+        specifier: ^1.2.0
+        version: 1.2.3
       '@wash/ui':
         specifier: workspace:*
         version: link:../../lib
