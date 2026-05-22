@@ -53,6 +53,7 @@ import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import xtermCSS from '@xterm/xterm/css/xterm.css?inline';
 import {
+  Check,
   ChevronDown,
   ChevronRight,
   File as FileIcon,
@@ -1583,7 +1584,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               {(l) => (
                 <MenuItem
                   label={l.label}
-                  trailing={currentLang() === l.key ? <span style={{ color: tokens.fgMuted }}>✓</span> : undefined}
+                  trailing={currentLang() === l.key ? <span style={menuCheckStyle}><Check size={12} /></span> : undefined}
                   onClick={run(() => setLang(l.key === langKeyForPath(activeTab()?.path ?? '') ? null : l.key))}
                   data-testid={`edit-menu-lang-${l.key}`}
                 />
@@ -1592,7 +1593,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             <MenuSeparator />
             <MenuItem
               label="Word Wrap"
-              trailing={wordWrap() ? <span style={{ color: tokens.fgMuted }}>✓</span> : undefined}
+              trailing={wordWrap() ? <span style={menuCheckStyle}><Check size={12} /></span> : undefined}
               onClick={run(toggleWrap)}
               data-testid="edit-menu-wrap"
             />
@@ -2103,6 +2104,17 @@ const kbdStyle: JSX.CSSProperties = {
   color: tokens.fgMuted,
   background: 'transparent',
   padding: '0 4px',
+};
+
+// menuCheckStyle wraps the lucide Check icon used as the "active"
+// indicator on toggleable menu items (Syntax language picker,
+// Word Wrap). Same color as the menu item's text so the active
+// state reads as confirmation rather than competing emphasis.
+const menuCheckStyle: JSX.CSSProperties = {
+  display: 'inline-flex',
+  'align-items': 'center',
+  color: tokens.fg,
+  opacity: 0.85,
 };
 
 const termPaneStyle: JSX.CSSProperties = {
