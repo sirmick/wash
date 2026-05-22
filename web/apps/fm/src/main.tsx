@@ -991,6 +991,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       { app_id: 'com.wash.bulk' },
       { kind: 'enqueue', op: 'move', paths, dest: targetDir },
     );
+    // Source paths are about to vanish — drop them from the
+    // selection so the status bar doesn't keep claiming "N
+    // selected" for paths that no longer exist.
+    setSelection(new Set());
+    selectionAnchor = null;
   };
 
   // commitSymlink creates a symlink at targetDir/basename(src)
@@ -1479,6 +1484,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           style={treeStyle}
           onDragOver={onListDragOver}
           onDrop={onListDrop}
+          onClick={(ev) => {
+            // Background click clears the selection — native FM
+            // convention. Only fire when the click hit the list
+            // container itself (not a row that bubbled up).
+            if (ev.target === ev.currentTarget && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey) {
+              setSelection(new Set());
+              selectionAnchor = null;
+            }
+          }}
         >
           <ColumnHeader
             sortKey={sortKey()}
