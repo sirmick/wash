@@ -30,6 +30,7 @@ const ICONS = [
   'activity',       // wash-top
   'shield-check',   // wash-priv (privilege gateway)
   'shield-alert',   // "Root Terminal" launcher entry
+  'scroll-text',    // wash-journal
 ];
 
 // Resolve via require so pnpm's nested layout is fine.

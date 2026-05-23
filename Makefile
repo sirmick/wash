@@ -14,7 +14,7 @@ GOARCH  ?= amd64
 GOFLAGS := -trimpath -ldflags=-s\ -w -tags netgo,osusergo
 
 OUT     := out
-BINS    := wash-router wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-settings wash-top wash-priv wash-launch wash-sudo
+BINS    := wash-router wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-settings wash-top wash-priv wash-journal wash-launch wash-sudo
 TARGETS := $(addprefix $(OUT)/,$(BINS))
 
 # Test app: not part of the default build; built explicitly with
@@ -73,6 +73,9 @@ TOP_STAMP       := $(TOP_ASSETS)/.stamp
 PRIV_ASSETS     := cmd/wash-priv/assets
 PRIV_STAMP      := $(PRIV_ASSETS)/.stamp
 
+JOURNAL_ASSETS  := cmd/wash-journal/assets
+JOURNAL_STAMP   := $(JOURNAL_ASSETS)/.stamp
+
 .PHONY: all
 all: $(TARGETS)
 
@@ -130,6 +133,10 @@ web-top: web-deps
 web-priv: web-deps
 	@cd web && $(PNPM) --filter @wash/app-priv run build
 
+.PHONY: web-journal
+web-journal: web-deps
+	@cd web && $(PNPM) --filter @wash/app-journal run build
+
 # embed-into-cmd helper. Usage: $(call embed,<src dist dir>,<dst assets dir>)
 define embed_dist
 	rm -rf $(2)
@@ -176,6 +183,9 @@ $(TOP_STAMP): web-top
 $(PRIV_STAMP): web-priv
 	$(call embed_dist,web/apps/priv/dist,$(PRIV_ASSETS))
 
+$(JOURNAL_STAMP): web-journal
+	$(call embed_dist,web/apps/journal/dist,$(JOURNAL_ASSETS))
+
 # ----- go stage -----
 
 $(OUT)/wash-router: $(ROUTER_STAMP) | $(OUT)
@@ -210,6 +220,9 @@ $(OUT)/wash-top: $(TOP_STAMP) | $(OUT)
 
 $(OUT)/wash-priv: $(PRIV_STAMP) | $(OUT)
 	$(call go_build,$@,cmd/wash-priv)
+
+$(OUT)/wash-journal: $(JOURNAL_STAMP) | $(OUT)
+	$(call go_build,$@,cmd/wash-journal)
 
 # wash-launch is a CLI, not an app. No FE bundle, no embedded assets.
 $(OUT)/wash-launch: | $(OUT)
