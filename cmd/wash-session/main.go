@@ -111,13 +111,25 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		if appID == "" {
 			return
 		}
+		// For Root Terminal: tell wash-term to start its shell as a
+		// login shell so the user gets root's environment (PATH,
+		// colour PS1, locale) sourced from profile / bashrc instead
+		// of inheriting wash-priv's parent shell env.
+		var args []string
+		if appID == "com.wash.term" {
+			args = []string{"--login"}
+		}
 		reqID := newReqID()
-		if err := c.SendAppMsgTo(wire.Recipient{AppID: "com.wash.priv"}, map[string]any{
+		payload := map[string]any{
 			"kind":   "spawn",
 			"req_id": reqID,
 			"app_id": appID,
 			"reason": "session menu",
-		}); err != nil {
+		}
+		if len(args) > 0 {
+			payload["args"] = args
+		}
+		if err := c.SendAppMsgTo(wire.Recipient{AppID: "com.wash.priv"}, payload); err != nil {
 			log.Printf("wash-session: spawn_root %s: %v", appID, err)
 		}
 	}

@@ -26,6 +26,8 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	osuser "os/user"
+	"strings"
 	"sync"
 
 	"github.com/sirmick/wash/internal/pty"
@@ -36,6 +38,77 @@ import (
 // runs argv directly instead of $SHELL, and the tab autocloses on
 // exit. Parsed once in main; immutable thereafter.
 var execArgv []string
+
+// loginShell is set by --login; when true, the user's shell is
+// invoked with -l (or argv[0]="-bash" equivalent). Cheapest way to
+// pick up profile-sourced PATH, prompt colours, and root's
+// environment for Root Terminal launches.
+var loginShell bool
+
+// loginShellPath picks the shell for --login. It does NOT trust
+// $SHELL — when wash-term has been exec'd by sudo, $SHELL is the
+// invoking user's shell, not the current uid's. We look up the
+// effective uid in /etc/passwd via os/user.Current to get the
+// right shell (and HOME / USER, see fixupLoginEnv).
+//
+// Fallback is /bin/bash; on a stripped distro it's still the
+// least-surprising default.
+func loginShellPath() string {
+	if u, err := osuser.Current(); err == nil {
+		// LookupShell isn't a real call; passwd's shell field is
+		// in u.Username's underlying record but Go's os/user doesn't
+		// expose it. Read /etc/passwd directly.
+		if sh := lookupShellFromPasswd(u.Uid); sh != "" {
+			return sh
+		}
+	}
+	if s := os.Getenv("SHELL"); s != "" {
+		return s
+	}
+	return "/bin/bash"
+}
+
+// lookupShellFromPasswd parses /etc/passwd for the row with
+// matching uid and returns its shell field. Used by --login mode
+// when sudo's env has left us with the invoking user's $SHELL but
+// we want root's.
+func lookupShellFromPasswd(uid string) string {
+	data, err := os.ReadFile("/etc/passwd")
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Split(line, ":")
+		if len(fields) >= 7 && fields[2] == uid {
+			return fields[6]
+		}
+	}
+	return ""
+}
+
+// fixupLoginEnv mutates env (in-place over the os.Setenv side) so
+// the spawned shell sees HOME/USER/LOGNAME/SHELL matching the
+// EFFECTIVE uid of the wash-term process — not whatever the parent
+// (sudo via wash-priv) inherited from the original user's session.
+// Without this, root bash --login reads /home/<user>/.bashrc
+// because HOME wasn't rewritten by sudo. Called once at startup
+// when --login was passed.
+func fixupLoginEnv() {
+	u, err := osuser.Current()
+	if err != nil {
+		return
+	}
+	if u.HomeDir != "" {
+		_ = os.Setenv("HOME", u.HomeDir)
+	}
+	if u.Username != "" {
+		_ = os.Setenv("USER", u.Username)
+		_ = os.Setenv("LOGNAME", u.Username)
+	}
+	if sh := lookupShellFromPasswd(u.Uid); sh != "" {
+		_ = os.Setenv("SHELL", sh)
+	}
+}
 
 //go:embed all:assets
 var assetsFS embed.FS
@@ -56,6 +129,7 @@ func main() {
 	// pass through unscathed.
 	flags := flag.NewFlagSet("wash-term", flag.ContinueOnError)
 	useExec := flags.Bool("exec", false, "treat all positional args as the command to run instead of $SHELL")
+	login := flags.Bool("login", false, "spawn the user's shell as a login shell (-l). Sources /etc/profile + ~/.profile so PATH / aliases / PS1 colour match a fresh terminal login. Used by Root Terminal so a root login picks up root's environment, not wash-priv's parent shell env.")
 	flags.SetOutput(io.Discard)
 	_ = flags.Parse(os.Args[1:])
 	if *useExec {
@@ -63,6 +137,10 @@ func main() {
 		if len(execArgv) == 0 {
 			log.Fatal("wash-term: --exec requires at least one positional argument")
 		}
+	}
+	loginShell = *login
+	if loginShell {
+		fixupLoginEnv()
 	}
 
 	sub, err := fs.Sub(assetsFS, "assets")
@@ -167,12 +245,19 @@ func registerHandlers(b *sdk.Bus) {
 // pairs. Reports tab_opened / tab_closed app_msgs to the FE.
 func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
 	var argv []string
-	if len(execArgv) > 0 {
+	switch {
+	case len(execArgv) > 0:
 		// --exec mode: run the requested argv. argv[0] is resolved
 		// via $PATH (exec.Command does that). The tab autocloses on
 		// exit so wash-priv → wash-term --exec apt-update flows
 		// finish naturally.
 		argv = execArgv
+	case loginShell:
+		// --login mode: run the user's shell with -l so it sources
+		// profile + rc files. Used by Root Terminal so a sudo'd
+		// shell picks up root's PATH / prompt / colour config
+		// instead of inheriting wash-priv's parent env.
+		argv = []string{loginShellPath(), "-l"}
 	}
 	sess, err := pty.Open(context.Background(), c, windowID, cols, rows, argv, pty.WithWashEnv, func(s *pty.Session, reason string) {
 		// onClose runs from the pty goroutine when the session ends.
