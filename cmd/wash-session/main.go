@@ -63,12 +63,37 @@ func main() {
 // dispatch.
 func onReady(c *sdk.Conn, _ string, _ uint32) {
 	sendDesktopConfig(c)
+	sendSystemInfo(c)
 	startConfigWatcher(c)
 	bus := sdk.NewBus(c)
 	sdk.HandleVoid(bus, "desktop.request", func(conn *sdk.Conn, _ string, _ struct{}) error {
 		sendDesktopConfig(conn)
+		// Resend the banner facts too so a late-connecting shell (or
+		// a tab refresh that fires desktop.request on mount) gets a
+		// full state, not just the config.
+		sendSystemInfo(conn)
 		return nil
 	})
+}
+
+// sendSystemInfo ships the hostname / user / hardware / IP block the
+// desktop banner displays. Fire-and-forget — the FE re-renders on
+// receipt and ignores absence (banner falls back to "wash").
+func sendSystemInfo(c *sdk.Conn) {
+	info := gatherSysInfo()
+	log.Printf("wash-session sysinfo: %s", sysInfoString(info))
+	msg := map[string]any{
+		"kind":      "system.info",
+		"hostname":  info.Hostname,
+		"fqdn":      info.FQDN,
+		"username":  info.Username,
+		"cpus":      info.CPUs,
+		"mem_bytes": info.MemBytes,
+		"ips":       info.IPs,
+	}
+	if err := c.SendAppMsg(msg); err != nil {
+		log.Printf("wash-session: send system.info: %v", err)
+	}
 }
 
 // washIcon — Lucide sprite symbol name. Session is surface=desktop

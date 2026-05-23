@@ -59,6 +59,19 @@ interface DesktopConfigMsg {
   };
 }
 
+// SystemInfoMsg mirrors the BE's system.info app_msg. Sent once on
+// session ready (plus on each desktop.request) and rendered by the
+// top-left banner.
+interface SystemInfoMsg {
+  kind: 'system.info';
+  hostname: string;
+  fqdn: string;
+  username: string;
+  cpus: number;
+  mem_bytes: number;
+  ips: string[];
+}
+
 // rootTerminalEntry — synthetic launcher item exposed in StartMenu
 // + Palette. Module-level (not closed over App's scope) so the
 // paletteResults memo can read it during its eager initial run
@@ -92,6 +105,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [showSeconds, setShowSeconds] = createSignal(false);
   const [taskbarPosition, setTaskbarPosition] = createSignal<'top' | 'bottom'>('bottom');
   const [clock, setClock] = createSignal(formatClock(clockFormat(), showSeconds()));
+  // System info — populated by the BE's system.info app_msg on
+  // session ready. Empty defaults render the legacy "wash" placeholder.
+  const [sysInfo, setSysInfo] = createSignal<SystemInfoMsg | null>(null);
   const [screenshotStatus, setScreenshotStatus] = createSignal('');
   const [screenshotVisible, setScreenshotVisible] = createSignal(false);
   let screenshotTimer = 0;
@@ -268,10 +284,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
     // BE → FE: desktop.config arrives once at startup and again
     // on every fswatch fire (wash-settings rewrote the file).
+    // system.info arrives once at startup; the banner re-renders.
     const onMsg = (ev: Event) => {
       const data = (ev as CustomEvent).detail as { kind?: string };
-      if (!data || data.kind !== 'desktop.config') return;
-      applyDesktopConfig(data as DesktopConfigMsg);
+      if (!data) return;
+      switch (data.kind) {
+        case 'desktop.config':
+          applyDesktopConfig(data as DesktopConfigMsg);
+          return;
+        case 'system.info':
+          setSysInfo(data as SystemInfoMsg);
+          return;
+      }
     };
     props.host.addEventListener('wash:msg', onMsg);
     // Belt + braces: ask for current state in case the BE's initial
@@ -329,7 +353,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   return (
     <>
-      <Banner />
+      <Banner info={sysInfo} />
       <Pager
         windows={windows}
         vp={vp}
@@ -428,20 +452,115 @@ const SpriteIcon: Component<{ name: string; size: number }> = (props) => (
   </svg>
 );
 
-const Banner: Component = () => (
-  <div
-    style={{
-      position: 'absolute',
-      left: '32px',
-      top: '28px',
-      font: '600 22px system-ui,sans-serif',
-      'letter-spacing': '0.05em',
-      opacity: 0.35,
-    }}
-  >
-    wash
-  </div>
-);
+// formatMem renders bytes as a short human string like "16 GB" /
+// "512 MB". Used by the Banner only; doesn't need binary-vs-decimal
+// pedantry — the value is informational.
+function formatMem(bytes: number): string {
+  if (!bytes) return '?';
+  const gb = bytes / (1024 * 1024 * 1024);
+  if (gb >= 1) return `${gb.toFixed(gb >= 10 ? 0 : 1)} GB`;
+  const mb = bytes / (1024 * 1024);
+  return `${Math.round(mb)} MB`;
+}
+
+// Banner is the top-left desktop identity block. Renders:
+//
+//   • host.example.com           (large, FQDN)
+//   • alice                      (bold)
+//   • 8 cores · 16 GB            (small)
+//   • 10.0.0.5  192.168.1.42     (small)
+//
+// Falls back to a faded "wash" placeholder before the BE's
+// system.info message arrives.
+const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
+  const info = props.info;
+
+  const placeholderStyle: JSX.CSSProperties = {
+    position: 'absolute',
+    left: '32px',
+    top: '28px',
+    font: '600 22px system-ui,sans-serif',
+    'letter-spacing': '0.05em',
+    opacity: 0.35,
+    'pointer-events': 'none',
+  };
+
+  return (
+    <Show
+      when={info()}
+      fallback={
+        <div style={placeholderStyle} data-testid="desktop-banner-placeholder">
+          wash
+        </div>
+      }
+    >
+      {(s) => (
+        <div
+          data-testid="desktop-banner"
+          style={{
+            position: 'absolute',
+            left: '32px',
+            top: '24px',
+            color: '#eee',
+            font: '14px system-ui,sans-serif',
+            'pointer-events': 'none',
+            'max-width': '480px',
+            'line-height': '1.4',
+          }}
+        >
+          <div
+            data-testid="desktop-banner-host"
+            style={{
+              font: '600 22px system-ui,sans-serif',
+              'letter-spacing': '0.02em',
+              opacity: 0.85,
+              'text-shadow': '0 1px 2px rgba(0,0,0,0.6)',
+              'word-break': 'break-all',
+            }}
+          >
+            {s().fqdn || s().hostname || 'wash'}
+          </div>
+          <div
+            style={{
+              'margin-top': '4px',
+              opacity: 0.7,
+              'text-shadow': '0 1px 2px rgba(0,0,0,0.6)',
+            }}
+          >
+            <span data-testid="desktop-banner-user" style={{ 'font-weight': 700 }}>
+              {s().username || '?'}
+            </span>
+          </div>
+          <div
+            data-testid="desktop-banner-hw"
+            style={{
+              'margin-top': '2px',
+              font: '12px ui-monospace,Menlo,Consolas,monospace',
+              opacity: 0.6,
+              'text-shadow': '0 1px 2px rgba(0,0,0,0.6)',
+            }}
+          >
+            {s().cpus || '?'} cores · {formatMem(s().mem_bytes)}
+          </div>
+          <Show when={s().ips && s().ips.length > 0}>
+            <div
+              data-testid="desktop-banner-ips"
+              style={{
+                'margin-top': '2px',
+                font: '12px ui-monospace,Menlo,Consolas,monospace',
+                opacity: 0.55,
+                'text-shadow': '0 1px 2px rgba(0,0,0,0.6)',
+                'word-break': 'break-all',
+              }}
+            >
+              {s().ips.join('  ')}
+            </div>
+          </Show>
+        </div>
+      )}
+    </Show>
+  );
+};
 
 // Pager renders the 3x3 virtual-desktop overview as a panel parked
 // just above the taskbar. Each cell is a scaled-down rect of the
