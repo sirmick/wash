@@ -119,7 +119,7 @@ func (r *Registry) appendEntry(e *Entry) {
 		// reserved id. Mark listed-disabled (never silently dropped)
 		// so the operator can see why the launcher entry is missing.
 		if reservedIDs[e.Manifest.ID] && !r.isTrustedBinary(e.Path) {
-			e.Reason = fmt.Sprintf("reserved id %q requires a trusted binary (root-owned, or under a trusted dir; not world/group-writable)", e.Manifest.ID)
+			e.Reason = fmt.Sprintf("reserved id %q requires a trusted binary (root-owned, owned by this user with mode 0755, or under a trusted dir; not world/group-writable)", e.Manifest.ID)
 		}
 		if existing, ok := r.byID[e.Manifest.ID]; ok {
 			// First registration wins (user dir scanned first).
@@ -132,17 +132,24 @@ func (r *Registry) appendEntry(e *Entry) {
 }
 
 // isTrustedBinary reports whether path is acceptable as a host for a
-// reservedID. Two branches:
+// reservedID. Three branches:
 //
 //   (a) Root-owned strict path: file owned by uid 0 AND not group- or
-//       world-writable. This is the production posture — root install
-//       under /usr/share/wash/apps/.
-//   (b) Trusted-dir relaxed path: the file lives directly under one
-//       of the registry's trustedDirs and is not world-writable. The
-//       dir declaration IS the trust statement; group-writability is
-//       accepted because dev-mode binaries built with default umask
-//       (0775) would otherwise be unusable. World-write is still a
-//       hard fail — that's the "anyone on the box" case.
+//       world-writable. The production posture — root install under
+//       /usr/share/wash/apps/.
+//   (b) Same-user strict path: file owned by the uid running the
+//       router AND not group- or world-writable. On a single-user
+//       wash setup, the threat model already assumes apps run as the
+//       user; the meaningful defence against a malicious local app
+//       planting a fake wash-priv is "this file isn't writable by
+//       other accounts on the box." Owner-uid + 0755 perms is
+//       exactly that, and lets `make all` produce binaries that
+//       Just Work without flags or env vars.
+//   (c) Trusted-dir relaxed path: the file lives directly under one
+//       of the registry's trustedDirs and is not world-writable.
+//       Group-writability is accepted via this path (default umask
+//       0002 yields 0775); the dir declaration IS the trust
+//       statement. World-write is still a hard fail.
 //
 // Stat failures fail closed.
 func (r *Registry) isTrustedBinary(path string) bool {
@@ -155,6 +162,9 @@ func (r *Registry) isTrustedBinary(path string) bool {
 		return false
 	}
 	if sys.Uid == 0 && info.Mode().Perm()&0o022 == 0 {
+		return true
+	}
+	if int(sys.Uid) == os.Getuid() && info.Mode().Perm()&0o022 == 0 {
 		return true
 	}
 	if info.Mode().Perm()&0o002 != 0 {

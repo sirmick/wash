@@ -27,6 +27,15 @@ endif
 
 GO_ENV  := CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH)
 
+# go_build wraps `go build` and forces 0755 perms on the output. The
+# router's reserved-id trust check rejects group/world-writable
+# binaries; default umasks vary across devs (0022 → 0755, 0002 →
+# 0775), so normalising here means freshly-built wash-priv passes the
+# trust gate without --dev or WASH_TRUSTED_APPS_DIRS. The trust
+# branch that accepts this is "owned by current uid + mode 0755" —
+# see internal/router/registry.go isTrustedBinary.
+go_build = $(GO_ENV) go build $(GOFLAGS) -o $(1) ./$(2) && chmod 0755 $(1)
+
 PNPM    := pnpm
 
 # Per-binary embed stamps. Each binary's go build depends on its stamp
@@ -170,51 +179,51 @@ $(PRIV_STAMP): web-priv
 # ----- go stage -----
 
 $(OUT)/wash-router: $(ROUTER_STAMP) | $(OUT)
-	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-router
+	$(call go_build,$@,cmd/wash-router)
 
 $(OUT)/wash-session: $(SESSION_STAMP) | $(OUT)
-	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-session
+	$(call go_build,$@,cmd/wash-session)
 
 $(OUT)/wash-about: $(ABOUT_STAMP) | $(OUT)
-	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-about
+	$(call go_build,$@,cmd/wash-about)
 
 $(OUT)/wash-test: $(TEST_STAMP) | $(OUT)
-	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-test
+	$(call go_build,$@,cmd/wash-test)
 
 $(OUT)/wash-term: $(TERM_STAMP) | $(OUT)
-	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-term
+	$(call go_build,$@,cmd/wash-term)
 
 $(OUT)/wash-fm: $(FM_STAMP) | $(OUT)
-	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-fm
+	$(call go_build,$@,cmd/wash-fm)
 
 $(OUT)/wash-bulk: $(BULK_STAMP) | $(OUT)
-	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-bulk
+	$(call go_build,$@,cmd/wash-bulk)
 
 $(OUT)/wash-edit: $(EDIT_STAMP) | $(OUT)
-	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-edit
+	$(call go_build,$@,cmd/wash-edit)
 
 $(OUT)/wash-settings: $(SETTINGS_STAMP) | $(OUT)
-	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-settings
+	$(call go_build,$@,cmd/wash-settings)
 
 $(OUT)/wash-top: $(TOP_STAMP) | $(OUT)
-	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-top
+	$(call go_build,$@,cmd/wash-top)
 
 $(OUT)/wash-priv: $(PRIV_STAMP) | $(OUT)
-	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-priv
+	$(call go_build,$@,cmd/wash-priv)
 
 # wash-launch is a CLI, not an app. No FE bundle, no embedded assets.
 $(OUT)/wash-launch: | $(OUT)
-	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-launch
+	$(call go_build,$@,cmd/wash-launch)
 
 # wash-sudo is also a CLI — the privilege-aware shell wrapper.
 $(OUT)/wash-sudo: | $(OUT)
-	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-sudo
+	$(call go_build,$@,cmd/wash-sudo)
 
 # fakesudo: tiny sudo stub for wash-priv e2e tests. Not part of the
 # default build; only the e2e harness should ever invoke it. Lives
 # in cmd/ so it shares the go module + GOFLAGS settings.
 $(OUT)/wash-priv-fakesudo: | $(OUT)
-	$(GO_ENV) go build $(GOFLAGS) -o $@ ./cmd/wash-priv-fakesudo
+	$(call go_build,$@,cmd/wash-priv-fakesudo)
 
 # Convenience target: build the test app + everything else.
 .PHONY: test-app
