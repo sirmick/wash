@@ -8,18 +8,9 @@
 // through disk by design (see [no premature service]).
 
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
-import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
-import { FilePicker, tokens } from '@wash/ui';
+import { FilePicker, defineWashApp, tokens } from '@wash/ui';
 import { Image as ImageIcon } from 'lucide-solid';
-
-declare global {
-  interface Window {
-    wash: {
-      sendAppMsg(instanceID: string, data: unknown): void;
-    } & Record<string, unknown>;
-  }
-}
 
 // DesktopConfig mirrors cmd/wash-session/config.go schema. Optional
 // everywhere — defaults are applied for missing fields so an empty
@@ -507,31 +498,6 @@ const statusStyle: JSX.CSSProperties = {
 
 // ---- custom element ----
 
-class WashAppSettings extends HTMLElement {
-  private cleanup?: () => void;
-
-  connectedCallback() {
-    this.style.cssText = [
-      'display:block',
-      'position:relative',
-      'width:100%',
-      'height:100%',
-      'overflow:hidden',
-      `background:${tokens.bgWindow}`,
-      `color:${tokens.fg}`,
-      `font:${tokens.fontSizeBase} ${tokens.fontSans}`,
-      'box-sizing:border-box',
-    ].join(';');
-    const instance = this.getAttribute('data-wash-instance') ?? '';
-    this.cleanup = render(() => <App instance={instance} host={this} />, this);
-  }
-
-  disconnectedCallback() {
-    this.cleanup?.();
-    this.cleanup = undefined;
-  }
-}
-
-if (!customElements.get('wash-app-settings')) {
-  customElements.define('wash-app-settings', WashAppSettings);
-}
+defineWashApp('wash-app-settings', (props) => <App {...props} />, {
+  style: `display:block;position:relative;width:100%;height:100%;overflow:hidden;background:${tokens.bgWindow};color:${tokens.fg};font:${tokens.fontSizeBase} ${tokens.fontSans};box-sizing:border-box`,
+});

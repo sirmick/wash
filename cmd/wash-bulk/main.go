@@ -142,8 +142,8 @@ func jobUpdateHandler(c *sdk.Conn) func(bulkops.Job) {
 }
 
 func onAppMsg(c *sdk.Conn, _ uint32, data any) {
-	m, ok := data.(map[any]any)
-	if !ok {
+	m := sdk.AsMap(data)
+	if m == nil {
 		return
 	}
 	kind, _ := m["kind"].(string)
@@ -151,7 +151,7 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 	switch kind {
 	case "enqueue":
 		op, _ := m["op"].(string)
-		paths := toStringSlice(m["paths"])
+		paths := sdk.ToStringSlice(m["paths"])
 		dest, _ := m["dest"].(string)
 		if len(paths) == 0 {
 			_ = c.SendAppMsg(map[string]any{
@@ -213,25 +213,6 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		}
 		_ = c.SendAppMsg(map[string]any{"kind": "list_ok", "id": id, "jobs": out})
 	}
-}
-
-// toStringSlice converts a CBOR-decoded array-of-strings (which
-// comes through as []any) into []string. Silently drops non-string
-// entries — defensive but not strict.
-func toStringSlice(v any) []string {
-	switch x := v.(type) {
-	case []any:
-		out := make([]string, 0, len(x))
-		for _, item := range x {
-			if s, ok := item.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	case []string:
-		return x
-	}
-	return nil
 }
 
 // bulkIcon — Lucide sprite symbol name. Same delivery as other apps

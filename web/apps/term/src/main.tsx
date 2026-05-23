@@ -12,19 +12,9 @@ import { FitAddon } from '@xterm/addon-fit';
 import xtermCSS from '@xterm/xterm/css/xterm.css?inline';
 
 import { For, createSignal, onCleanup, onMount } from 'solid-js';
-import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
 import { Plus, X } from 'lucide-solid';
-
-declare global {
-  interface Window {
-    wash: {
-      sendAppMsg(instanceID: string, data: unknown): void;
-      openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
-      writeRaw(channelID: number, bytes: Uint8Array): void;
-    };
-  }
-}
+import { defineWashApp } from '@wash/ui';
 
 interface BEMessage {
   kind: string;
@@ -378,28 +368,6 @@ const addBtnStyle: JSX.CSSProperties = {
 
 // ---- custom element ----
 
-class WashAppTerm extends HTMLElement {
-  private cleanup?: () => void;
-  connectedCallback() {
-    this.style.cssText = [
-      'display:flex',
-      'flex-direction:column',
-      'width:100%',
-      'height:100%',
-      'box-sizing:border-box',
-      'background:#000',
-      'color:#eee',
-      'overflow:hidden',
-    ].join(';');
-    const instance = this.getAttribute('data-wash-instance') ?? '';
-    this.cleanup = render(() => <App instance={instance} host={this} />, this);
-  }
-  disconnectedCallback() {
-    this.cleanup?.();
-    this.cleanup = undefined;
-  }
-}
-
-if (!customElements.get('wash-app-term')) {
-  customElements.define('wash-app-term', WashAppTerm);
-}
+defineWashApp('wash-app-term', (props) => <App {...props} />, {
+  style: 'display:flex;flex-direction:column;width:100%;height:100%;box-sizing:border-box;background:#000;color:#eee;overflow:hidden',
+});

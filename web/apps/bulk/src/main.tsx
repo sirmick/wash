@@ -6,17 +6,8 @@
 
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore } from 'solid-js/store';
-import { render } from 'solid-js/web';
+import { Button, defineWashApp } from '@wash/ui';
 import type { Component } from 'solid-js';
-import { Button } from '@wash/ui';
-
-declare global {
-  interface Window {
-    wash: {
-      sendAppMsg(instanceID: string, data: unknown): void;
-    };
-  }
-}
 
 type Status = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 type Op = 'delete' | 'move' | 'copy';
@@ -299,18 +290,4 @@ const JobRow: Component<{
   );
 };
 
-class WashAppBulk extends HTMLElement {
-  private cleanup?: () => void;
-  connectedCallback() {
-    const instance = this.getAttribute('data-wash-instance') ?? '';
-    this.cleanup = render(() => <App instance={instance} host={this} />, this);
-  }
-  disconnectedCallback() {
-    this.cleanup?.();
-    this.cleanup = undefined;
-  }
-}
-
-if (!customElements.get('wash-app-bulk')) {
-  customElements.define('wash-app-bulk', WashAppBulk);
-}
+defineWashApp('wash-app-bulk', (props) => <App {...props} />);

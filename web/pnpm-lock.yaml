@@ -10,6 +10,9 @@ importers:
 
   apps/about:
     dependencies:
+      '@wash/ui':
+        specifier: workspace:*
+        version: link:../../lib
       solid-js:
         specifier: ^1.9.13
         version: 1.9.13
@@ -194,6 +197,9 @@ importers:
 
   apps/term:
     dependencies:
+      '@wash/ui':
+        specifier: workspace:*
+        version: link:../../lib
       '@xterm/addon-fit':
         specifier: ^0.10.0
         version: 0.10.0(@xterm/xterm@5.5.0)

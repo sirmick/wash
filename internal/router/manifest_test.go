@@ -59,7 +59,7 @@ func TestValidateRejects(t *testing.T) {
 				t.Fatalf("base manifest must parse: %v", err)
 			}
 			tc.mut(m)
-			err = m.Validate()
+			err = validateManifest(m)
 			if err == nil {
 				t.Fatalf("expected error containing %q, got nil", tc.want)
 			}

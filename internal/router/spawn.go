@@ -6,16 +6,19 @@ import (
 	"os/exec"
 )
 
-// Spawn launches an app binary. There is no inherited socket pair
-// anymore: the child dials the router's wash socket (passed via
-// WASH_DISPLAY env) and sends an Identity frame. The router
-// matches incoming Identity to a pending-attach record by pid and
-// hands the conn back to the spawn caller as the app's transport.
+// Spawn launches an app binary. The child dials the router's wash
+// socket (passed via WASH_DISPLAY env) and sends an Identity frame.
+// The router matches incoming Identity to a pending-attach record
+// by pid and hands the conn back to the spawn caller as the app's
+// transport.
 //
 // Caller owns the returned Cmd: it must wait on the matching
 // pendingAttach channel for the real AppInstance, and reap the
 // process via Cmd.Wait() when the app exits.
-func Spawn(binary, appID, instanceID, display string, extraEnv []string) (*exec.Cmd, error) {
+//
+// instance_id is assigned by the router in IdentityAck, not at
+// spawn time — apps read it from there, not from env.
+func Spawn(binary, appID, display string, extraEnv []string) (*exec.Cmd, error) {
 	if display == "" {
 		return nil, fmt.Errorf("spawn %s: WASH_DISPLAY (control socket) is required — was the router started with --control-socket none?", appID)
 	}
@@ -28,7 +31,6 @@ func Spawn(binary, appID, instanceID, display string, extraEnv []string) (*exec.
 		"WASH_DISPLAY="+display,
 		"WASH_PROTO=1",
 		"WASH_APP_ID="+appID,
-		"WASH_INSTANCE_ID="+instanceID,
 	)
 	cmd.Env = append(cmd.Env, extraEnv...)
 	cmd.Stdout = os.Stdout

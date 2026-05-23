@@ -30,6 +30,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/sirmick/wash/internal/wire"
@@ -114,6 +115,9 @@ func (r *Router) handleAttach(ctx context.Context, conn net.Conn, rd *bufio.Read
 			return
 		}
 		if !validateAttachBinary(ident.PID, rec.binary) {
+			procExe := fmt.Sprintf("/proc/%d/exe", ident.PID)
+			actual, _ := os.Readlink(procExe)
+			r.log("token attach refused: pid=%d /proc/exe=%q expected=%q", ident.PID, actual, rec.binary)
 			_ = transport.WriteFrame(controlFrame(wire.NewError("forbidden", "binary does not match the prepared spawn")))
 			_ = conn.Close()
 			return
@@ -219,25 +223,49 @@ func (r *Router) acceptIdentity(inst *AppInstance) error {
 // validateAttachBinary resolves /proc/<pid>/exe and checks that
 // it matches the registered binary path. EvalSymlinks on both
 // sides so distro-managed installs (binary symlinked into PATH)
-// still match. Returns false on any error — defense in depth.
+// still match.
+//
+// Fallback for root-owned children (the wash-priv → sudo → app
+// case): /proc/<pid>/exe is unreadable to non-root by default
+// (kernel restricts the symlink to ptrace-capable readers).
+// /proc/<pid>/comm IS world-readable and carries the binary
+// basename, truncated to TASK_COMM_LEN-1 = 15 chars. We use it as
+// a sanity check when exe is blocked — the strong auth is the
+// attach token anyway; this is belt-and-suspenders confirming the
+// thing on the other end of the socket is at least named like the
+// registered binary.
+//
+// Returns false on any error — defense in depth.
 func validateAttachBinary(pid int, registeredPath string) bool {
 	if pid <= 0 {
 		return false
-	}
-	procExe := fmt.Sprintf("/proc/%d/exe", pid)
-	actual, err := os.Readlink(procExe)
-	if err != nil {
-		return false
-	}
-	actualResolved, err := filepath.EvalSymlinks(actual)
-	if err != nil {
-		actualResolved = actual
 	}
 	regResolved, err := filepath.EvalSymlinks(registeredPath)
 	if err != nil {
 		regResolved = registeredPath
 	}
-	return actualResolved == regResolved
+	procExe := fmt.Sprintf("/proc/%d/exe", pid)
+	if actual, err := os.Readlink(procExe); err == nil {
+		actualResolved, err := filepath.EvalSymlinks(actual)
+		if err != nil {
+			actualResolved = actual
+		}
+		return actualResolved == regResolved
+	}
+	// /proc/<pid>/exe is unreadable — most often because the peer is
+	// root and we are not. Compare /proc/<pid>/comm against the
+	// basename of the registered binary instead. comm is truncated
+	// at 15 chars, so match against the same-prefix of basename.
+	commBytes, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+	if err != nil {
+		return false
+	}
+	comm := strings.TrimSpace(string(commBytes))
+	want := filepath.Base(regResolved)
+	if len(want) > 15 {
+		want = want[:15]
+	}
+	return comm == want
 }
 
 // controlFrame helps build a one-off ctrl-channel frame from an
@@ -257,34 +285,11 @@ func controlFrame(m any) wire.Frame {
 // process reaping via cmd.Wait — for fresh attaches there's no
 // Cmd; the conn closure IS the process-exit signal.
 func (r *Router) startFreshAttach(ctx context.Context, inst *AppInstance) {
-	r.registerApp(inst)
-	if inst.WindowID != 0 {
-		var defW, defH uint32
-		if inst.Manifest.Window != nil {
-			defW = inst.Manifest.Window.DefaultWidth
-			defH = inst.Manifest.Window.DefaultHeight
-		}
-		patches := r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon, inst.Manifest.Name, defW, defH, inst.IsRoot())
-		if err := r.declareAppToAllShells(ctx, inst); err != nil {
-			r.log("declare: %v", err)
-		}
-		r.broadcastPatches(patches)
-		_ = inst.WriteEvt(wire.NewEvtWindowMapped(inst.WindowID))
-	} else {
-		if err := r.declareAppToAllShells(ctx, inst); err != nil {
-			r.log("declare: %v", err)
-		}
-	}
+	r.bringUp(ctx, inst)
 	if err := inst.loop(context.Background()); err != nil {
 		r.log("app %s loop: %v", inst.AppID, err)
 	}
-	r.unregisterApp(inst)
-	r.closeChannelsForApp(inst, "app exited")
-	r.dropAppMsgWatchers(inst.InstanceID)
-	r.winSession.dropAppState(inst.InstanceID)
-	if inst.WindowID != 0 {
-		r.broadcastPatches(r.winSession.destroyWindow(inst.WindowID))
-	}
+	r.tearDown(inst)
 	_ = inst.Transport.Close()
 }
 

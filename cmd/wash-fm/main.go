@@ -29,7 +29,6 @@ import (
 	"os/user"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	wfs "github.com/sirmick/wash/internal/fs"
@@ -66,95 +65,22 @@ var fmRoot string
 // BE doesn't need to thread fmRoot through every call.
 var fmFS *wfs.FS
 
-// watchState owns the fswatch.Manager and the per-path subscription
-// table. fm's FE asks the BE to watch a directory while it's
-// expanded in the tree; the BE keeps one Sub per path and tears it
-// down when the FE sends unwatch (or when the BE exits). The map
-// makes the protocol idempotent — repeated watch requests for the
-// same path keep one Sub, and an unwatch on an unknown path is a
-// no-op rather than an error.
-type watchState struct {
-	mu      sync.Mutex
-	mgr     *fswatch.Manager
-	subs    map[string]*fswatch.Sub
-	conn    *sdk.Conn
-}
+// fmWatch is the refcounted watcher backing fm's watch / unwatch
+// app_msg protocol. Nil when fswatch is unavailable on this host
+// (resource limits, unusual platform) — watching becomes a no-op
+// in that case so fm keeps working without live refresh.
+var fmWatch *fswatch.RefMap
 
-var fmWatch *watchState
-
-
-// All response structs carry an optional ID that echoes the
-// request's id when present. CBOR omitempty on the request side
-// keeps the wire small for FE list/read traffic where id is unused.
-type listResult struct {
-	Kind      string      `json:"kind"`
-	ID        string      `json:"id,omitempty"`
-	Path      string      `json:"path"`
-	Entries   []wfs.Entry `json:"entries"`
-	Truncated bool        `json:"truncated"`
-}
-
-type readResult struct {
-	Kind      string `json:"kind"`
-	ID        string `json:"id,omitempty"`
-	Path      string `json:"path"`
-	Content   string `json:"content"`
-	Truncated bool   `json:"truncated"`
-	Binary    bool   `json:"binary"`
-	Size      int64  `json:"size"`
-}
-
-type pathOK struct {
-	Kind string `json:"kind"`
-	ID   string `json:"id,omitempty"`
-	Path string `json:"path"`
-}
-
-type renameOK struct {
-	Kind string `json:"kind"`
-	ID   string `json:"id,omitempty"`
-	From string `json:"from"`
-	To   string `json:"to"`
-}
-
-type writeOK struct {
-	Kind  string `json:"kind"`
-	ID    string `json:"id,omitempty"`
-	Path  string `json:"path"`
-	Bytes int    `json:"bytes"`
-}
-
-type symlinkOK struct {
-	Kind     string `json:"kind"`
-	ID       string `json:"id,omitempty"`
-	Target   string `json:"target"`
-	LinkPath string `json:"link_path"`
-}
-
-type errResult struct {
-	Kind string `json:"kind"`
-	ID   string `json:"id,omitempty"`
-	Path string `json:"path,omitempty"`
-	Code string `json:"code"`
-	Msg  string `json:"msg"`
-}
 
 // fsEvent is the watch-fired message the BE pushes to the FE
 // whenever a fswatch.Sub reports a change. There's no id field:
-// these are unsolicited, not request/response.
+// these are unsolicited, not request/response. Local to fm because
+// the "watch" surface is fm-specific (the SDK's filepicker uses a
+// different fs.watch_event kind).
 type fsEvent struct {
 	Kind string `json:"kind"`
 	Op   string `json:"op"`   // "created" | "modified" | "deleted"
 	Path string `json:"path"` // the file/dir that changed
-}
-
-// watchOK is the reply to a successful watch request. ID echoes the
-// FE's request id so the FE can correlate; Path is the (cleaned)
-// path the BE is now watching.
-type watchOK struct {
-	Kind string `json:"kind"`
-	ID   string `json:"id,omitempty"`
-	Path string `json:"path"`
 }
 
 func main() {
@@ -208,7 +134,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		// without live refresh.
 		log.Printf("wash-fm: fswatch unavailable: %v", err)
 	} else {
-		fmWatch = &watchState{mgr: mgr, subs: make(map[string]*fswatch.Sub), conn: c}
+		fmWatch = fswatch.NewRefMap(mgr)
 	}
 	sendList(c, "", initialPath())
 	// Seed the FE's file-clipboard view from whatever's already on
@@ -269,8 +195,8 @@ func pushFilesClipboardToFE(c *sdk.Conn) {
 }
 
 func onAppMsg(c *sdk.Conn, _ uint32, data any) {
-	m, ok := data.(map[any]any)
-	if !ok {
+	m := sdk.AsMap(data)
+	if m == nil {
 		return
 	}
 	kind, _ := m["kind"].(string)
@@ -329,7 +255,7 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		doUnwatch(c, id, path)
 	case "chmod":
 		path, _ := m["path"].(string)
-		mode, _ := toUint32(m["mode"])
+		mode, _ := sdk.ToUint32(m["mode"])
 		doChmod(c, id, path, mode)
 	case "chown":
 		path, _ := m["path"].(string)
@@ -343,32 +269,13 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		doSymlink(c, id, target, linkPath, replace)
 	case "clipboard_files_set":
 		op, _ := m["op"].(string)
-		paths := toPathSlice(m["paths"])
+		paths := sdk.ToStringSlice(m["paths"])
 		doClipboardFilesSet(c, id, op, paths)
 	case "clipboard_files_get":
 		// On-demand fetch (FE asks at paste time without relying
 		// on the cached state). Reuses the push path.
 		go pushFilesClipboardToFE(c)
 	}
-}
-
-// toPathSlice converts a CBOR []any of strings into []string.
-// Skips non-string entries silently — defensive against malformed
-// inputs without strict validation.
-func toPathSlice(v any) []string {
-	switch x := v.(type) {
-	case []any:
-		out := make([]string, 0, len(x))
-		for _, e := range x {
-			if s, ok := e.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	case []string:
-		return x
-	}
-	return nil
 }
 
 // doClipboardFilesSet stores op + paths on the router clipboard
@@ -406,36 +313,6 @@ func doClipboardFilesSet(c *sdk.Conn, id, op string, paths []string) {
 	_ = c.SendAppMsg(map[string]any{"kind": "clipboard_files_set_ok", "id": id, "op": op, "paths": paths})
 }
 
-// toUint32 normalizes whatever the FE sent us (number, string, or
-// other) into a permission-bit mode. JSON over the wire ends up as
-// float64 once decoded; CBOR can deliver a uint64 directly. We
-// accept both plus a string (octal or decimal) so an FE that wants
-// to send "0755" verbatim from the input field works too.
-func toUint32(v any) (uint32, bool) {
-	switch x := v.(type) {
-	case uint64:
-		return uint32(x), true
-	case int64:
-		return uint32(x), true
-	case float64:
-		return uint32(x), true
-	case string:
-		// Allow "0755", "0o755", or "755". Strip a leading "0o"
-		// and let strconv pick base from the leading 0.
-		s := strings.TrimPrefix(x, "0o")
-		n, err := strconv.ParseUint(s, 0, 32)
-		if err != nil {
-			// Try as decimal.
-			n, err = strconv.ParseUint(x, 10, 32)
-			if err != nil {
-				return 0, false
-			}
-		}
-		return uint32(n), true
-	}
-	return 0, false
-}
-
 // doChmod sets the permission bits on path. Only the low 12 bits
 // (suid/sgid/sticky + rwx*3) are kept — apps that want to mess
 // with mode_t flags can shell out. Refuses outside-sandbox paths.
@@ -453,7 +330,7 @@ func doChmod(c *sdk.Conn, id, path string, mode uint32) {
 		sendErr(c, "chmod_err", id, abs, wfs.ErrCode(err), err.Error())
 		return
 	}
-	if err := c.SendAppMsg(pathOK{Kind: "chmod_ok", ID: id, Path: abs}); err != nil {
+	if err := c.SendAppMsg(wfs.PathReply{Kind: "chmod_ok", ID: id, Path: abs}); err != nil {
 		log.Printf("wash-fm send chmod_ok: %v", err)
 	}
 }
@@ -501,7 +378,7 @@ func doChown(c *sdk.Conn, id, path, owner, group string) {
 		sendErr(c, "chown_err", id, abs, wfs.ErrCode(err), err.Error())
 		return
 	}
-	if err := c.SendAppMsg(pathOK{Kind: "chown_ok", ID: id, Path: abs}); err != nil {
+	if err := c.SendAppMsg(wfs.PathReply{Kind: "chown_ok", ID: id, Path: abs}); err != nil {
 		log.Printf("wash-fm send chown_ok: %v", err)
 	}
 }
@@ -570,7 +447,7 @@ func doSymlink(c *sdk.Conn, id, target, linkPath string, replace bool) {
 		sendErr(c, "symlink_err", id, link, code, err.Error())
 		return
 	}
-	if err := c.SendAppMsg(symlinkOK{Kind: "symlink_ok", ID: id, Target: target, LinkPath: link}); err != nil {
+	if err := c.SendAppMsg(wfs.SymlinkReply{Kind: "symlink_ok", ID: id, Target: target, LinkPath: link}); err != nil {
 		log.Printf("wash-fm send symlink_ok: %v", err)
 	}
 }
@@ -593,46 +470,34 @@ func doWatch(c *sdk.Conn, id, path string) {
 		sendErr(c, "watch_err", id, path, wfs.ErrCode(err), err.Error())
 		return
 	}
-	fmWatch.mu.Lock()
-	if _, exists := fmWatch.subs[abs]; exists {
-		// Idempotent: a second watch for the same path is a no-op.
-		fmWatch.mu.Unlock()
-		_ = c.SendAppMsg(watchOK{Kind: "watch_ok", ID: id, Path: abs})
-		return
-	}
-	sub, err := fmWatch.mgr.Watch(abs)
+	sub, first, err := fmWatch.Watch(abs)
 	if err != nil {
-		fmWatch.mu.Unlock()
 		sendErr(c, "watch_err", id, abs, "io", err.Error())
 		return
 	}
-	fmWatch.subs[abs] = sub
-	fmWatch.mu.Unlock()
-
-	// One goroutine per Sub. Exits when the Sub's events channel
-	// closes — which happens on unwatch (Sub.Close) or on manager
-	// shutdown (Manager.Close). Either way the goroutine is bound
-	// to the Sub's lifetime, no manual coordination needed.
-	go func(s *fswatch.Sub) {
-		for ev := range s.Events() {
-			payload := fsEvent{Kind: "fs_event", Op: ev.Op.String(), Path: ev.Path}
-			if err := c.SendAppMsg(payload); err != nil {
-				log.Printf("wash-fm send fs_event: %v", err)
-				return
+	if first {
+		// One forwarder goroutine per Sub. The RefMap keeps the Sub
+		// alive across multiple subscribers; the goroutine exits
+		// when the last Unwatch closes the events channel.
+		go func(s *fswatch.Sub) {
+			for ev := range s.Events() {
+				payload := fsEvent{Kind: "fs_event", Op: ev.Op.String(), Path: ev.Path}
+				if err := c.SendAppMsg(payload); err != nil {
+					log.Printf("wash-fm send fs_event: %v", err)
+					return
+				}
 			}
-		}
-	}(sub)
-
-	_ = c.SendAppMsg(watchOK{Kind: "watch_ok", ID: id, Path: abs})
+		}(sub)
+	}
+	_ = c.SendAppMsg(wfs.PathReply{Kind: "watch_ok", ID: id, Path: abs})
 }
 
-// doUnwatch releases the Sub for path. Idempotent: an unwatch on a
-// path that wasn't being watched returns watch_ok (it's already in
-// the desired state) — same UX-shape as the FE asking the BE to
-// "stop watching", and the BE confirming it's not.
+// doUnwatch decrements the refcount for path. The underlying Sub
+// closes when nothing references it. Idempotent: an unwatch on a
+// path that wasn't being watched returns unwatch_ok.
 func doUnwatch(c *sdk.Conn, id, path string) {
 	if fmWatch == nil {
-		_ = c.SendAppMsg(watchOK{Kind: "unwatch_ok", ID: id, Path: path})
+		_ = c.SendAppMsg(wfs.PathReply{Kind: "unwatch_ok", ID: id, Path: path})
 		return
 	}
 	if path == "" {
@@ -644,16 +509,8 @@ func doUnwatch(c *sdk.Conn, id, path string) {
 		sendErr(c, "unwatch_err", id, path, wfs.ErrCode(err), err.Error())
 		return
 	}
-	fmWatch.mu.Lock()
-	sub, ok := fmWatch.subs[abs]
-	if ok {
-		delete(fmWatch.subs, abs)
-	}
-	fmWatch.mu.Unlock()
-	if sub != nil {
-		sub.Close()
-	}
-	_ = c.SendAppMsg(watchOK{Kind: "unwatch_ok", ID: id, Path: abs})
+	fmWatch.Unwatch(abs)
+	_ = c.SendAppMsg(wfs.PathReply{Kind: "unwatch_ok", ID: id, Path: abs})
 }
 
 // sendList lists the directory at path and sends list_ok / list_err.
@@ -669,7 +526,7 @@ func sendList(c *sdk.Conn, id, path string) {
 		sendErr(c, "list_err", id, path, wfs.ErrCode(err), err.Error())
 		return
 	}
-	res := listResult{Kind: "list_ok", ID: id, Path: abs, Entries: entries, Truncated: truncated}
+	res := wfs.ListReply{Kind: "list_ok", ID: id, Path: abs, Entries: entries, Truncated: truncated}
 	if err := c.SendAppMsg(res); err != nil {
 		log.Printf("wash-fm send list_ok: %v", err)
 	}
@@ -713,7 +570,7 @@ func sendRead(c *sdk.Conn, id, path string) {
 	}
 	chunk := buf[:n]
 	binary := looksBinary(chunk)
-	res := readResult{
+	res := wfs.ReadReply{
 		Kind:      "read_ok",
 		ID:        id,
 		Path:      abs,
@@ -746,7 +603,7 @@ func doRename(c *sdk.Conn, id, from, to string, replace bool) {
 		sendErr(c, "rename_err", id, path, wfs.ErrCode(err), err.Error())
 		return
 	}
-	if err := c.SendAppMsg(renameOK{Kind: "rename_ok", ID: id, From: src, To: dst}); err != nil {
+	if err := c.SendAppMsg(wfs.RenameReply{Kind: "rename_ok", ID: id, From: src, To: dst}); err != nil {
 		log.Printf("wash-fm send rename_ok: %v", err)
 	}
 }
@@ -764,7 +621,7 @@ func doDelete(c *sdk.Conn, id, path string) {
 		sendErr(c, "delete_err", id, p, wfs.ErrCode(err), err.Error())
 		return
 	}
-	if err := c.SendAppMsg(pathOK{Kind: "delete_ok", ID: id, Path: abs}); err != nil {
+	if err := c.SendAppMsg(wfs.PathReply{Kind: "delete_ok", ID: id, Path: abs}); err != nil {
 		log.Printf("wash-fm send delete_ok: %v", err)
 	}
 }
@@ -782,7 +639,7 @@ func doCreateFile(c *sdk.Conn, id, path string) {
 		sendErr(c, "create_file_err", id, p, wfs.ErrCode(err), err.Error())
 		return
 	}
-	if err := c.SendAppMsg(pathOK{Kind: "create_file_ok", ID: id, Path: abs}); err != nil {
+	if err := c.SendAppMsg(wfs.PathReply{Kind: "create_file_ok", ID: id, Path: abs}); err != nil {
 		log.Printf("wash-fm send create_file_ok: %v", err)
 	}
 }
@@ -800,7 +657,7 @@ func doCreateDir(c *sdk.Conn, id, path string) {
 		sendErr(c, "create_dir_err", id, p, wfs.ErrCode(err), err.Error())
 		return
 	}
-	if err := c.SendAppMsg(pathOK{Kind: "create_dir_ok", ID: id, Path: abs}); err != nil {
+	if err := c.SendAppMsg(wfs.PathReply{Kind: "create_dir_ok", ID: id, Path: abs}); err != nil {
 		log.Printf("wash-fm send create_dir_ok: %v", err)
 	}
 }
@@ -819,13 +676,13 @@ func doWrite(c *sdk.Conn, id, path, content string) {
 		sendErr(c, "write_err", id, p, wfs.ErrCode(err), err.Error())
 		return
 	}
-	if err := c.SendAppMsg(writeOK{Kind: "write_ok", ID: id, Path: abs, Bytes: n}); err != nil {
+	if err := c.SendAppMsg(wfs.WriteReply{Kind: "write_ok", ID: id, Path: abs, Bytes: n}); err != nil {
 		log.Printf("wash-fm send write_ok: %v", err)
 	}
 }
 
 func sendErr(c *sdk.Conn, kind, id, path, code, msg string) {
-	if err := c.SendAppMsg(errResult{Kind: kind, ID: id, Path: path, Code: code, Msg: msg}); err != nil {
+	if err := c.SendAppMsg(wfs.ErrReply{Kind: kind, ID: id, Path: path, Code: code, Msg: msg}); err != nil {
 		log.Printf("wash-fm send %s: %v", kind, err)
 	}
 }

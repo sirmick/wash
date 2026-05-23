@@ -25,18 +25,14 @@ package main
 import (
 	"context"
 	"embed"
-	"errors"
-	"io"
 	"io/fs"
 	"log"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 
-	"github.com/creack/pty"
 	wfs "github.com/sirmick/wash/internal/fs"
+	"github.com/sirmick/wash/internal/pty"
 	"github.com/sirmick/wash/internal/sdk"
 )
 
@@ -69,35 +65,11 @@ var (
 	root   string
 )
 
-// termSession is one PTY+raw-channel pair. The editor opens a new
-// one per terminal tab and tears it down on tab close. Channel id
-// is the natural session id since the FE addresses raw bytes by
-// channel.
-type termSession struct {
-	pty *os.File
-	cmd *exec.Cmd
-	ch  *sdk.RawChannel
-}
-
+// Editor terminal tabs: keyed by raw-channel id. One Session per tab.
 var (
 	termMu       sync.Mutex
-	termSessions = map[uint32]*termSession{}
+	termSessions = map[uint32]*pty.Session{}
 )
-
-// isPtyTerm — same heuristic as wash-term. The pty's slave going
-// away on Linux yields EIO; closing the master yields ErrClosed;
-// EOF is the clean exit. None of those are real errors.
-func isPtyTerm(err error) bool {
-	return err == nil || errors.Is(err, io.EOF) ||
-		errors.Is(err, syscall.EIO) || errors.Is(err, os.ErrClosed)
-}
-
-func userShell() string {
-	if s := os.Getenv("SHELL"); s != "" {
-		return s
-	}
-	return "/bin/bash"
-}
 
 func main() {
 	sub, err := fs.Sub(assetsFS, "assets")
@@ -141,45 +113,9 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	}
 }
 
-// All response structs carry an optional ID echoing the request's
-// id for correlation. Same shape as wash-fm's so any future SDK
-// reply-correlation helper can drop in unchanged.
-type listResult struct {
-	Kind      string      `json:"kind"`
-	ID        string      `json:"id,omitempty"`
-	Path      string      `json:"path"`
-	Entries   []wfs.Entry `json:"entries"`
-	Truncated bool        `json:"truncated"`
-}
-
-type readResult struct {
-	Kind      string `json:"kind"`
-	ID        string `json:"id,omitempty"`
-	Path      string `json:"path"`
-	Content   string `json:"content"`
-	Size      int64  `json:"size"`
-	Binary    bool   `json:"binary"`
-	Truncated bool   `json:"truncated"`
-}
-
-type writeResult struct {
-	Kind  string `json:"kind"`
-	ID    string `json:"id,omitempty"`
-	Path  string `json:"path"`
-	Bytes int    `json:"bytes"`
-}
-
-type errResult struct {
-	Kind string `json:"kind"`
-	ID   string `json:"id,omitempty"`
-	Path string `json:"path,omitempty"`
-	Code string `json:"code"`
-	Msg  string `json:"msg"`
-}
-
 func onAppMsg(c *sdk.Conn, _ uint32, data any) {
-	m, ok := data.(map[any]any)
-	if !ok {
+	m := sdk.AsMap(data)
+	if m == nil {
 		return
 	}
 	kind, _ := m["kind"].(string)
@@ -189,13 +125,7 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 	// direct line to the FE can skip this hop; the BE-side forward
 	// is here so test drivers and other apps can target either side.
 	if strings.HasPrefix(kind, "cmd.") {
-		out := map[string]any{}
-		for k, v := range m {
-			if ks, ok := k.(string); ok {
-				out[ks] = v
-			}
-		}
-		_ = c.SendAppMsg(out)
+		_ = c.SendAppMsg(m)
 		return
 	}
 	switch kind {
@@ -240,8 +170,8 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 			log.Printf("wash-edit save_state: %v", err)
 		}
 	case "term.open":
-		cols := toUint(m["cols"])
-		rows := toUint(m["rows"])
+		cols := sdk.ToUint64(m["cols"])
+		rows := sdk.ToUint64(m["rows"])
 		if cols == 0 {
 			cols = 80
 		}
@@ -251,9 +181,9 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		// OpenChannel must not run on the read goroutine; hand off.
 		go openTerm(c, id, uint16(cols), uint16(rows))
 	case "term.resize":
-		chID := toUint(m["channel_id"])
-		cols := toUint(m["cols"])
-		rows := toUint(m["rows"])
+		chID := sdk.ToUint64(m["channel_id"])
+		cols := sdk.ToUint64(m["cols"])
+		rows := sdk.ToUint64(m["rows"])
 		if chID == 0 || cols == 0 || rows == 0 {
 			return
 		}
@@ -263,11 +193,11 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		if sess == nil {
 			return
 		}
-		if err := pty.Setsize(sess.pty, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}); err != nil {
+		if err := sess.Resize(uint16(cols), uint16(rows)); err != nil {
 			log.Printf("wash-edit term.resize ch=%d: %v", chID, err)
 		}
 	case "term.close":
-		chID := toUint(m["channel_id"])
+		chID := sdk.ToUint64(m["channel_id"])
 		if chID == 0 {
 			return
 		}
@@ -275,100 +205,45 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		sess := termSessions[uint32(chID)]
 		termMu.Unlock()
 		if sess != nil {
-			_ = sess.pty.Close()
-			_ = sess.cmd.Process.Kill()
+			sess.CloseWithReason("user requested")
 		}
 	}
 }
 
-// toUint normalizes CBOR's mixed numeric shapes (int64 / uint64 /
-// float64) into uint64 for size + channel id fields.
-func toUint(v any) uint64 {
-	switch x := v.(type) {
-	case uint64:
-		return x
-	case int64:
-		if x < 0 {
-			return 0
-		}
-		return uint64(x)
-	case float64:
-		return uint64(x)
-	}
-	return 0
-}
-
-// openTerm spawns a shell, opens a raw channel, and io.Copy's the
-// two ends together. Once both directions are flowing the FE sees
-// `term.opened` { id, channel_id } and can wire xterm into the
-// channel. Mirrors wash-term's openTab almost exactly — when the
-// pty/term primitives are extracted to internal/pty/ both apps
-// will collapse onto the same code.
+// openTerm spawns a shell, opens a raw channel, and wires them via
+// internal/pty. Once both directions are flowing the FE sees
+// `term.opened` { id, channel_id }.
 func openTerm(c *sdk.Conn, replyID string, cols, rows uint16) {
-	ch, err := c.OpenChannel(context.Background(), c.WindowID())
+	sess, err := pty.Open(context.Background(), c, c.WindowID(), cols, rows, nil, pty.PinTerm, func(s *pty.Session, reason string) {
+		// onClose fires from the PTY goroutine when the shell exits.
+		termMu.Lock()
+		_, found := termSessions[s.ID()]
+		delete(termSessions, s.ID())
+		termMu.Unlock()
+		if !found {
+			return
+		}
+		_ = c.SendAppMsg(map[string]any{
+			"kind":       "term.closed",
+			"channel_id": uint64(s.ID()),
+			"reason":     reason,
+		})
+	})
 	if err != nil {
-		log.Printf("wash-edit term open channel: %v", err)
+		log.Printf("wash-edit term open: %v", err)
 		_ = c.SendAppMsg(map[string]any{"kind": "term.open_err", "id": replyID, "msg": err.Error()})
 		return
 	}
-	shell := userShell()
-	cmd := exec.Command(shell)
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
-	f, startErr := pty.StartWithSize(cmd, &pty.Winsize{Cols: cols, Rows: rows})
-	if startErr != nil {
-		log.Printf("wash-edit term pty.Start %s: %v", shell, startErr)
-		_ = ch.Close()
-		_ = c.SendAppMsg(map[string]any{"kind": "term.open_err", "id": replyID, "msg": startErr.Error()})
-		return
-	}
-	sess := &termSession{pty: f, cmd: cmd, ch: ch}
 	termMu.Lock()
-	termSessions[ch.ID()] = sess
+	termSessions[sess.ID()] = sess
 	termMu.Unlock()
 
-	log.Printf("wash-edit term opened ch=%d shell=%s pid=%d", ch.ID(), shell, cmd.Process.Pid)
+	log.Printf("wash-edit term opened ch=%d shell=%s pid=%d", sess.ID(), sess.Shell, sess.Cmd().Process.Pid)
 	_ = c.SendAppMsg(map[string]any{
 		"kind":       "term.opened",
 		"id":         replyID,
-		"channel_id": uint64(ch.ID()),
-		"shell":      shell,
-	})
-
-	// pty → channel
-	go func() {
-		_, copyErr := io.Copy(ch, f)
-		if !isPtyTerm(copyErr) {
-			log.Printf("wash-edit term pty→ch ch=%d: %v", ch.ID(), copyErr)
-		}
-		cleanupTerm(c, ch.ID(), "pty eof")
-	}()
-	// channel → pty
-	go func() {
-		_, copyErr := io.Copy(f, ch)
-		if !isPtyTerm(copyErr) {
-			log.Printf("wash-edit term ch→pty ch=%d: %v", ch.ID(), copyErr)
-		}
-		_ = cmd.Process.Kill()
-	}()
-	go func() {
-		_ = cmd.Wait()
-	}()
-}
-
-func cleanupTerm(c *sdk.Conn, chID uint32, reason string) {
-	termMu.Lock()
-	sess, ok := termSessions[chID]
-	delete(termSessions, chID)
-	termMu.Unlock()
-	if !ok {
-		return
-	}
-	_ = sess.pty.Close()
-	_ = sess.ch.Close()
-	_ = c.SendAppMsg(map[string]any{
-		"kind":       "term.closed",
-		"channel_id": uint64(chID),
-		"reason":     reason,
+		"channel_id": uint64(sess.ID()),
+		"shell":      sess.Shell,
 	})
 }
 
@@ -394,7 +269,7 @@ func doList(c *sdk.Conn, id, path string) {
 		sendErr(c, "list_err", id, path, wfs.ErrCode(err), err.Error())
 		return
 	}
-	_ = c.SendAppMsg(listResult{Kind: "list_ok", ID: id, Path: abs, Entries: entries, Truncated: truncated})
+	_ = c.SendAppMsg(wfs.ListReply{Kind: "list_ok", ID: id, Path: abs, Entries: entries, Truncated: truncated})
 }
 
 func doRead(c *sdk.Conn, id, path string) {
@@ -438,7 +313,7 @@ func doRead(c *sdk.Conn, id, path string) {
 	if !binary {
 		content = string(buf)
 	}
-	_ = c.SendAppMsg(readResult{
+	_ = c.SendAppMsg(wfs.ReadReply{
 		Kind:      "read_ok",
 		ID:        id,
 		Path:      abs,
@@ -497,11 +372,11 @@ func doWrite(c *sdk.Conn, id, path, content string) {
 		sendErr(c, "write_err", id, p, wfs.ErrCode(err), err.Error())
 		return
 	}
-	_ = c.SendAppMsg(writeResult{Kind: "write_ok", ID: id, Path: abs, Bytes: n})
+	_ = c.SendAppMsg(wfs.WriteReply{Kind: "write_ok", ID: id, Path: abs, Bytes: n})
 }
 
 func sendErr(c *sdk.Conn, kind, id, path, code, msg string) {
-	_ = c.SendAppMsg(errResult{Kind: kind, ID: id, Path: path, Code: code, Msg: msg})
+	_ = c.SendAppMsg(wfs.ErrReply{Kind: kind, ID: id, Path: path, Code: code, Msg: msg})
 }
 
 // looksBinary inspects bytes for NUL — wash-fm's heuristic. Good

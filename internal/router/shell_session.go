@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"sync"
 
 	"github.com/sirmick/wash/internal/wire"
@@ -144,36 +143,11 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 
 
 func (s *ShellSession) loop(ctx context.Context) error {
-	type readResult struct {
-		f   wire.Frame
-		err error
+	err := wire.ReadLoop(ctx, s.Transport, s.dispatch)
+	if errors.Is(err, context.Canceled) {
+		return nil
 	}
-	ch := make(chan readResult, 1)
-	go func() {
-		for {
-			f, err := s.Transport.ReadFrame()
-			ch <- readResult{f, err}
-			if err != nil {
-				return
-			}
-		}
-	}()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case rr := <-ch:
-			if rr.err != nil {
-				if errors.Is(rr.err, io.EOF) {
-					return nil
-				}
-				return rr.err
-			}
-			if err := s.dispatch(rr.f); err != nil {
-				return err
-			}
-		}
-	}
+	return err
 }
 
 func (s *ShellSession) dispatch(f wire.Frame) error {

@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+
+	"github.com/sirmick/wash/internal/wire"
 )
 
 // cliSession is a control-socket connection that has been promoted
@@ -103,13 +105,13 @@ func (s *cliSession) writeJSON(payload map[string]any) error {
 
 // writeAppMsg is what relayAppMsgCrossInstance calls when an
 // EvtAppMsgSendTo targets this session. The CBOR-shaped payload is
-// normalised to JSON-safe shapes (router-wide helper toJSON) and
-// wrapped in a transport envelope so wash-sudo's reader sees a
-// consistent {t:"priv.event", from:{…}, data:{…}} frame.
+// normalised to JSON-safe shapes (wire.ToJSONValue) and wrapped in
+// a transport envelope so wash-sudo's reader sees a consistent
+// {t:"priv.event", from:{…}, data:{…}} frame.
 func (s *cliSession) writeAppMsg(from *Sender, data any) error {
 	out := map[string]any{
 		"t":    "priv.event",
-		"data": toJSON(data),
+		"data": wire.ToJSONValue(data),
 	}
 	if from != nil {
 		fromMap := map[string]any{}

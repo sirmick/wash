@@ -43,40 +43,27 @@ func EnableFilePicker(c *Conn) {
 	}
 }
 
-// watchState owns the fswatch.Manager + per-path Sub map for one
-// app's fs.watch surface. Manager is lazy: created on the first
-// fs.watch so an app that never watches anything doesn't allocate
-// an fsnotify watcher.
-//
-// Subs are refcounted because one app can have multiple subscribers
-// to the same path (e.g. the editor's sidebar and the embedded
-// FilePicker both watch the project root). Without refcounting the
-// first unwatch would tear the sub down and the other subscriber
-// would silently stop receiving events. Each fs.watch bumps refs;
-// fs.unwatch decrements; the underlying sub only closes at zero.
-type subRef struct {
-	sub  *fswatch.Sub
-	refs int
-}
-
+// watchState wraps a lazily-constructed fswatch.RefMap. Lazy because
+// an app that never calls fs.watch shouldn't allocate an inotify
+// watcher. The RefMap inside handles refcounting so two FE surfaces
+// (editor sidebar + embedded FilePicker) watching the same path
+// share one underlying Sub.
 type watchState struct {
-	mu   sync.Mutex
-	mgr  *fswatch.Manager
-	subs map[string]*subRef
+	mu     sync.Mutex
+	mgr    *fswatch.Manager
+	refMap *fswatch.RefMap
 }
 
-func newWatchState() *watchState {
-	return &watchState{subs: map[string]*subRef{}}
-}
+func newWatchState() *watchState { return &watchState{} }
 
-// ensureMgr lazily constructs the fswatch.Manager. Returns nil on
-// failure (fswatch.New can fail on resource limits — inotify
-// instance caps, etc); callers should reply "unavailable".
-func (w *watchState) ensureMgr() *fswatch.Manager {
+// ensureRefMap lazily constructs the fswatch.Manager + RefMap.
+// Returns nil on failure (fswatch.New can fail on resource limits
+// — inotify instance caps, etc); callers should reply "unavailable".
+func (w *watchState) ensureRefMap() *fswatch.RefMap {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.mgr != nil {
-		return w.mgr
+	if w.refMap != nil {
+		return w.refMap
 	}
 	mgr, err := fswatch.New()
 	if err != nil {
@@ -84,7 +71,8 @@ func (w *watchState) ensureMgr() *fswatch.Manager {
 		return nil
 	}
 	w.mgr = mgr
-	return mgr
+	w.refMap = fswatch.NewRefMap(mgr)
+	return w.refMap
 }
 
 // dispatchPicker returns true when the message had a recognized
@@ -168,8 +156,7 @@ func dispatchPicker(c *Conn, fsa *wfs.FS, ws *watchState, data any) bool {
 // doWatch subscribes the connection to fsnotify events under path
 // and (on first subscribe) starts a goroutine that re-emits them
 // as fs.watch_event app_msgs. Calls for an already-watched path
-// just bump the refcount — same path, same sub, same goroutine;
-// the FE gets a fresh fs.watch_ok either way.
+// bump the refcount; the existing goroutine keeps forwarding.
 func doWatch(c *Conn, fsa *wfs.FS, ws *watchState, id, path string) {
 	if path == "" {
 		pickerReply(c, "fs.watch_err", id, map[string]any{
@@ -184,55 +171,43 @@ func doWatch(c *Conn, fsa *wfs.FS, ws *watchState, id, path string) {
 		})
 		return
 	}
-	mgr := ws.ensureMgr()
-	if mgr == nil {
+	refMap := ws.ensureRefMap()
+	if refMap == nil {
 		pickerReply(c, "fs.watch_err", id, map[string]any{
 			"path": abs, "code": "unavailable", "msg": "fswatch not available",
 		})
 		return
 	}
-	ws.mu.Lock()
-	if ref, ok := ws.subs[abs]; ok {
-		ref.refs++
-		ws.mu.Unlock()
-		pickerReply(c, "fs.watch_ok", id, map[string]any{"path": abs})
-		return
-	}
-	sub, err := mgr.Watch(abs)
+	sub, first, err := refMap.Watch(abs)
 	if err != nil {
-		ws.mu.Unlock()
 		pickerReply(c, "fs.watch_err", id, map[string]any{
 			"path": abs, "code": "io", "msg": err.Error(),
 		})
 		return
 	}
-	ws.subs[abs] = &subRef{sub: sub, refs: 1}
-	ws.mu.Unlock()
-
-	// One goroutine per fswatch.Sub. Survives every subscriber's
-	// lifetime — only exits when the Sub's events channel closes,
-	// which doUnwatch does only at refcount=0.
-	go func(s *fswatch.Sub) {
-		for ev := range s.Events() {
-			err := c.SendAppMsg(map[string]any{
-				"kind": "fs.watch_event",
-				"op":   ev.Op.String(),
-				"path": ev.Path,
-			})
-			if err != nil {
-				log.Printf("sdk.EnableFilePicker: fs.watch_event: %v", err)
-				return
+	if first {
+		// One goroutine per fswatch.Sub. Lives as long as the Sub:
+		// the last Unwatch closes it, the events channel drains, the
+		// loop returns.
+		go func(s *fswatch.Sub) {
+			for ev := range s.Events() {
+				if err := c.SendAppMsg(map[string]any{
+					"kind": "fs.watch_event",
+					"op":   ev.Op.String(),
+					"path": ev.Path,
+				}); err != nil {
+					log.Printf("sdk.EnableFilePicker: fs.watch_event: %v", err)
+					return
+				}
 			}
-		}
-	}(sub)
+		}(sub)
+	}
 	pickerReply(c, "fs.watch_ok", id, map[string]any{"path": abs})
 }
 
 // doUnwatch decrements the refcount for path. The underlying Sub
-// is only closed when the count reaches zero — any other
-// subscriber for the same path keeps receiving events. Unwatching
-// a path that isn't being watched is a no-op success (the FE asked
-// for it to stop; it isn't; mission accomplished).
+// is only closed when the count reaches zero. Unwatching a path
+// that isn't tracked is a no-op success.
 func doUnwatch(c *Conn, fsa *wfs.FS, ws *watchState, id, path string) {
 	if path == "" {
 		pickerReply(c, "fs.unwatch_err", id, map[string]any{
@@ -247,18 +222,8 @@ func doUnwatch(c *Conn, fsa *wfs.FS, ws *watchState, id, path string) {
 		pickerReply(c, "fs.unwatch_ok", id, map[string]any{"path": path})
 		return
 	}
-	var closeSub *fswatch.Sub
-	ws.mu.Lock()
-	if ref, ok := ws.subs[abs]; ok {
-		ref.refs--
-		if ref.refs <= 0 {
-			closeSub = ref.sub
-			delete(ws.subs, abs)
-		}
-	}
-	ws.mu.Unlock()
-	if closeSub != nil {
-		closeSub.Close()
+	if ws.refMap != nil {
+		ws.refMap.Unwatch(abs)
 	}
 	pickerReply(c, "fs.unwatch_ok", id, map[string]any{"path": abs})
 }

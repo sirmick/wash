@@ -34,11 +34,11 @@ const (
 //go:embed all:assets
 var assetsFS embed.FS
 
-// resolveRouterExe returns the EvalSymlinks-resolved path of the
-// running wash-router binary, or "" on failure. Same dance as
-// defaultAppsDir so the dev-reload watcher's path comparisons
-// canonicalize identically.
-func resolveRouterExe() string {
+// resolvedExe returns the EvalSymlinks-resolved path of the running
+// wash-router binary, or "" on failure. The dev-reload watcher and
+// the apps-dir default both want the canonicalised path so their
+// later comparisons match.
+func resolvedExe() string {
 	exe, err := os.Executable()
 	if err != nil {
 		return ""
@@ -50,22 +50,12 @@ func resolveRouterExe() string {
 }
 
 // defaultAppsDir returns the directory of the wash-router binary
-// itself — so `out/wash-router` finds its siblings in `out/`
-// with no further config. The system / user share dirs we used to
-// fall back to (~/.local/share/wash/apps, /usr/share/wash/apps)
-// can be wired back when packaging matters; for now the goal is a
-// single-step dev story: build the binaries, run wash-router from
-// its own dir.
+// itself — so `out/wash-router` finds its siblings in `out/` with
+// no further config.
 func defaultAppsDir() string {
-	exe, err := os.Executable()
-	if err != nil {
+	exe := resolvedExe()
+	if exe == "" {
 		return "."
-	}
-	// Resolve symlinks so symlinked installs still find the real
-	// neighbors. Best-effort: if EvalSymlinks fails, fall back to
-	// the literal path.
-	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = resolved
 	}
 	return filepath.Dir(exe)
 }
@@ -210,7 +200,7 @@ func main() {
 	// resolveRouterExe pulls the resolved-symlink path so the
 	// watcher's later EvalSymlinks comparison matches.
 	if cfg.Dev {
-		r.StartDevReload(resolveRouterExe())
+		r.StartDevReload(resolvedExe())
 	}
 
 	if err := srv.Run(ctx); err != nil {

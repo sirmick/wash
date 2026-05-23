@@ -114,8 +114,8 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 // onAppMsgFrom instead — we keep the two paths separate so the FE
 // can never impersonate a requester.
 func onAppMsg(c *sdk.Conn, _ uint32, data any) {
-	m, ok := data.(map[any]any)
-	if !ok {
+	m := sdk.AsMap(data)
+	if m == nil {
 		return
 	}
 	kind, _ := m["kind"].(string)
@@ -126,13 +126,13 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 	case "resync":
 		st.SendStateSnapshot(c)
 	case "approve":
-		st.HandleApprove(c, toString(m["req_id"]))
+		st.HandleApprove(c, sdk.ToString(m["req_id"]))
 	case "reject":
-		st.HandleReject(c, toString(m["req_id"]), toString(m["reason"]))
+		st.HandleReject(c, sdk.ToString(m["req_id"]), sdk.ToString(m["reason"]))
 	case "unlock":
-		ct := decodeBase64(m["ciphertext"])
-		pk := decodeBase64(m["fe_pubkey"])
-		nonce := decodeBase64(m["nonce"])
+		ct := sdk.DecodeBase64(m["ciphertext"])
+		pk := sdk.DecodeBase64(m["fe_pubkey"])
+		nonce := sdk.DecodeBase64(m["nonce"])
 		st.HandleUnlock(c, ct, pk, nonce)
 	case "lock":
 		st.HandleLock(c, "explicit")
@@ -143,12 +143,12 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 // `from` with the sender's instance — never trust anything the
 // payload claims about origin.
 func onAppMsgFrom(c *sdk.Conn, _ uint32, data any, from wire.Sender) {
-	m, ok := data.(map[any]any)
-	if !ok {
+	m := sdk.AsMap(data)
+	if m == nil {
 		return
 	}
 	kind, _ := m["kind"].(string)
-	reqID := toString(m["req_id"])
+	reqID := sdk.ToString(m["req_id"])
 	if reqID == "" {
 		// We can't reply without a req_id (the requester wouldn't be
 		// able to correlate the answer). Log and drop.
@@ -157,29 +157,28 @@ func onAppMsgFrom(c *sdk.Conn, _ uint32, data any, from wire.Sender) {
 	}
 	switch kind {
 	case "run":
-		argv := toStringSlice(m["argv"])
-		reason := toString(m["reason"])
+		argv := sdk.ToStringSlice(m["argv"])
+		reason := sdk.ToString(m["reason"])
 		st.EnqueueRun(c, from, reqID, argv, reason)
 	case "spawn":
-		appID := toString(m["app_id"])
-		args := toStringSlice(m["args"])
-		reason := toString(m["reason"])
+		appID := sdk.ToString(m["app_id"])
+		args := sdk.ToStringSlice(m["args"])
+		reason := sdk.ToString(m["reason"])
 		st.EnqueueSpawn(c, from, reqID, appID, args, reason)
 	case "run_inline":
 		// Originates from the wash-sudo CLI via the control socket's
 		// priv.run op. The sender is a synthetic cli-* instance and
 		// stays the addressee for stream/stdin/result envelopes.
-		argv := toStringSlice(m["argv"])
-		cwd := toString(m["cwd"])
-		reason := toString(m["reason"])
+		argv := sdk.ToStringSlice(m["argv"])
+		cwd := sdk.ToString(m["cwd"])
+		reason := sdk.ToString(m["reason"])
 		noPrompt, _ := m["no_prompt"].(bool)
-		envMap := toStringMap(m["env"])
+		envMap := sdk.ToStringMap(m["env"])
 		origin := parseCliOrigin(m["cli_origin"])
 		st.EnqueueRunInline(c, from, reqID, argv, cwd, envMap, reason, noPrompt, origin)
 	case "stdin":
 		// Forwarded bytes for the running subprocess of reqID.
-		raw, _ := m["bytes"].(string)
-		b := decodeBase64(raw)
+		b := sdk.DecodeBase64(m["bytes"])
 		if len(b) > 0 {
 			st.HandleInlineStdin(reqID, b)
 		}
@@ -204,58 +203,16 @@ func onAppMsgFrom(c *sdk.Conn, _ uint32, data any, from wire.Sender) {
 // didn't carry one (i.e. the sender wasn't a cli session). All
 // fields are best-effort — a missing tty just shows blank.
 func parseCliOrigin(v any) *CliOrigin {
-	m, ok := v.(map[any]any)
-	if !ok {
+	m := sdk.AsMap(v)
+	if m == nil {
 		return nil
 	}
 	return &CliOrigin{
-		PID:  toInt64(m["pid"]),
-		UID:  toInt64(m["uid"]),
-		Comm: toString(m["comm"]),
-		TTY:  toString(m["tty"]),
+		PID:  sdk.ToInt64(m["pid"]),
+		UID:  sdk.ToInt64(m["uid"]),
+		Comm: sdk.ToString(m["comm"]),
+		TTY:  sdk.ToString(m["tty"]),
 	}
-}
-
-func toInt64(v any) int64 {
-	switch x := v.(type) {
-	case int64:
-		return x
-	case uint64:
-		return int64(x)
-	case float64:
-		return int64(x)
-	case int:
-		return int64(x)
-	}
-	return 0
-}
-
-// toStringMap coerces a CBOR-decoded map-of-strings (map[any]any with
-// string keys + string values) into Go's idiomatic map[string]string.
-// Mixed or empty maps yield an empty result.
-func toStringMap(v any) map[string]string {
-	out := map[string]string{}
-	switch x := v.(type) {
-	case map[any]any:
-		for k, vv := range x {
-			ks, _ := k.(string)
-			vs, _ := vv.(string)
-			if ks != "" {
-				out[ks] = vs
-			}
-		}
-	case map[string]any:
-		for k, vv := range x {
-			if s, ok := vv.(string); ok {
-				out[k] = s
-			}
-		}
-	case map[string]string:
-		for k, v := range x {
-			out[k] = v
-		}
-	}
-	return out
 }
 
 // onPrepareSpawnResult dispatches to the per-req handler that called
@@ -263,34 +220,6 @@ func toStringMap(v any) map[string]string {
 // the req_id we passed.
 func onPrepareSpawnResult(c *sdk.Conn, reqID uint64, instanceID, token, binary string, err error) {
 	st.HandlePrepareSpawnResult(c, reqID, instanceID, token, binary, err)
-}
-
-// toString coerces any → string for CBOR-decoded payloads. Returns
-// "" for missing / wrong-type values, matching the defensive style
-// used elsewhere in the wash codebase.
-func toString(v any) string {
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return ""
-}
-
-// toStringSlice coerces a CBOR-decoded array-of-strings ([]any with
-// string elements) into []string. Non-string elements are dropped.
-func toStringSlice(v any) []string {
-	switch x := v.(type) {
-	case []any:
-		out := make([]string, 0, len(x))
-		for _, item := range x {
-			if s, ok := item.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	case []string:
-		return x
-	}
-	return nil
 }
 
 // fatalUsage is called for programmer-error config problems where

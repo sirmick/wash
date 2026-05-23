@@ -17,9 +17,8 @@
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
-import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
-import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Splitter, StatusBar } from '@wash/ui';
+import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, defineWashApp } from '@wash/ui';
 import {
   ArrowLeft,
   ArrowRight,
@@ -41,14 +40,6 @@ import {
   Square,
   Trash2,
 } from 'lucide-solid';
-
-declare global {
-  interface Window {
-    wash: {
-      sendAppMsg(instanceID: string, data: unknown): void;
-    };
-  }
-}
 
 interface PersistedState {
   path?: string;
@@ -2603,32 +2594,6 @@ function octalPerm(mode: number): string {
 
 // ---- custom element wrapper ----
 
-class WashAppFM extends HTMLElement {
-  private cleanup?: () => void;
-
-  connectedCallback() {
-    this.style.cssText = [
-      'display:grid',
-      'grid-template-rows:36px 1fr 22px',
-      'width:100%',
-      'height:100%',
-      'background:#10101a',
-      'color:#eee',
-      'font:13px ui-sans-serif,system-ui,sans-serif',
-      'box-sizing:border-box',
-      'position:relative',
-    ].join(';');
-
-    const instance = this.getAttribute('data-wash-instance') ?? '';
-    this.cleanup = render(() => <App instance={instance} host={this} />, this);
-  }
-
-  disconnectedCallback() {
-    this.cleanup?.();
-    this.cleanup = undefined;
-  }
-}
-
-if (!customElements.get('wash-app-fm')) {
-  customElements.define('wash-app-fm', WashAppFM);
-}
+defineWashApp('wash-app-fm', (props) => <App {...props} />, {
+  style: 'display:grid;grid-template-rows:36px 1fr 22px;width:100%;height:100%;background:#10101a;color:#eee;font:13px ui-sans-serif,system-ui,sans-serif;box-sizing:border-box;position:relative',
+});

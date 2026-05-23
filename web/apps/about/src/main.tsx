@@ -3,7 +3,7 @@
 // drives the UI but pulls in its tiny reactive runtime; the bundle
 // is still well under the per-app cap.
 
-import { render } from 'solid-js/web';
+import { defineWashApp } from '@wash/ui';
 import type { Component } from 'solid-js';
 
 const App: Component = () => (
@@ -23,19 +23,4 @@ const App: Component = () => (
   </div>
 );
 
-class WashAppAbout extends HTMLElement {
-  private cleanup?: () => void;
-
-  connectedCallback() {
-    this.cleanup = render(() => <App />, this);
-  }
-
-  disconnectedCallback() {
-    this.cleanup?.();
-    this.cleanup = undefined;
-  }
-}
-
-if (!customElements.get('wash-app-about')) {
-  customElements.define('wash-app-about', WashAppAbout);
-}
+defineWashApp('wash-app-about', () => <App />);

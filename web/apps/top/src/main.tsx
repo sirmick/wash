@@ -14,9 +14,8 @@
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore } from 'solid-js/store';
-import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
-import { ConfirmDialog, tokens } from '@wash/ui';
+import { ConfirmDialog, defineWashApp, tokens } from '@wash/ui';
 import {
   ChevronDown,
   ChevronRight,
@@ -27,14 +26,6 @@ import {
   X as XIcon,
   Skull,
 } from 'lucide-solid';
-
-declare global {
-  interface Window {
-    wash: {
-      sendAppMsg(instanceID: string, data: unknown): void;
-    };
-  }
-}
 
 // ---- types (mirror cmd/wash-top wire structs) ----
 
@@ -1465,31 +1456,6 @@ const killBodyStyle: JSX.CSSProperties = {
 
 // ---- custom element ----
 
-class WashAppTop extends HTMLElement {
-  private cleanup?: () => void;
-
-  connectedCallback() {
-    this.style.cssText = [
-      'display:block',
-      'position:relative',
-      'width:100%',
-      'height:100%',
-      'overflow:hidden',
-      `background:${tokens.bgWindow}`,
-      `color:${tokens.fg}`,
-      `font:${tokens.fontSizeBase} ${tokens.fontSans}`,
-      'box-sizing:border-box',
-    ].join(';');
-    const instance = this.getAttribute('data-wash-instance') ?? '';
-    this.cleanup = render(() => <App instance={instance} host={this} />, this);
-  }
-
-  disconnectedCallback() {
-    this.cleanup?.();
-    this.cleanup = undefined;
-  }
-}
-
-if (!customElements.get('wash-app-top')) {
-  customElements.define('wash-app-top', WashAppTop);
-}
+defineWashApp('wash-app-top', (props) => <App {...props} />, {
+  style: `display:block;position:relative;width:100%;height:100%;overflow:hidden;background:${tokens.bgWindow};color:${tokens.fg};font:${tokens.fontSizeBase} ${tokens.fontSans};box-sizing:border-box`,
+});

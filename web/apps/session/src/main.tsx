@@ -9,9 +9,8 @@
 // fields scattered across multiple render methods.
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
-import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
-import { Menu, MenuItem, tokens } from '@wash/ui';
+import { Menu, MenuItem, defineWashApp, tokens } from '@wash/ui';
 import { toBlob } from 'html-to-image';
 import { Camera, Search } from 'lucide-solid';
 
@@ -58,26 +57,6 @@ interface DesktopConfigMsg {
   taskbar: {
     position?: 'top' | 'bottom' | '';
   };
-}
-
-declare global {
-  interface Window {
-    wash: {
-      sendAppMsg(instanceID: string, data: unknown): void;
-      catalog(): CatalogApp[];
-      onCatalog(cb: (apps: CatalogApp[]) => void): () => void;
-      windows(): WindowInfo[];
-      onWindowsChanged(cb: (windows: WindowInfo[]) => void): () => void;
-      focusWindow(id: number): void;
-      closeWindow(id: number): void;
-      restoreWindow(id: number): void;
-      viewports(): { perAxis: number };
-      getViewport(): { vx: number; vy: number };
-      setViewport(vx: number, vy: number): void;
-      onViewport(cb: (vp: { vx: number; vy: number }) => void): () => void;
-      onScreenSize(cb: (s: { w: number; h: number }) => void): () => void;
-    };
-  }
 }
 
 // rootTerminalEntry — synthetic launcher item exposed in StartMenu
@@ -1064,30 +1043,6 @@ const emptyStyle: JSX.CSSProperties = {
 
 // ---- custom element wrapper ----
 
-class WashAppSession extends HTMLElement {
-  private cleanup?: () => void;
-
-  connectedCallback() {
-    this.style.cssText = [
-      'display:block',
-      'position:absolute',
-      'inset:0',
-      'background:radial-gradient(circle at 30% 20%, #1a1a32 0, #0a0a18 75%)',
-      'color:#eee',
-      'font:14px system-ui,sans-serif',
-      'overflow:hidden',
-    ].join(';');
-
-    const instance = this.getAttribute('data-wash-instance') ?? '';
-    this.cleanup = render(() => <App instance={instance} host={this} />, this);
-  }
-
-  disconnectedCallback() {
-    this.cleanup?.();
-    this.cleanup = undefined;
-  }
-}
-
-if (!customElements.get('wash-app-session')) {
-  customElements.define('wash-app-session', WashAppSession);
-}
+defineWashApp('wash-app-session', (props) => <App {...props} />, {
+  style: 'display:block;position:absolute;inset:0;background:radial-gradient(circle at 30% 20%, #1a1a32 0, #0a0a18 75%);color:#eee;font:14px system-ui,sans-serif;overflow:hidden',
+});

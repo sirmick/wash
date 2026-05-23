@@ -1,11 +1,11 @@
 // wash-term — a terminal emulator that runs as a normal wash app.
 //
-// The pty lives in this process (creack/pty), not in the router. The
-// router just forwards raw bytes between the pty fd and the browser
-// shell over a wash raw channel. The FE wraps xterm.js.
+// The pty lives in this process (via internal/pty), not in the
+// router. The router just forwards raw bytes between the pty fd and
+// the browser shell over a wash raw channel. The FE wraps xterm.js.
 //
-// One pty session per raw channel. Layer 3 (tabs) adds multiple
-// channels per window; for now: one tab per window.
+// One pty session per raw channel. Tabs share a window via the
+// session map (channel id → *pty.Session).
 //
 // CLI:
 //
@@ -21,18 +21,14 @@ package main
 import (
 	"context"
 	"embed"
-	"errors"
 	"flag"
 	"io"
 	"io/fs"
 	"log"
 	"os"
-	"os/exec"
-	"strings"
 	"sync"
-	"syscall"
 
-	"github.com/creack/pty"
+	"github.com/sirmick/wash/internal/pty"
 	"github.com/sirmick/wash/internal/sdk"
 )
 
@@ -41,30 +37,14 @@ import (
 // exit. Parsed once in main; immutable thereafter.
 var execArgv []string
 
-// isPtyTerm reports whether err is the kind of error you see when a
-// pty's slave side has gone away. On Linux, reading the master after
-// the slave closes (process exit / pty.Close) returns EIO; on Close,
-// further reads can also be ErrClosed. Both mean "session ended,"
-// not "something went wrong."
-func isPtyTerm(err error) bool {
-	return err == nil || errors.Is(err, io.EOF) ||
-		errors.Is(err, syscall.EIO) || errors.Is(err, os.ErrClosed)
-}
-
 //go:embed all:assets
 var assetsFS embed.FS
 
 const version = "0.0.0"
 
-type session struct {
-	pty *os.File
-	cmd *exec.Cmd
-	ch  *sdk.RawChannel
-}
-
 type state struct {
 	mu       sync.Mutex
-	sessions map[uint32]*session // by channel id
+	sessions map[uint32]*pty.Session // by channel id
 }
 
 var st state
@@ -89,7 +69,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("wash-term: assets: %v", err)
 	}
-	st.sessions = make(map[uint32]*session)
+	st.sessions = make(map[uint32]*pty.Session)
 	sdk.Main(&sdk.AppDef{
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.term",
@@ -118,129 +98,61 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	go openTab(c, windowID, 80, 24)
 }
 
-// openTab forks a shell, opens a raw channel to the browser, and
-// wires the two together with io.Copy pairs.
+// openTab forks a shell (or --exec argv), opens a raw channel, and
+// hands both to internal/pty.Open which wires them with io.Copy
+// pairs. Reports tab_opened / tab_closed app_msgs to the FE.
 func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
-	ch, err := c.OpenChannel(context.Background(), windowID)
-	if err != nil {
-		log.Printf("wash-term open channel: %v", err)
-		_ = c.SendAppMsg(map[string]any{"kind": "tab_error", "msg": err.Error()})
-		return
-	}
-	var cmd *exec.Cmd
-	var shell string
+	var argv []string
 	if len(execArgv) > 0 {
 		// --exec mode: run the requested argv. argv[0] is resolved
 		// via $PATH (exec.Command does that). The tab autocloses on
 		// exit so wash-priv → wash-term --exec apt-update flows
 		// finish naturally.
-		cmd = exec.Command(execArgv[0], execArgv[1:]...)
-		shell = execArgv[0]
-	} else {
-		shell = userShell()
-		cmd = exec.Command(shell)
+		argv = execArgv
 	}
-	// The shell inherits:
-	//   - WASH_DISPLAY (router-set in os.Environ) so a `wash-fm` or
-	//     `wash-launch` invocation finds the live router — the
-	//     xterm-loads-DISPLAY analogue.
-	//   - WASH_BIN_DIR (router-published) prepended to PATH so
-	//     sibling tools resolve by bare name.
-	// TERM is set explicitly; everything else flows through.
-	cmd.Env = withWashEnv(os.Environ())
-	f, startErr := pty.StartWithSize(cmd, &pty.Winsize{Cols: cols, Rows: rows})
-	if startErr != nil {
-		log.Printf("wash-term pty.Start %s: %v", shell, startErr)
-		_ = ch.Close()
-		_ = c.SendAppMsg(map[string]any{"kind": "tab_error", "msg": startErr.Error()})
+	sess, err := pty.Open(context.Background(), c, windowID, cols, rows, argv, pty.WithWashEnv, func(s *pty.Session, reason string) {
+		// onClose runs from the pty goroutine when the session ends.
+		// Drop from the session map, tell the FE, dismiss the window
+		// if no tabs remain.
+		st.mu.Lock()
+		_, found := st.sessions[s.ID()]
+		delete(st.sessions, s.ID())
+		empty := len(st.sessions) == 0
+		st.mu.Unlock()
+		if !found {
+			return
+		}
+		_ = c.SendAppMsg(map[string]any{
+			"kind":       "tab_closed",
+			"channel_id": uint64(s.ID()),
+			"reason":     reason,
+		})
+		if empty {
+			// Last tab gone — ask the router to close the window so
+			// the user doesn't sit looking at an empty terminal.
+			_ = c.ConfirmClose(c.WindowID(), true)
+		}
+	})
+	if err != nil {
+		log.Printf("wash-term open: %v", err)
+		_ = c.SendAppMsg(map[string]any{"kind": "tab_error", "msg": err.Error()})
 		return
 	}
-	sess := &session{pty: f, cmd: cmd, ch: ch}
 	st.mu.Lock()
-	st.sessions[ch.ID()] = sess
+	st.sessions[sess.ID()] = sess
 	st.mu.Unlock()
 
-	log.Printf("wash-term tab opened ch=%d shell=%s pid=%d", ch.ID(), shell, cmd.Process.Pid)
+	log.Printf("wash-term tab opened ch=%d shell=%s pid=%d", sess.ID(), sess.Shell, sess.Cmd().Process.Pid)
 	_ = c.SendAppMsg(map[string]any{
 		"kind":       "tab_opened",
-		"channel_id": uint64(ch.ID()),
-		"shell":      shell,
+		"channel_id": uint64(sess.ID()),
+		"shell":      sess.Shell,
 	})
-
-	// pty → channel
-	go func() {
-		_, copyErr := io.Copy(ch, f)
-		if !isPtyTerm(copyErr) {
-			log.Printf("wash-term pty→ch ch=%d: %v", ch.ID(), copyErr)
-		}
-		// pty closed — clean up.
-		cleanupSession(c, ch.ID(), "pty eof")
-	}()
-	// channel → pty
-	go func() {
-		_, copyErr := io.Copy(f, ch)
-		if !isPtyTerm(copyErr) {
-			log.Printf("wash-term ch→pty ch=%d: %v", ch.ID(), copyErr)
-		}
-		// Channel torn down — kill the shell so the other goroutine exits.
-		_ = cmd.Process.Kill()
-	}()
-	go func() {
-		_ = cmd.Wait()
-		// io.Copy goroutines see EOF on pty next.
-	}()
-}
-
-func cleanupSession(c *sdk.Conn, chID uint32, reason string) {
-	st.mu.Lock()
-	sess, ok := st.sessions[chID]
-	delete(st.sessions, chID)
-	st.mu.Unlock()
-	if !ok {
-		return
-	}
-	_ = sess.pty.Close()
-	_ = sess.ch.Close()
-	_ = c.SendAppMsg(map[string]any{
-		"kind":       "tab_closed",
-		"channel_id": uint64(chID),
-		"reason":     reason,
-	})
-	// If the last tab closed, request window dismissal so the user
-	// doesn't sit looking at an empty terminal.
-	st.mu.Lock()
-	empty := len(st.sessions) == 0
-	st.mu.Unlock()
-	if empty {
-		// Best-effort: ask the router to close the window. We'd
-		// usually wait for window.close_requested, but a session
-		// with no shells has nothing to do.
-		_ = c.ConfirmClose(c.WindowID(), true)
-	}
-}
-
-// toUint accepts the various concrete number types CBOR may produce
-// when a JSON number traverses JSON → router → CBOR → SDK. JSON's
-// Unmarshal lands integers in float64; re-encoding through CBOR
-// keeps them as float64. We accept whatever the wire delivered.
-func toUint(v any) uint64 {
-	switch x := v.(type) {
-	case uint64:
-		return x
-	case int64:
-		if x < 0 {
-			return 0
-		}
-		return uint64(x)
-	case float64:
-		return uint64(x)
-	}
-	return 0
 }
 
 func onAppMsg(c *sdk.Conn, _ uint32, data any) {
-	m, ok := data.(map[any]any)
-	if !ok {
+	m := sdk.AsMap(data)
+	if m == nil {
 		return
 	}
 	switch kind, _ := m["kind"].(string); kind {
@@ -255,9 +167,9 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 			log.Printf("wash-term save_state: %v", err)
 		}
 	case "resize":
-		chID := toUint(m["channel_id"])
-		cols := toUint(m["cols"])
-		rows := toUint(m["rows"])
+		chID := sdk.ToUint64(m["channel_id"])
+		cols := sdk.ToUint64(m["cols"])
+		rows := sdk.ToUint64(m["rows"])
 		if chID == 0 || cols == 0 || rows == 0 {
 			return
 		}
@@ -267,12 +179,12 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		if sess == nil {
 			return
 		}
-		if err := pty.Setsize(sess.pty, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}); err != nil {
+		if err := sess.Resize(uint16(cols), uint16(rows)); err != nil {
 			log.Printf("wash-term resize ch=%d: %v", chID, err)
 		}
 	case "new_tab":
-		cols := toUint(m["cols"])
-		rows := toUint(m["rows"])
+		cols := sdk.ToUint64(m["cols"])
+		rows := sdk.ToUint64(m["rows"])
 		if cols == 0 {
 			cols = 80
 		}
@@ -281,18 +193,15 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		}
 		go openTab(c, c.WindowID(), uint16(cols), uint16(rows))
 	case "close_tab":
-		chID := toUint(m["channel_id"])
+		chID := sdk.ToUint64(m["channel_id"])
 		if chID == 0 {
 			return
 		}
-		// Closing the channel will let io.Copy goroutines see EOF
-		// and cleanupSession finish the job.
 		st.mu.Lock()
 		sess := st.sessions[uint32(chID)]
 		st.mu.Unlock()
 		if sess != nil {
-			_ = sess.pty.Close()
-			_ = sess.cmd.Process.Kill()
+			sess.CloseWithReason("user requested")
 		}
 	}
 }
@@ -300,95 +209,18 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 func onCloseRequested(c *sdk.Conn, win uint32) bool {
 	// Kill every shell before letting the window go.
 	st.mu.Lock()
-	sessions := make([]*session, 0, len(st.sessions))
+	sessions := make([]*pty.Session, 0, len(st.sessions))
 	for _, s := range st.sessions {
 		sessions = append(sessions, s)
 	}
 	st.mu.Unlock()
 	for _, s := range sessions {
-		_ = s.cmd.Process.Kill()
-		_ = s.pty.Close()
+		s.CloseWithReason("window closed")
 	}
 	return true
 }
 
-func userShell() string {
-	if s := os.Getenv("SHELL"); s != "" {
-		return s
-	}
-	return "/bin/bash"
-}
-
-// withWashEnv returns env with wash-specific tweaks applied:
-//
-//   - TERM=xterm-256color (always — the shell side renders via xterm.js)
-//   - PATH prefixed with $WASH_BIN_DIR when set, deduped — so the user
-//     can run sibling wash CLIs (wash-launch, wash-fm, …) without an
-//     absolute path. The router publishes WASH_BIN_DIR; if absent,
-//     PATH is left alone.
-//
-// Note: WASH_APP_ID / WASH_INSTANCE_ID / WASH_ATTACH_TOKEN leak
-// through unchanged. The SDK reads instance_id from the IdentityAck
-// and ATTACH_TOKEN's pending-record is single-use, so leakage is
-// harmless. A future tighten could strip them here.
-func withWashEnv(env []string) []string {
-	binDir := lookupEnv(env, "WASH_BIN_DIR")
-	out := make([]string, 0, len(env)+1)
-	termSet := false
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "PATH=") && binDir != "" {
-			cur := kv[len("PATH="):]
-			out = append(out, "PATH="+prependPath(cur, binDir))
-			continue
-		}
-		if strings.HasPrefix(kv, "TERM=") {
-			out = append(out, "TERM=xterm-256color")
-			termSet = true
-			continue
-		}
-		out = append(out, kv)
-	}
-	if !termSet {
-		out = append(out, "TERM=xterm-256color")
-	}
-	// If PATH was absent altogether, seed it from WASH_BIN_DIR so
-	// the shell has something to find tools in.
-	if binDir != "" && lookupEnv(out, "PATH") == "" {
-		out = append(out, "PATH="+binDir)
-	}
-	return out
-}
-
-// lookupEnv finds the first KEY=… entry in env and returns the value
-// portion, or "" if absent.
-func lookupEnv(env []string, key string) string {
-	prefix := key + "="
-	for _, kv := range env {
-		if strings.HasPrefix(kv, prefix) {
-			return kv[len(prefix):]
-		}
-	}
-	return ""
-}
-
-// prependPath puts dir at the head of a colon-separated PATH-style
-// value, removing any later duplicate of dir so PATH-walkers stop at
-// our copy.
-func prependPath(path, dir string) string {
-	if path == "" {
-		return dir
-	}
-	sep := string(os.PathListSeparator)
-	parts := strings.Split(path, sep)
-	out := []string{dir}
-	for _, p := range parts {
-		if p != dir {
-			out = append(out, p)
-		}
-	}
-	return strings.Join(out, sep)
-}
-
-// termIcon — Lucide sprite symbol name. See fmIcon for the
-// resolution scheme.
+// termIcon — Lucide sprite symbol name. The shell renders this via
+// <svg><use href="/icons.svg#terminal"/></svg>; the sprite is built
+// from lucide-static at shell build time.
 const termIcon = "terminal"

@@ -180,18 +180,18 @@ func Main(def *AppDef) {
 }
 
 func maybePrintManifest(def *AppDef) bool {
-	for _, a := range os.Args[1:] {
-		if a == "--wash-manifest" {
-			b, err := json.Marshal(def.Manifest)
-			if err != nil {
-				fatal("wash sdk: marshal manifest: %v", err)
-			}
-			os.Stdout.Write(b)
-			os.Stdout.Write([]byte("\n"))
-			return true
-		}
+	// Router's probe invokes `<binary> --wash-manifest` with no other
+	// args (WIRE.md §5). Match only the conventional position.
+	if len(os.Args) < 2 || os.Args[1] != "--wash-manifest" {
+		return false
 	}
-	return false
+	b, err := json.Marshal(def.Manifest)
+	if err != nil {
+		fatal("wash sdk: marshal manifest: %v", err)
+	}
+	os.Stdout.Write(b)
+	os.Stdout.Write([]byte("\n"))
+	return true
 }
 
 // EnvDisplay is the env var that points apps at a running

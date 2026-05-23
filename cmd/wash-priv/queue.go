@@ -811,8 +811,16 @@ func runSudo(sudoBin, binary string, args []string, instanceID, token string, pw
 	})
 	c.Stdin = stdinPipeOnce(pw)
 	c.Stdout = nil
-	c.Stderr = nil
-	if err := c.Run(); err != nil {
+	stderr := &strings.Builder{}
+	c.Stderr = stderr
+	err := c.Run()
+	if s := strings.TrimSpace(stderr.String()); s != "" {
+		// sudo's "[sudo] password for X:" prompt also lands here.
+		// Log so failures (wrong password, refused command, missing
+		// env-preserve grant) are visible; harmless on success.
+		log.Printf("wash-priv runSudo %s stderr: %s", binary, s)
+	}
+	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
 			return ee.ExitCode(), nil
 		}

@@ -465,11 +465,57 @@ func (r *Router) closeChannelsForApp(inst *AppInstance, reason string) {
 	}
 }
 
+// bringUp performs every step between "the app's handshake has just
+// completed" and "the loop is about to start": register the inst,
+// allocate the window-create patch (windowed apps only), declare to
+// shells, broadcast the patch, send the initial WindowMapped event.
+//
+// Shared by spawnAndRun (router started the child), startFreshAttach
+// (terminal-launched / token-attached), and HandleApp (transport
+// supplied directly — used by tests).
+//
+// Order matters: declare-to-shells happens BEFORE the window patch
+// so the shell has the bundle in flight when window.upsert lands.
+func (r *Router) bringUp(ctx context.Context, inst *AppInstance) {
+	r.registerApp(inst)
+	var patches []wire.SessionPatch
+	if inst.WindowID != 0 {
+		var defW, defH uint32
+		if inst.Manifest.Window != nil {
+			defW = inst.Manifest.Window.DefaultWidth
+			defH = inst.Manifest.Window.DefaultHeight
+		}
+		patches = r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon, inst.Manifest.Name, defW, defH, inst.IsRoot())
+	}
+	if err := r.declareAppToAllShells(ctx, inst); err != nil {
+		r.log("declare: %v", err)
+	}
+	if len(patches) > 0 {
+		r.broadcastPatches(patches)
+	}
+	if inst.WindowID != 0 {
+		_ = inst.WriteEvt(wire.NewEvtWindowMapped(inst.WindowID))
+	}
+}
+
+// tearDown is the inverse of bringUp: unregister inst, close every
+// channel it owns, drop any pending app-msg watchers, drop the
+// persisted app-state, and tell shells the window is gone. Shared by
+// all three loop-finished paths. Idempotent for windowless apps.
+func (r *Router) tearDown(inst *AppInstance) {
+	r.unregisterApp(inst)
+	r.closeChannelsForApp(inst, "app exited")
+	r.dropAppMsgWatchers(inst.InstanceID)
+	r.winSession.dropAppState(inst.InstanceID)
+	if inst.WindowID != 0 {
+		r.broadcastPatches(r.winSession.destroyWindow(inst.WindowID))
+	}
+}
+
 // spawnAndRun spawns the given app, runs its handshake, registers it,
 // declares it to attached shells, sends the initial mapped event for
 // windowed apps, and runs the app's frame loop in a goroutine. The
-// goroutine handles cleanup on exit (close channels, unregister, tell
-// shells the window is gone, reap the process).
+// goroutine handles cleanup on exit.
 //
 // All three caller paths — spawn.request from an app, the control
 // socket, and the initial / session bootstraps — go through here.
@@ -487,7 +533,7 @@ func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*Ap
 	if r.cfg.ControlSocket == "" {
 		return nil, fmt.Errorf("spawn %s: control socket disabled (apps dial WASH_DISPLAY)", entry.Manifest.ID)
 	}
-	cmd, err := Spawn(entry.Path, entry.Manifest.ID, "", r.cfg.ControlSocket, r.spawnEnv())
+	cmd, err := Spawn(entry.Path, entry.Manifest.ID, r.cfg.ControlSocket, r.spawnEnv())
 	if err != nil {
 		return nil, fmt.Errorf("spawn %s: %w", entry.Manifest.ID, err)
 	}
@@ -527,39 +573,12 @@ func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*Ap
 		return nil, ctx.Err()
 	}
 	transport := inst.Transport
-	r.registerApp(inst)
-	if inst.WindowID != 0 {
-		var defW, defH uint32
-		if inst.Manifest.Window != nil {
-			defW = inst.Manifest.Window.DefaultWidth
-			defH = inst.Manifest.Window.DefaultHeight
-		}
-		patches := r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon, inst.Manifest.Name, defW, defH, inst.IsRoot())
-		// Declare the app to shells BEFORE the patch so they have the
-		// bundle in flight when window.upsert lands.
-		if err := r.declareAppToAllShells(ctx, inst); err != nil {
-			r.log("declare: %v", err)
-		}
-		r.broadcastPatches(patches)
-	} else {
-		if err := r.declareAppToAllShells(ctx, inst); err != nil {
-			r.log("declare: %v", err)
-		}
-	}
-	if inst.WindowID != 0 {
-		_ = inst.WriteEvt(wire.NewEvtWindowMapped(inst.WindowID))
-	}
+	r.bringUp(ctx, inst)
 	go func() {
 		if err := inst.loop(context.Background()); err != nil {
 			r.log("app %s loop: %v", inst.AppID, err)
 		}
-		r.unregisterApp(inst)
-		r.closeChannelsForApp(inst, "app exited")
-		r.dropAppMsgWatchers(inst.InstanceID)
-		r.winSession.dropAppState(inst.InstanceID)
-		if inst.WindowID != 0 {
-			r.broadcastPatches(r.winSession.destroyWindow(inst.WindowID))
-		}
+		r.tearDown(inst)
 		_ = transport.Close()
 		_ = cmd.Wait()
 	}()

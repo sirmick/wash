@@ -15,15 +15,16 @@ import (
 )
 
 // fallbackIndexHTML is the placeholder shell served when no embedded
-// assets are present. Real shell-runtime assets are wired up in
-// commit C5; until then this loads no JS and explains the state.
+// assets are present. Production builds always embed the real shell;
+// this is only hit by router-only test builds where the //go:embed
+// stamp wasn't produced.
 const fallbackIndexHTML = `<!doctype html>
 <html lang="en"><meta charset="utf-8"><title>wash</title>
 <body style="background:#111;color:#eee;font:14px/1.4 system-ui,sans-serif;padding:2em">
 <h1>wash — Web Application SHell</h1>
 <p>The router is running, but no shell-runtime bundle is embedded in
-this build. Continue through commit C5 to embed the real Solid+Vite
-runtime under <code>cmd/wash-router/assets/</code>.</p>
+this build. Run <code>make</code> from the repo root to build the
+shell into <code>cmd/wash-router/assets/</code>.</p>
 </body>
 </html>`
 

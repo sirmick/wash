@@ -314,42 +314,11 @@ func (c *Conn) Notify(title, body, level string) error {
 // never inspects it. CBOR-decoded values (which arrive at OnAppMsg
 // as map[any]any) are normalized to JSON-marshalable shapes first.
 func (c *Conn) SaveState(state any) error {
-	data, err := json.Marshal(toJSONValue(state))
+	data, err := json.Marshal(wire.ToJSONValue(state))
 	if err != nil {
 		return err
 	}
 	return c.writeEvt(wire.NewEvtAppStateSet(data))
-}
-
-// toJSONValue walks a CBOR-decoded value and rewrites it to be safe
-// for json.Marshal. CBOR maps can have non-string keys; JSON cannot.
-// Mirrors the router-side toJSON helper.
-func toJSONValue(v any) any {
-	switch x := v.(type) {
-	case map[any]any:
-		out := make(map[string]any, len(x))
-		for k, vv := range x {
-			ks, ok := k.(string)
-			if !ok {
-				ks = fmt.Sprint(k)
-			}
-			out[ks] = toJSONValue(vv)
-		}
-		return out
-	case map[string]any:
-		out := make(map[string]any, len(x))
-		for k, vv := range x {
-			out[k] = toJSONValue(vv)
-		}
-		return out
-	case []any:
-		out := make([]any, len(x))
-		for i, vv := range x {
-			out[i] = toJSONValue(vv)
-		}
-		return out
-	}
-	return v
 }
 
 // ClipboardSet stores (mime, data) in the router-held clipboard and

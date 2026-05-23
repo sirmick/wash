@@ -1,46 +1,26 @@
 package sdk
 
+import "github.com/sirmick/wash/internal/wire"
+
 // ProtocolVersion is the wire protocol version this SDK speaks.
-const ProtocolVersion = 1
+const ProtocolVersion = wire.ProtocolVersion
 
 // Surface and Instancing values mirror WIRE.md §5.1.
 const (
-	SurfaceWindow  = "window"
-	SurfaceDesktop = "desktop"
+	SurfaceWindow  = wire.SurfaceWindow
+	SurfaceDesktop = wire.SurfaceDesktop
 
-	InstancingMulti     = "multi"
-	InstancingSingle    = "single"
-	InstancingSingleton = "singleton"
+	InstancingMulti     = wire.InstancingMulti
+	InstancingSingle    = wire.InstancingSingle
+	InstancingSingleton = wire.InstancingSingleton
 
-	CapSpawn        = "spawn"
-	CapPrepareSpawn = "prepare_spawn"
+	CapSpawn        = wire.CapSpawn
+	CapPrepareSpawn = wire.CapPrepareSpawn
 )
 
-// Manifest is the manifest schema from WIRE.md §5.1, kept here so
-// apps can construct it as a Go literal without importing the router.
-type Manifest struct {
-	ID              string       `json:"id"`
-	Name            string       `json:"name"`
-	Version         string       `json:"version"`
-	ProtocolVersion int          `json:"protocol_version"`
-	Element         string       `json:"element"`
-	Surface         string       `json:"surface"`
-	Icon            string       `json:"icon"`
-	Instancing      string       `json:"instancing"`
-	Capabilities    []string     `json:"capabilities"`
-	Window          *WindowHints `json:"window,omitempty"`
-
-	// Hidden keeps the app out of the launcher catalog. It is still
-	// spawnable (by --initial-app or by another app's
-	// spawn.request).
-	Hidden bool `json:"hidden,omitempty"`
-}
-
-// WindowHints mirrors router.WindowHints. v0.0 honors width/height.
-type WindowHints struct {
-	DefaultWidth  uint32 `json:"default_width,omitempty"`
-	DefaultHeight uint32 `json:"default_height,omitempty"`
-	MinWidth      uint32 `json:"min_width,omitempty"`
-	MinHeight     uint32 `json:"min_height,omitempty"`
-	Resizable     *bool  `json:"resizable,omitempty"`
-}
+// Manifest / WindowHints alias the canonical wire definitions so apps
+// can keep writing sdk.Manifest{...} literals.
+type (
+	Manifest    = wire.Manifest
+	WindowHints = wire.WindowHints
+)

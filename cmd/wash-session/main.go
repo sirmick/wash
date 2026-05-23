@@ -76,8 +76,8 @@ const washIcon = "layout-dashboard"
 //                                              an app as root
 //   {"kind":"desktop.request"}              — re-ship desktop.config
 func onAppMsg(c *sdk.Conn, _ uint32, data any) {
-	m, ok := data.(map[any]any)
-	if !ok {
+	m := sdk.AsMap(data)
+	if m == nil {
 		return
 	}
 	if kind, _ := m["kind"].(string); kind == "desktop.request" {

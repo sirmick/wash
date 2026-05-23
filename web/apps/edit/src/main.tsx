@@ -13,9 +13,8 @@
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
-import { render } from 'solid-js/web';
 import type { Component, JSX } from 'solid-js';
-import { FilePicker, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, tokens } from '@wash/ui';
+import { FilePicker, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, defineWashApp, tokens } from '@wash/ui';
 import { EditorSelection, EditorState, Compartment } from '@codemirror/state';
 import {
   EditorView,
@@ -61,16 +60,6 @@ import {
   Folder as FolderIcon,
   Link2,
 } from 'lucide-solid';
-
-declare global {
-  interface Window {
-    wash: {
-      sendAppMsg(instanceID: string, data: unknown): void;
-      openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
-      writeRaw(channelID: number, bytes: Uint8Array): void;
-    } & Record<string, unknown>;
-  }
-}
 
 interface Entry {
   name: string;
@@ -2637,31 +2626,10 @@ const placeholderOverlayStyle: JSX.CSSProperties = {
 
 // ---- custom element ----
 
-class WashAppEdit extends HTMLElement {
-  private dispose?: () => void;
-  connectedCallback() {
-    const instance = this.getAttribute('data-wash-instance') ?? '';
-    this.style.cssText = [
-      'display:grid',
-      // menubar (auto) | body (1fr) | status bar (auto). The
-      // menubar row carries `position: relative` so the absolute-
-      // positioned <Menu> dropdowns inside it anchor relative to
-      // it rather than escaping to the closest positioned
-      // ancestor.
-      'grid-template-rows:auto 1fr auto',
-      'height:100%',
-      'background:' + tokens.bgWindow,
-      'color:' + tokens.fg,
-      'overflow:hidden',
-      'position:relative',
-    ].join(';');
-    this.dispose = render(() => <App instance={instance} host={this} />, this);
-  }
-  disconnectedCallback() {
-    this.dispose?.();
-  }
-}
-
-if (!customElements.get('wash-app-edit')) {
-  customElements.define('wash-app-edit', WashAppEdit);
-}
+// Grid: menubar (auto) | body (1fr) | status bar (auto). The
+// menubar row carries `position: relative` so the absolute-
+// positioned <Menu> dropdowns inside it anchor relative to it
+// rather than escaping to the closest positioned ancestor.
+defineWashApp('wash-app-edit', (props) => <App {...props} />, {
+  style: `display:grid;grid-template-rows:auto 1fr auto;height:100%;background:${tokens.bgWindow};color:${tokens.fg};overflow:hidden;position:relative`,
+});

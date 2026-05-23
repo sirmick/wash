@@ -2,9 +2,7 @@ package sdk
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/sirmick/wash/internal/wire"
@@ -14,36 +12,11 @@ import (
 // dispatches them to AppDef callbacks. Returns when the transport
 // closes (ErrConnClosed) or ctx cancels.
 func (c *Conn) Run(ctx context.Context) error {
-	type rr struct {
-		f   wire.Frame
-		err error
+	err := wire.ReadLoop(ctx, c.transport, c.dispatch)
+	if err == nil {
+		return ErrConnClosed
 	}
-	ch := make(chan rr, 1)
-	go func() {
-		for {
-			f, err := c.transport.ReadFrame()
-			ch <- rr{f, err}
-			if err != nil {
-				return
-			}
-		}
-	}()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case r := <-ch:
-			if r.err != nil {
-				if errors.Is(r.err, io.EOF) {
-					return ErrConnClosed
-				}
-				return r.err
-			}
-			if err := c.dispatch(r.f); err != nil {
-				return err
-			}
-		}
-	}
+	return err
 }
 
 func (c *Conn) dispatch(f wire.Frame) error {

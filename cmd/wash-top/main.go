@@ -232,8 +232,8 @@ func pushSnapshot() {
 // ---- dispatch ----
 
 func onAppMsg(_ *sdk.Conn, _ uint32, data any) {
-	m, ok := data.(map[any]any)
-	if !ok {
+	m := sdk.AsMap(data)
+	if m == nil {
 		return
 	}
 	kind, _ := m["kind"].(string)

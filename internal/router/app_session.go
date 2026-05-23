@@ -3,12 +3,10 @@ package router
 import (
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os/exec"
 	"sync"
 	"time"
@@ -127,27 +125,9 @@ func (r *Router) handleAppOpts(ctx context.Context, t FrameTransport, manifest *
 		_ = t.Close()
 		return fmt.Errorf("handshake %s: %w", manifest.ID, err)
 	}
-	r.registerApp(inst)
-	if err := r.declareAppToAllShells(ctx, inst); err != nil {
-		r.log("declare to shell: %v", err)
-	}
-	if inst.WindowID != 0 {
-		var defW, defH uint32
-		if inst.Manifest.Window != nil {
-			defW = inst.Manifest.Window.DefaultWidth
-			defH = inst.Manifest.Window.DefaultHeight
-		}
-		r.broadcastPatches(r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon, inst.Manifest.Name, defW, defH, inst.IsRoot()))
-		_ = inst.WriteEvt(wire.NewEvtWindowMapped(inst.WindowID))
-	}
+	r.bringUp(ctx, inst)
 	err := inst.loop(ctx)
-	r.unregisterApp(inst)
-	r.closeChannelsForApp(inst, "app exited")
-	r.dropAppMsgWatchers(inst.InstanceID)
-	r.winSession.dropAppState(inst.InstanceID)
-	if inst.WindowID != 0 {
-		r.broadcastPatches(r.winSession.destroyWindow(inst.WindowID))
-	}
+	r.tearDown(inst)
 	_ = t.Close()
 	return err
 }
@@ -156,24 +136,12 @@ func (r *Router) handleAppOpts(ctx context.Context, t FrameTransport, manifest *
 // with identity.ack. It assigns an instance id (and window id if the
 // app's surface is window).
 func (inst *AppInstance) handshake(ctx context.Context) error {
-	type readResult struct {
-		f   wire.Frame
-		err error
-	}
-	ch := make(chan readResult, 1)
-	go func() {
-		f, err := inst.Transport.ReadFrame()
-		ch <- readResult{f, err}
-	}()
-	var f wire.Frame
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case rr := <-ch:
-		if rr.err != nil {
-			return fmt.Errorf("read identity: %w", rr.err)
+	f, err := wire.ReadOne(ctx, inst.Transport)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
 		}
-		f = rr.f
+		return fmt.Errorf("read identity: %w", err)
 	}
 	if f.Channel != ChannelControl {
 		return fmt.Errorf("identity frame on wrong channel %d", f.Channel)
@@ -210,36 +178,11 @@ func (inst *AppInstance) handshake(ctx context.Context) error {
 // loop reads frames until the transport closes. ctx cancel triggers a
 // best-effort shutdown.
 func (inst *AppInstance) loop(ctx context.Context) error {
-	type readResult struct {
-		f   wire.Frame
-		err error
+	err := wire.ReadLoop(ctx, inst.Transport, inst.dispatch)
+	if errors.Is(err, context.Canceled) {
+		return nil
 	}
-	ch := make(chan readResult, 1)
-	go func() {
-		for {
-			f, err := inst.Transport.ReadFrame()
-			ch <- readResult{f, err}
-			if err != nil {
-				return
-			}
-		}
-	}()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case rr := <-ch:
-			if rr.err != nil {
-				if errors.Is(rr.err, io.EOF) {
-					return nil
-				}
-				return rr.err
-			}
-			if err := inst.dispatch(rr.f); err != nil {
-				return err
-			}
-		}
-	}
+	return err
 }
 
 func (inst *AppInstance) dispatch(f wire.Frame) error {
@@ -493,7 +436,7 @@ func (inst *AppInstance) relayAppMsgCrossInstance(m wire.EvtAppMsgSendTo) error 
 // id) gets delivered the data before shell relay. This is how the
 // `wash-launch msg --await` path correlates BE replies.
 func (inst *AppInstance) relayAppMsgToShell(m wire.EvtAppMsg) error {
-	normalized := toJSON(m.Data)
+	normalized := wire.ToJSONValue(m.Data)
 	if asMap, ok := normalized.(map[string]any); ok {
 		if msgID, _ := asMap["id"].(string); msgID != "" {
 			inst.router.dispatchAppMsgWatchers(inst.InstanceID, msgID, asMap)
@@ -510,39 +453,6 @@ func (inst *AppInstance) relayAppMsgToShell(m wire.EvtAppMsg) error {
 		}
 	}
 	return nil
-}
-
-// toJSON walks a CBOR-decoded value and produces a JSON-marshalable
-// version. Maps with non-string keys (CBOR allows any) are
-// stringified; byte slices become base64 strings.
-func toJSON(v any) any {
-	switch x := v.(type) {
-	case map[any]any:
-		out := make(map[string]any, len(x))
-		for k, vv := range x {
-			ks, ok := k.(string)
-			if !ok {
-				ks = fmt.Sprint(k)
-			}
-			out[ks] = toJSON(vv)
-		}
-		return out
-	case map[string]any:
-		out := make(map[string]any, len(x))
-		for k, vv := range x {
-			out[k] = toJSON(vv)
-		}
-		return out
-	case []any:
-		out := make([]any, len(x))
-		for i, vv := range x {
-			out[i] = toJSON(vv)
-		}
-		return out
-	case []byte:
-		return base64.StdEncoding.EncodeToString(x)
-	}
-	return v
 }
 
 // relayNotify forwards an app's notification to every attached shell.

@@ -1,3 +1,5 @@
+/// <reference path="./window-wash.d.ts" />
+
 export { tokens } from './tokens';
 export type { Tokens } from './tokens';
 export { Button } from './button';
@@ -12,3 +14,5 @@ export { FilePicker } from './file-picker';
 export type { FilePickerProps, FilterSpec } from './file-picker';
 export { Splitter } from './splitter';
 export type { SplitterProps, SplitterOrientation } from './splitter';
+export { defineWashApp } from './define-app';
+export type { WashAppProps, DefineWashAppOptions } from './define-app';

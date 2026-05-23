@@ -22,19 +22,6 @@ import { createSignal } from 'solid-js';
 import { render } from 'solid-js/web';
 import { FilePicker } from '@wash/ui';
 
-declare global {
-  interface Window {
-    wash: {
-      sendAppMsg(instanceID: string, data: unknown): void;
-      sendAppMsgTo(recipient: { app_id: string } | { instance_id: string }, data: unknown): void;
-      log(level: 'error' | 'warn' | 'info' | 'debug', source: string, msg: string, stack?: string): void;
-      openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
-      writeRaw(channelID: number, bytes: Uint8Array): void;
-      // (other members exist but the test app doesn't use them here)
-    };
-  }
-}
-
 interface BEMessage {
   kind: string;
   [k: string]: unknown;

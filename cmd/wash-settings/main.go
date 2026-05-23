@@ -21,13 +21,13 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 
 	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/internal/wire"
 )
 
 //go:embed all:assets
@@ -74,8 +74,8 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 }
 
 func onAppMsg(c *sdk.Conn, _ uint32, data any) {
-	m, ok := data.(map[any]any)
-	if !ok {
+	m := sdk.AsMap(data)
+	if m == nil {
 		return
 	}
 	kind, _ := m["kind"].(string)
@@ -180,7 +180,7 @@ func doWrite(c *sdk.Conn, id, domain string, value any) {
 		sendErr(c, "settings.write_err", id, domain, "bad_request", "unknown domain")
 		return
 	}
-	out, err := json.MarshalIndent(toJSON(value), "", "  ")
+	out, err := json.MarshalIndent(wire.ToJSONValue(value), "", "  ")
 	if err != nil {
 		sendErr(c, "settings.write_err", id, domain, "bad_request", err.Error())
 		return
@@ -232,34 +232,3 @@ func sendErr(c *sdk.Conn, kind, id, domain, code, msg string) {
 	_ = c.SendAppMsg(errReply{Kind: kind, ID: id, Domain: domain, Code: code, Msg: msg})
 }
 
-// toJSON normalizes CBOR-decoded values into something json.Marshal
-// accepts. CBOR allows non-string map keys; encoding/json doesn't.
-// Mirrors internal/router/app_session.go toJSON in spirit but stays
-// in-package so the settings BE has no router dependency.
-func toJSON(v any) any {
-	switch x := v.(type) {
-	case map[any]any:
-		out := make(map[string]any, len(x))
-		for k, vv := range x {
-			ks, ok := k.(string)
-			if !ok {
-				ks = fmt.Sprint(k)
-			}
-			out[ks] = toJSON(vv)
-		}
-		return out
-	case map[string]any:
-		out := make(map[string]any, len(x))
-		for k, vv := range x {
-			out[k] = toJSON(vv)
-		}
-		return out
-	case []any:
-		out := make([]any, len(x))
-		for i, vv := range x {
-			out[i] = toJSON(vv)
-		}
-		return out
-	}
-	return v
-}

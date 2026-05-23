@@ -5,50 +5,42 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+
+	"github.com/sirmick/wash/internal/wire"
 )
 
 // ProtocolVersion is the wash wire protocol version this router speaks.
 // Apps declaring a different protocol_version are listed-disabled.
-const ProtocolVersion = 1
+const ProtocolVersion = wire.ProtocolVersion
 
-// Surface values (WIRE.md §5.1).
+// Surface values.
 const (
-	SurfaceWindow  = "window"
-	SurfaceDesktop = "desktop"
+	SurfaceWindow  = wire.SurfaceWindow
+	SurfaceDesktop = wire.SurfaceDesktop
 )
 
-// Instancing values (WIRE.md §5.1, extended).
+// Instancing values.
 const (
-	// InstancingMulti — independent process per spawn (default).
-	InstancingMulti = "multi"
-	// InstancingSingle — one process serves many windows. Semantics
-	// still deferred in the wire; reserved for future use.
-	InstancingSingle = "single"
-	// InstancingSingleton — at most one running instance globally,
-	// addressable by app_id as a sentinel. Spawn requests for an
-	// already-running singleton return its existing instance instead
-	// of starting a second one. Suited for system-service apps
-	// (wash-bulk, future desktop chrome) where having two would be
-	// either pointless or actively wrong.
-	InstancingSingleton = "singleton"
+	InstancingMulti     = wire.InstancingMulti
+	InstancingSingle    = wire.InstancingSingle
+	InstancingSingleton = wire.InstancingSingleton
 )
 
-// Capability strings recognized by v0.0.
+// Capability strings recognized by v0.1.
 const (
-	CapSpawn = "spawn"
-
-	// CapPrepareSpawn lets an app ask the router to mint a
-	// pending-attach record (instance_id + attach_token) for an
-	// app_id, after which the calling app is responsible for the
-	// fork+exec itself (e.g. wash-priv launching a registered binary
-	// under sudo). Distinct from CapSpawn because the trust grant
-	// is bigger: the spawner controls how the binary is launched,
-	// including its uid.
-	CapPrepareSpawn = "prepare_spawn"
+	CapSpawn        = wire.CapSpawn
+	CapPrepareSpawn = wire.CapPrepareSpawn
 )
 
 // MaxIconBytes is the cap on the inline icon data URI per WIRE.md §5.1.
-const MaxIconBytes = 64 * 1024
+const MaxIconBytes = wire.MaxIconBytes
+
+// Manifest / WindowHints alias the canonical wire definitions so
+// router-internal code can keep using the bare names.
+type (
+	Manifest    = wire.Manifest
+	WindowHints = wire.WindowHints
+)
 
 // idRegexp is the manifest id regex from WIRE.md §5.1.
 var idRegexp = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)+$`)
@@ -57,49 +49,10 @@ var idRegexp = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)+$`)
 // global registry stays namespaced.
 const elementPrefix = "wash-app-"
 
-// Manifest is the parsed shape printed by --wash-manifest (WIRE.md §5.1).
-type Manifest struct {
-	ID              string       `json:"id"`
-	Name            string       `json:"name"`
-	Version         string       `json:"version"`
-	ProtocolVersion int          `json:"protocol_version"`
-	Element         string       `json:"element"`
-	Surface         string       `json:"surface"`
-	Icon            string       `json:"icon"`
-	Instancing      string       `json:"instancing"`
-	Capabilities    []string     `json:"capabilities"`
-	Window          *WindowHints `json:"window,omitempty"`
-
-	// Hidden keeps the app out of the launcher catalog. The app is
-	// still spawnable (by --initial-app, or by another app's
-	// spawn.request) — useful for test/utility apps.
-	Hidden bool `json:"hidden,omitempty"`
-}
-
-// WindowHints carries the optional default window geometry. v0.0
-// honors default width/height only (WIRE.md §5.1).
-type WindowHints struct {
-	DefaultWidth  uint32 `json:"default_width,omitempty"`
-	DefaultHeight uint32 `json:"default_height,omitempty"`
-	MinWidth      uint32 `json:"min_width,omitempty"`
-	MinHeight     uint32 `json:"min_height,omitempty"`
-	Resizable     *bool  `json:"resizable,omitempty"`
-}
-
-// HasCapability reports whether the manifest declares cap.
-func (m *Manifest) HasCapability(cap string) bool {
-	for _, c := range m.Capabilities {
-		if c == cap {
-			return true
-		}
-	}
-	return false
-}
-
-// Validate checks all v0.0 manifest constraints. Returning an error
-// makes the registry mark the app listed-disabled (never silently
+// validateManifest checks all v0.0 manifest constraints. Returning an
+// error makes the registry mark the app listed-disabled (never silently
 // drop), with err.Error() as the displayed reason.
-func (m *Manifest) Validate() error {
+func validateManifest(m *Manifest) error {
 	if !idRegexp.MatchString(m.ID) {
 		return fmt.Errorf("invalid id %q", m.ID)
 	}
@@ -135,12 +88,12 @@ func (m *Manifest) Validate() error {
 }
 
 // ParseManifest parses one --wash-manifest probe output. The manifest
-// is returned even when Validate fails so the caller can list it
+// is returned even when validation fails so the caller can list it
 // disabled with the reason.
 func ParseManifest(data []byte) (*Manifest, error) {
 	var m Manifest
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("parse: %w", err)
 	}
-	return &m, m.Validate()
+	return &m, validateManifest(&m)
 }
