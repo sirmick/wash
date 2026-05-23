@@ -34,6 +34,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -225,6 +226,53 @@ func (b *Bus) HandlePattern(prefix string, fn func(c *Conn, kind string, data ma
 	b.patterns = append(b.patterns, patternHandler{prefix: prefix, fn: fn})
 }
 
+// appID returns this bus's app id for log messages. Reaches through
+// the Conn to the manifest. Falls back to "?" if unavailable so logs
+// keep flowing under degenerate (test) wiring.
+func (b *Bus) appID() string {
+	if b.conn != nil && b.conn.def != nil && b.conn.def.Manifest.ID != "" {
+		return b.conn.def.Manifest.ID
+	}
+	return "?"
+}
+
+// logDecodeErr formats the "bus decode failed" log line with enough
+// context to identify which message broke. The previous one-liner
+// hid the app, sender, id, and offending payload — enough on its own
+// to make every decode error a puzzle.
+//
+//	bus: <app-id> decode <kind> id=<id> from=<src>: <err>
+//	  data: {…trimmed payload…}
+//
+// payload is rendered with sdk.AsMap (string-keyed) + json marshal
+// + a 240-char cap so a noisy field doesn't fill the log.
+func (b *Bus) logDecodeErr(kind, id string, from *wire.Sender, data map[any]any, err error) {
+	src := "FE"
+	if from != nil {
+		src = fmt.Sprintf("%s/%s", from.AppID, from.InstanceID)
+	}
+	log.Printf("bus: %s decode %s id=%q from=%s: %v\n  data: %s",
+		b.appID(), kind, id, src, err, truncJSON(data, 240))
+}
+
+// truncJSON marshals v to a compact JSON string for diagnostic
+// output, capped at max chars (with "…" suffix on overflow).
+// Best-effort — on marshal failure it falls back to fmt.Sprint.
+func truncJSON(v any, max int) string {
+	out, err := json.Marshal(AsMap(v))
+	if err != nil {
+		s := fmt.Sprint(v)
+		if len(s) > max {
+			return s[:max] + "…"
+		}
+		return s
+	}
+	if len(out) > max {
+		return string(out[:max]) + "…"
+	}
+	return string(out)
+}
+
 // Handle is the typed request/response registration for FE→BE
 // messages. Req and Resp are arbitrary structs; the bus decodes
 // the inbound payload into Req (re-marshalling to CBOR for a clean
@@ -239,6 +287,7 @@ func Handle[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, req 
 		id, _ := data["id"].(string)
 		var req Req
 		if err := decodeInto(data, &req); err != nil {
+			b.logDecodeErr(kind, id, nil, data, err)
 			b.sendErr(c, kind, id, ErrBadRequest, err.Error(), nil)
 			return
 		}
@@ -260,11 +309,11 @@ func HandleVoid[Req any](b *Bus, kind string, fn func(c *Conn, id string, req Re
 		id, _ := data["id"].(string)
 		var req Req
 		if err := decodeInto(data, &req); err != nil {
-			log.Printf("bus: %s decode: %v", kind, err)
+			b.logDecodeErr(kind, id, nil, data, err)
 			return
 		}
 		if err := fn(c, id, req); err != nil {
-			log.Printf("bus: %s: %v", kind, err)
+			log.Printf("bus: %s %s id=%q: %v", b.appID(), kind, id, err)
 		}
 	})
 }
@@ -289,6 +338,7 @@ func HandleFrom[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, 
 		id, reqID := requestIDs(data)
 		var req Req
 		if err := decodeInto(data, &req); err != nil {
+			b.logDecodeErr(kind, id, from, data, err)
 			b.sendErr(c, kind, id, ErrBadRequest, err.Error(), &replyTo{from: *from, reqID: reqID})
 			return
 		}
@@ -312,11 +362,11 @@ func HandleFromVoid[Req any](b *Bus, kind string, fn func(c *Conn, id string, re
 		id := requestIDOnly(data)
 		var req Req
 		if err := decodeInto(data, &req); err != nil {
-			log.Printf("bus: %s decode: %v", kind, err)
+			b.logDecodeErr(kind, id, from, data, err)
 			return
 		}
 		if err := fn(c, id, req, *from); err != nil {
-			log.Printf("bus: %s: %v", kind, err)
+			log.Printf("bus: %s %s id=%q from=%s/%s: %v", b.appID(), kind, id, from.AppID, from.InstanceID, err)
 		}
 	})
 }
@@ -491,8 +541,14 @@ func envelope(kind, id string, payload any) (map[string]any, error) {
 // decodeInto re-marshals a CBOR-decoded map into typed dst by going
 // through CBOR bytes. Slow path (one encode + one decode) but
 // zero-dep and type-correct.
+//
+// Nulls are stripped before remarshal. A JSON `null` (which the FE
+// commonly sends for "no value here") becomes a CBOR null primitive,
+// which fxamacker/cbor refuses to decode into a plain int / string /
+// bool field. Treating null as "field absent" lets the zero value
+// stand — same semantics every Go programmer expects.
 func decodeInto(data any, dst any) error {
-	buf, err := cbor.Marshal(data)
+	buf, err := cbor.Marshal(stripNulls(data))
 	if err != nil {
 		return fmt.Errorf("decode marshal: %w", err)
 	}
@@ -500,6 +556,47 @@ func decodeInto(data any, dst any) error {
 		return fmt.Errorf("decode unmarshal: %w", err)
 	}
 	return nil
+}
+
+// stripNulls drops nil values from maps and slices recursively.
+// Used by decodeInto so a JSON null on the wire doesn't fail the
+// typed CBOR decode into primitive Go fields (int/string/bool/…).
+// Map entries whose VALUE is nil are removed; nested maps/slices
+// recurse. Non-nil leaves pass through unchanged.
+func stripNulls(v any) any {
+	switch x := v.(type) {
+	case map[any]any:
+		out := make(map[any]any, len(x))
+		for k, vv := range x {
+			if vv == nil {
+				continue
+			}
+			out[k] = stripNulls(vv)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, vv := range x {
+			if vv == nil {
+				continue
+			}
+			out[k] = stripNulls(vv)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(x))
+		for _, vv := range x {
+			// Slice-element nulls are dropped too — same semantics
+			// as map values. An FE sending a sparse array gets the
+			// dense version typed-decode.
+			if vv == nil {
+				continue
+			}
+			out = append(out, stripNulls(vv))
+		}
+		return out
+	}
+	return v
 }
 
 // asMap is the bus's internal AsMap variant. Same idea as sdk.AsMap

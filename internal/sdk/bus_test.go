@@ -195,6 +195,47 @@ func TestBusEmit(t *testing.T) {
 	}
 }
 
+func TestBusToleratesNullFields(t *testing.T) {
+	// Reproducer for the wash-journal "cannot unmarshal primitives
+	// into Go struct field" panic: the FE sent {priority: null} and
+	// the bus's CBOR decode rejected it. After stripNulls in
+	// decodeInto, the field should fall back to its zero value.
+	bus, router, cleanup := busTestConn(t)
+	defer cleanup()
+
+	type SelectReq struct {
+		Unit     string `cbor:"unit"`
+		Priority int    `cbor:"priority"`
+		Range    string `cbor:"range"`
+	}
+	got := make(chan SelectReq, 1)
+	HandleVoid(bus, "select", func(c *Conn, _ string, req SelectReq) error {
+		got <- req
+		return nil
+	})
+
+	go func() { _ = bus.conn.Run(context.Background()) }()
+
+	// priority: nil — would previously fail decode.
+	writeEvt(t, router, wire.NewEvtAppMsg(1, map[string]any{
+		"kind":     "select",
+		"unit":     "ssh.service",
+		"priority": nil,
+		"range":    "hour",
+	}))
+	select {
+	case r := <-got:
+		if r.Unit != "ssh.service" || r.Range != "hour" {
+			t.Fatalf("decoded wrong: %+v", r)
+		}
+		if r.Priority != 0 {
+			t.Fatalf("expected zero-value Priority, got %d", r.Priority)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler didn't fire — null still breaks decode")
+	}
+}
+
 func TestBusHandleVoid(t *testing.T) {
 	bus, router, cleanup := busTestConn(t)
 	defer cleanup()
