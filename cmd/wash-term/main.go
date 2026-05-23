@@ -159,6 +159,14 @@ func main() {
 			Icon:            termIcon,
 			Instancing:      sdk.InstancingMulti,
 			Window:          &sdk.WindowHints{DefaultWidth: 800, DefaultHeight: 480},
+			// "Root Terminal" launcher row. The custom Name preserves
+			// the long-standing label; --login makes root's shell
+			// source profile/bashrc so PATH / PS1 / colour match a
+			// fresh login rather than wash-priv's parent env.
+			RootVariant: &sdk.RootVariant{
+				Name: "Root Terminal",
+				Args: []string{"--login"},
+			},
 		},
 		Assets:           sub,
 		OnReady:          onReady,

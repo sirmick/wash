@@ -25,6 +25,15 @@ interface WashCatalogApp {
   instancing: 'multi' | 'single' | 'singleton';
   disabled?: boolean;
   reason?: string;
+  /**
+   * When set, the launcher renders an additional synthetic row that
+   * spawns the app via wash-priv. Mirrors the BE-side manifest field.
+   */
+  root_variant?: {
+    name?: string;
+    icon?: string;
+    args?: string[];
+  };
 }
 
 interface WashWindowInfo {

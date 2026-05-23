@@ -91,6 +91,11 @@ type ShellCatalogApp struct {
 	Instancing string `json:"instancing"`
 	Disabled   bool   `json:"disabled,omitempty"`
 	Reason     string `json:"reason,omitempty"`
+
+	// RootVariant mirrors the same manifest field. When non-nil the
+	// shell renders an additional synthetic catalog row "<Name>
+	// (root)" that routes through wash-priv on click.
+	RootVariant *RootVariant `json:"root_variant,omitempty"`
 }
 
 // ShellCatalog is the router's "here is what is launchable" snapshot.

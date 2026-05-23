@@ -64,6 +64,30 @@ type Manifest struct {
 	// still spawnable (by --initial-app, or by another app's
 	// spawn.request) — useful for test/utility apps.
 	Hidden bool `json:"hidden,omitempty"`
+
+	// RootVariant declares that this app has a meaningful "run as
+	// root" variant. When set, the launcher shows an additional
+	// synthetic catalog row alongside the normal one; clicking it
+	// routes through wash-priv (queue + approval + sudo + spawn).
+	// The app itself doesn't need any awareness of being launched
+	// privileged — it just inherits uid 0 at start.
+	//
+	// Apps that declare this MUST be safe to run as root: no
+	// assumption that $HOME is the invoking user's, no per-uid
+	// state files written in places only root can recover.
+	RootVariant *RootVariant `json:"root_variant,omitempty"`
+}
+
+// RootVariant is the manifest-side hint for the launcher's synthetic
+// "run as root" entry. All fields are optional.
+type RootVariant struct {
+	// Name override for the launcher row. Default: "<Name> (root)".
+	Name string `json:"name,omitempty"`
+	// Icon override (lucide sprite symbol name). Default: shield-alert.
+	Icon string `json:"icon,omitempty"`
+	// Args appended to the child process argv (e.g. ["--login"] for
+	// wash-term so root's shell sources profile/bashrc).
+	Args []string `json:"args,omitempty"`
 }
 
 // WindowHints carries the optional default window geometry. v0.1

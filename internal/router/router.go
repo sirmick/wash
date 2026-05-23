@@ -317,13 +317,14 @@ func (r *Router) catalog() []wire.ShellCatalogApp {
 			continue
 		}
 		out = append(out, wire.ShellCatalogApp{
-			ID:         e.Manifest.ID,
-			Name:       e.Manifest.Name,
-			Icon:       e.Manifest.Icon,
-			Surface:    e.Manifest.Surface,
-			Instancing: e.Manifest.Instancing,
-			Disabled:   !e.Enabled(),
-			Reason:     e.Reason,
+			ID:          e.Manifest.ID,
+			Name:        e.Manifest.Name,
+			Icon:        e.Manifest.Icon,
+			Surface:     e.Manifest.Surface,
+			Instancing:  e.Manifest.Instancing,
+			Disabled:    !e.Enabled(),
+			Reason:      e.Reason,
+			RootVariant: e.Manifest.RootVariant,
 		})
 	}
 	return out

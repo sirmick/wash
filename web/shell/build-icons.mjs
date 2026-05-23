@@ -31,6 +31,8 @@ const ICONS = [
   'shield-check',   // wash-priv (privilege gateway)
   'shield-alert',   // "Root Terminal" launcher entry
   'scroll-text',    // wash-journal
+  'text-search',    // wash-syslogs
+  'file-text',      // wash-syslogs sidebar rows
 ];
 
 // Resolve via require so pnpm's nested layout is fine.

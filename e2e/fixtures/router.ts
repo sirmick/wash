@@ -30,6 +30,7 @@ const PRIV_BIN = join(REPO_ROOT, 'out', 'wash-priv');
 const JOURNAL_BIN = join(REPO_ROOT, 'out', 'wash-journal');
 const SETTINGS_BIN = join(REPO_ROOT, 'out', 'wash-settings');
 const TOP_BIN = join(REPO_ROOT, 'out', 'wash-top');
+const SYSLOGS_BIN = join(REPO_ROOT, 'out', 'wash-syslogs');
 const FAKESUDO_BIN = join(REPO_ROOT, 'out', 'wash-priv-fakesudo');
 export const SUDO_BIN = join(REPO_ROOT, 'out', 'wash-sudo');
 
@@ -79,7 +80,7 @@ export interface RouterOptions {
   /** kiosk mode: --no-session + --initial-app=<appID>. */
   kiosk?: string;
   /** include these binaries in the apps dir; defaults to all five. */
-  apps?: ('session' | 'about' | 'test' | 'term' | 'fm' | 'bulk' | 'priv' | 'journal' | 'settings' | 'top')[];
+  apps?: ('session' | 'about' | 'test' | 'term' | 'fm' | 'bulk' | 'priv' | 'journal' | 'settings' | 'top' | 'syslogs')[];
   /** include manifest.hidden apps in the catalog. */
   showHidden?: boolean;
   /** extra wash-router args. */
@@ -187,6 +188,12 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
       throw new Error(`missing wash-top: ${TOP_BIN}`);
     }
     bins.push(TOP_BIN);
+  }
+  if (wanted.includes('syslogs')) {
+    if (!existsSync(SYSLOGS_BIN)) {
+      throw new Error(`missing wash-syslogs: ${SYSLOGS_BIN}`);
+    }
+    bins.push(SYSLOGS_BIN);
   }
   const appsDir = stageApps(bins);
   // wash-priv claims a reservedID (com.wash.priv) which the registry
