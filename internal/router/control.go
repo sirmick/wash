@@ -33,6 +33,7 @@ package router
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -218,8 +219,8 @@ func (r *Router) controlMsg(ctx context.Context, conn net.Conn, req controlReq) 
 		})
 		return
 	}
-	var parsed any
-	if err := json.Unmarshal(req.Data, &parsed); err != nil {
+	parsed, err := decodeControlData(req.Data)
+	if err != nil {
 		writeControlResponse(conn, map[string]any{
 			"t": "error", "code": "bad_request", "msg": "data is not valid JSON: " + err.Error(),
 		})
@@ -438,5 +439,54 @@ func (r *Router) controlPrivRun(ctx context.Context, conn net.Conn, rd *bufio.Re
 			fwd := map[string]any{"kind": "cancel", "req_id": first.ReqID}
 			_ = target.WriteEvt(wire.NewEvtAppMsgFrom(target.WindowID, fwd, from))
 		}
+	}
+}
+
+// decodeControlData unmarshals the `data` payload from a control-socket
+// msg request, preserving integer-ness of numeric fields.
+//
+// json.Unmarshal turns every JSON number into float64. The bus's typed
+// handlers ultimately CBOR-decode into structs with int fields (e.g.
+// signalReq.PID int32) — fxamacker's decoder refuses to coerce float
+// → int, so the request fails with bad_request. The browser path
+// dodges this because the shell encodes JS numbers directly as CBOR
+// ints when they're integral; only the JSON-over-control-socket path
+// loses that information.
+//
+// Using a Decoder with UseNumber() gives us json.Number values, which
+// we then normalize: integer-valued numbers become int64, fractional
+// ones become float64. CBOR encoding of those Go types is faithful.
+func decodeControlData(raw json.RawMessage) (any, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil, err
+	}
+	return normalizeNumbers(v), nil
+}
+
+func normalizeNumbers(v any) any {
+	switch x := v.(type) {
+	case json.Number:
+		if i, err := x.Int64(); err == nil {
+			return i
+		}
+		if f, err := x.Float64(); err == nil {
+			return f
+		}
+		return x.String()
+	case map[string]any:
+		for k, vv := range x {
+			x[k] = normalizeNumbers(vv)
+		}
+		return x
+	case []any:
+		for i, vv := range x {
+			x[i] = normalizeNumbers(vv)
+		}
+		return x
+	default:
+		return v
 	}
 }

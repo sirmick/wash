@@ -28,6 +28,8 @@ const BULK_BIN = join(REPO_ROOT, 'out', 'wash-bulk');
 const EDIT_BIN = join(REPO_ROOT, 'out', 'wash-edit');
 const PRIV_BIN = join(REPO_ROOT, 'out', 'wash-priv');
 const JOURNAL_BIN = join(REPO_ROOT, 'out', 'wash-journal');
+const SETTINGS_BIN = join(REPO_ROOT, 'out', 'wash-settings');
+const TOP_BIN = join(REPO_ROOT, 'out', 'wash-top');
 const FAKESUDO_BIN = join(REPO_ROOT, 'out', 'wash-priv-fakesudo');
 export const SUDO_BIN = join(REPO_ROOT, 'out', 'wash-sudo');
 
@@ -45,6 +47,9 @@ export interface RouterHandle {
   screenshotDir: string;
   /** per-test fm sandbox root. Empty when fmRoot wasn't requested. */
   fmRoot: string;
+  /** per-test XDG_CONFIG_HOME (wash configs live under <here>/wash/).
+   *  Empty when xdgConfig wasn't requested. */
+  xdgConfigHome: string;
   /**
    * Path to the fakesudo audit log when fakesudo:true was set;
    * empty otherwise. Tests read this to assert which targets
@@ -74,7 +79,7 @@ export interface RouterOptions {
   /** kiosk mode: --no-session + --initial-app=<appID>. */
   kiosk?: string;
   /** include these binaries in the apps dir; defaults to all five. */
-  apps?: ('session' | 'about' | 'test' | 'term' | 'fm' | 'bulk' | 'priv' | 'journal')[];
+  apps?: ('session' | 'about' | 'test' | 'term' | 'fm' | 'bulk' | 'priv' | 'journal' | 'settings' | 'top')[];
   /** include manifest.hidden apps in the catalog. */
   showHidden?: boolean;
   /** extra wash-router args. */
@@ -102,6 +107,13 @@ export interface RouterOptions {
    * fixture tree your test needs. Implies fmRoot:true.
    */
   fmSeed?: (root: string) => void;
+  /**
+   * If true, point XDG_CONFIG_HOME at a per-test tmpdir so wash-settings
+   * (and the wash-session config watcher) read/write into an isolated
+   * tree. Without this, settings tests would clobber ~/.config/wash on
+   * the test runner.
+   */
+  xdgConfig?: boolean;
 }
 
 async function freePort(): Promise<number> {
@@ -164,6 +176,18 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
     }
     bins.push(JOURNAL_BIN);
   }
+  if (wanted.includes('settings')) {
+    if (!existsSync(SETTINGS_BIN)) {
+      throw new Error(`missing wash-settings: ${SETTINGS_BIN}`);
+    }
+    bins.push(SETTINGS_BIN);
+  }
+  if (wanted.includes('top')) {
+    if (!existsSync(TOP_BIN)) {
+      throw new Error(`missing wash-top: ${TOP_BIN}`);
+    }
+    bins.push(TOP_BIN);
+  }
   const appsDir = stageApps(bins);
   // wash-priv claims a reservedID (com.wash.priv) which the registry
   // refuses from a non-root-owned binary by default. The e2e dir is
@@ -207,6 +231,14 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   }
   if (trustForPriv) {
     env.WASH_TRUSTED_APPS_DIRS = trustForPriv;
+  }
+  // Isolate the user's real ~/.config/wash. wash-settings.write()
+  // overwrites desktop.json; without this every settings spec would
+  // trash the developer's chrome between runs.
+  let xdgConfigHome = '';
+  if (opts.xdgConfig) {
+    xdgConfigHome = mkdtempSync(join(tmpdir(), 'wash-e2e-xdg-'));
+    env.XDG_CONFIG_HOME = xdgConfigHome;
   }
   // fakesudo wiring: WASH_PRIV_SUDO_BIN is read by wash-priv at
   // startup; FAKESUDO_LOG is read by fakesudo on every invocation
@@ -255,6 +287,7 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
     controlSocket,
     screenshotDir,
     fmRoot,
+    xdgConfigHome,
     fakesudoLog,
     log: () => logBuf,
     waitForLog: (re, timeout = 5_000) => waitForRegex(() => logBuf, re, timeout),

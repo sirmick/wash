@@ -501,6 +501,12 @@ func (b *Bus) ship(c *Conn, payload map[string]any, to *replyTo) {
 // envelope wraps payload in {kind, id?, ...payload fields} as a
 // map[string]any. payload may be a struct (re-marshaled through
 // CBOR to extract its fields) or already a map.
+//
+// id precedence: an explicit `id` arg always wins; otherwise an "id"
+// field in the payload passes through. Lets Emit("...", {"id": ...})
+// preserve the id so control-socket / FE await-matchers can correlate
+// the reply, while sendOk/sendErr (which thread id via the arg) keep
+// working unchanged.
 func envelope(kind, id string, payload any) (map[string]any, error) {
 	out := map[string]any{"kind": kind}
 	if id != "" {
@@ -513,7 +519,10 @@ func envelope(kind, id string, payload any) (map[string]any, error) {
 	// keys onto out without going through CBOR.
 	if m, ok := payload.(map[string]any); ok {
 		for k, v := range m {
-			if k == "kind" || k == "id" {
+			if k == "kind" {
+				continue
+			}
+			if k == "id" && id != "" {
 				continue
 			}
 			out[k] = v
@@ -530,7 +539,10 @@ func envelope(kind, id string, payload any) (map[string]any, error) {
 		return nil, fmt.Errorf("envelope unmarshal: %w", err)
 	}
 	for k, v := range fields {
-		if k == "kind" || k == "id" {
+		if k == "kind" {
+			continue
+		}
+		if k == "id" && id != "" {
 			continue
 		}
 		out[k] = v
