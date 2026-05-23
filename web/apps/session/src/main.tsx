@@ -111,17 +111,20 @@ function rootSourceID(syntheticID: string): string {
 }
 
 // rootEntryFor builds the synthetic CatalogApp row that the launcher
-// renders for a source app declaring root_variant. Default name is
-// the source app's name verbatim — the red-tinted icon carries the
-// "this runs as root" signal, so duplicating it in the label was
-// noise. Apps that want an explicit label (Root Terminal) set
-// `root_variant.name` in their manifest.
+// renders for a source app declaring root_variant.
+//
+// Default name is the source app's name verbatim — the red-tinted
+// icon carries the "this runs as root" signal, so duplicating it in
+// the label was noise. Default icon is the source app's own icon
+// (so root terminal still looks like a terminal, root syslogs like
+// syslogs, etc.) tinted red at render time. Apps that want a
+// distinct icon override via manifest.root_variant.icon.
 function rootEntryFor(src: CatalogApp): CatalogApp | null {
   if (!src.root_variant) return null;
   return {
     id: ROOT_PREFIX + src.id,
     name: src.root_variant.name ?? src.name,
-    icon: src.root_variant.icon ?? 'shield-alert',
+    icon: src.root_variant.icon ?? src.icon,
     surface: src.surface,
     instancing: src.instancing,
     disabled: false,

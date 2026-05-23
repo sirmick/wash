@@ -45,9 +45,12 @@ var assetsFS embed.FS
 
 const version = "0.0.0"
 
-// syslogsIcon — text-search reads as "look through log text" without
-// stepping on journal's scroll-text or edit's file-pen.
-const syslogsIcon = "text-search"
+// syslogsIcon matches wash-journal's "scroll-text". The two apps
+// view different surfaces of the same domain (the journal's
+// structured stream vs. classic flat /var/log files); using the
+// same icon makes the family relationship obvious, and the launcher
+// disambiguates by name.
+const syslogsIcon = "scroll-text"
 
 type be struct {
 	conn *sdk.Conn

@@ -29,9 +29,7 @@ const ICONS = [
   'settings',       // wash-settings
   'activity',       // wash-top
   'shield-check',   // wash-priv (privilege gateway)
-  'shield-alert',   // "Root Terminal" launcher entry
-  'scroll-text',    // wash-journal
-  'text-search',    // wash-syslogs
+  'scroll-text',    // wash-journal + wash-syslogs (sister apps, shared icon)
   'file-text',      // wash-syslogs sidebar rows
 ];
 
