@@ -94,8 +94,17 @@ func TestSpine(t *testing.T) {
 	// The fake shell side reads frames as a real shell would.
 	shell := shellPair.EndB()
 
+	// fr is a frame reader shared by every phase of the test. It
+	// tolerates raw bundle frames whenever they show up, accumulating
+	// the bytes into fr.bundleBytes so phase 4's assertion still
+	// works no matter which phase happens to consume the raw frames
+	// off the wire. Without this, any phase that calls readCtrl-
+	// flavoured logic races against bundle delivery and fatals on
+	// "expected channel 0, got N".
+	fr := &frameReader{t: t, shell: shell}
+
 	// 0. Catalog goes out first on shell connect.
-	if _, ok := readCtrl(t, shell).(wire.ShellCatalog); !ok {
+	if _, ok := fr.nextCtrl().(wire.ShellCatalog); !ok {
 		t.Fatalf("expected ShellCatalog first")
 	}
 
@@ -107,7 +116,7 @@ func TestSpine(t *testing.T) {
 	var declared *wire.ShellAppDeclared
 	var window *wire.SessionWindow
 	for declared == nil || window == nil {
-		switch m := readCtrl(t, shell).(type) {
+		switch m := fr.nextCtrl().(type) {
 		case wire.ShellAppDeclared:
 			d := m
 			declared = &d
@@ -125,6 +134,7 @@ func TestSpine(t *testing.T) {
 			}
 		}
 	}
+	fr.targetInstance = declared.InstanceID
 	if declared.Element != "wash-app-about" || declared.Surface != router.SurfaceWindow {
 		t.Fatalf("bad declared: %+v", declared)
 	}
@@ -139,55 +149,18 @@ func TestSpine(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("OnMapped never fired")
 	}
-	// 3. A session.patch arrives with the new title. May be preceded
-	//    by other in-flight frames; drain until we see it.
-	for {
-		switch m := readCtrl(t, shell).(type) {
-		case wire.ShellSessionPatch:
-			for _, p := range m.Patches {
-				if p.Op == wire.SessionPatchWindowUpsert && p.Window != nil && p.Window.WindowID == winID && p.Window.Title == mappedTitle {
-					goto titlePatchFound
-				}
-			}
-		}
-	}
-titlePatchFound:
 
-	// 4. Bundle delivery: the SDK ships the embedded bundle on a
-	// kind=bundle raw channel right after handshake. Router caches
-	// the bytes and replays them to every attached shell via
-	// ShellChannelBind{kind:bundle} + raw frames + ShellChannelUnbind.
-	var bundleChannelID uint32
-	bundleBytes := []byte{}
-	bundleDone := false
-	for !bundleDone {
-		f, err := shell.ReadFrame()
-		if err != nil {
-			t.Fatalf("read frame: %v", err)
-		}
-		if f.Channel == 0 {
-			m, derr := wire.DecodeCtrl(f.Payload)
-			if derr != nil {
-				t.Fatalf("decode ctrl: %v", derr)
-			}
-			switch v := m.(type) {
-			case wire.ShellChannelBind:
-				if v.Kind == wire.ChannelKindBundle && v.InstanceID == declared.InstanceID {
-					bundleChannelID = v.ChannelID
-				}
-			case wire.ShellChannelUnbind:
-				if v.ChannelID == bundleChannelID {
-					bundleDone = true
-				}
-			}
-			continue
-		}
-		if f.Channel == bundleChannelID {
-			bundleBytes = append(bundleBytes, f.Payload...)
-		}
+	// 3+4. Title patch and bundle delivery race each other on the
+	// wire — the SDK ships the bundle on a kind=bundle raw channel
+	// right after handshake, and the router replays it to the shell
+	// concurrently with whatever ctrl frames OnMapped's SetTitle
+	// produces. fr handles raw bundle frames transparently; we just
+	// loop until both signals (title patch + bundle done) arrive.
+	for !fr.bundleDone || !fr.titlePatchSeen(winID, mappedTitle) {
+		fr.nextCtrl()
 	}
-	if string(bundleBytes) != bundleBody {
-		t.Fatalf("bundle bytes mismatch: %q", string(bundleBytes))
+	if string(fr.bundleBytes) != bundleBody {
+		t.Fatalf("bundle bytes mismatch: %q", string(fr.bundleBytes))
 	}
 
 	// 5. Close handshake: shell sends close_clicked → router runs the
@@ -195,7 +168,7 @@ titlePatchFound:
 	//    broadcasts session.patch with window.delete.
 	writeCtrl(t, shell, wire.NewShellWindowCloseClicked(winID))
 	for {
-		switch m := readCtrl(t, shell).(type) {
+		switch m := fr.nextCtrl().(type) {
 		case wire.ShellSessionPatch:
 			for _, p := range m.Patches {
 				if p.Op == wire.SessionPatchWindowDelete && p.WindowID == winID {
@@ -229,20 +202,75 @@ deletePatchFound:
 
 // helpers ---------------------------------------------------------
 
-func readCtrl(t *testing.T, e wire.FrameTransport) any {
-	t.Helper()
-	f, err := e.ReadFrame()
-	if err != nil {
-		t.Fatalf("read: %v", err)
+// frameReader is a phase-spanning shell-side frame consumer. It
+// blocks on the next ctrl frame on channel 0 but transparently
+// accumulates raw bundle bytes (channel != 0) into bundleBytes, so a
+// raw frame arriving "early" (during phase 1's catalog/declared/
+// window drain, say) doesn't fatal the test on "expected channel 0".
+// Bundle bind/unbind ctrl frames are also tracked so phase 4 can
+// just check bundleDone instead of running its own mixed reader.
+//
+// targetInstance is set once phase 1 learns the app's instance id;
+// before then any ShellChannelBind{kind:bundle} is ignored (there
+// shouldn't be any — the SDK uploads the bundle after handshake).
+type frameReader struct {
+	t              *testing.T
+	shell          wire.FrameTransport
+	targetInstance string
+
+	bundleChannelID uint32
+	bundleBytes     []byte
+	bundleDone      bool
+
+	titlePatches []wire.ShellSessionPatch
+}
+
+func (fr *frameReader) nextCtrl() any {
+	fr.t.Helper()
+	for {
+		f, err := fr.shell.ReadFrame()
+		if err != nil {
+			fr.t.Fatalf("read: %v", err)
+		}
+		if f.Channel != 0 {
+			if fr.bundleChannelID != 0 && f.Channel == fr.bundleChannelID {
+				fr.bundleBytes = append(fr.bundleBytes, f.Payload...)
+			}
+			continue
+		}
+		m, err := wire.DecodeCtrl(f.Payload)
+		if err != nil {
+			fr.t.Fatalf("decode: %v", err)
+		}
+		switch v := m.(type) {
+		case wire.ShellChannelBind:
+			if v.Kind == wire.ChannelKindBundle &&
+				fr.targetInstance != "" && v.InstanceID == fr.targetInstance {
+				fr.bundleChannelID = v.ChannelID
+			}
+		case wire.ShellChannelUnbind:
+			if fr.bundleChannelID != 0 && v.ChannelID == fr.bundleChannelID {
+				fr.bundleDone = true
+			}
+		case wire.ShellSessionPatch:
+			fr.titlePatches = append(fr.titlePatches, v)
+		}
+		return m
 	}
-	if f.Channel != 0 {
-		t.Fatalf("expected channel 0, got %d", f.Channel)
+}
+
+// titlePatchSeen reports whether any session.patch buffered so far
+// carries the mapped title on winID.
+func (fr *frameReader) titlePatchSeen(winID uint32, want string) bool {
+	for _, sp := range fr.titlePatches {
+		for _, p := range sp.Patches {
+			if p.Op == wire.SessionPatchWindowUpsert && p.Window != nil &&
+				p.Window.WindowID == winID && p.Window.Title == want {
+				return true
+			}
+		}
 	}
-	m, err := wire.DecodeCtrl(f.Payload)
-	if err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	return m
+	return false
 }
 
 func writeCtrl(t *testing.T, e wire.FrameTransport, m any) {
