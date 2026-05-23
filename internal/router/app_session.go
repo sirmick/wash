@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
@@ -47,6 +48,19 @@ type AppInstance struct {
 	WindowID   uint32 // 0 if surface=desktop OR Kiosk
 	Manifest   *Manifest
 	Cmd        *exec.Cmd // nil for in-process tests
+	// spawnLog captures the BE's stdout+stderr (last ~16 KB) for
+	// crash reporting. nil for in-process tests.
+	spawnLog *ringBuf
+	// startedAt is when the process was spawned; used to compute
+	// uptime for the crash dialog.
+	startedAt time.Time
+	// expectedExit flips true when the router itself terminates the
+	// BE (close handshake confirmed, devreload, shutdown). The
+	// crash-broadcast path in spawnAndRun checks it and stays
+	// silent — a router-driven SIGTERM is not a crash. A panic, an
+	// OOM-kill, or a signal from an external party leaves this
+	// false and the dialog fires as intended.
+	expectedExit atomic.Bool
 
 	// PeerUID is the kernel-attested uid of the connected app process,
 	// read via SO_PEERCRED at attach time. Zero means root; uidNoPeer
@@ -607,6 +621,7 @@ func (inst *AppInstance) requestClose(ctx context.Context) (allowed bool, err er
 	case <-timer.C:
 		// Force-kill per §10. Subsequent loop iteration will tear down.
 		if inst.Cmd != nil && inst.Cmd.Process != nil {
+			inst.expectedExit.Store(true)
 			_ = inst.Cmd.Process.Kill()
 		}
 		return true, nil

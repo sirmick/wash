@@ -283,6 +283,17 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		}
 	case "fe_event":
 		log.Printf("wash-test fe_event %v", m["type"])
+	case "crash":
+		// Deliberate panic exercising the router's crash-capture +
+		// shell tombstone path. Goroutine so the SDK can ship the
+		// app_msg reply (if any) before the process dies. Note that
+		// printing here also pre-seeds the ring buffer with a
+		// recognisable line — useful for e2e assertions even if a
+		// future Go release changes the panic prefix.
+		log.Printf("wash-test: deliberate crash incoming")
+		go func() {
+			panic("wash-test: deliberate crash from FE button")
+		}()
 	default:
 		log.Printf("wash-test unhandled kind=%q msg=%+v", kind, m)
 	}

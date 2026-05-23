@@ -229,6 +229,11 @@ func (s *ShellSession) handleWindowCloseClicked(m wire.ShellWindowCloseClicked) 
 			s.router.broadcastPatches(s.router.winSession.destroyWindow(m.WindowID))
 			if inst.Cmd != nil && inst.Cmd.Process != nil {
 				// Send SIGTERM gracefully; loop will detect EOF.
+				// expectedExit suppresses the crash-broadcast in
+				// spawnAndRun's cleanup goroutine — a user-clicked
+				// close that the app confirmed is an orderly exit,
+				// not a tombstone-worthy crash.
+				inst.expectedExit.Store(true)
 				_ = inst.Cmd.Process.Signal(stopSignal())
 			}
 		}

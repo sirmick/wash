@@ -7,10 +7,11 @@
 // / window.focus / window.state on the wire; the router applies them
 // and broadcasts a session.patch back, which lands in the store.
 
-import { createSignal, onCleanup, onMount } from 'solid-js';
+import { Show, createSignal, onCleanup, onMount } from 'solid-js';
 import { registerMountedElement, unregisterMountedElement } from './api';
 import {
   VIEWPORTS_PER_AXIS,
+  CrashInfo,
   focused,
   moveLocal,
   raiseLocal,
@@ -18,7 +19,7 @@ import {
   screenSize,
   Win,
 } from './wm';
-import { Maximize2, Minimize2, Minus, X } from 'lucide-solid';
+import { AlertOctagon, Copy, Maximize2, Minimize2, Minus, X } from 'lucide-solid';
 
 export interface WindowProps {
   win: Win;
@@ -39,6 +40,15 @@ export function FloatingWindow(props: WindowProps) {
   const [resizeH, setResizeH] = createSignal<number | null>(null);
 
   onMount(() => {
+    // Don't mount the (dead) custom element when the BE has already
+    // crashed by the time we get a chance to render — the crash
+    // tombstone owns the slot. props.win.crashed can also flip true
+    // later, after the element is already mounted; the slot just
+    // sits behind the absolute-positioned overlay in that case.
+    if (props.win.crashed) {
+      window.wash.focusWindow(props.win.windowID);
+      return;
+    }
     const el = document.createElement(props.win.element);
     el.setAttribute('data-wash-instance', props.win.instanceID);
     slot.appendChild(el);
@@ -196,8 +206,11 @@ export function FloatingWindow(props: WindowProps) {
   // dark red stripe identifies the privilege scope at a glance, and
   // the value comes from router-attested SessionWindow.is_root — apps
   // cannot self-declare it. The non-focused tone is a darker maroon
-  // so focus is still distinguishable.
+  // so focus is still distinguishable. A crashed window's titlebar
+  // is a brighter red regardless of focus — the tombstone state needs
+  // to be unmistakable.
   const titlebarBackground = () => {
+    if (props.win.crashed) return '#8a1d1d';
     if (props.win.isRoot) {
       return focused() === props.win.windowID ? '#7a1f1f' : '#5a1818';
     }
@@ -285,7 +298,11 @@ export function FloatingWindow(props: WindowProps) {
           <X size={14} />
         </button>
       </div>
-      <div ref={slot} style={{ flex: 1, overflow: 'auto' }} />
+      <div ref={slot} style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
+        <Show when={props.win.crashed}>
+          <CrashPane info={props.win.crashed!} title={props.win.title} />
+        </Show>
+      </div>
       <div
         class="wash-resize-handle"
         data-testid="window-resize"
@@ -310,6 +327,110 @@ export function FloatingWindow(props: WindowProps) {
 // Keep the symbol around even though raise* is gone — older callers
 // (the desktop button click path) reach for it.
 export { raiseLocal };
+
+// CrashPane renders the in-place tombstone for a window whose BE
+// process exited abnormally. Replaces the (dead) custom element with
+// a red-headed banner + scrollable log + Copy button. The window's
+// close button still works (FE-only removal from the WM store).
+function CrashPane(props: { info: CrashInfo; title: string }) {
+  const [copied, setCopied] = createSignal(false);
+  const summary = () => {
+    const parts = [`exit ${props.info.exitCode}`];
+    if (props.info.signal) parts.push(`signal ${props.info.signal}`);
+    if (props.info.uptime) parts.push(`ran ${props.info.uptime}`);
+    return parts.join(' • ');
+  };
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(props.info.log);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1_500);
+    } catch {
+      // clipboard blocked (insecure context, no permission) — the
+      // textarea is still selectable, so this is just a nicety.
+    }
+  };
+  return (
+    <div
+      data-testid="window-crashed"
+      style={{
+        position: 'absolute',
+        inset: '0',
+        background: '#1a0e0e',
+        color: '#f4e4e4',
+        display: 'flex',
+        'flex-direction': 'column',
+        'box-sizing': 'border-box',
+        font: '12px ui-monospace, Menlo, Consolas, monospace',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          'align-items': 'center',
+          gap: '8px',
+          padding: '10px 12px',
+          background: '#3a0f0f',
+          'border-bottom': '1px solid #5a1818',
+          color: '#ffd0d0',
+          font: '13px ui-sans-serif, system-ui, sans-serif',
+        }}
+      >
+        <AlertOctagon size={16} />
+        <div style={{ flex: 1 }}>
+          <div style={{ 'font-weight': '600' }}>{props.title} crashed</div>
+          <div style={{ opacity: '0.75', 'font-size': '11px' }}>
+            {props.info.appID} — {summary()}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onCopy}
+          data-testid="window-crashed-copy"
+          aria-label="Copy crash log"
+          title="Copy log to clipboard"
+          style={{
+            display: 'flex',
+            'align-items': 'center',
+            gap: '4px',
+            background: copied() ? '#2d5a2d' : '#5a1818',
+            color: '#fff',
+            border: '1px solid #7a2828',
+            'border-radius': '3px',
+            padding: '4px 8px',
+            cursor: 'pointer',
+            font: 'inherit',
+            'font-size': '12px',
+          }}
+        >
+          <Copy size={12} />
+          {copied() ? 'copied' : 'copy'}
+        </button>
+      </div>
+      <textarea
+        data-testid="window-crashed-log"
+        readonly
+        spellcheck={false}
+        value={props.info.log || '(no output captured)'}
+        style={{
+          flex: 1,
+          margin: '0',
+          padding: '10px 12px',
+          background: '#10070a',
+          color: '#f4d0d0',
+          border: 'none',
+          outline: 'none',
+          resize: 'none',
+          'font-family': 'inherit',
+          'font-size': '12px',
+          'line-height': '1.45',
+          'white-space': 'pre',
+          'overflow': 'auto',
+        }}
+      />
+    </div>
+  );
+}
 
 const titlebarBtnStyle = {
   background: 'transparent',

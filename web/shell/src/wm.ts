@@ -14,6 +14,14 @@ import type { SessionPatch, SessionWindow } from './main';
 
 export type WinState = 'normal' | 'minimized' | 'maximized';
 
+export interface CrashInfo {
+  appID: string;
+  exitCode: number;
+  signal?: string;
+  uptime: string;
+  log: string;
+}
+
 export interface Win {
   windowID: number;
   instanceID: string;
@@ -36,6 +44,12 @@ export interface Win {
   // isRoot is router-attested; renders the red ROOT stripe in the
   // titlebar. See SessionWindow.is_root in main.tsx.
   isRoot?: boolean;
+  // crashed is set when the BE process exited abnormally. The window
+  // stays mounted (geometry intact) but FloatingWindow swaps in the
+  // crash tombstone instead of the dead custom element. Router-side
+  // window state is gone by this point — closing the tombstone is a
+  // pure FE removal.
+  crashed?: CrashInfo;
 }
 
 export interface DesktopMount {
@@ -226,10 +240,36 @@ export function applySessionPatch(
       }
     } else if (p.op === 'window.delete' && typeof p.window_id === 'number') {
       const id = p.window_id;
+      // Crashed windows survive the router-side delete patch — they
+      // become FE-only tombstones the user dismisses by clicking
+      // close. The router has already torn down its side; we just
+      // hold the geometry + crash info until the user is done.
+      const w = windows.find((x) => x.windowID === id);
+      if (w?.crashed) continue;
       setWindows((prev) => prev.filter((w) => w.windowID !== id));
       if (focused() === id) setFocused(null);
     }
   }
+}
+
+// markCrashed flips the tombstone bit on the matching window.
+// Called from the shell's app.crashed handler in main.tsx. Idempotent.
+// If the window isn't currently in the store (rare race: the BE
+// crashed before its window-upsert reached the shell), this is a
+// no-op — there's nothing to tombstone.
+export function markCrashed(instanceID: string, info: CrashInfo): void {
+  const idx = windows.findIndex((w) => w.instanceID === instanceID);
+  if (idx < 0) return;
+  setWindows(idx, 'crashed', info);
+}
+
+// dismissCrashed removes a crash tombstone from the WM store. The
+// close button on a crashed window calls this directly rather than
+// sending window.close_clicked — the router-side state is already
+// gone.
+export function dismissCrashed(windowID: number): void {
+  setWindows((prev) => prev.filter((w) => w.windowID !== windowID));
+  if (focused() === windowID) setFocused(null);
 }
 
 function upsertWindow(w: Win): void {

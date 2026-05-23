@@ -49,6 +49,12 @@ const (
 	// bundles are stale and customElements is one-shot per tab.
 	// Shell handles this by calling window.location.reload().
 	TShellReload = "shell.reload"
+
+	// Router → shell, "the BE for this instance crashed." Carries
+	// captured stdout/stderr (last few KB) + exit info. The shell
+	// converts the matching window into a crash tombstone in place,
+	// preserving geometry so the user can copy the trace.
+	TShellAppCrashed = "app.crashed"
 )
 
 // ShellLog levels.
@@ -377,6 +383,40 @@ func NewShellChannelBindBundle(channelID uint32, instanceID string) ShellChannel
 		ChannelID:  channelID,
 		Kind:       ChannelKindBundle,
 		InstanceID: instanceID,
+	}
+}
+
+// ShellAppCrashed reports that an app BE process exited abnormally.
+// "Abnormal" means non-zero exit code, or killed by a signal. The
+// router emits this immediately before the window-delete patch that
+// tearDown produces; the shell intercepts it, marks the window
+// crashed in place (so the user keeps the geometry context), and
+// suppresses the subsequent delete.
+//
+// Log is the tail of the BE's stdout+stderr — typically the panic
+// trace from Go's default crash handler. Truncated at the router's
+// per-instance ring-buffer cap.
+type ShellAppCrashed struct {
+	T          string `json:"t"`
+	InstanceID string `json:"instance_id"`
+	WindowID   uint32 `json:"window_id,omitempty"`
+	AppID      string `json:"app_id"`
+	ExitCode   int    `json:"exit_code"`
+	Signal     string `json:"signal,omitempty"`
+	Uptime     string `json:"uptime"`
+	Log        string `json:"log"`
+}
+
+func NewShellAppCrashed(instanceID, appID string, windowID uint32, exitCode int, signal, uptime, log string) ShellAppCrashed {
+	return ShellAppCrashed{
+		T:          TShellAppCrashed,
+		InstanceID: instanceID,
+		WindowID:   windowID,
+		AppID:      appID,
+		ExitCode:   exitCode,
+		Signal:     signal,
+		Uptime:     uptime,
+		Log:        log,
 	}
 }
 

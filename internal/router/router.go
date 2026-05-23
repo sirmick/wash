@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/sirmick/wash/internal/wire"
@@ -534,10 +535,12 @@ func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*Ap
 	if r.cfg.ControlSocket == "" {
 		return nil, fmt.Errorf("spawn %s: control socket disabled (apps dial WASH_DISPLAY)", entry.Manifest.ID)
 	}
-	cmd, err := Spawn(entry.Path, entry.Manifest.ID, r.cfg.ControlSocket, r.spawnEnv())
+	sr, err := Spawn(entry.Path, entry.Manifest.ID, r.cfg.ControlSocket, r.spawnEnv())
 	if err != nil {
 		return nil, fmt.Errorf("spawn %s: %w", entry.Manifest.ID, err)
 	}
+	cmd := sr.Cmd
+	startedAt := time.Now()
 	pid := cmd.Process.Pid
 	// Register the pending channel BEFORE the spawn could plausibly
 	// dial back; cmd.Start has already returned, so the child may
@@ -563,6 +566,8 @@ func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*Ap
 		}
 		inst = res.inst
 		inst.Cmd = cmd
+		inst.spawnLog = sr.logBuf
+		inst.startedAt = startedAt
 		inst.Kiosk = kiosk
 	case <-timeout.C:
 		_ = cmd.Process.Kill()
@@ -579,11 +584,60 @@ func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*Ap
 		if err := inst.loop(context.Background()); err != nil {
 			r.log("app %s loop: %v", inst.AppID, err)
 		}
-		r.tearDown(inst)
 		_ = transport.Close()
 		_ = cmd.Wait()
+		// Inspect exit status before tearing down. tearDown sends
+		// the window-delete patch that the shell would otherwise
+		// race against the crash event. crashEvent must precede
+		// the delete so the shell can mark the window crashed
+		// in place rather than dropping it.
+		r.maybeBroadcastCrash(inst)
+		r.tearDown(inst)
 	}()
 	return inst, nil
+}
+
+// maybeBroadcastCrash inspects the cmd.ProcessState after Wait() has
+// returned and, if the exit looks abnormal (non-zero code or
+// signal-killed), ships a ShellAppCrashed event to every attached
+// shell. A clean exit (code 0) is silent — apps closing themselves
+// down don't need a tombstone.
+func (r *Router) maybeBroadcastCrash(inst *AppInstance) {
+	if inst.Cmd == nil || inst.Cmd.ProcessState == nil {
+		return
+	}
+	// Router-initiated terminations (close handshake, devreload,
+	// shutdown) set expectedExit before signalling. Skip those —
+	// SIGTERM after the user clicked X is the orderly path, not a
+	// crash.
+	if inst.expectedExit.Load() {
+		return
+	}
+	ps := inst.Cmd.ProcessState
+	code := ps.ExitCode()
+	signal := ""
+	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		signal = ws.Signal().String()
+	}
+	if code == 0 && signal == "" {
+		return
+	}
+	log := ""
+	if inst.spawnLog != nil {
+		log = inst.spawnLog.String()
+	}
+	uptime := ""
+	if !inst.startedAt.IsZero() {
+		uptime = time.Since(inst.startedAt).Round(time.Second).String()
+	}
+	r.log("app %s crashed: code=%d signal=%q uptime=%s instance=%s",
+		inst.AppID, code, signal, uptime, inst.InstanceID)
+	msg := wire.NewShellAppCrashed(inst.InstanceID, inst.AppID, inst.WindowID, code, signal, uptime, log)
+	for _, s := range r.shellList() {
+		if err := s.WriteCtrl(msg); err != nil {
+			r.log("broadcast crash to shell: %v", err)
+		}
+	}
 }
 
 // closeChannelsForWindow tears down every channel rooted at the given

@@ -198,6 +198,7 @@ func (r *Router) killInstancesByBinary(binaryPath string) int {
 	r.mu.Unlock()
 	for _, inst := range victims {
 		if inst.Cmd != nil && inst.Cmd.Process != nil {
+			inst.expectedExit.Store(true)
 			_ = inst.Cmd.Process.Signal(syscall.SIGTERM)
 		} else {
 			// Fresh-attach apps don't have a Cmd we own; closing

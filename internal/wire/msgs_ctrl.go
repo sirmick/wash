@@ -305,6 +305,9 @@ func DecodeCtrl(data []byte) (any, error) {
 	case TShellChannelUnbind:
 		var m ShellChannelUnbind
 		return m, json.Unmarshal(data, &m)
+	case TShellAppCrashed:
+		var m ShellAppCrashed
+		return m, json.Unmarshal(data, &m)
 	}
 	return nil, fmt.Errorf("ctrl decode: unknown t %q", t)
 }

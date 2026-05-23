@@ -109,6 +109,7 @@ class WashAppTest extends HTMLElement {
         ${actionBtn('console-error',  'console.error')}
         ${actionBtn('reject-promise', 'Reject unhandled')}
         ${actionBtn('sudo-whoami',    'sudo whoami (via wash-priv)')}
+        ${actionBtn('crash-be',       'Crash BE (panic)')}
       </section>
 
       <section style="margin:10px 0;display:flex;gap:18px;flex-wrap:wrap;align-items:center;">
@@ -226,6 +227,9 @@ class WashAppTest extends HTMLElement {
     this.querySelector('[data-testid="action-sudo-whoami"]')?.addEventListener('click', () => {
       this.set('sudo-whoami-output', '(running…)');
       this.send({ kind: 'sudo_whoami' });
+    });
+    this.querySelector('[data-testid="action-crash-be"]')?.addEventListener('click', () => {
+      this.send({ kind: 'crash' });
     });
 
     // Messages from the BE half arrive as CustomEvents on this

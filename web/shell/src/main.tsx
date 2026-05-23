@@ -17,7 +17,9 @@ import {
   VIEWPORTS_PER_AXIS,
   applySessionPatch,
   applySessionSnapshot,
+  dismissCrashed,
   focused,
+  markCrashed,
   mountDesktop,
   moveLocal,
   raiseLocal,
@@ -130,6 +132,17 @@ interface ShellNotify {
   level?: 'info' | 'warn' | 'error';
 }
 
+export interface ShellAppCrashed {
+  t: 'app.crashed';
+  instance_id: string;
+  window_id?: number;
+  app_id: string;
+  exit_code: number;
+  signal?: string;
+  uptime: string;
+  log: string;
+}
+
 // Track declared instances so window.create can resolve element by id.
 const instances = new Map<string, { element: string; surface: string }>();
 
@@ -185,6 +198,9 @@ const conn = new Conn(
         });
         break;
       }
+      case 'app.crashed':
+        handleCrash(msg as ShellAppCrashed);
+        break;
       case 'shell.reload': {
         // Dev-mode signal from the router: a watched binary
         // changed and our embedded bundles are stale. Reload
@@ -322,6 +338,21 @@ function handleSnapshot(msg: ShellSessionSnapshot): void {
   applySessionSnapshot(msg.windows, waitForBundle);
 }
 
+// handleCrash marks the matching window crashed in the WM store so
+// the FloatingWindow renders the tombstone overlay instead of the
+// (dead) custom element. The router still ships a window-delete
+// patch right after this; wm.applySessionPatch ignores deletes for
+// already-crashed windows so the tombstone survives.
+function handleCrash(msg: ShellAppCrashed): void {
+  markCrashed(msg.instance_id, {
+    appID: msg.app_id,
+    exitCode: msg.exit_code,
+    signal: msg.signal,
+    uptime: msg.uptime,
+    log: msg.log,
+  });
+}
+
 function handlePatch(msg: ShellSessionPatch): void {
   // Apply app_state ops first so when a window upsert in the same
   // patch triggers a remount, wash:state carries the latest blob.
@@ -364,7 +395,15 @@ function waitForBundle(instanceID: string): Promise<void> {
 }
 
 // Bridge a window's close-button click into the WS protocol.
+// Crashed windows are FE-only tombstones — the router-side state was
+// already torn down on abnormal exit, so a close_clicked would have
+// nowhere to land. Drop them directly out of the WM store.
 function onWindowClose(windowID: number): void {
+  const w = windows.find((x) => x.windowID === windowID);
+  if (w?.crashed) {
+    dismissCrashed(windowID);
+    return;
+  }
   conn.sendCtrl({ t: 'window.close_clicked', window_id: windowID });
   // The actual removal happens when the router sends window.destroy.
 }
