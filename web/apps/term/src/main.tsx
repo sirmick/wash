@@ -193,15 +193,31 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // through internal refs.
     (host as unknown as { __washTerm: Terminal }).__washTerm = term;
 
-    const unsub = window.wash.openRawChannel(channelID, (bytes) => term.write(bytes));
+    // Buffer incoming bytes until the next animation frame fires.
+    // The non-determinism we were chasing: subscribeRaw drains the
+    // shell-side pendingRaw queue synchronously, so the bash prompt
+    // can land in xterm.write before xterm's renderer has measured
+    // the host. xterm internally tracks an 80×24 default until a
+    // fit() supersedes it; bytes written before the fit paint into
+    // a stale viewport and the rows never repaint. Holding the
+    // bytes in `pending` until after the first fit.fit() means the
+    // viewport is correct before any output reaches the renderer.
+    let pending: Uint8Array[] | null = [];
+    const writeOrBuffer = (bytes: Uint8Array) => {
+      if (pending) pending.push(bytes);
+      else term.write(bytes);
+    };
+    const unsub = window.wash.openRawChannel(channelID, writeOrBuffer);
     const encoder = new TextEncoder();
     term.onData((data) => window.wash.writeRaw(channelID, encoder.encode(data)));
 
     refs.set(channelID, { host, term, fit, unsub });
 
-    // Initial fit/focus once layout settles.
     requestAnimationFrame(() => {
-      fit.fit();
+      try { fit.fit(); } catch { /* host still 0×0 — next ResizeObserver wakeup picks it up */ }
+      const drain = pending ?? [];
+      pending = null;
+      for (const b of drain) term.write(b);
       if (active() === channelID) {
         term.focus();
         sendResize(channelID);
