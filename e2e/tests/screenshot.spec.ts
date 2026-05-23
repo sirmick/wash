@@ -8,6 +8,10 @@ import { join } from 'node:path';
 
 test.describe('screenshot button', () => {
   test('clicking the button saves a PNG to the screenshot dir', async ({ page, router }) => {
+    // chromium PDF/PNG capture + BE-side file write can take a
+    // beat under load; the 5s default isn't enough for the 8s
+    // "saved <name>" assertion below.
+    test.setTimeout(15_000);
     await page.goto(router.url);
 
     // The session taskbar button is testid="screenshot-btn".

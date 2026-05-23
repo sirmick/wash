@@ -1,16 +1,18 @@
 import { defineConfig, devices } from '@playwright/test';
 
-// Single-worker by default so the router fixture's port allocation
-// stays deterministic. CI parity matters more than peak throughput;
-// each test spins up its own router process anyway.
+// Worker count comes from the test runner (test.sh defaults to
+// nproc/2 capped at 8). fullyParallel:false lets the runner control
+// concurrency without splitting within a file. Tests that genuinely
+// need longer (terminal/wash-priv flows etc.) override with
+// test.setTimeout(); the default below is tight on purpose so a
+// hung test surfaces fast.
 export default defineConfig({
   testDir: './tests',
   fullyParallel: false,
-  workers: 1,
   forbidOnly: !!process.env.CI,
   retries: 0,
   reporter: process.env.CI ? 'line' : 'list',
-  timeout: 30_000,
+  timeout: 5_000,
   expect: { timeout: 5_000 },
   use: {
     headless: true,

@@ -189,6 +189,10 @@ test.describe('chrome (test app via --show-hidden)', () => {
 
   test('notify button shows a toast that auto-dismisses', async ({ page, router }) => {
     await page.goto(router.url);
+    // Toast lingers ~6s before the auto-dismiss kicks in; bump the
+    // test-level cap so the 8s wait below doesn't trip the 5s
+    // default in playwright.config.ts.
+    test.setTimeout(15_000);
     await launchTestApp(page);
     const app = page.locator('wash-app-test');
     await expect(app).toBeVisible();

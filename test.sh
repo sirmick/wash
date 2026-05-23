@@ -12,6 +12,11 @@
 #   --no-e2e               — skip playwright suite
 #   --filter <pattern>     — passed to `playwright test <pattern>`
 #                            (run only matching specs)
+#   --workers <N>          — playwright workers. Default: nproc/2.
+#                            Each worker spawns its own router +
+#                            apps; tune down on memory-constrained
+#                            boxes or when chasing inotify-instance
+#                            limits.
 #   --no-build             — assume out/ is current; skip build.sh
 #
 # Exit non-zero on the first failing suite. Test output streams
@@ -29,6 +34,10 @@ do_unit=1
 do_e2e=1
 do_build=1
 filter=""
+# Playwright workers. The fixture allocates a unique port + tmpdir
+# per test, so >1 is safe in principle; default to half the CPU
+# cores so a test machine doesn't saturate. Override with --workers.
+e2e_workers=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -39,6 +48,7 @@ while [[ $# -gt 0 ]]; do
     --no-e2e)     do_e2e=0; shift;;
     --no-build)   do_build=0; shift;;
     --filter)     filter="$2"; shift 2;;
+    --workers)    e2e_workers="$2"; shift 2;;
     -h|--help)
       sed -n '1,/^set -euo/p' "$0" | sed 's/^# \{0,1\}//' | sed '$d'
       exit 0
@@ -89,7 +99,22 @@ run_e2e() {
   rm -rf "$REPO/e2e/test-results"/*
   local extra=()
   [[ -n "$filter" ]] && extra+=("$filter")
-  if env "$@" pnpm --dir "$REPO/e2e" exec playwright test "${extra[@]}" --reporter=line --workers=1; then
+  # Resolve workers at run time. 0 → half of nproc (rounded up),
+  # capped at 8 so a 32-core machine doesn't try to keep 32 routers
+  # alive concurrently — each one spawns ~5 BE apps + a chromium
+  # tab, and the inotify-instances default ceiling is 128 per user.
+  local workers="$e2e_workers"
+  if [[ "$workers" == "0" ]]; then
+    if command -v nproc >/dev/null 2>&1; then
+      workers=$(( ( $(nproc) + 1 ) / 2 ))
+    else
+      workers=2
+    fi
+    (( workers > 8 )) && workers=8
+    (( workers < 1 )) && workers=1
+  fi
+  echo "test.sh: e2e workers=$workers"
+  if env "$@" pnpm --dir "$REPO/e2e" exec playwright test "${extra[@]}" --reporter=line --workers="$workers"; then
     echo "test.sh: e2e ($label) PASS"
   else
     echo "test.sh: e2e ($label) FAIL" >&2

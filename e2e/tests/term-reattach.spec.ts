@@ -13,6 +13,10 @@ import { test, expect } from '../fixtures/router';
 
 test.describe('terminal reattach', () => {
   test('pty scrollback survives browser refresh', async ({ page, router }) => {
+    // pty spawn + first prompt + reattach replay all serialize on
+    // the shell's bundle stream; the 5s default in
+    // playwright.config.ts is too tight for the chained waits.
+    test.setTimeout(20_000);
     await page.goto(router.url);
     await page.locator('button[title="Apps"]').click();
     await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Terminal', exact: true }).click();
