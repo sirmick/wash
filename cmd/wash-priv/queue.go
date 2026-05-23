@@ -100,6 +100,14 @@ type State struct {
 	password     []byte     // cached; nil when locked
 	lastActivity time.Time  // resets on every approve/unlock; idle timeout reads this
 
+	// pendingApproveReq is the req_id whose Approve click triggered
+	// the current need_password modal. On unlock, ONLY this request
+	// runs — entering the password is the implicit approval for the
+	// item that prompted it. Other items in the queue stay
+	// StatusQueued and need their own Approve clicks. Cleared on
+	// each unlock attempt (success or fail).
+	pendingApproveReq string
+
 	// FE binding.
 	pageNonce string // last seen page_nonce; reload changes it → lock
 
@@ -137,12 +145,26 @@ func (s *State) WipePassword() {
 	s.wipeLocked()
 }
 
+// wipeLocked clears the cached password. handshake + pendingApproveReq
+// are tied to an in-flight Approve and are cleared separately by the
+// explicit lock / idle paths — NOT by a browser refresh. A refresh
+// (page-nonce change) gets the security-relevant clear (password
+// out of memory) but keeps the pending unlock alive so the new FE
+// can re-show the modal via HandleHello below.
 func (s *State) wipeLocked() {
 	if s.password != nil {
 		wipe(s.password)
 		s.password = nil
 	}
+}
+
+// wipeAllLocked is the harder variant — clears the in-flight Approve
+// state too. Used by explicit Lock and by idle timeout, where the
+// user has signalled they're done with the current session.
+func (s *State) wipeAllLocked() {
+	s.wipeLocked()
 	s.handshake = nil
+	s.pendingApproveReq = ""
 }
 
 // IdleTicker zeros the password if idle for ≥ d. Polls every minute
@@ -157,7 +179,7 @@ func (s *State) IdleTicker(d time.Duration) {
 	for range t.C {
 		s.mu.Lock()
 		if s.password != nil && !s.lastActivity.IsZero() && time.Since(s.lastActivity) >= d {
-			s.wipeLocked()
+			s.wipeAllLocked()
 			c := s.conn
 			s.mu.Unlock()
 			log.Printf("wash-priv: password cache cleared (idle timeout)")
@@ -169,23 +191,53 @@ func (s *State) IdleTicker(d time.Duration) {
 	}
 }
 
-// HandleHello records the FE's page nonce. A change-of-nonce on an
-// already-bound state is a browser reload — wipe the cache to honour
-// the "browser refresh locks" requirement.
+// HandleHello records the FE's page nonce. A change-of-nonce is a
+// browser reload — wipe the cached password (the security-relevant
+// clear) but keep the in-flight pendingApproveReq + handshake alive
+// so the user can finish the unlock they started. If a request was
+// awaiting approval before the refresh, re-send need_password with
+// the existing handshake so the new FE shows the modal again
+// without an extra Approve click.
 func (s *State) HandleHello(c *sdk.Conn, nonce string) {
 	s.mu.Lock()
 	if nonce == "" {
 		s.mu.Unlock()
 		return
 	}
+	var rePromptReqID string
+	var rePromptPub []byte
 	if s.pageNonce != "" && s.pageNonce != nonce {
 		s.wipeLocked()
 		log.Printf("wash-priv: password cache cleared (page nonce change)")
 		s.appendAudit(auditRecord{Decision: "refresh_locked"})
+		// Re-prompt path: there was a pending approval in-flight.
+		// If the handshake is still around (it survives wipeLocked
+		// now), reuse it; otherwise mint a fresh one. Either way,
+		// the new FE gets a need_password event and the modal
+		// reappears.
+		if s.pendingApproveReq != "" {
+			if s.handshake == nil {
+				if hs, pub, err := NewHandshake(); err == nil {
+					s.handshake = hs
+					rePromptPub = pub
+				}
+			} else {
+				rePromptPub = s.handshake.priv.PublicKey().Bytes()
+			}
+			rePromptReqID = s.pendingApproveReq
+		}
 	}
 	s.pageNonce = nonce
 	s.mu.Unlock()
 	s.SendStateSnapshot(c)
+	if rePromptReqID != "" && rePromptPub != nil {
+		log.Printf("wash-priv: need_password be_pubkey=%s (refresh re-prompt req=%s)", base64.StdEncoding.EncodeToString(rePromptPub), rePromptReqID)
+		_ = c.SendAppMsg(map[string]any{
+			"kind":      "need_password",
+			"be_pubkey": rePromptPub,
+			"req_id":    rePromptReqID,
+		})
+	}
 }
 
 // SendStateSnapshot ships the full current state to the FE. Called
@@ -350,12 +402,44 @@ func (s *State) enqueue(c *sdk.Conn, r *Request) {
 		}
 	}
 	s.queue = append(s.queue, r)
+
+	// Auto-prompt for password if we're locked AND no other pw
+	// dialog is already pending. This is the "arrival pops the
+	// modal directly" UX — entering the password both unlocks the
+	// cache and approves the prompting item; other queued items
+	// still need their own Approve clicks. If a second request
+	// arrives while a modal is already up, it queues quietly
+	// rather than spawning a competing prompt.
+	var autoPrompt bool
+	var autoPub []byte
+	if s.password == nil && s.pendingApproveReq == "" {
+		hs, pub, err := NewHandshake()
+		if err != nil {
+			log.Printf("wash-priv: handshake init: %v", err)
+		} else {
+			s.handshake = hs
+			s.pendingApproveReq = r.ReqID
+			autoPrompt = true
+			autoPub = pub
+		}
+	}
 	s.mu.Unlock()
+
 	// One ops-friendly line per enqueue so the e2e + ops eyeballs
 	// can find the req_id without parsing audit jsonl. Quiet on
 	// every other state transition — those land in priv-audit.log.
 	log.Printf("wash-priv enqueue: req_id=%s kind=%s sender=%s/%s", r.ReqID, r.Kind, r.Sender.AppID, r.Sender.InstanceID)
 	_ = c.SendAppMsg(map[string]any{"kind": "req.new", "req": requestView(r)})
+	if autoPrompt {
+		// Pubkey is public by definition — logging gives e2e + ops
+		// a handle on the unlock attempt without a browser.
+		log.Printf("wash-priv: need_password be_pubkey=%s (auto-prompt req=%s)", base64.StdEncoding.EncodeToString(autoPub), r.ReqID)
+		_ = c.SendAppMsg(map[string]any{
+			"kind":      "need_password",
+			"be_pubkey": autoPub,
+			"req_id":    r.ReqID,
+		})
+	}
 }
 
 // HandleApprove starts the spawn pipeline for the named request. If
@@ -369,17 +453,29 @@ func (s *State) HandleApprove(c *sdk.Conn, reqID string) {
 		return
 	}
 	if s.password == nil {
-		// Generate fresh BE keypair and ask the FE to unlock. The
-		// approve "sticks" — the request remains StatusQueued. After
-		// unlock, the FE re-approves (or we auto-drain queued+approved
-		// requests; see HandleUnlock).
-		hs, pub, err := NewHandshake()
-		if err != nil {
-			s.mu.Unlock()
-			log.Printf("wash-priv: handshake init: %v", err)
-			return
+		// Re-use an existing handshake when there is one — most
+		// often because the enqueue path's auto-prompt already
+		// minted a keypair the FE has been encrypting to. A fresh
+		// keypair every Approve click would invalidate the FE's
+		// in-progress password entry. Only mint when no handshake
+		// is in flight.
+		var pub []byte
+		if s.handshake != nil {
+			pub = s.handshake.priv.PublicKey().Bytes()
+		} else {
+			hs, p, err := NewHandshake()
+			if err != nil {
+				s.mu.Unlock()
+				log.Printf("wash-priv: handshake init: %v", err)
+				return
+			}
+			s.handshake = hs
+			pub = p
 		}
-		s.handshake = hs
+		// pendingApproveReq records WHICH req prompted the unlock so
+		// HandleUnlock runs only that one. Subsequent items still
+		// need their own Approve clicks.
+		s.pendingApproveReq = reqID
 		s.mu.Unlock()
 		// Pubkey is public by definition — logging it gives the e2e
 		// harness a way to drive the password flow without a browser.
@@ -452,39 +548,46 @@ func (s *State) HandleUnlock(c *sdk.Conn, ciphertext, fePubKey, nonce []byte) {
 		_ = c.SendAppMsg(map[string]any{"kind": "unlock_err", "code": "bad_password", "msg": err.Error()})
 		s.mu.Lock()
 		s.handshake = nil
+		s.pendingApproveReq = ""
 		s.mu.Unlock()
 		s.appendAudit(auditRecord{Decision: "password_failed"})
 		return
 	}
+	// Successful unlock approves ONLY the request whose Approve
+	// click triggered the password prompt — pendingApproveReq.
+	// Other items in the queue are NOT auto-drained; they stay
+	// StatusQueued waiting for their own Approve clicks. Reasoning:
+	// password entry is implicit consent for one thing, not a
+	// blanket approval of everything pending in the queue.
 	s.mu.Lock()
 	s.password = pw
 	s.lastActivity = time.Now()
 	s.handshake = nil
-	// Drain queued requests by calling HandleApprove indirectly. We
-	// can't hold the lock across SendAppMsg, so collect and dispatch
-	// outside the critical section.
-	var toExec []*Request
-	for _, r := range s.queue {
-		if r.Status == StatusQueued {
+	pendingID := s.pendingApproveReq
+	s.pendingApproveReq = ""
+	var toExec *Request
+	if pendingID != "" {
+		if r := s.findLocked(pendingID); r != nil && r.Status == StatusQueued {
 			r.Status = StatusRunning
 			r.StartedAt = time.Now()
-			toExec = append(toExec, r)
+			toExec = r
 		}
 	}
 	s.mu.Unlock()
 	_ = c.SendAppMsg(map[string]any{"kind": "unlocked"})
-	for _, r := range toExec {
-		_ = c.SendAppMsg(map[string]any{"kind": "req.update", "req": requestView(r)})
-		go s.executeApproved(c, r)
+	if toExec != nil {
+		_ = c.SendAppMsg(map[string]any{"kind": "req.update", "req": requestView(toExec)})
+		go s.executeApproved(c, toExec)
 	}
 }
 
 // HandleLock clears the cache and notifies the FE. reason goes into
-// the audit log.
+// the audit log. Explicit lock clears the in-flight approval state
+// too — the user said "stop", we drop everything.
 func (s *State) HandleLock(c *sdk.Conn, reason string) {
 	s.mu.Lock()
 	had := s.password != nil
-	s.wipeLocked()
+	s.wipeAllLocked()
 	s.mu.Unlock()
 	if had {
 		log.Printf("wash-priv: password cache cleared (%s)", reason)
@@ -691,27 +794,35 @@ func (s *State) HandlePrepareSpawnResult(c *sdk.Conn, wireReqID uint64, instance
 		"req_id":      r.ReqID,
 		"instance_id": instanceID,
 	})
-	// Actually fork+exec sudo.
-	exitCode, runErr := runSudo(cfg.SudoBin, binary, execArgs, instanceID, token, pw)
-	wipe(pw)
-	s.mu.Lock()
-	r.FinishedAt = time.Now()
-	r.ExitCode = exitCode
-	if runErr != nil {
-		r.Status = StatusError
-		r.ErrorMsg = runErr.Error()
-	} else {
-		r.Status = StatusDone
-	}
-	view2 := requestView(r)
-	s.appendAudit(auditRecordFromRequest(r, "approve"))
-	s.mu.Unlock()
-	_ = c.SendAppMsg(map[string]any{"kind": "req.update", "req": view2})
-	_ = c.SendAppMsgTo(wire.Recipient{InstanceID: r.Sender.InstanceID}, map[string]any{
-		"kind":      "result",
-		"req_id":    r.ReqID,
-		"exit_code": exitCode,
-	})
+	// Fork+exec sudo in a goroutine. This handler is invoked from
+	// the SDK's read goroutine, and runSudo's cmd.Run waits for the
+	// spawned target to exit — for long-lived UI apps (wash-term,
+	// wash-about) that's forever. Blocking the read goroutine would
+	// deadlock every subsequent message: refresh hello, next
+	// approve, even shutdown signals. The goroutine off-loads the
+	// wait so the read loop keeps draining.
+	go func() {
+		exitCode, runErr := runSudo(cfg.SudoBin, binary, execArgs, instanceID, token, pw)
+		wipe(pw)
+		s.mu.Lock()
+		r.FinishedAt = time.Now()
+		r.ExitCode = exitCode
+		if runErr != nil {
+			r.Status = StatusError
+			r.ErrorMsg = runErr.Error()
+		} else {
+			r.Status = StatusDone
+		}
+		view2 := requestView(r)
+		s.appendAudit(auditRecordFromRequest(r, "approve"))
+		s.mu.Unlock()
+		_ = c.SendAppMsg(map[string]any{"kind": "req.update", "req": view2})
+		_ = c.SendAppMsgTo(wire.Recipient{InstanceID: r.Sender.InstanceID}, map[string]any{
+			"kind":      "result",
+			"req_id":    r.ReqID,
+			"exit_code": exitCode,
+		})
+	}()
 }
 
 // unwrap pulls the internal req id from a pending record or "" if
