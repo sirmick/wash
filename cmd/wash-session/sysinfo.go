@@ -231,21 +231,23 @@ func dedupSort(ss *[]string) {
 	if len(*ss) < 2 {
 		return
 	}
-	// Tiny slices — insertion sort + manual dedupe is fine; avoids
-	// pulling in sort just for this.
+	// Tiny slices — insertion sort + two-pointer dedupe is fine;
+	// avoids pulling in sort just for this.
 	s := *ss
 	for i := 1; i < len(s); i++ {
 		for j := i; j > 0 && s[j-1] > s[j]; j-- {
 			s[j-1], s[j] = s[j], s[j-1]
 		}
 	}
+	// Two-pointer dedup. w is the write cursor pointing at the last
+	// unique element; advance it only when the next read produces a
+	// new value. s[0] is always unique by definition (the first
+	// element of any non-empty sequence).
 	w := 0
-	for i, v := range s {
-		if i == 0 || v != s[w] {
-			s[w+1] = v
-			if i != 0 {
-				w++
-			}
+	for i := 1; i < len(s); i++ {
+		if s[i] != s[w] {
+			w++
+			s[w] = s[i]
 		}
 	}
 	*ss = s[:w+1]
