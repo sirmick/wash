@@ -570,6 +570,11 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
 const PAGER_CELL_W = 56;
 const PAGER_GAP = 3;
 const PAGER_PAD = 6;
+// PAGER_BORDER mirrors the `border: 1px solid` on the panel. With
+// box-sizing: border-box, the container's declared width INCLUDES
+// border + padding, so panelW/panelH must add the border width on
+// each axis (2px) or the right + bottom rows clip into the border.
+const PAGER_BORDER = 1;
 
 const Pager: Component<{
   windows: () => WindowInfo[];
@@ -583,8 +588,8 @@ const Pager: Component<{
     const aspect = s.h / Math.max(1, s.w);
     return Math.round(PAGER_CELL_W * aspect);
   };
-  const panelW = () => perAxis * PAGER_CELL_W + (perAxis - 1) * PAGER_GAP + PAGER_PAD * 2;
-  const panelH = () => perAxis * cellH() + (perAxis - 1) * PAGER_GAP + PAGER_PAD * 2;
+  const panelW = () => perAxis * PAGER_CELL_W + (perAxis - 1) * PAGER_GAP + PAGER_PAD * 2 + PAGER_BORDER * 2;
+  const panelH = () => perAxis * cellH() + (perAxis - 1) * PAGER_GAP + PAGER_PAD * 2 + PAGER_BORDER * 2;
   const containerStyle = () => {
     const s: JSX.CSSProperties = {
       position: 'absolute',
