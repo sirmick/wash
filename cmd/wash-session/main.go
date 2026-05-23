@@ -92,6 +92,16 @@ func sendSystemInfo(c *sdk.Conn) {
 			"ips":  g.IPs,
 		})
 	}
+	router := map[string]any{"version": info.Router.Version}
+	if info.Router.Commit != "" {
+		router["commit"] = info.Router.Commit
+	}
+	if info.Router.Built != "" {
+		router["built"] = info.Router.Built
+	}
+	if info.Router.Dev {
+		router["dev"] = true
+	}
 	msg := map[string]any{
 		"kind":       "system.info",
 		"hostname":   info.Hostname,
@@ -100,6 +110,7 @@ func sendSystemInfo(c *sdk.Conn) {
 		"cpus":       info.CPUs,
 		"mem_bytes":  info.MemBytes,
 		"interfaces": ifaces,
+		"router":     router,
 	}
 	if err := c.SendAppMsg(msg); err != nil {
 		log.Printf("wash-session: send system.info: %v", err)

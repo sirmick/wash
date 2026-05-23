@@ -312,6 +312,35 @@ func mustParseIPs(t *testing.T, ss ...string) []net.IP {
 	return out
 }
 
+func TestGatherSysInfoRouterFromEnv(t *testing.T) {
+	// gatherSysInfo populates RouterInfo from WASH_ROUTER_* env vars
+	// set by cmd/wash-router/main.go at startup. Set them here and
+	// confirm the values come through.
+	t.Setenv("WASH_ROUTER_VERSION", "1.2.3")
+	t.Setenv("WASH_ROUTER_COMMIT", "abcdef0")
+	t.Setenv("WASH_ROUTER_BUILT", "2026-05-23T07:29:32Z")
+	t.Setenv("WASH_ROUTER_DEV", "1")
+	info := gatherSysInfo()
+	if info.Router.Version != "1.2.3" {
+		t.Fatalf("Version=%q, want %q", info.Router.Version, "1.2.3")
+	}
+	if info.Router.Commit != "abcdef0" {
+		t.Fatalf("Commit=%q", info.Router.Commit)
+	}
+	if info.Router.Built != "2026-05-23T07:29:32Z" {
+		t.Fatalf("Built=%q", info.Router.Built)
+	}
+	if !info.Router.Dev {
+		t.Fatal("Dev should be true when WASH_ROUTER_DEV=1")
+	}
+	// Anything other than literal "1" reads as false.
+	t.Setenv("WASH_ROUTER_DEV", "true")
+	info = gatherSysInfo()
+	if info.Router.Dev {
+		t.Fatal(`Dev should be false unless WASH_ROUTER_DEV == "1"`)
+	}
+}
+
 func TestResolveFQDNDottedHostnamePassthrough(t *testing.T) {
 	// A hostname that already contains a dot is treated as the FQDN
 	// without any lookup. This codepath is the deterministic one;

@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -30,6 +31,51 @@ const (
 	defaultListen       = "0.0.0.0:11000"
 	defaultSessionAppID = "com.wash.session"
 )
+
+// buildInfo is the version/commit/build-date trio the router logs at
+// startup and exports to spawned apps via WASH_ROUTER_* env vars
+// (consumed by wash-session for the desktop banner). Commit/Built
+// come from runtime/debug.ReadBuildInfo when available — `go build`
+// and `go install` populate vcs.* automatically. For non-vcs builds
+// (Makefile-staged dev binaries with -trimpath) Commit may be empty;
+// the FE renders just the version in that case.
+type buildInfo struct {
+	Version string
+	Commit  string // short git hash, e.g. "5370839"
+	Built   string // ISO-8601 of the commit time; empty if unknown
+}
+
+func gatherBuildInfo() buildInfo {
+	bi := buildInfo{Version: version}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return bi
+	}
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			if len(s.Value) >= 7 {
+				bi.Commit = s.Value[:7]
+			} else {
+				bi.Commit = s.Value
+			}
+		case "vcs.time":
+			bi.Built = s.Value
+		}
+	}
+	return bi
+}
+
+func (bi buildInfo) String() string {
+	parts := []string{"v" + bi.Version}
+	if bi.Commit != "" {
+		parts = append(parts, bi.Commit)
+	}
+	if bi.Built != "" {
+		parts = append(parts, bi.Built)
+	}
+	return strings.Join(parts, " ")
+}
 
 //go:embed all:assets
 var assetsFS embed.FS
@@ -84,8 +130,9 @@ func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
+	bi := gatherBuildInfo()
 	if *showVersion {
-		fmt.Printf("wash-router %s\n", version)
+		fmt.Printf("wash-router %s\n", bi)
 		return
 	}
 
@@ -169,6 +216,23 @@ func main() {
 	assets, err := shellAssets()
 	if err != nil {
 		logger.Fatalf("embedded assets: %v", err)
+	}
+
+	// Build info goes into the router's process env so every spawned
+	// app inherits WASH_ROUTER_VERSION / _COMMIT / _BUILT / _DEV via
+	// the os.Environ() copy in internal/router/spawn.go. wash-session
+	// reads these and ships them in the system.info app_msg the
+	// desktop banner renders.
+	logf("wash-router %s (dev=%v)", bi, cfg.Dev)
+	_ = os.Setenv("WASH_ROUTER_VERSION", bi.Version)
+	if bi.Commit != "" {
+		_ = os.Setenv("WASH_ROUTER_COMMIT", bi.Commit)
+	}
+	if bi.Built != "" {
+		_ = os.Setenv("WASH_ROUTER_BUILT", bi.Built)
+	}
+	if cfg.Dev {
+		_ = os.Setenv("WASH_ROUTER_DEV", "1")
 	}
 
 	r := router.NewRouter(cfg, reg, logf)

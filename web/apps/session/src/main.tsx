@@ -76,6 +76,17 @@ interface IfaceIPs {
   ips: string[];
 }
 
+// RouterInfo mirrors the BE's wash-router build identity. version is
+// always present; commit / built come from the Go binary's
+// debug.BuildInfo (populated by `go build`/`go install` from VCS
+// when possible); dev is true when --dev was passed at router start.
+interface RouterInfo {
+  version: string;
+  commit?: string;
+  built?: string;
+  dev?: boolean;
+}
+
 interface SystemInfoMsg {
   kind: 'system.info';
   hostname: string;
@@ -84,6 +95,7 @@ interface SystemInfoMsg {
   cpus: number;
   mem_bytes: number;
   interfaces: IfaceIPs[];
+  router?: RouterInfo;
 }
 
 // ROOT_PREFIX — synthetic-id prefix for the "run as root" launcher
@@ -610,11 +622,63 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
               </For>
             </div>
           </Show>
+          <Show when={s().router}>
+            {(r) => (
+              <div
+                data-testid="desktop-banner-router"
+                style={{
+                  'margin-top': '6px',
+                  font: '11px ui-monospace,Menlo,Consolas,monospace',
+                  opacity: 0.45,
+                  'text-shadow': '0 1px 2px rgba(0,0,0,0.6)',
+                  display: 'flex',
+                  'align-items': 'center',
+                  gap: '6px',
+                  'flex-wrap': 'wrap',
+                }}
+              >
+                <span>wash-router v{r().version}</span>
+                <Show when={r().commit}>
+                  <span style={{ opacity: 0.7 }}>{r().commit}</span>
+                </Show>
+                <Show when={r().built}>
+                  <span style={{ opacity: 0.7 }}>{formatBuilt(r().built!)}</span>
+                </Show>
+                <Show when={r().dev}>
+                  <span
+                    data-testid="desktop-banner-router-dev"
+                    style={{
+                      background: '#a04040',
+                      color: '#fff',
+                      padding: '0 6px',
+                      'border-radius': '2px',
+                      'font-weight': 700,
+                      'letter-spacing': '0.05em',
+                      opacity: 1,
+                    }}
+                  >
+                    DEV
+                  </span>
+                </Show>
+              </div>
+            )}
+          </Show>
         </div>
       )}
     </Show>
   );
 };
+
+// formatBuilt trims the wire's ISO-8601 build timestamp down to
+// something glanceable in the banner. The BE ships full RFC 3339
+// (e.g. 2026-05-23T12:34:56Z); we keep date+hh:mm and drop the rest.
+function formatBuilt(s: string): string {
+  // Match the leading "YYYY-MM-DDTHH:MM". If that fails, fall back
+  // to the full string so a future BE shape change doesn't hide it.
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(s);
+  if (!m) return s;
+  return `${m[1]} ${m[2]}`;
+}
 
 // Pager renders the 3x3 virtual-desktop overview as a panel parked
 // just above the taskbar. Each cell is a scaled-down rect of the

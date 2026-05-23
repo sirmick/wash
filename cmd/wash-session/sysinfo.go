@@ -30,6 +30,17 @@ type sysInfo struct {
 	CPUs       int        `cbor:"cpus"`
 	MemBytes   uint64     `cbor:"mem_bytes"`
 	Interfaces []IfaceIPs `cbor:"interfaces"`
+	Router     RouterInfo `cbor:"router"`
+}
+
+// RouterInfo describes the wash-router instance hosting this session.
+// Populated from WASH_ROUTER_* env vars wash-router sets at startup;
+// missing values stay empty and the FE hides the absent fields.
+type RouterInfo struct {
+	Version string `cbor:"version" json:"version"`
+	Commit  string `cbor:"commit,omitempty" json:"commit,omitempty"`
+	Built   string `cbor:"built,omitempty" json:"built,omitempty"`
+	Dev     bool   `cbor:"dev,omitempty" json:"dev,omitempty"`
 }
 
 // IfaceIPs is a single network interface's addresses, grouped so the
@@ -57,6 +68,12 @@ func gatherSysInfo() sysInfo {
 	}
 	out.MemBytes = readMemTotal()
 	out.Interfaces = externalInterfaces()
+	out.Router = RouterInfo{
+		Version: os.Getenv("WASH_ROUTER_VERSION"),
+		Commit:  os.Getenv("WASH_ROUTER_COMMIT"),
+		Built:   os.Getenv("WASH_ROUTER_BUILT"),
+		Dev:     os.Getenv("WASH_ROUTER_DEV") == "1",
+	}
 	return out
 }
 
@@ -359,7 +376,14 @@ func sysInfoString(s sysInfo) string {
 	for _, g := range s.Interfaces {
 		parts = append(parts, g.Name+"="+strings.Join(g.IPs, ","))
 	}
-	return fmt.Sprintf("host=%s fqdn=%s user=%s cpus=%d mem=%dMB ifaces=[%s]",
-		s.Hostname, s.FQDN, s.Username, s.CPUs, s.MemBytes/(1024*1024),
+	router := "v" + s.Router.Version
+	if s.Router.Commit != "" {
+		router += "/" + s.Router.Commit
+	}
+	if s.Router.Dev {
+		router += "/dev"
+	}
+	return fmt.Sprintf("host=%s fqdn=%s user=%s cpus=%d mem=%dMB router=%s ifaces=[%s]",
+		s.Hostname, s.FQDN, s.Username, s.CPUs, s.MemBytes/(1024*1024), router,
 		strings.Join(parts, " "))
 }
