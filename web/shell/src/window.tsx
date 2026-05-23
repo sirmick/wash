@@ -241,26 +241,6 @@ export function FloatingWindow(props: WindowProps) {
             <use href={`/icons.svg#${props.win.icon}`} />
           </svg>
         )}
-        {props.win.isRoot && (
-          <span
-            data-testid="window-root-badge"
-            aria-label="Privileged window"
-            title="This window's process runs with root privileges"
-            style={{
-              'font-size': '10px',
-              'font-weight': 700,
-              'letter-spacing': '0.06em',
-              padding: '1px 5px',
-              'margin-right': '6px',
-              'border-radius': '3px',
-              background: '#fff',
-              color: '#7a1f1f',
-              'flex-shrink': 0,
-            }}
-          >
-            ROOT
-          </span>
-        )}
         <span style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{props.win.title}</span>
         <button
           onPointerDown={(e) => e.stopPropagation()}

@@ -730,13 +730,16 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
 // at module init in some configurations — declaring after the
 // component triggers a TDZ "cannot access X before initialization"
 // error on the bundle's first run.
+// Styled to match MenuItem dimensions exactly — same padding, gap,
+// icon slot width — so the Root Terminal label lines up with the
+// labels of normal entries above and below it. Only the colours
+// differ.
 const rootMenuItemStyle: JSX.CSSProperties = {
   display: 'flex',
   'align-items': 'center',
-  gap: '8px',
+  gap: '10px',
   width: '100%',
-  padding: '6px 10px',
-  'margin-bottom': '4px',
+  padding: '6px 14px',
   background: '#7a1f1f',
   color: '#fff',
   border: 'none',
@@ -784,7 +787,20 @@ const StartMenu: Component<{
                   onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#a02828'; }}
                   onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#7a1f1f'; }}
                 >
-                  <SpriteIcon name={app.icon!} size={20} />
+                  {/* Match MenuItem's 22×22 icon slot so the label
+                      lines up across the catalog/root mix. */}
+                  <span
+                    style={{
+                      width: '22px',
+                      height: '22px',
+                      'flex-shrink': 0,
+                      display: 'inline-flex',
+                      'align-items': 'center',
+                      'justify-content': 'center',
+                    }}
+                  >
+                    <SpriteIcon name={app.icon!} size={20} />
+                  </span>
                   <span style={{ flex: 1, 'text-align': 'left' }}>{app.name}</span>
                 </button>
               );
