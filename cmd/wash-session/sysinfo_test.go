@@ -1,7 +1,9 @@
 package main
 
 import (
+	"net"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -165,6 +167,138 @@ func TestGatherSysInfoSelfConsistent(t *testing.T) {
 			t.Fatalf("MemTotal returned 0 on linux — /proc/meminfo unreadable?")
 		}
 	}
+}
+
+func TestIsEUI64(t *testing.T) {
+	cases := []struct {
+		name string
+		ip   string
+		want bool
+	}{
+		// MAC 3c:a5:00:81:53:11 → EUI-64 inserts ff:fe →
+		// 3ea5:00ff:fe81:5311 (also flips the universal/local bit
+		// on the first byte: 3c ^ 02 = 3e).
+		{"real MAC-derived", "2601:646:8700:aa64:3ea5:00ff:fe81:5311", true},
+		// Random RFC 4941 privacy address — no ff:fe.
+		{"privacy ext", "2601:646:8700:aa64:d6c1:f5f1:5deb:2e24", false},
+		// Edge case: ff at byte 11 but not fe at 12.
+		{"ff:00 false positive", "2001:db8::ff00:0:0:0", false},
+		// Edge case: fe at 12 but not ff at 11.
+		{"00:fe false positive", "2001:db8::1:00fe:0:0", false},
+		// IPv4-mapped — not v6.
+		{"v4-mapped", "::ffff:192.0.2.1", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ip := net.ParseIP(tc.ip)
+			if ip == nil {
+				t.Fatalf("bad input IP: %s", tc.ip)
+			}
+			if got := isEUI64(ip.To16()); got != tc.want {
+				t.Fatalf("isEUI64(%s)=%v, want %v", tc.ip, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDedupV6ByPrefix(t *testing.T) {
+	t.Run("collapses SLAAC noise on one /64", func(t *testing.T) {
+		// The screenshot's actual addresses: 3 privacy + 1 EUI-64,
+		// all on the same /64. The EUI-64 one (ending …fe81:5311)
+		// should be the survivor.
+		ips := mustParseIPs(t,
+			"2601:646:8700:aa64:d6c1:f5f1:5deb:2e24",
+			"2601:646:8700:aa64:fa66:b30d:9d8d:5ac2",
+			"2601:646:8700:aa64:6b69:9685:991a:cee8",
+			"2601:646:8700:aa64:3ea5:00ff:fe81:5311",
+		)
+		got := dedupV6ByPrefix(ips)
+		if len(got) != 1 {
+			t.Fatalf("expected 1 address, got %d: %v", len(got), got)
+		}
+		if got[0] != "2601:646:8700:aa64:3ea5:ff:fe81:5311" && got[0] != "2601:646:8700:aa64:3ea5:00ff:fe81:5311" {
+			t.Fatalf("expected EUI-64 address, got %s", got[0])
+		}
+	})
+
+	t.Run("first one wins when no EUI-64 present", func(t *testing.T) {
+		ips := mustParseIPs(t,
+			"2001:db8::1",
+			"2001:db8::2",
+			"2001:db8::3",
+		)
+		got := dedupV6ByPrefix(ips)
+		if len(got) != 1 {
+			t.Fatalf("expected 1 address, got %d: %v", len(got), got)
+		}
+		// First-encountered wins. We can't assert which one
+		// because the map iteration above the slot lookup is
+		// deterministic only because there's a single key here.
+		if got[0] != "2001:db8::1" {
+			t.Fatalf("expected first input to win, got %s", got[0])
+		}
+	})
+
+	t.Run("multiple /64 prefixes preserved", func(t *testing.T) {
+		ips := mustParseIPs(t,
+			"2001:db8:1::1",
+			"2001:db8:1::ffff:fe00:0",
+			"2001:db8:2::1",
+			"2001:db8:2::ffff:fe00:0",
+			"fdab::1",
+		)
+		got := dedupV6ByPrefix(ips)
+		sort.Strings(got)
+		if len(got) != 3 {
+			t.Fatalf("expected 3 prefixes, got %d: %v", len(got), got)
+		}
+		// Each /64 should have contributed exactly one survivor;
+		// where an EUI-64 exists, it wins.
+		want := []string{
+			"2001:db8:1::ffff:fe00:0",
+			"2001:db8:2::ffff:fe00:0",
+			"fdab::1",
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("dedup mismatch: got %v, want %v", got, want)
+			}
+		}
+	})
+
+	t.Run("empty input", func(t *testing.T) {
+		if got := dedupV6ByPrefix(nil); got != nil {
+			t.Fatalf("expected nil, got %v", got)
+		}
+	})
+
+	t.Run("EUI-64 wins regardless of input order", func(t *testing.T) {
+		// Same prefix, EUI-64 second in the input. Should still win.
+		ips := mustParseIPs(t,
+			"2001:db8::aaaa:bbbb:cccc:dddd",
+			"2001:db8::1234:56ff:fe78:9abc",
+		)
+		got := dedupV6ByPrefix(ips)
+		if len(got) != 1 {
+			t.Fatalf("expected 1, got %v", got)
+		}
+		if got[0] != "2001:db8::1234:56ff:fe78:9abc" {
+			t.Fatalf("EUI-64 should win order-independent; got %s", got[0])
+		}
+	})
+}
+
+func mustParseIPs(t *testing.T, ss ...string) []net.IP {
+	t.Helper()
+	out := make([]net.IP, 0, len(ss))
+	for _, s := range ss {
+		ip := net.ParseIP(s)
+		if ip == nil {
+			t.Fatalf("bad IP literal: %s", s)
+		}
+		out = append(out, ip)
+	}
+	return out
 }
 
 func TestResolveFQDNDottedHostnamePassthrough(t *testing.T) {

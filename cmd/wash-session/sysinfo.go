@@ -149,7 +149,8 @@ func externalIPs() []string {
 	if err != nil {
 		return nil
 	}
-	var v4, v6 []string
+	var v4 []string
+	var v6 []net.IP
 	for _, iface := range ifs {
 		if iface.Flags&net.FlagUp == 0 {
 			continue
@@ -176,14 +177,90 @@ func externalIPs() []string {
 			if v4ip := ip.To4(); v4ip != nil {
 				v4 = append(v4, v4ip.String())
 			} else {
-				v6 = append(v6, ip.String())
+				v6 = append(v6, ip)
 			}
 		}
 	}
-	// Stable but readable order: v4 alphanumeric, then v6.
+	// IPv4: alphanumeric dedup is fine — addresses don't multiply
+	// the way SLAAC ones do.
 	dedupSort(&v4)
-	dedupSort(&v6)
-	return append(v4, v6...)
+	// IPv6: collapse to one address per /64. Privacy extensions
+	// (RFC 4941/8981) generate rotating temporary addresses, so a
+	// single host with a single connection often ends up with 3-4
+	// global v6 addresses on one prefix. The banner shows the
+	// stable EUI-64 derived address when present (it doesn't
+	// rotate, so it's the right "address to share with peers");
+	// otherwise the lexicographically-first survivor.
+	v6str := dedupV6ByPrefix(v6)
+	dedupSort(&v6str)
+	return append(v4, v6str...)
+}
+
+// dedupV6ByPrefix groups IPv6 addresses by their /64 prefix and
+// returns one string per group. Within a group, prefer the EUI-64
+// stable address — identifiable by the kernel-injected ff:fe at
+// bytes 11-12 of the 16-byte representation (RFC 4291 §2.5.1).
+// When no EUI-64 address is present, the input-order-first survives.
+//
+// This collapses SLAAC privacy-extension noise: temporary addresses
+// rotate every few hours and the kernel keeps deprecated ones around
+// for incoming-only use, producing 3-4 globals per /64 in steady
+// state. The banner shows the one that doesn't rotate.
+func dedupV6ByPrefix(ips []net.IP) []string {
+	if len(ips) == 0 {
+		return nil
+	}
+	type slot struct {
+		chosen net.IP
+		stable bool // true once we've picked an EUI-64 address for this prefix
+	}
+	// 8-byte prefix → chosen address. map iteration is non-
+	// deterministic; the outer dedupSort sorts the final strings.
+	byPrefix := make(map[[8]byte]*slot)
+	for _, ip := range ips {
+		ip16 := ip.To16()
+		if ip16 == nil {
+			continue
+		}
+		var key [8]byte
+		copy(key[:], ip16[:8])
+		s, ok := byPrefix[key]
+		if !ok {
+			byPrefix[key] = &slot{chosen: ip, stable: isEUI64(ip16)}
+			continue
+		}
+		if s.stable {
+			// Already have the stable address; ignore everything
+			// else under this prefix.
+			continue
+		}
+		if isEUI64(ip16) {
+			s.chosen = ip
+			s.stable = true
+		}
+		// Otherwise keep the first one we saw.
+	}
+	out := make([]string, 0, len(byPrefix))
+	for _, s := range byPrefix {
+		out = append(out, s.chosen.String())
+	}
+	return out
+}
+
+// isEUI64 reports whether ip's lower 64 bits look like a MAC-derived
+// EUI-64 interface identifier. The kernel inserts 0xFFFE at bytes
+// 11-12 when expanding a 48-bit MAC into a 64-bit IID, and that
+// byte pair is essentially never produced by RFC 4941 temporary
+// addresses (which roll 64 random bits). False positive rate is
+// 1 in 2^16 for purely random addresses, acceptable for "pick the
+// nicer one to display."
+//
+// ip must be the 16-byte representation (call To16 first).
+func isEUI64(ip16 net.IP) bool {
+	if len(ip16) != 16 {
+		return false
+	}
+	return ip16[11] == 0xFF && ip16[12] == 0xFE
 }
 
 // skipInterface reports whether name looks like a container /
