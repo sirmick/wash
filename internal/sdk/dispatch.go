@@ -166,6 +166,14 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 		if err := cbor.Unmarshal(payload, &m); err != nil {
 			return err
 		}
+		// Intercept wash-priv replies that belong to an in-flight
+		// PrivRunInlineSync. Other priv messages and all non-priv
+		// senders fall through to the user's callbacks.
+		if m.From != nil && m.From.AppID == "com.wash.priv" {
+			if c.tryConsumePrivReply(m.Data) {
+				return nil
+			}
+		}
 		if m.From != nil && c.def.OnAppMsgFrom != nil {
 			c.def.OnAppMsgFrom(c, m.Win, m.Data, *m.From)
 		} else if c.def.OnAppMsg != nil {

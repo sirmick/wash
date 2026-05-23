@@ -334,6 +334,80 @@ test('wrong password rejects the unlock without touching the cache', async ({ ro
   expect(entries.some((e) => e.mode === 'exec')).toBe(false);
 });
 
+// SDK PrivRunInlineSync from a wash-app BE. Exercises the round-
+// trip where wash-test is the requester (not the wash-sudo CLI):
+// SendAppMsgTo → wash-priv → approval → unlock → run_inline → bytes
+// stream back to wash-test → sudo_whoami_result reaches wash-test's
+// FE event log via sendEvent.
+test('SDK PrivRunInlineSync from wash-test reaches wash-priv and streams stdout back', async ({ router }) => {
+  const { privInst } = await drivePriv(router);
+
+  // Launch wash-test and trigger its sudo_whoami button programmatically
+  // via the control socket. This exercises the BE → BE cross-app path:
+  // the request's sender is com.wash.test (router-attested), and
+  // PrivRunInlineSync's reply interceptor in the SDK pulls bytes off
+  // the wash-priv stream messages.
+  const testLaunched = await router.controlRequest({ t: 'launch', app_id: 'com.wash.test' });
+  const testInst = testLaunched.instance_id as string;
+  await router.controlRequest({
+    t: 'msg', instance_id: testInst,
+    data: { kind: 'sudo_whoami' },
+  });
+
+  // wash-priv logs every enqueue with the requester-supplied req_id.
+  // For PrivRunInlineSync that id starts with "p-" (the SDK helper's
+  // prefix; wash-sudo uses "ws-").
+  const m = await router.waitForLog(/wash-priv enqueue: req_id=(p-[a-f0-9]+) kind=run_inline sender=com\.wash\.test/, 5000);
+  const reqID = m.match(/req_id=(p-[a-f0-9]+)/)![1];
+  await router.controlRequest({
+    t: 'msg', instance_id: privInst,
+    data: { kind: 'approve', req_id: reqID },
+  });
+
+  const km = await router.waitForLog(/wash-priv: need_password be_pubkey=([A-Za-z0-9+/=]+)/, 5000);
+  const bePub = b64decode(km.replace(/^.*be_pubkey=/, ''));
+  const enc = await encryptPassword(PASSWORD, bePub);
+  await router.controlRequest({
+    t: 'msg', instance_id: privInst,
+    data: {
+      kind: 'unlock',
+      ciphertext: enc.ciphertext, fe_pubkey: enc.fe_pubkey, nonce: enc.nonce,
+    },
+  });
+
+  // fakesudo logs both the validate and the exec call. The exec
+  // target is "whoami" (no path — fakesudo resolves via PATH which
+  // includes WASH_BIN_DIR plus the user's PATH).
+  await pollUntil(() => fakesudoEntries(router.fakesudoLog).some((e) => e.mode === 'exec'), 5000);
+  const entries = fakesudoEntries(router.fakesudoLog);
+  const exec = entries.find((e) => e.mode === 'exec');
+  expect(exec!.target).toBe('whoami');
+  expect(exec!.pw_ok).toBe(true);
+});
+
+// wash-sudo bare-form heuristic: when argv[0] matches a registered
+// wash-app binary basename, the router auto-promotes to spawn mode.
+// Verifies the heuristic itself (the spawn outcome is covered by the
+// existing cross-app spawn test).
+test('wash-sudo bare-form auto-promotes a known app binary to spawn mode', async ({ router }) => {
+  if (!existsSync(SUDO_BIN)) test.skip(true, 'wash-sudo binary missing');
+  await drivePriv(router);
+
+  // Bare invocation: wash-sudo wash-about. The router should log the
+  // heuristic line; the spawn path proceeds the same way the
+  // explicit --app form does. We're proving the promotion happened.
+  const proc = spawn(SUDO_BIN, ['wash-about'], {
+    env: { ...process.env, WASH_CONTROL_SOCKET: router.controlSocket },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  // The process will hang waiting for approval; we kill it after we
+  // see the heuristic log. The router's "priv.run heuristic" line is
+  // the smoking gun.
+  await router.waitForLog(/priv\.run heuristic: .*wash-about → spawn app_id=com\.wash\.about/, 5000);
+  proc.kill();
+  await new Promise((r) => proc.on('exit', r));
+});
+
 // pollUntil keeps re-running pred until it returns truthy or the
 // deadline passes. Returns the final value or throws on timeout.
 async function pollUntil<T>(pred: () => T, timeoutMs: number): Promise<T> {

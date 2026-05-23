@@ -243,6 +243,25 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 				log.Printf("wash-test spawn err: %v", err)
 			}
 		}
+	case "sudo_whoami":
+		// One-liner privileged call via the SDK helper. Goroutine
+		// because PrivRunInlineSync blocks and OnAppMsg runs on the
+		// SDK's read goroutine — blocking it would deadlock the
+		// reply path that delivers our result.
+		go func() {
+			r, _ := c.PrivRunInlineSync(context.Background(), []string{"whoami"}, "wash-test demo")
+			errMsg := ""
+			if r.Err != nil {
+				errMsg = r.Err.Error()
+			}
+			sendEvent(c, map[string]any{
+				"kind":   "sudo_whoami_result",
+				"stdout": string(r.Stdout),
+				"stderr": string(r.Stderr),
+				"exit":   r.Exit,
+				"error":  errMsg,
+			})
+		}()
 	case "send_to":
 		// Cross-app messaging exerciser for e2e tests. The harness
 		// uses it to drive wash-test into sending an arbitrary

@@ -121,6 +121,12 @@ class WashAppTest extends HTMLElement {
         ${actionBtn('throw',          'Throw uncaught')}
         ${actionBtn('console-error',  'console.error')}
         ${actionBtn('reject-promise', 'Reject unhandled')}
+        ${actionBtn('sudo-whoami',    'sudo whoami (via wash-priv)')}
+      </section>
+
+      <section style="margin:10px 0;display:flex;gap:18px;flex-wrap:wrap;align-items:center;">
+        <span>sudo whoami:</span>
+        <code data-testid="sudo-whoami-output" style="background:#10101a;padding:4px 8px;border-radius:3px;min-width:60px;display:inline-block;">(not run)</code>
       </section>
 
       <section style="margin:10px 0;display:flex;gap:18px;flex-wrap:wrap;">
@@ -230,6 +236,10 @@ class WashAppTest extends HTMLElement {
     this.querySelector('[data-testid="action-reject-promise"]')?.addEventListener('click', () => {
       void Promise.reject(new Error('test app: deliberate unhandled rejection'));
     });
+    this.querySelector('[data-testid="action-sudo-whoami"]')?.addEventListener('click', () => {
+      this.set('sudo-whoami-output', '(running…)');
+      this.send({ kind: 'sudo_whoami' });
+    });
 
     // Messages from the BE half arrive as CustomEvents on this
     // element (dispatched by the shell on app_msg.deliver).
@@ -302,6 +312,17 @@ class WashAppTest extends HTMLElement {
         this.state.pings += 1;
         this.set('counter-pings', String(this.state.pings));
         this.logEvent('pong', `seq=${m.seq}`);
+        return;
+      }
+      case 'sudo_whoami_result': {
+        const out = String(m.stdout ?? '').trim();
+        const err = String(m.error ?? '').trim();
+        const exit = Number(m.exit ?? -1);
+        const display = err
+          ? `(error: ${err})`
+          : `${out || '(no output)'} [exit ${exit}]`;
+        this.set('sudo-whoami-output', display);
+        this.logEvent('sudo_whoami_result', display);
         return;
       }
       case 'event': {

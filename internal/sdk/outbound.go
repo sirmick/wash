@@ -2,11 +2,20 @@ package sdk
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/sirmick/wash/internal/wire"
 )
+
+// PrivAppID is wash-priv's reserved app id. Sender for the privilege
+// helpers below; exposed so app code can recognise wash-priv replies
+// without hard-coding the string.
+const PrivAppID = "com.wash.priv"
 
 // SendAppMsg sends an APP_MSG to the FE half (WIRE.md §9). data is
 // passed through to CBOR verbatim — the format is app-private and
@@ -37,6 +46,222 @@ func (c *Conn) SetTitle(title string) error {
 // dialog said "cancel").
 func (c *Conn) ConfirmClose(win uint32, allow bool) error {
 	return c.writeEvt(wire.NewEvtWindowConfirmClose(win, allow))
+}
+
+// PrivSpawn asks wash-priv to launch the named wash app as root.
+// One-line privilege escalation for app authors:
+//
+//	c.PrivSpawn("com.wash.term", "user wants a root shell")
+//
+// Fire-and-forget over the cross-app bus. wash-priv handles the
+// queue UI, user approval, password prompt, sudo invocation, and
+// PrepareSpawn. The router stamps your app's id + instance as the
+// router-attested sender; wash-priv shows that in the approval row.
+//
+// Errors only on transport failure. The actual approve/reject /
+// success result is async — wash-priv replies with {kind:"spawned"}
+// or {kind:"rejected"} on this app's event channel; if you care,
+// install OnAppMsgFrom and match on from.AppID == sdk.PrivAppID.
+func (c *Conn) PrivSpawn(appID, reason string) error {
+	return c.SendAppMsgTo(wire.Recipient{AppID: PrivAppID}, map[string]any{
+		"kind":   "spawn",
+		"req_id": newPrivReqID(),
+		"app_id": appID,
+		"reason": reason,
+	})
+}
+
+// PrivRun asks wash-priv to run argv as root inside a fresh wash-term
+// window. The user sees the command run in a real terminal; ideal
+// for one-off `apt update` / `make install` style invocations
+// triggered from a normal app's UI.
+//
+//	c.PrivRun([]string{"apt", "update"}, "from fm: refreshing")
+//
+// Same async / fire-and-forget shape as PrivSpawn.
+func (c *Conn) PrivRun(argv []string, reason string) error {
+	return c.SendAppMsgTo(wire.Recipient{AppID: PrivAppID}, map[string]any{
+		"kind":   "run",
+		"req_id": newPrivReqID(),
+		"argv":   argv,
+		"reason": reason,
+	})
+}
+
+// PrivResult is what PrivRunInlineSync returns. Stdout / Stderr are
+// the raw bytes the command produced (no encoding decoration); Exit
+// is the wrapped command's exit code. Err is non-nil only for
+// transport / handshake failures — a sudo "wrong password" or a
+// rejected approval surfaces as Exit non-zero and a populated
+// Stderr, not Err.
+type PrivResult struct {
+	Stdout []byte
+	Stderr []byte
+	Exit   int
+	Err    error
+}
+
+// PrivRunInlineSync runs argv as root via wash-priv and BLOCKS until
+// the command exits, returning everything in one struct. The
+// one-liner for app code that needs the actual output:
+//
+//	r, _ := c.PrivRunInlineSync(ctx, []string{"whoami"}, "audit")
+//	fmt.Println(string(r.Stdout)) // -> "root\n"
+//
+// Approval / password / audit still flow through wash-priv's FE.
+//
+// MUST NOT be called from an SDK callback (OnAppMsg, OnAppMsgFrom,
+// OnFocus, …): the wash-priv reply streams arrive on the same read
+// goroutine that's running the callback, so blocking it deadlocks.
+// Spawn a goroutine if you're inside a callback.
+func (c *Conn) PrivRunInlineSync(ctx context.Context, argv []string, reason string) (PrivResult, error) {
+	if len(argv) == 0 {
+		return PrivResult{}, fmt.Errorf("argv is empty")
+	}
+	reqID := newPrivReqID()
+	call := &privCall{
+		stdout: &byteBuf{},
+		stderr: &byteBuf{},
+		done:   make(chan PrivResult, 1),
+	}
+	c.privMu.Lock()
+	if c.privPending == nil {
+		c.privPending = make(map[string]*privCall)
+	}
+	c.privPending[reqID] = call
+	c.privMu.Unlock()
+	defer func() {
+		c.privMu.Lock()
+		delete(c.privPending, reqID)
+		c.privMu.Unlock()
+	}()
+
+	if err := c.SendAppMsgTo(wire.Recipient{AppID: PrivAppID}, map[string]any{
+		"kind":   "run_inline",
+		"req_id": reqID,
+		"argv":   argv,
+		"reason": reason,
+	}); err != nil {
+		return PrivResult{Err: err}, err
+	}
+	select {
+	case r := <-call.done:
+		return r, r.Err
+	case <-ctx.Done():
+		return PrivResult{Err: ctx.Err()}, ctx.Err()
+	}
+}
+
+// privCall is the in-flight state for one PrivRunInlineSync. The
+// SDK's dispatchEvt path intercepts incoming app_msgs from wash-
+// priv whose req_id matches a pending call here, accumulates bytes,
+// and resolves done on priv.result.
+type privCall struct {
+	stdout *byteBuf
+	stderr *byteBuf
+	done   chan PrivResult
+}
+
+// byteBuf is a tiny mutex-guarded byte buffer. The stream callback
+// pushes from the dispatch goroutine; the final result reads on the
+// blocked caller's goroutine — both need synchronised access.
+type byteBuf struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (b *byteBuf) append(p []byte) {
+	b.mu.Lock()
+	b.buf = append(b.buf, p...)
+	b.mu.Unlock()
+}
+
+func (b *byteBuf) bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]byte, len(b.buf))
+	copy(out, b.buf)
+	return out
+}
+
+// tryConsumePrivReply looks at a CBOR-decoded app_msg payload from
+// wash-priv. If its req_id matches a PrivRunInlineSync waiter,
+// accumulates streamed bytes and resolves the call on priv.result.
+// Returns true when the message was consumed — caller should NOT
+// forward to OnAppMsgFrom.
+func (c *Conn) tryConsumePrivReply(data any) bool {
+	m, ok := data.(map[any]any)
+	if !ok {
+		return false
+	}
+	reqID, _ := m["req_id"].(string)
+	if reqID == "" {
+		return false
+	}
+	c.privMu.Lock()
+	call, ok := c.privPending[reqID]
+	c.privMu.Unlock()
+	if !ok {
+		return false
+	}
+	kind, _ := m["kind"].(string)
+	switch kind {
+	case "priv.stream":
+		stream, _ := m["stream"].(string)
+		b64, _ := m["bytes"].(string)
+		raw, err := base64.StdEncoding.DecodeString(b64)
+		if err != nil || len(raw) == 0 {
+			return true
+		}
+		if stream == "stderr" {
+			call.stderr.append(raw)
+		} else {
+			call.stdout.append(raw)
+		}
+		return true
+	case "priv.result":
+		exit := 0
+		switch x := m["exit_code"].(type) {
+		case int64:
+			exit = int(x)
+		case uint64:
+			exit = int(x)
+		case float64:
+			exit = int(x)
+		}
+		errMsg, _ := m["error"].(string)
+		r := PrivResult{
+			Stdout: call.stdout.bytes(),
+			Stderr: call.stderr.bytes(),
+			Exit:   exit,
+		}
+		if errMsg != "" {
+			r.Err = fmt.Errorf("wash-priv: %s", errMsg)
+		}
+		select {
+		case call.done <- r:
+		default:
+		}
+		return true
+	case "rejected":
+		reason, _ := m["reason"].(string)
+		select {
+		case call.done <- PrivResult{Exit: 1, Err: fmt.Errorf("wash-priv rejected: %s", reason)}:
+		default:
+		}
+		return true
+	}
+	return false
+}
+
+// newPrivReqID returns a short hex id for the wash-priv req_id field.
+// Doesn't need to be cryptographic; just unique inside the queue at
+// any moment. The "p-" prefix makes BE logs easy to grep apart from
+// wash-sudo's "ws-".
+func newPrivReqID() string {
+	var b [6]byte
+	_, _ = rand.Read(b[:])
+	return "p-" + hex.EncodeToString(b[:])
 }
 
 // SpawnRequest asks the router to launch another app by id. Requires

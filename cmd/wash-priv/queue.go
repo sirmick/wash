@@ -351,6 +351,10 @@ func (s *State) enqueue(c *sdk.Conn, r *Request) {
 	}
 	s.queue = append(s.queue, r)
 	s.mu.Unlock()
+	// One ops-friendly line per enqueue so the e2e + ops eyeballs
+	// can find the req_id without parsing audit jsonl. Quiet on
+	// every other state transition — those land in priv-audit.log.
+	log.Printf("wash-priv enqueue: req_id=%s kind=%s sender=%s/%s", r.ReqID, r.Kind, r.Sender.AppID, r.Sender.InstanceID)
 	_ = c.SendAppMsg(map[string]any{"kind": "req.new", "req": requestView(r)})
 }
 

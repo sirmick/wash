@@ -117,6 +117,14 @@ type Conn struct {
 	// waiting goroutine in ClipboardGet.
 	clipMu             sync.Mutex
 	pendingClipboardGet map[uint64]chan clipboardResult
+
+	// privPending tracks in-flight PrivRunInlineSync calls keyed by
+	// req_id. dispatchEvt intercepts incoming app_msgs from com.wash
+	// .priv whose req_id matches a pending call, accumulates the
+	// stream bytes, and resolves on priv.result. Non-matching priv
+	// messages flow through to OnAppMsgFrom as normal.
+	privMu      sync.Mutex
+	privPending map[string]*privCall
 }
 
 type clipboardResult struct {
