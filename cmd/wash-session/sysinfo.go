@@ -24,12 +24,21 @@ import (
 // sysInfo is the shape sent to the FE as the "system.info" app_msg.
 // Field names match the wire keys; the FE picks them up by name.
 type sysInfo struct {
-	Hostname string   `cbor:"hostname"`
-	FQDN     string   `cbor:"fqdn"`
-	Username string   `cbor:"username"`
-	CPUs     int      `cbor:"cpus"`
-	MemBytes uint64   `cbor:"mem_bytes"`
-	IPs      []string `cbor:"ips"`
+	Hostname   string     `cbor:"hostname"`
+	FQDN       string     `cbor:"fqdn"`
+	Username   string     `cbor:"username"`
+	CPUs       int        `cbor:"cpus"`
+	MemBytes   uint64     `cbor:"mem_bytes"`
+	Interfaces []IfaceIPs `cbor:"interfaces"`
+}
+
+// IfaceIPs is a single network interface's addresses, grouped so the
+// banner can render one line per iface ("br-lan: 172.16.16.60 2601:…").
+// The BE deduplicates IPv6 within a group (one address per /64,
+// preferring the EUI-64 stable form).
+type IfaceIPs struct {
+	Name string   `cbor:"name" json:"name"`
+	IPs  []string `cbor:"ips" json:"ips"`
 }
 
 // gatherSysInfo collects every field once. Best-effort: any single
@@ -47,7 +56,7 @@ func gatherSysInfo() sysInfo {
 		out.Username = u.Username
 	}
 	out.MemBytes = readMemTotal()
-	out.IPs = externalIPs()
+	out.Interfaces = externalInterfaces()
 	return out
 }
 
@@ -144,13 +153,21 @@ func readMemTotal() uint64 {
 // — the user wants to see what the box presents to peers, not the
 // container plumbing. Sorted: IPv4 first, then IPv6, both
 // lexicographic for determinism.
-func externalIPs() []string {
+// externalInterfaces walks net.Interfaces, filters out the noisy
+// container/virt ones, and returns one IfaceIPs per real-looking
+// interface that has at least one displayable address. Within each
+// interface, IPv4 is alphasorted; IPv6 is collapsed to one address
+// per /64 (preferring the stable EUI-64 form).
+//
+// Interface order is alphabetical for stability across reloads.
+// Empty interfaces (no surviving addresses) are dropped — the banner
+// would otherwise show a label with nothing after the colon.
+func externalInterfaces() []IfaceIPs {
 	ifs, err := net.Interfaces()
 	if err != nil {
 		return nil
 	}
-	var v4 []string
-	var v6 []net.IP
+	var groups []IfaceIPs
 	for _, iface := range ifs {
 		if iface.Flags&net.FlagUp == 0 {
 			continue
@@ -165,6 +182,8 @@ func externalIPs() []string {
 		if err != nil {
 			continue
 		}
+		var v4 []string
+		var v6 []net.IP
 		for _, a := range addrs {
 			ipNet, ok := a.(*net.IPNet)
 			if !ok {
@@ -180,20 +199,23 @@ func externalIPs() []string {
 				v6 = append(v6, ip)
 			}
 		}
+		dedupSort(&v4)
+		v6str := dedupV6ByPrefix(v6)
+		dedupSort(&v6str)
+		ips := append(v4, v6str...)
+		if len(ips) == 0 {
+			continue
+		}
+		groups = append(groups, IfaceIPs{Name: iface.Name, IPs: ips})
 	}
-	// IPv4: alphanumeric dedup is fine — addresses don't multiply
-	// the way SLAAC ones do.
-	dedupSort(&v4)
-	// IPv6: collapse to one address per /64. Privacy extensions
-	// (RFC 4941/8981) generate rotating temporary addresses, so a
-	// single host with a single connection often ends up with 3-4
-	// global v6 addresses on one prefix. The banner shows the
-	// stable EUI-64 derived address when present (it doesn't
-	// rotate, so it's the right "address to share with peers");
-	// otherwise the lexicographically-first survivor.
-	v6str := dedupV6ByPrefix(v6)
-	dedupSort(&v6str)
-	return append(v4, v6str...)
+	// Stable order: alphabetical by interface name. Stable across
+	// reloads so the banner doesn't shuffle on every fetch.
+	for i := 1; i < len(groups); i++ {
+		for j := i; j > 0 && groups[j-1].Name > groups[j].Name; j-- {
+			groups[j-1], groups[j] = groups[j], groups[j-1]
+		}
+	}
+	return groups
 }
 
 // dedupV6ByPrefix groups IPv6 addresses by their /64 prefix and
@@ -333,6 +355,11 @@ func dedupSort(ss *[]string) {
 // sysInfoString is a debug-print helper for logs; FE renders the
 // fields itself.
 func sysInfoString(s sysInfo) string {
-	return fmt.Sprintf("host=%s fqdn=%s user=%s cpus=%d mem=%dMB ips=%v",
-		s.Hostname, s.FQDN, s.Username, s.CPUs, s.MemBytes/(1024*1024), s.IPs)
+	parts := make([]string, 0, len(s.Interfaces))
+	for _, g := range s.Interfaces {
+		parts = append(parts, g.Name+"="+strings.Join(g.IPs, ","))
+	}
+	return fmt.Sprintf("host=%s fqdn=%s user=%s cpus=%d mem=%dMB ifaces=[%s]",
+		s.Hostname, s.FQDN, s.Username, s.CPUs, s.MemBytes/(1024*1024),
+		strings.Join(parts, " "))
 }

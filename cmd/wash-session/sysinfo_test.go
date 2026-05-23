@@ -152,12 +152,23 @@ func TestGatherSysInfoSelfConsistent(t *testing.T) {
 	}
 	// Username may be empty on stripped containers (no /etc/passwd);
 	// don't assert on it.
-	for _, ip := range info.IPs {
-		if strings.HasPrefix(ip, "127.") || strings.HasPrefix(ip, "::1") {
-			t.Fatalf("loopback leaked: %s", ip)
+	for _, g := range info.Interfaces {
+		if g.Name == "" {
+			t.Fatalf("empty interface name in group: %+v", g)
 		}
-		if strings.HasPrefix(ip, "169.254.") || strings.HasPrefix(ip, "fe80:") {
-			t.Fatalf("link-local leaked: %s", ip)
+		if len(g.IPs) == 0 {
+			t.Fatalf("interface %s in output with no IPs — should have been filtered", g.Name)
+		}
+		if skipInterface(g.Name) {
+			t.Fatalf("filtered iface %s leaked into output", g.Name)
+		}
+		for _, ip := range g.IPs {
+			if strings.HasPrefix(ip, "127.") || strings.HasPrefix(ip, "::1") {
+				t.Fatalf("loopback leaked: %s", ip)
+			}
+			if strings.HasPrefix(ip, "169.254.") || strings.HasPrefix(ip, "fe80:") {
+				t.Fatalf("link-local leaked: %s", ip)
+			}
 		}
 	}
 	if info.MemBytes == 0 {

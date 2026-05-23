@@ -82,14 +82,24 @@ func onReady(c *sdk.Conn, _ string, _ uint32) {
 func sendSystemInfo(c *sdk.Conn) {
 	info := gatherSysInfo()
 	log.Printf("wash-session sysinfo: %s", sysInfoString(info))
+	// Interfaces ship as [{name, ips:[…]}] so the banner can label
+	// each address by the interface it lives on. The FE's
+	// SystemInfoMsg type mirrors the field name.
+	ifaces := make([]map[string]any, 0, len(info.Interfaces))
+	for _, g := range info.Interfaces {
+		ifaces = append(ifaces, map[string]any{
+			"name": g.Name,
+			"ips":  g.IPs,
+		})
+	}
 	msg := map[string]any{
-		"kind":      "system.info",
-		"hostname":  info.Hostname,
-		"fqdn":      info.FQDN,
-		"username":  info.Username,
-		"cpus":      info.CPUs,
-		"mem_bytes": info.MemBytes,
-		"ips":       info.IPs,
+		"kind":       "system.info",
+		"hostname":   info.Hostname,
+		"fqdn":       info.FQDN,
+		"username":   info.Username,
+		"cpus":       info.CPUs,
+		"mem_bytes":  info.MemBytes,
+		"interfaces": ifaces,
 	}
 	if err := c.SendAppMsg(msg); err != nil {
 		log.Printf("wash-session: send system.info: %v", err)
@@ -132,18 +142,17 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		// wash-priv. wash-priv's queue UI shows com.wash.session as
 		// the (router-attested) sender, plus the user-typed reason.
 		// We never run sudo ourselves — that's wash-priv's job.
+		//
+		// Args come from the FE payload, sourced from the source app's
+		// manifest.root_variant.args (e.g. wash-term ships ["--login"]).
+		// Nothing here is per-app special-cased anymore — the launcher
+		// FE is the single source of truth for which apps have a root
+		// variant and what argv they prefer.
 		appID, _ := m["app_id"].(string)
 		if appID == "" {
 			return
 		}
-		// For Root Terminal: tell wash-term to start its shell as a
-		// login shell so the user gets root's environment (PATH,
-		// colour PS1, locale) sourced from profile / bashrc instead
-		// of inheriting wash-priv's parent shell env.
-		var args []string
-		if appID == "com.wash.term" {
-			args = []string{"--login"}
-		}
+		args := sdk.ToStringSlice(m["args"])
 		reqID := newReqID()
 		payload := map[string]any{
 			"kind":   "spawn",

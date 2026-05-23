@@ -22,6 +22,11 @@ interface CatalogApp {
   instancing: string;
   disabled?: boolean;
   reason?: string;
+  root_variant?: {
+    name?: string;
+    icon?: string;
+    args?: string[];
+  };
 }
 
 interface WindowInfo {
@@ -62,6 +67,15 @@ interface DesktopConfigMsg {
 // SystemInfoMsg mirrors the BE's system.info app_msg. Sent once on
 // session ready (plus on each desktop.request) and rendered by the
 // top-left banner.
+//
+// `interfaces` is the grouped form: one entry per real-looking NIC,
+// each carrying that interface's IPv4 + (deduped) IPv6 addresses.
+// The BE drops empty interfaces; FE rendering is a row per group.
+interface IfaceIPs {
+  name: string;
+  ips: string[];
+}
+
 interface SystemInfoMsg {
   kind: 'system.info';
   hostname: string;
@@ -69,21 +83,35 @@ interface SystemInfoMsg {
   username: string;
   cpus: number;
   mem_bytes: number;
-  ips: string[];
+  interfaces: IfaceIPs[];
 }
 
-// rootTerminalEntry — synthetic launcher item exposed in StartMenu
-// + Palette. Module-level (not closed over App's scope) so the
-// paletteResults memo can read it during its eager initial run
-// without a TDZ on the still-uninitialised inner binding.
-const rootTerminalEntry: CatalogApp = {
-  id: '__root-terminal',
-  name: 'Root Terminal',
-  icon: 'shield-alert',
-  surface: 'window',
-  instancing: 'multi',
-  disabled: false,
-};
+// ROOT_PREFIX — synthetic-id prefix for the "run as root" launcher
+// rows. Apps that declare manifest.root_variant produce a derived
+// entry "<ROOT_PREFIX><app_id>"; clicking it ships the source app id
+// plus the manifest-supplied args to the session BE.
+const ROOT_PREFIX = '__root:';
+
+// isRootEntryID is the inverse: extract the source app id from a
+// synthetic root row id, or '' if it isn't one.
+function rootSourceID(syntheticID: string): string {
+  return syntheticID.startsWith(ROOT_PREFIX) ? syntheticID.slice(ROOT_PREFIX.length) : '';
+}
+
+// rootEntryFor builds the synthetic CatalogApp row that the launcher
+// renders for a source app declaring root_variant. Defaults: name is
+// "<Name> (root)" unless the variant overrides; icon is shield-alert.
+function rootEntryFor(src: CatalogApp): CatalogApp | null {
+  if (!src.root_variant) return null;
+  return {
+    id: ROOT_PREFIX + src.id,
+    name: src.root_variant.name ?? `${src.name} (root)`,
+    icon: src.root_variant.icon ?? 'shield-alert',
+    surface: src.surface,
+    instancing: src.instancing,
+    disabled: false,
+  };
+}
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ---- reactive state ----
@@ -116,12 +144,22 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   let paletteInputEl: HTMLInputElement | undefined;
   let startBtnEl: HTMLButtonElement | undefined;
 
-  // Filtered palette results. Root Terminal is mixed into the
-  // normal catalog and sorted by name like everything else — the
-  // red row already makes it stand out, no pinning needed.
+  // Derived list of synthetic "root variant" rows — one per catalog
+  // app that declares manifest.root_variant. The launcher renders
+  // these alongside the normal catalog with a red highlight.
+  const rootEntries = createMemo((): CatalogApp[] => {
+    return catalog()
+      .filter((a) => !a.disabled && a.root_variant)
+      .map((a) => rootEntryFor(a))
+      .filter((a): a is CatalogApp => a !== null);
+  });
+
+  // Filtered palette results. Root rows are mixed into the normal
+  // catalog and sorted by name like everything else — the red row
+  // already makes them stand out, no pinning needed.
   const paletteResults = createMemo(() => {
     const q = paletteQuery().trim().toLowerCase();
-    const apps = [...catalog().filter((a) => !a.disabled), rootTerminalEntry];
+    const apps = [...catalog().filter((a) => !a.disabled), ...rootEntries()];
     apps.sort((a, b) => a.name.localeCompare(b.name));
     if (!q) return apps;
     return apps.filter((a) => a.id.toLowerCase().includes(q) || a.name.toLowerCase().includes(q));
@@ -131,12 +169,20 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     window.wash.sendAppMsg(props.instance, { action: 'launch', app_id: appID });
   };
 
-  // launchRootTerminal routes a "spawn as root" through the session
-  // BE → wash-priv. The user sees the approval row in wash-priv's
-  // window with router-attested sender (com.wash.session). Picking
-  // this from the menu does NOT bypass the password modal.
-  const launchRootTerminal = () => {
-    window.wash.sendAppMsg(props.instance, { action: 'spawn_root', app_id: 'com.wash.term' });
+  // launchPick handles both regular catalog rows and synthetic root
+  // rows. Routes the latter through the session BE → wash-priv path
+  // (queue + approval + password modal + sudo).
+  const launchPick = (id: string) => {
+    const src = rootSourceID(id);
+    if (src) {
+      const app = catalog().find((a) => a.id === src);
+      const args = app?.root_variant?.args ?? [];
+      const msg: Record<string, unknown> = { action: 'spawn_root', app_id: src };
+      if (args.length > 0) msg.args = args;
+      window.wash.sendAppMsg(props.instance, msg);
+      return;
+    }
+    launchApp(id);
   };
 
   // ---- desktop config ----
@@ -242,8 +288,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const app = apps[paletteSelected()];
     if (!app) return;
     closePalette();
-    if (app.id === rootTerminalEntry.id) launchRootTerminal();
-    else launchApp(app.id);
+    launchPick(app.id);
   };
 
   const onPaletteKey = (ev: KeyboardEvent) => {
@@ -401,12 +446,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       <Show when={menuOpen()}>
         <StartMenu
           apps={catalog()}
-          rootTerminal={rootTerminalEntry}
+          rootRows={rootEntries()}
           onDismiss={() => setMenuOpen(false)}
           onPick={(id) => {
             setMenuOpen(false);
-            if (id === rootTerminalEntry.id) launchRootTerminal();
-            else launchApp(id);
+            launchPick(id);
           }}
         />
       </Show>
@@ -421,7 +465,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           }}
           results={paletteResults()}
           selected={paletteSelected()}
-          rootTerminalID={rootTerminalEntry.id}
+          isRootRowID={(id) => id.startsWith(ROOT_PREFIX)}
           onHover={setPaletteSelected}
           onPick={() => launchSelected()}
           onKey={onPaletteKey}
@@ -542,18 +586,28 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
           >
             {s().cpus || '?'} cores · {formatMem(s().mem_bytes)}
           </div>
-          <Show when={s().ips && s().ips.length > 0}>
+          <Show when={s().interfaces && s().interfaces.length > 0}>
             <div
-              data-testid="desktop-banner-ips"
+              data-testid="desktop-banner-ifaces"
               style={{
                 'margin-top': '2px',
                 font: '12px ui-monospace,Menlo,Consolas,monospace',
                 opacity: 0.55,
                 'text-shadow': '0 1px 2px rgba(0,0,0,0.6)',
-                'word-break': 'break-all',
               }}
             >
-              {s().ips.join('  ')}
+              <For each={s().interfaces}>
+                {(iface) => (
+                  <div
+                    data-testid={`desktop-banner-iface-${iface.name}`}
+                    style={{ 'word-break': 'break-all' }}
+                  >
+                    <span style={{ opacity: 0.7 }}>{iface.name}</span>
+                    {' '}
+                    {iface.ips.join('  ')}
+                  </div>
+                )}
+              </For>
             </div>
           </Show>
         </div>
@@ -875,19 +929,18 @@ const rootMenuItemStyle: JSX.CSSProperties = {
 
 const StartMenu: Component<{
   apps: CatalogApp[];
-  rootTerminal?: CatalogApp;
+  rootRows: CatalogApp[];
   onPick: (id: string) => void;
   onDismiss: () => void;
 }> = (props) => {
-  // Merge the synthetic Root Terminal in with the catalog and sort
-  // alphabetically — the red row stands out on its own, no pinning.
+  // Merge synthetic root rows in with the catalog and sort
+  // alphabetically — the red rows stand out on their own.
   const items = createMemo(() => {
-    const merged = props.rootTerminal
-      ? [...props.apps, props.rootTerminal]
-      : props.apps.slice();
+    const merged = [...props.apps, ...props.rootRows];
     merged.sort((a, b) => a.name.localeCompare(b.name));
     return merged;
   });
+  const isRootRow = (id: string) => id.startsWith(ROOT_PREFIX);
   return (
     <Menu
       data-testid="start-menu"
@@ -900,12 +953,19 @@ const StartMenu: Component<{
       <Show when={items().length > 0} fallback={<div style={emptyStyle}>no apps registered</div>}>
         <For each={items()}>
           {(app) => {
-            const isRoot = props.rootTerminal && app.id === props.rootTerminal.id;
-            if (isRoot) {
+            if (isRootRow(app.id)) {
+              // data-testid keeps the legacy "start-menu-root-terminal"
+              // for the wash-term row so existing tests stay green;
+              // others get start-menu-root-<srcID>. Both shapes are
+              // stable hooks teams can grep for.
+              const srcID = app.id.slice(ROOT_PREFIX.length);
+              const testid = srcID === 'com.wash.term'
+                ? 'start-menu-root-terminal'
+                : `start-menu-root-${srcID}`;
               return (
                 <button
                   type="button"
-                  data-testid="start-menu-root-terminal"
+                  data-testid={testid}
                   onClick={() => props.onPick(app.id)}
                   style={rootMenuItemStyle}
                   onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#a02828'; }}
@@ -957,7 +1017,7 @@ const Palette: Component<{
   onQueryChange: (v: string) => void;
   results: CatalogApp[];
   selected: number;
-  rootTerminalID?: string;
+  isRootRowID: (id: string) => boolean;
   onHover: (i: number) => void;
   onPick: () => void;
   onKey: (ev: KeyboardEvent) => void;
@@ -1023,7 +1083,7 @@ const Palette: Component<{
                 <PaletteRow
                   app={app}
                   selected={i() === props.selected}
-                  isRoot={app.id === props.rootTerminalID}
+                  isRoot={props.isRootRowID(app.id)}
                   onHover={() => props.onHover(i())}
                   onPick={props.onPick}
                 />
