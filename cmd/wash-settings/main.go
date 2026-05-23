@@ -59,36 +59,73 @@ func main() {
 			Instancing:      sdk.InstancingSingleton,
 			Window:          &sdk.WindowHints{DefaultWidth: 760, DefaultHeight: 520},
 		},
-		Assets:   sub,
-		OnReady:  onReady,
-		OnAppMsg: onAppMsg,
+		Assets:  sub,
+		OnReady: onReady,
 	})
 }
 
+var bus *sdk.Bus
+
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-settings ready instance=%s window=%d", instanceID, windowID)
-	// FilePicker support: lets the FE browse the disk for an
-	// image via @wash/ui's <FilePicker>. The BE half is the same
-	// dispatch helper wash-edit uses.
+	// FilePicker support: lets the FE browse the disk for an image
+	// via @wash/ui's <FilePicker>. EnableFilePicker installs its own
+	// OnAppMsg chain on c; the bus then wraps that so fs.* messages
+	// still route to the picker.
 	sdk.EnableFilePicker(c)
+	bus = sdk.NewBus(c)
+	registerHandlers(bus)
 }
 
-func onAppMsg(c *sdk.Conn, _ uint32, data any) {
-	m := sdk.AsMap(data)
-	if m == nil {
-		return
-	}
-	kind, _ := m["kind"].(string)
-	id, _ := m["id"].(string)
-	switch kind {
-	case "settings.read":
-		domain, _ := m["domain"].(string)
-		doRead(c, id, domain)
-	case "settings.write":
-		domain, _ := m["domain"].(string)
-		// value is a CBOR-decoded map[any]any — re-marshal as JSON.
-		doWrite(c, id, domain, m["value"])
-	}
+type readReq struct {
+	Domain string `cbor:"domain"`
+}
+
+type writeReq struct {
+	Domain string `cbor:"domain"`
+	Value  any    `cbor:"value"`
+}
+
+type writeResp struct {
+	Domain string `cbor:"domain"`
+}
+
+func registerHandlers(b *sdk.Bus) {
+	// settings.read returns `settings.value` (not settings.read_ok)
+	// — non-conventional, so emit explicitly via HandleVoid.
+	sdk.HandleVoid(b, "settings.read", func(_ *sdk.Conn, id string, req readReq) error {
+		path := domainFile(req.Domain)
+		if path == "" {
+			return b.Emit("settings.read_err", map[string]any{
+				"id": id, "domain": req.Domain, "code": "bad_request", "msg": "unknown domain",
+			})
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				data = []byte("{}")
+			} else {
+				return b.Emit("settings.read_err", map[string]any{
+					"id": id, "domain": req.Domain, "code": "io", "msg": err.Error(),
+				})
+			}
+		}
+		var value any
+		if err := json.Unmarshal(data, &value); err != nil {
+			log.Printf("wash-settings: %s not valid JSON (%v); returning {}", path, err)
+			value = map[string]any{}
+		}
+		return b.Emit("settings.value", map[string]any{
+			"id": id, "domain": req.Domain, "value": value,
+		})
+	})
+
+	sdk.Handle(b, "settings.write", func(_ *sdk.Conn, _ string, req writeReq) (writeResp, error) {
+		if err := doWrite(req.Domain, req.Value); err != nil {
+			return writeResp{}, err
+		}
+		return writeResp{Domain: req.Domain}, nil
+	})
 }
 
 // configDir resolves $XDG_CONFIG_HOME/wash, falling back to
@@ -117,118 +154,51 @@ func domainFile(domain string) string {
 	return ""
 }
 
-// readReply ships the decoded JSON as a Go value (map/array/etc.) so
-// CBOR encodes it as a structured object. Using json.RawMessage here
-// would land as a CBOR byte string — and the router's CBOR→JSON
-// normalizer base64-encodes byte strings, breaking the FE decode.
-type readReply struct {
-	Kind   string `json:"kind"`
-	ID     string `json:"id,omitempty"`
-	Domain string `json:"domain"`
-	Value  any    `json:"value"`
-}
-
-type writeReply struct {
-	Kind   string `json:"kind"`
-	ID     string `json:"id,omitempty"`
-	Domain string `json:"domain"`
-}
-
-type errReply struct {
-	Kind   string `json:"kind"`
-	ID     string `json:"id,omitempty"`
-	Domain string `json:"domain,omitempty"`
-	Code   string `json:"code"`
-	Msg    string `json:"msg"`
-}
-
-// doRead loads the domain file and replies with settings.value. A
-// missing file returns an empty object — the FE applies the same
-// defaults the consumer BE does.
-func doRead(c *sdk.Conn, id, domain string) {
+// doWrite atomically replaces the domain file. value is a
+// CBOR-decoded map[any]any; wire.ToJSONValue normalises it for the
+// JSON marshaller.
+func doWrite(domain string, value any) error {
 	path := domainFile(domain)
 	if path == "" {
-		sendErr(c, "settings.read_err", id, domain, "bad_request", "unknown domain")
-		return
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			data = []byte("{}")
-		} else {
-			sendErr(c, "settings.read_err", id, domain, "io", err.Error())
-			return
-		}
-	}
-	var value any
-	if err := json.Unmarshal(data, &value); err != nil {
-		log.Printf("wash-settings: %s not valid JSON (%v); returning {}", path, err)
-		value = map[string]any{}
-	}
-	_ = c.SendAppMsg(readReply{
-		Kind: "settings.value", ID: id, Domain: domain, Value: value,
-	})
-}
-
-// doWrite atomically replaces the domain file. CBOR decode produces
-// map[any]any (string keys held in interface{}); json.Marshal can't
-// handle that, so toJSON() recurses and rewrites maps to map[string]any
-// before marshaling.
-func doWrite(c *sdk.Conn, id, domain string, value any) {
-	path := domainFile(domain)
-	if path == "" {
-		sendErr(c, "settings.write_err", id, domain, "bad_request", "unknown domain")
-		return
+		return sdk.Errf("bad_request", "unknown domain")
 	}
 	out, err := json.MarshalIndent(wire.ToJSONValue(value), "", "  ")
 	if err != nil {
-		sendErr(c, "settings.write_err", id, domain, "bad_request", err.Error())
-		return
+		return sdk.Err{Code: "bad_request", Msg: err.Error()}
 	}
 	if len(out) > maxConfigBytes {
-		sendErr(c, "settings.write_err", id, domain, "too_large", "config exceeds cap")
-		return
+		return sdk.Errf("too_large", "config exceeds cap")
 	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		sendErr(c, "settings.write_err", id, domain, "io", err.Error())
-		return
+		return sdk.Err{Code: "io", Msg: err.Error()}
 	}
 	// Atomic write: temp file in same dir, fsync, rename. The
 	// rename is what consumers' fswatch sees — no torn-read window.
 	tmp, err := os.CreateTemp(dir, ".desktop-*.json.tmp")
 	if err != nil {
-		sendErr(c, "settings.write_err", id, domain, "io", err.Error())
-		return
+		return sdk.Err{Code: "io", Msg: err.Error()}
 	}
 	tmpPath := tmp.Name()
 	cleanup := func() { _ = os.Remove(tmpPath) }
 	if _, err := tmp.Write(out); err != nil {
 		_ = tmp.Close()
 		cleanup()
-		sendErr(c, "settings.write_err", id, domain, "io", err.Error())
-		return
+		return sdk.Err{Code: "io", Msg: err.Error()}
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
 		cleanup()
-		sendErr(c, "settings.write_err", id, domain, "io", err.Error())
-		return
+		return sdk.Err{Code: "io", Msg: err.Error()}
 	}
 	if err := tmp.Close(); err != nil {
 		cleanup()
-		sendErr(c, "settings.write_err", id, domain, "io", err.Error())
-		return
+		return sdk.Err{Code: "io", Msg: err.Error()}
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		cleanup()
-		sendErr(c, "settings.write_err", id, domain, "io", err.Error())
-		return
+		return sdk.Err{Code: "io", Msg: err.Error()}
 	}
-	_ = c.SendAppMsg(writeReply{Kind: "settings.write_ok", ID: id, Domain: domain})
-}
-
-func sendErr(c *sdk.Conn, kind, id, domain, code, msg string) {
-	_ = c.SendAppMsg(errReply{Kind: kind, ID: id, Domain: domain, Code: code, Msg: msg})
+	return nil
 }
 

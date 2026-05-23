@@ -58,11 +58,12 @@ func main() {
 			Instancing:      sdk.InstancingSingleton,
 			Window:          &sdk.WindowHints{DefaultWidth: 480, DefaultHeight: 360},
 		},
-		Assets:   sub,
-		OnReady:  onReady,
-		OnAppMsg: onAppMsg,
+		Assets:  sub,
+		OnReady: onReady,
 	})
 }
+
+var bus *sdk.Bus
 
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	conn = c
@@ -71,6 +72,91 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		bulkops.WithOnUpdate(jobUpdateHandler(c)),
 		bulkops.WithOnConflict(conflictHandler(c)),
 	)
+	bus = sdk.NewBus(c)
+	registerHandlers(bus)
+}
+
+// ----- request/response types -----
+
+type enqueueReq struct {
+	Op    string   `cbor:"op"`
+	Paths []string `cbor:"paths"`
+	Dest  string   `cbor:"dest"`
+}
+
+type enqueueResp struct {
+	JobID string `cbor:"job_id"`
+}
+
+type cancelReq struct {
+	JobID string `cbor:"job_id"`
+}
+
+type cancelResp struct {
+	JobID string `cbor:"job_id"`
+}
+
+type conflictResolveReq struct {
+	JobID  string `cbor:"job_id"`
+	Action string `cbor:"action"`
+}
+
+type conflictResolveResp struct {
+	JobID string `cbor:"job_id"`
+}
+
+type listResp struct {
+	Jobs []jobView `cbor:"jobs"`
+}
+
+type jobView struct {
+	JobID  string   `cbor:"job_id"`
+	Op     string   `cbor:"op"`
+	Status string   `cbor:"status"`
+	Paths  []string `cbor:"paths"`
+	Dest   string   `cbor:"dest"`
+	Done   int      `cbor:"done"`
+	Total  int      `cbor:"total"`
+	Error  string   `cbor:"error"`
+}
+
+func registerHandlers(b *sdk.Bus) {
+	sdk.Handle(b, "enqueue", func(_ *sdk.Conn, _ string, req enqueueReq) (enqueueResp, error) {
+		if len(req.Paths) == 0 {
+			return enqueueResp{}, sdk.Errf(sdk.ErrBadRequest, "paths is empty")
+		}
+		return enqueueResp{JobID: mgr.Enqueue(bulkops.Op(req.Op), req.Paths, req.Dest)}, nil
+	})
+	sdk.Handle(b, "cancel", func(_ *sdk.Conn, _ string, req cancelReq) (cancelResp, error) {
+		if !mgr.Cancel(req.JobID) {
+			return cancelResp{}, sdk.Err{Code: sdk.ErrNotFound, Msg: req.JobID}
+		}
+		return cancelResp{JobID: req.JobID}, nil
+	})
+	sdk.Handle(b, "conflict_resolve", func(_ *sdk.Conn, _ string, req conflictResolveReq) (conflictResolveResp, error) {
+		pendingConflicts.Lock()
+		ch, ok := pendingConflicts.m[req.JobID]
+		pendingConflicts.Unlock()
+		if !ok {
+			return conflictResolveResp{}, sdk.Err{Code: sdk.ErrNotFound, Msg: "no pending conflict for " + req.JobID}
+		}
+		select {
+		case ch <- bulkops.ConflictAction(req.Action):
+		default:
+		}
+		return conflictResolveResp{JobID: req.JobID}, nil
+	})
+	sdk.Handle(b, "list", func(_ *sdk.Conn, _ string, _ struct{}) (listResp, error) {
+		jobs := mgr.Jobs()
+		out := make([]jobView, 0, len(jobs))
+		for _, j := range jobs {
+			out = append(out, jobView{
+				JobID: j.ID, Op: string(j.Op), Status: string(j.Status),
+				Paths: j.Paths, Dest: j.Dest, Done: j.Done, Total: j.Total, Error: j.Error,
+			})
+		}
+		return listResp{Jobs: out}, nil
+	})
 }
 
 // conflictHandler is the BE-side glue between the library's
@@ -138,80 +224,6 @@ func jobUpdateHandler(c *sdk.Conn) func(bulkops.Job) {
 				}
 			}
 		}
-	}
-}
-
-func onAppMsg(c *sdk.Conn, _ uint32, data any) {
-	m := sdk.AsMap(data)
-	if m == nil {
-		return
-	}
-	kind, _ := m["kind"].(string)
-	id, _ := m["id"].(string)
-	switch kind {
-	case "enqueue":
-		op, _ := m["op"].(string)
-		paths := sdk.ToStringSlice(m["paths"])
-		dest, _ := m["dest"].(string)
-		if len(paths) == 0 {
-			_ = c.SendAppMsg(map[string]any{
-				"kind": "enqueue_err", "id": id,
-				"code": "bad_request", "msg": "paths is empty",
-			})
-			return
-		}
-		jobID := mgr.Enqueue(bulkops.Op(op), paths, dest)
-		_ = c.SendAppMsg(map[string]any{
-			"kind":   "enqueue_ok",
-			"id":     id,
-			"job_id": jobID,
-		})
-	case "cancel":
-		jobID, _ := m["job_id"].(string)
-		if !mgr.Cancel(jobID) {
-			_ = c.SendAppMsg(map[string]any{
-				"kind": "cancel_err", "id": id,
-				"code": "not_found", "msg": jobID,
-			})
-			return
-		}
-		_ = c.SendAppMsg(map[string]any{"kind": "cancel_ok", "id": id, "job_id": jobID})
-	case "conflict_resolve":
-		jobID, _ := m["job_id"].(string)
-		action, _ := m["action"].(string)
-		pendingConflicts.Lock()
-		ch, ok := pendingConflicts.m[jobID]
-		pendingConflicts.Unlock()
-		if !ok {
-			_ = c.SendAppMsg(map[string]any{
-				"kind": "conflict_resolve_err", "id": id,
-				"code": "not_found", "msg": "no pending conflict for " + jobID,
-			})
-			return
-		}
-		select {
-		case ch <- bulkops.ConflictAction(action):
-		default:
-		}
-		_ = c.SendAppMsg(map[string]any{"kind": "conflict_resolve_ok", "id": id, "job_id": jobID})
-	case "list":
-		// FE-side caller asks for the current state of the queue.
-		// Used on mount to seed the UI.
-		jobs := mgr.Jobs()
-		out := make([]map[string]any, 0, len(jobs))
-		for _, j := range jobs {
-			out = append(out, map[string]any{
-				"job_id": j.ID,
-				"op":     string(j.Op),
-				"status": string(j.Status),
-				"paths":  j.Paths,
-				"dest":   j.Dest,
-				"done":   j.Done,
-				"total":  j.Total,
-				"error":  j.Error,
-			})
-		}
-		_ = c.SendAppMsg(map[string]any{"kind": "list_ok", "id": id, "jobs": out})
 	}
 }
 

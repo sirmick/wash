@@ -90,8 +90,6 @@ func main() {
 		},
 		Assets:               sub,
 		OnReady:              onReady,
-		OnAppMsg:             onAppMsg,
-		OnAppMsgFrom:         onAppMsgFrom,
 		OnPrepareSpawnResult: onPrepareSpawnResult,
 	})
 
@@ -107,93 +105,146 @@ func main() {
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-priv ready instance=%s window=%d", instanceID, windowID)
 	st.AttachConn(c)
+	bus := sdk.NewBus(c)
+	registerHandlers(bus)
 	go st.IdleTicker(cfg.IdleTimeout)
 }
 
-// onAppMsg handles own-FE messages. Cross-app requests land in
-// onAppMsgFrom instead — we keep the two paths separate so the FE
-// can never impersonate a requester.
-func onAppMsg(c *sdk.Conn, _ uint32, data any) {
-	m := sdk.AsMap(data)
-	if m == nil {
-		return
-	}
-	kind, _ := m["kind"].(string)
-	switch kind {
-	case "hello":
-		nonce, _ := m["page_nonce"].(string)
-		st.HandleHello(c, nonce)
-	case "resync":
-		st.SendStateSnapshot(c)
-	case "approve":
-		st.HandleApprove(c, sdk.ToString(m["req_id"]))
-	case "reject":
-		st.HandleReject(c, sdk.ToString(m["req_id"]), sdk.ToString(m["reason"]))
-	case "unlock":
-		ct := sdk.DecodeBase64(m["ciphertext"])
-		pk := sdk.DecodeBase64(m["fe_pubkey"])
-		nonce := sdk.DecodeBase64(m["nonce"])
-		st.HandleUnlock(c, ct, pk, nonce)
-	case "lock":
-		st.HandleLock(c, "explicit")
-	}
+// ----- bus types -----
+//
+// wash-priv doesn't return _ok/_err replies — the state code in
+// queue.go produces domain-specific event kinds ({kind:"spawned"},
+// {kind:"result"}, {kind:"rejected"}, {kind:"req.update"}, …) via
+// direct SendAppMsg / SendAppMsgTo. So every handler here is a
+// HandleVoid / HandleFromVoid; the bus is just a typed dispatcher
+// onto the State methods.
+
+type helloReq struct {
+	PageNonce string `cbor:"page_nonce"`
 }
 
-// onAppMsgFrom is the cross-app entry point. The router has stamped
-// `from` with the sender's instance — never trust anything the
-// payload claims about origin.
-func onAppMsgFrom(c *sdk.Conn, _ uint32, data any, from wire.Sender) {
-	m := sdk.AsMap(data)
-	if m == nil {
-		return
-	}
-	kind, _ := m["kind"].(string)
-	reqID := sdk.ToString(m["req_id"])
-	if reqID == "" {
-		// We can't reply without a req_id (the requester wouldn't be
-		// able to correlate the answer). Log and drop.
-		log.Printf("wash-priv: cross-app msg without req_id from %s/%s", from.AppID, from.InstanceID)
-		return
-	}
-	switch kind {
-	case "run":
-		argv := sdk.ToStringSlice(m["argv"])
-		reason := sdk.ToString(m["reason"])
-		st.EnqueueRun(c, from, reqID, argv, reason)
-	case "spawn":
-		appID := sdk.ToString(m["app_id"])
-		args := sdk.ToStringSlice(m["args"])
-		reason := sdk.ToString(m["reason"])
-		st.EnqueueSpawn(c, from, reqID, appID, args, reason)
-	case "run_inline":
-		// Originates from the wash-sudo CLI via the control socket's
-		// priv.run op. The sender is a synthetic cli-* instance and
-		// stays the addressee for stream/stdin/result envelopes.
-		argv := sdk.ToStringSlice(m["argv"])
-		cwd := sdk.ToString(m["cwd"])
-		reason := sdk.ToString(m["reason"])
-		noPrompt, _ := m["no_prompt"].(bool)
-		envMap := sdk.ToStringMap(m["env"])
-		origin := parseCliOrigin(m["cli_origin"])
-		st.EnqueueRunInline(c, from, reqID, argv, cwd, envMap, reason, noPrompt, origin)
-	case "stdin":
-		// Forwarded bytes for the running subprocess of reqID.
-		b := sdk.DecodeBase64(m["bytes"])
+type approveReq struct {
+	ReqID string `cbor:"req_id"`
+}
+
+type rejectReq struct {
+	ReqID  string `cbor:"req_id"`
+	Reason string `cbor:"reason"`
+}
+
+type unlockReq struct {
+	Ciphertext any `cbor:"ciphertext"`
+	FEPubKey   any `cbor:"fe_pubkey"`
+	Nonce      any `cbor:"nonce"`
+}
+
+type runReq struct {
+	Argv   []string `cbor:"argv"`
+	Reason string   `cbor:"reason"`
+}
+
+type spawnReq struct {
+	AppID  string   `cbor:"app_id"`
+	Args   []string `cbor:"args"`
+	Reason string   `cbor:"reason"`
+}
+
+type runInlineReq struct {
+	Argv      []string          `cbor:"argv"`
+	Cwd       string            `cbor:"cwd"`
+	Reason    string            `cbor:"reason"`
+	NoPrompt  bool              `cbor:"no_prompt"`
+	Env       map[string]string `cbor:"env"`
+	CliOrigin any               `cbor:"cli_origin"`
+}
+
+type stdinReq struct {
+	Bytes any `cbor:"bytes"` // base64 string
+}
+
+type emptyReq struct{}
+
+func registerHandlers(b *sdk.Bus) {
+	// ----- own-FE -----
+	sdk.HandleVoid(b, "hello", func(c *sdk.Conn, _ string, req helloReq) error {
+		st.HandleHello(c, req.PageNonce)
+		return nil
+	})
+	sdk.HandleVoid(b, "resync", func(c *sdk.Conn, _ string, _ emptyReq) error {
+		st.SendStateSnapshot(c)
+		return nil
+	})
+	sdk.HandleVoid(b, "approve", func(c *sdk.Conn, _ string, req approveReq) error {
+		st.HandleApprove(c, req.ReqID)
+		return nil
+	})
+	sdk.HandleVoid(b, "reject", func(c *sdk.Conn, _ string, req rejectReq) error {
+		st.HandleReject(c, req.ReqID, req.Reason)
+		return nil
+	})
+	sdk.HandleVoid(b, "unlock", func(c *sdk.Conn, _ string, req unlockReq) error {
+		st.HandleUnlock(c,
+			sdk.DecodeBase64(req.Ciphertext),
+			sdk.DecodeBase64(req.FEPubKey),
+			sdk.DecodeBase64(req.Nonce))
+		return nil
+	})
+	sdk.HandleVoid(b, "lock", func(c *sdk.Conn, _ string, _ emptyReq) error {
+		st.HandleLock(c, "explicit")
+		return nil
+	})
+
+	// ----- cross-app -----
+	sdk.HandleFromVoid(b, "run", func(c *sdk.Conn, reqID string, req runReq, from wire.Sender) error {
+		if reqID == "" {
+			log.Printf("wash-priv: run without req_id from %s/%s", from.AppID, from.InstanceID)
+			return nil
+		}
+		st.EnqueueRun(c, from, reqID, req.Argv, req.Reason)
+		return nil
+	})
+	sdk.HandleFromVoid(b, "spawn", func(c *sdk.Conn, reqID string, req spawnReq, from wire.Sender) error {
+		if reqID == "" {
+			log.Printf("wash-priv: spawn without req_id from %s/%s", from.AppID, from.InstanceID)
+			return nil
+		}
+		st.EnqueueSpawn(c, from, reqID, req.AppID, req.Args, req.Reason)
+		return nil
+	})
+	sdk.HandleFromVoid(b, "run_inline", func(c *sdk.Conn, reqID string, req runInlineReq, from wire.Sender) error {
+		if reqID == "" {
+			log.Printf("wash-priv: run_inline without req_id from %s/%s", from.AppID, from.InstanceID)
+			return nil
+		}
+		origin := parseCliOrigin(req.CliOrigin)
+		st.EnqueueRunInline(c, from, reqID, req.Argv, req.Cwd, req.Env, req.Reason, req.NoPrompt, origin)
+		return nil
+	})
+	sdk.HandleFromVoid(b, "stdin", func(_ *sdk.Conn, reqID string, req stdinReq, _ wire.Sender) error {
+		if reqID == "" {
+			return nil
+		}
+		b := sdk.DecodeBase64(req.Bytes)
 		if len(b) > 0 {
 			st.HandleInlineStdin(reqID, b)
 		}
-	case "stdin_close":
+		return nil
+	})
+	sdk.HandleFromVoid(b, "stdin_close", func(_ *sdk.Conn, reqID string, _ emptyReq, _ wire.Sender) error {
+		if reqID == "" {
+			return nil
+		}
 		st.HandleInlineStdinClose(reqID)
-	case "cancel", "cli.disconnect":
-		// cli.disconnect comes from the router when the wash-sudo
-		// side hangs up; semantically the same as a cancel.
-		st.HandleInlineCancel(reqID)
-	default:
-		_ = c.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
-			"kind":   "error",
-			"req_id": reqID,
-			"code":   "bad_request",
-			"msg":    "unknown kind " + kind,
+		return nil
+	})
+	// cancel and cli.disconnect both terminate an in-flight inline run.
+	for _, kind := range []string{"cancel", "cli.disconnect"} {
+		sdk.HandleFromVoid(b, kind, func(_ *sdk.Conn, reqID string, _ emptyReq, _ wire.Sender) error {
+			if reqID == "" {
+				return nil
+			}
+			st.HandleInlineCancel(reqID)
+			return nil
 		})
 	}
 }

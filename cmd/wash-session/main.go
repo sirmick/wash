@@ -56,10 +56,19 @@ func main() {
 }
 
 // onReady ships the initial desktop config and starts watching the
-// config file for live updates from wash-settings.
+// config file for live updates from wash-settings. Also installs a
+// bus + the one kind-shaped handler we have (desktop.request); the
+// action-keyed FE messages (launch / spawn_root) flow through the
+// fallback OnAppMsg path, since they don't fit the bus's kind
+// dispatch.
 func onReady(c *sdk.Conn, _ string, _ uint32) {
 	sendDesktopConfig(c)
 	startConfigWatcher(c)
+	bus := sdk.NewBus(c)
+	sdk.HandleVoid(bus, "desktop.request", func(conn *sdk.Conn, _ string, _ struct{}) error {
+		sendDesktopConfig(conn)
+		return nil
+	})
 }
 
 // washIcon — Lucide sprite symbol name. Session is surface=desktop
@@ -75,13 +84,12 @@ const washIcon = "layout-dashboard"
 //   {"action":"spawn_root","app_id":"…"}    — ask wash-priv to spawn
 //                                              an app as root
 //   {"kind":"desktop.request"}              — re-ship desktop.config
+// onAppMsg handles the action-keyed launcher messages — these
+// predate the bus and use `action` instead of `kind`. The bus
+// dispatches kind-shaped messages first; this is the fallback.
 func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 	m := sdk.AsMap(data)
 	if m == nil {
-		return
-	}
-	if kind, _ := m["kind"].(string); kind == "desktop.request" {
-		sendDesktopConfig(c)
 		return
 	}
 	action, _ := m["action"].(string)

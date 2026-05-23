@@ -84,7 +84,6 @@ func main() {
 		},
 		Assets:           sub,
 		OnReady:          onReady,
-		OnAppMsg:         onAppMsg,
 		OnCloseRequested: onCloseRequested,
 	})
 }
@@ -95,7 +94,72 @@ func main() {
 // foreground sync path so a goroutine is the safer pattern uniformly.
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-term ready instance=%s window=%d", instanceID, windowID)
+	bus := sdk.NewBus(c)
+	registerHandlers(bus)
 	go openTab(c, windowID, 80, 24)
+}
+
+// ----- bus types -----
+
+type saveStateReq struct {
+	State any `cbor:"state"`
+}
+
+type resizeReq struct {
+	ChannelID uint64 `cbor:"channel_id"`
+	Cols      uint64 `cbor:"cols"`
+	Rows      uint64 `cbor:"rows"`
+}
+
+type newTabReq struct {
+	Cols uint64 `cbor:"cols"`
+	Rows uint64 `cbor:"rows"`
+}
+
+type closeTabReq struct {
+	ChannelID uint64 `cbor:"channel_id"`
+}
+
+func registerHandlers(b *sdk.Bus) {
+	sdk.HandleVoid(b, "save_state", func(c *sdk.Conn, _ string, req saveStateReq) error {
+		return c.SaveState(req.State)
+	})
+	sdk.HandleVoid(b, "resize", func(_ *sdk.Conn, _ string, req resizeReq) error {
+		if req.ChannelID == 0 || req.Cols == 0 || req.Rows == 0 {
+			return nil
+		}
+		st.mu.Lock()
+		sess := st.sessions[uint32(req.ChannelID)]
+		st.mu.Unlock()
+		if sess == nil {
+			return nil
+		}
+		return sess.Resize(uint16(req.Cols), uint16(req.Rows))
+	})
+	sdk.HandleVoid(b, "new_tab", func(c *sdk.Conn, _ string, req newTabReq) error {
+		cols := req.Cols
+		rows := req.Rows
+		if cols == 0 {
+			cols = 80
+		}
+		if rows == 0 {
+			rows = 24
+		}
+		go openTab(c, c.WindowID(), uint16(cols), uint16(rows))
+		return nil
+	})
+	sdk.HandleVoid(b, "close_tab", func(_ *sdk.Conn, _ string, req closeTabReq) error {
+		if req.ChannelID == 0 {
+			return nil
+		}
+		st.mu.Lock()
+		sess := st.sessions[uint32(req.ChannelID)]
+		st.mu.Unlock()
+		if sess != nil {
+			sess.CloseWithReason("user requested")
+		}
+		return nil
+	})
 }
 
 // openTab forks a shell (or --exec argv), opens a raw channel, and
@@ -148,62 +212,6 @@ func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
 		"channel_id": uint64(sess.ID()),
 		"shell":      sess.Shell,
 	})
-}
-
-func onAppMsg(c *sdk.Conn, _ uint32, data any) {
-	m := sdk.AsMap(data)
-	if m == nil {
-		return
-	}
-	switch kind, _ := m["kind"].(string); kind {
-	case "save_state":
-		// FE-originated persistence — BE is the single writer to
-		// the router's app_state store.
-		state, ok := m["state"]
-		if !ok {
-			return
-		}
-		if err := c.SaveState(state); err != nil {
-			log.Printf("wash-term save_state: %v", err)
-		}
-	case "resize":
-		chID := sdk.ToUint64(m["channel_id"])
-		cols := sdk.ToUint64(m["cols"])
-		rows := sdk.ToUint64(m["rows"])
-		if chID == 0 || cols == 0 || rows == 0 {
-			return
-		}
-		st.mu.Lock()
-		sess := st.sessions[uint32(chID)]
-		st.mu.Unlock()
-		if sess == nil {
-			return
-		}
-		if err := sess.Resize(uint16(cols), uint16(rows)); err != nil {
-			log.Printf("wash-term resize ch=%d: %v", chID, err)
-		}
-	case "new_tab":
-		cols := sdk.ToUint64(m["cols"])
-		rows := sdk.ToUint64(m["rows"])
-		if cols == 0 {
-			cols = 80
-		}
-		if rows == 0 {
-			rows = 24
-		}
-		go openTab(c, c.WindowID(), uint16(cols), uint16(rows))
-	case "close_tab":
-		chID := sdk.ToUint64(m["channel_id"])
-		if chID == 0 {
-			return
-		}
-		st.mu.Lock()
-		sess := st.sessions[uint32(chID)]
-		st.mu.Unlock()
-		if sess != nil {
-			sess.CloseWithReason("user requested")
-		}
-	}
 }
 
 func onCloseRequested(c *sdk.Conn, win uint32) bool {

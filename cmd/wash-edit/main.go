@@ -28,7 +28,6 @@ import (
 	"io/fs"
 	"log"
 	"os"
-	"strings"
 	"sync"
 
 	wfs "github.com/sirmick/wash/internal/fs"
@@ -92,11 +91,12 @@ func main() {
 			// this capability before honoring the request.
 			Capabilities: []string{sdk.CapSpawn},
 		},
-		Assets:   sub,
-		OnReady:  onReady,
-		OnAppMsg: onAppMsg,
+		Assets:  sub,
+		OnReady: onReady,
 	})
 }
+
+var bus *sdk.Bus
 
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	mu.Lock()
@@ -104,8 +104,15 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	editFS = wfs.New(root)
 	mu.Unlock()
 	// FilePicker bridge: one-liner; the picker FE addresses the
-	// editor's own BE.
+	// editor's own BE. EnableFilePicker installs its own OnAppMsg
+	// chain on c; the bus then wraps that, so fs.* messages still
+	// route to the filepicker handler while everything else flows
+	// through the bus.
 	sdk.EnableFilePicker(c)
+
+	bus = sdk.NewBus(c)
+	registerHandlers(bus)
+
 	if root == "" {
 		log.Printf("wash-edit ready instance=%s window=%d (unconfined)", instanceID, windowID)
 	} else {
@@ -113,65 +120,140 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	}
 }
 
-func onAppMsg(c *sdk.Conn, _ uint32, data any) {
-	m := sdk.AsMap(data)
-	if m == nil {
-		return
-	}
-	kind, _ := m["kind"].(string)
-	id, _ := m["id"].(string)
-	// Headless control commands (cmd.*) are owned by the FE; the BE
-	// just passes them through unchanged. Callers that have a
-	// direct line to the FE can skip this hop; the BE-side forward
-	// is here so test drivers and other apps can target either side.
-	if strings.HasPrefix(kind, "cmd.") {
-		_ = c.SendAppMsg(m)
-		return
-	}
-	switch kind {
-	case "list":
-		path, _ := m["path"].(string)
-		doList(c, id, path)
-	case "read":
-		path, _ := m["path"].(string)
-		doRead(c, id, path)
-	case "write":
-		path, _ := m["path"].(string)
-		content, _ := m["content"].(string)
-		doWrite(c, id, path, content)
-	case "rename":
-		from, _ := m["from"].(string)
-		to, _ := m["to"].(string)
-		replace, _ := m["replace"].(bool)
-		doRename(c, id, from, to, replace)
-	case "delete":
-		path, _ := m["path"].(string)
-		doDelete(c, id, path)
-	case "spawn":
+// ----- request/response types -----
+
+type listReq struct {
+	Path string `cbor:"path"`
+}
+
+type readReq struct {
+	Path string `cbor:"path"`
+}
+
+type writeReq struct {
+	Path    string `cbor:"path"`
+	Content string `cbor:"content"`
+}
+
+type renameReq struct {
+	From    string `cbor:"from"`
+	To      string `cbor:"to"`
+	Replace bool   `cbor:"replace"`
+}
+
+type pathReq struct {
+	Path string `cbor:"path"`
+}
+
+type spawnReq struct {
+	AppID string `cbor:"app_id"`
+}
+
+type saveStateReq struct {
+	State any `cbor:"state"`
+}
+
+type termOpenReq struct {
+	Cols uint64 `cbor:"cols"`
+	Rows uint64 `cbor:"rows"`
+}
+
+type termResizeReq struct {
+	ChannelID uint64 `cbor:"channel_id"`
+	Cols      uint64 `cbor:"cols"`
+	Rows      uint64 `cbor:"rows"`
+}
+
+type termCloseReq struct {
+	ChannelID uint64 `cbor:"channel_id"`
+}
+
+type termOpenedEvent struct {
+	ChannelID uint64 `cbor:"channel_id"`
+	Shell     string `cbor:"shell"`
+}
+
+type termClosedEvent struct {
+	ChannelID uint64 `cbor:"channel_id"`
+	Reason    string `cbor:"reason"`
+}
+
+// ----- handler registration -----
+
+func registerHandlers(b *sdk.Bus) {
+	// cmd.* — FE-owned passthrough. The bus pattern routes any kind
+	// starting with "cmd." into this single handler, which echoes the
+	// message back unchanged so test drivers and other apps targeting
+	// either side see the same wire.
+	b.HandlePattern("cmd.", func(c *sdk.Conn, _ string, data map[any]any) {
+		_ = c.SendAppMsg(sdk.AsMap(data))
+	})
+
+	sdk.Handle(b, "list", func(_ *sdk.Conn, _ string, req listReq) (wfs.ListReply, error) {
+		path := req.Path
+		// "/" gets resolved to a useful default so the FE boot doesn't
+		// have to chain calls.
+		if path == "/" {
+			if root != "" {
+				path = root
+			} else {
+				path = wfs.DefaultStart()
+			}
+		}
+		if path == "" {
+			return wfs.ListReply{}, sdk.Errf(sdk.ErrBadRequest, "missing path")
+		}
+		entries, abs, truncated, err := editFS.List(path, maxListEntries)
+		if err != nil {
+			return wfs.ListReply{}, sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
+		}
+		return wfs.ListReply{Path: abs, Entries: entries, Truncated: truncated}, nil
+	})
+
+	sdk.Handle(b, "read", func(_ *sdk.Conn, _ string, req readReq) (wfs.ReadReply, error) {
+		return doRead(req.Path)
+	})
+
+	sdk.Handle(b, "write", func(_ *sdk.Conn, _ string, req writeReq) (wfs.WriteReply, error) {
+		abs, n, err := editFS.Write(req.Path, []byte(req.Content), maxWriteBytes)
+		if err != nil {
+			return wfs.WriteReply{}, sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
+		}
+		return wfs.WriteReply{Path: abs, Bytes: n}, nil
+	})
+
+	sdk.Handle(b, "rename", func(_ *sdk.Conn, _ string, req renameReq) (wfs.RenameReply, error) {
+		src, dst, err := editFS.Rename(req.From, req.To, req.Replace)
+		if err != nil {
+			return wfs.RenameReply{}, sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
+		}
+		return wfs.RenameReply{From: src, To: dst}, nil
+	})
+
+	sdk.Handle(b, "delete", func(_ *sdk.Conn, _ string, req pathReq) (wfs.PathReply, error) {
+		abs, err := editFS.Delete(req.Path)
+		if err != nil {
+			return wfs.PathReply{}, sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
+		}
+		return wfs.PathReply{Path: abs}, nil
+	})
+
+	sdk.HandleVoid(b, "spawn", func(c *sdk.Conn, _ string, req spawnReq) error {
 		// FE-driven app spawn (e.g. the "Open in fm" button). The
-		// router validates CapSpawn on the manifest; without it,
-		// SpawnRequest returns ErrCodeForbidden.
-		appID, _ := m["app_id"].(string)
-		if appID == "" {
-			return
+		// router validates CapSpawn on the manifest.
+		if req.AppID == "" {
+			return nil
 		}
-		if err := c.SpawnRequest(appID); err != nil {
-			log.Printf("wash-edit spawn %s: %v", appID, err)
-		}
-	case "save_state":
-		// Persist the FE's state blob via the SDK's SaveState. The
-		// router stores it keyed by this instance's id and replays
-		// to the FE on next mount as a `wash:state` event.
-		state, ok := m["state"]
-		if !ok {
-			return
-		}
-		if err := c.SaveState(state); err != nil {
-			log.Printf("wash-edit save_state: %v", err)
-		}
-	case "term.open":
-		cols := sdk.ToUint64(m["cols"])
-		rows := sdk.ToUint64(m["rows"])
+		return c.SpawnRequest(req.AppID)
+	})
+
+	sdk.HandleVoid(b, "save_state", func(c *sdk.Conn, _ string, req saveStateReq) error {
+		return c.SaveState(req.State)
+	})
+
+	sdk.HandleVoid(b, "term.open", func(c *sdk.Conn, id string, req termOpenReq) error {
+		cols := req.Cols
+		rows := req.Rows
 		if cols == 0 {
 			cols = 80
 		}
@@ -180,34 +262,34 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		}
 		// OpenChannel must not run on the read goroutine; hand off.
 		go openTerm(c, id, uint16(cols), uint16(rows))
-	case "term.resize":
-		chID := sdk.ToUint64(m["channel_id"])
-		cols := sdk.ToUint64(m["cols"])
-		rows := sdk.ToUint64(m["rows"])
-		if chID == 0 || cols == 0 || rows == 0 {
-			return
+		return nil
+	})
+
+	sdk.HandleVoid(b, "term.resize", func(_ *sdk.Conn, _ string, req termResizeReq) error {
+		if req.ChannelID == 0 || req.Cols == 0 || req.Rows == 0 {
+			return nil
 		}
 		termMu.Lock()
-		sess := termSessions[uint32(chID)]
+		sess := termSessions[uint32(req.ChannelID)]
 		termMu.Unlock()
 		if sess == nil {
-			return
+			return nil
 		}
-		if err := sess.Resize(uint16(cols), uint16(rows)); err != nil {
-			log.Printf("wash-edit term.resize ch=%d: %v", chID, err)
-		}
-	case "term.close":
-		chID := sdk.ToUint64(m["channel_id"])
-		if chID == 0 {
-			return
+		return sess.Resize(uint16(req.Cols), uint16(req.Rows))
+	})
+
+	sdk.HandleVoid(b, "term.close", func(_ *sdk.Conn, _ string, req termCloseReq) error {
+		if req.ChannelID == 0 {
+			return nil
 		}
 		termMu.Lock()
-		sess := termSessions[uint32(chID)]
+		sess := termSessions[uint32(req.ChannelID)]
 		termMu.Unlock()
 		if sess != nil {
 			sess.CloseWithReason("user requested")
 		}
-	}
+		return nil
+	})
 }
 
 // openTerm spawns a shell, opens a raw channel, and wires them via
@@ -223,15 +305,11 @@ func openTerm(c *sdk.Conn, replyID string, cols, rows uint16) {
 		if !found {
 			return
 		}
-		_ = c.SendAppMsg(map[string]any{
-			"kind":       "term.closed",
-			"channel_id": uint64(s.ID()),
-			"reason":     reason,
-		})
+		_ = bus.Emit("term.closed", termClosedEvent{ChannelID: uint64(s.ID()), Reason: reason})
 	})
 	if err != nil {
 		log.Printf("wash-edit term open: %v", err)
-		_ = c.SendAppMsg(map[string]any{"kind": "term.open_err", "id": replyID, "msg": err.Error()})
+		_ = bus.Emit("term.open_err", map[string]any{"id": replyID, "msg": err.Error()})
 		return
 	}
 	termMu.Lock()
@@ -239,72 +317,45 @@ func openTerm(c *sdk.Conn, replyID string, cols, rows uint16) {
 	termMu.Unlock()
 
 	log.Printf("wash-edit term opened ch=%d shell=%s pid=%d", sess.ID(), sess.Shell, sess.Cmd().Process.Pid)
-	_ = c.SendAppMsg(map[string]any{
-		"kind":       "term.opened",
-		"id":         replyID,
+	// term.opened carries the FE's reply id so the FE can match the
+	// open request to its initiator. Emit-with-id achieves this by
+	// going via the bus's envelope path.
+	out := map[string]any{
 		"channel_id": uint64(sess.ID()),
 		"shell":      sess.Shell,
-	})
+	}
+	if replyID != "" {
+		out["id"] = replyID
+	}
+	_ = bus.Emit("term.opened", out)
 }
 
-func doList(c *sdk.Conn, id, path string) {
+// doRead loads up to maxReadBytes of path. Returns sdk.Err with the
+// canonical code on failure; the bus wraps it as read_err.
+func doRead(path string) (wfs.ReadReply, error) {
 	if path == "" {
-		sendErr(c, "list_err", id, path, "bad_request", "missing path")
-		return
-	}
-	// "/" gets resolved to a useful default so the FE boot doesn't
-	// have to chain calls. With a sandbox configured it means the
-	// sandbox root; without one it means $HOME (DefaultStart) — the
-	// unconfined editor lands the user in their home dir instead of
-	// the filesystem root. Path-bar navigation still works above it.
-	if path == "/" {
-		if root != "" {
-			path = root
-		} else {
-			path = wfs.DefaultStart()
-		}
-	}
-	entries, abs, truncated, err := editFS.List(path, maxListEntries)
-	if err != nil {
-		sendErr(c, "list_err", id, path, wfs.ErrCode(err), err.Error())
-		return
-	}
-	_ = c.SendAppMsg(wfs.ListReply{Kind: "list_ok", ID: id, Path: abs, Entries: entries, Truncated: truncated})
-}
-
-func doRead(c *sdk.Conn, id, path string) {
-	if path == "" {
-		sendErr(c, "read_err", id, path, "bad_request", "missing path")
-		return
+		return wfs.ReadReply{}, sdk.Errf(sdk.ErrBadRequest, "missing path")
 	}
 	abs, err := editFS.Confine(path)
 	if err != nil {
-		sendErr(c, "read_err", id, path, wfs.ErrCode(err), err.Error())
-		return
+		return wfs.ReadReply{}, sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
 	}
 	info, err := os.Stat(abs)
 	if err != nil {
-		sendErr(c, "read_err", id, abs, wfs.ErrCode(err), err.Error())
-		return
+		return wfs.ReadReply{}, sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
 	}
 	if info.IsDir() {
-		sendErr(c, "read_err", id, abs, "is_dir", "path is a directory")
-		return
+		return wfs.ReadReply{}, sdk.Errf("is_dir", "path is a directory")
 	}
 	f, err := os.Open(abs)
 	if err != nil {
-		sendErr(c, "read_err", id, abs, wfs.ErrCode(err), err.Error())
-		return
+		return wfs.ReadReply{}, sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
 	}
 	defer f.Close()
 	buf := make([]byte, maxReadBytes)
 	n, err := f.Read(buf)
-	if err != nil && n == 0 {
-		// EOF on an empty file is fine; only error if read truly failed.
-		if info.Size() != 0 {
-			sendErr(c, "read_err", id, abs, "io", err.Error())
-			return
-		}
+	if err != nil && n == 0 && info.Size() != 0 {
+		return wfs.ReadReply{}, sdk.Err{Code: sdk.ErrIO, Msg: err.Error()}
 	}
 	buf = buf[:n]
 	truncated := info.Size() > int64(n)
@@ -313,70 +364,13 @@ func doRead(c *sdk.Conn, id, path string) {
 	if !binary {
 		content = string(buf)
 	}
-	_ = c.SendAppMsg(wfs.ReadReply{
-		Kind:      "read_ok",
-		ID:        id,
+	return wfs.ReadReply{
 		Path:      abs,
 		Content:   content,
 		Size:      info.Size(),
 		Binary:    binary,
 		Truncated: truncated,
-	})
-}
-
-// doRename wraps internal/fs.Rename. Mirrors wash-fm's protocol:
-// reply with rename_ok { from, to } on success, rename_err on
-// failure. `replace=true` removes a clobber-able destination
-// first; non-empty dirs return code=not_empty_dir.
-func doRename(c *sdk.Conn, id, from, to string, replace bool) {
-	src, dst, err := editFS.Rename(from, to, replace)
-	if err != nil {
-		path := src
-		if path == "" {
-			path = from
-		}
-		sendErr(c, "rename_err", id, path, wfs.ErrCode(err), err.Error())
-		return
-	}
-	_ = c.SendAppMsg(map[string]any{
-		"kind": "rename_ok", "id": id, "from": src, "to": dst,
-	})
-}
-
-// doDelete wraps internal/fs.Delete for single-path deletes. The
-// editor's FE routes recursive deletes (non-empty dirs, multi)
-// through wash-bulk instead — fm-direct is the synchronous fast
-// path for the easy case.
-func doDelete(c *sdk.Conn, id, path string) {
-	abs, err := editFS.Delete(path)
-	if err != nil {
-		p := abs
-		if p == "" {
-			p = path
-		}
-		sendErr(c, "delete_err", id, p, wfs.ErrCode(err), err.Error())
-		return
-	}
-	_ = c.SendAppMsg(map[string]any{
-		"kind": "delete_ok", "id": id, "path": abs,
-	})
-}
-
-func doWrite(c *sdk.Conn, id, path, content string) {
-	abs, n, err := editFS.Write(path, []byte(content), maxWriteBytes)
-	if err != nil {
-		p := abs
-		if p == "" {
-			p = path
-		}
-		sendErr(c, "write_err", id, p, wfs.ErrCode(err), err.Error())
-		return
-	}
-	_ = c.SendAppMsg(wfs.WriteReply{Kind: "write_ok", ID: id, Path: abs, Bytes: n})
-}
-
-func sendErr(c *sdk.Conn, kind, id, path, code, msg string) {
-	_ = c.SendAppMsg(wfs.ErrReply{Kind: kind, ID: id, Path: path, Code: code, Msg: msg})
+	}, nil
 }
 
 // looksBinary inspects bytes for NUL — wash-fm's heuristic. Good

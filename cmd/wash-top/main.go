@@ -142,7 +142,6 @@ func main() {
 		OnReady:  onReady,
 		OnMapped: onMapped,
 		OnState:  onState,
-		OnAppMsg: onAppMsg,
 	})
 }
 
@@ -158,7 +157,82 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	// listens on mount and the window is always at least already
 	// mapped by the time we call SendAppMsg in the loop.
 	st.active.Store(true)
+	bus := sdk.NewBus(c)
+	registerHandlers(bus)
 	go snapshotLoop()
+}
+
+// ----- bus types + handlers -----
+
+type setIntervalReq struct {
+	MS int `cbor:"ms"`
+}
+
+type detailsReq struct {
+	PID int32 `cbor:"pid"`
+}
+
+// detailsResp mirrors the Details struct in proc.go but tagged for
+// CBOR so the bus encodes it correctly. Field types match Details.
+type detailsResp struct {
+	PID      int32             `cbor:"pid"`
+	Found    bool              `cbor:"found"`
+	Comm     string            `cbor:"comm"`
+	Cmd      string            `cbor:"cmd"`
+	Exe      string            `cbor:"exe"`
+	Cwd      string            `cbor:"cwd"`
+	Status   map[string]string `cbor:"status"`
+	IO       map[string]string `cbor:"io"`
+	Limits   []limitRow        `cbor:"limits"`
+	Cgroup   string            `cbor:"cgroup"`
+	FDs      int32             `cbor:"fds"`
+	Wchan    string            `cbor:"wchan"`
+	OOMScore string            `cbor:"oom_score"`
+}
+
+type signalReq struct {
+	PID int32  `cbor:"pid"`
+	Sig string `cbor:"sig"`
+}
+
+type signalResp struct {
+	PID int32  `cbor:"pid"`
+	Sig string `cbor:"sig"`
+}
+
+func registerHandlers(b *sdk.Bus) {
+	sdk.HandleVoid(b, "set_interval", func(_ *sdk.Conn, _ string, req setIntervalReq) error {
+		ms := req.MS
+		if ms < minIntervalMS {
+			ms = minIntervalMS
+		}
+		if ms > maxIntervalMS {
+			ms = maxIntervalMS
+		}
+		st.intervalMS.Store(int64(ms))
+		poke()
+		return nil
+	})
+	sdk.HandleVoid(b, "request_snapshot", func(_ *sdk.Conn, _ string, _ struct{}) error {
+		poke()
+		return nil
+	})
+	sdk.Handle(b, "details", func(_ *sdk.Conn, _ string, req detailsReq) (detailsResp, error) {
+		d := readDetails(req.PID)
+		return detailsResp{
+			PID: req.PID, Found: d.Found, Comm: d.Comm, Cmd: d.Cmd, Exe: d.Exe,
+			Cwd: d.Cwd, Status: d.Status, IO: d.IO, Limits: d.Limits,
+			Cgroup: d.Cgroup, FDs: d.FDs, Wchan: d.Wchan, OOMScore: d.OOMScore,
+		}, nil
+	})
+	sdk.Handle(b, "signal", func(_ *sdk.Conn, _ string, req signalReq) (signalResp, error) {
+		if err := sendSignal(req.PID, req.Sig); err != nil {
+			return signalResp{}, sdk.Err{Code: classifySignalErr(err), Msg: err.Error()}
+		}
+		// Push a follow-up snapshot so the row clears in the UI.
+		poke()
+		return signalResp{PID: req.PID, Sig: req.Sig}, nil
+	})
 }
 
 // onMapped resumes the stream. onState handles minimize/restore.
@@ -226,68 +300,6 @@ func pushSnapshot() {
 	snap.IntMS = int(st.intervalMS.Load())
 	if err := st.conn.SendAppMsg(snap); err != nil {
 		log.Printf("wash-top send snapshot: %v", err)
-	}
-}
-
-// ---- dispatch ----
-
-func onAppMsg(_ *sdk.Conn, _ uint32, data any) {
-	m := sdk.AsMap(data)
-	if m == nil {
-		return
-	}
-	kind, _ := m["kind"].(string)
-	id, _ := m["id"].(string)
-	switch kind {
-	case "set_interval":
-		ms := toInt(m["ms"])
-		if ms < minIntervalMS {
-			ms = minIntervalMS
-		}
-		if ms > maxIntervalMS {
-			ms = maxIntervalMS
-		}
-		st.intervalMS.Store(int64(ms))
-		poke()
-	case "request_snapshot":
-		// One-off snapshot, e.g. after a kill so the FE updates
-		// without waiting for the next tick.
-		poke()
-	case "details":
-		pid := int32(toInt(m["pid"]))
-		d := readDetails(pid)
-		_ = st.conn.SendAppMsg(map[string]any{
-			"kind":     "details_ok",
-			"id":       id,
-			"pid":      pid,
-			"found":    d.Found,
-			"comm":     d.Comm,
-			"cmd":      d.Cmd,
-			"exe":      d.Exe,
-			"cwd":      d.Cwd,
-			"status":   d.Status,
-			"io":       d.IO,
-			"limits":   d.Limits,
-			"cgroup":   d.Cgroup,
-			"fds":      d.FDs,
-			"wchan":    d.Wchan,
-			"oom_score": d.OOMScore,
-		})
-	case "signal":
-		pid := int32(toInt(m["pid"]))
-		sig, _ := m["sig"].(string)
-		if err := sendSignal(pid, sig); err != nil {
-			_ = st.conn.SendAppMsg(map[string]any{
-				"kind": "signal_err", "id": id, "pid": pid, "sig": sig,
-				"code": classifySignalErr(err), "msg": err.Error(),
-			})
-			return
-		}
-		_ = st.conn.SendAppMsg(map[string]any{
-			"kind": "signal_ok", "id": id, "pid": pid, "sig": sig,
-		})
-		// Push a follow-up snapshot soon so the row clears.
-		poke()
 	}
 }
 
