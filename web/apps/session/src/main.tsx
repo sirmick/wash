@@ -111,19 +111,28 @@ function rootSourceID(syntheticID: string): string {
 }
 
 // rootEntryFor builds the synthetic CatalogApp row that the launcher
-// renders for a source app declaring root_variant. Defaults: name is
-// "<Name> (root)" unless the variant overrides; icon is shield-alert.
+// renders for a source app declaring root_variant. Default name is
+// the source app's name verbatim — the red-tinted icon carries the
+// "this runs as root" signal, so duplicating it in the label was
+// noise. Apps that want an explicit label (Root Terminal) set
+// `root_variant.name` in their manifest.
 function rootEntryFor(src: CatalogApp): CatalogApp | null {
   if (!src.root_variant) return null;
   return {
     id: ROOT_PREFIX + src.id,
-    name: src.root_variant.name ?? `${src.name} (root)`,
+    name: src.root_variant.name ?? src.name,
     icon: src.root_variant.icon ?? 'shield-alert',
     surface: src.surface,
     instancing: src.instancing,
     disabled: false,
   };
 }
+
+// ROOT_ICON_COLOR — the tint applied to root-row icons in the start
+// menu and command palette. Bright enough to stand out on the dark
+// menu background but not so loud that the row feels destructive.
+// Single source of truth so both rendering sites stay consistent.
+const ROOT_ICON_COLOR = '#e26060';
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ---- reactive state ----
@@ -967,30 +976,6 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
   );
 };
 
-// rootMenuItemStyle + rootMenuBadgeStyle are declared above StartMenu
-// because Solid's JSX compile path evaluates inline style references
-// at module init in some configurations — declaring after the
-// component triggers a TDZ "cannot access X before initialization"
-// error on the bundle's first run.
-// Styled to match MenuItem dimensions exactly — same padding, gap,
-// icon slot width — so the Root Terminal label lines up with the
-// labels of normal entries above and below it. Only the colours
-// differ.
-const rootMenuItemStyle: JSX.CSSProperties = {
-  display: 'flex',
-  'align-items': 'center',
-  gap: '10px',
-  width: '100%',
-  padding: '6px 14px',
-  background: '#7a1f1f',
-  color: '#fff',
-  border: 'none',
-  'border-radius': '4px',
-  cursor: 'pointer',
-  font: '13px ui-sans-serif,system-ui,sans-serif',
-  'text-align': 'left',
-};
-
 const StartMenu: Component<{
   apps: CatalogApp[];
   rootRows: CatalogApp[];
@@ -998,7 +983,9 @@ const StartMenu: Component<{
   onDismiss: () => void;
 }> = (props) => {
   // Merge synthetic root rows in with the catalog and sort
-  // alphabetically — the red rows stand out on their own.
+  // alphabetically. Root rows get a red-tinted icon — that's the
+  // only visual signal; everything else (padding, font, hover) is
+  // the standard MenuItem shape.
   const items = createMemo(() => {
     const merged = [...props.apps, ...props.rootRows];
     merged.sort((a, b) => a.name.localeCompare(b.name));
@@ -1017,47 +1004,27 @@ const StartMenu: Component<{
       <Show when={items().length > 0} fallback={<div style={emptyStyle}>no apps registered</div>}>
         <For each={items()}>
           {(app) => {
-            if (isRootRow(app.id)) {
-              // data-testid keeps the legacy "start-menu-root-terminal"
-              // for the wash-term row so existing tests stay green;
-              // others get start-menu-root-<srcID>. Both shapes are
-              // stable hooks teams can grep for.
-              const srcID = app.id.slice(ROOT_PREFIX.length);
-              const testid = srcID === 'com.wash.term'
-                ? 'start-menu-root-terminal'
-                : `start-menu-root-${srcID}`;
-              return (
-                <button
-                  type="button"
-                  data-testid={testid}
-                  onClick={() => props.onPick(app.id)}
-                  style={rootMenuItemStyle}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#a02828'; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#7a1f1f'; }}
-                >
-                  {/* Match MenuItem's 22×22 icon slot so the label
-                      lines up across the catalog/root mix. */}
-                  <span
-                    style={{
-                      width: '22px',
-                      height: '22px',
-                      'flex-shrink': 0,
-                      display: 'inline-flex',
-                      'align-items': 'center',
-                      'justify-content': 'center',
-                    }}
-                  >
-                    <SpriteIcon name={app.icon!} size={20} />
-                  </span>
-                  <span style={{ flex: 1, 'text-align': 'left' }}>{app.name}</span>
-                </button>
-              );
-            }
+            const root = isRootRow(app.id);
+            // Stable data-testid hook: legacy wash-term row keeps the
+            // "start-menu-root-terminal" id; everything else gets
+            // start-menu-root-<srcID>. Non-root rows fall back to
+            // MenuItem's own (no testid stamping needed).
+            const rootTestid = root
+              ? (app.id.slice(ROOT_PREFIX.length) === 'com.wash.term'
+                  ? 'start-menu-root-terminal'
+                  : `start-menu-root-${app.id.slice(ROOT_PREFIX.length)}`)
+              : undefined;
+            const iconNode = app.icon ? (
+              <span style={{ color: root ? ROOT_ICON_COLOR : undefined, display: 'inline-flex' }}>
+                <SpriteIcon name={app.icon} size={20} />
+              </span>
+            ) : undefined;
             return (
               <MenuItem
+                data-testid={rootTestid}
                 label={app.name}
                 disabled={app.disabled}
-                icon={app.icon ? <SpriteIcon name={app.icon} size={20} /> : undefined}
+                icon={iconNode}
                 trailing={
                   app.disabled ? (
                     <span style={{ color: tokens.fgMuted, 'font-size': tokens.fontSizeMd }}>
@@ -1185,10 +1152,8 @@ const PaletteRow: Component<{
         gap: '10px',
         width: '100%',
         padding: '8px 16px',
-        background: props.isRoot
-          ? (props.selected ? '#a02828' : '#7a1f1f')
-          : (props.selected ? '#2a2a4a' : 'transparent'),
-        color: props.isRoot ? '#fff' : '#eee',
+        background: props.selected ? '#2a2a4a' : 'transparent',
+        color: '#eee',
         border: 'none',
         'text-align': 'left',
         cursor: 'pointer',
@@ -1203,6 +1168,9 @@ const PaletteRow: Component<{
           display: 'inline-flex',
           'align-items': 'center',
           'justify-content': 'center',
+          // Root entries get the same red tint as in the start menu;
+          // the icon is the only signal — row chrome is unchanged.
+          color: props.isRoot ? ROOT_ICON_COLOR : undefined,
         }}
       >
         <Show when={props.app.icon}>
@@ -1210,9 +1178,7 @@ const PaletteRow: Component<{
         </Show>
       </span>
       <span style={{ flex: 1 }}>{props.app.name}</span>
-      <Show when={!props.isRoot}>
-        <span style={{ opacity: 0.55, 'font-size': '12px' }}>{props.app.id}</span>
-      </Show>
+      <span style={{ opacity: 0.55, 'font-size': '12px' }}>{props.app.id}</span>
     </button>
   );
 };
