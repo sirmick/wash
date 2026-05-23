@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/sirmick/wash/internal/wire"
 )
@@ -135,6 +136,7 @@ func (r *Router) handleAttach(ctx context.Context, conn net.Conn, rd *bufio.Read
 			PeerUID:    peerUID,
 			InstanceID: rec.instanceID,
 			router:     r,
+			startedAt:  time.Now(),
 		}
 		if inst.Manifest.Surface == SurfaceWindow {
 			inst.WindowID = r.allocWindowID()
@@ -193,6 +195,7 @@ func (r *Router) handleAttach(ctx context.Context, conn net.Conn, rd *bufio.Read
 		Manifest:  entry.Manifest,
 		PeerUID:   peerUID,
 		router:    r,
+		startedAt: time.Now(),
 	}
 	if err := r.acceptIdentity(inst); err != nil {
 		_ = conn.Close()
@@ -289,8 +292,46 @@ func (r *Router) startFreshAttach(ctx context.Context, inst *AppInstance) {
 	if err := inst.loop(context.Background()); err != nil {
 		r.log("app %s loop: %v", inst.AppID, err)
 	}
+	// Terminal-attached BE death is the conn-closure: any non-
+	// expectedExit drop is a tombstone-worthy event. We can't read
+	// the exit code (we don't own the process) and stdout/stderr
+	// went to the launching terminal, but the window is real and
+	// the user deserves to know it died. The dialog gets a hint
+	// pointing at the terminal.
+	r.maybeBroadcastFreshAttachCrash(inst)
 	r.tearDown(inst)
 	_ = inst.Transport.Close()
+}
+
+// maybeBroadcastFreshAttachCrash is the terminal-attach analogue of
+// maybeBroadcastCrash: same event, no exit code / signal / log
+// (those belong to the launching terminal), but enough to convert
+// the window into a tombstone instead of silently vanishing.
+func (r *Router) maybeBroadcastFreshAttachCrash(inst *AppInstance) {
+	if inst.expectedExit.Load() {
+		return
+	}
+	if inst.WindowID == 0 {
+		// Desktop/kiosk/cli sessions don't have a tombstone-able
+		// window. The exit is still logged via the loop-error line.
+		return
+	}
+	uptime := ""
+	if !inst.startedAt.IsZero() {
+		uptime = time.Since(inst.startedAt).Round(time.Second).String()
+	}
+	log := "App process exited unexpectedly.\n\n" +
+		"This app was launched from a terminal (or another non-router\n" +
+		"parent), so the router didn't capture its stdout/stderr. Check\n" +
+		"the launching terminal for the panic trace and any earlier output."
+	r.log("app %s exited unexpectedly (terminal-attach) instance=%s uptime=%s",
+		inst.AppID, inst.InstanceID, uptime)
+	msg := wire.NewShellAppCrashed(inst.InstanceID, inst.AppID, inst.WindowID, -1, "", uptime, log)
+	for _, s := range r.shellList() {
+		if err := s.WriteCtrl(msg); err != nil {
+			r.log("broadcast crash to shell: %v", err)
+		}
+	}
 }
 
 // bufferedReadWriter adapts (*bufio.Reader + net.Conn) into an

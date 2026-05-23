@@ -20,6 +20,8 @@
 // dead element.
 
 import { test, expect } from '../fixtures/router';
+import { spawn } from 'node:child_process';
+import { join } from 'node:path';
 
 test.describe('BE crash → shell tombstone', () => {
   test.setTimeout(20_000);
@@ -71,6 +73,50 @@ test.describe('BE crash → shell tombstone', () => {
     // Closing the tombstone removes the window locally.
     await window_.locator('[data-testid="window-close"]').click();
     await expect(window_).toHaveCount(0);
+  });
+
+  test('terminal-attached BE crash tombstones with a "see terminal" hint', async ({ page, router }) => {
+    // When wash-test is launched from outside the router (e.g. from a
+    // shell inside wash-term), the router doesn't own the process and
+    // can't read its stdout/stderr — both go to the launching
+    // terminal. But the window IS owned by the router, so an
+    // unexpected conn-drop should still tombstone the window. The
+    // tombstone log gets a hint pointing the user at the terminal.
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+
+    const testBin = join(router.appsDir, 'wash-test');
+    const child = spawn(testBin, [], {
+      env: { ...process.env, WASH_DISPLAY: router.controlSocket },
+      stdio: 'ignore',
+      detached: false,
+    });
+    try {
+      const app = page.locator('wash-app-test');
+      await expect(app).toBeVisible({ timeout: 5_000 });
+
+      const window_ = page.locator('.wash-window').filter({ has: app });
+      await expect(window_).toBeVisible();
+
+      // Crash button → BE panics → conn drops → router emits the
+      // terminal-attach variant of the crash event.
+      await app.locator('[data-testid="action-crash-be"]').click();
+
+      const crashPane = window_.locator('[data-testid="window-crashed"]');
+      await expect(crashPane).toBeVisible({ timeout: 5_000 });
+
+      // No stdout/stderr was captured (the router didn't own them),
+      // but the dialog points the user at the launching terminal.
+      const logBox = crashPane.locator('[data-testid="window-crashed-log"]');
+      await expect(logBox).toHaveValue(/launched from a terminal/);
+
+      await router.waitForLog(
+        /app com\.wash\.test exited unexpectedly \(terminal-attach\)/,
+        5_000,
+      );
+    } finally {
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+    }
   });
 
   test('graceful BE exit does NOT produce a tombstone', async ({ page, router }) => {
