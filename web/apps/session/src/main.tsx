@@ -80,6 +80,19 @@ declare global {
   }
 }
 
+// rootTerminalEntry — synthetic launcher item exposed in StartMenu
+// + Palette. Module-level (not closed over App's scope) so the
+// paletteResults memo can read it during its eager initial run
+// without a TDZ on the still-uninitialised inner binding.
+const rootTerminalEntry: CatalogApp = {
+  id: '__root-terminal',
+  name: 'Root Terminal',
+  icon: 'shield-alert',
+  surface: 'window',
+  instancing: 'multi',
+  disabled: false,
+};
+
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ---- reactive state ----
   const [catalog, setCatalog] = createSignal<CatalogApp[]>(window.wash.catalog());
@@ -108,16 +121,27 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   let paletteInputEl: HTMLInputElement | undefined;
   let startBtnEl: HTMLButtonElement | undefined;
 
-  // Filtered palette results.
+  // Filtered palette results. Root Terminal is mixed into the
+  // normal catalog and sorted by name like everything else — the
+  // red row already makes it stand out, no pinning needed.
   const paletteResults = createMemo(() => {
     const q = paletteQuery().trim().toLowerCase();
-    const apps = catalog().filter((a) => !a.disabled);
+    const apps = [...catalog().filter((a) => !a.disabled), rootTerminalEntry];
+    apps.sort((a, b) => a.name.localeCompare(b.name));
     if (!q) return apps;
     return apps.filter((a) => a.id.toLowerCase().includes(q) || a.name.toLowerCase().includes(q));
   });
 
   const launchApp = (appID: string) => {
     window.wash.sendAppMsg(props.instance, { action: 'launch', app_id: appID });
+  };
+
+  // launchRootTerminal routes a "spawn as root" through the session
+  // BE → wash-priv. The user sees the approval row in wash-priv's
+  // window with router-attested sender (com.wash.session). Picking
+  // this from the menu does NOT bypass the password modal.
+  const launchRootTerminal = () => {
+    window.wash.sendAppMsg(props.instance, { action: 'spawn_root', app_id: 'com.wash.term' });
   };
 
   // ---- desktop config ----
@@ -223,7 +247,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const app = apps[paletteSelected()];
     if (!app) return;
     closePalette();
-    launchApp(app.id);
+    if (app.id === rootTerminalEntry.id) launchRootTerminal();
+    else launchApp(app.id);
   };
 
   const onPaletteKey = (ev: KeyboardEvent) => {
@@ -373,10 +398,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       <Show when={menuOpen()}>
         <StartMenu
           apps={catalog()}
+          rootTerminal={rootTerminalEntry}
           onDismiss={() => setMenuOpen(false)}
           onPick={(id) => {
             setMenuOpen(false);
-            launchApp(id);
+            if (id === rootTerminalEntry.id) launchRootTerminal();
+            else launchApp(id);
           }}
         />
       </Show>
@@ -391,6 +418,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           }}
           results={paletteResults()}
           selected={paletteSelected()}
+          rootTerminalID={rootTerminalEntry.id}
           onHover={setPaletteSelected}
           onPick={() => launchSelected()}
           onKey={onPaletteKey}
@@ -718,40 +746,91 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
   );
 };
 
+// rootMenuItemStyle + rootMenuBadgeStyle are declared above StartMenu
+// because Solid's JSX compile path evaluates inline style references
+// at module init in some configurations — declaring after the
+// component triggers a TDZ "cannot access X before initialization"
+// error on the bundle's first run.
+const rootMenuItemStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'center',
+  gap: '8px',
+  width: '100%',
+  padding: '6px 10px',
+  'margin-bottom': '4px',
+  background: '#7a1f1f',
+  color: '#fff',
+  border: 'none',
+  'border-radius': '4px',
+  cursor: 'pointer',
+  font: '13px ui-sans-serif,system-ui,sans-serif',
+  'text-align': 'left',
+};
+
 const StartMenu: Component<{
   apps: CatalogApp[];
+  rootTerminal?: CatalogApp;
   onPick: (id: string) => void;
   onDismiss: () => void;
-}> = (props) => (
-  <Menu
-    data-testid="start-menu"
-    anchor="bottom-left"
-    animation="slide-up"
-    zIndex={tokens.zStartMenu}
-    onDismiss={props.onDismiss}
-    style={{ 'min-width': '240px', padding: '4px' }}
-  >
-    <Show when={props.apps.length > 0} fallback={<div style={emptyStyle}>no apps registered</div>}>
-      <For each={props.apps}>
-        {(app) => (
-          <MenuItem
-            label={app.name}
-            disabled={app.disabled}
-            icon={app.icon ? <SpriteIcon name={app.icon} size={20} /> : undefined}
-            trailing={
-              app.disabled ? (
-                <span style={{ color: tokens.fgMuted, 'font-size': tokens.fontSizeMd }}>
-                  {app.reason ? '· ' + app.reason : '· disabled'}
-                </span>
-              ) : undefined
+}> = (props) => {
+  // Merge the synthetic Root Terminal in with the catalog and sort
+  // alphabetically — the red row stands out on its own, no pinning.
+  const items = createMemo(() => {
+    const merged = props.rootTerminal
+      ? [...props.apps, props.rootTerminal]
+      : props.apps.slice();
+    merged.sort((a, b) => a.name.localeCompare(b.name));
+    return merged;
+  });
+  return (
+    <Menu
+      data-testid="start-menu"
+      anchor="bottom-left"
+      animation="slide-up"
+      zIndex={tokens.zStartMenu}
+      onDismiss={props.onDismiss}
+      style={{ 'min-width': '240px', padding: '4px' }}
+    >
+      <Show when={items().length > 0} fallback={<div style={emptyStyle}>no apps registered</div>}>
+        <For each={items()}>
+          {(app) => {
+            const isRoot = props.rootTerminal && app.id === props.rootTerminal.id;
+            if (isRoot) {
+              return (
+                <button
+                  type="button"
+                  data-testid="start-menu-root-terminal"
+                  onClick={() => props.onPick(app.id)}
+                  style={rootMenuItemStyle}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#a02828'; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#7a1f1f'; }}
+                >
+                  <SpriteIcon name={app.icon!} size={20} />
+                  <span style={{ flex: 1, 'text-align': 'left' }}>{app.name}</span>
+                </button>
+              );
             }
-            onClick={() => props.onPick(app.id)}
-          />
-        )}
-      </For>
-    </Show>
-  </Menu>
-);
+            return (
+              <MenuItem
+                label={app.name}
+                disabled={app.disabled}
+                icon={app.icon ? <SpriteIcon name={app.icon} size={20} /> : undefined}
+                trailing={
+                  app.disabled ? (
+                    <span style={{ color: tokens.fgMuted, 'font-size': tokens.fontSizeMd }}>
+                      {app.reason ? '· ' + app.reason : '· disabled'}
+                    </span>
+                  ) : undefined
+                }
+                onClick={() => props.onPick(app.id)}
+              />
+            );
+          }}
+        </For>
+      </Show>
+    </Menu>
+  );
+};
 
 const Palette: Component<{
   inputRef: (el: HTMLInputElement) => void;
@@ -759,6 +838,7 @@ const Palette: Component<{
   onQueryChange: (v: string) => void;
   results: CatalogApp[];
   selected: number;
+  rootTerminalID?: string;
   onHover: (i: number) => void;
   onPick: () => void;
   onKey: (ev: KeyboardEvent) => void;
@@ -824,6 +904,7 @@ const Palette: Component<{
                 <PaletteRow
                   app={app}
                   selected={i() === props.selected}
+                  isRoot={app.id === props.rootTerminalID}
                   onHover={() => props.onHover(i())}
                   onPick={props.onPick}
                 />
@@ -839,6 +920,7 @@ const Palette: Component<{
 const PaletteRow: Component<{
   app: CatalogApp;
   selected: boolean;
+  isRoot?: boolean;
   onHover: () => void;
   onPick: () => void;
 }> = (props) => {
@@ -860,8 +942,10 @@ const PaletteRow: Component<{
         gap: '10px',
         width: '100%',
         padding: '8px 16px',
-        background: props.selected ? '#2a2a4a' : 'transparent',
-        color: '#eee',
+        background: props.isRoot
+          ? (props.selected ? '#a02828' : '#7a1f1f')
+          : (props.selected ? '#2a2a4a' : 'transparent'),
+        color: props.isRoot ? '#fff' : '#eee',
         border: 'none',
         'text-align': 'left',
         cursor: 'pointer',
@@ -883,7 +967,9 @@ const PaletteRow: Component<{
         </Show>
       </span>
       <span style={{ flex: 1 }}>{props.app.name}</span>
-      <span style={{ opacity: 0.55, 'font-size': '12px' }}>{props.app.id}</span>
+      <Show when={!props.isRoot}>
+        <span style={{ opacity: 0.55, 'font-size': '12px' }}>{props.app.id}</span>
+      </Show>
     </button>
   );
 };

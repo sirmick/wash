@@ -28,6 +28,8 @@ const ICONS = [
   'file-pen',       // wash-edit
   'settings',       // wash-settings
   'activity',       // wash-top
+  'shield-check',   // wash-priv (privilege gateway)
+  'shield-alert',   // "Root Terminal" launcher entry
 ];
 
 // Resolve via require so pnpm's nested layout is fine.

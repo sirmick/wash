@@ -7,11 +7,14 @@
 package main
 
 import (
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"io/fs"
 	"log"
 
 	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/internal/wire"
 )
 
 //go:embed all:assets
@@ -68,8 +71,10 @@ const washIcon = "layout-dashboard"
 // requests. data is the (CBOR-decoded) JSON the FE sent via
 // app_msg.send.
 //
-//   {"action":"launch","app_id":"…"}    — spawn an app
-//   {"kind":"desktop.request"}          — re-ship desktop.config
+//   {"action":"launch","app_id":"…"}        — spawn an app
+//   {"action":"spawn_root","app_id":"…"}    — ask wash-priv to spawn
+//                                              an app as root
+//   {"kind":"desktop.request"}              — re-ship desktop.config
 func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 	m, ok := data.(map[any]any)
 	if !ok {
@@ -80,14 +85,40 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		return
 	}
 	action, _ := m["action"].(string)
-	if action != "launch" {
-		return
+	switch action {
+	case "launch":
+		appID, _ := m["app_id"].(string)
+		if appID == "" {
+			return
+		}
+		if err := c.SpawnRequest(appID); err != nil {
+			log.Printf("wash-session: spawn.request %s: %v", appID, err)
+		}
+	case "spawn_root":
+		// The session app routes "spawn as root" requests through
+		// wash-priv. wash-priv's queue UI shows com.wash.session as
+		// the (router-attested) sender, plus the user-typed reason.
+		// We never run sudo ourselves — that's wash-priv's job.
+		appID, _ := m["app_id"].(string)
+		if appID == "" {
+			return
+		}
+		reqID := newReqID()
+		if err := c.SendAppMsgTo(wire.Recipient{AppID: "com.wash.priv"}, map[string]any{
+			"kind":   "spawn",
+			"req_id": reqID,
+			"app_id": appID,
+			"reason": "session menu",
+		}); err != nil {
+			log.Printf("wash-session: spawn_root %s: %v", appID, err)
+		}
 	}
-	appID, _ := m["app_id"].(string)
-	if appID == "" {
-		return
-	}
-	if err := c.SpawnRequest(appID); err != nil {
-		log.Printf("wash-session: spawn.request %s: %v", appID, err)
-	}
+}
+
+// newReqID is a tiny correlation id for cross-app spawn_root.
+// Format is opaque to wash-priv; we use it only in our own logs.
+func newReqID() string {
+	var b [4]byte
+	_, _ = rand.Read(b[:])
+	return "ss-" + hex.EncodeToString(b[:])
 }
