@@ -7,7 +7,7 @@
 
 import { test as base, expect } from '@playwright/test';
 import { spawn, ChildProcess } from 'node:child_process';
-import { mkdtempSync, copyFileSync, existsSync, chmodSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, copyFileSync, existsSync, chmodSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -136,6 +136,35 @@ async function freePort(): Promise<number> {
 
 function stageApps(binaries: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), 'wash-e2e-apps-'));
+  // Multi-call mode (WASH_E2E_MULTICALL=1): copy out/wash once and
+  // create a symlink per requested app pointing at it. Exercises the
+  // busybox-style layout end-to-end through the same e2e suite as
+  // the standalone layout — same router, same Playwright tests,
+  // different binary topology.
+  if (process.env.WASH_E2E_MULTICALL === '1') {
+    const washBin = join(REPO_ROOT, 'out', 'wash');
+    if (!existsSync(washBin)) {
+      throw new Error(`WASH_E2E_MULTICALL=1 set but out/wash missing — run \`make TEST_APP=1 out/wash\` first`);
+    }
+    const washDest = join(dir, 'wash');
+    copyFileSync(washBin, washDest);
+    chmodSync(washDest, 0o755);
+    for (const bin of binaries) {
+      const name = bin.split('/').pop()!;
+      // wash-sudo and wash-priv-fakesudo stay as real separate
+      // binaries — they're never built into the multi-call wash. Copy
+      // them in as-is so the priv chain still works.
+      if (name === 'wash-sudo' || name === 'wash-priv-fakesudo') {
+        const dest = join(dir, name);
+        copyFileSync(bin, dest);
+        chmodSync(dest, 0o755);
+        continue;
+      }
+      symlinkSync('wash', join(dir, name));
+    }
+    return dir;
+  }
+  // Default: each app is its own separate binary (today's layout).
   for (const bin of binaries) {
     const dest = join(dir, bin.split('/').pop()!);
     copyFileSync(bin, dest);
@@ -441,11 +470,23 @@ type Fixtures = {
 
 export const test = base.extend<Fixtures>({
   routerOpts: [{}, { option: true }],
-  router: async ({ routerOpts }, use) => {
+  router: async ({ routerOpts }, use, testInfo) => {
     const h = await startRouter(routerOpts);
     try {
       await use(h);
     } finally {
+      // On test failure, attach the router's stderr+stdout so
+      // post-mortem debugging doesn't require re-running with
+      // bespoke instrumentation.
+      if (testInfo.status !== testInfo.expectedStatus) {
+        const log = h.log();
+        if (log) {
+          await testInfo.attach('router.log', {
+            contentType: 'text/plain',
+            body: log,
+          });
+        }
+      }
       await stopRouter(h);
     }
   },

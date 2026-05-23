@@ -13,6 +13,17 @@ export default defineConfig({
       formats: ['es'],
       fileName: () => 'index.js',
     },
-    rollupOptions: { external: [] },
+    rollupOptions: {
+      // Shared vendor modules resolved via /vendor/* import map in
+      // web/shell/index.html. Keep in sync with build-vendor.mjs.
+      external: [
+        'solid-js',
+        'solid-js/web',
+        'solid-js/store',
+        '@xterm/xterm',
+        '@xterm/addon-fit',
+        '@wash/ui',
+      ],
+    },
   },
 });

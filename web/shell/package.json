@@ -4,14 +4,19 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "build": "vite build && node build-icons.mjs",
-    "dev": "vite"
+    "build": "node build-vendor.mjs && pnpm --filter @wash/ui run build && vite build && node build-icons.mjs",
+    "build-vendor": "node build-vendor.mjs && pnpm --filter @wash/ui run build",
+    "dev": "node build-vendor.mjs && pnpm --filter @wash/ui run build && vite"
   },
   "dependencies": {
+    "@wash/ui": "workspace:*",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
     "lucide-solid": "^1.16.0",
     "solid-js": "^1.9.13"
   },
   "devDependencies": {
+    "esbuild": "^0.21.5",
     "lucide-static": "^1.16.0",
     "typescript": "^5.5.4",
     "vite": "^5.4.10",

@@ -52,7 +52,13 @@ export function FloatingWindow(props: WindowProps) {
     const el = document.createElement(props.win.element);
     el.setAttribute('data-wash-instance', props.win.instanceID);
     slot.appendChild(el);
-    registerMountedElement(props.win.instanceID, el);
+    // Defer registerMountedElement to a microtask so the custom
+    // element's Solid onMount has run and any `wash:state` /
+    // `wash:msg` listeners are wired BEFORE registerMountedElement
+    // dispatches them. Without this, apps that set up their
+    // listeners inside onMount (e.g. wash-fm) miss the wash:state
+    // event entirely and never initialize their FE state.
+    queueMicrotask(() => registerMountedElement(props.win.instanceID, el));
     window.wash.focusWindow(props.win.windowID);
   });
   onCleanup(() => {

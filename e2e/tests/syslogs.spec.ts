@@ -47,10 +47,10 @@ test.use({
 
 async function openSyslogs(page: Page) {
   await page.locator('button[title="Apps"]').click();
-  // "System Logs" is the regular entry; the root variant is "System
-  // Logs (root)". Pick the non-root one — exact match avoids picking
-  // the (root) row.
-  await page.getByRole('button', { name: /^System Logs$/ }).click();
+  // The root variant entry shares "System Logs" in its accessible
+  // name, so a name-based selector matches both rows. Use the
+  // testid the launcher stamps on the non-root entry directly.
+  await page.locator('[data-testid="start-menu-com.wash.syslogs"]').click();
   await expect(page.locator('wash-app-syslogs')).toBeVisible();
   await expect(page.locator('[data-testid="syslogs-root"]')).toBeVisible();
 }
@@ -136,8 +136,11 @@ test.describe('syslogs app', () => {
     // backward compat with existing tests.
     await expect(page.getByTestId('start-menu-root-terminal')).toBeVisible();
 
-    // The button name should be "System Logs (root)" by default.
-    await expect(page.getByRole('button', { name: /System Logs \(root\)/ })).toBeVisible();
+    // The root entry's label mirrors the source app's name (no
+    // "(root)" suffix — visual disambiguation is the red icon tint
+    // alone). The distinct testid + the red-tinted icon make the
+    // intent clear without crowding the label.
+    await expect(page.getByTestId('start-menu-root-com.wash.syslogs')).toHaveText(/System Logs/);
 
     // Sanity: router didn't crash on the new catalog message.
     expect(router.log()).not.toMatch(/panic/);

@@ -1,8 +1,8 @@
 # wash — top-level build
 #
 # Two stages, wired together:
-#   1. web — Vite library builds; brotli precompress (if installed);
-#            output copied into cmd/<bin>/assets/ for //go:embed.
+#   1. web — Vite library builds; output copied into cmd/<bin>/assets/
+#            for //go:embed.
 #   2. go  — CGO_ENABLED=0 go build -trimpath -ldflags="-s -w".
 #
 # `make verify` enforces static-ELF output. If the web stage is
@@ -14,7 +14,18 @@ GOARCH  ?= amd64
 GOFLAGS := -trimpath -ldflags=-s\ -w -tags netgo,osusergo
 
 OUT     := out
-BINS    := wash-router wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-settings wash-top wash-priv wash-journal wash-syslogs wash-launch wash-sudo
+BINS    := wash-router wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-settings wash-top wash-priv wash-journal wash-syslogs wash-launch
+
+# wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
+# entrypoint that routes through the browser FE for unlock).
+# Opt-out by setting WASH_NO_SUDO=1 — useful for headless / kiosk
+# deploys that never need a terminal-driven sudo path. Default is
+# on so existing dev flows are unaffected.
+WASH_NO_SUDO ?=
+ifeq ($(WASH_NO_SUDO),)
+BINS += wash-sudo
+endif
+
 TARGETS := $(addprefix $(OUT)/,$(BINS))
 
 # Test app: not part of the default build; built explicitly with
@@ -40,43 +51,43 @@ PNPM    := pnpm
 
 # Per-binary embed stamps. Each binary's go build depends on its stamp
 # so the web stage runs first and updates assets/ if anything changed.
-ROUTER_ASSETS  := cmd/wash-router/assets
+ROUTER_ASSETS  := internal/runner/router/assets
 ROUTER_STAMP   := $(ROUTER_ASSETS)/.stamp
 
-SESSION_ASSETS := cmd/wash-session/assets
+SESSION_ASSETS := internal/apps/session/assets
 SESSION_STAMP  := $(SESSION_ASSETS)/.stamp
 
-ABOUT_ASSETS   := cmd/wash-about/assets
+ABOUT_ASSETS   := internal/apps/about/assets
 ABOUT_STAMP    := $(ABOUT_ASSETS)/.stamp
 
-TEST_ASSETS    := cmd/wash-test/assets
+TEST_ASSETS    := internal/apps/test/assets
 TEST_STAMP     := $(TEST_ASSETS)/.stamp
 
-TERM_ASSETS    := cmd/wash-term/assets
+TERM_ASSETS    := internal/apps/term/assets
 TERM_STAMP     := $(TERM_ASSETS)/.stamp
 
-FM_ASSETS      := cmd/wash-fm/assets
+FM_ASSETS      := internal/apps/fm/assets
 FM_STAMP       := $(FM_ASSETS)/.stamp
 
-BULK_ASSETS    := cmd/wash-bulk/assets
+BULK_ASSETS    := internal/apps/bulk/assets
 BULK_STAMP     := $(BULK_ASSETS)/.stamp
 
-EDIT_ASSETS    := cmd/wash-edit/assets
+EDIT_ASSETS    := internal/apps/edit/assets
 EDIT_STAMP     := $(EDIT_ASSETS)/.stamp
 
-SETTINGS_ASSETS := cmd/wash-settings/assets
+SETTINGS_ASSETS := internal/apps/settings/assets
 SETTINGS_STAMP  := $(SETTINGS_ASSETS)/.stamp
 
-TOP_ASSETS      := cmd/wash-top/assets
+TOP_ASSETS      := internal/apps/top/assets
 TOP_STAMP       := $(TOP_ASSETS)/.stamp
 
-PRIV_ASSETS     := cmd/wash-priv/assets
+PRIV_ASSETS     := internal/apps/priv/assets
 PRIV_STAMP      := $(PRIV_ASSETS)/.stamp
 
-JOURNAL_ASSETS  := cmd/wash-journal/assets
+JOURNAL_ASSETS  := internal/apps/journal/assets
 JOURNAL_STAMP   := $(JOURNAL_ASSETS)/.stamp
 
-SYSLOGS_ASSETS  := cmd/wash-syslogs/assets
+SYSLOGS_ASSETS  := internal/apps/syslogs/assets
 SYSLOGS_STAMP   := $(SYSLOGS_ASSETS)/.stamp
 
 .PHONY: all
@@ -145,15 +156,16 @@ web-syslogs: web-deps
 	@cd web && $(PNPM) --filter @wash/app-syslogs run build
 
 # embed-into-cmd helper. Usage: $(call embed,<src dist dir>,<dst assets dir>)
+#
+# Files land under cmd/<bin>/assets/ and are picked up by //go:embed
+# all:assets. Brotli precompression was removed: the router's
+# http.FileServer has no Accept-Encoding negotiation, so .br copies
+# only bloated every binary. Re-add a *.br pass + content-encoding
+# handling in router/http.go together if HTTP brotli ever lands.
 define embed_dist
 	rm -rf $(2)
 	mkdir -p $(2)
 	cp -R $(1)/. $(2)/
-	@if command -v brotli >/dev/null 2>&1; then \
-		find $(2) -type f \( -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.svg' -o -name '*.json' \) -exec brotli -k -q 11 -f {} + ; \
-	else \
-		echo "brotli not installed: skipping precompress under $(2)"; \
-	fi
 	touch $(2)/.stamp
 endef
 
@@ -255,6 +267,37 @@ $(OUT)/wash-priv-fakesudo: | $(OUT)
 .PHONY: test-app
 test-app: $(OUT)/wash-priv-fakesudo
 	$(MAKE) TEST_APP=1 all
+
+# Multi-call build. Compiles cmd/wash with -tags=multicall — the
+# resulting binary dispatches by argv[0] to whatever apps are
+# linked in via cmd/wash/imports_<name>.go. `wash install-symlinks`
+# materializes the wash-<name> symlinks. Standalone per-app
+# binaries (BINS above) are unaffected.
+#
+# Only includes extracted apps (Phase 4+: wash-about so far).
+# Adding an app: extract into internal/apps/<name>/, drop a
+# cmd/wash/imports_<name>.go blank-import, add its asset stamp to
+# the dep list below.
+MULTICALL_STAMPS := $(ABOUT_STAMP) $(BULK_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(PRIV_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP)
+
+# Adding wash_test_app to the tags pulls the test app's blank-import
+# in (which is otherwise excluded by cmd/wash/imports_test.go's
+# wash_test_app build constraint). Mirrors the standalone TEST_APP=1
+# convention.
+MULTICALL_TAGS := multicall,netgo,osusergo
+ifneq ($(TEST_APP),)
+MULTICALL_TAGS := $(MULTICALL_TAGS),wash_test_app
+MULTICALL_STAMPS += $(TEST_STAMP)
+endif
+
+$(OUT)/wash: $(MULTICALL_STAMPS) | $(OUT)
+	$(GO_ENV) go build -trimpath -ldflags="-s -w" \
+	  -tags=$(MULTICALL_TAGS) \
+	  -o $@ ./cmd/wash && chmod 0755 $@
+
+.PHONY: multicall
+multicall: $(OUT)/wash
+	$(OUT)/wash install-symlinks $(OUT)
 
 # Full-stack e2e: builds everything (incl. test app), then runs the
 # Playwright suite. Browser binary download is one-time and cached.

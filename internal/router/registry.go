@@ -99,6 +99,18 @@ func (r *Registry) Scan(ctx context.Context, dirs []string) error {
 }
 
 func (r *Registry) probeAndRegister(ctx context.Context, bin string) {
+	// Multi-call fast path: when bin resolves to our own executable
+	// and the in-process registry has an entry for argv[0]'s basename,
+	// skip the exec-probe. The compiled-in manifest is the same struct
+	// ParseManifest would build from --wash-manifest output and has
+	// already been validated by registry.Register. In standalone
+	// builds selfApp is a stub that returns nil, leaving the probe
+	// path unchanged.
+	if a := selfApp(bin); a != nil {
+		m := a.Manifest
+		r.appendEntry(&Entry{Path: bin, Manifest: &m})
+		return
+	}
 	data, err := Probe(ctx, bin)
 	if err != nil {
 		// We still add the entry so it can be surfaced.
@@ -223,8 +235,12 @@ func (r *Registry) Entries() []*Entry {
 	return out
 }
 
-// executablesIn returns the absolute paths of regular +x files in dir,
-// in name order. Symlinks are followed only enough to stat their target.
+// executablesIn returns the absolute paths of regular +x files in
+// dir, in name order. Symlinks pointing at a regular +x file are
+// included — the multi-call layout installs wash-term, wash-fm, …
+// as symlinks to a single `wash` binary, and the catalog scan has
+// to see them. Broken or non-executable symlinks are silently
+// skipped, same as a non-executable regular file.
 func executablesIn(dir string) ([]string, error) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
@@ -232,20 +248,31 @@ func executablesIn(dir string) ([]string, error) {
 	}
 	var out []string
 	for _, e := range ents {
-		if e.IsDir() {
-			continue
-		}
-		info, err := e.Info()
+		path := filepath.Join(dir, e.Name())
+		// Lstat for the dirent — skips real subdirectories without
+		// following symlinks. A symlink-to-dir lstat's as a symlink
+		// (not a dir) and falls through; the stat-follow below then
+		// catches it via the IsRegular() check.
+		linfo, err := e.Info()
 		if err != nil {
 			continue
 		}
-		if !info.Mode().IsRegular() {
+		if linfo.IsDir() {
 			continue
 		}
-		if info.Mode().Perm()&0o111 == 0 {
+		// Stat-follow validates the target. For non-symlinks this is
+		// the same FileInfo as linfo; for symlinks it's the target's.
+		sinfo, err := os.Stat(path)
+		if err != nil {
 			continue
 		}
-		out = append(out, filepath.Join(dir, e.Name()))
+		if !sinfo.Mode().IsRegular() {
+			continue
+		}
+		if sinfo.Mode().Perm()&0o111 == 0 {
+			continue
+		}
+		out = append(out, path)
 	}
 	sort.Strings(out)
 	return out, nil

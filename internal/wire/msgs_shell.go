@@ -44,6 +44,12 @@ const (
 	TShellChannelBind   = "channel.bind"
 	TShellChannelUnbind = "channel.unbind"
 
+	// Shell → router, per-channel credit grant. Lets the FE pace
+	// individual raw streams ("I'm slow rendering wash-fm — pause
+	// that channel") without affecting other channels on the same
+	// connection. See docs/QOS.md §5.
+	TShellChannelCredit = "channel.credit"
+
 	// Router → shell, "reload your page now." Used by --dev mode
 	// when a watched binary changes — the embedded shell/app
 	// bundles are stale and customElements is one-shot per tab.
@@ -384,6 +390,26 @@ func NewShellChannelBindBundle(channelID uint32, instanceID string) ShellChannel
 		Kind:       ChannelKindBundle,
 		InstanceID: instanceID,
 	}
+}
+
+// ShellChannelCredit is the per-channel flow-control grant sent from
+// the shell (browser FE) to the router. N is *additive*: each credit
+// frame extends the channel's send budget by N bytes. The router
+// tracks sent_bytes vs. granted_bytes and pauses dequeuing for a
+// channel when the two meet; this credit frame replenishes that
+// budget.
+//
+// Channels open with an implicit initial window — 64 KiB for raw,
+// unlimited for JSON control. The FE replenishes as its renderer
+// absorbs bytes; see docs/QOS.md §5.
+type ShellChannelCredit struct {
+	T         string `json:"t"`
+	ChannelID uint32 `json:"ch"`
+	N         uint32 `json:"n"`
+}
+
+func NewShellChannelCredit(channelID, n uint32) ShellChannelCredit {
+	return ShellChannelCredit{T: TShellChannelCredit, ChannelID: channelID, N: n}
 }
 
 // ShellAppCrashed reports that an app BE process exited abnormally.

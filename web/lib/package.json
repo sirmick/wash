@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "scripts": {
+    "build": "vite build"
+  },
   "exports": {
     ".": "./src/index.ts"
   },
@@ -11,5 +14,10 @@
   },
   "dependencies": {
     "lucide-solid": "^1.16.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vite": "^5.4.10",
+    "vite-plugin-solid": "^2.10.2"
   }
 }

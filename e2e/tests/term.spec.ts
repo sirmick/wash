@@ -47,7 +47,7 @@ test.describe('terminal app', () => {
     await expect(page.locator('wash-app-session')).toBeVisible();
 
     await page.locator('button[title="Apps"]').click();
-    await page.getByRole('button', { name: /Terminal/ }).click();
+    await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Terminal', exact: true }).click();
 
     const term = page.locator('wash-app-term');
     await expect(term).toBeVisible();
@@ -66,7 +66,7 @@ test.describe('terminal app', () => {
   test('+ button opens a second tab, each preserves its own buffer', async ({ page, router }) => {
     await page.goto(router.url);
     await page.locator('button[title="Apps"]').click();
-    await page.getByRole('button', { name: /Terminal/ }).click();
+    await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Terminal', exact: true }).click();
     await expect(page.locator('wash-app-term')).toBeVisible();
 
     // Wait for tab 1's prompt.
@@ -101,7 +101,7 @@ test.describe('terminal app', () => {
   test('closing a tab leaves the window with the other tab', async ({ page, router }) => {
     await page.goto(router.url);
     await page.locator('button[title="Apps"]').click();
-    await page.getByRole('button', { name: /Terminal/ }).click();
+    await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Terminal', exact: true }).click();
     await expect(page.locator('wash-app-term')).toBeVisible();
     await expect.poll(() => activeBufferText(page), { timeout: 8_000 }).toMatch(/[$#%>][ ]?/);
 

@@ -41,6 +41,9 @@ const (
 	ErrCodeInternal             = "internal"
 	ErrCodeNotFound             = "not_found"
 	ErrCodeIncompatibleProtocol = "incompatible_protocol"
+	// Credit / flow-control error codes (docs/QOS.md §5).
+	ErrCodeUnknownChannel  = "unknown_channel"
+	ErrCodeCreditOverflow  = "credit_overflow"
 	ErrCodeBadRequest           = "bad_request"
 )
 
@@ -304,6 +307,9 @@ func DecodeCtrl(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TShellChannelUnbind:
 		var m ShellChannelUnbind
+		return m, json.Unmarshal(data, &m)
+	case TShellChannelCredit:
+		var m ShellChannelCredit
 		return m, json.Unmarshal(data, &m)
 	case TShellAppCrashed:
 		var m ShellAppCrashed

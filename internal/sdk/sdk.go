@@ -169,14 +169,27 @@ func Main(def *AppDef) {
 	if maybePrintManifest(def) {
 		return
 	}
+	if err := Run(context.Background(), def); err != nil {
+		fatal("wash sdk: %v", err)
+	}
+}
+
+// Run is the post-handshake event loop: connect, dispatch frames
+// until the socket closes, and close cleanly. It returns nil on a
+// normal shutdown and an error otherwise — callers that need to
+// distinguish probe vs run wrap this with their own --wash-manifest
+// dispatch (Main does it for standalone binaries; the multi-call
+// dispatcher does it for its argv[0] cases).
+func Run(ctx context.Context, def *AppDef) error {
 	c, err := Connect(def)
 	if err != nil {
-		fatal("wash sdk: connect: %v", err)
+		return fmt.Errorf("connect: %w", err)
 	}
 	defer c.Close()
-	if err := c.Run(context.Background()); err != nil && !errors.Is(err, ErrConnClosed) {
-		fatal("wash sdk: run: %v", err)
+	if err := c.Run(ctx); err != nil && !errors.Is(err, ErrConnClosed) {
+		return fmt.Errorf("run: %w", err)
 	}
+	return nil
 }
 
 func maybePrintManifest(def *AppDef) bool {
@@ -329,13 +342,25 @@ func (c *Conn) writeCtrl(m any) error {
 	return c.transport.WriteFrame(wire.Frame{Flags: wire.FlagEnd, Channel: channelControl, Payload: b})
 }
 
-// writeEvt encodes m as CBOR and writes a channel-1 frame.
+// writeEvt encodes m as CBOR and writes a channel-1 frame at the
+// default class (Interactive). Most call sites are interactive
+// (lifecycle, window ops, small RPCs); explicit bulk goes through
+// writeEvtClass.
 func (c *Conn) writeEvt(m any) error {
+	return c.writeEvtClass(m, wire.ClassInteractive)
+}
+
+// writeEvtClass is writeEvt with an explicit class for the frame.
+// Bulk producers (pty output, large list replies, file streams) go
+// through this path so the router's scheduler can prioritize away
+// from them when interactive traffic is waiting.
+func (c *Conn) writeEvtClass(m any, class wire.Class) error {
 	b, err := wire.EncodeEvt(m)
 	if err != nil {
 		return err
 	}
-	return c.transport.WriteFrame(wire.Frame{Flags: wire.FlagEnd, Channel: channelEvent, Payload: b})
+	f := wire.Frame{Flags: wire.FlagEnd, Channel: channelEvent, Payload: b}.WithClass(class)
+	return c.transport.WriteFrame(f)
 }
 
 func fatal(format string, args ...any) {

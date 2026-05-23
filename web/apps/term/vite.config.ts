@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite';
 import solid from 'vite-plugin-solid';
 
-// Library build that bundles xterm + the fit addon + their CSS into a
-// single ES module file. cssCodeSplit:false + the CSS-in-JS injection
-// (see src/main.tsx) keep us to exactly one dist/index.js.
+// Library build for the <wash-app-term> element. xterm + addon-fit
+// are externalized (router serves them at /vendor/xterm.js +
+// /vendor/xterm-fit.js); the vendor xterm.js auto-injects its CSS
+// on import so the app no longer needs `?inline` CSS imports.
 export default defineConfig({
   plugins: [solid()],
   build: {
@@ -18,7 +19,16 @@ export default defineConfig({
       fileName: () => 'index.js',
     },
     rollupOptions: {
-      external: [],
+      // Shared vendor modules resolved via /vendor/* import map in
+      // web/shell/index.html. Keep in sync with build-vendor.mjs.
+      external: [
+        'solid-js',
+        'solid-js/web',
+        'solid-js/store',
+        '@xterm/xterm',
+        '@xterm/addon-fit',
+        '@wash/ui',
+      ],
     },
   },
 });

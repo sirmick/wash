@@ -7,9 +7,12 @@
 // Terminal/FitAddon references in a plain Map, mount each host via
 // <For keyed>, and dispose on unmount.
 
+// xterm + addon-fit are externalized to the shared vendor bundle at
+// /vendor/xterm.js (see web/shell/build-vendor.mjs). That bundle
+// auto-injects the xterm CSS on first import, so the app no longer
+// needs the `?inline` CSS import + manual <style> shim.
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import xtermCSS from '@xterm/xterm/css/xterm.css?inline';
 
 import { For, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
@@ -38,7 +41,11 @@ interface PersistedState {
   active?: number;
 }
 
-const TAB_BAR_HEIGHT = 28;
+// TAB_BAR_HEIGHT — 32 (was 28) leaves 4px of breathing room above the
+// tab buttons; the bar's padding-top puts it there. Without the gap
+// the tabs render flush against the window titlebar and read as one
+// flat block rather than a row of pickable controls.
+const TAB_BAR_HEIGHT = 32;
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [tabs, setTabs] = createSignal<TabMeta[]>([]);
@@ -228,13 +235,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ---- lifecycle ----
 
   onMount(() => {
-    if (!document.querySelector('style[data-wash-xterm]')) {
-      const style = document.createElement('style');
-      style.dataset.washXterm = '1';
-      style.textContent = xtermCSS;
-      document.head.appendChild(style);
-    }
-
     const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail as BEMessage);
     const onState = (ev: Event) => {
       const s = (ev as CustomEvent).detail as PersistedState | null;
@@ -279,6 +279,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                   color: '#eee',
                   border: 'none',
                   'border-top': isActive() ? '2px solid #66c' : '2px solid transparent',
+                  // Rounded only on top — the bottom meets the bar's
+                  // border-bottom flush, matching browser-tab idiom.
+                  'border-radius': '6px 6px 0 0',
                   padding: '0 6px 0 10px',
                   cursor: 'pointer',
                   font: '12px ui-monospace,Menlo,Consolas,monospace',
@@ -364,8 +367,10 @@ const tabBarStyle: JSX.CSSProperties = {
   'border-bottom': '1px solid #2a2a3a',
   display: 'flex',
   'align-items': 'stretch',
-  gap: '1px',
-  padding: '0 2px',
+  gap: '2px',
+  // padding-top creates the gap above the tabs; tabs round into the
+  // border-bottom line, matching how browser tabs sit on a bar.
+  padding: '4px 4px 0',
   'overflow-x': 'auto',
   'overflow-y': 'hidden',
   font: '12px ui-monospace,Menlo,Consolas,monospace',

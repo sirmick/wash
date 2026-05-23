@@ -42,7 +42,9 @@ import {
   setSavedState,
   subscribeRaw,
 } from './api';
+import { CreditTracker } from './credit';
 import { showToast } from './notify';
+import { virtioConsoleFactory } from './virtio';
 
 interface ShellCatalog {
   t: 'catalog';
@@ -169,8 +171,44 @@ function wsURL(): string {
   return `${proto}://${window.location.host}/ws`;
 }
 
-const conn = new Conn(
-  wsURL(),
+/**
+ * Pick the wash transport from the URL. Default is a real WebSocket
+ * to the router's HTTP listener. `?transport=virtio-console&port=2`
+ * routes through the v86 emulator's virtio-console bus events — used
+ * by the online demo (PLAN.md Phase 6b). The v86 instance attaches
+ * its bus to `window.washV86Bus` before loading the shell.
+ */
+function pickTransport(): string | (() => import('./ws').SocketFactory extends () => infer S ? S : never) {
+  const params = new URLSearchParams(window.location.search);
+  const t = params.get('transport');
+  if (t !== 'virtio-console') return wsURL();
+  const portN = Number(params.get('port') ?? '2');
+  const bus = (window as unknown as { washV86Bus?: import('./virtio').V86Bus }).washV86Bus;
+  if (!bus) {
+    // Fall back to ws if the bus isn't wired yet — the page hasn't
+    // booted v86 properly. Log loudly so the demo author notices.
+    console.error('wash shell: ?transport=virtio-console requested but window.washV86Bus is undefined; falling back to WebSocket');
+    return wsURL();
+  }
+  // Returning a factory; Conn detects via typeof.
+  return virtioConsoleFactory(bus, portN) as any;
+}
+
+// Credit tracker for per-channel flow control (QOS.md §5). Bytes
+// absorbed on each raw channel count toward a running tally;
+// crossing the replenish threshold emits one channel.credit{ch,n}
+// frame so the router-side Bulk producer doesn't stall.
+//
+// The sender closes over `conn`, which is assigned just below. JS
+// closure semantics make this safe — the closure isn't *called*
+// until the first raw frame arrives, by which point conn is bound.
+let conn: Conn;
+const creditTracker = new CreditTracker((channelID, n) => {
+  conn.sendCtrl({ t: 'channel.credit', ch: channelID, n });
+});
+
+conn = new Conn(
+  pickTransport() as any,
   (msg) => {
     switch (msg.t) {
       case 'catalog':
@@ -230,6 +268,9 @@ const conn = new Conn(
         finishBundle(u.channel_id);
         channelOwner.delete(u.channel_id);
         closeRawSubscriber(u.channel_id);
+        // Forget any pending credit count — channel is gone, no
+        // point sending credit for a dead id.
+        creditTracker.forget(u.channel_id);
         break;
       }
     }
@@ -240,6 +281,12 @@ const conn = new Conn(
     // subscriber (xterm's pty, etc.).
     if (pushBundleBytes(channelID, bytes)) return;
     deliverRaw(channelID, bytes);
+    // Bulk-class raw flows (terminal output, file content) drain
+    // the router-side credit window — replenish via channel.credit
+    // as we absorb. Bundle bytes were returned-early above; those
+    // flow Interactive class and bypass the credit ledger on the
+    // BE side, so emitting credit for them is a no-op but cheap.
+    creditTracker.absorbed(channelID, bytes.length);
   },
 );
 

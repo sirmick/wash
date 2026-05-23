@@ -153,26 +153,32 @@ func (r *Router) handleAttach(ctx context.Context, conn net.Conn, rd *bufio.Read
 
 	// Spawn-completion branch — router started a child and is
 	// blocked waiting for it to dial back.
-	if ch, found := r.takePendingAttach(ident.PID); found {
+	if rec, found := r.takePendingAttach(ident.PID); found {
 		entry := r.reg.ByID(ident.AppID)
 		if entry == nil {
-			ch <- attachResult{err: fmt.Errorf("attach: app_id %q not in registry", ident.AppID)}
+			rec.ch <- attachResult{err: fmt.Errorf("attach: app_id %q not in registry", ident.AppID)}
 			_ = conn.Close()
 			return
 		}
+		// Stamp Kiosk BEFORE acceptIdentity — handshake's WindowID
+		// allocation in handleAppOpts gates on !inst.Kiosk, so a
+		// stale-false value here would phantom-allocate a window id
+		// for a kiosk app and surface it in the FE's session
+		// snapshot as a second mount.
 		inst := &AppInstance{
 			Transport: transport,
 			AppID:     ident.AppID,
 			Manifest:  entry.Manifest,
 			PeerUID:   peerUID,
+			Kiosk:     rec.kiosk,
 			router:    r,
 		}
 		if err := r.acceptIdentity(inst); err != nil {
-			ch <- attachResult{err: err}
+			rec.ch <- attachResult{err: err}
 			_ = conn.Close()
 			return
 		}
-		ch <- attachResult{inst: inst}
+		rec.ch <- attachResult{inst: inst}
 		return
 	}
 
@@ -259,12 +265,19 @@ func validateAttachBinary(pid int, registeredPath string) bool {
 	// root and we are not. Compare /proc/<pid>/comm against the
 	// basename of the registered binary instead. comm is truncated
 	// at 15 chars, so match against the same-prefix of basename.
+	//
+	// We use the *un-resolved* registeredPath so a busybox layout
+	// (wash-term → wash) matches: comm is set from argv[0]'s basename
+	// ("wash-term"), while basename(regResolved) would resolve through
+	// the symlink to "wash" and never match. For the distro-symlink
+	// case (registered = /usr/local/bin/foo → /opt/x/bin/foo) the two
+	// basenames are still equal, so existing behavior is preserved.
 	commBytes, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
 	if err != nil {
 		return false
 	}
 	comm := strings.TrimSpace(string(commBytes))
-	want := filepath.Base(regResolved)
+	want := filepath.Base(registeredPath)
 	if len(want) > 15 {
 		want = want[:15]
 	}

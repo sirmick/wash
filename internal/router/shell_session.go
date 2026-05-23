@@ -1,6 +1,7 @@
 package router
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,16 @@ type ShellSession struct {
 	// declare and any follow-on relay are observed in order by the
 	// receiver.
 	declared map[string]bool
+
+	// scheduler holds frames bound for the FE in per-class queues
+	// (see internal/router/qos.go and docs/QOS.md). Producers
+	// (writeCtrlLocked, WriteRawFrame, broadcastPatches) call
+	// Submit; one drainer goroutine pulls in strict-priority order
+	// and writes to Transport. nil before HandleShell wires it up.
+	scheduler *Scheduler
+	// drainerDone is closed by the drainer goroutine on exit so
+	// HandleShell can wait for it during teardown.
+	drainerDone chan struct{}
 }
 
 // declareInstance sends ShellAppDeclared (and ShellWindowCreate for
@@ -81,8 +92,20 @@ func (s *ShellSession) undeclareInstance(instanceID string) {
 // already-running instances to it (so a late-connecting shell sees
 // the world), then runs the frame loop.
 func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
-	sess := &ShellSession{Transport: t, router: r}
+	sess := &ShellSession{
+		Transport:   t,
+		router:      r,
+		scheduler:   NewScheduler(),
+		drainerDone: make(chan struct{}),
+	}
 	defer t.Close()
+	defer func() {
+		// Stop the drainer first so it doesn't try to write to a
+		// closing transport, then wait for it to exit.
+		sess.scheduler.Close()
+		<-sess.drainerDone
+	}()
+	go sess.drainLoop(ctx)
 
 	// Hold writeMu for the whole setup. While we hold it, any
 	// concurrent HandleApp.declareInstance blocks at the same mutex,
@@ -184,13 +207,38 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 	case wire.ShellWindowState:
 		return s.handleWindowState(m)
 	case wire.ShellAppMsgSend:
-		return s.handleAppMsgSend(m)
+		var probe struct{ Data struct{ Kind string `json:"kind"` } `json:"data"` }
+		_ = json.Unmarshal(f.Payload, &probe)
+		s.router.log("shell→BE app_msg.send inst=%s data.kind=%q", m.InstanceID, probe.Data.Kind)
+		return s.handleAppMsgSend(m, f.Class())
 	case wire.ShellAppMsgSendTo:
-		return s.handleAppMsgSendTo(m)
+		return s.handleAppMsgSendTo(m, f.Class())
 	case wire.ShellLog:
 		return s.handleShellLog(m)
+	case wire.ShellChannelCredit:
+		return s.handleChannelCredit(m)
 	}
 	s.router.log("shell: unexpected ctrl msg %T", msg)
+	return nil
+}
+
+// handleChannelCredit applies an FE-issued credit grant to the
+// matching channel's ledger. Best-effort: an unknown channel id
+// means the channel has been closed since the FE sent the grant,
+// which is benign — log and ignore (the FE will stop sending
+// credits once it sees the ChannelUnbind).
+func (s *ShellSession) handleChannelCredit(m wire.ShellChannelCredit) error {
+	b := s.router.lookupChannel(m.ChannelID)
+	if b == nil || b.credit == nil {
+		// Channel closed already; FE's grant is stale. Not an error.
+		return nil
+	}
+	if err := b.credit.Grant(m.N); err != nil {
+		// Overflow: FE is buggy or malicious. Close the channel
+		// rather than tearing down the whole shell connection.
+		s.router.log("channel %d: credit overflow, closing: %v", m.ChannelID, err)
+		s.router.closeChannel(m.ChannelID, wire.ErrCodeCreditOverflow)
+	}
 	return nil
 }
 
@@ -308,59 +356,218 @@ func (s *ShellSession) handleWindowState(m wire.ShellWindowState) error {
 	return inst.WriteEvt(wire.NewEvtWindowState(m.WindowID, m.State))
 }
 
-func (s *ShellSession) handleAppMsgSend(m wire.ShellAppMsgSend) error {
+// handleAppMsgSend relays a shell-originated app_msg to its BE half.
+// class is the priority class the FE stamped on its frame (typically
+// Interactive — most FE→BE messages are user actions); we preserve it
+// on the BE-bound event frame so the SDK sees the same class on read.
+func (s *ShellSession) handleAppMsgSend(m wire.ShellAppMsgSend, class wire.Class) error {
 	inst := s.router.appByInstance(m.InstanceID)
 	if inst == nil {
 		return nil
 	}
-	// The shell sends data as a JSON value; we relay it as the
-	// CBOR-encoded app_msg payload. The data is passed through
-	// without inspection — see "transport, not interpreter".
-	var raw any
-	if err := json.Unmarshal(m.Data, &raw); err != nil {
+	raw, err := decodeShellAppMsgPayload(m.Data)
+	if err != nil {
 		return fmt.Errorf("app_msg.send data: %w", err)
 	}
-	return inst.WriteEvt(wire.NewEvtAppMsg(inst.WindowID, raw))
+	return inst.WriteEvtClass(wire.NewEvtAppMsg(inst.WindowID, raw), class)
 }
 
 // handleAppMsgSendTo resolves the recipient (instance_id direct, or
 // app_id sentinel for singletons — spawning on demand), then relays
 // the JSON data as that instance's normal EvtAppMsg event. Same
 // transport-not-interpreter discipline as ShellAppMsgSend.
-func (s *ShellSession) handleAppMsgSendTo(m wire.ShellAppMsgSendTo) error {
+func (s *ShellSession) handleAppMsgSendTo(m wire.ShellAppMsgSendTo, class wire.Class) error {
 	target, code, err := s.router.resolveRecipient(context.Background(), m.Recipient)
 	if err != nil {
 		s.router.log("shell app_msg.send.to: %s: %v", code, err)
 		return nil
 	}
-	var raw any
-	if err := json.Unmarshal(m.Data, &raw); err != nil {
+	raw, err := decodeShellAppMsgPayload(m.Data)
+	if err != nil {
 		return fmt.Errorf("app_msg.send.to data: %w", err)
 	}
-	return target.WriteEvt(wire.NewEvtAppMsg(target.WindowID, raw))
+	return target.WriteEvtClass(wire.NewEvtAppMsg(target.WindowID, raw), class)
+}
+
+// decodeShellAppMsgPayload turns the shell's JSON-encoded app_msg
+// payload into a Go value the SDK will CBOR-encode for the BE.
+//
+// The naive `json.Unmarshal(data, &any)` decodes every JS Number as
+// float64 — which then CBOR-encodes as a major-type-7 float. BE
+// handlers that decode into integer-typed struct fields (Cols
+// uint64, channel_id uint64, etc.) reject those with the misleading
+// "cannot unmarshal primitives" error.
+//
+// Decoder with UseNumber preserves the original token; we then walk
+// the value and coerce json.Number to int64 when it has no fractional
+// part, falling back to float64 otherwise. That round-trips integral
+// JS Numbers (which is what "cols: 80" actually is on the wire)
+// through CBOR as integers, matching what every BE struct expects.
+func decodeShellAppMsgPayload(data []byte) (any, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var raw any
+	if err := dec.Decode(&raw); err != nil {
+		return nil, err
+	}
+	return normalizeJSONNumbers(raw), nil
+}
+
+// normalizeJSONNumbers walks v recursively and converts every
+// json.Number to int64 (when integral) or float64. Other types pass
+// through unchanged.
+func normalizeJSONNumbers(v any) any {
+	switch x := v.(type) {
+	case json.Number:
+		if i, err := x.Int64(); err == nil {
+			return i
+		}
+		if f, err := x.Float64(); err == nil {
+			return f
+		}
+		return x.String()
+	case map[string]any:
+		for k, vv := range x {
+			x[k] = normalizeJSONNumbers(vv)
+		}
+		return x
+	case []any:
+		for i, vv := range x {
+			x[i] = normalizeJSONNumbers(vv)
+		}
+		return x
+	}
+	return v
 }
 
 // WriteCtrl encodes m as JSON and writes a shell control-channel frame.
+//
+// No writeMu: the scheduler's channel provides ordering for concurrent
+// callers, and holding the declared-map mutex across a potentially
+// blocking Submit would head-of-line block every other producer (in
+// particular, a Bulk flood under WriteRawFrame would freeze all
+// Interactive control traffic). The mutex now only protects the
+// declared map's mutations in declareInstance.
+//
+// Default class is Interactive — see WriteCtrlClass for the explicit
+// variant used when relaying app→shell traffic that originated as
+// Bulk on the app side.
 func (s *ShellSession) WriteCtrl(m any) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 	return s.writeCtrlLocked(m)
 }
 
-// writeCtrlLocked assumes writeMu is held by the caller.
+// WriteCtrlClass is WriteCtrl with an explicit priority class. Used
+// when relaying EvtAppMsg / EvtAppMsgFrom payloads so the class the
+// originating app stamped on its event channel frame propagates
+// through to the FE-bound delivery.
+func (s *ShellSession) WriteCtrlClass(m any, class wire.Class) error {
+	data, err := wire.EncodeCtrl(m)
+	if err != nil {
+		return err
+	}
+	f := wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: data}.WithClass(class)
+	if s.scheduler == nil {
+		return s.Transport.WriteFrame(f)
+	}
+	return s.scheduler.Submit(context.Background(), f)
+}
+
+// writeCtrlLocked is kept for callers inside HandleShell setup that
+// already hold writeMu (for declared-map atomicity); the "Locked"
+// suffix is historical — the actual Submit no longer requires the
+// mutex. Pure Submit; safe under or without writeMu.
+//
+// Control-channel frames are router-originated lifecycle messages
+// (app.declared, session.snapshot, session.patch, window.create,
+// shell.reload, error envelopes) — Interactive class by default; the
+// scheduler keeps them ahead of bulk traffic on the same connection.
 func (s *ShellSession) writeCtrlLocked(m any) error {
 	data, err := wire.EncodeCtrl(m)
 	if err != nil {
 		return err
 	}
-	return s.Transport.WriteFrame(wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: data})
+	f := wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: data}
+	if s.scheduler == nil {
+		// Pre-HandleShell setup (e.g. tests) or post-teardown
+		// fallback. Direct write preserves the legacy semantics.
+		return s.Transport.WriteFrame(f)
+	}
+	return s.scheduler.Submit(context.Background(), f)
 }
 
 // WriteRawFrame writes a bare-byte frame on a dynamic channel. The
 // router calls this when forwarding raw bytes from an app to its
-// bound shell.
+// bound shell — pty output, file content streams, anything large.
+// Defaults to Bulk class so it yields to user-interactive frames
+// from other channels.
+//
+// Bundle/replay-style transactional flows (Bind → raw … → Unbind)
+// must use WriteRawFrameClass with ClassInteractive instead — Bulk
+// would let the Interactive Unbind overtake the data frames under
+// strict priority, breaking the transaction.
+//
+// No writeMu: see WriteCtrl. The scheduler's channel handles
+// concurrent-producer ordering; the previous mutex was a remnant
+// of the pre-scheduler write-path serialization.
 func (s *ShellSession) WriteRawFrame(channelID uint32, payload []byte) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	return s.Transport.WriteFrame(wire.Frame{Flags: wire.FlagEnd, Channel: channelID, Payload: payload})
+	return s.WriteRawFrameClass(channelID, payload, wire.ClassBulk)
+}
+
+// WriteRawFrameClass is WriteRawFrame with an explicit class. Used
+// for raw channels whose framing is transactional (bundle delivery,
+// scrollback replay on reattach) so all frames in the transaction
+// drain at the same priority and no Interactive control frame slips
+// between them.
+//
+// Bulk-class writes consume per-channel credit (docs/QOS.md §5):
+// the call blocks until the FE has granted enough bytes via
+// channel.credit. Interactive-class writes bypass the credit check
+// — transactional flows aren't paced by the FE.
+func (s *ShellSession) WriteRawFrameClass(channelID uint32, payload []byte, class wire.Class) error {
+	// Credit gate (Bulk only; Interactive is transactional).
+	if class == wire.ClassBulk && s.router != nil {
+		if b := s.router.lookupChannel(channelID); b != nil && b.credit != nil {
+			if err := b.credit.Reserve(context.Background(), uint64(len(payload))); err != nil {
+				return err
+			}
+		}
+	}
+	f := wire.Frame{Flags: wire.FlagEnd, Channel: channelID, Payload: payload}.WithClass(class)
+	if s.scheduler == nil {
+		return s.Transport.WriteFrame(f)
+	}
+	return s.scheduler.Submit(context.Background(), f)
+}
+
+// drainLoop is the single FE-bound writer goroutine. Pulls frames
+// from the scheduler in strict-priority order and writes them to
+// Transport. Exits on scheduler.Close (graceful) or transport write
+// error (FE disconnect / network failure). On exit, drainerDone is
+// closed so HandleShell's teardown can wait.
+func (s *ShellSession) drainLoop(ctx context.Context) {
+	defer close(s.drainerDone)
+	count := 0
+	for {
+		f, err := s.scheduler.Next(ctx)
+		if err != nil {
+			// router is nil in the QoS integration tests that drive
+			// a ShellSession in isolation; the guard keeps both the
+			// exit log and the per-frame trace below from segfaulting.
+			if s.router != nil {
+				s.router.log("drainLoop exit: %v (wrote %d frames)", err, count)
+			}
+			// ErrSchedulerClosed (teardown) or ctx.Err — exit
+			// quietly. Producer-side Submit calls returning
+			// errors handle the upstream visibility.
+			return
+		}
+		count++
+		if err := s.Transport.WriteFrame(f); err != nil {
+			// Transport write failed — FE gone. Close the
+			// scheduler so any blocked producers unblock with
+			// ErrSchedulerClosed and the shell tears down.
+			s.scheduler.Close()
+			return
+		}
+	}
 }

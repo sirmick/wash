@@ -279,24 +279,47 @@ func truncJSON(v any, max int) string {
 // typed decode) and ships the returned Resp wrapped in a
 // <kind>_ok envelope with id echoed. Errors map to <kind>_err.
 //
+// Reply class is Interactive — the common case. For handlers whose
+// reply is large by nature (list/read/stream), use HandleBulk.
+//
 // The id parameter is extracted from data["id"] before decoding so
 // handlers don't need to thread it through their Req struct (though
 // they may put an ID field there if they want it round-tripped).
 func Handle[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, req Req) (Resp, error)) {
+	handleClass(b, kind, fn, wire.ClassInteractive)
+}
+
+// HandleBulk is Handle for replies that should always go out on the
+// Bulk class. Use for fs.list, fs.read, and other handlers whose
+// reply payload is large enough that user-interactive frames from
+// other apps should overtake it in the router's scheduler.
+func HandleBulk[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, req Req) (Resp, error)) {
+	handleClass(b, kind, fn, wire.ClassBulk)
+}
+
+// HandleBackground is Handle for replies on the Background class.
+// Use for transfer-style handlers — large file content reads,
+// archive enumeration, anything where the reply progresses but
+// shouldn't compete with interactive UI for bandwidth.
+func HandleBackground[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, req Req) (Resp, error)) {
+	handleClass(b, kind, fn, wire.ClassBackground)
+}
+
+func handleClass[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, req Req) (Resp, error), class wire.Class) {
 	b.register(kind, func(c *Conn, _ uint32, data map[any]any, _ *wire.Sender) {
 		id, _ := data["id"].(string)
 		var req Req
 		if err := decodeInto(data, &req); err != nil {
 			b.logDecodeErr(kind, id, nil, data, err)
-			b.sendErr(c, kind, id, ErrBadRequest, err.Error(), nil)
+			b.sendErr(c, kind, id, ErrBadRequest, err.Error(), &replyTo{class: class})
 			return
 		}
 		resp, err := fn(c, id, req)
 		if err != nil {
-			b.sendErr(c, kind, id, codeOf(err), msgOf(err), nil)
+			b.sendErr(c, kind, id, codeOf(err), msgOf(err), &replyTo{class: class})
 			return
 		}
-		b.sendOk(c, kind, id, resp, nil)
+		b.sendOk(c, kind, id, resp, &replyTo{class: class})
 	})
 }
 
@@ -304,6 +327,10 @@ func Handle[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, req 
 // success. Errors are logged BE-side; the FE doesn't get an envelope
 // because it didn't ask for one. Use for save_state, clipboard_set,
 // and other "do this, no answer needed" messages.
+//
+// HandleVoid has no Bulk variant: there's no reply to classify.
+// Streaming Emit calls inside a HandleVoid handler use EmitBulk
+// directly.
 func HandleVoid[Req any](b *Bus, kind string, fn func(c *Conn, id string, req Req) error) {
 	b.register(kind, func(c *Conn, _ uint32, data map[any]any, _ *wire.Sender) {
 		id, _ := data["id"].(string)
@@ -327,7 +354,26 @@ func HandleVoid[Req any](b *Bus, kind string, fn func(c *Conn, id string, req Re
 // reply if the request carried one (Call() uses req_id; legacy
 // callers that used id also work because the bus copies both
 // fields onto the reply for compatibility).
+//
+// Reply class is Interactive. Use HandleFromBulk for handlers whose
+// reply payload is large by nature.
 func HandleFrom[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, req Req, from wire.Sender) (Resp, error)) {
+	handleFromClass(b, kind, fn, wire.ClassInteractive)
+}
+
+// HandleFromBulk is HandleFrom for replies that should always go out
+// on the Bulk class.
+func HandleFromBulk[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, req Req, from wire.Sender) (Resp, error)) {
+	handleFromClass(b, kind, fn, wire.ClassBulk)
+}
+
+// HandleFromBackground is HandleFrom for replies on the Background
+// class — for cross-app transfer-style handlers.
+func HandleFromBackground[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, req Req, from wire.Sender) (Resp, error)) {
+	handleFromClass(b, kind, fn, wire.ClassBackground)
+}
+
+func handleFromClass[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, req Req, from wire.Sender) (Resp, error), class wire.Class) {
 	b.register(kind, func(c *Conn, _ uint32, data map[any]any, from *wire.Sender) {
 		if from == nil {
 			// Own-FE message with the same kind as a cross-app
@@ -339,15 +385,15 @@ func HandleFrom[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, 
 		var req Req
 		if err := decodeInto(data, &req); err != nil {
 			b.logDecodeErr(kind, id, from, data, err)
-			b.sendErr(c, kind, id, ErrBadRequest, err.Error(), &replyTo{from: *from, reqID: reqID})
+			b.sendErr(c, kind, id, ErrBadRequest, err.Error(), &replyTo{from: *from, reqID: reqID, class: class})
 			return
 		}
 		resp, err := fn(c, id, req, *from)
 		if err != nil {
-			b.sendErr(c, kind, id, codeOf(err), msgOf(err), &replyTo{from: *from, reqID: reqID})
+			b.sendErr(c, kind, id, codeOf(err), msgOf(err), &replyTo{from: *from, reqID: reqID, class: class})
 			return
 		}
-		b.sendOk(c, kind, id, resp, &replyTo{from: *from, reqID: reqID})
+		b.sendOk(c, kind, id, resp, &replyTo{from: *from, reqID: reqID, class: class})
 	})
 }
 
@@ -374,12 +420,47 @@ func HandleFromVoid[Req any](b *Bus, kind string, fn func(c *Conn, id string, re
 // Emit pushes an unsolicited message to the app's FE. Use for events
 // the FE subscribes to (req.update, snapshot, tab_opened, …).
 // payload is anything CBOR-marshalable; the bus stamps the kind.
+//
+// Class is inferred from the verb suffix when it matches a known
+// bulk pattern (`*.output`, `*.list_reply`, `*.watch_event`,
+// `*.stream`); otherwise Interactive. For explicit control, use
+// EmitBulk.
 func (b *Bus) Emit(kind string, payload any) error {
 	out, err := envelope(kind, "", payload)
 	if err != nil {
 		return err
 	}
+	if classifyKind(kind) == wire.ClassBulk {
+		return b.conn.SendAppMsgBulk(out)
+	}
 	return b.conn.SendAppMsg(out)
+}
+
+// EmitBulk is Emit with the Bulk class bit set unconditionally. Use
+// for pty output, large reply payloads, file content streams, watch
+// event floods — anything where the router's scheduler should let
+// user-interactive frames overtake the producer.
+func (b *Bus) EmitBulk(kind string, payload any) error {
+	out, err := envelope(kind, "", payload)
+	if err != nil {
+		return err
+	}
+	return b.conn.SendAppMsgBulk(out)
+}
+
+// EmitBackground is Emit with the Background class bit set. Strictly
+// lower priority than Bulk — drains only when no Interactive, Bulk,
+// or Control traffic is queued. Designed for resumable large-file
+// transfers (uploads/downloads), lazy prefetch, telemetry shipping:
+// flows where "make progress when the system is otherwise idle" is
+// the right semantics, and where blocking interactive UI for them
+// would be unacceptable.
+func (b *Bus) EmitBackground(kind string, payload any) error {
+	out, err := envelope(kind, "", payload)
+	if err != nil {
+		return err
+	}
+	return b.conn.SendAppMsgBackground(out)
 }
 
 // EmitTo pushes an unsolicited message to a specific other app. Same
@@ -389,7 +470,50 @@ func (b *Bus) EmitTo(recipient wire.Recipient, kind string, payload any) error {
 	if err != nil {
 		return err
 	}
+	if classifyKind(kind) == wire.ClassBulk {
+		return b.conn.SendAppMsgToBulk(recipient, out)
+	}
 	return b.conn.SendAppMsgTo(recipient, out)
+}
+
+// EmitToBulk is EmitTo with the Bulk class bit set unconditionally.
+func (b *Bus) EmitToBulk(recipient wire.Recipient, kind string, payload any) error {
+	out, err := envelope(kind, "", payload)
+	if err != nil {
+		return err
+	}
+	return b.conn.SendAppMsgToBulk(recipient, out)
+}
+
+// EmitToBackground is EmitTo with the Background class bit set.
+func (b *Bus) EmitToBackground(recipient wire.Recipient, kind string, payload any) error {
+	out, err := envelope(kind, "", payload)
+	if err != nil {
+		return err
+	}
+	return b.conn.SendAppMsgToBackground(recipient, out)
+}
+
+// classifyKind is the SDK-internal safety net that picks Bulk for
+// well-known streaming verb suffixes when an app called Emit instead
+// of EmitBulk. Apps that follow naming conventions get correct
+// scheduling without remembering the bulk variant. Explicit EmitBulk
+// always wins; this table is only consulted on plain Emit.
+//
+// Keep the suffix list small and conservative — false positives
+// (interactive frame mis-classified as Bulk) starve themselves under
+// load; false negatives (bulk frame as Interactive) hog the scheduler.
+// Better to under-classify here and lean on explicit EmitBulk.
+func classifyKind(kind string) wire.Class {
+	switch {
+	case strings.HasSuffix(kind, ".output"),
+		strings.HasSuffix(kind, ".list_reply"),
+		strings.HasSuffix(kind, ".read_reply"),
+		strings.HasSuffix(kind, ".watch_event"),
+		strings.HasSuffix(kind, ".stream"):
+		return wire.ClassBulk
+	}
+	return wire.ClassInteractive
 }
 
 // Call performs a typed cross-app request, awaiting the matching
@@ -452,12 +576,15 @@ func Call[Req, Resp any](ctx context.Context, b *Bus, recipient wire.Recipient, 
 	}
 }
 
-// replyTo carries the addressing fields needed to ship a reply to a
-// cross-app caller — the from instance and the req_id we should
-// echo. Nil for own-FE replies (those go via SendAppMsg).
+// replyTo carries the addressing + class fields needed to ship a
+// reply. Cross-app replies have from.InstanceID set; own-FE replies
+// leave it empty. class selects between SendAppMsg and SendAppMsgBulk
+// (and the cross-app variants). nil *replyTo means own-FE Interactive
+// (legacy default for code paths that don't care about class).
 type replyTo struct {
 	from  wire.Sender
 	reqID string
+	class wire.Class
 }
 
 // sendOk builds the <kind>_ok envelope and ships it.
@@ -483,19 +610,38 @@ func (b *Bus) sendErr(c *Conn, kind, id, code, msg string, to *replyTo) {
 	b.ship(c, out, to)
 }
 
-// ship is the addressing branch: own-FE via SendAppMsg, cross-app via
-// SendAppMsgTo with the from instance as the recipient.
+// ship is the addressing+class branch: cross-app via SendAppMsgTo*,
+// own-FE via SendAppMsg*.
 func (b *Bus) ship(c *Conn, payload map[string]any, to *replyTo) {
+	class := wire.ClassInteractive
 	if to != nil {
+		class = to.class
+	}
+	if to != nil && to.from.InstanceID != "" {
 		if to.reqID != "" {
 			payload["req_id"] = to.reqID
 		}
 		// Address by InstanceID so the reply always lands on the
 		// specific caller, not a sibling singleton instance.
-		_ = c.SendAppMsgTo(wire.Recipient{InstanceID: to.from.InstanceID}, payload)
+		recipient := wire.Recipient{InstanceID: to.from.InstanceID}
+		switch class {
+		case wire.ClassBulk:
+			_ = c.SendAppMsgToBulk(recipient, payload)
+		case wire.ClassBackground:
+			_ = c.SendAppMsgToBackground(recipient, payload)
+		default:
+			_ = c.SendAppMsgTo(recipient, payload)
+		}
 		return
 	}
-	_ = c.SendAppMsg(payload)
+	switch class {
+	case wire.ClassBulk:
+		_ = c.SendAppMsgBulk(payload)
+	case wire.ClassBackground:
+		_ = c.SendAppMsgBackground(payload)
+	default:
+		_ = c.SendAppMsg(payload)
+	}
 }
 
 // envelope wraps payload in {kind, id?, ...payload fields} as a

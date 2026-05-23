@@ -11,14 +11,26 @@ import (
 //
 //	[flags:8][channel-id:24][length:32][payload:length]
 //
+//	flags byte:  E CC R R R R R
+//	             |  |  └────────  reserved, MUST be 0
+//	             |  └───────────  class (2 bits): see QOS.md §3
+//	             └──────────────  END (last fragment of a logical message)
+//
 // All multi-byte integers are big-endian.
 const (
 	// FlagEnd marks the last (or only) fragment of a logical message.
 	// v0.0 senders MUST set this; fragmentation is reserved.
 	FlagEnd byte = 0x01
 
-	// flagReserved is the mask of bits that MUST be zero in v0.0.
-	flagReserved byte = 0xFE
+	// flagClassMask covers the 2 class bits (bits 1..2). Senders that
+	// leave these zero get ClassInteractive — the safe default per
+	// QOS.md §3 (default-Interactive on unknown verbs).
+	flagClassMask  byte = 0x06
+	flagClassShift uint = 1
+
+	// flagReserved is the mask of bits that MUST be zero. Bits 3..7
+	// are unallocated; bits 1..2 are the class field above.
+	flagReserved byte = 0xF8
 
 	// MaxPayload is the per-frame payload cap (16 MiB) from WIRE.md §2.
 	MaxPayload = 16 * 1024 * 1024
@@ -29,6 +41,41 @@ const (
 	// headerSize is the size of the fixed frame header in bytes.
 	headerSize = 8
 )
+
+// Class is the priority class of a frame. See QOS.md §3.
+type Class uint8
+
+const (
+	// ClassInteractive — keystrokes, mouse, focus, app-lifecycle,
+	// anything the user is staring at right now. Default for sends
+	// that don't specify a class.
+	ClassInteractive Class = 0
+	// ClassBulk — pty output, list replies, file content, watch
+	// events, log lines. Subject to per-channel credit windows and
+	// strict-priority drain below Interactive.
+	ClassBulk Class = 1
+	// ClassBackground — reserved. Future: telemetry, lazy prefetch.
+	ClassBackground Class = 2
+	// ClassControl — reserved. Future: credit, keepalive, anything
+	// that MUST NOT block on bulk congestion.
+	ClassControl Class = 3
+)
+
+// String returns a short label for log output.
+func (c Class) String() string {
+	switch c {
+	case ClassInteractive:
+		return "interactive"
+	case ClassBulk:
+		return "bulk"
+	case ClassBackground:
+		return "background"
+	case ClassControl:
+		return "control"
+	default:
+		return "?"
+	}
+}
 
 // Errors returned by Frame encoding/decoding.
 var (
@@ -50,6 +97,21 @@ type Frame struct {
 
 // End reports whether the END flag is set on f.
 func (f Frame) End() bool { return f.Flags&FlagEnd != 0 }
+
+// Class returns the priority class encoded in f.Flags. Zero (the
+// implicit default for any sender that hasn't set class bits) maps to
+// ClassInteractive — the safe default per QOS.md §3.
+func (f Frame) Class() Class {
+	return Class((f.Flags & flagClassMask) >> flagClassShift)
+}
+
+// WithClass returns a copy of f with the class bits set to c. Used
+// by the SDK when serializing frames with EmitBulk / HandleBulk; app
+// code never calls this directly.
+func (f Frame) WithClass(c Class) Frame {
+	f.Flags = (f.Flags &^ flagClassMask) | (byte(c)<<flagClassShift)&flagClassMask
+	return f
+}
 
 // Validate checks the v0.0 wire invariants. See WIRE.md §2.
 //

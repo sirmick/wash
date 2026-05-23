@@ -49,9 +49,10 @@ import { tags as t } from '@lezer/highlight';
 import { javascript } from '@codemirror/lang-javascript';
 import { json } from '@codemirror/lang-json';
 import { markdown } from '@codemirror/lang-markdown';
+// xterm + addon-fit are externalized to /vendor/xterm.js. The vendor
+// bundle auto-injects the xterm CSS, so no manual <style> shim here.
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import xtermCSS from '@xterm/xterm/css/xterm.css?inline';
 import {
   Check,
   ChevronDown,
@@ -1598,15 +1599,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   let mainEl!: HTMLDivElement;
 
   onMount(() => {
-    // Inject xterm's CSS once (shared across all editor windows
-    // — the document-level style is idempotent).
-    if (!document.querySelector('style[data-wash-edit-xterm]')) {
-      const style = document.createElement('style');
-      style.dataset.washEditXterm = '1';
-      style.textContent = xtermCSS;
-      document.head.appendChild(style);
-    }
-
     const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail as BEMessage);
     props.host.addEventListener('wash:msg', onMsg);
     const onState = (ev: Event) => {
@@ -2588,6 +2580,9 @@ function tabStyle(active: boolean): JSX.CSSProperties {
     padding: '0 8px',
     height: '26px',
     'border-right': `1px solid ${tokens.borderMenu}`,
+    // Rounded only on top so the tab visually sits on the bar's
+    // border-bottom — matches wash-term's tab styling.
+    'border-radius': '6px 6px 0 0',
     background: active ? tokens.bgWindow : 'transparent',
     color: active ? tokens.fg : tokens.fgMuted,
     cursor: 'pointer',

@@ -28,7 +28,10 @@ export function Desktop() {
     const el = document.createElement(d.element);
     el.setAttribute('data-wash-instance', d.instanceID);
     host.appendChild(el);
-    registerMountedElement(d.instanceID, el);
+    // See window.tsx for the rationale: defer one microtask so
+    // mounted-app listeners are set up before wash:state /
+    // wash:msg dispatch.
+    queueMicrotask(() => registerMountedElement(d.instanceID, el));
     mountedFor = d.instanceID;
   });
 

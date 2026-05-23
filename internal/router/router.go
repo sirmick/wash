@@ -108,9 +108,13 @@ type Router struct {
 	// pendingAttach tracks router-spawned children awaiting their
 	// dial-back. Keyed by pid; the spawn caller blocks on the
 	// channel, and the control-socket's attach handler resolves it
-	// when the matching Identity arrives.
+	// when the matching Identity arrives. The record carries the
+	// kiosk flag so the handler can stamp it onto the inst BEFORE
+	// the handshake runs — handshake's WindowID allocation gates on
+	// inst.Kiosk, so setting it post-attach would race the FE-bound
+	// IdentityAck and surface a phantom window.
 	pendingMu     sync.Mutex
-	pendingAttach map[int]chan attachResult
+	pendingAttach map[int]*pendingAttach
 
 	// pendingByToken tracks dial-backs from externally-spawned
 	// children (wash-priv's "spawn under sudo" path). Keyed by the
@@ -160,7 +164,7 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		channels:       make(map[uint32]*channelBinding),
 		appMsgWatchers: make(map[string]map[string]chan map[string]any),
 		singletons:     make(map[string]*AppInstance),
-		pendingAttach:  make(map[int]chan attachResult),
+		pendingAttach:  make(map[int]*pendingAttach),
 		pendingByToken: make(map[string]*tokenPending),
 		cliSessions:    make(map[string]*cliSession),
 	}
@@ -190,25 +194,35 @@ type attachResult struct {
 	err  error
 }
 
+// pendingAttach is the record stashed in router.pendingAttach for
+// each in-flight router-spawned child. The chan carries the post-
+// handshake AppInstance back to spawnAndRun; kiosk is set on the
+// inst BEFORE the handshake's WindowID allocation runs (see the
+// pendingAttach map's comment for why the timing matters).
+type pendingAttach struct {
+	ch    chan attachResult
+	kiosk bool
+}
+
 // registerPendingAttach reserves the pid slot before Spawn returns
 // — the child could in principle dial fast enough that the
 // control-socket handler runs before spawnAndRun reaches its
 // select. Caller MUST unregister via takePendingAttach (or via
 // the deferred cleanup) once the spawn completes one way or the
 // other so stale entries don't leak.
-func (r *Router) registerPendingAttach(pid int) chan attachResult {
+func (r *Router) registerPendingAttach(pid int, kiosk bool) chan attachResult {
 	ch := make(chan attachResult, 1)
 	r.pendingMu.Lock()
-	r.pendingAttach[pid] = ch
+	r.pendingAttach[pid] = &pendingAttach{ch: ch, kiosk: kiosk}
 	r.pendingMu.Unlock()
 	return ch
 }
 
 // takePendingAttach claims and removes the pending entry for pid.
-// Returns (ch, true) if found. The caller is responsible for
+// Returns (rec, true) if found. The caller is responsible for
 // writing the attach result before another goroutine starts a
 // new spawn that could reuse the pid (unlikely but possible).
-func (r *Router) takePendingAttach(pid int) (chan attachResult, bool) {
+func (r *Router) takePendingAttach(pid int) (*pendingAttach, bool) {
 	r.pendingMu.Lock()
 	defer r.pendingMu.Unlock()
 	ch, ok := r.pendingAttach[pid]
@@ -416,9 +430,19 @@ type channelBinding struct {
 	shellMu sync.Mutex
 	shell   *ShellSession
 	buf     *ringBuffer
+
+	// credit is the FE-→router flow-control ledger for this
+	// channel (docs/QOS.md §5). Bulk-class router→shell writes
+	// reserve from it; the FE replenishes via channel.credit on
+	// the shell control channel. Interactive-class writes
+	// (bundle/replay transactional flows) bypass it.
+	credit *ChannelCredit
 }
 
 func (r *Router) registerChannel(b *channelBinding) {
+	if b.credit == nil {
+		b.credit = NewChannelCredit(DefaultChannelCredit)
+	}
 	r.channelsMu.Lock()
 	r.channels[b.channelID] = b
 	r.channelsMu.Unlock()
@@ -439,6 +463,11 @@ func (r *Router) closeChannel(id uint32, reason string) {
 	r.channelsMu.Unlock()
 	if b == nil {
 		return
+	}
+	// Unblock any producer waiting on this channel's credit so the
+	// teardown can proceed without leaks.
+	if b.credit != nil {
+		b.credit.Close()
 	}
 	if b.app != nil {
 		_ = b.app.writeCtrl(wire.NewChannelClosed(id, reason))
@@ -547,7 +576,7 @@ func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*Ap
 	// already be running. takePendingAttach in the control-socket
 	// handler will only match this pid if registerPendingAttach
 	// has been called first. The lock keeps the operations ordered.
-	ch := r.registerPendingAttach(pid)
+	ch := r.registerPendingAttach(pid, kiosk)
 	defer func() {
 		// Best-effort: in case of timeout/cancel the channel still
 		// hangs around if we leave it. takePendingAttach is safe to
@@ -822,7 +851,12 @@ func (r *Router) replayBundleToShell(s *ShellSession, inst *AppInstance) {
 		if end > len(bytes) {
 			end = len(bytes)
 		}
-		if err := s.WriteRawFrame(id, bytes[off:end]); err != nil {
+		// Interactive class: bundle delivery is a transactional
+		// Bind → data → Unbind sequence. Under Bulk, the strict-
+		// priority scheduler would let the Interactive Unbind
+		// overtake these data frames and the shell would observe
+		// "channel closed" before the bytes arrived.
+		if err := s.WriteRawFrameClass(id, bytes[off:end], wire.ClassInteractive); err != nil {
 			r.log("bundle frame %s: %v", inst.InstanceID, err)
 			return
 		}
@@ -873,7 +907,10 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 			continue
 		}
 		if len(replay) > 0 {
-			if err := s.WriteRawFrame(id, replay); err != nil {
+			// Interactive class so the replay arrives in the same
+			// transactional window as the Bind that preceded it —
+			// see fanOutBundleToAttachedShells for the same rule.
+			if err := s.WriteRawFrameClass(id, replay, wire.ClassInteractive); err != nil {
 				r.log("reattach replay channel %d: %v", id, err)
 			}
 		}

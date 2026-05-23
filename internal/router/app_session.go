@@ -204,7 +204,7 @@ func (inst *AppInstance) dispatch(f wire.Frame) error {
 	case ChannelControl:
 		return inst.handleCtrl(f.Payload)
 	case ChannelEvent:
-		return inst.handleEvt(f.Payload)
+		return inst.handleEvt(f.Payload, f.Class())
 	default:
 		// Channel ≥ 2: raw byte stream.
 		b := inst.router.lookupChannel(f.Channel)
@@ -235,7 +235,12 @@ func (inst *AppInstance) dispatch(f wire.Frame) error {
 			// the next attached shell will replay them.
 			return nil
 		}
-		return sh.WriteRawFrame(f.Channel, f.Payload)
+		// Preserve the sender app's class on the forward — if the
+		// app's SDK marked this stream Bulk (pty output), we want
+		// the FE-bound forward to inherit that. The default-Bulk
+		// path in WriteRawFrame is the right answer when the
+		// originating frame doesn't carry an explicit class bit.
+		return sh.WriteRawFrameClass(f.Channel, f.Payload, f.Class())
 	}
 }
 
@@ -332,7 +337,7 @@ func (inst *AppInstance) handleChannelOpen(m wire.ChannelOpen) error {
 	return inst.writeCtrl(wire.NewChannelOpened(m.ReqID, id))
 }
 
-func (inst *AppInstance) handleEvt(payload []byte) error {
+func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 	t, err := wire.PeekEvtType(payload)
 	if err != nil {
 		return fmt.Errorf("evt peek: %w", err)
@@ -343,7 +348,7 @@ func (inst *AppInstance) handleEvt(payload []byte) error {
 		if err := cbor.Unmarshal(payload, &m); err != nil {
 			return err
 		}
-		return inst.relayAppMsgToShell(m)
+		return inst.relayAppMsgToShell(m, class)
 	case wire.TEvtAppMsgSendTo:
 		var m wire.EvtAppMsgSendTo
 		if err := cbor.Unmarshal(payload, &m); err != nil {
@@ -449,7 +454,13 @@ func (inst *AppInstance) relayAppMsgCrossInstance(m wire.EvtAppMsgSendTo) error 
 // "id" field, any control-socket watcher registered for (instance,
 // id) gets delivered the data before shell relay. This is how the
 // `wash-launch msg --await` path correlates BE replies.
-func (inst *AppInstance) relayAppMsgToShell(m wire.EvtAppMsg) error {
+// relayAppMsgToShell forwards an app's BE→FE message to every
+// attached shell. class is the priority class the originating app
+// stamped on its frame (Interactive by default; Bulk for streaming
+// senders that called SendAppMsgBulk / EmitBulk in the SDK). It is
+// preserved on the FE-bound ShellAppMsgDeliver so the scheduler
+// queues the relayed envelope at the same priority.
+func (inst *AppInstance) relayAppMsgToShell(m wire.EvtAppMsg, class wire.Class) error {
 	normalized := wire.ToJSONValue(m.Data)
 	if asMap, ok := normalized.(map[string]any); ok {
 		if msgID, _ := asMap["id"].(string); msgID != "" {
@@ -462,7 +473,7 @@ func (inst *AppInstance) relayAppMsgToShell(m wire.EvtAppMsg) error {
 	}
 	send := wire.NewShellAppMsgDeliver(inst.InstanceID, dataJSON)
 	for _, s := range inst.router.shellList() {
-		if err := s.WriteCtrl(send); err != nil {
+		if err := s.WriteCtrlClass(send, class); err != nil {
 			return err
 		}
 	}
@@ -651,13 +662,23 @@ func (inst *AppInstance) writeCtrl(m any) error {
 	return inst.writeFrame(wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: data})
 }
 
-// WriteEvt encodes m as CBOR and writes an event-channel frame.
+// WriteEvt encodes m as CBOR and writes an event-channel frame at
+// the default class (Interactive). Use WriteEvtClass to preserve a
+// class from a relayed FE-originated frame.
 func (inst *AppInstance) WriteEvt(m any) error {
+	return inst.WriteEvtClass(m, wire.ClassInteractive)
+}
+
+// WriteEvtClass is WriteEvt with an explicit priority class. The
+// router uses this when relaying ShellAppMsgSend → EvtAppMsg so the
+// app's read path observes the same class the FE sender stamped.
+func (inst *AppInstance) WriteEvtClass(m any, class wire.Class) error {
 	data, err := wire.EncodeEvt(m)
 	if err != nil {
 		return err
 	}
-	return inst.writeFrame(wire.Frame{Flags: wire.FlagEnd, Channel: ChannelEvent, Payload: data})
+	f := wire.Frame{Flags: wire.FlagEnd, Channel: ChannelEvent, Payload: data}.WithClass(class)
+	return inst.writeFrame(f)
 }
 
 func (inst *AppInstance) writeFrame(f wire.Frame) error {

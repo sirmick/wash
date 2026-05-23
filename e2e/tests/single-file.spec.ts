@@ -1,11 +1,14 @@
 // Single-file-app contract: each app's FE bundle ships as exactly one
-// self-contained ES module under <app>/dist/index.js. No code-split
-// chunks. No external module imports — the bundle is the whole app
-// (apart from the shell-provided window.wash API surface).
+// ES module under <app>/dist/index.js. No code-split chunks. The only
+// external modules permitted are the shared runtimes served by the
+// router under /vendor/* (solid-js, @xterm/*, @wash/ui) and resolved
+// via the import map in web/shell/index.html — everything else must
+// be inlined into the bundle.
 //
-// This is a wire/contract invariant from the v0.0 prompt; we test it
-// here so a build-config slip (accidentally externalizing something,
-// or generating a chunk per Solid component) breaks CI.
+// This is a wire/contract invariant from the v0.0 prompt, generalised
+// to permit the import-map externals introduced in the bundle-size
+// reduction pass; a build-config slip (accidentally pulling in a new
+// dependency, or generating a chunk per Solid component) breaks CI.
 
 import { test, expect } from '@playwright/test';
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
@@ -25,18 +28,30 @@ interface AppBundle {
 }
 
 const APPS: AppBundle[] = [
-  // Session bundle hosts the chrome (taskbar, start menu, palette,
-  // screenshot button via bundled html-to-image) on top of Solid +
-  // lucide-solid for chrome icons. Keep an eye on growth but the
-  // budget can flex as features land.
+  // Caps after the bundle-size pass: solid-js, @xterm/*, @wash/ui are
+  // import-map externals (served from /vendor/*) so they don't add to
+  // the per-app bundle. Re-evaluate caps when adding a new shared dep.
   { name: 'session', dir: 'web/apps/session/dist', maxBytes: 70_000 },
   { name: 'about',   dir: 'web/apps/about/dist',   maxBytes: 10_000 },
   { name: 'test',    dir: 'web/apps/test/dist',    maxBytes: 30_000 },
-  // wash-term bundles xterm.js + the fit addon + xterm CSS.
-  { name: 'term',    dir: 'web/apps/term/dist',    maxBytes: 600_000 },
+  { name: 'term',    dir: 'web/apps/term/dist',    maxBytes: 30_000 },
   { name: 'fm',      dir: 'web/apps/fm/dist',      maxBytes: 100_000 },
-  { name: 'bulk',    dir: 'web/apps/bulk/dist',    maxBytes: 40_000 },
+  { name: 'bulk',    dir: 'web/apps/bulk/dist',    maxBytes: 30_000 },
 ];
+
+// ALLOWED_EXTERNALS are the bare specifiers served via the import map
+// in web/shell/index.html — each must also be built into
+// web/shell/public/vendor/ by web/shell/build-vendor.mjs. Adding a
+// new entry here without wiring the vendor build will silently break
+// every app at load time.
+const ALLOWED_EXTERNALS = new Set([
+  'solid-js',
+  'solid-js/web',
+  'solid-js/store',
+  '@xterm/xterm',
+  '@xterm/addon-fit',
+  '@wash/ui',
+]);
 
 for (const app of APPS) {
   test.describe(`${app.name} app bundle`, () => {
@@ -53,14 +68,18 @@ for (const app of APPS) {
       expect(jsFiles).toEqual(['index.js']);
     });
 
-    test('bundle has no top-level ES module imports', () => {
+    test('bundle only imports allowed externals', () => {
       const dir = resolve(REPO_ROOT, app.dir);
       const code = readFileSync(resolve(dir, 'index.js'), 'utf8');
-      // Static imports the bundler should have inlined.
-      expect(code).not.toMatch(/^\s*import\s+/m);
-      expect(code).not.toMatch(/^\s*export\s+\*\s*from/m);
+      // Static imports: every bare specifier MUST be in
+      // ALLOWED_EXTERNALS. Anything else means a missed inline.
+      const importPat = /(?:^|\n|;)\s*(?:import|export\s*\*)\s+(?:[\s\S]*?\s+from\s+)?["']([^"']+)["']/g;
+      for (const m of code.matchAll(importPat)) {
+        const spec = m[1];
+        expect(ALLOWED_EXTERNALS.has(spec)).toBe(true);
+      }
       // Dynamic imports — none are expected; the wash host gives the
-      // bundle everything it needs through window.wash.
+      // bundle everything it needs through window.wash + externals.
       expect(code).not.toMatch(/\bimport\s*\(/);
       // require() is a CommonJS construct that shouldn't appear in
       // an ES library build at all.
@@ -78,7 +97,16 @@ for (const app of APPS) {
       const code = readFileSync(resolve(dir, 'index.js'), 'utf8');
       const elem = `wash-app-${app.name}`;
       expect(code).toContain(elem);
-      expect(code).toMatch(/customElements\.define/);
+      // Two ways to register:
+      //   (a) a direct customElements.define() call in the bundle
+      //       (older apps that don't use @wash/ui), or
+      //   (b) a defineWashApp import from @wash/ui — the registration
+      //       call itself lives in the externalized vendor/wash-ui.js,
+      //       but importing the helper is enough to prove the bundle
+      //       drives the registration path.
+      const direct = /customElements\.define/.test(code);
+      const viaUI = /defineWashApp/.test(code) && /from\s+["']@wash\/ui["']/.test(code);
+      expect(direct || viaUI).toBe(true);
     });
   });
 }

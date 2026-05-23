@@ -15,7 +15,7 @@ test.describe('terminal reattach', () => {
   test('pty scrollback survives browser refresh', async ({ page, router }) => {
     await page.goto(router.url);
     await page.locator('button[title="Apps"]').click();
-    await page.locator('[data-testid="start-menu"]').getByRole('button', { name: /Terminal/ }).click();
+    await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Terminal', exact: true }).click();
     const term = page.locator('wash-app-term');
     await expect(term).toBeVisible();
     // The first prompt arrives within a beat.

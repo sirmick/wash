@@ -308,6 +308,22 @@ importers:
         specifier: ^2.10.2
         version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
 
+  demo:
+    dependencies:
+      '@xterm/addon-fit':
+        specifier: ^0.10.0
+        version: 0.10.0(@xterm/xterm@5.5.0)
+      '@xterm/xterm':
+        specifier: ^5.5.0
+        version: 5.5.0
+    devDependencies:
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+      vite:
+        specifier: ^5.4.10
+        version: 5.4.21
+
   lib:
     dependencies:
       lucide-solid:
@@ -316,9 +332,28 @@ importers:
       solid-js:
         specifier: ^1.9.13
         version: 1.9.13
+    devDependencies:
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+      vite:
+        specifier: ^5.4.10
+        version: 5.4.21
+      vite-plugin-solid:
+        specifier: ^2.10.2
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
 
   shell:
     dependencies:
+      '@wash/ui':
+        specifier: workspace:*
+        version: link:../lib
+      '@xterm/addon-fit':
+        specifier: ^0.10.0
+        version: 0.10.0(@xterm/xterm@5.5.0)
+      '@xterm/xterm':
+        specifier: ^5.5.0
+        version: 5.5.0
       lucide-solid:
         specifier: ^1.16.0
         version: 1.16.0(solid-js@1.9.13)
@@ -326,6 +361,9 @@ importers:
         specifier: ^1.9.13
         version: 1.9.13
     devDependencies:
+      esbuild:
+        specifier: ^0.21.5
+        version: 0.21.5
       lucide-static:
         specifier: ^1.16.0
         version: 1.16.0

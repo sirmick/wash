@@ -3,6 +3,8 @@ package router
 import (
 	"strings"
 	"testing"
+
+	"github.com/sirmick/wash/internal/wire"
 )
 
 func validManifestJSON() string {
@@ -59,7 +61,7 @@ func TestValidateRejects(t *testing.T) {
 				t.Fatalf("base manifest must parse: %v", err)
 			}
 			tc.mut(m)
-			err = validateManifest(m)
+			err = wire.ValidateManifest(m)
 			if err == nil {
 				t.Fatalf("expected error containing %q, got nil", tc.want)
 			}

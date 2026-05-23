@@ -1,5 +1,11 @@
 package wire
 
+import (
+	"errors"
+	"fmt"
+	"regexp"
+)
+
 // ProtocolVersion is the wash wire protocol version this build speaks.
 // Router and SDK share it. Apps declaring a different value in their
 // manifest are listed-disabled by the registry.
@@ -108,4 +114,53 @@ func (m *Manifest) HasCapability(cap string) bool {
 		}
 	}
 	return false
+}
+
+// idRegexp is the manifest id regex from WIRE.md §5.1.
+var idRegexp = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)+$`)
+
+// elementPrefix is the required prefix for custom-element tags so the
+// global registry stays namespaced.
+const elementPrefix = "wash-app-"
+
+// ValidateManifest checks all manifest constraints from WIRE.md §5.1.
+// Returning an error makes the router mark the app listed-disabled
+// (never silently dropped), with err.Error() as the displayed reason.
+// Lives in wire (not router) so the in-process app registry can call
+// it without a dep on router — same validation, same error messages,
+// regardless of whether the manifest came from --wash-manifest output
+// or a compiled-in registration.
+func ValidateManifest(m *Manifest) error {
+	if !idRegexp.MatchString(m.ID) {
+		return fmt.Errorf("invalid id %q", m.ID)
+	}
+	if m.Name == "" {
+		return errors.New("name is empty")
+	}
+	if m.Version == "" {
+		return errors.New("version is empty")
+	}
+	if m.ProtocolVersion != ProtocolVersion {
+		return fmt.Errorf("protocol_version %d incompatible (router speaks %d)", m.ProtocolVersion, ProtocolVersion)
+	}
+	if len(m.Element) <= len(elementPrefix) || m.Element[:len(elementPrefix)] != elementPrefix {
+		return fmt.Errorf("element %q must start with %q", m.Element, elementPrefix)
+	}
+	switch m.Surface {
+	case SurfaceWindow, SurfaceDesktop:
+	default:
+		return fmt.Errorf("invalid surface %q", m.Surface)
+	}
+	switch m.Instancing {
+	case InstancingMulti, InstancingSingle, InstancingSingleton:
+	default:
+		return fmt.Errorf("invalid instancing %q", m.Instancing)
+	}
+	if m.Icon == "" {
+		return errors.New("icon is empty (must be inline data URI)")
+	}
+	if len(m.Icon) > MaxIconBytes {
+		return fmt.Errorf("icon is %d bytes, cap is %d", len(m.Icon), MaxIconBytes)
+	}
+	return nil
 }

@@ -159,6 +159,77 @@ returns a working capability handle redeemed into a raw channel.
 **Exit:** one static arm64 binary runs the whole desktop; reload preserves the
 session; flood and teardown are clean.
 
+## Phase 6 — Router QoS, priority classes, and online demo
+
+Two workstreams. QoS first; demo depends on it.
+
+### 6a. Router scheduling: priority classes + per-class flow control
+
+Phase 0/2's credit/backpressure encoding gives correctness under flood; it does
+not give *fairness*. With one shell-side stream fanned out by the router, a
+chatty app (e.g. `cat bigfile` in wash-term, a 50k-entry listing in wash-fm)
+can starve interactive frames from other apps. Real desktops layer scheduling
+on top of flow control; wash needs the same.
+
+- **Two priority classes to start**: Interactive (keystrokes, mouse, focus,
+  app-lifecycle, anything the user is staring at right now) and Bulk
+  (pty_output, list_reply, file content, watch events, telemetry). Verb-keyed
+  classification table inside the router; apps stay dumb.
+- **Bounded per-class outgoing queues** between the per-app Unix sockets and
+  the FE WebSocket. When a class's queue is full, the router stops reading the
+  Unix sockets of apps producing into it; kernel-level socket backpressure does
+  the rest. No wire-format change for this piece.
+- **Per-channel FE→router credit windows** (one new frame type, `CREDIT chan n`)
+  so the FE can pace per-app — "wash-fm is slow rendering, pause that channel"
+  without touching wash-term.
+- Optional channel-class hint in the OPEN handshake later; not needed for v1
+  of this work.
+- **Not** doing per-app fairness within a class yet. Defer until it bites.
+
+**Exit:** under a sustained `cat 100MB` from wash-term, keystrokes to wash-term
+itself stay <50ms p99 and *other* apps' interactive frames stay <50ms p99.
+
+### 6b. Online demo via v86
+
+Static-hosted, zero-infra demo at `demo.wash.example` so people can try wash
+in their browser without booting a VM locally. Architecture: v86 boots a real
+Linux kernel + minimal userspace running native `wash-router` and friends;
+the outer page hosts the wash FE directly; transport between them is
+virtio-console framed as length-prefixed CBOR.
+
+Stack locked:
+
+- Custom Linux LTS kernel, i686, **no TCP/IP**, with virtio-PCI + virtio-console
+  + ptmx + inotify + devtmpfs + futex + epoll. One 8250 kept for `earlycon`
+  only (handoff to `hvc0` once virtio inits, so xterm.js never shows blank
+  during early boot). Target ~5MB kernel blob.
+- **Alpine minirootfs** userspace (musl + OpenRC + busybox); wash's
+  service/journal UIs taught to speak OpenRC + on-disk log files directly
+  rather than systemd/journald.
+- `wash-router --transport=virtio-console:/dev/vport0p2` (new) — no HTTP, no
+  ws listener.
+- Three virtio-console ports (confirmed implemented in v86 `src/virtio_console.js`,
+  buffer-event API, no UART fiction): `hvc0` (kernel/boot log → xterm.js boot
+  terminal in outer page), `vport0p1` (control: `WASH_READY` token + future
+  signals), `vport0p2` (router CBOR bus). Outer-side API:
+  `bus.register("virtio-console{N}-output-bytes", …)` and
+  `bus.send("virtio-console{N}-input-bytes", buf)`.
+- Outer page: Vite-built static site on Cloudflare Pages; hosts v86,
+  xterm.js, wash FE bundles, kernel.bin, rootfs.img. The same Vite project
+  that builds production wash; transport abstraction in the FE selects
+  WebSocket vs. serial-shim at runtime.
+- Target total download: ~15MB raw, ~5–7MB brotli.
+
+Open items: flow-control behavior under v86's virtio-console drain rate
+(buffer-event API should be MB/s-class but unmeasured).
+
+**Depends on 6a** — v86's serial bandwidth is well below loopback ws, so
+without priority classes a single bulk transfer wedges the demo visibly.
+
+**Exit:** open `demo.wash.example` in a fresh browser → see Linux boot in an
+xterm.js panel → wash desktop fades in within ~10s → fm/term/session all
+usable; a `cat 1MB` in wash-term does not stall wash-fm or keystrokes.
+
 ## Validation strategy
 
 The development sandbox SIGKILLs long-lived listening servers, so v1 is

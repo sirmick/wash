@@ -1,6 +1,25 @@
 /out/
 **/dist/
 **/node_modules/
+# Per-app FE bundles get copied into each app's package via the
+# Makefile and embedded with //go:embed. Same convention now spans
+# the standalone-shim assets (cmd/*/assets — historical) AND the
+# extracted runtime packages (internal/apps/*/assets,
+# internal/runner/*/assets). The vendor/ tree under web/shell/public
+# is produced by build-vendor.mjs + the @wash/ui vite build.
 cmd/*/assets/
+internal/apps/*/assets/
+internal/runner/*/assets/
+web/shell/public/vendor/
 e2e/test-results/
 e2e/playwright-report/
+# Stray dev binaries: `go build ./cmd/wash` without -o lands the
+# binary at the repo root. Same for ./cmd/wash-router. They're never
+# what you actually want in the tree.
+/wash
+/wash-router
+# Out-of-tree build artifacts for the v86 demo + image builds —
+# heavy (hundreds of MB) and produced by separate toolchains.
+/image/
+/image-rv/
+/web/demo/

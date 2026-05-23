@@ -62,7 +62,7 @@ test.describe('wash-launch', () => {
     test.setTimeout(20_000);
     await page.goto(router.url);
     await page.locator('button[title="Apps"]').click();
-    await page.getByRole('button', { name: /Terminal/ }).click();
+    await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Terminal', exact: true }).click();
     await expect(page.locator('wash-app-term')).toBeVisible();
     await expect.poll(() => activeBufferText(page), { timeout: 8_000 }).toMatch(/[$#%>][ ]?/);
 

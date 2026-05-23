@@ -5,6 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>wash</title>
   <link rel="icon" type="image/svg+xml" href="/wash-logo.svg">
+  <!-- Shared runtime bundles. The shell + every dynamically-imported
+       app bundle externalizes these specifiers and resolves them via
+       this map. A single live instance per module is load-bearing —
+       Solid reactivity (instanceof + signal-owner checks) breaks if
+       two copies of solid-js end up loaded. Keep in sync with
+       web/shell/build-vendor.mjs and each consumer's vite.config.ts
+       externals list. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "solid-js": "/vendor/solid.js",
+      "solid-js/web": "/vendor/solid-web.js",
+      "solid-js/store": "/vendor/solid-store.js",
+      "@xterm/xterm": "/vendor/xterm.js",
+      "@xterm/addon-fit": "/vendor/xterm-fit.js",
+      "@wash/ui": "/vendor/wash-ui.js"
+    }
+  }
+  </script>
   <style>
     html, body { margin: 0; height: 100%; background: #111; color: #eee; font: 14px system-ui, sans-serif; overflow: hidden; }
     #root { position: fixed; inset: 0; }

@@ -51,7 +51,7 @@ func TestEncodeRejectsBadFrames(t *testing.T) {
 		want error
 	}{
 		{"channel out of range", Frame{Flags: FlagEnd, Channel: MaxChannel + 1}, ErrChannelTooLarge},
-		{"reserved flag set", Frame{Flags: FlagEnd | 0x02, Channel: 0}, ErrReservedFlag},
+		{"reserved flag set", Frame{Flags: FlagEnd | 0x08, Channel: 0}, ErrReservedFlag},
 		{"END not set", Frame{Flags: 0, Channel: 0}, ErrEndNotSet},
 		{"payload too large", Frame{Flags: FlagEnd, Channel: 0, Payload: make([]byte, MaxPayload+1)}, ErrOversizeFrame},
 	}
@@ -133,6 +133,76 @@ func TestDecodeEOF(t *testing.T) {
 	_, err := DecodeFrame(bytes.NewReader(nil))
 	if err != io.EOF {
 		t.Fatalf("got %v, want io.EOF", err)
+	}
+}
+
+// TestClassRoundTrip exercises every class through encode/decode and
+// asserts the accessor reports back what was set.
+func TestClassRoundTrip(t *testing.T) {
+	classes := []Class{ClassInteractive, ClassBulk, ClassBackground, ClassControl}
+	for _, c := range classes {
+		t.Run(c.String(), func(t *testing.T) {
+			in := Frame{Flags: FlagEnd, Channel: 17, Payload: []byte("x")}.WithClass(c)
+			if in.Class() != c {
+				t.Fatalf("in.Class()=%v want %v", in.Class(), c)
+			}
+			var buf bytes.Buffer
+			if err := EncodeFrame(&buf, in); err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			out, err := DecodeFrame(&buf)
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if out.Class() != c {
+				t.Fatalf("out.Class()=%v want %v (flags=%08b)", out.Class(), c, out.Flags)
+			}
+		})
+	}
+}
+
+// TestClassDefaultsInteractive ensures a sender that didn't set class
+// bits (the common case for legacy code) reads back as Interactive —
+// the QOS.md §3 default.
+func TestClassDefaultsInteractive(t *testing.T) {
+	in := Frame{Flags: FlagEnd, Channel: 0, Payload: nil}
+	if in.Class() != ClassInteractive {
+		t.Fatalf("default class=%v, want Interactive", in.Class())
+	}
+	var buf bytes.Buffer
+	if err := EncodeFrame(&buf, in); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	out, err := DecodeFrame(&buf)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Class() != ClassInteractive {
+		t.Fatalf("decoded class=%v, want Interactive", out.Class())
+	}
+}
+
+// TestWithClassIsIdempotent — calling WithClass twice leaves only the
+// final class on the wire (no accumulated bits).
+func TestWithClassIsIdempotent(t *testing.T) {
+	f := Frame{Flags: FlagEnd, Channel: 0}.WithClass(ClassBulk).WithClass(ClassInteractive)
+	if f.Class() != ClassInteractive {
+		t.Fatalf("class=%v, want Interactive", f.Class())
+	}
+	// Ensure END bit survives reclassification.
+	if !f.End() {
+		t.Fatalf("END flag lost after WithClass")
+	}
+}
+
+// TestClassDoesNotTripReservedCheck — class bits live in 0x06; the
+// reserved-flag rejection MUST only fire on bits 3..7.
+func TestClassDoesNotTripReservedCheck(t *testing.T) {
+	for _, c := range []Class{ClassInteractive, ClassBulk, ClassBackground, ClassControl} {
+		f := Frame{Flags: FlagEnd, Channel: 0}.WithClass(c)
+		if err := f.Validate(); err != nil {
+			t.Fatalf("class=%v rejected by Validate: %v (flags=%08b)", c, err, f.Flags)
+		}
 	}
 }
 

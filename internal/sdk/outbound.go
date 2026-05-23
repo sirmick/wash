@@ -19,9 +19,27 @@ const PrivAppID = "com.wash.priv"
 
 // SendAppMsg sends an APP_MSG to the FE half (WIRE.md §9). data is
 // passed through to CBOR verbatim — the format is app-private and
-// the router never inspects it.
+// the router never inspects it. Frames go out as Interactive class;
+// use SendAppMsgBulk for streams that should yield to user input.
 func (c *Conn) SendAppMsg(data any) error {
 	return c.writeEvt(wire.NewEvtAppMsg(c.windowID, data))
+}
+
+// SendAppMsgBulk is SendAppMsg with the Bulk class bit set. Used by
+// pty output streams, large list/read replies, watch event floods —
+// anywhere the volume is high enough that user-interactive frames
+// should overtake it in the router's scheduler.
+func (c *Conn) SendAppMsgBulk(data any) error {
+	return c.writeEvtClass(wire.NewEvtAppMsg(c.windowID, data), wire.ClassBulk)
+}
+
+// SendAppMsgBackground is SendAppMsg with the Background class bit
+// set. Used for transfers that should only consume bandwidth when
+// nothing else needs it — large file uploads/downloads, lazy
+// prefetch, telemetry shipping. Strictly lower priority than Bulk,
+// so a normal pty flood still overtakes a multi-GB transfer.
+func (c *Conn) SendAppMsgBackground(data any) error {
+	return c.writeEvtClass(wire.NewEvtAppMsg(c.windowID, data), wire.ClassBackground)
 }
 
 // SendAppMsgTo dispatches data as an APP_MSG to a *different*
@@ -32,6 +50,18 @@ func (c *Conn) SendAppMsg(data any) error {
 // fm enqueueing a bulk-delete job into wash-bulk.
 func (c *Conn) SendAppMsgTo(recipient wire.Recipient, data any) error {
 	return c.writeEvt(wire.NewEvtAppMsgSendTo(recipient, data))
+}
+
+// SendAppMsgToBulk is SendAppMsgTo with the Bulk class bit set. See
+// SendAppMsgBulk for the rationale.
+func (c *Conn) SendAppMsgToBulk(recipient wire.Recipient, data any) error {
+	return c.writeEvtClass(wire.NewEvtAppMsgSendTo(recipient, data), wire.ClassBulk)
+}
+
+// SendAppMsgToBackground is SendAppMsgTo with the Background class
+// bit set. Cross-app version of SendAppMsgBackground.
+func (c *Conn) SendAppMsgToBackground(recipient wire.Recipient, data any) error {
+	return c.writeEvtClass(wire.NewEvtAppMsgSendTo(recipient, data), wire.ClassBackground)
 }
 
 // SetTitle requests a titlebar text change for this app's window.

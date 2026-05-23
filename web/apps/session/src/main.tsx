@@ -1008,15 +1008,20 @@ const StartMenu: Component<{
         <For each={items()}>
           {(app) => {
             const root = isRootRow(app.id);
-            // Stable data-testid hook: legacy wash-term row keeps the
-            // "start-menu-root-terminal" id; everything else gets
-            // start-menu-root-<srcID>. Non-root rows fall back to
-            // MenuItem's own (no testid stamping needed).
-            const rootTestid = root
+            // Stable data-testid hook for every launcher row so e2e
+            // tests can disambiguate without relying on accessible
+            // name (root variants share their parent app's name).
+            //
+            //   non-root: start-menu-<app-id>
+            //   root:     start-menu-root-<source-app-id>
+            //
+            // Legacy wash-term root entry keeps the historic alias
+            // "start-menu-root-terminal" for tests that hard-coded it.
+            const rowTestid = root
               ? (app.id.slice(ROOT_PREFIX.length) === 'com.wash.term'
                   ? 'start-menu-root-terminal'
                   : `start-menu-root-${app.id.slice(ROOT_PREFIX.length)}`)
-              : undefined;
+              : `start-menu-${app.id}`;
             const iconNode = app.icon ? (
               <span style={{ color: root ? ROOT_ICON_COLOR : undefined, display: 'inline-flex' }}>
                 <SpriteIcon name={app.icon} size={20} />
@@ -1024,7 +1029,7 @@ const StartMenu: Component<{
             ) : undefined;
             return (
               <MenuItem
-                data-testid={rootTestid}
+                data-testid={rowTestid}
                 label={app.name}
                 disabled={app.disabled}
                 icon={iconNode}
