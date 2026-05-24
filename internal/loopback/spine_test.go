@@ -2,6 +2,7 @@ package loopback
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -11,6 +12,30 @@ import (
 	"github.com/sirmick/wash/internal/wire"
 	"github.com/sirmick/wash/internal/wiretest"
 )
+
+// readFrameWithDeadline is a diagnostic wrapper around ReadFrame that
+// returns an error if no frame arrives within d. The describe callback
+// is invoked only on timeout and used to build the error message —
+// callers thread the test's current expectations through it so a hang
+// names what was missing (bundle bytes vs title patch, etc.) instead
+// of just timing out with no context.
+func readFrameWithDeadline(t wire.FrameTransport, d time.Duration, describe func() string) (wire.Frame, error) {
+	type rr struct {
+		f   wire.Frame
+		err error
+	}
+	ch := make(chan rr, 1)
+	go func() {
+		f, err := t.ReadFrame()
+		ch <- rr{f, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.f, r.err
+	case <-time.After(d):
+		return wire.Frame{}, fmt.Errorf("no frame for %v; state: %s", d, describe())
+	}
+}
 
 // TestSpine validates the v0.0 acceptance criterion #6: handshake →
 // asset-pull → window mapped → close handshake exercised against the
@@ -223,12 +248,21 @@ type frameReader struct {
 	bundleDone      bool
 
 	titlePatches []wire.ShellSessionPatch
+	// snapshotWindows captures any window upsert that lands in a
+	// ShellSessionSnapshot. If SetTitle runs BEFORE HandleShell's
+	// snapshot, the new title is baked into the snapshot and
+	// winSession.setTitle returns nil patches for the redundant
+	// SetTitle — there is no follow-on patch to observe.
+	snapshotWindows []wire.SessionWindow
 }
 
 func (fr *frameReader) nextCtrl() any {
 	fr.t.Helper()
 	for {
-		f, err := fr.shell.ReadFrame()
+		f, err := readFrameWithDeadline(fr.shell, 10*time.Second, func() string {
+			return fmt.Sprintf("bundleDone=%v titlePatches=%d snapshotWindows=%d bundleBytes=%d",
+				fr.bundleDone, len(fr.titlePatches), len(fr.snapshotWindows), len(fr.bundleBytes))
+		})
 		if err != nil {
 			fr.t.Fatalf("read: %v", err)
 		}
@@ -254,13 +288,20 @@ func (fr *frameReader) nextCtrl() any {
 			}
 		case wire.ShellSessionPatch:
 			fr.titlePatches = append(fr.titlePatches, v)
+		case wire.ShellSessionSnapshot:
+			fr.snapshotWindows = append(fr.snapshotWindows, v.Windows...)
 		}
 		return m
 	}
 }
 
-// titlePatchSeen reports whether any session.patch buffered so far
-// carries the mapped title on winID.
+// titlePatchSeen reports whether any session.patch OR session.snapshot
+// buffered so far carries the mapped title on winID. The snapshot path
+// covers the race where SetTitle is applied to winSession BEFORE
+// HandleShell's setup runs — in that case the snapshot the shell
+// receives already carries the new title and setTitle returns nil
+// patches for the (now-redundant) SetTitle call, so we'd wait
+// forever for a patch that never arrives.
 func (fr *frameReader) titlePatchSeen(winID uint32, want string) bool {
 	for _, sp := range fr.titlePatches {
 		for _, p := range sp.Patches {
@@ -268,6 +309,11 @@ func (fr *frameReader) titlePatchSeen(winID uint32, want string) bool {
 				p.Window.WindowID == winID && p.Window.Title == want {
 				return true
 			}
+		}
+	}
+	for _, w := range fr.snapshotWindows {
+		if w.WindowID == winID && w.Title == want {
+			return true
 		}
 	}
 	return false

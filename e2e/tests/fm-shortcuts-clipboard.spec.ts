@@ -19,6 +19,12 @@ async function openFm(page: import('@playwright/test').Page, router: import('../
 }
 
 test.describe('fm keyboard shortcuts', () => {
+  // Race-prone under parallel workers + tight default timeout:
+  // BE round-trips for list/clipboard sync can exceed the 10s
+  // playwright.config default under concurrent load. 20s gives
+  // the same headroom the pre-5s-default 30s did.
+  test.setTimeout(20_000);
+
   test('F2 starts inline rename for the single selected row', async ({ page, router }) => {
     await openFm(page, router);
     await page.locator('[data-testid="fm-entry-hello.txt"]').click();
@@ -158,6 +164,11 @@ test.describe('fm clipboard cross-window sync', () => {
     await page.locator('button[title="Apps"]').click();
     await page.locator('[data-testid="start-menu"]').getByRole('button', { name: /^Files$/ }).click();
     await expect(page.locator('wash-app-fm')).toHaveCount(2);
+    // Wait for the second fm to bootstrap — both path bars must
+    // carry the sandbox root before we navigate either, otherwise
+    // a late initial-list_ok on fmB can stomp state we set below.
+    await expect(page.locator('[data-testid="fm-path"]')).toHaveCount(2);
+    await expect(page.locator('[data-testid="fm-path"]').nth(1)).toHaveValue(router.fmRoot);
 
     const allIDs = await page.evaluate(() => window.wash.windows().map((w) => w.windowID));
     const bID = allIDs.find((id) => id !== aID)!;
@@ -186,8 +197,12 @@ test.describe('fm clipboard cross-window sync', () => {
     // Window B: navigate to b-side, paste.
     await fmB.locator('[data-testid="fm-entry-b-side"]').dblclick();
     await expect(fmB.locator('[data-testid="fm-path"]')).toHaveValue(join(router.fmRoot, 'b-side'));
-    // Window B must focus before Ctrl+V routes there.
-    await fmB.click();
+    // Focus fmB before Ctrl+V — but DO NOT click the body. The
+    // tree-view shows sandbox-root rows, and a center-click lands
+    // on a file row (typically hello.txt), triggering focusForFile()
+    // which sets path() to the file, so dirOfSelection() then
+    // resolves to the sandbox root instead of b-side.
+    await fmB.focus();
     await fmB.press('Control+v');
 
     await router.waitForLog(/bulk-ops job=\S+ op=copy status=done/, 5_000);

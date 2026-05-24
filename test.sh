@@ -78,13 +78,10 @@ run_unit() {
   local label="$1"; shift
   echo
   echo "════ test.sh: unit ($label) ════"
-  # -p 1 forces one test package at a time. internal/loopback's QoS
-  # soak test makes strict latency assertions on the scheduler;
-  # parallel package execution that also spins up routers
-  # (internal/router, internal/sdk) loads the runtime enough that
-  # the soak's bulk-flood goroutines starve and the package hits
-  # the 10-minute timeout. Serial keeps the bounds honest.
-  if go test -count=1 -p 1 "$@" ./...; then
+  # -p 1 forces one test package at a time so the loopback package
+  # (router+sdk wire end-to-end via in-memory pipes) doesn't race
+  # other in-process tests for goroutine scheduling.
+  if go test -count=1 -p 1 -timeout 60s "$@" ./...; then
     echo "test.sh: unit ($label) PASS"
   else
     echo "test.sh: unit ($label) FAIL" >&2

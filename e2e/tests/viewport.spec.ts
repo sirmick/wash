@@ -5,6 +5,12 @@
 import { test, expect } from '../fixtures/router';
 
 test.describe('viewport', () => {
+  // Race-prone under parallel workers + tight default timeout:
+  // BE round-trips for list/clipboard sync can exceed the 10s
+  // playwright.config default under concurrent load. 20s gives
+  // the same headroom the pre-5s-default 30s did.
+  test.setTimeout(20_000);
+
   test('pager renders 9 cells with (0,0) active by default', async ({ page, router }) => {
     await page.goto(router.url);
     await expect(page.locator('wash-app-session')).toBeVisible();
@@ -33,11 +39,11 @@ test.describe('viewport', () => {
     await page.locator('[data-testid="pager-cell-1-0"]').click();
     // Cam transform reflects the pan. The cam wraps the For-of windows
     // in main.tsx with transform: translate(-W, 0).
-    const cam = page.locator('wash-app-session ~ div').first();
+    const cam = page.locator('[data-testid="wash-cam"]');
     await expect.poll(async () => {
       const t = await cam.evaluate((el) => getComputedStyle(el as HTMLElement).transform);
       return t;
-    }, { timeout: 1500 }).not.toBe('none');
+    }, { timeout: 4_000 }).not.toBe('none');
     const transform = await cam.evaluate((el) => getComputedStyle(el as HTMLElement).transform);
     // matrix(1,0,0,1, -W, 0) — extract tx (5th value).
     const m = /matrix\(([^)]+)\)/.exec(transform);

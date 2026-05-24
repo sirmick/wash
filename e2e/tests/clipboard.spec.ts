@@ -8,6 +8,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 test.describe('clipboard service', () => {
+  // Race-prone under parallel workers + tight default timeout:
+  // BE round-trips for list/clipboard sync can exceed the 10s
+  // playwright.config default under concurrent load. 20s gives
+  // the same headroom the pre-5s-default 30s did.
+  test.setTimeout(20_000);
+
   test.use({ routerOpts: { showHidden: true } });
 
   test('set in one instance, broadcast + readable in another', async ({ page, router }) => {
@@ -59,10 +65,15 @@ test.describe('clipboard service', () => {
     const fm = page.locator('wash-app-fm');
     await expect(fm).toBeVisible();
 
-    // Navigate fm to fixture.
+    // Navigate fm to fixture. Wait for the initial home list_ok
+    // first — otherwise the late setPathInputValue(home) callback
+    // overwrites our fill and the right-click below operates on the
+    // wrong directory.
     const input = page.locator('[data-testid="fm-path"]');
+    await expect(input).not.toHaveValue('');
     await input.fill(root);
     await input.press('Enter');
+    await expect(input).toHaveValue(root);
 
     // Right-click the file → Copy path.
     await page.locator('[data-testid="fm-entry-paste-me.txt"]').click({ button: 'right' });

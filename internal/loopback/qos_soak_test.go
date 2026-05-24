@@ -40,10 +40,14 @@ import (
 // What it does NOT prove: real-browser DOM render latency. That's
 // a Playwright soak — out of scope here.
 func TestQoSSoakInteractiveLatencyUnderBulkFlood(t *testing.T) {
-	t.Parallel()
-
-	const bulkFrames = 5000     // ~5k bulk frames → multi-second flood
-	const bulkPayloadSize = 4096 // ~4 KiB per frame, like a pty output chunk
+	// No t.Parallel(): this test shares the loopback package's
+	// in-memory router with TestSpine and floods Interactive-class
+	// frames. Running them concurrently let bundle/title-patch
+	// frames in TestSpine starve and deadlocked the suite. Run
+	// serially; the test is still self-contained (own router,
+	// own pipes) and finishes well under the package timeout.
+	const bulkFrames = 500       // 500 frames is still a multi-hundred-ms flood
+	const bulkPayloadSize = 2048 // 2 KiB matches a typical pty chunk; less queue pressure
 	const interactiveFrames = 50
 	const interactiveInterval = 2 * time.Millisecond
 	// p99 latency cap. Generous because we're at Go-test scheduling

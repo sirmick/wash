@@ -12,8 +12,12 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: 0,
   reporter: process.env.CI ? 'line' : 'list',
-  timeout: 5_000,
-  expect: { timeout: 5_000 },
+  // 15s per test + 10s per expect under load (test.sh --workers 8
+  // can keep 8 chromium tabs + 8 routers + ~40 BE apps alive
+  // simultaneously). A genuinely-hung assertion still surfaces in
+  // ~10s; one slow BE round-trip doesn't tank the test.
+  timeout: 15_000,
+  expect: { timeout: 10_000 },
   use: {
     headless: true,
     trace: 'retain-on-failure',

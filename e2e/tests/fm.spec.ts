@@ -10,11 +10,28 @@ import { join } from 'node:path';
 
 async function navigate(page: import('@playwright/test').Page, path: string) {
   const input = page.locator('[data-testid="fm-path"]');
+  // Wait for fm's initial list_ok to land. Until it does, the path
+  // bar is empty AND a stray setPathInputValue(home) is queued
+  // behind the BE round-trip — typing+Enter NOW races that callback
+  // and the navigation silently gets overwritten by $HOME.
+  await expect(input).not.toHaveValue('');
   await input.fill(path);
   await input.press('Enter');
+  // selectPath sets the input synchronously on Enter; toHaveValue
+  // confirms our fill survived and wasn't blown away by a late
+  // initial list_ok.
+  await expect(input).toHaveValue(path);
 }
 
 test.describe('file manager', () => {
+  // fm spawns its own router + BE per test, then navigates via the
+  // path bar (which races BE list_ok arrival against the 5s default
+  // expect timeout). Under heavy concurrent load — the runner's
+  // parallel-workers mode is the obvious case — the round-trip is
+  // borderline at the 10s playwright.config default. Give the
+  // describe block a wider window.
+  test.setTimeout(20_000);
+
   test('launches and lists the home directory', async ({ page, router }) => {
     await page.goto(router.url);
     await page.locator('button[title="Apps"]').click();

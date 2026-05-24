@@ -9,6 +9,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 test.describe('app state opt-in', () => {
+  // Race-prone under parallel workers + tight default timeout:
+  // BE round-trips for list/clipboard sync can exceed the 10s
+  // playwright.config default under concurrent load. 20s gives
+  // the same headroom the pre-5s-default 30s did.
+  test.setTimeout(20_000);
+
   test('wash-fm path, show-hidden, sort, info-pane survive a refresh', async ({ page, router }) => {
     // Build a fixture tree so the path we navigate to actually exists.
     const root = mkdtempSync(join(tmpdir(), 'wash-fm-state-'));
@@ -22,9 +28,14 @@ test.describe('app state opt-in', () => {
     const fm = page.locator('wash-app-fm');
     await expect(fm).toBeVisible();
 
-    // Navigate into the fixture root.
-    await fm.locator('[data-testid="fm-path"]').fill(root);
-    await fm.locator('[data-testid="fm-path"]').press('Enter');
+    // Navigate into the fixture root. Wait for the initial home
+    // list_ok first — the late setPathInputValue(home) callback
+    // would otherwise race our fill and stomp it.
+    const fmPath = fm.locator('[data-testid="fm-path"]');
+    await expect(fmPath).not.toHaveValue('');
+    await fmPath.fill(root);
+    await fmPath.press('Enter');
+    await expect(fmPath).toHaveValue(root);
     await expect(fm.locator('[data-testid="fm-entry-file.txt"]')).toBeVisible();
     // Hidden file not yet shown.
     await expect(fm.locator('[data-testid="fm-entry-.hidden"]')).toHaveCount(0);
