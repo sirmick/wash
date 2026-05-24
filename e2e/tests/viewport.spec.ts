@@ -38,20 +38,20 @@ test.describe('viewport', () => {
     // Jump to cell (1, 0).
     await page.locator('[data-testid="pager-cell-1-0"]').click();
     // Cam transform reflects the pan. The cam wraps the For-of windows
-    // in main.tsx with transform: translate(-W, 0).
+    // in main.tsx with transform: translate(-W, 0). Solid sets the
+    // initial transform to translate(0px, 0px) — so getComputedStyle
+    // never reports 'none'. A 260ms CSS transition then interpolates
+    // toward the new value; poll on the tx component reaching the
+    // target instead of just "anything but none".
     const cam = page.locator('[data-testid="wash-cam"]');
+    const innerW = await page.evaluate(() => window.innerWidth);
     await expect.poll(async () => {
       const t = await cam.evaluate((el) => getComputedStyle(el as HTMLElement).transform);
-      return t;
-    }, { timeout: 4_000 }).not.toBe('none');
-    const transform = await cam.evaluate((el) => getComputedStyle(el as HTMLElement).transform);
-    // matrix(1,0,0,1, -W, 0) — extract tx (5th value).
-    const m = /matrix\(([^)]+)\)/.exec(transform);
-    expect(m).not.toBeNull();
-    const parts = m![1].split(',').map((s) => parseFloat(s.trim()));
-    const innerW = await page.evaluate(() => window.innerWidth);
-    expect(parts[4]).toBeCloseTo(-innerW, 0);
-    expect(parts[5]).toBeCloseTo(0, 0);
+      const m = /matrix\(([^)]+)\)/.exec(t);
+      if (!m) return null;
+      const parts = m[1].split(',').map((s) => parseFloat(s.trim()));
+      return parts[4];
+    }, { timeout: 4_000 }).toBeCloseTo(-innerW, 0);
   });
 
   test('taskbar pill dblclick snaps to the window viewport', async ({ page, router }) => {

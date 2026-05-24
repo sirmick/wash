@@ -400,6 +400,14 @@ function handleCrash(msg: ShellAppCrashed): void {
   });
 }
 
+// Tracks windowIDs we've already first-sighted. The wm store can't
+// serve this on its own: applySessionPatch defers the upsert for an
+// unseen window behind waitForBundle, so a window-in-flight isn't
+// in `windows` yet. Without a separate set, every BE patch that
+// arrives before the bundle resolves looks "fresh" and we'd
+// re-relocate the same window N times.
+const seenWindowIDs = new Set<number>();
+
 function handlePatch(msg: ShellSessionPatch): void {
   // Apply app_state ops first so when a window upsert in the same
   // patch triggers a remount, wash:state carries the latest blob.
@@ -409,31 +417,38 @@ function handlePatch(msg: ShellSessionPatch): void {
     }
   }
   // First-sight detection for viewport auto-relocation: any
-  // window.upsert whose id isn't in the store yet is a new spawn.
+  // window.upsert whose id isn't in seenWindowIDs is a new spawn.
   // The router cascades new windows from (40, 40); if the user is
   // looking at a non-(0,0) viewport, we re-issue a window.move so
   // the window appears where they're actually looking. Otherwise
   // new windows silently land off-screen in cell (0,0).
-  const seen = new Set(windows.map((w) => w.windowID));
-  const fresh: SessionWindow[] = [];
+  //
+  // We MUTATE the patch's window x/y here (rather than calling
+  // moveLocal afterwards) so applySessionPatch's bundle-deferred
+  // upsert uses the relocated coords directly — moveLocal on a
+  // not-yet-in-store window is a no-op.
+  const vp = viewport();
+  const s = screenSize();
+  const moves: Array<{ id: number; x: number; y: number }> = [];
   for (const p of msg.patches) {
-    if (p.op === 'window.upsert' && p.window && !seen.has(p.window.window_id)) {
-      fresh.push(p.window);
+    if (p.op === 'window.upsert' && p.window && !seenWindowIDs.has(p.window.window_id)) {
+      if (vp.vx !== 0 || vp.vy !== 0) {
+        p.window.x = p.window.x + vp.vx * s.w;
+        p.window.y = p.window.y + vp.vy * s.h;
+        moves.push({ id: p.window.window_id, x: p.window.x, y: p.window.y });
+      }
+      seenWindowIDs.add(p.window.window_id);
+    }
+    if (p.op === 'window.delete' && typeof p.window_id === 'number') {
+      seenWindowIDs.delete(p.window_id);
     }
   }
   applySessionPatch(
     msg.patches.filter((p) => p.op !== 'app_state'),
     waitForBundle,
   );
-  const vp = viewport();
-  if (fresh.length > 0 && (vp.vx !== 0 || vp.vy !== 0)) {
-    const s = screenSize();
-    for (const w of fresh) {
-      const nx = w.x + vp.vx * s.w;
-      const ny = w.y + vp.vy * s.h;
-      moveLocal(w.window_id, nx, ny);
-      conn.sendCtrl({ t: 'window.move', window_id: w.window_id, x: nx, y: ny });
-    }
+  for (const m of moves) {
+    conn.sendCtrl({ t: 'window.move', window_id: m.id, x: m.x, y: m.y });
   }
 }
 
@@ -512,7 +527,7 @@ const camStyle = () => {
 const App = () => (
   <>
     <Desktop />
-    <div style={camStyle()}>
+    <div data-testid="wash-cam" style={camStyle()}>
       <For each={windows}>{(w) => <FloatingWindow win={w} onClose={onWindowClose} />}</For>
     </div>
     <ConnectionBanner state={connState()} />
