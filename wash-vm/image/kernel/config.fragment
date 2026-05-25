@@ -1,0 +1,119 @@
+# Linux kernel config fragment for the wash TinyEMU/RISC-V demo.
+#
+# Merged on top of `make ARCH=riscv tinyconfig`. Mirrors image/
+# kernel/config.fragment in spirit (no TCP/IP, virtio-PCI + virtio-
+# console + virtio-blk, ptmx + inotify + futex + epoll, ext2
+# rootfs) but targets riscv64 and BBL/OpenSBI firmware instead of
+# i686 + SeaBIOS.
+#
+# What's INTENTIONALLY off (same reasoning as the x86 fragment):
+#   CONFIG_NET, CONFIG_USB, CONFIG_SOUND, CONFIG_HID, CONFIG_DRM,
+#   CONFIG_FB, CONFIG_INPUT, CONFIG_WIRELESS, CONFIG_MODULES.
+
+# ─── 1. CPU / arch ───────────────────────────────────────────────────
+CONFIG_ARCH_RV64I=y
+CONFIG_64BIT=y
+CONFIG_SMP=n
+CONFIG_NONPORTABLE=y
+CONFIG_PHYS_RAM_BASE_FIXED=y
+# Userspace (musl + buildroot binaries + wash multicall) is built
+# rv64gc with hard-float (lp64d ABI). Without CONFIG_FPU the kernel
+# doesn't enable sstatus.FS for user mode and the first FP store
+# (typical: musl libc) traps SIGILL. riscv tinyconfig leaves FPU off
+# by default — turn it on explicitly.
+CONFIG_FPU=y
+# TinyEMU's DTB exposes only the legacy `riscv,isa = "rv64imafdc"`
+# property, not the newer `riscv,isa-base` / `riscv,isa-extensions`
+# that 6.x prefers. Without FALLBACK the kernel sees zero
+# extensions, decides FP isn't available, and any user-mode FSD/FLD
+# traps SIGILL (musl libc uses FP early).
+CONFIG_RISCV_ISA_FALLBACK=y
+# Vector (V extension) — TinyEMU 2019 doesn't emulate it. Leaving
+# CONFIG_RISCV_ISA_V on bloats the kernel and risks the kernel
+# trying to enable V-state and trapping.
+# CONFIG_RISCV_ISA_V is not set
+
+# ─── 2. Block + filesystems ──────────────────────────────────────────
+# Bellard's kernel mounts ext2 via the ext4 driver (EXT4_USE_FOR_EXT2).
+# We follow suit so rootfstype=ext2 in cmdline is served by ext4.ko —
+# matches his proven path and keeps the door open for ext4 rootfs later.
+CONFIG_BLOCK=y
+CONFIG_BLK_DEV=y
+CONFIG_EXT4_FS=y
+CONFIG_EXT4_USE_FOR_EXT2=y
+CONFIG_TMPFS=y
+CONFIG_PROC_FS=y
+CONFIG_SYSFS=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+
+# ─── 3. Virtio ────────────────────────────────────────────────────────
+# Bellard's BBL passes a DTB describing virtio-mmio devices; we also
+# enable VIRTIO_MMIO_CMDLINE_DEVICES so `virtio_mmio.device=<sz>@<addr>:<irq>`
+# on the kernel cmdline works as a backup discovery path. PCI is OFF —
+# Bellard's TinyEMU exposes virtio over MMIO only.
+CONFIG_VIRTIO=y
+CONFIG_VIRTIO_MENU=y
+CONFIG_VIRTIO_MMIO=y
+CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES=y
+CONFIG_VIRTIO_CONSOLE=y
+CONFIG_VIRTIO_BLK=y
+# CONFIG_VIRTIO_PCI is not set
+# CONFIG_PCI is not set
+
+# ─── 4. Console (SBI early printk + virtio-console late) ─────────────
+# CONFIG_HVC_RISCV_SBI=y registers the SBI 0.1 legacy putchar console
+# very early in boot (before virtio init), so kernel printk has a sink
+# from the first message. Bellard's bbl64.bin implements SBI 0.1
+# putchar via HTIF, so this lands on the tinyemu term. Without this
+# the kernel boots silently until virtio-console binds — and if
+# anything panics before then, we see nothing. The kernel cmdline
+# says `console=hvc0` which resolves to whatever HVC driver registers
+# first; SBI binds at boot, virtio-console binds later and is also
+# named hvc0. Either way: visible.
+CONFIG_TTY=y
+CONFIG_HVC_DRIVER=y
+CONFIG_RISCV_SBI=y
+# RISCV_SBI_V01 is the prerequisite kconfig dependency for
+# HVC_RISCV_SBI in 6.x — without it, olddefconfig silently strips
+# the HVC driver and we lose early printk on Bellard's BBL.
+CONFIG_RISCV_SBI_V01=y
+CONFIG_HVC_RISCV_SBI=y
+
+# ─── 5. Userspace prereqs ─────────────────────────────────────────────
+CONFIG_BINFMT_ELF=y
+CONFIG_BINFMT_SCRIPT=y
+CONFIG_FILE_LOCKING=y
+CONFIG_UNIX98_PTYS=y
+CONFIG_DEVPTS_FS=y
+CONFIG_INOTIFY_USER=y
+CONFIG_FUTEX=y
+CONFIG_FUTEX_PI=y
+CONFIG_EPOLL=y
+CONFIG_EVENTFD=y
+CONFIG_SIGNALFD=y
+CONFIG_TIMERFD=y
+CONFIG_FHANDLE=y
+CONFIG_MULTIUSER=y
+CONFIG_POSIX_TIMERS=y
+CONFIG_PRINTK=y
+CONFIG_PRINTK_TIME=y
+
+# Explicitly OFF — same exclusions as image/kernel/config.fragment.
+# CONFIG_NET is not set
+# CONFIG_USB is not set
+# CONFIG_USB_SUPPORT is not set
+# CONFIG_SOUND is not set
+# CONFIG_INPUT is not set
+# CONFIG_WIRELESS is not set
+# CONFIG_HID is not set
+# CONFIG_DRM is not set
+# CONFIG_FB is not set
+# CONFIG_MODULES is not set
+# CONFIG_BLK_DEV_INITRD is not set
+# CONFIG_SWAP is not set
+# CONFIG_AIO is not set
+# CONFIG_KEXEC is not set
+# CONFIG_KPROBES is not set
+# CONFIG_FTRACE is not set
+# CONFIG_DEBUG_KERNEL is not set

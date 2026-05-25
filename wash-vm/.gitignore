@@ -1,0 +1,44 @@
+## wash-vm build artifacts — never tracked
+
+# TinyEMU object files + binaries (build with `make -C wash-vm/tinyemu temu`
+# and `emmake make -C wash-vm/tinyemu -f Makefile.js js/riscvemu64-wasm.js`)
+tinyemu/*.o
+tinyemu/*.d
+tinyemu/*.js.o
+tinyemu/*.js.d
+tinyemu/slirp/*.o
+tinyemu/slirp/*.d
+tinyemu/temu
+tinyemu/splitimg
+tinyemu/build_filelist
+tinyemu/js/riscvemu*-wasm.js
+tinyemu/js/riscvemu*-wasm.wasm
+tinyemu/js/riscvemu32.js
+tinyemu/js/riscvemu64.js
+tinyemu/js/*.o
+tinyemu/js/*.d
+
+# image/dist: outputs of buildroot/kernel/firmware Dockerfiles (built via
+# `make -C wash-vm/image all`)
+image/dist/
+
+# web/public/tinyemu/ artifacts produced by `make -C wash-vm/image install`:
+# kernel + bbl + chunked rootfs. Rebuild via the image pipeline.
+web/public/tinyemu/wash-kernel.bin
+web/public/tinyemu/wash-rootfs.ext2
+web/public/tinyemu/wash-rootfs/
+web/public/tinyemu/opensbi-fw_jump.bin
+web/public/tinyemu/riscvemu64-wasm.*
+
+# v86 legacy demo (parallel x86 demo, separate build pipeline).
+web/public/v86.wasm
+
+# Vite dev artifacts.
+web/node_modules/
+web/dist/
+
+# Per-channel runtime pipes used by the native launcher.
+native/pipes/
+
+# Per-channel log files split by the native launcher.
+native/logs/

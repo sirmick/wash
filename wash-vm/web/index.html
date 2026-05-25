@@ -1,0 +1,490 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <!-- Base href makes jslinux's relative loadScript("riscvemu64-wasm.js")
+         resolve to /tinyemu/riscvemu64-wasm.js. Without this, the script
+         load 404s and the page errors with a cryptic SyntaxError because
+         vite's SPA fallback returns HTML for missing static paths. -->
+    <base href="/tinyemu/" />
+    <title>wash — TinyEMU RISC-V</title>
+    <link href="style.css" rel="stylesheet" type="text/css" />
+    <style>
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: #0b0c10;
+        color: #cfd0d4;
+        font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+        overflow: hidden;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+      }
+
+      /* Title bar: persistent VM-spec strip + view toggle. */
+      #titlebar {
+        flex: 0 0 36px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 14px;
+        font-size: 12px;
+        color: #cfd0d4;
+        background: #11131a;
+        border-bottom: 1px solid #1a1c22;
+        letter-spacing: 0.02em;
+      }
+      #titlebar .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #ffae57;
+        animation: pulse 1.2s ease-in-out infinite;
+        flex: 0 0 8px;
+      }
+      #titlebar[data-state="boot"]   .dot { background: #ffae57; }
+      #titlebar[data-state="ready"]  .dot { background: #6fdc8c; animation: none; }
+      #titlebar[data-state="wash"]   .dot { background: #51c4ff; animation: none; }
+      #titlebar[data-state="error"]  .dot { background: #ff5f56; animation: none; }
+      @keyframes pulse {
+        0%, 100% { opacity: 0.4; }
+        50% { opacity: 1; }
+      }
+      #titlebar .name { font-weight: 600; }
+      #titlebar .status {
+        color: #cfd0d4;
+        font-variant-numeric: tabular-nums;
+        padding: 2px 8px;
+        background: #1a1c22;
+        border-radius: 4px;
+        font-size: 11px;
+      }
+      #titlebar[data-state="error"] .status { color: #ff8a80; }
+      #titlebar[data-state="ready"] .status,
+      #titlebar[data-state="wash"]  .status { color: #8fd99a; }
+      #titlebar .specs { color: #8a8f9c; }
+      #titlebar .specs span + span::before {
+        content: " · ";
+        color: #4a4f5c;
+      }
+      #titlebar .toggle {
+        margin-left: auto;
+        display: inline-flex;
+        background: #1a1c22;
+        border-radius: 6px;
+        padding: 2px;
+      }
+      #titlebar .toggle button {
+        font: inherit;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #8a8f9c;
+        background: transparent;
+        border: 0;
+        padding: 4px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      #titlebar .toggle button.active {
+        background: #2a2c33;
+        color: #cfd0d4;
+      }
+
+      /* Stage: container for term + wash. One is always display:block,
+         the other display:none, controlled by body.dataset.view. */
+      #stage {
+        flex: 1 1 auto;
+        position: relative;
+        min-height: 0;
+        background: #000;
+      }
+      /* jslinux sets term_wrap.style.width inline to the initial term
+         pixel width — override with !important so it actually fills.
+         Same for the term root element inside #term_container. */
+      /* All view roots fill the stage absolute-positioned. CSS picks
+         which one shows by body[data-view]. */
+      #term_wrap    { position: absolute !important; inset: 0 !important; width: auto !important; }
+      #term_container,
+      #term_container > div { width: 100% !important; height: 100% !important; }
+      #shell_host   { position: absolute; inset: 0; background: #000; }
+      #washlog_host { position: absolute; inset: 0; background: #000; }
+      #diag_host    { position: absolute; inset: 0; background: #000; }
+      /* The xterm.js root element doesn't set height itself; without
+         this it collapses to row-grid height and the host element
+         has dead space at the bottom. */
+      #shell_host > .xterm,
+      #washlog_host > .xterm,
+      #diag_host > .xterm { height: 100% !important; width: 100% !important; }
+      #wash_host    { position: absolute; inset: 0; }
+
+      /* Default: only the kernel view is visible. */
+      #shell_host, #washlog_host, #diag_host, #wash_host { display: none; }
+      body[data-view="kernel"]  #term_wrap     { display: block; }
+      body[data-view="shell"]   #shell_host    { display: block; }
+      body[data-view="shell"]   #term_wrap     { display: none; }
+      body[data-view="wash"]    #wash_host     { display: block; }
+      body[data-view="wash"]    #term_wrap     { display: none; }
+      body[data-view="washlog"] #washlog_host  { display: block; }
+      body[data-view="washlog"] #term_wrap     { display: none; }
+      body[data-view="diag"]    #diag_host     { display: block; }
+      body[data-view="diag"]    #term_wrap     { display: none; }
+
+      /* Wash mount target — mirrors what the shell expects from
+         web/demo/v86.html so the same shell bundle renders here. */
+      #wash_host #root { position: absolute; inset: 0; }
+
+      /* Animation keyframes used by wash apps for overlay/menu enter. */
+      @keyframes wash-fade-in { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes wash-pop-in  { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+      @keyframes wash-slide-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+  </head>
+  <body data-view="kernel">
+
+    <div id="titlebar" data-state="boot">
+      <span class="dot"></span>
+      <span class="name">wash riscv64</span>
+      <span id="status" class="status">loading…</span>
+      <span class="specs">
+        <span id="spec-machine">…</span>
+        <span id="spec-mem">…</span>
+        <span id="spec-kernel">…</span>
+        <span id="spec-drive">…</span>
+        <span id="spec-bios">…</span>
+      </span>
+      <span class="toggle" role="tablist">
+        <button id="view-kernel"  class="active" type="button">kernel</button>
+        <button id="view-shell"   type="button">shell</button>
+        <button id="view-wash"    type="button">wash</button>
+        <button id="view-washlog" type="button">wash log</button>
+        <button id="view-diag"    type="button">diag</button>
+      </span>
+    </div>
+
+    <div id="stage">
+      <!-- Kernel view: jslinux renders Bellard's Term here. Fed by
+           HTIF / SBI console (kernel printk). id MUST be `term_wrap`
+           (underscore) — jslinux.js does document.getElementById
+           ("term_wrap") at line 528. -->
+      <div id="term_wrap">
+        <div id="term_bar" style="height:0"></div>
+        <div id="term_container" style="height:100%"></div>
+        <textarea id="term_paste"
+                  style="position:absolute; left:-9999px; width:1px; height:1px;"
+                  autocorrect="off"
+                  spellcheck="false"></textarea>
+      </div>
+
+      <!-- Shell view: xterm.js terminal attached to /dev/hvc1
+           (washConsoles[0]). FE keystrokes go in; when a getty is
+           configured on hvc1 the user gets an interactive shell.
+           Hidden unless body[data-view="shell"]. -->
+      <div id="shell_host"></div>
+
+      <!-- Wash log view: xterm.js terminal attached to /dev/hvc3
+           (washConsoles[2]). Shows wash-supervisor + wash-router
+           stdout/stderr — the channel that tells us why wash isn't
+           painting. -->
+      <div id="washlog_host"></div>
+
+      <!-- Diag view: xterm.js terminal attached to /dev/hvc4
+           (washConsoles[3]). Periodic ps / uptime / dmesg dump from
+           the in-VM S98wash-diag service. -->
+      <div id="diag_host"></div>
+
+      <!-- Wash desktop view. Solid shell mounts into #root. -->
+      <div id="wash_host">
+        <div id="root"></div>
+      </div>
+    </div>
+
+    <!-- Hidden stubs jslinux references but our minimal demo doesn't
+         use: net_progress / wrap / form / status / login / password / log. -->
+    <div id="net_progress" style="display:none"></div>
+    <div id="wrap" style="display:none">
+      <form id="form">
+        <input id="login" name="user" />
+        <input id="password" name="pwd" type="password" />
+        <button id="login_btn" type="submit">login</button>
+      </form>
+      <div id="status"></div>
+      <pre id="log"></pre>
+    </div>
+
+    <!-- jslinux's get_params() reads window.location.href for its
+         cpu/url/mem/font_size/cols/rows/net_url. To keep the URL bar
+         clean we DON'T pollute the URL — instead we publish our
+         defaults to a window-global and override get_params after
+         jslinux loads so it reads from there. Anything the user puts
+         in the actual URL still wins. -->
+    <script>
+      window.__washDefaults = {
+        cpu: 'riscv64',
+        url: '/tinyemu/wash-riscv64.cfg',
+        mem: '256',
+        font_size: '11',
+        cols: '200',
+        rows: '50',
+        net_url: '',
+      };
+      // Selectively block jslinux's `wss://relay.widgetry.org/` dial
+      // (its Ethernet openHandler calls net_set_carrier via cwrap
+      // BEFORE the WASM runtime is ready — fatal ASSERTIONS=2 abort
+      // in the debug build). Anything else (vite HMR, our /ws bus)
+      // must pass through. Previous implementation hard-blocked ALL
+      // WebSocket constructions and silently broke the wash demo
+      // server's bridge.
+      (function () {
+        const Native = window.WebSocket;
+        function PatchedWebSocket(url, protocols) {
+          if (typeof url === 'string' && /relay\.widgetry\.org/.test(url)) {
+            throw new Error('[tinyemu] blocked external relay: ' + url);
+          }
+          return protocols !== undefined ? new Native(url, protocols) : new Native(url);
+        }
+        PatchedWebSocket.prototype = Native.prototype;
+        PatchedWebSocket.CONNECTING = Native.CONNECTING;
+        PatchedWebSocket.OPEN       = Native.OPEN;
+        PatchedWebSocket.CLOSING    = Native.CLOSING;
+        PatchedWebSocket.CLOSED     = Native.CLOSED;
+        window.WebSocket = PatchedWebSocket;
+      })();
+
+      // Bellard's wasm-glue is mixed-vintage Emscripten — bottom half
+      // calls legacy `Pointer_stringify`. Shim it to current UTF8ToString.
+      window.Pointer_stringify = function (ptr) {
+        if (!ptr) return '';
+        return typeof UTF8ToString === 'function' ? UTF8ToString(ptr) : '';
+      };
+
+      // Legacy Runtime.dynCall — used by Bellard's
+      // _emscripten_async_wget3_data onload/onerror callback path
+      // (Runtime.dynCall("viiii", onload, [...])). Emscripten 5+
+      // removed the Runtime namespace; route to modern alternatives
+      // (Module.dynCall / wasmTable / dynCall_* exports) in order.
+      window.Runtime = {
+        dynCall: function (sig, fnPtr, args) {
+          if (typeof Module !== 'undefined') {
+            if (typeof Module.dynCall === 'function') return Module.dynCall(sig, fnPtr, args);
+            var keyed = Module['dynCall_' + sig];
+            if (typeof keyed === 'function') return keyed.apply(null, [fnPtr].concat(args));
+            if (Module.wasmTable && typeof Module.wasmTable.get === 'function') {
+              return Module.wasmTable.get(fnPtr).apply(null, args);
+            }
+          }
+          throw new Error('Runtime.dynCall shim: no impl for sig=' + sig);
+        }
+      };
+
+      // Legacy emcc Browser namespace was removed in 5.x; provide a
+      // minimal stand-in so _emscripten_async_wget3_data doesn't
+      // ReferenceError inside the XHR onload path.
+      window.Browser = (function () {
+        var nextWgetHandle = 1;
+        return {
+          safeSetTimeout: function (cb, ms) { return setTimeout(cb, ms || 0); },
+          safeSetInterval: function (cb, ms) { return setInterval(cb, ms || 0); },
+          safeRequestAnimationFrame: function (cb) {
+            return (window.requestAnimationFrame || setTimeout)(cb, 16);
+          },
+          requestAnimationFrame: function (cb) { return window.requestAnimationFrame(cb); },
+          getMouseWheelDelta: function (e) { return -(e.deltaY || e.detail || 0); },
+          getMovementX: function (e) { return e.movementX || 0; },
+          getMovementY: function (e) { return e.movementY || 0; },
+          calculateMouseEvent: function () {},
+          wgetRequests: {},
+          getNextWgetRequestHandle: function () { return nextWgetHandle++; },
+        };
+      })();
+
+      // wash multi-channel virtio-console bridge.
+      //
+      // TinyEMU is patched to expose N virtio-console MMIO devices,
+      // one per wash channel. Linux sees them as /dev/hvc(N+1)
+      // (hvc0 is the SBI console). Channel index → role:
+      //   0 → /dev/hvc1   login / getty (future)
+      //   1 → /dev/hvc2   wash router data plane (wash protocol frames)
+      //   2 → /dev/hvc3   wash supervisor + router stdout log
+      //
+      // The C side calls window.washConsoles[ch].onOutput(Uint8Array)
+      // when the VM writes; reads bytes injected via
+      // window.washConsoles[ch].input(byte). Each channel has its own
+      // pending buffer so frames queued before WASM is ready aren't
+      // dropped.
+      (function () {
+        var N = 4;
+        window.washConsoles = [];
+        for (var ch = 0; ch < N; ch++) {
+          (function (ix) {
+            var pendingIn = [];
+            var pendingOut = [];
+            var outputCb = null;
+            window.washConsoles[ix] = {
+              channel: ix,
+              input: function (byte) {
+                if (typeof Module === 'undefined' || typeof Module.ccall !== 'function') {
+                  pendingIn.push(byte);
+                  return;
+                }
+                try {
+                  Module.ccall('virtio_console_in_queue_char', null, ['number','number'], [ix, byte]);
+                } catch (e) {
+                  console.error('[washConsoles['+ix+'].input]', e);
+                }
+              },
+              onOutput: function (bytes) {
+                if (typeof outputCb === 'function') {
+                  try { outputCb(bytes); } catch (e) { console.error(e); }
+                } else {
+                  pendingOut.push(bytes);
+                }
+              },
+              setOutputHandler: function (fn) {
+                outputCb = fn;
+                while (pendingOut.length) {
+                  try { fn(pendingOut.shift()); } catch (e) { console.error(e); }
+                }
+              },
+              _flushIn: function () {
+                while (pendingIn.length) {
+                  try { Module.ccall('virtio_console_in_queue_char', null, ['number','number'], [ix, pendingIn.shift()]); }
+                  catch (e) { console.error('[washConsoles['+ix+'].flush]', e); break; }
+                }
+              },
+            };
+          })(ch);
+        }
+
+        var flush = setInterval(function () {
+          if (typeof Module === 'undefined' || typeof Module.ccall !== 'function') return;
+          clearInterval(flush);
+          for (var i = 0; i < N; i++) window.washConsoles[i]._flushIn();
+        }, 50);
+      })();
+
+      // window.washVports — parallel array for the multiport
+      // virtio-console device. Same shape as washConsoles, but routes
+      // via virtio_vport_* (raw chardev /dev/vport0p{port}, no
+      // HVC/tty layer).
+      (function () {
+        var P = 3;
+        window.washVports = [];
+        for (var p = 0; p < P; p++) {
+          (function (ix) {
+            var pendingIn = [];
+            var pendingOut = [];
+            var outputCb = null;
+            window.washVports[ix] = {
+              port: ix,
+              input: function (byte) {
+                if (typeof Module === 'undefined' || typeof Module.ccall !== 'function') {
+                  pendingIn.push(byte);
+                  return;
+                }
+                try {
+                  Module.ccall('virtio_vport_in_queue_char', null, ['number','number'], [ix, byte]);
+                } catch (e) { console.error('[washVports['+ix+'].input]', e); }
+              },
+              onOutput: function (bytes) {
+                if (typeof outputCb === 'function') {
+                  try { outputCb(bytes); } catch (e) { console.error(e); }
+                } else {
+                  pendingOut.push(bytes);
+                }
+              },
+              setOutputHandler: function (fn) {
+                outputCb = fn;
+                while (pendingOut.length) {
+                  try { fn(pendingOut.shift()); } catch (e) { console.error(e); }
+                }
+              },
+              _flushIn: function () {
+                while (pendingIn.length) {
+                  try { Module.ccall('virtio_vport_in_queue_char', null, ['number','number'], [ix, pendingIn.shift()]); }
+                  catch (e) { console.error('[washVports['+ix+'].flush]', e); break; }
+                }
+              },
+            };
+          })(p);
+        }
+        var flushVp = setInterval(function () {
+          if (typeof Module === 'undefined' || typeof Module.ccall !== 'function') return;
+          clearInterval(flushVp);
+          for (var i = 0; i < P; i++) window.washVports[i]._flushIn();
+        }, 50);
+      })();
+
+      // Diagnostic buffer for TinyEMU's stdio. The wasm runs
+      // synchronously inside Module.calledRun and may exit(1) before
+      // the bridge module (deferred) has a chance to install its
+      // WS-forwarding hooks. We buffer every print/printErr here in
+      // the inline-script phase; the bridge flushes the buffer to
+      // /ws when it's ready. Without this we lose TinyEMU's "HTIF:
+      // unsupported tohost" line — the one console message that
+      // explains a startup exit(1).
+      window.__washDbgBuf = [];
+      window.__washDbgPush = function (cat, line) {
+        if (window.__washDbg) window.__washDbg(cat, line);
+        else window.__washDbgBuf.push({ cat: cat, line: line });
+      };
+      window.Module = window.Module || {};
+      window.Module.onAbort = function (what) {
+        window.__washDbgPush('tinyemu.abort', String(what));
+        try { throw new Error('onAbort-stack'); }
+        catch (e) {
+          var lines = (e.stack || '').split('\n').slice(0, 12);
+          for (var i = 0; i < lines.length; i++) {
+            window.__washDbgPush('tinyemu.abort.stack', lines[i].trim());
+          }
+        }
+      };
+      window.Module.print = function () {
+        window.__washDbgPush('tinyemu.stdout', Array.prototype.slice.call(arguments).join(' '));
+      };
+      window.Module.printErr = function () {
+        window.__washDbgPush('tinyemu.stderr', Array.prototype.slice.call(arguments).join(' '));
+      };
+    </script>
+
+    <!-- term.js + jslinux.js: as-shipped from bellard.org. -->
+    <script src="/tinyemu/term.js"></script>
+    <script src="/tinyemu/jslinux.js"></script>
+    <script>
+      // Belt-and-braces: replace Ethernet handlers post-load so any
+      // in-progress wss:// dial can't reach the wasm via net_set_carrier.
+      if (typeof Ethernet !== 'undefined') {
+        Ethernet.prototype.openHandler = function () {};
+        Ethernet.prototype.closeHandler = function () {};
+        Ethernet.prototype.messageHandler = function () {};
+      }
+
+      // get_params() is patched in jslinux.js itself (vendored) to
+      // consult window.__washDefaults — see the top inline script.
+      // The URL bar stays clean even though jslinux gets all params.
+    </script>
+
+    <!-- Vendor import map for the wash shell — same shape as v86.html
+         since both demos load the same shell bundle. Keep in sync
+         with web/shell/dist/index.html. -->
+    <script type="importmap">
+    {
+      "imports": {
+        "solid-js": "/shell/vendor/solid.js",
+        "solid-js/web": "/shell/vendor/solid-web.js",
+        "solid-js/store": "/shell/vendor/solid-store.js",
+        "@xterm/xterm": "/shell/vendor/xterm.js",
+        "@xterm/addon-fit": "/shell/vendor/xterm-fit.js",
+        "@wash/ui": "/shell/vendor/wash-ui.js"
+      }
+    }
+    </script>
+
+    <!-- Bridge: term tap + Module lifecycle + virtio-console bus
+         shim + wash shell loader + view-toggle wiring. -->
+    <script type="module" src="/src/tinyemu-bridge.ts"></script>
+  </body>
+</html>

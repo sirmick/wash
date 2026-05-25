@@ -1,0 +1,102 @@
+#!/bin/sh
+# wash-router supervisor for the TinyEMU multi-channel layout.
+#
+# Channel split:
+#   /dev/hvc2  wash router DATA plane (wash protocol frames over
+#              virtio-console; opened by wash-router itself via
+#              --transport=virtio-console:/dev/hvc2).
+#   /dev/hvc3  wash supervisor LOG. This script ties its own stdout/
+#              stderr here, so the supervisor banner + every
+#              wash-router restart cycle + wash-router's stdout/
+#              stderr are visible to the FE via window.washConsoles[2]
+#              (server-tagged `[wash-log]`). One channel, complete
+#              visibility into "why isn't wash painting".
+#
+# If /dev/hvc2 is missing (single-console kernel build, no wash
+# patches), exit cleanly so the rest of the init still runs.
+
+PIDFILE=/run/wash-router.pid
+
+start() {
+    # Wait for the multiport virtio-console to probe + udev/mdev to
+    # create /dev/vport4p0 (data) and /dev/vport4p1 (log). Fall back
+    # to legacy hvc2/hvc3 if running against an old rootfs.
+    # Detect the multiport virtio-console: every single-port hvc
+    # also creates /dev/vport{N}p0, but ONLY the multiport exposes
+    # /dev/vport{N}p2. Use that to identify N, then derive data/log.
+    MP_INDEX=""
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        for cand in /dev/vport*p2; do
+            [ -e "$cand" ] || continue
+            MP_INDEX=$(basename "$cand" | sed 's/vport\([0-9][0-9]*\)p2/\1/')
+            break 2
+        done
+        sleep 1
+    done
+    if [ -n "$MP_INDEX" ]; then
+        DATA_DEV=/dev/vport${MP_INDEX}p0
+        LOG_DEV=/dev/vport${MP_INDEX}p1
+    else
+        # Fallback to legacy hvc layout.
+        [ -e /dev/hvc2 ] && DATA_DEV=/dev/hvc2
+        [ -e /dev/hvc3 ] && LOG_DEV=/dev/hvc3
+    fi
+    if [ -z "$DATA_DEV" ] || [ -z "$LOG_DEV" ]; then
+        echo "wash-supervisor: missing data ($DATA_DEV) or log ($LOG_DEV) — skipped" \
+            > /dev/kmsg 2>/dev/null || true
+        return 0
+    fi
+    echo "wash-supervisor: data=$DATA_DEV log=$LOG_DEV" \
+        > /dev/kmsg 2>/dev/null || true
+    mkdir -p /var/log /run
+
+    # Wash-router log channel: redirect this script's stdout/stderr +
+    # any child's inherited descriptors to $LOG_DEV. Background the
+    # whole supervisor with setsid so it doesn't tie to the rcS pgrp.
+    (
+        exec 0</dev/null >"$LOG_DEV" 2>&1
+
+        echo "wash-supervisor: alive (data=$DATA_DEV log=$LOG_DEV)"
+        echo "wash-supervisor: kernel: $(uname -srm)"
+
+        # Pre-open the data device RW into fd 3; wash-router invoked
+        # with --transport=fd:3 inherits it. On the vport path this
+        # is a raw chardev (no HVC/tty layer) so there's no Go-poller
+        # interaction to wedge khvcd.
+        echo "wash-supervisor: pre-opening $DATA_DEV as fd 3"
+        exec 3<>"$DATA_DEV"
+        echo "wash-supervisor: fd 3 ready"
+
+        n=0
+        while :; do
+            n=$((n + 1))
+            echo "──────── wash-supervisor: launch #$n ────────"
+            echo "wash-supervisor: invoking wash-router (transport=fd:3)..."
+            /usr/bin/wash-router \
+                --transport=fd:3 \
+                --apps-dir=/usr/lib/wash
+            rc=$?
+            echo "wash-supervisor: wash-router exited rc=$rc (launch #$n)"
+            sleep_for=$(( n > 5 ? 5 : 1 ))
+            echo "wash-supervisor: respawn in ${sleep_for}s"
+            sleep "$sleep_for"
+        done
+    ) &
+    echo $! > "$PIDFILE"
+    echo "wash-supervisor: started pid=$(cat $PIDFILE)" > /dev/kmsg 2>/dev/null || true
+}
+
+stop() {
+    if [ -f "$PIDFILE" ]; then
+        pgid=$(cat "$PIDFILE")
+        kill -TERM -"$pgid" 2>/dev/null || kill "$pgid" 2>/dev/null
+        rm -f "$PIDFILE"
+    fi
+}
+
+case "$1" in
+    start)   start ;;
+    stop)    stop ;;
+    restart) stop; start ;;
+    *)       echo "usage: $0 {start|stop|restart}" >&2; exit 1 ;;
+esac

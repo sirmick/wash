@@ -1,0 +1,62 @@
+# Buildroot defconfig for the wash RISC-V demo rootfs.
+#
+# - rv64gc (matches Bellard's bbl64.bin / TinyEMU emulated ISA)
+# - musl libc (smaller than glibc)
+# - external prebuilt bootlin toolchain (skips ~25 min of gcc build)
+# - busybox init (no openrc/systemd weight)
+# - ext2 rootfs ~8 MiB (TinyEMU virtio-blk reads it directly)
+# - no kernel here; image-rv/kernel/ owns kernel build.
+#
+# Iterate with `make -C image-rv menuconfig` inside the builder if you
+# want to tweak. Save back to this file via `make savedefconfig
+# BR2_DEFCONFIG=…/wash_riscv64_defconfig` from inside the buildroot tree.
+
+BR2_riscv=y
+BR2_RISCV_64=y
+BR2_RISCV_ABI_LP64D=y
+BR2_RISCV_ISA_RVI=y
+BR2_RISCV_ISA_RVM=y
+BR2_RISCV_ISA_RVA=y
+BR2_RISCV_ISA_RVF=y
+BR2_RISCV_ISA_RVD=y
+BR2_RISCV_ISA_RVC=y
+
+# Prebuilt riscv64 musl toolchain from bootlin. Saves ~25 min cold build.
+BR2_TOOLCHAIN_EXTERNAL=y
+BR2_TOOLCHAIN_EXTERNAL_BOOTLIN=y
+BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_RISCV64_LP64D_MUSL_STABLE=y
+
+BR2_OPTIMIZE_S=y
+
+# Init = busybox. Boot ordering via /etc/init.d/SNNxxx scripts.
+BR2_INIT_BUSYBOX=y
+BR2_SYSTEM_BIN_SH_BUSYBOX=y
+BR2_PACKAGE_BUSYBOX=y
+
+BR2_TARGET_GENERIC_HOSTNAME="wash"
+BR2_TARGET_GENERIC_ISSUE="wash riscv64 (buildroot)"
+# getty runs on /dev/hvc1 (the first virtio-console). TinyEMU's HTIF
+# (hvc0) is output-only in the WASM build — keystrokes can't reach
+# it, so a getty there would be useless. The wash demo's [shell]
+# tab is connected via window.washConsoles[0] which corresponds to
+# hvc1; user keystrokes flow in → getty reads them → login prompt.
+BR2_TARGET_GENERIC_GETTY_PORT="hvc1"
+BR2_TARGET_GENERIC_GETTY_BAUDRATE_KEEP=y
+BR2_TARGET_GENERIC_ROOT_PASSWD=""
+BR2_TARGET_GENERIC_PASSWD_METHOD="sha-256"
+
+# Overlay path is the absolute path inside the build container.
+# Dockerfile COPYs the staged overlay (wash binaries + init scripts)
+# to this exact path so buildroot can rsync it onto target/ during
+# the rootfs assembly step. Setting it here (in the defconfig) is
+# essential — env overrides at `make` time are ignored once the
+# defconfig has produced .config.
+BR2_ROOTFS_OVERLAY="/overlay"
+
+BR2_TARGET_ROOTFS_EXT2=y
+BR2_TARGET_ROOTFS_EXT2_REV=1
+# 20M = wash multicall (~9 MiB) + buildroot base (~3-4 MiB) + slack.
+# Sized to fit comfortably in TinyEMU's 256 MiB RAM with room for
+# kernel + caches.
+BR2_TARGET_ROOTFS_EXT2_SIZE="20M"
+# No tarball, no other formats — we just want the ext2.

@@ -17,6 +17,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -369,48 +370,80 @@ func parseTransport(s string) (scheme, path string, err error) {
 // the outer JS treats the absence of a READY token as "still booting,"
 // which the user sees as the boot xterm staying visible longer.
 func runShellOverStream(ctx context.Context, r *router.Router, scheme, path, readyPath string, logf func(string, ...any)) error {
-	// Two scheme branches:
-	//   "fd"                  — path is an integer fd number, opened by
-	//                           the caller (supervisor pre-opens with
-	//                           `exec 3<>/dev/hvc2`). We wrap with
-	//                           os.NewFile, sidestepping a TinyEMU
-	//                           kernel hang on first virtio-console
-	//                           RDWR open from inside a Go binary.
-	//   "virtio-console" /
-	//   "serial"              — path is a device path; OpenFile RDWR
-	//                           with O_NONBLOCK.
-	var f *os.File
+	// fd:N inherits an already-open fd (supervisor's `exec 3<>/dev/hvc2`)
+	// and uses RAW syscall.Read/Write — never wrapping it in *os.File —
+	// so Go's runtime poller doesn't register the fd (no
+	// fcntl(F_SETFL,O_NONBLOCK), no epoll_ctl). On Linux's HVC tty
+	// subsystem, that registration wedges khvcd and blocks I/O on every
+	// other /dev/hvcN. Direct blocking syscalls keep us out of the
+	// shared tty paths entirely.
+	var rwc io.ReadWriteCloser
 	switch scheme {
 	case "fd":
 		n, err := strconv.Atoi(path)
 		if err != nil {
 			return fmt.Errorf("transport fd:%s: %w", path, err)
 		}
-		logf("wrap inherited fd=%d", n)
-		f = os.NewFile(uintptr(n), fmt.Sprintf("inherited-fd-%d", n))
-		if f == nil {
-			return fmt.Errorf("transport fd:%d: NewFile returned nil (bad fd?)", n)
-		}
+		logf("raw-syscall transport on inherited fd=%d", n)
+		rwc = &rawFD{fd: n}
 	default:
 		logf("open %s O_RDWR|O_NONBLOCK", path)
-		var err error
-		f, err = os.OpenFile(path, os.O_RDWR|syscall.O_NONBLOCK, 0)
+		f, err := os.OpenFile(path, os.O_RDWR|syscall.O_NONBLOCK, 0)
 		if err != nil {
 			return fmt.Errorf("open %s: %w", path, err)
 		}
 		logf("open %s succeeded fd=%d", path, f.Fd())
+		rwc = f
 	}
-	defer f.Close()
+	defer rwc.Close()
 	if readyPath != "" {
 		if err := writeReadyToken(readyPath); err != nil {
 			logf("ready signal to %s: %v", readyPath, err)
 		}
 	}
-	t := wire.NewStreamTransport(f)
+	t := wire.NewStreamTransport(rwc)
 	if err := r.HandleShell(ctx, t); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
 	return nil
+}
+
+// rawFD performs blocking I/O directly via syscall.Read/Write on a raw
+// kernel fd. Unlike *os.File, it never registers the fd with Go's
+// runtime poller, so the fd's open flags stay exactly as the caller
+// set them (no automatic O_NONBLOCK, no epoll registration).
+type rawFD struct {
+	fd int
+}
+
+func (r *rawFD) Read(p []byte) (int, error) {
+	n, err := syscall.Read(r.fd, p)
+	if err != nil {
+		return n, err
+	}
+	if n == 0 {
+		return 0, io.EOF
+	}
+	return n, nil
+}
+
+func (r *rawFD) Write(p []byte) (int, error) {
+	written := 0
+	for written < len(p) {
+		n, err := syscall.Write(r.fd, p[written:])
+		if err != nil {
+			return written, err
+		}
+		if n == 0 {
+			return written, io.ErrShortWrite
+		}
+		written += n
+	}
+	return written, nil
+}
+
+func (r *rawFD) Close() error {
+	return syscall.Close(r.fd)
 }
 
 // writeReadyToken writes "WASH_READY\n" to path. The token format is

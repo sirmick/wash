@@ -1,0 +1,58 @@
+#!/bin/sh
+# wash-diag: periodic process/state dump on /dev/hvc4 so the FE can
+# watch what's actually running inside the VM in real time. Critical
+# for debugging questions like "did getty start?" or "is wash-router
+# blocked in a syscall?"
+PIDFILE=/run/wash-diag.pid
+
+start() {
+    # Wait for the multiport virtio-console to probe and udev/mdev
+    # to create the node. Try /dev/vport4p2 first (preferred), fall
+    # back to /dev/hvc4 (legacy HVC path) so the script works on
+    # either rootfs variant.
+    # Wait for the multiport virtio-console to expose its port 2.
+    # Naming is /dev/vport{N}p2 where N is the virtio device index
+    # (depends on probe order in TinyEMU). Glob over all N. Fall
+    # back to /dev/hvc4 if multiport never shows up.
+    DIAG_DEV=""
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        for cand in /dev/vport*p2; do
+            [ -e "$cand" ] && DIAG_DEV=$cand && break 2
+        done
+        [ -e /dev/hvc4 ] && DIAG_DEV=/dev/hvc4 && break
+        sleep 1
+    done
+    if [ -z "$DIAG_DEV" ]; then
+        echo "wash-diag: no diag device; skipped" \
+            > /dev/kmsg 2>/dev/null || true
+        return 0
+    fi
+    echo "wash-diag: using $DIAG_DEV" > /dev/kmsg 2>/dev/null || true
+    mkdir -p /run
+
+    # Minimal test: just tick + sleep, see if the loop iterates.
+    setsid /bin/sh -c "
+        exec >$DIAG_DEV 2>&1 </dev/null
+        echo \"wash-diag-min: alive pid=\$\$ via $DIAG_DEV\"
+        n=0
+        while :; do
+            n=\$((n + 1))
+            t=\$(cat /proc/uptime 2>/dev/null | cut -d. -f1)
+            echo \"tick \$n at uptime=\${t}s\"
+            sleep 2
+        done
+    " &
+    echo $! > "$PIDFILE"
+}
+
+stop() {
+    [ -f "$PIDFILE" ] && kill "$(cat $PIDFILE)" 2>/dev/null
+    rm -f "$PIDFILE"
+}
+
+case "$1" in
+    start)   start ;;
+    stop)    stop ;;
+    restart) stop; start ;;
+    *)       echo "usage: $0 {start|stop|restart}" >&2; exit 1 ;;
+esac
