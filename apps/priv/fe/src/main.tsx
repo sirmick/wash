@@ -23,6 +23,11 @@ import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import type { Component } from 'solid-js';
 import { Button, defineWashApp } from '@wash/ui';
+import { p256 } from '@noble/curves/nist.js';
+import { ecdh } from '@noble/curves/abstract/weierstrass.js';
+import { hkdf } from '@noble/hashes/hkdf.js';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { gcm } from '@noble/ciphers/aes.js';
 
 type Status = 'queued' | 'running' | 'done' | 'rejected' | 'error';
 type Kind = 'run' | 'spawn';
@@ -108,55 +113,52 @@ function b64decode(s: string): Uint8Array {
 // The plaintext bytes are zeroed before this function returns. Any
 // exception bubbles up so the caller can surface "encrypt failed"
 // without partially leaking secrets.
-async function encryptPassword(password: string, bePubRaw: Uint8Array): Promise<{
+// noble primitives. We deliberately do NOT use Web Crypto here — its
+// subtle interface is gated to "secure contexts" (HTTPS or
+// http://localhost), and wash is routinely accessed via a LAN
+// hostname over plain HTTP. The threat model in apps/priv/be/
+// crypto.go calls out "misconfigured non-loopback exposure" as
+// something this encryption must defend against, but the original
+// subtle-based implementation broke on exactly that case. noble's
+// pure-JS primitives run anywhere, only depending on
+// crypto.getRandomValues (which IS available in insecure contexts).
+//
+// Wire shape is unchanged: ECDH-P256 → HKDF-SHA256 → AES-256-GCM,
+// FE pubkey emitted as uncompressed SEC1 (65 bytes 04||X||Y), the
+// HKDF info string + length match apps/priv/be/crypto.go.deriveKey.
+const p256ecdh = ecdh(p256.Point);
+
+function encryptPassword(password: string, bePubRaw: Uint8Array): {
   ciphertext: Uint8Array;
   fePubKey: Uint8Array;
   nonce: Uint8Array;
-}> {
-  const subtle = crypto.subtle;
-  const bePub = await subtle.importKey(
-    'raw',
-    bePubRaw,
-    { name: 'ECDH', namedCurve: 'P-256' },
-    false,
-    [],
-  );
-  const fe = await subtle.generateKey(
-    { name: 'ECDH', namedCurve: 'P-256' },
-    true,
-    ['deriveBits'],
-  );
-  const shared = new Uint8Array(
-    await subtle.deriveBits({ name: 'ECDH', public: bePub }, fe.privateKey, 256),
-  );
-  // HKDF-SHA256(salt=empty, info=HKDF_INFO, length=32). importKey for
-  // HKDF needs raw bytes of the shared secret; HKDF doesn't accept
-  // "extractable", and the derived key goes straight into AES-GCM.
-  const hkdfKey = await subtle.importKey('raw', shared, { name: 'HKDF' }, false, ['deriveKey']);
-  const aesKey = await subtle.deriveKey(
-    {
-      name: 'HKDF',
-      hash: 'SHA-256',
-      salt: new Uint8Array(0),
-      info: new TextEncoder().encode(HKDF_INFO),
-    },
-    hkdfKey,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt'],
-  );
+} {
+  // Fresh ephemeral keypair per unlock — nonce reuse across
+  // handshakes is structurally impossible because the AES key changes
+  // with every keygen.
+  const { secretKey } = p256ecdh.keygen();
+  const fePubKey = p256ecdh.getPublicKey(secretKey, false); // uncompressed 65b
+  // ECDH shared secret. noble emits SEC1 (33b compressed = prefix||X);
+  // the BE's crypto/ecdh.ECDH returns just X (32 bytes), so we strip
+  // the 1-byte prefix.
+  const sharedSEC1 = p256ecdh.getSharedSecret(secretKey, bePubRaw, true);
+  const shared = sharedSEC1.slice(1);
+  // HKDF-SHA256(salt=empty, info=HKDF_INFO, L=32). Matches deriveKey
+  // in the BE one-for-one.
+  const aesKey = hkdf(sha256, shared, new Uint8Array(0), new TextEncoder().encode(HKDF_INFO), 32);
+  // AES-256-GCM. noble's gcm encrypt emits ciphertext||tag in one
+  // buffer, same as Go's cipher.AEAD.Open expects.
   const nonce = crypto.getRandomValues(new Uint8Array(12));
   const pwBytes = new TextEncoder().encode(password);
-  const ct = new Uint8Array(
-    await subtle.encrypt({ name: 'AES-GCM', iv: nonce }, aesKey, pwBytes),
-  );
-  // Best-effort scrub. The TextEncoder copy in pwBytes is the only
-  // owned buffer; the password string is GC'd later but that's out
-  // of our hands.
+  const ct = gcm(aesKey, nonce).encrypt(pwBytes);
+  // Best-effort scrub. JS strings are immutable so the password
+  // string itself is out of our hands; the TextEncoder copy + the
+  // derived secrets are all we can touch.
   pwBytes.fill(0);
   shared.fill(0);
-  const fePubRaw = new Uint8Array(await subtle.exportKey('raw', fe.publicKey));
-  return { ciphertext: ct, fePubKey: fePubRaw, nonce };
+  aesKey.fill(0);
+  secretKey.fill(0);
+  return { ciphertext: ct, fePubKey, nonce };
 }
 
 // argvPreview prints argv as a single shell-like line for the queue

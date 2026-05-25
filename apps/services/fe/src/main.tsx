@@ -1,0 +1,568 @@
+// wash-app-services: init system frontend.
+//
+// Layout:
+//   [ toolbar: search · refresh · auto-refresh ]
+//   [ scrolling service table — per-row: status badge, name +
+//     description, enabled chip, action buttons ]
+//   [ status bar: init system · count · last refresh ]
+//
+// Actions (start/stop/restart/enable/disable) round-trip through the
+// BE which routes them through wash-priv; we just show a spinner on
+// the row while the request is in flight. show_logs spawns the
+// matching log viewer in a fresh window.
+
+import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import type { Component, JSX } from 'solid-js';
+import { defineWashApp, StatusBar, tokens } from '@wash/ui';
+import {
+  Check,
+  CircleAlert,
+  CircleDashed,
+  CirclePlay,
+  CircleX,
+  FileText,
+  Pause,
+  Play,
+  RefreshCcw,
+  RotateCcw,
+  Search,
+} from 'lucide-solid';
+
+interface Service {
+  name: string;
+  description: string;
+  active: string;
+  sub: string;
+  load: string;
+  enabled: string;
+}
+
+interface ServicesList {
+  kind: 'services_list';
+  init: '' | 'systemd' | 'openrc';
+  services: Service[];
+}
+
+interface ActionDone {
+  kind: 'action_done';
+  name: string;
+  op: string;
+  ok: boolean;
+  exit: number;
+  stderr: string;
+}
+
+type BEMessage = ServicesList | ActionDone | { kind: string; [k: string]: unknown };
+
+const AUTO_REFRESH_MS = 5000;
+
+const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
+  const [initSys, setInitSys] = createSignal<'' | 'systemd' | 'openrc'>('');
+  const [services, setServices] = createSignal<Service[]>([]);
+  const [search, setSearch] = createSignal('');
+  const [autoRefresh, setAutoRefresh] = createSignal(true);
+  const [lastRefresh, setLastRefresh] = createSignal<number>(0);
+  // busy maps a tab name → the op currently in-flight against it. Used
+  // to spin the row + disable other buttons while priv is prompting.
+  const [busy, setBusy] = createSignal<Record<string, string>>({});
+  // Per-row last error from action_done — surfaces an action that
+  // returned a non-zero exit so the user knows what went wrong.
+  const [errors, setErrors] = createSignal<Record<string, string>>({});
+
+  const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
+
+  const requestList = () => send({ kind: 'list' });
+  const requestAction = (name: string, op: string) => {
+    setBusy((b) => ({ ...b, [name]: op }));
+    setErrors((e) => {
+      if (!(name in e)) return e;
+      const out = { ...e };
+      delete out[name];
+      return out;
+    });
+    send({ kind: 'action', name, op });
+  };
+  const requestLogs = (name: string) => send({ kind: 'show_logs', name });
+
+  const handleBE = (m: BEMessage) => {
+    if (m.kind === 'services_list') {
+      const msg = m as ServicesList;
+      setInitSys(msg.init);
+      setServices(msg.services ?? []);
+      setLastRefresh(Date.now());
+      return;
+    }
+    if (m.kind === 'action_done') {
+      const msg = m as ActionDone;
+      setBusy((b) => {
+        if (!(msg.name in b)) return b;
+        const out = { ...b };
+        delete out[msg.name];
+        return out;
+      });
+      if (!msg.ok) {
+        const detail = msg.stderr.trim() || `exit ${msg.exit}`;
+        setErrors((e) => ({ ...e, [msg.name]: detail }));
+      }
+      return;
+    }
+  };
+
+  let refreshTimer: number | undefined;
+  const tickAutoRefresh = () => {
+    if (refreshTimer != null) window.clearInterval(refreshTimer);
+    if (!autoRefresh()) return;
+    refreshTimer = window.setInterval(requestList, AUTO_REFRESH_MS);
+  };
+
+  onMount(() => {
+    const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail as BEMessage);
+    props.host.addEventListener('wash:msg', onMsg);
+    // First listing is unsolicited from the BE; we also request one
+    // here so a re-mount (e.g. SaveState reload) gets fresh data.
+    requestList();
+    tickAutoRefresh();
+    onCleanup(() => {
+      props.host.removeEventListener('wash:msg', onMsg);
+      if (refreshTimer != null) window.clearInterval(refreshTimer);
+    });
+  });
+
+  // Restart the interval whenever the toggle changes.
+  const toggleAutoRefresh = () => {
+    setAutoRefresh(!autoRefresh());
+    tickAutoRefresh();
+  };
+
+  const filtered = createMemo(() => {
+    const q = search().trim().toLowerCase();
+    const list = services();
+    if (!q) return list;
+    return list.filter((s) =>
+      s.name.toLowerCase().includes(q) ||
+      (s.description && s.description.toLowerCase().includes(q))
+    );
+  });
+
+  return (
+    <>
+      <div data-testid="srv-toolbar" style={toolbarStyle}>
+        <div style={searchWrapStyle}>
+          <Search size={12} />
+          <input
+            type="text"
+            placeholder="Filter services…"
+            data-testid="srv-search"
+            value={search()}
+            onInput={(e) => setSearch(e.currentTarget.value)}
+            style={searchInputStyle}
+          />
+        </div>
+        <button
+          type="button"
+          data-testid="srv-refresh"
+          title="Refresh"
+          onClick={requestList}
+          style={toolbarBtnStyle}
+        >
+          <RefreshCcw size={14} />
+        </button>
+        <label style={toggleLabelStyle} data-testid="srv-auto-label">
+          <input
+            type="checkbox"
+            data-testid="srv-auto"
+            checked={autoRefresh()}
+            onChange={toggleAutoRefresh}
+            style={checkboxStyle}
+          />
+          <span>Auto-refresh</span>
+        </label>
+      </div>
+
+      <div style={bodyStyle}>
+        <Show
+          when={initSys() !== ''}
+          fallback={
+            <div data-testid="srv-no-init" style={emptyStateStyle}>
+              <CircleAlert size={28} />
+              <div style={{ 'margin-top': '8px', 'font-size': tokens.fontSizeBase }}>
+                No supported init system detected.
+              </div>
+              <div style={{ 'margin-top': '4px', color: tokens.fgDim }}>
+                wash-services supports systemd and OpenRC.
+              </div>
+            </div>
+          }
+        >
+          <Show
+            when={filtered().length > 0}
+            fallback={
+              <div data-testid="srv-empty" style={emptyStateStyle}>
+                <CircleDashed size={28} />
+                <div style={{ 'margin-top': '8px' }}>
+                  {services().length === 0 ? 'Loading services…' : 'No services match your filter.'}
+                </div>
+              </div>
+            }
+          >
+            <div data-testid="srv-list" style={listStyle}>
+              <For each={filtered()}>
+                {(s) => (
+                  <ServiceRow
+                    service={s}
+                    busy={() => busy()[s.name] ?? ''}
+                    error={() => errors()[s.name] ?? ''}
+                    onAction={(op) => requestAction(s.name, op)}
+                    onLogs={() => requestLogs(s.name)}
+                  />
+                )}
+              </For>
+            </div>
+          </Show>
+        </Show>
+      </div>
+
+      <StatusBar data-testid="srv-status">
+        <span>{initSys() ? `init: ${initSys()}` : 'init: —'}</span>
+        <span style={{ 'margin-left': '12px' }}>{filtered().length} / {services().length}</span>
+        <Show when={lastRefresh() > 0}>
+          <span style={{ 'margin-left': '12px', color: tokens.fgDim }}>
+            updated {fmtAgo(lastRefresh())}
+          </span>
+        </Show>
+      </StatusBar>
+    </>
+  );
+};
+
+const ServiceRow: Component<{
+  service: Service;
+  busy: () => string;
+  error: () => string;
+  onAction: (op: string) => void;
+  onLogs: () => void;
+}> = (props) => {
+  const s = () => props.service;
+  const isActive = () => s().active === 'active' || s().active === 'reloading';
+  const isFailed = () => s().active === 'failed' || s().sub === 'crashed';
+  const isEnabled = () => s().enabled === 'enabled' || s().enabled === 'alias' || s().enabled === 'static';
+  const masked = () => s().enabled === 'masked';
+  const isBusy = () => props.busy() !== '';
+
+  return (
+    <div
+      data-testid={`srv-row-${s().name}`}
+      data-active={isActive() ? 'true' : undefined}
+      data-failed={isFailed() ? 'true' : undefined}
+      style={rowStyle}
+    >
+      <StatusBadge active={s().active} sub={s().sub} />
+      <div style={nameColStyle}>
+        <div data-testid={`srv-name-${s().name}`} style={nameStyle}>{s().name}</div>
+        <Show when={s().description}>
+          <div style={descStyle}>{s().description}</div>
+        </Show>
+        <Show when={props.error()}>
+          <div data-testid={`srv-err-${s().name}`} style={errStyle}>
+            <CircleX size={12} /> {props.error()}
+          </div>
+        </Show>
+      </div>
+      <EnabledChip enabled={s().enabled} />
+      <div style={actionsStyle}>
+        <Show
+          when={isActive()}
+          fallback={
+            <button
+              type="button"
+              data-testid={`srv-start-${s().name}`}
+              title="Start"
+              disabled={isBusy() || masked()}
+              onClick={() => props.onAction('start')}
+              style={iconBtnStyle(false)}
+            >
+              <Play size={14} />
+            </button>
+          }
+        >
+          <button
+            type="button"
+            data-testid={`srv-stop-${s().name}`}
+            title="Stop"
+            disabled={isBusy()}
+            onClick={() => props.onAction('stop')}
+            style={iconBtnStyle(false)}
+          >
+            <Pause size={14} />
+          </button>
+        </Show>
+        <button
+          type="button"
+          data-testid={`srv-restart-${s().name}`}
+          title="Restart"
+          disabled={isBusy() || masked()}
+          onClick={() => props.onAction('restart')}
+          style={iconBtnStyle(false)}
+        >
+          <RotateCcw size={14} />
+        </button>
+        <button
+          type="button"
+          data-testid={`srv-toggle-${s().name}`}
+          title={isEnabled() ? 'Disable' : 'Enable'}
+          disabled={isBusy() || masked()}
+          onClick={() => props.onAction(isEnabled() ? 'disable' : 'enable')}
+          style={iconBtnStyle(isEnabled())}
+        >
+          <Check size={14} />
+        </button>
+        <button
+          type="button"
+          data-testid={`srv-logs-${s().name}`}
+          title="View logs"
+          onClick={props.onLogs}
+          style={iconBtnStyle(false)}
+        >
+          <FileText size={14} />
+        </button>
+        <Show when={isBusy()}>
+          <span data-testid={`srv-busy-${s().name}`} style={busyTagStyle}>
+            {props.busy()}…
+          </span>
+        </Show>
+      </div>
+    </div>
+  );
+};
+
+const StatusBadge: Component<{ active: string; sub: string }> = (props) => {
+  const tone = (): { bg: string; fg: string; label: string; icon: JSX.Element } => {
+    if (props.active === 'failed' || props.sub === 'crashed') {
+      return { bg: '#5b1d1d', fg: '#fca5a5', label: 'failed', icon: <CircleX size={12} /> };
+    }
+    if (props.active === 'active' || props.active === 'reloading') {
+      return { bg: '#1c3d24', fg: '#86efac', label: props.sub || 'running', icon: <CirclePlay size={12} /> };
+    }
+    if (props.active === 'activating' || props.active === 'deactivating') {
+      return { bg: '#3a3a1c', fg: '#fde047', label: props.active, icon: <CircleDashed size={12} /> };
+    }
+    return { bg: '#1f1f2a', fg: tokens.fgDim, label: props.sub || props.active || 'inactive', icon: <CircleDashed size={12} /> };
+  };
+  const t = tone();
+  return (
+    <span style={{ ...badgeStyle, background: t.bg, color: t.fg }} title={`${props.active} / ${props.sub}`}>
+      {t.icon}
+      <span style={{ 'margin-left': '4px' }}>{t.label}</span>
+    </span>
+  );
+};
+
+const EnabledChip: Component<{ enabled: string }> = (props) => {
+  if (!props.enabled) return <span style={chipDimStyle}>—</span>;
+  const map: Record<string, { bg: string; fg: string }> = {
+    enabled:   { bg: '#1c2d3d', fg: '#93c5fd' },
+    disabled:  { bg: '#1f1f2a', fg: tokens.fgDim },
+    static:    { bg: '#262338', fg: '#c4b5fd' },
+    masked:    { bg: '#3d1c1c', fg: '#fca5a5' },
+    alias:     { bg: '#262338', fg: '#c4b5fd' },
+    linked:    { bg: '#262338', fg: '#c4b5fd' },
+    indirect:  { bg: '#1f1f2a', fg: tokens.fgDim },
+    generated: { bg: '#1f1f2a', fg: tokens.fgDim },
+  };
+  const t = map[props.enabled] ?? { bg: '#1f1f2a', fg: tokens.fgDim };
+  return <span style={{ ...chipStyle, background: t.bg, color: t.fg }}>{props.enabled}</span>;
+};
+
+// ---- helpers ----
+
+function fmtAgo(ts: number): string {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 5) return 'just now';
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  return `${Math.floor(s / 3600)}h ago`;
+}
+
+// ---- styles ----
+
+const toolbarStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'center',
+  background: tokens.bgMenu,
+  'border-bottom': `1px solid ${tokens.borderMenu}`,
+  padding: '4px 8px',
+  gap: '8px',
+  'flex-shrink': 0,
+  'min-height': '30px',
+};
+
+const searchWrapStyle: JSX.CSSProperties = {
+  display: 'inline-flex',
+  'align-items': 'center',
+  gap: '6px',
+  background: '#10101a',
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}px`,
+  padding: '0 8px',
+  height: '22px',
+  flex: 1,
+  'max-width': '320px',
+  color: tokens.fgDim,
+};
+
+const searchInputStyle: JSX.CSSProperties = {
+  flex: 1,
+  background: 'transparent',
+  border: 'none',
+  outline: 'none',
+  color: tokens.fg,
+  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  height: '20px',
+};
+
+const toolbarBtnStyle: JSX.CSSProperties = {
+  display: 'inline-flex',
+  'align-items': 'center',
+  'justify-content': 'center',
+  width: '24px',
+  height: '22px',
+  background: 'transparent',
+  border: `1px solid transparent`,
+  'border-radius': `${tokens.radiusSm}px`,
+  color: tokens.fg,
+  cursor: 'pointer',
+  padding: 0,
+};
+
+const toggleLabelStyle: JSX.CSSProperties = {
+  display: 'inline-flex',
+  'align-items': 'center',
+  gap: '6px',
+  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  color: tokens.fgDim,
+  cursor: 'pointer',
+  'user-select': 'none',
+};
+
+const checkboxStyle: JSX.CSSProperties = {
+  margin: 0,
+  cursor: 'pointer',
+};
+
+const bodyStyle: JSX.CSSProperties = {
+  flex: 1,
+  overflow: 'auto',
+};
+
+const listStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'flex-direction': 'column',
+};
+
+const rowStyle: JSX.CSSProperties = {
+  display: 'grid',
+  'grid-template-columns': '110px 1fr 90px auto',
+  'align-items': 'center',
+  gap: '12px',
+  padding: '8px 12px',
+  'border-bottom': `1px solid ${tokens.borderMenu}`,
+};
+
+const nameColStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'flex-direction': 'column',
+  gap: '2px',
+  'min-width': 0,
+};
+
+const nameStyle: JSX.CSSProperties = {
+  font: `${tokens.fontSizeBase} ${tokens.fontMono}`,
+  color: tokens.fg,
+  overflow: 'hidden',
+  'text-overflow': 'ellipsis',
+  'white-space': 'nowrap',
+};
+
+const descStyle: JSX.CSSProperties = {
+  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  color: tokens.fgDim,
+  overflow: 'hidden',
+  'text-overflow': 'ellipsis',
+  'white-space': 'nowrap',
+};
+
+const errStyle: JSX.CSSProperties = {
+  display: 'inline-flex',
+  'align-items': 'center',
+  gap: '4px',
+  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  color: '#fca5a5',
+  'margin-top': '2px',
+};
+
+const badgeStyle: JSX.CSSProperties = {
+  display: 'inline-flex',
+  'align-items': 'center',
+  padding: '2px 8px',
+  'border-radius': `${tokens.radiusSm}px`,
+  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  'white-space': 'nowrap',
+};
+
+const chipStyle: JSX.CSSProperties = {
+  display: 'inline-flex',
+  'align-items': 'center',
+  'justify-content': 'center',
+  padding: '2px 6px',
+  'border-radius': `${tokens.radiusSm}px`,
+  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+};
+
+const chipDimStyle: JSX.CSSProperties = {
+  color: tokens.fgDim,
+  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+};
+
+const actionsStyle: JSX.CSSProperties = {
+  display: 'inline-flex',
+  'align-items': 'center',
+  gap: '4px',
+};
+
+function iconBtnStyle(active: boolean): JSX.CSSProperties {
+  return {
+    display: 'inline-flex',
+    'align-items': 'center',
+    'justify-content': 'center',
+    width: '26px',
+    height: '24px',
+    background: active ? tokens.bgRowSelected : 'transparent',
+    border: `1px solid ${tokens.borderMenu}`,
+    'border-radius': `${tokens.radiusSm}px`,
+    color: tokens.fg,
+    cursor: 'pointer',
+    padding: 0,
+  };
+}
+
+const busyTagStyle: JSX.CSSProperties = {
+  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  color: tokens.fgDim,
+  'margin-left': '4px',
+};
+
+const emptyStateStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'flex-direction': 'column',
+  'align-items': 'center',
+  'justify-content': 'center',
+  padding: '48px 16px',
+  color: tokens.fgDim,
+  height: '100%',
+};
+
+// ---- custom element ----
+
+defineWashApp('wash-app-services', (props) => <App {...props} />, {
+  style: `display:flex;flex-direction:column;position:relative;width:100%;height:100%;overflow:hidden;background:${tokens.bgWindow};color:${tokens.fg};font:${tokens.fontSizeBase} ${tokens.fontSans};box-sizing:border-box`,
+});

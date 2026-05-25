@@ -31,6 +31,7 @@ const JOURNAL_BIN = join(REPO_ROOT, 'out', 'wash-journal');
 const SETTINGS_BIN = join(REPO_ROOT, 'out', 'wash-settings');
 const TOP_BIN = join(REPO_ROOT, 'out', 'wash-top');
 const SYSLOGS_BIN = join(REPO_ROOT, 'out', 'wash-syslogs');
+const SERVICES_BIN = join(REPO_ROOT, 'out', 'wash-services');
 const FAKESUDO_BIN = join(REPO_ROOT, 'out', 'wash-priv-fakesudo');
 export const SUDO_BIN = join(REPO_ROOT, 'out', 'wash-sudo');
 
@@ -80,7 +81,7 @@ export interface RouterOptions {
   /** kiosk mode: --no-session + --initial-app=<appID>. */
   kiosk?: string;
   /** include these binaries in the apps dir; defaults to all five. */
-  apps?: ('session' | 'about' | 'test' | 'term' | 'fm' | 'bulk' | 'priv' | 'journal' | 'settings' | 'top' | 'syslogs')[];
+  apps?: ('session' | 'about' | 'test' | 'term' | 'fm' | 'bulk' | 'priv' | 'journal' | 'settings' | 'top' | 'syslogs' | 'services' | 'edit')[];
   /** include manifest.hidden apps in the catalog. */
   showHidden?: boolean;
   /** extra wash-router args. */
@@ -115,6 +116,14 @@ export interface RouterOptions {
    * the test runner.
    */
   xdgConfig?: boolean;
+  /**
+   * Extra env vars merged into the router process's env after the
+   * other options have been applied. Useful for tests that need to
+   * inject mock binaries into PATH (e.g. wash-services with a stub
+   * systemctl) or override SDK-side env that the BE reads at start.
+   * Empty-string values delete the var, matching the shell convention.
+   */
+  extraEnv?: Record<string, string>;
 }
 
 async function freePort(): Promise<number> {
@@ -224,6 +233,12 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
     }
     bins.push(SYSLOGS_BIN);
   }
+  if (wanted.includes('services')) {
+    if (!existsSync(SERVICES_BIN)) {
+      throw new Error(`missing wash-services: ${SERVICES_BIN}`);
+    }
+    bins.push(SERVICES_BIN);
+  }
   const appsDir = stageApps(bins);
   // wash-priv claims a reservedID (com.wash.priv) which the registry
   // refuses from a non-root-owned binary by default. The e2e dir is
@@ -294,6 +309,15 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
     env.WASH_PRIV_IDLE = '0';
     // Point the audit log somewhere bounded.
     env.WASH_PRIV_AUDIT_PATH = join(appsDir, 'priv-audit.log');
+  }
+  // extraEnv applied last so tests can override anything the fixture
+  // set above (rare, but useful — e.g. point WASH_PRIV_IDLE back on
+  // for a timeout test). Empty string deletes the var.
+  if (opts.extraEnv) {
+    for (const [k, v] of Object.entries(opts.extraEnv)) {
+      if (v === '') delete env[k];
+      else env[k] = v;
+    }
   }
 
   const proc = spawn(ROUTER_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'], env });

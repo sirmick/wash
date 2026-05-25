@@ -112,6 +112,15 @@ type selectReq struct {
 
 type emptyReq struct{}
 
+// deeplinkReq is the cross-app deeplink payload. Distinct shape from
+// selectReq because cross-app deeplinks carry only the unit name —
+// range / priority / as_root come from the FE's own toolbar state via
+// the existing onPickUnit code path, so a deeplinked window looks
+// identical to one where the user clicked the sidebar.
+type deeplinkReq struct {
+	Unit string `cbor:"unit"`
+}
+
 func registerHandlers(b *sdk.Bus) {
 	sdk.HandleVoid(b, "select", func(c *sdk.Conn, _ string, req selectReq) error {
 		// Spawning blocks on the stream stop, so off-goroutine.
@@ -125,6 +134,23 @@ func registerHandlers(b *sdk.Bus) {
 	sdk.HandleVoid(b, "stop", func(_ *sdk.Conn, _ string, _ emptyReq) error {
 		stopStream()
 		return nil
+	})
+	// Cross-app deeplink: another app (wash-services) asks us to focus
+	// a specific unit. We can't reuse the bus's cmd.* pattern handler
+	// because patterns are scoped to own-FE messages; cross-app drops
+	// straight through to fallback. Instead we accept a typed kind and
+	// echo it down to our own FE, which runs onPickUnit — identical to
+	// a sidebar click, so toolbar state stays consistent.
+	// HandleVoid (not HandleFromVoid) so the same kind works for both
+	// own-FE drivers (CLI tests, tooling) and cross-app deeplinks.
+	// The handler just echoes the unit down to the FE — no privilege
+	// concerns regardless of sender.
+	sdk.HandleVoid(b, "cmd.select_unit", func(c *sdk.Conn, _ string, req deeplinkReq) error {
+		log.Printf("wash-journal: cmd.select_unit unit=%q", req.Unit)
+		return c.SendAppMsg(map[string]any{
+			"kind": "cmd.select_unit",
+			"unit": req.Unit,
+		})
 	})
 }
 

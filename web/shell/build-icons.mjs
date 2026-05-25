@@ -31,6 +31,7 @@ const ICONS = [
   'shield-check',   // wash-priv (privilege gateway)
   'scroll-text',    // wash-journal + wash-syslogs (sister apps, shared icon)
   'file-text',      // wash-syslogs sidebar rows
+  'server-cog',     // wash-services
 ];
 
 // Resolve via require so pnpm's nested layout is fine.

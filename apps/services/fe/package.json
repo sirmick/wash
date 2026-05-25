@@ -1,5 +1,5 @@
 {
-  "name": "@wash/app-priv",
+  "name": "@wash/app-services",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -7,10 +7,8 @@
     "build": "vite build"
   },
   "dependencies": {
-    "@noble/ciphers": "^2.2.0",
-    "@noble/curves": "^2.2.0",
-    "@noble/hashes": "^2.2.0",
     "@wash/ui": "workspace:*",
+    "lucide-solid": "^1.16.0",
     "solid-js": "^1.9.13"
   },
   "devDependencies": {

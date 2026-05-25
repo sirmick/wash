@@ -14,7 +14,7 @@ GOARCH  ?= amd64
 GOFLAGS := -trimpath -ldflags=-s\ -w -tags netgo,osusergo
 
 OUT     := out
-BINS    := wash-router wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-settings wash-top wash-priv wash-journal wash-syslogs wash-launch
+BINS    := wash-router wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-launch
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -90,6 +90,9 @@ JOURNAL_STAMP   := $(JOURNAL_ASSETS)/.stamp
 SYSLOGS_ASSETS  := apps/syslogs/be/assets
 SYSLOGS_STAMP   := $(SYSLOGS_ASSETS)/.stamp
 
+SERVICES_ASSETS := apps/services/be/assets
+SERVICES_STAMP  := $(SERVICES_ASSETS)/.stamp
+
 .PHONY: all
 all: $(TARGETS)
 
@@ -155,6 +158,10 @@ web-journal: web-deps
 web-syslogs: web-deps
 	@$(PNPM) --filter @wash/app-syslogs run build
 
+.PHONY: web-services
+web-services: web-deps
+	@$(PNPM) --filter @wash/app-services run build
+
 # embed-into-cmd helper. Usage: $(call embed,<src dist dir>,<dst assets dir>)
 #
 # Files land under cmd/<bin>/assets/ and are picked up by //go:embed
@@ -208,6 +215,9 @@ $(JOURNAL_STAMP): web-journal
 $(SYSLOGS_STAMP): web-syslogs
 	$(call embed_dist,apps/syslogs/fe/dist,$(SYSLOGS_ASSETS))
 
+$(SERVICES_STAMP): web-services
+	$(call embed_dist,apps/services/fe/dist,$(SERVICES_ASSETS))
+
 # ----- go stage -----
 
 $(OUT)/wash-router: $(ROUTER_STAMP) | $(OUT)
@@ -249,6 +259,9 @@ $(OUT)/wash-journal: $(JOURNAL_STAMP) | $(OUT)
 $(OUT)/wash-syslogs: $(SYSLOGS_STAMP) | $(OUT)
 	$(call go_build,$@,apps/syslogs/be/cmd)
 
+$(OUT)/wash-services: $(SERVICES_STAMP) | $(OUT)
+	$(call go_build,$@,apps/services/be/cmd)
+
 # wash-launch is a CLI, not an app. No FE bundle, no embedded assets.
 $(OUT)/wash-launch: | $(OUT)
 	$(call go_build,$@,cmd/wash-launch)
@@ -278,7 +291,7 @@ test-app: $(OUT)/wash-priv-fakesudo
 # Adding an app: extract into apps/<name>/be/, drop a
 # cmd/wash/imports_<name>.go blank-import, add its asset stamp to
 # the dep list below.
-MULTICALL_STAMPS := $(ABOUT_STAMP) $(BULK_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(PRIV_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP)
+MULTICALL_STAMPS := $(ABOUT_STAMP) $(BULK_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PRIV_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP)
 
 # Adding wash_test_app to the tags pulls the test app's blank-import
 # in (which is otherwise excluded by cmd/wash/imports_test.go's
@@ -313,13 +326,16 @@ e2e: test-app
 linux-arm64:
 	$(MAKE) GOARCH=arm64 all
 
-# One-command RISC-V TinyEMU demo build: GOARCH=riscv64 wash bins +
-# Linux Image + alpine-riscv64 rootfs.ext2, all installed into
-# web/demo/public/tinyemu/ with the names wash-riscv64.cfg reads.
+# wash-vm: build the full RISC-V Linux VM (kernel + firmware + rootfs)
+# and install artifacts where wash-vm/web's index.html expects them.
 # Requires Docker (kernel + rootfs both build in containers).
+.PHONY: vm
+vm:
+	$(MAKE) -C wash-vm/image all
+
+# Legacy alias.
 .PHONY: rv
-rv:
-	$(MAKE) -C image-rv all
+rv: vm
 
 .PHONY: clean
 clean:

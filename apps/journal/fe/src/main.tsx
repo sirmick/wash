@@ -137,6 +137,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         // when the user accepts a priv prompt.
         if (typeof m.as_root === 'boolean') setAsRoot(m.as_root);
         return;
+      case 'cmd.select_unit': {
+        // Cross-app deeplink from wash-services. The BE echoes the
+        // unit down here so we can run the same code path a sidebar
+        // click would — toolbar range/priority stay on the user's
+        // current selection and the sidebar row highlights.
+        const u = typeof m.unit === 'string' ? m.unit : '';
+        onPickUnit(u === '' ? SYSTEM_KEY : u);
+        return;
+      }
     }
   };
 
@@ -398,6 +407,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         <div style={{ overflow: 'auto', flex: 1 }}>
           <div
             data-testid="journal-system-row"
+            data-selected={selected() === SYSTEM_KEY ? 'true' : undefined}
             style={unitRowStyle(true, selected() === SYSTEM_KEY)}
             onClick={() => onPickUnit(SYSTEM_KEY)}
           >
@@ -415,6 +425,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 <div
                   data-testid="journal-unit-row"
                   data-unit-name={u.name}
+                  data-selected={selected() === u.name ? 'true' : undefined}
                   style={unitRowStyle(active || failed, selected() === u.name)}
                   onClick={() => onPickUnit(u.name)}
                   title={`${u.name}\n${u.active}/${u.sub}\n${u.description}`}

@@ -101,6 +101,91 @@ test.describe('journal app', () => {
     );
   });
 
+  test('sidebar click moves the data-selected highlight', async ({ page, router }) => {
+    await page.goto(router.url);
+    await openJournal(page);
+
+    await expect.poll(
+      () => page.locator('[data-testid="journal-unit-row"]').count(),
+      { timeout: 5_000 },
+    ).toBeGreaterThan(0);
+
+    // Initial: System row is selected, no unit row is.
+    const systemRow = page.locator('[data-testid="journal-system-row"]');
+    await expect(systemRow).toHaveAttribute('data-selected', 'true');
+    await expect(page.locator('[data-testid="journal-unit-row"][data-selected="true"]')).toHaveCount(0);
+
+    // Pick any unit; the click should move data-selected from System
+    // to that row. The selection is what tells the user which unit's
+    // logs are currently in view.
+    const firstUnit = page.locator('[data-testid="journal-unit-row"]').first();
+    const name = await firstUnit.getAttribute('data-unit-name');
+    expect(name).toBeTruthy();
+    await firstUnit.click();
+
+    await expect(firstUnit).toHaveAttribute('data-selected', 'true');
+    await expect(systemRow).not.toHaveAttribute('data-selected', 'true');
+    await expect(page.locator('[data-testid="journal-unit-row"][data-selected="true"]')).toHaveCount(1);
+
+    // Sanity: click another row → highlight moves to it.
+    const rows = page.locator('[data-testid="journal-unit-row"]');
+    const count = await rows.count();
+    if (count >= 2) {
+      const second = rows.nth(1);
+      await second.click();
+      await expect(second).toHaveAttribute('data-selected', 'true');
+      await expect(firstUnit).not.toHaveAttribute('data-selected', 'true');
+    }
+    // Suppress the unused-router warning — this test asserts purely
+    // FE state but the same fixture spawns the router. Reference it
+    // so the eslint pass doesn't flag.
+    void router;
+  });
+
+  test('cross-app cmd.select_unit drives the same selection as a click', async ({ page, router }) => {
+    await page.goto(router.url);
+    await openJournal(page);
+
+    await expect.poll(
+      () => page.locator('[data-testid="journal-unit-row"]').count(),
+      { timeout: 5_000 },
+    ).toBeGreaterThan(0);
+
+    // Choose a target unit from the list. We don't care which one —
+    // the assertion is about the deeplink driving the same observable
+    // outcome a sidebar click does.
+    const target = page.locator('[data-testid="journal-unit-row"]').first();
+    const name = await target.getAttribute('data-unit-name');
+    expect(name).toBeTruthy();
+
+    // Pull the journal's instance id from the router log. The "ready"
+    // line is logged once per instance; openJournal already awaited
+    // the FE visible state, so the line is guaranteed present.
+    const m = router.log().match(/wash-journal ready instance=(i-\d+)/);
+    if (!m) throw new Error('journal instance id not found in router log:\n' + router.log());
+    const instanceID = m[1];
+
+    // Deeplink via the control-socket sendAppMsg helper. The router
+    // delivers with from=nil, but the journal BE's HandleVoid for
+    // cmd.select_unit accepts any sender — it just echoes the unit
+    // to the FE, which runs the same onPickUnit code path a sidebar
+    // click would.
+    await router.sendAppMsg(instanceID, {
+      kind: 'cmd.select_unit',
+      unit: name!,
+    });
+
+    // Same FE outcome as the click test.
+    await expect(target).toHaveAttribute('data-selected', 'true');
+    await expect(page.locator('[data-testid="journal-system-row"]')).not.toHaveAttribute('data-selected', 'true');
+
+    // Same BE outcome — the stream restarted with the unit.
+    await router.waitForLog(
+      new RegExp(`wash-journal stream gen=\\d+ unit="${escapeRegex(name!)}" range=boot`),
+      5_000,
+    );
+  });
+
   test('text filter narrows visible rows', async ({ page, router }) => {
     await page.goto(router.url);
     await openJournal(page);
