@@ -2,4 +2,4 @@
 
 package main
 
-import _ "github.com/sirmick/wash/internal/apps/syslogs"
+import _ "github.com/sirmick/wash/apps/syslogs/be"

@@ -2,4 +2,4 @@
 
 package main
 
-import _ "github.com/sirmick/wash/internal/apps/journal"
+import _ "github.com/sirmick/wash/apps/journal/be"

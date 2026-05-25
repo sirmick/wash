@@ -2,4 +2,4 @@
 
 package main
 
-import _ "github.com/sirmick/wash/internal/apps/bulk"
+import _ "github.com/sirmick/wash/apps/bulk/be"

@@ -7,4 +7,4 @@
 // stays out of the registered set.
 package main
 
-import _ "github.com/sirmick/wash/internal/apps/test"
+import _ "github.com/sirmick/wash/apps/test/be"

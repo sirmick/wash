@@ -10,6 +10,7 @@
 cmd/*/assets/
 internal/apps/*/assets/
 internal/runner/*/assets/
+apps/*/be/assets/
 web/shell/public/vendor/
 e2e/test-results/
 e2e/playwright-report/

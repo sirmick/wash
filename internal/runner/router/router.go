@@ -25,6 +25,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -313,7 +314,7 @@ func Run(args []string) int {
 			return 1
 		}
 	} else {
-		if err := runShellOverStream(ctx, r, transportPath, *readyPath, logf); err != nil {
+		if err := runShellOverStream(ctx, r, transportScheme, transportPath, *readyPath, logf); err != nil {
 			logger.Printf("%s transport: %v", transportScheme, err)
 			return 1
 		}
@@ -344,10 +345,12 @@ func parseTransport(s string) (scheme, path string, err error) {
 	switch scheme {
 	case "ws":
 		return "", "", fmt.Errorf("ws scheme does not take a path")
-	case "virtio-console", "serial":
-		// ok
+	case "virtio-console", "serial", "fd":
+		// fd:<N> takes an integer; supervisor pre-opens the device
+		// and we wrap the inherited fd. Sidesteps a TinyEMU kernel
+		// hang on first virtio-console RDWR open from inside wash.
 	default:
-		return "", "", fmt.Errorf("unsupported scheme %q (expected virtio-console, serial, or ws)", scheme)
+		return "", "", fmt.Errorf("unsupported scheme %q (expected virtio-console, serial, fd, or ws)", scheme)
 	}
 	if path == "" {
 		return "", "", fmt.Errorf("%s: path is empty", scheme)
@@ -365,10 +368,37 @@ func parseTransport(s string) (scheme, path string, err error) {
 // channel shouldn't prevent the shell from running. In the v86 demo
 // the outer JS treats the absence of a READY token as "still booting,"
 // which the user sees as the boot xterm staying visible longer.
-func runShellOverStream(ctx context.Context, r *router.Router, path, readyPath string, logf func(string, ...any)) error {
-	f, err := os.OpenFile(path, os.O_RDWR, 0)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", path, err)
+func runShellOverStream(ctx context.Context, r *router.Router, scheme, path, readyPath string, logf func(string, ...any)) error {
+	// Two scheme branches:
+	//   "fd"                  — path is an integer fd number, opened by
+	//                           the caller (supervisor pre-opens with
+	//                           `exec 3<>/dev/hvc2`). We wrap with
+	//                           os.NewFile, sidestepping a TinyEMU
+	//                           kernel hang on first virtio-console
+	//                           RDWR open from inside a Go binary.
+	//   "virtio-console" /
+	//   "serial"              — path is a device path; OpenFile RDWR
+	//                           with O_NONBLOCK.
+	var f *os.File
+	switch scheme {
+	case "fd":
+		n, err := strconv.Atoi(path)
+		if err != nil {
+			return fmt.Errorf("transport fd:%s: %w", path, err)
+		}
+		logf("wrap inherited fd=%d", n)
+		f = os.NewFile(uintptr(n), fmt.Sprintf("inherited-fd-%d", n))
+		if f == nil {
+			return fmt.Errorf("transport fd:%d: NewFile returned nil (bad fd?)", n)
+		}
+	default:
+		logf("open %s O_RDWR|O_NONBLOCK", path)
+		var err error
+		f, err = os.OpenFile(path, os.O_RDWR|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			return fmt.Errorf("open %s: %w", path, err)
+		}
+		logf("open %s succeeded fd=%d", path, f.Fd())
 	}
 	defer f.Close()
 	if readyPath != "" {

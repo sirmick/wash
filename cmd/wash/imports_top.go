@@ -2,4 +2,4 @@
 
 package main
 
-import _ "github.com/sirmick/wash/internal/apps/top"
+import _ "github.com/sirmick/wash/apps/top/be"

@@ -1,7 +1,7 @@
 # wash — top-level build
 #
 # Two stages, wired together:
-#   1. web — Vite library builds; output copied into cmd/<bin>/assets/
+#   1. web — Vite library builds; output copied into apps/<X>/be/assets/
 #            for //go:embed.
 #   2. go  — CGO_ENABLED=0 go build -trimpath -ldflags="-s -w".
 #
@@ -54,40 +54,40 @@ PNPM    := pnpm
 ROUTER_ASSETS  := internal/runner/router/assets
 ROUTER_STAMP   := $(ROUTER_ASSETS)/.stamp
 
-SESSION_ASSETS := internal/apps/session/assets
+SESSION_ASSETS := apps/session/be/assets
 SESSION_STAMP  := $(SESSION_ASSETS)/.stamp
 
-ABOUT_ASSETS   := internal/apps/about/assets
+ABOUT_ASSETS   := apps/about/be/assets
 ABOUT_STAMP    := $(ABOUT_ASSETS)/.stamp
 
-TEST_ASSETS    := internal/apps/test/assets
+TEST_ASSETS    := apps/test/be/assets
 TEST_STAMP     := $(TEST_ASSETS)/.stamp
 
-TERM_ASSETS    := internal/apps/term/assets
+TERM_ASSETS    := apps/term/be/assets
 TERM_STAMP     := $(TERM_ASSETS)/.stamp
 
-FM_ASSETS      := internal/apps/fm/assets
+FM_ASSETS      := apps/fm/be/assets
 FM_STAMP       := $(FM_ASSETS)/.stamp
 
-BULK_ASSETS    := internal/apps/bulk/assets
+BULK_ASSETS    := apps/bulk/be/assets
 BULK_STAMP     := $(BULK_ASSETS)/.stamp
 
-EDIT_ASSETS    := internal/apps/edit/assets
+EDIT_ASSETS    := apps/edit/be/assets
 EDIT_STAMP     := $(EDIT_ASSETS)/.stamp
 
-SETTINGS_ASSETS := internal/apps/settings/assets
+SETTINGS_ASSETS := apps/settings/be/assets
 SETTINGS_STAMP  := $(SETTINGS_ASSETS)/.stamp
 
-TOP_ASSETS      := internal/apps/top/assets
+TOP_ASSETS      := apps/top/be/assets
 TOP_STAMP       := $(TOP_ASSETS)/.stamp
 
-PRIV_ASSETS     := internal/apps/priv/assets
+PRIV_ASSETS     := apps/priv/be/assets
 PRIV_STAMP      := $(PRIV_ASSETS)/.stamp
 
-JOURNAL_ASSETS  := internal/apps/journal/assets
+JOURNAL_ASSETS  := apps/journal/be/assets
 JOURNAL_STAMP   := $(JOURNAL_ASSETS)/.stamp
 
-SYSLOGS_ASSETS  := internal/apps/syslogs/assets
+SYSLOGS_ASSETS  := apps/syslogs/be/assets
 SYSLOGS_STAMP   := $(SYSLOGS_ASSETS)/.stamp
 
 .PHONY: all
@@ -101,59 +101,59 @@ $(OUT):
 # pnpm install once; subsequent runs are fast no-ops.
 .PHONY: web-deps
 web-deps:
-	@cd web && $(PNPM) install --silent
+	@$(PNPM) install --silent
 
 .PHONY: web-shell
 web-shell: web-deps
-	@cd web && $(PNPM) --filter @wash/shell run build
+	@$(PNPM) --filter @wash/shell run build
 
 .PHONY: web-session
 web-session: web-deps
-	@cd web && $(PNPM) --filter @wash/app-session run build
+	@$(PNPM) --filter @wash/app-session run build
 
 .PHONY: web-about
 web-about: web-deps
-	@cd web && $(PNPM) --filter @wash/app-about run build
+	@$(PNPM) --filter @wash/app-about run build
 
 .PHONY: web-test
 web-test: web-deps
-	@cd web && $(PNPM) --filter @wash/app-test run build
+	@$(PNPM) --filter @wash/app-test run build
 
 .PHONY: web-term
 web-term: web-deps
-	@cd web && $(PNPM) --filter @wash/app-term run build
+	@$(PNPM) --filter @wash/app-term run build
 
 .PHONY: web-fm
 web-fm: web-deps
-	@cd web && $(PNPM) --filter @wash/app-fm run build
+	@$(PNPM) --filter @wash/app-fm run build
 
 .PHONY: web-bulk
 web-bulk: web-deps
-	@cd web && $(PNPM) --filter @wash/app-bulk run build
+	@$(PNPM) --filter @wash/app-bulk run build
 
 .PHONY: web-edit
 web-edit: web-deps
-	@cd web && $(PNPM) --filter @wash/app-edit run build
+	@$(PNPM) --filter @wash/app-edit run build
 
 .PHONY: web-settings
 web-settings: web-deps
-	@cd web && $(PNPM) --filter @wash/app-settings run build
+	@$(PNPM) --filter @wash/app-settings run build
 
 .PHONY: web-top
 web-top: web-deps
-	@cd web && $(PNPM) --filter @wash/app-top run build
+	@$(PNPM) --filter @wash/app-top run build
 
 .PHONY: web-priv
 web-priv: web-deps
-	@cd web && $(PNPM) --filter @wash/app-priv run build
+	@$(PNPM) --filter @wash/app-priv run build
 
 .PHONY: web-journal
 web-journal: web-deps
-	@cd web && $(PNPM) --filter @wash/app-journal run build
+	@$(PNPM) --filter @wash/app-journal run build
 
 .PHONY: web-syslogs
 web-syslogs: web-deps
-	@cd web && $(PNPM) --filter @wash/app-syslogs run build
+	@$(PNPM) --filter @wash/app-syslogs run build
 
 # embed-into-cmd helper. Usage: $(call embed,<src dist dir>,<dst assets dir>)
 #
@@ -173,40 +173,40 @@ $(ROUTER_STAMP): web-shell
 	$(call embed_dist,web/shell/dist,$(ROUTER_ASSETS))
 
 $(SESSION_STAMP): web-session
-	$(call embed_dist,web/apps/session/dist,$(SESSION_ASSETS))
+	$(call embed_dist,apps/session/fe/dist,$(SESSION_ASSETS))
 
 $(ABOUT_STAMP): web-about
-	$(call embed_dist,web/apps/about/dist,$(ABOUT_ASSETS))
+	$(call embed_dist,apps/about/fe/dist,$(ABOUT_ASSETS))
 
 $(TEST_STAMP): web-test
-	$(call embed_dist,web/apps/test/dist,$(TEST_ASSETS))
+	$(call embed_dist,apps/test/fe/dist,$(TEST_ASSETS))
 
 $(TERM_STAMP): web-term
-	$(call embed_dist,web/apps/term/dist,$(TERM_ASSETS))
+	$(call embed_dist,apps/term/fe/dist,$(TERM_ASSETS))
 
 $(FM_STAMP): web-fm
-	$(call embed_dist,web/apps/fm/dist,$(FM_ASSETS))
+	$(call embed_dist,apps/fm/fe/dist,$(FM_ASSETS))
 
 $(BULK_STAMP): web-bulk
-	$(call embed_dist,web/apps/bulk/dist,$(BULK_ASSETS))
+	$(call embed_dist,apps/bulk/fe/dist,$(BULK_ASSETS))
 
 $(EDIT_STAMP): web-edit
-	$(call embed_dist,web/apps/edit/dist,$(EDIT_ASSETS))
+	$(call embed_dist,apps/edit/fe/dist,$(EDIT_ASSETS))
 
 $(SETTINGS_STAMP): web-settings
-	$(call embed_dist,web/apps/settings/dist,$(SETTINGS_ASSETS))
+	$(call embed_dist,apps/settings/fe/dist,$(SETTINGS_ASSETS))
 
 $(TOP_STAMP): web-top
-	$(call embed_dist,web/apps/top/dist,$(TOP_ASSETS))
+	$(call embed_dist,apps/top/fe/dist,$(TOP_ASSETS))
 
 $(PRIV_STAMP): web-priv
-	$(call embed_dist,web/apps/priv/dist,$(PRIV_ASSETS))
+	$(call embed_dist,apps/priv/fe/dist,$(PRIV_ASSETS))
 
 $(JOURNAL_STAMP): web-journal
-	$(call embed_dist,web/apps/journal/dist,$(JOURNAL_ASSETS))
+	$(call embed_dist,apps/journal/fe/dist,$(JOURNAL_ASSETS))
 
 $(SYSLOGS_STAMP): web-syslogs
-	$(call embed_dist,web/apps/syslogs/dist,$(SYSLOGS_ASSETS))
+	$(call embed_dist,apps/syslogs/fe/dist,$(SYSLOGS_ASSETS))
 
 # ----- go stage -----
 
@@ -214,40 +214,40 @@ $(OUT)/wash-router: $(ROUTER_STAMP) | $(OUT)
 	$(call go_build,$@,cmd/wash-router)
 
 $(OUT)/wash-session: $(SESSION_STAMP) | $(OUT)
-	$(call go_build,$@,cmd/wash-session)
+	$(call go_build,$@,apps/session/be/cmd)
 
 $(OUT)/wash-about: $(ABOUT_STAMP) | $(OUT)
-	$(call go_build,$@,cmd/wash-about)
+	$(call go_build,$@,apps/about/be/cmd)
 
 $(OUT)/wash-test: $(TEST_STAMP) | $(OUT)
-	$(call go_build,$@,cmd/wash-test)
+	$(call go_build,$@,apps/test/be/cmd)
 
 $(OUT)/wash-term: $(TERM_STAMP) | $(OUT)
-	$(call go_build,$@,cmd/wash-term)
+	$(call go_build,$@,apps/term/be/cmd)
 
 $(OUT)/wash-fm: $(FM_STAMP) | $(OUT)
-	$(call go_build,$@,cmd/wash-fm)
+	$(call go_build,$@,apps/fm/be/cmd)
 
 $(OUT)/wash-bulk: $(BULK_STAMP) | $(OUT)
-	$(call go_build,$@,cmd/wash-bulk)
+	$(call go_build,$@,apps/bulk/be/cmd)
 
 $(OUT)/wash-edit: $(EDIT_STAMP) | $(OUT)
-	$(call go_build,$@,cmd/wash-edit)
+	$(call go_build,$@,apps/edit/be/cmd)
 
 $(OUT)/wash-settings: $(SETTINGS_STAMP) | $(OUT)
-	$(call go_build,$@,cmd/wash-settings)
+	$(call go_build,$@,apps/settings/be/cmd)
 
 $(OUT)/wash-top: $(TOP_STAMP) | $(OUT)
-	$(call go_build,$@,cmd/wash-top)
+	$(call go_build,$@,apps/top/be/cmd)
 
 $(OUT)/wash-priv: $(PRIV_STAMP) | $(OUT)
-	$(call go_build,$@,cmd/wash-priv)
+	$(call go_build,$@,apps/priv/be/cmd)
 
 $(OUT)/wash-journal: $(JOURNAL_STAMP) | $(OUT)
-	$(call go_build,$@,cmd/wash-journal)
+	$(call go_build,$@,apps/journal/be/cmd)
 
 $(OUT)/wash-syslogs: $(SYSLOGS_STAMP) | $(OUT)
-	$(call go_build,$@,cmd/wash-syslogs)
+	$(call go_build,$@,apps/syslogs/be/cmd)
 
 # wash-launch is a CLI, not an app. No FE bundle, no embedded assets.
 $(OUT)/wash-launch: | $(OUT)
@@ -275,7 +275,7 @@ test-app: $(OUT)/wash-priv-fakesudo
 # binaries (BINS above) are unaffected.
 #
 # Only includes extracted apps (Phase 4+: wash-about so far).
-# Adding an app: extract into internal/apps/<name>/, drop a
+# Adding an app: extract into apps/<name>/be/, drop a
 # cmd/wash/imports_<name>.go blank-import, add its asset stamp to
 # the dep list below.
 MULTICALL_STAMPS := $(ABOUT_STAMP) $(BULK_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(PRIV_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP)
@@ -313,11 +313,18 @@ e2e: test-app
 linux-arm64:
 	$(MAKE) GOARCH=arm64 all
 
+# One-command RISC-V TinyEMU demo build: GOARCH=riscv64 wash bins +
+# Linux Image + alpine-riscv64 rootfs.ext2, all installed into
+# web/demo/public/tinyemu/ with the names wash-riscv64.cfg reads.
+# Requires Docker (kernel + rootfs both build in containers).
+.PHONY: rv
+rv:
+	$(MAKE) -C image-rv all
+
 .PHONY: clean
 clean:
 	rm -rf $(OUT)
-	rm -rf web/*/dist web/apps/*/dist
-	rm -rf cmd/*/assets
+	rm -rf web/*/dist apps/*/fe/dist
 
 .PHONY: verify
 verify: all
@@ -341,5 +348,5 @@ dev: $(OUT)/wash-router $(OUT)/wash-session $(OUT)/wash-about
 	@echo "wash dev: router :11000 + Vite :5173 — open http://localhost:5173/"
 	@trap 'kill 0' INT TERM EXIT; \
 	  ( WASH_APPS_DIR=$(DEV_APPS) $(OUT)/wash-router ) & \
-	  ( cd web && $(PNPM) --filter @wash/shell run dev ) & \
+	  ( $(PNPM) --filter @wash/shell run dev ) & \
 	  wait

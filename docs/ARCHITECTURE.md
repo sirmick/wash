@@ -114,7 +114,7 @@ program plus an embedded frontend (FE) web-component bundle.
 - **pty** — originally specified as a native router service with
   router-owned lifetime, motivated by reattach/survive-disconnect. The
   **v0.1 implementation** keeps pty *inside the terminal app process*
-  (`cmd/wash-term` imports `creack/pty` directly) because v0.1 does
+  (`apps/term/be` imports `creack/pty` directly) because v0.1 does
   not ship reattach (Phase 5) and the splice argument is thinner across
   the WS framing layer than a literal `splice(2)` call would be.
   Bytes still flow pty ↔ wash-term ↔ router ↔ WS verbatim; raw

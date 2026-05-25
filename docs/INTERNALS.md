@@ -28,9 +28,13 @@ out/                 build output (binaries)
 Makefile             two-stage build (web → embed → go build)
 ```
 
-Every app binary is `cmd/wash-<name>/` paired with `web/apps/<name>/`.
-The Makefile's `embed_dist` rule copies the Vite output into
-`cmd/wash-<name>/assets/`, which the binary then `//go:embed`s.
+Every app lives in `apps/<name>/`, with the Go backend under `be/`
+(plus a `cmd/` shim for the standalone binary) and the Vite bundle
+under `fe/`. The Makefile's `embed_dist` rule copies the Vite output
+into `apps/<name>/be/assets/`, which the binary then `//go:embed`s.
+Five non-app entries stay under `cmd/`: the multicall dispatcher
+(`cmd/wash`), the router/launch services, the `wash-sudo` CLI, and
+the `wash-priv-fakesudo` e2e stub.
 
 ## Process model
 
@@ -230,7 +234,7 @@ to the router via `t:"log"` so the BE log shows what the browser sees.
 isn't aware. The cam div translates the windows layer by
 `(-vx*W, -vy*H)`. Ctrl+Alt+arrows pans. Persists in localStorage.
 
-## Web apps (`web/apps/<name>/`)
+## Web apps (`apps/<name>/fe/`)
 
 Each app is a Vite library bundle that exports a custom element. The
 shell loads the bundle on demand (bundle channel) and mounts the

@@ -1,0 +1,7 @@
+packages:
+  - "web/shell"
+  - "web/lib"
+  - "web/demo"
+  - "apps/*/fe"
+allowBuilds:
+  esbuild: true

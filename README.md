@@ -89,8 +89,8 @@ wear a red ROOT stripe so privilege is visible.
 
 ## Apps
 
-Each app is one binary in `cmd/wash-<name>/` paired with one web
-component bundle in `web/apps/<name>/`. The Makefile builds them all
+Each app lives in `apps/<name>/`, with the Go backend under `be/` and
+the web component bundle under `fe/`. The Makefile builds them all
 and embeds the FE bundle into the BE binary.
 
 | App           | ID                  | What it does |

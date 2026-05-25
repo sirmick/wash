@@ -2,4 +2,4 @@
 
 package main
 
-import _ "github.com/sirmick/wash/internal/apps/settings"
+import _ "github.com/sirmick/wash/apps/settings/be"

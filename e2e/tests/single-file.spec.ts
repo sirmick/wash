@@ -31,12 +31,12 @@ const APPS: AppBundle[] = [
   // Caps after the bundle-size pass: solid-js, @xterm/*, @wash/ui are
   // import-map externals (served from /vendor/*) so they don't add to
   // the per-app bundle. Re-evaluate caps when adding a new shared dep.
-  { name: 'session', dir: 'web/apps/session/dist', maxBytes: 70_000 },
-  { name: 'about',   dir: 'web/apps/about/dist',   maxBytes: 10_000 },
-  { name: 'test',    dir: 'web/apps/test/dist',    maxBytes: 30_000 },
-  { name: 'term',    dir: 'web/apps/term/dist',    maxBytes: 30_000 },
-  { name: 'fm',      dir: 'web/apps/fm/dist',      maxBytes: 100_000 },
-  { name: 'bulk',    dir: 'web/apps/bulk/dist',    maxBytes: 30_000 },
+  { name: 'session', dir: 'apps/session/fe/dist', maxBytes: 70_000 },
+  { name: 'about',   dir: 'apps/about/fe/dist',   maxBytes: 10_000 },
+  { name: 'test',    dir: 'apps/test/fe/dist',    maxBytes: 30_000 },
+  { name: 'term',    dir: 'apps/term/fe/dist',    maxBytes: 30_000 },
+  { name: 'fm',      dir: 'apps/fm/fe/dist',      maxBytes: 100_000 },
+  { name: 'bulk',    dir: 'apps/bulk/fe/dist',    maxBytes: 30_000 },
 ];
 
 // ALLOWED_EXTERNALS are the bare specifiers served via the import map

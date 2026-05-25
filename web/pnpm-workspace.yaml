@@ -1,7 +1,0 @@
-packages:
-  - "shell"
-  - "apps/*"
-  - "lib"
-  - "demo"
-allowBuilds:
-  esbuild: true

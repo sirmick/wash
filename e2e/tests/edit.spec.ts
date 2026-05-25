@@ -12,7 +12,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 function seed(root: string): void {
-  writeFileSync(join(root, 'hello.md'), '# hello\n\nfirst line\n');
+  writeFileSync(join(root, 'hello.txt'), '# hello\n\nfirst line\n');
   writeFileSync(join(root, 'config.json'), '{"a":1}\n');
   mkdirSync(join(root, 'src'));
   writeFileSync(join(root, 'src', 'index.js'), 'export const x = 1;\n');
@@ -34,13 +34,13 @@ test.describe('wash-edit', () => {
     const editor = await openEditor(page, router);
 
     // Sidebar shows the seeded files.
-    await expect(editor.locator('[data-testid="edit-entry-hello.md"]')).toBeVisible();
+    await expect(editor.locator('[data-testid="edit-entry-hello.txt"]')).toBeVisible();
     await expect(editor.locator('[data-testid="edit-entry-config.json"]')).toBeVisible();
 
-    // Double-click hello.md — single click selects, double click
+    // Double-click hello.txt — single click selects, double click
     // opens (matches fm). A tab appears, content lands in CM.
-    await editor.locator('[data-testid="edit-entry-hello.md"]').dblclick();
-    await expect(editor.locator('[data-testid="edit-tab-' + join(router.fmRoot, 'hello.md') + '"]')).toBeVisible();
+    await editor.locator('[data-testid="edit-entry-hello.txt"]').dblclick();
+    await expect(editor.locator('[data-testid="edit-tab-' + join(router.fmRoot, 'hello.txt') + '"]')).toBeVisible();
     await expect(editor.locator('.cm-content')).toContainText('first line');
   });
 
@@ -55,7 +55,7 @@ test.describe('wash-edit', () => {
 
   test('edit then Ctrl+S writes to disk', async ({ page, router }) => {
     const editor = await openEditor(page, router);
-    await editor.locator('[data-testid="edit-entry-hello.md"]').dblclick();
+    await editor.locator('[data-testid="edit-entry-hello.txt"]').dblclick();
     await expect(editor.locator('.cm-content')).toContainText('first line');
 
     // Focus the editor and type a new line.
@@ -64,7 +64,7 @@ test.describe('wash-edit', () => {
     await page.keyboard.type('appended\n');
 
     // Dirty marker on the tab.
-    const tab = editor.locator('[data-testid="edit-tab-' + join(router.fmRoot, 'hello.md') + '"]');
+    const tab = editor.locator('[data-testid="edit-tab-' + join(router.fmRoot, 'hello.txt') + '"]');
     await expect(tab).toHaveAttribute('data-dirty', 'true');
 
     // Save.
@@ -74,7 +74,7 @@ test.describe('wash-edit', () => {
     await expect(tab).not.toHaveAttribute('data-dirty', 'true');
 
     // On-disk content updated.
-    const updated = readFileSync(join(router.fmRoot, 'hello.md'), 'utf8');
+    const updated = readFileSync(join(router.fmRoot, 'hello.txt'), 'utf8');
     expect(updated).toContain('appended');
   });
 
@@ -130,8 +130,8 @@ test.describe('wash-edit', () => {
 
   test('Ctrl+W closes the active tab', async ({ page, router }) => {
     const editor = await openEditor(page, router);
-    await editor.locator('[data-testid="edit-entry-hello.md"]').dblclick();
-    const tab = editor.locator('[data-testid="edit-tab-' + join(router.fmRoot, 'hello.md') + '"]');
+    await editor.locator('[data-testid="edit-entry-hello.txt"]').dblclick();
+    const tab = editor.locator('[data-testid="edit-tab-' + join(router.fmRoot, 'hello.txt') + '"]');
     await expect(tab).toBeVisible();
     await editor.click();
     await page.keyboard.press('Control+w');
@@ -140,9 +140,9 @@ test.describe('wash-edit', () => {
 
   test('opening the same file twice converges on one tab', async ({ page, router }) => {
     const editor = await openEditor(page, router);
-    await editor.locator('[data-testid="edit-entry-hello.md"]').dblclick();
+    await editor.locator('[data-testid="edit-entry-hello.txt"]').dblclick();
     await editor.locator('[data-testid="edit-entry-config.json"]').dblclick();
-    await editor.locator('[data-testid="edit-entry-hello.md"]').dblclick();
+    await editor.locator('[data-testid="edit-entry-hello.txt"]').dblclick();
     // Exactly two tabs total. The close ✕ element shares the
     // edit-tab- prefix (edit-tab-close-…), so scope the count to
     // tabs whose id matches a real path (starts with "/").
