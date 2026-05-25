@@ -166,6 +166,17 @@ func (s *streamCtl) runDirect(ctx context.Context) {
 		stderrTxt := string(s.stderrAcc)
 		s.mu.Unlock()
 		if exitCode != 0 && looksLikePermDenied(stderrTxt) {
+			// Transparent escalation. The file needs root; reroute the
+			// same gen through wash-priv. The FE never sees perm_denied
+			// in the common case — it just observes the stream go
+			// running → running (via wash-priv) without a banner. If
+			// the privileged exec ALSO fails (priv rejection, SELinux,
+			// etc.) finishPriv's own perm_denied path surfaces it.
+			if !s.req.AsRoot && !s.closed.Load() {
+				s.req.AsRoot = true
+				s.runPriv(context.Background())
+				return
+			}
 			s.sendState("perm_denied", strings.TrimSpace(stderrTxt))
 			return
 		}

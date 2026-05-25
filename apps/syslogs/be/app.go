@@ -11,10 +11,11 @@
 //   - Containers / chroots without a running journald.
 //
 // Privilege: most /var/log/* files are root:adm 640. Users in `adm`
-// can read system logs unprivileged; everyone else gets the same
-// perm-denied → "Read with root" banner the journal app uses, OR
-// can launch this app via the "Root System Logs" synthetic launcher
-// entry (parallel to Root Terminal) so the binary starts as uid 0.
+// can read system logs unprivileged; everyone else gets transparent
+// escalation — runDirect detects "permission denied" from tail and
+// auto-retries through wash-priv (which prompts for sudo the first
+// time per session, then caches). The FE's "Read with root" banner
+// remains as a fallback if priv itself rejects the request.
 //
 // Wire shapes (BE→FE):
 //   {kind:"files", files:[{path, name, size, mtime}]}
@@ -81,10 +82,6 @@ func init() {
 			Icon:            syslogsIcon,
 			Instancing:      sdk.InstancingMulti,
 			Window:          &sdk.WindowHints{DefaultWidth: 900, DefaultHeight: 560},
-			// /var/log/* is mostly root:adm 640; many users will want
-			// the root variant by default. The synthetic launcher row
-			// makes that one-click.
-			RootVariant: &sdk.RootVariant{},
 		},
 		Assets:       sub,
 		OnReady:      onReady,

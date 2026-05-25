@@ -10,9 +10,9 @@
 //   - sidebar shows file paths + size/mtime, not units
 //   - no priority filter button (syslog files are mostly unstructured)
 //   - selecting a file is required (no auto-stream on launch)
-//   - the "Read with root" banner is the SAME ergonomic — and is
-//     additionally redundant with the "System Logs (root)" launcher
-//     entry, which spawns this binary as uid 0 from the start
+//   - perm-denied is rare in the user-visible state: the BE
+//     auto-retries via wash-priv when the unprivileged tail fails,
+//     so the user only sees the banner if priv itself was rejected
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component } from 'solid-js';
@@ -348,7 +348,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             when={sortedFiles().length > 0}
             fallback={
               <div style={{ padding: tokens.spaceLg + 'px', color: tokens.fgMuted, 'font-style': 'italic', 'font-size': tokens.fontSizeMd }}>
-                no readable files in /var/log — try the System Logs (root) launcher entry
+                no readable files in /var/log — click Refresh, or pick a file that requires root (you'll be prompted)
               </div>
             }
           >

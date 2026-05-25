@@ -1,9 +1,9 @@
-// wash-syslogs — the /var/log file tailer + the manifest-declared
-// root variant. Verifies the regular launcher entry mounts the app
-// with a sidebar of files, selecting a file streams parsed lines,
-// and the synthetic "System Logs (root)" entry exists in the start
-// menu (proving the new manifest.root_variant → catalog → launcher
-// pipeline works).
+// wash-syslogs — the /var/log file tailer. Verifies the launcher
+// entry mounts the app with a sidebar of files and selecting a file
+// streams parsed lines. Auto-escalation when a file requires root
+// (perm_denied → runPriv) is exercised by the BE log assertion in
+// the streaming test; the synthetic "Root System Logs" launcher
+// row was removed in favour of transparent escalation.
 //
 // Skipped on hosts where /var/log isn't readable at all — that's
 // usually a CI container with no syslog daemon at all, where the
@@ -47,9 +47,6 @@ test.use({
 
 async function openSyslogs(page: Page) {
   await page.locator('button[title="Apps"]').click();
-  // The root variant entry shares "System Logs" in its accessible
-  // name, so a name-based selector matches both rows. Use the
-  // testid the launcher stamps on the non-root entry directly.
   await page.locator('[data-testid="start-menu-com.wash.syslogs"]').click();
   await expect(page.locator('wash-app-syslogs')).toBeVisible();
   await expect(page.locator('[data-testid="syslogs-root"]')).toBeVisible();
@@ -121,28 +118,20 @@ test.describe('syslogs app', () => {
     ).not.toEqual('pending');
   });
 
-  test('"System Logs (root)" launcher row exists (manifest.root_variant)', async ({ page, router }) => {
+  test('no synthetic root-variant launcher row', async ({ page, router }) => {
+    // syslogs used to ship a RootVariant{} that materialized as a
+    // second start-menu entry. The auto-escalation rework removed
+    // it — assert it's gone so a future regression that re-adds the
+    // variant gets caught here.
     await page.goto(router.url);
     await page.locator('button[title="Apps"]').click();
+    await expect(page.getByTestId('start-menu-root-com.wash.syslogs')).toHaveCount(0);
 
-    // The synthetic row exists because wash-syslogs declares
-    // RootVariant{} in its manifest. data-testid is
-    // start-menu-root-<appID>; this is the proof that the catalog
-    // wire carries RootVariant through and the session FE renders it
-    // generically (not just for wash-term).
-    await expect(page.getByTestId('start-menu-root-com.wash.syslogs')).toBeVisible();
-
-    // wash-term still gets its custom-name + legacy testid for
-    // backward compat with existing tests.
+    // wash-term still has its custom-named root variant — the
+    // RootVariant pipeline itself is intact, only the syslogs use
+    // was retired.
     await expect(page.getByTestId('start-menu-root-terminal')).toBeVisible();
 
-    // The root entry's label mirrors the source app's name (no
-    // "(root)" suffix — visual disambiguation is the red icon tint
-    // alone). The distinct testid + the red-tinted icon make the
-    // intent clear without crowding the label.
-    await expect(page.getByTestId('start-menu-root-com.wash.syslogs')).toHaveText(/System Logs/);
-
-    // Sanity: router didn't crash on the new catalog message.
     expect(router.log()).not.toMatch(/panic/);
   });
 });
