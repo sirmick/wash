@@ -6,6 +6,9 @@
 // Usage:
 //   node cli.mjs reload                            # reload all browser tabs
 //   node cli.mjs reset                             # restart the VM (FE choice)
+//   node cli.mjs dump                              # ask FE to dump CPU+trap state
+//                                                  #   (output lands in [tinyemu.stderr])
+//   node cli.mjs mem 0x800003c0 64                 # hex-dump RAM at addr (max 256B)
 //   node cli.mjs input "uname -a\n"                # legacy console (hvc1)
 //   node cli.mjs input --port 1 "ls -l\n"          # hvc1 (login/getty)
 //   node cli.mjs input --port 2 "<wash bytes>"     # hvc2 (wash data, binary)
@@ -22,7 +25,7 @@ const SERVER = process.env.WASH_SERVER || 'ws://localhost:5180/ws';
 const [verb, ...rest] = process.argv.slice(2);
 
 if (!verb) {
-  console.error('usage: wash-rv {reload|reset|stop|run|input <bytes>|tail [--filter <source>]}');
+  console.error('usage: wash-rv {reload|reset|stop|run|dump|mem <addr> <len>|input <bytes>|tail [--filter <source>]}');
   process.exit(2);
 }
 
@@ -31,8 +34,16 @@ const ws = new WebSocket(SERVER);
 ws.on('open', () => {
   ws.send(JSON.stringify({ t: 'hello', role: 'admin' }));
 
-  if (verb === 'reload' || verb === 'reset' || verb === 'stop' || verb === 'run') {
+  if (verb === 'reload' || verb === 'reset' || verb === 'stop' || verb === 'run' || verb === 'dump') {
     ws.send(JSON.stringify({ t: 'ctl', verb }));
+    ws.close();
+    return;
+  }
+
+  if (verb === 'mem') {
+    const [addr, len] = rest;
+    if (!addr || !len) { console.error('mem: usage `wash-rv mem <addr> <len>` (e.g. wash-rv mem 0x800003c0 64)'); process.exit(2); }
+    ws.send(JSON.stringify({ t: 'ctl', verb: 'mem', addr, len }));
     ws.close();
     return;
   }

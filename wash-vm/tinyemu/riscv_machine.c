@@ -239,10 +239,12 @@ static void clint_write(void *opaque, uint32_t offset, uint32_t val,
     case 0x4000:
         m->timecmp = (m->timecmp & ~0xffffffff) | val;
         riscv_cpu_reset_mip(m->cpu_state, MIP_MTIP);
+        wash_cpu_arm_mtie(m->cpu_state);
         break;
     case 0x4004:
         m->timecmp = (m->timecmp & 0xffffffff) | ((uint64_t)val << 32);
         riscv_cpu_reset_mip(m->cpu_state, MIP_MTIP);
+        wash_cpu_arm_mtie(m->cpu_state);
         break;
     default:
         break;
@@ -535,8 +537,15 @@ static void fdt_prop_tab_str(FDTState *s, const char *prop_name,
     free(tab);
 }
 
-/* write the FDT to 'dst1'. return the FDT size in bytes */
-int fdt_output(FDTState *s, uint8_t *dst)
+/* write the FDT to 'dst1'. Optional `rsv` is a NULL-terminated array
+   of (addr,size) pairs to emit into the memreserve block — the FDT
+   spec requires Linux to leave those ranges alone. Pass NULL or an
+   empty list for the upstream "no reservations" behavior. */
+struct wash_mem_rsv {
+    uint64_t addr;
+    uint64_t size; /* 0 marks the end of the list */
+};
+int fdt_output_rsv(FDTState *s, uint8_t *dst, const struct wash_mem_rsv *rsv)
 {
     struct fdt_header *h;
     struct fdt_reserve_entry *re;
@@ -545,9 +554,9 @@ int fdt_output(FDTState *s, uint8_t *dst)
     int pos;
 
     assert(s->open_node_count == 0);
-    
+
     fdt_put32(s, FDT_END);
-    
+
     dt_struct_size = s->tab_len * sizeof(uint32_t);
     dt_strings_size = s->string_table_len;
 
@@ -570,8 +579,26 @@ int fdt_output(FDTState *s, uint8_t *dst)
         dst[pos++] = 0;
     }
     h->off_mem_rsvmap = cpu_to_be32(pos);
+    /* wash patch: emit caller-supplied reservations, then a terminator
+       (0,0). Linux treats the memreserve block as "do not allocate
+       from these ranges" — critical for protecting OpenSBI text from
+       being clobbered by the kernel's page allocator. Reservation
+       values are stored big-endian per FDT spec. */
+    /* cpu_to_be64 isn't in cutils.h — write each u64 as two big-endian
+       u32s (hi half first, matching the FDT memreserve layout). */
+    if (rsv) {
+        for (const struct wash_mem_rsv *r = rsv; r->size != 0; r++) {
+            uint32_t *w = (uint32_t *)(dst + pos);
+            w[0] = cpu_to_be32((uint32_t)(r->addr >> 32));
+            w[1] = cpu_to_be32((uint32_t)(r->addr));
+            w[2] = cpu_to_be32((uint32_t)(r->size >> 32));
+            w[3] = cpu_to_be32((uint32_t)(r->size));
+            pos += sizeof(struct fdt_reserve_entry);
+        }
+    }
+    /* terminator */
     re = (struct fdt_reserve_entry *)(dst + pos);
-    re->address = 0; /* no reserved entry */
+    re->address = 0;
     re->size = 0;
     pos += sizeof(struct fdt_reserve_entry);
 
@@ -587,6 +614,11 @@ int fdt_output(FDTState *s, uint8_t *dst)
     h->totalsize = cpu_to_be32(pos);
     return pos;
 }
+/* Back-compat wrapper for callers that don't have reservations. */
+int fdt_output(FDTState *s, uint8_t *dst)
+{
+    return fdt_output_rsv(s, dst, NULL);
+}
 
 void fdt_end(FDTState *s)
 {
@@ -598,6 +630,7 @@ void fdt_end(FDTState *s)
 static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
                            uint64_t kernel_start, uint64_t kernel_size,
                            uint64_t initrd_start, uint64_t initrd_size,
+                           uint64_t firmware_rsv_size,
                            const char *cmd_line)
 {
     FDTState *s;
@@ -768,12 +801,25 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
     
     fdt_end_node(s); /* / */
 
-    size = fdt_output(s, dst);
+    /* wash patch: reserve the firmware region at the base of RAM so
+       Linux's page allocator doesn't clobber OpenSBI's text. Without
+       this, the kernel pages the rootfs over OpenSBI's mtvec and the
+       next M-mode trap dies with an illegal-instruction storm (see
+       wash_machine_dump_status output: PC pinned at 0x800003c8). The
+       reservation runs from RAM_BASE_ADDR up to the kernel base
+       (typically 2MB), which is well above the largest firmware
+       footprint we'd reasonably load. */
+    struct wash_mem_rsv rsv[2] = {
+        { .addr = RAM_BASE_ADDR, .size = firmware_rsv_size },
+        { .addr = 0, .size = 0 },
+    };
+    size = fdt_output_rsv(s, dst, firmware_rsv_size > 0 ? rsv : NULL);
     /* wash: kept as a deliberate yield point. Removing this printf
        caused the kernel to hang at futex_init — the FE-side JS event
        loop apparently needs the WASM emulator to call printf early
        to schedule the first virtio/timer ticks correctly. Cheap. */
-    printf("wash/fdt: built (%d bytes)\n", size);
+    printf("wash/fdt: built (%d bytes, fw_rsv=%lu)\n", size,
+           (unsigned long)firmware_rsv_size);
     fdt_end(s);
     return size;
 }
@@ -830,6 +876,11 @@ static void copy_bios(RISCVMachine *s, const uint8_t *buf, int buf_len,
     riscv_build_fdt(s, ram_ptr + fdt_addr,
                     RAM_BASE_ADDR + kernel_base, kernel_buf_len,
                     RAM_BASE_ADDR + initrd_base, initrd_buf_len,
+                    /* firmware reservation = everything from RAM_BASE
+                       up to where the kernel begins (page-aligned to
+                       2MB). Covers OpenSBI text + scratch + DTB-load
+                       area in one block. */
+                    kernel_base,
                     cmd_line);
 
     /* jump_addr = 0x80000000 */
@@ -1054,6 +1105,56 @@ static void riscv_machine_end(VirtMachine *s1)
     riscv_cpu_end(s->cpu_state);
     phys_mem_map_end(s->mem_map);
     free(s);
+}
+
+/* wash debug: dump machine + cpu status. Called from temu.c heartbeat
+   (native) and Module._wash_dump_global() in jsemu.c (WASM, on admin
+   dump request). Dispatches to the per-xlen cpu dumper via the CPU
+   class table — only one xlen is actually linked into a given binary,
+   so per-xlen extern decls here would be unresolved at link time. */
+/* wash debug: hex-dump physical RAM. Bounded to 256 bytes per call so
+   a typo doesn't fill the WS log. Output is stderr → forwarded as
+   [tinyemu.stderr] / [console.error] on the FE. */
+void wash_machine_dump_mem(VirtMachine *s1, uint64_t paddr, uint32_t len)
+{
+    RISCVMachine *m = (RISCVMachine *)s1;
+    if (len > 256) len = 256;
+    uint8_t *p = phys_mem_get_ram_ptr(m->mem_map, paddr, FALSE);
+    if (!p) {
+        fprintf(stderr, "[WASH-MEM] paddr=0x%lx len=%u → no RAM mapping\n",
+                (unsigned long)paddr, len);
+        fflush(stderr);
+        return;
+    }
+    for (uint32_t off = 0; off < len; off += 16) {
+        uint32_t row = (len - off) < 16 ? (len - off) : 16;
+        fprintf(stderr, "[WASH-MEM] %016lx:", (unsigned long)(paddr + off));
+        for (uint32_t i = 0; i < row; i++) fprintf(stderr, " %02x", p[off + i]);
+        fprintf(stderr, "  ");
+        for (uint32_t i = 0; i < row; i++) {
+            uint8_t c = p[off + i];
+            fputc((c >= 0x20 && c < 0x7f) ? c : '.', stderr);
+        }
+        fputc('\n', stderr);
+    }
+    fflush(stderr);
+}
+
+void wash_machine_dump_status(VirtMachine *s1)
+{
+    RISCVMachine *m = (RISCVMachine *)s1;
+    RISCVCPUState *cpu = m->cpu_state;
+    uint64_t rtc = rtc_get_time(m);
+    int64_t delta = (int64_t)(m->timecmp - rtc);
+    fprintf(stderr,
+        "[WASH-MACH] xlen=%d rtc=%lu timecmp=%lu delta=%ld mtip=%d mip=0x%x pwrdn=%d\n",
+        m->max_xlen,
+        (unsigned long)rtc, (unsigned long)m->timecmp, (long)delta,
+        (riscv_cpu_get_mip(cpu) & MIP_MTIP) ? 1 : 0,
+        riscv_cpu_get_mip(cpu),
+        riscv_cpu_get_power_down(cpu) ? 1 : 0);
+    wash_cpu_dump_status(cpu);
+    fflush(stderr);
 }
 
 /* in ms */

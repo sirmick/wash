@@ -47,6 +47,11 @@
 //#define DUMP_EXCEPTIONS
 //#define DUMP_CSR
 //#define CONFIG_LOGFILE
+#define WASH_TRACE_TRAPS /* wash debug: per-cause exception histogram +
+   a wash_machine_dump_status helper.  Tiny per-trap cost; left enabled
+   so the diagnostics are available without a rebuild when the timer/
+   interrupt path next misbehaves.  temu.c's heartbeat only invokes the
+   helper when stderr looks interesting — production runs stay quiet. */
 
 #include "riscv_cpu_priv.h"
 
@@ -735,11 +740,6 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
         break;
 #endif
     case 0xc00: /* ucycle */
-    case 0xc01: /* utime — wash patch: alias to insn_counter so the
-                  Go runtime's `csrr time` for time.Now() doesn't
-                  trap. With modern firmware (OpenSBI) the kernel
-                  sets scounteren correctly so the U-mode check
-                  below permits this read. */
     case 0xc02: /* uinstret */
         {
             uint32_t counteren;
@@ -753,6 +753,29 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
             }
         }
         val = (int64_t)s->insn_counter;
+        break;
+    case 0xc01: /* utime — wash patch: alias to CLINT mtime via
+                  wash_rdtime_cb so the kernel's view of `time` matches
+                  what it programs through SBI set_timer (which writes
+                  CLINT timecmp). Returning raw insn_counter (the old
+                  upstream behavior) makes csrr-time advance way faster
+                  than mtime, and any timer Linux programs lands far
+                  in the future from the CLINT's view — timer never
+                  fires → jiffies freeze → kernel wedges. Applies to
+                  both native and WASM targets. */
+        {
+            uint32_t counteren;
+            extern uint64_t (*wash_rdtime_cb)(void);
+            if (s->priv < PRV_M) {
+                if (s->priv < PRV_S)
+                    counteren = s->scounteren;
+                else
+                    counteren = s->mcounteren;
+                if (((counteren >> (csr & 0x1f)) & 1) == 0)
+                    goto invalid_csr;
+            }
+            val = (int64_t)wash_rdtime_cb();
+        }
         break;
     case 0xc80: /* mcycleh */
     case 0xc81: /* utimeh — same wash alias for xlen=32 (unused with
@@ -1142,12 +1165,33 @@ static void set_priv(RISCVCPUState *s, int priv)
     }
 }
 
+#ifdef WASH_TRACE_TRAPS
+/* static so the three xlen compile units don't collide at link time;
+   only the active xlen's counts get populated, and the matching
+   wash_dump_cpu_status<XLEN> reads them. */
+static uint64_t wash_trap_count[64];
+static target_ulong wash_trap_last_pc[64];
+static target_ulong wash_trap_last_tval[64];
+static uint8_t wash_trap_last_priv[64];
+#endif
+
 static void raise_exception2(RISCVCPUState *s, uint32_t cause,
                              target_ulong tval)
 {
     BOOL deleg;
     target_ulong causel;
-    
+
+#ifdef WASH_TRACE_TRAPS
+    {
+        uint32_t bucket = cause & 0x3f;
+        if (cause & CAUSE_INTERRUPT) bucket |= 0x20;
+        wash_trap_count[bucket]++;
+        wash_trap_last_pc[bucket] = s->pc;
+        wash_trap_last_tval[bucket] = tval;
+        wash_trap_last_priv[bucket] = s->priv;
+    }
+#endif
+
 #if defined(DUMP_EXCEPTIONS) || defined(DUMP_MMU_EXCEPTIONS) || defined(DUMP_INTERRUPTS)
     {
         int flag;
@@ -1197,6 +1241,24 @@ static void raise_exception2(RISCVCPUState *s, uint32_t cause,
     if (cause & CAUSE_INTERRUPT)
         causel |= (target_ulong)1 << (s->cur_xlen - 1);
     
+    /* wash workaround: an M-mode timer interrupt being delivered
+       means mtime crossed timecmp. With this OpenSBI build the
+       handler does NOT do the standard MTIP-to-STIP shuffle (it
+       appears to assume Sstc semantics, which our hart doesn't
+       advertise), so on mret the very next basic block sees MTIP &
+       MTIE still set and re-traps — a sustained storm that wedges
+       Linux.  Mirror the OpenSBI MTIP-handler convention here:
+       atomically (1) disable MTIE so the M-mode handler doesn't
+       re-fire; (2) raise MIP.STIP so S-mode sees the tick and
+       Linux's timer ISR runs and calls sbi_set_timer (which clears
+       MTIP and re-enables MTIE via clint_write). Applies to both
+       native and WASM targets — confirmed kernel won't progress
+       past OpenSBI on WASM without this. */
+    if ((cause & CAUSE_INTERRUPT) && (cause & 0x1f) == 7 && !deleg) {
+        s->mie &= ~(1u << 7); /* MIE_MTIE */
+        s->mip |= (1u << 5);  /* MIP_STIP */
+    }
+
     if (deleg) {
         s->scause = causel;
         s->sepc = s->pc;
@@ -1366,6 +1428,46 @@ static uint64_t glue(riscv_cpu_get_cycles, MAX_XLEN)(RISCVCPUState *s)
     return s->insn_counter;
 }
 
+/* wash patch: pair with raise_exception2's MTIE-disable workaround.
+   Wired into the class table; clint_write -> wash_cpu_arm_mtie() (the
+   inline dispatcher in riscv_cpu.h) calls into here whenever OpenSBI
+   arms mtimecmp via SBI set_timer, re-enabling the M-mode timer so the
+   next deadline can fire. */
+static void glue(wash_cpu_arm_mtie, MAX_XLEN)(RISCVCPUState *s)
+{
+    s->mie |= (1u << 7); /* MIE_MTIE */
+}
+
+#ifdef WASH_TRACE_TRAPS
+static uint32_t glue(riscv_cpu_get_mip, MAX_XLEN)(RISCVCPUState *s);
+void glue(wash_dump_cpu_status, MAX_XLEN)(RISCVCPUState *s)
+{
+    const char priv_str[4] = "USHM";
+    uint32_t direct_mip = glue(riscv_cpu_get_mip, MAX_XLEN)(s);
+    fprintf(stderr,
+        "[WASH-CPU%d] s=%p sz=%zu off_pc=%zu off_mip=%zu pc=0x%016lx priv=%c insns=%lu mstatus=0x%lx mip=0x%x direct_mip=0x%x mie=0x%x\n",
+        MAX_XLEN, (void*)s, sizeof(*s),
+        (size_t)((char*)&s->pc - (char*)s),
+        (size_t)((char*)&s->mip - (char*)s),
+        (unsigned long)s->pc, priv_str[s->priv], (unsigned long)s->insn_counter,
+        (unsigned long)s->mstatus, s->mip, direct_mip, s->mie);
+    for (int i = 0; i < 64; i++) {
+        if (wash_trap_count[i]) {
+            int cause = i & 0x1f;
+            int is_intr = (i >> 5) & 1;
+            fprintf(stderr,
+                "[WASH-TRAP] %s cause=%d count=%lu last_pc=0x%016lx last_tval=0x%lx priv=%c\n",
+                is_intr ? "intr" : "excp", cause,
+                (unsigned long)wash_trap_count[i],
+                (unsigned long)wash_trap_last_pc[i],
+                (unsigned long)wash_trap_last_tval[i],
+                priv_str[wash_trap_last_priv[i] & 3]);
+        }
+    }
+    fflush(stderr);
+}
+#endif
+
 static void glue(riscv_cpu_set_mip, MAX_XLEN)(RISCVCPUState *s, uint32_t mask)
 {
     s->mip |= mask;
@@ -1446,6 +1548,12 @@ const RISCVCPUClass glue(riscv_cpu_class, MAX_XLEN) = {
     glue(riscv_cpu_get_power_down, MAX_XLEN),
     glue(riscv_cpu_get_misa, MAX_XLEN),
     glue(riscv_cpu_flush_tlb_write_range_ram, MAX_XLEN),
+    glue(wash_cpu_arm_mtie, MAX_XLEN),
+#ifdef WASH_TRACE_TRAPS
+    glue(wash_dump_cpu_status, MAX_XLEN),
+#else
+    NULL,
+#endif
 };
 
 #if CONFIG_RISCV_MAX_XLEN == MAX_XLEN

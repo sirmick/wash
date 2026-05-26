@@ -162,6 +162,28 @@ static void fb_refresh1(FBDevice *fb_dev, void *opaque,
                stride);
 }
 
+/* wash debug: ws/cli-triggered CPU+machine dump. Forward-declare here
+   so we don't have to pull machine internals into jsemu.h. The browser
+   side calls Module._wash_dump_global() in response to a `dump` ctl
+   frame; stderr capture forwards the output as [tinyemu.stderr]. */
+extern void wash_machine_dump_status(VirtMachine *m);
+extern void wash_machine_dump_mem(VirtMachine *m, uint64_t paddr, uint32_t len);
+void wash_dump_global(void)
+{
+    if (global_vm) wash_machine_dump_status(global_vm);
+}
+/* wash debug: physical-memory hex dump, callable from the FE on a
+   `mem <addr> <len>` ctl request. Browser splits the u64 addr into a
+   pair of u32s (Emscripten i64 marshalling is fragile across versions
+   without -sEXPORT_ALL or BigInt builds, and a u32 high-half is plenty
+   for our 256MB ram window). */
+void wash_dump_mem_global(uint32_t paddr_hi, uint32_t paddr_lo, uint32_t len)
+{
+    if (!global_vm) return;
+    uint64_t paddr = ((uint64_t)paddr_hi << 32) | paddr_lo;
+    wash_machine_dump_mem(global_vm, paddr, len);
+}
+
 static CharacterDevice *console_init(void)
 {
     CharacterDevice *dev;

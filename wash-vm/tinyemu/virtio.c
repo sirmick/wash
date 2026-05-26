@@ -78,6 +78,26 @@ void washtrace_heartbeat(void) {
         if (len > 0) wash_log_bytes((const uint8_t *)buf, len);
     }
 }
+/* wash patch: expose the iteration counter as a callable so the FE can
+   sample iter-rate against wallclock and surface browser throttling
+   ("[rate] THROTTLED viz=hidden") in the server log. Exported via
+   Emscripten so Module._wash_iter_counter() is reachable from JS. */
+int wash_iter_counter(void) {
+    return washtrace_heartbeat_counter;
+}
+/* wash debug: WASM heap byte-count source-of-truth.
+   The Emscripten build we ship has closure off and no HEAPU8 in
+   EXPORTED_RUNTIME_METHODS, so `Module.wasmMemory` isn't reachable
+   from JS — expose the heap size via this C export instead. Native
+   build returns 0 (no emscripten_get_heap_size symbol there). */
+#ifdef __EMSCRIPTEN__
+#include <emscripten/heap.h>
+unsigned int wash_heap_bytes(void) {
+    return (unsigned int)emscripten_get_heap_size();
+}
+#else
+unsigned int wash_heap_bytes(void) { return 0; }
+#endif
 #define WASHTRACE(...) do { \
     char _tb[256]; \
     int _n = snprintf(_tb, sizeof(_tb), "[WASHTRACE] " __VA_ARGS__); \
@@ -1375,21 +1395,13 @@ BOOL virtio_console_can_write_data(VIRTIODevice *s)
     if (!qs->ready)
         return FALSE;
     avail_idx = virtio_read16(s, qs->avail_addr + 2);
-    BOOL can = qs->last_avail_idx != avail_idx;
-    {
-        VIRTIOConsoleDevice *s1 = (VIRTIOConsoleDevice *)s;
-        int ch = (int)(intptr_t)s1->cs->opaque;
-        static int last_state[8] = {-1,-1,-1,-1,-1,-1,-1,-1};
-        if (ch >= 0 && ch < 8) {
-            int st = can ? 1 : 0;
-            if (last_state[ch] != st) {
-                WASHTRACE("vc_can_write ch=%d ready=%d avail=%u last_avail=%u can=%d\n",
-                          ch, qs->ready, avail_idx, qs->last_avail_idx, can);
-                last_state[ch] = st;
-            }
-        }
-    }
-    return can;
+    /* wash: an old can-write trace lived here but assumed every
+       virtio-console device's cs->opaque held a small integer channel
+       ID. The native multiport device's cs isn't a CharacterDevice
+       conforming to that convention, so once a port advanced past
+       kernel boot the opaque deref faulted. Trace removed; nothing
+       functional depended on it. */
+    return qs->last_avail_idx != avail_idx;
 }
 
 int virtio_console_get_write_len(VIRTIODevice *s)

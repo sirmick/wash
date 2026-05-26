@@ -54,6 +54,154 @@ dbg.log('demo', 'tinyemu page loaded');
   w.__washDbg = (cat, line) => dbg.log(cat, line);
 })();
 
+// --- 0a. Throttling visibility ----------------------------------------------
+// When a tab is backgrounded, Chrome aggressively clamps timers and
+// emscripten_async_call (setTimeout under the hood) to ~1Hz — the VM
+// effectively grinds to a halt and looks "locked up" even though
+// nothing is actually broken. Surface the page-visibility state and a
+// rough emulated-iteration rate to the server log so a developer can
+// tell the difference between "WASM bug" and "browser throttled tab".
+//
+// Two streams:
+//   [viz]   discrete visibility / freeze events
+//   [rate]  every ~3s wallclock: iterations-since-last and ms/iter
+(() => {
+  let lastVisibility = document.visibilityState;
+  dbg.log('viz', `initial visibilityState=${lastVisibility} hasFocus=${document.hasFocus()}`);
+  const onVisibility = () => {
+    const v = document.visibilityState;
+    if (v !== lastVisibility) {
+      dbg.log('viz', `visibilityState ${lastVisibility} → ${v}`);
+      lastVisibility = v;
+    }
+  };
+  document.addEventListener('visibilitychange', onVisibility);
+  window.addEventListener('focus',  () => dbg.log('viz', 'window focus'));
+  window.addEventListener('blur',   () => dbg.log('viz', 'window blur'));
+  // Modern Chrome fires these when the tab is frozen/discarded.
+  document.addEventListener('freeze' as keyof DocumentEventMap, () => dbg.log('viz', 'document freeze'));
+  document.addEventListener('resume' as keyof DocumentEventMap, () => dbg.log('viz', 'document resume'));
+
+  // Iteration-rate sampler. The C code increments
+  // washtrace_heartbeat_counter on every virt_machine_run iteration
+  // (jsemu.c). It's exposed indirectly via __washDbgBuf already, but
+  // we want a wallclock-anchored sample so "throttled vs running" is
+  // obvious at a glance. Poll the global symbol the C code maintains.
+  let prevHb = 0;
+  let prevAt = performance.now();
+  setInterval(() => {
+    const w = window as unknown as { _wash_iter_counter?: () => number };
+    // No exported getter today; fall back to scanning Module exports.
+    // If unavailable, we just emit visibility-only and skip rate.
+    const mod = (window as unknown as { Module?: Record<string, unknown> }).Module;
+    let cur: number | null = null;
+    if (mod && typeof mod._wash_iter_counter === 'function') {
+      try { cur = Number((mod._wash_iter_counter as () => number)()); } catch { cur = null; }
+    }
+    const now = performance.now();
+    const dtMs = now - prevAt;
+    if (cur !== null && prevHb > 0 && dtMs > 0) {
+      const delta = cur - prevHb;
+      const iterPerSec = (delta * 1000) / dtMs;
+      const msPerIter = delta > 0 ? dtMs / delta : Infinity;
+      const flag = iterPerSec < 50 ? ' THROTTLED' : '';
+      dbg.log('rate', `iters=+${delta} in ${Math.round(dtMs)}ms → ${iterPerSec.toFixed(0)}/s (${msPerIter.toFixed(1)}ms/iter)${flag} viz=${document.visibilityState}`);
+    }
+    if (cur !== null) prevHb = cur;
+    prevAt = now;
+  }, 3000);
+})();
+
+// --- 0b. Heap + long-task + on-demand dump ---------------------------------
+// All three exist for the same reason: when the page falls silent we
+// want a remote tail to tell "VM stalled" from "main thread blocked"
+// from "we're hitting OOM/heap-growth pauses." Cheap to leave on.
+//
+// Streams:
+//   [heap]      every ~10s: WASM HEAPU8 size + performance.memory triple
+//   [longtask]  on PerformanceObserver longtask entries (>50ms)
+//   [tinyemu.stderr]  the existing capture forwards wash_dump_global
+//                     output when ctl verb `dump` arrives
+function readIterCounter(): number | null {
+  const mod = (window as unknown as { Module?: Record<string, unknown> }).Module;
+  if (mod && typeof mod._wash_iter_counter === 'function') {
+    try { return Number((mod._wash_iter_counter as () => number)()); }
+    catch { return null; }
+  }
+  return null;
+}
+function readHeapBytes(): number | null {
+  // Emscripten exposes neither HEAPU8 nor wasmMemory on Module in our
+  // build profile (NO_FILESYSTEM, closure off, no HEAPU8 in
+  // EXPORTED_RUNTIME_METHODS). The reliable source-of-truth is the C
+  // export `_wash_heap_bytes` → emscripten_get_heap_size(), wired in
+  // virtio.c. Fall through to the legacy accessors in case we ever
+  // flip the runtime export.
+  const mod = (window as unknown as { Module?: { HEAPU8?: Uint8Array; wasmMemory?: WebAssembly.Memory; _wash_heap_bytes?: () => number } }).Module;
+  if (!mod) return null;
+  if (typeof mod._wash_heap_bytes === 'function') {
+    try { return Number(mod._wash_heap_bytes()); } catch { /* fall through */ }
+  }
+  if (mod.HEAPU8?.byteLength) return mod.HEAPU8.byteLength;
+  if (mod.wasmMemory?.buffer) return mod.wasmMemory.buffer.byteLength;
+  return null;
+}
+function formatHeapLine(tag: string): string {
+  const wasm = readHeapBytes();
+  // performance.memory is Chrome-only; on Firefox we just emit what
+  // we have. Used to be a feature-detect; the cast keeps TS happy.
+  const pm = (performance as unknown as { memory?: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number } }).memory;
+  const wasmStr = wasm !== null ? `wasm=${(wasm / 1048576).toFixed(1)}MB` : 'wasm=?';
+  const jsStr = pm
+    ? `js used=${(pm.usedJSHeapSize / 1048576).toFixed(1)}MB total=${(pm.totalJSHeapSize / 1048576).toFixed(1)}MB limit=${(pm.jsHeapSizeLimit / 1048576).toFixed(0)}MB`
+    : 'js=unsupported';
+  return `${tag} ${wasmStr} ${jsStr}`;
+}
+(() => {
+  // Periodic heap sample. 10s is slow enough not to spam, fast enough
+  // that growth/leak patterns show up across a normal debug session.
+  setInterval(() => {
+    dbg.log('heap', formatHeapLine('sample'));
+  }, 10_000);
+
+  // Long-task observer. Each entry is a window of main-thread blocking
+  // ≥50ms — useful to identify "WASM RAF iteration is the thing
+  // blocking" vs "kernel is fully stalled, no blocking." Wrap in
+  // try/catch: PerformanceObserver longtask isn't on Firefox (yet).
+  try {
+    const obs = new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) {
+        // attribution[0]?.name is rarely informative under cross-origin,
+        // but the duration + startTime are useful even alone.
+        dbg.log('longtask', `dur=${Math.round(e.duration)}ms startTime=${Math.round(e.startTime)}ms`);
+      }
+    });
+    obs.observe({ entryTypes: ['longtask'] });
+  } catch (e) {
+    dbg.log('longtask', `not supported: ${(e as Error).message}`);
+  }
+
+  // Visibility-edge snapshot. Pair with the [viz] event already emitted
+  // — this adds an iter-counter + heap sample at the moment of edge so
+  // we can correlate "tab hid → iters froze → mtime drifted N ticks"
+  // when the page comes back into focus.
+  let lastShownAt = performance.now();
+  let lastIterAtEdge = readIterCounter();
+  document.addEventListener('visibilitychange', () => {
+    const now = performance.now();
+    const iter = readIterCounter();
+    if (document.visibilityState === 'hidden') {
+      lastShownAt = now;
+      lastIterAtEdge = iter;
+      dbg.log('viz', `edge:hidden ${formatHeapLine('iter=' + (iter ?? '?'))}`);
+    } else {
+      const hiddenMs = Math.round(now - lastShownAt);
+      const iterDelta = iter !== null && lastIterAtEdge !== null ? iter - lastIterAtEdge : null;
+      dbg.log('viz', `edge:visible after=${hiddenMs}ms iters+=${iterDelta ?? '?'} ${formatHeapLine('now')}`);
+    }
+  });
+})();
+
 // --- 0. Stage indicator -----------------------------------------------------
 // Title-bar status text + dot color. State machine is monotone-ish:
 // boot → ready → wash. `error` is a terminal red state any phase can
@@ -674,6 +822,46 @@ dbg.onMessage((msg) => {
     if (msg.verb === 'reload') {
       dbg.log('ctl', 'reload received — reloading page');
       window.location.reload();
+    } else if (msg.verb === 'dump') {
+      // Triggers wash_dump_global() in the WASM, which calls
+      // wash_machine_dump_status(global_vm). Output goes to stderr,
+      // which Module.printErr (tapped above) forwards as
+      // [tinyemu.stderr] frames. Also emit a [heap]+[rate] snapshot in
+      // the same response so a single `wash-rv dump` gives us machine,
+      // CPU, traps, heap, and iter-rate in one timestamped block.
+      dbg.log('ctl', 'dump requested');
+      const mod = (window as unknown as { Module?: Record<string, unknown> }).Module;
+      const fn = mod?._wash_dump_global;
+      if (typeof fn === 'function') {
+        try { (fn as () => void)(); }
+        catch (e) { dbg.log('ctl', `dump threw: ${(e as Error).message}`); }
+      } else {
+        dbg.log('ctl', 'dump: Module._wash_dump_global unavailable (WASM not ready or export missing)');
+      }
+      dbg.log('heap', formatHeapLine('on-dump'));
+      const iter = readIterCounter();
+      if (iter !== null) dbg.log('rate', `on-dump iter=${iter} viz=${document.visibilityState}`);
+    } else if (msg.verb === 'mem') {
+      // Split a u64 paddr into (hi,lo) u32s — Emscripten i64
+      // marshalling without BigInt is fragile, and we only care about
+      // addresses inside our 256MB RAM window anyway.
+      const addrStr = String(msg.addr ?? '');
+      const lenStr = String(msg.len ?? '');
+      const addr = addrStr.startsWith('0x') || addrStr.startsWith('0X')
+        ? BigInt(addrStr)
+        : BigInt('0x' + addrStr.replace(/[^0-9a-fA-F]/g, ''));
+      const len = parseInt(lenStr, 10) || 64;
+      const hi = Number((addr >> 32n) & 0xffffffffn);
+      const lo = Number(addr & 0xffffffffn);
+      dbg.log('ctl', `mem requested addr=0x${addr.toString(16)} len=${len}`);
+      const mod = (window as unknown as { Module?: Record<string, unknown> }).Module;
+      const fn = mod?._wash_dump_mem_global;
+      if (typeof fn === 'function') {
+        try { (fn as (h: number, l: number, n: number) => void)(hi, lo, len); }
+        catch (e) { dbg.log('ctl', `mem threw: ${(e as Error).message}`); }
+      } else {
+        dbg.log('ctl', 'mem: Module._wash_dump_mem_global unavailable');
+      }
     } else if (msg.verb === 'reset' || msg.verb === 'stop' || msg.verb === 'run') {
       // Hooks for future emulator-control verbs once jslinux exposes
       // run/stop bindings. No-op today.

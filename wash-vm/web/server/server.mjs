@@ -27,7 +27,9 @@ import { createServer as createHttpServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { createServer as createViteServer } from 'vite';
 import { appendFile, mkdir } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
+import { dirname, resolve, normalize, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -99,6 +101,43 @@ server.on('request', async (req, res) => {
     return;
   }
 
+  // /shell/* — static-serve the pre-built shell bundle from
+  // wash/web/shell/dist. Without this, vite's SPA fallback serves
+  // index.html in place of `/shell/shell.js`, the browser rejects the
+  // HTML as a JS module, and the wash desktop never loads. The header
+  // comment at the top of this file already advertised this route;
+  // wiring it up here makes that comment true. Vite ignores its own
+  // import-suffix (`?import`) when we serve the file ourselves —
+  // strip it so the path resolves on disk.
+  if (url.startsWith('/shell/')) {
+    const SHELL_ROOT = resolve(DEMO_ROOT, '../../web/shell/dist');
+    const stripped = url.slice('/shell/'.length).split('?')[0].split('#')[0];
+    // Defense in depth: reject any path that climbs out of SHELL_ROOT.
+    const target = normalize(resolve(SHELL_ROOT, stripped));
+    if (!target.startsWith(SHELL_ROOT + '/') && target !== SHELL_ROOT) {
+      res.writeHead(403); res.end('forbidden\n'); return;
+    }
+    try {
+      const st = await stat(target);
+      if (!st.isFile()) throw new Error('not a file');
+      const mime = ({
+        '.js':  'text/javascript; charset=utf-8',
+        '.mjs': 'text/javascript; charset=utf-8',
+        '.css': 'text/css; charset=utf-8',
+        '.html':'text/html; charset=utf-8',
+        '.svg': 'image/svg+xml',
+        '.json':'application/json; charset=utf-8',
+        '.wasm':'application/wasm',
+      })[extname(target)] || 'application/octet-stream';
+      res.writeHead(200, { 'Content-Type': mime, 'Content-Length': st.size });
+      createReadStream(target).pipe(res);
+    } catch {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end(`shell asset not found: ${stripped}\n`);
+    }
+    return;
+  }
+
   // HTTP admin path — POST /admin/<verb> with optional JSON body.
   // Convenience wrapper around the admin-role WS frames. Useful for
   // shell scripts that don't want to spawn a ws client.
@@ -109,8 +148,16 @@ server.on('request', async (req, res) => {
     let body = '';
     req.on('data', c => { body += c; if (body.length > 4096) req.destroy(); });
     req.on('end', () => {
-      if (verb === 'reload' || verb === 'reset' || verb === 'stop' || verb === 'run') {
+      if (verb === 'reload' || verb === 'reset' || verb === 'stop' || verb === 'run' || verb === 'dump') {
         broadcast('browser', { t: 'ctl', verb });
+      } else if (verb === 'mem') {
+        // POST body = "0x800003c0 64" or "0x800003c0,64" — split on
+        // whitespace/comma. Two args required: addr len.
+        const parts = body.trim().split(/[\s,]+/).filter(Boolean);
+        if (parts.length !== 2) { res.writeHead(400); res.end('mem: usage POST /admin/mem -d "<addr> <len>"\n'); return; }
+        const addr = parts[0];
+        const len = parts[1];
+        broadcast('browser', { t: 'ctl', verb: 'mem', addr, len });
       } else if (verb === 'input') {
         broadcast('browser', { t: 'input', data: body });
       } else {

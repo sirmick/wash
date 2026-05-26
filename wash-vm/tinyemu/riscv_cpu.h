@@ -55,6 +55,16 @@ typedef struct {
     uint32_t (*riscv_cpu_get_misa)(RISCVCPUState *s);
     void (*riscv_cpu_flush_tlb_write_range_ram)(RISCVCPUState *s,
                                                 uint8_t *ram_ptr, size_t ram_size);
+    /* wash: re-arm M-mode timer enable. Paired with the MTIP-to-STIP
+       shuffle in raise_exception2 — clint_write calls this whenever
+       SBI set_timer arms a new mtimecmp so the next deadline can fire. */
+    void (*wash_arm_mtie)(RISCVCPUState *s);
+    /* wash: dump CPU + trap state to stderr. Per-xlen because the trap
+       histogram counters live in static storage in the matching cpu
+       compile unit. Only one xlen is built into a given binary, so the
+       riscv_machine.c dispatcher just calls through the class table —
+       no per-xlen extern decl needed at link time. */
+    void (*wash_dump_status)(RISCVCPUState *s);
 } RISCVCPUClass;
 
 typedef struct {
@@ -113,6 +123,16 @@ static inline void riscv_cpu_flush_tlb_write_range_ram(RISCVCPUState *s,
 {
     const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
     c->riscv_cpu_flush_tlb_write_range_ram(s, ram_ptr, ram_size);
+}
+static inline void wash_cpu_arm_mtie(RISCVCPUState *s)
+{
+    const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
+    c->wash_arm_mtie(s);
+}
+static inline void wash_cpu_dump_status(RISCVCPUState *s)
+{
+    const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
+    if (c->wash_dump_status) c->wash_dump_status(s);
 }
 
 #endif /* RISCV_CPU_H */

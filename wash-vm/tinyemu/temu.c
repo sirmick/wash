@@ -544,6 +544,11 @@ void virt_machine_run(VirtMachine *m)
 #endif
 
     {
+        /* wash: bare liveness pulse. To dump CPU + trap state too, call
+           wash_machine_dump_status(m) here (defined in riscv_machine.c).
+           Left out of the default path because it spams stderr every
+           ~1024 iterations and the rates aren't useful unless you're
+           debugging the interrupt path. */
         static int beat;
         if ((++beat & 0x3FF) == 0) {
             fprintf(stderr, "[WASH-NATIVE] heartbeat tick=%d\n", beat);

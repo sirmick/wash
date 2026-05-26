@@ -29,6 +29,27 @@ let connected = false;
 let connectAttempt = 0;
 const PAGE_HINT = window.location.pathname.replace(/^\//, '') || 'index';
 
+// WS-health telemetry. Tracks queue depth + connection-state edges so a
+// remote tail can tell "log fell silent because the VM stalled" from
+// "log fell silent because the bus dropped." Edge-triggered: we only
+// emit on (re)connect, on disconnect, and the first time the queue
+// crosses each high-water mark — never on every dropped frame.
+const QUEUE_WATERMARKS = [64, 256, 1024];
+let highWaterHit = 0;
+let droppedSinceLastReport = 0;
+
+function reportQueueState(reason: string): void {
+  // Best-effort: bypass the queue and write directly if we can; if not,
+  // skip (we don't want telemetry to evict real frames from the queue).
+  if (!connected || !ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({
+    t: 'log', source: 'wsq',
+    line: `${reason} queue=${queue.length} dropped=${droppedSinceLastReport} attempt=${connectAttempt}`,
+    ts: Date.now(),
+  }));
+  droppedSinceLastReport = 0;
+}
+
 function send(frameJson: string): void {
   if (connected && ws && ws.readyState === WebSocket.OPEN) {
     ws.send(frameJson);
@@ -36,7 +57,17 @@ function send(frameJson: string): void {
   }
   // Not connected — queue and drop oldest if over cap.
   queue.push(frameJson);
-  while (queue.length > QUEUE_MAX) queue.shift();
+  if (queue.length > QUEUE_MAX) {
+    queue.shift();
+    droppedSinceLastReport++;
+  }
+  // First time we cross each watermark, remember so we can emit a
+  // [wsq] line as soon as the WS reopens (we can't send now — we'd
+  // just be queuing more telemetry behind the backlog).
+  while (highWaterHit < QUEUE_WATERMARKS.length &&
+         queue.length >= QUEUE_WATERMARKS[highWaterHit]) {
+    highWaterHit++;
+  }
 }
 
 function flushQueue(): void {
@@ -54,10 +85,18 @@ function connect(): void {
     return;
   }
   ws.onopen = () => {
+    const wasReconnect = connectAttempt > 0;
     connected = true;
-    connectAttempt = 0;
     ws!.send(JSON.stringify({ t: 'hello', role: 'browser', page: PAGE_HINT, ua: navigator.userAgent }));
     flushQueue();
+    // After the backlog is drained, report state so the remote tail
+    // sees the (re)connect event with the high-water hit recorded
+    // while we were offline.
+    if (wasReconnect || highWaterHit > 0) {
+      reportQueueState(wasReconnect ? 'ws.reconnected' : 'ws.connected');
+    }
+    connectAttempt = 0;
+    highWaterHit = 0;
   };
   ws.onclose = () => {
     connected = false;
