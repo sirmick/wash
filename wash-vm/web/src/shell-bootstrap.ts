@@ -73,12 +73,17 @@ const dec = new TextDecoder('utf-8');
 export interface BootstrapResult {
   /** The shell.js bundle bytes, ready for Blob URL + dynamic import. */
   bytes: Uint8Array;
-  /** Non-asset wash frames received during bootstrap, re-encoded as a
-   *  single byte sequence. Replay these to the shell's transport after
-   *  it loads, in the order they arrived, so the shell sees the
-   *  router's catalog/session.snapshot/etc. that were sent during our
-   *  fetch window. */
+  /** Non-asset wash frames received during bootstrap (re-encoded as
+   *  one byte sequence). The caller MUST hand these to the shell's
+   *  transport before any further router bytes — otherwise the shell
+   *  sees a late catalog after live mutations and renders nothing. */
   replay: Uint8Array;
+  /** Call this AFTER the shell has loaded and registered its transport
+   *  handler. The bootloader keeps buffering bytes between asset-
+   *  complete and finish() so nothing the router emits during the
+   *  shell-load gap is lost; finish() flushes replay+buffered bytes
+   *  in order via `forward`, then resumes normal fanout. */
+  finish: (forward: (bytes: Uint8Array) => void) => void;
 }
 
 export interface BootstrapDeps {
@@ -88,6 +93,11 @@ export interface BootstrapDeps {
   onBytes: (handler: (bytes: Uint8Array) => void) => () => void;
   /** Optional logger; default is a no-op. */
   log?: (line: string) => void;
+  /** If true, defer the asset.read send until the first router byte
+   *  arrives. Use when the router-side virtio-console port may not
+   *  have opened yet — bytes pushed too early can get lost between
+   *  the host FIFO and the guest's virtio-console driver. */
+  deferUntilFirstByte?: boolean;
 }
 
 export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', reqID = 1): Promise<BootstrapResult> {
@@ -97,12 +107,45 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
   let assetSize = 0;
   const assetChunks: Uint8Array[] = [];
   const replayChunks: Uint8Array[] = [];
+  // Phase tracks the bootstrap state:
+  //   'asset' - asset stream still arriving; parse frames, accumulate
+  //   'buffering' - asset complete; capture every incoming byte
+  //     verbatim into postAssetBuffer so the caller can replay them
+  //     in order after the shell loads
+  //   'passthrough' - shell loaded and replay done; future bytes go
+  //     straight to caller-supplied forward
+  let phase: 'asset' | 'buffering' | 'passthrough' = 'asset';
+  const postAssetBuffer: Uint8Array[] = [];
+  let forwardFn: ((bytes: Uint8Array) => void) | null = null;
 
   let resolve!: (r: BootstrapResult) => void;
   let reject!: (e: Error) => void;
   const done = new Promise<BootstrapResult>((res, rej) => { resolve = res; reject = rej; });
 
+  let sent = false;
+  const sendRequest = () => {
+    if (sent) return;
+    sent = true;
+    const req = enc.encode(JSON.stringify({ t: 'asset.read', req_id: reqID, path }));
+    deps.sendBytes(encodeFrame(0, req));
+    log(`bootstrap: sent asset.read path=${path}`);
+  };
   const detach = deps.onBytes((bytes) => {
+    if (!sent && deps.deferUntilFirstByte) {
+      // First router byte arrived → router is alive, port is open,
+      // safe to send. Fire BEFORE feeding the parser so the request
+      // can land in the router's input queue ASAP.
+      sendRequest();
+    }
+    if (phase === 'buffering') {
+      postAssetBuffer.push(new Uint8Array(bytes));
+      return;
+    }
+    if (phase === 'passthrough') {
+      forwardFn?.(bytes);
+      return;
+    }
+    // phase === 'asset': parse + classify each frame
     for (const f of parser.feed(bytes)) {
       if (f.channel === 0) {
         // JSON ctrl frame — peek `t` to dispatch.
@@ -130,7 +173,22 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
           let roff = 0;
           for (const c of replayChunks) { replay.set(c, roff); roff += c.length; }
           log(`bootstrap: shell.js ${total} bytes, replay ${replayTotal} bytes`);
-          resolve({ bytes: out, replay });
+          // Switch to buffering — capture any bytes that arrive while
+          // the caller is loading shell.js so finish() can flush them
+          // after the replay.
+          phase = 'buffering';
+          resolve({
+            bytes: out,
+            replay,
+            finish: (forward) => {
+              forwardFn = forward;
+              forward(replay);
+              for (const buf of postAssetBuffer) forward(buf);
+              postAssetBuffer.length = 0;
+              phase = 'passthrough';
+            },
+          });
+          return; // stop processing more frames in this batch
         } else if (msg?.t === 'channel.bind' && msg.channel_id === assetChannelID) {
           // No-op: the asset.read.ok already told us about the channel.
         } else {
@@ -146,15 +204,21 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
     }
   });
 
-  // Send the asset.read request.
-  const req = enc.encode(JSON.stringify({ t: 'asset.read', req_id: reqID, path }));
-  deps.sendBytes(encodeFrame(0, req));
-  log(`bootstrap: sent asset.read path=${path}`);
+  // Send the asset.read request immediately unless we're deferring
+  // until the first router byte (see BootstrapDeps.deferUntilFirstByte).
+  if (!deps.deferUntilFirstByte) {
+    sendRequest();
+  } else {
+    log('bootstrap: deferring asset.read until first router byte');
+  }
 
+  // Stash detach in a closure that callers won't see — only used on
+  // error. On success the bootstrap handler stays subscribed and
+  // becomes the passthrough conduit to the shell.
   try {
-    const result = await done;
-    return result;
-  } finally {
+    return await done;
+  } catch (e) {
     detach();
+    throw e;
   }
 }

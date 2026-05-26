@@ -694,6 +694,15 @@ declare global {
   // additions are easy to spot.
   let firstWashByte = true;
   const outHandlers = new Set<(data: unknown) => void>();
+  // Shell-side port-2 handlers register here; the bootloader's
+  // finish() iterates this set to deliver replay + buffered bytes,
+  // and during passthrough the bootloader forwards live bytes to
+  // each handler in order. Kept separate from outHandlers so the
+  // dataVC fanout has a single entry (the bootloader) — eliminates
+  // the race where the shell handler receives live bytes BEFORE
+  // the bootloader replays catalog/snapshot.
+  const shellOutHandlers = new Set<(bytes: Uint8Array) => void>();
+  let bootFinished = false;
 
   // Shell event-name conventions (see web/shell/src/virtio.ts):
   //   bus.send  ('virtio-console{N}-input-bytes',  Uint8Array)
@@ -754,9 +763,23 @@ declare global {
         if (!s) { s = new Set(); handlersByPort.set(port, s); }
         s.add(handler);
         dbg.log('wash', `bus.register port=${port} (${s.size} handler(s))`);
-        // Backwards compat with the existing outHandlers iteration in
-        // the dataVC setOutputHandler below (port 2 = dataVC).
-        if (port === 2) outHandlers.add(handler);
+        if (port === 2) {
+          // The bootloader is the only handler in outHandlers for
+          // port 2. Shell handlers register HERE and we route them
+          // via shellOutHandlers; the bootloader's finish() then
+          // flushes replay + any buffered post-asset bytes to them
+          // in order. If the bootloader has already finished asset
+          // pull (bootResult is non-null), kick the handler now.
+          shellOutHandlers.add(handler as (b: Uint8Array) => void);
+          if (bootResult && !bootFinished) {
+            bootFinished = true;
+            bootResult.finish((bytes) => {
+              for (const sh of shellOutHandlers) {
+                try { sh(bytes); } catch (e) { dbg.log('wash', `shell handler threw: ${(e as Error).message}`); }
+              }
+            });
+          }
+        }
         return;
       }
       dbg.log('wash', `bus.register unhandled: ${event}`);
@@ -796,28 +819,35 @@ declare global {
   if (!transientSp.has('port')) transientSp.set('port', '2');
   window.history.replaceState(null, '', window.location.pathname + '?' + transientSp.toString());
 
-  // Wait for the router to send its first data-plane byte before we
-  // try to asset-fetch shell.js — if we send asset.read before the
-  // router is reading from /dev/vport0p0 the request is dropped.
-  await new Promise<void>((resolve) => {
-    if (!firstWashByte) { resolve(); return; }
-    const poll = setInterval(() => {
-      if (!firstWashByte) { clearInterval(poll); resolve(); }
-    }, 50);
-  });
-
+  // Kick the bootstrap immediately — DO NOT wait for firstWashByte
+  // first. The router's HandleShell push (catalog, app.declared,
+  // session.snapshot) is the first thing on the wire, and if we
+  // register our buffering handler AFTER those bytes have already
+  // been fanned out to an empty outHandlers set, the shell never
+  // sees its catalog and renders "no apps registered". TinyEMU's
+  // virtio-console buffers input host→guest, so sending asset.read
+  // before the router is reading is fine — it'll pick up the queued
+  // bytes when its dispatch loop starts.
   dbg.log('wash', 'bootstrapping shell.js over asset channel…');
-  let bootResult: { bytes: Uint8Array; replay: Uint8Array } | null = null;
+  let bootResult: import('./shell-bootstrap').BootstrapResult | null = null;
   try {
     const mod = await import('./shell-bootstrap');
     bootResult = await mod.bootstrapShell({
       sendBytes: (bs) => { for (let i = 0; i < bs.length; i++) dataVC.input(bs[i]); },
       onBytes: (h) => {
-        const wrap = (data: unknown) => h(data as Uint8Array);
+        // Convert bus-supplied data (Uint8Array | ArrayBuffer | …) to
+        // a Uint8Array before handing it to the parser.
+        const wrap = (data: unknown) => {
+          const u = data instanceof Uint8Array ? data
+                  : data instanceof ArrayBuffer ? new Uint8Array(data)
+                  : new Uint8Array(data as ArrayBufferLike);
+          h(u);
+        };
         outHandlers.add(wrap);
         return () => { outHandlers.delete(wrap); };
       },
       log: (line) => dbg.log('wash', line),
+      deferUntilFirstByte: true,
     });
     dbg.log('wash', `shell.js fetched: ${bootResult.bytes.length}B (replay queued: ${bootResult.replay.length}B)`);
   } catch (e) {
@@ -836,16 +866,9 @@ declare global {
     } catch (e) {
       dbg.log('wash', `shell import failed: ${(e as Error).message}`);
     }
-    // Replay frames that arrived during bootstrap to the now-registered
-    // shell handler(s). microtask delay so the shell's bus.register
-    // has actually landed before we fire bytes at it.
-    if (bootResult.replay.length > 0) {
-      queueMicrotask(() => {
-        for (const h of outHandlers) {
-          try { h(bootResult!.replay); } catch (e) { dbg.log('wash', `replay handler threw: ${(e as Error).message}`); }
-        }
-      });
-    }
+    // Replay + post-asset bytes are flushed by bootResult.finish(),
+    // which is invoked from bus.register when the shell registers
+    // its port-2 handler. Nothing to do here.
   }
 
   // Restore the original (clean) URL. The shell has already read its
