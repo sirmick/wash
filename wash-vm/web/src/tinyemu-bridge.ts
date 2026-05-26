@@ -796,22 +796,62 @@ declare global {
   if (!transientSp.has('port')) transientSp.set('port', '2');
   window.history.replaceState(null, '', window.location.pathname + '?' + transientSp.toString());
 
-  dbg.log('wash', 'loading shell bundle…');
-  try {
-    await loadShellModule('/shell/shell.js');
-    dbg.log('wash', 'shell bundle loaded');
-  } catch (e) {
-    dbg.log('wash', `shell load failed: ${(e as Error).message}`);
-  } finally {
-    // Restore the original (clean) URL. The shell has already read
-    // its transport hint by now.
-    window.history.replaceState(null, '', origUrl);
-  }
-})();
+  // Wait for the router to send its first data-plane byte before we
+  // try to asset-fetch shell.js — if we send asset.read before the
+  // router is reading from /dev/vport0p0 the request is dropped.
+  await new Promise<void>((resolve) => {
+    if (!firstWashByte) { resolve(); return; }
+    const poll = setInterval(() => {
+      if (!firstWashByte) { clearInterval(poll); resolve(); }
+    }, 50);
+  });
 
-async function loadShellModule(url: string): Promise<void> {
-  await import(/* @vite-ignore */ url);
-}
+  dbg.log('wash', 'bootstrapping shell.js over asset channel…');
+  let bootResult: { bytes: Uint8Array; replay: Uint8Array } | null = null;
+  try {
+    const mod = await import('./shell-bootstrap');
+    bootResult = await mod.bootstrapShell({
+      sendBytes: (bs) => { for (let i = 0; i < bs.length; i++) dataVC.input(bs[i]); },
+      onBytes: (h) => {
+        const wrap = (data: unknown) => h(data as Uint8Array);
+        outHandlers.add(wrap);
+        return () => { outHandlers.delete(wrap); };
+      },
+      log: (line) => dbg.log('wash', line),
+    });
+    dbg.log('wash', `shell.js fetched: ${bootResult.bytes.length}B (replay queued: ${bootResult.replay.length}B)`);
+  } catch (e) {
+    dbg.log('wash', `shell bootstrap failed: ${(e as Error).message}`);
+  }
+
+  if (bootResult) {
+    try {
+      // Slice to a fresh ArrayBuffer view — Blob's TS types reject
+       // Uint8Array<ArrayBufferLike> under strict mode.
+      const blob = new Blob([bootResult.bytes.slice().buffer], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      try { await import(/* @vite-ignore */ url); }
+      finally { URL.revokeObjectURL(url); }
+      dbg.log('wash', 'shell bundle loaded');
+    } catch (e) {
+      dbg.log('wash', `shell import failed: ${(e as Error).message}`);
+    }
+    // Replay frames that arrived during bootstrap to the now-registered
+    // shell handler(s). microtask delay so the shell's bus.register
+    // has actually landed before we fire bytes at it.
+    if (bootResult.replay.length > 0) {
+      queueMicrotask(() => {
+        for (const h of outHandlers) {
+          try { h(bootResult!.replay); } catch (e) { dbg.log('wash', `replay handler threw: ${(e as Error).message}`); }
+        }
+      });
+    }
+  }
+
+  // Restore the original (clean) URL. The shell has already read its
+  // transport hint by now.
+  window.history.replaceState(null, '', origUrl);
+})();
 
 // --- 7. WS-driven admin commands -------------------------------------------
 // Admin frames arrive through dbg's WS singleton — no polling. The

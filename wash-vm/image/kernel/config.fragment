@@ -7,7 +7,7 @@
 # i686 + SeaBIOS.
 #
 # What's INTENTIONALLY off (same reasoning as the x86 fragment):
-#   CONFIG_NET, CONFIG_USB, CONFIG_SOUND, CONFIG_HID, CONFIG_DRM,
+#   CONFIG_USB, CONFIG_SOUND, CONFIG_HID, CONFIG_DRM,
 #   CONFIG_FB, CONFIG_INPUT, CONFIG_WIRELESS, CONFIG_MODULES.
 
 # ─── 1. CPU / arch ───────────────────────────────────────────────────
@@ -99,8 +99,15 @@ CONFIG_POSIX_TIMERS=y
 CONFIG_PRINTK=y
 CONFIG_PRINTK_TIME=y
 
+CONFIG_NET=y
+CONFIG_UNIX=y
+CONFIG_INET=y
+CONFIG_IPV6=y
+CONFIG_UNIX_DIAG=y
+CONFIG_INET_DIAG=y
+CONFIG_NETLINK_DIAG=y
+
 # Explicitly OFF — same exclusions as image/kernel/config.fragment.
-# CONFIG_NET is not set
 # CONFIG_USB is not set
 # CONFIG_USB_SUPPORT is not set
 # CONFIG_SOUND is not set

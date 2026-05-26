@@ -45,38 +45,14 @@ static void wash_log_bytes(const uint8_t *buf, int len) {
     fwrite(buf, 1, len, stderr); fflush(stderr);
 }
 #endif
-static void washtrace_emit(const char *tag) {
-    int n = 0; while (tag[n]) n++;
-    wash_log_bytes((const uint8_t *)tag, n);
-}
-
-/* Lookup table: VIRTIODevice* → wash console channel index, populated
-   by wash_virtio_console_set in jsemu.c. Lets queue_notify identify
-   which console port without forward-declaring the inner struct. */
-#define WASHTRACE_VC_MAX 8
-static void *washtrace_vc_dev[WASHTRACE_VC_MAX];
-void washtrace_register_console(int ch, void *dev) {
-    if (ch >= 0 && ch < WASHTRACE_VC_MAX) washtrace_vc_dev[ch] = dev;
-}
-static int washtrace_lookup_ch(void *dev) {
-    for (int i = 0; i < WASHTRACE_VC_MAX; i++)
-        if (washtrace_vc_dev[i] == dev) return i;
-    return -1;
-}
-
-/* Heartbeat: a periodic beat fired from virt_machine_run so we can
-   tell "WASM main loop alive but kernel idle" from "WASM dead".
-   Counter is non-static (extern-visible) so LTO can't reason it away. */
+/* Heartbeat counter: incremented every virt_machine_run iteration.
+   No longer emits a log line — the FE [rate] sampler reads this via
+   wash_iter_counter() against wallclock, which is the only consumer
+   that actually needs it. Counter stays volatile + extern-visible so
+   LTO can't reason it away. */
 volatile int washtrace_heartbeat_counter;
 void washtrace_heartbeat(void) {
     washtrace_heartbeat_counter++;
-    int n = washtrace_heartbeat_counter;
-    if ((n & 0xFF) == 0) {  /* every 256 calls */
-        char buf[64];
-        int len = snprintf(buf, sizeof(buf),
-                           "[WASHTRACE] heartbeat tick=%d\n", n);
-        if (len > 0) wash_log_bytes((const uint8_t *)buf, len);
-    }
 }
 /* wash patch: expose the iteration counter as a callable so the FE can
    sample iter-rate against wallclock and surface browser throttling
@@ -98,6 +74,10 @@ unsigned int wash_heap_bytes(void) {
 #else
 unsigned int wash_heap_bytes(void) { return 0; }
 #endif
+/* Surviving trace macro: only used by the multiport ctrl-queue
+   OVERFLOW / DROP error paths. Routes through console_write under
+   WASM since Emscripten's NO_FILESYSTEM=1 strips fprintf — so the
+   bytes show up tagged [riscv] in the WS log. */
 #define WASHTRACE(...) do { \
     char _tb[256]; \
     int _n = snprintf(_tb, sizeof(_tb), "[WASHTRACE] " __VA_ARGS__); \
@@ -106,7 +86,6 @@ unsigned int wash_heap_bytes(void) { return 0; }
         wash_log_bytes((const uint8_t *)_tb, _n); \
     } \
 } while (0)
-#define WASHTRACE_LITERAL(s) washtrace_emit(s)
 
 //#define DEBUG_VIRTIO
 
@@ -598,18 +577,6 @@ static void queue_notify(VIRTIODevice *s, int queue_idx)
     int desc_idx, read_size, write_size;
 
     avail_idx = virtio_read16(s, qs->avail_addr + 2);
-    {
-        int ch = (s->device_id == 3) ? washtrace_lookup_ch((void *)s) : -1;
-        /* Console ch=1 (wash data plane): log every kick. Other
-           console channels and the block device: 1/32 sampling. */
-        static uint32_t qnotify_count;
-        qnotify_count++;
-        if (ch == 1 || (qnotify_count & 31) == 0) {
-            WASHTRACE("qnotify n=%u dev=%p did=%u ch=%d q=%d ready=%d avail=%u last_avail=%u\n",
-                      qnotify_count, (void *)s, s->device_id, ch, queue_idx, qs->ready,
-                      avail_idx, qs->last_avail_idx);
-        }
-    }
 
     if (qs->manual_recv)
         return;
@@ -1363,19 +1330,6 @@ static int virtio_console_recv_request(VIRTIODevice *s, int queue_idx,
     CharacterDevice *cs = s1->cs;
     uint8_t *buf;
 
-    int ch = (int)(intptr_t)cs->opaque;
-    /* ch=1 is the wash data plane — log every event, no sampling.
-       Other channels: 1/16 sampling to keep the noise floor down. */
-    {
-        static uint32_t vc_recv_count[8];
-        if (ch >= 0 && ch < 8) {
-            vc_recv_count[ch]++;
-            if (ch == 1 || (vc_recv_count[ch] & 15) == 0)
-                WASHTRACE("vc_recv ch=%d n=%u q=%d desc=%d rsz=%d wsz=%d\n",
-                          ch, vc_recv_count[ch], queue_idx, desc_idx, read_size, write_size);
-        }
-    }
-
     if (queue_idx == 1) {
         /* send to console */
         buf = malloc(read_size);
@@ -1566,8 +1520,6 @@ static int mp_drain_ctrl_rx(VIRTIOConsoleMPDevice *s)
             virtio_consume_desc(vs, 2, desc_idx, sizeof(c));
             qs->last_avail_idx++;
             sent++;
-            WASHTRACE("mp_ctrl_send id=%u event=%u value=%u\n",
-                      c.id, c.event, c.value);
         } else {
             WASHTRACE("mp_ctrl_send DROP id=%u event=%u (write_size=%d)\n",
                       c.id, c.event, write_size);
@@ -1579,8 +1531,6 @@ static int mp_drain_ctrl_rx(VIRTIOConsoleMPDevice *s)
 static void mp_handle_ctrl_tx(VIRTIOConsoleMPDevice *s,
                               const VIRTIOConsoleCtrl *c)
 {
-    WASHTRACE("mp_ctrl_recv id=%u event=%u value=%u\n",
-              c->id, c->event, c->value);
     switch (c->event) {
     case VIRTIO_CONSOLE_DEVICE_READY:
         s->device_ready = TRUE;
@@ -1646,7 +1596,6 @@ static int virtio_console_mp_recv_request(VIRTIODevice *vs, int queue_idx,
         if (cs && cs->write_data) {
             uint8_t *buf = malloc(read_size);
             memcpy_from_queue(vs, buf, queue_idx, desc_idx, 0, read_size);
-            WASHTRACE("mp_tx port=%d len=%d\n", port, read_size);
             cs->write_data(cs->opaque, buf, read_size);
             free(buf);
         }

@@ -224,11 +224,9 @@ static CharacterDevice *wash_vc_chardev[WASH_VC_MAX];
 static VIRTIODevice    *wash_vc_vdev[WASH_VC_MAX];
 static int              wash_vc_count;
 
-extern void washtrace_register_console(int ch, void *dev);
 void wash_virtio_console_set(int ch, VIRTIODevice *dev)
 {
     if (ch >= 0 && ch < WASH_VC_MAX) wash_vc_vdev[ch] = dev;
-    washtrace_register_console(ch, (void *)dev);
 }
 
 static int wash_vc_in_read(void *opaque, uint8_t *buf, int len)

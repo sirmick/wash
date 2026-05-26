@@ -27,6 +27,7 @@ WORKDIR /buildroot
 # Defconfig drives the buildroot configuration. Caching: this layer
 # only changes when the defconfig does.
 COPY wash_riscv64_defconfig configs/wash_defconfig
+COPY busybox.fragment /input/busybox.fragment
 RUN make wash_defconfig
 
 # Wash binaries + init script overlay. This is the layer that changes

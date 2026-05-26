@@ -13,6 +13,7 @@ import { For, Show, createEffect, createSignal } from 'solid-js';
 import type { Component } from 'solid-js';
 import { Conn, type ConnState } from './ws';
 import { beginBundle, finishBundle, pushBundleBytes } from './assets';
+import { washFetch, handleAssetReadOK, handleAssetReadErr, pushAssetBytes, finishAsset } from './wash-fetch';
 import {
   VIEWPORTS_PER_AXIS,
   applySessionPatch,
@@ -256,16 +257,26 @@ conn = new Conn(
           // Bundle delivery channel — start accumulating until the
           // matching channel.unbind triggers the dynamic import.
           bundleReady.set(b.instance_id, beginBundle(b.channel_id, b.instance_id));
+        } else if (b.kind === 'asset') {
+          // Asset channel: state lives in wash-fetch.ts, keyed by
+          // (req_id, channel_id) via the preceding asset.read.ok.
+          // Nothing to do here.
         } else {
           channelOwner.set(b.channel_id, b.window_id);
         }
         break;
       }
+      case 'asset.read.ok':
+        handleAssetReadOK(msg as { req_id: number; channel_id: number; size: number; mime?: string });
+        break;
+      case 'asset.read.err':
+        handleAssetReadErr(msg as { req_id: number; code: string; msg?: string });
+        break;
       case 'channel.unbind': {
         const u = msg as ShellChannelUnbind;
-        // If it's a bundle channel, finalize the import; otherwise
-        // drop any raw-channel subscriber waiting on the id.
+        // Try each accumulator in turn; harmless on miss.
         finishBundle(u.channel_id);
+        finishAsset(u.channel_id);
         channelOwner.delete(u.channel_id);
         closeRawSubscriber(u.channel_id);
         // Forget any pending credit count — channel is gone, no
@@ -276,9 +287,10 @@ conn = new Conn(
     }
   },
   (channelID, bytes) => {
-    // Bundle-channel bytes (a one-shot upload of an app's JS) get
-    // accumulated; everything else flows to the per-channel raw
-    // subscriber (xterm's pty, etc.).
+    // Asset (washFetch) and bundle (kind=bundle) channels divert
+    // bytes into their own accumulators; everything else flows to the
+    // per-channel raw subscriber (xterm's pty, etc.).
+    if (pushAssetBytes(channelID, bytes)) return;
     if (pushBundleBytes(channelID, bytes)) return;
     deliverRaw(channelID, bytes);
     // Bulk-class raw flows (terminal output, file content) drain

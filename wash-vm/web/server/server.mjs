@@ -101,6 +101,25 @@ server.on('request', async (req, res) => {
     return;
   }
 
+  // /icons.svg — wash icon sprite. Lives in wash-router's embedded
+  // assets at internal/runner/router/assets/icons.svg. window.tsx and
+  // a few apps reference symbols via `<use href="/icons.svg#name">`,
+  // which expects the file at the page origin. Wash-router would
+  // serve it from its embedded FS when transport=ws — we use fd:3
+  // for the in-VM router, so the FE never sees it without this route.
+  if (url === '/icons.svg' || url.startsWith('/icons.svg?')) {
+    const ICONS = resolve(DEMO_ROOT, '../../internal/runner/router/assets/icons.svg');
+    try {
+      const st = await stat(ICONS);
+      res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Content-Length': st.size });
+      createReadStream(ICONS).pipe(res);
+    } catch {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('icons.svg not found\n');
+    }
+    return;
+  }
+
   // /shell/* — static-serve the pre-built shell bundle from
   // wash/web/shell/dist. Without this, vite's SPA fallback serves
   // index.html in place of `/shell/shell.js`, the browser rejects the

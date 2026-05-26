@@ -612,10 +612,7 @@ int sbi_domain_root_add_memregion(const struct sbi_domain_memregion *reg)
 	bool reg_merged;
 	struct sbi_domain_memregion *nreg, *nreg1, *nreg2;
 
-	/* Sanity checks (with WASH bisect debug prints) */
-	sbi_printf("WASH/addmem: enter reg=%p finalized=%d root.regions=%p count=%u/%u\n",
-		   reg, domain_finalized, root.regions,
-		   root_memregs_count, ROOT_REGION_MAX);
+	/* Sanity checks */
 	if (!reg || domain_finalized || !root.regions ||
 	    (ROOT_REGION_MAX <= root_memregs_count))
 		return SBI_EINVAL;

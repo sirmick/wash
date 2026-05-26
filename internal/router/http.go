@@ -38,7 +38,11 @@ type HTTPServer struct {
 }
 
 // NewHTTPServer returns a ready-to-mount handler. assets may be nil.
+// The assets FS is also stashed on the Router so the shell-session
+// asset-pull handler (TShellAssetRead) can serve from it over the WS
+// transport — same source of truth.
 func NewHTTPServer(r *Router, assets http.FileSystem) *HTTPServer {
+	r.SetAssets(assets)
 	s := &HTTPServer{router: r, assets: assets, mux: http.NewServeMux()}
 	s.mux.HandleFunc("/ws", s.handleWS)
 	s.mux.HandleFunc("/screenshot", s.handleScreenshot)

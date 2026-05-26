@@ -17,7 +17,7 @@
 # Host prerequisites: bash, docker. The cross-compile toolchain
 # runs entirely inside Docker containers.
 
-REPO_ROOT := $(abspath ..)
+REPO_ROOT := $(abspath ../..)
 DIST      := $(CURDIR)/dist
 ROOTFS    := $(DIST)/rootfs.ext2
 KERNEL    := $(DIST)/Image

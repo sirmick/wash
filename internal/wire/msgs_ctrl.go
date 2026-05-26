@@ -137,6 +137,10 @@ func NewError(code, msg string) Error {
 const (
 	ChannelKindGeneric = ""
 	ChannelKindBundle  = "bundle"
+	// "asset" is a one-shot, router-originated, read-only channel
+	// streaming a single file from the router's embedded asset FS.
+	// Opened in response to ShellAssetRead. ChannelClose marks EOF.
+	ChannelKindAsset = "asset"
 )
 
 // ChannelOpen — app → router — requests a new raw channel bound to
@@ -313,6 +317,15 @@ func DecodeCtrl(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TShellAppCrashed:
 		var m ShellAppCrashed
+		return m, json.Unmarshal(data, &m)
+	case TShellAssetRead:
+		var m ShellAssetRead
+		return m, json.Unmarshal(data, &m)
+	case TShellAssetReadOK:
+		var m ShellAssetReadOK
+		return m, json.Unmarshal(data, &m)
+	case TShellAssetReadErr:
+		var m ShellAssetReadErr
 		return m, json.Unmarshal(data, &m)
 	}
 	return nil, fmt.Errorf("ctrl decode: unknown t %q", t)

@@ -104,12 +104,18 @@
       }
       /* jslinux sets term_wrap.style.width inline to the initial term
          pixel width — override with !important so it actually fills.
-         Same for the term root element inside #term_container. */
+         Same for the term root element inside #term_container.
+         CRITICAL: exclude .term_char_size — that's a measurement div
+         Bellard's Term creates inside the container, never removes,
+         and uses to compute char_width. Forcing it to 100% width
+         makes one character look like the whole container wide
+         (char_width = container_width), which then makes resizePixel
+         compute zero columns and refuse to resize. */
       /* All view roots fill the stage absolute-positioned. CSS picks
          which one shows by body[data-view]. */
       #term_wrap    { position: absolute !important; inset: 0 !important; width: auto !important; }
       #term_container,
-      #term_container > div { width: 100% !important; height: 100% !important; }
+      #term_container > div.term:not(.term_char_size) { width: 100% !important; height: 100% !important; }
       #shell_host   { position: absolute; inset: 0; background: #000; }
       #washlog_host { position: absolute; inset: 0; background: #000; }
       #diag_host    { position: absolute; inset: 0; background: #000; }

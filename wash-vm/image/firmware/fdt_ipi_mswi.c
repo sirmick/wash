@@ -21,9 +21,6 @@ static int ipi_mswi_cold_init(void *fdt, int nodeoff,
 	unsigned long offset;
 	struct aclint_mswi_data *ms;
 
-	sbi_printf("WASH/mswi: enter nodeoff=%d compat=%s\n", nodeoff,
-		   match->compatible);
-
 	ms = sbi_zalloc(sizeof(*ms));
 	if (!ms)
 		return SBI_ENOMEM;
@@ -31,8 +28,6 @@ static int ipi_mswi_cold_init(void *fdt, int nodeoff,
 	rc = fdt_parse_aclint_node(fdt, nodeoff, false, false,
 				   &ms->addr, &ms->size, NULL, NULL,
 				   &ms->first_hartid, &ms->hart_count);
-	sbi_printf("WASH/mswi: parse rc=%d addr=0x%lx size=0x%lx fh=%u hc=%u\n",
-		   rc, ms->addr, ms->size, ms->first_hartid, ms->hart_count);
 	if (rc) {
 		sbi_free(ms);
 		return rc;
@@ -40,8 +35,6 @@ static int ipi_mswi_cold_init(void *fdt, int nodeoff,
 
 	if (match->data) {
 		offset = *((unsigned long *)match->data);
-		sbi_printf("WASH/mswi: offset=0x%lx ACLINT_MSWI_SIZE=0x%x\n",
-			   offset, ACLINT_MSWI_SIZE);
 		ms->addr += offset;
 		if ((ms->size - offset) < ACLINT_MSWI_SIZE) {
 			sbi_printf("WASH/mswi: SIZE CHECK FAILED\n");
@@ -51,7 +44,6 @@ static int ipi_mswi_cold_init(void *fdt, int nodeoff,
 	}
 
 	rc = aclint_mswi_cold_init(ms);
-	sbi_printf("WASH/mswi: aclint_mswi_cold_init rc=%d\n", rc);
 	if (rc) {
 		sbi_free(ms);
 		return rc;

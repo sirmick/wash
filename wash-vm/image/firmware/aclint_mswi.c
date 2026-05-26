@@ -88,10 +88,6 @@ int aclint_mswi_cold_init(struct aclint_mswi_data *mswi)
 	unsigned long pos, region_size;
 	struct sbi_domain_memregion reg;
 
-	sbi_printf("WASH/aclint: enter addr=0x%lx size=0x%lx fh=%u hc=%u\n",
-		   mswi ? mswi->addr : 0, mswi ? mswi->size : 0,
-		   mswi ? mswi->first_hartid : 0, mswi ? mswi->hart_count : 0);
-
 	/* Sanity checks */
 	if (!mswi) {
 		sbi_printf("WASH/aclint: SANITY FAIL: mswi NULL\n");

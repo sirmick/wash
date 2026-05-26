@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -74,9 +75,10 @@ type Logger func(format string, args ...any)
 // either call Run(ctx) for the full server lifecycle or feed it
 // transports directly via HandleApp/HandleShell for tests.
 type Router struct {
-	cfg Config
-	reg *Registry
-	log Logger
+	cfg    Config
+	reg    *Registry
+	log    Logger
+	assets http.FileSystem // embedded shell-runtime FS; served via TShellAssetRead
 
 	mu      sync.Mutex
 	apps    map[string]*AppInstance // by instance id
@@ -169,6 +171,11 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		cliSessions:    make(map[string]*cliSession),
 	}
 }
+
+// SetAssets installs the embedded shell-runtime FS so TShellAssetRead
+// handlers can serve files from it. Called by the runner after the
+// router is constructed and the embedded FS is resolved.
+func (r *Router) SetAssets(fs http.FileSystem) { r.assets = fs }
 
 // tokenPending is a pending-attach record keyed by attach token
 // (Identity.AttachToken). Differs from pendingAttach (pid-keyed) in

@@ -61,6 +61,15 @@ const (
 	// converts the matching window into a crash tombstone in place,
 	// preserving geometry so the user can copy the trace.
 	TShellAppCrashed = "app.crashed"
+
+	// Shell → router, asset pull. Read a single file from the
+	// router's embedded shell-asset FS (icons.svg, future docs, etc.).
+	TShellAssetRead = "asset.read"
+	// Router → shell, asset pull accepted. ChannelID will stream the
+	// file bytes via Kind="asset". ChannelClose marks EOF.
+	TShellAssetReadOK = "asset.read.ok"
+	// Router → shell, asset pull rejected. Code mirrors §13.
+	TShellAssetReadErr = "asset.read.err"
 )
 
 // ShellLog levels.
@@ -455,4 +464,46 @@ type ShellChannelUnbind struct {
 
 func NewShellChannelUnbind(channelID uint32, reason string) ShellChannelUnbind {
 	return ShellChannelUnbind{T: TShellChannelUnbind, ChannelID: channelID, Reason: reason}
+}
+
+// ShellAssetRead: shell asks router for a single asset from the
+// router's embedded asset FS. ReqID correlates the response. Path is
+// the request path as the shell would have written `fetch(path)` —
+// resolved against the asset FS root, leading slash optional.
+type ShellAssetRead struct {
+	T     string `json:"t"`
+	ReqID uint64 `json:"req_id"`
+	Path  string `json:"path"`
+}
+
+func NewShellAssetRead(reqID uint64, path string) ShellAssetRead {
+	return ShellAssetRead{T: TShellAssetRead, ReqID: reqID, Path: path}
+}
+
+// ShellAssetReadOK: router accepts the pull. Bytes will stream on
+// ChannelID (Kind=ChannelKindAsset) until a ChannelClose marks EOF.
+// Size/Mime are advisory; shell can pre-allocate and dispatch.
+type ShellAssetReadOK struct {
+	T         string `json:"t"`
+	ReqID     uint64 `json:"req_id"`
+	ChannelID uint32 `json:"channel_id"`
+	Size      int64  `json:"size"`
+	Mime      string `json:"mime,omitempty"`
+}
+
+func NewShellAssetReadOK(reqID uint64, channelID uint32, size int64, mime string) ShellAssetReadOK {
+	return ShellAssetReadOK{T: TShellAssetReadOK, ReqID: reqID, ChannelID: channelID, Size: size, Mime: mime}
+}
+
+// ShellAssetReadErr: router rejects the pull (typically ErrCodeNotFound
+// or ErrCodeForbidden). No channel is opened.
+type ShellAssetReadErr struct {
+	T     string `json:"t"`
+	ReqID uint64 `json:"req_id"`
+	Code  string `json:"code"`
+	Msg   string `json:"msg"`
+}
+
+func NewShellAssetReadErr(reqID uint64, code, msg string) ShellAssetReadErr {
+	return ShellAssetReadErr{T: TShellAssetReadErr, ReqID: reqID, Code: code, Msg: msg}
 }

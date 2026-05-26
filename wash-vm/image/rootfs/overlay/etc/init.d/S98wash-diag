@@ -30,16 +30,39 @@ start() {
     echo "wash-diag: using $DIAG_DEV" > /dev/kmsg 2>/dev/null || true
     mkdir -p /run
 
-    # Minimal test: just tick + sleep, see if the loop iterates.
+    # Periodic system snapshot. Each iteration prints a labelled block
+    # so a developer tailing the diag pane can see what's running,
+    # memory headroom, disk usage, and process hierarchy without
+    # having to login. pstree comes from psmisc (added to defconfig);
+    # if absent, we degrade gracefully to busybox `ps -ef` only.
     setsid /bin/sh -c "
         exec >$DIAG_DEV 2>&1 </dev/null
-        echo \"wash-diag-min: alive pid=\$\$ via $DIAG_DEV\"
+        echo \"wash-diag: alive pid=\$\$ via $DIAG_DEV\"
+        uname -a
         n=0
         while :; do
             n=\$((n + 1))
-            t=\$(cat /proc/uptime 2>/dev/null | cut -d. -f1)
-            echo \"tick \$n at uptime=\${t}s\"
-            sleep 2
+            t=\$(cut -d. -f1 /proc/uptime 2>/dev/null)
+            printf '\n===== diag #%d  uptime=%ss  %s =====\n' \"\$n\" \"\$t\" \"\$(date 2>/dev/null)\"
+            echo '--- uptime / load ---'
+            uptime
+            echo '--- memory (free -h) ---'
+            free -h 2>/dev/null || free
+            echo '--- disk (df -h) ---'
+            df -h 2>/dev/null || df
+            echo '--- mounts ---'
+            mount | grep -v '^proc\\|^sysfs\\|^tmpfs.*on /sys' | head -10
+            echo '--- pstree ---'
+            if command -v pstree >/dev/null 2>&1; then
+                pstree -p 2>/dev/null || pstree
+            else
+                echo '(pstree not installed)'
+            fi
+            echo '--- ps -ef ---'
+            ps -ef 2>/dev/null || ps
+            echo '--- wash sockets ---'
+            ls -l /tmp/wash-*.sock 2>/dev/null | head -10 || echo '(no /tmp/wash-*.sock yet)'
+            sleep 10
         done
     " &
     echo $! > "$PIDFILE"

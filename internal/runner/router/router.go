@@ -263,6 +263,11 @@ func Run(args []string) int {
 	}
 
 	r := router.NewRouter(cfg, reg, logf)
+	// Make the embedded shell asset FS available for TShellAssetRead
+	// regardless of transport. NewHTTPServer also calls SetAssets
+	// (redundant when transport=ws, but the ws branch may be skipped
+	// when we run over fd:3 / unix sockets).
+	r.SetAssets(assets)
 
 	// Parse transport selection up-front so we error before any
 	// listener / fs work happens on a bad flag.

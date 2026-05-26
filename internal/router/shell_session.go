@@ -6,6 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"mime"
+	"path"
+	"strings"
 	"sync"
 
 	"github.com/sirmick/wash/internal/wire"
@@ -217,9 +221,75 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		return s.handleShellLog(m)
 	case wire.ShellChannelCredit:
 		return s.handleChannelCredit(m)
+	case wire.ShellAssetRead:
+		return s.handleAssetRead(m)
 	}
 	s.router.log("shell: unexpected ctrl msg %T", msg)
 	return nil
+}
+
+// handleAssetRead serves a single file from the router's embedded
+// asset FS (set by SetAssets) to the shell over a freshly-allocated
+// Kind=ChannelKindAsset channel. Closes the channel with ChannelUnbind
+// when the file is fully written. On error (no FS configured, path
+// missing, traversal attempt, read failure) a ShellAssetReadErr is
+// sent back and no channel is opened.
+func (s *ShellSession) handleAssetRead(m wire.ShellAssetRead) error {
+	fs := s.router.assets
+	if fs == nil {
+		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeInternal, "no asset fs"))
+	}
+	// Normalise: strip leading slashes, reject any segment that's "..".
+	// http.FileSystem.Open with a path containing ".." can still escape
+	// http.Dir wrappers; we belt-and-braces it.
+	clean := path.Clean("/" + strings.TrimLeft(m.Path, "/"))
+	if clean == "/" || strings.Contains(clean, "/..") {
+		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeBadRequest, "bad path"))
+	}
+	f, err := fs.Open(clean)
+	if err != nil {
+		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeNotFound, err.Error()))
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeInternal, err.Error()))
+	}
+	if st.IsDir() {
+		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeBadRequest, "is a directory"))
+	}
+	ct := mime.TypeByExtension(path.Ext(clean))
+	id := s.router.allocChannelID()
+	if err := s.WriteCtrl(wire.NewShellAssetReadOK(m.ReqID, id, st.Size(), ct)); err != nil {
+		return err
+	}
+	// Bind so the shell knows the channel id maps to an asset stream.
+	if err := s.WriteCtrl(wire.ShellChannelBind{
+		T:         wire.TShellChannelBind,
+		ChannelID: id,
+		Kind:      wire.ChannelKindAsset,
+	}); err != nil {
+		return err
+	}
+	// Stream bytes. Same Interactive class as bundle delivery so the
+	// strict-priority scheduler can't let the Unbind overtake data.
+	const chunkSize = 64 * 1024
+	buf := make([]byte, chunkSize)
+	for {
+		n, rerr := f.Read(buf)
+		if n > 0 {
+			if werr := s.WriteRawFrameClass(id, buf[:n], wire.ClassInteractive); werr != nil {
+				return werr
+			}
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			return s.WriteCtrl(wire.NewShellChannelUnbind(id, "read error: "+rerr.Error()))
+		}
+	}
+	return s.WriteCtrl(wire.NewShellChannelUnbind(id, "asset complete"))
 }
 
 // handleChannelCredit applies an FE-issued credit grant to the

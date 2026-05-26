@@ -105,6 +105,7 @@ EOF
 
 # Buildroot inputs.
 cp "$here/wash_riscv64_defconfig" "$ctx/wash_riscv64_defconfig"
+cp "$here/busybox.fragment"       "$ctx/busybox.fragment"
 cp "$here/Dockerfile" "$ctx/Dockerfile"
 
 echo "==> building buildroot rootfs"
