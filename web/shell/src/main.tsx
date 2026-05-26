@@ -641,7 +641,7 @@ window.wash = {
     conn.sendCtrl({ t: 'app_msg.send', instance_id: instanceID, data });
   },
   sendAppMsgTo(recipient, data) {
-    conn.sendCtrl({ t: 'app_msg.send.to', recipient, data });
+    conn.sendCtrl({ t: 'app_msg.send', to: recipient, data });
   },
   catalog: () => catalogSub.value,
   onCatalog: (cb) => catalogSub.on(cb),

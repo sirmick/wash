@@ -216,22 +216,22 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 // ----- bus types -----
 
 type saveStateReq struct {
-	State any `cbor:"state"`
+	State any `json:"state"`
 }
 
 type resizeReq struct {
-	ChannelID uint64 `cbor:"channel_id"`
-	Cols      uint64 `cbor:"cols"`
-	Rows      uint64 `cbor:"rows"`
+	ChannelID uint64 `json:"channel_id"`
+	Cols      uint64 `json:"cols"`
+	Rows      uint64 `json:"rows"`
 }
 
 type newTabReq struct {
-	Cols uint64 `cbor:"cols"`
-	Rows uint64 `cbor:"rows"`
+	Cols uint64 `json:"cols"`
+	Rows uint64 `json:"rows"`
 }
 
 type closeTabReq struct {
-	ChannelID uint64 `cbor:"channel_id"`
+	ChannelID uint64 `json:"channel_id"`
 }
 
 func registerHandlers(b *sdk.Bus) {

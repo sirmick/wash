@@ -18,7 +18,7 @@ import (
 // negotiation is post-v0.0.
 const (
 	ChannelControl = 0 // JSON: handshake/asset on app socket; shell vocabulary on WS
-	ChannelEvent   = 1 // CBOR: app event channel
+	ChannelEvent   = 1 // JSON: app event channel
 )
 
 // Config is the runtime configuration the caller (cmd/wash-router)
@@ -102,7 +102,7 @@ type Router struct {
 	// singletons maps a singleton manifest's app_id to its currently-
 	// running instance, or absent if none. Used to (a) refuse a
 	// second spawn of a singleton, and (b) resolve sentinel addresses
-	// in EvtAppMsgSendTo / ShellAppMsgSendTo. Mutations always happen
+	// in EvtAppMsg / ShellAppMsgSend. Mutations always happen
 	// while r.mu is held — same lock that guards r.apps — so the
 	// lookup stays consistent with the live instance map.
 	singletons map[string]*AppInstance
@@ -356,14 +356,17 @@ func (r *Router) catalog() []wire.ShellCatalogApp {
 func (r *Router) Config() Config { return r.cfg }
 
 // handshakeSession builds the Session bag the router ships to every
-// app in the IdentityAck. Returns nil when nothing's configured so
-// the field stays omitempty on the wire. Named distinctly from
-// r.session (the desktop-session app state).
+// app in the IdentityAck. Named distinctly from r.session (the
+// desktop-session app state).
 func (r *Router) handshakeSession() *wire.Session {
-	if r.cfg.FSRoot == "" {
-		return nil
+	// closeGrace is a router-wide constant today; the wire field
+	// gives apps a way to read it without guessing. If it ever
+	// becomes per-app configurable, the value at this site is what
+	// each instance sees.
+	return &wire.Session{
+		Root:         r.cfg.FSRoot,
+		CloseGraceMs: uint32(closeGrace / time.Millisecond),
 	}
-	return &wire.Session{Root: r.cfg.FSRoot}
 }
 
 // allocInstanceID returns a fresh per-process instance id. The format
@@ -824,27 +827,15 @@ func (r *Router) unregisterShell(s *ShellSession) {
 // bundle upload, accumulates bytes until the unbind, and then
 // blob-URL-imports the result.
 //
-// No-op if the bundle hasn't finished uploading yet. The caller is
-// expected to invoke this again from the ChannelClose handler when
-// the bundle becomes ready.
+// Bundle bytes come from the registry entry for inst's app id (the
+// probe envelope captured them at scan time). No-op when the entry
+// is missing or its bundle is empty.
 func (r *Router) replayBundleToShell(s *ShellSession, inst *AppInstance) {
-	inst.bundleMu.Lock()
-	bytes := inst.bundleBytes
-	ready := inst.bundleReady
-	inst.bundleMu.Unlock()
-	if ready == nil {
+	entry := r.reg.ByID(inst.AppID)
+	if entry == nil || len(entry.Bundle) == 0 {
 		return
 	}
-	select {
-	case <-ready:
-	default:
-		// Bundle still uploading; the ChannelClose handler will
-		// re-fan-out to attached shells when it completes.
-		return
-	}
-	if len(bytes) == 0 {
-		return
-	}
+	bytes := entry.Bundle
 	id := r.allocChannelID()
 	if err := s.WriteCtrl(wire.NewShellChannelBindBundle(id, inst.InstanceID)); err != nil {
 		r.log("bundle bind %s: %v", inst.InstanceID, err)
@@ -870,15 +861,6 @@ func (r *Router) replayBundleToShell(s *ShellSession, inst *AppInstance) {
 	}
 	if err := s.WriteCtrl(wire.NewShellChannelUnbind(id, "bundle complete")); err != nil {
 		r.log("bundle unbind %s: %v", inst.InstanceID, err)
-	}
-}
-
-// fanOutBundleToAttachedShells sends the bundle for inst to every
-// currently-connected shell. Called when the SDK finishes uploading
-// the bundle (i.e., the bundle channel's ChannelClose arrives).
-func (r *Router) fanOutBundleToAttachedShells(inst *AppInstance) {
-	for _, s := range r.shellList() {
-		r.replayBundleToShell(s, inst)
 	}
 }
 

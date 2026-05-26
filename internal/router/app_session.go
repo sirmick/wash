@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/fxamacker/cbor/v2"
 	"github.com/sirmick/wash/internal/wire"
 )
 
@@ -82,26 +81,6 @@ type AppInstance struct {
 	// awaiting close confirmation. nil when no close is pending.
 	closeMu      sync.Mutex
 	closeConfirm chan bool
-
-	// bundleMu guards bundleBytes + bundleChannel + bundleReady.
-	// bundleBytes accumulates the JS bundle the SDK uploads
-	// post-handshake on the bundle channel. The full bytes are
-	// retained for the instance lifetime so every (re)attaching
-	// shell can replay them — no second BE round-trip needed.
-	bundleMu      sync.Mutex
-	bundleBytes   []byte
-	bundleChannel uint32        // channel id reserved for app-side upload
-	bundleReady   chan struct{} // closed when the upload completes
-}
-
-// newBundleReady returns a fresh signaling channel; bundleReady is
-// lazy-init'd so AppInstance{} stays zero-valued.
-func (inst *AppInstance) ensureBundleReady() {
-	inst.bundleMu.Lock()
-	if inst.bundleReady == nil {
-		inst.bundleReady = make(chan struct{})
-	}
-	inst.bundleMu.Unlock()
 }
 
 // HandleApp is the entrypoint for a freshly-spawned app: it owns the
@@ -212,15 +191,6 @@ func (inst *AppInstance) dispatch(f wire.Frame) error {
 			inst.router.log("app %s: drop raw frame on unbound channel %d", inst.AppID, f.Channel)
 			return nil
 		}
-		if b.kind == wire.ChannelKindBundle {
-			// Bundle bytes from SDK during handshake — append to
-			// the instance's bundle cache. No shell forwarding;
-			// per-shell replay channels handle delivery.
-			inst.bundleMu.Lock()
-			inst.bundleBytes = append(inst.bundleBytes, f.Payload...)
-			inst.bundleMu.Unlock()
-			return nil
-		}
 		// Tee into the scrollback ring buffer (so a future
 		// reattaching shell can replay them) and forward to the
 		// currently-attached shell, if any.
@@ -253,24 +223,7 @@ func (inst *AppInstance) handleCtrl(payload []byte) error {
 	case wire.ChannelOpen:
 		return inst.handleChannelOpen(m)
 	case wire.ChannelClose:
-		// If the closing channel was the bundle uploader, the
-		// bundle is now complete — flip bundleReady and fan it
-		// out to every currently-attached shell.
-		inst.bundleMu.Lock()
-		isBundle := inst.bundleChannel == m.ChannelID && inst.bundleReady != nil
-		if isBundle {
-			select {
-			case <-inst.bundleReady:
-				// already closed
-			default:
-				close(inst.bundleReady)
-			}
-		}
-		inst.bundleMu.Unlock()
 		inst.router.closeChannel(m.ChannelID, "app requested close")
-		if isBundle {
-			inst.router.fanOutBundleToAttachedShells(inst)
-		}
 		return nil
 	case wire.Error:
 		inst.router.log("app %s: error code=%s: %s", inst.AppID, m.Code, m.Msg)
@@ -285,28 +238,6 @@ func (inst *AppInstance) handleCtrl(payload []byte) error {
 // the window belongs to this app (kiosk root counts), allocates an id,
 // records the binding, tells both sides.
 func (inst *AppInstance) handleChannelOpen(m wire.ChannelOpen) error {
-	// Bundle channels are special — they're an upload-only pipe
-	// from the SDK to the router used during/right after handshake
-	// to ship the embedded bundle. No shell forwarding; bytes go
-	// straight into inst.bundleBytes. The router replays them to
-	// every (re)attaching shell on a per-shell channel.
-	if m.Kind == wire.ChannelKindBundle {
-		id := inst.router.allocChannelID()
-		b := &channelBinding{
-			channelID: id,
-			app:       inst,
-			windowID:  inst.WindowID,
-			kind:      wire.ChannelKindBundle,
-		}
-		inst.router.registerChannel(b)
-		inst.bundleMu.Lock()
-		inst.bundleChannel = id
-		if inst.bundleReady == nil {
-			inst.bundleReady = make(chan struct{})
-		}
-		inst.bundleMu.Unlock()
-		return inst.writeCtrl(wire.NewChannelOpened(m.ReqID, id))
-	}
 	// For kiosk / desktop-surface apps the app has WindowID=0; the
 	// app must request windowID=0 as well (we treat that as "the
 	// root surface of this app"). For windowed apps, the requested
@@ -345,62 +276,60 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 	switch t {
 	case wire.TEvtAppMsg:
 		var m wire.EvtAppMsg
-		if err := cbor.Unmarshal(payload, &m); err != nil {
+		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
+		}
+		// Unified app_msg: To set ⇒ cross-app outbound; otherwise
+		// own-FE relay. The router never trusts a sender-supplied
+		// From field — relayAppMsgCrossInstance stamps a router-
+		// attested From on the receiver-bound frame.
+		if m.To != nil {
+			return inst.relayAppMsgCrossInstance(m)
 		}
 		return inst.relayAppMsgToShell(m, class)
-	case wire.TEvtAppMsgSendTo:
-		var m wire.EvtAppMsgSendTo
-		if err := cbor.Unmarshal(payload, &m); err != nil {
-			return err
-		}
-		return inst.relayAppMsgCrossInstance(m)
 	case wire.TEvtWindowSetTitle:
 		var m wire.EvtWindowSetTitle
-		if err := cbor.Unmarshal(payload, &m); err != nil {
+		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
 		return inst.relayWindowTitle(m)
 	case wire.TEvtWindowConfirmClose:
 		var m wire.EvtWindowConfirmClose
-		if err := cbor.Unmarshal(payload, &m); err != nil {
+		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
 		inst.deliverCloseConfirm(m.Allow)
 		return nil
 	case wire.TEvtSpawnRequest:
 		var m wire.EvtSpawnRequest
-		if err := cbor.Unmarshal(payload, &m); err != nil {
+		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
+		}
+		if m.Prepare {
+			return inst.handlePrepareSpawn(m)
 		}
 		return inst.handleSpawnRequest(m)
-	case wire.TEvtPrepareSpawn:
-		var m wire.EvtPrepareSpawn
-		if err := cbor.Unmarshal(payload, &m); err != nil {
-			return err
-		}
-		return inst.handlePrepareSpawn(m)
 	case wire.TEvtNotify:
 		var m wire.EvtNotify
-		if err := cbor.Unmarshal(payload, &m); err != nil {
+		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
 		return inst.relayNotify(m)
 	case wire.TEvtClipboardSet:
 		var m wire.EvtClipboardSet
-		if err := cbor.Unmarshal(payload, &m); err != nil {
+		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
 		return inst.handleClipboardSet(m)
 	case wire.TEvtClipboardGet:
 		var m wire.EvtClipboardGet
-		if err := cbor.Unmarshal(payload, &m); err != nil {
+		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
 		return inst.handleClipboardGet(m)
 	case wire.TEvtAppStateSet:
 		var m wire.EvtAppStateSet
-		if err := cbor.Unmarshal(payload, &m); err != nil {
+		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
 		// State is JSON bytes; pass straight through. RawMessage
@@ -424,54 +353,55 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 // model has no capability gate — anyone can address anyone, single-
 // user assumption. The router still validates the recipient
 // (existence, singleton-vs-sentinel rules) and logs failures.
-func (inst *AppInstance) relayAppMsgCrossInstance(m wire.EvtAppMsgSendTo) error {
-	// From identifies the sending instance to the receiver. The
-	// router is the only party that can fill it accurately —
-	// trust-by-relay. wash-priv's approval UI uses this for the
-	// "App <X> wants to run <Y>" prompt; payload-claimed identity
-	// would be spoofable.
+//
+// The To field on the inbound EvtAppMsg names the recipient; the
+// router writes the relayed frame with From set to the sender's
+// router-attested identity so the receiver knows who messaged it.
+func (inst *AppInstance) relayAppMsgCrossInstance(m wire.EvtAppMsg) error {
+	if m.To == nil {
+		return nil
+	}
+	to := *m.To
 	from := wire.Sender{AppID: inst.AppID, InstanceID: inst.InstanceID}
 	// CLI session fast-path: SendAppMsgTo({InstanceID:"cli-..."})
 	// targets a control-socket connection promoted to a streaming
 	// back-channel, not a registered app. Used by wash-priv to
 	// stream stdout/stderr/exit back to wash-sudo. The session
 	// renders the payload as a JSON envelope on the conn.
-	if cli := inst.router.findCliSession(m.Recipient.InstanceID); cli != nil {
+	if cli := inst.router.findCliSession(to.InstanceID); cli != nil {
 		return cli.writeAppMsg(&Sender{AppID: from.AppID, InstanceID: from.InstanceID}, m.Data)
 	}
-	target, _, err := inst.router.resolveRecipient(context.Background(), m.Recipient)
+	target, _, err := inst.router.resolveRecipient(context.Background(), to)
 	if err != nil {
-		inst.router.log("app %s app_msg.send.to: %v", inst.AppID, err)
+		inst.router.log("app %s app_msg cross-instance: %v", inst.AppID, err)
 		return nil
 	}
 	return target.WriteEvt(wire.NewEvtAppMsgFrom(target.WindowID, m.Data, from))
 }
 
 // relayAppMsgToShell forwards an APP_MSG from BE to its FE half.
-// CBOR-decoded values (often map[any]any) are converted to a JSON-
-// friendly shape so the shell can decode without a CBOR runtime.
-// Side effect: if the normalized data is a map carrying a string
-// "id" field, any control-socket watcher registered for (instance,
-// id) gets delivered the data before shell relay. This is how the
-// `wash-launch msg --await` path correlates BE replies.
-// relayAppMsgToShell forwards an app's BE→FE message to every
-// attached shell. class is the priority class the originating app
-// stamped on its frame (Interactive by default; Bulk for streaming
-// senders that called SendAppMsgBulk / EmitBulk in the SDK). It is
+// The event channel speaks JSON, so the payload is already
+// JSON bytes — relayed verbatim, no decode+re-encode hop.
+//
+// Side effect: if the data is a JSON object carrying a string "id"
+// field, any control-socket watcher registered for (instance, id)
+// gets delivered the decoded map before shell relay. This is how
+// the `wash-launch msg --await` path correlates BE replies.
+//
+// class is the priority class the originating app stamped on its
+// frame (Interactive by default; Bulk for streaming senders). It is
 // preserved on the FE-bound ShellAppMsgDeliver so the scheduler
 // queues the relayed envelope at the same priority.
 func (inst *AppInstance) relayAppMsgToShell(m wire.EvtAppMsg, class wire.Class) error {
-	normalized := wire.ToJSONValue(m.Data)
-	if asMap, ok := normalized.(map[string]any); ok {
-		if msgID, _ := asMap["id"].(string); msgID != "" {
-			inst.router.dispatchAppMsgWatchers(inst.InstanceID, msgID, asMap)
+	if len(m.Data) > 0 {
+		var probe map[string]any
+		if err := json.Unmarshal(m.Data, &probe); err == nil {
+			if msgID, _ := probe["id"].(string); msgID != "" {
+				inst.router.dispatchAppMsgWatchers(inst.InstanceID, msgID, probe)
+			}
 		}
 	}
-	dataJSON, err := json.Marshal(normalized)
-	if err != nil {
-		return fmt.Errorf("marshal app_msg data: %w", err)
-	}
-	send := wire.NewShellAppMsgDeliver(inst.InstanceID, dataJSON)
+	send := wire.NewShellAppMsgDeliver(inst.InstanceID, json.RawMessage(m.Data))
 	for _, s := range inst.router.shellList() {
 		if err := s.WriteCtrlClass(send, class); err != nil {
 			return err
@@ -520,27 +450,27 @@ func (inst *AppInstance) handleSpawnRequest(m wire.EvtSpawnRequest) error {
 }
 
 // handlePrepareSpawn enforces the prepare_spawn capability, mints an
-// instance id + attach token, and replies with EvtPrepareSpawnOk so
-// the calling app can fork+exec the registered binary itself. The
-// router does NOT spawn the binary — that's the caller's job, by
-// design (the caller may want to wrap the exec in sudo, a uid switch,
-// or a cgroup move). The dial-back is matched in handleAttach by
-// AttachToken, and /proc/<pid>/exe is still checked against the
-// registered binary path.
-func (inst *AppInstance) handlePrepareSpawn(m wire.EvtPrepareSpawn) error {
+// instance id + attach token, and replies with a prepared
+// EvtSpawnOk so the calling app can fork+exec the registered binary
+// itself. The router does NOT spawn the binary — that's the
+// caller's job, by design (the caller may want to wrap the exec in
+// sudo, a uid switch, or a cgroup move). The dial-back is matched
+// in handleAttach by AttachToken, and /proc/<pid>/exe is still
+// checked against the registered binary path.
+func (inst *AppInstance) handlePrepareSpawn(m wire.EvtSpawnRequest) error {
 	if !inst.Manifest.HasCapability(CapPrepareSpawn) {
-		return inst.WriteEvt(wire.NewEvtPrepareSpawnErr(m.ReqID, wire.ErrCodeForbidden, "prepare_spawn capability not declared"))
+		return inst.WriteEvt(wire.NewEvtSpawnErrPrepared(m.ReqID, wire.ErrCodeForbidden, "prepare_spawn capability not declared"))
 	}
 	target := inst.router.reg.ByID(m.AppID)
 	if target == nil || !target.Enabled() {
-		return inst.WriteEvt(wire.NewEvtPrepareSpawnErr(m.ReqID, wire.ErrCodeNotFound, "unknown app id"))
+		return inst.WriteEvt(wire.NewEvtSpawnErrPrepared(m.ReqID, wire.ErrCodeNotFound, "unknown app id"))
 	}
 	if target.Manifest.ProtocolVersion != ProtocolVersion {
-		return inst.WriteEvt(wire.NewEvtPrepareSpawnErr(m.ReqID, wire.ErrCodeIncompatibleProtocol, "protocol mismatch"))
+		return inst.WriteEvt(wire.NewEvtSpawnErrPrepared(m.ReqID, wire.ErrCodeIncompatibleProtocol, "protocol mismatch"))
 	}
 	tok, err := mintAttachToken()
 	if err != nil {
-		return inst.WriteEvt(wire.NewEvtPrepareSpawnErr(m.ReqID, wire.ErrCodeInternal, err.Error()))
+		return inst.WriteEvt(wire.NewEvtSpawnErrPrepared(m.ReqID, wire.ErrCodeInternal, err.Error()))
 	}
 	instanceID := inst.router.allocInstanceID()
 	inst.router.pendingMu.Lock()
@@ -552,7 +482,7 @@ func (inst *AppInstance) handlePrepareSpawn(m wire.EvtPrepareSpawn) error {
 		expires:    time.Now().Add(60 * time.Second),
 	}
 	inst.router.pendingMu.Unlock()
-	return inst.WriteEvt(wire.NewEvtPrepareSpawnOk(m.ReqID, instanceID, tok, target.Path))
+	return inst.WriteEvt(wire.NewEvtSpawnOkPrepared(m.ReqID, target.Manifest.ID, instanceID, tok, target.Path))
 }
 
 // mintAttachToken returns a 32-byte cryptographic-random hex string.
@@ -662,7 +592,7 @@ func (inst *AppInstance) writeCtrl(m any) error {
 	return inst.writeFrame(wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: data})
 }
 
-// WriteEvt encodes m as CBOR and writes an event-channel frame at
+// WriteEvt encodes m as JSON and writes an event-channel frame at
 // the default class (Interactive). Use WriteEvtClass to preserve a
 // class from a relayed FE-originated frame.
 func (inst *AppInstance) WriteEvt(m any) error {

@@ -79,7 +79,7 @@ func (w *watchState) ensureRefMap() *fswatch.RefMap {
 // fs.* kind (handled or errored with a reply); false when the host
 // should keep dispatching.
 func dispatchPicker(c *Conn, fsa *wfs.FS, ws *watchState, data any) bool {
-	m, ok := data.(map[any]any)
+	m, ok := data.(map[string]any)
 	if !ok {
 		return false
 	}

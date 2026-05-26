@@ -1,9 +1,8 @@
 # wash wire protocol
 
-Status: **draft, scoped to v0.0** (see [PLAN.md](PLAN.md)). This document
-specifies exactly what v0.0 exercises and identifies what is deferred so the
-deferred parts slot in without rework. All multi-byte integers are
-**big-endian**.
+Status: **draft, v0.1.** Reflects the post-simplification surface: JSON
+everywhere, one envelope per concept, bundles delivered at probe time.
+All multi-byte integers are **big-endian**.
 
 ## 1. Transports
 
@@ -38,9 +37,14 @@ Two transports carry the same frame format:
 +---------------------------------------------------------------+
 ```
 
-- **flags** (1 byte). Bit 0 (LSB) = `END` (last fragment of a logical
-  message). v0.0 senders MUST set `END=1`; no fragmentation. Bits 1–7
-  reserved, MUST be 0.
+- **flags** (1 byte):
+  - Bit 0 (LSB) = `END` (last fragment of a logical message). v0.1
+    senders MUST set `END=1`; fragmentation is reserved for future use.
+  - Bits 1–2 = **priority class**. `00`=Interactive, `01`=Bulk,
+    `10`=Background, `11`=Control. Used by the router's scheduler
+    (docs/QOS.md). Interactive is the safe default for any sender
+    that doesn't know better.
+  - Bits 3–7 = reserved, MUST be 0.
 - **channel id** (24 bits). 0 .. 16,777,215.
 - **length** (32 bits). Payload byte count. Implementations MUST reject
   frames with `length > 16 MiB` and send an `error` (§13) with code
@@ -51,33 +55,38 @@ A frame with `length = 0` is legal and reserved for future keep-alive.
 ## 3. Channel model
 
 A connection carries multiple logical channels distinguished by `channel id`.
-v0.0 fixes two channels per app connection and a single control channel on
-the browser-side connection:
 
 ### Router ↔ app socket
 
 - **Channel 0** — control. JSON discipline. Implicit on connect.
-- **Channel 1** — event channel. CBOR discipline. Implicit on connect.
-- Channel ids ≥ 2 are reserved for raw channels (deferred).
+- **Channel 1** — event channel. JSON discipline. Implicit on connect.
+- Channel ids ≥ 2 are dynamic raw channels (apps open them via
+  `channel.open` on channel 0; bytes flow as bare-byte frames). See §11.
 
 ### Browser ↔ router WebSocket
 
 - **Channel 0** — shell ↔ router control. JSON discipline. Implicit on
   connect.
-- Channels ≥ 1 are reserved for raw window streams (deferred).
-
-The discipline of channels ≥ 2 (app socket) and ≥ 1 (WS) will be set at OPEN
-time in a later revision.
+- Channels ≥ 1 are dynamic raw streams (bundle delivery, asset reads,
+  app-owned binary streams). See §11.
 
 ## 4. Encoding disciplines
 
-- **JSON (control channels):** each frame is one UTF-8 JSON object. Every
+- **JSON (channels 0 and 1):** each frame is one UTF-8 JSON object. Every
   message has a `"t"` (type) string field.
-- **CBOR (event channel):** each frame is one CBOR map. Every message has a
-  `"t"` string field. CBOR is chosen over JSON for the event channel for
-  compactness and binary-safe payloads (e.g. `app_msg.data`); chosen over
-  protobuf to keep a "nice C API" without codegen.
-- **Raw (deferred):** opaque bytes, no envelope.
+- **Raw:** opaque bytes, no envelope. Used for bundle delivery, asset
+  reads, and app-owned binary streams.
+
+JSON is the single application-level codec: app messages, control
+messages, event messages, and the shell vocabulary all share one
+encoder/decoder pair. (Earlier drafts used CBOR for the event channel;
+the dual-codec impedance mismatch produced more bugs than CBOR saved
+bytes, so it was removed in favour of one codec everywhere.)
+
+Binary payloads inside app messages travel as JSON-default base64
+(encoding/json's `[]byte` rendering); for genuinely large or
+performance-critical binary, open a raw channel (§11) instead of inlining
+in `app_msg.data`.
 
 ## 5. Discovery (`--wash-manifest`)
 
@@ -90,11 +99,25 @@ on `id` collision). For each `+x` regular file the router invokes:
 ```
 
 with `WASH_PROTO=1` and an otherwise stripped environment, a 2-second
-timeout, and stdout capped at 64 KiB. The SDK intercepts this flag inside
-`wash_main` before any app code runs. The binary prints one JSON manifest to
-stdout and exits 0.
+timeout, and stdout capped at 32 MiB. The SDK intercepts this flag inside
+`wash_main` before any app code runs. The binary prints one JSON envelope
+to stdout and exits 0.
 
-### 5.1 Manifest schema
+### 5.1 Probe envelope
+
+```json
+{
+  "manifest": { … manifest fields, see §5.2 … },
+  "bundle_b64": "<base64-encoded index.js>"
+}
+```
+
+The bundle bytes are the app's embedded FE — historically uploaded on a
+post-handshake raw channel, now shipped here so the router caches the
+bytes at scan time and there's nothing to negotiate per-instance. Apps
+with no FE (CLI helpers, services) omit `bundle_b64`.
+
+### 5.2 Manifest schema
 
 ```json
 {
@@ -112,28 +135,36 @@ stdout and exits 0.
 ```
 
 - `id` — reverse-DNS. Regex: `^[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)+$`.
-- `protocol_version` — ABI gate. Incompatible apps are *listed-disabled with
-  a visible reason*, never silently dropped.
-- `element` — the custom-element tag the app's web component registers. MUST
-  start with `wash-app-` so the global custom-element registry stays
+- `protocol_version` — ABI gate. Incompatible apps are *listed-disabled
+  with a visible reason*, never silently dropped.
+- `element` — the custom-element tag the app's web component registers.
+  MUST start with `wash-app-` so the global custom-element registry stays
   namespaced.
-- `surface` — `"window"` (default; the app appears as a floating window) or
-  `"desktop"` (the app's element mounts as the root desktop surface, not a
-  floating window). Exactly one running app may declare `surface:"desktop"`
-  — the session app.
-- `icon` — inline data URI, ≤ 64 KiB. SVG strongly preferred (themable,
-  scalable). Inline because the catalog has no live connection.
-- `instancing` — `"multi"` (one process per window, v0.0 default) or
-  `"single"` (one process serves many windows, semantics *deferred*).
-- `capabilities` — declared roles/permissions. v0.0 recognizes:
+- `surface` — `"window"` (default; the app appears as a floating window)
+  or `"desktop"` (the app's element mounts as the root desktop surface).
+  Exactly one running app may declare `surface:"desktop"` — the session
+  app.
+- `icon` — inline data URI, ≤ 64 KiB. SVG strongly preferred.
+- `instancing` — `"multi"` (one process per window, the default) or
+  `"singleton"` (at most one running instance globally, addressable by
+  `app_id` as a sentinel). A third value `"single"` (one process serves
+  many windows) is accepted by the validator but not yet wired in the
+  router; treat it as a synonym for `"multi"` for now.
+- `capabilities` — declared roles/permissions:
   - `"spawn"` — grants the right to send `spawn.request` on the event
-    channel (§9.2). The session app's manifest is the v0.0 example.
+    channel (§9.2).
+  - `"prepare_spawn"` — grants the right to send
+    `spawn.request{prepare:true}`. The router replies with an attach
+    token and binary path; the caller fork+execs the binary itself
+    (under sudo, for wash-priv). Distinct from `spawn` because the
+    spawner controls how the child is launched, including its uid.
 - `window` — hints (`default_width`, `default_height`, `min_width`,
-  `min_height`, `resizable`). v0.0 honors width/height only.
+  `min_height`, `resizable`). Honored: width/height. Min sizes / resize
+  hints are advisory.
 
 Validation failures (timeout, non-JSON, schema invalid, duplicate id, icon
-oversize) result in a listed-disabled launcher entry with the reason. Apps
-are never silently dropped.
+oversize, bundle base64 malformed) result in a listed-disabled launcher
+entry with the reason. Apps are never silently dropped.
 
 ## 6. App handshake
 
@@ -141,121 +172,157 @@ After the SDK adopts fd 3:
 
 1. App → router, channel 0:
    ```json
-   {"t":"identity","app_id":"com.wash.about","proto":1,"version":"0.0.1"}
+   {"t":"identity","app_id":"com.wash.about","proto":1,"version":"0.0.1","pid":1234}
    ```
+   - `pid` is `os.Getpid()`; the router validates against
+     `/proc/<pid>/exe` matching the registered binary path.
+   - `attach_token` MAY be set when the process was forked by an external
+     spawner via `prepare_spawn` (§9.2). The router matches the dial-back
+     by token in that case.
+
 2. Router validates `proto`, checks `app_id` matches the spawn record.
+
 3. Router → app, channel 0:
    ```json
-   {"t":"identity.ack","instance_id":"…","window_id":1}
+   {"t":"identity.ack","instance_id":"i-1","window_id":1,
+    "session":{"root":"/sandbox","close_grace_ms":5000}}
    ```
-   - `window_id` is assigned for `surface:"window"` apps spawned to show a
-     window (v0.0 default).
-   - `window_id` is **omitted** for `surface:"desktop"` apps — the element
-     mounts as the root, no floating window.
+   - `window_id` is assigned for `surface:"window"` apps spawned to show
+     a window (default).
+   - `window_id` is **omitted** for `surface:"desktop"` apps — the
+     element mounts as the root, no floating window.
+   - `session` is a bag of router-supplied session facts (omitempty per
+     field); apps that don't care can ignore it.
+     - `root` — fs sandbox prefix; `""` means unconfined.
+     - `close_grace_ms` — how long the app has to reply to
+       `window.close_requested` before the router force-kills (§10).
+
 4. The event channel (channel 1) is live from this point.
 
 On any failure, the router sends an `error` (§13) on channel 0 and closes
 the socket.
 
-## 7. Asset pull
+## 7. Bundle delivery
 
-The shell loads an app's web-component bundle lazily, on first window/desktop
-mount. The router relays asset reads from shell to the owning app over the
-app's channel 0:
+There is no post-handshake bundle upload. The router has the bundle bytes
+from the probe envelope (§5.1) and streams them to every (re)attaching
+shell over a `kind="bundle"` raw channel:
 
-Router → app:
-```json
-{"t":"asset.read","id":17,"name":"index.js"}
-```
+1. Router → shell, channel 0:
+   `{"t":"channel.bind","channel_id":N,"kind":"bundle","instance_id":"i-1"}`
+2. Router → shell, channel N: bundle bytes (chunked, Interactive class).
+3. Router → shell, channel 0:
+   `{"t":"channel.unbind","channel_id":N,"reason":"bundle complete"}`
 
-App → router (success):
-```json
-{"t":"asset.read.ok","id":17,"len":12345,"mime":"application/javascript"}
-```
-… followed by one or more chunks on channel 0 carrying base64 bytes:
-```json
-{"t":"asset.data","id":17,"bytes":"<base64>","end":false}
-{"t":"asset.data","id":17,"bytes":"<base64>","end":true}
-```
-Receiver concatenates chunks for the same `id` in order; `end:true`
-terminates.
-
-App → router (failure):
-```json
-{"t":"asset.read.err","id":17,"code":"not_found","msg":"…"}
-```
-
-> *v0.0 uses base64 inside JSON because raw channels are not yet specified.
-> v0.1 replaces this with a per-asset raw side-channel; the router-shell
-> interface (§10) absorbs that change without app changes.*
+The shell accumulates the bytes, blob-URL imports the result, and
+registers the custom element declared in the manifest.
 
 ## 8. Browser ↔ router shell channel (channel 0, JSON)
 
-Carries window/lifecycle control between the browser shell runtime and the
-router. v0.0 vocabulary:
+Carries window/lifecycle control and the FE half of app messages.
 
 **Router → shell:**
+
+- `{"t":"catalog","apps":[…]}` — initial app listing on connect.
 - `{"t":"app.declared","instance_id":"…","element":"wash-app-about","surface":"desktop|window","manifest":{…}}`
-  — the router has accepted a new app instance; the shell should fetch its
-  bundle (`{"t":"asset.fetch","instance_id":"…","name":"…"}`) and prepare
-  to mount the element.
-- `{"t":"window.create","window_id":42,"instance_id":"…","title":"…","w":480,"h":320}`
-  — create a floating window of the given size and mount the instance's
-  element in it. Skipped for `surface:"desktop"`; the shell mounts the
-  element at the root desktop surface instead.
-- `{"t":"window.destroy","window_id":42}` — unmount and remove.
-- `{"t":"window.title","window_id":42,"title":"…"}` — update title.
-- `{"t":"asset.deliver","instance_id":"…","name":"index.js","bytes":"<base64>","end":bool}`
-  — bundle data flowing back to the shell.
+- `{"t":"session.snapshot","windows":[…],"app_state":{…}}` — the WM
+  snapshot the shell rebuilds its window list from.
+- `{"t":"session.patch","patches":[…]}` — incremental WM updates
+  (window.upsert / window.delete / app_state).
+- `{"t":"app_msg.deliver","instance_id":"…","data":<opaque>,"from":{…}?}`
+  — a BE-originated message routed to its FE half. `from` is set on
+  cross-app deliveries (router-attested).
+- `{"t":"notify","instance_id":"…","title":"…","body":"…","level":"info|warn|error"}`
+- `{"t":"app.crashed","instance_id":"…","app_id":"…","exit_code":…,"signal":…,"uptime":…,"log":"…"}`
+- `{"t":"shell.reload","reason":"…"}` — dev-mode hot reload.
+- `{"t":"channel.bind","channel_id":N,"window_id":W,"kind":"bundle|asset|"}`
+  — a raw channel is now live. `kind` selects shell-side semantics.
+- `{"t":"channel.unbind","channel_id":N,"reason":"…"}`
+- `{"t":"asset.read.ok","req_id":…,"channel_id":N,"size":…,"mime":"…"}`
+- `{"t":"asset.read.err","req_id":…,"code":"…","msg":"…"}`
 
 **Shell → router:**
-- `{"t":"asset.fetch","instance_id":"…","name":"index.js"}` — request a
-  bundle file (relayed by the router into the app's channel 0 `asset.read`).
-- `{"t":"window.close_clicked","window_id":42}` — user clicked the
-  titlebar close.
-- `{"t":"window.focus","window_id":42}` — user clicked/focused the window;
-  shell raises and informs the router (which relays to the app's event
-  channel).
-- `{"t":"app_msg.send","instance_id":"…","data":<cbor-as-base64-or-json>}`
-  — FE-side of an app sending an `APP_MSG` to its BE half (relayed onto
-  channel 1 as §9 `app_msg`).
 
-Reserved (deferred): drag/resize geometry, z-order requests, modal-for.
+- `{"t":"window.close_clicked","window_id":W}` — user clicked close.
+  Router relays as `window.close_requested` on the event channel and
+  awaits the app's `window.confirm_close` (§10).
+- `{"t":"window.focus","window_id":W}` — user clicked / raised; router
+  relays to the app as `window.focus`.
+- `{"t":"window.move","window_id":W,"x":…,"y":…}`
+- `{"t":"window.resize","window_id":W,"w":…,"h":…}`
+- `{"t":"window.state","window_id":W,"state":"normal|minimized|maximized"}`
+- `{"t":"app_msg.send","instance_id":"…","data":<opaque>,"to":{…}?}` —
+  unified FE→BE / cross-app app message. When `to` is set, the router
+  resolves the recipient and forwards as `app_msg` on the event channel
+  (no router-side `from` attribution — the shell cannot identify the
+  originating mounted element). When `to` is unset, the router relays
+  to the BE half of the app identified by `instance_id`.
+- `{"t":"asset.read","req_id":…,"path":"…"}` — fetch a file from the
+  router's embedded asset FS.
+- `{"t":"channel.credit","ch":N,"n":…}` — per-channel credit grant
+  (docs/QOS.md §5).
+- `{"t":"log","level":"…","source":"…","msg":"…","stack":"…"?}` — FE
+  log lines mirrored to the BE for visibility.
 
-## 9. App event channel (channel 1, CBOR)
+## 9. App event channel (channel 1, JSON)
 
-Each frame on channel 1 is one CBOR map with a `"t"` string field. v0.0
-vocabulary:
+Each frame on channel 1 is one JSON object with a `"t"` field.
 
 ### 9.1 Router → app
 
-- `{"t":"window.mapped","win":<u32>}` — the window is now visible.
-- `{"t":"window.focus","win":<u32>}` — focus gained.
-- `{"t":"window.unfocus","win":<u32>}` — focus lost.
-- `{"t":"window.close_requested","win":<u32>}` — user requested close
-  (X `WM_DELETE` analogue). App MUST reply with `window.confirm_close`
-  within grace (default 5 s) or the router force-kills.
+- `{"t":"window.mapped","win":W}` — the window is now visible.
+- `{"t":"window.focus","win":W}` — focus gained.
+- `{"t":"window.unfocus","win":W}` — focus lost.
+- `{"t":"window.resize","win":W,"w":…,"h":…}`
+- `{"t":"window.state","win":W,"state":"normal|minimized|maximized"}`
+- `{"t":"window.close_requested","win":W}` — user requested close. App
+  MUST reply with `window.confirm_close` within `session.close_grace_ms`
+  (or the router force-kills).
 - `{"t":"shutdown"}` — router is going away; close cleanly within grace.
-- `{"t":"app_msg","win":<u32>,"data":<any>}` — relayed FE→BE message
-  from this app's own frontend half.
+- `{"t":"app_msg","win":W,"data":<any>,"from":{…}?}` — relayed FE→BE
+  or cross-app→BE message. `from` is router-attested and set only on
+  cross-app deliveries.
+- `{"t":"spawn.ok","app_id":"…","instance_id":"…","req_id":…?,"attach_token":"…"?,"binary":"…"?}`
+  — reply to a spawn request. `attach_token` + `binary` are populated
+  only for prepared spawns (§9.2).
+- `{"t":"spawn.err","app_id":"…","code":"…","msg":"…","req_id":…?}` —
+  rejection (codes: `forbidden`, `not_found`, `incompatible_protocol`,
+  `internal`).
+- `{"t":"clipboard.data","req_id":…,"mime":"…","data":"…"}` — reply to
+  a `clipboard.get`.
+- `{"t":"clipboard.changed","mime":"…"}` — broadcast when any app sets
+  the clipboard (recipient is every other app).
 
 ### 9.2 App → router
 
-- `{"t":"window.set_title","win":<u32>,"title":<text>}`.
-- `{"t":"window.confirm_close","win":<u32>,"allow":<bool>}` — answer to
+- `{"t":"window.set_title","win":W,"title":"…"}`
+- `{"t":"window.confirm_close","win":W,"allow":true|false}` — reply to
   `window.close_requested`.
-- `{"t":"spawn.request","app_id":<text>}` — **requires `spawn` in
-  `capabilities`**. Router replies with one of:
-  - `{"t":"spawn.ok","app_id":<text>,"instance_id":<text>}`
-  - `{"t":"spawn.err","app_id":<text>,"code":<text>,"msg":<text>}`
-    (codes include `forbidden`, `not_found`, `incompatible_protocol`).
-- `{"t":"app_msg","win":<u32>,"data":<any>}` — BE→FE message; relayed to
-  the app's web component via §8 `app_msg.send` in the reverse direction.
+- `{"t":"spawn.request","app_id":"…","prepare":true|false?,"req_id":…?}`
+  — unified spawn request:
+  - `prepare:false` (default): router does fork+exec. Requires the
+    `spawn` capability. Reply is `spawn.ok{app_id,instance_id}`.
+  - `prepare:true`: router mints an attach token + records the pending
+    spawn; the caller fork+execs the binary itself with env vars
+    `WASH_DISPLAY`, `WASH_PROTO`, `WASH_APP_ID`, `WASH_INSTANCE_ID`,
+    `WASH_ATTACH_TOKEN`. Requires the `prepare_spawn` capability.
+    `req_id` correlates the reply. Reply is
+    `spawn.ok{req_id,instance_id,attach_token,binary}`.
+- `{"t":"app_msg","win":W,"data":<any>,"to":{…}?}` — unified BE-originated
+  message. Without `to`, the router relays to the app's own FE half. With
+  `to` ({"app_id":"…"} for singletons or {"instance_id":"…"} for direct),
+  the router resolves the recipient and forwards as another `app_msg` on
+  the target's event channel with router-attested `from` set.
+- `{"t":"notify","title":"…","body":"…?","level":"info|warn|error?"}`
+- `{"t":"clipboard.set","mime":"…","data":"…(base64)"}`
+- `{"t":"clipboard.get","req_id":…}`
+- `{"t":"app_state.set","state":<json>}` — persist FE state blob
+  router-side; the shell delivers it as a `wash:state` event on every
+  (re)mount.
 
-Capability checks are enforced by the router. Without the `spawn`
-capability, `spawn.request` is answered with
-`{"t":"spawn.err","code":"forbidden"}`; the connection is **not** torn down
-so apps can degrade gracefully.
+Capability checks (`spawn`, `prepare_spawn`) are enforced by the router.
+Denial returns `spawn.err{code:"forbidden"}`; the connection is not
+torn down so apps can degrade gracefully.
 
 ## 10. Close handshake
 
@@ -265,28 +332,46 @@ so apps can degrade gracefully.
    channel.
 3. App decides (optionally consulting its FE via `app_msg`) and replies
    `window.confirm_close` with `allow:true|false`.
-4. If allowed: router sends `window.destroy` to the shell, unmaps the
-   window, and (for `multi` instancing) tears down the app process; the
-   app's `wash_main` returns.
-5. If the app does not reply within grace (5 s default), the router
-   force-kills.
-6. When the router shuts down, it asks the session app to close, which is
-   responsible (via the supervision tree) for asking its children to close
-   first.
+4. If allowed: router emits a `window.delete` patch in the session
+   snapshot stream; the shell tears down the floating window; the app
+   process exits.
+5. If the app does not reply within `session.close_grace_ms` (default
+   5000), the router force-kills.
+6. When the router shuts down, it asks the session app to close, which
+   cascades to its children via the supervision tree.
 
-## 11. Capability gating
+## 11. Dynamic raw channels
 
-The router consults the manifest's `capabilities` list on every
-capability-gated request. v0.0 gates exactly one operation: `spawn.request`.
-Failures are non-fatal `spawn.err` responses; gated operations never tear
-down the connection.
+Either side can open a raw channel for opaque byte streaming (terminal
+PTYs, bulk data, app-owned WebRTC-style sockets):
+
+```
+App → router, channel 0:   {"t":"channel.open","req_id":N,"window_id":W,"kind":"?"}
+Router → app, channel 0:   {"t":"channel.opened","req_id":N,"channel_id":C}
+                       or  {"t":"channel.open.err","req_id":N,"code":"…","msg":"…"}
+... bare-byte frames on channel C ...
+Either side, channel 0:    {"t":"channel.close","channel_id":C}
+Router → side, channel 0:  {"t":"channel.closed","channel_id":C,"reason":"…"}
+```
+
+Allocated channel ids are ≥ 2 on the app socket and ≥ 1 on the WS. The
+router relays raw bytes between the app channel and a matching FE-side
+channel (announced to the shell via `channel.bind` on its channel 0).
+
+`kind` selects shell-side semantics: `""` (generic byte pipe, default),
+`"bundle"` (router-originated bundle delivery, see §7), `"asset"`
+(router-originated, one-shot file from the embedded asset FS; channel
+close marks EOF). Apps generally request `""`; the others are
+router-internal.
+
+Per-channel credit pacing flows through `channel.credit` (docs/QOS.md §5).
 
 ## 12. Versioning
 
 This document specifies `proto = 1`. Additive changes (new message types,
 new optional fields ignored when unknown) do **not** bump `proto`.
-Wire-incompatible changes do; the manifest's `protocol_version` is the gate
-and is checked at handshake.
+Wire-incompatible changes do; the manifest's `protocol_version` is the
+gate and is checked at handshake.
 
 ## 13. Errors
 
@@ -297,75 +382,87 @@ before closing the socket:
 {"t":"error","code":"<token>","msg":"<human readable>"}
 ```
 
-v0.0 codes: `proto_mismatch`, `bad_identity`, `bad_frame`,
-`oversize_frame`, `bad_manifest`, `forbidden`, `unknown_app`,
-`internal`.
+Codes: `proto_mismatch`, `bad_identity`, `bad_frame`, `oversize_frame`,
+`bad_manifest`, `forbidden`, `unknown_app`, `internal`, `not_found`,
+`incompatible_protocol`, `unknown_channel`, `credit_overflow`,
+`bad_request`.
 
-## 14. The v0.0 launch flow (worked example)
+## 14. Worked example
 
-End-to-end trace, exercising every v0.0 piece:
+End-to-end trace:
 
-1. **Boot.** Router starts; scans apps dir via `--wash-manifest`; catalog
-   = `{com.wash.session (surface:desktop, capabilities:[spawn]),
-   com.wash.about (surface:window)}`.
-2. **Session spawn.** Router spawns `com.wash.session` per config. Inherited
-   fd, env set, `wash_main` adopts fd 3, sends `identity`. Router replies
-   `identity.ack` with no `window_id` (desktop surface).
-3. **Desktop mount.** Shell connects WS. Router sends `app.declared` for
-   the session instance with `surface:"desktop"`. Shell fetches the
-   bundle (`asset.fetch` → router → app `asset.read` → `asset.read.ok` +
-   `asset.data` chunks → router → shell `asset.deliver`). Shell registers
-   the `wash-app-session` custom element and mounts it as the root.
-4. **User click.** The desktop UI shows a launcher with one entry, "About".
-   User clicks. Session FE sends an APP_MSG to its BE via the shell's
-   `app_msg.send` → router → session BE `app_msg` event.
+1. **Boot.** Router probes apps via `--wash-manifest`; catalog =
+   `{com.wash.session (surface:desktop, caps:[spawn]),
+   com.wash.about (surface:window)}`. Each entry caches its bundle
+   bytes from the probe envelope.
+2. **Session spawn.** Router spawns `com.wash.session`. SDK adopts fd 3,
+   sends `identity`. Router replies `identity.ack` with no `window_id`
+   (desktop surface) and a `session` bag containing the FS root +
+   close-grace.
+3. **Desktop mount.** Shell connects WS. Router sends `catalog`,
+   `app.declared` for the session instance, opens a `kind=bundle` raw
+   channel and streams the cached bytes. Shell blob-imports the bundle,
+   registers `wash-app-session`, mounts as the root surface.
+4. **User click.** Session FE sends `app_msg.send{instance_id, data}`
+   → router → session BE `app_msg{win, data}`.
 5. **Spawn About.** Session BE sends `spawn.request{app_id:"com.wash.about"}`
-   on its event channel. Router validates the session's `spawn` capability,
-   `fork+exec`s About with inherited fd, and replies `spawn.ok` with the
-   new instance id.
-6. **About handshake.** About's `wash_main` adopts fd 3, sends `identity`,
-   gets `identity.ack` with `window_id=1`.
+   on its event channel. Router validates the `spawn` capability,
+   fork+execs About with the inherited fd, and replies
+   `spawn.ok{app_id, instance_id}`.
+6. **About handshake.** About's SDK adopts fd 3, sends `identity`, gets
+   `identity.ack{instance_id, window_id:1, session:{…}}`.
 7. **Window create.** Router emits `app.declared` for About and
-   `window.create{window_id:1, …, instance_id, w:480, h:320}` to the shell.
-   Shell fetches About's bundle as in step 3 and mounts `wash-app-about`
-   in a new floating window.
+   `session.patch{window.upsert}`. Shell streams About's cached bundle
+   and mounts `wash-app-about` in a new floating window.
 8. **Mapped.** Router sends `window.mapped{win:1}` to About on its event
    channel. About may `window.set_title` if it wants to.
-9. **Interaction.** User clicks the window → shell sends
-   `window.focus{window_id:1}` → router relays `window.focus{win:1}` to
-   About. User drags the titlebar (shell-local). User clicks close:
-10. **Close.** Shell `window.close_clicked{window_id:1}` → router
-    `window.close_requested{win:1}` → About `window.confirm_close{allow:true}` →
-    router `window.destroy{window_id:1}` to shell + process teardown.
+9. **Close.** User clicks close → shell `window.close_clicked{window_id:1}`
+   → router `window.close_requested{win:1}` → About
+   `window.confirm_close{win:1,allow:true}` → router emits a
+   `window.delete` patch + process teardown.
 
-The user can launch About again to confirm two-window focus/raise; killing
-the router cleanly tears down the children via the supervision tree.
+## 15. History
 
-## 15. Deferred (post-v0.0, designed to slot in)
+What v0.1 cleaned up from v0.0:
+
+- **Dropped CBOR for the event channel.** Channels 0 and 1 both speak
+  JSON; the dual-codec impedance mismatch produced more bugs than the
+  byte-count savings justified. C clients no longer need two parsers.
+- **Unified `app_msg`.** Previously split into `app_msg` + `app_msg.send.to`
+  on the event channel and `app_msg.send` + `app_msg.send.to` on the
+  shell channel — same shape, different name. Now: one envelope each,
+  with an optional `to`/`from` field.
+- **Unified spawn.** `prepare_spawn` was a parallel triplet alongside
+  `spawn.request` / `spawn.ok` / `spawn.err` with the same shape but
+  different names. Now: one triplet, with `prepare:true` and `req_id`
+  driving the external-spawner path.
+- **Bundle moved to probe time.** Apps used to upload their FE bundle
+  on a post-handshake `kind=bundle` raw channel; the router cached it
+  per-instance and replayed to attached shells. Now the bundle ships in
+  the probe envelope and the router caches it per-app at scan time. The
+  SDK has no upload step; the router has no per-instance bundle state.
+- **CloseGraceMs in session bag.** Apps can now read their deadline
+  rather than guessing or hard-coding 5 s.
+
+## 16. Deferred
 
 In rough priority order:
 
-- **Channel lifecycle for dynamic channels.** OPEN / OPENED / CLOSE /
-  CLOSED control messages on channel 0; discipline (raw, CBOR-event)
-  declared at OPEN. Channel ids ≥ 2 (app socket) and ≥ 1 (WS) become
-  dynamic.
-- **Raw discipline + credit backpressure.** Bare-bytes frames on raw
-  channels; per-channel `channel.credit{ch,n}` on control to grant bytes.
-- **Asset pull v2.** Replace base64 `asset.data` with a per-asset raw
-  side-channel (router opens a raw channel app→shell that streams the
-  bundle).
+- **Fragmentation.** v0.1 mandates `END=1`. Future versions may allow
+  splitting a logical message across multiple frames; class bits must
+  match across fragments (docs/QOS.md §11).
 - **Splice attach/detach.** `splice.attach{src_ch,dst_ch}` /
   `splice.detach`; router copies raw frames between two channels without
   app involvement. Enables zero-overhead pty → window streaming.
-- **Service requests.** The native-service contract (pty, fs) and
+- **Service requests.** A formal native-service contract (pty, fs) and
   out-of-process service apps. A service is a capability-gated channel
   opener.
 - **Dialog provider role.** `dialog.open` / `dialog.result` carrying
-  opaque capability handles with the lifecycle from
-  [ARCHITECTURE.md §Filesystem](ARCHITECTURE.md).
-- **Multi-window apps.** Explicit `window.create` request, and
-  `instancing:"single"` semantics (one process serves many windows).
+  opaque capability handles.
+- **Multi-window apps.** `instancing:"single"` semantics (one process
+  serves many windows). Manifest field is accepted today; semantics
+  pending.
 - **Persistence / reattach.** Router-owned PTY survives socket close;
   reattach by `instance_id`.
-- **Window geometry messages.** Drag/resize/z-order/modal-for; for v0.0,
-  drag is shell-local and resize/z-order are deferred.
+- **Window geometry messages.** Drag is shell-local today; live-resize
+  events are coalesced; z-order / modal-for are not yet on the wire.

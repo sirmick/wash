@@ -24,23 +24,23 @@ import (
 // sysInfo is the shape sent to the FE as the "system.info" app_msg.
 // Field names match the wire keys; the FE picks them up by name.
 type sysInfo struct {
-	Hostname   string     `cbor:"hostname"`
-	FQDN       string     `cbor:"fqdn"`
-	Username   string     `cbor:"username"`
-	CPUs       int        `cbor:"cpus"`
-	MemBytes   uint64     `cbor:"mem_bytes"`
-	Interfaces []IfaceIPs `cbor:"interfaces"`
-	Router     RouterInfo `cbor:"router"`
+	Hostname   string     `json:"hostname"`
+	FQDN       string     `json:"fqdn"`
+	Username   string     `json:"username"`
+	CPUs       int        `json:"cpus"`
+	MemBytes   uint64     `json:"mem_bytes"`
+	Interfaces []IfaceIPs `json:"interfaces"`
+	Router     RouterInfo `json:"router"`
 }
 
 // RouterInfo describes the wash-router instance hosting this session.
 // Populated from WASH_ROUTER_* env vars wash-router sets at startup;
 // missing values stay empty and the FE hides the absent fields.
 type RouterInfo struct {
-	Version string `cbor:"version" json:"version"`
-	Commit  string `cbor:"commit,omitempty" json:"commit,omitempty"`
-	Built   string `cbor:"built,omitempty" json:"built,omitempty"`
-	Dev     bool   `cbor:"dev,omitempty" json:"dev,omitempty"`
+	Version string `json:"version"`
+	Commit  string `json:"commit,omitempty"`
+	Built   string `json:"built,omitempty"`
+	Dev     bool   `json:"dev,omitempty"`
 }
 
 // IfaceIPs is a single network interface's addresses, grouped so the
@@ -48,8 +48,8 @@ type RouterInfo struct {
 // The BE deduplicates IPv6 within a group (one address per /64,
 // preferring the EUI-64 stable form).
 type IfaceIPs struct {
-	Name string   `cbor:"name" json:"name"`
-	IPs  []string `cbor:"ips" json:"ips"`
+	Name string   `json:"name"`
+	IPs  []string `json:"ips"`
 }
 
 // gatherSysInfo collects every field once. Best-effort: any single

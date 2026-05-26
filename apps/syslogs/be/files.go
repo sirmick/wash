@@ -13,10 +13,10 @@ import (
 // LogFile is one row in the sidebar — a regular file directly under
 // /var/log/ that smells like text and isn't an archived rotation.
 type LogFile struct {
-	Path  string `cbor:"path" json:"path"`
-	Name  string `cbor:"name" json:"name"`
-	Size  int64  `cbor:"size" json:"size"`
-	MTime int64  `cbor:"mtime" json:"mtime"` // unix seconds
+	Path  string `json:"path"`
+	Name  string `json:"name"`
+	Size  int64  `json:"size"`
+	MTime int64  `json:"mtime"` // unix seconds
 }
 
 // pushFiles enumerates /var/log/* once and ships the list to the FE.

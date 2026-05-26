@@ -137,59 +137,59 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 // ----- request/response types -----
 
 type listReq struct {
-	Path string `cbor:"path"`
+	Path string `json:"path"`
 }
 
 type readReq struct {
-	Path string `cbor:"path"`
+	Path string `json:"path"`
 }
 
 type writeReq struct {
-	Path    string `cbor:"path"`
-	Content string `cbor:"content"`
+	Path    string `json:"path"`
+	Content string `json:"content"`
 }
 
 type renameReq struct {
-	From    string `cbor:"from"`
-	To      string `cbor:"to"`
-	Replace bool   `cbor:"replace"`
+	From    string `json:"from"`
+	To      string `json:"to"`
+	Replace bool   `json:"replace"`
 }
 
 type pathReq struct {
-	Path string `cbor:"path"`
+	Path string `json:"path"`
 }
 
 type spawnReq struct {
-	AppID string `cbor:"app_id"`
+	AppID string `json:"app_id"`
 }
 
 type saveStateReq struct {
-	State any `cbor:"state"`
+	State any `json:"state"`
 }
 
 type termOpenReq struct {
-	Cols uint64 `cbor:"cols"`
-	Rows uint64 `cbor:"rows"`
+	Cols uint64 `json:"cols"`
+	Rows uint64 `json:"rows"`
 }
 
 type termResizeReq struct {
-	ChannelID uint64 `cbor:"channel_id"`
-	Cols      uint64 `cbor:"cols"`
-	Rows      uint64 `cbor:"rows"`
+	ChannelID uint64 `json:"channel_id"`
+	Cols      uint64 `json:"cols"`
+	Rows      uint64 `json:"rows"`
 }
 
 type termCloseReq struct {
-	ChannelID uint64 `cbor:"channel_id"`
+	ChannelID uint64 `json:"channel_id"`
 }
 
 type termOpenedEvent struct {
-	ChannelID uint64 `cbor:"channel_id"`
-	Shell     string `cbor:"shell"`
+	ChannelID uint64 `json:"channel_id"`
+	Shell     string `json:"shell"`
 }
 
 type termClosedEvent struct {
-	ChannelID uint64 `cbor:"channel_id"`
-	Reason    string `cbor:"reason"`
+	ChannelID uint64 `json:"channel_id"`
+	Reason    string `json:"reason"`
 }
 
 // ----- handler registration -----
@@ -199,8 +199,8 @@ func registerHandlers(b *sdk.Bus) {
 	// starting with "cmd." into this single handler, which echoes the
 	// message back unchanged so test drivers and other apps targeting
 	// either side see the same wire.
-	b.HandlePattern("cmd.", func(c *sdk.Conn, _ string, data map[any]any) {
-		_ = c.SendAppMsg(sdk.AsMap(data))
+	b.HandlePattern("cmd.", func(c *sdk.Conn, _ string, data map[string]any) {
+		_ = c.SendAppMsg(data)
 	})
 
 	sdk.Handle(b, "list", func(_ *sdk.Conn, _ string, req listReq) (wfs.ListReply, error) {

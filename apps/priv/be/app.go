@@ -12,7 +12,7 @@
 // own window wears the red ROOT stripe (via the reserved-id rule in
 // the router) because compromising wash-priv compromises root.
 //
-// External wire (cross-app, via app_msg.send.to {AppID:"com.wash.priv"}):
+// External wire (cross-app, via app_msg.send with to={AppID:"com.wash.priv"}):
 //
 //   →  {kind:"run",   req_id, argv, reason?}      # sugar
 //   →  {kind:"spawn", req_id, app_id, args?, reason?}
@@ -155,46 +155,46 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 // onto the State methods.
 
 type helloReq struct {
-	PageNonce string `cbor:"page_nonce"`
+	PageNonce string `json:"page_nonce"`
 }
 
 type approveReq struct {
-	ReqID string `cbor:"req_id"`
+	ReqID string `json:"req_id"`
 }
 
 type rejectReq struct {
-	ReqID  string `cbor:"req_id"`
-	Reason string `cbor:"reason"`
+	ReqID  string `json:"req_id"`
+	Reason string `json:"reason"`
 }
 
 type unlockReq struct {
-	Ciphertext any `cbor:"ciphertext"`
-	FEPubKey   any `cbor:"fe_pubkey"`
-	Nonce      any `cbor:"nonce"`
+	Ciphertext any `json:"ciphertext"`
+	FEPubKey   any `json:"fe_pubkey"`
+	Nonce      any `json:"nonce"`
 }
 
 type runReq struct {
-	Argv   []string `cbor:"argv"`
-	Reason string   `cbor:"reason"`
+	Argv   []string `json:"argv"`
+	Reason string   `json:"reason"`
 }
 
 type spawnReq struct {
-	AppID  string   `cbor:"app_id"`
-	Args   []string `cbor:"args"`
-	Reason string   `cbor:"reason"`
+	AppID  string   `json:"app_id"`
+	Args   []string `json:"args"`
+	Reason string   `json:"reason"`
 }
 
 type runInlineReq struct {
-	Argv      []string          `cbor:"argv"`
-	Cwd       string            `cbor:"cwd"`
-	Reason    string            `cbor:"reason"`
-	NoPrompt  bool              `cbor:"no_prompt"`
-	Env       map[string]string `cbor:"env"`
-	CliOrigin any               `cbor:"cli_origin"`
+	Argv      []string          `json:"argv"`
+	Cwd       string            `json:"cwd"`
+	Reason    string            `json:"reason"`
+	NoPrompt  bool              `json:"no_prompt"`
+	Env       map[string]string `json:"env"`
+	CliOrigin any               `json:"cli_origin"`
 }
 
 type stdinReq struct {
-	Bytes any `cbor:"bytes"` // base64 string
+	Bytes any `json:"bytes"` // base64 string
 }
 
 type emptyReq struct{}

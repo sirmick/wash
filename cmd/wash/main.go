@@ -19,15 +19,18 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/runner/launch"
 	routerrun "github.com/sirmick/wash/internal/runner/router"
+	"github.com/sirmick/wash/internal/wire"
 )
 
 func main() {
@@ -72,13 +75,34 @@ func dispatchApp(a *registry.App) {
 }
 
 func writeManifest(w io.Writer, a *registry.App) {
-	b, err := json.Marshal(a.Manifest)
+	// Emit a ProbeOutput envelope (manifest + base64 bundle) — same
+	// shape the SDK's --wash-manifest path produces. The router's
+	// exec-probe parser is envelope-aware and needs both halves.
+	envelope := wire.ProbeOutput{Manifest: a.Manifest}
+	if a.Assets != nil {
+		if b, err := readIndexJS(a.Assets); err == nil {
+			envelope.BundleB64 = base64.StdEncoding.EncodeToString(b)
+		}
+	}
+	b, err := json.Marshal(envelope)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wash: marshal manifest: %v\n", err)
 		os.Exit(1)
 	}
 	w.Write(b)
 	w.Write([]byte{'\n'})
+}
+
+// readIndexJS pulls index.js from an app's embedded fs.FS. Mirrors
+// the SDK's path so the multicall and standalone probe envelopes
+// share their bundle source.
+func readIndexJS(fsys fs.FS) ([]byte, error) {
+	f, err := fsys.Open("index.js")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
 }
 
 func runSubcommand(args []string) {

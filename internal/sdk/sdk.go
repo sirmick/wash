@@ -2,9 +2,11 @@ package sdk
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"os"
@@ -53,8 +55,9 @@ type AppDef struct {
 	OnCloseRequested func(c *Conn, win uint32) bool
 
 	// OnAppMsg is the FE → BE pipe for this app's own halves. data is
-	// whatever the FE sent via app_msg.send; the SDK leaves CBOR
-	// decoding to the app since the format is app-private.
+	// the JSON-decoded payload — map[string]any for objects, []any
+	// for arrays, scalars for primitives. The SDK leaves further
+	// typed-decode to the app since the shape is app-private.
 	//
 	// Called only when no From envelope is present — i.e. the message
 	// arrived from this app's own FE, not from another app. Cross-app
@@ -198,13 +201,37 @@ func maybePrintManifest(def *AppDef) bool {
 	if len(os.Args) < 2 || os.Args[1] != "--wash-manifest" {
 		return false
 	}
-	b, err := json.Marshal(def.Manifest)
+	// Emit a probe envelope carrying the manifest plus the embedded
+	// FE bundle (base64'd). The router caches both at scan time, so
+	// there is no post-handshake bundle-upload step on the wire.
+	envelope := wire.ProbeOutput{Manifest: def.Manifest}
+	if def.Assets != nil {
+		if b, err := readEmbeddedBundle(def.Assets); err == nil {
+			envelope.BundleB64 = base64.StdEncoding.EncodeToString(b)
+		}
+		// On read failure we still ship the manifest. The router
+		// will list the app disabled with "missing bundle" reason
+		// when a shell tries to mount it; a malformed bundle in the
+		// build is the operator's problem, not the probe's.
+	}
+	b, err := json.Marshal(envelope)
 	if err != nil {
 		fatal("wash sdk: marshal manifest: %v", err)
 	}
 	os.Stdout.Write(b)
 	os.Stdout.Write([]byte("\n"))
 	return true
+}
+
+// readEmbeddedBundle pulls index.js out of the app's embedded FS.
+// Returns the raw bytes for base64 encoding into the probe envelope.
+func readEmbeddedBundle(fsys fs.FS) ([]byte, error) {
+	f, err := fsys.Open("index.js")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
 }
 
 // EnvDisplay is the env var that points apps at a running
@@ -271,18 +298,10 @@ func ConnectWith(t wire.FrameTransport, def *AppDef) (*Conn, error) {
 	if def.OnReady != nil {
 		def.OnReady(c, c.instanceID, c.windowID)
 	}
-	// Ship the embedded bundle in a background goroutine. uploadBundle
-	// opens a kind=bundle channel and writes the bytes; the
-	// router caches them and replays to every (re)attaching shell.
-	// The goroutine's OpenChannel call needs Run to be reading
-	// replies — Main starts Run immediately after ConnectWith, and
-	// tests invoke c.Run in a goroutine right after. The buffered
-	// transport keeps the ChannelOpen frame around until then.
-	go func() {
-		if err := c.uploadBundle(); err != nil {
-			fmt.Fprintf(os.Stderr, "wash sdk: bundle upload: %v\n", err)
-		}
-	}()
+	// No post-handshake bundle upload: the router already has the
+	// embedded FE bundle bytes from the --wash-manifest probe and
+	// streams them straight to attached shells. See wire.ProbeOutput
+	// + router.Registry.Entry.Bundle.
 	return c, nil
 }
 
@@ -296,7 +315,7 @@ func (c *Conn) Close() error {
 //
 // If WASH_ATTACH_TOKEN is set, the SDK adds it to the identity. The
 // router uses the token to match the dial-back to a pending record
-// minted via EvtPrepareSpawn — required when this process was forked
+// minted via EvtSpawnRequest (with Prepare=true) — required when this process was forked
 // by something other than the router itself (e.g. wash-priv → sudo).
 func (c *Conn) handshake() error {
 	var ident wire.Identity
@@ -342,7 +361,7 @@ func (c *Conn) writeCtrl(m any) error {
 	return c.transport.WriteFrame(wire.Frame{Flags: wire.FlagEnd, Channel: channelControl, Payload: b})
 }
 
-// writeEvt encodes m as CBOR and writes a channel-1 frame at the
+// writeEvt encodes m as JSON and writes a channel-1 frame at the
 // default class (Interactive). Most call sites are interactive
 // (lifecycle, window ops, small RPCs); explicit bulk goes through
 // writeEvtClass.

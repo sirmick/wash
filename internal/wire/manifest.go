@@ -11,6 +11,21 @@ import (
 // manifest are listed-disabled by the registry.
 const ProtocolVersion = 1
 
+// ProbeOutput is what `<binary> --wash-manifest` writes to stdout.
+// Carries the manifest plus the app's embedded FE bundle (base64'd)
+// so the router caches both at probe time — no post-handshake
+// bundle-upload step is needed.
+//
+// BundleB64 is empty for apps with no FE bundle (e.g. CLI helpers
+// that registered but never expose a window). The router treats
+// "manifest with empty bundle" as a usable entry; the shell-side
+// mount path surfaces a recognizable error if a mount is attempted
+// anyway.
+type ProbeOutput struct {
+	Manifest  Manifest `json:"manifest"`
+	BundleB64 string   `json:"bundle_b64,omitempty"`
+}
+
 // Surface values (WIRE.md §5.1).
 const (
 	SurfaceWindow  = "window"

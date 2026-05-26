@@ -71,9 +71,15 @@ func TestSpine(t *testing.T) {
 		Window:          &router.WindowHints{DefaultWidth: 480, DefaultHeight: 320},
 	}
 
-	// Build a router with an empty registry — the only app instance
-	// we'll exercise comes in via HandleApp directly, not via Spawn.
+	// Build a router with a hand-seeded registry: bundle delivery
+	// now reads from the registry entry (per the manifest-time
+	// bundle scheme), so HandleApp-only tests must pre-register.
 	reg := router.NewRegistry()
+	reg.RegisterEntry(&router.Entry{
+		Path:     "test:com.wash.about",
+		Manifest: rtrManifest,
+		Bundle:   []byte(bundleBody),
+	})
 	r := router.NewRouter(router.Config{}, reg, func(format string, args ...any) {
 		t.Logf("router: "+format, args...)
 	})
@@ -145,6 +151,12 @@ func TestSpine(t *testing.T) {
 		case wire.ShellAppDeclared:
 			d := m
 			declared = &d
+			// Capture the instance id immediately so the bundle
+			// bind/raw/unbind frames that follow are recognized by
+			// frameReader (they ship back-to-back with the declare
+			// now that bundles come from the registry, not a post-
+			// handshake SDK upload).
+			fr.targetInstance = declared.InstanceID
 		case wire.ShellSessionSnapshot:
 			for i := range m.Windows {
 				w := m.Windows[i]
@@ -159,7 +171,6 @@ func TestSpine(t *testing.T) {
 			}
 		}
 	}
-	fr.targetInstance = declared.InstanceID
 	if declared.Element != "wash-app-about" || declared.Surface != router.SurfaceWindow {
 		t.Fatalf("bad declared: %+v", declared)
 	}

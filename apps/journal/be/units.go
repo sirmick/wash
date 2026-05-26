@@ -16,10 +16,10 @@ import (
 // short string so the user sees something close to what they'd see
 // in a terminal.
 type Unit struct {
-	Name        string `cbor:"name" json:"name"`
-	Active      string `cbor:"active" json:"active"`           // active | inactive | failed | activating | ...
-	Sub         string `cbor:"sub" json:"sub"`                 // running | exited | dead | ...
-	Description string `cbor:"description" json:"description"`
+	Name        string `json:"name"`
+	Active      string `json:"active"`           // active | inactive | failed | activating | ...
+	Sub         string `json:"sub"`                 // running | exited | dead | ...
+	Description string `json:"description"`
 }
 
 // pushUnits runs `systemctl list-units` (without --user), parses the

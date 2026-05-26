@@ -17,10 +17,10 @@
 // is fire-and-forget (no reply). Emit pushes unsolicited events.
 // Call performs a typed cross-app round-trip with req_id matching.
 //
-// Decoding strategy: incoming Data lands as CBOR's map[any]any. The
-// bus re-marshals just the data field to CBOR bytes and unmarshals
-// into the typed Req. One extra encode+decode per message, but no
-// new dependencies and the wire types stay sharp.
+// Decoding strategy: incoming Data lands as map[string]any (the SDK
+// json-decodes once at dispatch). The bus re-marshals just the data
+// field to JSON bytes and unmarshals into the typed Req. One extra
+// encode+decode per message, but the wire types stay sharp.
 //
 // Bus is installed by NewBus, which chains its dispatch onto the
 // existing OnAppMsg / OnAppMsgFrom callbacks. Messages whose kind
@@ -38,11 +38,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"reflect"
 	"strings"
 	"sync"
 
-	"github.com/fxamacker/cbor/v2"
 	"github.com/sirmick/wash/internal/wire"
 )
 
@@ -86,10 +84,9 @@ type Bus struct {
 	patterns []patternHandler     // prefix matches in registration order
 
 	// pending awaits keyed by req_id for Bus.Call. Each waiter
-	// gets the matching reply data (already CBOR-decoded as
-	// map[any]any) on its one-shot channel.
+	// gets the matching reply data on its one-shot channel.
 	pendMu  sync.Mutex
-	pending map[string]chan map[any]any
+	pending map[string]chan map[string]any
 
 	// prevAppMsg / prevAppMsgFrom hold whatever callbacks the app
 	// already installed. The bus chains to them for any kind it
@@ -99,12 +96,12 @@ type Bus struct {
 }
 
 // handlerFn is the bus's internal handler shape. data is the
-// CBOR-decoded message map; from is non-nil for cross-app deliveries.
-type handlerFn func(c *Conn, win uint32, data map[any]any, from *wire.Sender)
+// JSON-decoded message map; from is non-nil for cross-app deliveries.
+type handlerFn func(c *Conn, win uint32, data map[string]any, from *wire.Sender)
 
 type patternHandler struct {
 	prefix string
-	fn     func(c *Conn, kind string, data map[any]any)
+	fn     func(c *Conn, kind string, data map[string]any)
 }
 
 // Conn returns the underlying Conn so callers can reach the rest of
@@ -120,7 +117,7 @@ func NewBus(c *Conn) *Bus {
 	b := &Bus{
 		conn:     c,
 		handlers: map[string]handlerFn{},
-		pending:  map[string]chan map[any]any{},
+		pending:  map[string]chan map[string]any{},
 	}
 	b.prevAppMsg = c.def.OnAppMsg
 	b.prevAppMsgFrom = c.def.OnAppMsgFrom
@@ -138,7 +135,7 @@ func NewBus(c *Conn) *Bus {
 // handler with a matching kind), then exact-match kinds, then
 // pattern handlers, then fall through to the previous callback.
 func (b *Bus) dispatch(c *Conn, win uint32, data any, from *wire.Sender) {
-	m := asMap(data)
+	m, _ := data.(map[string]any)
 	if m == nil {
 		// Not a map shape — bus has nothing to dispatch; fall back.
 		b.fallback(c, win, data, from)
@@ -217,10 +214,10 @@ func (b *Bus) register(kind string, h handlerFn) {
 }
 
 // HandlePattern registers a prefix handler. Matched messages get the
-// raw CBOR map plus the kind string. Used for wash-edit's "cmd.*"
+// raw decoded map plus the kind string. Used for wash-edit's "cmd.*"
 // transparent FE→BE→FE pass-through. Only applies to own-FE messages
 // (cross-app messages always have a typed kind contract).
-func (b *Bus) HandlePattern(prefix string, fn func(c *Conn, kind string, data map[any]any)) {
+func (b *Bus) HandlePattern(prefix string, fn func(c *Conn, kind string, data map[string]any)) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.patterns = append(b.patterns, patternHandler{prefix: prefix, fn: fn})
@@ -237,16 +234,11 @@ func (b *Bus) appID() string {
 }
 
 // logDecodeErr formats the "bus decode failed" log line with enough
-// context to identify which message broke. The previous one-liner
-// hid the app, sender, id, and offending payload — enough on its own
-// to make every decode error a puzzle.
+// context to identify which message broke.
 //
 //	bus: <app-id> decode <kind> id=<id> from=<src>: <err>
 //	  data: {…trimmed payload…}
-//
-// payload is rendered with sdk.AsMap (string-keyed) + json marshal
-// + a 240-char cap so a noisy field doesn't fill the log.
-func (b *Bus) logDecodeErr(kind, id string, from *wire.Sender, data map[any]any, err error) {
+func (b *Bus) logDecodeErr(kind, id string, from *wire.Sender, data map[string]any, err error) {
 	src := "FE"
 	if from != nil {
 		src = fmt.Sprintf("%s/%s", from.AppID, from.InstanceID)
@@ -259,7 +251,7 @@ func (b *Bus) logDecodeErr(kind, id string, from *wire.Sender, data map[any]any,
 // output, capped at max chars (with "…" suffix on overflow).
 // Best-effort — on marshal failure it falls back to fmt.Sprint.
 func truncJSON(v any, max int) string {
-	out, err := json.Marshal(AsMap(v))
+	out, err := json.Marshal(v)
 	if err != nil {
 		s := fmt.Sprint(v)
 		if len(s) > max {
@@ -275,38 +267,29 @@ func truncJSON(v any, max int) string {
 
 // Handle is the typed request/response registration for FE→BE
 // messages. Req and Resp are arbitrary structs; the bus decodes
-// the inbound payload into Req (re-marshalling to CBOR for a clean
-// typed decode) and ships the returned Resp wrapped in a
+// the inbound payload into Req (re-marshalling through JSON for a
+// clean typed decode) and ships the returned Resp wrapped in a
 // <kind>_ok envelope with id echoed. Errors map to <kind>_err.
 //
 // Reply class is Interactive — the common case. For handlers whose
 // reply is large by nature (list/read/stream), use HandleBulk.
-//
-// The id parameter is extracted from data["id"] before decoding so
-// handlers don't need to thread it through their Req struct (though
-// they may put an ID field there if they want it round-tripped).
 func Handle[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, req Req) (Resp, error)) {
 	handleClass(b, kind, fn, wire.ClassInteractive)
 }
 
 // HandleBulk is Handle for replies that should always go out on the
-// Bulk class. Use for fs.list, fs.read, and other handlers whose
-// reply payload is large enough that user-interactive frames from
-// other apps should overtake it in the router's scheduler.
+// Bulk class.
 func HandleBulk[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, req Req) (Resp, error)) {
 	handleClass(b, kind, fn, wire.ClassBulk)
 }
 
 // HandleBackground is Handle for replies on the Background class.
-// Use for transfer-style handlers — large file content reads,
-// archive enumeration, anything where the reply progresses but
-// shouldn't compete with interactive UI for bandwidth.
 func HandleBackground[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, req Req) (Resp, error)) {
 	handleClass(b, kind, fn, wire.ClassBackground)
 }
 
 func handleClass[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, req Req) (Resp, error), class wire.Class) {
-	b.register(kind, func(c *Conn, _ uint32, data map[any]any, _ *wire.Sender) {
+	b.register(kind, func(c *Conn, _ uint32, data map[string]any, _ *wire.Sender) {
 		id, _ := data["id"].(string)
 		var req Req
 		if err := decodeInto(data, &req); err != nil {
@@ -324,15 +307,9 @@ func handleClass[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string,
 }
 
 // HandleVoid registers a fire-and-forget handler — no reply on
-// success. Errors are logged BE-side; the FE doesn't get an envelope
-// because it didn't ask for one. Use for save_state, clipboard_set,
-// and other "do this, no answer needed" messages.
-//
-// HandleVoid has no Bulk variant: there's no reply to classify.
-// Streaming Emit calls inside a HandleVoid handler use EmitBulk
-// directly.
+// success.
 func HandleVoid[Req any](b *Bus, kind string, fn func(c *Conn, id string, req Req) error) {
-	b.register(kind, func(c *Conn, _ uint32, data map[any]any, _ *wire.Sender) {
+	b.register(kind, func(c *Conn, _ uint32, data map[string]any, _ *wire.Sender) {
 		id, _ := data["id"].(string)
 		var req Req
 		if err := decodeInto(data, &req); err != nil {
@@ -348,33 +325,22 @@ func HandleVoid[Req any](b *Bus, kind string, fn func(c *Conn, id string, req Re
 // HandleFrom is Handle for cross-app messages. The `from` parameter
 // is router-attested — apps that care about caller identity
 // (wash-priv) must use this rather than Handle.
-//
-// Replies route back to the caller via SendAppMsgTo on the
-// originating instance. The bus stamps req_id automatically on the
-// reply if the request carried one (Call() uses req_id; legacy
-// callers that used id also work because the bus copies both
-// fields onto the reply for compatibility).
-//
-// Reply class is Interactive. Use HandleFromBulk for handlers whose
-// reply payload is large by nature.
 func HandleFrom[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, req Req, from wire.Sender) (Resp, error)) {
 	handleFromClass(b, kind, fn, wire.ClassInteractive)
 }
 
-// HandleFromBulk is HandleFrom for replies that should always go out
-// on the Bulk class.
+// HandleFromBulk is HandleFrom for replies on Bulk class.
 func HandleFromBulk[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, req Req, from wire.Sender) (Resp, error)) {
 	handleFromClass(b, kind, fn, wire.ClassBulk)
 }
 
-// HandleFromBackground is HandleFrom for replies on the Background
-// class — for cross-app transfer-style handlers.
+// HandleFromBackground is HandleFrom for replies on Background class.
 func HandleFromBackground[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, req Req, from wire.Sender) (Resp, error)) {
 	handleFromClass(b, kind, fn, wire.ClassBackground)
 }
 
 func handleFromClass[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id string, req Req, from wire.Sender) (Resp, error), class wire.Class) {
-	b.register(kind, func(c *Conn, _ uint32, data map[any]any, from *wire.Sender) {
+	b.register(kind, func(c *Conn, _ uint32, data map[string]any, from *wire.Sender) {
 		if from == nil {
 			// Own-FE message with the same kind as a cross-app
 			// handler. Skip: HandleFrom is by definition for
@@ -397,11 +363,9 @@ func handleFromClass[Req, Resp any](b *Bus, kind string, fn func(c *Conn, id str
 	})
 }
 
-// HandleFromVoid is HandleFrom for fire-and-forget cross-app messages
-// (no reply expected). Used by wash-priv's stdin/cancel/disconnect
-// kinds — they're stream control, not request/response.
+// HandleFromVoid is HandleFrom for fire-and-forget cross-app messages.
 func HandleFromVoid[Req any](b *Bus, kind string, fn func(c *Conn, id string, req Req, from wire.Sender) error) {
-	b.register(kind, func(c *Conn, _ uint32, data map[any]any, from *wire.Sender) {
+	b.register(kind, func(c *Conn, _ uint32, data map[string]any, from *wire.Sender) {
 		if from == nil {
 			return
 		}
@@ -417,14 +381,7 @@ func HandleFromVoid[Req any](b *Bus, kind string, fn func(c *Conn, id string, re
 	})
 }
 
-// Emit pushes an unsolicited message to the app's FE. Use for events
-// the FE subscribes to (req.update, snapshot, tab_opened, …).
-// payload is anything CBOR-marshalable; the bus stamps the kind.
-//
-// Class is inferred from the verb suffix when it matches a known
-// bulk pattern (`*.output`, `*.list_reply`, `*.watch_event`,
-// `*.stream`); otherwise Interactive. For explicit control, use
-// EmitBulk.
+// Emit pushes an unsolicited message to the app's FE.
 func (b *Bus) Emit(kind string, payload any) error {
 	out, err := envelope(kind, "", payload)
 	if err != nil {
@@ -436,10 +393,7 @@ func (b *Bus) Emit(kind string, payload any) error {
 	return b.conn.SendAppMsg(out)
 }
 
-// EmitBulk is Emit with the Bulk class bit set unconditionally. Use
-// for pty output, large reply payloads, file content streams, watch
-// event floods — anything where the router's scheduler should let
-// user-interactive frames overtake the producer.
+// EmitBulk is Emit with the Bulk class bit set unconditionally.
 func (b *Bus) EmitBulk(kind string, payload any) error {
 	out, err := envelope(kind, "", payload)
 	if err != nil {
@@ -448,13 +402,7 @@ func (b *Bus) EmitBulk(kind string, payload any) error {
 	return b.conn.SendAppMsgBulk(out)
 }
 
-// EmitBackground is Emit with the Background class bit set. Strictly
-// lower priority than Bulk — drains only when no Interactive, Bulk,
-// or Control traffic is queued. Designed for resumable large-file
-// transfers (uploads/downloads), lazy prefetch, telemetry shipping:
-// flows where "make progress when the system is otherwise idle" is
-// the right semantics, and where blocking interactive UI for them
-// would be unacceptable.
+// EmitBackground is Emit with the Background class bit set.
 func (b *Bus) EmitBackground(kind string, payload any) error {
 	out, err := envelope(kind, "", payload)
 	if err != nil {
@@ -463,8 +411,7 @@ func (b *Bus) EmitBackground(kind string, payload any) error {
 	return b.conn.SendAppMsgBackground(out)
 }
 
-// EmitTo pushes an unsolicited message to a specific other app. Same
-// shape as Emit but addressed via SendAppMsgTo.
+// EmitTo pushes an unsolicited message to a specific other app.
 func (b *Bus) EmitTo(recipient wire.Recipient, kind string, payload any) error {
 	out, err := envelope(kind, "", payload)
 	if err != nil {
@@ -496,14 +443,7 @@ func (b *Bus) EmitToBackground(recipient wire.Recipient, kind string, payload an
 
 // classifyKind is the SDK-internal safety net that picks Bulk for
 // well-known streaming verb suffixes when an app called Emit instead
-// of EmitBulk. Apps that follow naming conventions get correct
-// scheduling without remembering the bulk variant. Explicit EmitBulk
-// always wins; this table is only consulted on plain Emit.
-//
-// Keep the suffix list small and conservative — false positives
-// (interactive frame mis-classified as Bulk) starve themselves under
-// load; false negatives (bulk frame as Interactive) hog the scheduler.
-// Better to under-classify here and lean on explicit EmitBulk.
+// of EmitBulk. Keep the suffix list small and conservative.
 func classifyKind(kind string) wire.Class {
 	switch {
 	case strings.HasSuffix(kind, ".output"),
@@ -521,9 +461,6 @@ func classifyKind(kind string) wire.Class {
 // installs a one-shot waiter, and decodes the matching reply into
 // *resp.
 //
-// The reply is matched by req_id — the recipient's HandleFrom path
-// echoes it automatically. Timeout via ctx.
-//
 // MUST NOT be called from an SDK callback: the reply arrives on the
 // same read goroutine that's running the callback, so blocking it
 // deadlocks. Spawn a goroutine first if you're inside a handler.
@@ -532,7 +469,7 @@ func Call[Req, Resp any](ctx context.Context, b *Bus, recipient wire.Recipient, 
 	if err != nil {
 		return err
 	}
-	ch := make(chan map[any]any, 1)
+	ch := make(chan map[string]any, 1)
 	b.pendMu.Lock()
 	b.pending[reqID] = ch
 	b.pendMu.Unlock()
@@ -577,10 +514,7 @@ func Call[Req, Resp any](ctx context.Context, b *Bus, recipient wire.Recipient, 
 }
 
 // replyTo carries the addressing + class fields needed to ship a
-// reply. Cross-app replies have from.InstanceID set; own-FE replies
-// leave it empty. class selects between SendAppMsg and SendAppMsgBulk
-// (and the cross-app variants). nil *replyTo means own-FE Interactive
-// (legacy default for code paths that don't care about class).
+// reply.
 type replyTo struct {
 	from  wire.Sender
 	reqID string
@@ -610,8 +544,7 @@ func (b *Bus) sendErr(c *Conn, kind, id, code, msg string, to *replyTo) {
 	b.ship(c, out, to)
 }
 
-// ship is the addressing+class branch: cross-app via SendAppMsgTo*,
-// own-FE via SendAppMsg*.
+// ship is the addressing+class branch.
 func (b *Bus) ship(c *Conn, payload map[string]any, to *replyTo) {
 	class := wire.ClassInteractive
 	if to != nil {
@@ -645,14 +578,11 @@ func (b *Bus) ship(c *Conn, payload map[string]any, to *replyTo) {
 }
 
 // envelope wraps payload in {kind, id?, ...payload fields} as a
-// map[string]any. payload may be a struct (re-marshaled through
-// CBOR to extract its fields) or already a map.
+// map[string]any. payload may be a struct (re-marshaled through JSON
+// to extract its fields) or already a map.
 //
 // id precedence: an explicit `id` arg always wins; otherwise an "id"
-// field in the payload passes through. Lets Emit("...", {"id": ...})
-// preserve the id so control-socket / FE await-matchers can correlate
-// the reply, while sendOk/sendErr (which thread id via the arg) keep
-// working unchanged.
+// field in the payload passes through.
 func envelope(kind, id string, payload any) (map[string]any, error) {
 	out := map[string]any{"kind": kind}
 	if id != "" {
@@ -662,7 +592,7 @@ func envelope(kind, id string, payload any) (map[string]any, error) {
 		return out, nil
 	}
 	// Fast path: payload is already a map[string]any. Copy its
-	// keys onto out without going through CBOR.
+	// keys onto out without going through JSON.
 	if m, ok := payload.(map[string]any); ok {
 		for k, v := range m {
 			if k == "kind" {
@@ -675,13 +605,13 @@ func envelope(kind, id string, payload any) (map[string]any, error) {
 		}
 		return out, nil
 	}
-	// Generic path: re-marshal through CBOR, walk into out.
-	buf, err := cbor.Marshal(payload)
+	// Generic path: re-marshal through JSON, walk into out.
+	buf, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("envelope marshal: %w", err)
 	}
 	var fields map[string]any
-	if err := cbor.Unmarshal(buf, &fields); err != nil {
+	if err := json.Unmarshal(buf, &fields); err != nil {
 		return nil, fmt.Errorf("envelope unmarshal: %w", err)
 	}
 	for k, v := range fields {
@@ -696,80 +626,18 @@ func envelope(kind, id string, payload any) (map[string]any, error) {
 	return out, nil
 }
 
-// decodeInto re-marshals a CBOR-decoded map into typed dst by going
-// through CBOR bytes. Slow path (one encode + one decode) but
-// zero-dep and type-correct.
-//
-// Nulls are stripped before remarshal. A JSON `null` (which the FE
-// commonly sends for "no value here") becomes a CBOR null primitive,
-// which fxamacker/cbor refuses to decode into a plain int / string /
-// bool field. Treating null as "field absent" lets the zero value
-// stand — same semantics every Go programmer expects.
+// decodeInto re-marshals a JSON-shaped map into typed dst by going
+// through JSON bytes. Slow path (one encode + one decode) but
+// zero-dep and type-correct. encoding/json handles JSON null by
+// leaving the field at its zero value — the natural "field absent"
+// semantic — so no null-stripping pass is needed.
 func decodeInto(data any, dst any) error {
-	buf, err := cbor.Marshal(stripNulls(data))
+	buf, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("decode marshal: %w", err)
 	}
-	if err := cbor.Unmarshal(buf, dst); err != nil {
+	if err := json.Unmarshal(buf, dst); err != nil {
 		return fmt.Errorf("decode unmarshal: %w", err)
-	}
-	return nil
-}
-
-// stripNulls drops nil values from maps and slices recursively.
-// Used by decodeInto so a JSON null on the wire doesn't fail the
-// typed CBOR decode into primitive Go fields (int/string/bool/…).
-// Map entries whose VALUE is nil are removed; nested maps/slices
-// recurse. Non-nil leaves pass through unchanged.
-func stripNulls(v any) any {
-	switch x := v.(type) {
-	case map[any]any:
-		out := make(map[any]any, len(x))
-		for k, vv := range x {
-			if vv == nil {
-				continue
-			}
-			out[k] = stripNulls(vv)
-		}
-		return out
-	case map[string]any:
-		out := make(map[string]any, len(x))
-		for k, vv := range x {
-			if vv == nil {
-				continue
-			}
-			out[k] = stripNulls(vv)
-		}
-		return out
-	case []any:
-		out := make([]any, 0, len(x))
-		for _, vv := range x {
-			// Slice-element nulls are dropped too — same semantics
-			// as map values. An FE sending a sparse array gets the
-			// dense version typed-decode.
-			if vv == nil {
-				continue
-			}
-			out = append(out, stripNulls(vv))
-		}
-		return out
-	}
-	return v
-}
-
-// asMap is the bus's internal AsMap variant. Same idea as sdk.AsMap
-// (in cbor.go) — accept either map[any]any or map[string]any —
-// but lets bus.go avoid an alias-rename headache.
-func asMap(data any) map[any]any {
-	switch x := data.(type) {
-	case map[any]any:
-		return x
-	case map[string]any:
-		out := make(map[any]any, len(x))
-		for k, v := range x {
-			out[k] = v
-		}
-		return out
 	}
 	return nil
 }
@@ -778,13 +646,13 @@ func asMap(data any) map[any]any {
 // req_id is the bus.Call correlation key; id is the FE-side request
 // correlation. They're separate concepts but both flow through the
 // reply envelope when present.
-func requestIDs(data map[any]any) (id, reqID string) {
+func requestIDs(data map[string]any) (id, reqID string) {
 	id, _ = data["id"].(string)
 	reqID, _ = data["req_id"].(string)
 	return
 }
 
-func requestIDOnly(data map[any]any) string {
+func requestIDOnly(data map[string]any) string {
 	id, _ := data["id"].(string)
 	if id == "" {
 		// Cross-app fire-and-forget often uses req_id only.
@@ -827,27 +695,3 @@ func mintReqID() (string, error) {
 	return "c-" + hex.EncodeToString(b[:]), nil
 }
 
-// Reflection helper: extract the value of a struct field tagged
-// cbor:"id" (or json:"id"). Used internally — exposed mostly so
-// callers can introspect their own types.
-func extractIDField(v any) string {
-	rv := reflect.ValueOf(v)
-	if rv.Kind() == reflect.Ptr {
-		rv = rv.Elem()
-	}
-	if rv.Kind() != reflect.Struct {
-		return ""
-	}
-	rt := rv.Type()
-	for i := 0; i < rt.NumField(); i++ {
-		f := rt.Field(i)
-		tag := strings.Split(f.Tag.Get("cbor"), ",")[0]
-		if tag == "" {
-			tag = strings.Split(f.Tag.Get("json"), ",")[0]
-		}
-		if tag == "id" && rv.Field(i).Kind() == reflect.String {
-			return rv.Field(i).String()
-		}
-	}
-	return ""
-}

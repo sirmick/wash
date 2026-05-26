@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -12,6 +13,19 @@ import (
 	"sync"
 	"syscall"
 )
+
+// readIndexJS returns the bytes of "index.js" from an embedded fs.FS,
+// the same path the SDK exposes from the probe envelope. Used by the
+// multi-call fast path so in-process registrations carry the same
+// bundle bytes as exec-probed ones.
+func readIndexJS(fsys fs.FS) ([]byte, error) {
+	f, err := fsys.Open("index.js")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
 
 // reservedIDs are app ids the router refuses to serve from an
 // untrusted (user-writable) binary. v0.1 has exactly one entry —
@@ -31,10 +45,16 @@ var reservedIDs = map[string]bool{
 // When the manifest probe failed or the manifest does not validate,
 // Manifest may be nil and Reason holds the human-readable cause. The
 // app is then listed-disabled, NEVER silently dropped (WIRE.md §5.1).
+//
+// Bundle holds the embedded FE bundle (index.js bytes) captured at
+// probe time. Empty for CLI helpers with no window. Shared across
+// every instance the router spawns from this entry — the router
+// streams these bytes to every (re)attaching shell.
 type Entry struct {
 	Path     string
 	Manifest *Manifest
 	Reason   string // empty when valid
+	Bundle   []byte // FE bundle bytes (may be nil)
 }
 
 // Enabled reports whether the entry is usable (has a manifest and no
@@ -102,13 +122,22 @@ func (r *Registry) probeAndRegister(ctx context.Context, bin string) {
 	// Multi-call fast path: when bin resolves to our own executable
 	// and the in-process registry has an entry for argv[0]'s basename,
 	// skip the exec-probe. The compiled-in manifest is the same struct
-	// ParseManifest would build from --wash-manifest output and has
+	// ParseProbe would build from --wash-manifest output and has
 	// already been validated by registry.Register. In standalone
 	// builds selfApp is a stub that returns nil, leaving the probe
 	// path unchanged.
+	//
+	// Bundle bytes come from the in-process Assets fs.FS rather than
+	// the probe envelope — same source the probe path emits from.
 	if a := selfApp(bin); a != nil {
 		m := a.Manifest
-		r.appendEntry(&Entry{Path: bin, Manifest: &m})
+		entry := &Entry{Path: bin, Manifest: &m}
+		if a.Assets != nil {
+			if b, err := readIndexJS(a.Assets); err == nil {
+				entry.Bundle = b
+			}
+		}
+		r.appendEntry(entry)
 		return
 	}
 	data, err := Probe(ctx, bin)
@@ -117,8 +146,8 @@ func (r *Registry) probeAndRegister(ctx context.Context, bin string) {
 		r.appendEntry(&Entry{Path: bin, Reason: err.Error()})
 		return
 	}
-	m, valErr := ParseManifest(data)
-	entry := &Entry{Path: bin, Manifest: m}
+	m, bundle, valErr := ParseProbe(data)
+	entry := &Entry{Path: bin, Manifest: m, Bundle: bundle}
 	if valErr != nil {
 		entry.Reason = valErr.Error()
 	}
@@ -194,6 +223,20 @@ func (r *Registry) isTrustedBinary(path string) bool {
 		}
 	}
 	return false
+}
+
+// RegisterEntry adds e to the catalog without going through the
+// exec-probe path. Used by in-process tests that wire HandleApp
+// directly against a hand-rolled router.Manifest and need the
+// bundle bytes to be available for shell mounts.
+//
+// Bundle delivery flows through registry.Entry.Bundle, so tests
+// that mount a window must inject bytes here. First registration
+// wins on id collision (matches Scan semantics).
+func (r *Registry) RegisterEntry(e *Entry) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.appendEntry(e)
 }
 
 // ByID returns the entry for the given id or nil.

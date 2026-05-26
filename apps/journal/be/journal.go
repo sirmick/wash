@@ -33,12 +33,12 @@ const batchInterval = 100 * time.Millisecond
 // LogEntry is the wire-shape one journal record. Fields lowercased
 // for the FE; we drop everything we don't render.
 type LogEntry struct {
-	TS       int64  `cbor:"ts" json:"ts"`               // microseconds since epoch
-	Priority int    `cbor:"priority" json:"priority"`   // 0..7 (0 = emerg)
-	Unit     string `cbor:"unit" json:"unit"`           // _SYSTEMD_UNIT
-	Ident    string `cbor:"ident" json:"ident"`         // SYSLOG_IDENTIFIER or _COMM
-	PID      int    `cbor:"pid" json:"pid"`             // _PID
-	Message  string `cbor:"message" json:"message"`     // MESSAGE
+	TS       int64  `json:"ts"`               // microseconds since epoch
+	Priority int    `json:"priority"`   // 0..7 (0 = emerg)
+	Unit     string `json:"unit"`           // _SYSTEMD_UNIT
+	Ident    string `json:"ident"`         // SYSLOG_IDENTIFIER or _COMM
+	PID      int    `json:"pid"`             // _PID
+	Message  string `json:"message"`     // MESSAGE
 }
 
 // streamCtl owns one running journalctl (either direct subprocess or
@@ -389,9 +389,8 @@ func journalArgv(req selectReq) []string {
 }
 
 // priorityOf coerces selectReq.Priority through sdk.ToInt64 so the
-// JS-Number → JSON float64 → CBOR float64 path decodes cleanly. The
-// field is typed `any` on the struct; if the FE ever sends a CBOR
-// int, ToInt64 still handles it.
+// JS-Number → JSON float64 path decodes cleanly. The field is typed
+// `any` on the struct; pre-typed int values are also handled.
 func priorityOf(req selectReq) int {
 	return int(sdk.ToInt64(req.Priority))
 }

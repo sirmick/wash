@@ -1,6 +1,7 @@
 package router
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 
@@ -40,13 +41,24 @@ type (
 	WindowHints = wire.WindowHints
 )
 
-// ParseManifest parses one --wash-manifest probe output. The manifest
+// ParseProbe parses one --wash-manifest probe output. Probe output
+// is a ProbeOutput envelope: {manifest, bundle_b64?}. The manifest
 // is returned even when validation fails so the caller can list it
-// disabled with the reason. Validation rules live in wire.
-func ParseManifest(data []byte) (*Manifest, error) {
-	var m Manifest
-	if err := json.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("parse: %w", err)
+// disabled with the reason. Bundle bytes are base64-decoded; an
+// invalid base64 payload yields (manifest, nil, err) so the caller
+// can list-disable the entry with a "bad bundle" reason.
+func ParseProbe(data []byte) (*Manifest, []byte, error) {
+	var p wire.ProbeOutput
+	if err := json.Unmarshal(data, &p); err != nil {
+		return nil, nil, fmt.Errorf("parse: %w", err)
 	}
-	return &m, wire.ValidateManifest(&m)
+	var bundle []byte
+	if p.BundleB64 != "" {
+		b, err := base64.StdEncoding.DecodeString(p.BundleB64)
+		if err != nil {
+			return &p.Manifest, nil, fmt.Errorf("bundle base64: %w", err)
+		}
+		bundle = b
+	}
+	return &p.Manifest, bundle, wire.ValidateManifest(&p.Manifest)
 }

@@ -2,9 +2,9 @@ package sdk
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
-	"github.com/fxamacker/cbor/v2"
 	"github.com/sirmick/wash/internal/wire"
 )
 
@@ -82,7 +82,7 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 	switch t {
 	case wire.TEvtWindowMapped:
 		var m wire.EvtWindowMapped
-		if err := cbor.Unmarshal(payload, &m); err != nil {
+		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
 		if c.def.OnMapped != nil {
@@ -90,7 +90,7 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 		}
 	case wire.TEvtWindowFocus:
 		var m wire.EvtWindowFocus
-		if err := cbor.Unmarshal(payload, &m); err != nil {
+		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
 		if c.def.OnFocus != nil {
@@ -98,7 +98,7 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 		}
 	case wire.TEvtWindowUnfocus:
 		var m wire.EvtWindowUnfocus
-		if err := cbor.Unmarshal(payload, &m); err != nil {
+		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
 		if c.def.OnUnfocus != nil {
@@ -106,7 +106,7 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 		}
 	case wire.TEvtWindowResize:
 		var m wire.EvtWindowResize
-		if err := cbor.Unmarshal(payload, &m); err != nil {
+		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
 		if c.def.OnResize != nil {
@@ -114,7 +114,7 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 		}
 	case wire.TEvtWindowState:
 		var m wire.EvtWindowState
-		if err := cbor.Unmarshal(payload, &m); err != nil {
+		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
 		if c.def.OnState != nil {
@@ -122,7 +122,7 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 		}
 	case wire.TEvtWindowCloseRequested:
 		var m wire.EvtWindowCloseRequested
-		if err := cbor.Unmarshal(payload, &m); err != nil {
+		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
 		allow := true
@@ -136,57 +136,64 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 		}
 	case wire.TEvtAppMsg:
 		var m wire.EvtAppMsg
-		if err := cbor.Unmarshal(payload, &m); err != nil {
+		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
+		}
+		// Decode the opaque payload into a generic Go value. For app
+		// messages whose data is a JSON object this is map[string]any
+		// — the natural shape every Bus / OnAppMsg consumer expects.
+		// Bare arrays / scalars come through as []any / string / etc.
+		var data any
+		if len(m.Data) > 0 {
+			if err := json.Unmarshal(m.Data, &data); err != nil {
+				return fmt.Errorf("app_msg data decode: %w", err)
+			}
 		}
 		// Intercept wash-priv replies that belong to an in-flight
 		// PrivRunInlineSync. Other priv messages and all non-priv
 		// senders fall through to the user's callbacks.
 		if m.From != nil && m.From.AppID == "com.wash.priv" {
-			if c.tryConsumePrivReply(m.Data) {
+			if c.tryConsumePrivReply(data) {
 				return nil
 			}
 		}
 		if m.From != nil && c.def.OnAppMsgFrom != nil {
-			c.def.OnAppMsgFrom(c, m.Win, m.Data, *m.From)
+			c.def.OnAppMsgFrom(c, m.Win, data, *m.From)
 		} else if c.def.OnAppMsg != nil {
-			c.def.OnAppMsg(c, m.Win, m.Data)
+			c.def.OnAppMsg(c, m.Win, data)
 		}
 	case wire.TEvtSpawnOk:
 		var m wire.EvtSpawnOk
-		if err := cbor.Unmarshal(payload, &m); err != nil {
+		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
-		if c.def.OnSpawnResult != nil {
+		// Prepared spawn replies carry AttachToken; normal spawn
+		// replies don't. Dispatch by presence so each capability
+		// stays plumbed to its own callback.
+		if m.AttachToken != "" {
+			if c.def.OnPrepareSpawnResult != nil {
+				c.def.OnPrepareSpawnResult(c, m.ReqID, m.InstanceID, m.AttachToken, m.Binary, nil)
+			}
+		} else if c.def.OnSpawnResult != nil {
 			c.def.OnSpawnResult(c, m.AppID, m.InstanceID, nil)
 		}
 	case wire.TEvtSpawnErr:
 		var m wire.EvtSpawnErr
-		if err := cbor.Unmarshal(payload, &m); err != nil {
+		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
-		if c.def.OnSpawnResult != nil {
+		// ReqID non-zero ⇒ this was a prepared-spawn rejection;
+		// route to the same callback that handles its Ok variant.
+		if m.ReqID != 0 {
+			if c.def.OnPrepareSpawnResult != nil {
+				c.def.OnPrepareSpawnResult(c, m.ReqID, "", "", "", fmt.Errorf("%s: %s", m.Code, m.Msg))
+			}
+		} else if c.def.OnSpawnResult != nil {
 			c.def.OnSpawnResult(c, m.AppID, "", fmt.Errorf("%s: %s", m.Code, m.Msg))
-		}
-	case wire.TEvtPrepareSpawnOk:
-		var m wire.EvtPrepareSpawnOk
-		if err := cbor.Unmarshal(payload, &m); err != nil {
-			return err
-		}
-		if c.def.OnPrepareSpawnResult != nil {
-			c.def.OnPrepareSpawnResult(c, m.ReqID, m.InstanceID, m.AttachToken, m.Binary, nil)
-		}
-	case wire.TEvtPrepareSpawnErr:
-		var m wire.EvtPrepareSpawnErr
-		if err := cbor.Unmarshal(payload, &m); err != nil {
-			return err
-		}
-		if c.def.OnPrepareSpawnResult != nil {
-			c.def.OnPrepareSpawnResult(c, m.ReqID, "", "", "", fmt.Errorf("%s: %s", m.Code, m.Msg))
 		}
 	case wire.TEvtClipboardData:
 		var m wire.EvtClipboardData
-		if err := cbor.Unmarshal(payload, &m); err != nil {
+		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
 		c.clipMu.Lock()
@@ -200,7 +207,7 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 		}
 	case wire.TEvtClipboardChanged:
 		var m wire.EvtClipboardChanged
-		if err := cbor.Unmarshal(payload, &m); err != nil {
+		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
 		if c.def.OnClipboardChanged != nil {

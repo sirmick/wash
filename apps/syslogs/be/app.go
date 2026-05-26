@@ -113,8 +113,8 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 // ----- FE → BE bus -----
 
 type selectReq struct {
-	Path   string `cbor:"path"`
-	AsRoot bool   `cbor:"as_root"`
+	Path   string `json:"path"`
+	AsRoot bool   `json:"as_root"`
 }
 
 type emptyReq struct{}

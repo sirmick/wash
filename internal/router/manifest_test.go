@@ -7,6 +7,13 @@ import (
 	"github.com/sirmick/wash/internal/wire"
 )
 
+// envelopedManifest wraps a bare manifest JSON in the ProbeOutput
+// envelope shape (no bundle) so the validation tests can drive
+// ParseProbe — the production probe-output parser — directly.
+func envelopedManifest(manifestJSON string) string {
+	return `{"manifest":` + manifestJSON + `}`
+}
+
 func validManifestJSON() string {
 	return `{
 		"id":"com.wash.about",
@@ -23,7 +30,7 @@ func validManifestJSON() string {
 }
 
 func TestParseValidManifest(t *testing.T) {
-	m, err := ParseManifest([]byte(validManifestJSON()))
+	m, _, err := ParseProbe([]byte(envelopedManifest(validManifestJSON())))
 	if err != nil {
 		t.Fatalf("validate: %v", err)
 	}
@@ -56,7 +63,7 @@ func TestValidateRejects(t *testing.T) {
 	}
 	for _, tc := range tweaks {
 		t.Run(tc.name, func(t *testing.T) {
-			m, err := ParseManifest([]byte(validManifestJSON()))
+			m, _, err := ParseProbe([]byte(envelopedManifest(validManifestJSON())))
 			if err != nil {
 				t.Fatalf("base manifest must parse: %v", err)
 			}
@@ -73,13 +80,13 @@ func TestValidateRejects(t *testing.T) {
 }
 
 func TestParseRejectsNonJSON(t *testing.T) {
-	if _, err := ParseManifest([]byte("not json")); err == nil {
+	if _, _, err := ParseProbe([]byte("not json")); err == nil {
 		t.Fatal("expected parse error")
 	}
 }
 
 func TestHasCapability(t *testing.T) {
-	m, err := ParseManifest([]byte(validManifestJSON()))
+	m, _, err := ParseProbe([]byte(envelopedManifest(validManifestJSON())))
 	if err != nil {
 		t.Fatal(err)
 	}

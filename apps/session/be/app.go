@@ -138,8 +138,8 @@ func sendSystemInfo(c *sdk.Conn) {
 const washIcon = "layout-dashboard"
 
 // onAppMsg interprets the FE's launcher click + desktop-config
-// requests. data is the (CBOR-decoded) JSON the FE sent via
-// app_msg.send.
+// requests. data is the JSON the FE sent via app_msg.send, decoded
+// into map[string]any.
 //
 //   {"action":"launch","app_id":"…"}        — spawn an app
 //   {"action":"spawn_root","app_id":"…"}    — ask wash-priv to spawn

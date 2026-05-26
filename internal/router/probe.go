@@ -12,7 +12,12 @@ import (
 const probeTimeout = 2 * time.Second
 
 // probeStdoutCap is the max bytes read from probe stdout (WIRE.md §5).
-const probeStdoutCap = 64 * 1024
+// Raised to 32 MiB so the embedded FE bundle can ride along on the
+// probe envelope (manifest + bundle_b64). The router's max frame
+// size is 16 MiB; the base64 expansion is 4/3, so a ~12 MiB raw
+// bundle fits with room to spare. No realistic wash app is anywhere
+// near that — the largest in tree is ~2 MiB.
+const probeStdoutCap = 32 * 1024 * 1024
 
 // Probe runs `<bin> --wash-manifest` with a stripped environment and
 // returns the captured stdout (WIRE.md §5). Stdout is capped at 64

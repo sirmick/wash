@@ -29,7 +29,6 @@ import (
 
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/sdk"
-	"github.com/sirmick/wash/internal/wire"
 )
 
 //go:embed all:assets
@@ -93,16 +92,16 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 }
 
 type readReq struct {
-	Domain string `cbor:"domain"`
+	Domain string `json:"domain"`
 }
 
 type writeReq struct {
-	Domain string `cbor:"domain"`
-	Value  any    `cbor:"value"`
+	Domain string `json:"domain"`
+	Value  any    `json:"value"`
 }
 
 type writeResp struct {
-	Domain string `cbor:"domain"`
+	Domain string `json:"domain"`
 }
 
 func registerHandlers(b *sdk.Bus) {
@@ -169,15 +168,15 @@ func domainFile(domain string) string {
 	return ""
 }
 
-// doWrite atomically replaces the domain file. value is a
-// CBOR-decoded map[any]any; wire.ToJSONValue normalises it for the
-// JSON marshaller.
+// doWrite atomically replaces the domain file. value is the
+// JSON-decoded payload (map[string]any for objects); json.Marshal
+// handles it directly.
 func doWrite(domain string, value any) error {
 	path := domainFile(domain)
 	if path == "" {
 		return sdk.Errf("bad_request", "unknown domain")
 	}
-	out, err := json.MarshalIndent(wire.ToJSONValue(value), "", "  ")
+	out, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return sdk.Err{Code: "bad_request", Msg: err.Error()}
 	}

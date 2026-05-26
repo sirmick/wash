@@ -2,39 +2,23 @@ package sdk
 
 import (
 	"encoding/base64"
-	"fmt"
 	"strconv"
 	"strings"
 )
 
-// CBOR-decoded values arrive at OnAppMsg / OnAppMsgFrom with shapes
-// that depend on what crossed the wire: integers can land as int64,
-// uint64, or float64 (CBOR preserves type; JSON-via-CBOR collapses to
-// float64); maps land as map[any]any rather than map[string]any.
-// These helpers do the per-field coercion every app needs and used
-// to redefine for itself.
-//
-// The shape they assume is whatever cbor.Unmarshal(payload, &m)
-// produced, where m is any. Apps that genuinely care about precise
-// types can drop down to cbor.Unmarshal with a typed struct.
+// Helpers for poking into JSON-decoded `any` values returned from
+// OnAppMsg / OnAppMsgFrom. encoding/json decodes JSON objects into
+// map[string]any, numbers into float64, booleans into bool, strings
+// into string, and arrays into []any. These helpers do the per-field
+// coercion that would otherwise be repeated in every app.
 
-// AsMap unwraps a CBOR-decoded map[any]any (or already-string-keyed
-// map[string]any) into map[string]any. Non-string keys are dropped.
-// Returns nil if data isn't a map.
+// AsMap unwraps a JSON-decoded map into map[string]any. Returns nil
+// if data isn't a map. Now that the event channel is JSON, the data
+// arrives already-string-keyed — AsMap is mostly a typed shortcut
+// for the `data.(map[string]any)` assertion plus a nil-safe fallback.
 func AsMap(data any) map[string]any {
-	switch x := data.(type) {
-	case map[string]any:
-		return x
-	case map[any]any:
-		out := make(map[string]any, len(x))
-		for k, v := range x {
-			if ks, ok := k.(string); ok {
-				out[ks] = v
-			}
-		}
-		return out
-	}
-	return nil
+	m, _ := data.(map[string]any)
+	return m
 }
 
 // ToString returns v as a string, or "" if v is missing or wrong-typed.
@@ -49,42 +33,36 @@ func ToBool(v any) bool {
 	return b
 }
 
-// ToInt64 coerces CBOR's mixed numeric shapes into int64.
+// ToInt64 coerces a JSON-decoded numeric value into int64. JSON
+// numbers land as float64 when the target is `any`; we also accept
+// the typed-int forms in case a struct-typed decoder filled the map.
 func ToInt64(v any) int64 {
 	switch x := v.(type) {
-	case int64:
-		return x
-	case uint64:
-		return int64(x)
 	case float64:
 		return int64(x)
+	case int64:
+		return x
 	case int:
-		return int64(x)
-	case int32:
-		return int64(x)
-	case uint32:
 		return int64(x)
 	}
 	return 0
 }
 
-// ToUint64 coerces CBOR's mixed numeric shapes into uint64.
-// Negative int64 values clamp to 0.
+// ToUint64 coerces a JSON-decoded numeric value into uint64.
+// Negative values clamp to 0.
 func ToUint64(v any) uint64 {
 	switch x := v.(type) {
+	case float64:
+		if x < 0 {
+			return 0
+		}
+		return uint64(x)
 	case uint64:
 		return x
 	case int64:
 		if x < 0 {
 			return 0
 		}
-		return uint64(x)
-	case float64:
-		if x < 0 {
-			return 0
-		}
-		return uint64(x)
-	case uint32:
 		return uint64(x)
 	case int:
 		if x < 0 {
@@ -95,20 +73,18 @@ func ToUint64(v any) uint64 {
 	return 0
 }
 
-// ToUint32 coerces CBOR's mixed numeric shapes into uint32. Also
+// ToUint32 coerces a JSON-decoded numeric value into uint32. Also
 // accepts strings (decimal or with leading 0 / 0o / 0x base markers)
 // so an FE that types "0755" verbatim works for chmod-style fields.
 // Returns (0, false) when v can't be parsed.
 func ToUint32(v any) (uint32, bool) {
 	switch x := v.(type) {
+	case float64:
+		return uint32(x), true
 	case uint64:
 		return uint32(x), true
 	case int64:
 		return uint32(x), true
-	case float64:
-		return uint32(x), true
-	case uint32:
-		return x, true
 	case int:
 		return uint32(x), true
 	case string:
@@ -125,7 +101,7 @@ func ToUint32(v any) (uint32, bool) {
 	return 0, false
 }
 
-// ToStringSlice coerces a CBOR-decoded array-of-strings ([]any with
+// ToStringSlice coerces a JSON-decoded array-of-strings ([]any with
 // string elements, or already-typed []string) into []string.
 // Non-string elements are dropped silently.
 func ToStringSlice(v any) []string {
@@ -144,21 +120,12 @@ func ToStringSlice(v any) []string {
 	return nil
 }
 
-// ToStringMap coerces a CBOR-decoded map-of-strings into
-// map[string]string. Accepts map[any]any (CBOR's typical decode),
-// map[string]any, and map[string]string. Mixed types yield only the
-// string→string entries.
+// ToStringMap coerces a JSON-decoded map-of-strings into
+// map[string]string. Accepts map[string]any (JSON's default) and
+// map[string]string. Mixed types yield only the string→string entries.
 func ToStringMap(v any) map[string]string {
 	out := map[string]string{}
 	switch x := v.(type) {
-	case map[any]any:
-		for k, vv := range x {
-			ks, _ := k.(string)
-			vs, _ := vv.(string)
-			if ks != "" {
-				out[ks] = vs
-			}
-		}
 	case map[string]any:
 		for k, vv := range x {
 			if s, ok := vv.(string); ok {
@@ -186,13 +153,4 @@ func DecodeBase64(v any) []byte {
 		return nil
 	}
 	return b
-}
-
-// stringify is a fallback for non-string CBOR map keys when AsMap
-// would otherwise drop them. Used by ToJSONValue.
-func stringify(v any) string {
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return fmt.Sprint(v)
 }

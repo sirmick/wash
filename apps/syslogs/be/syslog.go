@@ -40,12 +40,12 @@ const (
 // heuristic on the message body. Callers should treat priority<0 as
 // "unknown — render neutral".
 type LogEntry struct {
-	TS       int64  `cbor:"ts" json:"ts"`             // µs since epoch (0 if unparsed)
-	Priority int    `cbor:"priority" json:"priority"` // -1 unknown; 0..7 RFC values
-	Ident    string `cbor:"ident" json:"ident"`       // program name (sshd, kernel, …)
-	PID      int    `cbor:"pid" json:"pid"`           // 0 if absent
-	Message  string `cbor:"message" json:"message"`
-	Raw      string `cbor:"raw" json:"raw"` // original line — fallback view
+	TS       int64  `json:"ts"`             // µs since epoch (0 if unparsed)
+	Priority int    `json:"priority"` // -1 unknown; 0..7 RFC values
+	Ident    string `json:"ident"`       // program name (sshd, kernel, …)
+	PID      int    `json:"pid"`           // 0 if absent
+	Message  string `json:"message"`
+	Raw      string `json:"raw"` // original line — fallback view
 }
 
 // streamCtl owns one running tail. Same shape as wash-journal's
@@ -273,12 +273,10 @@ func (s *streamCtl) finishPriv(exit int, errMsg string) {
 // it. Empty lines and `tail`'s "==> file <==" headers are skipped.
 //
 // Binary-content guard: if the line isn't valid UTF-8, scrub it
-// before parsing. CBOR (the BE↔router transport) encodes Go strings
-// as text-strings and the router's decode side strictly validates
-// UTF-8 — a single bad byte tears down the app's read loop, leaving
-// the user with a dead connection. Defensive sanitisation keeps a
-// misclassified binary file (sysstat artefacts that slip past the
-// discovery filter, etc.) from breaking the whole window.
+// before parsing. JSON strings must be valid UTF-8 and json.Marshal
+// will escape or fail on invalid bytes — defensive sanitisation
+// keeps a misclassified binary file (sysstat artefacts that slip
+// past the discovery filter, etc.) from breaking the whole window.
 func (s *streamCtl) handleLine(line string) {
 	if line == "" {
 		return

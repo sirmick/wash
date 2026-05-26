@@ -110,10 +110,10 @@ func TestHandleReplyIsInteractive(t *testing.T) {
 	defer cleanup()
 
 	type req struct {
-		ID string `cbor:"id"`
+		ID string `json:"id"`
 	}
 	type resp struct {
-		OK bool `cbor:"ok"`
+		OK bool `json:"ok"`
 	}
 	Handle(bus, "ping", func(c *Conn, id string, r req) (resp, error) {
 		return resp{OK: true}, nil
@@ -135,10 +135,10 @@ func TestHandleBulkReplyIsBulk(t *testing.T) {
 	defer cleanup()
 
 	type req struct {
-		ID string `cbor:"id"`
+		ID string `json:"id"`
 	}
 	type resp struct {
-		OK bool `cbor:"ok"`
+		OK bool `json:"ok"`
 	}
 	HandleBulk(bus, "ping", func(c *Conn, id string, r req) (resp, error) {
 		return resp{OK: true}, nil
@@ -175,10 +175,10 @@ func TestHandleBackgroundReplyIsBackground(t *testing.T) {
 	defer cleanup()
 
 	type req struct {
-		ID string `cbor:"id"`
+		ID string `json:"id"`
 	}
 	type resp struct {
-		OK bool `cbor:"ok"`
+		OK bool `json:"ok"`
 	}
 	HandleBackground(bus, "ping", func(c *Conn, id string, r req) (resp, error) {
 		return resp{OK: true}, nil
@@ -203,7 +203,7 @@ func TestHandleBulkErrorReplyIsBulk(t *testing.T) {
 	defer cleanup()
 
 	type req struct {
-		ID string `cbor:"id"`
+		ID string `json:"id"`
 	}
 	type resp struct{}
 	HandleBulk(bus, "ping", func(c *Conn, id string, r req) (resp, error) {

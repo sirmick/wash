@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -161,10 +162,9 @@ func TestEvtRoundTrip(t *testing.T) {
 	}
 }
 
-// EvtAppMsg carries arbitrary data. CBOR's default decoding promotes
-// maps to map[interface{}]interface{} with int keys for small ints —
-// so the round-trip comparison is on a representative subset rather
-// than every shape.
+// EvtAppMsg carries arbitrary data as a json.RawMessage. Round-trip
+// the envelope and inspect the raw bytes — the test doesn't decode
+// the inner payload because the wire layer treats it as opaque.
 func TestEvtAppMsgRoundTripStringData(t *testing.T) {
 	in := NewEvtAppMsg(7, "hello")
 	b, err := EncodeEvt(in)
@@ -182,12 +182,15 @@ func TestEvtAppMsgRoundTripStringData(t *testing.T) {
 	if out.T != TEvtAppMsg || out.Win != 7 {
 		t.Fatalf("header: %+v", out)
 	}
-	if s, _ := out.Data.(string); s != "hello" {
-		t.Fatalf("data %#v, want string \"hello\"", out.Data)
+	if string(out.Data) != `"hello"` {
+		t.Fatalf("data %s, want %q", out.Data, `"hello"`)
 	}
 }
 
-func TestEvtAppMsgPreservesBinaryData(t *testing.T) {
+// Binary payloads survive the JSON envelope via base64 — encoding/json's
+// default for []byte fields. End-to-end binary requires raw channels;
+// app_msg.data is JSON, and base64 is the standard fallback.
+func TestEvtAppMsgBinaryDataAsBase64(t *testing.T) {
 	binData := []byte{0x00, 0xff, 0x01, 0x02, 0x80}
 	in := NewEvtAppMsg(1, binData)
 	b, err := EncodeEvt(in)
@@ -199,12 +202,10 @@ func TestEvtAppMsgPreservesBinaryData(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := got.(EvtAppMsg)
-	gotBytes, ok := out.Data.([]byte)
-	if !ok {
-		t.Fatalf("data type %T, want []byte", out.Data)
-	}
-	if !reflect.DeepEqual(gotBytes, binData) {
-		t.Fatalf("binary mismatch")
+	// Inner data is a JSON string holding base64(binData).
+	want := `"` + base64.StdEncoding.EncodeToString(binData) + `"`
+	if string(out.Data) != want {
+		t.Fatalf("data %s, want %s", out.Data, want)
 	}
 }
 

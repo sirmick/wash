@@ -18,9 +18,10 @@ import (
 const PrivAppID = "com.wash.priv"
 
 // SendAppMsg sends an APP_MSG to the FE half (WIRE.md §9). data is
-// passed through to CBOR verbatim — the format is app-private and
-// the router never inspects it. Frames go out as Interactive class;
-// use SendAppMsgBulk for streams that should yield to user input.
+// JSON-marshaled and passed through verbatim — the format is
+// app-private and the router never inspects it. Frames go out as
+// Interactive class; use SendAppMsgBulk for streams that should
+// yield to user input.
 func (c *Conn) SendAppMsg(data any) error {
 	return c.writeEvt(wire.NewEvtAppMsg(c.windowID, data))
 }
@@ -49,19 +50,19 @@ func (c *Conn) SendAppMsgBackground(data any) error {
 // Used by apps that need to queue work in a system service, e.g.
 // fm enqueueing a bulk-delete job into wash-bulk.
 func (c *Conn) SendAppMsgTo(recipient wire.Recipient, data any) error {
-	return c.writeEvt(wire.NewEvtAppMsgSendTo(recipient, data))
+	return c.writeEvt(wire.NewEvtAppMsgTo(recipient, data))
 }
 
 // SendAppMsgToBulk is SendAppMsgTo with the Bulk class bit set. See
 // SendAppMsgBulk for the rationale.
 func (c *Conn) SendAppMsgToBulk(recipient wire.Recipient, data any) error {
-	return c.writeEvtClass(wire.NewEvtAppMsgSendTo(recipient, data), wire.ClassBulk)
+	return c.writeEvtClass(wire.NewEvtAppMsgTo(recipient, data), wire.ClassBulk)
 }
 
 // SendAppMsgToBackground is SendAppMsgTo with the Background class
 // bit set. Cross-app version of SendAppMsgBackground.
 func (c *Conn) SendAppMsgToBackground(recipient wire.Recipient, data any) error {
-	return c.writeEvtClass(wire.NewEvtAppMsgSendTo(recipient, data), wire.ClassBackground)
+	return c.writeEvtClass(wire.NewEvtAppMsgTo(recipient, data), wire.ClassBackground)
 }
 
 // SetTitle requests a titlebar text change for this app's window.
@@ -214,13 +215,13 @@ func (b *byteBuf) bytes() []byte {
 	return out
 }
 
-// tryConsumePrivReply looks at a CBOR-decoded app_msg payload from
+// tryConsumePrivReply looks at a JSON-decoded app_msg payload from
 // wash-priv. If its req_id matches a PrivRunInlineSync waiter,
 // accumulates streamed bytes and resolves the call on priv.result.
 // Returns true when the message was consumed — caller should NOT
 // forward to OnAppMsgFrom.
 func (c *Conn) tryConsumePrivReply(data any) bool {
-	m, ok := data.(map[any]any)
+	m, ok := data.(map[string]any)
 	if !ok {
 		return false
 	}
@@ -250,13 +251,9 @@ func (c *Conn) tryConsumePrivReply(data any) bool {
 		}
 		return true
 	case "priv.result":
+		// JSON decodes numbers into float64 when the target is `any`.
 		exit := 0
-		switch x := m["exit_code"].(type) {
-		case int64:
-			exit = int(x)
-		case uint64:
-			exit = int(x)
-		case float64:
+		if x, ok := m["exit_code"].(float64); ok {
 			exit = int(x)
 		}
 		errMsg, _ := m["error"].(string)
@@ -323,7 +320,7 @@ func (c *Conn) SpawnRequest(appID string) error {
 // The dial-back from the child is matched by token; /proc/<pid>/exe
 // is verified against the binary path before the attach is accepted.
 func (c *Conn) PrepareSpawn(reqID uint64, appID string) error {
-	return c.writeEvt(wire.NewEvtPrepareSpawn(reqID, appID))
+	return c.writeEvt(wire.NewEvtPrepareSpawnRequest(reqID, appID))
 }
 
 // Notify asks the chrome to show a toast. level is one of "info",
@@ -341,10 +338,9 @@ func (c *Conn) Notify(title, body, level string) error {
 // matching element the shell dispatches it as a `wash:state` event.
 //
 // state is JSON-marshalled; the schema is the app's own — the router
-// never inspects it. CBOR-decoded values (which arrive at OnAppMsg
-// as map[any]any) are normalized to JSON-marshalable shapes first.
+// never inspects it.
 func (c *Conn) SaveState(state any) error {
-	data, err := json.Marshal(wire.ToJSONValue(state))
+	data, err := json.Marshal(state)
 	if err != nil {
 		return err
 	}

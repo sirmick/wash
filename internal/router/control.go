@@ -445,17 +445,13 @@ func (r *Router) controlPrivRun(ctx context.Context, conn net.Conn, rd *bufio.Re
 // decodeControlData unmarshals the `data` payload from a control-socket
 // msg request, preserving integer-ness of numeric fields.
 //
-// json.Unmarshal turns every JSON number into float64. The bus's typed
-// handlers ultimately CBOR-decode into structs with int fields (e.g.
-// signalReq.PID int32) — fxamacker's decoder refuses to coerce float
-// → int, so the request fails with bad_request. The browser path
-// dodges this because the shell encodes JS numbers directly as CBOR
-// ints when they're integral; only the JSON-over-control-socket path
-// loses that information.
-//
-// Using a Decoder with UseNumber() gives us json.Number values, which
-// we then normalize: integer-valued numbers become int64, fractional
-// ones become float64. CBOR encoding of those Go types is faithful.
+// json.Unmarshal into `any` turns every JSON number into float64.
+// Bus handlers re-marshal through json.Marshal + Unmarshal into the
+// typed Req struct; an integer-typed field (e.g. signalReq.PID int32)
+// rejects a fractional-looking float. Using json.Decoder with
+// UseNumber() preserves the original token, and we then normalize:
+// integer-valued numbers become int64, fractional ones become float64.
+// The bus's typed decode then accepts both faithfully.
 func decodeControlData(raw json.RawMessage) (any, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()

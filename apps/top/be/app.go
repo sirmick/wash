@@ -41,10 +41,8 @@ const (
 
 // ---- wire payloads ----
 //
-// All fields are plain Go scalars or maps so CBOR (BE side) and the
-// router's CBOR→JSON normalizer (browser side) both stay happy. Per
-// the project's CBOR/JSON pitfall: no []byte / json.RawMessage in
-// structured fields; the router would base64-encode them.
+// Plain Go scalars + maps + slices. The whole pipeline is JSON now;
+// the bus marshals via encoding/json and the FE parses the same.
 
 type Snapshot struct {
 	Kind     string     `json:"kind"`
@@ -103,13 +101,9 @@ type diskDev struct {
 	Real                  bool `json:"real"`
 }
 
-// MarshalJSON for ProcInfo: serialize lowercase fields so the FE
-// reads consistent keys whether the payload arrived via CBOR or JSON.
-// (CBOR with struct tags lowercases via fxamacker's default, but
-// JSON struct tags would otherwise capitalize without explicit
-// tags — explicitly tagging in proc.go is simpler.)
-// Tags live on the struct; this comment exists so future-me knows why
-// each field has both `cbor` (implicit via Go names) and `json` parity.
+// ProcInfo's JSON tags live on the struct (in proc.go) — explicit
+// lowercase names so the FE reads consistent keys regardless of
+// Go's CamelCase field naming.
 
 // ---- BE state ----
 
@@ -180,39 +174,39 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 // ----- bus types + handlers -----
 
 type setIntervalReq struct {
-	MS int `cbor:"ms"`
+	MS int `json:"ms"`
 }
 
 type detailsReq struct {
-	PID int32 `cbor:"pid"`
+	PID int32 `json:"pid"`
 }
 
-// detailsResp mirrors the Details struct in proc.go but tagged for
-// CBOR so the bus encodes it correctly. Field types match Details.
+// detailsResp mirrors the Details struct in proc.go with JSON tags
+// so the bus encodes it cleanly. Field types match Details.
 type detailsResp struct {
-	PID      int32             `cbor:"pid"`
-	Found    bool              `cbor:"found"`
-	Comm     string            `cbor:"comm"`
-	Cmd      string            `cbor:"cmd"`
-	Exe      string            `cbor:"exe"`
-	Cwd      string            `cbor:"cwd"`
-	Status   map[string]string `cbor:"status"`
-	IO       map[string]string `cbor:"io"`
-	Limits   []limitRow        `cbor:"limits"`
-	Cgroup   string            `cbor:"cgroup"`
-	FDs      int32             `cbor:"fds"`
-	Wchan    string            `cbor:"wchan"`
-	OOMScore string            `cbor:"oom_score"`
+	PID      int32             `json:"pid"`
+	Found    bool              `json:"found"`
+	Comm     string            `json:"comm"`
+	Cmd      string            `json:"cmd"`
+	Exe      string            `json:"exe"`
+	Cwd      string            `json:"cwd"`
+	Status   map[string]string `json:"status"`
+	IO       map[string]string `json:"io"`
+	Limits   []limitRow        `json:"limits"`
+	Cgroup   string            `json:"cgroup"`
+	FDs      int32             `json:"fds"`
+	Wchan    string            `json:"wchan"`
+	OOMScore string            `json:"oom_score"`
 }
 
 type signalReq struct {
-	PID int32  `cbor:"pid"`
-	Sig string `cbor:"sig"`
+	PID int32  `json:"pid"`
+	Sig string `json:"sig"`
 }
 
 type signalResp struct {
-	PID int32  `cbor:"pid"`
-	Sig string `cbor:"sig"`
+	PID int32  `json:"pid"`
+	Sig string `json:"sig"`
 }
 
 func registerHandlers(b *sdk.Bus) {
@@ -367,8 +361,9 @@ func classifySignalErr(err error) string {
 	return "signal_failed"
 }
 
-// toInt coerces whatever CBOR-decoded numeric came through (uint64,
-// int64, float64) into a plain int. Returns 0 for non-numeric values.
+// toInt coerces whatever JSON-decoded numeric came through (float64
+// is the common case; uint64/int64 covered for pre-typed values)
+// into a plain int. Returns 0 for non-numeric values.
 func toInt(v any) int {
 	switch x := v.(type) {
 	case uint64:

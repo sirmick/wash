@@ -59,54 +59,50 @@ const (
 )
 
 // ---- wire types ----
-//
-// All scalar / map / slice — no []byte / json.RawMessage anywhere or
-// the router's CBOR→JSON normalizer would base64-encode it (see the
-// [[wash-cbor-json-pitfall]] memory note).
 
 type Service struct {
-	Name        string `cbor:"name" json:"name"`
-	Description string `cbor:"description" json:"description"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
 	// Active is systemd's high-level state — "active", "inactive",
 	// "failed", "activating", "deactivating", "reloading". For openrc
 	// we synthesize "active" / "inactive" / "failed" from the more
 	// granular sub status so the FE doesn't need two badge ladders.
-	Active string `cbor:"active" json:"active"`
+	Active string `json:"active"`
 	// Sub is the granular sub-state. systemd: "running", "exited",
 	// "dead", "start-pre", … openrc: "started", "crashed", "stopped".
-	Sub string `cbor:"sub" json:"sub"`
+	Sub string `json:"sub"`
 	// Load is systemd's load state — "loaded", "not-found", "masked"
 	// — or "loaded" / "not-loaded" for openrc (synthesized).
-	Load string `cbor:"load" json:"load"`
+	Load string `json:"load"`
 	// Enabled is the unit-file state. systemd: "enabled", "disabled",
 	// "static", "masked", "alias", "generated", "indirect", "linked".
 	// openrc: "enabled" / "disabled" — anything assigned to any
 	// runlevel is "enabled".
-	Enabled string `cbor:"enabled" json:"enabled"`
+	Enabled string `json:"enabled"`
 }
 
 type ListResp struct {
-	Kind     string    `cbor:"kind"`
-	Init     string    `cbor:"init"`
-	Services []Service `cbor:"services"`
+	Kind     string    `json:"kind"`
+	Init     string    `json:"init"`
+	Services []Service `json:"services"`
 }
 
 type ActionReq struct {
-	Name string `cbor:"name"`
-	Op   string `cbor:"op"`
+	Name string `json:"name"`
+	Op   string `json:"op"`
 }
 
 type ActionResp struct {
-	Kind   string `cbor:"kind"`
-	Name   string `cbor:"name"`
-	Op     string `cbor:"op"`
-	OK     bool   `cbor:"ok"`
-	Exit   int    `cbor:"exit"`
-	Stderr string `cbor:"stderr"`
+	Kind   string `json:"kind"`
+	Name   string `json:"name"`
+	Op     string `json:"op"`
+	OK     bool   `json:"ok"`
+	Exit   int    `json:"exit"`
+	Stderr string `json:"stderr"`
 }
 
 type ShowLogsReq struct {
-	Name string `cbor:"name"`
+	Name string `json:"name"`
 }
 
 // ---- BE state ----

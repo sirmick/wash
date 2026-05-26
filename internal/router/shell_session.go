@@ -1,7 +1,6 @@
 package router
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -215,8 +214,6 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		_ = json.Unmarshal(f.Payload, &probe)
 		s.router.log("shell→BE app_msg.send inst=%s data.kind=%q", m.InstanceID, probe.Data.Kind)
 		return s.handleAppMsgSend(m, f.Class())
-	case wire.ShellAppMsgSendTo:
-		return s.handleAppMsgSendTo(m, f.Class())
 	case wire.ShellLog:
 		return s.handleShellLog(m)
 	case wire.ShellChannelCredit:
@@ -426,88 +423,30 @@ func (s *ShellSession) handleWindowState(m wire.ShellWindowState) error {
 	return inst.WriteEvt(wire.NewEvtWindowState(m.WindowID, m.State))
 }
 
-// handleAppMsgSend relays a shell-originated app_msg to its BE half.
-// class is the priority class the FE stamped on its frame (typically
-// Interactive — most FE→BE messages are user actions); we preserve it
-// on the BE-bound event frame so the SDK sees the same class on read.
+// handleAppMsgSend relays a shell-originated app_msg. Two cases:
+//
+//   - To is nil: relay to the FE's own BE half (look up by
+//     InstanceID).
+//   - To is set: cross-app send; resolve the recipient and relay as
+//     that instance's normal EvtAppMsg event.
+//
+// Data ships verbatim as json.RawMessage — no decode hop. class is
+// the priority class the FE stamped on its frame; we preserve it on
+// the BE-bound event frame so the SDK sees the same class on read.
 func (s *ShellSession) handleAppMsgSend(m wire.ShellAppMsgSend, class wire.Class) error {
+	if m.To != nil {
+		target, code, err := s.router.resolveRecipient(context.Background(), *m.To)
+		if err != nil {
+			s.router.log("shell app_msg cross-instance: %s: %v", code, err)
+			return nil
+		}
+		return target.WriteEvtClass(wire.NewEvtAppMsg(target.WindowID, m.Data), class)
+	}
 	inst := s.router.appByInstance(m.InstanceID)
 	if inst == nil {
 		return nil
 	}
-	raw, err := decodeShellAppMsgPayload(m.Data)
-	if err != nil {
-		return fmt.Errorf("app_msg.send data: %w", err)
-	}
-	return inst.WriteEvtClass(wire.NewEvtAppMsg(inst.WindowID, raw), class)
-}
-
-// handleAppMsgSendTo resolves the recipient (instance_id direct, or
-// app_id sentinel for singletons — spawning on demand), then relays
-// the JSON data as that instance's normal EvtAppMsg event. Same
-// transport-not-interpreter discipline as ShellAppMsgSend.
-func (s *ShellSession) handleAppMsgSendTo(m wire.ShellAppMsgSendTo, class wire.Class) error {
-	target, code, err := s.router.resolveRecipient(context.Background(), m.Recipient)
-	if err != nil {
-		s.router.log("shell app_msg.send.to: %s: %v", code, err)
-		return nil
-	}
-	raw, err := decodeShellAppMsgPayload(m.Data)
-	if err != nil {
-		return fmt.Errorf("app_msg.send.to data: %w", err)
-	}
-	return target.WriteEvtClass(wire.NewEvtAppMsg(target.WindowID, raw), class)
-}
-
-// decodeShellAppMsgPayload turns the shell's JSON-encoded app_msg
-// payload into a Go value the SDK will CBOR-encode for the BE.
-//
-// The naive `json.Unmarshal(data, &any)` decodes every JS Number as
-// float64 — which then CBOR-encodes as a major-type-7 float. BE
-// handlers that decode into integer-typed struct fields (Cols
-// uint64, channel_id uint64, etc.) reject those with the misleading
-// "cannot unmarshal primitives" error.
-//
-// Decoder with UseNumber preserves the original token; we then walk
-// the value and coerce json.Number to int64 when it has no fractional
-// part, falling back to float64 otherwise. That round-trips integral
-// JS Numbers (which is what "cols: 80" actually is on the wire)
-// through CBOR as integers, matching what every BE struct expects.
-func decodeShellAppMsgPayload(data []byte) (any, error) {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	var raw any
-	if err := dec.Decode(&raw); err != nil {
-		return nil, err
-	}
-	return normalizeJSONNumbers(raw), nil
-}
-
-// normalizeJSONNumbers walks v recursively and converts every
-// json.Number to int64 (when integral) or float64. Other types pass
-// through unchanged.
-func normalizeJSONNumbers(v any) any {
-	switch x := v.(type) {
-	case json.Number:
-		if i, err := x.Int64(); err == nil {
-			return i
-		}
-		if f, err := x.Float64(); err == nil {
-			return f
-		}
-		return x.String()
-	case map[string]any:
-		for k, vv := range x {
-			x[k] = normalizeJSONNumbers(vv)
-		}
-		return x
-	case []any:
-		for i, vv := range x {
-			x[i] = normalizeJSONNumbers(vv)
-		}
-		return x
-	}
-	return v
+	return inst.WriteEvtClass(wire.NewEvtAppMsg(inst.WindowID, m.Data), class)
 }
 
 // WriteCtrl encodes m as JSON and writes a shell control-channel frame.

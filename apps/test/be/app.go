@@ -164,8 +164,8 @@ func onSpawnResult(c *sdk.Conn, appID, instanceID string, err error) {
 	})
 }
 
-// onAppMsg handles the FE's control messages. data is the JSON-shaped
-// object from the FE (CBOR-decoded by the SDK into map[any]any).
+// onAppMsg handles the FE's control messages. data is the
+// JSON-decoded object from the FE (map[string]any).
 func onAppMsg(c *sdk.Conn, win uint32, data any) {
 	m := sdk.AsMap(data)
 	if m == nil {

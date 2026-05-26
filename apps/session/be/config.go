@@ -2,7 +2,8 @@
 // watched via internal/fswatch (the directory, not the file itself —
 // settings.write uses temp+rename which destroys the inode), shipped
 // to the FE as a "desktop.config" app_msg carrying the parsed prefs
-// plus the wallpaper bytes inline (CBOR carries binary natively).
+// plus the wallpaper bytes inline (encoding/json base64s []byte
+// fields automatically; the FE decodes back to a Uint8Array).
 //
 // One consumer (wash-session FE) — per [no premature service] this
 // stays a session-app private concern; wash-settings only writes the
@@ -22,8 +23,9 @@ import (
 	"github.com/sirmick/wash/internal/sdk"
 )
 
-// maxWallpaperBytes caps inline image payload. Frames are 16 MiB;
-// leaving headroom for the CBOR map overhead.
+// maxWallpaperBytes caps inline image payload. Frames are 16 MiB
+// and JSON's base64 expansion is 4/3, leaving headroom for that
+// plus the envelope.
 const maxWallpaperBytes = 12 * 1024 * 1024
 
 // desktopConfig is the on-disk schema. Every field is optional; the
@@ -153,7 +155,7 @@ func sendDesktopConfig(c *sdk.Conn) {
 			"mode":           cfg.Wallpaper.Mode,
 			"fallback_color": cfg.Wallpaper.FallbackColor,
 			"mime":           mime,
-			"bytes":          bytes, // nil when no image; CBOR ⇒ null
+			"bytes":          bytes, // nil when no image; JSON ⇒ null
 		},
 		"clock": map[string]any{
 			"format":       cfg.Clock.Format,

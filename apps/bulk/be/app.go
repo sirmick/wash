@@ -95,45 +95,45 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 // ----- request/response types -----
 
 type enqueueReq struct {
-	Op    string   `cbor:"op"`
-	Paths []string `cbor:"paths"`
-	Dest  string   `cbor:"dest"`
+	Op    string   `json:"op"`
+	Paths []string `json:"paths"`
+	Dest  string   `json:"dest"`
 }
 
 type enqueueResp struct {
-	JobID string `cbor:"job_id"`
+	JobID string `json:"job_id"`
 }
 
 type cancelReq struct {
-	JobID string `cbor:"job_id"`
+	JobID string `json:"job_id"`
 }
 
 type cancelResp struct {
-	JobID string `cbor:"job_id"`
+	JobID string `json:"job_id"`
 }
 
 type conflictResolveReq struct {
-	JobID  string `cbor:"job_id"`
-	Action string `cbor:"action"`
+	JobID  string `json:"job_id"`
+	Action string `json:"action"`
 }
 
 type conflictResolveResp struct {
-	JobID string `cbor:"job_id"`
+	JobID string `json:"job_id"`
 }
 
 type listResp struct {
-	Jobs []jobView `cbor:"jobs"`
+	Jobs []jobView `json:"jobs"`
 }
 
 type jobView struct {
-	JobID  string   `cbor:"job_id"`
-	Op     string   `cbor:"op"`
-	Status string   `cbor:"status"`
-	Paths  []string `cbor:"paths"`
-	Dest   string   `cbor:"dest"`
-	Done   int      `cbor:"done"`
-	Total  int      `cbor:"total"`
-	Error  string   `cbor:"error"`
+	JobID  string   `json:"job_id"`
+	Op     string   `json:"op"`
+	Status string   `json:"status"`
+	Paths  []string `json:"paths"`
+	Dest   string   `json:"dest"`
+	Done   int      `json:"done"`
+	Total  int      `json:"total"`
+	Error  string   `json:"error"`
 }
 
 func registerHandlers(b *sdk.Bus) {

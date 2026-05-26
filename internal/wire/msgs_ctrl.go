@@ -58,7 +58,7 @@ const (
 //
 // AttachToken is set when the process was forked by an external
 // spawner (e.g. wash-priv launching an app under sudo) that called
-// EvtPrepareSpawn ahead of time. The router matches by token in
+// EvtSpawnRequest (with Prepare=true) ahead of time. The router matches by token in
 // that case, not pid — sudo's fork/exec semantics make the
 // dialing pid unreliable. Token-matched attaches still go through
 // the /proc/<pid>/exe binary check before being accepted.
@@ -85,7 +85,7 @@ func NewIdentityWithPID(appID string, proto int, version string, pid int) Identi
 
 // NewIdentityWithToken identifies the SDK to the router for an
 // externally-spawned attach. Token must match a live pending-attach
-// record minted via EvtPrepareSpawn on the spawner's connection.
+// record minted via EvtSpawnRequest (with Prepare=true) on the spawner's connection.
 func NewIdentityWithToken(appID string, proto int, version string, pid int, token string) Identity {
 	return Identity{T: TIdentity, AppID: appID, Proto: proto, Version: version, PID: pid, AttachToken: token}
 }
@@ -100,6 +100,14 @@ type Session struct {
 	// touch the filesystem (wash-fm, wash-fs) MUST treat every
 	// path as relative to this prefix when it's non-empty.
 	Root string `json:"root,omitempty"`
+
+	// CloseGraceMs is how long an app has to reply to
+	// window.close_requested before the router force-kills, in
+	// milliseconds. Zero means "the router didn't tell you" —
+	// apps that need to surface a deadline (an unsaved-changes
+	// dialog with a countdown, say) should treat the absence as
+	// "use the conservative default" rather than guessing.
+	CloseGraceMs uint32 `json:"close_grace_ms,omitempty"`
 }
 
 // IdentityAck is the router's reply (§6 step 3). WindowID is omitted
@@ -290,9 +298,6 @@ func DecodeCtrl(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TShellAppMsgSend:
 		var m ShellAppMsgSend
-		return m, json.Unmarshal(data, &m)
-	case TShellAppMsgSendTo:
-		var m ShellAppMsgSendTo
 		return m, json.Unmarshal(data, &m)
 	case TShellAppMsgDeliver:
 		var m ShellAppMsgDeliver

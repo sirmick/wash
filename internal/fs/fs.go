@@ -41,22 +41,21 @@ const (
 var ErrOutsideRoot = errors.New("path is outside the configured root")
 
 // Entry is the metadata shape wash-fm puts on the wire and that
-// wash-fs returns to its callers. JSON + CBOR tags so either
-// transport can re-emit it as-is.
+// wash-fs returns to its callers.
 type Entry struct {
-	Name        string `json:"name" cbor:"name"`
-	Type        string `json:"type" cbor:"type"` // "dir" | "file" | "symlink" | "other"
-	Size        int64  `json:"size" cbor:"size"`
-	ModUnix     int64  `json:"mod_unix" cbor:"mod_unix"`
-	CreatedUnix int64  `json:"created_unix" cbor:"created_unix"`
-	Perm        string `json:"perm" cbor:"perm"` // "rwxr-xr--" 9-char human form
-	Mode        uint32 `json:"mode" cbor:"mode"` // raw permission bits
-	UID         uint32 `json:"uid" cbor:"uid"`
-	GID         uint32 `json:"gid" cbor:"gid"`
-	Owner       string `json:"owner,omitempty" cbor:"owner,omitempty"`
-	Group       string `json:"group,omitempty" cbor:"group,omitempty"`
-	LinkTo      string `json:"link_to,omitempty" cbor:"link_to,omitempty"`
-	LinkErr     string `json:"link_err,omitempty" cbor:"link_err,omitempty"`
+	Name        string `json:"name"`
+	Type        string `json:"type"` // "dir" | "file" | "symlink" | "other"
+	Size        int64  `json:"size"`
+	ModUnix     int64  `json:"mod_unix"`
+	CreatedUnix int64  `json:"created_unix"`
+	Perm        string `json:"perm"` // "rwxr-xr--" 9-char human form
+	Mode        uint32 `json:"mode"` // raw permission bits
+	UID         uint32 `json:"uid"`
+	GID         uint32 `json:"gid"`
+	Owner       string `json:"owner,omitempty"`
+	Group       string `json:"group,omitempty"`
+	LinkTo      string `json:"link_to,omitempty"`
+	LinkErr     string `json:"link_err,omitempty"`
 }
 
 // FS is a sandboxed read accessor. Construct with New(root). Methods

@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -10,6 +11,23 @@ import (
 	"github.com/sirmick/wash/internal/wire"
 	"github.com/sirmick/wash/internal/wiretest"
 )
+
+// decodeAppMsgData unmarshals the JSON-encoded data field of an
+// EvtAppMsg / EvtAppMsgSendTo into a map[string]any for tests that
+// need to introspect kind/id/payload fields directly. Callers pass
+// the raw bytes (m.Data) so the helper doesn't need to know which
+// envelope holds them.
+func decodeAppMsgData(t *testing.T, raw json.RawMessage) map[string]any {
+	t.Helper()
+	if len(raw) == 0 {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode app_msg data: %v", err)
+	}
+	return out
+}
 
 func readCtrl(t *testing.T, e wire.FrameTransport) any {
 	t.Helper()

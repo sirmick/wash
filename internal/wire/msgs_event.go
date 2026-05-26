@@ -1,14 +1,13 @@
 package wire
 
 import (
+	"encoding/json"
 	"fmt"
-
-	"github.com/fxamacker/cbor/v2"
 )
 
 // App event channel (channel 1) vocabulary, WIRE.md §9. Encoding:
-// CBOR. Tag names match the spec exactly. Type names are prefixed
-// Evt to disambiguate from shell-channel JSON types (§8).
+// JSON (same discipline as channel 0). Type names are prefixed Evt
+// to disambiguate from shell-channel JSON types (§8).
 const (
 	// Router → app.
 	TEvtWindowMapped         = "window.mapped"
@@ -22,30 +21,37 @@ const (
 	// App → router.
 	TEvtWindowSetTitle     = "window.set_title"
 	TEvtWindowConfirmClose = "window.confirm_close"
-	TEvtSpawnRequest       = "spawn.request"
-	TEvtSpawnOk            = "spawn.ok"
-	TEvtSpawnErr           = "spawn.err"
-	TEvtNotify             = "notify"
+	// EvtSpawnRequest / Ok / Err — unified spawn protocol.
+	//
+	// Normal spawn: app requests "launch app_id" and the router does
+	// fork+exec itself. Requires the "spawn" capability.
+	//
+	// Prepare spawn: the caller will fork+exec the binary itself
+	// (e.g. wash-priv launching under sudo). The router replies with
+	// an attach token + binary path; the caller passes both via env.
+	// Requires the "prepare_spawn" capability and Prepare=true on
+	// the request. The dial-back is matched by token, not pid, since
+	// sudo's exec semantics make the dialing pid unreliable.
+	//
+	// ReqID correlates requests with replies — required for Prepare
+	// (a single caller may have multiple in flight), optional for
+	// normal spawn (which is fire-and-forget plus a single-shot ack).
+	TEvtSpawnRequest = "spawn.request"
+	TEvtSpawnOk      = "spawn.ok"
+	TEvtSpawnErr     = "spawn.err"
+	TEvtNotify       = "notify"
 
-	// EvtPrepareSpawn / .ok / .err — external-spawner protocol used
-	// by wash-priv. The app asks the router to mint a pending-attach
-	// record (instance_id + attach_token) for a given app_id; the
-	// app then fork+exec's the registered binary with sudo, wrapping
-	// it in env vars that include the token. The dial-back is matched
-	// by token, not pid (sudo's exec semantics make pid unreliable).
-	TEvtPrepareSpawn    = "prepare_spawn"
-	TEvtPrepareSpawnOk  = "prepare_spawn.ok"
-	TEvtPrepareSpawnErr = "prepare_spawn.err"
-
-	// Both directions.
+	// Both directions. Carries app-private bytes between an app's BE
+	// and either its own FE half or another instance's BE.
+	//
+	// Routing is determined by the optional From / To fields:
+	//   - own-FE → own-BE: neither set
+	//   - cross-app source: To set by sender
+	//   - cross-app delivery: From set by router (router-attested)
+	//
+	// Earlier versions split this into two tags (app_msg + app_msg.send.to);
+	// they were structurally identical and have been unified.
 	TEvtAppMsg = "app_msg"
-
-	// App → router. Cross-app messaging: deliver data as an EvtAppMsg
-	// to a *different* instance. Recipient is addressed by either
-	// instance_id (any app) or app_id (singleton only — the router
-	// resolves the sentinel to the running instance, spawning the
-	// singleton on demand if none exists).
-	TEvtAppMsgSendTo = "app_msg.send.to"
 
 	// Clipboard — router holds a single in-memory entry. Apps set,
 	// fetch, and observe changes.
@@ -63,8 +69,8 @@ const (
 
 // EvtWindowMapped: router → app, "the window is now visible".
 type EvtWindowMapped struct {
-	T   string `cbor:"t"`
-	Win uint32 `cbor:"win"`
+	T   string `json:"t"`
+	Win uint32 `json:"win"`
 }
 
 func NewEvtWindowMapped(win uint32) EvtWindowMapped {
@@ -73,8 +79,8 @@ func NewEvtWindowMapped(win uint32) EvtWindowMapped {
 
 // EvtWindowFocus: router → app, focus gained.
 type EvtWindowFocus struct {
-	T   string `cbor:"t"`
-	Win uint32 `cbor:"win"`
+	T   string `json:"t"`
+	Win uint32 `json:"win"`
 }
 
 func NewEvtWindowFocus(win uint32) EvtWindowFocus {
@@ -83,8 +89,8 @@ func NewEvtWindowFocus(win uint32) EvtWindowFocus {
 
 // EvtWindowUnfocus: router → app, focus lost.
 type EvtWindowUnfocus struct {
-	T   string `cbor:"t"`
-	Win uint32 `cbor:"win"`
+	T   string `json:"t"`
+	Win uint32 `json:"win"`
 }
 
 func NewEvtWindowUnfocus(win uint32) EvtWindowUnfocus {
@@ -95,10 +101,10 @@ func NewEvtWindowUnfocus(win uint32) EvtWindowUnfocus {
 // (typically at drag-resize end). v0.1 emits this once per commit;
 // live-resize is deferred.
 type EvtWindowResize struct {
-	T   string `cbor:"t"`
-	Win uint32 `cbor:"win"`
-	W   uint32 `cbor:"w"`
-	H   uint32 `cbor:"h"`
+	T   string `json:"t"`
+	Win uint32 `json:"win"`
+	W   uint32 `json:"w"`
+	H   uint32 `json:"h"`
 }
 
 func NewEvtWindowResize(win, w, h uint32) EvtWindowResize {
@@ -109,9 +115,9 @@ func NewEvtWindowResize(win, w, h uint32) EvtWindowResize {
 // State is one of WindowStateNormal / WindowStateMinimized /
 // WindowStateMaximized (string-equal to shared constants on the wire).
 type EvtWindowState struct {
-	T     string `cbor:"t"`
-	Win   uint32 `cbor:"win"`
-	State string `cbor:"state"`
+	T     string `json:"t"`
+	Win   uint32 `json:"win"`
+	State string `json:"state"`
 }
 
 func NewEvtWindowState(win uint32, state string) EvtWindowState {
@@ -121,8 +127,8 @@ func NewEvtWindowState(win uint32, state string) EvtWindowState {
 // EvtWindowCloseRequested: router → app, X WM_DELETE analogue. App
 // MUST reply with EvtWindowConfirmClose within grace (§10).
 type EvtWindowCloseRequested struct {
-	T   string `cbor:"t"`
-	Win uint32 `cbor:"win"`
+	T   string `json:"t"`
+	Win uint32 `json:"win"`
 }
 
 func NewEvtWindowCloseRequested(win uint32) EvtWindowCloseRequested {
@@ -131,16 +137,16 @@ func NewEvtWindowCloseRequested(win uint32) EvtWindowCloseRequested {
 
 // EvtShutdown: router → app, "I'm going away, close cleanly".
 type EvtShutdown struct {
-	T string `cbor:"t"`
+	T string `json:"t"`
 }
 
 func NewEvtShutdown() EvtShutdown { return EvtShutdown{T: TEvtShutdown} }
 
 // EvtWindowSetTitle: app → router, request titlebar text change.
 type EvtWindowSetTitle struct {
-	T     string `cbor:"t"`
-	Win   uint32 `cbor:"win"`
-	Title string `cbor:"title"`
+	T     string `json:"t"`
+	Win   uint32 `json:"win"`
+	Title string `json:"title"`
 }
 
 func NewEvtWindowSetTitle(win uint32, title string) EvtWindowSetTitle {
@@ -150,98 +156,84 @@ func NewEvtWindowSetTitle(win uint32, title string) EvtWindowSetTitle {
 // EvtWindowConfirmClose: app's answer to EvtWindowCloseRequested.
 // Allow=true tears down the window; allow=false vetoes it.
 type EvtWindowConfirmClose struct {
-	T     string `cbor:"t"`
-	Win   uint32 `cbor:"win"`
-	Allow bool   `cbor:"allow"`
+	T     string `json:"t"`
+	Win   uint32 `json:"win"`
+	Allow bool   `json:"allow"`
 }
 
 func NewEvtWindowConfirmClose(win uint32, allow bool) EvtWindowConfirmClose {
 	return EvtWindowConfirmClose{T: TEvtWindowConfirmClose, Win: win, Allow: allow}
 }
 
-// EvtSpawnRequest: app → router, "launch app_id". Gated by the
-// "spawn" capability on the requester's manifest.
+// EvtSpawnRequest is the unified spawn request: app → router.
+//
+//   - Normal spawn (router does fork+exec): Prepare=false. Gated by
+//     the "spawn" capability. ReqID is optional.
+//   - Prepare spawn (caller will fork+exec, e.g. wash-priv under
+//     sudo): Prepare=true. Gated by the "prepare_spawn" capability.
+//     ReqID required for correlation with EvtSpawnOk{AttachToken}.
 type EvtSpawnRequest struct {
-	T     string `cbor:"t"`
-	AppID string `cbor:"app_id"`
+	T       string `json:"t"`
+	ReqID   uint64 `json:"req_id,omitempty"`
+	AppID   string `json:"app_id"`
+	Prepare bool   `json:"prepare,omitempty"`
 }
 
 func NewEvtSpawnRequest(appID string) EvtSpawnRequest {
 	return EvtSpawnRequest{T: TEvtSpawnRequest, AppID: appID}
 }
 
+// NewEvtPrepareSpawnRequest is the prepare-spawn variant. Same wire
+// type; Prepare=true; ReqID required for the caller's correlation.
+func NewEvtPrepareSpawnRequest(reqID uint64, appID string) EvtSpawnRequest {
+	return EvtSpawnRequest{T: TEvtSpawnRequest, ReqID: reqID, AppID: appID, Prepare: true}
+}
+
 // EvtSpawnOk: router → app, spawn succeeded.
+//
+// AttachToken + Binary are populated only for prepare-spawn replies.
+// The caller should exec the binary (or a wrapper such as sudo) with
+// env including WASH_DISPLAY, WASH_PROTO, WASH_APP_ID,
+// WASH_INSTANCE_ID, and WASH_ATTACH_TOKEN.
 type EvtSpawnOk struct {
-	T          string `cbor:"t"`
-	AppID      string `cbor:"app_id"`
-	InstanceID string `cbor:"instance_id"`
+	T           string `json:"t"`
+	ReqID       uint64 `json:"req_id,omitempty"`
+	AppID       string `json:"app_id"`
+	InstanceID  string `json:"instance_id"`
+	AttachToken string `json:"attach_token,omitempty"`
+	Binary      string `json:"binary,omitempty"`
 }
 
 func NewEvtSpawnOk(appID, instanceID string) EvtSpawnOk {
 	return EvtSpawnOk{T: TEvtSpawnOk, AppID: appID, InstanceID: instanceID}
 }
 
+// NewEvtSpawnOkPrepared is the prepare-spawn reply variant. Carries
+// the minted instance id, attach token, and registered binary path.
+func NewEvtSpawnOkPrepared(reqID uint64, appID, instanceID, token, binary string) EvtSpawnOk {
+	return EvtSpawnOk{T: TEvtSpawnOk, ReqID: reqID, AppID: appID, InstanceID: instanceID, AttachToken: token, Binary: binary}
+}
+
 // EvtSpawnErr: router → app, spawn refused. Capability denial uses
 // code "forbidden"; unknown id "not_found"; ABI mismatch
 // "incompatible_protocol".
 type EvtSpawnErr struct {
-	T     string `cbor:"t"`
-	AppID string `cbor:"app_id"`
-	Code  string `cbor:"code"`
-	Msg   string `cbor:"msg"`
+	T     string `json:"t"`
+	ReqID uint64 `json:"req_id,omitempty"`
+	AppID string `json:"app_id,omitempty"`
+	Code  string `json:"code"`
+	Msg   string `json:"msg"`
 }
 
 func NewEvtSpawnErr(appID, code, msg string) EvtSpawnErr {
 	return EvtSpawnErr{T: TEvtSpawnErr, AppID: appID, Code: code, Msg: msg}
 }
 
-// EvtPrepareSpawn: app → router. Request the router prepare for a
-// dial-back from a process the *caller* will fork+exec. The router
-// allocates an instance id and an opaque attach token; the caller
-// passes both via env when spawning the binary (under sudo, in
-// wash-priv's case). Token-matched attaches do not collide with
-// pid-matched ones — sudo's fork/exec semantics make pid unreliable.
-//
-// Gated by the "prepare_spawn" capability — wash-priv has it.
-type EvtPrepareSpawn struct {
-	T     string `cbor:"t"`
-	ReqID uint64 `cbor:"req_id"`
-	AppID string `cbor:"app_id"`
-}
-
-func NewEvtPrepareSpawn(reqID uint64, appID string) EvtPrepareSpawn {
-	return EvtPrepareSpawn{T: TEvtPrepareSpawn, ReqID: reqID, AppID: appID}
-}
-
-// EvtPrepareSpawnOk: router → app. Carries the minted instance id,
-// the attach token, and the registered binary path. The caller
-// should exec the binary (or a wrapper such as sudo that ultimately
-// exec's it) with env including WASH_DISPLAY, WASH_PROTO,
-// WASH_APP_ID, WASH_INSTANCE_ID, and WASH_ATTACH_TOKEN.
-type EvtPrepareSpawnOk struct {
-	T           string `cbor:"t"`
-	ReqID       uint64 `cbor:"req_id"`
-	InstanceID  string `cbor:"instance_id"`
-	AttachToken string `cbor:"attach_token"`
-	Binary      string `cbor:"binary"`
-}
-
-func NewEvtPrepareSpawnOk(reqID uint64, instanceID, token, binary string) EvtPrepareSpawnOk {
-	return EvtPrepareSpawnOk{T: TEvtPrepareSpawnOk, ReqID: reqID, InstanceID: instanceID, AttachToken: token, Binary: binary}
-}
-
-// EvtPrepareSpawnErr: router → app. Codes: forbidden (cap missing),
-// not_found (unknown app_id), bad_request (disabled / reserved-id
-// refusal in registry), internal.
-type EvtPrepareSpawnErr struct {
-	T     string `cbor:"t"`
-	ReqID uint64 `cbor:"req_id"`
-	Code  string `cbor:"code"`
-	Msg   string `cbor:"msg"`
-}
-
-func NewEvtPrepareSpawnErr(reqID uint64, code, msg string) EvtPrepareSpawnErr {
-	return EvtPrepareSpawnErr{T: TEvtPrepareSpawnErr, ReqID: reqID, Code: code, Msg: msg}
+// NewEvtSpawnErrPrepared is the prepare-spawn error variant: echoes
+// ReqID so the caller can match the rejection to its in-flight
+// request.
+func NewEvtSpawnErrPrepared(reqID uint64, code, msg string) EvtSpawnErr {
+	return EvtSpawnErr{T: TEvtSpawnErr, ReqID: reqID, Code: code, Msg: msg}
 }
 
 // Notification levels.
@@ -255,10 +247,10 @@ const (
 // the shell can render a toast. v0.1 has no capability gate; spamming
 // the chrome with notifications is a future concern.
 type EvtNotify struct {
-	T     string `cbor:"t"`
-	Title string `cbor:"title"`
-	Body  string `cbor:"body,omitempty"`
-	Level string `cbor:"level,omitempty"`
+	T     string `json:"t"`
+	Title string `json:"title"`
+	Body  string `json:"body,omitempty"`
+	Level string `json:"level,omitempty"`
 }
 
 func NewEvtNotify(title, body, level string) EvtNotify {
@@ -267,11 +259,13 @@ func NewEvtNotify(title, body, level string) EvtNotify {
 
 // EvtClipboardSet writes new content to the router-held clipboard.
 // The router broadcasts EvtClipboardChanged to every connected app
-// (except the sender) so they can react.
+// (except the sender) so they can react. Data is base64 on the JSON
+// wire — encoding/json's default for []byte; the SDK handles the
+// round-trip transparently.
 type EvtClipboardSet struct {
-	T    string `cbor:"t"`
-	Mime string `cbor:"mime"`
-	Data []byte `cbor:"data"`
+	T    string `json:"t"`
+	Mime string `json:"mime"`
+	Data []byte `json:"data"`
 }
 
 func NewEvtClipboardSet(mime string, data []byte) EvtClipboardSet {
@@ -281,8 +275,8 @@ func NewEvtClipboardSet(mime string, data []byte) EvtClipboardSet {
 // EvtClipboardGet requests the current clipboard contents. The router
 // replies with EvtClipboardData. req_id correlates response with caller.
 type EvtClipboardGet struct {
-	T     string `cbor:"t"`
-	ReqID uint64 `cbor:"req_id"`
+	T     string `json:"t"`
+	ReqID uint64 `json:"req_id"`
 }
 
 func NewEvtClipboardGet(reqID uint64) EvtClipboardGet {
@@ -292,10 +286,10 @@ func NewEvtClipboardGet(reqID uint64) EvtClipboardGet {
 // EvtClipboardData is the router → app response containing the
 // clipboard's current mime and bytes.
 type EvtClipboardData struct {
-	T     string `cbor:"t"`
-	ReqID uint64 `cbor:"req_id"`
-	Mime  string `cbor:"mime"`
-	Data  []byte `cbor:"data"`
+	T     string `json:"t"`
+	ReqID uint64 `json:"req_id"`
+	Mime  string `json:"mime"`
+	Data  []byte `json:"data"`
 }
 
 func NewEvtClipboardData(reqID uint64, mime string, data []byte) EvtClipboardData {
@@ -306,8 +300,8 @@ func NewEvtClipboardData(reqID uint64, mime string, data []byte) EvtClipboardDat
 // (excluding the setter) when the clipboard changes. Apps re-get
 // content if interested.
 type EvtClipboardChanged struct {
-	T    string `cbor:"t"`
-	Mime string `cbor:"mime"`
+	T    string `json:"t"`
+	Mime string `json:"mime"`
 }
 
 func NewEvtClipboardChanged(mime string) EvtClipboardChanged {
@@ -326,82 +320,108 @@ func NewEvtClipboardChanged(mime string) EvtClipboardChanged {
 // unforgeable and the basis for capability prompts in apps like
 // wash-priv.
 type Sender struct {
-	AppID      string `cbor:"app_id,omitempty"`
-	InstanceID string `cbor:"instance_id,omitempty"`
+	AppID      string `json:"app_id,omitempty"`
+	InstanceID string `json:"instance_id,omitempty"`
 }
 
-// EvtAppMsg is the FE↔BE app-private pipe. Data is intentionally
-// opaque; the router never inspects it. From is set only on
-// cross-app deliveries — see Sender.
+// EvtAppMsg is the unified app-private message envelope on the
+// event channel. Data is intentionally opaque; the router never
+// inspects it. The optional From / To fields direct routing:
+//
+//   - own-FE ↔ own-BE: neither set (router relays to/from the
+//     instance's other half by socket).
+//   - cross-app outbound: To set by the sender; router resolves the
+//     recipient and forwards as a new EvtAppMsg with From set on
+//     the receiver's side.
+//   - cross-app inbound: From set by router; never trust this field
+//     on the sender side — it is router-attested.
+//
+// Data is json.RawMessage so the router can relay bytes verbatim —
+// no decode + re-encode hop.
 type EvtAppMsg struct {
-	T    string  `cbor:"t"`
-	Win  uint32  `cbor:"win"`
-	Data any     `cbor:"data"`
-	From *Sender `cbor:"from,omitempty"`
+	T    string          `json:"t"`
+	Win  uint32          `json:"win,omitempty"`
+	Data json.RawMessage `json:"data"`
+	From *Sender         `json:"from,omitempty"`
+	To   *Recipient      `json:"to,omitempty"`
 }
 
+// NewEvtAppMsg builds an EvtAppMsg with data marshaled to JSON. data
+// may be any json-marshalable value (struct, map, slice, primitive).
+// Pre-encoded json.RawMessage is shipped verbatim — useful for relays
+// that want to avoid re-encode cost.
 func NewEvtAppMsg(win uint32, data any) EvtAppMsg {
-	return EvtAppMsg{T: TEvtAppMsg, Win: win, Data: data}
+	return EvtAppMsg{T: TEvtAppMsg, Win: win, Data: mustJSON(data)}
 }
 
 // NewEvtAppMsgFrom builds an EvtAppMsg whose From field identifies
 // the originating instance. Only the router constructs these — it
-// is the relay path for cross-app app_msg.send.to.
+// is the relay path for cross-app sends.
 func NewEvtAppMsgFrom(win uint32, data any, from Sender) EvtAppMsg {
-	return EvtAppMsg{T: TEvtAppMsg, Win: win, Data: data, From: &from}
+	return EvtAppMsg{T: TEvtAppMsg, Win: win, Data: mustJSON(data), From: &from}
 }
 
-// Recipient is the address used by EvtAppMsgSendTo and the shell's
-// ShellAppMsgSendTo. Exactly one of AppID / InstanceID should be
-// set: AppID resolves via the singleton table (failing if the
+// NewEvtAppMsgTo builds an EvtAppMsg addressed to a cross-app
+// recipient. The router resolves the target (instance_id direct, or
+// app_id sentinel for singletons) and forwards as a new EvtAppMsg
+// on the receiver's socket with From set to the sender.
+func NewEvtAppMsgTo(to Recipient, data any) EvtAppMsg {
+	return EvtAppMsg{T: TEvtAppMsg, Data: mustJSON(data), To: &to}
+}
+
+// Recipient is the address used by cross-app EvtAppMsg and the
+// shell's ShellAppMsgSend. Exactly one of AppID / InstanceID should
+// be set: AppID resolves via the singleton table (failing if the
 // named app isn't singleton-instancing); InstanceID is a direct
 // reference to an already-running app.
 type Recipient struct {
-	AppID      string `cbor:"app_id,omitempty" json:"app_id,omitempty"`
-	InstanceID string `cbor:"instance_id,omitempty" json:"instance_id,omitempty"`
-}
-
-// EvtAppMsgSendTo: an app asking the router to relay data as an
-// EvtAppMsg to another instance. The router is a message broker for
-// this one path — no app capability gate yet (v0.1 single-user
-// trust model).
-type EvtAppMsgSendTo struct {
-	T         string    `cbor:"t"`
-	Recipient Recipient `cbor:"recipient"`
-	Data      any       `cbor:"data"`
-}
-
-func NewEvtAppMsgSendTo(r Recipient, data any) EvtAppMsgSendTo {
-	return EvtAppMsgSendTo{T: TEvtAppMsgSendTo, Recipient: r, Data: data}
+	AppID      string `json:"app_id,omitempty"`
+	InstanceID string `json:"instance_id,omitempty"`
 }
 
 // EvtAppStateSet — app → router — persist `State` as this app's
 // FE-state blob (router stores keyed by instance_id). The blob is
-// JSON bytes; the router never inspects them. Used by SDK.SaveState
-// for apps whose state lives BE-side or is computed in Go. FE-only
-// apps can use the shell's window.wash.saveState instead.
+// JSON; the router never inspects it. Used by SDK.SaveState for
+// apps whose state lives BE-side or is computed in Go. FE-only apps
+// can use the shell's window.wash.saveState instead.
 type EvtAppStateSet struct {
-	T     string `cbor:"t"`
-	State []byte `cbor:"state"`
+	T     string          `json:"t"`
+	State json.RawMessage `json:"state"`
 }
 
 func NewEvtAppStateSet(state []byte) EvtAppStateSet {
-	return EvtAppStateSet{T: TEvtAppStateSet, State: state}
+	return EvtAppStateSet{T: TEvtAppStateSet, State: json.RawMessage(state)}
 }
 
-// PeekEvtType returns the t field of a CBOR map without otherwise
+// mustJSON marshals v with encoding/json. Internal use — callers
+// (constructors above) take already-validated Go values whose JSON
+// shapes are stable. On marshal failure we ship a JSON null rather
+// than a malformed payload; downstream decoders treat null as the
+// zero value, which is the same semantic as a missing field.
+func mustJSON(v any) json.RawMessage {
+	if rm, ok := v.(json.RawMessage); ok {
+		return rm
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return json.RawMessage("null")
+	}
+	return b
+}
+
+// PeekEvtType returns the t field of a JSON object without otherwise
 // decoding it.
 func PeekEvtType(data []byte) (string, error) {
 	var probe struct {
-		T string `cbor:"t"`
+		T string `json:"t"`
 	}
-	if err := cbor.Unmarshal(data, &probe); err != nil {
+	if err := json.Unmarshal(data, &probe); err != nil {
 		return "", err
 	}
 	return probe.T, nil
 }
 
-// DecodeEvt parses a single CBOR event-channel message into the
+// DecodeEvt parses a single JSON event-channel message into the
 // concrete type matching its t field.
 func DecodeEvt(data []byte) (any, error) {
 	t, err := PeekEvtType(data)
@@ -411,79 +431,67 @@ func DecodeEvt(data []byte) (any, error) {
 	switch t {
 	case TEvtWindowMapped:
 		var m EvtWindowMapped
-		return m, cbor.Unmarshal(data, &m)
+		return m, json.Unmarshal(data, &m)
 	case TEvtWindowFocus:
 		var m EvtWindowFocus
-		return m, cbor.Unmarshal(data, &m)
+		return m, json.Unmarshal(data, &m)
 	case TEvtWindowUnfocus:
 		var m EvtWindowUnfocus
-		return m, cbor.Unmarshal(data, &m)
+		return m, json.Unmarshal(data, &m)
 	case TEvtWindowResize:
 		var m EvtWindowResize
-		return m, cbor.Unmarshal(data, &m)
+		return m, json.Unmarshal(data, &m)
 	case TEvtWindowState:
 		var m EvtWindowState
-		return m, cbor.Unmarshal(data, &m)
+		return m, json.Unmarshal(data, &m)
 	case TEvtWindowCloseRequested:
 		var m EvtWindowCloseRequested
-		return m, cbor.Unmarshal(data, &m)
+		return m, json.Unmarshal(data, &m)
 	case TEvtShutdown:
 		var m EvtShutdown
-		return m, cbor.Unmarshal(data, &m)
+		return m, json.Unmarshal(data, &m)
 	case TEvtWindowSetTitle:
 		var m EvtWindowSetTitle
-		return m, cbor.Unmarshal(data, &m)
+		return m, json.Unmarshal(data, &m)
 	case TEvtWindowConfirmClose:
 		var m EvtWindowConfirmClose
-		return m, cbor.Unmarshal(data, &m)
+		return m, json.Unmarshal(data, &m)
 	case TEvtSpawnRequest:
 		var m EvtSpawnRequest
-		return m, cbor.Unmarshal(data, &m)
+		return m, json.Unmarshal(data, &m)
 	case TEvtSpawnOk:
 		var m EvtSpawnOk
-		return m, cbor.Unmarshal(data, &m)
+		return m, json.Unmarshal(data, &m)
 	case TEvtSpawnErr:
 		var m EvtSpawnErr
-		return m, cbor.Unmarshal(data, &m)
+		return m, json.Unmarshal(data, &m)
 	case TEvtAppMsg:
 		var m EvtAppMsg
-		return m, cbor.Unmarshal(data, &m)
-	case TEvtAppMsgSendTo:
-		var m EvtAppMsgSendTo
-		return m, cbor.Unmarshal(data, &m)
+		return m, json.Unmarshal(data, &m)
 	case TEvtNotify:
 		var m EvtNotify
-		return m, cbor.Unmarshal(data, &m)
+		return m, json.Unmarshal(data, &m)
 	case TEvtClipboardSet:
 		var m EvtClipboardSet
-		return m, cbor.Unmarshal(data, &m)
+		return m, json.Unmarshal(data, &m)
 	case TEvtClipboardGet:
 		var m EvtClipboardGet
-		return m, cbor.Unmarshal(data, &m)
+		return m, json.Unmarshal(data, &m)
 	case TEvtClipboardData:
 		var m EvtClipboardData
-		return m, cbor.Unmarshal(data, &m)
+		return m, json.Unmarshal(data, &m)
 	case TEvtClipboardChanged:
 		var m EvtClipboardChanged
-		return m, cbor.Unmarshal(data, &m)
+		return m, json.Unmarshal(data, &m)
 	case TEvtAppStateSet:
 		var m EvtAppStateSet
-		return m, cbor.Unmarshal(data, &m)
-	case TEvtPrepareSpawn:
-		var m EvtPrepareSpawn
-		return m, cbor.Unmarshal(data, &m)
-	case TEvtPrepareSpawnOk:
-		var m EvtPrepareSpawnOk
-		return m, cbor.Unmarshal(data, &m)
-	case TEvtPrepareSpawnErr:
-		var m EvtPrepareSpawnErr
-		return m, cbor.Unmarshal(data, &m)
+		return m, json.Unmarshal(data, &m)
 	}
 	return nil, fmt.Errorf("evt decode: unknown t %q", t)
 }
 
-// EncodeEvt marshals a CBOR event-channel message. Equivalent to
-// cbor.Marshal; provided for symmetry with EncodeCtrl.
+// EncodeEvt marshals a JSON event-channel message. Equivalent to
+// json.Marshal; provided for symmetry with EncodeCtrl.
 func EncodeEvt(v any) ([]byte, error) {
-	return cbor.Marshal(v)
+	return json.Marshal(v)
 }

@@ -144,78 +144,78 @@ func initialPath() string {
 // ----- request/response types -----
 
 type listReq struct {
-	Path string `cbor:"path"`
+	Path string `json:"path"`
 }
 
 type readReq struct {
-	Path string `cbor:"path"`
+	Path string `json:"path"`
 }
 
 type writeReq struct {
-	Path    string `cbor:"path"`
-	Content string `cbor:"content"`
+	Path    string `json:"path"`
+	Content string `json:"content"`
 }
 
 type renameReq struct {
-	From    string `cbor:"from"`
-	To      string `cbor:"to"`
-	Replace bool   `cbor:"replace"`
+	From    string `json:"from"`
+	To      string `json:"to"`
+	Replace bool   `json:"replace"`
 }
 
 type pathReq struct {
-	Path string `cbor:"path"`
+	Path string `json:"path"`
 }
 
 type chmodReq struct {
-	Path string `cbor:"path"`
-	Mode any    `cbor:"mode"` // FE may send number or "0755" string
+	Path string `json:"path"`
+	Mode any    `json:"mode"` // FE may send number or "0755" string
 }
 
 type chownReq struct {
-	Path  string `cbor:"path"`
-	Owner string `cbor:"owner"`
-	Group string `cbor:"group"`
+	Path  string `json:"path"`
+	Owner string `json:"owner"`
+	Group string `json:"group"`
 }
 
 type symlinkReq struct {
-	Target   string `cbor:"target"`
-	LinkPath string `cbor:"link_path"`
-	Replace  bool   `cbor:"replace"`
+	Target   string `json:"target"`
+	LinkPath string `json:"link_path"`
+	Replace  bool   `json:"replace"`
 }
 
 type completeReq struct {
-	Partial string `cbor:"partial"`
+	Partial string `json:"partial"`
 }
 
 type completeResp struct {
-	Partial string   `cbor:"partial"`
-	Matches []string `cbor:"matches"`
+	Partial string   `json:"partial"`
+	Matches []string `json:"matches"`
 }
 
 type clipboardCopyPathReq struct {
-	Path string `cbor:"path"`
+	Path string `json:"path"`
 }
 
 type clipboardFilesSetReq struct {
-	Op    string   `cbor:"op"`
-	Paths []string `cbor:"paths"`
+	Op    string   `json:"op"`
+	Paths []string `json:"paths"`
 }
 
 type clipboardFilesSetResp struct {
-	Op    string   `cbor:"op"`
-	Paths []string `cbor:"paths"`
+	Op    string   `json:"op"`
+	Paths []string `json:"paths"`
 }
 
 type saveStateReq struct {
-	State any `cbor:"state"`
+	State any `json:"state"`
 }
 
 // fsEvent is the watch-fired message the BE pushes to the FE
 // whenever a fswatch.Sub reports a change. Unsolicited (Emit), not
 // a reply, so no id.
 type fsEvent struct {
-	Op   string `cbor:"op"   json:"op"`
-	Path string `cbor:"path" json:"path"`
+	Op   string `  json:"op"`
+	Path string `json:"path"`
 }
 
 // ----- handler registration -----

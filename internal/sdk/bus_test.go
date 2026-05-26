@@ -44,13 +44,13 @@ func TestBusHandleRequestReply(t *testing.T) {
 	defer cleanup()
 
 	type ListReq struct {
-		Kind string `cbor:"kind"`
-		ID   string `cbor:"id"`
-		Path string `cbor:"path"`
+		Kind string `json:"kind"`
+		ID   string `json:"id"`
+		Path string `json:"path"`
 	}
 	type ListResp struct {
-		Path    string   `cbor:"path"`
-		Entries []string `cbor:"entries"`
+		Path    string   `json:"path"`
+		Entries []string `json:"entries"`
 	}
 	Handle(bus, "list", func(c *Conn, id string, req ListReq) (ListResp, error) {
 		if req.Path == "" {
@@ -73,7 +73,7 @@ func TestBusHandleRequestReply(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected EvtAppMsg, got %T", got)
 	}
-	data, _ := m.Data.(map[any]any)
+	data := decodeAppMsgData(t, m.Data)
 	if data == nil {
 		t.Fatalf("data shape: %T", m.Data)
 	}
@@ -93,10 +93,10 @@ func TestBusHandleErrorReply(t *testing.T) {
 	defer cleanup()
 
 	type ReadReq struct {
-		Path string `cbor:"path"`
+		Path string `json:"path"`
 	}
 	type ReadResp struct {
-		Content string `cbor:"content"`
+		Content string `json:"content"`
 	}
 	Handle(bus, "read", func(c *Conn, id string, req ReadReq) (ReadResp, error) {
 		return ReadResp{}, Errf(ErrNotFound, "no such file: %s", req.Path)
@@ -112,7 +112,7 @@ func TestBusHandleErrorReply(t *testing.T) {
 
 	got := readEvt(t, router)
 	m := got.(wire.EvtAppMsg)
-	data, _ := m.Data.(map[any]any)
+	data := decodeAppMsgData(t, m.Data)
 	if data["kind"] != "read_err" {
 		t.Fatalf("kind=%v", data["kind"])
 	}
@@ -178,15 +178,15 @@ func TestBusEmit(t *testing.T) {
 	defer cleanup()
 
 	type Update struct {
-		ReqID  string `cbor:"req_id"`
-		Status string `cbor:"status"`
+		ReqID  string `json:"req_id"`
+		Status string `json:"status"`
 	}
 	if err := bus.Emit("req.update", Update{ReqID: "x", Status: "running"}); err != nil {
 		t.Fatalf("emit: %v", err)
 	}
 	got := readEvt(t, router)
 	m := got.(wire.EvtAppMsg)
-	data, _ := m.Data.(map[any]any)
+	data := decodeAppMsgData(t, m.Data)
 	if data["kind"] != "req.update" {
 		t.Fatalf("kind=%v", data["kind"])
 	}
@@ -204,9 +204,9 @@ func TestBusToleratesNullFields(t *testing.T) {
 	defer cleanup()
 
 	type SelectReq struct {
-		Unit     string `cbor:"unit"`
-		Priority int    `cbor:"priority"`
-		Range    string `cbor:"range"`
+		Unit     string `json:"unit"`
+		Priority int    `json:"priority"`
+		Range    string `json:"range"`
 	}
 	got := make(chan SelectReq, 1)
 	HandleVoid(bus, "select", func(c *Conn, _ string, req SelectReq) error {
@@ -241,7 +241,7 @@ func TestBusHandleVoid(t *testing.T) {
 	defer cleanup()
 
 	type SaveReq struct {
-		State string `cbor:"state"`
+		State string `json:"state"`
 	}
 	got := make(chan string, 1)
 	HandleVoid(bus, "save_state", func(c *Conn, id string, req SaveReq) error {
@@ -273,7 +273,7 @@ func TestBusHandlePattern(t *testing.T) {
 	defer cleanup()
 
 	gotKind := make(chan string, 1)
-	bus.HandlePattern("cmd.", func(c *Conn, kind string, data map[any]any) {
+	bus.HandlePattern("cmd.", func(c *Conn, kind string, data map[string]any) {
 		gotKind <- kind
 	})
 
@@ -298,10 +298,10 @@ func TestBusHandleFromCrossApp(t *testing.T) {
 	defer cleanup()
 
 	type RunReq struct {
-		Argv []string `cbor:"argv"`
+		Argv []string `json:"argv"`
 	}
 	type RunResp struct {
-		ExitCode int `cbor:"exit_code"`
+		ExitCode int `json:"exit_code"`
 	}
 	HandleFrom(bus, "run", func(c *Conn, id string, req RunReq, from wire.Sender) (RunResp, error) {
 		if from.AppID != "com.wash.fm" {
@@ -322,18 +322,18 @@ func TestBusHandleFromCrossApp(t *testing.T) {
 	writeEvt(t, router, msg)
 
 	got := readEvt(t, router)
-	m := got.(wire.EvtAppMsgSendTo)
-	if m.Recipient.InstanceID != "i-5" {
-		t.Fatalf("reply addressed to %v", m.Recipient)
+	m := got.(wire.EvtAppMsg)
+	if m.To.InstanceID != "i-5" {
+		t.Fatalf("reply addressed to %v", m.To)
 	}
-	data, _ := m.Data.(map[any]any)
+	data := decodeAppMsgData(t, m.Data)
 	if data["kind"] != "run_ok" {
 		t.Fatalf("kind=%v", data["kind"])
 	}
 	if data["req_id"] != "rq-1" {
 		t.Fatalf("req_id=%v", data["req_id"])
 	}
-	if data["exit_code"] != uint64(42) && data["exit_code"] != int64(42) {
+	if data["exit_code"] != float64(42) {
 		t.Fatalf("exit_code=%v (%T)", data["exit_code"], data["exit_code"])
 	}
 }
@@ -343,10 +343,10 @@ func TestBusCallRoundTrip(t *testing.T) {
 	defer cleanup()
 
 	type RunReq struct {
-		Argv []string `cbor:"argv"`
+		Argv []string `json:"argv"`
 	}
 	type RunResp struct {
-		ExitCode int `cbor:"exit_code"`
+		ExitCode int `json:"exit_code"`
 	}
 
 	go func() { _ = bus.conn.Run(context.Background()) }()
@@ -367,11 +367,11 @@ func TestBusCallRoundTrip(t *testing.T) {
 	// Read the outbound request, grab its req_id, send back a
 	// matching reply.
 	got := readEvt(t, router)
-	m := got.(wire.EvtAppMsgSendTo)
-	if m.Recipient.AppID != "com.wash.priv" {
-		t.Fatalf("recipient=%v", m.Recipient)
+	m := got.(wire.EvtAppMsg)
+	if m.To.AppID != "com.wash.priv" {
+		t.Fatalf("recipient=%v", m.To)
 	}
-	data, _ := m.Data.(map[any]any)
+	data := decodeAppMsgData(t, m.Data)
 	reqID, _ := data["req_id"].(string)
 	if reqID == "" {
 		t.Fatalf("missing req_id in outbound request: %v", data)
@@ -412,8 +412,8 @@ func TestBusCallErrorEnvelope(t *testing.T) {
 	}()
 
 	got := readEvt(t, router)
-	m := got.(wire.EvtAppMsgSendTo)
-	data, _ := m.Data.(map[any]any)
+	m := got.(wire.EvtAppMsg)
+	data := decodeAppMsgData(t, m.Data)
 	reqID, _ := data["req_id"].(string)
 
 	// Reply with an error envelope.

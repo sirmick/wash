@@ -100,14 +100,14 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 // ----- FE → BE bus -----
 
 // selectReq's wire shape — Priority is `any` so JS Numbers (which
-// arrive as CBOR float64 after the router's JSON→CBOR re-encode) and
-// the occasional integer encoding both decode without complaint.
+// arrive as JSON float64 when decoded into a typed-`any` field) and
+// the occasional pre-typed integer both decode without complaint.
 // startStream coerces it via sdk.ToInt64.
 type selectReq struct {
-	Unit     string `cbor:"unit"`     // empty = system view (no -u)
-	Priority any    `cbor:"priority"` // 0..7; 0 means no filter
-	Range    string `cbor:"range"`    // "boot" | "hour" | "day" | "all"
-	AsRoot   bool   `cbor:"as_root"`  // route via wash-priv run_inline
+	Unit     string `json:"unit"`     // empty = system view (no -u)
+	Priority any    `json:"priority"` // 0..7; 0 means no filter
+	Range    string `json:"range"`    // "boot" | "hour" | "day" | "all"
+	AsRoot   bool   `json:"as_root"`  // route via wash-priv run_inline
 }
 
 type emptyReq struct{}
@@ -118,7 +118,7 @@ type emptyReq struct{}
 // the existing onPickUnit code path, so a deeplinked window looks
 // identical to one where the user clicked the sidebar.
 type deeplinkReq struct {
-	Unit string `cbor:"unit"`
+	Unit string `json:"unit"`
 }
 
 func registerHandlers(b *sdk.Bus) {

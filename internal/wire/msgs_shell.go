@@ -24,13 +24,16 @@ const (
 	TShellWindowMove         = "window.move"
 	TShellWindowResize       = "window.resize"
 	TShellWindowState        = "window.state"
-	TShellAppMsgSend         = "app_msg.send"
-	// Shell → router. Cross-app send: relay to a different instance
-	// (peer to EvtAppMsgSendTo on the event channel). Same Recipient
-	// addressing rules: app_id for singletons, instance_id for any
-	// running app.
-	TShellAppMsgSendTo = "app_msg.send.to"
-	TShellLog          = "log"
+	// Shell → router. App-private message from a mounted element.
+	// Routing depends on the optional To field:
+	//   - Own BE: To unset; InstanceID identifies the sender; router
+	//     relays to that instance's BE half.
+	//   - Cross-app: To set with {AppID (singleton) | InstanceID
+	//     (direct)}; router resolves and forwards as EvtAppMsg.
+	// Earlier versions had a separate "app_msg.send.to" tag; they
+	// were structurally identical and have been unified.
+	TShellAppMsgSend = "app_msg.send"
+	TShellLog        = "log"
 
 	// Router → shell (BE → FE relay).
 	TShellAppMsgDeliver = "app_msg.deliver"
@@ -304,31 +307,32 @@ func NewShellWindowState(windowID uint32, state string) ShellWindowState {
 	return ShellWindowState{T: TShellWindowState, WindowID: windowID, State: state}
 }
 
-// ShellAppMsgSend is the FE half of an app sending an APP_MSG to its
-// BE half. Data is intentionally opaque to the router; it carries
-// whatever the app uses domain-side.
+// ShellAppMsgSend is the unified FE → router app-private message.
+// Data is intentionally opaque to the router; it carries whatever
+// the app uses domain-side. Routing:
+//
+//   - Own BE: InstanceID identifies the sender (the mounted app);
+//     To is nil; router relays to that instance's BE half.
+//   - Cross-app: To is set; router resolves the recipient and
+//     forwards as EvtAppMsg on the receiver's event channel. The FE
+//     cannot attribute the sender — no router-side identity for
+//     window-of-origin on the multiplexed shell channel — so the
+//     receiver sees a bare EvtAppMsg without From.
 type ShellAppMsgSend struct {
 	T          string          `json:"t"`
-	InstanceID string          `json:"instance_id"`
+	InstanceID string          `json:"instance_id,omitempty"`
 	Data       json.RawMessage `json:"data"`
+	To         *Recipient      `json:"to,omitempty"`
 }
 
 func NewShellAppMsgSend(instanceID string, data json.RawMessage) ShellAppMsgSend {
 	return ShellAppMsgSend{T: TShellAppMsgSend, InstanceID: instanceID, Data: data}
 }
 
-// ShellAppMsgSendTo is the FE → router cross-app send. Mirrors
-// EvtAppMsgSendTo on the event channel; lets a FE (e.g. fm)
-// dispatch a job to a singleton service (e.g. wash-bulk) without
-// going through its own BE.
-type ShellAppMsgSendTo struct {
-	T         string          `json:"t"`
-	Recipient Recipient       `json:"recipient"`
-	Data      json.RawMessage `json:"data"`
-}
-
-func NewShellAppMsgSendTo(r Recipient, data json.RawMessage) ShellAppMsgSendTo {
-	return ShellAppMsgSendTo{T: TShellAppMsgSendTo, Recipient: r, Data: data}
+// NewShellAppMsgSendTo is the cross-app variant — same wire type,
+// To set, InstanceID unused.
+func NewShellAppMsgSendTo(r Recipient, data json.RawMessage) ShellAppMsgSend {
+	return ShellAppMsgSend{T: TShellAppMsgSend, Data: data, To: &r}
 }
 
 // ShellAppMsgDeliver is the reverse: a BE → FE message, relayed to

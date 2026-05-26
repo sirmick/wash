@@ -1002,8 +1002,8 @@ func stripControl(s string) string {
 }
 
 // decodeBase64 is a defensive wrapper: the FE sends ciphertext /
-// pubkey / nonce as base64 strings, but CBOR can also carry raw
-// bytes if the FE used a binary type. Accept either.
+// pubkey / nonce as base64 strings; some callers occasionally hand
+// in raw bytes. Accept either.
 func decodeBase64(v any) []byte {
 	switch x := v.(type) {
 	case string:
