@@ -10,6 +10,8 @@
     ".": "./src/index.ts"
   },
   "peerDependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
     "solid-js": "^1.9.13"
   },
   "dependencies": {

@@ -14,7 +14,8 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { FilePicker, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, defineWashApp, tokens } from '@wash/ui';
+import { FilePicker, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens } from '@wash/ui';
+import type { TerminalAPI } from '@wash/ui';
 import { EditorSelection, EditorState, Compartment } from '@codemirror/state';
 import {
   EditorView,
@@ -51,8 +52,6 @@ import { json } from '@codemirror/lang-json';
 import { markdown } from '@codemirror/lang-markdown';
 // xterm + addon-fit are externalized to /vendor/xterm.js. The vendor
 // bundle auto-injects the xterm CSS, so no manual <style> shim here.
-import { Terminal as XTerm } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
 import {
   Bold,
   Check,
@@ -233,17 +232,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // Pending term.open requests waiting for term.opened so we can
   // pair channelID with the FE's local term id. Keyed by reply id.
   const pendingTermOpens = new Map<string, string>(); // reply id -> local id
-  // Per-channel state: xterm + fit + bytes-queue + cleanup. We
-  // keep this outside Solid's reactive system because xterm is
-  // imperative and a Map is the cleanest fit. Map keyed by
-  // channelID; created at term.opened; populated at mount.
-  type TermRefs = {
-    xterm: XTerm | null;
-    fit: FitAddon | null;
-    unsub?: () => void;
-    pending: Uint8Array[];
-  };
-  const termRefs = new Map<number, TermRefs>();
+  // Imperative <Terminal> handles keyed by channel id; populated by
+  // each <Terminal>'s onReady, dropped on tab close.
+  const termAPIs = new Map<number, TerminalAPI>();
   let nextTermLocalID = 0;
 
   // wysHandles is the TipTap editor per markdown-wysiwyg tab. Keyed
@@ -924,40 +915,19 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       pendingTermOpens.delete(replyID);
       const channelID = Number(m.channel_id ?? 0);
       if (!channelID) return;
+      // Setting channelID flips the tab from placeholder to
+      // <Terminal channelId={N}>. The component opens the raw
+      // channel synchronously on first render; bytes the BE has
+      // already sent are still in the router's pendingRaw queue
+      // and drain into the component on subscribe.
       setTermTabs(termTabs().map((t) => t.id === localID ? { ...t, channelID } : t));
-      // Initialize refs so mountTerm can queue bytes that arrive
-      // before the xterm host element is in the DOM.
-      termRefs.set(channelID, { xterm: null, fit: null, pending: [] });
-      // Subscribe to bytes immediately so we don't lose anything
-      // between term.opened and the host element being created.
-      const unsub = window.wash.openRawChannel(channelID, (bytes) => {
-        const ref = termRefs.get(channelID);
-        if (!ref) return;
-        if (ref.xterm) ref.xterm.write(bytes);
-        else ref.pending.push(bytes);
-      });
-      const ref = termRefs.get(channelID)!;
-      ref.unsub = unsub;
-      // Mount xterm into the host element. Solid has already
-      // rendered the host since termOpen()+termTabs() were set
-      // before the BE replied; queueMicrotask defers one tick so
-      // a freshly-toggled-open panel has its DOM in place.
-      queueMicrotask(() => {
-        const hostEl = props.host.querySelector(`[data-testid="edit-term-host-${localID}"]`) as HTMLDivElement | null;
-        if (hostEl) mountTerm(channelID, hostEl);
-      });
       return;
     }
     if (m.kind === 'term.closed') {
       const channelID = Number(m.channel_id ?? 0);
       if (!channelID) return;
       const tab = termTabs().find((t) => t.channelID === channelID);
-      const ref = termRefs.get(channelID);
-      if (ref) {
-        ref.unsub?.();
-        ref.xterm?.dispose();
-        termRefs.delete(channelID);
-      }
+      termAPIs.delete(channelID);
       if (tab) {
         setTermTabs(termTabs().filter((t) => t.id !== tab.id));
         if (activeTermID() === tab.id) {
@@ -1012,46 +982,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     if (termOpen() && termTabs().length === 0) openNewTerm();
   };
 
-  // mountTerm wires xterm into a host div for the given channel.
-  // Bytes queued before mount are flushed at the end so initial
-  // shell output isn't dropped if the user opens then quickly
-  // switches tabs.
-  const mountTerm = (channelID: number, host: HTMLDivElement) => {
-    const ref = termRefs.get(channelID);
-    if (!ref) return;
-    const term = new XTerm({
-      fontFamily: tokens.fontMono,
-      fontSize: 13,
-      theme: { background: '#000000' },
-      cursorBlink: true,
-      allowProposedApi: true,
-    });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(host);
-    ref.xterm = term;
-    ref.fit = fit;
-    // Expose the live Terminal on the host element so e2e tests
-    // can read the buffer without going through internal refs.
-    // Same pattern wash-term uses.
-    (host as unknown as { __washTerm: XTerm }).__washTerm = term;
-    const encoder = new TextEncoder();
-    term.onData((s) => window.wash.writeRaw(channelID, encoder.encode(s)));
-    // Flush bytes that arrived between term.opened and mount.
-    for (const b of ref.pending) term.write(b);
-    ref.pending = [];
-    // Initial fit + announce size after layout settles.
-    requestAnimationFrame(() => {
-      fit.fit();
-      term.focus();
-      send({
-        kind: 'term.resize',
-        channel_id: channelID,
-        cols: term.cols,
-        rows: term.rows,
-      });
-    });
-  };
 
   // ---- sidebar drag / drop / rename / delete ----
   //
@@ -1791,18 +1721,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     };
     props.host.addEventListener('wash:state', onState);
 
-    // Window-resize → refit every mounted terminal + announce
-    // the new size. The active terminal is what the user sees,
-    // but background tabs still need fits so they're ready when
-    // activated. fit.fit() is cheap on a hidden element.
-    const ro = new ResizeObserver(() => {
-      for (const [chID, ref] of termRefs) {
-        if (!ref.fit || !ref.xterm) continue;
-        ref.fit.fit();
-        send({ kind: 'term.resize', channel_id: chID, cols: ref.xterm.cols, rows: ref.xterm.rows });
-      }
-    });
-    ro.observe(props.host);
+    // <Terminal> components carry their own ResizeObserver against
+    // each host div, so a window resize bubbles into per-component
+    // refits without a top-level coordinator. Background tabs
+    // (display:none) re-fit on next activation via their own RO
+    // firing when the size flips back to non-zero.
 
     // Create the EditorView once. Doc + language reconfigure on
     // file open via dispatch + compartment.
@@ -1930,7 +1853,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('wash:state', onState);
       props.host.removeEventListener('keydown', onKey);
-      ro.disconnect();
       // Release every active fs.watch so the BE doesn't strand
       // them after the editor window closes. Idempotent BE-side,
       // so we don't need to know which subs survived the run.
@@ -1940,14 +1862,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       watching.clear();
       for (const t of refreshTimers.values()) window.clearTimeout(t);
       refreshTimers.clear();
-      // Dispose every live terminal — pty cleanup is on the BE
-      // side via the channel close path, but we still want to
-      // drop xterm DOM + listeners.
-      for (const ref of termRefs.values()) {
-        ref.unsub?.();
-        ref.xterm?.dispose();
-      }
-      termRefs.clear();
+      // <Terminal> components handle their own xterm disposal +
+      // raw-channel unsubscribe via onCleanup; just drop the API
+      // map so we're not holding references after teardown.
+      termAPIs.clear();
       // Tear down every TipTap editor; each holds its own DOM
       // listeners + ProseMirror plumbing.
       for (const h of wysHandles.values()) h.destroy();
@@ -2419,16 +2337,34 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               its host element on tab switch. */}
           <div style={termBodyStyle}>
             <For each={termTabs()}>
-              {(t) => (
-                <div
-                  data-testid={`edit-term-host-${t.id}`}
-                  style={{
-                    position: 'absolute',
-                    inset: 0,
-                    display: activeTermID() === t.id ? 'block' : 'none',
-                  }}
-                />
-              )}
+              {(t) => {
+                let hostEl: HTMLDivElement | undefined;
+                return (
+                  <div
+                    data-testid={`edit-term-host-${t.id}`}
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      display: activeTermID() === t.id ? 'block' : 'none',
+                    }}
+                    ref={(el) => { hostEl = el; }}
+                  >
+                    <Show when={t.channelID > 0}>
+                      <Terminal
+                        channelId={t.channelID}
+                        onReady={(api) => {
+                          termAPIs.set(t.channelID, api);
+                          if (activeTermID() === t.id) api.focus();
+                          if (hostEl) (hostEl as unknown as { __washTerm: unknown }).__washTerm = api.xterm();
+                        }}
+                        onResize={(cols, rows) => {
+                          send({ kind: 'term.resize', channel_id: t.channelID, cols, rows });
+                        }}
+                      />
+                    </Show>
+                  </div>
+                );
+              }}
             </For>
           </div>
         </div>

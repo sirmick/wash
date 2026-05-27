@@ -3,21 +3,17 @@
 // instance. Tab bar at top, terminals stack below with display:none
 // on inactive ones so state and scrollback survive switching.
 //
-// Solid drives the UI but xterm itself is imperative — we hold the
-// Terminal/FitAddon references in a plain Map, mount each host via
-// <For keyed>, and dispose on unmount.
-
-// xterm + addon-fit are externalized to the shared vendor bundle at
-// /vendor/xterm.js (see web/shell/build-vendor.mjs). That bundle
-// auto-injects the xterm CSS on first import, so the app no longer
-// needs the `?inline` CSS import + manual <style> shim.
-import { Terminal } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
+// xterm construction and raw-channel wiring live in @wash/ui's
+// <Terminal>. This file owns the tab orchestration (open, close,
+// switch, persist, keyboard shortcuts) and forwards an imperative
+// handle from each <Terminal> via onReady so tab activation can
+// trigger focus/fit.
 
 import { For, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { Plus, X } from 'lucide-solid';
-import { defineWashApp } from '@wash/ui';
+import { Terminal, defineWashApp } from '@wash/ui';
+import type { TerminalAPI } from '@wash/ui';
 
 interface BEMessage {
   kind: string;
@@ -51,15 +47,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [tabs, setTabs] = createSignal<TabMeta[]>([]);
   const [active, setActive] = createSignal(0);
 
-  // xterm instances live outside the reactive system — they're imperative
-  // canvas-backed widgets. We key by channel id.
-  type TabRef = {
-    host: HTMLDivElement;
-    term: Terminal;
-    fit: FitAddon;
-    unsub: () => void;
-  };
-  const refs = new Map<number, TabRef>();
+  // Imperative <Terminal> handles keyed by channel id. Populated
+  // by each <Terminal>'s onReady callback; dropped on tab close.
+  const apis = new Map<number, TerminalAPI>();
+  // Last reported size per channel so resize messages have a value
+  // even when called outside a fit() tick.
+  const sizes = new Map<number, { cols: number; rows: number }>();
 
   const send = (m: unknown) => window.wash.sendAppMsg(props.instance, m);
 
@@ -74,12 +67,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   const removeTab = (channelID: number) => {
-    const ref = refs.get(channelID);
-    if (ref) {
-      ref.unsub();
-      ref.term.dispose();
-      refs.delete(channelID);
-    }
+    apis.delete(channelID);
+    sizes.delete(channelID);
     const remaining = tabs().filter((t) => t.channelID !== channelID);
     setTabs(remaining);
     if (active() === channelID) {
@@ -93,24 +82,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     setActive(channelID);
     persist();
     requestAnimationFrame(() => {
-      const ref = refs.get(channelID);
-      if (ref) {
-        ref.fit.fit();
-        ref.term.focus();
-        sendResize(channelID);
+      const api = apis.get(channelID);
+      if (api) {
+        api.fit();
+        api.focus();
       }
     });
   };
 
-  const sendResize = (channelID: number) => {
-    const ref = refs.get(channelID);
-    if (!ref) return;
-    send({
-      kind: 'resize',
-      channel_id: channelID,
-      cols: ref.term.cols,
-      rows: ref.term.rows,
-    });
+  const sendResize = (channelID: number, cols: number, rows: number) => {
+    send({ kind: 'resize', channel_id: channelID, cols, rows });
   };
 
   const openNewTab = () => send({ kind: 'new_tab' });
@@ -127,8 +108,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         removeTab(Number(m.channel_id));
         return;
       case 'tab_error': {
-        const ref = refs.get(active());
-        if (ref) ref.term.write('\r\n\x1b[31mwash-term: ' + String(m.msg) + '\x1b[0m\r\n');
+        const api = apis.get(active());
+        if (api) api.write('\r\n\x1b[31mwash-term: ' + String(m.msg) + '\x1b[0m\r\n');
         return;
       }
     }
@@ -181,57 +162,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     activate(ids[(i + dir + ids.length) % ids.length]);
   };
 
-  // ---- per-tab xterm mount ----
-
-  const mountTab = (channelID: number, host: HTMLDivElement) => {
-    const term = new Terminal({
-      fontFamily: 'ui-monospace,Menlo,Consolas,monospace',
-      fontSize: 13,
-      theme: { background: '#000000' },
-      cursorBlink: true,
-      allowProposedApi: true,
-    });
-    term.attachCustomKeyEventHandler(onTermKey);
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(host);
-    // Expose the Terminal on the host element so tests (and any
-    // debug tooling) can poke at the live buffer without going
-    // through internal refs.
-    (host as unknown as { __washTerm: Terminal }).__washTerm = term;
-
-    // Buffer incoming bytes until the next animation frame fires.
-    // The non-determinism we were chasing: subscribeRaw drains the
-    // shell-side pendingRaw queue synchronously, so the bash prompt
-    // can land in xterm.write before xterm's renderer has measured
-    // the host. xterm internally tracks an 80×24 default until a
-    // fit() supersedes it; bytes written before the fit paint into
-    // a stale viewport and the rows never repaint. Holding the
-    // bytes in `pending` until after the first fit.fit() means the
-    // viewport is correct before any output reaches the renderer.
-    let pending: Uint8Array[] | null = [];
-    const writeOrBuffer = (bytes: Uint8Array) => {
-      if (pending) pending.push(bytes);
-      else term.write(bytes);
-    };
-    const unsub = window.wash.openRawChannel(channelID, writeOrBuffer);
-    const encoder = new TextEncoder();
-    term.onData((data) => window.wash.writeRaw(channelID, encoder.encode(data)));
-
-    refs.set(channelID, { host, term, fit, unsub });
-
-    requestAnimationFrame(() => {
-      try { fit.fit(); } catch { /* host still 0×0 — next ResizeObserver wakeup picks it up */ }
-      const drain = pending ?? [];
-      pending = null;
-      for (const b of drain) term.write(b);
-      if (active() === channelID) {
-        term.focus();
-        sendResize(channelID);
-      }
-    });
-  };
-
   // ---- lifecycle ----
 
   onMount(() => {
@@ -243,24 +173,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     props.host.addEventListener('wash:msg', onMsg);
     props.host.addEventListener('wash:state', onState);
 
-    // Window resize → refit the active terminal.
-    const ro = new ResizeObserver(() => {
-      const ref = refs.get(active());
-      if (!ref) return;
-      ref.fit.fit();
-      sendResize(active());
-    });
-    ro.observe(props.host);
-
     onCleanup(() => {
       props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('wash:state', onState);
-      ro.disconnect();
-      for (const ref of refs.values()) {
-        ref.unsub();
-        ref.term.dispose();
-      }
-      refs.clear();
+      apis.clear();
+      sizes.clear();
     });
   });
 
@@ -333,21 +250,39 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       </div>
       <div style={{ flex: 1, position: 'relative', 'min-height': 0 }}>
         <For each={tabs()}>
-          {(tab) => (
-            <div
-              data-testid="term-host"
-              data-channel={tab.channelID}
-              style={{
-                position: 'absolute',
-                inset: 0,
-                display: active() === tab.channelID ? 'block' : 'none',
-              }}
-              ref={(el) => {
-                // Mount xterm once per tab into this host div.
-                if (!refs.has(tab.channelID)) mountTab(tab.channelID, el);
-              }}
-            />
-          )}
+          {(tab) => {
+            let hostEl: HTMLDivElement | undefined;
+            return (
+              <div
+                data-testid="term-host"
+                data-channel={tab.channelID}
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: active() === tab.channelID ? 'block' : 'none',
+                }}
+                ref={(el) => { hostEl = el; }}
+              >
+                <Terminal
+                  channelId={tab.channelID}
+                  customKeyHandler={onTermKey}
+                  onReady={(api) => {
+                    apis.set(tab.channelID, api);
+                    if (active() === tab.channelID) api.focus();
+                    // Expose on the term-host div too — e2e tests look
+                    // up __washTerm on the testid-bearing element.
+                    if (hostEl) (hostEl as unknown as { __washTerm: unknown }).__washTerm = api.xterm();
+                  }}
+                  onResize={(cols, rows) => {
+                    const prev = sizes.get(tab.channelID);
+                    if (prev && prev.cols === cols && prev.rows === rows) return;
+                    sizes.set(tab.channelID, { cols, rows });
+                    sendResize(tab.channelID, cols, rows);
+                  }}
+                />
+              </div>
+            );
+          }}
         </For>
       </div>
     </>

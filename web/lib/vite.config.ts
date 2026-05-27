@@ -14,6 +14,10 @@ import { resolve } from 'node:path';
 // solid-js + subpaths stay external — they're served from their own
 // vendor bundles, and a single live Solid instance across the page
 // is load-bearing (signal owner + instanceof checks).
+//
+// @xterm/* stays external too: the shared xterm vendor bundle is
+// already built by web/shell/build-vendor.mjs, and bundling it again
+// here would double-ship ~280 KB of terminal code in every page.
 export default defineConfig({
   plugins: [solid()],
   build: {
@@ -27,7 +31,13 @@ export default defineConfig({
       fileName: () => 'wash-ui.js',
     },
     rollupOptions: {
-      external: ['solid-js', 'solid-js/web', 'solid-js/store'],
+      external: [
+        'solid-js',
+        'solid-js/web',
+        'solid-js/store',
+        '@xterm/xterm',
+        '@xterm/addon-fit',
+      ],
     },
   },
 });
