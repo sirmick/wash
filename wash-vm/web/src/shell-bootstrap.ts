@@ -130,7 +130,15 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
     deps.sendBytes(encodeFrame(0, req));
     log(`bootstrap: sent asset.read path=${path}`);
   };
+  let onBytesCount = 0;
+  // Persistent across calls so multi-chunk frames assemble correctly.
+  const passthroughParser = new FrameParser();
   const detach = deps.onBytes((bytes) => {
+    onBytesCount++;
+    // Log first 30, then every 10 — generous for debugging.
+    if (onBytesCount <= 30 || onBytesCount % 10 === 0) {
+      log(`bs: #${onBytesCount} phase=${phase} len=${bytes.length}`);
+    }
     if (!sent && deps.deferUntilFirstByte) {
       // First router byte arrived → router is alive, port is open,
       // safe to send. Fire BEFORE feeding the parser so the request
@@ -142,6 +150,21 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
       return;
     }
     if (phase === 'passthrough') {
+      // Frame-decode via the persistent passthroughParser so chunks
+      // that span frame boundaries (very common: 8B-only chunks for
+      // a header, 32KB chunks for raw bundle bytes) parse correctly.
+      try {
+        for (const f of passthroughParser.feed(bytes)) {
+          if (f.channel === 0) {
+            try {
+              const msg = JSON.parse(dec.decode(f.payload)) as { t?: string; kind?: string; channel_id?: number; instance_id?: string };
+              log(`pt: ctrl t=${msg?.t} kind=${msg?.kind ?? ''} ch=${msg?.channel_id ?? ''} inst=${msg?.instance_id ?? ''}`);
+            } catch { log(`pt: ctrl <non-json> len=${f.payload.length}`); }
+          } else {
+            log(`pt: raw ch=${f.channel} len=${f.payload.length}`);
+          }
+        }
+      } catch (e) { log(`pt: parse threw: ${(e as Error).message}`); }
       forwardFn?.(bytes);
       return;
     }
@@ -181,11 +204,36 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
             bytes: out,
             replay,
             finish: (forward) => {
+              log(`bs: finish() called, replay=${replay.length}B, buffered=${postAssetBuffer.length} chunks`);
               forwardFn = forward;
+              // Frame-decode replay + buffered chunks so we see what
+              // the shell will actually receive. The shell only does
+              // anything useful on channel.bind {kind:bundle} → raw
+              // → channel.unbind, so we should see all three.
+              const peekDump = (label: string, bytes: Uint8Array) => {
+                try {
+                  const fs = new FrameParser().feed(bytes);
+                  for (const f of fs) {
+                    if (f.channel === 0) {
+                      try {
+                        const msg = JSON.parse(dec.decode(f.payload)) as { t?: string; kind?: string; channel_id?: number; instance_id?: string };
+                        log(`bs: flush[${label}] ctrl t=${msg?.t} kind=${msg?.kind ?? ''} ch=${msg?.channel_id ?? ''}`);
+                      } catch { log(`bs: flush[${label}] ctrl <non-json> len=${f.payload.length}`); }
+                    } else {
+                      log(`bs: flush[${label}] raw ch=${f.channel} len=${f.payload.length}`);
+                    }
+                  }
+                } catch (e) { log(`bs: flush[${label}] parse err: ${(e as Error).message}`); }
+              };
+              peekDump('replay', replay);
               forward(replay);
-              for (const buf of postAssetBuffer) forward(buf);
+              for (let i = 0; i < postAssetBuffer.length; i++) {
+                peekDump(`buf${i}`, postAssetBuffer[i]);
+                forward(postAssetBuffer[i]);
+              }
               postAssetBuffer.length = 0;
               phase = 'passthrough';
+              log(`bs: phase=passthrough (after replay+buffered flush)`);
             },
           });
           return; // stop processing more frames in this batch

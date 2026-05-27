@@ -54,6 +54,12 @@ const vite = await createViteServer({
     middlewareMode: true,
     host: HOST,
     hmr: { server },           // share our http server for HMR upgrades
+    // Vite 5.x blocks Host headers it doesn't know about as a
+    // rebinding-attack defense. Reverse-proxy / LAN-hostname access
+    // (`dev-app3.homezone.be`, raw IPs, etc.) trips it. `true` opts
+    // out of the check entirely — fine for the demo server which
+    // never holds secrets.
+    allowedHosts: true,
   },
   appType: 'spa',
 });
