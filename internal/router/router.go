@@ -147,6 +147,13 @@ type Router struct {
 	// renders. Sent as a snapshot on shell connect; mutated by router
 	// or shell actions, with patches broadcast to every shell.
 	winSession windowSession
+
+	// runtimeStats is the per-instance Go-runtime self-report from
+	// each app's SDK heartbeat. The About panel queries the full
+	// table via the com.wash.router synthetic peer. See
+	// internal/router/runtime_stats.go.
+	statsMu      sync.Mutex
+	runtimeStats map[string]*runtimeStatsRecord
 }
 
 // NewRouter constructs a router; cfg.AppsDirs are expected to already
@@ -547,6 +554,7 @@ func (r *Router) tearDown(inst *AppInstance) {
 	r.unregisterApp(inst)
 	r.closeChannelsForApp(inst, "app exited")
 	r.dropAppMsgWatchers(inst.InstanceID)
+	r.dropRuntimeStats(inst.InstanceID)
 	r.winSession.dropAppState(inst.InstanceID)
 	if inst.WindowID != 0 {
 		r.broadcastPatches(r.winSession.destroyWindow(inst.WindowID))

@@ -189,6 +189,12 @@ func Run(ctx context.Context, def *AppDef) error {
 		return fmt.Errorf("connect: %w", err)
 	}
 	defer c.Close()
+	// Heartbeat: ships runtime.stats every few seconds to the
+	// router for the About panel. ctx-bound so it dies when Run
+	// returns.
+	hbCtx, cancelHB := context.WithCancel(ctx)
+	defer cancelHB()
+	c.startHeartbeat(hbCtx)
 	if err := c.Run(ctx); err != nil && !errors.Is(err, ErrConnClosed) {
 		return fmt.Errorf("run: %w", err)
 	}

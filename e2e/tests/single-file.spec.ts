@@ -32,7 +32,10 @@ const APPS: AppBundle[] = [
   // import-map externals (served from /vendor/*) so they don't add to
   // the per-app bundle. Re-evaluate caps when adding a new shared dep.
   { name: 'session', dir: 'apps/session/fe/dist', maxBytes: 70_000 },
-  { name: 'about',   dir: 'apps/about/fe/dist',   maxBytes: 10_000 },
+  // about grew into the system-info panel: build/host/Go-runtime
+  // process table/registered-apps/browser sections + sortable table.
+  // 30 KB headroom keeps a brake on further growth.
+  { name: 'about',   dir: 'apps/about/fe/dist',   maxBytes: 30_000 },
   { name: 'test',    dir: 'apps/test/fe/dist',    maxBytes: 30_000 },
   { name: 'term',    dir: 'apps/term/fe/dist',    maxBytes: 30_000 },
   { name: 'fm',      dir: 'apps/fm/fe/dist',      maxBytes: 100_000 },

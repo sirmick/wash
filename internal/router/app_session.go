@@ -343,6 +343,13 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 		inst.router.log("app_state.set instance=%s bytes=%d", inst.InstanceID, len(state))
 		inst.router.broadcastPatches(inst.router.winSession.setAppState(inst.InstanceID, state))
 		return nil
+	case wire.TEvtRuntimeStats:
+		var m wire.EvtRuntimeStats
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		inst.router.recordRuntimeStats(inst.InstanceID, m)
+		return nil
 	}
 	inst.router.log("app %s: unexpected evt %q", inst.AppID, t)
 	return nil
@@ -363,6 +370,14 @@ func (inst *AppInstance) relayAppMsgCrossInstance(m wire.EvtAppMsg) error {
 	}
 	to := *m.To
 	from := wire.Sender{AppID: inst.AppID, InstanceID: inst.InstanceID}
+	// Synthetic router peer: com.wash.router is not a real spawned
+	// process — the router answers in-process. Used today by the
+	// About panel to fetch the runtime-stats table without us having
+	// to broadcast it to every shell. Reply is shipped back to the
+	// sender as an EvtAppMsg with From={AppID:"com.wash.router"}.
+	if to.AppID == RouterPeerAppID {
+		return inst.router.handleRouterPeerMsg(inst, m.Data)
+	}
 	// CLI session fast-path: SendAppMsgTo({InstanceID:"cli-..."})
 	// targets a control-socket connection promoted to a streaming
 	// back-channel, not a registered app. Used by wash-priv to

@@ -65,6 +65,12 @@ const (
 	// on every (re)mount, restoring FE state across browser refresh
 	// and multi-tab viewing.
 	TEvtAppStateSet = "app_state.set"
+
+	// Runtime stats heartbeat — app → router. SDK emits one every
+	// few seconds with Go-runtime self-report (NumGoroutine, MemStats
+	// subset). Router collects per-instance and surfaces via the
+	// com.wash.router synthetic-peer bus for the About panel.
+	TEvtRuntimeStats = "runtime.stats"
 )
 
 // EvtWindowMapped: router → app, "the window is now visible".
@@ -393,6 +399,50 @@ func NewEvtAppStateSet(state []byte) EvtAppStateSet {
 	return EvtAppStateSet{T: TEvtAppStateSet, State: json.RawMessage(state)}
 }
 
+// EvtRuntimeStats is a periodic heartbeat from each app's SDK to the
+// router. Two purposes in one envelope:
+//
+//   - Liveness: arrival proves the BE is responsive. Universal —
+//     every wash app, in every implementation language, is expected
+//     to ship one of these every few seconds.
+//   - Go self-report: optional bag of Go-runtime metrics (heap,
+//     goroutines, GC) the Go SDK fills in. A future Rust / Python
+//     SDK would leave these zero and set RuntimeKind to its own
+//     label; the router treats the absence the same as a Go app
+//     that hasn't run a GC yet.
+//
+// RuntimeKind is the discriminator. Empty defaults to "go" for
+// backwards compat with binaries that predate this field. Non-go
+// kinds tell the About table to render heap/goroutine/GC columns
+// as "—" rather than misleading zeros.
+//
+// /proc-derived RSS / VSize aren't shipped here — the router reads
+// /proc/<pid>/statm at query time. RSS is a kernel fact, not an
+// app self-report; no SDK should be expected to know it.
+//
+// Cadence: ~5s (SDK constant). All memory fields are bytes.
+type EvtRuntimeStats struct {
+	T string `json:"t"`
+	// RuntimeKind is "go", "rust", "node", etc. Empty == "go" for
+	// pre-field binaries. Lets the consumer skip language-specific
+	// columns rather than display zeros.
+	RuntimeKind string `json:"runtime_kind,omitempty"`
+	// UptimeSec since the BE began. Universal across languages.
+	UptimeSec int64 `json:"uptime_sec"`
+
+	// ----- Go-specific (optional for non-Go BEs) -----
+	GoVersion    string `json:"go_version,omitempty"`
+	NumGoroutine int    `json:"num_goroutine,omitempty"`
+	NumCgoCall   int64  `json:"num_cgo_call,omitempty"`
+	HeapAlloc    uint64 `json:"heap_alloc,omitempty"`
+	HeapInuse    uint64 `json:"heap_inuse,omitempty"`
+	HeapObjects  uint64 `json:"heap_objects,omitempty"`
+	StackInuse   uint64 `json:"stack_inuse,omitempty"`
+	Sys          uint64 `json:"sys,omitempty"`
+	NumGC        uint32 `json:"num_gc,omitempty"`
+	GCPauseTotal uint64 `json:"gc_pause_total_ns,omitempty"`
+}
+
 // mustJSON marshals v with encoding/json. Internal use — callers
 // (constructors above) take already-validated Go values whose JSON
 // shapes are stable. On marshal failure we ship a JSON null rather
@@ -485,6 +535,9 @@ func DecodeEvt(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TEvtAppStateSet:
 		var m EvtAppStateSet
+		return m, json.Unmarshal(data, &m)
+	case TEvtRuntimeStats:
+		var m EvtRuntimeStats
 		return m, json.Unmarshal(data, &m)
 	}
 	return nil, fmt.Errorf("evt decode: unknown t %q", t)
