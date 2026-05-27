@@ -1,35 +1,30 @@
-// wash-services — frontend for the init system. systemd + openrc.
+// wash-services — frontend for the init system. systemd + openrc
+// today, OpenWRT procd ready to slot in (see procd.go).
 //
 // One BE per window (instancing=multi). Detects the host's init at
-// onReady, lists units, and routes the action verbs (start, stop,
-// restart, enable, disable) through wash-priv so the password prompt
-// + audit trail land in one place rather than reinventing them here.
+// onReady, lists units, and routes action verbs (start, stop,
+// restart, enable, disable, reload) through wash-priv so the
+// password prompt + audit trail live in one place rather than being
+// reinvented here.
 //
-// systemd is the JSON path: `systemctl list-units --output=json`
-// returns load/active/sub/description in one round, merged with
-// `list-unit-files` for the enabled-vs-disabled state. openrc has no
-// JSON; we walk /etc/init.d for the catalog and `rc-status -f ini`
-// for runtime state. Descriptions on openrc would require a per-
-// service exec of `rc-service <name> describe` — skipped in v1; the
-// name carries enough.
+// Distro-specific work is fully behind the Backend interface
+// (backend.go). app.go is init-system-agnostic: it asks the backend
+// for the catalog, asks for an argv when the user clicks an action,
+// and forwards the argv to priv. New init systems drop in next to
+// systemd.go / openrc.go / procd.go without touching this file.
 //
-// Logs deeplink as a separate window: SpawnRequest com.wash.journal
-// (systemd) or com.wash.syslogs (openrc). SpawnRequest doesn't ship
-// an args payload yet, so the spawned app starts at its catalog and
-// the user picks the unit there. Worth revisiting once spawn args
-// land.
+// Logs deeplink as a separate window: backend.LogAppID() returns
+// com.wash.journal on systemd, com.wash.syslogs elsewhere. The
+// spawned app starts at its catalog and (on systemd only) gets a
+// cmd.select_unit follow-up so the chosen unit is pre-selected.
 
 package services
 
 import (
 	"context"
 	"embed"
-	"encoding/json"
 	"io/fs"
 	"log"
-	"os"
-	"os/exec"
-	"strings"
 	"sync"
 	"time"
 
@@ -47,16 +42,6 @@ const version = "0.0.0"
 // system" without colliding with com.wash.settings's gear-shaped
 // glyph (settings uses "settings").
 const servicesIcon = "server-cog"
-
-// initSystem is the detected init flavour. Empty means we couldn't
-// identify one — the FE will show a placeholder.
-type initSystem string
-
-const (
-	initUnknown initSystem = ""
-	initSystemd initSystem = "systemd"
-	initOpenRC  initSystem = "openrc"
-)
 
 // ---- wire types ----
 
@@ -108,8 +93,8 @@ type ShowLogsReq struct {
 // ---- BE state ----
 
 type be struct {
-	conn *sdk.Conn
-	init initSystem
+	conn    *sdk.Conn
+	backend Backend // nil ⇒ no supported init detected; FE shows banner
 
 	// pendingJournalUnits is the FIFO of unit names waiting for their
 	// spawned wash-journal instance id to arrive. show_logs pushes
@@ -165,30 +150,18 @@ func Def() *sdk.AppDef { return def }
 func run(ctx context.Context) error { return sdk.Run(ctx, def) }
 
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
-	log.Printf("wash-services ready instance=%s window=%d", instanceID, windowID)
-	st = &be{conn: c, init: detectInit()}
-	log.Printf("wash-services init system: %q", string(st.init))
+	backend := Detect()
+	name := "(none)"
+	if backend != nil {
+		name = backend.Name()
+	}
+	log.Printf("wash-services ready instance=%s window=%d init=%s", instanceID, windowID, name)
+	st = &be{conn: c, backend: backend}
 	bus := sdk.NewBus(c)
 	registerHandlers(bus)
 	// Push the first listing immediately so the FE has data on mount
 	// without a round-trip.
 	go pushList()
-}
-
-// detectInit probes the host. systemd wins if both systemctl and the
-// runtime directory exist (otherwise we'd mis-detect on a box that
-// has systemctl installed but isn't running it as PID 1, like inside
-// some Docker images).
-func detectInit() initSystem {
-	if _, err := exec.LookPath("systemctl"); err == nil {
-		if _, err := os.Stat("/run/systemd/system"); err == nil {
-			return initSystemd
-		}
-	}
-	if _, err := exec.LookPath("rc-service"); err == nil {
-		return initOpenRC
-	}
-	return initUnknown
 }
 
 func registerHandlers(b *sdk.Bus) {
@@ -204,28 +177,23 @@ func registerHandlers(b *sdk.Bus) {
 		return nil
 	})
 	sdk.HandleVoid(b, "show_logs", func(_ *sdk.Conn, _ string, req ShowLogsReq) error {
-		if st == nil {
+		if st == nil || st.backend == nil {
 			return nil
 		}
-		switch st.init {
-		case initSystemd:
-			// systemd: deeplink the unit. We queue the name before
-			// firing SpawnRequest because the spawn ack (with the new
-			// instance id) lands on OnSpawnResult, off this goroutine.
-			// FIFO ordering is preserved by the router's serial spawn
-			// dispatch for a given requester.
+		logApp := st.backend.LogAppID()
+		if logApp == "" {
+			return nil
+		}
+		// Only systemd carries unit-scoped logs that pre-select
+		// cleanly on the deeplink target. For other backends we
+		// just open the log viewer at its default state — the user
+		// picks from there.
+		if logApp == "com.wash.journal" {
 			st.pendingMu.Lock()
 			st.pendingJournalUnit = append(st.pendingJournalUnit, req.Name)
 			st.pendingMu.Unlock()
-			return st.conn.SpawnRequest("com.wash.journal")
-		case initOpenRC:
-			// openrc: syslogs is path-based, not unit-based — no clean
-			// deeplink mapping for v1. The user picks the file in
-			// syslogs' own sidebar.
-			return st.conn.SpawnRequest("com.wash.syslogs")
-		default:
-			return nil
 		}
+		return st.conn.SpawnRequest(logApp)
 	})
 }
 
@@ -277,43 +245,38 @@ func onSpawnResult(c *sdk.Conn, appID, instanceID string, spawnErr error) {
 	}
 }
 
-// pushList runs whichever lister matches the detected init and ships
-// the result to the FE. Safe to call from any goroutine; called both
-// on demand (FE refresh) and as a side effect of a successful action.
+// pushList asks the backend for the catalog and ships the result
+// to the FE. Safe to call from any goroutine; called both on
+// demand (FE refresh) and as a side effect of a successful action.
 func pushList() {
 	if st == nil {
 		return
 	}
-	resp := ListResp{Kind: "services_list", Init: string(st.init)}
-	switch st.init {
-	case initSystemd:
-		resp.Services = listSystemd()
-	case initOpenRC:
-		resp.Services = listOpenRC()
+	resp := ListResp{Kind: "services_list"}
+	if st.backend != nil {
+		resp.Init = st.backend.Name()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		services, err := st.backend.List(ctx)
+		if err != nil {
+			log.Printf("wash-services: list: %v", err)
+		}
+		resp.Services = services
 	}
 	if err := st.conn.SendAppMsg(resp); err != nil {
 		log.Printf("wash-services: list send: %v", err)
 	}
 }
 
-// runAction dispatches to the per-init action helper, posts the
-// result back, and refreshes the listing on success so the row's
-// active/enabled badges update without another FE round-trip.
+// runAction asks the backend for the argv, runs it through priv,
+// posts the result back, and refreshes the listing on success so
+// the row's active/enabled badges update without another FE round-
+// trip.
 func runAction(req ActionReq) {
 	if st == nil {
 		return
 	}
-	var ok bool
-	var exit int
-	var stderr string
-	switch st.init {
-	case initSystemd:
-		ok, exit, stderr = runActionSystemd(req)
-	case initOpenRC:
-		ok, exit, stderr = runActionOpenRC(req)
-	default:
-		ok, exit, stderr = false, -1, "no supported init system detected"
-	}
+	ok, exit, stderr := dispatchAction(req)
 	if err := st.conn.SendAppMsg(ActionResp{
 		Kind: "action_done", Name: req.Name, Op: req.Op,
 		OK: ok, Exit: exit, Stderr: stderr,
@@ -325,173 +288,13 @@ func runAction(req ActionReq) {
 	}
 }
 
-// ---- systemd ----
-
-func listSystemd() []Service {
-	type sysdRow struct {
-		Unit, Load, Active, Sub, Description string
+func dispatchAction(req ActionReq) (ok bool, exit int, stderr string) {
+	if st.backend == nil {
+		return false, -1, "no supported init system detected"
 	}
-	out, err := exec.Command("systemctl", "list-units", "--type=service", "--all",
-		"--no-legend", "--plain", "--no-pager", "--output=json").Output()
-	if err != nil {
-		log.Printf("wash-services: list-units: %v", err)
-		return nil
-	}
-	var rows []sysdRow
-	if err := json.Unmarshal(out, &rows); err != nil {
-		log.Printf("wash-services: list-units json: %v", err)
-		return nil
-	}
-	// list-unit-files for the enabled/disabled state — list-units
-	// doesn't carry it. First column is the unit, second is the
-	// unit-file state; we ignore the preset column (3rd).
-	enabled := map[string]string{}
-	if out2, err := exec.Command("systemctl", "list-unit-files", "--type=service",
-		"--no-legend", "--plain", "--no-pager").Output(); err == nil {
-		for _, line := range strings.Split(string(out2), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				enabled[fields[0]] = fields[1]
-			}
-		}
-	}
-	services := make([]Service, 0, len(rows)+len(enabled))
-	seen := make(map[string]bool, len(rows))
-	for _, r := range rows {
-		seen[r.Unit] = true
-		services = append(services, Service{
-			Name:        r.Unit,
-			Description: r.Description,
-			Load:        r.Load,
-			Active:      r.Active,
-			Sub:         r.Sub,
-			Enabled:     enabled[r.Unit],
-		})
-	}
-	// Installed-but-not-loaded units: include so the user can enable
-	// or start them without first knowing they exist.
-	for name, e := range enabled {
-		if seen[name] {
-			continue
-		}
-		services = append(services, Service{
-			Name:    name,
-			Active:  "inactive",
-			Sub:     "dead",
-			Load:    "not-loaded",
-			Enabled: e,
-		})
-	}
-	return services
-}
-
-func runActionSystemd(req ActionReq) (ok bool, exit int, stderr string) {
-	var argv []string
-	switch req.Op {
-	case "start", "stop", "restart", "reload":
-		argv = []string{"systemctl", req.Op, req.Name}
-	case "enable":
-		argv = []string{"systemctl", "enable", req.Name}
-	case "disable":
-		argv = []string{"systemctl", "disable", req.Name}
-	default:
-		return false, 0, "unknown op: " + req.Op
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	r, err := st.conn.PrivRunInlineSync(ctx, argv, "services: "+req.Op+" "+req.Name)
-	if err != nil {
-		return false, -1, err.Error()
-	}
-	return r.Exit == 0, r.Exit, string(r.Stderr)
-}
-
-// ---- openrc ----
-
-func listOpenRC() []Service {
-	entries, err := os.ReadDir("/etc/init.d")
-	if err != nil {
-		log.Printf("wash-services: /etc/init.d: %v", err)
-		return nil
-	}
-	services := make([]Service, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		services = append(services, Service{Name: e.Name(), Load: "loaded"})
-	}
-	// rc-status -f ini: groups services under [runlevel] headers,
-	// "name = status" lines underneath. A single name can appear in
-	// multiple runlevels; last-write-wins on status is fine because
-	// the status is identical (it's the live state, not per-runlevel).
-	running := map[string]string{}
-	if out, err := exec.Command("rc-status", "-a", "-f", "ini").Output(); err == nil {
-		for _, line := range strings.Split(string(out), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "[") {
-				continue
-			}
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			running[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
-		}
-	}
-	// rc-update show -v: "name | runlevel [runlevel ...]" — service is
-	// enabled if the runlevel column is non-empty for any runlevel.
-	enabled := map[string]bool{}
-	if out, err := exec.Command("rc-update", "show", "-v").Output(); err == nil {
-		for _, line := range strings.Split(string(out), "\n") {
-			parts := strings.SplitN(line, "|", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			name := strings.TrimSpace(parts[0])
-			rls := strings.TrimSpace(parts[1])
-			if name != "" && rls != "" {
-				enabled[name] = true
-			}
-		}
-	}
-	for i := range services {
-		if status, ok := running[services[i].Name]; ok {
-			services[i].Sub = status
-			switch status {
-			case "started", "running":
-				services[i].Active = "active"
-			case "crashed":
-				services[i].Active = "failed"
-			default:
-				services[i].Active = "inactive"
-			}
-		} else {
-			services[i].Active = "inactive"
-			services[i].Sub = "stopped"
-		}
-		if enabled[services[i].Name] {
-			services[i].Enabled = "enabled"
-		} else {
-			services[i].Enabled = "disabled"
-		}
-	}
-	// Descriptions skipped in v1 — `rc-service <name> describe` is one
-	// exec per service and the catalog can run into the hundreds.
-	return services
-}
-
-func runActionOpenRC(req ActionReq) (ok bool, exit int, stderr string) {
-	var argv []string
-	switch req.Op {
-	case "start", "stop", "restart":
-		argv = []string{"rc-service", req.Name, req.Op}
-	case "enable":
-		argv = []string{"rc-update", "add", req.Name}
-	case "disable":
-		argv = []string{"rc-update", "del", req.Name}
-	default:
-		return false, 0, "unknown op: " + req.Op
+	argv := st.backend.ActionArgv(req.Op, req.Name)
+	if len(argv) == 0 {
+		return false, -1, "unsupported op for " + st.backend.Name() + ": " + req.Op
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
