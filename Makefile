@@ -14,7 +14,7 @@ GOARCH  ?= amd64
 GOFLAGS := -trimpath -ldflags=-s\ -w -tags netgo,osusergo
 
 OUT     := out
-BINS    := wash-router wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-launch
+BINS    := wash-router wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -93,6 +93,9 @@ SYSLOGS_STAMP   := $(SYSLOGS_ASSETS)/.stamp
 SERVICES_ASSETS := apps/services/be/assets
 SERVICES_STAMP  := $(SERVICES_ASSETS)/.stamp
 
+PACKAGES_ASSETS := apps/packages/be/assets
+PACKAGES_STAMP  := $(PACKAGES_ASSETS)/.stamp
+
 .PHONY: all
 all: $(TARGETS)
 
@@ -162,6 +165,10 @@ web-syslogs: web-deps
 web-services: web-deps
 	@$(PNPM) --filter @wash/app-services run build
 
+.PHONY: web-packages
+web-packages: web-deps
+	@$(PNPM) --filter @wash/app-packages run build
+
 # embed-into-cmd helper. Usage: $(call embed,<src dist dir>,<dst assets dir>)
 #
 # Files land under cmd/<bin>/assets/ and are picked up by //go:embed
@@ -218,6 +225,9 @@ $(SYSLOGS_STAMP): web-syslogs
 $(SERVICES_STAMP): web-services
 	$(call embed_dist,apps/services/fe/dist,$(SERVICES_ASSETS))
 
+$(PACKAGES_STAMP): web-packages
+	$(call embed_dist,apps/packages/fe/dist,$(PACKAGES_ASSETS))
+
 # ----- go stage -----
 
 $(OUT)/wash-router: $(ROUTER_STAMP) | $(OUT)
@@ -262,6 +272,9 @@ $(OUT)/wash-syslogs: $(SYSLOGS_STAMP) | $(OUT)
 $(OUT)/wash-services: $(SERVICES_STAMP) | $(OUT)
 	$(call go_build,$@,apps/services/be/cmd)
 
+$(OUT)/wash-packages: $(PACKAGES_STAMP) | $(OUT)
+	$(call go_build,$@,apps/packages/be/cmd)
+
 # wash-launch is a CLI, not an app. No FE bundle, no embedded assets.
 $(OUT)/wash-launch: | $(OUT)
 	$(call go_build,$@,cmd/wash-launch)
@@ -291,7 +304,7 @@ test-app: $(OUT)/wash-priv-fakesudo
 # Adding an app: extract into apps/<name>/be/, drop a
 # cmd/wash/imports_<name>.go blank-import, add its asset stamp to
 # the dep list below.
-MULTICALL_STAMPS := $(ABOUT_STAMP) $(BULK_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PRIV_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP)
+MULTICALL_STAMPS := $(ABOUT_STAMP) $(BULK_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(PRIV_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP)
 
 # Adding wash_test_app to the tags pulls the test app's blank-import
 # in (which is otherwise excluded by cmd/wash/imports_test.go's

@@ -1,0 +1,21 @@
+{
+  "name": "@wash/app-packages",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@wash/ui": "workspace:*",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "lucide-solid": "^1.16.0",
+    "solid-js": "^1.9.13"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vite": "^5.4.10",
+    "vite-plugin-solid": "^2.10.2"
+  }
+}

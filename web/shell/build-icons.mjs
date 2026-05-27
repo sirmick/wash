@@ -32,6 +32,7 @@ const ICONS = [
   'scroll-text',    // wash-journal + wash-syslogs (sister apps, shared icon)
   'file-text',      // wash-syslogs sidebar rows
   'server-cog',     // wash-services
+  'package',        // wash-packages
 ];
 
 // Resolve via require so pnpm's nested layout is fine.
