@@ -7,12 +7,11 @@
 #
 # Targets:
 #
-#   make rootfs   — alpine-riscv64 + wash GOARCH=riscv64 → rootfs.ext2
+#   make rootfs   — buildroot-musl riscv64 + wash GOARCH=riscv64 → rootfs.ext2
 #   make kernel   — Linux 6.6 LTS for ARCH=riscv → Image
-#   make bbl      — re-use Bellard's bbl64.bin (already downloaded
-#                   to web/demo/public/tinyemu/) as our firmware
-#   make all      — rootfs + kernel + install
-#   make install  — copy current dist/ → web/demo/public/tinyemu-rv/
+#   make firmware — OpenSBI 1.5 generic riscv64 → fw_jump.bin
+#   make all      — rootfs + kernel + firmware + install
+#   make install  — copy current dist/ → wash-vm/web/public/tinyemu/
 #
 # Host prerequisites: bash, docker. The cross-compile toolchain
 # runs entirely inside Docker containers.
@@ -30,7 +29,7 @@ FIRMWARE  := $(DIST)/fw_jump.bin
 # Bellard EMSCRIPTEN load_file abort; see docs/TINYEMU.md.
 DEMO_PUB  := $(REPO_ROOT)/wash-vm/web/public/tinyemu
 
-.PHONY: all rootfs kernel firmware install clean help bbl
+.PHONY: all rootfs kernel firmware install clean help
 
 help:
 	@echo "Targets:"
@@ -38,7 +37,6 @@ help:
 	@echo "  rootfs    — buildroot-musl riscv64 + wash → rootfs.ext2"
 	@echo "  kernel    — Linux 6.6 riscv → Image"
 	@echo "  firmware  — OpenSBI 1.5 generic riscv64 → fw_jump.bin"
-	@echo "  bbl       — sanity-check vendored bbl64.bin presence (legacy)"
 	@echo "  install   — copy current dist/ into $(DEMO_PUB)/ with cfg names"
 	@echo "  clean     — wipe dist/"
 
@@ -55,18 +53,6 @@ $(FIRMWARE): firmware/Dockerfile
 	cd firmware && docker build -t wash-firmware-rv-builder .
 	docker run --rm -v $(DIST):/out wash-firmware-rv-builder \
 	  cp /fw_jump.bin /out/fw_jump.bin
-
-# bbl is vendored from Bellard (riscvemu64-2019-12-21 release). The
-# WASM-side wgetfetch reads it via /tinyemu/bbl64.bin. We don't have
-# a reproducible builder for BBL today; this target is a presence
-# check so `make all` fails fast if someone wiped public/tinyemu/.
-bbl:
-	@if [ ! -f $(DEMO_PUB)/bbl64.bin ]; then \
-	  echo "ERROR: $(DEMO_PUB)/bbl64.bin missing"; \
-	  echo "vendored from https://bellard.org/jslinux/ (riscvemu64-2019-12-21)"; \
-	  exit 1; \
-	fi
-	@echo "bbl64.bin present ($$(stat -c %s $(DEMO_PUB)/bbl64.bin) bytes)"
 
 $(ROOTFS): rootfs/build.sh rootfs/Dockerfile rootfs/wash_riscv64_defconfig \
            rootfs/overlay/etc/init.d/S99wash-router
@@ -89,7 +75,7 @@ $(SPLITIMG):
 	cd $(REPO_ROOT)/wash-vm/tinyemu && \
 	  gcc -O2 -DCONFIG_VERSION='"2019-12-21"' -o $(SPLITIMG) splitimg.c cutils.c
 
-install: bbl $(SPLITIMG)
+install: $(SPLITIMG)
 	mkdir -p $(DEMO_PUB)
 	@if [ -f $(KERNEL) ]; then cp -v $(KERNEL) $(DEMO_PUB)/wash-kernel.bin; fi
 	@if [ -f $(FIRMWARE) ]; then cp -v $(FIRMWARE) $(DEMO_PUB)/opensbi-fw_jump.bin; fi

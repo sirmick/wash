@@ -4,7 +4,6 @@
 // Responsibilities (replaces the old vite + debug-server.mjs split):
 //   1. HTTP front door for everything the demo page loads:
 //        /                  → index.html (TinyEMU/RISC-V wash demo)
-//        /v86.html          → v86/x86 demo
 //        /src/*.ts          → vite-transpiled with HMR
 //        /tinyemu/*         → static (kernel, rootfs, bbl, wasm…)
 //        /vfsync/*          → proxy to bellard.org (vite proxy plugin)
