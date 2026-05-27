@@ -191,6 +191,20 @@ type runInlineReq struct {
 	NoPrompt  bool              `json:"no_prompt"`
 	Env       map[string]string `json:"env"`
 	CliOrigin any               `json:"cli_origin"`
+	// Pty=true allocates a PTY pair for the child instead of plain
+	// pipes. Output still flows back as priv.stream messages (base64
+	// bytes); the requester's xterm-class widget interprets the
+	// terminal escapes. Use this when the wrapped command needs
+	// real terminal semantics (progress bars, color, interactive
+	// prompts) — apt-get is the canonical case.
+	Pty  bool   `json:"pty"`
+	Cols uint16 `json:"cols"`
+	Rows uint16 `json:"rows"`
+}
+
+type resizeReq struct {
+	Cols uint16 `json:"cols"`
+	Rows uint16 `json:"rows"`
 }
 
 type stdinReq struct {
@@ -252,7 +266,14 @@ func registerHandlers(b *sdk.Bus) {
 			return nil
 		}
 		origin := parseCliOrigin(req.CliOrigin)
-		st.EnqueueRunInline(c, from, reqID, req.Argv, req.Cwd, req.Env, req.Reason, req.NoPrompt, origin)
+		st.EnqueueRunInline(c, from, reqID, req.Argv, req.Cwd, req.Env, req.Reason, req.NoPrompt, origin, req.Pty, req.Cols, req.Rows)
+		return nil
+	})
+	sdk.HandleFromVoid(b, "resize", func(_ *sdk.Conn, reqID string, req resizeReq, _ wire.Sender) error {
+		if reqID == "" {
+			return nil
+		}
+		st.HandleInlinePtyResize(reqID, req.Cols, req.Rows)
 		return nil
 	})
 	sdk.HandleFromVoid(b, "stdin", func(_ *sdk.Conn, reqID string, req stdinReq, _ wire.Sender) error {

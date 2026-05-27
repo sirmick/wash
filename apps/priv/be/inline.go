@@ -17,11 +17,18 @@ import (
 // and runs goroutines that fan stdout / stderr to a caller-supplied
 // callback in chunks.
 //
+// Two flavors: pipe-mode (stdin/stdout/stderr are os pipes — wash-sudo
+// CLI bridge) and pty-mode (a single PTY pair carries everything —
+// packages-class apps embedding xterm). The flavor is set at start
+// time and never changes; WriteStdin / Resize / Cancel branch on
+// which fields are populated.
+//
 // One inlineProc per inline Request. Stored in State.inlineProcs.
 type inlineProc struct {
 	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stdinMu sync.Mutex // serialises Writes; CloseStdin sets closed
+	stdin   io.WriteCloser // pipe mode: child's stdin
+	pty     *os.File       // pty mode: master fd; writes reach the child as TTY input
+	stdinMu sync.Mutex     // serialises Writes; CloseStdin sets closed
 	closed  bool
 
 	doneCh chan int // delivers exit code exactly once
@@ -133,10 +140,10 @@ func copyStream(r io.Reader, name string, onStream func(stream string, b []byte)
 	}
 }
 
-// WriteStdin pushes bytes from the cli session into the
-// subprocess's stdin. Safe to call concurrently with CloseStdin —
-// after close, further writes are silently dropped (the subprocess
-// has signalled it's done reading).
+// WriteStdin pushes bytes from the requester into the subprocess's
+// input. Routes to the stdin pipe (pipe mode) or PTY master (pty
+// mode). Safe to call concurrently with CloseStdin — after close,
+// further writes are silently dropped.
 func (p *inlineProc) WriteStdin(b []byte) {
 	if len(b) == 0 {
 		return
@@ -144,15 +151,23 @@ func (p *inlineProc) WriteStdin(b []byte) {
 	p.stdinMu.Lock()
 	closed := p.closed
 	stdin := p.stdin
+	pty := p.pty
 	p.stdinMu.Unlock()
-	if closed || stdin == nil {
+	if closed {
 		return
 	}
-	_, _ = stdin.Write(b)
+	switch {
+	case pty != nil:
+		_, _ = pty.Write(b)
+	case stdin != nil:
+		_, _ = stdin.Write(b)
+	}
 }
 
-// CloseStdin shuts down the subprocess's stdin — the standard EOF
-// signal a program uses to know "no more input."
+// CloseStdin shuts down the subprocess's input. In pipe mode this
+// is the standard EOF signal a program uses to know "no more input."
+// In pty mode we don't close the master — closing it kills the
+// session, which Cancel does explicitly.
 func (p *inlineProc) CloseStdin() {
 	p.stdinMu.Lock()
 	defer p.stdinMu.Unlock()
@@ -165,12 +180,23 @@ func (p *inlineProc) CloseStdin() {
 	}
 }
 
+// Resize updates the PTY winsize. No-op in pipe mode.
+func (p *inlineProc) Resize(cols, rows uint16) {
+	if p.pty == nil || cols == 0 || rows == 0 {
+		return
+	}
+	_ = ptySetsize(p.pty, cols, rows)
+}
+
 // Cancel kills the subprocess. Best-effort; the Wait goroutine will
 // observe the kill and complete normally with a non-zero exit code.
 func (p *inlineProc) Cancel() {
 	p.cancelOnce.Do(func() {
 		if p.cmd != nil && p.cmd.Process != nil {
 			_ = p.cmd.Process.Kill()
+		}
+		if p.pty != nil {
+			_ = p.pty.Close()
 		}
 	})
 }

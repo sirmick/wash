@@ -52,6 +52,9 @@ type Request struct {
 	Env        map[string]string // for KindRunInline: caller-allowlisted env vars passed via sudo --preserve-env
 	Reason     string      // freeform explanation, escape-stripped before FE render
 	NoPrompt   bool        // KindRunInline: refuse if password cache is empty
+	Pty        bool        // KindRunInline: allocate a PTY instead of pipes
+	Cols       uint16      // KindRunInline+Pty: initial column count
+	Rows       uint16      // KindRunInline+Pty: initial row count
 	CliOrigin  *CliOrigin  // router-attested origin metadata (pid/uid/tty/comm) when sender is a cli-* session
 	Status     Status
 	CreatedAt  time.Time
@@ -338,7 +341,7 @@ func (s *State) EnqueueRun(c *sdk.Conn, from wire.Sender, reqID string, argv []s
 // wash-sudo CLI. argv goes straight to sudo (no wash-term wrap); the
 // subprocess's stdin/stdout/stderr are piped through the cliSession
 // bridge so wash-sudo behaves like a normal `sudo cmd`.
-func (s *State) EnqueueRunInline(c *sdk.Conn, from wire.Sender, reqID string, argv []string, cwd string, env map[string]string, reason string, noPrompt bool, origin *CliOrigin) {
+func (s *State) EnqueueRunInline(c *sdk.Conn, from wire.Sender, reqID string, argv []string, cwd string, env map[string]string, reason string, noPrompt bool, origin *CliOrigin, pty bool, cols, rows uint16) {
 	if len(argv) == 0 {
 		_ = c.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
 			"kind": "priv.result", "req_id": reqID, "exit_code": 2, "error": "argv is empty",
@@ -365,6 +368,9 @@ func (s *State) EnqueueRunInline(c *sdk.Conn, from wire.Sender, reqID string, ar
 		Env:       env,
 		Reason:    reason,
 		NoPrompt:  noPrompt,
+		Pty:       pty,
+		Cols:      cols,
+		Rows:      rows,
 		CliOrigin: origin,
 		Status:    StatusQueued,
 		CreatedAt: time.Now(),
@@ -629,14 +635,21 @@ func (s *State) executeRunInline(c *sdk.Conn, r *Request) {
 	// cli-... synthetic instance.
 	cliInst := r.Sender.InstanceID
 
-	proc, startErr := startInlineRun(cfg.SudoBin, r.Argv, r.Cwd, r.Env, pw, func(stream string, b []byte) {
+	onStream := func(stream string, b []byte) {
 		_ = c.SendAppMsgTo(wire.Recipient{InstanceID: cliInst}, map[string]any{
 			"kind":   "priv.stream",
 			"req_id": r.ReqID,
 			"stream": stream,
 			"bytes":  base64.StdEncoding.EncodeToString(b),
 		})
-	})
+	}
+	var proc *inlineProc
+	var startErr error
+	if r.Pty {
+		proc, startErr = startInlinePTY(cfg.SudoBin, r.Argv, r.Cwd, r.Env, pw, r.Cols, r.Rows, onStream)
+	} else {
+		proc, startErr = startInlineRun(cfg.SudoBin, r.Argv, r.Cwd, r.Env, pw, onStream)
+	}
 	wipe(pw)
 	if startErr != nil {
 		s.finishInline(c, r, -1, startErr.Error())
@@ -714,6 +727,19 @@ func (s *State) HandleInlineCancel(reqID string) {
 		return
 	}
 	proc.Cancel()
+}
+
+// HandleInlinePtyResize forwards a terminal resize from the requester
+// (a packages-class app whose embedded xterm widget reflowed). No-op
+// for pipe-mode inline runs — only PTY-allocated procs honour resize.
+func (s *State) HandleInlinePtyResize(reqID string, cols, rows uint16) {
+	s.mu.Lock()
+	proc := s.inlineProcs[reqID]
+	s.mu.Unlock()
+	if proc == nil {
+		return
+	}
+	proc.Resize(cols, rows)
 }
 
 // executeRun spawns wash-term with --exec ARGV as root via the
