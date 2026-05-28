@@ -28,9 +28,73 @@ import (
 const version = "0.0.0"
 
 const (
-	defaultListen     = "0.0.0.0:11000"
-	defaultSecretPath = "/etc/wash/secret.key"
+	defaultListen      = "0.0.0.0:11000"
+	systemSecretPath   = "/etc/wash/secret.key"
+	userSecretSubpath  = "wash/secret.key"
 )
+
+// defaultSecretPath picks /etc/wash/secret.key when wash-login runs
+// with write access to /etc/wash (production install as
+// root/wash-system) and falls back to $XDG_CONFIG_HOME/wash/secret.key
+// (or ~/.config/wash/secret.key) for unprivileged dev / personal use.
+// Either way --secret-generate defaults to true, so the file is
+// minted on first run rather than failing OOTB.
+func defaultSecretPath() string {
+	if canWriteTo(filepath.Dir(systemSecretPath)) {
+		return systemSecretPath
+	}
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, userSecretSubpath)
+	}
+	if home := os.Getenv("HOME"); home != "" {
+		return filepath.Join(home, ".config", userSecretSubpath)
+	}
+	return systemSecretPath
+}
+
+// defaultRunRoot picks /run/wash when wash-login can write to it
+// (production install as root / wash-system, tmpfiles.d-provisioned)
+// and falls back to $XDG_RUNTIME_DIR/wash (typical per-user session
+// runtime dir on logind systems) or /tmp/wash-<uid> as the universal
+// fallback. Same OOTB principle as defaultSecretPath: never refuse
+// to start over a path the unprivileged dev user can't create.
+func defaultRunRoot() string {
+	if canWriteTo("/run/wash") || canWriteTo("/run") {
+		return "/run/wash"
+	}
+	if xdg := os.Getenv("XDG_RUNTIME_DIR"); xdg != "" && canWriteTo(xdg) {
+		return filepath.Join(xdg, "wash")
+	}
+	return fmt.Sprintf("/tmp/wash-%d", os.Getuid())
+}
+
+// canWriteTo reports whether the calling uid can create files
+// under dir. Used for the "where do I land my secret key by
+// default" decision. A missing dir but writable parent counts as
+// writable — we'll MkdirAll on demand.
+func canWriteTo(dir string) bool {
+	for d := dir; d != "" && d != "/"; d = filepath.Dir(d) {
+		st, err := os.Stat(d)
+		if err == nil {
+			if !st.IsDir() {
+				return false
+			}
+			// Cheapest probe: try to open a tempfile.
+			f, err := os.CreateTemp(d, ".washprobe-*")
+			if err != nil {
+				return false
+			}
+			name := f.Name()
+			_ = f.Close()
+			_ = os.Remove(name)
+			return true
+		}
+		if !os.IsNotExist(err) {
+			return false
+		}
+	}
+	return false
+}
 
 // Run drives wash-login with the given argv (excluding the program
 // name). Returns a process exit code — 0 on normal shutdown,
@@ -41,8 +105,8 @@ func Run(args []string) int {
 
 	listen := fs.String("listen", defaultListen, "host:port to bind. Default is 0.0.0.0:10000 — wash-login is a network service by design.")
 	insecureListen := fs.Bool("insecure-listen", false, "deprecated; no-op now that non-loopback binds are allowed by default. Kept for compatibility.")
-	secretKey := fs.String("secret-key", "", fmt.Sprintf("path to the HMAC secret used to sign session cookies (default %s)", defaultSecretPath))
-	secretGenerate := fs.Bool("secret-generate", false, "generate the secret-key file if it doesn't exist (mode 0600). Off by default so production installs fail noisily when /etc/wash/secret.key is missing.")
+	secretKey := fs.String("secret-key", "", fmt.Sprintf("path to the HMAC secret used to sign session cookies. Empty picks %s when writable, else $XDG_CONFIG_HOME/wash/secret.key (or ~/.config/wash/secret.key).", systemSecretPath))
+	secretGenerate := fs.Bool("secret-generate", true, "generate the secret-key file if it doesn't exist (mode 0600). Default on for OOTB; pass --secret-generate=false to fail noisily on production installs that expect a pre-provisioned key.")
 	cookieSecure := fs.Bool("cookie-secure", false, "set the Secure flag on session cookies. Required when a TLS terminator is in front; leave off for plain-HTTP loopback dev.")
 	cookieTTL := fs.Duration("cookie-ttl", login.DefaultCookieTTL, "how long a freshly-minted session cookie is valid for")
 	authTest := fs.String("auth-test", "", `dev/CI-only test backend: --auth-test "user:password" hard-codes one allowed credential. When set, overrides the default su+pty backend.`)
@@ -56,7 +120,7 @@ func Run(args []string) int {
 	maxUID := fs.Uint("user-list-max-uid", 60000, "maximum uid to include in the login form's user list.")
 	routerBinary := fs.String("router-binary", "", "path to wash-router. Empty means look in the directory of wash-login's own binary, then PATH.")
 	appsDir := fs.String("apps-dir", "", "apps-dir forwarded to spawned wash-router processes. Empty means let the router default to its own binary's directory.")
-	runRoot := fs.String("run-root", "/run/wash", "root for per-uid runtime state (sessions sockets, spawn flock).")
+	runRoot := fs.String("run-root", "", "root for per-uid runtime state (sessions sockets, spawn flock). Empty picks /run/wash when writable (production install), else $XDG_RUNTIME_DIR/wash (typical user session) or /tmp/wash-<uid>.")
 	idleTimeout := fs.Duration("idle-timeout", 0, "--idle-timeout forwarded to spawned wash-router processes. Zero forwards no flag (router default 30m).")
 	maxSessions := fs.Int("max-sessions-per-uid", 8, "cap on concurrent live wash-router processes per user. 0 disables; embedded deployments typically set to 1.")
 	noHandoff := fs.Bool("no-handoff", false, "disable the /ws handoff path (M2-only mode for auth-flow inspection). Implied off when --auth-test is set.")
@@ -123,11 +187,16 @@ func Run(args []string) int {
 		logger.Printf("auth: su via PTY")
 	}
 
-	signer, err := login.NewSigner(*secretKey, *secretGenerate)
+	keyPath := *secretKey
+	if keyPath == "" {
+		keyPath = defaultSecretPath()
+	}
+	signer, err := login.NewSigner(keyPath, *secretGenerate)
 	if err != nil {
 		logger.Printf("secret key: %v", err)
 		return 1
 	}
+	logger.Printf("secret key: %s", keyPath)
 
 	showUsers := *userList != "hide"
 
@@ -146,18 +215,22 @@ func Run(args []string) int {
 			logger.Printf("could not locate wash-router; pass --router-binary or use --no-handoff to disable /ws")
 			return 2
 		}
+		runRootPath := *runRoot
+		if runRootPath == "" {
+			runRootPath = defaultRunRoot()
+		}
 		sessions := login.NewProcRegistry()
 		cfg.Sessions = sessions
 		cfg.Spawner = &login.Spawner{
 			RouterBinary: routerBin,
 			AllowUID:     uint32(os.Getuid()),
-			RunRoot:      *runRoot,
+			RunRoot:      runRootPath,
 			AppsDir:      *appsDir,
 			IdleTimeout:  *idleTimeout,
 			MaxPerUID:    *maxSessions,
 			Sessions:     sessions,
 		}
-		logger.Printf("handoff enabled: router=%s run-root=%s allow-uid=%d max-sessions-per-uid=%d", routerBin, *runRoot, os.Getuid(), *maxSessions)
+		logger.Printf("handoff enabled: router=%s run-root=%s allow-uid=%d max-sessions-per-uid=%d", routerBin, runRootPath, os.Getuid(), *maxSessions)
 	} else {
 		logger.Printf("handoff disabled (--no-handoff); /ws will return 503")
 	}
