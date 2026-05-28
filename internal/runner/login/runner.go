@@ -45,10 +45,15 @@ func Run(args []string) int {
 	secretGenerate := fs.Bool("secret-generate", false, "generate the secret-key file if it doesn't exist (mode 0600). Off by default so production installs fail noisily when /etc/wash/secret.key is missing.")
 	cookieSecure := fs.Bool("cookie-secure", false, "set the Secure flag on session cookies. Required when a TLS terminator is in front; leave off for plain-HTTP loopback dev.")
 	cookieTTL := fs.Duration("cookie-ttl", login.DefaultCookieTTL, "how long a freshly-minted session cookie is valid for")
-	authTest := fs.String("auth-test", "", `dev/CI-only test backend: --auth-test "user:password" hard-codes one allowed credential. Resolved uid/gid default to wash-login's own; override with --auth-test-uid / --auth-test-gid.`)
+	authTest := fs.String("auth-test", "", `dev/CI-only test backend: --auth-test "user:password" hard-codes one allowed credential. When set, overrides the default su+pty backend.`)
 	authTestUID := fs.Uint("auth-test-uid", 0, "uid to attach to a successful --auth-test login (default: this process's uid)")
 	authTestGID := fs.Uint("auth-test-gid", 0, "gid to attach to a successful --auth-test login (default: this process's gid)")
 	authTestShell := fs.String("auth-test-shell", "/bin/sh", "shell to record on a successful --auth-test login")
+	suPath := fs.String("su-path", "", "path to the su binary used for unix authentication. Empty searches /bin and /usr/bin.")
+	passwdPath := fs.String("passwd-path", "/etc/passwd", "path to the passwd file used for the user list + uid lookup.")
+	userList := fs.String("user-list", "show", `show|hide the user list on the login form. "hide" suppresses enumeration on sensitive deployments.`)
+	minUID := fs.Uint("user-list-min-uid", 1000, "minimum uid to include in the login form's user list.")
+	maxUID := fs.Uint("user-list-max-uid", 60000, "maximum uid to include in the login form's user list.")
 	routerBinary := fs.String("router-binary", "", "path to wash-router. Empty means look in the directory of wash-login's own binary, then PATH.")
 	appsDir := fs.String("apps-dir", "", "apps-dir forwarded to spawned wash-router processes. Empty means let the router default to its own binary's directory.")
 	runRoot := fs.String("run-root", "/run/wash", "root for per-uid runtime state (sessions sockets, spawn flock).")
@@ -78,24 +83,45 @@ func Run(args []string) int {
 		logger.Printf("WARNING: --listen %s without --cookie-secure — session cookies will cross plain HTTP", *listen)
 	}
 
-	// Auth backend: --auth-test is the only v1 option. shadowAuth
-	// lands in a follow-up commit.
-	if *authTest == "" {
-		logger.Printf("no auth backend configured: pass --auth-test user:password (shadow-file backend ships in a follow-up)")
-		return 2
+	// Always construct a passwd-backed UserLister; even the
+	// --auth-test path uses it for the user-list UX (when not
+	// disabled). NSS is intentionally avoided per the "no NSS,
+	// no fancy syscalls" direction in docs/MULTIUSER.md — wash-login
+	// reads /etc/passwd as plain text.
+	lister := &login.PasswdLister{
+		Path:   *passwdPath,
+		MinUID: uint32(*minUID),
+		MaxUID: uint32(*maxUID),
 	}
-	uid := uint32(*authTestUID)
-	if uid == 0 {
-		uid = uint32(os.Getuid())
-	}
-	gid := uint32(*authTestGID)
-	if gid == 0 {
-		gid = uint32(os.Getgid())
-	}
-	auth, err := login.NewTestAuth(*authTest, uid, gid, *authTestShell)
-	if err != nil {
-		logger.Printf("%v", err)
-		return 2
+
+	// Auth backend selection:
+	//   --auth-test set     ⇒ test backend (CI / dev)
+	//   otherwise           ⇒ su -c true via PTY (production)
+	var auth login.Authenticator
+	if *authTest != "" {
+		uid := uint32(*authTestUID)
+		if uid == 0 {
+			uid = uint32(os.Getuid())
+		}
+		gid := uint32(*authTestGID)
+		if gid == 0 {
+			gid = uint32(os.Getgid())
+		}
+		a, err := login.NewTestAuth(*authTest, uid, gid, *authTestShell)
+		if err != nil {
+			logger.Printf("%v", err)
+			return 2
+		}
+		auth = a
+		logger.Printf("auth: --auth-test (CI / dev backend)")
+	} else {
+		a, err := login.NewSuAuth(*suPath, lister.Lookup)
+		if err != nil {
+			logger.Printf("auth: %v", err)
+			return 1
+		}
+		auth = a
+		logger.Printf("auth: su via PTY")
 	}
 
 	signer, err := login.NewSigner(*secretKey, *secretGenerate)
@@ -104,12 +130,16 @@ func Run(args []string) int {
 		return 1
 	}
 
+	showUsers := *userList != "hide"
+
 	cfg := login.Config{
 		Auth:         auth,
 		Signer:       signer,
 		TTL:          *cookieTTL,
 		CookieSecure: *cookieSecure,
 		Logger:       logger,
+		Users:        lister,
+		ShowUsers:    showUsers,
 	}
 	if !*noHandoff {
 		routerBin := resolveRouterBinary(*routerBinary)

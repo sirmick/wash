@@ -9,15 +9,39 @@
     font: 14px/1.4 system-ui, -apple-system, sans-serif;
     min-height: 100vh; margin: 0;
     display: grid; place-items: center;
+    padding: 2rem 1rem;
   }
   .card {
     background: #161b22; border: 1px solid #2a313a;
-    padding: 2rem 2.4rem; border-radius: 8px;
+    padding: 1.8rem 2rem; border-radius: 8px;
     box-shadow: 0 1px 0 rgba(255,255,255,0.04), 0 8px 24px rgba(0,0,0,0.3);
-    min-width: 22rem;
+    width: 100%; max-width: 22rem;
   }
-  h1 { margin: 0 0 1.4rem 0; font-size: 1.05rem; font-weight: 600; letter-spacing: 0.02em; }
+  h1 { margin: 0 0 1rem 0; font-size: 1.05rem; font-weight: 600; letter-spacing: 0.02em; }
   h1 .sub { color: #6e7681; font-weight: 400; margin-left: 0.4rem; }
+
+  .users {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
+    gap: 0.4rem; margin: 0 0 1.2rem 0;
+  }
+  .users a {
+    display: block;
+    background: #0d1117; color: #d9dde3;
+    border: 1px solid #30363d; border-radius: 4px;
+    padding: 0.55rem 0.6rem;
+    text-decoration: none; text-align: center;
+    font-size: 0.88rem;
+    transition: border-color 80ms;
+  }
+  .users a:hover { border-color: #5b8eff; background: #161b22; }
+  .users a.selected { border-color: #5b8eff; background: #1a2238; }
+  .users a .name { font-weight: 500; }
+  .users a .display { display: block; color: #6e7681; font-size: 0.78rem; margin-top: 0.15rem; }
+  .users-divider {
+    border: 0; border-top: 1px solid #2a313a;
+    margin: 0.6rem 0 1rem 0;
+  }
+
   label { display: block; margin: 0.6rem 0 0.2rem 0; color: #8b949e; font-size: 0.85rem; }
   input[type=text], input[type=password] {
     width: 100%; box-sizing: border-box;
@@ -26,14 +50,14 @@
     padding: 0.5rem 0.7rem; font: inherit;
   }
   input:focus { outline: none; border-color: #5b8eff; }
-  button {
+  button[type=submit] {
     margin-top: 1.2rem; width: 100%;
     background: #2c5fd9; color: white;
     border: none; border-radius: 4px;
     padding: 0.6rem 0.8rem; font: inherit; font-weight: 500;
     cursor: pointer;
   }
-  button:hover { background: #3a6ee8; }
+  button[type=submit]:hover { background: #3a6ee8; }
   .err {
     margin-top: 0.8rem;
     background: #4a1a1a; color: #ffb8b8;
@@ -42,14 +66,33 @@
   }
 </style>
 <body>
-  <form class="card" method="post" action="/auth" autocomplete="off">
+  <div class="card">
     <h1>wash <span class="sub">— log in</span></h1>
+
+    {{if .Users}}
+      <div class="users">
+        {{range .Users}}
+          <a href="/login?user={{.Name}}" class="{{if eq $.PreselectUser .Name}}selected{{end}}">
+            <span class="name">{{.Name}}</span>
+            {{if .Display}}<span class="display">{{.Display}}</span>{{end}}
+          </a>
+        {{end}}
+      </div>
+      <hr class="users-divider">
+    {{end}}
+
     {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
-    <label for="u">Username</label>
-    <input id="u" type="text" name="user" autocomplete="username" autofocus required>
-    <label for="p">Password</label>
-    <input id="p" type="password" name="password" autocomplete="current-password" required>
-    <button type="submit">Sign in</button>
-  </form>
+
+    <form method="post" action="/auth" autocomplete="off">
+      <label for="u">Username</label>
+      <input id="u" type="text" name="user" autocomplete="username" required
+             value="{{.PreselectUser}}"
+             {{if not .PreselectUser}}autofocus{{end}}>
+      <label for="p">Password</label>
+      <input id="p" type="password" name="password" autocomplete="current-password" required
+             {{if .PreselectUser}}autofocus{{end}}>
+      <button type="submit">Sign in</button>
+    </form>
+  </div>
 </body>
 </html>

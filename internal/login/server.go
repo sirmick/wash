@@ -47,6 +47,8 @@ type Server struct {
 	sessions   SessionRegistry      // nil = /ws handoff disabled (M2-only mode)
 	spawner    *Spawner             // nil = /ws handoff disabled
 	killer     func(pid int) error  // overrideable for tests; default syscall.Kill(pid, SIGTERM)
+	users      UserLister           // nil = no user list on login form
+	showUsers  bool                 // false = always omit list even if users != nil
 }
 
 // Config drives Server construction.
@@ -69,6 +71,12 @@ type Config struct {
 	// with SIGTERM. Tests override to capture pids without
 	// touching real processes.
 	Killer func(pid int) error
+	// Users powers the user-list tiles on the login page. nil
+	// hides the list (text-only login). ShowUsers gates display
+	// even when Users is non-nil — sysadmins who want to suppress
+	// the user enumeration pass --user-list=hide.
+	Users     UserLister
+	ShowUsers bool
 }
 
 // NewServer returns a fully-wired Server. The Auth and Signer must
@@ -114,6 +122,8 @@ func NewServer(cfg Config) (*Server, error) {
 		sessions:   cfg.Sessions,
 		spawner:    cfg.Spawner,
 		killer:     killer,
+		users:      cfg.Users,
+		showUsers:  cfg.ShowUsers,
 	}, nil
 }
 
@@ -434,7 +444,14 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 
 // handleLogin renders the login form. Authed users get bounced to /
 // so re-visiting /login after a successful auth lands you back on the
-// welcome page rather than asking again.
+// picker rather than asking again. The form is templated with:
+//
+//   - Error string from ?err=...
+//   - PreselectUser from ?user=... so clicking a user tile (which
+//     navigates to /login?user=alice) lands the cursor on the
+//     password field with the username pre-filled.
+//   - Users []User when a UserLister is configured and ShowUsers
+//     is set — rendered as clickable tiles above the form.
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.identityFromRequest(r); ok {
 		http.Redirect(w, r, "/", http.StatusFound)
@@ -442,9 +459,21 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	data := struct{ Error string }{}
-	if e := r.URL.Query().Get("err"); e != "" {
-		data.Error = e
+
+	data := struct {
+		Error         string
+		PreselectUser string
+		Users         []User
+	}{
+		Error:         r.URL.Query().Get("err"),
+		PreselectUser: r.URL.Query().Get("user"),
+	}
+	if s.users != nil && s.showUsers {
+		if list, err := s.users.List(); err == nil {
+			data.Users = list
+		} else {
+			s.log.Printf("user list: %v", err)
+		}
 	}
 	_ = s.tplLogin.Execute(w, data)
 }

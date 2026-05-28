@@ -282,8 +282,53 @@ $(OUT)/wash-launch: | $(OUT)
 # wash-login is the multi-user front-door (docs/MULTIUSER.md). It
 # embeds its own login + welcome HTML via //go:embed; no Vite stage,
 # no FE-bundle stamp dependency.
+#
+# For multi-user deployments wash-login needs three Linux
+# capabilities so it can fork-setuid-exec wash-router as the
+# authenticated user and SIGTERM cross-uid routers:
+#
+#   cap_setuid + cap_setgid → fork → setuid → exec per-user router
+#   cap_kill                → end-session SIGTERM across uids
+#
+# Set them with `make wash-login-caps` (uses sudo). The dev path
+# (wash-login + target user are the same uid) doesn't need caps.
 $(OUT)/wash-login: | $(OUT)
 	$(call go_build,$@,cmd/wash-login)
+	@caps_have=`getcap $@ 2>/dev/null || true`; \
+	  case "$$caps_have" in \
+	    *cap_setuid*cap_setgid*cap_kill*) echo "  CAPS  $@ ($$caps_have)" ;; \
+	    *) echo "  HINT  $@ has no capabilities yet; for multi-user run: sudo make wash-login-caps" ;; \
+	  esac
+
+# wash-login-caps applies the three capabilities wash-login needs
+# for multi-user operation. Requires sudo because setcap is a
+# privileged operation (it writes file-level capabilities into the
+# binary's extended attributes).
+#
+# Idempotent: runs even if caps are already set. Re-run after
+# rebuilding wash-login (caps are tied to the file, not the path —
+# replacing the file drops them).
+.PHONY: wash-login-caps
+wash-login-caps: $(OUT)/wash-login
+	@command -v setcap >/dev/null 2>&1 || { \
+	  echo "setcap not found; install libcap2-bin (Debian/Ubuntu) or libcap (RHEL/Fedora)" >&2; \
+	  exit 1; }
+	sudo setcap 'cap_setuid,cap_setgid,cap_kill+ep' $(OUT)/wash-login
+	@echo "  CAPS  $(OUT)/wash-login → cap_setuid, cap_setgid, cap_kill"
+	@getcap $(OUT)/wash-login
+
+# wash-login-deploy: full multi-user OOTB. Adds caps, creates the
+# wash group if missing, ensures wash-login's runtime user is in it.
+# This target is intentionally interactive (uses sudo prompts) and
+# meant for first-time setup, not CI.
+.PHONY: wash-login-deploy
+wash-login-deploy: wash-login-caps
+	@getent group wash >/dev/null 2>&1 || { \
+	  echo "  GROUP creating system group 'wash'"; \
+	  sudo groupadd --system wash; }
+	@echo "  DONE  wash-login ready for multi-user. If you run wash-login as a"
+	@echo "        dedicated wash-system user, add it to group wash:"
+	@echo "          sudo usermod -aG wash <user-running-wash-login>"
 
 # wash-sudo is also a CLI — the privilege-aware shell wrapper.
 $(OUT)/wash-sudo: | $(OUT)

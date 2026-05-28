@@ -65,10 +65,16 @@ func (r *Router) RunUnixListener(ctx context.Context) error {
 		_ = os.Remove(r.cfg.ListenUnix)
 	}()
 
-	// Default mode 0600 — peer-cred is the real gate; permissions are
-	// a defense-in-depth layer. M3 install scripts will widen to 0660
-	// group=wash once wash-login lands as a distinct uid.
-	if err := os.Chmod(r.cfg.ListenUnix, 0o600); err != nil {
+	// Socket mode is 0660 so wash-login (membership in group `wash`)
+	// can dial without CAP_DAC_OVERRIDE. The group itself is
+	// inherited from the parent directory's setgid bit (spawn.go
+	// creates /run/wash/<uid>/sessions/ as 02750 owner:wash), so
+	// when the wash group exists the socket lands as group=wash
+	// automatically. Single-user / dev installs without the wash
+	// group end up with group=<user>, and wash-login (running as
+	// the same user) still has access. peer-cred is the real gate;
+	// permissions are defense-in-depth.
+	if err := os.Chmod(r.cfg.ListenUnix, 0o660); err != nil {
 		return fmt.Errorf("chmod %s: %w", r.cfg.ListenUnix, err)
 	}
 

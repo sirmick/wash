@@ -167,18 +167,15 @@ func TestAuthSuccess(t *testing.T) {
 		t.Errorf("cookie flags wrong: HttpOnly=%v SameSite=%v", sessCookie.HttpOnly, sessCookie.SameSite)
 	}
 
-	// Follow-up GET / should now render the welcome page.
+	// Follow-up GET / should redirect to /sessions (the picker is
+	// the canonical post-auth landing page since M4).
 	resp2, err := client.Get(ts.URL + "/")
 	if err != nil {
 		t.Fatalf("GET / after auth: %v", err)
 	}
 	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusOK {
-		t.Fatalf("welcome status: got %d want 200", resp2.StatusCode)
-	}
-	body, _ := io.ReadAll(resp2.Body)
-	if !strings.Contains(string(body), "Authenticated as <code>alice</code>") {
-		t.Errorf("welcome page missing identity:\n%s", body)
+	if resp2.StatusCode != http.StatusFound || resp2.Header.Get("Location") != "/sessions" {
+		t.Errorf("after auth: got %d %q want 302→/sessions", resp2.StatusCode, resp2.Header.Get("Location"))
 	}
 }
 

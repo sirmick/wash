@@ -182,23 +182,37 @@ browser's shell.js closes the WS and reconnects.
 
 ### Auth backends
 
-**Default — simple-attempt against `/etc/shadow`**:
+**Default — rely on the system's `login` mechanism**:
 
 ```
 wash-login receives (username, password)
-   ├─ getent passwd <username>  → resolves uid, gid, shell
-   ├─ reject if shell ∈ {nologin, false}
-   ├─ read /etc/shadow line for username (requires group `shadow`)
-   ├─ parse stored hash (yescrypt / sha512crypt / etc)
-   ├─ hash submitted password with stored salt
-   ├─ constant-time compare
-   └─ on success: mint signed cookie {uid, expiry}, return uid
+   ├─ spawn `su -c true <username>` attached to a PTY
+   ├─ wait for the "Password: " prompt
+   ├─ write the password followed by newline
+   ├─ wait for su's exit code (0 = valid, non-zero = invalid)
+   └─ on success: parse /etc/passwd for uid/gid; mint cookie
 ```
 
-Pure Go, no cgo. ~100 LOC.
+The "no NSS, no fancy syscalls" path: we don't reimplement crypt,
+don't link libpam, don't shell out to `getent`. wash-login asks the
+system to perform an actual login (via the universal `/bin/su`
+binary, which goes through PAM and inherits whatever auth chain the
+distro is configured for — local, LDAP, SSSD, Kerberos), and reads
+the result. `-c true` makes su exec `/bin/true` instead of a shell,
+so there's no .profile execution, no motd, no utmp churn — just an
+exit code.
 
-**v2: pluggable `--auth-helper <cmd>`** exec interface for PAM /
-LDAP / Tailscale-whois / SSO. Out of v1 scope.
+User list on the login page: parsed from `/etc/passwd` directly,
+filtered by uid ≥ 1000 and shell not in {nologin, false, halt,
+shutdown, sync}. Sorted by name, rendered as clickable tiles that
+prefill the username via `?user=`.
+
+**Dev / CI: `--auth-test user:password`** hard-codes one credential
+for repeatable testing without touching real Unix accounts. The e2e
+suite uses this.
+
+**v2: pluggable `--auth-helper <cmd>`** exec interface for SSO,
+Tailscale-whois, custom backends. Out of v1 scope.
 
 Cookie shape: `Authorization=<base64({uid, expiry}).<hmac>` (or
 equivalent signed-cookie form). `HttpOnly; Secure; SameSite=Strict;
@@ -310,6 +324,77 @@ shouldn't auto-attach to a session they explicitly walked away from.
 | Session rename | Ephemeral names are an acceptable v1 stance. |
 | Structured journald logging | Plain stderr is fine v1. |
 | nginx deployment doc | Write when there's a deployer to write it for. |
+
+## Trust model
+
+wash-login runs as a dedicated `wash-system` Unix uid with **three
+Linux capabilities** and **membership in group `wash`**:
+
+| Capability   | What it enables                              | Why wash-login needs it             |
+|--------------|----------------------------------------------|-------------------------------------|
+| `CAP_SETUID` | `setuid(N)` to any uid, including 0          | fork → setuid → exec per-user router |
+| `CAP_SETGID` | `setgid(N)` to any gid                       | same                                |
+| `CAP_KILL`   | send signals to processes owned by other uids | SIGTERM routers on `/logout?end_session` |
+
+Group `wash` grants dial-access to the per-user router ctl sockets.
+Sockets are `mode 0660 group wash` so only wash-login (and the
+owning user) can connect — the group inheritance happens
+automatically because `/run/wash/<uid>/sessions/` is created with
+the setgid bit (mode 02750) when the wash group exists.
+
+### What this trust model means in practice
+
+**wash-login is effectively root for identity-switching purposes.**
+`CAP_SETUID` permits `setuid(0)` with no password check; any code
+execution inside wash-login can become root instantly. The other
+caps it doesn't have (`CAP_NET_ADMIN`, `CAP_SYS_MODULE`, …) don't
+matter at that point — root reacquires anything it needs.
+
+This is the inherent cost of a single process that spawns child
+processes as many users. Capabilities narrow the privilege envelope
+from "full root" to "root for identity-switching" — a real reduction
+in attack surface, not a magic sandbox.
+
+### Mitigations
+
+1. **Small, auditable surface.** wash-login is ~1500 LOC of custom
+   code over `net/http` (cookie HMAC, form parse, picker render,
+   hijack + SCM_RIGHTS). Reviewable in an afternoon.
+2. **seccomp-bpf** (TODO, DEPLOY.md) denies syscalls beyond what
+   wash-login actually uses: fork, execve, sendmsg, kill, socket,
+   accept, read, write — nothing exotic.
+3. **No outbound network.** wash-login listens on :11000 only;
+   never opens outbound sockets.
+
+### Privilege separation (v2)
+
+The long-term answer is the sshd / postfix shape: a tiny
+**wash-spawnd** holds `CAP_SETUID` / `CAP_SETGID` and exposes one
+IPC operation (`spawn(uid, name) → sock_path`). **wash-login** then
+runs with **zero** capabilities and asks wash-spawnd whenever it
+needs to spawn or signal a router. An HTTP compromise in wash-login
+no longer reaches `setuid(0)` because wash-login literally can't
+call `setuid()`.
+
+Deferred from v1 because it requires inventing wash-spawnd, its IPC
+protocol, its lifecycle / restart story, and the bookkeeping that
+matches /proc-scanning to the spawnd's authoritative session list.
+Not load-bearing for "wash-login is deployable" but load-bearing for
+"wash-login has minimal privilege."
+
+### Out-of-the-box setup
+
+```bash
+make                       # builds out/wash-login (prints a caps hint)
+sudo make wash-login-caps  # setcap cap_setuid,cap_setgid,cap_kill+ep
+sudo make wash-login-deploy # ^ + creates the `wash` system group if missing
+```
+
+After `wash-login-deploy`, wash-login can run as any user that's in
+group `wash` (typically a dedicated `wash-system` system user). The
+dev path — wash-login running as your own uid spawning routers as
+your own uid — works **without caps** because target uid == self uid
+short-circuits the setuid call.
 
 ## File-system & socket layout
 

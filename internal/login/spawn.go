@@ -104,16 +104,44 @@ func (s *Spawner) Spawn(id Identity, name string) (Session, error) {
 	}
 
 	// Lay out the per-uid run directory + sessions subdir.
+	//
+	// When the wash group exists (production installs), the
+	// sessions/ dir gets mode 02750 with group=wash. The setgid bit
+	// makes child sockets inherit the group automatically — the
+	// router doesn't need to know about groups, and wash-login (in
+	// group wash) can dial the per-user sockets. Single-user / dev
+	// installs without the wash group fall back to 0700 owner-only;
+	// wash-login runs as the same user in that mode so peer-cred
+	// + ownership both pass.
 	uidDir := filepath.Join(s.runRoot(), strconv.FormatUint(uint64(id.UID), 10))
 	sessionsDir := filepath.Join(uidDir, "sessions")
-	if err := os.MkdirAll(sessionsDir, 0o700); err != nil {
+	sessionsMode := os.FileMode(0o700)
+	uidDirMode := os.FileMode(0o700)
+	washGID, gerr := LookupGroupGID(WashGroupName)
+	if gerr == nil {
+		sessionsMode = 0o2750 // setgid bit so socket children inherit group
+		uidDirMode = 0o750
+	}
+	if err := os.MkdirAll(uidDir, uidDirMode); err != nil {
+		return Session{}, fmt.Errorf("mkdir %s: %w", uidDir, err)
+	}
+	if err := os.MkdirAll(sessionsDir, sessionsMode); err != nil {
 		return Session{}, fmt.Errorf("mkdir %s: %w", sessionsDir, err)
 	}
-	// Match ownership to the target user so the spawned router can
-	// also write under here. When target uid == self this is a no-op.
+	// Apply the mode explicitly: MkdirAll honours umask, which on
+	// most systems strips group bits we want here.
+	_ = os.Chmod(uidDir, uidDirMode)
+	_ = os.Chmod(sessionsDir, sessionsMode)
+	// Ownership: when wash-login isn't the target user, the dirs
+	// need to be owned by the target user (so the spawned router can
+	// write under them) AND group=wash (so wash-login can enter).
 	if uint32(os.Geteuid()) != id.UID {
-		_ = os.Chown(uidDir, int(id.UID), int(id.GID))
-		_ = os.Chown(sessionsDir, int(id.UID), int(id.GID))
+		group := int(id.GID)
+		if gerr == nil {
+			group = int(washGID)
+		}
+		_ = os.Chown(uidDir, int(id.UID), group)
+		_ = os.Chown(sessionsDir, int(id.UID), group)
 	}
 
 	// Per-uid flock around the spawn so concurrent /ws hits don't
