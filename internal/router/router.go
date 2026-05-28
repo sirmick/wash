@@ -617,6 +617,8 @@ func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*Ap
 		inst.startedAt = startedAt
 		inst.Kiosk = kiosk
 	case <-timeout.C:
+		tail := sr.LogTail()
+		r.log("spawn %s pid=%d attach timeout after 10s. log_tail=%q", entry.Manifest.ID, pid, tail)
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		return nil, fmt.Errorf("attach timeout for %s (pid %d)", entry.Manifest.ID, pid)

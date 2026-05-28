@@ -35,6 +35,19 @@ BR2_PACKAGE_BUSYBOX=y
 BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES="/input/busybox.fragment"
 BR2_PACKAGE_NANO=y
 
+# Userspace entropy daemon. TinyEMU/RISC-V has no hardware RNG and
+# the kernel's CRYPTO_JITTERENTROPY refuses to initialize on the
+# emulated CPU (insufficient timing variance). Without an entropy
+# source every crypto/rand consumer in Go (attach token mint, priv
+# handshake, anything calling getrandom(2)) blocks for 60+ seconds
+# on first use, which wedges the spawn pipeline before priv can
+# even reply to a PrepareSpawn. haveged installs an S20haveged
+# init script that starts before wash-router (S99), seeds the pool
+# via the HAVEGE algorithm (userspace CPU-flutter extraction —
+# works where kernel jitter entropy doesn't), and keeps it topped
+# up. All wash code paths then assume crypto/rand "just works."
+BR2_PACKAGE_HAVEGED=y
+
 BR2_TARGET_GENERIC_HOSTNAME="wash"
 BR2_TARGET_GENERIC_ISSUE="wash riscv64 (buildroot)"
 # getty runs on /dev/hvc1 (the first virtio-console). TinyEMU's HTIF

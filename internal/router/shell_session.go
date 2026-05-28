@@ -342,14 +342,28 @@ func (s *ShellSession) handleWindowCloseClicked(m wire.ShellWindowCloseClicked) 
 			// teardown will also call destroyWindow when it exits;
 			// the second call is a no-op (already deleted).
 			s.router.broadcastPatches(s.router.winSession.destroyWindow(m.WindowID))
+			// expectedExit suppresses the crash-broadcast in the
+			// cleanup goroutine — a user-clicked close the app
+			// confirmed is an orderly exit, not a tombstone-worthy
+			// crash. Set BEFORE signalling.
+			inst.expectedExit.Store(true)
 			if inst.Cmd != nil && inst.Cmd.Process != nil {
-				// Send SIGTERM gracefully; loop will detect EOF.
-				// expectedExit suppresses the crash-broadcast in
-				// spawnAndRun's cleanup goroutine — a user-clicked
-				// close that the app confirmed is an orderly exit,
-				// not a tombstone-worthy crash.
-				inst.expectedExit.Store(true)
+				// Spawn-completion branch: router forked the child
+				// directly and owns *exec.Cmd. SIGTERM gracefully;
+				// the app's read loop sees EOF after the signal.
 				_ = inst.Cmd.Process.Signal(stopSignal())
+			} else {
+				// Token-attach branch: the child was forked by an
+				// external spawner (e.g. wash-priv under sudo). We
+				// don't have an *exec.Cmd to signal, and in the
+				// non-embedded case wouldn't have permission to
+				// SIGTERM the root child anyway. Closing the
+				// transport is the unprivileged equivalent: the
+				// app's read loop sees EOF, sdk.Run returns, main()
+				// returns, the process exits, and the spawner's
+				// cmd.Wait unblocks (so wash-priv's queue row
+				// transitions Running → Done).
+				_ = inst.Transport.Close()
 			}
 		}
 	}()

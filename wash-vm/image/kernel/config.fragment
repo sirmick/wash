@@ -124,3 +124,18 @@ CONFIG_NETLINK_DIAG=y
 # CONFIG_KPROBES is not set
 # CONFIG_FTRACE is not set
 # CONFIG_DEBUG_KERNEL is not set
+
+# ─── Entropy ─────────────────────────────────────────────────────────
+# Without these, /dev/urandom / getrandom(2) block for 60+s on a
+# fresh boot inside TinyEMU — the kernel pool has no hardware RNG
+# (no RDRAND on rv64, no virtio-rng device in TinyEMU 2019). Apps
+# using crypto/rand (Go's default) or any TLS-style keygen wedge.
+# Symptom: "crypto/rand: blocked for 60 seconds" in the wash-log,
+# followed by app spawn hanging because the spawner is itself stuck
+# in a blocking RNG read (e.g. wash-session.newReqID).
+#   JITTERENTROPY  — software entropy from CPU timing jitter; works
+#                    without any HW RNG, seeds the pool at boot.
+#   RANDOM_TRUST_BOOTLOADER — trust the seed OpenSBI/firmware passes
+#                    via DTB; cheap and adds another path.
+CONFIG_CRYPTO_JITTERENTROPY=y
+CONFIG_RANDOM_TRUST_BOOTLOADER=y
