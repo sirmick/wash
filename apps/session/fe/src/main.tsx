@@ -494,6 +494,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             setMenuOpen(false);
             launchPick(id);
           }}
+          onLogout={() => {
+            setMenuOpen(false);
+            // Top-level navigation hits wash-login's /logout, which
+            // clears the cookie and SIGTERMs every per-user router
+            // owned by this uid (end_all=true). For single-session
+            // users (the common case) that's exactly the desktop
+            // "Log out" verb; the picker (M4) adds per-session
+            // "End session" granularity. See docs/MULTIUSER.md.
+            window.location.href = '/logout?end_all=true';
+          }}
         />
       </Show>
 
@@ -1002,6 +1012,7 @@ const StartMenu: Component<{
   rootRows: CatalogApp[];
   onPick: (id: string) => void;
   onDismiss: () => void;
+  onLogout: () => void;
 }> = (props) => {
   // Merge synthetic root rows in with the catalog and sort
   // alphabetically. Root rows get a red-tinted icon — that's the
@@ -1069,6 +1080,19 @@ const StartMenu: Component<{
           }}
         </For>
       </Show>
+      <div
+        aria-hidden="true"
+        style={{
+          height: '1px',
+          background: tokens.borderMenu,
+          margin: '4px 6px',
+        }}
+      />
+      <MenuItem
+        data-testid="start-menu-logout"
+        label="Log out"
+        onClick={() => props.onLogout()}
+      />
     </Menu>
   );
 };

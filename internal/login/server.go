@@ -24,6 +24,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"syscall"
 	"time"
 )
 
@@ -40,8 +41,9 @@ type Server struct {
 	log        *log.Logger
 	tplLogin   *template.Template
 	tplWelcome *template.Template
-	sessions   SessionRegistry // nil = /ws handoff disabled (M2-only mode)
-	spawner    *Spawner        // nil = /ws handoff disabled
+	sessions   SessionRegistry      // nil = /ws handoff disabled (M2-only mode)
+	spawner    *Spawner             // nil = /ws handoff disabled
+	killer     func(pid int) error  // overrideable for tests; default syscall.Kill(pid, SIGTERM)
 }
 
 // Config drives Server construction.
@@ -59,6 +61,11 @@ type Config struct {
 	// for the auth-flow tests).
 	Sessions SessionRegistry
 	Spawner  *Spawner
+	// Killer is the function used for /logout?end_session and
+	// ?end_all=true SIGTERM. Production passes nil ⇒ syscall.Kill
+	// with SIGTERM. Tests override to capture pids without
+	// touching real processes.
+	Killer func(pid int) error
 }
 
 // NewServer returns a fully-wired Server. The Auth and Signer must
@@ -84,6 +91,10 @@ func NewServer(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse welcome.html: %w", err)
 	}
+	killer := cfg.Killer
+	if killer == nil {
+		killer = func(pid int) error { return syscall.Kill(pid, syscall.SIGTERM) }
+	}
 	return &Server{
 		auth:       cfg.Auth,
 		signer:     cfg.Signer,
@@ -94,6 +105,7 @@ func NewServer(cfg Config) (*Server, error) {
 		tplWelcome: tplWelcome,
 		sessions:   cfg.Sessions,
 		spawner:    cfg.Spawner,
+		killer:     killer,
 	}, nil
 }
 
@@ -274,11 +286,26 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
-// handleLogout clears the cookie regardless of state. Accepting GET
-// makes simple browser navigation work (e.g. a future "Log out" link
-// from inside wash-session) without requiring JS. Routers' SIGTERM
-// logic lands in M3 — for now this is cookie-only.
+// handleLogout clears the cookie and, when authed, optionally
+// SIGTERMs the user's running router(s). Query knobs:
+//
+//   /logout                       cookie clear only.
+//   /logout?end_session=<sessid>  cookie clear + SIGTERM that sessid.
+//   /logout?end_all=true          cookie clear + SIGTERM every router
+//                                 owned by the authed uid.
+//
+// end_session validates that the named sessid actually belongs to
+// the authed uid before signaling — a logged-in user can't terminate
+// someone else's session by guessing sessids.
+//
+// Accepting GET makes simple browser navigation work (e.g.
+// wash-session's "Log out" menu item is a top-level navigation,
+// not a POST). SameSite=Strict on the cookie blocks the
+// cross-site CSRF angle.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	payload, authed := s.identityFromRequest(r)
+	// Clear the cookie first so even an error in the SIGTERM path
+	// still logs the browser out.
 	http.SetCookie(w, &http.Cookie{
 		Name:     CookieName,
 		Value:    "",
@@ -288,7 +315,56 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})
+
+	if authed && s.sessions != nil {
+		q := r.URL.Query()
+		switch {
+		case q.Get("end_all") == "true":
+			s.endAllSessions(payload.UID)
+		case q.Get("end_session") != "":
+			s.endSession(payload.UID, q.Get("end_session"))
+		}
+	}
+
 	http.Redirect(w, r, "/login", http.StatusFound)
+}
+
+// endSession SIGTERMs the named sessid IF it's currently running
+// and owned by uid. Silently no-ops if the sessid doesn't match a
+// live session — a user retrying logout on a stale URL shouldn't
+// get an error, and we don't want to leak existence information.
+func (s *Server) endSession(uid uint32, sessid string) {
+	sessions, err := s.sessions.List(uid)
+	if err != nil {
+		s.log.Printf("logout: list sessions uid=%d: %v", uid, err)
+		return
+	}
+	for _, sess := range sessions {
+		if sess.SessID == sessid {
+			if err := s.killer(sess.Pid); err != nil {
+				s.log.Printf("logout: SIGTERM pid=%d sessid=%s: %v", sess.Pid, sessid, err)
+				return
+			}
+			s.log.Printf("logout: SIGTERM sessid=%s pid=%d uid=%d", sessid, sess.Pid, uid)
+			return
+		}
+	}
+}
+
+// endAllSessions SIGTERMs every running session owned by uid.
+func (s *Server) endAllSessions(uid uint32) {
+	sessions, err := s.sessions.List(uid)
+	if err != nil {
+		s.log.Printf("logout: list sessions uid=%d: %v", uid, err)
+		return
+	}
+	for _, sess := range sessions {
+		if err := s.killer(sess.Pid); err != nil {
+			s.log.Printf("logout: SIGTERM pid=%d sessid=%s: %v", sess.Pid, sess.SessID, err)
+			continue
+		}
+		s.log.Printf("logout: SIGTERM sessid=%s pid=%d uid=%d (end_all)", sess.SessID, sess.Pid, uid)
+	}
 }
 
 // identityFromRequest pulls and verifies the session cookie. Returns
