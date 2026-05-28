@@ -33,25 +33,32 @@ var assetsFS embed.FS
 // Server is the HTTP handler set for wash-login. Construct via
 // NewServer, then call ServeHTTP / mount onto your own listener.
 type Server struct {
-	auth     Authenticator
-	signer   *Signer
-	ttl      time.Duration
-	cookieSec bool // Secure flag on cookie — false in dev/loopback HTTP
-	log      *log.Logger
+	auth       Authenticator
+	signer     *Signer
+	ttl        time.Duration
+	cookieSec  bool // Secure flag on cookie — false in dev/loopback HTTP
+	log        *log.Logger
 	tplLogin   *template.Template
 	tplWelcome *template.Template
+	sessions   SessionRegistry // nil = /ws handoff disabled (M2-only mode)
+	spawner    *Spawner        // nil = /ws handoff disabled
 }
 
 // Config drives Server construction.
 type Config struct {
-	Auth     Authenticator
-	Signer   *Signer
-	TTL      time.Duration
+	Auth   Authenticator
+	Signer *Signer
+	TTL    time.Duration
 	// CookieSecure controls the cookie's Secure flag. Set false for
 	// plain-HTTP deployments (loopback dev) and true behind any TLS
 	// terminator (nginx, Caddy, Tailscale-serve).
 	CookieSecure bool
 	Logger       *log.Logger
+	// Sessions + Spawner enable the M3 /ws handoff path. Both
+	// non-nil ⇒ /ws is live. Either nil ⇒ /ws returns 503 (M2 mode
+	// for the auth-flow tests).
+	Sessions SessionRegistry
+	Spawner  *Spawner
 }
 
 // NewServer returns a fully-wired Server. The Auth and Signer must
@@ -85,6 +92,8 @@ func NewServer(cfg Config) (*Server, error) {
 		log:        cfg.Logger,
 		tplLogin:   tplLogin,
 		tplWelcome: tplWelcome,
+		sessions:   cfg.Sessions,
+		spawner:    cfg.Spawner,
 	}, nil
 }
 
@@ -95,7 +104,89 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/login", s.handleLogin)
 	mux.HandleFunc("/auth", s.handleAuth)
 	mux.HandleFunc("/logout", s.handleLogout)
+	mux.HandleFunc("/ws", s.handleWS)
 	return mux
+}
+
+// handleWS is the M3 handoff endpoint. Validates the cookie,
+// resolves the target session (auto-attach if exactly one exists;
+// auto-spawn if none), then SCM_RIGHTS the browser-facing TCP fd
+// to the per-user router's ctl socket. wash-login is not in the
+// data path after this returns.
+//
+// If Sessions / Spawner are not configured (M2 mode), returns 503.
+func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	if s.sessions == nil || s.spawner == nil {
+		http.Error(w, "session handoff not configured", http.StatusServiceUnavailable)
+		return
+	}
+	payload, ok := s.identityFromRequest(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	// Look up existing sessions for this uid. Spawn if there are
+	// none. For now any count > 0 just picks the first; the picker
+	// (M4) makes this a real choice.
+	sessions, err := s.sessions.List(payload.UID)
+	if err != nil {
+		s.log.Printf("ws: list sessions for uid=%d: %v", payload.UID, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	var target Session
+	switch {
+	case len(sessions) == 0:
+		// Need to spawn. We need an Identity for the spawner — the
+		// cookie payload has uid + name; gid + shell aren't in the
+		// cookie. Pull them from the configured auth backend's view
+		// of this user. For the M3 dev path with --auth-test, the
+		// identity we mint here uses gid=this-process's-gid + a
+		// stub shell. M5 / shadow-auth resolves these properly via
+		// the user database.
+		id := Identity{
+			UID:   payload.UID,
+			GID:   uint32(0),
+			Name:  payload.Name,
+			Shell: "/bin/sh",
+		}
+		spawned, err := s.spawner.Spawn(id, payload.Name)
+		if err != nil {
+			s.log.Printf("ws: spawn for uid=%d: %v", payload.UID, err)
+			http.Error(w, "could not start session", http.StatusInternalServerError)
+			return
+		}
+		target = spawned
+		s.log.Printf("ws: spawned new session sessid=%s pid=%d for uid=%d", spawned.SessID, spawned.Pid, payload.UID)
+	default:
+		target = sessions[0]
+		s.log.Printf("ws: attaching to existing sessid=%s pid=%d for uid=%d", target.SessID, target.Pid, payload.UID)
+	}
+
+	// Hijack BEFORE writing any response. websocket.Accept on the
+	// router side will write the 101 once it parses the synthesized
+	// request bytes.
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "hijacker not supported", http.StatusInternalServerError)
+		return
+	}
+	conn, brw, err := hj.Hijack()
+	if err != nil {
+		s.log.Printf("ws hijack: %v", err)
+		return
+	}
+
+	if err := Handoff(r, conn, brw, target.Sock); err != nil {
+		s.log.Printf("ws handoff to %s: %v", target.Sock, err)
+		// Best-effort: write a 502 directly to the hijacked conn
+		// so the browser sees something less mysterious than a
+		// dropped connection. We've already lost the http.Server
+		// response path.
+		_, _ = conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\nhandoff failed\n"))
+		_ = conn.Close()
+		return
+	}
 }
 
 // handleRoot dispatches based on auth state: authed users get the

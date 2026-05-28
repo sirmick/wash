@@ -15,7 +15,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -47,6 +49,11 @@ func Run(args []string) int {
 	authTestUID := fs.Uint("auth-test-uid", 0, "uid to attach to a successful --auth-test login (default: this process's uid)")
 	authTestGID := fs.Uint("auth-test-gid", 0, "gid to attach to a successful --auth-test login (default: this process's gid)")
 	authTestShell := fs.String("auth-test-shell", "/bin/sh", "shell to record on a successful --auth-test login")
+	routerBinary := fs.String("router-binary", "", "path to wash-router. Empty means look in the directory of wash-login's own binary, then PATH.")
+	appsDir := fs.String("apps-dir", "", "apps-dir forwarded to spawned wash-router processes. Empty means let the router default to its own binary's directory.")
+	runRoot := fs.String("run-root", "/run/wash", "root for per-uid runtime state (sessions sockets, spawn flock).")
+	idleTimeout := fs.Duration("idle-timeout", 0, "--idle-timeout forwarded to spawned wash-router processes. Zero forwards no flag (router default 30m).")
+	noHandoff := fs.Bool("no-handoff", false, "disable the /ws handoff path (M2-only mode for auth-flow inspection). Implied off when --auth-test is set.")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	if err := fs.Parse(args); err != nil {
@@ -96,13 +103,33 @@ func Run(args []string) int {
 		return 1
 	}
 
-	srv, err := login.NewServer(login.Config{
+	cfg := login.Config{
 		Auth:         auth,
 		Signer:       signer,
 		TTL:          *cookieTTL,
 		CookieSecure: *cookieSecure,
 		Logger:       logger,
-	})
+	}
+	if !*noHandoff {
+		routerBin := resolveRouterBinary(*routerBinary)
+		if routerBin == "" {
+			logger.Printf("could not locate wash-router; pass --router-binary or use --no-handoff to disable /ws")
+			return 2
+		}
+		cfg.Sessions = login.NewProcRegistry()
+		cfg.Spawner = &login.Spawner{
+			RouterBinary: routerBin,
+			AllowUID:     uint32(os.Getuid()),
+			RunRoot:      *runRoot,
+			AppsDir:      *appsDir,
+			IdleTimeout:  *idleTimeout,
+		}
+		logger.Printf("handoff enabled: router=%s run-root=%s allow-uid=%d", routerBin, *runRoot, os.Getuid())
+	} else {
+		logger.Printf("handoff disabled (--no-handoff); /ws will return 503")
+	}
+
+	srv, err := login.NewServer(cfg)
 	if err != nil {
 		logger.Printf("server: %v", err)
 		return 1
@@ -156,4 +183,24 @@ func isLoopback(addr string) bool {
 		return true
 	}
 	return false
+}
+
+// resolveRouterBinary looks for wash-router. Explicit override wins;
+// otherwise look beside wash-login's own binary (the dev / install
+// case where they're colocated), then fall back to PATH.
+func resolveRouterBinary(override string) string {
+	if override != "" {
+		return override
+	}
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		candidate := filepath.Join(dir, "wash-router")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	if p, err := exec.LookPath("wash-router"); err == nil {
+		return p
+	}
+	return ""
 }
