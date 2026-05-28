@@ -60,23 +60,13 @@ for app in wash-session wash-about wash-fm wash-bulk wash-edit \
     ln -s ../../bin/wash "$ctx/overlay/usr/lib/wash/$app"
 done
 
-# Ensure proc + sys + run + tmp are mounted before any user init runs.
-# Buildroot's default mountVirtFS runs from /etc/init.d/rcS but if we
-# stub other scripts we still need these. Use S00 prefix to ensure
-# it runs first.
-cat > "$ctx/overlay/etc/init.d/S00mounts" <<'EOF'
-#!/bin/sh
-# wash: mount the virtual filesystems userspace needs.
-[ -d /proc ] || mkdir -p /proc
-[ -d /sys  ] || mkdir -p /sys
-[ -d /run  ] || mkdir -p /run
-[ -d /tmp  ] || mkdir -p /tmp
-mountpoint -q /proc || mount -t proc     proc /proc
-mountpoint -q /sys  || mount -t sysfs    sys  /sys
-mountpoint -q /run  || mount -t tmpfs    tmpfs /run
-mountpoint -q /tmp  || mount -t tmpfs    tmpfs /tmp
-EOF
-chmod 0755 "$ctx/overlay/etc/init.d/S00mounts"
+# No S00mounts — buildroot's default /etc/inittab runs `mount -a`
+# in sysinit (before rcS), which handles every line in /etc/fstab:
+# /proc, /sys, /tmp (mode=1777), /run, /dev/pts, plus the /var/log
+# tmpfs line that post-build.sh appends. Anything we mounted from a
+# rcS script ran AFTER mount -a and would shadow it with the wrong
+# mode (lost the 1777 on /tmp once, busted bind() for non-root).
+# Filesystem table is authoritative; we just extend it.
 
 # busybox-init service to start wash-router on boot.
 install -m 0755 "$here/overlay/etc/init.d/S99wash-router" \
@@ -91,11 +81,16 @@ install -m 0755 "$here/overlay/etc/init.d/S98wash-diag" \
 install -m 0440 -D "$here/overlay/etc/sudoers.d/wash-nopasswd" \
                    "$ctx/overlay/etc/sudoers.d/wash-nopasswd"
 
-# Boot-speed: stub out the init.d entries we don't want for the wash
-# demo (no network, no CONFIG_NET in kernel; syslogd/klogd add ~3-5s
-# of startup time; sysctl touches nothing useful for a single-tenant
-# browser VM). Overlay-shadowed with no-op scripts.
-for stub in S01syslogd S02klogd S40network S02sysctl S01seedrng; do
+# Boot-speed: stub out init.d entries we don't want for the wash
+# demo (no network → CONFIG_NET disabled in kernel; sysctl touches
+# nothing useful; seedrng is redundant with haveged + the kernel's
+# RANDOM_TRUST_BOOTLOADER). Overlay-shadowed with no-op scripts.
+#
+# Note: S01syslogd + S02klogd are NOT stubbed — busybox's own init
+# scripts wire syslogd → /var/log/messages and klogd → /dev/kmsg
+# forwarding. Result: every printk + syslog(3) call lands in a
+# greppable log file, dmesg still works for the raw ring buffer.
+for stub in S40network S02sysctl S01seedrng; do
     cat > "$ctx/overlay/etc/init.d/$stub" <<'EOF'
 #!/bin/sh
 exit 0

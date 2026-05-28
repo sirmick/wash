@@ -85,13 +85,16 @@ BR2_ROOTFS_OVERLAY="/overlay"
 
 BR2_TARGET_ROOTFS_EXT2=y
 BR2_TARGET_ROOTFS_EXT2_REV=1
-# 16M = wash multicall (~10.7 MiB) + buildroot base + slack, AFTER
-# post-build.sh prunes the toolchain libs (libstdc++/libgfortran/
-# libgomp = ~3.3 MiB) and the offline sudo helpers (~860 KiB). Used
-# space drops from ~18.5 MiB → ~14 MiB, so 16M leaves a healthy
-# 2 MiB tail. Splits into 8 × 2 MiB chunks instead of 10 — every
-# chunk skipped is one fewer HTTP fetch on cold boot.
-BR2_TARGET_ROOTFS_EXT2_SIZE="16M"
+# 20M = wash multicall (~10.7 MiB) + buildroot base + post-build.sh
+# prunes (libstdc++/libgfortran/libgomp + offline sudo helpers, ~4
+# MiB saved) + comfortable 5 MiB slack. Earlier we tried 16M (8
+# chunks); ext2 metadata + a few packages we hadn't accounted for
+# left only ~400 KiB free, and the first time sudo / sshd / similar
+# tried to write tmpfile-style state the rootfs hit ENOSPC. The
+# saved chunks weren't worth the breakage. Squashfs + overlayfs is
+# the cleaner long-term answer (compress + read-only base + tmpfs
+# upper), separate change.
+BR2_TARGET_ROOTFS_EXT2_SIZE="20M"
 # Post-build hook: see image/rootfs/post-build.sh. Buildroot runs it
 # with $1 = staged target/ dir, before mkfs.ext2 packs it.
 BR2_ROOTFS_POST_BUILD_SCRIPT="/input/post-build.sh"

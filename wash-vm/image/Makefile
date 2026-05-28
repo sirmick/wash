@@ -72,7 +72,10 @@ $(WASM_BIN): wasm/Dockerfile $(wildcard $(TINYEMU)/*.c) $(wildcard $(TINYEMU)/*.
 	  'cp js/riscvemu64-wasm.js js/riscvemu64-wasm.wasm /out/'
 
 $(ROOTFS): rootfs/build.sh rootfs/Dockerfile rootfs/wash_riscv64_defconfig \
-           rootfs/overlay/etc/init.d/S99wash-router
+           rootfs/post-build.sh rootfs/busybox.fragment rootfs/users.table \
+           rootfs/overlay/etc/init.d/S99wash-router \
+           rootfs/overlay/etc/init.d/S98wash-diag \
+           rootfs/overlay/etc/sudoers.d/wash-nopasswd
 	mkdir -p $(DIST)
 	REPO_ROOT=$(REPO_ROOT) DIST=$(DIST) ./rootfs/build.sh
 
