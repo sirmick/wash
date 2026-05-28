@@ -174,7 +174,15 @@ const screenSub = new Sub<{ w: number; h: number }>({ w: window.innerWidth, h: w
 
 function wsURL(): string {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${proto}://${window.location.host}/ws`;
+  // When the page URL carries ?s=<sessid>, route the WS at the
+  // sessid-specific endpoint so wash-login attaches to that session
+  // instead of auto-picking. Bare /ws is used when no preference is
+  // declared — wash-login then spawns (0 sessions) or attaches to
+  // the lone one (1 session) by default.
+  const params = new URLSearchParams(window.location.search);
+  const sessid = params.get('s');
+  const path = sessid ? `/ws/s/${encodeURIComponent(sessid)}/` : '/ws';
+  return `${proto}://${window.location.host}${path}`;
 }
 
 /**

@@ -24,13 +24,14 @@ import (
 // sysInfo is the shape sent to the FE as the "system.info" app_msg.
 // Field names match the wire keys; the FE picks them up by name.
 type sysInfo struct {
-	Hostname   string     `json:"hostname"`
-	FQDN       string     `json:"fqdn"`
-	Username   string     `json:"username"`
-	CPUs       int        `json:"cpus"`
-	MemBytes   uint64     `json:"mem_bytes"`
-	Interfaces []IfaceIPs `json:"interfaces"`
-	Router     RouterInfo `json:"router"`
+	Hostname    string     `json:"hostname"`
+	FQDN        string     `json:"fqdn"`
+	Username    string     `json:"username"`
+	CPUs        int        `json:"cpus"`
+	MemBytes    uint64     `json:"mem_bytes"`
+	Interfaces  []IfaceIPs `json:"interfaces"`
+	Router      RouterInfo `json:"router"`
+	SessionName string     `json:"session_name,omitempty"`
 }
 
 // RouterInfo describes the wash-router instance hosting this session.
@@ -74,6 +75,7 @@ func gatherSysInfo() sysInfo {
 		Built:   os.Getenv("WASH_ROUTER_BUILT"),
 		Dev:     os.Getenv("WASH_ROUTER_DEV") == "1",
 	}
+	out.SessionName = os.Getenv("WASH_SESSION_NAME")
 	return out
 }
 

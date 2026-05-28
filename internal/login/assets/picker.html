@@ -90,7 +90,7 @@
               <div class="name">{{.Name}}</div>
               <div class="meta">sessid {{.SessID}} · pid {{.Pid}}</div>
             </div>
-            <a class="attach" href="/ws/s/{{.SessID}}/">Attach</a>
+            <a class="attach" href="/?s={{.SessID}}">Connect</a>
             <form method="post" action="/sessions/end" style="margin:0">
               <input type="hidden" name="sessid" value="{{.SessID}}">
               <button type="submit" class="end">End</button>

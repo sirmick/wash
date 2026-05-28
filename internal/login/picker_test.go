@@ -112,7 +112,7 @@ func TestPickerListsSessions(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	bs := string(body)
-	for _, want := range []string{`data-sessid="s-alpha"`, `data-sessid="s-beta"`, ">mick<", ">scratch<", `href="/ws/s/s-alpha/"`, `href="/ws/s/s-beta/"`} {
+	for _, want := range []string{`data-sessid="s-alpha"`, `data-sessid="s-beta"`, ">mick<", ">scratch<", `href="/?s=s-alpha"`, `href="/?s=s-beta"`} {
 		if !strings.Contains(bs, want) {
 			t.Errorf("picker missing %q in:\n%s", want, bs)
 		}

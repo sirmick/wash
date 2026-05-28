@@ -127,6 +127,9 @@ func sendSystemInfo(c *sdk.Conn) {
 		"interfaces": ifaces,
 		"router":     router,
 	}
+	if info.SessionName != "" {
+		msg["session_name"] = info.SessionName
+	}
 	if err := c.SendAppMsg(msg); err != nil {
 		log.Printf("wash-session: send system.info: %v", err)
 	}

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>wash — new session</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    background: #0e1116; color: #d9dde3;
+    font: 14px/1.4 system-ui, -apple-system, sans-serif;
+    min-height: 100vh; margin: 0;
+    display: grid; place-items: center;
+    padding: 2rem 1rem;
+  }
+  .card {
+    background: #161b22; border: 1px solid #2a313a;
+    padding: 1.8rem 2rem; border-radius: 8px;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.04), 0 8px 24px rgba(0,0,0,0.3);
+    width: 100%; max-width: 22rem;
+  }
+  .logo { display: block; margin: 0 auto 1rem auto; width: 48px; height: 48px; }
+  h1 {
+    margin: 0 0 0.4rem 0;
+    text-align: center;
+    font-size: 0.95rem; font-weight: 500; letter-spacing: 0.04em;
+    color: #8b949e; text-transform: lowercase;
+  }
+  .who { text-align: center; color: #6e7681; font-size: 0.82rem; margin: 0 0 1.2rem 0; }
+  label { display: block; margin: 0.6rem 0 0.25rem 0; color: #8b949e; font-size: 0.82rem; }
+  input[type=text] {
+    width: 100%; box-sizing: border-box;
+    background: #0d1117; color: #d9dde3;
+    border: 1px solid #30363d; border-radius: 4px;
+    padding: 0.55rem 0.7rem; font: inherit;
+  }
+  input:focus { outline: none; border-color: #5b8eff; }
+  .actions {
+    margin-top: 1.2rem;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;
+  }
+  .actions button, .actions a {
+    border-radius: 4px;
+    padding: 0.6rem 0.8rem; font: inherit; font-weight: 500;
+    cursor: pointer;
+    border: 1px solid #30363d;
+    text-align: center; text-decoration: none; box-sizing: border-box;
+    display: inline-block;
+  }
+  .actions button.primary { background: #2c5fd9; color: white; border-color: #3a6ee8; }
+  .actions button.primary:hover { background: #3a6ee8; }
+  .actions a.secondary { background: #21262d; color: #d9dde3; }
+  .actions a.secondary:hover { background: #30363d; }
+  .hint { color: #6e7681; font-size: 0.78rem; margin-top: 0.3rem; }
+</style>
+<body>
+  <form class="card" method="post" action="/sessions/new" autocomplete="off">
+    <img class="logo" src="/wash-logo.svg" alt="wash">
+    <h1>wash — new session</h1>
+    <div class="who">as {{.Name}} (uid {{.UID}})</div>
+
+    <label for="n">Session name</label>
+    <input id="n" type="text" name="name" value="{{.DefaultName}}" required autofocus>
+    <div class="hint">A label to recognise this session later. Default is a timestamp.</div>
+
+    <div class="actions">
+      <button type="submit" class="primary">Create</button>
+      <a class="secondary" href="/sessions">Cancel</a>
+    </div>
+  </form>
+</body>
+</html>

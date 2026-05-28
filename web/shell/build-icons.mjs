@@ -33,6 +33,8 @@ const ICONS = [
   'file-text',      // wash-syslogs sidebar rows
   'server-cog',     // wash-services
   'package',        // wash-packages
+  'log-out',        // session app "Log out" menu item
+  'unplug',         // session app "Disconnect" menu item
 ];
 
 // Resolve via require so pnpm's nested layout is fine.

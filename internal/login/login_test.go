@@ -167,15 +167,25 @@ func TestAuthSuccess(t *testing.T) {
 		t.Errorf("cookie flags wrong: HttpOnly=%v SameSite=%v", sessCookie.HttpOnly, sessCookie.SameSite)
 	}
 
-	// Follow-up GET / should redirect to /sessions (the picker is
-	// the canonical post-auth landing page since M4).
+	// Follow-up GET / should serve the shell index.html for authed
+	// users. The asset only exists when the Makefile has staged
+	// shell assets under internal/login/assets/shell — in test
+	// builds it may be missing, in which case handleRoot falls
+	// back to a /sessions redirect. Accept either outcome.
 	resp2, err := client.Get(ts.URL + "/")
 	if err != nil {
 		t.Fatalf("GET / after auth: %v", err)
 	}
 	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusFound || resp2.Header.Get("Location") != "/sessions" {
-		t.Errorf("after auth: got %d %q want 302→/sessions", resp2.StatusCode, resp2.Header.Get("Location"))
+	switch resp2.StatusCode {
+	case http.StatusOK:
+		// shell index.html served (full build).
+	case http.StatusFound:
+		if loc := resp2.Header.Get("Location"); loc != "/sessions" {
+			t.Errorf("after auth: 302 → %q want /sessions", loc)
+		}
+	default:
+		t.Errorf("after auth: got %d (expected 200 or 302→/sessions)", resp2.StatusCode)
 	}
 }
 

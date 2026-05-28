@@ -278,6 +278,9 @@ func Run(args []string) int {
 	if cfg.Dev {
 		_ = os.Setenv("WASH_ROUTER_DEV", "1")
 	}
+	if cfg.Name != "" {
+		_ = os.Setenv("WASH_SESSION_NAME", cfg.Name)
+	}
 
 	r := router.NewRouter(cfg, reg, logf)
 	// Make the embedded shell asset FS available for TShellAssetRead

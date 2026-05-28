@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
 <meta charset="utf-8">
-<title>wash — log in</title>
+<title>wash — sign in</title>
 <style>
   :root { color-scheme: dark; }
   body {
@@ -17,47 +17,51 @@
     box-shadow: 0 1px 0 rgba(255,255,255,0.04), 0 8px 24px rgba(0,0,0,0.3);
     width: 100%; max-width: 22rem;
   }
-  h1 { margin: 0 0 1rem 0; font-size: 1.05rem; font-weight: 600; letter-spacing: 0.02em; }
-  h1 .sub { color: #6e7681; font-weight: 400; margin-left: 0.4rem; }
-
-  .users {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
-    gap: 0.4rem; margin: 0 0 1.2rem 0;
+  .logo {
+    display: block; margin: 0 auto 1rem auto;
+    width: 64px; height: 64px;
   }
-  .users a {
-    display: block;
-    background: #0d1117; color: #d9dde3;
-    border: 1px solid #30363d; border-radius: 4px;
-    padding: 0.55rem 0.6rem;
-    text-decoration: none; text-align: center;
-    font-size: 0.88rem;
-    transition: border-color 80ms;
+  h1 {
+    margin: 0 0 1.2rem 0;
+    text-align: center;
+    font-size: 0.95rem; font-weight: 500; letter-spacing: 0.04em;
+    color: #8b949e; text-transform: lowercase;
   }
-  .users a:hover { border-color: #5b8eff; background: #161b22; }
-  .users a.selected { border-color: #5b8eff; background: #1a2238; }
-  .users a .name { font-weight: 500; }
-  .users a .display { display: block; color: #6e7681; font-size: 0.78rem; margin-top: 0.15rem; }
-  .users-divider {
-    border: 0; border-top: 1px solid #2a313a;
-    margin: 0.6rem 0 1rem 0;
-  }
-
-  label { display: block; margin: 0.6rem 0 0.2rem 0; color: #8b949e; font-size: 0.85rem; }
-  input[type=text], input[type=password] {
+  label { display: block; margin: 0.6rem 0 0.25rem 0; color: #8b949e; font-size: 0.82rem; }
+  input[type=text], input[type=password], select {
     width: 100%; box-sizing: border-box;
     background: #0d1117; color: #d9dde3;
     border: 1px solid #30363d; border-radius: 4px;
-    padding: 0.5rem 0.7rem; font: inherit;
+    padding: 0.55rem 0.7rem; font: inherit;
   }
-  input:focus { outline: none; border-color: #5b8eff; }
-  button[type=submit] {
-    margin-top: 1.2rem; width: 100%;
-    background: #2c5fd9; color: white;
-    border: none; border-radius: 4px;
+  select {
+    appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, #6e7681 50%),
+                      linear-gradient(135deg, #6e7681 50%, transparent 50%);
+    background-position: calc(100% - 16px) center, calc(100% - 11px) center;
+    background-size: 5px 5px;
+    background-repeat: no-repeat;
+    padding-right: 1.8rem;
+  }
+  input:focus, select:focus { outline: none; border-color: #5b8eff; }
+  .actions {
+    margin-top: 1.2rem;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;
+  }
+  .actions button {
+    border-radius: 4px;
     padding: 0.6rem 0.8rem; font: inherit; font-weight: 500;
     cursor: pointer;
+    border: 1px solid #30363d;
   }
-  button[type=submit]:hover { background: #3a6ee8; }
+  .actions button.primary {
+    background: #2c5fd9; color: white; border-color: #3a6ee8;
+  }
+  .actions button.primary:hover { background: #3a6ee8; }
+  .actions button.secondary {
+    background: #21262d; color: #d9dde3;
+  }
+  .actions button.secondary:hover { background: #30363d; }
   .err {
     margin-top: 0.8rem;
     background: #4a1a1a; color: #ffb8b8;
@@ -66,33 +70,37 @@
   }
 </style>
 <body>
-  <div class="card">
-    <h1>wash <span class="sub">— log in</span></h1>
-
-    {{if .Users}}
-      <div class="users">
-        {{range .Users}}
-          <a href="/login?user={{.Name}}" class="{{if eq $.PreselectUser .Name}}selected{{end}}">
-            <span class="name">{{.Name}}</span>
-            {{if .Display}}<span class="display">{{.Display}}</span>{{end}}
-          </a>
-        {{end}}
-      </div>
-      <hr class="users-divider">
-    {{end}}
+  <form class="card" method="post" action="/auth" autocomplete="off">
+    <img class="logo" src="/wash-logo.svg" alt="wash">
+    <h1>wash — sign in</h1>
 
     {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
 
-    <form method="post" action="/auth" autocomplete="off">
+    {{if .Users}}
+      <label for="u">Username</label>
+      <select id="u" name="user" autocomplete="username" required {{if not .PreselectUser}}autofocus{{end}}>
+        {{if not .PreselectUser}}<option value="" disabled selected>Choose user…</option>{{end}}
+        {{range .Users}}
+          <option value="{{.Name}}" {{if eq $.PreselectUser .Name}}selected{{end}}>
+            {{.Name}}{{if .Display}} — {{.Display}}{{end}}
+          </option>
+        {{end}}
+      </select>
+    {{else}}
       <label for="u">Username</label>
       <input id="u" type="text" name="user" autocomplete="username" required
              value="{{.PreselectUser}}"
              {{if not .PreselectUser}}autofocus{{end}}>
-      <label for="p">Password</label>
-      <input id="p" type="password" name="password" autocomplete="current-password" required
-             {{if .PreselectUser}}autofocus{{end}}>
-      <button type="submit">Sign in</button>
-    </form>
-  </div>
+    {{end}}
+
+    <label for="p">Password</label>
+    <input id="p" type="password" name="password" autocomplete="current-password" required
+           {{if .PreselectUser}}autofocus{{end}}>
+
+    <div class="actions">
+      <button type="submit" class="primary" name="action" value="signin">Sign in</button>
+      <button type="submit" class="secondary" name="action" value="new">New session</button>
+    </div>
+  </form>
 </body>
 </html>

@@ -98,6 +98,9 @@ interface SystemInfoMsg {
   mem_bytes: number;
   interfaces: IfaceIPs[];
   router?: RouterInfo;
+  /** wash-router --name, surfaced in the desktop banner so the
+   *  user can tell which session this tab is attached to. */
+  session_name?: string;
 }
 
 // ROOT_PREFIX — synthetic-id prefix for the "run as root" launcher
@@ -504,6 +507,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             // "End session" granularity. See docs/MULTIUSER.md.
             window.location.href = '/logout?end_all=true';
           }}
+          onDisconnect={() => {
+            setMenuOpen(false);
+            // /logout without query params clears the session cookie
+            // but leaves the per-user router running. The browser
+            // gets bounced back to the login form; reconnecting later
+            // attaches to the same session by name.
+            window.location.href = '/logout';
+          }}
         />
       </Show>
 
@@ -616,6 +627,19 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
           >
             {s().fqdn || s().hostname || 'wash'}
           </div>
+          <Show when={s().session_name}>
+            <div
+              data-testid="desktop-banner-session-name"
+              style={{
+                'margin-top': '2px',
+                font: '500 13px system-ui,sans-serif',
+                opacity: 0.65,
+                'text-shadow': '0 1px 2px rgba(0,0,0,0.6)',
+              }}
+            >
+              session: {s().session_name}
+            </div>
+          </Show>
           <div
             style={{
               'margin-top': '4px',
@@ -1013,6 +1037,7 @@ const StartMenu: Component<{
   onPick: (id: string) => void;
   onDismiss: () => void;
   onLogout: () => void;
+  onDisconnect: () => void;
 }> = (props) => {
   // Merge synthetic root rows in with the catalog and sort
   // alphabetically. Root rows get a red-tinted icon — that's the
@@ -1089,8 +1114,15 @@ const StartMenu: Component<{
         }}
       />
       <MenuItem
+        data-testid="start-menu-disconnect"
+        label="Disconnect"
+        icon={<SpriteIcon name="unplug" size={20} />}
+        onClick={() => props.onDisconnect()}
+      />
+      <MenuItem
         data-testid="start-menu-logout"
         label="Log out"
+        icon={<SpriteIcon name="log-out" size={20} />}
         onClick={() => props.onLogout()}
       />
     </Menu>

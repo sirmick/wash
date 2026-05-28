@@ -50,10 +50,11 @@ type Server struct {
 	signer     *Signer
 	ttl        time.Duration
 	cookieSec  bool // Secure flag on cookie — false in dev/loopback HTTP
-	log        *log.Logger
-	tplLogin   *template.Template
-	tplWelcome *template.Template
-	tplPicker  *template.Template
+	log           *log.Logger
+	tplLogin      *template.Template
+	tplWelcome    *template.Template
+	tplPicker     *template.Template
+	tplNewSession *template.Template
 	sessions   SessionRegistry      // nil = /ws handoff disabled (M2-only mode)
 	spawner    *Spawner             // nil = /ws handoff disabled
 	killer     func(pid int) error  // overrideable for tests; default syscall.Kill(pid, SIGTERM)
@@ -116,6 +117,10 @@ func NewServer(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse picker.html: %w", err)
 	}
+	tplNewSession, err := template.ParseFS(assetsFS, "assets/new-session.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse new-session.html: %w", err)
+	}
 	killer := cfg.Killer
 	if killer == nil {
 		killer = func(pid int) error { return syscall.Kill(pid, syscall.SIGTERM) }
@@ -126,10 +131,11 @@ func NewServer(cfg Config) (*Server, error) {
 		ttl:        cfg.TTL,
 		cookieSec:  cfg.CookieSecure,
 		log:        cfg.Logger,
-		tplLogin:   tplLogin,
-		tplWelcome: tplWelcome,
-		tplPicker:  tplPicker,
-		sessions:   cfg.Sessions,
+		tplLogin:      tplLogin,
+		tplWelcome:    tplWelcome,
+		tplPicker:     tplPicker,
+		tplNewSession: tplNewSession,
+		sessions:      cfg.Sessions,
 		spawner:    cfg.Spawner,
 		killer:     killer,
 		users:      cfg.Users,
@@ -353,18 +359,19 @@ func (s *Server) handleSessionsPage(w http.ResponseWriter, r *http.Request) {
 	_ = s.tplPicker.Execute(w, view)
 }
 
-// handleSessionsNew spawns a fresh session under the authed uid
-// using the form-supplied name (or the user's username when empty),
-// then redirects the browser to /ws/s/<new-sessid>/ so the new
-// session is what the user lands in.
+// handleSessionsNew handles GET (render the name-prompt page) and
+// POST (spawn the session, redirect to /?s=<sessid>).
+//
+// GET path is reached either when a user clicked "New session" on
+// the login form (handleAuth redirects here after creds check), or
+// when they followed an explicit link from /sessions.
+//
+// POST spawns via spawnFor; on success the browser is sent to
+// /?s=<sessid> so handleRoot serves shell.html and shell.js opens
+// /ws/s/<sessid>/ directly (no auto-pick race).
 func (s *Server) handleSessionsNew(w http.ResponseWriter, r *http.Request) {
 	if s.spawner == nil || s.sessions == nil {
 		http.Error(w, "spawn not configured", http.StatusServiceUnavailable)
-		return
-	}
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	payload, ok := s.identityFromRequest(r)
@@ -372,30 +379,51 @@ func (s *Server) handleSessionsNew(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad form", http.StatusBadRequest)
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		data := struct {
+			Name        string
+			UID         uint32
+			DefaultName string
+		}{
+			Name:        payload.Name,
+			UID:         payload.UID,
+			DefaultName: time.Now().Format("2006-01-02 15:04"),
+		}
+		_ = s.tplNewSession.Execute(w, data)
 		return
-	}
-	name := strings.TrimSpace(r.PostForm.Get("name"))
-	if name == "" {
-		name = time.Now().Format("2006-01-02 15:04")
-	}
-	if !validSessionName(name) {
-		http.Redirect(w, r, "/sessions?err="+url.QueryEscape("invalid session name"), http.StatusFound)
-		return
-	}
-	spawned, err := s.spawnFor(payload, name)
-	if err != nil {
-		if errors.Is(err, ErrSessionCap) {
-			http.Redirect(w, r, "/sessions?err="+url.QueryEscape("session cap reached — end an existing session first"), http.StatusFound)
+	case http.MethodPost:
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "bad form", http.StatusBadRequest)
 			return
 		}
-		s.log.Printf("sessions/new spawn uid=%d: %v", payload.UID, err)
-		http.Redirect(w, r, "/sessions?err="+url.QueryEscape("could not start session"), http.StatusFound)
+		name := strings.TrimSpace(r.PostForm.Get("name"))
+		if name == "" {
+			name = time.Now().Format("2006-01-02 15:04")
+		}
+		if !validSessionName(name) {
+			http.Redirect(w, r, "/sessions?err="+url.QueryEscape("invalid session name"), http.StatusFound)
+			return
+		}
+		spawned, err := s.spawnFor(payload, name)
+		if err != nil {
+			if errors.Is(err, ErrSessionCap) {
+				http.Redirect(w, r, "/sessions?err="+url.QueryEscape("session cap reached — end an existing session first"), http.StatusFound)
+				return
+			}
+			s.log.Printf("sessions/new spawn uid=%d: %v", payload.UID, err)
+			http.Redirect(w, r, "/sessions?err="+url.QueryEscape("could not start session"), http.StatusFound)
+			return
+		}
+		s.log.Printf("sessions/new: spawned sessid=%s pid=%d name=%q for uid=%d", spawned.SessID, spawned.Pid, name, payload.UID)
+		http.Redirect(w, r, "/?s="+url.QueryEscape(spawned.SessID), http.StatusFound)
 		return
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
-	s.log.Printf("sessions/new: spawned sessid=%s pid=%d name=%q for uid=%d", spawned.SessID, spawned.Pid, name, payload.UID)
-	http.Redirect(w, r, "/ws/s/"+spawned.SessID+"/", http.StatusFound)
 }
 
 // handleSessionsEnd SIGTERMs the named sessid IF it belongs to the
@@ -447,27 +475,35 @@ func validSessionName(n string) bool {
 	return true
 }
 
-// handleRoot serves the shell-runtime page for authed users —
-// index.html embedded under assets/shell. Unauthed users redirect
-// to /login. The picker (/sessions) is reachable explicitly when
-// the user has more than one session.
+// handleRoot serves the shell-runtime page for authed users.
+// Unauthed → /login. Authed visitors take one of three paths:
 //
-// Single-session users land directly on the shell page; shell.js
-// opens a WebSocket to /ws which wash-login auto-attaches.
-// Multi-session users come here via /?s=<sessid> after picking;
-// shell.js sees ?s= in the URL and opens /ws/s/<sessid>/ instead.
+//   - ?s=<sessid> set → serve shell.html. shell.js reads ?s= and
+//     opens /ws/s/<sessid>/, attaching to that named session.
+//   - No ?s=, ≥2 sessions exist → redirect to /sessions picker so
+//     the user picks one explicitly (we can't auto-resolve and a
+//     /ws auto-attempt would 302 mid-WS-upgrade, breaking it).
+//   - No ?s=, 0 or 1 sessions → serve shell.html. shell.js opens
+//     /ws, which auto-spawns (count=0) or auto-attaches (count=1).
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
 	}
-	if _, ok := s.identityFromRequest(r); !ok {
+	payload, ok := s.identityFromRequest(r)
+	if !ok {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
+	if r.URL.Query().Get("s") == "" && s.sessions != nil {
+		if list, err := s.sessions.List(payload.UID); err == nil && len(list) >= 2 {
+			http.Redirect(w, r, "/sessions", http.StatusFound)
+			return
+		}
+	}
 	// Serve shell index.html. If the embedded asset is missing
-	// (router was built without web-shell), fall back to the
-	// picker redirect so the user has somewhere to go.
+	// (test build without web-shell), fall back to the picker
+	// redirect so the user has somewhere to go.
 	body, err := shellAssetsFS.ReadFile("assets/shell/index.html")
 	if err != nil {
 		http.Redirect(w, r, "/sessions", http.StatusFound)
@@ -562,7 +598,25 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 		Expires:  time.Unix(payload.Expires, 0),
 	})
 	s.log.Printf("auth: user=%q uid=%d from=%s ok", id.Name, id.UID, clientIP(r))
-	http.Redirect(w, r, "/", http.StatusFound)
+
+	// Dispatch on the action button the user clicked. "new" → name
+	// prompt page → /sessions/new. "signin" (default; also what
+	// "Enter from password input" submits) → count-based redirect:
+	//   0 / 1 sessions: serve the shell at /
+	//   ≥2 sessions: send to /sessions picker so the user picks
+	switch r.PostForm.Get("action") {
+	case "new":
+		http.Redirect(w, r, "/sessions/new", http.StatusFound)
+		return
+	default:
+		dst := "/"
+		if s.sessions != nil {
+			if list, err := s.sessions.List(payload.UID); err == nil && len(list) >= 2 {
+				dst = "/sessions"
+			}
+		}
+		http.Redirect(w, r, dst, http.StatusFound)
+	}
 }
 
 // handleLogout clears the cookie and, when authed, optionally
