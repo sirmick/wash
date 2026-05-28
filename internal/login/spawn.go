@@ -158,10 +158,14 @@ func (s *Spawner) Spawn(id Identity, name string) (Session, error) {
 	}
 	pid := cmd.Process.Pid
 
-	// Don't wait for the child — wash-login is reactive only,
-	// routers self-exit on idle. Release the Go side's process
-	// handle so we don't keep a zombie reference.
-	_ = cmd.Process.Release()
+	// Run cmd.Wait() in the background so the kernel auto-reaps
+	// the child when it exits. Without this, on SIGTERM the router
+	// exits but persists as a Z (zombie) in /proc until wash-login
+	// terminates — eating a slot in the process table, confusing
+	// ps/top, and breaking liveness probes that count zombies as
+	// alive. The goroutine doesn't need to do anything with the
+	// exit status; running .Wait() to completion is the reaping.
+	go func() { _ = cmd.Wait() }()
 
 	// Poll for the ctl socket to appear. If it never does, the
 	// child probably crashed; clean up.
