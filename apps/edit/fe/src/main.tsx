@@ -16,7 +16,7 @@ import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
 import { FilePicker, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens } from '@wash/ui';
 import type { TerminalAPI } from '@wash/ui';
-import { EditorSelection, EditorState, Compartment } from '@codemirror/state';
+import { EditorSelection, EditorState, Compartment, Extension } from '@codemirror/state';
 import {
   EditorView,
   crosshairCursor,
@@ -45,11 +45,36 @@ import {
   foldKeymap,
   indentOnInput,
   syntaxHighlighting,
+  StreamLanguage,
 } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
 import { javascript } from '@codemirror/lang-javascript';
 import { json } from '@codemirror/lang-json';
 import { markdown } from '@codemirror/lang-markdown';
+import { html } from '@codemirror/lang-html';
+import { css } from '@codemirror/lang-css';
+import { xml } from '@codemirror/lang-xml';
+import { python } from '@codemirror/lang-python';
+import { rust } from '@codemirror/lang-rust';
+import { go } from '@codemirror/lang-go';
+import { cpp } from '@codemirror/lang-cpp';
+import { java } from '@codemirror/lang-java';
+import { php } from '@codemirror/lang-php';
+import { sql } from '@codemirror/lang-sql';
+import { yaml } from '@codemirror/lang-yaml';
+import { sass } from '@codemirror/lang-sass';
+// Legacy modes: parsers for langs that don't have a dedicated CM6
+// lang-* pack. StreamLanguage.define adapts them into a LanguageSupport.
+import { shell } from '@codemirror/legacy-modes/mode/shell';
+import { dockerFile } from '@codemirror/legacy-modes/mode/dockerfile';
+import { cmake } from '@codemirror/legacy-modes/mode/cmake';
+import { ruby } from '@codemirror/legacy-modes/mode/ruby';
+import { lua } from '@codemirror/legacy-modes/mode/lua';
+import { perl } from '@codemirror/legacy-modes/mode/perl';
+import { toml } from '@codemirror/legacy-modes/mode/toml';
+import { properties } from '@codemirror/legacy-modes/mode/properties';
+import { nginx } from '@codemirror/legacy-modes/mode/nginx';
+import { diff } from '@codemirror/legacy-modes/mode/diff';
 // xterm + addon-fit are externalized to /vendor/xterm.js. The vendor
 // bundle auto-injects the xterm CSS, so no manual <style> shim here.
 import {
@@ -1645,48 +1670,28 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // langForKey returns a CM6 language pack for an explicit key.
   // Used by both the path-derived default (langForPath) and the
   // Syntax menu's manual override.
-  const langForKey = (key: string) => {
-    switch (key) {
-      case 'javascript':
-        return javascript();
-      case 'jsx':
-        return javascript({ jsx: true });
-      case 'typescript':
-        return javascript({ typescript: true });
-      case 'tsx':
-        return javascript({ typescript: true, jsx: true });
-      case 'json':
-        return json();
-      case 'markdown':
-        return markdown();
-      default:
-        return [];
-    }
+  // langForKey + langKeyForPath are table-driven from LANGS — one
+  // row per syntax owns its label, extensions, and CM6 factory.
+  const langForKey = (key: string): Extension | Extension[] => {
+    return LANGS_BY_KEY[key]?.lang() ?? [];
   };
 
-  // langKeyForPath picks a language key from the file extension.
-  // Unknown extensions fall through to plain text.
+  // langKeyForPath picks a syntax from the file's basename or
+  // extension. Filenames win over extensions so e.g. "Dockerfile"
+  // (no extension) still maps to dockerfile. Unknown → plain.
   const langKeyForPath = (path: string): string => {
-    const ext = path.toLowerCase().split('.').pop() ?? '';
-    switch (ext) {
-      case 'js':
-      case 'mjs':
-      case 'cjs':
-        return 'javascript';
-      case 'jsx':
-        return 'jsx';
-      case 'ts':
-        return 'typescript';
-      case 'tsx':
-        return 'tsx';
-      case 'json':
-        return 'json';
-      case 'md':
-      case 'markdown':
-        return 'markdown';
-      default:
-        return 'plain';
+    const base = (path.toLowerCase().split('/').pop() ?? '').trim();
+    if (!base) return 'plain';
+    for (const l of LANGS) {
+      if (l.filenames?.includes(base)) return l.key;
     }
+    const ext = base.includes('.') ? base.split('.').pop()! : '';
+    if (ext) {
+      for (const l of LANGS) {
+        if (l.extensions?.includes(ext)) return l.key;
+      }
+    }
+    return 'plain';
   };
 
   // currentLang is what's actually configured in the editor right
@@ -2019,15 +2024,32 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         </Show>
         <Show when={openMenu() === 'syntax'}>
           <Menu x={menuAnchor().x} y={menuAnchor().y} onDismiss={closeMenu} data-testid="edit-menu-syntax">
-            <For each={langChoices}>
-              {(l) => (
-                <MenuItem
-                  label={l.label}
-                  trailing={currentLang() === l.key ? <span style={menuCheckStyle}><Check size={12} /></span> : undefined}
-                  onClick={run(() => setLang(l.key === langKeyForPath(activeTab()?.path ?? '') ? null : l.key))}
-                  data-testid={`edit-menu-lang-${l.key}`}
-                />
-              )}
+            <For each={LANGS}>
+              {(l) => {
+                // Trailing shows either the check (when this row is
+                // the active syntax) or the list of file signals
+                // mapped to it — extensions like ".js .mjs" or
+                // filename triggers like "Dockerfile". Plays the
+                // role of a hint so users learn the mapping.
+                const hint = [
+                  ...(l.extensions ?? []).map((e) => `.${e}`),
+                  ...(l.filenames ?? []),
+                ].join(' ');
+                return (
+                  <MenuItem
+                    label={l.label}
+                    trailing={
+                      currentLang() === l.key
+                        ? <span style={menuCheckStyle}><Check size={12} /></span>
+                        : hint
+                          ? <span style={langHintStyle}>{hint}</span>
+                          : undefined
+                    }
+                    onClick={run(() => setLang(l.key === langKeyForPath(activeTab()?.path ?? '') ? null : l.key))}
+                    data-testid={`edit-menu-lang-${l.key}`}
+                  />
+                );
+              }}
             </For>
             <MenuSeparator />
             <MenuItem
@@ -2611,18 +2633,70 @@ const EntryIcon: Component<{ type: Entry['type'] }> = (props) => {
 
 // ---- menu bar pieces ----
 
-// langChoices is the Syntax menu list. Adding a new language pack
-// is two lines: import the package, append a row here, and the
-// menu picks it up. langForKey resolves the actual extension.
-const langChoices = [
-  { key: 'plain', label: 'Plain Text' },
-  { key: 'javascript', label: 'JavaScript' },
-  { key: 'jsx', label: 'JavaScript (JSX)' },
-  { key: 'typescript', label: 'TypeScript' },
-  { key: 'tsx', label: 'TypeScript (TSX)' },
-  { key: 'json', label: 'JSON' },
-  { key: 'markdown', label: 'Markdown' },
+// LANGS is the single source of truth for syntax highlighting.
+// Every row carries its menu label, the CM6 extension factory, and
+// the filename signals (extensions + exact basenames) that map a
+// file to it. langForKey / langKeyForPath / langChoices all derive
+// from this table — adding a new syntax is one row.
+//
+// `lang` returns a CM6 Extension. Modern packs (lang-*) are called
+// directly; legacy parsers go through StreamLanguage.define here so
+// callers stay uniform.
+interface LangDef {
+  key: string;
+  label: string;
+  /** File extensions (without leading dot), lowercase. */
+  extensions?: string[];
+  /** Exact basenames matched case-insensitively (e.g. "dockerfile"). */
+  filenames?: string[];
+  lang: () => Extension | Extension[];
+}
+
+const LANGS: LangDef[] = [
+  { key: 'plain', label: 'Plain Text', lang: () => [] },
+  { key: 'javascript', label: 'JavaScript', extensions: ['js', 'mjs', 'cjs'], lang: () => javascript() },
+  { key: 'jsx', label: 'JavaScript (JSX)', extensions: ['jsx'], lang: () => javascript({ jsx: true }) },
+  { key: 'typescript', label: 'TypeScript', extensions: ['ts'], lang: () => javascript({ typescript: true }) },
+  { key: 'tsx', label: 'TypeScript (TSX)', extensions: ['tsx'], lang: () => javascript({ typescript: true, jsx: true }) },
+  { key: 'json', label: 'JSON', extensions: ['json'], lang: () => json() },
+  { key: 'markdown', label: 'Markdown', extensions: ['md', 'markdown'], lang: () => markdown() },
+  { key: 'html', label: 'HTML', extensions: ['html', 'htm'], lang: () => html() },
+  { key: 'css', label: 'CSS', extensions: ['css'], lang: () => css() },
+  { key: 'sass', label: 'Sass / SCSS', extensions: ['sass', 'scss'], lang: () => sass() },
+  { key: 'xml', label: 'XML', extensions: ['xml', 'svg'], lang: () => xml() },
+  { key: 'yaml', label: 'YAML', extensions: ['yaml', 'yml'], lang: () => yaml() },
+  { key: 'toml', label: 'TOML', extensions: ['toml'], lang: () => StreamLanguage.define(toml) },
+  { key: 'properties', label: 'INI / Properties', extensions: ['ini', 'conf', 'cfg', 'properties'], lang: () => StreamLanguage.define(properties) },
+  { key: 'python', label: 'Python', extensions: ['py', 'pyw'], lang: () => python() },
+  { key: 'go', label: 'Go', extensions: ['go'], lang: () => go() },
+  { key: 'rust', label: 'Rust', extensions: ['rs'], lang: () => rust() },
+  { key: 'cpp', label: 'C / C++', extensions: ['c', 'h', 'cc', 'cpp', 'cxx', 'hpp', 'hh', 'hxx'], lang: () => cpp() },
+  { key: 'java', label: 'Java', extensions: ['java'], lang: () => java() },
+  { key: 'php', label: 'PHP', extensions: ['php', 'phtml'], lang: () => php() },
+  { key: 'ruby', label: 'Ruby', extensions: ['rb', 'rake', 'gemspec'], lang: () => StreamLanguage.define(ruby) },
+  { key: 'lua', label: 'Lua', extensions: ['lua'], lang: () => StreamLanguage.define(lua) },
+  { key: 'perl', label: 'Perl', extensions: ['pl', 'pm'], lang: () => StreamLanguage.define(perl) },
+  { key: 'sql', label: 'SQL', extensions: ['sql'], lang: () => sql() },
+  {
+    key: 'shell',
+    label: 'Shell / Bash',
+    extensions: ['sh', 'bash', 'zsh', 'ksh'],
+    filenames: ['.bashrc', '.bash_profile', '.profile', '.zshrc'],
+    lang: () => StreamLanguage.define(shell),
+  },
+  { key: 'dockerfile', label: 'Dockerfile', filenames: ['dockerfile'], lang: () => StreamLanguage.define(dockerFile) },
+  {
+    key: 'cmake',
+    label: 'CMake / Makefile',
+    filenames: ['makefile', 'gnumakefile', 'cmakelists.txt'],
+    lang: () => StreamLanguage.define(cmake),
+  },
+  { key: 'nginx', label: 'nginx', filenames: ['nginx.conf'], lang: () => StreamLanguage.define(nginx) },
+  { key: 'diff', label: 'Diff / Patch', extensions: ['diff', 'patch'], lang: () => StreamLanguage.define(diff) },
 ];
+
+// Index for O(1) lookup by key in langForKey + the menu.
+const LANGS_BY_KEY: Record<string, LangDef> = Object.fromEntries(LANGS.map((l) => [l.key, l]));
 
 type MenuID = 'file' | 'edit' | 'view' | 'syntax' | 'terminal';
 
@@ -2712,6 +2786,14 @@ const menuCheckStyle: JSX.CSSProperties = {
   'align-items': 'center',
   color: tokens.fg,
   opacity: 0.85,
+};
+
+// langHintStyle renders the file extensions / basenames next to
+// each Syntax menu row. Muted + monospace so they read as data
+// signals rather than competing with the language label.
+const langHintStyle: JSX.CSSProperties = {
+  color: tokens.fgDim,
+  font: `11px ${tokens.fontMono}`,
 };
 
 const termPaneStyle: JSX.CSSProperties = {
