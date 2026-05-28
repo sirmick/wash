@@ -1235,9 +1235,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // computation here automatically.
   const visibleRows = createMemo<Array<{ entry: Entry; path: string; depth: number; childCount?: number }>>(() => {
     const rows: Array<{ entry: Entry; path: string; depth: number; childCount?: number }> = [];
+    // `walked` tracks directories the walk has descended into.
+    // Used by the fallback below to find ancestors of path() that
+    // the main walk couldn't reach (intermediate listing in flight)
+    // and avoid double-rendering when the fallback's start equals
+    // the main walk's start.
+    const walked = new Set<string>();
     const walk = (p: string, depth: number) => {
       const entries = listings[p];
       if (!entries) return;
+      walked.add(p);
       for (const e of sortedFiltered(entries)) {
         const childPath = joinPath(p, e.name);
         // For listed dirs, expose the entry count so the row's
@@ -1257,6 +1264,45 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     };
     const start = treeRoot();
     if (listings[start]) walk(start, 0);
+
+    // Fallback render: if the walk from treeRoot didn't reach
+    // path()'s neighbourhood (some intermediate ancestor's
+    // list_ok hasn't landed yet), find the highest listed
+    // ancestor whose own contents the main walk didn't include
+    // and walk from there. This bridges the gap so the user sees
+    // the dir they navigated to even while ancestor listings are
+    // still in flight. Disappears as soon as the intermediates
+    // land and the normal walk reaches the chain.
+    //
+    // Walk up from path() through ancestors that are listed but
+    // the main walk didn't descend into. Stop at the first one
+    // that's missing a listing or that the main walk did walk —
+    // `fallbackRoot` is the *highest* still-unwalked listed
+    // ancestor, which is where the bridge walk should start so
+    // descendants render at their natural relative depth.
+    const cur = path();
+    if (cur) {
+      let fallbackRoot = '';
+      let p = cur;
+      while (p && listings[p] && !walked.has(p)) {
+        fallbackRoot = p;
+        const par = parentPath(p);
+        if (par === p) break;
+        p = par;
+      }
+      if (fallbackRoot) {
+        // Use the depth fallbackRoot would have under the main
+        // walk — so when ancestors fill in and the main walk
+        // reaches it, the rows stay at the same depth instead
+        // of shifting. Without this the dom flips depth, which
+        // moves the elements vertically and trips Playwright's
+        // stability gate on dblclick / click under heavy load.
+        const tr = start;
+        const segs = (s: string) => s.split('/').filter(Boolean).length;
+        const baseDepth = Math.max(0, segs(fallbackRoot) - segs(tr));
+        walk(fallbackRoot, baseDepth);
+      }
+    }
     return rows;
   });
 
