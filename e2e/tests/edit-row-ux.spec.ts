@@ -66,7 +66,8 @@ test.describe('wash-edit row UX (fm parity)', () => {
   test('right-click opens context menu with Open / Copy path / Rename / Delete', async ({ page, router }) => {
     const editor = await openEditor(page, router);
     await editor.locator('[data-testid="edit-entry-plain.txt"]').click({ button: 'right' });
-    const menu = editor.locator('[data-testid="edit-ctx-menu"]');
+    // Menus portal to document.body, so scope to `page` not `editor`.
+    const menu = page.locator('[data-testid="edit-ctx-menu"]');
     await expect(menu).toBeVisible();
     await expect(menu.locator('[data-testid="edit-ctx-open"]')).toBeVisible();
     await expect(menu.locator('[data-testid="edit-ctx-copy-path"]')).toBeVisible();
@@ -77,14 +78,14 @@ test.describe('wash-edit row UX (fm parity)', () => {
   test('right-click → Rename pops inline edit input', async ({ page, router }) => {
     const editor = await openEditor(page, router);
     await editor.locator('[data-testid="edit-entry-plain.txt"]').click({ button: 'right' });
-    await editor.locator('[data-testid="edit-ctx-rename"]').click();
+    await page.locator('[data-testid="edit-ctx-rename"]').click();
     await expect(editor.locator('[data-testid="edit-rename-input"]')).toBeVisible();
   });
 
   test('right-click → Delete removes the file', async ({ page, router }) => {
     const editor = await openEditor(page, router);
     await editor.locator('[data-testid="edit-entry-plain.txt"]').click({ button: 'right' });
-    await editor.locator('[data-testid="edit-ctx-delete"]').click();
+    await page.locator('[data-testid="edit-ctx-delete"]').click();
     await expect(editor.locator('[data-testid="edit-entry-plain.txt"]')).toHaveCount(0, { timeout: 3_000 });
     expect(existsSync(join(router.fmRoot, 'plain.txt'))).toBe(false);
   });

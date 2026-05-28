@@ -2255,7 +2255,7 @@ const SortMenu: Component<{
     return props.sortDesc ? <ChevronDown size={12} /> : <ChevronUp size={12} />;
   };
   return (
-    <Menu data-testid="fm-sort-menu" portal x={props.left} y={props.top} onDismiss={props.onDismiss}>
+    <Menu data-testid="fm-sort-menu" x={props.left} y={props.top} onDismiss={props.onDismiss}>
       <MenuItem data-testid="fm-sort-name" label="Name" trailing={arrow('name')} onClick={() => props.onPick('name')} />
       <MenuItem data-testid="fm-sort-mtime" label="Modified" trailing={arrow('mtime')} onClick={() => props.onPick('mtime')} />
       <MenuItem data-testid="fm-sort-ctime" label="Created" trailing={arrow('ctime')} onClick={() => props.onPick('ctime')} />
@@ -2285,7 +2285,7 @@ const ContextMenu: Component<{
   onDismiss: () => void;
 }> = (props) => {
   return (
-    <Menu data-testid="fm-context-menu" portal x={props.left} y={props.top} onDismiss={props.onDismiss}>
+    <Menu data-testid="fm-context-menu" x={props.left} y={props.top} onDismiss={props.onDismiss}>
       <MenuItem data-testid="fm-ctx-open" label="Open" onClick={props.onOpen} />
       <MenuItem data-testid="fm-ctx-copy" label="Copy path" onClick={props.onCopy} />
       <MenuItem data-testid="fm-ctx-info" label="Show info" onClick={props.onInfo} />
@@ -2406,7 +2406,7 @@ const DropMenu: Component<{
   // confirms. (Tokens names the value as zDropMenu; this matches
   // the historic layering decisions documented in [[wash fm DnD]].)
   return (
-    <Menu data-testid="fm-drop-menu" portal x={props.x} y={props.y} zIndex={1950} onDismiss={props.onCancel}>
+    <Menu data-testid="fm-drop-menu" x={props.x} y={props.y} zIndex={1950} onDismiss={props.onCancel}>
       <MenuItem data-testid="fm-drop-move" label="Move here" onClick={props.onMove} />
       <MenuItem data-testid="fm-drop-copy" label="Copy here" onClick={props.onCopy} />
       <MenuItem data-testid="fm-drop-symlink" label="Create symlink here" onClick={props.onSymlink} />

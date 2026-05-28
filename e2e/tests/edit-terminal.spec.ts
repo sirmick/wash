@@ -45,7 +45,7 @@ test.describe('wash-edit terminal pane', () => {
     const editor = await openEditor(page, router);
     // Open the Terminal menu.
     await editor.locator('[data-testid="edit-menubar-terminal"]').click();
-    await editor.locator('[data-testid="edit-menu-term-new"]').click();
+    await page.locator('[data-testid="edit-menu-term-new"]').click();
 
     // Pane is visible; one terminal tab.
     await expect(editor.locator('[data-testid="edit-term-pane"]')).toBeVisible();
@@ -78,7 +78,7 @@ test.describe('wash-edit terminal pane', () => {
   test('+ button opens a second terminal, each preserves its own buffer', async ({ page, router }) => {
     const editor = await openEditor(page, router);
     await editor.locator('[data-testid="edit-menubar-terminal"]').click();
-    await editor.locator('[data-testid="edit-menu-term-new"]').click();
+    await page.locator('[data-testid="edit-menu-term-new"]').click();
 
     await expect.poll(() => activeBufferText(page), { timeout: 8_000 }).toMatch(/[$#%>][ ]?/);
 

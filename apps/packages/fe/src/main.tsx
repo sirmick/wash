@@ -281,12 +281,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               setActionsMenu(null);
               return;
             }
+            // Viewport coords — Menu portals to body with position:fixed.
             const btnRect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
-            const hostRect = props.host.getBoundingClientRect();
-            setActionsMenu({
-              x: btnRect.left - hostRect.left,
-              y: btnRect.bottom - hostRect.top + 2,
-            });
+            setActionsMenu({ x: btnRect.left, y: btnRect.bottom + 2 });
           }}
         >
           Actions
@@ -732,9 +729,9 @@ function termBodyForStatus(status: 'idle' | 'running' | 'success' | 'failure'): 
 }
 
 defineWashApp('wash-app-packages', (props) => <App {...props} />, {
-  // position:relative is load-bearing — the menubar's <Menu> uses
-  // position:absolute and needs the host as its containing block so
-  // host-relative coords land in the right place (edit/fm pattern).
+  // position:relative kept as defense in depth for in-app overlays.
+  // Menus themselves portal to document.body with position:fixed,
+  // so they no longer depend on the host being a containing block.
   style:
     'display:flex;flex-direction:column;width:100%;height:100%;box-sizing:border-box;background:#181828;color:#eee;overflow:hidden;position:relative',
 });

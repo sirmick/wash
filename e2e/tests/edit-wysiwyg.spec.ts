@@ -92,7 +92,7 @@ test.describe('wash-edit wysiwyg', () => {
 
     // Open View menu, click Source.
     await editor.locator('[data-testid="edit-menubar-view"]').click();
-    await editor.locator('[data-testid="edit-menu-source"]').click();
+    await page.locator('[data-testid="edit-menu-source"]').click();
 
     // CM is now visible; wysiwyg host hides.
     await expect(editor.locator('[data-testid="edit-cm"]')).toBeVisible();

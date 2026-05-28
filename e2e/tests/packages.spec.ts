@@ -67,7 +67,8 @@ test.describe('packages app — UI', () => {
     // Menubar Actions menu surfaces the four granular ops; combo
     // is hidden from the menu since it's already on the toolbar.
     await app.locator('[data-testid="pkg-actions-button"]').click();
-    const menu = app.locator('[data-testid="pkg-actions-menu"]');
+    // Menu portals to document.body, so scope to `page` not `app`.
+    const menu = page.locator('[data-testid="pkg-actions-menu"]');
     await expect(menu).toBeVisible();
     await expect(menu.locator('[data-testid="pkg-action-update"]')).toBeVisible();
     await expect(menu.locator('[data-testid="pkg-action-upgrade"]')).toBeVisible();

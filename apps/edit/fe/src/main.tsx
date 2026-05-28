@@ -853,13 +853,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       setOpenMenu('');
       return;
     }
-    const btn = ev.currentTarget as HTMLElement;
-    const btnRect = btn.getBoundingClientRect();
-    const hostRect = props.host.getBoundingClientRect();
-    setMenuAnchor({
-      x: btnRect.left - hostRect.left,
-      y: btnRect.bottom - hostRect.top + 2,
-    });
+    // Menu paints via Portal with position:fixed, so coords are
+    // viewport-space — no host-rect subtraction.
+    const btnRect = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+    setMenuAnchor({ x: btnRect.left, y: btnRect.bottom + 2 });
     setOpenMenu(id);
   };
   const closeMenu = () => setOpenMenu('');
@@ -1060,10 +1057,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     ev.stopPropagation();
     setDropTargetPath('');
     if (ev.altKey) {
-      const rect = props.host.getBoundingClientRect();
       setDropMenu({
-        x: ev.clientX - rect.left + 8,
-        y: ev.clientY - rect.top + 8,
+        x: ev.clientX + 8,
+        y: ev.clientY + 8,
         src: paths[0],
         destDir: rowPath,
       });
@@ -1090,10 +1086,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const dest = dirOfSelection();
     if (!dest) return;
     if (ev.altKey) {
-      const rect = props.host.getBoundingClientRect();
       setDropMenu({
-        x: ev.clientX - rect.left + 8,
-        y: ev.clientY - rect.top + 8,
+        x: ev.clientX + 8,
+        y: ev.clientY + 8,
         src: paths[0],
         destDir: dest,
       });
@@ -1318,8 +1313,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const openCtxMenu = (ev: MouseEvent, entry: Entry, p: string) => {
     ev.preventDefault();
     setSelectedPath(p);
-    const rect = props.host.getBoundingClientRect();
-    setCtxMenu({ x: ev.clientX - rect.left, y: ev.clientY - rect.top, entry, path: p });
+    // Viewport coords — Menu portals to body with position:fixed.
+    setCtxMenu({ x: ev.clientX, y: ev.clientY, entry, path: p });
   };
   const closeCtxMenu = () => setCtxMenu(null);
 
@@ -3008,10 +3003,12 @@ const placeholderOverlayStyle: JSX.CSSProperties = {
 
 // ---- custom element ----
 
-// Grid: menubar (auto) | body (1fr) | status bar (auto). The
-// menubar row carries `position: relative` so the absolute-
-// positioned <Menu> dropdowns inside it anchor relative to it
-// rather than escaping to the closest positioned ancestor.
+// Grid: menubar (auto) | body (1fr) | status bar (22px). Menus now
+// portal to document.body with position:fixed, so the host no
+// longer needs to be a positioning ancestor for the menubar
+// dropdowns — `position: relative` here is just defense in depth
+// for any in-app absolutely-positioned overlays still inside the
+// slot (rename inputs, the autocomplete dropdown, etc.).
 defineWashApp('wash-app-edit', (props) => <App {...props} />, {
   // Status-bar row pinned to 22px — same as wash-fm — so the chrome
   // is consistent across apps. `auto` collapses to the StatusBar's

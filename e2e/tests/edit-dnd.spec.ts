@@ -70,7 +70,8 @@ test.describe('wash-edit DnD', () => {
     await page.mouse.up();
     await page.keyboard.up('Alt');
 
-    const menu = editor.locator('[data-testid="edit-drop-menu"]');
+    // Menus portal to document.body, so scope to `page` not `editor`.
+    const menu = page.locator('[data-testid="edit-drop-menu"]');
     await expect(menu).toBeVisible();
     await expect(menu.locator('[data-testid="edit-drop-move"]')).toBeVisible();
     await expect(menu.locator('[data-testid="edit-drop-copy"]')).toBeVisible();
@@ -92,7 +93,7 @@ test.describe('wash-edit DnD', () => {
     await page.mouse.up();
     await page.keyboard.up('Alt');
 
-    await editor.locator('[data-testid="edit-drop-copy"]').click();
+    await page.locator('[data-testid="edit-drop-copy"]').click();
 
     // bulk-ops queues the job → router log records it. fs.watch
     // catches up to the new file in docs/.
@@ -115,7 +116,7 @@ test.describe('wash-edit DnD', () => {
     await page.mouse.up();
     await page.keyboard.up('Alt');
 
-    await editor.locator('[data-testid="edit-drop-rename"]').click();
+    await page.locator('[data-testid="edit-drop-rename"]').click();
 
     const input = editor.locator('[data-testid="edit-rename-input"]');
     await expect(input).toBeVisible();
@@ -141,7 +142,7 @@ test.describe('wash-edit DnD', () => {
     await page.mouse.up();
     await page.keyboard.up('Alt');
 
-    await editor.locator('[data-testid="edit-drop-delete"]').click();
+    await page.locator('[data-testid="edit-drop-delete"]').click();
 
     await expect(editor.locator('[data-testid="edit-entry-hello.txt"]')).toHaveCount(0, { timeout: 3_000 });
     expect(existsSync(join(router.fmRoot, 'hello.txt'))).toBe(false);

@@ -5,19 +5,16 @@ import { tokens } from './tokens';
 
 // Menu positions one of two ways:
 //   - cursor-relative (x/y in props): drop-on-target menus,
-//     right-click context menus, sort menus.
+//     right-click context menus, sort menus, menubar dropdowns.
 //   - anchored: chrome menus that hang off a UI element
 //     (e.g. start menu off the taskbar — anchor="bottom-left").
 //
-// `portal`: when true, the menu mounts into document.body via a
-// Portal. Use this for menus that would otherwise be clipped by an
-// `overflow: hidden|auto` ancestor — the obvious case is right-
-// click context menus inside an app window, whose slot is scrollable.
-// In portal mode x/y are viewport (clientX/clientY) coords, since
-// `position:fixed` is anchored to the viewport. In non-portal mode
-// x/y stay host-relative (absolute positioning within the nearest
-// positioned ancestor) — that's how callers expect chrome menus
-// (taskbar start, edit's menubar) to anchor.
+// Every menu portals into document.body and lays out with
+// `position:fixed` so it can't be clipped by an `overflow:auto`
+// ancestor (the obvious case is the window slot in the shell).
+// Callers therefore pass *viewport* coords (clientX/clientY or
+// getBoundingClientRect()-derived) — host-relative offsets would
+// land in the wrong place.
 //
 // Menu installs its own document-mousedown listener to dismiss
 // on click-outside (one-tick deferred so the click that opened
@@ -26,8 +23,6 @@ export interface MenuProps {
   x?: number;
   y?: number;
   anchor?: 'bottom-left';
-  /** Render via Portal to document.body. x/y become viewport coords. */
-  portal?: boolean;
   onDismiss: () => void;
   zIndex?: number;
   animation?: 'pop' | 'slide-up';
@@ -47,29 +42,30 @@ export const Menu: ParentComponent<MenuProps> = (props) => {
     setTimeout(() => document.addEventListener('mousedown', onDocDown), 0);
     onCleanup(() => document.removeEventListener('mousedown', onDocDown));
   });
-  const node = () => (
-    <div
-      ref={menuEl}
-      data-testid={props['data-testid']}
-      onContextMenu={(ev) => ev.preventDefault()}
-      style={{
-        position: props.portal ? 'fixed' : 'absolute',
-        background: tokens.bgMenu,
-        border: `1px solid ${tokens.borderMenu}`,
-        'border-radius': props.anchor === 'bottom-left' ? `${tokens.radiusXl}px` : `${tokens.radiusMd}px`,
-        padding: '4px 0',
-        'min-width': '160px',
-        'box-shadow': tokens.shadowMenu,
-        'z-index': props.zIndex ?? tokens.zMenu,
-        ...positionFor(props),
-        ...animFor(props),
-        ...(props.style ?? {}),
-      }}
-    >
-      {props.children}
-    </div>
+  return (
+    <Portal mount={document.body}>
+      <div
+        ref={menuEl}
+        data-testid={props['data-testid']}
+        onContextMenu={(ev) => ev.preventDefault()}
+        style={{
+          position: 'fixed',
+          background: tokens.bgMenu,
+          border: `1px solid ${tokens.borderMenu}`,
+          'border-radius': props.anchor === 'bottom-left' ? `${tokens.radiusXl}px` : `${tokens.radiusMd}px`,
+          padding: '4px 0',
+          'min-width': '160px',
+          'box-shadow': tokens.shadowMenu,
+          'z-index': props.zIndex ?? tokens.zMenu,
+          ...positionFor(props),
+          ...animFor(props),
+          ...(props.style ?? {}),
+        }}
+      >
+        {props.children}
+      </div>
+    </Portal>
   );
-  return props.portal ? <Portal mount={document.body}>{node()}</Portal> : node();
 };
 
 function positionFor(p: MenuProps): JSX.CSSProperties {
