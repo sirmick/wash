@@ -160,6 +160,11 @@ type SessionWindow struct {
 	InstanceID string `json:"instance_id"`
 	Element    string `json:"element"`
 	Icon       string `json:"icon,omitempty"`
+	// Accent mirrors the source app's manifest accent so the shell
+	// can tint the titlebar icon in the same brand color the
+	// launcher uses. Empty for apps that didn't declare one (the
+	// shell will derive a hash-based hue at render time).
+	Accent     string `json:"accent,omitempty"`
 	Title      string `json:"title"`
 	X          int32  `json:"x"`
 	Y          int32  `json:"y"`

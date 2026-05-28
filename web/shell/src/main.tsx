@@ -68,6 +68,8 @@ export interface SessionWindow {
   instance_id: string;
   element: string;
   icon?: string;
+  /** Brand accent inherited from the source app's manifest. */
+  accent?: string;
   title: string;
   x: number;
   y: number;

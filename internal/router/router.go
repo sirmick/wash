@@ -534,7 +534,7 @@ func (r *Router) bringUp(ctx context.Context, inst *AppInstance) {
 			defW = inst.Manifest.Window.DefaultWidth
 			defH = inst.Manifest.Window.DefaultHeight
 		}
-		patches = r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon, inst.Manifest.Name, defW, defH, inst.IsRoot())
+		patches = r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon, inst.Manifest.Accent, inst.Manifest.Name, defW, defH, inst.IsRoot())
 	}
 	if err := r.declareAppToAllShells(ctx, inst); err != nil {
 		r.log("declare: %v", err)

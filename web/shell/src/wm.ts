@@ -27,6 +27,9 @@ export interface Win {
   instanceID: string;
   element: string;
   icon?: string;
+  /** Brand accent inherited from the source app's manifest;
+   * applied as `color:` on the titlebar icon. */
+  accent?: string;
   title: string;
   x: number;
   y: number;
@@ -170,6 +173,7 @@ function fromSessionWindow(sw: SessionWindow): Win {
     instanceID: sw.instance_id,
     element: sw.element,
     icon: sw.icon,
+    accent: sw.accent,
     title: sw.title,
     x: sw.x,
     y: sw.y,

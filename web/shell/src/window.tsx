@@ -231,6 +231,23 @@ export function FloatingWindow(props: WindowProps) {
     return focused() === props.win.windowID ? '#33387a' : '#2a2a2a';
   };
 
+  // Icon color matches the source app's manifest accent. Apps that
+  // didn't declare one fall back to a deterministic HSL hash of
+  // their element tag — same algorithm as the start menu so the
+  // launcher row and the titlebar icon agree. Root windows keep a
+  // muted off-white so the accent doesn't clash with the red
+  // privilege stripe (which already carries the identity signal).
+  const titlebarIconColor = () => {
+    if (props.win.isRoot) return undefined;
+    if (props.win.accent) return props.win.accent;
+    let h = 0;
+    const k = props.win.element || props.win.instanceID;
+    for (let i = 0; i < k.length; i++) {
+      h = ((h << 5) - h + k.charCodeAt(i)) | 0;
+    }
+    return `hsl(${Math.abs(h) % 360} 55% 65%)`;
+  };
+
   return (
     <div
       class="wash-window"
@@ -263,7 +280,12 @@ export function FloatingWindow(props: WindowProps) {
             stroke-width="2"
             stroke-linecap="round"
             stroke-linejoin="round"
-            style={{ 'flex-shrink': 0, 'margin-right': '6px', opacity: 0.85 }}
+            style={{
+              'flex-shrink': 0,
+              'margin-right': '6px',
+              opacity: 0.85,
+              color: titlebarIconColor(),
+            }}
             aria-hidden="true"
           >
             <use href={`/icons.svg#${props.win.icon}`} />
