@@ -14,7 +14,7 @@ GOARCH  ?= amd64
 GOFLAGS := -trimpath -ldflags=-s\ -w -tags netgo,osusergo
 
 OUT     := out
-BINS    := wash-router wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch
+BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -278,6 +278,12 @@ $(OUT)/wash-packages: $(PACKAGES_STAMP) | $(OUT)
 # wash-launch is a CLI, not an app. No FE bundle, no embedded assets.
 $(OUT)/wash-launch: | $(OUT)
 	$(call go_build,$@,cmd/wash-launch)
+
+# wash-login is the multi-user front-door (docs/MULTIUSER.md). It
+# embeds its own login + welcome HTML via //go:embed; no Vite stage,
+# no FE-bundle stamp dependency.
+$(OUT)/wash-login: | $(OUT)
+	$(call go_build,$@,cmd/wash-login)
 
 # wash-sudo is also a CLI — the privilege-aware shell wrapper.
 $(OUT)/wash-sudo: | $(OUT)

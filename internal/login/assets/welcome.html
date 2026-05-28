@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>wash — authenticated</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    background: #0e1116; color: #d9dde3;
+    font: 14px/1.4 system-ui, -apple-system, sans-serif;
+    min-height: 100vh; margin: 0;
+    display: grid; place-items: center;
+  }
+  .card {
+    background: #161b22; border: 1px solid #2a313a;
+    padding: 2rem 2.4rem; border-radius: 8px;
+    min-width: 22rem;
+  }
+  h1 { margin: 0 0 0.4rem 0; font-size: 1.05rem; font-weight: 600; }
+  p { color: #8b949e; margin: 0.4rem 0; }
+  code { background: #0d1117; padding: 0.1rem 0.3rem; border-radius: 3px; }
+  form { margin-top: 1.4rem; }
+  button {
+    background: #30363d; color: #d9dde3;
+    border: 1px solid #444c56; border-radius: 4px;
+    padding: 0.4rem 0.8rem; font: inherit; cursor: pointer;
+  }
+  button:hover { background: #444c56; }
+</style>
+<body>
+  <div class="card">
+    <h1>Authenticated as <code>{{.Name}}</code> (uid {{.UID}})</h1>
+    <p>wash session UI lands in M3 — multi-user spawn + handoff are next.</p>
+    <p>This page exists to prove the cookie round-trip.</p>
+    <form method="post" action="/logout">
+      <button type="submit">Log out</button>
+    </form>
+  </div>
+</body>
+</html>
