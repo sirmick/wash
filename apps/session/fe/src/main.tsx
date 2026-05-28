@@ -8,7 +8,7 @@
 // input, screenshot status, etc.) lives in signals instead of class
 // fields scattered across multiple render methods.
 
-import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { Menu, MenuItem, defineWashApp, tokens } from '@wash/ui';
 import { toBlob } from 'html-to-image';
@@ -238,6 +238,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     setSidebarMode(sidebarMode() === 'open' ? 'hidden' : 'open');
     persistSidebar();
   };
+  // Keep --wash-reserved-right in sync with sidebar mode so the
+  // shell's window.tsx can shrink maximized windows away from the
+  // sidebar — otherwise titlebar controls (close, restore) fall
+  // under it. 300 = SIDEBAR_OPEN_WIDTH; 14 = SIDEBAR_TAB_WIDTH.
+  createEffect(() => {
+    const px = sidebarMode() === 'open' ? 300 : 14;
+    document.documentElement.style.setProperty('--wash-reserved-right', `${px}px`);
+  });
   // Section helpers. Widgets call autoExpandSection when an event
   // arrives the user might want to see (new bulk job, new priv req,
   // new notification). User can collapse manually; next event re-opens.

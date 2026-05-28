@@ -179,11 +179,16 @@ export function FloatingWindow(props: WindowProps) {
       return { ...base, display: 'none' };
     }
     if (props.win.state === 'maximized') {
+      // --wash-reserved-right reserves screen width for the session
+      // app's right sidebar (300px when open, 14px tab when hidden).
+      // The session app writes the var on document.documentElement;
+      // here we just respect it so a maximized window's titlebar
+      // controls stay reachable instead of disappearing under chrome.
       return {
         ...base,
         left: '0',
         top: '0',
-        width: '100vw',
+        width: 'calc(100vw - var(--wash-reserved-right, 0px))',
         height: 'calc(100vh - 40px)',
       };
     }
