@@ -47,10 +47,20 @@
     /* Single-pass diagonal highlight that sweeps across an element
        once on mount. Used by the start menu on open. The overlay
        lives in a child div with pointer-events:none and is clipped
-       by an overflow:hidden ancestor so the band can't escape. */
+       by an overflow:hidden ancestor so the band can't escape.
+       Two non-obvious bits:
+       - background-repeat:no-repeat. Default `repeat` tiles the
+         gradient, so the band reappears on the left edge once the
+         primary copy has slid off-screen right.
+       - opacity ramps to 0 across the second half of the animation
+         so even if the band's tail is still inside the visible
+         box at the end, it fades out instead of freezing as a
+         pale diagonal stripe. */
     @keyframes wash-shimmer-sweep {
-      from { background-position: -120% 0; }
-      to   { background-position:  220% 0; }
+      0%   { background-position: -120% 0; opacity: 0; }
+      15%  { opacity: 1; }
+      60%  { opacity: 1; }
+      100% { background-position:  220% 0; opacity: 0; }
     }
     .wash-shimmer-sweep {
       position: absolute;
@@ -62,6 +72,8 @@
         transparent 70%);
       background-size: 200% 100%;
       background-position: -120% 0;
+      background-repeat: no-repeat;
+      opacity: 0;
       animation: wash-shimmer-sweep 900ms ease-out 1 forwards;
     }
   </style>
