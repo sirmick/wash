@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
@@ -32,6 +33,15 @@ import (
 
 //go:embed assets/*.html
 var assetsFS embed.FS
+
+// shellAssetsFS holds the shell-runtime files (index.html, shell.js,
+// icons.svg, vendor/*) that wash-login serves under / for authed
+// users. Copy-staged from internal/runner/router/assets by the
+// Makefile's $(LOGIN_SHELL_STAMP) rule. Tagged all: so the brotli
+// .br siblings come along too.
+//
+//go:embed all:assets/shell
+var shellAssetsFS embed.FS
 
 // Server is the HTTP handler set for wash-login. Construct via
 // NewServer, then call ServeHTTP / mount onto your own listener.
@@ -139,6 +149,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/sessions", s.handleSessionsPage)
 	mux.HandleFunc("/sessions/new", s.handleSessionsNew)
 	mux.HandleFunc("/sessions/end", s.handleSessionsEnd)
+	// Shell-runtime assets that bootstrap the desktop after auth.
+	// Copy-staged from the router's embedded set; served verbatim
+	// here so browsers get them from wash-login (the only HTTP
+	// origin in multi-user deployments — per-user routers are
+	// Unix-socket only). Authed users get the shell page at /.
+	if sub, err := fs.Sub(shellAssetsFS, "assets/shell"); err == nil {
+		shellHandler := http.FileServer(http.FS(sub))
+		for _, prefix := range []string{"/shell.js", "/icons.svg", "/wash-logo.svg", "/vendor/"} {
+			mux.Handle(prefix, shellHandler)
+		}
+	}
 	return mux
 }
 
@@ -426,10 +447,15 @@ func validSessionName(n string) bool {
 	return true
 }
 
-// handleRoot redirects authed users to /sessions (the picker /
-// landing page); unauthed users go to /login. The /sessions page
-// is the canonical post-auth surface — it handles 0/1/N session
-// counts uniformly and exposes attach, end, and new actions.
+// handleRoot serves the shell-runtime page for authed users —
+// index.html embedded under assets/shell. Unauthed users redirect
+// to /login. The picker (/sessions) is reachable explicitly when
+// the user has more than one session.
+//
+// Single-session users land directly on the shell page; shell.js
+// opens a WebSocket to /ws which wash-login auto-attaches.
+// Multi-session users come here via /?s=<sessid> after picking;
+// shell.js sees ?s= in the URL and opens /ws/s/<sessid>/ instead.
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -439,7 +465,17 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
-	http.Redirect(w, r, "/sessions", http.StatusFound)
+	// Serve shell index.html. If the embedded asset is missing
+	// (router was built without web-shell), fall back to the
+	// picker redirect so the user has somewhere to go.
+	body, err := shellAssetsFS.ReadFile("assets/shell/index.html")
+	if err != nil {
+		http.Redirect(w, r, "/sessions", http.StatusFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	_, _ = w.Write(body)
 }
 
 // handleLogin renders the login form. Authed users get bounced to /

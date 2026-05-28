@@ -54,6 +54,14 @@ PNPM    := pnpm
 ROUTER_ASSETS  := internal/runner/router/assets
 ROUTER_STAMP   := $(ROUTER_ASSETS)/.stamp
 
+# wash-login embeds the same shell runtime as wash-router so authed
+# users hitting wash-login's HTTP root get a working desktop without
+# wash-router needing to expose its own HTTP port (it's --listen-unix
+# in multi-user mode). The login package's //go:embed picks up
+# whatever lands under internal/login/assets/shell/.
+LOGIN_SHELL_ASSETS := internal/login/assets/shell
+LOGIN_SHELL_STAMP  := $(LOGIN_SHELL_ASSETS)/.stamp
+
 SESSION_ASSETS := apps/session/be/assets
 SESSION_STAMP  := $(SESSION_ASSETS)/.stamp
 
@@ -186,6 +194,9 @@ endef
 $(ROUTER_STAMP): web-shell
 	$(call embed_dist,web/shell/dist,$(ROUTER_ASSETS))
 
+$(LOGIN_SHELL_STAMP): $(ROUTER_STAMP)
+	$(call embed_dist,$(ROUTER_ASSETS),$(LOGIN_SHELL_ASSETS))
+
 $(SESSION_STAMP): web-session
 	$(call embed_dist,apps/session/fe/dist,$(SESSION_ASSETS))
 
@@ -292,7 +303,7 @@ $(OUT)/wash-launch: | $(OUT)
 #
 # Set them with `make wash-login-caps` (uses sudo). The dev path
 # (wash-login + target user are the same uid) doesn't need caps.
-$(OUT)/wash-login: | $(OUT)
+$(OUT)/wash-login: $(LOGIN_SHELL_STAMP) | $(OUT)
 	$(call go_build,$@,cmd/wash-login)
 	@caps_have=`getcap $@ 2>/dev/null || true`; \
 	  case "$$caps_have" in \

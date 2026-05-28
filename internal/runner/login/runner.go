@@ -28,7 +28,7 @@ import (
 const version = "0.0.0"
 
 const (
-	defaultListen     = "127.0.0.1:11000"
+	defaultListen     = "0.0.0.0:11000"
 	defaultSecretPath = "/etc/wash/secret.key"
 )
 
@@ -39,8 +39,8 @@ func Run(args []string) int {
 	fs := flag.NewFlagSet("wash-login", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
-	listen := fs.String("listen", defaultListen, "host:port to bind (loopback-only by default; use --insecure-listen to bind elsewhere)")
-	insecureListen := fs.Bool("insecure-listen", false, "permit binding to non-loopback addresses on plain HTTP (production deployments should front with nginx/Caddy/Tailscale and keep wash-login on 127.0.0.1)")
+	listen := fs.String("listen", defaultListen, "host:port to bind. Default is 0.0.0.0:10000 — wash-login is a network service by design.")
+	insecureListen := fs.Bool("insecure-listen", false, "deprecated; no-op now that non-loopback binds are allowed by default. Kept for compatibility.")
 	secretKey := fs.String("secret-key", "", fmt.Sprintf("path to the HMAC secret used to sign session cookies (default %s)", defaultSecretPath))
 	secretGenerate := fs.Bool("secret-generate", false, "generate the secret-key file if it doesn't exist (mode 0600). Off by default so production installs fail noisily when /etc/wash/secret.key is missing.")
 	cookieSecure := fs.Bool("cookie-secure", false, "set the Secure flag on session cookies. Required when a TLS terminator is in front; leave off for plain-HTTP loopback dev.")
@@ -72,16 +72,15 @@ func Run(args []string) int {
 
 	logger := log.New(os.Stderr, "wash-login ", log.LstdFlags|log.Lmsgprefix)
 
-	// Loopback-only by default; --insecure-listen acknowledges the
-	// risk of plain HTTP across an untrusted segment.
-	if !isLoopback(*listen) && !*insecureListen {
-		logger.Printf("--listen %s is non-loopback and --insecure-listen is not set", *listen)
-		logger.Printf("front wash-login with nginx/Caddy/Tailscale-serve and keep it on 127.0.0.1, or pass --insecure-listen to override")
-		return 2
+	// Non-loopback default: wash-login is a network service. Warn
+	// loudly when there's no TLS terminator in front so credentials
+	// + cookies don't cross plain HTTP on an untrusted segment.
+	if !isLoopback(*listen) && !*cookieSecure {
+		logger.Printf("WARNING: --listen %s on plain HTTP — credentials + session cookies cross the wire unencrypted.", *listen)
+		logger.Printf("         Front wash-login with nginx/Caddy/Tailscale-serve for TLS and pass --cookie-secure,")
+		logger.Printf("         or restrict --listen to 127.0.0.1 and tunnel (SSH -L / WireGuard).")
 	}
-	if !isLoopback(*listen) && *insecureListen && !*cookieSecure {
-		logger.Printf("WARNING: --listen %s without --cookie-secure — session cookies will cross plain HTTP", *listen)
-	}
+	_ = *insecureListen // deprecated, retained for arg-compatibility
 
 	// Always construct a passwd-backed UserLister; even the
 	// --auth-test path uses it for the user-list UX (when not
