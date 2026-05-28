@@ -80,6 +80,7 @@ func init() {
 			Element:         "wash-app-syslogs",
 			Surface:         sdk.SurfaceWindow,
 			Icon:            syslogsIcon,
+			Accent:          "#c08040",
 			Instancing:      sdk.InstancingMulti,
 			Window:          &sdk.WindowHints{DefaultWidth: 900, DefaultHeight: 560},
 		},

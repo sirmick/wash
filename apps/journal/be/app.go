@@ -65,6 +65,7 @@ func init() {
 			Element:         "wash-app-journal",
 			Surface:         sdk.SurfaceWindow,
 			Icon:            journalIcon,
+			Accent:          "#d09040",
 			Instancing:      sdk.InstancingMulti,
 			Window:          &sdk.WindowHints{DefaultWidth: 900, DefaultHeight: 560},
 		},

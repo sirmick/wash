@@ -18,6 +18,8 @@ interface CatalogApp {
   id: string;
   name: string;
   icon?: string;
+  /** Brand color for the launcher icon; falls back to a hash of id. */
+  accent?: string;
   surface: string;
   instancing: string;
   disabled?: boolean;
@@ -129,6 +131,22 @@ function rootEntryFor(src: CatalogApp): CatalogApp | null {
     instancing: src.instancing,
     disabled: false,
   };
+}
+
+// accentFor returns the brand color for a catalog row. Apps that
+// declare `accent` in their manifest get that exact color; the rest
+// fall back to a deterministic hue derived from the id so no
+// launcher row ends up monochrome. Saturation + lightness are fixed
+// so the palette stays in the same visual register as the
+// hand-picked accents — only the hue varies.
+function accentFor(app: CatalogApp): string {
+  if (app.accent) return app.accent;
+  let h = 0;
+  for (let i = 0; i < app.id.length; i++) {
+    h = ((h << 5) - h + app.id.charCodeAt(i)) | 0;
+  }
+  // Map to 0..359°, fixed S/L for "soft pastel on dark" look.
+  return `hsl(${Math.abs(h) % 360} 55% 65%)`;
 }
 
 // ROOT_ICON_COLOR — the tint applied to root-row icons in the start
@@ -1002,8 +1020,13 @@ const StartMenu: Component<{
       animation="slide-up"
       zIndex={tokens.zStartMenu}
       onDismiss={props.onDismiss}
-      style={{ 'min-width': '240px', padding: '4px' }}
+      // overflow:hidden clips the one-shot shimmer band to the menu
+      // panel so the diagonal sweep can't escape past the rounded
+      // corners. Pointer-events on the shimmer div are off so it
+      // doesn't intercept clicks on the rows underneath.
+      style={{ 'min-width': '240px', padding: '4px', overflow: 'hidden' }}
     >
+      <div class="wash-shimmer-sweep" aria-hidden="true" />
       <Show when={items().length > 0} fallback={<div style={emptyStyle}>no apps registered</div>}>
         <For each={items()}>
           {(app) => {
@@ -1023,7 +1046,7 @@ const StartMenu: Component<{
                   : `start-menu-root-${app.id.slice(ROOT_PREFIX.length)}`)
               : `start-menu-${app.id}`;
             const iconNode = app.icon ? (
-              <span style={{ color: root ? ROOT_ICON_COLOR : undefined, display: 'inline-flex' }}>
+              <span style={{ color: root ? ROOT_ICON_COLOR : accentFor(app), display: 'inline-flex' }}>
                 <SpriteIcon name={app.icon} size={20} />
               </span>
             ) : undefined;

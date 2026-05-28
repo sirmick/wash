@@ -7,6 +7,9 @@ export interface CatalogApp {
   id: string;
   name: string;
   icon?: string;
+  /** Brand color (CSS color) for the launcher icon. Falls back to a
+   * deterministic hash of `id` when unset, so no row stays mono. */
+  accent?: string;
   surface: string;
   instancing: string;
   disabled?: boolean;

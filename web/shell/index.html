@@ -43,6 +43,27 @@
       from { opacity: 0; transform: translateY(8px); }
       to   { opacity: 1; transform: translateY(0); }
     }
+
+    /* Single-pass diagonal highlight that sweeps across an element
+       once on mount. Used by the start menu on open. The overlay
+       lives in a child div with pointer-events:none and is clipped
+       by an overflow:hidden ancestor so the band can't escape. */
+    @keyframes wash-shimmer-sweep {
+      from { background-position: -120% 0; }
+      to   { background-position:  220% 0; }
+    }
+    .wash-shimmer-sweep {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: linear-gradient(105deg,
+        transparent 30%,
+        rgba(255, 255, 255, 0.12) 50%,
+        transparent 70%);
+      background-size: 200% 100%;
+      background-position: -120% 0;
+      animation: wash-shimmer-sweep 900ms ease-out 1 forwards;
+    }
   </style>
 </head>
 <body>

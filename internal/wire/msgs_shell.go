@@ -111,6 +111,7 @@ type ShellCatalogApp struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
 	Icon       string `json:"icon,omitempty"`
+	Accent     string `json:"accent,omitempty"`
 	Surface    string `json:"surface"`
 	Instancing string `json:"instancing"`
 	Disabled   bool   `json:"disabled,omitempty"`

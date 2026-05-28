@@ -87,6 +87,7 @@ func init() {
 			Element:         "wash-app-edit",
 			Surface:         sdk.SurfaceWindow,
 			Icon:            editIcon,
+			Accent:          "#e0b060",
 			Instancing:      sdk.InstancingMulti,
 			Window:          &sdk.WindowHints{DefaultWidth: 900, DefaultHeight: 600},
 			// Declared so the FE's "Open in fm" button can ask the

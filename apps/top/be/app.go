@@ -133,6 +133,7 @@ func init() {
 			Element:         "wash-app-top",
 			Surface:         sdk.SurfaceWindow,
 			Icon:            topIcon,
+			Accent:          "#b070d0",
 			Instancing:      sdk.InstancingMulti,
 			Window:          &sdk.WindowHints{DefaultWidth: 880, DefaultHeight: 560},
 		},

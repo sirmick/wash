@@ -82,6 +82,7 @@ func init() {
 			Element:         "wash-app-fm",
 			Surface:         sdk.SurfaceWindow,
 			Icon:            fmIcon,
+			Accent:          "#6090e0",
 			Instancing:      sdk.InstancingMulti,
 			Window:          &sdk.WindowHints{DefaultWidth: 760, DefaultHeight: 520},
 		},

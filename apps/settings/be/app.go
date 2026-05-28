@@ -59,6 +59,7 @@ func init() {
 			Element:         "wash-app-settings",
 			Surface:         sdk.SurfaceWindow,
 			Icon:            "settings",
+			Accent:          "#7c8fa8",
 			Instancing:      sdk.InstancingSingleton,
 			Window:          &sdk.WindowHints{DefaultWidth: 760, DefaultHeight: 520},
 		},

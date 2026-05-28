@@ -125,6 +125,7 @@ func init() {
 			Element:         "wash-app-services",
 			Surface:         sdk.SurfaceWindow,
 			Icon:            servicesIcon,
+			Accent:          "#5cb0d0",
 			Instancing:      sdk.InstancingMulti,
 			Window:          &sdk.WindowHints{DefaultWidth: 820, DefaultHeight: 600},
 			// spawn for the log deeplink (wash-journal / wash-syslogs).

@@ -77,6 +77,11 @@ type Manifest struct {
 	Element         string       `json:"element"`
 	Surface         string       `json:"surface"`
 	Icon            string       `json:"icon"`
+	// Accent is an optional brand color (any CSS color string,
+	// typically a #rrggbb hex). The shell tints the app's launcher
+	// icon with this. Apps that leave it empty get a deterministic
+	// hue derived from the app id — no row stays monochrome.
+	Accent          string       `json:"accent,omitempty"`
 	Instancing      string       `json:"instancing"`
 	Capabilities    []string     `json:"capabilities"`
 	Window          *WindowHints `json:"window,omitempty"`

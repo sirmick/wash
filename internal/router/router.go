@@ -349,6 +349,7 @@ func (r *Router) catalog() []wire.ShellCatalogApp {
 			ID:          e.Manifest.ID,
 			Name:        e.Manifest.Name,
 			Icon:        e.Manifest.Icon,
+			Accent:      e.Manifest.Accent,
 			Surface:     e.Manifest.Surface,
 			Instancing:  e.Manifest.Instancing,
 			Disabled:    !e.Enabled(),

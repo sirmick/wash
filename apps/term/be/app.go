@@ -140,6 +140,7 @@ func init() {
 			Element:         "wash-app-term",
 			Surface:         sdk.SurfaceWindow,
 			Icon:            termIcon,
+			Accent:          "#6dc878",
 			Instancing:      sdk.InstancingMulti,
 			Window:          &sdk.WindowHints{DefaultWidth: 800, DefaultHeight: 480},
 			// "Root Terminal" launcher row. The custom Name preserves
