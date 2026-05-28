@@ -21,6 +21,9 @@ DIST      := $(CURDIR)/dist
 ROOTFS    := $(DIST)/rootfs.ext2
 KERNEL    := $(DIST)/Image
 FIRMWARE  := $(DIST)/fw_jump.bin
+WASM_JS   := $(DIST)/riscvemu64-wasm.js
+WASM_BIN  := $(DIST)/riscvemu64-wasm.wasm
+TINYEMU   := $(REPO_ROOT)/wash-vm/tinyemu
 
 # install target = the dir the live tinyemu.html cfg reads from
 # (web/demo/public/tinyemu/wash-riscv64.cfg). Filenames are renamed
@@ -29,18 +32,19 @@ FIRMWARE  := $(DIST)/fw_jump.bin
 # Bellard EMSCRIPTEN load_file abort; see docs/TINYEMU.md.
 DEMO_PUB  := $(REPO_ROOT)/wash-vm/web/public/tinyemu
 
-.PHONY: all rootfs kernel firmware install clean help
+.PHONY: all rootfs kernel firmware wasm install clean help
 
 help:
 	@echo "Targets:"
-	@echo "  all       — rootfs + kernel + firmware + install (full demo build)"
+	@echo "  all       — rootfs + kernel + firmware + wasm + install (full demo build)"
 	@echo "  rootfs    — buildroot-musl riscv64 + wash → rootfs.ext2"
 	@echo "  kernel    — Linux 6.6 riscv → Image"
 	@echo "  firmware  — OpenSBI 1.5 generic riscv64 → fw_jump.bin"
+	@echo "  wasm      — TinyEMU emcc build → riscvemu64-wasm.{js,wasm}"
 	@echo "  install   — copy current dist/ into $(DEMO_PUB)/ with cfg names"
 	@echo "  clean     — wipe dist/"
 
-all: rootfs kernel firmware install
+all: rootfs kernel firmware wasm install
 
 rootfs: $(ROOTFS)
 
@@ -48,11 +52,24 @@ kernel: $(KERNEL)
 
 firmware: $(FIRMWARE)
 
+wasm: $(WASM_BIN)
+
 $(FIRMWARE): firmware/Dockerfile
 	mkdir -p $(DIST)
 	cd firmware && docker build -t wash-firmware-rv-builder .
 	docker run --rm -v $(DIST):/out wash-firmware-rv-builder \
 	  cp /fw_jump.bin /out/fw_jump.bin
+
+# WASM build. Context is wash-vm/tinyemu/ (the TinyEMU sources +
+# Makefile.js + js/lib.js); Dockerfile lives in image/wasm/. Rebuild
+# when any .c/.h in the tinyemu tree changes or when js/lib.js
+# (the WASM↔JS shim) changes.
+$(WASM_BIN): wasm/Dockerfile $(wildcard $(TINYEMU)/*.c) $(wildcard $(TINYEMU)/*.h) \
+             $(TINYEMU)/js/lib.js $(TINYEMU)/Makefile.js
+	mkdir -p $(DIST)
+	docker build -t wash-wasm-rv-builder -f wasm/Dockerfile $(TINYEMU)
+	docker run --rm -v $(DIST):/out wash-wasm-rv-builder bash -c \
+	  'cp js/riscvemu64-wasm.js js/riscvemu64-wasm.wasm /out/'
 
 $(ROOTFS): rootfs/build.sh rootfs/Dockerfile rootfs/wash_riscv64_defconfig \
            rootfs/overlay/etc/init.d/S99wash-router
@@ -79,6 +96,8 @@ install: $(SPLITIMG)
 	mkdir -p $(DEMO_PUB)
 	@if [ -f $(KERNEL) ]; then cp -v $(KERNEL) $(DEMO_PUB)/wash-kernel.bin; fi
 	@if [ -f $(FIRMWARE) ]; then cp -v $(FIRMWARE) $(DEMO_PUB)/opensbi-fw_jump.bin; fi
+	@if [ -f $(WASM_JS) ]; then cp -v $(WASM_JS) $(DEMO_PUB)/riscvemu64-wasm.js; fi
+	@if [ -f $(WASM_BIN) ]; then cp -v $(WASM_BIN) $(DEMO_PUB)/riscvemu64-wasm.wasm; fi
 	@if [ -f $(ROOTFS) ]; then \
 	  cp -v $(ROOTFS) $(DEMO_PUB)/wash-rootfs.ext2; \
 	  echo "  splitting rootfs into 2 MiB blocks for TinyEMU drive0..."; \
@@ -87,7 +106,7 @@ install: $(SPLITIMG)
 	  (cd $(DEMO_PUB)/wash-rootfs && ls blk*.bin > .preload); \
 	  echo "  wrote $$(ls $(DEMO_PUB)/wash-rootfs/blk*.bin | wc -l) chunks + .preload"; \
 	fi
-	@echo "installed → $(DEMO_PUB)/{wash-kernel.bin,wash-rootfs/blk.txt,opensbi-fw_jump.bin}"
+	@echo "installed → $(DEMO_PUB)/{wash-kernel.bin,wash-rootfs/blk.txt,opensbi-fw_jump.bin,riscvemu64-wasm.{js,wasm}}"
 
 clean:
 	rm -rf $(DIST)

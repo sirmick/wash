@@ -44,6 +44,16 @@ COPY fdt_ipi_mswi.c  /opensbi/lib/utils/ipi/fdt_ipi_mswi.c
 # PLATFORM=generic = DTB-driven, no hardcoded board layout. Reads the
 # FDT pointer in a1 at boot and discovers cpus/clint/plic/virtio from
 # it — exactly the shape TinyEMU's riscv_build_fdt produces.
-RUN make PLATFORM=generic CROSS_COMPILE=riscv64-linux-gnu- -j"$(nproc)" \
+#
+# FW_OPTIONS=0x1 sets SBI_SCRATCH_NO_BOOT_PRINTS (see include/sbi/
+# sbi_scratch.h:151). The four printk sites in lib/sbi/sbi_init.c
+# guarded by that bit are the ~50-line "OpenSBI v1.5 / Platform Name
+# / Domain0 RegionNN / Firmware Base ..." banner table — every byte
+# of which goes char-by-char through HTIF putchar and dominates the
+# pre-Linux wall-clock cost. WASH/aclint and WASH/addmem traces in
+# our patched aclint_mswi.c use sbi_printf directly and are NOT
+# gated by NO_BOOT_PRINTS, so the futex-init workaround survives.
+RUN make PLATFORM=generic CROSS_COMPILE=riscv64-linux-gnu- \
+        FW_OPTIONS=0x1 -j"$(nproc)" \
  && cp build/platform/generic/firmware/fw_jump.bin /fw_jump.bin \
  && ls -lh /fw_jump.bin

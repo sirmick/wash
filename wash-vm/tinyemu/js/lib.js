@@ -22,13 +22,62 @@
  * THE SOFTWARE.
  */
 mergeInto(LibraryManager.library, {
+    /* wash patch: batch console_write at the WASM↔JS boundary.
+     * HTIF (riscv_machine.c:htif_handle_cmd) emits exactly 1 byte per
+     * call, so the unpatched form did String.fromCharCode + term.write
+     * per character — 3000+ JS↔C round-trips per cold boot, each
+     * crossing the boundary, allocating a 1-char string, and running
+     * Bellard's Term VT100 state machine for one glyph.
+     *
+     * Strategy: copy bytes into a JS-side Uint8Array; on the first
+     * write of a batch, schedule a microtask via Promise.resolve()
+     * to flush all accumulated bytes as one term.write call.
+     * Microtasks drain when the current synchronous JS task
+     * (virt_machine_run → virt_machine_interp) returns to the event
+     * loop, so all chars produced inside one interp iteration
+     * coalesce into a single term.write. */
     console_write: function(opaque, buf, len)
     {
-        var str;
-        /* Note: we really send byte values. It would be up to the
-         * terminal to support UTF-8 */
-        str = String.fromCharCode.apply(String, HEAPU8.subarray(buf, buf + len));
-        term.write(str);
+        if (typeof window === 'undefined') {
+            /* node/test fallback: pass-through to whatever term is. */
+            var s = String.fromCharCode.apply(String, HEAPU8.subarray(buf, buf + len));
+            if (typeof term !== 'undefined' && term) term.write(s);
+            return;
+        }
+        var W = window.__washHtif;
+        if (!W) {
+            W = window.__washHtif = { buf: new Uint8Array(8192), len: 0, pending: false };
+        }
+        var off = W.len;
+        if (off + len > W.buf.length) {
+            var newSize = W.buf.length;
+            while (newSize < off + len) newSize <<= 1;
+            var nb = new Uint8Array(newSize);
+            nb.set(W.buf.subarray(0, off));
+            W.buf = nb;
+        }
+        W.buf.set(HEAPU8.subarray(buf, buf + len), off);
+        W.len = off + len;
+        if (!W.pending) {
+            W.pending = true;
+            Promise.resolve().then(function () {
+                W.pending = false;
+                var n = W.len;
+                if (n === 0) return;
+                W.len = 0;
+                /* String.fromCharCode.apply has a max-args limit (~64K
+                 * on most engines, lower on Safari). Chunk to stay
+                 * safe even for the rare burst that exceeds it. */
+                var s = '';
+                for (var i = 0; i < n; i += 16384) {
+                    var end = (i + 16384 < n) ? i + 16384 : n;
+                    s += String.fromCharCode.apply(String, W.buf.subarray(i, end));
+                }
+                if (typeof term !== 'undefined' && term && typeof term.write === 'function') {
+                    term.write(s);
+                }
+            });
+        }
     },
 
     /* wash patch: multi-channel sink for the per-wash virtio-console

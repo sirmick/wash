@@ -85,8 +85,14 @@ BR2_ROOTFS_OVERLAY="/overlay"
 
 BR2_TARGET_ROOTFS_EXT2=y
 BR2_TARGET_ROOTFS_EXT2_REV=1
-# 20M = wash multicall (~9 MiB) + buildroot base (~3-4 MiB) + slack.
-# Sized to fit comfortably in TinyEMU's 256 MiB RAM with room for
-# kernel + caches.
-BR2_TARGET_ROOTFS_EXT2_SIZE="20M"
+# 16M = wash multicall (~10.7 MiB) + buildroot base + slack, AFTER
+# post-build.sh prunes the toolchain libs (libstdc++/libgfortran/
+# libgomp = ~3.3 MiB) and the offline sudo helpers (~860 KiB). Used
+# space drops from ~18.5 MiB → ~14 MiB, so 16M leaves a healthy
+# 2 MiB tail. Splits into 8 × 2 MiB chunks instead of 10 — every
+# chunk skipped is one fewer HTTP fetch on cold boot.
+BR2_TARGET_ROOTFS_EXT2_SIZE="16M"
+# Post-build hook: see image/rootfs/post-build.sh. Buildroot runs it
+# with $1 = staged target/ dir, before mkfs.ext2 packs it.
+BR2_ROOTFS_POST_BUILD_SCRIPT="/input/post-build.sh"
 # No tarball, no other formats — we just want the ext2.

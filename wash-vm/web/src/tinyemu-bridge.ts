@@ -345,7 +345,10 @@ function setView(view: View): void {
   for (const v of VIEWS) {
     document.getElementById('view-' + v)?.classList.toggle('active', v === view);
   }
-  if (view === 'kernel') document.getElementById('term_paste')?.focus();
+  if (view === 'kernel') {
+    kernelXtermFit?.();
+    // xterm.js focuses naturally on click; nothing to do programmatically.
+  }
   if (view === 'shell')   { shellTerm?.fit?.(); shellTerm?.focus(); }
   if (view === 'washlog') { washlogTerm?.fit?.(); washlogTerm?.focus(); }
   if (view === 'diag')    { diagTerm?.fit?.(); diagTerm?.focus(); }
@@ -377,6 +380,27 @@ let diagTerm: { focus: () => void; fit?: () => void } | undefined;
 const encoder = new TextEncoder();
 let bellardTerm: JsLinuxTerm | undefined;
 
+// Kernel-view xterm.js terminal — replaces Bellard's canvas VT100
+// emulator (term.js, ~1500 lines) as the render sink for HTIF console
+// output. Bellard's Term still gets new'd by jslinux (we don't touch
+// jslinux.js) but its `term_el` div is hidden via CSS and its
+// `.write` method is overridden to forward to xterm.js. Wins:
+//   - one canvas-redraw cost vs N (xterm.js batches internally)
+//   - no per-char VT100 state-machine traversal through term.js
+//   - same xterm.js codebase as shell/washlog/diag (one terminal
+//     implementation across the whole app)
+interface XtermLike {
+  write(data: string | Uint8Array): void;
+  onData(cb: (data: string) => void): void;
+  resize(cols: number, rows: number): void;
+  loadAddon(addon: unknown): void;
+  open(el: HTMLElement): void;
+  cols: number;
+  rows: number;
+}
+let kernelXterm: XtermLike | undefined;
+let kernelXtermFit: (() => void) | undefined;
+
 // Userspace / login / wash-router-ready detection over the term byte
 // stream. We buffer the last ~256 bytes and string-match for the
 // known signposts; cheap and resilient to chunk boundaries.
@@ -388,6 +412,27 @@ let washReadyDetected = false;
 const tail = new Uint8Array(256);
 let tailLen = 0;
 const td = new TextDecoder('utf-8', { fatal: false });
+
+// rAF-batched dbg.pushBytes for the riscv (HTIF) stream. HTIF delivers
+// one byte per `console_write` call (the C side is hard-locked to
+// len=1 in htif_handle_cmd) — so without batching every kernel printk
+// char triggers JSON.stringify + ws.send. We collect the encoded byte
+// chunks here and flush a single concatenated Uint8Array once per
+// animation frame, collapsing ~3000 per-cold-boot per-char trips
+// through dbg.pushBytes into ~one per frame.
+const dbgRiscvBuf: Uint8Array[] = [];
+let dbgRiscvRaf = 0;
+function flushDbgRiscv(): void {
+  dbgRiscvRaf = 0;
+  if (dbgRiscvBuf.length === 0) return;
+  let total = 0;
+  for (const b of dbgRiscvBuf) total += b.length;
+  const flat = new Uint8Array(total);
+  let off = 0;
+  for (const b of dbgRiscvBuf) { flat.set(b, off); off += b.length; }
+  dbgRiscvBuf.length = 0;
+  dbg.pushBytes('riscv', flat);
+}
 
 function feedTail(bytes: Uint8Array): void {
   if (bytes.length >= tail.length) {
@@ -430,6 +475,68 @@ function detectStages(): void {
   }
 }
 
+async function mountKernelXterm(): Promise<void> {
+  const container = document.getElementById('term_container');
+  if (!container) {
+    dbg.log('tinyemu', 'mountKernelXterm: #term_container missing');
+    return;
+  }
+  // Hide Bellard's `.term` div (created inside #term_container by
+  // term.js open()). We leave the DOM alone otherwise — jslinux's
+  // resizePixel + measurement div (.term_char_size) keep their
+  // internal state consistent in case anything still calls them.
+  const bellardEl = (bellardTerm as unknown as { term_el?: HTMLElement } | undefined)?.term_el;
+  if (bellardEl) bellardEl.style.display = 'none';
+
+  const [xtermMod, fitMod] = await Promise.all([
+    import('@xterm/xterm'),
+    import('@xterm/addon-fit'),
+  ]);
+  const xt = new xtermMod.Terminal({
+    convertEol: true,
+    fontSize: 11,
+    fontFamily: 'ui-monospace, "JetBrains Mono", Menlo, monospace',
+    theme: { background: '#000000', foreground: '#cfd0d4' },
+    scrollback: 10000,
+    cols: 200, rows: 50,
+  }) as unknown as XtermLike;
+  const fit = new fitMod.FitAddon();
+  xt.loadAddon(fit);
+
+  // Dedicated wrapper so we can fit() against a positioned host
+  // without disturbing Bellard's measurement div in the same parent.
+  const wrap = document.createElement('div');
+  wrap.id = 'wash-xterm-kernel';
+  wrap.style.cssText = 'position:absolute; inset:0;';
+  container.appendChild(wrap);
+  xt.open(wrap);
+  const fitNow = () => { try { (fit as unknown as { fit: () => void }).fit(); } catch { /* host 0×0 */ } };
+  requestAnimationFrame(fitNow);
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(fitNow).observe(wrap);
+
+  // Input: forward each character to WASM's console_queue_char via
+  // the already-cwrap'd `window.console_write1` global (set by
+  // jslinux.js line 514 once the WASM runtime is up).
+  xt.onData((data) => {
+    const fn = (window as unknown as { console_write1?: (ch: number) => void }).console_write1;
+    if (typeof fn !== 'function') return;
+    for (let i = 0; i < data.length; i++) fn(data.charCodeAt(i));
+  });
+
+  kernelXterm = xt;
+  kernelXtermFit = fitNow;
+
+  // Override Bellard Term API methods used elsewhere by the WASM
+  // glue and our resize observer, so they read/write xterm state.
+  // (Bellard's Term object remains; only these three methods change.)
+  if (bellardTerm) {
+    const ext = bellardTerm as unknown as Record<string, unknown>;
+    ext.getSize = (): [number, number] => [xt.cols, xt.rows];
+    ext.resizePixel = (_w: number, _h: number): boolean => { fitNow(); return true; };
+  }
+  dbg.log('tinyemu', `kernel-view xterm mounted (${xt.cols}×${xt.rows})`);
+}
+
 const waitForTerm = setInterval(() => {
   const term = window.term;
   if (!term) return;
@@ -437,11 +544,16 @@ const waitForTerm = setInterval(() => {
   bellardTerm = term;
   dbg.log('tinyemu', 'term tap installed');
 
-  const origWrite = term.write.bind(term);
+  // Replace Bellard's term.write entirely: route bytes to xterm.js
+  // (option C) and batch the dbg WS sink to once per animation frame
+  // (option A). Skipping origWrite removes Bellard's per-char VT100
+  // state machine + canvas redraw from the hot path. The dbg-batch
+  // collapses the per-char JSON.stringify + ws.send chain.
   term.write = (s: string) => {
-    origWrite(s);
+    if (kernelXterm) kernelXterm.write(s);
     const bytes = encoder.encode(s);
-    dbg.pushBytes('riscv', bytes);
+    dbgRiscvBuf.push(bytes);
+    if (!dbgRiscvRaf) dbgRiscvRaf = requestAnimationFrame(flushDbgRiscv);
     kernelByteCount += bytes.length;
     if (firstKernelByte) {
       firstKernelByte = false;
@@ -451,28 +563,34 @@ const waitForTerm = setInterval(() => {
     detectStages();
   };
 
-  // First resize as soon as the term exists — Bellard's open() picks a
-  // default grid; we want to expand it to fill #term_wrap immediately.
-  applyTermResize();
+  // Mount xterm.js asynchronously (the dynamic imports complete in a
+  // few ms; until then writes accumulate in dbgRiscvBuf and the next
+  // term.write after mount renders them. Worst case: first ~5ms of
+  // boot text isn't painted to the kernel pane but IS captured in
+  // the WS log — acceptable.)
+  void mountKernelXterm();
 }, 50);
 
-// Resize Bellard's Term whenever the host element changes shape.
-// resizePixel recomputes cols/rows from char dimensions internally.
-// ResizeObserver fires on layout changes the window-resize event
-// misses (e.g. flex relayout after the title bar measures, view
-// toggle revealing the term, font load). Debounced via rAF.
+// Resize hook — applyTermResize uses the (possibly overridden)
+// resizePixel to call xterm's FitAddon. ResizeObserver fires on
+// layout changes the window-resize event misses (flex relayout,
+// view toggle revealing the term, font load). Debounced via rAF.
 let resizeRaf = 0;
 function applyTermResize(): void {
   if (resizeRaf) cancelAnimationFrame(resizeRaf);
   resizeRaf = requestAnimationFrame(() => {
     resizeRaf = 0;
+    if (kernelXtermFit) {
+      kernelXtermFit();
+      return;
+    }
+    // Fallback while xterm is still mounting (pre-mountKernelXterm).
     if (!bellardTerm || typeof bellardTerm.resizePixel !== 'function') return;
     const host = document.getElementById('term_wrap');
     if (!host) return;
     const rect = host.getBoundingClientRect();
-    if (rect.width < 32 || rect.height < 32) return; // not laid out yet
-    const ok = bellardTerm.resizePixel(rect.width, rect.height);
-    if (ok) dbg.log('tinyemu', `term resized to ${Math.round(rect.width)}×${Math.round(rect.height)}px`);
+    if (rect.width < 32 || rect.height < 32) return;
+    bellardTerm.resizePixel(rect.width, rect.height);
   });
 }
 window.addEventListener('resize', applyTermResize);

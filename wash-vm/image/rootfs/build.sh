@@ -114,6 +114,7 @@ EOF
 cp "$here/wash_riscv64_defconfig" "$ctx/wash_riscv64_defconfig"
 cp "$here/busybox.fragment"       "$ctx/busybox.fragment"
 cp "$here/users.table"            "$ctx/users.table"
+cp "$here/post-build.sh"          "$ctx/post-build.sh"
 cp "$here/Dockerfile" "$ctx/Dockerfile"
 
 echo "==> building buildroot rootfs"

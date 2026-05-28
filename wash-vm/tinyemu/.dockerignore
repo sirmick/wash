@@ -1,0 +1,11 @@
+# Excluded from the Docker build context for image/wasm/Dockerfile.
+# Keep the context tight: only sources, no precompiled artifacts.
+*.o
+*.d
+js/riscvemu*-wasm.js
+js/riscvemu*-wasm.wasm
+js/riscvemu*.js
+js/*.broken-dev
+js/*.prod
+splitimg
+temu
