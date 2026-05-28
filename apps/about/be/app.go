@@ -129,20 +129,26 @@ func onState(_ *sdk.Conn, _ uint32, state string) {
 
 // runtimeLoop polls the router's synthetic peer every
 // runtimePollInterval while the window is mapped, forwarding each
-// reply to the FE as runtime.table.
+// reply to the FE as runtime.table. Exits when the connection closes
+// — about is InstancingMulti, so without the Done() select every
+// closed window would leak the goroutine and ticker for the lifetime
+// of the process.
 func runtimeLoop(bus *sdk.Bus, c *sdk.Conn) {
-	// First query fires immediately so the table populates as soon
-	// as the FE mounts; subsequent ticks pace the refresh.
 	if active.Load() {
 		queryRuntime(context.Background(), bus, c)
 	}
 	t := time.NewTicker(runtimePollInterval)
 	defer t.Stop()
-	for range t.C {
-		if !active.Load() {
-			continue
+	for {
+		select {
+		case <-c.Done():
+			return
+		case <-t.C:
+			if !active.Load() {
+				continue
+			}
+			queryRuntime(context.Background(), bus, c)
 		}
-		queryRuntime(context.Background(), bus, c)
 	}
 }
 

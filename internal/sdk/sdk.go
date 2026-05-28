@@ -128,6 +128,12 @@ type Conn struct {
 	// messages flow through to OnAppMsgFrom as normal.
 	privMu      sync.Mutex
 	privPending map[string]*privCall
+
+	// done is closed exactly once when Close runs. App-side goroutines
+	// can select on Done() to tie themselves to connection lifetime
+	// without threading a context through every callback.
+	closeOnce sync.Once
+	done      chan struct{}
 }
 
 type clipboardResult struct {
@@ -296,6 +302,7 @@ func ConnectWith(t wire.FrameTransport, def *AppDef) (*Conn, error) {
 		channels:            make(map[uint32]*RawChannel),
 		pendingOpens:        make(map[uint64]chan openResult),
 		pendingClipboardGet: make(map[uint64]chan clipboardResult),
+		done:                make(chan struct{}),
 	}
 	if err := c.handshake(); err != nil {
 		_ = t.Close()
@@ -311,10 +318,19 @@ func ConnectWith(t wire.FrameTransport, def *AppDef) (*Conn, error) {
 	return c, nil
 }
 
-// Close closes the transport. Idempotent.
+// Close closes the transport. Idempotent. Also closes the Done()
+// channel so app goroutines tied to the connection exit.
 func (c *Conn) Close() error {
+	c.closeOnce.Do(func() { close(c.done) })
 	return c.transport.Close()
 }
+
+// Done returns a channel that is closed when the connection is torn
+// down (Close called, or Run returned because the transport closed).
+// App goroutines started in OnReady should select on this so they
+// exit with the connection — without it, multi-instance apps leak a
+// goroutine per closed window.
+func (c *Conn) Done() <-chan struct{} { return c.done }
 
 // handshake sends identity (with pid for router-side auth) and
 // reads identity.ack.

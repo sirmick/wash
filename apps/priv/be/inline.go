@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // inlineProc is one running sudo+argv subprocess for a wash-sudo
@@ -32,6 +33,12 @@ type inlineProc struct {
 	closed  bool
 
 	doneCh chan int // delivers exit code exactly once
+
+	// echoTimer re-enables PTY echo ~100ms after password injection.
+	// Cancel stops it so a process killed during that window doesn't
+	// leave a pending timer around (and doesn't call setEcho on a
+	// closed fd, even though that would silently fail).
+	echoTimer *time.Timer
 
 	cancelOnce sync.Once
 }
@@ -192,6 +199,9 @@ func (p *inlineProc) Resize(cols, rows uint16) {
 // observe the kill and complete normally with a non-zero exit code.
 func (p *inlineProc) Cancel() {
 	p.cancelOnce.Do(func() {
+		if p.echoTimer != nil {
+			p.echoTimer.Stop()
+		}
 		if p.cmd != nil && p.cmd.Process != nil {
 			_ = p.cmd.Process.Kill()
 		}

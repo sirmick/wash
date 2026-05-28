@@ -81,11 +81,13 @@ func startInlinePTY(sudoBin string, argv []string, cwd string, callerEnv map[str
 		pty:    ptmx,
 		doneCh: make(chan int, 1),
 	}
-
-	go func() {
-		time.Sleep(100 * time.Millisecond)
+	// Re-enable ECHO after sudo has consumed the password line. Stored
+	// on the proc so Cancel can stop it — a process killed inside the
+	// 100ms window would otherwise leave the timer pending until it
+	// fires on a closed fd.
+	p.echoTimer = time.AfterFunc(100*time.Millisecond, func() {
 		_ = setEcho(ptmx, true)
-	}()
+	})
 
 	// pty → onStream. One stream label since the PTY merges
 	// stdout/stderr at the kernel level.

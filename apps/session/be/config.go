@@ -196,6 +196,15 @@ func startConfigWatcher(c *sdk.Conn) {
 		return
 	}
 	target := configFilePath()
+	// Tie the watcher's lifetime to the connection. Without this the
+	// inotify FD and the events-range goroutine survive every closed
+	// session window — and the e2e harness has hit the inotify
+	// instance limit in the past from exactly this kind of leak.
+	go func() {
+		<-c.Done()
+		sub.Close()
+		mgr.Close()
+	}()
 	go func() {
 		var (
 			mu      sync.Mutex
