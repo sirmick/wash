@@ -54,6 +54,16 @@ dbg.log('demo', 'tinyemu page loaded');
   w.__washDbg = (cat, line) => dbg.log(cat, line);
 })();
 
+// Bridge for shell-side diagnostics that need to reach the demo
+// server log. The shell runs inside a dynamically-imported bundle and
+// can't reach this module directly; expose a window global so
+// console.info('[wash-diag] ...') in the shell (and any code it
+// imports) can forward here without a build-time dependency.
+(() => {
+  const w = window as unknown as { __washDiagLog?: (source: string, msg: string) => void };
+  w.__washDiagLog = (source, msg) => dbg.log(source, msg);
+})();
+
 // --- 0a. Throttling visibility ----------------------------------------------
 // When a tab is backgrounded, Chrome aggressively clamps timers and
 // emscripten_async_call (setTimeout under the hood) to ~1Hz — the VM
@@ -739,13 +749,20 @@ declare global {
       const m = reIn.exec(event);
       if (m) {
         const port = parseInt(m[1], 10);
-        const vc = vcForPort(port);
-        if (!vc) {
-          dbg.log('wash', `bus.send: no vc for port ${port}`);
+        // Port 2 is the wash router data plane — router reads from
+        // /dev/vport4p0 (multiport device), NOT /dev/hvc2 (HVC). The
+        // bootstrap already injects to dataVC = vports[0]; the shell
+        // must use the same device for its outbound frames, or
+        // FE→BE bytes vanish into /dev/hvc2 where nobody reads.
+        // Other ports stay on the HVC washConsoles (login getty, etc.)
+        // for back-compat.
+        const target = port === 2 ? dataVC : vcForPort(port);
+        if (!target) {
+          dbg.log('wash', `bus.send: no transport for port ${port}`);
           return;
         }
         const bytes = payload as Uint8Array;
-        for (let i = 0; i < bytes.length; i++) vc.input(bytes[i]);
+        for (let i = 0; i < bytes.length; i++) target.input(bytes[i]);
         txByteCount += bytes.length;
         if (txByteCount <= 64 || (txByteCount % 256) < bytes.length) {
           const hex = Array.from(bytes.slice(0, 16)).map(b => b.toString(16).padStart(2,'0')).join(' ');
@@ -808,16 +825,14 @@ declare global {
     }
   });
 
-  // The shell reads ?transport=virtio-console&port=2 from
-  // window.location.search during its synchronous init (Conn picks
-  // transport, then connects). We don't want this in the URL bar
-  // permanently — so set it transiently around the import, then
-  // restore the clean URL once the shell has consumed it.
-  const origUrl = window.location.pathname + window.location.search + window.location.hash;
-  const transientSp = new URLSearchParams(window.location.search);
-  transientSp.set('transport', 'virtio-console');
-  if (!transientSp.has('port')) transientSp.set('port', '2');
-  window.history.replaceState(null, '', window.location.pathname + '?' + transientSp.toString());
+  // Tell the shell which transport to pick via a window global, so
+  // the URL bar doesn't flicker through ?transport=virtio-console&port=2
+  // during bundle load. The shell's pickTransport() reads this first
+  // and falls back to URL params if absent (back-compat).
+  (window as unknown as { __washShellTransport?: { kind: string; port: number } }).__washShellTransport = {
+    kind: 'virtio-console',
+    port: 2,
+  };
 
   // Kick the bootstrap immediately — DO NOT wait for firstWashByte
   // first. The router's HandleShell push (catalog, app.declared,
@@ -871,9 +886,6 @@ declare global {
     // its port-2 handler. Nothing to do here.
   }
 
-  // Restore the original (clean) URL. The shell has already read its
-  // transport hint by now.
-  window.history.replaceState(null, '', origUrl);
 })();
 
 // --- 7. WS-driven admin commands -------------------------------------------

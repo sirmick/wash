@@ -106,23 +106,32 @@ server.on('request', async (req, res) => {
     return;
   }
 
-  // /icons.svg — wash icon sprite. Lives in wash-router's embedded
-  // assets at internal/runner/router/assets/icons.svg. window.tsx and
-  // a few apps reference symbols via `<use href="/icons.svg#name">`,
-  // which expects the file at the page origin. Wash-router would
-  // serve it from its embedded FS when transport=ws — we use fd:3
-  // for the in-VM router, so the FE never sees it without this route.
-  if (url === '/icons.svg' || url.startsWith('/icons.svg?')) {
-    const ICONS = resolve(DEMO_ROOT, '../../internal/runner/router/assets/icons.svg');
-    try {
-      const st = await stat(ICONS);
-      res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Content-Length': st.size });
-      createReadStream(ICONS).pipe(res);
-    } catch {
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      res.end('icons.svg not found\n');
+  // Chrome assets served at the page origin — wash-router would
+  // serve these from its embedded FS when transport=ws, but for the
+  // in-VM router (fd:3 transport) the FE never sees them without
+  // this route. Mirrors the file layout in
+  // internal/runner/router/assets/.
+  //   /icons.svg     — Lucide sprite (referenced via <use href="/icons.svg#name">)
+  //   /wash-logo.svg — taskbar / start-button icon used by the session app
+  {
+    const CHROME = new Map([
+      ['/icons.svg', 'icons.svg'],
+      ['/wash-logo.svg', 'wash-logo.svg'],
+    ]);
+    const bare = url.split('?')[0];
+    const fname = CHROME.get(bare);
+    if (fname) {
+      const target = resolve(DEMO_ROOT, '../../internal/runner/router/assets/', fname);
+      try {
+        const st = await stat(target);
+        res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Content-Length': st.size });
+        createReadStream(target).pipe(res);
+      } catch {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end(`${fname} not found\n`);
+      }
+      return;
     }
-    return;
   }
 
   // /shell/* — static-serve the pre-built shell bundle from

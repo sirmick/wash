@@ -4,6 +4,8 @@
 //
 // Replaces the v0.0 base64-in-JSON asset.fetch / asset.deliver pipe.
 
+import { wlog } from './diag';
+
 interface Pending {
   channelID: number;
   chunks: Uint8Array[];
@@ -59,13 +61,31 @@ export function finishBundle(channelID: number): void {
 
   const blob = new Blob(p.chunks, { type: 'application/javascript' });
   const url = URL.createObjectURL(blob);
+
+  let settled = false;
+  // Watchdog: if a future regression pauses async module resolution
+  // (e.g. hidden-tab throttling on a Blob-URL `import()`), the
+  // bundle would never define its custom element and the desktop
+  // would silently stay blank. Scream after 5s so the symptom is
+  // visible without devtools.
+  const watchdog = setTimeout(() => {
+    if (settled) return;
+    wlog(`bundle PENDING after 5s: inst=${instanceID} ch=${channelID} viz=${document.visibilityState} focus=${document.hasFocus()}`);
+  }, 5000);
+
   import(/* @vite-ignore */ url)
     .then(() => {
+      settled = true;
+      clearTimeout(watchdog);
       URL.revokeObjectURL(url);
       p.resolve();
     })
     .catch((err) => {
+      settled = true;
+      clearTimeout(watchdog);
       URL.revokeObjectURL(url);
+      const stack = err instanceof Error ? err.stack ?? err.message : String(err);
+      wlog(`bundle FAILED: inst=${instanceID} stack=${stack}`);
       p.reject(err instanceof Error ? err : new Error(String(err)));
     });
 }

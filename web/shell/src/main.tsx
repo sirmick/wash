@@ -13,11 +13,14 @@ import { For, Show, createEffect, createSignal } from 'solid-js';
 import type { Component } from 'solid-js';
 import { Conn, type ConnState } from './ws';
 import { beginBundle, finishBundle, pushBundleBytes } from './assets';
+
+const __washLoadT0 = performance.now();
 import { washFetch, handleAssetReadOK, handleAssetReadErr, pushAssetBytes, finishAsset } from './wash-fetch';
 import {
   VIEWPORTS_PER_AXIS,
   applySessionPatch,
   applySessionSnapshot,
+  desktop,
   dismissCrashed,
   focused,
   markCrashed,
@@ -180,18 +183,20 @@ function wsURL(): string {
  * its bus to `window.washV86Bus` before loading the shell.
  */
 function pickTransport(): string | (() => import('./ws').SocketFactory extends () => infer S ? S : never) {
+  // Prefer a window-global config object (set by the outer page before
+  // importing the shell). Falls back to URL params for backwards
+  // compatibility. The window-global path lets the demo page keep the
+  // URL bar clean — no transient ?transport=… flicker on load.
+  const cfg = (window as unknown as { __washShellTransport?: { kind?: string; port?: number } }).__washShellTransport;
   const params = new URLSearchParams(window.location.search);
-  const t = params.get('transport');
+  const t = cfg?.kind ?? params.get('transport');
   if (t !== 'virtio-console') return wsURL();
-  const portN = Number(params.get('port') ?? '2');
+  const portN = cfg?.port ?? Number(params.get('port') ?? '2');
   const bus = (window as unknown as { washV86Bus?: import('./virtio').V86Bus }).washV86Bus;
   if (!bus) {
-    // Fall back to ws if the bus isn't wired yet — the page hasn't
-    // booted v86 properly. Log loudly so the demo author notices.
-    console.error('wash shell: ?transport=virtio-console requested but window.washV86Bus is undefined; falling back to WebSocket');
+    console.error('wash shell: virtio-console transport requested but window.washV86Bus is undefined; falling back to WebSocket');
     return wsURL();
   }
-  // Returning a factory; Conn detects via typeof.
   return virtioConsoleFactory(bus, portN) as any;
 }
 
@@ -346,11 +351,6 @@ createEffect(() => {
 
 function handleAppDeclared(msg: ShellAppDeclared): void {
   instances.set(msg.instance_id, { element: msg.element, surface: msg.surface });
-  // Bundle bytes arrive on a kind=bundle raw channel: channel.bind
-  // calls beginBundle() (which records the in-flight promise) and
-  // channel.unbind calls finishBundle() (which imports and resolves).
-  // For desktop-surface apps we mount the desktop element once the
-  // import has completed.
   if (msg.surface === 'desktop') {
     waitForBundleByInstance(msg.instance_id)
       .then(() => mountDesktop({ instanceID: msg.instance_id, element: msg.element }))
@@ -734,3 +734,47 @@ function stringifyArg(a: unknown): string {
     return String(a);
   }
 }
+
+// window.__washDiag — invoke from devtools (or via console.info pipe)
+// to get a snapshot of shell state. Designed for the blank-desktop bug:
+// answers "what does the shell think it has?" without devtools open.
+interface WashDiagSnapshot {
+  loadAgeMs: number;
+  visibility: DocumentVisibilityState;
+  hasFocus: boolean;
+  desktop: { instanceID: string; element: string } | null;
+  declaredInstances: Array<{ id: string; element: string; surface: string }>;
+  bundleReady: string[];
+  windowsCount: number;
+  rootChildCount: number;
+  desktopHostChildCount: number;
+  customElements: Record<string, boolean>;
+}
+declare global {
+  interface Window { __washDiag?: () => WashDiagSnapshot; }
+}
+window.__washDiag = (): WashDiagSnapshot => {
+  const d = desktop();
+  const root = document.getElementById('root');
+  const deskHost = root?.querySelector('.wash-desktop');
+  const probes = [
+    'wash-app-session', 'wash-app-files', 'wash-app-terminal',
+    'wash-app-about', 'wash-app-packages', 'wash-app-shell',
+  ];
+  const ce: Record<string, boolean> = {};
+  for (const tag of probes) ce[tag] = customElements.get(tag) != null;
+  const snap: WashDiagSnapshot = {
+    loadAgeMs: Math.round(performance.now() - __washLoadT0),
+    visibility: document.visibilityState,
+    hasFocus: document.hasFocus(),
+    desktop: d ? { instanceID: d.instanceID, element: d.element } : null,
+    declaredInstances: [...instances.entries()].map(([id, v]) => ({ id, element: v.element, surface: v.surface })),
+    bundleReady: [...bundleReady.keys()],
+    windowsCount: windows.length,
+    rootChildCount: root?.children.length ?? -1,
+    desktopHostChildCount: deskHost?.children.length ?? -1,
+    customElements: ce,
+  };
+  console.info(`[wash-diag] snapshot: ${JSON.stringify(snap)}`);
+  return snap;
+};

@@ -43,12 +43,36 @@ export interface SocketLike {
 
 const HEADER_BYTES = 8;
 
+// Defensive diagnostic sink — used to surface frames being held in
+// the buffer because no consumer is attached yet. Normal during
+// bootstrap (bus.register-during-ctor re-entry path); the setter on
+// `onmessage` drains the buffer as soon as Conn attaches. If this
+// ever fires AFTER the shell is up and running, something's wrong.
+function vlogWarn(msg: string): void {
+  console.warn(`[wash-diag] ${msg}`);
+  const sink = (window as unknown as { __washDiagLog?: (s: string, m: string) => void }).__washDiagLog;
+  try { sink?.('wash-diag', msg); } catch { /* ignore */ }
+}
+
 export class VirtioConsoleSocket implements SocketLike {
   binaryType: 'arraybuffer' = 'arraybuffer';
   onopen: ((ev: Event) => unknown) | null = null;
   onerror: ((ev: Event) => unknown) | null = null;
-  onmessage: ((ev: MessageEvent) => unknown) | null = null;
   onclose: ((ev: CloseEvent) => unknown) | null = null;
+
+  // onmessage uses a setter so frames buffered during construction
+  // (before Conn could assign onmessage — see the synchronous
+  // bus.register → bootResult.finish() re-entry path in
+  // wash-vm/web/src/tinyemu-bridge.ts) get drained on assignment.
+  // Without this, real WS semantics aren't preserved: a
+  // VirtioConsoleSocket that received bytes during constructor would
+  // silently drop frames because the consumer hadn't yet attached.
+  private _onmessage: ((ev: MessageEvent) => unknown) | null = null;
+  get onmessage(): ((ev: MessageEvent) => unknown) | null { return this._onmessage; }
+  set onmessage(fn: ((ev: MessageEvent) => unknown) | null) {
+    this._onmessage = fn;
+    if (fn != null && this.buf.length >= HEADER_BYTES) this.drainBuffer();
+  }
 
   private readonly bus: V86Bus;
   private readonly portN: number;
@@ -104,19 +128,41 @@ export class VirtioConsoleSocket implements SocketLike {
     merged.set(bytes, this.buf.length);
     this.buf = merged;
 
-    // Drain every complete frame currently in the buffer. We don't
-    // call onmessage with partial frames — Conn's onMessage expects
-    // exactly one wash frame per dispatch.
-    for (;;) {
-      if (this.buf.length < HEADER_BYTES) return;
+    this.drainBuffer();
+  }
+
+  // drainBuffer pops every complete wash frame currently in `this.buf`
+  // and dispatches it via `_onmessage`. If `_onmessage` is null the
+  // buffer stays intact — the setter for `onmessage` re-invokes this
+  // method on assignment so any frames buffered while the consumer
+  // wasn't attached still get delivered.
+  //
+  // Why this matters: VirtioConsoleSocket's bus.register call inside
+  // the constructor can synchronously receive bytes when there's a
+  // bootstrap that flushes accumulated output on handler-registration
+  // (tinyemu-bridge.ts → bootResult.finish()). The previous impl
+  // advanced past each frame and then no-op'd on `onmessage?.(...)`,
+  // silently dropping frames before Conn could assign onmessage. If
+  // that regression returns, vlogWarn fires below.
+  private drainBuffer(): void {
+    while (this.buf.length >= HEADER_BYTES) {
       const length = new DataView(this.buf.buffer, this.buf.byteOffset + 4, 4).getUint32(0, false);
       const total = HEADER_BYTES + length;
-      if (this.buf.length < total) return;
+      if (this.buf.length < total) break;
+      if (this._onmessage == null) {
+        // Hold the frame in the buffer until onmessage attaches. The
+        // setter will re-invoke drainBuffer to flush. The warn is
+        // chatty during bootstrap (one per buffered frame) but the
+        // setter clears the queue in one go, so steady-state silence
+        // is the normal post-bootstrap signal.
+        vlogWarn(`virtio[port=${this.portN}].FRAME HELD (no onmessage yet): ch=${(this.buf[1] << 16) | (this.buf[2] << 8) | this.buf[3]} payloadLen=${length} bufLen=${this.buf.length}`);
+        break;
+      }
       const frame = this.buf.slice(0, total);
-      // Advance the buffer FIRST so a re-entrant call into send
-      // from onmessage doesn't see a half-consumed buffer.
+      // Advance the buffer FIRST so a re-entrant call into send from
+      // onmessage doesn't see a half-consumed buffer.
       this.buf = this.buf.subarray(total);
-      this.onmessage?.({ type: 'message', data: frame.buffer } as unknown as MessageEvent);
+      this._onmessage({ type: 'message', data: frame.buffer } as unknown as MessageEvent);
     }
   }
 }
