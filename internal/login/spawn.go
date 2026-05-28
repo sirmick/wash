@@ -61,7 +61,23 @@ type Spawner struct {
 	// SocketPollInterval is the polling cadence while waiting for
 	// the ctl socket. Zero defaults to 25ms.
 	SocketPollInterval time.Duration
+
+	// MaxPerUID caps concurrent live sessions per uid. Zero
+	// disables the cap (unbounded). Spawn returns ErrSessionCap
+	// when the cap is hit; the picker surfaces this as
+	// "End an existing session first." Embedded deployments
+	// typically set this to 1 to lock down to single-session.
+	MaxPerUID int
+
+	// Sessions is consulted for the live-session count when
+	// MaxPerUID > 0. Optional; nil disables cap enforcement
+	// regardless of MaxPerUID.
+	Sessions SessionRegistry
 }
+
+// ErrSessionCap is returned by Spawn when the per-uid live-session
+// cap would be exceeded.
+var ErrSessionCap = fmt.Errorf("session cap reached for this user")
 
 // Spawn forks a new wash-router process for (id.UID, name). Returns
 // the resulting Session — including the running pid and the ctl
@@ -75,6 +91,12 @@ type Spawner struct {
 func (s *Spawner) Spawn(id Identity, name string) (Session, error) {
 	if name == "" {
 		name = id.Name
+	}
+	if s.MaxPerUID > 0 && s.Sessions != nil {
+		existing, err := s.Sessions.List(id.UID)
+		if err == nil && len(existing) >= s.MaxPerUID {
+			return Session{}, ErrSessionCap
+		}
 	}
 	sessid, err := generateSessID()
 	if err != nil {

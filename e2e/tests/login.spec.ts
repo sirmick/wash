@@ -19,6 +19,16 @@ test.describe('wash-login auth flow', () => {
     await expect(page.locator('input[name="password"]')).toBeVisible();
   });
 
+  test('post-auth lands on /sessions picker', async ({ page, login }) => {
+    await page.goto(login.url + 'login');
+    await page.fill('input[name="user"]', login.user);
+    await page.fill('input[name="password"]', login.password);
+    await page.click('button[type="submit"]');
+    await expect(page).toHaveURL(login.url + 'sessions');
+    await expect(page.locator('h1')).toContainText('wash sessions');
+    await expect(page.locator('h1')).toContainText(login.user);
+  });
+
   test('bad credentials bounce back with error', async ({ page, login }) => {
     await page.goto(login.url + 'login');
     await page.fill('input[name="user"]', login.user);
@@ -28,28 +38,16 @@ test.describe('wash-login auth flow', () => {
     await expect(page.locator('.err')).toContainText('Invalid');
   });
 
-  test('good credentials land on welcome page', async ({ page, login }) => {
-    await page.goto(login.url + 'login');
-    await page.fill('input[name="user"]', login.user);
-    await page.fill('input[name="password"]', login.password);
-    await page.click('button[type="submit"]');
-    // After 302 + 302 (auth → /, / → welcome page), the URL settles
-    // on the root with the welcome page rendered.
-    await expect(page).toHaveURL(login.url);
-    await expect(page.locator('h1')).toContainText(`Authenticated as`);
-    await expect(page.locator('h1 code')).toHaveText(login.user);
-  });
-
   test('cookie survives reload', async ({ page, login }) => {
     await page.goto(login.url + 'login');
     await page.fill('input[name="user"]', login.user);
     await page.fill('input[name="password"]', login.password);
     await page.click('button[type="submit"]');
-    await expect(page.locator('h1 code')).toHaveText(login.user);
+    await expect(page).toHaveURL(login.url + 'sessions');
 
     await page.reload();
-    await expect(page).toHaveURL(login.url);
-    await expect(page.locator('h1 code')).toHaveText(login.user);
+    await expect(page).toHaveURL(login.url + 'sessions');
+    await expect(page.locator('h1')).toContainText(login.user);
   });
 
   test('logout clears cookie and returns to /login', async ({ page, login }) => {
@@ -57,14 +55,112 @@ test.describe('wash-login auth flow', () => {
     await page.fill('input[name="user"]', login.user);
     await page.fill('input[name="password"]', login.password);
     await page.click('button[type="submit"]');
-    await expect(page.locator('h1 code')).toHaveText(login.user);
+    await expect(page).toHaveURL(login.url + 'sessions');
 
-    await page.click('button[type="submit"]'); // welcome page's "Log out"
+    await page.locator('form.logout button[type="submit"]').click();
     await expect(page).toHaveURL(/\/login$/);
 
-    // After logout, hitting / again should redirect to /login.
     await page.goto(login.url);
     await expect(page).toHaveURL(/\/login$/);
+  });
+});
+
+test.describe('wash-login picker (M4)', () => {
+  async function loginAs(page: import('@playwright/test').Page, login: import('../fixtures/login').LoginHandle) {
+    await page.goto(login.url + 'login');
+    await page.fill('input[name="user"]', login.user);
+    await page.fill('input[name="password"]', login.password);
+    await page.click('button[type="submit"]');
+    await expect(page).toHaveURL(login.url + 'sessions');
+  }
+
+  test('empty picker shows hint and the new-session form', async ({ page, login }) => {
+    await loginAs(page, login);
+    await expect(page.locator('text=No running sessions')).toBeVisible();
+    await expect(page.locator('form.new input[name="name"]')).toBeVisible();
+    await expect(page.locator('form.new button[type="submit"]')).toBeEnabled();
+  });
+
+  test('new session via picker spawns and lands at /ws/s/<sessid>/', async ({ page, login }) => {
+    await loginAs(page, login);
+    await page.fill('form.new input[name="name"]', 'scratch');
+    await page.click('form.new button[type="submit"]');
+    // Server redirects to /ws/s/<sessid>/. The browser tries to load
+    // that as a regular HTTP page, which the server hijacks for WS
+    // upgrade — Chromium gets a 502 / connection drop because the
+    // WS Upgrade isn't a real navigation. Verify the URL did change
+    // to /ws/s/<sessid>/ before the error page.
+    await expect(page).toHaveURL(/\/ws\/s\/s-[0-9a-f]+\/?$/);
+
+    // The session should be visible in /proc with name "scratch".
+    await expect.poll(() => login.log(), { timeout: 5000 })
+      .toMatch(/sessions\/new: spawned sessid=s-[0-9a-f]+ pid=\d+ name="scratch"/);
+    const found = findRunningRouterUnder(login.runRoot, login.uid);
+    expect(found.length).toBe(1);
+  });
+
+  test('picker lists sessions and End button SIGTERMs them', async ({ page, login }) => {
+    await loginAs(page, login);
+    // Spawn two named sessions via the form (each navigates to
+    // /ws/s/... and produces a 502 from the hijacked conn, then
+    // we navigate back to /sessions to see the list).
+    for (const name of ['work', 'home']) {
+      await page.goto(login.url + 'sessions');
+      await page.fill('form.new input[name="name"]', name);
+      await page.click('form.new button[type="submit"]');
+      // Wait for the spawn log line so the next iteration sees this
+      // session in /proc.
+      await expect.poll(() => login.log(), { timeout: 5000 })
+        .toMatch(new RegExp(`sessions/new: spawned sessid=s-[0-9a-f]+ pid=\\d+ name="${name}"`));
+    }
+
+    await page.goto(login.url + 'sessions');
+    await expect(page.locator('.session[data-sessid]')).toHaveCount(2);
+    await expect(page.locator('.session .name', { hasText: 'work' })).toBeVisible();
+    await expect(page.locator('.session .name', { hasText: 'home' })).toBeVisible();
+
+    // End the "work" one.
+    const workCard = page.locator('.session', { has: page.locator('.name', { hasText: 'work' }) });
+    await workCard.locator('button.end').click();
+    await expect(page).toHaveURL(login.url + 'sessions');
+
+    // Wait for the SIGTERM logline + the router actually exiting.
+    await expect.poll(() => findRunningRouterUnder(login.runRoot, login.uid).length, { timeout: 5000 }).toBe(1);
+    await expect(page.locator('.session[data-sessid]')).toHaveCount(1);
+    await expect(page.locator('.session .name', { hasText: 'home' })).toBeVisible();
+  });
+
+  test('cap enforcement disables new-session form', async ({ page, browser, login }) => {
+    // Need a wash-login configured with a cap. Bring up a second
+    // instance via the fixture's startLogin with --max-sessions-per-uid=1.
+    const { startLogin, stopLogin } = await import('../fixtures/login');
+    const capped = await startLogin({ extraArgs: ['--max-sessions-per-uid', '1'] });
+    try {
+      const ctx = await browser.newContext();
+      const p = await ctx.newPage();
+      // Log in.
+      await p.goto(capped.url + 'login');
+      await p.fill('input[name="user"]', capped.user);
+      await p.fill('input[name="password"]', capped.password);
+      await p.click('button[type="submit"]');
+      await expect(p).toHaveURL(capped.url + 'sessions');
+
+      // Spawn one session.
+      await p.fill('form.new input[name="name"]', 'only');
+      await p.click('form.new button[type="submit"]');
+      await expect.poll(() => capped.log(), { timeout: 5000 })
+        .toMatch(/sessions\/new: spawned sessid=s-[0-9a-f]+ pid=\d+ name="only"/);
+
+      // Back to picker — cap should be visible.
+      await p.goto(capped.url + 'sessions');
+      await expect(p.locator('form.new input[name="name"]')).toBeDisabled();
+      await expect(p.locator('form.new button[type="submit"]')).toBeDisabled();
+      await expect(p.locator('text=Session cap reached')).toBeVisible();
+
+      await ctx.close();
+    } finally {
+      await stopLogin(capped);
+    }
   });
 });
 
@@ -75,7 +171,7 @@ test.describe('wash-login → wash-router handoff', () => {
     await page.fill('input[name="user"]', login.user);
     await page.fill('input[name="password"]', login.password);
     await page.click('button[type="submit"]');
-    await expect(page.locator('h1 code')).toHaveText(login.user);
+    await expect(page).toHaveURL(login.url + 'sessions');
 
     // Now open a WebSocket to /ws from the browser context. This
     // sends the cookie alongside the upgrade. wash-login validates,
@@ -114,6 +210,7 @@ test.describe('wash-login → wash-router handoff', () => {
     await page.fill('input[name="user"]', login.user);
     await page.fill('input[name="password"]', login.password);
     await page.click('button[type="submit"]');
+    await expect(page).toHaveURL(login.url + 'sessions');
 
     const wsUrl = login.url.replace(/^http/, 'ws') + 'ws';
     const open1 = await page.evaluate(async (url) => {
@@ -154,6 +251,7 @@ test.describe('wash-login → wash-router handoff', () => {
     await page.fill('input[name="user"]', login.user);
     await page.fill('input[name="password"]', login.password);
     await page.click('button[type="submit"]');
+    await expect(page).toHaveURL(login.url + 'sessions');
 
     // Open a WS to spawn a session.
     const wsUrl = login.url.replace(/^http/, 'ws') + 'ws';

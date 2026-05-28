@@ -53,6 +53,7 @@ func Run(args []string) int {
 	appsDir := fs.String("apps-dir", "", "apps-dir forwarded to spawned wash-router processes. Empty means let the router default to its own binary's directory.")
 	runRoot := fs.String("run-root", "/run/wash", "root for per-uid runtime state (sessions sockets, spawn flock).")
 	idleTimeout := fs.Duration("idle-timeout", 0, "--idle-timeout forwarded to spawned wash-router processes. Zero forwards no flag (router default 30m).")
+	maxSessions := fs.Int("max-sessions-per-uid", 8, "cap on concurrent live wash-router processes per user. 0 disables; embedded deployments typically set to 1.")
 	noHandoff := fs.Bool("no-handoff", false, "disable the /ws handoff path (M2-only mode for auth-flow inspection). Implied off when --auth-test is set.")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
@@ -116,15 +117,18 @@ func Run(args []string) int {
 			logger.Printf("could not locate wash-router; pass --router-binary or use --no-handoff to disable /ws")
 			return 2
 		}
-		cfg.Sessions = login.NewProcRegistry()
+		sessions := login.NewProcRegistry()
+		cfg.Sessions = sessions
 		cfg.Spawner = &login.Spawner{
 			RouterBinary: routerBin,
 			AllowUID:     uint32(os.Getuid()),
 			RunRoot:      *runRoot,
 			AppsDir:      *appsDir,
 			IdleTimeout:  *idleTimeout,
+			MaxPerUID:    *maxSessions,
+			Sessions:     sessions,
 		}
-		logger.Printf("handoff enabled: router=%s run-root=%s allow-uid=%d", routerBin, *runRoot, os.Getuid())
+		logger.Printf("handoff enabled: router=%s run-root=%s allow-uid=%d max-sessions-per-uid=%d", routerBin, *runRoot, os.Getuid(), *maxSessions)
 	} else {
 		logger.Printf("handoff disabled (--no-handoff); /ws will return 503")
 	}

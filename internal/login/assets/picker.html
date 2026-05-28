@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>wash — sessions ({{.Name}})</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    background: #0e1116; color: #d9dde3;
+    font: 14px/1.4 system-ui, -apple-system, sans-serif;
+    min-height: 100vh; margin: 0;
+    display: grid; place-items: start center;
+    padding: 4rem 1rem;
+  }
+  .wrap {
+    width: 100%; max-width: 38rem;
+  }
+  h1 { margin: 0 0 1rem 0; font-size: 1.1rem; font-weight: 600; }
+  h1 .who { color: #8b949e; font-weight: 400; margin-left: 0.4rem; }
+  .err {
+    background: #4a1a1a; color: #ffb8b8;
+    border: 1px solid #6e2424; border-radius: 4px;
+    padding: 0.5rem 0.7rem; font-size: 0.9rem;
+    margin: 0 0 1rem 0;
+  }
+  .sessions {
+    display: grid; gap: 0.5rem;
+    margin: 0 0 1.2rem 0;
+  }
+  .session {
+    background: #161b22; border: 1px solid #2a313a;
+    border-radius: 6px;
+    padding: 0.7rem 0.9rem;
+    display: grid; grid-template-columns: 1fr auto auto; gap: 0.6rem;
+    align-items: center;
+  }
+  .session .name {
+    font-weight: 500; color: #d9dde3;
+  }
+  .session .meta {
+    color: #6e7681; font-size: 0.78rem; margin-top: 0.15rem;
+    font-family: ui-monospace, monospace;
+  }
+  .session a.attach,
+  .session button.end,
+  form.new button,
+  form.logout button {
+    border: 1px solid #30363d; border-radius: 4px;
+    padding: 0.35rem 0.7rem; font: inherit;
+    background: #21262d; color: #d9dde3;
+    text-decoration: none; cursor: pointer;
+  }
+  .session a.attach { background: #2c5fd9; border-color: #3a6ee8; color: white; }
+  .session a.attach:hover { background: #3a6ee8; }
+  .session button.end:hover, form.new button:hover, form.logout button:hover { background: #30363d; }
+  .empty {
+    color: #8b949e; font-style: italic; padding: 0.6rem 0;
+  }
+  form.new {
+    background: #161b22; border: 1px solid #2a313a;
+    border-radius: 6px;
+    padding: 0.8rem 0.9rem;
+    display: grid; grid-template-columns: 1fr auto; gap: 0.5rem;
+  }
+  form.new label { display: block; color: #8b949e; font-size: 0.85rem; margin-bottom: 0.2rem; grid-column: 1 / -1; }
+  form.new input {
+    background: #0d1117; color: #d9dde3;
+    border: 1px solid #30363d; border-radius: 4px;
+    padding: 0.4rem 0.6rem; font: inherit;
+  }
+  form.new input:focus { outline: none; border-color: #5b8eff; }
+  .cap {
+    color: #c69a26; font-size: 0.85rem; margin-top: 0.4rem;
+  }
+  .row-logout {
+    margin-top: 1.5rem;
+    display: flex; justify-content: flex-end;
+  }
+</style>
+<body>
+  <div class="wrap">
+    <h1>wash sessions <span class="who">— {{.Name}} (uid {{.UID}})</span></h1>
+
+    {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
+
+    {{if .Sessions}}
+      <div class="sessions">
+        {{range .Sessions}}
+          <div class="session" data-sessid="{{.SessID}}">
+            <div>
+              <div class="name">{{.Name}}</div>
+              <div class="meta">sessid {{.SessID}} · pid {{.Pid}}</div>
+            </div>
+            <a class="attach" href="/ws/s/{{.SessID}}/">Attach</a>
+            <form method="post" action="/sessions/end" style="margin:0">
+              <input type="hidden" name="sessid" value="{{.SessID}}">
+              <button type="submit" class="end">End</button>
+            </form>
+          </div>
+        {{end}}
+      </div>
+    {{else}}
+      <div class="empty">No running sessions. Start one below.</div>
+    {{end}}
+
+    <form class="new" method="post" action="/sessions/new" autocomplete="off">
+      <label for="new-name">New session name (optional)</label>
+      <input id="new-name" type="text" name="name" placeholder="e.g. work, scratch, or a timestamp" {{if .AtCap}}disabled{{end}}>
+      <button type="submit" {{if .AtCap}}disabled{{end}}>+ new</button>
+      {{if .AtCap}}<div class="cap" style="grid-column: 1 / -1;">Session cap reached ({{.MaxCap}}). End an existing session first.</div>{{end}}
+    </form>
+
+    <div class="row-logout">
+      <form class="logout" method="get" action="/logout">
+        <button type="submit">Log out</button>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

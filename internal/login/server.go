@@ -24,6 +24,8 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -41,6 +43,7 @@ type Server struct {
 	log        *log.Logger
 	tplLogin   *template.Template
 	tplWelcome *template.Template
+	tplPicker  *template.Template
 	sessions   SessionRegistry      // nil = /ws handoff disabled (M2-only mode)
 	spawner    *Spawner             // nil = /ws handoff disabled
 	killer     func(pid int) error  // overrideable for tests; default syscall.Kill(pid, SIGTERM)
@@ -91,6 +94,10 @@ func NewServer(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse welcome.html: %w", err)
 	}
+	tplPicker, err := template.ParseFS(assetsFS, "assets/picker.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse picker.html: %w", err)
+	}
 	killer := cfg.Killer
 	if killer == nil {
 		killer = func(pid int) error { return syscall.Kill(pid, syscall.SIGTERM) }
@@ -103,6 +110,7 @@ func NewServer(cfg Config) (*Server, error) {
 		log:        cfg.Logger,
 		tplLogin:   tplLogin,
 		tplWelcome: tplWelcome,
+		tplPicker:  tplPicker,
 		sessions:   cfg.Sessions,
 		spawner:    cfg.Spawner,
 		killer:     killer,
@@ -117,14 +125,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/auth", s.handleAuth)
 	mux.HandleFunc("/logout", s.handleLogout)
 	mux.HandleFunc("/ws", s.handleWS)
+	mux.HandleFunc("/ws/s/", s.handleWSSpecific)
+	mux.HandleFunc("/sessions", s.handleSessionsPage)
+	mux.HandleFunc("/sessions/new", s.handleSessionsNew)
+	mux.HandleFunc("/sessions/end", s.handleSessionsEnd)
 	return mux
 }
 
-// handleWS is the M3 handoff endpoint. Validates the cookie,
-// resolves the target session (auto-attach if exactly one exists;
-// auto-spawn if none), then SCM_RIGHTS the browser-facing TCP fd
-// to the per-user router's ctl socket. wash-login is not in the
-// data path after this returns.
+// handleWS resolves the target session (auto-attach if exactly one
+// exists; auto-spawn if none; redirect to picker if there are
+// many) and SCM_RIGHTS-hands the browser-facing TCP fd to the
+// per-user router's ctl socket. wash-login is not in the data path
+// after this returns.
 //
 // If Sessions / Spawner are not configured (M2 mode), returns 503.
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
@@ -137,9 +149,6 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
-	// Look up existing sessions for this uid. Spawn if there are
-	// none. For now any count > 0 just picks the first; the picker
-	// (M4) makes this a real choice.
 	sessions, err := s.sessions.List(payload.UID)
 	if err != nil {
 		s.log.Printf("ws: list sessions for uid=%d: %v", payload.UID, err)
@@ -149,20 +158,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	var target Session
 	switch {
 	case len(sessions) == 0:
-		// Need to spawn. We need an Identity for the spawner — the
-		// cookie payload has uid + name; gid + shell aren't in the
-		// cookie. Pull them from the configured auth backend's view
-		// of this user. For the M3 dev path with --auth-test, the
-		// identity we mint here uses gid=this-process's-gid + a
-		// stub shell. M5 / shadow-auth resolves these properly via
-		// the user database.
-		id := Identity{
-			UID:   payload.UID,
-			GID:   uint32(0),
-			Name:  payload.Name,
-			Shell: "/bin/sh",
-		}
-		spawned, err := s.spawner.Spawn(id, payload.Name)
+		spawned, err := s.spawnFor(payload, payload.Name)
 		if err != nil {
 			s.log.Printf("ws: spawn for uid=%d: %v", payload.UID, err)
 			http.Error(w, "could not start session", http.StatusInternalServerError)
@@ -170,14 +166,64 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 		target = spawned
 		s.log.Printf("ws: spawned new session sessid=%s pid=%d for uid=%d", spawned.SessID, spawned.Pid, payload.UID)
-	default:
+	case len(sessions) == 1:
 		target = sessions[0]
 		s.log.Printf("ws: attaching to existing sessid=%s pid=%d for uid=%d", target.SessID, target.Pid, payload.UID)
+	default:
+		// More than one session → punt to the picker. The browser
+		// is mid-WS-upgrade right now; redirect mid-handshake. The
+		// shell.js / chrome doesn't issue a top-level Upgrade
+		// anyway — it embeds an <a> link to /sessions when needed.
+		http.Redirect(w, r, "/sessions", http.StatusFound)
+		return
 	}
 
-	// Hijack BEFORE writing any response. websocket.Accept on the
-	// router side will write the 101 once it parses the synthesized
-	// request bytes.
+	s.handoffToSession(w, r, target)
+}
+
+// handleWSSpecific implements /ws/s/<sessid>/ — direct attach to a
+// named session. The sessid must belong to the authed uid; unknown
+// or foreign sessids 404. No auto-spawn here — the picker is the
+// only place that mints new sessions explicitly.
+func (s *Server) handleWSSpecific(w http.ResponseWriter, r *http.Request) {
+	if s.sessions == nil || s.spawner == nil {
+		http.Error(w, "session handoff not configured", http.StatusServiceUnavailable)
+		return
+	}
+	payload, ok := s.identityFromRequest(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	// Strip /ws/s/ prefix and any trailing slash to extract sessid.
+	rest := strings.TrimPrefix(r.URL.Path, "/ws/s/")
+	sessid := strings.TrimSuffix(rest, "/")
+	if sessid == "" || strings.Contains(sessid, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	sessions, err := s.sessions.List(payload.UID)
+	if err != nil {
+		s.log.Printf("ws/s: list sessions for uid=%d: %v", payload.UID, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	for _, sess := range sessions {
+		if sess.SessID == sessid {
+			s.log.Printf("ws/s: attaching to sessid=%s pid=%d for uid=%d", sessid, sess.Pid, payload.UID)
+			s.handoffToSession(w, r, sess)
+			return
+		}
+	}
+	// Unknown sessid for this uid — 404 (don't leak whether it
+	// exists for a different uid).
+	http.NotFound(w, r)
+}
+
+// handoffToSession is the common tail end of /ws and /ws/s/<sessid>/:
+// hijack the conn, SCM_RIGHTS the fd to the named session's ctl
+// socket, surface a 502 on the hijacked conn if anything fails.
+func (s *Server) handoffToSession(w http.ResponseWriter, r *http.Request, target Session) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacker not supported", http.StatusInternalServerError)
@@ -188,34 +234,202 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		s.log.Printf("ws hijack: %v", err)
 		return
 	}
-
 	if err := Handoff(r, conn, brw, target.Sock); err != nil {
 		s.log.Printf("ws handoff to %s: %v", target.Sock, err)
-		// Best-effort: write a 502 directly to the hijacked conn
-		// so the browser sees something less mysterious than a
-		// dropped connection. We've already lost the http.Server
-		// response path.
 		_, _ = conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\nhandoff failed\n"))
 		_ = conn.Close()
 		return
 	}
 }
 
-// handleRoot dispatches based on auth state: authed users get the
-// welcome page; unauthed users redirect to /login.
+// spawnFor materialises an Identity from the cookie payload and
+// runs the Spawner. Used by /ws auto-spawn and /sessions/new.
+// gid + shell aren't in the cookie; we stub them with the wash-login
+// process's gid + /bin/sh, which is correct for the --auth-test
+// dev path. Real shadow-auth resolves these from the user database
+// at auth time and the picker spawn re-derives from a richer cookie
+// payload — out of v1 scope.
+func (s *Server) spawnFor(payload Payload, name string) (Session, error) {
+	id := Identity{
+		UID:   payload.UID,
+		GID:   uint32(0),
+		Name:  payload.Name,
+		Shell: "/bin/sh",
+	}
+	return s.spawner.Spawn(id, name)
+}
+
+// pickerView is the template data for picker.html. Time fields are
+// formatted server-side because the template only does string
+// interpolation.
+type pickerView struct {
+	Name     string
+	UID      uint32
+	Sessions []pickerSessionRow
+	Error    string
+	MaxCap   int
+	AtCap    bool
+}
+
+type pickerSessionRow struct {
+	SessID string
+	Name   string
+	Sock   string
+	Pid    int
+}
+
+// handleSessionsPage renders the picker. Lists all sessions owned
+// by the authed uid; each row gets [Attach] and [End] buttons,
+// plus a "+ new" form at the bottom and a separate "Log out
+// everywhere" form.
+func (s *Server) handleSessionsPage(w http.ResponseWriter, r *http.Request) {
+	if s.sessions == nil {
+		http.Error(w, "sessions not configured", http.StatusServiceUnavailable)
+		return
+	}
+	payload, ok := s.identityFromRequest(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	sessions, err := s.sessions.List(payload.UID)
+	if err != nil {
+		s.log.Printf("sessions list: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	rows := make([]pickerSessionRow, 0, len(sessions))
+	for _, sess := range sessions {
+		rows = append(rows, pickerSessionRow{
+			SessID: sess.SessID,
+			Name:   sess.Name,
+			Sock:   sess.Sock,
+			Pid:    sess.Pid,
+		})
+	}
+	view := pickerView{
+		Name:     payload.Name,
+		UID:      payload.UID,
+		Sessions: rows,
+		Error:    r.URL.Query().Get("err"),
+	}
+	if s.spawner != nil && s.spawner.MaxPerUID > 0 {
+		view.MaxCap = s.spawner.MaxPerUID
+		view.AtCap = len(rows) >= s.spawner.MaxPerUID
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = s.tplPicker.Execute(w, view)
+}
+
+// handleSessionsNew spawns a fresh session under the authed uid
+// using the form-supplied name (or the user's username when empty),
+// then redirects the browser to /ws/s/<new-sessid>/ so the new
+// session is what the user lands in.
+func (s *Server) handleSessionsNew(w http.ResponseWriter, r *http.Request) {
+	if s.spawner == nil || s.sessions == nil {
+		http.Error(w, "spawn not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	payload, ok := s.identityFromRequest(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSpace(r.PostForm.Get("name"))
+	if name == "" {
+		name = time.Now().Format("2006-01-02 15:04")
+	}
+	if !validSessionName(name) {
+		http.Redirect(w, r, "/sessions?err="+url.QueryEscape("invalid session name"), http.StatusFound)
+		return
+	}
+	spawned, err := s.spawnFor(payload, name)
+	if err != nil {
+		if errors.Is(err, ErrSessionCap) {
+			http.Redirect(w, r, "/sessions?err="+url.QueryEscape("session cap reached — end an existing session first"), http.StatusFound)
+			return
+		}
+		s.log.Printf("sessions/new spawn uid=%d: %v", payload.UID, err)
+		http.Redirect(w, r, "/sessions?err="+url.QueryEscape("could not start session"), http.StatusFound)
+		return
+	}
+	s.log.Printf("sessions/new: spawned sessid=%s pid=%d name=%q for uid=%d", spawned.SessID, spawned.Pid, name, payload.UID)
+	http.Redirect(w, r, "/ws/s/"+spawned.SessID+"/", http.StatusFound)
+}
+
+// handleSessionsEnd SIGTERMs the named sessid IF it belongs to the
+// authed uid, then redirects back to /sessions.
+func (s *Server) handleSessionsEnd(w http.ResponseWriter, r *http.Request) {
+	if s.sessions == nil {
+		http.Error(w, "sessions not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	payload, ok := s.identityFromRequest(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	sessid := r.PostForm.Get("sessid")
+	if sessid == "" {
+		http.Redirect(w, r, "/sessions?err="+url.QueryEscape("missing sessid"), http.StatusFound)
+		return
+	}
+	s.endSession(payload.UID, sessid)
+	http.Redirect(w, r, "/sessions", http.StatusFound)
+}
+
+// validSessionName enforces the picker's name rules: 1-64 chars,
+// only printable ASCII (no NUL, control chars, slashes, or unicode
+// surprises that would make the argv-in-/proc-cmdline display
+// ambiguous).
+func validSessionName(n string) bool {
+	if len(n) == 0 || len(n) > 64 {
+		return false
+	}
+	for _, r := range n {
+		if r < 0x20 || r > 0x7e {
+			return false
+		}
+		if r == '/' || r == '\\' {
+			return false
+		}
+	}
+	return true
+}
+
+// handleRoot redirects authed users to /sessions (the picker /
+// landing page); unauthed users go to /login. The /sessions page
+// is the canonical post-auth surface — it handles 0/1/N session
+// counts uniformly and exposes attach, end, and new actions.
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
 	}
-	p, ok := s.identityFromRequest(r)
-	if !ok {
+	if _, ok := s.identityFromRequest(r); !ok {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	_ = s.tplWelcome.Execute(w, p)
+	http.Redirect(w, r, "/sessions", http.StatusFound)
 }
 
 // handleLogin renders the login form. Authed users get bounced to /
