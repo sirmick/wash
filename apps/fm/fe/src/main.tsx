@@ -18,7 +18,7 @@
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, defineWashApp } from '@wash/ui';
+import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, defineWashApp, tokens } from '@wash/ui';
 import {
   ArrowLeft,
   ArrowRight,
@@ -33,7 +33,6 @@ import {
   Folder as FolderIcon,
   FolderPlus,
   Home as HomeIcon,
-  Info as InfoIcon,
   Link2,
   Pencil,
   RotateCw,
@@ -102,10 +101,21 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [rootInitialized, setRootInitialized] = createSignal(false);
   const [pathInputValue, setPathInputValue] = createSignal('');
   const [previewContent, setPreviewContent] = createSignal<{ binary: boolean; size: number; text: string; truncated: boolean } | null>(null);
-  // statusOverride is set by transient one-shot messages (drop, error).
-  // While non-null it wins over the auto-derived visible-entry count.
-  // Navigation / clicks clear it so the auto status resumes.
-  const [statusOverride, setStatusOverride] = createSignal<string | null>(null);
+  // statusOverride is set by transient one-shot messages (drop, error,
+  // clipboard feedback). While non-null it wins over the auto-derived
+  // visible-entry count. Navigation / clicks clear it so the auto
+  // status resumes. The `kind` drives styling — errors render red at
+  // full opacity so they read as failure, not as casual chatter.
+  type StatusOverride = { kind: 'error' | 'info'; text: string };
+  const [statusOverride, setStatusOverrideRaw] = createSignal<StatusOverride | null>(null);
+  // Default helper: setStatusOverride(string) is an error; nulls clear.
+  // Most failure paths predate the kind distinction and stay one-arg.
+  const setStatusOverride = (text: string | null) => {
+    setStatusOverrideRaw(text == null ? null : { kind: 'error', text });
+  };
+  const setStatusInfo = (text: string) => {
+    setStatusOverrideRaw({ kind: 'info', text });
+  };
   const [menu, setMenu] = createSignal<MenuState>(null);
 
   // Autocomplete
@@ -1256,10 +1266,25 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const visibleCount = createMemo(() => visibleRows().length);
 
   // statusBar text — derived. While statusOverride is set (drop /
-  // error), show it; otherwise the live visible-entry count.
-  const statusBar = createMemo(() => {
+  // error / clipboard feedback), show it; otherwise the live
+  // visible-entry count. Errors render in red at full opacity so
+  // failures (e.g. "move: cross device link") read as failures and
+  // not as casual chatter alongside the entry count.
+  const statusBar = createMemo<JSX.Element>(() => {
     const override = statusOverride();
-    if (override) return override;
+    if (override) {
+      if (override.kind === 'error') {
+        return (
+          <span
+            data-status-kind="error"
+            style={{ color: tokens.borderDanger, opacity: 1 }}
+          >
+            {override.text}
+          </span>
+        );
+      }
+      return override.text;
+    }
     if (!rootInitialized()) return 'loading…';
     const sel = selection().size;
     if (sel > 1) return `${sel} of ${visibleCount()} selected`;
@@ -1367,7 +1392,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           if (paths.length === 0) return;
           ev.preventDefault();
           putFilesOnClipboard('copy', paths);
-          setStatusOverride(`copied ${paths.length} to clipboard`);
+          setStatusInfo(`copied ${paths.length} to clipboard`);
           return;
         }
         if (ev.key === 'x' || ev.key === 'X') {
@@ -1375,7 +1400,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           if (paths.length === 0) return;
           ev.preventDefault();
           putFilesOnClipboard('cut', paths);
-          setStatusOverride(`cut ${paths.length} to clipboard`);
+          setStatusInfo(`cut ${paths.length} to clipboard`);
           return;
         }
         if (ev.key === 'v' || ev.key === 'V') {
@@ -2078,7 +2103,6 @@ const InfoSection: Component<{
         onClick={props.onToggle}
       >
         {props.open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-        <InfoIcon size={11} />
         <span>Info</span>
       </button>
       <Show when={props.open}>
@@ -2481,7 +2505,7 @@ const pathInputStyle: JSX.CSSProperties = {
   border: '1px solid #2a2a3a',
   'border-radius': '3px',
   padding: '4px 8px',
-  font: '12px ui-monospace,Menlo,Consolas,monospace',
+  font: '12px ui-sans-serif, system-ui, sans-serif',
   outline: 'none',
 };
 

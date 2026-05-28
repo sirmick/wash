@@ -2931,5 +2931,8 @@ const placeholderOverlayStyle: JSX.CSSProperties = {
 // positioned <Menu> dropdowns inside it anchor relative to it
 // rather than escaping to the closest positioned ancestor.
 defineWashApp('wash-app-edit', (props) => <App {...props} />, {
-  style: `display:grid;grid-template-rows:auto 1fr auto;height:100%;background:${tokens.bgWindow};color:${tokens.fg};overflow:hidden;position:relative`,
+  // Status-bar row pinned to 22px — same as wash-fm — so the chrome
+  // is consistent across apps. `auto` collapses to the StatusBar's
+  // intrinsic height (~13px), which read as visibly thinner than fm.
+  style: `display:grid;grid-template-rows:auto 1fr 22px;height:100%;background:${tokens.bgWindow};color:${tokens.fg};overflow:hidden;position:relative`,
 });
