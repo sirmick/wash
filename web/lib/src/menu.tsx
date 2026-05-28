@@ -1,4 +1,5 @@
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
+import { Portal } from 'solid-js/web';
 import type { Component, JSX, ParentComponent } from 'solid-js';
 import { tokens } from './tokens';
 
@@ -8,6 +9,16 @@ import { tokens } from './tokens';
 //   - anchored: chrome menus that hang off a UI element
 //     (e.g. start menu off the taskbar — anchor="bottom-left").
 //
+// `portal`: when true, the menu mounts into document.body via a
+// Portal. Use this for menus that would otherwise be clipped by an
+// `overflow: hidden|auto` ancestor — the obvious case is right-
+// click context menus inside an app window, whose slot is scrollable.
+// In portal mode x/y are viewport (clientX/clientY) coords, since
+// `position:fixed` is anchored to the viewport. In non-portal mode
+// x/y stay host-relative (absolute positioning within the nearest
+// positioned ancestor) — that's how callers expect chrome menus
+// (taskbar start, edit's menubar) to anchor.
+//
 // Menu installs its own document-mousedown listener to dismiss
 // on click-outside (one-tick deferred so the click that opened
 // the menu doesn't immediately close it).
@@ -15,6 +26,8 @@ export interface MenuProps {
   x?: number;
   y?: number;
   anchor?: 'bottom-left';
+  /** Render via Portal to document.body. x/y become viewport coords. */
+  portal?: boolean;
   onDismiss: () => void;
   zIndex?: number;
   animation?: 'pop' | 'slide-up';
@@ -34,13 +47,13 @@ export const Menu: ParentComponent<MenuProps> = (props) => {
     setTimeout(() => document.addEventListener('mousedown', onDocDown), 0);
     onCleanup(() => document.removeEventListener('mousedown', onDocDown));
   });
-  return (
+  const node = () => (
     <div
       ref={menuEl}
       data-testid={props['data-testid']}
       onContextMenu={(ev) => ev.preventDefault()}
       style={{
-        position: 'absolute',
+        position: props.portal ? 'fixed' : 'absolute',
         background: tokens.bgMenu,
         border: `1px solid ${tokens.borderMenu}`,
         'border-radius': props.anchor === 'bottom-left' ? `${tokens.radiusXl}px` : `${tokens.radiusMd}px`,
@@ -56,6 +69,7 @@ export const Menu: ParentComponent<MenuProps> = (props) => {
       {props.children}
     </div>
   );
+  return props.portal ? <Portal mount={document.body}>{node()}</Portal> : node();
 };
 
 function positionFor(p: MenuProps): JSX.CSSProperties {

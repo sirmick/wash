@@ -149,7 +149,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   // Refs / latched state (no reactivity needed)
   let pendingNav: string | null = null;
-  let pendingSelectAfter: { path: string; pushHistory: boolean } | null = null;
   let completePartial = '';
   let completeTimer: number | null = null;
   // (no manual click-timer state — we lean on native dblclick.)
@@ -305,22 +304,28 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         if (!rootInitialized()) {
           setRootInitialized(true);
           setHome(p);
-          setPath(p);
-          setPathInputValue(p);
-          setSelectedEntry(null);
-          setHistory([p]);
-          setHistoryIdx(0);
-          expandPath(p);
+          // Only adopt this path as the current location if the user
+          // hasn't already navigated. Otherwise the late initial
+          // list_ok would stomp a navigation that ran while the
+          // request was in flight. The path-input value is gated
+          // separately on the input being untouched, so a user who
+          // typed but hasn't hit Enter yet doesn't lose their entry.
+          if (!path()) {
+            setPath(p);
+            setHistory([p]);
+            setHistoryIdx(0);
+            if (!pathInputValue()) setPathInputValue(p);
+          }
+          setSelectedEntry(findEntry(path() || p));
+          expandPath(path() || p);
+        } else if (parentPath(path()) === p) {
+          // Parent listing just arrived — refresh the selection's
+          // entry metadata (info pane, etc.) which was stale while
+          // we were navigating with no parent listing in hand.
+          const fresh = findEntry(path());
+          if (fresh) setSelectedEntry(fresh);
         }
         pendingNav = null;
-        if (pendingSelectAfter) {
-          const par = parentPath(pendingSelectAfter.path);
-          if (par === p) {
-            const ps = pendingSelectAfter;
-            pendingSelectAfter = null;
-            selectPath(ps.path, ps.pushHistory);
-          }
-        }
         return;
       }
       case 'list_err':
@@ -412,23 +417,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // location (dirOfSelection prefers the selection over path()).
     setSelection(new Set());
     selectionAnchor = null;
-    const par = parentPath(p);
-    // Block on the parent listing only when we have no listing for
-    // p itself either — otherwise (e.g. navigating Home to the
-    // sandbox root, whose parent is outside WASH_FM_ROOT and will
-    // never list) we stall in pendingSelectAfter forever.
-    if (!listings[par] && !listings[p] && par !== p) {
-      sendList(par);
-      pendingSelectAfter = { path: p, pushHistory };
-      return;
-    }
-    const entry = findEntry(p);
+
+    // Eager state commit: path + input + history move now, before
+    // any BE round-trip. Old code queued the navigation in
+    // pendingSelectAfter when the parent listing wasn't loaded yet,
+    // then re-entered from the list_ok handler. That single-slot
+    // queue was easy to lose under fs_event-driven re-lists or
+    // concurrent navigations, leaving the path bar showing the new
+    // path but the tree stuck on the old one. We instead commit
+    // intent immediately; visibleRows lights up as listings arrive.
+    const entry = findEntry(p);  // may be null if par isn't listed
     setPath(p);
     setSelectedEntry(entry);
-    // Sync the path bar immediately. We do this before any early
-    // returns for unloaded dir listings so the input always reflects
-    // the currently-selected path, even while a list response is in
-    // flight.
     setPathInputValue(p);
     if (pushHistory) {
       const h = history().slice(0, historyIdx() + 1);
@@ -436,16 +436,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       setHistory(h);
       setHistoryIdx(h.length - 1);
     }
-    if (entry?.type === 'dir' || (p === '/' && listings[p])) {
-      if (!listings[p]) {
-        sendList(p);
-        return;
-      }
-      expandDir(p);
-    } else if (entry?.type === 'file') {
+
+    // expandPath issues sendList for every ancestor we don't have a
+    // listing for, including p itself (unless entry is a known
+    // non-dir, in which case it stops at the parent). For a file
+    // target we still want a preview, so trigger sendRead too.
+    expandPath(p);
+    if (entry?.type === 'file' || entry?.type === 'symlink') {
       sendRead(p);
     }
-    expandPath(p);
     persist();
   };
 
@@ -937,8 +936,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     ev.stopPropagation();
     setDropTargetPath('');
     if (ev.altKey) {
-      const my = props.host.getBoundingClientRect();
-      setDropMenu({ x: ev.clientX - my.left + 8, y: ev.clientY - my.top + 8, srcs: paths, targetDir: rowPath });
+      setDropMenu({ x: ev.clientX + 8, y: ev.clientY + 8, srcs: paths, targetDir: rowPath });
       return;
     }
     handleMoveDrop(paths, rowPath);
@@ -957,8 +955,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     ev.preventDefault();
     setDropTargetPath('');
     if (ev.altKey) {
-      const my = props.host.getBoundingClientRect();
-      setDropMenu({ x: ev.clientX - my.left + 8, y: ev.clientY - my.top + 8, srcs: paths, targetDir: dirOfSelection() });
+      setDropMenu({ x: ev.clientX + 8, y: ev.clientY + 8, srcs: paths, targetDir: dirOfSelection() });
       return;
     }
     handleMoveDrop(paths, dirOfSelection());
@@ -1273,10 +1270,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   const closeMenu = () => setMenu(null);
 
+  // Menu coords are viewport-relative — the Menu component portals
+  // out of the window slot (which has overflow:auto and would clip
+  // a menu painted at the edge) and renders with position:fixed.
   const openSortMenu = (ev: MouseEvent) => {
     const rect = (ev.currentTarget as HTMLElement).getBoundingClientRect();
-    const my = props.host.getBoundingClientRect();
-    setMenu({ kind: 'sort', left: rect.right - my.left - 160, top: rect.bottom - my.top + 4 });
+    setMenu({ kind: 'sort', left: rect.right - 160, top: rect.bottom + 4 });
   };
 
   const openContextMenu = (ev: MouseEvent, entry: Entry, p: string) => {
@@ -1290,8 +1289,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // selection elsewhere.
     if (!selection().has(p)) setSelection(new Set([p]));
     if (entry.type === 'file') sendRead(p);
-    const my = props.host.getBoundingClientRect();
-    setMenu({ kind: 'context', left: ev.clientX - my.left, top: ev.clientY - my.top, entry, path: p });
+    setMenu({ kind: 'context', left: ev.clientX, top: ev.clientY, entry, path: p });
   };
 
   // ---- lifecycle: events ----
@@ -2233,7 +2231,7 @@ const SortMenu: Component<{
     return props.sortDesc ? <ChevronDown size={12} /> : <ChevronUp size={12} />;
   };
   return (
-    <Menu data-testid="fm-sort-menu" x={props.left} y={props.top} onDismiss={props.onDismiss}>
+    <Menu data-testid="fm-sort-menu" portal x={props.left} y={props.top} onDismiss={props.onDismiss}>
       <MenuItem data-testid="fm-sort-name" label="Name" trailing={arrow('name')} onClick={() => props.onPick('name')} />
       <MenuItem data-testid="fm-sort-mtime" label="Modified" trailing={arrow('mtime')} onClick={() => props.onPick('mtime')} />
       <MenuItem data-testid="fm-sort-ctime" label="Created" trailing={arrow('ctime')} onClick={() => props.onPick('ctime')} />
@@ -2263,7 +2261,7 @@ const ContextMenu: Component<{
   onDismiss: () => void;
 }> = (props) => {
   return (
-    <Menu data-testid="fm-context-menu" x={props.left} y={props.top} onDismiss={props.onDismiss}>
+    <Menu data-testid="fm-context-menu" portal x={props.left} y={props.top} onDismiss={props.onDismiss}>
       <MenuItem data-testid="fm-ctx-open" label="Open" onClick={props.onOpen} />
       <MenuItem data-testid="fm-ctx-copy" label="Copy path" onClick={props.onCopy} />
       <MenuItem data-testid="fm-ctx-info" label="Show info" onClick={props.onInfo} />
@@ -2384,7 +2382,7 @@ const DropMenu: Component<{
   // confirms. (Tokens names the value as zDropMenu; this matches
   // the historic layering decisions documented in [[wash fm DnD]].)
   return (
-    <Menu data-testid="fm-drop-menu" x={props.x} y={props.y} zIndex={1950} onDismiss={props.onCancel}>
+    <Menu data-testid="fm-drop-menu" portal x={props.x} y={props.y} zIndex={1950} onDismiss={props.onCancel}>
       <MenuItem data-testid="fm-drop-move" label="Move here" onClick={props.onMove} />
       <MenuItem data-testid="fm-drop-copy" label="Copy here" onClick={props.onCopy} />
       <MenuItem data-testid="fm-drop-symlink" label="Create symlink here" onClick={props.onSymlink} />

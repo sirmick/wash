@@ -111,6 +111,14 @@ export function FloatingWindow(props: WindowProps) {
 
   const onWindowPointerDown = () => window.wash.focusWindow(props.win.windowID);
 
+  // Pointer events don't fire during an HTML5 drag, so a drag from
+  // one window's row to another window never raises the target.
+  // Hook dragenter (fires once when the drag crosses into the frame)
+  // to raise the window under the cursor so the user can see the
+  // drop target. focusWindow is idempotent — re-entering an already-
+  // focused window is a no-op.
+  const onWindowDragEnter = () => window.wash.focusWindow(props.win.windowID);
+
   // Bottom-right resize: track override locally, commit on release.
   const onResizeHandlePointerDown = (ev: PointerEvent) => {
     ev.preventDefault();
@@ -229,6 +237,7 @@ export function FloatingWindow(props: WindowProps) {
       classList={{ 'wash-window-root': !!props.win.isRoot }}
       data-is-root={props.win.isRoot ? 'true' : undefined}
       onPointerDown={onWindowPointerDown}
+      onDragEnter={onWindowDragEnter}
       style={frameStyle()}
     >
       <div
