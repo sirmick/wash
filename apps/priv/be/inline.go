@@ -56,25 +56,34 @@ func startInlineRun(sudoBin string, argv []string, cwd string, callerEnv map[str
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("argv is empty")
 	}
-	cmdArgs := []string{"-S", "-k"}
-	// --preserve-env: combine our WASH_* allowlist with the caller-
-	// requested vars. sudo's --preserve-env accepts a comma list.
-	preserve := []string{"WASH_DISPLAY", "WASH_PROTO", "WASH_CONTROL_SOCKET", "WASH_BIN_DIR"}
-	for k := range callerEnv {
-		preserve = append(preserve, k)
+	var c *exec.Cmd
+	if os.Geteuid() == 0 {
+		// Passthrough: already root, just exec the target. No sudo
+		// wrapper means no password stdin to inject either.
+		c = exec.Command(argv[0], argv[1:]...)
+	} else {
+		cmdArgs := []string{"-S", "-k"}
+		// --preserve-env: combine our WASH_* allowlist with the caller-
+		// requested vars. sudo's --preserve-env accepts a comma list.
+		preserve := []string{"WASH_DISPLAY", "WASH_PROTO", "WASH_CONTROL_SOCKET", "WASH_BIN_DIR"}
+		for k := range callerEnv {
+			preserve = append(preserve, k)
+		}
+		sort.Strings(preserve)
+		cmdArgs = append(cmdArgs, "--preserve-env="+strings.Join(preserve, ","))
+		cmdArgs = append(cmdArgs, "--")
+		cmdArgs = append(cmdArgs, argv...)
+		c = exec.Command(sudoBin, cmdArgs...)
 	}
-	sort.Strings(preserve)
-	cmdArgs = append(cmdArgs, "--preserve-env="+strings.Join(preserve, ","))
-	cmdArgs = append(cmdArgs, "--")
-	cmdArgs = append(cmdArgs, argv...)
-	c := exec.Command(sudoBin, cmdArgs...)
 	c.Dir = cwd
 	c.Env = mergeEnv(os.Environ(), callerEnv)
 
-	// Stdin pipe. We write pw + "\n" up front so sudo -S grabs it;
-	// subsequent bytes go to the wrapped child (sudo forwards
-	// trailing stdin after auth). Keep the writer open so wash-sudo
-	// can continue feeding input.
+	// Stdin pipe. In the sudo path we write pw + "\n" up front so
+	// sudo -S grabs it; subsequent bytes go to the wrapped child
+	// (sudo forwards trailing stdin after auth). In passthrough
+	// mode there's no sudo so the pipe is just the child's stdin
+	// directly. Either way we keep the writer open so wash-sudo
+	// (or any caller) can continue feeding input.
 	stdin, err := c.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("stdin pipe: %w", err)
@@ -88,18 +97,20 @@ func startInlineRun(sudoBin string, argv []string, cwd string, callerEnv map[str
 		return nil, fmt.Errorf("stderr pipe: %w", err)
 	}
 	if err := c.Start(); err != nil {
-		return nil, fmt.Errorf("start sudo: %w", err)
+		return nil, fmt.Errorf("start inline: %w", err)
 	}
-	// Inject the password synchronously before returning. The
-	// caller wipes its pw buffer on our return, so we MUST get the
-	// bytes into sudo's stdin before that — a goroutine racing
-	// the wipe would write zeros. Stdin stays open after; sudo
-	// forwards subsequent bytes to the child.
-	pwLine := make([]byte, 0, len(pw)+1)
-	pwLine = append(pwLine, pw...)
-	pwLine = append(pwLine, '\n')
-	_, _ = stdin.Write(pwLine)
-	wipeBytes(pwLine)
+	if os.Geteuid() != 0 {
+		// Inject the password synchronously before returning. The
+		// caller wipes its pw buffer on our return, so we MUST get
+		// the bytes into sudo's stdin before that — a goroutine
+		// racing the wipe would write zeros. Stdin stays open
+		// after; sudo forwards subsequent bytes to the child.
+		pwLine := make([]byte, 0, len(pw)+1)
+		pwLine = append(pwLine, pw...)
+		pwLine = append(pwLine, '\n')
+		_, _ = stdin.Write(pwLine)
+		wipeBytes(pwLine)
+	}
 	p := &inlineProc{
 		cmd:    c,
 		stdin:  stdin,

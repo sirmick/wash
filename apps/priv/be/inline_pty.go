@@ -28,16 +28,24 @@ func startInlinePTY(sudoBin string, argv []string, cwd string, callerEnv map[str
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("argv is empty")
 	}
-	cmdArgs := []string{"-S", "-k"}
-	preserve := []string{"WASH_DISPLAY", "WASH_PROTO", "WASH_CONTROL_SOCKET", "WASH_BIN_DIR"}
-	for k := range callerEnv {
-		preserve = append(preserve, k)
+	isRoot := os.Geteuid() == 0
+	var c *exec.Cmd
+	if isRoot {
+		// Passthrough: priv is already root. Exec the target directly
+		// — no sudo, no password injection, no ECHO toggling.
+		c = exec.Command(argv[0], argv[1:]...)
+	} else {
+		cmdArgs := []string{"-S", "-k"}
+		preserve := []string{"WASH_DISPLAY", "WASH_PROTO", "WASH_CONTROL_SOCKET", "WASH_BIN_DIR"}
+		for k := range callerEnv {
+			preserve = append(preserve, k)
+		}
+		sort.Strings(preserve)
+		cmdArgs = append(cmdArgs, "--preserve-env="+strings.Join(preserve, ","))
+		cmdArgs = append(cmdArgs, "--")
+		cmdArgs = append(cmdArgs, argv...)
+		c = exec.Command(sudoBin, cmdArgs...)
 	}
-	sort.Strings(preserve)
-	cmdArgs = append(cmdArgs, "--preserve-env="+strings.Join(preserve, ","))
-	cmdArgs = append(cmdArgs, "--")
-	cmdArgs = append(cmdArgs, argv...)
-	c := exec.Command(sudoBin, cmdArgs...)
 	c.Dir = cwd
 	// PTY-allocated programs expect a real terminal name; pin TERM
 	// so curses-class output (apt progress, dialog) renders. Caller
@@ -57,37 +65,40 @@ func startInlinePTY(sudoBin string, argv []string, cwd string, callerEnv map[str
 
 	ptmx, startErr := creackpty.StartWithSize(c, &creackpty.Winsize{Cols: cols, Rows: rows})
 	if startErr != nil {
-		return nil, fmt.Errorf("start sudo (pty): %w", startErr)
+		return nil, fmt.Errorf("start inline (pty): %w", startErr)
 	}
-
-	// Disable ECHO before injecting the password so the bytes don't
-	// round-trip back to the requester's xterm. We re-enable on a
-	// short delay — sudo consumes "password\n" from stdin promptly
-	// and execs the child, after which normal TTY echo is what an
-	// interactive user would expect.
-	if err := setEcho(ptmx, false); err != nil {
-		_ = ptmx.Close()
-		_ = c.Process.Kill()
-		return nil, fmt.Errorf("disable echo: %w", err)
-	}
-	pwLine := make([]byte, 0, len(pw)+1)
-	pwLine = append(pwLine, pw...)
-	pwLine = append(pwLine, '\n')
-	_, _ = ptmx.Write(pwLine)
-	wipeBytes(pwLine)
 
 	p := &inlineProc{
 		cmd:    c,
 		pty:    ptmx,
 		doneCh: make(chan int, 1),
 	}
-	// Re-enable ECHO after sudo has consumed the password line. Stored
-	// on the proc so Cancel can stop it — a process killed inside the
-	// 100ms window would otherwise leave the timer pending until it
-	// fires on a closed fd.
-	p.echoTimer = time.AfterFunc(100*time.Millisecond, func() {
-		_ = setEcho(ptmx, true)
-	})
+
+	if !isRoot {
+		// Disable ECHO before injecting the password so the bytes don't
+		// round-trip back to the requester's xterm. We re-enable on a
+		// short delay — sudo consumes "password\n" from stdin promptly
+		// and execs the child, after which normal TTY echo is what an
+		// interactive user would expect.
+		if err := setEcho(ptmx, false); err != nil {
+			_ = ptmx.Close()
+			_ = c.Process.Kill()
+			return nil, fmt.Errorf("disable echo: %w", err)
+		}
+		pwLine := make([]byte, 0, len(pw)+1)
+		pwLine = append(pwLine, pw...)
+		pwLine = append(pwLine, '\n')
+		_, _ = ptmx.Write(pwLine)
+		wipeBytes(pwLine)
+
+		// Re-enable ECHO after sudo has consumed the password line.
+		// Stored on the proc so Cancel can stop it — a process killed
+		// inside the 100ms window would otherwise leave the timer
+		// pending until it fires on a closed fd.
+		p.echoTimer = time.AfterFunc(100*time.Millisecond, func() {
+			_ = setEcho(ptmx, true)
+		})
+	}
 
 	// pty → onStream. One stream label since the PTY merges
 	// stdout/stderr at the kernel level.

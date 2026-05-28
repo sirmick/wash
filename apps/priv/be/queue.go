@@ -123,6 +123,16 @@ type State struct {
 	// so cli-originated stdin / cancel / disconnect messages can
 	// address them. Mutated under mu.
 	inlineProcs map[string]*inlineProc
+
+	// isRoot is true when wash-priv itself runs as uid 0 (the
+	// embedded VM scenario, or any deployment that spawns priv as
+	// root directly). When true, the password modal + sudo wrapper
+	// are short-circuited: enqueue auto-approves, executors exec
+	// the target binary directly (no `sudo` in front), and the
+	// password field stays nil forever. There's no privilege to
+	// escalate to when you're already root. Set once at NewState
+	// and immutable thereafter.
+	isRoot bool
 }
 
 func NewState() *State {
@@ -130,6 +140,7 @@ func NewState() *State {
 		queue:       []*Request{},
 		pendingPrep: map[uint64]*pendingPrepareSpawn{},
 		inlineProcs: map[string]*inlineProc{},
+		isRoot:      os.Geteuid() == 0,
 	}
 }
 
@@ -156,6 +167,7 @@ func (s *State) WipePassword() {
 // can re-show the modal via HandleHello below.
 func (s *State) wipeLocked() {
 	if s.password != nil {
+		secureUnlock(s.password, log.Printf)
 		wipe(s.password)
 		s.password = nil
 	}
@@ -416,9 +428,12 @@ func (s *State) enqueue(c *sdk.Conn, r *Request) {
 	// still need their own Approve clicks. If a second request
 	// arrives while a modal is already up, it queues quietly
 	// rather than spawning a competing prompt.
+	//
+	// Skipped entirely in isRoot passthrough mode — we'll auto-
+	// approve below, so there's no password to ask for.
 	var autoPrompt bool
 	var autoPub []byte
-	if s.password == nil && s.pendingApproveReq == "" {
+	if !s.isRoot && s.password == nil && s.pendingApproveReq == "" {
 		hs, pub, err := NewHandshake()
 		if err != nil {
 			log.Printf("wash-priv: handshake init: %v", err)
@@ -446,6 +461,32 @@ func (s *State) enqueue(c *sdk.Conn, r *Request) {
 			"req_id":    r.ReqID,
 		})
 	}
+	// isRoot passthrough: no password machinery, just promote the
+	// request straight to Running and execute. The queue UI still
+	// receives req.new + the imminent req.update, so the audit
+	// trail / FE list is preserved.
+	if s.isRoot {
+		log.Printf("wash-priv: passthrough auto-approve req_id=%s", r.ReqID)
+		go s.autoApproveAndExecute(c, r)
+	}
+}
+
+// autoApproveAndExecute promotes a queued request to Running without
+// the password gate and kicks executeApproved. Only called from the
+// isRoot passthrough path; the regular path goes through HandleApprove.
+func (s *State) autoApproveAndExecute(c *sdk.Conn, r *Request) {
+	s.mu.Lock()
+	if r.Status != StatusQueued {
+		s.mu.Unlock()
+		return
+	}
+	r.Status = StatusRunning
+	r.StartedAt = time.Now()
+	s.lastActivity = time.Now()
+	view := requestView(r)
+	s.mu.Unlock()
+	_ = c.SendAppMsg(map[string]any{"kind": "req.update", "req": view})
+	s.executeApproved(c, r)
 }
 
 // HandleApprove starts the spawn pipeline for the named request. If
@@ -567,6 +608,7 @@ func (s *State) HandleUnlock(c *sdk.Conn, ciphertext, fePubKey, nonce []byte) {
 	// blanket approval of everything pending in the queue.
 	s.mu.Lock()
 	s.password = pw
+	secureLock(s.password, log.Printf)
 	s.lastActivity = time.Now()
 	s.handshake = nil
 	pendingID := s.pendingApproveReq
@@ -928,13 +970,23 @@ func validateSudo(pw []byte) error {
 // pw\n from stdin, then exec's the target. Our exit-code wiring
 // works identically.
 func runSudo(sudoBin, binary string, args []string, instanceID, token string, pw []byte) (int, error) {
-	cmdArgs := []string{
-		"-S", "-k",
-		"--preserve-env=WASH_DISPLAY,WASH_PROTO,WASH_APP_ID,WASH_INSTANCE_ID,WASH_ATTACH_TOKEN",
-		"--", binary,
+	var c *exec.Cmd
+	if os.Geteuid() == 0 {
+		// Passthrough: priv is already root, exec the binary directly.
+		// No sudo wrapper, no password stdin pipe — both unnecessary
+		// and the latter would hang sudo -S waiting for input we
+		// don't have.
+		c = exec.Command(binary, args...)
+	} else {
+		cmdArgs := []string{
+			"-S", "-k",
+			"--preserve-env=WASH_DISPLAY,WASH_PROTO,WASH_APP_ID,WASH_INSTANCE_ID,WASH_ATTACH_TOKEN",
+			"--", binary,
+		}
+		cmdArgs = append(cmdArgs, args...)
+		c = exec.Command(sudoBin, cmdArgs...)
+		c.Stdin = stdinPipeOnce(pw)
 	}
-	cmdArgs = append(cmdArgs, args...)
-	c := exec.Command(sudoBin, cmdArgs...)
 	c.Env = append(os.Environ(),
 		"WASH_APP_ID="+filepath.Base(binary), // overridden below if we can derive better
 		"WASH_INSTANCE_ID="+instanceID,
@@ -946,7 +998,6 @@ func runSudo(sudoBin, binary string, args []string, instanceID, token string, pw
 		"WASH_INSTANCE_ID":  instanceID,
 		"WASH_ATTACH_TOKEN": token,
 	})
-	c.Stdin = stdinPipeOnce(pw)
 	c.Stdout = nil
 	stderr := &strings.Builder{}
 	c.Stderr = stderr

@@ -132,6 +132,9 @@ func startup() {
 	// privilege escalation path entirely.
 	applyHardening(log.Printf)
 	st = NewState()
+	if st.isRoot {
+		log.Printf("wash-priv: running as euid=0 — passthrough mode (no sudo, no password prompt, auto-approve)")
+	}
 }
 
 // onReady fires after the SDK handshake completes. We seed the state
