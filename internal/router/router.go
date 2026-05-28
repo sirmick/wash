@@ -66,6 +66,31 @@ type Config struct {
 	// Apps that touch the filesystem (wash-fm, wash-fs) treat all
 	// paths as relative to this prefix when non-empty.
 	FSRoot string
+
+	// ListenUnix, if non-empty, switches the router from the legacy
+	// TCP/HTTP+WS listener (cfg.Listen) into multi-user mode: it
+	// binds a Unix socket at this path and accepts SCM_RIGHTS
+	// handoffs from wash-login. Each accepted handoff carries a
+	// browser-facing TCP fd plus the buffered HTTP-upgrade request
+	// bytes; the router runs the WS upgrade itself and attaches
+	// the resulting WebSocket as a shell view. See docs/MULTIUSER.md.
+	ListenUnix string
+	// Name is the human-readable session name surfaced in the
+	// stat RPC and in /proc/<pid>/cmdline. Informational only;
+	// the router never makes routing decisions on it. Immutable
+	// once set.
+	Name string
+	// IdleTimeout is the period of no-attached-shell after which
+	// the router self-exits. Zero disables idle reaping. Default
+	// applied by the runner is 30 minutes when ListenUnix is set.
+	IdleTimeout time.Duration
+	// AllowUID is the uid whose handoffs the SCM_RIGHTS listener
+	// accepts (verified via SO_PEERCRED on the ctl socket). Zero
+	// defaults to the router's own uid (the normal single-tenant
+	// case where wash-login runs alongside under one system
+	// account). Multi-tenant deployments set this to the
+	// wash-system uid that owns wash-login.
+	AllowUID uint32
 }
 
 // Logger is a minimal sink; cmd/wash-router supplies a real one.

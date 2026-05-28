@@ -149,6 +149,10 @@ func Run(args []string) int {
 	screenshotDir := fs.String("screenshot-dir", "", "directory for POST /screenshot uploads (overrides WASH_SCREENSHOT_DIR; default: /tmp/wash-screenshots; \"none\" disables)")
 	transport := fs.String("transport", "ws", `shell transport: "ws" (default; HTTP/WebSocket listener) or "virtio-console:<path>" / "serial:<path>" for a single-shell raw byte-stream — used in the v86 online demo where the kernel has no TCP/IP and the FE talks to the router over a virtio-console port.`)
 	readyPath := fs.String("ready-path", "", `after the shell transport is open, write "WASH_READY\n" to this path. v86 demo: --ready-path=/dev/vport0p1 so the outer JS knows the BE is live.`)
+	listenUnix := fs.String("listen-unix", "", `multi-user ctl socket path. When set, the router does not bind --listen; instead it listens on this Unix socket for SCM_RIGHTS handoffs from wash-login (see docs/MULTIUSER.md). Mutually exclusive with --transport=virtio-console / --transport=serial / --transport=fd.`)
+	name := fs.String("name", "", "human-readable session name; surfaced in stat RPC and /proc/<pid>/cmdline. Informational; immutable.")
+	idleTimeout := fs.Duration("idle-timeout", 0, "self-exit after this duration with no attached shell. Zero disables; default 30m when --listen-unix is set.")
+	allowUID := fs.Uint("allow-uid", 0, "uid whose SCM_RIGHTS handoffs the --listen-unix listener accepts (SO_PEERCRED-verified). Zero defaults to the router's own uid.")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
 		// flag already printed the message.
@@ -182,6 +186,15 @@ func Run(args []string) int {
 		}
 	}
 
+	idleTimeoutVal := *idleTimeout
+	if *listenUnix != "" && idleTimeoutVal == 0 {
+		idleTimeoutVal = 30 * time.Minute
+	}
+	allowUIDVal := uint32(*allowUID)
+	if *listenUnix != "" && allowUIDVal == 0 {
+		allowUIDVal = uint32(os.Getuid())
+	}
+
 	cfg := router.Config{
 		Listen:        firstNonEmpty(*listen, os.Getenv("WASH_LISTEN"), defaultListen),
 		AppsDirs:      router.SplitAppsDir(firstNonEmpty(*appsDir, os.Getenv("WASH_APPS_DIR"), defaultAppsDir())),
@@ -193,6 +206,10 @@ func Run(args []string) int {
 		ScreenshotDir: sd,
 		Dev:           *dev || os.Getenv("WASH_DEV") != "",
 		FSRoot:        normRoot,
+		ListenUnix:    *listenUnix,
+		Name:          *name,
+		IdleTimeout:   idleTimeoutVal,
+		AllowUID:      allowUIDVal,
 	}
 
 	logger := log.New(os.Stderr, "wash-router ", log.LstdFlags|log.Lmsgprefix)
@@ -277,8 +294,21 @@ func Run(args []string) int {
 		return 2
 	}
 
+	// Multi-user mode (--listen-unix) is mutually exclusive with the
+	// non-ws transports (virtio-console / serial / fd) which carry a
+	// single byte-stream from a kernel-owned device, not a TCP-fd to
+	// hand off. See docs/MULTIUSER.md.
+	if cfg.ListenUnix != "" && transportScheme != "ws" {
+		logger.Printf("--listen-unix is mutually exclusive with --transport=%s", transportScheme)
+		return 2
+	}
+
 	var srv *router.HTTPServer
-	if transportScheme == "ws" {
+	switch {
+	case cfg.ListenUnix != "":
+		// Multi-user mode: no TCP listener; wash-login hands off
+		// upgraded WS fds via SCM_RIGHTS on the ctl socket.
+	case transportScheme == "ws":
 		srv = router.NewHTTPServer(r, assets)
 		if !strings.HasPrefix(cfg.Listen, "127.0.0.1:") && !strings.HasPrefix(cfg.Listen, "[::1]:") {
 			host, _, splitErr := net.SplitHostPort(cfg.Listen)
@@ -291,9 +321,14 @@ func Run(args []string) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	if transportScheme == "ws" {
+	switch {
+	case cfg.ListenUnix != "":
+		logf("ctl socket %s (name=%q allow-uid=%d idle=%s apps=%s session=%s)",
+			cfg.ListenUnix, cfg.Name, cfg.AllowUID, cfg.IdleTimeout,
+			strings.Join(cfg.AppsDirs, ":"), cfg.SessionAppID)
+	case transportScheme == "ws":
 		logf("listening on %s (apps dirs: %s; session: %s)", cfg.Listen, strings.Join(cfg.AppsDirs, ":"), cfg.SessionAppID)
-	} else {
+	default:
 		logf("shell transport %s://%s (apps dirs: %s; session: %s)", transportScheme, transportPath, strings.Join(cfg.AppsDirs, ":"), cfg.SessionAppID)
 	}
 	if cfg.FSRoot != "" {
@@ -314,12 +349,30 @@ func Run(args []string) int {
 		r.StartDevReload(resolvedExe())
 	}
 
-	if transportScheme == "ws" {
+	switch {
+	case cfg.ListenUnix != "":
+		// Idle reaper runs in parallel with the listener. When it
+		// returns nil (idle threshold hit), we cancel the parent
+		// context so the listener tears down its accept loop and
+		// HandleShell goroutines drain naturally.
+		listenCtx, listenCancel := context.WithCancel(ctx)
+		go func() {
+			if err := r.ReapWhenIdle(listenCtx, cfg.IdleTimeout); err == nil {
+				listenCancel()
+			}
+		}()
+		if err := r.RunUnixListener(listenCtx); err != nil {
+			listenCancel()
+			logger.Printf("listen-unix: %v", err)
+			return 1
+		}
+		listenCancel()
+	case transportScheme == "ws":
 		if err := srv.Run(ctx); err != nil {
 			logger.Printf("http: %v", err)
 			return 1
 		}
-	} else {
+	default:
 		if err := runShellOverStream(ctx, r, transportScheme, transportPath, *readyPath, logf); err != nil {
 			logger.Printf("%s transport: %v", transportScheme, err)
 			return 1
