@@ -132,8 +132,11 @@ func startup() {
 	// privilege escalation path entirely.
 	applyHardening(log.Printf)
 	st = NewState()
-	if st.isRoot {
-		log.Printf("wash-priv: running as euid=0 — passthrough mode (no sudo, no password prompt, auto-approve)")
+	switch {
+	case st.isRoot:
+		log.Printf("wash-priv: running as euid=0 — auto-approve (no sudo, no password modal, no Approve click)")
+	case st.passwordless:
+		log.Printf("wash-priv: sudo is passwordless for this user — skip password modal (sudo -n), Approve click still required")
 	}
 }
 

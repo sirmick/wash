@@ -28,6 +28,7 @@ WORKDIR /buildroot
 # only changes when the defconfig does.
 COPY wash_riscv64_defconfig configs/wash_defconfig
 COPY busybox.fragment /input/busybox.fragment
+COPY users.table /input/users.table
 RUN make wash_defconfig
 
 # Wash binaries + init script overlay. This is the layer that changes

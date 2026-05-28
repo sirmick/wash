@@ -1,0 +1,13 @@
+# Buildroot users table — additional accounts created at rootfs
+# assembly time. See
+#   https://buildroot.org/downloads/manual/manual.html#makeuser-syntax
+# Format: username uid group gid password home shell groups comment
+#
+# `wash` is the unprivileged user wash-router drops to via su(1)
+# from S99wash-router. Empty password ("=") because login via getty
+# isn't a normal user-facing path here; the shell tab is for the
+# debugger. Sudo policy in /etc/sudoers.d/wash-nopasswd grants
+# passwordless sudo to all commands (wash-priv detects this at
+# startup and skips the FE password modal — see priv's
+# detectPasswordlessSudo + skipPassword).
+wash -1 wash -1 = /home/wash /bin/sh - "wash desktop user"

@@ -124,24 +124,113 @@ type State struct {
 	// address them. Mutated under mu.
 	inlineProcs map[string]*inlineProc
 
-	// isRoot is true when wash-priv itself runs as uid 0 (the
-	// embedded VM scenario, or any deployment that spawns priv as
-	// root directly). When true, the password modal + sudo wrapper
-	// are short-circuited: enqueue auto-approves, executors exec
-	// the target binary directly (no `sudo` in front), and the
-	// password field stays nil forever. There's no privilege to
-	// escalate to when you're already root. Set once at NewState
-	// and immutable thereafter.
+	// isRoot is true when wash-priv itself runs as uid 0. When true
+	// there's no privilege to escalate to, so the executors skip
+	// the `sudo` wrapper and exec the target binary directly.
 	isRoot bool
+
+	// passwordless is true when the configured sudo accepts our
+	// requests without prompting for a password — typically because
+	// /etc/sudoers grants NOPASSWD to the user running wash-priv.
+	// Detected once at startup via `sudo -n true`. When true, sudo
+	// is still used (we need the uid bump) but with `-n` instead of
+	// `-S`, no stdin password pipe, no FE password modal.
+	passwordless bool
 }
 
+// skipPassword returns true when no FE password prompt is needed for
+// privileged actions — either because we're already root (no escalation
+// at all) or because sudo is configured passwordless (no credentials to
+// collect). Enqueue + Approve consult this to decide whether to mint
+// a handshake / open the FE modal or run straight to executeApproved.
+//
+// Crucially this DOES NOT gate the consent step — see autoApprove for
+// that. Skipping the password just means "no credential challenge",
+// not "no user gesture": NOPASSWD in sudoers is an explicit trust
+// grant on auth, not a blanket pre-approval of every action. The
+// passwordless path still requires the user to click Approve in the
+// priv queue UI per request — same model as the existing password
+// flow, where unlock approves only the prompting request and the
+// rest stay queued.
+func (s *State) skipPassword() bool { return s.isRoot || s.passwordless }
+
+// autoApprove returns true when each new request should bypass the
+// queue UI entirely and run immediately on enqueue, with no human
+// gesture in the loop. This is the embedded-VM (uid=0) posture: the
+// VM is a single-tenant sandbox, there's no privilege to escalate
+// to, and asking the user to Approve every wash launcher click would
+// be friction without security benefit. It's NOT what passwordless
+// sudo does — see skipPassword.
+func (s *State) autoApprove() bool { return s.isRoot }
+
 func NewState() *State {
+	isRoot := os.Geteuid() == 0
 	return &State{
-		queue:       []*Request{},
-		pendingPrep: map[uint64]*pendingPrepareSpawn{},
-		inlineProcs: map[string]*inlineProc{},
-		isRoot:      os.Geteuid() == 0,
+		queue:        []*Request{},
+		pendingPrep:  map[uint64]*pendingPrepareSpawn{},
+		inlineProcs:  map[string]*inlineProc{},
+		isRoot:       isRoot,
+		passwordless: !isRoot && detectPasswordlessSudo(cfg.SudoBin),
 	}
+}
+
+// detectPasswordlessSudo probes whether the configured sudoBin will
+// run a no-op command without prompting for a password. `sudo -n true`
+// returns 0 iff our user has NOPASSWD in /etc/sudoers (or one of its
+// drop-ins) for the target user we'd elevate to. The probe is run
+// once at startup; if you change /etc/sudoers later you need to
+// restart wash-priv (which is fine — the daemon is singleton and
+// re-spawn is cheap).
+//
+// Returns false on any error — the safe default is "we'll prompt for
+// a password," which is the existing behaviour.
+func detectPasswordlessSudo(sudoBin string) bool {
+	if sudoBin == "" {
+		return false
+	}
+	c := exec.Command(sudoBin, "-n", "true")
+	// Drop our stdin so sudo can't somehow read from a parent's tty.
+	c.Stdin = nil
+	c.Stdout = nil
+	c.Stderr = nil
+	// The e2e test stub (cmd/wash-priv-fakesudo) writes every
+	// invocation to $FAKESUDO_LOG so tests can assert what crossed
+	// the sudo boundary. Our probe is internal bookkeeping, not a
+	// test-observable event — clearing the env var for the probe's
+	// child keeps the test log uncontaminated. No effect with real
+	// sudo, which doesn't read FAKESUDO_LOG.
+	c.Env = filterEnv(os.Environ(), "FAKESUDO_LOG")
+	err := c.Run()
+	if err == nil {
+		log.Printf("wash-priv: sudo passwordless probe succeeded — skipping FE password modal")
+		return true
+	}
+	return false
+}
+
+// filterEnv returns env with any entries whose key matches one of the
+// excluded names removed. Order preserved.
+func filterEnv(env []string, excluded ...string) []string {
+	out := env[:0:0]
+	for _, kv := range env {
+		idx := strings.IndexByte(kv, '=')
+		if idx < 0 {
+			out = append(out, kv)
+			continue
+		}
+		key := kv[:idx]
+		skip := false
+		for _, ex := range excluded {
+			if key == ex {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // AttachConn binds the SDK conn at OnReady time. Idempotent.
@@ -429,11 +518,11 @@ func (s *State) enqueue(c *sdk.Conn, r *Request) {
 	// arrives while a modal is already up, it queues quietly
 	// rather than spawning a competing prompt.
 	//
-	// Skipped entirely in isRoot passthrough mode — we'll auto-
-	// approve below, so there's no password to ask for.
+	// Skipped entirely when skipPassword (already root, or sudo is
+	// configured NOPASSWD) — we auto-approve below instead.
 	var autoPrompt bool
 	var autoPub []byte
-	if !s.isRoot && s.password == nil && s.pendingApproveReq == "" {
+	if !s.skipPassword() && s.password == nil && s.pendingApproveReq == "" {
 		hs, pub, err := NewHandshake()
 		if err != nil {
 			log.Printf("wash-priv: handshake init: %v", err)
@@ -461,19 +550,23 @@ func (s *State) enqueue(c *sdk.Conn, r *Request) {
 			"req_id":    r.ReqID,
 		})
 	}
-	// isRoot passthrough: no password machinery, just promote the
-	// request straight to Running and execute. The queue UI still
-	// receives req.new + the imminent req.update, so the audit
-	// trail / FE list is preserved.
-	if s.isRoot {
-		log.Printf("wash-priv: passthrough auto-approve req_id=%s", r.ReqID)
+	// Auto-approve passthrough (isRoot only, NOT passwordless):
+	// promote straight to Running + execute without a user gesture.
+	// The queue UI still receives req.new + req.update, so the audit
+	// trail / FE list is preserved. Passwordless mode falls through
+	// here — the user still clicks Approve in the queue UI, but
+	// HandleApprove won't open a password modal (skipPassword=true
+	// short-circuits the s.password==nil branch).
+	if s.autoApprove() {
+		log.Printf("wash-priv: passthrough auto-approve req_id=%s (isRoot=%v)", r.ReqID, s.isRoot)
 		go s.autoApproveAndExecute(c, r)
 	}
 }
 
 // autoApproveAndExecute promotes a queued request to Running without
 // the password gate and kicks executeApproved. Only called from the
-// isRoot passthrough path; the regular path goes through HandleApprove.
+// skip-password passthrough path; the regular path goes through
+// HandleApprove.
 func (s *State) autoApproveAndExecute(c *sdk.Conn, r *Request) {
 	s.mu.Lock()
 	if r.Status != StatusQueued {
@@ -499,7 +592,7 @@ func (s *State) HandleApprove(c *sdk.Conn, reqID string) {
 		s.mu.Unlock()
 		return
 	}
-	if s.password == nil {
+	if s.password == nil && !s.skipPassword() {
 		// Re-use an existing handshake when there is one — most
 		// often because the enqueue path's auto-prompt already
 		// minted a keypair the FE has been encrypting to. A fresh
@@ -970,14 +1063,26 @@ func validateSudo(pw []byte) error {
 // pw\n from stdin, then exec's the target. Our exit-code wiring
 // works identically.
 func runSudo(sudoBin, binary string, args []string, instanceID, token string, pw []byte) (int, error) {
+	// Three modes — empty pw + non-root means passwordless sudo
+	// (NOPASSWD policy detected at startup); pw populated means the
+	// standard auth-then-exec flow; root means skip sudo entirely.
 	var c *exec.Cmd
-	if os.Geteuid() == 0 {
-		// Passthrough: priv is already root, exec the binary directly.
-		// No sudo wrapper, no password stdin pipe — both unnecessary
-		// and the latter would hang sudo -S waiting for input we
-		// don't have.
+	switch {
+	case os.Geteuid() == 0:
 		c = exec.Command(binary, args...)
-	} else {
+	case len(pw) == 0:
+		// Passwordless: -n is non-interactive; sudo fails fast (with
+		// no prompt) if auth would otherwise be needed. We checked
+		// at startup that NOPASSWD covers us, so a failure here is
+		// an audit-worthy config skew rather than a normal modal.
+		cmdArgs := []string{
+			"-n",
+			"--preserve-env=WASH_DISPLAY,WASH_PROTO,WASH_APP_ID,WASH_INSTANCE_ID,WASH_ATTACH_TOKEN",
+			"--", binary,
+		}
+		cmdArgs = append(cmdArgs, args...)
+		c = exec.Command(sudoBin, cmdArgs...)
+	default:
 		cmdArgs := []string{
 			"-S", "-k",
 			"--preserve-env=WASH_DISPLAY,WASH_PROTO,WASH_APP_ID,WASH_INSTANCE_ID,WASH_ATTACH_TOKEN",

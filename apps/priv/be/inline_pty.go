@@ -29,13 +29,24 @@ func startInlinePTY(sudoBin string, argv []string, cwd string, callerEnv map[str
 		return nil, fmt.Errorf("argv is empty")
 	}
 	isRoot := os.Geteuid() == 0
+	injectPassword := !isRoot && len(pw) > 0
 	var c *exec.Cmd
-	if isRoot {
-		// Passthrough: priv is already root. Exec the target directly
-		// — no sudo, no password injection, no ECHO toggling.
+	switch {
+	case isRoot:
+		// Passthrough: already root. Exec the target directly.
+		// No sudo, no password injection, no ECHO toggling.
 		c = exec.Command(argv[0], argv[1:]...)
-	} else {
-		cmdArgs := []string{"-S", "-k"}
+	default:
+		var cmdArgs []string
+		if injectPassword {
+			cmdArgs = []string{"-S", "-k"}
+		} else {
+			// Passwordless: -n short-circuits if auth would be
+			// needed. We checked at startup that NOPASSWD covers
+			// us; if sudo prompts here something's wrong with the
+			// policy and the child won't start (audit-loud failure).
+			cmdArgs = []string{"-n"}
+		}
 		preserve := []string{"WASH_DISPLAY", "WASH_PROTO", "WASH_CONTROL_SOCKET", "WASH_BIN_DIR"}
 		for k := range callerEnv {
 			preserve = append(preserve, k)
@@ -74,7 +85,7 @@ func startInlinePTY(sudoBin string, argv []string, cwd string, callerEnv map[str
 		doneCh: make(chan int, 1),
 	}
 
-	if !isRoot {
+	if injectPassword {
 		// Disable ECHO before injecting the password so the bytes don't
 		// round-trip back to the requester's xterm. We re-enable on a
 		// short delay — sudo consumes "password\n" from stdin promptly

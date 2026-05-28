@@ -63,18 +63,37 @@ start() {
         # with --transport=fd:3 inherits it. On the vport path this
         # is a raw chardev (no HVC/tty layer) so there's no Go-poller
         # interaction to wedge khvcd.
+        #
+        # Pre-open happens AS ROOT so the kernel's vfs perm check
+        # (the device is root-owned by default) succeeds; the open
+        # fd then carries through the su(1) drop below — kernel
+        # perm checks happen at open time, not at each use, so a
+        # uid-bumped child reads/writes it freely. Same trick PAM
+        # session_setup etc. use to thread root-only resources to
+        # an unprivileged session.
         echo "wash-supervisor: pre-opening $DATA_DEV as fd 3"
         exec 3<>"$DATA_DEV"
         echo "wash-supervisor: fd 3 ready"
+
+        # Make the control-socket dir wash-writable in advance. The
+        # router defaults the socket to /tmp/wash-0.sock and creates
+        # it itself; /tmp is 1777 in the buildroot rootfs so this is
+        # implicitly fine, but we re-state it here so a future
+        # cfg.ControlSocket move to /run/wash/ doesn't silently fail
+        # the bind on first boot.
+        install -d -m 0755 -o wash -g wash /home/wash 2>/dev/null || true
 
         n=0
         while :; do
             n=$((n + 1))
             echo "──────── wash-supervisor: launch #$n ────────"
-            echo "wash-supervisor: invoking wash-router (transport=fd:3)..."
-            /usr/bin/wash-router \
-                --transport=fd:3 \
-                --apps-dir=/usr/lib/wash
+            echo "wash-supervisor: invoking wash-router as user 'wash' (transport=fd:3)..."
+            # Drop privileges via busybox su. su preserves open
+            # fds across the uid switch, so fd 3 (already pointed
+            # at the data device) reaches wash-router exactly as
+            # before. The exec replaces su's child shell so we
+            # don't carry a useless sh in the process tree.
+            su wash -s /bin/sh -c 'exec /usr/bin/wash-router --transport=fd:3 --apps-dir=/usr/lib/wash'
             rc=$?
             echo "wash-supervisor: wash-router exited rc=$rc (launch #$n)"
             sleep_for=$(( n > 5 ? 5 : 1 ))

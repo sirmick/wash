@@ -84,6 +84,13 @@ install -m 0755 "$here/overlay/etc/init.d/S99wash-router" \
 install -m 0755 "$here/overlay/etc/init.d/S98wash-diag" \
                 "$ctx/overlay/etc/init.d/S98wash-diag"
 
+# Sudo policy for the unprivileged `wash` user that wash-router
+# drops to. Sudo refuses to read sudoers fragments with anything
+# weaker than mode 0440, hence the explicit -m here (the default
+# 0644 from the repo wouldn't pass visudo's perm check).
+install -m 0440 -D "$here/overlay/etc/sudoers.d/wash-nopasswd" \
+                   "$ctx/overlay/etc/sudoers.d/wash-nopasswd"
+
 # Boot-speed: stub out the init.d entries we don't want for the wash
 # demo (no network, no CONFIG_NET in kernel; syslogd/klogd add ~3-5s
 # of startup time; sysctl touches nothing useful for a single-tenant
@@ -106,6 +113,7 @@ EOF
 # Buildroot inputs.
 cp "$here/wash_riscv64_defconfig" "$ctx/wash_riscv64_defconfig"
 cp "$here/busybox.fragment"       "$ctx/busybox.fragment"
+cp "$here/users.table"            "$ctx/users.table"
 cp "$here/Dockerfile" "$ctx/Dockerfile"
 
 echo "==> building buildroot rootfs"

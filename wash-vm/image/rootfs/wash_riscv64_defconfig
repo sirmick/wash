@@ -48,6 +48,21 @@ BR2_PACKAGE_NANO=y
 # up. All wash code paths then assume crypto/rand "just works."
 BR2_PACKAGE_HAVEGED=y
 
+# sudo — required by wash-priv for privilege escalation now that
+# wash-router runs as the unprivileged `wash` user (see the users
+# table below + the init script). Even with NOPASSWD policy we
+# need the sudo binary present; priv's runSudo calls it.
+BR2_PACKAGE_SUDO=y
+
+# Users table: defines additional non-root accounts created at
+# rootfs assembly time. We add a single `wash` user that
+# wash-router drops to before exec, so the realistic "user shell
+# clicks a launcher → priv mediates root operations" flow is
+# exercised in the embedded VM (not just root-on-root passthrough).
+# Format documented at
+#   https://buildroot.org/downloads/manual/manual.html#makeuser-syntax
+BR2_ROOTFS_USERS_TABLES="/input/users.table"
+
 BR2_TARGET_GENERIC_HOSTNAME="wash"
 BR2_TARGET_GENERIC_ISSUE="wash riscv64 (buildroot)"
 # getty runs on /dev/hvc1 (the first virtio-console). TinyEMU's HTIF

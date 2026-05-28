@@ -56,13 +56,20 @@ func startInlineRun(sudoBin string, argv []string, cwd string, callerEnv map[str
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("argv is empty")
 	}
+	// Same three-mode shape as runSudo: euid=0 → no sudo at all;
+	// empty pw + non-root → sudo -n (passwordless); pw populated →
+	// sudo -S with stdin password injection.
 	var c *exec.Cmd
-	if os.Geteuid() == 0 {
-		// Passthrough: already root, just exec the target. No sudo
-		// wrapper means no password stdin to inject either.
+	switch {
+	case os.Geteuid() == 0:
 		c = exec.Command(argv[0], argv[1:]...)
-	} else {
-		cmdArgs := []string{"-S", "-k"}
+	default:
+		var cmdArgs []string
+		if len(pw) == 0 {
+			cmdArgs = []string{"-n"}
+		} else {
+			cmdArgs = []string{"-S", "-k"}
+		}
 		// --preserve-env: combine our WASH_* allowlist with the caller-
 		// requested vars. sudo's --preserve-env accepts a comma list.
 		preserve := []string{"WASH_DISPLAY", "WASH_PROTO", "WASH_CONTROL_SOCKET", "WASH_BIN_DIR"}
@@ -99,12 +106,14 @@ func startInlineRun(sudoBin string, argv []string, cwd string, callerEnv map[str
 	if err := c.Start(); err != nil {
 		return nil, fmt.Errorf("start inline: %w", err)
 	}
-	if os.Geteuid() != 0 {
+	if len(pw) > 0 {
 		// Inject the password synchronously before returning. The
 		// caller wipes its pw buffer on our return, so we MUST get
 		// the bytes into sudo's stdin before that — a goroutine
 		// racing the wipe would write zeros. Stdin stays open
 		// after; sudo forwards subsequent bytes to the child.
+		// Skipped when sudo is passwordless (no pw) or when we're
+		// already root (no sudo wrapping at all).
 		pwLine := make([]byte, 0, len(pw)+1)
 		pwLine = append(pwLine, pw...)
 		pwLine = append(pwLine, '\n')

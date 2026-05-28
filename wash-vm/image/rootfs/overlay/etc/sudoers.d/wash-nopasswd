@@ -1,0 +1,18 @@
+# Embedded wash VM sudo policy.
+#
+# wash-router runs as the unprivileged `wash` user (see
+# /etc/init.d/S99wash-router). wash-priv calls sudo to elevate
+# specific app spawns to root. NOPASSWD because:
+#
+#   - The VM is a single-tenant, ephemeral browser sandbox; there
+#     is no untrusted neighbour user to defend against.
+#   - There's no realistic way to prompt for a sudo password in
+#     this deployment — the user hasn't set one (BR2_TARGET_GENERIC_
+#     ROOT_PASSWD="" + empty wash password via the users table).
+#   - wash-priv's startup probe (`sudo -n true`) detects this and
+#     skips the FE password modal accordingly.
+#
+# For a real (non-embedded) deployment, replace this file with one
+# that omits NOPASSWD; wash-priv will then prompt for the password
+# via its FE modal + P-256 ECDH handshake the way it normally would.
+wash ALL=(ALL) NOPASSWD: ALL
