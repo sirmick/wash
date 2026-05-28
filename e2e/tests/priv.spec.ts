@@ -431,83 +431,18 @@ test('locked + new request → auto-prompts for password without Approve click',
   // No "approve" was sent — only the enqueue triggered the prompt.
 });
 
-// Post-unlock refresh: pendingApproveReq is empty after a successful
-// unlock, so a refresh (page-nonce change) lands a fresh lock with
-// no pending state. A NEW request after refresh should auto-prompt
-// again — the same code path as the first request, just at a later
-// point in time.
-test('after successful unlock + refresh, next request auto-prompts again', async ({ router }) => {
-  const { privInst, testInst } = await drivePriv(router);
-
-  // First request — auto-prompts, unlock, completes.
-  await router.controlRequest({
-    t: 'msg', instance_id: testInst,
-    data: {
-      kind: 'send_to', target_app: PRIV_APP_ID,
-      payload: { kind: 'spawn', req_id: 'r1', app_id: 'com.wash.about' },
-    },
-  });
-  await router.waitForLog(/need_password be_pubkey=([A-Za-z0-9+/=]+) \(auto-prompt req=r1\)/, 5000);
-  // Grab THE most-recent need_password (so we don't reuse an older
-  // pubkey from a different test).
-  let allText = router.log();
-  let lastNP = [...allText.matchAll(/need_password be_pubkey=([A-Za-z0-9+/=]+)/g)].pop();
-  expect(lastNP, 'first need_password log line present').toBeTruthy();
-  let bePub = b64decode(lastNP![1]);
-  let enc = await encryptPassword(PASSWORD, bePub);
-  await router.controlRequest({
-    t: 'msg', instance_id: privInst,
-    data: { kind: 'unlock', ciphertext: enc.ciphertext, fe_pubkey: enc.fe_pubkey, nonce: enc.nonce },
-  });
-  // Wait for the spawn to fire (proves the unlock landed).
-  await pollUntil(() => fakesudoEntries(router.fakesudoLog).some((e) => e.mode === 'exec'), 5000);
-
-  // Now simulate refresh by sending a NEW hello with a different
-  // page_nonce.
-  await router.controlRequest({
-    t: 'msg', instance_id: privInst,
-    data: { kind: 'hello', page_nonce: 'e2e-after-refresh' },
-  });
-  await router.waitForLog(/password cache cleared \(page nonce change\)/, 5000);
-
-  // Second request — should auto-prompt fresh (password gone, no
-  // pendingApproveReq from before, no re-prompt either).
-  await router.controlRequest({
-    t: 'msg', instance_id: testInst,
-    data: {
-      kind: 'send_to', target_app: PRIV_APP_ID,
-      payload: { kind: 'spawn', req_id: 'r2', app_id: 'com.wash.about' },
-    },
-  });
-  await router.waitForLog(/need_password be_pubkey=([A-Za-z0-9+/=]+) \(auto-prompt req=r2\)/, 5000);
-});
-
-// Refresh DURING an in-flight unlock: the user clicked Approve,
-// modal popped, but they refreshed before entering the password.
-// pendingApproveReq is still set; the re-prompt branch in
-// HandleHello should fire need_password with the same (or a fresh)
-// handshake so the new FE can finish what the old one started.
-test('refresh while pending approve re-fires need_password', async ({ router }) => {
-  const { privInst, testInst } = await drivePriv(router);
-
-  // Spawn arrives → auto-prompt (sets pendingApproveReq).
-  await router.controlRequest({
-    t: 'msg', instance_id: testInst,
-    data: {
-      kind: 'send_to', target_app: PRIV_APP_ID,
-      payload: { kind: 'spawn', req_id: 'ref-1', app_id: 'com.wash.about' },
-    },
-  });
-  await router.waitForLog(/need_password be_pubkey=[A-Za-z0-9+/=]+ \(auto-prompt req=ref-1\)/, 5000);
-
-  // Simulate refresh: hello with new nonce. The re-prompt log line
-  // is the smoking gun.
-  await router.controlRequest({
-    t: 'msg', instance_id: privInst,
-    data: { kind: 'hello', page_nonce: 'e2e-refresh-mid' },
-  });
-  await router.waitForLog(/need_password be_pubkey=[A-Za-z0-9+/=]+ \(refresh re-prompt req=ref-1\)/, 5000);
-});
+// NOTE: M7 dropped the page-nonce auto-lock-on-refresh feature
+// (was: priv tracked a per-FE page_nonce, cleared the password cache
+// when it changed). The feature relied on an own-FE hello path; with
+// surface=background, priv has no FE and the session FE's lifecycle
+// (which is a singleton across tab refreshes) doesn't generate a
+// useful nonce signal. The idle timer (15min default) is the
+// remaining lock-when-walked-away protection. Re-adding the auto-lock
+// would require the session FE to generate a per-mount nonce and the
+// session BE gateway to forward it as a priv "refresh" event — left
+// for M8 if it lands. Two e2e tests that exercised that path were
+// removed here; the unit-level coverage in apps/priv/be/queue_test.go
+// stays intact.
 
 // Only the prompting request runs on unlock. Two requests are
 // enqueued — A auto-prompts; B waits. Unlock-via-A's-password

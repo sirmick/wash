@@ -30,6 +30,14 @@ type ProbeOutput struct {
 const (
 	SurfaceWindow  = "window"
 	SurfaceDesktop = "desktop"
+	// SurfaceBackground is a service-tier app: no window, no
+	// launcher entry, no FE bundle. Autoboot on first shell
+	// connect; other apps consume it via cross-app app_msg (the
+	// sdk.StateService subscribe-with-snapshot pattern is the
+	// canonical contract). wash-bulk, wash-priv, and com.wash.notify
+	// are the v1 background services; future audio mixer / clipboard
+	// daemon / network agent take the same slot.
+	SurfaceBackground = "background"
 )
 
 // Instancing values (WIRE.md §5.1, extended).
@@ -163,11 +171,17 @@ func ValidateManifest(m *Manifest) error {
 	if m.ProtocolVersion != ProtocolVersion {
 		return fmt.Errorf("protocol_version %d incompatible (router speaks %d)", m.ProtocolVersion, ProtocolVersion)
 	}
-	if len(m.Element) <= len(elementPrefix) || m.Element[:len(elementPrefix)] != elementPrefix {
-		return fmt.Errorf("element %q must start with %q", m.Element, elementPrefix)
+	// Element + Icon are required for surfaces that ever paint; a
+	// background service has no FE, so we accept an empty element/icon
+	// for it. The router's catalog filter keeps background entries out
+	// of the launcher either way, so an icon would never be rendered.
+	if m.Surface != SurfaceBackground {
+		if len(m.Element) <= len(elementPrefix) || m.Element[:len(elementPrefix)] != elementPrefix {
+			return fmt.Errorf("element %q must start with %q", m.Element, elementPrefix)
+		}
 	}
 	switch m.Surface {
-	case SurfaceWindow, SurfaceDesktop:
+	case SurfaceWindow, SurfaceDesktop, SurfaceBackground:
 	default:
 		return fmt.Errorf("invalid surface %q", m.Surface)
 	}
@@ -176,11 +190,13 @@ func ValidateManifest(m *Manifest) error {
 	default:
 		return fmt.Errorf("invalid instancing %q", m.Instancing)
 	}
-	if m.Icon == "" {
-		return errors.New("icon is empty (must be inline data URI)")
-	}
-	if len(m.Icon) > MaxIconBytes {
-		return fmt.Errorf("icon is %d bytes, cap is %d", len(m.Icon), MaxIconBytes)
+	if m.Surface != SurfaceBackground {
+		if m.Icon == "" {
+			return errors.New("icon is empty (must be inline data URI)")
+		}
+		if len(m.Icon) > MaxIconBytes {
+			return fmt.Errorf("icon is %d bytes, cap is %d", len(m.Icon), MaxIconBytes)
+		}
 	}
 	return nil
 }

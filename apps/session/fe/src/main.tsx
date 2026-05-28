@@ -12,7 +12,16 @@ import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-j
 import type { Component, JSX } from 'solid-js';
 import { Menu, MenuItem, defineWashApp, tokens } from '@wash/ui';
 import { toBlob } from 'html-to-image';
-import { Camera, Search } from 'lucide-solid';
+import { Camera, Search, PanelRightOpen } from 'lucide-solid';
+import { Sidebar, type SidebarMode } from './sidebar/Sidebar';
+import { Section, type SectionState } from './sidebar/Section';
+import { ViewportWidget } from './sidebar/ViewportWidget';
+import { AboutWidget, type AboutHostStats } from './sidebar/AboutWidget';
+import { NotifyWidget, type NotifyEntry } from './sidebar/NotifyWidget';
+import { BulkWidget, type BulkJob } from './sidebar/BulkWidget';
+import { BulkConflictOverlay, type BulkConflict } from './sidebar/BulkConflictOverlay';
+import { PrivWidget, type PrivReq } from './sidebar/PrivWidget';
+import { PrivUnlockOverlay, type PrivUnlockState } from './sidebar/PrivUnlockOverlay';
 
 interface CatalogApp {
   id: string;
@@ -183,11 +192,104 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [sysInfo, setSysInfo] = createSignal<SystemInfoMsg | null>(null);
   const [screenshotStatus, setScreenshotStatus] = createSignal('');
   const [screenshotVisible, setScreenshotVisible] = createSignal(false);
+  // Sidebar state. Open-by-default for first session use; persisted
+  // via wash:state so a refresh restores the user's preference. The
+  // per-section state map is keyed by section id (sidebar/Sidebar.tsx
+  // constants); we initialise lazily as sections register.
+  const [sidebarMode, setSidebarMode] = createSignal<SidebarMode>('open');
+  const [sectionStates, setSectionStates] = createSignal<Record<string, SectionState>>({
+    viewport: 'expanded',
+    about: 'collapsed',
+    notify: 'collapsed',
+    bulk: 'collapsed',
+    priv: 'collapsed',
+  });
+  // Host stats (CPU% / mem%) — pushed by the session BE every 5s as
+  // a `host.stats` app_msg. Null until the first tick lands.
+  const [hostStats, setHostStats] = createSignal<AboutHostStats | null>(null);
+  // Notify history — fed by com.wash.notify's StateService snapshot
+  // pushes. We subscribe in onMount; updates arrive on wash:msg as a
+  // {kind:"state"} envelope coming from the cross-app sender.
+  const [notifications, setNotifications] = createSignal<NotifyEntry[]>([]);
+  // Bulk queue + active conflicts — fed by com.wash.bulk's StateService.
+  // First pending conflict (if any) pops as a screen-anchored overlay.
+  const [bulkJobs, setBulkJobs] = createSignal<BulkJob[]>([]);
+  const [bulkConflicts, setBulkConflicts] = createSignal<BulkConflict[]>([]);
+  // Priv queue + lock state — fed by com.wash.priv's broadcasts.
+  // need_password drives the unlock overlay.
+  const [privReqs, setPrivReqs] = createSignal<PrivReq[]>([]);
+  const [privLocked, setPrivLocked] = createSignal<boolean>(true);
+  const [privUnlock, setPrivUnlock] = createSignal<PrivUnlockState | null>(null);
+  const [privUnlockErr, setPrivUnlockErr] = createSignal<string>('');
+  // persistSidebar is debounced so a flurry of toggles doesn't
+  // hammer the BE's save_state path. Matches the wash-edit cadence.
+  let persistTimer: number | null = null;
+  const persistSidebar = () => {
+    if (persistTimer != null) window.clearTimeout(persistTimer);
+    persistTimer = window.setTimeout(() => {
+      persistTimer = null;
+      window.wash.sendAppMsg(props.instance, {
+        kind: 'save_state',
+        state: { sidebar_mode: sidebarMode(), section_states: sectionStates() },
+      });
+    }, 300);
+  };
+  const toggleSidebar = () => {
+    setSidebarMode(sidebarMode() === 'open' ? 'hidden' : 'open');
+    persistSidebar();
+  };
+  // Section helpers. Widgets call autoExpandSection when an event
+  // arrives the user might want to see (new bulk job, new priv req,
+  // new notification). User can collapse manually; next event re-opens.
+  const setSectionState = (id: string, next: SectionState) => {
+    setSectionStates({ ...sectionStates(), [id]: next });
+    persistSidebar();
+  };
+  const toggleSection = (id: string) => {
+    const cur = sectionStates()[id] ?? 'expanded';
+    setSectionState(id, cur === 'expanded' ? 'collapsed' : 'expanded');
+  };
+  // autoExpandSection is the event-driven open. Widgets call this
+  // when a new event arrives that the user probably wants to see
+  // (new bulk job, new priv approval, new notification). User
+  // collapsing a section after an auto-expand simply re-collapses
+  // it; the next event will re-open. v0.1 doesn't model a stronger
+  // "mute" — kept the surface minimal until we know the right shape.
+  const autoExpandSection = (id: string) => {
+    const cur = sectionStates()[id] ?? 'collapsed';
+    if (cur === 'expanded') return;
+    setSectionState(id, 'expanded');
+  };
+  // notifyBadge — show the unread count in the section header. Empty
+  // string hides the badge (Section's Show guard treats it as falsy).
+  const notifyBadge = (): string => {
+    const unread = notifications().filter((n) => !n.read).length;
+    return unread > 0 ? String(unread) : '';
+  };
+  // bulkBadge — show the count of in-flight (queued + running) jobs.
+  // Terminal-state rows don't count (they're informational, auto-
+  // evicting). Conflicts also count — they're blocking work.
+  const bulkBadge = (): string => {
+    const active = bulkJobs().filter(
+      (j) => j.status === 'queued' || j.status === 'running',
+    ).length;
+    return active > 0 ? String(active) : '';
+  };
+  // privBadge — count pending approval requests. Empty when the queue
+  // is settled (everything either approved-and-done or already
+  // rejected — those don't demand the user's attention).
+  const privBadge = (): string => {
+    const pending = privReqs().filter((r) => r.status === 'queued').length;
+    return pending > 0 ? String(pending) : '';
+  };
+  // privAccent — red trust tint used on the priv section header,
+  // matching the (now-removed) priv window's titlebar stripe and the
+  // ROOT-flagged window treatment in window.tsx.
+  const PRIV_ACCENT = '#e26060';
   let screenshotTimer = 0;
   let currentObjectURL: string | null = null;
 
   let paletteInputEl: HTMLInputElement | undefined;
-  let startBtnEl: HTMLButtonElement | undefined;
 
   // Derived list of synthetic "root variant" rows — one per catalog
   // app that declares manifest.root_variant. The launcher renders
@@ -375,8 +477,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // BE → FE: desktop.config arrives once at startup and again
     // on every fswatch fire (wash-settings rewrote the file).
     // system.info arrives once at startup; the banner re-renders.
+    // host.stats arrives every 5s while the session BE is running.
+    // state messages with no kind come from cross-app subscribes
+    // (we currently subscribe to com.wash.notify only — others can
+    // share the dispatch path when they grow).
     const onMsg = (ev: Event) => {
-      const data = (ev as CustomEvent).detail as { kind?: string };
+      const data = (ev as CustomEvent).detail as { kind?: string; state?: { notifications?: NotifyEntry[] } };
       if (!data) return;
       switch (data.kind) {
         case 'desktop.config':
@@ -385,9 +491,129 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         case 'system.info':
           setSysInfo(data as SystemInfoMsg);
           return;
+        case 'host.stats':
+          setHostStats(data as unknown as AboutHostStats);
+          return;
+        case 'notify.state': {
+          // notify service → session BE forwards StateService payload
+          // verbatim under a service-specific kind so the FE doesn't
+          // have to disambiguate "state" between services. The state
+          // shape is the notify service's public State type —
+          // { notifications: [...] }.
+          const next = (data.state as { notifications?: NotifyEntry[] })?.notifications ?? [];
+          // Auto-expand the notify section when a NEW notification
+          // arrives (id we haven't seen) unless the user pinned it
+          // closed. Compare ids against the current view.
+          const seen = new Set(notifications().map((n) => n.id));
+          const fresh = next.find((n) => !seen.has(n.id));
+          setNotifications(next);
+          if (fresh) {
+            autoExpandSection('notify');
+          }
+          return;
+        }
+        case 'bulk.state': {
+          // wash-bulk's StateService payload: { jobs: [...], conflicts: [...] }.
+          const next = data.state as { jobs?: BulkJob[]; conflicts?: BulkConflict[] };
+          const nextJobs = next?.jobs ?? [];
+          const nextConflicts = next?.conflicts ?? [];
+          // Auto-expand the bulk section on a NEW job (id not seen).
+          // Cancelled / failed terminal-state additions are still
+          // "new" — they're a state change the user might want to see.
+          const seenJobs = new Set(bulkJobs().map((j) => j.job_id));
+          const fresh = nextJobs.find((j) => !seenJobs.has(j.job_id));
+          setBulkJobs(nextJobs);
+          setBulkConflicts(nextConflicts);
+          if (fresh) {
+            autoExpandSection('bulk');
+          }
+          return;
+        }
+        case 'priv.state': {
+          // wash-priv full snapshot — broadcast on subscribe + every
+          // queue change. Shape: { locked: bool, queue: [...] }.
+          const next = data.state as { locked?: boolean; queue?: PrivReq[] };
+          const nextReqs = next?.queue ?? [];
+          const seen = new Set(privReqs().map((r) => r.req_id));
+          const fresh = nextReqs.find((r) => !seen.has(r.req_id));
+          setPrivReqs(nextReqs);
+          setPrivLocked(!!next?.locked);
+          if (fresh) {
+            autoExpandSection('priv');
+          }
+          return;
+        }
+        case 'priv.req.new':
+        case 'priv.req.update': {
+          // Per-request transitions arrive in addition to the full
+          // state push. We can rely on the broadcast for queue
+          // shape, but auto-expand on req.new specifically.
+          const req = (data as unknown as { req?: PrivReq }).req;
+          if (req) {
+            const seen = new Set(privReqs().map((r) => r.req_id));
+            // Merge: replace the existing entry or append.
+            const merged = seen.has(req.req_id)
+              ? privReqs().map((r) => (r.req_id === req.req_id ? req : r))
+              : [...privReqs(), req];
+            setPrivReqs(merged);
+            if (data.kind === 'priv.req.new') autoExpandSection('priv');
+          }
+          return;
+        }
+        case 'priv.need_password': {
+          const m = data as unknown as { be_pubkey?: string; req_id?: string };
+          if (m.be_pubkey && m.req_id) {
+            setPrivUnlockErr('');
+            setPrivUnlock({ be_pubkey: m.be_pubkey, req_id: m.req_id });
+            autoExpandSection('priv');
+          }
+          return;
+        }
+        case 'priv.unlock_err': {
+          const m = data as unknown as { msg?: string; code?: string };
+          setPrivUnlockErr(m.msg || m.code || 'unlock failed');
+          return;
+        }
+        case 'priv.unlocked': {
+          setPrivLocked(false);
+          setPrivUnlock(null);
+          setPrivUnlockErr('');
+          return;
+        }
+        case 'priv.locked': {
+          setPrivLocked(true);
+          setPrivUnlock(null);
+          return;
+        }
       }
     };
+    // Subscribe via the session BE gateways. Shell-originated cross-
+    // app sends don't carry a router-attested From, so the services
+    // would reject direct sendAppMsgTo. Routing through our own BE
+    // makes the sender attestation correct (the router stamps the
+    // session instance as From).
+    window.wash.sendAppMsg(props.instance, { kind: 'notify_subscribe' });
+    window.wash.sendAppMsg(props.instance, { kind: 'bulk_subscribe' });
+    window.wash.sendAppMsg(props.instance, { kind: 'priv_subscribe' });
     props.host.addEventListener('wash:msg', onMsg);
+
+    // wash:state restores the persisted sidebar config on (re)mount.
+    // Fires once on first attach and again on any browser refresh.
+    // Treat absence of fields as "keep the default" so a partial
+    // blob from an older client doesn't wipe new settings.
+    const onState = (ev: Event) => {
+      const s = (ev as CustomEvent).detail as
+        | { sidebar_mode?: SidebarMode; section_states?: Record<string, SectionState> }
+        | null;
+      if (!s) return;
+      if (s.sidebar_mode === 'open' || s.sidebar_mode === 'hidden') {
+        setSidebarMode(s.sidebar_mode);
+      }
+      if (s.section_states && typeof s.section_states === 'object') {
+        setSectionStates({ ...sectionStates(), ...s.section_states });
+      }
+    };
+    props.host.addEventListener('wash:state', onState);
     // Belt + braces: ask for current state in case the BE's initial
     // push raced our listener install (the SDK runs OnReady before
     // the FE's connectedCallback in some orderings).
@@ -407,6 +633,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       if (ev.ctrlKey && (ev.key === ' ' || ev.code === 'Space')) {
         ev.preventDefault();
         togglePalette();
+        return;
+      }
+      // Ctrl+Alt+S toggles the sidebar between open and hidden.
+      // Doesn't collide with Ctrl+Alt+Arrows (viewport pan) — the
+      // shell-level keymap owns those; this fires for the unbound
+      // 'S' key only.
+      if (ev.ctrlKey && ev.altKey && !ev.shiftKey && !ev.metaKey && (ev.key === 's' || ev.key === 'S')) {
+        ev.preventDefault();
+        toggleSidebar();
+        return;
       }
     };
 
@@ -432,27 +668,152 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       offVp();
       offScreen();
       props.host.removeEventListener('wash:msg', onMsg);
+      props.host.removeEventListener('wash:state', onState);
+      // Cooperative unsubscribe via the session BE gateways. Cheap
+      // fire-and-forget; gateways forward with proper sender
+      // attestation.
+      try {
+        window.wash.sendAppMsg(props.instance, { kind: 'notify_unsubscribe' });
+        window.wash.sendAppMsg(props.instance, { kind: 'bulk_unsubscribe' });
+        window.wash.sendAppMsg(props.instance, { kind: 'priv_unsubscribe' });
+      } catch {
+        /* ignore — connection may already be torn down */
+      }
       document.removeEventListener('mousedown', onDocMouseDown);
       document.removeEventListener('keydown', onKey);
       clearInterval(clockId);
       clearInterval(offClockSwap);
       if (screenshotTimer) clearTimeout(screenshotTimer);
       if (currentObjectURL) URL.revokeObjectURL(currentObjectURL);
+      if (persistTimer != null) clearTimeout(persistTimer);
     });
   });
+
+  // Taskbar height is fixed at 40px in the styles below; we pass it
+  // to the Sidebar so its inset stays accurate even if the constant
+  // ever moves to a token.
+  const taskbarHeight = 40;
 
   return (
     <>
       <Banner info={sysInfo} />
-      <Pager
-        windows={windows}
-        vp={vp}
-        screen={screen}
-        taskbarPos={taskbarPosition}
+      <Sidebar
+        mode={sidebarMode()}
+        taskbarPos={taskbarPosition()}
+        taskbarHeight={taskbarHeight}
+        onToggle={toggleSidebar}
+      >
+        <Section
+          id="viewport"
+          title="Viewport"
+          icon="layout-grid"
+          state={sectionStates().viewport ?? 'expanded'}
+          onToggle={() => toggleSection('viewport')}
+        >
+          <ViewportWidget
+            renderPager={() => <Pager windows={windows} vp={vp} screen={screen} />}
+          />
+        </Section>
+        <Section
+          id="about"
+          title="About"
+          icon="info"
+          state={sectionStates().about ?? 'collapsed'}
+          onToggle={() => toggleSection('about')}
+        >
+          <AboutWidget
+            info={() => sysInfo()}
+            stats={() => hostStats()}
+          />
+        </Section>
+        <Section
+          id="notify"
+          title="Notifications"
+          icon="bell"
+          state={sectionStates().notify ?? 'collapsed'}
+          onToggle={() => toggleSection('notify')}
+          badge={notifyBadge()}
+        >
+          <NotifyWidget
+            notifications={notifications}
+            onMarkRead={(id) => window.wash.sendAppMsg(props.instance, { kind: 'notify_mark_read', id })}
+            onClearAll={() => window.wash.sendAppMsg(props.instance, { kind: 'notify_clear_all' })}
+          />
+        </Section>
+        <Section
+          id="bulk"
+          title="Bulk Ops"
+          icon="list-checks"
+          state={sectionStates().bulk ?? 'collapsed'}
+          onToggle={() => toggleSection('bulk')}
+          badge={bulkBadge()}
+        >
+          <BulkWidget
+            jobs={bulkJobs}
+            onCancel={(jobID) =>
+              window.wash.sendAppMsg(props.instance, { kind: 'bulk_cancel', job_id: jobID })
+            }
+          />
+        </Section>
+        <Section
+          id="priv"
+          title="Privilege"
+          icon="shield-check"
+          accent={PRIV_ACCENT}
+          state={sectionStates().priv ?? 'collapsed'}
+          onToggle={() => toggleSection('priv')}
+          badge={privBadge()}
+        >
+          <PrivWidget
+            locked={privLocked}
+            reqs={privReqs}
+            onApprove={(id) =>
+              window.wash.sendAppMsg(props.instance, { kind: 'priv_approve', req_id: id })
+            }
+            onReject={(id, reason) =>
+              window.wash.sendAppMsg(props.instance, {
+                kind: 'priv_reject',
+                req_id: id,
+                reason: reason ?? '',
+              })
+            }
+            onLock={() => window.wash.sendAppMsg(props.instance, { kind: 'priv_lock' })}
+          />
+        </Section>
+      </Sidebar>
+      <BulkConflictOverlay
+        conflict={() => bulkConflicts()[0] ?? null}
+        onResolve={(jobID, action) =>
+          window.wash.sendAppMsg(props.instance, {
+            kind: 'bulk_resolve_conflict',
+            job_id: jobID,
+            action,
+          })
+        }
+      />
+      <PrivUnlockOverlay
+        state={privUnlock}
+        error={privUnlockErr}
+        onUnlock={(req) =>
+          window.wash.sendAppMsg(props.instance, {
+            kind: 'priv_unlock',
+            ciphertext: req.ciphertext,
+            fe_pubkey: req.fe_pubkey,
+            nonce: req.nonce,
+          })
+        }
+        onCancel={(reqID) => {
+          setPrivUnlock(null);
+          setPrivUnlockErr('');
+          window.wash.sendAppMsg(props.instance, {
+            kind: 'priv_reject',
+            req_id: reqID,
+            reason: 'unlock cancelled',
+          });
+        }}
       />
       <div style={taskbarPosition() === 'top' ? taskbarStyleTop : taskbarStyle}>
         <IconButton
-          ref={(el) => (startBtnEl = el)}
           title="Apps"
           onClick={toggleMenu}
         >
@@ -484,6 +845,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           }}
         >
           <Camera size={17} />
+        </IconButton>
+        <IconButton
+          testid="sidebar-toggle"
+          title="Toggle sidebar (Ctrl+Alt+S)"
+          onClick={toggleSidebar}
+        >
+          <PanelRightOpen size={17} />
         </IconButton>
         <span style={clockStyle}>{clock()}</span>
       </div>
@@ -623,33 +991,34 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
               opacity: 0.85,
               'text-shadow': '0 1px 2px rgba(0,0,0,0.6)',
               'word-break': 'break-all',
+              display: 'flex',
+              'align-items': 'baseline',
+              gap: '10px',
+              'flex-wrap': 'wrap',
             }}
           >
-            {s().fqdn || s().hostname || 'wash'}
-          </div>
-          <Show when={s().session_name}>
-            <div
-              data-testid="desktop-banner-session-name"
+            <span>{s().fqdn || s().hostname || 'wash'}</span>
+            <span
+              data-testid="desktop-banner-user"
               style={{
-                'margin-top': '2px',
-                font: '500 13px system-ui,sans-serif',
-                opacity: 0.65,
-                'text-shadow': '0 1px 2px rgba(0,0,0,0.6)',
+                font: '500 14px system-ui,sans-serif',
+                opacity: 0.7,
+                'font-weight': 600,
               }}
             >
-              session: {s().session_name}
-            </div>
-          </Show>
-          <div
-            style={{
-              'margin-top': '4px',
-              opacity: 0.7,
-              'text-shadow': '0 1px 2px rgba(0,0,0,0.6)',
-            }}
-          >
-            <span data-testid="desktop-banner-user" style={{ 'font-weight': 700 }}>
               {s().username || '?'}
             </span>
+            <Show when={s().session_name}>
+              <span
+                data-testid="desktop-banner-session-name"
+                style={{
+                  font: '500 12px ui-monospace,Menlo,Consolas,monospace',
+                  opacity: 0.55,
+                }}
+              >
+                · {s().session_name}
+              </span>
+            </Show>
           </div>
           <div
             data-testid="desktop-banner-hw"
@@ -744,56 +1113,40 @@ function formatBuilt(s: string): string {
   return `${m[1]} ${m[2]}`;
 }
 
-// Pager renders the 3x3 virtual-desktop overview as a panel parked
-// just above the taskbar. Each cell is a scaled-down rect of the
-// real viewport; window outlines inside each cell preview where
-// they live across the plane. Click a cell to pan; click a window
-// to pan + focus.
-const PAGER_CELL_W = 56;
+// Pager renders the 3x3 virtual-desktop overview. Embedded in the
+// sidebar's Viewport widget — fills the section width (no chrome /
+// rounded rect; cells size themselves to the available width). Click
+// a cell to pan; click a window outline to pan + focus.
 const PAGER_GAP = 3;
 const PAGER_PAD = 6;
-// PAGER_BORDER mirrors the `border: 1px solid` on the panel. With
-// box-sizing: border-box, the container's declared width INCLUDES
-// border + padding, so panelW/panelH must add the border width on
-// each axis (2px) or the right + bottom rows clip into the border.
-const PAGER_BORDER = 1;
 
 const Pager: Component<{
   windows: () => WindowInfo[];
   vp: () => { vx: number; vy: number };
   screen: () => { w: number; h: number };
-  taskbarPos: () => 'top' | 'bottom';
 }> = (props) => {
   const perAxis = window.wash.viewports().perAxis;
+  // SIDEBAR_OPEN_WIDTH is 300px; section body has 10px horizontal
+  // padding (Section.tsx) → ~280px of usable width. We compute the
+  // cell width from `perAxis` so any future N×N config Just Works.
+  const PAGER_USABLE_W = 280 - PAGER_PAD * 2;
+  const cellW = () => Math.floor((PAGER_USABLE_W - (perAxis - 1) * PAGER_GAP) / perAxis);
   const cellH = () => {
     const s = props.screen();
     const aspect = s.h / Math.max(1, s.w);
-    return Math.round(PAGER_CELL_W * aspect);
+    return Math.max(1, Math.round(cellW() * aspect));
   };
-  const panelW = () => perAxis * PAGER_CELL_W + (perAxis - 1) * PAGER_GAP + PAGER_PAD * 2 + PAGER_BORDER * 2;
-  const panelH = () => perAxis * cellH() + (perAxis - 1) * PAGER_GAP + PAGER_PAD * 2 + PAGER_BORDER * 2;
-  const containerStyle = () => {
-    const s: JSX.CSSProperties = {
-      position: 'absolute',
-      right: '14px',
-      width: `${panelW()}px`,
-      height: `${panelH()}px`,
-      background: 'rgba(15,15,30,0.75)',
-      'backdrop-filter': 'blur(10px)',
-      '-webkit-backdrop-filter': 'blur(10px)',
-      border: '1px solid #2a2a4a',
-      'border-radius': '8px',
-      padding: `${PAGER_PAD}px`,
-      'box-sizing': 'border-box',
-      'box-shadow': '0 4px 14px rgba(0,0,0,0.4)',
-      'z-index': 9999, // just below the taskbar (10000) so the bar wins on overlap
-      'user-select': 'none',
-    };
-    // 16px gap from the taskbar on whichever edge it lives.
-    if (props.taskbarPos() === 'top') s.top = '56px';
-    else s.bottom = '56px';
-    return s;
-  };
+  const panelW = () => perAxis * cellW() + (perAxis - 1) * PAGER_GAP + PAGER_PAD * 2;
+  const panelH = () => perAxis * cellH() + (perAxis - 1) * PAGER_GAP + PAGER_PAD * 2;
+  const containerStyle = (): JSX.CSSProperties => ({
+    position: 'relative',
+    width: `${panelW()}px`,
+    height: `${panelH()}px`,
+    margin: '0 auto',
+    padding: `${PAGER_PAD}px`,
+    'box-sizing': 'border-box',
+    'user-select': 'none',
+  });
   const cells = () => {
     const out: { vx: number; vy: number }[] = [];
     for (let y = 0; y < perAxis; y++) {
@@ -836,6 +1189,7 @@ const Pager: Component<{
             return (
               <PagerCell
                 cell={c}
+                cellW={cellW()}
                 cellH={cellH()}
                 active={props.vp().vx === c.vx && props.vp().vy === c.vy}
                 windows={visible()}
@@ -851,18 +1205,19 @@ const Pager: Component<{
 
 const PagerCell: Component<{
   cell: { vx: number; vy: number };
+  cellW: number;
   cellH: number;
   active: boolean;
   windows: WindowInfo[];
   screen: { w: number; h: number };
 }> = (props) => {
-  const left = () => props.cell.vx * (PAGER_CELL_W + PAGER_GAP);
+  const left = () => props.cell.vx * (props.cellW + PAGER_GAP);
   const top = () => props.cell.vy * (props.cellH + PAGER_GAP);
   const cellStyle = (): JSX.CSSProperties => ({
     position: 'absolute',
     left: `${left()}px`,
     top: `${top()}px`,
-    width: `${PAGER_CELL_W}px`,
+    width: `${props.cellW}px`,
     height: `${props.cellH}px`,
     background: props.active ? 'rgba(80,90,180,0.28)' : 'rgba(255,255,255,0.04)',
     border: props.active ? '1.5px solid #6a7adf' : '1px solid #2a2a4a',
@@ -885,7 +1240,7 @@ const PagerCell: Component<{
       onClick={onCellClick}
     >
       <For each={props.windows}>
-        {(w) => <PagerWindow win={w} cell={props.cell} cellH={props.cellH} screen={props.screen} />}
+        {(w) => <PagerWindow win={w} cell={props.cell} cellW={props.cellW} cellH={props.cellH} screen={props.screen} />}
       </For>
     </div>
   );
@@ -894,6 +1249,7 @@ const PagerCell: Component<{
 const PagerWindow: Component<{
   win: WindowInfo;
   cell: { vx: number; vy: number };
+  cellW: number;
   cellH: number;
   screen: { w: number; h: number };
 }> = (props) => {
@@ -905,7 +1261,7 @@ const PagerWindow: Component<{
     const s = props.screen;
     const cellOriginX = props.cell.vx * s.w;
     const cellOriginY = props.cell.vy * s.h;
-    const scaleX = PAGER_CELL_W / Math.max(1, s.w);
+    const scaleX = props.cellW / Math.max(1, s.w);
     const scaleY = props.cellH / Math.max(1, s.h);
     return {
       left: Math.round((props.win.x - cellOriginX) * scaleX),

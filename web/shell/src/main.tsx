@@ -360,6 +360,13 @@ createEffect(() => {
 });
 
 function handleAppDeclared(msg: ShellAppDeclared): void {
+  // Background services have no FE — no bundle, no element, no mount.
+  // The shell ignores the declaration: the BE talks to other apps via
+  // cross-app app_msg, and nothing on this side ever needs to address
+  // it by element name.
+  if ((msg.surface as string) === 'background') {
+    return;
+  }
   instances.set(msg.instance_id, { element: msg.element, surface: msg.surface });
   if (msg.surface === 'desktop') {
     waitForBundleByInstance(msg.instance_id)

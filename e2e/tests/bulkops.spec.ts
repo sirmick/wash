@@ -91,16 +91,23 @@ test.describe('wash-bulk BE: enqueue → completion via log + fs', () => {
     expect(r.code).toBe('bad_request');
   });
 
-  test('cancel of unknown job_id returns cancel_err not_found', async ({ router }) => {
-    // The race-prone "cancel a real queued job before it runs"
-    // scenario is covered by internal/bulkops unit tests; here we
-    // verify the wire surface: a cancel for an unknown id rejects
-    // cleanly without affecting the queue.
+  test('cancel of unknown job_id is silently ignored (fire-and-forget)', async ({ router }) => {
+    // Cancel became HandleVoid in M6 — the StateService fan is the
+    // confirmation, not a reply envelope. An unknown-id cancel must
+    // not throw, not crash the service, not corrupt subsequent
+    // enqueues. We can't easily await "no reply"; instead, fire the
+    // cancel then verify the service still processes a real enqueue.
     const launched = await router.controlRequest({ t: 'launch', app_id: 'com.wash.bulk' });
     const inst = launched.instance_id as string;
-    const r = await router.sendAppMsg(inst, { kind: 'cancel', id: 'c', job_id: 'no-such-job' });
-    expect(r.kind).toBe('cancel_err');
-    expect(r.code).toBe('not_found');
+    // Fire the no-op cancel. Without an `id` field sendAppMsg takes
+    // the no-await path (msg.ok rather than awaiting a reply), which
+    // matches the new fire-and-forget contract on bulk.cancel.
+    await router.sendAppMsg(inst, { kind: 'cancel', job_id: 'no-such-job' });
+    // Now a real enqueue must still complete.
+    const ack = await router.sendAppMsg(inst, {
+      kind: 'enqueue', id: 'after-cancel', op: 'delete', paths: ['/tmp/wash-nonexistent-XYZ'],
+    });
+    expect(ack.kind).toBe('enqueue_ok');
   });
 });
 
@@ -165,6 +172,64 @@ test.describe('fm: bulk delete via multi-select', () => {
     // dispatches to bulk-ops and we wait for that job to finish.
     await router.waitForLog(/bulk-ops job=\S+ op=delete status=done/, 5_000);
     expect(existsSync(dir)).toBe(false);
+  });
+
+  test('sidebar bulk widget shows job row + auto-expands on enqueue', async ({ page, router }) => {
+    // Multi-select delete should produce a bulk-job-* row in the
+    // sidebar's Bulk Ops section. The auto-expand rule (M5) flips
+    // the section from collapsed → expanded on a new job.
+    writeFileSync(join(router.fmRoot, 'sb-a.txt'), 'a');
+    writeFileSync(join(router.fmRoot, 'sb-b.txt'), 'b');
+    await openFm(page, router);
+
+    // Confirm the bulk section starts collapsed.
+    await expect(page.locator('[data-testid="sidebar-section-bulk"]')).toHaveAttribute('data-state', 'collapsed');
+
+    // Multi-select + delete.
+    await page.locator('[data-testid="fm-entry-sb-a.txt"]').click();
+    await page.locator('[data-testid="fm-entry-sb-b.txt"]').click({ modifiers: ['Control'] });
+    await page.locator('[data-testid="fm-entry-sb-a.txt"]').click({ button: 'right' });
+    await page.locator('[data-testid="fm-ctx-delete"]').click();
+    await page.locator('[data-testid="fm-confirm-delete-yes"]').click();
+
+    // Auto-expand + a row arrives. Row test-id includes the job_id
+    // (we don't know it ahead of time — match the prefix).
+    await expect(page.locator('[data-testid="sidebar-section-bulk"]')).toHaveAttribute('data-state', 'expanded', { timeout: 5_000 });
+    await expect(page.locator('[data-testid^="bulk-job-"]').first()).toBeVisible({ timeout: 5_000 });
+    // Job completes (fs side already covered by other tests; here we
+    // just check the row reaches a terminal state).
+    await expect(page.locator('[data-testid^="bulk-job-"]').first()).toHaveAttribute('data-status', /done|cancelled|failed/, { timeout: 5_000 });
+  });
+
+  test('sidebar bulk conflict overlay pops on copy-onto-existing', async ({ page, router }) => {
+    // Set up a target file + a source we'll copy onto it.
+    mkdirSync(join(router.fmRoot, 'src'));
+    writeFileSync(join(router.fmRoot, 'src', 'conflict.txt'), 'src');
+    writeFileSync(join(router.fmRoot, 'conflict.txt'), 'existing');
+    await openFm(page, router);
+
+    // Trigger a copy via the cross-app bulk wire — fm's UI doesn't
+    // ship a copy-with-conflict path in M6 (separate UX), but bulk's
+    // BE accepts copy enqueues directly. Use control socket to
+    // enqueue. The conflict overlay will pop in the session FE.
+    const launched = await router.controlRequest({ t: 'launch', app_id: 'com.wash.bulk' });
+    const inst = launched.instance_id as string;
+    const ack = await router.sendAppMsg(inst, {
+      kind: 'enqueue', id: 'cf-1', op: 'copy',
+      paths: [join(router.fmRoot, 'src', 'conflict.txt')],
+      dest: router.fmRoot,
+    });
+    expect(ack.kind).toBe('enqueue_ok');
+
+    // The overlay appears with the conflict prompt + a Replace button.
+    const overlay = page.locator('[data-testid="bulk-conflict-overlay"]');
+    await expect(overlay).toBeVisible({ timeout: 5_000 });
+    await expect(overlay).toContainText(/Replace|Merge/);
+    // Skip — leaves the existing file intact.
+    await page.locator('[data-testid^="bulk-conflict-skip-"]').first().click();
+    await expect(overlay).toBeHidden({ timeout: 3_000 });
+    // Existing content unchanged.
+    expect(existsSync(join(router.fmRoot, 'conflict.txt'))).toBe(true);
   });
 
   test('shift-click range-selects between two clicks', async ({ page, router }) => {

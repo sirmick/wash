@@ -7,8 +7,9 @@ const ProtocolVersion = wire.ProtocolVersion
 
 // Surface and Instancing values mirror WIRE.md §5.1.
 const (
-	SurfaceWindow  = wire.SurfaceWindow
-	SurfaceDesktop = wire.SurfaceDesktop
+	SurfaceWindow     = wire.SurfaceWindow
+	SurfaceDesktop    = wire.SurfaceDesktop
+	SurfaceBackground = wire.SurfaceBackground
 
 	InstancingMulti     = wire.InstancingMulti
 	InstancingSingle    = wire.InstancingSingle

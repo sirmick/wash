@@ -174,10 +174,32 @@ func (r *Router) controlLaunch(ctx context.Context, conn net.Conn, appID string)
 		return
 	}
 	// Spawning a session-surface app via the control socket would
-	// stomp on the autoboot session; refuse.
+	// stomp on the autoboot session; refuse. Background services
+	// take a different path: they autoboot on shell connect, but
+	// launching via control is allowed because they're singleton-
+	// instancing (resolveRecipient will return the existing one if
+	// already running, spawn on demand if not). Useful for headless
+	// e2e harnesses that drive the wire surface without a browser.
 	if entry.Manifest.Surface == SurfaceDesktop {
 		writeControlResponse(conn, map[string]any{
 			"t": "error", "code": "forbidden", "msg": "cannot launch desktop-surface app via control socket",
+		})
+		return
+	}
+	if entry.Manifest.Surface == SurfaceBackground {
+		// Route through resolveRecipient so the singleton table is
+		// consulted (returns existing instance) before spawning.
+		inst, code, err := r.resolveRecipient(ctx, wire.Recipient{AppID: appID})
+		if err != nil {
+			writeControlResponse(conn, map[string]any{
+				"t": "error", "code": code, "msg": err.Error(),
+			})
+			return
+		}
+		writeControlResponse(conn, map[string]any{
+			"t":           "launched",
+			"instance_id": inst.InstanceID,
+			"window_id":   uint64(inst.WindowID),
 		})
 		return
 	}

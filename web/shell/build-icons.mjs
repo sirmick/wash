@@ -35,6 +35,10 @@ const ICONS = [
   'package',        // wash-packages
   'log-out',        // session app "Log out" menu item
   'unplug',         // session app "Disconnect" menu item
+  'layout-grid',    // sidebar Viewport widget
+  'bell',           // sidebar Notifications widget
+  'lock',           // priv widget lock-state indicator
+  'unlock',         // priv widget unlock-state indicator
 ];
 
 // Resolve via require so pnpm's nested layout is fine.

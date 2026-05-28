@@ -165,3 +165,50 @@ func TestIsTrustedBinary_AcceptsTrustedDir(t *testing.T) {
 		t.Fatalf("0775 binary under trusted dir should be accepted")
 	}
 }
+
+// TestCatalogFiltersSurfaceBackground confirms surface=background
+// entries don't appear in the shell catalog — alongside surface=
+// desktop and Hidden, which the same filter already excluded.
+//
+// Lives in the router package (not registry) because the filter
+// itself is on Router.catalog(), not Registry. The registry holds
+// every entry; the catalog is what the shell renders.
+func TestCatalogFiltersSurfaceBackground(t *testing.T) {
+	reg := NewRegistry()
+	reg.RegisterEntry(&Entry{
+		Path: "/tmp/wash-about",
+		Manifest: &Manifest{
+			ID: "com.wash.about", Name: "About wash", Version: "0.0.0",
+			ProtocolVersion: ProtocolVersion, Element: "wash-app-about",
+			Surface: SurfaceWindow, Icon: "data:image/svg+xml,W",
+			Instancing: InstancingMulti,
+		},
+	})
+	reg.RegisterEntry(&Entry{
+		Path: "/tmp/wash-notify",
+		Manifest: &Manifest{
+			ID: "com.wash.notify", Name: "Notifications", Version: "0.0.0",
+			ProtocolVersion: ProtocolVersion,
+			Surface:         SurfaceBackground, Instancing: InstancingSingleton,
+		},
+	})
+	reg.RegisterEntry(&Entry{
+		Path: "/tmp/wash-session",
+		Manifest: &Manifest{
+			ID: "com.wash.session", Name: "Session", Version: "0.0.0",
+			ProtocolVersion: ProtocolVersion, Element: "wash-app-session",
+			Surface: SurfaceDesktop, Icon: "data:image/svg+xml,S",
+			Instancing: InstancingSingleton,
+		},
+	})
+
+	r := NewRouter(Config{}, reg, nil)
+	cat := r.catalog()
+
+	if len(cat) != 1 {
+		t.Fatalf("catalog len=%d, want 1 (only wash-about visible); got %+v", len(cat), cat)
+	}
+	if cat[0].ID != "com.wash.about" {
+		t.Fatalf("catalog[0]=%q, want com.wash.about", cat[0].ID)
+	}
+}

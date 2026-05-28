@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/sirmick/wash/internal/proc"
 )
 
 // pageSize and clockTicks are populated once at startup; both come from
@@ -30,25 +32,6 @@ var (
 	pageSize   = int64(os.Getpagesize())
 	clockTicks = int64(100)
 )
-
-// CPUTimes is the aggregate row from /proc/stat. All fields are
-// jiffies (USER_HZ ticks), not seconds.
-type CPUTimes struct {
-	User, Nice, System, Idle, IOWait, IRQ, SoftIRQ, Steal uint64
-}
-
-// Total returns the sum of all fields — used as the denominator in
-// per-pid %CPU.
-func (c CPUTimes) Total() uint64 {
-	return c.User + c.Nice + c.System + c.Idle + c.IOWait + c.IRQ + c.SoftIRQ + c.Steal
-}
-
-// MemInfo holds the fields we care about from /proc/meminfo. Values
-// are bytes (the file reports kB; we promote).
-type MemInfo struct {
-	Total, Available, Free, Buffers, Cached uint64
-	SwapTotal, SwapFree                     uint64
-}
 
 // LoadAvg is /proc/loadavg's first three numbers + the running/total
 // from the fourth.
@@ -112,7 +95,7 @@ type Sampler struct {
 	// userCache memoizes uid → username; getent is slow at htop-scale.
 	userCache map[int32]string
 
-	prevCPU   CPUTimes
+	prevCPU   proc.CPUTimes
 	prevProcs map[int32]procSample
 	havePrev  bool
 }
@@ -136,7 +119,7 @@ func (s *Sampler) Snapshot() (Snapshot, error) {
 	snap.TS = time.Now().Unix()
 	snap.CPUCount = runtime.NumCPU()
 
-	cpu, perCPU, err := readStat()
+	cpu, perCPU, err := proc.ReadStat()
 	if err != nil {
 		return snap, fmt.Errorf("stat: %w", err)
 	}
@@ -146,7 +129,7 @@ func (s *Sampler) Snapshot() (Snapshot, error) {
 		snap.PerCPU[i] = cpuRowFrom(c)
 	}
 
-	mem, _ := readMem()
+	mem, _ := proc.ReadMem()
 	snap.Mem = memRow{
 		Total: mem.Total, Available: mem.Available, Free: mem.Free,
 		Buffers: mem.Buffers, Cached: mem.Cached,
@@ -197,7 +180,7 @@ func (s *Sampler) Snapshot() (Snapshot, error) {
 	return snap, nil
 }
 
-func cpuRowFrom(c CPUTimes) cpuRow {
+func cpuRowFrom(c proc.CPUTimes) cpuRow {
 	return cpuRow{
 		User: c.User, Nice: c.Nice, System: c.System, Idle: c.Idle,
 		IOWait: c.IOWait, IRQ: c.IRQ, SoftIRQ: c.SoftIRQ, Steal: c.Steal,
@@ -363,79 +346,6 @@ func (s *Sampler) lookupUser(uid int32) string {
 	}
 	s.userCache[uid] = u.Username
 	return u.Username
-}
-
-// readStat parses /proc/stat. Returns the aggregate "cpu " line and
-// per-core "cpu0".."cpuN" lines, in order.
-func readStat() (CPUTimes, []CPUTimes, error) {
-	b, err := os.ReadFile("/proc/stat")
-	if err != nil {
-		return CPUTimes{}, nil, err
-	}
-	var agg CPUTimes
-	var per []CPUTimes
-	for _, line := range strings.Split(string(b), "\n") {
-		if !strings.HasPrefix(line, "cpu") {
-			break
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 8 {
-			continue
-		}
-		c := CPUTimes{}
-		c.User, _ = strconv.ParseUint(fields[1], 10, 64)
-		c.Nice, _ = strconv.ParseUint(fields[2], 10, 64)
-		c.System, _ = strconv.ParseUint(fields[3], 10, 64)
-		c.Idle, _ = strconv.ParseUint(fields[4], 10, 64)
-		c.IOWait, _ = strconv.ParseUint(fields[5], 10, 64)
-		c.IRQ, _ = strconv.ParseUint(fields[6], 10, 64)
-		c.SoftIRQ, _ = strconv.ParseUint(fields[7], 10, 64)
-		if len(fields) > 8 {
-			c.Steal, _ = strconv.ParseUint(fields[8], 10, 64)
-		}
-		if fields[0] == "cpu" {
-			agg = c
-		} else {
-			per = append(per, c)
-		}
-	}
-	return agg, per, nil
-}
-
-// readMem parses /proc/meminfo. Values are in kB on Linux; promoted to
-// bytes here so the FE doesn't have to know the unit.
-func readMem() (MemInfo, error) {
-	b, err := os.ReadFile("/proc/meminfo")
-	if err != nil {
-		return MemInfo{}, err
-	}
-	m := MemInfo{}
-	for _, line := range strings.Split(string(b), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		key := strings.TrimSuffix(fields[0], ":")
-		val, _ := strconv.ParseUint(fields[1], 10, 64)
-		val *= 1024
-		switch key {
-		case "MemTotal":
-			m.Total = val
-		case "MemAvailable":
-			m.Available = val
-		case "MemFree":
-			m.Free = val
-		case "Buffers":
-			m.Buffers = val
-		case "Cached":
-			m.Cached = val
-		case "SwapTotal":
-			m.SwapTotal = val
-		case "SwapFree":
-			m.SwapFree = val
-		}
-	}
-	return m, nil
 }
 
 // readLoadAvg parses /proc/loadavg.

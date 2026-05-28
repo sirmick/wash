@@ -31,7 +31,12 @@ const APPS: AppBundle[] = [
   // Caps after the bundle-size pass: solid-js, @xterm/*, @wash/ui are
   // import-map externals (served from /vendor/*) so they don't add to
   // the per-app bundle. Re-evaluate caps when adding a new shared dep.
-  { name: 'session', dir: 'apps/session/fe/dist', maxBytes: 70_000 },
+  //
+  // Session grew significantly in M4–M7: sidebar shell, 5 widget
+  // components, bulk conflict + priv unlock overlays, and noble crypto
+  // (P-256 / HKDF / AES-GCM, ~30 KB) for the priv password handshake
+  // that moved here from the (now-deleted) priv FE.
+  { name: 'session', dir: 'apps/session/fe/dist', maxBytes: 170_000 },
   // about grew into the system-info panel: build/host/Go-runtime
   // process table/registered-apps/browser sections + sortable table.
   // 30 KB headroom keeps a brake on further growth.
@@ -39,7 +44,9 @@ const APPS: AppBundle[] = [
   { name: 'test',    dir: 'apps/test/fe/dist',    maxBytes: 30_000 },
   { name: 'term',    dir: 'apps/term/fe/dist',    maxBytes: 30_000 },
   { name: 'fm',      dir: 'apps/fm/fe/dist',      maxBytes: 100_000 },
-  { name: 'bulk',    dir: 'apps/bulk/fe/dist',    maxBytes: 30_000 },
+  // wash-bulk + wash-priv shipped FE bundles before M6 / M7; they're
+  // now background services with no FE — their UI lives in the
+  // session sidebar. Nothing to bundle-check here anymore.
 ];
 
 // ALLOWED_EXTERNALS are the bare specifiers served via the import map

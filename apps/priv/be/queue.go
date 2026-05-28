@@ -111,8 +111,13 @@ type State struct {
 	// each unlock attempt (success or fail).
 	pendingApproveReq string
 
-	// FE binding.
-	pageNonce string // last seen page_nonce; reload changes it → lock
+	// subs is the set of subscriber instance ids — typically just the
+	// session BE acting as the sidebar's gateway. broadcast() fans
+	// every state-bearing event to this set. Subscribers are added by
+	// a `subscribe` cross-app message and removed by `unsubscribe`.
+	// The router silently drops messages to gone instances, so a
+	// missed unsubscribe leaks one map entry but doesn't break anything.
+	subs map[string]struct{}
 
 	// nextWireReqID counts our outbound PrepareSpawn req_ids. Starts
 	// at 1.
@@ -169,9 +174,58 @@ func NewState() *State {
 		queue:        []*Request{},
 		pendingPrep:  map[uint64]*pendingPrepareSpawn{},
 		inlineProcs:  map[string]*inlineProc{},
+		subs:         map[string]struct{}{},
 		isRoot:       isRoot,
 		passwordless: !isRoot && detectPasswordlessSudo(cfg.SudoBin),
 	}
+}
+
+// addSubscriber registers inst as a subscriber and ships the current
+// state snapshot to it. Called from the subscribe handler.
+func (s *State) addSubscriber(c *sdk.Conn, inst string) {
+	s.mu.Lock()
+	s.subs[inst] = struct{}{}
+	snap := s.stateSnapshotLocked()
+	s.mu.Unlock()
+	_ = c.SendAppMsgTo(wire.Recipient{InstanceID: inst}, snap)
+}
+
+// removeSubscriber drops inst from the fan-out set.
+func (s *State) removeSubscriber(inst string) {
+	s.mu.Lock()
+	delete(s.subs, inst)
+	s.mu.Unlock()
+}
+
+// broadcast sends payload to every subscriber. Caller MUST NOT hold
+// s.mu — we lock briefly to snapshot the subs list. Cross-app sends
+// to gone instances are silently dropped by the router; we don't
+// bother GC-ing here.
+func (s *State) broadcast(c *sdk.Conn, payload map[string]any) {
+	s.mu.Lock()
+	subs := make([]string, 0, len(s.subs))
+	for k := range s.subs {
+		subs = append(subs, k)
+	}
+	s.mu.Unlock()
+	for _, inst := range subs {
+		_ = c.SendAppMsgTo(wire.Recipient{InstanceID: inst}, payload)
+	}
+}
+
+// stateSnapshotLocked returns the current full state in wire shape.
+// Caller MUST hold s.mu. Mirrors what SendStateSnapshot used to ship
+// to the (now-gone) own-FE.
+func (s *State) stateSnapshotLocked() map[string]any {
+	out := map[string]any{
+		"kind":   "state",
+		"locked": s.password == nil,
+		"queue":  renderQueue(s.queue),
+	}
+	if s.password != nil {
+		out["idle_remaining_ms"] = idleRemaining(s.lastActivity, cfg.IdleTimeout)
+	}
+	return out
 }
 
 // detectPasswordlessSudo probes whether the configured sudoBin will
@@ -287,7 +341,7 @@ func (s *State) IdleTicker(d time.Duration) {
 			c := s.conn
 			s.mu.Unlock()
 			log.Printf("wash-priv: password cache cleared (idle timeout)")
-			_ = c.SendAppMsg(map[string]any{"kind": "locked", "reason": "idle"})
+			s.broadcast(c, map[string]any{"kind": "locked", "reason": "idle"})
 			s.appendAudit(auditRecord{Decision: "idle_locked"})
 			continue
 		}
@@ -295,69 +349,16 @@ func (s *State) IdleTicker(d time.Duration) {
 	}
 }
 
-// HandleHello records the FE's page nonce. A change-of-nonce is a
-// browser reload — wipe the cached password (the security-relevant
-// clear) but keep the in-flight pendingApproveReq + handshake alive
-// so the user can finish the unlock they started. If a request was
-// awaiting approval before the refresh, re-send need_password with
-// the existing handshake so the new FE shows the modal again
-// without an extra Approve click.
-func (s *State) HandleHello(c *sdk.Conn, nonce string) {
-	s.mu.Lock()
-	if nonce == "" {
-		s.mu.Unlock()
-		return
-	}
-	var rePromptReqID string
-	var rePromptPub []byte
-	if s.pageNonce != "" && s.pageNonce != nonce {
-		s.wipeLocked()
-		log.Printf("wash-priv: password cache cleared (page nonce change)")
-		s.appendAudit(auditRecord{Decision: "refresh_locked"})
-		// Re-prompt path: there was a pending approval in-flight.
-		// If the handshake is still around (it survives wipeLocked
-		// now), reuse it; otherwise mint a fresh one. Either way,
-		// the new FE gets a need_password event and the modal
-		// reappears.
-		if s.pendingApproveReq != "" {
-			if s.handshake == nil {
-				if hs, pub, err := NewHandshake(); err == nil {
-					s.handshake = hs
-					rePromptPub = pub
-				}
-			} else {
-				rePromptPub = s.handshake.priv.PublicKey().Bytes()
-			}
-			rePromptReqID = s.pendingApproveReq
-		}
-	}
-	s.pageNonce = nonce
-	s.mu.Unlock()
-	s.SendStateSnapshot(c)
-	if rePromptReqID != "" && rePromptPub != nil {
-		log.Printf("wash-priv: need_password be_pubkey=%s (refresh re-prompt req=%s)", base64.StdEncoding.EncodeToString(rePromptPub), rePromptReqID)
-		_ = c.SendAppMsg(map[string]any{
-			"kind":      "need_password",
-			"be_pubkey": rePromptPub,
-			"req_id":    rePromptReqID,
-		})
-	}
-}
-
-// SendStateSnapshot ships the full current state to the FE. Called
-// on hello, resync, and whenever the queue mutates substantially.
+// SendStateSnapshot broadcasts the full current state to subscribers.
+// Called by resync (rare, debug-y) and as a building block for the
+// snapshot-on-subscribe path. The per-event broadcasts (req.new /
+// req.update / locked / unlocked / need_password / unlock_err) still
+// fire on each individual transition; this is the catch-all push.
 func (s *State) SendStateSnapshot(c *sdk.Conn) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := map[string]any{
-		"kind":   "state",
-		"locked": s.password == nil,
-		"queue":  renderQueue(s.queue),
-	}
-	if s.password != nil {
-		out["idle_remaining_ms"] = idleRemaining(s.lastActivity, cfg.IdleTimeout)
-	}
-	_ = c.SendAppMsg(out)
+	out := s.stateSnapshotLocked()
+	s.mu.Unlock()
+	s.broadcast(c, out)
 }
 
 func renderQueue(q []*Request) []map[string]any {
@@ -539,12 +540,12 @@ func (s *State) enqueue(c *sdk.Conn, r *Request) {
 	// can find the req_id without parsing audit jsonl. Quiet on
 	// every other state transition — those land in priv-audit.log.
 	log.Printf("wash-priv enqueue: req_id=%s kind=%s sender=%s/%s", r.ReqID, r.Kind, r.Sender.AppID, r.Sender.InstanceID)
-	_ = c.SendAppMsg(map[string]any{"kind": "req.new", "req": requestView(r)})
+	s.broadcast(c, map[string]any{"kind": "req.new", "req": requestView(r)})
 	if autoPrompt {
 		// Pubkey is public by definition — logging gives e2e + ops
 		// a handle on the unlock attempt without a browser.
 		log.Printf("wash-priv: need_password be_pubkey=%s (auto-prompt req=%s)", base64.StdEncoding.EncodeToString(autoPub), r.ReqID)
-		_ = c.SendAppMsg(map[string]any{
+		s.broadcast(c, map[string]any{
 			"kind":      "need_password",
 			"be_pubkey": autoPub,
 			"req_id":    r.ReqID,
@@ -578,7 +579,7 @@ func (s *State) autoApproveAndExecute(c *sdk.Conn, r *Request) {
 	s.lastActivity = time.Now()
 	view := requestView(r)
 	s.mu.Unlock()
-	_ = c.SendAppMsg(map[string]any{"kind": "req.update", "req": view})
+	s.broadcast(c, map[string]any{"kind": "req.update", "req": view})
 	s.executeApproved(c, r)
 }
 
@@ -621,7 +622,7 @@ func (s *State) HandleApprove(c *sdk.Conn, reqID string) {
 		// harness a way to drive the password flow without a browser.
 		// In prod this is one harmless log line per unlock attempt.
 		log.Printf("wash-priv: need_password be_pubkey=%s", base64.StdEncoding.EncodeToString(pub))
-		_ = c.SendAppMsg(map[string]any{
+		s.broadcast(c, map[string]any{
 			"kind":      "need_password",
 			"be_pubkey": pub,
 			"req_id":    reqID,
@@ -633,7 +634,7 @@ func (s *State) HandleApprove(c *sdk.Conn, reqID string) {
 	s.lastActivity = time.Now()
 	view := requestView(r)
 	s.mu.Unlock()
-	_ = c.SendAppMsg(map[string]any{"kind": "req.update", "req": view})
+	s.broadcast(c, map[string]any{"kind": "req.update", "req": view})
 	go s.executeApproved(c, r)
 }
 
@@ -652,7 +653,7 @@ func (s *State) HandleReject(c *sdk.Conn, reqID, reason string) {
 	view := requestView(r)
 	s.appendAudit(auditRecordFromRequest(r, "reject"))
 	s.mu.Unlock()
-	_ = c.SendAppMsg(map[string]any{"kind": "req.update", "req": view})
+	s.broadcast(c, map[string]any{"kind": "req.update", "req": view})
 	_ = c.SendAppMsgTo(wire.Recipient{InstanceID: r.Sender.InstanceID}, map[string]any{
 		"kind":   "rejected",
 		"req_id": r.ReqID,
@@ -668,12 +669,12 @@ func (s *State) HandleUnlock(c *sdk.Conn, ciphertext, fePubKey, nonce []byte) {
 	hs := s.handshake
 	s.mu.Unlock()
 	if hs == nil {
-		_ = c.SendAppMsg(map[string]any{"kind": "unlock_err", "code": "no_handshake", "msg": "no unlock in progress"})
+		s.broadcast(c, map[string]any{"kind": "unlock_err", "code": "no_handshake", "msg": "no unlock in progress"})
 		return
 	}
 	pw, err := hs.Decrypt(ciphertext, fePubKey, nonce)
 	if err != nil {
-		_ = c.SendAppMsg(map[string]any{"kind": "unlock_err", "code": "decrypt_failed", "msg": err.Error()})
+		s.broadcast(c, map[string]any{"kind": "unlock_err", "code": "decrypt_failed", "msg": err.Error()})
 		s.mu.Lock()
 		s.handshake = nil
 		s.mu.Unlock()
@@ -685,7 +686,7 @@ func (s *State) HandleUnlock(c *sdk.Conn, ciphertext, fePubKey, nonce []byte) {
 	// retries — one shot, FE re-prompts on failure.
 	if err := validateSudo(pw); err != nil {
 		wipe(pw)
-		_ = c.SendAppMsg(map[string]any{"kind": "unlock_err", "code": "bad_password", "msg": err.Error()})
+		s.broadcast(c, map[string]any{"kind": "unlock_err", "code": "bad_password", "msg": err.Error()})
 		s.mu.Lock()
 		s.handshake = nil
 		s.pendingApproveReq = ""
@@ -715,9 +716,9 @@ func (s *State) HandleUnlock(c *sdk.Conn, ciphertext, fePubKey, nonce []byte) {
 		}
 	}
 	s.mu.Unlock()
-	_ = c.SendAppMsg(map[string]any{"kind": "unlocked"})
+	s.broadcast(c, map[string]any{"kind": "unlocked"})
 	if toExec != nil {
-		_ = c.SendAppMsg(map[string]any{"kind": "req.update", "req": requestView(toExec)})
+		s.broadcast(c, map[string]any{"kind": "req.update", "req": requestView(toExec)})
 		go s.executeApproved(c, toExec)
 	}
 }
@@ -734,7 +735,7 @@ func (s *State) HandleLock(c *sdk.Conn, reason string) {
 		log.Printf("wash-priv: password cache cleared (%s)", reason)
 		s.appendAudit(auditRecord{Decision: "locked", Reason: reason})
 	}
-	_ = c.SendAppMsg(map[string]any{"kind": "locked", "reason": reason})
+	s.broadcast(c, map[string]any{"kind": "locked", "reason": reason})
 }
 
 // executeApproved is the spawn workhorse. Off the SDK goroutine,
@@ -816,7 +817,7 @@ func (s *State) finishInline(c *sdk.Conn, r *Request, exit int, errMsg string) {
 	view := requestView(r)
 	s.appendAudit(auditRecordFromRequest(r, "approve"))
 	s.mu.Unlock()
-	_ = c.SendAppMsg(map[string]any{"kind": "req.update", "req": view})
+	s.broadcast(c, map[string]any{"kind": "req.update", "req": view})
 	_ = c.SendAppMsgTo(wire.Recipient{InstanceID: r.Sender.InstanceID}, map[string]any{
 		"kind":      "priv.result",
 		"req_id":    r.ReqID,
@@ -949,7 +950,7 @@ func (s *State) HandlePrepareSpawnResult(c *sdk.Conn, wireReqID uint64, instance
 	view := requestView(r)
 	pw := append([]byte(nil), s.password...)
 	s.mu.Unlock()
-	_ = c.SendAppMsg(map[string]any{"kind": "req.update", "req": view})
+	s.broadcast(c, map[string]any{"kind": "req.update", "req": view})
 	_ = c.SendAppMsgTo(wire.Recipient{InstanceID: r.Sender.InstanceID}, map[string]any{
 		"kind":        "spawned",
 		"req_id":      r.ReqID,
@@ -977,7 +978,7 @@ func (s *State) HandlePrepareSpawnResult(c *sdk.Conn, wireReqID uint64, instance
 		view2 := requestView(r)
 		s.appendAudit(auditRecordFromRequest(r, "approve"))
 		s.mu.Unlock()
-		_ = c.SendAppMsg(map[string]any{"kind": "req.update", "req": view2})
+		s.broadcast(c, map[string]any{"kind": "req.update", "req": view2})
 		_ = c.SendAppMsgTo(wire.Recipient{InstanceID: r.Sender.InstanceID}, map[string]any{
 			"kind":      "result",
 			"req_id":    r.ReqID,
@@ -1005,7 +1006,7 @@ func (s *State) finishWithError(c *sdk.Conn, r *Request, code, msg string) {
 	view := requestView(r)
 	s.appendAudit(auditRecordFromRequest(r, "error"))
 	s.mu.Unlock()
-	_ = c.SendAppMsg(map[string]any{"kind": "req.update", "req": view})
+	s.broadcast(c, map[string]any{"kind": "req.update", "req": view})
 	_ = c.SendAppMsgTo(wire.Recipient{InstanceID: r.Sender.InstanceID}, map[string]any{
 		"kind":   "error",
 		"req_id": r.ReqID,

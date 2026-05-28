@@ -161,6 +161,7 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	if err := r.EnsureSessionRunning(ctx); err != nil {
 		r.log("ensure session: %v", err)
 	}
+	r.EnsureBackgroundAppsRunning(ctx)
 	if err := r.EnsureInitialAppRunning(ctx); err != nil {
 		r.log("ensure initial: %v", err)
 	}

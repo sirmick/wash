@@ -425,16 +425,76 @@ func (inst *AppInstance) relayAppMsgToShell(m wire.EvtAppMsg, class wire.Class) 
 	return nil
 }
 
-// relayNotify forwards an app's notification to every attached shell.
-// v0.1 is open — any app can notify, no capability gate.
+// relayNotify routes an EvtNotify based on the sender:
+//
+//   - From any app OTHER than the notify service: the notification is
+//     forwarded to the com.wash.notify singleton as a cross-app msg.
+//     The service stores history and decides when/whether to emit a
+//     toast (re-emitting its own Notify; the router then broadcasts
+//     that to every shell via the branch below). v0.1 has no DND or
+//     filtering, so the service always re-emits — but the seam for
+//     adding policy lives in one place now.
+//
+//   - From the notify service itself: broadcast as ShellNotify to
+//     every attached shell. The service is the toast authority; this
+//     is the only path that produces a visible toast.
+//
+// Single-authority routing means a notify service crash (or a not-
+// yet-running service early in boot) loses transient toasts — that's
+// the cost of having one source of truth for filtering / DND / cross-
+// shell sync. forwardNotifyToService spawns the singleton on demand,
+// which keeps the cold-start window narrow.
 func (inst *AppInstance) relayNotify(m wire.EvtNotify) error {
-	out := wire.NewShellNotify(inst.InstanceID, m.Title, m.Body, m.Level)
-	for _, s := range inst.router.shellList() {
-		if err := s.WriteCtrl(out); err != nil {
-			return err
+	if inst.AppID == NotifyAppID {
+		out := wire.NewShellNotify(inst.InstanceID, m.Title, m.Body, m.Level)
+		var firstErr error
+		for _, s := range inst.router.shellList() {
+			if err := s.WriteCtrl(out); err != nil && firstErr == nil {
+				firstErr = err
+			}
 		}
+		return firstErr
 	}
+	// Run in a goroutine because resolveRecipient may spawn the
+	// notify singleton on first reference — synchronous spawn would
+	// stall the producer's read loop for the duration of the handshake.
+	go inst.router.forwardNotifyToService(inst.AppID, inst.InstanceID, m)
 	return nil
+}
+
+// NotifyAppID is the reserved app id for the notify service. Kept in
+// the router (not imported from the notify package) so the router has
+// no compile-time dependency on the service binary's package — a
+// notify replacement could ship as a separate binary claiming the
+// same id and the router would route to it without recompile.
+const NotifyAppID = "com.wash.notify"
+
+// forwardNotifyToService resolves the notify singleton (spawning it
+// on demand if not yet running) and ships an `app_msg{kind:"notify"}`
+// from the original producer. Best-effort: logs and returns on any
+// failure — the shell broadcast already happened, the history surface
+// is the secondary consumer.
+func (r *Router) forwardNotifyToService(sourceAppID, sourceInstID string, m wire.EvtNotify) {
+	target, _, err := r.resolveRecipient(context.Background(), wire.Recipient{AppID: NotifyAppID})
+	if err != nil {
+		// Not registered (or spawn failed). Background apps are best-
+		// effort — toasts still fire either way.
+		return
+	}
+	// Pass the payload as a typed map (not pre-marshalled bytes).
+	// NewEvtAppMsgFrom calls mustJSON internally — handing it []byte
+	// would round-trip through base64, which the receiver's decoder
+	// then can't unmarshal back into a map.
+	payload := map[string]any{
+		"kind":  "notify",
+		"title": m.Title,
+		"body":  m.Body,
+		"level": m.Level,
+	}
+	from := wire.Sender{AppID: sourceAppID, InstanceID: sourceInstID}
+	if err := target.WriteEvt(wire.NewEvtAppMsgFrom(target.WindowID, payload, from)); err != nil {
+		r.log("notify forward: write: %v", err)
+	}
 }
 
 func (inst *AppInstance) relayWindowTitle(m wire.EvtWindowSetTitle) error {

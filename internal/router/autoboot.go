@@ -62,6 +62,43 @@ func (r *Router) EnsureSessionRunning(ctx context.Context) error {
 	return nil
 }
 
+// EnsureBackgroundAppsRunning spawns every registered surface=background
+// app that hasn't already been started. Idempotent — safe to call on
+// every shell connect; only the first call per app id actually spawns.
+// Failures don't abort the loop (one broken service shouldn't block
+// the others), and they clear the per-app started flag so a retry on
+// the next shell connect can succeed.
+func (r *Router) EnsureBackgroundAppsRunning(ctx context.Context) {
+	for _, entry := range r.reg.Entries() {
+		if !entry.Enabled() {
+			continue
+		}
+		if entry.Manifest.Surface != SurfaceBackground {
+			continue
+		}
+		appID := entry.Manifest.ID
+		r.backgroundMu.Lock()
+		if r.backgroundStarted[appID] {
+			r.backgroundMu.Unlock()
+			continue
+		}
+		r.backgroundStarted[appID] = true
+		r.backgroundMu.Unlock()
+
+		// Router-lifetime context — background services must outlive
+		// any one shell. Same reasoning as the session app above.
+		e := entry
+		go func() {
+			if _, err := r.spawnAndRun(context.Background(), e, false); err != nil {
+				r.log("background app %s: %v", e.Manifest.ID, err)
+				r.backgroundMu.Lock()
+				delete(r.backgroundStarted, e.Manifest.ID)
+				r.backgroundMu.Unlock()
+			}
+		}()
+	}
+}
+
 // EnsureInitialAppRunning spawns Config.InitialAppID, if set, in kiosk
 // mode. Idempotent. Called from HandleShell.
 func (r *Router) EnsureInitialAppRunning(ctx context.Context) error {

@@ -7,6 +7,9 @@
     "build": "vite build"
   },
   "dependencies": {
+    "@noble/ciphers": "^2.2.0",
+    "@noble/curves": "^2.2.0",
+    "@noble/hashes": "^2.2.0",
     "@wash/ui": "workspace:*",
     "html-to-image": "^1.11.13",
     "lucide-solid": "^1.16.0",

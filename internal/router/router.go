@@ -168,6 +168,14 @@ type Router struct {
 	initialMu sync.Mutex
 	initial   sessionAppState
 
+	// backgroundMu guards backgroundStarted, the set of background
+	// surface app ids EnsureBackgroundAppsRunning has spawned. Each
+	// id maps to a per-app start-state so a failed spawn can be
+	// retried on the next shell connect without leaking a "started
+	// once" sentinel.
+	backgroundMu      sync.Mutex
+	backgroundStarted map[string]bool
+
 	// windowSession is the canonical state for windows the shell
 	// renders. Sent as a snapshot on shell connect; mutated by router
 	// or shell actions, with patches broadcast to every shell.
@@ -200,7 +208,8 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		singletons:     make(map[string]*AppInstance),
 		pendingAttach:  make(map[int]*pendingAttach),
 		pendingByToken: make(map[string]*tokenPending),
-		cliSessions:    make(map[string]*cliSession),
+		cliSessions:       make(map[string]*cliSession),
+		backgroundStarted: make(map[string]bool),
 	}
 }
 
@@ -352,9 +361,9 @@ func (r *Router) dropAppMsgWatchers(instanceID string) {
 func (r *Router) Registry() *Registry { return r.reg }
 
 // catalog builds the snapshot the shell sees on connect. Surface=
-// desktop apps and Hidden apps are filtered out — they don't belong
-// in launchers (the session app is autoboot; hidden apps are
-// test/utility).
+// desktop apps, surface=background apps, and Hidden apps are
+// filtered out — they don't belong in launchers (the session app
+// and background services autoboot; hidden apps are test/utility).
 func (r *Router) catalog() []wire.ShellCatalogApp {
 	entries := r.reg.Entries()
 	out := make([]wire.ShellCatalogApp, 0, len(entries))
@@ -364,7 +373,7 @@ func (r *Router) catalog() []wire.ShellCatalogApp {
 			// have no name to render.
 			continue
 		}
-		if e.Manifest.Surface == SurfaceDesktop {
+		if e.Manifest.Surface == SurfaceDesktop || e.Manifest.Surface == SurfaceBackground {
 			continue
 		}
 		if e.Manifest.Hidden && !r.cfg.ShowHidden {

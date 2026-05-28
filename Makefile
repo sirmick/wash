@@ -14,7 +14,7 @@ GOARCH  ?= amd64
 GOFLAGS := -trimpath -ldflags=-s\ -w -tags netgo,osusergo
 
 OUT     := out
-BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch
+BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -77,9 +77,6 @@ TERM_STAMP     := $(TERM_ASSETS)/.stamp
 FM_ASSETS      := apps/fm/be/assets
 FM_STAMP       := $(FM_ASSETS)/.stamp
 
-BULK_ASSETS    := apps/bulk/be/assets
-BULK_STAMP     := $(BULK_ASSETS)/.stamp
-
 EDIT_ASSETS    := apps/edit/be/assets
 EDIT_STAMP     := $(EDIT_ASSETS)/.stamp
 
@@ -88,9 +85,6 @@ SETTINGS_STAMP  := $(SETTINGS_ASSETS)/.stamp
 
 TOP_ASSETS      := apps/top/be/assets
 TOP_STAMP       := $(TOP_ASSETS)/.stamp
-
-PRIV_ASSETS     := apps/priv/be/assets
-PRIV_STAMP      := $(PRIV_ASSETS)/.stamp
 
 JOURNAL_ASSETS  := apps/journal/be/assets
 JOURNAL_STAMP   := $(JOURNAL_ASSETS)/.stamp
@@ -141,10 +135,6 @@ web-term: web-deps
 web-fm: web-deps
 	@$(PNPM) --filter @wash/app-fm run build
 
-.PHONY: web-bulk
-web-bulk: web-deps
-	@$(PNPM) --filter @wash/app-bulk run build
-
 .PHONY: web-edit
 web-edit: web-deps
 	@$(PNPM) --filter @wash/app-edit run build
@@ -156,10 +146,6 @@ web-settings: web-deps
 .PHONY: web-top
 web-top: web-deps
 	@$(PNPM) --filter @wash/app-top run build
-
-.PHONY: web-priv
-web-priv: web-deps
-	@$(PNPM) --filter @wash/app-priv run build
 
 .PHONY: web-journal
 web-journal: web-deps
@@ -212,9 +198,6 @@ $(TERM_STAMP): web-term
 $(FM_STAMP): web-fm
 	$(call embed_dist,apps/fm/fe/dist,$(FM_ASSETS))
 
-$(BULK_STAMP): web-bulk
-	$(call embed_dist,apps/bulk/fe/dist,$(BULK_ASSETS))
-
 $(EDIT_STAMP): web-edit
 	$(call embed_dist,apps/edit/fe/dist,$(EDIT_ASSETS))
 
@@ -223,9 +206,6 @@ $(SETTINGS_STAMP): web-settings
 
 $(TOP_STAMP): web-top
 	$(call embed_dist,apps/top/fe/dist,$(TOP_ASSETS))
-
-$(PRIV_STAMP): web-priv
-	$(call embed_dist,apps/priv/fe/dist,$(PRIV_ASSETS))
 
 $(JOURNAL_STAMP): web-journal
 	$(call embed_dist,apps/journal/fe/dist,$(JOURNAL_ASSETS))
@@ -259,7 +239,12 @@ $(OUT)/wash-term: $(TERM_STAMP) | $(OUT)
 $(OUT)/wash-fm: $(FM_STAMP) | $(OUT)
 	$(call go_build,$@,apps/fm/be/cmd)
 
-$(OUT)/wash-bulk: $(BULK_STAMP) | $(OUT)
+# wash-bulk is a background service (M6): no window, no FE bundle,
+# no embedded assets. Other apps' enqueue calls land here via cross-
+# app app_msg; state ships back via sdk.StateService subscribers.
+# .PHONY: see wash-notify for the rationale.
+.PHONY: $(OUT)/wash-bulk
+$(OUT)/wash-bulk: | $(OUT)
 	$(call go_build,$@,apps/bulk/be/cmd)
 
 $(OUT)/wash-edit: $(EDIT_STAMP) | $(OUT)
@@ -271,7 +256,12 @@ $(OUT)/wash-settings: $(SETTINGS_STAMP) | $(OUT)
 $(OUT)/wash-top: $(TOP_STAMP) | $(OUT)
 	$(call go_build,$@,apps/top/be/cmd)
 
-$(OUT)/wash-priv: $(PRIV_STAMP) | $(OUT)
+# wash-priv is a background service (M7): no window, no FE bundle,
+# no embedded assets. Its UI lives in the session sidebar; crypto
+# handshake moved into the session FE bundle.
+# .PHONY: see wash-notify for the rationale.
+.PHONY: $(OUT)/wash-priv
+$(OUT)/wash-priv: | $(OUT)
 	$(call go_build,$@,apps/priv/be/cmd)
 
 $(OUT)/wash-journal: $(JOURNAL_STAMP) | $(OUT)
@@ -285,6 +275,18 @@ $(OUT)/wash-services: $(SERVICES_STAMP) | $(OUT)
 
 $(OUT)/wash-packages: $(PACKAGES_STAMP) | $(OUT)
 	$(call go_build,$@,apps/packages/be/cmd)
+
+# wash-notify is a background service: no window, no FE bundle, no
+# embedded assets. Other apps' c.Notify() calls land here via the
+# router's fan-out (see relayNotify in internal/router/app_session.go).
+#
+# .PHONY so `make all` always re-runs `go build`. The Go toolchain
+# does its own incremental check on source mtimes; without this the
+# target's lack of source-stamp dep would let make consider an
+# already-built binary up-to-date even after a .go change.
+.PHONY: $(OUT)/wash-notify
+$(OUT)/wash-notify: | $(OUT)
+	$(call go_build,$@,apps/notify/be/cmd)
 
 # wash-launch is a CLI, not an app. No FE bundle, no embedded assets.
 $(OUT)/wash-launch: | $(OUT)
@@ -366,7 +368,7 @@ test-app: $(OUT)/wash-priv-fakesudo
 # Adding an app: extract into apps/<name>/be/, drop a
 # cmd/wash/imports_<name>.go blank-import, add its asset stamp to
 # the dep list below.
-MULTICALL_STAMPS := $(ABOUT_STAMP) $(BULK_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(PRIV_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP)
+MULTICALL_STAMPS := $(ABOUT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP)
 
 # Adding wash_test_app to the tags pulls the test app's blank-import
 # in (which is otherwise excluded by cmd/wash/imports_test.go's

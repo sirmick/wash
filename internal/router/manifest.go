@@ -14,8 +14,9 @@ const ProtocolVersion = wire.ProtocolVersion
 
 // Surface values.
 const (
-	SurfaceWindow  = wire.SurfaceWindow
-	SurfaceDesktop = wire.SurfaceDesktop
+	SurfaceWindow     = wire.SurfaceWindow
+	SurfaceDesktop    = wire.SurfaceDesktop
+	SurfaceBackground = wire.SurfaceBackground
 )
 
 // Instancing values.

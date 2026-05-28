@@ -85,6 +85,39 @@ func TestParseRejectsNonJSON(t *testing.T) {
 	}
 }
 
+// TestValidateBackgroundSurface confirms surface=background validates
+// even without an element or icon — services have no FE so requiring
+// them would be wrong. Other manifest fields still enforced normally.
+func TestValidateBackgroundSurface(t *testing.T) {
+	m := &Manifest{
+		ID:              "com.wash.notify",
+		Name:            "Notifications",
+		Version:         "0.0.0",
+		ProtocolVersion: ProtocolVersion,
+		Surface:         SurfaceBackground,
+		Instancing:      InstancingSingleton,
+	}
+	if err := wire.ValidateManifest(m); err != nil {
+		t.Fatalf("background manifest must validate without element/icon: %v", err)
+	}
+	// A background manifest with a junk element should still be
+	// accepted — the field is ignored on this surface.
+	m.Element = "not-prefixed"
+	if err := wire.ValidateManifest(m); err != nil {
+		t.Fatalf("background manifest should ignore element prefix: %v", err)
+	}
+	// Empty icon is fine on background.
+	m.Icon = ""
+	if err := wire.ValidateManifest(m); err != nil {
+		t.Fatalf("background manifest should accept empty icon: %v", err)
+	}
+	// Bad ID still rejected — surface doesn't excuse it.
+	m.ID = "BadID"
+	if err := wire.ValidateManifest(m); err == nil {
+		t.Fatal("background surface must not bypass id validation")
+	}
+}
+
 func TestHasCapability(t *testing.T) {
 	m, _, err := ParseProbe([]byte(envelopedManifest(validManifestJSON())))
 	if err != nil {

@@ -33,6 +33,7 @@ const TOP_BIN = join(REPO_ROOT, 'out', 'wash-top');
 const SYSLOGS_BIN = join(REPO_ROOT, 'out', 'wash-syslogs');
 const SERVICES_BIN = join(REPO_ROOT, 'out', 'wash-services');
 const PACKAGES_BIN = join(REPO_ROOT, 'out', 'wash-packages');
+const NOTIFY_BIN = join(REPO_ROOT, 'out', 'wash-notify');
 const FAKESUDO_BIN = join(REPO_ROOT, 'out', 'wash-priv-fakesudo');
 export const SUDO_BIN = join(REPO_ROOT, 'out', 'wash-sudo');
 
@@ -189,7 +190,7 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
       throw new Error(`missing binary: ${b}\n(make TEST_APP=1 from the repo root)`);
     }
   }
-  const wanted = opts.apps ?? ['session', 'about', 'test', 'term', 'fm', 'bulk', 'edit'];
+  const wanted = opts.apps ?? ['session', 'about', 'test', 'term', 'fm', 'bulk', 'edit', 'notify'];
   // fakesudo:true implies wash-priv in the apps dir — the BE is what
   // reads WASH_PRIV_SUDO_BIN, so without it the test wires the env
   // var into a process that never receives it.
@@ -245,6 +246,12 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
       throw new Error(`missing wash-packages: ${PACKAGES_BIN}`);
     }
     bins.push(PACKAGES_BIN);
+  }
+  if (wanted.includes('notify')) {
+    if (!existsSync(NOTIFY_BIN)) {
+      throw new Error(`missing wash-notify: ${NOTIFY_BIN}`);
+    }
+    bins.push(NOTIFY_BIN);
   }
   const appsDir = stageApps(bins);
   // wash-priv claims a reservedID (com.wash.priv) which the registry

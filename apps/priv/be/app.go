@@ -31,8 +31,6 @@ package priv
 
 import (
 	"context"
-	"embed"
-	"io/fs"
 	"log"
 	"os"
 
@@ -41,20 +39,13 @@ import (
 	"github.com/sirmick/wash/internal/wire"
 )
 
-//go:embed all:assets
-var assetsFS embed.FS
-
 const version = "0.0.0"
 
 // AppID is the reserved id this app claims. The registry refuses any
 // non-trusted binary from serving this id (see internal/router/
 // registry.go reservedIDs), so a malicious local wash app cannot
-// shadow the real wash-priv to inherit its red-stripe trust signal.
+// shadow the real wash-priv to inherit its trust signal.
 const AppID = "com.wash.priv"
-
-// privIcon — lucide sprite name. shield-check signals "protected /
-// gateway" without looking like a generic warning.
-const privIcon = "shield-check"
 
 var (
 	st  *State
@@ -63,31 +54,22 @@ var (
 )
 
 func init() {
-	sub, err := fs.Sub(assetsFS, "assets")
-	if err != nil {
-		panic("wash-priv: assets: " + err.Error())
-	}
 	def = &sdk.AppDef{
 		Manifest: sdk.Manifest{
 			ID:              AppID,
 			Name:            "Privileged Actions",
 			Version:         version,
 			ProtocolVersion: sdk.ProtocolVersion,
-			Element:         "wash-app-priv",
-			Surface:         sdk.SurfaceWindow,
-			Icon:            privIcon,
+			Surface:         sdk.SurfaceBackground,
 			Instancing:      sdk.InstancingSingleton,
 			Capabilities:    []string{sdk.CapPrepareSpawn},
-			Window:          &sdk.WindowHints{DefaultWidth: 520, DefaultHeight: 420},
 		},
-		Assets:               sub,
 		OnReady:              onReady,
 		OnPrepareSpawnResult: onPrepareSpawnResult,
 	}
 	registry.Register(&registry.App{
 		Name:     "wash-priv",
 		Manifest: def.Manifest,
-		Assets:   def.Assets,
 		Run:      run,
 	})
 }
@@ -156,13 +138,11 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 // wash-priv doesn't return _ok/_err replies — the state code in
 // queue.go produces domain-specific event kinds ({kind:"spawned"},
 // {kind:"result"}, {kind:"rejected"}, {kind:"req.update"}, …) via
-// direct SendAppMsg / SendAppMsgTo. So every handler here is a
-// HandleVoid / HandleFromVoid; the bus is just a typed dispatcher
-// onto the State methods.
-
-type helloReq struct {
-	PageNonce string `json:"page_nonce"`
-}
+// broadcasts to subscribers + cross-app SendAppMsgTo replies. So
+// every handler here is HandleFromVoid; the bus is just a typed
+// dispatcher onto the State methods. All FE-bound control flows
+// through the session BE gateway, which subscribes here and forwards
+// to its own FE — so we never see own-FE messages directly.
 
 type approveReq struct {
 	ReqID string `json:"req_id"`
@@ -220,15 +200,34 @@ type stdinReq struct {
 type emptyReq struct{}
 
 func registerHandlers(b *sdk.Bus) {
-	// ----- own-FE -----
-	sdk.HandleVoid(b, "hello", func(c *sdk.Conn, _ string, req helloReq) error {
-		st.HandleHello(c, req.PageNonce)
+	// ----- cross-app subscribe/control (FE→session BE→here) -----
+	//
+	// Every FE-bound interaction comes through the session BE
+	// gateway: it subscribes here and forwards approve / reject /
+	// unlock / lock cross-app. router-attested From identifies the
+	// session instance; we don't otherwise care who's calling.
+	sdk.HandleFromVoid(b, "subscribe", func(c *sdk.Conn, _ string, _ emptyReq, from wire.Sender) error {
+		if from.InstanceID == "" {
+			return nil
+		}
+		st.addSubscriber(c, from.InstanceID)
 		return nil
 	})
-	sdk.HandleVoid(b, "resync", func(c *sdk.Conn, _ string, _ emptyReq) error {
-		st.SendStateSnapshot(c)
+	sdk.HandleFromVoid(b, "unsubscribe", func(_ *sdk.Conn, _ string, _ emptyReq, from wire.Sender) error {
+		if from.InstanceID == "" {
+			return nil
+		}
+		st.removeSubscriber(from.InstanceID)
 		return nil
 	})
+	// approve/reject/unlock/lock are HandleVoid (sender-agnostic) so
+	// the session BE gateway, the control-socket-driven e2e tests,
+	// and any future trusted caller can all drive them without a
+	// router-attested From. v1's trust model considers every FE
+	// (FE-originated cross-app sends lack From by design) trusted;
+	// the BE-level guard is the registry's reserved-id check at
+	// internal/router/registry.go:162, which still gates who can
+	// claim com.wash.priv at all.
 	sdk.HandleVoid(b, "approve", func(c *sdk.Conn, _ string, req approveReq) error {
 		st.HandleApprove(c, req.ReqID)
 		return nil
@@ -249,7 +248,7 @@ func registerHandlers(b *sdk.Bus) {
 		return nil
 	})
 
-	// ----- cross-app -----
+	// ----- cross-app spawn/run requests (from producers) -----
 	sdk.HandleFromVoid(b, "run", func(c *sdk.Conn, reqID string, req runReq, from wire.Sender) error {
 		if reqID == "" {
 			log.Printf("wash-priv: run without req_id from %s/%s", from.AppID, from.InstanceID)
