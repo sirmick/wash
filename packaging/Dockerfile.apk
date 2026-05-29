@@ -1,0 +1,125 @@
+# Builds an .apk from the source tarball staged by run_matrix.sh, then
+# verifies the resulting layout in a clean stage. Mirror of
+# Dockerfile.{deb,rpm} adapted for abuild.
+#
+# abuild quirks: must run as a non-root user in the `abuild` group;
+# requires signing keys (`abuild-keygen -a -n` makes them on the fly);
+# `abuild -F` skips upstream-source-fetch (we ship the tarball).
+#
+# Usage (driven by packaging/run_matrix.sh):
+#   docker build -f packaging/Dockerfile.apk \
+#     --build-arg BASE=alpine:3.21 \
+#     --build-arg VERSION=0.8.0 \
+#     -t wash-pkg:alpine-3.21-amd64 \
+#     packaging/build-ctx
+
+ARG BASE=alpine:3.21
+ARG VERSION=0.8.0
+
+# ---------- build stage --------------------------------------------------
+FROM ${BASE} AS build
+ARG VERSION
+
+RUN apk add --no-cache alpine-sdk sudo coreutils xz tar \
+        libcap shadow \
+    && adduser -D builder \
+    && addgroup builder abuild \
+    && echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers \
+    && mkdir -p /var/cache/distfiles \
+    && chmod 1777 /var/cache/distfiles
+# libcap + shadow are wash's runtime depends; abuild's analyze step
+# checks they exist as installed packages in the build env (not just
+# that they're in the index). Pre-install rather than rely on
+# `abuild -r`, which uses a temp .makedepends-* virtual that hits a
+# bug in this Alpine 3.21 image.
+
+COPY wash_${VERSION}.tar.xz /tmp/source.tar.xz
+
+# Extract source as root, stage the abuild working dir, and put the
+# tarball both in /var/cache/distfiles AND alongside APKBUILD —
+# abuild's checksum routine prefers $SRCDEST but falls back to cwd,
+# and on this image $SRCDEST isn't reliably honoured.
+RUN mkdir -p /tmp/extract \
+    && tar -xJf /tmp/source.tar.xz -C /tmp/extract \
+    && cp /tmp/source.tar.xz /var/cache/distfiles/wash_${VERSION}.tar.xz \
+    && mkdir -p /home/builder/wash \
+    && cp -r /tmp/extract/wash-${VERSION}/alpine/. /home/builder/wash/ \
+    && cp /tmp/source.tar.xz /home/builder/wash/wash_${VERSION}.tar.xz \
+    && chown -R builder:builder /home/builder
+
+USER builder
+WORKDIR /home/builder/wash
+
+# Alpine's /etc/abuild.conf has SRCDEST commented out, so abuild
+# doesn't know where to find our pre-staged tarball. Pin it via env.
+ENV SRCDEST=/var/cache/distfiles
+
+# Keys for signing the apk (private key in ~/.abuild). `abuild
+# checksum` computes the source sha512 and writes it back into
+# APKBUILD; the subsequent `abuild` runs the full pipeline.
+RUN abuild-keygen -a -n \
+    && sudo cp /home/builder/.abuild/*.rsa.pub /etc/apk/keys/ \
+    && abuild checksum \
+    && abuild -P /home/builder/packages
+# Install the freshly generated pubkey into /etc/apk/keys so abuild's
+# index-creation step trusts the package it just signed.
+
+USER root
+RUN mkdir -p /pkg /tests \
+    && find /home/builder/packages -name '*.apk' -exec cp {} /pkg/ \; \
+    && cp /tmp/extract/wash-${VERSION}/out/packages_distro.test /tests/ \
+    && cp /tmp/extract/wash-${VERSION}/out/services_distro.test /tests/
+
+# ---------- test stage (clean image, no build deps) ----------------------
+FROM ${BASE} AS test
+
+COPY --from=build /pkg/*.apk /pkg/
+COPY --from=build /tests /tests
+
+# --allow-untrusted because the build stage's signing key isn't
+# enrolled here. Real distribution would publish + sign with a key
+# baked into /etc/apk/keys/; for the matrix the trust gate is moot.
+# `apk update` populates the repo index so the distro_integration
+# test below can `apk add --simulate tree`.
+RUN apk update \
+    && apk add --allow-untrusted /pkg/*.apk wget
+
+# Static smoke.
+RUN set -eux; \
+    test -x /usr/bin/wash-router; \
+    test -x /usr/bin/wash-priv; \
+    test -x /usr/bin/wash-packages; \
+    test -x /usr/bin/wash-services; \
+    [ "$(stat -c '%U %a' /usr/bin/wash-priv)" = "root 755" ]; \
+    getent passwd wash-system >/dev/null; \
+    getent group wash >/dev/null; \
+    test -d /etc/wash
+
+# Distro-integration tests against real apk + openrc (where present).
+# openrc-in-container is friendly enough that systemd's PID-1 caveat
+# doesn't apply here.
+RUN /tests/packages_distro.test -test.v
+RUN /tests/services_distro.test -test.v
+
+# Daemon boot smoke. busybox wget is fine for this.
+RUN set -eux; \
+    /usr/bin/wash-router -version; \
+    mkdir -p /tmp/empty-apps; \
+    /usr/bin/wash-router -listen 127.0.0.1:11000 -apps-dir /tmp/empty-apps > /tmp/router.log 2>&1 & \
+    ROUTER=$!; \
+    ok=0; \
+    for i in 1 2 3 4 5 6 7 8 9 10; do \
+      if wget -q -O /dev/null http://127.0.0.1:11000/ 2>/dev/null; then \
+        ok=1; break; \
+      fi; \
+      sleep 1; \
+    done; \
+    kill $ROUTER 2>/dev/null || true; \
+    wait $ROUTER 2>/dev/null || true; \
+    if [ "$ok" != "1" ]; then \
+      echo "=== router log ==="; cat /tmp/router.log; \
+      echo "boot smoke FAIL"; exit 1; \
+    fi; \
+    echo "boot smoke OK"
+
+CMD ["/usr/bin/wash-router", "-listen", "0.0.0.0:11000", "-apps-dir", "/usr/bin"]

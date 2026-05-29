@@ -1,0 +1,201 @@
+# Distro packaging matrix.
+#
+# Builds wash's native packages (.deb / .rpm / .apk) across
+# (distro, arch) rows and verifies each via the corresponding
+# Dockerfile's test stage. Mirrors packaging/run_matrix.sh row-for-
+# row — every job invokes the same Dockerfile.<kind> the local matrix
+# does, so a green CI run means the same artefact a dev would get
+# from `./packaging/run_matrix.sh` on their box.
+#
+# Triggers:
+#   - push to main      — keep main releasable
+#   - pull_request      — gate merges
+#   - workflow_dispatch — manual matrix re-run
+#   - paths             — backends, packaging trees, Dockerfiles
+
+name: matrix
+
+on:
+  push:
+    branches: [main, multiuser]
+    tags: ['v*']
+    paths:
+      - 'apps/packages/be/**'
+      - 'apps/services/be/**'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'web/**'
+      - 'debian/**'
+      - 'rpm/**'
+      - 'alpine/**'
+      - 'packaging/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+      - 'build.sh'
+      - '.github/workflows/matrix.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/packages/be/**'
+      - 'apps/services/be/**'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'web/**'
+      - 'debian/**'
+      - 'rpm/**'
+      - 'alpine/**'
+      - 'packaging/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+      - 'build.sh'
+      - '.github/workflows/matrix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # release job needs write to attach artefacts
+
+# One in-flight matrix per branch — a new push supersedes the old.
+concurrency:
+  group: matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  matrix:
+    name: ${{ matrix.tag }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tag: ubuntu-24.04-amd64
+            base: ubuntu:24.04
+            kind: deb
+          - tag: debian-12-amd64
+            base: debian:12
+            kind: deb
+          - tag: fedora-40-amd64
+            base: fedora:40
+            kind: rpm
+          - tag: alpine-3.21-amd64
+            base: alpine:3.21
+            kind: apk
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: pnpm install (workspace)
+        run: pnpm install --frozen-lockfile
+
+      - name: Build wash binaries (clean standalone)
+        # rm -rf out is the same guard packaging/run_matrix.sh uses
+        # locally — prevents leftover multicall-mode symlinks from
+        # tripping dh_install / rpmbuild / abuild.
+        run: |
+          rm -rf out
+          ./build.sh --standalone
+
+      - name: Precompile distro_integration test binaries
+        # Static (CGO_ENABLED=0) so the same binary runs on alpine,
+        # debian, fedora — built once on the ubuntu runner, shipped
+        # inside the source tarball, executed in the test stage.
+        run: |
+          CGO_ENABLED=0 go test -c -tags=distro_integration -trimpath \
+            -o out/packages_distro.test ./apps/packages/be
+          CGO_ENABLED=0 go test -c -tags=distro_integration -trimpath \
+            -o out/services_distro.test ./apps/services/be
+          chmod 0755 out/packages_distro.test out/services_distro.test
+
+      - name: Stage source tarball
+        # Mirrors run_matrix.sh's tarball-staging step. Excludes the
+        # noise dirs that don't belong in a packaging source archive.
+        run: |
+          set -e
+          VERSION=0.8.0
+          mkdir -p packaging/build-ctx
+          stage=$(mktemp -d)
+          srcdir="$stage/wash-$VERSION"
+          mkdir -p "$srcdir"
+          rsync -a \
+            --exclude='node_modules/' \
+            --exclude='.git/' \
+            --exclude='dist/' \
+            --exclude='wash-vm/' \
+            --exclude='packaging/build-ctx/' \
+            --exclude='e2e/test-results/' \
+            --exclude='e2e/node_modules/' \
+            --exclude='*.log' \
+            ./ "$srcdir/"
+          tar -cJf packaging/build-ctx/wash_${VERSION}.tar.xz -C "$stage" "wash-$VERSION"
+          ls -la packaging/build-ctx/
+
+      - name: Build package (${{ matrix.kind }} on ${{ matrix.base }})
+        # Each row uses its distro's native image (ubuntu:24.04 /
+        # debian:12 / fedora:40 / alpine:3.21). docker build runs
+        # both stages: stage 1 produces the artefact via the distro's
+        # own packager, stage 2 installs it back into a clean image
+        # and runs static smoke + distro_integration tests + a
+        # daemon-boot check. A green build IS the test result.
+        run: |
+          docker build \
+            -f packaging/Dockerfile.${{ matrix.kind }} \
+            --build-arg BASE=${{ matrix.base }} \
+            --build-arg VERSION=0.8.0 \
+            -t wash-pkg:${{ matrix.tag }} \
+            packaging/build-ctx
+
+      - name: Extract package artefact
+        run: |
+          mkdir -p dist/packages/${{ matrix.tag }}
+          cid=$(docker create wash-pkg:${{ matrix.tag }})
+          docker cp "$cid:/pkg/." dist/packages/${{ matrix.tag }}/
+          docker rm "$cid"
+          ls -la dist/packages/${{ matrix.tag }}/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wash-${{ matrix.tag }}
+          path: dist/packages/${{ matrix.tag }}/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # Tag push (v*) → create a GitHub Release with all four packages
+  # attached. Skipped on every other event.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: matrix
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artefacts
+          pattern: wash-*
+          merge-multiple: true
+
+      - name: List artefacts
+        run: ls -la artefacts/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artefacts/*
+          generate_release_notes: true
+          # If a release for this tag already exists, append rather
+          # than fail (e.g. re-running the matrix on the same tag).
+          fail_on_unmatched_files: true

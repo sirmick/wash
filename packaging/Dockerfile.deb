@@ -1,0 +1,95 @@
+# Builds a .deb from the source tarball staged by run_matrix.sh, then
+# verifies the resulting layout in a clean stage. Two-stage pattern
+# lifted from ferrite/packaging.
+#
+# Usage (driven by packaging/run_matrix.sh):
+#   docker build -f packaging/Dockerfile.deb \
+#     --build-arg BASE=ubuntu:24.04 \
+#     --build-arg VERSION=0.8.0 \
+#     -t wash-pkg:ubuntu-24.04-amd64 \
+#     packaging/build-ctx
+#
+# Build context (set up by run_matrix.sh):
+#   ./wash_<ver>.tar.xz   — source tarball incl. prebuilt out/wash-*
+
+ARG BASE=ubuntu:24.04
+ARG VERSION=0.8.0
+
+# ---------- build stage --------------------------------------------------
+FROM ${BASE} AS build
+ARG VERSION
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential debhelper xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY wash_${VERSION}.tar.xz /tmp/source.tar.xz
+# Extract into /src directly (strip the wash-VERSION/ wrapper dir).
+# dpkg-buildpackage looks for debian/ in cwd; output .deb lands in /.
+RUN tar -xJf /tmp/source.tar.xz --strip-components=1 -C /src \
+    && dpkg-buildpackage -us -uc -b -d \
+    && mkdir -p /pkg /tests \
+    && cp /*.deb /pkg/ \
+    && cp out/packages_distro.test /tests/ \
+    && cp out/services_distro.test /tests/
+
+# ---------- test stage (clean image, no build deps) ----------------------
+FROM ${BASE} AS test
+ARG DEBIAN_FRONTEND=noninteractive
+
+COPY --from=build /pkg/*.deb /pkg/
+COPY --from=build /tests /tests
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        /pkg/*.deb \
+        ca-certificates wget
+# (Keep /var/lib/apt/lists populated — the distro_integration test
+# below runs `apt-get -s install tree`, which needs the index.)
+
+# Static smoke: binaries present, mode right, user/group created.
+RUN set -eux; \
+    test -x /usr/bin/wash-router; \
+    test -x /usr/bin/wash-priv; \
+    test -x /usr/bin/wash-packages; \
+    test -x /usr/bin/wash-services; \
+    [ "$(stat -c '%U %a' /usr/bin/wash-priv)" = "root 755" ]; \
+    getent passwd wash-system >/dev/null; \
+    getent group wash >/dev/null; \
+    test -d /etc/wash
+
+# Distro-integration tests against the host's real apt + systemd
+# (where present). The container isn't running systemd as PID 1, so
+# systemd tests skip via the /run/systemd/system guard — apt is what
+# we're proving here.
+RUN /tests/packages_distro.test -test.v
+RUN /tests/services_distro.test -test.v
+
+# Daemon boot smoke: --version, then --listen → curl → kill.
+#
+# Empty apps-dir: prevents wash-router from rejecting non-app files
+# under /usr/bin. We're verifying the binary boots + serves HTTP,
+# not exercising the app catalog (the smoke containers don't run
+# apps, that's a host concern).
+RUN set -eux; \
+    /usr/bin/wash-router -version; \
+    mkdir -p /tmp/empty-apps; \
+    /usr/bin/wash-router -listen 127.0.0.1:11000 -apps-dir /tmp/empty-apps > /tmp/router.log 2>&1 & \
+    ROUTER=$!; \
+    ok=0; \
+    for i in 1 2 3 4 5 6 7 8 9 10; do \
+      if wget -q -O /dev/null --tries=1 --timeout=1 http://127.0.0.1:11000/ 2>/dev/null; then \
+        ok=1; break; \
+      fi; \
+      sleep 1; \
+    done; \
+    kill $ROUTER 2>/dev/null || true; \
+    wait $ROUTER 2>/dev/null || true; \
+    if [ "$ok" != "1" ]; then \
+      echo "=== router log ==="; cat /tmp/router.log; \
+      echo "boot smoke FAIL"; exit 1; \
+    fi; \
+    echo "boot smoke OK"
+
+CMD ["/usr/bin/wash-router", "-listen", "0.0.0.0:11000", "-apps-dir", "/usr/bin"]

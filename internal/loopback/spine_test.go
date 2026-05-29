@@ -51,7 +51,7 @@ func TestSpine(t *testing.T) {
 	aboutManifest := sdk.Manifest{
 		ID:              "com.wash.about",
 		Name:            "About wash",
-		Version:         "0.0.0",
+		Version:         "0.8.0",
 		ProtocolVersion: sdk.ProtocolVersion,
 		Element:         "wash-app-about",
 		Surface:         sdk.SurfaceWindow,
@@ -62,7 +62,7 @@ func TestSpine(t *testing.T) {
 	rtrManifest := &router.Manifest{
 		ID:              "com.wash.about",
 		Name:            "About wash",
-		Version:         "0.0.0",
+		Version:         "0.8.0",
 		ProtocolVersion: router.ProtocolVersion,
 		Element:         "wash-app-about",
 		Surface:         router.SurfaceWindow,

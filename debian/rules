@@ -11,6 +11,9 @@ export DH_VERBOSE = 1
 %:
 	dh $@
 
+override_dh_auto_clean:
+# Default would invoke `make clean`, which wipes out/ — exactly the
+# dir holding our prebuilt binaries. No-op so dh_install can see them.
 override_dh_auto_build:
 override_dh_auto_test:
 override_dh_strip:

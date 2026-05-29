@@ -1,0 +1,90 @@
+# Builds a .rpm from the source tarball + spec staged by run_matrix.sh,
+# then verifies the resulting layout in a clean stage. Mirror of
+# Dockerfile.deb adapted for dnf / rpmbuild.
+#
+# Usage (driven by packaging/run_matrix.sh):
+#   docker build -f packaging/Dockerfile.rpm \
+#     --build-arg BASE=fedora:40 \
+#     --build-arg VERSION=0.8.0 \
+#     -t wash-pkg:fedora-40-amd64 \
+#     packaging/build-ctx
+#
+# Build context (set up by run_matrix.sh):
+#   ./wash_<ver>.tar.xz
+
+ARG BASE=fedora:40
+ARG VERSION=0.8.0
+
+# ---------- build stage --------------------------------------------------
+FROM ${BASE} AS build
+ARG VERSION
+
+RUN dnf install -y --setopt=install_weak_deps=False \
+        rpm-build xz tar \
+    && dnf clean all
+
+WORKDIR /root/rpmbuild
+COPY wash_${VERSION}.tar.xz /tmp/source.tar.xz
+
+# Stage: extract once to grab the spec + test binaries, then place
+# the tarball in SOURCES/ for rpmbuild's %prep autosetup.
+RUN mkdir -p BUILD RPMS SOURCES SPECS SRPMS \
+    && mkdir -p /tmp/extract \
+    && tar -xJf /tmp/source.tar.xz -C /tmp/extract \
+    && cp /tmp/source.tar.xz SOURCES/wash_${VERSION}.tar.xz \
+    && cp /tmp/extract/wash-${VERSION}/rpm/wash.spec SPECS/wash.spec \
+    && rpmbuild -bb SPECS/wash.spec \
+    && mkdir -p /pkg /tests \
+    && cp RPMS/*/*.rpm /pkg/ \
+    && cp /tmp/extract/wash-${VERSION}/out/packages_distro.test /tests/ \
+    && cp /tmp/extract/wash-${VERSION}/out/services_distro.test /tests/
+
+# ---------- test stage (clean image, no build deps) ----------------------
+FROM ${BASE} AS test
+
+COPY --from=build /pkg/*.rpm /pkg/
+COPY --from=build /tests /tests
+
+RUN dnf install -y --setopt=install_weak_deps=False \
+        /pkg/*.rpm \
+        ca-certificates wget
+# (Keep the dnf cache — the distro_integration test below runs
+# `dnf install --assumeno tree`, which needs the metadata.)
+
+# Static smoke.
+RUN set -eux; \
+    test -x /usr/bin/wash-router; \
+    test -x /usr/bin/wash-priv; \
+    test -x /usr/bin/wash-packages; \
+    test -x /usr/bin/wash-services; \
+    [ "$(stat -c '%U %a' /usr/bin/wash-priv)" = "root 755" ]; \
+    getent passwd wash-system >/dev/null; \
+    getent group wash >/dev/null; \
+    test -d /etc/wash
+
+# Distro-integration tests against real dnf + rpm.
+RUN /tests/packages_distro.test -test.v
+RUN /tests/services_distro.test -test.v
+
+# Daemon boot smoke. See Dockerfile.deb for the empty-apps-dir rationale.
+RUN set -eux; \
+    /usr/bin/wash-router -version; \
+    mkdir -p /tmp/empty-apps; \
+    /usr/bin/wash-router -listen 127.0.0.1:11000 -apps-dir /tmp/empty-apps > /tmp/router.log 2>&1 & \
+    ROUTER=$!; \
+    ok=0; \
+    for i in 1 2 3 4 5 6 7 8 9 10; do \
+      if wget -q -O /dev/null --tries=1 --timeout=1 http://127.0.0.1:11000/ 2>/dev/null; then \
+        ok=1; break; \
+      fi; \
+      sleep 1; \
+    done; \
+    kill $ROUTER 2>/dev/null || true; \
+    wait $ROUTER 2>/dev/null || true; \
+    if [ "$ok" != "1" ]; then \
+      echo "=== router log ==="; cat /tmp/router.log; \
+      echo "boot smoke FAIL"; exit 1; \
+    fi; \
+    echo "boot smoke OK"
+
+CMD ["/usr/bin/wash-router", "-listen", "0.0.0.0:11000", "-apps-dir", "/usr/bin"]

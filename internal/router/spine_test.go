@@ -42,7 +42,7 @@ func aboutManifest() *Manifest {
 	return &Manifest{
 		ID:              "com.wash.about",
 		Name:            "About wash",
-		Version:         "0.0.0",
+		Version:         "0.8.0",
 		ProtocolVersion: ProtocolVersion,
 		Element:         "wash-app-about",
 		Surface:         SurfaceWindow,
@@ -81,7 +81,7 @@ func TestHandshakeAndAssetPull(t *testing.T) {
 	}()
 
 	// App side: send Identity, expect IdentityAck.
-	writeCtrl(t, appPair.EndB(), wire.NewIdentity("com.wash.about", 1, "0.0.0"))
+	writeCtrl(t, appPair.EndB(), wire.NewIdentity("com.wash.about", 1, "0.8.0"))
 	ack, ok := readCtrl(t, appPair.EndB()).(wire.IdentityAck)
 	if !ok {
 		t.Fatalf("expected IdentityAck")
@@ -178,7 +178,7 @@ func TestHandshakeRejectsBadAppID(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- r.HandleApp(context.Background(), pp.EndA(), manifest, nil) }()
 
-	writeCtrl(t, pp.EndB(), wire.NewIdentity("com.evil.imposter", 1, "0.0.0"))
+	writeCtrl(t, pp.EndB(), wire.NewIdentity("com.evil.imposter", 1, "0.8.0"))
 
 	// Router will close after sending Error. Drain.
 	msg := readCtrl(t, pp.EndB())
@@ -207,7 +207,7 @@ func TestHandshakeRejectsBadProto(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- r.HandleApp(context.Background(), pp.EndA(), manifest, nil) }()
 
-	writeCtrl(t, pp.EndB(), wire.NewIdentity("com.wash.about", 99, "0.0.0"))
+	writeCtrl(t, pp.EndB(), wire.NewIdentity("com.wash.about", 99, "0.8.0"))
 
 	msg := readCtrl(t, pp.EndB())
 	if e, ok := msg.(wire.Error); !ok || e.Code != wire.ErrCodeProtoMismatch {

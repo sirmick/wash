@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.0.0
+Version:        0.8.0
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -32,9 +32,9 @@ needing SSH plus a stack of text-only tools.
 
 %install
 install -d %{buildroot}%{_bindir}
-for bin in wash-router wash-session wash-about wash-fm wash-term \
-           wash-edit wash-bulk wash-priv wash-journal wash-settings \
-           wash-top wash-syslogs wash-services wash-packages \
+for bin in wash-router wash-login wash-session wash-about wash-fm wash-term \
+           wash-edit wash-bulk wash-priv wash-journal wash-notify \
+           wash-settings wash-top wash-syslogs wash-services wash-packages \
            wash-launch wash-sudo; do
     install -m 0755 out/$bin %{buildroot}%{_bindir}/$bin
 done
@@ -42,6 +42,7 @@ install -d -m 0755 %{buildroot}%{_sysconfdir}/wash
 
 %files
 %{_bindir}/wash-router
+%{_bindir}/wash-login
 %{_bindir}/wash-session
 %{_bindir}/wash-about
 %{_bindir}/wash-fm
@@ -50,6 +51,7 @@ install -d -m 0755 %{buildroot}%{_sysconfdir}/wash
 %{_bindir}/wash-bulk
 %{_bindir}/wash-priv
 %{_bindir}/wash-journal
+%{_bindir}/wash-notify
 %{_bindir}/wash-settings
 %{_bindir}/wash-top
 %{_bindir}/wash-syslogs
@@ -94,5 +96,5 @@ fi
 exit 0
 
 %changelog
-* Thu May 28 2026 wash maintainers <wash@example.invalid> - 0.0.0-1
+* Thu May 28 2026 wash maintainers <wash@example.invalid> - 0.8.0-1
 - Initial packaging.

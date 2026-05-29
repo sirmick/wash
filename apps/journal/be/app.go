@@ -33,7 +33,7 @@ import (
 //go:embed all:assets
 var assetsFS embed.FS
 
-const version = "0.0.0"
+const version = "0.8.0"
 
 // journalIcon — lucide sprite name. scroll-text reads as "log" without
 // looking like a generic document.

@@ -31,7 +31,7 @@ import (
 //go:embed all:assets
 var assetsFS embed.FS
 
-const version = "0.0.0"
+const version = "0.8.0"
 
 // washIcon — Lucide sprite symbol name. The shell's sprite already
 // includes "info" via web/shell/build-icons.mjs.

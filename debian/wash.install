@@ -1,4 +1,5 @@
 out/wash-router        usr/bin
+out/wash-login         usr/bin
 out/wash-session       usr/bin
 out/wash-about         usr/bin
 out/wash-fm            usr/bin
@@ -7,6 +8,7 @@ out/wash-edit          usr/bin
 out/wash-bulk          usr/bin
 out/wash-priv          usr/bin
 out/wash-journal       usr/bin
+out/wash-notify        usr/bin
 out/wash-settings      usr/bin
 out/wash-top           usr/bin
 out/wash-syslogs       usr/bin

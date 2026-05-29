@@ -1,6 +1,6 @@
 # Maintainer: wash maintainers <wash@example.invalid>
 pkgname=wash
-pkgver=0.0.0
+pkgver=0.8.0
 pkgrel=1
 pkgdesc="Lightweight remote-admin desktop environment"
 url="https://github.com/sirmick/wash"
@@ -22,9 +22,9 @@ build() {
 package() {
     cd "$builddir"
     install -d "$pkgdir/usr/bin"
-    for bin in wash-router wash-session wash-about wash-fm wash-term \
-               wash-edit wash-bulk wash-priv wash-journal wash-settings \
-               wash-top wash-syslogs wash-services wash-packages \
+    for bin in wash-router wash-login wash-session wash-about wash-fm wash-term \
+               wash-edit wash-bulk wash-priv wash-journal wash-notify \
+               wash-settings wash-top wash-syslogs wash-services wash-packages \
                wash-launch wash-sudo; do
         install -m 0755 out/$bin "$pkgdir/usr/bin/$bin"
     done

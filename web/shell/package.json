@@ -1,7 +1,7 @@
 {
   "name": "@wash/shell",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.8.0",
   "type": "module",
   "scripts": {
     "build": "node build-vendor.mjs && pnpm --filter @wash/ui run build && vite build && node build-icons.mjs",
