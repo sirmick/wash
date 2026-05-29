@@ -1,0 +1,91 @@
+# Prebuild the rarely-changing VM blobs (kernel + firmware + wasm)
+# and ship them as a GitHub Release. The demo workflow downloads
+# from this release instead of rebuilding from scratch — turns a
+# ~25 min cold demo build into ~5 min (rootfs only).
+#
+# Why a Release and not actions/cache:
+#   * Cache: 7-day expiry, 10 GB cap per repo, no cross-repo
+#     consumption.
+#   * Release: durable until manually deleted, no size cap that
+#     matters here, consumable by anyone via `gh release download`.
+#
+# When this runs:
+#   * Manual: `gh workflow run prebuild.yml` (typical — fire after
+#     bumping kernel version, OpenSBI version, emsdk version, or
+#     editing any of the Dockerfiles / kernel config / lib.js).
+#   * Auto: on push to main when the inputs change.
+#
+# When demo.yml fails to find this release (first-ever run, or
+# accidental deletion) it falls back to building the blobs from
+# source — green build either way, just slow.
+
+name: prebuild-vm-blobs
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'wash-vm/image/firmware/**'
+      - 'wash-vm/image/kernel/**'
+      - 'wash-vm/image/wasm/**'
+      - 'wash-vm/tinyemu/**'
+      - '.github/workflows/prebuild.yml'
+
+permissions:
+  contents: write   # to create / update the vm-blobs Release
+
+concurrency:
+  group: prebuild-vm-blobs
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build only the slow, rarely-changing pieces. The rootfs is
+      # the per-push variable piece; demo.yml owns it.
+      - name: Build firmware + wasm (fast)
+        run: make -C wash-vm/image firmware wasm
+
+      - name: Build kernel (slow)
+        run: make -C wash-vm/image kernel
+
+      - name: Inventory
+        run: |
+          set -euo pipefail
+          cd wash-vm/image/dist
+          ls -lh Image fw_jump.bin riscvemu64-wasm.js riscvemu64-wasm.wasm
+          sha256sum Image fw_jump.bin riscvemu64-wasm.js riscvemu64-wasm.wasm
+
+      # Single rolling release named `vm-blobs`. softprops's action
+      # creates it if absent, otherwise replaces the attached files
+      # in place. Keep the tag stable so demo.yml's download URL
+      # doesn't need updating.
+      - name: Publish / update vm-blobs release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: vm-blobs
+          name: "wash-vm prebuilt blobs"
+          body: |
+            Rarely-changing VM artifacts consumed by
+            `.github/workflows/demo.yml`. Auto-refreshed on every
+            push to `main` that touches:
+              * `wash-vm/image/firmware/`
+              * `wash-vm/image/kernel/`
+              * `wash-vm/image/wasm/`
+              * `wash-vm/tinyemu/`
+
+            Last built from commit ${{ github.sha }}.
+          files: |
+            wash-vm/image/dist/Image
+            wash-vm/image/dist/fw_jump.bin
+            wash-vm/image/dist/riscvemu64-wasm.js
+            wash-vm/image/dist/riscvemu64-wasm.wasm
+          fail_on_unmatched_files: true
+          # Replace existing assets in place — keep the tag rolling.
+          make_latest: 'false'   # not the latest semver release

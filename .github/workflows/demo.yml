@@ -109,11 +109,42 @@ jobs:
       - name: Build wash shell
         run: pnpm -F @wash/shell build
 
-      # The four Docker-driven builds. They share the buildx cache
-      # from setup-buildx-action above; cold-pull the kernel image
-      # is the long pole.
-      - name: Build VM artifacts
-        run: make -C wash-vm/image all
+      # Try to pull the rarely-changing blobs (kernel + firmware +
+      # wasm) from the vm-blobs Release maintained by prebuild.yml.
+      # On the first run (no release yet) this fails harmlessly and
+      # the fallback below builds them from source.
+      - name: Download prebuilt VM blobs
+        id: blobs
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eo pipefail
+          mkdir -p wash-vm/image/dist
+          cd wash-vm/image/dist
+          gh release download vm-blobs \
+            --pattern 'Image' \
+            --pattern 'fw_jump.bin' \
+            --pattern 'riscvemu64-wasm.js' \
+            --pattern 'riscvemu64-wasm.wasm' \
+            --clobber
+          echo "Downloaded blobs:"
+          ls -lh Image fw_jump.bin riscvemu64-wasm.js riscvemu64-wasm.wasm
+
+      # Cold-path fallback: build kernel + firmware + wasm from
+      # source. Only runs when the download step failed (e.g. first
+      # ever workflow run, or someone deleted the release). Takes
+      # ~25 min; the prebuild workflow exists specifically to skip
+      # this on subsequent runs.
+      - name: Build kernel + firmware + wasm (fallback)
+        if: steps.blobs.outcome == 'failure'
+        run: make -C wash-vm/image kernel firmware wasm
+
+      # Rootfs is the per-push variable piece (changes on every app
+      # commit). Always built locally. Install copies everything
+      # under wash-vm/image/dist/ → web/public/tinyemu/.
+      - name: Build rootfs + install
+        run: make -C wash-vm/image rootfs install
 
       - name: Vite-build host page
         working-directory: wash-vm/web
