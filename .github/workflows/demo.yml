@@ -38,12 +38,27 @@ on:
       - 'go.sum'
       - 'Makefile'
       - '.github/workflows/demo.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'wash-vm/**'
+      - 'web/shell/**'
+      - 'web/lib/**'
+      - 'web/ui/**'
+      - 'apps/**'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+      - '.github/workflows/demo.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
   pages: write
   id-token: write
+  pull-requests: write   # to comment on PRs with the artifact link
 
 # A new push supersedes an in-flight deploy. We let the in-flight
 # build finish (so PR feedback isn't lost), but only the latest
@@ -115,12 +130,43 @@ jobs:
           echo "Final dist size:"
           du -sh dist/
 
-      - uses: actions/upload-pages-artifact@v3
+      # Pages artifact — only consumed by the deploy job on main.
+      # Skipped on PRs since they don't deploy.
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
         with:
           path: wash-vm/web/dist
 
+      # Downloadable workflow artifact — always uploaded so PR
+      # authors (and post-mortem debuggers) can grab the exact
+      # built bytes from the Actions UI / `gh run download`. Lives
+      # 7 days by default.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demo-dist-${{ github.run_id }}
+          path: wash-vm/web/dist
+          if-no-files-found: error
+          retention-days: 7
+
+      # PR feedback. On a successful build we leave a single
+      # sticky comment with the dist size + a link to the
+      # artifact, so a reviewer doesn't have to dig through the
+      # Actions tab. The marker comment is recognised and
+      # rewritten in place on subsequent pushes to the same PR.
+      - if: github.event_name == 'pull_request'
+        name: Comment artifact link on PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: demo-build
+          message: |
+            ✅ **Demo build green.**
+
+            * Run: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            * Artifact: `demo-dist-${{ github.run_id }}` — download from the run page, unzip, `python3 -m http.server` to preview locally.
+            * The deployed copy at <https://sirmick.github.io/wash/> stays on the last `main` build until this PR merges.
+
   deploy:
-    # Only deploy on main; PRs build-only.
+    # Only deploy on main; PRs build-only (artifact only).
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
