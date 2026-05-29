@@ -1,5 +1,12 @@
 # wash — Web Application SHell
 
+> **Try it in your browser:** [sirmick.github.io/wash](https://sirmick.github.io/wash/)
+> — a real wash desktop running on real Linux (Linux 6.6 LTS riscv64,
+> wash-router, busybox userland) inside a WASM-compiled RISC-V
+> emulator, ~3 s cold boot. The whole thing is ~24 MiB of static
+> assets served from GitHub Pages — no backend, no relay. Build
+> pipeline + how to host your own copy in [`wash-vm/`](wash-vm/).
+
 A browser-delivered Linux desktop. A traditional floating-window
 environment — taskbar, menu, real windows — served over a single
 WebSocket from a static, dependency-free Go binary that runs anywhere,

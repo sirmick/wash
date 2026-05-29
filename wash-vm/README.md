@@ -1,5 +1,9 @@
 # wash-vm — wash inside a browser-tab RISC-V Linux VM
 
+> **Live demo:** [sirmick.github.io/wash](https://sirmick.github.io/wash/)
+> — auto-built from this directory by [`.github/workflows/demo.yml`](../.github/workflows/demo.yml)
+> on every push to `main`.
+
 `wash-vm/` packages everything needed to run wash inside a real Linux
 VM (kernel + rootfs + emulator) in a browser tab. The emulator is
 vendored TinyEMU compiled to WASM; the kernel is upstream Linux 6.6

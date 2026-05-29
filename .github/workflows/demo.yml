@@ -1,0 +1,132 @@
+# Build the wash RISC-V browser demo and deploy it to GitHub Pages.
+#
+# Triggers:
+#   * push to main (auto-deploy)
+#   * workflow_dispatch (manual re-run from the Actions tab)
+#   * push to any branch under a path that affects the demo
+#     (build-only, no deploy — sanity check on PRs)
+#
+# Build path mirrors wash-vm/web/README.md § "Deploy as static HTML":
+#   1. Build the wash shell bundle (web/shell → dist/)
+#   2. Build the VM artifacts (kernel + firmware + rootfs + wasm)
+#      via `make -C wash-vm/image all` — four Docker containers
+#   3. Vite-build the host page with --base set to the GH Pages URL
+#   4. Stage the shell bundle + chrome SVGs into dist/, prune the
+#      duplicates Vite copies in
+#   5. Upload as a Pages artifact, deploy
+#
+# First-time setup (one-off, on the repo's Settings page):
+#   Settings → Pages → Source: GitHub Actions
+#
+# Cold build is ~25-35 min (kernel is the slow one). Subsequent runs
+# hit Docker layer cache via setup-buildx-action and are ~5-10 min.
+
+name: demo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'wash-vm/**'
+      - 'web/shell/**'
+      - 'web/lib/**'
+      - 'web/ui/**'
+      - 'apps/**'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+      - '.github/workflows/demo.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# A new push supersedes an in-flight deploy. We let the in-flight
+# build finish (so PR feedback isn't lost), but only the latest
+# successful build deploys to Pages.
+concurrency:
+  group: demo-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - uses: docker/setup-buildx-action@v3
+
+      # The workspace packages (web/shell, web/lib, apps/*/fe).
+      - name: pnpm install (workspace)
+        run: pnpm install --frozen-lockfile
+
+      # wash-vm/web is intentionally outside the pnpm workspace
+      # (different stack — vite + tsc only, no @wash/* deps), so
+      # install its deps separately.
+      - name: pnpm install (wash-vm/web)
+        working-directory: wash-vm/web
+        run: pnpm install --frozen-lockfile
+
+      - name: Build wash shell
+        run: pnpm -F @wash/shell build
+
+      # The four Docker-driven builds. They share the buildx cache
+      # from setup-buildx-action above; cold-pull the kernel image
+      # is the long pole.
+      - name: Build VM artifacts
+        run: make -C wash-vm/image all
+
+      - name: Vite-build host page
+        working-directory: wash-vm/web
+        # --base must match the GitHub Pages URL so the bundled
+        # asset paths resolve. github.event.repository.name is
+        # the repo slug ("wash" → /wash/). Custom domain? Drop
+        # the flag entirely.
+        run: pnpm exec vite build --base=/${{ github.event.repository.name }}/
+
+      - name: Stage static dist
+        working-directory: wash-vm/web
+        run: |
+          set -euo pipefail
+          mkdir -p dist/shell
+          cp -a ../../web/shell/dist/. dist/shell/
+          cp ../../internal/runner/router/assets/icons.svg dist/
+          cp ../../internal/runner/router/assets/wash-logo.svg dist/
+          rm -f dist/tinyemu/riscvemu64-wasm.{js,wasm}.{broken-dev,prod}
+          rm -f dist/v86.wasm
+          rm -f dist/tinyemu/wash-rootfs.ext2
+          echo "Final dist size:"
+          du -sh dist/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: wash-vm/web/dist
+
+  deploy:
+    # Only deploy on main; PRs build-only.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
