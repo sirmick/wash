@@ -46,7 +46,15 @@ mkdir -p "$ctx" "$ctx/overlay/usr/bin" "$ctx/overlay/usr/lib/wash" \
 # independent binaries (~9 MiB → 9 MiB instead of N × 9 MiB).
 install -m 0755 "$work/washrv64/wash" "$ctx/overlay/usr/bin/wash"
 
-# /usr/bin entry points (the multicall dispatch table).
+# /usr/bin entry points (the multicall dispatch table). wash-launch
+# is a CLI client (dial /tmp/wash-${uid}.sock and send a launch /
+# msg request) — runnable from the in-VM shell tab to spawn an app
+# from the command line. It is INTENTIONALLY absent from the
+# /usr/lib/wash mirror below: the router's --apps-dir scan probes
+# every binary it finds via `<bin> --wash-manifest`, which wash-
+# launch (a CLI without a manifest) rejects with exit 2 → router
+# logs `disabled /usr/lib/wash/wash-launch`. Keep the user-facing
+# tool, skip the app-dir entry.
 for app in wash-router wash-session wash-about wash-fm wash-bulk \
            wash-edit wash-settings wash-top wash-priv wash-journal \
            wash-syslogs wash-launch wash-term; do
@@ -54,9 +62,10 @@ for app in wash-router wash-session wash-about wash-fm wash-bulk \
 done
 
 # /usr/lib/wash mirrors — wash-router's --apps-dir scans here.
+# wash-launch deliberately skipped (see comment above).
 for app in wash-session wash-about wash-fm wash-bulk wash-edit \
            wash-settings wash-top wash-priv wash-journal \
-           wash-syslogs wash-launch wash-term; do
+           wash-syslogs wash-term; do
     ln -s ../../bin/wash "$ctx/overlay/usr/lib/wash/$app"
 done
 
@@ -80,6 +89,13 @@ install -m 0755 "$here/overlay/etc/init.d/S98wash-diag" \
 # 0644 from the repo wouldn't pass visudo's perm check).
 install -m 0440 -D "$here/overlay/etc/sudoers.d/wash-nopasswd" \
                    "$ctx/overlay/etc/sudoers.d/wash-nopasswd"
+
+# /etc/profile.d/wash.sh — auto-discovers the running wash-router's
+# control socket and exports WASH_CONTROL_SOCKET so a shell user can
+# run `wash-launch <app-id>` without arg-fiddling. Buildroot's
+# default /etc/profile already sources /etc/profile.d/*.sh.
+install -m 0644 -D "$here/overlay/etc/profile.d/wash.sh" \
+                   "$ctx/overlay/etc/profile.d/wash.sh"
 
 # Boot-speed: stub out init.d entries we don't want for the wash
 # demo (no network → CONFIG_NET disabled in kernel; sysctl touches
