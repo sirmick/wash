@@ -14,6 +14,15 @@
 
 const WS_URL = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
 
+// Static-hosting kill switch. Vite sets import.meta.env.DEV=true under
+// `vite` / dev-server middleware and false in `vite build` output. On
+// GitHub Pages / S3 / any static CDN there is no /ws endpoint, so
+// trying to dial it just spams "WebSocket connection failed" in the
+// console every backoff tick. When WS_ENABLED is false we short-
+// circuit send() to a no-op and never call connect() — page works
+// fine, logs just don't leave the tab.
+const WS_ENABLED = import.meta.env.DEV;
+
 const dec = new TextDecoder('utf-8', { fatal: false });
 const buffers = new Map<string, string>();
 
@@ -50,6 +59,10 @@ function reportQueueState(reason: string): void {
 }
 
 function send(frameJson: string): void {
+  // Production / static-hosting fast-path: nothing reads the queue,
+  // so don't even build it. No allocations, no growth, no console
+  // noise from a never-arriving connection.
+  if (!WS_ENABLED) return;
   if (connected && ws && ws.readyState === WebSocket.OPEN) {
     ws.send(frameJson);
     return;
@@ -135,7 +148,7 @@ export function onMessage(h: IncomingHandler): () => void {
   return () => handlers.delete(h);
 }
 
-connect();
+if (WS_ENABLED) connect();
 
 // ─────────────────────────── public API ────────────────────────────────
 
