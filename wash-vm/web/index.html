@@ -232,6 +232,16 @@
          jslinux loads so it reads from there. Anything the user puts
          in the actual URL still wins. -->
     <script>
+      // Tell the wash shell bundles (web/lib washAssetUrl()) where
+      // the page's chrome (icons.svg, wash-logo.svg) actually lives.
+      // %BASE_URL% is `/` in dev and `/wash/` in the GH Pages prod
+      // build, so a JSX <use href={washAssetUrl('icons.svg#x')} /> →
+      //   dev   → /icons.svg#x
+      //   prod  → /wash/icons.svg#x
+      // Standalone wash-router / wash-login don't set this and fall
+      // back to '/' which is the historical hard-coded behaviour.
+      window.__washAssetBase = '%BASE_URL%';
+
       window.__washDefaults = {
         cpu: 'riscv64',
         // page-relative (no leading slash) — jslinux's get_absolute_url

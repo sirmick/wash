@@ -20,6 +20,7 @@ import {
   Win,
 } from './wm';
 import { AlertOctagon, Copy, Maximize2, Minimize2, Minus, X } from 'lucide-solid';
+import { washAssetUrl } from '@wash/ui';
 
 export interface WindowProps {
   win: Win;
@@ -293,7 +294,7 @@ export function FloatingWindow(props: WindowProps) {
             }}
             aria-hidden="true"
           >
-            <use href={`/icons.svg#${props.win.icon}`} />
+            <use href={washAssetUrl(`icons.svg#${props.win.icon}`)} />
           </svg>
         )}
         <span style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{props.win.title}</span>

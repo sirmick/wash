@@ -15,6 +15,7 @@
 
 import type { Component } from 'solid-js';
 import { For, Show } from 'solid-js';
+import { washAssetUrl } from '@wash/ui';
 
 export type PrivStatus = 'queued' | 'running' | 'done' | 'rejected' | 'error';
 export type PrivKind = 'run' | 'spawn' | 'run_inline';
@@ -101,7 +102,7 @@ const LockBar: Component<{ locked: () => boolean; onLock: () => void }> = (props
     >
       <span style={{ display: 'inline-flex', 'align-items': 'center', gap: '6px' }}>
         <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <use href={`/icons.svg#${props.locked() ? 'lock' : 'unlock'}`} />
+          <use href={washAssetUrl(`icons.svg#${props.locked() ? 'lock' : 'unlock'}`)} />
         </svg>
         {props.locked() ? 'locked' : 'unlocked'}
       </span>

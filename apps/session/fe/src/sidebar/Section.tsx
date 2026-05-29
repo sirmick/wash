@@ -9,6 +9,7 @@
 
 import type { Component, JSX } from 'solid-js';
 import { Show } from 'solid-js';
+import { washAssetUrl } from '@wash/ui';
 
 export type SectionState = 'collapsed' | 'expanded';
 
@@ -94,7 +95,7 @@ export const Section: Component<SectionProps> = (props) => {
               stroke-linecap="round"
               stroke-linejoin="round"
             >
-              <use href={`/icons.svg#${props.icon}`} />
+              <use href={washAssetUrl(`icons.svg#${props.icon}`)} />
             </svg>
           </span>
         </Show>

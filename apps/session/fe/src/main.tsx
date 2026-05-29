@@ -10,7 +10,7 @@
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Menu, MenuItem, defineWashApp, tokens } from '@wash/ui';
+import { Menu, MenuItem, defineWashApp, tokens, washAssetUrl } from '@wash/ui';
 import { toBlob } from 'html-to-image';
 import { Camera, Search, PanelRightOpen } from 'lucide-solid';
 import { Sidebar, type SidebarMode } from './sidebar/Sidebar';
@@ -825,7 +825,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           title="Apps"
           onClick={toggleMenu}
         >
-          <img src="/wash-logo.svg" width="20" height="20" alt="wash" style={{ display: 'block' }} />
+          <img src={washAssetUrl('wash-logo.svg')} width="20" height="20" alt="wash" style={{ display: 'block' }} />
         </IconButton>
         <IconButton
           testid="palette-open"
@@ -931,7 +931,7 @@ const SpriteIcon: Component<{ name: string; size: number }> = (props) => (
     stroke-linejoin="round"
     style={{ display: 'block' }}
   >
-    <use href={`/icons.svg#${props.name}`} />
+    <use href={washAssetUrl(`icons.svg#${props.name}`)} />
   </svg>
 );
 
