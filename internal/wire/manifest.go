@@ -68,6 +68,13 @@ const (
 	// is bigger: the spawner controls how the binary is launched,
 	// including its uid.
 	CapPrepareSpawn = "prepare_spawn"
+
+	// CapWindows lets an app instance own more than one window via the
+	// window.create/destroy events (docs/DISPLAY.md §4). Without it an
+	// instance has exactly the one window the router mints at
+	// identity.ack. Gated because unbounded window creation is a
+	// chrome-DoS vector; wash-display is the canonical holder.
+	CapWindows = "windows"
 )
 
 // MaxIconBytes is the cap on the inline icon data URI per WIRE.md §5.1.

@@ -21,6 +21,19 @@ const (
 	// App → router.
 	TEvtWindowSetTitle     = "window.set_title"
 	TEvtWindowConfirmClose = "window.confirm_close"
+
+	// Multi-window: one app instance owning more than one window
+	// (wash-display maps each Wayland/X11 toplevel to a window). The
+	// shape mirrors the spawn protocol — app → router window.create
+	// with a req_id, router → app window.created{win} or
+	// window.create.err. window.destroy is fire-and-forget. Gated by
+	// the "windows" capability. See docs/DISPLAY.md §4. Single-window
+	// apps never send these; the router still mints their one window
+	// at identity.ack.
+	TEvtWindowCreate    = "window.create"
+	TEvtWindowCreated   = "window.created"
+	TEvtWindowCreateErr = "window.create.err"
+	TEvtWindowDestroy   = "window.destroy"
 	// EvtSpawnRequest / Ok / Err — unified spawn protocol.
 	//
 	// Normal spawn: app requests "launch app_id" and the router does
@@ -68,6 +81,23 @@ const (
 	// subset). Router collects per-instance and surfaces via the
 	// com.wash.router synthetic-peer bus for the About panel.
 	TEvtRuntimeStats = "runtime.stats"
+
+	// Ingress — app → router RPC that publishes an HTTP/WS backend
+	// (a unix socket or loopback addr the app's BE is serving) and
+	// gets back an opaque public path under the shell origin. The
+	// router reverse-proxies /app/<token>/* to that backend, with
+	// WebSocket-upgrade passthrough, so an embedded web app
+	// (code-server, jupyter, …) can render in an <iframe> without
+	// the browser ever reaching the backend port directly. The
+	// token is the capability: it is minted router-side, handed to
+	// the FE over the trusted app_msg channel, and embedded in the
+	// iframe src. req_id correlates publish with published/err.
+	// Unpublish (idempotent) drops the route; the router also GCs
+	// every token for an instance when that instance tears down.
+	TEvtIngressPublish   = "ingress.publish"
+	TEvtIngressPublished = "ingress.published"
+	TEvtIngressUnpublish = "ingress.unpublish"
+	TEvtIngressErr       = "ingress.err"
 )
 
 // EvtWindowMapped: router → app, "the window is now visible".
@@ -166,6 +196,77 @@ type EvtWindowConfirmClose struct {
 
 func NewEvtWindowConfirmClose(win uint32, allow bool) EvtWindowConfirmClose {
 	return EvtWindowConfirmClose{T: TEvtWindowConfirmClose, Win: win, Allow: allow}
+}
+
+// Window roles for EvtWindowCreate. Empty == toplevel. A popup is a
+// transient child (menu, tooltip, X11 override-redirect) positioned
+// relative to ParentWin; the shell renders it borderless.
+const (
+	WindowRoleToplevel = "toplevel"
+	WindowRolePopup    = "popup"
+)
+
+// EvtWindowCreate: app → router, "give me another window". The router
+// allocates a window id, registers a SessionWindow under the calling
+// instance, and replies with EvtWindowCreated (or EvtWindowCreateErr).
+// Gated by the "windows" capability. ReqID correlates the reply.
+// W/H are the requested initial pixel size; Min*/Max* are hints the
+// shell's WM may honour. ParentWin is required for role "popup".
+type EvtWindowCreate struct {
+	T         string `json:"t"`
+	ReqID     uint64 `json:"req_id"`
+	Role      string `json:"role,omitempty"`
+	ParentWin uint32 `json:"parent_win,omitempty"`
+	Title     string `json:"title,omitempty"`
+	W         uint32 `json:"w,omitempty"`
+	H         uint32 `json:"h,omitempty"`
+	MinW      uint32 `json:"min_w,omitempty"`
+	MinH      uint32 `json:"min_h,omitempty"`
+	MaxW      uint32 `json:"max_w,omitempty"`
+	MaxH      uint32 `json:"max_h,omitempty"`
+}
+
+func NewEvtWindowCreate(reqID uint64, role string, parentWin uint32, title string, w, h uint32) EvtWindowCreate {
+	return EvtWindowCreate{T: TEvtWindowCreate, ReqID: reqID, Role: role, ParentWin: parentWin, Title: title, W: w, H: h}
+}
+
+// EvtWindowCreated: router → app, the window exists and is in the
+// session. Win is the freshly allocated id; subsequent window.* events
+// (resize/focus/…) and OpenChannel calls key on it.
+type EvtWindowCreated struct {
+	T     string `json:"t"`
+	ReqID uint64 `json:"req_id"`
+	Win   uint32 `json:"win"`
+}
+
+func NewEvtWindowCreated(reqID uint64, win uint32) EvtWindowCreated {
+	return EvtWindowCreated{T: TEvtWindowCreated, ReqID: reqID, Win: win}
+}
+
+// EvtWindowCreateErr: router → app, the create was refused. Capability
+// denial uses code "forbidden"; a per-instance window-count cap uses
+// "forbidden" too with an explanatory msg.
+type EvtWindowCreateErr struct {
+	T     string `json:"t"`
+	ReqID uint64 `json:"req_id"`
+	Code  string `json:"code"`
+	Msg   string `json:"msg"`
+}
+
+func NewEvtWindowCreateErr(reqID uint64, code, msg string) EvtWindowCreateErr {
+	return EvtWindowCreateErr{T: TEvtWindowCreateErr, ReqID: reqID, Code: code, Msg: msg}
+}
+
+// EvtWindowDestroy: app → router, tear down one of my windows (the
+// app's own toplevel went away). Fire-and-forget; the router emits the
+// session window.delete. Instance teardown GCs all its windows anyway.
+type EvtWindowDestroy struct {
+	T   string `json:"t"`
+	Win uint32 `json:"win"`
+}
+
+func NewEvtWindowDestroy(win uint32) EvtWindowDestroy {
+	return EvtWindowDestroy{T: TEvtWindowDestroy, Win: win}
 }
 
 // EvtSpawnRequest is the unified spawn request: app → router.
@@ -309,6 +410,65 @@ type EvtClipboardChanged struct {
 
 func NewEvtClipboardChanged(mime string) EvtClipboardChanged {
 	return EvtClipboardChanged{T: TEvtClipboardChanged, Mime: mime}
+}
+
+// EvtIngressPublish — app → router — register an HTTP/WS backend the
+// app's BE is serving and ask for a public ingress path. Network is
+// "unix" (Addr is a socket path) or "tcp" (Addr is host:port, which
+// the router will dial on loopback). BasePath, if set, is the path
+// prefix the backend expects to be served under — the router echoes
+// the minted path in an X-Wash-Ingress-Path header regardless, but
+// some backends want it confirmed up front. req_id correlates with
+// EvtIngressPublished / EvtIngressErr.
+type EvtIngressPublish struct {
+	T       string `json:"t"`
+	ReqID   uint64 `json:"req_id"`
+	Network string `json:"network"`
+	Addr    string `json:"addr"`
+}
+
+func NewEvtIngressPublish(reqID uint64, network, addr string) EvtIngressPublish {
+	return EvtIngressPublish{T: TEvtIngressPublish, ReqID: reqID, Network: network, Addr: addr}
+}
+
+// EvtIngressPublished — router → app — the public base path (e.g.
+// "/app/<token>/") the FE should load in its iframe. Token is the
+// raw capability token, also embedded in Path; apps generally only
+// need Path.
+type EvtIngressPublished struct {
+	T     string `json:"t"`
+	ReqID uint64 `json:"req_id"`
+	Path  string `json:"path"`
+	Token string `json:"token"`
+}
+
+func NewEvtIngressPublished(reqID uint64, path, token string) EvtIngressPublished {
+	return EvtIngressPublished{T: TEvtIngressPublished, ReqID: reqID, Path: path, Token: token}
+}
+
+// EvtIngressUnpublish — app → router — drop a previously published
+// route by its path. Idempotent: unpublishing an unknown/already-gone
+// path is a no-op. Fire-and-forget (no reply).
+type EvtIngressUnpublish struct {
+	T    string `json:"t"`
+	Path string `json:"path"`
+}
+
+func NewEvtIngressUnpublish(path string) EvtIngressUnpublish {
+	return EvtIngressUnpublish{T: TEvtIngressUnpublish, Path: path}
+}
+
+// EvtIngressErr — router → app — publish failed (bad request, no
+// shell, internal). req_id correlates with the originating publish.
+type EvtIngressErr struct {
+	T     string `json:"t"`
+	ReqID uint64 `json:"req_id"`
+	Code  string `json:"code"`
+	Msg   string `json:"msg"`
+}
+
+func NewEvtIngressErr(reqID uint64, code, msg string) EvtIngressErr {
+	return EvtIngressErr{T: TEvtIngressErr, ReqID: reqID, Code: code, Msg: msg}
 }
 
 // Sender identifies the originating app instance of a relayed
@@ -503,6 +663,18 @@ func DecodeEvt(data []byte) (any, error) {
 	case TEvtWindowConfirmClose:
 		var m EvtWindowConfirmClose
 		return m, json.Unmarshal(data, &m)
+	case TEvtWindowCreate:
+		var m EvtWindowCreate
+		return m, json.Unmarshal(data, &m)
+	case TEvtWindowCreated:
+		var m EvtWindowCreated
+		return m, json.Unmarshal(data, &m)
+	case TEvtWindowCreateErr:
+		var m EvtWindowCreateErr
+		return m, json.Unmarshal(data, &m)
+	case TEvtWindowDestroy:
+		var m EvtWindowDestroy
+		return m, json.Unmarshal(data, &m)
 	case TEvtSpawnRequest:
 		var m EvtSpawnRequest
 		return m, json.Unmarshal(data, &m)
@@ -535,6 +707,18 @@ func DecodeEvt(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TEvtRuntimeStats:
 		var m EvtRuntimeStats
+		return m, json.Unmarshal(data, &m)
+	case TEvtIngressPublish:
+		var m EvtIngressPublish
+		return m, json.Unmarshal(data, &m)
+	case TEvtIngressPublished:
+		var m EvtIngressPublished
+		return m, json.Unmarshal(data, &m)
+	case TEvtIngressUnpublish:
+		var m EvtIngressUnpublish
+		return m, json.Unmarshal(data, &m)
+	case TEvtIngressErr:
+		var m EvtIngressErr
 		return m, json.Unmarshal(data, &m)
 	}
 	return nil, fmt.Errorf("evt decode: unknown t %q", t)

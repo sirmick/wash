@@ -149,6 +149,11 @@ const (
 	// streaming a single file from the router's embedded asset FS.
 	// Opened in response to ShellAssetRead. ChannelClose marks EOF.
 	ChannelKindAsset = "asset"
+	// "video" carries an encoded per-window pixel stream (PNG/WebP
+	// frames, or out-of-band-negotiated H.264/VP9). The hint tells the
+	// shell to mount its display decoder component on the bound channel
+	// rather than treating it as opaque bytes. See docs/DISPLAY.md §5.
+	ChannelKindVideo = "video"
 )
 
 // ChannelOpen — app → router — requests a new raw channel bound to
