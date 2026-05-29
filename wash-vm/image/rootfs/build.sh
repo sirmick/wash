@@ -25,7 +25,7 @@ echo "==> cross-compiling wash multicall binary (linux/riscv64)"
 make -C "$REPO_ROOT" \
     GOARCH=riscv64 \
     OUT="$work/washrv64" \
-    multicall \
+    multicall-bin \
     >/dev/null
 
 # Sanity-check the multicall binary exists. The top-level Makefile's

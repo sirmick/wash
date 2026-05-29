@@ -397,6 +397,15 @@ $(OUT)/wash: $(MULTICALL_STAMPS) | $(OUT)
 multicall: $(OUT)/wash
 	$(OUT)/wash install-symlinks $(OUT)
 
+# Cross-compile-friendly variant: builds the multicall binary but
+# does NOT run it (no install-symlinks). Used by wash-vm/image/
+# rootfs/build.sh when GOARCH=riscv64 — the wash-router/wash-* /usr/
+# bin entries inside the rootfs are created by build.sh's own
+# symlink loops, and `$(OUT)/wash install-symlinks` would fail when
+# the binary's arch differs from the host's (no qemu-user binfmt).
+.PHONY: multicall-bin
+multicall-bin: $(OUT)/wash
+
 # Full-stack e2e: builds everything (incl. test app), then runs the
 # Playwright suite. Browser binary download is one-time and cached.
 .PHONY: e2e
