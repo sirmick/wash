@@ -3,10 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <!-- Base href makes jslinux's relative loadScript("riscvemu64-wasm.js")
-         resolve to /tinyemu/riscvemu64-wasm.js. Without this, the script
+         resolve to <base>/riscvemu64-wasm.js. Without this, the script
          load 404s and the page errors with a cryptic SyntaxError because
-         vite's SPA fallback returns HTML for missing static paths. -->
-    <base href="/tinyemu/" />
+         vite's SPA fallback returns HTML for missing static paths.
+         %BASE_URL% is a Vite-substituted placeholder — / in dev, /wash/
+         (or whatever) in the deployed prod build. The trailing tinyemu/
+         is the static subdir under base. -->
+    <base href="%BASE_URL%tinyemu/" />
+    <link rel="icon" href="%BASE_URL%wash-logo.svg" type="image/svg+xml" />
     <title>wash — TinyEMU RISC-V</title>
     <link href="style.css" rel="stylesheet" type="text/css" />
     <style>
@@ -230,7 +234,7 @@
     <script>
       window.__washDefaults = {
         cpu: 'riscv64',
-        url: '/tinyemu/wash-riscv64.cfg',
+        url: '%BASE_URL%tinyemu/wash-riscv64.cfg',
         mem: '64',
         font_size: '11',
         cols: '200',
@@ -456,9 +460,11 @@
       };
     </script>
 
-    <!-- term.js + jslinux.js: as-shipped from bellard.org. -->
-    <script src="/tinyemu/term.js"></script>
-    <script src="/tinyemu/jslinux.js"></script>
+    <!-- term.js + jslinux.js: as-shipped from bellard.org. Relative
+         to <base> so they resolve to <BASE_URL>/tinyemu/{term,jslinux}.js
+         in both dev (base=/) and the GH Pages prod build (base=/wash/). -->
+    <script src="term.js"></script>
+    <script src="jslinux.js"></script>
     <script>
       // Belt-and-braces: replace Ethernet handlers post-load so any
       // in-progress wss:// dial can't reach the wasm via net_set_carrier.
@@ -479,12 +485,12 @@
     <script type="importmap">
     {
       "imports": {
-        "solid-js": "/shell/vendor/solid.js",
-        "solid-js/web": "/shell/vendor/solid-web.js",
-        "solid-js/store": "/shell/vendor/solid-store.js",
-        "@xterm/xterm": "/shell/vendor/xterm.js",
-        "@xterm/addon-fit": "/shell/vendor/xterm-fit.js",
-        "@wash/ui": "/shell/vendor/wash-ui.js"
+        "solid-js": "%BASE_URL%shell/vendor/solid.js",
+        "solid-js/web": "%BASE_URL%shell/vendor/solid-web.js",
+        "solid-js/store": "%BASE_URL%shell/vendor/solid-store.js",
+        "@xterm/xterm": "%BASE_URL%shell/vendor/xterm.js",
+        "@xterm/addon-fit": "%BASE_URL%shell/vendor/xterm-fit.js",
+        "@wash/ui": "%BASE_URL%shell/vendor/wash-ui.js"
       }
     }
     </script>
