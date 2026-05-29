@@ -234,7 +234,13 @@
     <script>
       window.__washDefaults = {
         cpu: 'riscv64',
-        url: '%BASE_URL%tinyemu/wash-riscv64.cfg',
+        // page-relative (no leading slash) — jslinux's get_absolute_url
+        // is a naive `window.location.pathname + fname` concat. An
+        // absolute /wash/tinyemu/... would become /wash//wash/tinyemu/...
+        // when the page lives at /wash/. Page-relative works under
+        // both base=/ (dev) and base=/wash/ (GH Pages) because the
+        // browser hands jslinux the right pathname either way.
+        url: 'tinyemu/wash-riscv64.cfg',
         mem: '64',
         font_size: '11',
         cols: '200',
