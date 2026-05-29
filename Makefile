@@ -368,7 +368,15 @@ test-app: $(OUT)/wash-priv-fakesudo
 # Adding an app: extract into apps/<name>/be/, drop a
 # cmd/wash/imports_<name>.go blank-import, add its asset stamp to
 # the dep list below.
-MULTICALL_STAMPS := $(ABOUT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP)
+# Note ROUTER_STAMP + LOGIN_SHELL_STAMP: cmd/wash imports
+# internal/runner/router (which `//go:embed`s internal/runner/
+# router/assets) and internal/runner/login → internal/login
+# (which `//go:embed`s assets/shell). Without these stamps in
+# multicall's dep list, a clean checkout fails to compile with
+# "pattern all:assets: no matching files found" — local dev
+# accidentally works because the standalone wash-router build
+# rule already chains through ROUTER_STAMP.
+MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP)
 
 # Adding wash_test_app to the tags pulls the test app's blank-import
 # in (which is otherwise excluded by cmd/wash/imports_test.go's
