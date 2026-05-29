@@ -73,7 +73,7 @@ turns it into a **single static binary plus a browser**:
 - **Tiny.** The router idles around **25 MB RSS**; a full desktop
   session — router plus a dozen app processes — sits near **100 MB
   RSS** total. The browser demo runs an *entire Linux system* in a
-  256 MB emulated machine.
+  64 MB emulated machine.
 
 ---
 
@@ -155,7 +155,7 @@ desktop won't fit.
 | Router binary on disk (amd64, static, `-s -w`) | ~7.5 MB |
 | Multicall `wash` binary in the demo VM (riscv64) | **~11 MB** — *all* apps + router + login |
 | Whole browser demo (kernel + rootfs + emulator + UI) | **~24 MiB** static assets |
-| Emulated machine the demo's full Linux system runs in | 256 MB RAM |
+| Emulated machine the demo's full Linux system runs in | 64 MB RAM |
 
 The wire carries events and file bytes, not video — bandwidth scales
 with what you actually do, not with screen size or frame rate.
