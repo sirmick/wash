@@ -162,18 +162,22 @@ jobs:
             packaging/build-ctx
 
       - name: Extract package artefact
-        # Rename to a stable, version-free filename so
-        # /releases/latest/download/wash-<tag>.<ext> always resolves
-        # to the right asset across releases. The version is still
-        # baked into the package metadata (dpkg -I, rpm -qi, apk info).
+        # Produce two filenames per row, same bytes:
+        #   wash-<version>-<tag>.<ext>  — visible on the release page
+        #   wash-<tag>.<ext>            — stable URL for /releases/latest/download
+        # On a tag push the version comes from the ref (strip leading "v");
+        # on branch builds it falls back to the workflow VERSION default.
         run: |
           mkdir -p dist/packages/${{ matrix.tag }}
           cid=$(docker create wash-pkg:${{ matrix.tag }})
           docker cp "$cid:/pkg/." dist/packages/${{ matrix.tag }}/
           docker rm "$cid"
+          VER="${GITHUB_REF_NAME#v}"
+          case "$VER" in *.*.*) ;; *) VER=0.8.0;; esac
           for f in dist/packages/${{ matrix.tag }}/*; do
             ext="${f##*.}"
-            mv "$f" "dist/packages/${{ matrix.tag }}/wash-${{ matrix.tag }}.${ext}"
+            cp  "$f" "dist/packages/${{ matrix.tag }}/wash-${VER}-${{ matrix.tag }}.${ext}"
+            mv  "$f" "dist/packages/${{ matrix.tag }}/wash-${{ matrix.tag }}.${ext}"
           done
           ls -la dist/packages/${{ matrix.tag }}/
 
