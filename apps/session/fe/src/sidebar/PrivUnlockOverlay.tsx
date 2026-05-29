@@ -6,9 +6,9 @@
 // pull it into any reactive store.
 //
 // Architectural note: the password keystrokes briefly transit through
-// session FE memory (vs. the old priv FE bundle). Session FE is the
-// same trust tier as the shell — same browser process either way —
-// so no real boundary change, but worth knowing.
+// session FE memory. Session FE is the same trust tier as the shell
+// (same browser process), so this is not a boundary change, but worth
+// knowing.
 
 import type { Component, JSX } from 'solid-js';
 import { Show, createSignal } from 'solid-js';

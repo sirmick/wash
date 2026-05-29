@@ -119,17 +119,15 @@ test.describe('syslogs app', () => {
   });
 
   test('no synthetic root-variant launcher row', async ({ page, router }) => {
-    // syslogs used to ship a RootVariant{} that materialized as a
-    // second start-menu entry. The auto-escalation rework removed
-    // it — assert it's gone so a future regression that re-adds the
+    // syslogs ships no RootVariant{}, so it has no second start-menu
+    // entry — assert it's absent so a regression that re-adds the
     // variant gets caught here.
     await page.goto(router.url);
     await page.locator('button[title="Apps"]').click();
     await expect(page.getByTestId('start-menu-root-com.wash.syslogs')).toHaveCount(0);
 
-    // wash-term still has its custom-named root variant — the
-    // RootVariant pipeline itself is intact, only the syslogs use
-    // was retired.
+    // wash-term has its custom-named root variant — the RootVariant
+    // pipeline itself is intact.
     await expect(page.getByTestId('start-menu-root-terminal')).toBeVisible();
 
     expect(router.log()).not.toMatch(/panic/);

@@ -79,10 +79,22 @@ type GlobalAction struct {
 
 // Detect probes each supported backend in order and returns the
 // first one whose underlying binaries are present. Returns nil if
-// none of apt/dnf/apk/opkg are installed; the FE renders a
+// none of apt/dnf/apk are installed; the FE renders a
 // "no supported package manager" state.
+//
+// Only one of the three is installed on any given distro, so the
+// probe order is for readability not precedence: a debian box wins
+// on apt, fedora on dnf, alpine on apk. If a future hybrid box
+// genuinely has two, the first-match-wins ordering matches what
+// most users running that distro expect.
 func Detect() Backend {
 	if b := newAPT(); b != nil {
+		return b
+	}
+	if b := newDNF(); b != nil {
+		return b
+	}
+	if b := newAPK(); b != nil {
 		return b
 	}
 	return nil

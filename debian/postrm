@@ -1,0 +1,29 @@
+#!/bin/sh
+# wash postrm.
+#
+# On purge only: remove the wash-system user, wash group, and /etc/wash.
+# On remove (non-purge) we leave them in place so a reinstall is seamless.
+
+set -e
+
+case "$1" in
+    purge)
+        if getent passwd wash-system >/dev/null; then
+            deluser --quiet --system wash-system >/dev/null 2>&1 || true
+        fi
+        if getent group wash >/dev/null; then
+            delgroup --quiet --system wash >/dev/null 2>&1 || true
+        fi
+        rm -rf /etc/wash
+        ;;
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+    *)
+        echo "postrm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

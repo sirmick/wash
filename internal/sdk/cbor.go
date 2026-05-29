@@ -13,9 +13,9 @@ import (
 // coercion that would otherwise be repeated in every app.
 
 // AsMap unwraps a JSON-decoded map into map[string]any. Returns nil
-// if data isn't a map. Now that the event channel is JSON, the data
-// arrives already-string-keyed — AsMap is mostly a typed shortcut
-// for the `data.(map[string]any)` assertion plus a nil-safe fallback.
+// if data isn't a map. The event channel is JSON, so the data arrives
+// already-string-keyed — AsMap is a typed shortcut for the
+// `data.(map[string]any)` assertion plus a nil-safe fallback.
 func AsMap(data any) map[string]any {
 	m, _ := data.(map[string]any)
 	return m

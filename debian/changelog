@@ -1,0 +1,7 @@
+wash (0.0.0-1) unstable; urgency=low
+
+  * Initial packaging: wash-router plus the v0 app set
+    (session, fm, term, edit, bulk, priv, settings, top, syslogs,
+    services, packages, journal, about, sudo, launch).
+
+ -- wash maintainers <wash@example.invalid>  Thu, 28 May 2026 00:00:00 +0000

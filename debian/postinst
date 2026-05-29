@@ -1,0 +1,45 @@
+#!/bin/sh
+# wash postinst.
+#
+# - create wash-system uid + wash group (idempotent)
+# - chmod the priv binary so the router's trust check accepts it
+#   without WASH_TRUSTED_APPS_DIRS (see internal/router/registry.go)
+# - leave /etc/wash/secret.key absent — wash-login generates it on
+#   first start. Avoids needing entropy at install time.
+
+set -e
+
+case "$1" in
+    configure)
+        if ! getent group wash >/dev/null; then
+            addgroup --system wash
+        fi
+        if ! getent passwd wash-system >/dev/null; then
+            adduser --system --ingroup wash \
+                --home /var/lib/wash --no-create-home \
+                --shell /usr/sbin/nologin wash-system
+        fi
+        # Trust-check guard: registry refuses reservedID com.wash.priv
+        # from non-root binaries unless mode 0755 root:root.
+        if [ -x /usr/bin/wash-priv ]; then
+            chown root:root /usr/bin/wash-priv
+            chmod 0755 /usr/bin/wash-priv
+        fi
+        # /etc/wash holds the multi-user HMAC secret once wash-login
+        # ships. Create the dir now (mode 0755) so first-start code
+        # only has to write the key.
+        if [ ! -d /etc/wash ]; then
+            install -d -m 0755 /etc/wash
+        fi
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

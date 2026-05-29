@@ -159,7 +159,7 @@ function readHeapBytes(): number | null {
 function formatHeapLine(tag: string): string {
   const wasm = readHeapBytes();
   // performance.memory is Chrome-only; on Firefox we just emit what
-  // we have. Used to be a feature-detect; the cast keeps TS happy.
+  // we have. The cast keeps TS happy.
   const pm = (performance as unknown as { memory?: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number } }).memory;
   const wasmStr = wasm !== null ? `wasm=${(wasm / 1048576).toFixed(1)}MB` : 'wasm=?';
   const jsStr = pm
@@ -609,10 +609,10 @@ const waitForModule = setInterval(() => {
   // Tap Module.print / printErr (Emscripten stdio surfaces) and route
   // them straight to the WS bus as dedicated sources. This is where
   // TinyEMU itself prints diagnostics like "HTIF: unsupported tohost"
-  // — the ONE path in tinyemu's HTIF code that triggers exit() —
-  // which were previously lost to console.log (not captured by
-  // installErrorCapture). Critical for debugging why the wasm
-  // exit(1)s before any kernel output.
+  // — the ONE path in tinyemu's HTIF code that triggers exit().
+  // These surfaces aren't captured by installErrorCapture, so tapping
+  // them here is critical for debugging why the wasm exit(1)s before
+  // any kernel output.
   const origPrint = mod.print;
   const origPrintErr = mod.printErr;
   mod.print = (...args: unknown[]) => {

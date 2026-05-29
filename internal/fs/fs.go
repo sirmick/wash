@@ -11,8 +11,7 @@
 //
 // An FS instance carries a root. Confine resolves every input path
 // to its absolute, cleaned form and rejects paths outside the root
-// with ErrOutsideRoot. An empty root disables the sandbox (matches
-// the historical wash-fm behavior when WASH_FM_ROOT was unset).
+// with ErrOutsideRoot. An empty root disables the sandbox.
 package fs
 
 import (

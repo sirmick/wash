@@ -118,9 +118,7 @@ test.describe('sidebar', () => {
     await expect(page.locator('[data-testid="sidebar-section-badge-notify"]')).toContainText('1');
   });
 
-  // NOTE: a pinned-closed test used to live here, exercising a third
-  // section state that blocked auto-expand. User feedback ("not sure
-  // what the pin icon does") prompted removing the pin button + the
-  // pinned-closed state entirely; auto-expand fires whenever an event
-  // arrives at a collapsed section, and the user can re-collapse.
+  // Sections have two states: expanded and collapsed. Auto-expand
+  // fires whenever an event arrives at a collapsed section, and the
+  // user can re-collapse.
 });

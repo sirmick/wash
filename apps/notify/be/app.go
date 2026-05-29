@@ -8,7 +8,7 @@
 //     live ones.
 //   - Receives notifications via a router-side fan-out: when any app
 //     emits EvtNotify, the router both (a) broadcasts ShellNotify to
-//     every shell for the transient toast (existing behaviour) and
+//     every shell for the transient toast and
 //     (b) forwards a cross-app app_msg {kind:"notify", ...} to this
 //     service with the originating sender's instance attested.
 //

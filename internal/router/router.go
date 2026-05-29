@@ -465,12 +465,6 @@ const ChannelScrollbackBytes = 256 * 1024
 // drop). bytes from app are then captured in the ring buffer only;
 // the next shell that attaches receives the buffered scrollback as
 // a single replay frame, followed by live bytes.
-//
-// Kind=="bundle" gives the channel different semantics: bytes from
-// app are accumulated into app.bundleBytes (no shell forwarding, no
-// ring buffer), and on ChannelClose the bundle is marked ready.
-// Per-shell bundle replay channels are spawned separately via
-// reattachChannelsToShell.
 type channelBinding struct {
 	channelID uint32
 	app       *AppInstance
@@ -943,7 +937,7 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 		if len(replay) > 0 {
 			// Interactive class so the replay arrives in the same
 			// transactional window as the Bind that preceded it —
-			// see fanOutBundleToAttachedShells for the same rule.
+			// see replayBundleToShell for the same rule.
 			if err := s.WriteRawFrameClass(id, replay, wire.ClassInteractive); err != nil {
 				r.log("reattach replay channel %d: %v", id, err)
 			}

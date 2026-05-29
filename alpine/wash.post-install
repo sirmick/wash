@@ -1,0 +1,11 @@
+#!/bin/sh
+# wash-priv reserved-id trust gate wants root:root 0755 on the binary.
+# APKBUILD declares 0755 install mode but be explicit.
+
+set -e
+
+if [ -x /usr/bin/wash-priv ]; then
+    chown root:root /usr/bin/wash-priv
+    chmod 0755 /usr/bin/wash-priv
+fi
+exit 0

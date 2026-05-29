@@ -72,8 +72,8 @@ func TestSpine(t *testing.T) {
 	}
 
 	// Build a router with a hand-seeded registry: bundle delivery
-	// now reads from the registry entry (per the manifest-time
-	// bundle scheme), so HandleApp-only tests must pre-register.
+	// reads from the registry entry, so HandleApp-only tests must
+	// pre-register.
 	reg := router.NewRegistry()
 	reg.RegisterEntry(&router.Entry{
 		Path:     "test:com.wash.about",
@@ -153,9 +153,8 @@ func TestSpine(t *testing.T) {
 			declared = &d
 			// Capture the instance id immediately so the bundle
 			// bind/raw/unbind frames that follow are recognized by
-			// frameReader (they ship back-to-back with the declare
-			// now that bundles come from the registry, not a post-
-			// handshake SDK upload).
+			// frameReader (they ship back-to-back with the declare,
+			// since bundles come from the registry).
 			fr.targetInstance = declared.InstanceID
 		case wire.ShellSessionSnapshot:
 			for i := range m.Windows {

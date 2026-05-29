@@ -30,8 +30,6 @@ const (
 	//     relays to that instance's BE half.
 	//   - Cross-app: To set with {AppID (singleton) | InstanceID
 	//     (direct)}; router resolves and forwards as EvtAppMsg.
-	// Earlier versions had a separate "app_msg.send.to" tag; they
-	// were structurally identical and have been unified.
 	TShellAppMsgSend = "app_msg.send"
 	TShellLog        = "log"
 

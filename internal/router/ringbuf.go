@@ -3,7 +3,7 @@ package router
 // ringBuffer is a fixed-capacity FIFO of bytes used for PTY scrollback
 // on raw channels. Once full, new writes overwrite the oldest bytes.
 //
-// Not goroutine-safe — the channel binding's bufMu serializes access.
+// Not goroutine-safe — the channel binding's shellMu serializes access.
 type ringBuffer struct {
 	data []byte
 	head int  // index of the next byte to write

@@ -1,25 +1,6 @@
 // defineWashApp — collapses the customElements.define + connectedCallback
-// + disconnectedCallback boilerplate every wash web app repeated.
-//
-// Before:
-//
-//   class WashAppFoo extends HTMLElement {
-//     private cleanup?: () => void;
-//     connectedCallback() {
-//       this.style.cssText = 'display:block;...';
-//       const instance = this.getAttribute('data-wash-instance') ?? '';
-//       this.cleanup = render(() => <App instance={instance} host={this} />, this);
-//     }
-//     disconnectedCallback() {
-//       this.cleanup?.();
-//       this.cleanup = undefined;
-//     }
-//   }
-//   if (!customElements.get('wash-app-foo')) {
-//     customElements.define('wash-app-foo', WashAppFoo);
-//   }
-//
-// After:
+// + disconnectedCallback boilerplate every wash web app needs into a
+// single call:
 //
 //   defineWashApp('wash-app-foo', (props) => <App {...props} />, {
 //     style: 'display:block;...',
@@ -30,8 +11,8 @@
 // component as `props.instance`; `props.host` is the element itself
 // (apps use it as the wash:msg / wash:state event target).
 //
-// Re-registering an element tag is a no-op (matches the existing
-// `if (!customElements.get(...))` guard every app had).
+// Re-registering an element tag is a no-op (guarded by
+// customElements.get).
 
 import { render } from 'solid-js/web';
 import type { Component } from 'solid-js';
@@ -57,7 +38,7 @@ export interface DefineWashAppOptions {
  * `App` on connect and disposes it on disconnect.
  *
  * If `tag` is already registered (HMR re-import, multiple bundle
- * loads), the call is a no-op — matches every app's previous guard.
+ * loads), the call is a no-op.
  */
 export function defineWashApp(
   tag: `wash-app-${string}`,

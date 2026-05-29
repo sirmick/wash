@@ -103,7 +103,7 @@ func Run(args []string) int {
 	fs := flag.NewFlagSet("wash-login", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
-	listen := fs.String("listen", defaultListen, "host:port to bind. Default is 0.0.0.0:10000 — wash-login is a network service by design.")
+	listen := fs.String("listen", defaultListen, "host:port to bind. Default is "+defaultListen+" — wash-login is a network service by design.")
 	insecureListen := fs.Bool("insecure-listen", false, "deprecated; no-op now that non-loopback binds are allowed by default. Kept for compatibility.")
 	secretKey := fs.String("secret-key", "", fmt.Sprintf("path to the HMAC secret used to sign session cookies. Empty picks %s when writable, else $XDG_CONFIG_HOME/wash/secret.key (or ~/.config/wash/secret.key).", systemSecretPath))
 	secretGenerate := fs.Bool("secret-generate", true, "generate the secret-key file if it doesn't exist (mode 0600). Default on for OOTB; pass --secret-generate=false to fail noisily on production installs that expect a pre-provisioned key.")

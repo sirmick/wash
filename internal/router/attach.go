@@ -1,7 +1,6 @@
 // Attach: control-socket path for apps to register themselves
 // with the router. Router-spawned apps and terminal-launched
-// apps go through the same code — there's no inherited-fd
-// special case anymore.
+// apps go through the same code.
 //
 // Flow:
 //   1. App dials the control socket (path from WASH_DISPLAY env).
@@ -15,7 +14,7 @@
 //          claimed app_id is in the registry AND /proc/<pid>/exe
 //          matches the registered binary, then accepts.
 //   4. Router writes IdentityAck with the assigned instance/window
-//      ids and registers the app exactly the same way as today.
+//      ids and registers the app.
 //
 // Auth model: registry-only. A binary that isn't in the registry
 // cannot attach. A registered binary cannot claim a different

@@ -216,7 +216,7 @@ func TestBusToleratesNullFields(t *testing.T) {
 
 	go func() { _ = bus.conn.Run(context.Background()) }()
 
-	// priority: nil — would previously fail decode.
+	// priority: nil decodes to the zero value rather than failing.
 	writeEvt(t, router, wire.NewEvtAppMsg(1, map[string]any{
 		"kind":     "select",
 		"unit":     "ssh.service",

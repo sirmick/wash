@@ -55,11 +55,9 @@ func aboutManifest() *Manifest {
 // TestHandshakeAndAssetPull drives the full v0.0 spine in-memory:
 //
 //   - App side sends Identity → router replies IdentityAck and tells
-//     the shell ShellAppDeclared + ShellWindowCreate.
-//   - Shell sends ShellAssetFetch → router relays as AssetRead on the
-//     app's channel 0.
-//   - App responds with AssetReadOK then AssetData(end=true) → router
-//     relays both as ShellAssetDeliver back to the shell.
+//     the shell ShellAppDeclared + a window upsert.
+//   - App side receives EvtWindowMapped on its event channel.
+//   - App opens a kind=bundle channel → router replies ChannelOpened.
 func TestHandshakeAndAssetPull(t *testing.T) {
 	reg := NewRegistry()
 	r := NewRouter(Config{}, reg, func(format string, args ...any) {

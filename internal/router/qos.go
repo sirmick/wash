@@ -17,10 +17,6 @@
 // practice. When a class queue is full Submit blocks the producer —
 // kernel SO_RCVBUF backpressure on app sockets then stops the
 // upstream app.
-//
-// This file ONLY defines the scheduler. Wiring it into the existing
-// ShellSession.WriteCtrl / WriteRawFrame / app_session writers is a
-// separate change.
 
 package router
 
@@ -132,11 +128,10 @@ func (s *Scheduler) TrySubmit(f wire.Frame) bool {
 // strict" — at most one frame can be served "out of priority" per
 // race window, and FIFO within each class is preserved.
 //
-// (An earlier version "re-checked" higher-priority queues after a
+// Deliberately we do NOT re-check higher-priority queues after a
 // slow-path dequeue and put the lower-priority frame BACK on its
-// queue if a higher one was found — which reordered the lower
-// queue, violating FIFO. The simpler approach below is both
-// correct and easier to reason about.)
+// queue: that would reorder the lower queue and violate FIFO. The
+// approach below is both correct and easier to reason about.
 func (s *Scheduler) Next(ctx context.Context) (wire.Frame, error) {
 	// Fast-path: pick the highest-priority queue with a ready frame.
 	for _, c := range drainOrder {

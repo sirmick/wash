@@ -1,7 +1,6 @@
-// Password-handshake crypto for the priv unlock modal. Ported
-// verbatim from the (now-deleted) apps/priv/fe/src/main.tsx so the
-// wire shape is unchanged — the priv BE's deriveKey + AES-GCM decode
-// expects exactly these primitive choices and parameters.
+// Password-handshake crypto for the priv unlock modal. The wire shape
+// is fixed: the priv BE's deriveKey + AES-GCM decode expects exactly
+// these primitive choices and parameters.
 //
 // We deliberately do NOT use Web Crypto. Its subtle interface is
 // gated to "secure contexts" (HTTPS or http://localhost), and wash is

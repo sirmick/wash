@@ -151,9 +151,7 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	// the scrollback so the user lands on their pre-refresh terminal.
 	r.reattachChannelsToShell(sess)
 
-	// Replay any already-uploaded bundles to the new shell. Bundles
-	// in flight (bundleReady not yet closed) will be fanned out
-	// from the ChannelClose handler when they complete.
+	// Replay any already-cached bundles to the new shell.
 	for _, inst := range snapshot {
 		r.replayBundleToShell(sess, inst)
 	}
@@ -470,7 +468,7 @@ func (s *ShellSession) handleAppMsgSend(m wire.ShellAppMsgSend, class wire.Class
 // callers, and holding the declared-map mutex across a potentially
 // blocking Submit would head-of-line block every other producer (in
 // particular, a Bulk flood under WriteRawFrame would freeze all
-// Interactive control traffic). The mutex now only protects the
+// Interactive control traffic). The mutex only protects the
 // declared map's mutations in declareInstance.
 //
 // Default class is Interactive — see WriteCtrlClass for the explicit
@@ -496,10 +494,10 @@ func (s *ShellSession) WriteCtrlClass(m any, class wire.Class) error {
 	return s.scheduler.Submit(context.Background(), f)
 }
 
-// writeCtrlLocked is kept for callers inside HandleShell setup that
-// already hold writeMu (for declared-map atomicity); the "Locked"
-// suffix is historical — the actual Submit no longer requires the
-// mutex. Pure Submit; safe under or without writeMu.
+// writeCtrlLocked is used by callers inside HandleShell setup that
+// already hold writeMu (for declared-map atomicity). The Submit it
+// performs does not itself require the mutex — safe under or without
+// writeMu.
 //
 // Control-channel frames are router-originated lifecycle messages
 // (app.declared, session.snapshot, session.patch, window.create,
@@ -531,8 +529,7 @@ func (s *ShellSession) writeCtrlLocked(m any) error {
 // strict priority, breaking the transaction.
 //
 // No writeMu: see WriteCtrl. The scheduler's channel handles
-// concurrent-producer ordering; the previous mutex was a remnant
-// of the pre-scheduler write-path serialization.
+// concurrent-producer ordering.
 func (s *ShellSession) WriteRawFrame(channelID uint32, payload []byte) error {
 	return s.WriteRawFrameClass(channelID, payload, wire.ClassBulk)
 }

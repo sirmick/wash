@@ -140,10 +140,10 @@ export class VirtioConsoleSocket implements SocketLike {
   // Why this matters: VirtioConsoleSocket's bus.register call inside
   // the constructor can synchronously receive bytes when there's a
   // bootstrap that flushes accumulated output on handler-registration
-  // (tinyemu-bridge.ts → bootResult.finish()). The previous impl
-  // advanced past each frame and then no-op'd on `onmessage?.(...)`,
-  // silently dropping frames before Conn could assign onmessage. If
-  // that regression returns, vlogWarn fires below.
+  // (tinyemu-bridge.ts → bootResult.finish()). Holding (rather than
+  // discarding) frames received before Conn assigns onmessage is what
+  // keeps those bytes from being dropped; vlogWarn fires below if a
+  // frame is ever held while the shell is already running.
   private drainBuffer(): void {
     while (this.buf.length >= HEADER_BYTES) {
       const length = new DataView(this.buf.buffer, this.buf.byteOffset + 4, 4).getUint32(0, false);

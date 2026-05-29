@@ -1,0 +1,23 @@
+Source: wash
+Section: admin
+Priority: optional
+Maintainer: wash maintainers <wash@example.invalid>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.0
+Rules-Requires-Root: no
+
+Package: wash
+Architecture: any
+Depends: ${misc:Depends},
+         adduser,
+         libcap2-bin
+Recommends: ca-certificates
+Description: lightweight remote-admin desktop environment
+ wash is a transport-only router and a small family of web-component
+ apps that present a Windows/GNOME/macOS-style desktop over HTTP/WS.
+ Designed for maintaining Linux machines over the network without
+ needing SSH plus a stack of text-only tools.
+ .
+ This package installs the wash-* binaries to /usr/bin/. wash-router
+ is the entry point; per-user multi-session support (wash-login) is
+ planned but not yet shipped.

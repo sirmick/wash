@@ -431,18 +431,13 @@ test('locked + new request → auto-prompts for password without Approve click',
   // No "approve" was sent — only the enqueue triggered the prompt.
 });
 
-// NOTE: M7 dropped the page-nonce auto-lock-on-refresh feature
-// (was: priv tracked a per-FE page_nonce, cleared the password cache
-// when it changed). The feature relied on an own-FE hello path; with
+// NOTE: there is no page-nonce auto-lock-on-refresh. With
 // surface=background, priv has no FE and the session FE's lifecycle
-// (which is a singleton across tab refreshes) doesn't generate a
-// useful nonce signal. The idle timer (15min default) is the
-// remaining lock-when-walked-away protection. Re-adding the auto-lock
-// would require the session FE to generate a per-mount nonce and the
-// session BE gateway to forward it as a priv "refresh" event — left
-// for M8 if it lands. Two e2e tests that exercised that path were
-// removed here; the unit-level coverage in apps/priv/be/queue_test.go
-// stays intact.
+// (a singleton across tab refreshes) doesn't generate a useful nonce
+// signal. The idle timer (15min default) is the lock-when-walked-away
+// protection. An auto-lock would require the session FE to generate a
+// per-mount nonce and the session BE gateway to forward it as a priv
+// "refresh" event. Unit-level coverage lives in apps/priv/be/queue_test.go.
 
 // Only the prompting request runs on unlock. Two requests are
 // enqueued — A auto-prompts; B waits. Unlock-via-A's-password

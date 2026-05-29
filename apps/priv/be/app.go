@@ -85,9 +85,9 @@ func Def() *sdk.AppDef {
 	return def
 }
 
-// run is the multi-call entrypoint. Mirrors what the standalone main
-// used to do — Connect/Run/Close via sdk.Run with the populated def
-// — plus the cleanup scrub on a clean exit.
+// run is the multi-call entrypoint. Runs the Connect/Run/Close
+// sequence via sdk.Run with the populated def, plus the cleanup
+// scrub on a clean exit.
 func run(ctx context.Context) error {
 	startup()
 	err := sdk.Run(ctx, def)

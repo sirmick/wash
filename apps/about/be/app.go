@@ -217,7 +217,7 @@ func sendInfo(c *sdk.Conn) {
 }
 
 // ----- about.info wire payload (build + host only; per-process Go
-// runtime is now the table) -----
+// runtime lives in the runtime.table) -----
 
 type aboutInfo struct {
 	Kind  string     `json:"kind"`

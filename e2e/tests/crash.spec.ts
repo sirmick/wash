@@ -65,9 +65,9 @@ test.describe('BE crash → shell tombstone', () => {
       5_000,
     );
 
-    // The dead custom element has lost its content (we no longer
-    // re-mount on remap, and the BE is gone) — but the frame and
-    // tombstone are still there.
+    // The dead custom element has lost its content (remap doesn't
+    // re-mount, and the BE is gone) — but the frame and tombstone
+    // are still there.
     await expect(window_).toBeVisible();
 
     // Closing the tombstone removes the window locally.

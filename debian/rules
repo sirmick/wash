@@ -1,0 +1,19 @@
+#!/usr/bin/make -f
+# wash's source tarball ships prebuilt static Go binaries under out/.
+# debhelper's auto_build / auto_test / strip / dwz steps are all no-ops:
+#   - nothing to compile
+#   - tests run on the host before tarball assembly
+#   - binaries are already stripped via -ldflags="-s -w"
+#   - static Go binaries have no DWARF dh_dwz can process
+
+export DH_VERBOSE = 1
+
+%:
+	dh $@
+
+override_dh_auto_build:
+override_dh_auto_test:
+override_dh_strip:
+override_dh_dwz:
+override_dh_shlibdeps:
+# Pure-Go static binaries → no shared-library deps to compute.

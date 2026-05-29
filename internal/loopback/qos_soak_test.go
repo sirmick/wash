@@ -42,10 +42,10 @@ import (
 func TestQoSSoakInteractiveLatencyUnderBulkFlood(t *testing.T) {
 	// No t.Parallel(): this test shares the loopback package's
 	// in-memory router with TestSpine and floods Interactive-class
-	// frames. Running them concurrently let bundle/title-patch
-	// frames in TestSpine starve and deadlocked the suite. Run
-	// serially; the test is still self-contained (own router,
-	// own pipes) and finishes well under the package timeout.
+	// frames. Running them concurrently starves bundle/title-patch
+	// frames in TestSpine and deadlocks the suite. Run serially; the
+	// test is still self-contained (own router, own pipes) and
+	// finishes well under the package timeout.
 	const bulkFrames = 500       // 500 frames is still a multi-hundred-ms flood
 	const bulkPayloadSize = 2048 // 2 KiB matches a typical pty chunk; less queue pressure
 	const interactiveFrames = 50

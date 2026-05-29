@@ -217,7 +217,7 @@ func registerHandlers(b *sdk.Bus) {
 func sendBackendStatus(c *sdk.Conn, backend Backend) {
 	msg := map[string]any{"kind": "backend_status"}
 	if backend == nil {
-		msg["error"] = "no supported package manager found (looked for apt-get)"
+		msg["error"] = "no supported package manager found (looked for apt/dnf/apk)"
 	} else {
 		msg["name"] = backend.Name()
 		// Ship the global-actions catalog with status so the FE

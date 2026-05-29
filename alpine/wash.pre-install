@@ -1,0 +1,13 @@
+#!/bin/sh
+# Create wash-system uid + wash group before the files land.
+# Idempotent so reinstall doesn't fail.
+
+set -e
+
+if ! getent group wash >/dev/null 2>&1; then
+    addgroup -S wash
+fi
+if ! getent passwd wash-system >/dev/null 2>&1; then
+    adduser -S -G wash -h /var/lib/wash -s /sbin/nologin -D wash-system
+fi
+exit 0

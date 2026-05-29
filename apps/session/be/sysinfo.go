@@ -166,12 +166,6 @@ func readMemTotal() uint64 {
 	return 0
 }
 
-// externalIPs returns every non-loopback, non-link-local IPv4/IPv6
-// address bound to an interface that looks like a real NIC. Docker /
-// virtual bridges, veth pairs, wireguard tunnels, etc. are excluded
-// — the user wants to see what the box presents to peers, not the
-// container plumbing. Sorted: IPv4 first, then IPv6, both
-// lexicographic for determinism.
 // externalInterfaces walks net.Interfaces, filters out the noisy
 // container/virt ones, and returns one IfaceIPs per real-looking
 // interface that has at least one displayable address. Within each
@@ -343,8 +337,8 @@ func isDockerBridge(name string) bool {
 }
 
 // dedupSort sorts ss in place and removes adjacent duplicates.
-// Helper for externalIPs which can see the same address on multiple
-// interfaces in some VPN configurations.
+// Helper for externalInterfaces, which can see the same address on
+// multiple interfaces in some VPN configurations.
 func dedupSort(ss *[]string) {
 	if len(*ss) < 2 {
 		return

@@ -271,7 +271,7 @@ test.describe('bulk-ops conflict prompt', () => {
     // merge path we exercise the bulk-ops route via Ctrl+C / V.
     await page.locator('[data-testid="fm-entry-merge-src"]').click();
     await page.locator('wash-app-fm').press('Control+c');
-    // Single click on a folder no longer updates path — we need
+    // Single click on a folder doesn't update path — we need
     // dirOfSelection to point at the dest's PARENT (router.fmRoot)
     // so the copy lands as merge-dst/merge-src... that's wrong.
     // We want to copy merge-src INTO merge-dst. Easier: select

@@ -18,6 +18,45 @@ import { test, expect } from '../fixtures/router';
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync, truncateSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { webcrypto } from 'node:crypto';
+
+// Crypto helpers ported from priv.spec.ts so the services test can
+// approve+unlock priv via the control socket (no UI in kiosk mode).
+const HKDF_INFO = 'wash-priv/password/v1';
+
+function b64encode(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString('base64');
+}
+function b64decode(s: string): Uint8Array {
+  return new Uint8Array(Buffer.from(s, 'base64'));
+}
+
+async function encryptPassword(
+  password: string,
+  bePubRaw: Uint8Array,
+): Promise<{ ciphertext: string; fe_pubkey: string; nonce: string }> {
+  const subtle = webcrypto.subtle;
+  const bePub = await subtle.importKey('raw', bePubRaw, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+  const fe = await subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const shared = new Uint8Array(await subtle.deriveBits({ name: 'ECDH', public: bePub }, fe.privateKey, 256));
+  const hkdfKey = await subtle.importKey('raw', shared, { name: 'HKDF' }, false, ['deriveKey']);
+  const aesKey = await subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: new TextEncoder().encode(HKDF_INFO) },
+    hkdfKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt'],
+  );
+  const nonce = webcrypto.getRandomValues(new Uint8Array(12));
+  const pwBytes = new TextEncoder().encode(password);
+  const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv: nonce }, aesKey, pwBytes));
+  const fePubRaw = new Uint8Array(await subtle.exportKey('raw', fe.publicKey));
+  return {
+    ciphertext: b64encode(ct),
+    fe_pubkey: b64encode(fePubRaw),
+    nonce: b64encode(nonce),
+  };
+}
 
 // Canonical stub responses. Two units: cups is active (Stop visible),
 // foo is inactive (Start visible). Descriptions populate the
@@ -136,29 +175,31 @@ test.describe('wash-services (stubbed systemctl)', () => {
     const app = page.locator('wash-app-services');
     await expect(app.locator('[data-testid="srv-row-foo.service"]')).toBeVisible();
 
-    // Trigger the action. wash-priv pops an approval window because
-    // we enabled fakesudo. The priv window is part of the chrome
-    // surface, not nested in the services app.
+    // Trigger the action; wash-priv (a background service since M7)
+    // gets a fresh request. This test runs in kiosk mode with no
+    // session app, so the sidebar UI isn't present — we drive priv
+    // approve + unlock via the control socket like priv.spec does.
     await app.locator('[data-testid="srv-start-foo.service"]').click();
 
-    const priv = page.locator('wash-app-priv');
-    await expect(priv).toBeVisible({ timeout: 5000 });
+    // Resolve the wash-priv instance for direct addressing.
+    const privLaunched = await router.controlRequest({ t: 'launch', app_id: 'com.wash.priv' });
+    expect(privLaunched.t).toBe('launched');
+    const privInst = privLaunched.instance_id as string;
 
-    // The new request appears in priv's queue with a per-row Approve
-    // button; we don't know the req_id in advance (BE-generated) so
-    // we target the first one by testid prefix.
-    const approve = priv.locator('[data-testid^="priv-req-approve-"]').first();
-    await expect(approve).toBeVisible({ timeout: 5000 });
-    // force: true — the password modal opens immediately on click
-    // and overlays the button, which trips Playwright's post-click
-    // stability check even though the click landed.
-    await approve.click({ force: true });
-
-    // wash-priv is locked, so clicking Approve opens the password
-    // modal. Fill the fakesudo-accepted password and submit.
-    await expect(priv.locator('[data-testid="priv-pw-modal"]')).toBeVisible({ timeout: 5000 });
-    await priv.locator('[data-testid="priv-pw-input"]').fill('test123');
-    await priv.locator('[data-testid="priv-pw-submit"]').click({ force: true });
+    // services' Start path uses run_inline with NoPrompt; wash-priv
+    // auto-prompts as soon as it ingests the request because priv is
+    // locked. The need_password log line carries both the pubkey and
+    // the req_id, so a single wait gets us both.
+    const np = await router.waitForLog(
+      /wash-priv: need_password be_pubkey=([A-Za-z0-9+/=]+) \(auto-prompt req=(\S+)\)/,
+      5_000,
+    );
+    const bePub = b64decode(np.match(/be_pubkey=([A-Za-z0-9+/=]+)/)![1]);
+    const enc = await encryptPassword('test123', bePub);
+    await router.controlRequest({
+      t: 'msg', instance_id: privInst,
+      data: { kind: 'unlock', ciphertext: enc.ciphertext, fe_pubkey: enc.fe_pubkey, nonce: enc.nonce },
+    });
 
     // Wait for the shim to log the call. fakesudo execs systemctl,
     // and our stub appends "start foo.service" to action.log.

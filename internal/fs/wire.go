@@ -1,6 +1,5 @@
-// Reply payloads for fs-touching apps (wash-fm, wash-edit). These
-// structs were duplicated across the two BEs; hosting them here keeps
-// the wire shape consistent.
+// Reply payloads for fs-touching apps (wash-fm, wash-edit). Hosting
+// them here keeps the wire shape consistent across both BEs.
 //
 // Kind and ID are NOT included — the sdk.Bus envelope owns those.
 // A handler returns ListReply{Path: ..., Entries: ...} and the bus

@@ -48,9 +48,6 @@ const (
 	//   - own-FE → own-BE: neither set
 	//   - cross-app source: To set by sender
 	//   - cross-app delivery: From set by router (router-attested)
-	//
-	// Earlier versions split this into two tags (app_msg + app_msg.send.to);
-	// they were structurally identical and have been unified.
 	TEvtAppMsg = "app_msg"
 
 	// Clipboard — router holds a single in-memory entry. Apps set,

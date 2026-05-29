@@ -216,8 +216,7 @@ func conflictHandler(c *sdk.Conn) func(bulkops.ConflictInfo) bulkops.ConflictAct
 
 // jobUpdateHandler builds the onUpdate callback that pushes every
 // queue transition into the StateService state. The router log emit
-// (used by e2e waitForLog assertions) stays so existing tests can
-// observe transitions.
+// is what e2e waitForLog assertions observe transitions through.
 func jobUpdateHandler() func(bulkops.Job) {
 	return func(j bulkops.Job) {
 		log.Printf("bulk-ops job=%s op=%s status=%s done=%d total=%d err=%q",

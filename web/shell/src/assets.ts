@@ -1,8 +1,6 @@
 // Bundle accumulator. The router ships an app's JS bundle as raw
 // bytes on a kind=bundle channel; the WS handler routes raw frames
 // through here, and ChannelUnbind triggers a dynamic import.
-//
-// Replaces the v0.0 base64-in-JSON asset.fetch / asset.deliver pipe.
 
 import { wlog } from './diag';
 

@@ -1176,11 +1176,10 @@ const Pager: Component<{
             // createMemo makes the filter reactive: it re-runs when
             // any of props.windows / props.screen change, and the
             // result is a stable accessor that PagerCell can read.
-            // Without this, the filter was a one-shot snapshot taken
-            // at child-mount time — windows that landed in the store
-            // after the cell mounted (snapshot replay, drags, new
-            // spawns) never showed up, producing the "random" outlines
-            // the user saw on browser refresh.
+            // Without this the filter would be a one-shot snapshot taken
+            // at child-mount time, so windows that land in the store
+            // after the cell mounts (snapshot replay, drags, new
+            // spawns) would never show up.
             const visible = createMemo(() => {
               const s = props.screen();
               const cl = c.vx * s.w;

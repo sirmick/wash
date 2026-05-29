@@ -49,11 +49,10 @@ func pickerTestSetup(t *testing.T, sessions []Session, spawnResp func(Identity, 
 			// fake registry holding `n` sessions and set MaxPerUID
 			// via the spawn trap.
 			MaxPerUID: 0,
-			// Real RouterBinary isn't used because we intercept via
-			// spawnFor → s.spawner.Spawn — but Spawner.Spawn is a
-			// concrete method, not an interface. So instead we
-			// inject the spawn trap as the Spawner field directly
-			// in a follow-up; for now use serverWithSpawnFunc.
+			// RouterBinary is empty: routing-decision tests never
+			// reach the actual exec. Spawner.Spawn is a concrete
+			// method (not an interface), so spawn-behaviour tests
+			// construct a Spawner inline instead (TestSpawnCap*).
 		},
 		Killer: trap.kill,
 	})

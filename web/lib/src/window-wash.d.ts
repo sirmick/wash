@@ -1,7 +1,7 @@
 // Ambient declaration for `window.wash` — the shell-provided API
 // every wash web app uses to talk back to the router. Living in
 // @wash/ui means importing `@wash/ui` in any app picks up the type
-// automatically; apps no longer redeclare partial versions of this.
+// automatically, so this is the one declaration apps share.
 //
 // The implementation lives in web/shell/src/main.tsx; this file is
 // the single source of truth for the type.

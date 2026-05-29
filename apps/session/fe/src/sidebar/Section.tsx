@@ -4,9 +4,8 @@
 // State is binary: `expanded` or `collapsed`. The Sidebar's auto-
 // expand-on-event behaviour fires for collapsed sections only; a
 // user who collapses a section after an event ticks accepts that
-// the next event will re-open it. (Earlier drafts had a third
-// `pinned-closed` state but the pin metaphor confused users — the
-// auto-expand is the only behaviour distinction worth modelling.)
+// the next event will re-open it. The auto-expand is the only
+// behaviour distinction worth modelling.
 
 import type { Component, JSX } from 'solid-js';
 import { Show } from 'solid-js';

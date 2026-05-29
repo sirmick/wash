@@ -731,7 +731,7 @@ function termBodyForStatus(status: 'idle' | 'running' | 'success' | 'failure'): 
 defineWashApp('wash-app-packages', (props) => <App {...props} />, {
   // position:relative kept as defense in depth for in-app overlays.
   // Menus themselves portal to document.body with position:fixed,
-  // so they no longer depend on the host being a containing block.
+  // so they don't depend on the host being a containing block.
   style:
     'display:flex;flex-direction:column;width:100%;height:100%;box-sizing:border-box;background:#181828;color:#eee;overflow:hidden;position:relative',
 });

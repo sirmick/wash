@@ -57,6 +57,11 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       transition: 'transform 180ms cubic-bezier(.2,.7,.2,1)',
       transform: isOpen() ? 'translateX(0)' : `translateX(${SIDEBAR_OPEN_WIDTH}px)`,
       'box-shadow': '-4px 0 16px rgba(0,0,0,0.35)',
+      // Hidden mode keeps the panel translated off-screen but its
+      // 300px-wide bounding box still intercepts pointer events on
+      // the right edge — disable hit-testing entirely while hidden so
+      // windows underneath stay interactive.
+      'pointer-events': isOpen() ? ('auto' as const) : ('none' as const),
     };
     if (props.taskbarPos === 'top') {
       base.top = `${props.taskbarHeight}px`;

@@ -429,13 +429,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     selectionAnchor = null;
 
     // Eager state commit: path + input + history move now, before
-    // any BE round-trip. Old code queued the navigation in
-    // pendingSelectAfter when the parent listing wasn't loaded yet,
-    // then re-entered from the list_ok handler. That single-slot
-    // queue was easy to lose under fs_event-driven re-lists or
-    // concurrent navigations, leaving the path bar showing the new
-    // path but the tree stuck on the old one. We instead commit
-    // intent immediately; visibleRows lights up as listings arrive.
+    // any BE round-trip. We commit intent immediately rather than
+    // queueing the navigation until the parent listing loads, because
+    // a single-slot queue is easy to lose under fs_event-driven
+    // re-lists or concurrent navigations (path bar shows the new path
+    // but the tree sticks on the old one). visibleRows lights up as
+    // listings arrive.
     const entry = findEntry(p);  // may be null if par isn't listed
     setPath(p);
     setSelectedEntry(entry);
@@ -874,8 +873,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [dropMenu, setDropMenu] = createSignal<{ x: number; y: number; srcs: string[]; targetDir: string } | null>(null);
 
   // Drag payload format. We carry a JSON array of source paths
-  // under application/x-wash-paths (plural — distinct from the
-  // singular MIME the old shell-pre-multi-select code used). A
+  // under application/x-wash-paths (plural). A
   // single drag from an unselected row carries one path; dragging
   // a row that's part of a multi-selection carries every selected
   // path. Drop handlers branch on length: n>1 always routes to
@@ -1307,8 +1305,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   });
 
   // visibleCount is the total entries visible right now. Updates
-  // automatically as folders expand/collapse — replacing the old "X
-  // entries (just the last list)" status that never refreshed.
+  // automatically as folders expand/collapse.
   const visibleCount = createMemo(() => visibleRows().length);
 
   // statusBar text — derived. While statusOverride is set (drop /
@@ -1459,8 +1456,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       }
     };
     // Click-outside dismissal is owned by the Menu component
-    // itself ([[@wash/ui menu]]); we no longer need a host-level
-    // handler.
+    // itself ([[@wash/ui menu]]); no host-level handler is needed.
     props.host.addEventListener('wash:msg', onMsg);
     props.host.addEventListener('wash:state', onState);
     props.host.addEventListener('keydown', onKey);
@@ -1612,11 +1608,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                   onRowClick(row.path, row.entry, ev);
                 }}
                 onDblClick={() => {
-                  // Native dblclick — browser's timing window is
-                  // stricter than the timer-based heuristic we
-                  // used to keep here, which sometimes caught
-                  // pairs of intentional single clicks as
-                  // double-clicks on slow input. Single-click
+                  // Native dblclick — the browser's timing window
+                  // avoids catching pairs of intentional single
+                  // clicks as double-clicks on slow input. Single-click
                   // navigation never happens here; this is the
                   // only path that calls selectPath for a row.
                   if (row.entry.type === 'symlink') {

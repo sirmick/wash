@@ -5,9 +5,8 @@
 // server fans them to stdout, a log file, and any admin clients
 // (e.g. `pnpm cli tail`).
 //
-// Public API is intentionally unchanged from the prior HTTP version
-// (log, pushBytes, flush, installErrorCapture) — bridges and main.ts
-// keep working without edits.
+// Public API: log, pushBytes, flush, installErrorCapture — consumed
+// by the bridges and main.ts.
 //
 // Resilience: if the WS isn't open yet, frames queue in memory and
 // flush on connect. If the WS closes (server restart), reconnect with

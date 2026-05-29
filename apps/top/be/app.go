@@ -41,8 +41,8 @@ const (
 
 // ---- wire payloads ----
 //
-// Plain Go scalars + maps + slices. The whole pipeline is JSON now;
-// the bus marshals via encoding/json and the FE parses the same.
+// Plain Go scalars + maps + slices. The whole pipeline is JSON: the
+// bus marshals via encoding/json and the FE parses the same.
 
 type Snapshot struct {
 	Kind     string     `json:"kind"`
@@ -360,23 +360,6 @@ func classifySignalErr(err error) string {
 		return "no_such_process"
 	}
 	return "signal_failed"
-}
-
-// toInt coerces whatever JSON-decoded numeric came through (float64
-// is the common case; uint64/int64 covered for pre-typed values)
-// into a plain int. Returns 0 for non-numeric values.
-func toInt(v any) int {
-	switch x := v.(type) {
-	case uint64:
-		return int(x)
-	case int64:
-		return int(x)
-	case int:
-		return x
-	case float64:
-		return int(x)
-	}
-	return 0
 }
 
 // topIcon — Lucide sprite symbol name. See cmd/wash-fm/main.go's

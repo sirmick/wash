@@ -6,9 +6,6 @@
 // Scope is deliberately narrow: CPU aggregate + memory only. The per-
 // process walk, network counters, disk counters, and load averages
 // remain in apps/top/be/proc.go — wash-top is the sole consumer.
-// Extracted when wash-session became the second consumer of just the
-// cpu+mem subset (per the [[no premature service]] memory rule: a
-// second consumer is the right time to lift a library out).
 package proc
 
 import (

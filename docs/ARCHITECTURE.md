@@ -71,6 +71,14 @@ program plus an embedded frontend (FE) web-component bundle.
   Chosen over tiling.
 - The shell runtime is a **compositor that hosts web components in windows plus
   the WS mux** — nothing more.
+- **Right sidebar** lives in the session app's chrome (not the shell).
+  Houses ambient/peripheral status: virtual-desktop pager, host
+  CPU/mem load, notification history, bulk-ops queue, priv approval
+  queue. Widgets subscribe to background services via the session
+  BE gateway (which provides router-attested sender attribution that
+  shell-originated cross-app sends lack). Modal overlays (bulk
+  conflicts, priv password handshake) are anchored at the screen
+  level, not nested in the sidebar — too dense for ~300px.
 - App contract = a **web component** (in-process, Shadow DOM CSS isolation,
   framework-agnostic internally), defined transport-agnostically so a future
   untrusted app could be moved to an iframe binding of the same contract. Not a
@@ -106,11 +114,30 @@ program plus an embedded frontend (FE) web-component bundle.
 
 ## Services vs. apps
 
-- **App** = window + FE + manifest + menu entry; user-launchable.
-- **Service** = plumbing apps consume; no window/menu/manifest.
-- Resolved as **one service contract with two transport bindings** (in-router
-  goroutine vs. out-of-process app over the Unix socket) — indistinguishable to
-  the SDK, shell, and registry. An external app can shadow a builtin by id.
+Three tiers, distinguished by `manifest.surface`:
+
+- **`window` apps** — windowed processes the user launches from the
+  start menu / palette. fm, term, edit, about, top, journal, syslogs,
+  services, packages.
+- **`desktop` apps** — exactly one (the session leader). Owns the
+  desktop chrome: banner, taskbar, start menu, palette, right
+  sidebar. Filtered from the launcher (autoboots; the user doesn't
+  pick it).
+- **`background` services** — singleton processes with no window, no
+  FE bundle, no launcher entry. Autoboot on first shell connect.
+  Other apps consume them via cross-app `app_msg`; their UI (if any)
+  lives in the session app's sidebar via the
+  subscribe-with-snapshot pattern (`sdk.StateService`). The v1
+  background services are wash-notify (notification authority,
+  persistence + transient toast emit), wash-bulk (queued file ops),
+  wash-priv (privilege gateway). Future audio mixer, clipboard
+  daemon, network/battery agent take the same slot.
+- The **router service** option (in-router goroutine bound by the
+  same wire contract) is still on the table for things that
+  fundamentally need router-process visibility — but the background
+  apps tier replaces most "service" use cases without coupling the
+  service's lifecycle to the router's.
+- An external app can shadow a builtin by id.
 - **pty** — originally specified as a native router service with
   router-owned lifetime, motivated by reattach/survive-disconnect. The
   **v0.1 implementation** keeps pty *inside the terminal app process*

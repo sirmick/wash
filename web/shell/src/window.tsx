@@ -366,8 +366,8 @@ export function FloatingWindow(props: WindowProps) {
   );
 }
 
-// Keep the symbol around even though raise* is gone — older callers
-// (the desktop button click path) reach for it.
+// Re-exported for the desktop button click path, which raises a
+// window before invoking a wire helper.
 export { raiseLocal };
 
 // CrashPane renders the in-place tombstone for a window whose BE

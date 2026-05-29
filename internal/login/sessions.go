@@ -280,6 +280,5 @@ func SockPath(runRoot string, uid uint32, sessid string) string {
 // Compile-time assertion that ProcRegistry satisfies SessionRegistry.
 var _ SessionRegistry = (*ProcRegistry)(nil)
 
-// statErr is a sentinel for "/proc entry isn't a file we can read."
-// Returned by the parser; never propagated to callers.
+// Keep the io/fs import referenced.
 var _ = fs.ErrNotExist

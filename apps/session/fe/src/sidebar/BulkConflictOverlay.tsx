@@ -1,6 +1,5 @@
 // BulkConflictOverlay is a screen-anchored modal that pops when the
-// bulk service reports a pending conflict. Replaces the per-job
-// modal that used to live inside the (now-deleted) wash-bulk window.
+// bulk service reports a pending conflict.
 //
 // UI shape mirrors Windows Explorer / GNOME Files conventions:
 //

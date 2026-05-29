@@ -1,0 +1,14 @@
+#!/bin/sh
+# Remove wash-system / wash on full uninstall. apk runs post-deinstall
+# on real removals (not on upgrades).
+
+set -e
+
+if getent passwd wash-system >/dev/null 2>&1; then
+    deluser wash-system >/dev/null 2>&1 || true
+fi
+if getent group wash >/dev/null 2>&1; then
+    delgroup wash >/dev/null 2>&1 || true
+fi
+rm -rf /etc/wash
+exit 0

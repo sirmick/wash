@@ -379,9 +379,9 @@ func onAppMsg(c *sdk.Conn, _ uint32, data any) {
 		//
 		// Args come from the FE payload, sourced from the source app's
 		// manifest.root_variant.args (e.g. wash-term ships ["--login"]).
-		// Nothing here is per-app special-cased anymore — the launcher
-		// FE is the single source of truth for which apps have a root
-		// variant and what argv they prefer.
+		// No app is special-cased here — the launcher FE is the single
+		// source of truth for which apps have a root variant and what
+		// argv they prefer.
 		appID, _ := m["app_id"].(string)
 		if appID == "" {
 			return

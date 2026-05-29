@@ -214,8 +214,8 @@ func (s *State) broadcast(c *sdk.Conn, payload map[string]any) {
 }
 
 // stateSnapshotLocked returns the current full state in wire shape.
-// Caller MUST hold s.mu. Mirrors what SendStateSnapshot used to ship
-// to the (now-gone) own-FE.
+// Caller MUST hold s.mu. This is the catch-all snapshot that
+// subscribers receive on subscribe and via SendStateSnapshot.
 func (s *State) stateSnapshotLocked() map[string]any {
 	out := map[string]any{
 		"kind":   "state",
@@ -908,13 +908,10 @@ func (s *State) requestPrepareSpawn(c *sdk.Conn, displayReq, spawnArgs *Request)
 		startedAt:     time.Now(),
 	}
 	s.mu.Unlock()
-	// We store spawnArgs alongside via the displayReq's mutation;
-	// since displayReq is the same pointer the FE saw, we leave it
-	// alone and stash spawnArgs in a closure-style side-map. For
-	// simplicity in this commit, we instead just look up displayReq
-	// in HandlePrepareSpawnResult and recompute args there from
-	// displayReq.Kind. (Future refactor if a Kind learns to pivot
-	// args mid-flight.)
+	// We don't carry spawnArgs through the pending record:
+	// HandlePrepareSpawnResult looks up displayReq and recomputes the
+	// exec args there from displayReq.Kind. Only spawnArgs.AppID is
+	// needed at PrepareSpawn time.
 	_ = c.PrepareSpawn(wireReqID, spawnArgs.AppID)
 }
 
@@ -1184,33 +1181,3 @@ func stripControl(s string) string {
 	return string(out)
 }
 
-// decodeBase64 is a defensive wrapper: the FE sends ciphertext /
-// pubkey / nonce as base64 strings; some callers occasionally hand
-// in raw bytes. Accept either.
-func decodeBase64(v any) []byte {
-	switch x := v.(type) {
-	case string:
-		// Lazy import: handled inline to avoid a top-level encoding/base64
-		// import dance through too many files.
-		return decodeBase64String(x)
-	case []byte:
-		return x
-	}
-	return nil
-}
-
-// decodeBase64String is the actual decoder. Standard or URL-safe both
-// supported; padding required.
-func decodeBase64String(s string) []byte {
-	// Tolerate base64url by translating to base64-std.
-	s = strings.ReplaceAll(s, "-", "+")
-	s = strings.ReplaceAll(s, "_", "/")
-	for len(s)%4 != 0 {
-		s += "="
-	}
-	b, err := base64.StdEncoding.DecodeString(s)
-	if err != nil {
-		return nil
-	}
-	return b
-}

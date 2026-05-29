@@ -215,7 +215,7 @@ type saveStateReq struct {
 // whenever a fswatch.Sub reports a change. Unsolicited (Emit), not
 // a reply, so no id.
 type fsEvent struct {
-	Op   string `  json:"op"`
+	Op   string `json:"op"`
 	Path string `json:"path"`
 }
 
