@@ -12,6 +12,31 @@
     <base href="%BASE_URL%tinyemu/" />
     <link rel="icon" href="%BASE_URL%wash-logo.svg" type="image/svg+xml" />
     <title>wash — TinyEMU RISC-V</title>
+
+    <!-- Preload the heavy boot-critical artifacts so they start
+         fetching in parallel with jslinux + WASM compile, instead of
+         only after jslinux's vm_start() walks the cfg and asks for
+         them at ~+500ms. Empirically this shaves ~300-500ms off the
+         cold-boot wall clock; relative to <base> = tinyemu/ so the
+         hrefs resolve to %BASE_URL%tinyemu/... in both dev and prod.
+
+         `as="fetch"` matches how the WASM-side XHRs ultimately request
+         these; same-origin so no `crossorigin` attribute (would cause
+         the preload to be ignored for non-CORS XHRs).
+
+         We don't preload every rootfs chunk — kernel touches blk0-3
+         on the way to /sbin/init; later chunks lazy-load on demand.
+         If you change the rootfs layout, retune. -->
+    <link rel="preload" as="fetch" href="wash-riscv64.cfg" />
+    <link rel="preload" as="fetch" href="opensbi-fw_jump.bin" />
+    <link rel="preload" as="fetch" href="wash-kernel.bin" />
+    <link rel="preload" as="fetch" href="riscvemu64-wasm.wasm" />
+    <link rel="preload" as="fetch" href="wash-rootfs/blk.txt" />
+    <link rel="preload" as="fetch" href="wash-rootfs/blk000000000.bin" />
+    <link rel="preload" as="fetch" href="wash-rootfs/blk000000001.bin" />
+    <link rel="preload" as="fetch" href="wash-rootfs/blk000000002.bin" />
+    <link rel="preload" as="fetch" href="wash-rootfs/blk000000003.bin" />
+
     <link href="style.css" rel="stylesheet" type="text/css" />
     <style>
       html, body {

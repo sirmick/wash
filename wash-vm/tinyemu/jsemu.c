@@ -387,10 +387,21 @@ static void init_vm_drive(void *arg)
 
     if (p->drive_count > 0) {
         assert(p->drive_count == 1);
+        /* wash patch: the cfg gives drive0.file as a path relative
+           to the cfg's directory (e.g. "wash-rootfs/blk.txt"), but
+           block_device_init_http takes the URL verbatim and uses it
+           BOTH as the manifest fetch URL AND as the chunk URL base.
+           Without joining against cfg_filename, the manifest fetch
+           ends up resolved against document.baseURI (which depends
+           on <base href>) — under a GH-Pages-style subpath the first
+           attempt 404s on /tinyemu/wash-rootfs/blk.txt instead of
+           /wash/tinyemu/.... temu.c:747 already does this join for
+           the native build; the jsemu init path was missing it. */
+        char *drive_url = get_file_path(p->cfg_filename,
+                                        p->tab_drive[0].filename);
         p->tab_drive[0].block_dev =
-            block_device_init_http(p->tab_drive[0].filename,
-                                   131072,
-                                   init_vm, s);
+            block_device_init_http(drive_url, 131072, init_vm, s);
+        free(drive_url);
     } else {
         init_vm(s);
     }
