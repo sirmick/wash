@@ -291,8 +291,32 @@ build stays fast.
 
 ## Packaging (deb / rpm / apk)
 
-Native distro packages are built in clean Docker images across a
-distro matrix (Ubuntu, Debian, Fedora, Alpine):
+### Install the latest release
+
+Every tagged release ships native packages for all four distros.
+These URLs always resolve to the latest:
+
+```bash
+# Ubuntu / Debian
+wget https://github.com/sirmick/wash/releases/latest/download/wash-ubuntu-24.04-amd64.deb
+sudo apt install ./wash-ubuntu-24.04-amd64.deb
+
+wget https://github.com/sirmick/wash/releases/latest/download/wash-debian-12-amd64.deb
+sudo apt install ./wash-debian-12-amd64.deb
+
+# Fedora
+sudo dnf install https://github.com/sirmick/wash/releases/latest/download/wash-fedora-40-amd64.rpm
+
+# Alpine
+wget https://github.com/sirmick/wash/releases/latest/download/wash-alpine-3.21-amd64.apk
+sudo apk add --allow-untrusted ./wash-alpine-3.21-amd64.apk
+```
+
+All four are stable filenames — they don't include the version. The
+release page at <https://github.com/sirmick/wash/releases/latest> has
+the same downloads if you'd rather click than `wget`.
+
+### Build from source
 
 ```bash
 ./packaging/run_matrix.sh                       # all rows → dist/packages/<tag>/
@@ -306,7 +330,7 @@ distro-integration tests, and a boot check. Packaging sources live in
 `debian/`, `rpm/wash.spec`, and `alpine/APKBUILD`; the package installs
 the `wash-*` binaries into `/usr/bin` and creates the `wash` group +
 `wash-system` user for the multi-user front door. CI runs the same
-matrix and attaches `.deb`/`.rpm`/`.apk` artifacts to tagged releases
+matrix and attaches the artifacts to tagged releases
 ([`.github/workflows/matrix.yml`](.github/workflows/matrix.yml)). The
 distro backends and install layout are documented in
 [docs/MATRIX.md](docs/MATRIX.md).
