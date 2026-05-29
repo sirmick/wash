@@ -93,11 +93,18 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # wash-vm/web is intentionally outside the pnpm workspace
-      # (different stack — vite + tsc only, no @wash/* deps), so
-      # install its deps separately.
+      # (different stack — vite + tsc only, no @wash/* deps), but
+      # the root pnpm-workspace.yaml's reach means a plain
+      # `pnpm install` here would walk UP, treat the workspace as
+      # the install target, and no-op for wash-vm/web (left with
+      # an empty node_modules and `vite` not on PATH for the next
+      # step). --ignore-workspace forces pnpm to treat the cwd
+      # package.json as the install root. No lockfile is checked
+      # in for wash-vm/web yet — once it stabilises we can add
+      # --frozen-lockfile, until then accept a fresh resolve.
       - name: pnpm install (wash-vm/web)
         working-directory: wash-vm/web
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --ignore-workspace --no-frozen-lockfile
 
       - name: Build wash shell
         run: pnpm -F @wash/shell build
