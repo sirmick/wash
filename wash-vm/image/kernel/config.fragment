@@ -34,11 +34,29 @@ CONFIG_RISCV_ISA_FALLBACK=y
 # CONFIG_RISCV_ISA_V is not set
 
 # ─── 2. Block + filesystems ──────────────────────────────────────────
-# Bellard's kernel mounts ext2 via the ext4 driver (EXT4_USE_FOR_EXT2).
-# We follow suit so rootfstype=ext2 in cmdline is served by ext4.ko —
-# matches his proven path and keeps the door open for ext4 rootfs later.
+# rootfs lives on a read-only squashfs (compressed ~3-4× over the
+# uncompressed tree) overlaid by a tmpfs upper layer via overlayfs.
+# The /init binary baked into the initramfs (see section 9 below)
+# mounts:
+#     /dev/vda    squashfs   ro    →  /mnt/ro
+#     none        tmpfs            →  /mnt/rw
+#     overlay     overlay    rw    →  /mnt/root  (lower=/mnt/ro upper=/mnt/rw/up workdir=/mnt/rw/wk)
+# and then switch_roots into /mnt/root. Writes go to RAM only;
+# every page reload is a fresh VM anyway. ext2/ext4 stays compiled
+# in only because buildroot's host tools still produce an ext2 we
+# could fall back to in dev — strip if you're truly stable on squashfs.
 CONFIG_BLOCK=y
 CONFIG_BLK_DEV=y
+# SQUASHFS lives under MISC_FILESYSTEMS in the kernel kconfig tree;
+# without enabling the parent menu, olddefconfig silently strips
+# SQUASHFS even if we set it explicitly here. Learned the hard way.
+CONFIG_MISC_FILESYSTEMS=y
+CONFIG_SQUASHFS=y
+# LZ4 over ZSTD: ~10% looser packing but ~8-10× faster decompress
+# under the WASM-emulated CPU — cold boot wall clock dominates by
+# squashfs decompress, not network transfer.
+CONFIG_SQUASHFS_LZ4=y
+CONFIG_OVERLAY_FS=y
 CONFIG_EXT4_FS=y
 CONFIG_EXT4_USE_FOR_EXT2=y
 CONFIG_TMPFS=y
@@ -117,7 +135,7 @@ CONFIG_NETLINK_DIAG=y
 # CONFIG_DRM is not set
 # CONFIG_FB is not set
 # CONFIG_MODULES is not set
-# CONFIG_BLK_DEV_INITRD is not set
+CONFIG_BLK_DEV_INITRD=y
 # CONFIG_SWAP is not set
 # CONFIG_AIO is not set
 # CONFIG_KEXEC is not set
@@ -139,3 +157,22 @@ CONFIG_NETLINK_DIAG=y
 #                    via DTB; cheap and adds another path.
 CONFIG_CRYPTO_JITTERENTROPY=y
 CONFIG_RANDOM_TRUST_BOOTLOADER=y
+
+# ─── Initramfs ───────────────────────────────────────────────────────
+# A baked-in cpio archive that contains a single /init binary. The
+# kernel decompresses it into rootfs (the in-RAM ramfs) at boot, runs
+# /init, which then mounts the real rootfs (squashfs from /dev/vda)
+# over a tmpfs upper layer via overlayfs and switch_roots into it.
+#
+# CONFIG_INITRAMFS_SOURCE points at a path in the kernel build tree
+# — kernel/Dockerfile stages our prebuilt init binary at that exact
+# path before invoking make. The kernel build then cpio's it,
+# compresses (gzip default), and embeds it as a built-in initramfs.
+#
+# Sized: ~80-150 KiB (static-linked init using only raw syscalls
+# via musl-static — see kernel/init.c).
+CONFIG_INITRAMFS_SOURCE="/build/initramfs.cpio"
+# Compress the initramfs for storage; gzip is the default but kernel
+# also supports xz/zstd. Keep gzip — the init payload is tiny, gzip
+# is the smallest decompressor.
+CONFIG_RD_GZIP=y

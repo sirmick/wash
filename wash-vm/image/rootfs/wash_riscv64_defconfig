@@ -83,19 +83,21 @@ BR2_TARGET_GENERIC_PASSWD_METHOD="sha-256"
 # defconfig has produced .config.
 BR2_ROOTFS_OVERLAY="/overlay"
 
-BR2_TARGET_ROOTFS_EXT2=y
-BR2_TARGET_ROOTFS_EXT2_REV=1
-# 20M = wash multicall (~10.7 MiB) + buildroot base + post-build.sh
-# prunes (libstdc++/libgfortran/libgomp + offline sudo helpers, ~4
-# MiB saved) + comfortable 5 MiB slack. Earlier we tried 16M (8
-# chunks); ext2 metadata + a few packages we hadn't accounted for
-# left only ~400 KiB free, and the first time sudo / sshd / similar
-# tried to write tmpfile-style state the rootfs hit ENOSPC. The
-# saved chunks weren't worth the breakage. Squashfs + overlayfs is
-# the cleaner long-term answer (compress + read-only base + tmpfs
-# upper), separate change.
-BR2_TARGET_ROOTFS_EXT2_SIZE="20M"
+# squashfs (LZ4-compressed) is the on-wire rootfs format. Boot path:
+# kernel → initramfs /init → mount squashfs ro on /mnt/ro + tmpfs
+# upper + overlayfs → switch_root. Writes go to the tmpfs upper layer
+# only, so /var/log etc. never touch the squashfs blob — page reload
+# = fresh VM.
+#
+# Compression: LZ4 (not ZSTD or XZ). The emulated CPU inside the
+# WASM-built TinyEMU is ~50× slower than a native host at decompression,
+# so even though ZSTD packs ~10% tighter, LZ4 decompresses 8-10× faster
+# under emulation and shows up as several seconds saved in cold-boot
+# wall clock. Trade absolute bytes for emulated CPU cycles.
+BR2_TARGET_ROOTFS_SQUASHFS=y
+BR2_TARGET_ROOTFS_SQUASHFS4_LZ4=y
 # Post-build hook: see image/rootfs/post-build.sh. Buildroot runs it
-# with $1 = staged target/ dir, before mkfs.ext2 packs it.
+# with $1 = staged target/ dir, before mksquashfs packs it.
 BR2_ROOTFS_POST_BUILD_SCRIPT="/input/post-build.sh"
-# No tarball, no other formats — we just want the ext2.
+# No ext2, no tarball, no other formats — we just want the squashfs.
+# BR2_TARGET_ROOTFS_EXT2 is not set

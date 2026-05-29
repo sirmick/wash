@@ -13,29 +13,15 @@
     <link rel="icon" href="%BASE_URL%wash-logo.svg" type="image/svg+xml" />
     <title>wash — TinyEMU RISC-V</title>
 
-    <!-- Preload the heavy boot-critical artifacts so they start
-         fetching in parallel with jslinux + WASM compile, instead of
-         only after jslinux's vm_start() walks the cfg and asks for
-         them at ~+500ms. Empirically this shaves ~300-500ms off the
-         cold-boot wall clock; relative to <base> = tinyemu/ so the
-         hrefs resolve to %BASE_URL%tinyemu/... in both dev and prod.
-
-         `as="fetch"` matches how the WASM-side XHRs ultimately request
-         these; same-origin so no `crossorigin` attribute (would cause
-         the preload to be ignored for non-CORS XHRs).
-
-         We don't preload every rootfs chunk — kernel touches blk0-3
-         on the way to /sbin/init; later chunks lazy-load on demand.
-         If you change the rootfs layout, retune. -->
-    <link rel="preload" as="fetch" href="wash-riscv64.cfg" />
-    <link rel="preload" as="fetch" href="opensbi-fw_jump.bin" />
-    <link rel="preload" as="fetch" href="wash-kernel.bin" />
-    <link rel="preload" as="fetch" href="riscvemu64-wasm.wasm" />
-    <link rel="preload" as="fetch" href="wash-rootfs/blk.txt" />
-    <link rel="preload" as="fetch" href="wash-rootfs/blk000000000.bin" />
-    <link rel="preload" as="fetch" href="wash-rootfs/blk000000001.bin" />
-    <link rel="preload" as="fetch" href="wash-rootfs/blk000000002.bin" />
-    <link rel="preload" as="fetch" href="wash-rootfs/blk000000003.bin" />
+    <!-- Boot-critical assets used to be <link rel="preload">'d here.
+         Removed: WASM's _emscripten_async_wget3_data uses a vanilla
+         XHR with no CORS opt-in, so the browser never reused the
+         preloaded resources — every byte was fetched twice. With
+         squashfs the boot path is small enough that the natural
+         discover-and-fetch order at +500ms is fine; we'll revisit
+         once we have a way to make WASM reuse the preload cache
+         (likely needs an emscripten patch or a JS wrapper that
+         services the WASM XHR from a preloaded blob). -->
 
     <link href="style.css" rel="stylesheet" type="text/css" />
     <style>

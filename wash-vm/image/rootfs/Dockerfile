@@ -38,11 +38,11 @@ RUN chmod +x /input/post-build.sh && make wash_defconfig
 COPY overlay /overlay
 
 # Build. Buildroot does: fetch bootlin toolchain, build busybox, rsync
-# /overlay over staged target/, mkfs.ext2 → output/images/rootfs.ext2.
+# /overlay over staged target/, mksquashfs → output/images/rootfs.squashfs.
 # The overlay path is in the defconfig — env vars at make-time are
 # too late once `make wash_defconfig` has produced .config.
 RUN make -j"$(nproc)" \
- && cp output/images/rootfs.ext2 /rootfs.ext2 \
- && ls -lh /rootfs.ext2 \
+ && cp output/images/rootfs.squashfs /rootfs.squashfs \
+ && ls -lh /rootfs.squashfs \
  && ls -la output/target/usr/bin/wash 2>/dev/null && echo "wash binary present in target" \
     || echo "WARNING: wash binary missing from target"

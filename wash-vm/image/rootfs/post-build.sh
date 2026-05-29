@@ -63,30 +63,19 @@ prune usr/sbin/visudo
 prune usr/sbin/sudo_logsrvd
 prune usr/sbin/sudo_sendlog
 
-# --- 3. /var/log on tmpfs ---------------------------------------------
-# Buildroot's skeleton-init-sysv (also used by busybox-init) ships
-# /var/log as a SYMLINK to ../tmp — a space-saving convention from
-# the embedded-Linux era. That breaks the fstab approach: mounting
-# `tmpfs … /var/log` follows the symlink and re-mounts /tmp with
-# whatever mode we specified, shadowing the 1777 mount that fstab
-# line 5 set up. Result: /tmp becomes 0755 root:root → wash-router
-# can't bind /tmp/wash-${uid}.sock → wash-session dial fails → wash
-# never paints. Diagnosis fingerprint: `ls -la /tmp` returns only
-# "messages" (the syslogd write that landed in /tmp via the symlink).
-#
-# Fix: replace the symlink with a real dir. Then the fstab append
-# below lands /var/log on its own tmpfs, /tmp stays 1777, syslog
-# logs to /var/log/messages, nothing leaks into /tmp.
+# --- 3. /var/log -----------------------------------------------------
+# Replace the buildroot /var/log → ../tmp symlink with a real dir.
+# Used to matter for the ext2+fstab path (the tmpfs mount on
+# /var/log followed the symlink and clobbered /tmp's 1777 mount).
+# With squashfs+overlayfs we don't fstab-mount /var/log anyway —
+# writes go straight to the overlay's tmpfs upper layer — but a
+# real dir is still the right shape (the symlink would route
+# /var/log writes through /tmp's overlay node, which sort of works
+# but means logs share namespace with user temp files).
 if [ -L "$TARGET/var/log" ]; then
     echo "wash post-build: replacing /var/log symlink with real dir"
     rm -f "$TARGET/var/log"
     mkdir -p "$TARGET/var/log"
-fi
-
-if ! grep -q '^tmpfs[[:space:]]\+/var/log' "$TARGET/etc/fstab" 2>/dev/null; then
-    echo "wash post-build: adding /var/log tmpfs to /etc/fstab"
-    printf 'tmpfs\t\t/var/log\ttmpfs\tmode=0755,size=8m\t0\t0\n' \
-        >> "$TARGET/etc/fstab"
 fi
 
 # --- 4. Sanity ---------------------------------------------------------

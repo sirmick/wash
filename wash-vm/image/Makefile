@@ -18,7 +18,7 @@
 
 REPO_ROOT := $(abspath ../..)
 DIST      := $(CURDIR)/dist
-ROOTFS    := $(DIST)/rootfs.ext2
+ROOTFS    := $(DIST)/rootfs.squashfs
 KERNEL    := $(DIST)/Image
 FIRMWARE  := $(DIST)/fw_jump.bin
 WASM_JS   := $(DIST)/riscvemu64-wasm.js
@@ -102,10 +102,10 @@ install: $(SPLITIMG)
 	@if [ -f $(WASM_JS) ]; then cp -v $(WASM_JS) $(DEMO_PUB)/riscvemu64-wasm.js; fi
 	@if [ -f $(WASM_BIN) ]; then cp -v $(WASM_BIN) $(DEMO_PUB)/riscvemu64-wasm.wasm; fi
 	@if [ -f $(ROOTFS) ]; then \
-	  cp -v $(ROOTFS) $(DEMO_PUB)/wash-rootfs.ext2; \
-	  echo "  splitting rootfs into 2 MiB blocks for TinyEMU drive0..."; \
+	  cp -v $(ROOTFS) $(DEMO_PUB)/wash-rootfs.squashfs; \
+	  echo "  splitting rootfs into 512 KiB blocks for TinyEMU drive0..."; \
 	  rm -rf $(DEMO_PUB)/wash-rootfs && mkdir $(DEMO_PUB)/wash-rootfs; \
-	  $(SPLITIMG) $(DEMO_PUB)/wash-rootfs.ext2 $(DEMO_PUB)/wash-rootfs/ 2048; \
+	  $(SPLITIMG) $(DEMO_PUB)/wash-rootfs.squashfs $(DEMO_PUB)/wash-rootfs/ 512; \
 	  (cd $(DEMO_PUB)/wash-rootfs && ls blk*.bin > .preload); \
 	  echo "  wrote $$(ls $(DEMO_PUB)/wash-rootfs/blk*.bin | wc -l) chunks + .preload"; \
 	fi

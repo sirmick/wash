@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build rootfs.ext2 for the TinyEMU RISC-V demo (buildroot pipeline).
+# Build rootfs.squashfs for the TinyEMU RISC-V demo (buildroot pipeline).
 #
-# Output: $DIST/rootfs.ext2
+# Output: $DIST/rootfs.squashfs
 # Env: REPO_ROOT, DIST (set by image-rv/Makefile).
 #
 # Flow:
@@ -9,7 +9,7 @@
 #   2. Stage build context: defconfig + Dockerfile + overlay with
 #      wash binaries materialised as /usr/bin/wash + symlinks.
 #   3. docker build runs buildroot inside the container; output is
-#      /rootfs.ext2 (~5-8 MiB).
+#      /rootfs.squashfs (~5-8 MiB).
 #   4. docker cp the rootfs out.
 
 set -euo pipefail
@@ -133,11 +133,11 @@ echo "    (cold build: ~5-10 min; cached: seconds)"
 img_tag="wash-rootfs-rv-builder:latest"
 docker build -t "$img_tag" "$ctx"
 
-echo "==> extracting rootfs.ext2"
+echo "==> extracting rootfs.squashfs"
 cid=$(docker create "$img_tag")
 trap 'rm -rf "$work"; docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
-rm -f "$DIST/rootfs.ext2"
-docker cp "$cid:/rootfs.ext2" "$DIST/rootfs.ext2"
+rm -f "$DIST/rootfs.squashfs"
+docker cp "$cid:/rootfs.squashfs" "$DIST/rootfs.squashfs"
 
-size=$(du -h "$DIST/rootfs.ext2" | cut -f1)
-echo "==> $DIST/rootfs.ext2 ($size)"
+size=$(du -h "$DIST/rootfs.squashfs" | cut -f1)
+echo "==> $DIST/rootfs.squashfs ($size)"
