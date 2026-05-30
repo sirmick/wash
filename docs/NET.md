@@ -583,9 +583,10 @@ externally tested by `wash-vm/vm`); C/D are sketched.
   browser WS ⟷ the guest data plane (internal/wire). Verified: Alpine boots
   ~1.1s, `uname=Linux`, and a wash frame round-trips browser→WS→proxy→serial→
   guest→back (-race clean). *Guest data plane currently echoes frames.*
-- **B1 — the two wash apps + the VM serves everything** (§2.11, §3, §8.3). Built
-  as sub-rungs, each green on host message-injection tests (`wiretest.NewPipePair`
-  + the `busTestConn` pattern) — no VM needed until the gate:
+- **B1 — the two wash apps + the VM serves everything** (§2.11, §3, §8.3). ✅ DONE
+  (commits e06d9ae JSON codec, 5189423 B1a, 6e110b2 B1b+c, 3a5a2cb B1d, 66ec873
+  B1e-1, e8e9ed6 B1e-2). Built as sub-rungs, each green on host message-injection
+  tests (`wiretest.NewPipePair` + the `busTestConn` pattern) — no VM until the gate:
   - **B1a — `com.wash.netd`** (`apps/netd/be`): reserved-id background singleton
     service; links `internal/washnet`; `HandleFrom` `validate`/`stage`/`diff`/
     `apply` against the **fake Applier**; `sdk.StateService` for status/diff/job.
