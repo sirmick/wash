@@ -24,7 +24,7 @@ import {
   createBus,
   createWatch,
   DRAG_MIME, dragPayload, dropEffectFor, hasWashDrag, readDragPaths,
-  sortedFiltered as sortListing,
+  flattenTree,
   withReplacePrompt as runReplaceFlow,
 } from '@wash/fs-client';
 import {
@@ -1086,12 +1086,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   // ---- listings sort/filter ----
 
-  // The comparator + hidden-file filter live in @wash/fs-client's
-  // sort.ts (unit-tested). This adapter reads the reactive sort signals
-  // so callers (the visibleRows memo) still track them, then delegates.
-  const sortedFiltered = (entries: Entry[]): Entry[] =>
-    sortListing(entries, { key: sortKey(), desc: sortDesc(), showHidden: showHidden() });
-
   // treeRoot is the SHALLOWEST ancestor of path() that the FE has
   // successfully listed — i.e. the highest reachable directory in
   // the current confinement. In production fm lists "/" so
@@ -1117,81 +1111,22 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     return '/';
   });
 
-  // Flatten the visible tree into a list of {entry, path, depth} rows
+  // Flatten the visible tree into {entry, path, depth, childCount} rows
   // — Solid's <For> renders the list; toggling expand triggers a fresh
-  // computation here automatically.
-  const visibleRows = createMemo<Array<{ entry: Entry; path: string; depth: number; childCount?: number }>>(() => {
-    const rows: Array<{ entry: Entry; path: string; depth: number; childCount?: number }> = [];
-    // `walked` tracks directories the walk has descended into.
-    // Used by the fallback below to find ancestors of path() that
-    // the main walk couldn't reach (intermediate listing in flight)
-    // and avoid double-rendering when the fallback's start equals
-    // the main walk's start.
-    const walked = new Set<string>();
-    const walk = (p: string, depth: number) => {
-      const entries = listings[p];
-      if (!entries) return;
-      walked.add(p);
-      for (const e of sortedFiltered(entries)) {
-        const childPath = joinPath(p, e.name);
-        // For listed dirs, expose the entry count so the row's
-        // size column can render "12 items" instead of blank. We
-        // count ALL entries (including hidden) — Windows-explorer-
-        // style. "show hidden" only affects what's rendered, not
-        // the total.
-        let childCount: number | undefined;
-        if (e.type === 'dir' && listings[childPath]) {
-          childCount = listings[childPath].length;
-        }
-        rows.push({ entry: e, path: childPath, depth, childCount });
-        if (e.type === 'dir' && expanded[childPath] && listings[childPath]) {
-          walk(childPath, depth + 1);
-        }
-      }
-    };
-    const start = treeRoot();
-    if (listings[start]) walk(start, 0);
-
-    // Fallback render: if the walk from treeRoot didn't reach
-    // path()'s neighbourhood (some intermediate ancestor's
-    // list_ok hasn't landed yet), find the highest listed
-    // ancestor whose own contents the main walk didn't include
-    // and walk from there. This bridges the gap so the user sees
-    // the dir they navigated to even while ancestor listings are
-    // still in flight. Disappears as soon as the intermediates
-    // land and the normal walk reaches the chain.
-    //
-    // Walk up from path() through ancestors that are listed but
-    // the main walk didn't descend into. Stop at the first one
-    // that's missing a listing or that the main walk did walk —
-    // `fallbackRoot` is the *highest* still-unwalked listed
-    // ancestor, which is where the bridge walk should start so
-    // descendants render at their natural relative depth.
-    const cur = path();
-    if (cur) {
-      let fallbackRoot = '';
-      let p = cur;
-      while (p && listings[p] && !walked.has(p)) {
-        fallbackRoot = p;
-        const par = parentPath(p);
-        if (par === p) break;
-        p = par;
-      }
-      if (fallbackRoot) {
-        // Use the depth fallbackRoot would have under the main
-        // walk — so when ancestors fill in and the main walk
-        // reaches it, the rows stay at the same depth instead
-        // of shifting. Without this the dom flips depth, which
-        // moves the elements vertically and trips Playwright's
-        // stability gate on dblclick / click under heavy load.
-        const tr = start;
-        const segs = (s: string) => s.split('/').filter(Boolean).length;
-        const baseDepth = Math.max(0, segs(fallbackRoot) - segs(tr));
-        walk(fallbackRoot, baseDepth);
-      }
-    }
-    return rows;
-  });
+  // computation here automatically. The walk + in-flight fallback bridge
+  // live in @wash/fs-client's flattenTree (pure, unit-tested); this memo
+  // reads the reactive sources (sort signals, treeRoot, path) and passes
+  // the listings/expanded store proxies straight in — flattenTree runs
+  // synchronously here, so its listings[p]/expanded[x] reads stay tracked.
+  const visibleRows = createMemo<Array<{ entry: Entry; path: string; depth: number; childCount?: number }>>(() =>
+    flattenTree<Entry>({
+      listings,
+      expanded,
+      sort: { key: sortKey(), desc: sortDesc(), showHidden: showHidden() },
+      start: treeRoot(),
+      cur: path(),
+    }),
+  );
 
   // visibleCount is the total entries visible right now. Updates
   // automatically as folders expand/collapse.

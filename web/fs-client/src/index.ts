@@ -39,3 +39,6 @@ export type { SortKey, SortableEntry, SortOptions } from './sort.ts';
 
 export { withReplacePrompt } from './replace-flow.ts';
 export type { ReplaceFlowDeps } from './replace-flow.ts';
+
+export { flattenTree } from './tree.ts';
+export type { TreeRow, TreeInput } from './tree.ts';
