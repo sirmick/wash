@@ -184,15 +184,19 @@ jobs:
           for f in dist/packages/${{ matrix.tag }}/*; do
             # Compound .tar.xz / .tar.gz extensions need a two-step
             # strip; otherwise ${f##*.} loses the .tar half. .tgz
-            # remains one extension. Single switch covers all four
-            # current matrix outputs.
+            # remains one extension.
             case "$f" in
               *.tar.xz) ext="tar.xz" ;;
               *.tar.gz) ext="tar.gz" ;;
               *)        ext="${f##*.}" ;;
             esac
-            cp  "$f" "dist/packages/${{ matrix.tag }}/wash-${VER}-${{ matrix.tag }}.${ext}"
-            mv  "$f" "dist/packages/${{ matrix.tag }}/wash-${{ matrix.tag }}.${ext}"
+            versioned="dist/packages/${{ matrix.tag }}/wash-${VER}-${{ matrix.tag }}.${ext}"
+            stable="dist/packages/${{ matrix.tag }}/wash-${{ matrix.tag }}.${ext}"
+            # Skip if either side already matches — openwrt's tarball
+            # is born with the stable name, so the mv would otherwise
+            # error with "same file".
+            [ "$f" = "$versioned" ] || cp "$f" "$versioned"
+            [ "$f" = "$stable" ]    || mv "$f" "$stable"
           done
           ls -la dist/packages/${{ matrix.tag }}/
 
