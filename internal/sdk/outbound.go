@@ -381,3 +381,47 @@ func (c *Conn) ClipboardGet(ctx context.Context) (string, []byte, error) {
 		return r.mime, r.data, r.err
 	}
 }
+
+// PublishIngress registers an HTTP/WS backend this app's BE is serving
+// and returns the public base path (e.g. "/app/<token>/") the FE
+// should load in its iframe. The router reverse-proxies that path to
+// the backend, WebSocket upgrades included, so the browser reaches an
+// embedded web app (code-server, jupyter, …) without ever touching
+// the backend port directly.
+//
+// network is "unix" (addr = socket path — preferred, no TCP surface)
+// or "tcp" (addr = host:port, dialed on loopback). Blocks until the
+// router replies or ctx cancels. Like ClipboardGet, MUST NOT be called
+// from an SDK dispatch callback — the reply returns on the same read
+// goroutine and would deadlock.
+func (c *Conn) PublishIngress(ctx context.Context, network, addr string) (string, error) {
+	reqID := c.nextReqID.Add(1)
+	wait := make(chan ingressResult, 1)
+	c.ingressMu.Lock()
+	c.pendingIngress[reqID] = wait
+	c.ingressMu.Unlock()
+
+	if err := c.writeEvt(wire.NewEvtIngressPublish(reqID, network, addr)); err != nil {
+		c.ingressMu.Lock()
+		delete(c.pendingIngress, reqID)
+		c.ingressMu.Unlock()
+		return "", err
+	}
+	select {
+	case <-ctx.Done():
+		c.ingressMu.Lock()
+		delete(c.pendingIngress, reqID)
+		c.ingressMu.Unlock()
+		return "", ctx.Err()
+	case r := <-wait:
+		return r.path, r.err
+	}
+}
+
+// UnpublishIngress drops a route previously returned by PublishIngress.
+// Idempotent and fire-and-forget — the router also GCs every route an
+// instance published when the instance tears down, so apps only need
+// this to release a route mid-life (e.g. restarting the backend).
+func (c *Conn) UnpublishIngress(path string) error {
+	return c.writeEvt(wire.NewEvtIngressUnpublish(path))
+}

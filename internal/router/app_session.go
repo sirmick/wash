@@ -350,6 +350,19 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 		}
 		inst.router.recordRuntimeStats(inst.InstanceID, m)
 		return nil
+	case wire.TEvtIngressPublish:
+		var m wire.EvtIngressPublish
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.handleIngressPublish(m)
+	case wire.TEvtIngressUnpublish:
+		var m wire.EvtIngressUnpublish
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		inst.router.ingress.unpublish(m.Path)
+		return nil
 	}
 	inst.router.log("app %s: unexpected evt %q", inst.AppID, t)
 	return nil

@@ -26,6 +26,8 @@ const ICONS = [
   'flask-conical',  // wash-test (hidden by default)
   'list-checks',    // wash-bulk
   'file-pen',       // wash-edit
+  'square-code',    // wash-vscode (manager)
+  'folder-code',    // wash-vscode-workbench (a code workspace)
   'settings',       // wash-settings
   'activity',       // wash-top
   'shield-check',   // wash-priv (privilege gateway)

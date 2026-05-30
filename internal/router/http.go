@@ -46,6 +46,10 @@ func NewHTTPServer(r *Router, assets http.FileSystem) *HTTPServer {
 	s := &HTTPServer{router: r, assets: assets, mux: http.NewServeMux()}
 	s.mux.HandleFunc("/ws", s.handleWS)
 	s.mux.HandleFunc("/screenshot", s.handleScreenshot)
+	// Generic ingress: /app/<token>/* reverse-proxies to an app-
+	// published HTTP/WS backend. More specific than "/", so the mux
+	// routes it here. See ingress.go.
+	s.mux.HandleFunc("/app/", s.handleAppProxy)
 	s.mux.HandleFunc("/", s.handleRoot)
 	return s
 }

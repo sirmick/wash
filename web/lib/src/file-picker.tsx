@@ -46,7 +46,7 @@ export interface FilterSpec {
 
 export interface FilePickerProps {
   open: boolean;
-  mode: 'open' | 'save';
+  mode: 'open' | 'save' | 'directory';
   // Host element for delivering BE replies. The picker installs a
   // `wash:msg` listener here and correlates replies by id.
   host: HTMLElement;
@@ -336,6 +336,8 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
   const visibleEntries = createMemo<Entry[]>(() => {
     const re = filterRE();
     let list = entries();
+    // Directory mode is a folder chooser — only dirs are relevant.
+    if (props.mode === 'directory') list = list.filter((e) => e.type === 'dir');
     if (re) list = list.filter((e) => e.type === 'dir' || re.test(e.name));
     const out = list.slice();
     const desc = sortDesc();
@@ -393,6 +395,14 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
   };
 
   const onConfirmClick = async () => {
+    if (props.mode === 'directory') {
+      // Confirm the highlighted subfolder if one is selected, else
+      // the current directory ("use this folder").
+      const sel = selectedName();
+      const e = sel ? entries().find((x) => x.name === sel) : null;
+      props.onConfirm(e && e.type === 'dir' ? joinPath(cwd(), sel) : cwd());
+      return;
+    }
     if (props.mode === 'open') {
       const sel = selectedName();
       if (!sel) return;
@@ -487,7 +497,7 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
         >
           {/* title */}
           <div style={titleStyle}>
-            {props.mode === 'open' ? 'Open File' : 'Save As'}
+            {props.mode === 'open' ? 'Open File' : props.mode === 'directory' ? 'Open Folder' : 'Save As'}
           </div>
 
           {/* path bar */}
@@ -633,10 +643,11 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
               disabled={
                 (props.mode === 'open' && !selectedName()) ||
                 (props.mode === 'save' && !saveName().trim())
+                // directory mode is always actionable (falls back to cwd)
               }
               style={actionBtnStyle(true)}
             >
-              {props.mode === 'open' ? 'Open' : 'Save'}
+              {props.mode === 'open' ? 'Open' : props.mode === 'directory' ? 'Open Folder' : 'Save'}
             </button>
           </div>
         </div>

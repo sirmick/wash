@@ -19,3 +19,5 @@ export type { TerminalProps, TerminalAPI } from './terminal';
 export { defineWashApp } from './define-app';
 export type { WashAppProps, DefineWashAppOptions } from './define-app';
 export { washAssetUrl } from './assets';
+export { IngressFrame } from './ingress-frame';
+export type { IngressFrameProps } from './ingress-frame';

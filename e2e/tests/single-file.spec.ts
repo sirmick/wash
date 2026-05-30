@@ -43,6 +43,10 @@ const APPS: AppBundle[] = [
   { name: 'test',    dir: 'apps/test/fe/dist',    maxBytes: 30_000 },
   { name: 'term',    dir: 'apps/term/fe/dist',    maxBytes: 30_000 },
   { name: 'fm',      dir: 'apps/fm/fe/dist',      maxBytes: 100_000 },
+  // vscode is a thin shell: install/launch state machine + IngressFrame.
+  // The workbench is code-server (external), so this stays small.
+  { name: 'vscode',  dir: 'apps/vscode/fe/dist',  maxBytes: 30_000 },
+  { name: 'vscode-workbench', dir: 'apps/vscode-workbench/fe/dist', maxBytes: 30_000 },
   // wash-bulk + wash-priv shipped FE bundles before M6 / M7; they're
   // now background services with no FE — their UI lives in the
   // session sidebar. Nothing to bundle-check here anymore.

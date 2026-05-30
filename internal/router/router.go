@@ -187,6 +187,10 @@ type Router struct {
 	// internal/router/runtime_stats.go.
 	statsMu      sync.Mutex
 	runtimeStats map[string]*runtimeStatsRecord
+
+	// ingress is the token→backend registry for the generic embed-
+	// a-web-app proxy (/app/<token>/*). See ingress.go.
+	ingress *ingressRegistry
 }
 
 // NewRouter constructs a router; cfg.AppsDirs are expected to already
@@ -210,6 +214,7 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		pendingByToken: make(map[string]*tokenPending),
 		cliSessions:       make(map[string]*cliSession),
 		backgroundStarted: make(map[string]bool),
+		ingress:           newIngressRegistry(log),
 	}
 }
 
@@ -584,6 +589,7 @@ func (r *Router) tearDown(inst *AppInstance) {
 	r.closeChannelsForApp(inst, "app exited")
 	r.dropAppMsgWatchers(inst.InstanceID)
 	r.dropRuntimeStats(inst.InstanceID)
+	r.ingress.dropInstance(inst.InstanceID)
 	r.winSession.dropAppState(inst.InstanceID)
 	if inst.WindowID != 0 {
 		r.broadcastPatches(r.winSession.destroyWindow(inst.WindowID))

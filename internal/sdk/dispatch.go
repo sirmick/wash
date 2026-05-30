@@ -213,7 +213,33 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 		if c.def.OnClipboardChanged != nil {
 			c.def.OnClipboardChanged(c, m.Mime)
 		}
+	case wire.TEvtIngressPublished:
+		var m wire.EvtIngressPublished
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		c.resolveIngress(m.ReqID, ingressResult{path: m.Path})
+	case wire.TEvtIngressErr:
+		var m wire.EvtIngressErr
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		c.resolveIngress(m.ReqID, ingressResult{err: fmt.Errorf("%s: %s", m.Code, m.Msg)})
 	}
 	// Unknown event types: ignore for forward compat.
 	return nil
+}
+
+// resolveIngress hands a result to the PublishIngress call waiting on
+// reqID, if any. No-op for an unknown/already-resolved req_id.
+func (c *Conn) resolveIngress(reqID uint64, r ingressResult) {
+	c.ingressMu.Lock()
+	ch, ok := c.pendingIngress[reqID]
+	if ok {
+		delete(c.pendingIngress, reqID)
+	}
+	c.ingressMu.Unlock()
+	if ok {
+		ch <- r
+	}
 }

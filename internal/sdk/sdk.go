@@ -121,6 +121,11 @@ type Conn struct {
 	clipMu             sync.Mutex
 	pendingClipboardGet map[uint64]chan clipboardResult
 
+	// pendingIngress correlates PublishIngress req_id with the waiting
+	// goroutine. Resolved by dispatch on ingress.published / ingress.err.
+	ingressMu      sync.Mutex
+	pendingIngress map[uint64]chan ingressResult
+
 	// privPending tracks in-flight PrivRunInlineSync calls keyed by
 	// req_id. dispatchEvt intercepts incoming app_msgs from com.wash
 	// .priv whose req_id matches a pending call, accumulates the
@@ -139,6 +144,11 @@ type Conn struct {
 type clipboardResult struct {
 	mime string
 	data []byte
+	err  error
+}
+
+type ingressResult struct {
+	path string
 	err  error
 }
 
@@ -302,6 +312,7 @@ func ConnectWith(t wire.FrameTransport, def *AppDef) (*Conn, error) {
 		channels:            make(map[uint32]*RawChannel),
 		pendingOpens:        make(map[uint64]chan openResult),
 		pendingClipboardGet: make(map[uint64]chan clipboardResult),
+		pendingIngress:      make(map[uint64]chan ingressResult),
 		done:                make(chan struct{}),
 	}
 	if err := c.handshake(); err != nil {

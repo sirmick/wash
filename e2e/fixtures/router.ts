@@ -7,7 +7,7 @@
 
 import { test as base, expect } from '@playwright/test';
 import { spawn, ChildProcess } from 'node:child_process';
-import { mkdtempSync, copyFileSync, existsSync, chmodSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, copyFileSync, existsSync, chmodSync, writeFileSync, mkdirSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,6 +34,8 @@ const SYSLOGS_BIN = join(REPO_ROOT, 'out', 'wash-syslogs');
 const SERVICES_BIN = join(REPO_ROOT, 'out', 'wash-services');
 const PACKAGES_BIN = join(REPO_ROOT, 'out', 'wash-packages');
 const NOTIFY_BIN = join(REPO_ROOT, 'out', 'wash-notify');
+const VSCODE_BIN = join(REPO_ROOT, 'out', 'wash-vscode');
+const VSCODE_WB_BIN = join(REPO_ROOT, 'out', 'wash-vscode-workbench');
 const FAKESUDO_BIN = join(REPO_ROOT, 'out', 'wash-priv-fakesudo');
 export const SUDO_BIN = join(REPO_ROOT, 'out', 'wash-sudo');
 
@@ -83,7 +85,7 @@ export interface RouterOptions {
   /** kiosk mode: --no-session + --initial-app=<appID>. */
   kiosk?: string;
   /** include these binaries in the apps dir; defaults to all five. */
-  apps?: ('session' | 'about' | 'test' | 'term' | 'fm' | 'bulk' | 'priv' | 'journal' | 'settings' | 'top' | 'syslogs' | 'services' | 'packages' | 'edit')[];
+  apps?: ('session' | 'about' | 'test' | 'term' | 'fm' | 'bulk' | 'priv' | 'journal' | 'settings' | 'top' | 'syslogs' | 'services' | 'packages' | 'edit' | 'vscode')[];
   /** include manifest.hidden apps in the catalog. */
   showHidden?: boolean;
   /** extra wash-router args. */
@@ -252,6 +254,15 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
       throw new Error(`missing wash-notify: ${NOTIFY_BIN}`);
     }
     bins.push(NOTIFY_BIN);
+  }
+  if (wanted.includes('vscode')) {
+    // The manager window (owns code-server) + the hidden workbench window.
+    for (const b of [VSCODE_BIN, VSCODE_WB_BIN]) {
+      if (!existsSync(b)) {
+        throw new Error(`missing vscode binary: ${b}`);
+      }
+      bins.push(b);
+    }
   }
   const appsDir = stageApps(bins);
   // wash-priv claims a reservedID (com.wash.priv) which the registry
@@ -496,6 +507,19 @@ export async function stopRouter(h: RouterHandle): Promise<void> {
       resolveP();
     });
   });
+  // Remove the per-test temp dirs so /tmp doesn't accumulate. The
+  // staged apps dir is a full copy of the binary set; thousands of
+  // runs otherwise pile up to hundreds of GB. force:true ignores a
+  // still-dying child's open files.
+  for (const d of [h.appsDir, h.fmRoot, h.xdgConfigHome]) {
+    if (d) {
+      try {
+        rmSync(d, { recursive: true, force: true });
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
 }
 
 // Typed fixtures: any test can pull a `router` from the function args

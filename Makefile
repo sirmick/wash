@@ -14,7 +14,7 @@ GOARCH  ?= amd64
 GOFLAGS := -trimpath -ldflags=-s\ -w -tags netgo,osusergo
 
 OUT     := out
-BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify
+BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -98,6 +98,12 @@ SERVICES_STAMP  := $(SERVICES_ASSETS)/.stamp
 PACKAGES_ASSETS := apps/packages/be/assets
 PACKAGES_STAMP  := $(PACKAGES_ASSETS)/.stamp
 
+VSCODE_ASSETS  := apps/vscode/be/assets
+VSCODE_STAMP   := $(VSCODE_ASSETS)/.stamp
+
+VSCODE_WB_ASSETS := apps/vscode-workbench/be/assets
+VSCODE_WB_STAMP  := $(VSCODE_WB_ASSETS)/.stamp
+
 .PHONY: all
 all: $(TARGETS)
 
@@ -138,6 +144,14 @@ web-fm: web-deps
 .PHONY: web-edit
 web-edit: web-deps
 	@$(PNPM) --filter @wash/app-edit run build
+
+.PHONY: web-vscode
+web-vscode: web-deps
+	@$(PNPM) --filter @wash/app-vscode run build
+
+.PHONY: web-vscode-workbench
+web-vscode-workbench: web-deps
+	@$(PNPM) --filter @wash/app-vscode-workbench run build
 
 .PHONY: web-settings
 web-settings: web-deps
@@ -201,6 +215,12 @@ $(FM_STAMP): web-fm
 $(EDIT_STAMP): web-edit
 	$(call embed_dist,apps/edit/fe/dist,$(EDIT_ASSETS))
 
+$(VSCODE_STAMP): web-vscode
+	$(call embed_dist,apps/vscode/fe/dist,$(VSCODE_ASSETS))
+
+$(VSCODE_WB_STAMP): web-vscode-workbench
+	$(call embed_dist,apps/vscode-workbench/fe/dist,$(VSCODE_WB_ASSETS))
+
 $(SETTINGS_STAMP): web-settings
 	$(call embed_dist,apps/settings/fe/dist,$(SETTINGS_ASSETS))
 
@@ -249,6 +269,12 @@ $(OUT)/wash-bulk: | $(OUT)
 
 $(OUT)/wash-edit: $(EDIT_STAMP) | $(OUT)
 	$(call go_build,$@,apps/edit/be/cmd)
+
+$(OUT)/wash-vscode: $(VSCODE_STAMP) | $(OUT)
+	$(call go_build,$@,apps/vscode/be/cmd)
+
+$(OUT)/wash-vscode-workbench: $(VSCODE_WB_STAMP) | $(OUT)
+	$(call go_build,$@,apps/vscode-workbench/be/cmd)
 
 $(OUT)/wash-settings: $(SETTINGS_STAMP) | $(OUT)
 	$(call go_build,$@,apps/settings/be/cmd)
@@ -376,7 +402,7 @@ test-app: $(OUT)/wash-priv-fakesudo
 # "pattern all:assets: no matching files found" — local dev
 # accidentally works because the standalone wash-router build
 # rule already chains through ROUTER_STAMP.
-MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP)
+MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP) $(VSCODE_STAMP) $(VSCODE_WB_STAMP)
 
 # Adding wash_test_app to the tags pulls the test app's blank-import
 # in (which is otherwise excluded by cmd/wash/imports_test.go's
