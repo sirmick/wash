@@ -16,7 +16,12 @@ import (
 )
 
 func main() {
-	ctlPort, dataPort := "/dev/ttyS1", "/dev/ttyS2"
+	// ctlPort is the out-of-band control plane (Ctl.Exec). dataPort, when
+	// given and non-empty, makes the agent echo wash wire frames — a router
+	// stand-in from B0. Once the real in-guest wash-router owns the data plane
+	// (--transport=serial:…, baked by build-vm-image-alpine.sh), /init passes
+	// only the ctl port and the agent leaves the data plane to the router.
+	ctlPort, dataPort := "/dev/ttyS1", ""
 	if len(os.Args) > 1 {
 		ctlPort = os.Args[1]
 	}
@@ -37,12 +42,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Data plane: echo wash wire frames. This stands in for the in-guest
-	// wash-router until B1 bakes it into the image; it proves the inside-out
-	// transport (browser WS ⟷ proxy ⟷ serial ⟷ guest) end to end.
-	if df, err := os.OpenFile(dataPort, os.O_RDWR, 0); err == nil {
-		_ = makeRaw(int(df.Fd()))
-		go echoFrames(df)
+	// Data plane: only echo when an explicit port is given (B0 router
+	// stand-in). With the real wash-router baked in (B1e) the data plane
+	// belongs to the router and /init passes no data port here.
+	if dataPort != "" {
+		if df, err := os.OpenFile(dataPort, os.O_RDWR, 0); err == nil {
+			_ = makeRaw(int(df.Fd()))
+			go echoFrames(df)
+		}
 	}
 
 	// Announce readiness guest→host. This direction is buffered by qemu, so it

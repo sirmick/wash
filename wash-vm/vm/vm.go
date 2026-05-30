@@ -91,9 +91,18 @@ func Launch(ctx context.Context, o Opts) (*VM, error) {
 		"-kernel", o.Kernel, "-initrd", o.Initramfs, "-append", o.KernelArgs,
 		"-serial", "file:" + vm.logPath, // ttyS0: console / log plane
 		"-chardev", "socket,id=ctl,path=" + ctlPath + ",server=on,wait=off",
-		"-serial", "chardev:ctl", // ttyS1: control plane
+		"-serial", "chardev:ctl", // ttyS1: control plane (small line-framed Exec)
+		// Data plane: the wash wire (FE bundle + protocol). A virtio-serial
+		// port, NOT a UART — /dev/vport0p0 in-guest is a raw chardev with no tty
+		// line discipline, so the in-guest wash-router (which doesn't cfmakeraw
+		// its transport fd) gets clean binary frames. UART cooked-mode would
+		// mangle them (docs/NET.md §8.2). Host side stays a chardev socket, so
+		// the proxy bridge is unchanged.
 		"-chardev", "socket,id=data,path=" + dataPath + ",server=on,wait=off",
-		"-serial", "chardev:data", // ttyS2: data plane (wash wire frames)
+		"-device", "virtio-serial-pci,id=vser0",
+		// nr=1: port 0 on a virtio-serial bus is reserved for the console, so
+		// the first data port is deterministically /dev/vport0p1 in-guest.
+		"-device", "virtserialport,chardev=data,name=wash.data,nr=1",
 	}
 	vm.cmd = exec.CommandContext(ctx, o.QEMU, args...)
 	vm.cmd.Stderr = vm.stderr

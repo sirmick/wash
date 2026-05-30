@@ -3,10 +3,8 @@ package vm
 import (
 	"bytes"
 	"context"
-	"io"
-	"net/http"
-	"os"
-	"path/filepath"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,7 +13,15 @@ import (
 	"github.com/sirmick/wash/internal/wire"
 )
 
-func TestProxyServesAndBridges(t *testing.T) {
+// TestProxyServesVMWire proves the decided shape (docs/NET.md §8.3): the VM
+// serves everything and the proxy is a transparent serial tunnel. A browser WS
+// to the proxy bridges to the in-guest wash-router over the virtio-serial data
+// plane; on connect the router pushes its real catalog, the session-desktop
+// declaration, and the FE bundle — byte-for-byte what a physical wash box serves
+// on its LAN. We assert the catalog carries com.wash.net and the desktop app is
+// declared. (The browser actually rendering this + round-tripping a model edit
+// is the B1e-2 chrome/Playwright gate.)
+func TestProxyServesVMWire(t *testing.T) {
 	kernel, initramfs := artifacts(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -29,58 +35,68 @@ func TestProxyServesAndBridges(t *testing.T) {
 		t.Fatalf("WaitReady: %v", err)
 	}
 
-	// A static asset dir to serve host-side (vite-like).
-	static := t.TempDir()
-	if err := os.WriteFile(filepath.Join(static, "index.html"), []byte("<title>wash-net</title>"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	p, err := vm.Proxy(ProxyOpts{Static: static})
+	p, err := vm.Proxy(ProxyOpts{})
 	if err != nil {
 		t.Fatalf("Proxy: %v", err)
 	}
 	defer p.Close()
 
-	// 1) FE assets served host-side.
-	resp, err := http.Get(p.URL + "/index.html")
-	if err != nil {
-		t.Fatalf("GET: %v", err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if !bytes.Contains(body, []byte("wash-net")) {
-		t.Fatalf("static asset not served: %q", body)
-	}
-
-	// 2) Browser WS ⟷ guest data plane: one wash frame per message, round-tripped
-	//    through the guest over serial and back.
 	wsURL := "ws" + p.URL[len("http"):] + "/ws"
 	c, _, err := websocket.Dial(ctx, wsURL, nil)
 	if err != nil {
 		t.Fatalf("ws dial: %v", err)
 	}
 	defer c.CloseNow()
+	c.SetReadLimit(1 << 20) // the session FE bundle rides in one large frame
 
-	want := wire.Frame{Flags: wire.FlagEnd, Channel: 42, Payload: []byte("hello from the browser")}
-	var enc bytes.Buffer
-	if err := wire.EncodeFrame(&enc, want); err != nil {
-		t.Fatal(err)
+	// Read the router's connect-time push. We only need the early control
+	// frames (catalog, session.snapshot, app.declared); stop once both
+	// assertions are satisfied or the budget runs out.
+	var sawNetInCatalog, sawDesktop bool
+	deadline := time.Now().Add(20 * time.Second)
+	for n := 0; n < 8 && !(sawNetInCatalog && sawDesktop); n++ {
+		rctx, rcancel := context.WithDeadline(ctx, deadline)
+		typ, data, err := c.Read(rctx)
+		rcancel()
+		if err != nil {
+			t.Fatalf("ws read %d: %v\nconsole:\n%s", n, err, vm.ConsoleLog())
+		}
+		if typ != websocket.MessageBinary {
+			t.Fatalf("ws message type = %v", typ)
+		}
+		fr, err := wire.DecodeFrame(bytes.NewReader(data))
+		if err != nil {
+			t.Fatalf("decode frame %d: %v", n, err)
+		}
+		if fr.Channel != 0 {
+			continue // raw bundle / data channel — not what we assert on
+		}
+		var msg struct {
+			T        string `json:"t"`
+			Surface  string `json:"surface"`
+			Element  string `json:"element"`
+			Manifest struct {
+				ID      string `json:"id"`
+				Surface string `json:"surface"`
+			} `json:"manifest"`
+		}
+		_ = json.Unmarshal(fr.Payload, &msg)
+		switch msg.T {
+		case "catalog":
+			if strings.Contains(string(fr.Payload), "com.wash.net") {
+				sawNetInCatalog = true
+			}
+		case "app.declared":
+			if msg.Surface == "desktop" || msg.Manifest.Surface == "desktop" || msg.Element == "wash-app-session" {
+				sawDesktop = true
+			}
+		}
 	}
-	if err := c.Write(ctx, websocket.MessageBinary, enc.Bytes()); err != nil {
-		t.Fatalf("ws write: %v", err)
+	if !sawNetInCatalog {
+		t.Fatal("router catalog (served from the VM) did not include com.wash.net")
 	}
-	typ, data, err := c.Read(ctx)
-	if err != nil {
-		t.Fatalf("ws read: %v\nconsole:\n%s", err, vm.ConsoleLog())
+	if !sawDesktop {
+		t.Fatal("router did not declare the session desktop app over the tunnel")
 	}
-	if typ != websocket.MessageBinary {
-		t.Fatalf("ws message type = %v", typ)
-	}
-	got, err := wire.DecodeFrame(bytes.NewReader(data))
-	if err != nil {
-		t.Fatalf("decode echoed frame: %v", err)
-	}
-	if got.Channel != want.Channel || !bytes.Equal(got.Payload, want.Payload) {
-		t.Fatalf("echo mismatch: got ch=%d %q, want ch=%d %q", got.Channel, got.Payload, want.Channel, want.Payload)
-	}
-	t.Logf("round-tripped a wash frame through the guest: ch=%d %q", got.Channel, got.Payload)
+	t.Log("VM served its real catalog (incl. com.wash.net) + desktop over the serial tunnel")
 }
