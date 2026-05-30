@@ -16,15 +16,35 @@ OUT="$ROOT_DIR/out/vm"
 BUILD="$OUT/build"
 mkdir -p "$BUILD"
 
-echo ">> fetching Alpine assets (cached in $BUILD)"
-[ -f "$BUILD/minirootfs.tar.gz" ] || \
-  curl -fsSL -o "$BUILD/minirootfs.tar.gz" "$MIRROR/alpine-minirootfs-${ALPINE_VER}-${ARCH}.tar.gz"
 [ -f "$OUT/vmlinuz" ] || \
   curl -fsSL -o "$OUT/vmlinuz" "$MIRROR/netboot/vmlinuz-virt"
 
-echo ">> building static guest agent"
-CGO_ENABLED=0 GOOS=linux GOARCH="$( [ "$ARCH" = x86_64 ] && echo amd64 || echo "$ARCH" )" \
+# Base rootfs = Alpine + NetworkManager (the type-2 backend, docs/NET.md §5).
+# The host has no apk, so we render the rootfs in a throwaway Alpine container
+# and export it. Cached; rebuilt only when this package set changes. Pin the
+# set in a marker so a changed list invalidates the cache.
+NM_PKGS="networkmanager networkmanager-cli networkmanager-wifi dbus wpa_supplicant"
+ROOTFS_TAR="$BUILD/alpine-nm.tar"
+PKG_MARK="$BUILD/.alpine-nm.pkgs"
+if [ ! -f "$ROOTFS_TAR" ] || [ "$(cat "$PKG_MARK" 2>/dev/null)" != "$ALPINE_VER:$NM_PKGS" ]; then
+  echo ">> rendering Alpine+NM rootfs via Docker (host has no apk)"
+  command -v docker >/dev/null || { echo "!! docker required to build the NM rootfs" >&2; exit 1; }
+  docker rm -f washnm-build >/dev/null 2>&1 || true
+  docker run --name washnm-build "alpine:${ALPINE_VER%.*}" \
+    sh -c "apk add --no-cache $NM_PKGS" >/dev/null
+  docker export washnm-build -o "$ROOTFS_TAR"
+  docker rm washnm-build >/dev/null
+  printf '%s' "$ALPINE_VER:$NM_PKGS" > "$PKG_MARK"
+fi
+
+echo ">> building static guest agent + nm probe"
+GOARCH="$( [ "$ARCH" = x86_64 ] && echo amd64 || echo "$ARCH" )"
+CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" \
   go build -trimpath -ldflags="-s -w" -o "$BUILD/washvm-agent" "$ROOT_DIR/cmd/washvm-agent"
+# washnet-nmprobe: B4b smoke check that the pure-Go nm backend reaches NM in the
+# guest (godbus → NetworkManager). Run over the ctl plane.
+CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" \
+  go build -trimpath -ldflags="-s -w" -o "$BUILD/washnet-nmprobe" "$ROOT_DIR/cmd/washnet-nmprobe"
 
 # The multicall wash binary (router + apps, incl. com.wash.net/.netd) is the
 # real payload (docs/NET.md §8.3 — the VM serves everything). It embeds every
@@ -40,8 +60,9 @@ echo ">> assembling rootfs"
 RFS="$BUILD/root"
 rm -rf "$RFS"
 mkdir -p "$RFS"
-tar -C "$RFS" -xzf "$BUILD/minirootfs.tar.gz"
+tar -C "$RFS" -xf "$ROOTFS_TAR"
 install -Dm755 "$BUILD/washvm-agent" "$RFS/sbin/washvm-agent"
+install -Dm755 "$BUILD/washnet-nmprobe" "$RFS/usr/bin/washnet-nmprobe"
 
 # Bake the multicall + materialize the per-app symlinks the router scans. The
 # host binary is the same arch (amd64), so run it on the host to emit symlinks
@@ -59,6 +80,17 @@ cat > "$RFS/init" <<'INIT'
 mount -t proc proc /proc 2>/dev/null
 mount -t sysfs sys /sys 2>/dev/null
 mount -t devtmpfs dev /dev 2>/dev/null
+mount -t tmpfs tmpfs /run 2>/dev/null
+
+# Bring up D-Bus + NetworkManager so the netd NM backend (docs/NET.md §5 — the
+# type-2 backend, driven pure-Go over D-Bus via godbus) has something to talk
+# to. This is a hand-rolled init (no OpenRC), so start the daemons directly.
+ip link set lo up 2>/dev/null
+mkdir -p /run/dbus /run/NetworkManager /var/lib/NetworkManager /etc/NetworkManager/system-connections
+[ -s /etc/machine-id ] || dbus-uuidgen --ensure=/etc/machine-id 2>/dev/null || dbus-uuidgen > /etc/machine-id
+dbus-daemon --system 2>>/run/nm.log
+( i=0; while [ ! -e /run/dbus/system_bus_socket ] && [ $i -lt 50 ]; do i=$((i+1)); sleep 0.1; done )
+NetworkManager --no-daemon >>/run/nm.log 2>&1 &
 
 # Serve the wash UI + wire over the data port. The virtio-serial port device
 # (/dev/vport0p1) only appears once the HOST connects the data chardev (the

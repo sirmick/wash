@@ -11,3 +11,5 @@ require (
 	golang.org/x/crypto v0.52.0
 	golang.org/x/sys v0.45.0
 )
+
+require github.com/godbus/dbus/v5 v5.2.2
