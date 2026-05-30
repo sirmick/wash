@@ -16,6 +16,11 @@ import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
 import { FilePicker, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens } from '@wash/ui';
 import type { TerminalAPI } from '@wash/ui';
+import {
+  joinPath, baseName, parentPath,
+  createBus,
+  DRAG_MIME, readDragPaths, hasWashDrag, dropEffectFor,
+} from '@wash/fs-client';
 import { EditorSelection, EditorState, Compartment, Extension } from '@codemirror/state';
 import {
   EditorView,
@@ -323,31 +328,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     { equals: (a, b) => a.length === b.length && a.every((id, i) => id === b[i]) },
   );
 
-  // Per-request id counter for the message correlator. Each list /
-  // read / write gets a fresh id so we can pair the reply.
-  let nextReqID = 0;
-  const pendingReplies = new Map<string, (m: BEMessage) => void>();
-
   // ---- BE I/O ----
 
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
 
-  const sendWithReply = (req: Record<string, unknown>, timeoutMs = 5000): Promise<BEMessage> => {
-    nextReqID += 1;
-    const id = `e-${nextReqID}`;
-    return new Promise((resolve) => {
-      const timer = window.setTimeout(() => {
-        if (pendingReplies.delete(id)) {
-          resolve({ kind: 'timeout_err', id, code: 'timeout', msg: `no reply within ${timeoutMs}ms` });
-        }
-      }, timeoutMs);
-      pendingReplies.set(id, (m) => {
-        window.clearTimeout(timer);
-        resolve(m);
-      });
-      send({ ...req, id });
-    });
-  };
+  // Request/reply correlation + timeout live in @wash/fs-client's bus.ts
+  // (unit-tested). idPrefix 'e' mints e-<n> ids (fm uses 'f'); handleBE
+  // consults bus.tryResolve for echoed ids. sendWithReply is an alias so
+  // the call sites below read unchanged.
+  const bus = createBus(send, undefined, 'e');
+  const sendWithReply = bus.request;
 
   const loadDir = async (path: string) => {
     const reply = await sendWithReply({ kind: 'list', path });
@@ -959,12 +949,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       }
       return;
     }
-    const replyID = typeof m.id === 'string' ? m.id : undefined;
-    if (replyID && pendingReplies.has(replyID)) {
-      const resolver = pendingReplies.get(replyID)!;
-      pendingReplies.delete(replyID);
-      resolver(m);
-    }
+    // Resolve a correlated reply via the bus (uncorrelated pushes were
+    // handled by the switch above).
+    bus.tryResolve(m);
   };
 
   // ---- terminal pane ops ----
@@ -1018,21 +1005,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // fs.watch refreshes the affected dirs on completion, so we
   // don't need to manually re-list after rename/delete.
 
-  const DRAG_MIME = 'application/x-wash-paths';
-
-  const readDragPaths = (ev: DragEvent): string[] => {
-    if (!ev.dataTransfer) return [];
-    const json = ev.dataTransfer.getData(DRAG_MIME);
-    if (!json) return [];
-    try {
-      const arr = JSON.parse(json);
-      if (Array.isArray(arr)) return arr.filter((s) => typeof s === 'string');
-    } catch {
-      /* ignore */
-    }
-    return [];
-  };
-
+  // DRAG_MIME + readDragPaths + the hasWashDrag/dropEffectFor helpers
+  // live in @wash/fs-client's dnd.ts (unit-tested). edit carries a
+  // single path (no multi-select), so the dragstart payload stays inline.
   const onRowDragStart = (ev: DragEvent, p: string) => {
     if (!ev.dataTransfer) return;
     ev.dataTransfer.effectAllowed = 'copyMove';
@@ -1044,14 +1019,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const onRowDragEnd = () => setDropTargetPath('');
 
   const onRowDragOver = (ev: DragEvent, rowPath: string) => {
-    if (!ev.dataTransfer || !ev.dataTransfer.types.includes(DRAG_MIME)) return;
+    if (!hasWashDrag(ev.dataTransfer)) return;
     ev.preventDefault();
     ev.stopPropagation();
-    ev.dataTransfer.dropEffect = ev.altKey ? 'copy' : 'move';
+    ev.dataTransfer!.dropEffect = dropEffectFor(ev.altKey);
     if (dropTargetPath() !== rowPath) setDropTargetPath(rowPath);
   };
   const onRowDrop = (ev: DragEvent, rowPath: string) => {
-    const paths = readDragPaths(ev);
+    const paths = readDragPaths(ev.dataTransfer);
     if (paths.length === 0) return;
     ev.preventDefault();
     ev.stopPropagation();
@@ -1069,13 +1044,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   const onListDragOver = (ev: DragEvent) => {
-    if (!ev.dataTransfer || !ev.dataTransfer.types.includes(DRAG_MIME)) return;
+    if (!hasWashDrag(ev.dataTransfer)) return;
     ev.preventDefault();
-    ev.dataTransfer.dropEffect = ev.altKey ? 'copy' : 'move';
+    ev.dataTransfer!.dropEffect = dropEffectFor(ev.altKey);
     if (dropTargetPath() !== '') setDropTargetPath('');
   };
   const onListDrop = (ev: DragEvent) => {
-    const paths = readDragPaths(ev);
+    const paths = readDragPaths(ev.dataTransfer);
     if (paths.length === 0) return;
     ev.preventDefault();
     setDropTargetPath('');
@@ -2713,24 +2688,8 @@ const MenuBarButton: Component<{
   );
 };
 
-// ---- helpers ----
-
-function joinPath(parent: string, name: string): string {
-  if (parent.endsWith('/')) return parent + name;
-  return parent + '/' + name;
-}
-
-function baseName(p: string): string {
-  const i = p.lastIndexOf('/');
-  return i < 0 ? p : p.slice(i + 1);
-}
-
-function parentPath(p: string): string {
-  if (!p || p === '/') return '/';
-  const i = p.lastIndexOf('/');
-  if (i <= 0) return '/';
-  return p.slice(0, i);
-}
+// joinPath / baseName / parentPath now come from @wash/fs-client (imported
+// at the top) — identical bodies, removed from here.
 
 // ---- styles ----
 
