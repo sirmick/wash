@@ -106,6 +106,7 @@ func Validate(c model.Config, cp caps.Capabilities) []Diagnostic {
 	for i, o := range c.SSIDs {
 		d.ssid(o, at("SSIDs", i), cp)
 	}
+	d.relational(c)
 	return d
 }
 
