@@ -14,7 +14,7 @@ GOARCH  ?= amd64
 GOFLAGS := -trimpath -ldflags=-s\ -w -tags netgo,osusergo
 
 OUT     := out
-BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify
+BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -334,6 +334,14 @@ $(OUT)/wash-packages: $(PACKAGES_STAMP) | $(OUT)
 .PHONY: $(OUT)/wash-notify
 $(OUT)/wash-notify: | $(OUT)
 	$(call go_build,$@,apps/notify/be/cmd)
+
+# wash-netd is the privileged networking background service (docs/NET.md
+# §2.11): no window, no FE bundle, reserved id com.wash.netd. The windowed
+# com.wash.net app drives it cross-app. .PHONY for the same reason as
+# wash-notify (Go-only target, no source-stamp dep).
+.PHONY: $(OUT)/wash-netd
+$(OUT)/wash-netd: | $(OUT)
+	$(call go_build,$@,apps/netd/be/cmd)
 
 # wash-launch is a CLI, not an app. No FE bundle, no embedded assets.
 $(OUT)/wash-launch: | $(OUT)
