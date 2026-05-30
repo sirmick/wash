@@ -3,8 +3,12 @@ package vm
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -14,9 +18,12 @@ import (
 )
 
 // Proxy is the inside-out counterpart of wash-vm's in-browser VirtioConsoleSocket
-// (docs/NET.md §8.3): it serves the FE assets host-side and bridges a browser
-// WebSocket to the guest's serial data plane, one wash wire frame per WS message.
-// The guest VM, not the browser, hosts the OS — but the wire is identical.
+// (docs/NET.md §8.3). It serves the minimal host chrome at / (Static), tunnels a
+// browser WebSocket ⟷ the guest serial DATA plane at /ws (one wash wire frame
+// per message — wire-compatible with the shell's transport), and streams the
+// guest console (LOG plane) at /console. The wash UI itself is served BY the VM:
+// the chrome fetches shell.js over the wire (asset.read) and the in-guest router
+// pushes the catalog + app bundles. The browser can't tell it isn't a real box.
 type Proxy struct {
 	vm  *VM
 	ln  net.Listener
@@ -47,6 +54,7 @@ func (vm *VM) Proxy(opts ProxyOpts) (*Proxy, error) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", p.handleWS)
+	mux.HandleFunc("/console", p.handleConsole)
 	if opts.Static != "" {
 		mux.Handle("/", http.FileServer(http.Dir(opts.Static)))
 	}
@@ -115,6 +123,57 @@ func (p *Proxy) handleWS(w http.ResponseWriter, r *http.Request) {
 	_ = p.vm.data.SetReadDeadline(time.Now())
 	<-errc
 	_ = p.vm.data.SetReadDeadline(time.Time{})
+}
+
+// handleConsole streams the guest console (ttyS0 — the LOG plane) to the chrome's
+// Console tab over Server-Sent Events. Each chunk is base64-framed (the console
+// carries raw bytes / ANSI that would otherwise collide with SSE's line framing)
+// and the FE decodes + appends. It tails the file: read to EOF, then poll for
+// growth, so late-attaching browsers still get the boot log from the top.
+func (p *Proxy) handleConsole(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	f, err := os.Open(p.vm.logPath)
+	if err != nil {
+		http.Error(w, "console unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher.Flush()
+
+	ctx := r.Context()
+	buf := make([]byte, 8192)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		n, err := f.Read(buf)
+		if n > 0 {
+			if _, werr := fmt.Fprintf(w, "data: %s\n\n", base64.StdEncoding.EncodeToString(buf[:n])); werr != nil {
+				return
+			}
+			flusher.Flush()
+		}
+		if err == io.EOF {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(150 * time.Millisecond):
+			}
+			continue
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 // Close shuts the proxy down (not the VM).

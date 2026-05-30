@@ -21,9 +21,17 @@ test('VM-served wash UI round-trips a model edit to in-guest netd', async ({ vm,
 
   await page.goto(vm.url);
 
-  // The desktop rendered — its bundle streamed from the in-guest router over
-  // the serial tunnel, not from a host file.
+  // The desktop rendered — shell.js was fetched over the wire (asset.read) and
+  // the bundle streamed from the in-guest router over the serial tunnel, not
+  // from a host file. The chrome's spec label flips to "served from VM" once
+  // the over-the-wire shell boot completes.
   await expect(page.locator('wash-app-session')).toBeVisible({ timeout: 40_000 });
+  await expect(page.locator('#spec')).toContainText('served from VM', { timeout: 40_000 });
+
+  // The Console tab streams the guest console (LOG plane) over /console SSE.
+  await page.locator('#tab-console').click();
+  await expect(page.locator('#pane-console')).toContainText('Linux', { timeout: 20_000 });
+  await page.locator('#tab-wash').click();
 
   // Launch the Network app from the start menu (catalog served by the VM).
   await page.locator('[title="Apps"]').click();

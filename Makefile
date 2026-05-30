@@ -492,25 +492,37 @@ $(OUT)/washvm-run: | $(OUT)
 	$(call go_build,$@,cmd/washvm-run)
 
 # vm-image: the bootable Alpine microvm image baking the real wash desktop.
-# Depends on the multicall binary (the script bakes out/wash) + the shell
-# chrome the proxy serves.
+# Depends on the multicall binary (the script bakes out/wash).
 .PHONY: vm-image
-vm-image: $(OUT)/wash web-shell
+vm-image: $(OUT)/wash
 	sh scripts/build-vm-image-alpine.sh
+
+# vm-chrome: the minimal host chrome the proxy serves (docs/NET.md §8.3) —
+# tabs for Console + Wash. The wash UI (shell.js + app bundles) comes over the
+# wire FROM the VM; only the vendored runtimes + this chrome are host-served, so
+# we assemble: shell's /vendor + icons + our index.html + chrome.js (NO
+# shell.js — it's fetched over the wire to prove the point).
+VM_CHROME := $(OUT)/vm-chrome
+.PHONY: vm-chrome
+vm-chrome: web-shell
+	rm -rf $(VM_CHROME) && mkdir -p $(VM_CHROME)
+	cp -R web/shell/dist/vendor $(VM_CHROME)/vendor
+	cp web/shell/dist/icons.svg web/shell/dist/wash-logo.svg $(VM_CHROME)/
+	cp wash-vm/chrome/index.html wash-vm/chrome/chrome.js $(VM_CHROME)/
 
 # e2e-vm: the wash-net B1 exit gate (docs/NET.md §8.3, §11) — Playwright drives
 # the VM-served wash UI through the proxy and round-trips a model edit to
 # in-guest com.wash.netd. Needs qemu + /dev/kvm; the spec self-skips otherwise.
 .PHONY: e2e-vm
-e2e-vm: vm-image $(OUT)/washvm-run
+e2e-vm: vm-image vm-chrome $(OUT)/washvm-run
 	cd e2e && $(PNPM) install --ignore-workspace --silent
 	cd e2e && $(PNPM) exec playwright install chromium
 	cd e2e && $(PNPM) exec playwright test net-vm-gate
 
 # run-vm: boot the baked image and serve the wash UI for manual poking.
 .PHONY: run-vm
-run-vm: vm-image $(OUT)/washvm-run
-	$(OUT)/washvm-run --chrome web/shell/dist --addr 127.0.0.1:8080
+run-vm: vm-image vm-chrome $(OUT)/washvm-run
+	$(OUT)/washvm-run --chrome $(VM_CHROME) --addr 127.0.0.1:8080
 
 # ----- meta -----
 

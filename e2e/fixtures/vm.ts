@@ -20,14 +20,14 @@ const REPO_ROOT = resolve(__dirname, '..', '..');
 const RUN_BIN = join(REPO_ROOT, 'out', 'washvm-run');
 const KERNEL = join(REPO_ROOT, 'out', 'vm', 'vmlinuz');
 const INITRAMFS = join(REPO_ROOT, 'out', 'vm', 'initramfs.gz');
-const CHROME = join(REPO_ROOT, 'web', 'shell', 'dist');
+const CHROME = join(REPO_ROOT, 'out', 'vm-chrome'); // make vm-chrome
 
 /** Returns a human reason to skip, or null when the VM gate can run here. */
 export function vmSkipReason(): string | null {
   if (!existsSync('/dev/kvm')) return '/dev/kvm not available';
   if (!existsSync(RUN_BIN)) return `${RUN_BIN} missing (go build ./cmd/washvm-run)`;
   if (!existsSync(KERNEL) || !existsSync(INITRAMFS)) return 'VM image missing (scripts/build-vm-image-alpine.sh)';
-  if (!existsSync(join(CHROME, 'shell.js'))) return 'shell chrome missing (pnpm -F @wash/shell build)';
+  if (!existsSync(join(CHROME, 'chrome.js'))) return 'host chrome missing (make vm-chrome)';
   try {
     execSync('command -v qemu-system-x86_64', { stdio: 'ignore' });
   } catch {
