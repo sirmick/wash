@@ -174,37 +174,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // we coalesce them into a single re-list with a small delay so
   // the tree doesn't flicker mid-write.
   const refreshTimers = new Map<string, number>();
-  // BE-reply correlation: each outgoing request that wants a typed
-  // ack gets a fresh id; the BE echoes the id on its response and
-  // the resolver in this map gets the message. Resolvers self-clear
-  // when matched. Failure paths are dispatched by the resolver too
-  // (it inspects the kind suffix to know).
-  let nextReqID = 0;
-  const pendingReplies = new Map<string, (m: BEMessage) => void>();
-
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
 
-  // sendWithReply tags a request with a fresh id and returns a
-  // promise that resolves with whatever BE message bears that id.
-  // Caller inspects msg.kind to discriminate ok / err. Times out
-  // after `timeoutMs` (default 5s) to keep the FE from leaking
-  // resolvers if the BE never replies.
-  const sendWithReply = (req: Record<string, unknown>, timeoutMs = 5000): Promise<BEMessage> => {
-    nextReqID += 1;
-    const id = `f-${nextReqID}`;
-    return new Promise((resolve) => {
-      const timer = window.setTimeout(() => {
-        if (pendingReplies.delete(id)) {
-          resolve({ kind: 'timeout_err', id, code: 'timeout', msg: `no reply within ${timeoutMs}ms` });
-        }
-      }, timeoutMs);
-      pendingReplies.set(id, (m) => {
-        window.clearTimeout(timer);
-        resolve(m);
-      });
-      send({ ...req, id });
-    });
-  };
+  // Request/reply correlation + timeout live in ./bus.ts (unit-tested).
+  // sendWithReply is kept as an alias so the call sites below read the
+  // same; handleBE consults bus.tryResolve for echoed ids.
+  const bus = createBus(send);
+  const sendWithReply = bus.request;
 
   // askReplace shows the Replace confirm overlay for `dst` and
   // resolves with the user's choice. Used by withReplacePrompt
