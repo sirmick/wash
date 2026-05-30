@@ -485,6 +485,33 @@ e2e: test-app
 	cd e2e && $(PNPM) exec playwright install chromium
 	cd e2e && $(PNPM) test
 
+# washvm-run: the host-side VM runner/proxy CLI (docs/NET.md §8.2) — boots a
+# microvm and fronts it with the chrome + wire tunnel. The wash-net e2e gate
+# and `make run-vm` spawn it.
+$(OUT)/washvm-run: | $(OUT)
+	$(call go_build,$@,cmd/washvm-run)
+
+# vm-image: the bootable Alpine microvm image baking the real wash desktop.
+# Depends on the multicall binary (the script bakes out/wash) + the shell
+# chrome the proxy serves.
+.PHONY: vm-image
+vm-image: $(OUT)/wash web-shell
+	sh scripts/build-vm-image-alpine.sh
+
+# e2e-vm: the wash-net B1 exit gate (docs/NET.md §8.3, §11) — Playwright drives
+# the VM-served wash UI through the proxy and round-trips a model edit to
+# in-guest com.wash.netd. Needs qemu + /dev/kvm; the spec self-skips otherwise.
+.PHONY: e2e-vm
+e2e-vm: vm-image $(OUT)/washvm-run
+	cd e2e && $(PNPM) install --ignore-workspace --silent
+	cd e2e && $(PNPM) exec playwright install chromium
+	cd e2e && $(PNPM) exec playwright test net-vm-gate
+
+# run-vm: boot the baked image and serve the wash UI for manual poking.
+.PHONY: run-vm
+run-vm: vm-image $(OUT)/washvm-run
+	$(OUT)/washvm-run --chrome web/shell/dist --addr 127.0.0.1:8080
+
 # ----- meta -----
 
 .PHONY: linux-arm64
