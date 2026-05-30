@@ -955,7 +955,7 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 		id := b.channelID
 		win := b.windowID
 		b.shellMu.Unlock()
-		if err := s.WriteCtrl(wire.NewShellChannelBind(id, win)); err != nil {
+		if err := s.WriteCtrl(wire.NewShellChannelBind(id, win, b.kind)); err != nil {
 			r.log("reattach bind: %v", err)
 			continue
 		}

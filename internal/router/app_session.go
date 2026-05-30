@@ -290,7 +290,7 @@ func (inst *AppInstance) handleChannelOpen(m wire.ChannelOpen) error {
 		buf:       newRingBuffer(ChannelScrollbackBytes),
 	}
 	inst.router.registerChannel(b)
-	if err := shell.WriteCtrl(wire.NewShellChannelBind(id, m.WindowID)); err != nil {
+	if err := shell.WriteCtrl(wire.NewShellChannelBind(id, m.WindowID, m.Kind)); err != nil {
 		inst.router.closeChannel(id, "shell bind failed")
 		return inst.writeCtrl(wire.NewChannelOpenErr(m.ReqID, wire.ErrCodeInternal, err.Error()))
 	}
@@ -595,9 +595,16 @@ func (inst *AppInstance) handleWindowCreate(m wire.EvtWindowCreate) error {
 	inst.extraWins[win] = true
 	inst.winMu.Unlock()
 
-	inst.router.log("window.create instance=%s win=%d role=%q", inst.InstanceID, win, m.Role)
+	// A window may name its own custom-element tag (e.g. a video window
+	// asking for the built-in "wash-app-display" decoder). Empty falls
+	// back to the instance's manifest element — the common case.
+	element := m.Element
+	if element == "" {
+		element = inst.Manifest.Element
+	}
+	inst.router.log("window.create instance=%s win=%d role=%q element=%q", inst.InstanceID, win, m.Role, element)
 	inst.router.broadcastPatches(inst.router.winSession.createWindow(
-		win, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon,
+		win, inst.InstanceID, element, inst.Manifest.Icon,
 		inst.Manifest.Accent, title, m.W, m.H, inst.IsRoot()))
 	return inst.WriteEvt(wire.NewEvtWindowCreated(m.ReqID, win))
 }

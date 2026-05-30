@@ -224,10 +224,15 @@ type EvtWindowCreate struct {
 	MinH      uint32 `json:"min_h,omitempty"`
 	MaxW      uint32 `json:"max_w,omitempty"`
 	MaxH      uint32 `json:"max_h,omitempty"`
+	// Element optionally overrides the custom-element tag the shell
+	// mounts for this window. Empty inherits the requesting instance's
+	// manifest element (the common case). A multi-window app can name a
+	// per-window decoder/view here (e.g. the built-in "wash-app-display").
+	Element string `json:"element,omitempty"`
 }
 
-func NewEvtWindowCreate(reqID uint64, role string, parentWin uint32, title string, w, h uint32) EvtWindowCreate {
-	return EvtWindowCreate{T: TEvtWindowCreate, ReqID: reqID, Role: role, ParentWin: parentWin, Title: title, W: w, H: h}
+func NewEvtWindowCreate(reqID uint64, role string, parentWin uint32, title string, w, h uint32, element string) EvtWindowCreate {
+	return EvtWindowCreate{T: TEvtWindowCreate, ReqID: reqID, Role: role, ParentWin: parentWin, Title: title, W: w, H: h, Element: element}
 }
 
 // EvtWindowCreated: router → app, the window exists and is in the

@@ -125,7 +125,7 @@ func TestMultiWindowCreateChannelDestroy(t *testing.T) {
 	waitWindowUpsert(t, shell, primary) // shell sees the primary window
 
 	// Create a second window.
-	writeEvt(t, app, wire.NewEvtWindowCreate(1, wire.WindowRoleToplevel, 0, "Second", 300, 200))
+	writeEvt(t, app, wire.NewEvtWindowCreate(1, wire.WindowRoleToplevel, 0, "Second", 300, 200, ""))
 	created, ok := readEvt(t, app).(wire.EvtWindowCreated)
 	if !ok || created.ReqID != 1 {
 		t.Fatalf("expected EvtWindowCreated req=1, got %+v", created)
@@ -136,6 +136,21 @@ func TestMultiWindowCreateChannelDestroy(t *testing.T) {
 	}
 	if got := waitWindowUpsert(t, shell, w2); got.Title != "Second" || got.InstanceID != ack.InstanceID {
 		t.Fatalf("second window upsert mismatch: %+v", got)
+	} else if got.Element != "wash-app-disptest" {
+		// Empty element override inherits the instance manifest element.
+		t.Fatalf("inherited element want wash-app-disptest, got %q", got.Element)
+	}
+
+	// A per-window element override names a different decoder/view tag
+	// (e.g. the built-in wash-app-display). The shell mounts that tag
+	// instead of the instance's manifest element.
+	writeEvt(t, app, wire.NewEvtWindowCreate(3, wire.WindowRoleToplevel, 0, "Video", 300, 200, "wash-app-display"))
+	created3, ok := readEvt(t, app).(wire.EvtWindowCreated)
+	if !ok || created3.ReqID != 3 {
+		t.Fatalf("expected EvtWindowCreated req=3, got %+v", created3)
+	}
+	if got := waitWindowUpsert(t, shell, created3.Win); got.Element != "wash-app-display" {
+		t.Fatalf("override element want wash-app-display, got %q", got.Element)
 	}
 
 	// Open a video channel on the created window — proves ownsWindow
@@ -175,7 +190,7 @@ func TestWindowCreateRequiresCapability(t *testing.T) {
 		t.Fatalf("expected EvtWindowMapped, got %+v", m)
 	}
 
-	writeEvt(t, app, wire.NewEvtWindowCreate(1, wire.WindowRoleToplevel, 0, "Nope", 300, 200))
+	writeEvt(t, app, wire.NewEvtWindowCreate(1, wire.WindowRoleToplevel, 0, "Nope", 300, 200, ""))
 	errEvt, ok := readEvt(t, app).(wire.EvtWindowCreateErr)
 	if !ok || errEvt.ReqID != 1 || errEvt.Code != wire.ErrCodeForbidden {
 		t.Fatalf("expected EvtWindowCreateErr req=1 forbidden, got %+v", errEvt)

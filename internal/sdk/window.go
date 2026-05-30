@@ -23,6 +23,11 @@ type WindowOpts struct {
 	MinH   uint32
 	MaxW   uint32
 	MaxH   uint32
+	// Element optionally overrides the custom-element tag the shell
+	// mounts for this window. Empty inherits the instance's manifest
+	// element (the common case). Use it to name a per-window decoder or
+	// view (e.g. "wash-app-display" for a video surface).
+	Element string
 }
 
 type windowCreateResult struct {
@@ -51,6 +56,7 @@ func (c *Conn) CreateWindow(ctx context.Context, opts WindowOpts) (uint32, error
 		Role: opts.Role, ParentWin: opts.Parent, Title: opts.Title,
 		W: opts.W, H: opts.H,
 		MinW: opts.MinW, MinH: opts.MinH, MaxW: opts.MaxW, MaxH: opts.MaxH,
+		Element: opts.Element,
 	}
 	if err := c.writeEvt(m); err != nil {
 		c.winCreateMu.Lock()

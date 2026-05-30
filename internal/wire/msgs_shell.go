@@ -396,8 +396,12 @@ type ShellChannelBind struct {
 	InstanceID string `json:"instance_id,omitempty"`
 }
 
-func NewShellChannelBind(channelID, windowID uint32) ShellChannelBind {
-	return ShellChannelBind{T: TShellChannelBind, ChannelID: channelID, WindowID: windowID}
+// NewShellChannelBind binds an app-opened raw channel to a window. The
+// kind hint (e.g. ChannelKindVideo) lets the shell mount a decoder
+// component for the channel instead of treating its bytes as opaque;
+// pass ChannelKindGeneric ("") for a plain byte stream.
+func NewShellChannelBind(channelID, windowID uint32, kind string) ShellChannelBind {
+	return ShellChannelBind{T: TShellChannelBind, ChannelID: channelID, WindowID: windowID, Kind: kind}
 }
 
 func NewShellChannelBindBundle(channelID uint32, instanceID string) ShellChannelBind {
