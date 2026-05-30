@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 
-import { joinPath, parentPath, baseName, humanSize, formatDate, octalPerm } from './paths.ts';
+import { joinPath, parentPath, baseName, ancestorChain, humanSize, formatDate, octalPerm } from './paths.ts';
 
 test('joinPath: appends with a separator', () => {
   assert.equal(joinPath('/home', 'mick'), '/home/mick');
@@ -78,4 +78,28 @@ test('octalPerm: leading-zero octal of the low 9 bits', () => {
   assert.equal(octalPerm(0o644), '0644');
   // High bits (file type / setuid) are masked off.
   assert.equal(octalPerm(0o100644), '0644');
+});
+
+test('ancestorChain: a nested path expands to each ancestor, root first', () => {
+  assert.deepEqual(ancestorChain('/a/b/c'), ['/', '/a', '/a/b', '/a/b/c']);
+});
+
+test('ancestorChain: a top-level entry is just root + itself', () => {
+  assert.deepEqual(ancestorChain('/etc'), ['/', '/etc']);
+});
+
+test('ancestorChain: root (and any segment-less path) is just ["/"]', () => {
+  assert.deepEqual(ancestorChain('/'), ['/']);
+  assert.deepEqual(ancestorChain(''), ['/']);
+});
+
+test('ancestorChain: redundant/trailing slashes are collapsed (empty segments dropped)', () => {
+  assert.deepEqual(ancestorChain('/a//b/'), ['/', '/a', '/a/b']);
+});
+
+test('ancestorChain: each element is the parent of the next (chain invariant)', () => {
+  const chain = ancestorChain('/x/y/z');
+  for (let i = 1; i < chain.length; i++) {
+    assert.equal(parentPath(chain[i]), chain[i - 1]);
+  }
 });

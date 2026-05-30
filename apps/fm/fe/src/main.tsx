@@ -20,7 +20,7 @@ import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
 import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, defineWashApp, tokens } from '@wash/ui';
 import {
-  baseName, formatDate, humanSize, joinPath, octalPerm, parentPath,
+  baseName, formatDate, humanSize, joinPath, octalPerm, parentPath, ancestorChain,
   createBus,
   createWatch,
   DRAG_MIME, dragPayload, dropEffectFor, hasWashDrag, readDragPaths,
@@ -347,18 +347,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   const expandPath = (p: string) => {
-    const parts = p.split('/').filter(Boolean);
-    let acc = '/';
-    expandDir(acc);
-    if (!listings[acc]) sendList(acc);
-    for (let i = 0; i < parts.length; i++) {
-      acc = acc === '/' ? '/' + parts[i] : acc + '/' + parts[i];
+    // ancestorChain(p) = ['/', '/a', '/a/b', …] (pure, in paths.ts);
+    // this loop applies the side effects per dir.
+    const chain = ancestorChain(p);
+    for (let i = 0; i < chain.length; i++) {
+      const acc = chain[i];
       // Don't sendList the last segment if it's a file/symlink —
       // BE's list errors with "not a directory" and the status bar
       // would carry that user-visible error. The leaf-file case is
       // legitimate when the user clicks a file row; we already
-      // sendRead for that elsewhere.
-      if (i === parts.length - 1) {
+      // sendRead for that elsewhere. (i > 0 so the tree root is never
+      // treated as a leaf file.)
+      if (i === chain.length - 1 && i > 0) {
         const entry = findEntry(acc);
         if (entry && entry.type !== 'dir') return;
       }

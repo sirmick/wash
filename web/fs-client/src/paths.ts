@@ -20,6 +20,22 @@ export function baseName(p: string): string {
   return i < 0 ? p : p.slice(i + 1);
 }
 
+// ancestorChain returns the path's ancestors from the root down to p
+// inclusive: "/a/b/c" → ["/", "/a", "/a/b", "/a/b/c"]. "/" (or any
+// path with no segments) → ["/"]. fm's expandPath walks this chain
+// expanding+listing each dir; keeping the accumulation pure lets the
+// segment math be unit-tested while the side-effecting walk stays in App.
+export function ancestorChain(p: string): string[] {
+  const parts = p.split('/').filter(Boolean);
+  const chain = ['/'];
+  let acc = '/';
+  for (const part of parts) {
+    acc = acc === '/' ? '/' + part : acc + '/' + part;
+    chain.push(acc);
+  }
+  return chain;
+}
+
 export function humanSize(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;

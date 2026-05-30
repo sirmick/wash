@@ -10,6 +10,7 @@ export {
   joinPath,
   parentPath,
   baseName,
+  ancestorChain,
   humanSize,
   formatDate,
   octalPerm,
