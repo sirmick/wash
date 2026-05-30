@@ -310,9 +310,13 @@ sudo dnf install https://github.com/sirmick/wash/releases/latest/download/wash-f
 # Alpine
 wget https://github.com/sirmick/wash/releases/latest/download/wash-alpine-3.21-amd64.apk
 sudo apk add --allow-untrusted ./wash-alpine-3.21-amd64.apk
+
+# OpenWRT (binary tarball — extract to /usr/bin)
+wget https://github.com/sirmick/wash/releases/latest/download/wash-openwrt-24.10.6-x86_64.tgz
+sudo tar -xzf wash-openwrt-24.10.6-x86_64.tgz -C /usr/bin
 ```
 
-All four are stable filenames — they don't include the version. The
+All five are stable filenames — they don't include the version. The
 release page at <https://github.com/sirmick/wash/releases/latest> has
 the same downloads if you'd rather click than `wget`.
 
