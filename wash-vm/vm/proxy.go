@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -30,7 +31,33 @@ type Proxy struct {
 	srv *http.Server
 	URL string
 
-	bridge sync.Mutex // the single serial data plane serves one WS bridge at a time
+	// Takeover bridge management. One browser is bridged onto the serial at a
+	// time; a newer browser EVICTS the current one (docs/NET.md — "latest
+	// viewer drives the box"). acquireMu serialises takeovers; current points
+	// at the active bridge (nil when none).
+	acquireMu sync.Mutex
+	bridgeMu  sync.Mutex
+	current   *bridge
+
+	// sinkMu guards sink, the encoded-frame handler for the currently-attached
+	// browser (nil when none). A single persistent read-pump (readPump) owns
+	// the serial frame reader for the proxy's whole life and hands each frame
+	// to sink. It must never be torn down per-browser: DecodeFrame reads
+	// straight off the conn (no buffer), so unblocking a per-bridge reader
+	// would risk desyncing the shared stream. Because the guest now pushes
+	// nothing until a SessionOpen (a browser is present), the stream is idle —
+	// not backing up — between viewers.
+	sinkMu sync.Mutex
+	sink   func([]byte)
+}
+
+// bridge is one browser's slot on the serial. stop is closed to evict it
+// (a newer browser took over); done is closed once it has fully torn down
+// (SessionClose written, sink cleared) so the next browser's SessionOpen is
+// strictly ordered after this one's SessionClose.
+type bridge struct {
+	stop chan struct{}
+	done chan struct{}
 }
 
 // ProxyOpts configures the proxy. Static, if set, is a directory served at /.
@@ -60,7 +87,76 @@ func (vm *VM) Proxy(opts ProxyOpts) (*Proxy, error) {
 	}
 	p.srv = &http.Server{Handler: mux}
 	go p.srv.Serve(ln)
+	go p.readPump()
 	return p, nil
+}
+
+// readPump owns the serial frame reader for the proxy's lifetime: it reads one
+// wash frame at a time and forwards it (re-encoded) to the currently-attached
+// browser, or drops it when none is attached. Because it is never torn down
+// per-browser it can't be interrupted mid-frame (no stream desync) and it keeps
+// draining the guest so its non-blocking serial write never wedges. It exits
+// when the data conn closes (Proxy.Close / VM shutdown).
+func (p *Proxy) readPump() {
+	for {
+		fr, err := p.vm.dataT.ReadFrame()
+		if err != nil {
+			return // serial closed — proxy shutting down
+		}
+		var b bytes.Buffer
+		if err := wire.EncodeFrame(&b, fr); err != nil {
+			continue // malformed frame — skip, stay in sync
+		}
+		// Hold sinkMu across the (non-blocking) sink call so we order against a
+		// detaching bridge that nils the sink and closes its channel under the
+		// same lock — otherwise we could send on a closed channel.
+		p.sinkMu.Lock()
+		if p.sink != nil {
+			p.sink(b.Bytes())
+		}
+		p.sinkMu.Unlock()
+	}
+}
+
+// acquireBridge makes this browser the active viewer, evicting whoever held
+// the serial before it. It blocks until the previous browser has fully torn
+// down (its SessionClose is on the wire), so the guest sees a clean
+// close→open ordering. Takeovers are serialised by acquireMu.
+func (p *Proxy) acquireBridge() *bridge {
+	p.acquireMu.Lock()
+	defer p.acquireMu.Unlock()
+
+	p.bridgeMu.Lock()
+	old := p.current
+	p.bridgeMu.Unlock()
+	if old != nil {
+		close(old.stop) // evict the current viewer
+		<-old.done      // wait for its SessionClose + cleanup
+	}
+
+	me := &bridge{stop: make(chan struct{}), done: make(chan struct{})}
+	p.bridgeMu.Lock()
+	p.current = me
+	p.bridgeMu.Unlock()
+	return me
+}
+
+func (p *Proxy) releaseBridge(me *bridge) {
+	p.bridgeMu.Lock()
+	if p.current == me {
+		p.current = nil
+	}
+	p.bridgeMu.Unlock()
+	close(me.done)
+}
+
+// writeCtrl sends a JSON control message to the guest on channel 0.
+func (p *Proxy) writeCtrl(v any) error {
+	payload, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return p.vm.dataT.WriteFrame(wire.Frame{Flags: wire.FlagEnd, Channel: 0, Payload: payload})
 }
 
 func (p *Proxy) handleWS(w http.ResponseWriter, r *http.Request) {
@@ -72,57 +168,82 @@ func (p *Proxy) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.CloseNow()
 
-	p.bridge.Lock()
-	defer p.bridge.Unlock()
+	// Become the active viewer (takeover). The browser's WS open/close is the
+	// connection lifecycle the serial lacks; we translate it into SessionOpen/
+	// SessionClose frames so the guest runs a fresh HandleShell per browser
+	// (docs/NET.md §8.3). releaseBridge runs LAST (deferred first); SessionClose
+	// runs before it, so the next browser's SessionOpen is ordered after.
+	me := p.acquireBridge()
+	defer p.releaseBridge(me)
+
 	ctx := r.Context()
-	errc := make(chan error, 2)
-
-	// guest data plane → WS: one wash frame per WS message.
+	// Cancel the WS read when this browser is evicted by a newer one.
+	rctx, rcancel := context.WithCancel(ctx)
+	defer rcancel()
 	go func() {
-		for {
-			fr, err := p.vm.dataT.ReadFrame()
+		select {
+		case <-me.stop:
+			rcancel()
+		case <-rctx.Done():
+		}
+	}()
+
+	if err := p.writeCtrl(wire.NewSessionOpen()); err != nil {
+		return
+	}
+	defer p.writeCtrl(wire.NewSessionClose())
+
+	// Register this browser as the read-pump's sink. The sink hands frames to a
+	// per-bridge writer goroutine via a buffered channel and NEVER blocks: the
+	// read-pump owns the serial framing, so blocking here would stall it on one
+	// slow browser. A full buffer drops frames for this browser, not the stream.
+	// The writer goroutine is the sole caller of c.Write.
+	out := make(chan []byte, 256)
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		for b := range out {
+			wctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			err := c.Write(wctx, websocket.MessageBinary, b)
+			cancel()
 			if err != nil {
-				errc <- err
-				return
-			}
-			var b bytes.Buffer
-			if err := wire.EncodeFrame(&b, fr); err != nil {
-				errc <- err
-				return
-			}
-			if err := c.Write(ctx, websocket.MessageBinary, b.Bytes()); err != nil {
-				errc <- err
 				return
 			}
 		}
 	}()
-
-	// WS → guest data plane.
-	go func() {
-		for {
-			_, data, err := c.Read(ctx)
-			if err != nil {
-				errc <- err
-				return
-			}
-			fr, err := wire.DecodeFrame(bytes.NewReader(data))
-			if err != nil {
-				errc <- err
-				return
-			}
-			if err := p.vm.dataT.WriteFrame(fr); err != nil {
-				errc <- err
-				return
-			}
+	sink := func(b []byte) {
+		select {
+		case out <- b:
+		default: // browser too slow — drop this frame, keep the framing moving
 		}
+	}
+	p.sinkMu.Lock()
+	p.sink = sink
+	p.sinkMu.Unlock()
+	defer func() {
+		p.sinkMu.Lock()
+		p.sink = nil
+		p.sinkMu.Unlock()
+		close(out)
+		<-writerDone
 	}()
 
-	<-errc
-	// Unblock the serial reader (blocked in ReadFrame on the shared data conn)
-	// so it exits before the next bridge starts; then restore the deadline.
-	_ = p.vm.data.SetReadDeadline(time.Now())
-	<-errc
-	_ = p.vm.data.SetReadDeadline(time.Time{})
+	// WS → guest data plane. One WS message = one wash frame; WriteFrame always
+	// emits a whole frame, so this direction can't desync the serial. Exits on
+	// browser disconnect (c.Read error) or eviction (rctx cancelled).
+	for {
+		_, data, err := c.Read(rctx)
+		if err != nil {
+			return
+		}
+		fr, err := wire.DecodeFrame(bytes.NewReader(data))
+		if err != nil {
+			return
+		}
+		if err := p.vm.dataT.WriteFrame(fr); err != nil {
+			return
+		}
+	}
 }
 
 // handleConsole streams the guest console (ttyS0 — the LOG plane) to the chrome's
