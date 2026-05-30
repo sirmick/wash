@@ -39,13 +39,16 @@ import {
   CatalogApp,
   Sub,
   WindowInfo,
+  bindVideoChannel,
   closeRawSubscriber,
   deliverRaw,
   deliverToInstance,
+  forgetVideoChannel,
   replaceSavedStates,
   setSavedState,
   subscribeRaw,
 } from './api';
+import './wash-app-display';
 import { CreditTracker } from './credit';
 import { showToast } from './notify';
 import { virtioConsoleFactory } from './virtio';
@@ -276,6 +279,15 @@ conn = new Conn(
           // Asset channel: state lives in wash-fetch.ts, keyed by
           // (req_id, channel_id) via the preceding asset.read.ok.
           // Nothing to do here.
+        } else if (b.kind === 'video') {
+          // Per-window video stream for the built-in <wash-app-display>
+          // decoder (wire.ChannelKindVideo). Record window→channel and
+          // attach to the element if it's already mounted; the registry
+          // (api.ts) handles the bind-before-mount race. Frame bytes
+          // still flow through the generic raw path below, so we keep the
+          // channelOwner mapping too (drives channel.unbind cleanup).
+          channelOwner.set(b.channel_id, b.window_id);
+          bindVideoChannel(b.window_id, b.channel_id);
         } else {
           channelOwner.set(b.channel_id, b.window_id);
         }
@@ -294,6 +306,9 @@ conn = new Conn(
         finishAsset(u.channel_id);
         channelOwner.delete(u.channel_id);
         closeRawSubscriber(u.channel_id);
+        // Drop any stashed video binding so a later rebind on the same
+        // window doesn't replay this dead channel to a fresh element.
+        forgetVideoChannel(u.channel_id);
         // Forget any pending credit count — channel is gone, no
         // point sending credit for a dead id.
         creditTracker.forget(u.channel_id);

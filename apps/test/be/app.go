@@ -5,10 +5,14 @@
 package test
 
 import (
+	"bytes"
 	"context"
 	"embed"
-	"encoding/base64"
+	"encoding/binary"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"io/fs"
 	"log"
@@ -19,18 +23,51 @@ import (
 	"github.com/sirmick/wash/internal/wire"
 )
 
-// fakeFrame is a minimal 1×1 PNG used as a stand-in video frame by the
-// fake-display mode (the multi-window contract reference / e2e). The
-// content is irrelevant to the BE-only e2e, but it's a real PNG so a
-// future <wash-app-display> decoder can render it unchanged.
-var fakeFrame = mustB64("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+// fakeFrame is a stand-in video frame for fake-display mode (the
+// multi-window contract reference / e2e). It matches the on-wire frame
+// format the wash-display compositor emits and that the shell's
+// <wash-app-display> decoder expects: a 45-byte little-endian header
+// followed by an image payload (the browser's createImageBitmap
+// auto-detects PNG/WebP from the magic bytes). Here the payload is a
+// minimal 1×1 opaque PNG, so the decoder renders one fully-opaque pixel
+// — enough for the e2e canvas pixel-readback assertion.
+var fakeFrame = makeFakeFrame(onePixelPNG())
 
-func mustB64(s string) []byte {
-	b, err := base64.StdEncoding.DecodeString(s)
-	if err != nil {
-		panic("wash-test: bad fakeFrame b64: " + err.Error())
+// onePixelPNG returns a 1×1 fully-opaque red PNG encoded by the stdlib,
+// so its chunk CRCs are valid and the browser's createImageBitmap accepts
+// it. (An earlier hand-pasted base64 frame had a corrupt IDAT CRC that
+// strict decoders like Chromium reject even though lenient ones read it.)
+// The e2e reads this pixel back from the <wash-app-display> canvas.
+func onePixelPNG() []byte {
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	img.Set(0, 0, color.RGBA{R: 255, A: 255})
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		panic("wash-test: png encode: " + err.Error())
 	}
-	return b
+	return buf.Bytes()
+}
+
+// makeFakeFrame prepends the 45-byte little-endian display header to a
+// raw image payload. The image is a single 1×1 full-surface frame with
+// a dirty rect covering the whole surface; timestamps and cursor fields
+// are left zero (the decoder ignores them). See docs/DISPLAY.md and the
+// shell's wash-app-display.ts parseHeader for the field layout.
+func makeFakeFrame(payload []byte) []byte {
+	const headerBytes = 45
+	const w, h = uint32(1), uint32(1)
+	buf := make([]byte, headerBytes+len(payload))
+	// off 0 u64 t1_frame_ready left 0.
+	// dirty rect covers the whole 1x1 surface.
+	binary.LittleEndian.PutUint32(buf[8:], 0)  // dirty_x
+	binary.LittleEndian.PutUint32(buf[12:], 0) // dirty_y
+	binary.LittleEndian.PutUint32(buf[16:], w) // dirty_w
+	binary.LittleEndian.PutUint32(buf[20:], h) // dirty_h
+	binary.LittleEndian.PutUint32(buf[24:], w) // frame_w
+	binary.LittleEndian.PutUint32(buf[28:], h) // frame_h
+	// off 32 u64 t4, off 40 cursor_x/y, off 44 cursor_visible all 0.
+	copy(buf[headerBytes:], payload)
+	return buf
 }
 
 //go:embed all:assets
@@ -269,7 +306,13 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			ctx := context.Background()
 			windows := make([]map[string]any, 0, n)
 			for i := 0; i < n; i++ {
-				win, err := c.CreateWindow(ctx, sdk.WindowOpts{Title: fmt.Sprintf("Display %d", i+1), W: 320, H: 240})
+				// Element override: these windows render video, so the shell
+				// must mount the built-in <wash-app-display> decoder rather
+				// than the test app's own manifest element (wash-app-test).
+				// The real wash-display app gets this for free (its manifest
+				// element IS wash-app-display); the override lets a non-display
+				// app present a display window. See docs/DISPLAY.md §4.
+				win, err := c.CreateWindow(ctx, sdk.WindowOpts{Title: fmt.Sprintf("Display %d", i+1), W: 320, H: 240, Element: "wash-app-display"})
 				if err != nil {
 					log.Printf("wash-test display_open create: %v", err)
 					windows = append(windows, map[string]any{"win": 0, "channel": 0, "error": err.Error()})

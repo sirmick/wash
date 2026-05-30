@@ -195,3 +195,76 @@ export function closeRawSubscriber(channelID: number): void {
   rawSubscribers.delete(channelID);
   pendingRaw.delete(channelID);
 }
+
+// ---- Display window ↔ video channel registry ----
+//
+// The built-in <wash-app-display> element (wash-app-display.ts) renders
+// one window's video stream. wash-display windows carry element
+// "wash-app-display" with an empty app bundle, so the element is a shell
+// built-in keyed by WINDOW id (not instance id — a single background
+// wash-display instance owns many display windows).
+//
+// The router announces a window's video channel via channel.bind with
+// kind="video" {channel_id, window_id}. main.tsx forwards that here as
+// bindVideoChannel(window_id, channel_id). The element registers itself
+// on mount via registerDisplayWindow(window_id, el). Either order works:
+//   - bind before mount → channel id is stashed; replayed on register.
+//   - mount before bind → element waits; attached when the bind lands.
+// This mirrors the pendingMessages / pendingRaw pattern above.
+//
+// Actual frame bytes still flow through deliverRaw(channel_id, …); the
+// element subscribes via subscribeRaw(channel_id) once attached.
+
+interface DisplayElement extends HTMLElement {
+  attachVideoChannel(channelID: number): void;
+}
+
+const displayWindows = new Map<number, DisplayElement>();
+const videoChannelForWindow = new Map<number, number>();
+
+export function registerDisplayWindow(windowID: number, el: DisplayElement): void {
+  displayWindows.set(windowID, el);
+  const ch = videoChannelForWindow.get(windowID);
+  if (ch !== undefined) {
+    try {
+      el.attachVideoChannel(ch);
+    } catch (e) {
+      console.error('wash: attachVideoChannel (register):', e);
+    }
+  }
+}
+
+export function unregisterDisplayWindow(windowID: number, el: DisplayElement): void {
+  // Only drop if the registered element is still us — guards against a
+  // remount that already re-registered before our disconnect ran.
+  if (displayWindows.get(windowID) === el) {
+    displayWindows.delete(windowID);
+  }
+}
+
+// bindVideoChannel records (and, if the element is mounted, attaches)
+// the video channel for a window. Called from main.tsx's channel.bind
+// handler when kind === wire.ChannelKindVideo ("video").
+export function bindVideoChannel(windowID: number, channelID: number): void {
+  videoChannelForWindow.set(windowID, channelID);
+  const el = displayWindows.get(windowID);
+  if (el) {
+    try {
+      el.attachVideoChannel(channelID);
+    } catch (e) {
+      console.error('wash: attachVideoChannel (bind):', e);
+    }
+  }
+}
+
+// forgetVideoChannel clears the stashed video channel for a window.
+// Called on channel.unbind so a later rebind on the same window id
+// doesn't replay a dead channel to a freshly-mounted element.
+export function forgetVideoChannel(channelID: number): void {
+  for (const [winID, chID] of videoChannelForWindow) {
+    if (chID === channelID) {
+      videoChannelForWindow.delete(winID);
+      break;
+    }
+  }
+}

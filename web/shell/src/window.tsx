@@ -53,6 +53,10 @@ export function FloatingWindow(props: WindowProps) {
     }
     const el = document.createElement(props.win.element);
     el.setAttribute('data-wash-instance', props.win.instanceID);
+    // window_id lets per-window shell built-ins (the <wash-app-display>
+    // video decoder) find their video channel via the display-window
+    // registry. Backward-compatible: existing app elements ignore it.
+    el.setAttribute('data-wash-window', String(props.win.windowID));
     slot.appendChild(el);
     // Defer registerMountedElement to a microtask so the custom
     // element's Solid onMount has run and any `wash:state` /

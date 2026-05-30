@@ -1,15 +1,16 @@
-// Multi-window display contract (docs/DISPLAY.md §4–5), BE-only.
+// Multi-window display contract (docs/DISPLAY.md §4–5).
 //
-// Proves the wash-display wire contract end-to-end through the real
-// router — no compositor, no browser. The test app's fake-display mode
-// (it declares CapWindows) creates N windows via window.create, opens a
-// per-window "video" channel on each, and pushes one stand-in frame.
-// We assert the BE reply (distinct window + channel ids) and the
-// router's window.create log line, per [[wash e2e pattern]].
-//
-// The browser-side proof (a <wash-app-display> canvas rendering the
-// frame) lands with the shell's video-channel routing in a later step;
-// here the contract itself is what we lock down.
+// Two layers:
+//   1. BE/router contract (headless, no browser): the test app's
+//      fake-display mode (it declares CapWindows) creates N windows via
+//      window.create, opens a per-window "video" channel on each, and
+//      pushes one stand-in frame. We assert the BE reply (distinct
+//      window + channel ids) and the router's window.create log line,
+//      per [[wash e2e pattern]].
+//   2. FE render (browser): with a shell attached, each window's video
+//      channel binds (kind="video") and the built-in <wash-app-display>
+//      element decodes the canned frame onto its <canvas> — the pixel
+//      readback proves the decode/draw path.
 
 import { test, expect } from '../fixtures/router';
 
@@ -48,5 +49,56 @@ test.describe('multi-window display contract', () => {
     });
     expect(closed.kind).toBe('display_closed');
     expect(closed.win).toBe(wins[0].win);
+  });
+
+  test('browser: <wash-app-display> decodes the canned video frame', async ({ page, router }) => {
+    // The shell page is served by the same router. Load it, then drive
+    // the test app's fake-display mode through the control socket. The
+    // test app writes the canned frame (45-byte LE header + a 1x1
+    // opaque PNG) the moment it opens each window's video channel; the
+    // router binds the channel to the shell with kind="video", and
+    // main.tsx routes the bytes to the matching <wash-app-display>
+    // element keyed by window id.
+    await page.goto(router.url);
+
+    const launched = await router.controlRequest({ t: 'launch', app_id: 'com.wash.test' });
+    expect(launched.t).toBe('launched');
+    const inst = launched.instance_id as string;
+
+    const resp = await router.sendAppMsg(inst, { kind: 'display_open', id: 'b1', n: 2 });
+    expect(resp.kind).toBe('display_opened');
+    const wins = (resp.windows ?? []) as Array<{ win: number; channel: number }>;
+    expect(wins).toHaveLength(2);
+    // With a shell attached the per-window video channels open and carry
+    // the frame, so channel ids must be nonzero (unlike the headless run
+    // above) — the shell-bound branch of the contract.
+    for (const w of wins) {
+      expect(w.channel).toBeGreaterThan(0);
+    }
+
+    // The built-in element mounts per window (window.tsx createElement).
+    await page.waitForSelector('wash-app-display[data-wash-window]', { timeout: 10_000 });
+    expect(await page.locator('wash-app-display').count()).toBeGreaterThanOrEqual(2);
+
+    // Poll the canvas: the canned frame is a 1x1 opaque PNG behind the
+    // 45-byte header, so after decode + drawImage the canvas is sized to
+    // the frame (1x1) and its single pixel is fully opaque (a != 0).
+    // createImageBitmap is async, hence the poll.
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(() => {
+            const el = document.querySelector('wash-app-display');
+            if (!el) return null;
+            const canvas = el.querySelector('canvas') as HTMLCanvasElement | null;
+            if (!canvas || canvas.width === 0 || canvas.height === 0) return null;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return null;
+            const { data } = ctx.getImageData(0, 0, 1, 1);
+            return { w: canvas.width, h: canvas.height, a: data[3] };
+          }),
+        { timeout: 10_000 },
+      )
+      .toMatchObject({ w: 1, h: 1, a: 255 });
   });
 });
