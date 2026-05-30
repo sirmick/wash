@@ -54,6 +54,7 @@ func (o *Opts) defaults() {
 // VirtioConsoleSocket).
 type VM struct {
 	cmd     *exec.Cmd
+	cancel  context.CancelFunc // tears down qemu on Close (NOT on the boot ctx)
 	ctl     net.Conn
 	data    net.Conn
 	dataT   *wire.StreamTransport
@@ -104,9 +105,17 @@ func Launch(ctx context.Context, o Opts) (*VM, error) {
 		// the first data port is deterministically /dev/vport0p1 in-guest.
 		"-device", "virtserialport,chardev=data,name=wash.data,nr=1",
 	}
-	vm.cmd = exec.CommandContext(ctx, o.QEMU, args...)
+	// qemu's lifetime is the VM's lifetime — until Close() — NOT the caller's
+	// boot context. The passed ctx bounds the dial/handshake below (which is
+	// what a "boot timeout" should cap); binding qemu itself to it would
+	// SIGKILL a healthy VM the moment that timeout elapses, so a browser that
+	// connected even a minute after boot would find a dead data/ctl plane.
+	qemuCtx, cancel := context.WithCancel(context.Background())
+	vm.cancel = cancel
+	vm.cmd = exec.CommandContext(qemuCtx, o.QEMU, args...)
 	vm.cmd.Stderr = vm.stderr
 	if err := vm.cmd.Start(); err != nil {
+		cancel()
 		os.RemoveAll(dir)
 		return nil, fmt.Errorf("vm: start qemu: %w", err)
 	}
@@ -210,6 +219,9 @@ func (vm *VM) Close() error {
 	}
 	if vm.data != nil {
 		vm.data.Close()
+	}
+	if vm.cancel != nil {
+		vm.cancel()
 	}
 	if vm.cmd != nil && vm.cmd.Process != nil {
 		vm.cmd.Process.Kill()
