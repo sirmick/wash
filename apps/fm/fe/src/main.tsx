@@ -20,6 +20,7 @@ import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
 import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, defineWashApp, tokens } from '@wash/ui';
 import { baseName, formatDate, humanSize, joinPath, octalPerm, parentPath } from './paths.ts';
+import { createBus } from './bus.ts';
 import {
   ArrowLeft,
   ArrowRight,
@@ -295,17 +296,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   const handleBE = (m: BEMessage) => {
-    // request_id correlation: if the BE echoes an id we issued via
-    // sendWithReply, resolve the matching promise and stop. Any
-    // remaining branches handle messages without an id — the
-    // existing FE list/read/complete flows.
-    const replyID = typeof m.id === 'string' ? m.id : undefined;
-    if (replyID && pendingReplies.has(replyID)) {
-      const resolver = pendingReplies.get(replyID)!;
-      pendingReplies.delete(replyID);
-      resolver(m);
-      return;
-    }
+    // If the BE echoes an id we issued via sendWithReply, the bus
+    // resolves the matching promise and we stop. The remaining
+    // branches handle uncorrelated push messages (list/read/complete/
+    // fs_event).
+    if (bus.tryResolve(m)) return;
     switch (m.kind) {
       case 'list_ok': {
         const p = String(m.path);
