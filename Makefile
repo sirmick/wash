@@ -14,7 +14,7 @@ GOARCH  ?= amd64
 GOFLAGS := -trimpath -ldflags=-s\ -w -tags netgo,osusergo
 
 OUT     := out
-BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd
+BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -112,6 +112,9 @@ SERVICES_STAMP  := $(SERVICES_ASSETS)/.stamp
 PACKAGES_ASSETS := apps/packages/be/assets
 PACKAGES_STAMP  := $(PACKAGES_ASSETS)/.stamp
 
+NET_ASSETS      := apps/net/be/assets
+NET_STAMP       := $(NET_ASSETS)/.stamp
+
 VSCODE_ASSETS  := apps/vscode/be/assets
 VSCODE_STAMP   := $(VSCODE_ASSETS)/.stamp
 
@@ -191,6 +194,10 @@ web-services: web-deps
 web-packages: web-deps
 	@$(PNPM) --filter @wash/app-packages run build
 
+.PHONY: web-net
+web-net: web-deps
+	@$(PNPM) --filter @wash/app-net run build
+
 # embed-into-cmd helper. Usage: $(call embed,<src dist dir>,<dst assets dir>)
 #
 # Files land under cmd/<bin>/assets/ and are picked up by //go:embed
@@ -252,6 +259,9 @@ $(SERVICES_STAMP): web-services
 
 $(PACKAGES_STAMP): web-packages
 	$(call embed_dist,apps/packages/fe/dist,$(PACKAGES_ASSETS))
+
+$(NET_STAMP): web-net
+	$(call embed_dist,apps/net/fe/dist,$(NET_ASSETS))
 
 # ----- go stage -----
 
@@ -322,6 +332,12 @@ $(OUT)/wash-services: $(SERVICES_STAMP) | $(OUT)
 
 $(OUT)/wash-packages: $(PACKAGES_STAMP) | $(OUT)
 	$(call go_build,$@,apps/packages/be/cmd)
+
+# wash-net is the windowed network UI (docs/NET.md §2.11). It embeds the
+# apps/net/fe bundle and relays to the privileged wash-netd service. The
+# NET_STAMP dep stages the FE into apps/net/be/assets before the go build.
+$(OUT)/wash-net: $(NET_STAMP) | $(OUT)
+	$(call go_build,$@,apps/net/be/cmd)
 
 # wash-notify is a background service: no window, no FE bundle, no
 # embedded assets. Other apps' c.Notify() calls land here via the
@@ -431,7 +447,7 @@ test-app: $(OUT)/wash-priv-fakesudo
 # "pattern all:assets: no matching files found" — local dev
 # accidentally works because the standalone wash-router build
 # rule already chains through ROUTER_STAMP.
-MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP) $(VSCODE_STAMP) $(VSCODE_WB_STAMP)
+MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP) $(VSCODE_STAMP) $(VSCODE_WB_STAMP) $(NET_STAMP)
 
 # Adding wash_test_app to the tags pulls the test app's blank-import
 # in (which is otherwise excluded by cmd/wash/imports_test.go's
