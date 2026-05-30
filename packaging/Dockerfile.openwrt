@@ -1,0 +1,101 @@
+# Builds a binary tarball for OpenWRT and verifies it works against
+# a clean openwrt/rootfs image. OpenWRT's native package format (.ipk)
+# wants the OpenWRT SDK + a target-specific Makefile DSL; that's out
+# of scope for v1, so this row publishes a `.tgz` of static binaries
+# instead. Users install by extracting to /usr/bin.
+#
+# Single-stage: openwrt/rootfs already provides everything we need
+# (procd, opkg, busybox userland). No build tooling required.
+#
+# Usage (driven by packaging/run_matrix.sh):
+#   docker build -f packaging/Dockerfile.openwrt \
+#     --build-arg BASE=openwrt/rootfs:x86-64-24.10.6 \
+#     --build-arg VERSION=0.8.0 \
+#     -t wash-pkg:openwrt-24.10.6-x86_64 \
+#     packaging/build-ctx
+
+ARG BASE=openwrt/rootfs:x86-64-24.10.6
+ARG VERSION=0.8.0
+
+FROM ${BASE} AS test
+ARG VERSION
+
+# OpenWRT's container doesn't ship some dirs opkg expects. Provision
+# them up front so opkg can run during the integration test. Also
+# install xz — busybox tar can't read .tar.xz natively (no -J flag)
+# and the openwrt rootfs ships no xz binary by default.
+RUN mkdir -p /var/lock /var/lib/opkg /var/opkg-lists /tmp/extract /etc/wash \
+    && opkg update >/dev/null 2>&1 \
+    && opkg install xz >/dev/null 2>&1
+
+COPY wash_${VERSION}.tar.xz /tmp/source.tar.xz
+
+# Stage 1: unpack the tarball, install binaries, build the artefact.
+# Pipe through xz since busybox tar can't decompress xz directly.
+RUN xz -dc /tmp/source.tar.xz | tar -x -C /tmp/extract \
+    && SRC=/tmp/extract/wash-${VERSION} \
+    && BINS="wash-router wash-login wash-session wash-about wash-fm \
+            wash-term wash-edit wash-bulk wash-priv wash-journal \
+            wash-notify wash-settings wash-top wash-syslogs \
+            wash-services wash-packages wash-launch wash-sudo" \
+    && for bin in $BINS; do \
+        cp "$SRC/out/$bin" "/usr/bin/$bin" && chmod 0755 "/usr/bin/$bin"; \
+    done \
+    && chown root:root /usr/bin/wash-priv \
+    && mkdir -p /tests \
+    && cp "$SRC/out/packages_distro.test" /tests/ \
+    && cp "$SRC/out/services_distro.test" /tests/ \
+    && mkdir -p /pkg \
+    && (cd /usr/bin && tar -czf /pkg/wash-openwrt-24.10.6-x86_64.tgz $BINS)
+
+# wash-system uid + wash group. The openwrt/rootfs image doesn't ship
+# busybox's adduser/addgroup applets (and shadow-utils would need an
+# opkg install). Append to /etc/passwd + /etc/group directly — same
+# end state, no dependencies. Fixed uid/gid 990 is arbitrary but well
+# above the busybox dynamic range.
+RUN echo 'wash:x:990:' >> /etc/group \
+    && echo 'wash-system:x:990:990:wash-system:/var/lib/wash:/sbin/nologin' >> /etc/passwd
+
+# Static smoke. busybox lacks `stat -c` and `getent` on this image,
+# so check perms via ls and user/group via /etc/passwd, /etc/group.
+RUN test -x /usr/bin/wash-router \
+    && test -x /usr/bin/wash-priv \
+    && test -x /usr/bin/wash-packages \
+    && test -x /usr/bin/wash-services \
+    && [ "$(ls -l /usr/bin/wash-priv | awk '{print $1" "$3}')" = "-rwxr-xr-x root" ] \
+    && grep -q '^wash-system:' /etc/passwd \
+    && grep -q '^wash:' /etc/group \
+    && test -d /etc/wash
+
+# Refresh the opkg index so the distro_integration test below can
+# `opkg find busybox` against a populated catalog. Done in a separate
+# layer because it pulls down ~MBs of feeds.
+RUN opkg update 2>&1 | tail -5
+
+# Distro-integration tests against real opkg + procd. The procd one
+# only verifies the catalog (no PID-1 procd in the container); the
+# opkg test exercises the full Search path.
+RUN /tests/packages_distro.test -test.v
+RUN /tests/services_distro.test -test.v
+
+# Daemon boot smoke. busybox wget on OpenWRT supports the same flags.
+RUN /usr/bin/wash-router -version \
+    && mkdir -p /tmp/empty-apps \
+    && /usr/bin/wash-router -listen 127.0.0.1:11000 -apps-dir /tmp/empty-apps > /tmp/router.log 2>&1 & \
+    ROUTER=$!; \
+    ok=0; \
+    for i in 1 2 3 4 5 6 7 8 9 10; do \
+      if wget -q -O /dev/null http://127.0.0.1:11000/ 2>/dev/null; then \
+        ok=1; break; \
+      fi; \
+      sleep 1; \
+    done; \
+    kill $ROUTER 2>/dev/null || true; \
+    wait $ROUTER 2>/dev/null || true; \
+    if [ "$ok" != "1" ]; then \
+      echo "=== router log ==="; cat /tmp/router.log; \
+      echo "boot smoke FAIL"; exit 1; \
+    fi; \
+    echo "boot smoke OK"
+
+CMD ["/usr/bin/wash-router", "-listen", "0.0.0.0:11000", "-apps-dir", "/usr/bin"]

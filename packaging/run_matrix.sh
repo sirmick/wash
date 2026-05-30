@@ -29,10 +29,11 @@ TARBALL_NAME="wash_${VERSION}.tar.xz"
 #   WASH_PKG_TARGETS=$'ubuntu-24.04-amd64 linux/amd64 ubuntu:24.04 deb' \
 #     ./packaging/run_matrix.sh
 TARGETS=(
-  "ubuntu-24.04-amd64    linux/amd64    ubuntu:24.04   deb"
-  "debian-12-amd64       linux/amd64    debian:12      deb"
-  "fedora-40-amd64       linux/amd64    fedora:40      rpm"
-  "alpine-3.21-amd64     linux/amd64    alpine:3.21    apk"
+  "ubuntu-24.04-amd64      linux/amd64    ubuntu:24.04                    deb"
+  "debian-12-amd64         linux/amd64    debian:12                       deb"
+  "fedora-40-amd64         linux/amd64    fedora:40                       rpm"
+  "alpine-3.21-amd64       linux/amd64    alpine:3.21                     apk"
+  "openwrt-24.10.6-x86_64  linux/amd64    openwrt/rootfs:x86-64-24.10.6   openwrt"
 )
 if [[ -n "${WASH_PKG_TARGETS:-}" ]]; then
   mapfile -t TARGETS <<<"$WASH_PKG_TARGETS"
@@ -115,7 +116,7 @@ for row in "${TARGETS[@]}"; do
     cid="$(docker create "$image")"
     docker cp "$cid:/pkg/." "$pkg_out/" >/dev/null 2>&1 || true
     docker rm "$cid" >/dev/null 2>&1 || true
-    artifact="$(find "$pkg_out" -maxdepth 1 \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' \) | sort | head -1)"
+    artifact="$(find "$pkg_out" -maxdepth 1 \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' -o -name '*.tgz' \) | sort | head -1)"
     if [[ -n "$artifact" ]]; then
         size="$(du -h "$artifact" | cut -f1)"
         results+=("$tag: OK   $size $(basename "$artifact")")

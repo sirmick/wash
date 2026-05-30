@@ -81,6 +81,13 @@ jobs:
           - tag: alpine-3.21-amd64
             base: alpine:3.21
             kind: apk
+          # OpenWRT row: runtime-only (no native .ipk). The Dockerfile
+          # produces a tarball of static binaries; matrix proves the
+          # opkg + procd backends work end-to-end on a real OpenWRT
+          # rootfs.
+          - tag: openwrt-24.10.6-x86_64
+            base: openwrt/rootfs:x86-64-24.10.6
+            kind: openwrt
 
     steps:
       - uses: actions/checkout@v4
@@ -175,7 +182,15 @@ jobs:
           VER="${GITHUB_REF_NAME#v}"
           case "$VER" in *.*.*) ;; *) VER=0.8.0;; esac
           for f in dist/packages/${{ matrix.tag }}/*; do
-            ext="${f##*.}"
+            # Compound .tar.xz / .tar.gz extensions need a two-step
+            # strip; otherwise ${f##*.} loses the .tar half. .tgz
+            # remains one extension. Single switch covers all four
+            # current matrix outputs.
+            case "$f" in
+              *.tar.xz) ext="tar.xz" ;;
+              *.tar.gz) ext="tar.gz" ;;
+              *)        ext="${f##*.}" ;;
+            esac
             cp  "$f" "dist/packages/${{ matrix.tag }}/wash-${VER}-${{ matrix.tag }}.${ext}"
             mv  "$f" "dist/packages/${{ matrix.tag }}/wash-${{ matrix.tag }}.${ext}"
           done
