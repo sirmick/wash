@@ -22,6 +22,7 @@ import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, defi
 import { baseName, formatDate, humanSize, joinPath, octalPerm, parentPath } from './paths.ts';
 import { createBus } from './bus.ts';
 import { createWatch } from './watch.ts';
+import { DRAG_MIME, dragPayload, dropEffectFor, hasWashDrag, readDragPaths } from './dnd.ts';
 import {
   ArrowLeft,
   ArrowRight,
@@ -821,15 +822,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // length>1 means we route through bulk-ops for everything.
   const [dropMenu, setDropMenu] = createSignal<{ x: number; y: number; srcs: string[]; targetDir: string } | null>(null);
 
-  // Drag payload format. We carry a JSON array of source paths
-  // under application/x-wash-paths (plural). A
-  // single drag from an unselected row carries one path; dragging
-  // a row that's part of a multi-selection carries every selected
-  // path. Drop handlers branch on length: n>1 always routes to
-  // bulk-ops because the BE rename op is single-shot — the queue
-  // is where Replace All / Skip All live.
-  const DRAG_MIME = 'application/x-wash-paths';
-
+  // Drag payload parsing + drop-accept logic (DRAG_MIME, readDragPaths,
+  // dragPayload, hasWashDrag, dropEffectFor) live in ./dnd.ts
+  // (framework-free, unit-tested). The thin DOM handlers below own only
+  // the event-plumbing (preventDefault/stopPropagation) and the Solid
+  // dropTargetPath signal.
   const onDragStart = (ev: DragEvent, p: string) => {
     if (!ev.dataTransfer) return;
     // effectAllowed = 'copyMove' (not 'move') so the browser
@@ -841,7 +838,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // create-symlink lives behind the Alt menu, not the cursor
     // badge.
     ev.dataTransfer.effectAllowed = 'copyMove';
-    const paths = selection().has(p) ? Array.from(selection()) : [p];
+    const paths = dragPayload(p, selection());
     ev.dataTransfer.setData(DRAG_MIME, JSON.stringify(paths));
     // text/plain is a friendly fallback for drops onto non-wash
     // targets (terminals, editors). Newline-joined matches what
@@ -853,23 +850,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     setDropTargetPath('');
   };
 
-  // readDragPaths pulls our JSON-array payload out of a drag
-  // event. Returns [] if the drag doesn't carry our MIME so
-  // non-wash drags (text drops from other apps, etc.) are ignored
-  // cleanly.
-  const readDragPaths = (ev: DragEvent): string[] => {
-    if (!ev.dataTransfer) return [];
-    const json = ev.dataTransfer.getData(DRAG_MIME);
-    if (!json) return [];
-    try {
-      const arr = JSON.parse(json);
-      if (Array.isArray(arr)) return arr.filter((s) => typeof s === 'string');
-    } catch {
-      /* ignore */
-    }
-    return [];
-  };
-
   // onRowDragOver is wired on directory rows only. preventDefault
   // tells the browser "this is a valid drop target," and
   // stopPropagation keeps the list-pane onDragOver from also
@@ -879,15 +859,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // otherwise) — without this, Mac users get no feedback that
   // the modifier is actually doing something.
   const onRowDragOver = (ev: DragEvent, rowPath: string) => {
-    if (!ev.dataTransfer || !ev.dataTransfer.types.includes(DRAG_MIME)) return;
+    if (!hasWashDrag(ev.dataTransfer)) return;
     ev.preventDefault();
     ev.stopPropagation();
-    ev.dataTransfer.dropEffect = ev.altKey ? 'copy' : 'move';
+    ev.dataTransfer!.dropEffect = dropEffectFor(ev.altKey);
     if (dropTargetPath() !== rowPath) setDropTargetPath(rowPath);
   };
 
   const onRowDrop = (ev: DragEvent, rowPath: string) => {
-    const paths = readDragPaths(ev);
+    const paths = readDragPaths(ev.dataTransfer);
     if (paths.length === 0) return;
     ev.preventDefault();
     ev.stopPropagation();
@@ -900,14 +880,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   const onListDragOver = (ev: DragEvent) => {
-    if (!ev.dataTransfer || !ev.dataTransfer.types.includes(DRAG_MIME)) return;
+    if (!hasWashDrag(ev.dataTransfer)) return;
     ev.preventDefault();
-    ev.dataTransfer.dropEffect = ev.altKey ? 'copy' : 'move';
+    ev.dataTransfer!.dropEffect = dropEffectFor(ev.altKey);
     if (dropTargetPath() !== '') setDropTargetPath('');
   };
 
   const onListDrop = (ev: DragEvent) => {
-    const paths = readDragPaths(ev);
+    const paths = readDragPaths(ev.dataTransfer);
     if (paths.length === 0) return;
     ev.preventDefault();
     setDropTargetPath('');
