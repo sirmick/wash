@@ -33,6 +33,8 @@ e2e/playwright-report/
 
 # wash-display CMake build dir
 wash-display/build/
+# Vendored wlroots is committed as SOURCE; its Meson build output is not.
+wash-display/third_party/wlroots/build/
 
 # Vendored reference sources (mac-phoenix, greenfield) for the
 # compositor work — heavy borrow, never committed.
