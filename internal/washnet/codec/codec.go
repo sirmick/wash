@@ -1,8 +1,10 @@
 // Package codec serializes a model.Config to native UCI text and parses it
 // back. It is reflection-driven off the `uci` struct tags, so adding a model
 // object (with the tags + UCIPackage/UCISection methods) makes it codec-aware
-// with no codec changes. The round-trip Parse(Render(c)) == c is the A1 commit
-// gate (see docs/NET.md §9, §11). The format emitted is standard UCI export:
+// with no codec changes. Tagged unions (uci:"opt,union") render the
+// discriminator option plus the concrete variant's fields inlined into the same
+// section. The round-trip Parse(Render(c)) == c is a commit gate (docs/NET.md
+// §9, §11). Output is standard UCI export:
 //
 //	config interface 'lan'
 //		option proto 'static'
@@ -15,20 +17,22 @@ import (
 	"fmt"
 	"net/netip"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/sirmick/wash/internal/washnet/model"
 )
 
-// uciObject is implemented by every model object that maps to a UCI section.
 type uciObject interface {
 	UCIPackage() string
 	UCISection() string
 }
 
-// Render serializes a Config to one UCI text blob per package (e.g. "network",
-// "firewall"), keyed by package name. Zero-valued optional fields are omitted,
-// which is what makes the round-trip total: omitted ⇄ zero.
+type uciTagger interface{ UCITag() string }
+
+// Render serializes a Config to one UCI text blob per package, keyed by package
+// name. Zero-valued optional fields are omitted, which makes the round-trip
+// total: omitted ⇄ zero.
 func Render(c model.Config) (map[string]string, error) {
 	byPkg := map[string][]string{}
 	cv := reflect.ValueOf(c)
@@ -59,9 +63,28 @@ func Render(c model.Config) (map[string]string, error) {
 }
 
 func renderObject(v reflect.Value, section string) (string, error) {
+	name, lines, err := collectFields(v)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	if name != "" {
+		fmt.Fprintf(&b, "config %s '%s'\n", section, name)
+	} else {
+		fmt.Fprintf(&b, "config %s\n", section)
+	}
+	for _, l := range lines {
+		b.WriteString(l)
+		b.WriteByte('\n')
+	}
+	return b.String(), nil
+}
+
+// collectFields walks a struct's `uci` tags, returning the section name (if a
+// ,name field is present) and the option/list lines. Union fields recurse,
+// inlining the variant's lines into the same section.
+func collectFields(v reflect.Value) (name string, lines []string, err error) {
 	t := v.Type()
-	var name string
-	var opts []string
 	for i := 0; i < t.NumField(); i++ {
 		tag := t.Field(i).Tag.Get("uci")
 		if tag == "" || tag == "-" {
@@ -72,38 +95,35 @@ func renderObject(v reflect.Value, section string) (string, error) {
 		switch {
 		case hasFlag(flags, "name"):
 			name = fv.String()
+		case hasFlag(flags, "union"):
+			if fv.IsNil() {
+				continue
+			}
+			tagger, ok := fv.Interface().(uciTagger)
+			if !ok {
+				return "", nil, fmt.Errorf("union field %s does not implement UCITag", t.Field(i).Name)
+			}
+			lines = append(lines, fmt.Sprintf("\toption %s '%s'", optName, tagger.UCITag()))
+			_, sub, serr := collectFields(reflect.ValueOf(fv.Interface()))
+			if serr != nil {
+				return "", nil, serr
+			}
+			lines = append(lines, sub...)
 		case hasFlag(flags, "list"):
 			for _, s := range formatList(fv) {
-				opts = append(opts, fmt.Sprintf("\tlist %s '%s'", optName, s))
+				lines = append(lines, fmt.Sprintf("\tlist %s '%s'", optName, s))
 			}
 		default:
 			if s, ok := formatScalar(fv); ok {
-				opts = append(opts, fmt.Sprintf("\toption %s '%s'", optName, s))
+				lines = append(lines, fmt.Sprintf("\toption %s '%s'", optName, s))
 			}
 		}
 	}
-	var b strings.Builder
-	if name != "" {
-		fmt.Fprintf(&b, "config %s '%s'\n", section, name)
-	} else {
-		fmt.Fprintf(&b, "config %s\n", section)
-	}
-	for _, o := range opts {
-		b.WriteString(o)
-		b.WriteByte('\n')
-	}
-	return b.String(), nil
+	return name, lines, nil
 }
 
 func formatScalar(fv reflect.Value) (string, bool) {
 	switch x := fv.Interface().(type) {
-	case string:
-		return x, x != ""
-	case bool:
-		if !x {
-			return "", false
-		}
-		return "1", true
 	case netip.Addr:
 		if !x.IsValid() {
 			return "", false
@@ -114,6 +134,28 @@ func formatScalar(fv reflect.Value) (string, bool) {
 			return "", false
 		}
 		return x.String(), true
+	}
+	switch fv.Kind() {
+	case reflect.String:
+		s := fv.String()
+		return s, s != ""
+	case reflect.Bool:
+		if !fv.Bool() {
+			return "", false
+		}
+		return "1", true
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		n := fv.Int()
+		if n == 0 {
+			return "", false
+		}
+		return strconv.FormatInt(n, 10), true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		n := fv.Uint()
+		if n == 0 {
+			return "", false
+		}
+		return strconv.FormatUint(n, 10), true
 	}
 	return "", false
 }
@@ -133,12 +175,18 @@ func formatList(fv reflect.Value) []string {
 				out = append(out, a.String())
 			}
 		}
+	case []netip.Prefix:
+		for _, p := range xs {
+			if p.IsValid() {
+				out = append(out, p.String())
+			}
+		}
 	}
 	return out
 }
 
-// binding maps a (package/section) key to the Config slice field and element
-// type that receives parsed sections.
+// binding maps a package/section key to the Config slice field and element type
+// that receives parsed sections.
 type binding struct {
 	fieldIndex int
 	elemType   reflect.Type
@@ -179,7 +227,7 @@ func Parse(files map[string]string) (model.Config, error) {
 				continue
 			}
 			elem := reflect.New(b.elemType).Elem()
-			if err := fillObject(elem, sec); err != nil {
+			if err := fillFields(elem, sec); err != nil {
 				return c, fmt.Errorf("package %q section %q %q: %w", pkg, sec.typ, sec.name, err)
 			}
 			fld := cv.Field(b.fieldIndex)
@@ -189,7 +237,7 @@ func Parse(files map[string]string) (model.Config, error) {
 	return c, nil
 }
 
-func fillObject(v reflect.Value, sec section) error {
+func fillFields(v reflect.Value, sec section) error {
 	t := v.Type()
 	for i := 0; i < t.NumField(); i++ {
 		tag := t.Field(i).Tag.Get("uci")
@@ -201,6 +249,20 @@ func fillObject(v reflect.Value, sec section) error {
 		switch {
 		case hasFlag(flags, "name"):
 			fv.SetString(sec.name)
+		case hasFlag(flags, "union"):
+			tag, ok := sec.opts[name]
+			if !ok {
+				continue
+			}
+			vt, ok := model.VariantType(fv.Type(), tag)
+			if !ok {
+				return fmt.Errorf("unknown %s variant %q", name, tag)
+			}
+			variant := reflect.New(vt).Elem()
+			if err := fillFields(variant, sec); err != nil {
+				return err
+			}
+			fv.Set(variant)
 		case hasFlag(flags, "list"):
 			if vals, ok := sec.lists[name]; ok {
 				if err := setList(fv, vals); err != nil {
@@ -220,22 +282,38 @@ func fillObject(v reflect.Value, sec section) error {
 
 func setScalar(fv reflect.Value, s string) error {
 	switch fv.Interface().(type) {
-	case string:
-		fv.SetString(s)
-	case bool:
-		fv.SetBool(parseBool(s))
 	case netip.Addr:
 		a, err := netip.ParseAddr(s)
 		if err != nil {
 			return err
 		}
 		fv.Set(reflect.ValueOf(a))
+		return nil
 	case netip.Prefix:
 		p, err := netip.ParsePrefix(s)
 		if err != nil {
 			return err
 		}
 		fv.Set(reflect.ValueOf(p))
+		return nil
+	}
+	switch fv.Kind() {
+	case reflect.String:
+		fv.SetString(s)
+	case reflect.Bool:
+		fv.SetBool(parseBool(s))
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return err
+		}
+		fv.SetInt(n)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		n, err := strconv.ParseUint(s, 10, 64)
+		if err != nil {
+			return err
+		}
+		fv.SetUint(n)
 	}
 	return nil
 }
@@ -254,6 +332,16 @@ func setList(fv reflect.Value, vals []string) error {
 			addrs = append(addrs, a)
 		}
 		fv.Set(reflect.ValueOf(addrs))
+	case []netip.Prefix:
+		ps := make([]netip.Prefix, 0, len(vals))
+		for _, s := range vals {
+			p, err := netip.ParsePrefix(s)
+			if err != nil {
+				return err
+			}
+			ps = append(ps, p)
+		}
+		fv.Set(reflect.ValueOf(ps))
 	}
 	return nil
 }
@@ -322,7 +410,7 @@ func tokenize(line string) []string {
 				i++
 			}
 			if i < len(line) {
-				i++ // consume closing quote
+				i++
 			}
 		} else {
 			for i < len(line) && line[i] != ' ' && line[i] != '\t' {
