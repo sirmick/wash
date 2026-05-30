@@ -134,6 +134,9 @@ importers:
       '@tiptap/starter-kit':
         specifier: ^3.23.6
         version: 3.23.6
+      '@wash/fs-client':
+        specifier: workspace:*
+        version: link:../../../web/fs-client
       '@wash/ui':
         specifier: workspace:*
         version: link:../../../web/lib
@@ -165,6 +168,9 @@ importers:
 
   apps/fm/fe:
     dependencies:
+      '@wash/fs-client':
+        specifier: workspace:*
+        version: link:../../../web/fs-client
       '@wash/ui':
         specifier: workspace:*
         version: link:../../../web/lib
@@ -441,6 +447,8 @@ importers:
       vite-plugin-solid:
         specifier: ^2.10.2
         version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+
+  web/fs-client: {}
 
   web/lib:
     dependencies:

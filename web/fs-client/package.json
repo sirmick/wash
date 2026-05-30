@@ -1,0 +1,9 @@
+{
+  "name": "@wash/fs-client",
+  "private": true,
+  "version": "0.8.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

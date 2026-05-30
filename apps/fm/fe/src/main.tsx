@@ -20,6 +20,20 @@ import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
 import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, defineWashApp, tokens } from '@wash/ui';
 import {
+  baseName, formatDate, humanSize, joinPath, octalPerm, parentPath, ancestorChain,
+  createBus,
+  createWatch,
+  DRAG_MIME, dragPayload, dropEffectFor, hasWashDrag, readDragPaths,
+  flattenTree,
+  withReplacePrompt as runReplaceFlow,
+} from '@wash/fs-client';
+import {
+  type NavHistory, emptyHistory, initAt, pushPath, back, forward, at,
+} from './nav-history.ts';
+import {
+  type ClipboardState, parseClipboardState, planPaste,
+} from './clipboard.ts';
+import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
@@ -86,8 +100,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [selectedEntry, setSelectedEntry] = createSignal<Entry | null>(null);
   const [listings, setListings] = createStore<Record<string, Entry[]>>({});
   const [expanded, setExpanded] = createStore<Record<string, true>>({});
-  const [history, setHistory] = createSignal<string[]>([]);
-  const [historyIdx, setHistoryIdx] = createSignal(-1);
+  // Back/forward history. The push/back/forward index arithmetic lives
+  // in ./nav-history.ts (unit-tested); this signal just holds the state
+  // and the handlers below apply the reducer's results.
+  const [navHistory, setNavHistory] = createSignal<NavHistory>(emptyHistory());
   const [sortKey, setSortKey] = createSignal<SortKey>('name');
   const [sortDesc, setSortDesc] = createSignal(false);
   const [showHidden, setShowHidden] = createSignal(false);
@@ -155,7 +171,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // clipboard_files_state on every change (and at fm startup). Two
   // fm windows therefore share one clipboard: cut in window A,
   // paste in window B works naturally.
-  const [filesClipboard, setFilesClipboard] = createSignal<{ op: 'copy' | 'cut'; paths: string[] } | null>(null);
+  const [filesClipboard, setFilesClipboard] = createSignal<ClipboardState | null>(null);
 
   // Refs / latched state (no reactivity needed)
   let pendingNav: string | null = null;
@@ -163,46 +179,24 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   let completeTimer: number | null = null;
   // (no manual click-timer state — we lean on native dblclick.)
   let pathInputEl!: HTMLInputElement;
-  // Tracks which paths we've asked the BE to watch. The BE's watch
-  // op is idempotent so duplicates are safe, but keeping the set
-  // FE-side avoids the chatter. Cleared on collapse / unmount.
-  const watching = new Set<string>();
-  // Per-dir debounce timer for fs_event-driven refreshes. fsnotify
-  // can emit several events for one logical save (write + chmod);
-  // we coalesce them into a single re-list with a small delay so
-  // the tree doesn't flicker mid-write.
-  const refreshTimers = new Map<string, number>();
-  // BE-reply correlation: each outgoing request that wants a typed
-  // ack gets a fresh id; the BE echoes the id on its response and
-  // the resolver in this map gets the message. Resolvers self-clear
-  // when matched. Failure paths are dispatched by the resolver too
-  // (it inspects the kind suffix to know).
-  let nextReqID = 0;
-  const pendingReplies = new Map<string, (m: BEMessage) => void>();
-
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
 
-  // sendWithReply tags a request with a fresh id and returns a
-  // promise that resolves with whatever BE message bears that id.
-  // Caller inspects msg.kind to discriminate ok / err. Times out
-  // after `timeoutMs` (default 5s) to keep the FE from leaking
-  // resolvers if the BE never replies.
-  const sendWithReply = (req: Record<string, unknown>, timeoutMs = 5000): Promise<BEMessage> => {
-    nextReqID += 1;
-    const id = `f-${nextReqID}`;
-    return new Promise((resolve) => {
-      const timer = window.setTimeout(() => {
-        if (pendingReplies.delete(id)) {
-          resolve({ kind: 'timeout_err', id, code: 'timeout', msg: `no reply within ${timeoutMs}ms` });
-        }
-      }, timeoutMs);
-      pendingReplies.set(id, (m) => {
-        window.clearTimeout(timer);
-        resolve(m);
-      });
-      send({ ...req, id });
-    });
-  };
+  // Request/reply correlation + timeout live in ./bus.ts (unit-tested).
+  // sendWithReply is kept as an alias so the call sites below read the
+  // same; handleBE consults bus.tryResolve for echoed ids.
+  const bus = createBus(send);
+  const sendWithReply = bus.request;
+
+  // fs.watch bookkeeping (the watched-paths dedup set) + the fs_event
+  // refresh debounce live in ./watch.ts (unit-tested). shouldRefresh
+  // gates a re-list on the dir still being listed+expanded so a stale
+  // event can't resurrect a row the user just collapsed; the timer is
+  // re-checked at fire time for the same reason. refresh = re-list.
+  const fsWatch = createWatch({
+    send,
+    refresh: (dir) => invalidateAndList(dir),
+    shouldRefresh: (dir) => !!listings[dir] && !!expanded[dir],
+  });
 
   // askReplace shows the Replace confirm overlay for `dst` and
   // resolves with the user's choice. Used by withReplacePrompt
@@ -217,27 +211,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     });
   };
 
-  // withReplacePrompt wraps a sendWithReply call with conflict
-  // handling: if the first try comes back with `*_err exists`,
-  // we open the Replace overlay; on user-Replace we retry with
-  // `replace: true`. Returns a synthetic `cancelled` kind if the
-  // user dismissed the overlay so the caller can stay silent
-  // instead of showing an error.
-  const withReplacePrompt = async (
+  // withReplacePrompt is the conflict-retry flow (request → `*_err
+  // exists` → confirm → retry with replace:true → cancelled). The logic
+  // lives in @wash/fs-client's replace-flow.ts (unit-tested with a fake
+  // bus + confirm); this adapter injects fm's bus + the askReplace
+  // overlay so the 3 call sites read unchanged.
+  const withReplacePrompt = (
     req: Record<string, unknown>,
     destPath: string,
     errKind: string,
-  ): Promise<BEMessage> => {
-    let reply = await sendWithReply(req);
-    if (reply.kind === errKind && reply.code === 'exists') {
-      const confirmed = await askReplace(destPath);
-      if (!confirmed) {
-        return { kind: 'cancelled' };
-      }
-      reply = await sendWithReply({ ...req, replace: true });
-    }
-    return reply;
-  };
+  ): Promise<BEMessage> =>
+    runReplaceFlow({ request: sendWithReply, confirm: askReplace }, req, destPath, errKind);
 
   // ---- BE comms ----
 
@@ -253,58 +237,26 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // expandDir marks a path as visually expanded AND asks the BE to
   // watch it. collapseDir is the inverse. Use these instead of
   // setExpanded() directly so the watch state stays in sync with
-  // the tree — they're the only places that touch fmWatch.
+  // the tree — they're the only places that touch fsWatch. The
+  // watch/unwatch dedup + refresh debounce live in ./watch.ts.
   const expandDir = (p: string) => {
     if (expanded[p]) return;
     setExpanded(p, true);
-    if (!watching.has(p)) {
-      watching.add(p);
-      send({ kind: 'watch', path: p });
-    }
+    fsWatch.watch(p);
   };
 
   const collapseDir = (p: string) => {
     if (!expanded[p]) return;
     setExpanded(produce((s) => { delete s[p]; }));
-    if (watching.has(p)) {
-      watching.delete(p);
-      send({ kind: 'unwatch', path: p });
-    }
-  };
-
-  // scheduleRefresh debounces a re-list of dir by 100ms. Coalesces
-  // bursts of fs_events for the same directory (one save can fire
-  // write+chmod in close succession).
-  //
-  // We skip refreshes for dirs that aren't currently expanded —
-  // even if listings[dir] still has stale data. Otherwise an
-  // fs_event on a dir's mtime (from its parent's watch) would
-  // re-list it, and the list_ok handler's auto-expand would
-  // resurrect the row the user just collapsed.
-  const scheduleRefresh = (dir: string) => {
-    if (!listings[dir]) return;
-    if (!expanded[dir]) return;
-    const prev = refreshTimers.get(dir);
-    if (prev) window.clearTimeout(prev);
-    const tok = window.setTimeout(() => {
-      refreshTimers.delete(dir);
-      if (listings[dir] && expanded[dir]) invalidateAndList(dir);
-    }, 100);
-    refreshTimers.set(dir, tok);
+    fsWatch.unwatch(p);
   };
 
   const handleBE = (m: BEMessage) => {
-    // request_id correlation: if the BE echoes an id we issued via
-    // sendWithReply, resolve the matching promise and stop. Any
-    // remaining branches handle messages without an id — the
-    // existing FE list/read/complete flows.
-    const replyID = typeof m.id === 'string' ? m.id : undefined;
-    if (replyID && pendingReplies.has(replyID)) {
-      const resolver = pendingReplies.get(replyID)!;
-      pendingReplies.delete(replyID);
-      resolver(m);
-      return;
-    }
+    // If the BE echoes an id we issued via sendWithReply, the bus
+    // resolves the matching promise and we stop. The remaining
+    // branches handle uncorrelated push messages (list/read/complete/
+    // fs_event).
+    if (bus.tryResolve(m)) return;
     switch (m.kind) {
       case 'list_ok': {
         const p = String(m.path);
@@ -322,8 +274,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           // typed but hasn't hit Enter yet doesn't lose their entry.
           if (!path()) {
             setPath(p);
-            setHistory([p]);
-            setHistoryIdx(0);
+            setNavHistory(initAt(p));
             if (!pathInputValue()) setPathInputValue(p);
           }
           setSelectedEntry(findEntry(path() || p));
@@ -371,18 +322,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         // m.path is the dir — schedule both paths so the parent
         // listing (which now lacks that dir) refreshes too.
         const evtPath = String(m.path);
-        scheduleRefresh(parentPath(evtPath));
-        scheduleRefresh(evtPath);
+        fsWatch.scheduleRefresh(parentPath(evtPath));
+        fsWatch.scheduleRefresh(evtPath);
         return;
       }
       case 'clipboard_files_state': {
-        const op = String(m.op || '');
-        const paths = (m.paths as string[]) ?? [];
-        if ((op === 'copy' || op === 'cut') && paths.length > 0) {
-          setFilesClipboard({ op: op as 'copy' | 'cut', paths });
-        } else {
-          setFilesClipboard(null);
-        }
+        setFilesClipboard(parseClipboardState(m.op, m.paths));
         return;
       }
     }
@@ -399,18 +344,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   const expandPath = (p: string) => {
-    const parts = p.split('/').filter(Boolean);
-    let acc = '/';
-    expandDir(acc);
-    if (!listings[acc]) sendList(acc);
-    for (let i = 0; i < parts.length; i++) {
-      acc = acc === '/' ? '/' + parts[i] : acc + '/' + parts[i];
+    // ancestorChain(p) = ['/', '/a', '/a/b', …] (pure, in paths.ts);
+    // this loop applies the side effects per dir.
+    const chain = ancestorChain(p);
+    for (let i = 0; i < chain.length; i++) {
+      const acc = chain[i];
       // Don't sendList the last segment if it's a file/symlink —
       // BE's list errors with "not a directory" and the status bar
       // would carry that user-visible error. The leaf-file case is
       // legitimate when the user clicks a file row; we already
-      // sendRead for that elsewhere.
-      if (i === parts.length - 1) {
+      // sendRead for that elsewhere. (i > 0 so the tree root is never
+      // treated as a leaf file.)
+      if (i === chain.length - 1 && i > 0) {
         const entry = findEntry(acc);
         if (entry && entry.type !== 'dir') return;
       }
@@ -440,10 +385,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     setSelectedEntry(entry);
     setPathInputValue(p);
     if (pushHistory) {
-      const h = history().slice(0, historyIdx() + 1);
-      h.push(p);
-      setHistory(h);
-      setHistoryIdx(h.length - 1);
+      setNavHistory(pushPath(navHistory(), p));
     }
 
     // expandPath issues sendList for every ancestor we don't have a
@@ -516,17 +458,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const navigateTo = (p: string) => selectPath(p || '/', true);
   const goHome = () => navigateTo(home());
   const goBack = () => {
-    if (historyIdx() > 0) {
-      const newIdx = historyIdx() - 1;
-      setHistoryIdx(newIdx);
-      selectPath(history()[newIdx], false);
+    const move = back(navHistory());
+    if (move) {
+      setNavHistory(at(navHistory(), move.idx));
+      selectPath(move.path, false);
     }
   };
   const goForward = () => {
-    if (historyIdx() < history().length - 1) {
-      const newIdx = historyIdx() + 1;
-      setHistoryIdx(newIdx);
-      selectPath(history()[newIdx], false);
+    const move = forward(navHistory());
+    if (move) {
+      setNavHistory(at(navHistory(), move.idx));
+      selectPath(move.path, false);
     }
   };
   const goUp = () => {
@@ -872,15 +814,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // length>1 means we route through bulk-ops for everything.
   const [dropMenu, setDropMenu] = createSignal<{ x: number; y: number; srcs: string[]; targetDir: string } | null>(null);
 
-  // Drag payload format. We carry a JSON array of source paths
-  // under application/x-wash-paths (plural). A
-  // single drag from an unselected row carries one path; dragging
-  // a row that's part of a multi-selection carries every selected
-  // path. Drop handlers branch on length: n>1 always routes to
-  // bulk-ops because the BE rename op is single-shot — the queue
-  // is where Replace All / Skip All live.
-  const DRAG_MIME = 'application/x-wash-paths';
-
+  // Drag payload parsing + drop-accept logic (DRAG_MIME, readDragPaths,
+  // dragPayload, hasWashDrag, dropEffectFor) live in ./dnd.ts
+  // (framework-free, unit-tested). The thin DOM handlers below own only
+  // the event-plumbing (preventDefault/stopPropagation) and the Solid
+  // dropTargetPath signal.
   const onDragStart = (ev: DragEvent, p: string) => {
     if (!ev.dataTransfer) return;
     // effectAllowed = 'copyMove' (not 'move') so the browser
@@ -892,7 +830,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // create-symlink lives behind the Alt menu, not the cursor
     // badge.
     ev.dataTransfer.effectAllowed = 'copyMove';
-    const paths = selection().has(p) ? Array.from(selection()) : [p];
+    const paths = dragPayload(p, selection());
     ev.dataTransfer.setData(DRAG_MIME, JSON.stringify(paths));
     // text/plain is a friendly fallback for drops onto non-wash
     // targets (terminals, editors). Newline-joined matches what
@@ -904,23 +842,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     setDropTargetPath('');
   };
 
-  // readDragPaths pulls our JSON-array payload out of a drag
-  // event. Returns [] if the drag doesn't carry our MIME so
-  // non-wash drags (text drops from other apps, etc.) are ignored
-  // cleanly.
-  const readDragPaths = (ev: DragEvent): string[] => {
-    if (!ev.dataTransfer) return [];
-    const json = ev.dataTransfer.getData(DRAG_MIME);
-    if (!json) return [];
-    try {
-      const arr = JSON.parse(json);
-      if (Array.isArray(arr)) return arr.filter((s) => typeof s === 'string');
-    } catch {
-      /* ignore */
-    }
-    return [];
-  };
-
   // onRowDragOver is wired on directory rows only. preventDefault
   // tells the browser "this is a valid drop target," and
   // stopPropagation keeps the list-pane onDragOver from also
@@ -930,15 +851,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // otherwise) — without this, Mac users get no feedback that
   // the modifier is actually doing something.
   const onRowDragOver = (ev: DragEvent, rowPath: string) => {
-    if (!ev.dataTransfer || !ev.dataTransfer.types.includes(DRAG_MIME)) return;
+    if (!hasWashDrag(ev.dataTransfer)) return;
     ev.preventDefault();
     ev.stopPropagation();
-    ev.dataTransfer.dropEffect = ev.altKey ? 'copy' : 'move';
+    ev.dataTransfer!.dropEffect = dropEffectFor(ev.altKey);
     if (dropTargetPath() !== rowPath) setDropTargetPath(rowPath);
   };
 
   const onRowDrop = (ev: DragEvent, rowPath: string) => {
-    const paths = readDragPaths(ev);
+    const paths = readDragPaths(ev.dataTransfer);
     if (paths.length === 0) return;
     ev.preventDefault();
     ev.stopPropagation();
@@ -951,14 +872,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   const onListDragOver = (ev: DragEvent) => {
-    if (!ev.dataTransfer || !ev.dataTransfer.types.includes(DRAG_MIME)) return;
+    if (!hasWashDrag(ev.dataTransfer)) return;
     ev.preventDefault();
-    ev.dataTransfer.dropEffect = ev.altKey ? 'copy' : 'move';
+    ev.dataTransfer!.dropEffect = dropEffectFor(ev.altKey);
     if (dropTargetPath() !== '') setDropTargetPath('');
   };
 
   const onListDrop = (ev: DragEvent) => {
-    const paths = readDragPaths(ev);
+    const paths = readDragPaths(ev.dataTransfer);
     if (paths.length === 0) return;
     ev.preventDefault();
     setDropTargetPath('');
@@ -1053,16 +974,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // For "cut", we clear the clipboard after dispatching so a
   // second paste doesn't try to re-move already-moved paths.
   const pasteFilesClipboard = () => {
-    const cb = filesClipboard();
-    if (!cb || cb.paths.length === 0) return;
-    const dest = dirOfSelection();
-    if (!dest) return;
-    const bulkOp = cb.op === 'cut' ? 'move' : 'copy';
+    const plan = planPaste(filesClipboard(), dirOfSelection());
+    if (!plan) return;
     window.wash.sendAppMsgTo(
       { app_id: 'com.wash.bulk' },
-      { kind: 'enqueue', op: bulkOp, paths: cb.paths, dest },
+      { kind: 'enqueue', op: plan.op, paths: plan.paths, dest: plan.dest },
     );
-    if (cb.op === 'cut') {
+    if (plan.clearAfter) {
       // Clear the clipboard so a second Ctrl+V doesn't try to
       // re-move paths that no longer exist at the source.
       send({ kind: 'clipboard_files_set', op: 'copy', paths: [] });
@@ -1168,41 +1086,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   // ---- listings sort/filter ----
 
-  const sortedFiltered = (entries: Entry[]): Entry[] => {
-    let out = entries;
-    if (!showHidden()) out = out.filter((e) => !e.name.startsWith('.'));
-    out = out.slice();
-    const desc = sortDesc();
-    const key = sortKey();
-    out.sort((a, b) => {
-      if (key !== 'type') {
-        if (a.type === 'dir' && b.type !== 'dir') return -1;
-        if (a.type !== 'dir' && b.type === 'dir') return 1;
-      }
-      let cmp = 0;
-      switch (key) {
-        case 'name':
-          cmp = a.name.toLowerCase().localeCompare(b.name.toLowerCase());
-          break;
-        case 'mtime':
-          cmp = a.mod_unix - b.mod_unix;
-          break;
-        case 'ctime':
-          cmp = a.created_unix - b.created_unix;
-          break;
-        case 'size':
-          cmp = a.size - b.size;
-          break;
-        case 'type':
-          cmp = a.type.localeCompare(b.type);
-          if (cmp === 0) cmp = a.name.toLowerCase().localeCompare(b.name.toLowerCase());
-          break;
-      }
-      return desc ? -cmp : cmp;
-    });
-    return out;
-  };
-
   // treeRoot is the SHALLOWEST ancestor of path() that the FE has
   // successfully listed — i.e. the highest reachable directory in
   // the current confinement. In production fm lists "/" so
@@ -1228,81 +1111,22 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     return '/';
   });
 
-  // Flatten the visible tree into a list of {entry, path, depth} rows
+  // Flatten the visible tree into {entry, path, depth, childCount} rows
   // — Solid's <For> renders the list; toggling expand triggers a fresh
-  // computation here automatically.
-  const visibleRows = createMemo<Array<{ entry: Entry; path: string; depth: number; childCount?: number }>>(() => {
-    const rows: Array<{ entry: Entry; path: string; depth: number; childCount?: number }> = [];
-    // `walked` tracks directories the walk has descended into.
-    // Used by the fallback below to find ancestors of path() that
-    // the main walk couldn't reach (intermediate listing in flight)
-    // and avoid double-rendering when the fallback's start equals
-    // the main walk's start.
-    const walked = new Set<string>();
-    const walk = (p: string, depth: number) => {
-      const entries = listings[p];
-      if (!entries) return;
-      walked.add(p);
-      for (const e of sortedFiltered(entries)) {
-        const childPath = joinPath(p, e.name);
-        // For listed dirs, expose the entry count so the row's
-        // size column can render "12 items" instead of blank. We
-        // count ALL entries (including hidden) — Windows-explorer-
-        // style. "show hidden" only affects what's rendered, not
-        // the total.
-        let childCount: number | undefined;
-        if (e.type === 'dir' && listings[childPath]) {
-          childCount = listings[childPath].length;
-        }
-        rows.push({ entry: e, path: childPath, depth, childCount });
-        if (e.type === 'dir' && expanded[childPath] && listings[childPath]) {
-          walk(childPath, depth + 1);
-        }
-      }
-    };
-    const start = treeRoot();
-    if (listings[start]) walk(start, 0);
-
-    // Fallback render: if the walk from treeRoot didn't reach
-    // path()'s neighbourhood (some intermediate ancestor's
-    // list_ok hasn't landed yet), find the highest listed
-    // ancestor whose own contents the main walk didn't include
-    // and walk from there. This bridges the gap so the user sees
-    // the dir they navigated to even while ancestor listings are
-    // still in flight. Disappears as soon as the intermediates
-    // land and the normal walk reaches the chain.
-    //
-    // Walk up from path() through ancestors that are listed but
-    // the main walk didn't descend into. Stop at the first one
-    // that's missing a listing or that the main walk did walk —
-    // `fallbackRoot` is the *highest* still-unwalked listed
-    // ancestor, which is where the bridge walk should start so
-    // descendants render at their natural relative depth.
-    const cur = path();
-    if (cur) {
-      let fallbackRoot = '';
-      let p = cur;
-      while (p && listings[p] && !walked.has(p)) {
-        fallbackRoot = p;
-        const par = parentPath(p);
-        if (par === p) break;
-        p = par;
-      }
-      if (fallbackRoot) {
-        // Use the depth fallbackRoot would have under the main
-        // walk — so when ancestors fill in and the main walk
-        // reaches it, the rows stay at the same depth instead
-        // of shifting. Without this the dom flips depth, which
-        // moves the elements vertically and trips Playwright's
-        // stability gate on dblclick / click under heavy load.
-        const tr = start;
-        const segs = (s: string) => s.split('/').filter(Boolean).length;
-        const baseDepth = Math.max(0, segs(fallbackRoot) - segs(tr));
-        walk(fallbackRoot, baseDepth);
-      }
-    }
-    return rows;
-  });
+  // computation here automatically. The walk + in-flight fallback bridge
+  // live in @wash/fs-client's flattenTree (pure, unit-tested); this memo
+  // reads the reactive sources (sort signals, treeRoot, path) and passes
+  // the listings/expanded store proxies straight in — flattenTree runs
+  // synchronously here, so its listings[p]/expanded[x] reads stay tracked.
+  const visibleRows = createMemo<Array<{ entry: Entry; path: string; depth: number; childCount?: number }>>(() =>
+    flattenTree<Entry>({
+      listings,
+      expanded,
+      sort: { key: sortKey(), desc: sortDesc(), showHidden: showHidden() },
+      start: treeRoot(),
+      cur: path(),
+    }),
+  );
 
   // visibleCount is the total entries visible right now. Updates
   // automatically as folders expand/collapse.
@@ -2606,53 +2430,9 @@ const EntryIcon: Component<{ entry: Entry }> = (props) => {
   }
 };
 
-function joinPath(parent: string, name: string): string {
-  if (parent.endsWith('/')) return parent + name;
-  return parent + '/' + name;
-}
-
-function parentPath(p: string): string {
-  if (!p || p === '/') return '/';
-  const i = p.lastIndexOf('/');
-  if (i <= 0) return '/';
-  return p.slice(0, i);
-}
-
-function baseName(p: string): string {
-  const i = p.lastIndexOf('/');
-  return i < 0 ? p : p.slice(i + 1);
-}
-
-function humanSize(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-// formatDate renders a unix seconds timestamp in the compact
-// ls-style: "Dec 15 14:32" for this year, "Dec 15  2024" for
-// older entries. Returns "" for 0/missing values so the row
-// stays clean.
-function formatDate(unix: number): string {
-  if (!unix) return '';
-  const d = new Date(unix * 1000);
-  const now = new Date();
-  const month = MONTHS[d.getMonth()];
-  const day = String(d.getDate()).padStart(2, ' ');
-  if (d.getFullYear() === now.getFullYear()) {
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mm = String(d.getMinutes()).padStart(2, '0');
-    return `${month} ${day} ${hh}:${mm}`;
-  }
-  return `${month} ${day}  ${d.getFullYear()}`;
-}
-
-function octalPerm(mode: number): string {
-  return '0' + (mode & 0o777).toString(8);
-}
+// Pure path/format helpers (joinPath, parentPath, baseName, humanSize,
+// formatDate, octalPerm) live in ./paths.ts — extracted for node:test
+// coverage and reuse.
 
 // ---- custom element wrapper ----
 

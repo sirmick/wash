@@ -16,6 +16,13 @@ import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
 import { FilePicker, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens } from '@wash/ui';
 import type { TerminalAPI } from '@wash/ui';
+import {
+  joinPath, baseName, parentPath,
+  createBus,
+  createWatch,
+  DRAG_MIME, readDragPaths, hasWashDrag, dropEffectFor,
+  flattenTree,
+} from '@wash/fs-client';
 import { EditorSelection, EditorState, Compartment, Extension } from '@codemirror/state';
 import {
   EditorView,
@@ -107,6 +114,10 @@ interface Entry {
   type: 'dir' | 'file' | 'symlink' | 'other';
   size: number;
   mod_unix: number;
+  // created_unix is part of the BE's fs.Entry (the wire data always has
+  // it); declared here so Entry satisfies @wash/fs-client's SortableEntry
+  // for flattenTree. edit only name-sorts, so it's otherwise unused.
+  created_unix: number;
   // link_to / link_err carry the symlink target as returned by
   // the BE (internal/fs.Entry). Used by the double-click handler
   // to follow links — same affordance fm has.
@@ -323,31 +334,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     { equals: (a, b) => a.length === b.length && a.every((id, i) => id === b[i]) },
   );
 
-  // Per-request id counter for the message correlator. Each list /
-  // read / write gets a fresh id so we can pair the reply.
-  let nextReqID = 0;
-  const pendingReplies = new Map<string, (m: BEMessage) => void>();
-
   // ---- BE I/O ----
 
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
 
-  const sendWithReply = (req: Record<string, unknown>, timeoutMs = 5000): Promise<BEMessage> => {
-    nextReqID += 1;
-    const id = `e-${nextReqID}`;
-    return new Promise((resolve) => {
-      const timer = window.setTimeout(() => {
-        if (pendingReplies.delete(id)) {
-          resolve({ kind: 'timeout_err', id, code: 'timeout', msg: `no reply within ${timeoutMs}ms` });
-        }
-      }, timeoutMs);
-      pendingReplies.set(id, (m) => {
-        window.clearTimeout(timer);
-        resolve(m);
-      });
-      send({ ...req, id });
-    });
-  };
+  // Request/reply correlation + timeout live in @wash/fs-client's bus.ts
+  // (unit-tested). idPrefix 'e' mints e-<n> ids (fm uses 'f'); handleBE
+  // consults bus.tryResolve for echoed ids. sendWithReply is an alias so
+  // the call sites below read unchanged.
+  const bus = createBus(send, undefined, 'e');
+  const sendWithReply = bus.request;
 
   const loadDir = async (path: string) => {
     const reply = await sendWithReply({ kind: 'list', path });
@@ -360,7 +356,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         // Watch the root the first time we see it — the sidebar
         // always shows root-level entries, so we always want
         // fresh data there. Other dirs subscribe on expand.
-        sendFsWatch(abs);
+        fsWatch.watch(abs);
       }
     }
   };
@@ -895,7 +891,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       setListings({});
       setExpanded({});
       void loadDir(path);
-      sendFsWatch(path);
+      fsWatch.watch(path);
       return;
     }
     if (m.kind === 'cmd.open_diff') {
@@ -922,8 +918,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     if (m.kind === 'fs.watch_event') {
       const evPath = String(m.path ?? '');
       if (!evPath) return;
-      scheduleRefresh(parentPath(evPath));
-      scheduleRefresh(evPath);
+      fsWatch.scheduleRefresh(parentPath(evPath));
+      fsWatch.scheduleRefresh(evPath);
       return;
     }
     // Terminal lifecycle messages: term.opened pairs the
@@ -959,12 +955,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       }
       return;
     }
-    const replyID = typeof m.id === 'string' ? m.id : undefined;
-    if (replyID && pendingReplies.has(replyID)) {
-      const resolver = pendingReplies.get(replyID)!;
-      pendingReplies.delete(replyID);
-      resolver(m);
-    }
+    // Resolve a correlated reply via the bus (uncorrelated pushes were
+    // handled by the switch above).
+    bus.tryResolve(m);
   };
 
   // ---- terminal pane ops ----
@@ -1018,21 +1011,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // fs.watch refreshes the affected dirs on completion, so we
   // don't need to manually re-list after rename/delete.
 
-  const DRAG_MIME = 'application/x-wash-paths';
-
-  const readDragPaths = (ev: DragEvent): string[] => {
-    if (!ev.dataTransfer) return [];
-    const json = ev.dataTransfer.getData(DRAG_MIME);
-    if (!json) return [];
-    try {
-      const arr = JSON.parse(json);
-      if (Array.isArray(arr)) return arr.filter((s) => typeof s === 'string');
-    } catch {
-      /* ignore */
-    }
-    return [];
-  };
-
+  // DRAG_MIME + readDragPaths + the hasWashDrag/dropEffectFor helpers
+  // live in @wash/fs-client's dnd.ts (unit-tested). edit carries a
+  // single path (no multi-select), so the dragstart payload stays inline.
   const onRowDragStart = (ev: DragEvent, p: string) => {
     if (!ev.dataTransfer) return;
     ev.dataTransfer.effectAllowed = 'copyMove';
@@ -1044,14 +1025,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const onRowDragEnd = () => setDropTargetPath('');
 
   const onRowDragOver = (ev: DragEvent, rowPath: string) => {
-    if (!ev.dataTransfer || !ev.dataTransfer.types.includes(DRAG_MIME)) return;
+    if (!hasWashDrag(ev.dataTransfer)) return;
     ev.preventDefault();
     ev.stopPropagation();
-    ev.dataTransfer.dropEffect = ev.altKey ? 'copy' : 'move';
+    ev.dataTransfer!.dropEffect = dropEffectFor(ev.altKey);
     if (dropTargetPath() !== rowPath) setDropTargetPath(rowPath);
   };
   const onRowDrop = (ev: DragEvent, rowPath: string) => {
-    const paths = readDragPaths(ev);
+    const paths = readDragPaths(ev.dataTransfer);
     if (paths.length === 0) return;
     ev.preventDefault();
     ev.stopPropagation();
@@ -1069,13 +1050,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   const onListDragOver = (ev: DragEvent) => {
-    if (!ev.dataTransfer || !ev.dataTransfer.types.includes(DRAG_MIME)) return;
+    if (!hasWashDrag(ev.dataTransfer)) return;
     ev.preventDefault();
-    ev.dataTransfer.dropEffect = ev.altKey ? 'copy' : 'move';
+    ev.dataTransfer!.dropEffect = dropEffectFor(ev.altKey);
     if (dropTargetPath() !== '') setDropTargetPath('');
   };
   const onListDrop = (ev: DragEvent) => {
-    const paths = readDragPaths(ev);
+    const paths = readDragPaths(ev.dataTransfer);
     if (paths.length === 0) return;
     ev.preventDefault();
     setDropTargetPath('');
@@ -1162,43 +1143,23 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   // ---- tree ops + fs.watch ----
   //
-  // watching is the set of dirs we currently hold an fs.watch on.
-  // Every expand subscribes (idempotent BE-side), every collapse
-  // releases. The root gets watched at boot via loadDir's first
-  // success path. onCleanup tears every remaining sub down so a
-  // closed editor window doesn't strand watchers in the BE.
+  // The watched-dirs dedup set + the fs_event refresh debounce live in
+  // @wash/fs-client's watch.ts (unit-tested, shared with fm). Every
+  // expand subscribes (idempotent BE-side), every collapse releases the
+  // subtree (fsWatch.unwatchWhere below); the root gets watched at boot
+  // via loadDir's first success. onCleanup tears every remaining sub
+  // down so a closed editor doesn't strand watchers in the BE.
   //
-  // refreshTimers is the per-dir debounce: fsnotify can fire
-  // multiple events for one logical save (write + chmod); 100ms
-  // collapses bursts without making the tree feel stale.
-
-  const watching = new Set<string>();
-  const refreshTimers = new Map<string, number>();
-
-  const sendFsWatch = (p: string) => {
-    if (!p || watching.has(p)) return;
-    watching.add(p);
-    send({ kind: 'fs.watch', path: p });
-  };
-  const sendFsUnwatch = (p: string) => {
-    if (!p || !watching.has(p)) return;
-    watching.delete(p);
-    send({ kind: 'fs.unwatch', path: p });
-  };
-
-  const scheduleRefresh = (dir: string) => {
-    if (!listings[dir]) return;
-    const prev = refreshTimers.get(dir);
-    if (prev != null) window.clearTimeout(prev);
-    const tok = window.setTimeout(() => {
-      refreshTimers.delete(dir);
-      // Only re-list if we still care about this dir — closing the
-      // editor or collapsing the parent could have happened during
-      // the debounce.
-      if (listings[dir]) void loadDir(dir);
-    }, 100);
-    refreshTimers.set(dir, tok);
-  };
+  // edit's BE speaks the dotted fs.watch/fs.unwatch kinds, and its
+  // refresh guard is just "still listed" (no expanded gate — collapse
+  // already unwatches the subtree, so no stale events arrive).
+  const fsWatch = createWatch({
+    send,
+    refresh: (dir) => void loadDir(dir),
+    shouldRefresh: (dir) => !!listings[dir],
+    watchKind: 'fs.watch',
+    unwatchKind: 'fs.unwatch',
+  });
 
   const toggleExpand = (path: string) => {
     if (expanded[path]) {
@@ -1212,41 +1173,30 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           if (k === path || k.startsWith(prefix)) delete s[k];
         }
       }));
-      for (const w of Array.from(watching)) {
-        if (w === path || w.startsWith(prefix)) sendFsUnwatch(w);
-      }
+      fsWatch.unwatchWhere((w) => w === path || w.startsWith(prefix));
     } else {
       setExpanded(path, true);
       if (!listings[path]) void loadDir(path);
-      sendFsWatch(path);
+      fsWatch.watch(path);
     }
   };
 
-  // visibleRows flattens the tree into render-able rows: { entry,
-  // path, depth }. Folders come before files at each level.
-  const visibleRows = createMemo<Array<{ entry: Entry; path: string; depth: number }>>(() => {
-    const rows: Array<{ entry: Entry; path: string; depth: number }> = [];
-    const walk = (parent: string, depth: number) => {
-      const entries = listings[parent];
-      if (!entries) return;
-      const sorted = entries.slice().sort((a, b) => {
-        if (a.type === 'dir' && b.type !== 'dir') return -1;
-        if (a.type !== 'dir' && b.type === 'dir') return 1;
-        return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
-      });
-      for (const e of sorted) {
-        if (e.name.startsWith('.')) continue;
-        const child = joinPath(parent, e.name);
-        rows.push({ entry: e, path: child, depth });
-        if (e.type === 'dir' && expanded[child]) {
-          walk(child, depth + 1);
-        }
-      }
-    };
-    const r = root();
-    if (r) walk(r, 0);
-    return rows;
-  });
+  // visibleRows flattens the tree into render-able rows. The recursive
+  // walk lives in @wash/fs-client's flattenTree (unit-tested, shared with
+  // fm). edit always sorts name-asc with hidden filtered — exactly the
+  // {key:'name', desc:false, showHidden:false} the comparator produces —
+  // and has no in-flight fallback bridge, so cur:'' skips it. flattenTree
+  // also computes childCount, which edit'\''s rows simply ignore. Passing
+  // the store proxies in keeps the memo reactive (synchronous read).
+  const visibleRows = createMemo<Array<{ entry: Entry; path: string; depth: number }>>(() =>
+    flattenTree<Entry>({
+      listings,
+      expanded,
+      sort: { key: 'name', desc: false, showHidden: false },
+      start: root(),
+      cur: '',
+    }),
+  );
 
   // ---- row click semantics ----
   //
@@ -1854,14 +1804,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       props.host.removeEventListener('wash:state', onState);
       props.host.removeEventListener('keydown', onKey);
       // Release every active fs.watch so the BE doesn't strand
-      // them after the editor window closes. Idempotent BE-side,
-      // so we don't need to know which subs survived the run.
-      for (const p of Array.from(watching)) {
-        send({ kind: 'fs.unwatch', path: p });
-      }
-      watching.clear();
-      for (const t of refreshTimers.values()) window.clearTimeout(t);
-      refreshTimers.clear();
+      // them after the editor window closes, and clear pending
+      // refresh timers. Idempotent BE-side.
+      fsWatch.unwatchWhere(() => true);
+      fsWatch.dispose();
       // <Terminal> components handle their own xterm disposal +
       // raw-channel unsubscribe via onCleanup; just drop the API
       // map so we're not holding references after teardown.
@@ -2713,24 +2659,8 @@ const MenuBarButton: Component<{
   );
 };
 
-// ---- helpers ----
-
-function joinPath(parent: string, name: string): string {
-  if (parent.endsWith('/')) return parent + name;
-  return parent + '/' + name;
-}
-
-function baseName(p: string): string {
-  const i = p.lastIndexOf('/');
-  return i < 0 ? p : p.slice(i + 1);
-}
-
-function parentPath(p: string): string {
-  if (!p || p === '/') return '/';
-  const i = p.lastIndexOf('/');
-  if (i <= 0) return '/';
-  return p.slice(0, i);
-}
+// joinPath / baseName / parentPath now come from @wash/fs-client (imported
+// at the top) — identical bodies, removed from here.
 
 // ---- styles ----
 
