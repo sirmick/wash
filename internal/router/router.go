@@ -594,6 +594,19 @@ func (r *Router) tearDown(inst *AppInstance) {
 	if inst.WindowID != 0 {
 		r.broadcastPatches(r.winSession.destroyWindow(inst.WindowID))
 	}
+	// Multi-window: tell shells about every window created via
+	// window.create too. closeChannelsForApp above already closed
+	// their channels (it matches on b.app == inst, window-agnostic).
+	inst.winMu.Lock()
+	extra := make([]uint32, 0, len(inst.extraWins))
+	for w := range inst.extraWins {
+		extra = append(extra, w)
+	}
+	inst.extraWins = nil
+	inst.winMu.Unlock()
+	for _, w := range extra {
+		r.broadcastPatches(r.winSession.destroyWindow(w))
+	}
 }
 
 // spawnAndRun spawns the given app, runs its handshake, registers it,
@@ -770,8 +783,14 @@ func (r *Router) unregisterApp(inst *AppInstance) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.apps, inst.InstanceID)
-	if inst.WindowID != 0 {
-		delete(r.byWin, inst.WindowID)
+	// Drop every window→instance entry pointing at inst: the primary
+	// handshake window plus any created via window.create. A scan
+	// (not delete(byWin, WindowID)) so multi-window instances leave no
+	// dangling routes.
+	for w, owner := range r.byWin {
+		if owner == inst {
+			delete(r.byWin, w)
+		}
 	}
 	if inst.Manifest != nil && inst.Manifest.Instancing == InstancingSingleton {
 		if cur, ok := r.singletons[inst.Manifest.ID]; ok && cur == inst {

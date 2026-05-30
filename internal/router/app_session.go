@@ -81,6 +81,33 @@ type AppInstance struct {
 	// awaiting close confirmation. nil when no close is pending.
 	closeMu      sync.Mutex
 	closeConfirm chan bool
+
+	// winMu guards extraWins. extraWins is the set of window ids this
+	// instance created via window.create (CapWindows) — beyond the one
+	// primary WindowID minted at handshake. A multi-window app
+	// (wash-display maps each Wayland/X11 toplevel to a window) owns
+	// its toplevels here; ordinary single-window apps leave it nil.
+	// See docs/DISPLAY.md §4.
+	winMu     sync.Mutex
+	extraWins map[uint32]bool
+}
+
+// maxWindowsPerInstance caps how many windows one instance may create
+// via window.create. A bound, not a tuning knob: unbounded window
+// creation is a chrome-DoS vector. The primary handshake window does
+// not count against it.
+const maxWindowsPerInstance = 64
+
+// ownsWindow reports whether win belongs to this instance — either the
+// primary handshake window (covers the 0==0 desktop/kiosk case) or one
+// created via window.create.
+func (inst *AppInstance) ownsWindow(win uint32) bool {
+	if win == inst.WindowID {
+		return true
+	}
+	inst.winMu.Lock()
+	defer inst.winMu.Unlock()
+	return inst.extraWins[win]
 }
 
 // HandleApp is the entrypoint for a freshly-spawned app: it owns the
@@ -241,8 +268,10 @@ func (inst *AppInstance) handleChannelOpen(m wire.ChannelOpen) error {
 	// For kiosk / desktop-surface apps the app has WindowID=0; the
 	// app must request windowID=0 as well (we treat that as "the
 	// root surface of this app"). For windowed apps, the requested
-	// window must match the app's window.
-	if m.WindowID != inst.WindowID {
+	// window must be one the app owns — its primary handshake window
+	// or one it created via window.create (the per-window video stream
+	// path for wash-display).
+	if !inst.ownsWindow(m.WindowID) {
 		return inst.writeCtrl(wire.NewChannelOpenErr(m.ReqID, wire.ErrCodeForbidden, "window not owned by app"))
 	}
 	// v0.1: one shell. Pick it (any). For multi-shell we'd need the
@@ -300,6 +329,18 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 		}
 		inst.deliverCloseConfirm(m.Allow)
 		return nil
+	case wire.TEvtWindowCreate:
+		var m wire.EvtWindowCreate
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.handleWindowCreate(m)
+	case wire.TEvtWindowDestroy:
+		var m wire.EvtWindowDestroy
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.handleWindowDestroy(m)
 	case wire.TEvtSpawnRequest:
 		var m wire.EvtSpawnRequest
 		if err := json.Unmarshal(payload, &m); err != nil {
@@ -511,10 +552,73 @@ func (r *Router) forwardNotifyToService(sourceAppID, sourceInstID string, m wire
 }
 
 func (inst *AppInstance) relayWindowTitle(m wire.EvtWindowSetTitle) error {
-	if m.Win != inst.WindowID {
+	if !inst.ownsWindow(m.Win) {
 		return nil
 	}
 	inst.router.broadcastPatches(inst.router.winSession.setTitle(m.Win, m.Title))
+	return nil
+}
+
+// handleWindowCreate gives a CapWindows app another window beyond its
+// primary one. The router allocates a window id, registers it under
+// this instance (so byWin routing + teardown find it), adds it to the
+// session, and replies with EvtWindowCreated. See docs/DISPLAY.md §4.
+//
+// role/parent_win are accepted but not yet honoured at the WM level —
+// popups are created as ordinary toplevels for now; positioning a
+// popup relative to its parent is a later shell-rendering change.
+func (inst *AppInstance) handleWindowCreate(m wire.EvtWindowCreate) error {
+	if !inst.Manifest.HasCapability(CapWindows) {
+		return inst.WriteEvt(wire.NewEvtWindowCreateErr(m.ReqID, wire.ErrCodeForbidden, "windows capability not declared"))
+	}
+	inst.winMu.Lock()
+	n := len(inst.extraWins)
+	inst.winMu.Unlock()
+	if n >= maxWindowsPerInstance {
+		return inst.WriteEvt(wire.NewEvtWindowCreateErr(m.ReqID, wire.ErrCodeForbidden, "window limit reached"))
+	}
+
+	win := inst.router.allocWindowID()
+	title := m.Title
+	if title == "" {
+		title = inst.Manifest.Name
+	}
+
+	inst.router.mu.Lock()
+	inst.router.byWin[win] = inst
+	inst.router.mu.Unlock()
+
+	inst.winMu.Lock()
+	if inst.extraWins == nil {
+		inst.extraWins = make(map[uint32]bool)
+	}
+	inst.extraWins[win] = true
+	inst.winMu.Unlock()
+
+	inst.router.broadcastPatches(inst.router.winSession.createWindow(
+		win, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon,
+		inst.Manifest.Accent, title, m.W, m.H, inst.IsRoot()))
+	return inst.WriteEvt(wire.NewEvtWindowCreated(m.ReqID, win))
+}
+
+// handleWindowDestroy tears down one window the instance created via
+// window.create. The primary handshake window can't be dropped this
+// way (it dies with the instance); destroying a window the instance
+// doesn't own is a no-op. Channels rooted at the window are closed.
+func (inst *AppInstance) handleWindowDestroy(m wire.EvtWindowDestroy) error {
+	if m.Win == inst.WindowID || !inst.ownsWindow(m.Win) {
+		return nil
+	}
+	inst.winMu.Lock()
+	delete(inst.extraWins, m.Win)
+	inst.winMu.Unlock()
+
+	inst.router.mu.Lock()
+	delete(inst.router.byWin, m.Win)
+	inst.router.mu.Unlock()
+
+	inst.router.closeChannelsForWindow(m.Win, "window destroyed")
+	inst.router.broadcastPatches(inst.router.winSession.destroyWindow(m.Win))
 	return nil
 }
 
