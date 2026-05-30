@@ -36,6 +36,7 @@ const PACKAGES_BIN = join(REPO_ROOT, 'out', 'wash-packages');
 const NOTIFY_BIN = join(REPO_ROOT, 'out', 'wash-notify');
 const VSCODE_BIN = join(REPO_ROOT, 'out', 'wash-vscode');
 const VSCODE_WB_BIN = join(REPO_ROOT, 'out', 'wash-vscode-workbench');
+const DISPLAY_BIN = join(REPO_ROOT, 'out', 'wash-display');
 const FAKESUDO_BIN = join(REPO_ROOT, 'out', 'wash-priv-fakesudo');
 export const SUDO_BIN = join(REPO_ROOT, 'out', 'wash-sudo');
 
@@ -207,6 +208,12 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   if (wanted.includes('fm')) bins.push(FM_BIN);
   if (wanted.includes('bulk')) bins.push(BULK_BIN);
   if (wanted.includes('edit')) bins.push(EDIT_BIN);
+  if (wanted.includes('display')) {
+    if (!existsSync(DISPLAY_BIN)) {
+      throw new Error(`missing wash-display: ${DISPLAY_BIN} (cmake --build wash-display/build)`);
+    }
+    bins.push(DISPLAY_BIN);
+  }
   if (wanted.includes('priv')) {
     if (!existsSync(PRIV_BIN)) {
       throw new Error(`missing wash-priv: ${PRIV_BIN}`);

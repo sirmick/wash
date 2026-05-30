@@ -36,6 +36,20 @@ ifneq ($(TEST_APP),)
 TARGETS += $(OUT)/wash-test
 endif
 
+# wash-display: native X/Wayland compositor BE (C++/CMake, separate
+# package). Opt-in via WASH_DISPLAY=1; never built for the emulator
+# (riscv) target. Built by its own CMake project — NOT the Go build —
+# so the native wlroots/libdatachannel deps never touch the
+# CGO_ENABLED=0 core (docs/DISPLAY.md §8). The wire client builds with
+# just a C++17 compiler; the compositor sources are enabled in
+# wash-display/CMakeLists.txt once wlroots/libdatachannel are present.
+WASH_DISPLAY ?=
+ifeq ($(WASH_DISPLAY),1)
+ifneq ($(GOARCH),riscv64)
+TARGETS += $(OUT)/wash-display
+endif
+endif
+
 GO_ENV  := CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH)
 
 # go_build wraps `go build` and forces 0755 perms on the output. The
@@ -252,6 +266,13 @@ $(OUT)/wash-about: $(ABOUT_STAMP) | $(OUT)
 
 $(OUT)/wash-test: $(TEST_STAMP) | $(OUT)
 	$(call go_build,$@,apps/test/be/cmd)
+
+# wash-display is C++/CMake, not Go. Configure + build its own project
+# and copy the binary into out/. Rebuilds when any source changes.
+$(OUT)/wash-display: $(wildcard wash-display/src/*) wash-display/CMakeLists.txt | $(OUT)
+	cmake -S wash-display -B wash-display/build -DCMAKE_BUILD_TYPE=Release >/dev/null
+	cmake --build wash-display/build
+	cp wash-display/build/wash-display $@ && chmod 0755 $@
 
 $(OUT)/wash-term: $(TERM_STAMP) | $(OUT)
 	$(call go_build,$@,apps/term/be/cmd)

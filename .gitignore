@@ -30,3 +30,6 @@ e2e/playwright-report/
 
 # /understand knowledge-graph tooling output (per-checkout, not source)
 .understand-anything/
+
+# wash-display CMake build dir
+wash-display/build/
