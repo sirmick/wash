@@ -19,6 +19,7 @@ import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-j
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
 import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, defineWashApp, tokens } from '@wash/ui';
+import { baseName, formatDate, humanSize, joinPath, octalPerm, parentPath } from './paths.ts';
 import {
   ArrowLeft,
   ArrowRight,
@@ -2606,53 +2607,9 @@ const EntryIcon: Component<{ entry: Entry }> = (props) => {
   }
 };
 
-function joinPath(parent: string, name: string): string {
-  if (parent.endsWith('/')) return parent + name;
-  return parent + '/' + name;
-}
-
-function parentPath(p: string): string {
-  if (!p || p === '/') return '/';
-  const i = p.lastIndexOf('/');
-  if (i <= 0) return '/';
-  return p.slice(0, i);
-}
-
-function baseName(p: string): string {
-  const i = p.lastIndexOf('/');
-  return i < 0 ? p : p.slice(i + 1);
-}
-
-function humanSize(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-// formatDate renders a unix seconds timestamp in the compact
-// ls-style: "Dec 15 14:32" for this year, "Dec 15  2024" for
-// older entries. Returns "" for 0/missing values so the row
-// stays clean.
-function formatDate(unix: number): string {
-  if (!unix) return '';
-  const d = new Date(unix * 1000);
-  const now = new Date();
-  const month = MONTHS[d.getMonth()];
-  const day = String(d.getDate()).padStart(2, ' ');
-  if (d.getFullYear() === now.getFullYear()) {
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mm = String(d.getMinutes()).padStart(2, '0');
-    return `${month} ${day} ${hh}:${mm}`;
-  }
-  return `${month} ${day}  ${d.getFullYear()}`;
-}
-
-function octalPerm(mode: number): string {
-  return '0' + (mode & 0o777).toString(8);
-}
+// Pure path/format helpers (joinPath, parentPath, baseName, humanSize,
+// formatDate, octalPerm) live in ./paths.ts — extracted for node:test
+// coverage and reuse.
 
 // ---- custom element wrapper ----
 
