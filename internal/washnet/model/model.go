@@ -1,9 +1,11 @@
 // Package model defines the UCI-shaped object vocabulary that is wash-net's
 // single source of truth. Each object maps ~1:1 to a UCI section; the `uci`
-// struct tags carry the serialization mapping (see internal/washnet/codec),
-// and field types carry datatype validation for free. See docs/NET.md §4.
+// struct tags carry the serialization mapping (see internal/washnet/codec) and
+// the `ui` tags carry presentation hints consumed by the UI codegen (see
+// internal/washnet/uigen). Field types carry datatype validation for free. See
+// docs/NET.md §4, §6.
 //
-// Tag grammar (consumed by the codec):
+// uci tag grammar:
 //
 //	uci:",name"          this field is the UCI section NAME (config <type> 'NAME')
 //	uci:"opt"            option opt
@@ -12,15 +14,18 @@
 //	                     variant's own fields are inlined into the same section
 //	uci:"-" / (no tag)   ignored
 //
-// Sum types (proto, encryption) are modeled as a discriminator interface + one
-// struct per variant, flattened into the flat UCI section by the codec. This is
-// the documented Go "sum-type tax" — repaid by driving form conditional
-// visibility off the variant structs in the FE.
+// ui tag grammar (all optional; widget otherwise derives from the field type):
+//
+//	ui:"group=g"         logical form group
+//	ui:"ref=kind"        render as a picker of existing objects of that kind
+//	ui:"widget=w"        override the derived widget (e.g. mac)
+//	ui:"advanced"        hide behind the Advanced toggle
 package model
 
 import (
 	"net/netip"
 	"reflect"
+	"sort"
 )
 
 // Config is the full declarative network configuration. Pure data; validation,
@@ -56,8 +61,8 @@ type Config struct {
 // --- network ---------------------------------------------------------------
 
 type Globals struct {
-	Name      string       `uci:",name"` // conventionally 'globals'
-	ULAPrefix netip.Prefix `uci:"ula_prefix"`
+	Name      string       `uci:",name"`
+	ULAPrefix netip.Prefix `uci:"ula_prefix" ui:"group=ipv6"`
 }
 
 func (Globals) UCIPackage() string { return "network" }
@@ -67,8 +72,8 @@ func (Globals) UCISection() string { return "globals" }
 // addressing is carried by the proto union.
 type Interface struct {
 	Name   string      `uci:",name"`
-	Device string      `uci:"device"`
-	Proto  ProtoConfig `uci:"proto,union"`
+	Device string      `uci:"device" ui:"group=general,ref=device"`
+	Proto  ProtoConfig `uci:"proto,union" ui:"group=general"`
 }
 
 func (Interface) UCIPackage() string { return "network" }
@@ -82,15 +87,15 @@ type NoneProto struct{}
 func (NoneProto) UCITag() string { return "none" }
 
 type StaticProto struct {
-	IPAddr  netip.Prefix `uci:"ipaddr"`
-	Gateway netip.Addr   `uci:"gateway"`
-	DNS     []netip.Addr `uci:"dns,list"`
+	IPAddr  netip.Prefix `uci:"ipaddr" ui:"group=addressing"`
+	Gateway netip.Addr   `uci:"gateway" ui:"group=addressing"`
+	DNS     []netip.Addr `uci:"dns,list" ui:"group=addressing,advanced"`
 }
 
 func (StaticProto) UCITag() string { return "static" }
 
 type DHCPProto struct {
-	Hostname string `uci:"hostname"`
+	Hostname string `uci:"hostname" ui:"advanced"`
 }
 
 func (DHCPProto) UCITag() string { return "dhcp" }
@@ -101,13 +106,13 @@ func (DHCPv6Proto) UCITag() string { return "dhcpv6" }
 
 type PPPoEProto struct {
 	Username string `uci:"username"`
-	Password string `uci:"password"`
+	Password string `uci:"password" ui:"widget=password"`
 }
 
 func (PPPoEProto) UCITag() string { return "pppoe" }
 
 type WireGuardProto struct {
-	PrivateKey string         `uci:"private_key"`
+	PrivateKey string         `uci:"private_key" ui:"widget=password"`
 	ListenPort int            `uci:"listen_port"`
 	Addresses  []netip.Prefix `uci:"addresses,list"`
 }
@@ -118,20 +123,20 @@ func (WireGuardProto) UCITag() string { return "wireguard" }
 // (e.g. br-lan).
 type Device struct {
 	Name  string   `uci:"name"`
-	Type  string   `uci:"type"` // bridge, 8021q, macvlan
+	Type  string   `uci:"type"`
 	Ports []string `uci:"ports,list"`
-	MTU   int      `uci:"mtu"`
+	MTU   int      `uci:"mtu" ui:"advanced"`
 }
 
 func (Device) UCIPackage() string { return "network" }
 func (Device) UCISection() string { return "device" }
 
 type Route struct {
-	Interface string       `uci:"interface"`
+	Interface string       `uci:"interface" ui:"ref=interface"`
 	Target    netip.Prefix `uci:"target"`
 	Gateway   netip.Addr   `uci:"gateway"`
-	Metric    int          `uci:"metric"`
-	Table     string       `uci:"table"`
+	Metric    int          `uci:"metric" ui:"advanced"`
+	Table     string       `uci:"table" ui:"advanced"`
 }
 
 func (Route) UCIPackage() string { return "network" }
@@ -139,12 +144,12 @@ func (Route) UCISection() string { return "route" }
 
 // PolicyRule is a `config rule` in the network package (ip rule).
 type PolicyRule struct {
-	In       string       `uci:"in"`
-	Out      string       `uci:"out"`
+	In       string       `uci:"in" ui:"ref=interface"`
+	Out      string       `uci:"out" ui:"ref=interface"`
 	Src      netip.Prefix `uci:"src"`
 	Dest     netip.Prefix `uci:"dest"`
 	Lookup   string       `uci:"lookup"`
-	Priority int          `uci:"priority"`
+	Priority int          `uci:"priority" ui:"advanced"`
 }
 
 func (PolicyRule) UCIPackage() string { return "network" }
@@ -154,14 +159,14 @@ func (PolicyRule) UCISection() string { return "rule" }
 // UCI adapter maps it to OpenWRT's `wireguard_<ifname>` section in Phase D.
 type WGPeer struct {
 	Name                string         `uci:",name"`
-	Interface           string         `uci:"interface"`
+	Interface           string         `uci:"interface" ui:"ref=interface"`
 	PublicKey           string         `uci:"public_key"`
-	PresharedKey        string         `uci:"preshared_key"`
+	PresharedKey        string         `uci:"preshared_key" ui:"widget=password,advanced"`
 	AllowedIPs          []netip.Prefix `uci:"allowed_ips,list"`
 	EndpointHost        string         `uci:"endpoint_host"`
 	EndpointPort        int            `uci:"endpoint_port"`
-	PersistentKeepalive int            `uci:"persistent_keepalive"`
-	RouteAllowedIPs     bool           `uci:"route_allowed_ips"`
+	PersistentKeepalive int            `uci:"persistent_keepalive" ui:"advanced"`
+	RouteAllowedIPs     bool           `uci:"route_allowed_ips" ui:"advanced"`
 }
 
 func (WGPeer) UCIPackage() string { return "network" }
@@ -173,7 +178,7 @@ type Defaults struct {
 	Input    string `uci:"input"`
 	Output   string `uci:"output"`
 	Forward  string `uci:"forward"`
-	SynFlood bool   `uci:"syn_flood"`
+	SynFlood bool   `uci:"syn_flood" ui:"advanced"`
 }
 
 func (Defaults) UCIPackage() string { return "firewall" }
@@ -181,20 +186,20 @@ func (Defaults) UCISection() string { return "defaults" }
 
 type Zone struct {
 	Name     string   `uci:"name"`
-	Networks []string `uci:"network,list"`
+	Networks []string `uci:"network,list" ui:"ref=interface"`
 	Input    string   `uci:"input"`
 	Output   string   `uci:"output"`
 	Forward  string   `uci:"forward"`
 	Masq     bool     `uci:"masq"`
-	MTUFix   bool     `uci:"mtu_fix"`
+	MTUFix   bool     `uci:"mtu_fix" ui:"advanced"`
 }
 
 func (Zone) UCIPackage() string { return "firewall" }
 func (Zone) UCISection() string { return "zone" }
 
 type Forwarding struct {
-	Src  string `uci:"src"`
-	Dest string `uci:"dest"`
+	Src  string `uci:"src" ui:"ref=zone"`
+	Dest string `uci:"dest" ui:"ref=zone"`
 }
 
 func (Forwarding) UCIPackage() string { return "firewall" }
@@ -203,13 +208,13 @@ func (Forwarding) UCISection() string { return "forwarding" }
 // Redirect is a DNAT / port-forward (config redirect).
 type Redirect struct {
 	Name     string     `uci:"name"`
-	Src      string     `uci:"src"`
+	Src      string     `uci:"src" ui:"ref=zone"`
 	SrcDPort string     `uci:"src_dport"`
-	Dest     string     `uci:"dest"`
+	Dest     string     `uci:"dest" ui:"ref=zone"`
 	DestIP   netip.Addr `uci:"dest_ip"`
 	DestPort string     `uci:"dest_port"`
 	Proto    string     `uci:"proto"`
-	Target   string     `uci:"target"` // DNAT / SNAT
+	Target   string     `uci:"target"`
 }
 
 func (Redirect) UCIPackage() string { return "firewall" }
@@ -217,13 +222,13 @@ func (Redirect) UCISection() string { return "redirect" }
 
 type FirewallRule struct {
 	Name     string `uci:"name"`
-	Src      string `uci:"src"`
-	Dest     string `uci:"dest"`
+	Src      string `uci:"src" ui:"ref=zone"`
+	Dest     string `uci:"dest" ui:"ref=zone"`
 	Proto    string `uci:"proto"`
 	SrcPort  string `uci:"src_port"`
 	DestPort string `uci:"dest_port"`
-	Target   string `uci:"target"` // ACCEPT / REJECT / DROP
-	Family   string `uci:"family"`
+	Target   string `uci:"target"`
+	Family   string `uci:"family" ui:"advanced"`
 }
 
 func (FirewallRule) UCIPackage() string { return "firewall" }
@@ -231,8 +236,8 @@ func (FirewallRule) UCISection() string { return "rule" }
 
 type NAT struct {
 	Name   string     `uci:"name"`
-	Src    string     `uci:"src"`
-	Target string     `uci:"target"` // SNAT / MASQUERADE
+	Src    string     `uci:"src" ui:"ref=zone"`
+	Target string     `uci:"target"`
 	SNATIP netip.Addr `uci:"snat_ip"`
 }
 
@@ -251,11 +256,11 @@ func (IPSet) UCISection() string { return "ipset" }
 // --- dhcp ------------------------------------------------------------------
 
 type Dnsmasq struct {
-	DomainNeeded bool     `uci:"domainneeded"`
-	BogusPriv    bool     `uci:"boguspriv"`
-	Local        string   `uci:"local"`
+	DomainNeeded bool     `uci:"domainneeded" ui:"advanced"`
+	BogusPriv    bool     `uci:"boguspriv" ui:"advanced"`
+	Local        string   `uci:"local" ui:"advanced"`
 	Domain       string   `uci:"domain"`
-	ExpandHosts  bool     `uci:"expandhosts"`
+	ExpandHosts  bool     `uci:"expandhosts" ui:"advanced"`
 	Server       []string `uci:"server,list"`
 }
 
@@ -265,13 +270,13 @@ func (Dnsmasq) UCISection() string { return "dnsmasq" }
 // DHCPPool is named by its interface (config dhcp 'lan').
 type DHCPPool struct {
 	Name      string `uci:",name"`
-	Interface string `uci:"interface"`
+	Interface string `uci:"interface" ui:"ref=interface"`
 	Start     int    `uci:"start"`
 	Limit     int    `uci:"limit"`
 	LeaseTime string `uci:"leasetime"`
 	Ignore    bool   `uci:"ignore"`
-	RA        string `uci:"ra"`
-	DHCPv6    string `uci:"dhcpv6"`
+	RA        string `uci:"ra" ui:"advanced"`
+	DHCPv6    string `uci:"dhcpv6" ui:"advanced"`
 }
 
 func (DHCPPool) UCIPackage() string { return "dhcp" }
@@ -280,10 +285,10 @@ func (DHCPPool) UCISection() string { return "dhcp" }
 // Host is a static lease (config host).
 type Host struct {
 	Name      string     `uci:"name"`
-	MAC       string     `uci:"mac"`
+	MAC       string     `uci:"mac" ui:"widget=mac"`
 	IP        netip.Addr `uci:"ip"`
 	Hostname  string     `uci:"hostname"`
-	LeaseTime string     `uci:"leasetime"`
+	LeaseTime string     `uci:"leasetime" ui:"advanced"`
 }
 
 func (Host) UCIPackage() string { return "dhcp" }
@@ -311,10 +316,10 @@ func (CNAME) UCISection() string { return "cname" }
 // WifiDevice is a radio (config wifi-device 'radio0').
 type WifiDevice struct {
 	Name     string `uci:",name"`
-	Type     string `uci:"type"`
-	Band     string `uci:"band"` // 2g / 5g / 6g
+	Type     string `uci:"type" ui:"advanced"`
+	Band     string `uci:"band"`
 	Channel  string `uci:"channel"`
-	HTMode   string `uci:"htmode"`
+	HTMode   string `uci:"htmode" ui:"advanced"`
 	Country  string `uci:"country"`
 	Disabled bool   `uci:"disabled"`
 }
@@ -325,13 +330,13 @@ func (WifiDevice) UCISection() string { return "wifi-device" }
 // WifiIface is an SSID (config wifi-iface). Encryption is a union.
 type WifiIface struct {
 	Name       string     `uci:",name"`
-	Device     string     `uci:"device"`
-	Mode       string     `uci:"mode"` // ap / sta / mesh
+	Device     string     `uci:"device" ui:"ref=radio"`
+	Mode       string     `uci:"mode"`
 	SSID       string     `uci:"ssid"`
-	Network    string     `uci:"network"`
+	Network    string     `uci:"network" ui:"ref=interface"`
 	Encryption Encryption `uci:"encryption,union"`
-	Hidden     bool       `uci:"hidden"`
-	Isolate    bool       `uci:"isolate"`
+	Hidden     bool       `uci:"hidden" ui:"advanced"`
+	Isolate    bool       `uci:"isolate" ui:"advanced"`
 }
 
 func (WifiIface) UCIPackage() string { return "wireless" }
@@ -345,13 +350,13 @@ type EncNone struct{}
 func (EncNone) UCITag() string { return "none" }
 
 type EncPSK2 struct {
-	Key string `uci:"key"`
+	Key string `uci:"key" ui:"widget=password"`
 }
 
 func (EncPSK2) UCITag() string { return "psk2" }
 
 type EncSAE struct {
-	Key string `uci:"key"`
+	Key string `uci:"key" ui:"widget=password"`
 }
 
 func (EncSAE) UCITag() string { return "sae" }
@@ -383,6 +388,26 @@ func VariantType(iface reflect.Type, tag string) (reflect.Type, bool) {
 	return t, ok
 }
 
+// VariantsOf returns every variant struct type registered for a union
+// interface, sorted by discriminator tag for deterministic output.
+func VariantsOf(iface reflect.Type) []reflect.Type {
+	m := unionVariants[iface]
+	ts := make([]reflect.Type, 0, len(m))
+	for _, t := range m {
+		ts = append(ts, t)
+	}
+	sort.Slice(ts, func(i, j int) bool { return TagOf(ts[i]) < TagOf(ts[j]) })
+	return ts
+}
+
+// TagOf returns the UCITag of a variant struct type.
+func TagOf(t reflect.Type) string {
+	if v, ok := reflect.New(t).Elem().Interface().(interface{ UCITag() string }); ok {
+		return v.UCITag()
+	}
+	return ""
+}
+
 // Kinded is implemented by every object that maps to a UCI section.
 type Kinded interface {
 	UCIPackage() string
@@ -404,6 +429,23 @@ func Kinds() []string {
 		}
 	}
 	return ks
+}
+
+// ObjectTypes returns the element type of every Config slice field, in order —
+// the set of model objects, for codegen.
+func ObjectTypes() []reflect.Type {
+	var ts []reflect.Type
+	ct := reflect.TypeOf(Config{})
+	for i := 0; i < ct.NumField(); i++ {
+		if ct.Field(i).Type.Kind() != reflect.Slice {
+			continue
+		}
+		et := ct.Field(i).Type.Elem()
+		if _, ok := reflect.New(et).Elem().Interface().(Kinded); ok {
+			ts = append(ts, et)
+		}
+	}
+	return ts
 }
 
 func init() {
