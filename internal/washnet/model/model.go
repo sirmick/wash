@@ -383,6 +383,29 @@ func VariantType(iface reflect.Type, tag string) (reflect.Type, bool) {
 	return t, ok
 }
 
+// Kinded is implemented by every object that maps to a UCI section.
+type Kinded interface {
+	UCIPackage() string
+	UCISection() string
+}
+
+// Kinds returns the "package/section" key for every object kind, in Config
+// field order. Used by caps to enumerate what a backend may cover.
+func Kinds() []string {
+	var ks []string
+	ct := reflect.TypeOf(Config{})
+	for i := 0; i < ct.NumField(); i++ {
+		if ct.Field(i).Type.Kind() != reflect.Slice {
+			continue
+		}
+		et := ct.Field(i).Type.Elem()
+		if obj, ok := reflect.New(et).Elem().Interface().(Kinded); ok {
+			ks = append(ks, obj.UCIPackage()+"/"+obj.UCISection())
+		}
+	}
+	return ks
+}
+
 func init() {
 	registerUnion[ProtoConfig](NoneProto{}, StaticProto{}, DHCPProto{}, DHCPv6Proto{}, PPPoEProto{}, WireGuardProto{})
 	registerUnion[Encryption](EncNone{}, EncPSK2{}, EncSAE{})
