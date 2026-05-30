@@ -49,7 +49,11 @@ func connectNetd(t *testing.T) (wire.FrameTransport, func()) {
 
 	return pp.EndB(), func() {
 		r.c.Close()
-		svc, applier, pending = nil, nil, nil // reset package singletons between tests
+		if timer != nil {
+			timer.Stop()
+		}
+		svc, applier, pending, timer = nil, nil, nil, nil // reset package singletons between tests
+		ConfirmTimeout = 90 * time.Second
 	}
 }
 
@@ -282,6 +286,40 @@ func TestApplyRefusesInvalidConfigWithDiagnostics(t *testing.T) {
 	}
 	if len(applier.Live().Interfaces) != 0 {
 		t.Fatal("invalid apply must not touch live state")
+	}
+}
+
+// TestApplyAutoRevertsOnConfirmTimeout is the lock-out protection (docs/NET.md
+// §7, §2.9): an applied change that is never confirmed reverts itself, without
+// the FE, when the confirm window elapses. Live state is restored and the
+// status flips to reverted autonomously.
+func TestApplyAutoRevertsOnConfirmTimeout(t *testing.T) {
+	router, cleanup := connectNetd(t)
+	defer cleanup()
+	ConfirmTimeout = 150 * time.Millisecond // tighten the window for the test
+
+	reply := call(t, router, netSender, "apply", map[string]any{"config": ifaceConfig()})
+	if reply["state"] != "await-confirm" {
+		t.Fatalf("apply reply: %v", reply)
+	}
+	// Don't confirm. The window elapses → netd reverts on its own.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if svc.Snapshot().Status == "reverted" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := svc.Snapshot().Status; got != "reverted" {
+		t.Fatalf("status=%q, want reverted (auto-revert didn't fire)", got)
+	}
+	if len(applier.Live().Interfaces) != 0 {
+		t.Fatal("live config changed despite auto-revert")
+	}
+	// The pending change is gone → a late confirm errors.
+	cr := call(t, router, netSender, "confirm", nil)
+	if cr["kind"] != "confirm_err" {
+		t.Fatalf("confirm after auto-revert: %v, want confirm_err", cr)
 	}
 }
 

@@ -19,7 +19,7 @@ import (
 // second consumer exists yet. Promote to backend/fake only if B2 wants it too.
 type fakeApplier struct {
 	mu     sync.Mutex
-	live   model.Config // confirmed state — the base for the next diff/apply
+	live   model.Config  // confirmed state — the base for the next diff/apply
 	staged *model.Config // applied-but-unconfirmed target; nil otherwise
 
 	// verifyErr, when set, makes Verify fail so the txn engine exercises its

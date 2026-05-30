@@ -54,4 +54,11 @@ test('VM-served wash UI round-trips a model edit to in-guest netd', async ({ vm,
   // Keep the change → netd confirms → committed.
   await net.getByRole('button', { name: 'Keep' }).click();
   await expect(net.locator('.wash-net-status')).toHaveText('committed', { timeout: 20_000 });
+
+  // The other commit-confirm branch in-VM: apply again, then Discard → netd
+  // reverts. (The autonomous timeout-revert is covered by the netd unit test.)
+  await net.getByRole('button', { name: 'Apply' }).click();
+  await expect(net.locator('.wash-net-status')).toHaveText('await-confirm', { timeout: 20_000 });
+  await net.getByRole('button', { name: 'Discard' }).click();
+  await expect(net.locator('.wash-net-status')).toHaveText('reverted', { timeout: 20_000 });
 });

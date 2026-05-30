@@ -31,16 +31,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"sync"
+	"time"
 
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/sdk"
-	"github.com/sirmick/wash/internal/wire"
 	"github.com/sirmick/wash/internal/washnet/change"
 	"github.com/sirmick/wash/internal/washnet/codec"
 	"github.com/sirmick/wash/internal/washnet/model"
 	"github.com/sirmick/wash/internal/washnet/txn"
 	"github.com/sirmick/wash/internal/washnet/validate"
+	"github.com/sirmick/wash/internal/wire"
 )
 
 const version = "0.8.0"
@@ -95,11 +97,70 @@ var (
 	svc     *sdk.StateService[NetState]
 	applier *fakeApplier
 	mu      sync.Mutex
-	pending *txn.Job // set while a change awaits confirm; nil otherwise
+	pending *txn.Job    // set while a change awaits confirm; nil otherwise
+	timer   *time.Timer // autonomous auto-revert timer for `pending`
 )
+
+// ConfirmTimeout is the commit-confirm window (docs/NET.md §7, §2.9): if an
+// applied change isn't confirmed within it, netd auto-reverts on its OWN —
+// without the FE — which is the lock-out protection (an admin who applied a
+// WAN-breaking change and got cut off is restored automatically). Tests set a
+// short value; production uses this default.
+var ConfirmTimeout = 90 * time.Second
+
+// setPending records the awaiting-confirm job and arms the autonomous revert.
+func setPending(job *txn.Job) {
+	mu.Lock()
+	defer mu.Unlock()
+	pending = job
+	if timer != nil {
+		timer.Stop()
+	}
+	if ConfirmTimeout > 0 {
+		timer = time.AfterFunc(ConfirmTimeout, func() { autoRevert(job) })
+	}
+}
+
+// takePending clears the awaiting-confirm job (for an explicit confirm/revert)
+// and disarms the timer. Returns nil if nothing was pending.
+func takePending() *txn.Job {
+	mu.Lock()
+	defer mu.Unlock()
+	job := pending
+	pending = nil
+	if timer != nil {
+		timer.Stop()
+		timer = nil
+	}
+	return job
+}
+
+// autoRevert fires when the confirm window elapses: if the job is still the
+// pending one, revert it autonomously and publish the lock-out outcome.
+func autoRevert(job *txn.Job) {
+	mu.Lock()
+	if pending != job {
+		mu.Unlock()
+		return // already confirmed or reverted
+	}
+	pending = nil
+	timer = nil
+	mu.Unlock()
+	_ = job.Revert()
+	log.Printf("wash-netd: auto-reverted (not confirmed within %s)", ConfirmTimeout)
+	publish(NetState{Status: string(txn.Reverted), Summary: []string{"auto-reverted: not confirmed in time"}})
+}
 
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-netd ready instance=%s", instanceID)
+	// Operators (and the in-VM harness) can tune the commit-confirm window
+	// without a rebuild. Bad values are ignored (keep the safe default).
+	if v := os.Getenv("WASH_NETD_CONFIRM_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			ConfirmTimeout = d
+			log.Printf("wash-netd: confirm window = %s (WASH_NETD_CONFIRM_TIMEOUT)", d)
+		}
+	}
 	bus := sdk.NewBus(c)
 	applier = newFakeApplier()
 	svc = sdk.NewStateService(bus, NetState{Status: "idle"})
@@ -158,9 +219,7 @@ func registerHandlers(bus *sdk.Bus) {
 		resp := applyResp{State: string(job.State()), Events: eventDTOs(job), Entries: entryDTOs(job.Diff())}
 		switch job.State() {
 		case txn.AwaitConfirm:
-			mu.Lock()
-			pending = job
-			mu.Unlock()
+			setPending(job) // arms the autonomous auto-revert (§7)
 			publish(NetState{Status: string(txn.AwaitConfirm), Phase: lastPhase(job), Summary: summarize(job.Diff())})
 		case txn.Reverted:
 			publish(NetState{Status: string(txn.Reverted), Phase: lastPhase(job)})
@@ -172,17 +231,12 @@ func registerHandlers(bus *sdk.Bus) {
 		if err := authz(from); err != nil {
 			return statusResp{}, err
 		}
-		mu.Lock()
-		job := pending
-		pending = nil
-		mu.Unlock()
+		job := takePending()
 		if job == nil {
 			return statusResp{}, sdk.Errf(sdk.ErrBadRequest, "no change awaiting confirmation")
 		}
 		if err := job.Confirm(); err != nil {
-			mu.Lock()
-			pending = job // confirm failed; the job is still awaiting, restore it
-			mu.Unlock()
+			setPending(job) // confirm failed; the job is still awaiting, re-arm
 			return statusResp{}, sdk.Errf(sdk.ErrInternal, "confirm: %v", err)
 		}
 		publish(NetState{Status: string(txn.Committed)})
@@ -193,10 +247,7 @@ func registerHandlers(bus *sdk.Bus) {
 		if err := authz(from); err != nil {
 			return statusResp{}, err
 		}
-		mu.Lock()
-		job := pending
-		pending = nil
-		mu.Unlock()
+		job := takePending()
 		if job == nil {
 			return statusResp{}, sdk.Errf(sdk.ErrBadRequest, "no change awaiting confirmation")
 		}
