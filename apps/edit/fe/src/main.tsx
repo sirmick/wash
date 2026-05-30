@@ -20,6 +20,7 @@ import {
   joinPath, baseName, parentPath,
   createBus,
   DRAG_MIME, readDragPaths, hasWashDrag, dropEffectFor,
+  flattenTree,
 } from '@wash/fs-client';
 import { EditorSelection, EditorState, Compartment, Extension } from '@codemirror/state';
 import {
@@ -112,6 +113,10 @@ interface Entry {
   type: 'dir' | 'file' | 'symlink' | 'other';
   size: number;
   mod_unix: number;
+  // created_unix is part of the BE's fs.Entry (the wire data always has
+  // it); declared here so Entry satisfies @wash/fs-client's SortableEntry
+  // for flattenTree. edit only name-sorts, so it's otherwise unused.
+  created_unix: number;
   // link_to / link_err carry the symlink target as returned by
   // the BE (internal/fs.Entry). Used by the double-click handler
   // to follow links — same affordance fm has.
@@ -1197,31 +1202,22 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
-  // visibleRows flattens the tree into render-able rows: { entry,
-  // path, depth }. Folders come before files at each level.
-  const visibleRows = createMemo<Array<{ entry: Entry; path: string; depth: number }>>(() => {
-    const rows: Array<{ entry: Entry; path: string; depth: number }> = [];
-    const walk = (parent: string, depth: number) => {
-      const entries = listings[parent];
-      if (!entries) return;
-      const sorted = entries.slice().sort((a, b) => {
-        if (a.type === 'dir' && b.type !== 'dir') return -1;
-        if (a.type !== 'dir' && b.type === 'dir') return 1;
-        return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
-      });
-      for (const e of sorted) {
-        if (e.name.startsWith('.')) continue;
-        const child = joinPath(parent, e.name);
-        rows.push({ entry: e, path: child, depth });
-        if (e.type === 'dir' && expanded[child]) {
-          walk(child, depth + 1);
-        }
-      }
-    };
-    const r = root();
-    if (r) walk(r, 0);
-    return rows;
-  });
+  // visibleRows flattens the tree into render-able rows. The recursive
+  // walk lives in @wash/fs-client's flattenTree (unit-tested, shared with
+  // fm). edit always sorts name-asc with hidden filtered — exactly the
+  // {key:'name', desc:false, showHidden:false} the comparator produces —
+  // and has no in-flight fallback bridge, so cur:'' skips it. flattenTree
+  // also computes childCount, which edit'\''s rows simply ignore. Passing
+  // the store proxies in keeps the memo reactive (synchronous read).
+  const visibleRows = createMemo<Array<{ entry: Entry; path: string; depth: number }>>(() =>
+    flattenTree<Entry>({
+      listings,
+      expanded,
+      sort: { key: 'name', desc: false, showHidden: false },
+      start: root(),
+      cur: '',
+    }),
+  );
 
   // ---- row click semantics ----
   //
