@@ -21,6 +21,7 @@ import type { Component, JSX } from 'solid-js';
 import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, defineWashApp, tokens } from '@wash/ui';
 import { baseName, formatDate, humanSize, joinPath, octalPerm, parentPath } from './paths.ts';
 import { createBus } from './bus.ts';
+import { createWatch } from './watch.ts';
 import {
   ArrowLeft,
   ArrowRight,
@@ -165,15 +166,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   let completeTimer: number | null = null;
   // (no manual click-timer state — we lean on native dblclick.)
   let pathInputEl!: HTMLInputElement;
-  // Tracks which paths we've asked the BE to watch. The BE's watch
-  // op is idempotent so duplicates are safe, but keeping the set
-  // FE-side avoids the chatter. Cleared on collapse / unmount.
-  const watching = new Set<string>();
-  // Per-dir debounce timer for fs_event-driven refreshes. fsnotify
-  // can emit several events for one logical save (write + chmod);
-  // we coalesce them into a single re-list with a small delay so
-  // the tree doesn't flicker mid-write.
-  const refreshTimers = new Map<string, number>();
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
 
   // Request/reply correlation + timeout live in ./bus.ts (unit-tested).
@@ -181,6 +173,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // same; handleBE consults bus.tryResolve for echoed ids.
   const bus = createBus(send);
   const sendWithReply = bus.request;
+
+  // fs.watch bookkeeping (the watched-paths dedup set) + the fs_event
+  // refresh debounce live in ./watch.ts (unit-tested). shouldRefresh
+  // gates a re-list on the dir still being listed+expanded so a stale
+  // event can't resurrect a row the user just collapsed; the timer is
+  // re-checked at fire time for the same reason. refresh = re-list.
+  const fsWatch = createWatch({
+    send,
+    refresh: (dir) => invalidateAndList(dir),
+    shouldRefresh: (dir) => !!listings[dir] && !!expanded[dir],
+  });
 
   // askReplace shows the Replace confirm overlay for `dst` and
   // resolves with the user's choice. Used by withReplacePrompt
@@ -231,44 +234,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // expandDir marks a path as visually expanded AND asks the BE to
   // watch it. collapseDir is the inverse. Use these instead of
   // setExpanded() directly so the watch state stays in sync with
-  // the tree — they're the only places that touch fmWatch.
+  // the tree — they're the only places that touch fsWatch. The
+  // watch/unwatch dedup + refresh debounce live in ./watch.ts.
   const expandDir = (p: string) => {
     if (expanded[p]) return;
     setExpanded(p, true);
-    if (!watching.has(p)) {
-      watching.add(p);
-      send({ kind: 'watch', path: p });
-    }
+    fsWatch.watch(p);
   };
 
   const collapseDir = (p: string) => {
     if (!expanded[p]) return;
     setExpanded(produce((s) => { delete s[p]; }));
-    if (watching.has(p)) {
-      watching.delete(p);
-      send({ kind: 'unwatch', path: p });
-    }
-  };
-
-  // scheduleRefresh debounces a re-list of dir by 100ms. Coalesces
-  // bursts of fs_events for the same directory (one save can fire
-  // write+chmod in close succession).
-  //
-  // We skip refreshes for dirs that aren't currently expanded —
-  // even if listings[dir] still has stale data. Otherwise an
-  // fs_event on a dir's mtime (from its parent's watch) would
-  // re-list it, and the list_ok handler's auto-expand would
-  // resurrect the row the user just collapsed.
-  const scheduleRefresh = (dir: string) => {
-    if (!listings[dir]) return;
-    if (!expanded[dir]) return;
-    const prev = refreshTimers.get(dir);
-    if (prev) window.clearTimeout(prev);
-    const tok = window.setTimeout(() => {
-      refreshTimers.delete(dir);
-      if (listings[dir] && expanded[dir]) invalidateAndList(dir);
-    }, 100);
-    refreshTimers.set(dir, tok);
+    fsWatch.unwatch(p);
   };
 
   const handleBE = (m: BEMessage) => {
@@ -343,8 +320,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         // m.path is the dir — schedule both paths so the parent
         // listing (which now lacks that dir) refreshes too.
         const evtPath = String(m.path);
-        scheduleRefresh(parentPath(evtPath));
-        scheduleRefresh(evtPath);
+        fsWatch.scheduleRefresh(parentPath(evtPath));
+        fsWatch.scheduleRefresh(evtPath);
         return;
       }
       case 'clipboard_files_state': {
