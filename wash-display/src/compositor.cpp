@@ -581,6 +581,25 @@ int run_compositor(WireConn& conn) {
     // spawn a configured guest app that connects immediately.
     conn.send_app_msg(0, json{{"kind", "display_ready"},
                               {"wayland_display", socket}});
+
+    // Publish the socket names as WASH_*-namespaced env hints. The router
+    // merges these into every app it later spawns; wash-term maps them to
+    // DISPLAY / WAYLAND_DISPLAY so a client typed at a wash prompt finds
+    // this compositor. Gated router-side by the env-publish capability.
+    // See docs/DISPLAY_ENV.md.
+    {
+        json pub;
+        pub["WASH_WAYLAND_DISPLAY"] = socket;
+        if (const char* xrd = std::getenv("XDG_RUNTIME_DIR"); xrd && *xrd) {
+            pub["WASH_XDG_RUNTIME_DIR"] = xrd;
+        }
+#ifdef WASH_DISPLAY_XWAYLAND
+        if (server.xwayland && server.xwayland->display_name) {
+            pub["WASH_X_DISPLAY"] = server.xwayland->display_name;
+        }
+#endif
+        conn.publish_env(pub);
+    }
     maybe_spawn_guest();
 
     // Blocks until wl_display_terminate / fatal backend error.

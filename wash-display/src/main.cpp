@@ -48,7 +48,7 @@ static int print_manifest() {
         "\"surface\":\"background\","
         "\"icon\":\"\","
         "\"instancing\":\"singleton\","
-        "\"capabilities\":[\"windows\"]"
+        "\"capabilities\":[\"windows\",\"env-publish\"]"
         "},\"bundle_b64\":\"\"}\n",
         kAppID, kVersion, kProto);
     return 0;

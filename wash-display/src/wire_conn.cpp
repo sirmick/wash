@@ -199,4 +199,9 @@ bool WireConn::send_app_msg(uint32_t win, const json& data) {
     return write_json(CH_EVENT, m);
 }
 
+bool WireConn::publish_env(const json& env) {
+    json m = {{"t", "env.publish"}, {"env", env}};
+    return write_json(CH_EVENT, m);
+}
+
 } // namespace wash

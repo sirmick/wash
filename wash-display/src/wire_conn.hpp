@@ -78,6 +78,12 @@ public:
     // `win` (0 = instance level).
     bool send_app_msg(uint32_t win, const json& data);
 
+    // publish_env sends env.publish: WASH_*-namespaced env hints the
+    // router merges into every app it later spawns (docs/DISPLAY_ENV.md),
+    // so wash-term's shell can reach DISPLAY / WAYLAND_DISPLAY. Requires
+    // the env-publish capability (declared in the manifest).
+    bool publish_env(const json& env);
+
     void on_app_msg(AppMsgHandler h) { app_msg_handler_ = std::move(h); }
 
     // alive is false once the socket closed or a shutdown arrived.
