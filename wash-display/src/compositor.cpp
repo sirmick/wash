@@ -63,6 +63,7 @@ extern "C" {
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_xdg_shell.h>
+#include <wlr/types/wlr_xdg_decoration_v1.h>
 #include <wlr/util/box.h>
 #include <wlr/util/log.h>
 #ifdef WASH_DISPLAY_XWAYLAND
@@ -101,6 +102,12 @@ struct Server {
 
     struct wl_listener new_output;
     struct wl_listener new_xdg_toplevel;
+
+    // xdg-decoration: force server-side decorations so GTK/Wayland apps
+    // drop their own titlebar/shadow — wash draws the real frame,
+    // otherwise the client renders a titlebar INSIDE the wash window.
+    struct wlr_xdg_decoration_manager_v1* xdg_decoration = nullptr;
+    struct wl_listener new_toplevel_decoration;
 
     // Seat + a single virtual keyboard (commit 9). The seat is required
     // even for display-only X11: Xwayland's core keyboard device fails to
@@ -339,6 +346,46 @@ void toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
     delete t;
 }
 
+// --- xdg-decoration: force server-side -----------------------------
+//
+// A client (e.g. GTK) that supports xdg-decoration asks the compositor
+// whether it should draw its own decorations. We always answer
+// SERVER_SIDE: wash draws the window frame, so the client must NOT draw
+// a titlebar/border (which would appear as a frame inside the wash
+// window). One Decoration per toplevel; we re-force the mode on every
+// client request_mode and self-clean on destroy.
+struct Decoration {
+    struct wlr_xdg_toplevel_decoration_v1* deco = nullptr;
+    struct wl_listener request_mode;
+    struct wl_listener destroy;
+};
+
+void decoration_request_mode(struct wl_listener* listener, void* /*data*/) {
+    Decoration* d = wl_container_of(listener, d, request_mode);
+    wlr_xdg_toplevel_decoration_v1_set_mode(
+        d->deco, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+}
+
+void decoration_destroy(struct wl_listener* listener, void* /*data*/) {
+    Decoration* d = wl_container_of(listener, d, destroy);
+    wl_list_remove(&d->request_mode.link);
+    wl_list_remove(&d->destroy.link);
+    delete d;
+}
+
+void server_new_toplevel_decoration(struct wl_listener* /*listener*/, void* data) {
+    auto* deco = static_cast<struct wlr_xdg_toplevel_decoration_v1*>(data);
+    auto* d = new Decoration();
+    d->deco = deco;
+    d->request_mode.notify = decoration_request_mode;
+    wl_signal_add(&deco->events.request_mode, &d->request_mode);
+    d->destroy.notify = decoration_destroy;
+    wl_signal_add(&deco->events.destroy, &d->destroy);
+    // Force the initial mode now (the client may not send a request).
+    wlr_xdg_toplevel_decoration_v1_set_mode(
+        deco, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+}
+
 void server_new_xdg_toplevel(struct wl_listener* listener, void* data) {
     Server* server = wl_container_of(listener, server, new_xdg_toplevel);
     // 0.17: wlr_xdg_shell has no new_toplevel signal; it emits new_surface
@@ -531,6 +578,15 @@ int run_compositor(WireConn& conn) {
     // 0.17: subscribe to new_surface (no new_toplevel signal); the handler
     // filters for the toplevel role.
     wl_signal_add(&server.xdg_shell->events.new_surface, &server.new_xdg_toplevel);
+
+    // Advertise xdg-decoration and force server-side, so Wayland clients
+    // (GTK etc.) don't draw their own titlebar inside the wash frame.
+    server.xdg_decoration = wlr_xdg_decoration_manager_v1_create(server.display);
+    if (server.xdg_decoration) {
+        server.new_toplevel_decoration.notify = server_new_toplevel_decoration;
+        wl_signal_add(&server.xdg_decoration->events.new_toplevel_decoration,
+                      &server.new_toplevel_decoration);
+    }
 
 #ifdef WASH_DISPLAY_XWAYLAND
     // Bring up Xwayland lazily (the X server only starts when an X client
