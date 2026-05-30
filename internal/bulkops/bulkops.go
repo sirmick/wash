@@ -32,6 +32,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -99,7 +100,10 @@ type Job struct {
 	Done   int    // items processed so far
 	Total  int    // items the job will process (computed at start)
 	Error  string // populated on Failed
-	cancel atomic.Bool
+	// cancel is a pointer so Job stays a safe value type — snapshots
+	// and onUpdate copies share the live flag rather than copying a
+	// sync/atomic value (which go vet flags and would silently zero).
+	cancel *atomic.Bool
 }
 
 // snapshot returns a copy of the job safe to hand to callbacks
@@ -114,6 +118,7 @@ func (j *Job) snapshot() Job {
 		Done:   j.Done,
 		Total:  j.Total,
 		Error:  j.Error,
+		cancel: j.cancel,
 	}
 	return out
 }
@@ -211,6 +216,7 @@ func (m *Manager) Enqueue(op Op, paths []string, dest string) string {
 		Paths:  append([]string(nil), paths...),
 		Dest:   dest,
 		Status: StatusQueued,
+		cancel: &atomic.Bool{},
 	}
 	m.mu.Lock()
 	m.jobs = append(m.jobs, job)
@@ -897,21 +903,9 @@ func removeAll(path string, onItem func()) error {
 	return nil
 }
 
-// isCrossDevice reports whether err is an EXDEV-equivalent. We
-// inspect the message because syscall.EXDEV is platform-specific
-// and the wash binary is CGO_ENABLED=0 / cross-compiled.
+// isCrossDevice reports whether err is an EXDEV — a rename across
+// filesystems. os.Rename wraps the errno in *os.LinkError, which
+// errors.Is unwraps.
 func isCrossDevice(err error) bool {
-	if err == nil {
-		return false
-	}
-	return contains(err.Error(), "invalid cross-device link") || contains(err.Error(), "EXDEV")
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
+	return errors.Is(err, syscall.EXDEV)
 }

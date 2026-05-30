@@ -133,7 +133,7 @@ func (f *FS) Rename(from, to string, replace bool) (src, dst string, err error) 
 			return src, dst, os.ErrExist
 		}
 		if err := os.Remove(dst); err != nil {
-			if dstInfo.IsDir() && strings.Contains(err.Error(), "directory not empty") {
+			if dstInfo.IsDir() && errors.Is(err, syscall.ENOTEMPTY) {
 				return src, dst, ErrNotEmptyDir
 			}
 			return src, dst, err
@@ -163,7 +163,7 @@ func (f *FS) Delete(p string) (abs string, err error) {
 		return abs, ErrForbidden
 	}
 	if err := os.Remove(abs); err != nil {
-		if strings.Contains(err.Error(), "directory not empty") {
+		if errors.Is(err, syscall.ENOTEMPTY) {
 			return abs, ErrNotEmpty
 		}
 		return abs, err
