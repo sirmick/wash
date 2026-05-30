@@ -24,6 +24,18 @@
 #include <ctime>
 #include <string>
 #include <unistd.h>
+#include <xkbcommon/xkbcommon.h>
+
+#ifdef WASH_DISPLAY_XWAYLAND
+// xcb headers (pulled in transitively by wlr/xwayland.h) carry many
+// `static inline` helpers; include them NORMALLY here so the `#define
+// static` hack below — needed for wlroots' C99 array-param render headers
+// — cannot mangle them. wlr/xwayland.h re-includes these under their own
+// include guards, so the copy inside the hacked block is a no-op.
+#include <xcb/xcb.h>
+#include <xcb/xcb_ewmh.h>
+#include <xcb/xcb_icccm.h>
+#endif
 
 // WLR_USE_UNSTABLE is defined by the build (CMake). wlroots' headers
 // pull in generated protocol headers (xdg-shell-protocol.h) that CMake
@@ -48,9 +60,20 @@ extern "C" {
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_subcompositor.h>
+#include <wlr/types/wlr_seat.h>
+#include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/box.h>
 #include <wlr/util/log.h>
+#ifdef WASH_DISPLAY_XWAYLAND
+// wlr/xwayland.h declares a struct field named `class` (valid C, reserved
+// in C++). Rename the token for the span of this one header so it parses
+// under C++; we never reference that field. (xcb/xcb_ewmh/xcb_icccm were
+// already included normally above, so their guards skip re-parsing here.)
+#define class class_
+#include <wlr/xwayland.h>
+#undef class
+#endif
 }
 #undef static
 
@@ -79,7 +102,36 @@ struct Server {
     struct wl_listener new_output;
     struct wl_listener new_xdg_toplevel;
 
+    // Seat + a single virtual keyboard (commit 9). The seat is required
+    // even for display-only X11: Xwayland's core keyboard device fails to
+    // initialize (aborting the X server) unless the compositor advertises
+    // a seat keyboard with a valid xkb keymap. Pointer input is notified
+    // through the same seat. No physical input devices exist (headless);
+    // events are injected from app_msg (FE → BE, DISPLAY.md §6).
+    struct wlr_seat* seat = nullptr;
+    struct wlr_keyboard vkbd;       // virtual keyboard backing the seat
+    bool vkbd_inited = false;
+
+#ifdef WASH_DISPLAY_XWAYLAND
+    struct wlr_xwayland* xwayland = nullptr;
+    struct wl_listener new_xwayland_surface;
+#endif
+
     WireConn* conn = nullptr;
+};
+
+// WindowSink is the per-window half of the pipeline shared by both
+// surface sources (xdg-shell toplevels and, via the Xwayland bridge,
+// X11 windows): one wash window id, its video channel, and the pooled
+// capture+WebP encoder. Both Toplevel and XSurface embed one so the
+// frame path is written once. (Defined before Toplevel, which embeds it.)
+struct WindowSink {
+    uint32_t win = 0;        // wash window id (0 until mapped)
+    uint32_t video_chan = 0; // per-window video channel (0 until opened)
+    uint32_t seq = 0;        // monotonic frame counter
+    SurfaceCapture cap;      // pooled BGRA capture
+    SurfaceEncoder enc;      // WebP framer
+    bool enc_ready = false;
 };
 
 // One mapped toplevel ↔ one wash window.
@@ -93,13 +145,7 @@ struct Toplevel {
     struct wl_listener commit;
     struct wl_listener destroy;
 
-    uint32_t win = 0;        // wash window id (0 until mapped)
-    uint32_t video_chan = 0; // per-window video channel (0 until opened)
-    uint32_t seq = 0;        // monotonic frame counter
-
-    SurfaceCapture cap;      // pooled BGRA capture
-    SurfaceEncoder enc;      // WebP framer
-    bool enc_ready = false;
+    WindowSink sink;         // shared window + capture/encode pipeline
 };
 
 // now_ms returns a monotonic millisecond timestamp for the WS frame
@@ -110,15 +156,74 @@ static uint64_t now_ms() {
     return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
+// sink_open mints the wash window for a freshly-mapped surface and opens
+// its per-window video channel. The channel needs a bound shell
+// (browser); without one the router replies "no shell attached" and we
+// get 0 — capture still runs but frames drop until a shell binds.
+static void sink_open(WindowSink& s, WireConn* conn, const std::string& title,
+                      uint32_t w, uint32_t h) {
+    s.win = conn->create_window(title, w, h);
+    wlr_log(WLR_INFO, "wash-display: mapped \"%s\" %ux%u -> win=%u",
+            title.c_str(), w, h, s.win);
+    if (s.win) {
+        s.video_chan = conn->open_video_channel(s.win);
+        if (s.video_chan)
+            wlr_log(WLR_INFO, "wash-display: win=%u video channel=%u", s.win, s.video_chan);
+        else
+            wlr_log(WLR_INFO, "wash-display: win=%u no video channel yet (no shell?)", s.win);
+    }
+}
+
+// sink_frame captures the surface's current buffer → WebP → one framed
+// message on the video channel. No-op until the window + channel exist.
+// This is the capture.cpp + encode.cpp seam, shared by both paths.
+static void sink_frame(WindowSink& s, WireConn* conn, struct wlr_surface* surface,
+                       struct wlr_renderer* renderer) {
+    if (!s.win || !s.video_chan) return; // not mapped / no sink
+    if (!s.cap.capture(surface, renderer)) return;
+
+    if (!s.enc_ready || s.enc.width() != s.cap.width() ||
+        s.enc.height() != s.cap.height()) {
+        s.enc_ready = s.enc.init(s.cap.width(), s.cap.height());
+        if (!s.enc_ready) return;
+    }
+
+    std::vector<uint8_t> frame = s.enc.encode_frame(
+        s.cap.data(), s.cap.stride(), s.cap.width(), s.cap.height(),
+        s.cap.dirty_x, s.cap.dirty_y, s.cap.dirty_w, s.cap.dirty_h, now_ms());
+    if (frame.empty()) return;
+
+    conn->write_channel(s.video_chan, frame.data(), frame.size());
+    if ((++s.seq % 60) == 1) {
+        wlr_log(WLR_INFO, "wash-display: win=%u frame seq=%u (%zu B) %dx%d",
+                s.win, s.seq, frame.size(), s.cap.width(), s.cap.height());
+    }
+}
+
+// sink_close tears down the wash window (fire-and-forget). Idempotent.
+static void sink_close(WindowSink& s, WireConn* conn) {
+    if (s.win) {
+        conn->destroy_window(s.win);
+        s.win = 0;
+    }
+}
+
 // maybe_spawn_guest fork+execs $WASH_DISPLAY_EXEC (if set) as a child;
 // it inherits WAYLAND_DISPLAY + XDG_RUNTIME_DIR from our env, so the
-// app connects straight to this compositor. Children are auto-reaped
-// (SIGCHLD ignored). This is the DISPLAY.md §2 "wash-display spawns the
-// guest apps" model — discovery is free.
+// app connects straight to this compositor. This is the DISPLAY.md §2
+// "wash-display spawns the guest apps" model — discovery is free.
+//
+// IMPORTANT: do NOT set SIGCHLD to SIG_IGN here. wlroots manages the
+// Xwayland subprocess with waitpid(), and SIG_IGN both (a) makes that
+// waitpid fail with ECHILD and (b) is inherited by Xwayland, whose own
+// keymap compilation forks xkbcomp and waitpid()s for it — under SIG_IGN
+// that child is auto-reaped, so Xwayland reports "Failed to compile
+// keymap" and aborts. We leave SIGCHLD at its default and let wlroots
+// own it; the guest (a leaf process) becoming a brief zombie on exit is
+// harmless for a long-lived compositor.
 static void maybe_spawn_guest() {
     const char* exec = std::getenv("WASH_DISPLAY_EXEC");
     if (!exec || !*exec) return;
-    std::signal(SIGCHLD, SIG_IGN);
     pid_t pid = fork();
     if (pid == 0) {
         execl("/bin/sh", "sh", "-c", exec, (char*)nullptr);
@@ -202,29 +307,12 @@ void toplevel_map(struct wl_listener* listener, void* /*data*/) {
 
     // Blocking wire round-trip; safe here (compositor thread, not the
     // WireConn reader thread).
-    t->win = t->server->conn->create_window(ttl, w, h);
-    wlr_log(WLR_INFO, "wash-display: toplevel mapped \"%s\" %ux%u -> win=%u",
-            ttl.c_str(), w, h, t->win);
-
-    // Open the per-window video channel. Needs a bound shell (browser);
-    // without one the router replies "no shell attached" and we get 0 —
-    // capture still runs but frames are dropped until a shell binds.
-    if (t->win) {
-        t->video_chan = t->server->conn->open_video_channel(t->win);
-        if (t->video_chan)
-            wlr_log(WLR_INFO, "wash-display: win=%u video channel=%u", t->win, t->video_chan);
-        else
-            wlr_log(WLR_INFO, "wash-display: win=%u no video channel yet (no shell?)", t->win);
-    }
+    sink_open(t->sink, t->server->conn, ttl, w, h);
 }
 
 void toplevel_unmap(struct wl_listener* listener, void* /*data*/) {
     Toplevel* t = wl_container_of(listener, t, unmap);
-    if (t->win) {
-        t->server->conn->destroy_window(t->win);
-        wlr_log(WLR_INFO, "wash-display: toplevel unmapped win=%u", t->win);
-        t->win = 0;
-    }
+    sink_close(t->sink, t->server->conn);
 }
 
 void toplevel_commit(struct wl_listener* listener, void* /*data*/) {
@@ -235,38 +323,15 @@ void toplevel_commit(struct wl_listener* listener, void* /*data*/) {
         wlr_xdg_toplevel_set_size(t->xdg_toplevel, 0, 0);
         return;
     }
-    if (!t->win || !t->video_chan) return; // not mapped / no sink
-
     // Capture the just-committed buffer → WebP → one framed message on
-    // the video channel (ClassBulk via write_channel). This is the
-    // capture.cpp + encode.cpp seam of the per-window pipeline.
-    struct wlr_surface* surface = t->xdg_toplevel->base->surface;
-    if (!t->cap.capture(surface, t->server->renderer)) return;
-
-    if (!t->enc_ready || t->enc.width() != t->cap.width() ||
-        t->enc.height() != t->cap.height()) {
-        t->enc_ready = t->enc.init(t->cap.width(), t->cap.height());
-        if (!t->enc_ready) return;
-    }
-
-    std::vector<uint8_t> frame = t->enc.encode_frame(
-        t->cap.data(), t->cap.stride(), t->cap.width(), t->cap.height(),
-        t->cap.dirty_x, t->cap.dirty_y, t->cap.dirty_w, t->cap.dirty_h, now_ms());
-    if (frame.empty()) return;
-
-    t->server->conn->write_channel(t->video_chan, frame.data(), frame.size());
-    if ((++t->seq % 60) == 1) {
-        wlr_log(WLR_INFO, "wash-display: win=%u frame seq=%u (%zu B) %dx%d",
-                t->win, t->seq, frame.size(), t->cap.width(), t->cap.height());
-    }
+    // the video channel (shared sink path; same as the X11 surfaces).
+    sink_frame(t->sink, t->server->conn, t->xdg_toplevel->base->surface,
+               t->server->renderer);
 }
 
 void toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
     Toplevel* t = wl_container_of(listener, t, destroy);
-    if (t->win) {
-        t->server->conn->destroy_window(t->win);
-        t->win = 0;
-    }
+    sink_close(t->sink, t->server->conn);
     wl_list_remove(&t->map.link);
     wl_list_remove(&t->unmap.link);
     wl_list_remove(&t->commit.link);
@@ -305,6 +370,115 @@ void server_new_xdg_toplevel(struct wl_listener* listener, void* data) {
     wl_signal_add(&xdg_toplevel->base->events.destroy, &t->destroy);
 }
 
+#ifdef WASH_DISPLAY_XWAYLAND
+// --- Xwayland (X11) surfaces (commit 10) -----------------------------
+//
+// X11 apps connect to the bundled Xwayland server; wlroots' embedded X
+// window manager (XWM) presents each X window as a wlr_xwayland_surface.
+// Unlike xdg-shell, the inner wlr_surface only becomes valid at the
+// `associate` event — so the map/unmap/commit listeners are wired there
+// and removed at `dissociate`. The frame path is identical to xdg: the
+// shared WindowSink helpers, so an X11 window streams over the same
+// capture→WebP→video-channel pipeline and inherits the wash-app-display
+// decoder element via window.create.
+struct XSurface {
+    Server* server = nullptr;
+    struct wlr_xwayland_surface* xsurf = nullptr;
+
+    struct wl_listener associate;
+    struct wl_listener dissociate;
+    struct wl_listener map;
+    struct wl_listener unmap;
+    struct wl_listener commit;
+    struct wl_listener destroy;
+    bool surface_listeners = false; // map/unmap/commit currently wired
+
+    WindowSink sink;
+};
+
+void xsurface_map(struct wl_listener* listener, void* /*data*/) {
+    XSurface* x = wl_container_of(listener, x, map);
+    const char* title = x->xsurf->title;
+    std::string ttl = title ? title : "X11 Window";
+    uint32_t w = x->xsurf->width  > 0 ? (uint32_t)x->xsurf->width  : (uint32_t)kScreenW;
+    uint32_t h = x->xsurf->height > 0 ? (uint32_t)x->xsurf->height : (uint32_t)kScreenH;
+    // X clients aren't sized implicitly by us — configure them to their
+    // own requested geometry so they paint at the expected dimensions.
+    wlr_xwayland_surface_configure(x->xsurf, x->xsurf->x, x->xsurf->y,
+                                   (uint16_t)w, (uint16_t)h);
+    sink_open(x->sink, x->server->conn, ttl, w, h);
+}
+
+void xsurface_unmap(struct wl_listener* listener, void* /*data*/) {
+    XSurface* x = wl_container_of(listener, x, unmap);
+    sink_close(x->sink, x->server->conn);
+}
+
+void xsurface_commit(struct wl_listener* listener, void* /*data*/) {
+    XSurface* x = wl_container_of(listener, x, commit);
+    sink_frame(x->sink, x->server->conn, x->xsurf->surface, x->server->renderer);
+}
+
+void xsurface_associate(struct wl_listener* listener, void* /*data*/) {
+    XSurface* x = wl_container_of(listener, x, associate);
+    // The inner wlr_surface is valid now; add it to the scene (so it gets
+    // frame callbacks and keeps rendering, e.g. a ticking clock) and wire
+    // the surface-level listeners.
+    wlr_scene_surface_create(&x->server->scene->tree, x->xsurf->surface);
+    x->map.notify = xsurface_map;
+    wl_signal_add(&x->xsurf->surface->events.map, &x->map);
+    x->unmap.notify = xsurface_unmap;
+    wl_signal_add(&x->xsurf->surface->events.unmap, &x->unmap);
+    x->commit.notify = xsurface_commit;
+    wl_signal_add(&x->xsurf->surface->events.commit, &x->commit);
+    x->surface_listeners = true;
+}
+
+static void xsurface_drop_surface_listeners(XSurface* x) {
+    if (x->surface_listeners) {
+        wl_list_remove(&x->map.link);
+        wl_list_remove(&x->unmap.link);
+        wl_list_remove(&x->commit.link);
+        x->surface_listeners = false;
+    }
+}
+
+void xsurface_dissociate(struct wl_listener* listener, void* /*data*/) {
+    XSurface* x = wl_container_of(listener, x, dissociate);
+    sink_close(x->sink, x->server->conn);
+    xsurface_drop_surface_listeners(x);
+}
+
+void xsurface_destroy(struct wl_listener* listener, void* /*data*/) {
+    XSurface* x = wl_container_of(listener, x, destroy);
+    sink_close(x->sink, x->server->conn);
+    xsurface_drop_surface_listeners(x);
+    wl_list_remove(&x->associate.link);
+    wl_list_remove(&x->dissociate.link);
+    wl_list_remove(&x->destroy.link);
+    delete x;
+}
+
+void server_new_xwayland_surface(struct wl_listener* listener, void* data) {
+    Server* server = wl_container_of(listener, server, new_xwayland_surface);
+    auto* xsurf = static_cast<struct wlr_xwayland_surface*>(data);
+
+    auto* x = new XSurface();
+    x->server = server;
+    x->xsurf = xsurf;
+
+    // associate/dissociate bracket the inner wlr_surface's validity;
+    // destroy is the X window going away. (override_redirect popups are
+    // treated as plain windows in v1 — role/popup mapping is a follow-up.)
+    x->associate.notify = xsurface_associate;
+    wl_signal_add(&xsurf->events.associate, &x->associate);
+    x->dissociate.notify = xsurface_dissociate;
+    wl_signal_add(&xsurf->events.dissociate, &x->dissociate);
+    x->destroy.notify = xsurface_destroy;
+    wl_signal_add(&xsurf->events.destroy, &x->destroy);
+}
+#endif // WASH_DISPLAY_XWAYLAND
+
 } // namespace
 
 int run_compositor(WireConn& conn) {
@@ -339,7 +513,8 @@ int run_compositor(WireConn& conn) {
     }
     g_capture_allocator = server.allocator; // capture.cpp mints render targets here
 
-    wlr_compositor_create(server.display, 5, server.renderer);
+    struct wlr_compositor* compositor =
+        wlr_compositor_create(server.display, 5, server.renderer);
     wlr_subcompositor_create(server.display);
     wlr_data_device_manager_create(server.display);
 
@@ -356,6 +531,30 @@ int run_compositor(WireConn& conn) {
     // 0.17: subscribe to new_surface (no new_toplevel signal); the handler
     // filters for the toplevel role.
     wl_signal_add(&server.xdg_shell->events.new_surface, &server.new_xdg_toplevel);
+
+#ifdef WASH_DISPLAY_XWAYLAND
+    // Bring up Xwayland lazily (the X server only starts when an X client
+    // first connects). Each X window arrives as a wlr_xwayland_surface on
+    // events.new_surface and rides the same WindowSink pipeline as xdg.
+    server.xwayland = wlr_xwayland_create(server.display, compositor, true);
+    if (server.xwayland) {
+        server.new_xwayland_surface.notify = server_new_xwayland_surface;
+        wl_signal_add(&server.xwayland->events.new_surface,
+                      &server.new_xwayland_surface);
+        // Point X clients (including a WASH_DISPLAY_EXEC guest) at our X
+        // server; display_name is assigned at create time even in lazy mode.
+        setenv("DISPLAY", server.xwayland->display_name, 1);
+        // Hand Xwayland the seat so its core keyboard binds to our keymap.
+        wlr_xwayland_set_seat(server.xwayland, server.seat);
+        wlr_log(WLR_INFO, "wash-display: Xwayland ready on DISPLAY=%s",
+                server.xwayland->display_name);
+    } else {
+        wlr_log(WLR_ERROR,
+                "wash-display: Xwayland init failed — X11 apps unavailable");
+    }
+#else
+    (void)compositor;
+#endif
 
     // Give the headless backend one virtual output so clients see a display.
     wlr_headless_add_output(server.backend, kScreenW, kScreenH);
