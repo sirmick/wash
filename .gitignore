@@ -33,3 +33,7 @@ e2e/playwright-report/
 
 # wash-display CMake build dir
 wash-display/build/
+
+# Vendored reference sources (mac-phoenix, greenfield) for the
+# compositor work — heavy borrow, never committed.
+tmp/
