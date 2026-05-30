@@ -1,35 +1,32 @@
 // wash-display — native X/Wayland surfaces as wash windows.
 //
-// THIS FILE is the wash-side integration: it speaks the wash wire
-// protocol (docs/WIRE.md) over the dialed control socket, does the
-// identity handshake, and drives the multi-window contract
-// (docs/DISPLAY.md §4) — window.create / window.created / app_msg —
-// all in C++, proving "the BE can be any language; it's just a JSON
-// wire protocol."
+// THIS FILE is the entry point and the wash-side integration: it dials
+// the control socket, does the identity handshake, and then either
+//   (a) runs the wlroots compositor (when built with wlroots — each
+//       real toplevel becomes a wash window, COMPILE-gated by
+//       WASH_DISPLAY_COMPOSITOR), or
+//   (b) serves the fake "display_open" reference path (no wlroots) that
+//       the contract e2e (e2e/tests/display-cpp.spec.ts) drives — it
+//       still proves "the BE can be any language; it's just JSON wire."
 //
-// The COMPOSITOR half (wlroots: real Wayland/X11 surfaces, per-surface
-// capture) and the ENCODE half (libdatachannel/codecs, copied from
-// mac-phoenix) attach at the seams marked `COMPOSITOR SEAM` below.
-// Those translation units require wlroots + libdatachannel and are
-// gated separately so this wire client builds on its own. Until they
-// exist, display_open is driven as a contract reference (creates the
-// windows; the per-window video channel needs a bound shell).
-//
-// Build: cmake (see ../CMakeLists.txt). No wlroots dependency here.
+// The threaded wire I/O lives in WireConn (wire_conn.*); the compositor
+// in compositor.* . Build: cmake (see ../CMakeLists.txt).
 
-#include "wire.hpp"
-#include "json.hpp"
+#include "wire_conn.hpp"
 
+#ifdef WASH_DISPLAY_COMPOSITOR
+#include "compositor.hpp"
+#endif
+
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
-#include <vector>
+#include <thread>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
-
-using wash::Frame;
 
 static const char* kAppID = "com.wash.display";
 static const char* kVersion = "0.8.0";
@@ -57,15 +54,6 @@ static int print_manifest() {
     return 0;
 }
 
-// --- wire helpers ---------------------------------------------------
-static bool send_json(int fd, uint32_t channel, const std::string& json) {
-    Frame f;
-    f.flags = wash::FLAG_END;
-    f.channel = channel;
-    f.payload = json;
-    return wash::write_frame(fd, f);
-}
-
 // dial connects to the control socket named by $WASH_DISPLAY.
 static int dial(const char* path) {
     int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
@@ -80,84 +68,19 @@ static int dial(const char* path) {
     return fd;
 }
 
-// handshake: send identity (with pid; router validates /proc/pid/exe),
-// read identity.ack.
-static bool handshake(int fd, const std::string& appID, const std::string& token,
-                      std::string& instanceID, uint64_t& windowID) {
-    std::string id = "{\"t\":\"identity\",\"app_id\":\"" + wash::json::esc(appID) +
-                     "\",\"proto\":" + std::to_string(kProto) +
-                     ",\"version\":\"" + kVersion + "\",\"pid\":" + std::to_string(::getpid());
-    if (!token.empty()) id += ",\"attach_token\":\"" + wash::json::esc(token) + "\"";
-    id += "}";
-    if (!send_json(fd, wash::CH_CONTROL, id)) return false;
-
-    Frame f;
-    if (!wash::read_frame(fd, f)) return false;
-    std::string t;
-    if (!wash::json::find_string(f.payload, "t", t) || t != "identity.ack") {
-        std::fprintf(stderr, "wash-display: expected identity.ack, got %s\n", f.payload.c_str());
-        return false;
-    }
-    wash::json::find_string(f.payload, "instance_id", instanceID);
-    windowID = 0;
-    wash::json::find_uint(f.payload, "window_id", windowID); // absent for background
-    return true;
-}
-
-// create_window sends window.create and blocks until the matching
-// window.created (docs/DISPLAY.md §4). Returns 0 on failure.
-static uint64_t create_window(int fd, uint64_t& reqSeq, const std::string& title) {
-    uint64_t req = ++reqSeq;
-    std::string m = "{\"t\":\"window.create\",\"req_id\":" + std::to_string(req) +
-                    ",\"role\":\"toplevel\",\"title\":\"" + wash::json::esc(title) +
-                    "\",\"w\":320,\"h\":240}";
-    if (!send_json(fd, wash::CH_EVENT, m)) return 0;
-    for (;;) {
-        Frame f;
-        if (!wash::read_frame(fd, f)) return 0;
-        if (f.channel != wash::CH_EVENT) continue;
-        std::string t;
-        if (!wash::json::find_string(f.payload, "t", t)) continue;
-        if (t == "window.created") {
-            uint64_t rid = 0, win = 0;
-            wash::json::find_uint(f.payload, "req_id", rid);
-            if (rid != req) continue;
-            wash::json::find_uint(f.payload, "win", win);
-            return win;
-        }
-        if (t == "window.create.err") {
-            uint64_t rid = 0;
-            wash::json::find_uint(f.payload, "req_id", rid);
-            if (rid == req) {
-                std::fprintf(stderr, "wash-display: window.create.err: %s\n", f.payload.c_str());
-                return 0;
-            }
-        }
-    }
-}
-
-// on_display_open creates n windows and replies display_opened. This is
-// the contract reference until the COMPOSITOR SEAM is filled: there,
-// each Wayland/X11 toplevel triggers create_window, and a per-window
-// video channel (OpenChannel kind=video) carries encoded frames.
-static void on_display_open(int fd, uint64_t& reqSeq, const std::string& data) {
-    std::string id;
-    wash::json::find_string(data, "id", id);
-    uint64_t n = 1;
-    wash::json::find_uint(data, "n", n);
-
-    std::string wins;
+// handle_display_open is the fake reference path: create n windows and
+// reply display_opened. Runs on its OWN thread (create_window blocks on
+// the reader thread, so it must not run inside the app_msg callback).
+static void handle_display_open(wash::WireConn& conn, const wash::json& data) {
+    std::string id = data.value("id", "");
+    uint64_t n = data.value("n", 1ULL);
+    wash::json windows = wash::json::array();
     for (uint64_t i = 0; i < n; ++i) {
-        uint64_t win = create_window(fd, reqSeq, "Display " + std::to_string(i + 1));
-        std::fprintf(stderr, "wash-display: created win=%llu\n", (unsigned long long)win);
-        if (!wins.empty()) wins += ",";
-        wins += "{\"win\":" + std::to_string(win) + "}";
-        // COMPOSITOR SEAM: open kind=video channel for `win` and stream
-        // wlroots-captured + libdatachannel-encoded frames here.
+        uint32_t win = conn.create_window("Display " + std::to_string(i + 1), 320, 240);
+        std::fprintf(stderr, "wash-display: created win=%u\n", win);
+        windows.push_back({{"win", win}});
     }
-    std::string reply = "{\"t\":\"app_msg\",\"win\":0,\"data\":{\"kind\":\"display_opened\",\"id\":\"" +
-                        wash::json::esc(id) + "\",\"windows\":[" + wins + "]}}";
-    send_json(fd, wash::CH_EVENT, reply);
+    conn.send_app_msg(0, {{"kind", "display_opened"}, {"id", id}, {"windows", windows}});
 }
 
 static int run() {
@@ -176,37 +99,40 @@ static int run() {
         std::fprintf(stderr, "wash-display: dial %s failed\n", sock);
         return 1;
     }
+
+    wash::WireConn conn(fd);
     std::string instanceID;
-    uint64_t windowID = 0;
-    if (!handshake(fd, appID, token, instanceID, windowID)) {
+    if (!conn.handshake(appID, kVersion, kProto, token, instanceID)) {
         std::fprintf(stderr, "wash-display: handshake failed\n");
         return 1;
     }
     std::fprintf(stderr, "wash-display: attached instance=%s\n", instanceID.c_str());
 
-    // COMPOSITOR SEAM: start the wlroots compositor + Xwayland here, on
-    // its own event loop/thread; each new toplevel surface calls
-    // create_window() and opens a per-window video channel.
-
-    uint64_t reqSeq = 0;
-    for (;;) {
-        Frame f;
-        if (!wash::read_frame(fd, f)) break; // socket closed → exit
-        if (f.channel != wash::CH_EVENT) continue;
-        std::string t;
-        if (!wash::json::find_string(f.payload, "t", t)) continue;
-        if (t == "app_msg") {
-            std::string data = wash::json::data_object(f.payload);
-            std::string kind;
-            if (wash::json::find_string(data, "kind", kind) && kind == "display_open") {
-                on_display_open(fd, reqSeq, data);
-            }
-        } else if (t == "shutdown") {
-            break;
+    // The fake reference path: react to display_open by spawning a
+    // worker that creates windows (kept even with the compositor so the
+    // contract e2e keeps working as a smoke test).
+    conn.on_app_msg([&conn](const wash::json& data, uint32_t /*win*/) {
+        if (data.value("kind", "") == "display_open") {
+            std::thread(handle_display_open, std::ref(conn), data).detach();
         }
+    });
+
+    conn.start();
+
+#ifdef WASH_DISPLAY_COMPOSITOR
+    // Real path: run the wlroots compositor on this thread. Each mapped
+    // toplevel becomes a wash window via conn.create_window().
+    int rc = wash::run_compositor(conn);
+    conn.stop();
+    return rc;
+#else
+    // Contract-reference path: idle until the socket dies.
+    while (conn.alive()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    ::close(fd);
+    conn.stop();
     return 0;
+#endif
 }
 
 int main(int argc, char** argv) {
