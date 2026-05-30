@@ -163,6 +163,11 @@ void WireConn::destroy_window(uint32_t win) {
     write_json(CH_EVENT, m);
 }
 
+void WireConn::report_geometry(uint32_t win, uint32_t w, uint32_t h) {
+    json m = {{"t", "window.geometry"}, {"win", win}, {"w", w}, {"h", h}};
+    write_json(CH_EVENT, m);
+}
+
 uint32_t WireConn::open_video_channel(uint32_t win) {
     if (!alive_.load()) return 0;
     uint64_t req = next_req();

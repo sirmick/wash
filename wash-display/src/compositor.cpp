@@ -136,6 +136,8 @@ struct WindowSink {
     uint32_t win = 0;        // wash window id (0 until mapped)
     uint32_t video_chan = 0; // per-window video channel (0 until opened)
     uint32_t seq = 0;        // monotonic frame counter
+    uint32_t sent_w = 0;     // last geometry reported to the router
+    uint32_t sent_h = 0;
     SurfaceCapture cap;      // pooled BGRA capture
     SurfaceEncoder enc;      // WebP framer
     bool enc_ready = false;
@@ -187,7 +189,18 @@ static void sink_open(WindowSink& s, WireConn* conn, const std::string& title,
 static void sink_frame(WindowSink& s, WireConn* conn, struct wlr_surface* surface,
                        struct wlr_renderer* renderer) {
     if (!s.win || !s.video_chan) return; // not mapped / no sink
+    // capture returns false when nothing changed (empty damage) — skip
+    // the frame entirely, the per-frame win of damage tracking.
     if (!s.cap.capture(surface, renderer)) return;
+
+    // Tell the router when the content size changed so the shell frame
+    // tracks it (window.geometry). Fire-and-forget; only on actual change.
+    uint32_t cw = (uint32_t)s.cap.width(), ch = (uint32_t)s.cap.height();
+    if (cw && ch && (cw != s.sent_w || ch != s.sent_h)) {
+        conn->report_geometry(s.win, cw, ch);
+        s.sent_w = cw;
+        s.sent_h = ch;
+    }
 
     if (!s.enc_ready || s.enc.width() != s.cap.width() ||
         s.enc.height() != s.cap.height()) {

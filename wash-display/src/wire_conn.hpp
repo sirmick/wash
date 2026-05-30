@@ -64,6 +64,11 @@ public:
     // destroy_window is fire-and-forget (window.destroy on CH_EVENT).
     void destroy_window(uint32_t win);
 
+    // report_geometry tells the router a window's content changed size
+    // (window.geometry on CH_EVENT, fire-and-forget) so the shell frame
+    // tracks the new size. Send only on actual size change.
+    void report_geometry(uint32_t win, uint32_t w, uint32_t h);
+
     // open_video_channel sends channel.open{kind:"video"} for `win` and
     // blocks for channel.opened / channel.open.err. Returns the
     // allocated channel id, or 0 on failure (e.g. "no shell attached"
