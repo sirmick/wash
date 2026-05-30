@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 )
 
@@ -178,9 +177,6 @@ func classifyMutateErr(err error) error {
 		return nil
 	}
 	if errors.Is(err, syscall.EXDEV) {
-		return ErrCrossDevice
-	}
-	if strings.Contains(err.Error(), "cross-device") {
 		return ErrCrossDevice
 	}
 	return err

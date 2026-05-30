@@ -484,8 +484,8 @@ func (m *Manager) deleteOne(job *Job, path string) error {
 // its existing basename. On overwrite collision the conflict
 // callback is consulted (Replace removes dst first; Skip moves on).
 // Cross-device renames degrade to copy+delete — Go's os.Rename
-// returns syscall.EXDEV in that case; we detect the error string
-// and fall back.
+// returns syscall.EXDEV in that case, which isCrossDevice matches
+// with errors.Is.
 func (m *Manager) runMove(job *Job) error {
 	if job.Dest == "" {
 		return errors.New("move requires dest")

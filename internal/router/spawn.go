@@ -102,7 +102,11 @@ func newRingBuf(cap int) *ringBuf {
 func (r *ringBuf) Write(p []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	n := len(p)
+	// ringBuf never rejects input — it accepts every byte and drops
+	// the oldest when full — so Write always reports len(p) consumed.
+	// (io.MultiWriter raises ErrShortWrite if we return anything else.)
+	total := len(p)
+	n := total
 	if n == 0 {
 		return 0, nil
 	}
@@ -143,7 +147,7 @@ func (r *ringBuf) Write(p []byte) (int, error) {
 			n = 0
 		}
 	}
-	return len(p) + (len(r.buf) - len(p)), nil // n
+	return total, nil
 }
 
 // String returns the buffered bytes in arrival order.
