@@ -19,10 +19,12 @@ import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-j
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
 import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, defineWashApp, tokens } from '@wash/ui';
-import { baseName, formatDate, humanSize, joinPath, octalPerm, parentPath } from './paths.ts';
-import { createBus } from './bus.ts';
-import { createWatch } from './watch.ts';
-import { DRAG_MIME, dragPayload, dropEffectFor, hasWashDrag, readDragPaths } from './dnd.ts';
+import {
+  baseName, formatDate, humanSize, joinPath, octalPerm, parentPath,
+  createBus,
+  createWatch,
+  DRAG_MIME, dragPayload, dropEffectFor, hasWashDrag, readDragPaths,
+} from '@wash/fs-client';
 import {
   ArrowLeft,
   ArrowRight,
