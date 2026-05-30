@@ -615,11 +615,17 @@ externally tested by `wash-vm/vm`); C/D are sketched.
   both branches (Apply→Keep→committed, Apply→Discard→reverted). The §10 lock-out
   *truth* test (a real WAN-breaking apply that fails connectivity VERIFY) waits
   on the real NM backend (B4); with the fake Applier the mechanism is unit-proven.
-- **B3 — apply terminal.** washnetd streamed job (phase events + raw logs) over
-  the log plane; FE `<apply-terminal>` (xterm + progress rail + countdown);
-  reconnect-safe replay. *Test:* external e2e — Apply shows PLAN→…→COMMITTED in
-  the xterm, countdown renders; BE job-phase sequence asserted over the log plane.
-  *Commit gate:* external apply-terminal e2e green.
+- **B3 — apply terminal.** ✅ DONE (4a79cc8). netd publishes the txn phase-event
+  stream + the commit-confirm window in its StateService pushes; the com.wash.net
+  BE subscribes to netd and relays state to the FE (so the window sees autonomous
+  transitions). FE `ApplyTerminal`: progress rail (PLAN·RENDER·APPLY·VERIFY·CONFIRM)
+  + phase-event log + a live countdown to the auto-revert with Keep/Discard.
+  *Gate:* the in-VM e2e asserts the phase log (verify), the countdown, then
+  Keep→committed and Discard→reverted, through the real stack. *Note:* raw backend
+  log bytes (nft/networkctl) stream into the log pane with the real backend (B4);
+  the fake Applier emits only phase events, so an xterm raw-byte pane isn't wired
+  yet (a structured event log stands in). Reconnect-replay rides the StateService
+  snapshot (last state re-sent on subscribe), not a per-byte job buffer.
 - **B4 — NM backend.** `nm` backend (`godbus`→NetworkManager) for NM-covered
   kinds (Interface/wifi-client/VPN); capability gating wired so non-NM kinds emit
   diagnostics / grey out. *Test:* in the Alpine VM (NM running), apply an
