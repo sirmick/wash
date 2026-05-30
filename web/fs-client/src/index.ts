@@ -35,3 +35,6 @@ export type { DragData } from './dnd.ts';
 
 export { sortedFiltered } from './sort.ts';
 export type { SortKey, SortableEntry, SortOptions } from './sort.ts';
+
+export { withReplacePrompt } from './replace-flow.ts';
+export type { ReplaceFlowDeps } from './replace-flow.ts';

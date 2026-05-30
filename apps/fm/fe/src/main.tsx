@@ -25,6 +25,7 @@ import {
   createWatch,
   DRAG_MIME, dragPayload, dropEffectFor, hasWashDrag, readDragPaths,
   sortedFiltered as sortListing,
+  withReplacePrompt as runReplaceFlow,
 } from '@wash/fs-client';
 import {
   type NavHistory, emptyHistory, initAt, pushPath, back, forward, at,
@@ -207,27 +208,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     });
   };
 
-  // withReplacePrompt wraps a sendWithReply call with conflict
-  // handling: if the first try comes back with `*_err exists`,
-  // we open the Replace overlay; on user-Replace we retry with
-  // `replace: true`. Returns a synthetic `cancelled` kind if the
-  // user dismissed the overlay so the caller can stay silent
-  // instead of showing an error.
-  const withReplacePrompt = async (
+  // withReplacePrompt is the conflict-retry flow (request → `*_err
+  // exists` → confirm → retry with replace:true → cancelled). The logic
+  // lives in @wash/fs-client's replace-flow.ts (unit-tested with a fake
+  // bus + confirm); this adapter injects fm's bus + the askReplace
+  // overlay so the 3 call sites read unchanged.
+  const withReplacePrompt = (
     req: Record<string, unknown>,
     destPath: string,
     errKind: string,
-  ): Promise<BEMessage> => {
-    let reply = await sendWithReply(req);
-    if (reply.kind === errKind && reply.code === 'exists') {
-      const confirmed = await askReplace(destPath);
-      if (!confirmed) {
-        return { kind: 'cancelled' };
-      }
-      reply = await sendWithReply({ ...req, replace: true });
-    }
-    return reply;
-  };
+  ): Promise<BEMessage> =>
+    runReplaceFlow({ request: sendWithReply, confirm: askReplace }, req, destPath, errKind);
 
   // ---- BE comms ----
 
