@@ -276,6 +276,48 @@ The value of this ordering: **commit 5 proves the entire wash-visible contract**
 fake and a browser — no compositor required. If commit 5 is green, the C++ work in 6–11
 plugs into a contract that's already known-good.
 
+### 9a. Compositor build reality (as built)
+
+The compositor half (commits 7–8) is built and runtime-verified. Notes that diverge
+from the original sketch above:
+
+- **Vendored wlroots, version 0.17.4.** wlroots is committed as source under
+  `wash-display/third_party/wlroots/` and built statically as part of the CMake build
+  (it drives a Meson sub-build → `libwlroots.a`, linked in a `--start-group`). We do
+  **not** use the distro `libwlroots-dev`:
+  - Stock Ubuntu 24.04 ships a frozen **0.17.1** that lacks the GPU pixel read-back we
+    need; 0.17.4 has it. (0.18 was tried and rejected — it requires `wayland ≥1.23`
+    but the platform has 1.22.0, and faking that means patching wlroots' generated shm
+    protocol glue. 0.17.4 builds clean against system wayland 1.22.)
+  - Vendoring pins one version → no per-distro `.pc`-name games (`wlroots` vs
+    `wlroots-0.17`) and no 0.17-vs-0.18 API forks in our code.
+  - Vendoring pins *wlroots*, **not** the graphics stack: the build still links the
+    system `-dev` libs (wayland-server, xkbcommon, pixman, libdrm, gbm, egl, glesv2,
+    libinput). `WASH_DISPLAY=1` + Meson + those headers are the build prerequisites.
+- **Headless backend.** No real output device — the right fit for a streaming
+  compositor. One virtual output; clients see a normal display.
+- **Capture is GPU-capable.** Per-surface capture goes
+  texture → pooled render-target → `wlr_renderer_begin_with_buffer` (bind FBO) →
+  `wlr_renderer_read_pixels` → CPU buffer. This captures hardware-accelerated
+  (dmabuf) clients, not just `wl_shm` ones. Gotchas: read back as `XBGR8888`
+  (`GL_RGBA`, universally supported) and swap R↔B for the WebP `BGRA` encoder —
+  `XRGB8888`/`GL_BGRA_EXT` is not guaranteed on llvmpipe/surfaceless; and the gbm
+  allocator needs an explicit `DRM_FORMAT_MOD_LINEAR` modifier for a CPU-readable BO.
+- **Threaded wire client.** `WireConn` runs one reader thread; `window.create` /
+  `channel.open` are blocking request/reply via per-`req_id` condvars (must never be
+  called from the inbound `app_msg` callback — that deadlocks the reader). JSON is
+  nlohmann/json (vendored). WebP rides the raw video channel framed with the 45-byte
+  little-endian mac-phoenix WS header (§5; codec inferred from payload magic bytes).
+- **Discovery + spawn.** On startup the compositor sends `app_msg{kind:"display_ready",
+  wayland_display:"wayland-N"}` to the router, and (if `$WASH_DISPLAY_EXEC` is set)
+  fork+execs that guest app with `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR` pre-set so it
+  connects straight to this compositor.
+- **CI-free verification.** The contract e2e (commit 5) runs in CI without a
+  compositor. The compositor itself is proven by a local smoke harness in `tmp/`
+  (gitignored): a fake router + the headless compositor + a minimal xdg_toplevel
+  client → asserts toplevel→`window.create` and capture→WebP→video-channel
+  end to end. Not in default `make e2e` (needs wlroots + a GL/EGL device).
+
 ---
 
 ## 10. E2E test plan

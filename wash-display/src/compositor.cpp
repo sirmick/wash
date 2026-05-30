@@ -12,17 +12,29 @@
 // (CMake defines WASH_DISPLAY_COMPOSITOR); targets the system wlroots
 // 0.17 API.
 #include "compositor.hpp"
+#include "capture.hpp"
+#include "encode.hpp"
+
+// ALL C++/STL headers MUST be included BEFORE the `#define static` hack
+// below — otherwise the macro is in effect while libstdc++ headers parse
+// and corrupts them (e.g. <limits>'s `static constexpr` -> ~600 errors).
+#include <csignal>
+#include <cstdio>
+#include <cstdlib>
+#include <ctime>
+#include <string>
+#include <unistd.h>
 
 // WLR_USE_UNSTABLE is defined by the build (CMake). wlroots' headers
 // pull in generated protocol headers (xdg-shell-protocol.h) that CMake
 // generates with wayland-scanner into the build include dir.
 //
-// 0.17's render/scene headers declare functions with C99 "array with
-// static bound" parameters (e.g. `const float color[static 4]`), which
-// is not valid C++ and won't parse under our C++ compiler. We only call
-// the scene/xdg API, never these float-array render entry points, so
-// neutralize the `static` qualifier for the duration of these C headers
-// (0.18 dropped this old render API; the project targets system 0.17).
+// vendored wlroots 0.17.4's render/scene headers declare functions with
+// C99 "array with static bound" parameters (e.g. `const float
+// color[static 4]`), which is not valid C++ and won't parse under our
+// C++ compiler. We only call the scene/xdg API, never these float-array
+// render entry points, so neutralize the `static` qualifier for the
+// duration of these C headers (0.18 dropped this old render API).
 #define static
 extern "C" {
 #include <wayland-server-core.h>
@@ -42,11 +54,11 @@ extern "C" {
 }
 #undef static
 
-#include <cstdio>
-#include <cstdlib>
-#include <string>
-
 namespace wash {
+
+// Allocator handle the capture path uses to mint per-surface render targets
+// (defined here, declared extern in capture.cpp). Set in run_compositor().
+struct wlr_allocator* g_capture_allocator = nullptr;
 
 namespace {
 
@@ -81,8 +93,43 @@ struct Toplevel {
     struct wl_listener commit;
     struct wl_listener destroy;
 
-    uint32_t win = 0; // wash window id (0 until mapped)
+    uint32_t win = 0;        // wash window id (0 until mapped)
+    uint32_t video_chan = 0; // per-window video channel (0 until opened)
+    uint32_t seq = 0;        // monotonic frame counter
+
+    SurfaceCapture cap;      // pooled BGRA capture
+    SurfaceEncoder enc;      // WebP framer
+    bool enc_ready = false;
 };
+
+// now_ms returns a monotonic millisecond timestamp for the WS frame
+// header's ready_ts (latency stat only).
+static uint64_t now_ms() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+// maybe_spawn_guest fork+execs $WASH_DISPLAY_EXEC (if set) as a child;
+// it inherits WAYLAND_DISPLAY + XDG_RUNTIME_DIR from our env, so the
+// app connects straight to this compositor. Children are auto-reaped
+// (SIGCHLD ignored). This is the DISPLAY.md §2 "wash-display spawns the
+// guest apps" model — discovery is free.
+static void maybe_spawn_guest() {
+    const char* exec = std::getenv("WASH_DISPLAY_EXEC");
+    if (!exec || !*exec) return;
+    std::signal(SIGCHLD, SIG_IGN);
+    pid_t pid = fork();
+    if (pid == 0) {
+        execl("/bin/sh", "sh", "-c", exec, (char*)nullptr);
+        _exit(127);
+    }
+    if (pid > 0) {
+        wlr_log(WLR_INFO, "wash-display: spawned guest [%s] pid=%d", exec, (int)pid);
+    } else {
+        wlr_log(WLR_ERROR, "wash-display: fork for guest failed");
+    }
+}
 
 // --- output --------------------------------------------------------
 
@@ -158,8 +205,17 @@ void toplevel_map(struct wl_listener* listener, void* /*data*/) {
     t->win = t->server->conn->create_window(ttl, w, h);
     wlr_log(WLR_INFO, "wash-display: toplevel mapped \"%s\" %ux%u -> win=%u",
             ttl.c_str(), w, h, t->win);
-    // COMPOSITOR SEAM (commit 8): open a kind=video channel for t->win
-    // and start streaming this surface's captured frames.
+
+    // Open the per-window video channel. Needs a bound shell (browser);
+    // without one the router replies "no shell attached" and we get 0 —
+    // capture still runs but frames are dropped until a shell binds.
+    if (t->win) {
+        t->video_chan = t->server->conn->open_video_channel(t->win);
+        if (t->video_chan)
+            wlr_log(WLR_INFO, "wash-display: win=%u video channel=%u", t->win, t->video_chan);
+        else
+            wlr_log(WLR_INFO, "wash-display: win=%u no video channel yet (no shell?)", t->win);
+    }
 }
 
 void toplevel_unmap(struct wl_listener* listener, void* /*data*/) {
@@ -177,6 +233,31 @@ void toplevel_commit(struct wl_listener* listener, void* /*data*/) {
     // its own size by configuring 0x0.
     if (t->xdg_toplevel->base->initial_commit) {
         wlr_xdg_toplevel_set_size(t->xdg_toplevel, 0, 0);
+        return;
+    }
+    if (!t->win || !t->video_chan) return; // not mapped / no sink
+
+    // Capture the just-committed buffer → WebP → one framed message on
+    // the video channel (ClassBulk via write_channel). This is the
+    // capture.cpp + encode.cpp seam of the per-window pipeline.
+    struct wlr_surface* surface = t->xdg_toplevel->base->surface;
+    if (!t->cap.capture(surface, t->server->renderer)) return;
+
+    if (!t->enc_ready || t->enc.width() != t->cap.width() ||
+        t->enc.height() != t->cap.height()) {
+        t->enc_ready = t->enc.init(t->cap.width(), t->cap.height());
+        if (!t->enc_ready) return;
+    }
+
+    std::vector<uint8_t> frame = t->enc.encode_frame(
+        t->cap.data(), t->cap.stride(), t->cap.width(), t->cap.height(),
+        t->cap.dirty_x, t->cap.dirty_y, t->cap.dirty_w, t->cap.dirty_h, now_ms());
+    if (frame.empty()) return;
+
+    t->server->conn->write_channel(t->video_chan, frame.data(), frame.size());
+    if ((++t->seq % 60) == 1) {
+        wlr_log(WLR_INFO, "wash-display: win=%u frame seq=%u (%zu B) %dx%d",
+                t->win, t->seq, frame.size(), t->cap.width(), t->cap.height());
     }
 }
 
@@ -256,6 +337,7 @@ int run_compositor(WireConn& conn) {
         std::fprintf(stderr, "wash-display: allocator autocreate failed\n");
         return 1;
     }
+    g_capture_allocator = server.allocator; // capture.cpp mints render targets here
 
     wlr_compositor_create(server.display, 5, server.renderer);
     wlr_subcompositor_create(server.display);
@@ -294,6 +376,13 @@ int run_compositor(WireConn& conn) {
     }
 
     wlr_log(WLR_INFO, "wash-display: compositor up on WAYLAND_DISPLAY=%s", socket);
+
+    // Publish the Wayland socket name back to the router so other wash
+    // apps (e.g. wash-term) can point clients at us, and optionally
+    // spawn a configured guest app that connects immediately.
+    conn.send_app_msg(0, json{{"kind", "display_ready"},
+                              {"wayland_display", socket}});
+    maybe_spawn_guest();
 
     // Blocks until wl_display_terminate / fatal backend error.
     wl_display_run(server.display);

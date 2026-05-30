@@ -91,7 +91,8 @@ if(WLROOTS_FOUND AND WAYLAND_FOUND AND XKB_FOUND AND PIXMAN_FOUND)
 
     target_sources(wash-display PRIVATE
         src/compositor.cpp          # wlroots: headless backend, xdg-shell
-        # commit 8+: capture.cpp / transport.cpp / input.cpp / clipboard.cpp
+        src/capture.cpp             # per-surface buffer -> BGRA (read_pixels)
+        # commit 9+: input.cpp / clipboard.cpp; Xwayland in compositor.cpp
     )
     target_compile_definitions(wash-display PRIVATE WASH_DISPLAY_COMPOSITOR WLR_USE_UNSTABLE)
     target_include_directories(wash-display PRIVATE
