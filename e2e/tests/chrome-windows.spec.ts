@@ -153,6 +153,108 @@ test.describe('chrome (test app via --show-hidden)', () => {
     await expect(app.locator('[data-testid="window-state"] b')).toHaveText('normal');
   });
 
+  test('maximize fills the visible screen on a non-origin viewport cell', async ({ page, router }) => {
+    await page.goto(router.url);
+    await launchTestApp(page);
+    const app = page.locator('wash-app-test');
+    await expect(app).toBeVisible();
+
+    const { innerW, innerH } = await page.evaluate(() => ({
+      innerW: window.innerWidth,
+      innerH: window.innerHeight,
+    }));
+
+    // Move the test window onto viewport cell (1,0) and pan the camera
+    // there. The frame renders *inside* the panned cam container, so a
+    // maximize that naively pins to left:0/top:0 lands at the (0,0)
+    // cell's corner — a full screen-width off to the left — instead of
+    // filling the screen the user is actually looking at. That is the
+    // regression this test guards.
+    const id = await page.evaluate(() => {
+      const w = window.wash.windows().find((x) => x.element === 'wash-app-test');
+      return w!.windowID;
+    });
+    await page.evaluate(
+      (args) => {
+        window.wash.moveWindow(args.id, args.innerW + 60, 60);
+        window.wash.setViewport(1, 0);
+      },
+      { id, innerW },
+    );
+
+    // Confirm the cam actually panned one full screen-width left.
+    await page.waitForTimeout(400);
+    const cam = page.locator('[data-testid="wash-cam"]');
+    const tx = await cam.evaluate(
+      (el) => parseFloat(getComputedStyle(el as HTMLElement).transform.split(',')[4]),
+    );
+    expect(tx).toBeCloseTo(-innerW, 0);
+
+    // Maximize and assert the frame fills the *visible* screen: flush to
+    // the top-left, not shoved off toward the origin cell.
+    await page.evaluate((wid) => window.wash.maximizeWindow(wid), id);
+    await expect(app.locator('[data-testid="window-state"] b')).toHaveText('maximized');
+
+    const frame = page.locator('.wash-window').first();
+    const box = await frame.boundingBox();
+    if (!box) throw new Error('no frame bbox');
+    // Flush to the visible top-left (the pre-fix bug parked it at x ≈ -W).
+    expect(box.x).toBeGreaterThanOrEqual(-1);
+    expect(box.x).toBeLessThanOrEqual(1);
+    expect(box.y).toBeGreaterThanOrEqual(-1);
+    expect(box.y).toBeLessThanOrEqual(1);
+    // Fills the screen minus the session sidebar reservation (right) and
+    // the 40 px taskbar (bottom); never overflows the visible viewport.
+    expect(box.width).toBeGreaterThanOrEqual(innerW - 320);
+    expect(box.x + box.width).toBeLessThanOrEqual(innerW + 1);
+    expect(box.height).toBeGreaterThanOrEqual(innerH - 120);
+    expect(box.y + box.height).toBeLessThanOrEqual(innerH - 39);
+  });
+
+  test('maximized window tracks a browser resize', async ({ page, router }) => {
+    await page.goto(router.url);
+    await launchTestApp(page);
+    const app = page.locator('wash-app-test');
+    await expect(app).toBeVisible();
+
+    // Maximize on a non-origin cell so this also guards the cam
+    // anchoring: on resize the cam re-pans by -vx*newW and the maximized
+    // frame must re-anchor to the new screen size to stay flush.
+    const innerW = await page.evaluate(() => window.innerWidth);
+    const id = await page.evaluate(() => {
+      const w = window.wash.windows().find((x) => x.element === 'wash-app-test');
+      return w!.windowID;
+    });
+    await page.evaluate(
+      (args) => {
+        window.wash.moveWindow(args.id, args.innerW + 60, 60);
+        window.wash.setViewport(1, 0);
+        window.wash.maximizeWindow(args.id);
+      },
+      { id, innerW },
+    );
+    await expect(app.locator('[data-testid="window-state"] b')).toHaveText('maximized');
+    await page.waitForTimeout(400);
+
+    // Shrink the browser. The maximized frame should follow the new
+    // screen size and stay flush to the visible top-left.
+    await page.setViewportSize({ width: 900, height: 600 });
+    await page.waitForTimeout(400);
+
+    const frame = page.locator('.wash-window').first();
+    const box = await frame.boundingBox();
+    if (!box) throw new Error('no frame bbox');
+    expect(box.x).toBeGreaterThanOrEqual(-1);
+    expect(box.x).toBeLessThanOrEqual(1);
+    expect(box.y).toBeLessThanOrEqual(1);
+    // Width tracks the new 900-px screen (minus sidebar reservation).
+    expect(box.width).toBeGreaterThanOrEqual(900 - 320);
+    expect(box.x + box.width).toBeLessThanOrEqual(901);
+    // Height tracks the new 600-px screen (minus the 40-px taskbar).
+    expect(box.height).toBeGreaterThanOrEqual(600 - 120);
+    expect(box.y + box.height).toBeLessThanOrEqual(600 - 39);
+  });
+
   test('double-clicking titlebar toggles maximize', async ({ page, router }) => {
     await page.goto(router.url);
     await launchTestApp(page);

@@ -17,6 +17,7 @@ import {
   raiseLocal,
   resizeLocal,
   screenSize,
+  viewportFor,
   Win,
 } from './wm';
 import { AlertOctagon, Copy, Maximize2, Minimize2, Minus, X } from 'lucide-solid';
@@ -180,17 +181,32 @@ export function FloatingWindow(props: WindowProps) {
       return { ...base, display: 'none' };
     }
     if (props.win.state === 'maximized') {
+      // The frame lives inside the viewport cam container, which is
+      // translated by (-vx*W, -vy*H). A static left:0/top:0 only lines
+      // up with the visible screen on cell (0,0); on any other cell the
+      // window flies off toward the (0,0) corner. Anchor instead to the
+      // window's home-viewport origin in plane coords so that, after the
+      // cam translate, the frame lands flush at the screen's top-left.
+      //
+      // Geometry comes from screenSize() — a signal updated on the
+      // window 'resize' event — so the maximized frame snaps to the
+      // current screen edges and re-renders reactively when the browser
+      // is resized (and stays aligned with the cam, which pans by the
+      // same screenSize).
+      //
       // --wash-reserved-right reserves screen width for the session
       // app's right sidebar (300px when open, 14px tab when hidden).
       // The session app writes the var on document.documentElement;
       // here we just respect it so a maximized window's titlebar
       // controls stay reachable instead of disappearing under chrome.
+      const vp = viewportFor(props.win);
+      const s = screenSize();
       return {
         ...base,
-        left: '0',
-        top: '0',
-        width: 'calc(100vw - var(--wash-reserved-right, 0px))',
-        height: 'calc(100vh - 40px)',
+        left: `${vp.vx * s.w}px`,
+        top: `${vp.vy * s.h}px`,
+        width: `calc(${s.w}px - var(--wash-reserved-right, 0px))`,
+        height: `${s.h - 40}px`,
       };
     }
     const x = dragX() ?? props.win.x;
