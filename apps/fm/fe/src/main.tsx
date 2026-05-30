@@ -31,6 +31,9 @@ import {
   type NavHistory, emptyHistory, initAt, pushPath, back, forward, at,
 } from './nav-history.ts';
 import {
+  type ClipboardState, parseClipboardState, planPaste,
+} from './clipboard.ts';
+import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
@@ -168,7 +171,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // clipboard_files_state on every change (and at fm startup). Two
   // fm windows therefore share one clipboard: cut in window A,
   // paste in window B works naturally.
-  const [filesClipboard, setFilesClipboard] = createSignal<{ op: 'copy' | 'cut'; paths: string[] } | null>(null);
+  const [filesClipboard, setFilesClipboard] = createSignal<ClipboardState | null>(null);
 
   // Refs / latched state (no reactivity needed)
   let pendingNav: string | null = null;
@@ -324,13 +327,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         return;
       }
       case 'clipboard_files_state': {
-        const op = String(m.op || '');
-        const paths = (m.paths as string[]) ?? [];
-        if ((op === 'copy' || op === 'cut') && paths.length > 0) {
-          setFilesClipboard({ op: op as 'copy' | 'cut', paths });
-        } else {
-          setFilesClipboard(null);
-        }
+        setFilesClipboard(parseClipboardState(m.op, m.paths));
         return;
       }
     }
@@ -977,16 +974,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // For "cut", we clear the clipboard after dispatching so a
   // second paste doesn't try to re-move already-moved paths.
   const pasteFilesClipboard = () => {
-    const cb = filesClipboard();
-    if (!cb || cb.paths.length === 0) return;
-    const dest = dirOfSelection();
-    if (!dest) return;
-    const bulkOp = cb.op === 'cut' ? 'move' : 'copy';
+    const plan = planPaste(filesClipboard(), dirOfSelection());
+    if (!plan) return;
     window.wash.sendAppMsgTo(
       { app_id: 'com.wash.bulk' },
-      { kind: 'enqueue', op: bulkOp, paths: cb.paths, dest },
+      { kind: 'enqueue', op: plan.op, paths: plan.paths, dest: plan.dest },
     );
-    if (cb.op === 'cut') {
+    if (plan.clearAfter) {
       // Clear the clipboard so a second Ctrl+V doesn't try to
       // re-move paths that no longer exist at the source.
       send({ kind: 'clipboard_files_set', op: 'copy', paths: [] });
