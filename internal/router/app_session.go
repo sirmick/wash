@@ -323,6 +323,12 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 			return err
 		}
 		return inst.relayWindowTitle(m)
+	case wire.TEvtWindowGeometry:
+		var m wire.EvtWindowGeometry
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.relayWindowGeometry(m)
 	case wire.TEvtWindowConfirmClose:
 		var m wire.EvtWindowConfirmClose
 		if err := json.Unmarshal(payload, &m); err != nil {
@@ -563,6 +569,17 @@ func (inst *AppInstance) relayWindowTitle(m wire.EvtWindowSetTitle) error {
 		return nil
 	}
 	inst.router.broadcastPatches(inst.router.winSession.setTitle(m.Win, m.Title))
+	return nil
+}
+
+// relayWindowGeometry applies an app-reported content-size change to the
+// window's geometry so the shell frame tracks it. Used by wash-display
+// when a guest surface resizes. Only honored for owned windows.
+func (inst *AppInstance) relayWindowGeometry(m wire.EvtWindowGeometry) error {
+	if !inst.ownsWindow(m.Win) {
+		return nil
+	}
+	inst.router.broadcastPatches(inst.router.winSession.resize(m.Win, m.W, m.H))
 	return nil
 }
 

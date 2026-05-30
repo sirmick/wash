@@ -21,6 +21,12 @@ const (
 	// App → router.
 	TEvtWindowSetTitle     = "window.set_title"
 	TEvtWindowConfirmClose = "window.confirm_close"
+	// TEvtWindowGeometry: app → router, the app's own content changed
+	// size (e.g. a wash-display guest surface resized). Distinct from
+	// TEvtWindowResize, which is router → app (a command to resize). The
+	// router updates the window's geometry so the shell frame tracks the
+	// new content size. Only honored for windows the sender owns.
+	TEvtWindowGeometry = "window.geometry"
 
 	// Multi-window: one app instance owning more than one window
 	// (wash-display maps each Wayland/X11 toplevel to a window). The
@@ -194,6 +200,20 @@ type EvtWindowSetTitle struct {
 
 func NewEvtWindowSetTitle(win uint32, title string) EvtWindowSetTitle {
 	return EvtWindowSetTitle{T: TEvtWindowSetTitle, Win: win, Title: title}
+}
+
+// EvtWindowGeometry: app → router, the app's own window content changed
+// size. The router applies it via windowSession.resize so the shell
+// frame tracks the content. Only honored for windows the sender owns.
+type EvtWindowGeometry struct {
+	T   string `json:"t"`
+	Win uint32 `json:"win"`
+	W   uint32 `json:"w"`
+	H   uint32 `json:"h"`
+}
+
+func NewEvtWindowGeometry(win, w, h uint32) EvtWindowGeometry {
+	return EvtWindowGeometry{T: TEvtWindowGeometry, Win: win, W: w, H: h}
 }
 
 // EvtWindowConfirmClose: app's answer to EvtWindowCloseRequested.
@@ -698,6 +718,9 @@ func DecodeEvt(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TEvtWindowSetTitle:
 		var m EvtWindowSetTitle
+		return m, json.Unmarshal(data, &m)
+	case TEvtWindowGeometry:
+		var m EvtWindowGeometry
 		return m, json.Unmarshal(data, &m)
 	case TEvtWindowConfirmClose:
 		var m EvtWindowConfirmClose
