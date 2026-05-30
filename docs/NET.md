@@ -606,11 +606,15 @@ externally tested by `wash-vm/vm`); C/D are sketched.
   *Commit gate (B1e):* the wash UI served **by the VM** loads through the proxy
   and round-trips a model edit to in-guest netd; kernel-log tab streams the
   console; term tab gives a guest shell.
-- **B2 — transaction + commit-confirm.** `txn/` stage/diff/plan; VERIFY +
-  autonomous auto-revert; wire to a fake Applier in washnetd.
-  *Test:* fake-Applier commit-confirm (VERIFY-fail→revert; confirm→persist;
-  timeout→revert) — unit (§9.7) **and** one in-VM run over serial.
-  *Commit gate:* both green.
+- **B2 — transaction + commit-confirm.** ✅ DONE (171d312; the `txn/` engine +
+  VERIFY/auto-revert landed earlier as the pure half). netd arms an autonomous
+  auto-revert timer on apply→await-confirm and disarms on explicit confirm/revert;
+  `ConfirmTimeout` (90s default, `WASH_NETD_CONFIRM_TIMEOUT` override). *Tests:*
+  netd message-injection — VERIFY-fail→revert (B1a), confirm→persist (B1a),
+  timeout→autonomous-revert (B2), -race clean; **and** the in-VM gate exercises
+  both branches (Apply→Keep→committed, Apply→Discard→reverted). The §10 lock-out
+  *truth* test (a real WAN-breaking apply that fails connectivity VERIFY) waits
+  on the real NM backend (B4); with the fake Applier the mechanism is unit-proven.
 - **B3 — apply terminal.** washnetd streamed job (phase events + raw logs) over
   the log plane; FE `<apply-terminal>` (xterm + progress rail + countdown);
   reconnect-safe replay. *Test:* external e2e — Apply shows PLAN→…→COMMITTED in
