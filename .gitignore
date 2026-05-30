@@ -37,3 +37,7 @@ wash-display/build/
 # Vendored reference sources (mac-phoenix, greenfield) for the
 # compositor work — heavy borrow, never committed.
 tmp/
+
+# Isolated git worktrees for parallel work (e.g. FE refactor) — each
+# is its own branch checkout sharing this repo's objects/history.
+branches/
