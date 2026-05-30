@@ -24,6 +24,7 @@ import {
   createBus,
   createWatch,
   DRAG_MIME, dragPayload, dropEffectFor, hasWashDrag, readDragPaths,
+  sortedFiltered as sortListing,
 } from '@wash/fs-client';
 import {
   type NavHistory, emptyHistory, initAt, pushPath, back, forward, at,
@@ -1100,40 +1101,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   // ---- listings sort/filter ----
 
-  const sortedFiltered = (entries: Entry[]): Entry[] => {
-    let out = entries;
-    if (!showHidden()) out = out.filter((e) => !e.name.startsWith('.'));
-    out = out.slice();
-    const desc = sortDesc();
-    const key = sortKey();
-    out.sort((a, b) => {
-      if (key !== 'type') {
-        if (a.type === 'dir' && b.type !== 'dir') return -1;
-        if (a.type !== 'dir' && b.type === 'dir') return 1;
-      }
-      let cmp = 0;
-      switch (key) {
-        case 'name':
-          cmp = a.name.toLowerCase().localeCompare(b.name.toLowerCase());
-          break;
-        case 'mtime':
-          cmp = a.mod_unix - b.mod_unix;
-          break;
-        case 'ctime':
-          cmp = a.created_unix - b.created_unix;
-          break;
-        case 'size':
-          cmp = a.size - b.size;
-          break;
-        case 'type':
-          cmp = a.type.localeCompare(b.type);
-          if (cmp === 0) cmp = a.name.toLowerCase().localeCompare(b.name.toLowerCase());
-          break;
-      }
-      return desc ? -cmp : cmp;
-    });
-    return out;
-  };
+  // The comparator + hidden-file filter live in @wash/fs-client's
+  // sort.ts (unit-tested). This adapter reads the reactive sort signals
+  // so callers (the visibleRows memo) still track them, then delegates.
+  const sortedFiltered = (entries: Entry[]): Entry[] =>
+    sortListing(entries, { key: sortKey(), desc: sortDesc(), showHidden: showHidden() });
 
   // treeRoot is the SHALLOWEST ancestor of path() that the FE has
   // successfully listed — i.e. the highest reachable directory in
