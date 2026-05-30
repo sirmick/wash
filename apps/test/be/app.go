@@ -7,6 +7,7 @@ package test
 import (
 	"context"
 	"embed"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"io/fs"
@@ -17,6 +18,20 @@ import (
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/wire"
 )
+
+// fakeFrame is a minimal 1×1 PNG used as a stand-in video frame by the
+// fake-display mode (the multi-window contract reference / e2e). The
+// content is irrelevant to the BE-only e2e, but it's a real PNG so a
+// future <wash-app-display> decoder can render it unchanged.
+var fakeFrame = mustB64("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+func mustB64(s string) []byte {
+	b, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		panic("wash-test: bad fakeFrame b64: " + err.Error())
+	}
+	return b
+}
 
 //go:embed all:assets
 var assetsFS embed.FS
@@ -31,6 +46,10 @@ type state struct {
 	vetoNextClose  bool
 	pingSeq        int
 	closeReqAllow  bool // last decision returned, for logging
+	// displayChans holds the per-window video channels opened by the
+	// fake-display mode, keyed by window id, so display_close can shut
+	// one down. Reference impl for wash-display's per-surface streams.
+	displayChans map[uint32]*sdk.RawChannel
 }
 
 var st state
@@ -52,7 +71,7 @@ func init() {
 			Surface:         sdk.SurfaceWindow,
 			Icon:            testIcon,
 			Instancing:      sdk.InstancingMulti,
-			Capabilities:    []string{sdk.CapSpawn},
+			Capabilities:    []string{sdk.CapSpawn, sdk.CapWindows},
 			Window:          &sdk.WindowHints{DefaultWidth: 560, DefaultHeight: 480},
 			Hidden:          true,
 		},
@@ -235,6 +254,72 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 				log.Printf("wash-test echo io.Copy: %v", err)
 			}
 		}()
+	case "display_open":
+		// Fake-display mode: a reference for wash-display. Create n
+		// windows, open a per-window video channel on each, push one
+		// stand-in frame, and reply with the (win, channel) pairs.
+		// CreateWindow/OpenChannel block on the read goroutine's reply,
+		// so this MUST run off it.
+		id, _ := m["id"].(string)
+		n := 1
+		if v, ok := m["n"].(float64); ok && int(v) > 0 {
+			n = int(v)
+		}
+		go func() {
+			ctx := context.Background()
+			windows := make([]map[string]any, 0, n)
+			for i := 0; i < n; i++ {
+				win, err := c.CreateWindow(ctx, sdk.WindowOpts{Title: fmt.Sprintf("Display %d", i+1), W: 320, H: 240})
+				if err != nil {
+					log.Printf("wash-test display_open create: %v", err)
+					windows = append(windows, map[string]any{"win": 0, "channel": 0, "error": err.Error()})
+					continue
+				}
+				entry := map[string]any{"win": uint64(win), "channel": uint64(0)}
+				// The per-window video channel needs a bound shell; in a
+				// headless (BE-only) run there's none, so a channel-open
+				// failure is expected and non-fatal — the window itself is
+				// the multi-window contract. With a shell attached the
+				// channel opens and carries the frame.
+				if ch, err := c.OpenChannelKind(ctx, win, wire.ChannelKindVideo); err != nil {
+					log.Printf("wash-test display_open channel win=%d: %v (no shell?)", win, err)
+				} else {
+					if _, err := ch.Write(fakeFrame); err != nil {
+						log.Printf("wash-test display_open frame win=%d: %v", win, err)
+					}
+					st.mu.Lock()
+					if st.displayChans == nil {
+						st.displayChans = map[uint32]*sdk.RawChannel{}
+					}
+					st.displayChans[win] = ch
+					st.mu.Unlock()
+					entry["channel"] = uint64(ch.ID())
+					log.Printf("wash-test display win=%d channel=%d frame=%dB", win, ch.ID(), len(fakeFrame))
+				}
+				windows = append(windows, entry)
+			}
+			sendEvent(c, map[string]any{"kind": "display_opened", "id": id, "windows": windows})
+		}()
+	case "display_close":
+		id, _ := m["id"].(string)
+		var win uint32
+		if v, ok := m["win"].(float64); ok {
+			win = uint32(v)
+		}
+		st.mu.Lock()
+		ch := st.displayChans[win]
+		delete(st.displayChans, win)
+		st.mu.Unlock()
+		if ch != nil {
+			ch.Close()
+		}
+		if win != 0 {
+			if err := c.DestroyWindow(win); err != nil {
+				log.Printf("wash-test display_close: %v", err)
+			}
+		}
+		log.Printf("wash-test display_close win=%d", win)
+		sendEvent(c, map[string]any{"kind": "display_closed", "id": id, "win": uint64(win)})
 	case "set_title":
 		title, _ := m["title"].(string)
 		if title != "" {

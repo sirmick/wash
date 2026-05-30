@@ -150,6 +150,15 @@ func (c *Conn) OpenChannel(ctx context.Context, windowID uint32) (*RawChannel, e
 	return c.openChannelKind(ctx, windowID, wire.ChannelKindGeneric)
 }
 
+// OpenChannelKind is OpenChannel with an explicit channel kind hint
+// (e.g. wire.ChannelKindVideo for a per-window pixel stream — the
+// shell mounts its display decoder on a video channel instead of
+// treating it as opaque bytes). Same callback/deadlock caveat as
+// OpenChannel.
+func (c *Conn) OpenChannelKind(ctx context.Context, windowID uint32, kind string) (*RawChannel, error) {
+	return c.openChannelKind(ctx, windowID, kind)
+}
+
 // openChannelKind is OpenChannel with an explicit channel kind hint
 // for the router. Internal — bundle channels are the only non-
 // generic kind today.

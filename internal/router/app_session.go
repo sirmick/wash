@@ -595,6 +595,7 @@ func (inst *AppInstance) handleWindowCreate(m wire.EvtWindowCreate) error {
 	inst.extraWins[win] = true
 	inst.winMu.Unlock()
 
+	inst.router.log("window.create instance=%s win=%d role=%q", inst.InstanceID, win, m.Role)
 	inst.router.broadcastPatches(inst.router.winSession.createWindow(
 		win, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon,
 		inst.Manifest.Accent, title, m.W, m.H, inst.IsRoot()))
