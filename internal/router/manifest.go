@@ -31,6 +31,7 @@ const (
 	CapSpawn        = wire.CapSpawn
 	CapPrepareSpawn = wire.CapPrepareSpawn
 	CapWindows      = wire.CapWindows
+	CapEnvPublish   = wire.CapEnvPublish
 )
 
 // MaxIconBytes is the cap on the inline icon data URI per WIRE.md §5.1.

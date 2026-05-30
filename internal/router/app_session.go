@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -350,6 +351,12 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 			return inst.handlePrepareSpawn(m)
 		}
 		return inst.handleSpawnRequest(m)
+	case wire.TEvtEnvPublish:
+		var m wire.EvtEnvPublish
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.handleEnvPublish(m)
 	case wire.TEvtNotify:
 		var m wire.EvtNotify
 		if err := json.Unmarshal(payload, &m); err != nil {
@@ -567,6 +574,39 @@ func (inst *AppInstance) relayWindowTitle(m wire.EvtWindowSetTitle) error {
 // role/parent_win are accepted but not yet honoured at the WM level —
 // popups are created as ordinary toplevels for now; positioning a
 // popup relative to its parent is a later shell-rendering change.
+// envKeyRe allowlists publishable env keys: only WASH_*-namespaced names.
+// Even a capable app can't set PATH / LD_PRELOAD via env.publish — the
+// router silently drops anything that doesn't match. See docs/DISPLAY_ENV.md.
+var envKeyRe = regexp.MustCompile(`^WASH_[A-Z0-9_]+$`)
+
+// handleEnvPublish records WASH_*-namespaced env hints that spawnEnv then
+// merges into every subsequently-spawned app's environment. Gated by the
+// env-publish capability; non-matching keys are dropped. Used by
+// wash-display to propagate DISPLAY / WAYLAND_DISPLAY.
+func (inst *AppInstance) handleEnvPublish(m wire.EvtEnvPublish) error {
+	if !inst.Manifest.HasCapability(CapEnvPublish) {
+		return inst.WriteEvt(wire.NewEvtEnvPublishErr(wire.ErrCodeForbidden, "env-publish capability not declared"))
+	}
+	clean := make(map[string]string, len(m.Env))
+	for k, v := range m.Env {
+		if envKeyRe.MatchString(k) {
+			clean[k] = v
+		} else {
+			inst.router.log("env.publish: dropped disallowed key %q from %s", k, inst.InstanceID)
+		}
+	}
+	inst.router.publishedEnvMu.Lock()
+	if inst.router.publishedEnv == nil {
+		inst.router.publishedEnv = make(map[string]string, len(clean))
+	}
+	for k, v := range clean {
+		inst.router.publishedEnv[k] = v
+	}
+	inst.router.publishedEnvMu.Unlock()
+	inst.router.log("env.publish from %s: %d key(s)", inst.InstanceID, len(clean))
+	return nil
+}
+
 func (inst *AppInstance) handleWindowCreate(m wire.EvtWindowCreate) error {
 	if !inst.Manifest.HasCapability(CapWindows) {
 		return inst.WriteEvt(wire.NewEvtWindowCreateErr(m.ReqID, wire.ErrCodeForbidden, "windows capability not declared"))

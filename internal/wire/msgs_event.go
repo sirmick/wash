@@ -34,6 +34,16 @@ const (
 	TEvtWindowCreated   = "window.created"
 	TEvtWindowCreateErr = "window.create.err"
 	TEvtWindowDestroy   = "window.destroy"
+
+	// EvtEnvPublish: app → router. A privileged app (wash-display)
+	// publishes WASH_*-namespaced env hints that the router then merges
+	// into the environment of every app it subsequently spawns (see
+	// Router.spawnEnv). Used to propagate the compositor's DISPLAY /
+	// WAYLAND_DISPLAY socket names so wash-term's shell can launch X /
+	// Wayland clients. Gated by the "env-publish" capability; the router
+	// also allowlists keys to ^WASH_[A-Z0-9_]+$. See docs/DISPLAY_ENV.md.
+	TEvtEnvPublish    = "env.publish"
+	TEvtEnvPublishErr = "env.publish.err"
 	// EvtSpawnRequest / Ok / Err — unified spawn protocol.
 	//
 	// Normal spawn: app requests "launch app_id" and the router does
@@ -272,6 +282,30 @@ type EvtWindowDestroy struct {
 
 func NewEvtWindowDestroy(win uint32) EvtWindowDestroy {
 	return EvtWindowDestroy{T: TEvtWindowDestroy, Win: win}
+}
+
+// EvtEnvPublish: app → router. Env is a set of WASH_*-namespaced
+// environment hints the router merges into every subsequently-spawned
+// app's environment. See docs/DISPLAY_ENV.md and Router.spawnEnv.
+type EvtEnvPublish struct {
+	T   string            `json:"t"`
+	Env map[string]string `json:"env"`
+}
+
+func NewEvtEnvPublish(env map[string]string) EvtEnvPublish {
+	return EvtEnvPublish{T: TEvtEnvPublish, Env: env}
+}
+
+// EvtEnvPublishErr: router → app, the publish was rejected (capability
+// not declared). Fire-and-forget; the app isn't expected to retry.
+type EvtEnvPublishErr struct {
+	T    string `json:"t"`
+	Code string `json:"code"`
+	Msg  string `json:"msg"`
+}
+
+func NewEvtEnvPublishErr(code, msg string) EvtEnvPublishErr {
+	return EvtEnvPublishErr{T: TEvtEnvPublishErr, Code: code, Msg: msg}
 }
 
 // EvtSpawnRequest is the unified spawn request: app → router.
@@ -679,6 +713,12 @@ func DecodeEvt(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TEvtWindowDestroy:
 		var m EvtWindowDestroy
+		return m, json.Unmarshal(data, &m)
+	case TEvtEnvPublish:
+		var m EvtEnvPublish
+		return m, json.Unmarshal(data, &m)
+	case TEvtEnvPublishErr:
+		var m EvtEnvPublishErr
 		return m, json.Unmarshal(data, &m)
 	case TEvtSpawnRequest:
 		var m EvtSpawnRequest

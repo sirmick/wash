@@ -105,10 +105,10 @@ type Router struct {
 	log    Logger
 	assets http.FileSystem // embedded shell-runtime FS; served via TShellAssetRead
 
-	mu      sync.Mutex
-	apps    map[string]*AppInstance // by instance id
-	byWin   map[uint32]*AppInstance // by window id (0 keys are skipped)
-	shells  map[*ShellSession]struct{}
+	mu     sync.Mutex
+	apps   map[string]*AppInstance // by instance id
+	byWin  map[uint32]*AppInstance // by window id (0 keys are skipped)
+	shells map[*ShellSession]struct{}
 
 	nextWindow   atomic.Uint32
 	nextInstance atomic.Uint64
@@ -176,6 +176,12 @@ type Router struct {
 	backgroundMu      sync.Mutex
 	backgroundStarted map[string]bool
 
+	// publishedEnv holds WASH_*-namespaced env hints an env-publish app
+	// (wash-display) has published; spawnEnv merges them into every
+	// subsequently-spawned app's environment. See docs/DISPLAY_ENV.md.
+	publishedEnvMu sync.Mutex
+	publishedEnv   map[string]string
+
 	// windowSession is the canonical state for windows the shell
 	// renders. Sent as a snapshot on shell connect; mutated by router
 	// or shell actions, with patches broadcast to every shell.
@@ -201,17 +207,17 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		log = func(string, ...any) {}
 	}
 	return &Router{
-		cfg:            cfg,
-		reg:            reg,
-		log:            log,
-		apps:           make(map[string]*AppInstance),
-		byWin:          make(map[uint32]*AppInstance),
-		shells:         make(map[*ShellSession]struct{}),
-		channels:       make(map[uint32]*channelBinding),
-		appMsgWatchers: make(map[string]map[string]chan map[string]any),
-		singletons:     make(map[string]*AppInstance),
-		pendingAttach:  make(map[int]*pendingAttach),
-		pendingByToken: make(map[string]*tokenPending),
+		cfg:               cfg,
+		reg:               reg,
+		log:               log,
+		apps:              make(map[string]*AppInstance),
+		byWin:             make(map[uint32]*AppInstance),
+		shells:            make(map[*ShellSession]struct{}),
+		channels:          make(map[uint32]*channelBinding),
+		appMsgWatchers:    make(map[string]map[string]chan map[string]any),
+		singletons:        make(map[string]*AppInstance),
+		pendingAttach:     make(map[int]*pendingAttach),
+		pendingByToken:    make(map[string]*tokenPending),
 		cliSessions:       make(map[string]*cliSession),
 		backgroundStarted: make(map[string]bool),
 		ingress:           newIngressRegistry(log),
@@ -230,11 +236,11 @@ func (r *Router) SetAssets(fs http.FileSystem) { r.assets = fs }
 // successful attach OR by the spawner's connection going away
 // (orphan tokens are reaped in cleanupPendingByToken).
 type tokenPending struct {
-	appID      string         // the token may only be redeemed for this app id
-	instanceID string         // pre-minted; the attaching child gets this back in IdentityAck
-	binary     string         // /proc/<pid>/exe must match this path at attach
-	spawner    *AppInstance   // the app that called PrepareSpawn — used for orphan reap
-	expires    time.Time      // 60s grace; expired tokens are refused
+	appID      string       // the token may only be redeemed for this app id
+	instanceID string       // pre-minted; the attaching child gets this back in IdentityAck
+	binary     string       // /proc/<pid>/exe must match this path at attach
+	spawner    *AppInstance // the app that called PrepareSpawn — used for orphan reap
+	expires    time.Time    // 60s grace; expired tokens are refused
 }
 
 // attachResult is what spawnAndRun reads from a pending-attach
@@ -453,6 +459,14 @@ func (r *Router) spawnEnv() []string {
 		}
 		env = append(env, "WASH_BIN_DIR="+filepath.Dir(exe))
 	}
+	// Merge any published display env (WASH_WAYLAND_DISPLAY etc.) so a
+	// spawned app — notably wash-term's shell via pty.WithWashEnv — can
+	// reach the compositor's sockets. See docs/DISPLAY_ENV.md.
+	r.publishedEnvMu.Lock()
+	for k, v := range r.publishedEnv {
+		env = append(env, k+"="+v)
+	}
+	r.publishedEnvMu.Unlock()
 	return env
 }
 
@@ -812,10 +826,10 @@ func (r *Router) singletonInstance(appID string) *AppInstance {
 // app_id. Returns a structured error code so callers can surface it
 // without leaking error formatting.
 //
-//   recipient.instance_id set  →  direct lookup
-//   recipient.app_id set       →  must be a singleton manifest;
-//                                  spawned on first reference
-//   both / neither set         →  bad_request
+//	recipient.instance_id set  →  direct lookup
+//	recipient.app_id set       →  must be a singleton manifest;
+//	                               spawned on first reference
+//	both / neither set         →  bad_request
 func (r *Router) resolveRecipient(ctx context.Context, rec wire.Recipient) (*AppInstance, string, error) {
 	if (rec.InstanceID == "") == (rec.AppID == "") {
 		return nil, wire.ErrCodeBadRequest, fmt.Errorf("recipient must set exactly one of instance_id or app_id")
@@ -1005,4 +1019,3 @@ func (r *Router) broadcastPatches(patches []wire.SessionPatch) {
 		}
 	}
 }
-
