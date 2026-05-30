@@ -26,6 +26,9 @@ import {
   DRAG_MIME, dragPayload, dropEffectFor, hasWashDrag, readDragPaths,
 } from '@wash/fs-client';
 import {
+  type NavHistory, emptyHistory, initAt, pushPath, back, forward, at,
+} from './nav-history.ts';
+import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
@@ -92,8 +95,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [selectedEntry, setSelectedEntry] = createSignal<Entry | null>(null);
   const [listings, setListings] = createStore<Record<string, Entry[]>>({});
   const [expanded, setExpanded] = createStore<Record<string, true>>({});
-  const [history, setHistory] = createSignal<string[]>([]);
-  const [historyIdx, setHistoryIdx] = createSignal(-1);
+  // Back/forward history. The push/back/forward index arithmetic lives
+  // in ./nav-history.ts (unit-tested); this signal just holds the state
+  // and the handlers below apply the reducer's results.
+  const [navHistory, setNavHistory] = createSignal<NavHistory>(emptyHistory());
   const [sortKey, setSortKey] = createSignal<SortKey>('name');
   const [sortDesc, setSortDesc] = createSignal(false);
   const [showHidden, setShowHidden] = createSignal(false);
@@ -274,8 +279,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           // typed but hasn't hit Enter yet doesn't lose their entry.
           if (!path()) {
             setPath(p);
-            setHistory([p]);
-            setHistoryIdx(0);
+            setNavHistory(initAt(p));
             if (!pathInputValue()) setPathInputValue(p);
           }
           setSelectedEntry(findEntry(path() || p));
@@ -392,10 +396,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     setSelectedEntry(entry);
     setPathInputValue(p);
     if (pushHistory) {
-      const h = history().slice(0, historyIdx() + 1);
-      h.push(p);
-      setHistory(h);
-      setHistoryIdx(h.length - 1);
+      setNavHistory(pushPath(navHistory(), p));
     }
 
     // expandPath issues sendList for every ancestor we don't have a
@@ -468,17 +469,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const navigateTo = (p: string) => selectPath(p || '/', true);
   const goHome = () => navigateTo(home());
   const goBack = () => {
-    if (historyIdx() > 0) {
-      const newIdx = historyIdx() - 1;
-      setHistoryIdx(newIdx);
-      selectPath(history()[newIdx], false);
+    const move = back(navHistory());
+    if (move) {
+      setNavHistory(at(navHistory(), move.idx));
+      selectPath(move.path, false);
     }
   };
   const goForward = () => {
-    if (historyIdx() < history().length - 1) {
-      const newIdx = historyIdx() + 1;
-      setHistoryIdx(newIdx);
-      selectPath(history()[newIdx], false);
+    const move = forward(navHistory());
+    if (move) {
+      setNavHistory(at(navHistory(), move.idx));
+      selectPath(move.path, false);
     }
   };
   const goUp = () => {
