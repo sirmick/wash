@@ -126,6 +126,12 @@ type Conn struct {
 	ingressMu      sync.Mutex
 	pendingIngress map[uint64]chan ingressResult
 
+	// pendingWindowCreate correlates CreateWindow req_id with the
+	// waiting goroutine. Resolved by dispatch on window.created /
+	// window.create.err. See docs/DISPLAY.md §4.
+	winCreateMu         sync.Mutex
+	pendingWindowCreate map[uint64]chan windowCreateResult
+
 	// privPending tracks in-flight PrivRunInlineSync calls keyed by
 	// req_id. dispatchEvt intercepts incoming app_msgs from com.wash
 	// .priv whose req_id matches a pending call, accumulates the
@@ -313,6 +319,7 @@ func ConnectWith(t wire.FrameTransport, def *AppDef) (*Conn, error) {
 		pendingOpens:        make(map[uint64]chan openResult),
 		pendingClipboardGet: make(map[uint64]chan clipboardResult),
 		pendingIngress:      make(map[uint64]chan ingressResult),
+		pendingWindowCreate: make(map[uint64]chan windowCreateResult),
 		done:                make(chan struct{}),
 	}
 	if err := c.handshake(); err != nil {

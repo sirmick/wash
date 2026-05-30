@@ -130,6 +130,18 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 			allow = c.def.OnCloseRequested(c, m.Win)
 		}
 		return c.ConfirmClose(m.Win, allow)
+	case wire.TEvtWindowCreated:
+		var m wire.EvtWindowCreated
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		c.resolveWindowCreate(m.ReqID, m.Win, nil)
+	case wire.TEvtWindowCreateErr:
+		var m wire.EvtWindowCreateErr
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		c.resolveWindowCreate(m.ReqID, 0, windowCreateErrFromMsg(m))
 	case wire.TEvtShutdown:
 		if c.def.OnShutdown != nil {
 			c.def.OnShutdown(c)
