@@ -9,10 +9,11 @@
 // terminal land in later rungs; this proves the round-trip the whole product
 // stands on: FE edit → netd validate/apply → diagnostics back onto the widget.
 
-import { Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
-import { Button, defineWashApp, type WashAppProps } from "@wash/ui";
+import { createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { defineWashApp, type WashAppProps } from "@wash/ui";
 
 import { ObjectForm } from "./ObjectForm.tsx";
+import { ApplyTerminal, type ApplyEvent } from "./ApplyTerminal.tsx";
 import type { Descriptor, Diagnostic } from "./objectform-model.ts";
 import descriptorJson from "./generated/descriptor.json";
 import i18nJson from "./generated/i18n.json";
@@ -48,12 +49,37 @@ function NetApp(props: WashAppProps) {
   });
   const [diags, setDiags] = createSignal<Diagnostic[]>([]);
   const [status, setStatus] = createSignal("idle");
+  const [events, setEvents] = createSignal<ApplyEvent[]>([]);
+  const [confirmWindowMs, setConfirmWindowMs] = createSignal(0);
+  const [deadline, setDeadline] = createSignal(0);
+  const [remaining, setRemaining] = createSignal(0);
   const [busy, setBusy] = createSignal(false);
   const [showAdvanced, setShowAdvanced] = createSignal(false);
 
   const hasErrors = createMemo(() => diags().some(isError));
-  const awaitingConfirm = () => status() === "await-confirm";
   const wrap = () => ({ Interfaces: [value()] });
+
+  // Apply state arrives two ways: the apply reply, AND unsolicited net.state
+  // pushes — netd relays its StateService through the BE, which is how the
+  // window learns about the autonomous auto-revert (§7.2). Both funnel here.
+  const applyState = (s: any) => {
+    if (!s) return;
+    if (typeof s.status === "string") setStatus(s.status);
+    if (Array.isArray(s.events)) setEvents(s.events as ApplyEvent[]);
+    if (Array.isArray(s.diagnostics)) setDiags(s.diagnostics as Diagnostic[]);
+    if (typeof s.confirm_window_ms === "number") setConfirmWindowMs(s.confirm_window_ms);
+  };
+
+  // Arm the countdown while a change awaits confirmation; the interval (onMount)
+  // ticks `remaining` down toward the autonomous auto-revert.
+  createEffect(() => {
+    if (status() === "await-confirm" && confirmWindowMs() > 0) {
+      setDeadline(Date.now() + confirmWindowMs());
+    } else {
+      setDeadline(0);
+      setRemaining(0);
+    }
+  });
 
   // --- request/reply over app_msg (correlated by id) ----------------------
   let reqSeq = 0;
@@ -82,15 +108,15 @@ function NetApp(props: WashAppProps) {
     const r = await sendWithReply("apply", { config: wrap() });
     setBusy(false);
     if (r.kind === "apply_ok") {
-      setStatus(r.state ?? "");
-      if (Array.isArray(r.diagnostics)) setDiags(r.diagnostics);
+      applyState({ status: r.state, events: r.events, diagnostics: r.diagnostics, confirm_window_ms: r.confirm_window_ms });
     } else {
       setStatus(`error: ${r.msg ?? r.code}`);
     }
   };
   const finish = (kind: "confirm" | "revert") => async () => {
     const r = await sendWithReply(kind);
-    setStatus(r.kind === `${kind}_ok` ? (r.state ?? "") : `error: ${r.msg ?? r.code}`);
+    if (r.kind === `${kind}_ok`) setStatus(r.state ?? "");
+    else setStatus(`error: ${r.msg ?? r.code}`);
   };
 
   // Debounced validate-on-edit.
@@ -105,6 +131,8 @@ function NetApp(props: WashAppProps) {
   onMount(() => {
     const onMsg = (ev: Event) => {
       const m = (ev as CustomEvent).detail;
+      if (!m) return;
+      if (m.kind === "net.state") { applyState(m.state); return; }
       const id = m?.id;
       if (typeof id === "string" && pending.has(id)) {
         const cb = pending.get(id)!;
@@ -113,8 +141,15 @@ function NetApp(props: WashAppProps) {
       }
     };
     props.host.addEventListener("wash:msg", onMsg);
+    const tick = window.setInterval(() => {
+      const d = deadline();
+      setRemaining(d ? Math.max(0, d - Date.now()) : 0);
+    }, 250);
     void validate();
-    onCleanup(() => props.host.removeEventListener("wash:msg", onMsg));
+    onCleanup(() => {
+      props.host.removeEventListener("wash:msg", onMsg);
+      window.clearInterval(tick);
+    });
   });
 
   return (
@@ -138,21 +173,17 @@ function NetApp(props: WashAppProps) {
         onChange={onChange}
       />
 
-      <footer class="wash-net-foot">
-        <span class="wash-net-status" data-status={status()}>{status()}</span>
-        <Show
-          when={awaitingConfirm()}
-          fallback={
-            <Button onClick={apply} disabled={busy() || hasErrors()}>
-              {busy() ? "Applying…" : "Apply"}
-            </Button>
-          }
-        >
-          <span class="wash-net-confirm-note">Keep these changes?</span>
-          <Button variant="ghost" onClick={finish("revert")}>Discard</Button>
-          <Button onClick={finish("confirm")}>Keep</Button>
-        </Show>
-      </footer>
+      <ApplyTerminal
+        status={status}
+        events={events}
+        remainingMs={remaining}
+        windowMs={confirmWindowMs}
+        busy={busy}
+        canApply={() => !hasErrors()}
+        onApply={apply}
+        onKeep={finish("confirm")}
+        onDiscard={finish("revert")}
+      />
     </div>
   );
 }
@@ -172,9 +203,32 @@ const STYLE = `
 .wash-net-diag { grid-column:2; font-size:11px; color:#e06060; }
 .wash-net-diag[data-severity="warning"] { color:#d0a040; }
 .wash-net-union { display:flex; flex-direction:column; gap:6px; }
-.wash-net-foot { display:flex; align-items:center; gap:8px; padding:8px 12px; border-top:1px solid #2a2d33; }
+
+/* --- apply terminal (B3) --- */
+.wash-net-apply { border-top:1px solid #2a2d33; display:flex; flex-direction:column; gap:0; flex-shrink:0; }
+.wash-net-rail { display:flex; align-items:center; gap:6px; padding:8px 12px 4px; }
+.wash-net-chip { font-size:10px; text-transform:uppercase; letter-spacing:.04em; padding:2px 8px;
+                 border-radius:10px; border:1px solid #33363d; color:#7a7d85; }
+.wash-net-chip[data-state="done"] { color:#3aa050; border-color:#2e5a38; }
+.wash-net-chip[data-state="active"] { color:#d0a040; border-color:#4a4030; animation:wash-pulse 1.2s ease-in-out infinite; }
+.wash-net-chip[data-state="bad"] { color:#e06060; border-color:#5a2e2e; }
+@keyframes wash-pulse { 0%,100% { opacity:1; } 50% { opacity:.5; } }
+.wash-net-log { max-height:120px; overflow:auto; margin:0 12px; padding:4px 0;
+                font:11px ui-monospace, Menlo, Consolas, monospace; }
+.wash-net-logline { display:flex; gap:8px; padding:1px 0; }
+.wash-net-logphase { color:#6a6d75; min-width:80px; text-transform:uppercase; }
+.wash-net-logline[data-level="warn"] .wash-net-logmsg { color:#d0a040; }
+.wash-net-logline[data-level="error"] .wash-net-logmsg { color:#e06060; }
+.wash-net-applybar, .wash-net-confirm { display:flex; align-items:center; gap:8px; padding:8px 12px; }
 .wash-net-status { flex:1; font-size:12px; opacity:.8; font-variant:tabular-nums; }
-.wash-net-confirm-note { font-size:12px; color:#d0a040; }
+.wash-net-countdown { flex:1; position:relative; height:22px; border-radius:4px; overflow:hidden;
+                      background:#1b1d22; border:1px solid #4a4030; display:flex; align-items:center; }
+.wash-net-countbar { position:absolute; inset:0 auto 0 0; background:rgba(208,160,64,.18); transition:width .25s linear; }
+.wash-net-counttext { position:relative; padding:0 8px; font-size:11px; color:#e8c878; }
+.wash-net-btn { background:#23252b; color:#ddd; border:1px solid #3a3a4a; border-radius:4px;
+                padding:4px 12px; font:inherit; cursor:pointer; }
+.wash-net-btn.primary { background:#3a5a9a; border-color:#3a5a9a; color:#fff; }
+.wash-net-btn:disabled { opacity:.5; cursor:default; }
 `;
 
 defineWashApp("wash-app-net", NetApp, { style: "display:block;height:100%;overflow:hidden;font:13px/1.5 ui-sans-serif,system-ui,sans-serif;color:#cfd0d4;" });

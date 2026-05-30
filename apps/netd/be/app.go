@@ -56,13 +56,20 @@ const AppID = "com.wash.netd"
 // attests the sender, so this is a real authorization boundary, not a hint.
 const NetAppID = "com.wash.net"
 
-// NetState is the status snapshot published to the sidebar (via the session-BE
-// gateway, B1d). Minimal for B1a; the apply terminal stream is B3.
+// NetState is the status snapshot published to subscribers (the sidebar via the
+// session-BE gateway, B1d; and the com.wash.net window, which subscribes so it
+// sees autonomous transitions like the auto-revert). It carries the apply job's
+// phase-event stream (§7.1) so the FE apply terminal (B3) can render the
+// lifecycle, plus the commit-confirm window so the FE can run the countdown.
 type NetState struct {
 	Status      string                `json:"status"` // idle|await-confirm|committed|reverted|failed
 	Phase       string                `json:"phase,omitempty"`
 	Summary     []string              `json:"summary,omitempty"`
 	Diagnostics []validate.Diagnostic `json:"diagnostics,omitempty"`
+	Events      []eventDTO            `json:"events,omitempty"`
+	// ConfirmWindowMs is the auto-revert window, sent while await-confirm so the
+	// FE can count down to the autonomous revert (§7.2). Zero otherwise.
+	ConfirmWindowMs int64 `json:"confirm_window_ms,omitempty"`
 }
 
 var def *sdk.AppDef
@@ -148,7 +155,7 @@ func autoRevert(job *txn.Job) {
 	mu.Unlock()
 	_ = job.Revert()
 	log.Printf("wash-netd: auto-reverted (not confirmed within %s)", ConfirmTimeout)
-	publish(NetState{Status: string(txn.Reverted), Summary: []string{"auto-reverted: not confirmed in time"}})
+	publish(NetState{Status: string(txn.Reverted), Summary: []string{"auto-reverted: not confirmed in time"}, Events: eventDTOs(job)})
 }
 
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
@@ -220,9 +227,16 @@ func registerHandlers(bus *sdk.Bus) {
 		switch job.State() {
 		case txn.AwaitConfirm:
 			setPending(job) // arms the autonomous auto-revert (§7)
-			publish(NetState{Status: string(txn.AwaitConfirm), Phase: lastPhase(job), Summary: summarize(job.Diff())})
+			resp.ConfirmWindowMs = ConfirmTimeout.Milliseconds()
+			publish(NetState{
+				Status:          string(txn.AwaitConfirm),
+				Phase:           lastPhase(job),
+				Summary:         summarize(job.Diff()),
+				Events:          eventDTOs(job),
+				ConfirmWindowMs: ConfirmTimeout.Milliseconds(),
+			})
 		case txn.Reverted:
-			publish(NetState{Status: string(txn.Reverted), Phase: lastPhase(job)})
+			publish(NetState{Status: string(txn.Reverted), Phase: lastPhase(job), Events: eventDTOs(job)})
 		}
 		return resp, nil
 	})
@@ -239,7 +253,7 @@ func registerHandlers(bus *sdk.Bus) {
 			setPending(job) // confirm failed; the job is still awaiting, re-arm
 			return statusResp{}, sdk.Errf(sdk.ErrInternal, "confirm: %v", err)
 		}
-		publish(NetState{Status: string(txn.Committed)})
+		publish(NetState{Status: string(txn.Committed), Events: eventDTOs(job)})
 		return statusResp{State: string(job.State())}, nil
 	})
 
@@ -254,7 +268,7 @@ func registerHandlers(bus *sdk.Bus) {
 		if err := job.Revert(); err != nil {
 			return statusResp{}, sdk.Errf(sdk.ErrInternal, "revert: %v", err)
 		}
-		publish(NetState{Status: string(txn.Reverted)})
+		publish(NetState{Status: string(txn.Reverted), Events: eventDTOs(job)})
 		return statusResp{State: string(job.State())}, nil
 	})
 }
@@ -293,10 +307,11 @@ type diffResp struct {
 }
 
 type applyResp struct {
-	State       string                `json:"state"`
-	Events      []eventDTO            `json:"events"`
-	Entries     []entryDTO            `json:"entries,omitempty"`
-	Diagnostics []validate.Diagnostic `json:"diagnostics,omitempty"`
+	State           string                `json:"state"`
+	Events          []eventDTO            `json:"events"`
+	Entries         []entryDTO            `json:"entries,omitempty"`
+	Diagnostics     []validate.Diagnostic `json:"diagnostics,omitempty"`
+	ConfirmWindowMs int64                 `json:"confirm_window_ms,omitempty"`
 }
 
 type statusResp struct {

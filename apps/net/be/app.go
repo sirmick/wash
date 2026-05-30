@@ -98,6 +98,24 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	for _, kind := range proxyKinds {
 		registerProxy(bus, kind)
 	}
+	// Subscribe to netd's status so the window sees autonomous transitions (the
+	// commit-confirm auto-revert) and the apply-event stream — relayed to the FE
+	// as net.state, the same shape the sidebar gateway uses. Without this the
+	// window would only learn outcomes it explicitly requested.
+	sdk.HandleFromVoid(bus, "state", func(conn *sdk.Conn, _ string, req stateRelay, from wire.Sender) error {
+		if from.AppID != NetdAppID {
+			return nil
+		}
+		return conn.SendAppMsg(map[string]any{"kind": "net.state", "state": req.State})
+	})
+	if err := c.SendAppMsgTo(wire.Recipient{AppID: NetdAppID}, map[string]any{"kind": "subscribe"}); err != nil {
+		log.Printf("wash-net: subscribe netd: %v", err)
+	}
+}
+
+// stateRelay is the opaque netd StateService push we forward verbatim to the FE.
+type stateRelay struct {
+	State any `json:"state"`
 }
 
 // registerProxy wires one FE request kind to a cross-app round-trip with netd.
