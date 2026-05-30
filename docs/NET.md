@@ -90,6 +90,11 @@ without cause.
 9. **Commit-confirm triggers on VERIFY-failure / confirm-timeout, not on a
    dropped management link.** More robust in production (a lost socket is a
    symptom, not the trigger) and fully testable over serial. See §7.
+10. **The VM serves everything; the proxy is a transparent tunnel** (decided
+    2026-05-30). The in-guest `wash-router` serves the FE *and* the wire, exactly
+    as a physical box would; the host contributes only a minimal chrome (kernel-
+    log / term / wash tabs, like the in-browser `wash-vm` demo). The browser
+    loads the wash UI *from the running VM*, not from a host bundle. See §8.3.
 
 ---
 
@@ -371,25 +376,38 @@ wash-vm/vm run --image wash-alpine.qcow2 --port 8080 -- -smp 2 -m 512
 - **Two layers of value:** *generic* (boot any image, browser console over serial)
   and *wash-aware* (also bridge the router WS + log planes when the guest is wash).
 
-### 8.3 The proxy (what crosses which plane)
+### 8.3 The proxy (the VM serves everything)
+
+**Decision (2026-05-30): the VM serves the whole app; the proxy is a transparent
+serial tunnel, not an asset server.** A real wash box serves its UI from the box;
+the faithful VM-target reproduces that — the in-guest `wash-router` serves the FE
+*and* the wire over its own HTTP/WS, and the proxy merely exposes that to a
+browser over the out-of-band serial link. The host contributes only a *minimal
+chrome* (a few KB of JS/HTML), exactly mirroring the existing in-browser
+`wash-vm` demo UI: tabs for **kernel log**, a **terminal**, and the **wash tab**
+(the real wash UI, loaded *from the VM*).
 
 ```
-  browser / Playwright
-     │  HTTP (assets, host-served)  +  WS (router wire)  +  /logs (apply terminal)
-     ▼
-  ┌─ proxy (embedded in wash-vm/vm) ────────────────────────────┐
-  │  • serves the wash-net FE bundle from host (instant, vite-like)│
-  │  • /ws   ⇄ guest DATA plane  (wash.data) ─┐                    │
-  │  • /logs ⇄ guest LOG  plane  (wash.log)  ─┤ virtio-serial      │
-  │  • /ctl  exec/observe/snapshot (wash.ctl)─┘ chardev unix sockets│
-  │  • owns qemu lifecycle (boot · reset · snapshot/restore via QMP)│
-  └──────────────────────────┬─────────────────────────────────────┘
-                          qemu microvm: washnetd + wash-router + wash-net
+  browser
+   ├─ minimal host chrome (served by proxy): tabs = [ kernel-log | term | wash ]
+   │     • kernel-log tab  ← LOG plane   (ttyS0 console)         stream
+   │     • term tab        ⇄ a guest shell on the CTL/term plane
+   │     └─ wash tab       ⇄ TUNNEL ───────────────────────────────┐
+   ▼                                                                │
+  ┌─ proxy (embedded in wash-vm/vm) ─────────────────────────────┐ │
+  │  • serves ONLY the minimal chrome bundle                      │ │
+  │  • transparent TCP/HTTP+WS tunnel over the DATA plane ────────┼─┘
+  │  • streams the LOG plane; exposes the CTL/term plane          │
+  │  • owns qemu lifecycle (boot · reset · snapshot/restore QMP)  │
+  └──────────────────────────┬────────────────────────────────────┘
+                  qemu microvm: wash-router (serves FE+wire) + washnetd + wash-net
 ```
 
-It is a frame transcoder: the existing `transport=virtio-console` codec guest-side,
-the wash-router WS protocol browser-side. FE assets are host-served — only the
-router *wire* and logs enter the guest.
+So the **wash tab's content — shell JS, wash-net UI, and the router wire — all
+come from the running VM**, byte-for-byte what a physical box serves on its LAN.
+The host JS/HTML is just the demo chrome. The proxy needs no FE knowledge and no
+`Static` bundle; it tunnels to the guest's HTTP/WS server (TCP-over-serial) and
+mirrors `wash-vm`'s in-browser `VirtioConsoleSocket` framing on the wire.
 
 ### 8.4 Image pipeline
 
@@ -535,16 +553,23 @@ externally tested by `wash-vm/vm`); C/D are sketched.
 
 ### Phase B — Alpine microvm + NM, the shippable type-2 target
 
-- **B0 — `wash-vm/vm` harness + base Alpine image.** `scripts/build-vm-image-
-  alpine.sh` (base, no wash yet); `vm.Launch` + named-serial wiring + embedded
-  proxy serving a static page + `Ctl.Exec` over the ctl plane; CLI `run`.
-  *Test:* boot base Alpine, proxy serves, `Ctl.Exec("uname -a")` returns over
-  serial. *Commit gate:* harness boots a real VM and talks to it out-of-band.
-- **B1 — wash in the VM, FE over the proxy.** Bake wash (washnetd stub + router +
-  FE) into the image; OpenRC service; 9p dev-share mode. Proxy bridges the router
-  WS (data plane) so the **FE loads via the proxy and reaches the in-guest router**.
-  *Test:* external Playwright loads the FE through the proxy and round-trips a
-  model edit to washnetd. *Commit gate:* the external-test path works end-to-end.
+- **B0 — `wash-vm/vm` harness + base Alpine image.** ✅ DONE (commits 3c6f9a4,
+  75f47cd). `scripts/build-vm-image-alpine.sh` (Alpine-minirootfs initramfs +
+  static guest agent); `vm.Launch` (q35+kvm, log/ctl/data serial planes),
+  `Ctl.Exec` over the ctl plane, and a proxy that serves a host dir + bridges a
+  browser WS ⟷ the guest data plane (internal/wire). Verified: Alpine boots
+  ~1.1s, `uname=Linux`, and a wash frame round-trips browser→WS→proxy→serial→
+  guest→back (-race clean). *Guest data plane currently echoes frames.*
+- **B1 — the VM serves everything; proxy becomes a transparent tunnel** (§8.3).
+  Bake real `wash-router` + `washnetd` (+ the built FE bundle) into the image
+  (static no-cgo binaries → copy + OpenRC service); the guest router serves the
+  FE *and* wire over HTTP/WS; rework the proxy from asset-server to a transparent
+  TCP/HTTP+WS-over-serial **tunnel** to the guest, plus a *minimal host chrome*
+  (kernel-log / term / wash tabs) mirroring the in-browser `wash-vm` demo UI.
+  *Test:* browser loads the wash tab **from the VM** through the proxy and
+  round-trips a model edit to in-guest washnetd; kernel-log tab streams the
+  console; term tab gives a guest shell. *Commit gate:* the wash UI served by the
+  VM loads and talks to its in-guest backend through the tunnel.
 - **B2 — transaction + commit-confirm.** `txn/` stage/diff/plan; VERIFY +
   autonomous auto-revert; wire to a fake Applier in washnetd.
   *Test:* fake-Applier commit-confirm (VERIFY-fail→revert; confirm→persist;
