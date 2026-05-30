@@ -10,6 +10,9 @@ depends="libcap shadow"
 # No makedepends: binaries are prebuilt in the source tarball.
 options="!check !strip"
 install="$pkgname.pre-install $pkgname.post-install $pkgname.post-deinstall"
+# Optional native display subpackage — only populated when the source
+# tarball was built with WASH_DISPLAY=1 (out/wash-display present).
+subpackages="$pkgname-display:_display"
 source="wash_$pkgver.tar.xz"
 # pre-built binaries; no upstream sha to verify
 builddir="$srcdir/wash-$pkgver"
@@ -29,4 +32,14 @@ package() {
         install -m 0755 out/$bin "$pkgdir/usr/bin/$bin"
     done
     install -d -m 0755 "$pkgdir/etc/wash"
+}
+
+_display() {
+    pkgdesc="Native X/Wayland app surfaces for wash"
+    depends="wash=$pkgver-r$pkgrel xwayland"
+    if [ ! -f "$builddir/out/wash-display" ]; then
+        msg "wash-display not built (WASH_DISPLAY=1); skipping subpackage"
+        return 0
+    fi
+    install -Dm0755 "$builddir/out/wash-display" "$subpkgdir/usr/bin/wash-display"
 }

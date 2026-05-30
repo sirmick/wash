@@ -21,3 +21,18 @@ Description: lightweight remote-admin desktop environment
  This package installs the wash-* binaries to /usr/bin/. wash-router
  is the entry point; per-user multi-session support (wash-login) is
  planned but not yet shipped.
+
+Package: wash-display
+Architecture: amd64 arm64
+Depends: ${misc:Depends},
+         ${shlibs:Depends},
+         wash (= ${binary:Version}),
+         xwayland
+Description: native X/Wayland app surfaces for wash
+ wash-display runs native Linux GUI apps (Wayland and X11 via Xwayland)
+ as first-class wash windows: each app surface is captured, encoded, and
+ streamed to the browser shell, with input and clipboard bridged back.
+ .
+ Split from the main wash package because it links the compositor stack
+ (wlroots) and a media/transport stack the pure-Go core deliberately
+ avoids. Install only on hosts that serve native GUI apps.

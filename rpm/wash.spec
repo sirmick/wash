@@ -18,11 +18,28 @@ BuildArch:      x86_64
 Requires:       shadow-utils
 Requires:       libcap
 
+# Optional native display subpackage. Off by default; build with
+# `rpmbuild --with display` on a host that built out/wash-display
+# (make WASH_DISPLAY=1). Mirrors the Makefile gate.
+%bcond_with display
+
 %description
 wash is a transport-only router and a small family of web-component
 apps that present a Windows/GNOME/macOS-style desktop over HTTP/WS.
 Designed for maintaining Linux machines over the network without
 needing SSH plus a stack of text-only tools.
+
+%if %{with display}
+%package display
+Summary:        Native X/Wayland app surfaces for wash
+Requires:       wash = %{version}-%{release}
+Requires:       xorg-x11-server-Xwayland
+%description display
+wash-display runs native Linux GUI apps (Wayland and X11 via Xwayland)
+as first-class wash windows: each app surface is captured, encoded, and
+streamed to the browser shell. Split out because it links the wlroots
+compositor stack the pure-Go core deliberately avoids.
+%endif
 
 %prep
 %autosetup -n wash-%{version}
@@ -38,6 +55,9 @@ for bin in wash-router wash-login wash-session wash-about wash-fm wash-term \
            wash-launch wash-sudo; do
     install -m 0755 out/$bin %{buildroot}%{_bindir}/$bin
 done
+%if %{with display}
+install -m 0755 out/wash-display %{buildroot}%{_bindir}/wash-display
+%endif
 install -d -m 0755 %{buildroot}%{_sysconfdir}/wash
 
 %files
@@ -60,6 +80,11 @@ install -d -m 0755 %{buildroot}%{_sysconfdir}/wash
 %{_bindir}/wash-launch
 %{_bindir}/wash-sudo
 %dir %{_sysconfdir}/wash
+
+%if %{with display}
+%files display
+%{_bindir}/wash-display
+%endif
 
 %pre
 # Create wash-system uid + wash group before the files land so
