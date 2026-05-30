@@ -19,6 +19,7 @@ import type { TerminalAPI } from '@wash/ui';
 import {
   joinPath, baseName, parentPath,
   createBus,
+  createWatch,
   DRAG_MIME, readDragPaths, hasWashDrag, dropEffectFor,
   flattenTree,
 } from '@wash/fs-client';
@@ -355,7 +356,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         // Watch the root the first time we see it — the sidebar
         // always shows root-level entries, so we always want
         // fresh data there. Other dirs subscribe on expand.
-        sendFsWatch(abs);
+        fsWatch.watch(abs);
       }
     }
   };
@@ -890,7 +891,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       setListings({});
       setExpanded({});
       void loadDir(path);
-      sendFsWatch(path);
+      fsWatch.watch(path);
       return;
     }
     if (m.kind === 'cmd.open_diff') {
@@ -917,8 +918,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     if (m.kind === 'fs.watch_event') {
       const evPath = String(m.path ?? '');
       if (!evPath) return;
-      scheduleRefresh(parentPath(evPath));
-      scheduleRefresh(evPath);
+      fsWatch.scheduleRefresh(parentPath(evPath));
+      fsWatch.scheduleRefresh(evPath);
       return;
     }
     // Terminal lifecycle messages: term.opened pairs the
@@ -1142,43 +1143,23 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   // ---- tree ops + fs.watch ----
   //
-  // watching is the set of dirs we currently hold an fs.watch on.
-  // Every expand subscribes (idempotent BE-side), every collapse
-  // releases. The root gets watched at boot via loadDir's first
-  // success path. onCleanup tears every remaining sub down so a
-  // closed editor window doesn't strand watchers in the BE.
+  // The watched-dirs dedup set + the fs_event refresh debounce live in
+  // @wash/fs-client's watch.ts (unit-tested, shared with fm). Every
+  // expand subscribes (idempotent BE-side), every collapse releases the
+  // subtree (fsWatch.unwatchWhere below); the root gets watched at boot
+  // via loadDir's first success. onCleanup tears every remaining sub
+  // down so a closed editor doesn't strand watchers in the BE.
   //
-  // refreshTimers is the per-dir debounce: fsnotify can fire
-  // multiple events for one logical save (write + chmod); 100ms
-  // collapses bursts without making the tree feel stale.
-
-  const watching = new Set<string>();
-  const refreshTimers = new Map<string, number>();
-
-  const sendFsWatch = (p: string) => {
-    if (!p || watching.has(p)) return;
-    watching.add(p);
-    send({ kind: 'fs.watch', path: p });
-  };
-  const sendFsUnwatch = (p: string) => {
-    if (!p || !watching.has(p)) return;
-    watching.delete(p);
-    send({ kind: 'fs.unwatch', path: p });
-  };
-
-  const scheduleRefresh = (dir: string) => {
-    if (!listings[dir]) return;
-    const prev = refreshTimers.get(dir);
-    if (prev != null) window.clearTimeout(prev);
-    const tok = window.setTimeout(() => {
-      refreshTimers.delete(dir);
-      // Only re-list if we still care about this dir — closing the
-      // editor or collapsing the parent could have happened during
-      // the debounce.
-      if (listings[dir]) void loadDir(dir);
-    }, 100);
-    refreshTimers.set(dir, tok);
-  };
+  // edit's BE speaks the dotted fs.watch/fs.unwatch kinds, and its
+  // refresh guard is just "still listed" (no expanded gate — collapse
+  // already unwatches the subtree, so no stale events arrive).
+  const fsWatch = createWatch({
+    send,
+    refresh: (dir) => void loadDir(dir),
+    shouldRefresh: (dir) => !!listings[dir],
+    watchKind: 'fs.watch',
+    unwatchKind: 'fs.unwatch',
+  });
 
   const toggleExpand = (path: string) => {
     if (expanded[path]) {
@@ -1192,13 +1173,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           if (k === path || k.startsWith(prefix)) delete s[k];
         }
       }));
-      for (const w of Array.from(watching)) {
-        if (w === path || w.startsWith(prefix)) sendFsUnwatch(w);
-      }
+      fsWatch.unwatchWhere((w) => w === path || w.startsWith(prefix));
     } else {
       setExpanded(path, true);
       if (!listings[path]) void loadDir(path);
-      sendFsWatch(path);
+      fsWatch.watch(path);
     }
   };
 
@@ -1825,14 +1804,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       props.host.removeEventListener('wash:state', onState);
       props.host.removeEventListener('keydown', onKey);
       // Release every active fs.watch so the BE doesn't strand
-      // them after the editor window closes. Idempotent BE-side,
-      // so we don't need to know which subs survived the run.
-      for (const p of Array.from(watching)) {
-        send({ kind: 'fs.unwatch', path: p });
-      }
-      watching.clear();
-      for (const t of refreshTimers.values()) window.clearTimeout(t);
-      refreshTimers.clear();
+      // them after the editor window closes, and clear pending
+      // refresh timers. Idempotent BE-side.
+      fsWatch.unwatchWhere(() => true);
+      fsWatch.dispose();
       // <Terminal> components handle their own xterm disposal +
       // raw-channel unsubscribe via onCleanup; just drop the API
       // map so we're not holding references after teardown.

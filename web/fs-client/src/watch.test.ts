@@ -37,6 +37,8 @@ class FakeClock implements Clock {
 interface Opts {
   shouldRefresh?: (dir: string) => boolean;
   debounceMs?: number;
+  watchKind?: string;
+  unwatchKind?: string;
 }
 
 function setup(opts: Opts = {}) {
@@ -49,6 +51,8 @@ function setup(opts: Opts = {}) {
     shouldRefresh: opts.shouldRefresh ?? (() => true),
     clock,
     debounceMs: opts.debounceMs ?? 100,
+    watchKind: opts.watchKind,
+    unwatchKind: opts.unwatchKind,
   });
   return { sent, refreshed, clock, watch };
 }
@@ -78,6 +82,49 @@ test('unwatch drops the dir and sends one unwatch request', () => {
     { kind: 'watch', path: '/a' },
     { kind: 'unwatch', path: '/a' },
   ]);
+});
+
+test('watch ignores an empty path (no request, not tracked)', () => {
+  const { sent, watch } = setup();
+  watch.watch('');
+  assert.equal(watch.isWatching(''), false);
+  assert.equal(sent.length, 0);
+});
+
+test('custom watchKind/unwatchKind are used in the messages (edit: fs.watch)', () => {
+  const { sent, watch } = setup({ watchKind: 'fs.watch', unwatchKind: 'fs.unwatch' });
+  watch.watch('/a');
+  watch.unwatch('/a');
+  assert.deepEqual(sent, [
+    { kind: 'fs.watch', path: '/a' },
+    { kind: 'fs.unwatch', path: '/a' },
+  ]);
+});
+
+test('unwatchWhere unwatches the matching subtree only (one request each)', () => {
+  const { sent, watch } = setup();
+  for (const d of ['/a', '/a/b', '/a/b/c', '/other']) watch.watch(d);
+  sent.length = 0; // drop the watch requests; focus on the teardown
+  // collapse /a → unwatch /a and everything under it, but not /other.
+  watch.unwatchWhere((w) => w === '/a' || w.startsWith('/a/'));
+  assert.deepEqual(sent, [
+    { kind: 'unwatch', path: '/a' },
+    { kind: 'unwatch', path: '/a/b' },
+    { kind: 'unwatch', path: '/a/b/c' },
+  ]);
+  assert.equal(watch.isWatching('/other'), true);
+  assert.equal(watch.isWatching('/a/b'), false);
+});
+
+test('unwatchWhere(() => true) releases everything (unmount teardown)', () => {
+  const { sent, watch } = setup();
+  watch.watch('/a');
+  watch.watch('/b');
+  sent.length = 0;
+  watch.unwatchWhere(() => true);
+  assert.deepEqual(sent.map((m) => (m as { path: string }).path).sort(), ['/a', '/b']);
+  assert.equal(watch.isWatching('/a'), false);
+  assert.equal(watch.isWatching('/b'), false);
 });
 
 test('unwatch on an unwatched dir is a no-op (no request)', () => {

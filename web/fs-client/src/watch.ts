@@ -39,19 +39,30 @@ export interface WatchOptions {
   shouldRefresh: (dir: string) => boolean;
   clock?: Clock;
   debounceMs?: number;
+  // Message kinds for the watch/unwatch requests. fm uses the defaults
+  // ('watch'/'unwatch'); edit's BE speaks the dotted 'fs.watch'/'fs.unwatch'.
+  watchKind?: string;
+  unwatchKind?: string;
 }
 
 export interface Watch {
   // watch records dir and sends a watch request the first time only.
+  // Empty paths are ignored.
   watch(dir: string): void;
   // unwatch drops dir and sends an unwatch request only if it was watched.
   unwatch(dir: string): void;
+  // unwatchWhere unwatches every currently-watched dir matching pred —
+  // for edit's subtree teardown on collapse and unwatch-all on unmount.
+  // Iterates a snapshot so the in-loop unwatch mutation is safe.
+  unwatchWhere(pred: (dir: string) => boolean): void;
   // isWatching reports membership (test / diagnostic aid).
   isWatching(dir: string): boolean;
   // scheduleRefresh debounces a re-list of dir; repeat calls within the
   // window coalesce onto a single re-list.
   scheduleRefresh(dir: string): void;
-  // dispose clears any pending refresh timers (call on unmount).
+  // dispose clears any pending refresh timers (call on unmount). It does
+  // NOT unwatch — pair with unwatchWhere(() => true) if teardown should
+  // release the BE watches too.
   dispose(): void;
 }
 
@@ -59,20 +70,28 @@ export function createWatch(opts: WatchOptions): Watch {
   const { send, refresh, shouldRefresh } = opts;
   const clock = opts.clock ?? realClock;
   const debounceMs = opts.debounceMs ?? 100;
+  const watchKind = opts.watchKind ?? 'watch';
+  const unwatchKind = opts.unwatchKind ?? 'unwatch';
 
   const watching = new Set<string>();
   const refreshTimers = new Map<string, unknown>();
 
   const watch = (dir: string): void => {
-    if (watching.has(dir)) return;
+    if (!dir || watching.has(dir)) return;
     watching.add(dir);
-    send({ kind: 'watch', path: dir });
+    send({ kind: watchKind, path: dir });
   };
 
   const unwatch = (dir: string): void => {
     if (!watching.has(dir)) return;
     watching.delete(dir);
-    send({ kind: 'unwatch', path: dir });
+    send({ kind: unwatchKind, path: dir });
+  };
+
+  const unwatchWhere = (pred: (dir: string) => boolean): void => {
+    for (const dir of [...watching]) {
+      if (pred(dir)) unwatch(dir);
+    }
   };
 
   const scheduleRefresh = (dir: string): void => {
@@ -94,6 +113,7 @@ export function createWatch(opts: WatchOptions): Watch {
   return {
     watch,
     unwatch,
+    unwatchWhere,
     isWatching: (dir) => watching.has(dir),
     scheduleRefresh,
     dispose,
