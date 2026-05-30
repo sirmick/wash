@@ -12,6 +12,12 @@ a real bug / maintenance cost, not effort.
 
 ## P1 — correctness risk, do soon
 
+> **DONE** (commits `41c1506`, `6f9d2a1`): all three items fixed —
+> `Job.cancel` is now `*atomic.Bool` (vet clean), `ringBuf.Write`
+> reports the real consumed count (with a regression test), and error
+> classification uses `errors.Is(syscall.EXDEV/ENOTEMPTY)` throughout
+> (hand-rolled `contains` and the string fallbacks removed).
+
 - **`internal/bulkops/bulkops.go:93` — `Job` embeds `atomic.Bool` but is
   copied by value everywhere** (snapshot, emit, onUpdate, ConflictInfo).
   `go vet` flags ~20 "copies lock value" sites. Only saved today because
