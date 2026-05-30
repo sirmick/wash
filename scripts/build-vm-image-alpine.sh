@@ -40,8 +40,7 @@ cat > "$RFS/init" <<'INIT'
 mount -t proc proc /proc 2>/dev/null
 mount -t sysfs sys /sys 2>/dev/null
 mount -t devtmpfs dev /dev 2>/dev/null
-stty -F /dev/ttyS1 raw -echo -onlcr 2>/dev/null
-exec /sbin/washvm-agent /dev/ttyS1
+exec /sbin/washvm-agent /dev/ttyS1 /dev/ttyS2
 INIT
 chmod +x "$RFS/init"
 

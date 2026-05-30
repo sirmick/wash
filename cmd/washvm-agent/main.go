@@ -12,25 +12,37 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/sirmick/wash/internal/washvm/proto"
+	"github.com/sirmick/wash/internal/wire"
 )
 
 func main() {
-	port := "/dev/ttyS1"
+	ctlPort, dataPort := "/dev/ttyS1", "/dev/ttyS2"
 	if len(os.Args) > 1 {
-		port = os.Args[1]
+		ctlPort = os.Args[1]
 	}
-	f, err := os.OpenFile(port, os.O_RDWR, 0)
+	if len(os.Args) > 2 {
+		dataPort = os.Args[2]
+	}
+	f, err := os.OpenFile(ctlPort, os.O_RDWR, 0)
 	if err != nil {
 		// Nothing to talk to; nothing to do.
 		os.Exit(1)
 	}
 	defer f.Close()
 
-	// The control plane carries binary length-prefixed frames, so the serial
-	// port must be raw — canonical mode would line-buffer and mangle CR/LF and
-	// the frame would never arrive. Don't rely on busybox stty; do it here.
+	// Both serial planes carry binary frames, so they must be raw — canonical
+	// mode would line-buffer and mangle CR/LF and the frame would never arrive.
+	// Don't rely on busybox stty; do it here.
 	if err := makeRaw(int(f.Fd())); err != nil {
 		os.Exit(1)
+	}
+
+	// Data plane: echo wash wire frames. This stands in for the in-guest
+	// wash-router until B1 bakes it into the image; it proves the inside-out
+	// transport (browser WS ⟷ proxy ⟷ serial ⟷ guest) end to end.
+	if df, err := os.OpenFile(dataPort, os.O_RDWR, 0); err == nil {
+		_ = makeRaw(int(df.Fd()))
+		go echoFrames(df)
 	}
 
 	// Announce readiness guest→host. This direction is buffered by qemu, so it
@@ -48,6 +60,21 @@ func main() {
 		}
 		resp := run(req)
 		if err := proto.WriteFrame(f, &resp); err != nil {
+			return
+		}
+	}
+}
+
+// echoFrames reads wash wire frames off the data plane and echoes them back —
+// a minimal router stand-in.
+func echoFrames(rwc *os.File) {
+	t := wire.NewStreamTransport(rwc)
+	for {
+		fr, err := t.ReadFrame()
+		if err != nil {
+			return
+		}
+		if err := t.WriteFrame(fr); err != nil {
 			return
 		}
 	}

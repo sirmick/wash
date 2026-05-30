@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/washvm/proto"
+	"github.com/sirmick/wash/internal/wire"
 )
 
 // Opts configures a microvm launch. Kernel and Initramfs are required.
@@ -48,10 +49,14 @@ func (o *Opts) defaults() {
 	}
 }
 
-// VM is a running microvm with an open control plane.
+// VM is a running microvm with an open control plane (and a data plane carrying
+// wash wire frames — the inside-out counterpart of wash-vm's in-browser
+// VirtioConsoleSocket).
 type VM struct {
 	cmd     *exec.Cmd
 	ctl     net.Conn
+	data    net.Conn
+	dataT   *wire.StreamTransport
 	dir     string
 	logPath string
 	stderr  *bytes.Buffer
@@ -77,6 +82,7 @@ func Launch(ctx context.Context, o Opts) (*VM, error) {
 		stderr:  &bytes.Buffer{},
 	}
 	ctlPath := filepath.Join(dir, "ctl.sock")
+	dataPath := filepath.Join(dir, "data.sock")
 
 	args := []string{
 		"-machine", "q35", "-accel", o.Accel, "-cpu", o.CPU,
@@ -86,6 +92,8 @@ func Launch(ctx context.Context, o Opts) (*VM, error) {
 		"-serial", "file:" + vm.logPath, // ttyS0: console / log plane
 		"-chardev", "socket,id=ctl,path=" + ctlPath + ",server=on,wait=off",
 		"-serial", "chardev:ctl", // ttyS1: control plane
+		"-chardev", "socket,id=data,path=" + dataPath + ",server=on,wait=off",
+		"-serial", "chardev:data", // ttyS2: data plane (wash wire frames)
 	}
 	vm.cmd = exec.CommandContext(ctx, o.QEMU, args...)
 	vm.cmd.Stderr = vm.stderr
@@ -100,6 +108,14 @@ func Launch(ctx context.Context, o Opts) (*VM, error) {
 		return nil, fmt.Errorf("vm: connect control plane: %w\nqemu stderr:\n%s", err, vm.stderr.String())
 	}
 	vm.ctl = conn
+
+	dconn, err := vm.dialCtl(ctx, dataPath, 15*time.Second)
+	if err != nil {
+		vm.Close()
+		return nil, fmt.Errorf("vm: connect data plane: %w", err)
+	}
+	vm.data = dconn
+	vm.dataT = wire.NewStreamTransport(dconn)
 	return vm, nil
 }
 
@@ -182,6 +198,9 @@ func (vm *VM) ConsoleLog() string {
 func (vm *VM) Close() error {
 	if vm.ctl != nil {
 		vm.ctl.Close()
+	}
+	if vm.data != nil {
+		vm.data.Close()
 	}
 	if vm.cmd != nil && vm.cmd.Process != nil {
 		vm.cmd.Process.Kill()
