@@ -1,6 +1,7 @@
 package uigen
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sort"
@@ -8,6 +9,35 @@ import (
 
 	"github.com/sirmick/wash/internal/washnet/model"
 )
+
+// DescriptorJSON is the indented JSON of BuildDescriptor (trailing newline).
+func DescriptorJSON() string {
+	b, _ := json.MarshalIndent(BuildDescriptor(), "", "  ")
+	return string(b) + "\n"
+}
+
+// I18nJSON is the i18n scaffold as a key-sorted JSON object (deterministic).
+func I18nJSON() string {
+	m := EmitI18n()
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString("{\n")
+	for i, k := range keys {
+		comma := ","
+		if i == len(keys)-1 {
+			comma = ""
+		}
+		kj, _ := json.Marshal(k)
+		vj, _ := json.Marshal(m[k])
+		b.WriteString("  " + string(kj) + ": " + string(vj) + comma + "\n")
+	}
+	b.WriteString("}\n")
+	return b.String()
+}
 
 // EmitTS generates TypeScript type definitions for the model: one interface per
 // object and per union variant, a union alias per discriminator interface, and

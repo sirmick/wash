@@ -31,12 +31,17 @@ func (s Severity) String() string {
 }
 
 // Diagnostic is one validation finding, located by Path (e.g.
-// "Interfaces[0].IPAddr").
+// "Interfaces[0].Proto.IPAddr"). JSON-tagged for the FE wire.
 type Diagnostic struct {
-	Path     string
-	Code     string
-	Message  string
-	Severity Severity
+	Path     string   `json:"path"`
+	Code     string   `json:"code"`
+	Message  string   `json:"message"`
+	Severity Severity `json:"severity"`
+}
+
+// MarshalJSON renders Severity as "error"/"warning" on the wire.
+func (s Severity) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + s.String() + `"`), nil
 }
 
 var (
@@ -117,7 +122,7 @@ func (d *diags) iface(o model.Interface, path string, cp caps.Capabilities) {
 	switch p := o.Proto.(type) {
 	case model.StaticProto:
 		if !p.IPAddr.IsValid() {
-			d.add(path+".IPAddr", "required", "static interface needs an ipaddr", Error)
+			d.add(path+".Proto.IPAddr", "required", "static interface needs an ipaddr", Error)
 		}
 	case model.PPPoEProto:
 		d.required(path+".Proto", "Username", p.Username)

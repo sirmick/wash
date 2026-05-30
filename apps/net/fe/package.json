@@ -1,0 +1,21 @@
+{
+  "name": "@wash/app-net",
+  "private": true,
+  "version": "0.8.0",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "test": "tsx --test src/objectform-model.test.ts",
+    "gen": "cd ../../.. && go run ./cmd/washnet-uigen -out apps/net/fe/src/generated"
+  },
+  "dependencies": {
+    "@wash/ui": "workspace:*",
+    "solid-js": "^1.9.13"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.10",
+    "vite-plugin-solid": "^2.10.2"
+  }
+}

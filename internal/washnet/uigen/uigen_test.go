@@ -1,11 +1,8 @@
 package uigen
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"testing"
 )
 
@@ -68,30 +65,10 @@ func TestDescriptorSanity(t *testing.T) {
 // TestGolden snapshots the descriptor, TS types, and i18n scaffold. Regenerate
 // with UPDATE_GOLDEN=1.
 func TestGolden(t *testing.T) {
-	descJSON, _ := json.MarshalIndent(BuildDescriptor(), "", "  ")
-	i18n := EmitI18n()
-	keys := make([]string, 0, len(i18n))
-	for k := range i18n {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var ib strings.Builder
-	ib.WriteString("{\n")
-	for i, k := range keys {
-		comma := ","
-		if i == len(keys)-1 {
-			comma = ""
-		}
-		kj, _ := json.Marshal(k)
-		vj, _ := json.Marshal(i18n[k])
-		ib.WriteString("  " + string(kj) + ": " + string(vj) + comma + "\n")
-	}
-	ib.WriteString("}\n")
-
 	artifacts := map[string]string{
-		"descriptor.json": string(descJSON) + "\n",
+		"descriptor.json": DescriptorJSON(),
 		"types.ts":        EmitTS(),
-		"i18n.json":       ib.String(),
+		"i18n.json":       I18nJSON(),
 	}
 	update := os.Getenv("UPDATE_GOLDEN") != ""
 	if update {

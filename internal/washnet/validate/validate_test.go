@@ -64,7 +64,7 @@ func TestFieldChecks(t *testing.T) {
 			"required", "Interfaces[0].Name"},
 		{"static iface without ipaddr",
 			model.Config{Interfaces: []model.Interface{{Name: "lan", Proto: model.StaticProto{}}}},
-			"required", "Interfaces[0].IPAddr"},
+			"required", "Interfaces[0].Proto.IPAddr"},
 		{"bad zone target",
 			model.Config{Zones: []model.Zone{{Name: "z", Input: "ALLOW"}}},
 			"invalid_enum", "Zones[0].Input"},
