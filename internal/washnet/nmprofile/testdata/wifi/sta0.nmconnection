@@ -1,0 +1,17 @@
+[connection]
+id=sta0
+type=802-11-wireless
+
+[802-11-wireless]
+mode=infrastructure
+ssid=home-network
+
+[802-11-wireless-security]
+key-mgmt=sae
+psk=a-strong-passphrase
+
+[ipv4]
+method=auto
+
+[ipv6]
+method=auto

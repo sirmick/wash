@@ -1,0 +1,7 @@
+config wifi-iface 'sta0'
+	option device 'radio0'
+	option mode 'sta'
+	option ssid 'home-network'
+	option network 'wwan'
+	option encryption 'sae'
+	option key 'a-strong-passphrase'

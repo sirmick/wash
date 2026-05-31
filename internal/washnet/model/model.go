@@ -122,10 +122,12 @@ func (WireGuardProto) UCITag() string { return "wireguard" }
 // Device is an anonymous section whose `name` option is the resulting ifname
 // (e.g. br-lan).
 type Device struct {
-	Name  string   `uci:"name"`
-	Type  string   `uci:"type"`
-	Ports []string `uci:"ports,list"`
-	MTU   int      `uci:"mtu" ui:"advanced"`
+	Name   string   `uci:"name"`
+	Type   string   `uci:"type"`
+	Ports  []string `uci:"ports,list"` // bridge members
+	Ifname string   `uci:"ifname"`     // vlan/macvlan parent link
+	VID    int      `uci:"vid"`        // 802.1q vlan id
+	MTU    int      `uci:"mtu" ui:"advanced"`
 }
 
 func (Device) UCIPackage() string { return "network" }

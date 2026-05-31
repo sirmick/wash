@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/sirmick/wash/internal/washnet/model"
@@ -24,7 +25,7 @@ func ParseKeyfiles(kfs map[string]string) (model.Config, error) {
 		conn map[string]string
 		ini  map[string]map[string]string
 	}
-	var bridges, eths []parsed
+	var bridges, eths, wgs, wifis, vlans []parsed
 
 	for _, name := range sortedKeys(kfs) {
 		ini := parseINI(kfs[name])
@@ -32,6 +33,12 @@ func ParseKeyfiles(kfs map[string]string) (model.Config, error) {
 		switch conn["type"] {
 		case "bridge":
 			bridges = append(bridges, parsed{conn, ini})
+		case "wireguard":
+			wgs = append(wgs, parsed{conn, ini})
+		case "vlan":
+			vlans = append(vlans, parsed{conn, ini})
+		case "802-11-wireless":
+			wifis = append(wifis, parsed{conn, ini})
 		case "802-3-ethernet":
 			if conn["slave-type"] == "bridge" {
 				m := conn["master"]
@@ -60,7 +67,150 @@ func ParseKeyfiles(kfs map[string]string) (model.Config, error) {
 		}
 		c.Interfaces = append(c.Interfaces, iface)
 	}
+	for _, v := range vlans {
+		vl := v.ini["vlan"]
+		vid, _ := strconv.Atoi(vl["id"])
+		dev := model.Device{Name: v.conn["interface-name"], Type: "8021q", Ifname: vl["parent"], VID: vid}
+		c.Devices = append(c.Devices, dev)
+		proto, err := parseIPv4(v.ini["ipv4"])
+		if err != nil {
+			return c, fmt.Errorf("vlan %q: %w", v.conn["id"], err)
+		}
+		c.Interfaces = append(c.Interfaces, model.Interface{Name: v.conn["id"], Device: dev.Name, Proto: proto})
+	}
+	for _, w := range wgs {
+		iface, peers := parseWireGuard(w.conn, w.ini)
+		c.Interfaces = append(c.Interfaces, iface)
+		c.WGPeers = append(c.WGPeers, peers...)
+	}
+	for _, wf := range wifis {
+		ssid, iface, err := parseWifi(wf.conn, wf.ini)
+		if err != nil {
+			return c, fmt.Errorf("wifi %q: %w", wf.conn["id"], err)
+		}
+		c.SSIDs = append(c.SSIDs, ssid)
+		c.Interfaces = append(c.Interfaces, iface)
+	}
 	return c, nil
+}
+
+// parseWifi splits an 802-11-wireless connection back into a WifiIface and the
+// network Interface that carries its IP config, linked by a derived name (NM
+// doesn't store UCI's internal cross-ref, so the canonical name round-trips).
+func parseWifi(conn map[string]string, ini map[string]map[string]string) (model.WifiIface, model.Interface, error) {
+	id := conn["id"]
+	wl := ini["802-11-wireless"]
+	w := model.WifiIface{Name: id, Network: id, SSID: wl["ssid"], Mode: uciWifiMode(wl["mode"])}
+	switch ini["802-11-wireless-security"]["key-mgmt"] {
+	case "wpa-psk":
+		w.Encryption = model.EncPSK2{Key: ini["802-11-wireless-security"]["psk"]}
+	case "sae":
+		w.Encryption = model.EncSAE{Key: ini["802-11-wireless-security"]["psk"]}
+	default:
+		w.Encryption = model.EncNone{}
+	}
+	proto, err := parseIPv4(ini["ipv4"])
+	if err != nil {
+		return w, model.Interface{}, err
+	}
+	return w, model.Interface{Name: id, Proto: proto}, nil
+}
+
+func uciWifiMode(mode string) string {
+	if mode == "ap" {
+		return "ap"
+	}
+	return "sta"
+}
+
+// deviceFor returns the explicit device of a connection, or "" when the device
+// equals the connection id (the renderer derives ifname from the name then).
+func deviceFor(conn map[string]string) string {
+	if conn["interface-name"] == conn["id"] {
+		return ""
+	}
+	return conn["interface-name"]
+}
+
+func parseWireGuard(conn map[string]string, ini map[string]map[string]string) (model.Interface, []model.WGPeer) {
+	name := conn["id"]
+	wg := model.WireGuardProto{}
+	if w := ini["wireguard"]; w != nil {
+		wg.PrivateKey = w["private-key"]
+		if lp := w["listen-port"]; lp != "" {
+			wg.ListenPort, _ = strconv.Atoi(lp)
+		}
+	}
+	wg.Addresses = append(parseAddrs(ini["ipv4"]), parseAddrs(ini["ipv6"])...)
+
+	iface := model.Interface{Name: name, Device: deviceFor(conn), Proto: wg}
+
+	var peers []model.WGPeer
+	for sec, kv := range ini {
+		if !strings.HasPrefix(sec, "wireguard-peer.") {
+			continue
+		}
+		p := model.WGPeer{Interface: name, PublicKey: strings.TrimPrefix(sec, "wireguard-peer.")}
+		p.AllowedIPs = parsePrefixList(kv["allowed-ips"])
+		if ep := kv["endpoint"]; ep != "" {
+			p.EndpointHost, p.EndpointPort = parseEndpoint(ep)
+		}
+		p.PresharedKey = kv["preshared-key"]
+		if k := kv["persistent-keepalive"]; k != "" {
+			p.PersistentKeepalive, _ = strconv.Atoi(k)
+		}
+		peers = append(peers, p)
+	}
+	sort.Slice(peers, func(a, b int) bool { return peers[a].PublicKey < peers[b].PublicKey })
+	return iface, peers
+}
+
+// parseAddrs reads address1..N from a manual [ipvN] section (ignoring any
+// trailing gateway, which WireGuard tunnels don't carry).
+func parseAddrs(sec map[string]string) []netip.Prefix {
+	if sec["method"] != "manual" {
+		return nil
+	}
+	var out []netip.Prefix
+	for n := 1; ; n++ {
+		v := sec[fmt.Sprintf("address%d", n)]
+		if v == "" {
+			break
+		}
+		if pfx, err := netip.ParsePrefix(strings.SplitN(v, ",", 2)[0]); err == nil {
+			out = append(out, pfx)
+		}
+	}
+	return out
+}
+
+func parsePrefixList(s string) []netip.Prefix {
+	var out []netip.Prefix
+	for _, x := range strings.Split(strings.Trim(s, ";"), ";") {
+		if x == "" {
+			continue
+		}
+		if p, err := netip.ParsePrefix(x); err == nil {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func parseEndpoint(ep string) (string, int) {
+	host, portStr := ep, ""
+	if strings.HasPrefix(ep, "[") { // [v6]:port
+		if i := strings.LastIndex(ep, "]"); i >= 0 {
+			host = ep[1:i]
+			if len(ep) > i+1 && ep[i+1] == ':' {
+				portStr = ep[i+2:]
+			}
+		}
+	} else if i := strings.LastIndex(ep, ":"); i >= 0 {
+		host, portStr = ep[:i], ep[i+1:]
+	}
+	port, _ := strconv.Atoi(portStr)
+	return host, port
 }
 
 func parseEthInterface(conn map[string]string, ini map[string]map[string]string) (model.Interface, error) {

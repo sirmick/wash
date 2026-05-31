@@ -1,0 +1,15 @@
+[connection]
+id=lab
+interface-name=eth0.10
+type=vlan
+
+[vlan]
+id=10
+parent=eth0
+
+[ipv4]
+address1=10.10.10.1/24
+method=manual
+
+[ipv6]
+method=auto

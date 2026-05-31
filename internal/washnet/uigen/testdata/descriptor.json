@@ -176,6 +176,18 @@
           "labelKey": "Device.Ports"
         },
         {
+          "name": "Ifname",
+          "option": "ifname",
+          "widget": "text",
+          "labelKey": "Device.Ifname"
+        },
+        {
+          "name": "VID",
+          "option": "vid",
+          "widget": "number",
+          "labelKey": "Device.VID"
+        },
+        {
           "name": "MTU",
           "option": "mtu",
           "widget": "number",

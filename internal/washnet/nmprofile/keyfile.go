@@ -10,7 +10,9 @@ package nmprofile
 
 import (
 	"fmt"
+	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/sirmick/wash/internal/washnet/model"
@@ -26,10 +28,43 @@ func RenderKeyfiles(c model.Config) (map[string]string, error) {
 	for _, d := range c.Devices {
 		devByName[d.Name] = d
 	}
+	ifaceByName := map[string]model.Interface{}
+	for _, i := range c.Interfaces {
+		ifaceByName[i.Name] = i
+	}
 	out := map[string]string{}
+
+	// Wifi: NM merges what UCI splits — a WifiIface plus the network Interface it
+	// references become ONE 802-11-wireless connection. Render those, and mark
+	// their network interfaces so the interface loop doesn't re-emit them.
+	wifiNetworks := map[string]bool{}
+	for _, w := range c.SSIDs {
+		if err := renderWifi(w, ifaceByName[w.Network], out); err != nil {
+			return nil, fmt.Errorf("wifi %q: %w", w.Name, err)
+		}
+		if w.Network != "" {
+			wifiNetworks[w.Network] = true
+		}
+	}
+
 	for _, iface := range c.Interfaces {
+		if wifiNetworks[iface.Name] {
+			continue // already rendered as the wifi connection's IP config
+		}
+		if _, ok := iface.Proto.(model.WireGuardProto); ok {
+			if err := renderWireGuard(iface, c.WGPeers, out); err != nil {
+				return nil, fmt.Errorf("interface %q: %w", iface.Name, err)
+			}
+			continue
+		}
 		if dev, ok := devByName[iface.Device]; ok && dev.Type == "bridge" {
 			if err := renderBridge(iface, dev, out); err != nil {
+				return nil, fmt.Errorf("interface %q: %w", iface.Name, err)
+			}
+			continue
+		}
+		if dev, ok := devByName[iface.Device]; ok && dev.Type == "8021q" {
+			if err := renderVLAN(iface, dev, out); err != nil {
 				return nil, fmt.Errorf("interface %q: %w", iface.Name, err)
 			}
 			continue
@@ -82,6 +117,168 @@ func renderBridge(i model.Interface, dev model.Device, out map[string]string) er
 // portConnID names an enslaved member connection deterministically so the
 // round-trip regenerates an identical keyfile.
 func portConnID(bridge, port string) string { return bridge + "-port-" + port }
+
+// renderVLAN emits a `vlan` connection from an Interface over an 802.1q device.
+func renderVLAN(i model.Interface, dev model.Device, out map[string]string) error {
+	var k keyfile
+	k.section("connection")
+	k.kv("id", i.Name)
+	k.kv("type", "vlan")
+	k.kv("interface-name", dev.Name) // e.g. eth0.10
+	k.section("vlan")
+	k.kv("id", strconv.Itoa(dev.VID))
+	k.kv("parent", dev.Ifname)
+	if err := renderIPv4(&k, i.Proto); err != nil {
+		return err
+	}
+	k.section("ipv6")
+	k.kv("method", "auto")
+	out[i.Name] = k.String()
+	return nil
+}
+
+// ifname is the kernel link name for an interface: its explicit device, else
+// its name (a WireGuard interface like "wg0" carries no separate device).
+func ifname(i model.Interface) string {
+	if i.Device != "" {
+		return i.Device
+	}
+	return i.Name
+}
+
+// renderWireGuard emits a `wireguard` connection: the [wireguard] private
+// key/port, one [wireguard-peer.<pubkey>] section per peer (sorted by key for
+// stable output), and the tunnel addresses split into [ipv4]/[ipv6].
+func renderWireGuard(i model.Interface, allPeers []model.WGPeer, out map[string]string) error {
+	wg := i.Proto.(model.WireGuardProto)
+	var k keyfile
+	k.section("connection")
+	k.kv("id", i.Name)
+	k.kv("type", "wireguard")
+	k.kv("interface-name", ifname(i))
+
+	k.section("wireguard")
+	if wg.PrivateKey != "" {
+		k.kv("private-key", wg.PrivateKey)
+	}
+	if wg.ListenPort != 0 {
+		k.kv("listen-port", strconv.Itoa(wg.ListenPort))
+	}
+
+	var peers []model.WGPeer
+	for _, p := range allPeers {
+		if p.Interface == i.Name {
+			peers = append(peers, p)
+		}
+	}
+	sort.Slice(peers, func(a, b int) bool { return peers[a].PublicKey < peers[b].PublicKey })
+	for _, p := range peers {
+		k.section("wireguard-peer." + p.PublicKey)
+		if len(p.AllowedIPs) > 0 {
+			k.kv("allowed-ips", joinPrefixesSemi(p.AllowedIPs))
+		}
+		if p.EndpointHost != "" {
+			k.kv("endpoint", endpointStr(p.EndpointHost, p.EndpointPort))
+		}
+		if p.PresharedKey != "" {
+			k.kv("preshared-key", p.PresharedKey)
+		}
+		if p.PersistentKeepalive != 0 {
+			k.kv("persistent-keepalive", strconv.Itoa(p.PersistentKeepalive))
+		}
+	}
+
+	var v4, v6 []netip.Prefix
+	for _, a := range wg.Addresses {
+		if a.Addr().Is4() {
+			v4 = append(v4, a)
+		} else {
+			v6 = append(v6, a)
+		}
+	}
+	renderAddrSection(&k, "ipv4", v4)
+	renderAddrSection(&k, "ipv6", v6)
+	out[i.Name] = k.String()
+	return nil
+}
+
+// renderAddrSection writes a manual [ipvN] section from a list of addresses, or
+// method=disabled when there are none (a WireGuard tunnel has no DHCP/SLAAC).
+func renderAddrSection(k *keyfile, sec string, addrs []netip.Prefix) {
+	k.section(sec)
+	if len(addrs) == 0 {
+		k.kv("method", "disabled")
+		return
+	}
+	k.kv("method", "manual")
+	for n, a := range addrs {
+		k.kv(fmt.Sprintf("address%d", n+1), a.String())
+	}
+}
+
+func joinPrefixesSemi(ps []netip.Prefix) string {
+	ss := make([]string, len(ps))
+	for i, p := range ps {
+		ss[i] = p.String()
+	}
+	return strings.Join(ss, ";") + ";"
+}
+
+func endpointStr(host string, port int) string {
+	if strings.Contains(host, ":") { // IPv6 literal
+		return fmt.Sprintf("[%s]:%d", host, port)
+	}
+	return fmt.Sprintf("%s:%d", host, port)
+}
+
+// renderWifi emits an 802-11-wireless connection from a WifiIface merged with
+// the network Interface it references (which carries the addressing).
+func renderWifi(w model.WifiIface, iface model.Interface, out map[string]string) error {
+	var k keyfile
+	k.section("connection")
+	k.kv("id", w.Name)
+	k.kv("type", "802-11-wireless")
+
+	k.section("802-11-wireless")
+	k.kv("mode", nmWifiMode(w.Mode))
+	k.kv("ssid", w.SSID)
+
+	switch e := w.Encryption.(type) {
+	case model.EncPSK2:
+		k.section("802-11-wireless-security")
+		k.kv("key-mgmt", "wpa-psk")
+		if e.Key != "" {
+			k.kv("psk", e.Key)
+		}
+	case model.EncSAE:
+		k.section("802-11-wireless-security")
+		k.kv("key-mgmt", "sae")
+		if e.Key != "" {
+			k.kv("psk", e.Key)
+		}
+	}
+
+	if iface.Proto != nil {
+		if err := renderIPv4(&k, iface.Proto); err != nil {
+			return err
+		}
+	} else {
+		k.section("ipv4")
+		k.kv("method", "auto")
+	}
+	k.section("ipv6")
+	k.kv("method", "auto")
+	out[w.Name] = k.String()
+	return nil
+}
+
+// nmWifiMode maps the model's wifi mode to NM's. Client (sta) → infrastructure.
+func nmWifiMode(mode string) string {
+	if mode == "ap" {
+		return "ap"
+	}
+	return "infrastructure"
+}
 
 // renderIPv4 writes the [ipv4] section from the model's proto union.
 func renderIPv4(k *keyfile, proto model.ProtoConfig) error {

@@ -15,7 +15,8 @@ var update = flag.Bool("update", false, "rewrite .nmconnection golden files")
 
 // Each corpus scenario is a directory under testdata/ holding:
 //
-//	source.uci          the canonical authored config (the IR's input form)
+//	<package>.uci           canonical source, one file per UCI package
+//	                        (network.uci, wireless.uci, …) — the IR's input form
 //	<connID>.nmconnection   the rendered NM connection set (one file per conn)
 //
 // covering the cases that exercise the model↔NM shape gap: eth, bridge, vlan,
@@ -57,11 +58,17 @@ func readSet(t *testing.T, dir string) map[string]string {
 func TestCompile(t *testing.T) {
 	for _, name := range scenarios(t) {
 		t.Run(name, func(t *testing.T) {
-			uci, err := os.ReadFile(filepath.Join("testdata", name, "source.uci"))
-			if err != nil {
-				t.Fatal(err)
+			// Source is per-UCI-package files (network.uci, wireless.uci, …).
+			uciFiles, _ := filepath.Glob(filepath.Join("testdata", name, "*.uci"))
+			pkgs := map[string]string{}
+			for _, f := range uciFiles {
+				b, err := os.ReadFile(f)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pkgs[strings.TrimSuffix(filepath.Base(f), ".uci")] = string(b)
 			}
-			cfg, err := codec.Parse(map[string]string{"network": string(uci)})
+			cfg, err := codec.Parse(pkgs)
 			if err != nil {
 				t.Fatalf("parse uci: %v", err)
 			}

@@ -56,6 +56,8 @@ export interface Device {
   Name?: string;
   Type?: string;
   Ports?: string[];
+  Ifname?: string;
+  VID?: number;
   MTU?: number;
 }
 
