@@ -122,11 +122,30 @@ void WireConn::reader_loop() {
                 json data = m.contains("data") ? m["data"] : json::object();
                 app_msg_handler_(data, win);
             }
+        } else if (t == "window.resize") {
+            // Router → app COMMAND: the shell resized a window's frame.
+            // Hand to the compositor via window_cmd_handler_, which marshals
+            // onto the wlroots thread (single-threaded; cannot touch here).
+            if (window_cmd_handler_) {
+                uint32_t win = m.value("win", 0U);
+                uint32_t w = m.value("w", 0U);
+                uint32_t h = m.value("h", 0U);
+                window_cmd_handler_(t, win, w, h);
+            }
+        } else if (t == "window.close_requested") {
+            // Router → app COMMAND: user clicked the window's close button.
+            // The compositor MUST respond (confirm_close) or the router's
+            // grace timer force-kills the whole process (WIRE.md §10). This
+            // dispatch was previously missing — close silently dropped here
+            // → no veto → grace expiry SIGKILLed the compositor.
+            if (window_cmd_handler_) {
+                uint32_t win = m.value("win", 0U);
+                window_cmd_handler_(t, win, 0, 0);
+            }
         } else if (t == "shutdown") {
             break;
         }
-        // Other window.* events (focus/resize/close_requested) are
-        // consumed by the compositor in later commits; ignored here.
+        // Other window.* events (focus, etc.) are ignored for now.
     }
     alive_.store(false);
     // Wake any blocked callers so they fail instead of hanging.

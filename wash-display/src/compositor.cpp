@@ -592,16 +592,23 @@ void server_new_xwayland_surface(struct wl_listener* listener, void* data) {
 // handler), so wlroots calls are safe. Unknown win (already gone) is a
 // no-op.
 static void apply_win_cmd(const WinCmd& c) {
+    wlr_log(WLR_INFO, "wash-display: apply win cmd t=%s win=%u %ux%u",
+            c.t.c_str(), c.win, c.w, c.h);
     WinRef ref;
     {
         std::lock_guard<std::mutex> lk(g_reg_mu);
         auto it = g_win_reg.find(c.win);
-        if (it == g_win_reg.end()) return;
+        if (it == g_win_reg.end()) {
+            wlr_log(WLR_ERROR, "wash-display: win cmd t=%s for unknown win=%u (gone?)",
+                    c.t.c_str(), c.win);
+            return;
+        }
         ref = it->second;
     }
     if (ref.kind == WinRef::XDG) {
         Toplevel* t = static_cast<Toplevel*>(ref.ptr);
         if (c.t == "window.resize" && c.w && c.h) {
+            wlr_log(WLR_INFO, "wash-display: xdg set_size win=%u -> %ux%u", c.win, c.w, c.h);
             wlr_xdg_toplevel_set_size(t->xdg_toplevel, c.w, c.h);
         } else if (c.t == "window.close_requested") {
             // Veto the router's auto-destroy; ask the client to close
@@ -614,6 +621,7 @@ static void apply_win_cmd(const WinCmd& c) {
 #ifdef WASH_DISPLAY_XWAYLAND
         XSurface* x = static_cast<XSurface*>(ref.ptr);
         if (c.t == "window.resize" && c.w && c.h) {
+            wlr_log(WLR_INFO, "wash-display: X11 configure win=%u -> %ux%u", c.win, c.w, c.h);
             wlr_xwayland_surface_configure(x->xsurf, x->xsurf->x, x->xsurf->y,
                                            (uint16_t)c.w, (uint16_t)c.h);
         } else if (c.t == "window.close_requested") {
