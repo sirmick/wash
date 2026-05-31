@@ -51,8 +51,8 @@ type Status struct {
 	Devices      []Device `json:"devices"`
 }
 
-func str(v dbus.Variant) string  { s, _ := v.Value().(string); return s }
-func u32(v dbus.Variant) uint32  { n, _ := v.Value().(uint32); return n }
+func str(v dbus.Variant) string { s, _ := v.Value().(string); return s }
+func u32(v dbus.Variant) uint32 { n, _ := v.Value().(uint32); return n }
 
 // Status reads NM's version, overall state, connectivity, and device list.
 func (c *Conn) Status() (*Status, error) {
@@ -85,6 +85,24 @@ func (c *Conn) Status() (*Status, error) {
 		s.Devices = append(s.Devices, d)
 	}
 	return s, nil
+}
+
+// Connectivity levels (NMConnectivityState).
+const (
+	ConnUnknown uint32 = 0
+	ConnNone    uint32 = 1
+	ConnPortal  uint32 = 2
+	ConnLimited uint32 = 3
+	ConnFull    uint32 = 4
+)
+
+// CheckConnectivity forces an immediate connectivity check and returns the
+// resulting NMConnectivityState. Unlike the cached Connectivity property this is
+// synchronous, which is what makes the commit-confirm VERIFY deterministic.
+func (c *Conn) CheckConnectivity() (uint32, error) {
+	var state uint32
+	err := c.nm.Call(iface+".CheckConnectivity", 0).Store(&state)
+	return state, err
 }
 
 // StateName renders an NMState enum value (nm-dbus-types.h).

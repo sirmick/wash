@@ -48,6 +48,8 @@ CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" \
   go build -trimpath -ldflags="-s -w" -o "$BUILD/washnet-apply" "$ROOT_DIR/cmd/washnet-apply"
 CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" \
   go build -trimpath -ldflags="-s -w" -o "$BUILD/washnet-read" "$ROOT_DIR/cmd/washnet-read"
+CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" \
+  go build -trimpath -ldflags="-s -w" -o "$BUILD/washnet-cc" "$ROOT_DIR/cmd/washnet-cc"
 
 # The multicall wash binary (router + apps, incl. com.wash.net/.netd) is the
 # real payload (docs/NET.md §8.3 — the VM serves everything). It embeds every
@@ -90,6 +92,7 @@ NMCONF
 install -Dm755 "$BUILD/washnet-nmprobe" "$RFS/usr/bin/washnet-nmprobe"
 install -Dm755 "$BUILD/washnet-apply" "$RFS/usr/bin/washnet-apply"
 install -Dm755 "$BUILD/washnet-read" "$RFS/usr/bin/washnet-read"
+install -Dm755 "$BUILD/washnet-cc" "$RFS/usr/bin/washnet-cc"
 
 # Bake the multicall + materialize the per-app symlinks the router scans. The
 # host binary is the same arch (amd64), so run it on the host to emit symlinks

@@ -49,13 +49,39 @@ func (c *Conn) connectionByID(id string) (dbus.ObjectPath, error) {
 // Activate brings a connection up, letting NM pick/create the device (device
 // and specific-object "/"). Activating a bridge-port pulls up its master; a
 // vlan/bridge connection creates its link.
+//
+// If the connection is ALREADY active (e.g. we just rewrote an interface's
+// keyfile), ActivateConnection alone won't re-read the changed settings — NM
+// considers it active and no-ops. So deactivate the live instance first to force
+// a fresh apply. For a brand-new connection this finds nothing and is a no-op.
 func (c *Conn) Activate(id string) error {
 	p, err := c.connectionByID(id)
 	if err != nil {
 		return err
 	}
+	c.deactivateConnection(p)
 	var ac dbus.ObjectPath
 	return c.nm.Call(iface+".ActivateConnection", 0, p, dbus.ObjectPath("/"), dbus.ObjectPath("/")).Store(&ac)
+}
+
+// deactivateConnection tears down any active instance of the given settings
+// connection so its next activation re-reads changed settings. Best-effort.
+func (c *Conn) deactivateConnection(connPath dbus.ObjectPath) {
+	v, err := c.nm.GetProperty(iface + ".ActiveConnections")
+	if err != nil {
+		return
+	}
+	actives, _ := v.Value().([]dbus.ObjectPath)
+	for _, ac := range actives {
+		o := c.bus.Object(dest, ac)
+		cv, err := o.GetProperty(iface + ".Connection.Active.Connection")
+		if err != nil {
+			continue
+		}
+		if p, _ := cv.Value().(dbus.ObjectPath); p == connPath {
+			_ = c.nm.Call(iface+".DeactivateConnection", 0, ac).Err
+		}
+	}
 }
 
 // Apply renders cfg to NM keyfiles, installs them in the system-connections dir
