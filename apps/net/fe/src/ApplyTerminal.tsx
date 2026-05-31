@@ -33,9 +33,6 @@ export interface ApplyTerminalProps {
   events: () => ApplyEvent[];
   remainingMs: () => number; // countdown while await-confirm; 0 otherwise
   windowMs: () => number; // the full confirm window, for the bar ratio
-  busy: () => boolean;
-  canApply: () => boolean;
-  onApply: () => void;
   onKeep: () => void;
   onDiscard: () => void;
 }
@@ -88,16 +85,11 @@ export function ApplyTerminal(props: ApplyTerminalProps) {
       <Show
         when={awaiting()}
         fallback={
+          // Applies are initiated per-connection from the wizards (each Create
+          // runs its own commit-confirm), so the terminal just reflects the
+          // resulting status; there is no standalone Apply button.
           <div class="wash-net-applybar">
             <span class="wash-net-status" data-status={props.status()}>{props.status()}</span>
-            <button
-              class="wash-net-btn primary"
-              data-testid="apply-button"
-              disabled={props.busy() || !props.canApply()}
-              onClick={() => props.onApply()}
-            >
-              {props.busy() ? "Applying…" : "Apply"}
-            </button>
           </div>
         }
       >

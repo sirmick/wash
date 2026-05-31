@@ -13,6 +13,7 @@
 //
 // FE↔BE wire (own-FE request/reply, correlated by `id`):
 //
+//	→ {kind:"current",  id}               ← {kind:"current_ok", id, config, caps, devices}
 //	→ {kind:"validate", id, config:{…}}   ← {kind:"validate_ok", id, diagnostics:[…]}
 //	→ {kind:"diff",     id, config:{…}}   ← {kind:"diff_ok", id, entries, summary}
 //	→ {kind:"apply",    id, config:{…}}   ← {kind:"apply_ok", id, state, events, …}
@@ -48,13 +49,13 @@ const (
 	NetdAppID = "com.wash.netd"
 )
 
-// netIcon is a minimal inline SVG (globe + nodes). Manifest requires an icon for
-// windowed apps; kept tiny to stay well under the 64KB cap.
-const netIcon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%236090e0" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>`
+// netIcon is the lucide "network" glyph as an inline SVG. Manifest requires an
+// icon for windowed apps; kept tiny to stay well under the 64KB cap.
+const netIcon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%236090e0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/></svg>`
 
 // proxyKinds are the FE→BE request kinds relayed to com.wash.netd. Each is a
 // request/reply round-trip correlated by the FE's `id`.
-var proxyKinds = []string{"validate", "diff", "apply", "confirm", "revert"}
+var proxyKinds = []string{"current", "validate", "diff", "apply", "confirm", "revert"}
 
 var def *sdk.AppDef
 
@@ -74,7 +75,7 @@ func init() {
 			Icon:            netIcon,
 			Accent:          "#6090e0",
 			Instancing:      sdk.InstancingSingle,
-			Window:          &sdk.WindowHints{DefaultWidth: 820, DefaultHeight: 620},
+			Window:          &sdk.WindowHints{DefaultWidth: 574, DefaultHeight: 620},
 		},
 		Assets:  sub,
 		OnReady: onReady,

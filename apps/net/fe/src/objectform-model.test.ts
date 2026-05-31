@@ -29,7 +29,7 @@ function field(groups: GroupView[], name: string): FieldView | undefined {
 
 test("every descriptor object builds without throwing", () => {
   for (const o of desc.objects) {
-    const fv = buildForm(o, {}, [], { showAdvanced: true, pathPrefix: `${o.goType}[0]` });
+    const fv = buildForm(o, {}, [], { pathPrefix: `${o.goType}[0]` });
     assert.ok(fv.groups.length >= 0);
   }
 });
@@ -41,7 +41,7 @@ test("interface static proto: union resolves, variant fields appear", () => {
     Device: "br-lan",
     Proto: { _tag: "static", IPAddr: "192.168.1.1/24" },
   };
-  const form = buildForm(iface, value, [], { showAdvanced: false, pathPrefix: "Interfaces[0]" });
+  const form = buildForm(iface, value, [], { pathPrefix: "Interfaces[0]" });
 
   const proto = field(form.groups, "Proto")!;
   assert.ok(proto.union, "Proto should carry a union view");
@@ -61,7 +61,7 @@ test("union switches variant by _tag", () => {
     iface,
     { Name: "wan", Proto: { _tag: "pppoe", Username: "u" } },
     [],
-    { showAdvanced: false, pathPrefix: "Interfaces[0]" },
+    { pathPrefix: "Interfaces[0]" },
   );
   const proto = field(form.groups, "Proto")!;
   assert.equal(proto.union!.tag, "pppoe");
@@ -70,17 +70,15 @@ test("union switches variant by _tag", () => {
   assert.ok(!names.includes("IPAddr"), "should not show static fields under pppoe");
 });
 
-test("advanced fields hidden unless showAdvanced", () => {
+test("formerly-advanced fields always show (no basic/advanced split)", () => {
   const iface = descriptorFor(desc, "network/interface")!;
   const value = { Name: "lan", Proto: { _tag: "static", IPAddr: "10.0.0.1/24", DNS: ["1.1.1.1"] } };
 
-  const basic = buildForm(iface, value, [], { showAdvanced: false, pathPrefix: "Interfaces[0]" });
-  const adv = buildForm(iface, value, [], { showAdvanced: true, pathPrefix: "Interfaces[0]" });
-
-  const dnsHidden = field(basic.groups, "Proto")!.union!.fields.some((f) => f.field.name === "DNS");
-  const dnsShown = field(adv.groups, "Proto")!.union!.fields.some((f) => f.field.name === "DNS");
-  assert.equal(dnsHidden, false, "DNS is advanced; hidden by default");
-  assert.equal(dnsShown, true, "DNS shown when showAdvanced");
+  // DNS carries advanced:true in the descriptor; it must still render — the
+  // distinction was removed, every field is always visible.
+  const form = buildForm(iface, value, [], { pathPrefix: "Interfaces[0]" });
+  const dns = field(form.groups, "Proto")!.union!.fields.find((f) => f.field.name === "DNS");
+  assert.ok(dns, "DNS (advanced) should always show");
 });
 
 test("diagnostics map onto fields by path (incl. union subfields)", () => {
@@ -89,7 +87,7 @@ test("diagnostics map onto fields by path (incl. union subfields)", () => {
     { path: "Interfaces[0].Name", code: "required", message: "Name is required", severity: "error" as const },
     { path: "Interfaces[0].Proto.IPAddr", code: "required", message: "needs an ipaddr", severity: "error" as const },
   ];
-  const form = buildForm(iface, { Proto: { _tag: "static" } }, diags, { showAdvanced: false, pathPrefix: "Interfaces[0]" });
+  const form = buildForm(iface, { Proto: { _tag: "static" } }, diags, { pathPrefix: "Interfaces[0]" });
 
   assert.equal(field(form.groups, "Name")!.error, "Name is required");
   const ipaddr = field(form.groups, "Proto")!.union!.fields.find((f) => f.field.name === "IPAddr")!;
@@ -103,7 +101,7 @@ test("error preferred over warning on the same path; int severity tolerated", ()
     { path: "Zones[0].Input", code: "x", message: "warn", severity: 1 },
     { path: "Zones[0].Input", code: "y", message: "err", severity: 0 },
   ];
-  const form = buildForm(zone, { Name: "lan" }, diags, { showAdvanced: false, pathPrefix: "Zones[0]" });
+  const form = buildForm(zone, { Name: "lan" }, diags, { pathPrefix: "Zones[0]" });
   const input = field(form.groups, "Input")!;
   assert.equal(input.error, "err");
   assert.equal(input.severity, "error");
@@ -111,11 +109,11 @@ test("error preferred over warning on the same path; int severity tolerated", ()
 
 test("widget + ref metadata flow through (mac, list-ref)", () => {
   const host = descriptorFor(desc, "dhcp/host")!;
-  const hf = buildForm(host, {}, [], { showAdvanced: true, pathPrefix: "Hosts[0]" });
+  const hf = buildForm(host, {}, [], { pathPrefix: "Hosts[0]" });
   assert.equal(field(hf.groups, "MAC")!.field.widget, "mac");
 
   const zone = descriptorFor(desc, "firewall/zone")!;
-  const zf = buildForm(zone, {}, [], { showAdvanced: true, pathPrefix: "Zones[0]" });
+  const zf = buildForm(zone, {}, [], { pathPrefix: "Zones[0]" });
   const nets = field(zf.groups, "Networks")!;
   assert.equal(nets.field.ref, "interface");
   assert.equal(nets.field.list, true);
@@ -123,7 +121,17 @@ test("widget + ref metadata flow through (mac, list-ref)", () => {
 
 test("fields are grouped; section-name lands in a group", () => {
   const iface = descriptorFor(desc, "network/interface")!;
-  const form = buildForm(iface, { Name: "lan", Proto: { _tag: "dhcp" } }, [], { showAdvanced: false, pathPrefix: "Interfaces[0]" });
+  const form = buildForm(iface, { Name: "lan", Proto: { _tag: "dhcp" } }, [], { pathPrefix: "Interfaces[0]" });
   assert.ok(field(form.groups, "Name"), "Name (section-name) should be present");
   assert.ok(form.groups.length >= 1);
+});
+
+test("fieldless variant (none) builds without throwing", () => {
+  const iface = descriptorFor(desc, "network/interface")!;
+  // NoneProto has no fields → variant.fields is null in the descriptor; buildForm
+  // must not throw (a throw here freezes the whole reactive form).
+  const form = buildForm(iface, { Proto: { _tag: "none" } }, [], { pathPrefix: "Interfaces[0]" });
+  const proto = field(form.groups, "Proto")!;
+  assert.equal(proto.union!.tag, "none");
+  assert.deepEqual(proto.union!.fields, []);
 });

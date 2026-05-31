@@ -174,7 +174,7 @@ func genProto(r *rand.Rand) model.ProtoConfig {
 		}
 		return model.DHCPProto{}
 	case 3:
-		return model.DHCPv6Proto{}
+		return model.NoneProto{}
 	case 4:
 		return model.PPPoEProto{Username: "user", Password: "pass"}
 	default:

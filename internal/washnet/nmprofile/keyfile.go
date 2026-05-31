@@ -76,11 +76,9 @@ func RenderKeyfiles(c model.Config) (map[string]string, error) {
 		if iface.Device != "" {
 			k.kv("interface-name", iface.Device)
 		}
-		if err := renderIPv4(&k, iface.Proto); err != nil {
+		if err := renderAddressing(&k, iface.Proto); err != nil {
 			return nil, fmt.Errorf("interface %q: %w", iface.Name, err)
 		}
-		k.section("ipv6")
-		k.kv("method", "auto")
 		out[iface.Name] = k.String()
 	}
 	return out, nil
@@ -94,11 +92,9 @@ func renderBridge(i model.Interface, dev model.Device, out map[string]string) er
 	k.kv("id", i.Name)
 	k.kv("type", "bridge")
 	k.kv("interface-name", dev.Name)
-	if err := renderIPv4(&k, i.Proto); err != nil {
+	if err := renderAddressing(&k, i.Proto); err != nil {
 		return err
 	}
-	k.section("ipv6")
-	k.kv("method", "auto")
 	out[i.Name] = k.String()
 
 	for _, port := range dev.Ports {
@@ -128,11 +124,9 @@ func renderVLAN(i model.Interface, dev model.Device, out map[string]string) erro
 	k.section("vlan")
 	k.kv("id", strconv.Itoa(dev.VID))
 	k.kv("parent", dev.Ifname)
-	if err := renderIPv4(&k, i.Proto); err != nil {
+	if err := renderAddressing(&k, i.Proto); err != nil {
 		return err
 	}
-	k.section("ipv6")
-	k.kv("method", "auto")
 	out[i.Name] = k.String()
 	return nil
 }
@@ -259,15 +253,15 @@ func renderWifi(w model.WifiIface, iface model.Interface, out map[string]string)
 	}
 
 	if iface.Proto != nil {
-		if err := renderIPv4(&k, iface.Proto); err != nil {
+		if err := renderAddressing(&k, iface.Proto); err != nil {
 			return err
 		}
 	} else {
 		k.section("ipv4")
 		k.kv("method", "auto")
+		k.section("ipv6")
+		k.kv("method", "auto")
 	}
-	k.section("ipv6")
-	k.kv("method", "auto")
 	out[w.Name] = k.String()
 	return nil
 }
@@ -280,7 +274,18 @@ func nmWifiMode(mode string) string {
 	return "infrastructure"
 }
 
-// renderIPv4 writes the [ipv4] section from the model's proto union.
+// renderAddressing writes both the [ipv4] and [ipv6] sections for the model's
+// proto union — the two address families live in one connection.
+func renderAddressing(k *keyfile, proto model.ProtoConfig) error {
+	if err := renderIPv4(k, proto); err != nil {
+		return err
+	}
+	renderIPv6(k, proto)
+	return nil
+}
+
+// renderIPv4 writes the [ipv4] section from the model's proto union. DNS is
+// split by family — only the v4 servers land here (v6 ones go under [ipv6]).
 func renderIPv4(k *keyfile, proto model.ProtoConfig) error {
 	k.section("ipv4")
 	switch p := proto.(type) {
@@ -291,21 +296,81 @@ func renderIPv4(k *keyfile, proto model.ProtoConfig) error {
 			addr += "," + p.Gateway.String()
 		}
 		k.kv("address1", addr)
-		if len(p.DNS) > 0 {
-			ss := make([]string, len(p.DNS))
-			for n, d := range p.DNS {
-				ss[n] = d.String()
-			}
-			k.kv("dns", strings.Join(ss, ";")+";")
+		if dns := dnsByFamily(p.DNS, true); dns != "" {
+			k.kv("dns", dns)
 		}
 	case model.DHCPProto:
-		k.kv("method", "auto")
+		if v4, _ := dhcpFamilies(p); v4 {
+			k.kv("method", "auto")
+			if p.Hostname != "" {
+				k.kv("dhcp-hostname", p.Hostname)
+			}
+		} else {
+			k.kv("method", "disabled")
+		}
 	case model.NoneProto:
 		k.kv("method", "disabled")
 	default:
 		return fmt.Errorf("proto %q not yet supported by the nm backend", proto.UCITag())
 	}
 	return nil
+}
+
+// renderIPv6 writes the [ipv6] section. A static interface gets manual v6
+// addressing when an IP6Addr is set, otherwise SLAAC ("auto") so a v4-only
+// static box still autoconfigures IPv6; "none" disables it.
+func renderIPv6(k *keyfile, proto model.ProtoConfig) {
+	k.section("ipv6")
+	switch p := proto.(type) {
+	case model.StaticProto:
+		if p.IP6Addr.IsValid() {
+			k.kv("method", "manual")
+			addr := p.IP6Addr.String()
+			if p.IP6Gw.IsValid() {
+				addr += "," + p.IP6Gw.String()
+			}
+			k.kv("address1", addr)
+		} else {
+			k.kv("method", "auto")
+		}
+		if dns := dnsByFamily(p.DNS, false); dns != "" {
+			k.kv("dns", dns)
+		}
+	case model.DHCPProto:
+		if _, v6 := dhcpFamilies(p); v6 {
+			k.kv("method", "auto")
+		} else {
+			k.kv("method", "disabled")
+		}
+	case model.NoneProto:
+		k.kv("method", "disabled")
+	default:
+		k.kv("method", "auto")
+	}
+}
+
+// dhcpFamilies resolves which families a DHCP interface requests. A bare "dhcp"
+// with neither flag set (e.g. from UCI `proto dhcp`, or a default) means BOTH —
+// only an explicit single-family choice narrows it.
+func dhcpFamilies(p model.DHCPProto) (v4, v6 bool) {
+	if !p.IPv4 && !p.IPv6 {
+		return true, true
+	}
+	return p.IPv4, p.IPv6
+}
+
+// dnsByFamily joins the v4 (or v6) DNS servers into NM's "a;b;" form, or "".
+func dnsByFamily(dns []netip.Addr, v4 bool) string {
+	var ss []string
+	for _, d := range dns {
+		if d.Is4() == v4 {
+			ss = append(ss, d.String())
+		}
+	}
+	if len(ss) == 0 {
+		return ""
+	}
+	return strings.Join(ss, ";") + ";"
 }
 
 // keyfile builds NM keyfile (INI) text: sections in append order, keys sorted

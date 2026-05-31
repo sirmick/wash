@@ -54,7 +54,7 @@ func ParseKeyfiles(kfs map[string]string) (model.Config, error) {
 	for _, b := range bridges {
 		ifname := b.conn["interface-name"]
 		c.Devices = append(c.Devices, model.Device{Name: ifname, Type: "bridge", Ports: ports[ifname]})
-		proto, err := parseIPv4(b.ini["ipv4"])
+		proto, err := parseAddressing(b.ini)
 		if err != nil {
 			return c, fmt.Errorf("bridge %q: %w", b.conn["id"], err)
 		}
@@ -72,7 +72,7 @@ func ParseKeyfiles(kfs map[string]string) (model.Config, error) {
 		vid, _ := strconv.Atoi(vl["id"])
 		dev := model.Device{Name: v.conn["interface-name"], Type: "8021q", Ifname: vl["parent"], VID: vid}
 		c.Devices = append(c.Devices, dev)
-		proto, err := parseIPv4(v.ini["ipv4"])
+		proto, err := parseAddressing(v.ini)
 		if err != nil {
 			return c, fmt.Errorf("vlan %q: %w", v.conn["id"], err)
 		}
@@ -109,7 +109,7 @@ func parseWifi(conn map[string]string, ini map[string]map[string]string) (model.
 	default:
 		w.Encryption = model.EncNone{}
 	}
-	proto, err := parseIPv4(ini["ipv4"])
+	proto, err := parseAddressing(ini)
 	if err != nil {
 		return w, model.Interface{}, err
 	}
@@ -215,12 +215,88 @@ func parseEndpoint(ep string) (string, int) {
 
 func parseEthInterface(conn map[string]string, ini map[string]map[string]string) (model.Interface, error) {
 	i := model.Interface{Name: conn["id"], Device: conn["interface-name"]}
-	proto, err := parseIPv4(ini["ipv4"])
+	proto, err := parseAddressing(ini)
 	if err != nil {
 		return i, err
 	}
 	i.Proto = proto
 	return i, nil
+}
+
+// parseAddressing maps a connection's [ipv4] + [ipv6] sections to the proto
+// union. The v4 section sets the variant; a static one is then augmented with
+// any manual IPv6 address/gateway + v6 DNS servers so the round-trip is lossless.
+func parseAddressing(ini map[string]map[string]string) (model.ProtoConfig, error) {
+	proto, err := parseIPv4(ini["ipv4"])
+	if err != nil {
+		return nil, err
+	}
+	ip4, ip6 := ini["ipv4"], ini["ipv6"]
+	m6 := ip6["method"]
+	switch p := proto.(type) {
+	case model.StaticProto:
+		if err := augmentIPv6(&p, ip6); err != nil {
+			return nil, err
+		}
+		return p, nil
+	case model.DHCPProto:
+		// [ipv4] auto set the dhcp variant; carry the v4 flag + hostname and
+		// derive the v6 flag from the [ipv6] section.
+		p.IPv4 = true
+		p.IPv6 = m6 == "auto"
+		p.Hostname = ip4["dhcp-hostname"]
+		return p, nil
+	case model.NoneProto:
+		// [ipv4] disabled, but the box may still do v6: auto → DHCPv6-only,
+		// manual → static-v6-only, disabled → genuinely no addressing.
+		switch m6 {
+		case "auto":
+			return model.DHCPProto{IPv6: true, Hostname: ip6["dhcp-hostname"]}, nil
+		case "manual":
+			var sp model.StaticProto
+			if err := augmentIPv6(&sp, ip6); err != nil {
+				return nil, err
+			}
+			return sp, nil
+		}
+		return p, nil
+	}
+	return proto, nil
+}
+
+// augmentIPv6 fills a StaticProto's IPv6 address/gateway + v6 DNS from a manual
+// [ipv6] section (no-op when the section isn't manual).
+func augmentIPv6(sp *model.StaticProto, ip6 map[string]string) error {
+	if ip6["method"] == "manual" {
+		if a := ip6["address1"]; a != "" {
+			parts := strings.SplitN(a, ",", 2)
+			pfx, err := netip.ParsePrefix(strings.TrimSpace(parts[0]))
+			if err != nil {
+				return fmt.Errorf("ipv6 address1 %q: %w", a, err)
+			}
+			sp.IP6Addr = pfx
+			if len(parts) == 2 {
+				gw, err := netip.ParseAddr(strings.TrimSpace(parts[1]))
+				if err != nil {
+					return fmt.Errorf("ipv6 gateway in %q: %w", a, err)
+				}
+				sp.IP6Gw = gw
+			}
+		}
+	}
+	if d := strings.Trim(ip6["dns"], ";"); d != "" {
+		for _, s := range strings.Split(d, ";") {
+			if s == "" {
+				continue
+			}
+			addr, err := netip.ParseAddr(s)
+			if err != nil {
+				return fmt.Errorf("ipv6 dns %q: %w", s, err)
+			}
+			sp.DNS = append(sp.DNS, addr)
+		}
+	}
+	return nil
 }
 
 // parseIPv4 maps an [ipv4] section to the model's proto union.

@@ -55,18 +55,24 @@
                 "goType": "DHCPProto",
                 "fields": [
                   {
+                    "name": "IPv4",
+                    "option": "ipv4",
+                    "widget": "toggle",
+                    "labelKey": "DHCPProto.IPv4"
+                  },
+                  {
+                    "name": "IPv6",
+                    "option": "ipv6",
+                    "widget": "toggle",
+                    "labelKey": "DHCPProto.IPv6"
+                  },
+                  {
                     "name": "Hostname",
                     "option": "hostname",
                     "widget": "text",
-                    "advanced": true,
                     "labelKey": "DHCPProto.Hostname"
                   }
                 ]
-              },
-              {
-                "tag": "dhcpv6",
-                "goType": "DHCPv6Proto",
-                "fields": null
               },
               {
                 "tag": "none",
@@ -110,12 +116,25 @@
                     "labelKey": "StaticProto.Gateway"
                   },
                   {
+                    "name": "IP6Addr",
+                    "option": "ip6addr",
+                    "widget": "cidr",
+                    "group": "addressing",
+                    "labelKey": "StaticProto.IP6Addr"
+                  },
+                  {
+                    "name": "IP6Gw",
+                    "option": "ip6gw",
+                    "widget": "ip",
+                    "group": "addressing",
+                    "labelKey": "StaticProto.IP6Gw"
+                  },
+                  {
                     "name": "DNS",
                     "option": "dns",
                     "widget": "list-ip",
                     "group": "addressing",
                     "list": true,
-                    "advanced": true,
                     "labelKey": "StaticProto.DNS"
                   }
                 ]
@@ -191,7 +210,6 @@
           "name": "MTU",
           "option": "mtu",
           "widget": "number",
-          "advanced": true,
           "labelKey": "Device.MTU"
         }
       ]
@@ -225,14 +243,12 @@
           "name": "Metric",
           "option": "metric",
           "widget": "number",
-          "advanced": true,
           "labelKey": "Route.Metric"
         },
         {
           "name": "Table",
           "option": "table",
           "widget": "text",
-          "advanced": true,
           "labelKey": "Route.Table"
         }
       ]
@@ -279,7 +295,6 @@
           "name": "Priority",
           "option": "priority",
           "widget": "number",
-          "advanced": true,
           "labelKey": "PolicyRule.Priority"
         }
       ]
@@ -313,7 +328,6 @@
           "name": "PresharedKey",
           "option": "preshared_key",
           "widget": "password",
-          "advanced": true,
           "labelKey": "WGPeer.PresharedKey"
         },
         {
@@ -339,14 +353,12 @@
           "name": "PersistentKeepalive",
           "option": "persistent_keepalive",
           "widget": "number",
-          "advanced": true,
           "labelKey": "WGPeer.PersistentKeepalive"
         },
         {
           "name": "RouteAllowedIPs",
           "option": "route_allowed_ips",
           "widget": "toggle",
-          "advanced": true,
           "labelKey": "WGPeer.RouteAllowedIPs"
         }
       ]
@@ -379,7 +391,6 @@
           "name": "SynFlood",
           "option": "syn_flood",
           "widget": "toggle",
-          "advanced": true,
           "labelKey": "Defaults.SynFlood"
         }
       ]
@@ -432,7 +443,6 @@
           "name": "MTUFix",
           "option": "mtu_fix",
           "widget": "toggle",
-          "advanced": true,
           "labelKey": "Zone.MTUFix"
         }
       ]
@@ -571,7 +581,6 @@
           "name": "Family",
           "option": "family",
           "widget": "text",
-          "advanced": true,
           "labelKey": "FirewallRule.Family"
         }
       ]
@@ -646,21 +655,18 @@
           "name": "DomainNeeded",
           "option": "domainneeded",
           "widget": "toggle",
-          "advanced": true,
           "labelKey": "Dnsmasq.DomainNeeded"
         },
         {
           "name": "BogusPriv",
           "option": "boguspriv",
           "widget": "toggle",
-          "advanced": true,
           "labelKey": "Dnsmasq.BogusPriv"
         },
         {
           "name": "Local",
           "option": "local",
           "widget": "text",
-          "advanced": true,
           "labelKey": "Dnsmasq.Local"
         },
         {
@@ -673,7 +679,6 @@
           "name": "ExpandHosts",
           "option": "expandhosts",
           "widget": "toggle",
-          "advanced": true,
           "labelKey": "Dnsmasq.ExpandHosts"
         },
         {
@@ -732,14 +737,12 @@
           "name": "RA",
           "option": "ra",
           "widget": "text",
-          "advanced": true,
           "labelKey": "DHCPPool.RA"
         },
         {
           "name": "DHCPv6",
           "option": "dhcpv6",
           "widget": "text",
-          "advanced": true,
           "labelKey": "DHCPPool.DHCPv6"
         }
       ]
@@ -778,7 +781,6 @@
           "name": "LeaseTime",
           "option": "leasetime",
           "widget": "text",
-          "advanced": true,
           "labelKey": "Host.LeaseTime"
         }
       ]
@@ -839,7 +841,6 @@
           "name": "Type",
           "option": "type",
           "widget": "text",
-          "advanced": true,
           "labelKey": "WifiDevice.Type"
         },
         {
@@ -858,7 +859,6 @@
           "name": "HTMode",
           "option": "htmode",
           "widget": "text",
-          "advanced": true,
           "labelKey": "WifiDevice.HTMode"
         },
         {
@@ -957,14 +957,12 @@
           "name": "Hidden",
           "option": "hidden",
           "widget": "toggle",
-          "advanced": true,
           "labelKey": "WifiIface.Hidden"
         },
         {
           "name": "Isolate",
           "option": "isolate",
           "widget": "toggle",
-          "advanced": true,
           "labelKey": "WifiIface.Isolate"
         }
       ]

@@ -47,7 +47,7 @@ func TestDescriptorSanity(t *testing.T) {
 	for _, v := range proto.Union.Variants {
 		tags[v.Tag] = true
 	}
-	for _, want := range []string{"static", "dhcp", "wireguard", "pppoe", "none", "dhcpv6"} {
+	for _, want := range []string{"static", "dhcp", "wireguard", "pppoe", "none"} {
 		if !tags[want] {
 			t.Errorf("proto union missing variant %q", want)
 		}

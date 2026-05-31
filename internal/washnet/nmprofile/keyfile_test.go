@@ -8,7 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"net/netip"
+
 	"github.com/sirmick/wash/internal/washnet/codec"
+	"github.com/sirmick/wash/internal/washnet/model"
 )
 
 var update = flag.Bool("update", false, "rewrite .nmconnection golden files")
@@ -129,5 +132,80 @@ func assertSet(t *testing.T, got, want map[string]string) {
 		if _, ok := want[id]; !ok {
 			t.Errorf("unexpected extra connection %q\n%s", id, got[id])
 		}
+	}
+}
+
+// TestIPv6DualStack locks in the IPv6 addressing path: a static interface with
+// both v4 and v6 addresses + mixed DNS renders manual [ipv4] AND [ipv6], and
+// round-trips back to the same model (NM keyfiles → model → keyfiles).
+func TestIPv6DualStack(t *testing.T) {
+	cfg := model.Config{
+		Interfaces: []model.Interface{{
+			Name:   "wan",
+			Device: "eth0",
+			Proto: model.StaticProto{
+				IPAddr:  netip.MustParsePrefix("192.0.2.10/24"),
+				Gateway: netip.MustParseAddr("192.0.2.1"),
+				IP6Addr: netip.MustParsePrefix("2001:db8::10/64"),
+				IP6Gw:   netip.MustParseAddr("2001:db8::1"),
+				DNS:     []netip.Addr{netip.MustParseAddr("1.1.1.1"), netip.MustParseAddr("2606:4700:4700::1111")},
+			},
+		}},
+	}
+	kfs, err := RenderKeyfiles(cfg)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	wan := kfs["wan"]
+	for _, want := range []string{
+		"[ipv4]", "address1=192.0.2.10/24,192.0.2.1", "dns=1.1.1.1;",
+		"[ipv6]", "method=manual", "address1=2001:db8::10/64,2001:db8::1", "dns=2606:4700:4700::1111;",
+	} {
+		if !strings.Contains(wan, want) {
+			t.Errorf("rendered wan missing %q:\n%s", want, wan)
+		}
+	}
+
+	cfg2, err := ParseKeyfiles(kfs)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	sp, ok := cfg2.Interfaces[0].Proto.(model.StaticProto)
+	if !ok {
+		t.Fatalf("proto = %T, want StaticProto", cfg2.Interfaces[0].Proto)
+	}
+	if sp.IP6Addr.String() != "2001:db8::10/64" || sp.IP6Gw.String() != "2001:db8::1" {
+		t.Errorf("ipv6 round-trip lost address/gw: %+v", sp)
+	}
+	if len(sp.DNS) != 2 {
+		t.Errorf("DNS round-trip = %v, want both families", sp.DNS)
+	}
+}
+
+// TestDHCPFamilies locks in per-family DHCP: a v4-only DHCP renders [ipv4] auto +
+// [ipv6] disabled and round-trips, and a bare dhcp (no family flags) means both.
+func TestDHCPFamilies(t *testing.T) {
+	v4only := model.Config{Interfaces: []model.Interface{{Name: "wan", Device: "eth0", Proto: model.DHCPProto{IPv4: true}}}}
+	kfs, err := RenderKeyfiles(v4only)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	wan := kfs["wan"]
+	if !strings.Contains(wan, "[ipv4]\nmethod=auto") || !strings.Contains(wan, "[ipv6]\nmethod=disabled") {
+		t.Errorf("v4-only dhcp wrong sections:\n%s", wan)
+	}
+	cfg2, err := ParseKeyfiles(kfs)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	dp, ok := cfg2.Interfaces[0].Proto.(model.DHCPProto)
+	if !ok || !dp.IPv4 || dp.IPv6 {
+		t.Errorf("v4-only round-trip = %+v (want IPv4 only)", cfg2.Interfaces[0].Proto)
+	}
+
+	// Bare dhcp (no flags) ⇒ both families auto.
+	both, _ := RenderKeyfiles(model.Config{Interfaces: []model.Interface{{Name: "w", Device: "eth0", Proto: model.DHCPProto{}}}})
+	if !strings.Contains(both["w"], "[ipv4]\nmethod=auto") || !strings.Contains(both["w"], "[ipv6]\nmethod=auto") {
+		t.Errorf("bare dhcp should be both-auto:\n%s", both["w"])
 	}
 }

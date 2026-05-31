@@ -41,7 +41,7 @@ func TestJSONRoundTripTable(t *testing.T) {
 		"every-proto": {Interfaces: []model.Interface{
 			{Name: "a", Proto: model.NoneProto{}},
 			{Name: "b", Proto: model.DHCPProto{Hostname: "box"}},
-			{Name: "c", Proto: model.DHCPv6Proto{}},
+			{Name: "c", Proto: model.NoneProto{}},
 			{Name: "d", Proto: model.PPPoEProto{Username: "u", Password: "p"}},
 			{Name: "e", Proto: model.WireGuardProto{PrivateKey: "K", ListenPort: 51820, Addresses: []netip.Prefix{netip.MustParsePrefix("10.9.0.1/24")}}},
 		}},

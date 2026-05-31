@@ -112,22 +112,41 @@ func (a *Applier) Verify(model.Config) error {
 	a.mu.Unlock()
 
 	if !hadRoute {
+		// No default route to lose ⇒ no lock-out risk; the apply only needs to
+		// leave NM alive, not connected. A "disconnected" box is a perfectly valid
+		// result — e.g. an interface set to Disabled / no-IP, or one still waiting
+		// on a carrier — so DON'T require connectivity (that spuriously reverted
+		// any apply that didn't bring up connectivity). Just confirm NM still
+		// answers a method call (it didn't crash/wedge), and isn't asleep.
 		s, err := c.Status()
 		if err != nil {
-			return fmt.Errorf("verify: NM status: %w", err)
+			return fmt.Errorf("verify: NM unreachable after apply: %w", err)
 		}
-		if s.State != 0 && s.State < 40 { // asleep/disconnecting/disconnected
-			return fmt.Errorf("verify: NM state %s after apply", StateName(s.State))
+		if s.State == 10 { // NM_STATE_ASLEEP — NM was actually put to sleep
+			return fmt.Errorf("verify: NM asleep after apply")
 		}
 		return nil
 	}
 
-	time.Sleep(5 * time.Second) // let the route reconcile
-	for deadline := time.Now().Add(12 * time.Second); time.Now().Before(deadline); {
+	// The box had a default route; the apply is safe as long as it survives. NM
+	// may briefly drop+replace it while reconfiguring the route-bearing interface,
+	// so don't trust a single sample. Give it a short beat to begin reconciling,
+	// then require the route to be continuously present for a stable streak — that
+	// both rules out a lingering pre-teardown route (a drop resets the streak) and
+	// returns in ~2s for the common case where nothing touched the route, instead
+	// of a flat 5s wait. Only declare lock-out if it stays gone for the window.
+	time.Sleep(time.Second)
+	const need = 3 // consecutive present samples ≈ 1.5s of stability
+	streak := 0
+	for deadline := time.Now().Add(14 * time.Second); time.Now().Before(deadline); {
 		if HasDefaultRoute() {
-			return nil // route held (or was replaced) — the apply is fine
+			if streak++; streak >= need {
+				return nil
+			}
+		} else {
+			streak = 0
 		}
-		time.Sleep(time.Second)
+		time.Sleep(500 * time.Millisecond)
 	}
 	return fmt.Errorf("verify: lost the default route after apply — reverting (lock-out protection)")
 }

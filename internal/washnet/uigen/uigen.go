@@ -3,7 +3,7 @@
 // generic <ObjectForm>), TypeScript types (form binding), and an i18n label
 // scaffold. Go structs are the single source of truth; everything here is
 // generated downstream. Widgets derive from the field type; `ui` tags only
-// augment (group, ref, widget override, advanced). Unions emit a discriminator
+// augment (group, ref, widget override). Unions emit a discriminator
 // + one variant sub-form each, which is how the FE gets conditional visibility
 // for free.
 package uigen
@@ -36,7 +36,6 @@ type FieldDescriptor struct {
 	Group    string           `json:"group,omitempty"`
 	Ref      string           `json:"ref,omitempty"` // referenced object kind, for pickers
 	List     bool             `json:"list,omitempty"`
-	Advanced bool             `json:"advanced,omitempty"`
 	LabelKey string           `json:"labelKey"` // i18n key
 	Union    *UnionDescriptor `json:"union,omitempty"`
 }
@@ -86,7 +85,6 @@ func fieldsOf(t reflect.Type) []FieldDescriptor {
 		isName := has(flags, "name")
 		isList := has(flags, "list")
 		isUnion := has(flags, "union")
-		_, advanced := ui["advanced"]
 		fd := FieldDescriptor{
 			Name:     f.Name,
 			Option:   optName,
@@ -94,7 +92,6 @@ func fieldsOf(t reflect.Type) []FieldDescriptor {
 			Group:    ui["group"],
 			Ref:      ui["ref"],
 			List:     isList,
-			Advanced: advanced,
 			LabelKey: t.Name() + "." + f.Name,
 		}
 		if isUnion {

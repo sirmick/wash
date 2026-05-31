@@ -19,7 +19,6 @@
 //	ui:"group=g"         logical form group
 //	ui:"ref=kind"        render as a picker of existing objects of that kind
 //	ui:"widget=w"        override the derived widget (e.g. mac)
-//	ui:"advanced"        hide behind the Advanced toggle
 package model
 
 import (
@@ -87,22 +86,22 @@ type NoneProto struct{}
 func (NoneProto) UCITag() string { return "none" }
 
 type StaticProto struct {
-	IPAddr  netip.Prefix `uci:"ipaddr" ui:"group=addressing"`
-	Gateway netip.Addr   `uci:"gateway" ui:"group=addressing"`
-	DNS     []netip.Addr `uci:"dns,list" ui:"group=addressing,advanced"`
+	IPAddr   netip.Prefix `uci:"ipaddr" ui:"group=addressing"`
+	Gateway  netip.Addr   `uci:"gateway" ui:"group=addressing"`
+	IP6Addr  netip.Prefix `uci:"ip6addr" ui:"group=addressing"`
+	IP6Gw    netip.Addr   `uci:"ip6gw" ui:"group=addressing"`
+	DNS      []netip.Addr `uci:"dns,list" ui:"group=addressing"`
 }
 
 func (StaticProto) UCITag() string { return "static" }
 
 type DHCPProto struct {
-	Hostname string `uci:"hostname" ui:"advanced"`
+	IPv4     bool   `uci:"ipv4"`     // request a DHCPv4 lease
+	IPv6     bool   `uci:"ipv6"`     // request DHCPv6 / accept SLAAC
+	Hostname string `uci:"hostname"` // hostname sent to the DHCP server
 }
 
 func (DHCPProto) UCITag() string { return "dhcp" }
-
-type DHCPv6Proto struct{}
-
-func (DHCPv6Proto) UCITag() string { return "dhcpv6" }
 
 type PPPoEProto struct {
 	Username string `uci:"username"`
@@ -127,7 +126,7 @@ type Device struct {
 	Ports  []string `uci:"ports,list"` // bridge members
 	Ifname string   `uci:"ifname"`     // vlan/macvlan parent link
 	VID    int      `uci:"vid"`        // 802.1q vlan id
-	MTU    int      `uci:"mtu" ui:"advanced"`
+	MTU    int      `uci:"mtu"`
 }
 
 func (Device) UCIPackage() string { return "network" }
@@ -137,8 +136,8 @@ type Route struct {
 	Interface string       `uci:"interface" ui:"ref=interface"`
 	Target    netip.Prefix `uci:"target"`
 	Gateway   netip.Addr   `uci:"gateway"`
-	Metric    int          `uci:"metric" ui:"advanced"`
-	Table     string       `uci:"table" ui:"advanced"`
+	Metric    int          `uci:"metric"`
+	Table     string       `uci:"table"`
 }
 
 func (Route) UCIPackage() string { return "network" }
@@ -151,7 +150,7 @@ type PolicyRule struct {
 	Src      netip.Prefix `uci:"src"`
 	Dest     netip.Prefix `uci:"dest"`
 	Lookup   string       `uci:"lookup"`
-	Priority int          `uci:"priority" ui:"advanced"`
+	Priority int          `uci:"priority"`
 }
 
 func (PolicyRule) UCIPackage() string { return "network" }
@@ -163,12 +162,12 @@ type WGPeer struct {
 	Name                string         `uci:",name"`
 	Interface           string         `uci:"interface" ui:"ref=interface"`
 	PublicKey           string         `uci:"public_key"`
-	PresharedKey        string         `uci:"preshared_key" ui:"widget=password,advanced"`
+	PresharedKey        string         `uci:"preshared_key" ui:"widget=password"`
 	AllowedIPs          []netip.Prefix `uci:"allowed_ips,list"`
 	EndpointHost        string         `uci:"endpoint_host"`
 	EndpointPort        int            `uci:"endpoint_port"`
-	PersistentKeepalive int            `uci:"persistent_keepalive" ui:"advanced"`
-	RouteAllowedIPs     bool           `uci:"route_allowed_ips" ui:"advanced"`
+	PersistentKeepalive int            `uci:"persistent_keepalive"`
+	RouteAllowedIPs     bool           `uci:"route_allowed_ips"`
 }
 
 func (WGPeer) UCIPackage() string { return "network" }
@@ -180,7 +179,7 @@ type Defaults struct {
 	Input    string `uci:"input"`
 	Output   string `uci:"output"`
 	Forward  string `uci:"forward"`
-	SynFlood bool   `uci:"syn_flood" ui:"advanced"`
+	SynFlood bool   `uci:"syn_flood"`
 }
 
 func (Defaults) UCIPackage() string { return "firewall" }
@@ -193,7 +192,7 @@ type Zone struct {
 	Output   string   `uci:"output"`
 	Forward  string   `uci:"forward"`
 	Masq     bool     `uci:"masq"`
-	MTUFix   bool     `uci:"mtu_fix" ui:"advanced"`
+	MTUFix   bool     `uci:"mtu_fix"`
 }
 
 func (Zone) UCIPackage() string { return "firewall" }
@@ -230,7 +229,7 @@ type FirewallRule struct {
 	SrcPort  string `uci:"src_port"`
 	DestPort string `uci:"dest_port"`
 	Target   string `uci:"target"`
-	Family   string `uci:"family" ui:"advanced"`
+	Family   string `uci:"family"`
 }
 
 func (FirewallRule) UCIPackage() string { return "firewall" }
@@ -258,11 +257,11 @@ func (IPSet) UCISection() string { return "ipset" }
 // --- dhcp ------------------------------------------------------------------
 
 type Dnsmasq struct {
-	DomainNeeded bool     `uci:"domainneeded" ui:"advanced"`
-	BogusPriv    bool     `uci:"boguspriv" ui:"advanced"`
-	Local        string   `uci:"local" ui:"advanced"`
+	DomainNeeded bool     `uci:"domainneeded"`
+	BogusPriv    bool     `uci:"boguspriv"`
+	Local        string   `uci:"local"`
 	Domain       string   `uci:"domain"`
-	ExpandHosts  bool     `uci:"expandhosts" ui:"advanced"`
+	ExpandHosts  bool     `uci:"expandhosts"`
 	Server       []string `uci:"server,list"`
 }
 
@@ -277,8 +276,8 @@ type DHCPPool struct {
 	Limit     int    `uci:"limit"`
 	LeaseTime string `uci:"leasetime"`
 	Ignore    bool   `uci:"ignore"`
-	RA        string `uci:"ra" ui:"advanced"`
-	DHCPv6    string `uci:"dhcpv6" ui:"advanced"`
+	RA        string `uci:"ra"`
+	DHCPv6    string `uci:"dhcpv6"`
 }
 
 func (DHCPPool) UCIPackage() string { return "dhcp" }
@@ -290,7 +289,7 @@ type Host struct {
 	MAC       string     `uci:"mac" ui:"widget=mac"`
 	IP        netip.Addr `uci:"ip"`
 	Hostname  string     `uci:"hostname"`
-	LeaseTime string     `uci:"leasetime" ui:"advanced"`
+	LeaseTime string     `uci:"leasetime"`
 }
 
 func (Host) UCIPackage() string { return "dhcp" }
@@ -318,10 +317,10 @@ func (CNAME) UCISection() string { return "cname" }
 // WifiDevice is a radio (config wifi-device 'radio0').
 type WifiDevice struct {
 	Name     string `uci:",name"`
-	Type     string `uci:"type" ui:"advanced"`
+	Type     string `uci:"type"`
 	Band     string `uci:"band"`
 	Channel  string `uci:"channel"`
-	HTMode   string `uci:"htmode" ui:"advanced"`
+	HTMode   string `uci:"htmode"`
 	Country  string `uci:"country"`
 	Disabled bool   `uci:"disabled"`
 }
@@ -337,8 +336,8 @@ type WifiIface struct {
 	SSID       string     `uci:"ssid"`
 	Network    string     `uci:"network" ui:"ref=interface"`
 	Encryption Encryption `uci:"encryption,union"`
-	Hidden     bool       `uci:"hidden" ui:"advanced"`
-	Isolate    bool       `uci:"isolate" ui:"advanced"`
+	Hidden     bool       `uci:"hidden"`
+	Isolate    bool       `uci:"isolate"`
 }
 
 func (WifiIface) UCIPackage() string { return "wireless" }
@@ -451,6 +450,6 @@ func ObjectTypes() []reflect.Type {
 }
 
 func init() {
-	registerUnion[ProtoConfig](NoneProto{}, StaticProto{}, DHCPProto{}, DHCPv6Proto{}, PPPoEProto{}, WireGuardProto{})
+	registerUnion[ProtoConfig](NoneProto{}, StaticProto{}, DHCPProto{}, PPPoEProto{}, WireGuardProto{})
 	registerUnion[Encryption](EncNone{}, EncPSK2{}, EncSAE{})
 }

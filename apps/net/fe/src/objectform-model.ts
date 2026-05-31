@@ -2,8 +2,8 @@
 // §6, A6). It turns a UI descriptor object + a value + server diagnostics into a
 // grouped view-model the Solid shell renders. No framework imports — this is the
 // unit-tested core (the widget choice already lives in the descriptor; here we
-// resolve groups, the active union variant, advanced filtering, and the
-// diagnostic→field mapping).
+// resolve groups, the active union variant, and the diagnostic→field mapping).
+// Every field always shows — there is no basic/advanced split.
 
 export interface FieldDescriptor {
   name: string;
@@ -12,7 +12,6 @@ export interface FieldDescriptor {
   group?: string;
   ref?: string;
   list?: boolean;
-  advanced?: boolean;
   labelKey: string;
   union?: UnionDescriptor;
 }
@@ -64,7 +63,6 @@ export interface FormView {
 }
 
 export interface BuildOpts {
-  showAdvanced: boolean;
   // Object path used to match diagnostics, e.g. "Interfaces[0]".
   pathPrefix: string;
 }
@@ -95,8 +93,9 @@ export function buildForm(
   };
 
   for (const f of obj.fields) {
-    if (f.advanced && !opts.showAdvanced) continue;
-    const path = `${opts.pathPrefix}.${f.name}`;
+    // Join without a leading dot when there's no prefix (e.g. the addressing
+    // fragment uses pathPrefix=""), so paths are "Proto" not ".Proto".
+    const path = opts.pathPrefix ? `${opts.pathPrefix}.${f.name}` : f.name;
     const fv: FieldView = { field: f, path, value: value?.[f.name] };
     attachError(fv, byPath);
 
@@ -106,8 +105,11 @@ export function buildForm(
       const variant = f.union.variants.find((v) => v.tag === tag);
       const subFields: FieldView[] = [];
       if (variant) {
-        for (const sf of variant.fields) {
-          if (sf.advanced && !opts.showAdvanced) continue;
+        // A fieldless variant (e.g. NoneProto) serializes with fields: null in
+        // the descriptor — guard so iterating it doesn't throw. A throw here is
+        // especially nasty: it happens inside the reactive form() computation, so
+        // Solid disposes the whole scope and the form freezes on every later edit.
+        for (const sf of variant.fields ?? []) {
           const sfv: FieldView = { field: sf, path: `${path}.${sf.name}`, value: uval[sf.name] };
           attachError(sfv, byPath);
           subFields.push(sfv);

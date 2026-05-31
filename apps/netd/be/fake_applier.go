@@ -86,5 +86,9 @@ func (a *fakeApplier) setVerifyErr(err error) {
 	a.verifyErr = err
 }
 
-// Devices: the fake has no real links; the FE falls back to configured ones.
-func (a *fakeApplier) Devices() []string { return nil }
+// Devices: the fake presents four unconfigured links — matching the four
+// virtio NICs the Alpine VM image carries — so the host-side e2e (and a
+// developer poking the kiosk net app without a VM) can drive the Add wizards
+// against real-looking interfaces. The real NM/networkd appliers read these
+// from the live box.
+func (a *fakeApplier) Devices() []string { return []string{"eth0", "eth1", "eth2", "eth3"} }
