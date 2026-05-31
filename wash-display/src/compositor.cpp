@@ -22,8 +22,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <fcntl.h>
+#include <map>
+#include <mutex>
 #include <string>
 #include <unistd.h>
+#include <vector>
 #include <xkbcommon/xkbcommon.h>
 
 #ifdef WASH_DISPLAY_XWAYLAND
@@ -142,6 +146,41 @@ struct WindowSink {
     SurfaceEncoder enc;      // WebP framer
     bool enc_ready = false;
 };
+
+// --- window-command registry + cross-thread queue ------------------
+//
+// Router→app commands (window.resize / window.close_requested) arrive on
+// the WireConn reader thread, but wlroots is single-threaded and may only
+// be touched from the compositor thread. We therefore (1) keep a registry
+// mapping wash window id → its mapped surface object, and (2) marshal each
+// command onto the compositor thread via a self-pipe registered in the
+// wl_event_loop. The reader thread pushes a WinCmd + writes a byte; the
+// event-loop fd handler drains the queue and applies the commands.
+struct WinRef {
+    enum Kind { XDG, X11 } kind;
+    void* ptr; // Toplevel* (XDG) or XSurface* (X11)
+};
+static std::mutex g_reg_mu;
+static std::map<uint32_t, WinRef> g_win_reg;
+
+static void register_win(uint32_t win, WinRef::Kind kind, void* ptr) {
+    if (!win) return;
+    std::lock_guard<std::mutex> lk(g_reg_mu);
+    g_win_reg[win] = WinRef{kind, ptr};
+}
+static void unregister_win(uint32_t win) {
+    if (!win) return;
+    std::lock_guard<std::mutex> lk(g_reg_mu);
+    g_win_reg.erase(win);
+}
+
+struct WinCmd {
+    std::string t;
+    uint32_t win = 0, w = 0, h = 0;
+};
+static std::mutex g_cmd_mu;
+static std::vector<WinCmd> g_cmds;
+static int g_cmd_pipe[2] = {-1, -1};
 
 // One mapped toplevel ↔ one wash window.
 struct Toplevel {
@@ -328,10 +367,12 @@ void toplevel_map(struct wl_listener* listener, void* /*data*/) {
     // Blocking wire round-trip; safe here (compositor thread, not the
     // WireConn reader thread).
     sink_open(t->sink, t->server->conn, ttl, w, h);
+    register_win(t->sink.win, WinRef::XDG, t);
 }
 
 void toplevel_unmap(struct wl_listener* listener, void* /*data*/) {
     Toplevel* t = wl_container_of(listener, t, unmap);
+    unregister_win(t->sink.win);
     sink_close(t->sink, t->server->conn);
 }
 
@@ -351,6 +392,7 @@ void toplevel_commit(struct wl_listener* listener, void* /*data*/) {
 
 void toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
     Toplevel* t = wl_container_of(listener, t, destroy);
+    unregister_win(t->sink.win);
     sink_close(t->sink, t->server->conn);
     wl_list_remove(&t->map.link);
     wl_list_remove(&t->unmap.link);
@@ -467,10 +509,12 @@ void xsurface_map(struct wl_listener* listener, void* /*data*/) {
     wlr_xwayland_surface_configure(x->xsurf, x->xsurf->x, x->xsurf->y,
                                    (uint16_t)w, (uint16_t)h);
     sink_open(x->sink, x->server->conn, ttl, w, h);
+    register_win(x->sink.win, WinRef::X11, x);
 }
 
 void xsurface_unmap(struct wl_listener* listener, void* /*data*/) {
     XSurface* x = wl_container_of(listener, x, unmap);
+    unregister_win(x->sink.win);
     sink_close(x->sink, x->server->conn);
 }
 
@@ -505,12 +549,14 @@ static void xsurface_drop_surface_listeners(XSurface* x) {
 
 void xsurface_dissociate(struct wl_listener* listener, void* /*data*/) {
     XSurface* x = wl_container_of(listener, x, dissociate);
+    unregister_win(x->sink.win);
     sink_close(x->sink, x->server->conn);
     xsurface_drop_surface_listeners(x);
 }
 
 void xsurface_destroy(struct wl_listener* listener, void* /*data*/) {
     XSurface* x = wl_container_of(listener, x, destroy);
+    unregister_win(x->sink.win);
     sink_close(x->sink, x->server->conn);
     xsurface_drop_surface_listeners(x);
     wl_list_remove(&x->associate.link);
@@ -538,6 +584,59 @@ void server_new_xwayland_surface(struct wl_listener* listener, void* data) {
     wl_signal_add(&xsurf->events.destroy, &x->destroy);
 }
 #endif // WASH_DISPLAY_XWAYLAND
+
+// --- apply window commands on the compositor thread ----------------
+
+// apply_win_cmd resolves a wash window id to its surface and applies a
+// resize/close. Runs on the compositor thread (from the event-loop pipe
+// handler), so wlroots calls are safe. Unknown win (already gone) is a
+// no-op.
+static void apply_win_cmd(const WinCmd& c) {
+    WinRef ref;
+    {
+        std::lock_guard<std::mutex> lk(g_reg_mu);
+        auto it = g_win_reg.find(c.win);
+        if (it == g_win_reg.end()) return;
+        ref = it->second;
+    }
+    if (ref.kind == WinRef::XDG) {
+        Toplevel* t = static_cast<Toplevel*>(ref.ptr);
+        if (c.t == "window.resize" && c.w && c.h) {
+            wlr_xdg_toplevel_set_size(t->xdg_toplevel, c.w, c.h);
+        } else if (c.t == "window.close_requested") {
+            // Veto the router's auto-destroy; ask the client to close
+            // politely. Real teardown happens via destroy_window when the
+            // client actually exits (toplevel_destroy).
+            t->server->conn->confirm_close(c.win, false);
+            wlr_xdg_toplevel_send_close(t->xdg_toplevel);
+        }
+    } else {
+#ifdef WASH_DISPLAY_XWAYLAND
+        XSurface* x = static_cast<XSurface*>(ref.ptr);
+        if (c.t == "window.resize" && c.w && c.h) {
+            wlr_xwayland_surface_configure(x->xsurf, x->xsurf->x, x->xsurf->y,
+                                           (uint16_t)c.w, (uint16_t)c.h);
+        } else if (c.t == "window.close_requested") {
+            x->server->conn->confirm_close(c.win, false);
+            wlr_xwayland_surface_close(x->xsurf);
+        }
+#endif
+    }
+}
+
+// on_cmd_pipe drains the cross-thread command queue when the reader
+// thread signals via the self-pipe. wl_event_loop_fd_func_t signature.
+int on_cmd_pipe(int fd, uint32_t /*mask*/, void* /*data*/) {
+    char buf[64];
+    while (read(fd, buf, sizeof buf) > 0) { /* drain wakeups */ }
+    std::vector<WinCmd> cmds;
+    {
+        std::lock_guard<std::mutex> lk(g_cmd_mu);
+        cmds.swap(g_cmds);
+    }
+    for (const auto& c : cmds) apply_win_cmd(c);
+    return 0;
+}
 
 } // namespace
 
@@ -591,6 +690,28 @@ int run_compositor(WireConn& conn) {
     // 0.17: subscribe to new_surface (no new_toplevel signal); the handler
     // filters for the toplevel role.
     wl_signal_add(&server.xdg_shell->events.new_surface, &server.new_xdg_toplevel);
+
+    // Cross-thread window-command path: the WireConn reader thread pushes
+    // resize/close commands onto g_cmds + writes a byte to this pipe; the
+    // event-loop handler drains them on THIS (compositor) thread, where
+    // wlroots calls are safe. Set the handler only after the pipe exists.
+    if (pipe2(g_cmd_pipe, O_NONBLOCK | O_CLOEXEC) == 0) {
+        struct wl_event_loop* loop = wl_display_get_event_loop(server.display);
+        wl_event_loop_add_fd(loop, g_cmd_pipe[0], WL_EVENT_READABLE,
+                             on_cmd_pipe, nullptr);
+        conn.on_window_cmd([](const std::string& t, uint32_t win,
+                              uint32_t w, uint32_t h) {
+            {
+                std::lock_guard<std::mutex> lk(g_cmd_mu);
+                g_cmds.push_back(WinCmd{t, win, w, h});
+            }
+            char b = 1;
+            ssize_t n = write(g_cmd_pipe[1], &b, 1);
+            (void)n;
+        });
+    } else {
+        wlr_log(WLR_ERROR, "wash-display: cmd pipe failed; resize/close disabled");
+    }
 
     // Advertise xdg-decoration and force server-side, so Wayland clients
     // (GTK etc.) don't draw their own titlebar inside the wash frame.

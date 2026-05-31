@@ -39,6 +39,14 @@ public:
     // thread. Same rule the Go SDK documents.
     using AppMsgHandler = std::function<void(const json& data, uint32_t win)>;
 
+    // Called on the reader thread for router→app window commands the
+    // compositor must act on: "window.resize" (w,h set) and
+    // "window.close_requested" (w,h zero). Like AppMsgHandler this runs
+    // on the reader thread and MUST NOT call wlroots directly — the
+    // compositor marshals onto its own thread (wlroots is single-thread).
+    using WindowCmdHandler =
+        std::function<void(const std::string& t, uint32_t win, uint32_t w, uint32_t h)>;
+
     explicit WireConn(int fd) : fd_(fd) {}
     ~WireConn();
 
@@ -69,6 +77,12 @@ public:
     // tracks the new size. Send only on actual size change.
     void report_geometry(uint32_t win, uint32_t w, uint32_t h);
 
+    // confirm_close replies to a router window.close_requested. We pass
+    // allow=false to VETO the router's auto-destroy: the compositor asks
+    // the guest client to close politely and drives the real teardown via
+    // destroy_window when the client actually exits (window.confirm_close).
+    void confirm_close(uint32_t win, bool allow);
+
     // open_video_channel sends channel.open{kind:"video"} for `win` and
     // blocks for channel.opened / channel.open.err. Returns the
     // allocated channel id, or 0 on failure (e.g. "no shell attached"
@@ -90,6 +104,7 @@ public:
     bool publish_env(const json& env);
 
     void on_app_msg(AppMsgHandler h) { app_msg_handler_ = std::move(h); }
+    void on_window_cmd(WindowCmdHandler h) { window_cmd_handler_ = std::move(h); }
 
     // alive is false once the socket closed or a shutdown arrived.
     bool alive() const { return alive_.load(); }
@@ -122,6 +137,7 @@ private:
     std::map<uint64_t, Reply> chan_pending_;
 
     AppMsgHandler app_msg_handler_;
+    WindowCmdHandler window_cmd_handler_;
 };
 
 } // namespace wash
