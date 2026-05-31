@@ -105,10 +105,10 @@ type Router struct {
 	log    Logger
 	assets http.FileSystem // embedded shell-runtime FS; served via TShellAssetRead
 
-	mu      sync.Mutex
-	apps    map[string]*AppInstance // by instance id
-	byWin   map[uint32]*AppInstance // by window id (0 keys are skipped)
-	shells  map[*ShellSession]struct{}
+	mu     sync.Mutex
+	apps   map[string]*AppInstance // by instance id
+	byWin  map[uint32]*AppInstance // by window id (0 keys are skipped)
+	shells map[*ShellSession]struct{}
 
 	nextWindow   atomic.Uint32
 	nextInstance atomic.Uint64
@@ -201,17 +201,17 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		log = func(string, ...any) {}
 	}
 	return &Router{
-		cfg:            cfg,
-		reg:            reg,
-		log:            log,
-		apps:           make(map[string]*AppInstance),
-		byWin:          make(map[uint32]*AppInstance),
-		shells:         make(map[*ShellSession]struct{}),
-		channels:       make(map[uint32]*channelBinding),
-		appMsgWatchers: make(map[string]map[string]chan map[string]any),
-		singletons:     make(map[string]*AppInstance),
-		pendingAttach:  make(map[int]*pendingAttach),
-		pendingByToken: make(map[string]*tokenPending),
+		cfg:               cfg,
+		reg:               reg,
+		log:               log,
+		apps:              make(map[string]*AppInstance),
+		byWin:             make(map[uint32]*AppInstance),
+		shells:            make(map[*ShellSession]struct{}),
+		channels:          make(map[uint32]*channelBinding),
+		appMsgWatchers:    make(map[string]map[string]chan map[string]any),
+		singletons:        make(map[string]*AppInstance),
+		pendingAttach:     make(map[int]*pendingAttach),
+		pendingByToken:    make(map[string]*tokenPending),
 		cliSessions:       make(map[string]*cliSession),
 		backgroundStarted: make(map[string]bool),
 		ingress:           newIngressRegistry(log),
@@ -230,11 +230,11 @@ func (r *Router) SetAssets(fs http.FileSystem) { r.assets = fs }
 // successful attach OR by the spawner's connection going away
 // (orphan tokens are reaped in cleanupPendingByToken).
 type tokenPending struct {
-	appID      string         // the token may only be redeemed for this app id
-	instanceID string         // pre-minted; the attaching child gets this back in IdentityAck
-	binary     string         // /proc/<pid>/exe must match this path at attach
-	spawner    *AppInstance   // the app that called PrepareSpawn — used for orphan reap
-	expires    time.Time      // 60s grace; expired tokens are refused
+	appID      string       // the token may only be redeemed for this app id
+	instanceID string       // pre-minted; the attaching child gets this back in IdentityAck
+	binary     string       // /proc/<pid>/exe must match this path at attach
+	spawner    *AppInstance // the app that called PrepareSpawn — used for orphan reap
+	expires    time.Time    // 60s grace; expired tokens are refused
 }
 
 // attachResult is what spawnAndRun reads from a pending-attach
@@ -807,15 +807,86 @@ func (r *Router) singletonInstance(appID string) *AppInstance {
 	return r.singletons[appID]
 }
 
+// restartBackgroundApp cycles a background singleton service: terminate
+// its running instance (if any), wait for its loop goroutine to run
+// tearDown (which clears the singleton slot and GCs its windows /
+// channels / ingress routes), then spawn a fresh one on a router-
+// lifetime context. Returns the new instance id, or a wire error code +
+// error. Restricted to surface=background targets; the caller's restart
+// capability is checked upstream in handleAppRestart. See
+// docs/SETTINGS.md §5.
+//
+// Blocks up to ~20s (terminate grace + respawn attach); callers run it
+// off the reader goroutine.
+func (r *Router) restartBackgroundApp(appID string) (string, string, error) {
+	entry := r.reg.ByID(appID)
+	if entry == nil || !entry.Enabled() {
+		return "", wire.ErrCodeNotFound, fmt.Errorf("app %q not found", appID)
+	}
+	if entry.Manifest.Surface != SurfaceBackground {
+		return "", wire.ErrCodeForbidden, fmt.Errorf("app %q is not a background service", appID)
+	}
+
+	// Terminate the running instance and wait for teardown. The
+	// singleton slot must clear before we respawn — spawnAndRun's
+	// singleton dedup would otherwise hand back the dying instance.
+	// The instance's own loop goroutine runs tearDown on exit (which
+	// clears the singleton slot); we poll for that via waitSingletonGone.
+	if old := r.singletonInstance(appID); old != nil && old.Cmd != nil && old.Cmd.Process != nil {
+		old.expectedExit.Store(true) // a restart SIGTERM is not a crash
+		_ = old.Cmd.Process.Signal(stopSignal())
+		if !r.waitSingletonGone(appID, 5*time.Second) {
+			// Grace expired — force-kill and wait once more.
+			_ = old.Cmd.Process.Kill()
+			r.waitSingletonGone(appID, 5*time.Second)
+		}
+	}
+
+	// Claim the background-started slot so a concurrent shell-connect
+	// autoboot doesn't race in a second copy. Mirrors
+	// EnsureBackgroundAppsRunning; cleared on respawn failure so the
+	// next shell connect retries.
+	r.backgroundMu.Lock()
+	r.backgroundStarted[appID] = true
+	r.backgroundMu.Unlock()
+
+	inst, err := r.spawnAndRun(context.Background(), entry, false)
+	if err != nil {
+		r.backgroundMu.Lock()
+		delete(r.backgroundStarted, appID)
+		r.backgroundMu.Unlock()
+		return "", wire.ErrCodeInternal, fmt.Errorf("respawn %q: %w", appID, err)
+	}
+	return inst.InstanceID, "", nil
+}
+
+// waitSingletonGone polls until the singleton slot for appID is empty
+// (the terminated instance's loop goroutine ran tearDown) or the
+// timeout elapses. Returns true if the slot is clear. A short poll is
+// adequate for a user-initiated restart; cmd.Wait() is owned by the
+// instance's own loop goroutine, so there is no channel to select on.
+func (r *Router) waitSingletonGone(appID string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if r.singletonInstance(appID) == nil {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // resolveRecipient turns a wire.Recipient into a concrete
 // *AppInstance, spawning a singleton on demand when addressed by
 // app_id. Returns a structured error code so callers can surface it
 // without leaking error formatting.
 //
-//   recipient.instance_id set  →  direct lookup
-//   recipient.app_id set       →  must be a singleton manifest;
-//                                  spawned on first reference
-//   both / neither set         →  bad_request
+//	recipient.instance_id set  →  direct lookup
+//	recipient.app_id set       →  must be a singleton manifest;
+//	                               spawned on first reference
+//	both / neither set         →  bad_request
 func (r *Router) resolveRecipient(ctx context.Context, rec wire.Recipient) (*AppInstance, string, error) {
 	if (rec.InstanceID == "") == (rec.AppID == "") {
 		return nil, wire.ErrCodeBadRequest, fmt.Errorf("recipient must set exactly one of instance_id or app_id")
@@ -1005,4 +1076,3 @@ func (r *Router) broadcastPatches(patches []wire.SessionPatch) {
 		}
 	}
 }
-
