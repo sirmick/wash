@@ -39,6 +39,7 @@ extern "C" {
 #include <wlr/types/wlr_buffer.h>
 #include <wlr/util/box.h>
 #include <drm_fourcc.h>
+#include <pixman.h>
 }
 #undef static
 
@@ -62,6 +63,10 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
     struct wlr_renderer* r = texture->renderer ? texture->renderer : renderer;
 
     struct wlr_buffer* render_buf = (struct wlr_buffer*)render_buf_;
+
+    // A size change (or first capture) forces a full-frame dirty rect —
+    // the FE canvas is resized and must be fully repainted.
+    bool full_capture = (!render_buf || rb_w_ != w || rb_h_ != h);
 
     // (Re)allocate the pooled render target only when the size changes.
     if (!render_buf || rb_w_ != w || rb_h_ != h) {
@@ -142,10 +147,39 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
 
     w_ = w;
     h_ = h;
-    dirty_x = 0;
-    dirty_y = 0;
-    dirty_w = w;
-    dirty_h = h;
+
+    // Damage tracking: encode/send only the changed sub-rect. On a full
+    // capture (first frame or resize) the whole surface is dirty. Else use
+    // the surface's effective damage (surface-local; matches buffer coords
+    // at scale 1) bounding box, clamped to the surface. Empty damage with
+    // no size change means nothing visibly changed → skip the frame
+    // (return false) so we don't re-encode/transmit an identical image.
+    if (full_capture) {
+        dirty_x = 0;
+        dirty_y = 0;
+        dirty_w = w;
+        dirty_h = h;
+        return true;
+    }
+
+    pixman_region32_t damage;
+    pixman_region32_init(&damage);
+    wlr_surface_get_effective_damage(surface, &damage);
+    const pixman_box32_t* ext = pixman_region32_extents(&damage);
+    int x0 = ext->x1 < 0 ? 0 : ext->x1;
+    int y0 = ext->y1 < 0 ? 0 : ext->y1;
+    int x1 = ext->x2 > w ? w : ext->x2;
+    int y1 = ext->y2 > h ? h : ext->y2;
+    bool empty = !pixman_region32_not_empty(&damage) || x1 <= x0 || y1 <= y0;
+    pixman_region32_fini(&damage);
+
+    if (empty) {
+        return false; // nothing changed; caller skips this frame
+    }
+    dirty_x = x0;
+    dirty_y = y0;
+    dirty_w = x1 - x0;
+    dirty_h = y1 - y0;
     return true;
 }
 

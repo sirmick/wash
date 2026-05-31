@@ -122,11 +122,30 @@ void WireConn::reader_loop() {
                 json data = m.contains("data") ? m["data"] : json::object();
                 app_msg_handler_(data, win);
             }
+        } else if (t == "window.resize") {
+            // Router → app COMMAND: the shell resized a window's frame.
+            // Hand to the compositor via window_cmd_handler_, which marshals
+            // onto the wlroots thread (single-threaded; cannot touch here).
+            if (window_cmd_handler_) {
+                uint32_t win = m.value("win", 0U);
+                uint32_t w = m.value("w", 0U);
+                uint32_t h = m.value("h", 0U);
+                window_cmd_handler_(t, win, w, h);
+            }
+        } else if (t == "window.close_requested") {
+            // Router → app COMMAND: user clicked the window's close button.
+            // The compositor MUST respond (confirm_close) or the router's
+            // grace timer force-kills the whole process (WIRE.md §10). This
+            // dispatch was previously missing — close silently dropped here
+            // → no veto → grace expiry SIGKILLed the compositor.
+            if (window_cmd_handler_) {
+                uint32_t win = m.value("win", 0U);
+                window_cmd_handler_(t, win, 0, 0);
+            }
         } else if (t == "shutdown") {
             break;
         }
-        // Other window.* events (focus/resize/close_requested) are
-        // consumed by the compositor in later commits; ignored here.
+        // Other window.* events (focus, etc.) are ignored for now.
     }
     alive_.store(false);
     // Wake any blocked callers so they fail instead of hanging.
@@ -155,11 +174,29 @@ uint32_t WireConn::create_window(const std::string& title, uint32_t w, uint32_t 
     win_cv_.wait(lk, [&] { return win_pending_[req].done || !alive_.load(); });
     Reply r = win_pending_[req];
     win_pending_.erase(req);
+    lk.unlock();
+    if (r.ok && r.value) {
+        // Every window — XDG and X11 alike — is minted here, so this is
+        // the one place to track the live count for the settings Display
+        // panel (docs/SETTINGS.md §3b).
+        note_window_delta(+1);
+    }
     return r.ok ? r.value : 0;
 }
 
 void WireConn::destroy_window(uint32_t win) {
     json m = {{"t", "window.destroy"}, {"win", win}};
+    write_json(CH_EVENT, m);
+    note_window_delta(-1);
+}
+
+void WireConn::report_geometry(uint32_t win, uint32_t w, uint32_t h) {
+    json m = {{"t", "window.geometry"}, {"win", win}, {"w", w}, {"h", h}};
+    write_json(CH_EVENT, m);
+}
+
+void WireConn::confirm_close(uint32_t win, bool allow) {
+    json m = {{"t", "window.confirm_close"}, {"win", win}, {"allow", allow}};
     write_json(CH_EVENT, m);
 }
 
@@ -199,6 +236,11 @@ bool WireConn::send_app_msg(uint32_t win, const json& data) {
     return write_json(CH_EVENT, m);
 }
 
+bool WireConn::publish_env(const json& env) {
+    json m = {{"t", "env.publish"}, {"env", env}};
+    return write_json(CH_EVENT, m);
+}
+
 void WireConn::note_wayland_display(const std::string& wd) {
     {
         std::lock_guard<std::mutex> lk(state_mu_);
@@ -221,7 +263,7 @@ void WireConn::emit_display_state() {
     int n = window_count_.load();
     if (n < 0) n = 0;
     // running is always true here: a live process is the only thing that
-    // can answer. The panel maps running→"running", absent reply→"not
+    // can answer. The panel maps running->"running", absent reply->"not
     // installed".
     send_app_msg(0, json{{"kind", "display.state"},
                          {"running", true},

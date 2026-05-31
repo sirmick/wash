@@ -176,6 +176,12 @@ type Router struct {
 	backgroundMu      sync.Mutex
 	backgroundStarted map[string]bool
 
+	// publishedEnv holds WASH_*-namespaced env hints an env-publish app
+	// (wash-display) has published; spawnEnv merges them into every
+	// subsequently-spawned app's environment. See docs/DISPLAY_ENV.md.
+	publishedEnvMu sync.Mutex
+	publishedEnv   map[string]string
+
 	// windowSession is the canonical state for windows the shell
 	// renders. Sent as a snapshot on shell connect; mutated by router
 	// or shell actions, with patches broadcast to every shell.
@@ -453,6 +459,14 @@ func (r *Router) spawnEnv() []string {
 		}
 		env = append(env, "WASH_BIN_DIR="+filepath.Dir(exe))
 	}
+	// Merge any published display env (WASH_WAYLAND_DISPLAY etc.) so a
+	// spawned app — notably wash-term's shell via pty.WithWashEnv — can
+	// reach the compositor's sockets. See docs/DISPLAY_ENV.md.
+	r.publishedEnvMu.Lock()
+	for k, v := range r.publishedEnv {
+		env = append(env, k+"="+v)
+	}
+	r.publishedEnvMu.Unlock()
 	return env
 }
 

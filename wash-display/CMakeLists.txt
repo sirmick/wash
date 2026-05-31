@@ -105,6 +105,41 @@ if(WLROOTS_FOUND AND WAYLAND_FOUND AND XKB_FOUND AND PIXMAN_FOUND)
     target_link_directories(wash-display PRIVATE
         ${WLROOTS_LIBRARY_DIRS} ${WAYLAND_LIBRARY_DIRS}
         ${XKB_LIBRARY_DIRS} ${PIXMAN_LIBRARY_DIRS})
+
+    # --- Xwayland (X11) bridge (commit 10) --------------------------
+    # X11 windows arrive as wlr_xwayland_surfaces and ride the same
+    # capture pipeline. The wlr_xwayland_* API lives in libwlroots (built
+    # with have_xwayland); its header only needs the xcb / xcb_icccm /
+    # xcb_ewmh *types* (we call no xcb function ourselves). xcb + xcb-icccm
+    # are the hard requirement. Auto-detected: absent them, the compositor
+    # still builds Wayland-only.
+    pkg_check_modules(XCB xcb xcb-icccm)
+    if(XCB_FOUND)
+        message(STATUS "wash-display: xcb found — Xwayland (X11) bridge enabled")
+        target_compile_definitions(wash-display PRIVATE WASH_DISPLAY_XWAYLAND)
+        target_include_directories(wash-display PRIVATE ${XCB_INCLUDE_DIRS})
+        target_link_libraries(wash-display PRIVATE ${XCB_LIBRARIES})
+        target_link_directories(wash-display PRIVATE ${XCB_LIBRARY_DIRS})
+
+        # wlr/xwayland.h includes <xcb/xcb_ewmh.h> only for the
+        # xcb_ewmh_wm_strut_partial_t pointer-field type. Prefer the real
+        # dev header; if libxcb-ewmh-dev is absent, fall back to a minimal
+        # local shim (src/xcbshim) that forward-declares just that type.
+        # No ewmh function is called here, so nothing extra is linked —
+        # libwlroots links the runtime libxcb-ewmh itself.
+        pkg_check_modules(XCB_EWMH xcb-ewmh)
+        if(XCB_EWMH_FOUND)
+            target_include_directories(wash-display PRIVATE ${XCB_EWMH_INCLUDE_DIRS})
+            target_link_libraries(wash-display PRIVATE ${XCB_EWMH_LIBRARIES})
+            target_link_directories(wash-display PRIVATE ${XCB_EWMH_LIBRARY_DIRS})
+        else()
+            message(STATUS "wash-display: libxcb-ewmh-dev absent — using minimal xcb_ewmh shim")
+            target_include_directories(wash-display BEFORE PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/xcbshim)
+        endif()
+    else()
+        message(STATUS "wash-display: xcb not found — Wayland-only (no X11 bridge)")
+    endif()
 else()
     message(STATUS "wash-display: wlroots not found — wire client + WebP back-half only")
 endif()

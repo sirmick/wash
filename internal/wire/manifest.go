@@ -76,6 +76,14 @@ const (
 	// chrome-DoS vector; wash-display is the canonical holder.
 	CapWindows = "windows"
 
+	// CapEnvPublish lets an app publish WASH_*-namespaced env hints that
+	// the router merges into every subsequently-spawned app's
+	// environment (env.publish). Used by wash-display to propagate the
+	// compositor's DISPLAY / WAYLAND_DISPLAY. Privileged — it influences
+	// other apps' environments — so it's a distinct capability and the
+	// router additionally allowlists keys. See docs/DISPLAY_ENV.md.
+	CapEnvPublish = "env-publish"
+
 	// CapRestart lets an app ask the router to cycle a background
 	// singleton service (the app.restart event, docs/SETTINGS.md §5):
 	// terminate the running instance, GC its windows/channels, and
@@ -93,21 +101,21 @@ const MaxIconBytes = 64 * 1024
 // Lives in wire so router and SDK share one definition. Adding a
 // field here updates every consumer in lockstep.
 type Manifest struct {
-	ID              string       `json:"id"`
-	Name            string       `json:"name"`
-	Version         string       `json:"version"`
-	ProtocolVersion int          `json:"protocol_version"`
-	Element         string       `json:"element"`
-	Surface         string       `json:"surface"`
-	Icon            string       `json:"icon"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Version         string `json:"version"`
+	ProtocolVersion int    `json:"protocol_version"`
+	Element         string `json:"element"`
+	Surface         string `json:"surface"`
+	Icon            string `json:"icon"`
 	// Accent is an optional brand color (any CSS color string,
 	// typically a #rrggbb hex). The shell tints the app's launcher
 	// icon with this. Apps that leave it empty get a deterministic
 	// hue derived from the app id — no row stays monochrome.
-	Accent          string       `json:"accent,omitempty"`
-	Instancing      string       `json:"instancing"`
-	Capabilities    []string     `json:"capabilities"`
-	Window          *WindowHints `json:"window,omitempty"`
+	Accent       string       `json:"accent,omitempty"`
+	Instancing   string       `json:"instancing"`
+	Capabilities []string     `json:"capabilities"`
+	Window       *WindowHints `json:"window,omitempty"`
 
 	// Hidden keeps the app out of the launcher catalog. The app is
 	// still spawnable (by --initial-app, or by another app's

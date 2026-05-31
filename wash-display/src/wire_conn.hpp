@@ -39,6 +39,14 @@ public:
     // thread. Same rule the Go SDK documents.
     using AppMsgHandler = std::function<void(const json& data, uint32_t win)>;
 
+    // Called on the reader thread for router→app window commands the
+    // compositor must act on: "window.resize" (w,h set) and
+    // "window.close_requested" (w,h zero). Like AppMsgHandler this runs
+    // on the reader thread and MUST NOT call wlroots directly — the
+    // compositor marshals onto its own thread (wlroots is single-thread).
+    using WindowCmdHandler =
+        std::function<void(const std::string& t, uint32_t win, uint32_t w, uint32_t h)>;
+
     explicit WireConn(int fd) : fd_(fd) {}
     ~WireConn();
 
@@ -64,6 +72,17 @@ public:
     // destroy_window is fire-and-forget (window.destroy on CH_EVENT).
     void destroy_window(uint32_t win);
 
+    // report_geometry tells the router a window's content changed size
+    // (window.geometry on CH_EVENT, fire-and-forget) so the shell frame
+    // tracks the new size. Send only on actual size change.
+    void report_geometry(uint32_t win, uint32_t w, uint32_t h);
+
+    // confirm_close replies to a router window.close_requested. We pass
+    // allow=false to VETO the router's auto-destroy: the compositor asks
+    // the guest client to close politely and drives the real teardown via
+    // destroy_window when the client actually exits (window.confirm_close).
+    void confirm_close(uint32_t win, bool allow);
+
     // open_video_channel sends channel.open{kind:"video"} for `win` and
     // blocks for channel.opened / channel.open.err. Returns the
     // allocated channel id, or 0 on failure (e.g. "no shell attached"
@@ -78,27 +97,23 @@ public:
     // `win` (0 = instance level).
     bool send_app_msg(uint32_t win, const json& data);
 
-    void on_app_msg(AppMsgHandler h) { app_msg_handler_ = std::move(h); }
+    // publish_env sends env.publish: WASH_*-namespaced env hints the
+    // router merges into every app it later spawns (docs/DISPLAY_ENV.md),
+    // so wash-term's shell can reach DISPLAY / WAYLAND_DISPLAY. Requires
+    // the env-publish capability (declared in the manifest).
+    bool publish_env(const json& env);
 
     // --- display.state (settings Display panel, docs/SETTINGS.md §3b) -
     // The compositor reports its live state so the settings panel can
-    // render status; the panel subscribes and gets a snapshot, then a
-    // fresh push on every window open/close. All three are safe from
-    // either thread (compositor or reader): each is a fire-and-forget
-    // send_app_msg, never a blocking round-trip.
-
-    // note_wayland_display records which wayland-N socket we serve.
-    // Called once by the compositor at startup.
+    // render status; the panel subscribes for a snapshot, then a fresh
+    // push on every window open/close. All three are fire-and-forget
+    // send_app_msg, safe from either thread.
     void note_wayland_display(const std::string& wd);
-
-    // note_window_delta adjusts the live window count by d (+1 on map,
-    // -1 on unmap/destroy) and pushes a fresh display.state.
     void note_window_delta(int d);
-
-    // emit_display_state pushes the current snapshot as an instance-level
-    // app_msg{kind:"display.state", running, wayland_display, window_count}.
-    // The subscribe handler calls this for the initial snapshot.
     void emit_display_state();
+
+    void on_app_msg(AppMsgHandler h) { app_msg_handler_ = std::move(h); }
+    void on_window_cmd(WindowCmdHandler h) { window_cmd_handler_ = std::move(h); }
 
     // alive is false once the socket closed or a shutdown arrived.
     bool alive() const { return alive_.load(); }
@@ -131,10 +146,11 @@ private:
     std::map<uint64_t, Reply> chan_pending_;
 
     AppMsgHandler app_msg_handler_;
+    WindowCmdHandler window_cmd_handler_;
 
     // display.state snapshot. state_mu_ guards the string; the count is
-    // atomic so map/unmap on the compositor thread and a subscribe on
-    // the reader thread don't race.
+    // atomic so map/unmap (compositor thread) and a subscribe (reader
+    // thread) don't race.
     std::mutex state_mu_;
     std::string wayland_display_;
     std::atomic<int> window_count_{0};

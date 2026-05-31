@@ -18,6 +18,7 @@ const (
 	CapSpawn        = wire.CapSpawn
 	CapPrepareSpawn = wire.CapPrepareSpawn
 	CapWindows      = wire.CapWindows
+	CapEnvPublish   = wire.CapEnvPublish
 	CapRestart      = wire.CapRestart
 )
 

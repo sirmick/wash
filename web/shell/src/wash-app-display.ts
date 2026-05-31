@@ -56,14 +56,28 @@ export class WashAppDisplay extends HTMLElement {
     this.windowID = winAttr != null ? parseInt(winAttr, 10) : -1;
 
     if (!this.canvas) {
+      // Render the guest buffer at native 1:1 pixels, anchored top-left,
+      // and CLIP the element box (no CSS scaling). During a drag-resize the
+      // wash frame resizes instantly but the guest repaints a beat later;
+      // with 1:1 + clip the stale frame is revealed/clipped (like a real X
+      // window mid-resize) instead of being stretched/blurred to the new
+      // box. Steady state (frame == guest size) is still exactly 1:1.
       this.style.display = 'block';
       this.style.width = '100%';
       this.style.height = '100%';
+      this.style.position = 'relative';
+      this.style.overflow = 'hidden';
+      // No opaque fill: during a grow-resize the slot expands a frame before
+      // the guest's larger buffer arrives, so the not-yet-covered strip shows
+      // through. Transparent lets the window's own dark chrome show there
+      // instead of a harsh black flash (the resize "flicker").
+      this.style.background = 'transparent';
 
       const canvas = document.createElement('canvas');
       canvas.style.display = 'block';
-      canvas.style.width = '100%';
-      canvas.style.height = '100%';
+      canvas.style.position = 'absolute';
+      canvas.style.left = '0';
+      canvas.style.top = '0';
       canvas.style.imageRendering = 'auto';
       this.appendChild(canvas);
       this.canvas = canvas;
@@ -133,9 +147,18 @@ export class WashAppDisplay extends HTMLElement {
           bitmap.close?.();
           return;
         }
+        // Keep the canvas CSS box equal to its backing-store pixels so the
+        // bitmap is drawn 1:1 (never scaled). The element clips/letterboxes
+        // any difference between this and the current frame size.
         if (header.frameW > 0 && header.frameH > 0) {
-          if (canvas.width !== header.frameW) canvas.width = header.frameW;
-          if (canvas.height !== header.frameH) canvas.height = header.frameH;
+          if (canvas.width !== header.frameW) {
+            canvas.width = header.frameW;
+            canvas.style.width = header.frameW + 'px';
+          }
+          if (canvas.height !== header.frameH) {
+            canvas.height = header.frameH;
+            canvas.style.height = header.frameH + 'px';
+          }
         }
         ctx.drawImage(bitmap, header.dirtyX, header.dirtyY);
         bitmap.close?.();

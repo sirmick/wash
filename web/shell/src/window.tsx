@@ -136,16 +136,33 @@ export function FloatingWindow(props: WindowProps) {
     const startY = ev.clientY;
     const origW = props.win.w;
     const origH = props.win.h;
+    // Stream the resize to the BE live during the drag, throttled to one
+    // in-flight animation frame, so the guest app reconfigures and repaints
+    // continuously instead of only snapping once on release. Without this
+    // the canvas just CSS-scales the last frame mid-drag ("janky / only
+    // sometimes re-renders") and the guest never sees intermediate sizes.
+    let rafPending: number | null = null;
+    const flush = () => {
+      rafPending = null;
+      const w = resizeW();
+      const h = resizeH();
+      if (w != null && h != null) window.wash.resizeWindow(props.win.windowID, w, h);
+    };
     const onMove = (m: PointerEvent) => {
       const newW = Math.max(160, Math.round(origW + (m.clientX - startX)));
       const newH = Math.max(80, Math.round(origH + (m.clientY - startY)));
       setResizeW(newW);
       setResizeH(newH);
+      if (rafPending == null) rafPending = requestAnimationFrame(flush);
     };
     const onUp = () => {
       target.removeEventListener('pointermove', onMove);
       target.removeEventListener('pointerup', onUp);
       target.releasePointerCapture(ev.pointerId);
+      if (rafPending != null) {
+        cancelAnimationFrame(rafPending);
+        rafPending = null;
+      }
       const w = resizeW();
       const h = resizeH();
       if (w != null && h != null && (w !== origW || h !== origH)) {
@@ -162,6 +179,14 @@ export function FloatingWindow(props: WindowProps) {
   // Frame geometry depends on state. Maximized = top-left of viewport
   // minus the chrome's bottom taskbar (40 px hardcoded; will become
   // negotiable when the chrome publishes a workarea).
+  // Window chrome: the stored window w/h is the CONTENT (slot) size — what
+  // the app element / guest surface actually gets. The frame adds a fixed-
+  // height titlebar + a 1px border per side. TITLEBAR_H MUST equal the
+  // wash-titlebar element's height below, or the slot won't equal the stored
+  // size and a guest surface (wash-app-display) will clip by the difference.
+  const TITLEBAR_H = 28;
+  const FRAME_BORDER = 1;
+
   const frameStyle = () => {
     const base = {
       position: 'absolute' as const,
@@ -226,8 +251,12 @@ export function FloatingWindow(props: WindowProps) {
       ...base,
       left: `${x}px`,
       top: `${y}px`,
-      width: `${w}px`,
-      height: `${h}px`,
+      // w/h is CONTENT (slot) size; the frame is that plus chrome (fixed
+      // titlebar + 1px border per side), so the slot equals the stored size
+      // exactly — guest surfaces fill it with no titlebar-height clip, and
+      // geometry feedback can't shrink-spiral.
+      width: `${w + FRAME_BORDER * 2}px`,
+      height: `${h + TITLEBAR_H + FRAME_BORDER * 2}px`,
       opacity: dragging ? 0.72 : 1,
     };
   };
@@ -290,7 +319,9 @@ export function FloatingWindow(props: WindowProps) {
         style={{
           display: 'flex',
           'align-items': 'center',
-          padding: '6px 8px',
+          height: `${TITLEBAR_H}px`,
+          'box-sizing': 'border-box',
+          padding: '0 8px',
           background: titlebarBackground(),
           cursor: 'move',
           'user-select': 'none',

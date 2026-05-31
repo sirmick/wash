@@ -21,6 +21,12 @@ const (
 	// App → router.
 	TEvtWindowSetTitle     = "window.set_title"
 	TEvtWindowConfirmClose = "window.confirm_close"
+	// TEvtWindowGeometry: app → router, the app's own content changed
+	// size (e.g. a wash-display guest surface resized). Distinct from
+	// TEvtWindowResize, which is router → app (a command to resize). The
+	// router updates the window's geometry so the shell frame tracks the
+	// new content size. Only honored for windows the sender owns.
+	TEvtWindowGeometry = "window.geometry"
 
 	// Multi-window: one app instance owning more than one window
 	// (wash-display maps each Wayland/X11 toplevel to a window). The
@@ -34,6 +40,16 @@ const (
 	TEvtWindowCreated   = "window.created"
 	TEvtWindowCreateErr = "window.create.err"
 	TEvtWindowDestroy   = "window.destroy"
+
+	// EvtEnvPublish: app → router. A privileged app (wash-display)
+	// publishes WASH_*-namespaced env hints that the router then merges
+	// into the environment of every app it subsequently spawns (see
+	// Router.spawnEnv). Used to propagate the compositor's DISPLAY /
+	// WAYLAND_DISPLAY socket names so wash-term's shell can launch X /
+	// Wayland clients. Gated by the "env-publish" capability; the router
+	// also allowlists keys to ^WASH_[A-Z0-9_]+$. See docs/DISPLAY_ENV.md.
+	TEvtEnvPublish    = "env.publish"
+	TEvtEnvPublishErr = "env.publish.err"
 	// EvtSpawnRequest / Ok / Err — unified spawn protocol.
 	//
 	// Normal spawn: app requests "launch app_id" and the router does
@@ -199,6 +215,20 @@ func NewEvtWindowSetTitle(win uint32, title string) EvtWindowSetTitle {
 	return EvtWindowSetTitle{T: TEvtWindowSetTitle, Win: win, Title: title}
 }
 
+// EvtWindowGeometry: app → router, the app's own window content changed
+// size. The router applies it via windowSession.resize so the shell
+// frame tracks the content. Only honored for windows the sender owns.
+type EvtWindowGeometry struct {
+	T   string `json:"t"`
+	Win uint32 `json:"win"`
+	W   uint32 `json:"w"`
+	H   uint32 `json:"h"`
+}
+
+func NewEvtWindowGeometry(win, w, h uint32) EvtWindowGeometry {
+	return EvtWindowGeometry{T: TEvtWindowGeometry, Win: win, W: w, H: h}
+}
+
 // EvtWindowConfirmClose: app's answer to EvtWindowCloseRequested.
 // Allow=true tears down the window; allow=false vetoes it.
 type EvtWindowConfirmClose struct {
@@ -285,6 +315,30 @@ type EvtWindowDestroy struct {
 
 func NewEvtWindowDestroy(win uint32) EvtWindowDestroy {
 	return EvtWindowDestroy{T: TEvtWindowDestroy, Win: win}
+}
+
+// EvtEnvPublish: app → router. Env is a set of WASH_*-namespaced
+// environment hints the router merges into every subsequently-spawned
+// app's environment. See docs/DISPLAY_ENV.md and Router.spawnEnv.
+type EvtEnvPublish struct {
+	T   string            `json:"t"`
+	Env map[string]string `json:"env"`
+}
+
+func NewEvtEnvPublish(env map[string]string) EvtEnvPublish {
+	return EvtEnvPublish{T: TEvtEnvPublish, Env: env}
+}
+
+// EvtEnvPublishErr: router → app, the publish was rejected (capability
+// not declared). Fire-and-forget; the app isn't expected to retry.
+type EvtEnvPublishErr struct {
+	T    string `json:"t"`
+	Code string `json:"code"`
+	Msg  string `json:"msg"`
+}
+
+func NewEvtEnvPublishErr(code, msg string) EvtEnvPublishErr {
+	return EvtEnvPublishErr{T: TEvtEnvPublishErr, Code: code, Msg: msg}
 }
 
 // EvtSpawnRequest is the unified spawn request: app → router.
@@ -722,6 +776,9 @@ func DecodeEvt(data []byte) (any, error) {
 	case TEvtWindowSetTitle:
 		var m EvtWindowSetTitle
 		return m, json.Unmarshal(data, &m)
+	case TEvtWindowGeometry:
+		var m EvtWindowGeometry
+		return m, json.Unmarshal(data, &m)
 	case TEvtWindowConfirmClose:
 		var m EvtWindowConfirmClose
 		return m, json.Unmarshal(data, &m)
@@ -736,6 +793,12 @@ func DecodeEvt(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TEvtWindowDestroy:
 		var m EvtWindowDestroy
+		return m, json.Unmarshal(data, &m)
+	case TEvtEnvPublish:
+		var m EvtEnvPublish
+		return m, json.Unmarshal(data, &m)
+	case TEvtEnvPublishErr:
+		var m EvtEnvPublishErr
 		return m, json.Unmarshal(data, &m)
 	case TEvtSpawnRequest:
 		var m EvtSpawnRequest

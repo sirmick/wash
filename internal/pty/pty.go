@@ -212,7 +212,29 @@ func WithWashEnv(env []string) []string {
 	if binDir != "" && lookupEnv(out, "PATH") == "" {
 		out = append(out, "PATH="+binDir)
 	}
+	out = mapDisplayEnv(out)
 	return out
+}
+
+// mapDisplayEnv turns the router's WASH_*-namespaced display hints (set
+// by Router.spawnEnv from an env.publish, see docs/DISPLAY_ENV.md) into
+// the real DISPLAY / WAYLAND_DISPLAY / XDG_RUNTIME_DIR a GUI client
+// needs — so typing `xclock` or a Wayland app in a wash terminal just
+// works. A pre-existing real var (the user exported their own) is never
+// clobbered. Only wash-term applies this, via WithWashEnv: wash's own
+// apps keep the inert WASH_* names and never become display clients.
+func mapDisplayEnv(env []string) []string {
+	maybeSet := func(env []string, src, dst string) []string {
+		v := lookupEnv(env, src)
+		if v == "" || lookupEnv(env, dst) != "" {
+			return env
+		}
+		return append(env, dst+"="+v)
+	}
+	env = maybeSet(env, "WASH_X_DISPLAY", "DISPLAY")
+	env = maybeSet(env, "WASH_WAYLAND_DISPLAY", "WAYLAND_DISPLAY")
+	env = maybeSet(env, "WASH_XDG_RUNTIME_DIR", "XDG_RUNTIME_DIR")
+	return env
 }
 
 // PinTerm returns env with TERM forced to xterm-256color but PATH

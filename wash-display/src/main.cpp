@@ -24,6 +24,8 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <csignal>
+#include <execinfo.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -31,6 +33,55 @@
 static const char* kAppID = "com.wash.display";
 static const char* kVersion = "0.8.0";
 static const int kProto = 1;
+
+// crash_handler dumps a native backtrace to stderr on a fatal signal so
+// the cause of a compositor abort/segfault lands in the router log (the
+// compositor shares the router's stderr). wlroots aborts on protocol
+// violations via abort()/SIGABRT, which the kernel does NOT record in
+// dmesg — without this the process just vanishes silently. Re-raises with
+// the default disposition so the exit status still reflects the signal.
+static void crash_handler(int sig) {
+    void* frames[64];
+    int n = backtrace(frames, 64);
+    const char* name = (sig == SIGSEGV) ? "SIGSEGV"
+                     : (sig == SIGABRT) ? "SIGABRT"
+                     : (sig == SIGBUS)  ? "SIGBUS"
+                     : (sig == SIGFPE)  ? "SIGFPE"  : "signal";
+    std::fprintf(stderr, "wash-display: FATAL %s — backtrace (%d frames):\n", name, n);
+    std::fflush(stderr);
+    backtrace_symbols_fd(frames, n, STDERR_FILENO);
+    std::signal(sig, SIG_DFL);
+    std::raise(sig);
+}
+
+// term_handler logs an orderly termination signal so a router-driven
+// shutdown (SIGTERM) or a hangup is distinguishable in the log from a
+// crash. Uses raw write() (async-signal-safe) and _exit().
+static void term_handler(int sig) {
+    const char* name = (sig == SIGTERM) ? "SIGTERM"
+                     : (sig == SIGHUP)  ? "SIGHUP" : "signal";
+    static const char pfx[] = "wash-display: received ";
+    static const char sfx[] = " — exiting\n";
+    (void)!write(STDERR_FILENO, pfx, sizeof pfx - 1);
+    (void)!write(STDERR_FILENO, name, std::strlen(name));
+    (void)!write(STDERR_FILENO, sfx, sizeof sfx - 1);
+    _exit(128 + sig);
+}
+
+static void install_crash_handler() {
+    // A socket server MUST ignore SIGPIPE: when a write() races the peer
+    // closing its end (e.g. the router tearing down our connection as an
+    // X client exits), the default disposition silently kills the whole
+    // process — no backtrace, no run_compositor return. With SIG_IGN the
+    // write() returns EPIPE and WireConn fails the frame gracefully.
+    std::signal(SIGPIPE, SIG_IGN);
+    std::signal(SIGSEGV, crash_handler);
+    std::signal(SIGABRT, crash_handler);
+    std::signal(SIGBUS, crash_handler);
+    std::signal(SIGFPE, crash_handler);
+    std::signal(SIGTERM, term_handler);
+    std::signal(SIGHUP, term_handler);
+}
 
 // --- manifest probe -------------------------------------------------
 // `wash-display --wash-manifest` prints the ProbeOutput envelope the
@@ -48,7 +99,7 @@ static int print_manifest() {
         "\"surface\":\"background\","
         "\"icon\":\"\","
         "\"instancing\":\"singleton\","
-        "\"capabilities\":[\"windows\"]"
+        "\"capabilities\":[\"windows\",\"env-publish\"]"
         "},\"bundle_b64\":\"\"}\n",
         kAppID, kVersion, kProto);
     return 0;
@@ -129,6 +180,8 @@ static int run() {
     // Real path: run the wlroots compositor on this thread. Each mapped
     // toplevel becomes a wash window via conn.create_window().
     int rc = wash::run_compositor(conn);
+    std::fprintf(stderr, "wash-display: run_compositor returned rc=%d (alive=%d) — "
+                         "compositor event loop exited\n", rc, (int)conn.alive());
     conn.stop();
     return rc;
 #else
@@ -145,5 +198,6 @@ int main(int argc, char** argv) {
     if (argc >= 2 && std::strcmp(argv[1], "--wash-manifest") == 0) {
         return print_manifest();
     }
+    install_crash_handler();
     return run();
 }

@@ -189,6 +189,28 @@ function fromSessionWindow(sw: SessionWindow): Win {
   };
 }
 
+// mountWhenReady upserts a window once its element is available. Built-in
+// elements — custom elements the shell registers itself at startup, e.g.
+// <wash-app-display> for wash-display's video surfaces — ship no app
+// bundle, so they're already defined and we mount immediately. Bundle-
+// backed app windows wait for their bundle to arrive (so the element
+// definition exists before we instantiate it). Without the built-in
+// fast-path, a wash-display window waited 10s for a bundle that never
+// comes ("bundle for <id> not announced") and never mounted.
+function mountWhenReady(
+  w: Win,
+  waitForBundle: (instanceID: string) => Promise<void>,
+  where: string,
+): void {
+  if (typeof customElements !== 'undefined' && customElements.get(w.element)) {
+    upsertWindow(w);
+    return;
+  }
+  waitForBundle(w.instanceID)
+    .then(() => upsertWindow(w))
+    .catch((err) => console.error(`wash: ${where} window mount:`, err));
+}
+
 // applySessionSnapshot replaces the store with the router's full
 // state. Each new window waits for its bundle to be ready before
 // landing in the store so onMount can resolve the custom element.
@@ -208,9 +230,7 @@ export function applySessionSnapshot(
 
   for (const sw of sessionWins) {
     const w = fromSessionWindow(sw);
-    waitForBundle(w.instanceID)
-      .then(() => upsertWindow(w))
-      .catch((err) => console.error('wash: snapshot window mount:', err));
+    mountWhenReady(w, waitForBundle, 'snapshot');
     if (sw.focused) setFocused(sw.window_id);
   }
   if (sessionWins.length === 0 || !sessionWins.some((w) => w.focused)) {
@@ -232,10 +252,9 @@ export function applySessionPatch(
       if (existed) {
         upsertWindow(w);
       } else {
-        // First sight of this window — wait for the bundle to land.
-        waitForBundle(w.instanceID)
-          .then(() => upsertWindow(w))
-          .catch((err) => console.error('wash: patch window mount:', err));
+        // First sight of this window — mount when its element is ready
+        // (immediately for built-ins, else after its bundle lands).
+        mountWhenReady(w, waitForBundle, 'patch');
       }
       if (w.state === 'minimized' && focused() === w.windowID) {
         setFocused(null);
