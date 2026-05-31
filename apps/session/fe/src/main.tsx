@@ -21,7 +21,7 @@ import { NotifyWidget, type NotifyEntry } from './sidebar/NotifyWidget';
 import { BulkWidget, type BulkJob } from './sidebar/BulkWidget';
 import { BulkConflictOverlay, type BulkConflict } from './sidebar/BulkConflictOverlay';
 import { PrivWidget, type PrivReq } from './sidebar/PrivWidget';
-import { NetWidget, type NetState } from './sidebar/NetWidget';
+import { NetWidget, type NetState, type NetIface } from './sidebar/NetWidget';
 import { PrivUnlockOverlay, type PrivUnlockState } from './sidebar/PrivUnlockOverlay';
 
 interface CatalogApp {
@@ -226,6 +226,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // Net — com.wash.netd status snapshot (status/phase/summary/diagnostics),
   // fed by the session BE's net.state forwarder. Null until first push.
   const [netState, setNetState] = createSignal<NetState | null>(null);
+  // Live interface IPs from the session BE's host-stats ticker (host.ifaces).
+  const [netIfaces, setNetIfaces] = createSignal<NetIface[]>([]);
   // persistSidebar is debounced so a flurry of toggles doesn't
   // hammer the BE's save_state path. Matches the wash-edit cadence.
   let persistTimer: number | null = null;
@@ -516,6 +518,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           return;
         case 'host.stats':
           setHostStats(data as unknown as AboutHostStats);
+          return;
+        case 'host.ifaces':
+          setNetIfaces((data.interfaces as NetIface[] | undefined) ?? []);
           return;
         case 'notify.state': {
           // notify service → session BE forwards StateService payload
@@ -826,7 +831,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           onToggle={() => toggleSection('net')}
           badge={netBadge()}
         >
-          <NetWidget state={netState} onConfigure={() => launchApp('com.wash.net')} />
+          <NetWidget state={netState} ifaces={netIfaces} onConfigure={() => launchApp('com.wash.net')} />
         </Section>
       </Sidebar>
       <BulkConflictOverlay

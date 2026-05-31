@@ -25,8 +25,16 @@ export interface NetState {
   diagnostics?: NetDiag[];
 }
 
+// NetIface is one non-local, non-docker interface and its IPs, pushed live by
+// the session BE's host-stats ticker (host.ifaces).
+export interface NetIface {
+  name: string;
+  ips: string[];
+}
+
 export interface NetWidgetProps {
   state: () => NetState | null;
+  ifaces: () => NetIface[];
   onConfigure: () => void;
 }
 
@@ -77,6 +85,27 @@ export const NetWidget: Component<NetWidgetProps> = (props) => {
           <span style={{ opacity: 0.6, font: '10px ui-monospace,Menlo,Consolas,monospace' }}>{st()!.phase}</span>
         </Show>
       </div>
+
+      {/* Live addressing: the IP of every non-local, non-docker interface. */}
+      <Show when={props.ifaces().length > 0} fallback={
+        <span data-testid="net-noaddr" style={{ opacity: 0.45, font: '10px ui-monospace,Menlo,Consolas,monospace' }}>
+          no addressed interfaces
+        </span>
+      }>
+        <div data-testid="net-ifaces" style={{ display: 'flex', 'flex-direction': 'column', gap: '2px' }}>
+          <For each={props.ifaces()}>
+            {(ifc) => (
+              <div
+                data-testid={`net-iface-${ifc.name}`}
+                style={{ display: 'flex', gap: '6px', 'align-items': 'baseline', font: '10px ui-monospace,Menlo,Consolas,monospace' }}
+              >
+                <span style={{ color: '#8fb0e0', 'min-width': '52px' }}>{ifc.name}</span>
+                <span style={{ color: '#cfd0d4', flex: 1, 'word-break': 'break-all' }}>{ifc.ips.join('  ')}</span>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
 
       <Show when={awaiting() && summary().length > 0}>
         <div
