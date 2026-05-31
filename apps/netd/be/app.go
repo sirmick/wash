@@ -35,8 +35,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sirmick/wash/apps/netd/be/nm"
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/internal/washnet/backend"
 	"github.com/sirmick/wash/internal/washnet/change"
 	"github.com/sirmick/wash/internal/washnet/codec"
 	"github.com/sirmick/wash/internal/washnet/model"
@@ -102,11 +104,30 @@ func run(ctx context.Context) error { return sdk.Run(ctx, def) }
 // handler closures capture these. A package-level mutex guards the pending job.
 var (
 	svc     *sdk.StateService[NetState]
-	applier *fakeApplier
+	applier netApplier
 	mu      sync.Mutex
 	pending *txn.Job    // set while a change awaits confirm; nil otherwise
 	timer   *time.Timer // autonomous auto-revert timer for `pending`
 )
+
+// netApplier is the backend seam plus Live() (the confirmed base netd diffs an
+// edit against). Both the fake and the real NM backend satisfy it.
+type netApplier interface {
+	backend.Applier
+	Live() model.Config
+}
+
+// newApplier selects the backend. NM is used ONLY when explicitly opted in via
+// WASH_NETD_BACKEND=nm (the guest image sets it) — never by mere D-Bus
+// reachability, so a dev host that happens to run NetworkManager can't have its
+// real networking reconfigured by a unit test. Otherwise the in-memory fake.
+func newApplier() netApplier {
+	if os.Getenv("WASH_NETD_BACKEND") == "nm" {
+		log.Printf("wash-netd: backend = NetworkManager")
+		return nm.NewApplier()
+	}
+	return newFakeApplier()
+}
 
 // ConfirmTimeout is the commit-confirm window (docs/NET.md §7, §2.9): if an
 // applied change isn't confirmed within it, netd auto-reverts on its OWN —
@@ -169,7 +190,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		}
 	}
 	bus := sdk.NewBus(c)
-	applier = newFakeApplier()
+	applier = newApplier()
 	svc = sdk.NewStateService(bus, NetState{Status: "idle"})
 	registerHandlers(bus)
 }

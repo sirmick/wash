@@ -60,9 +60,12 @@ func (c *Conn) Activate(id string) error {
 
 // Apply renders cfg to NM keyfiles, installs them in the system-connections dir
 // (root-owned 0600, as NM requires), reloads NM, and activates every connection.
+func (c *Conn) Apply(cfg model.Config) ([]string, error) { return c.applyTo(SystemConnDir, cfg) }
+
+// applyTo is Apply against an explicit keyfile dir (overridable for tests).
 // Masters before members so a bridge exists before its ports enslave. Returns
 // the connection ids it installed.
-func (c *Conn) Apply(cfg model.Config) ([]string, error) {
+func (c *Conn) applyTo(dir string, cfg model.Config) ([]string, error) {
 	kfs, err := nmprofile.RenderKeyfiles(cfg)
 	if err != nil {
 		return nil, err
@@ -70,7 +73,7 @@ func (c *Conn) Apply(cfg model.Config) ([]string, error) {
 	ids := make([]string, 0, len(kfs))
 	for id, text := range kfs {
 		ids = append(ids, id)
-		p := filepath.Join(SystemConnDir, id+".nmconnection")
+		p := filepath.Join(dir, id+".nmconnection")
 		if err := os.WriteFile(p, []byte(text), 0o600); err != nil {
 			return ids, fmt.Errorf("write %s: %w", p, err)
 		}

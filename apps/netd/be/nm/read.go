@@ -15,8 +15,11 @@ import (
 // engine diffs an edit against. We map only the fields the model represents;
 // anything NM added (uuid, timestamps, settings we don't model) is ignored on
 // read and preserved on write by editing the existing connection in place.
-func ReadSystemConnections() (model.Config, error) {
-	entries, err := os.ReadDir(SystemConnDir)
+func ReadSystemConnections() (model.Config, error) { return readDir(SystemConnDir) }
+
+// readDir is ReadSystemConnections against an explicit dir (overridable for tests).
+func readDir(dir string) (model.Config, error) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return model.Config{}, nil
@@ -28,7 +31,7 @@ func ReadSystemConnections() (model.Config, error) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".nmconnection") {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(SystemConnDir, e.Name()))
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
 			return model.Config{}, err
 		}

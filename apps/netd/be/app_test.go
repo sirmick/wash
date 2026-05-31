@@ -254,7 +254,7 @@ func TestApplyAutoRevertsOnVerifyFailure(t *testing.T) {
 	router, cleanup := connectNetd(t)
 	defer cleanup()
 
-	applier.setVerifyErr(errors.New("gateway unreachable")) // the lock-out path (§7, §10)
+	applier.(*fakeApplier).setVerifyErr(errors.New("gateway unreachable")) // the lock-out path (§7, §10)
 
 	reply := call(t, router, netSender, "apply", map[string]any{"config": ifaceConfig()})
 	if reply["kind"] != "apply_ok" || reply["state"] != "reverted" {

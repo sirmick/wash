@@ -140,6 +140,9 @@ NetworkManager --no-daemon >>/run/nm.log 2>&1 &
 # session desktop, …); logs to /run/wash-router.log for ctl-plane inspection.
 # The port is a raw chardev, so no stty/raw is needed.
 mkdir -p /run
+# Tell wash-netd to drive real NetworkManager (it defaults to the in-memory fake
+# unless explicitly opted in — so a dev host running NM is never touched).
+export WASH_NETD_BACKEND=nm
 ( i=0; while [ ! -e /dev/vport0p1 ] && [ $i -lt 600 ]; do i=$((i+1)); sleep 0.1; done
   while :; do
     /usr/lib/wash/wash-router \
