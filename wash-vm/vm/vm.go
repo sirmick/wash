@@ -33,7 +33,7 @@ type Opts struct {
 
 func (o *Opts) defaults() {
 	if o.Mem == "" {
-		o.Mem = "512M" // NM + glib live in a RAM-backed initramfs; 256M is tight
+		o.Mem = "1024M" // NM + linux-virt modules live in a RAM-backed initramfs
 	}
 	if o.Accel == "" {
 		o.Accel = "kvm"
@@ -104,13 +104,18 @@ func Launch(ctx context.Context, o Opts) (*VM, error) {
 		// nr=1: port 0 on a virtio-serial bus is reserved for the console, so
 		// the first data port is deterministically /dev/vport0p1 in-guest.
 		"-device", "virtserialport,chardev=data,name=wash.data,nr=1",
-		// A managed NIC for NetworkManager (docs/NET.md §5/B4). qemu user-mode
-		// networking gives the guest a NAT'd eth0 with a built-in DHCP server +
-		// 10.0.2.2 gateway, so NM can DHCP, gain "full" connectivity, and the
-		// commit-confirm connectivity VERIFY has something real to check —
-		// in-band, while the control plane stays out-of-band on the serial.
-		"-netdev", "user,id=net0",
-		"-device", "virtio-net-pci,netdev=net0,id=nic0",
+	}
+	// Managed NICs for NetworkManager (docs/NET.md §5/B4). Several eth devices so
+	// the backend can be tested configuring them different ways — eth0 for
+	// baseline connectivity (qemu user-net: NAT'd, built-in DHCP + 10.0.2.2
+	// gateway, so the commit-confirm VERIFY has something real), eth1..eth3 as
+	// fodder for bridging and VLANs. All in-band; the control plane stays
+	// out-of-band on the serial.
+	for n := 0; n < 4; n++ {
+		args = append(args,
+			"-netdev", fmt.Sprintf("user,id=net%d", n),
+			"-device", fmt.Sprintf("virtio-net-pci,netdev=net%d,id=nic%d", n, n),
+		)
 	}
 	// qemu's lifetime is the VM's lifetime — until Close() — NOT the caller's
 	// boot context. The passed ctx bounds the dial/handshake below (which is

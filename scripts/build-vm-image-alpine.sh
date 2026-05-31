@@ -16,14 +16,12 @@ OUT="$ROOT_DIR/out/vm"
 BUILD="$OUT/build"
 mkdir -p "$BUILD"
 
-[ -f "$OUT/vmlinuz" ] || \
-  curl -fsSL -o "$OUT/vmlinuz" "$MIRROR/netboot/vmlinuz-virt"
-
-# Base rootfs = Alpine + NetworkManager (the type-2 backend, docs/NET.md §5).
-# The host has no apk, so we render the rootfs in a throwaway Alpine container
-# and export it. Cached; rebuilt only when this package set changes. Pin the
-# set in a marker so a changed list invalidates the cache.
-NM_PKGS="networkmanager networkmanager-cli networkmanager-wifi dbus wpa_supplicant"
+# Base rootfs = Alpine + NetworkManager (the type-2 backend, docs/NET.md §5) +
+# linux-virt (so the kernel AND its modules — virtio_net for the NICs, 8021q,
+# bridge — come from the SAME package and always match). The host has no apk, so
+# we render the rootfs in a throwaway Alpine container and export it. Cached;
+# rebuilt only when this package set changes.
+NM_PKGS="networkmanager networkmanager-cli networkmanager-wifi dbus wpa_supplicant eudev linux-virt"
 ROOTFS_TAR="$BUILD/alpine-nm.tar"
 PKG_MARK="$BUILD/.alpine-nm.pkgs"
 if [ ! -f "$ROOTFS_TAR" ] || [ "$(cat "$PKG_MARK" 2>/dev/null)" != "$ALPINE_VER:$NM_PKGS" ]; then
@@ -45,6 +43,9 @@ CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" \
 # guest (godbus → NetworkManager). Run over the ctl plane.
 CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" \
   go build -trimpath -ldflags="-s -w" -o "$BUILD/washnet-nmprobe" "$ROOT_DIR/cmd/washnet-nmprobe"
+# washnet-apply: render a UCI config to NM keyfiles and apply it to live NM.
+CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" \
+  go build -trimpath -ldflags="-s -w" -o "$BUILD/washnet-apply" "$ROOT_DIR/cmd/washnet-apply"
 
 # The multicall wash binary (router + apps, incl. com.wash.net/.netd) is the
 # real payload (docs/NET.md §8.3 — the VM serves everything). It embeds every
@@ -61,8 +62,31 @@ RFS="$BUILD/root"
 rm -rf "$RFS"
 mkdir -p "$RFS"
 tar -C "$RFS" -xf "$ROOTFS_TAR"
+# Kernel comes from the same linux-virt package as the in-rootfs modules.
+cp "$RFS/boot/vmlinuz-virt" "$OUT/vmlinuz"
 install -Dm755 "$BUILD/washvm-agent" "$RFS/sbin/washvm-agent"
+
+# Make NM actually manage the eth NICs: keyfile-only plugin (don't defer to
+# Alpine's /etc/network/interfaces via ifupdown) + explicitly manage everything.
+# Without this NM reports the devices "unmanaged" and won't apply our profiles.
+mkdir -p "$RFS/etc/NetworkManager/conf.d"
+cat > "$RFS/etc/NetworkManager/conf.d/10-wash.conf" <<'NMCONF'
+[main]
+plugins=keyfile
+# Don't auto-create a "Wired connection N" per NIC: those would hold eth1/eth2/
+# eth3 and conflict when wash applies a bridge-port / vlan onto them. wash owns
+# the config; an unconfigured NIC just sits managed+disconnected until applied.
+no-auto-default=*
+
+[keyfile]
+unmanaged-devices=none
+
+[device]
+match-device=interface-name:eth*
+managed=1
+NMCONF
 install -Dm755 "$BUILD/washnet-nmprobe" "$RFS/usr/bin/washnet-nmprobe"
+install -Dm755 "$BUILD/washnet-apply" "$RFS/usr/bin/washnet-apply"
 
 # Bake the multicall + materialize the per-app symlinks the router scans. The
 # host binary is the same arch (amd64), so run it on the host to emit symlinks
@@ -81,6 +105,19 @@ mount -t proc proc /proc 2>/dev/null
 mount -t sysfs sys /sys 2>/dev/null
 mount -t devtmpfs dev /dev 2>/dev/null
 mount -t tmpfs tmpfs /run 2>/dev/null
+
+# Load the NIC driver + link drivers (the initramfs is module-bearing now, from
+# linux-virt). virtio_net makes the qemu NICs appear as eth0..ethN; 8021q/bridge
+# back the vlan/bridge devices NM creates (NM also autoloads these, but be
+# explicit). Quiet if already built in.
+for m in virtio_net 8021q bridge; do modprobe "$m" 2>/dev/null; done
+
+# udev: NM refuses to manage a link until udev has initialized it (reason 71 —
+# "link not initialized by udev"). Start eudev's udevd and populate the device
+# db before NM comes up.
+/sbin/udevd --daemon 2>/dev/null
+udevadm trigger --action=add 2>/dev/null
+udevadm settle --timeout=10 2>/dev/null
 
 # Bring up D-Bus + NetworkManager so the netd NM backend (docs/NET.md §5 — the
 # type-2 backend, driven pure-Go over D-Bus via godbus) has something to talk
