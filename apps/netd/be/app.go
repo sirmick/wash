@@ -39,6 +39,7 @@ import (
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/washnet/backend"
+	"github.com/sirmick/wash/internal/washnet/caps"
 	"github.com/sirmick/wash/internal/washnet/change"
 	"github.com/sirmick/wash/internal/washnet/codec"
 	"github.com/sirmick/wash/internal/washnet/model"
@@ -115,6 +116,7 @@ var (
 type netApplier interface {
 	backend.Applier
 	Live() model.Config
+	Devices() []string // managed link names (eth0, …) for the FE's Add wizards
 }
 
 // newApplier selects the backend. NM is used ONLY when explicitly opted in via
@@ -205,6 +207,30 @@ func registerHandlers(bus *sdk.Bus) {
 			return validateResp{}, sdk.Errf(sdk.ErrBadRequest, "decode config: %v", err)
 		}
 		return validateResp{Diagnostics: nonNilDiags(validate.Validate(cfg, applier.Capabilities()))}, nil
+	})
+
+	sdk.HandleFrom(bus, "current", func(_ *sdk.Conn, _ string, _ struct{}, from wire.Sender) (currentResp, error) {
+		if err := authz(from); err != nil {
+			return currentResp{}, err
+		}
+		data, err := codec.EncodeJSON(applier.Live())
+		if err != nil {
+			return currentResp{}, sdk.Errf(sdk.ErrInternal, "encode current: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			return currentResp{}, sdk.Errf(sdk.ErrInternal, "decode current: %v", err)
+		}
+		c := applier.Capabilities()
+		return currentResp{Config: m, Devices: applier.Devices(), Caps: capsDTO{
+			CanBridge:     c.Has(caps.CanBridge),
+			CanVLAN:       c.Has(caps.CanVLAN),
+			CanWireGuard:  c.Has(caps.CanWireGuard),
+			CanWifiClient: c.SupportsKind("wireless", "wifi-iface"),
+			CanZones:      c.Has(caps.CanZones),
+			CanDHCPServer: c.Has(caps.CanDHCPServer),
+			CanAP:         c.Has(caps.CanAP),
+		}}, nil
 	})
 
 	sdk.HandleFrom(bus, "diff", func(_ *sdk.Conn, _ string, req configReq, from wire.Sender) (diffResp, error) {
@@ -337,6 +363,26 @@ type applyResp struct {
 
 type statusResp struct {
 	State string `json:"state"`
+}
+
+// currentResp carries the box's live config (the FE-JSON interchange, as a
+// structured map — not raw bytes, which the router would base64-encode) plus the
+// backend's capabilities so the FE greys what this backend can't do.
+type currentResp struct {
+	Config  map[string]any `json:"config"`
+	Caps    capsDTO        `json:"caps"`
+	Devices []string       `json:"devices"` // managed links for the Add wizards
+}
+
+// capsDTO is the feature subset the FE needs to gate its Add menu + screens.
+type capsDTO struct {
+	CanBridge     bool `json:"can_bridge"`
+	CanVLAN       bool `json:"can_vlan"`
+	CanWireGuard  bool `json:"can_wireguard"`
+	CanWifiClient bool `json:"can_wifi_client"`
+	CanZones      bool `json:"can_zones"`
+	CanDHCPServer bool `json:"can_dhcp_server"`
+	CanAP         bool `json:"can_ap"`
 }
 
 // entryDTO / eventDTO are snake_case wire shapes for the pure domain types

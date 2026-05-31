@@ -30,7 +30,7 @@ func main() {
 	initramfs := flag.String("initramfs", "out/vm/initramfs.gz", "guest initramfs")
 	chrome := flag.String("chrome", "", "host chrome dir served at / (e.g. web/shell/dist); empty serves only /ws")
 	addr := flag.String("addr", "127.0.0.1:0", "proxy listen address")
-	mem := flag.String("mem", "256M", "guest memory")
+	mem := flag.String("mem", "1024M", "guest memory (NM + modules in the RAM initramfs)")
 	bootTimeout := flag.Duration("boot-timeout", 30*time.Second, "guest readiness timeout")
 	flag.Parse()
 

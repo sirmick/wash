@@ -85,3 +85,6 @@ func (a *fakeApplier) setVerifyErr(err error) {
 	defer a.mu.Unlock()
 	a.verifyErr = err
 }
+
+// Devices: the fake has no real links; the FE falls back to configured ones.
+func (a *fakeApplier) Devices() []string { return nil }

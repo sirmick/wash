@@ -239,3 +239,25 @@ func restoreDir(dir string, snap map[string]string) error {
 	}
 	return nil
 }
+
+// Devices lists the managed link names NM sees (eth0, …), so the FE wizards can
+// offer them as VLAN parents / bridge members even before they carry a config.
+// Loopback and already-virtual links (vlan/bridge) are filtered out.
+func (a *Applier) Devices() []string {
+	c, err := Connect()
+	if err != nil {
+		return nil
+	}
+	defer c.Close()
+	s, err := c.Status()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, d := range s.Devices {
+		if d.Type == 1 && d.Interface != "" { // NM_DEVICE_TYPE_ETHERNET
+			out = append(out, d.Interface)
+		}
+	}
+	return out
+}
