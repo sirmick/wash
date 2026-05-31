@@ -80,6 +80,26 @@ public:
 
     void on_app_msg(AppMsgHandler h) { app_msg_handler_ = std::move(h); }
 
+    // --- display.state (settings Display panel, docs/SETTINGS.md §3b) -
+    // The compositor reports its live state so the settings panel can
+    // render status; the panel subscribes and gets a snapshot, then a
+    // fresh push on every window open/close. All three are safe from
+    // either thread (compositor or reader): each is a fire-and-forget
+    // send_app_msg, never a blocking round-trip.
+
+    // note_wayland_display records which wayland-N socket we serve.
+    // Called once by the compositor at startup.
+    void note_wayland_display(const std::string& wd);
+
+    // note_window_delta adjusts the live window count by d (+1 on map,
+    // -1 on unmap/destroy) and pushes a fresh display.state.
+    void note_window_delta(int d);
+
+    // emit_display_state pushes the current snapshot as an instance-level
+    // app_msg{kind:"display.state", running, wayland_display, window_count}.
+    // The subscribe handler calls this for the initial snapshot.
+    void emit_display_state();
+
     // alive is false once the socket closed or a shutdown arrived.
     bool alive() const { return alive_.load(); }
 
@@ -111,6 +131,13 @@ private:
     std::map<uint64_t, Reply> chan_pending_;
 
     AppMsgHandler app_msg_handler_;
+
+    // display.state snapshot. state_mu_ guards the string; the count is
+    // atomic so map/unmap on the compositor thread and a subscribe on
+    // the reader thread don't race.
+    std::mutex state_mu_;
+    std::string wayland_display_;
+    std::atomic<int> window_count_{0};
 };
 
 } // namespace wash

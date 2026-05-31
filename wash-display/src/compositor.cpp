@@ -205,6 +205,11 @@ void toplevel_map(struct wl_listener* listener, void* /*data*/) {
     t->win = t->server->conn->create_window(ttl, w, h);
     wlr_log(WLR_INFO, "wash-display: toplevel mapped \"%s\" %ux%u -> win=%u",
             ttl.c_str(), w, h, t->win);
+    if (t->win) {
+        // Bump the live window count → fresh display.state to the
+        // settings panel.
+        t->server->conn->note_window_delta(+1);
+    }
 
     // Open the per-window video channel. Needs a bound shell (browser);
     // without one the router replies "no shell attached" and we get 0 —
@@ -222,6 +227,7 @@ void toplevel_unmap(struct wl_listener* listener, void* /*data*/) {
     Toplevel* t = wl_container_of(listener, t, unmap);
     if (t->win) {
         t->server->conn->destroy_window(t->win);
+        t->server->conn->note_window_delta(-1);
         wlr_log(WLR_INFO, "wash-display: toplevel unmapped win=%u", t->win);
         t->win = 0;
     }
@@ -264,7 +270,11 @@ void toplevel_commit(struct wl_listener* listener, void* /*data*/) {
 void toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
     Toplevel* t = wl_container_of(listener, t, destroy);
     if (t->win) {
+        // Still mapped at destroy (no unmap fired first) — drop the
+        // window and its count. If unmap already ran, t->win is 0 and
+        // the count was decremented there; no double-count.
         t->server->conn->destroy_window(t->win);
+        t->server->conn->note_window_delta(-1);
         t->win = 0;
     }
     wl_list_remove(&t->map.link);
@@ -382,6 +392,9 @@ int run_compositor(WireConn& conn) {
     // spawn a configured guest app that connects immediately.
     conn.send_app_msg(0, json{{"kind", "display_ready"},
                               {"wayland_display", socket}});
+    // Record the wayland display for the settings Display panel and push
+    // the initial display.state (running, 0 windows yet).
+    conn.note_wayland_display(socket);
     maybe_spawn_guest();
 
     // Blocks until wl_display_terminate / fatal backend error.

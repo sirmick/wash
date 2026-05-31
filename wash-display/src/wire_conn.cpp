@@ -199,4 +199,34 @@ bool WireConn::send_app_msg(uint32_t win, const json& data) {
     return write_json(CH_EVENT, m);
 }
 
+void WireConn::note_wayland_display(const std::string& wd) {
+    {
+        std::lock_guard<std::mutex> lk(state_mu_);
+        wayland_display_ = wd;
+    }
+    emit_display_state();
+}
+
+void WireConn::note_window_delta(int d) {
+    window_count_.fetch_add(d);
+    emit_display_state();
+}
+
+void WireConn::emit_display_state() {
+    std::string wd;
+    {
+        std::lock_guard<std::mutex> lk(state_mu_);
+        wd = wayland_display_;
+    }
+    int n = window_count_.load();
+    if (n < 0) n = 0;
+    // running is always true here: a live process is the only thing that
+    // can answer. The panel maps running→"running", absent reply→"not
+    // installed".
+    send_app_msg(0, json{{"kind", "display.state"},
+                         {"running", true},
+                         {"wayland_display", wd},
+                         {"window_count", n}});
+}
+
 } // namespace wash
