@@ -1,0 +1,6 @@
+[connection]
+id=br0-port-eth2
+interface-name=eth2
+master=br0
+slave-type=bridge
+type=802-3-ethernet

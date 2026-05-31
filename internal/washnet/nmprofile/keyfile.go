@@ -17,35 +17,79 @@ import (
 )
 
 // RenderKeyfiles compiles a Config into NM keyfile connections, keyed by
-// connection id. One connection per interface today; bridge/vlan/wifi/wireguard
-// mappings extend renderInterface + add member/peer connections.
+// connection id. Most interfaces map 1:1 to a connection; an interface whose
+// device is a bridge maps to a `bridge` connection (carrying the addressing)
+// plus one enslaved `bridge-port` connection per member — the model↔NM shape
+// gap (UCI's flat Interface+Device vs NM's connection-per-link).
 func RenderKeyfiles(c model.Config) (map[string]string, error) {
+	devByName := map[string]model.Device{}
+	for _, d := range c.Devices {
+		devByName[d.Name] = d
+	}
 	out := map[string]string{}
 	for _, iface := range c.Interfaces {
-		name, text, err := renderInterface(iface)
-		if err != nil {
+		if dev, ok := devByName[iface.Device]; ok && dev.Type == "bridge" {
+			if err := renderBridge(iface, dev, out); err != nil {
+				return nil, fmt.Errorf("interface %q: %w", iface.Name, err)
+			}
+			continue
+		}
+		var k keyfile
+		k.section("connection")
+		k.kv("id", iface.Name)
+		k.kv("type", "802-3-ethernet")
+		if iface.Device != "" {
+			k.kv("interface-name", iface.Device)
+		}
+		if err := renderIPv4(&k, iface.Proto); err != nil {
 			return nil, fmt.Errorf("interface %q: %w", iface.Name, err)
 		}
-		out[name] = text
+		k.section("ipv6")
+		k.kv("method", "auto")
+		out[iface.Name] = k.String()
 	}
 	return out, nil
 }
 
-func renderInterface(i model.Interface) (string, string, error) {
+// renderBridge emits the bridge connection (id = the interface name, holding the
+// addressing) and one bridge-port connection per member.
+func renderBridge(i model.Interface, dev model.Device, out map[string]string) error {
 	var k keyfile
 	k.section("connection")
 	k.kv("id", i.Name)
-	k.kv("type", "802-3-ethernet") // plain wired; bridge/vlan/wifi specialise this
-	if i.Device != "" {
-		k.kv("interface-name", i.Device)
+	k.kv("type", "bridge")
+	k.kv("interface-name", dev.Name)
+	if err := renderIPv4(&k, i.Proto); err != nil {
+		return err
 	}
+	k.section("ipv6")
+	k.kv("method", "auto")
+	out[i.Name] = k.String()
 
-	switch p := i.Proto.(type) {
+	for _, port := range dev.Ports {
+		var p keyfile
+		p.section("connection")
+		p.kv("id", portConnID(dev.Name, port))
+		p.kv("interface-name", port)
+		p.kv("master", dev.Name)
+		p.kv("slave-type", "bridge")
+		p.kv("type", "802-3-ethernet")
+		out[portConnID(dev.Name, port)] = p.String()
+	}
+	return nil
+}
+
+// portConnID names an enslaved member connection deterministically so the
+// round-trip regenerates an identical keyfile.
+func portConnID(bridge, port string) string { return bridge + "-port-" + port }
+
+// renderIPv4 writes the [ipv4] section from the model's proto union.
+func renderIPv4(k *keyfile, proto model.ProtoConfig) error {
+	k.section("ipv4")
+	switch p := proto.(type) {
 	case model.StaticProto:
-		k.section("ipv4")
 		k.kv("method", "manual")
-		// NM address1 = "addr/prefix[,gateway]"
-		addr := p.IPAddr.String()
+		addr := p.IPAddr.String() // NM address1 = "addr/prefix[,gateway]"
 		if p.Gateway.IsValid() {
 			addr += "," + p.Gateway.String()
 		}
@@ -58,20 +102,13 @@ func renderInterface(i model.Interface) (string, string, error) {
 			k.kv("dns", strings.Join(ss, ";")+";")
 		}
 	case model.DHCPProto:
-		k.section("ipv4")
 		k.kv("method", "auto")
 	case model.NoneProto:
-		k.section("ipv4")
 		k.kv("method", "disabled")
 	default:
-		return "", "", fmt.Errorf("proto %q not yet supported by the nm backend", i.Proto.UCITag())
+		return fmt.Errorf("proto %q not yet supported by the nm backend", proto.UCITag())
 	}
-
-	// IPv6: default to SLAAC/auto until the model carries an ipv6 proto.
-	k.section("ipv6")
-	k.kv("method", "auto")
-
-	return i.Name, k.String(), nil
+	return nil
 }
 
 // keyfile builds NM keyfile (INI) text: sections in append order, keys sorted

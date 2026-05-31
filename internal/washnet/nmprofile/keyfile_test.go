@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/sirmick/wash/internal/washnet/codec"
@@ -12,26 +13,51 @@ import (
 
 var update = flag.Bool("update", false, "rewrite .nmconnection golden files")
 
-// TestRenderKeyfileGoldens is the pure "compile to NM profiles" gate: each
-// sample, authored as canonical UCI, parses to the model and renders to a
-// golden NM keyfile — no D-Bus, no VM (docs/NET.md §9). Run with -update to
-// regenerate goldens after an intentional mapping change, then eyeball them.
-func TestRenderKeyfileGoldens(t *testing.T) {
-	// sample → the connection id we assert on.
-	cases := map[string]string{
-		"eth-static": "eth-static",
-		"eth-dhcp":   "eth-dhcp",
+// Each corpus scenario is a directory under testdata/ holding:
+//
+//	source.uci          the canonical authored config (the IR's input form)
+//	<connID>.nmconnection   the rendered NM connection set (one file per conn)
+//
+// covering the cases that exercise the model↔NM shape gap: eth, bridge, vlan,
+// wifi, wireguard.
+func scenarios(t *testing.T) []string {
+	t.Helper()
+	dirs, err := filepath.Glob("testdata/*")
+	if err != nil {
+		t.Fatal(err)
 	}
-	names := make([]string, 0, len(cases))
-	for n := range cases {
-		names = append(names, n)
+	var out []string
+	for _, d := range dirs {
+		if fi, err := os.Stat(d); err == nil && fi.IsDir() {
+			out = append(out, filepath.Base(d))
+		}
 	}
-	sort.Strings(names)
+	sort.Strings(out)
+	return out
+}
 
-	for _, name := range names {
-		conn := cases[name]
+// readSet reads every *.nmconnection in a scenario dir, keyed by connection id
+// (the filename stem == the keyfile's [connection] id).
+func readSet(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	files, _ := filepath.Glob(filepath.Join("testdata", dir, "*.nmconnection"))
+	set := map[string]string{}
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		set[strings.TrimSuffix(filepath.Base(f), ".nmconnection")] = string(b)
+	}
+	return set
+}
+
+// TestCompile is the "compile to NM profiles" gate: canonical UCI → IR →
+// NM keyfile set must equal the goldens. -update regenerates them.
+func TestCompile(t *testing.T) {
+	for _, name := range scenarios(t) {
 		t.Run(name, func(t *testing.T) {
-			uci, err := os.ReadFile(filepath.Join("testdata", name+".uci"))
+			uci, err := os.ReadFile(filepath.Join("testdata", name, "source.uci"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -39,34 +65,62 @@ func TestRenderKeyfileGoldens(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse uci: %v", err)
 			}
-			kfs, err := RenderKeyfiles(cfg)
+			got, err := RenderKeyfiles(cfg)
 			if err != nil {
 				t.Fatalf("render keyfiles: %v", err)
 			}
-			got, ok := kfs[conn]
-			if !ok {
-				have := make([]string, 0, len(kfs))
-				for k := range kfs {
-					have = append(have, k)
-				}
-				t.Fatalf("no connection %q rendered; got %v", conn, have)
-			}
-
-			golden := filepath.Join("testdata", name+".nmconnection")
 			if *update {
-				if err := os.WriteFile(golden, []byte(got), 0o644); err != nil {
-					t.Fatal(err)
+				for id, text := range got {
+					p := filepath.Join("testdata", name, id+".nmconnection")
+					if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+						t.Fatal(err)
+					}
 				}
-				t.Logf("updated %s", golden)
 				return
 			}
-			want, err := os.ReadFile(golden)
-			if err != nil {
-				t.Fatalf("read golden (run -update first?): %v", err)
-			}
-			if got != string(want) {
-				t.Fatalf("keyfile mismatch for %s\n--- got ---\n%s\n--- want ---\n%s", name, got, want)
-			}
+			assertSet(t, got, readSet(t, name))
 		})
+	}
+}
+
+// TestRoundTrip is the fidelity gate you care about: NM in → IR → NM out must
+// be identical to NM in, for every connection in every scenario. This is what
+// makes "load the box's current NM state, edit it, write it back" lossless.
+func TestRoundTrip(t *testing.T) {
+	for _, name := range scenarios(t) {
+		t.Run(name, func(t *testing.T) {
+			in := readSet(t, name)
+			if len(in) == 0 {
+				t.Skip("no .nmconnection fixtures yet")
+			}
+			cfg, err := ParseKeyfiles(in)
+			if err != nil {
+				t.Fatalf("parse keyfiles → IR: %v", err)
+			}
+			out, err := RenderKeyfiles(cfg)
+			if err != nil {
+				t.Fatalf("render IR → keyfiles: %v", err)
+			}
+			assertSet(t, out, in)
+		})
+	}
+}
+
+func assertSet(t *testing.T, got, want map[string]string) {
+	t.Helper()
+	for id, w := range want {
+		g, ok := got[id]
+		if !ok {
+			t.Errorf("missing connection %q in output", id)
+			continue
+		}
+		if g != w {
+			t.Errorf("connection %q mismatch\n--- got ---\n%s\n--- want ---\n%s", id, g, w)
+		}
+	}
+	for id := range got {
+		if _, ok := want[id]; !ok {
+			t.Errorf("unexpected extra connection %q\n%s", id, got[id])
+		}
 	}
 }
