@@ -331,7 +331,7 @@ func (s *ShellSession) handleWindowCloseClicked(m wire.ShellWindowCloseClicked) 
 	// Drive the close handshake in a goroutine — the loop must keep
 	// reading so confirm_close can arrive.
 	go func() {
-		allowed, err := inst.requestClose(context.Background())
+		allowed, err := inst.requestClose(context.Background(), m.WindowID)
 		if err != nil {
 			s.router.log("close window %d: %v", m.WindowID, err)
 			return

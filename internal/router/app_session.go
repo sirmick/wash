@@ -792,7 +792,16 @@ func (r *Router) spawnChild(target *Entry, requester *AppInstance) {
 // requestClose initiates the X-style close handshake (WIRE.md §10).
 // Returns when the app confirms (allow=true/false) or grace expires
 // (force-close).
-func (inst *AppInstance) requestClose(ctx context.Context) (allowed bool, err error) {
+// win is the specific window being closed. For a multi-window instance
+// (wash-display) this is the clicked window, not the instance's primary —
+// a background instance's primary WindowID is 0, so sending the primary
+// would mis-target the close and the guest would never get it (then the
+// grace timer force-kills the whole instance). Falls back to the primary
+// when win is 0 (ordinary single-window apps).
+func (inst *AppInstance) requestClose(ctx context.Context, win uint32) (allowed bool, err error) {
+	if win == 0 {
+		win = inst.WindowID
+	}
 	inst.closeMu.Lock()
 	if inst.closeConfirm != nil {
 		inst.closeMu.Unlock()
@@ -808,7 +817,7 @@ func (inst *AppInstance) requestClose(ctx context.Context) (allowed bool, err er
 		inst.closeMu.Unlock()
 	}()
 
-	if err := inst.WriteEvt(wire.NewEvtWindowCloseRequested(inst.WindowID)); err != nil {
+	if err := inst.WriteEvt(wire.NewEvtWindowCloseRequested(win)); err != nil {
 		return false, err
 	}
 	timer := time.NewTimer(closeGrace)
