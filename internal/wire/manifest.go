@@ -75,6 +75,14 @@ const (
 	// identity.ack. Gated because unbounded window creation is a
 	// chrome-DoS vector; wash-display is the canonical holder.
 	CapWindows = "windows"
+
+	// CapRestart lets an app ask the router to cycle a background
+	// singleton service (the app.restart event, docs/SETTINGS.md §5):
+	// terminate the running instance, GC its windows/channels, and
+	// spawn a fresh one. Gated because cycling system services is a
+	// privileged action — the settings app is the canonical holder.
+	// Restricted router-side to surface=background targets.
+	CapRestart = "restart"
 )
 
 // MaxIconBytes is the cap on the inline icon data URI per WIRE.md §5.1.

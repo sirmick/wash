@@ -158,6 +158,11 @@ with no FE (CLI helpers, services) omit `bundle_b64`.
     token and binary path; the caller fork+execs the binary itself
     (under sudo, for wash-priv). Distinct from `spawn` because the
     spawner controls how the child is launched, including its uid.
+  - `"restart"` — grants the right to send `app.restart` (§9.2) to
+    cycle a background singleton service. The target must be
+    `surface:"background"`; the router terminates its instance, GCs the
+    windows/channels, and spawns a fresh one. Held by the settings app
+    (restarts wash-display). See docs/SETTINGS.md §5.
 - `window` — hints (`default_width`, `default_height`, `min_width`,
   `min_height`, `resizable`). Honored: width/height. Min sizes / resize
   hints are advisory.
@@ -288,6 +293,11 @@ Each frame on channel 1 is one JSON object with a `"t"` field.
 - `{"t":"spawn.err","app_id":"…","code":"…","msg":"…","req_id":…?}` —
   rejection (codes: `forbidden`, `not_found`, `incompatible_protocol`,
   `internal`).
+- `{"t":"app.restart.ok","req_id":…,"instance_id":"…"}` — reply to an
+  `app.restart`; `instance_id` is the freshly spawned instance.
+- `{"t":"app.restart.err","req_id":…,"code":"…","msg":"…"}` — rejection
+  (codes: `forbidden` — missing `restart` cap or non-background target;
+  `not_found` — unknown/disabled id; `internal` — respawn failed).
 - `{"t":"clipboard.data","req_id":…,"mime":"…","data":"…"}` — reply to
   a `clipboard.get`.
 - `{"t":"clipboard.changed","mime":"…"}` — broadcast when any app sets
@@ -308,6 +318,13 @@ Each frame on channel 1 is one JSON object with a `"t"` field.
     `WASH_ATTACH_TOKEN`. Requires the `prepare_spawn` capability.
     `req_id` correlates the reply. Reply is
     `spawn.ok{req_id,instance_id,attach_token,binary}`.
+- `{"t":"app.restart","req_id":…,"app_id":"…"}` — cycle a background
+  singleton service: the router terminates the named app's running
+  instance, GCs its windows/channels, clears its background-started
+  flag, and spawns a fresh one. Requires the `restart` capability; the
+  target must be `surface:"background"`. `req_id` correlates the reply
+  (`app.restart.ok{instance_id}` / `app.restart.err`). See
+  docs/SETTINGS.md §5.
 - `{"t":"app_msg","win":W,"data":<any>,"to":{…}?}` — unified BE-originated
   message. Without `to`, the router relays to the app's own FE half. With
   `to` ({"app_id":"…"} for singletons or {"instance_id":"…"} for direct),
@@ -320,8 +337,9 @@ Each frame on channel 1 is one JSON object with a `"t"` field.
   router-side; the shell delivers it as a `wash:state` event on every
   (re)mount.
 
-Capability checks (`spawn`, `prepare_spawn`) are enforced by the router.
-Denial returns `spawn.err{code:"forbidden"}`; the connection is not
+Capability checks (`spawn`, `prepare_spawn`, `restart`) are enforced by
+the router. Denial returns `spawn.err{code:"forbidden"}` (or
+`app.restart.err{code:"forbidden"}` for restart); the connection is not
 torn down so apps can degrade gracefully.
 
 ## 10. Close handshake

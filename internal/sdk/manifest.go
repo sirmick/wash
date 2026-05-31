@@ -18,6 +18,7 @@ const (
 	CapSpawn        = wire.CapSpawn
 	CapPrepareSpawn = wire.CapPrepareSpawn
 	CapWindows      = wire.CapWindows
+	CapRestart      = wire.CapRestart
 )
 
 // Manifest / WindowHints / RootVariant alias the canonical wire
