@@ -154,6 +154,80 @@ func AddWireGuardPeer(_ model.Config, p WireGuardPeer) (change.ChangeSet, error)
 	}, nil
 }
 
+// VLAN tags an 802.1q VLAN onto a parent interface: a Device(8021q) plus an
+// Interface bound to it. The everyday "add a VLAN" wizard (docs/NET.md §6.2).
+type VLAN struct {
+	Parent    string            // parent ifname, e.g. eth0
+	VID       int               // 1..4094
+	Interface string            // friendly interface name; default <parent>_<vid>
+	Proto     model.ProtoConfig // addressing; default DHCP
+}
+
+func AddVLAN(_ model.Config, p VLAN) (change.ChangeSet, error) {
+	if p.Parent == "" || p.VID < 1 || p.VID > 4094 {
+		return change.ChangeSet{}, fmt.Errorf("vlan needs a Parent and a VID in 1..4094")
+	}
+	dev := fmt.Sprintf("%s.%d", p.Parent, p.VID)
+	def(&p.Interface, fmt.Sprintf("%s_%d", p.Parent, p.VID))
+	if p.Proto == nil {
+		p.Proto = model.DHCPProto{}
+	}
+	return change.ChangeSet{
+		Summary: []string{
+			fmt.Sprintf("add VLAN %d on %s (device %s, interface %q)", p.VID, p.Parent, dev, p.Interface),
+		},
+		Apply: func(c model.Config) (model.Config, error) {
+			c.Devices = appendCopy(c.Devices, model.Device{Name: dev, Type: "8021q", Ifname: p.Parent, VID: p.VID})
+			c.Interfaces = appendCopy(c.Interfaces, model.Interface{Name: p.Interface, Device: dev, Proto: p.Proto})
+			return c, nil
+		},
+	}, nil
+}
+
+// Bridge bonds member NICs into a bridge: a Device(bridge) plus an Interface
+// that carries the addressing. The members become ports, so any standalone
+// interface bound to a member is removed (it's now enslaved). The "bridge these
+// interfaces" wizard (docs/NET.md §6.2).
+type Bridge struct {
+	Name      string            // bridge ifname, e.g. br0
+	Interface string            // friendly interface name; default = Name
+	Members   []string          // member ifnames, e.g. eth1, eth2
+	Proto     model.ProtoConfig // addressing on the bridge; default DHCP
+}
+
+func AddBridge(_ model.Config, p Bridge) (change.ChangeSet, error) {
+	if p.Name == "" || len(p.Members) == 0 {
+		return change.ChangeSet{}, fmt.Errorf("bridge needs a Name and at least one Member")
+	}
+	def(&p.Interface, p.Name)
+	if p.Proto == nil {
+		p.Proto = model.DHCPProto{}
+	}
+	isMember := map[string]bool{}
+	for _, m := range p.Members {
+		isMember[m] = true
+	}
+	return change.ChangeSet{
+		Summary: []string{
+			fmt.Sprintf("bridge %s over %v", p.Name, p.Members),
+			fmt.Sprintf("create interface %q on %s", p.Interface, p.Name),
+		},
+		Apply: func(c model.Config) (model.Config, error) {
+			// Members become ports — drop any standalone interface bound to one.
+			var kept []model.Interface
+			for _, i := range c.Interfaces {
+				if !isMember[i.Device] {
+					kept = append(kept, i)
+				}
+			}
+			c.Interfaces = kept
+			c.Devices = appendCopy(c.Devices, model.Device{Name: p.Name, Type: "bridge", Ports: p.Members})
+			c.Interfaces = appendCopy(c.Interfaces, model.Interface{Name: p.Interface, Device: p.Name, Proto: p.Proto})
+			return c, nil
+		},
+	}, nil
+}
+
 func def(s *string, fallback string) {
 	if *s == "" {
 		*s = fallback

@@ -55,6 +55,12 @@ func TestRecipeSoundness(t *testing.T) {
 		"wgpeer": func() (change.ChangeSet, error) {
 			return AddWireGuardPeer(b, WireGuardPeer{Interface: "vpn", PublicKey: "PUB", AllowedIPs: []netip.Prefix{netip.MustParsePrefix("10.9.0.2/32")}, PersistentKeepalive: 25})
 		},
+		"vlan": func() (change.ChangeSet, error) {
+			return AddVLAN(b, VLAN{Parent: "eth0", VID: 20, Proto: model.StaticProto{IPAddr: netip.MustParsePrefix("10.0.20.1/24")}})
+		},
+		"bridge": func() (change.ChangeSet, error) {
+			return AddBridge(b, Bridge{Name: "br0", Members: []string{"eth1", "eth2"}, Proto: model.StaticProto{IPAddr: netip.MustParsePrefix("10.0.50.1/24")}})
+		},
 	}
 	for name, mk := range recipes {
 		t.Run(name, func(t *testing.T) {
@@ -114,5 +120,43 @@ func TestRecipeValidationRejectsBadParams(t *testing.T) {
 	}
 	if _, err := AddWireGuardPeer(base(), WireGuardPeer{Interface: "vpn"}); err == nil {
 		t.Error("peer without pubkey/allowedips should error")
+	}
+}
+
+func TestAddVLANAndBridge(t *testing.T) {
+	// VLAN: adds a Device(8021q) + an Interface bound to <parent>.<vid>.
+	cs, err := AddVLAN(model.Config{}, VLAN{Parent: "eth0", VID: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _ := cs.Apply(model.Config{})
+	if len(out.Devices) != 1 || out.Devices[0].Name != "eth0.10" || out.Devices[0].VID != 10 || out.Devices[0].Ifname != "eth0" {
+		t.Errorf("vlan device wrong: %+v", out.Devices)
+	}
+	if len(out.Interfaces) != 1 || out.Interfaces[0].Device != "eth0.10" {
+		t.Errorf("vlan interface wrong: %+v", out.Interfaces)
+	}
+
+	// Bridge: members lose their standalone interface and become ports.
+	b := model.Config{Interfaces: []model.Interface{
+		{Name: "wired1", Device: "eth1", Proto: model.DHCPProto{}},
+		{Name: "wired2", Device: "eth2", Proto: model.DHCPProto{}},
+		{Name: "keepme", Device: "eth9", Proto: model.DHCPProto{}},
+	}}
+	cs, err = AddBridge(b, Bridge{Name: "br0", Members: []string{"eth1", "eth2"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _ = cs.Apply(b)
+	if len(out.Devices) != 1 || out.Devices[0].Type != "bridge" || len(out.Devices[0].Ports) != 2 {
+		t.Errorf("bridge device wrong: %+v", out.Devices)
+	}
+	// wired1/wired2 gone (now ports), keepme stays, br0 interface added → 2 total.
+	names := map[string]bool{}
+	for _, i := range out.Interfaces {
+		names[i.Name] = true
+	}
+	if names["wired1"] || names["wired2"] || !names["keepme"] || !names["br0"] {
+		t.Errorf("bridge interface set wrong: %+v", out.Interfaces)
 	}
 }
