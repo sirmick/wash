@@ -108,4 +108,17 @@ func TestNMApplyBridgeAndVLAN(t *testing.T) {
 	t.Logf("vlan link: %s", strings.TrimRight(vlan, "\n"))
 
 	t.Logf("active connections:\n%s", exec("nmcli -t -f NAME,TYPE,DEVICE connection show --active 2>&1"))
+
+	// Read-back: the backend loads the box's current NM state into the model
+	// (the UI's "load current settings" path) and we get our bridge + vlan back.
+	read := exec("washnet-read 2>&1")
+	t.Logf("washnet-read (NM → model → UCI):\n%s", read)
+	for _, want := range []string{
+		"option type 'bridge'", "list ports 'eth1'", "list ports 'eth2'",
+		"option type '8021q'", "option ifname 'eth3'", "option vid '20'",
+	} {
+		if !strings.Contains(read, want) {
+			t.Errorf("read-back of current NM state missing %q", want)
+		}
+	}
 }
