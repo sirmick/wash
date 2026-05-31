@@ -67,7 +67,11 @@ export class WashAppDisplay extends HTMLElement {
       this.style.height = '100%';
       this.style.position = 'relative';
       this.style.overflow = 'hidden';
-      this.style.background = '#000';
+      // No opaque fill: during a grow-resize the slot expands a frame before
+      // the guest's larger buffer arrives, so the not-yet-covered strip shows
+      // through. Transparent lets the window's own dark chrome show there
+      // instead of a harsh black flash (the resize "flicker").
+      this.style.background = 'transparent';
 
       const canvas = document.createElement('canvas');
       canvas.style.display = 'block';
