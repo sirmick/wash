@@ -112,14 +112,6 @@ SERVICES_STAMP  := $(SERVICES_ASSETS)/.stamp
 PACKAGES_ASSETS := apps/packages/be/assets
 PACKAGES_STAMP  := $(PACKAGES_ASSETS)/.stamp
 
-<<<<<<< HEAD
-NET_ASSETS      := apps/net/be/assets
-NET_STAMP       := $(NET_ASSETS)/.stamp
-
-VSCODE_ASSETS  := apps/vscode/be/assets
-VSCODE_STAMP   := $(VSCODE_ASSETS)/.stamp
-=======
->>>>>>> settings-services
 
 VSCODE_WB_ASSETS := apps/vscode-workbench/be/assets
 VSCODE_WB_STAMP  := $(VSCODE_WB_ASSETS)/.stamp
@@ -445,11 +437,7 @@ test-app: $(OUT)/wash-priv-fakesudo
 # "pattern all:assets: no matching files found" — local dev
 # accidentally works because the standalone wash-router build
 # rule already chains through ROUTER_STAMP.
-<<<<<<< HEAD
-MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP) $(VSCODE_STAMP) $(VSCODE_WB_STAMP) $(NET_STAMP)
-=======
 MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP) $(VSCODE_WB_STAMP)
->>>>>>> settings-services
 
 # Adding wash_test_app to the tags pulls the test app's blank-import
 # in (which is otherwise excluded by cmd/wash/imports_test.go's
