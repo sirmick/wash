@@ -1,6 +1,7 @@
 #include "wire_conn.hpp"
 
 #include <cstdio>
+#include <vector>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -120,7 +121,12 @@ void WireConn::reader_loop() {
             if (app_msg_handler_) {
                 uint32_t win = m.value("win", 0U);
                 json data = m.contains("data") ? m["data"] : json::object();
-                app_msg_handler_(data, win);
+                // Router-attested sender (set on cross-app deliveries);
+                // the display.state reply path addresses it directly.
+                std::string from;
+                if (m.contains("from") && m["from"].is_object())
+                    from = m["from"].value("instance_id", "");
+                app_msg_handler_(data, win, from);
             }
         } else if (t == "window.resize") {
             // Router → app COMMAND: the shell resized a window's frame.
@@ -236,6 +242,26 @@ bool WireConn::send_app_msg(uint32_t win, const json& data) {
     return write_json(CH_EVENT, m);
 }
 
+// send_app_msg_to addresses a specific instance (the subscribed settings
+// panel). A background service has no FE half, so send_app_msg(0,…) —
+// which the router routes to the sender's own FE — reaches nobody.
+bool WireConn::send_app_msg_to(const std::string& instanceID, const json& data) {
+    json m = {{"t", "app_msg"}, {"data", data},
+              {"to", {{"instance_id", instanceID}}}};
+    return write_json(CH_EVENT, m);
+}
+
+void WireConn::add_subscriber(const std::string& instanceID) {
+    if (instanceID.empty()) return;
+    std::lock_guard<std::mutex> lk(state_mu_);
+    subs_.insert(instanceID);
+}
+
+void WireConn::remove_subscriber(const std::string& instanceID) {
+    std::lock_guard<std::mutex> lk(state_mu_);
+    subs_.erase(instanceID);
+}
+
 bool WireConn::publish_env(const json& env) {
     json m = {{"t", "env.publish"}, {"env", env}};
     return write_json(CH_EVENT, m);
@@ -255,20 +281,21 @@ void WireConn::note_window_delta(int d) {
 }
 
 void WireConn::emit_display_state() {
-    std::string wd;
+    json payload;
+    std::vector<std::string> targets;
     {
         std::lock_guard<std::mutex> lk(state_mu_);
-        wd = wayland_display_;
+        int n = window_count_.load();
+        if (n < 0) n = 0;
+        // running is always true: only a live process can answer. The
+        // panel maps running->"running", an absent reply->"not installed".
+        payload = json{{"kind", "display.state"},
+                       {"running", true},
+                       {"wayland_display", wayland_display_},
+                       {"window_count", n}};
+        targets.assign(subs_.begin(), subs_.end());
     }
-    int n = window_count_.load();
-    if (n < 0) n = 0;
-    // running is always true here: a live process is the only thing that
-    // can answer. The panel maps running->"running", absent reply->"not
-    // installed".
-    send_app_msg(0, json{{"kind", "display.state"},
-                         {"running", true},
-                         {"wayland_display", wd},
-                         {"window_count", n}});
+    for (const auto& id : targets) send_app_msg_to(id, payload);
 }
 
 } // namespace wash

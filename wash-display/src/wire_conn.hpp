@@ -23,6 +23,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 
@@ -37,7 +38,8 @@ public:
     // absent). MUST NOT call create_window/open_video_channel directly
     // (that blocks on this same thread → deadlock); offload to another
     // thread. Same rule the Go SDK documents.
-    using AppMsgHandler = std::function<void(const json& data, uint32_t win)>;
+    using AppMsgHandler =
+        std::function<void(const json& data, uint32_t win, const std::string& from)>;
 
     // Called on the reader thread for router→app window commands the
     // compositor must act on: "window.resize" (w,h set) and
@@ -97,6 +99,10 @@ public:
     // `win` (0 = instance level).
     bool send_app_msg(uint32_t win, const json& data);
 
+    // send_app_msg_to addresses a specific instance (e.g. the settings
+    // panel that subscribed) via app_msg.to{instance_id}.
+    bool send_app_msg_to(const std::string& instanceID, const json& data);
+
     // publish_env sends env.publish: WASH_*-namespaced env hints the
     // router merges into every app it later spawns (docs/DISPLAY_ENV.md),
     // so wash-term's shell can reach DISPLAY / WAYLAND_DISPLAY. Requires
@@ -111,6 +117,11 @@ public:
     void note_wayland_display(const std::string& wd);
     void note_window_delta(int d);
     void emit_display_state();
+    // add/remove_subscriber track which instances asked for display.state.
+    // A background service has no FE of its own, so replies are addressed
+    // to the subscriber's instance (send_app_msg_to), not send_app_msg(0).
+    void add_subscriber(const std::string& instanceID);
+    void remove_subscriber(const std::string& instanceID);
 
     void on_app_msg(AppMsgHandler h) { app_msg_handler_ = std::move(h); }
     void on_window_cmd(WindowCmdHandler h) { window_cmd_handler_ = std::move(h); }
@@ -154,6 +165,7 @@ private:
     std::mutex state_mu_;
     std::string wayland_display_;
     std::atomic<int> window_count_{0};
+    std::set<std::string> subs_; // display.state subscribers (guarded by state_mu_)
 };
 
 } // namespace wash
