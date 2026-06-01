@@ -108,7 +108,10 @@ func init() {
 			Surface:         sdk.SurfaceWindow,
 			Icon:            testIcon,
 			Instancing:      sdk.InstancingMulti,
-			Capabilities:    []string{sdk.CapSpawn, sdk.CapWindows},
+			// CapRestart lets the e2e harness exercise the full-stack
+			// app.restart contract (router restartBackgroundApp) through
+			// a real wire round-trip, not just the router unit tests.
+			Capabilities: []string{sdk.CapSpawn, sdk.CapWindows, sdk.CapRestart},
 			Window:          &sdk.WindowHints{DefaultWidth: 560, DefaultHeight: 480},
 			Hidden:          true,
 		},
@@ -385,6 +388,36 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 				log.Printf("wash-test spawn err: %v", err)
 			}
 		}
+	case "restart":
+		// Full-stack app.restart exerciser for e2e. Drives the router's
+		// restartBackgroundApp through a real wire round-trip: RestartApp
+		// blocks on the router's app.restart.ok/err reply, so it MUST run
+		// off the read goroutine. Echoes the request id so the control
+		// socket's await_id can correlate the reply (router matches on
+		// data["id"]). On success the new singleton instance id comes
+		// back; on failure the SDK error is "<code>: <msg>".
+		id, _ := m["id"].(string)
+		appID, _ := m["app_id"].(string)
+		go func() {
+			newInst, err := c.RestartApp(context.Background(), appID)
+			if err != nil {
+				log.Printf("wash-test restart %s err: %v", appID, err)
+				sendEvent(c, map[string]any{
+					"kind":   "restart_err",
+					"id":     id,
+					"app_id": appID,
+					"error":  err.Error(),
+				})
+				return
+			}
+			log.Printf("wash-test restart %s ok new_instance=%s", appID, newInst)
+			sendEvent(c, map[string]any{
+				"kind":        "restart_ok",
+				"id":          id,
+				"app_id":      appID,
+				"instance_id": newInst,
+			})
+		}()
 	case "sudo_whoami":
 		// One-liner privileged call via the SDK helper. Goroutine
 		// because PrivRunInlineSync blocks and OnAppMsg runs on the
