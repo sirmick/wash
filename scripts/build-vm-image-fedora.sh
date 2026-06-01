@@ -153,7 +153,8 @@ ln -sf /etc/systemd/system/wash-agent.service \
 # sessions), exactly like the Alpine launcher.
 cat > "$RFS/usr/sbin/wash-router-launch" <<'LAUNCH'
 #!/bin/sh
-export WASH_NETD_BACKEND=auto
+# No WASH_NETD_BACKEND: netd defaults to autodetect (→ networkd here, since NM is
+# absent). The env var is only for tests/forcing; a real box needs none.
 export SHELL=/bin/bash HOME=/home/wash TERM=xterm-256color
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/lib/wash"
 mkdir -p /tmp && chmod 1777 /tmp
@@ -161,7 +162,7 @@ mkdir -p /home/wash/.config/wash && chown -R wash /home/wash 2>/dev/null
 i=0; while [ ! -e /dev/vport0p1 ] && [ "$i" -lt 600 ]; do i=$((i+1)); sleep 0.1; done
 chown wash /dev/vport0p1 2>/dev/null
 while :; do
-  su -l wash -c '/usr/lib/wash/wash-router --transport=virtio-console:/dev/vport0p1 --apps-dir=/usr/lib/wash' >> /run/wash-router.log 2>&1
+  su -m wash -c '/usr/lib/wash/wash-router --transport=virtio-console:/dev/vport0p1 --apps-dir=/usr/lib/wash' >> /run/wash-router.log 2>&1
   echo "wash-router exited rc=$? — respawn in 1s" >> /run/wash-router.log
   sleep 1
 done

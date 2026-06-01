@@ -140,21 +140,22 @@ type backendStatus struct {
 var info backendStatus
 
 // selectApplier resolves and builds the backend, plus the status for the FE
-// (docs/NET.md §2.7). Precedence: WASH_NETD_BACKEND env (images/tests) > the
-// persisted `network` setting (the Settings dropdown) > none → fake. A real
-// backend is used ONLY on an explicit choice — never by mere reachability — so a
-// dev host can't have its networking reconfigured unasked, and the unset/fake
-// paths DON'T probe (so unit tests stay hermetic: no D-Bus dial / networkctl
-// exec). Only "auto" runs the read-only Detect probes; chooseBackend (select.go)
-// is the unit-tested policy.
+// (docs/NET.md §2.7). Precedence: WASH_NETD_BACKEND env (tests / forcing) > the
+// persisted `network` setting (the Settings dropdown's choice) > "auto" (the
+// default — autodetect, no env var or config needed). Autodetecting is safe: it
+// only reads/shows status; nothing touches the kernel until an explicit Apply.
+// Unit tests stay hermetic because connectNetd forces WASH_NETD_BACKEND=fake, so
+// the fake path neither probes nor reconfigures. chooseBackend (select.go) is the
+// unit-tested policy that "auto" runs the read-only Detect probes through.
 func selectApplier() (netApplier, backendStatus) {
 	mode := os.Getenv("WASH_NETD_BACKEND")
 	if mode == "" {
 		mode = persistedBackend() // the Settings dropdown's choice, "" if unset
 	}
+	if mode == "" {
+		mode = BackendAuto // default: autodetect
+	}
 	switch mode {
-	case "":
-		return newFakeApplier(), backendStatus{active: BackendFake}
 	case BackendFake:
 		return newFakeApplier(), backendStatus{active: BackendFake, available: []string{BackendFake}}
 	case BackendAuto:
