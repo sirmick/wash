@@ -75,8 +75,9 @@ func init() {
 			Instancing:      sdk.InstancingSingleton,
 			Window:          &sdk.WindowHints{DefaultWidth: 760, DefaultHeight: 520},
 			// restart lets the Display panel cycle the compositor
-			// (and any background service) via the router's app.restart.
-			Capabilities: []string{sdk.CapRestart},
+			// (and any background service) via the router's app.restart;
+			// spawn lets the Network pane open the com.wash.net window.
+			Capabilities: []string{sdk.CapRestart, sdk.CapSpawn},
 		},
 		Assets:  sub,
 		OnReady: onReady,
