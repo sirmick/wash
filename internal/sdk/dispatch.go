@@ -237,9 +237,35 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 			return err
 		}
 		c.resolveIngress(m.ReqID, ingressResult{err: fmt.Errorf("%s: %s", m.Code, m.Msg)})
+	case wire.TEvtAppRestartOk:
+		var m wire.EvtAppRestartOk
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		c.resolveRestart(m.ReqID, restartResult{instanceID: m.InstanceID})
+	case wire.TEvtAppRestartErr:
+		var m wire.EvtAppRestartErr
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		c.resolveRestart(m.ReqID, restartResult{err: fmt.Errorf("%s: %s", m.Code, m.Msg)})
 	}
 	// Unknown event types: ignore for forward compat.
 	return nil
+}
+
+// resolveRestart hands a result to the RestartApp call waiting on
+// reqID, if any. No-op for an unknown/already-resolved req_id.
+func (c *Conn) resolveRestart(reqID uint64, r restartResult) {
+	c.restartMu.Lock()
+	ch, ok := c.pendingRestart[reqID]
+	if ok {
+		delete(c.pendingRestart, reqID)
+	}
+	c.restartMu.Unlock()
+	if ok {
+		ch <- r
+	}
 }
 
 // resolveIngress hands a result to the PublishIngress call waiting on

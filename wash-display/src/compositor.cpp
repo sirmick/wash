@@ -798,6 +798,12 @@ int run_compositor(WireConn& conn) {
 #endif
         conn.publish_env(pub);
     }
+    // Record the wayland display for the settings Display panel and push
+    // the initial display.state. Window counting lives in WireConn::
+    // create_window/destroy_window (the choke point both the XDG and X11
+    // paths funnel through), so no per-map hooks are needed here.
+    // See docs/SETTINGS.md §3b.
+    conn.note_wayland_display(socket);
     maybe_spawn_guest();
 
     // Blocks until wl_display_terminate / fatal backend error.

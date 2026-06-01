@@ -1,6 +1,7 @@
 #include "wire_conn.hpp"
 
 #include <cstdio>
+#include <vector>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -120,7 +121,12 @@ void WireConn::reader_loop() {
             if (app_msg_handler_) {
                 uint32_t win = m.value("win", 0U);
                 json data = m.contains("data") ? m["data"] : json::object();
-                app_msg_handler_(data, win);
+                // Router-attested sender (set on cross-app deliveries);
+                // the display.state reply path addresses it directly.
+                std::string from;
+                if (m.contains("from") && m["from"].is_object())
+                    from = m["from"].value("instance_id", "");
+                app_msg_handler_(data, win, from);
             }
         } else if (t == "window.resize") {
             // Router → app COMMAND: the shell resized a window's frame.
@@ -174,12 +180,20 @@ uint32_t WireConn::create_window(const std::string& title, uint32_t w, uint32_t 
     win_cv_.wait(lk, [&] { return win_pending_[req].done || !alive_.load(); });
     Reply r = win_pending_[req];
     win_pending_.erase(req);
+    lk.unlock();
+    if (r.ok && r.value) {
+        // Every window — XDG and X11 alike — is minted here, so this is
+        // the one place to track the live count for the settings Display
+        // panel (docs/SETTINGS.md §3b).
+        note_window_delta(+1);
+    }
     return r.ok ? r.value : 0;
 }
 
 void WireConn::destroy_window(uint32_t win) {
     json m = {{"t", "window.destroy"}, {"win", win}};
     write_json(CH_EVENT, m);
+    note_window_delta(-1);
 }
 
 void WireConn::report_geometry(uint32_t win, uint32_t w, uint32_t h) {
@@ -228,9 +242,60 @@ bool WireConn::send_app_msg(uint32_t win, const json& data) {
     return write_json(CH_EVENT, m);
 }
 
+// send_app_msg_to addresses a specific instance (the subscribed settings
+// panel). A background service has no FE half, so send_app_msg(0,…) —
+// which the router routes to the sender's own FE — reaches nobody.
+bool WireConn::send_app_msg_to(const std::string& instanceID, const json& data) {
+    json m = {{"t", "app_msg"}, {"data", data},
+              {"to", {{"instance_id", instanceID}}}};
+    return write_json(CH_EVENT, m);
+}
+
+void WireConn::add_subscriber(const std::string& instanceID) {
+    if (instanceID.empty()) return;
+    std::lock_guard<std::mutex> lk(state_mu_);
+    subs_.insert(instanceID);
+}
+
+void WireConn::remove_subscriber(const std::string& instanceID) {
+    std::lock_guard<std::mutex> lk(state_mu_);
+    subs_.erase(instanceID);
+}
+
 bool WireConn::publish_env(const json& env) {
     json m = {{"t", "env.publish"}, {"env", env}};
     return write_json(CH_EVENT, m);
+}
+
+void WireConn::note_wayland_display(const std::string& wd) {
+    {
+        std::lock_guard<std::mutex> lk(state_mu_);
+        wayland_display_ = wd;
+    }
+    emit_display_state();
+}
+
+void WireConn::note_window_delta(int d) {
+    window_count_.fetch_add(d);
+    emit_display_state();
+}
+
+void WireConn::emit_display_state() {
+    json payload;
+    std::vector<std::string> targets;
+    {
+        std::lock_guard<std::mutex> lk(state_mu_);
+        int n = window_count_.load();
+        if (n < 0) n = 0;
+        // running is always true: only a live process can answer. The
+        // panel maps running->"running", an absent reply->"not installed".
+        payload = json{{"kind", "display.state"},
+                       {"running", true},
+                       {"wayland_display", wayland_display_},
+                       {"window_count", n}};
+        targets.assign(subs_.begin(), subs_.end());
+    }
+    for (const auto& id : targets) send_app_msg_to(id, payload);
 }
 
 } // namespace wash

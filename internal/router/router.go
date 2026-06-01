@@ -821,6 +821,77 @@ func (r *Router) singletonInstance(appID string) *AppInstance {
 	return r.singletons[appID]
 }
 
+// restartBackgroundApp cycles a background singleton service: terminate
+// its running instance (if any), wait for its loop goroutine to run
+// tearDown (which clears the singleton slot and GCs its windows /
+// channels / ingress routes), then spawn a fresh one on a router-
+// lifetime context. Returns the new instance id, or a wire error code +
+// error. Restricted to surface=background targets; the caller's restart
+// capability is checked upstream in handleAppRestart. See
+// docs/SETTINGS.md §5.
+//
+// Blocks up to ~20s (terminate grace + respawn attach); callers run it
+// off the reader goroutine.
+func (r *Router) restartBackgroundApp(appID string) (string, string, error) {
+	entry := r.reg.ByID(appID)
+	if entry == nil || !entry.Enabled() {
+		return "", wire.ErrCodeNotFound, fmt.Errorf("app %q not found", appID)
+	}
+	if entry.Manifest.Surface != SurfaceBackground {
+		return "", wire.ErrCodeForbidden, fmt.Errorf("app %q is not a background service", appID)
+	}
+
+	// Terminate the running instance and wait for teardown. The
+	// singleton slot must clear before we respawn — spawnAndRun's
+	// singleton dedup would otherwise hand back the dying instance.
+	// The instance's own loop goroutine runs tearDown on exit (which
+	// clears the singleton slot); we poll for that via waitSingletonGone.
+	if old := r.singletonInstance(appID); old != nil && old.Cmd != nil && old.Cmd.Process != nil {
+		old.expectedExit.Store(true) // a restart SIGTERM is not a crash
+		_ = old.Cmd.Process.Signal(stopSignal())
+		if !r.waitSingletonGone(appID, 5*time.Second) {
+			// Grace expired — force-kill and wait once more.
+			_ = old.Cmd.Process.Kill()
+			r.waitSingletonGone(appID, 5*time.Second)
+		}
+	}
+
+	// Claim the background-started slot so a concurrent shell-connect
+	// autoboot doesn't race in a second copy. Mirrors
+	// EnsureBackgroundAppsRunning; cleared on respawn failure so the
+	// next shell connect retries.
+	r.backgroundMu.Lock()
+	r.backgroundStarted[appID] = true
+	r.backgroundMu.Unlock()
+
+	inst, err := r.spawnAndRun(context.Background(), entry, false)
+	if err != nil {
+		r.backgroundMu.Lock()
+		delete(r.backgroundStarted, appID)
+		r.backgroundMu.Unlock()
+		return "", wire.ErrCodeInternal, fmt.Errorf("respawn %q: %w", appID, err)
+	}
+	return inst.InstanceID, "", nil
+}
+
+// waitSingletonGone polls until the singleton slot for appID is empty
+// (the terminated instance's loop goroutine ran tearDown) or the
+// timeout elapses. Returns true if the slot is clear. A short poll is
+// adequate for a user-initiated restart; cmd.Wait() is owned by the
+// instance's own loop goroutine, so there is no channel to select on.
+func (r *Router) waitSingletonGone(appID string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if r.singletonInstance(appID) == nil {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // resolveRecipient turns a wire.Recipient into a concrete
 // *AppInstance, spawning a singleton on demand when addressed by
 // app_id. Returns a structured error code so callers can surface it

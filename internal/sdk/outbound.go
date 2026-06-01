@@ -425,3 +425,40 @@ func (c *Conn) PublishIngress(ctx context.Context, network, addr string) (string
 func (c *Conn) UnpublishIngress(path string) error {
 	return c.writeEvt(wire.NewEvtIngressUnpublish(path))
 }
+
+// RestartApp asks the router to cycle a background singleton service:
+// terminate its running instance, GC its windows/channels, and spawn a
+// fresh one. Returns the new instance id. Blocks until the router
+// replies or ctx cancels.
+//
+// Requires the "restart" capability (sdk.CapRestart); the target must
+// be a surface=background app — otherwise the router replies forbidden.
+// An unknown/disabled app id replies not_found. Used by the settings
+// app to restart wash-display. See docs/SETTINGS.md §5.
+//
+// Like ClipboardGet / PublishIngress, MUST NOT be called from an SDK
+// dispatch callback — the reply returns on the same read goroutine and
+// would deadlock. Spawn a goroutine if you're inside a callback.
+func (c *Conn) RestartApp(ctx context.Context, appID string) (string, error) {
+	reqID := c.nextReqID.Add(1)
+	wait := make(chan restartResult, 1)
+	c.restartMu.Lock()
+	c.pendingRestart[reqID] = wait
+	c.restartMu.Unlock()
+
+	if err := c.writeEvt(wire.NewEvtAppRestart(reqID, appID)); err != nil {
+		c.restartMu.Lock()
+		delete(c.pendingRestart, reqID)
+		c.restartMu.Unlock()
+		return "", err
+	}
+	select {
+	case <-ctx.Done():
+		c.restartMu.Lock()
+		delete(c.pendingRestart, reqID)
+		c.restartMu.Unlock()
+		return "", ctx.Err()
+	case r := <-wait:
+		return r.instanceID, r.err
+	}
+}

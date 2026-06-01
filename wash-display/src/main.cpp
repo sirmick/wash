@@ -159,11 +159,23 @@ static int run() {
     }
     std::fprintf(stderr, "wash-display: attached instance=%s\n", instanceID.c_str());
 
-    // The fake reference path: react to display_open by spawning a
-    // worker that creates windows (kept even with the compositor so the
-    // contract e2e keeps working as a smoke test).
-    conn.on_app_msg([&conn](const wash::json& data, uint32_t /*win*/) {
-        if (data.value("kind", "") == "display_open") {
+    // App-msg dispatch (reader thread). Two consumers:
+    //   - subscribe: the settings Display panel asks for a state
+    //     snapshot. emit_display_state is a fire-and-forget send, safe
+    //     from the reader thread (unlike create_window, which blocks).
+    //   - display_open: the fake reference path (contract e2e) — create
+    //     windows on a worker thread (create_window blocks the reader).
+    conn.on_app_msg([&conn](const wash::json& data, uint32_t /*win*/,
+                            const std::string& from) {
+        const std::string kind = data.value("kind", "");
+        if (kind == "subscribe") {
+            // The settings Display panel subscribes. Record it (so window
+            // deltas push it fresh state) and reply with a snapshot.
+            conn.add_subscriber(from);
+            conn.emit_display_state();
+        } else if (kind == "unsubscribe") {
+            conn.remove_subscriber(from);
+        } else if (kind == "display_open") {
             std::thread(handle_display_open, std::ref(conn), data).detach();
         }
     });

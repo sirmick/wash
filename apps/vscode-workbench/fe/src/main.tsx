@@ -1,21 +1,24 @@
-// wash-app-vscode-workbench — the embedded VS Code workbench window.
-// Asks the daemon (via its BE relay) to ensure code-server is running,
-// receives { path, folder }, and renders the workbench in an iframe at
-// path?folder=<folder>. One per opened folder; all share the daemon's
-// single code-server.
+// wash-app-vscode-workbench — the VS Code editor window. On cold launch
+// it prompts for a folder (FilePicker, directory mode); on a refresh it
+// restores the folder from wash:state and skips the prompt. Once a
+// folder is chosen it asks the wash-vscode service (via its BE relay) to
+// ensure code-server is running, receives { path }, and renders the
+// workbench in an iframe at path?folder=<folder>.
 //
 // It remembers its folder across server restarts: an upgrade restarts
-// code-server and the daemon broadcasts a folderless ready{path}; the
-// window re-applies its stored folder so it reloads the same workspace.
+// code-server and the service broadcasts a fresh ready{path}; the window
+// re-applies its stored folder so it reloads the same workspace.
 
 import { Match, Switch, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Button, IngressFrame, defineWashApp, tokens } from '@wash/ui';
+import { Button, FilePicker, IngressFrame, defineWashApp, tokens } from '@wash/ui';
 
-type Phase = 'launching' | 'ready' | 'absent' | 'error';
+type Phase = 'choosing' | 'launching' | 'ready' | 'absent' | 'error';
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
-  const [phase, setPhase] = createSignal<Phase>('launching');
+  // Cold launch starts at the folder prompt. A wash:state restore (on
+  // refresh) flips us straight to launching with the saved folder.
+  const [phase, setPhase] = createSignal<Phase>('choosing');
   const [path, setPath] = createSignal('');
   const [folder, setFolder] = createSignal('');
   const [error, setError] = createSignal('');
@@ -29,19 +32,29 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     return f ? `${p}?folder=${encodeURIComponent(f)}` : p;
   });
 
+  // openFolder is the one entry into "bring code-server up for this
+  // folder": persist the choice (so a refresh skips the picker) and
+  // ask the service to ensure the server.
+  const openFolder = (f: string) => {
+    setFolder(f);
+    setError('');
+    setPhase('launching');
+    send({ kind: 'save_folder', folder: f });
+    send({ kind: 'ensure' });
+  };
+
   const handleBE = (m: any) => {
     switch (m?.kind) {
       case 'ready':
         setPath(m.path);
-        if (m.folder) setFolder(m.folder); // keep prior folder on folderless (restart) readys
         setPhase('ready');
         break;
       case 'status':
-        // Not installed yet — point the user at the manager.
+        // Not installed yet — point the user at Settings.
         if (!m.installed && phase() !== 'ready') setPhase('absent');
         break;
       case 'shutdown': {
-        // The manager is quitting — close this window too.
+        // The service is going away — close this window too.
         const win = window.wash.windows().find((w) => w.instanceID === props.instance);
         if (win) window.wash.closeWindow(win.windowID);
         break;
@@ -60,23 +73,63 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   onMount(() => {
     const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail);
     props.host.addEventListener('wash:msg', onMsg);
-    send({ kind: 'ensure' });
-    onCleanup(() => props.host.removeEventListener('wash:msg', onMsg));
+
+    // wash:state restores the folder this window opened last time.
+    // Fires on (re)mount when the BE has a persisted blob. Treat a
+    // missing folder as "stay on the picker".
+    const onState = (ev: Event) => {
+      const s = (ev as CustomEvent).detail as { folder?: string } | null;
+      if (s && typeof s.folder === 'string' && s.folder && phase() === 'choosing') {
+        openFolder(s.folder);
+      }
+    };
+    props.host.addEventListener('wash:state', onState);
+
+    onCleanup(() => {
+      props.host.removeEventListener('wash:msg', onMsg);
+      props.host.removeEventListener('wash:state', onState);
+    });
   });
 
-  const retry = () => { setError(''); setPhase('launching'); send({ kind: 'ensure' }); };
+  const retry = () => {
+    setError('');
+    if (folder()) {
+      setPhase('launching');
+      send({ kind: 'ensure' });
+    } else {
+      setPhase('choosing');
+    }
+  };
+
+  const closeSelf = () => {
+    const win = window.wash.windows().find((w) => w.instanceID === props.instance);
+    if (win) window.wash.closeWindow(win.windowID);
+  };
 
   return (
     <Switch>
       <Match when={phase() === 'ready'}>
         <IngressFrame path={src()} host={props.host} title="VS Code" />
       </Match>
+      <Match when={phase() === 'choosing'}>
+        <FilePicker
+          open={true}
+          mode="directory"
+          host={props.host}
+          hostInstanceID={props.instance}
+          onConfirm={(p) => openFolder(p)}
+          onCancel={closeSelf}
+          data-testid="vscode-folder-picker"
+        />
+      </Match>
       <Match when={phase() === 'launching'}>
         <Centered><Spinner /><p style={bodyStyle}>Starting VS Code…</p></Centered>
       </Match>
       <Match when={phase() === 'absent'}>
         <Centered>
-          <p style={bodyStyle}>VS Code isn't installed yet. Open the <strong>VS Code</strong> app to install it.</p>
+          <p style={bodyStyle}>
+            VS Code isn't installed yet. Open <strong>Settings → Developer</strong> to install it.
+          </p>
         </Centered>
       </Match>
       <Match when={phase() === 'error'}>

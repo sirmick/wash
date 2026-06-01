@@ -68,7 +68,20 @@ const (
 	TEvtSpawnRequest = "spawn.request"
 	TEvtSpawnOk      = "spawn.ok"
 	TEvtSpawnErr     = "spawn.err"
-	TEvtNotify       = "notify"
+
+	// EvtAppRestart / Ok / Err — cycle a background singleton service
+	// (docs/SETTINGS.md §5). app → router app.restart{app_id} with a
+	// req_id; router → app app.restart.ok{instance_id} (the freshly
+	// spawned instance) or app.restart.err. The router terminates the
+	// running instance, GCs its windows/channels, clears the
+	// background-started flag, and spawns a fresh one. Gated by the
+	// "restart" capability and restricted to surface=background
+	// targets. Used by the settings app to restart wash-display.
+	TEvtAppRestart    = "app.restart"
+	TEvtAppRestartOk  = "app.restart.ok"
+	TEvtAppRestartErr = "app.restart.err"
+
+	TEvtNotify = "notify"
 
 	// Both directions. Carries app-private bytes between an app's BE
 	// and either its own FE half or another instance's BE.
@@ -397,6 +410,50 @@ func NewEvtSpawnErr(appID, code, msg string) EvtSpawnErr {
 // request.
 func NewEvtSpawnErrPrepared(reqID uint64, code, msg string) EvtSpawnErr {
 	return EvtSpawnErr{T: TEvtSpawnErr, ReqID: reqID, Code: code, Msg: msg}
+}
+
+// EvtAppRestart: app → router, "cycle this background singleton".
+// The router terminates the named app's running instance, GCs its
+// windows + channels, clears its background-started flag, and spawns
+// a fresh instance, replying with EvtAppRestartOk (or
+// EvtAppRestartErr). ReqID correlates the reply. Gated by the
+// "restart" capability; the target must be surface=background.
+// See docs/SETTINGS.md §5.
+type EvtAppRestart struct {
+	T     string `json:"t"`
+	ReqID uint64 `json:"req_id"`
+	AppID string `json:"app_id"`
+}
+
+func NewEvtAppRestart(reqID uint64, appID string) EvtAppRestart {
+	return EvtAppRestart{T: TEvtAppRestart, ReqID: reqID, AppID: appID}
+}
+
+// EvtAppRestartOk: router → app, the service was cycled. InstanceID
+// is the freshly spawned instance's id.
+type EvtAppRestartOk struct {
+	T          string `json:"t"`
+	ReqID      uint64 `json:"req_id"`
+	InstanceID string `json:"instance_id"`
+}
+
+func NewEvtAppRestartOk(reqID uint64, instanceID string) EvtAppRestartOk {
+	return EvtAppRestartOk{T: TEvtAppRestartOk, ReqID: reqID, InstanceID: instanceID}
+}
+
+// EvtAppRestartErr: router → app, the restart was refused. Capability
+// denial and a non-background target both use code "forbidden";
+// unknown/disabled id uses "not_found"; a spawn failure mid-restart
+// uses "internal".
+type EvtAppRestartErr struct {
+	T     string `json:"t"`
+	ReqID uint64 `json:"req_id"`
+	Code  string `json:"code"`
+	Msg   string `json:"msg"`
+}
+
+func NewEvtAppRestartErr(reqID uint64, code, msg string) EvtAppRestartErr {
+	return EvtAppRestartErr{T: TEvtAppRestartErr, ReqID: reqID, Code: code, Msg: msg}
 }
 
 // Notification levels.
@@ -751,6 +808,15 @@ func DecodeEvt(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TEvtSpawnErr:
 		var m EvtSpawnErr
+		return m, json.Unmarshal(data, &m)
+	case TEvtAppRestart:
+		var m EvtAppRestart
+		return m, json.Unmarshal(data, &m)
+	case TEvtAppRestartOk:
+		var m EvtAppRestartOk
+		return m, json.Unmarshal(data, &m)
+	case TEvtAppRestartErr:
+		var m EvtAppRestartErr
 		return m, json.Unmarshal(data, &m)
 	case TEvtAppMsg:
 		var m EvtAppMsg

@@ -363,6 +363,12 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 			return err
 		}
 		return inst.handleEnvPublish(m)
+	case wire.TEvtAppRestart:
+		var m wire.EvtAppRestart
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.handleAppRestart(m)
 	case wire.TEvtNotify:
 		var m wire.EvtNotify
 		if err := json.Unmarshal(payload, &m); err != nil {
@@ -740,6 +746,29 @@ func (inst *AppInstance) handlePrepareSpawn(m wire.EvtSpawnRequest) error {
 	}
 	inst.router.pendingMu.Unlock()
 	return inst.WriteEvt(wire.NewEvtSpawnOkPrepared(m.ReqID, target.Manifest.ID, instanceID, tok, target.Path))
+}
+
+// handleAppRestart enforces the restart capability and cycles a
+// background singleton service: terminate the running instance, wait
+// for its teardown (which GCs windows/channels/ingress), then spawn a
+// fresh one. The reply (app.restart.ok / app.restart.err) rides this
+// instance's event channel, keyed by ReqID. Runs in a goroutine so the
+// terminate-wait + respawn-attach (each up to several seconds) doesn't
+// block the reader. See docs/SETTINGS.md §5.
+func (inst *AppInstance) handleAppRestart(m wire.EvtAppRestart) error {
+	if !inst.Manifest.HasCapability(CapRestart) {
+		inst.router.log("app %s: restart denied (no capability)", inst.AppID)
+		return inst.WriteEvt(wire.NewEvtAppRestartErr(m.ReqID, wire.ErrCodeForbidden, "restart capability not declared"))
+	}
+	go func() {
+		newID, code, err := inst.router.restartBackgroundApp(m.AppID)
+		if err != nil {
+			_ = inst.WriteEvt(wire.NewEvtAppRestartErr(m.ReqID, code, err.Error()))
+			return
+		}
+		_ = inst.WriteEvt(wire.NewEvtAppRestartOk(m.ReqID, newID))
+	}()
+	return nil
 }
 
 // mintAttachToken returns a 32-byte cryptographic-random hex string.

@@ -1,28 +1,27 @@
-// wash-vscode — the VS Code manager: a singleton window that BOTH
-// owns code-server (the single process + ingress route for the
-// session) AND is the control panel. Folding the former background
-// daemon into this window means there are just two apps — this and
-// the hidden workbench — and a simple lifecycle: code-server lives as
-// long as this window is open, and closing it (after a prompt) tears
-// down code-server and every workbench window.
+// wash-vscode — the VS Code service: a windowless background singleton
+// that owns code-server (the single process + ingress route for the
+// session) and brokers it to workbench windows. It has no window and no
+// FE of its own; its control UI (status / start / stop / install /
+// update / restart) lives in the settings app, driven over cross-app
+// app_msg. Restart is the router's app.restart verb (docs/SETTINGS.md
+// §5), not a message this service handles.
 //
 // Owns: detect/install/upgrade (PTY stream → install.go), the
 // code-server process + ingress (server.go). Talks to:
-//   - its own control-panel FE (own-FE app_msg): status / start /
-//     stop / install / update / open_window / force_quit, plus fs.*
-//     for the folder picker (EnableFilePicker).
-//   - workbench windows (cross-app app_msg): subscribe / ensure.
-// Pushes status / log / ready / exited / error to its FE and to every
-// subscribed workbench.
+//   - the settings panel (cross-app app_msg): status / start / stop /
+//     install / update, via subscribe.
+//   - workbench windows (cross-app app_msg): subscribe / ensure. Each
+//     workbench picks its own folder (folder prompt on cold launch) and
+//     opens path?folder=… ; this service just ensures code-server is up
+//     and hands back the ingress path.
+//
+// Pushes status / log / ready / exited / error to every subscriber.
 package vscode
 
 import (
 	"context"
-	"embed"
 	"encoding/base64"
-	"io/fs"
 	"log"
-	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -32,21 +31,9 @@ import (
 	"github.com/sirmick/wash/internal/wire"
 )
 
-//go:embed all:assets
-var assetsFS embed.FS
-
 const version = "0.1.0"
 
-// workbenchAppID is the hidden window this manager spawns per folder.
-const workbenchAppID = "com.wash.vscode.workbench"
-
 const logRingMax = 4096
-
-// managerIcon names a symbol in the shell's icon sprite (/icons.svg);
-// the chrome renders it as <use href="icons.svg#<icon>"> and tints it
-// with the manifest accent. square-code reads as "the code IDE app".
-// Add the name to web/shell/build-icons.mjs's ICONS list.
-const managerIcon = "square-code"
 
 var def *sdk.AppDef
 
@@ -57,52 +44,39 @@ type manager struct {
 
 	launchMu sync.Mutex
 
-	mu               sync.Mutex
-	proc             *exec.Cmd
-	sock             string
-	path             string
-	installing       bool
-	latest           string
-	subs             map[string]struct{} // subscribed workbench instance ids
-	logBuf           []string
-	pendingFolders   []string
-	folderByInstance map[string]string
+	mu         sync.Mutex
+	proc       *exec.Cmd
+	sock       string
+	path       string
+	installing bool
+	latest     string
+	subs       map[string]struct{} // subscribed instance ids (settings panel + workbenches)
+	logBuf     []string
 }
 
-// theManager is the live singleton; the package-level OnSpawnResult
-// callback routes through it.
+// theManager is the live singleton.
 var theManager *manager
 
 func init() {
-	sub, err := fs.Sub(assetsFS, "assets")
-	if err != nil {
-		panic("wash-vscode: assets: " + err.Error())
-	}
+	// Background service: no window, no FE bundle of its own. The
+	// control UI lives in the settings app, so there is nothing to
+	// embed — same shape as wash-priv. No Assets, no Element, no Icon.
 	def = &sdk.AppDef{
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.vscode",
-			Name:            "VS Code Manager",
+			Name:            "VS Code Service",
 			Version:         version,
 			ProtocolVersion: sdk.ProtocolVersion,
-			Element:         "wash-app-vscode",
-			Surface:         sdk.SurfaceWindow,
-			Icon:            managerIcon,
-			Accent:          "#007acc",
-			// Singleton: one manager owns code-server; workbench
-			// windows address it cross-app by this id.
-			Instancing:   sdk.InstancingSingleton,
-			Capabilities: []string{sdk.CapSpawn}, // spawns workbench windows
-			Window:       &sdk.WindowHints{DefaultWidth: 560, DefaultHeight: 460},
+			Surface:         sdk.SurfaceBackground,
+			// Singleton: one service owns code-server; the settings
+			// panel and workbench windows address it cross-app by id.
+			Instancing: sdk.InstancingSingleton,
 		},
-		Assets:           sub,
-		OnReady:          onReady,
-		OnSpawnResult:    onSpawnResult,
-		OnCloseRequested: onCloseRequested,
+		OnReady: onReady,
 	}
 	registry.Register(&registry.App{
 		Name:     "wash-vscode",
 		Manifest: def.Manifest,
-		Assets:   def.Assets,
 		Run:      run,
 	})
 }
@@ -114,14 +88,10 @@ func run(ctx context.Context) error { return sdk.Run(ctx, def) }
 
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	m := &manager{
-		root:             c.Session().Root,
-		instanceID:       instanceID,
-		subs:             map[string]struct{}{},
-		folderByInstance: map[string]string{},
+		root:       c.Session().Root,
+		instanceID: instanceID,
+		subs:       map[string]struct{}{},
 	}
-	// Folder picker (fs.*) first; the Bus then wraps it for everything
-	// else.
-	sdk.EnableFilePicker(c)
 	m.bus = sdk.NewBus(c)
 	theManager = m
 	registerHandlers(m)
@@ -139,28 +109,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		}
 	}()
 
-	// Opening the manager launches a VS Code workspace at the last
-	// folder used (or home on first run) — the manager is the hub,
-	// but you get an editor straight away.
-	go func() {
-		folder := m.readLastFolder()
-		if folder == "" {
-			folder = m.defaultFolder()
-		}
-		if err := m.openWorkspace(folder); err != nil {
-			log.Printf("wash-vscode: auto-open workspace: %v", err)
-		}
-	}()
-
-	log.Printf("wash-vscode (manager) ready instance=%s window=%d root=%q", instanceID, windowID, m.root)
-}
-
-// onCloseRequested always prompts: ask the FE to confirm, and veto the
-// close for now. The FE's confirm sends force_quit, which tears
-// everything down.
-func onCloseRequested(c *sdk.Conn, _ uint32) bool {
-	_ = c.SendAppMsg(map[string]any{"kind": "confirm_close"})
-	return false
+	log.Printf("wash-vscode (service) ready instance=%s root=%q", instanceID, m.root)
 }
 
 // ----- request types -----
@@ -169,16 +118,13 @@ type emptyReq struct{}
 type installReq struct {
 	Version string `json:"version"`
 }
-type openWindowReq struct {
-	Folder string `json:"folder"`
-}
 
 func registerHandlers(m *manager) {
 	b := m.bus
 
-	// --- control-panel FE commands (own-FE) ---
-	sdk.HandleVoid(b, "status", func(_ *sdk.Conn, _ string, _ emptyReq) error {
-		go m.emitStatusToFE()
+	// --- control commands (settings panel, cross-app) ---
+	sdk.HandleFromVoid(b, "status", func(_ *sdk.Conn, _ string, _ emptyReq, from wire.Sender) error {
+		go m.sendTo(from.InstanceID, m.statusPayload())
 		return nil
 	})
 	sdk.HandleVoid(b, "start", func(_ *sdk.Conn, _ string, _ emptyReq) error {
@@ -201,15 +147,8 @@ func registerHandlers(m *manager) {
 		go m.runInstall(v)
 		return nil
 	})
-	sdk.HandleVoid(b, "open_window", func(_ *sdk.Conn, _ string, req openWindowReq) error {
-		return m.openWorkspace(req.Folder)
-	})
-	sdk.HandleVoid(b, "force_quit", func(c *sdk.Conn, _ string, _ emptyReq) error {
-		go m.quit(c)
-		return nil
-	})
 
-	// --- workbench cross-app messages ---
+	// --- subscriber lifecycle (settings panel + workbench windows) ---
 	sdk.HandleFromVoid(b, "subscribe", func(_ *sdk.Conn, _ string, _ emptyReq, from wire.Sender) error {
 		if from.InstanceID == "" {
 			return nil
@@ -236,37 +175,7 @@ func registerHandlers(m *manager) {
 	})
 }
 
-// onSpawnResult binds a pending open_window folder to the freshly
-// spawned workbench instance.
-func onSpawnResult(_ *sdk.Conn, _, instanceID string, err error) {
-	m := theManager
-	if m == nil {
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.pendingFolders) == 0 {
-		return
-	}
-	folder := m.pendingFolders[0]
-	m.pendingFolders = m.pendingFolders[1:]
-	if err != nil || instanceID == "" {
-		return
-	}
-	m.folderByInstance[instanceID] = folder
-}
-
 // ----- orchestration -----
-
-// openWorkspace spawns a workbench window for folder, remembering it
-// as the last-opened so the manager reopens it next launch.
-func (m *manager) openWorkspace(folder string) error {
-	m.mu.Lock()
-	m.pendingFolders = append(m.pendingFolders, folder)
-	m.mu.Unlock()
-	m.writeLastFolder(folder)
-	return m.bus.Conn().SpawnRequest(workbenchAppID)
-}
 
 func (m *manager) startServer() {
 	if _, err := m.launch(context.Background()); err != nil {
@@ -276,6 +185,10 @@ func (m *manager) startServer() {
 	m.broadcastStatus()
 }
 
+// handleEnsure brings code-server up (idempotent) and hands the
+// requesting workbench the ingress path. The workbench owns its own
+// folder — it opens path?folder=… — so this reply carries only the
+// path, not a folder.
 func (m *manager) handleEnsure(fromInst string) {
 	st := detect()
 	if !st.Installed {
@@ -287,13 +200,7 @@ func (m *manager) handleEnsure(fromInst string) {
 		m.sendTo(fromInst, errPayload(err))
 		return
 	}
-	m.mu.Lock()
-	folder, ok := m.folderByInstance[fromInst]
-	m.mu.Unlock()
-	if !ok {
-		folder = m.defaultFolder()
-	}
-	m.sendTo(fromInst, map[string]any{"kind": "ready", "path": path, "folder": folder})
+	m.sendTo(fromInst, map[string]any{"kind": "ready", "path": path})
 	m.broadcastStatus()
 }
 
@@ -333,17 +240,7 @@ func (m *manager) runInstall(version string) {
 	m.broadcast(map[string]any{"kind": "ready", "path": path})
 }
 
-// quit tears everything down: tell workbenches to close, kill
-// code-server, then exit the process. The router reaps the exit and
-// destroys this window; code-server (our child) is already gone.
-func (m *manager) quit(_ *sdk.Conn) {
-	m.broadcast(map[string]any{"kind": "shutdown"})
-	time.Sleep(150 * time.Millisecond) // let workbenches self-close
-	m.stop()
-	os.Exit(0)
-}
-
-// ----- fan-out (own FE + subscribed workbenches) -----
+// ----- fan-out (every subscriber) -----
 
 func (m *manager) sendTo(inst string, payload map[string]any) {
 	if inst == "" {
@@ -353,7 +250,6 @@ func (m *manager) sendTo(inst string, payload map[string]any) {
 }
 
 func (m *manager) broadcast(payload map[string]any) {
-	_ = m.bus.Conn().SendAppMsg(payload) // own control-panel FE
 	m.mu.Lock()
 	subs := make([]string, 0, len(m.subs))
 	for k := range m.subs {
@@ -366,9 +262,6 @@ func (m *manager) broadcast(payload map[string]any) {
 }
 
 func (m *manager) broadcastStatus() { m.broadcast(m.statusPayload()) }
-
-// emitStatusToFE replies to the manager FE's status request.
-func (m *manager) emitStatusToFE() { _ = m.bus.Conn().SendAppMsg(m.statusPayload()) }
 
 func (m *manager) streamLog(b []byte) {
 	enc := base64.StdEncoding.EncodeToString(b)

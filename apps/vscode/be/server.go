@@ -1,9 +1,10 @@
 package vscode
 
 // server.go — the single code-server process and its single ingress
-// route, owned by the manager window for as long as it's open. Closing
-// the manager kills code-server (it's our child; Pdeathsig + group-kill
-// guarantee it). Workbench windows iframe the published path.
+// route, owned by the background service for its lifetime (the router-
+// lifetime ctx). code-server is our child; Pdeathsig + group-kill
+// guarantee the kernel reaps it if we die abruptly. Workbench windows
+// iframe the published path.
 
 import (
 	"context"
@@ -54,27 +55,9 @@ func sanitize(s string) string {
 	return string(out)
 }
 
-// lastFolderPath stores the most recently opened workspace folder so
-// the manager can reopen it on next launch.
-func (m *manager) lastFolderPath() string { return filepath.Join(m.dataHome(), "last-folder") }
-
-func (m *manager) readLastFolder() string {
-	b, err := os.ReadFile(m.lastFolderPath())
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(b))
-}
-
-func (m *manager) writeLastFolder(folder string) {
-	if folder == "" {
-		return
-	}
-	_ = os.MkdirAll(m.dataHome(), 0o755)
-	_ = os.WriteFile(m.lastFolderPath(), []byte(folder), 0o644)
-}
-
-// defaultFolder is the workspace code-server opens by default.
+// defaultFolder is the workspace code-server opens by default. Each
+// workbench window passes its own ?folder=… on top of this; this is
+// just the launch-time working directory + fallback.
 func (m *manager) defaultFolder() string {
 	if m.root != "" {
 		return m.root
