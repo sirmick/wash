@@ -29,10 +29,13 @@ mkdir -p "$BUILD"
 NM_PKGS="networkmanager networkmanager-cli networkmanager-wifi dbus polkit wpa_supplicant eudev linux-virt bash openrc"
 # The guest runs the wash desktop as the unprivileged 'wash' user (in the netdev
 # group so NM/polkit lets it manage networking — see 49-wash-nm.rules).
-WASH_USER_SETUP="addgroup -S netdev 2>/dev/null; adduser -D -h /home/wash -s /bin/bash -G netdev wash; passwd -u wash 2>/dev/null || true"
+# Create the wash user AND give it a real shadow password ("wash"): the login
+# front authenticates via su(1)/shadow (same mechanism as wash-login), not a
+# hardcoded credential, so the account needs a password busybox su can validate.
+WASH_USER_SETUP="addgroup -S netdev 2>/dev/null; adduser -D -h /home/wash -s /bin/bash -G netdev wash; echo 'wash:wash' | chpasswd"
 ROOTFS_TAR="$BUILD/alpine-nm.tar"
 PKG_MARK="$BUILD/.alpine-nm.pkgs"
-RENDER_VER="2-openrc-washuser" # bump to force a re-render when this setup changes
+RENDER_VER="3-washpw" # bump to force a re-render when this setup changes (now sets wash's password)
 if [ ! -f "$ROOTFS_TAR" ] || [ "$(cat "$PKG_MARK" 2>/dev/null)" != "$ALPINE_VER:$RENDER_VER:$NM_PKGS" ]; then
   echo ">> rendering Alpine+NM+OpenRC rootfs via Docker (host has no apk)"
   command -v docker >/dev/null || { echo "!! docker required to build the NM rootfs" >&2; exit 1; }
@@ -273,9 +276,10 @@ SVC
 # front exits when the data plane drops (browser gone / between sessions); the
 # loop retries until the next browser attaches.
 #
-# --auth-test wash:<pw> is the dev/CI credential; resolveCredential re-derives
-# wash's real uid/gid/groups from /etc/passwd so NM access is preserved. Swap to
-# the su/passwd backend (drop --auth-test) for a hardened deployment.
+# Real auth: wash-vmlogin's default backend is su(1)/shadow over a PTY — the
+# same mechanism as wash-login. Log in as wash / wash (the wash user's shadow
+# password, set above). resolveCredential re-derives wash's real uid/gid/groups
+# from /etc/passwd so the netdev group (NM access) is preserved.
 cat > "$RFS/sbin/wash-router-launch" <<'LAUNCH'
 #!/bin/sh
 export WASH_NETD_BACKEND=nm
@@ -286,8 +290,7 @@ i=0; while [ ! -e /dev/vport0p1 ] && [ "$i" -lt 600 ]; do i=$((i+1)); sleep 0.1;
 while :; do
   /usr/lib/wash/wash-vmlogin \
     --transport=virtio-console:/dev/vport0p1 \
-    --apps-dir=/usr/lib/wash \
-    --auth-test "wash:wash" >> /run/wash-router.log 2>&1
+    --apps-dir=/usr/lib/wash >> /run/wash-router.log 2>&1
   echo "wash-vmlogin exited rc=$? — respawn in 1s" >> /run/wash-router.log
   sleep 1
 done

@@ -93,10 +93,10 @@ start() {
             # authed user itself (it needs root to setuid + preserve groups —
             # wash-vm/UNIFY.md). It uses the inherited fd 3 via raw syscalls (no
             # Go poller, so no khvcd wedge), exactly as wash-router did.
-            # --auth-test wash:<pw> is the dev credential; resolveCredential
-            # re-derives wash's uid/gid/groups from /etc/passwd. Drop --auth-test
-            # for the su/passwd backend on a hardened build.
-            /usr/bin/wash-vmlogin --transport=fd:3 --apps-dir=/usr/lib/wash --auth-test "wash:wash"
+            # Real auth: the default backend is su(1)/shadow over a PTY — the
+            # same mechanism as wash-login. Log in as wash / wash (the rootfs
+            # users.table sets wash's shadow password).
+            /usr/bin/wash-vmlogin --transport=fd:3 --apps-dir=/usr/lib/wash
             rc=$?
             echo "wash-supervisor: wash-vmlogin exited rc=$rc (launch #$n)"
             sleep_for=$(( n > 5 ? 5 : 1 ))
