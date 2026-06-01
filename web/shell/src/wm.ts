@@ -12,6 +12,7 @@ import { createSignal } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import type { SessionPatch, SessionWindow } from './main';
 import { clampViewport, viewportForRect, nextZ } from './viewport-math';
+import { focusFromSnapshot } from './wm-focus';
 
 export type WinState = 'normal' | 'minimized' | 'maximized';
 
@@ -219,12 +220,10 @@ export function applySessionSnapshot(
   for (const sw of sessionWins) {
     const w = fromSessionWindow(sw);
     mountWhenReady(w, waitForBundle, 'snapshot');
-    if (sw.focused) setFocused(sw.window_id);
   }
-  if (sessionWins.length === 0 || !sessionWins.some((w) => w.focused)) {
-    // No focus claim in the snapshot → clear local focus.
-    if (!sessionWins.some((w) => w.focused)) setFocused(null);
-  }
+  // Reconcile focus to the snapshot's claim (or null → clear local focus
+  // on the reconnect / no-claim path). See wm-focus.focusFromSnapshot.
+  setFocused(focusFromSnapshot(sessionWins));
 }
 
 // applySessionPatch applies a batch of mutations in order. Upserts
