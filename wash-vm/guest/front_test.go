@@ -76,16 +76,17 @@ func TestFront_SuccessfulLoginForksRouterAsUser(t *testing.T) {
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- f.Serve(context.Background(), front) }()
 
-	// Proxy injects SessionOpen first; the front must ignore it and wait for
-	// the login frame.
+	// Proxy injects SessionOpen first; the front announces the login gate.
 	openP, _ := json.Marshal(wire.NewSessionOpen())
 	if err := fe.WriteFrame(wire.Frame{Flags: wire.FlagEnd, Channel: 0, Payload: openP}); err != nil {
 		t.Fatalf("write session.open: %v", err)
 	}
+	if got := readResp(t, fe); got.T != msgLoginRequired {
+		t.Fatalf("on session.open got t = %q, want %q", got.T, msgLoginRequired)
+	}
 	if err := fe.WriteFrame(loginFrame(t, "root", "hunter2")); err != nil {
 		t.Fatalf("write login: %v", err)
 	}
-
 	if got := readResp(t, fe); got.T != msgLoginOK {
 		t.Fatalf("response t = %q, want %q", got.T, msgLoginOK)
 	}
@@ -116,10 +117,11 @@ func TestFront_BadCredentialsDoNotFork(t *testing.T) {
 	front, fe, closeAll := pipePair(t)
 	defer closeAll()
 
+	spawned := make(chan Identity, 1)
 	f := &Front{
 		Auth: mustAuth(t),
 		Spawn: func(ctx context.Context, id Identity) error {
-			t.Errorf("SpawnRouter called on failed auth (id=%+v)", id)
+			spawned <- id
 			return nil
 		},
 	}
@@ -131,13 +133,24 @@ func TestFront_BadCredentialsDoNotFork(t *testing.T) {
 	if got := readResp(t, fe); got.T != msgLoginErr {
 		t.Fatalf("response t = %q, want %q", got.T, msgLoginErr)
 	}
+	// Bad creds must not have forked anything.
+	select {
+	case id := <-spawned:
+		t.Fatalf("SpawnRouter called on failed auth: %+v", id)
+	default:
+	}
 
-	// A retry with correct creds on the same channel must now succeed.
+	// A retry with correct creds on the same channel must now succeed + fork.
 	if err := fe.WriteFrame(loginFrame(t, "root", "hunter2")); err != nil {
 		t.Fatalf("write retry login: %v", err)
 	}
 	if got := readResp(t, fe); got.T != msgLoginOK {
 		t.Fatalf("retry response t = %q, want %q", got.T, msgLoginOK)
+	}
+	select {
+	case <-spawned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SpawnRouter not called after successful retry")
 	}
 }
 

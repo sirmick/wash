@@ -51,9 +51,10 @@ type Authenticator interface {
 // envelope only; wash-router never sees these (the front consumes them before
 // handoff).
 const (
-	msgLogin    = "login"
-	msgLoginOK  = "login.ok"
-	msgLoginErr = "login.err"
+	msgLogin         = "login"
+	msgLoginOK       = "login.ok"
+	msgLoginErr      = "login.err"
+	msgLoginRequired = "login.required"
 )
 
 type loginReq struct {
@@ -109,6 +110,15 @@ func (f *Front) Serve(ctx context.Context, t wire.FrameTransport) error {
 			T string `json:"t"`
 		}
 		if err := json.Unmarshal(fr.Payload, &probe); err != nil {
+			continue
+		}
+		// A fresh viewer attached (the proxy injects SessionOpen on browser
+		// connect). Announce that this side is the login gate so the FE shows
+		// the login form. A browser that instead reattaches to a live session
+		// reaches wash-router (which owns the channel while the front blocks in
+		// Spawn), sees the catalog rather than this prompt, and skips login.
+		if probe.T == wire.TSessionOpen {
+			f.reply(t, loginResp{T: msgLoginRequired})
 			continue
 		}
 		if probe.T != msgLogin {
