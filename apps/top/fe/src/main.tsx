@@ -16,6 +16,7 @@ import { For, Index, Show, createMemo, createSignal, onCleanup, onMount } from '
 import { createStore } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
 import { ConfirmDialog, defineWashApp, tokens } from '@wash/ui';
+import { filterSortProcs, type SortKey } from './procsort.ts';
 import {
   ChevronDown,
   ChevronRight,
@@ -90,8 +91,6 @@ interface Details {
   wchan?: string;
   oom_score?: string;
 }
-
-type SortKey = 'cpu' | 'mem' | 'pid' | 'user' | 'cmd' | 'time';
 
 // HISTORY_LEN is the sparkline ring-buffer depth. 60 samples × 2s
 // default = 2 minutes; long enough to see a workload settle, short
@@ -369,31 +368,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   const procs = () => snapshot()?.procs ?? [];
 
-  const filteredFlat = createMemo(() => {
-    const f = filter().trim().toLowerCase();
-    let rows = procs();
-    if (f) {
-      rows = rows.filter((p) =>
-        p.Cmd.toLowerCase().includes(f) ||
-        p.Comm.toLowerCase().includes(f) ||
-        String(p.PID).includes(f) ||
-        (p.User || '').toLowerCase().includes(f)
-      );
-    }
-    const k = sortKey();
-    const desc = sortDesc() ? -1 : 1;
-    const cmp = (a: ProcInfo, b: ProcInfo): number => {
-      switch (k) {
-        case 'cpu': return (a.CPU - b.CPU) * desc;
-        case 'mem': return (a.RSS - b.RSS) * desc;
-        case 'pid': return (a.PID - b.PID) * desc;
-        case 'user': return (a.User || '').localeCompare(b.User || '') * desc;
-        case 'cmd': return (a.Cmd || '').localeCompare(b.Cmd || '') * desc;
-        case 'time': return (a.TimeJiff - b.TimeJiff) * desc;
-      }
-    };
-    return [...rows].sort(cmp);
-  });
+  const filteredFlat = createMemo(() => filterSortProcs(procs(), filter(), sortKey(), sortDesc()));
 
   // Tree view: build children map; render depth-first.
   const treeRows = createMemo(() => {
