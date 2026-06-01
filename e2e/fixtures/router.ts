@@ -42,6 +42,17 @@ const NETD_BIN = join(REPO_ROOT, 'out', 'wash-netd');
 const FAKESUDO_BIN = join(REPO_ROOT, 'out', 'wash-priv-fakesudo');
 export const SUDO_BIN = join(REPO_ROOT, 'out', 'wash-sudo');
 
+// wash-display is the native (C++/CMake/wlroots) compositor — not built by
+// build.sh and not present on a dep-less checkout or CI. Specs that need
+// the live compositor call this in a beforeEach and test.skip() on a
+// non-null reason, so they're an opt-in capstone (mirrors vmSkipReason).
+export function displaySkipReason(): string | null {
+  if (!existsSync(DISPLAY_BIN)) {
+    return `${DISPLAY_BIN} missing (cmake --build wash-display/build; needs libwlroots-dev)`;
+  }
+  return null;
+}
+
 export interface RouterHandle {
   url: string;
   /** absolute path to wash-launch on this host (for tests that invoke it from a shell) */

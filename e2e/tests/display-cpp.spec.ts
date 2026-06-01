@@ -9,11 +9,16 @@
 // Requires the native binary: `cmake --build wash-display/build` then
 // copy build/wash-display to out/. BE-only (no browser).
 
-import { test, expect } from '../fixtures/router';
+import { test, expect, displaySkipReason } from '../fixtures/router';
 
 test.use({ routerOpts: { apps: ['session', 'display'] } });
 
 test.describe('wash-display C++ wire client', () => {
+  test.beforeEach(() => {
+    const reason = displaySkipReason();
+    test.skip(reason !== null, reason ?? '');
+  });
+
   test('a C++ BE handshakes and creates windows via window.create', async ({ router }) => {
     const launched = await router.controlRequest({ t: 'launch', app_id: 'com.wash.display' });
     expect(launched.t).toBe('launched');
