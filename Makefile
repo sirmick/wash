@@ -291,6 +291,10 @@ $(OUT)/wash-edit: $(EDIT_STAMP) | $(OUT)
 
 # wash-vscode is a background service with no FE bundle (its control UI
 # lives in the settings app), so its binary has no asset-stamp dep.
+# .PHONY (like wash-bulk/wash-notify): with no changing prerequisite,
+# make would otherwise treat the binary as up-to-date forever and never
+# pick up Go source changes. go_build is cheap (Go's own build cache).
+.PHONY: $(OUT)/wash-vscode
 $(OUT)/wash-vscode: | $(OUT)
 	$(call go_build,$@,apps/vscode/be/cmd)
 
