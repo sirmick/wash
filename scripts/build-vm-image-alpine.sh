@@ -29,10 +29,13 @@ mkdir -p "$BUILD"
 NM_PKGS="networkmanager networkmanager-cli networkmanager-wifi dbus polkit wpa_supplicant eudev linux-virt bash openrc"
 # The guest runs the wash desktop as the unprivileged 'wash' user (in the netdev
 # group so NM/polkit lets it manage networking — see 49-wash-nm.rules).
-WASH_USER_SETUP="addgroup -S netdev 2>/dev/null; adduser -D -h /home/wash -s /bin/bash -G netdev wash; passwd -u wash 2>/dev/null || true"
+# Create the wash user AND give it a real shadow password ("wash"): the login
+# front authenticates via su(1)/shadow (same mechanism as wash-login), not a
+# hardcoded credential, so the account needs a password busybox su can validate.
+WASH_USER_SETUP="addgroup -S netdev 2>/dev/null; adduser -D -h /home/wash -s /bin/bash -G netdev wash; echo 'wash:wash' | chpasswd"
 ROOTFS_TAR="$BUILD/alpine-nm.tar"
 PKG_MARK="$BUILD/.alpine-nm.pkgs"
-RENDER_VER="2-openrc-washuser" # bump to force a re-render when this setup changes
+RENDER_VER="3-washpw" # bump to force a re-render when this setup changes (now sets wash's password)
 if [ ! -f "$ROOTFS_TAR" ] || [ "$(cat "$PKG_MARK" 2>/dev/null)" != "$ALPINE_VER:$RENDER_VER:$NM_PKGS" ]; then
   echo ">> rendering Alpine+NM+OpenRC rootfs via Docker (host has no apk)"
   command -v docker >/dev/null || { echo "!! docker required to build the NM rootfs" >&2; exit 1; }
@@ -238,27 +241,30 @@ respawn_delay=1
 SVC
 
 # Launcher: sets the desktop's environment (NM backend + a real shell for
-# wash-term) and RE-RUNS the router forever. The router exits whenever the host
-# drops the data plane (browser closes / between sessions); we must retry
-# indefinitely until the next browser attaches — so the loop lives here rather
-# than relying on supervise-daemon's bounded respawn-max (which gives up after a
-# few pre-browser exits and leaves the router dead when the browser arrives).
+# wash-term) and RE-RUNS the login front forever. wash-vmlogin owns the data
+# plane, authenticates one browser, then forks wash-router AS the authed user
+# (wash-vm/UNIFY.md) — replacing the old hardcoded `su -m wash`. It stays root
+# (so it can setuid to the resolved user, preserving the netdev supplementary
+# group that gates NetworkManager); the forked router runs unprivileged. The
+# front exits when the data plane drops (browser gone / between sessions); the
+# loop retries until the next browser attaches.
+#
+# Real auth: wash-vmlogin's default backend is su(1)/shadow over a PTY — the
+# same mechanism as wash-login. Log in as wash / wash (the wash user's shadow
+# password, set above). resolveCredential re-derives wash's real uid/gid/groups
+# from /etc/passwd so the netdev group (NM access) is preserved.
 cat > "$RFS/sbin/wash-router-launch" <<'LAUNCH'
 #!/bin/sh
-# Runs as root (from wash-early.sh) only long enough to hand the data-plane fd to
-# the unprivileged 'wash' user, then runs the whole desktop (router + every app
-# it spawns, incl. com.wash.netd) AS wash. netd drives NM over D-Bus authorized
-# by the netdev group (wash is a member; see 49-wash-nm.rules) and writes its
-# keyfiles into the wash-owned system-connections dir.
 export WASH_NETD_BACKEND=nm
 export SHELL=/bin/bash HOME=/home/wash TERM=xterm-256color
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/lib/wash"
 # Wait for the data chardev (created when the host attaches it in Launch).
 i=0; while [ ! -e /dev/vport0p1 ] && [ "$i" -lt 600 ]; do i=$((i+1)); sleep 0.1; done
-chown wash /dev/vport0p1 2>/dev/null   # the single virtio data-plane fd
 while :; do
-  su -m wash -c '/usr/lib/wash/wash-router --transport=virtio-console:/dev/vport0p1 --apps-dir=/usr/lib/wash' >> /run/wash-router.log 2>&1
-  echo "wash-router exited rc=$? — respawn in 1s" >> /run/wash-router.log
+  /usr/lib/wash/wash-vmlogin \
+    --transport=virtio-console:/dev/vport0p1 \
+    --apps-dir=/usr/lib/wash >> /run/wash-router.log 2>&1
+  echo "wash-vmlogin exited rc=$? — respawn in 1s" >> /run/wash-router.log
   sleep 1
 done
 LAUNCH

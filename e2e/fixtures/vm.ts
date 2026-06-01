@@ -82,3 +82,19 @@ export const test = base.extend<{ vm: VMHandle }>({
 });
 
 export { expect };
+
+/**
+ * Log in through the host chrome's login overlay (wash-vm/UNIFY.md): the
+ * in-guest front gates the channel and emits login.required on connect; the
+ * overlay appears, we submit creds, and on login.ok the front forks wash-router
+ * as that user and the shell loads over the same socket. Credentials match the
+ * image's launcher (`--auth-test wash:wash` in build-vm-image-alpine.sh).
+ *
+ * Call right after page.goto(vm.url), before asserting the desktop. fill()
+ * auto-waits for the overlay to become visible, which covers VM boot latency.
+ */
+export async function vmLogin(page: import('@playwright/test').Page, user = 'wash', pass = 'wash'): Promise<void> {
+  await page.locator('#login-user').fill(user, { timeout: 40_000 });
+  await page.locator('#login-pass').fill(pass);
+  await page.locator('#login-go').click();
+}

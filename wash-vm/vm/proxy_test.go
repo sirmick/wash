@@ -49,12 +49,26 @@ func TestProxyServesVMWire(t *testing.T) {
 	defer c.CloseNow()
 	c.SetReadLimit(1 << 20) // the session FE bundle rides in one large frame
 
-	// Read the router's connect-time push. We only need the early control
-	// frames (catalog, session.snapshot, app.declared); stop once both
-	// assertions are satisfied or the budget runs out.
+	// The in-guest front gates the channel (wash-vm/UNIFY.md): on connect it
+	// emits login.required, and only forks wash-router (which pushes the
+	// catalog) after a login.ok. Send credentials up front — the front reads the
+	// proxy's SessionOpen, emits login.required, then reads this and authenticates.
+	loginJSON, _ := json.Marshal(map[string]string{"t": "login", "user": "wash", "pass": "wash"})
+	var lf bytes.Buffer
+	if err := wire.EncodeFrame(&lf, wire.Frame{Flags: wire.FlagEnd, Channel: 0, Payload: loginJSON}); err != nil {
+		t.Fatalf("encode login: %v", err)
+	}
+	if err := c.Write(ctx, websocket.MessageBinary, lf.Bytes()); err != nil {
+		t.Fatalf("ws write login: %v", err)
+	}
+
+	// Read the router's connect-time push (after login.ok forks it). We only
+	// need the early control frames (catalog, session.snapshot, app.declared);
+	// stop once both assertions are satisfied or the budget runs out. The budget
+	// covers login + the router cold-start that follows it.
 	var sawNetInCatalog, sawDesktop bool
-	deadline := time.Now().Add(20 * time.Second)
-	for n := 0; n < 8 && !(sawNetInCatalog && sawDesktop); n++ {
+	deadline := time.Now().Add(45 * time.Second)
+	for n := 0; n < 24 && !(sawNetInCatalog && sawDesktop); n++ {
 		rctx, rcancel := context.WithDeadline(ctx, deadline)
 		typ, data, err := c.Read(rctx)
 		rcancel()

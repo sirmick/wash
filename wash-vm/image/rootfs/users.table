@@ -3,11 +3,11 @@
 #   https://buildroot.org/downloads/manual/manual.html#makeuser-syntax
 # Format: username uid group gid password home shell groups comment
 #
-# `wash` is the unprivileged user wash-router drops to via su(1)
-# from S99wash-router. Empty password ("=") because login via getty
-# isn't a normal user-facing path here; the shell tab is for the
-# debugger. Sudo policy in /etc/sudoers.d/wash-nopasswd grants
-# passwordless sudo to all commands (wash-priv detects this at
-# startup and skips the FE password modal — see priv's
-# detectPasswordlessSudo + skipPassword).
-wash -1 wash -1 = /home/wash /bin/sh - "wash desktop user"
+# `wash` is the unprivileged user the login front (wash-vmlogin) drops to.
+# It now authenticates via REAL su(1)/shadow — the same mechanism as
+# wash-login (`su -c true wash` over a PTY) — so wash needs a real
+# password. The field below is the sha512-crypt ($6$) hash of "wash"
+# (dev credential; musl's crypt validates $6$). Sudo policy in
+# /etc/sudoers.d/wash-nopasswd still grants passwordless sudo to all
+# commands (wash-priv detects this and skips the FE password modal).
+wash -1 wash -1 $6$eyZbeAbZDUV22HpM$hyIv5zrwv7Olttr8nD2NhxDFjBDcGRIzkzMasghaCmIL7MJMAssUWof9ON.lziuIN.jtZTl7jdZH0RdpFp2YL0 /home/wash /bin/sh - "wash desktop user"

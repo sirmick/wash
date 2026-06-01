@@ -8,11 +8,13 @@ import (
 )
 
 // TestRouterBakedAndServing boots the image baked by build-vm-image-alpine.sh
-// and verifies — entirely over the out-of-band ctl plane — that the real
-// in-guest wash-router came up, found the virtio-serial data port, and
-// discovered the wash-net apps (docs/NET.md §8.3, B1e). This proves the bake
-// without depending on the browser chrome (B1e-2) or the data-plane wire
-// timing: the router serving the wire to a browser is the next rung's gate.
+// and verifies — entirely over the out-of-band ctl plane — that the bake is
+// sound: the virtio-serial data port exists, the wash multicall + net-app
+// symlinks are present, and the in-guest login front (wash-vmlogin) is running,
+// ready to fork wash-router on a browser login (wash-vm/UNIFY.md). The router
+// actually serving its catalog over the wire (which now requires a login) is
+// proven by TestProxyServesVMWire; here we just prove the launcher came up,
+// without depending on the browser chrome or the data-plane wire timing.
 func TestRouterBakedAndServing(t *testing.T) {
 	kernel, initramfs := artifacts(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -46,31 +48,17 @@ func TestRouterBakedAndServing(t *testing.T) {
 		t.Fatalf("apps dir missing net apps: %q", out)
 	}
 
-	// Wait for the router process to be up (it starts in the background after
-	// the data port appears).
+	// Wait for the login front to be up (wash-router-launch execs wash-vmlogin
+	// once the data port appears; it owns the channel and forks wash-router only
+	// after a browser logs in — so pre-login, wash-vmlogin is the process to see).
 	var psOut string
 	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); {
-		if psOut = exec("pgrep -f wash-router || true"); strings.TrimSpace(psOut) != "" {
+		if psOut = exec("pgrep -f wash-vmlogin || true"); strings.TrimSpace(psOut) != "" {
 			break
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
 	if strings.TrimSpace(psOut) == "" {
-		t.Fatalf("wash-router not running\nrouter log:\n%s\nconsole:\n%s", exec("cat /run/wash-router.log 2>&1"), vm.ConsoleLog())
-	}
-
-	// The router log should show the app scan finding the net apps (the
-	// catalog the served shell would render). Give the scan a moment.
-	var log string
-	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); {
-		log = exec("cat /run/wash-router.log 2>&1")
-		if strings.Contains(log, "com.wash.net") {
-			break
-		}
-		time.Sleep(300 * time.Millisecond)
-	}
-	t.Logf("router log:\n%s", log)
-	if !strings.Contains(log, "com.wash.net") {
-		t.Fatalf("router log never mentioned com.wash.net (app scan?):\n%s", log)
+		t.Fatalf("wash-vmlogin (login front) not running\nlauncher log:\n%s\nconsole:\n%s", exec("cat /run/wash-router.log 2>&1"), vm.ConsoleLog())
 	}
 }

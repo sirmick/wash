@@ -55,7 +55,7 @@ install -m 0755 "$work/washrv64/wash" "$ctx/overlay/usr/bin/wash"
 # launch (a CLI without a manifest) rejects with exit 2 → router
 # logs `disabled /usr/lib/wash/wash-launch`. Keep the user-facing
 # tool, skip the app-dir entry.
-for app in wash-router wash-session wash-about wash-fm wash-bulk \
+for app in wash-router wash-vmlogin wash-session wash-about wash-fm wash-bulk \
            wash-edit wash-settings wash-top wash-priv wash-journal \
            wash-syslogs wash-launch wash-term; do
     ln -s wash "$ctx/overlay/usr/bin/$app"

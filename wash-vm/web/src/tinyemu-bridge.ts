@@ -665,6 +665,45 @@ const waitForModule = setInterval(() => {
   }, 250);
 }, 50);
 
+// --- 5b. Login overlay -------------------------------------------------------
+// The in-guest login front gates the wash data channel (wash-vm/UNIFY.md).
+// promptLogin shows the host-served #login overlay and resolves with the
+// submitted credentials; shell-bootstrap re-invokes it on login.err and skips
+// it entirely when reattaching to a live router. Hidden on submit; a missing
+// overlay falls back to the dev credential so boot never hangs.
+let loginAttempted = false;
+function promptLogin(): Promise<{ user: string; pass: string }> {
+  return new Promise((resolve) => {
+    // Distinct washlogin* ids — the page already has jslinux's #login/#password
+    // stubs (display:none) that Bellard's JS getElementById's; don't collide.
+    const overlay = document.getElementById('washlogin');
+    const form = document.getElementById('washlogin-form') as HTMLFormElement | null;
+    const userEl = document.getElementById('washlogin-user') as HTMLInputElement | null;
+    const passEl = document.getElementById('washlogin-pass') as HTMLInputElement | null;
+    const errEl = document.getElementById('washlogin-err');
+    const goEl = document.getElementById('washlogin-go') as HTMLButtonElement | null;
+    if (!overlay || !form || !userEl || !passEl) {
+      dbg.log('wash', 'login: no #washlogin overlay in DOM — using dev credential');
+      resolve({ user: 'wash', pass: 'wash' });
+      return;
+    }
+    overlay.style.display = 'flex';
+    if (errEl) errEl.textContent = loginAttempted ? 'invalid credentials' : '';
+    if (goEl) goEl.disabled = false;
+    loginAttempted = true;
+    setStage('login');
+    userEl.focus();
+    const onSubmit = (e: Event) => {
+      e.preventDefault();
+      form.removeEventListener('submit', onSubmit);
+      if (goEl) goEl.disabled = true;
+      overlay.style.display = 'none';
+      resolve({ user: userEl.value.trim(), pass: passEl.value });
+    };
+    form.addEventListener('submit', onSubmit);
+  });
+}
+
 // --- 6. wash multi-channel virtio-console wiring + shell bootstrap ----------
 // TinyEMU exposes N virtio-console devices; the bridge wires each to
 // its role:
@@ -981,6 +1020,10 @@ declare global {
       },
       log: (line) => dbg.log('wash', line),
       deferUntilFirstByte: true,
+      // The in-guest login front gates the channel (wash-vm/UNIFY.md): show the
+      // login overlay and resolve with the submitted credentials. Re-invoked on
+      // login.err. Skipped automatically when reattaching to a live router.
+      getCredentials: promptLogin,
     });
     dbg.log('wash', `shell.js fetched: ${bootResult.bytes.length}B (replay queued: ${bootResult.replay.length}B)`);
   } catch (e) {
