@@ -83,7 +83,15 @@ func (vm *VM) Proxy(opts ProxyOpts) (*Proxy, error) {
 	mux.HandleFunc("/ws", p.handleWS)
 	mux.HandleFunc("/console", p.handleConsole)
 	if opts.Static != "" {
-		mux.Handle("/", http.FileServer(http.Dir(opts.Static)))
+		// no-store on the chrome: the browser-VM dev server and this proxy both
+		// serve on :13000 (same origin), so without it a browser that visited
+		// one serves the other's cached page (loads the wrong app — WASM bridge
+		// vs wemu chrome). The chrome is a few KB; never cache it.
+		fs := http.FileServer(http.Dir(opts.Static))
+		mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
+			fs.ServeHTTP(w, r)
+		}))
 	}
 	p.srv = &http.Server{Handler: mux}
 	go p.srv.Serve(ln)
