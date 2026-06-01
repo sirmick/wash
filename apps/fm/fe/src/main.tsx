@@ -33,6 +33,7 @@ import {
 import {
   type ClipboardState, parseClipboardState, planPaste,
 } from './clipboard.ts';
+import { nextSelection } from './selection.ts';
 import {
   ArrowLeft,
   ArrowRight,
@@ -425,38 +426,24 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       setPath(p);
       setPathInputValue(p);
     };
-    if (ev.shiftKey && selectionAnchor) {
-      const rows = visibleRows().map((r) => r.path);
-      const a = rows.indexOf(selectionAnchor);
-      const b = rows.indexOf(rowPath);
-      if (a >= 0 && b >= 0) {
-        const [lo, hi] = a < b ? [a, b] : [b, a];
-        setSelection(new Set(rows.slice(lo, hi + 1)));
-      } else {
-        setSelection(new Set([rowPath]));
-      }
-      setSelectedEntry(entry);
-      if (entry.type === 'file') focusForFile(rowPath);
-      return;
-    }
-    if (ev.ctrlKey || ev.metaKey) {
-      const next = new Set(selection());
-      if (next.has(rowPath)) next.delete(rowPath);
-      else next.add(rowPath);
-      setSelection(next);
-      selectionAnchor = rowPath;
-      setSelectedEntry(entry);
-      if (entry.type === 'file') focusForFile(rowPath);
-      return;
-    }
-    // Plain click: select + (for files) focus + preview.
-    setSelection(new Set([rowPath]));
-    selectionAnchor = rowPath;
+    // The set/anchor decision is the pure kernel (selection.ts, unit-
+    // tested); the component owns the side effects below. A plain click
+    // additionally clears any status override and previews the file;
+    // shift/ctrl clicks do neither (they're building a multi-selection).
+    const isPlain = !ev.shiftKey && !(ev.ctrlKey || ev.metaKey);
+    const result = nextSelection(
+      { selection: selection(), anchor: selectionAnchor },
+      rowPath,
+      visibleRows().map((r) => r.path),
+      { shift: ev.shiftKey, ctrlOrMeta: ev.ctrlKey || ev.metaKey },
+    );
+    setSelection(result.selection);
+    selectionAnchor = result.anchor;
     setSelectedEntry(entry);
-    setStatusOverride(null);
+    if (isPlain) setStatusOverride(null);
     if (entry.type === 'file') {
       focusForFile(rowPath);
-      sendRead(rowPath);
+      if (isPlain) sendRead(rowPath);
     }
   };
 
