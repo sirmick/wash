@@ -19,5 +19,9 @@ export default defineConfig({
     environment: 'jsdom',
     include: ['{apps,web}/**/src/**/*.ctest.{ts,tsx}'],
     watch: false,
+    // lucide-solid (and other Solid component libs) ship untransformed .jsx
+    // sources; inline them so they go through vite-plugin-solid instead of
+    // Node trying to load .jsx raw ("Unknown file extension .jsx").
+    server: { deps: { inline: [/lucide-solid/] } },
   },
 });
