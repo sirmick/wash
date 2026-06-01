@@ -1,0 +1,13 @@
+[NetDev]
+Name=wg0
+Kind=wireguard
+
+[WireGuard]
+PrivateKey=aPrivateKeyBase64Encoded000000000000000000=
+ListenPort=51820
+
+[WireGuardPeer]
+PublicKey=aPeerPublicKeyBase64Encoded00000000000000000=
+AllowedIPs=10.9.0.2/32
+Endpoint=vpn.example.com:51820
+PersistentKeepalive=25

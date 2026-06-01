@@ -60,10 +60,16 @@ const dhcpDefault = (): Proto => ({ _tag: "dhcp", IPv4: true, IPv6: true });
 type Interface = { Name: string; Device?: string; Proto?: Proto };
 type Device = { Name: string; Type?: string; Ports?: string[]; Ifname?: string; VID?: number };
 type Config = { Interfaces?: Interface[]; Devices?: Device[]; [k: string]: any };
-type Caps = {
-  can_bridge?: boolean; can_vlan?: boolean; can_wireguard?: boolean;
-  can_wifi_client?: boolean; can_zones?: boolean; can_dhcp_server?: boolean; can_ap?: boolean;
-};
+// Caps mirrors netd's generic capability wire (docs/NET.md §2.7): the supported
+// feature keys + object-kind keys. The UI greys by set membership, so a new
+// backend (networkd, uci) advertising a different subset re-gates without any
+// per-feature field here. `can(f)` / `kind(k)` are the membership helpers.
+type Caps = { features: Set<string>; kinds: Set<string> };
+const emptyCaps = (): Caps => ({ features: new Set(), kinds: new Set() });
+const toCaps = (raw: any): Caps => ({
+  features: new Set<string>(Array.isArray(raw?.features) ? raw.features : []),
+  kinds: new Set<string>(Array.isArray(raw?.kinds) ? raw.kinds : []),
+});
 
 const protoLabel = (p?: Proto): string => {
   if (!p) return "—";
@@ -100,7 +106,8 @@ function Icon(p: { name: keyof typeof ICONS | string; size?: number }) {
 function NetApp(props: WashAppProps) {
   const [config, setConfig] = createSignal<Config>({ Interfaces: [], Devices: [] }); // committed baseline (from netd)
   const [draft, setDraft] = createSignal<Config>({ Interfaces: [], Devices: [] });  // staged edits, not yet applied
-  const [caps, setCaps] = createSignal<Caps>({});
+  const [caps, setCaps] = createSignal<Caps>(emptyCaps());
+  const can = (f: string) => caps().features.has(f);
   const [links, setLinks] = createSignal<string[]>([]); // physical NICs from the backend
   const [adding, setAdding] = createSignal<null | "ethernet" | "vlan" | "bridge">(null);
   const [editIface, setEditIface] = createSignal<Interface | null>(null);
@@ -144,6 +151,21 @@ function NetApp(props: WashAppProps) {
     for (const d of draft().Devices ?? []) if (d.Type === "bridge") out.push(d.Name);
     return out;
   });
+  // Physical adapters with no connection yet — listed so the box's full hardware
+  // is visible (not just configured interfaces), each with a Configure shortcut.
+  const unconfiguredLinks = createMemo(() => {
+    const used = new Set<string>();
+    for (const i of draft().Interfaces ?? []) if (i.Device) used.add(i.Device);
+    for (const d of draft().Devices ?? []) {
+      used.add(d.Name);
+      if (d.Ifname) used.add(d.Ifname);
+      (d.Ports ?? []).forEach((p) => used.add(p));
+    }
+    return links().filter((l) => !used.has(l));
+  });
+  // configureDevice pre-selects a NIC when the Ethernet wizard is opened from an
+  // unconfigured adapter's Configure button ("" = normal Add Ethernet).
+  const [configureDevice, setConfigureDevice] = createSignal<string>("");
 
   // --- draft vs committed diff (what the UI badges as new/edited/removed) ----
   // A connection's signature is its interface object plus its backing device
@@ -206,7 +228,7 @@ function NetApp(props: WashAppProps) {
       const cfg = (r.config ?? { Interfaces: [], Devices: [] }) as Config;
       setConfig(cfg);
       setDraft(structuredClone(cfg)); // reset the draft to the freshly committed state
-      setCaps((r.caps ?? {}) as Caps);
+      setCaps(toCaps(r.caps));
       setLinks((r.devices ?? []) as string[]);
     }
   };
@@ -325,18 +347,19 @@ function NetApp(props: WashAppProps) {
       <style>{STYLE}</style>
       <header class="wash-net-head">
         <div class="wash-net-add">
-          <button data-testid="add-ethernet" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => setAdding("ethernet")}><Icon name="ethernet" /> Ethernet</button>
-          <button data-testid="add-vlan" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !caps().can_vlan} onClick={() => setAdding("vlan")}><Icon name="git-branch" /> VLAN</button>
-          <button data-testid="add-bridge" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !caps().can_bridge} onClick={() => setAdding("bridge")}><Icon name="git-merge" /> Bridge</button>
+          <button data-testid="add-ethernet" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setConfigureDevice(""); setAdding("ethernet"); }}><Icon name="ethernet" /> Ethernet</button>
+          <button data-testid="add-vlan" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("vlan")} onClick={() => setAdding("vlan")}><Icon name="git-branch" /> VLAN</button>
+          <button data-testid="add-bridge" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("bridge")} onClick={() => setAdding("bridge")}><Icon name="git-merge" /> Bridge</button>
         </div>
       </header>
 
       <div class="wash-net-body">
         <Show when={adding() === "ethernet" || editIface()}>
           <EthernetWizard
-            nics={editIface() ? [] : (freeDevices().length ? freeDevices() : links())}
+            nics={editIface() ? [] : links()}
+            defaultDevice={configureDevice()}
             initial={editIface() ?? undefined}
-            onCancel={() => { setAdding(null); setEditIface(null); }}
+            onCancel={() => { setAdding(null); setEditIface(null); setConfigureDevice(""); }}
             onSave={saveEthernet}
           />
         </Show>
@@ -374,6 +397,21 @@ function NetApp(props: WashAppProps) {
               );
             }}
           </For>
+          <For each={unconfiguredLinks()}>
+            {(link) => (
+              <div class="wash-net-conn" data-testid={`adapter-${link}`} data-kind="Adapter" data-device={link} data-status="unconfigured">
+                <div class="wash-net-conn-main">
+                  <span class="wash-net-conn-name">{link}</span>
+                  <span class="wash-net-conn-kind">Adapter</span>
+                  <span class="wash-net-conn-dev">{link}</span>
+                  <span class="wash-net-badge" data-badge="unconfigured">unconfigured</span>
+                </div>
+                <div class="wash-net-conn-actions">
+                  <button class="wash-net-btn ghost" title="Configure this adapter" disabled={busy() || adding() !== null || editIface() !== null} onClick={() => { setConfigureDevice(link); setAdding("ethernet"); }}><Icon name="plus" /> Configure</button>
+                </div>
+              </div>
+            )}
+          </For>
           <For each={removed()}>
             {(iface) => (
               <div class="wash-net-conn removed" data-testid={`conn-removed-${iface.Name}`} data-status="removed">
@@ -390,9 +428,9 @@ function NetApp(props: WashAppProps) {
         </div>
 
         <div class="wash-net-greyed">
-          <Show when={!caps().can_zones}><span class="wash-net-lock">Firewall 🔒</span></Show>
-          <Show when={!caps().can_dhcp_server}><span class="wash-net-lock">DHCP server 🔒</span></Show>
-          <Show when={!caps().can_ap}><span class="wash-net-lock">Access point 🔒</span></Show>
+          <Show when={!can("zones")}><span class="wash-net-lock">Firewall 🔒</span></Show>
+          <Show when={!can("dhcp-server")}><span class="wash-net-lock">DHCP server 🔒</span></Show>
+          <Show when={!can("ap")}><span class="wash-net-lock">Access point 🔒</span></Show>
           <span class="wash-net-hint">available in router mode</span>
         </div>
       </div>
@@ -464,10 +502,11 @@ function AddressingFields(p: { proto: () => Proto; setProto: (x: Proto) => void 
   );
 }
 
-function EthernetWizard(props: { nics: string[]; initial?: Interface; onCancel: () => void; onSave: (name: string, device: string, proto: Proto) => void }) {
+function EthernetWizard(props: { nics: string[]; defaultDevice?: string; initial?: Interface; onCancel: () => void; onSave: (name: string, device: string, proto: Proto) => void }) {
   const editing = !!props.initial;
-  const [device, setDevice] = createSignal(props.initial?.Device ?? props.nics[0] ?? "");
-  const [name, setName] = createSignal(props.initial?.Name ?? props.nics[0] ?? "");
+  const seed = props.initial?.Device ?? (props.defaultDevice || props.nics[0]) ?? "";
+  const [device, setDevice] = createSignal(seed);
+  const [name, setName] = createSignal(props.initial?.Name ?? seed);
   const [proto, setProto] = createSignal<Proto>(props.initial?.Proto ?? dhcpDefault());
   // When adding, the connection name follows the chosen NIC unless edited.
   let nameTouched = editing;

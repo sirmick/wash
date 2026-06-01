@@ -26,6 +26,16 @@ import {
 // Background-service app ids the panels drive over the svc.* relay.
 const VSCODE_APP = 'com.wash.vscode';
 const DISPLAY_APP = 'com.wash.display';
+const NETD_APP = 'com.wash.netd'; // privileged networking service (status only)
+const NET_APP = 'com.wash.net'; // the dedicated network window the pane opens
+
+// Backend choices the Network pane offers; value persisted to network.json and
+// read by com.wash.netd at startup (docs/NET.md §2.7).
+const NET_BACKENDS: { value: string; label: string }[] = [
+  { value: 'auto', label: 'Automatic (detect)' },
+  { value: 'nm', label: 'NetworkManager (coexist)' },
+  { value: 'networkd', label: 'systemd-networkd (take over)' },
+];
 
 // vscode service status snapshot (apps/vscode/be statusPayload).
 interface VscodeStatus {
@@ -83,7 +93,7 @@ interface BEMessage {
   [k: string]: unknown;
 }
 
-type Section = 'desktop' | 'developer' | 'display';
+type Section = 'desktop' | 'developer' | 'display' | 'network';
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [section, setSection] = createSignal<Section>('desktop');
@@ -95,6 +105,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // dead); otherwise the live state snapshot.
   const [display, setDisplay] = createSignal<DisplayState | null>(null);
   const [displayAbsent, setDisplayAbsent] = createSignal(false);
+
+  // ---- network pane: the persisted renderer choice (netMode, from
+  // network.json) + what netd reports running/available (its state push).
+  const [netMode, setNetMode] = createSignal<string>('auto');
+  const [netActive, setNetActive] = createSignal<string>('');
+  const [netAvailable, setNetAvailable] = createSignal<string[]>([]);
 
   // Form state. Initialized to defaults; overwritten when the BE
   // ships settings.value on mount.
@@ -121,6 +137,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const handleBE = (msg: BEMessage) => {
     switch (msg.kind) {
       case 'settings.value': {
+        if ((msg as { domain?: string }).domain === 'network') {
+          const v = (msg.value || {}) as { backend?: string };
+          setNetMode(v.backend || 'auto');
+          return;
+        }
         const v = (msg.value || {}) as DesktopConfig;
         setPath(v.wallpaper?.path ?? '');
         setMode(v.wallpaper?.mode ?? DEFAULTS.mode);
@@ -151,6 +172,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         const p = ((msg as { payload?: BEMessage }).payload || {}) as BEMessage;
         if (app === VSCODE_APP) handleVscode(p);
         else if (app === DISPLAY_APP) handleDisplay(p);
+        else if (app === NETD_APP) handleNetd(p);
         return;
       }
       case 'svc.restart_done': {
@@ -203,6 +225,29 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
+  // handleNetd folds netd's StateService snapshot into the Network pane: which
+  // backend is actually running + which the box could run (for greying).
+  const handleNetd = (p: BEMessage) => {
+    if (p.kind !== 'state') return;
+    const s = ((p as { state?: { backend?: string; available?: string[] } }).state) || {};
+    setNetActive(s.backend ?? '');
+    setNetAvailable(Array.isArray(s.available) ? s.available : []);
+  };
+
+  // chooseNetBackend persists the renderer choice, then restarts netd AND the
+  // net window so both pick up the new backend at process start — no hot reload
+  // (docs/NET.md §2.7).
+  const chooseNetBackend = (backend: string) => {
+    setNetMode(backend);
+    send({ kind: 'settings.write', domain: 'network', value: { backend } });
+    svcRestart(NETD_APP);
+    svcRestart(NET_APP);
+    setStatus('applying network backend…');
+    window.setTimeout(() => setStatus(''), 1_500);
+  };
+
+  const openNetwork = () => send({ kind: 'launch', app: NET_APP });
+
   // ---- save (debounced) ----
 
   let saveTimer = 0;
@@ -241,6 +286,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
     // Ask BE for current values + picker root.
     send({ kind: 'settings.read', domain: 'desktop' });
+    send({ kind: 'settings.read', domain: 'network' });
     send({ kind: 'fs.root' });
 
     // Subscribe to the service panels. vscode is a registered
@@ -250,6 +296,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // installed" after a grace window.
     svcSend(VSCODE_APP, { kind: 'subscribe' });
     svcSend(DISPLAY_APP, { kind: 'subscribe' });
+    svcSend(NETD_APP, { kind: 'subscribe' });
     const displayProbe = window.setTimeout(() => {
       if (display() === null) setDisplayAbsent(true);
     }, 1_500);
@@ -260,6 +307,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       window.clearTimeout(displayProbe);
       svcSend(VSCODE_APP, { kind: 'unsubscribe' });
       svcSend(DISPLAY_APP, { kind: 'unsubscribe' });
+      svcSend(NETD_APP, { kind: 'unsubscribe' });
     });
   });
 
@@ -290,6 +338,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             label="Display"
             active={section() === 'display'}
             onClick={() => setSection('display')}
+          />
+          <RailItem
+            label="Network"
+            active={section() === 'network'}
+            onClick={() => setSection('network')}
           />
         </div>
         <div style={paneStyle}>
@@ -326,6 +379,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               state={display()}
               absent={displayAbsent()}
               onRestart={() => svcRestart(DISPLAY_APP)}
+            />
+          </Show>
+          <Show when={section() === 'network'}>
+            <NetworkPane
+              mode={netMode()}
+              active={netActive()}
+              available={netAvailable()}
+              onChoose={chooseNetBackend}
+              onOpen={openNetwork}
             />
           </Show>
         </div>
@@ -606,6 +668,69 @@ const DisplayPane: Component<{
             </div>
           </Show>
         </Show>
+      </Section>
+    </div>
+  );
+};
+
+// NetworkPane picks the networking renderer + opens the dedicated network app.
+// It only selects the engine + shows what's running; all actual config editing
+// (and the privileged apply) lives in com.wash.net (docs/NET.md §2.7) — the
+// "Open Network…" button launches it. Changing the backend persists the choice
+// and restarts netd + the net window (no hot reload).
+const NetworkPane: Component<{
+  mode: string;
+  active: string;
+  available: string[];
+  onChoose: (backend: string) => void;
+  onOpen: () => void;
+}> = (props) => {
+  // A backend is selectable if it's auto, the current choice, or detected
+  // available; others grey out (e.g. systemd-networkd on a non-systemd box).
+  const selectable = (v: string) =>
+    v === 'auto' || v === props.mode || props.available.includes(v);
+  return (
+    <div style={{ display: 'flex', 'flex-direction': 'column', gap: '20px', padding: '4px 4px' }}>
+      <Section title="Networking backend">
+        <div style={{ display: 'flex', 'flex-direction': 'column', gap: '12px' }}>
+          <Row label="Manage mode">
+            <select
+              data-testid="net-backend"
+              value={props.mode}
+              onChange={(e) => props.onChoose(e.currentTarget.value)}
+              style={textInputStyle}
+            >
+              <For each={NET_BACKENDS}>
+                {(b) => (
+                  <option value={b.value} disabled={!selectable(b.value)}>
+                    {b.label}
+                    {!selectable(b.value) ? ' — unavailable' : ''}
+                  </option>
+                )}
+              </For>
+            </select>
+          </Row>
+          <Row label="Currently running">
+            <Show
+              when={props.active && props.active !== 'fake'}
+              fallback={<ServiceBadge tone="off" label={props.active === 'fake' ? 'no backend selected' : 'starting…'} />}
+            >
+              <ServiceBadge tone="on" label={props.active} />
+            </Show>
+          </Row>
+          <div style={{ opacity: 0.7, font: `${tokens.fontSizeMd} ${tokens.fontSans}`, 'max-width': '440px', 'line-height': 1.5 }}>
+            Choosing a backend restarts the network service; any open Network window reloads.
+            <strong> Automatic</strong> keeps NetworkManager when it's already managing the box (coexist),
+            and uses systemd-networkd when wash owns it.
+          </div>
+        </div>
+      </Section>
+      <Section title="Network settings">
+        <div>
+          <SmallBtn onClick={props.onOpen} data-testid="net-open">
+            Open Network…
+          </SmallBtn>
+        </div>
       </Section>
     </div>
   );
