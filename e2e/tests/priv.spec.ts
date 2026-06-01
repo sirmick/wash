@@ -132,6 +132,10 @@ async function drivePriv(router: import('../fixtures/router').RouterHandle) {
 }
 
 test('cross-app spawn: enqueue → approve → unlock → fakesudo exec → result', async ({ router }) => {
+  // Full priv PTY chain (enqueue → approve → unlock → fakesudo -v + exec)
+  // makes many BE round-trips; under an 8-worker load run the tight 15s
+  // default isn't enough headroom. Matches the packages priv-PTY tests.
+  test.setTimeout(20_000);
   const { privInst, testInst } = await drivePriv(router);
 
   // 1. wash-test → wash-priv via SendAppMsgTo. The router fills `from`
@@ -158,9 +162,11 @@ test('cross-app spawn: enqueue → approve → unlock → fakesudo exec → resu
       },
     },
   });
-  // The send_to traverses an async path; give wash-priv a tick to
-  // ingest before driving the approval.
-  await new Promise((r) => setTimeout(r, 200));
+  // The send_to traverses an async path. Wait for wash-priv to actually
+  // log the enqueue before driving the approval — a fixed sleep raced the
+  // approve ahead of the enqueue under load, so the approval found nothing
+  // to act on and need_password never fired.
+  await router.waitForLog(/wash-priv enqueue: req_id=r-cross-1 kind=spawn sender=com\.wash\.test/, 5000);
 
   // 2. Approve. wash-priv is locked, so we expect need_password
   // back. We can't directly capture it through the control socket

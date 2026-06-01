@@ -8,7 +8,7 @@
 // editor's BE, so its dispatch is also in-process.
 
 import { test, expect } from '../fixtures/router';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 function seed(root: string): void {
@@ -102,9 +102,13 @@ test.describe('wash-edit', () => {
     await picker.locator('[data-testid="fp-confirm"]').click();
     await expect(picker).not.toBeVisible();
 
-    // File exists on disk.
-    const content = readFileSync(join(router.fmRoot, 'new-untitled.txt'), 'utf8');
-    expect(content).toBe('hello from untitled');
+    // File exists on disk. The picker closing is an FE event; the BE
+    // write is async, so poll rather than read immediately — a bare
+    // readFileSync here raced the write under load and hit ENOENT.
+    const savedPath = join(router.fmRoot, 'new-untitled.txt');
+    await expect
+      .poll(() => (existsSync(savedPath) ? readFileSync(savedPath, 'utf8') : null))
+      .toBe('hello from untitled');
 
     // Tab id morphed to the real path; no leftover Untitled tab.
     await expect(editor.locator('[data-testid="edit-tab-' + join(router.fmRoot, 'new-untitled.txt') + '"]')).toBeVisible();

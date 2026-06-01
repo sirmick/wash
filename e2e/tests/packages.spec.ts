@@ -216,11 +216,14 @@ test.describe('packages app — actions via priv PTY', () => {
       data: { kind: 'run_action', action: 'global', global_id: 'update', cols: 80, rows: 24 },
     });
 
-    const m = await router.waitForLog(/wash-priv enqueue: req_id=(pkg-[a-f0-9]+) kind=run_inline sender=com\.wash\.packages/, 5000);
+    // 10s (not 5s) on each PTY-chain wait: the run_action → packages →
+    // priv → fakesudo path is load-sensitive and this test has a 20s
+    // budget, so a tight internal wait only manufactures flakes.
+    const m = await router.waitForLog(/wash-priv enqueue: req_id=(pkg-[a-f0-9]+) kind=run_inline sender=com\.wash\.packages/, 10_000);
     const reqID = m.match(/req_id=(pkg-[a-f0-9]+)/)![1];
     await router.controlRequest({ t: 'msg', instance_id: privInst, data: { kind: 'approve', req_id: reqID } });
 
-    const km = await router.waitForLog(/wash-priv: need_password be_pubkey=([A-Za-z0-9+/=]+)/, 5000);
+    const km = await router.waitForLog(/wash-priv: need_password be_pubkey=([A-Za-z0-9+/=]+)/, 10_000);
     const bePub = b64decode(km.replace(/^.*be_pubkey=/, ''));
     const enc = await encryptPassword(PASSWORD, bePub);
     await router.controlRequest({
@@ -228,7 +231,7 @@ test.describe('packages app — actions via priv PTY', () => {
       data: { kind: 'unlock', ciphertext: enc.ciphertext, fe_pubkey: enc.fe_pubkey, nonce: enc.nonce },
     });
 
-    await pollUntil(() => fakesudoEntries(router.fakesudoLog).some((e) => e.mode === 'exec' && e.target === '/bin/echo'), 5000);
+    await pollUntil(() => fakesudoEntries(router.fakesudoLog).some((e) => e.mode === 'exec' && e.target === '/bin/echo'), 10_000);
     const exec = fakesudoEntries(router.fakesudoLog).find((e) => e.mode === 'exec' && e.target === '/bin/echo');
     expect(exec).toBeDefined();
     expect(exec!.target_args).toEqual(['update']);
@@ -267,7 +270,7 @@ test.describe('packages app — actions via priv PTY', () => {
     await app.locator('[data-testid="pkg-update-system"]').click();
     await expect(dialog).toBeVisible();
     await app.locator('[data-testid="pkg-confirm-update-system-ok"]').click();
-    await router.waitForLog(/wash-priv enqueue: req_id=pkg-[a-f0-9]+ kind=run_inline sender=com\.wash\.packages/, 5000);
+    await router.waitForLog(/wash-priv enqueue: req_id=pkg-[a-f0-9]+ kind=run_inline sender=com\.wash\.packages/, 10_000);
   });
 
   test('install action: full PTY chain reaches fakesudo, exit 0 returns via action_done', async ({ router }) => {
@@ -296,14 +299,18 @@ test.describe('packages app — actions via priv PTY', () => {
 
     // Wait for priv to log the enqueue. The req_id prefix is pkg-
     // (packages BE picks it; see randHex in apps/packages/be/app.go).
-    const m = await router.waitForLog(/wash-priv enqueue: req_id=(pkg-[a-f0-9]+) kind=run_inline sender=com\.wash\.packages/, 5000);
+    // 10s (not 5s) on each PTY-chain wait below: the run_action → packages
+    // → priv → fakesudo path is load-sensitive, and this test has a 20s
+    // budget, so a tight internal wait only manufactures flakes under the
+    // 8-worker run.
+    const m = await router.waitForLog(/wash-priv enqueue: req_id=(pkg-[a-f0-9]+) kind=run_inline sender=com\.wash\.packages/, 10_000);
     const reqID = m.match(/req_id=(pkg-[a-f0-9]+)/)![1];
 
     // Approve the request.
     await router.controlRequest({ t: 'msg', instance_id: privInst, data: { kind: 'approve', req_id: reqID } });
 
     // Auto-prompt for password since cache is empty. Catch the be_pubkey.
-    const km = await router.waitForLog(/wash-priv: need_password be_pubkey=([A-Za-z0-9+/=]+)/, 5000);
+    const km = await router.waitForLog(/wash-priv: need_password be_pubkey=([A-Za-z0-9+/=]+)/, 10_000);
     const bePub = b64decode(km.replace(/^.*be_pubkey=/, ''));
     const enc = await encryptPassword(PASSWORD, bePub);
     await router.controlRequest({
@@ -313,7 +320,7 @@ test.describe('packages app — actions via priv PTY', () => {
 
     // fakesudo logs each invocation. We want the exec entry whose
     // target is /bin/echo. Wait for the audit line.
-    await pollUntil(() => fakesudoEntries(router.fakesudoLog).some((e) => e.mode === 'exec' && e.target === '/bin/echo'), 5000);
+    await pollUntil(() => fakesudoEntries(router.fakesudoLog).some((e) => e.mode === 'exec' && e.target === '/bin/echo'), 10_000);
     const entries = fakesudoEntries(router.fakesudoLog);
     const exec = entries.find((e) => e.mode === 'exec' && e.target === '/bin/echo');
     expect(exec).toBeDefined();
