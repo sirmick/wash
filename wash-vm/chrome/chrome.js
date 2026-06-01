@@ -95,6 +95,39 @@ function wireConsole() {
   es.onerror = () => { /* proxy gone / VM down — leave what we have */ };
 }
 
+// --- login overlay (wash-vm/UNIFY.md) --------------------------------------
+// The in-guest front gates the channel; these drive the host-served form.
+function showLogin() {
+  const el = document.getElementById('login');
+  if (el) el.style.display = 'flex';
+  document.getElementById('login-go')?.removeAttribute('disabled');
+  document.getElementById('login-user')?.focus();
+  setSpec('login');
+}
+function hideLogin() {
+  const el = document.getElementById('login');
+  if (el) el.style.display = 'none';
+}
+function loginError(msg) {
+  const err = document.getElementById('login-err');
+  if (err) err.textContent = msg;
+  document.getElementById('login-go')?.removeAttribute('disabled');
+}
+// wireLoginForm hooks the form's submit to `send(user, pass)`. Submitting
+// disables the button + clears the error; loginError/showLogin re-enable it.
+function wireLoginForm(send) {
+  const form = document.getElementById('login-form');
+  if (!form) return;
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    const user = (document.getElementById('login-user')?.value ?? '').trim();
+    const pass = document.getElementById('login-pass')?.value ?? '';
+    document.getElementById('login-err').textContent = '';
+    document.getElementById('login-go')?.setAttribute('disabled', '');
+    send(user, pass);
+  };
+}
+
 // bootShell fetches shell.js over the wire and boots the wash desktop over the
 // same WebSocket. Returns once the shell bundle has been imported.
 async function bootShell(showTab) {
@@ -109,9 +142,22 @@ async function bootShell(showTab) {
   let assetCh = -1;
   const assetChunks = [];
   const replayChunks = [];
-  let phase = 'asset'; // asset → buffering → passthrough
+  // gate → asset → buffering → passthrough. The gate phase runs the login
+  // handshake (wash-vm/UNIFY.md): the in-guest front emits login.required on a
+  // fresh connect; we collect creds, send {t:"login"}, and proceed to asset on
+  // login.ok. A browser reattaching to a LIVE session reaches wash-router
+  // directly (it owns the channel while the front blocks), so the first frame
+  // is the catalog rather than login.required — we treat any non-login frame as
+  // "already serving" and skip straight to the asset pull, replaying that frame.
+  let phase = 'gate';
   const postBuf = [];
   let shellSink = null; // the shell's VirtioConsoleSocket output handler
+
+  const sendAssetRead = () =>
+    ws.send(encodeFrame(0, enc.encode(JSON.stringify({ t: 'asset.read', req_id: 1, path: '/shell.js' }))));
+  const sendLogin = (user, pass) =>
+    ws.send(encodeFrame(0, enc.encode(JSON.stringify({ t: 'login', user, pass }))));
+  wireLoginForm(sendLogin);
 
   const ready = new Promise((resolve, reject) => {
     ws.onmessage = (ev) => {
@@ -119,6 +165,21 @@ async function bootShell(showTab) {
       if (phase === 'buffering') { postBuf.push(bytes); return; }
       if (phase === 'passthrough') { shellSink?.(bytes); return; }
       for (const f of parser.feed(bytes)) {
+        if (phase === 'gate') {
+          let msg = null;
+          if (f.channel === 0) { try { msg = JSON.parse(dec.decode(f.payload)); } catch { /* not ctrl */ } }
+          if (msg && msg.t === 'login.required') { showLogin(); continue; }
+          if (msg && msg.t === 'login.err') { loginError(msg.msg || 'invalid credentials'); continue; }
+          if (msg && msg.t === 'login.ok') { hideLogin(); phase = 'asset'; sendAssetRead(); continue; }
+          // Anything else = reattach to a live router: skip the gate, ask for
+          // the shell, and keep this frame for the shell's replay.
+          hideLogin();
+          phase = 'asset';
+          sendAssetRead();
+          replayChunks.push(encodeFrame(f.channel, f.payload, f.flags));
+          continue;
+        }
+        // phase === 'asset'
         if (f.channel === 0) {
           let msg = null;
           try { msg = JSON.parse(dec.decode(f.payload)); }
@@ -144,10 +205,6 @@ async function bootShell(showTab) {
       }
     };
   });
-
-  // Ask the in-guest router for the shell bundle. The router buffers input, so
-  // sending right after open is fine even if its catalog push is in flight.
-  ws.send(encodeFrame(0, enc.encode(JSON.stringify({ t: 'asset.read', req_id: 1, path: '/shell.js' }))));
 
   const { shellBytes, replay } = await ready;
   setSpec(`shell.js ${(shellBytes.length / 1024).toFixed(0)}KB from VM`);

@@ -44,6 +44,23 @@
                     font: 11px ui-monospace, Menlo, Consolas, monospace; }
     /* The shell mounts into #root; give it a positioned box to fill the pane. */
     #root { position: absolute; inset: 0; }
+
+    /* Login overlay — shown when the in-guest front emits login.required
+       (wash-vm/UNIFY.md). Host-served (the one wash UI bit not over the wire);
+       on login.ok the shell loads from the VM over the same socket. */
+    #login { position: absolute; inset: 0; display: none; align-items: center;
+             justify-content: center; background: #111; z-index: 10; }
+    #login form { display: flex; flex-direction: column; gap: 10px; width: 260px;
+                  padding: 24px; background: #1a1c21; border: 1px solid #2a2d33;
+                  border-radius: 10px; animation: wash-pop-in 120ms ease-out; }
+    #login h1 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+    #login input { background: #0d0e11; color: #eee; border: 1px solid #2a2d33;
+                   border-radius: 6px; padding: 8px 10px; font: inherit; }
+    #login button { background: #2f6df6; color: #fff; border: none; border-radius: 6px;
+                    padding: 9px; font: inherit; cursor: pointer; }
+    #login button:disabled { opacity: 0.6; cursor: default; }
+    #login .err { color: #f0807a; font-size: 12px; min-height: 14px; }
+    #login .hint { color: #6a6d75; font-size: 11px; }
   </style>
 </head>
 <body>
@@ -55,6 +72,16 @@
   <div id="stage">
     <pre class="pane" id="pane-console" style="display:none"></pre>
     <div class="pane" id="pane-wash"><div id="root"></div></div>
+    <div id="login">
+      <form id="login-form" autocomplete="off">
+        <h1>wash</h1>
+        <input id="login-user" name="user" placeholder="user" autocapitalize="off" autocorrect="off" spellcheck="false" autofocus>
+        <input id="login-pass" name="pass" type="password" placeholder="password">
+        <button id="login-go" type="submit">Log in</button>
+        <div class="err" id="login-err"></div>
+        <div class="hint">root/diagnostic console — served from the VM</div>
+      </form>
+    </div>
   </div>
   <script type="module" src="/chrome.js"></script>
 </body>

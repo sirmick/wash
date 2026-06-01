@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -180,8 +181,12 @@ func spawnRouter(devFd int, routerBin, appsDir string, logger *log.Logger) guest
 			argv = append(argv, "--apps-dir="+appsDir)
 		}
 		attr := &syscall.ProcAttr{
+			// Inherit our environment explicitly — unlike os/exec, raw ForkExec
+			// gives the child an EMPTY env when Env is nil, which would drop the
+			// launcher's HOME/PATH/SHELL/WASH_NETD_BACKEND the desktop needs.
+			Env:   os.Environ(),
 			Files: []uintptr{0, 1, 2, uintptr(devFd)},
-			Sys:   &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: id.UID, Gid: id.GID}},
+			Sys:   &syscall.SysProcAttr{Credential: resolveCredential(id, logger)},
 		}
 		pid, err := syscall.ForkExec(routerBin, argv, attr)
 		if err != nil {
@@ -196,6 +201,37 @@ func spawnRouter(devFd int, routerBin, appsDir string, logger *log.Logger) guest
 			}
 		}
 	}
+}
+
+// resolveCredential builds the setuid credential for the forked wash-router.
+// It re-resolves uid/gid AND supplementary groups from the system user database
+// (osusergo: /etc/passwd + /etc/group) keyed on the authed name — so the
+// desktop keeps group memberships like `netdev` that gate NetworkManager
+// access, which a bare Uid/Gid handoff would silently drop. Falls back to the
+// Identity's uid/gid when the name isn't in the database (e.g. --auth-test with
+// a synthetic user).
+func resolveCredential(id guest.Identity, logger *log.Logger) *syscall.Credential {
+	cred := &syscall.Credential{Uid: id.UID, Gid: id.GID}
+	u, err := user.Lookup(id.Name)
+	if err != nil {
+		logger.Printf("credential: user %q not in passwd, using uid=%d gid=%d (no supplementary groups)", id.Name, id.UID, id.GID)
+		return cred
+	}
+	if n, err := strconv.Atoi(u.Uid); err == nil {
+		cred.Uid = uint32(n)
+	}
+	if n, err := strconv.Atoi(u.Gid); err == nil {
+		cred.Gid = uint32(n)
+	}
+	if gids, err := u.GroupIds(); err == nil {
+		for _, g := range gids {
+			if n, err := strconv.Atoi(g); err == nil {
+				cred.Groups = append(cred.Groups, uint32(n))
+			}
+		}
+	}
+	logger.Printf("credential: uid=%d gid=%d groups=%v (user %q)", cred.Uid, cred.Gid, cred.Groups, id.Name)
+	return cred
 }
 
 // resolveRouterBinary locates wash-router: explicit override, then beside this

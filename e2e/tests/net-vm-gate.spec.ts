@@ -9,7 +9,7 @@
 // relays to cross-app), and the resulting await-confirm → committed states come
 // back over the serial tunnel onto the widget. Nothing here is host-faked.
 
-import { test, expect, vmSkipReason } from '../fixtures/vm';
+import { test, expect, vmSkipReason, vmLogin } from '../fixtures/vm';
 
 test.beforeEach(() => {
   const reason = vmSkipReason();
@@ -17,9 +17,12 @@ test.beforeEach(() => {
 });
 
 test('VM-served wash UI round-trips a model edit to in-guest netd', async ({ vm, page }) => {
-  test.setTimeout(90_000); // VM boot + chromium + the full wire bring-up
+  test.setTimeout(120_000); // VM boot + chromium + login + the full wire bring-up
 
   await page.goto(vm.url);
+
+  // Log in through the in-guest front's gate (wash-vm/UNIFY.md) before the desktop loads.
+  await vmLogin(page);
 
   // The desktop rendered — shell.js was fetched over the wire (asset.read) and
   // the bundle streamed from the in-guest router over the serial tunnel, not

@@ -265,27 +265,30 @@ respawn_delay=1
 SVC
 
 # Launcher: sets the desktop's environment (NM backend + a real shell for
-# wash-term) and RE-RUNS the router forever. The router exits whenever the host
-# drops the data plane (browser closes / between sessions); we must retry
-# indefinitely until the next browser attaches — so the loop lives here rather
-# than relying on supervise-daemon's bounded respawn-max (which gives up after a
-# few pre-browser exits and leaves the router dead when the browser arrives).
+# wash-term) and RE-RUNS the login front forever. wash-vmlogin owns the data
+# plane, authenticates one browser, then forks wash-router AS the authed user
+# (wash-vm/UNIFY.md) — replacing the old hardcoded `su -m wash`. It stays root
+# (so it can setuid to the resolved user, preserving the netdev supplementary
+# group that gates NetworkManager); the forked router runs unprivileged. The
+# front exits when the data plane drops (browser gone / between sessions); the
+# loop retries until the next browser attaches.
+#
+# --auth-test wash:<pw> is the dev/CI credential; resolveCredential re-derives
+# wash's real uid/gid/groups from /etc/passwd so NM access is preserved. Swap to
+# the su/passwd backend (drop --auth-test) for a hardened deployment.
 cat > "$RFS/sbin/wash-router-launch" <<'LAUNCH'
 #!/bin/sh
-# Runs as root (from wash-early.sh) only long enough to hand the data-plane fd to
-# the unprivileged 'wash' user, then runs the whole desktop (router + every app
-# it spawns, incl. com.wash.netd) AS wash. netd drives NM over D-Bus authorized
-# by the netdev group (wash is a member; see 49-wash-nm.rules) and writes its
-# keyfiles into the wash-owned system-connections dir.
 export WASH_NETD_BACKEND=nm
 export SHELL=/bin/bash HOME=/home/wash TERM=xterm-256color
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/lib/wash"
 # Wait for the data chardev (created when the host attaches it in Launch).
 i=0; while [ ! -e /dev/vport0p1 ] && [ "$i" -lt 600 ]; do i=$((i+1)); sleep 0.1; done
-chown wash /dev/vport0p1 2>/dev/null   # the single virtio data-plane fd
 while :; do
-  su -m wash -c '/usr/lib/wash/wash-router --transport=virtio-console:/dev/vport0p1 --apps-dir=/usr/lib/wash' >> /run/wash-router.log 2>&1
-  echo "wash-router exited rc=$? — respawn in 1s" >> /run/wash-router.log
+  /usr/lib/wash/wash-vmlogin \
+    --transport=virtio-console:/dev/vport0p1 \
+    --apps-dir=/usr/lib/wash \
+    --auth-test "wash:wash" >> /run/wash-router.log 2>&1
+  echo "wash-vmlogin exited rc=$? — respawn in 1s" >> /run/wash-router.log
   sleep 1
 done
 LAUNCH

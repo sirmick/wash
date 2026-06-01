@@ -12,7 +12,7 @@
 // This is the slow capstone; the fast host-side equivalent (fake backend, no VM)
 // is net-app.spec.ts.
 
-import { test, expect, vmSkipReason } from '../fixtures/vm';
+import { test, expect, vmSkipReason, vmLogin } from '../fixtures/vm';
 
 test.beforeEach(() => {
   const reason = vmSkipReason();
@@ -23,6 +23,9 @@ test('eth(DHCP) + bridge(eth1,eth2) + vlan(eth3.100): real NM accepts all three'
   test.setTimeout(180_000); // VM boot + chromium + three commit-confirm verifies
 
   await page.goto(vm.url);
+
+  // Log in through the in-guest front's gate (wash-vm/UNIFY.md) before the desktop loads.
+  await vmLogin(page);
   await expect(page.locator('wash-app-session')).toBeVisible({ timeout: 40_000 });
   await expect(page.locator('#spec')).toContainText('served from VM', { timeout: 40_000 });
 
