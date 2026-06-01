@@ -36,6 +36,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sirmick/wash/apps/netd/be/networkd"
 	"github.com/sirmick/wash/apps/netd/be/nm"
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/sdk"
@@ -120,14 +121,20 @@ type netApplier interface {
 	Devices() []string // managed link names (eth0, …) for the FE's Add wizards
 }
 
-// newApplier selects the backend. NM is used ONLY when explicitly opted in via
-// WASH_NETD_BACKEND=nm (the guest image sets it) — never by mere D-Bus
-// reachability, so a dev host that happens to run NetworkManager can't have its
-// real networking reconfigured by a unit test. Otherwise the in-memory fake.
+// newApplier selects the backend. A real backend is used ONLY when explicitly
+// opted in via WASH_NETD_BACKEND (the guest images set it: nm on Alpine,
+// networkd on Fedora) — never by mere reachability, so a dev host that happens
+// to run NetworkManager/networkd can't have its real networking reconfigured by
+// a unit test. Otherwise the in-memory fake. (Step-5 autodetection layers on
+// top: `auto` will probe and pick; this env override stays the hard precedence.)
 func newApplier() netApplier {
-	if os.Getenv("WASH_NETD_BACKEND") == "nm" {
+	switch os.Getenv("WASH_NETD_BACKEND") {
+	case "nm":
 		log.Printf("wash-netd: backend = NetworkManager")
 		return nm.NewApplier()
+	case "networkd":
+		log.Printf("wash-netd: backend = systemd-networkd")
+		return networkd.NewApplier()
 	}
 	return newFakeApplier()
 }
