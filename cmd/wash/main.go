@@ -30,6 +30,7 @@ import (
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/runner/launch"
 	routerrun "github.com/sirmick/wash/internal/runner/router"
+	vmloginrun "github.com/sirmick/wash/internal/runner/vmlogin"
 	"github.com/sirmick/wash/internal/wire"
 )
 
@@ -50,6 +51,8 @@ func main() {
 		os.Exit(routerrun.Run(os.Args[1:]))
 	case "wash-launch":
 		os.Exit(launch.Run(os.Args[1:]))
+	case "wash-vmlogin":
+		os.Exit(vmloginrun.Run(os.Args[1:]))
 	}
 
 	a := registry.Get(name)
