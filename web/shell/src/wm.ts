@@ -11,6 +11,7 @@
 import { createSignal } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import type { SessionPatch, SessionWindow } from './main';
+import { clampViewport, viewportForRect, nextZ } from './viewport-math';
 
 export type WinState = 'normal' | 'minimized' | 'maximized';
 
@@ -103,9 +104,7 @@ const [viewport, setViewportSignal] = createSignal(loadStoredViewport());
 export { windows, focused, desktop, viewport, screenSize };
 
 export function setViewport(vx: number, vy: number): void {
-  const max = VIEWPORTS_PER_AXIS - 1;
-  const cvx = Math.max(0, Math.min(max, Math.round(vx)));
-  const cvy = Math.max(0, Math.min(max, Math.round(vy)));
+  const { vx: cvx, vy: cvy } = clampViewport(vx, vy, VIEWPORTS_PER_AXIS);
   const cur = viewport();
   if (cur.vx === cvx && cur.vy === cvy) return;
   setViewportSignal({ vx: cvx, vy: cvy });
@@ -123,25 +122,14 @@ export function viewportFor(w: { x: number; y: number; w: number; h: number }): 
   vx: number;
   vy: number;
 } {
-  const s = screenSize();
-  const cx = w.x + w.w / 2;
-  const cy = w.y + w.h / 2;
-  const max = VIEWPORTS_PER_AXIS - 1;
-  return {
-    vx: Math.max(0, Math.min(max, Math.floor(cx / s.w))),
-    vy: Math.max(0, Math.min(max, Math.floor(cy / s.h))),
-  };
+  return viewportForRect(w, screenSize(), VIEWPORTS_PER_AXIS);
 }
 
 // raiseLocal bumps a window to the front locally; the router's patch
 // confirms the change moments later. Kept as a separate export for
 // places that already raise before calling a wire helper.
 export function raiseLocal(windowID: number): void {
-  let maxZ = 0;
-  for (const w of windows) {
-    if (w.z > maxZ) maxZ = w.z;
-  }
-  setWindows((w) => w.windowID === windowID, 'z', maxZ + 1);
+  setWindows((w) => w.windowID === windowID, 'z', nextZ(windows));
   setFocused(windowID);
 }
 
