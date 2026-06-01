@@ -40,9 +40,11 @@ test.describe('app state opt-in', () => {
     // Hidden file not yet shown.
     await expect(fm.locator('[data-testid="fm-entry-.hidden"]')).toHaveCount(0);
 
-    // Turn on show-hidden via the sort menu.
+    // Turn on show-hidden via the sort menu. The menu (Menu component)
+    // portals into document.body, so its items live OUTSIDE wash-app-fm —
+    // address them page-scoped, not via fm.locator (matches fm.spec).
     await fm.locator('[data-testid="fm-sort"]').click();
-    await fm.locator('[data-testid="fm-show-hidden"]').click();
+    await page.locator('[data-testid="fm-show-hidden"]').click();
     await expect(fm.locator('[data-testid="fm-entry-.hidden"]')).toBeVisible();
 
     // Open the info pane.
