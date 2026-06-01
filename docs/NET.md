@@ -651,12 +651,73 @@ wireless/AP, static routing). New image: minimal systemd distro via mkosi.
 (`nft -c`,`networkd verify`), lockout truth test — all via `wash-vm/vm`.
 *Exit:* complete, tested type-1 systemd-router product.
 
+**Delivered (2026-05-31, the IP-layer slice).** The `networkd` backend
+(`internal/washnet/networkdprofile` render/parse + golden corpus; the
+`apps/netd/be/networkd` Applier = write `/etc/systemd/network` + `networkctl
+reload/reconfigure` + lock-out Verify), backend **autodetection** (`Detect()`
+per backend + an auto-by-default policy; `WASH_NETD_BACKEND` env > persisted
+`network.json` > auto), the generic **features/kinds capability wire**, and a
+**Settings → Network pane** (renderer dropdown + Open Network). Test bed: a
+**Fedora microvm** (systemd-as-PID1-from-initramfs, networkd-active/NM-absent),
+mirroring Alpine+NM, with in-VM boot + apply (bridge/VLAN, kernel-verified)
+e2e — built on a refactored shared image-payload lib (`scripts/lib`). *Still
+pending in Phase C:* the direct backends (nftables/dnsmasq/hostapd) and the
+router screens (firewall matrix, DHCP server, AP) — networkd covers the IP
+layer only.
+
 ### Phase D — OpenWRT UCI mode (full type-1)
 
 `uci` backend (write `/etc/config/*` + ubus reload); all caps enabled, nothing
 greyed. New image: OpenWRT via Image Builder. *Proven by:* OpenWRT-VM apply,
 renderer-as-oracle (`fw4 check`,`uci import`), full type-1 truth test on real
 OpenWRT — via `wash-vm/vm`. *Exit:* full router product on OpenWRT.
+
+### Phase E — Debian / the ifupdown incumbent (the take-over flow)
+
+The third real-world distro, and the first that doesn't hand wash a *live
+manager* to drive. Debian server/minimal defaults to **ifupdown**
+(`/etc/network/interfaces`) — a boot-time *front-end* (§2.2), not a backend wash
+targets. So Debian forces the question Alpine (NM) and Fedora (networkd) didn't:
+*what does wash do on a box owned by something it doesn't drive?* Three new
+problems: (1) a **detection gap** — autodetect probes only NM + networkd, so an
+ifupdown box reads as "networkd available" and would silently stomp it; (2)
+**take-over, not coexistence** — ifupdown isn't a daemon you ride, so the honest
+posture is to *seize* the links; (3) **reading the current config** before
+seizing.
+
+**Decision (settled 2026-05-31): take over with networkd; ifupdown is
+read-only.** wash does NOT gain an ifupdown *backend* (§2.2 holds — it's a
+front-end). Rationale from the mechanics: ifupdown's runtime apply is
+`systemctl restart networking` = `ifdown -a`/`ifup -a` — **coarse** (downs/ups
+all `auto` links, a connectivity blip per apply — ugly under commit-confirm) and
+carries the *ifdown-reads-the-current-file* hazard; `ifupdown2`'s graceful
+`ifreload -a` can't be assumed present. Bridges/VLANs *are* expressible
+(`bridge-utils` → `bridge_ports`; `vlan` → `vlan-raw-device`) but **WireGuard is
+hook-only** (no native stanza). So driving ifupdown would be coarse, lossy, and
+WG-incapable — whereas wash's **networkd backend already renders the exact
+`.network`/`.netdev` set** a Debian box needs (Phase C), with a clean targeted
+`reconfigure` and full features. The only *new* code is the seize.
+
+**The seize** (one-time, gated by commit-confirm — this is wash's first **hot
+take-over**, the lock-out-risk operation): `systemctl disable --now
+networking.service` · `ifdown -a` (tear down the incumbent's live state with the
+*old* file) · neutralize `/etc/network/interfaces` (keep only `lo`) · `systemctl
+enable --now systemd-networkd systemd-resolved` → then the normal networkd
+Apply. Auto-revert restores ifupdown.
+
+*Plan, safe-first:* **E1** `internal/washnet/ifupdownprofile` — read-only
+`interfaces → model.Config` parser (incl. `bridge_ports`, `vlan-raw-device`),
+golden corpus, pure/unit-tested (mirrors how nm/networkd profiles started; no
+write path). **E2** an ifupdown `Detect()` source so autodetect recognizes the
+incumbent and `chooseBackend` proposes *take-over-via-networkd* rather than
+silently picking networkd. **E3** Debian image module (`build-vm-image-debian.sh`
+— apt rootfs via Docker, systemd-as-PID1 like Fedora, **ifupdown configured +
+active** on eth0). **E4** the seize step in the networkd Applier (or a sibling
+`takeover`), commit-confirm-gated. **E5** Debian e2e: boot → assert ifupdown is
+the incumbent + wash imports its config → take-over apply → networkd owns the
+NICs (ifupdown disarmed), kernel-verified over the ctl plane; lock-out
+auto-revert restores ifupdown. *Exit:* wash manages a stock Debian server,
+migrating it off ifupdown onto networkd through commit-confirm.
 
 ---
 
@@ -679,5 +740,9 @@ non-systemd non-OpenWRT router target demands it).
   dev-share; baked+layered for CI (§8.4–8.5).
 - *AI* — deferred from v1; model + diagnostics + recipe layers kept introspectable
   so natural-language rules and "why can't X reach Y" can attach later.
+- *Debian / ifupdown* — take over with networkd (ifupdown stays a read-only
+  import, not a backend — §2.2 holds); the first hot-take-over, commit-confirm-
+  gated. The networkd backend renders Debian's config unchanged; only the seize
+  is new (Phase E).
 
 **Open.** None blocking A1.
