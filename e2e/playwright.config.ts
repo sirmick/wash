@@ -8,6 +8,10 @@ import { defineConfig, devices } from '@playwright/test';
 // hung test surfaces fast.
 export default defineConfig({
   testDir: './tests',
+  // Pre-flight: fail loudly if inotify instances are near the per-user
+  // cap (leaked watchers break fs.watch silently mid-run). See
+  // global-setup.ts.
+  globalSetup: './global-setup.ts',
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,
