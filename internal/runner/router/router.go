@@ -149,6 +149,7 @@ func Run(args []string) int {
 	screenshotDir := fs.String("screenshot-dir", "", "directory for POST /screenshot uploads (overrides WASH_SCREENSHOT_DIR; default: /tmp/wash-screenshots; \"none\" disables)")
 	transport := fs.String("transport", "ws", `shell transport: "ws" (default; HTTP/WebSocket listener) or "virtio-console:<path>" / "serial:<path>" for a single-shell raw byte-stream — used in the v86 online demo where the kernel has no TCP/IP and the FE talks to the router over a virtio-console port.`)
 	readyPath := fs.String("ready-path", "", `after the shell transport is open, write "WASH_READY\n" to this path. v86 demo: --ready-path=/dev/vport0p1 so the outer JS knows the BE is live.`)
+	sessionPreopened := fs.Bool("session-preopened", false, `the leading SessionOpen frame was already consumed by an upstream login front (wash-vm/guest), so synthesize the first viewer session immediately instead of waiting for SessionOpen. Subsequent SessionOpen/SessionClose (reconnects) flow normally. Only meaningful with a non-ws --transport.`)
 	listenUnix := fs.String("listen-unix", "", `multi-user ctl socket path. When set, the router does not bind --listen; instead it listens on this Unix socket for SCM_RIGHTS handoffs from wash-login (see docs/MULTIUSER.md). Mutually exclusive with --transport=virtio-console / --transport=serial / --transport=fd.`)
 	name := fs.String("name", "", "human-readable session name; surfaced in stat RPC and /proc/<pid>/cmdline. Informational; immutable.")
 	idleTimeout := fs.Duration("idle-timeout", 0, "self-exit after this duration with no attached shell. Zero disables; default 30m when --listen-unix is set.")
@@ -376,7 +377,7 @@ func Run(args []string) int {
 			return 1
 		}
 	default:
-		if err := runShellOverStream(ctx, r, transportScheme, transportPath, *readyPath, logf); err != nil {
+		if err := runShellOverStream(ctx, r, transportScheme, transportPath, *readyPath, *sessionPreopened, logf); err != nil {
 			logger.Printf("%s transport: %v", transportScheme, err)
 			return 1
 		}
@@ -430,7 +431,7 @@ func parseTransport(s string) (scheme, path string, err error) {
 // channel shouldn't prevent the shell from running. In the v86 demo
 // the outer JS treats the absence of a READY token as "still booting,"
 // which the user sees as the boot xterm staying visible longer.
-func runShellOverStream(ctx context.Context, r *router.Router, scheme, path, readyPath string, logf func(string, ...any)) error {
+func runShellOverStream(ctx context.Context, r *router.Router, scheme, path, readyPath string, sessionPreopened bool, logf func(string, ...any)) error {
 	// fd:N inherits an already-open fd (supervisor's `exec 3<>/dev/hvc2`)
 	// and uses RAW syscall.Read/Write — never wrapping it in *os.File —
 	// so Go's runtime poller doesn't register the fd (no
@@ -476,6 +477,17 @@ func runShellOverStream(ctx context.Context, r *router.Router, scheme, path, rea
 	// side is never orphaned.
 	raw := wire.NewStreamTransport(rwc)
 	split := newSessionSplitter(raw, logf)
+	// --session-preopened: an upstream login front (wash-vm/guest) authenticated
+	// the browser and already consumed the leading SessionOpen off this stream
+	// before forking us. Synthesize the first viewer NOW — before run() starts,
+	// so the active viewer is set before any router-protocol data frame (the
+	// FE's first asset.read) is read and would otherwise be dropped. Subsequent
+	// SessionClose/SessionOpen (the browser reconnecting) flow through run()
+	// normally, so a re-attach doesn't require another login.
+	if sessionPreopened {
+		logf("session-preopened: synthesizing initial viewer (login front consumed SessionOpen)")
+		split.beginSession()
+	}
 	go split.run()
 
 	for {
