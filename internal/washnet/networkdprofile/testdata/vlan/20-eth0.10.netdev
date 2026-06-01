@@ -1,0 +1,6 @@
+[NetDev]
+Name=eth0.10
+Kind=vlan
+
+[VLAN]
+Id=10
