@@ -65,6 +65,12 @@ jobs:
           cache: 'pnpm'
       - name: pnpm install (workspace)
         run: pnpm install --frozen-lockfile
+      - name: pnpm install (e2e — standalone, outside the workspace)
+        # e2e/ is NOT a workspace member (pnpm-workspace.yaml), so the
+        # workspace install above doesn't create e2e/node_modules.
+        # --ignore-workspace installs e2e's own package.json there, which
+        # `pnpm --dir e2e exec playwright …` (below + in test.sh) needs.
+        run: pnpm --dir e2e install --ignore-workspace --frozen-lockfile
       - name: Install Playwright Chromium (+ system deps)
         run: pnpm --dir e2e exec playwright install --with-deps chromium
       - name: E2e suite (build + Playwright)
