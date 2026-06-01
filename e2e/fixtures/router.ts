@@ -337,6 +337,17 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   if (trustForPriv) {
     env.WASH_TRUSTED_APPS_DIRS = trustForPriv;
   }
+  // Force netd onto its fake applier (eth0..eth3, deterministic). Since
+  // netd defaults to autodetecting a live backend, on a dev host with
+  // NetworkManager/networkd running it would otherwise bind the real
+  // backend and list the box's real NICs (enp3s0, …) — breaking the
+  // host-side net tests that assert on eth0. (The real-backend path is
+  // covered separately by net-vm-gate.spec.ts, which runs the in-guest
+  // netd inside a real microvm via the vm fixture, not this one.) A test
+  // can still override via extraEnv, which is applied last.
+  if (wanted.includes('netd')) {
+    env.WASH_NETD_BACKEND = 'fake';
+  }
   // Isolate the user's real ~/.config/wash. wash-settings.write()
   // overwrites desktop.json; without this every settings spec would
   // trash the developer's chrome between runs.

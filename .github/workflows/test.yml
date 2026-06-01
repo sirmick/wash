@@ -1,0 +1,81 @@
+# Functional test suite — the tier that matrix.yml (distro packaging)
+# does NOT cover: Go unit/integration (`go test ./...`), the FE unit
+# tests (node --test), and the full Playwright e2e suite. These run
+# locally via ./test.sh; this workflow runs the exact same entrypoint in
+# CI so a regression can't land on main unnoticed (which is how the
+# login/net-app specs drifted red — they were only ever gated locally).
+#
+# Two jobs so a Go failure and an e2e failure report independently and
+# run in parallel. Both delegate to test.sh (single source of truth):
+#   unit → ./test.sh --no-e2e   (build + FE unit + go test ./...)
+#   e2e  → ./test.sh --no-unit  (build + Playwright)
+name: tests
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# A new push to a branch/PR supersedes the in-flight run for it.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: unit (go + fe)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - name: pnpm install (workspace)
+        run: pnpm install --frozen-lockfile
+      - name: Unit suites (build + FE unit + go test ./...)
+        run: ./test.sh --no-e2e
+
+  e2e:
+    name: e2e (playwright)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - name: pnpm install (workspace)
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright Chromium (+ system deps)
+        run: pnpm --dir e2e exec playwright install --with-deps chromium
+      - name: E2e suite (build + Playwright)
+        run: ./test.sh --no-unit
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: |
+            e2e/test-results
+            e2e/playwright-report
+          retention-days: 7
+          if-no-files-found: ignore

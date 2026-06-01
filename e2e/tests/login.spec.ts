@@ -4,58 +4,79 @@
 // the auth form + the SCM_RIGHTS handoff. The latter is the hard part
 // — every other piece of wash-login has Go unit tests; only the full
 // browser → wash-login → spawn-router → handoff flow lives here.
+//
+// M4 routing note: a successful signin with <2 running sessions
+// redirects to "/" — the desktop shell (shell.js), which auto-opens a
+// WS and spawns a router. The picker at /sessions is the static,
+// WS-free authed surface these tests assert against, so signIn() lands
+// there explicitly rather than on the auto-connecting desktop.
 
 import { test, expect } from '../fixtures/login';
 import { readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
 
+type Page = import('@playwright/test').Page;
+type LoginHandle = import('../fixtures/login').LoginHandle;
+
+// Authenticate with the handle's credentials and land on the picker.
+//
+// Auth runs through the request context (not the visible form) on
+// purpose: a 0-session signin redirects to the desktop at "/", and if
+// the browser follows it the shell boots, opens a WS, and spawns a
+// stray session — poisoning the deterministic /proc + picker-count
+// assertions below. The request POST sets the session cookie in the
+// browser context without loading the shell, so the subsequent
+// navigation to the (static, WS-free) picker is authed. The visible
+// signin form is exercised separately by the auth-flow tests.
+async function signIn(page: Page, login: LoginHandle) {
+  const resp = await page.request.post(login.url + 'auth', {
+    form: { user: login.user, password: login.password, action: 'signin' },
+    maxRedirects: 0,
+  });
+  expect(resp.status()).toBe(302);
+  await page.goto(login.url + 'sessions');
+  await expect(page).toHaveURL(login.url + 'sessions');
+}
+
 test.describe('wash-login auth flow', () => {
   test('unauthed visit redirects to /login', async ({ page, login }) => {
     await page.goto(login.url);
     await expect(page).toHaveURL(/\/login$/);
-    await expect(page.locator('h1')).toContainText('log in');
+    await expect(page.locator('h1')).toContainText('sign in');
     await expect(page.locator('input[name="user"]')).toBeVisible();
     await expect(page.locator('input[name="password"]')).toBeVisible();
   });
 
-  test('post-auth lands on /sessions picker', async ({ page, login }) => {
+  test('post-auth with no sessions lands on the desktop (/)', async ({ page, login }) => {
     await page.goto(login.url + 'login');
     await page.fill('input[name="user"]', login.user);
     await page.fill('input[name="password"]', login.password);
-    await page.click('button[type="submit"]');
-    await expect(page).toHaveURL(login.url + 'sessions');
-    await expect(page.locator('h1')).toContainText('wash sessions');
-    await expect(page.locator('h1')).toContainText(login.user);
+    await page.click('button[value="signin"]');
+    // M4: signin with <2 sessions redirects to the shell at "/", not
+    // the picker. (≥2 sessions would land on /sessions — see picker.)
+    await expect(page).toHaveURL(login.url);
   });
 
   test('bad credentials bounce back with error', async ({ page, login }) => {
     await page.goto(login.url + 'login');
     await page.fill('input[name="user"]', login.user);
     await page.fill('input[name="password"]', 'wrong-password');
-    await page.click('button[type="submit"]');
+    await page.click('button[value="signin"]');
     await expect(page).toHaveURL(/\/login\?err=/);
     await expect(page.locator('.err')).toContainText('Invalid');
   });
 
   test('cookie survives reload', async ({ page, login }) => {
-    await page.goto(login.url + 'login');
-    await page.fill('input[name="user"]', login.user);
-    await page.fill('input[name="password"]', login.password);
-    await page.click('button[type="submit"]');
-    await expect(page).toHaveURL(login.url + 'sessions');
-
+    await signIn(page, login);
     await page.reload();
+    // Still authed: the picker reloads rather than bouncing to /login.
     await expect(page).toHaveURL(login.url + 'sessions');
     await expect(page.locator('h1')).toContainText(login.user);
   });
 
   test('logout clears cookie and returns to /login', async ({ page, login }) => {
-    await page.goto(login.url + 'login');
-    await page.fill('input[name="user"]', login.user);
-    await page.fill('input[name="password"]', login.password);
-    await page.click('button[type="submit"]');
-    await expect(page).toHaveURL(login.url + 'sessions');
+    await signIn(page, login);
 
     await page.locator('form.logout button[type="submit"]').click();
     await expect(page).toHaveURL(/\/login$/);
@@ -66,31 +87,28 @@ test.describe('wash-login auth flow', () => {
 });
 
 test.describe('wash-login picker (M4)', () => {
-  async function loginAs(page: import('@playwright/test').Page, login: import('../fixtures/login').LoginHandle) {
-    await page.goto(login.url + 'login');
-    await page.fill('input[name="user"]', login.user);
-    await page.fill('input[name="password"]', login.password);
-    await page.click('button[type="submit"]');
-    await expect(page).toHaveURL(login.url + 'sessions');
-  }
-
   test('empty picker shows hint and the new-session form', async ({ page, login }) => {
-    await loginAs(page, login);
+    await signIn(page, login);
     await expect(page.locator('text=No running sessions')).toBeVisible();
     await expect(page.locator('form.new input[name="name"]')).toBeVisible();
     await expect(page.locator('form.new button[type="submit"]')).toBeEnabled();
   });
 
-  test('new session via picker spawns and lands at /ws/s/<sessid>/', async ({ page, login }) => {
-    await loginAs(page, login);
-    await page.fill('form.new input[name="name"]', 'scratch');
-    await page.click('form.new button[type="submit"]');
-    // Server redirects to /ws/s/<sessid>/. The browser tries to load
-    // that as a regular HTTP page, which the server hijacks for WS
-    // upgrade — Chromium gets a 502 / connection drop because the
-    // WS Upgrade isn't a real navigation. Verify the URL did change
-    // to /ws/s/<sessid>/ before the error page.
-    await expect(page).toHaveURL(/\/ws\/s\/s-[0-9a-f]+\/?$/);
+  test('new session via picker spawns and redirects to /?s=<sessid>', async ({ page, login }) => {
+    await signIn(page, login);
+    // POST the form via the page's request context (carries the same
+    // session cookie) with redirects disabled, so the session spawns
+    // server-side without the browser following the 302 into the
+    // desktop shell — the shell opens its own WS and would spawn an
+    // extra session, defeating the deterministic /proc count below.
+    const resp = await page.request.post(login.url + 'sessions/new', {
+      form: { name: 'scratch' },
+      maxRedirects: 0,
+    });
+    // M4: a successful spawn redirects to the desktop attached to the
+    // new session (/?s=<sessid>), not the old /ws/s/<sessid>/.
+    expect(resp.status()).toBe(302);
+    expect(resp.headers()['location']).toMatch(/^\/\?s=s-[0-9a-f]+$/);
 
     // The session should be visible in /proc with name "scratch".
     await expect.poll(() => login.log(), { timeout: 5000 })
@@ -100,14 +118,13 @@ test.describe('wash-login picker (M4)', () => {
   });
 
   test('picker lists sessions and End button SIGTERMs them', async ({ page, login }) => {
-    await loginAs(page, login);
-    // Spawn two named sessions via the form (each navigates to
-    // /ws/s/... and produces a 502 from the hijacked conn, then
-    // we navigate back to /sessions to see the list).
+    await signIn(page, login);
+    // Spawn two named sessions server-side (request context, no
+    // browser navigation) so the desktop shell never loads and can't
+    // spawn extra sessions behind our back.
     for (const name of ['work', 'home']) {
-      await page.goto(login.url + 'sessions');
-      await page.fill('form.new input[name="name"]', name);
-      await page.click('form.new button[type="submit"]');
+      const resp = await page.request.post(login.url + 'sessions/new', { form: { name }, maxRedirects: 0 });
+      expect(resp.status()).toBe(302);
       // Wait for the spawn log line so the next iteration sees this
       // session in /proc.
       await expect.poll(() => login.log(), { timeout: 5000 })
@@ -139,15 +156,11 @@ test.describe('wash-login picker (M4)', () => {
       const ctx = await browser.newContext();
       const p = await ctx.newPage();
       // Log in.
-      await p.goto(capped.url + 'login');
-      await p.fill('input[name="user"]', capped.user);
-      await p.fill('input[name="password"]', capped.password);
-      await p.click('button[type="submit"]');
-      await expect(p).toHaveURL(capped.url + 'sessions');
+      await signIn(p, capped);
 
-      // Spawn one session.
-      await p.fill('form.new input[name="name"]', 'only');
-      await p.click('form.new button[type="submit"]');
+      // Spawn one session server-side (no shell load — see above).
+      const resp = await p.request.post(capped.url + 'sessions/new', { form: { name: 'only' }, maxRedirects: 0 });
+      expect(resp.status()).toBe(302);
       await expect.poll(() => capped.log(), { timeout: 5000 })
         .toMatch(/sessions\/new: spawned sessid=s-[0-9a-f]+ pid=\d+ name="only"/);
 
@@ -166,12 +179,8 @@ test.describe('wash-login picker (M4)', () => {
 
 test.describe('wash-login → wash-router handoff', () => {
   test('opening /ws after auth spawns a session and the WS reaches 101', async ({ page, login }) => {
-    // Log in first so the browser context has the wash_session cookie.
-    await page.goto(login.url + 'login');
-    await page.fill('input[name="user"]', login.user);
-    await page.fill('input[name="password"]', login.password);
-    await page.click('button[type="submit"]');
-    await expect(page).toHaveURL(login.url + 'sessions');
+    // Sign in first so the browser context has the wash_session cookie.
+    await signIn(page, login);
 
     // Now open a WebSocket to /ws from the browser context. This
     // sends the cookie alongside the upgrade. wash-login validates,
@@ -206,11 +215,7 @@ test.describe('wash-login → wash-router handoff', () => {
   });
 
   test('second WS to /ws attaches the existing session, not a new one', async ({ page, login }) => {
-    await page.goto(login.url + 'login');
-    await page.fill('input[name="user"]', login.user);
-    await page.fill('input[name="password"]', login.password);
-    await page.click('button[type="submit"]');
-    await expect(page).toHaveURL(login.url + 'sessions');
+    await signIn(page, login);
 
     const wsUrl = login.url.replace(/^http/, 'ws') + 'ws';
     const open1 = await page.evaluate(async (url) => {
@@ -247,11 +252,7 @@ test.describe('wash-login → wash-router handoff', () => {
   });
 
   test('logout?end_all=true terminates the spawned router', async ({ page, login }) => {
-    await page.goto(login.url + 'login');
-    await page.fill('input[name="user"]', login.user);
-    await page.fill('input[name="password"]', login.password);
-    await page.click('button[type="submit"]');
-    await expect(page).toHaveURL(login.url + 'sessions');
+    await signIn(page, login);
 
     // Open a WS to spawn a session.
     const wsUrl = login.url.replace(/^http/, 'ws') + 'ws';

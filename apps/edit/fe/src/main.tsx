@@ -1188,7 +1188,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // and has no in-flight fallback bridge, so cur:'' skips it. flattenTree
   // also computes childCount, which edit'\''s rows simply ignore. Passing
   // the store proxies in keeps the memo reactive (synchronous read).
-  const visibleRows = createMemo<Array<{ entry: Entry; path: string; depth: number }>>(() =>
+  type EditRow = { entry: Entry; path: string; depth: number };
+  const flatRows = createMemo<EditRow[]>(() =>
     flattenTree<Entry>({
       listings,
       expanded,
@@ -1197,6 +1198,26 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       cur: '',
     }),
   );
+
+  // Identity-stabilising layer (same rationale as wash-fm): flattenTree
+  // returns brand-new wrapper+entry objects each recompute, and <For>
+  // keys by reference — so any re-list (incl. a no-op fs.watch refresh)
+  // would tear down and rebuild every row's DOM, racing clicks mid-render
+  // ("element detached from the DOM"). Reuse the prior row object for a
+  // path whose content is unchanged so <For> keeps that row's DOM.
+  let prevRows = new Map<string, { row: EditRow; sig: string }>();
+  const visibleRows = createMemo<EditRow[]>(() => {
+    const next = new Map<string, { row: EditRow; sig: string }>();
+    const out = flatRows().map((row) => {
+      const sig = JSON.stringify(row);
+      const prior = prevRows.get(row.path);
+      const stable = prior && prior.sig === sig ? prior.row : row;
+      next.set(row.path, { row: stable, sig });
+      return stable;
+    });
+    prevRows = next;
+    return out;
+  });
 
   // ---- row click semantics ----
   //
