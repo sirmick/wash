@@ -15,7 +15,8 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
 
 PORT="${PORT:-13000}"
-export PORT
+HOST="${HOST:-0.0.0.0}"   # 0.0.0.0 = reachable from other devices on the LAN
+export PORT HOST
 
 # The host page imports the shell bundle from /shell/shell.js; build it first.
 pnpm -F @wash/shell build

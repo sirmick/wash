@@ -17,7 +17,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
 
-ADDR="${ADDR:-127.0.0.1:13000}"
+ADDR="${ADDR:-0.0.0.0:13000}"   # 0.0.0.0 = reachable from other devices on the LAN
 
 # Build the image + minimal chrome + host runner (incremental — skipped when
 # already current; the Alpine render is docker-cached).
