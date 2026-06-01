@@ -98,6 +98,14 @@ export interface BootstrapDeps {
    *  have opened yet — bytes pushed too early can get lost between
    *  the host FIFO and the guest's virtio-console driver. */
   deferUntilFirstByte?: boolean;
+  /** When set, the channel is gated by the in-guest login front
+   *  (wash-vm/UNIFY.md): bootstrap first runs the login handshake, only
+   *  sending asset.read after login.ok. On the front's login.required the
+   *  bootstrap calls this to collect credentials (e.g. show a form); it
+   *  resolves with the user's input and is re-invoked on login.err. If the
+   *  first frame isn't login.required (reattach to a live router), login is
+   *  skipped. Omit for an ungated channel (legacy / wemu's own bootstrap). */
+  getCredentials?: () => Promise<{ user: string; pass: string }>;
 }
 
 export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', reqID = 1): Promise<BootstrapResult> {
@@ -108,15 +116,28 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
   const assetChunks: Uint8Array[] = [];
   const replayChunks: Uint8Array[] = [];
   // Phase tracks the bootstrap state:
+  //   'gate' - login front gating the channel; run the handshake before asset
   //   'asset' - asset stream still arriving; parse frames, accumulate
   //   'buffering' - asset complete; capture every incoming byte
   //     verbatim into postAssetBuffer so the caller can replay them
   //     in order after the shell loads
   //   'passthrough' - shell loaded and replay done; future bytes go
   //     straight to caller-supplied forward
-  let phase: 'asset' | 'buffering' | 'passthrough' = 'asset';
+  let phase: 'gate' | 'asset' | 'buffering' | 'passthrough' = deps.getCredentials ? 'gate' : 'asset';
   const postAssetBuffer: Uint8Array[] = [];
   let forwardFn: ((bytes: Uint8Array) => void) | null = null;
+
+  // Login-gate helpers (phase 'gate'). promptingLogin guards against firing the
+  // credential prompt more than once per login.required burst.
+  let promptingLogin = false;
+  const sendLogin = (user: string, pass: string) =>
+    deps.sendBytes(encodeFrame(0, enc.encode(JSON.stringify({ t: 'login', user, pass }))));
+  const promptAndSend = () => {
+    if (!deps.getCredentials) return;
+    promptingLogin = true;
+    deps.getCredentials().then(({ user, pass }) => { sendLogin(user, pass); })
+      .catch((e) => log(`bootstrap: getCredentials failed: ${(e as Error).message}`));
+  };
 
   let resolve!: (r: BootstrapResult) => void;
   let reject!: (e: Error) => void;
@@ -139,10 +160,11 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
     if (onBytesCount <= 30 || onBytesCount % 10 === 0) {
       log(`bs: #${onBytesCount} phase=${phase} len=${bytes.length}`);
     }
-    if (!sent && deps.deferUntilFirstByte) {
+    if (!sent && deps.deferUntilFirstByte && phase !== 'gate') {
       // First router byte arrived → router is alive, port is open,
       // safe to send. Fire BEFORE feeding the parser so the request
-      // can land in the router's input queue ASAP.
+      // can land in the router's input queue ASAP. While gating, the
+      // gate drives sendRequest after login.ok instead.
       sendRequest();
     }
     if (phase === 'buffering') {
@@ -168,8 +190,28 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
       forwardFn?.(bytes);
       return;
     }
-    // phase === 'asset': parse + classify each frame
+    // phase 'gate' or 'asset': parse + classify each frame. The gate runs the
+    // login handshake before the asset phase; on login.ok (or a reattach to a
+    // live router) it flips phase to 'asset' and sends asset.read, then the same
+    // loop processes any further frames as asset frames.
     for (const f of parser.feed(bytes)) {
+      if (phase === 'gate') {
+        if (f.channel === 0) {
+          let gm: { t?: string } | null = null;
+          try { gm = JSON.parse(dec.decode(f.payload)); } catch { gm = null; }
+          if (gm?.t === 'login.required') { if (!promptingLogin) promptAndSend(); continue; }
+          if (gm?.t === 'login.err') { log('bootstrap: login rejected'); promptingLogin = false; promptAndSend(); continue; }
+          if (gm?.t === 'login.ok') { log('bootstrap: login.ok — requesting shell'); phase = 'asset'; sendRequest(); continue; }
+          // Any other ctrl frame = reattach to a live router (front blocked in
+          // Spawn). Skip login, request the shell, and replay this frame.
+          phase = 'asset'; sendRequest();
+          // fall through to asset handling of this frame
+        } else {
+          // Data frame while gating = reattach. Switch + request, then let the
+          // asset branch below handle/replay this frame.
+          phase = 'asset'; sendRequest();
+        }
+      }
       if (f.channel === 0) {
         // JSON ctrl frame — peek `t` to dispatch.
         let msg: { t?: string; req_id?: number; channel_id?: number; size?: number; code?: string; msg?: string } | null = null;
@@ -252,9 +294,15 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
     }
   });
 
-  // Send the asset.read request immediately unless we're deferring
-  // until the first router byte (see BootstrapDeps.deferUntilFirstByte).
-  if (!deps.deferUntilFirstByte) {
+  if (phase === 'gate') {
+    // Kick the in-guest login front: it emits login.required on SessionOpen.
+    // On wemu the host proxy injects this; the in-browser box has no proxy, so
+    // the FE sends it. The gate then drives login → (login.ok) → asset.read.
+    deps.sendBytes(encodeFrame(0, enc.encode(JSON.stringify({ t: 'session.open' }))));
+    log('bootstrap: gate — sent session.open to trigger login.required');
+  } else if (!deps.deferUntilFirstByte) {
+    // Send the asset.read request immediately unless we're deferring until the
+    // first router byte (see BootstrapDeps.deferUntilFirstByte).
     sendRequest();
   } else {
     log('bootstrap: deferring asset.read until first router byte');

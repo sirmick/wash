@@ -87,15 +87,18 @@ start() {
         while :; do
             n=$((n + 1))
             echo "──────── wash-supervisor: launch #$n ────────"
-            echo "wash-supervisor: invoking wash-router as user 'wash' (transport=fd:3)..."
-            # Drop privileges via busybox su. su preserves open
-            # fds across the uid switch, so fd 3 (already pointed
-            # at the data device) reaches wash-router exactly as
-            # before. The exec replaces su's child shell so we
-            # don't carry a useless sh in the process tree.
-            su wash -s /bin/sh -c 'exec /usr/bin/wash-router --transport=fd:3 --apps-dir=/usr/lib/wash'
+            echo "wash-supervisor: invoking wash-vmlogin (login front, transport=fd:3)..."
+            # Run wash-vmlogin AS ROOT (no su): it owns the data-plane fd, gates
+            # the channel with the login handshake, and forks wash-router as the
+            # authed user itself (it needs root to setuid + preserve groups —
+            # wash-vm/UNIFY.md). It uses the inherited fd 3 via raw syscalls (no
+            # Go poller, so no khvcd wedge), exactly as wash-router did.
+            # --auth-test wash:<pw> is the dev credential; resolveCredential
+            # re-derives wash's uid/gid/groups from /etc/passwd. Drop --auth-test
+            # for the su/passwd backend on a hardened build.
+            /usr/bin/wash-vmlogin --transport=fd:3 --apps-dir=/usr/lib/wash --auth-test "wash:wash"
             rc=$?
-            echo "wash-supervisor: wash-router exited rc=$rc (launch #$n)"
+            echo "wash-supervisor: wash-vmlogin exited rc=$rc (launch #$n)"
             sleep_for=$(( n > 5 ? 5 : 1 ))
             echo "wash-supervisor: respawn in ${sleep_for}s"
             sleep "$sleep_for"
