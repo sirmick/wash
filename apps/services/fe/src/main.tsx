@@ -14,6 +14,7 @@
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { defineWashApp, StatusBar, tokens } from '@wash/ui';
+import { serviceBadge, isActive as isActiveState, isFailed as isFailedState, type BadgeTone } from './service-status.ts';
 import {
   Check,
   CircleAlert,
@@ -243,8 +244,8 @@ const ServiceRow: Component<{
   onLogs: () => void;
 }> = (props) => {
   const s = () => props.service;
-  const isActive = () => s().active === 'active' || s().active === 'reloading';
-  const isFailed = () => s().active === 'failed' || s().sub === 'crashed';
+  const isActive = () => isActiveState(s().active);
+  const isFailed = () => isFailedState(s().active, s().sub);
   const isEnabled = () => s().enabled === 'enabled' || s().enabled === 'alias' || s().enabled === 'static';
   const masked = () => s().enabled === 'masked';
   const isBusy = () => props.busy() !== '';
@@ -335,24 +336,32 @@ const ServiceRow: Component<{
   );
 };
 
+// Tone → colours. The tone + label decision is the unit-tested kernel
+// (service-status.ts); this component only maps tone to presentation.
+const TONE_STYLE: Record<BadgeTone, { bg: string; fg: string }> = {
+  failed: { bg: '#5b1d1d', fg: '#fca5a5' },
+  active: { bg: '#1c3d24', fg: '#86efac' },
+  transitioning: { bg: '#3a3a1c', fg: '#fde047' },
+  inactive: { bg: '#1f1f2a', fg: tokens.fgDim },
+};
+
 const StatusBadge: Component<{ active: string; sub: string }> = (props) => {
-  const tone = (): { bg: string; fg: string; label: string; icon: JSX.Element } => {
-    if (props.active === 'failed' || props.sub === 'crashed') {
-      return { bg: '#5b1d1d', fg: '#fca5a5', label: 'failed', icon: <CircleX size={12} /> };
+  const badge = () => serviceBadge(props.active, props.sub);
+  const sty = () => TONE_STYLE[badge().tone];
+  const icon = () => {
+    switch (badge().tone) {
+      case 'failed':
+        return <CircleX size={12} />;
+      case 'active':
+        return <CirclePlay size={12} />;
+      default: // transitioning + inactive
+        return <CircleDashed size={12} />;
     }
-    if (props.active === 'active' || props.active === 'reloading') {
-      return { bg: '#1c3d24', fg: '#86efac', label: props.sub || 'running', icon: <CirclePlay size={12} /> };
-    }
-    if (props.active === 'activating' || props.active === 'deactivating') {
-      return { bg: '#3a3a1c', fg: '#fde047', label: props.active, icon: <CircleDashed size={12} /> };
-    }
-    return { bg: '#1f1f2a', fg: tokens.fgDim, label: props.sub || props.active || 'inactive', icon: <CircleDashed size={12} /> };
   };
-  const t = tone();
   return (
-    <span style={{ ...badgeStyle, background: t.bg, color: t.fg }} title={`${props.active} / ${props.sub}`}>
-      {t.icon}
-      <span style={{ 'margin-left': '4px' }}>{t.label}</span>
+    <span style={{ ...badgeStyle, background: sty().bg, color: sty().fg }} title={`${props.active} / ${props.sub}`}>
+      {icon()}
+      <span style={{ 'margin-left': '4px' }}>{badge().label}</span>
     </span>
   );
 };
