@@ -1,0 +1,169 @@
+// Package net is wash-net (com.wash.net) — the windowed network UI app
+// (docs/NET.md §2.11, §3). It is the UNPRIVILEGED half of the pair: it embeds
+// the apps/net/fe bundle (the generated Advanced editor + bespoke screens) and
+// serves it to the browser like any wash app, then relays the FE's
+// validate/diff/apply/confirm/revert requests to the privileged com.wash.netd
+// service over cross-app app_msg. The router stamps these forwards with this
+// app's attested identity, which is how netd authorizes them (netd.authz).
+//
+// This process holds no privilege and no network logic — it is a typed proxy.
+// All the model/validate/apply logic lives in com.wash.netd (and the pure
+// internal/washnet library it links). Keeping the FE-facing app unprivileged is
+// the whole point of the two-app split (§3 privilege boundary).
+//
+// FE↔BE wire (own-FE request/reply, correlated by `id`):
+//
+//	→ {kind:"current",  id}               ← {kind:"current_ok", id, config, caps, devices}
+//	→ {kind:"validate", id, config:{…}}   ← {kind:"validate_ok", id, diagnostics:[…]}
+//	→ {kind:"diff",     id, config:{…}}   ← {kind:"diff_ok", id, entries, summary}
+//	→ {kind:"apply",    id, config:{…}}   ← {kind:"apply_ok", id, state, events, …}
+//	→ {kind:"confirm",  id}               ← {kind:"confirm_ok", id, state}
+//	→ {kind:"revert",   id}               ← {kind:"revert_ok", id, state}
+//
+// Each FE request is relayed verbatim to netd; netd's reply is relayed back with
+// the FE's id echoed. `config` is the FE interchange JSON (codec, §2.11).
+package net
+
+import (
+	"context"
+	"embed"
+	"errors"
+	"io/fs"
+	"log"
+
+	"github.com/sirmick/wash/internal/apps/registry"
+	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/internal/wire"
+)
+
+//go:embed all:assets
+var assetsFS embed.FS
+
+const version = "0.8.0"
+
+// AppID is this app's id. NetdAppID is the privileged service it relays to —
+// declared locally (not imported) so the two apps stay independently buildable
+// and the wire contract is owned on each side.
+const (
+	AppID     = "com.wash.net"
+	NetdAppID = "com.wash.netd"
+)
+
+// netIcon is the lucide "network" glyph as an inline SVG. Manifest requires an
+// icon for windowed apps; kept tiny to stay well under the 64KB cap.
+const netIcon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%236090e0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/></svg>`
+
+// proxyKinds are the FE→BE request kinds relayed to com.wash.netd. Each is a
+// request/reply round-trip correlated by the FE's `id`.
+var proxyKinds = []string{"current", "validate", "diff", "apply", "confirm", "revert"}
+
+var def *sdk.AppDef
+
+func init() {
+	sub, err := fs.Sub(assetsFS, "assets")
+	if err != nil {
+		log.Printf("wash-net: assets sub: %v", err)
+	}
+	def = &sdk.AppDef{
+		Manifest: sdk.Manifest{
+			ID:              AppID,
+			Name:            "Network",
+			Version:         version,
+			ProtocolVersion: sdk.ProtocolVersion,
+			Element:         "wash-app-net",
+			Surface:         sdk.SurfaceWindow,
+			Icon:            netIcon,
+			Accent:          "#6090e0",
+			Instancing:      sdk.InstancingSingle,
+			Window:          &sdk.WindowHints{DefaultWidth: 574, DefaultHeight: 620},
+		},
+		Assets:  sub,
+		OnReady: onReady,
+	}
+	registry.Register(&registry.App{
+		Name:     "wash-net",
+		Manifest: def.Manifest,
+		Assets:   def.Assets,
+		Run:      run,
+	})
+}
+
+// Def is the AppDef for the standalone shim's sdk.Main call.
+func Def() *sdk.AppDef { return def }
+
+func run(ctx context.Context) error { return sdk.Run(ctx, def) }
+
+func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
+	log.Printf("wash-net ready instance=%s window=%d", instanceID, windowID)
+	bus := sdk.NewBus(c)
+	for _, kind := range proxyKinds {
+		registerProxy(bus, kind)
+	}
+	// Subscribe to netd's status so the window sees autonomous transitions (the
+	// commit-confirm auto-revert) and the apply-event stream — relayed to the FE
+	// as net.state, the same shape the sidebar gateway uses. Without this the
+	// window would only learn outcomes it explicitly requested.
+	sdk.HandleFromVoid(bus, "state", func(conn *sdk.Conn, _ string, req stateRelay, from wire.Sender) error {
+		if from.AppID != NetdAppID {
+			return nil
+		}
+		return conn.SendAppMsg(map[string]any{"kind": "net.state", "state": req.State})
+	})
+	if err := c.SendAppMsgTo(wire.Recipient{AppID: NetdAppID}, map[string]any{"kind": "subscribe"}); err != nil {
+		log.Printf("wash-net: subscribe netd: %v", err)
+	}
+}
+
+// stateRelay is the opaque netd StateService push we forward verbatim to the FE.
+type stateRelay struct {
+	State any `json:"state"`
+}
+
+// registerProxy wires one FE request kind to a cross-app round-trip with netd.
+// The FE handler is fire-and-forget at the bus layer (HandleVoid) because the
+// reply is produced asynchronously: sdk.Call blocks awaiting netd's reply, and
+// MUST NOT run on the dispatch goroutine (it would deadlock the read loop), so
+// the relay runs in a goroutine and ships the reply to the FE itself.
+func registerProxy(bus *sdk.Bus, kind string) {
+	sdk.HandleVoid(bus, kind, func(c *sdk.Conn, id string, req map[string]any) error {
+		// Forward only the meaningful payload (config for validate/diff/apply;
+		// nothing for confirm/revert) — not the FE envelope fields.
+		fwd := map[string]any{}
+		if cfg, ok := req["config"]; ok {
+			fwd["config"] = cfg
+		}
+		go func() {
+			var resp map[string]any
+			err := sdk.Call(context.Background(), bus, wire.Recipient{AppID: NetdAppID}, kind, fwd, &resp)
+			if err != nil {
+				_ = c.SendAppMsg(errReply(kind, id, err))
+				return
+			}
+			if resp == nil {
+				resp = map[string]any{}
+			}
+			// Relay netd's reply to the FE: rebrand to <kind>_ok, echo the FE's
+			// id, and drop netd's hop-level req_id.
+			resp["kind"] = kind + "_ok"
+			if id != "" {
+				resp["id"] = id
+			}
+			delete(resp, "req_id")
+			_ = c.SendAppMsg(resp)
+		}()
+		return nil
+	})
+}
+
+func errReply(kind, id string, err error) map[string]any {
+	code, msg := sdk.ErrInternal, err.Error()
+	var e sdk.Err
+	if errors.As(err, &e) {
+		code, msg = e.Code, e.Msg
+	}
+	r := map[string]any{"kind": kind + "_err", "code": code, "msg": msg}
+	if id != "" {
+		r["id"] = id
+	}
+	return r
+}

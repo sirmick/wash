@@ -1,0 +1,971 @@
+{
+  "objects": [
+    {
+      "kind": "network/globals",
+      "package": "network",
+      "section": "globals",
+      "goType": "Globals",
+      "fields": [
+        {
+          "name": "Name",
+          "option": "",
+          "widget": "section-name",
+          "labelKey": "Globals.Name"
+        },
+        {
+          "name": "ULAPrefix",
+          "option": "ula_prefix",
+          "widget": "cidr",
+          "group": "ipv6",
+          "labelKey": "Globals.ULAPrefix"
+        }
+      ]
+    },
+    {
+      "kind": "network/interface",
+      "package": "network",
+      "section": "interface",
+      "goType": "Interface",
+      "fields": [
+        {
+          "name": "Name",
+          "option": "",
+          "widget": "section-name",
+          "labelKey": "Interface.Name"
+        },
+        {
+          "name": "Device",
+          "option": "device",
+          "widget": "ref",
+          "group": "general",
+          "ref": "device",
+          "labelKey": "Interface.Device"
+        },
+        {
+          "name": "Proto",
+          "option": "proto",
+          "widget": "union",
+          "group": "general",
+          "labelKey": "Interface.Proto",
+          "union": {
+            "discriminator": "proto",
+            "variants": [
+              {
+                "tag": "dhcp",
+                "goType": "DHCPProto",
+                "fields": [
+                  {
+                    "name": "IPv4",
+                    "option": "ipv4",
+                    "widget": "toggle",
+                    "labelKey": "DHCPProto.IPv4"
+                  },
+                  {
+                    "name": "IPv6",
+                    "option": "ipv6",
+                    "widget": "toggle",
+                    "labelKey": "DHCPProto.IPv6"
+                  },
+                  {
+                    "name": "Hostname",
+                    "option": "hostname",
+                    "widget": "text",
+                    "labelKey": "DHCPProto.Hostname"
+                  }
+                ]
+              },
+              {
+                "tag": "none",
+                "goType": "NoneProto",
+                "fields": null
+              },
+              {
+                "tag": "pppoe",
+                "goType": "PPPoEProto",
+                "fields": [
+                  {
+                    "name": "Username",
+                    "option": "username",
+                    "widget": "text",
+                    "labelKey": "PPPoEProto.Username"
+                  },
+                  {
+                    "name": "Password",
+                    "option": "password",
+                    "widget": "password",
+                    "labelKey": "PPPoEProto.Password"
+                  }
+                ]
+              },
+              {
+                "tag": "static",
+                "goType": "StaticProto",
+                "fields": [
+                  {
+                    "name": "IPAddr",
+                    "option": "ipaddr",
+                    "widget": "cidr",
+                    "group": "addressing",
+                    "labelKey": "StaticProto.IPAddr"
+                  },
+                  {
+                    "name": "Gateway",
+                    "option": "gateway",
+                    "widget": "ip",
+                    "group": "addressing",
+                    "labelKey": "StaticProto.Gateway"
+                  },
+                  {
+                    "name": "IP6Addr",
+                    "option": "ip6addr",
+                    "widget": "cidr",
+                    "group": "addressing",
+                    "labelKey": "StaticProto.IP6Addr"
+                  },
+                  {
+                    "name": "IP6Gw",
+                    "option": "ip6gw",
+                    "widget": "ip",
+                    "group": "addressing",
+                    "labelKey": "StaticProto.IP6Gw"
+                  },
+                  {
+                    "name": "DNS",
+                    "option": "dns",
+                    "widget": "list-ip",
+                    "group": "addressing",
+                    "list": true,
+                    "labelKey": "StaticProto.DNS"
+                  }
+                ]
+              },
+              {
+                "tag": "wireguard",
+                "goType": "WireGuardProto",
+                "fields": [
+                  {
+                    "name": "PrivateKey",
+                    "option": "private_key",
+                    "widget": "password",
+                    "labelKey": "WireGuardProto.PrivateKey"
+                  },
+                  {
+                    "name": "ListenPort",
+                    "option": "listen_port",
+                    "widget": "number",
+                    "labelKey": "WireGuardProto.ListenPort"
+                  },
+                  {
+                    "name": "Addresses",
+                    "option": "addresses",
+                    "widget": "list-cidr",
+                    "list": true,
+                    "labelKey": "WireGuardProto.Addresses"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "network/device",
+      "package": "network",
+      "section": "device",
+      "goType": "Device",
+      "fields": [
+        {
+          "name": "Name",
+          "option": "name",
+          "widget": "text",
+          "labelKey": "Device.Name"
+        },
+        {
+          "name": "Type",
+          "option": "type",
+          "widget": "text",
+          "labelKey": "Device.Type"
+        },
+        {
+          "name": "Ports",
+          "option": "ports",
+          "widget": "list-text",
+          "list": true,
+          "labelKey": "Device.Ports"
+        },
+        {
+          "name": "Ifname",
+          "option": "ifname",
+          "widget": "text",
+          "labelKey": "Device.Ifname"
+        },
+        {
+          "name": "VID",
+          "option": "vid",
+          "widget": "number",
+          "labelKey": "Device.VID"
+        },
+        {
+          "name": "MTU",
+          "option": "mtu",
+          "widget": "number",
+          "labelKey": "Device.MTU"
+        }
+      ]
+    },
+    {
+      "kind": "network/route",
+      "package": "network",
+      "section": "route",
+      "goType": "Route",
+      "fields": [
+        {
+          "name": "Interface",
+          "option": "interface",
+          "widget": "ref",
+          "ref": "interface",
+          "labelKey": "Route.Interface"
+        },
+        {
+          "name": "Target",
+          "option": "target",
+          "widget": "cidr",
+          "labelKey": "Route.Target"
+        },
+        {
+          "name": "Gateway",
+          "option": "gateway",
+          "widget": "ip",
+          "labelKey": "Route.Gateway"
+        },
+        {
+          "name": "Metric",
+          "option": "metric",
+          "widget": "number",
+          "labelKey": "Route.Metric"
+        },
+        {
+          "name": "Table",
+          "option": "table",
+          "widget": "text",
+          "labelKey": "Route.Table"
+        }
+      ]
+    },
+    {
+      "kind": "network/rule",
+      "package": "network",
+      "section": "rule",
+      "goType": "PolicyRule",
+      "fields": [
+        {
+          "name": "In",
+          "option": "in",
+          "widget": "ref",
+          "ref": "interface",
+          "labelKey": "PolicyRule.In"
+        },
+        {
+          "name": "Out",
+          "option": "out",
+          "widget": "ref",
+          "ref": "interface",
+          "labelKey": "PolicyRule.Out"
+        },
+        {
+          "name": "Src",
+          "option": "src",
+          "widget": "cidr",
+          "labelKey": "PolicyRule.Src"
+        },
+        {
+          "name": "Dest",
+          "option": "dest",
+          "widget": "cidr",
+          "labelKey": "PolicyRule.Dest"
+        },
+        {
+          "name": "Lookup",
+          "option": "lookup",
+          "widget": "text",
+          "labelKey": "PolicyRule.Lookup"
+        },
+        {
+          "name": "Priority",
+          "option": "priority",
+          "widget": "number",
+          "labelKey": "PolicyRule.Priority"
+        }
+      ]
+    },
+    {
+      "kind": "network/wireguard_peer",
+      "package": "network",
+      "section": "wireguard_peer",
+      "goType": "WGPeer",
+      "fields": [
+        {
+          "name": "Name",
+          "option": "",
+          "widget": "section-name",
+          "labelKey": "WGPeer.Name"
+        },
+        {
+          "name": "Interface",
+          "option": "interface",
+          "widget": "ref",
+          "ref": "interface",
+          "labelKey": "WGPeer.Interface"
+        },
+        {
+          "name": "PublicKey",
+          "option": "public_key",
+          "widget": "text",
+          "labelKey": "WGPeer.PublicKey"
+        },
+        {
+          "name": "PresharedKey",
+          "option": "preshared_key",
+          "widget": "password",
+          "labelKey": "WGPeer.PresharedKey"
+        },
+        {
+          "name": "AllowedIPs",
+          "option": "allowed_ips",
+          "widget": "list-cidr",
+          "list": true,
+          "labelKey": "WGPeer.AllowedIPs"
+        },
+        {
+          "name": "EndpointHost",
+          "option": "endpoint_host",
+          "widget": "text",
+          "labelKey": "WGPeer.EndpointHost"
+        },
+        {
+          "name": "EndpointPort",
+          "option": "endpoint_port",
+          "widget": "number",
+          "labelKey": "WGPeer.EndpointPort"
+        },
+        {
+          "name": "PersistentKeepalive",
+          "option": "persistent_keepalive",
+          "widget": "number",
+          "labelKey": "WGPeer.PersistentKeepalive"
+        },
+        {
+          "name": "RouteAllowedIPs",
+          "option": "route_allowed_ips",
+          "widget": "toggle",
+          "labelKey": "WGPeer.RouteAllowedIPs"
+        }
+      ]
+    },
+    {
+      "kind": "firewall/defaults",
+      "package": "firewall",
+      "section": "defaults",
+      "goType": "Defaults",
+      "fields": [
+        {
+          "name": "Input",
+          "option": "input",
+          "widget": "text",
+          "labelKey": "Defaults.Input"
+        },
+        {
+          "name": "Output",
+          "option": "output",
+          "widget": "text",
+          "labelKey": "Defaults.Output"
+        },
+        {
+          "name": "Forward",
+          "option": "forward",
+          "widget": "text",
+          "labelKey": "Defaults.Forward"
+        },
+        {
+          "name": "SynFlood",
+          "option": "syn_flood",
+          "widget": "toggle",
+          "labelKey": "Defaults.SynFlood"
+        }
+      ]
+    },
+    {
+      "kind": "firewall/zone",
+      "package": "firewall",
+      "section": "zone",
+      "goType": "Zone",
+      "fields": [
+        {
+          "name": "Name",
+          "option": "name",
+          "widget": "text",
+          "labelKey": "Zone.Name"
+        },
+        {
+          "name": "Networks",
+          "option": "network",
+          "widget": "ref",
+          "ref": "interface",
+          "list": true,
+          "labelKey": "Zone.Networks"
+        },
+        {
+          "name": "Input",
+          "option": "input",
+          "widget": "text",
+          "labelKey": "Zone.Input"
+        },
+        {
+          "name": "Output",
+          "option": "output",
+          "widget": "text",
+          "labelKey": "Zone.Output"
+        },
+        {
+          "name": "Forward",
+          "option": "forward",
+          "widget": "text",
+          "labelKey": "Zone.Forward"
+        },
+        {
+          "name": "Masq",
+          "option": "masq",
+          "widget": "toggle",
+          "labelKey": "Zone.Masq"
+        },
+        {
+          "name": "MTUFix",
+          "option": "mtu_fix",
+          "widget": "toggle",
+          "labelKey": "Zone.MTUFix"
+        }
+      ]
+    },
+    {
+      "kind": "firewall/forwarding",
+      "package": "firewall",
+      "section": "forwarding",
+      "goType": "Forwarding",
+      "fields": [
+        {
+          "name": "Src",
+          "option": "src",
+          "widget": "ref",
+          "ref": "zone",
+          "labelKey": "Forwarding.Src"
+        },
+        {
+          "name": "Dest",
+          "option": "dest",
+          "widget": "ref",
+          "ref": "zone",
+          "labelKey": "Forwarding.Dest"
+        }
+      ]
+    },
+    {
+      "kind": "firewall/redirect",
+      "package": "firewall",
+      "section": "redirect",
+      "goType": "Redirect",
+      "fields": [
+        {
+          "name": "Name",
+          "option": "name",
+          "widget": "text",
+          "labelKey": "Redirect.Name"
+        },
+        {
+          "name": "Src",
+          "option": "src",
+          "widget": "ref",
+          "ref": "zone",
+          "labelKey": "Redirect.Src"
+        },
+        {
+          "name": "SrcDPort",
+          "option": "src_dport",
+          "widget": "text",
+          "labelKey": "Redirect.SrcDPort"
+        },
+        {
+          "name": "Dest",
+          "option": "dest",
+          "widget": "ref",
+          "ref": "zone",
+          "labelKey": "Redirect.Dest"
+        },
+        {
+          "name": "DestIP",
+          "option": "dest_ip",
+          "widget": "ip",
+          "labelKey": "Redirect.DestIP"
+        },
+        {
+          "name": "DestPort",
+          "option": "dest_port",
+          "widget": "text",
+          "labelKey": "Redirect.DestPort"
+        },
+        {
+          "name": "Proto",
+          "option": "proto",
+          "widget": "text",
+          "labelKey": "Redirect.Proto"
+        },
+        {
+          "name": "Target",
+          "option": "target",
+          "widget": "text",
+          "labelKey": "Redirect.Target"
+        }
+      ]
+    },
+    {
+      "kind": "firewall/rule",
+      "package": "firewall",
+      "section": "rule",
+      "goType": "FirewallRule",
+      "fields": [
+        {
+          "name": "Name",
+          "option": "name",
+          "widget": "text",
+          "labelKey": "FirewallRule.Name"
+        },
+        {
+          "name": "Src",
+          "option": "src",
+          "widget": "ref",
+          "ref": "zone",
+          "labelKey": "FirewallRule.Src"
+        },
+        {
+          "name": "Dest",
+          "option": "dest",
+          "widget": "ref",
+          "ref": "zone",
+          "labelKey": "FirewallRule.Dest"
+        },
+        {
+          "name": "Proto",
+          "option": "proto",
+          "widget": "text",
+          "labelKey": "FirewallRule.Proto"
+        },
+        {
+          "name": "SrcPort",
+          "option": "src_port",
+          "widget": "text",
+          "labelKey": "FirewallRule.SrcPort"
+        },
+        {
+          "name": "DestPort",
+          "option": "dest_port",
+          "widget": "text",
+          "labelKey": "FirewallRule.DestPort"
+        },
+        {
+          "name": "Target",
+          "option": "target",
+          "widget": "text",
+          "labelKey": "FirewallRule.Target"
+        },
+        {
+          "name": "Family",
+          "option": "family",
+          "widget": "text",
+          "labelKey": "FirewallRule.Family"
+        }
+      ]
+    },
+    {
+      "kind": "firewall/nat",
+      "package": "firewall",
+      "section": "nat",
+      "goType": "NAT",
+      "fields": [
+        {
+          "name": "Name",
+          "option": "name",
+          "widget": "text",
+          "labelKey": "NAT.Name"
+        },
+        {
+          "name": "Src",
+          "option": "src",
+          "widget": "ref",
+          "ref": "zone",
+          "labelKey": "NAT.Src"
+        },
+        {
+          "name": "Target",
+          "option": "target",
+          "widget": "text",
+          "labelKey": "NAT.Target"
+        },
+        {
+          "name": "SNATIP",
+          "option": "snat_ip",
+          "widget": "ip",
+          "labelKey": "NAT.SNATIP"
+        }
+      ]
+    },
+    {
+      "kind": "firewall/ipset",
+      "package": "firewall",
+      "section": "ipset",
+      "goType": "IPSet",
+      "fields": [
+        {
+          "name": "Name",
+          "option": "name",
+          "widget": "text",
+          "labelKey": "IPSet.Name"
+        },
+        {
+          "name": "Match",
+          "option": "match",
+          "widget": "text",
+          "labelKey": "IPSet.Match"
+        },
+        {
+          "name": "Entry",
+          "option": "entry",
+          "widget": "list-text",
+          "list": true,
+          "labelKey": "IPSet.Entry"
+        }
+      ]
+    },
+    {
+      "kind": "dhcp/dnsmasq",
+      "package": "dhcp",
+      "section": "dnsmasq",
+      "goType": "Dnsmasq",
+      "fields": [
+        {
+          "name": "DomainNeeded",
+          "option": "domainneeded",
+          "widget": "toggle",
+          "labelKey": "Dnsmasq.DomainNeeded"
+        },
+        {
+          "name": "BogusPriv",
+          "option": "boguspriv",
+          "widget": "toggle",
+          "labelKey": "Dnsmasq.BogusPriv"
+        },
+        {
+          "name": "Local",
+          "option": "local",
+          "widget": "text",
+          "labelKey": "Dnsmasq.Local"
+        },
+        {
+          "name": "Domain",
+          "option": "domain",
+          "widget": "text",
+          "labelKey": "Dnsmasq.Domain"
+        },
+        {
+          "name": "ExpandHosts",
+          "option": "expandhosts",
+          "widget": "toggle",
+          "labelKey": "Dnsmasq.ExpandHosts"
+        },
+        {
+          "name": "Server",
+          "option": "server",
+          "widget": "list-text",
+          "list": true,
+          "labelKey": "Dnsmasq.Server"
+        }
+      ]
+    },
+    {
+      "kind": "dhcp/dhcp",
+      "package": "dhcp",
+      "section": "dhcp",
+      "goType": "DHCPPool",
+      "fields": [
+        {
+          "name": "Name",
+          "option": "",
+          "widget": "section-name",
+          "labelKey": "DHCPPool.Name"
+        },
+        {
+          "name": "Interface",
+          "option": "interface",
+          "widget": "ref",
+          "ref": "interface",
+          "labelKey": "DHCPPool.Interface"
+        },
+        {
+          "name": "Start",
+          "option": "start",
+          "widget": "number",
+          "labelKey": "DHCPPool.Start"
+        },
+        {
+          "name": "Limit",
+          "option": "limit",
+          "widget": "number",
+          "labelKey": "DHCPPool.Limit"
+        },
+        {
+          "name": "LeaseTime",
+          "option": "leasetime",
+          "widget": "text",
+          "labelKey": "DHCPPool.LeaseTime"
+        },
+        {
+          "name": "Ignore",
+          "option": "ignore",
+          "widget": "toggle",
+          "labelKey": "DHCPPool.Ignore"
+        },
+        {
+          "name": "RA",
+          "option": "ra",
+          "widget": "text",
+          "labelKey": "DHCPPool.RA"
+        },
+        {
+          "name": "DHCPv6",
+          "option": "dhcpv6",
+          "widget": "text",
+          "labelKey": "DHCPPool.DHCPv6"
+        }
+      ]
+    },
+    {
+      "kind": "dhcp/host",
+      "package": "dhcp",
+      "section": "host",
+      "goType": "Host",
+      "fields": [
+        {
+          "name": "Name",
+          "option": "name",
+          "widget": "text",
+          "labelKey": "Host.Name"
+        },
+        {
+          "name": "MAC",
+          "option": "mac",
+          "widget": "mac",
+          "labelKey": "Host.MAC"
+        },
+        {
+          "name": "IP",
+          "option": "ip",
+          "widget": "ip",
+          "labelKey": "Host.IP"
+        },
+        {
+          "name": "Hostname",
+          "option": "hostname",
+          "widget": "text",
+          "labelKey": "Host.Hostname"
+        },
+        {
+          "name": "LeaseTime",
+          "option": "leasetime",
+          "widget": "text",
+          "labelKey": "Host.LeaseTime"
+        }
+      ]
+    },
+    {
+      "kind": "dhcp/domain",
+      "package": "dhcp",
+      "section": "domain",
+      "goType": "Domain",
+      "fields": [
+        {
+          "name": "Name",
+          "option": "name",
+          "widget": "text",
+          "labelKey": "Domain.Name"
+        },
+        {
+          "name": "IP",
+          "option": "ip",
+          "widget": "ip",
+          "labelKey": "Domain.IP"
+        }
+      ]
+    },
+    {
+      "kind": "dhcp/cname",
+      "package": "dhcp",
+      "section": "cname",
+      "goType": "CNAME",
+      "fields": [
+        {
+          "name": "Alias",
+          "option": "cname",
+          "widget": "text",
+          "labelKey": "CNAME.Alias"
+        },
+        {
+          "name": "Target",
+          "option": "target",
+          "widget": "text",
+          "labelKey": "CNAME.Target"
+        }
+      ]
+    },
+    {
+      "kind": "wireless/wifi-device",
+      "package": "wireless",
+      "section": "wifi-device",
+      "goType": "WifiDevice",
+      "fields": [
+        {
+          "name": "Name",
+          "option": "",
+          "widget": "section-name",
+          "labelKey": "WifiDevice.Name"
+        },
+        {
+          "name": "Type",
+          "option": "type",
+          "widget": "text",
+          "labelKey": "WifiDevice.Type"
+        },
+        {
+          "name": "Band",
+          "option": "band",
+          "widget": "text",
+          "labelKey": "WifiDevice.Band"
+        },
+        {
+          "name": "Channel",
+          "option": "channel",
+          "widget": "text",
+          "labelKey": "WifiDevice.Channel"
+        },
+        {
+          "name": "HTMode",
+          "option": "htmode",
+          "widget": "text",
+          "labelKey": "WifiDevice.HTMode"
+        },
+        {
+          "name": "Country",
+          "option": "country",
+          "widget": "text",
+          "labelKey": "WifiDevice.Country"
+        },
+        {
+          "name": "Disabled",
+          "option": "disabled",
+          "widget": "toggle",
+          "labelKey": "WifiDevice.Disabled"
+        }
+      ]
+    },
+    {
+      "kind": "wireless/wifi-iface",
+      "package": "wireless",
+      "section": "wifi-iface",
+      "goType": "WifiIface",
+      "fields": [
+        {
+          "name": "Name",
+          "option": "",
+          "widget": "section-name",
+          "labelKey": "WifiIface.Name"
+        },
+        {
+          "name": "Device",
+          "option": "device",
+          "widget": "ref",
+          "ref": "radio",
+          "labelKey": "WifiIface.Device"
+        },
+        {
+          "name": "Mode",
+          "option": "mode",
+          "widget": "text",
+          "labelKey": "WifiIface.Mode"
+        },
+        {
+          "name": "SSID",
+          "option": "ssid",
+          "widget": "text",
+          "labelKey": "WifiIface.SSID"
+        },
+        {
+          "name": "Network",
+          "option": "network",
+          "widget": "ref",
+          "ref": "interface",
+          "labelKey": "WifiIface.Network"
+        },
+        {
+          "name": "Encryption",
+          "option": "encryption",
+          "widget": "union",
+          "labelKey": "WifiIface.Encryption",
+          "union": {
+            "discriminator": "encryption",
+            "variants": [
+              {
+                "tag": "none",
+                "goType": "EncNone",
+                "fields": null
+              },
+              {
+                "tag": "psk2",
+                "goType": "EncPSK2",
+                "fields": [
+                  {
+                    "name": "Key",
+                    "option": "key",
+                    "widget": "password",
+                    "labelKey": "EncPSK2.Key"
+                  }
+                ]
+              },
+              {
+                "tag": "sae",
+                "goType": "EncSAE",
+                "fields": [
+                  {
+                    "name": "Key",
+                    "option": "key",
+                    "widget": "password",
+                    "labelKey": "EncSAE.Key"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "Hidden",
+          "option": "hidden",
+          "widget": "toggle",
+          "labelKey": "WifiIface.Hidden"
+        },
+        {
+          "name": "Isolate",
+          "option": "isolate",
+          "widget": "toggle",
+          "labelKey": "WifiIface.Isolate"
+        }
+      ]
+    }
+  ]
+}

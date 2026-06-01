@@ -14,7 +14,7 @@ GOARCH  ?= amd64
 GOFLAGS := -trimpath -ldflags=-s\ -w -tags netgo,osusergo
 
 OUT     := out
-BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify
+BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -112,6 +112,9 @@ SERVICES_STAMP  := $(SERVICES_ASSETS)/.stamp
 PACKAGES_ASSETS := apps/packages/be/assets
 PACKAGES_STAMP  := $(PACKAGES_ASSETS)/.stamp
 
+NET_ASSETS      := apps/net/be/assets
+NET_STAMP       := $(NET_ASSETS)/.stamp
+
 VSCODE_ASSETS  := apps/vscode/be/assets
 VSCODE_STAMP   := $(VSCODE_ASSETS)/.stamp
 
@@ -191,6 +194,10 @@ web-services: web-deps
 web-packages: web-deps
 	@$(PNPM) --filter @wash/app-packages run build
 
+.PHONY: web-net
+web-net: web-deps
+	@$(PNPM) --filter @wash/app-net run build
+
 # embed-into-cmd helper. Usage: $(call embed,<src dist dir>,<dst assets dir>)
 #
 # Files land under cmd/<bin>/assets/ and are picked up by //go:embed
@@ -252,6 +259,9 @@ $(SERVICES_STAMP): web-services
 
 $(PACKAGES_STAMP): web-packages
 	$(call embed_dist,apps/packages/fe/dist,$(PACKAGES_ASSETS))
+
+$(NET_STAMP): web-net
+	$(call embed_dist,apps/net/fe/dist,$(NET_ASSETS))
 
 # ----- go stage -----
 
@@ -323,6 +333,12 @@ $(OUT)/wash-services: $(SERVICES_STAMP) | $(OUT)
 $(OUT)/wash-packages: $(PACKAGES_STAMP) | $(OUT)
 	$(call go_build,$@,apps/packages/be/cmd)
 
+# wash-net is the windowed network UI (docs/NET.md §2.11). It embeds the
+# apps/net/fe bundle and relays to the privileged wash-netd service. The
+# NET_STAMP dep stages the FE into apps/net/be/assets before the go build.
+$(OUT)/wash-net: $(NET_STAMP) | $(OUT)
+	$(call go_build,$@,apps/net/be/cmd)
+
 # wash-notify is a background service: no window, no FE bundle, no
 # embedded assets. Other apps' c.Notify() calls land here via the
 # router's fan-out (see relayNotify in internal/router/app_session.go).
@@ -334,6 +350,14 @@ $(OUT)/wash-packages: $(PACKAGES_STAMP) | $(OUT)
 .PHONY: $(OUT)/wash-notify
 $(OUT)/wash-notify: | $(OUT)
 	$(call go_build,$@,apps/notify/be/cmd)
+
+# wash-netd is the privileged networking background service (docs/NET.md
+# §2.11): no window, no FE bundle, reserved id com.wash.netd. The windowed
+# com.wash.net app drives it cross-app. .PHONY for the same reason as
+# wash-notify (Go-only target, no source-stamp dep).
+.PHONY: $(OUT)/wash-netd
+$(OUT)/wash-netd: | $(OUT)
+	$(call go_build,$@,apps/netd/be/cmd)
 
 # wash-launch is a CLI, not an app. No FE bundle, no embedded assets.
 $(OUT)/wash-launch: | $(OUT)
@@ -423,7 +447,7 @@ test-app: $(OUT)/wash-priv-fakesudo
 # "pattern all:assets: no matching files found" — local dev
 # accidentally works because the standalone wash-router build
 # rule already chains through ROUTER_STAMP.
-MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP) $(VSCODE_STAMP) $(VSCODE_WB_STAMP)
+MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP) $(VSCODE_STAMP) $(VSCODE_WB_STAMP) $(NET_STAMP)
 
 # Adding wash_test_app to the tags pulls the test app's blank-import
 # in (which is otherwise excluded by cmd/wash/imports_test.go's
@@ -460,6 +484,45 @@ e2e: test-app
 	cd e2e && $(PNPM) install --silent
 	cd e2e && $(PNPM) exec playwright install chromium
 	cd e2e && $(PNPM) test
+
+# washvm-run: the host-side VM runner/proxy CLI (docs/NET.md §8.2) — boots a
+# microvm and fronts it with the chrome + wire tunnel. The wash-net e2e gate
+# and `make run-vm` spawn it.
+$(OUT)/washvm-run: | $(OUT)
+	$(call go_build,$@,cmd/washvm-run)
+
+# vm-image: the bootable Alpine microvm image baking the real wash desktop.
+# Depends on the multicall binary (the script bakes out/wash).
+.PHONY: vm-image
+vm-image: $(OUT)/wash
+	sh scripts/build-vm-image-alpine.sh
+
+# vm-chrome: the minimal host chrome the proxy serves (docs/NET.md §8.3) —
+# tabs for Console + Wash. The wash UI (shell.js + app bundles) comes over the
+# wire FROM the VM; only the vendored runtimes + this chrome are host-served, so
+# we assemble: shell's /vendor + icons + our index.html + chrome.js (NO
+# shell.js — it's fetched over the wire to prove the point).
+VM_CHROME := $(OUT)/vm-chrome
+.PHONY: vm-chrome
+vm-chrome: web-shell
+	rm -rf $(VM_CHROME) && mkdir -p $(VM_CHROME)
+	cp -R web/shell/dist/vendor $(VM_CHROME)/vendor
+	cp web/shell/dist/icons.svg web/shell/dist/wash-logo.svg $(VM_CHROME)/
+	cp wash-vm/chrome/index.html wash-vm/chrome/chrome.js $(VM_CHROME)/
+
+# e2e-vm: the wash-net B1 exit gate (docs/NET.md §8.3, §11) — Playwright drives
+# the VM-served wash UI through the proxy and round-trips a model edit to
+# in-guest com.wash.netd. Needs qemu + /dev/kvm; the spec self-skips otherwise.
+.PHONY: e2e-vm
+e2e-vm: vm-image vm-chrome $(OUT)/washvm-run
+	cd e2e && $(PNPM) install --ignore-workspace --silent
+	cd e2e && $(PNPM) exec playwright install chromium
+	cd e2e && $(PNPM) exec playwright test net-vm-gate
+
+# run-vm: boot the baked image and serve the wash UI for manual poking.
+.PHONY: run-vm
+run-vm: vm-image vm-chrome $(OUT)/washvm-run
+	$(OUT)/washvm-run --chrome $(VM_CHROME) --addr 127.0.0.1:8080
 
 # ----- meta -----
 

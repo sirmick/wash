@@ -1,0 +1,41 @@
+config globals 'globals'
+	option ula_prefix 'fdca:1234::/48'
+
+config interface 'loopback'
+	option device 'lo'
+	option proto 'static'
+	option ipaddr '127.0.0.1/8'
+
+config interface 'wan'
+	option device 'eth0'
+	option proto 'dhcp'
+
+config interface 'lan'
+	option device 'br-lan'
+	option proto 'static'
+	option ipaddr '192.168.1.1/24'
+	list dns '1.1.1.1'
+
+config interface 'vpn'
+	option proto 'wireguard'
+	option private_key 'PRIVKEY='
+	option listen_port '51820'
+	list addresses '10.9.0.1/24'
+
+config device
+	option name 'br-lan'
+	option type 'bridge'
+	list ports 'eth1'
+	list ports 'eth2'
+
+config route
+	option interface 'lan'
+	option target '10.10.0.0/16'
+	option gateway '192.168.1.254'
+	option metric '1'
+
+config wireguard_peer 'phone'
+	option interface 'vpn'
+	option public_key 'PEERPUB='
+	list allowed_ips '10.9.0.2/32'
+	option persistent_keepalive '25'

@@ -1,0 +1,20 @@
+config dnsmasq
+	option domainneeded '1'
+	option boguspriv '1'
+	option local '/lan/'
+	option domain 'lan'
+	option expandhosts '1'
+	list server '1.1.1.1'
+	list server '8.8.8.8'
+
+config dhcp 'lan'
+	option interface 'lan'
+	option start '100'
+	option limit '150'
+	option leasetime '12h'
+
+config host
+	option name 'nas'
+	option mac 'aa:bb:cc:dd:ee:ff'
+	option ip '192.168.1.10'
+	option hostname 'nas'

@@ -90,6 +90,27 @@ without cause.
 9. **Commit-confirm triggers on VERIFY-failure / confirm-timeout, not on a
    dropped management link.** More robust in production (a lost socket is a
    symptom, not the trigger) and fully testable over serial. See §7.
+10. **The VM serves everything; the proxy is a transparent tunnel** (decided
+    2026-05-30). The in-guest `wash-router` serves the FE *and* the wire, exactly
+    as a physical box would; the host contributes only a minimal chrome (kernel-
+    log / term / wash tabs, like the in-browser `wash-vm` demo). The browser
+    loads the wash UI *from the running VM*, not from a host bundle. See §8.3.
+11. **wash-net is two ordinary wash apps, not a bespoke daemon** (decided
+    2026-05-30, supersedes the SO_PEERCRED design). `washnetd` is a wash
+    **background singleton service** (`Surface: background`, `Instancing:
+    singleton`, reserved app id `com.wash.netd`), modeled exactly on
+    `com.wash.priv`/`notify`/`bulk`: it links the `washnet` library + an Applier,
+    receives requests by **cross-app `app_msg`** with a router-attested sender,
+    and publishes status/diff/commit-confirm state via `sdk.StateService`. The
+    windowed UI is a *separate* unprivileged app `com.wash.net` (it holds the FE
+    bundle; background services carry none). The app-BE↔washnetd seam is wash's
+    own cross-app messaging — no unix socket, no custom framing. Privilege follows
+    the wash-priv pattern (reserved-id registry gate; root via launch-as-root or
+    escalation through `com.wash.priv` for kernel-touching applies). netd's
+    ambient status renders as a **sidebar panel** through the session-BE gateway
+    (like notify/bulk/priv); clicking it launches the `com.wash.net` window. The
+    commit-confirm countdown (§7) lives in that panel — the natural home for the
+    "you're about to be locked out" signal. See §3.
 
 ---
 
@@ -97,29 +118,36 @@ without cause.
 
 ```
 browser (wash shell, Solid)
-  └─ wash-net FE:  generated <ObjectForm> (Advanced)  +  bespoke screens
-        (Overview · Devices · Firewall matrix · Wireless · DHCP/DNS · VPN · Diagnostics)
-        +  <apply-terminal>  (xterm.js streaming the apply job)
-        ▲ typed model + UI descriptor (codegen)     ▼ validate / stage / apply (WS over :11000)
-┌──────────────────────────── host ────────────────────────────────────┐
-│  wash-router (Go, existing)  — treats wash-net BE as an ordinary app   │
-│  wash-net BE (Go, UNPRIVILEGED)  — app surface; proxies to washnetd     │
-│        │  unix socket (SO_PEERCRED)                                      │
-│  washnetd (Go, PRIVILEGED)  — links the washnet library                 │
+  ├─ com.wash.net FE (windowed):  generated <ObjectForm> (Advanced) + bespoke screens
+  │      (Overview · Devices · Firewall matrix · Wireless · DHCP/DNS · VPN · Diagnostics)
+  │      + <apply-terminal> (xterm.js streaming the apply job)
+  └─ sidebar net panel (rendered by the session FE): live status + commit-confirm
+         countdown; click → launch the com.wash.net window
+        ▲ app_msg (FE↔BE)        ▼ validate / stage / apply
+┌──────────────────────────── host (wash-router supervises both apps) ───────┐
+│  com.wash.net  BE (Go, UNPRIVILEGED, Surface=window)                        │
+│      — embeds the FE bundle; handles FE app_msg; forwards privileged ops    │
+│        to washnetd via cross-app app_msg (router attests From)              │
+│                          │  cross-app app_msg (SendAppMsgTo / HandleFrom)    │
+│  com.wash.netd (Go, PRIVILEGED, Surface=background, Instancing=singleton)    │
+│      — reserved-id service; StateService publishes status→sidebar gateway   │
 │     ├─ washnet/ (PURE) ....... model · codec · validate · recipe · txn · caps │
-│     └─ backends (IMPURE, pure-Go libs / child procs):                   │
-│         netlink · nftables · wireguard(wgctrl) · dnsmasq(child)          │
-│         hostapd(child) · wpa_supplicant|iwd · dbus→NM(godbus)            │
-│         uci(write+ubus) · networkd(render+reload)                       │
-└────────────────────────────────────────────────────────────────────────┘
+│     └─ backends (IMPURE, pure-Go libs / child procs):                       │
+│         netlink · nftables · wireguard(wgctrl) · dnsmasq(child)             │
+│         hostapd(child) · wpa_supplicant|iwd · dbus→NM(godbus)               │
+│         uci(write+ubus) · networkd(render+reload)                           │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 In **test/VM-target** topology the FE↔router transport swaps to `virtio-console`
-and a host-side proxy presents HTTP/WS (see §8). washnetd, the router, and the FE
-are otherwise identical to production.
+and a host-side proxy presents HTTP/WS (see §8). Both apps, the router, and the
+FE are otherwise identical to production — the cross-app seam doesn't change.
 
-**Privilege boundary.** Only `washnetd` is privileged. The app BE is unprivileged
-and proxies over a unix socket (`SO_PEERCRED`); the FE reaches the BE over :11000.
+**Privilege boundary.** Only `com.wash.netd` is privileged. `com.wash.net` (the
+windowed app holding the FE) is unprivileged and reaches netd only by cross-app
+`app_msg`, which the router stamps with an attested sender — so netd authorizes
+by `From.AppID == "com.wash.net"`, the same trust shape `com.wash.priv` uses. The
+reserved-id registry gate refuses any untrusted binary claiming `com.wash.netd`.
 
 ---
 
@@ -371,25 +399,38 @@ wash-vm/vm run --image wash-alpine.qcow2 --port 8080 -- -smp 2 -m 512
 - **Two layers of value:** *generic* (boot any image, browser console over serial)
   and *wash-aware* (also bridge the router WS + log planes when the guest is wash).
 
-### 8.3 The proxy (what crosses which plane)
+### 8.3 The proxy (the VM serves everything)
+
+**Decision (2026-05-30): the VM serves the whole app; the proxy is a transparent
+serial tunnel, not an asset server.** A real wash box serves its UI from the box;
+the faithful VM-target reproduces that — the in-guest `wash-router` serves the FE
+*and* the wire over its own HTTP/WS, and the proxy merely exposes that to a
+browser over the out-of-band serial link. The host contributes only a *minimal
+chrome* (a few KB of JS/HTML), exactly mirroring the existing in-browser
+`wash-vm` demo UI: tabs for **kernel log**, a **terminal**, and the **wash tab**
+(the real wash UI, loaded *from the VM*).
 
 ```
-  browser / Playwright
-     │  HTTP (assets, host-served)  +  WS (router wire)  +  /logs (apply terminal)
-     ▼
-  ┌─ proxy (embedded in wash-vm/vm) ────────────────────────────┐
-  │  • serves the wash-net FE bundle from host (instant, vite-like)│
-  │  • /ws   ⇄ guest DATA plane  (wash.data) ─┐                    │
-  │  • /logs ⇄ guest LOG  plane  (wash.log)  ─┤ virtio-serial      │
-  │  • /ctl  exec/observe/snapshot (wash.ctl)─┘ chardev unix sockets│
-  │  • owns qemu lifecycle (boot · reset · snapshot/restore via QMP)│
-  └──────────────────────────┬─────────────────────────────────────┘
-                          qemu microvm: washnetd + wash-router + wash-net
+  browser
+   ├─ minimal host chrome (served by proxy): tabs = [ kernel-log | term | wash ]
+   │     • kernel-log tab  ← LOG plane   (ttyS0 console)         stream
+   │     • term tab        ⇄ a guest shell on the CTL/term plane
+   │     └─ wash tab       ⇄ TUNNEL ───────────────────────────────┐
+   ▼                                                                │
+  ┌─ proxy (embedded in wash-vm/vm) ─────────────────────────────┐ │
+  │  • serves ONLY the minimal chrome bundle                      │ │
+  │  • transparent TCP/HTTP+WS tunnel over the DATA plane ────────┼─┘
+  │  • streams the LOG plane; exposes the CTL/term plane          │
+  │  • owns qemu lifecycle (boot · reset · snapshot/restore QMP)  │
+  └──────────────────────────┬────────────────────────────────────┘
+                  qemu microvm: wash-router (serves FE+wire) + washnetd + wash-net
 ```
 
-It is a frame transcoder: the existing `transport=virtio-console` codec guest-side,
-the wash-router WS protocol browser-side. FE assets are host-served — only the
-router *wire* and logs enter the guest.
+So the **wash tab's content — shell JS, wash-net UI, and the router wire — all
+come from the running VM**, byte-for-byte what a physical box serves on its LAN.
+The host JS/HTML is just the demo chrome. The proxy needs no FE knowledge and no
+`Static` bundle; it tunnels to the guest's HTTP/WS server (TCP-over-serial) and
+mirrors `wash-vm`'s in-browser `VirtioConsoleSocket` framing on the wire.
 
 ### 8.4 Image pipeline
 
@@ -535,26 +576,56 @@ externally tested by `wash-vm/vm`); C/D are sketched.
 
 ### Phase B — Alpine microvm + NM, the shippable type-2 target
 
-- **B0 — `wash-vm/vm` harness + base Alpine image.** `scripts/build-vm-image-
-  alpine.sh` (base, no wash yet); `vm.Launch` + named-serial wiring + embedded
-  proxy serving a static page + `Ctl.Exec` over the ctl plane; CLI `run`.
-  *Test:* boot base Alpine, proxy serves, `Ctl.Exec("uname -a")` returns over
-  serial. *Commit gate:* harness boots a real VM and talks to it out-of-band.
-- **B1 — wash in the VM, FE over the proxy.** Bake wash (washnetd stub + router +
-  FE) into the image; OpenRC service; 9p dev-share mode. Proxy bridges the router
-  WS (data plane) so the **FE loads via the proxy and reaches the in-guest router**.
-  *Test:* external Playwright loads the FE through the proxy and round-trips a
-  model edit to washnetd. *Commit gate:* the external-test path works end-to-end.
-- **B2 — transaction + commit-confirm.** `txn/` stage/diff/plan; VERIFY +
-  autonomous auto-revert; wire to a fake Applier in washnetd.
-  *Test:* fake-Applier commit-confirm (VERIFY-fail→revert; confirm→persist;
-  timeout→revert) — unit (§9.7) **and** one in-VM run over serial.
-  *Commit gate:* both green.
-- **B3 — apply terminal.** washnetd streamed job (phase events + raw logs) over
-  the log plane; FE `<apply-terminal>` (xterm + progress rail + countdown);
-  reconnect-safe replay. *Test:* external e2e — Apply shows PLAN→…→COMMITTED in
-  the xterm, countdown renders; BE job-phase sequence asserted over the log plane.
-  *Commit gate:* external apply-terminal e2e green.
+- **B0 — `wash-vm/vm` harness + base Alpine image.** ✅ DONE (commits 3c6f9a4,
+  75f47cd). `scripts/build-vm-image-alpine.sh` (Alpine-minirootfs initramfs +
+  static guest agent); `vm.Launch` (q35+kvm, log/ctl/data serial planes),
+  `Ctl.Exec` over the ctl plane, and a proxy that serves a host dir + bridges a
+  browser WS ⟷ the guest data plane (internal/wire). Verified: Alpine boots
+  ~1.1s, `uname=Linux`, and a wash frame round-trips browser→WS→proxy→serial→
+  guest→back (-race clean). *Guest data plane currently echoes frames.*
+- **B1 — the two wash apps + the VM serves everything** (§2.11, §3, §8.3). ✅ DONE
+  (commits e06d9ae JSON codec, 5189423 B1a, 6e110b2 B1b+c, 3a5a2cb B1d, 66ec873
+  B1e-1, e8e9ed6 B1e-2). Built as sub-rungs, each green on host message-injection
+  tests (`wiretest.NewPipePair` + the `busTestConn` pattern) — no VM until the gate:
+  - **B1a — `com.wash.netd`** (`apps/netd/be`): reserved-id background singleton
+    service; links `internal/washnet`; `HandleFrom` `validate`/`stage`/`diff`/
+    `apply` against the **fake Applier**; `sdk.StateService` for status/diff/job.
+  - **B1b — `com.wash.net`** (`apps/net/be`): unprivileged windowed app; embeds
+    the FE bundle; FE `app_msg` handlers proxy privileged ops to netd cross-app.
+  - **B1c — wire `apps/net/fe`**: `defineWashApp('wash-app-net', …)` + request/
+    reply `window.wash.sendAppMsg`; map returned diagnostics onto `<ObjectForm>`
+    (server-authoritative validation, §6). Replaces the A6 console-logging stub.
+  - **B1d — sidebar panel**: session-BE gateway `net_subscribe`/`unsubscribe` →
+    `com.wash.netd`; `serviceFEKind("com.wash.netd")="net.state"`; session FE
+    sidebar widget (status + click→launch `com.wash.net`).
+  - **B1e — bake into the image + minimal chrome**: add `wash-router` (both apps
+    registered) + run `--transport=virtio-console`; trim the host chrome to reuse
+    `shell-bootstrap` against the proxy WS. The proxy WS bridge is already a
+    transparent wire tunnel (frames over serial); the FE is served from the VM
+    over the wire's own `asset.read` channel, exactly as the in-browser demo does.
+  *Commit gate (B1e):* the wash UI served **by the VM** loads through the proxy
+  and round-trips a model edit to in-guest netd; kernel-log tab streams the
+  console; term tab gives a guest shell.
+- **B2 — transaction + commit-confirm.** ✅ DONE (171d312; the `txn/` engine +
+  VERIFY/auto-revert landed earlier as the pure half). netd arms an autonomous
+  auto-revert timer on apply→await-confirm and disarms on explicit confirm/revert;
+  `ConfirmTimeout` (90s default, `WASH_NETD_CONFIRM_TIMEOUT` override). *Tests:*
+  netd message-injection — VERIFY-fail→revert (B1a), confirm→persist (B1a),
+  timeout→autonomous-revert (B2), -race clean; **and** the in-VM gate exercises
+  both branches (Apply→Keep→committed, Apply→Discard→reverted). The §10 lock-out
+  *truth* test (a real WAN-breaking apply that fails connectivity VERIFY) waits
+  on the real NM backend (B4); with the fake Applier the mechanism is unit-proven.
+- **B3 — apply terminal.** ✅ DONE (4a79cc8). netd publishes the txn phase-event
+  stream + the commit-confirm window in its StateService pushes; the com.wash.net
+  BE subscribes to netd and relays state to the FE (so the window sees autonomous
+  transitions). FE `ApplyTerminal`: progress rail (PLAN·RENDER·APPLY·VERIFY·CONFIRM)
+  + phase-event log + a live countdown to the auto-revert with Keep/Discard.
+  *Gate:* the in-VM e2e asserts the phase log (verify), the countdown, then
+  Keep→committed and Discard→reverted, through the real stack. *Note:* raw backend
+  log bytes (nft/networkctl) stream into the log pane with the real backend (B4);
+  the fake Applier emits only phase events, so an xterm raw-byte pane isn't wired
+  yet (a structured event log stands in). Reconnect-replay rides the StateService
+  snapshot (last state re-sent on subscribe), not a per-byte job buffer.
 - **B4 — NM backend.** `nm` backend (`godbus`→NetworkManager) for NM-covered
   kinds (Interface/wifi-client/VPN); capability gating wired so non-NM kinds emit
   diagnostics / grey out. *Test:* in the Alpine VM (NM running), apply an

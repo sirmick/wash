@@ -21,6 +21,7 @@ import { NotifyWidget, type NotifyEntry } from './sidebar/NotifyWidget';
 import { BulkWidget, type BulkJob } from './sidebar/BulkWidget';
 import { BulkConflictOverlay, type BulkConflict } from './sidebar/BulkConflictOverlay';
 import { PrivWidget, type PrivReq } from './sidebar/PrivWidget';
+import { NetWidget, type NetState, type NetIface } from './sidebar/NetWidget';
 import { PrivUnlockOverlay, type PrivUnlockState } from './sidebar/PrivUnlockOverlay';
 
 interface CatalogApp {
@@ -203,6 +204,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     notify: 'collapsed',
     bulk: 'collapsed',
     priv: 'collapsed',
+    net: 'collapsed',
   });
   // Host stats (CPU% / mem%) — pushed by the session BE every 5s as
   // a `host.stats` app_msg. Null until the first tick lands.
@@ -221,6 +223,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [privLocked, setPrivLocked] = createSignal<boolean>(true);
   const [privUnlock, setPrivUnlock] = createSignal<PrivUnlockState | null>(null);
   const [privUnlockErr, setPrivUnlockErr] = createSignal<string>('');
+  // Net — com.wash.netd status snapshot (status/phase/summary/diagnostics),
+  // fed by the session BE's net.state forwarder. Null until first push.
+  const [netState, setNetState] = createSignal<NetState | null>(null);
+  // Live interface IPs from the session BE's host-stats ticker (host.ifaces).
+  const [netIfaces, setNetIfaces] = createSignal<NetIface[]>([]);
   // persistSidebar is debounced so a flurry of toggles doesn't
   // hammer the BE's save_state path. Matches the wash-edit cadence.
   let persistTimer: number | null = null;
@@ -294,6 +301,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // matching the (now-removed) priv window's titlebar stripe and the
   // ROOT-flagged window treatment in window.tsx.
   const PRIV_ACCENT = '#e26060';
+  // netBadge — flag when netd wants attention: "!" while a change awaits
+  // confirmation (the lock-out window), the status verb on a terminal
+  // outcome, empty when idle/committed.
+  const netBadge = (): string => {
+    const s = netState()?.status;
+    if (s === 'await-confirm') return '!';
+    if (s === 'failed' || s === 'reverted') return s;
+    return '';
+  };
+  const NET_ACCENT = '#6090e0';
   let screenshotTimer = 0;
   let currentObjectURL: string | null = null;
 
@@ -502,6 +519,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         case 'host.stats':
           setHostStats(data as unknown as AboutHostStats);
           return;
+        case 'host.ifaces':
+          setNetIfaces((data.interfaces as NetIface[] | undefined) ?? []);
+          return;
         case 'notify.state': {
           // notify service → session BE forwards StateService payload
           // verbatim under a service-specific kind so the FE doesn't
@@ -548,6 +568,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           setPrivLocked(!!next?.locked);
           if (fresh) {
             autoExpandSection('priv');
+          }
+          return;
+        }
+        case 'net.state': {
+          // com.wash.netd's StateService snapshot: {status, phase, summary,
+          // diagnostics}. Auto-expand on await-confirm — that's the
+          // commit-confirm "about to be locked out" moment the user must see.
+          const next = data.state as unknown as NetState;
+          const wasAwaiting = netState()?.status === 'await-confirm';
+          setNetState(next ?? null);
+          if (next?.status === 'await-confirm' && !wasAwaiting) {
+            autoExpandSection('net');
           }
           return;
         }
@@ -603,6 +635,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     window.wash.sendAppMsg(props.instance, { kind: 'notify_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'bulk_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'priv_subscribe' });
+    window.wash.sendAppMsg(props.instance, { kind: 'net_subscribe' });
     props.host.addEventListener('wash:msg', onMsg);
 
     // wash:state restores the persisted sidebar config on (re)mount.
@@ -684,6 +717,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         window.wash.sendAppMsg(props.instance, { kind: 'notify_unsubscribe' });
         window.wash.sendAppMsg(props.instance, { kind: 'bulk_unsubscribe' });
         window.wash.sendAppMsg(props.instance, { kind: 'priv_unsubscribe' });
+        window.wash.sendAppMsg(props.instance, { kind: 'net_unsubscribe' });
       } catch {
         /* ignore — connection may already be torn down */
       }
@@ -787,6 +821,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             }
             onLock={() => window.wash.sendAppMsg(props.instance, { kind: 'priv_lock' })}
           />
+        </Section>
+        <Section
+          id="net"
+          title="Network"
+          icon="globe"
+          accent={NET_ACCENT}
+          state={sectionStates().net ?? 'collapsed'}
+          onToggle={() => toggleSection('net')}
+          badge={netBadge()}
+        >
+          <NetWidget state={netState} ifaces={netIfaces} onConfigure={() => launchApp('com.wash.net')} />
         </Section>
       </Sidebar>
       <BulkConflictOverlay

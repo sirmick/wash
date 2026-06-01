@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>wash-vm</title>
+  <link rel="icon" type="image/svg+xml" href="/wash-logo.svg">
+  <!-- Shared runtime bundles, host-served from /vendor (mirrors web/shell/
+       index.html). The wash UI (shell.js + every app bundle) comes over the
+       wire FROM the VM; only these vendored runtimes + this chrome are
+       host-served, exactly like the in-browser wash-vm demo. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "solid-js": "/vendor/solid.js",
+      "solid-js/web": "/vendor/solid-web.js",
+      "solid-js/store": "/vendor/solid-store.js",
+      "@xterm/xterm": "/vendor/xterm.js",
+      "@xterm/addon-fit": "/vendor/xterm-fit.js",
+      "@wash/ui": "/vendor/wash-ui.js"
+    }
+  }
+  </script>
+  <style>
+    html, body { margin: 0; height: 100%; background: #111; color: #eee;
+                 font: 13px ui-sans-serif, system-ui, sans-serif; overflow: hidden; }
+    body { display: flex; flex-direction: column; }
+    /* Animations the shell + apps reference by name (copied from the shell's
+       own index.html so light-DOM-mounted apps can use them). */
+    @keyframes wash-fade-in { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes wash-pop-in { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+    @keyframes wash-slide-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+    #tabs { display: flex; align-items: center; gap: 2px; height: 30px; flex-shrink: 0;
+            background: #16171b; border-bottom: 1px solid #2a2d33; padding: 0 6px; }
+    #tabs .tab { background: transparent; color: #aaa; border: none; padding: 5px 12px;
+                 font: inherit; cursor: pointer; border-radius: 5px 5px 0 0; }
+    #tabs .tab.active { background: #23252b; color: #fff; }
+    #tabs .spec { margin-left: auto; color: #6a6d75; font-size: 11px; padding-right: 4px; }
+    #stage { flex: 1; position: relative; }
+    .pane { position: absolute; inset: 0; }
+    #pane-console { background: #000; color: #cfd0d4; margin: 0; padding: 8px;
+                    overflow: auto; white-space: pre-wrap; word-break: break-all;
+                    font: 11px ui-monospace, Menlo, Consolas, monospace; }
+    /* The shell mounts into #root; give it a positioned box to fill the pane. */
+    #root { position: absolute; inset: 0; }
+  </style>
+</head>
+<body>
+  <div id="tabs">
+    <button class="tab" id="tab-console" type="button">Console</button>
+    <button class="tab active" id="tab-wash" type="button">Wash</button>
+    <span class="spec" id="spec">booting…</span>
+  </div>
+  <div id="stage">
+    <pre class="pane" id="pane-console" style="display:none"></pre>
+    <div class="pane" id="pane-wash"><div id="root"></div></div>
+  </div>
+  <script type="module" src="/chrome.js"></script>
+</body>
+</html>

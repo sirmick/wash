@@ -1,0 +1,10 @@
+config interface 'lab'
+	option device 'eth0.10'
+	option proto 'static'
+	option ipaddr '10.10.10.1/24'
+
+config device
+	option name 'eth0.10'
+	option type '8021q'
+	option ifname 'eth0'
+	option vid '10'

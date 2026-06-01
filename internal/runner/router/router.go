@@ -462,11 +462,41 @@ func runShellOverStream(ctx context.Context, r *router.Router, scheme, path, rea
 			logf("ready signal to %s: %v", readyPath, err)
 		}
 	}
-	t := wire.NewStreamTransport(rwc)
-	if err := r.HandleShell(ctx, t); err != nil && !errors.Is(err, context.Canceled) {
-		return err
+	// The serial is one byte-stream shared across every browser for the VM's
+	// whole life — it has no per-browser connection lifecycle of its own. The
+	// splitter re-manufactures one: the host proxy delimits each browser with
+	// SessionOpen/SessionClose frames, and the splitter turns each span into a
+	// fresh virtual connection. We then call HandleShell once per browser,
+	// exactly as a TCP/WS listener would — the router core stays oblivious to
+	// the transport. The persistent apps (session desktop, background
+	// services) are spawned by HandleShell on the first session and survive
+	// across viewers (HandleShell's Ensure*Running calls are idempotent and
+	// never tear apps down on disconnect), so a reconnecting browser just
+	// reattaches. The port stays open for the splitter's life, so the host
+	// side is never orphaned.
+	raw := wire.NewStreamTransport(rwc)
+	split := newSessionSplitter(raw, logf)
+	go split.run()
+
+	for {
+		v := split.nextSession(ctx)
+		if v == nil {
+			// Serial gone or ctx cancelled — the router process exits and the
+			// guest init respawn loop catches a genuine crash.
+			if err := split.doneErr; err != nil &&
+				!errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
+				return err
+			}
+			return nil
+		}
+		logf("viewer session: open")
+		if err := r.HandleShell(ctx, v); err != nil &&
+			!errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
+			logf("viewer session ended: %v", err)
+		} else {
+			logf("viewer session: closed")
+		}
 	}
-	return nil
 }
 
 // rawFD performs blocking I/O directly via syscall.Read/Write on a raw

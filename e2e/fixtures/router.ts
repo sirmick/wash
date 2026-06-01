@@ -37,6 +37,8 @@ const NOTIFY_BIN = join(REPO_ROOT, 'out', 'wash-notify');
 const VSCODE_BIN = join(REPO_ROOT, 'out', 'wash-vscode');
 const VSCODE_WB_BIN = join(REPO_ROOT, 'out', 'wash-vscode-workbench');
 const DISPLAY_BIN = join(REPO_ROOT, 'out', 'wash-display');
+const NET_BIN = join(REPO_ROOT, 'out', 'wash-net');
+const NETD_BIN = join(REPO_ROOT, 'out', 'wash-netd');
 const FAKESUDO_BIN = join(REPO_ROOT, 'out', 'wash-priv-fakesudo');
 export const SUDO_BIN = join(REPO_ROOT, 'out', 'wash-sudo');
 
@@ -86,7 +88,7 @@ export interface RouterOptions {
   /** kiosk mode: --no-session + --initial-app=<appID>. */
   kiosk?: string;
   /** include these binaries in the apps dir; defaults to all five. */
-  apps?: ('session' | 'about' | 'test' | 'term' | 'fm' | 'bulk' | 'priv' | 'journal' | 'settings' | 'top' | 'syslogs' | 'services' | 'packages' | 'edit' | 'vscode' | 'display')[];
+  apps?: ('session' | 'about' | 'test' | 'term' | 'fm' | 'bulk' | 'priv' | 'journal' | 'settings' | 'top' | 'syslogs' | 'services' | 'packages' | 'edit' | 'vscode' | 'display' | 'net' | 'netd')[];
   /** include manifest.hidden apps in the catalog. */
   showHidden?: boolean;
   /** extra wash-router args. */
@@ -262,6 +264,24 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
     }
     bins.push(NOTIFY_BIN);
   }
+  // The Network window app + its privileged backing service. netd is a
+  // background singleton (Surface=background), auto-spawned by the router once
+  // its binary is in the apps dir — net relays validate/apply to it cross-app.
+  // netd defaults to the FAKE applier (real NM only when WASH_NETD_BACKEND=nm),
+  // so this whole stack runs deterministically on the host — no VM. The in-VM
+  // real-NM capstone is net-vm-gate.spec.ts.
+  if (wanted.includes('net')) {
+    if (!existsSync(NET_BIN)) {
+      throw new Error(`missing wash-net: ${NET_BIN}`);
+    }
+    bins.push(NET_BIN);
+  }
+  if (wanted.includes('netd')) {
+    if (!existsSync(NETD_BIN)) {
+      throw new Error(`missing wash-netd: ${NETD_BIN}`);
+    }
+    bins.push(NETD_BIN);
+  }
   if (wanted.includes('vscode')) {
     // The manager window (owns code-server) + the hidden workbench window.
     for (const b of [VSCODE_BIN, VSCODE_WB_BIN]) {
@@ -276,7 +296,9 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   // refuses from a non-root-owned binary by default. The e2e dir is
   // owned by the test runner; opt it into the trusted list so the
   // priv binary registers correctly.
-  const trustForPriv = wanted.includes('priv') ? appsDir : '';
+  // netd (com.wash.netd) claims a reserved id too, so it needs the same trust.
+  const needsTrust = wanted.includes('priv') || wanted.includes('netd');
+  const trustForPriv = needsTrust ? appsDir : '';
 
   const port = await freePort();
   // Each test gets its own control-socket path so concurrent test

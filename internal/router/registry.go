@@ -38,6 +38,11 @@ func readIndexJS(fsys fs.FS) ([]byte, error) {
 // reason at the call site that depends on the guarantee.
 var reservedIDs = map[string]bool{
 	"com.wash.priv": true,
+	// com.wash.netd is the privileged networking service (docs/NET.md §2.11,
+	// §3). It authorizes mutating requests by router-attested sender; a
+	// user-writable shadow could claim the id and forge that trust. Reserved
+	// for the same reason as com.wash.priv.
+	"com.wash.netd": true,
 }
 
 // Entry is one row of the catalog.

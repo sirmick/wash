@@ -53,6 +53,7 @@ func runHostStatsLoop(c *sdk.Conn) {
 		// (cgroups during a container restart, etc.). The next tick
 		// will retry.
 	}
+	pushNetIfaces(c) // interface IPs need no baseline — ship the first set now
 	t := time.NewTicker(HostStatsInterval)
 	defer t.Stop()
 	for {
@@ -60,6 +61,7 @@ func runHostStatsLoop(c *sdk.Conn) {
 		case <-c.Done():
 			return
 		case <-t.C:
+			pushNetIfaces(c) // companion push: live interface IPs for the net panel
 			curr, _, err := proc.ReadStat()
 			if err != nil {
 				log.Printf("wash-session host.stats: /proc/stat: %v", err)

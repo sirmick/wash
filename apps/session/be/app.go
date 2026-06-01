@@ -110,6 +110,7 @@ func onReady(c *sdk.Conn, _ string, _ uint32) {
 	registerNotifyGateway(bus)
 	registerBulkGateway(bus)
 	registerPrivGateway(bus)
+	registerNetGateway(bus)
 	// state forwarder: notify, bulk, and priv all push
 	// {kind:"state", state:...} cross-app. Branch on the sender's
 	// AppID to re-brand for the FE under a service-specific kind.
@@ -161,6 +162,7 @@ const (
 	NotifyAppID = "com.wash.notify"
 	BulkAppID   = "com.wash.bulk"
 	PrivAppID   = "com.wash.priv"
+	NetdAppID   = "com.wash.netd"
 )
 
 // serviceFEKind maps a service app id to the FE-side kind we
@@ -174,8 +176,24 @@ func serviceFEKind(appID string) string {
 		return "bulk.state"
 	case PrivAppID:
 		return "priv.state"
+	case NetdAppID:
+		return "net.state"
 	}
 	return ""
+}
+
+// registerNetGateway forwards the sidebar's subscribe/unsubscribe to the
+// com.wash.netd networking service (docs/NET.md §2.11, B1d). netd's status
+// pushes return as {kind:"state"} and are re-branded to "net.state" by the
+// shared state forwarder (serviceFEKind). The sidebar widget's "configure"
+// click launches com.wash.net via the existing launcher path, not here.
+func registerNetGateway(bus *sdk.Bus) {
+	sdk.HandleVoid(bus, "net_subscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
+		return conn.SendAppMsgTo(wire.Recipient{AppID: NetdAppID}, map[string]any{"kind": "subscribe"})
+	})
+	sdk.HandleVoid(bus, "net_unsubscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
+		return conn.SendAppMsgTo(wire.Recipient{AppID: NetdAppID}, map[string]any{"kind": "unsubscribe"})
+	})
 }
 
 func registerNotifyGateway(bus *sdk.Bus) {

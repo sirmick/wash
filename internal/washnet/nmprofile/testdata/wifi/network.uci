@@ -1,0 +1,2 @@
+config interface 'wwan'
+	option proto 'dhcp'

@@ -1,0 +1,3 @@
+config interface 'eth-dhcp'
+	option device 'eth0'
+	option proto 'dhcp'
