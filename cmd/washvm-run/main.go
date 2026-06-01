@@ -34,19 +34,21 @@ func main() {
 	bootTimeout := flag.Duration("boot-timeout", 30*time.Second, "guest readiness timeout")
 	flag.Parse()
 
-	if err := run(*kernel, *initramfs, *chrome, *addr, *mem, *bootTimeout); err != nil {
+	// Everything after `--` is raw qemu, appended after wash's defaults
+	// (docs/NET.md §8.2) — e.g. `washvm-run --addr :13000 -- -smp 2 -m 2048`.
+	if err := run(*kernel, *initramfs, *chrome, *addr, *mem, *bootTimeout, flag.Args()); err != nil {
 		fmt.Fprintln(os.Stderr, "washvm-run:", err)
 		os.Exit(1)
 	}
 }
 
-func run(kernel, initramfs, chrome, addr, mem string, bootTimeout time.Duration) error {
+func run(kernel, initramfs, chrome, addr, mem string, bootTimeout time.Duration, qemuExtra []string) error {
 	// Boot + readiness get their own bounded context; the proxy then runs until
 	// a signal so a deadline here wouldn't tear the VM down mid-session.
 	bootCtx, cancelBoot := context.WithTimeout(context.Background(), bootTimeout)
 	defer cancelBoot()
 
-	machine, err := vm.Launch(bootCtx, vm.Opts{Kernel: kernel, Initramfs: initramfs, Mem: mem})
+	machine, err := vm.Launch(bootCtx, vm.Opts{Kernel: kernel, Initramfs: initramfs, Mem: mem, Extra: qemuExtra})
 	if err != nil {
 		return fmt.Errorf("launch: %w", err)
 	}

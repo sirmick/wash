@@ -29,6 +29,10 @@ type Opts struct {
 	CPU        string // default "host"
 	KernelArgs string // default "console=ttyS0 panic=-1"
 	QEMU       string // default "qemu-system-x86_64"
+	// Extra is appended verbatim to the qemu argv after wash's defaults, so a
+	// caller (washvm-run's `-- …` passthrough, docs/NET.md §8.2) can add or
+	// override devices/flags — e.g. `-smp 2` `-m 2048` `-cpu max`.
+	Extra []string
 }
 
 func (o *Opts) defaults() {
@@ -117,6 +121,8 @@ func Launch(ctx context.Context, o Opts) (*VM, error) {
 			"-device", fmt.Sprintf("virtio-net-pci,netdev=net%d,id=nic%d", n, n),
 		)
 	}
+	// Caller passthrough (washvm-run `-- …`): appended last so it overrides/adds.
+	args = append(args, o.Extra...)
 	// qemu's lifetime is the VM's lifetime — until Close() — NOT the caller's
 	// boot context. The passed ctx bounds the dial/handshake below (which is
 	// what a "boot timeout" should cap); binding qemu itself to it would

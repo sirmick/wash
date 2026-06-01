@@ -453,6 +453,11 @@ MULTICALL_TAGS := $(MULTICALL_TAGS),wash_test_app
 MULTICALL_STAMPS += $(TEST_STAMP)
 endif
 
+# .PHONY: the stamps key only on FE assets, so a Go-source change (router,
+# vmlogin, any app BE) would otherwise leave out/wash — and thus the baked VM
+# image — stale (the FE-less-Go gotcha). Always re-link; Go's cache keeps it
+# cheap when nothing changed.
+.PHONY: $(OUT)/wash
 $(OUT)/wash: $(MULTICALL_STAMPS) | $(OUT)
 	$(GO_ENV) go build -trimpath -ldflags="-s -w" \
 	  -tags=$(MULTICALL_TAGS) \
@@ -482,6 +487,10 @@ e2e: test-app
 # washvm-run: the host-side VM runner/proxy CLI (docs/NET.md §8.2) — boots a
 # microvm and fronts it with the chrome + wire tunnel. The wash-net e2e gate
 # and `make run-vm` spawn it.
+# .PHONY: it has no FE-asset stamp to key on, so without this make would never
+# rebuild it on a Go-source change (the FE-less-Go-service gotcha). Go's build
+# cache makes the unconditional re-link cheap.
+.PHONY: $(OUT)/washvm-run
 $(OUT)/washvm-run: | $(OUT)
 	$(call go_build,$@,cmd/washvm-run)
 
