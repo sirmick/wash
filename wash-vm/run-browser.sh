@@ -20,6 +20,14 @@ export PORT
 # The host page imports the shell bundle from /shell/shell.js; build it first.
 pnpm -F @wash/shell build
 
+# wash-vm/web (@wash/demo) is a standalone package, not a pnpm workspace member,
+# so the root install doesn't cover its server deps (ws, vite). Install them
+# into wash-vm/web/node_modules on first run (fast once the store is warm).
+if [[ ! -d wash-vm/web/node_modules ]]; then
+  echo "run-browser.sh: installing wash-vm/web deps (ws, vite)…"
+  (cd wash-vm/web && pnpm install --ignore-workspace --prefer-offline)
+fi
+
 # The WASM VM needs the RISC-V kernel + firmware + rootfs under
 # wash-vm/web/public/tinyemu/ (built by `make -C wash-vm/image all`). Warn rather
 # than fail — the dev server still runs (e.g. for front-end-only iteration).
