@@ -162,6 +162,12 @@ export async function startLogin(opts: LoginOptions = {}): Promise<LoginHandle> 
     '--secret-generate',
     '--auth-test', `${user}:${password}`,
     '--auth-test-uid', String(uid),
+    // The username dropdown is populated from /etc/passwd, so it never
+    // contains the synthetic --auth-test user. Hide the list so the
+    // form renders a plain text <input name="user"> the tests can fill
+    // — the auth + SCM_RIGHTS handoff under test are independent of the
+    // user-picker UX.
+    '--user-list', 'hide',
     '--router-binary', join(appsDir, 'wash-router'),
     '--apps-dir', appsDir,
     '--run-root', runRoot,

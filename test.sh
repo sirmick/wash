@@ -10,6 +10,15 @@
 # Other flags:
 #   --no-unit              — skip go tests
 #   --no-e2e               — skip playwright suite
+#   --distro               — also run the distro-integration matrix
+#                            (apps/packages/be + apps/services/be under
+#                            -tags=distro_integration). Delegates to
+#                            packaging/run_matrix.sh, which builds a
+#                            Docker image per distro and runs the test
+#                            binaries inside. Requires Docker; slow.
+#                            Off by default.
+#   --only-distro          — run *only* the distro matrix (implies
+#                            --no-unit --no-e2e --no-build --distro).
 #   --filter <pattern>     — passed to `playwright test <pattern>`
 #                            (run only matching specs)
 #   --workers <N>          — playwright workers. Default: nproc/2.
@@ -33,6 +42,7 @@ mode=standalone
 do_unit=1
 do_e2e=1
 do_build=1
+do_distro=0
 filter=""
 # Playwright workers. The fixture allocates a unique port + tmpdir
 # per test, so >1 is safe in principle; default to half the CPU
@@ -47,6 +57,8 @@ while [[ $# -gt 0 ]]; do
     --no-unit)    do_unit=0; shift;;
     --no-e2e)     do_e2e=0; shift;;
     --no-build)   do_build=0; shift;;
+    --distro)     do_distro=1; shift;;
+    --only-distro) do_distro=1; do_unit=0; do_e2e=0; do_build=0; shift;;
     --filter)     filter="$2"; shift 2;;
     --workers)    e2e_workers="$2"; shift 2;;
     -h|--help)
@@ -145,6 +157,24 @@ run_e2e() {
   fi
 }
 
+run_distro() {
+  echo
+  echo "════ test.sh: distro-integration (docker matrix) ════"
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "test.sh: distro — docker not found; cannot run the matrix" >&2
+    return 1
+  fi
+  # packaging/run_matrix.sh precompiles the -tags=distro_integration
+  # test binaries (static, CGO off) and runs them inside each distro's
+  # Dockerfile test stage. It owns the full deb/rpm/apk/openwrt matrix.
+  if "$REPO/packaging/run_matrix.sh"; then
+    echo "test.sh: distro-integration PASS"
+  else
+    echo "test.sh: distro-integration FAIL" >&2
+    return 1
+  fi
+}
+
 # FE unit tests are layout-independent — run them once up front when
 # unit tests are enabled, before the per-mode go/e2e sequence.
 [[ "$do_unit" == "1" ]] && run_fe_unit node
@@ -166,5 +196,9 @@ case "$mode" in
     [[ "$do_e2e"  == "1" ]] && run_e2e multicall WASH_E2E_MULTICALL=1
     ;;
 esac
+
+# Distro-integration matrix (opt-in; Docker-based, owns its own
+# distro fan-out so it runs once regardless of standalone/multicall).
+[[ "$do_distro" == "1" ]] && run_distro
 
 echo "test.sh: all suites passed"
