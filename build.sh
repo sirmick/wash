@@ -91,7 +91,16 @@ fi
 case "$mode" in
   standalone)
     echo "build.sh: standalone (separate per-app binaries)"
-    make "${make_args[@]}" all
+    # wash-priv-fakesudo is a test-only sudo stub — not in TARGETS, so
+    # `make all` skips it. Build it alongside `all` when the test app is
+    # included so a clean checkout (e.g. CI) has everything the
+    # priv/services/packages e2e specs need, instead of silently relying
+    # on a stale binary in a dev's out/. Mirrors the multicall path.
+    standalone_targets=(all)
+    if [[ "$test_app" == "1" ]]; then
+      standalone_targets+=(out/wash-priv-fakesudo)
+    fi
+    make "${make_args[@]}" "${standalone_targets[@]}"
     ;;
   multicall)
     echo "build.sh: multicall (single wash binary + symlinks)"

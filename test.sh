@@ -109,8 +109,14 @@ run_fe_unit() {
   # 22+'s native TypeScript type-stripping — no tsx/vitest/build step,
   # matching the web/shell/*.test.ts precedent. Covers framework-free
   # logic under web/** and apps/**/fe/**; anything needing a real DOM
-  # stays in the Playwright e2e suite. Layout-independent (no build
-  # tags), so it runs once regardless of standalone/multicall mode.
+  # stays in the Playwright e2e (and the component tests; see
+  # run_component_unit). Layout-independent (no build tags), so it runs
+  # once regardless of standalone/multicall mode.
+  #
+  # --conditions=browser makes solid-js resolve its CLIENT (reactive)
+  # build instead of the default SSR one, so reactive-logic tests
+  # (createSignal/createMemo/createEffect — no DOM) run correctly here.
+  # It's a no-op for the framework-free tests, which import no solid.
   local files
   files=$(find "$REPO/web" "$REPO/apps" -path '*/node_modules' -prune -o \
     -name '*.test.ts' -not -path '*/dist/*' -print 2>/dev/null)
@@ -119,7 +125,7 @@ run_fe_unit() {
     return 0
   fi
   # shellcheck disable=SC2086
-  if node --test $files; then
+  if node --test --conditions=browser $files; then
     echo "test.sh: fe-unit ($label) PASS"
   else
     echo "test.sh: fe-unit ($label) FAIL" >&2
@@ -157,6 +163,23 @@ run_e2e() {
   fi
 }
 
+run_component_unit() {
+  local label="$1"
+  echo
+  echo "════ test.sh: component ($label) ════"
+  # Component tests (Tier B): vitest + vite-plugin-solid + jsdom mount real
+  # Solid components and assert DOM/events — the reactive wiring the
+  # node:test reactive-logic tier can't reach. Scoped to *.ctest.tsx by
+  # vitest.config.ts. Layout-independent, so it runs once like fe-unit.
+  # --passWithNoTests so an early checkout with no *.ctest.tsx isn't a fail.
+  if pnpm --dir "$REPO" exec vitest run --passWithNoTests; then
+    echo "test.sh: component ($label) PASS"
+  else
+    echo "test.sh: component ($label) FAIL" >&2
+    return 1
+  fi
+}
+
 run_distro() {
   echo
   echo "════ test.sh: distro-integration (docker matrix) ════"
@@ -175,9 +198,10 @@ run_distro() {
   fi
 }
 
-# FE unit tests are layout-independent — run them once up front when
-# unit tests are enabled, before the per-mode go/e2e sequence.
+# FE unit + component tests are layout-independent — run them once up
+# front when unit tests are enabled, before the per-mode go/e2e sequence.
 [[ "$do_unit" == "1" ]] && run_fe_unit node
+[[ "$do_unit" == "1" ]] && run_component_unit vitest
 
 # Run sequence per mode.
 case "$mode" in

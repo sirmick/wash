@@ -9,9 +9,16 @@
 // Needs the native compositor: out/wash-display (make WASH_DISPLAY=1) and
 // /usr/bin/xclock. Not part of the default `make e2e` (no compositor in
 // CI). Kept here as the reusable real-stack check.
-import { test, expect } from '../fixtures/router';
+import { test, expect, displaySkipReason } from '../fixtures/router';
+import { existsSync } from 'node:fs';
 
 test.use({ routerOpts: { apps: ['session', 'term', 'display'], showHidden: true } });
+
+// Opt-in capstone: needs the native compositor AND an X client.
+test.beforeEach(() => {
+  const reason = displaySkipReason() ?? (existsSync('/usr/bin/xclock') ? null : '/usr/bin/xclock not installed');
+  test.skip(reason !== null, reason ?? '');
+});
 
 test('type xclock in a terminal → X11 window appears', async ({ page, router }) => {
   test.setTimeout(60_000);

@@ -13,7 +13,7 @@
 // xdgConfig fixture points XDG_CONFIG_HOME at a per-test tmpdir, so the
 // developer's real desktop.json is never touched.
 
-import { test, expect } from '../fixtures/router';
+import { test, expect, displaySkipReason } from '../fixtures/router';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -214,6 +214,13 @@ test.describe('wash-settings — Display panel (wash-display compositor)', () =>
   });
   // Compositor boot (wlroots + Xwayland) is the slow part.
   test.setTimeout(60_000);
+  // Needs the native compositor binary; skip (not fail) on a dep-less
+  // checkout. The "compositor absent" describe below has no such guard —
+  // it tests the not-installed path and runs everywhere.
+  test.beforeEach(() => {
+    const reason = displaySkipReason();
+    test.skip(reason !== null, reason ?? '');
+  });
 
   test('populates running + wayland display + window count from the live compositor', async ({ page, router }) => {
     await page.goto(router.url);

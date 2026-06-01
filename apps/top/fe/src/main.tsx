@@ -12,7 +12,7 @@
 // aligned simple choice; BE-side history can be added later if
 // people miss the curve continuity.
 
-import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Index, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
 import { ConfirmDialog, defineWashApp, tokens } from '@wash/ui';
@@ -614,39 +614,46 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             <Show
               when={view() === 'flat'}
               fallback={
-                <For each={treeRows()}>
+                // <Index> (not <For>): each poll hands us a fresh procs
+                // array of fresh ProcInfo objects, so a reference-keyed
+                // <For> would tear down and rebuild every row's DOM ~every
+                // 2s. <Index> keeps the DOM per position and updates the
+                // row's props in place — the data the row shows genuinely
+                // changes each tick anyway. row() is the per-position
+                // accessor; the closures read it at event time.
+                <Index each={treeRows()}>
                   {(row) => (
                     <ProcRow
-                      proc={row.proc}
-                      depth={row.depth}
-                      hasKids={row.hasKids}
-                      collapsed={!!collapsed[row.proc.PID]}
-                      selected={selectedPID() === row.proc.PID}
-                      onSelect={() => selectPID(row.proc.PID)}
+                      proc={row().proc}
+                      depth={row().depth}
+                      hasKids={row().hasKids}
+                      collapsed={!!collapsed[row().proc.PID]}
+                      selected={selectedPID() === row().proc.PID}
+                      onSelect={() => selectPID(row().proc.PID)}
                       onToggle={() => {
-                        if (collapsed[row.proc.PID]) {
-                          setCollapsed(row.proc.PID, undefined as unknown as true);
+                        if (collapsed[row().proc.PID]) {
+                          setCollapsed(row().proc.PID, undefined as unknown as true);
                         } else {
-                          setCollapsed(row.proc.PID, true);
+                          setCollapsed(row().proc.PID, true);
                         }
                       }}
                     />
                   )}
-                </For>
+                </Index>
               }
             >
-              <For each={filteredFlat()}>
+              <Index each={filteredFlat()}>
                 {(p) => (
                   <ProcRow
-                    proc={p}
+                    proc={p()}
                     depth={0}
                     hasKids={false}
                     collapsed={false}
-                    selected={selectedPID() === p.PID}
-                    onSelect={() => selectPID(p.PID)}
+                    selected={selectedPID() === p().PID}
+                    onSelect={() => selectPID(p().PID)}
                   />
                 )}
-              </For>
+              </Index>
             </Show>
           </div>
           <Show when={showDetails()}>

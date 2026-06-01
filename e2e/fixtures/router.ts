@@ -7,7 +7,7 @@
 
 import { test as base, expect } from '@playwright/test';
 import { spawn, ChildProcess } from 'node:child_process';
-import { mkdtempSync, copyFileSync, existsSync, chmodSync, writeFileSync, mkdirSync, symlinkSync, rmSync } from 'node:fs';
+import { mkdtempSync, copyFileSync, existsSync, chmodSync, writeFileSync, mkdirSync, symlinkSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,6 +41,17 @@ const NET_BIN = join(REPO_ROOT, 'out', 'wash-net');
 const NETD_BIN = join(REPO_ROOT, 'out', 'wash-netd');
 const FAKESUDO_BIN = join(REPO_ROOT, 'out', 'wash-priv-fakesudo');
 export const SUDO_BIN = join(REPO_ROOT, 'out', 'wash-sudo');
+
+// wash-display is the native (C++/CMake/wlroots) compositor — not built by
+// build.sh and not present on a dep-less checkout or CI. Specs that need
+// the live compositor call this in a beforeEach and test.skip() on a
+// non-null reason, so they're an opt-in capstone (mirrors vmSkipReason).
+export function displaySkipReason(): string | null {
+  if (!existsSync(DISPLAY_BIN)) {
+    return `${DISPLAY_BIN} missing (cmake --build wash-display/build; needs libwlroots-dev)`;
+  }
+  return null;
+}
 
 export interface RouterHandle {
   url: string;
@@ -531,6 +542,42 @@ async function waitForRegex(read: () => string, re: RegExp, timeout: number): Pr
   }
 }
 
+// Kill any process whose argv still references this test's per-test apps
+// dir. Killing the router *should* take its children with it, but the
+// wash-display compositor (a background singleton, auto-spawned on shell
+// connect) survives — so display-spec runs otherwise leak a wash-display
+// per test, and a session's worth piles up until the live-compositor query
+// in settings.spec gets confused (the compositor flavor of
+// feedback_e2e_orphan_accumulation). Sweeping by argv catches it and any
+// other straggler under the dir. Best-effort; SIGKILL since we're already
+// tearing the router down.
+function killProcsUnder(dir: string): void {
+  let pids: string[];
+  try {
+    pids = readdirSync('/proc');
+  } catch {
+    return;
+  }
+  for (const pid of pids) {
+    if (!/^\d+$/.test(pid)) continue;
+    const n = parseInt(pid, 10);
+    if (n === process.pid) continue;
+    let argv = '';
+    try {
+      argv = readFileSync(`/proc/${pid}/cmdline`, 'utf8'); // NUL-separated; substring match is fine
+    } catch {
+      continue; // raced exit / not ours
+    }
+    if (argv.includes(dir)) {
+      try {
+        process.kill(n, 'SIGKILL');
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+}
+
 export async function stopRouter(h: RouterHandle): Promise<void> {
   h.proc.kill('SIGTERM');
   await new Promise<void>((resolveP) => {
@@ -547,6 +594,9 @@ export async function stopRouter(h: RouterHandle): Promise<void> {
       resolveP();
     });
   });
+  // Reap any child the router left behind (notably the wash-display
+  // compositor) before we rm the dir its argv points at.
+  if (h.appsDir) killProcsUnder(h.appsDir);
   // Remove the per-test temp dirs so /tmp doesn't accumulate. The
   // staged apps dir is a full copy of the binary set; thousands of
   // runs otherwise pile up to hundreds of GB. force:true ignores a
