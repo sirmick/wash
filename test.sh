@@ -109,8 +109,14 @@ run_fe_unit() {
   # 22+'s native TypeScript type-stripping — no tsx/vitest/build step,
   # matching the web/shell/*.test.ts precedent. Covers framework-free
   # logic under web/** and apps/**/fe/**; anything needing a real DOM
-  # stays in the Playwright e2e suite. Layout-independent (no build
-  # tags), so it runs once regardless of standalone/multicall mode.
+  # stays in the Playwright e2e (and the component tests; see
+  # run_component_unit). Layout-independent (no build tags), so it runs
+  # once regardless of standalone/multicall mode.
+  #
+  # --conditions=browser makes solid-js resolve its CLIENT (reactive)
+  # build instead of the default SSR one, so reactive-logic tests
+  # (createSignal/createMemo/createEffect — no DOM) run correctly here.
+  # It's a no-op for the framework-free tests, which import no solid.
   local files
   files=$(find "$REPO/web" "$REPO/apps" -path '*/node_modules' -prune -o \
     -name '*.test.ts' -not -path '*/dist/*' -print 2>/dev/null)
@@ -119,7 +125,7 @@ run_fe_unit() {
     return 0
   fi
   # shellcheck disable=SC2086
-  if node --test $files; then
+  if node --test --conditions=browser $files; then
     echo "test.sh: fe-unit ($label) PASS"
   else
     echo "test.sh: fe-unit ($label) FAIL" >&2
