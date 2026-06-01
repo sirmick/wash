@@ -14,6 +14,7 @@ import { defineWashApp, type WashAppProps } from "@wash/ui";
 
 import { ApplyTerminal, type ApplyEvent } from "./ApplyTerminal.tsx";
 import { ObjectForm } from "./ObjectForm.tsx";
+import { setAtPath } from "./setAtPath.ts";
 import type { Descriptor, ObjectDescriptor } from "./objectform-model.ts";
 import descriptorJson from "./generated/descriptor.json";
 import i18nJson from "./generated/i18n.json";
@@ -39,15 +40,6 @@ const addressingDesc: ObjectDescriptor = {
     : protoField],
 };
 
-// setAtPath immutably sets a dotted path; a union switch arrives as the bare
-// discriminator path with a {_tag} value, replacing the variant (dropping the
-// old variant's fields).
-function setAtPath(obj: Record<string, any>, keys: string[], v: unknown): Record<string, any> {
-  const [head, ...rest] = keys;
-  const next = { ...obj };
-  next[head] = rest.length === 0 ? v : setAtPath((obj[head] as Record<string, any>) ?? {}, rest, v);
-  return next;
-}
 
 type Proto = {
   _tag: string;
