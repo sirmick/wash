@@ -85,6 +85,11 @@ interface BEMessage {
   [k: string]: unknown;
 }
 
+// One flattened tree row, as produced by flattenTree() and rendered by
+// the <For> in the body. Kept as a named type so the identity-stabilising
+// memo and the raw memo share a signature.
+type VisibleRow = { entry: Entry; path: string; depth: number; childCount?: number };
+
 type SortKey = 'name' | 'mtime' | 'ctime' | 'size' | 'type';
 
 type MenuState =
@@ -1118,7 +1123,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // reads the reactive sources (sort signals, treeRoot, path) and passes
   // the listings/expanded store proxies straight in — flattenTree runs
   // synchronously here, so its listings[p]/expanded[x] reads stay tracked.
-  const visibleRows = createMemo<Array<{ entry: Entry; path: string; depth: number; childCount?: number }>>(() =>
+  const flatRows = createMemo<VisibleRow[]>(() =>
     flattenTree<Entry>({
       listings,
       expanded,
@@ -1127,6 +1132,29 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       cur: path(),
     }),
   );
+
+  // Identity-stabilising layer. flattenTree returns brand-new wrapper +
+  // entry objects on every recompute, and a plain <For> keys by object
+  // reference — so without this, ANY re-list (even a no-op fs.watch
+  // refresh that produces value-identical entries) tears down and
+  // rebuilds every row's DOM. A click then races the rebuild: the row
+  // is "detached from the DOM" mid-click. That's the source of the
+  // fm/clipboard full-suite flakes. Here we reuse the previous row
+  // object for a path whose visible content is unchanged, so <For>
+  // keeps those rows' DOM and only genuinely-changed rows re-render.
+  let prevRows = new Map<string, { row: VisibleRow; sig: string }>();
+  const visibleRows = createMemo<VisibleRow[]>(() => {
+    const next = new Map<string, { row: VisibleRow; sig: string }>();
+    const out = flatRows().map((row) => {
+      const sig = JSON.stringify(row);
+      const prior = prevRows.get(row.path);
+      const stable = prior && prior.sig === sig ? prior.row : row;
+      next.set(row.path, { row: stable, sig });
+      return stable;
+    });
+    prevRows = next;
+    return out;
+  });
 
   // visibleCount is the total entries visible right now. Updates
   // automatically as folders expand/collapse.
