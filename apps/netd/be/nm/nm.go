@@ -8,7 +8,28 @@ import (
 	"fmt"
 
 	"github.com/godbus/dbus/v5"
+
+	"github.com/sirmick/wash/internal/washnet/backend"
 )
+
+// Detect probes whether NetworkManager is reachable on D-Bus and actively
+// managing (docs/NET.md §2.7) — read-only, for netd's `auto` selection. A
+// reachable, non-asleep NM means the box is NM-managed: the coexist-safe choice.
+func Detect() backend.Detection {
+	c, err := Connect()
+	if err != nil {
+		return backend.Detection{Note: "NetworkManager not reachable on D-Bus"}
+	}
+	defer c.Close()
+	s, err := c.Status()
+	if err != nil {
+		return backend.Detection{Available: true, Note: "NetworkManager present but not answering"}
+	}
+	if s.State == 10 { // NM_STATE_ASLEEP
+		return backend.Detection{Available: true, Note: "NetworkManager asleep"}
+	}
+	return backend.Detection{Available: true, Active: true, Note: "NetworkManager active"}
+}
 
 const (
 	dest     = "org.freedesktop.NetworkManager"

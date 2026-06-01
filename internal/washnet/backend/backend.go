@@ -24,6 +24,17 @@ type RenderPlan struct {
 	Steps  []string
 }
 
+// Detection is a backend's cheap, read-only verdict on whether it can run on
+// this box (Available) and whether it is the active link manager right now
+// (Active). It feeds netd's `auto` backend selection (docs/NET.md §2.7): an
+// Active backend means "this is what the box runs" — pick it; Available-only is
+// the fallback. Note is a short human reason for the status panel.
+type Detection struct {
+	Available bool
+	Active    bool
+	Note      string
+}
+
 // Applier renders and applies a Config. Apply must snapshot prior live state so
 // Rollback can restore it (the commit-confirm safety property lives here and in
 // the txn engine). Verify reads back actual state and returns an error if the

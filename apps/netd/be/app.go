@@ -121,19 +121,28 @@ type netApplier interface {
 	Devices() []string // managed link names (eth0, …) for the FE's Add wizards
 }
 
-// newApplier selects the backend. A real backend is used ONLY when explicitly
-// opted in via WASH_NETD_BACKEND (the guest images set it: nm on Alpine,
-// networkd on Fedora) — never by mere reachability, so a dev host that happens
-// to run NetworkManager/networkd can't have its real networking reconfigured by
-// a unit test. Otherwise the in-memory fake. (Step-5 autodetection layers on
-// top: `auto` will probe and pick; this env override stays the hard precedence.)
+// newApplier selects the backend (docs/NET.md §2.7). A real backend is used
+// ONLY when explicitly opted in via WASH_NETD_BACKEND — never by mere
+// reachability, so a dev host that happens to run NetworkManager/networkd can't
+// have its real networking reconfigured by a unit test. The images set it: the
+// Alpine image "nm", the Fedora image "auto" (so it probes → networkd) or
+// "networkd". An UNSET env stays the in-memory fake. Only "auto" runs the
+// read-only Detect probes; chooseBackend (select.go) is the unit-tested policy.
 func newApplier() netApplier {
-	switch os.Getenv("WASH_NETD_BACKEND") {
-	case "nm":
-		log.Printf("wash-netd: backend = NetworkManager")
+	mode := os.Getenv("WASH_NETD_BACKEND")
+	if mode == "" {
+		return newFakeApplier() // dev-host safe: never touch real networking unasked
+	}
+	var d detections
+	if mode == BackendAuto {
+		d = detections{nm: nm.Detect(), networkd: networkd.Detect()}
+	}
+	choice, reason := chooseBackend(mode, d)
+	log.Printf("wash-netd: backend = %s (%s)", choice, reason)
+	switch choice {
+	case BackendNM:
 		return nm.NewApplier()
-	case "networkd":
-		log.Printf("wash-netd: backend = systemd-networkd")
+	case BackendNetworkd:
 		return networkd.NewApplier()
 	}
 	return newFakeApplier()

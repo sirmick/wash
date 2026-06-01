@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sirmick/wash/internal/washnet/backend"
 	"github.com/sirmick/wash/internal/washnet/caps"
 	"github.com/sirmick/wash/internal/washnet/model"
 )
@@ -43,6 +44,22 @@ func Capabilities() caps.Capabilities {
 		"network/rule",
 		"network/wireguard_peer",
 	}, caps.CanWireGuard, caps.CanVLAN, caps.CanBridge, caps.CanPolicyRouting)
+}
+
+// Detect probes whether systemd-networkd can run here and is the active link
+// manager (docs/NET.md §2.7) — read-only, for netd's `auto` selection. Available
+// = networkctl is present; Active = systemd-networkd is running. Uses the real
+// exec seam (the decision logic that consumes this is unit-tested separately).
+func Detect() backend.Detection {
+	r := execRunner{}
+	if _, err := r.run("networkctl", "--version"); err != nil {
+		return backend.Detection{Note: "networkctl not present"}
+	}
+	out, err := r.run("systemctl", "is-active", "systemd-networkd")
+	if err == nil && strings.TrimSpace(out) == "active" {
+		return backend.Detection{Available: true, Active: true, Note: "systemd-networkd active"}
+	}
+	return backend.Detection{Available: true, Note: "systemd-networkd present but not active"}
 }
 
 // runner is the exec seam: it runs a host command and returns its combined
