@@ -60,10 +60,16 @@ const dhcpDefault = (): Proto => ({ _tag: "dhcp", IPv4: true, IPv6: true });
 type Interface = { Name: string; Device?: string; Proto?: Proto };
 type Device = { Name: string; Type?: string; Ports?: string[]; Ifname?: string; VID?: number };
 type Config = { Interfaces?: Interface[]; Devices?: Device[]; [k: string]: any };
-type Caps = {
-  can_bridge?: boolean; can_vlan?: boolean; can_wireguard?: boolean;
-  can_wifi_client?: boolean; can_zones?: boolean; can_dhcp_server?: boolean; can_ap?: boolean;
-};
+// Caps mirrors netd's generic capability wire (docs/NET.md §2.7): the supported
+// feature keys + object-kind keys. The UI greys by set membership, so a new
+// backend (networkd, uci) advertising a different subset re-gates without any
+// per-feature field here. `can(f)` / `kind(k)` are the membership helpers.
+type Caps = { features: Set<string>; kinds: Set<string> };
+const emptyCaps = (): Caps => ({ features: new Set(), kinds: new Set() });
+const toCaps = (raw: any): Caps => ({
+  features: new Set<string>(Array.isArray(raw?.features) ? raw.features : []),
+  kinds: new Set<string>(Array.isArray(raw?.kinds) ? raw.kinds : []),
+});
 
 const protoLabel = (p?: Proto): string => {
   if (!p) return "—";
@@ -100,7 +106,8 @@ function Icon(p: { name: keyof typeof ICONS | string; size?: number }) {
 function NetApp(props: WashAppProps) {
   const [config, setConfig] = createSignal<Config>({ Interfaces: [], Devices: [] }); // committed baseline (from netd)
   const [draft, setDraft] = createSignal<Config>({ Interfaces: [], Devices: [] });  // staged edits, not yet applied
-  const [caps, setCaps] = createSignal<Caps>({});
+  const [caps, setCaps] = createSignal<Caps>(emptyCaps());
+  const can = (f: string) => caps().features.has(f);
   const [links, setLinks] = createSignal<string[]>([]); // physical NICs from the backend
   const [adding, setAdding] = createSignal<null | "ethernet" | "vlan" | "bridge">(null);
   const [editIface, setEditIface] = createSignal<Interface | null>(null);
@@ -206,7 +213,7 @@ function NetApp(props: WashAppProps) {
       const cfg = (r.config ?? { Interfaces: [], Devices: [] }) as Config;
       setConfig(cfg);
       setDraft(structuredClone(cfg)); // reset the draft to the freshly committed state
-      setCaps((r.caps ?? {}) as Caps);
+      setCaps(toCaps(r.caps));
       setLinks((r.devices ?? []) as string[]);
     }
   };
@@ -326,8 +333,8 @@ function NetApp(props: WashAppProps) {
       <header class="wash-net-head">
         <div class="wash-net-add">
           <button data-testid="add-ethernet" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => setAdding("ethernet")}><Icon name="ethernet" /> Ethernet</button>
-          <button data-testid="add-vlan" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !caps().can_vlan} onClick={() => setAdding("vlan")}><Icon name="git-branch" /> VLAN</button>
-          <button data-testid="add-bridge" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !caps().can_bridge} onClick={() => setAdding("bridge")}><Icon name="git-merge" /> Bridge</button>
+          <button data-testid="add-vlan" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("vlan")} onClick={() => setAdding("vlan")}><Icon name="git-branch" /> VLAN</button>
+          <button data-testid="add-bridge" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("bridge")} onClick={() => setAdding("bridge")}><Icon name="git-merge" /> Bridge</button>
         </div>
       </header>
 
@@ -390,9 +397,9 @@ function NetApp(props: WashAppProps) {
         </div>
 
         <div class="wash-net-greyed">
-          <Show when={!caps().can_zones}><span class="wash-net-lock">Firewall 🔒</span></Show>
-          <Show when={!caps().can_dhcp_server}><span class="wash-net-lock">DHCP server 🔒</span></Show>
-          <Show when={!caps().can_ap}><span class="wash-net-lock">Access point 🔒</span></Show>
+          <Show when={!can("zones")}><span class="wash-net-lock">Firewall 🔒</span></Show>
+          <Show when={!can("dhcp-server")}><span class="wash-net-lock">DHCP server 🔒</span></Show>
+          <Show when={!can("ap")}><span class="wash-net-lock">Access point 🔒</span></Show>
           <span class="wash-net-hint">available in router mode</span>
         </div>
       </div>

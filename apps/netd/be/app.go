@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -221,16 +222,7 @@ func registerHandlers(bus *sdk.Bus) {
 		if err := json.Unmarshal(data, &m); err != nil {
 			return currentResp{}, sdk.Errf(sdk.ErrInternal, "decode current: %v", err)
 		}
-		c := applier.Capabilities()
-		return currentResp{Config: m, Devices: applier.Devices(), Caps: capsDTO{
-			CanBridge:     c.Has(caps.CanBridge),
-			CanVLAN:       c.Has(caps.CanVLAN),
-			CanWireGuard:  c.Has(caps.CanWireGuard),
-			CanWifiClient: c.SupportsKind("wireless", "wifi-iface"),
-			CanZones:      c.Has(caps.CanZones),
-			CanDHCPServer: c.Has(caps.CanDHCPServer),
-			CanAP:         c.Has(caps.CanAP),
-		}}, nil
+		return currentResp{Config: m, Devices: applier.Devices(), Caps: capsToDTO(applier.Capabilities())}, nil
 	})
 
 	sdk.HandleFrom(bus, "diff", func(_ *sdk.Conn, _ string, req configReq, from wire.Sender) (diffResp, error) {
@@ -374,15 +366,32 @@ type currentResp struct {
 	Devices []string       `json:"devices"` // managed links for the Add wizards
 }
 
-// capsDTO is the feature subset the FE needs to gate its Add menu + screens.
+// capsDTO carries the backend's capabilities generically (docs/NET.md §2.7): the
+// supported feature keys + object-kind keys ("pkg/section"), so the FE greys
+// what this backend can't do by set membership. A new backend (networkd, uci)
+// advertises a different subset and the FE re-gates off these sets — no lockstep
+// DTO/FE edits per feature. Both lists are sorted for deterministic output.
 type capsDTO struct {
-	CanBridge     bool `json:"can_bridge"`
-	CanVLAN       bool `json:"can_vlan"`
-	CanWireGuard  bool `json:"can_wireguard"`
-	CanWifiClient bool `json:"can_wifi_client"`
-	CanZones      bool `json:"can_zones"`
-	CanDHCPServer bool `json:"can_dhcp_server"`
-	CanAP         bool `json:"can_ap"`
+	Features []string `json:"features"`
+	Kinds    []string `json:"kinds"`
+}
+
+func capsToDTO(c caps.Capabilities) capsDTO {
+	feats := make([]string, 0, len(c.Features))
+	for f, ok := range c.Features {
+		if ok {
+			feats = append(feats, string(f))
+		}
+	}
+	sort.Strings(feats)
+	kinds := make([]string, 0, len(c.Kinds))
+	for k, ok := range c.Kinds {
+		if ok {
+			kinds = append(kinds, k)
+		}
+	}
+	sort.Strings(kinds)
+	return capsDTO{Features: feats, Kinds: kinds}
 }
 
 // entryDTO / eventDTO are snake_case wire shapes for the pure domain types
