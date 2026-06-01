@@ -128,8 +128,14 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
   let forwardFn: ((bytes: Uint8Array) => void) | null = null;
 
   // Login-gate helpers (phase 'gate'). promptingLogin guards against firing the
-  // credential prompt more than once per login.required burst.
+  // credential prompt more than once per login.required burst. gateAcked flips
+  // once the front responds, which stops the session.open retry.
   let promptingLogin = false;
+  let gateAcked = false;
+  let gateRetry: ReturnType<typeof setInterval> | null = null;
+  const clearGateRetry = () => { if (gateRetry) { clearInterval(gateRetry); gateRetry = null; } };
+  const sendSessionOpen = () =>
+    deps.sendBytes(encodeFrame(0, enc.encode(JSON.stringify({ t: 'session.open' }))));
   const sendLogin = (user: string, pass: string) =>
     deps.sendBytes(encodeFrame(0, enc.encode(JSON.stringify({ t: 'login', user, pass }))));
   const promptAndSend = () => {
@@ -196,6 +202,8 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
     // loop processes any further frames as asset frames.
     for (const f of parser.feed(bytes)) {
       if (phase === 'gate') {
+        // The front responded — stop retrying session.open.
+        gateAcked = true; clearGateRetry();
         if (f.channel === 0) {
           let gm: { t?: string } | null = null;
           try { gm = JSON.parse(dec.decode(f.payload)); } catch { gm = null; }
@@ -297,9 +305,17 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
   if (phase === 'gate') {
     // Kick the in-guest login front: it emits login.required on SessionOpen.
     // On wemu the host proxy injects this; the in-browser box has no proxy, so
-    // the FE sends it. The gate then drives login → (login.ok) → asset.read.
-    deps.sendBytes(encodeFrame(0, enc.encode(JSON.stringify({ t: 'session.open' }))));
-    log('bootstrap: gate — sent session.open to trigger login.required');
+    // the FE sends it. RETRY until the front acks: the guest may not have opened
+    // its virtio-serial data port yet (supervisor fd-3 pre-open races our send),
+    // and a multiport drops host→guest bytes to an unopened port — so a single
+    // send loses the race. We resend every 600ms until any frame comes back
+    // (gateAcked), then the gate drives login → (login.ok) → asset.read.
+    sendSessionOpen();
+    log('bootstrap: gate — sent session.open (will retry until login.required)');
+    gateRetry = setInterval(() => {
+      if (phase !== 'gate' || gateAcked) { clearGateRetry(); return; }
+      sendSessionOpen();
+    }, 600);
   } else if (!deps.deferUntilFirstByte) {
     // Send the asset.read request immediately unless we're deferring until the
     // first router byte (see BootstrapDeps.deferUntilFirstByte).
@@ -314,6 +330,7 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
   try {
     return await done;
   } catch (e) {
+    clearGateRetry();
     detach();
     throw e;
   }
