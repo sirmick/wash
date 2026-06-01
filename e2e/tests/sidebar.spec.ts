@@ -83,14 +83,10 @@ test.describe('sidebar', () => {
     await expect(cpuBar).toBeVisible();
   });
 
-  test('Notifications widget shows empty state when no notifications', async ({ page, router }) => {
-    await page.goto(router.url);
-    await page.locator('[data-testid="sidebar-section-header-notify"]').click();
-    await expect(page.locator('[data-testid="notify-widget"]')).toBeVisible();
-    // Brand new session → service has nothing in history.
-    await expect(page.locator('[data-testid="notify-empty"]')).toBeVisible();
-  });
-
+  // NOTE: empty-state rendering of the notify widget moved to a fast
+  // component test (apps/session/fe/src/sidebar/NotifyWidget.ctest.tsx).
+  // The cross-process flow below — a real notification arriving over the
+  // wire and auto-expanding the section — stays here as the integration seam.
   test('triggered notification appears in the widget and auto-expands the section', async ({ page, router }) => {
     // wash-test exposes a "notify" action button; clicking it fires a
     // c.Notify() that reaches both the shell's toast AND the notify
