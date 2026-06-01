@@ -44,35 +44,16 @@ if [ ! -f "$ROOTFS_TAR" ] || [ "$(cat "$PKG_MARK" 2>/dev/null)" != "$ALPINE_VER:
   printf '%s' "$ALPINE_VER:$RENDER_VER:$NM_PKGS" > "$PKG_MARK"
 fi
 
-echo ">> building static guest agent + nm probe"
-GOARCH="$( [ "$ARCH" = x86_64 ] && echo amd64 || echo "$ARCH" )"
-CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" \
-  go build -trimpath -ldflags="-s -w" -o "$BUILD/washvm-agent" "$ROOT_DIR/cmd/washvm-agent"
-# washnet-nmprobe: B4b smoke check that the pure-Go nm backend reaches NM in the
-# guest (godbus → NetworkManager). Run over the ctl plane.
-CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" \
-  go build -trimpath -ldflags="-s -w" -o "$BUILD/washnet-nmprobe" "$ROOT_DIR/cmd/washnet-nmprobe"
-# washnet-apply: render a UCI config to NM keyfiles and apply it to live NM.
-CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" \
-  go build -trimpath -ldflags="-s -w" -o "$BUILD/washnet-apply" "$ROOT_DIR/cmd/washnet-apply"
-CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" \
-  go build -trimpath -ldflags="-s -w" -o "$BUILD/washnet-read" "$ROOT_DIR/cmd/washnet-read"
-CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" \
-  go build -trimpath -ldflags="-s -w" -o "$BUILD/washnet-cc" "$ROOT_DIR/cmd/washnet-cc"
-# setuid-root trampoline so the unprivileged 'wash' desktop can spawn netd as
-# root (NM keyfiles must be root-owned). Installed as wash-netd below.
-CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" \
-  go build -trimpath -ldflags="-s -w" -o "$BUILD/washvm-rootexec" "$ROOT_DIR/cmd/washvm-rootexec"
+# shellcheck source=scripts/lib/wash-vm-payload.sh
+. "$ROOT_DIR/scripts/lib/wash-vm-payload.sh"
 
-# The multicall wash binary (router + apps, incl. com.wash.net/.netd) is the
-# real payload (docs/NET.md §8.3 — the VM serves everything). It embeds every
-# FE bundle, so it can only be produced by the full web+go build: `make
-# multicall`. Image building is file ops (§8.4), so we require it pre-built.
-WASH_BIN="$ROOT_DIR/out/wash"
-if [ ! -x "$WASH_BIN" ]; then
-  echo "!! $WASH_BIN missing — run 'make multicall' first (builds the FE bundles + static multicall)" >&2
-  exit 1
-fi
+# Core payload (agent + setuid-root netd trampoline) + the NM-backend CLIs this
+# image ships: washnet-nmprobe (B4b godbus→NM smoke check), -apply (UCI→NM
+# keyfiles→live NM), -read, -cc. The multicall wash is the real payload and must
+# be pre-built (make multicall).
+wvm_build_core "$BUILD" "$ROOT_DIR" "$ARCH"
+wvm_build_cli "$BUILD" "$ROOT_DIR" "$ARCH" washnet-nmprobe washnet-apply washnet-read washnet-cc
+WASH_BIN="$(wvm_require_multicall "$ROOT_DIR")"
 
 echo ">> assembling rootfs"
 RFS="$BUILD/root"
@@ -81,7 +62,6 @@ mkdir -p "$RFS"
 tar -C "$RFS" -xf "$ROOTFS_TAR"
 # Kernel comes from the same linux-virt package as the in-rootfs modules.
 cp "$RFS/boot/vmlinuz-virt" "$OUT/vmlinuz"
-install -Dm755 "$BUILD/washvm-agent" "$RFS/sbin/washvm-agent"
 
 # Make NM actually manage the eth NICs: keyfile-only plugin (don't defer to
 # Alpine's /etc/network/interfaces via ifupdown) + explicitly manage everything.
@@ -142,17 +122,10 @@ install -Dm755 "$BUILD/washnet-apply" "$RFS/usr/bin/washnet-apply"
 install -Dm755 "$BUILD/washnet-read" "$RFS/usr/bin/washnet-read"
 install -Dm755 "$BUILD/washnet-cc" "$RFS/usr/bin/washnet-cc"
 
-# Bake the multicall + materialize the per-app symlinks the router scans. The
-# host binary is the same arch (amd64), so run it on the host to emit symlinks
-# into the guest apps dir; symlinks are just names (→ wash).
-install -Dm755 "$WASH_BIN" "$RFS/usr/lib/wash/wash"
-"$WASH_BIN" install-symlinks "$RFS/usr/lib/wash" >/dev/null
-ln -sf ../lib/wash/wash "$RFS/usr/bin/wash"
-# Replace the wash-netd symlink with the setuid-root trampoline so the wash
-# router spawns netd as root (see washvm-rootexec). 4755 = setuid + world-exec;
-# cpio -R 0:0 makes it root-owned, so the setuid bit grants root.
-rm -f "$RFS/usr/lib/wash/wash-netd"
-install -m4755 "$BUILD/washvm-rootexec" "$RFS/usr/lib/wash/wash-netd"
+# Bake the agent + multicall + per-app symlinks, and the setuid-root netd
+# trampoline (cpio -R 0:0 below makes it root-owned so the setuid bit grants
+# root). Shared with every distro image — see scripts/lib/wash-vm-payload.sh.
+wvm_stage_payload "$RFS" "$BUILD" "$WASH_BIN"
 
 # --- boot: busybox-init → OpenRC (docs/NET.md §8.4) -------------------------
 # The kernel runs /init from the initramfs; we exec busybox init, which reads
@@ -303,9 +276,7 @@ ln -sf /etc/init.d/dbus            "$RFS/etc/runlevels/default/dbus"
 ln -sf /etc/init.d/polkit          "$RFS/etc/runlevels/default/polkit"
 ln -sf /etc/init.d/networkmanager  "$RFS/etc/runlevels/default/networkmanager"
 
-echo ">> packing initramfs (root-owned: reserved ids like com.wash.netd need a"
-echo "   root-owned/non-world-writable binary to be served — see registry.go)"
-( cd "$RFS" && find . | cpio -o -H newc -R 0:0 2>/dev/null | gzip -9 ) > "$OUT/initramfs.gz"
+wvm_pack_initramfs "$RFS" "$OUT/initramfs.gz"
 
 echo ">> done:"
 ls -lh "$OUT/vmlinuz" "$OUT/initramfs.gz"
