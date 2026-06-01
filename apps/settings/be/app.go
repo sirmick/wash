@@ -181,6 +181,16 @@ func registerHandlers(b *sdk.Bus) {
 	// reply, so run it off the reader goroutine. not_found surfaces as
 	// ok=false with the error — the Display panel reads that as "not
 	// installed".
+	// launch spawns a windowed app (the Network pane's "Open Network…" → the
+	// dedicated com.wash.net window). SpawnRequest is a plain router primitive —
+	// no session round-trip — so settings can open an app like the launcher does.
+	sdk.HandleVoid(b, "launch", func(c *sdk.Conn, _ string, req launchReq) error {
+		if req.App == "" {
+			return nil
+		}
+		return c.SpawnRequest(req.App)
+	})
+
 	sdk.HandleVoid(b, "svc.restart", func(c *sdk.Conn, _ string, req svcRestartReq) error {
 		if req.App == "" {
 			return nil
@@ -207,6 +217,10 @@ type svcSendReq struct {
 }
 
 type svcRestartReq struct {
+	App string `json:"app"`
+}
+
+type launchReq struct {
 	App string `json:"app"`
 }
 
@@ -249,6 +263,10 @@ func domainFile(domain string) string {
 	switch domain {
 	case "desktop":
 		return filepath.Join(dir, "desktop.json")
+	case "network":
+		// The Network pane's renderer choice ({"backend":"auto"|"nm"|"networkd"});
+		// com.wash.netd reads this file at startup (docs/NET.md §2.7).
+		return filepath.Join(dir, "network.json")
 	}
 	return ""
 }

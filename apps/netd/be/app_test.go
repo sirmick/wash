@@ -18,6 +18,10 @@ import (
 // Mirrors apps/notify/be/app_test.go's connectNotify.
 func connectNetd(t *testing.T) (wire.FrameTransport, func()) {
 	t.Helper()
+	// Force the in-memory fake backend so onReady's selectApplier neither reads
+	// the dev's ~/.config/wash/network.json nor probes D-Bus/networkctl — keeps
+	// these message-injection tests hermetic.
+	t.Setenv("WASH_NETD_BACKEND", "fake")
 	pp := wiretest.NewPipePair()
 
 	type res struct {

@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -75,6 +76,12 @@ type NetState struct {
 	// ConfirmWindowMs is the auto-revert window, sent while await-confirm so the
 	// FE can count down to the autonomous revert (§7.2). Zero otherwise.
 	ConfirmWindowMs int64 `json:"confirm_window_ms,omitempty"`
+	// Backend is the active renderer ("nm"/"networkd"/"fake") and Available the
+	// backends usable on this box — for the Settings Network pane's dropdown
+	// (which backend is running, which to grey). Static after startup; publish()
+	// stamps them onto every state so they survive state transitions.
+	Backend   string   `json:"backend,omitempty"`
+	Available []string `json:"available,omitempty"`
 }
 
 var def *sdk.AppDef
@@ -121,24 +128,48 @@ type netApplier interface {
 	Devices() []string // managed link names (eth0, …) for the FE's Add wizards
 }
 
-// newApplier selects the backend (docs/NET.md §2.7). A real backend is used
-// ONLY when explicitly opted in via WASH_NETD_BACKEND — never by mere
-// reachability, so a dev host that happens to run NetworkManager/networkd can't
-// have its real networking reconfigured by a unit test. The images set it: the
-// Alpine image "nm", the Fedora image "auto" (so it probes → networkd) or
-// "networkd". An UNSET env stays the in-memory fake. Only "auto" runs the
-// read-only Detect probes; chooseBackend (select.go) is the unit-tested policy.
-func newApplier() netApplier {
+// backendStatus is the selected + available backends netd publishes in NetState
+// so the Settings Network pane can show what's running and grey what this box
+// can't do.
+type backendStatus struct {
+	active    string   // the backend in use ("nm"/"networkd"/"fake")
+	available []string // backends Detect() found usable here
+}
+
+// info is the live backendStatus (set once at startup, published in every state).
+var info backendStatus
+
+// selectApplier resolves and builds the backend, plus the status for the FE
+// (docs/NET.md §2.7). Precedence: WASH_NETD_BACKEND env (images/tests) > the
+// persisted `network` setting (the Settings dropdown) > none → fake. A real
+// backend is used ONLY on an explicit choice — never by mere reachability — so a
+// dev host can't have its networking reconfigured unasked, and the unset/fake
+// paths DON'T probe (so unit tests stay hermetic: no D-Bus dial / networkctl
+// exec). Only "auto" runs the read-only Detect probes; chooseBackend (select.go)
+// is the unit-tested policy.
+func selectApplier() (netApplier, backendStatus) {
 	mode := os.Getenv("WASH_NETD_BACKEND")
 	if mode == "" {
-		return newFakeApplier() // dev-host safe: never touch real networking unasked
+		mode = persistedBackend() // the Settings dropdown's choice, "" if unset
 	}
-	var d detections
-	if mode == BackendAuto {
-		d = detections{nm: nm.Detect(), networkd: networkd.Detect()}
+	switch mode {
+	case "":
+		return newFakeApplier(), backendStatus{active: BackendFake}
+	case BackendFake:
+		return newFakeApplier(), backendStatus{active: BackendFake, available: []string{BackendFake}}
+	case BackendAuto:
+		d := detections{nm: nm.Detect(), networkd: networkd.Detect()}
+		choice, reason := chooseBackend(BackendAuto, d)
+		log.Printf("wash-netd: backend = %s (%s)", choice, reason)
+		return buildApplier(choice), backendStatus{active: choice, available: availableBackends(d)}
+	default: // forced nm / networkd (the images) — no probe needed to select
+		choice, reason := chooseBackend(mode, detections{})
+		log.Printf("wash-netd: backend = %s (%s)", choice, reason)
+		return buildApplier(choice), backendStatus{active: choice, available: []string{choice}}
 	}
-	choice, reason := chooseBackend(mode, d)
-	log.Printf("wash-netd: backend = %s (%s)", choice, reason)
+}
+
+func buildApplier(choice string) netApplier {
 	switch choice {
 	case BackendNM:
 		return nm.NewApplier()
@@ -146,6 +177,50 @@ func newApplier() netApplier {
 		return networkd.NewApplier()
 	}
 	return newFakeApplier()
+}
+
+func availableBackends(d detections) []string {
+	var out []string
+	if d.nm.Available {
+		out = append(out, BackendNM)
+	}
+	if d.networkd.Available {
+		out = append(out, BackendNetworkd)
+	}
+	return out
+}
+
+// persistedBackend reads the Settings Network pane's choice from the shared wash
+// config (~/.config/wash/network.json, written by com.wash.settings). Empty when
+// unset — netd then falls back to the fake. Resolves the same dir settings uses,
+// so the two agree as long as they share $HOME/$XDG_CONFIG_HOME (the image
+// launcher propagates them from the wash user to the root-spawned netd).
+func persistedBackend() string {
+	dir := netConfigDir()
+	if dir == "" {
+		return ""
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "network.json"))
+	if err != nil {
+		return ""
+	}
+	var v struct {
+		Backend string `json:"backend"`
+	}
+	if json.Unmarshal(b, &v) != nil {
+		return ""
+	}
+	return v.Backend
+}
+
+func netConfigDir() string {
+	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
+		return filepath.Join(d, "wash")
+	}
+	if h, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(h, ".config", "wash")
+	}
+	return ""
 }
 
 // ConfirmTimeout is the commit-confirm window (docs/NET.md §7, §2.9): if an
@@ -209,8 +284,8 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		}
 	}
 	bus := sdk.NewBus(c)
-	applier = newApplier()
-	svc = sdk.NewStateService(bus, NetState{Status: "idle"})
+	applier, info = selectApplier()
+	svc = sdk.NewStateService(bus, NetState{Status: "idle", Backend: info.active, Available: info.available})
 	registerHandlers(bus)
 }
 
@@ -339,6 +414,9 @@ func authz(from wire.Sender) error {
 
 func publish(s NetState) {
 	if svc != nil {
+		// Carry the (static) backend identity through every transition so a
+		// subscriber that joins mid-apply still learns which backend is running.
+		s.Backend, s.Available = info.active, info.available
 		svc.Mutate(func(cur *NetState) { *cur = s })
 	}
 }
