@@ -584,7 +584,7 @@ function BridgeWizard(props: { members: string[]; onCancel: () => void; onCreate
 
 const STYLE = `
 .wash-net-app { display:flex; flex-direction:column; height:100%; background:#181828; color:#eee;
-  font:13px ui-sans-serif, system-ui, sans-serif; }
+  font:13px ui-sans-serif, system-ui, sans-serif; position:relative; }
 .wash-net-head { display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border-bottom:1px solid #2a2a3a; }
 .wash-net-head h1 { font-size:14px; font-weight:600; margin:0; }
 .wash-net-add { display:flex; gap:6px; }
@@ -660,8 +660,14 @@ const STYLE = `
 .wash-net-logphase { color:#6a6d75; min-width:80px; text-transform:uppercase; }
 .wash-net-logline[data-level="warn"] .wash-net-logmsg { color:#d0a040; }
 .wash-net-logline[data-level="error"] .wash-net-logmsg { color:#e06060; }
-.wash-net-applybar, .wash-net-confirm { display:flex; align-items:center; gap:8px; padding:8px 12px; }
+.wash-net-applybar { display:flex; align-items:center; gap:8px; padding:8px 12px; }
 .wash-net-status { flex:1; font-size:12px; opacity:.8; font-variant:tabular-nums; }
+/* Confirm prompt: a banner pinned to the top of the app (over the header),
+ * so Keep/Discard are reachable even when the window's bottom is clipped
+ * under the taskbar on a short screen. See ApplyTerminal.tsx. */
+.wash-net-confirm { position:absolute; top:0; left:0; right:0; z-index:50;
+  display:flex; align-items:center; gap:8px; padding:8px 12px;
+  background:#23201a; border-bottom:1px solid #4a4030; box-shadow:0 4px 12px rgba(0,0,0,.45); }
 .wash-net-countdown { flex:1; position:relative; height:22px; border-radius:4px; overflow:hidden; background:#1b1d22; border:1px solid #4a4030; display:flex; align-items:center; }
 .wash-net-countbar { position:absolute; inset:0 auto 0 0; background:rgba(208,160,64,.18); transition:width .25s linear; }
 .wash-net-counttext { position:relative; padding:0 8px; font-size:11px; color:#e8c878; }
