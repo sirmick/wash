@@ -50,24 +50,32 @@ type WifiRuntime interface {
 	Forget(ctx context.Context, ssid string) (string, error)
 }
 
-// Live is the real nmcli-backed runtime.
-type Live struct{ run runner }
+// Live is the real nmcli-backed runtime. radio is the radio-presence probe,
+// injectable for tests; it defaults to a sysfs scan so radio detection is
+// INDEPENDENT of NetworkManager (a no-NM netplan box still reports its radio,
+// which the FE needs to show advanced/manual mode there).
+type Live struct {
+	run   runner
+	radio func() []string
+}
 
-// New builds a Live over the real exec runner.
-func New() *Live { return &Live{run: execRunner{}} }
+// New builds a Live over the real exec runner and the sysfs radio probe.
+func New() *Live { return &Live{run: execRunner{}, radio: RadioDevices} }
 
 var _ WifiRuntime = (*Live)(nil)
 
-// Detect runs one `nmcli general status`: success ⇒ NM is live; WIFI-HW=enabled
-// ⇒ a radio is present. nmcli absent or NM not running ⇒ both false.
+// Detect reports radio presence (sysfs, NM-independent) and whether NM is the
+// live manager (`nmcli general status` succeeds). The two are deliberately
+// orthogonal: a box can have a radio without NM (declarative/advanced only), or
+// NM without our knowing the radio yet.
 func (l *Live) Detect() (radioPresent, nmLive bool) {
-	out, err := l.run.runStdout(context.Background(), "nmcli", "-t", "-f", "STATE,WIFI-HW,WIFI", "general", "status")
-	if err != nil {
-		return false, false
+	probe := l.radio
+	if probe == nil {
+		probe = RadioDevices
 	}
-	f := splitTerse(strings.TrimSpace(out))
-	nmLive = len(f) >= 1 && f[0] != ""
-	radioPresent = len(f) >= 2 && f[1] == "enabled" // WIFI-HW column
+	radioPresent = len(probe()) > 0
+	out, err := l.run.runStdout(context.Background(), "nmcli", "-t", "-f", "STATE", "general", "status")
+	nmLive = err == nil && strings.TrimSpace(out) != ""
 	return radioPresent, nmLive
 }
 

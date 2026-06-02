@@ -70,9 +70,14 @@ func Parse(files map[string]string) (model.Config, error) {
 		c.Radios = append(c.Radios, model.WifiDevice{Name: radio})
 		for ssid, ap := range w.AccessPoints {
 			si := model.WifiIface{Device: radio, SSID: ssid, Mode: "sta", Network: radio, Hidden: ap.Hidden}
-			if ap.Password != "" {
+			switch {
+			case ap.Auth != nil && ap.Auth.KeyManagement == "sae":
+				si.Encryption = model.EncSAE{Key: firstNonEmpty(ap.Auth.Password, ap.Password)}
+			case ap.Auth != nil && ap.Auth.KeyManagement == "psk":
+				si.Encryption = model.EncPSK2{Key: firstNonEmpty(ap.Auth.Password, ap.Password)}
+			case ap.Password != "":
 				si.Encryption = model.EncPSK2{Key: ap.Password}
-			} else {
+			default:
 				si.Encryption = model.EncNone{}
 			}
 			c.SSIDs = append(c.SSIDs, si)
@@ -82,6 +87,17 @@ func Parse(files map[string]string) (model.Config, error) {
 
 	sortConfig(&c)
 	return c, nil
+}
+
+// firstNonEmpty returns the first non-empty string (netplan may carry the PSK
+// either as the bare password or inside the auth block).
+func firstNonEmpty(ss ...string) string {
+	for _, s := range ss {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // ifaceFrom builds an Interface from a device entry's addressing.

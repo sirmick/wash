@@ -1,9 +1,25 @@
 package wifi
 
 import (
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
+
+// RadioDevices returns the netdevs that are 802.11 radios — those with a
+// `wireless/` subdir under /sys/class/net. It reads sysfs directly (no nmcli,
+// no root), so it works on no-NM boxes too; the FE uses the first name as the
+// device for the declarative (netplan) advanced path.
+func RadioDevices() []string {
+	matches, _ := filepath.Glob("/sys/class/net/*/wireless")
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		out = append(out, filepath.Base(filepath.Dir(m))) // /sys/class/net/<dev>/wireless
+	}
+	sort.Strings(out)
+	return out
+}
 
 // splitTerse splits one `nmcli -t` line on its unescaped ':' separators,
 // unescaping each field. nmcli -t escapes ':' as `\:` and '\' as `\\` inside

@@ -635,10 +635,11 @@ func registerHandlers(bus *sdk.Bus) {
 
 	// wifi_connect / wifi_forget MUTATE NetworkManager and need polkit. They run
 	// off the callback path (runWifiMutation goroutines the escalation) and ack
-	// immediately with Pending; the outcome lands as a state Refresh. On an
-	// NM-live box this is the imperative nmcli path (NM owns the profile). On a
-	// no-NM box with declarative wifi caps the connect would fold into the apply
-	// document instead — wired up in the netplanprofile-wifi commit.
+	// immediately with Pending; the outcome lands as a state Refresh. This is the
+	// imperative nmcli path (NM owns the profile), so it requires wifi_live. A
+	// no-NM box does declarative wifi the other way: the FE folds the SSID into
+	// its config draft and uses the normal `apply` flow (netplanprofile renders
+	// the wifis: block) — netd never mints a second connect mechanism.
 	sdk.HandleFrom(bus, "wifi_connect", func(_ *sdk.Conn, _ string, req wifiConnectReq, from wire.Sender) (wifiActionResp, error) {
 		if err := authz(from); err != nil {
 			return wifiActionResp{}, err
@@ -647,7 +648,8 @@ func registerHandlers(bus *sdk.Bus) {
 			return wifiActionResp{}, sdk.Errf(sdk.ErrBadRequest, "wifi_connect: missing ssid")
 		}
 		if !wifiLive {
-			return wifiActionResp{}, sdk.Errf(sdk.ErrBadRequest, "wifi_connect: declarative (no-NM) connect not yet supported")
+			// No NM ⇒ no imperative path; the FE connects declaratively via apply.
+			return wifiActionResp{}, sdk.Errf(sdk.ErrBadRequest, "wifi_connect requires NetworkManager; use apply for declarative wifi")
 		}
 		argv, security := wifiConnectArgv(washnetWifiBin, req)
 		rt := wifiRT

@@ -68,13 +68,15 @@ func reply(m map[string]string) *fakeRunner {
 func TestDetect(t *testing.T) {
 	cases := []struct {
 		name              string
-		out               string
-		err               error
+		radios            []string // injected sysfs probe result
+		out               string   // nmcli general status stdout
+		err               error    // nmcli error (absent / NM down)
 		wantRadio, wantNM bool
 	}{
-		{"nm live with radio", "connected:enabled:enabled", nil, true, true},
-		{"nm live no radio", "connected:missing:unavailable", nil, false, true},
-		{"nmcli absent / nm down", "", errors.New("not running"), false, false},
+		{"nm live with radio", []string{"wlan0"}, "connected", nil, true, true},
+		{"radio but no NM (declarative box)", []string{"wlan0"}, "", errors.New("not running"), true, false},
+		{"NM live, no radio", nil, "connected", nil, false, true},
+		{"neither", nil, "", errors.New("not running"), false, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -82,7 +84,8 @@ func TestDetect(t *testing.T) {
 				out string
 				err error
 			}{"general status": {out: c.out, err: c.err}}}
-			radio, nm := (&Live{run: f}).Detect()
+			l := &Live{run: f, radio: func() []string { return c.radios }}
+			radio, nm := l.Detect()
 			if radio != c.wantRadio || nm != c.wantNM {
 				t.Errorf("Detect() = (radio %v, nm %v), want (%v, %v)", radio, nm, c.wantRadio, c.wantNM)
 			}

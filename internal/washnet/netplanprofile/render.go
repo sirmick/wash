@@ -80,9 +80,9 @@ func Render(c model.Config) (map[string]string, error) {
 		ap := accesspoint{Hidden: s.Hidden}
 		switch e := s.Encryption.(type) {
 		case model.EncPSK2:
-			ap.Password = e.Key
+			ap.Password = e.Key // bare password ⇒ netplan's WPA2-PSK
 		case model.EncSAE:
-			ap.Password = e.Key
+			ap.Auth = &apauth{KeyManagement: "sae", Password: e.Key} // WPA3
 		}
 		d.AccessPoints[s.SSID] = ap
 		wifi[s.Device] = d
