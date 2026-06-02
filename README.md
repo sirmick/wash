@@ -526,6 +526,7 @@ web/
   shell/            browser shell runtime (WM, WS client)
   lib/              @wash/ui — shared web components + FilePicker
 wash-vm/            the in-browser RISC-V Linux demo (kernel/rootfs/wasm/host)
+wash-display/       native X/Wayland compositor (C++/CMake, optional) — see its README
 packaging/ debian/ rpm/ alpine/    distro package builds
 e2e/                Playwright suite
 docs/               see below
@@ -542,19 +543,37 @@ docs/               see below
 | [MULTIUSER.md](docs/MULTIUSER.md) | wash-login: browser auth, per-user routers, SCM_RIGHTS handoff, sessions. |
 | [MATRIX.md](docs/MATRIX.md) | Distro packaging — apt/dnf/apk backends, the package matrix, install layout. |
 | [TINYEMU.md](docs/TINYEMU.md) | The WASM RISC-V emulator: kernel format, shims, debug loop. |
+| [DISPLAY.md](docs/DISPLAY.md) | The native X/Wayland compositor (`wash-display`): build reality, capture pipeline, wire client. |
+| [NET.md](docs/NET.md) | Networking app + privileged daemon (`wash-net`/`wash-netd`): UCI-shaped model, backends. |
 | [PLAN.md](docs/PLAN.md) | The v1 plan this is built against. |
 | [TECH_DEBT.md](docs/TECH_DEBT.md) / [AUDIT.md](docs/AUDIT.md) | Known debt and a code-quality audit. |
 
-## Testing
+## Building & testing each part
 
-```bash
-make verify     # go vet + go test + static-ELF check on every binary
-make e2e        # build the test app + run Playwright (downloads Chromium first run)
-```
+wash covers a lot of ground; each part builds and tests on its own. The
+top-level `./build.sh` / `./test.sh` (both take `--help`) wrap the common
+flows, but you can also drive any single subsystem directly:
 
-`./test.sh` runs both unit and e2e tests and can sweep
-`--standalone`, `--multicall`, or `--both` layouts; `--filter` and
-`--workers` pass through to Playwright.
+| Part | Build | Test | Prereqs |
+|---|---|---|---|
+| **Go core + apps** | `make` (→ `out/`) | `go test ./...`, or one package: `go test ./apps/fm/...` | Go ≥ 1.25 |
+| **Frontend logic units** | — | `node --test --conditions=browser <files>` (run by `./test.sh`; the `browser` condition makes Solid resolve its reactive build) | pnpm, Node ≥ 22 |
+| **Frontend components** | — | `pnpm exec vitest run` (scopes `*.ctest.tsx` via `vitest.config.ts`) | pnpm |
+| **End-to-end** | `make test-app` (builds the world + test app) | `make e2e` *or* `pnpm -C e2e exec playwright test` | Chromium (auto-downloaded first run); free inotify instances (`e2e/global-setup.ts` pre-flights this) |
+| **Distro packages** | `./packaging/run_matrix.sh` | runs inside the same matrix (smoke + boot + distro-integration) | Docker |
+| **wash-display** (native compositor) | `WASH_DISPLAY=1 make` | local smoke harness only (not in CI) — see [`wash-display/README.md`](wash-display/README.md) | CMake + system wlroots/wayland `-dev` libs |
+| **wash-vm** (in-browser RISC-V VM) | `make -C wash-vm/image all` | `wash-vm/test/*.mjs` (ad-hoc repro scripts) | Docker only |
+
+`make verify` is the all-in-one gate: `go vet` + `go test` + a static-ELF
+check on every binary. `./test.sh` sweeps `--standalone` / `--multicall` /
+`--both` layouts and runs all four test tiers; `--filter` and `--workers`
+pass through to Playwright.
+
+> **Note:** a fresh `git clone` builds the Go core, frontends, and wash-vm
+> with no surprises. The native **wash-display** compositor is opt-in and
+> needs system development libraries — see its README for the `apt install`
+> line. Nothing in the build depends on the gitignored `tmp/` or `branches/`
+> working dirs.
 
 ---
 

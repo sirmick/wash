@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"sort"
 	"strings"
 	"time"
 
@@ -37,24 +36,12 @@ func startInlinePTY(sudoBin string, argv []string, cwd string, callerEnv map[str
 		// No sudo, no password injection, no ECHO toggling.
 		c = exec.Command(argv[0], argv[1:]...)
 	default:
-		var cmdArgs []string
-		if injectPassword {
-			cmdArgs = []string{"-S", "-k"}
-		} else {
-			// Passwordless: -n short-circuits if auth would be
-			// needed. We checked at startup that NOPASSWD covers
-			// us; if sudo prompts here something's wrong with the
-			// policy and the child won't start (audit-loud failure).
-			cmdArgs = []string{"-n"}
-		}
-		preserve := []string{"WASH_DISPLAY", "WASH_PROTO", "WASH_CONTROL_SOCKET", "WASH_BIN_DIR"}
-		for k := range callerEnv {
-			preserve = append(preserve, k)
-		}
-		sort.Strings(preserve)
-		cmdArgs = append(cmdArgs, "--preserve-env="+strings.Join(preserve, ","))
-		cmdArgs = append(cmdArgs, "--")
-		cmdArgs = append(cmdArgs, argv...)
+		// Shared sudo-arg assembly (sudoargv.go). Same inline allowlist
+		// as pipe-mode runs; -n vs -S -k follows injectPassword. (When
+		// passwordless, -n fails fast rather than prompt — we verified a
+		// NOPASSWD policy covers us at startup, so a prompt here is an
+		// audit-loud config skew, not a normal modal.)
+		cmdArgs := sudoArgv(injectPassword, inlinePreserveEnv, callerEnv, argv)
 		c = exec.Command(sudoBin, cmdArgs...)
 	}
 	c.Dir = cwd

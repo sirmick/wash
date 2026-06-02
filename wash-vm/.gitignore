@@ -26,6 +26,7 @@ image/dist/
 # kernel + bbl + chunked rootfs. Rebuild via the image pipeline.
 web/public/tinyemu/wash-kernel.bin
 web/public/tinyemu/wash-rootfs.ext2
+web/public/tinyemu/wash-rootfs.squashfs
 web/public/tinyemu/wash-rootfs/
 web/public/tinyemu/opensbi-fw_jump.bin
 web/public/tinyemu/riscvemu64-wasm.*

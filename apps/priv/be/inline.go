@@ -6,8 +6,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 )
@@ -64,22 +62,9 @@ func startInlineRun(sudoBin string, argv []string, cwd string, callerEnv map[str
 	case os.Geteuid() == 0:
 		c = exec.Command(argv[0], argv[1:]...)
 	default:
-		var cmdArgs []string
-		if len(pw) == 0 {
-			cmdArgs = []string{"-n"}
-		} else {
-			cmdArgs = []string{"-S", "-k"}
-		}
-		// --preserve-env: combine our WASH_* allowlist with the caller-
-		// requested vars. sudo's --preserve-env accepts a comma list.
-		preserve := []string{"WASH_DISPLAY", "WASH_PROTO", "WASH_CONTROL_SOCKET", "WASH_BIN_DIR"}
-		for k := range callerEnv {
-			preserve = append(preserve, k)
-		}
-		sort.Strings(preserve)
-		cmdArgs = append(cmdArgs, "--preserve-env="+strings.Join(preserve, ","))
-		cmdArgs = append(cmdArgs, "--")
-		cmdArgs = append(cmdArgs, argv...)
+		// Shared sudo-arg assembly (sudoargv.go). inlinePreserveEnv is
+		// the WASH_* allowlist; callerEnv keys are merged on top.
+		cmdArgs := sudoArgv(len(pw) > 0, inlinePreserveEnv, callerEnv, argv)
 		c = exec.Command(sudoBin, cmdArgs...)
 	}
 	c.Dir = cwd

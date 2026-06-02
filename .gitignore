@@ -33,6 +33,10 @@ e2e/playwright-report/
 
 # wash-display CMake build dir
 wash-display/build/
+# Stray distro packages downloaded while probing system wlroots deps
+# (e.g. libwlroots-dev_*.deb). The build links system wlroots via
+# pkg-config; these downloads are never part of the tree.
+wash-display/*.deb
 # Vendored wlroots is committed as SOURCE; its Meson build output is not.
 wash-display/third_party/wlroots/build/
 

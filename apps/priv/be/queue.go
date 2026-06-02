@@ -1068,27 +1068,18 @@ func runSudo(sudoBin, binary string, args []string, instanceID, token string, pw
 	switch {
 	case os.Geteuid() == 0:
 		c = exec.Command(binary, args...)
-	case len(pw) == 0:
-		// Passwordless: -n is non-interactive; sudo fails fast (with
-		// no prompt) if auth would otherwise be needed. We checked
-		// at startup that NOPASSWD covers us, so a failure here is
-		// an audit-worthy config skew rather than a normal modal.
-		cmdArgs := []string{
-			"-n",
-			"--preserve-env=WASH_DISPLAY,WASH_PROTO,WASH_APP_ID,WASH_INSTANCE_ID,WASH_ATTACH_TOKEN",
-			"--", binary,
-		}
-		cmdArgs = append(cmdArgs, args...)
-		c = exec.Command(sudoBin, cmdArgs...)
 	default:
-		cmdArgs := []string{
-			"-S", "-k",
-			"--preserve-env=WASH_DISPLAY,WASH_PROTO,WASH_APP_ID,WASH_INSTANCE_ID,WASH_ATTACH_TOKEN",
-			"--", binary,
-		}
-		cmdArgs = append(cmdArgs, args...)
+		// Shared sudo-arg assembly (sudoargv.go). appSpawnPreserveEnv
+		// carries the router re-attach identity (app/instance/token).
+		// With a password we use -S -k and feed pw\n on stdin; without
+		// one we use -n (passwordless NOPASSWD policy, verified at
+		// startup — a prompt here would be an audit-worthy config skew).
+		injectPassword := len(pw) > 0
+		cmdArgs := sudoArgv(injectPassword, appSpawnPreserveEnv, nil, append([]string{binary}, args...))
 		c = exec.Command(sudoBin, cmdArgs...)
-		c.Stdin = stdinPipeOnce(pw)
+		if injectPassword {
+			c.Stdin = stdinPipeOnce(pw)
+		}
 	}
 	c.Env = append(os.Environ(),
 		"WASH_APP_ID="+filepath.Base(binary), // overridden below if we can derive better
