@@ -141,7 +141,9 @@ func (a *Applier) Rollback(token backend.RollbackToken) error {
 // (every /etc/netplan file), so it sees the real box no matter where the
 // under-renderer's keyfiles land. This is the fix for the empty-read bug.
 func (a *Applier) Live() model.Config {
-	out, err := a.run.run("netplan", "get")
+	// stdout only: `netplan get` warns to stderr (e.g. "permissions too open"
+	// for a 0644 file), which would otherwise corrupt the YAML we parse.
+	out, err := a.run.runStdout("netplan", "get")
 	if err != nil {
 		return model.Config{}
 	}

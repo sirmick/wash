@@ -35,6 +35,11 @@ func (f *fakeRunner) run(name string, args ...string) (string, error) {
 	return f.out[key], f.err[key]
 }
 
+// runStdout shares the fake's canned output (tests provide clean stdout).
+func (f *fakeRunner) runStdout(name string, args ...string) (string, error) {
+	return f.run(name, args...)
+}
+
 func (f *fakeRunner) saw(substr string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -37,6 +37,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -345,24 +346,33 @@ func refreshLiveViaPriv() {
 	defer cancel()
 	var cfg model.Config
 	ok := false
+	log.Printf("wash-netd: privileged read: %s -backend %s", washnetReadBin, info.active)
 	r, err := conn.PrivRunInlineSync(ctx, []string{washnetReadBin, "-backend", info.active}, "read current network configuration")
 	if err == nil && r.Exit == 0 {
-		if parsed, perr := codec.Parse(ucibuf.Unmarshal(string(r.Stdout))); perr == nil {
+		parsed, perr := codec.Parse(ucibuf.Unmarshal(string(r.Stdout)))
+		log.Printf("wash-netd: privileged read ok: %d stdout bytes → %d interfaces, %d devices (parse err=%v); stderr=%q",
+			len(r.Stdout), len(parsed.Interfaces), len(parsed.Devices), perr, strings.TrimSpace(string(r.Stderr)))
+		if perr == nil {
 			cfg, ok = parsed, true
-		} else {
-			log.Printf("wash-netd: privileged read parse: %v", perr)
 		}
 	} else {
 		log.Printf("wash-netd: privileged read failed (err=%v exit=%d): %s", err, r.Exit, string(r.Stderr))
 	}
+	// Only warm the cache on a non-empty read: a spuriously-empty result (a
+	// failed escalation, a read bug) must not stick — leave the cache cold so
+	// the next `current` retries rather than showing "unconfigured" forever.
+	nonEmpty := len(cfg.Interfaces) > 0 || len(cfg.Devices) > 0
 	liveMu.Lock()
 	liveRefreshing = false
-	if ok {
+	if ok && nonEmpty {
 		liveCache = cfg
 		liveWarm = true
 	}
 	liveMu.Unlock()
-	if ok {
+	if ok && !nonEmpty {
+		log.Printf("wash-netd: privileged read returned an empty config — not caching (will retry)")
+	}
+	if ok && nonEmpty {
 		// Tell the FE to re-fetch `current` now that we can read the box.
 		publish(NetState{Status: "idle", Backend: info.active, Available: info.available, Refresh: true})
 	}

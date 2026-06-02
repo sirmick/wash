@@ -75,6 +75,10 @@ func hasYAML(dir string) bool {
 // inject a fake that records calls.
 type runner interface {
 	run(name string, args ...string) (string, error)
+	// runStdout returns STDOUT only — `netplan get` writes warnings (e.g.
+	// "permissions too open") to stderr, and mixing them into the YAML breaks
+	// the parser. Reads use this; apply uses run (combined, for error text).
+	runStdout(name string, args ...string) (string, error)
 }
 
 type execRunner struct{}
@@ -85,6 +89,20 @@ func (execRunner) run(name string, args ...string) (string, error) {
 	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("%s %s: %w (%s)", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
+}
+
+func (execRunner) runStdout(name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).Output() // stdout only
+	if err != nil {
+		stderr := ""
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr = strings.TrimSpace(string(ee.Stderr))
+		}
+		return string(out), fmt.Errorf("%s %s: %w (%s)", name, strings.Join(args, " "), err, stderr)
 	}
 	return string(out), nil
 }
