@@ -1,60 +1,30 @@
-// wash-app-settings: singleton settings UI. Three panes — Desktop
-// (round-trips ~/.config/wash/desktop.json via settings.read/write),
-// Developer (controls the wash-vscode background service), and Display
-// (controls the wash-display compositor) — the latter two host-rendered
-// over the BE's svc.* relay (docs/SETTINGS.md §4).
+// wash-app-settings: singleton settings UI. One built-in pane — Desktop
+// (round-trips ~/.config/wash/desktop.json via settings.read/write) —
+// plus a section per app-supplied settings panel discovered through
+// window.wash.settingsPanels(). The panels (Developer/vscode,
+// Network/netd, Display/compositor) live in their owning apps and are
+// loaded on demand; settings hosts them over a per-panel port that wraps
+// its generic svc.* / settings.* / launch BE verbs (docs/SETTINGS.md).
 //
 // Architecture: this app never talks to wash-session directly.
 // settings.write rewrites desktop.json atomically; the session BE
 // fswatches that file and re-ships desktop.config to its FE. Decoupled
-// through disk by design (see [no premature service]). The service
-// panels subscribe via svc.send and render the snapshots the services
-// push back (relayed by the BE as svc.recv).
+// through disk by design (see [no premature service]).
 
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { FilePicker, defineWashApp, tokens } from '@wash/ui';
 import {
-  Image as ImageIcon,
-  RotateCcw,
-  Play,
-  Square as StopIcon,
-  Download,
-  CircleAlert,
-} from 'lucide-solid';
-
-// Background-service app ids the panels drive over the svc.* relay.
-const VSCODE_APP = 'com.wash.vscode';
-const DISPLAY_APP = 'com.wash.display';
-const NETD_APP = 'com.wash.netd'; // privileged networking service (status only)
-const NET_APP = 'com.wash.net'; // the dedicated network window the pane opens
-
-// Backend choices the Network pane offers; value persisted to network.json and
-// read by com.wash.netd at startup (docs/NET.md §2.7).
-const NET_BACKENDS: { value: string; label: string }[] = [
-  { value: 'auto', label: 'Automatic (detect)' },
-  { value: 'nm', label: 'NetworkManager (coexist)' },
-  { value: 'networkd', label: 'systemd-networkd (take over)' },
-];
-
-// vscode service status snapshot (apps/vscode/be statusPayload).
-interface VscodeStatus {
-  installed: boolean;
-  version: string;
-  managed: boolean;
-  arch_ok: boolean;
-  latest: string;
-  running: boolean;
-  installing: boolean;
-}
-
-// compositor state snapshot (apps/.../display, commit 7). Absent until
-// the service answers; the panel shows "not installed" until then.
-interface DisplayState {
-  running: boolean;
-  wayland_display: string;
-  window_count: number;
-}
+  FilePicker,
+  PANEL_PORT_PROP,
+  Row,
+  Section,
+  Select,
+  SmallBtn,
+  defineWashApp,
+  tokens,
+} from '@wash/ui';
+import type { SettingsPanelPort } from '@wash/ui';
+import { Image as ImageIcon } from 'lucide-solid';
 
 // DesktopConfig mirrors cmd/wash-session/config.go schema. Optional
 // everywhere — defaults are applied for missing fields so an empty
@@ -93,29 +63,19 @@ interface BEMessage {
   [k: string]: unknown;
 }
 
-type Section = 'desktop' | 'developer' | 'display' | 'network';
+// 'desktop' is the built-in pane; any other section value is a panel's
+// owning app id, discovered at runtime.
+type Section = string;
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [section, setSection] = createSignal<Section>('desktop');
 
-  // ---- service-panel state (Developer + Display) ----
-  const [vscode, setVscode] = createSignal<VscodeStatus | null>(null);
-  const [vscodeLog, setVscodeLog] = createSignal<string>('');
-  // Display: null = still checking; 'absent' = no reply (not installed /
-  // dead); otherwise the live state snapshot.
-  const [display, setDisplay] = createSignal<DisplayState | null>(null);
-  const [displayAbsent, setDisplayAbsent] = createSignal(false);
+  // Discovered app-supplied panels (catalog `panels` list via the shell).
+  const [panels, setPanels] = createSignal<WashPanelDesc[]>(window.wash.settingsPanels());
 
-  // ---- network pane: the persisted renderer choice (netMode, from
-  // network.json) + what netd reports running/available (its state push).
-  const [netMode, setNetMode] = createSignal<string>('auto');
-  const [netActive, setNetActive] = createSignal<string>('');
-  const [netAvailable, setNetAvailable] = createSignal<string[]>([]);
-
-  // Form state. Initialized to defaults; overwritten when the BE
-  // ships settings.value on mount.
+  // ---- desktop pane form state ----
   const [path, setPath] = createSignal<string>('');
-  const [mode, setMode] = createSignal<DesktopConfig['wallpaper']['mode']>(DEFAULTS.mode);
+  const [mode, setMode] = createSignal<NonNullable<DesktopConfig['wallpaper']>['mode']>(DEFAULTS.mode);
   const [fallback, setFallback] = createSignal<string>(DEFAULTS.fallback);
   const [format, setFormat] = createSignal<'12h' | '24h'>(DEFAULTS.format);
   const [showSeconds, setShowSeconds] = createSignal<boolean>(DEFAULTS.showSeconds);
@@ -132,17 +92,54 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
 
+  // ---- panel port machinery ----
+  // Panels are mounted inside this app's element, so they can't be their
+  // own router instances. Each gets a SettingsPanelPort that funnels its
+  // traffic through this app's BE (svc.* / settings.* / launch). We route
+  // the BE's replies back to the right panel here.
+  const msgSubs = new Map<string, Set<(payload: Record<string, unknown>) => void>>(); // by app id
+  const cfgSubs = new Map<string, Set<(value: Record<string, unknown>) => void>>(); // by domain
+
+  const subscribe = <T,>(m: Map<string, Set<T>>, key: string, cb: T): (() => void) => {
+    let set = m.get(key);
+    if (!set) {
+      set = new Set();
+      m.set(key, set);
+    }
+    set.add(cb);
+    return () => set!.delete(cb);
+  };
+
+  const svcSend = (app: string, payload: Record<string, unknown>) =>
+    send({ kind: 'svc.send', app, payload });
+  const svcRestart = (app: string) => send({ kind: 'svc.restart', app });
+
+  const buildPort = (appID: string): SettingsPanelPort => ({
+    appID,
+    send: (payload, app) => svcSend(app ?? appID, payload),
+    restart: (app) => svcRestart(app ?? appID),
+    onMessage: (cb, app) => subscribe(msgSubs, app ?? appID, cb),
+    readConfig: (domain, cb) => {
+      const off = subscribe(cfgSubs, domain, cb);
+      send({ kind: 'settings.read', domain });
+      return off;
+    },
+    writeConfig: (domain, value) => send({ kind: 'settings.write', domain, value }),
+    launch: (app) => send({ kind: 'launch', app }),
+  });
+
   // ---- BE plumbing ----
 
   const handleBE = (msg: BEMessage) => {
     switch (msg.kind) {
       case 'settings.value': {
-        if ((msg as { domain?: string }).domain === 'network') {
-          const v = (msg.value || {}) as { backend?: string };
-          setNetMode(v.backend || 'auto');
-          return;
-        }
-        const v = (msg.value || {}) as DesktopConfig;
+        const domain = (msg as { domain?: string }).domain || 'desktop';
+        const value = (msg.value || {}) as Record<string, unknown>;
+        // Fan a panel-owned domain (e.g. 'network') out to its readConfig
+        // subscribers; the desktop pane is handled inline below.
+        cfgSubs.get(domain)?.forEach((cb) => cb(value));
+        if (domain !== 'desktop') return;
+        const v = value as DesktopConfig;
         setPath(v.wallpaper?.path ?? '');
         setMode(v.wallpaper?.mode ?? DEFAULTS.mode);
         setFallback(v.wallpaper?.fallback_color ?? DEFAULTS.fallback);
@@ -167,88 +164,19 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         setPickerStart((msg as { root?: string }).root || '/');
         return;
       case 'svc.recv': {
-        // A background service pushed a reply; route by app id.
-        const app = (msg as { app?: string }).app;
-        const p = ((msg as { payload?: BEMessage }).payload || {}) as BEMessage;
-        if (app === VSCODE_APP) handleVscode(p);
-        else if (app === DISPLAY_APP) handleDisplay(p);
-        else if (app === NETD_APP) handleNetd(p);
+        // A background service pushed a reply; route to its panel's
+        // onMessage subscribers by app id.
+        const app = (msg as { app?: string }).app || '';
+        const payload = ((msg as { payload?: Record<string, unknown> }).payload || {});
+        msgSubs.get(app)?.forEach((cb) => cb(payload));
         return;
       }
-      case 'svc.restart_done': {
-        const m = msg as { app?: string; ok?: boolean; error?: string };
-        if (m.app === DISPLAY_APP && !m.ok) {
-          // Restart of an unregistered/dead compositor → not installed.
-          setDisplay(null);
-          setDisplayAbsent(true);
-        }
-        return;
-      }
+      // svc.restart_done is intentionally ignored: panels drive their own
+      // post-restart UI off the service's next state push.
     }
   };
 
-  // ---- service relay helpers ----
-
-  const svcSend = (app: string, payload: Record<string, unknown>) =>
-    send({ kind: 'svc.send', app, payload });
-  const svcRestart = (app: string) => send({ kind: 'svc.restart', app });
-
-  // handleVscode folds the vscode service's pushes into panel state.
-  const handleVscode = (p: BEMessage) => {
-    switch (p.kind) {
-      case 'status':
-        setVscode(p as unknown as VscodeStatus);
-        return;
-      case 'log': {
-        // base64 chunk of install output; append decoded tail.
-        const b64 = (p as { bytes?: string }).bytes;
-        if (b64) setVscodeLog((cur) => (cur + decodeUtf8(b64)).slice(-8000));
-        return;
-      }
-      case 'error':
-        setVscodeLog((cur) => cur + `\n[error] ${(p as { msg?: string }).msg ?? ''}\n`);
-        return;
-      // ready / exited only matter to workbench windows; ignore here.
-    }
-  };
-
-  // handleDisplay folds the compositor's pushes into panel state. Any
-  // reply at all means the service is alive, so clear the absent flag.
-  const handleDisplay = (p: BEMessage) => {
-    setDisplayAbsent(false);
-    if (p.kind === 'display.state' || p.kind === 'display_ready') {
-      setDisplay({
-        running: (p as { running?: boolean }).running ?? true,
-        wayland_display: (p as { wayland_display?: string }).wayland_display ?? '',
-        window_count: (p as { window_count?: number }).window_count ?? 0,
-      });
-    }
-  };
-
-  // handleNetd folds netd's StateService snapshot into the Network pane: which
-  // backend is actually running + which the box could run (for greying).
-  const handleNetd = (p: BEMessage) => {
-    if (p.kind !== 'state') return;
-    const s = ((p as { state?: { backend?: string; available?: string[] } }).state) || {};
-    setNetActive(s.backend ?? '');
-    setNetAvailable(Array.isArray(s.available) ? s.available : []);
-  };
-
-  // chooseNetBackend persists the renderer choice, then restarts netd AND the
-  // net window so both pick up the new backend at process start — no hot reload
-  // (docs/NET.md §2.7).
-  const chooseNetBackend = (backend: string) => {
-    setNetMode(backend);
-    send({ kind: 'settings.write', domain: 'network', value: { backend } });
-    svcRestart(NETD_APP);
-    svcRestart(NET_APP);
-    setStatus('applying network backend…');
-    window.setTimeout(() => setStatus(''), 1_500);
-  };
-
-  const openNetwork = () => send({ kind: 'launch', app: NET_APP });
-
-  // ---- save (debounced) ----
+  // ---- desktop save (debounced) ----
 
   let saveTimer = 0;
   const scheduleSave = () => {
@@ -272,7 +200,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     setStatus('saving…');
   };
 
-  // Auto-save on any signal change.
+  // Auto-save on any desktop signal change.
   createEffect(() => {
     path(); mode(); fallback(); format(); showSeconds(); position();
     scheduleSave();
@@ -284,30 +212,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail as BEMessage);
     props.host.addEventListener('wash:msg', onMsg);
 
-    // Ask BE for current values + picker root.
-    send({ kind: 'settings.read', domain: 'desktop' });
-    send({ kind: 'settings.read', domain: 'network' });
-    send({ kind: 'fs.root' });
+    const offPanels = window.wash.onSettingsPanels(setPanels);
 
-    // Subscribe to the service panels. vscode is a registered
-    // background app (spawns on demand), so it replies with status.
-    // display ships as a separate package — when absent the subscribe
-    // is dropped router-side and no reply arrives; flip to "not
-    // installed" after a grace window.
-    svcSend(VSCODE_APP, { kind: 'subscribe' });
-    svcSend(DISPLAY_APP, { kind: 'subscribe' });
-    svcSend(NETD_APP, { kind: 'subscribe' });
-    const displayProbe = window.setTimeout(() => {
-      if (display() === null) setDisplayAbsent(true);
-    }, 1_500);
+    // Ask BE for the desktop config + picker root. Panel domains are
+    // requested by each panel via port.readConfig on mount.
+    send({ kind: 'settings.read', domain: 'desktop' });
+    send({ kind: 'fs.root' });
 
     onCleanup(() => {
       props.host.removeEventListener('wash:msg', onMsg);
+      offPanels();
       if (saveTimer) clearTimeout(saveTimer);
-      window.clearTimeout(displayProbe);
-      svcSend(VSCODE_APP, { kind: 'unsubscribe' });
-      svcSend(DISPLAY_APP, { kind: 'unsubscribe' });
-      svcSend(NETD_APP, { kind: 'unsubscribe' });
     });
   });
 
@@ -324,26 +239,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     <>
       <div style={layoutStyle}>
         <div style={railStyle}>
-          <RailItem
-            label="Desktop"
-            active={section() === 'desktop'}
-            onClick={() => setSection('desktop')}
-          />
-          <RailItem
-            label="Developer"
-            active={section() === 'developer'}
-            onClick={() => setSection('developer')}
-          />
-          <RailItem
-            label="Display"
-            active={section() === 'display'}
-            onClick={() => setSection('display')}
-          />
-          <RailItem
-            label="Network"
-            active={section() === 'network'}
-            onClick={() => setSection('network')}
-          />
+          <RailItem label="Desktop" active={section() === 'desktop'} onClick={() => setSection('desktop')} />
+          <For each={panels()}>
+            {(p) => (
+              <RailItem
+                label={p.section}
+                active={section() === p.app_id}
+                onClick={() => setSection(p.app_id)}
+              />
+            )}
+          </For>
         </div>
         <div style={paneStyle}>
           <Show when={section() === 'desktop'}>
@@ -363,33 +268,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               onPositionChange={setPosition}
             />
           </Show>
-          <Show when={section() === 'developer'}>
-            <DeveloperPane
-              status={vscode()}
-              log={vscodeLog()}
-              onStart={() => svcSend(VSCODE_APP, { kind: 'start' })}
-              onStop={() => svcSend(VSCODE_APP, { kind: 'stop' })}
-              onInstall={() => svcSend(VSCODE_APP, { kind: 'install', version: '' })}
-              onUpdate={() => svcSend(VSCODE_APP, { kind: 'update' })}
-              onRestart={() => svcRestart(VSCODE_APP)}
-            />
-          </Show>
-          <Show when={section() === 'display'}>
-            <DisplayPane
-              state={display()}
-              absent={displayAbsent()}
-              onRestart={() => svcRestart(DISPLAY_APP)}
-            />
-          </Show>
-          <Show when={section() === 'network'}>
-            <NetworkPane
-              mode={netMode()}
-              active={netActive()}
-              available={netAvailable()}
-              onChoose={chooseNetBackend}
-              onOpen={openNetwork}
-            />
-          </Show>
+          <For each={panels()}>
+            {(p) => (
+              <Show when={section() === p.app_id}>
+                <PanelHost panel={p} buildPort={buildPort} />
+              </Show>
+            )}
+          </For>
         </div>
       </div>
       <div data-testid="settings-status" style={statusStyle}>{status()}</div>
@@ -409,6 +294,48 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         data-testid="settings-picker"
       />
     </>
+  );
+};
+
+// PanelHost loads an app-supplied panel bundle on demand (defining its
+// custom element), then mounts the element with a host-built port. The
+// element subscribes/unsubscribes itself; remounting on section switch
+// re-runs that lifecycle. loadSettingsPanel is idempotent per app id, so
+// only the first visit pays the fetch+import.
+const PanelHost: Component<{
+  panel: WashPanelDesc;
+  buildPort: (appID: string) => SettingsPanelPort;
+}> = (props) => {
+  let container: HTMLDivElement | undefined;
+  const [error, setError] = createSignal('');
+
+  onMount(() => {
+    let el: HTMLElement | undefined;
+    let cancelled = false;
+    window.wash
+      .loadSettingsPanel(props.panel.app_id)
+      .then(() => {
+        if (cancelled || !container) return;
+        el = document.createElement(props.panel.element);
+        (el as HTMLElement & { [PANEL_PORT_PROP]?: SettingsPanelPort })[PANEL_PORT_PROP] =
+          props.buildPort(props.panel.app_id);
+        container.appendChild(el);
+      })
+      .catch((e) => setError(String(e)));
+    onCleanup(() => {
+      cancelled = true;
+      el?.remove();
+    });
+  });
+
+  return (
+    <div ref={container} style={{ height: '100%' }}>
+      <Show when={error()}>
+        <div data-testid="panel-error" style={{ color: '#fca5a5', padding: '4px' }}>
+          Failed to load panel: {error()}
+        </div>
+      </Show>
+    </div>
   );
 };
 
@@ -531,282 +458,6 @@ const DesktopPane: Component<{
   );
 };
 
-// DeveloperPane controls the wash-vscode background service: install /
-// update code-server, start / stop it, and a hard restart. Host-rendered
-// over the service's status / log pushes (relayed as svc.recv).
-const DeveloperPane: Component<{
-  status: VscodeStatus | null;
-  log: string;
-  onStart: () => void;
-  onStop: () => void;
-  onInstall: () => void;
-  onUpdate: () => void;
-  onRestart: () => void;
-}> = (props) => {
-  const s = () => props.status;
-  const updatable = () => {
-    const v = s();
-    return !!v && v.installed && !!v.latest && v.latest !== v.version;
-  };
-  return (
-    <div style={{ display: 'flex', 'flex-direction': 'column', gap: '20px', padding: '4px 4px' }}>
-      <Section title="VS Code (code-server)">
-        <Show when={s()} fallback={<div style={{ opacity: 0.6 }}>Connecting to service…</div>}>
-          <div style={{ display: 'flex', 'flex-direction': 'column', gap: '12px' }}>
-            <Row label="Status">
-              <ServiceBadge
-                tone={
-                  !s()!.installed ? 'absent'
-                    : s()!.installing ? 'busy'
-                    : s()!.running ? 'on'
-                    : 'off'
-                }
-                label={
-                  !s()!.installed ? 'not installed'
-                    : s()!.installing ? 'installing…'
-                    : s()!.running ? 'running'
-                    : 'stopped'
-                }
-              />
-            </Row>
-            <Show when={s()!.installed}>
-              <Row label="Version">
-                <span style={{ font: `${tokens.fontSizeMd} ${tokens.fontMono}` }}>
-                  {s()!.version || '—'}
-                  <Show when={updatable()}>
-                    <span style={{ opacity: 0.6 }}> → {s()!.latest} available</span>
-                  </Show>
-                </span>
-              </Row>
-            </Show>
-            <Show when={!s()!.arch_ok}>
-              <div style={warnStyle}><CircleAlert size={13} /> Unsupported CPU architecture for code-server.</div>
-            </Show>
-            <div style={{ display: 'flex', gap: '6px', 'flex-wrap': 'wrap' }}>
-              <Show when={!s()!.installed && s()!.arch_ok}>
-                <SmallBtn onClick={props.onInstall} data-testid="dev-install">
-                  <Download size={14} /> Install
-                </SmallBtn>
-              </Show>
-              <Show when={updatable()}>
-                <SmallBtn onClick={props.onUpdate} data-testid="dev-update">
-                  <Download size={14} /> Update to {s()!.latest}
-                </SmallBtn>
-              </Show>
-              <Show when={s()!.installed}>
-                <Show
-                  when={s()!.running}
-                  fallback={
-                    <SmallBtn onClick={props.onStart} data-testid="dev-start">
-                      <Play size={14} /> Start
-                    </SmallBtn>
-                  }
-                >
-                  <SmallBtn onClick={props.onStop} data-testid="dev-stop">
-                    <StopIcon size={14} /> Stop
-                  </SmallBtn>
-                </Show>
-                <SmallBtn onClick={props.onRestart} data-testid="dev-restart">
-                  <RotateCcw size={14} /> Restart
-                </SmallBtn>
-              </Show>
-            </div>
-          </div>
-        </Show>
-      </Section>
-
-      <Show when={props.log}>
-        <Section title="Install log">
-          <pre data-testid="dev-log" style={logStyle}>{props.log}</pre>
-        </Section>
-      </Show>
-    </div>
-  );
-};
-
-// DisplayPane controls the wash-display compositor: live status + a
-// restart. When the package isn't installed the service never answers,
-// so the panel renders a not-installed hint instead.
-const DisplayPane: Component<{
-  state: DisplayState | null;
-  absent: boolean;
-  onRestart: () => void;
-}> = (props) => {
-  return (
-    <div style={{ display: 'flex', 'flex-direction': 'column', gap: '20px', padding: '4px 4px' }}>
-      <Section title="X / Wayland compositor">
-        <Show
-          when={!props.absent}
-          fallback={
-            <div data-testid="display-absent" style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}>
-              <ServiceBadge tone="absent" label="not installed" />
-              <div style={{ opacity: 0.7, font: `${tokens.fontSizeMd} ${tokens.fontSans}`, 'max-width': '420px', 'line-height': 1.5 }}>
-                The compositor ships as a separate package. Install <code>wash-display</code> to run native
-                X11 / Wayland apps inside wash.
-              </div>
-            </div>
-          }
-        >
-          <Show when={props.state} fallback={<div style={{ opacity: 0.6 }}>Checking…</div>}>
-            <div style={{ display: 'flex', 'flex-direction': 'column', gap: '12px' }}>
-              <Row label="Status">
-                <ServiceBadge tone={props.state!.running ? 'on' : 'off'} label={props.state!.running ? 'running' : 'stopped'} />
-              </Row>
-              <Show when={props.state!.wayland_display}>
-                <Row label="Wayland display">
-                  <span style={{ font: `${tokens.fontSizeMd} ${tokens.fontMono}` }}>{props.state!.wayland_display}</span>
-                </Row>
-              </Show>
-              <Row label="Native windows">
-                <span style={{ font: `${tokens.fontSizeMd} ${tokens.fontMono}` }}>{props.state!.window_count}</span>
-              </Row>
-              <div>
-                <SmallBtn onClick={props.onRestart} data-testid="display-restart">
-                  <RotateCcw size={14} /> Restart compositor
-                </SmallBtn>
-              </div>
-            </div>
-          </Show>
-        </Show>
-      </Section>
-    </div>
-  );
-};
-
-// NetworkPane picks the networking renderer + opens the dedicated network app.
-// It only selects the engine + shows what's running; all actual config editing
-// (and the privileged apply) lives in com.wash.net (docs/NET.md §2.7) — the
-// "Open Network…" button launches it. Changing the backend persists the choice
-// and restarts netd + the net window (no hot reload).
-const NetworkPane: Component<{
-  mode: string;
-  active: string;
-  available: string[];
-  onChoose: (backend: string) => void;
-  onOpen: () => void;
-}> = (props) => {
-  // A backend is selectable if it's auto, the current choice, or detected
-  // available; others grey out (e.g. systemd-networkd on a non-systemd box).
-  const selectable = (v: string) =>
-    v === 'auto' || v === props.mode || props.available.includes(v);
-  return (
-    <div style={{ display: 'flex', 'flex-direction': 'column', gap: '20px', padding: '4px 4px' }}>
-      <Section title="Networking backend">
-        <div style={{ display: 'flex', 'flex-direction': 'column', gap: '12px' }}>
-          <Row label="Manage mode">
-            <select
-              data-testid="net-backend"
-              value={props.mode}
-              onChange={(e) => props.onChoose(e.currentTarget.value)}
-              style={textInputStyle}
-            >
-              <For each={NET_BACKENDS}>
-                {(b) => (
-                  <option value={b.value} disabled={!selectable(b.value)}>
-                    {b.label}
-                    {!selectable(b.value) ? ' — unavailable' : ''}
-                  </option>
-                )}
-              </For>
-            </select>
-          </Row>
-          <Row label="Currently running">
-            <Show
-              when={props.active && props.active !== 'fake'}
-              fallback={<ServiceBadge tone="off" label={props.active === 'fake' ? 'no backend selected' : 'starting…'} />}
-            >
-              <ServiceBadge tone="on" label={props.active} />
-            </Show>
-          </Row>
-          <div style={{ opacity: 0.7, font: `${tokens.fontSizeMd} ${tokens.fontSans}`, 'max-width': '440px', 'line-height': 1.5 }}>
-            Choosing a backend restarts the network service; any open Network window reloads.
-            <strong> Automatic</strong> keeps NetworkManager when it's already managing the box (coexist),
-            and uses systemd-networkd when wash owns it.
-          </div>
-        </div>
-      </Section>
-      <Section title="Network settings">
-        <div>
-          <SmallBtn onClick={props.onOpen} data-testid="net-open">
-            Open Network…
-          </SmallBtn>
-        </div>
-      </Section>
-    </div>
-  );
-};
-
-// ServiceBadge is the small status pill shared by both service panels.
-const ServiceBadge: Component<{ tone: 'on' | 'off' | 'busy' | 'absent'; label: string }> = (props) => {
-  const palette: Record<string, { bg: string; fg: string }> = {
-    on: { bg: '#1c3d24', fg: '#86efac' },
-    off: { bg: '#1f1f2a', fg: tokens.fgDim },
-    busy: { bg: '#3a3a1c', fg: '#fde047' },
-    absent: { bg: '#3d1c1c', fg: '#fca5a5' },
-  };
-  const c = palette[props.tone] ?? palette.off;
-  return (
-    <span
-      data-testid="service-badge"
-      data-tone={props.tone}
-      style={{
-        display: 'inline-flex',
-        'align-items': 'center',
-        padding: '2px 10px',
-        'border-radius': `${tokens.radiusSm}px`,
-        font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
-        background: c.bg,
-        color: c.fg,
-      }}
-    >
-      {props.label}
-    </span>
-  );
-};
-
-const Section: Component<{ title: string; children: JSX.Element }> = (props) => (
-  <div>
-    <div style={sectionTitleStyle}>{props.title}</div>
-    {props.children}
-  </div>
-);
-
-const Row: Component<{ label: string; children: JSX.Element }> = (props) => (
-  <div style={{ display: 'grid', 'grid-template-columns': '140px 1fr', gap: '12px', 'align-items': 'center' }}>
-    <div style={{ opacity: 0.7, font: `${tokens.fontSizeBase} ${tokens.fontSans}` }}>{props.label}</div>
-    {props.children}
-  </div>
-);
-
-const Select: Component<{
-  value: string;
-  options: [string, string][];
-  onChange: (v: string) => void;
-}> = (props) => (
-  <select
-    value={props.value}
-    onInput={(e) => props.onChange(e.currentTarget.value)}
-    style={selectStyle}
-  >
-    <For each={props.options}>{([v, l]) => <option value={v}>{l}</option>}</For>
-  </select>
-);
-
-const SmallBtn: Component<{
-  onClick: () => void;
-  'data-testid'?: string;
-  children: JSX.Element;
-}> = (props) => (
-  <button
-    type="button"
-    data-testid={props['data-testid']}
-    onClick={props.onClick}
-    style={smallBtnStyle}
-  >
-    {props.children}
-  </button>
-);
-
 const Thumbnail: Component<{ color: string }> = (props) => (
   <div
     style={{
@@ -819,19 +470,6 @@ const Thumbnail: Component<{ color: string }> = (props) => (
     }}
   />
 );
-
-// decodeUtf8 turns a base64 chunk (the service's log bytes) into text.
-// Best-effort: malformed input yields "".
-function decodeUtf8(b64: string): string {
-  try {
-    const bin = atob(b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return new TextDecoder().decode(bytes);
-  } catch {
-    return '';
-  }
-}
 
 // normalizeHex coerces #fff / random text into a valid 7-char hex
 // for <input type=color> (which only accepts #rrggbb).
@@ -869,14 +507,6 @@ const paneStyle: JSX.CSSProperties = {
   overflow: 'auto',
 };
 
-const sectionTitleStyle: JSX.CSSProperties = {
-  font: `600 ${tokens.fontSizeBase} ${tokens.fontSans}`,
-  opacity: 0.7,
-  'text-transform': 'uppercase',
-  'letter-spacing': '0.04em',
-  'margin-bottom': '8px',
-};
-
 const pathRowStyle: JSX.CSSProperties = {
   font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
   opacity: 0.85,
@@ -903,33 +533,10 @@ const textInputStyle: JSX.CSSProperties = {
   outline: 'none',
 };
 
-const selectStyle: JSX.CSSProperties = {
-  background: tokens.bgMenu,
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusMd}px`,
-  padding: '4px 8px',
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
-  cursor: 'pointer',
-};
-
 const checkboxStyle: JSX.CSSProperties = {
   display: 'inline-flex',
   'align-items': 'center',
   gap: '4px',
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
-  cursor: 'pointer',
-};
-
-const smallBtnStyle: JSX.CSSProperties = {
-  display: 'inline-flex',
-  'align-items': 'center',
-  gap: '5px',
-  background: tokens.bgMenu,
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusMd}px`,
-  padding: '4px 10px',
   font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
   cursor: 'pointer',
 };
@@ -941,28 +548,6 @@ const statusStyle: JSX.CSSProperties = {
   font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
   opacity: 0.6,
   'pointer-events': 'none',
-};
-
-const logStyle: JSX.CSSProperties = {
-  margin: 0,
-  'max-height': '180px',
-  overflow: 'auto',
-  background: '#10101a',
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusMd}px`,
-  padding: '8px 10px',
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
-  color: tokens.fgDim,
-  'white-space': 'pre-wrap',
-  'word-break': 'break-word',
-};
-
-const warnStyle: JSX.CSSProperties = {
-  display: 'inline-flex',
-  'align-items': 'center',
-  gap: '6px',
-  color: '#fca5a5',
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
 };
 
 // ---- custom element ----

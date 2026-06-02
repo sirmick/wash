@@ -15,11 +15,14 @@ import (
 )
 
 // readIndexJS returns the bytes of "index.js" from an embedded fs.FS,
-// the same path the SDK exposes from the probe envelope. Used by the
+// the same path the SDK exposes from the probe payload. Used by the
 // multi-call fast path so in-process registrations carry the same
 // bundle bytes as exec-probed ones.
-func readIndexJS(fsys fs.FS) ([]byte, error) {
-	f, err := fsys.Open("index.js")
+func readIndexJS(fsys fs.FS) ([]byte, error) { return readAsset(fsys, "index.js") }
+
+// readAsset returns the bytes of name from an embedded fs.FS.
+func readAsset(fsys fs.FS, name string) ([]byte, error) {
+	f, err := fsys.Open(name)
 	if err != nil {
 		return nil, err
 	}
@@ -55,11 +58,19 @@ var reservedIDs = map[string]bool{
 // probe time. Empty for CLI helpers with no window. Shared across
 // every instance the router spawns from this entry — the router
 // streams these bytes to every (re)attaching shell.
+//
+// PanelBundle holds the optional settings-panel bundle (panel.js)
+// captured at probe time, present when the manifest declares a
+// SettingsPanel. The settings host fetches it over a raw channel
+// (panels.bundle) and mounts the panel element; it is independent of
+// any running instance, so a panel renders even when the owning
+// service is stopped.
 type Entry struct {
-	Path     string
-	Manifest *Manifest
-	Reason   string // empty when valid
-	Bundle   []byte // FE bundle bytes (may be nil)
+	Path        string
+	Manifest    *Manifest
+	Reason      string // empty when valid
+	Bundle      []byte // FE bundle bytes (may be nil)
+	PanelBundle []byte // settings-panel bundle bytes (may be nil)
 }
 
 // Enabled reports whether the entry is usable (has a manifest and no
@@ -141,6 +152,13 @@ func (r *Registry) probeAndRegister(ctx context.Context, bin string) {
 			if b, err := readIndexJS(a.Assets); err == nil {
 				entry.Bundle = b
 			}
+			// Same source as the exec-probe panel frame: panel.js,
+			// present only when the app declares a settings panel.
+			if m.SettingsPanel != nil {
+				if b, err := readAsset(a.Assets, "panel.js"); err == nil {
+					entry.PanelBundle = b
+				}
+			}
 		}
 		r.appendEntry(entry)
 		return
@@ -151,8 +169,8 @@ func (r *Registry) probeAndRegister(ctx context.Context, bin string) {
 		r.appendEntry(&Entry{Path: bin, Reason: err.Error()})
 		return
 	}
-	m, bundle, valErr := ParseProbe(data)
-	entry := &Entry{Path: bin, Manifest: m, Bundle: bundle}
+	m, bundle, panel, valErr := ParseProbe(data)
+	entry := &Entry{Path: bin, Manifest: m, Bundle: bundle, PanelBundle: panel}
 	if valErr != nil {
 		entry.Reason = valErr.Error()
 	}
@@ -180,22 +198,22 @@ func (r *Registry) appendEntry(e *Entry) {
 // isTrustedBinary reports whether path is acceptable as a host for a
 // reservedID. Three branches:
 //
-//   (a) Root-owned strict path: file owned by uid 0 AND not group- or
-//       world-writable. The production posture — root install under
-//       /usr/share/wash/apps/.
-//   (b) Same-user strict path: file owned by the uid running the
-//       router AND not group- or world-writable. On a single-user
-//       wash setup, the threat model already assumes apps run as the
-//       user; the meaningful defence against a malicious local app
-//       planting a fake wash-priv is "this file isn't writable by
-//       other accounts on the box." Owner-uid + 0755 perms is
-//       exactly that, and lets `make all` produce binaries that
-//       Just Work without flags or env vars.
-//   (c) Trusted-dir relaxed path: the file lives directly under one
-//       of the registry's trustedDirs and is not world-writable.
-//       Group-writability is accepted via this path (default umask
-//       0002 yields 0775); the dir declaration IS the trust
-//       statement. World-write is still a hard fail.
+//	(a) Root-owned strict path: file owned by uid 0 AND not group- or
+//	    world-writable. The production posture — root install under
+//	    /usr/share/wash/apps/.
+//	(b) Same-user strict path: file owned by the uid running the
+//	    router AND not group- or world-writable. On a single-user
+//	    wash setup, the threat model already assumes apps run as the
+//	    user; the meaningful defence against a malicious local app
+//	    planting a fake wash-priv is "this file isn't writable by
+//	    other accounts on the box." Owner-uid + 0755 perms is
+//	    exactly that, and lets `make all` produce binaries that
+//	    Just Work without flags or env vars.
+//	(c) Trusted-dir relaxed path: the file lives directly under one
+//	    of the registry's trustedDirs and is not world-writable.
+//	    Group-writability is accepted via this path (default umask
+//	    0002 yields 0775); the dir declaration IS the trust
+//	    statement. World-write is still a hard fail.
 //
 // Stat failures fail closed.
 func (r *Registry) isTrustedBinary(path string) bool {

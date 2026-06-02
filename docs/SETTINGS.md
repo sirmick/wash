@@ -1,13 +1,23 @@
-# wash settings — service-control panels (VS Code & compositor)
+# wash settings — app-supplied control panels
 
-Status: **design** (2026-05-31). Plan of record for turning the VS Code
-manager and the X/Wayland compositor into **background services** that
-the settings app controls via host-rendered panels — the same idiom the
-session sidebar already uses for notify / bulk / priv.
+Status: **implemented** (superseded the 2026-05-31 host-rendered design).
+The VS Code manager, the X/Wayland compositor, and the networking service
+are **background services**; each **supplies its own settings panel** as a
+bundle the settings app discovers and hosts. Settings keeps one built-in
+pane (Desktop); everything else is app-supplied.
+
+> **History.** The original plan host-rendered each panel *inside* the
+> settings app over a `*.state` snapshot, on the explicit non-goal of "no
+> embed app B inside app A" (§1–§2 below as written). That didn't scale —
+> every integrated app forced an edit to the settings monolith. §2 was
+> rewritten (see "§2 (revised)"): panels are now app-supplied and loaded
+> on demand, while the *runtime transport* is still the settings BE's
+> generic `svc.*` relay. The per-service designs in §3 are unchanged.
 
 Related: [ARCHITECTURE.md](ARCHITECTURE.md) (§ "Services vs. apps",
 the subscribe-with-snapshot pattern), [DISPLAY.md](DISPLAY.md)
-(wash-display, already `surface=background`), [WIRE.md](WIRE.md).
+(wash-display, already `surface=background`), [WIRE.md](WIRE.md) (§5.1
+framed probe + `settings_panel`, §8 `panel.read`).
 
 ---
 
@@ -55,6 +65,47 @@ shell-originated sends carry no attested sender; a normal app BE doesn't.
 Consequence: the C++ compositor never needs an FE bundle. Its panel is
 TypeScript in the settings app; the C++ side only emits a state message
 and accepts a restart.
+
+---
+
+## 2 (revised). App-supplied panels — service owns BOTH data and UI
+
+The host-rendered model above put every panel's UI in the settings
+monolith, so each new integration meant editing settings. The revised
+model inverts that: **an app supplies its own panel**, and settings is a
+generic host. The runtime transport is unchanged — still the settings
+BE's `svc.*` relay — so the trust story (router-attested `From =
+com.wash.settings`) is identical.
+
+**How an app supplies a panel.**
+1. Declare `settings_panel { section, element }` in the manifest
+   (WIRE.md §5.2). `element` is a `wash-settings-panel-<x>` custom-element
+   tag.
+2. Ship a `panel.js` bundle that calls `defineSettingsPanel(tag, Panel)`
+   (`@wash/ui`). Go apps `go:embed` it next to `index.js`; the C++
+   compositor embeds it via CMake. It rides the framed probe as the
+   `"panel"` bundle (WIRE.md §5.1), cached on the registry entry.
+
+**How settings hosts it.**
+- The router advertises every panel-bearing app in the catalog's `panels`
+  list (surface-agnostic — most are background services kept out of the
+  launcher). The shell exposes `window.wash.settingsPanels()`.
+- Settings renders one nav section per descriptor (plus built-in Desktop).
+  On first visit it calls `window.wash.loadSettingsPanel(appID)`, which
+  pulls the panel bundle over `panel.read` (WIRE.md §8) and blob-imports
+  it — the same path app bundles take — so the element gets defined
+  **without spawning the owning app**.
+- Settings mounts the element with a **`SettingsPanelPort`** (set as the
+  `washPanelPort` property): `send`/`restart`/`onMessage` wrap the
+  `svc.*` relay to the panel's app, `readConfig`/`writeConfig` wrap
+  `settings.read/write`, `launch` spawns a window. The panel runs its own
+  subscribe/unsubscribe lifecycle.
+
+**Result.** The C++ compositor *does* ship an FE bundle now — but only the
+panel (`panel.js`), embedded raw, not a window FE. vscode/netd likewise
+ship only a panel. Settings has zero per-app vocabulary. A missing package
+→ no descriptor → no section (the old "not installed" hint is gone;
+absence is the signal).
 
 ---
 

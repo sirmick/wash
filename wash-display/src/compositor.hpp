@@ -7,7 +7,7 @@
 // fake "display_open" reference path otherwise.
 #pragma once
 
-#include "wire_conn.hpp"
+#include <wash/wire_conn.hpp>
 
 namespace wash {
 

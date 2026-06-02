@@ -130,6 +130,15 @@ VSCODE_WB_STAMP  := $(VSCODE_WB_ASSETS)/.stamp
 NET_ASSETS      := apps/net/be/assets
 NET_STAMP       := $(NET_ASSETS)/.stamp
 
+# wash-vscode / wash-netd are background services, but each supplies a
+# settings panel (panel.js) embedded in its binary, so they get an
+# asset stamp like the windowed apps.
+VSCODE_ASSETS   := apps/vscode/be/assets
+VSCODE_STAMP    := $(VSCODE_ASSETS)/.stamp
+
+NETD_ASSETS     := apps/netd/be/assets
+NETD_STAMP      := $(NETD_ASSETS)/.stamp
+
 .PHONY: all
 all: $(TARGETS)
 
@@ -203,6 +212,14 @@ web-packages: web-deps
 web-net: web-deps
 	@$(PNPM) --filter @wash/app-net run build
 
+.PHONY: web-vscode
+web-vscode: web-deps
+	@$(PNPM) --filter @wash/app-vscode run build
+
+.PHONY: web-netd
+web-netd: web-deps
+	@$(PNPM) --filter @wash/app-netd run build
+
 # embed-into-cmd helper. Usage: $(call embed,<src dist dir>,<dst assets dir>)
 #
 # Files land under cmd/<bin>/assets/ and are picked up by //go:embed
@@ -265,6 +282,12 @@ $(PACKAGES_STAMP): web-packages
 $(NET_STAMP): web-net
 	$(call embed_dist,apps/net/fe/dist,$(NET_ASSETS))
 
+$(VSCODE_STAMP): web-vscode
+	$(call embed_dist,apps/vscode/fe/dist,$(VSCODE_ASSETS))
+
+$(NETD_STAMP): web-netd
+	$(call embed_dist,apps/netd/fe/dist,$(NETD_ASSETS))
+
 # ----- go stage -----
 
 $(OUT)/wash-router: $(ROUTER_STAMP) | $(OUT)
@@ -279,9 +302,15 @@ $(OUT)/wash-about: $(ABOUT_STAMP) | $(OUT)
 $(OUT)/wash-test: $(TEST_STAMP) | $(OUT)
 	$(call go_build,$@,apps/test/be/cmd)
 
-# wash-display is C++/CMake, not Go. Configure + build its own project
-# and copy the binary into out/. Rebuilds when any source changes.
-$(OUT)/wash-display: $(wildcard wash-display/src/*) wash-display/CMakeLists.txt | $(OUT)
+# wash-display is C++/CMake, not Go. Build the settings panel FE first
+# (web-display) so CMake can embed fe/dist/panel.js as raw bytes at
+# configure time, then configure + build the project and copy the binary
+# into out/. Rebuilds when any source or the panel bundle changes.
+.PHONY: web-display
+web-display: web-deps
+	@$(PNPM) --filter @wash/app-display run build
+
+$(OUT)/wash-display: web-display $(wildcard wash-display/src/*) $(wildcard wash-display/fe/dist/*) wash-display/CMakeLists.txt | $(OUT)
 	cmake -S wash-display -B wash-display/build -DCMAKE_BUILD_TYPE=Release >/dev/null
 	cmake --build wash-display/build
 	cp wash-display/build/wash-display $@ && chmod 0755 $@
@@ -303,13 +332,13 @@ $(OUT)/wash-bulk: | $(OUT)
 $(OUT)/wash-edit: $(EDIT_STAMP) | $(OUT)
 	$(call go_build,$@,apps/edit/be/cmd)
 
-# wash-vscode is a background service with no FE bundle (its control UI
-# lives in the settings app), so its binary has no asset-stamp dep.
-# .PHONY (like wash-bulk/wash-notify): with no changing prerequisite,
-# make would otherwise treat the binary as up-to-date forever and never
-# pick up Go source changes. go_build is cheap (Go's own build cache).
+# wash-vscode is a background service that now supplies the settings
+# Developer panel (panel.js), so its binary embeds VSCODE_STAMP's assets.
+# Still .PHONY (like wash-notify): the stamp prereq stages the FE first,
+# and .PHONY forces go_build to re-run so a Go-only change is picked up
+# even when the stamp didn't change. go_build is cheap (Go's build cache).
 .PHONY: $(OUT)/wash-vscode
-$(OUT)/wash-vscode: | $(OUT)
+$(OUT)/wash-vscode: $(VSCODE_STAMP) | $(OUT)
 	$(call go_build,$@,apps/vscode/be/cmd)
 
 $(OUT)/wash-vscode-workbench: $(VSCODE_WB_STAMP) | $(OUT)
@@ -360,11 +389,11 @@ $(OUT)/wash-notify: | $(OUT)
 	$(call go_build,$@,apps/notify/be/cmd)
 
 # wash-netd is the privileged networking background service (docs/NET.md
-# §2.11): no window, no FE bundle, reserved id com.wash.netd. The windowed
-# com.wash.net app drives it cross-app. .PHONY for the same reason as
-# wash-notify (Go-only target, no source-stamp dep).
+# §2.11): reserved id com.wash.netd. It now supplies the settings Network
+# panel (panel.js), so its binary embeds NETD_STAMP's assets. .PHONY +
+# stamp prereq for the same reason as wash-vscode above.
 .PHONY: $(OUT)/wash-netd
-$(OUT)/wash-netd: | $(OUT)
+$(OUT)/wash-netd: $(NETD_STAMP) | $(OUT)
 	$(call go_build,$@,apps/netd/be/cmd)
 
 # wash-launch is a CLI, not an app. No FE bundle, no embedded assets.
@@ -455,7 +484,7 @@ test-app: $(OUT)/wash-priv-fakesudo
 # "pattern all:assets: no matching files found" — local dev
 # accidentally works because the standalone wash-router build
 # rule already chains through ROUTER_STAMP.
-MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP) $(VSCODE_WB_STAMP) $(NET_STAMP)
+MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP) $(VSCODE_WB_STAMP) $(NET_STAMP) $(VSCODE_STAMP) $(NETD_STAMP)
 
 # Adding wash_test_app to the tags pulls the test app's blank-import
 # in (which is otherwise excluded by cmd/wash/imports_test.go's

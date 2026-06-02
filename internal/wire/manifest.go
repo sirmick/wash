@@ -1,9 +1,13 @@
 package wire
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
+	"strings"
 )
 
 // ProtocolVersion is the wash wire protocol version this build speaks.
@@ -11,19 +15,109 @@ import (
 // manifest are listed-disabled by the registry.
 const ProtocolVersion = 1
 
-// ProbeOutput is what `<binary> --wash-manifest` writes to stdout.
-// Carries the manifest plus the app's embedded FE bundle (base64'd)
-// so the router caches both at probe time — no post-handshake
-// bundle-upload step is needed.
+// ProbeHeader is the first line of `<binary> --wash-manifest` stdout.
+// Probe output is framed, not a single JSON blob:
 //
-// BundleB64 is empty for apps with no FE bundle (e.g. CLI helpers
-// that registered but never expose a window). The router treats
-// "manifest with empty bundle" as a usable entry; the shell-side
-// mount path surfaces a recognizable error if a mount is attempted
-// anyway.
-type ProbeOutput struct {
-	Manifest  Manifest `json:"manifest"`
-	BundleB64 string   `json:"bundle_b64,omitempty"`
+//	<header-json>\n
+//	<raw bytes of bundle[0]><raw bytes of bundle[1]>...
+//
+// so the FE bundle(s) ride along as raw bytes — no base64. The router
+// caches them at probe time; there is no post-handshake bundle-upload
+// step. json.Marshal never emits a bare newline, so the first '\n'
+// reliably delimits the header from the raw payload that follows.
+//
+// Bundles is empty for apps with no FE (background services, CLI
+// helpers). The router treats "manifest with no bundle" as a usable
+// entry; the shell-side mount path surfaces a recognizable error if a
+// window mount is attempted anyway.
+type ProbeHeader struct {
+	Manifest Manifest      `json:"manifest"`
+	Bundles  []BundleFrame `json:"bundles,omitempty"`
+}
+
+// BundleFrame describes one raw bundle blob in the probe payload, in
+// the order the blobs are concatenated after the header newline.
+type BundleFrame struct {
+	Kind string `json:"kind"` // BundleMain | BundlePanel
+	Len  int    `json:"len"`
+}
+
+// Bundle kinds carried in the probe payload.
+const (
+	// BundleMain is the app's FE bundle (index.js). Absent for
+	// background services and CLI helpers with no window.
+	BundleMain = "main"
+	// BundlePanel is the app's settings-panel bundle (panel.js),
+	// present when the manifest declares a SettingsPanel.
+	BundlePanel = "panel"
+)
+
+// NamedBundle pairs a bundle kind with its raw bytes for WriteProbe.
+type NamedBundle struct {
+	Kind  string
+	Bytes []byte
+}
+
+// WriteProbe writes framed probe output to w: the header JSON line
+// (manifest + frame descriptors) followed by each bundle's raw bytes
+// in slice order. Zero-length or nil bundles are skipped entirely, so
+// an app with no FE emits just "header\n".
+func WriteProbe(w io.Writer, m Manifest, bundles []NamedBundle) error {
+	hdr := ProbeHeader{Manifest: m}
+	for _, b := range bundles {
+		if len(b.Bytes) == 0 {
+			continue
+		}
+		hdr.Bundles = append(hdr.Bundles, BundleFrame{Kind: b.Kind, Len: len(b.Bytes)})
+	}
+	line, err := json.Marshal(hdr)
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(line); err != nil {
+		return err
+	}
+	if _, err := w.Write([]byte{'\n'}); err != nil {
+		return err
+	}
+	for _, b := range bundles {
+		if len(b.Bytes) == 0 {
+			continue
+		}
+		if _, err := w.Write(b.Bytes); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ReadProbe parses framed probe output: the header line plus the raw
+// bundle blobs that follow, returned as a kind→bytes map (kinds are
+// unique). A truncated payload (fewer bytes than the header declares)
+// is an error so a botched build is surfaced, not silently mounted.
+// The returned slices are copies, independent of data.
+func ReadProbe(data []byte) (ProbeHeader, map[string][]byte, error) {
+	nl := bytes.IndexByte(data, '\n')
+	if nl < 0 {
+		return ProbeHeader{}, nil, errors.New("probe: no header newline")
+	}
+	var hdr ProbeHeader
+	if err := json.Unmarshal(data[:nl], &hdr); err != nil {
+		return ProbeHeader{}, nil, fmt.Errorf("probe header: %w", err)
+	}
+	rest := data[nl+1:]
+	out := make(map[string][]byte, len(hdr.Bundles))
+	off := 0
+	for _, f := range hdr.Bundles {
+		if f.Len < 0 || off+f.Len > len(rest) {
+			return hdr, nil, fmt.Errorf("probe: bundle %q truncated (want %d at off %d, have %d)", f.Kind, f.Len, off, len(rest)-off)
+		}
+		b := make([]byte, f.Len)
+		copy(b, rest[off:off+f.Len])
+		out[f.Kind] = b
+		off += f.Len
+	}
+	return hdr, out, nil
 }
 
 // Surface values (WIRE.md §5.1).
@@ -117,6 +211,14 @@ type Manifest struct {
 	Capabilities []string     `json:"capabilities"`
 	Window       *WindowHints `json:"window,omitempty"`
 
+	// SettingsPanel, when set, declares a control panel this app
+	// supplies to the settings host. The host discovers it via
+	// panels.list, fetches the panel bundle (panel.js, shipped raw in
+	// the probe payload as BundlePanel) over a raw channel, and mounts
+	// Element in a settings section — so an app owns its settings UI
+	// instead of the settings app hardcoding it (docs/SETTINGS.md).
+	SettingsPanel *SettingsPanel `json:"settings_panel,omitempty"`
+
 	// Hidden keeps the app out of the launcher catalog. The app is
 	// still spawnable (by --initial-app, or by another app's
 	// spawn.request) — useful for test/utility apps.
@@ -147,6 +249,26 @@ type RootVariant struct {
 	Args []string `json:"args,omitempty"`
 }
 
+// SettingsPanel is the manifest-side descriptor for an app-supplied
+// settings panel. The panel bundle (panel.js) defines the custom
+// element named by Element; the settings host mounts it under the
+// named Section and bridges its messages to the app over the svc.*
+// relay.
+type SettingsPanel struct {
+	// Section is the nav label for the panel (e.g. "Display").
+	Section string `json:"section"`
+	// Element is the custom-element tag the panel bundle defines
+	// (e.g. "wash-settings-panel-display"). Must start with the
+	// settings-panel prefix so the tag namespace stays distinct from
+	// app window elements.
+	Element string `json:"element"`
+	// Icon is an optional lucide symbol name for the nav entry.
+	Icon string `json:"icon,omitempty"`
+	// Order is an optional ascending sort hint among supplied panels
+	// (default 0; ties break on Section name).
+	Order int `json:"order,omitempty"`
+}
+
 // WindowHints carries the optional default window geometry. v0.1
 // honors default width/height only (WIRE.md §5.1).
 type WindowHints struct {
@@ -173,6 +295,10 @@ var idRegexp = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)+$`)
 // elementPrefix is the required prefix for custom-element tags so the
 // global registry stays namespaced.
 const elementPrefix = "wash-app-"
+
+// settingsPanelPrefix namespaces app-supplied settings-panel elements
+// distinctly from app window elements (elementPrefix).
+const settingsPanelPrefix = "wash-settings-panel-"
 
 // ValidateManifest checks all manifest constraints from WIRE.md §5.1.
 // Returning an error makes the router mark the app listed-disabled
@@ -219,6 +345,14 @@ func ValidateManifest(m *Manifest) error {
 		}
 		if len(m.Icon) > MaxIconBytes {
 			return fmt.Errorf("icon is %d bytes, cap is %d", len(m.Icon), MaxIconBytes)
+		}
+	}
+	if sp := m.SettingsPanel; sp != nil {
+		if sp.Section == "" {
+			return errors.New("settings_panel.section is empty")
+		}
+		if !strings.HasPrefix(sp.Element, settingsPanelPrefix) || len(sp.Element) <= len(settingsPanelPrefix) {
+			return fmt.Errorf("settings_panel.element %q must start with %q", sp.Element, settingsPanelPrefix)
 		}
 	}
 	return nil

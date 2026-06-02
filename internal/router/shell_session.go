@@ -115,7 +115,7 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	// so the receiver sees catalog → declared → create in order
 	// regardless of which goroutine got there first.
 	sess.writeMu.Lock()
-	if err := sess.writeCtrlLocked(wire.NewShellCatalog(r.catalog())); err != nil {
+	if err := sess.writeCtrlLocked(wire.NewShellCatalog(r.catalog(), r.panelCatalog())); err != nil {
 		sess.writeMu.Unlock()
 		return err
 	}
@@ -166,7 +166,6 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	return sess.loop(ctx)
 }
 
-
 func (s *ShellSession) loop(ctx context.Context) error {
 	err := wire.ReadLoop(ctx, s.Transport, s.dispatch)
 	if errors.Is(err, context.Canceled) {
@@ -209,7 +208,11 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 	case wire.ShellWindowState:
 		return s.handleWindowState(m)
 	case wire.ShellAppMsgSend:
-		var probe struct{ Data struct{ Kind string `json:"kind"` } `json:"data"` }
+		var probe struct {
+			Data struct {
+				Kind string `json:"kind"`
+			} `json:"data"`
+		}
 		_ = json.Unmarshal(f.Payload, &probe)
 		s.router.log("shell→BE app_msg.send inst=%s data.kind=%q", m.InstanceID, probe.Data.Kind)
 		return s.handleAppMsgSend(m, f.Class())
@@ -219,6 +222,8 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		return s.handleChannelCredit(m)
 	case wire.ShellAssetRead:
 		return s.handleAssetRead(m)
+	case wire.ShellPanelRead:
+		return s.handlePanelRead(m)
 	}
 	s.router.log("shell: unexpected ctrl msg %T", msg)
 	return nil
@@ -286,6 +291,51 @@ func (s *ShellSession) handleAssetRead(m wire.ShellAssetRead) error {
 		}
 	}
 	return s.WriteCtrl(wire.NewShellChannelUnbind(id, "asset complete"))
+}
+
+// handlePanelRead streams an app's cached settings-panel bundle
+// (Entry.PanelBundle) to the shell over a freshly-allocated
+// Kind=ChannelKindBundle channel — the same blob-import path app
+// bundles take, so the shell can customElements.define the panel
+// element without spawning the owning app. Mirrors handleAssetRead but
+// keyed by app id and served from the registry. ErrCodeNotFound when
+// the app is absent, disabled, or declares no panel.
+func (s *ShellSession) handlePanelRead(m wire.ShellPanelRead) error {
+	entry := s.router.reg.ByID(m.AppID)
+	if entry == nil || !entry.Enabled() || entry.Manifest.SettingsPanel == nil {
+		return s.WriteCtrl(wire.NewShellPanelReadErr(m.ReqID, wire.ErrCodeNotFound, "no such panel"))
+	}
+	bundle := entry.PanelBundle
+	if len(bundle) == 0 {
+		// Declared a panel but shipped no panel.js — a build error on
+		// the app's side. Surface it rather than mounting an empty tag.
+		return s.WriteCtrl(wire.NewShellPanelReadErr(m.ReqID, wire.ErrCodeInternal, "panel bundle empty"))
+	}
+	id := s.router.allocChannelID()
+	if err := s.WriteCtrl(wire.NewShellPanelReadOK(m.ReqID, id, int64(len(bundle)))); err != nil {
+		return err
+	}
+	// Bind as a bundle channel so the shell accumulates + blob-imports.
+	if err := s.WriteCtrl(wire.ShellChannelBind{
+		T:         wire.TShellChannelBind,
+		ChannelID: id,
+		Kind:      wire.ChannelKindBundle,
+	}); err != nil {
+		return err
+	}
+	// Same Interactive class as bundle/asset delivery so the strict-
+	// priority scheduler can't let the Unbind overtake the data frames.
+	const chunkSize = 256 * 1024
+	for off := 0; off < len(bundle); off += chunkSize {
+		end := off + chunkSize
+		if end > len(bundle) {
+			end = len(bundle)
+		}
+		if err := s.WriteRawFrameClass(id, bundle[off:end], wire.ClassInteractive); err != nil {
+			return err
+		}
+	}
+	return s.WriteCtrl(wire.NewShellChannelUnbind(id, "panel complete"))
 }
 
 // handleChannelCredit applies an FE-issued credit grant to the

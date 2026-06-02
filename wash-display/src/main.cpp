@@ -12,7 +12,8 @@
 // The threaded wire I/O lives in WireConn (wire_conn.*); the compositor
 // in compositor.* . Build: cmake (see ../CMakeLists.txt).
 
-#include "wire_conn.hpp"
+#include <wash/wire_conn.hpp>
+#include <wash/probe.hpp>
 
 #ifdef WASH_DISPLAY_COMPOSITOR
 #include "compositor.hpp"
@@ -83,25 +84,33 @@ static void install_crash_handler() {
     std::signal(SIGHUP, term_handler);
 }
 
+// wash_panel_js is the settings "Display" panel bundle (panel.js),
+// embedded as raw bytes by CMake from fe/dist/panel.js (panel_bundle.cpp,
+// base64-free). Empty when the FE wasn't built.
+extern const unsigned char wash_panel_js[];
+extern const unsigned int wash_panel_js_len;
+
 // --- manifest probe -------------------------------------------------
-// `wash-display --wash-manifest` prints the ProbeOutput envelope the
-// router caches at registration (internal/wire/manifest.go). Background
-// surface: no window of its own; it creates windows on demand and they
-// mount the "wash-app-display" decoder element. No FE bundle yet.
+// `wash-display --wash-manifest` writes the FRAMED probe output the
+// router parses (internal/wire ReadProbe): a single header JSON line,
+// then the raw bundle bytes — no base64, byte-identical to the Go SDK's
+// wire.WriteProbe. Background surface: no window of its own; it creates
+// windows on demand (they mount the "wash-app-display" decoder element)
+// and supplies the settings "Display" panel.
 static int print_manifest() {
-    std::printf(
-        "{\"manifest\":{"
-        "\"id\":\"%s\","
-        "\"name\":\"Wash Display\","
-        "\"version\":\"%s\","
-        "\"protocol_version\":%d,"
-        "\"element\":\"wash-app-display\","
-        "\"surface\":\"background\","
-        "\"icon\":\"\","
-        "\"instancing\":\"singleton\","
-        "\"capabilities\":[\"windows\",\"env-publish\"]"
-        "},\"bundle_b64\":\"\"}\n",
-        kAppID, kVersion, kProto);
+    wash::json manifest = {
+        {"id", kAppID},
+        {"name", "Wash Display"},
+        {"version", kVersion},
+        {"protocol_version", kProto},
+        {"element", "wash-app-display"},
+        {"surface", "background"},
+        {"icon", ""},
+        {"instancing", "singleton"},
+        {"capabilities", {"windows", "env-publish"}},
+        {"settings_panel", {{"section", "Display"}, {"element", "wash-settings-panel-display"}}},
+    };
+    wash::write_probe(manifest, {{"panel", wash_panel_js, wash_panel_js_len}});
     return 0;
 }
 

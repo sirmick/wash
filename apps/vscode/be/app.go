@@ -20,7 +20,9 @@ package vscode
 
 import (
 	"context"
+	"embed"
 	"encoding/base64"
+	"io/fs"
 	"log"
 	"os/exec"
 	"sync"
@@ -30,6 +32,13 @@ import (
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/wire"
 )
+
+// assetsFS embeds the settings-panel bundle (panel.js) the Makefile
+// stages from apps/vscode/fe/dist. The service has no window of its
+// own; this is only the panel the settings app hosts.
+//
+//go:embed all:assets
+var assetsFS embed.FS
 
 const version = "0.1.0"
 
@@ -58,9 +67,13 @@ type manager struct {
 var theManager *manager
 
 func init() {
-	// Background service: no window, no FE bundle of its own. The
-	// control UI lives in the settings app, so there is nothing to
-	// embed — same shape as wash-priv. No Assets, no Element, no Icon.
+	// Background service: no window. It does, however, supply the
+	// settings "Developer" panel — panel.js embedded via assetsFS, shipped
+	// raw in the probe and loaded on demand by the settings host.
+	sub, err := fs.Sub(assetsFS, "assets")
+	if err != nil {
+		log.Printf("wash-vscode: assets sub: %v", err)
+	}
 	def = &sdk.AppDef{
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.vscode",
@@ -71,12 +84,19 @@ func init() {
 			// Singleton: one service owns code-server; the settings
 			// panel and workbench windows address it cross-app by id.
 			Instancing: sdk.InstancingSingleton,
+			// Developer panel for the settings app (docs/SETTINGS.md).
+			SettingsPanel: &sdk.SettingsPanel{
+				Section: "Developer",
+				Element: "wash-settings-panel-vscode",
+			},
 		},
+		Assets:  sub,
 		OnReady: onReady,
 	}
 	registry.Register(&registry.App{
 		Name:     "wash-vscode",
 		Manifest: def.Manifest,
+		Assets:   def.Assets,
 		Run:      run,
 	})
 }

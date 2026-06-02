@@ -2,8 +2,6 @@ package sdk
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -118,7 +116,7 @@ type Conn struct {
 
 	// pendingClipboardGet correlates ClipboardGet req_id with the
 	// waiting goroutine in ClipboardGet.
-	clipMu             sync.Mutex
+	clipMu              sync.Mutex
 	pendingClipboardGet map[uint64]chan clipboardResult
 
 	// pendingIngress correlates PublishIngress req_id with the waiting
@@ -243,32 +241,35 @@ func maybePrintManifest(def *AppDef) bool {
 	if len(os.Args) < 2 || os.Args[1] != "--wash-manifest" {
 		return false
 	}
-	// Emit a probe envelope carrying the manifest plus the embedded
-	// FE bundle (base64'd). The router caches both at scan time, so
-	// there is no post-handshake bundle-upload step on the wire.
-	envelope := wire.ProbeOutput{Manifest: def.Manifest}
+	// Emit framed probe output: the manifest header line followed by
+	// the embedded FE bundle(s) as raw bytes (wire.WriteProbe). The
+	// router caches them at scan time — no post-handshake upload step,
+	// no base64.
+	var bundles []wire.NamedBundle
 	if def.Assets != nil {
-		if b, err := readEmbeddedBundle(def.Assets); err == nil {
-			envelope.BundleB64 = base64.StdEncoding.EncodeToString(b)
+		if b, err := readEmbeddedBundle(def.Assets, "index.js"); err == nil {
+			bundles = append(bundles, wire.NamedBundle{Kind: wire.BundleMain, Bytes: b})
 		}
-		// On read failure we still ship the manifest. The router
-		// will list the app disabled with "missing bundle" reason
-		// when a shell tries to mount it; a malformed bundle in the
-		// build is the operator's problem, not the probe's.
+		// On read failure we still ship the manifest. The router lists
+		// the app disabled with a "missing bundle" reason when a shell
+		// tries to mount it; a malformed build is the operator's
+		// problem, not the probe's.
+		if def.Manifest.SettingsPanel != nil {
+			if b, err := readEmbeddedBundle(def.Assets, "panel.js"); err == nil {
+				bundles = append(bundles, wire.NamedBundle{Kind: wire.BundlePanel, Bytes: b})
+			}
+		}
 	}
-	b, err := json.Marshal(envelope)
-	if err != nil {
-		fatal("wash sdk: marshal manifest: %v", err)
+	if err := wire.WriteProbe(os.Stdout, def.Manifest, bundles); err != nil {
+		fatal("wash sdk: write manifest: %v", err)
 	}
-	os.Stdout.Write(b)
-	os.Stdout.Write([]byte("\n"))
 	return true
 }
 
-// readEmbeddedBundle pulls index.js out of the app's embedded FS.
-// Returns the raw bytes for base64 encoding into the probe envelope.
-func readEmbeddedBundle(fsys fs.FS) ([]byte, error) {
-	f, err := fsys.Open("index.js")
+// readEmbeddedBundle pulls a named bundle (index.js / panel.js) out of
+// the app's embedded FS as raw bytes for the probe payload.
+func readEmbeddedBundle(fsys fs.FS, name string) ([]byte, error) {
+	f, err := fsys.Open(name)
 	if err != nil {
 		return nil, err
 	}
@@ -346,7 +347,7 @@ func ConnectWith(t wire.FrameTransport, def *AppDef) (*Conn, error) {
 	}
 	// No post-handshake bundle upload: the router already has the
 	// embedded FE bundle bytes from the --wash-manifest probe and
-	// streams them straight to attached shells. See wire.ProbeOutput
+	// streams them straight to attached shells. See wire.ProbeHeader
 	// + router.Registry.Entry.Bundle.
 	return c, nil
 }

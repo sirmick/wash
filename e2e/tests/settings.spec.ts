@@ -238,8 +238,8 @@ test.describe('wash-settings — Display panel (wash-display compositor)', () =>
     await expect(badge).toBeVisible({ timeout: 30_000 });
     await expect(badge).toHaveAttribute('data-tone', 'on');
     await expect(badge).toContainText('running');
-    // Not the not-installed fallback.
-    await expect(app.locator('[data-testid="display-absent"]')).toHaveCount(0);
+    // The supplied panel element actually mounted (discover → load → mount).
+    await expect(app.locator('wash-settings-panel-display')).toBeAttached();
 
     // Live snapshot fields: a wayland-N socket and a numeric window count
     // (0 with no clients mapped yet).
@@ -271,34 +271,67 @@ test.describe('wash-settings — Display panel (wash-display compositor)', () =>
       return r.instance_id as string;
     }, { timeout: 30_000, intervals: [1_000, 1_000, 2_000] }).not.toBe(instA);
 
-    // A successful restart (svc.restart_done ok) must NOT flip the panel
-    // to "not installed" — that fallback is reserved for a dead/absent
-    // compositor (the !ok branch).
-    await expect(app.locator('[data-testid="display-absent"]')).toHaveCount(0);
+    // The supplied panel stays mounted across the restart round-trip.
+    await expect(app.locator('wash-settings-panel-display')).toBeAttached();
   });
 });
 
 test.describe('wash-settings — Display panel, compositor absent', () => {
   test.use({
     routerOpts: {
-      // No 'display' app registered → the subscribe is dropped router-
-      // side and no display.state ever arrives.
+      // No 'display' app registered → no panel descriptor in the catalog.
       apps: ['session', 'settings'],
       xdgConfig: true,
     },
   });
   test.setTimeout(15_000);
 
-  test('falls back to "not installed" when wash-display is unregistered', async ({ page, router }) => {
+  // App-supplied panels are invisible when their package is absent: with
+  // no wash-display registered the router emits no panel descriptor, so
+  // settings shows no Display section at all (the old in-panel "not
+  // installed" hint is gone — absence is the signal, docs/SETTINGS.md).
+  test('no Display section when wash-display is unregistered', async ({ page, router }) => {
     await page.goto(router.url);
     await router.controlRequest({ t: 'launch', app_id: 'com.wash.settings' });
     const app = page.locator('wash-app-settings');
     await expect(app).toBeVisible();
-    await app.getByRole('button', { name: 'Display' }).click();
+    // Desktop (the one built-in pane) is always present…
+    await expect(app.getByRole('button', { name: 'Desktop' })).toBeVisible();
+    // …but there is no Display nav section to click.
+    await expect(app.getByRole('button', { name: 'Display' })).toHaveCount(0);
+  });
+});
 
-    // After the ~1.5s grace with no reply, the panel renders the
-    // not-installed hint and nothing crashes.
-    await expect(app.locator('[data-testid="display-absent"]')).toBeVisible({ timeout: 5_000 });
-    await expect(app.locator('[data-testid="display-absent"]')).toContainText(/not installed/i);
+// The discovery → panel.read → mount path itself, with no external dep
+// (code-server / wlroots): registering wash-vscode is enough for its
+// manifest settings_panel to reach the catalog's `panels` list, for
+// settings to render the Developer section, and for a click to load +
+// define + mount the supplied element. Proves the new mechanism end to
+// end (docs/SETTINGS.md §2 revised, WIRE.md §5.1/§8).
+test.describe('wash-settings — app-supplied panel discovery', () => {
+  test.use({
+    routerOpts: {
+      apps: ['session', 'settings', 'vscode'],
+      xdgConfig: true,
+    },
+  });
+  test.setTimeout(30_000);
+
+  test('discovers + loads + mounts the vscode-supplied Developer panel', async ({ page, router }) => {
+    await page.goto(router.url);
+    await router.controlRequest({ t: 'launch', app_id: 'com.wash.settings' });
+    const app = page.locator('wash-app-settings');
+    await expect(app).toBeVisible();
+
+    // The Developer section is NOT hardcoded in settings — it comes from
+    // wash-vscode's manifest settings_panel, advertised in the catalog.
+    const dev = app.getByRole('button', { name: 'Developer' });
+    await expect(dev).toBeVisible();
+
+    // Clicking pulls vscode's panel.js over panel.read and blob-imports it,
+    // defining + mounting wash-settings-panel-vscode (no code-server needed
+    // — the panel renders "Connecting to service…" until status arrives).
+    await dev.click();
+    await expect(app.locator('wash-settings-panel-vscode')).toBeAttached({ timeout: 15_000 });
   });
 });

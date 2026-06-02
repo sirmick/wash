@@ -18,6 +18,13 @@ export { Terminal } from './terminal';
 export type { TerminalProps, TerminalAPI } from './terminal';
 export { defineWashApp } from './define-app';
 export type { WashAppProps, DefineWashAppOptions } from './define-app';
+export { defineSettingsPanel, PANEL_PORT_PROP } from './define-settings-panel';
+export type {
+  SettingsPanelPort,
+  SettingsPanelProps,
+  DefineSettingsPanelOptions,
+} from './define-settings-panel';
+export { Section, Row, SmallBtn, Select, ServiceBadge } from './panel-kit';
 export { washAssetUrl } from './assets';
 export { IngressFrame } from './ingress-frame';
 export type { IngressFrameProps } from './ingress-frame';

@@ -16,6 +16,7 @@ import { beginBundle, finishBundle, pushBundleBytes } from './assets';
 
 const __washLoadT0 = performance.now();
 import { washFetch, handleAssetReadOK, handleAssetReadErr, pushAssetBytes, finishAsset } from './wash-fetch';
+import { loadSettingsPanel, handlePanelReadOK, handlePanelReadErr, pushPanelBytes, finishPanel } from './panels';
 import {
   VIEWPORTS_PER_AXIS,
   applySessionPatch,
@@ -37,6 +38,7 @@ import { Desktop } from './desktop';
 import { FloatingWindow } from './window';
 import {
   CatalogApp,
+  PanelDesc,
   Sub,
   WindowInfo,
   bindVideoChannel,
@@ -56,6 +58,7 @@ import { virtioConsoleFactory } from './virtio';
 interface ShellCatalog {
   t: 'catalog';
   apps: CatalogApp[];
+  panels?: PanelDesc[];
 }
 
 interface ShellAppDeclared {
@@ -166,6 +169,7 @@ const bundleReady = new Map<string, Promise<void>>();
 
 // Reactive subs the chrome (mounted via window.wash) listens to.
 const catalogSub = new Sub<CatalogApp[]>([]);
+const panelsSub = new Sub<PanelDesc[]>([]);
 const windowsSub = new Sub<WindowInfo[]>([]);
 // viewportSub mirrors the Solid viewport signal into the cross-element
 // pub/sub the session app subscribes to via window.wash.onViewport.
@@ -232,6 +236,7 @@ conn = new Conn(
     switch (msg.t) {
       case 'catalog':
         catalogSub.set((msg as ShellCatalog).apps);
+        panelsSub.set((msg as ShellCatalog).panels ?? []);
         break;
       case 'app.declared':
         handleAppDeclared(msg as ShellAppDeclared);
@@ -275,6 +280,10 @@ conn = new Conn(
           // Bundle delivery channel — start accumulating until the
           // matching channel.unbind triggers the dynamic import.
           bundleReady.set(b.instance_id, beginBundle(b.channel_id, b.instance_id));
+        } else if (b.kind === 'bundle') {
+          // Settings-panel bundle channel: kind=bundle with no
+          // instance_id. Accumulation is keyed by channel_id via the
+          // preceding panel.read.ok (panels.ts). Nothing to do here.
         } else if (b.kind === 'asset') {
           // Asset channel: state lives in wash-fetch.ts, keyed by
           // (req_id, channel_id) via the preceding asset.read.ok.
@@ -299,11 +308,18 @@ conn = new Conn(
       case 'asset.read.err':
         handleAssetReadErr(msg as { req_id: number; code: string; msg?: string });
         break;
+      case 'panel.read.ok':
+        handlePanelReadOK(msg as { req_id: number; channel_id: number; size: number });
+        break;
+      case 'panel.read.err':
+        handlePanelReadErr(msg as { req_id: number; code: string; msg?: string });
+        break;
       case 'channel.unbind': {
         const u = msg as ShellChannelUnbind;
         // Try each accumulator in turn; harmless on miss.
         finishBundle(u.channel_id);
         finishAsset(u.channel_id);
+        finishPanel(u.channel_id);
         channelOwner.delete(u.channel_id);
         closeRawSubscriber(u.channel_id);
         // Drop any stashed video binding so a later rebind on the same
@@ -322,6 +338,7 @@ conn = new Conn(
     // per-channel raw subscriber (xterm's pty, etc.).
     if (pushAssetBytes(channelID, bytes)) return;
     if (pushBundleBytes(channelID, bytes)) return;
+    if (pushPanelBytes(channelID, bytes)) return;
     deliverRaw(channelID, bytes);
     // Bulk-class raw flows (terminal output, file content) drain
     // the router-side credit window — replenish via channel.credit
@@ -631,6 +648,12 @@ declare global {
       sendAppMsgTo(recipient: Recipient, data: unknown): void;
       catalog(): CatalogApp[];
       onCatalog(cb: (apps: CatalogApp[]) => void): () => void;
+      // App-supplied settings panels (from the catalog's `panels` list).
+      // loadSettingsPanel fetches+imports the panel bundle so its custom
+      // element is defined; the promise resolves once it's mountable.
+      settingsPanels(): PanelDesc[];
+      onSettingsPanels(cb: (panels: PanelDesc[]) => void): () => void;
+      loadSettingsPanel(appID: string): Promise<void>;
       windows(): WindowInfo[];
       onWindowsChanged(cb: (windows: WindowInfo[]) => void): () => void;
       focusWindow(id: number): void;
@@ -677,6 +700,9 @@ window.wash = {
   },
   catalog: () => catalogSub.value,
   onCatalog: (cb) => catalogSub.on(cb),
+  settingsPanels: () => panelsSub.value,
+  onSettingsPanels: (cb: (panels: PanelDesc[]) => void) => panelsSub.on(cb),
+  loadSettingsPanel: (appID: string) => loadSettingsPanel((m) => conn.sendCtrl(m), appID),
   windows: () => windowsSub.value,
   onWindowsChanged: (cb) => windowsSub.on(cb),
   focusWindow(id) {
