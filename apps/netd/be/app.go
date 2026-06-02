@@ -28,8 +28,10 @@ package netd
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -84,9 +86,20 @@ type NetState struct {
 	Available []string `json:"available,omitempty"`
 }
 
+// assetsFS embeds the settings "Network" panel bundle (panel.js), staged
+// by the Makefile from apps/netd/fe/dist. netd has no window; this is only
+// the panel the settings app hosts.
+//
+//go:embed all:assets
+var assetsFS embed.FS
+
 var def *sdk.AppDef
 
 func init() {
+	sub, err := fs.Sub(assetsFS, "assets")
+	if err != nil {
+		log.Printf("wash-netd: assets sub: %v", err)
+	}
 	def = &sdk.AppDef{
 		Manifest: sdk.Manifest{
 			ID:              AppID,
@@ -95,12 +108,19 @@ func init() {
 			ProtocolVersion: sdk.ProtocolVersion,
 			Surface:         sdk.SurfaceBackground,
 			Instancing:      sdk.InstancingSingleton,
+			// Network panel for the settings app (docs/NET.md §2.7).
+			SettingsPanel: &sdk.SettingsPanel{
+				Section: "Network",
+				Element: "wash-settings-panel-network",
+			},
 		},
+		Assets:  sub,
 		OnReady: onReady,
 	}
 	registry.Register(&registry.App{
 		Name:     "wash-netd",
 		Manifest: def.Manifest,
+		Assets:   def.Assets,
 		Run:      run,
 	})
 }

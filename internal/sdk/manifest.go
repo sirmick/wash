@@ -25,7 +25,8 @@ const (
 // Manifest / WindowHints / RootVariant alias the canonical wire
 // definitions so apps can keep writing sdk.Manifest{...} literals.
 type (
-	Manifest    = wire.Manifest
-	WindowHints = wire.WindowHints
-	RootVariant = wire.RootVariant
+	Manifest      = wire.Manifest
+	WindowHints   = wire.WindowHints
+	RootVariant   = wire.RootVariant
+	SettingsPanel = wire.SettingsPanel
 )

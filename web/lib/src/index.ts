@@ -24,6 +24,7 @@ export type {
   SettingsPanelProps,
   DefineSettingsPanelOptions,
 } from './define-settings-panel';
+export { Section, Row, SmallBtn, Select, ServiceBadge } from './panel-kit';
 export { washAssetUrl } from './assets';
 export { IngressFrame } from './ingress-frame';
 export type { IngressFrameProps } from './ingress-frame';
