@@ -1,17 +1,26 @@
 package router
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/sirmick/wash/internal/wire"
 )
 
-// envelopedManifest wraps a bare manifest JSON in the ProbeOutput
-// envelope shape (no bundle) so the validation tests can drive
-// ParseProbe — the production probe-output parser — directly.
+// envelopedManifest wraps a bare manifest JSON in the framed probe
+// header line (no bundles) so the validation tests can drive
+// ParseProbe — the production probe-output parser — directly. The
+// fixture JSON is compacted first (production emits compact json.Marshal
+// output) so the header is a single line; the trailing newline is what
+// ReadProbe splits the header on.
 func envelopedManifest(manifestJSON string) string {
-	return `{"manifest":` + manifestJSON + `}`
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, []byte(manifestJSON)); err != nil {
+		panic("envelopedManifest: compact: " + err.Error())
+	}
+	return `{"manifest":` + buf.String() + "}\n"
 }
 
 func validManifestJSON() string {
@@ -30,7 +39,7 @@ func validManifestJSON() string {
 }
 
 func TestParseValidManifest(t *testing.T) {
-	m, _, err := ParseProbe([]byte(envelopedManifest(validManifestJSON())))
+	m, _, _, err := ParseProbe([]byte(envelopedManifest(validManifestJSON())))
 	if err != nil {
 		t.Fatalf("validate: %v", err)
 	}
@@ -63,7 +72,7 @@ func TestValidateRejects(t *testing.T) {
 	}
 	for _, tc := range tweaks {
 		t.Run(tc.name, func(t *testing.T) {
-			m, _, err := ParseProbe([]byte(envelopedManifest(validManifestJSON())))
+			m, _, _, err := ParseProbe([]byte(envelopedManifest(validManifestJSON())))
 			if err != nil {
 				t.Fatalf("base manifest must parse: %v", err)
 			}
@@ -80,7 +89,7 @@ func TestValidateRejects(t *testing.T) {
 }
 
 func TestParseRejectsNonJSON(t *testing.T) {
-	if _, _, err := ParseProbe([]byte("not json")); err == nil {
+	if _, _, _, err := ParseProbe([]byte("not json\n")); err == nil {
 		t.Fatal("expected parse error")
 	}
 }
@@ -119,7 +128,7 @@ func TestValidateBackgroundSurface(t *testing.T) {
 }
 
 func TestHasCapability(t *testing.T) {
-	m, _, err := ParseProbe([]byte(envelopedManifest(validManifestJSON())))
+	m, _, _, err := ParseProbe([]byte(envelopedManifest(validManifestJSON())))
 	if err != nil {
 		t.Fatal(err)
 	}

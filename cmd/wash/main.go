@@ -9,8 +9,8 @@
 //   - argv[0] = "wash-launch"        → launchrun.Run
 //   - argv[0] = "wash-<app>"         → registered app (via symlink)
 //   - argv[0] = "wash" + verb        → subcommand (install-symlinks,
-//                                       list-apps, router, launch),
-//                                       or shorthand for wash-<app>
+//     list-apps, router, launch),
+//     or shorthand for wash-<app>
 //
 // --wash-manifest is honored on any per-app dispatch so the router's
 // exec-probe path (used when selfApp's fast path doesn't match)
@@ -19,8 +19,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -78,29 +76,31 @@ func dispatchApp(a *registry.App) {
 }
 
 func writeManifest(w io.Writer, a *registry.App) {
-	// Emit a ProbeOutput envelope (manifest + base64 bundle) — same
-	// shape the SDK's --wash-manifest path produces. The router's
-	// exec-probe parser is envelope-aware and needs both halves.
-	envelope := wire.ProbeOutput{Manifest: a.Manifest}
+	// Emit framed probe output (manifest header + raw bundle bytes) —
+	// same shape the SDK's --wash-manifest path produces. The router's
+	// exec-probe parser reads the header line then the raw frames.
+	var bundles []wire.NamedBundle
 	if a.Assets != nil {
-		if b, err := readIndexJS(a.Assets); err == nil {
-			envelope.BundleB64 = base64.StdEncoding.EncodeToString(b)
+		if b, err := readBundle(a.Assets, "index.js"); err == nil {
+			bundles = append(bundles, wire.NamedBundle{Kind: wire.BundleMain, Bytes: b})
+		}
+		if a.Manifest.SettingsPanel != nil {
+			if b, err := readBundle(a.Assets, "panel.js"); err == nil {
+				bundles = append(bundles, wire.NamedBundle{Kind: wire.BundlePanel, Bytes: b})
+			}
 		}
 	}
-	b, err := json.Marshal(envelope)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "wash: marshal manifest: %v\n", err)
+	if err := wire.WriteProbe(w, a.Manifest, bundles); err != nil {
+		fmt.Fprintf(os.Stderr, "wash: write manifest: %v\n", err)
 		os.Exit(1)
 	}
-	w.Write(b)
-	w.Write([]byte{'\n'})
 }
 
-// readIndexJS pulls index.js from an app's embedded fs.FS. Mirrors
-// the SDK's path so the multicall and standalone probe envelopes
-// share their bundle source.
-func readIndexJS(fsys fs.FS) ([]byte, error) {
-	f, err := fsys.Open("index.js")
+// readBundle pulls a named bundle (index.js / panel.js) from an app's
+// embedded fs.FS as raw bytes. Mirrors the SDK's path so the multicall
+// and standalone probe payloads share their bundle source.
+func readBundle(fsys fs.FS, name string) ([]byte, error) {
+	f, err := fsys.Open(name)
 	if err != nil {
 		return nil, err
 	}
