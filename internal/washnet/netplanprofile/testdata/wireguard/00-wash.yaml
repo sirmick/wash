@@ -1,0 +1,16 @@
+network:
+    version: 2
+    tunnels:
+        wg0:
+            addresses:
+                - 10.9.0.1/24
+            mode: wireguard
+            key: aPrivateKeyBase64Encoded000000000000000000=
+            port: 51820
+            peers:
+                - keys:
+                    public: aPeerPublicKeyBase64Encoded00000000000000000=
+                  allowed-ips:
+                    - 10.9.0.2/32
+                  endpoint: vpn.example.com:51820
+                  keepalive: 25
