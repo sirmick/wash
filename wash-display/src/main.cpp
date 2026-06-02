@@ -12,7 +12,8 @@
 // The threaded wire I/O lives in WireConn (wire_conn.*); the compositor
 // in compositor.* . Build: cmake (see ../CMakeLists.txt).
 
-#include "wire_conn.hpp"
+#include <wash/wire_conn.hpp>
+#include <wash/probe.hpp>
 
 #ifdef WASH_DISPLAY_COMPOSITOR
 #include "compositor.hpp"
@@ -97,8 +98,7 @@ extern const unsigned int wash_panel_js_len;
 // windows on demand (they mount the "wash-app-display" decoder element)
 // and supplies the settings "Display" panel.
 static int print_manifest() {
-    wash::json hdr;
-    hdr["manifest"] = {
+    wash::json manifest = {
         {"id", kAppID},
         {"name", "Wash Display"},
         {"version", kVersion},
@@ -110,16 +110,7 @@ static int print_manifest() {
         {"capabilities", {"windows", "env-publish"}},
         {"settings_panel", {{"section", "Display"}, {"element", "wash-settings-panel-display"}}},
     };
-    if (wash_panel_js_len > 0) {
-        hdr["bundles"] = wash::json::array();
-        hdr["bundles"].push_back({{"kind", "panel"}, {"len", wash_panel_js_len}});
-    }
-    const std::string line = hdr.dump();
-    std::fwrite(line.data(), 1, line.size(), stdout);
-    std::fputc('\n', stdout);
-    if (wash_panel_js_len > 0) {
-        std::fwrite(wash_panel_js, 1, wash_panel_js_len, stdout);
-    }
+    wash::write_probe(manifest, {{"panel", wash_panel_js, wash_panel_js_len}});
     return 0;
 }
 

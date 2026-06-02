@@ -26,6 +26,10 @@ add_compile_options(-Wall -Wextra -O2)
 
 find_package(PkgConfig REQUIRED)
 
+# cpp-sdk: the reusable wash C++ client (wire protocol + framed probe),
+# shared with examples/cpp-about. Lives at the repo root.
+set(CPP_SDK ${CMAKE_CURRENT_SOURCE_DIR}/../cpp-sdk)
+
 # --- back-half: image codec for the WS "video" channel --------------
 # WebP rides the raw channel in-band (docs/DISPLAY.md §5); VP9/WebRTC
 # (libdatachannel, vendored in tmp/mac-phoenix/subprojects) lands later.
@@ -58,14 +62,15 @@ endif()
 
 add_executable(wash-display
     src/main.cpp
-    src/wire_conn.cpp               # threaded wire I/O (nlohmann/json)
+    ${CPP_SDK}/wash/wire_conn.cpp   # threaded wire I/O (cpp-sdk, nlohmann/json)
     src/encoders/webp_encoder.cpp   # COPIED from mac-phoenix
     src/encode.cpp                  # SurfaceEncoder: capture buf -> framed msg
     ${PANEL_GEN}                    # settings panel bundle (raw bytes)
 )
 target_include_directories(wash-display PRIVATE
     src
-    third_party                     # nlohmann/json.hpp (header-only, vendored)
+    ${CPP_SDK}                      # <wash/wire.hpp>, <wash/wire_conn.hpp>, <wash/probe.hpp>
+    ${CPP_SDK}/third_party          # nlohmann/json.hpp (header-only, vendored)
     ${WEBP_INCLUDE_DIRS}
 )
 target_link_libraries(wash-display PRIVATE ${WEBP_LIBRARIES})
