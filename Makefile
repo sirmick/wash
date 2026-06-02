@@ -302,9 +302,15 @@ $(OUT)/wash-about: $(ABOUT_STAMP) | $(OUT)
 $(OUT)/wash-test: $(TEST_STAMP) | $(OUT)
 	$(call go_build,$@,apps/test/be/cmd)
 
-# wash-display is C++/CMake, not Go. Configure + build its own project
-# and copy the binary into out/. Rebuilds when any source changes.
-$(OUT)/wash-display: $(wildcard wash-display/src/*) wash-display/CMakeLists.txt | $(OUT)
+# wash-display is C++/CMake, not Go. Build the settings panel FE first
+# (web-display) so CMake can embed fe/dist/panel.js as raw bytes at
+# configure time, then configure + build the project and copy the binary
+# into out/. Rebuilds when any source or the panel bundle changes.
+.PHONY: web-display
+web-display: web-deps
+	@$(PNPM) --filter @wash/app-display run build
+
+$(OUT)/wash-display: web-display $(wildcard wash-display/src/*) $(wildcard wash-display/fe/dist/*) wash-display/CMakeLists.txt | $(OUT)
 	cmake -S wash-display -B wash-display/build -DCMAKE_BUILD_TYPE=Release >/dev/null
 	cmake --build wash-display/build
 	cp wash-display/build/wash-display $@ && chmod 0755 $@

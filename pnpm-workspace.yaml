@@ -4,5 +4,6 @@ packages:
   - "web/fs-client"
   - "web/demo"
   - "apps/*/fe"
+  - "wash-display/fe"
 allowBuilds:
   esbuild: true

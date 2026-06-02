@@ -31,11 +31,37 @@ find_package(PkgConfig REQUIRED)
 # (libdatachannel, vendored in tmp/mac-phoenix/subprojects) lands later.
 pkg_check_modules(WEBP REQUIRED libwebp)
 
+# --- settings panel bundle: panel.js embedded as RAW bytes (no base64).
+# Generated at configure time from the vite build output (fe/dist/panel.js);
+# the Makefile builds the FE before invoking cmake. Absent it, an empty
+# bundle is emitted and the probe advertises no panel. This is the C++
+# mirror of the Go SDK's go:embed + framed-probe path.
+set(PANEL_JS "${CMAKE_CURRENT_SOURCE_DIR}/fe/dist/panel.js")
+set(PANEL_GEN "${CMAKE_CURRENT_BINARY_DIR}/panel_bundle.cpp")
+if(EXISTS "${PANEL_JS}")
+    file(READ "${PANEL_JS}" PANEL_HEX HEX)
+    string(LENGTH "${PANEL_HEX}" PANEL_HEXLEN)
+    math(EXPR PANEL_LEN "${PANEL_HEXLEN} / 2")
+    string(REGEX REPLACE "(..)" "0x\\1," PANEL_BYTES "${PANEL_HEX}")
+    # `extern const` gives external linkage (a bare namespace-scope const
+    # defaults to internal linkage in C++, so main.cpp couldn't see it).
+    file(WRITE "${PANEL_GEN}"
+        "extern const unsigned char wash_panel_js[] = { ${PANEL_BYTES} };\n"
+        "extern const unsigned int wash_panel_js_len = ${PANEL_LEN};\n")
+    message(STATUS "wash-display: embedded settings panel (${PANEL_LEN} bytes)")
+else()
+    file(WRITE "${PANEL_GEN}"
+        "extern const unsigned char wash_panel_js[] = { 0 };\n"
+        "extern const unsigned int wash_panel_js_len = 0;\n")
+    message(STATUS "wash-display: no fe/dist/panel.js — probe advertises no panel")
+endif()
+
 add_executable(wash-display
     src/main.cpp
     src/wire_conn.cpp               # threaded wire I/O (nlohmann/json)
     src/encoders/webp_encoder.cpp   # COPIED from mac-phoenix
     src/encode.cpp                  # SurfaceEncoder: capture buf -> framed msg
+    ${PANEL_GEN}                    # settings panel bundle (raw bytes)
 )
 target_include_directories(wash-display PRIVATE
     src
