@@ -529,12 +529,13 @@ vm-chrome: web-shell
 
 # e2e-vm: the wash-net B1 exit gate (docs/NET.md §8.3, §11) — Playwright drives
 # the VM-served wash UI through the proxy and round-trips a model edit to
-# in-guest com.wash.netd. Needs qemu + /dev/kvm; the spec self-skips otherwise.
+# in-guest com.wash.netd. Needs qemu + /dev/kvm; the specs self-skip otherwise.
+# (`./test.sh --vm` is the higher-level entry point — it preflights the host.)
 .PHONY: e2e-vm
 e2e-vm: vm-image vm-chrome $(OUT)/washvm-run
 	cd e2e && $(PNPM) install --ignore-workspace --silent
 	cd e2e && $(PNPM) exec playwright install chromium
-	cd e2e && $(PNPM) exec playwright test net-vm-gate
+	cd e2e && $(PNPM) exec playwright test net-vm-gate net-vm-multi
 
 # run-vm: boot the baked image and serve the wash UI for manual poking.
 .PHONY: run-vm

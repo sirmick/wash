@@ -24,14 +24,22 @@ const CHROME = join(REPO_ROOT, 'out', 'vm-chrome'); // make vm-chrome
 
 /** Returns a human reason to skip, or null when the VM gate can run here. */
 export function vmSkipReason(): string | null {
-  if (!existsSync('/dev/kvm')) return '/dev/kvm not available';
-  if (!existsSync(RUN_BIN)) return `${RUN_BIN} missing (go build ./cmd/washvm-run)`;
-  if (!existsSync(KERNEL) || !existsSync(INITRAMFS)) return 'VM image missing (scripts/build-vm-image-alpine.sh)';
-  if (!existsSync(join(CHROME, 'chrome.js'))) return 'host chrome missing (make vm-chrome)';
+  // Host prerequisites first (not buildable): KVM + qemu.
+  if (!existsSync('/dev/kvm')) return '/dev/kvm not available (VM e2e needs KVM)';
   try {
     execSync('command -v qemu-system-x86_64', { stdio: 'ignore' });
   } catch {
-    return 'qemu-system-x86_64 not found';
+    return 'qemu-system-x86_64 not found (VM e2e needs qemu)';
+  }
+  // Build artifacts: a single message naming the one command that makes
+  // them, instead of three piecemeal "go build…/scripts…/make…" hints.
+  if (
+    !existsSync(RUN_BIN) ||
+    !existsSync(KERNEL) ||
+    !existsSync(INITRAMFS) ||
+    !existsSync(join(CHROME, 'chrome.js'))
+  ) {
+    return 'VM e2e artifacts not built — run `./test.sh --vm` (or `make e2e-vm`)';
   }
   return null;
 }
