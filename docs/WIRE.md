@@ -100,22 +100,46 @@ on `id` collision). For each `+x` regular file the router invokes:
 
 with `WASH_PROTO=1` and an otherwise stripped environment, a 2-second
 timeout, and stdout capped at 32 MiB. The SDK intercepts this flag inside
-`wash_main` before any app code runs. The binary prints one JSON envelope
-to stdout and exits 0.
+`wash_main` before any app code runs. The binary writes the **framed probe
+output** to stdout and exits 0.
 
-### 5.1 Probe envelope
+### 5.1 Framed probe output
+
+Probe output is **framed**, not a single JSON blob: a header JSON line,
+then the FE bundle(s) as **raw bytes** — no base64.
+
+```
+<header-json>\n
+<raw bytes of bundle[0]><raw bytes of bundle[1]>…
+```
+
+The header:
 
 ```json
 {
   "manifest": { … manifest fields, see §5.2 … },
-  "bundle_b64": "<base64-encoded index.js>"
+  "bundles": [ { "kind": "main", "len": 1942 }, { "kind": "panel", "len": 5407 } ]
 }
 ```
 
-The bundle bytes are the app's embedded FE — historically uploaded on a
-post-handshake raw channel, now shipped here so the router caches the
-bytes at scan time and there's nothing to negotiate per-instance. Apps
-with no FE (CLI helpers, services) omit `bundle_b64`.
+`json.Marshal` never emits a bare newline, so the **first `\n`** reliably
+delimits the header from the raw payload. The router (`internal/wire`
+`ReadProbe`) parses the header, then reads each declared `len` of raw
+bytes in frame order. Bundle kinds:
+
+- `"main"` — the app's FE bundle (`index.js`). Absent for background
+  services and CLI helpers with no window.
+- `"panel"` — the app's settings-panel bundle (`panel.js`), present when
+  the manifest declares a `settings_panel` (§5.2). The router caches it on
+  the registry entry and serves it to the settings host on demand via
+  `panel.read` (§8); it's independent of any running instance, so a panel
+  renders even when its owning service is stopped.
+
+Bundles travel **raw end to end** — stored via `go:embed` (or, for a C++
+app, a CMake byte array), shipped raw here, transported raw on the runtime
+bundle channel. No base64 anywhere. A C++ app emits byte-identical framing
+via `cpp-sdk`'s `wash::write_probe`; the Go SDK uses `wire.WriteProbe`. An
+app with no bundles emits just `header\n`.
 
 ### 5.2 Manifest schema
 
@@ -166,9 +190,15 @@ with no FE (CLI helpers, services) omit `bundle_b64`.
 - `window` — hints (`default_width`, `default_height`, `min_width`,
   `min_height`, `resizable`). Honored: width/height. Min sizes / resize
   hints are advisory.
+- `settings_panel` — optional. Declares a control panel this app supplies
+  to the settings app: `{ "section": "Developer", "element":
+  "wash-settings-panel-vscode", "icon"?, "order"? }`. `element` must start
+  with `wash-settings-panel-`. The app ships the panel's bundle as the
+  `"panel"` frame (§5.1); the settings host discovers it via the catalog's
+  `panels` list and loads it with `panel.read` (§8). See docs/SETTINGS.md.
 
 Validation failures (timeout, non-JSON, schema invalid, duplicate id, icon
-oversize, bundle base64 malformed) result in a listed-disabled launcher
+oversize, truncated bundle frame) result in a listed-disabled launcher
 entry with the reason. Apps are never silently dropped.
 
 ## 6. App handshake
@@ -245,6 +275,12 @@ Carries window/lifecycle control and the FE half of app messages.
 - `{"t":"channel.unbind","channel_id":N,"reason":"…"}`
 - `{"t":"asset.read.ok","req_id":…,"channel_id":N,"size":…,"mime":"…"}`
 - `{"t":"asset.read.err","req_id":…,"code":"…","msg":"…"}`
+- `{"t":"panel.read.ok","req_id":…,"channel_id":N,"size":…}` — an app's
+  settings-panel bundle will stream on `channel_id` (`kind:"bundle"`).
+- `{"t":"panel.read.err","req_id":…,"code":"…","msg":"…"}`
+- the `catalog` message carries a `panels` list (one
+  `{app_id, section, element, icon?, order?}` per app declaring
+  `settings_panel`) alongside `apps`.
 
 **Shell → router:**
 
@@ -264,6 +300,10 @@ Carries window/lifecycle control and the FE half of app messages.
   to the BE half of the app identified by `instance_id`.
 - `{"t":"asset.read","req_id":…,"path":"…"}` — fetch a file from the
   router's embedded asset FS.
+- `{"t":"panel.read","req_id":…,"app_id":"…"}` — fetch an app's
+  settings-panel bundle (`Entry.PanelBundle`) so the settings host can
+  blob-import + `customElements.define` it without spawning the app.
+  Mirrors `asset.read` but keyed by app id and served from the registry.
 - `{"t":"channel.credit","ch":N,"n":…}` — per-channel credit grant
   (docs/QOS.md §5).
 - `{"t":"log","level":"…","source":"…","msg":"…","stack":"…"?}` — FE
