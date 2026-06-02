@@ -546,6 +546,7 @@ docs/               see below
 | [DISPLAY.md](docs/DISPLAY.md) | The native X/Wayland compositor (`wash-display`): build reality, capture pipeline, wire client. |
 | [NET.md](docs/NET.md) | Networking app + privileged daemon (`wash-net`/`wash-netd`): UCI-shaped model, backends. |
 | [PLAN.md](docs/PLAN.md) | The v1 plan this is built against. |
+| [TESTING.md](docs/TESTING.md) | Test tiers, `./test.sh` flags, holistic coverage (`--coverage`), VM-backed e2e (`--vm`), CI, gotchas. |
 | [TECH_DEBT.md](docs/TECH_DEBT.md) / [AUDIT.md](docs/AUDIT.md) | Known debt and a code-quality audit. |
 
 ## Building & testing each part
@@ -571,6 +572,11 @@ check on every binary. `./test.sh` sweeps `--standalone` / `--multicall` /
 pass through to Playwright. Opt-in extras: `--coverage` (merged go-unit +
 e2e coverage report), `--vm` (the VM-backed net e2e above), `--distro`
 (the packaging matrix).
+
+**See [docs/TESTING.md](docs/TESTING.md)** for the full picture: what each
+tier proves, every `./test.sh` flag, holistic coverage (`--coverage` →
+merged go-unit + e2e, ~71%) and its gaps, the VM-backed e2e (`--vm`), what
+CI runs, and the test-tier gotchas.
 
 > **Note:** a fresh `git clone` builds the Go core, frontends, and wash-vm
 > with no surprises. The native **wash-display** compositor is opt-in and
