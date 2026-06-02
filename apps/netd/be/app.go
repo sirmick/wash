@@ -42,6 +42,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/apps/netd/be/backendsel"
+	"github.com/sirmick/wash/apps/netd/be/wifi"
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/washnet/backend"
@@ -86,6 +87,12 @@ type NetState struct {
 	// stamps them onto every state so they survive state transitions.
 	Backend   string   `json:"backend,omitempty"`
 	Available []string `json:"available,omitempty"`
+	// WifiRadio reports a wifi radio is present; WifiLive that NetworkManager is
+	// the live manager (nmcli reachable). The net panel gates the +Wifi button on
+	// WifiRadio + the renderer's wifi capability, and the scan/connect picker on
+	// WifiLive. Static after startup; publish() stamps them like Backend.
+	WifiRadio bool `json:"wifi_radio,omitempty"`
+	WifiLive  bool `json:"wifi_live,omitempty"`
 	// Refresh asks the FE to re-fetch `current` — pushed after netd reads the
 	// box's config out-of-band via a privileged escalation (see liveConfig).
 	Refresh bool `json:"refresh,omitempty"`
@@ -301,7 +308,14 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	conn = c
 	applier, info = selectApplier()
 	washnetReadBin = locateWashnetRead()
-	svc = sdk.NewStateService(bus, NetState{Status: "idle", Backend: info.active, Available: info.available})
+	// Probe the wifi runtime once: nmcli presence + radio. Cheap, never errors —
+	// absence just leaves both false so the FE hides the wifi UI.
+	wifiRT = wifi.New()
+	wifiRadio, wifiLive = wifiRT.Detect()
+	if wifiRadio || wifiLive {
+		log.Printf("wash-netd: wifi radio=%v nmcli-live=%v", wifiRadio, wifiLive)
+	}
+	svc = sdk.NewStateService(bus, NetState{Status: "idle", Backend: info.active, Available: info.available, WifiRadio: wifiRadio, WifiLive: wifiLive})
 	registerHandlers(bus)
 }
 
@@ -317,6 +331,10 @@ var (
 	conn           *sdk.Conn
 	privileged     = os.Geteuid() == 0
 	washnetReadBin string
+
+	wifiRT    wifi.WifiRuntime
+	wifiRadio bool
+	wifiLive  bool
 
 	liveMu         sync.Mutex
 	liveCache      model.Config
@@ -521,6 +539,7 @@ func publish(s NetState) {
 		// Carry the (static) backend identity through every transition so a
 		// subscriber that joins mid-apply still learns which backend is running.
 		s.Backend, s.Available = info.active, info.available
+		s.WifiRadio, s.WifiLive = wifiRadio, wifiLive
 		svc.Mutate(func(cur *NetState) { *cur = s })
 	}
 }
