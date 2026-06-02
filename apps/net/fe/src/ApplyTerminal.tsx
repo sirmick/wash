@@ -82,17 +82,22 @@ export function ApplyTerminal(props: ApplyTerminalProps) {
         </div>
       </Show>
 
-      <Show
-        when={awaiting()}
-        fallback={
-          // Applies are initiated per-connection from the wizards (each Create
-          // runs its own commit-confirm), so the terminal just reflects the
-          // resulting status; there is no standalone Apply button.
-          <div class="wash-net-applybar">
-            <span class="wash-net-status" data-status={props.status()}>{props.status()}</span>
-          </div>
-        }
-      >
+      {/* Status line stays in normal flow at the bottom of the terminal.
+          Applies are initiated per-connection from the wizards (each Create
+          runs its own commit-confirm), so the terminal just reflects the
+          resulting status; there is no standalone Apply button. */}
+      <div class="wash-net-applybar">
+        <span class="wash-net-status" data-status={props.status()}>{props.status()}</span>
+      </div>
+
+      {/* The Keep/Discard prompt is a banner pinned to the TOP of the app
+          (.wash-net-confirm is position:absolute against .wash-net-app), not a
+          bar at the bottom of the terminal: a window's bottom edge can be
+          clipped under the taskbar on a short screen (e.g. the VM-served
+          desktop), which left the bottom-anchored buttons unclickable. A
+          window's top is never off-screen, so a top banner is always
+          reachable. */}
+      <Show when={awaiting()}>
         <div class="wash-net-confirm" data-testid="apply-confirm">
           <div class="wash-net-countdown" data-testid="apply-countdown">
             <div class="wash-net-countbar" style={{ width: `${barPct()}%` }} />
