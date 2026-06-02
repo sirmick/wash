@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/apps/netd/be/backendsel"
-	"github.com/sirmick/wash/cmd/internal/ucibuf"
+	"github.com/sirmick/wash/internal/washnet/ucibuf"
 	"github.com/sirmick/wash/internal/washnet/backend"
 	"github.com/sirmick/wash/internal/washnet/change"
 	"github.com/sirmick/wash/internal/washnet/codec"

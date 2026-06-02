@@ -308,7 +308,13 @@ function NetApp(props: WashAppProps) {
     const onMsg = (ev: Event) => {
       const m = (ev as CustomEvent).detail;
       if (!m) return;
-      if (m.kind === "net.state") { applyState(m.state); return; }
+      if (m.kind === "net.state") {
+        applyState(m.state);
+        // netd read the box out-of-band (privileged escalation) — re-fetch so
+        // the freshly-readable config replaces the "unconfigured" placeholder.
+        if (m.state?.refresh) void loadCurrent();
+        return;
+      }
       const id = m?.id;
       if (typeof id === "string" && pending.has(id)) {
         const cb = pending.get(id)!; pending.delete(id); cb(m);

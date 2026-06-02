@@ -9,26 +9,30 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/sirmick/wash/apps/netd/be/backendsel"
-	"github.com/sirmick/wash/cmd/internal/ucibuf"
 	"github.com/sirmick/wash/internal/washnet/backend"
 	"github.com/sirmick/wash/internal/washnet/codec"
+	"github.com/sirmick/wash/internal/washnet/ucibuf"
 	"github.com/sirmick/wash/internal/washnet/validate"
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: washnet-apply <file.uci> [file.uci ...]")
+	// -backend wins over $WASH_NETD_BACKEND (sudo strips env). Empty → autodetect.
+	backendFlag := flag.String("backend", "", "backend: nm|networkd|netplan|ifupdown")
+	flag.Parse()
+	if flag.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "usage: washnet-apply [-backend X] <file.uci> [file.uci ...]")
 		os.Exit(2)
 	}
 
 	pkgs := map[string]string{}
-	for _, p := range os.Args[1:] {
+	for _, p := range flag.Args() {
 		b, err := os.ReadFile(p)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "washnet-apply:", err)
@@ -49,7 +53,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	name := os.Getenv("WASH_NETD_BACKEND")
+	name := *backendFlag
+	if name == "" {
+		name = os.Getenv("WASH_NETD_BACKEND")
+	}
 	if name == "" {
 		name, _ = backendsel.Autodetect()
 	}

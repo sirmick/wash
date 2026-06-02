@@ -34,6 +34,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -48,6 +49,7 @@ import (
 	"github.com/sirmick/wash/internal/washnet/codec"
 	"github.com/sirmick/wash/internal/washnet/model"
 	"github.com/sirmick/wash/internal/washnet/txn"
+	"github.com/sirmick/wash/internal/washnet/ucibuf"
 	"github.com/sirmick/wash/internal/washnet/validate"
 	"github.com/sirmick/wash/internal/wire"
 )
@@ -83,6 +85,9 @@ type NetState struct {
 	// stamps them onto every state so they survive state transitions.
 	Backend   string   `json:"backend,omitempty"`
 	Available []string `json:"available,omitempty"`
+	// Refresh asks the FE to re-fetch `current` — pushed after netd reads the
+	// box's config out-of-band via a privileged escalation (see liveConfig).
+	Refresh bool `json:"refresh,omitempty"`
 }
 
 // assetsFS embeds the settings "Network" panel bundle (panel.js), staged
@@ -292,9 +297,90 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		}
 	}
 	bus := sdk.NewBus(c)
+	conn = c
 	applier, info = selectApplier()
+	washnetReadBin = locateWashnetRead()
 	svc = sdk.NewStateService(bus, NetState{Status: "idle", Backend: info.active, Available: info.available})
 	registerHandlers(bus)
+}
+
+// --- privileged-read escalation (docs/NET-BACKENDS.md) ----------------------
+// netd may run unprivileged — the dev router runs it as the user, and a
+// least-privilege deploy may too. The config backends need root to read (and
+// apply), so when netd isn't euid 0 it ESCALATES through wash-priv: it runs the
+// washnet-read CLI as root (the FE shows wash-priv's approval/unlock), caches
+// the result, and signals the net FE to reload. "Ask on load" falls out: the
+// first `current` (panel open) kicks the escalation.
+
+var (
+	conn           *sdk.Conn
+	privileged     = os.Geteuid() == 0
+	washnetReadBin string
+
+	liveMu         sync.Mutex
+	liveCache      model.Config
+	liveWarm       bool
+	liveRefreshing bool
+)
+
+// liveConfig is the base config netd diffs against and serves as `current`.
+// Privileged → read the box directly. Unprivileged → the cache, kicking a
+// one-shot privileged refresh (via wash-priv) the first time so the panel asks
+// on load rather than silently showing an empty box.
+func liveConfig() model.Config {
+	if privileged {
+		return applier.Live()
+	}
+	liveMu.Lock()
+	defer liveMu.Unlock()
+	if !liveWarm && !liveRefreshing && conn != nil && washnetReadBin != "" {
+		liveRefreshing = true
+		go refreshLiveViaPriv()
+	}
+	return liveCache
+}
+
+func refreshLiveViaPriv() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) // the user may take a while to unlock
+	defer cancel()
+	var cfg model.Config
+	ok := false
+	r, err := conn.PrivRunInlineSync(ctx, []string{washnetReadBin, "-backend", info.active}, "read current network configuration")
+	if err == nil && r.Exit == 0 {
+		if parsed, perr := codec.Parse(ucibuf.Unmarshal(string(r.Stdout))); perr == nil {
+			cfg, ok = parsed, true
+		} else {
+			log.Printf("wash-netd: privileged read parse: %v", perr)
+		}
+	} else {
+		log.Printf("wash-netd: privileged read failed (err=%v exit=%d): %s", err, r.Exit, string(r.Stderr))
+	}
+	liveMu.Lock()
+	liveRefreshing = false
+	if ok {
+		liveCache = cfg
+		liveWarm = true
+	}
+	liveMu.Unlock()
+	if ok {
+		// Tell the FE to re-fetch `current` now that we can read the box.
+		publish(NetState{Status: "idle", Backend: info.active, Available: info.available, Refresh: true})
+	}
+}
+
+// locateWashnetRead finds the washnet-read CLI: next to netd's binary (dev
+// out/), else on PATH (the installed /usr/bin path).
+func locateWashnetRead() string {
+	if exe, err := os.Executable(); err == nil {
+		cand := filepath.Join(filepath.Dir(exe), "washnet-read")
+		if _, err := os.Stat(cand); err == nil {
+			return cand
+		}
+	}
+	if p, err := exec.LookPath("washnet-read"); err == nil {
+		return p
+	}
+	return ""
 }
 
 func registerHandlers(bus *sdk.Bus) {
@@ -313,7 +399,7 @@ func registerHandlers(bus *sdk.Bus) {
 		if err := authz(from); err != nil {
 			return currentResp{}, err
 		}
-		data, err := codec.EncodeJSON(applier.Live())
+		data, err := codec.EncodeJSON(liveConfig())
 		if err != nil {
 			return currentResp{}, sdk.Errf(sdk.ErrInternal, "encode current: %v", err)
 		}
@@ -332,7 +418,7 @@ func registerHandlers(bus *sdk.Bus) {
 		if err != nil {
 			return diffResp{}, sdk.Errf(sdk.ErrBadRequest, "decode config: %v", err)
 		}
-		d := change.Compute(applier.Live(), cfg)
+		d := change.Compute(liveConfig(), cfg)
 		return diffResp{Entries: entryDTOs(d), Summary: summarize(d)}, nil
 	})
 

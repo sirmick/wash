@@ -5,16 +5,25 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
 	"github.com/sirmick/wash/apps/netd/be/backendsel"
-	"github.com/sirmick/wash/cmd/internal/ucibuf"
 	"github.com/sirmick/wash/internal/washnet/codec"
+	"github.com/sirmick/wash/internal/washnet/ucibuf"
 )
 
 func main() {
-	name := os.Getenv("WASH_NETD_BACKEND")
+	// -backend wins over $WASH_NETD_BACKEND (sudo strips env, so the privileged
+	// escalation passes the backend as an arg). Empty → env → autodetect.
+	backendFlag := flag.String("backend", "", "backend: nm|networkd|netplan|ifupdown (default: $WASH_NETD_BACKEND or autodetect)")
+	flag.Parse()
+
+	name := *backendFlag
+	if name == "" {
+		name = os.Getenv("WASH_NETD_BACKEND")
+	}
 	if name == "" {
 		name, _ = backendsel.Autodetect()
 	}
