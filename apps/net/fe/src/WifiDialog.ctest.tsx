@@ -3,9 +3,37 @@
 
 import { test, expect, afterEach, vi } from 'vitest';
 import { render, fireEvent, cleanup } from '@solidjs/testing-library';
-import { WifiDialog } from './WifiDialog.tsx';
+import { WifiDialog, secTagFromAP } from './WifiDialog.tsx';
 
 afterEach(cleanup);
+
+test('secTagFromAP maps the security column to a union tag', () => {
+  expect(secTagFromAP('WPA3')).toBe('sae');
+  expect(secTagFromAP('WPA2 WPA3')).toBe('sae');
+  expect(secTagFromAP('WPA2')).toBe('psk2');
+  expect(secTagFromAP('')).toBe('none');
+});
+
+test('no AP picker when not live; picker present + click prefills the form when live', () => {
+  const aps = [
+    { ssid: 'home', signal: 80, security: 'WPA2', in_use: true },
+    { ssid: 'cafe', signal: 50, security: '', in_use: false },
+  ];
+  // not live → no scan section
+  const off = render(() => <WifiDialog live={false} busy={false} onConnect={() => {}} onCancel={() => {}} />);
+  expect(off.queryByTestId('wifi-scan')).toBeNull();
+  cleanup();
+
+  // live → picker present; clicking the open AP prefills SSID + security=none
+  const { getByTestId, queryByTestId } = render(() => (
+    <WifiDialog live={true} busy={false} aps={aps} onConnect={() => {}} onCancel={() => {}} />
+  ));
+  expect(queryByTestId('wifi-scan')).toBeTruthy();
+  fireEvent.click(getByTestId('ap-cafe'));
+  expect((getByTestId('wifi-ssid') as HTMLInputElement).value).toBe('cafe');
+  expect((getByTestId('wifi-security') as HTMLSelectElement).value).toBe('none');
+  expect(queryByTestId('wifi-psk')).toBeNull(); // open ⇒ no PSK field
+});
 
 test('PSK field gates on security; Connect needs a valid PSK; emits the chosen args', () => {
   const onConnect = vi.fn();

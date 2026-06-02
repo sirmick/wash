@@ -9,11 +9,11 @@
 // the schema-driven editor for one interface's addressing. Every change runs through
 // netd validate → apply (commit-confirm) → the box.
 
-import { createMemo, createSignal, onCleanup, onMount, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onMount, For, Show } from "solid-js";
 import { defineWashApp, type WashAppProps } from "@wash/ui";
 
 import { ApplyTerminal, type ApplyEvent } from "./ApplyTerminal.tsx";
-import { WifiDialog } from "./WifiDialog.tsx";
+import { WifiDialog, type AP } from "./WifiDialog.tsx";
 import { ObjectForm } from "./ObjectForm.tsx";
 import { setAtPath } from "./setAtPath.ts";
 import type { Descriptor, ObjectDescriptor } from "./objectform-model.ts";
@@ -115,6 +115,8 @@ function NetApp(props: WashAppProps) {
   const [wifiLive, setWifiLive] = createSignal(false);
   const [wifiDevices, setWifiDevices] = createSignal<string[]>([]);
   const [wifiConns, setWifiConns] = createSignal<WifiConn[]>([]);
+  const [aps, setAps] = createSignal<AP[]>([]);
+  const [scanning, setScanning] = createSignal(false);
   const wifiCapable = createMemo(() => canKind("wireless/wifi-iface") && wifiRadio());
   const [editIface, setEditIface] = createSignal<Interface | null>(null);
 
@@ -255,6 +257,15 @@ function NetApp(props: WashAppProps) {
     if (r.kind === "wifi_status_ok") setWifiConns((r.conns ?? []) as WifiConn[]);
   };
 
+  // scanWifi pulls the live AP list (NM rescans + lists; rate-limit handled BE).
+  const scanWifi = async () => {
+    if (!wifiLive()) return;
+    setScanning(true);
+    const r = await sendWithReply("wifi_scan", {}, 15000);
+    setScanning(false);
+    if (r.kind === "wifi_scan_ok") setAps((r.aps ?? []) as AP[]);
+  };
+
   // connectWifi routes by capability: NM-live → the imperative nmcli path
   // (wifi_connect; async, the result lands via a net.state Refresh). No NM →
   // declarative: fold the SSID into the config and apply (commit-confirm).
@@ -373,6 +384,15 @@ function NetApp(props: WashAppProps) {
     setAdding(null);
   };
 
+  // Poll the scan while the dialog is open on an NM-live box (~2.5s; the effect
+  // re-runs when `adding` changes and onCleanup clears the interval on close).
+  createEffect(() => {
+    if (adding() !== "wifi" || !wifiLive()) return;
+    void scanWifi();
+    const t = window.setInterval(() => void scanWifi(), 2500);
+    onCleanup(() => window.clearInterval(t));
+  });
+
   onMount(() => {
     const onMsg = (ev: Event) => {
       const m = (ev as CustomEvent).detail;
@@ -440,7 +460,7 @@ function NetApp(props: WashAppProps) {
           <BridgeWizard members={freeDevices()} onCancel={() => setAdding(null)} onCreate={addBridge} />
         </Show>
         <Show when={adding() === "wifi"}>
-          <WifiDialog live={wifiLive()} busy={busy()} onConnect={connectWifi} onCancel={() => setAdding(null)} />
+          <WifiDialog live={wifiLive()} busy={busy()} aps={aps()} scanning={scanning()} onScan={() => void scanWifi()} onConnect={connectWifi} onCancel={() => setAdding(null)} />
         </Show>
 
         <div class="wash-net-list">
@@ -734,6 +754,15 @@ const STYLE = `
 .wash-net-grouplabel { font-size:11px; opacity:.6; text-transform:uppercase; letter-spacing:.04em; margin:6px 0 2px; }
 .wash-net-addressing .wash-net-group { margin:0 0 6px; }
 .wash-net-member { font-size:12px; display:flex; gap:4px; align-items:center; }
+.wash-net-wifi-scan { margin:4px 0 10px; }
+.wash-net-wifi-scanhead { display:flex; align-items:center; justify-content:space-between; }
+.wash-net-aplist { display:flex; flex-direction:column; gap:3px; max-height:160px; overflow:auto; margin-top:4px; }
+.wash-net-ap { display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%;
+  background:#15152a; color:#eee; border:1px solid #2a2a3a; border-radius:4px; padding:5px 9px; font:inherit; cursor:pointer; text-align:left; }
+.wash-net-ap:hover { background:#22223a; border-color:#3a3a6a; }
+.wash-net-ap[data-inuse="1"] { border-color:#2e5a38; }
+.wash-net-ap-ssid { font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wash-net-ap-meta { font-size:12px; opacity:.7; flex-shrink:0; font-family:ui-monospace,Menlo,monospace; }
 .wash-net-btn { display:inline-flex; align-items:center; gap:5px; background:#202037; color:#eee; border:1px solid #2a2a3a; border-radius:4px; padding:4px 10px; font:inherit; cursor:pointer; }
 .wash-net-ico { flex-shrink:0; opacity:.9; }
 .wash-net-btn:hover:not(:disabled) { background:#2a2a4a; }

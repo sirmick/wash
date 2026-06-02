@@ -14,9 +14,27 @@ const SECURITIES: { tag: string; label: string }[] = [
   { tag: "sae", label: "WPA3 (SAE)" },
 ];
 
+// secTagFromAP maps nmcli's SECURITY column to our union tag — WPA3 → sae,
+// any other WPA → psk2, blank → open.
+export function secTagFromAP(security: string): string {
+  if (/WPA3|SAE/i.test(security)) return "sae";
+  if (/WPA|RSN|WEP/i.test(security)) return "psk2";
+  return "none";
+}
+
+// signalBars renders a 0–100 RSSI as 1–4 block glyphs (BMP chars, one UTF-16
+// unit each, so slice is safe).
+function signalBars(s: number): string {
+  const n = s >= 75 ? 4 : s >= 50 ? 3 : s >= 25 ? 2 : 1;
+  return "▂▄▆█".slice(0, n);
+}
+
 export function WifiDialog(props: {
   live: boolean;
   busy: boolean;
+  aps?: AP[];
+  scanning?: boolean;
+  onScan?: () => void;
   onConnect: (ssid: string, security: string, psk: string, hidden: boolean) => void;
   onCancel: () => void;
 }) {
@@ -25,14 +43,48 @@ export function WifiDialog(props: {
   const [psk, setPsk] = createSignal("");
   const [hidden, setHidden] = createSignal(false);
 
+  let pskInput: HTMLInputElement | undefined;
+
   const needsPsk = () => security() !== "none";
   // WPA2/WPA3 PSKs are 8–63 chars; enforce before enabling Connect.
   const pskOk = () => !needsPsk() || (psk().length >= 8 && psk().length <= 63);
   const canConnect = () => !!ssid() && pskOk() && !props.busy;
 
+  // Clicking a scanned AP prefills the manual form (the two flows are one form,
+  // one populated by a click, one by typing) and jumps to the password.
+  const pickAP = (ap: AP) => {
+    setSsid(ap.ssid);
+    const sec = secTagFromAP(ap.security);
+    setSecurity(sec);
+    if (sec !== "none") pskInput?.focus();
+  };
+
   return (
     <div class="wash-net-wizard" data-testid="wifi-dialog">
       <div class="wash-net-wizard-title">{props.live ? "Add Wi-Fi network" : "Add Wi-Fi network (manual)"}</div>
+
+      <Show when={props.live}>
+        <div class="wash-net-wifi-scan">
+          <div class="wash-net-wifi-scanhead">
+            <span class="wash-net-grouplabel">Available networks</span>
+            <button data-testid="wifi-scan" class="wash-net-btn ghost" disabled={!!props.scanning} onClick={() => props.onScan?.()}>
+              {props.scanning ? "Scanning…" : "Scan"}
+            </button>
+          </div>
+          <div class="wash-net-aplist">
+            <For each={props.aps ?? []} fallback={<div class="wash-net-hint">{props.scanning ? "Scanning…" : "No networks found yet."}</div>}>
+              {(ap) => (
+                <button type="button" class="wash-net-ap" data-testid={`ap-${ap.ssid}`} data-inuse={ap.in_use ? "1" : "0"} onClick={() => pickAP(ap)}>
+                  <span class="wash-net-ap-ssid">{ap.ssid || "(hidden)"}</span>
+                  <span class="wash-net-ap-meta">
+                    <Show when={ap.security}>🔒 </Show>{signalBars(ap.signal)}<Show when={ap.in_use}> ✓</Show>
+                  </span>
+                </button>
+              )}
+            </For>
+          </div>
+        </div>
+      </Show>
 
       <label class="wash-net-field">
         <span class="wash-net-label">Network (SSID)</span>
@@ -47,7 +99,7 @@ export function WifiDialog(props: {
       <Show when={needsPsk()}>
         <label class="wash-net-field">
           <span class="wash-net-label">Password</span>
-          <input data-testid="wifi-psk" type="password" value={psk()} placeholder="8–63 characters"
+          <input data-testid="wifi-psk" ref={pskInput} type="password" value={psk()} placeholder="8–63 characters"
             onInput={(e) => setPsk(e.currentTarget.value)} />
         </label>
       </Show>
