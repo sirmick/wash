@@ -130,15 +130,16 @@ func TestStatusFiltersWifi(t *testing.T) {
 
 func TestConnectArgv(t *testing.T) {
 	cases := []struct {
-		name              string
-		security, psk     string
-		hidden            bool
-		wantPass, wantHid bool
+		name          string
+		security, psk string
+		hidden        bool
+		wantKeyMgmt   string // "" ⇒ no wifi-sec (open)
+		wantHidden    bool
 	}{
-		{"wpa2-psk", SecPSK2, "hunter2!!", false, true, false},
-		{"wpa3-sae", SecSAE, "correcthorse", false, true, false},
-		{"open", SecNone, "", false, false, false},
-		{"hidden psk2", SecPSK2, "hunter2!!", true, true, true},
+		{"wpa2-psk", SecPSK2, "hunter2!!", false, "wpa-psk", false},
+		{"wpa3-sae", SecSAE, "correcthorse", false, "sae", false},
+		{"open", SecNone, "", false, "", false},
+		{"hidden psk2", SecPSK2, "hunter2!!", true, "wpa-psk", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -146,14 +147,27 @@ func TestConnectArgv(t *testing.T) {
 			if _, err := (&Live{run: f}).Connect(context.Background(), "MyNet", c.security, c.psk, c.hidden); err != nil {
 				t.Fatal(err)
 			}
-			if !f.saw("device wifi connect MyNet") {
-				t.Fatalf("missing connect call, calls=%v", f.calls)
+			// explicit profile add + up, and a stale-profile delete for idempotency
+			if !f.saw("connection add type wifi con-name MyNet ssid MyNet") {
+				t.Fatalf("missing profile add, calls=%v", f.calls)
 			}
-			if got := f.saw("password " + c.psk); got != c.wantPass {
-				t.Errorf("password-in-argv = %v, want %v (calls=%v)", got, c.wantPass, f.calls)
+			if !f.saw("connection up MyNet") {
+				t.Errorf("missing connection up, calls=%v", f.calls)
 			}
-			if got := f.saw("hidden yes"); got != c.wantHid {
-				t.Errorf("hidden-in-argv = %v, want %v", got, c.wantHid)
+			if c.wantKeyMgmt == "" {
+				if f.saw("wifi-sec.key-mgmt") {
+					t.Errorf("open should set no key-mgmt, calls=%v", f.calls)
+				}
+			} else {
+				if !f.saw("wifi-sec.key-mgmt " + c.wantKeyMgmt) {
+					t.Errorf("want key-mgmt %s, calls=%v", c.wantKeyMgmt, f.calls)
+				}
+				if !f.saw("wifi-sec.psk " + c.psk) {
+					t.Errorf("missing psk in argv, calls=%v", f.calls)
+				}
+			}
+			if got := f.saw("802-11-wireless.hidden yes"); got != c.wantHidden {
+				t.Errorf("hidden-in-argv = %v, want %v", got, c.wantHidden)
 			}
 		})
 	}

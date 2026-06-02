@@ -26,7 +26,9 @@ mkdir -p "$BUILD"
 # than the distro *-openrc subpackages: those pull in alpine-base's disk-oriented
 # sysinit services (need sysfs / localmount / fsck) that don't apply to a
 # run-from-RAM initramfs. openrc itself gives us runlevels + supervise-daemon.
-NM_PKGS="networkmanager networkmanager-cli networkmanager-wifi dbus polkit wpa_supplicant eudev linux-virt bash openrc"
+# linux-lts (not -virt): the virt kernel ships no 802.11 stack, and the wifi
+# e2e needs mac80211_hwsim + mac80211/cfg80211. lts still has virtio_net etc.
+NM_PKGS="networkmanager networkmanager-cli networkmanager-wifi dbus polkit wpa_supplicant eudev linux-lts bash openrc hostapd iw dnsmasq"
 # The guest runs the wash desktop as the unprivileged 'wash' user (in the netdev
 # group so NM/polkit lets it manage networking — see 49-wash-nm.rules).
 # Create the wash user AND give it a real shadow password ("wash"): the login
@@ -63,8 +65,13 @@ RFS="$BUILD/root"
 rm -rf "$RFS"
 mkdir -p "$RFS"
 tar -C "$RFS" -xf "$ROOTFS_TAR"
-# Kernel comes from the same linux-virt package as the in-rootfs modules.
-cp "$RFS/boot/vmlinuz-virt" "$OUT/vmlinuz"
+# Kernel comes from the same linux-lts package as the in-rootfs modules.
+cp "$RFS/boot/vmlinuz-lts" "$OUT/vmlinuz"
+# linux-lts drags in ~900M of linux-firmware + a /boot we don't need in the
+# RAM-backed initramfs: a virtual (hwsim) + virtio box needs no device firmware,
+# and the kernel is booted from $OUT/vmlinuz, not /boot. Drop both so the image
+# stays ~200M instead of >1G (which wouldn't fit the VM's RAM).
+rm -rf "$RFS/lib/firmware" "$RFS/boot"
 
 # Make NM actually manage the eth NICs: keyfile-only plugin (don't defer to
 # Alpine's /etc/network/interfaces via ifupdown) + explicitly manage everything.
@@ -79,7 +86,10 @@ plugins=keyfile
 no-auto-default=*
 
 [keyfile]
-unmanaged-devices=none
+# wlan1 is the wifi e2e's hostapd AP radio (hwsim radios=2 → wlan0 station,
+# wlan1 AP); keep NM + the global supplicant off it so hostapd owns it cleanly.
+# wlan0 stays managed as the station wash connects.
+unmanaged-devices=interface-name:wlan1
 
 [device]
 match-device=interface-name:eth*
@@ -229,7 +239,13 @@ output_log="/run/nm.log"
 error_log="/run/nm.log"
 respawn_delay=1
 depend() { need dbus; after polkit; }
-start_pre() { mkdir -p /run/NetworkManager /var/lib/NetworkManager /etc/NetworkManager/system-connections; }
+start_pre() {
+	mkdir -p /run/NetworkManager /var/lib/NetworkManager /etc/NetworkManager/system-connections
+	# NM drives wifi through wpa_supplicant's D-Bus interface. Start a global
+	# (-u) instance up front so any radio (e.g. the wifi e2e's hwsim wlan) is
+	# immediately usable, instead of racing on dbus activation.
+	pidof wpa_supplicant >/dev/null 2>&1 || /sbin/wpa_supplicant -u -s -B
+}
 SVC
 
 cat > "$RFS/etc/init.d/wash-agent" <<'SVC'

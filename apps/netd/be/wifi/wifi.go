@@ -101,19 +101,31 @@ func (l *Live) Status(ctx context.Context) ([]WifiConn, error) {
 	return parseActiveWifi(out), nil
 }
 
-// Connect associates with ssid. Security selects whether a password is passed
-// (open ⇒ none); nmcli infers WPA2-vs-WPA3 from the AP / negotiation. hidden
-// adds `hidden yes` for non-broadcast SSIDs (the expert/manual path). Returns
-// nmcli's combined output for diagnostics.
+// Connect provisions a profile named after the SSID and brings it up. We set the
+// security EXPLICITLY (key-mgmt + psk) rather than letting `nmcli device wifi
+// connect` infer it from the scan cache — that inference fails with "key-mgmt is
+// missing" whenever the AP isn't in NM's current scan results, and being
+// explicit also lets a not-in-range network be pre-configured (the expert/manual
+// path). The add is made idempotent by first dropping any stale same-named
+// profile. Returns nmcli's combined output for diagnostics.
 func (l *Live) Connect(ctx context.Context, ssid, security, psk string, hidden bool) (string, error) {
-	args := []string{"device", "wifi", "connect", ssid}
-	if security != SecNone && psk != "" {
-		args = append(args, "password", psk)
+	_, _ = l.run.run(ctx, "nmcli", "connection", "delete", "id", ssid) // ignore "no such connection"
+	args := []string{"connection", "add", "type", "wifi", "con-name", ssid, "ssid", ssid}
+	switch security {
+	case SecPSK2:
+		args = append(args, "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", psk)
+	case SecSAE:
+		args = append(args, "wifi-sec.key-mgmt", "sae", "wifi-sec.psk", psk)
 	}
 	if hidden {
-		args = append(args, "hidden", "yes")
+		args = append(args, "802-11-wireless.hidden", "yes")
 	}
-	return l.run.run(ctx, "nmcli", args...)
+	if out, err := l.run.run(ctx, "nmcli", args...); err != nil {
+		return out, err
+	}
+	// Bound activation so a network with no DHCP server returns a clean timeout
+	// instead of blocking until the process is killed.
+	return l.run.run(ctx, "nmcli", "--wait", "25", "connection", "up", ssid)
 }
 
 // Forget deletes the NM connection profile named ssid.
