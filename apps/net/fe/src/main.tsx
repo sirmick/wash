@@ -13,6 +13,7 @@ import { createMemo, createSignal, onCleanup, onMount, For, Show } from "solid-j
 import { defineWashApp, type WashAppProps } from "@wash/ui";
 
 import { ApplyTerminal, type ApplyEvent } from "./ApplyTerminal.tsx";
+import { WifiDialog } from "./WifiDialog.tsx";
 import { ObjectForm } from "./ObjectForm.tsx";
 import { setAtPath } from "./setAtPath.ts";
 import type { Descriptor, ObjectDescriptor } from "./objectform-model.ts";
@@ -51,7 +52,9 @@ type Proto = {
 const dhcpDefault = (): Proto => ({ _tag: "dhcp", IPv4: true, IPv6: true });
 type Interface = { Name: string; Device?: string; Proto?: Proto };
 type Device = { Name: string; Type?: string; Ports?: string[]; Ifname?: string; VID?: number };
-type Config = { Interfaces?: Interface[]; Devices?: Device[]; [k: string]: any };
+type Config = { Interfaces?: Interface[]; Devices?: Device[]; Radios?: any[]; SSIDs?: any[]; [k: string]: any };
+// WifiConn mirrors netd's wifi_status row (an active 802-11-wireless connection).
+type WifiConn = { name: string; device: string };
 // Caps mirrors netd's generic capability wire (docs/NET.md §2.7): the supported
 // feature keys + object-kind keys. The UI greys by set membership, so a new
 // backend (networkd, uci) advertising a different subset re-gates without any
@@ -86,6 +89,7 @@ const ICONS: Record<string, string> = {
   check: '<path d="M20 6 9 17l-5-5"/>',
   x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
   undo: '<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>',
+  wifi: '<path d="M12 20h.01"/><path d="M2 8.82a15 15 0 0 1 20 0"/><path d="M5 12.859a10 10 0 0 1 14 0"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/>',
 };
 function Icon(p: { name: keyof typeof ICONS | string; size?: number }) {
   return (
@@ -100,8 +104,18 @@ function NetApp(props: WashAppProps) {
   const [draft, setDraft] = createSignal<Config>({ Interfaces: [], Devices: [] });  // staged edits, not yet applied
   const [caps, setCaps] = createSignal<Caps>(emptyCaps());
   const can = (f: string) => caps().features.has(f);
+  const canKind = (k: string) => caps().kinds.has(k);
   const [links, setLinks] = createSignal<string[]>([]); // physical NICs from the backend
-  const [adding, setAdding] = createSignal<null | "ethernet" | "vlan" | "bridge">(null);
+  const [adding, setAdding] = createSignal<null | "ethernet" | "vlan" | "bridge" | "wifi">(null);
+
+  // Wifi gating + state. wifiCapable shows the +Wifi button (the renderer can
+  // express wifi AND a radio is present); wifiLive enables the live scan/connect
+  // path (nmcli), else the dialog is manual-only and connects via Apply.
+  const [wifiRadio, setWifiRadio] = createSignal(false);
+  const [wifiLive, setWifiLive] = createSignal(false);
+  const [wifiDevices, setWifiDevices] = createSignal<string[]>([]);
+  const [wifiConns, setWifiConns] = createSignal<WifiConn[]>([]);
+  const wifiCapable = createMemo(() => canKind("wireless/wifi-iface") && wifiRadio());
   const [editIface, setEditIface] = createSignal<Interface | null>(null);
 
   const [status, setStatus] = createSignal("idle");
@@ -212,6 +226,10 @@ function NetApp(props: WashAppProps) {
       setConfirmWindowMs(s.confirm_window_ms);
       setDeadline(s.status === "await-confirm" && s.confirm_window_ms > 0 ? Date.now() + s.confirm_window_ms : 0);
     }
+    // wifi_radio/wifi_live are omitempty, so only `true` arrives here; the
+    // authoritative (always-sent) values come from `current` in loadCurrent.
+    if (s.wifi_radio === true) setWifiRadio(true);
+    if (s.wifi_live === true) setWifiLive(true);
   };
 
   const loadCurrent = async () => {
@@ -222,7 +240,58 @@ function NetApp(props: WashAppProps) {
       setDraft(structuredClone(cfg)); // reset the draft to the freshly committed state
       setCaps(toCaps(r.caps));
       setLinks((r.devices ?? []) as string[]);
+      setWifiRadio(!!r.wifi_radio);
+      setWifiLive(!!r.wifi_live);
+      setWifiDevices((r.wifi_devices ?? []) as string[]);
+      void refreshWifi();
     }
+  };
+
+  // refreshWifi pulls the active wifi connections (NM-live only). Called on load
+  // and after any connect/forget (and on a net.state Refresh, via loadCurrent).
+  const refreshWifi = async () => {
+    if (!wifiLive()) { setWifiConns([]); return; }
+    const r = await sendWithReply("wifi_status");
+    if (r.kind === "wifi_status_ok") setWifiConns((r.conns ?? []) as WifiConn[]);
+  };
+
+  // connectWifi routes by capability: NM-live → the imperative nmcli path
+  // (wifi_connect; async, the result lands via a net.state Refresh). No NM →
+  // declarative: fold the SSID into the config and apply (commit-confirm).
+  const connectWifi = (ssid: string, security: string, psk: string, hidden: boolean) => {
+    setAdding(null);
+    if (wifiLive()) {
+      void sendWithReply("wifi_connect", { ssid, security, psk, hidden }).then((r) => {
+        if (r.kind !== "wifi_connect_ok") setStatus(`error: ${r.msg ?? r.code}`);
+      });
+      return;
+    }
+    connectWifiDeclarative(ssid, security, psk, hidden);
+  };
+
+  const connectWifiDeclarative = (ssid: string, security: string, psk: string, hidden: boolean) => {
+    const dev = wifiDevices()[0] ?? "";
+    if (!dev) { setStatus("error: no wifi device found"); return; }
+    // Encryption union matches codec FE-JSON: {_tag:"none"} | {_tag,Key}.
+    const enc = security === "none" ? { _tag: "none" } : { _tag: security, Key: psk };
+    const cfg = structuredClone(config()) as Config;
+    cfg.Radios = [...(cfg.Radios ?? []).filter((r: any) => r.Name !== dev), { Name: dev }];
+    cfg.SSIDs = [
+      ...(cfg.SSIDs ?? []).filter((s: any) => s.Device !== dev),
+      { Device: dev, SSID: ssid, Mode: "sta", Network: dev, Hidden: hidden, Encryption: enc },
+    ];
+    setBusy(true); setStatus("applying"); setEvents([]);
+    void sendWithReply("apply", { config: cfg }, 30000).then((r) => {
+      setBusy(false);
+      if (r.kind === "apply_ok") applyState({ status: r.state, events: r.events, confirm_window_ms: r.confirm_window_ms });
+      else setStatus(`error: ${r.msg ?? r.code}`);
+    });
+  };
+
+  const forgetWifi = (ssid: string) => {
+    void sendWithReply("wifi_forget", { ssid }).then((r) => {
+      if (r.kind !== "wifi_forget_ok") setStatus(`error: ${r.msg ?? r.code}`);
+    });
   };
 
   // applyDraft is the EXPLICIT apply: it ships the whole staged draft through the
@@ -348,6 +417,9 @@ function NetApp(props: WashAppProps) {
           <button data-testid="add-ethernet" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setConfigureDevice(""); setAdding("ethernet"); }}><Icon name="ethernet" /> Ethernet</button>
           <button data-testid="add-vlan" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("vlan")} onClick={() => setAdding("vlan")}><Icon name="git-branch" /> VLAN</button>
           <button data-testid="add-bridge" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("bridge")} onClick={() => setAdding("bridge")}><Icon name="git-merge" /> Bridge</button>
+          <Show when={wifiCapable()}>
+            <button data-testid="add-wifi" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => setAdding("wifi")}><Icon name="wifi" /> Wi-Fi</button>
+          </Show>
         </div>
       </header>
 
@@ -367,8 +439,25 @@ function NetApp(props: WashAppProps) {
         <Show when={adding() === "bridge"}>
           <BridgeWizard members={freeDevices()} onCancel={() => setAdding(null)} onCreate={addBridge} />
         </Show>
+        <Show when={adding() === "wifi"}>
+          <WifiDialog live={wifiLive()} busy={busy()} onConnect={connectWifi} onCancel={() => setAdding(null)} />
+        </Show>
 
         <div class="wash-net-list">
+          <For each={wifiConns()}>
+            {(w) => (
+              <div class="wash-net-conn" data-testid={`wifi-${w.name}`} data-kind="WiFi" data-device={w.device} data-status="active">
+                <div class="wash-net-conn-main">
+                  <span class="wash-net-conn-name"><Icon name="wifi" /> {w.name}</span>
+                  <span class="wash-net-conn-kind">Wi-Fi</span>
+                  <span class="wash-net-conn-dev">{w.device}</span>
+                </div>
+                <div class="wash-net-conn-actions">
+                  <button class="wash-net-btn ghost" title="Forget this network" disabled={busy()} onClick={() => forgetWifi(w.name)}><Icon name="trash" /> Forget</button>
+                </div>
+              </div>
+            )}
+          </For>
           <For each={draft().Interfaces ?? []} fallback={<Show when={removed().length === 0}><div class="wash-net-empty">No connections yet — use + Ethernet / + VLAN / + Bridge.</div></Show>}>
             {(iface) => {
               const d = devByName().get(iface.Device ?? "");

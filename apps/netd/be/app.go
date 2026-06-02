@@ -514,7 +514,10 @@ func registerHandlers(bus *sdk.Bus) {
 		if err := json.Unmarshal(data, &m); err != nil {
 			return currentResp{}, sdk.Errf(sdk.ErrInternal, "decode current: %v", err)
 		}
-		return currentResp{Config: m, Devices: applier.Devices(), Caps: capsToDTO(applier.Capabilities())}, nil
+		return currentResp{
+			Config: m, Devices: applier.Devices(), Caps: capsToDTO(applier.Capabilities()),
+			WifiRadio: wifiRadio, WifiLive: wifiLive, WifiDevices: wifi.RadioDevices(),
+		}, nil
 	})
 
 	sdk.HandleFrom(bus, "diff", func(_ *sdk.Conn, _ string, req configReq, from wire.Sender) (diffResp, error) {
@@ -794,6 +797,13 @@ type currentResp struct {
 	Config  map[string]any `json:"config"`
 	Caps    capsDTO        `json:"caps"`
 	Devices []string       `json:"devices"` // managed links for the Add wizards
+	// Wifi gating, delivered on the deterministic `current` fetch (not only the
+	// async net.state push): WifiRadio + the renderer's wifi cap show the +Wifi
+	// button, WifiLive enables the scan/connect picker, WifiDevices names the
+	// radio(s) for the declarative (no-NM) path.
+	WifiRadio   bool     `json:"wifi_radio"`
+	WifiLive    bool     `json:"wifi_live"`
+	WifiDevices []string `json:"wifi_devices,omitempty"`
 }
 
 // capsDTO carries the backend's capabilities generically (docs/NET.md §2.7): the
