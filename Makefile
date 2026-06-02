@@ -13,6 +13,17 @@ GOOS    ?= linux
 GOARCH  ?= amd64
 GOFLAGS := -trimpath -ldflags=-s\ -w -tags netgo,osusergo
 
+# COVER=1 builds coverage-instrumented binaries (`go build -cover`),
+# attributing coverage across the whole module. Used by
+# `./test.sh --coverage` to measure how much of the Go tree the e2e
+# suite exercises (each spawned app/router writes counters to GOCOVERDIR
+# on exit; see internal/sdk/coverage.go). Off by default — normal builds
+# are byte-for-byte untouched.
+COVER ?=
+ifeq ($(COVER),1)
+GOFLAGS += -cover -coverpkg=github.com/sirmick/wash/...
+endif
+
 OUT     := out
 BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net
 

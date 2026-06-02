@@ -27,6 +27,13 @@
 #                            boxes or when chasing inotify-instance
 #                            limits.
 #   --no-build             — assume out/ is current; skip build.sh
+#   --coverage             — build instrumented (go build -cover) and
+#                            merge go-unit + e2e-exercised counters into
+#                            one module-wide report under ./coverage/
+#                            (override dir with WASH_COVERDIR). Apps with
+#                            no _test.go still show real coverage because
+#                            the e2e suite drives them; requires the
+#                            SIGTERM counter-flush in internal/sdk.
 #
 # Exit non-zero on the first failing suite. Test output streams
 # directly to stdout/stderr — redirect to a file yourself if you
@@ -43,6 +50,7 @@ do_unit=1
 do_e2e=1
 do_build=1
 do_distro=0
+do_coverage=0
 filter=""
 # Playwright workers. The fixture allocates a unique port + tmpdir
 # per test, so >1 is safe in principle; default to half the CPU
@@ -59,6 +67,7 @@ while [[ $# -gt 0 ]]; do
     --no-build)   do_build=0; shift;;
     --distro)     do_distro=1; shift;;
     --only-distro) do_distro=1; do_unit=0; do_e2e=0; do_build=0; shift;;
+    --coverage)   do_coverage=1; shift;;
     --filter)     filter="$2"; shift 2;;
     --workers)    e2e_workers="$2"; shift 2;;
     -h|--help)
@@ -71,6 +80,21 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Coverage run: instrument the Go binaries (COVER=1 → Makefile adds
+# `go build -cover`) and collect counters under $cov_dir. The e2e suite's
+# routers + spawned apps write to $cov_dir/e2e on exit (apps need the
+# SIGTERM flush in internal/sdk/coverage.go); go-unit writes to
+# $cov_dir/unit; they're merged into one report at the end. Everything
+# below is a no-op unless --coverage was passed.
+cov_dir=""
+if [[ "$do_coverage" == "1" ]]; then
+  export COVER=1
+  cov_dir="${WASH_COVERDIR:-$REPO/coverage}"
+  rm -rf "$cov_dir"
+  mkdir -p "$cov_dir/unit" "$cov_dir/e2e"
+  echo "test.sh: coverage ON → $cov_dir (instrumented build)"
+fi
 
 # Builds first (unless --no-build). `--both` runs both layouts'
 # unit + e2e, so the build step must produce both kinds of output.
@@ -93,7 +117,17 @@ run_unit() {
   # -p 1 forces one test package at a time so the loopback package
   # (router+sdk wire end-to-end via in-memory pipes) doesn't race
   # other in-process tests for goroutine scheduling.
-  if go test -count=1 -p 1 -timeout 60s "$@" ./...; then
+  local pkgflags=("$@")
+  local covtail=()
+  if [[ "$do_coverage" == "1" ]]; then
+    # -coverpkg spreads attribution across the whole module so a test in
+    # one package counts the dependency code it exercises. Each package's
+    # test binary writes covdata pods into $cov_dir/unit (via the trailing
+    # -args -test.gocoverdir), which merges with the e2e counters later.
+    pkgflags+=(-coverpkg=./...)
+    covtail=(-args -test.gocoverdir="$cov_dir/unit")
+  fi
+  if go test -count=1 -p 1 -timeout 120s "${pkgflags[@]}" ./... "${covtail[@]}"; then
     echo "test.sh: unit ($label) PASS"
   else
     echo "test.sh: unit ($label) FAIL" >&2
@@ -203,26 +237,50 @@ run_distro() {
 [[ "$do_unit" == "1" ]] && run_fe_unit node
 [[ "$do_unit" == "1" ]] && run_component_unit vitest
 
+# Under --coverage the e2e routers + spawned apps write counters to
+# $cov_dir/e2e; the env var rides through run_e2e's `env "$@"` into the
+# playwright process and is inherited by every router/app it spawns.
+e2e_cov_env=()
+[[ "$do_coverage" == "1" ]] && e2e_cov_env=(GOCOVERDIR="$cov_dir/e2e")
+
 # Run sequence per mode.
 case "$mode" in
   standalone)
     [[ "$do_unit" == "1" ]] && run_unit standalone
-    [[ "$do_e2e"  == "1" ]] && run_e2e standalone
+    [[ "$do_e2e"  == "1" ]] && run_e2e standalone "${e2e_cov_env[@]}"
     ;;
   multicall)
     [[ "$do_unit" == "1" ]] && run_unit multicall -tags=multicall
-    [[ "$do_e2e"  == "1" ]] && run_e2e multicall WASH_E2E_MULTICALL=1
+    [[ "$do_e2e"  == "1" ]] && run_e2e multicall WASH_E2E_MULTICALL=1 "${e2e_cov_env[@]}"
     ;;
   both)
     [[ "$do_unit" == "1" ]] && run_unit standalone
     [[ "$do_unit" == "1" ]] && run_unit multicall -tags=multicall
-    [[ "$do_e2e"  == "1" ]] && run_e2e standalone
-    [[ "$do_e2e"  == "1" ]] && run_e2e multicall WASH_E2E_MULTICALL=1
+    [[ "$do_e2e"  == "1" ]] && run_e2e standalone "${e2e_cov_env[@]}"
+    [[ "$do_e2e"  == "1" ]] && run_e2e multicall WASH_E2E_MULTICALL=1 "${e2e_cov_env[@]}"
     ;;
 esac
 
 # Distro-integration matrix (opt-in; Docker-based, owns its own
 # distro fan-out so it runs once regardless of standalone/multicall).
 [[ "$do_distro" == "1" ]] && run_distro
+
+# Coverage report: merge the unit + e2e counter pods into one profile
+# and print the module-wide total + per-function breakdown. This is the
+# holistic Go number — app BEs that have no _test.go still show real
+# coverage here because the e2e suite exercised them.
+if [[ "$do_coverage" == "1" ]]; then
+  echo
+  echo "════ test.sh: coverage report ════"
+  inputs="$cov_dir/unit,$cov_dir/e2e"
+  mkdir -p "$cov_dir/merged"  # covdata merge won't create its output dir
+  go tool covdata merge -i="$inputs" -o="$cov_dir/merged"
+  go tool covdata textfmt -i="$cov_dir/merged" -o="$cov_dir/coverage.txt"
+  echo "── module total (merged unit + e2e) ──"
+  go tool covdata percent -i="$cov_dir/merged" | sort
+  echo
+  go tool cover -func="$cov_dir/coverage.txt" | tail -1
+  echo "coverage profile: $cov_dir/coverage.txt  (open with: go tool cover -html=$cov_dir/coverage.txt)"
+fi
 
 echo "test.sh: all suites passed"
