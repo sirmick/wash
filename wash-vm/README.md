@@ -10,9 +10,15 @@ vendored TinyEMU compiled to WASM; the kernel is upstream Linux 6.6
 LTS for RISC-V; the rootfs is a buildroot+musl userland with the wash
 multicall binary baked in.
 
-End result: open a page, ~3 seconds later you have a working wash
-desktop running over a real `wash-router` process inside a real Linux
-kernel, talking to the browser over a multiport virtio-console.
+End result: open a page, log in, and ~3 seconds later you have a working
+wash desktop running over a real `wash-router` process (forked by the
+`wash-vmlogin` login front after auth) inside a real Linux kernel, talking
+to the browser over a multiport virtio-console.
+
+> This dir is the **in-browser** surface. The sibling **wemu** surface
+> (host QEMU microvm) lives in [`vm/`](vm/) + [`docs/NET.md §8`](../docs/NET.md);
+> both share the login front + wire and are launched the same way — see
+> **Build & run** below and [`UNIFY.md`](UNIFY.md).
 
 ```
 ┌────────────────────────────────── browser tab ─────────────────────────────────┐
@@ -79,29 +85,52 @@ This produces and installs into `wash-vm/web/public/tinyemu/`:
 | `wash-kernel.bin`        | ~3.5 MiB | Linux 6.6.94 Image, RV64 + virtio + ext2 + futex |
 | `opensbi-fw_jump.bin`    | ~270 KiB | OpenSBI 1.5 generic, `FW_OPTIONS=0x1` (no banner) |
 | `riscvemu64-wasm.{js,wasm}` | ~200 KiB | TinyEMU compiled with emscripten/emsdk:3.1.74 |
-| `wash-rootfs.ext2`       | 20 MiB   | buildroot+musl, wash multicall (~11 MiB), splits into 10 × 2 MiB chunks |
-| `wash-rootfs/blk*.bin`   | 10 × 2 MiB | TinyEMU drive0 chunked format, on-demand fetched by virtio-blk |
+| `wash-rootfs.squashfs`   | ~7 MiB   | buildroot+musl, wash multicall + wash-vmlogin, wash shadow pw; split into 512 KiB chunks |
+| `wash-rootfs/blk*.bin`   | N × 512 KiB | TinyEMU drive0 chunked format, on-demand fetched by virtio-blk |
 
 Piecewise targets if you only want to rebuild one thing: `make rootfs
 | kernel | firmware | wasm | install`. See [`image/README.md`](image/README.md)
 for build internals.
 
-## Run locally
+## Build & run
 
-The shell bundle has to be built first (the host page imports it from
-`/shell/shell.js`):
+There are **two VM surfaces**, both serving the same wash UI on **:13000**
+(run one at a time), both gated by a login (**`wash` / `wash`**, real
+`su`/shadow auth — see [`UNIFY.md`](UNIFY.md)):
+
+| Surface | Launch | What it is |
+|---|---|---|
+| **In-browser** (TinyEMU RISC-V, WASM) | `wash-vm/run-browser.sh` | boots the VM in the tab; dev server hosts the page + artifacts |
+| **wemu** (host QEMU x86 microvm) | `wash-vm/run-qemu.sh` | host `qemu` + a proxy that tunnels the wire (`docs/NET.md §8`) |
 
 ```sh
-pnpm -F @wash/shell build           # produces web/shell/dist/
-cd wash-vm/web
-node server/server.mjs              # → http://localhost:5180
+# in-browser VM  → http://localhost:13000   (login wash / wash)
+wash-vm/run-browser.sh          # builds the shell, starts the dev server (0.0.0.0:13000)
+
+# wemu QEMU VM   → http://localhost:13000   (login wash / wash)
+wash-vm/run-qemu.sh             # builds image+chrome+runner, boots qemu + proxy
+wash-vm/run-qemu.sh -smp 2 -m 2048   # extra args pass straight through to qemu
 ```
 
-The dev server is a thin wrapper around Vite that adds a `/ws`
-log/control bus (`server/server.mjs`). Vite handles HMR for
-`src/tinyemu-bridge.ts`; the WASM, kernel, firmware, rootfs chunks
-are static under `public/tinyemu/` and don't need rebuilds for
-front-end iteration.
+Both bind `0.0.0.0` (LAN-reachable; override with `PORT=`/`ADDR=`). In both, the
+in-guest **`wash-vmlogin`** front authenticates, then forks **`wash-router`** as
+the user; `shell.js` + every app bundle stream from the VM over the channel —
+the host only serves a minimal bootstrap.
+
+### Cutting the images
+
+The run scripts (re)build incrementally; to cut an image explicitly:
+
+```sh
+make vm                  # RISC-V: kernel + firmware + rootfs + wasm → wash-vm/web/public/tinyemu/
+                         #   (needs Docker; rootfs bakes the multicall + wash-vmlogin + users.table pw)
+make vm-image vm-chrome  # wemu: Alpine initramfs + host chrome → out/vm/, out/vm-chrome/
+                         #   (needs Docker; out/washvm-run is the proxy runner)
+```
+
+The in-browser dev server is a thin Vite wrapper with a `/ws` log/control bus
+(`web/server/server.mjs`); it HMRs `src/tinyemu-bridge.ts`, while the WASM/
+kernel/rootfs chunks under `public/tinyemu/` only change when you `make vm`.
 
 ## Deploy as static HTML
 
