@@ -198,12 +198,16 @@ func (c *Conn) Manifest() *Manifest { return &c.def.Manifest }
 //     until the socket closes, then returns. On error it prints to
 //     stderr and exits non-zero.
 //
-// Main installs no signal handlers — the OS sends SIGTERM at router
-// shutdown, and the SDK lets the runtime tear down naturally.
+// Main installs no signal handlers in normal operation — the OS sends
+// SIGTERM at router shutdown, and the SDK lets the runtime tear down
+// naturally. The sole exception is a coverage run (GOCOVERDIR set), where
+// a SIGTERM handler flushes -cover counters before exiting; that path is
+// inert otherwise. See installCoverageFlushOnSignal.
 func Main(def *AppDef) {
 	if maybePrintManifest(def) {
 		return
 	}
+	installCoverageFlushOnSignal()
 	if err := Run(context.Background(), def); err != nil {
 		fatal("wash sdk: %v", err)
 	}

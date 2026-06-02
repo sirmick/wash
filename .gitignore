@@ -43,3 +43,6 @@ tmp/
 # Isolated git worktrees for parallel work (e.g. FE refactor) — each
 # is its own branch checkout sharing this repo's objects/history.
 branches/
+
+# go test --coverage output (./test.sh --coverage)
+coverage/
