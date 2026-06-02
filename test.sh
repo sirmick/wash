@@ -34,6 +34,12 @@
 #                            no _test.go still show real coverage because
 #                            the e2e suite drives them; requires the
 #                            SIGTERM counter-flush in internal/sdk.
+#   --vm                   — also run the VM-backed net e2e (net-vm-gate
+#                            + net-vm-multi): builds the Alpine microvm
+#                            image + host chrome + washvm-run so the
+#                            specs run for real instead of self-skipping.
+#                            Needs /dev/kvm + qemu-system-x86_64 + docker
+#                            (preflighted; aborts with the missing list).
 #
 # Exit non-zero on the first failing suite. Test output streams
 # directly to stdout/stderr — redirect to a file yourself if you
@@ -51,6 +57,7 @@ do_e2e=1
 do_build=1
 do_distro=0
 do_coverage=0
+do_vm=0
 filter=""
 # Playwright workers. The fixture allocates a unique port + tmpdir
 # per test, so >1 is safe in principle; default to half the CPU
@@ -68,6 +75,7 @@ while [[ $# -gt 0 ]]; do
     --distro)     do_distro=1; shift;;
     --only-distro) do_distro=1; do_unit=0; do_e2e=0; do_build=0; shift;;
     --coverage)   do_coverage=1; shift;;
+    --vm)         do_vm=1; shift;;
     --filter)     filter="$2"; shift 2;;
     --workers)    e2e_workers="$2"; shift 2;;
     -h|--help)
@@ -104,6 +112,29 @@ if [[ "$do_build" == "1" ]]; then
     multicall)  "$REPO/build.sh" --multicall;;
     *)          "$REPO/build.sh" --standalone;;
   esac
+fi
+
+# --vm: the VM-backed net e2e (net-vm-gate / net-vm-multi) boots a real
+# Alpine microvm under qemu/KVM and serves the wash UI over the wire. The
+# specs self-skip unless their artifacts exist, so build them here (and
+# preflight the host) — then the normal e2e run below executes them for
+# real. Combine with `--filter net-vm --no-unit` to run ONLY the VM specs.
+if [[ "$do_vm" == "1" ]]; then
+  echo
+  echo "════ test.sh: VM e2e prereqs ════"
+  vm_missing=()
+  [[ -e /dev/kvm ]] || vm_missing+=("/dev/kvm (KVM virtualization)")
+  command -v qemu-system-x86_64 >/dev/null 2>&1 || vm_missing+=("qemu-system-x86_64")
+  command -v docker >/dev/null 2>&1 || vm_missing+=("docker (renders the Alpine rootfs)")
+  if (( ${#vm_missing[@]} > 0 )); then
+    echo "test.sh: --vm needs: ${vm_missing[*]}" >&2
+    echo "test.sh: install those, or drop --vm (the net-vm specs then self-skip)." >&2
+    exit 2
+  fi
+  if [[ "$do_build" == "1" ]]; then
+    echo "test.sh: building VM image + chrome + washvm-run (Docker render is slow the first time)…"
+    make -C "$REPO" vm-image vm-chrome out/washvm-run
+  fi
 fi
 
 # run_unit and run_e2e are layout-tagged so the --both path can call

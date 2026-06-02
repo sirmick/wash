@@ -560,6 +560,7 @@ flows, but you can also drive any single subsystem directly:
 | **Frontend logic units** | — | `node --test --conditions=browser <files>` (run by `./test.sh`; the `browser` condition makes Solid resolve its reactive build) | pnpm, Node ≥ 22 |
 | **Frontend components** | — | `pnpm exec vitest run` (scopes `*.ctest.tsx` via `vitest.config.ts`) | pnpm |
 | **End-to-end** | `make test-app` (builds the world + test app) | `make e2e` *or* `pnpm -C e2e exec playwright test` | Chromium (auto-downloaded first run); free inotify instances (`e2e/global-setup.ts` pre-flights this) |
+| **VM-backed e2e** (net, real microvm) | `./test.sh --vm` (or `make e2e-vm`) — builds the Alpine image + host chrome + `washvm-run` | `net-vm-gate` / `net-vm-multi` drive the wash UI served over the wire by a booted VM; they self-skip until the artifacts + host are ready | `/dev/kvm` + `qemu-system-x86_64` + Docker |
 | **Distro packages** | `./packaging/run_matrix.sh` | runs inside the same matrix (smoke + boot + distro-integration) | Docker |
 | **wash-display** (native compositor) | `WASH_DISPLAY=1 make` | local smoke harness only (not in CI) — see [`wash-display/README.md`](wash-display/README.md) | CMake + system wlroots/wayland `-dev` libs |
 | **wash-vm** (in-browser RISC-V VM) | `make -C wash-vm/image all` | `wash-vm/test/*.mjs` (ad-hoc repro scripts) | Docker only |
@@ -567,7 +568,9 @@ flows, but you can also drive any single subsystem directly:
 `make verify` is the all-in-one gate: `go vet` + `go test` + a static-ELF
 check on every binary. `./test.sh` sweeps `--standalone` / `--multicall` /
 `--both` layouts and runs all four test tiers; `--filter` and `--workers`
-pass through to Playwright.
+pass through to Playwright. Opt-in extras: `--coverage` (merged go-unit +
+e2e coverage report), `--vm` (the VM-backed net e2e above), `--distro`
+(the packaging matrix).
 
 > **Note:** a fresh `git clone` builds the Go core, frontends, and wash-vm
 > with no surprises. The native **wash-display** compositor is opt-in and
