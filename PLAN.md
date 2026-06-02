@@ -60,10 +60,40 @@ Commit 4 is the first user-visible payoff. 6–7 plug C++ into an already-green
 contract. The base64 removal for the *main* bundle lands in commit 1 (the
 framed probe handles main + panel uniformly) — "do both" satisfied there.
 
+## Commit 4/5 detail (decided 2026-06-01)
+
+**Externalize ALL three service panes** — Developer (vscode), Display
+(compositor), AND Network (netd). Settings keeps only the **Desktop** pane
+built-in (it round-trips desktop.json + owns the file picker). Network is
+externalized to a **netd-supplied** panel; it needs no netd BE change
+because the panel reaches the host's generic verbs through the port.
+
+**`defineSettingsPanel(tag, Panel, opts)` + `SettingsPanelPort`** (web/lib,
+done): the settings host builds a port per panel and assigns it to the
+element as `washPanelPort` before append. The port wraps the existing,
+already-generic settings BE verbs — no BE changes anywhere:
+- `send(payload, app?)` → svc.send (default target = panel's appID)
+- `restart(app?)` → svc.restart
+- `onMessage(cb, app?)` → svc.recv payloads
+- `readConfig/writeConfig(domain, …)` → settings.read/write
+- `launch(app)` → spawn a window
+Covers every pane: vscode (send/restart/onMessage), display (restart/
+onMessage + absent fallback), network (onMessage + writeConfig('network')
++ restart netd & net + launch com.wash.net).
+
+**Safe build order (additive first, risky flip last):**
+1. `defineSettingsPanel` in web/lib — DONE (additive, green).
+2. vscode/fe + netd/fe panel packages (extract Developer/Network panes
+   into panel.tsx) + manifest SettingsPanel + go:embed assets + Makefile
+   web-vscode/web-netd + pnpm-workspace — ADDITIVE (apps now supply
+   panels; settings still uses its hardcoded panes, so no dup, stays green).
+3. settings host rewrite — flip to discovered panels via
+   window.wash.settingsPanels()/loadSettingsPanel, delete the hardcoded
+   Developer/Display/Network panes. THE risky edit; do last.
+4. display panel is C++ (commit 7); until then no Display section.
+
 ## Open / deferred
 - **Not-installed hint.** Discovered panels vanish when their package is
   absent (no descriptor → no panel). Whether settings keeps a small built-in
   "suggested integrations" list for install hints is deferred; default is
   invisible-when-absent.
-- **Panel transport.** v1 = `svc.*` relay to the panel's own app only.
-  Config-file-only panels (Desktop) stay settings built-ins.
