@@ -55,7 +55,7 @@ fi
 # keyfiles→live NM), -read, -cc. The multicall wash is the real payload and must
 # be pre-built (make multicall).
 wvm_build_core "$BUILD" "$ROOT_DIR" "$ARCH"
-wvm_build_cli "$BUILD" "$ROOT_DIR" "$ARCH" washnet-nmprobe washnet-apply washnet-read washnet-cc
+wvm_build_cli "$BUILD" "$ROOT_DIR" "$ARCH" washnet-nmprobe washnet-apply washnet-read washnet-cc washnet-wifi
 WASH_BIN="$(wvm_require_multicall "$ROOT_DIR")"
 
 echo ">> assembling rootfs"
@@ -124,6 +124,7 @@ install -Dm755 "$BUILD/washnet-nmprobe" "$RFS/usr/bin/washnet-nmprobe"
 install -Dm755 "$BUILD/washnet-apply" "$RFS/usr/bin/washnet-apply"
 install -Dm755 "$BUILD/washnet-read" "$RFS/usr/bin/washnet-read"
 install -Dm755 "$BUILD/washnet-cc" "$RFS/usr/bin/washnet-cc"
+install -Dm755 "$BUILD/washnet-wifi" "$RFS/usr/bin/washnet-wifi"
 
 # Bake the agent + multicall + per-app symlinks, and the setuid-root netd
 # trampoline (cpio -R 0:0 below makes it root-owned so the setuid bit grants
