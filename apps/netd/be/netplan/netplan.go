@@ -48,8 +48,11 @@ func Capabilities() caps.Capabilities {
 // Available = the netplan binary is present; Active = /etc/netplan holds config
 // (the box is netplan-managed — the authority layer). Read-only.
 func Detect() backend.Detection {
-	r := execRunner{}
-	if _, err := r.run("netplan", "--version"); err != nil {
+	// Presence via LookPath, not a probe command: `netplan` has no --version
+	// (it errors "specify a command"), so running it would always fail Detect.
+	// netplan lives in /usr/sbin, so the caller's PATH must include sbin —
+	// netd runs privileged, so it does; the dev router must add it.
+	if _, err := exec.LookPath("netplan"); err != nil {
 		return backend.Detection{Note: "netplan not present"}
 	}
 	if hasYAML(ConfigDir) {

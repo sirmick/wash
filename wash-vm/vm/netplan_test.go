@@ -113,6 +113,14 @@ func TestUbuntuNetplanRead(t *testing.T) {
 			t.Fatalf("wash netplan read missing %q — the backend didn't reconstruct the box:\n%s", want, uci)
 		}
 	}
+
+	// Regression guard: AUTODETECT (no forced backend) must also land on netplan.
+	// The forced read above can't catch a broken Detect(); this does — if Detect
+	// fails to recognise netplan, autodetect falls to nm and reads empty.
+	auto := run("PATH=/usr/sbin:/sbin:/usr/bin:/bin washnet-read 2>&1")
+	if !strings.Contains(auto, "option type 'bridge'") {
+		t.Fatalf("autodetect did not pick netplan (Detect regression?) — read:\n%s", auto)
+	}
 }
 
 // TestUbuntuNetplanApply is the full CLI loop at OS level: read the box's UCI,
