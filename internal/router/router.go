@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -402,6 +403,36 @@ func (r *Router) catalog() []wire.ShellCatalogApp {
 			RootVariant: e.Manifest.RootVariant,
 		})
 	}
+	return out
+}
+
+// panelCatalog returns the app-supplied settings panels: one descriptor
+// per enabled registry entry whose manifest declares a SettingsPanel.
+// Unlike catalog(), this does NOT filter by surface — most panels come
+// from surface=background services, which are intentionally absent from
+// the launchable Apps list. Sorted by (Order, Section) for a stable nav.
+func (r *Router) panelCatalog() []wire.ShellPanelDesc {
+	entries := r.reg.Entries()
+	out := make([]wire.ShellPanelDesc, 0)
+	for _, e := range entries {
+		if !e.Enabled() || e.Manifest.SettingsPanel == nil {
+			continue
+		}
+		sp := e.Manifest.SettingsPanel
+		out = append(out, wire.ShellPanelDesc{
+			AppID:   e.Manifest.ID,
+			Section: sp.Section,
+			Element: sp.Element,
+			Icon:    sp.Icon,
+			Order:   sp.Order,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Order != out[j].Order {
+			return out[i].Order < out[j].Order
+		}
+		return out[i].Section < out[j].Section
+	})
 	return out
 }
 

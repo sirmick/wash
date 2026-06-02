@@ -42,9 +42,9 @@ const (
 	ErrCodeNotFound             = "not_found"
 	ErrCodeIncompatibleProtocol = "incompatible_protocol"
 	// Credit / flow-control error codes (docs/QOS.md §5).
-	ErrCodeUnknownChannel  = "unknown_channel"
-	ErrCodeCreditOverflow  = "credit_overflow"
-	ErrCodeBadRequest           = "bad_request"
+	ErrCodeUnknownChannel = "unknown_channel"
+	ErrCodeCreditOverflow = "credit_overflow"
+	ErrCodeBadRequest     = "bad_request"
 )
 
 // Identity is the app's first frame on channel 0 after the wash
@@ -336,6 +336,15 @@ func DecodeCtrl(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TShellAssetReadErr:
 		var m ShellAssetReadErr
+		return m, json.Unmarshal(data, &m)
+	case TShellPanelRead:
+		var m ShellPanelRead
+		return m, json.Unmarshal(data, &m)
+	case TShellPanelReadOK:
+		var m ShellPanelReadOK
+		return m, json.Unmarshal(data, &m)
+	case TShellPanelReadErr:
+		var m ShellPanelReadErr
 		return m, json.Unmarshal(data, &m)
 	}
 	return nil, fmt.Errorf("ctrl decode: unknown t %q", t)

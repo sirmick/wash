@@ -71,6 +71,20 @@ const (
 	TShellAssetReadOK = "asset.read.ok"
 	// Router → shell, asset pull rejected. Code mirrors §13.
 	TShellAssetReadErr = "asset.read.err"
+
+	// Shell → router, settings-panel bundle pull. Read the cached
+	// panel.js bytes (Entry.PanelBundle) for an app that declared a
+	// SettingsPanel. Mirrors asset.read but keyed by app id and served
+	// from the app registry rather than the router's own asset FS, so
+	// the shell can blob-import + customElements.define the panel
+	// element without spawning the owning app.
+	TShellPanelRead = "panel.read"
+	// Router → shell, panel pull accepted. ChannelID streams the panel
+	// bytes via Kind="bundle"; ChannelUnbind marks the end.
+	TShellPanelReadOK = "panel.read.ok"
+	// Router → shell, panel pull rejected (ErrCodeNotFound when the app
+	// is absent or declares no panel).
+	TShellPanelReadErr = "panel.read.err"
 )
 
 // ShellLog levels.
@@ -121,15 +135,32 @@ type ShellCatalogApp struct {
 	RootVariant *RootVariant `json:"root_variant,omitempty"`
 }
 
-// ShellCatalog is the router's "here is what is launchable" snapshot.
-// Sent once on shell connect; v0.1 will revisit live updates.
-type ShellCatalog struct {
-	T    string            `json:"t"`
-	Apps []ShellCatalogApp `json:"apps"`
+// ShellPanelDesc is one app-supplied settings panel the host can mount.
+// Carried in the catalog (alongside, not within, Apps) because panels
+// come mostly from surface=background services that are deliberately
+// kept out of the launchable Apps list. The settings FE renders a
+// section per descriptor and loads the element on demand via
+// window.wash.loadSettingsPanel (panel.read).
+type ShellPanelDesc struct {
+	AppID   string `json:"app_id"`
+	Section string `json:"section"`
+	Element string `json:"element"`
+	Icon    string `json:"icon,omitempty"`
+	Order   int    `json:"order,omitempty"`
 }
 
-func NewShellCatalog(apps []ShellCatalogApp) ShellCatalog {
-	return ShellCatalog{T: TShellCatalog, Apps: apps}
+// ShellCatalog is the router's "here is what is launchable" snapshot.
+// Sent once on shell connect; v0.1 will revisit live updates. Panels
+// is the parallel list of app-supplied settings panels (see
+// ShellPanelDesc).
+type ShellCatalog struct {
+	T      string            `json:"t"`
+	Apps   []ShellCatalogApp `json:"apps"`
+	Panels []ShellPanelDesc  `json:"panels,omitempty"`
+}
+
+func NewShellCatalog(apps []ShellCatalogApp, panels []ShellPanelDesc) ShellCatalog {
+	return ShellCatalog{T: TShellCatalog, Apps: apps, Panels: panels}
 }
 
 // ShellAppDeclared tells the shell a new app instance has been
@@ -162,15 +193,15 @@ type SessionWindow struct {
 	// can tint the titlebar icon in the same brand color the
 	// launcher uses. Empty for apps that didn't declare one (the
 	// shell will derive a hash-based hue at render time).
-	Accent     string `json:"accent,omitempty"`
-	Title      string `json:"title"`
-	X          int32  `json:"x"`
-	Y          int32  `json:"y"`
-	W          uint32 `json:"w"`
-	H          uint32 `json:"h"`
-	Z          uint32 `json:"z"`
-	State      string `json:"state"` // normal | minimized | maximized
-	Focused    bool   `json:"focused"`
+	Accent  string `json:"accent,omitempty"`
+	Title   string `json:"title"`
+	X       int32  `json:"x"`
+	Y       int32  `json:"y"`
+	W       uint32 `json:"w"`
+	H       uint32 `json:"h"`
+	Z       uint32 `json:"z"`
+	State   string `json:"state"` // normal | minimized | maximized
+	Focused bool   `json:"focused"`
 	// IsRoot is true when the owning app process runs as uid 0, or
 	// when the app id is reserved as part of the privilege chain
 	// (com.wash.priv). The shell's WM paints a red stripe and ROOT
@@ -518,4 +549,44 @@ type ShellAssetReadErr struct {
 
 func NewShellAssetReadErr(reqID uint64, code, msg string) ShellAssetReadErr {
 	return ShellAssetReadErr{T: TShellAssetReadErr, ReqID: reqID, Code: code, Msg: msg}
+}
+
+// ShellPanelRead: shell asks the router for an app's settings-panel
+// bundle (Entry.PanelBundle). ReqID correlates the response; AppID
+// names the app whose panel.js to stream.
+type ShellPanelRead struct {
+	T     string `json:"t"`
+	ReqID uint64 `json:"req_id"`
+	AppID string `json:"app_id"`
+}
+
+func NewShellPanelRead(reqID uint64, appID string) ShellPanelRead {
+	return ShellPanelRead{T: TShellPanelRead, ReqID: reqID, AppID: appID}
+}
+
+// ShellPanelReadOK: router accepts the pull. Bytes stream on ChannelID
+// (Kind=ChannelKindBundle) until a ChannelUnbind marks the end. Size
+// is advisory.
+type ShellPanelReadOK struct {
+	T         string `json:"t"`
+	ReqID     uint64 `json:"req_id"`
+	ChannelID uint32 `json:"channel_id"`
+	Size      int64  `json:"size"`
+}
+
+func NewShellPanelReadOK(reqID uint64, channelID uint32, size int64) ShellPanelReadOK {
+	return ShellPanelReadOK{T: TShellPanelReadOK, ReqID: reqID, ChannelID: channelID, Size: size}
+}
+
+// ShellPanelReadErr: router rejects the pull (ErrCodeNotFound when the
+// app is absent or declares no panel). No channel is opened.
+type ShellPanelReadErr struct {
+	T     string `json:"t"`
+	ReqID uint64 `json:"req_id"`
+	Code  string `json:"code"`
+	Msg   string `json:"msg"`
+}
+
+func NewShellPanelReadErr(reqID uint64, code, msg string) ShellPanelReadErr {
+	return ShellPanelReadErr{T: TShellPanelReadErr, ReqID: reqID, Code: code, Msg: msg}
 }

@@ -52,6 +52,8 @@ func TestShellRoundTrip(t *testing.T) {
 		NewShellCatalog([]ShellCatalogApp{
 			{ID: "com.wash.about", Name: "About wash", Icon: "data:,", Surface: "window", Instancing: "multi"},
 			{ID: "com.wash.session", Name: "wash session", Icon: "", Surface: "desktop", Instancing: "single", Disabled: true, Reason: "test"},
+		}, []ShellPanelDesc{
+			{AppID: "com.wash.display", Section: "Display", Element: "wash-settings-panel-display"},
 		}),
 		NewShellAppDeclared("inst-1", "wash-app-about", "window", manifest),
 		NewShellSessionSnapshot([]SessionWindow{

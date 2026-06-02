@@ -36,9 +36,17 @@ host specifically; SETTINGS.md and WIRE.md get rewritten (commit 11).
 | # | Commit | Touches | Green? |
 |---|---|---|---|
 | 1 | `wire: framed probe (manifest + raw bundle frames), drop bundle_b64; add SettingsPanel manifest field` | `internal/wire`, `internal/router` (ParseProbe), `internal/sdk` (probe writer) | `go test ./internal/...` |
-| 2 | `router: panels.list + panels.bundle (raw channel); cache Entry.PanelBundle` | `internal/router` | router unit tests |
+| 2 | `router+shell: panel.read (serve Entry.PanelBundle, mirrors asset.read); catalog carries panel descriptors; window.wash.loadSettingsPanel` | `internal/wire`, `internal/router`, `web/shell` | router tests + build |
 | 3 | `sdk(go): RegisterSettingsPanel — declare panel + embed panel bundle, raw probe` | `internal/sdk` | sdk tests + build |
-| 4 | `settings: generic panel host (discover + mount over svc.* relay); drop hardcoded panels` | `apps/settings` (be+fe), `web/lib` (defineSettingsPanel) | build |
+| 4 | `settings: generic panel host (discover via window.wash, mount over svc.* relay); drop hardcoded panels` | `apps/settings` (be+fe), `web/lib` (defineSettingsPanel) | build |
+
+**Delivery is shell-centric (decided 2026-06-01):** panel bundles are JS
+that only the shell can blob-import + `customElements.define`. So the
+router serves `Entry.PanelBundle` to the *shell* via `panel.read` (a
+shell→router verb mirroring `asset.read`), the catalog carries panel
+descriptors, and `window.wash.loadSettingsPanel(appID)` lets the settings
+FE load+define a panel element. The settings BE stays purely the runtime
+`svc.*` relay.
 | 5 | `vscode: ship settings panel (relocated control FE)` | `apps/vscode` | build + be_test |
 | 6 | `cpp-sdk: extract wash-display wire layer into reusable SDK; framed probe + raw panel bundle (no base64)` | `cpp-sdk/`, `wash-display` | `WASH_DISPLAY=1` build |
 | 7 | `wash-display: ship settings panel (raw bundle); base64-free CMake embed` | `wash-display` (fe+CMake+main.cpp) | `WASH_DISPLAY=1` build |

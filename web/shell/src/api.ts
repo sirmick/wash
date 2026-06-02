@@ -16,6 +16,19 @@ export interface CatalogApp {
   reason?: string;
 }
 
+// PanelDesc is one app-supplied settings panel from the catalog's
+// `panels` list (wire.ShellPanelDesc, passed through verbatim so field
+// names match the wire JSON). The settings app renders a section per
+// descriptor and calls window.wash.loadSettingsPanel(app_id) to define
+// + mount the element on demand.
+export interface PanelDesc {
+  app_id: string;
+  section: string;
+  element: string;
+  icon?: string;
+  order?: number;
+}
+
 export interface WindowInfo {
   windowID: number;
   instanceID: string;

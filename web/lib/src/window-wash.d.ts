@@ -36,6 +36,17 @@ interface WashCatalogApp {
   };
 }
 
+// WashPanelDesc is one app-supplied settings panel (catalog `panels`
+// list). The settings app renders a section per descriptor and calls
+// loadSettingsPanel(app_id) to define + mount the element on demand.
+interface WashPanelDesc {
+  app_id: string;
+  section: string;
+  element: string;
+  icon?: string;
+  order?: number;
+}
+
 interface WashWindowInfo {
   windowID: number;
   instanceID: string;
@@ -58,6 +69,13 @@ interface WashGlobals {
   sendAppMsgTo(recipient: WashRecipient, data: unknown): void;
   catalog(): WashCatalogApp[];
   onCatalog(cb: (apps: WashCatalogApp[]) => void): () => void;
+  // App-supplied settings panels. loadSettingsPanel fetches+imports the
+  // panel bundle so its custom element is defined; the promise resolves
+  // once it's mountable. Used by the settings app to host panels other
+  // apps supply (see docs/SETTINGS.md).
+  settingsPanels(): WashPanelDesc[];
+  onSettingsPanels(cb: (panels: WashPanelDesc[]) => void): () => void;
+  loadSettingsPanel(appID: string): Promise<void>;
   windows(): WashWindowInfo[];
   onWindowsChanged(cb: (windows: WashWindowInfo[]) => void): () => void;
   focusWindow(id: number): void;
