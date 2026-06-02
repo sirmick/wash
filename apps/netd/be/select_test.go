@@ -19,11 +19,13 @@ func TestChooseBackend(t *testing.T) {
 	}{
 		{"forced nm", BackendNM, detections{}, BackendNM},
 		{"forced networkd", BackendNetworkd, detections{}, BackendNetworkd},
+		{"forced netplan", BackendNetplan, detections{}, BackendNetplan},
+		{"forced ifupdown", BackendIfupdown, detections{}, BackendIfupdown},
 		{"forced fake", BackendFake, detections{}, BackendFake},
 		{"unknown mode → fake", "bogus", detections{nm: active}, BackendFake},
 
-		// auto: a RUNNING NM means coexist — it wins even when networkd is present
-		// (the Fedora own-it image masks NM so this branch doesn't fire there).
+		// auto: a RUNNING NM is the active manager (no netplan present), it wins
+		// even when networkd is also present.
 		{"auto desktop: NM active wins over networkd", BackendAuto, detections{nm: active, networkd: active}, BackendNM},
 		{"auto: NM active", BackendAuto, detections{nm: active, networkd: absent}, BackendNM},
 
@@ -35,6 +37,23 @@ func TestChooseBackend(t *testing.T) {
 		{"auto: only NM available", BackendAuto, detections{nm: avail, networkd: absent}, BackendNM},
 		{"auto: only networkd available", BackendAuto, detections{nm: absent, networkd: avail}, BackendNetworkd},
 		{"auto: nothing → fake", BackendAuto, detections{}, BackendFake},
+
+		// netplan is the authority layer: an active netplan wins over an active
+		// NM/networkd (they are its render targets). This is the buzz / Ubuntu
+		// case — NM is "active" but netplan is the real config source.
+		{"auto: netplan active beats NM active", BackendAuto, detections{netplan: active, nm: active}, BackendNetplan},
+		{"auto: netplan active beats networkd active", BackendAuto, detections{netplan: active, networkd: active}, BackendNetplan},
+		{"auto: netplan active beats everything", BackendAuto, detections{netplan: active, nm: active, networkd: active, ifupdown: active}, BackendNetplan},
+		// netplan only installed (not driving) does NOT override an active NM.
+		{"auto: netplan available, NM active → NM", BackendAuto, detections{netplan: avail, nm: active}, BackendNM},
+		{"auto: netplan available only", BackendAuto, detections{netplan: avail}, BackendNetplan},
+
+		// ifupdown (classic Debian): active when it's the manager; loses to
+		// active NM/networkd/netplan but beats the available fallbacks.
+		{"auto: ifupdown active alone", BackendAuto, detections{ifupdown: active}, BackendIfupdown},
+		{"auto: ifupdown active beats networkd available", BackendAuto, detections{networkd: avail, ifupdown: active}, BackendIfupdown},
+		{"auto: NM active beats ifupdown active", BackendAuto, detections{nm: active, ifupdown: active}, BackendNM},
+		{"auto: ifupdown available only", BackendAuto, detections{ifupdown: avail}, BackendIfupdown},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
