@@ -523,6 +523,68 @@ func registerHandlers(bus *sdk.Bus) {
 		publish(NetState{Status: string(txn.Reverted), Events: eventDTOs(job)})
 		return statusResp{State: string(job.State())}, nil
 	})
+
+	// wifi_scan / wifi_status are UNPRIVILEGED reads: an active session can list
+	// APs and active connections via nmcli without root, so they run inline (no
+	// wash-priv escalation — unlike connect/forget). When wifi isn't live they
+	// return empty so the FE just shows nothing.
+	sdk.HandleFrom(bus, "wifi_scan", func(_ *sdk.Conn, _ string, _ struct{}, from wire.Sender) (wifiScanResp, error) {
+		if err := authz(from); err != nil {
+			return wifiScanResp{}, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		resp, err := wifiScan(ctx, wifiRT, wifiLive)
+		if err != nil {
+			return wifiScanResp{}, sdk.Errf(sdk.ErrInternal, "wifi scan: %v", err)
+		}
+		return resp, nil
+	})
+
+	sdk.HandleFrom(bus, "wifi_status", func(_ *sdk.Conn, _ string, _ struct{}, from wire.Sender) (wifiStatusResp, error) {
+		if err := authz(from); err != nil {
+			return wifiStatusResp{}, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		resp, err := wifiStatus(ctx, wifiRT, wifiLive)
+		if err != nil {
+			return wifiStatusResp{}, sdk.Errf(sdk.ErrInternal, "wifi status: %v", err)
+		}
+		return resp, nil
+	})
+}
+
+// wifiScan/wifiStatus are the handler cores, split out so they're unit-testable
+// with a fake runtime. Both return a non-nil slice (never nil) and, when wifi is
+// unavailable, an empty result with no error — the FE renders nothing rather
+// than surfacing a failure.
+func wifiScan(ctx context.Context, rt wifi.WifiRuntime, live bool) (wifiScanResp, error) {
+	if rt == nil || !live {
+		return wifiScanResp{APs: []wifi.AP{}}, nil
+	}
+	aps, err := rt.Scan(ctx)
+	if err != nil {
+		return wifiScanResp{}, err
+	}
+	if aps == nil {
+		aps = []wifi.AP{}
+	}
+	return wifiScanResp{APs: aps}, nil
+}
+
+func wifiStatus(ctx context.Context, rt wifi.WifiRuntime, live bool) (wifiStatusResp, error) {
+	if rt == nil || !live {
+		return wifiStatusResp{Conns: []wifi.WifiConn{}}, nil
+	}
+	conns, err := rt.Status(ctx)
+	if err != nil {
+		return wifiStatusResp{}, err
+	}
+	if conns == nil {
+		conns = []wifi.WifiConn{}
+	}
+	return wifiStatusResp{Conns: conns}, nil
 }
 
 // authz enforces the privilege boundary: only the windowed com.wash.net app may
@@ -572,6 +634,16 @@ type applyResp struct {
 
 type statusResp struct {
 	State string `json:"state"`
+}
+
+// wifiScanResp / wifiStatusResp carry the unprivileged wifi reads to the FE.
+// wifi.AP / wifi.WifiConn already carry their own json tags.
+type wifiScanResp struct {
+	APs []wifi.AP `json:"aps"`
+}
+
+type wifiStatusResp struct {
+	Conns []wifi.WifiConn `json:"conns"`
 }
 
 // currentResp carries the box's live config (the FE-JSON interchange, as a
