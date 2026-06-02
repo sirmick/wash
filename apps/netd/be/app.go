@@ -39,6 +39,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sirmick/wash/apps/netd/be/netplan"
 	"github.com/sirmick/wash/apps/netd/be/networkd"
 	"github.com/sirmick/wash/apps/netd/be/nm"
 	"github.com/sirmick/wash/internal/apps/registry"
@@ -179,7 +180,7 @@ func selectApplier() (netApplier, backendStatus) {
 	case BackendFake:
 		return newFakeApplier(), backendStatus{active: BackendFake, available: []string{BackendFake}}
 	case BackendAuto:
-		d := detections{nm: nm.Detect(), networkd: networkd.Detect()}
+		d := detections{netplan: netplan.Detect(), nm: nm.Detect(), networkd: networkd.Detect()}
 		choice, reason := chooseBackend(BackendAuto, d)
 		log.Printf("wash-netd: backend = %s (%s)", choice, reason)
 		return buildApplier(choice), backendStatus{active: choice, available: availableBackends(d)}
@@ -192,6 +193,8 @@ func selectApplier() (netApplier, backendStatus) {
 
 func buildApplier(choice string) netApplier {
 	switch choice {
+	case BackendNetplan:
+		return netplan.NewApplier()
 	case BackendNM:
 		return nm.NewApplier()
 	case BackendNetworkd:
@@ -202,6 +205,9 @@ func buildApplier(choice string) netApplier {
 
 func availableBackends(d detections) []string {
 	var out []string
+	if d.netplan.Available {
+		out = append(out, BackendNetplan)
+	}
 	if d.nm.Available {
 		out = append(out, BackendNM)
 	}
