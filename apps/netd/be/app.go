@@ -308,6 +308,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	conn = c
 	applier, info = selectApplier()
 	washnetReadBin = locateWashnetRead()
+	washnetWifiBin = locateWashnetWifi()
 	// Probe the wifi runtime once: nmcli presence + radio. Cheap, never errors —
 	// absence just leaves both false so the FE hides the wifi UI.
 	wifiRT = wifi.New()
@@ -331,6 +332,7 @@ var (
 	conn           *sdk.Conn
 	privileged     = os.Geteuid() == 0
 	washnetReadBin string
+	washnetWifiBin string
 
 	wifiRT    wifi.WifiRuntime
 	wifiRadio bool
@@ -409,6 +411,83 @@ func locateWashnetRead() string {
 		return p
 	}
 	return ""
+}
+
+// locateWashnetWifi finds the washnet-wifi CLI (connect/forget under wash-priv):
+// next to netd's binary (dev out/), else on PATH (installed /usr/bin).
+func locateWashnetWifi() string {
+	if exe, err := os.Executable(); err == nil {
+		cand := filepath.Join(filepath.Dir(exe), "washnet-wifi")
+		if _, err := os.Stat(cand); err == nil {
+			return cand
+		}
+	}
+	if p, err := exec.LookPath("washnet-wifi"); err == nil {
+		return p
+	}
+	return ""
+}
+
+// wifiConnectArgv builds the washnet-wifi connect argv and resolves the security
+// default (empty → none). Split out so it's unit-testable.
+func wifiConnectArgv(bin string, req wifiConnectReq) (argv []string, security string) {
+	security = req.Security
+	if security == "" {
+		security = wifi.SecNone
+	}
+	argv = []string{bin, "-op", "connect", "-ssid", req.SSID, "-security", security}
+	if req.PSK != "" {
+		argv = append(argv, "-psk", req.PSK)
+	}
+	if req.Hidden {
+		argv = append(argv, "-hidden")
+	}
+	return argv, security
+}
+
+// runWifiMutation performs a connect/forget OFF the SDK callback path: privileged
+// netd calls nmcli directly; unprivileged netd escalates through wash-priv —
+// which MUST run in a goroutine, since PrivRunInlineSync deadlocks if called
+// inline on the callback's read goroutine. On completion it asks the FE to
+// re-fetch wifi state (Refresh) and, on failure, publishes the reason as a
+// diagnostic so a post-approval error (bad password, AP gone) isn't a silent
+// no-op. direct is the in-process action used when netd is already root.
+func runWifiMutation(reason string, argv []string, direct func(context.Context) (string, error)) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) // includes the unlock wait
+		defer cancel()
+		var out string
+		var err error
+		switch {
+		case privileged:
+			out, err = direct(ctx)
+		case conn != nil && washnetWifiBin != "":
+			r, rerr := conn.PrivRunInlineSync(ctx, argv, reason)
+			if rerr != nil || r.Exit != 0 {
+				msg := strings.TrimSpace(string(r.Stderr))
+				if msg == "" && rerr != nil {
+					msg = rerr.Error()
+				}
+				if msg == "" {
+					msg = "wifi action failed"
+				}
+				err = fmt.Errorf("%s", msg)
+			} else {
+				out = strings.TrimSpace(string(r.Stdout))
+			}
+		default:
+			err = fmt.Errorf("no privileged path for wifi action (washnet-wifi not found)")
+		}
+		if err != nil {
+			log.Printf("wash-netd: wifi %q failed: %v", reason, err)
+			publish(NetState{Status: "idle", Refresh: true, Diagnostics: []validate.Diagnostic{{
+				Path: "wireless", Code: "wifi-action-failed", Message: err.Error(), Severity: validate.Error,
+			}}})
+			return
+		}
+		log.Printf("wash-netd: wifi %q ok: %s", reason, out)
+		publish(NetState{Status: "idle", Refresh: true})
+	}()
 }
 
 func registerHandlers(bus *sdk.Bus) {
@@ -553,6 +632,48 @@ func registerHandlers(bus *sdk.Bus) {
 		}
 		return resp, nil
 	})
+
+	// wifi_connect / wifi_forget MUTATE NetworkManager and need polkit. They run
+	// off the callback path (runWifiMutation goroutines the escalation) and ack
+	// immediately with Pending; the outcome lands as a state Refresh. On an
+	// NM-live box this is the imperative nmcli path (NM owns the profile). On a
+	// no-NM box with declarative wifi caps the connect would fold into the apply
+	// document instead — wired up in the netplanprofile-wifi commit.
+	sdk.HandleFrom(bus, "wifi_connect", func(_ *sdk.Conn, _ string, req wifiConnectReq, from wire.Sender) (wifiActionResp, error) {
+		if err := authz(from); err != nil {
+			return wifiActionResp{}, err
+		}
+		if req.SSID == "" {
+			return wifiActionResp{}, sdk.Errf(sdk.ErrBadRequest, "wifi_connect: missing ssid")
+		}
+		if !wifiLive {
+			return wifiActionResp{}, sdk.Errf(sdk.ErrBadRequest, "wifi_connect: declarative (no-NM) connect not yet supported")
+		}
+		argv, security := wifiConnectArgv(washnetWifiBin, req)
+		rt := wifiRT
+		runWifiMutation("connect to Wi-Fi network "+req.SSID, argv, func(ctx context.Context) (string, error) {
+			return rt.Connect(ctx, req.SSID, security, req.PSK, req.Hidden)
+		})
+		return wifiActionResp{Pending: true}, nil
+	})
+
+	sdk.HandleFrom(bus, "wifi_forget", func(_ *sdk.Conn, _ string, req wifiForgetReq, from wire.Sender) (wifiActionResp, error) {
+		if err := authz(from); err != nil {
+			return wifiActionResp{}, err
+		}
+		if req.SSID == "" {
+			return wifiActionResp{}, sdk.Errf(sdk.ErrBadRequest, "wifi_forget: missing ssid")
+		}
+		if !wifiLive {
+			return wifiActionResp{}, sdk.Errf(sdk.ErrBadRequest, "wifi_forget: requires NetworkManager")
+		}
+		rt := wifiRT
+		argv := []string{washnetWifiBin, "-op", "forget", "-ssid", req.SSID}
+		runWifiMutation("forget Wi-Fi network "+req.SSID, argv, func(ctx context.Context) (string, error) {
+			return rt.Forget(ctx, req.SSID)
+		})
+		return wifiActionResp{Pending: true}, nil
+	})
 }
 
 // wifiScan/wifiStatus are the handler cores, split out so they're unit-testable
@@ -644,6 +765,24 @@ type wifiScanResp struct {
 
 type wifiStatusResp struct {
 	Conns []wifi.WifiConn `json:"conns"`
+}
+
+// wifiConnectReq / wifiForgetReq drive the privileged mutations. wifiActionResp
+// only acks acceptance — the result arrives asynchronously as a state Refresh
+// (the action runs behind wash-priv approval), per the connect-is-async design.
+type wifiConnectReq struct {
+	SSID     string `json:"ssid"`
+	Security string `json:"security"` // none|psk2|sae (empty → none)
+	PSK      string `json:"psk"`
+	Hidden   bool   `json:"hidden"`
+}
+
+type wifiForgetReq struct {
+	SSID string `json:"ssid"`
+}
+
+type wifiActionResp struct {
+	Pending bool `json:"pending"`
 }
 
 // currentResp carries the box's live config (the FE-JSON interchange, as a

@@ -3,6 +3,7 @@ package netd
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/sirmick/wash/apps/netd/be/wifi"
@@ -45,6 +46,41 @@ func TestWifiScanHandler(t *testing.T) {
 	// runtime error propagates.
 	if _, err := wifiScan(ctx, fakeWifi{err: errors.New("boom")}, true); err == nil {
 		t.Fatal("scan error should propagate")
+	}
+}
+
+func TestWifiConnectArgv(t *testing.T) {
+	cases := []struct {
+		name     string
+		req      wifiConnectReq
+		wantSec  string
+		wantPSK  bool
+		wantHide bool
+	}{
+		{"wpa2", wifiConnectReq{SSID: "home", Security: "psk2", PSK: "hunter2!!"}, "psk2", true, false},
+		{"sae hidden", wifiConnectReq{SSID: "h", Security: "sae", PSK: "pw", Hidden: true}, "sae", true, true},
+		{"open default sec", wifiConnectReq{SSID: "cafe"}, "none", false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			argv, sec := wifiConnectArgv("washnet-wifi", c.req)
+			if sec != c.wantSec {
+				t.Errorf("security = %q, want %q", sec, c.wantSec)
+			}
+			joined := strings.Join(argv, " ")
+			if !strings.Contains(joined, "-op connect -ssid "+c.req.SSID) {
+				t.Errorf("argv missing connect/ssid: %q", joined)
+			}
+			if !strings.Contains(joined, "-security "+c.wantSec) {
+				t.Errorf("argv missing -security %s: %q", c.wantSec, joined)
+			}
+			if got := strings.Contains(joined, "-psk "); got != c.wantPSK {
+				t.Errorf("-psk present = %v, want %v (%q)", got, c.wantPSK, joined)
+			}
+			if got := strings.Contains(joined, "-hidden"); got != c.wantHide {
+				t.Errorf("-hidden present = %v, want %v", got, c.wantHide)
+			}
+		})
 	}
 }
 
