@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 
+	"github.com/sirmick/wash/apps/netd/be/ifupdown"
 	"github.com/sirmick/wash/apps/netd/be/netplan"
 	"github.com/sirmick/wash/apps/netd/be/networkd"
 	"github.com/sirmick/wash/apps/netd/be/nm"
@@ -25,6 +26,8 @@ func main() {
 		cfg = netplan.NewApplier().Live()
 	case "networkd":
 		cfg = networkd.NewApplier().Live()
+	case "ifupdown":
+		cfg = ifupdown.NewApplier().Live()
 	default: // nm (default, back-compat with the original keyfile reader)
 		c, err := nm.ReadSystemConnections()
 		if err != nil {
