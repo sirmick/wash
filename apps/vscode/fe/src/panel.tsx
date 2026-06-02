@@ -10,6 +10,7 @@
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { JSX } from 'solid-js';
 import {
+  Row,
   Section,
   ServiceBadge,
   SmallBtn,
