@@ -39,10 +39,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sirmick/wash/apps/netd/be/ifupdown"
-	"github.com/sirmick/wash/apps/netd/be/netplan"
-	"github.com/sirmick/wash/apps/netd/be/networkd"
-	"github.com/sirmick/wash/apps/netd/be/nm"
+	"github.com/sirmick/wash/apps/netd/be/backendsel"
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/washnet/backend"
@@ -181,46 +178,24 @@ func selectApplier() (netApplier, backendStatus) {
 	case BackendFake:
 		return newFakeApplier(), backendStatus{active: BackendFake, available: []string{BackendFake}}
 	case BackendAuto:
-		d := detections{netplan: netplan.Detect(), nm: nm.Detect(), networkd: networkd.Detect(), ifupdown: ifupdown.Detect()}
+		d := backendsel.Probe()
 		choice, reason := chooseBackend(BackendAuto, d)
 		log.Printf("wash-netd: backend = %s (%s)", choice, reason)
-		return buildApplier(choice), backendStatus{active: choice, available: availableBackends(d)}
-	default: // forced nm / networkd (the images) — no probe needed to select
+		return buildApplier(choice), backendStatus{active: choice, available: backendsel.Available(d)}
+	default: // forced nm / networkd / netplan / ifupdown — no probe needed
 		choice, reason := chooseBackend(mode, detections{})
 		log.Printf("wash-netd: backend = %s (%s)", choice, reason)
 		return buildApplier(choice), backendStatus{active: choice, available: []string{choice}}
 	}
 }
 
+// buildApplier maps a backend name to its live applier (backendsel.New), falling
+// back to the local fake for "fake"/unknown.
 func buildApplier(choice string) netApplier {
-	switch choice {
-	case BackendNetplan:
-		return netplan.NewApplier()
-	case BackendNM:
-		return nm.NewApplier()
-	case BackendNetworkd:
-		return networkd.NewApplier()
-	case BackendIfupdown:
-		return ifupdown.NewApplier()
+	if a := backendsel.New(choice); a != nil {
+		return a
 	}
 	return newFakeApplier()
-}
-
-func availableBackends(d detections) []string {
-	var out []string
-	if d.netplan.Available {
-		out = append(out, BackendNetplan)
-	}
-	if d.nm.Available {
-		out = append(out, BackendNM)
-	}
-	if d.networkd.Available {
-		out = append(out, BackendNetworkd)
-	}
-	if d.ifupdown.Available {
-		out = append(out, BackendIfupdown)
-	}
-	return out
 }
 
 // persistedBackend reads the Settings Network pane's choice from the shared wash

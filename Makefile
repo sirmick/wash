@@ -546,9 +546,11 @@ vm-image: $(OUT)/wash
 # Per-distro backend test-bed images (docs/NET-BACKENDS.md §6): Ubuntu/netplan
 # and Debian/ifupdown, alongside Fedora/networkd + Alpine/NM. Each bakes a known
 # config; the wash-vm/vm Go tests boot it and assert wash reads/applies it.
-.PHONY: vm-image-ubuntu vm-image-fedora
+.PHONY: vm-image-ubuntu vm-image-debian vm-image-fedora
 vm-image-ubuntu: $(OUT)/wash
 	sh scripts/build-vm-image-ubuntu.sh
+vm-image-debian: $(OUT)/wash
+	sh scripts/build-vm-image-debian.sh
 vm-image-fedora: $(OUT)/wash
 	sh scripts/build-vm-image-fedora.sh
 
@@ -556,7 +558,7 @@ vm-image-fedora: $(OUT)/wash
 # (skips a distro whose image isn't built). The netplan read is the bug-fix gate.
 .PHONY: vm-net-test
 vm-net-test: $(OUT)/wash
-	go test ./wash-vm/vm/ -run 'Ubuntu|Fedora' -v
+	go test ./wash-vm/vm/ -run 'Ubuntu|Debian|Fedora' -v
 
 # vm-chrome: the minimal host chrome the proxy serves (docs/NET.md §8.3) —
 # tabs for Console + Wash. The wash UI (shell.js + app bundles) comes over the

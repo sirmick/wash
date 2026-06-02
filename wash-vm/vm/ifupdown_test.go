@@ -101,3 +101,51 @@ func TestDebianIfupdownRead(t *testing.T) {
 		}
 	}
 }
+
+// TestDebianIfupdownApply is the full CLI loop at OS level: read the box's UCI,
+// CHANGE the bridge address, apply it through the ifupdown backend, and assert
+// the kernel carries the new address — read → edit → apply landing in the live
+// stack via /etc/network/interfaces + ifup.
+func TestDebianIfupdownApply(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+	defer cancel()
+	vm := launchDebian(ctx, t)
+	defer vm.Close()
+
+	run := func(cmd string) string {
+		t.Helper()
+		r, err := vm.Exec(ctx, cmd)
+		if err != nil {
+			t.Fatalf("Exec %q: %v", cmd, err)
+		}
+		return r.Out
+	}
+	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); {
+		s := strings.TrimSpace(run("systemctl is-system-running 2>&1"))
+		if s == "running" || s == "degraded" {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	run("WASH_NETD_BACKEND=ifupdown washnet-read > /tmp/net.uci")
+	run("sed -i 's#10.0.50.1/24#10.9.9.1/24#' /tmp/net.uci")
+	out := run("WASH_NETD_BACKEND=ifupdown washnet-apply /tmp/net.uci 2>&1")
+	t.Logf("washnet-apply: %s", strings.TrimSpace(out))
+	if !strings.Contains(out, "APPLIED") {
+		t.Fatalf("washnet-apply did not report APPLIED:\n%s\n--- /tmp/net.uci ---\n%s\n--- /etc/network/interfaces ---\n%s", out, run("cat /tmp/net.uci"), run("cat /etc/network/interfaces"))
+	}
+
+	var addr string
+	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); {
+		addr = run("ip -4 addr show br-lan 2>&1")
+		if strings.Contains(addr, "10.9.9.1") {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if !strings.Contains(addr, "10.9.9.1") {
+		t.Fatalf("br-lan did not get the applied address 10.9.9.1 at OS level:\nip addr:\n%s\ninterfaces:\n%s", addr, run("cat /etc/network/interfaces"))
+	}
+	t.Logf("OS-level applied: br-lan carries 10.9.9.1\n%s", strings.TrimSpace(addr))
+}

@@ -114,3 +114,53 @@ func TestUbuntuNetplanRead(t *testing.T) {
 		}
 	}
 }
+
+// TestUbuntuNetplanApply is the full CLI loop at OS level: read the box's UCI,
+// CHANGE the bridge address in it, apply it through the netplan backend, and
+// assert the kernel actually carries the new address — proving read → edit →
+// apply lands in the live network stack, not just in /etc/netplan.
+func TestUbuntuNetplanApply(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+	defer cancel()
+	vm := launchUbuntu(ctx, t)
+	defer vm.Close()
+
+	run := func(cmd string) string {
+		t.Helper()
+		r, err := vm.Exec(ctx, cmd)
+		if err != nil {
+			t.Fatalf("Exec %q: %v", cmd, err)
+		}
+		return r.Out
+	}
+	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); {
+		s := strings.TrimSpace(run("systemctl is-system-running 2>&1"))
+		if s == "running" || s == "degraded" {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	// READ → CHANGE (bridge 10.0.50.1 → 10.9.9.1) → APPLY, all via the CLI.
+	run("WASH_NETD_BACKEND=netplan washnet-read > /tmp/net.uci")
+	run("sed -i 's#10.0.50.1/24#10.9.9.1/24#' /tmp/net.uci")
+	out := run("WASH_NETD_BACKEND=netplan washnet-apply /tmp/net.uci 2>&1")
+	t.Logf("washnet-apply: %s", strings.TrimSpace(out))
+	if !strings.Contains(out, "APPLIED") {
+		t.Fatalf("washnet-apply did not report APPLIED:\n%s\n--- /tmp/net.uci ---\n%s", out, run("cat /tmp/net.uci"))
+	}
+
+	// VERIFY at OS level: the kernel's br-lan now carries 10.9.9.1.
+	var addr string
+	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); {
+		addr = run("ip -4 addr show br-lan 2>&1")
+		if strings.Contains(addr, "10.9.9.1") {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if !strings.Contains(addr, "10.9.9.1") {
+		t.Fatalf("br-lan did not get the applied address 10.9.9.1 at OS level:\nip addr:\n%s\nnetplan get:\n%s", addr, run("netplan get 2>&1"))
+	}
+	t.Logf("OS-level applied: br-lan carries 10.9.9.1\n%s", strings.TrimSpace(addr))
+}
