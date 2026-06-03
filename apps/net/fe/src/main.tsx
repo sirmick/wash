@@ -9,10 +9,11 @@
 // the schema-driven editor for one interface's addressing. Every change runs through
 // netd validate → apply (commit-confirm) → the box.
 
-import { createMemo, createSignal, onCleanup, onMount, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onMount, For, Show } from "solid-js";
 import { defineWashApp, type WashAppProps } from "@wash/ui";
 
 import { ApplyTerminal, type ApplyEvent } from "./ApplyTerminal.tsx";
+import { WifiDialog, type AP } from "./WifiDialog.tsx";
 import { ObjectForm } from "./ObjectForm.tsx";
 import { setAtPath } from "./setAtPath.ts";
 import type { Descriptor, ObjectDescriptor } from "./objectform-model.ts";
@@ -51,7 +52,9 @@ type Proto = {
 const dhcpDefault = (): Proto => ({ _tag: "dhcp", IPv4: true, IPv6: true });
 type Interface = { Name: string; Device?: string; Proto?: Proto };
 type Device = { Name: string; Type?: string; Ports?: string[]; Ifname?: string; VID?: number };
-type Config = { Interfaces?: Interface[]; Devices?: Device[]; [k: string]: any };
+type Config = { Interfaces?: Interface[]; Devices?: Device[]; Radios?: any[]; SSIDs?: any[]; [k: string]: any };
+// WifiConn mirrors netd's wifi_status row (an active 802-11-wireless connection).
+type WifiConn = { name: string; device: string };
 // Caps mirrors netd's generic capability wire (docs/NET.md §2.7): the supported
 // feature keys + object-kind keys. The UI greys by set membership, so a new
 // backend (networkd, uci) advertising a different subset re-gates without any
@@ -86,6 +89,7 @@ const ICONS: Record<string, string> = {
   check: '<path d="M20 6 9 17l-5-5"/>',
   x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
   undo: '<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>',
+  wifi: '<path d="M12 20h.01"/><path d="M2 8.82a15 15 0 0 1 20 0"/><path d="M5 12.859a10 10 0 0 1 14 0"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/>',
 };
 function Icon(p: { name: keyof typeof ICONS | string; size?: number }) {
   return (
@@ -100,8 +104,21 @@ function NetApp(props: WashAppProps) {
   const [draft, setDraft] = createSignal<Config>({ Interfaces: [], Devices: [] });  // staged edits, not yet applied
   const [caps, setCaps] = createSignal<Caps>(emptyCaps());
   const can = (f: string) => caps().features.has(f);
+  const canKind = (k: string) => caps().kinds.has(k);
   const [links, setLinks] = createSignal<string[]>([]); // physical NICs from the backend
-  const [adding, setAdding] = createSignal<null | "ethernet" | "vlan" | "bridge">(null);
+  const [adding, setAdding] = createSignal<null | "ethernet" | "vlan" | "bridge" | "wifi">(null);
+
+  // Wifi gating + state. wifiCapable shows the +Wifi button (the renderer can
+  // express wifi AND a radio is present); wifiLive enables the live scan/connect
+  // path (nmcli), else the dialog is manual-only and connects via Apply.
+  const [wifiRadio, setWifiRadio] = createSignal(false);
+  const [wifiLive, setWifiLive] = createSignal(false);
+  const [wifiDevices, setWifiDevices] = createSignal<string[]>([]);
+  const [wifiConns, setWifiConns] = createSignal<WifiConn[]>([]);
+  const [aps, setAps] = createSignal<AP[]>([]);
+  const [scanning, setScanning] = createSignal(false);
+  const [wifiEnabled, setWifiEnabled] = createSignal(true); // NM's software wifi switch
+  const wifiCapable = createMemo(() => canKind("wireless/wifi-iface") && wifiRadio());
   const [editIface, setEditIface] = createSignal<Interface | null>(null);
 
   const [status, setStatus] = createSignal("idle");
@@ -212,6 +229,10 @@ function NetApp(props: WashAppProps) {
       setConfirmWindowMs(s.confirm_window_ms);
       setDeadline(s.status === "await-confirm" && s.confirm_window_ms > 0 ? Date.now() + s.confirm_window_ms : 0);
     }
+    // wifi_radio/wifi_live are omitempty, so only `true` arrives here; the
+    // authoritative (always-sent) values come from `current` in loadCurrent.
+    if (s.wifi_radio === true) setWifiRadio(true);
+    if (s.wifi_live === true) setWifiLive(true);
   };
 
   const loadCurrent = async () => {
@@ -222,7 +243,79 @@ function NetApp(props: WashAppProps) {
       setDraft(structuredClone(cfg)); // reset the draft to the freshly committed state
       setCaps(toCaps(r.caps));
       setLinks((r.devices ?? []) as string[]);
+      setWifiRadio(!!r.wifi_radio);
+      setWifiLive(!!r.wifi_live);
+      setWifiDevices((r.wifi_devices ?? []) as string[]);
+      void refreshWifi();
     }
+  };
+
+  // refreshWifi pulls the active wifi connections (NM-live only). Called on load
+  // and after any connect/forget (and on a net.state Refresh, via loadCurrent).
+  const refreshWifi = async () => {
+    if (!wifiLive()) { setWifiConns([]); return; }
+    const r = await sendWithReply("wifi_status");
+    if (r.kind === "wifi_status_ok") setWifiConns((r.conns ?? []) as WifiConn[]);
+  };
+
+  // scanWifi pulls the live AP list (NM rescans + lists; rate-limit handled BE).
+  const scanWifi = async () => {
+    if (!wifiLive()) return;
+    setScanning(true);
+    const r = await sendWithReply("wifi_scan", {}, 15000);
+    setScanning(false);
+    if (r.kind === "wifi_scan_ok") {
+      setAps((r.aps ?? []) as AP[]);
+      if (typeof r.enabled === "boolean") setWifiEnabled(r.enabled);
+    }
+  };
+
+  // toggleRadio flips NM's software wifi switch (privileged → escalates). The
+  // scan poll picks up the new enabled state; nudge it once the action lands.
+  const toggleRadio = (on: boolean) => {
+    void sendWithReply("wifi_radio", { on }).then((r) => {
+      if (r.kind !== "wifi_radio_ok") setStatus(`error: ${r.msg ?? r.code}`);
+      window.setTimeout(() => void scanWifi(), 1500);
+    });
+  };
+
+  // connectWifi routes by capability: NM-live → the imperative nmcli path
+  // (wifi_connect; async, the result lands via a net.state Refresh). No NM →
+  // declarative: fold the SSID into the config and apply (commit-confirm).
+  const connectWifi = (ssid: string, security: string, psk: string, hidden: boolean) => {
+    setAdding(null);
+    if (wifiLive()) {
+      void sendWithReply("wifi_connect", { ssid, security, psk, hidden }).then((r) => {
+        if (r.kind !== "wifi_connect_ok") setStatus(`error: ${r.msg ?? r.code}`);
+      });
+      return;
+    }
+    connectWifiDeclarative(ssid, security, psk, hidden);
+  };
+
+  const connectWifiDeclarative = (ssid: string, security: string, psk: string, hidden: boolean) => {
+    const dev = wifiDevices()[0] ?? "";
+    if (!dev) { setStatus("error: no wifi device found"); return; }
+    // Encryption union matches codec FE-JSON: {_tag:"none"} | {_tag,Key}.
+    const enc = security === "none" ? { _tag: "none" } : { _tag: security, Key: psk };
+    const cfg = structuredClone(config()) as Config;
+    cfg.Radios = [...(cfg.Radios ?? []).filter((r: any) => r.Name !== dev), { Name: dev }];
+    cfg.SSIDs = [
+      ...(cfg.SSIDs ?? []).filter((s: any) => s.Device !== dev),
+      { Device: dev, SSID: ssid, Mode: "sta", Network: dev, Hidden: hidden, Encryption: enc },
+    ];
+    setBusy(true); setStatus("applying"); setEvents([]);
+    void sendWithReply("apply", { config: cfg }, 30000).then((r) => {
+      setBusy(false);
+      if (r.kind === "apply_ok") applyState({ status: r.state, events: r.events, confirm_window_ms: r.confirm_window_ms });
+      else setStatus(`error: ${r.msg ?? r.code}`);
+    });
+  };
+
+  const forgetWifi = (ssid: string) => {
+    void sendWithReply("wifi_forget", { ssid }).then((r) => {
+      if (r.kind !== "wifi_forget_ok") setStatus(`error: ${r.msg ?? r.code}`);
+    });
   };
 
   // applyDraft is the EXPLICIT apply: it ships the whole staged draft through the
@@ -304,6 +397,15 @@ function NetApp(props: WashAppProps) {
     setAdding(null);
   };
 
+  // Poll the scan while the dialog is open on an NM-live box (~2.5s; the effect
+  // re-runs when `adding` changes and onCleanup clears the interval on close).
+  createEffect(() => {
+    if (adding() !== "wifi" || !wifiLive()) return;
+    void scanWifi();
+    const t = window.setInterval(() => void scanWifi(), 2500);
+    onCleanup(() => window.clearInterval(t));
+  });
+
   onMount(() => {
     const onMsg = (ev: Event) => {
       const m = (ev as CustomEvent).detail;
@@ -348,6 +450,9 @@ function NetApp(props: WashAppProps) {
           <button data-testid="add-ethernet" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setConfigureDevice(""); setAdding("ethernet"); }}><Icon name="ethernet" /> Ethernet</button>
           <button data-testid="add-vlan" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("vlan")} onClick={() => setAdding("vlan")}><Icon name="git-branch" /> VLAN</button>
           <button data-testid="add-bridge" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("bridge")} onClick={() => setAdding("bridge")}><Icon name="git-merge" /> Bridge</button>
+          <Show when={wifiCapable()}>
+            <button data-testid="add-wifi" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => setAdding("wifi")}><Icon name="wifi" /> Wi-Fi</button>
+          </Show>
         </div>
       </header>
 
@@ -367,8 +472,25 @@ function NetApp(props: WashAppProps) {
         <Show when={adding() === "bridge"}>
           <BridgeWizard members={freeDevices()} onCancel={() => setAdding(null)} onCreate={addBridge} />
         </Show>
+        <Show when={adding() === "wifi"}>
+          <WifiDialog live={wifiLive()} busy={busy()} enabled={wifiEnabled()} aps={aps()} scanning={scanning()} onScan={() => void scanWifi()} onToggleRadio={toggleRadio} onConnect={connectWifi} onCancel={() => setAdding(null)} />
+        </Show>
 
         <div class="wash-net-list">
+          <For each={wifiConns()}>
+            {(w) => (
+              <div class="wash-net-conn" data-testid={`wifi-${w.name}`} data-kind="WiFi" data-device={w.device} data-status="active">
+                <div class="wash-net-conn-main">
+                  <span class="wash-net-conn-name"><Icon name="wifi" /> {w.name}</span>
+                  <span class="wash-net-conn-kind">Wi-Fi</span>
+                  <span class="wash-net-conn-dev">{w.device}</span>
+                </div>
+                <div class="wash-net-conn-actions">
+                  <button class="wash-net-btn ghost" title="Forget this network" disabled={busy()} onClick={() => forgetWifi(w.name)}><Icon name="trash" /> Forget</button>
+                </div>
+              </div>
+            )}
+          </For>
           <For each={draft().Interfaces ?? []} fallback={<Show when={removed().length === 0}><div class="wash-net-empty">No connections yet — use + Ethernet / + VLAN / + Bridge.</div></Show>}>
             {(iface) => {
               const d = devByName().get(iface.Device ?? "");
@@ -645,6 +767,16 @@ const STYLE = `
 .wash-net-grouplabel { font-size:11px; opacity:.6; text-transform:uppercase; letter-spacing:.04em; margin:6px 0 2px; }
 .wash-net-addressing .wash-net-group { margin:0 0 6px; }
 .wash-net-member { font-size:12px; display:flex; gap:4px; align-items:center; }
+.wash-net-wifi-scan { margin:4px 0 10px; }
+.wash-net-wifi-scanhead { display:flex; align-items:center; justify-content:space-between; }
+.wash-net-wifi-off { display:flex; align-items:center; gap:10px; padding:8px 0; }
+.wash-net-aplist { display:flex; flex-direction:column; gap:3px; max-height:160px; overflow:auto; margin-top:4px; }
+.wash-net-ap { display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%;
+  background:#15152a; color:#eee; border:1px solid #2a2a3a; border-radius:4px; padding:5px 9px; font:inherit; cursor:pointer; text-align:left; }
+.wash-net-ap:hover { background:#22223a; border-color:#3a3a6a; }
+.wash-net-ap[data-inuse="1"] { border-color:#2e5a38; }
+.wash-net-ap-ssid { font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wash-net-ap-meta { font-size:12px; opacity:.7; flex-shrink:0; font-family:ui-monospace,Menlo,monospace; }
 .wash-net-btn { display:inline-flex; align-items:center; gap:5px; background:#202037; color:#eee; border:1px solid #2a2a3a; border-radius:4px; padding:4px 10px; font:inherit; cursor:pointer; }
 .wash-net-ico { flex-shrink:0; opacity:.9; }
 .wash-net-btn:hover:not(:disabled) { background:#2a2a4a; }

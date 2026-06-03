@@ -42,6 +42,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/apps/netd/be/backendsel"
+	"github.com/sirmick/wash/apps/netd/be/wifi"
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/washnet/backend"
@@ -86,6 +87,12 @@ type NetState struct {
 	// stamps them onto every state so they survive state transitions.
 	Backend   string   `json:"backend,omitempty"`
 	Available []string `json:"available,omitempty"`
+	// WifiRadio reports a wifi radio is present; WifiLive that NetworkManager is
+	// the live manager (nmcli reachable). The net panel gates the +Wifi button on
+	// WifiRadio + the renderer's wifi capability, and the scan/connect picker on
+	// WifiLive. Static after startup; publish() stamps them like Backend.
+	WifiRadio bool `json:"wifi_radio,omitempty"`
+	WifiLive  bool `json:"wifi_live,omitempty"`
 	// Refresh asks the FE to re-fetch `current` — pushed after netd reads the
 	// box's config out-of-band via a privileged escalation (see liveConfig).
 	Refresh bool `json:"refresh,omitempty"`
@@ -301,7 +308,15 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	conn = c
 	applier, info = selectApplier()
 	washnetReadBin = locateWashnetRead()
-	svc = sdk.NewStateService(bus, NetState{Status: "idle", Backend: info.active, Available: info.available})
+	washnetWifiBin = locateWashnetWifi()
+	// Probe the wifi runtime once: nmcli presence + radio. Cheap, never errors —
+	// absence just leaves both false so the FE hides the wifi UI.
+	wifiRT = wifi.New()
+	wifiRadio, wifiLive = wifiRT.Detect()
+	if wifiRadio || wifiLive {
+		log.Printf("wash-netd: wifi radio=%v nmcli-live=%v", wifiRadio, wifiLive)
+	}
+	svc = sdk.NewStateService(bus, NetState{Status: "idle", Backend: info.active, Available: info.available, WifiRadio: wifiRadio, WifiLive: wifiLive})
 	registerHandlers(bus)
 }
 
@@ -317,6 +332,11 @@ var (
 	conn           *sdk.Conn
 	privileged     = os.Geteuid() == 0
 	washnetReadBin string
+	washnetWifiBin string
+
+	wifiRT    wifi.WifiRuntime
+	wifiRadio bool
+	wifiLive  bool
 
 	liveMu         sync.Mutex
 	liveCache      model.Config
@@ -393,6 +413,83 @@ func locateWashnetRead() string {
 	return ""
 }
 
+// locateWashnetWifi finds the washnet-wifi CLI (connect/forget under wash-priv):
+// next to netd's binary (dev out/), else on PATH (installed /usr/bin).
+func locateWashnetWifi() string {
+	if exe, err := os.Executable(); err == nil {
+		cand := filepath.Join(filepath.Dir(exe), "washnet-wifi")
+		if _, err := os.Stat(cand); err == nil {
+			return cand
+		}
+	}
+	if p, err := exec.LookPath("washnet-wifi"); err == nil {
+		return p
+	}
+	return ""
+}
+
+// wifiConnectArgv builds the washnet-wifi connect argv and resolves the security
+// default (empty → none). Split out so it's unit-testable.
+func wifiConnectArgv(bin string, req wifiConnectReq) (argv []string, security string) {
+	security = req.Security
+	if security == "" {
+		security = wifi.SecNone
+	}
+	argv = []string{bin, "-op", "connect", "-ssid", req.SSID, "-security", security}
+	if req.PSK != "" {
+		argv = append(argv, "-psk", req.PSK)
+	}
+	if req.Hidden {
+		argv = append(argv, "-hidden")
+	}
+	return argv, security
+}
+
+// runWifiMutation performs a connect/forget OFF the SDK callback path: privileged
+// netd calls nmcli directly; unprivileged netd escalates through wash-priv —
+// which MUST run in a goroutine, since PrivRunInlineSync deadlocks if called
+// inline on the callback's read goroutine. On completion it asks the FE to
+// re-fetch wifi state (Refresh) and, on failure, publishes the reason as a
+// diagnostic so a post-approval error (bad password, AP gone) isn't a silent
+// no-op. direct is the in-process action used when netd is already root.
+func runWifiMutation(reason string, argv []string, direct func(context.Context) (string, error)) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) // includes the unlock wait
+		defer cancel()
+		var out string
+		var err error
+		switch {
+		case privileged:
+			out, err = direct(ctx)
+		case conn != nil && washnetWifiBin != "":
+			r, rerr := conn.PrivRunInlineSync(ctx, argv, reason)
+			if rerr != nil || r.Exit != 0 {
+				msg := strings.TrimSpace(string(r.Stderr))
+				if msg == "" && rerr != nil {
+					msg = rerr.Error()
+				}
+				if msg == "" {
+					msg = "wifi action failed"
+				}
+				err = fmt.Errorf("%s", msg)
+			} else {
+				out = strings.TrimSpace(string(r.Stdout))
+			}
+		default:
+			err = fmt.Errorf("no privileged path for wifi action (washnet-wifi not found)")
+		}
+		if err != nil {
+			log.Printf("wash-netd: wifi %q failed: %v", reason, err)
+			publish(NetState{Status: "idle", Refresh: true, Diagnostics: []validate.Diagnostic{{
+				Path: "wireless", Code: "wifi-action-failed", Message: err.Error(), Severity: validate.Error,
+			}}})
+			return
+		}
+		log.Printf("wash-netd: wifi %q ok: %s", reason, out)
+		publish(NetState{Status: "idle", Refresh: true})
+	}()
+}
+
 func registerHandlers(bus *sdk.Bus) {
 	sdk.HandleFrom(bus, "validate", func(_ *sdk.Conn, _ string, req configReq, from wire.Sender) (validateResp, error) {
 		if err := authz(from); err != nil {
@@ -417,7 +514,10 @@ func registerHandlers(bus *sdk.Bus) {
 		if err := json.Unmarshal(data, &m); err != nil {
 			return currentResp{}, sdk.Errf(sdk.ErrInternal, "decode current: %v", err)
 		}
-		return currentResp{Config: m, Devices: applier.Devices(), Caps: capsToDTO(applier.Capabilities())}, nil
+		return currentResp{
+			Config: m, Devices: applier.Devices(), Caps: capsToDTO(applier.Capabilities()),
+			WifiRadio: wifiRadio, WifiLive: wifiLive, WifiDevices: wifi.RadioDevices(),
+		}, nil
 	})
 
 	sdk.HandleFrom(bus, "diff", func(_ *sdk.Conn, _ string, req configReq, from wire.Sender) (diffResp, error) {
@@ -505,6 +605,140 @@ func registerHandlers(bus *sdk.Bus) {
 		publish(NetState{Status: string(txn.Reverted), Events: eventDTOs(job)})
 		return statusResp{State: string(job.State())}, nil
 	})
+
+	// wifi_scan / wifi_status are UNPRIVILEGED reads: an active session can list
+	// APs and active connections via nmcli without root, so they run inline (no
+	// wash-priv escalation — unlike connect/forget). When wifi isn't live they
+	// return empty so the FE just shows nothing.
+	sdk.HandleFrom(bus, "wifi_scan", func(_ *sdk.Conn, _ string, _ struct{}, from wire.Sender) (wifiScanResp, error) {
+		if err := authz(from); err != nil {
+			return wifiScanResp{}, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		resp, err := wifiScan(ctx, wifiRT, wifiLive)
+		if err != nil {
+			return wifiScanResp{}, sdk.Errf(sdk.ErrInternal, "wifi scan: %v", err)
+		}
+		return resp, nil
+	})
+
+	sdk.HandleFrom(bus, "wifi_status", func(_ *sdk.Conn, _ string, _ struct{}, from wire.Sender) (wifiStatusResp, error) {
+		if err := authz(from); err != nil {
+			return wifiStatusResp{}, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		resp, err := wifiStatus(ctx, wifiRT, wifiLive)
+		if err != nil {
+			return wifiStatusResp{}, sdk.Errf(sdk.ErrInternal, "wifi status: %v", err)
+		}
+		return resp, nil
+	})
+
+	// wifi_connect / wifi_forget MUTATE NetworkManager and need polkit. They run
+	// off the callback path (runWifiMutation goroutines the escalation) and ack
+	// immediately with Pending; the outcome lands as a state Refresh. This is the
+	// imperative nmcli path (NM owns the profile), so it requires wifi_live. A
+	// no-NM box does declarative wifi the other way: the FE folds the SSID into
+	// its config draft and uses the normal `apply` flow (netplanprofile renders
+	// the wifis: block) — netd never mints a second connect mechanism.
+	sdk.HandleFrom(bus, "wifi_connect", func(_ *sdk.Conn, _ string, req wifiConnectReq, from wire.Sender) (wifiActionResp, error) {
+		if err := authz(from); err != nil {
+			return wifiActionResp{}, err
+		}
+		if req.SSID == "" {
+			return wifiActionResp{}, sdk.Errf(sdk.ErrBadRequest, "wifi_connect: missing ssid")
+		}
+		if !wifiLive {
+			// No NM ⇒ no imperative path; the FE connects declaratively via apply.
+			return wifiActionResp{}, sdk.Errf(sdk.ErrBadRequest, "wifi_connect requires NetworkManager; use apply for declarative wifi")
+		}
+		argv, security := wifiConnectArgv(washnetWifiBin, req)
+		rt := wifiRT
+		runWifiMutation("connect to Wi-Fi network "+req.SSID, argv, func(ctx context.Context) (string, error) {
+			return rt.Connect(ctx, req.SSID, security, req.PSK, req.Hidden)
+		})
+		return wifiActionResp{Pending: true}, nil
+	})
+
+	sdk.HandleFrom(bus, "wifi_forget", func(_ *sdk.Conn, _ string, req wifiForgetReq, from wire.Sender) (wifiActionResp, error) {
+		if err := authz(from); err != nil {
+			return wifiActionResp{}, err
+		}
+		if req.SSID == "" {
+			return wifiActionResp{}, sdk.Errf(sdk.ErrBadRequest, "wifi_forget: missing ssid")
+		}
+		if !wifiLive {
+			return wifiActionResp{}, sdk.Errf(sdk.ErrBadRequest, "wifi_forget: requires NetworkManager")
+		}
+		rt := wifiRT
+		argv := []string{washnetWifiBin, "-op", "forget", "-ssid", req.SSID}
+		runWifiMutation("forget Wi-Fi network "+req.SSID, argv, func(ctx context.Context) (string, error) {
+			return rt.Forget(ctx, req.SSID)
+		})
+		return wifiActionResp{Pending: true}, nil
+	})
+
+	// wifi_radio flips NM's software wifi switch — also polkit-gated, so it runs
+	// through the same escalation.
+	sdk.HandleFrom(bus, "wifi_radio", func(_ *sdk.Conn, _ string, req wifiRadioReq, from wire.Sender) (wifiActionResp, error) {
+		if err := authz(from); err != nil {
+			return wifiActionResp{}, err
+		}
+		if wifiRT == nil || !wifiLive {
+			return wifiActionResp{}, sdk.Errf(sdk.ErrBadRequest, "wifi_radio: no live wifi runtime")
+		}
+		rt := wifiRT
+		on := req.On
+		word := "off"
+		flag := "false"
+		if on {
+			word, flag = "on", "true"
+		}
+		argv := []string{washnetWifiBin, "-op", "radio", "-on=" + flag}
+		runWifiMutation("turn Wi-Fi "+word, argv, func(ctx context.Context) (string, error) {
+			return rt.SetEnabled(ctx, on)
+		})
+		return wifiActionResp{Pending: true}, nil
+	})
+}
+
+// wifiScan/wifiStatus are the handler cores, split out so they're unit-testable
+// with a fake runtime. Both return a non-nil slice (never nil) and, when wifi is
+// unavailable, an empty result with no error — the FE renders nothing rather
+// than surfacing a failure.
+func wifiScan(ctx context.Context, rt wifi.WifiRuntime, live bool) (wifiScanResp, error) {
+	if rt == nil || !live {
+		return wifiScanResp{APs: []wifi.AP{}}, nil
+	}
+	// A switched-off radio refuses scans; report enabled=false so the FE shows a
+	// "turn on Wi-Fi" affordance instead of an empty list.
+	if !rt.Enabled(ctx) {
+		return wifiScanResp{APs: []wifi.AP{}, Enabled: false}, nil
+	}
+	aps, err := rt.Scan(ctx)
+	if err != nil {
+		return wifiScanResp{}, err
+	}
+	if aps == nil {
+		aps = []wifi.AP{}
+	}
+	return wifiScanResp{APs: aps, Enabled: true}, nil
+}
+
+func wifiStatus(ctx context.Context, rt wifi.WifiRuntime, live bool) (wifiStatusResp, error) {
+	if rt == nil || !live {
+		return wifiStatusResp{Conns: []wifi.WifiConn{}}, nil
+	}
+	conns, err := rt.Status(ctx)
+	if err != nil {
+		return wifiStatusResp{}, err
+	}
+	if conns == nil {
+		conns = []wifi.WifiConn{}
+	}
+	return wifiStatusResp{Conns: conns}, nil
 }
 
 // authz enforces the privilege boundary: only the windowed com.wash.net app may
@@ -521,6 +755,7 @@ func publish(s NetState) {
 		// Carry the (static) backend identity through every transition so a
 		// subscriber that joins mid-apply still learns which backend is running.
 		s.Backend, s.Available = info.active, info.available
+		s.WifiRadio, s.WifiLive = wifiRadio, wifiLive
 		svc.Mutate(func(cur *NetState) { *cur = s })
 	}
 }
@@ -555,6 +790,39 @@ type statusResp struct {
 	State string `json:"state"`
 }
 
+// wifiScanResp / wifiStatusResp carry the unprivileged wifi reads to the FE.
+// wifi.AP / wifi.WifiConn already carry their own json tags.
+type wifiScanResp struct {
+	APs     []wifi.AP `json:"aps"`
+	Enabled bool      `json:"enabled"` // NM's software wifi switch (off ⇒ FE shows "turn on")
+}
+
+type wifiStatusResp struct {
+	Conns []wifi.WifiConn `json:"conns"`
+}
+
+// wifiConnectReq / wifiForgetReq drive the privileged mutations. wifiActionResp
+// only acks acceptance — the result arrives asynchronously as a state Refresh
+// (the action runs behind wash-priv approval), per the connect-is-async design.
+type wifiConnectReq struct {
+	SSID     string `json:"ssid"`
+	Security string `json:"security"` // none|psk2|sae (empty → none)
+	PSK      string `json:"psk"`
+	Hidden   bool   `json:"hidden"`
+}
+
+type wifiForgetReq struct {
+	SSID string `json:"ssid"`
+}
+
+type wifiRadioReq struct {
+	On bool `json:"on"`
+}
+
+type wifiActionResp struct {
+	Pending bool `json:"pending"`
+}
+
 // currentResp carries the box's live config (the FE-JSON interchange, as a
 // structured map — not raw bytes, which the router would base64-encode) plus the
 // backend's capabilities so the FE greys what this backend can't do.
@@ -562,6 +830,13 @@ type currentResp struct {
 	Config  map[string]any `json:"config"`
 	Caps    capsDTO        `json:"caps"`
 	Devices []string       `json:"devices"` // managed links for the Add wizards
+	// Wifi gating, delivered on the deterministic `current` fetch (not only the
+	// async net.state push): WifiRadio + the renderer's wifi cap show the +Wifi
+	// button, WifiLive enables the scan/connect picker, WifiDevices names the
+	// radio(s) for the declarative (no-NM) path.
+	WifiRadio   bool     `json:"wifi_radio"`
+	WifiLive    bool     `json:"wifi_live"`
+	WifiDevices []string `json:"wifi_devices,omitempty"`
 }
 
 // capsDTO carries the backend's capabilities generically (docs/NET.md §2.7): the

@@ -76,8 +76,17 @@ type wgkeys struct {
 }
 
 type accesspoint struct {
-	Password string `yaml:"password,omitempty"`
-	Hidden   bool   `yaml:"hidden,omitempty"`
+	Password string  `yaml:"password,omitempty"`
+	Hidden   bool    `yaml:"hidden,omitempty"`
+	Auth     *apauth `yaml:"auth,omitempty"`
+}
+
+// apauth is netplan's access-point auth block. WPA2-PSK uses the bare
+// `password:` form above; WPA3-SAE needs an explicit key-management so it
+// round-trips as SAE instead of degrading to PSK2.
+type apauth struct {
+	KeyManagement string `yaml:"key-management,omitempty"` // "psk" | "sae"
+	Password      string `yaml:"password,omitempty"`
 }
 
 func boolp(b bool) *bool { return &b }
