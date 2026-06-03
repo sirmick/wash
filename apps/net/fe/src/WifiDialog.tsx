@@ -32,9 +32,11 @@ function signalBars(s: number): string {
 export function WifiDialog(props: {
   live: boolean;
   busy: boolean;
+  enabled?: boolean; // NM's software wifi switch (undefined ⇒ treat as on)
   aps?: AP[];
   scanning?: boolean;
   onScan?: () => void;
+  onToggleRadio?: (on: boolean) => void;
   onConnect: (ssid: string, security: string, psk: string, hidden: boolean) => void;
   onCancel: () => void;
 }) {
@@ -63,7 +65,14 @@ export function WifiDialog(props: {
     <div class="wash-net-wizard" data-testid="wifi-dialog">
       <div class="wash-net-wizard-title">{props.live ? "Add Wi-Fi network" : "Add Wi-Fi network (manual)"}</div>
 
-      <Show when={props.live}>
+      <Show when={props.live && props.enabled === false}>
+        <div class="wash-net-wifi-scan wash-net-wifi-off">
+          <span class="wash-net-hint">Wi-Fi is turned off.</span>
+          <button data-testid="wifi-radio-on" class="wash-net-btn primary" disabled={props.busy} onClick={() => props.onToggleRadio?.(true)}>Turn on Wi-Fi</button>
+        </div>
+      </Show>
+
+      <Show when={props.live && props.enabled !== false}>
         <div class="wash-net-wifi-scan">
           <div class="wash-net-wifi-scanhead">
             <span class="wash-net-grouplabel">Available networks</span>

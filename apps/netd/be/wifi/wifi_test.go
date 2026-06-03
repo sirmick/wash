@@ -182,3 +182,26 @@ func TestForgetArgv(t *testing.T) {
 		t.Fatalf("missing delete call, calls=%v", f.calls)
 	}
 }
+
+func TestSetEnabledArgv(t *testing.T) {
+	for _, c := range []struct {
+		on   bool
+		want string
+	}{{true, "radio wifi on"}, {false, "radio wifi off"}} {
+		f := reply(nil)
+		if _, err := (&Live{run: f}).SetEnabled(context.Background(), c.on); err != nil {
+			t.Fatal(err)
+		}
+		if !f.saw(c.want) {
+			t.Errorf("SetEnabled(%v) missing %q, calls=%v", c.on, c.want, f.calls)
+		}
+	}
+}
+
+func TestEnabled(t *testing.T) {
+	on := &Live{run: reply(map[string]string{"general status": "enabled"})}
+	off := &Live{run: reply(map[string]string{"general status": "disabled"})}
+	if !on.Enabled(context.Background()) || off.Enabled(context.Background()) {
+		t.Error("Enabled should track the WIFI column")
+	}
+}

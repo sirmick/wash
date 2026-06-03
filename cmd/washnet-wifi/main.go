@@ -19,16 +19,13 @@ import (
 )
 
 func main() {
-	op := flag.String("op", "", "connect|forget")
-	ssid := flag.String("ssid", "", "network SSID")
+	op := flag.String("op", "", "connect|forget|radio")
+	ssid := flag.String("ssid", "", "network SSID (connect/forget)")
 	security := flag.String("security", wifi.SecNone, "none|psk2|sae")
 	psk := flag.String("psk", "", "pre-shared key (psk2/sae)")
 	hidden := flag.Bool("hidden", false, "connect to a hidden (non-broadcast) SSID")
+	on := flag.Bool("on", false, "radio: turn Wi-Fi on (default off)")
 	flag.Parse()
-
-	if *ssid == "" {
-		fail("missing -ssid")
-	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -38,11 +35,19 @@ func main() {
 	var err error
 	switch *op {
 	case "connect":
+		if *ssid == "" {
+			fail("connect: missing -ssid")
+		}
 		out, err = rt.Connect(ctx, *ssid, *security, *psk, *hidden)
 	case "forget":
+		if *ssid == "" {
+			fail("forget: missing -ssid")
+		}
 		out, err = rt.Forget(ctx, *ssid)
+	case "radio":
+		out, err = rt.SetEnabled(ctx, *on)
 	default:
-		fail("unknown -op %q (want connect|forget)", *op)
+		fail("unknown -op %q (want connect|forget|radio)", *op)
 	}
 	if err != nil {
 		fail("%v", err)

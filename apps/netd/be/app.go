@@ -679,6 +679,29 @@ func registerHandlers(bus *sdk.Bus) {
 		})
 		return wifiActionResp{Pending: true}, nil
 	})
+
+	// wifi_radio flips NM's software wifi switch — also polkit-gated, so it runs
+	// through the same escalation.
+	sdk.HandleFrom(bus, "wifi_radio", func(_ *sdk.Conn, _ string, req wifiRadioReq, from wire.Sender) (wifiActionResp, error) {
+		if err := authz(from); err != nil {
+			return wifiActionResp{}, err
+		}
+		if wifiRT == nil || !wifiLive {
+			return wifiActionResp{}, sdk.Errf(sdk.ErrBadRequest, "wifi_radio: no live wifi runtime")
+		}
+		rt := wifiRT
+		on := req.On
+		word := "off"
+		flag := "false"
+		if on {
+			word, flag = "on", "true"
+		}
+		argv := []string{washnetWifiBin, "-op", "radio", "-on=" + flag}
+		runWifiMutation("turn Wi-Fi "+word, argv, func(ctx context.Context) (string, error) {
+			return rt.SetEnabled(ctx, on)
+		})
+		return wifiActionResp{Pending: true}, nil
+	})
 }
 
 // wifiScan/wifiStatus are the handler cores, split out so they're unit-testable
@@ -689,6 +712,11 @@ func wifiScan(ctx context.Context, rt wifi.WifiRuntime, live bool) (wifiScanResp
 	if rt == nil || !live {
 		return wifiScanResp{APs: []wifi.AP{}}, nil
 	}
+	// A switched-off radio refuses scans; report enabled=false so the FE shows a
+	// "turn on Wi-Fi" affordance instead of an empty list.
+	if !rt.Enabled(ctx) {
+		return wifiScanResp{APs: []wifi.AP{}, Enabled: false}, nil
+	}
 	aps, err := rt.Scan(ctx)
 	if err != nil {
 		return wifiScanResp{}, err
@@ -696,7 +724,7 @@ func wifiScan(ctx context.Context, rt wifi.WifiRuntime, live bool) (wifiScanResp
 	if aps == nil {
 		aps = []wifi.AP{}
 	}
-	return wifiScanResp{APs: aps}, nil
+	return wifiScanResp{APs: aps, Enabled: true}, nil
 }
 
 func wifiStatus(ctx context.Context, rt wifi.WifiRuntime, live bool) (wifiStatusResp, error) {
@@ -765,7 +793,8 @@ type statusResp struct {
 // wifiScanResp / wifiStatusResp carry the unprivileged wifi reads to the FE.
 // wifi.AP / wifi.WifiConn already carry their own json tags.
 type wifiScanResp struct {
-	APs []wifi.AP `json:"aps"`
+	APs     []wifi.AP `json:"aps"`
+	Enabled bool      `json:"enabled"` // NM's software wifi switch (off ⇒ FE shows "turn on")
 }
 
 type wifiStatusResp struct {
@@ -784,6 +813,10 @@ type wifiConnectReq struct {
 
 type wifiForgetReq struct {
 	SSID string `json:"ssid"`
+}
+
+type wifiRadioReq struct {
+	On bool `json:"on"`
 }
 
 type wifiActionResp struct {

@@ -57,6 +57,17 @@ test('PSK field gates on security; Connect needs a valid PSK; emits the chosen a
   expect(onConnect).toHaveBeenCalledWith('home', 'psk2', 'longenough', false);
 });
 
+test('switched-off radio shows a Turn on Wi-Fi button instead of the scan list', () => {
+  const onToggleRadio = vi.fn();
+  const { getByTestId, queryByTestId } = render(() => (
+    <WifiDialog live={true} busy={false} enabled={false} onToggleRadio={onToggleRadio} onConnect={() => {}} onCancel={() => {}} />
+  ));
+  expect(queryByTestId('wifi-scan')).toBeNull(); // no scan list while off
+  const onBtn = getByTestId('wifi-radio-on');
+  fireEvent.click(onBtn);
+  expect(onToggleRadio).toHaveBeenCalledWith(true);
+});
+
 test('open security hides the PSK field and connects with an empty key', () => {
   const onConnect = vi.fn();
   const { getByTestId, queryByTestId } = render(() => (

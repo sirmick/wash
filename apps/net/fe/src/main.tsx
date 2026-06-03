@@ -117,6 +117,7 @@ function NetApp(props: WashAppProps) {
   const [wifiConns, setWifiConns] = createSignal<WifiConn[]>([]);
   const [aps, setAps] = createSignal<AP[]>([]);
   const [scanning, setScanning] = createSignal(false);
+  const [wifiEnabled, setWifiEnabled] = createSignal(true); // NM's software wifi switch
   const wifiCapable = createMemo(() => canKind("wireless/wifi-iface") && wifiRadio());
   const [editIface, setEditIface] = createSignal<Interface | null>(null);
 
@@ -263,7 +264,19 @@ function NetApp(props: WashAppProps) {
     setScanning(true);
     const r = await sendWithReply("wifi_scan", {}, 15000);
     setScanning(false);
-    if (r.kind === "wifi_scan_ok") setAps((r.aps ?? []) as AP[]);
+    if (r.kind === "wifi_scan_ok") {
+      setAps((r.aps ?? []) as AP[]);
+      if (typeof r.enabled === "boolean") setWifiEnabled(r.enabled);
+    }
+  };
+
+  // toggleRadio flips NM's software wifi switch (privileged → escalates). The
+  // scan poll picks up the new enabled state; nudge it once the action lands.
+  const toggleRadio = (on: boolean) => {
+    void sendWithReply("wifi_radio", { on }).then((r) => {
+      if (r.kind !== "wifi_radio_ok") setStatus(`error: ${r.msg ?? r.code}`);
+      window.setTimeout(() => void scanWifi(), 1500);
+    });
   };
 
   // connectWifi routes by capability: NM-live → the imperative nmcli path
@@ -460,7 +473,7 @@ function NetApp(props: WashAppProps) {
           <BridgeWizard members={freeDevices()} onCancel={() => setAdding(null)} onCreate={addBridge} />
         </Show>
         <Show when={adding() === "wifi"}>
-          <WifiDialog live={wifiLive()} busy={busy()} aps={aps()} scanning={scanning()} onScan={() => void scanWifi()} onConnect={connectWifi} onCancel={() => setAdding(null)} />
+          <WifiDialog live={wifiLive()} busy={busy()} enabled={wifiEnabled()} aps={aps()} scanning={scanning()} onScan={() => void scanWifi()} onToggleRadio={toggleRadio} onConnect={connectWifi} onCancel={() => setAdding(null)} />
         </Show>
 
         <div class="wash-net-list">
@@ -756,6 +769,7 @@ const STYLE = `
 .wash-net-member { font-size:12px; display:flex; gap:4px; align-items:center; }
 .wash-net-wifi-scan { margin:4px 0 10px; }
 .wash-net-wifi-scanhead { display:flex; align-items:center; justify-content:space-between; }
+.wash-net-wifi-off { display:flex; align-items:center; gap:10px; padding:8px 0; }
 .wash-net-aplist { display:flex; flex-direction:column; gap:3px; max-height:160px; overflow:auto; margin-top:4px; }
 .wash-net-ap { display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%;
   background:#15152a; color:#eee; border:1px solid #2a2a3a; border-radius:4px; padding:5px 9px; font:inherit; cursor:pointer; text-align:left; }

@@ -44,6 +44,11 @@ type WifiRuntime interface {
 	// manager. It never errors — absence of nmcli or NM ⇒ (false, false), so the
 	// FE simply hides the wifi UI.
 	Detect() (radioPresent, nmLive bool)
+	// Enabled reports NM's software wifi switch (a radio can be present but
+	// switched off — then scanning is refused). SetEnabled flips it; it needs
+	// polkit, so it's driven through the escalation like Connect/Forget.
+	Enabled(ctx context.Context) bool
+	SetEnabled(ctx context.Context, on bool) (string, error)
 	Scan(ctx context.Context) ([]AP, error)
 	Status(ctx context.Context) ([]WifiConn, error)
 	Connect(ctx context.Context, ssid, security, psk string, hidden bool) (string, error)
@@ -77,6 +82,21 @@ func (l *Live) Detect() (radioPresent, nmLive bool) {
 	out, err := l.run.runStdout(context.Background(), "nmcli", "-t", "-f", "STATE", "general", "status")
 	nmLive = err == nil && strings.TrimSpace(out) != ""
 	return radioPresent, nmLive
+}
+
+// Enabled reads NM's software wifi switch (WIFI column of `general status`).
+func (l *Live) Enabled(ctx context.Context) bool {
+	out, err := l.run.runStdout(ctx, "nmcli", "-t", "-f", "WIFI", "general", "status")
+	return err == nil && strings.TrimSpace(out) == "enabled"
+}
+
+// SetEnabled flips NM's software wifi switch (privileged: polkit).
+func (l *Live) SetEnabled(ctx context.Context, on bool) (string, error) {
+	state := "off"
+	if on {
+		state = "on"
+	}
+	return l.run.run(ctx, "nmcli", "radio", "wifi", state)
 }
 
 // Scan rescans (best-effort — NM rate-limits it on fast polls) then lists. The
