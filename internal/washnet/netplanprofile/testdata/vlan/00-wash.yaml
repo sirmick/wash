@@ -1,0 +1,11 @@
+network:
+    version: 2
+    ethernets:
+        eth0: {}
+    vlans:
+        eth0.10:
+            dhcp4: false
+            addresses:
+                - 10.10.10.1/24
+            id: 10
+            link: eth0

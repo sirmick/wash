@@ -1,0 +1,4 @@
+auto eth0.10
+iface eth0.10 inet static
+    address 10.10.10.1/24
+    vlan-raw-device eth0

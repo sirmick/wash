@@ -30,6 +30,12 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")" && pwd)"
 cd "$REPO"
 
+# Admin tools netd shells to (netplan, ip, ifup) live in /usr/sbin, which a
+# desktop login's PATH often omits. The dev router runs netd as the user (a
+# real deploy runs it as root, where sbin is present), so add sbin here — else
+# netplan/ifupdown autodetect can't find their binaries. (docs/NET-BACKENDS.md)
+export PATH="/usr/sbin:/sbin:$PATH"
+
 mode=standalone
 do_build=1
 listen="0.0.0.0:11000"

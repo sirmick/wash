@@ -1,0 +1,13 @@
+config interface 'wg0'
+	option proto 'wireguard'
+	option private_key 'aPrivateKeyBase64Encoded000000000000000000='
+	option listen_port '51820'
+	list addresses '10.9.0.1/24'
+
+config wireguard_peer 'phone'
+	option interface 'wg0'
+	option public_key 'aPeerPublicKeyBase64Encoded00000000000000000='
+	list allowed_ips '10.9.0.2/32'
+	option endpoint_host 'vpn.example.com'
+	option endpoint_port '51820'
+	option persistent_keepalive '25'
