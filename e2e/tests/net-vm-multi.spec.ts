@@ -29,9 +29,11 @@ test('eth(DHCP) + bridge(eth1,eth2) + vlan(eth3.100): real NM accepts all three'
   await expect(page.locator('wash-app-session')).toBeVisible({ timeout: 40_000 });
   await expect(page.locator('#spec')).toContainText('served from VM', { timeout: 40_000 });
 
-  // Launch Network from the VM-served catalog.
-  await page.locator('[title="Apps"]').click();
-  await page.locator('[data-testid="start-menu-com.wash.net"]').click();
+  // Network is hidden from the start-menu catalog (manifest.Hidden); launch it
+  // the supported way — the sidebar's Network section → Configure…, which
+  // spawn.requests com.wash.net (spawn works for hidden apps).
+  await page.locator('[data-testid="sidebar-section-header-net"]').click();
+  await page.locator('[data-testid="net-configure"]').click();
   const net = page.locator('wash-app-net');
   await expect(net).toBeVisible({ timeout: 20_000 });
   // +Ethernet enables once the mount-time `current` round-trip to in-guest netd

@@ -100,6 +100,55 @@ test.describe('net app (kiosk, host-side full stack)', () => {
   });
 });
 
+// Wi-Fi exercises the full windowed path FE → com.wash.net → com.wash.netd for
+// the wifi_* kinds, which the config-flow tests above never touch. This is the
+// regression net for the relay bug where com.wash.net's proxy only forwarded the
+// config kinds, so every wifi_scan/wifi_radio silently died in the windowed app
+// (15s timeout, dead scan) — green here only if the transparent relay carries
+// them. netd uses the deterministic fake wifi runtime (WASH_NETD_WIFI); the real
+// nmcli path is covered in the VM gate.
+test.describe('net app wifi (kiosk, full FE→net→netd relay)', () => {
+  test.describe('radio switched off', () => {
+    test.use({ routerOpts: { kiosk: 'com.wash.net', apps: ['net', 'netd'], extraEnv: { WASH_NETD_WIFI: 'off' } } });
+
+    test('scan reports disabled → "Turn on Wi-Fi" toggle appears', async ({ page, router }) => {
+      await page.goto(router.url);
+      const net = page.locator('wash-app-net');
+      await expect(net).toBeVisible();
+
+      // +Wi-Fi shows once caps (wireless/wifi-iface) + radio arrive from netd's
+      // `current`; clicking it opens the dialog, whose scan poll fires wifi_scan.
+      const addWifi = net.locator('[data-testid="add-wifi"]');
+      await expect(addWifi).toBeEnabled();
+      await addWifi.click();
+      await expect(net.locator('[data-testid="wifi-dialog"]')).toBeVisible();
+
+      // The toggle is shown ONLY when wifi_scan round-tripped and returned
+      // enabled:false — wifiEnabled defaults true, so its flip is proof the relay
+      // delivered the scan reply. A dropped relay leaves the scan UI up forever.
+      await expect(net.locator('[data-testid="wifi-radio-on"]')).toBeVisible();
+    });
+  });
+
+  test.describe('radio enabled with an AP', () => {
+    test.use({ routerOpts: { kiosk: 'com.wash.net', apps: ['net', 'netd'], extraEnv: { WASH_NETD_WIFI: 'on' } } });
+
+    test('scan returns the AP → picker lists it', async ({ page, router }) => {
+      await page.goto(router.url);
+      const net = page.locator('wash-app-net');
+      await expect(net).toBeVisible();
+
+      await net.locator('[data-testid="add-wifi"]').click();
+      await expect(net.locator('[data-testid="wifi-dialog"]')).toBeVisible();
+
+      // The fake's single AP can only appear here if wifi_scan relayed and its
+      // reply carried the AP list back through com.wash.net to the FE.
+      await expect(net.locator('[data-testid="ap-wash-e2e"]')).toBeVisible();
+      await expect(net.locator('[data-testid="wifi-radio-on"]')).toHaveCount(0);
+    });
+  });
+});
+
 test.describe('net app addressing (kiosk)', () => {
   test.use({ routerOpts: { kiosk: 'com.wash.net', apps: ['net', 'netd'] } });
 
