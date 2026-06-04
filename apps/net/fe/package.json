@@ -9,6 +9,7 @@
     "gen": "cd ../../.. && go run ./cmd/washnet-uigen -out apps/net/fe/src/generated"
   },
   "dependencies": {
+    "@noble/curves": "^2.2.0",
     "@wash/ui": "workspace:*",
     "solid-js": "^1.9.13"
   },

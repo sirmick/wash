@@ -126,6 +126,12 @@ test.describe('net app wireguard (kiosk, full FE→net→netd)', () => {
     await net.locator('[data-testid="wg-genkey"]').click();
     expect(await net.locator('[data-testid="wg-privkey"]').inputValue()).not.toBe(key1);
 
+    // The public key is derived in-browser (Curve25519) from the private key — a
+    // known key gives a deterministic pubkey (RFC-7748-verified derivation), so
+    // the user can hand it to peers without applying first.
+    await net.locator('[data-testid="wg-privkey"]').fill('yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=');
+    await expect(net.locator('[data-testid="wg-pubkey"]')).toHaveValue('HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=');
+
     await net.locator('[data-testid="wg-addresses"]').fill('10.9.0.1/24');
     await net.locator('[data-testid="wg-peer-pubkey-0"]').fill('aGVsbG93aXJlZ3VhcmRwdWJrZXlnb2VzaGVyZT0=');
     await net.locator('[data-testid="wg-peer-allowed-0"]').fill('10.9.0.2/32');
@@ -145,6 +151,49 @@ test.describe('net app wireguard (kiosk, full FE→net→netd)', () => {
     await net.locator('[data-testid="keep-button"]').click();
     await expect(net.locator('.wash-net-status')).toHaveText('committed');
     await expect(net.locator('[data-testid="conn-wg0"]')).toHaveAttribute('data-status', 'clean');
+  });
+
+  test('import a wg-quick config (QR contents) fills the whole form', async ({ page, router }) => {
+    await page.goto(router.url);
+    const net = page.locator('wash-app-net');
+    await expect(net).toBeVisible();
+    await net.locator('[data-testid="add-wireguard"]').click();
+    await expect(net.locator('[data-testid="wireguard-wizard"]')).toBeVisible();
+
+    // The exact text a WireGuard QR code encodes (and a .conf file holds).
+    const conf = [
+      '[Interface]',
+      'PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=',
+      'Address = 10.9.0.2/24, fd00::2/64',
+      'ListenPort = 51821',
+      'DNS = 1.1.1.1',
+      '',
+      '[Peer]',
+      'PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=',
+      'PresharedKey = c29tZXByZXNoYXJlZGtleWZvcndndGVzdA==',
+      'Endpoint = vpn.example.com:51820',
+      'AllowedIPs = 0.0.0.0/0, ::/0',
+      'PersistentKeepalive = 25',
+    ].join('\n');
+    await net.locator('[data-testid="wg-import-text"]').fill(conf);
+    await net.locator('[data-testid="wg-import-apply"]').click();
+
+    // [Interface] → the interface fields (and the derived public key).
+    await expect(net.locator('[data-testid="wg-privkey"]')).toHaveValue('yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=');
+    await expect(net.locator('[data-testid="wg-pubkey"]')).toHaveValue('HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=');
+    await expect(net.locator('[data-testid="wg-addresses"]')).toHaveValue('10.9.0.2/24, fd00::2/64');
+    await expect(net.locator('[data-testid="wg-listenport"]')).toHaveValue('51821');
+    // [Peer] → the peer row (endpoint split into host/port).
+    await expect(net.locator('[data-testid="wg-peer-pubkey-0"]')).toHaveValue('xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=');
+    await expect(net.locator('[data-testid="wg-peer-psk-0"]')).toHaveValue('c29tZXByZXNoYXJlZGtleWZvcndndGVzdA==');
+    await expect(net.locator('[data-testid="wg-peer-host-0"]')).toHaveValue('vpn.example.com');
+    await expect(net.locator('[data-testid="wg-peer-port-0"]')).toHaveValue('51820');
+    await expect(net.locator('[data-testid="wg-peer-allowed-0"]')).toHaveValue('0.0.0.0/0, ::/0');
+    await expect(net.locator('[data-testid="wg-peer-keepalive-0"]')).toHaveValue('25');
+
+    // …and it's immediately creatable from the imported config.
+    await net.locator('[data-testid="wg-create"]').click();
+    await expect(net.locator('[data-testid="conn-wg0"]')).toHaveAttribute('data-status', 'new');
   });
 });
 
