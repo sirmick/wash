@@ -132,7 +132,20 @@ func lastLines(s string, n int) string {
 // applyScenarioNetworkd is the same shape as the NM apply test: bridge eth1+eth2
 // into br0 with a static IP, and a VLAN on eth3 — proving wash renders + applies
 // real bridging/VLAN/addressing through systemd-networkd.
+//
+// Unlike NM (per-connection, which leaves links it isn't given alone), the
+// networkd backend OWNS /etc/systemd/network and rewrites it wholesale on apply
+// — so the target must be COMPLETE. It therefore carries eth0's DHCP uplink (the
+// box's default-route holder); omitting it would deconfigure eth0, sever the
+// route, and trip the commit-confirm lock-out auto-revert. This mirrors the real
+// read→edit→apply loop, where the FE always applies Live()+edits (and networkd's
+// Live() reads exactly this eth0 DHCP from the image's 90-wash-default seed),
+// never a partial config.
 const applyScenarioNetworkd = `
+config interface 'wan'
+	option device 'eth0'
+	option proto 'dhcp'
+
 config interface 'lan'
 	option device 'br0'
 	option proto 'static'
