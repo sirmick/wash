@@ -11,6 +11,7 @@
 
 import { createEffect, createMemo, createSignal, onCleanup, onMount, For, Show } from "solid-js";
 import { defineWashApp, washAssetUrl, type WashAppProps } from "@wash/ui";
+import { x25519 } from "@noble/curves/ed25519.js";
 
 import { ApplyTerminal, type ApplyEvent } from "./ApplyTerminal.tsx";
 import { WifiDialog, type AP } from "./WifiDialog.tsx";
@@ -63,6 +64,67 @@ const genWGPrivateKey = (): string => {
   crypto.getRandomValues(k);
   k[0] &= 248; k[31] &= 127; k[31] |= 64;
   return btoa(String.fromCharCode(...k));
+};
+const b64ToBytes = (s: string): Uint8Array => Uint8Array.from(atob(s.trim()), (c) => c.charCodeAt(0));
+// wgPublicKey derives the Curve25519 public key from a base64 private key the
+// way `wg pubkey` does (scalar-mult against the base point, RFC-7748 clamping).
+// Returns "" on any malformed key so the field just blanks out as you type.
+const wgPublicKey = (privB64: string): string => {
+  try {
+    const priv = b64ToBytes(privB64);
+    if (priv.length !== 32) return "";
+    return btoa(String.fromCharCode(...x25519.getPublicKey(priv)));
+  } catch { return ""; }
+};
+
+// PeerForm is the wizard's editable shape for one peer (strings throughout, so
+// number fields can be empty). parseWgConf returns the same shape so an imported
+// config drops straight in.
+type PeerForm = { publicKey: string; presharedKey: string; endpointHost: string; endpointPort: string; allowedIPs: string; keepalive: string };
+type WgImport = { privKey?: string; listenPort?: string; addresses?: string; dns?: string; peers: PeerForm[] };
+const blankPeer = (): PeerForm => ({ publicKey: "", presharedKey: "", endpointHost: "", endpointPort: "", allowedIPs: "", keepalive: "" });
+
+// splitEndpoint splits host:port, handling a bracketed IPv6 literal.
+const splitEndpoint = (s: string): { host: string; port: string } => {
+  const v6 = /^\[(.+)\]:(\d+)$/.exec(s);
+  if (v6) return { host: v6[1], port: v6[2] };
+  const i = s.lastIndexOf(":");
+  return i >= 0 ? { host: s.slice(0, i), port: s.slice(i + 1) } : { host: s, port: "" };
+};
+
+// parseWgConf reads a standard wg-quick config — the exact text a WireGuard QR
+// code encodes: one [Interface] section plus one or more [Peer] sections. Keys
+// match case-insensitively; comments (# or ;) and unknown keys are ignored.
+const parseWgConf = (text: string): WgImport => {
+  const out: WgImport = { peers: [] };
+  let section = "";
+  let peer: PeerForm | null = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/[#;].*$/, "").trim();
+    if (!line) continue;
+    const sec = /^\[(\w+)\]$/.exec(line);
+    if (sec) {
+      section = sec[1].toLowerCase();
+      if (section === "peer") { peer = blankPeer(); out.peers.push(peer); }
+      continue;
+    }
+    const kv = /^([A-Za-z]+)\s*=\s*(.*)$/.exec(line);
+    if (!kv) continue;
+    const key = kv[1].toLowerCase(), val = kv[2].trim();
+    if (section === "interface") {
+      if (key === "privatekey") out.privKey = val;
+      else if (key === "listenport") out.listenPort = val;
+      else if (key === "address") out.addresses = val;
+      else if (key === "dns") out.dns = val;
+    } else if (section === "peer" && peer) {
+      if (key === "publickey") peer.publicKey = val;
+      else if (key === "presharedkey") peer.presharedKey = val;
+      else if (key === "allowedips") peer.allowedIPs = val;
+      else if (key === "persistentkeepalive") peer.keepalive = val;
+      else if (key === "endpoint") { const e = splitEndpoint(val); peer.endpointHost = e.host; peer.endpointPort = e.port; }
+    }
+  }
+  return out;
 };
 type Interface = { Name: string; Device?: string; Proto?: Proto };
 type Device = { Name: string; Type?: string; Ports?: string[]; Ifname?: string; VID?: number };
@@ -746,19 +808,33 @@ function BridgeWizard(props: { members: string[]; onCancel: () => void; onCreate
 // public key on apply). Each peer needs at least a public key; empty peer rows
 // are dropped on create.
 function WireGuardWizard(props: { onCancel: () => void; onCreate: (name: string, proto: Proto, peers: WGPeer[]) => void }) {
-  type PeerForm = { publicKey: string; endpointHost: string; endpointPort: string; allowedIPs: string; keepalive: string };
-  const blankPeer = (): PeerForm => ({ publicKey: "", endpointHost: "", endpointPort: "", allowedIPs: "", keepalive: "" });
   const [name, setName] = createSignal("wg0");
   const [privKey, setPrivKey] = createSignal(genWGPrivateKey());
   const [listenPort, setListenPort] = createSignal("");
   const [addresses, setAddresses] = createSignal("");
   const [peers, setPeers] = createSignal<PeerForm[]>([blankPeer()]);
+  const [importText, setImportText] = createSignal("");
+  const [importErr, setImportErr] = createSignal("");
+  let fileInput: HTMLInputElement | undefined;
 
+  const pubKey = () => wgPublicKey(privKey());
   const csv = (s: string): string[] => s.split(",").map((x) => x.trim()).filter(Boolean);
   const peerFilled = (p: PeerForm) => !!(p.publicKey || p.endpointHost || p.allowedIPs);
   const setPeer = (i: number, patch: Partial<PeerForm>) => setPeers((ps) => ps.map((p, j) => (j === i ? { ...p, ...patch } : p)));
   // A peer that has any field filled must carry a public key (the one required field).
   const canCreate = () => !!name() && !!privKey() && peers().every((p) => !peerFilled(p) || p.publicKey.trim() !== "");
+
+  // applyImport fills the whole form from a pasted/loaded wg-quick config — the
+  // exact text a WireGuard QR code encodes — so "scan on phone, paste here" works.
+  const applyImport = (text: string) => {
+    const c = parseWgConf(text);
+    if (!c.privKey && !c.peers.length) { setImportErr("No [Interface]/[Peer] found — is this a WireGuard config?"); return; }
+    setImportErr("");
+    if (c.privKey) setPrivKey(c.privKey);
+    if (c.listenPort) setListenPort(c.listenPort);
+    if (c.addresses) setAddresses(c.addresses);
+    setPeers(c.peers.length ? c.peers : [blankPeer()]);
+  };
 
   const create = () => {
     const proto: Proto = { _tag: "wireguard", PrivateKey: privKey() };
@@ -767,6 +843,7 @@ function WireGuardWizard(props: { onCancel: () => void; onCreate: (name: string,
     if (addrs.length) proto.Addresses = addrs;
     const built: WGPeer[] = peers().filter(peerFilled).map((p, i) => {
       const peer: WGPeer = { Name: `${name()}_peer${i}`, Interface: name(), PublicKey: p.publicKey.trim() };
+      if (p.presharedKey.trim()) peer.PresharedKey = p.presharedKey.trim();
       if (p.endpointHost.trim()) peer.EndpointHost = p.endpointHost.trim();
       if (p.endpointPort.trim()) peer.EndpointPort = parseInt(p.endpointPort, 10);
       const aips = csv(p.allowedIPs);
@@ -780,6 +857,20 @@ function WireGuardWizard(props: { onCancel: () => void; onCreate: (name: string,
   return (
     <div class="wash-net-wizard" data-testid="wireguard-wizard">
       <div class="wash-net-wizard-title">New WireGuard tunnel</div>
+
+      <div class="wash-net-wg-import">
+        <textarea data-testid="wg-import-text" class="wash-net-wg-importbox" rows="3"
+          placeholder="Paste a WireGuard config (a QR code's contents), or load a .conf file — it fills in everything below."
+          value={importText()} onInput={(e) => setImportText(e.currentTarget.value)} />
+        <div class="wash-net-wg-importbar">
+          <button type="button" class="wash-net-btn ghost" data-testid="wg-import-file" onClick={() => fileInput?.click()}>Load .conf…</button>
+          <input ref={fileInput} type="file" accept=".conf,text/plain" style={{ display: "none" }}
+            onChange={(e) => { const f = e.currentTarget.files?.[0]; if (f) void f.text().then(applyImport); e.currentTarget.value = ""; }} />
+          <button type="button" class="wash-net-btn" data-testid="wg-import-apply" disabled={!importText().trim()} onClick={() => applyImport(importText())}>Import</button>
+          <Show when={importErr()}><span class="wash-net-wg-importerr" data-testid="wg-import-err">{importErr()}</span></Show>
+        </div>
+      </div>
+
       <label class="wash-net-field">
         <span class="wash-net-label">Name</span>
         <input data-testid="wg-name" value={name()} onInput={(e) => setName(e.currentTarget.value)} />
@@ -789,6 +880,13 @@ function WireGuardWizard(props: { onCancel: () => void; onCreate: (name: string,
         <span class="wash-net-wg-key">
           <input data-testid="wg-privkey" type="password" value={privKey()} onInput={(e) => setPrivKey(e.currentTarget.value)} />
           <button type="button" class="wash-net-btn ghost" data-testid="wg-genkey" onClick={() => setPrivKey(genWGPrivateKey())}>Generate</button>
+        </span>
+      </label>
+      <label class="wash-net-field">
+        <span class="wash-net-label">Public key</span>
+        <span class="wash-net-wg-key">
+          <input data-testid="wg-pubkey" readOnly value={pubKey()} placeholder="(derived from the private key)" />
+          <button type="button" class="wash-net-btn ghost" data-testid="wg-copy-pubkey" disabled={!pubKey()} onClick={() => void navigator.clipboard?.writeText(pubKey())}>Copy</button>
         </span>
       </label>
       <label class="wash-net-field">
@@ -806,6 +904,8 @@ function WireGuardWizard(props: { onCancel: () => void; onCreate: (name: string,
           <div class="wash-net-wg-peer" data-testid={`wg-peer-${i()}`}>
             <label class="wash-net-field"><span class="wash-net-label">Public key</span>
               <input data-testid={`wg-peer-pubkey-${i()}`} value={p.publicKey} onInput={(e) => setPeer(i(), { publicKey: e.currentTarget.value })} /></label>
+            <label class="wash-net-field"><span class="wash-net-label">Preshared key</span>
+              <input data-testid={`wg-peer-psk-${i()}`} type="password" placeholder="optional" value={p.presharedKey} onInput={(e) => setPeer(i(), { presharedKey: e.currentTarget.value })} /></label>
             <label class="wash-net-field"><span class="wash-net-label">Endpoint</span>
               <span class="wash-net-wg-endpoint">
                 <input data-testid={`wg-peer-host-${i()}`} placeholder="host" value={p.endpointHost} onInput={(e) => setPeer(i(), { endpointHost: e.currentTarget.value })} />
@@ -892,6 +992,12 @@ const STYLE = `
 .wash-net-wg-endpoint input:first-child { flex:1; min-width:0; }
 .wash-net-wg-endpoint input:last-child { width:72px; }
 .wash-net-wg-peer { border:1px solid #2a2a3a; border-radius:4px; padding:6px 8px; margin:4px 0; }
+.wash-net-wg-import { display:flex; flex-direction:column; gap:6px; margin:4px 0 8px; padding:8px;
+  background:#15151f; border:1px solid #2a2a3a; border-radius:4px; }
+.wash-net-wg-importbox { width:100%; box-sizing:border-box; resize:vertical; font:11px ui-monospace,Menlo,Consolas,monospace;
+  background:#101018; color:#cfd0d4; border:1px solid #2a2a3a; border-radius:3px; padding:5px 6px; }
+.wash-net-wg-importbar { display:flex; align-items:center; gap:6px; }
+.wash-net-wg-importerr { color:#e0a0a0; font-size:11px; }
 .wash-net-addressing .wash-net-group { margin:0 0 6px; }
 .wash-net-member { font-size:12px; display:flex; gap:4px; align-items:center; }
 .wash-net-wifi-scan { margin:4px 0 10px; }

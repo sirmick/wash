@@ -234,6 +234,9 @@ importers:
 
   apps/net/fe:
     dependencies:
+      '@noble/curves':
+        specifier: ^2.2.0
+        version: 2.2.0
       '@wash/ui':
         specifier: workspace:*
         version: link:../../../web/lib
