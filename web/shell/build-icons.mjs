@@ -42,6 +42,20 @@ const ICONS = [
   'bell',           // sidebar Notifications widget
   'lock',           // priv widget lock-state indicator
   'unlock',         // priv widget unlock-state indicator
+
+  // wash-net app chrome (the Network app pulls these from the shared sprite
+  // rather than inlining its own copies — one icon source).
+  'plus',           // add-* buttons
+  'ethernet-port',  // + Ethernet
+  'git-branch',     // + VLAN
+  'git-merge',      // + Bridge
+  'shield',         // + WireGuard
+  'wifi',           // + Wi-Fi
+  'trash',          // remove connection / peer
+  'pencil',         // edit connection
+  'check',          // confirm inline edit
+  'x',              // cancel inline edit
+  'undo-2',         // undo a staged change
 ];
 
 // Resolve via require so pnpm's nested layout is fine.

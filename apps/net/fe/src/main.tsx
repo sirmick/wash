@@ -10,7 +10,7 @@
 // netd validate → apply (commit-confirm) → the box.
 
 import { createEffect, createMemo, createSignal, onCleanup, onMount, For, Show } from "solid-js";
-import { defineWashApp, type WashAppProps } from "@wash/ui";
+import { defineWashApp, washAssetUrl, type WashAppProps } from "@wash/ui";
 
 import { ApplyTerminal, type ApplyEvent } from "./ApplyTerminal.tsx";
 import { WifiDialog, type AP } from "./WifiDialog.tsx";
@@ -98,26 +98,15 @@ const protoLabel = (p?: Proto): string => {
   }
 };
 
-// Inline lucide icons (the shared chrome sprite is lucide too, but carries none
-// of the networking glyphs we need). Each entry is the icon's inner SVG markup.
-const ICONS: Record<string, string> = {
-  plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
-  ethernet: '<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>',
-  "git-branch": '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
-  "git-merge": '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
-  trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
-  pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
-  check: '<path d="M20 6 9 17l-5-5"/>',
-  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
-  undo: '<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>',
-  wifi: '<path d="M12 20h.01"/><path d="M2 8.82a15 15 0 0 1 20 0"/><path d="M5 12.859a10 10 0 0 1 14 0"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/>',
-  shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>',
-};
-function Icon(p: { name: keyof typeof ICONS | string; size?: number }) {
+// Icon pulls lucide glyphs from the shared shell sprite (/icons.svg) by symbol
+// id — the same source the session sidebar uses — instead of inlining per-app
+// copies. The networking glyphs are registered in web/shell/build-icons.mjs.
+function Icon(p: { name: string; size?: number }) {
   return (
-    <svg class="wash-net-ico" width={p.size ?? 14} height={p.size ?? 14} viewBox="0 0 24 24"
-      fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-      innerHTML={ICONS[p.name] ?? ""} />
+    <svg class="wash-net-ico" width={p.size ?? 14} height={p.size ?? 14}
+      fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <use href={washAssetUrl(`icons.svg#${p.name}`)} />
+    </svg>
   );
 }
 
@@ -482,7 +471,7 @@ function NetApp(props: WashAppProps) {
       <style>{STYLE}</style>
       <header class="wash-net-head">
         <div class="wash-net-add">
-          <button data-testid="add-ethernet" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setConfigureDevice(""); setAdding("ethernet"); }}><Icon name="ethernet" /> Ethernet</button>
+          <button data-testid="add-ethernet" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setConfigureDevice(""); setAdding("ethernet"); }}><Icon name="ethernet-port" /> Ethernet</button>
           <button data-testid="add-vlan" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("vlan")} onClick={() => setAdding("vlan")}><Icon name="git-branch" /> VLAN</button>
           <button data-testid="add-bridge" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("bridge")} onClick={() => setAdding("bridge")}><Icon name="git-merge" /> Bridge</button>
           <Show when={can("wireguard")}>
@@ -581,7 +570,7 @@ function NetApp(props: WashAppProps) {
                   <span class="wash-net-badge" data-badge="removed">removed</span>
                 </div>
                 <div class="wash-net-conn-actions">
-                  <button class="wash-net-btn ghost" disabled={busy()} onClick={() => undoRemove(iface)}><Icon name="undo" /> Undo</button>
+                  <button class="wash-net-btn ghost" disabled={busy()} onClick={() => undoRemove(iface)}><Icon name="undo-2" /> Undo</button>
                 </div>
               </div>
             )}
