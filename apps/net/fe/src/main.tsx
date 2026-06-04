@@ -46,13 +46,34 @@ type Proto = {
   _tag: string;
   IPAddr?: string; Gateway?: string; IP6Addr?: string; IP6Gw?: string; DNS?: string[];
   Hostname?: string; IPv4?: boolean; IPv6?: boolean;
+  // wireguard variant: the local tunnel endpoint (the peer set lives in
+  // Config.WGPeers, a separate kind keyed by this interface's Name).
+  PrivateKey?: string; ListenPort?: number; Addresses?: string[];
 };
 // DHCP defaults to requesting both families; picking the method seeds these so
 // the v4/v6 checkboxes render on.
 const dhcpDefault = (): Proto => ({ _tag: "dhcp", IPv4: true, IPv6: true });
+
+// genWGPrivateKey makes a Curve25519 private key the way `wg genkey` does: 32
+// random bytes with the standard clamp, base64-encoded. We only generate the
+// PRIVATE key — the backend (nmcli / networkd) derives our public key from it on
+// apply, so no in-browser scalar-mult is needed.
+const genWGPrivateKey = (): string => {
+  const k = new Uint8Array(32);
+  crypto.getRandomValues(k);
+  k[0] &= 248; k[31] &= 127; k[31] |= 64;
+  return btoa(String.fromCharCode(...k));
+};
 type Interface = { Name: string; Device?: string; Proto?: Proto };
 type Device = { Name: string; Type?: string; Ports?: string[]; Ifname?: string; VID?: number };
-type Config = { Interfaces?: Interface[]; Devices?: Device[]; Radios?: any[]; SSIDs?: any[]; [k: string]: any };
+// WGPeer mirrors the model's network/wireguard_peer kind (one remote endpoint of
+// a WireGuard tunnel; Interface refs the local wg interface by Name).
+type WGPeer = {
+  Name: string; Interface: string; PublicKey?: string; PresharedKey?: string;
+  AllowedIPs?: string[]; EndpointHost?: string; EndpointPort?: number;
+  PersistentKeepalive?: number; RouteAllowedIPs?: boolean;
+};
+type Config = { Interfaces?: Interface[]; Devices?: Device[]; WGPeers?: WGPeer[]; Radios?: any[]; SSIDs?: any[]; [k: string]: any };
 // WifiConn mirrors netd's wifi_status row (an active 802-11-wireless connection).
 type WifiConn = { name: string; device: string };
 // Caps mirrors netd's generic capability wire (docs/NET.md §2.7): the supported
@@ -90,6 +111,7 @@ const ICONS: Record<string, string> = {
   x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
   undo: '<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>',
   wifi: '<path d="M12 20h.01"/><path d="M2 8.82a15 15 0 0 1 20 0"/><path d="M5 12.859a10 10 0 0 1 14 0"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/>',
+  shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>',
 };
 function Icon(p: { name: keyof typeof ICONS | string; size?: number }) {
   return (
@@ -106,7 +128,7 @@ function NetApp(props: WashAppProps) {
   const can = (f: string) => caps().features.has(f);
   const canKind = (k: string) => caps().kinds.has(k);
   const [links, setLinks] = createSignal<string[]>([]); // physical NICs from the backend
-  const [adding, setAdding] = createSignal<null | "ethernet" | "vlan" | "bridge" | "wifi">(null);
+  const [adding, setAdding] = createSignal<null | "ethernet" | "vlan" | "bridge" | "wifi" | "wireguard">(null);
 
   // Wifi gating + state. wifiCapable shows the +Wifi button (the renderer can
   // express wifi AND a radio is present); wifiLive enables the live scan/connect
@@ -396,6 +418,19 @@ function NetApp(props: WashAppProps) {
     });
     setAdding(null);
   };
+  // addWireGuard stages a WireGuard tunnel: the local interface (proto carries
+  // the private key / listen port / tunnel addresses) plus its peers, which live
+  // in the separate WGPeers kind and ref the interface by Name. The wg device is
+  // named after the interface itself (no physical NIC).
+  const addWireGuard = (name: string, proto: Proto, peers: WGPeer[]) => {
+    setDraft((d) => {
+      const next = structuredClone(d);
+      next.Interfaces = [...(next.Interfaces ?? []), { Name: name, Device: name, Proto: proto }];
+      next.WGPeers = [...(next.WGPeers ?? []), ...peers.map((p) => ({ ...p, Interface: name }))];
+      return next;
+    });
+    setAdding(null);
+  };
 
   // Poll the scan while the dialog is open on an NM-live box (~2.5s; the effect
   // re-runs when `adding` changes and onCleanup clears the interval on close).
@@ -450,6 +485,9 @@ function NetApp(props: WashAppProps) {
           <button data-testid="add-ethernet" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setConfigureDevice(""); setAdding("ethernet"); }}><Icon name="ethernet" /> Ethernet</button>
           <button data-testid="add-vlan" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("vlan")} onClick={() => setAdding("vlan")}><Icon name="git-branch" /> VLAN</button>
           <button data-testid="add-bridge" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("bridge")} onClick={() => setAdding("bridge")}><Icon name="git-merge" /> Bridge</button>
+          <Show when={can("wireguard")}>
+            <button data-testid="add-wireguard" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => setAdding("wireguard")}><Icon name="shield" /> WireGuard</button>
+          </Show>
           <Show when={wifiCapable()}>
             <button data-testid="add-wifi" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => setAdding("wifi")}><Icon name="wifi" /> Wi-Fi</button>
           </Show>
@@ -471,6 +509,9 @@ function NetApp(props: WashAppProps) {
         </Show>
         <Show when={adding() === "bridge"}>
           <BridgeWizard members={freeDevices()} onCancel={() => setAdding(null)} onCreate={addBridge} />
+        </Show>
+        <Show when={adding() === "wireguard"}>
+          <WireGuardWizard onCancel={() => setAdding(null)} onCreate={addWireGuard} />
         </Show>
         <Show when={adding() === "wifi"}>
           <WifiDialog live={wifiLive()} busy={busy()} enabled={wifiEnabled()} aps={aps()} scanning={scanning()} onScan={() => void scanWifi()} onToggleRadio={toggleRadio} onConnect={connectWifi} onCancel={() => setAdding(null)} />
@@ -710,6 +751,97 @@ function BridgeWizard(props: { members: string[]; onCancel: () => void; onCreate
   );
 }
 
+// WireGuardWizard builds a WG tunnel: the local endpoint (name + private key +
+// optional listen port + tunnel addresses) and a list of peers. The private key
+// seeds generated; only the PRIVATE key is needed here (the backend derives our
+// public key on apply). Each peer needs at least a public key; empty peer rows
+// are dropped on create.
+function WireGuardWizard(props: { onCancel: () => void; onCreate: (name: string, proto: Proto, peers: WGPeer[]) => void }) {
+  type PeerForm = { publicKey: string; endpointHost: string; endpointPort: string; allowedIPs: string; keepalive: string };
+  const blankPeer = (): PeerForm => ({ publicKey: "", endpointHost: "", endpointPort: "", allowedIPs: "", keepalive: "" });
+  const [name, setName] = createSignal("wg0");
+  const [privKey, setPrivKey] = createSignal(genWGPrivateKey());
+  const [listenPort, setListenPort] = createSignal("");
+  const [addresses, setAddresses] = createSignal("");
+  const [peers, setPeers] = createSignal<PeerForm[]>([blankPeer()]);
+
+  const csv = (s: string): string[] => s.split(",").map((x) => x.trim()).filter(Boolean);
+  const peerFilled = (p: PeerForm) => !!(p.publicKey || p.endpointHost || p.allowedIPs);
+  const setPeer = (i: number, patch: Partial<PeerForm>) => setPeers((ps) => ps.map((p, j) => (j === i ? { ...p, ...patch } : p)));
+  // A peer that has any field filled must carry a public key (the one required field).
+  const canCreate = () => !!name() && !!privKey() && peers().every((p) => !peerFilled(p) || p.publicKey.trim() !== "");
+
+  const create = () => {
+    const proto: Proto = { _tag: "wireguard", PrivateKey: privKey() };
+    if (listenPort().trim()) proto.ListenPort = parseInt(listenPort(), 10);
+    const addrs = csv(addresses());
+    if (addrs.length) proto.Addresses = addrs;
+    const built: WGPeer[] = peers().filter(peerFilled).map((p, i) => {
+      const peer: WGPeer = { Name: `${name()}_peer${i}`, Interface: name(), PublicKey: p.publicKey.trim() };
+      if (p.endpointHost.trim()) peer.EndpointHost = p.endpointHost.trim();
+      if (p.endpointPort.trim()) peer.EndpointPort = parseInt(p.endpointPort, 10);
+      const aips = csv(p.allowedIPs);
+      if (aips.length) peer.AllowedIPs = aips;
+      if (p.keepalive.trim()) peer.PersistentKeepalive = parseInt(p.keepalive, 10);
+      return peer;
+    });
+    props.onCreate(name(), proto, built);
+  };
+
+  return (
+    <div class="wash-net-wizard" data-testid="wireguard-wizard">
+      <div class="wash-net-wizard-title">New WireGuard tunnel</div>
+      <label class="wash-net-field">
+        <span class="wash-net-label">Name</span>
+        <input data-testid="wg-name" value={name()} onInput={(e) => setName(e.currentTarget.value)} />
+      </label>
+      <label class="wash-net-field">
+        <span class="wash-net-label">Private key</span>
+        <span class="wash-net-wg-key">
+          <input data-testid="wg-privkey" type="password" value={privKey()} onInput={(e) => setPrivKey(e.currentTarget.value)} />
+          <button type="button" class="wash-net-btn ghost" data-testid="wg-genkey" onClick={() => setPrivKey(genWGPrivateKey())}>Generate</button>
+        </span>
+      </label>
+      <label class="wash-net-field">
+        <span class="wash-net-label">Listen port</span>
+        <input data-testid="wg-listenport" type="number" min="0" max="65535" value={listenPort()} placeholder="auto" onInput={(e) => setListenPort(e.currentTarget.value)} />
+      </label>
+      <label class="wash-net-field">
+        <span class="wash-net-label">Addresses</span>
+        <input data-testid="wg-addresses" value={addresses()} placeholder="10.9.0.1/24, fd00::1/64" onInput={(e) => setAddresses(e.currentTarget.value)} />
+      </label>
+
+      <div class="wash-net-grouplabel">Peers</div>
+      <For each={peers()}>
+        {(p, i) => (
+          <div class="wash-net-wg-peer" data-testid={`wg-peer-${i()}`}>
+            <label class="wash-net-field"><span class="wash-net-label">Public key</span>
+              <input data-testid={`wg-peer-pubkey-${i()}`} value={p.publicKey} onInput={(e) => setPeer(i(), { publicKey: e.currentTarget.value })} /></label>
+            <label class="wash-net-field"><span class="wash-net-label">Endpoint</span>
+              <span class="wash-net-wg-endpoint">
+                <input data-testid={`wg-peer-host-${i()}`} placeholder="host" value={p.endpointHost} onInput={(e) => setPeer(i(), { endpointHost: e.currentTarget.value })} />
+                <input data-testid={`wg-peer-port-${i()}`} type="number" placeholder="port" value={p.endpointPort} onInput={(e) => setPeer(i(), { endpointPort: e.currentTarget.value })} />
+              </span></label>
+            <label class="wash-net-field"><span class="wash-net-label">Allowed IPs</span>
+              <input data-testid={`wg-peer-allowed-${i()}`} placeholder="0.0.0.0/0, ::/0" value={p.allowedIPs} onInput={(e) => setPeer(i(), { allowedIPs: e.currentTarget.value })} /></label>
+            <label class="wash-net-field"><span class="wash-net-label">Keepalive (s)</span>
+              <input data-testid={`wg-peer-keepalive-${i()}`} type="number" placeholder="off" value={p.keepalive} onInput={(e) => setPeer(i(), { keepalive: e.currentTarget.value })} /></label>
+            <Show when={peers().length > 1}>
+              <button type="button" class="wash-net-btn ghost" data-testid={`wg-peer-remove-${i()}`} onClick={() => setPeers((ps) => ps.filter((_, j) => j !== i()))}><Icon name="trash" /> Remove peer</button>
+            </Show>
+          </div>
+        )}
+      </For>
+      <button type="button" class="wash-net-btn ghost" data-testid="wg-add-peer" onClick={() => setPeers((ps) => [...ps, blankPeer()])}><Icon name="plus" /> Add peer</button>
+
+      <div class="wash-net-wizard-actions">
+        <button class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
+        <button data-testid="wg-create" class="wash-net-btn primary" disabled={!canCreate()} onClick={create}>Create</button>
+      </div>
+    </div>
+  );
+}
+
 const STYLE = `
 .wash-net-app { display:flex; flex-direction:column; height:100%; background:#181828; color:#eee;
   font:13px ui-sans-serif, system-ui, sans-serif; position:relative; }
@@ -765,6 +897,12 @@ const STYLE = `
 .wash-net-method select { width:100%; background:#15152a; color:#eee; border:1px solid #2a2a3a; border-radius:4px; padding:4px 6px; font:inherit; }
 .wash-net-method select:focus { outline:none; border-color:#3a3a6a; }
 .wash-net-grouplabel { font-size:11px; opacity:.6; text-transform:uppercase; letter-spacing:.04em; margin:6px 0 2px; }
+.wash-net-wg-key { display:flex; gap:6px; }
+.wash-net-wg-key input { flex:1; min-width:0; }
+.wash-net-wg-endpoint { display:flex; gap:6px; }
+.wash-net-wg-endpoint input:first-child { flex:1; min-width:0; }
+.wash-net-wg-endpoint input:last-child { width:72px; }
+.wash-net-wg-peer { border:1px solid #2a2a3a; border-radius:4px; padding:6px 8px; margin:4px 0; }
 .wash-net-addressing .wash-net-group { margin:0 0 6px; }
 .wash-net-member { font-size:12px; display:flex; gap:4px; align-items:center; }
 .wash-net-wifi-scan { margin:4px 0 10px; }

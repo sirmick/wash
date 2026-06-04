@@ -100,6 +100,54 @@ test.describe('net app (kiosk, host-side full stack)', () => {
   });
 });
 
+// WireGuard exercises the dedicated VPN wizard: a wg interface (private key +
+// tunnel address) plus a peer (which lives in the separate WGPeers kind) staged,
+// applied, and committed through the real commit-confirm txn — proving the FE
+// builds the model correctly and it round-trips through netd. The fake backend
+// advertises CanWireGuard (caps.Full), so the +WireGuard button shows host-side.
+test.describe('net app wireguard (kiosk, full FE→net→netd)', () => {
+  test.use({ routerOpts: { kiosk: 'com.wash.net', apps: ['net', 'netd'] } });
+
+  test('add a WireGuard tunnel → apply → committed', async ({ page, router }) => {
+    await page.goto(router.url);
+    const net = page.locator('wash-app-net');
+    await expect(net).toBeVisible();
+
+    // +WireGuard is gated on the CanWireGuard capability (the fake backend has it).
+    const add = net.locator('[data-testid="add-wireguard"]');
+    await expect(add).toBeEnabled();
+    await add.click();
+    await expect(net.locator('[data-testid="wireguard-wizard"]')).toBeVisible();
+
+    // A private key is pre-generated (32 bytes base64 ≈ 44 chars); Generate rolls
+    // a fresh one — proving the in-browser keygen runs, no backend round-trip.
+    const key1 = await net.locator('[data-testid="wg-privkey"]').inputValue();
+    expect(key1.length).toBeGreaterThan(40);
+    await net.locator('[data-testid="wg-genkey"]').click();
+    expect(await net.locator('[data-testid="wg-privkey"]').inputValue()).not.toBe(key1);
+
+    await net.locator('[data-testid="wg-addresses"]').fill('10.9.0.1/24');
+    await net.locator('[data-testid="wg-peer-pubkey-0"]').fill('aGVsbG93aXJlZ3VhcmRwdWJrZXlnb2VzaGVyZT0=');
+    await net.locator('[data-testid="wg-peer-allowed-0"]').fill('10.9.0.2/32');
+    await net.locator('[data-testid="wg-peer-host-0"]').fill('vpn.example.com');
+    await net.locator('[data-testid="wg-peer-port-0"]').fill('51820');
+    await net.locator('[data-testid="wg-create"]').click();
+
+    // Staged as a new WireGuard connection (kindOf → "WireGuard").
+    const conn = net.locator('[data-testid="conn-wg0"]');
+    await expect(conn).toHaveAttribute('data-status', 'new');
+    await expect(conn).toHaveAttribute('data-kind', 'WireGuard');
+
+    // Apply → keep → committed; conn reloads clean, proving the interface AND its
+    // peer survived encode → netd apply/confirm → liveConfig → decode unchanged.
+    await net.locator('[data-testid="apply-button"]').click();
+    await expect(net.locator('[data-testid="apply-confirm"]')).toBeVisible();
+    await net.locator('[data-testid="keep-button"]').click();
+    await expect(net.locator('.wash-net-status')).toHaveText('committed');
+    await expect(net.locator('[data-testid="conn-wg0"]')).toHaveAttribute('data-status', 'clean');
+  });
+});
+
 // Wi-Fi exercises the full windowed path FE → com.wash.net → com.wash.netd for
 // the wifi_* kinds, which the config-flow tests above never touch. This is the
 // regression net for the relay bug where com.wash.net's proxy only forwarded the
