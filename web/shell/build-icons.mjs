@@ -38,6 +38,7 @@ const ICONS = [
   'log-out',        // session app "Log out" menu item
   'unplug',         // session app "Disconnect" menu item
   'layout-grid',    // sidebar Viewport widget
+  'network',        // sidebar Network widget (matches wash-net app icon)
   'bell',           // sidebar Notifications widget
   'lock',           // priv widget lock-state indicator
   'unlock',         // priv widget unlock-state indicator

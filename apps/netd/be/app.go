@@ -310,8 +310,9 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	washnetReadBin = locateWashnetRead()
 	washnetWifiBin = locateWashnetWifi()
 	// Probe the wifi runtime once: nmcli presence + radio. Cheap, never errors —
-	// absence just leaves both false so the FE hides the wifi UI.
-	wifiRT = wifi.New()
+	// absence just leaves both false so the FE hides the wifi UI. selectWifi
+	// swaps in a deterministic fake under WASH_NETD_WIFI for the host-side e2e.
+	wifiRT = selectWifi()
 	wifiRadio, wifiLive = wifiRT.Detect()
 	if wifiRadio || wifiLive {
 		log.Printf("wash-netd: wifi radio=%v nmcli-live=%v", wifiRadio, wifiLive)
@@ -349,7 +350,13 @@ var (
 // one-shot privileged refresh (via wash-priv) the first time so the panel asks
 // on load rather than silently showing an empty box.
 func liveConfig() model.Config {
-	if privileged {
+	// The fake backend holds the live config entirely in memory — there is
+	// nothing to read out-of-band — so honor it directly regardless of privilege.
+	// The escalation below exists only for the real backends whose reads need
+	// root; without this guard an unprivileged netd on the fake backend (the
+	// host-side e2e) returns the empty liveCache and never surfaces a
+	// just-committed change (the apply→keep→committed regression).
+	if privileged || info.active == BackendFake {
 		return applier.Live()
 	}
 	liveMu.Lock()

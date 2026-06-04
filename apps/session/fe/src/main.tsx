@@ -825,7 +825,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         <Section
           id="net"
           title="Network"
-          icon="globe"
+          icon="network"
           accent={NET_ACCENT}
           state={sectionStates().net ?? 'collapsed'}
           onToggle={() => toggleSection('net')}

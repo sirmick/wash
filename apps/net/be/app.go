@@ -49,13 +49,12 @@ const (
 	NetdAppID = "com.wash.netd"
 )
 
-// netIcon is the lucide "network" glyph as an inline SVG. Manifest requires an
-// icon for windowed apps; kept tiny to stay well under the 64KB cap.
+// netIcon is the lucide "network" glyph as an inline SVG — the same icon the
+// session sidebar's Network section renders from the shared sprite (icons.svg
+// #network), so the app and the sidebar match. Manifest requires an icon for
+// windowed apps; kept tiny to stay well under the 64KB cap. %23 is an encoded
+// '#' (the accent hex color substituted for lucide's currentColor stroke).
 const netIcon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%236090e0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/></svg>`
-
-// proxyKinds are the FE→BE request kinds relayed to com.wash.netd. Each is a
-// request/reply round-trip correlated by the FE's `id`.
-var proxyKinds = []string{"current", "validate", "diff", "apply", "confirm", "revert"}
 
 var def *sdk.AppDef
 
@@ -74,6 +73,11 @@ func init() {
 			Surface:         sdk.SurfaceWindow,
 			Icon:            netIcon,
 			Accent:          "#6090e0",
+			// Kept out of the launcher catalog: the network UI is reached
+			// from the sidebar's Wi-Fi affordance and the Settings → Network
+			// pane (both spawn it via spawn.request), so a start-menu row
+			// would be redundant. Still fully spawnable.
+			Hidden:          true,
 			Instancing:      sdk.InstancingSingle,
 			Window:          &sdk.WindowHints{DefaultWidth: 574, DefaultHeight: 620},
 		},
@@ -96,9 +100,23 @@ func run(ctx context.Context) error { return sdk.Run(ctx, def) }
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-net ready instance=%s window=%d", instanceID, windowID)
 	bus := sdk.NewBus(c)
-	for _, kind := range proxyKinds {
-		registerProxy(bus, kind)
-	}
+	// Transparent relay: every FE request kind is forwarded verbatim to netd as a
+	// request/reply round-trip (correlated by the FE's id). net owns no FE-message
+	// logic of its own — it's a pure typed pipe whose whole job is to carry the
+	// FE's calls under this app's attested identity (the router stamps the
+	// forward; netd's authz trusts com.wash.net). A catch-all pattern ("" matches
+	// every kind) instead of a hand-maintained allowlist means new netd messages
+	// need ZERO changes here and can't silently drift out of sync — the bug that
+	// left the wifi kinds (scan/radio/connect/forget) unrelayed and the scan dead.
+	//
+	// Forwarding arbitrary FE-named kinds to the privileged service is safe: netd
+	// authorizes the sender and only acts on kinds it explicitly handles; anything
+	// else is a not-handled error, never a privileged effect. Mirrors wash-edit's
+	// cmd.* passthrough (the other HandlePattern user). Patterns fire only for
+	// own-FE messages, so netd's cross-app "state" push below is unaffected.
+	bus.HandlePattern("", func(conn *sdk.Conn, kind string, req map[string]any) {
+		relayToNetd(bus, conn, kind, req)
+	})
 	// Subscribe to netd's status so the window sees autonomous transitions (the
 	// commit-confirm auto-revert) and the apply-event stream — relayed to the FE
 	// as net.state, the same shape the sidebar gateway uses. Without this the
@@ -119,40 +137,42 @@ type stateRelay struct {
 	State any `json:"state"`
 }
 
-// registerProxy wires one FE request kind to a cross-app round-trip with netd.
-// The FE handler is fire-and-forget at the bus layer (HandleVoid) because the
-// reply is produced asynchronously: sdk.Call blocks awaiting netd's reply, and
-// MUST NOT run on the dispatch goroutine (it would deadlock the read loop), so
-// the relay runs in a goroutine and ships the reply to the FE itself.
-func registerProxy(bus *sdk.Bus, kind string) {
-	sdk.HandleVoid(bus, kind, func(c *sdk.Conn, id string, req map[string]any) error {
-		// Forward only the meaningful payload (config for validate/diff/apply;
-		// nothing for confirm/revert) — not the FE envelope fields.
-		fwd := map[string]any{}
-		if cfg, ok := req["config"]; ok {
-			fwd["config"] = cfg
+// relayToNetd carries one FE request through a cross-app round-trip with netd.
+// It runs in a goroutine because sdk.Call blocks awaiting netd's reply and MUST
+// NOT run on the dispatch goroutine (it would deadlock the read loop), so the
+// relay ships the reply to the FE itself rather than returning it.
+func relayToNetd(bus *sdk.Bus, c *sdk.Conn, kind string, req map[string]any) {
+	id, _ := req["id"].(string)
+	// Forward the request payload verbatim minus the FE envelope (kind/id):
+	// `config` for the config flow, `on`/`ssid`/`security`/`psk`/`hidden` for the
+	// wifi kinds, nothing for confirm/revert. netd decodes into its typed request
+	// and ignores extras.
+	fwd := map[string]any{}
+	for k, v := range req {
+		if k == "kind" || k == "id" {
+			continue
 		}
-		go func() {
-			var resp map[string]any
-			err := sdk.Call(context.Background(), bus, wire.Recipient{AppID: NetdAppID}, kind, fwd, &resp)
-			if err != nil {
-				_ = c.SendAppMsg(errReply(kind, id, err))
-				return
-			}
-			if resp == nil {
-				resp = map[string]any{}
-			}
-			// Relay netd's reply to the FE: rebrand to <kind>_ok, echo the FE's
-			// id, and drop netd's hop-level req_id.
-			resp["kind"] = kind + "_ok"
-			if id != "" {
-				resp["id"] = id
-			}
-			delete(resp, "req_id")
-			_ = c.SendAppMsg(resp)
-		}()
-		return nil
-	})
+		fwd[k] = v
+	}
+	go func() {
+		var resp map[string]any
+		err := sdk.Call(context.Background(), bus, wire.Recipient{AppID: NetdAppID}, kind, fwd, &resp)
+		if err != nil {
+			_ = c.SendAppMsg(errReply(kind, id, err))
+			return
+		}
+		if resp == nil {
+			resp = map[string]any{}
+		}
+		// Relay netd's reply to the FE: rebrand to <kind>_ok, echo the FE's
+		// id, and drop netd's hop-level req_id.
+		resp["kind"] = kind + "_ok"
+		if id != "" {
+			resp["id"] = id
+		}
+		delete(resp, "req_id")
+		_ = c.SendAppMsg(resp)
+	}()
 }
 
 func errReply(kind, id string, err error) map[string]any {

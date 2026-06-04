@@ -39,6 +39,13 @@ endif
 
 TARGETS := $(addprefix $(OUT)/,$(BINS))
 
+# Privileged escalation CLIs that com.wash.netd runs through wash-priv:
+# washnet-read snapshots the box's config, washnet-wifi drives the polkit-gated
+# radio/connect/forget. netd locates them next to its own binary, so the host
+# build must stage them into out/ alongside wash-netd — without washnet-wifi
+# every "Turn on Wi-Fi" fails with "no privileged path for wifi action".
+TARGETS += $(OUT)/washnet-read $(OUT)/washnet-wifi
+
 # Test app: not part of the default build; built explicitly with
 # `make test-app` (or `make TEST_APP=1`). Hidden from the prod
 # catalog at runtime via manifest.Hidden.
@@ -395,6 +402,18 @@ $(OUT)/wash-notify: | $(OUT)
 .PHONY: $(OUT)/wash-netd
 $(OUT)/wash-netd: $(NETD_STAMP) | $(OUT)
 	$(call go_build,$@,apps/netd/be/cmd)
+
+# washnet-read / washnet-wifi: netd's privileged helpers (run via wash-priv).
+# Pure Go CLIs — no FE, no embedded assets, no stamp — so .PHONY forces a
+# rebuild on a source change ([[Makefile .PHONY for Go services]]); go_build is
+# cheap. Staged into out/ next to wash-netd, where locateWashnet* find them.
+.PHONY: $(OUT)/washnet-read
+$(OUT)/washnet-read: | $(OUT)
+	$(call go_build,$@,cmd/washnet-read)
+
+.PHONY: $(OUT)/washnet-wifi
+$(OUT)/washnet-wifi: | $(OUT)
+	$(call go_build,$@,cmd/washnet-wifi)
 
 # wash-launch is a CLI, not an app. No FE bundle, no embedded assets.
 $(OUT)/wash-launch: | $(OUT)
