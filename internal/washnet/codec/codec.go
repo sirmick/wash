@@ -226,6 +226,7 @@ func Parse(files map[string]string) (model.Config, error) {
 			if !ok {
 				continue
 			}
+			combineNetmask(sec.opts)
 			elem := reflect.New(b.elemType).Elem()
 			if err := fillFields(elem, sec); err != nil {
 				return c, fmt.Errorf("package %q section %q %q: %w", pkg, sec.typ, sec.name, err)
@@ -235,6 +236,46 @@ func Parse(files map[string]string) (model.Config, error) {
 		}
 	}
 	return c, nil
+}
+
+// combineNetmask folds OpenWRT's split IPv4 addressing (`option ipaddr '1.2.3.4'`
+// + `option netmask '255.255.255.0'`) into the single CIDR `ipaddr` wash's model
+// expects — so a STOCK OpenWRT box (which ships split form) reads instead of
+// parsing as empty. No-op unless a maskless ipaddr AND a netmask are both
+// present. IPv6 always uses a prefix (`ip6addr 'fd00::1/64'`), so it needs no
+// equivalent.
+func combineNetmask(opts map[string]string) {
+	addr, hasAddr := opts["ipaddr"]
+	mask, hasMask := opts["netmask"]
+	if !hasAddr || !hasMask || addr == "" || strings.Contains(addr, "/") {
+		return
+	}
+	if n, ok := netmaskBits(mask); ok {
+		opts["ipaddr"] = addr + "/" + strconv.Itoa(n)
+	}
+}
+
+// netmaskBits converts a dotted IPv4 netmask to its prefix length, rejecting a
+// non-contiguous mask.
+func netmaskBits(mask string) (int, bool) {
+	a, err := netip.ParseAddr(mask)
+	if err != nil || !a.Is4() {
+		return 0, false
+	}
+	b := a.As4()
+	m := uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+	ones, seenZero := 0, false
+	for i := 31; i >= 0; i-- {
+		if m&(1<<uint(i)) != 0 {
+			if seenZero {
+				return 0, false // ones after a zero — not a valid contiguous mask
+			}
+			ones++
+		} else {
+			seenZero = true
+		}
+	}
+	return ones, true
 }
 
 func fillFields(v reflect.Value, sec section) error {

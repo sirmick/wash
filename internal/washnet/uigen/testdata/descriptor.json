@@ -166,6 +166,13 @@
               }
             ]
           }
+        },
+        {
+          "name": "IP6Assign",
+          "option": "ip6assign",
+          "widget": "number",
+          "group": "ipv6",
+          "labelKey": "Interface.IP6Assign"
         }
       ]
     },

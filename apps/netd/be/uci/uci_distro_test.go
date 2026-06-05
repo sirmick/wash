@@ -34,14 +34,15 @@ func TestUCI_Distro_ReadModifyWrite(t *testing.T) {
 	a := NewApplier() // real /etc/config
 
 	// Seed a minimal /etc/config/network via uci itself, so the test is
-	// self-contained on any OpenWRT image (the rootfs container ships none).
-	// CIDR ipaddr is wash's format; reading stock split ipaddr+netmask is a
-	// separate, known gap in the shared codec.
+	// self-contained on any OpenWRT image (the rootfs container ships none). This
+	// seeds STOCK OpenWRT format — split IPv4 (ipaddr + netmask) and the ip6assign
+	// IPv6 prefix-delegation pattern — to prove wash reads a real box, not just
+	// its own CIDR output.
 	seed := [][]string{
 		{"set", "network.loopback=interface"}, {"set", "network.loopback.device=lo"},
-		{"set", "network.loopback.proto=static"}, {"set", "network.loopback.ipaddr=127.0.0.1/8"},
-		{"set", "network.lan=interface"}, {"set", "network.lan.device=br-lan"},
-		{"set", "network.lan.proto=static"}, {"set", "network.lan.ipaddr=192.168.1.1/24"},
+		{"set", "network.loopback.proto=static"}, {"set", "network.loopback.ipaddr=127.0.0.1"}, {"set", "network.loopback.netmask=255.0.0.0"},
+		{"set", "network.lan=interface"}, {"set", "network.lan.device=br-lan"}, {"set", "network.lan.proto=static"},
+		{"set", "network.lan.ipaddr=192.168.1.1"}, {"set", "network.lan.netmask=255.255.255.0"}, {"set", "network.lan.ip6assign=60"},
 		{"set", "network.wan=interface"}, {"set", "network.wan.device=eth1"}, {"set", "network.wan.proto=dhcp"},
 	}
 	_ = exec.Command("touch", "/etc/config/network").Run()
@@ -50,7 +51,7 @@ func TestUCI_Distro_ReadModifyWrite(t *testing.T) {
 	}
 	uciCmd(t, "commit", "network")
 
-	// --- UCI IN: read the box through wash. ---
+	// --- UCI IN: read the STOCK-format box through wash. ---
 	live := a.Live()
 	lanIdx := -1
 	for i := range live.Interfaces {
@@ -61,7 +62,15 @@ func TestUCI_Distro_ReadModifyWrite(t *testing.T) {
 	if lanIdx < 0 {
 		t.Fatalf("did not read a 'lan' interface from /etc/config/network: %+v", live.Interfaces)
 	}
-	t.Logf("UCI IN: lan proto read as %+v", live.Interfaces[lanIdx].Proto)
+	lan := live.Interfaces[lanIdx]
+	t.Logf("UCI IN: lan = %+v (ip6assign=%d)", lan.Proto, lan.IP6Assign)
+	// Split ipaddr+netmask must have folded into CIDR, and ip6assign read.
+	if sp, ok := lan.Proto.(model.StaticProto); !ok || sp.IPAddr.String() != "192.168.1.1/24" {
+		t.Fatalf("stock split ipaddr+netmask did not read as CIDR: %+v", lan.Proto)
+	}
+	if lan.IP6Assign != 60 {
+		t.Errorf("ip6assign not read: got %d want 60", lan.IP6Assign)
+	}
 
 	// --- MODIFY: set lan's static address. ---
 	live.Interfaces[lanIdx].Proto = model.StaticProto{IPAddr: netip.MustParsePrefix("192.168.9.1/24")}

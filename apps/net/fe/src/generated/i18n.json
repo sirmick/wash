@@ -53,6 +53,7 @@
   "IPSet.Match": "Match",
   "IPSet.Name": "Name",
   "Interface.Device": "Device",
+  "Interface.IP6Assign": "IP6 Assign",
   "Interface.Name": "Name",
   "Interface.Proto": "Proto",
   "NAT.Name": "Name",

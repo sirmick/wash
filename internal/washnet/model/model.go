@@ -73,6 +73,11 @@ type Interface struct {
 	Name   string      `uci:",name"`
 	Device string      `uci:"device" ui:"group=general,ref=device"`
 	Proto  ProtoConfig `uci:"proto,union" ui:"group=general"`
+	// IP6Assign delegates a /N prefix to this interface from an upstream PD
+	// (OpenWRT's `option ip6assign '60'`) — the standard router-LAN IPv6 pattern.
+	// Interface-level (independent of proto). Zero = unset/omitted. UCI-only; the
+	// link-renderer backends (NM/networkd/netplan) ignore it.
+	IP6Assign int `uci:"ip6assign" ui:"group=ipv6"`
 }
 
 func (Interface) UCIPackage() string { return "network" }

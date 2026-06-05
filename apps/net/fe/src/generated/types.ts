@@ -51,6 +51,7 @@ export interface Interface {
   Name?: string;
   Device?: string;
   Proto?: ProtoConfig;
+  IP6Assign?: number;
 }
 
 export interface Device {
