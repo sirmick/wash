@@ -44,6 +44,9 @@ func TestUCI_Distro_ReadModifyWrite(t *testing.T) {
 		{"set", "network.lan=interface"}, {"set", "network.lan.device=br-lan"}, {"set", "network.lan.proto=static"},
 		{"set", "network.lan.ipaddr=192.168.1.1"}, {"set", "network.lan.netmask=255.255.255.0"}, {"set", "network.lan.ip6assign=60"},
 		{"set", "network.wan=interface"}, {"set", "network.wan.device=eth1"}, {"set", "network.wan.proto=dhcp"},
+		// wan6 uses OpenWRT's distinct v6-only proto — before the fix this crashed
+		// the whole network parse (unknown union variant).
+		{"set", "network.wan6=interface"}, {"set", "network.wan6.device=eth1"}, {"set", "network.wan6.proto=dhcpv6"},
 	}
 	_ = exec.Command("touch", "/etc/config/network").Run()
 	for _, s := range seed {
@@ -70,6 +73,20 @@ func TestUCI_Distro_ReadModifyWrite(t *testing.T) {
 	}
 	if lan.IP6Assign != 60 {
 		t.Errorf("ip6assign not read: got %d want 60", lan.IP6Assign)
+	}
+	// wan6 (proto dhcpv6) must read as a v6 DHCP interface — proving the parse no
+	// longer aborts on OpenWRT's distinct proto.
+	var wan6 *model.Interface
+	for i := range live.Interfaces {
+		if live.Interfaces[i].Name == "wan6" {
+			wan6 = &live.Interfaces[i]
+		}
+	}
+	if wan6 == nil {
+		t.Fatalf("did not read wan6 (proto dhcpv6) — parse aborted on it: %+v", live.Interfaces)
+	}
+	if dp, ok := wan6.Proto.(model.DHCPProto); !ok || !dp.IPv6 {
+		t.Errorf("wan6 proto dhcpv6 → got %+v, want DHCPProto{IPv6}", wan6.Proto)
 	}
 
 	// --- MODIFY: set lan's static address. ---

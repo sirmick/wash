@@ -103,7 +103,14 @@ func collectFields(v reflect.Value) (name string, lines []string, err error) {
 			if !ok {
 				return "", nil, fmt.Errorf("union field %s does not implement UCITag", t.Field(i).Name)
 			}
-			lines = append(lines, fmt.Sprintf("\toption %s '%s'", optName, tagger.UCITag()))
+			tag := tagger.UCITag()
+			// A v6-only DHCP interface renders as OpenWRT's distinct `proto
+			// 'dhcpv6'` (inverse of normalizeDHCPv6), so it round-trips a real
+			// box's wan6. Dual-stack/v4 stays `dhcp`.
+			if d, ok := fv.Interface().(model.DHCPProto); ok && d.IPv6 && !d.IPv4 {
+				tag = "dhcpv6"
+			}
+			lines = append(lines, fmt.Sprintf("\toption %s '%s'", optName, tag))
 			_, sub, serr := collectFields(reflect.ValueOf(fv.Interface()))
 			if serr != nil {
 				return "", nil, serr
@@ -227,6 +234,7 @@ func Parse(files map[string]string) (model.Config, error) {
 				continue
 			}
 			combineNetmask(sec.opts)
+			normalizeDHCPv6(sec.opts)
 			elem := reflect.New(b.elemType).Elem()
 			if err := fillFields(elem, sec); err != nil {
 				return c, fmt.Errorf("package %q section %q %q: %w", pkg, sec.typ, sec.name, err)
@@ -252,6 +260,20 @@ func combineNetmask(opts map[string]string) {
 	}
 	if n, ok := netmaskBits(mask); ok {
 		opts["ipaddr"] = addr + "/" + strconv.Itoa(n)
+	}
+}
+
+// normalizeDHCPv6 maps OpenWRT's distinct `proto 'dhcpv6'` (the v6-only DHCP
+// uplink, e.g. wan6) onto wash's single dual-stack DHCP proto with the IPv6
+// family flag — so it reads as DHCPProto{IPv6:true} instead of failing the union
+// lookup (which aborted the whole network parse). The inverse is in collectFields
+// (a v6-only DHCPProto renders back as `proto 'dhcpv6'`). UCI-specific impedance:
+// OpenWRT splits dual-stack into two interfaces (dhcp + dhcpv6); wash uses one.
+func normalizeDHCPv6(opts map[string]string) {
+	if opts["proto"] == "dhcpv6" {
+		opts["proto"] = "dhcp"
+		opts["ipv6"] = "1"
+		delete(opts, "ipv4") // dhcpv6 is v6-only
 	}
 }
 

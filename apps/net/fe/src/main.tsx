@@ -688,8 +688,8 @@ const PROTO_LABELS: Record<string, string> = {
   "StaticProto.IP6Addr": "IPv6 address",
   "StaticProto.IP6Gw": "IPv6 gateway",
   "StaticProto.DNS": "DNS servers",
-  "DHCPProto.IPv4": "IPv4 (DHCP)",
-  "DHCPProto.IPv6": "IPv6 (DHCP / SLAAC)",
+  "DHCPProto.IPv4": "Automatic IPv4 (DHCP)",
+  "DHCPProto.IPv6": "Automatic IPv6 (SLAAC / DHCPv6)",
   "DHCPProto.Hostname": "DHCP hostname",
 };
 const addrLabel = (k: string) => PROTO_LABELS[k] ?? label(k);

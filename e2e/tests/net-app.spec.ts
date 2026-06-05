@@ -274,3 +274,49 @@ test.describe('net app addressing (kiosk)', () => {
     await expect(cidr).toHaveCount(2);                                   // static again
   });
 });
+
+// IPv6 workstation addressing — static v6 and per-family DHCP — end to end through
+// the fake backend. The v6-only DHCP case also exercises the codec's `proto
+// dhcpv6` render/parse (the OpenWRT impedance fix) on the host tier.
+test.describe('net app IPv6 addressing (kiosk)', () => {
+  test.use({ routerOpts: { kiosk: 'com.wash.net', apps: ['net', 'netd'] } });
+
+  test('static dual-stack (v4 + IPv6) commits and round-trips', async ({ page, router }) => {
+    await page.goto(router.url);
+    const net = page.locator('wash-app-net');
+    await expect(net).toBeVisible();
+    await net.locator('[data-testid="add-ethernet"]').click();
+    const addr = net.locator('[data-testid="addressing"]');
+    await addr.locator('select').selectOption({ label: 'Manual (static IP)' });
+    // cidr[0] = IPv4 address, cidr[1] = IPv6 — set both (dual-stack static).
+    const cidr = addr.locator('input[data-widget="cidr"]');
+    await cidr.first().fill('192.168.50.10/24');
+    await cidr.nth(1).fill('fd00:1234::1/64');
+    await net.locator('[data-testid="eth-create"]').click();
+    await net.locator('[data-testid="apply-button"]').click();
+    await expect(net.locator('[data-testid="apply-confirm"]')).toBeVisible();
+    await net.locator('[data-testid="keep-button"]').click();
+    await expect(net.locator('.wash-net-status')).toHaveText('committed');
+    // Clean after reload ⇒ the IPv6 address survived encode → netd → decode.
+    await expect(net.locator('[data-testid="conn-eth0"]')).toHaveAttribute('data-status', 'clean');
+  });
+
+  test('DHCP IPv6-only commits (exercises the dhcpv6 codec path)', async ({ page, router }) => {
+    await page.goto(router.url);
+    const net = page.locator('wash-app-net');
+    await expect(net).toBeVisible();
+    await net.locator('[data-testid="add-ethernet"]').click();
+    const addr = net.locator('[data-testid="addressing"]');
+    // DHCP default = both families; uncheck IPv4 → a v6-only DHCP interface, which
+    // the fake backend renders as `proto dhcpv6` and parses back unchanged.
+    const boxes = addr.locator('input[type="checkbox"]');
+    await expect(boxes).toHaveCount(2);
+    await boxes.first().uncheck();
+    await net.locator('[data-testid="eth-create"]').click();
+    await net.locator('[data-testid="apply-button"]').click();
+    await expect(net.locator('[data-testid="apply-confirm"]')).toBeVisible();
+    await net.locator('[data-testid="keep-button"]').click();
+    await expect(net.locator('.wash-net-status')).toHaveText('committed');
+    await expect(net.locator('[data-testid="conn-eth0"]')).toHaveAttribute('data-status', 'clean');
+  });
+});

@@ -230,6 +230,36 @@ caps first so every screen has something real to talk to.
   want to express "which segments can reach router services," vs a separate
   "Services" screen.
 
+## 10b. IPv6 (router plane)
+
+Captured requirements for downstream router IPv6 (separate from the *workstation*
+IPv6 — autoconfig + static — which the type-2 backends already do). All of this
+is the router plane, gated on the UCI/router backend.
+
+1. **RA/ND server on the LAN/VLAN side** — the router answers Router Solicitations
+   and sends Router Advertisements (+ Neighbor Discovery) so segment clients
+   SLAAC-autoconfigure. Model: `DHCPPool.RA` / `DHCPPool.DHCPv6` (OpenWRT odhcpd
+   `option ra 'server'` / `dhcpv6 'server'`) — already on the pool; surfaces in the
+   segment's DHCP settings as "hand out IPv6 (RA/DHCPv6)".
+2. **DHCPv6 *client* + RA on the WAN side** — the WAN is a client: accept upstream
+   RA and run DHCPv6, **including prefix delegation request**. Model: `proto
+   'dhcpv6'` on the WAN (the parse/render fix in flight), plus a **reqprefix** field
+   (PD request) — *not modeled yet* (small add).
+3. **Firewall = NAT-equivalent protection, configurable off.** IPv6 has no NAT, so
+   the *firewall* must give the same posture NAT gave IPv4: **default-deny inbound
+   from WAN to internal segments**, as stateful rules — and a per-segment toggle to
+   open inbound IPv6 (for publicly-reachable hosts). This lands in the **zone
+   matrix** (WAN→segment defaults to block; the toggle adds the forwarding/rule).
+4. **Prefix delegation to VLANs from a wider WAN prefix.** The WAN gets a delegated
+   prefix (e.g. /56) and each segment carves a /64 from it. Model: `Interface.
+   IP6Assign` (added) per segment + the WAN `reqprefix`. Surfaces as the segment's
+   "IPv6: assign a /64 from the WAN prefix" — automatic once the WAN has PD.
+
+Net: most of this is already modeled (`DHCPPool.RA/DHCPv6`, `IP6Assign`, zones);
+the gaps are the WAN **reqprefix** (PD request) field and wiring the **inbound-IPv6
+toggle** into the firewall matrix. Folds into the Networks (segment), DHCP, and
+Firewall screens — no new screen.
+
 ## 11. Deferred
 
 - **Multi-WAN routing across physical links** (mwan3 — failover/balance). Out of
