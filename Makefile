@@ -611,6 +611,19 @@ e2e-vm: vm-image vm-chrome $(OUT)/washvm-run
 run-vm: vm-image vm-chrome $(OUT)/washvm-run
 	$(OUT)/washvm-run --chrome $(VM_CHROME) --addr 127.0.0.1:8080
 
+# net-demo: launch 3 OpenWRT microVMs (one wash-configured two-VLAN router + two
+# DHCP workstations) on a shared loopback L2 segment, each console in the browser
+# on its own port (8001/8002/8003). The interactive sibling of the M0–M3 e2e.
+# PHONY binary target: no FE/source prereqs to track, so always rebuild (else
+# make silently never picks up source changes — the FE-less Go-binary gotcha).
+.PHONY: $(OUT)/washnet-demo
+$(OUT)/washnet-demo: | $(OUT)
+	$(call go_build,$@,cmd/washnet-demo)
+.PHONY: net-demo
+net-demo: $(OUT)/washnet-demo
+	@test -f $(OUT)/vm/openwrt.img || { echo "missing $(OUT)/vm/openwrt.img — run: make vm-image-openwrt"; exit 1; }
+	$(OUT)/washnet-demo --image $(OUT)/vm/openwrt.img --base-port 8001
+
 # ----- meta -----
 
 .PHONY: linux-arm64
