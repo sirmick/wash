@@ -178,19 +178,42 @@ func MCastLAN(id, group string, port int, mac string) []string {
 	}
 }
 
-// WriteFile writes content to a path in-guest. It uses printf (busybox-native;
-// OpenWRT ships no base64/heredoc-friendly tools), escaping the content for a
-// double-quoted printf format so newlines/tabs survive.
+// WriteFile writes content to a path in-guest via printf (busybox-native;
+// OpenWRT ships no base64/heredoc-friendly tools), escaping for a double-quoted
+// printf format so newlines/tabs survive. Sent in short chunks because a long
+// single line overruns the serial console's line discipline (a ~700B config
+// silently never completes).
 func (w *OpenWRT) WriteFile(ctx context.Context, path, content string) error {
-	esc := content
-	for _, r := range [][2]string{
-		{"\\", "\\\\"}, {"\"", "\\\""}, {"$", "\\$"}, {"`", "\\`"},
-		{"\n", "\\n"}, {"\t", "\\t"},
-	} {
-		esc = strings.ReplaceAll(esc, r[0], r[1])
+	esc := func(s string) string {
+		for _, r := range [][2]string{
+			{"\\", "\\\\"}, {"\"", "\\\""}, {"$", "\\$"}, {"`", "\\`"}, {"\t", "\\t"},
+		} {
+			s = strings.ReplaceAll(s, r[0], r[1])
+		}
+		return s
 	}
-	_, err := w.Run(ctx, "printf \""+esc+"\" > "+path)
-	return err
+	if _, err := w.Run(ctx, ": > "+path); err != nil { // truncate
+		return err
+	}
+	chunk := ""
+	flush := func() error {
+		if chunk == "" {
+			return nil
+		}
+		_, err := w.Run(ctx, "printf \""+chunk+"\" >> "+path)
+		chunk = ""
+		return err
+	}
+	for _, ln := range strings.Split(content, "\n") {
+		add := esc(ln) + "\\n"
+		if len(chunk)+len(add) > 280 {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+		chunk += add
+	}
+	return flush()
 }
 
 // Close kills the VM and removes its scratch dir.
