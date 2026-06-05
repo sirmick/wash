@@ -165,6 +165,19 @@ func (w *OpenWRT) Run(ctx context.Context, cmd string) (string, error) {
 	return scrubConsole(string(w.buf)), fmt.Errorf("openwrt: command timed out: %q\nconsole tail:\n%s", cmd, tailStr(w.buf, 1200))
 }
 
+// MCastLAN returns qemu args attaching a virtio NIC to a shared L2 segment — a
+// multicast "virtual hub" pinned to loopback (localaddr=127.0.0.1), so no host
+// bridge/tap/root is involved and nothing leaks onto the real network. Every VM
+// given the same group:port shares one Ethernet segment (VLAN tags ride the
+// frames); mac must be unique per VM, id unique per NIC within a VM. This is the
+// multi-VM wiring for M1+ (pass via OpenWRTOpts.Extra / vm.Opts.Extra).
+func MCastLAN(id, group string, port int, mac string) []string {
+	return []string{
+		"-netdev", fmt.Sprintf("socket,id=%s,mcast=%s:%d,localaddr=127.0.0.1", id, group, port),
+		"-device", "virtio-net-pci,netdev=" + id + ",mac=" + mac,
+	}
+}
+
 // WriteFile writes content to a path in-guest. It uses printf (busybox-native;
 // OpenWRT ships no base64/heredoc-friendly tools), escaping the content for a
 // double-quoted printf format so newlines/tabs survive.
