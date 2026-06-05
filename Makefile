@@ -565,13 +565,17 @@ vm-image: $(OUT)/wash
 # Per-distro backend test-bed images (docs/NET-BACKENDS.md §6): Ubuntu/netplan
 # and Debian/ifupdown, alongside Fedora/networkd + Alpine/NM. Each bakes a known
 # config; the wash-vm/vm Go tests boot it and assert wash reads/applies it.
-.PHONY: vm-image-ubuntu vm-image-debian vm-image-fedora
+.PHONY: vm-image-ubuntu vm-image-debian vm-image-fedora vm-image-openwrt
 vm-image-ubuntu: $(OUT)/wash
 	sh scripts/build-vm-image-ubuntu.sh
 vm-image-debian: $(OUT)/wash
 	sh scripts/build-vm-image-debian.sh
 vm-image-fedora: $(OUT)/wash
 	sh scripts/build-vm-image-fedora.sh
+# OpenWRT router image via Image Builder (Docker); no $(OUT)/wash dep — it builds
+# its own static washnet CLIs and bakes them in.
+vm-image-openwrt:
+	sh scripts/build-vm-image-openwrt.sh
 
 # vm-net-test: boot the per-distro images and assert the backends in-guest
 # (skips a distro whose image isn't built). The netplan read is the bug-fix gate.
