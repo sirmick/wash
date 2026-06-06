@@ -136,6 +136,19 @@ type WGPeer = {
   PersistentKeepalive?: number; RouteAllowedIPs?: boolean;
 };
 type Config = { Interfaces?: Interface[]; Devices?: Device[]; WGPeers?: WGPeer[]; Radios?: any[]; SSIDs?: any[]; [k: string]: any };
+// Segment mirrors netd's segment-projection view (segment.Project, surfaced on the
+// `current` reply): the router-UI grouping of a config — per segment its computed
+// role + carrier + the names of the model objects it owns. The union-correct
+// objects live in Config; this is the grouping/role/carrier the FE renders.
+type Carrier = { kind: "untagged" | "vlan" | "bridge"; port?: string; vid?: number; members?: string[] };
+type Segment = { name: string; role: "lan" | "wan" | "vpn"; carrier: Carrier; device?: string; zone?: string; pool?: string; addrs?: string[] };
+const carrierLabel = (c: Carrier): string => {
+  switch (c.kind) {
+    case "vlan": return `VLAN ${c.vid} on ${c.port}`;
+    case "bridge": return `bridge of ${(c.members ?? []).join(", ")}`;
+    default: return c.port ? `port ${c.port}` : "untagged";
+  }
+};
 // WifiConn mirrors netd's wifi_status row (an active 802-11-wireless connection).
 type WifiConn = { name: string; device: string };
 // Caps mirrors netd's generic capability wire (docs/NET.md §2.7): the supported
@@ -176,6 +189,10 @@ function NetApp(props: WashAppProps) {
   const [config, setConfig] = createSignal<Config>({ Interfaces: [], Devices: [] }); // committed baseline (from netd)
   const [draft, setDraft] = createSignal<Config>({ Interfaces: [], Devices: [] });  // staged edits, not yet applied
   const [caps, setCaps] = createSignal<Caps>(emptyCaps());
+  const [segments, setSegments] = createSignal<Segment[]>([]); // segment.Project view from netd
+  // Router-shaped iff some segment owns a zone or a pool (a workstation's segments
+  // are bare interfaces). Gates the Networks panel — the router plane (plan §4).
+  const isRouter = () => segments().some((s) => s.zone || s.pool);
   const can = (f: string) => caps().features.has(f);
   const canKind = (k: string) => caps().kinds.has(k);
   const [links, setLinks] = createSignal<string[]>([]); // physical NICs from the backend
@@ -315,6 +332,7 @@ function NetApp(props: WashAppProps) {
       setConfig(cfg);
       setDraft(structuredClone(cfg)); // reset the draft to the freshly committed state
       setCaps(toCaps(r.caps));
+      setSegments((r.segments ?? []) as Segment[]);
       setLinks((r.devices ?? []) as string[]);
       setWifiRadio(!!r.wifi_radio);
       setWifiLive(!!r.wifi_live);
@@ -566,6 +584,30 @@ function NetApp(props: WashAppProps) {
         </Show>
         <Show when={adding() === "wifi"}>
           <WifiDialog live={wifiLive()} busy={busy()} enabled={wifiEnabled()} aps={aps()} scanning={scanning()} onScan={() => void scanWifi()} onToggleRadio={toggleRadio} onConnect={connectWifi} onCancel={() => setAdding(null)} />
+        </Show>
+
+        <Show when={isRouter()}>
+          <section class="wash-net-segments" data-testid="net-segments">
+            <h2 class="wash-net-seg-h">Networks</h2>
+            <For each={segments()}>
+              {(s) => (
+                <div class="wash-net-conn" data-testid={`segment-${s.name}`} data-role={s.role} data-carrier={s.carrier.kind}>
+                  <div class="wash-net-conn-main">
+                    <span class="wash-net-conn-name">
+                      <Icon name={s.role === "vpn" ? "shield" : s.role === "wan" ? "ethernet-port" : "git-branch"} /> {s.name}
+                    </span>
+                    <span class="wash-net-conn-kind" data-testid={`segment-role-${s.name}`}>{s.role.toUpperCase()}</span>
+                    <span class="wash-net-conn-dev">{carrierLabel(s.carrier)}</span>
+                  </div>
+                  <div class="wash-net-seg-detail">
+                    <Show when={(s.addrs ?? []).length > 0}><span>{(s.addrs ?? []).join(", ")}</span></Show>
+                    <Show when={s.pool}><span class="wash-net-seg-tag">DHCP</span></Show>
+                    <Show when={s.zone}><span class="wash-net-seg-tag">zone {s.zone}</span></Show>
+                  </div>
+                </div>
+              )}
+            </For>
+          </section>
         </Show>
 
         <div class="wash-net-list">
@@ -947,6 +989,12 @@ const STYLE = `
 .wash-net-conn-kind { font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:#8fb0e0; border:1px solid #33415a; border-radius:9px; padding:1px 7px; }
 .wash-net-conn-dev { font-size:11px; opacity:.6; font-family:ui-monospace,Menlo,monospace; }
 .wash-net-conn-sub { grid-column:1; font-size:11px; opacity:.7; }
+.wash-net-segments { display:flex; flex-direction:column; gap:6px; margin-bottom:14px; }
+.wash-net-seg-h { font-size:12px; text-transform:uppercase; letter-spacing:.06em; opacity:.55; margin:0 0 2px; font-weight:600; }
+.wash-net-seg-detail { grid-column:1; display:flex; gap:8px; align-items:center; font-size:11px; opacity:.7; font-family:ui-monospace,Menlo,monospace; }
+.wash-net-seg-tag { font-family:inherit; opacity:1; color:#8fb0e0; border:1px solid #33415a; border-radius:9px; padding:0 6px; }
+.wash-net-conn[data-role="wan"] { border-color:#3a3050; }
+.wash-net-conn[data-role="vpn"] { border-color:#2e4a4a; }
 .wash-net-conn-actions { grid-row:1 / span 2; grid-column:2; display:flex; gap:4px; align-items:center; }
 .wash-net-conn[data-status="new"] { border-color:#2e5a38; }
 .wash-net-conn[data-status="edited"] { border-color:#4a4030; }
