@@ -1,12 +1,21 @@
 # wash-net — networking / firewall / routing / wifi as a wash app
 
-Status: **design** (2026-05-29). Plan of record for wash's network-management
-app: a single declarative model of a box's networking (interfaces, firewall,
-DHCP/DNS, wifi, routing, VPN) that renders to whatever the host actually runs —
-OpenWRT/UCI, systemd-networkd, or NetworkManager — fronted by a schema-driven
-UI and applied through a commit-confirm transaction with a live log terminal.
-Tested end-to-end inside real microvms, driven entirely from outside the VM over
-an out-of-band serial control plane.
+Status: **implementing** (design 2026-05-29). Plan of record for wash's
+network-management app: a single declarative model of a box's networking
+(interfaces, firewall, DHCP/DNS, wifi, routing, VPN) that renders to whatever the
+host actually runs — OpenWRT/UCI, systemd-networkd, or NetworkManager — fronted by
+a schema-driven UI and applied through a commit-confirm transaction with a live log
+terminal. Tested end-to-end inside real microvms, driven entirely from outside the
+VM over an out-of-band serial control plane.
+
+**Progress (`wash-uci`):** all four renderer/applier backends (NM, networkd,
+netplan, ifupdown) + the UCI backend are implemented and unit-tested; the workstation
+FE ships (interfaces, wifi scan/connect, WireGuard). The OpenWRT **router** plane is
+proven end-to-end against real netifd/dnsmasq/fw4 (the M0–M3 multi-VM e2e in
+`wash-vm/vm` + `make net-demo`), and the model's Tier-A gaps are closed (blackhole
+route, per-pool DHCP options, multi-address interfaces). The remaining work is the
+**router UI** — see **[NET-ROUTER-UI.md](NET-ROUTER-UI.md)** for the plan of record
+(segment projection → Networks → Hosts → Firewall matrix → …).
 
 Related: [ARCHITECTURE.md](ARCHITECTURE.md), [WIRE.md](WIRE.md),
 [DISPLAY.md](DISPLAY.md) (sibling "native capability as a wash app" track),

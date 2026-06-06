@@ -32,15 +32,31 @@ Everything below maps back to making *this* config easy and safe to express.
 
 ## 2. Status & prerequisites
 
-- **UCI backend — done (Phase 1, `wash-uci`):** `Render`=`codec.Render`, `Apply`
-  writes `/etc/config/{network,firewall,dhcp,wireless}` + reloads, `Live`
+- **UCI backend — done + proven live (`wash-uci`):** `Render`=`codec.Render`,
+  `Apply` writes `/etc/config/{network,firewall,dhcp,wireless}` + reloads, `Live`
   reads→`codec.Parse`, snapshot rollback, lock-out `Verify`, OpenWRT `Detect`,
-  `Capabilities`=`caps.Full()`. Unit-tested. *Remaining:* wire into `backendsel`
-  + an OpenWRT-container backend test.
-- **Model — ~complete.** Every kind the canonical config needs already exists
+  `Capabilities`=`caps.Full()`, wired into `backendsel`.
+- **Proven end-to-end against real OpenWRT** (`wash-vm/vm`, qemu socket-mcast
+  hub, no host bridge/root): **M0** read+apply a live gateway · **M1** multi-VM
+  L2/VLAN · **M2** router serves a real DHCP lease · **M3** two-VLAN router with
+  per-VLAN DHCP, inside DNS, and inter-VLAN firewall (blocked→opened). Interactive
+  sibling `make net-demo` keeps that 3-VM topology alive with a browser console
+  per VM. Known UCI-applier nit: it reloads fw4/dnsmasq right after the *async*
+  network reload, so on a fresh interface they bind before netifd creates the
+  device — sequence the service reload after the link is up.
+- **Model — complete for the canonical config + harbor.** Every kind exists
   (firewall: `Zone`/`Forwarding`/`Redirect`/`FirewallRule`/`NAT`; dhcp/dns:
-  `Dnsmasq`/`DHCPPool`/`Host`/`Domain`/`CNAME`; wireless: `WifiDevice`/`WifiIface`).
-  The codec renders/parses them generically (reflection over `uci` tags).
+  `Dnsmasq`/`DHCPPool`/`Host`/`Domain`/`CNAME`; wireless: `WifiDevice`/`WifiIface`),
+  rendered/parsed generically (reflection over `uci` tags). **Tier A additions
+  done** (the three gaps the real-router fixture `harbor.config` exposed):
+  `Route.Type` (blackhole VPN kill-switch), `DHCPPool.DHCPOption` (per-segment
+  DHCP options incl. DNS=opt 6 / NTP=42), and `StaticProto.IPAddr` as a list
+  (multiple addresses per interface; `Primary()` for single-addr consumers). The
+  one remaining model field is `Redirect.Reflection` (§6). `harbor.config` (repo
+  root, MikroTik export — contains live secrets, do not echo/store) is the
+  migration/acceptance fixture: ~8 segments + 4 egress modes + the isolation
+  matrix map; only Tier-B/C services (DDNS→Route53, UPnP, ZeroTier, SMB) and
+  designed-out items (ACME-L7, port-knock, IDS-mirror) fall outside the model.
 - **The UI is the gap.** `com.wash.net` already stubs the locked sections
   (`Firewall 🔒 / DHCP server 🔒 / Access point 🔒`); they un-grey when the
   backend advertises the capability (UCI does).
@@ -83,6 +99,9 @@ Wireless · Advanced**.
 | DHCP→DNS register | `Dnsmasq{ExpandHosts,Domain}` + `Host.Hostname` | DNS/DHCP defaults + Hosts | ✓ |
 | WAN uplink | `Interface` in `wan` zone | **Networks** (type=WAN) | ✓ |
 | Per-segment VPN egress | WireGuard `Interface` + `PolicyRule` + `Route`(table) + `Zone` | segment **Egress** = WAN \| VPN | ✓ (no new model) |
+| VPN kill-switch (no leak) | `Route{Type:blackhole}` in the tunnel table | implicit with Egress=VPN | ✓ (Tier A) |
+| Per-segment DHCP DNS/NTP | `DHCPPool.DHCPOption` (opt 6 / 42) | inside the segment's DHCP | ✓ (Tier A) |
+| Multiple addresses per iface | `StaticProto.IPAddr` (list) | segment address list | ✓ (Tier A) |
 | Firewall per VLAN | `Zone` per segment | auto with the segment | ✓ |
 | Inter-VLAN granular | `Forwarding` + `FirewallRule` | **Firewall matrix** | ✓ |
 | NAT / masquerade | `Zone.Masq`, `NAT` | WAN segment toggle | ✓ |
@@ -93,9 +112,16 @@ Wireless · Advanced**.
 | Multi-WAN failover/balance | — (mwan3) | — | **deferred — VPN egress covers the real need** |
 | Per-VLAN DNS *views* | — (one dnsmasq) | — | **out of scope (confirmed)** |
 
-## 6. Model additions needed
+## 6. Model additions
 
-Small, and only one is required for the canonical config:
+**Tier A — done** (the three real-router gaps `harbor.config` exposed): `Route.Type`
+(blackhole VPN kill-switch), `DHCPPool.DHCPOption` (per-segment DHCP options, incl.
+DNS via option 6 and NTP via 42 — `StaticProto`/segment types DNS on top), and
+`StaticProto.IPAddr` as a list (`Primary()` for single-address backends; codec
+`normalizeIPAddr` folds a stock box's split `option ipaddr`+`netmask` and promotes a
+scalar `ipaddr` into the list, render always emits `list ipaddr`).
+
+**Remaining — one field, only for port forwards (step 5):**
 
 1. **`Redirect.Reflection bool` (+ `ReflectionSrc string`)** — to *control* hairpin
    NAT explicitly (fw4 defaults reflection on; today the model can't turn it off or
@@ -206,18 +232,52 @@ and applied as **one commit-confirm transaction** — so a half-applied router c
 never exists, and a bad firewall edit auto-reverts (the lock-out `Verify` already in
 the UCI applier).
 
+## 8b. The segment projection (Go lens — NOT a CLI)
+
+The "segment-first" principle (§3.1) is formalized as a **pure, bidirectional lens
+over the model**, not a parallel source of truth and **not a CLI** (the raw model +
+the UCI codec/apply path stay the one truth; the lens only re-shapes them):
+
+```
+Project(model.Config)                    → (segments, policy, leftovers)
+Materialize(segments, policy, leftovers) → model.Config
+```
+
+- **segments** are the nodes: a `Segment` = name · role (LAN/WAN/VPN) · carrier
+  (untagged port / VLAN-tag-on-trunk / bridge-of-members) · subnet+router IP · DHCP
+  (range, lease, per-pool DNS/NTP via `DHCPOption`) · egress (WAN / VPN-tunnel +
+  blackhole kill-switch). Each owns one `Interface` (+`Device` if tagged/bridged) +
+  one `Zone` + maybe a `DHCPPool`.
+- **policy** is the edges: the zone×zone matrix (`Forwarding`/`FirewallRule`), kept
+  separate from the nodes (N×N relations don't belong inside a segment).
+- **leftovers** is the honesty valve: anything that doesn't fit the segment pattern
+  (custom routes, ipsets, exotic objects) passes through untouched → the **Advanced**
+  raw `ObjectForm` (§7.7). Projection is *total* even when it isn't *pretty*.
+
+Lives in Go (`internal/washnet/segment`); **netd exposes the projection to the FE**
+alongside the raw config, so the segment-bundle (§7.1) and matrix (§7.2) screens
+read/write the same projection — there's no FE-only segment logic to drift. The
+governing law is the round-trip `Materialize(Project(c)…) == c` for every `c` the
+model can produce: a **pure Go property test, zero VMs** (the live `wash-vm/vm`
+suite already covers the model→UCI→netifd last mile). `harbor.config` is the golden
+acceptance fixture: "parses to N segments + M edges + a WG egress + ~90 DNS records,
+K quarantined." No `washnet-seg` CLI — the consumers are the UI and the test.
+
 ## 9. Delivery order
 
-Ship one screen at a time; each is independently useful and testable. Backend +
-caps first so every screen has something real to talk to.
+Ship one screen at a time; each is independently useful and testable. Backend, caps,
+and model are done (§2); the segment lens is the next foundation.
 
-1. **Finish the UCI backend** — `backendsel` wiring + OpenWRT-container test. *(Phase 1 tail.)*
-2. **Networks (segments)** — create/edit VLAN + WAN bundles; the foundation everything refs.
-3. **Hosts** — unified reservations + static DNS (small, high-value, unblocks DHCP→DNS).
-4. **Firewall matrix** — the centerpiece; needs zones from step 2.
-5. **Port forwards + internal-access** — needs the `Reflection` model field + split-DNS.
-6. **DNS/DHCP defaults**, then **Wireless AP**.
-7. **Advanced** raw view — mostly free; polish last.
+1. ~~**UCI backend** — `backendsel` + OpenWRT test.~~ **Done**, proven by the live
+   M0–M3 e2e + `net-demo` (§2).
+2. **Segment projection** (§8b) — `Project`/`Materialize` + the round-trip property
+   test + the `harbor.config` golden. The foundation the bundle and matrix render.
+3. **Networks (segments)** — create/edit VLAN + WAN bundles over the projection.
+4. **Hosts** — unified reservations + static DNS (small, high-value, unblocks DHCP→DNS).
+5. **Firewall matrix** — the centerpiece; needs zones from step 3.
+6. **Port forwards + internal-access** — needs the `Reflection` model field + split-DNS.
+7. **DNS/DHCP defaults**, then **Wireless AP**.
+8. **Advanced** raw view — mostly free; polish last.
 
 ## 10. Open questions
 
@@ -243,8 +303,8 @@ is the router plane, gated on the UCI/router backend.
    segment's DHCP settings as "hand out IPv6 (RA/DHCPv6)".
 2. **DHCPv6 *client* + RA on the WAN side** — the WAN is a client: accept upstream
    RA and run DHCPv6, **including prefix delegation request**. Model: `proto
-   'dhcpv6'` on the WAN (the parse/render fix in flight), plus a **reqprefix** field
-   (PD request) — *not modeled yet* (small add).
+   'dhcpv6'` on the WAN (parse/render done — codec `normalizeDHCPv6`), plus a
+   **reqprefix** field (PD request) — *not modeled yet* (small add).
 3. **Firewall = NAT-equivalent protection, configurable off.** IPv6 has no NAT, so
    the *firewall* must give the same posture NAT gave IPv4: **default-deny inbound
    from WAN to internal segments**, as stateful rules — and a per-segment toggle to
