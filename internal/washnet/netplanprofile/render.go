@@ -124,8 +124,10 @@ func applyProto(p model.ProtoConfig) device {
 	switch v := p.(type) {
 	case model.StaticProto:
 		d.DHCP4 = boolp(false)
-		if v.IPAddr.IsValid() {
-			d.Addresses = append(d.Addresses, v.IPAddr.String())
+		for _, a := range v.IPAddr {
+			if a.IsValid() {
+				d.Addresses = append(d.Addresses, a.String())
+			}
 		}
 		if v.IP6Addr.IsValid() {
 			d.Addresses = append(d.Addresses, v.IP6Addr.String())

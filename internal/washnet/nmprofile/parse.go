@@ -304,14 +304,19 @@ func parseIPv4(ip4 map[string]string) (model.ProtoConfig, error) {
 	switch ip4["method"] {
 	case "manual":
 		var sp model.StaticProto
-		// NM address1 = "addr/prefix[,gateway]".
-		if a := ip4["address1"]; a != "" {
+		// NM addressN = "addr/prefix[,gateway]"; read each in turn (the gateway
+		// rides whichever address carries it, conventionally the first).
+		for i := 1; ; i++ {
+			a := ip4[fmt.Sprintf("address%d", i)]
+			if a == "" {
+				break
+			}
 			parts := strings.SplitN(a, ",", 2)
 			pfx, err := netip.ParsePrefix(strings.TrimSpace(parts[0]))
 			if err != nil {
-				return nil, fmt.Errorf("address1 %q: %w", a, err)
+				return nil, fmt.Errorf("address%d %q: %w", i, a, err)
 			}
-			sp.IPAddr = pfx
+			sp.IPAddr = append(sp.IPAddr, pfx)
 			if len(parts) == 2 {
 				gw, err := netip.ParseAddr(strings.TrimSpace(parts[1]))
 				if err != nil {

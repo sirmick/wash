@@ -68,7 +68,7 @@ func TestUCI_Distro_ReadModifyWrite(t *testing.T) {
 	lan := live.Interfaces[lanIdx]
 	t.Logf("UCI IN: lan = %+v (ip6assign=%d)", lan.Proto, lan.IP6Assign)
 	// Split ipaddr+netmask must have folded into CIDR, and ip6assign read.
-	if sp, ok := lan.Proto.(model.StaticProto); !ok || sp.IPAddr.String() != "192.168.1.1/24" {
+	if sp, ok := lan.Proto.(model.StaticProto); !ok || sp.Primary().String() != "192.168.1.1/24" {
 		t.Fatalf("stock split ipaddr+netmask did not read as CIDR: %+v", lan.Proto)
 	}
 	if lan.IP6Assign != 60 {
@@ -90,7 +90,7 @@ func TestUCI_Distro_ReadModifyWrite(t *testing.T) {
 	}
 
 	// --- MODIFY: set lan's static address. ---
-	live.Interfaces[lanIdx].Proto = model.StaticProto{IPAddr: netip.MustParsePrefix("192.168.9.1/24")}
+	live.Interfaces[lanIdx].Proto = model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("192.168.9.1/24")}}
 
 	// --- UCI OUT: write it back through wash. ---
 	if _, err := a.Apply(backend.RenderPlan{Target: live}); err != nil {
@@ -111,7 +111,7 @@ func TestUCI_Distro_ReadModifyWrite(t *testing.T) {
 			continue
 		}
 		sp, isStatic := i.Proto.(model.StaticProto)
-		if isStatic && sp.IPAddr.String() == "192.168.9.1/24" {
+		if isStatic && sp.Primary().String() == "192.168.9.1/24" {
 			ok = true
 		}
 	}

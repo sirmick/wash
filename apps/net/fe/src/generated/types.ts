@@ -29,7 +29,7 @@ export interface PPPoEProto {
 }
 
 export interface StaticProto {
-  IPAddr?: string;
+  IPAddr?: string[];
   Gateway?: string;
   IP6Addr?: string;
   IP6Gw?: string;

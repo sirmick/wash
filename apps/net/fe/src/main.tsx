@@ -45,7 +45,7 @@ const addressingDesc: ObjectDescriptor = {
 
 type Proto = {
   _tag: string;
-  IPAddr?: string; Gateway?: string; IP6Addr?: string; IP6Gw?: string; DNS?: string[];
+  IPAddr?: string[]; Gateway?: string; IP6Addr?: string; IP6Gw?: string; DNS?: string[];
   Hostname?: string; IPv4?: boolean; IPv6?: boolean;
   // wireguard variant: the local tunnel endpoint (the peer set lives in
   // Config.WGPeers, a separate kind keyed by this interface's Name).
@@ -152,7 +152,7 @@ const toCaps = (raw: any): Caps => ({
 const protoLabel = (p?: Proto): string => {
   if (!p) return "—";
   switch (p._tag) {
-    case "static": return `static ${p.IPAddr ?? ""}`;
+    case "static": return `static ${(p.IPAddr ?? []).join(", ")}`;
     case "dhcp": return "DHCP";
     case "none": return "no IP";
     case "wireguard": return "WireGuard";
@@ -683,7 +683,7 @@ const PROTO_LABELS: Record<string, string> = {
   "variant.pppoe": "PPPoE",
   "variant.wireguard": "WireGuard",
   // Friendly field labels for the addressing fragment.
-  "StaticProto.IPAddr": "IPv4 address",
+  "StaticProto.IPAddr": "IPv4 addresses",
   "StaticProto.Gateway": "IPv4 gateway",
   "StaticProto.IP6Addr": "IPv6 address",
   "StaticProto.IP6Gw": "IPv6 gateway",

@@ -93,8 +93,11 @@ func applyProto(s *stanza, p model.ProtoConfig) {
 	switch v := p.(type) {
 	case model.StaticProto:
 		s.method = "static"
-		if v.IPAddr.IsValid() {
-			s.addr = v.IPAddr.String()
+		// ifupdown's inet stanza carries one address; use the primary (extra
+		// addresses would need alias stanzas — out of scope, the multi-IP target is
+		// UCI).
+		if a := v.Primary(); a.IsValid() {
+			s.addr = a.String()
 		}
 		if v.Gateway.IsValid() {
 			s.gateway = v.Gateway.String()
@@ -226,7 +229,7 @@ func protoOf(s *stanza) model.ProtoConfig {
 	case "static":
 		var sp model.StaticProto
 		if p, err := netip.ParsePrefix(s.addr); err == nil {
-			sp.IPAddr = p
+			sp.IPAddr = append(sp.IPAddr, p)
 		}
 		if g, err := netip.ParseAddr(s.gateway); err == nil {
 			sp.Gateway = g

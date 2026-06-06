@@ -104,8 +104,9 @@
                   {
                     "name": "IPAddr",
                     "option": "ipaddr",
-                    "widget": "cidr",
+                    "widget": "list-cidr",
                     "group": "addressing",
+                    "list": true,
                     "labelKey": "StaticProto.IPAddr"
                   },
                   {

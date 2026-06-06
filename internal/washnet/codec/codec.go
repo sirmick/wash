@@ -233,7 +233,7 @@ func Parse(files map[string]string) (model.Config, error) {
 			if !ok {
 				continue
 			}
-			combineNetmask(sec.opts)
+			normalizeIPAddr(sec)
 			normalizeDHCPv6(sec.opts)
 			elem := reflect.New(b.elemType).Elem()
 			if err := fillFields(elem, sec); err != nil {
@@ -246,12 +246,26 @@ func Parse(files map[string]string) (model.Config, error) {
 	return c, nil
 }
 
+// normalizeIPAddr reconciles the two ways a box expresses interface addresses
+// with wash's single list field (`ipaddr,list`): it folds a split
+// `option ipaddr` + `option netmask` into one CIDR (combineNetmask), then
+// promotes any scalar `option ipaddr` into the `ipaddr` list — so a stock box
+// (split form), an authored `option ipaddr '10.0.0.1/24'`, and a modern
+// `list ipaddr` all parse into StaticProto.IPAddr. The maps are shared with the
+// section, so mutating them in place is enough.
+func normalizeIPAddr(sec section) {
+	combineNetmask(sec.opts)
+	if addr, ok := sec.opts["ipaddr"]; ok && addr != "" {
+		sec.lists["ipaddr"] = append(sec.lists["ipaddr"], addr)
+		delete(sec.opts, "ipaddr")
+		delete(sec.opts, "netmask")
+	}
+}
+
 // combineNetmask folds OpenWRT's split IPv4 addressing (`option ipaddr '1.2.3.4'`
-// + `option netmask '255.255.255.0'`) into the single CIDR `ipaddr` wash's model
-// expects — so a STOCK OpenWRT box (which ships split form) reads instead of
-// parsing as empty. No-op unless a maskless ipaddr AND a netmask are both
-// present. IPv6 always uses a prefix (`ip6addr 'fd00::1/64'`), so it needs no
-// equivalent.
+// + `option netmask '255.255.255.0'`) into a single CIDR `ipaddr`. No-op unless a
+// maskless ipaddr AND a netmask are both present. IPv6 always uses a prefix
+// (`ip6addr 'fd00::1/64'`), so it needs no equivalent.
 func combineNetmask(opts map[string]string) {
 	addr, hasAddr := opts["ipaddr"]
 	mask, hasMask := opts["netmask"]

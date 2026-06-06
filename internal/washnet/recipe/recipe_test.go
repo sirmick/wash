@@ -16,7 +16,7 @@ import (
 func base() model.Config {
 	return model.Config{
 		Interfaces: []model.Interface{
-			{Name: "lan", Device: "br-lan", Proto: model.StaticProto{IPAddr: netip.MustParsePrefix("192.168.1.1/24")}},
+			{Name: "lan", Device: "br-lan", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("192.168.1.1/24")}}},
 			{Name: "wan", Device: "eth0", Proto: model.DHCPProto{}},
 			{Name: "vpn", Proto: model.WireGuardProto{PrivateKey: "K"}},
 		},
@@ -56,10 +56,10 @@ func TestRecipeSoundness(t *testing.T) {
 			return AddWireGuardPeer(b, WireGuardPeer{Interface: "vpn", PublicKey: "PUB", AllowedIPs: []netip.Prefix{netip.MustParsePrefix("10.9.0.2/32")}, PersistentKeepalive: 25})
 		},
 		"vlan": func() (change.ChangeSet, error) {
-			return AddVLAN(b, VLAN{Parent: "eth0", VID: 20, Proto: model.StaticProto{IPAddr: netip.MustParsePrefix("10.0.20.1/24")}})
+			return AddVLAN(b, VLAN{Parent: "eth0", VID: 20, Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("10.0.20.1/24")}}})
 		},
 		"bridge": func() (change.ChangeSet, error) {
-			return AddBridge(b, Bridge{Name: "br0", Members: []string{"eth1", "eth2"}, Proto: model.StaticProto{IPAddr: netip.MustParsePrefix("10.0.50.1/24")}})
+			return AddBridge(b, Bridge{Name: "br0", Members: []string{"eth1", "eth2"}, Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("10.0.50.1/24")}}})
 		},
 	}
 	for name, mk := range recipes {

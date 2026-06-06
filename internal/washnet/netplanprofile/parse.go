@@ -121,7 +121,7 @@ func protoFrom(d device) model.ProtoConfig {
 	for _, a := range d.Addresses {
 		if p, err := netip.ParsePrefix(a); err == nil {
 			if p.Addr().Is4() {
-				sp.IPAddr = p
+				sp.IPAddr = append(sp.IPAddr, p)
 			} else {
 				sp.IP6Addr = p
 			}

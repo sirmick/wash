@@ -153,8 +153,10 @@ func renderNetwork(nf *netfile) (string, error) {
 	u.section("Network")
 	switch p := nf.proto.(type) {
 	case model.StaticProto:
-		if p.IPAddr.IsValid() {
-			u.kv("Address", p.IPAddr.String())
+		for _, a := range p.IPAddr {
+			if a.IsValid() {
+				u.kv("Address", a.String())
+			}
 		}
 		if p.IP6Addr.IsValid() {
 			u.kv("Address", p.IP6Addr.String())

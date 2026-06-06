@@ -91,14 +91,28 @@ type NoneProto struct{}
 func (NoneProto) UCITag() string { return "none" }
 
 type StaticProto struct {
-	IPAddr   netip.Prefix `uci:"ipaddr" ui:"group=addressing"`
-	Gateway  netip.Addr   `uci:"gateway" ui:"group=addressing"`
-	IP6Addr  netip.Prefix `uci:"ip6addr" ui:"group=addressing"`
-	IP6Gw    netip.Addr   `uci:"ip6gw" ui:"group=addressing"`
-	DNS      []netip.Addr `uci:"dns,list" ui:"group=addressing"`
+	// IPAddr is one or more CIDRs on the interface (OpenWRT `list ipaddr`); the
+	// first is the conventional primary. A stock box's split `option ipaddr` +
+	// `option netmask` is folded to a CIDR and promoted into this list on parse
+	// (codec.normalizeIPAddr). Multiple addresses match real routers — e.g.
+	// harbor's switch carries both 172.16.16.1/24 and 192.168.1.8/24.
+	IPAddr  []netip.Prefix `uci:"ipaddr,list" ui:"group=addressing"`
+	Gateway netip.Addr     `uci:"gateway" ui:"group=addressing"`
+	IP6Addr netip.Prefix   `uci:"ip6addr" ui:"group=addressing"`
+	IP6Gw   netip.Addr     `uci:"ip6gw" ui:"group=addressing"`
+	DNS     []netip.Addr   `uci:"dns,list" ui:"group=addressing"`
 }
 
 func (StaticProto) UCITag() string { return "static" }
+
+// Primary returns the conventional primary address (the first configured), or
+// the zero Prefix if none — for single-address backends and required checks.
+func (p StaticProto) Primary() netip.Prefix {
+	if len(p.IPAddr) > 0 {
+		return p.IPAddr[0]
+	}
+	return netip.Prefix{}
+}
 
 type DHCPProto struct {
 	IPv4     bool   `uci:"ipv4"`     // request a DHCPv4 lease

@@ -19,14 +19,14 @@ func has(d Diff, kind, name string, op Op) bool {
 func TestDiffAddRemoveUpdate(t *testing.T) {
 	base := model.Config{
 		Interfaces: []model.Interface{
-			{Name: "lan", Proto: model.StaticProto{IPAddr: netip.MustParsePrefix("10.0.0.1/24")}},
+			{Name: "lan", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")}}},
 			{Name: "wan", Proto: model.DHCPProto{}},
 		},
 	}
 	after := model.Config{
 		Interfaces: []model.Interface{
-			{Name: "lan", Proto: model.StaticProto{IPAddr: netip.MustParsePrefix("10.0.0.2/24")}}, // changed
-			{Name: "guest", Proto: model.DHCPProto{}},                                             // added
+			{Name: "lan", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("10.0.0.2/24")}}}, // changed
+			{Name: "guest", Proto: model.DHCPProto{}},                                                             // added
 			// wan removed
 		},
 	}

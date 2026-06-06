@@ -39,7 +39,7 @@ test("interface static proto: union resolves, variant fields appear", () => {
   const value = {
     Name: "lan",
     Device: "br-lan",
-    Proto: { _tag: "static", IPAddr: "192.168.1.1/24" },
+    Proto: { _tag: "static", IPAddr: ["192.168.1.1/24"] },
   };
   const form = buildForm(iface, value, [], { pathPrefix: "Interfaces[0]" });
 
@@ -50,9 +50,10 @@ test("interface static proto: union resolves, variant fields appear", () => {
 
   const ipaddr = proto.union!.fields.find((f) => f.field.name === "IPAddr");
   assert.ok(ipaddr, "static variant should expose IPAddr");
-  assert.equal(ipaddr!.value, "192.168.1.1/24");
+  assert.deepEqual(ipaddr!.value, ["192.168.1.1/24"]);
   assert.equal(ipaddr!.path, "Interfaces[0].Proto.IPAddr");
-  assert.equal(ipaddr!.field.widget, "cidr");
+  assert.equal(ipaddr!.field.widget, "list-cidr");
+  assert.equal(ipaddr!.field.list, true);
 });
 
 test("union switches variant by _tag", () => {
@@ -72,7 +73,7 @@ test("union switches variant by _tag", () => {
 
 test("formerly-advanced fields always show (no basic/advanced split)", () => {
   const iface = descriptorFor(desc, "network/interface")!;
-  const value = { Name: "lan", Proto: { _tag: "static", IPAddr: "10.0.0.1/24", DNS: ["1.1.1.1"] } };
+  const value = { Name: "lan", Proto: { _tag: "static", IPAddr: ["10.0.0.1/24"], DNS: ["1.1.1.1"] } };
 
   // DNS carries advanced:true in the descriptor; it must still render — the
   // distinction was removed, every field is always visible.

@@ -95,8 +95,12 @@ func (d *diags) relational(c model.Config) {
 	}
 	var statics []pfx
 	for i, o := range c.Interfaces {
-		if sp, ok := o.Proto.(model.StaticProto); ok && sp.IPAddr.IsValid() {
-			statics = append(statics, pfx{i, sp.IPAddr})
+		if sp, ok := o.Proto.(model.StaticProto); ok {
+			for _, a := range sp.IPAddr {
+				if a.IsValid() {
+					statics = append(statics, pfx{i, a})
+				}
+			}
 		}
 	}
 	for a := 0; a < len(statics); a++ {

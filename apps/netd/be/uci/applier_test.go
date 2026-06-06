@@ -45,7 +45,7 @@ func newTestApplier(t *testing.T, route func() bool) (*Applier, *fakeRunner, str
 func sampleConfig() model.Config {
 	return model.Config{Interfaces: []model.Interface{
 		{Name: "wan", Device: "eth0", Proto: model.DHCPProto{}},
-		{Name: "lan", Device: "br-lan", Proto: model.StaticProto{IPAddr: netip.MustParsePrefix("10.0.50.1/24")}},
+		{Name: "lan", Device: "br-lan", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("10.0.50.1/24")}}},
 	}}
 }
 
@@ -143,7 +143,7 @@ func TestApplyRoundTripsFullGateway(t *testing.T) {
 	a, _, dir := newTestApplier(t, func() bool { return true })
 	cfg := model.Config{
 		Interfaces: []model.Interface{
-			{Name: "lan", Device: "br-lan", Proto: model.StaticProto{IPAddr: netip.MustParsePrefix("10.0.50.1/24")}},
+			{Name: "lan", Device: "br-lan", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("10.0.50.1/24")}}},
 		},
 		Zones: []model.Zone{
 			{Name: "lan", Networks: []string{"lan"}, Input: "ACCEPT", Output: "ACCEPT", Forward: "REJECT"},

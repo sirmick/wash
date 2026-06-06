@@ -128,7 +128,7 @@ func ifaceConfig() map[string]any {
 			map[string]any{
 				"Name":   "lan",
 				"Device": "br-lan",
-				"Proto":  map[string]any{"_tag": "static", "IPAddr": "10.0.0.1/24"},
+				"Proto":  map[string]any{"_tag": "static", "IPAddr": []any{"10.0.0.1/24"}},
 			},
 		},
 	}

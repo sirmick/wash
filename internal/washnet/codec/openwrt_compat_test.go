@@ -38,8 +38,8 @@ config interface 'lan'
 	if !ok {
 		t.Fatalf("proto: got %T want StaticProto", lan.Proto)
 	}
-	if sp.IPAddr.String() != "192.168.1.1/24" {
-		t.Errorf("split v4 ipaddr+netmask not folded to CIDR: got %q want 192.168.1.1/24", sp.IPAddr)
+	if sp.Primary().String() != "192.168.1.1/24" {
+		t.Errorf("split v4 ipaddr+netmask not folded to CIDR: got %v want 192.168.1.1/24", sp.IPAddr)
 	}
 	if sp.IP6Addr.String() != "fd00::1/64" {
 		t.Errorf("static ip6addr: got %q want fd00::1/64", sp.IP6Addr)
@@ -69,8 +69,8 @@ func TestCIDRIpaddrUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sp := c.Interfaces[0].Proto.(model.StaticProto); sp.IPAddr.String() != "10.0.0.1/24" {
-		t.Errorf("CIDR ipaddr mangled: %q", sp.IPAddr)
+	if sp := c.Interfaces[0].Proto.(model.StaticProto); sp.Primary().String() != "10.0.0.1/24" {
+		t.Errorf("CIDR ipaddr mangled: %v", sp.IPAddr)
 	}
 }
 
@@ -104,7 +104,7 @@ func TestDHCPv6ProtoRoundTrips(t *testing.T) {
 
 func TestIP6AssignRoundTrips(t *testing.T) {
 	c := model.Config{Interfaces: []model.Interface{
-		{Name: "lan", Device: "br-lan", Proto: model.StaticProto{IPAddr: netip.MustParsePrefix("10.0.0.1/24")}, IP6Assign: 60},
+		{Name: "lan", Device: "br-lan", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")}}, IP6Assign: 60},
 	}}
 	files, err := Render(c)
 	if err != nil {

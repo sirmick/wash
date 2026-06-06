@@ -121,7 +121,7 @@ func (d *diags) iface(o model.Interface, path string, cp caps.Capabilities) {
 	d.required(path, "Name", o.Name)
 	switch p := o.Proto.(type) {
 	case model.StaticProto:
-		if !p.IPAddr.IsValid() {
+		if !p.Primary().IsValid() {
 			d.add(path+".Proto.IPAddr", "required", "static interface needs an ipaddr", Error)
 		}
 	case model.PPPoEProto:

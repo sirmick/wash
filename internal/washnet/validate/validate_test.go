@@ -34,7 +34,7 @@ func errorCount(ds []Diagnostic) int {
 func TestValidConfigUnderFull(t *testing.T) {
 	c := model.Config{
 		Interfaces: []model.Interface{
-			{Name: "lan", Device: "br-lan", Proto: model.StaticProto{IPAddr: netip.MustParsePrefix("192.168.1.1/24")}},
+			{Name: "lan", Device: "br-lan", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("192.168.1.1/24")}}},
 			{Name: "wan", Device: "eth0", Proto: model.DHCPProto{}},
 		},
 		Zones: []model.Zone{

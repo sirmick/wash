@@ -17,10 +17,10 @@ func realisticConfig() model.Config {
 	return model.Config{
 		Globals: []model.Globals{{Name: "globals", ULAPrefix: netip.MustParsePrefix("fdca:1234::/48")}},
 		Interfaces: []model.Interface{
-			{Name: "loopback", Device: "lo", Proto: model.StaticProto{IPAddr: netip.MustParsePrefix("127.0.0.1/8")}},
+			{Name: "loopback", Device: "lo", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/8")}}},
 			{Name: "wan", Device: "eth0", Proto: model.DHCPProto{}},
 			{Name: "lan", Device: "br-lan", Proto: model.StaticProto{
-				IPAddr: netip.MustParsePrefix("192.168.1.1/24"),
+				IPAddr: []netip.Prefix{netip.MustParsePrefix("192.168.1.1/24")},
 				DNS:    []netip.Addr{netip.MustParseAddr("1.1.1.1")},
 			}},
 			{Name: "vpn", Proto: model.WireGuardProto{

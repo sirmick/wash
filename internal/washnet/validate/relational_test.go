@@ -39,7 +39,7 @@ func TestRelationalInvariants(t *testing.T) {
 
 		{"wgpeer interface not wireguard",
 			model.Config{
-				Interfaces: []model.Interface{{Name: "lan", Proto: model.StaticProto{IPAddr: netip.MustParsePrefix("10.0.0.1/24")}}},
+				Interfaces: []model.Interface{{Name: "lan", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")}}}},
 				WGPeers:    []model.WGPeer{{Name: "p", Interface: "lan", PublicKey: "K"}},
 			},
 			"not_wireguard", "WGPeers[0].Interface"},
@@ -50,8 +50,8 @@ func TestRelationalInvariants(t *testing.T) {
 
 		{"overlapping static subnets",
 			model.Config{Interfaces: []model.Interface{
-				{Name: "lan", Proto: model.StaticProto{IPAddr: netip.MustParsePrefix("192.168.0.1/16")}},
-				{Name: "lan2", Proto: model.StaticProto{IPAddr: netip.MustParsePrefix("192.168.1.1/24")}},
+				{Name: "lan", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("192.168.0.1/16")}}},
+				{Name: "lan2", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("192.168.1.1/24")}}},
 			}},
 			"subnet_overlap", "Interfaces[1].IPAddr"},
 
@@ -111,7 +111,7 @@ func TestRelationalInvariants(t *testing.T) {
 func TestRelationalCleanConfig(t *testing.T) {
 	c := model.Config{
 		Interfaces: []model.Interface{
-			{Name: "lan", Device: "br-lan", Proto: model.StaticProto{IPAddr: netip.MustParsePrefix("192.168.1.1/24")}},
+			{Name: "lan", Device: "br-lan", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("192.168.1.1/24")}}},
 			{Name: "wan", Device: "eth0", Proto: model.DHCPProto{}},
 			{Name: "vpn", Proto: model.WireGuardProto{PrivateKey: "K"}},
 		},

@@ -33,7 +33,7 @@ func TestJSONRoundTripTable(t *testing.T) {
 			Name:   "lan",
 			Device: "br-lan",
 			Proto: model.StaticProto{
-				IPAddr:  netip.MustParsePrefix("10.0.0.1/24"),
+				IPAddr:  []netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")},
 				Gateway: netip.MustParseAddr("10.0.0.254"),
 				DNS:     []netip.Addr{netip.MustParseAddr("1.1.1.1"), netip.MustParseAddr("9.9.9.9")},
 			},
@@ -69,7 +69,7 @@ func TestJSONRoundTripProperty(t *testing.T) {
 func TestJSONUnionWireShape(t *testing.T) {
 	c := model.Config{Interfaces: []model.Interface{{
 		Name:  "lan",
-		Proto: model.StaticProto{IPAddr: netip.MustParsePrefix("10.0.0.1/24")},
+		Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")}},
 	}}}
 	b, err := EncodeJSON(c)
 	if err != nil {
@@ -79,8 +79,8 @@ func TestJSONUnionWireShape(t *testing.T) {
 		Interfaces []struct {
 			Name  string `json:"Name"`
 			Proto struct {
-				Tag    string `json:"_tag"`
-				IPAddr string `json:"IPAddr"`
+				Tag    string   `json:"_tag"`
+				IPAddr []string `json:"IPAddr"`
 			} `json:"Proto"`
 		} `json:"Interfaces"`
 	}
@@ -93,8 +93,8 @@ func TestJSONUnionWireShape(t *testing.T) {
 	if got := top.Interfaces[0].Proto.Tag; got != "static" {
 		t.Errorf("_tag = %q, want \"static\"", got)
 	}
-	if got := top.Interfaces[0].Proto.IPAddr; got != "10.0.0.1/24" {
-		t.Errorf("IPAddr = %q, want \"10.0.0.1/24\"", got)
+	if got := top.Interfaces[0].Proto.IPAddr; len(got) != 1 || got[0] != "10.0.0.1/24" {
+		t.Errorf("IPAddr = %q, want [\"10.0.0.1/24\"]", got)
 	}
 }
 

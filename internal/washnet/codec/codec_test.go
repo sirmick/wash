@@ -32,7 +32,7 @@ func TestRoundTripTable(t *testing.T) {
 		"static iface with dns": {Interfaces: []model.Interface{{
 			Name: "lan", Device: "br-lan",
 			Proto: model.StaticProto{
-				IPAddr: netip.MustParsePrefix("10.0.0.1/24"),
+				IPAddr: []netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")},
 				DNS:    []netip.Addr{netip.MustParseAddr("1.1.1.1"), netip.MustParseAddr("8.8.8.8")},
 			},
 		}}},
@@ -182,7 +182,10 @@ func genProto(r *rand.Rand) model.ProtoConfig {
 	case 0:
 		return model.NoneProto{}
 	case 1:
-		p := model.StaticProto{IPAddr: netip.PrefixFrom(randAddr4(r), 24)}
+		var p model.StaticProto
+		for j, n := 0, 1+r.Intn(2); j < n; j++ { // 1–2 addresses
+			p.IPAddr = append(p.IPAddr, netip.PrefixFrom(randAddr4(r), 24))
+		}
 		if r.Intn(2) == 0 {
 			p.Gateway = randAddr4(r)
 		}
