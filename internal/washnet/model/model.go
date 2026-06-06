@@ -143,6 +143,12 @@ type Route struct {
 	Gateway   netip.Addr   `uci:"gateway"`
 	Metric    int          `uci:"metric"`
 	Table     string       `uci:"table"`
+	// Type is the route disposition: "" (unset = unicast) or one of OpenWRT's
+	// special types — notably "blackhole" for a VPN kill-switch (a blackhole
+	// default route in the tunnel's table, so a segment routed out the VPN can't
+	// leak to WAN if the tunnel drops). blackhole/unreachable/prohibit take no
+	// gateway.
+	Type string `uci:"type" ui:"group=general"`
 }
 
 func (Route) UCIPackage() string { return "network" }
@@ -283,6 +289,12 @@ type DHCPPool struct {
 	Ignore    bool   `uci:"ignore"`
 	RA        string `uci:"ra"`
 	DHCPv6    string `uci:"dhcpv6"`
+	// DHCPOption carries raw dnsmasq DHCP options handed to clients of this pool,
+	// each "code,value" (OpenWRT's `list dhcp_option`). The per-segment DNS server
+	// is option 6 (e.g. "6,10.0.0.53" to point a segment at a specific resolver
+	// instead of the router); NTP is 42. The segment layer types DNS on top of
+	// this; the model keeps it as the faithful UCI primitive.
+	DHCPOption []string `uci:"dhcp_option,list" ui:"group=advanced"`
 }
 
 func (DHCPPool) UCIPackage() string { return "dhcp" }

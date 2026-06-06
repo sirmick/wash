@@ -59,6 +59,18 @@ func TestRoundTripTable(t *testing.T) {
 			Pools: []model.DHCPPool{{Name: "lan", Interface: "lan", Start: 100, Limit: 150, LeaseTime: "12h"}},
 			Hosts: []model.Host{{Name: "nas", MAC: "aa:bb:cc:dd:ee:ff", IP: netip.MustParseAddr("192.168.1.10")}},
 		},
+		"pool with per-segment dns + ntp option": {
+			Pools: []model.DHCPPool{{
+				Name: "iot", Interface: "iot", Start: 50, Limit: 150, LeaseTime: "12h",
+				DHCPOption: []string{"6,192.168.15.1", "42,192.168.15.1"},
+			}},
+		},
+		"blackhole kill-switch route": {
+			Routes: []model.Route{
+				{Interface: "wg", Target: netip.MustParsePrefix("0.0.0.0/0"), Table: "vpn"},
+				{Target: netip.MustParsePrefix("0.0.0.0/0"), Table: "vpn", Type: "blackhole", Metric: 100},
+			},
+		},
 		"wifi psk2": {
 			Radios: []model.WifiDevice{{Name: "radio0", Type: "mac80211", Band: "5g", Channel: "36", Country: "US"}},
 			SSIDs:  []model.WifiIface{{Name: "ap0", Device: "radio0", Mode: "ap", SSID: "wash", Network: "lan", Encryption: model.EncPSK2{Key: "secret"}}},
@@ -109,6 +121,12 @@ func genConfig(r *rand.Rand) model.Config {
 		})
 	}
 	for i, n := 0, r.Intn(2); i < n; i++ {
+		if r.Intn(3) == 0 { // a blackhole route: no gateway, special type
+			c.Routes = append(c.Routes, model.Route{
+				Target: netip.PrefixFrom(randAddr4(r), 16), Table: "vpn", Type: "blackhole", Metric: r.Intn(10),
+			})
+			continue
+		}
 		c.Routes = append(c.Routes, model.Route{
 			Interface: "lan", Target: netip.PrefixFrom(randAddr4(r), 16), Gateway: randAddr4(r), Metric: r.Intn(10),
 		})
@@ -124,9 +142,13 @@ func genConfig(r *rand.Rand) model.Config {
 		})
 	}
 	for i, n := 0, r.Intn(2); i < n; i++ {
-		c.Pools = append(c.Pools, model.DHCPPool{
+		p := model.DHCPPool{
 			Name: fmt.Sprintf("pool%d", i), Interface: "lan", Start: r.Intn(200), Limit: r.Intn(200), LeaseTime: "12h",
-		})
+		}
+		if r.Intn(2) == 0 {
+			p.DHCPOption = []string{"6," + randAddr4(r).String()}
+		}
+		c.Pools = append(c.Pools, p)
 	}
 	for i, n := 0, r.Intn(3); i < n; i++ {
 		c.Hosts = append(c.Hosts, model.Host{

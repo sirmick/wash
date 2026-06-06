@@ -69,6 +69,7 @@ export interface Route {
   Gateway?: string;
   Metric?: number;
   Table?: string;
+  Type?: string;
 }
 
 export interface PolicyRule {
@@ -167,6 +168,7 @@ export interface DHCPPool {
   Ignore?: boolean;
   RA?: string;
   DHCPv6?: string;
+  DHCPOption?: string[];
 }
 
 export interface Host {

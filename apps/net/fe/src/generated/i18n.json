@@ -1,6 +1,7 @@
 {
   "CNAME.Alias": "Alias",
   "CNAME.Target": "Target",
+  "DHCPPool.DHCPOption": "DHCPOption",
   "DHCPPool.DHCPv6": "DHCPv6",
   "DHCPPool.Ignore": "Ignore",
   "DHCPPool.Interface": "Interface",
@@ -81,6 +82,7 @@
   "Route.Metric": "Metric",
   "Route.Table": "Table",
   "Route.Target": "Target",
+  "Route.Type": "Type",
   "StaticProto.DNS": "DNS",
   "StaticProto.Gateway": "Gateway",
   "StaticProto.IP6Addr": "IP6 Addr",

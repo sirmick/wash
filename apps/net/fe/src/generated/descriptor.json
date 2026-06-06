@@ -257,6 +257,13 @@
           "option": "table",
           "widget": "text",
           "labelKey": "Route.Table"
+        },
+        {
+          "name": "Type",
+          "option": "type",
+          "widget": "text",
+          "group": "general",
+          "labelKey": "Route.Type"
         }
       ]
     },
@@ -751,6 +758,14 @@
           "option": "dhcpv6",
           "widget": "text",
           "labelKey": "DHCPPool.DHCPv6"
+        },
+        {
+          "name": "DHCPOption",
+          "option": "dhcp_option",
+          "widget": "list-text",
+          "group": "advanced",
+          "list": true,
+          "labelKey": "DHCPPool.DHCPOption"
         }
       ]
     },
