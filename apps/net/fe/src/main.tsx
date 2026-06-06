@@ -17,6 +17,10 @@ import { ApplyTerminal, type ApplyEvent } from "./ApplyTerminal.tsx";
 import { WifiDialog, type AP } from "./WifiDialog.tsx";
 import { ObjectForm } from "./ObjectForm.tsx";
 import { setAtPath } from "./setAtPath.ts";
+import {
+  carrierLabel, materializeSegment, projectDraft, removeSegment, segFormFrom,
+  type Carrier, type Segment, type SegForm,
+} from "./segment-model.ts";
 import type { Descriptor, ObjectDescriptor } from "./objectform-model.ts";
 import descriptorJson from "./generated/descriptor.json";
 import i18nJson from "./generated/i18n.json";
@@ -136,32 +140,8 @@ type WGPeer = {
   PersistentKeepalive?: number; RouteAllowedIPs?: boolean;
 };
 type Config = { Interfaces?: Interface[]; Devices?: Device[]; WGPeers?: WGPeer[]; Radios?: any[]; SSIDs?: any[]; [k: string]: any };
-// Segment mirrors netd's segment-projection view (segment.Project, surfaced on the
-// `current` reply): the router-UI grouping of a config — per segment its computed
-// role + carrier + the names of the model objects it owns. The union-correct
-// objects live in Config; this is the grouping/role/carrier the FE renders.
-type Carrier = { kind: "untagged" | "vlan" | "bridge"; port?: string; vid?: number; members?: string[] };
-type Segment = { name: string; role: "lan" | "wan" | "vpn"; carrier: Carrier; device?: string; zone?: string; pool?: string; addrs?: string[] };
-const carrierLabel = (c: Carrier): string => {
-  switch (c.kind) {
-    case "vlan": return `VLAN ${c.vid} on ${c.port}`;
-    case "bridge": return `bridge of ${(c.members ?? []).join(", ")}`;
-    default: return c.port ? `port ${c.port}` : "untagged";
-  }
-};
-// SegForm is the editable shape of one segment (router bundle): the user edits
-// this and saveNetwork materializes it to Device(if vlan)+Interface+Zone+Pool.
-// v1 covers LAN segments carried by a VLAN tag or an untagged port; address is a
-// single gateway CIDR, DHCP is the server (pool) it hands out.
-type SegForm = {
-  name: string;
-  carrierKind: "vlan" | "port";
-  parent: string; vid: number; // vlan
-  port: string;                // untagged
-  address: string;             // gateway CIDR, e.g. 10.0.20.1/24
-  dhcp: boolean; start: number; limit: number; lease: string; dns: string;
-  isolate: boolean;            // zone forward REJECT (default) vs ACCEPT
-};
+// Carrier/Segment/SegForm + the segment form↔objects logic live in the pure
+// segment-model kernel (imported above); this component is the thin shell.
 // WifiConn mirrors netd's wifi_status row (an active 802-11-wireless connection).
 type WifiConn = { name: string; device: string };
 // Caps mirrors netd's generic capability wire (docs/NET.md §2.7): the supported
@@ -202,35 +182,9 @@ function NetApp(props: WashAppProps) {
   const [config, setConfig] = createSignal<Config>({ Interfaces: [], Devices: [] }); // committed baseline (from netd)
   const [draft, setDraft] = createSignal<Config>({ Interfaces: [], Devices: [] });  // staged edits, not yet applied
   const [caps, setCaps] = createSignal<Caps>(emptyCaps());
-  // draftSegments groups the live draft into the router-UI "segment" view so the
-  // Networks panel reflects staged create/edit/remove immediately. It mirrors the
-  // Go segment.Project grouping rules (single-network zone, pool by interface,
-  // device by name, role from wireguard/masq) — display-only; the Go lens stays
-  // the authoritative round-trip + materialize spec (netd also exposes the
-  // committed projection as the server contract). If this grouping starts to
-  // sprawl, promote to a netd "project this draft" round-trip instead.
-  const draftSegments = createMemo<Segment[]>(() => {
-    const d = draft();
-    const devByName = new Map((d.Devices ?? []).map((x) => [x.Name, x] as const));
-    const out: Segment[] = [];
-    for (const i of d.Interfaces ?? []) {
-      if (i.Device === "lo" || i.Name === "loopback") continue;
-      const dev = devByName.get(i.Device ?? "");
-      const zone = (d.Zones ?? []).find((z: any) => (z.Networks ?? []).length === 1 && z.Networks[0] === i.Name) as any;
-      const pool = (d.Pools ?? []).find((p: any) => p.Interface === i.Name) as any;
-      const tag = (i.Proto as any)?._tag;
-      const role: Segment["role"] = tag === "wireguard" ? "vpn" : zone?.Masq ? "wan" : "lan";
-      let carrier: Carrier;
-      if (dev?.Type === "8021q") carrier = { kind: "vlan", port: dev.Ifname, vid: dev.VID };
-      else if (dev?.Type === "bridge") carrier = { kind: "bridge", members: dev.Ports };
-      else carrier = { kind: "untagged", port: i.Device };
-      out.push({
-        name: i.Name, role, carrier, device: dev?.Name, zone: zone?.Name, pool: pool?.Name,
-        addrs: tag === "static" ? ((i.Proto as any).IPAddr ?? []) : [],
-      });
-    }
-    return out;
-  });
+  // draftSegments is the live router-UI grouping of the draft (segment-model
+  // kernel) so the Networks panel reflects staged create/edit/remove immediately.
+  const draftSegments = createMemo<Segment[]>(() => projectDraft(draft()));
   // Router-shaped iff some segment owns a zone or a pool (a workstation's segments
   // are bare interfaces). Gates the Networks panel — the router plane (plan §4).
   const isRouter = () => draftSegments().some((s) => s.zone || s.pool);
@@ -555,78 +509,13 @@ function NetApp(props: WashAppProps) {
     setAdding(null);
   };
 
-  // saveNetwork materializes a segment bundle into the draft: it strips any
-  // objects the (old or new) segment owns, then stages Device (if VLAN) +
-  // Interface (static gateway) + Zone + DHCPPool — the write side of the segment
-  // lens, the same object set segment.Project groups for the read view. orig is
-  // the segment being edited (its name may differ from the new name).
+  // Segment bundle: stage / strip / prefill via the pure segment-model kernel.
   const saveNetwork = (f: SegForm, orig?: Segment) => {
-    setDraft((d) => {
-      const next = structuredClone(d) as Config;
-      const names = new Set([f.name, orig?.name].filter(Boolean) as string[]);
-      // the device the old interface referenced (so an edited carrier is replaced)
-      const oldIface = (next.Interfaces ?? []).find((i) => names.has(i.Name));
-      const oldDev = oldIface?.Device;
-      next.Interfaces = (next.Interfaces ?? []).filter((i) => !names.has(i.Name));
-      next.Zones = (next.Zones ?? []).filter((z: any) => !((z.Networks ?? []).length === 1 && names.has(z.Networks[0])));
-      next.Pools = (next.Pools ?? []).filter((p: any) => !names.has(p.Interface));
-
-      let device = f.port;
-      if (f.carrierKind === "vlan") {
-        device = `${f.parent}.${f.vid}`;
-        // drop the old vlan device, then add the (possibly renamed) one
-        next.Devices = (next.Devices ?? []).filter((dev) => dev.Name !== oldDev && dev.Name !== device);
-        next.Devices = [...(next.Devices ?? []), { Name: device, Type: "8021q", Ifname: f.parent, VID: f.vid }];
-      } else if (oldDev && oldDev !== device) {
-        next.Devices = (next.Devices ?? []).filter((dev) => dev.Name !== oldDev); // old vlan device no longer used
-      }
-
-      next.Interfaces = [...(next.Interfaces ?? []), { Name: f.name, Device: device, Proto: { _tag: "static", IPAddr: [f.address] } }];
-      next.Zones = [...(next.Zones ?? []), { Name: f.name, Networks: [f.name], Input: "ACCEPT", Output: "ACCEPT", Forward: f.isolate ? "REJECT" : "ACCEPT" }];
-      if (f.dhcp) {
-        const pool: any = { Name: f.name, Interface: f.name, Start: f.start, Limit: f.limit, LeaseTime: f.lease };
-        if (f.dns) pool.DHCPOption = [`6,${f.dns}`];
-        next.Pools = [...(next.Pools ?? []), pool];
-      }
-      return next;
-    });
+    setDraft((d) => materializeSegment(d, f, orig) as Config);
     setAdding(null); setEditSeg(null);
   };
-
-  // removeNetwork strips a segment's whole bundle (interface + its device + zone +
-  // pool) from the draft.
-  const removeNetwork = (seg: Segment) => {
-    setDraft((d) => {
-      const next = structuredClone(d) as Config;
-      const dev = (next.Interfaces ?? []).find((i) => i.Name === seg.name)?.Device;
-      next.Interfaces = (next.Interfaces ?? []).filter((i) => i.Name !== seg.name);
-      if (dev) next.Devices = (next.Devices ?? []).filter((x) => x.Name !== dev);
-      next.Zones = (next.Zones ?? []).filter((z: any) => !((z.Networks ?? []).length === 1 && z.Networks[0] === seg.name));
-      next.Pools = (next.Pools ?? []).filter((p: any) => p.Interface !== seg.name);
-      return next;
-    });
-  };
-
-  // segForm builds the wizard's initial state from an existing segment by reading
-  // the objects it owns out of the draft (the projection names them).
-  const segForm = (seg: Segment): SegForm => {
-    const iface = (draft().Interfaces ?? []).find((i) => i.Name === seg.name);
-    const pool = (draft().Pools ?? []).find((p: any) => p.Interface === seg.name) as any;
-    const zone = (draft().Zones ?? []).find((z: any) => (z.Networks ?? []).length === 1 && z.Networks[0] === seg.name) as any;
-    const addr = (iface?.Proto as any)?.IPAddr?.[0] ?? "";
-    return {
-      name: seg.name,
-      carrierKind: seg.carrier.kind === "vlan" ? "vlan" : "port",
-      parent: seg.carrier.kind === "vlan" ? (seg.carrier.port ?? "") : (vlanParents()[0] ?? ""),
-      vid: seg.carrier.vid ?? 10,
-      port: seg.carrier.kind === "vlan" ? (links()[0] ?? "") : (seg.carrier.port ?? iface?.Device ?? ""),
-      address: addr,
-      dhcp: !!pool,
-      start: pool?.Start ?? 100, limit: pool?.Limit ?? 150, lease: pool?.LeaseTime ?? "12h",
-      dns: (pool?.DHCPOption ?? []).find((o: string) => o.startsWith("6,"))?.slice(2) ?? "",
-      isolate: (zone?.Forward ?? "REJECT") !== "ACCEPT",
-    };
-  };
+  const removeNetwork = (seg: Segment) => setDraft((d) => removeSegment(d, seg) as Config);
+  const segForm = (seg: Segment): SegForm => segFormFrom(draft(), seg, vlanParents(), links());
 
   // Poll the scan while the dialog is open on an NM-live box (~2.5s; the effect
   // re-runs when `adding` changes and onCleanup clears the interval on close).
