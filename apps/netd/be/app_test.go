@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/internal/washnet/model"
 	"github.com/sirmick/wash/internal/wire"
 	"github.com/sirmick/wash/internal/wiretest"
 )
@@ -366,5 +368,49 @@ func TestStateServiceSnapshotOnSubscribe(t *testing.T) {
 	summary, _ := st["summary"].([]any)
 	if len(summary) == 0 {
 		t.Fatalf("want a non-empty pending summary, got %v", st)
+	}
+}
+
+// TestProjectSegmentsView locks netd's segment-projection wire view: the segment
+// lens runs server-side and the `current` response carries per-segment role +
+// carrier + owned-object names (loopback omitted), so the FE groups by name
+// against the union-correct Config it already has — no FE-side projection drift.
+func TestProjectSegmentsView(t *testing.T) {
+	c := model.Config{
+		Interfaces: []model.Interface{
+			{Name: "loopback", Device: "lo", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/8")}}},
+			{Name: "iot", Device: "iot.6", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("192.168.15.1/24")}}},
+			{Name: "wan", Device: "eth0", Proto: model.DHCPProto{IPv4: true}},
+		},
+		Devices: []model.Device{{Name: "iot.6", Type: "8021q", Ifname: "switch", VID: 6}},
+		Zones: []model.Zone{
+			{Name: "iot", Networks: []string{"iot"}, Input: "ACCEPT", Forward: "REJECT"},
+			{Name: "wan", Networks: []string{"wan"}, Masq: true},
+		},
+		Pools: []model.DHCPPool{{Name: "iot", Interface: "iot", Start: 50, Limit: 150}},
+	}
+	segs := projectSegments(c)
+	if len(segs) != 2 {
+		t.Fatalf("want 2 segments (loopback omitted), got %d: %+v", len(segs), segs)
+	}
+	by := map[string]segmentDTO{}
+	for _, s := range segs {
+		by[s.Name] = s
+	}
+	iot := by["iot"]
+	if iot.Role != "lan" {
+		t.Errorf("iot role = %q, want lan", iot.Role)
+	}
+	if iot.Carrier.Kind != "vlan" || iot.Carrier.VID != 6 || iot.Carrier.Port != "switch" {
+		t.Errorf("iot carrier = %+v, want vlan 6 on switch", iot.Carrier)
+	}
+	if iot.Device != "iot.6" || iot.Zone != "iot" || iot.Pool != "iot" {
+		t.Errorf("iot ownership wrong: device=%q zone=%q pool=%q", iot.Device, iot.Zone, iot.Pool)
+	}
+	if len(iot.Addrs) != 1 || iot.Addrs[0] != "192.168.15.1/24" {
+		t.Errorf("iot addrs = %v, want [192.168.15.1/24]", iot.Addrs)
+	}
+	if by["wan"].Role != "wan" {
+		t.Errorf("wan role = %q, want wan", by["wan"].Role)
 	}
 }
