@@ -19,8 +19,9 @@ import { ObjectForm } from "./ObjectForm.tsx";
 import { setAtPath } from "./setAtPath.ts";
 import {
   carrierLabel, materializeSegment, projectDraft, removeSegment, segFormFrom,
-  type Carrier, type Segment, type SegForm,
+  type Segment, type SegForm,
 } from "./segment-model.ts";
+import { matrixZones, cellState, toggleForward, setInput, type MZone, type CellState } from "./matrix-model.ts";
 import type { Descriptor, ObjectDescriptor } from "./objectform-model.ts";
 import descriptorJson from "./generated/descriptor.json";
 import i18nJson from "./generated/i18n.json";
@@ -517,6 +518,14 @@ function NetApp(props: WashAppProps) {
   const removeNetwork = (seg: Segment) => setDraft((d) => removeSegment(d, seg) as Config);
   const segForm = (seg: Segment): SegForm => segFormFrom(draft(), seg, vlanParents(), links());
 
+  // Firewall matrix: the zone×zone access policy (matrix-model kernel), edited into
+  // the same draft. block↔allow toggles a Forwarding; the Router column toggles a
+  // zone's Input. Custom (rule-backed) cells are read-only here — edited in Advanced.
+  const matrixZonesList = createMemo<MZone[]>(() => matrixZones(draft()));
+  const cellAt = (src: string, dest: string): CellState => cellState(draft(), src, dest);
+  const toggleCell = (src: string, dest: string) => setDraft((d) => toggleForward(d, src, dest) as Config);
+  const toggleInput = (zone: string, cur: string) => setDraft((d) => setInput(d, zone, cur === "ACCEPT" ? "REJECT" : "ACCEPT") as Config);
+
   // Poll the scan while the dialog is open on an NM-live box (~2.5s; the effect
   // re-runs when `adding` changes and onCleanup clears the interval on close).
   createEffect(() => {
@@ -642,6 +651,10 @@ function NetApp(props: WashAppProps) {
               )}
             </For>
           </section>
+        </Show>
+
+        <Show when={routerCaps() && matrixZonesList().length >= 2}>
+          <FirewallMatrix zones={matrixZonesList()} state={cellAt} onToggle={toggleCell} onInput={toggleInput} />
         </Show>
 
         <div class="wash-net-list">
@@ -972,6 +985,51 @@ function NetworkWizard(props: { parents: string[]; ports: string[]; initial?: Se
   );
 }
 
+// FirewallMatrix is the zone×zone access grid (plan §7.2): rows = source zone,
+// columns = destination zone + a Router column (the zone's Input policy). A cell
+// click toggles block↔allow (a Forwarding); custom (rule-backed) cells are
+// read-only here (edited in Advanced). The grid is one CSS-grid container; every
+// header/cell is a direct child (Solid fragments add no wrappers).
+function FirewallMatrix(props: {
+  zones: MZone[];
+  state: (src: string, dest: string) => CellState;
+  onToggle: (src: string, dest: string) => void;
+  onInput: (zone: string, cur: string) => void;
+}) {
+  const glyph = (s: CellState) => (s === "allow" ? "✓" : s === "custom" ? "rules" : "✕");
+  return (
+    <section class="wash-net-matrix" data-testid="net-matrix">
+      <h2 class="wash-net-seg-h">Firewall — who can reach whom</h2>
+      <div class="wash-net-grid" style={{ "grid-template-columns": `auto repeat(${props.zones.length + 1}, minmax(54px, 1fr))` }}>
+        <div class="wash-net-grid-corner">src → dst</div>
+        <For each={props.zones}>{(z) => <div class="wash-net-grid-h" title={z.masq ? "WAN / egress (masquerade)" : ""}>{z.name}{z.masq ? " ⬈" : ""}</div>}</For>
+        <div class="wash-net-grid-h" title="Reach the router's own services (DNS/DHCP/admin)">Router</div>
+        <For each={props.zones}>
+          {(row) => (
+            <>
+              <div class="wash-net-grid-rh">{row.name}</div>
+              <For each={props.zones}>
+                {(col) => (
+                  <Show when={row.name !== col.name} fallback={<div class="wash-net-cell" data-state="self">—</div>}>
+                    <button
+                      class="wash-net-cell" data-testid={`cell-${row.name}-${col.name}`} data-state={props.state(row.name, col.name)}
+                      disabled={props.state(row.name, col.name) === "custom"}
+                      title={props.state(row.name, col.name) === "custom" ? "custom rules — edit in Advanced" : `${row.name} → ${col.name}`}
+                      onClick={() => props.onToggle(row.name, col.name)}
+                    >{glyph(props.state(row.name, col.name))}</button>
+                  </Show>
+                )}
+              </For>
+              <button class="wash-net-cell" data-testid={`input-${row.name}`} data-input={row.input}
+                title={`${row.name} → router services`} onClick={() => props.onInput(row.name, row.input)}>{row.input === "ACCEPT" ? "✓" : "✕"}</button>
+            </>
+          )}
+        </For>
+      </div>
+    </section>
+  );
+}
+
 // WireGuardWizard builds a WG tunnel: the local endpoint (name + private key +
 // optional listen port + tunnel addresses) and a list of peers. The private key
 // seeds generated; only the PRIVATE key is needed here (the backend derives our
@@ -1125,6 +1183,19 @@ const STYLE = `
 .wash-net-conn[data-role="vpn"] { border-color:#2e4a4a; }
 .wash-net-dhcp-row { display:flex; gap:6px; }
 .wash-net-dhcp-row input { width:5.5em; }
+.wash-net-matrix { margin-bottom:14px; }
+.wash-net-grid { display:grid; gap:2px; font-size:11px; }
+.wash-net-grid-corner { opacity:.5; padding:3px 6px; font-size:10px; }
+.wash-net-grid-h { text-align:center; padding:3px 4px; font-weight:600; color:#8fb0e0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wash-net-grid-rh { padding:3px 6px; font-weight:600; display:flex; align-items:center; }
+.wash-net-cell { border:1px solid #2a2a3a; border-radius:4px; background:#16161f; color:#eee; cursor:pointer; padding:4px 0; font-size:11px; }
+.wash-net-cell:hover:not(:disabled) { border-color:#4a4a6a; }
+.wash-net-cell[data-state="allow"] { background:#16301c; color:#5fd75f; border-color:#2e5a38; }
+.wash-net-cell[data-state="block"] { background:#2a1518; color:#d07070; border-color:#5a2e30; }
+.wash-net-cell[data-state="custom"] { background:#2a2410; color:#d0a040; border-color:#5a4a20; cursor:default; }
+.wash-net-cell[data-state="self"] { background:transparent; border-color:transparent; color:#444; cursor:default; }
+.wash-net-cell[data-input="ACCEPT"] { color:#5fd75f; }
+.wash-net-cell[data-input="REJECT"] { color:#d07070; }
 .wash-net-conn-actions { grid-row:1 / span 2; grid-column:2; display:flex; gap:4px; align-items:center; }
 .wash-net-conn[data-status="new"] { border-color:#2e5a38; }
 .wash-net-conn[data-status="edited"] { border-color:#4a4030; }
