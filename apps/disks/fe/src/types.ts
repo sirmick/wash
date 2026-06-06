@@ -142,6 +142,30 @@ export interface ZDataset {
   refer: number;
   mountpoint: string;
 }
+// ---- SMART (M2) ----
+
+export interface SmartAttr {
+  id: number;
+  name: string;
+  value: number;
+  worst: number;
+  thresh: number;
+  raw: string;
+  when_failed: string;
+}
+export interface SmartReport {
+  name: string;
+  passed: boolean;
+  have_status: boolean;
+  model: string;
+  serial: string;
+  firmware: string;
+  temp_c: number;
+  power_on_hours: number;
+  power_cycles: number;
+  attrs: SmartAttr[] | null;
+}
+
 export interface ZPool {
   name: string;
   state: string;

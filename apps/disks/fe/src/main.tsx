@@ -35,7 +35,15 @@ import type {
   ZPool,
   ZVdev,
   ZDataset,
+  SmartReport,
 } from './types.ts';
+
+// Per-disk SMART state in the FE store.
+interface SmartState {
+  loading?: boolean;
+  report?: SmartReport;
+  error?: string;
+}
 
 // ---- formatting ----
 
@@ -194,8 +202,23 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   // Per-disk I/O rate rings, keyed by device name.
   const [ioHist, setIoHist] = createStore<Record<string, { r: number[]; w: number[] }>>({});
+  // Per-disk SMART results, keyed by device name.
+  const [smart, setSmart] = createStore<Record<string, SmartState>>({});
+
+  const checkSmart = (name: string) => {
+    setSmart(name, { loading: true });
+    send({ kind: 'smart', id: `smart-${name}-${snapshot()?.ts ?? 0}`, name });
+  };
 
   const handleBE = (m: any) => {
+    if (m?.kind === 'smart_ok') {
+      setSmart(m.name, { report: m.report as SmartReport });
+      return;
+    }
+    if (m?.kind === 'smart_err') {
+      setSmart(m.name, { error: String(m.error ?? 'SMART read failed') });
+      return;
+    }
     if (m?.kind !== 'snapshot') return;
     const snap = m as Snapshot;
     const prev = snapshot();
@@ -252,7 +275,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       </div>
       <div style={detailStyle}>
         <Show when={selected()} fallback={<div style={{ opacity: 0.5, padding: '20px' }}>Select a device.</div>}>
-          {(row) => <Detail row={row()} ioHist={ioHist} />}
+          {(row) => (
+            <Detail
+              row={row()}
+              ioHist={ioHist}
+              smart={smart}
+              smartCap={snapshot()?.capabilities?.smart ?? false}
+              onCheckSmart={checkSmart}
+            />
+          )}
         </Show>
       </div>
     </div>
@@ -291,11 +322,25 @@ const RowTrailing: Component<{ row: Row }> = (props) => {
 
 // ---- detail pane (switches on row kind) ----
 
-const Detail: Component<{ row: Row; ioHist: Record<string, { r: number[]; w: number[] }> }> = (props) => {
+const Detail: Component<{
+  row: Row;
+  ioHist: Record<string, { r: number[]; w: number[] }>;
+  smart: Record<string, SmartState>;
+  smartCap: boolean;
+  onCheckSmart: (name: string) => void;
+}> = (props) => {
   return (
     <div style={{ padding: '16px 20px', overflow: 'auto', height: '100%', 'box-sizing': 'border-box' }}>
       <Switch>
-        <Match when={props.row.kind === 'disk'}><DiskDetail disk={props.row.data as Disk} ioHist={props.ioHist} /></Match>
+        <Match when={props.row.kind === 'disk'}>
+          <DiskDetail
+            disk={props.row.data as Disk}
+            ioHist={props.ioHist}
+            smart={props.smart[(props.row.data as Disk).name]}
+            smartCap={props.smartCap}
+            onCheckSmart={props.onCheckSmart}
+          />
+        </Match>
         <Match when={props.row.kind === 'part'}><PartDetail part={props.row.data as Partition} /></Match>
         <Match when={props.row.kind === 'md'}><MDDetail a={props.row.data as MDArray} /></Match>
         <Match when={props.row.kind === 'lvm-vg'}><VGDetail vg={props.row.data as LVMVG} /></Match>
@@ -314,7 +359,13 @@ const Title: Component<{ t: string }> = (props) => (
   <div data-testid="disks-detail-title" style={{ font: `600 ${tokens.fontSizeMd} ${tokens.fontSans}`, 'padding-bottom': '10px' }}>{props.t}</div>
 );
 
-const DiskDetail: Component<{ disk: Disk; ioHist: Record<string, { r: number[]; w: number[] }> }> = (props) => {
+const DiskDetail: Component<{
+  disk: Disk;
+  ioHist: Record<string, { r: number[]; w: number[] }>;
+  smart: SmartState | undefined;
+  smartCap: boolean;
+  onCheckSmart: (name: string) => void;
+}> = (props) => {
   const hist = () => props.ioHist[props.disk.name] ?? { r: [], w: [] };
   const lastR = () => hist().r[hist().r.length - 1] ?? 0;
   const lastW = () => hist().w[hist().w.length - 1] ?? 0;
@@ -338,7 +389,72 @@ const DiskDetail: Component<{ disk: Disk; ioHist: Record<string, { r: number[]; 
         <div style={{ height: '4px' }} />
         <Spark data={hist().w} color="#d97757" />
       </div>
+      <Show when={props.smartCap || props.disk.smart_supported}>
+        <SmartPanel disk={props.disk} smart={props.smart} onCheck={() => props.onCheckSmart(props.disk.name)} />
+      </Show>
     </>
+  );
+};
+
+const SmartPanel: Component<{ disk: Disk; smart: SmartState | undefined; onCheck: () => void }> = (props) => {
+  return (
+    <div style={{ 'padding-top': '14px', 'border-top': `1px solid ${tokens.borderMenu}`, 'margin-top': '14px' }}>
+      <div style={{ display: 'flex', 'align-items': 'center', gap: '10px', 'padding-bottom': '8px' }}>
+        <span style={{ font: `600 ${tokens.fontSizeBase} ${tokens.fontSans}` }}>SMART health</span>
+        <button
+          data-testid="disks-smart-check"
+          disabled={props.smart?.loading}
+          onClick={props.onCheck}
+          style={smartBtnStyle}
+        >
+          {props.smart?.loading ? 'Checking…' : props.smart?.report ? 'Re-check' : 'Check health'}
+        </button>
+        <Show when={props.smart?.report?.have_status}>
+          <span
+            data-testid="disks-smart-badge"
+            style={{
+              padding: '1px 8px',
+              'border-radius': '3px',
+              'font-size': tokens.fontSizeSm,
+              background: props.smart!.report!.passed ? '#2c5d4f' : tokens.borderDanger,
+              color: '#fff',
+            }}
+          >
+            {props.smart!.report!.passed ? 'PASSED' : 'FAILED'}
+          </span>
+        </Show>
+      </div>
+      <Show when={props.smart?.error}>
+        <div style={{ color: tokens.borderDanger, 'font-size': tokens.fontSizeBase }}>{props.smart!.error}</div>
+      </Show>
+      <Show when={props.smart?.report}>
+        {(_) => {
+          const r = props.smart!.report!;
+          return (
+            <div data-testid="disks-smart-panel">
+              <KV k="temperature" v={`${r.temp_c} °C`} />
+              <KV k="power-on" v={`${r.power_on_hours} h`} />
+              <KV k="power cycles" v={String(r.power_cycles)} />
+              <Show when={(r.attrs?.length ?? 0) > 0}>
+                <div style={{ 'padding-top': '8px', overflow: 'auto' }}>
+                  <For each={r.attrs ?? []}>
+                    {(a) => (
+                      <div style={{ display: 'flex', gap: '10px', font: `${tokens.fontSizeSm} ${tokens.fontMono}`, padding: '2px 0' }}>
+                        <span style={{ width: '210px', flex: '0 0 210px', opacity: 0.8 }}>{a.name}</span>
+                        <span style={{ width: '90px', 'text-align': 'right' }}>{a.raw}</span>
+                        <Show when={a.when_failed && a.when_failed !== '-'}>
+                          <span style={{ color: tokens.borderDanger }}>failed: {a.when_failed}</span>
+                        </Show>
+                      </div>
+                    )}
+                  </For>
+                </div>
+              </Show>
+            </div>
+          );
+        }}
+      </Show>
+    </div>
   );
 };
 
@@ -483,6 +599,16 @@ const detailStyle: JSX.CSSProperties = {
   flex: '1 1 auto',
   height: '100%',
   overflow: 'hidden',
+};
+
+const smartBtnStyle: JSX.CSSProperties = {
+  background: tokens.bgMenu,
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': '3px',
+  padding: '2px 10px',
+  cursor: 'pointer',
+  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
 };
 
 // ---- custom element ----

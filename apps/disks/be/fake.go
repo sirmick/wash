@@ -100,3 +100,18 @@ func fakeSnapshot() Snapshot {
 		Managers:     []Manager{mdMgr, lvmMgr, btrfsMgr, zfsMgr},
 	}
 }
+
+// fakeSmart returns a deterministic SMART report for the fake source, so the
+// "Check health" UI path is testable without smartctl or root.
+func fakeSmart(name string) SmartReport {
+	return SmartReport{
+		Name: name, Passed: true, HaveStatus: true,
+		Model: "WASH FakeSSD 512G", Serial: "FAKE-" + name, Firmware: "1.0",
+		TempC: 34, PowerOnHrs: 8123, PowerCycles: 412,
+		Attrs: []SmartAttr{
+			{ID: 5, Name: "Reallocated_Sector_Ct", Value: 100, Worst: 100, Thresh: 10, Raw: "0", WhenFailed: ""},
+			{ID: 9, Name: "Power_On_Hours", Value: 99, Worst: 99, Thresh: 0, Raw: "8123", WhenFailed: ""},
+			{ID: 194, Name: "Temperature_Celsius", Value: 66, Worst: 50, Thresh: 0, Raw: "34", WhenFailed: ""},
+		},
+	}
+}

@@ -58,4 +58,23 @@ test.describe('wash-disks browser', () => {
     await el.locator('[data-testid="disks-row-part:nvme0n1p2"]').click();
     await expect(el.locator('[data-testid="disks-fullness"]')).toBeVisible();
   });
+
+  test('SMART check renders a health badge + attributes', async ({ page, router }) => {
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    await page.keyboard.press('Control+Space');
+    const input = page.locator('[data-testid="palette-input"]');
+    await input.fill('disks');
+    await page.keyboard.press('Enter');
+
+    const el = page.locator('wash-app-disks');
+    await expect(el.locator('[data-testid="disks-row-disk:nvme0n1"]')).toBeVisible({ timeout: 6_000 });
+    await el.locator('[data-testid="disks-row-disk:nvme0n1"]').click();
+
+    // The fake source replies to the smart request without going through
+    // wash-priv, so the badge + panel appear deterministically.
+    await el.locator('[data-testid="disks-smart-check"]').click();
+    await expect(el.locator('[data-testid="disks-smart-badge"]')).toHaveText('PASSED', { timeout: 5_000 });
+    await expect(el.locator('[data-testid="disks-smart-panel"]')).toBeVisible();
+  });
 });

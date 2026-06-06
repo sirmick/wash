@@ -165,6 +165,7 @@ func registerHandlers(b *sdk.Bus) {
 		poke()
 		return nil
 	})
+	registerSmart(b)
 }
 
 // onMapped resumes the stream; onState pauses on minimize.
