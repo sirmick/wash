@@ -149,6 +149,19 @@ const carrierLabel = (c: Carrier): string => {
     default: return c.port ? `port ${c.port}` : "untagged";
   }
 };
+// SegForm is the editable shape of one segment (router bundle): the user edits
+// this and saveNetwork materializes it to Device(if vlan)+Interface+Zone+Pool.
+// v1 covers LAN segments carried by a VLAN tag or an untagged port; address is a
+// single gateway CIDR, DHCP is the server (pool) it hands out.
+type SegForm = {
+  name: string;
+  carrierKind: "vlan" | "port";
+  parent: string; vid: number; // vlan
+  port: string;                // untagged
+  address: string;             // gateway CIDR, e.g. 10.0.20.1/24
+  dhcp: boolean; start: number; limit: number; lease: string; dns: string;
+  isolate: boolean;            // zone forward REJECT (default) vs ACCEPT
+};
 // WifiConn mirrors netd's wifi_status row (an active 802-11-wireless connection).
 type WifiConn = { name: string; device: string };
 // Caps mirrors netd's generic capability wire (docs/NET.md §2.7): the supported
@@ -189,14 +202,56 @@ function NetApp(props: WashAppProps) {
   const [config, setConfig] = createSignal<Config>({ Interfaces: [], Devices: [] }); // committed baseline (from netd)
   const [draft, setDraft] = createSignal<Config>({ Interfaces: [], Devices: [] });  // staged edits, not yet applied
   const [caps, setCaps] = createSignal<Caps>(emptyCaps());
-  const [segments, setSegments] = createSignal<Segment[]>([]); // segment.Project view from netd
+  // draftSegments groups the live draft into the router-UI "segment" view so the
+  // Networks panel reflects staged create/edit/remove immediately. It mirrors the
+  // Go segment.Project grouping rules (single-network zone, pool by interface,
+  // device by name, role from wireguard/masq) — display-only; the Go lens stays
+  // the authoritative round-trip + materialize spec (netd also exposes the
+  // committed projection as the server contract). If this grouping starts to
+  // sprawl, promote to a netd "project this draft" round-trip instead.
+  const draftSegments = createMemo<Segment[]>(() => {
+    const d = draft();
+    const devByName = new Map((d.Devices ?? []).map((x) => [x.Name, x] as const));
+    const out: Segment[] = [];
+    for (const i of d.Interfaces ?? []) {
+      if (i.Device === "lo" || i.Name === "loopback") continue;
+      const dev = devByName.get(i.Device ?? "");
+      const zone = (d.Zones ?? []).find((z: any) => (z.Networks ?? []).length === 1 && z.Networks[0] === i.Name) as any;
+      const pool = (d.Pools ?? []).find((p: any) => p.Interface === i.Name) as any;
+      const tag = (i.Proto as any)?._tag;
+      const role: Segment["role"] = tag === "wireguard" ? "vpn" : zone?.Masq ? "wan" : "lan";
+      let carrier: Carrier;
+      if (dev?.Type === "8021q") carrier = { kind: "vlan", port: dev.Ifname, vid: dev.VID };
+      else if (dev?.Type === "bridge") carrier = { kind: "bridge", members: dev.Ports };
+      else carrier = { kind: "untagged", port: i.Device };
+      out.push({
+        name: i.Name, role, carrier, device: dev?.Name, zone: zone?.Name, pool: pool?.Name,
+        addrs: tag === "static" ? ((i.Proto as any).IPAddr ?? []) : [],
+      });
+    }
+    return out;
+  });
   // Router-shaped iff some segment owns a zone or a pool (a workstation's segments
   // are bare interfaces). Gates the Networks panel — the router plane (plan §4).
-  const isRouter = () => segments().some((s) => s.zone || s.pool);
+  const isRouter = () => draftSegments().some((s) => s.zone || s.pool);
+  // On a router, the managed-network interfaces (those with a zone/pool) live in
+  // the Networks panel — keep them out of the raw connections list below to avoid
+  // showing each segment twice. Workstations keep the full flat list.
+  const looseConnections = createMemo<Interface[]>(() => {
+    const all = draft().Interfaces ?? [];
+    if (!routerCaps()) return all;
+    const managed = new Set(draftSegments().filter((s) => s.zone || s.pool).map((s) => s.name));
+    return all.filter((i) => !managed.has(i.Name));
+  });
+  // routerCaps: the backend can express router segments (firewall zone + DHCP
+  // server) — UCI does, NM/workstation doesn't. Gates the Networks panel + the
+  // "+ Network" button so a fresh router (no segments yet) can still add one.
+  const routerCaps = () => canKind("zone") && canKind("dhcp");
   const can = (f: string) => caps().features.has(f);
   const canKind = (k: string) => caps().kinds.has(k);
   const [links, setLinks] = createSignal<string[]>([]); // physical NICs from the backend
-  const [adding, setAdding] = createSignal<null | "ethernet" | "vlan" | "bridge" | "wifi" | "wireguard">(null);
+  const [adding, setAdding] = createSignal<null | "ethernet" | "vlan" | "bridge" | "wifi" | "wireguard" | "network">(null);
+  const [editSeg, setEditSeg] = createSignal<Segment | null>(null); // segment being edited (router bundle)
 
   // Wifi gating + state. wifiCapable shows the +Wifi button (the renderer can
   // express wifi AND a radio is present); wifiLive enables the live scan/connect
@@ -332,7 +387,6 @@ function NetApp(props: WashAppProps) {
       setConfig(cfg);
       setDraft(structuredClone(cfg)); // reset the draft to the freshly committed state
       setCaps(toCaps(r.caps));
-      setSegments((r.segments ?? []) as Segment[]);
       setLinks((r.devices ?? []) as string[]);
       setWifiRadio(!!r.wifi_radio);
       setWifiLive(!!r.wifi_live);
@@ -501,6 +555,79 @@ function NetApp(props: WashAppProps) {
     setAdding(null);
   };
 
+  // saveNetwork materializes a segment bundle into the draft: it strips any
+  // objects the (old or new) segment owns, then stages Device (if VLAN) +
+  // Interface (static gateway) + Zone + DHCPPool — the write side of the segment
+  // lens, the same object set segment.Project groups for the read view. orig is
+  // the segment being edited (its name may differ from the new name).
+  const saveNetwork = (f: SegForm, orig?: Segment) => {
+    setDraft((d) => {
+      const next = structuredClone(d) as Config;
+      const names = new Set([f.name, orig?.name].filter(Boolean) as string[]);
+      // the device the old interface referenced (so an edited carrier is replaced)
+      const oldIface = (next.Interfaces ?? []).find((i) => names.has(i.Name));
+      const oldDev = oldIface?.Device;
+      next.Interfaces = (next.Interfaces ?? []).filter((i) => !names.has(i.Name));
+      next.Zones = (next.Zones ?? []).filter((z: any) => !((z.Networks ?? []).length === 1 && names.has(z.Networks[0])));
+      next.Pools = (next.Pools ?? []).filter((p: any) => !names.has(p.Interface));
+
+      let device = f.port;
+      if (f.carrierKind === "vlan") {
+        device = `${f.parent}.${f.vid}`;
+        // drop the old vlan device, then add the (possibly renamed) one
+        next.Devices = (next.Devices ?? []).filter((dev) => dev.Name !== oldDev && dev.Name !== device);
+        next.Devices = [...(next.Devices ?? []), { Name: device, Type: "8021q", Ifname: f.parent, VID: f.vid }];
+      } else if (oldDev && oldDev !== device) {
+        next.Devices = (next.Devices ?? []).filter((dev) => dev.Name !== oldDev); // old vlan device no longer used
+      }
+
+      next.Interfaces = [...(next.Interfaces ?? []), { Name: f.name, Device: device, Proto: { _tag: "static", IPAddr: [f.address] } }];
+      next.Zones = [...(next.Zones ?? []), { Name: f.name, Networks: [f.name], Input: "ACCEPT", Output: "ACCEPT", Forward: f.isolate ? "REJECT" : "ACCEPT" }];
+      if (f.dhcp) {
+        const pool: any = { Name: f.name, Interface: f.name, Start: f.start, Limit: f.limit, LeaseTime: f.lease };
+        if (f.dns) pool.DHCPOption = [`6,${f.dns}`];
+        next.Pools = [...(next.Pools ?? []), pool];
+      }
+      return next;
+    });
+    setAdding(null); setEditSeg(null);
+  };
+
+  // removeNetwork strips a segment's whole bundle (interface + its device + zone +
+  // pool) from the draft.
+  const removeNetwork = (seg: Segment) => {
+    setDraft((d) => {
+      const next = structuredClone(d) as Config;
+      const dev = (next.Interfaces ?? []).find((i) => i.Name === seg.name)?.Device;
+      next.Interfaces = (next.Interfaces ?? []).filter((i) => i.Name !== seg.name);
+      if (dev) next.Devices = (next.Devices ?? []).filter((x) => x.Name !== dev);
+      next.Zones = (next.Zones ?? []).filter((z: any) => !((z.Networks ?? []).length === 1 && z.Networks[0] === seg.name));
+      next.Pools = (next.Pools ?? []).filter((p: any) => p.Interface !== seg.name);
+      return next;
+    });
+  };
+
+  // segForm builds the wizard's initial state from an existing segment by reading
+  // the objects it owns out of the draft (the projection names them).
+  const segForm = (seg: Segment): SegForm => {
+    const iface = (draft().Interfaces ?? []).find((i) => i.Name === seg.name);
+    const pool = (draft().Pools ?? []).find((p: any) => p.Interface === seg.name) as any;
+    const zone = (draft().Zones ?? []).find((z: any) => (z.Networks ?? []).length === 1 && z.Networks[0] === seg.name) as any;
+    const addr = (iface?.Proto as any)?.IPAddr?.[0] ?? "";
+    return {
+      name: seg.name,
+      carrierKind: seg.carrier.kind === "vlan" ? "vlan" : "port",
+      parent: seg.carrier.kind === "vlan" ? (seg.carrier.port ?? "") : (vlanParents()[0] ?? ""),
+      vid: seg.carrier.vid ?? 10,
+      port: seg.carrier.kind === "vlan" ? (links()[0] ?? "") : (seg.carrier.port ?? iface?.Device ?? ""),
+      address: addr,
+      dhcp: !!pool,
+      start: pool?.Start ?? 100, limit: pool?.Limit ?? 150, lease: pool?.LeaseTime ?? "12h",
+      dns: (pool?.DHCPOption ?? []).find((o: string) => o.startsWith("6,"))?.slice(2) ?? "",
+      isolate: (zone?.Forward ?? "REJECT") !== "ACCEPT",
+    };
+  };
+
   // Poll the scan while the dialog is open on an NM-live box (~2.5s; the effect
   // re-runs when `adding` changes and onCleanup clears the interval on close).
   createEffect(() => {
@@ -551,6 +678,9 @@ function NetApp(props: WashAppProps) {
       <style>{STYLE}</style>
       <header class="wash-net-head">
         <div class="wash-net-add">
+          <Show when={routerCaps()}>
+            <button data-testid="add-network" class="wash-net-btn primary" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setEditSeg(null); setAdding("network"); }}><Icon name="git-branch" /> Network</button>
+          </Show>
           <button data-testid="add-ethernet" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setConfigureDevice(""); setAdding("ethernet"); }}><Icon name="ethernet-port" /> Ethernet</button>
           <button data-testid="add-vlan" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("vlan")} onClick={() => setAdding("vlan")}><Icon name="git-branch" /> VLAN</button>
           <button data-testid="add-bridge" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("bridge")} onClick={() => setAdding("bridge")}><Icon name="git-merge" /> Bridge</button>
@@ -564,6 +694,15 @@ function NetApp(props: WashAppProps) {
       </header>
 
       <div class="wash-net-body">
+        <Show when={adding() === "network"}>
+          <NetworkWizard
+            parents={vlanParents()}
+            ports={links()}
+            initial={editSeg() ? segForm(editSeg()!) : undefined}
+            onCancel={() => { setAdding(null); setEditSeg(null); }}
+            onSave={(f) => saveNetwork(f, editSeg() ?? undefined)}
+          />
+        </Show>
         <Show when={adding() === "ethernet" || editIface()}>
           <EthernetWizard
             nics={editIface() ? [] : links()}
@@ -586,10 +725,10 @@ function NetApp(props: WashAppProps) {
           <WifiDialog live={wifiLive()} busy={busy()} enabled={wifiEnabled()} aps={aps()} scanning={scanning()} onScan={() => void scanWifi()} onToggleRadio={toggleRadio} onConnect={connectWifi} onCancel={() => setAdding(null)} />
         </Show>
 
-        <Show when={isRouter()}>
+        <Show when={routerCaps()}>
           <section class="wash-net-segments" data-testid="net-segments">
             <h2 class="wash-net-seg-h">Networks</h2>
-            <For each={segments()}>
+            <For each={draftSegments()} fallback={<div class="wash-net-empty">No networks yet — use + Network.</div>}>
               {(s) => (
                 <div class="wash-net-conn" data-testid={`segment-${s.name}`} data-role={s.role} data-carrier={s.carrier.kind}>
                   <div class="wash-net-conn-main">
@@ -604,6 +743,12 @@ function NetApp(props: WashAppProps) {
                     <Show when={s.pool}><span class="wash-net-seg-tag">DHCP</span></Show>
                     <Show when={s.zone}><span class="wash-net-seg-tag">zone {s.zone}</span></Show>
                   </div>
+                  <Show when={s.role === "lan"}>
+                    <div class="wash-net-conn-actions">
+                      <button class="wash-net-btn ghost" data-testid={`segment-edit-${s.name}`} title="Edit this network" disabled={busy() || adding() !== null || editIface() !== null} onClick={() => { setEditSeg(s); setAdding("network"); }}><Icon name="git-branch" /> Edit</button>
+                      <button class="wash-net-btn ghost" data-testid={`segment-del-${s.name}`} title="Remove this network" disabled={busy() || adding() !== null} onClick={() => removeNetwork(s)}><Icon name="trash" /> Remove</button>
+                    </div>
+                  </Show>
                 </div>
               )}
             </For>
@@ -625,7 +770,7 @@ function NetApp(props: WashAppProps) {
               </div>
             )}
           </For>
-          <For each={draft().Interfaces ?? []} fallback={<Show when={removed().length === 0}><div class="wash-net-empty">No connections yet — use + Ethernet / + VLAN / + Bridge.</div></Show>}>
+          <For each={looseConnections()} fallback={<Show when={removed().length === 0 && !routerCaps()}><div class="wash-net-empty">No connections yet — use + Ethernet / + VLAN / + Bridge.</div></Show>}>
             {(iface) => {
               const d = devByName().get(iface.Device ?? "");
               const st = () => statusOf(iface);
@@ -844,6 +989,100 @@ function BridgeWizard(props: { members: string[]; onCancel: () => void; onCreate
   );
 }
 
+// NetworkWizard is the router segment bundle (plan §7.1): one form that the user
+// thinks of as "a network," materialized to Device(if VLAN)+Interface+Zone+Pool by
+// saveNetwork. v1 = a LAN segment carried by a VLAN tag or an untagged port, a
+// static gateway address, an optional DHCP server, and the isolation default.
+function NetworkWizard(props: { parents: string[]; ports: string[]; initial?: SegForm; onCancel: () => void; onSave: (f: SegForm) => void }) {
+  const editing = !!props.initial;
+  const i = props.initial;
+  const [name, setName] = createSignal(i?.name ?? "");
+  const [carrierKind, setCarrierKind] = createSignal<"vlan" | "port">(i?.carrierKind ?? "vlan");
+  const [parent, setParent] = createSignal(i?.parent ?? props.parents[0] ?? "");
+  const [vid, setVid] = createSignal(i?.vid ?? 10);
+  const [port, setPort] = createSignal(i?.port ?? props.ports[0] ?? "");
+  const [address, setAddress] = createSignal(i?.address ?? "");
+  const [dhcp, setDhcp] = createSignal(i?.dhcp ?? true);
+  const [start, setStart] = createSignal(i?.start ?? 100);
+  const [limit, setLimit] = createSignal(i?.limit ?? 150);
+  const [lease, setLease] = createSignal(i?.lease ?? "12h");
+  const [dns, setDns] = createSignal(i?.dns ?? "");
+  const [isolate, setIsolate] = createSignal(i?.isolate ?? true);
+
+  const valid = () => !!name() && /\/\d+$/.test(address()) &&
+    (carrierKind() === "port" ? !!port() : (!!parent() && vid() >= 1 && vid() <= 4094));
+  const submit = () => props.onSave({
+    name: name(), carrierKind: carrierKind(), parent: parent(), vid: vid(), port: port(),
+    address: address(), dhcp: dhcp(), start: start(), limit: limit(), lease: lease(), dns: dns(), isolate: isolate(),
+  });
+
+  return (
+    <div class="wash-net-wizard" data-testid="network-wizard">
+      <div class="wash-net-wizard-title">{editing ? `Edit network ${i!.name}` : "New network"}</div>
+      <label class="wash-net-field">
+        <span class="wash-net-label">Name</span>
+        <input data-testid="net-name" value={name()} disabled={editing} onInput={(e) => setName(e.currentTarget.value)} placeholder="iot" />
+      </label>
+      <label class="wash-net-field">
+        <span class="wash-net-label">Carrier</span>
+        <select data-testid="net-carrier" value={carrierKind()} onChange={(e) => setCarrierKind(e.currentTarget.value as any)}>
+          <option value="vlan">VLAN tag</option>
+          <option value="port">Untagged port</option>
+        </select>
+      </label>
+      <Show when={carrierKind() === "vlan"} fallback={
+        <label class="wash-net-field">
+          <span class="wash-net-label">Port</span>
+          <select data-testid="net-port" value={port()} onChange={(e) => setPort(e.currentTarget.value)}>
+            <For each={props.ports}>{(d) => <option value={d}>{d}</option>}</For>
+          </select>
+        </label>
+      }>
+        <label class="wash-net-field">
+          <span class="wash-net-label">Trunk</span>
+          <select data-testid="net-parent" value={parent()} onChange={(e) => setParent(e.currentTarget.value)}>
+            <For each={props.parents}>{(d) => <option value={d}>{d}</option>}</For>
+          </select>
+        </label>
+        <label class="wash-net-field">
+          <span class="wash-net-label">VLAN ID</span>
+          <input data-testid="net-vid" type="number" min="1" max="4094" value={vid()} onInput={(e) => setVid(parseInt(e.currentTarget.value || "0", 10))} />
+        </label>
+      </Show>
+      <label class="wash-net-field">
+        <span class="wash-net-label">Router address</span>
+        <input data-testid="net-address" value={address()} onInput={(e) => setAddress(e.currentTarget.value)} placeholder="10.0.20.1/24" />
+      </label>
+      <label class="wash-net-field">
+        <span class="wash-net-label">Isolate</span>
+        <input data-testid="net-isolate" type="checkbox" checked={isolate()} onChange={(e) => setIsolate(e.currentTarget.checked)} />
+      </label>
+      <label class="wash-net-field">
+        <span class="wash-net-label">DHCP server</span>
+        <input data-testid="net-dhcp" type="checkbox" checked={dhcp()} onChange={(e) => setDhcp(e.currentTarget.checked)} />
+      </label>
+      <Show when={dhcp()}>
+        <div class="wash-net-field">
+          <span class="wash-net-label">Range / lease</span>
+          <span class="wash-net-dhcp-row">
+            <input data-testid="net-start" type="number" min="2" max="254" value={start()} onInput={(e) => setStart(parseInt(e.currentTarget.value || "0", 10))} title="start offset" />
+            <input data-testid="net-limit" type="number" min="1" max="253" value={limit()} onInput={(e) => setLimit(parseInt(e.currentTarget.value || "0", 10))} title="count" />
+            <input data-testid="net-lease" value={lease()} onInput={(e) => setLease(e.currentTarget.value)} title="lease time" />
+          </span>
+        </div>
+        <label class="wash-net-field">
+          <span class="wash-net-label">DNS for clients</span>
+          <input data-testid="net-dns" value={dns()} onInput={(e) => setDns(e.currentTarget.value)} placeholder="(router) — or 192.168.15.1" />
+        </label>
+      </Show>
+      <div class="wash-net-wizard-actions">
+        <button class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
+        <button data-testid="net-save" class="wash-net-btn primary" disabled={!valid()} onClick={submit}>{editing ? "Save" : "Create"}</button>
+      </div>
+    </div>
+  );
+}
+
 // WireGuardWizard builds a WG tunnel: the local endpoint (name + private key +
 // optional listen port + tunnel addresses) and a list of peers. The private key
 // seeds generated; only the PRIVATE key is needed here (the backend derives our
@@ -995,6 +1234,8 @@ const STYLE = `
 .wash-net-seg-tag { font-family:inherit; opacity:1; color:#8fb0e0; border:1px solid #33415a; border-radius:9px; padding:0 6px; }
 .wash-net-conn[data-role="wan"] { border-color:#3a3050; }
 .wash-net-conn[data-role="vpn"] { border-color:#2e4a4a; }
+.wash-net-dhcp-row { display:flex; gap:6px; }
+.wash-net-dhcp-row input { width:5.5em; }
 .wash-net-conn-actions { grid-row:1 / span 2; grid-column:2; display:flex; gap:4px; align-items:center; }
 .wash-net-conn[data-status="new"] { border-color:#2e5a38; }
 .wash-net-conn[data-status="edited"] { border-color:#4a4030; }
