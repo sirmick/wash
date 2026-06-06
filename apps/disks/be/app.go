@@ -24,6 +24,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -54,6 +55,25 @@ type be struct {
 	intervalMS atomic.Int64
 	active     atomic.Bool   // set when the window is mapped
 	wake       chan struct{} // pokes the snapshot loop after a config change
+
+	// privManagers caches the last privileged-provider scan (LVM/btrfs/ZFS).
+	// The poll loop merges it into every snapshot so the Volumes tree stays
+	// populated, while the actual (root) collection happens only on an
+	// explicit user "Scan volumes" request — never per tick.
+	privMu       sync.Mutex
+	privManagers []Manager
+}
+
+func (b *be) setPrivManagers(m []Manager) {
+	b.privMu.Lock()
+	b.privManagers = m
+	b.privMu.Unlock()
+}
+
+func (b *be) getPrivManagers() []Manager {
+	b.privMu.Lock()
+	defer b.privMu.Unlock()
+	return b.privManagers
 }
 
 var (
@@ -165,7 +185,44 @@ func registerHandlers(b *sdk.Bus) {
 		poke()
 		return nil
 	})
+	// scan_managers: collect the privileged managers (LVM/btrfs/ZFS) via
+	// wash-priv once, on user request, and cache them for the poll loop.
+	sdk.HandleVoid(b, "scan_managers", func(c *sdk.Conn, _ string, _ struct{}) error {
+		go scanPrivManagers(c)
+		return nil
+	})
 	registerSmart(b)
+}
+
+// scanPrivManagers runs every detected privileged provider through wash-priv,
+// caches the result, and pushes a fresh snapshot. Off the callback goroutine —
+// PrivRunInlineSync must not block the read loop.
+func scanPrivManagers(c *sdk.Conn) {
+	runner := func(ctx context.Context, argv []string, reason string) ([]byte, error) {
+		r, err := c.PrivRunInlineSync(ctx, argv, reason)
+		if err != nil {
+			return nil, err
+		}
+		return r.Stdout, nil
+	}
+	var mgrs []Manager
+	var errs []string
+	for _, p := range providers {
+		if !p.Privileged() || !p.Detect() {
+			continue
+		}
+		mgr, present, err := p.Collect(context.Background(), runner)
+		if err != nil {
+			errs = append(errs, p.Name()+": "+err.Error())
+			continue
+		}
+		if present {
+			mgrs = append(mgrs, mgr)
+		}
+	}
+	st.setPrivManagers(mgrs)
+	poke() // push a snapshot carrying the freshly-scanned managers
+	_ = c.SendAppMsg(map[string]any{"kind": "scan_done", "errors": errs})
 }
 
 // onMapped resumes the stream; onState pauses on minimize.
@@ -219,9 +276,11 @@ func snapshotLoop() {
 }
 
 func pushSnapshot() {
-	// The poll loop never runs privileged providers — privRunner is the
-	// wash-priv path used only by on-demand FE requests (M2+).
+	// The poll loop never runs privileged providers (no recurring sudo
+	// prompts); it merges the last cached scan instead. Fresh privileged
+	// data comes from an explicit scan_managers request.
 	snap := collectSnapshot(context.Background(), nil)
+	snap.Managers = append(snap.Managers, st.getPrivManagers()...)
 	snap.Kind = "snapshot"
 	snap.IntMS = int(st.intervalMS.Load())
 	if err := st.conn.SendAppMsg(snap); err != nil {

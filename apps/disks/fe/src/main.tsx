@@ -210,7 +210,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     send({ kind: 'smart', id: `smart-${name}-${snapshot()?.ts ?? 0}`, name });
   };
 
+  const [scanning, setScanning] = createSignal(false);
+  const scanVolumes = () => {
+    setScanning(true);
+    send({ kind: 'scan_managers' });
+  };
+
   const handleBE = (m: any) => {
+    if (m?.kind === 'scan_done') {
+      setScanning(false);
+      return;
+    }
     if (m?.kind === 'smart_ok') {
       setSmart(m.name, { report: m.report as SmartReport });
       return;
@@ -249,10 +259,22 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   const rows = createMemo(() => buildRows(snapshot()));
   const selected = createMemo(() => findRow(rows(), selectedId()));
+  const caps = () => snapshot()?.capabilities;
+  const canScan = () => {
+    const c = caps();
+    return !!c && (c.lvm || c.btrfs || c.zfs);
+  };
 
   return (
     <div style={rootStyle}>
       <div style={listStyle} data-testid="disks-list">
+        <Show when={canScan()}>
+          <div style={{ padding: '4px 12px 8px' }}>
+            <button data-testid="disks-scan" disabled={scanning()} onClick={scanVolumes} style={smartBtnStyle}>
+              {scanning() ? 'Scanning…' : 'Scan volumes (root)'}
+            </button>
+          </div>
+        </Show>
         <For each={rows()}>
           {(row) => (
             <Show
