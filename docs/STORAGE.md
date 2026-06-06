@@ -59,17 +59,36 @@ parsers against actual md/lvm/btrfs/zfs, and a handy debugging tool.
 - **M1 — core (done):** physical disks + partitions + mounts + fullness + live
   I/O + md + topology FE + fake source + Tier 1–3 tests + build/packaging wiring.
   Fully unprivileged; no image-package or wash-priv dependency.
-- **M2 — SMART:** add `smartmontools` to the image; on-demand `smartctl -aj`
-  through wash-priv; health badge + attribute table per disk.
-- **M3 — LVM:** `pvs/vgs/lvs --reportformat json` → PV→VG→LV.
-- **M4 — btrfs:** `btrfs filesystem show/usage`, `subvolume list`,
-  `device stats` → multi-device fs + subvolumes + per-device errors.
-- **M5 — ZFS:** `zpool list/status`, `zfs list` → pools, vdev tree +
+- **M2 — SMART (done):** on-demand `smartctl -aj` through wash-priv; health badge
+  + attribute table per disk (ATA + NVMe). `smartmontools` belongs in the demo
+  image; the app detects smartctl at runtime.
+- **M3 — LVM (done):** single `lvm fullreport --reportformat json` → PV→VG→LV,
+  on the user-triggered "Scan volumes" privileged path (cached + merged into the
+  poll snapshots).
+- **M4 — btrfs (done):** `filesystem show` + `subvolume list` + `device stats`
+  combined behind one `sh -c` → multi-device fs + subvolumes + per-device errors.
+- **M5 — ZFS (done):** `zpool list/status` + `zfs list` → pools, vdev tree +
   scrub/resilver + per-device errors, datasets.
 
-M3–M5 are thin: one Provider + one parser + FE rendering, all on the M2
-privileged-probe path. The `Provider` interface accommodates a future dmcrypt
-provider as a drop-in.
+All four managers share the `Provider` interface and the privileged scan path;
+the interface accommodates a future dmcrypt provider as a drop-in.
+
+### Privileged scan model
+
+Privileged managers (LVM/btrfs/ZFS) are NOT collected per poll tick — that would
+mean a recurring sudo prompt. Instead the FE "Scan volumes (root)" button sends
+`scan_managers`; the BE runs each detected privileged provider once via
+`PrivRunInlineSync`, caches the result, and merges it into every subsequent poll
+snapshot. SMART is similar but per-disk ("Check health"). `wash-disks
+--dump-snapshot` run as root collects everything inline (no priv hop) for the
+Tier-4 VM gate.
+
+### Still to do
+
+- **Tier-4 real-kernel VM gate** (planned, see plan): build real md/lvm/btrfs/
+  zfs on virtio scratch disks in a microVM and assert via `--dump-snapshot`.
+- **Image packaging**: add `smartmontools` (+ optionally mdadm/lvm2/btrfs-progs)
+  to the demo image build under `/image/` (gitignored, so not in this branch).
 
 ## Testing
 
