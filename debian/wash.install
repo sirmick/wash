@@ -11,6 +11,7 @@ out/wash-journal       usr/bin
 out/wash-notify        usr/bin
 out/wash-settings      usr/bin
 out/wash-top           usr/bin
+out/wash-disks         usr/bin
 out/wash-syslogs       usr/bin
 out/wash-services      usr/bin
 out/wash-packages      usr/bin
