@@ -30,6 +30,7 @@ const ICONS = [
   'folder-code',    // wash-vscode-workbench (a code workspace)
   'settings',       // wash-settings
   'activity',       // wash-top
+  'hard-drive',     // wash-disks
   'shield-check',   // wash-priv (privilege gateway)
   'scroll-text',    // wash-journal + wash-syslogs (sister apps, shared icon)
   'file-text',      // wash-syslogs sidebar rows

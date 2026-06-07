@@ -30,6 +30,7 @@ const PRIV_BIN = join(REPO_ROOT, 'out', 'wash-priv');
 const JOURNAL_BIN = join(REPO_ROOT, 'out', 'wash-journal');
 const SETTINGS_BIN = join(REPO_ROOT, 'out', 'wash-settings');
 const TOP_BIN = join(REPO_ROOT, 'out', 'wash-top');
+const DISKS_BIN = join(REPO_ROOT, 'out', 'wash-disks');
 const SYSLOGS_BIN = join(REPO_ROOT, 'out', 'wash-syslogs');
 const SERVICES_BIN = join(REPO_ROOT, 'out', 'wash-services');
 const PACKAGES_BIN = join(REPO_ROOT, 'out', 'wash-packages');
@@ -99,7 +100,7 @@ export interface RouterOptions {
   /** kiosk mode: --no-session + --initial-app=<appID>. */
   kiosk?: string;
   /** include these binaries in the apps dir; defaults to all five. */
-  apps?: ('session' | 'about' | 'test' | 'term' | 'fm' | 'bulk' | 'priv' | 'journal' | 'settings' | 'top' | 'syslogs' | 'services' | 'packages' | 'edit' | 'vscode' | 'display' | 'net' | 'netd')[];
+  apps?: ('session' | 'about' | 'test' | 'term' | 'fm' | 'bulk' | 'priv' | 'journal' | 'settings' | 'top' | 'disks' | 'syslogs' | 'services' | 'packages' | 'edit' | 'vscode' | 'display' | 'net' | 'netd')[];
   /** include manifest.hidden apps in the catalog. */
   showHidden?: boolean;
   /** extra wash-router args. */
@@ -250,6 +251,12 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
       throw new Error(`missing wash-top: ${TOP_BIN}`);
     }
     bins.push(TOP_BIN);
+  }
+  if (wanted.includes('disks')) {
+    if (!existsSync(DISKS_BIN)) {
+      throw new Error(`missing wash-disks: ${DISKS_BIN}`);
+    }
+    bins.push(DISKS_BIN);
   }
   if (wanted.includes('syslogs')) {
     if (!existsSync(SYSLOGS_BIN)) {

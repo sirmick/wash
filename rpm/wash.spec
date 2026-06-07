@@ -51,7 +51,7 @@ compositor stack the pure-Go core deliberately avoids.
 install -d %{buildroot}%{_bindir}
 for bin in wash-router wash-login wash-session wash-about wash-fm wash-term \
            wash-edit wash-bulk wash-priv wash-journal wash-notify \
-           wash-settings wash-top wash-syslogs wash-services wash-packages \
+           wash-settings wash-top wash-disks wash-syslogs wash-services wash-packages \
            wash-launch wash-sudo; do
     install -m 0755 out/$bin %{buildroot}%{_bindir}/$bin
 done
@@ -74,6 +74,7 @@ install -d -m 0755 %{buildroot}%{_sysconfdir}/wash
 %{_bindir}/wash-notify
 %{_bindir}/wash-settings
 %{_bindir}/wash-top
+%{_bindir}/wash-disks
 %{_bindir}/wash-syslogs
 %{_bindir}/wash-services
 %{_bindir}/wash-packages

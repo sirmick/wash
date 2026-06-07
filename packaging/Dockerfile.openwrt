@@ -36,7 +36,7 @@ RUN xz -dc /tmp/source.tar.xz | tar -x -C /tmp/extract \
     && SRC=/tmp/extract/wash-${VERSION} \
     && BINS="wash-router wash-login wash-session wash-about wash-fm \
             wash-term wash-edit wash-bulk wash-priv wash-journal \
-            wash-notify wash-settings wash-top wash-syslogs \
+            wash-notify wash-settings wash-top wash-disks wash-syslogs \
             wash-services wash-packages wash-launch wash-sudo" \
     && for bin in $BINS; do \
         cp "$SRC/out/$bin" "/usr/bin/$bin" && chmod 0755 "/usr/bin/$bin"; \
