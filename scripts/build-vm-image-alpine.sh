@@ -33,7 +33,10 @@ NM_PKGS="networkmanager networkmanager-cli networkmanager-wifi dbus polkit wpa_s
 # mdadm (software RAID), lvm2 (PV/VG/LV), btrfs-progs, e2fsprogs (mkfs.ext4).
 # Small + broadly useful, so baked unconditionally. ZFS is heavy and its kmod is
 # ABI-pinned to linux-lts, so it's opt-in via WASH_VM_ZFS=1.
-STORAGE_PKGS="mdadm lvm2 btrfs-progs e2fsprogs"
+# sudo: wash-priv escalates via `sudo -S`, so the privileged "Scan volumes"
+# (LVM/btrfs/ZFS topology) needs it. The guest desktop runs as the unprivileged
+# 'wash' user, so without sudo priv has nothing to escalate through.
+STORAGE_PKGS="mdadm lvm2 btrfs-progs e2fsprogs sudo"
 ZFS_PKGS=""
 if [ "${WASH_VM_ZFS:-0}" = "1" ]; then
   ZFS_PKGS="zfs zfs-lts"
@@ -47,7 +50,7 @@ PKGS="$NM_PKGS $STORAGE_PKGS $ZFS_PKGS"
 WASH_USER_SETUP="addgroup -S netdev 2>/dev/null; adduser -D -h /home/wash -s /bin/bash -G netdev wash; echo 'wash:wash' | chpasswd"
 ROOTFS_TAR="$BUILD/alpine-nm.tar"
 PKG_MARK="$BUILD/.alpine-nm.pkgs"
-RENDER_VER="4-storage" # bump to force a re-render when this setup changes (added storage tooling)
+RENDER_VER="5-sudo" # bump to force a re-render when this setup changes (added sudo)
 if [ ! -f "$ROOTFS_TAR" ] || [ "$(cat "$PKG_MARK" 2>/dev/null)" != "$ALPINE_VER:$RENDER_VER:$PKGS" ]; then
   echo ">> rendering Alpine+NM+OpenRC rootfs via Docker (host has no apk)"
   command -v docker >/dev/null || { echo "!! docker required to build the NM rootfs" >&2; exit 1; }
@@ -150,6 +153,18 @@ install -Dm755 "$BUILD/washnet-wifi" "$RFS/usr/bin/washnet-wifi"
 # trampoline (cpio -R 0:0 below makes it root-owned so the setuid bit grants
 # root). Shared with every distro image — see scripts/lib/wash-vm-payload.sh.
 wvm_stage_payload "$RFS" "$BUILD" "$WASH_BIN"
+
+# sudoers for the unprivileged 'wash' desktop user: NOPASSWD so wash-priv's
+# `sudo -S` escalation works in this headless demo VM without PAM/shadow setup
+# (the privileged "Scan volumes" needs root for the LVM/btrfs/ZFS reports).
+# Demo-image only — a real install gates this behind the user's password.
+mkdir -p "$RFS/etc/sudoers.d"
+echo 'wash ALL=(ALL) NOPASSWD: ALL' > "$RFS/etc/sudoers.d/wash"
+chmod 0440 "$RFS/etc/sudoers.d/wash"
+# Restore sudo's setuid bit: the rootfs tar is extracted as the (non-root) build
+# user, which strips setuid; cpio -R 0:0 then makes it root-owned, so 4755 here
+# gives a working root-setuid sudo in the guest.
+[ -e "$RFS/usr/bin/sudo" ] && chmod 4755 "$RFS/usr/bin/sudo"
 
 # --- boot: busybox-init → OpenRC (docs/NET.md §8.4) -------------------------
 # The kernel runs /init from the initramfs; we exec busybox init, which reads
