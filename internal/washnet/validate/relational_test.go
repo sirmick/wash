@@ -127,3 +127,45 @@ func TestRelationalCleanConfig(t *testing.T) {
 		t.Fatalf("expected no errors, got %d: %+v", errorCount(ds), ds)
 	}
 }
+
+// TestRelationalSeverityAndShadow locks the two fixes for OpenWRT-stock noise:
+// dangling firewall/dhcp refs are warnings (not blocking errors), and the
+// shadowed-rule check doesn't false-positive on icmp / different-family rules.
+func TestRelationalSeverityAndShadow(t *testing.T) {
+	// The stock generic image ships a 'wan' zone + pool with no 'wan' interface;
+	// OpenWRT tolerates it, so wash must warn, not error (else apply is blocked).
+	c := model.Config{
+		Zones: []model.Zone{{Name: "wan", Networks: []string{"wan", "wan6"}, Input: "REJECT"}},
+		Pools: []model.DHCPPool{{Name: "wan", Interface: "wan", Start: 100, Limit: 50}},
+	}
+	ds := Validate(c, caps.Full())
+	if errorCount(ds) != 0 {
+		t.Fatalf("dangling wan refs must be warnings, not errors: %+v", ds)
+	}
+	if find(ds, "unknown_network", "Zones[0].Networks") == nil {
+		t.Fatal("the warning should still be surfaced")
+	}
+
+	// icmp rules are skipped (icmp_type unmodeled) — the stock Allow-Ping vs
+	// Allow-MLD / Allow-ICMPv6 false positive.
+	icmp := model.Config{FwRules: []model.FirewallRule{
+		{Name: "ping", Src: "wan", Proto: "icmp", Target: "ACCEPT"},
+		{Name: "mld", Src: "wan", Proto: "icmp", Family: "ipv6", Target: "ACCEPT"},
+		{Name: "icmp6", Src: "wan", Proto: "icmp", Family: "ipv6", Target: "ACCEPT"},
+	}}
+	if d := find(Validate(icmp, caps.Full()), "shadowed_rule", "FwRules[1]"); d != nil {
+		t.Fatalf("icmp rules must not be shadow-flagged: %+v", d)
+	}
+	if d := find(Validate(icmp, caps.Full()), "shadowed_rule", "FwRules[2]"); d != nil {
+		t.Fatalf("icmp rules must not be shadow-flagged: %+v", d)
+	}
+
+	// tcp/22 ipv4 vs ipv6: family distinguishes them → not shadowed.
+	fam := model.Config{FwRules: []model.FirewallRule{
+		{Name: "a", Src: "wan", Proto: "tcp", DestPort: "22", Family: "ipv4", Target: "ACCEPT"},
+		{Name: "b", Src: "wan", Proto: "tcp", DestPort: "22", Family: "ipv6", Target: "ACCEPT"},
+	}}
+	if d := find(Validate(fam, caps.Full()), "shadowed_rule", "FwRules[1]"); d != nil {
+		t.Fatalf("different-family rules must not be shadow-flagged: %+v", d)
+	}
+}

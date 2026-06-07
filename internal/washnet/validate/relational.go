@@ -51,7 +51,11 @@ func (d *diags) relational(c model.Config) {
 	for i, o := range c.Zones {
 		for _, n := range o.Networks {
 			if n != "" && !ifaceSet[n] {
-				d.add(at("Zones", i)+".Networks", "unknown_network", fmt.Sprintf("references unknown network %q", n), Error)
+				// OpenWRT tolerates a zone member that names an undefined network
+				// (the member is just inactive) — the stock 'wan' zone ships this way
+				// on the generic image. Warn, don't block (wash mustn't be stricter
+				// than the backend it drives).
+				d.add(at("Zones", i)+".Networks", "unknown_network", fmt.Sprintf("references unknown network %q", n), Warning)
 			}
 		}
 	}
@@ -84,7 +88,9 @@ func (d *diags) relational(c model.Config) {
 			ref = o.Name // OpenWRT: the pool section name is the interface
 		}
 		if ref != "" && !ifaceSet[ref] {
-			d.add(at("Pools", i)+".Interface", "unknown_network", fmt.Sprintf("DHCP pool references unknown interface %q", ref), Error)
+			// As with zones: dnsmasq just doesn't serve a pool whose interface is
+			// undefined (the stock 'wan' pool ships this way). Warn, don't block.
+			d.add(at("Pools", i)+".Interface", "unknown_network", fmt.Sprintf("DHCP pool references unknown interface %q", ref), Warning)
 		}
 	}
 
@@ -167,11 +173,18 @@ func (d *diags) relational(c model.Config) {
 	}
 
 	// --- firewall-rule shadowing (conservative: exact match behind a terminal rule) ---
-	type matchKey struct{ src, dest, proto, sport, dport string }
+	// Family is part of the key — an IPv4 rule never shadows an IPv6 one (the stock
+	// Allow-Ping vs Allow-MLD/Allow-ICMPv6 case). icmp/icmpv6 rules are skipped
+	// entirely: they're distinguished by icmp_type, which the model doesn't capture,
+	// so we can't tell them apart and would false-positive.
+	type matchKey struct{ src, dest, proto, sport, dport, family string }
 	terminal := map[matchKey]int{}
 	isTerminal := func(t string) bool { return t == "ACCEPT" || t == "REJECT" || t == "DROP" }
 	for i, o := range c.FwRules {
-		k := matchKey{o.Src, o.Dest, o.Proto, o.SrcPort, o.DestPort}
+		if o.Proto == "icmp" || o.Proto == "icmpv6" {
+			continue
+		}
+		k := matchKey{o.Src, o.Dest, o.Proto, o.SrcPort, o.DestPort, o.Family}
 		if prev, ok := terminal[k]; ok {
 			d.add(at("FwRules", i), "shadowed_rule", fmt.Sprintf("rule is unreachable; FwRules[%d] already matches and terminates", prev), Warning)
 		}
