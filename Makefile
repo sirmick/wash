@@ -25,7 +25,7 @@ GOFLAGS += -cover -coverpkg=github.com/sirmick/wash/...
 endif
 
 OUT     := out
-BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net
+BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net wash-music
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -137,6 +137,9 @@ VSCODE_WB_STAMP  := $(VSCODE_WB_ASSETS)/.stamp
 NET_ASSETS      := apps/net/be/assets
 NET_STAMP       := $(NET_ASSETS)/.stamp
 
+MUSIC_ASSETS    := apps/music/be/assets
+MUSIC_STAMP     := $(MUSIC_ASSETS)/.stamp
+
 # wash-vscode / wash-netd are background services, but each supplies a
 # settings panel (panel.js) embedded in its binary, so they get an
 # asset stamp like the windowed apps.
@@ -219,6 +222,10 @@ web-packages: web-deps
 web-net: web-deps
 	@$(PNPM) --filter @wash/app-net run build
 
+.PHONY: web-music
+web-music: web-deps
+	@$(PNPM) --filter @wash/app-music run build
+
 .PHONY: web-vscode
 web-vscode: web-deps
 	@$(PNPM) --filter @wash/app-vscode run build
@@ -288,6 +295,9 @@ $(PACKAGES_STAMP): web-packages
 
 $(NET_STAMP): web-net
 	$(call embed_dist,apps/net/fe/dist,$(NET_ASSETS))
+
+$(MUSIC_STAMP): web-music
+	$(call embed_dist,apps/music/fe/dist,$(MUSIC_ASSETS))
 
 $(VSCODE_STAMP): web-vscode
 	$(call embed_dist,apps/vscode/fe/dist,$(VSCODE_ASSETS))
@@ -382,6 +392,11 @@ $(OUT)/wash-packages: $(PACKAGES_STAMP) | $(OUT)
 # NET_STAMP dep stages the FE into apps/net/be/assets before the go build.
 $(OUT)/wash-net: $(NET_STAMP) | $(OUT)
 	$(call go_build,$@,apps/net/be/cmd)
+
+# wash-music is the windowed Winamp-skinned player (docs/AUDIO.md). It
+# embeds the apps/music/fe Webamp bundle and serves audio over ingress.
+$(OUT)/wash-music: $(MUSIC_STAMP) | $(OUT)
+	$(call go_build,$@,apps/music/be/cmd)
 
 # wash-notify is a background service: no window, no FE bundle, no
 # embedded assets. Other apps' c.Notify() calls land here via the
@@ -503,7 +518,7 @@ test-app: $(OUT)/wash-priv-fakesudo
 # "pattern all:assets: no matching files found" — local dev
 # accidentally works because the standalone wash-router build
 # rule already chains through ROUTER_STAMP.
-MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP) $(VSCODE_WB_STAMP) $(NET_STAMP) $(VSCODE_STAMP) $(NETD_STAMP)
+MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP) $(VSCODE_WB_STAMP) $(NET_STAMP) $(MUSIC_STAMP) $(VSCODE_STAMP) $(NETD_STAMP)
 
 # Adding wash_test_app to the tags pulls the test app's blank-import
 # in (which is otherwise excluded by cmd/wash/imports_test.go's
