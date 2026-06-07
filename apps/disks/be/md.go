@@ -36,7 +36,7 @@ func (mdProvider) Detect() bool {
 	return false
 }
 
-func (mdProvider) Collect(_ context.Context, _ RunFunc) (Manager, bool, error) {
+func (mdProvider) Collect(_ context.Context) (Manager, bool, error) {
 	entries, err := os.ReadDir(sysBlock)
 	if err != nil {
 		return Manager{}, false, err

@@ -26,19 +26,18 @@ const (
 	zfsMarkDatasets = "@@DATASETS"
 )
 
-func (zfsProvider) Collect(ctx context.Context, run RunFunc) (Manager, bool, error) {
-	script := strings.Join([]string{
+func (zfsProvider) ScanScript(_ context.Context) (string, bool) {
+	return strings.Join([]string{
 		"zpool list -Hp -o name,size,alloc,free,frag,health",
 		"echo " + zfsMarkStatus,
 		"zpool status",
 		"echo " + zfsMarkDatasets,
 		"zfs list -Hp -o name,used,avail,refer,mountpoint",
-	}, "\n")
-	out, err := run(ctx, []string{"sh", "-c", script}, "read ZFS pools")
-	if err != nil {
-		return Manager{}, false, err
-	}
-	pools := parseZfsCombined(string(out))
+	}, "\n"), true
+}
+
+func (zfsProvider) ParseScan(out string) (Manager, bool, error) {
+	pools := parseZfsCombined(out)
 	if len(pools) == 0 {
 		return Manager{}, false, nil
 	}

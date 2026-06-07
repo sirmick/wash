@@ -28,13 +28,13 @@ const (
 	btrfsMarkStats  = "@@STATS "
 )
 
-func (btrfsProvider) Collect(ctx context.Context, run RunFunc) (Manager, bool, error) {
+func (btrfsProvider) ScanScript(_ context.Context) (string, bool) {
 	mounts := btrfsMounts()
 	if len(mounts) == 0 {
-		return Manager{}, false, nil
+		return "", false
 	}
-	// One combined script: global `filesystem show` then per-mount subvolume
-	// list + device stats, each fenced by a marker line.
+	// Global `filesystem show` then per-mount subvolume list + device stats,
+	// each fenced by a marker line.
 	var sb strings.Builder
 	sb.WriteString("btrfs filesystem show --raw\n")
 	for _, m := range mounts {
@@ -43,11 +43,11 @@ func (btrfsProvider) Collect(ctx context.Context, run RunFunc) (Manager, bool, e
 		sb.WriteString("echo '" + btrfsMarkStats + m.point + "'\n")
 		sb.WriteString("btrfs device stats -- " + shq(m.point) + " 2>/dev/null || true\n")
 	}
-	out, err := run(ctx, []string{"sh", "-c", sb.String()}, "read btrfs filesystems")
-	if err != nil {
-		return Manager{}, false, err
-	}
-	fss := parseBtrfsCombined(string(out), mounts)
+	return sb.String(), true
+}
+
+func (btrfsProvider) ParseScan(out string) (Manager, bool, error) {
+	fss := parseBtrfsCombined(out, btrfsMounts())
 	if len(fss) == 0 {
 		return Manager{}, false, nil
 	}

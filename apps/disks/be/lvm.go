@@ -30,12 +30,12 @@ var lvmArgv = []string{
 	"--configreport", "lv", "-o", "lv_name,vg_name,lv_size,lv_attr,lv_path",
 }
 
-func (lvmProvider) Collect(ctx context.Context, run RunFunc) (Manager, bool, error) {
-	out, err := run(ctx, lvmArgv, "read LVM volume groups")
-	if err != nil {
-		return Manager{}, false, err
-	}
-	vgs, err := parseLvmFullreport(out, readMounts())
+func (lvmProvider) ScanScript(_ context.Context) (string, bool) {
+	return strings.Join(lvmArgv, " "), true
+}
+
+func (lvmProvider) ParseScan(out string) (Manager, bool, error) {
+	vgs, err := parseLvmFullreport([]byte(out), readMounts())
 	if err != nil {
 		return Manager{}, false, err
 	}

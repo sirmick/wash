@@ -194,8 +194,9 @@ func registerHandlers(b *sdk.Bus) {
 	registerSmart(b)
 }
 
-// scanPrivManagers runs every detected privileged provider through wash-priv,
-// caches the result, and pushes a fresh snapshot. Off the callback goroutine —
+// scanPrivManagers collects every detected privileged provider in a SINGLE
+// wash-priv escalation (one approval / sudo, not one per manager), caches the
+// result, and pushes a fresh snapshot. Off the callback goroutine —
 // PrivRunInlineSync must not block the read loop.
 func scanPrivManagers(c *sdk.Conn) {
 	runner := func(ctx context.Context, argv []string, reason string) ([]byte, error) {
@@ -205,24 +206,9 @@ func scanPrivManagers(c *sdk.Conn) {
 		}
 		return r.Stdout, nil
 	}
-	var mgrs []Manager
-	var errs []string
-	for _, p := range providers {
-		if !p.Privileged() || !p.Detect() {
-			continue
-		}
-		mgr, present, err := p.Collect(context.Background(), runner)
-		if err != nil {
-			errs = append(errs, p.Name()+": "+err.Error())
-			continue
-		}
-		if present {
-			mgrs = append(mgrs, mgr)
-		}
-	}
-	st.setPrivManagers(mgrs)
+	st.setPrivManagers(scanPrivileged(context.Background(), runner))
 	poke() // push a snapshot carrying the freshly-scanned managers
-	_ = c.SendAppMsg(map[string]any{"kind": "scan_done", "errors": errs})
+	_ = c.SendAppMsg(map[string]any{"kind": "scan_done"})
 }
 
 // onMapped resumes the stream; onState pauses on minimize.

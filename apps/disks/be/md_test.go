@@ -49,7 +49,7 @@ func TestMDProvider(t *testing.T) {
 	if !p.Detect() {
 		t.Fatal("Detect should be true with an md array present")
 	}
-	mgr, present, err := p.Collect(context.Background(), nil)
+	mgr, present, err := p.Collect(context.Background())
 	if err != nil || !present {
 		t.Fatalf("Collect: present=%v err=%v", present, err)
 	}
