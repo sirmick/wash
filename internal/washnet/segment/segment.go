@@ -182,7 +182,10 @@ func Project(c model.Config) Projection {
 func Materialize(p Projection) model.Config {
 	c := p.Leftovers // untouched kinds (routes, hosts, dns, wifi, …) flow through
 
-	var ifaces []model.Interface
+	// Start from any leftover interfaces (Project nils these, so the round-trip is
+	// unaffected; a hand-built Projection may carry e.g. loopback here), then add
+	// the segment interfaces.
+	ifaces := append([]model.Interface(nil), p.Leftovers.Interfaces...)
 	devices := append([]model.Device(nil), p.Leftovers.Devices...)
 	zones := append([]model.Zone(nil), p.Leftovers.Zones...)
 	pools := append([]model.DHCPPool(nil), p.Leftovers.Pools...)

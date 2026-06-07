@@ -3,10 +3,16 @@ package vm
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sirmick/wash/internal/washnet/codec"
+	"github.com/sirmick/wash/internal/washnet/model"
+	"github.com/sirmick/wash/internal/washnet/segment"
+	"github.com/sirmick/wash/internal/washnet/ucibuf"
 )
 
 // nicByMAC resolves the in-guest interface name for a known MAC, robust against
@@ -474,4 +480,111 @@ func TestRouterVLANsDHCPDNS(t *testing.T) {
 		t.Fatalf("inter-VLAN ping A->B should pass after wash opens forwarding:\n%s", out)
 	}
 	t.Logf("OK: inter-VLAN ping %s->%s permitted after wash opened forwarding", aIP, bIP)
+}
+
+// multiSegUCI builds a three-segment router config THROUGH the segment lens
+// (segment.Materialize) and renders it to UCI — proving the lens write side, the
+// same object set the FE's segment-model kernel composes, produces an enforceable
+// gateway. trunk is the router's NIC. Policy: trusted→cam one-way (asymmetric);
+// guest isolated from both; default forward REJECT.
+func multiSegUCI(trunk string) string {
+	seg := func(zone, ifn string, vid int, cidr string) segment.Segment {
+		dev := fmt.Sprintf("%s.%d", trunk, vid)
+		return segment.Segment{
+			Name:   ifn,
+			Iface:  model.Interface{Name: ifn, Device: dev, Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix(cidr)}}},
+			Device: &model.Device{Name: dev, Type: "8021q", Ifname: trunk, VID: vid},
+			Zone:   &model.Zone{Name: zone, Networks: []string{ifn}, Input: "ACCEPT", Output: "ACCEPT", Forward: "REJECT"},
+			Pool:   &model.DHCPPool{Name: ifn, Interface: ifn, Start: 100, Limit: 50, LeaseTime: "12h"},
+		}
+	}
+	proj := segment.Projection{
+		Segments: []segment.Segment{
+			seg("trusted", "v10", 10, "10.10.0.1/24"),
+			seg("guest", "v20", 20, "10.20.0.1/24"),
+			seg("cam", "v30", 30, "10.30.0.1/24"),
+		},
+		Policy: segment.Policy{
+			Defaults:    []model.Defaults{{Input: "ACCEPT", Output: "ACCEPT", Forward: "REJECT"}},
+			Forwardings: []model.Forwarding{{Src: "trusted", Dest: "cam"}}, // one-way: trusted may reach cam
+		},
+		Leftovers: model.Config{
+			Interfaces: []model.Interface{{Name: "loopback", Device: "lo", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/8")}}}},
+			Dnsmasq:    []model.Dnsmasq{{DomainNeeded: true, Local: "/lan/", Domain: "lan", ExpandHosts: true}},
+		},
+	}
+	files, err := codec.Render(segment.Materialize(proj))
+	if err != nil {
+		panic(err)
+	}
+	return ucibuf.Marshal(files)
+}
+
+// TestRouterMultiSegmentPolicy is the capstone: a wash-configured OpenWRT router
+// with THREE segments and DISTINCT per-zone policy — config built through the
+// segment lens — drives real netifd/dnsmasq/fw4, and three clients (one per VLAN)
+// prove the box enforces it: per-segment DHCP, and the firewall matrix end to end
+// — trusted→cam permitted (one-way), cam→trusted blocked, guest isolated from both.
+func TestRouterMultiSegmentPolicy(t *testing.T) {
+	disk := openwrtArtifacts(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 420*time.Second)
+	defer cancel()
+
+	const group = "230.0.0.96"
+	port := 28000 + (os.Getpid() % 1000)
+	macR := "52:54:00:c0:de:20"
+	macT, macG, macC := "52:54:00:c0:de:21", "52:54:00:c0:de:22", "52:54:00:c0:de:23"
+
+	router := mustLaunch(ctx, t, OpenWRTOpts{Disk: disk, Extra: MCastLAN("trunk", group, port, macR)})
+	defer router.Close()
+	ct := mustLaunch(ctx, t, OpenWRTOpts{Disk: disk, Extra: MCastLAN("trunk", group, port, macT)})
+	defer ct.Close()
+	cg := mustLaunch(ctx, t, OpenWRTOpts{Disk: disk, Extra: MCastLAN("trunk", group, port, macG)})
+	defer cg.Close()
+	cc := mustLaunch(ctx, t, OpenWRTOpts{Disk: disk, Extra: MCastLAN("trunk", group, port, macC)})
+	defer cc.Close()
+
+	// wash configures the three-segment router (via the segment lens).
+	if err := router.WriteFile(ctx, "/tmp/seg.uci", multiSegUCI(mustNIC(ctx, t, router, macR))); err != nil {
+		t.Fatal(err)
+	}
+	applyOK(ctx, t, router, "/tmp/seg.uci")
+	mustRun(ctx, t, router, "sleep 3; /etc/init.d/firewall restart; /etc/init.d/dnsmasq restart; sleep 1")
+
+	// Each client tags into its VLAN and leases from that segment's pool.
+	tIP := dhcpLease(ctx, t, ct, washClientVLAN(ctx, t, ct, mustNIC(ctx, t, ct, macT), "10"), "trusted")
+	gIP := dhcpLease(ctx, t, cg, washClientVLAN(ctx, t, cg, mustNIC(ctx, t, cg, macG), "20"), "guest")
+	cIP := dhcpLease(ctx, t, cc, washClientVLAN(ctx, t, cc, mustNIC(ctx, t, cc, macC), "30"), "cam")
+	if !strings.HasPrefix(tIP, "10.10.0.") {
+		t.Fatalf("trusted client leased %q, want 10.10.0.x", tIP)
+	}
+	if !strings.HasPrefix(gIP, "10.20.0.") {
+		t.Fatalf("guest client leased %q, want 10.20.0.x", gIP)
+	}
+	if !strings.HasPrefix(cIP, "10.30.0.") {
+		t.Fatalf("cam client leased %q, want 10.30.0.x", cIP)
+	}
+	t.Logf("OK: per-segment DHCP — trusted=%s guest=%s cam=%s", tIP, gIP, cIP)
+
+	// The matrix is enforced. trusted→cam is permitted (the one forwarding); the
+	// reply rides conntrack, so the ping completes.
+	if out, _ := ct.Run(ctx, "ping -c3 -W3 "+cIP); !pingOK(out) {
+		t.Fatalf("trusted→cam should be permitted (forwarding trusted→cam):\n%s", out)
+	}
+	t.Log("OK: trusted→cam permitted")
+
+	// cam→trusted is blocked: no reverse forwarding, and cam initiates (a new flow).
+	if out, _ := cc.Run(ctx, "ping -c2 -W2 "+tIP); pingOK(out) {
+		t.Fatalf("cam→trusted should be blocked (no reverse forwarding) — asymmetric policy:\n%s", out)
+	}
+	t.Log("OK: cam→trusted blocked (asymmetric)")
+
+	// guest is isolated from both LANs.
+	if out, _ := cg.Run(ctx, "ping -c2 -W2 "+tIP); pingOK(out) {
+		t.Fatalf("guest→trusted should be blocked:\n%s", out)
+	}
+	if out, _ := cg.Run(ctx, "ping -c2 -W2 "+cIP); pingOK(out) {
+		t.Fatalf("guest→cam should be blocked:\n%s", out)
+	}
+	t.Logf("OK: guest isolated — multi-segment per-zone policy enforced on a real router")
 }
