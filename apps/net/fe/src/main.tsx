@@ -663,8 +663,13 @@ export function NetApp(props: WashAppProps) {
             <button data-testid="add-network" class="wash-net-btn primary" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setEditSeg(null); setAdding("network"); }}><Icon name="git-branch" /> Network</button>
             <button data-testid="add-host" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setEditHost(null); setAdding("host"); }}><Icon name="plus" /> Host</button>
           </Show>
-          <button data-testid="add-ethernet" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setConfigureDevice(""); setAdding("ethernet"); }}><Icon name="ethernet-port" /> Ethernet</button>
-          <button data-testid="add-vlan" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("vlan")} onClick={() => setAdding("vlan")}><Icon name="git-branch" /> VLAN</button>
+          {/* On a router, + Network (port/VLAN carrier + role) supersedes the
+              workstation Ethernet/VLAN flows — hide them so there's one obvious
+              add path. Bridge stays (the wizard has no bridge carrier yet). */}
+          <Show when={!routerCaps()}>
+            <button data-testid="add-ethernet" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setConfigureDevice(""); setAdding("ethernet"); }}><Icon name="ethernet-port" /> Ethernet</button>
+            <button data-testid="add-vlan" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("vlan")} onClick={() => setAdding("vlan")}><Icon name="git-branch" /> VLAN</button>
+          </Show>
           <button data-testid="add-bridge" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("bridge")} onClick={() => setAdding("bridge")}><Icon name="git-merge" /> Bridge</button>
           <Show when={can("wireguard")}>
             <button data-testid="add-wireguard" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => setAdding("wireguard")}><Icon name="shield" /> WireGuard</button>
