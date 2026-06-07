@@ -1087,13 +1087,13 @@ function NetworkWizard(props: { parents: string[]; ports: string[]; initial?: Se
   return (
     <div class="wash-net-wizard" data-testid="network-wizard">
       <div class="wash-net-wizard-title">{editing ? `Edit network ${i!.name}` : "New network"}</div>
-      <label class="wash-net-field">
+      <div class="wash-net-field">
         <span class="wash-net-label">Type</span>
-        <select data-testid="net-role" value={role()} disabled={editing} onChange={(e) => pickRole(e.currentTarget.value as any)}>
-          <option value="lan">LAN segment</option>
-          <option value="wan">WAN uplink</option>
-        </select>
-      </label>
+        <div class="wash-net-chips" data-testid="net-role">
+          <button type="button" class="wash-net-chip" classList={{ on: role() === "lan" }} data-role="lan" data-testid="role-lan" disabled={editing} onClick={() => pickRole("lan")}><Icon name="git-branch" /> LAN segment</button>
+          <button type="button" class="wash-net-chip" classList={{ on: role() === "wan" }} data-role="wan" data-testid="role-wan" disabled={editing} onClick={() => pickRole("wan")}><Icon name="ethernet-port" /> WAN uplink</button>
+        </div>
+      </div>
       <label class="wash-net-field">
         <span class="wash-net-label">Name</span>
         <input data-testid="net-name" value={name()} disabled={editing} onInput={(e) => setName(e.currentTarget.value)} placeholder={role() === "wan" ? "wan" : "iot"} />
@@ -1229,7 +1229,7 @@ function FirewallMatrix(props: {
       <h2 class="wash-net-seg-h">Firewall — who can reach whom</h2>
       <div class="wash-net-grid" style={{ "grid-template-columns": `auto repeat(${props.zones.length + 1}, minmax(54px, 1fr))` }}>
         <div class="wash-net-grid-corner">src → dst</div>
-        <For each={props.zones}>{(z) => <div class="wash-net-grid-h" title={z.masq ? "WAN / egress (masquerade)" : ""}>{z.name}{z.masq ? " ⬈" : ""}</div>}</For>
+        <For each={props.zones}>{(z) => <div class="wash-net-grid-h" title={z.masq ? "WAN / egress (masquerade)" : ""}>{z.name}<Show when={z.masq}><span class="wan-mark"> ⬈</span></Show></div>}</For>
         <div class="wash-net-grid-h" title="Reach the router's own services (DNS/DHCP/admin)">Router</div>
         <For each={props.zones}>
           {(row) => (
@@ -1406,8 +1406,19 @@ const STYLE = `
 .wash-net-seg-h { font-size:12px; text-transform:uppercase; letter-spacing:.06em; opacity:.55; margin:0 0 2px; font-weight:600; }
 .wash-net-seg-detail { grid-column:1; display:flex; gap:8px; align-items:center; font-size:11px; opacity:.7; font-family:ui-monospace,Menlo,monospace; }
 .wash-net-seg-tag { font-family:inherit; opacity:1; color:#8fb0e0; border:1px solid #33415a; border-radius:9px; padding:0 6px; }
-.wash-net-conn[data-role="wan"] { border-color:#3a3050; }
-.wash-net-conn[data-role="vpn"] { border-color:#2e4a4a; }
+/* role colour-coding: LAN blue · WAN violet · VPN teal — consistent across the
+   type chips, segment cards, and role badges. */
+.wash-net-conn[data-role="wan"] { border-color:#4a3a66; background:#191622; }
+.wash-net-conn[data-role="vpn"] { border-color:#244a4a; background:#161e1e; }
+.wash-net-conn[data-role="wan"] .wash-net-conn-kind { color:#b48ae8; border-color:#5a3f8a; }
+.wash-net-conn[data-role="vpn"] .wash-net-conn-kind { color:#5fc7c7; border-color:#2e5a5a; }
+.wash-net-chips { display:flex; gap:8px; }
+.wash-net-chip { display:inline-flex; align-items:center; gap:5px; border:1px solid #33415a; background:#16161f; color:#9a9aa6; border-radius:16px; padding:5px 14px; cursor:pointer; font-size:12px; font-weight:600; }
+.wash-net-chip:hover:not(:disabled) { border-color:#4a4a6a; color:#cfd0d4; }
+.wash-net-chip:disabled { opacity:.55; cursor:default; }
+.wash-net-chip.on[data-role="lan"] { background:#16243a; color:#8fb0e0; border-color:#33558a; }
+.wash-net-chip.on[data-role="wan"] { background:#241a36; color:#b48ae8; border-color:#6a4aa0; }
+.wash-net-grid-h .wan-mark { color:#b48ae8; }
 .wash-net-dhcp-row { display:flex; gap:6px; }
 .wash-net-dhcp-row input { width:5.5em; }
 .wash-net-diags { display:flex; flex-direction:column; gap:4px; margin-bottom:12px; }

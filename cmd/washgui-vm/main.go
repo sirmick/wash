@@ -75,7 +75,7 @@ func main() {
 
 	// Start the wash desktop (background; no setsid — busybox lacks it). netd
 	// autodetects UCI on OpenWRT, so the router screens are real. Capture stderr.
-	out := run(ctx, w, "cd "+appsDir+" && ( WASH_APPS_DIR="+appsDir+" WASH_LISTEN=0.0.0.0:11000 ./wash-router >/tmp/wash.log 2>&1 & ); "+
+	out := run(ctx, w, "cd "+appsDir+" && ( WASH_APPS_DIR="+appsDir+" WASH_LISTEN=0.0.0.0:11000 ./wash-router --show-hidden >/tmp/wash.log 2>&1 & ); "+
 		"sleep 4; echo '=RUNNING='; pgrep -l wash-router 2>/dev/null; "+
 		"echo '=WASH.LOG='; cat /tmp/wash.log 2>&1 | head -20; "+
 		"echo '=SERVE='; wget -qO- http://127.0.0.1:11000/ 2>&1 | head -c 120")
