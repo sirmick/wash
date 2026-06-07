@@ -11,8 +11,9 @@ import Webamp from 'webamp';
 
 interface TracksOk {
   kind: 'tracks_ok';
-  base: string;
-  tracks: { file: string; title: string; artist: string }[];
+  // URLs are fully resolved by the BE (ingress path for local files,
+  // absolute for streams), so the FE feeds them straight to webamp.
+  tracks: { url: string; title: string; artist?: string }[];
 }
 
 interface AudioCmd {
@@ -98,8 +99,8 @@ function MusicApp(props: WashAppProps) {
     webamp = wa;
     await wa.renderWhenReady(container);
     const tracks = m.tracks.map((t) => ({
-      url: m.base + t.file,
-      metaData: { title: t.title, artist: t.artist },
+      url: t.url,
+      metaData: { title: t.title, artist: t.artist ?? '' },
     }));
     wa.appendTracks(tracks);
 

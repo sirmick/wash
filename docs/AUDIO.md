@@ -1,7 +1,7 @@
 # AUDIO — wash audio subsystem & music player
 
-Status: design approved 2026-06-06 (branch `wash-audio`). M1 + M3 done and
-e2e-green; M2 (library/playlist/skins) next.
+Status: design approved 2026-06-06 (branch `wash-audio`). M1, M2, M3 done and
+e2e-green. M4+ (persistence, per-source volume, Case 2) deferred.
 
 This document describes wash's audio subsystem and its first consumer, a
 Winamp-skinned music player. The defining constraint shapes everything:
@@ -140,11 +140,15 @@ owning producer. Pure renderer; the gateway does the wiring.
   main window present, playback starts). *Proves: webamp bundles under Vite,
   ingress serves Range audio with correct CORS, fixed-size window.*
 
-- **M2 — library + playlist + skins.** BE scans a music dir (default
-  `~/Music`) via the fs layer and exposes each track over ingress; FE builds
-  the playlist via `appendTracks`. Skins: ship Webamp's default + drag-drop
-  `.wsz` (`setSkinFromArrayBuffer`) + remote stream URL entry. No bundling of
-  third-party skin art (licensing — skins are author-owned fan art).
+- **M2 — library + playlist + skins.** DONE. BE scans a music dir
+  (`$WASH_MUSIC_DIR`, default `~/Music`) recursively for audio files, serves
+  them over ingress with a Range-capable file server (`os.DirFS`-confined,
+  per-segment URL-escaped), and falls back to the synth sample when empty.
+  Streams: `$WASH_MUSIC_STREAMS` (comma-separated Icecast/HTTP URLs) appended
+  verbatim. Skins: Webamp's default renders, and dropping a `.wsz` onto the
+  player re-skins it (Webamp's native drag-drop — no code). A hosted
+  skin-picker / museum browser stays deferred (skins are author-owned fan
+  art; no third-party art bundled).
 
 - **M3 — control plane + sidebar.** `com.wash.audio` (`StateService`) +
   session gateway + `AudioWidget`. Music registers/reports; sidebar shows

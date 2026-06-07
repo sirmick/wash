@@ -10,6 +10,32 @@
 //      server + PublishIngress + router proxy chain works.
 
 import { test, expect } from '../fixtures/router';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+// minimalWav builds a valid tiny 16-bit mono PCM WAV (silence) so webamp
+// can parse a real audio file off the seeded library dir.
+function minimalWav(): Buffer {
+  const rate = 8000;
+  const n = rate / 10; // 0.1s
+  const dataLen = n * 2;
+  const buf = Buffer.alloc(44 + dataLen);
+  buf.write('RIFF', 0);
+  buf.writeUInt32LE(36 + dataLen, 4);
+  buf.write('WAVE', 8);
+  buf.write('fmt ', 12);
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1, 20); // PCM
+  buf.writeUInt16LE(1, 22); // mono
+  buf.writeUInt32LE(rate, 24);
+  buf.writeUInt32LE(rate * 2, 28);
+  buf.writeUInt16LE(2, 32);
+  buf.writeUInt16LE(16, 34);
+  buf.write('data', 36);
+  buf.writeUInt32LE(dataLen, 40);
+  return buf; // samples left as zero (silence)
+}
 
 test.describe('music app (kiosk, host-side full stack)', () => {
   test.use({ routerOpts: { kiosk: 'com.wash.music', apps: ['music'] } });
@@ -74,5 +100,28 @@ test.describe('music + audio control plane (full shell + sidebar)', () => {
     await page.locator('[data-testid="audio-play"]').click();
     await expect(page.locator('[data-testid="audio-pause"]')).toBeVisible();
     await expect(nowPlaying).toHaveAttribute('data-status', 'playing');
+  });
+});
+
+// M2: the library scan. Point WASH_MUSIC_DIR at a seeded folder and the
+// BE serves those files over ingress; the FE builds the webamp playlist
+// from them (docs/AUDIO.md §5). Filenames with spaces exercise the
+// per-segment URL escaping.
+test.describe('music app library scan', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wash-music-lib-'));
+  writeFileSync(join(dir, 'Alpha Song.wav'), minimalWav());
+  writeFileSync(join(dir, 'Beta Tune.wav'), minimalWav());
+
+  test.use({ routerOpts: { kiosk: 'com.wash.music', apps: ['music'], extraEnv: { WASH_MUSIC_DIR: dir } } });
+
+  test('serves the seeded folder as the playlist', async ({ page, router }) => {
+    await page.goto(router.url);
+    await expect(page.getByRole('slider', { name: 'Volume Bar' })).toBeVisible();
+
+    // Both scanned files appear in the playlist (titles = filename stems),
+    // and the sample-tone fallback does NOT (a real library took over).
+    await expect(page.locator('#webamp')).toContainText('Alpha Song');
+    await expect(page.locator('#webamp')).toContainText('Beta Tune');
+    await expect(page.locator('#webamp')).not.toContainText('Wash Test Tone');
   });
 });
