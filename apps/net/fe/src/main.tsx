@@ -24,7 +24,7 @@ import {
 } from "./segment-model.ts";
 import { matrixZones, cellState, toggleForward, setInput, type MZone, type CellState } from "./matrix-model.ts";
 import { projectHosts, upsertHost, removeHost, type HostEntry } from "./hosts-model.ts";
-import type { Descriptor, ObjectDescriptor } from "./objectform-model.ts";
+import type { Descriptor, ObjectDescriptor, Diagnostic } from "./objectform-model.ts";
 import descriptorJson from "./generated/descriptor.json";
 import i18nJson from "./generated/i18n.json";
 
@@ -209,7 +209,8 @@ export function NetApp(props: WashAppProps) {
   // "+ Network" button so a fresh router (no segments yet) can still add one.
   // (Declared before the memos below — createMemo runs eagerly, so a memo that
   // calls routerCaps must not precede its declaration: TDZ.)
-  const routerCaps = () => canKind("zone") && canKind("dhcp");
+  // Kind keys are package/section (model.Kinds) — "firewall/zone", "dhcp/dhcp".
+  const routerCaps = () => canKind("firewall/zone") && canKind("dhcp/dhcp");
   // draftSegments is the live router-UI grouping of the draft (segment-model
   // kernel) so the Networks panel reflects staged create/edit/remove immediately.
   const draftSegments = createMemo<Segment[]>(() => projectDraft(draft()));
@@ -245,6 +246,7 @@ export function NetApp(props: WashAppProps) {
 
   const [status, setStatus] = createSignal("idle");
   const [events, setEvents] = createSignal<ApplyEvent[]>([]);
+  const [diagnostics, setDiagnostics] = createSignal<Diagnostic[]>([]); // validation errors/warnings on the draft
   const [confirmWindowMs, setConfirmWindowMs] = createSignal(0);
   const [deadline, setDeadline] = createSignal(0);
   const [remaining, setRemaining] = createSignal(0);
@@ -342,10 +344,24 @@ export function NetApp(props: WashAppProps) {
     });
   };
 
+  // Live validation: when the staged draft is dirty, validate it against netd
+  // (debounced) and surface diagnostics — so config errors show as you edit, not
+  // only on Apply. A clean draft clears them (don't flag the committed config).
+  createEffect(() => {
+    const c = draft();
+    if (dirtyCount() === 0) { setDiagnostics([]); return; }
+    const t = window.setTimeout(async () => {
+      const r = await sendWithReply("validate", { config: c });
+      if (r.kind === "validate_ok") setDiagnostics((r.diagnostics ?? []) as Diagnostic[]);
+    }, 400);
+    onCleanup(() => window.clearTimeout(t));
+  });
+
   const applyState = (s: any) => {
     if (!s) return;
     if (typeof s.status === "string") setStatus(s.status);
     if (Array.isArray(s.events)) setEvents(s.events as ApplyEvent[]);
+    if (Array.isArray(s.diagnostics)) setDiagnostics(s.diagnostics as Diagnostic[]);
 
     if (typeof s.confirm_window_ms === "number") {
       setConfirmWindowMs(s.confirm_window_ms);
@@ -454,7 +470,10 @@ export function NetApp(props: WashAppProps) {
     }
   };
   // Discard all staged edits locally (no backend round-trip) — back to committed.
-  const discardDraft = () => { setStatus("idle"); setEvents([]); setDraft(structuredClone(config())); };
+  const discardDraft = () => { setStatus("idle"); setEvents([]); setDiagnostics([]); setDraft(structuredClone(config())); };
+  // Normalize a diagnostic severity (BE sends "error"/"warning"; tolerate 0/1).
+  const diagSev = (s: Diagnostic["severity"]): "error" | "warning" => (s === "error" || s === 0 ? "error" : "warning");
+  const hasErrors = () => diagnostics().some((d) => diagSev(d.severity) === "error");
 
   const finish = (kind: "confirm" | "revert") => async () => {
     const r = await sendWithReply(kind, {}, 30000);
@@ -657,6 +676,19 @@ export function NetApp(props: WashAppProps) {
       </header>
 
       <div class="wash-net-body">
+        <Show when={diagnostics().length > 0}>
+          <div class="wash-net-diags" data-testid="net-diags">
+            <For each={diagnostics()}>
+              {(d) => (
+                <div class="wash-net-diag" data-sev={diagSev(d.severity)}>
+                  <span class="wash-net-diag-sev">{diagSev(d.severity) === "error" ? "✕" : "⚠"}</span>
+                  <span class="wash-net-diag-msg">{d.message}</span>
+                  <span class="wash-net-diag-path">{d.path}</span>
+                </div>
+              )}
+            </For>
+          </div>
+        </Show>
         <Show when={adding() === "network"}>
           <NetworkWizard
             parents={vlanParents()}
@@ -852,12 +884,14 @@ export function NetApp(props: WashAppProps) {
           </For>
         </div>
 
-        <div class="wash-net-greyed">
-          <Show when={!can("zones")}><span class="wash-net-lock">Firewall 🔒</span></Show>
-          <Show when={!can("dhcp-server")}><span class="wash-net-lock">DHCP server 🔒</span></Show>
-          <Show when={!can("ap")}><span class="wash-net-lock">Access point 🔒</span></Show>
-          <span class="wash-net-hint">available in router mode</span>
-        </div>
+        <Show when={!routerCaps()}>
+          <div class="wash-net-greyed">
+            <span class="wash-net-lock">Firewall 🔒</span>
+            <span class="wash-net-lock">DHCP server 🔒</span>
+            <span class="wash-net-lock">Access point 🔒</span>
+            <span class="wash-net-hint">available in router mode</span>
+          </div>
+        </Show>
       </div>
 
       <Show when={dirtyCount() > 0 && status() !== "applying" && status() !== "await-confirm"}>
@@ -866,7 +900,7 @@ export function NetApp(props: WashAppProps) {
             {dirtyCount()} pending change{dirtyCount() === 1 ? "" : "s"} — not applied yet
           </span>
           <button class="wash-net-btn" data-testid="discard-changes" disabled={busy()} onClick={discardDraft}><Icon name="x" /> Discard</button>
-          <button class="wash-net-btn primary" data-testid="apply-button" disabled={busy()} onClick={() => void applyDraft()}><Icon name="check" /> Apply</button>
+          <button class="wash-net-btn primary" data-testid="apply-button" disabled={busy() || hasErrors()} title={hasErrors() ? "fix the validation errors above first" : ""} onClick={() => void applyDraft()}><Icon name="check" /> Apply</button>
         </div>
       </Show>
 
@@ -1340,6 +1374,13 @@ const STYLE = `
 .wash-net-conn[data-role="vpn"] { border-color:#2e4a4a; }
 .wash-net-dhcp-row { display:flex; gap:6px; }
 .wash-net-dhcp-row input { width:5.5em; }
+.wash-net-diags { display:flex; flex-direction:column; gap:4px; margin-bottom:12px; }
+.wash-net-diag { display:flex; gap:8px; align-items:baseline; font-size:12px; padding:6px 10px; border-radius:6px; border:1px solid; }
+.wash-net-diag[data-sev="error"] { background:#2a1518; border-color:#5a2e30; color:#e09098; }
+.wash-net-diag[data-sev="warning"] { background:#2a2410; border-color:#5a4a20; color:#d0b060; }
+.wash-net-diag-sev { font-weight:700; }
+.wash-net-diag-msg { flex:1; }
+.wash-net-diag-path { opacity:.6; font-family:ui-monospace,Menlo,monospace; font-size:11px; }
 .wash-net-matrix { margin-bottom:14px; }
 .wash-net-grid { display:grid; gap:2px; font-size:11px; }
 .wash-net-grid-corner { opacity:.5; padding:3px 6px; font-size:10px; }
