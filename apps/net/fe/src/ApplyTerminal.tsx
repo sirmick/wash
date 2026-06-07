@@ -9,7 +9,7 @@
 //
 // Pure renderer — all state lives in the App (main.tsx).
 
-import { For, Show } from "solid-js";
+import { For, Show, Switch, Match } from "solid-js";
 
 export interface ApplyEvent {
   seq: number;
@@ -41,6 +41,16 @@ function reachedPhases(events: ApplyEvent[]): Set<string> {
   return new Set(events.map((e) => e.phase));
 }
 
+// Friendly status text for the footer line (the raw values are netd txn states).
+const STATUS_LABEL: Record<string, string> = {
+  idle: "Ready",
+  applying: "Applying…",
+  "await-confirm": "Awaiting confirmation",
+  committed: "Applied",
+  reverted: "Reverted",
+  failed: "Failed",
+};
+
 export function ApplyTerminal(props: ApplyTerminalProps) {
   const reached = () => reachedPhases(props.events());
   const awaiting = () => props.status() === "await-confirm";
@@ -59,15 +69,29 @@ export function ApplyTerminal(props: ApplyTerminalProps) {
 
   return (
     <div class="wash-net-apply" data-status={props.status()}>
-      <div class="wash-net-rail" data-testid="apply-rail">
+      {/* A stepper — connected nodes that tick from Plan → Confirm — rather than
+          a row of pills: the phases are an ordered sequence, so a progress rail
+          (check / spinner / ✕ per node, connectors filling as it advances) reads
+          the transaction far more naturally than disconnected chips. */}
+      <ol class="wash-net-steps" data-testid="apply-rail" data-status={props.status()}>
         <For each={RAIL}>
-          {(chip) => (
-            <span class="wash-net-chip" data-phase={chip.key} data-state={railState(chip.key)}>
-              {chip.label}
-            </span>
-          )}
+          {(step, i) => {
+            const st = () => railState(step.key);
+            return (
+              <li class="wash-net-step" data-phase={step.key} data-state={st()}>
+                <span class="wash-net-stepnode" aria-hidden="true">
+                  <Switch fallback={<span class="wash-net-stepnum">{i() + 1}</span>}>
+                    <Match when={st() === "done"}><span class="wash-net-stepglyph">✓</span></Match>
+                    <Match when={st() === "bad"}><span class="wash-net-stepglyph">✕</span></Match>
+                    <Match when={st() === "active"}><span class="wash-net-spin" /></Match>
+                  </Switch>
+                </span>
+                <span class="wash-net-steplabel">{step.label}</span>
+              </li>
+            );
+          }}
         </For>
-      </div>
+      </ol>
 
       <Show when={props.events().length > 0}>
         <div class="wash-net-log" data-testid="apply-log">
@@ -87,7 +111,10 @@ export function ApplyTerminal(props: ApplyTerminalProps) {
           runs its own commit-confirm), so the terminal just reflects the
           resulting status; there is no standalone Apply button. */}
       <div class="wash-net-applybar">
-        <span class="wash-net-status" data-status={props.status()}>{props.status()}</span>
+        <span class="wash-net-statdot" data-status={props.status()} aria-hidden="true" />
+        <span class="wash-net-status" data-status={props.status()}>
+          {STATUS_LABEL[props.status()] ?? props.status()}
+        </span>
       </div>
 
       {/* The Keep/Discard prompt is a banner pinned to the TOP of the app

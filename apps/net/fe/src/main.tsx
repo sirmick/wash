@@ -1524,12 +1524,33 @@ const STYLE = `
 
 /* --- apply terminal (B3) --- */
 .wash-net-apply { border-top:1px solid #2a2a3a; display:flex; flex-direction:column; flex-shrink:0; }
-.wash-net-rail { display:flex; align-items:center; gap:6px; padding:8px 12px 4px; }
-.wash-net-chip { font-size:10px; text-transform:uppercase; letter-spacing:.04em; padding:2px 8px; border-radius:10px; border:1px solid #33363d; color:#7a7d85; }
-.wash-net-chip[data-state="done"] { color:#3aa050; border-color:#2e5a38; }
-.wash-net-chip[data-state="active"] { color:#d0a040; border-color:#4a4030; animation:wash-pulse 1.2s ease-in-out infinite; }
-.wash-net-chip[data-state="bad"] { color:#e06060; border-color:#5a2e2e; }
-@keyframes wash-pulse { 0%,100% { opacity:1; } 50% { opacity:.5; } }
+
+/* Apply progress stepper — connected nodes that tick Plan→Confirm. Each step is
+   a node (number / spinner / ✓ / ✕) with a connector to the previous one that
+   fills as the transaction advances. Replaces the old pill row. */
+.wash-net-steps { list-style:none; display:flex; align-items:flex-start; margin:0; padding:11px 18px 5px; }
+.wash-net-step { position:relative; flex:1; display:flex; flex-direction:column; align-items:center; gap:5px; min-width:0; }
+.wash-net-step::before { content:""; position:absolute; top:10px; right:50%; left:-50%; height:2px; background:#2f323a; z-index:0; }
+.wash-net-step:first-child::before { display:none; }
+.wash-net-step[data-state="done"]::before, .wash-net-step[data-state="active"]::before { background:#2e6a3a; }
+.wash-net-step[data-state="bad"]::before { background:#6a3030; }
+.wash-net-stepnode { position:relative; z-index:1; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+  font-size:11px; font-weight:700; border:2px solid #33363d; background:#15151d; color:#7a7d85; box-sizing:border-box; transition:border-color .2s, background .2s; }
+.wash-net-stepglyph { line-height:1; }
+.wash-net-step[data-state="done"] .wash-net-stepnode { background:#2e6a3a; border-color:#2e6a3a; color:#d6f0d6; }
+.wash-net-step[data-state="active"] .wash-net-stepnode { border-color:#5a8cd0; color:#9cc0ef; background:#15151d; box-shadow:0 0 0 3px rgba(90,140,208,.16); }
+.wash-net-step[data-state="bad"] .wash-net-stepnode { background:#6a3030; border-color:#6a3030; color:#f2cccc; }
+.wash-net-steplabel { font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:#7a7d85; }
+.wash-net-step[data-state="done"] .wash-net-steplabel { color:#5f9a6f; }
+.wash-net-step[data-state="active"] .wash-net-steplabel { color:#9cc0ef; }
+.wash-net-step[data-state="bad"] .wash-net-steplabel { color:#d68a8a; }
+.wash-net-spin { width:9px; height:9px; border-radius:50%; border:2px solid rgba(156,192,239,.28); border-top-color:#9cc0ef; animation:wash-spin .7s linear infinite; }
+@keyframes wash-spin { to { transform:rotate(360deg); } }
+.wash-net-statdot { width:8px; height:8px; border-radius:50%; background:#5a5d65; flex-shrink:0; }
+.wash-net-statdot[data-status="applying"], .wash-net-statdot[data-status="await-confirm"] { background:#d0a040; animation:wash-pulse 1.2s ease-in-out infinite; }
+.wash-net-statdot[data-status="committed"] { background:#3aa050; }
+.wash-net-statdot[data-status="reverted"], .wash-net-statdot[data-status="failed"] { background:#e06060; }
+@keyframes wash-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
 .wash-net-log { max-height:120px; overflow:auto; margin:0 12px; padding:4px 0; font:11px ui-monospace, Menlo, Consolas, monospace; }
 .wash-net-logline { display:flex; gap:8px; padding:1px 0; }
 .wash-net-logphase { color:#6a6d75; min-width:80px; text-transform:uppercase; }
