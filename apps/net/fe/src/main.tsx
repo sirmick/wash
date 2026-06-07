@@ -9,7 +9,7 @@
 // the schema-driven editor for one interface's addressing. Every change runs through
 // netd validate → apply (commit-confirm) → the box.
 
-import { createEffect, createMemo, createSignal, onCleanup, onMount, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onMount, For, Show, Switch, Match } from "solid-js";
 import { defineWashApp, washAssetUrl, type WashAppProps } from "@wash/ui";
 import { x25519 } from "@noble/curves/ed25519.js";
 
@@ -663,14 +663,15 @@ export function NetApp(props: WashAppProps) {
             <button data-testid="add-network" class="wash-net-btn primary" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setEditSeg(null); setAdding("network"); }}><Icon name="git-branch" /> Network</button>
             <button data-testid="add-host" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setEditHost(null); setAdding("host"); }}><Icon name="plus" /> Host</button>
           </Show>
-          {/* On a router, + Network (port/VLAN carrier + role) supersedes the
-              workstation Ethernet/VLAN flows — hide them so there's one obvious
-              add path. Bridge stays (the wizard has no bridge carrier yet). */}
+          {/* On a router, + Network (VLAN / port / bridge carrier + role)
+              supersedes the workstation Ethernet/VLAN/Bridge flows — hide them so
+              there's one obvious add path (a bridged LAN is a Network with a
+              "Bridge (multiple ports)" carrier). */}
           <Show when={!routerCaps()}>
             <button data-testid="add-ethernet" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setConfigureDevice(""); setAdding("ethernet"); }}><Icon name="ethernet-port" /> Ethernet</button>
             <button data-testid="add-vlan" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("vlan")} onClick={() => setAdding("vlan")}><Icon name="git-branch" /> VLAN</button>
+            <button data-testid="add-bridge" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("bridge")} onClick={() => setAdding("bridge")}><Icon name="git-merge" /> Bridge</button>
           </Show>
-          <button data-testid="add-bridge" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("bridge")} onClick={() => setAdding("bridge")}><Icon name="git-merge" /> Bridge</button>
           <Show when={can("wireguard")}>
             <button data-testid="add-wireguard" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => setAdding("wireguard")}><Icon name="shield" /> WireGuard</button>
           </Show>
@@ -1062,10 +1063,12 @@ function NetworkWizard(props: { parents: string[]; ports: string[]; initial?: Se
   const editing = !!props.initial;
   const i = props.initial;
   const [name, setName] = createSignal(i?.name ?? "");
-  const [carrierKind, setCarrierKind] = createSignal<"vlan" | "port">(i?.carrierKind ?? "vlan");
+  const [carrierKind, setCarrierKind] = createSignal<"vlan" | "port" | "bridge">(i?.carrierKind ?? "vlan");
   const [parent, setParent] = createSignal(i?.parent ?? props.parents[0] ?? "");
   const [vid, setVid] = createSignal(i?.vid ?? 10);
   const [port, setPort] = createSignal(i?.port ?? props.ports[0] ?? "");
+  const [members, setMembers] = createSignal<Set<string>>(new Set(i?.members ?? []));
+  const toggleMember = (d: string) => setMembers((s) => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n; });
   const [address, setAddress] = createSignal(i?.address ?? "");
   const [dhcp, setDhcp] = createSignal(i?.dhcp ?? true);
   const [start, setStart] = createSignal(i?.start ?? 100);
@@ -1082,10 +1085,13 @@ function NetworkWizard(props: { parents: string[]; ports: string[]; initial?: Se
   };
 
   const cidrOK = () => /\/\d+$/.test(address());
-  const carrierOK = () => (carrierKind() === "port" ? !!port() : (!!parent() && vid() >= 1 && vid() <= 4094));
+  const carrierOK = () => carrierKind() === "port" ? !!port()
+    : carrierKind() === "bridge" ? members().size > 0
+    : (!!parent() && vid() >= 1 && vid() <= 4094);
   const valid = () => !!name() && carrierOK() && (role() === "wan" ? (proto() === "static" ? cidrOK() : true) : cidrOK());
   const submit = () => props.onSave({
-    name: name(), role: role(), carrierKind: carrierKind(), parent: parent(), vid: vid(), port: port(), proto: proto(),
+    name: name(), role: role(), carrierKind: carrierKind(), parent: parent(), vid: vid(), port: port(),
+    members: Array.from(members()), proto: proto(),
     address: address(), dhcp: dhcp(), start: start(), limit: limit(), lease: lease(), dns: dns(), isolate: isolate(),
   });
 
@@ -1108,27 +1114,41 @@ function NetworkWizard(props: { parents: string[]; ports: string[]; initial?: Se
         <select data-testid="net-carrier" value={carrierKind()} onChange={(e) => setCarrierKind(e.currentTarget.value as any)}>
           <option value="vlan">VLAN tag</option>
           <option value="port">Untagged port</option>
+          <option value="bridge">Bridge (multiple ports)</option>
         </select>
       </label>
-      <Show when={carrierKind() === "vlan"} fallback={
-        <label class="wash-net-field">
-          <span class="wash-net-label">Port</span>
-          <select data-testid="net-port" value={port()} onChange={(e) => setPort(e.currentTarget.value)}>
-            <For each={props.ports}>{(d) => <option value={d}>{d}</option>}</For>
-          </select>
-        </label>
-      }>
-        <label class="wash-net-field">
-          <span class="wash-net-label">Trunk</span>
-          <select data-testid="net-parent" value={parent()} onChange={(e) => setParent(e.currentTarget.value)}>
-            <For each={props.parents}>{(d) => <option value={d}>{d}</option>}</For>
-          </select>
-        </label>
-        <label class="wash-net-field">
-          <span class="wash-net-label">VLAN ID</span>
-          <input data-testid="net-vid" type="number" min="1" max="4094" value={vid()} onInput={(e) => setVid(parseInt(e.currentTarget.value || "0", 10))} />
-        </label>
-      </Show>
+      <Switch>
+        <Match when={carrierKind() === "vlan"}>
+          <label class="wash-net-field">
+            <span class="wash-net-label">Trunk</span>
+            <select data-testid="net-parent" value={parent()} onChange={(e) => setParent(e.currentTarget.value)}>
+              <For each={props.parents}>{(d) => <option value={d}>{d}</option>}</For>
+            </select>
+          </label>
+          <label class="wash-net-field">
+            <span class="wash-net-label">VLAN ID</span>
+            <input data-testid="net-vid" type="number" min="1" max="4094" value={vid()} onInput={(e) => setVid(parseInt(e.currentTarget.value || "0", 10))} />
+          </label>
+        </Match>
+        <Match when={carrierKind() === "bridge"}>
+          <div class="wash-net-field">
+            <span class="wash-net-label">Ports</span>
+            <div class="wash-net-members" data-testid="net-members">
+              <For each={props.ports} fallback={<span class="wash-net-hint">no free ports</span>}>
+                {(d) => <label class="wash-net-member"><input data-testid={`net-member-${d}`} type="checkbox" checked={members().has(d)} onChange={() => toggleMember(d)} /> {d}</label>}
+              </For>
+            </div>
+          </div>
+        </Match>
+        <Match when={carrierKind() === "port"}>
+          <label class="wash-net-field">
+            <span class="wash-net-label">Port</span>
+            <select data-testid="net-port" value={port()} onChange={(e) => setPort(e.currentTarget.value)}>
+              <For each={props.ports}>{(d) => <option value={d}>{d}</option>}</For>
+            </select>
+          </label>
+        </Match>
+      </Switch>
       {/* WAN uplink: proto + (static) address; masquerade is implied. */}
       <Show when={role() === "wan"}>
         <label class="wash-net-field">

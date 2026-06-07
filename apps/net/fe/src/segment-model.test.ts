@@ -6,7 +6,7 @@ import {
 } from "./segment-model.ts";
 
 const lanForm = (over: Partial<SegForm> = {}): SegForm => ({
-  name: "iot", carrierKind: "vlan", parent: "switch", vid: 6, port: "",
+  name: "iot", carrierKind: "vlan", parent: "switch", vid: 6, port: "", members: [],
   address: "192.168.15.1/24", dhcp: true, start: 50, limit: 150, lease: "12h", dns: "", isolate: true,
   ...over,
 });
@@ -51,6 +51,30 @@ test("untagged port carrier → no device added, interface on the port", () => {
   const c = materializeSegment({}, lanForm({ carrierKind: "port", port: "eth1" }));
   assert.equal((c.Devices ?? []).length, 0);
   assert.equal(find(c.Interfaces, (i) => i.Name === "iot").Device, "eth1");
+});
+
+test("bridge carrier → bridge Device of N ports + interface/zone/pool; round-trips", () => {
+  // a LAN spanning several adapters = a bridge of ports
+  const c = materializeSegment({}, lanForm({ name: "lan", carrierKind: "bridge", members: ["eth1", "eth2", "eth3"], address: "10.0.0.1/24" }));
+  const dev = find(c.Devices, (d) => d.Type === "bridge");
+  assert.equal(dev.Name, "br-lan");
+  assert.deepEqual(dev.Ports, ["eth1", "eth2", "eth3"]);
+  const iface = find(c.Interfaces, (i) => i.Name === "lan");
+  assert.equal(iface.Device, "br-lan", "interface sits on the bridge, not a raw port");
+  find(c.Zones, (z: any) => z.Name === "lan");
+  find(c.Pools, (p: any) => p.Interface === "lan");
+  // the full bundle round-trips back to a bridge segment with its members
+  const seg = projectDraft(c)[0];
+  assert.equal(seg.carrier.kind, "bridge");
+  assert.deepEqual(seg.carrier.members, ["eth1", "eth2", "eth3"]);
+});
+
+test("bridge carrier absorbs a bare interface that sat on a member port", () => {
+  // eth1 had its own interface; bridging it should remove that interface
+  const c0: Cfg = { Interfaces: [{ Name: "old1", Device: "eth1", Proto: { _tag: "dhcp" } }] };
+  const c = materializeSegment(c0, lanForm({ name: "lan", carrierKind: "bridge", members: ["eth1", "eth2"], address: "10.0.0.1/24" }));
+  assert.equal((c.Interfaces ?? []).filter((i) => i.Name === "old1").length, 0, "the bare member interface is absorbed");
+  assert.equal(find(c.Interfaces, (i) => i.Name === "lan").Device, "br-lan");
 });
 
 test("edit replaces (no duplication); changing the VID swaps the vlan device", () => {

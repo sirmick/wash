@@ -21,9 +21,10 @@ export type Segment = { name: string; role: "lan" | "wan" | "vpn"; carrier: Carr
 export type SegForm = {
   name: string;
   role: "lan" | "wan";
-  carrierKind: "vlan" | "port";
+  carrierKind: "vlan" | "port" | "bridge";
   parent: string; vid: number; // vlan tag on a trunk
   port: string;                // untagged port
+  members: string[];           // bridge member ports (carrierKind === "bridge")
   proto: "static" | "dhcp";    // wan uplink proto (lan is always static)
   address: string;             // lan gateway / wan static CIDR, e.g. 10.0.20.1/24
   dhcp: boolean; start: number; limit: number; lease: string; dns: string; // lan DHCP server
@@ -84,12 +85,21 @@ export function materializeSegment(cfg: Cfg, f: SegForm, orig?: Segment): Cfg {
   // multi-network/shared (the stock wan zone spans wan+wan6) — leave those.
   next.Zones = (next.Zones ?? []).filter((z: any) => !((z.Networks ?? []).length === 1 && names.has(z.Networks[0])));
 
-  // Carrier (shared by both roles): a VLAN device, or an untagged port.
+  // Carrier (shared by both roles): a VLAN device, a bridge of ports, or an
+  // untagged port.
   let device = f.port;
   if (f.carrierKind === "vlan") {
     device = `${f.parent}.${f.vid}`;
     next.Devices = (next.Devices ?? []).filter((dev) => dev.Name !== oldDev && dev.Name !== device);
     next.Devices = [...(next.Devices ?? []), { Name: device, Type: "8021q", Ifname: f.parent, VID: f.vid }];
+  } else if (f.carrierKind === "bridge") {
+    device = `br-${f.name}`;
+    const members = f.members ?? [];
+    const inBridge = new Set(members);
+    // a port can't be both a bare interface and a bridge member — absorb any
+    next.Interfaces = (next.Interfaces ?? []).filter((i) => !inBridge.has(i.Device ?? ""));
+    next.Devices = (next.Devices ?? []).filter((dev) => dev.Name !== oldDev && dev.Name !== device);
+    next.Devices = [...(next.Devices ?? []), { Name: device, Type: "bridge", Ports: members }];
   } else if (oldDev && oldDev !== device) {
     next.Devices = (next.Devices ?? []).filter((dev) => dev.Name !== oldDev);
   }
@@ -138,10 +148,11 @@ export function segFormFrom(cfg: Cfg, seg: Segment, parents: string[], ports: st
   return {
     name: seg.name,
     role: seg.role === "wan" ? "wan" : "lan",
-    carrierKind: seg.carrier.kind === "vlan" ? "vlan" : "port",
+    carrierKind: seg.carrier.kind === "vlan" ? "vlan" : seg.carrier.kind === "bridge" ? "bridge" : "port",
     parent: seg.carrier.kind === "vlan" ? (seg.carrier.port ?? "") : (parents[0] ?? ""),
     vid: seg.carrier.vid ?? 10,
     port: seg.carrier.kind === "vlan" ? (ports[0] ?? "") : (seg.carrier.port ?? iface?.Device ?? ""),
+    members: seg.carrier.kind === "bridge" ? (seg.carrier.members ?? []) : [],
     proto: iface?.Proto?._tag === "dhcp" ? "dhcp" : "static",
     address: iface?.Proto?.IPAddr?.[0] ?? "",
     dhcp: !!pool,
