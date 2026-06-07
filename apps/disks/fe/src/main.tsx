@@ -290,9 +290,21 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 data-testid={`disks-row-${row.id}`}
                 onClick={() => row.selectable && setSelectedId(row.id)}
               >
-                <span style={{ display: 'inline-flex', width: `${row.depth * 14}px` }} />
-                <RowIcon row={row} />
-                <span style={{ 'margin-left': '6px' }}>{row.name}</span>
+                <span style={{ display: 'inline-flex', flex: '0 0 auto', width: `${row.depth * 14}px` }} />
+                <span style={{ display: 'inline-flex', flex: '0 0 auto' }}><RowIcon row={row} /></span>
+                <span
+                  title={row.name}
+                  style={{
+                    'margin-left': '6px',
+                    flex: '1 1 auto',
+                    'min-width': 0,
+                    overflow: 'hidden',
+                    'text-overflow': 'ellipsis',
+                    'white-space': 'nowrap',
+                  }}
+                >
+                  {row.name}
+                </span>
                 <RowTrailing row={row} />
               </div>
             </Show>
@@ -347,7 +359,7 @@ const RowTrailing: Component<{ row: Row }> = (props) => {
         return '';
     }
   };
-  return <span style={{ 'margin-left': 'auto', opacity: 0.55, font: `${tokens.fontSizeSm} ${tokens.fontMono}` }}>{text()}</span>;
+  return <span style={{ 'margin-left': 'auto', flex: '0 0 auto', 'padding-left': '8px', opacity: 0.55, font: `${tokens.fontSizeSm} ${tokens.fontMono}` }}>{text()}</span>;
 };
 
 // ---- detail pane (switches on row kind) ----
