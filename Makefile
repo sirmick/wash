@@ -592,6 +592,15 @@ vm-image-fedora: $(OUT)/wash
 vm-net-test: $(OUT)/wash
 	go test ./wash-vm/vm/ -run 'Ubuntu|Debian|Fedora' -v
 
+# vm-disks-test: the wash-disks Tier-4 real-kernel gate (docs/STORAGE.md) — boot
+# the Alpine image with virtio scratch disks, build real md/LVM/btrfs, and assert
+# wash-disks' providers parse them via --dump-snapshot. Needs the storage image
+# (vm-image bakes the tooling). Set WASH_VM_ZFS=1 (and rebuild vm-image with it)
+# to also exercise ZFS. Skips cleanly without kvm/qemu/image.
+.PHONY: vm-disks-test
+vm-disks-test: $(OUT)/wash
+	go test ./wash-vm/vm/ -run TestDisksRealKernel -v -count=1
+
 # vm-chrome: the minimal host chrome the proxy serves (docs/NET.md §8.3) —
 # tabs for Console + Wash. The wash UI (shell.js + app bundles) comes over the
 # wire FROM the VM; only the vendored runtimes + this chrome are host-served, so

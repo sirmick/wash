@@ -29,6 +29,16 @@ mkdir -p "$BUILD"
 # linux-lts (not -virt): the virt kernel ships no 802.11 stack, and the wifi
 # e2e needs mac80211_hwsim + mac80211/cfg80211. lts still has virtio_net etc.
 NM_PKGS="networkmanager networkmanager-cli networkmanager-wifi dbus polkit wpa_supplicant eudev linux-lts bash openrc hostapd iw dnsmasq"
+# Storage tooling for the wash-disks real-kernel gate (wash-vm/vm/disks_test.go):
+# mdadm (software RAID), lvm2 (PV/VG/LV), btrfs-progs, e2fsprogs (mkfs.ext4).
+# Small + broadly useful, so baked unconditionally. ZFS is heavy and its kmod is
+# ABI-pinned to linux-lts, so it's opt-in via WASH_VM_ZFS=1.
+STORAGE_PKGS="mdadm lvm2 btrfs-progs e2fsprogs"
+ZFS_PKGS=""
+if [ "${WASH_VM_ZFS:-0}" = "1" ]; then
+  ZFS_PKGS="zfs zfs-lts"
+fi
+PKGS="$NM_PKGS $STORAGE_PKGS $ZFS_PKGS"
 # The guest runs the wash desktop as the unprivileged 'wash' user (in the netdev
 # group so NM/polkit lets it manage networking — see 49-wash-nm.rules).
 # Create the wash user AND give it a real shadow password ("wash"): the login
@@ -37,16 +47,16 @@ NM_PKGS="networkmanager networkmanager-cli networkmanager-wifi dbus polkit wpa_s
 WASH_USER_SETUP="addgroup -S netdev 2>/dev/null; adduser -D -h /home/wash -s /bin/bash -G netdev wash; echo 'wash:wash' | chpasswd"
 ROOTFS_TAR="$BUILD/alpine-nm.tar"
 PKG_MARK="$BUILD/.alpine-nm.pkgs"
-RENDER_VER="3-washpw" # bump to force a re-render when this setup changes (now sets wash's password)
-if [ ! -f "$ROOTFS_TAR" ] || [ "$(cat "$PKG_MARK" 2>/dev/null)" != "$ALPINE_VER:$RENDER_VER:$NM_PKGS" ]; then
+RENDER_VER="4-storage" # bump to force a re-render when this setup changes (added storage tooling)
+if [ ! -f "$ROOTFS_TAR" ] || [ "$(cat "$PKG_MARK" 2>/dev/null)" != "$ALPINE_VER:$RENDER_VER:$PKGS" ]; then
   echo ">> rendering Alpine+NM+OpenRC rootfs via Docker (host has no apk)"
   command -v docker >/dev/null || { echo "!! docker required to build the NM rootfs" >&2; exit 1; }
   docker rm -f washnm-build >/dev/null 2>&1 || true
   docker run --name washnm-build "alpine:${ALPINE_VER%.*}" \
-    sh -c "apk add --no-cache $NM_PKGS && $WASH_USER_SETUP" >/dev/null
+    sh -c "apk add --no-cache $PKGS && $WASH_USER_SETUP" >/dev/null
   docker export washnm-build -o "$ROOTFS_TAR"
   docker rm washnm-build >/dev/null
-  printf '%s' "$ALPINE_VER:$RENDER_VER:$NM_PKGS" > "$PKG_MARK"
+  printf '%s' "$ALPINE_VER:$RENDER_VER:$PKGS" > "$PKG_MARK"
 fi
 
 # shellcheck source=scripts/lib/wash-vm-payload.sh
@@ -189,6 +199,10 @@ mount -t devpts -o gid=5,mode=620,ptmxmode=666 devpts /dev/pts 2>/dev/null
 [ -e /dev/ptmx ] || ln -s pts/ptmx /dev/ptmx
 mount -t tmpfs shm /dev/shm 2>/dev/null
 for m in virtio_net 8021q bridge; do modprobe "$m" 2>/dev/null; done
+# Storage modules for the wash-disks gate: virtio_blk surfaces the qemu scratch
+# disks (/dev/vd*); the rest back md/LVM/btrfs/ZFS. modprobe is a no-op when a
+# module is built-in or absent (e.g. zfs in a non-WASH_VM_ZFS image).
+for m in virtio_blk dm-mod md-mod raid0 raid1 raid10 raid456 btrfs zfs; do modprobe "$m" 2>/dev/null; done
 ip link set lo up 2>/dev/null
 [ -s /etc/machine-id ] || dbus-uuidgen --ensure=/etc/machine-id 2>/dev/null
 # udev so NM will manage the NICs (otherwise reason 71, "not initialized by udev").
