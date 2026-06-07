@@ -27,6 +27,15 @@ echo ">> build static washnet CLIs (baked into the image)"
 ( cd "$ROOT_DIR" && CGO_ENABLED=0 go build -o "$OUT/owrt-files/usr/bin/washnet-apply" ./cmd/washnet-apply )
 chmod +x "$OUT/owrt-files/usr/bin/"*
 
+# WASH_GUI=1 also bakes the full wash desktop (static multicall) so the VM can
+# serve the wash GUI itself — netd autodetects UCI, so the router screens are real.
+# Needs the FE asset embeds built first (`make multicall`).
+if [ "${WASH_GUI:-}" = "1" ]; then
+	echo ">> bake wash desktop (static multicall, GUI)"
+	( cd "$ROOT_DIR" && CGO_ENABLED=0 go build -tags=multicall,netgo,osusergo -ldflags="-s -w" -o "$OUT/owrt-files/usr/bin/wash" ./cmd/wash )
+	chmod +x "$OUT/owrt-files/usr/bin/wash"
+fi
+
 echo ">> Image Builder ($IB): make image (FILES=washnet, PACKAGES=$PKGS)"
 docker pull -q "$IB" >/dev/null
 docker rm -f wash-owrt-ib >/dev/null 2>&1 || true

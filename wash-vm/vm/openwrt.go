@@ -64,22 +64,42 @@ func LaunchOpenWRT(ctx context.Context, o OpenWRTOpts) (*OpenWRT, error) {
 	}
 	args = append(args, o.Extra...)
 	w.cmd = exec.CommandContext(ctx, "qemu-system-x86_64", args...)
-	if os.Getenv("OWRT_DEBUG") != "" {
-		w.cmd.Stderr = os.Stderr
+	// Always capture qemu's own stderr to a file (a bad -netdev/-drive/hostfwd
+	// makes qemu exit before the serial socket appears, and the reason is only on
+	// its stderr) — surfaced in the launch error below. OWRT_DEBUG also tees live.
+	qErrPath := filepath.Join(dir, "qemu.stderr")
+	if qf, err := os.Create(qErrPath); err == nil {
+		if os.Getenv("OWRT_DEBUG") != "" {
+			w.cmd.Stderr = io.MultiWriter(qf, os.Stderr)
+		} else {
+			w.cmd.Stderr = qf
+		}
 	}
 	if err := w.cmd.Start(); err != nil {
 		w.Close()
 		return nil, err
 	}
 	if err := w.connect(ctx, sock); err != nil {
+		tail := qemuStderrTail(qErrPath) // read before Close removes the dir
 		w.Close()
-		return nil, err
+		return nil, fmt.Errorf("%w%s", err, tail)
 	}
 	if err := w.waitShell(ctx); err != nil {
+		tail := qemuStderrTail(qErrPath)
 		w.Close()
-		return nil, err
+		return nil, fmt.Errorf("%w%s", err, tail)
 	}
 	return w, nil
+}
+
+// qemuStderrTail returns qemu's captured stderr (tail) for inclusion in a launch
+// error, or "" if empty/unreadable.
+func qemuStderrTail(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil || len(b) == 0 {
+		return ""
+	}
+	return "\nqemu stderr:\n" + tailStr(b, 1000)
 }
 
 func (w *OpenWRT) connect(ctx context.Context, sock string) error {
