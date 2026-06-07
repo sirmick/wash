@@ -198,10 +198,18 @@ function Icon(p: { name: string; size?: number }) {
   );
 }
 
-function NetApp(props: WashAppProps) {
+export function NetApp(props: WashAppProps) {
   const [config, setConfig] = createSignal<Config>({ Interfaces: [], Devices: [] }); // committed baseline (from netd)
   const [draft, setDraft] = createSignal<Config>({ Interfaces: [], Devices: [] });  // staged edits, not yet applied
   const [caps, setCaps] = createSignal<Caps>(emptyCaps());
+  const can = (f: string) => caps().features.has(f);
+  const canKind = (k: string) => caps().kinds.has(k);
+  // routerCaps: the backend can express router segments (firewall zone + DHCP
+  // server) — UCI does, NM/workstation doesn't. Gates the Networks panel + the
+  // "+ Network" button so a fresh router (no segments yet) can still add one.
+  // (Declared before the memos below — createMemo runs eagerly, so a memo that
+  // calls routerCaps must not precede its declaration: TDZ.)
+  const routerCaps = () => canKind("zone") && canKind("dhcp");
   // draftSegments is the live router-UI grouping of the draft (segment-model
   // kernel) so the Networks panel reflects staged create/edit/remove immediately.
   const draftSegments = createMemo<Segment[]>(() => projectDraft(draft()));
@@ -217,12 +225,6 @@ function NetApp(props: WashAppProps) {
     const managed = new Set(draftSegments().filter((s) => s.zone || s.pool).map((s) => s.name));
     return all.filter((i) => !managed.has(i.Name));
   });
-  // routerCaps: the backend can express router segments (firewall zone + DHCP
-  // server) — UCI does, NM/workstation doesn't. Gates the Networks panel + the
-  // "+ Network" button so a fresh router (no segments yet) can still add one.
-  const routerCaps = () => canKind("zone") && canKind("dhcp");
-  const can = (f: string) => caps().features.has(f);
-  const canKind = (k: string) => caps().kinds.has(k);
   const [links, setLinks] = createSignal<string[]>([]); // physical NICs from the backend
   const [adding, setAdding] = createSignal<null | "ethernet" | "vlan" | "bridge" | "wifi" | "wireguard" | "network" | "host">(null);
   const [editSeg, setEditSeg] = createSignal<Segment | null>(null); // segment being edited (router bundle)
