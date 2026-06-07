@@ -745,7 +745,7 @@ export function NetApp(props: WashAppProps) {
                     <Show when={s.pool}><span class="wash-net-seg-tag">DHCP</span></Show>
                     <Show when={s.zone}><span class="wash-net-seg-tag">zone {s.zone}</span></Show>
                   </div>
-                  <Show when={s.role === "lan"}>
+                  <Show when={s.role !== "vpn"}>
                     <div class="wash-net-conn-actions">
                       <button class="wash-net-btn ghost" data-testid={`segment-edit-${s.name}`} title="Edit this network" disabled={busy() || adding() !== null || editIface() !== null} onClick={() => { setEditSeg(s); setAdding("network"); }}><Icon name="git-branch" /> Edit</button>
                       <button class="wash-net-btn ghost" data-testid={`segment-del-${s.name}`} title="Remove this network" disabled={busy() || adding() !== null} onClick={() => removeNetwork(s)}><Icon name="trash" /> Remove</button>
@@ -1068,11 +1068,19 @@ function NetworkWizard(props: { parents: string[]; ports: string[]; initial?: Se
   const [lease, setLease] = createSignal(i?.lease ?? "12h");
   const [dns, setDns] = createSignal(i?.dns ?? "");
   const [isolate, setIsolate] = createSignal(i?.isolate ?? true);
+  const [role, setRole] = createSignal<"lan" | "wan">(i?.role ?? "lan");
+  const [proto, setProto] = createSignal<"static" | "dhcp">(i?.proto ?? "dhcp");
+  const pickRole = (r: "lan" | "wan") => {
+    setRole(r);
+    if (!editing && (name() === "" || name() === "wan")) setName(r === "wan" ? "wan" : "");
+    if (!editing) setCarrierKind(r === "wan" ? "port" : "vlan");
+  };
 
-  const valid = () => !!name() && /\/\d+$/.test(address()) &&
-    (carrierKind() === "port" ? !!port() : (!!parent() && vid() >= 1 && vid() <= 4094));
+  const cidrOK = () => /\/\d+$/.test(address());
+  const carrierOK = () => (carrierKind() === "port" ? !!port() : (!!parent() && vid() >= 1 && vid() <= 4094));
+  const valid = () => !!name() && carrierOK() && (role() === "wan" ? (proto() === "static" ? cidrOK() : true) : cidrOK());
   const submit = () => props.onSave({
-    name: name(), carrierKind: carrierKind(), parent: parent(), vid: vid(), port: port(),
+    name: name(), role: role(), carrierKind: carrierKind(), parent: parent(), vid: vid(), port: port(), proto: proto(),
     address: address(), dhcp: dhcp(), start: start(), limit: limit(), lease: lease(), dns: dns(), isolate: isolate(),
   });
 
@@ -1080,8 +1088,15 @@ function NetworkWizard(props: { parents: string[]; ports: string[]; initial?: Se
     <div class="wash-net-wizard" data-testid="network-wizard">
       <div class="wash-net-wizard-title">{editing ? `Edit network ${i!.name}` : "New network"}</div>
       <label class="wash-net-field">
+        <span class="wash-net-label">Type</span>
+        <select data-testid="net-role" value={role()} disabled={editing} onChange={(e) => pickRole(e.currentTarget.value as any)}>
+          <option value="lan">LAN segment</option>
+          <option value="wan">WAN uplink</option>
+        </select>
+      </label>
+      <label class="wash-net-field">
         <span class="wash-net-label">Name</span>
-        <input data-testid="net-name" value={name()} disabled={editing} onInput={(e) => setName(e.currentTarget.value)} placeholder="iot" />
+        <input data-testid="net-name" value={name()} disabled={editing} onInput={(e) => setName(e.currentTarget.value)} placeholder={role() === "wan" ? "wan" : "iot"} />
       </label>
       <label class="wash-net-field">
         <span class="wash-net-label">Carrier</span>
@@ -1109,6 +1124,26 @@ function NetworkWizard(props: { parents: string[]; ports: string[]; initial?: Se
           <input data-testid="net-vid" type="number" min="1" max="4094" value={vid()} onInput={(e) => setVid(parseInt(e.currentTarget.value || "0", 10))} />
         </label>
       </Show>
+      {/* WAN uplink: proto + (static) address; masquerade is implied. */}
+      <Show when={role() === "wan"}>
+        <label class="wash-net-field">
+          <span class="wash-net-label">Uplink</span>
+          <select data-testid="net-proto" value={proto()} onChange={(e) => setProto(e.currentTarget.value as any)}>
+            <option value="dhcp">DHCP (automatic)</option>
+            <option value="static">Static</option>
+          </select>
+        </label>
+        <Show when={proto() === "static"}>
+          <label class="wash-net-field">
+            <span class="wash-net-label">WAN address</span>
+            <input data-testid="net-wan-address" value={address()} onInput={(e) => setAddress(e.currentTarget.value)} placeholder="203.0.113.2/24" />
+          </label>
+        </Show>
+        <div class="wash-net-field"><span class="wash-net-label">NAT</span><span class="wash-net-derived">masquerade on (LANs reach the internet via the firewall matrix)</span></div>
+      </Show>
+
+      {/* LAN segment: gateway address + isolation + DHCP server. */}
+      <Show when={role() === "lan"}>
       <label class="wash-net-field">
         <span class="wash-net-label">Router address</span>
         <input data-testid="net-address" value={address()} onInput={(e) => setAddress(e.currentTarget.value)} placeholder="10.0.20.1/24" />
@@ -1134,6 +1169,7 @@ function NetworkWizard(props: { parents: string[]; ports: string[]; initial?: Se
           <span class="wash-net-label">DNS for clients</span>
           <input data-testid="net-dns" value={dns()} onInput={(e) => setDns(e.currentTarget.value)} placeholder="(router) — or 192.168.15.1" />
         </label>
+      </Show>
       </Show>
       <div class="wash-net-wizard-actions">
         <button class="wash-net-btn" onClick={props.onCancel}>Cancel</button>

@@ -137,3 +137,36 @@ test("carrierLabel renders each carrier kind", () => {
   assert.equal(carrierLabel({ kind: "bridge", members: ["eth1", "eth2"] }), "bridge of eth1, eth2");
   assert.equal(carrierLabel({ kind: "untagged", port: "eth0" }), "port eth0");
 });
+
+const wanForm = (over: Partial<SegForm> = {}): SegForm => ({
+  ...lanForm(), name: "wan", role: "wan", carrierKind: "port", port: "eth1", proto: "dhcp", dhcp: false,
+  ...over,
+});
+
+test("WAN uplink: DHCP interface + masq zone, no pool, no device", () => {
+  const c = materializeSegment({}, wanForm());
+  const iface = find(c.Interfaces, (i) => i.Name === "wan");
+  assert.equal(iface.Device, "eth1");
+  assert.equal(iface.Proto._tag, "dhcp");
+  assert.equal((c.Pools ?? []).length, 0, "WAN has no DHCP server");
+  const zone = find(c.Zones, (z: any) => z.Name === "wan");
+  assert.equal(zone.Masq, true);
+  assert.equal(projectDraft(c)[0].role, "wan");
+});
+
+test("WAN static: static interface + masq zone", () => {
+  const c = materializeSegment({}, wanForm({ proto: "static", address: "203.0.113.2/24" }));
+  const iface = find(c.Interfaces, (i) => i.Name === "wan");
+  assert.equal(iface.Proto._tag, "static");
+  assert.deepEqual(iface.Proto.IPAddr, ["203.0.113.2/24"]);
+});
+
+test("WAN reuses an existing (multi-network) wan zone rather than duplicating it", () => {
+  // mimic the stock OpenWRT wan zone (spans wan + wan6, masq) with no wan iface yet
+  const stock: Cfg = { Zones: [{ Name: "wan", Networks: ["wan", "wan6"], Input: "REJECT", Masq: true }] };
+  const c = materializeSegment(stock, wanForm());
+  assert.equal((c.Zones ?? []).filter((z: any) => z.Name === "wan").length, 1, "no duplicate wan zone");
+  assert.deepEqual((c.Zones as any[])[0].Networks, ["wan", "wan6"], "stock zone untouched");
+  // the new wan interface makes it a WAN segment (masq zone contains it)
+  assert.equal(projectDraft(c).find((s) => s.name === "wan")!.role, "wan");
+});
