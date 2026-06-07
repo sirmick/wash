@@ -105,6 +105,7 @@ func run(ctx context.Context) error { return sdk.Run(ctx, def) }
 
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-fm ready instance=%s window=%d", instanceID, windowID)
+	fmInstance = instanceID
 	if root := c.Session().Root; root != "" {
 		fmRoot = root
 		log.Printf("wash-fm: sandbox root=%s (from router session)", fmRoot)
@@ -304,6 +305,9 @@ func registerHandlers(b *sdk.Bus) {
 	sdk.Handle(b, "clipboard_files_set", func(_ *sdk.Conn, id string, req clipboardFilesSetReq) (clipboardFilesSetResp, error) {
 		return doClipboardFilesSet(c, id, req.Op, req.Paths)
 	})
+
+	// Upload ingestion (OS files → confined fs); see upload.go.
+	registerUploadHandlers(b)
 
 	// Fire-and-forget commands (no reply).
 	sdk.HandleVoid(b, "request_initial", func(_ *sdk.Conn, _ string, _ struct{}) error {

@@ -42,3 +42,17 @@ export type { ReplaceFlowDeps } from './replace-flow.ts';
 
 export { flattenTree } from './tree.ts';
 export type { TreeRow, TreeInput } from './tree.ts';
+
+export {
+  UPLOAD_CHUNK_SIZE,
+  sanitizeRel,
+  totalBytes,
+  topLevelLabels,
+  planUpload,
+  encodeRecordHeader,
+  uploadEndMarker,
+  readBlobChunks,
+  entriesFromFileList,
+  entriesFromDataTransfer,
+} from './upload.ts';
+export type { UploadItem, UploadPlan, BlobLike } from './upload.ts';

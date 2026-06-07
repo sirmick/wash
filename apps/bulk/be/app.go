@@ -23,6 +23,7 @@ import (
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/bulkops"
 	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/internal/wire"
 )
 
 const version = "0.8.0"
@@ -36,11 +37,11 @@ const AppID = "com.wash.bulk"
 // parallel lists:
 //
 //   - Jobs:      every job the manager is currently tracking. The
-//                FE renders one row per entry; terminal-state jobs
-//                stick briefly (manager auto-evicts) then drop.
+//     FE renders one row per entry; terminal-state jobs
+//     stick briefly (manager auto-evicts) then drop.
 //   - Conflicts: every pending conflict prompt blocking a worker.
-//                The FE renders the FIRST one as a modal overlay;
-//                resolving it advances the worker.
+//     The FE renders the FIRST one as a modal overlay;
+//     resolving it advances the worker.
 type State struct {
 	Jobs      []JobView      `json:"jobs"`
 	Conflicts []ConflictView `json:"conflicts"`
@@ -73,6 +74,10 @@ var (
 	def *sdk.AppDef
 	mgr *bulkops.Manager
 	svc *sdk.StateService[State]
+
+	// external holds jobs driven by another app (fm uploads) that bulk
+	// mirrors but doesn't execute. See external.go.
+	external = newExternalStore()
 
 	// pendingConflicts maps job_id → the channel the worker
 	// goroutine blocks on. Resolve_conflict writes to that channel
@@ -138,7 +143,24 @@ type resolveConflictReq struct {
 	Action string `json:"action"`
 }
 
+// jobReportReq is the upsert another app sends to mirror a job it runs
+// itself (fm's uploads). Repeated for progress; the terminal status
+// (done/failed/cancelled) is the last report. Done/Total are byte
+// counts for uploads — the BulkWidget renders the fraction op-agnostic.
+type jobReportReq struct {
+	JobID    string   `json:"job_id"`
+	Instance string   `json:"instance"`
+	Op       string   `json:"op"`
+	Paths    []string `json:"paths"`
+	Dest     string   `json:"dest"`
+	Status   string   `json:"status"`
+	Done     int      `json:"done"`
+	Total    int      `json:"total"`
+	Error    string   `json:"error"`
+}
+
 func registerHandlers(b *sdk.Bus) {
+	c := b.Conn()
 	// enqueue: callable from any sender (fm's shell-originated send
 	// has no From attestation, so we use plain Handle which doesn't
 	// require it). Returns the new job_id in the reply envelope so the
@@ -149,12 +171,39 @@ func registerHandlers(b *sdk.Bus) {
 		}
 		return enqueueResp{JobID: mgr.Enqueue(bulkops.Op(req.Op), req.Paths, req.Dest)}, nil
 	})
+	// job_report: upsert an externally-driven job (fm uploads). The
+	// reporting app does the work + streams progress; we mirror it into
+	// state. Fire-and-forget; the fan-out is the acknowledgement.
+	sdk.HandleVoid(b, "job_report", func(_ *sdk.Conn, _ string, req jobReportReq) error {
+		if req.JobID == "" {
+			return nil
+		}
+		// Same "bulk-ops job=" prefix the worker jobs log under, so e2e
+		// waitForLog assertions observe upload transitions identically.
+		log.Printf("bulk-ops job=%s op=%s status=%s done=%d total=%d err=%q",
+			req.JobID, req.Op, req.Status, req.Done, req.Total, req.Error)
+		external.upsert(JobView{
+			JobID: req.JobID, Op: req.Op, Status: req.Status,
+			Paths: req.Paths, Dest: req.Dest,
+			Done: req.Done, Total: req.Total, Error: req.Error,
+		}, req.Instance)
+		publishJobs()
+		return nil
+	})
 	// cancel + resolve_conflict are fire-and-forget. Both are
 	// addressable from any sender (the session BE gateway forwards on
 	// behalf of the sidebar widget; nothing else legitimately calls
 	// them). HandleVoid because no reply is meaningful — the state
 	// fan-out reflects the outcome.
 	sdk.HandleVoid(b, "cancel", func(_ *sdk.Conn, _ string, req cancelReq) error {
+		// External (upload) jobs aren't in the worker queue — relay the
+		// cancel to the owning fm window, which tears down the transfer
+		// and reports the cancelled status back via job_report.
+		if owner, ok := external.ownerOf(req.JobID); ok {
+			return c.SendAppMsgTo(wire.Recipient{InstanceID: owner}, map[string]any{
+				"kind": "upload_cancel", "upload_id": req.JobID,
+			})
+		}
 		if !mgr.Cancel(req.JobID) {
 			log.Printf("wash-bulk: cancel for unknown job %q", req.JobID)
 		}
@@ -221,9 +270,7 @@ func jobUpdateHandler() func(bulkops.Job) {
 	return func(j bulkops.Job) {
 		log.Printf("bulk-ops job=%s op=%s status=%s done=%d total=%d err=%q",
 			j.ID, j.Op, j.Status, j.Done, j.Total, j.Error)
-		svc.Mutate(func(s *State) {
-			s.Jobs = jobsToViews(mgr.Jobs())
-		})
+		publishJobs()
 		// Terminal-state cleanup: release any pending conflict
 		// channel so a still-blocked worker (e.g. after a user-cancel)
 		// doesn't leak the goroutine indefinitely. Cancel wins over
@@ -243,6 +290,18 @@ func jobUpdateHandler() func(bulkops.Job) {
 	}
 }
 
+// publishJobs republishes State.Jobs as the worker-driven jobs
+// followed by the externally-driven (upload) jobs. Both the manager's
+// onUpdate and job_report route through here so neither path clobbers
+// the other's rows — State.Jobs is set wholesale on every mutate.
+func publishJobs() {
+	ext := external.views()
+	svc.Mutate(func(s *State) {
+		jobs := jobsToViews(mgr.Jobs())
+		s.Jobs = append(jobs, ext...)
+	})
+}
+
 // jobsToViews maps the bulkops public Job type to the wire JobView
 // shape. Kept as a helper so jobUpdateHandler stays focused.
 func jobsToViews(jobs []bulkops.Job) []JobView {
@@ -255,4 +314,3 @@ func jobsToViews(jobs []bulkops.Job) []JobView {
 	}
 	return out
 }
-
