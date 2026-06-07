@@ -85,10 +85,8 @@ Tier-4 VM gate.
 
 ### Still to do
 
-- **Tier-4 real-kernel VM gate** (planned, see plan): build real md/lvm/btrfs/
-  zfs on virtio scratch disks in a microVM and assert via `--dump-snapshot`.
-- **Image packaging**: add `smartmontools` (+ optionally mdadm/lvm2/btrfs-progs)
-  to the demo image build under `/image/` (gitignored, so not in this branch).
+- **Image packaging**: add `smartmontools` to the demo image build under
+  `/image/` (gitignored, so not in this branch) so SMART works in the v86 demo.
 
 ## Testing
 
@@ -101,6 +99,9 @@ Coverage is layered (see the plan for the full strategy):
 3. **Tier 3 — full-stack UI e2e** (`e2e/tests/disks.spec.ts`): launched with
    `WASH_DISKS_SOURCE=fake` so every section renders deterministically without
    root.
-4. **Tier 4 — real-kernel VM gate** (planned): boots a microVM with real tools +
-   virtio scratch disks, builds actual md/lvm/btrfs/zfs, and asserts the
-   providers via `wash-disks --dump-snapshot`. ZFS is opt-in (out-of-tree kmod).
+4. **Tier 4 — real-kernel VM gate** (done — `wash-vm/vm/disks_test.go`,
+   `make vm-disks-test`): boots the Alpine microvm with 6 virtio scratch disks,
+   builds actual md raid1 + LVM VG/LV + mounted btrfs-with-subvolume, and asserts
+   the providers via `wash-disks --dump-snapshot`. Skips cleanly without
+   kvm/qemu/image. ZFS is opt-in (out-of-tree kmod): rebuild with
+   `WASH_VM_ZFS=1 make vm-image`, then `WASH_VM_ZFS=1 make vm-disks-test`.
