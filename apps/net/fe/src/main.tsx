@@ -17,6 +17,7 @@ import { ApplyTerminal, type ApplyEvent } from "./ApplyTerminal.tsx";
 import { WifiDialog, type AP } from "./WifiDialog.tsx";
 import { ObjectForm } from "./ObjectForm.tsx";
 import { setAtPath } from "./setAtPath.ts";
+import { descriptorFor } from "./objectform-model.ts";
 import {
   carrierLabel, materializeSegment, projectDraft, removeSegment, segFormFrom,
   type Segment, type SegForm,
@@ -30,6 +31,23 @@ import i18nJson from "./generated/i18n.json";
 const desc = descriptorJson as unknown as Descriptor;
 const i18n = i18nJson as Record<string, string>;
 const label = (k: string) => i18n[k] ?? k.split(".").pop() ?? k;
+
+// ADVANCED_KINDS: the raw object kinds the Advanced view exposes (escape hatch) —
+// the ones not (fully) covered by Networks/Firewall/Hosts. kind is the descriptor
+// key (package/section); field is the Config array. Forwardings are excluded (the
+// matrix owns them); segments' interface/device/zone/pool live in Networks.
+const ADVANCED_KINDS: { kind: string; field: string; title: string }[] = [
+  { kind: "dhcp/dnsmasq", field: "Dnsmasq", title: "DNS / DHCP defaults" },
+  { kind: "firewall/redirect", field: "Redirects", title: "Port forwards" },
+  { kind: "firewall/rule", field: "FwRules", title: "Firewall rules" },
+  { kind: "firewall/nat", field: "NATs", title: "SNAT" },
+  { kind: "firewall/ipset", field: "IPSets", title: "IP sets" },
+  { kind: "network/route", field: "Routes", title: "Static routes" },
+  { kind: "network/rule", field: "PolicyRules", title: "Policy routing" },
+  { kind: "network/wireguard_peer", field: "WGPeers", title: "WireGuard peers" },
+  { kind: "dhcp/cname", field: "CNAMEs", title: "DNS aliases (CNAME)" },
+  { kind: "network/globals", field: "Globals", title: "Network globals" },
+];
 const ifaceDesc = desc.objects.find((o) => o.kind === "network/interface")!;
 // A proto-only slice of the Interface descriptor: the wizards are bespoke
 // containers (NIC picker / VID / members), but the ADDRESSING they all share is
@@ -537,6 +555,39 @@ function NetApp(props: WashAppProps) {
   };
   const delHost = (e: HostEntry) => setDraft((d) => removeHost(d, e) as Config);
 
+  // Advanced (raw objects): the schema-driven escape hatch (plan §7.7) — ObjectForm
+  // over the kinds the bespoke screens don't fully cover, edited directly into the
+  // draft. Each object is edited independently (pathPrefix="" so setAtPath works on
+  // the single object, not the whole config). Collapsed by default.
+  const [showAdv, setShowAdv] = createSignal(false);
+  const advChange = (field: string, i: number, path: string, v: unknown) => setDraft((d) => {
+    const next = structuredClone(d) as any;
+    const arr = (next[field] ?? []) as any[];
+    arr[i] = setAtPath(arr[i] ?? {}, path.split("."), v);
+    next[field] = arr;
+    return next as Config;
+  });
+  const advAdd = (field: string) => setDraft((d) => {
+    const next = structuredClone(d) as any;
+    next[field] = [...((next[field] ?? []) as any[]), {}];
+    return next as Config;
+  });
+  const advRemove = (field: string, i: number) => setDraft((d) => {
+    const next = structuredClone(d) as any;
+    const arr = [...((next[field] ?? []) as any[])];
+    arr.splice(i, 1);
+    next[field] = arr;
+    return next as Config;
+  });
+  const advRefOptions = (kind: string): string[] => {
+    switch (kind) {
+      case "interface": return (draft().Interfaces ?? []).map((i) => i.Name);
+      case "zone": return ((draft().Zones ?? []) as any[]).map((z) => z.Name);
+      case "device": return (draft().Devices ?? []).map((dv) => dv.Name);
+      default: return [];
+    }
+  };
+
   // Poll the scan while the dialog is open on an NM-live box (~2.5s; the effect
   // re-runs when `adding` changes and onCleanup clears the interval on close).
   createEffect(() => {
@@ -694,6 +745,37 @@ function NetApp(props: WashAppProps) {
                 </div>
               )}
             </For>
+          </section>
+        </Show>
+
+        <Show when={routerCaps()}>
+          <section class="wash-net-segments" data-testid="net-advanced">
+            <h2 class="wash-net-seg-h wash-net-adv-toggle" data-testid="adv-toggle" onClick={() => setShowAdv(!showAdv())}>Advanced (raw objects) {showAdv() ? "▾" : "▸"}</h2>
+            <Show when={showAdv()}>
+              <For each={ADVANCED_KINDS}>
+                {(k) => {
+                  const od = descriptorFor(desc, k.kind);
+                  if (!od) return null;
+                  const items = () => ((draft() as any)[k.field] ?? []) as any[];
+                  return (
+                    <div class="wash-net-adv-kind">
+                      <div class="wash-net-adv-h">
+                        <span>{k.title}</span>
+                        <button class="wash-net-btn ghost" data-testid={`adv-add-${k.field}`} disabled={busy()} onClick={() => advAdd(k.field)}><Icon name="plus" /> Add</button>
+                      </div>
+                      <For each={items()}>
+                        {(item, i) => (
+                          <div class="wash-net-adv-item">
+                            <ObjectForm object={od} value={item} pathPrefix="" label={label} refOptions={advRefOptions} onChange={(path, v) => advChange(k.field, i(), path, v)} />
+                            <button class="wash-net-btn ghost" data-testid={`adv-del-${k.field}-${i()}`} disabled={busy()} onClick={() => advRemove(k.field, i())}><Icon name="trash" /> Remove</button>
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                  );
+                }}
+              </For>
+            </Show>
           </section>
         </Show>
 
@@ -1269,6 +1351,11 @@ const STYLE = `
 .wash-net-cell[data-state="self"] { background:transparent; border-color:transparent; color:#444; cursor:default; }
 .wash-net-cell[data-input="ACCEPT"] { color:#5fd75f; }
 .wash-net-cell[data-input="REJECT"] { color:#d07070; }
+.wash-net-adv-toggle { cursor:pointer; user-select:none; }
+.wash-net-adv-kind { margin:6px 0 10px; }
+.wash-net-adv-h { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:600; color:#8fb0e0; margin-bottom:4px; }
+.wash-net-adv-item { border:1px solid #2a2a3a; border-radius:6px; padding:6px 8px; margin-bottom:4px; display:flex; flex-direction:column; gap:4px; }
+.wash-net-adv-item .wash-net-btn { align-self:flex-end; }
 .wash-net-conn-actions { grid-row:1 / span 2; grid-column:2; display:flex; gap:4px; align-items:center; }
 .wash-net-conn[data-status="new"] { border-color:#2e5a38; }
 .wash-net-conn[data-status="edited"] { border-color:#4a4030; }
