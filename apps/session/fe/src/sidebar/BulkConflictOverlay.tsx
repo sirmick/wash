@@ -14,7 +14,7 @@
 
 import type { Component, JSX } from 'solid-js';
 import { Show } from 'solid-js';
-import { Button } from '@wash/ui';
+import { Button, tokens } from '@wash/ui';
 
 export interface BulkConflict {
   job_id: string;
@@ -66,15 +66,15 @@ const ConflictModal: Component<{
   };
 
   const panelStyle: JSX.CSSProperties = {
-    background: '#181828',
+    background: tokens.bgWindow,
     border: '1px solid #3a3a6a',
     'border-radius': '8px',
     padding: '20px 22px',
     'min-width': '420px',
     'max-width': '600px',
     'box-shadow': '0 16px 40px rgba(0,0,0,0.6)',
-    color: '#eee',
-    font: '13px ui-sans-serif,system-ui,sans-serif',
+    color: tokens.fg,
+    font: `13px ${tokens.fontSans}`,
     animation: 'wash-pop-in 140ms ease-out',
   };
 
@@ -86,7 +86,7 @@ const ConflictModal: Component<{
         </div>
         <div
           style={{
-            font: '12px ui-monospace,Menlo,Consolas,monospace',
+            font: `12px ${tokens.fontMono}`,
             opacity: 0.85,
             'word-break': 'break-all',
             'margin-bottom': '14px',

@@ -9,6 +9,7 @@
 
 import type { Component, JSX } from 'solid-js';
 import { For, Show } from 'solid-js';
+import { tokens } from '@wash/ui';
 
 export interface NotifyEntry {
   id: string;
@@ -61,12 +62,12 @@ export const NotifyWidget: Component<NotifyWidgetProps> = (props) => {
           onClick={props.onClearAll}
           style={{
             background: 'transparent',
-            color: '#888',
-            border: '1px solid #2a2a3a',
+            color: tokens.fgMuted,
+            border: `1px solid ${tokens.borderMenu}`,
             'border-radius': '3px',
             padding: '4px 8px',
             cursor: 'pointer',
-            font: '11px ui-sans-serif,system-ui,sans-serif',
+            font: `11px ${tokens.fontSans}`,
             'align-self': 'flex-end',
             'margin-top': '4px',
           }}
@@ -84,11 +85,11 @@ const NotifyRow: Component<{ entry: NotifyEntry; onMarkRead: () => void }> = (pr
   const stripeColor = () => {
     switch (props.entry.level) {
       case 'error':
-        return '#a04040';
+        return tokens.borderDanger;
       case 'warn':
-        return '#a07040';
+        return tokens.accentAmber;
       default:
-        return '#5070b0';
+        return tokens.accentBlue;
     }
   };
   const rowStyle = (): JSX.CSSProperties => ({
@@ -151,7 +152,7 @@ const NotifyRow: Component<{ entry: NotifyEntry; onMarkRead: () => void }> = (pr
           opacity: 0.4,
           'margin-top': '3px',
           'font-size': '10px',
-          font: '10px ui-monospace,Menlo,Consolas,monospace',
+          font: `10px ${tokens.fontMono}`,
         }}
       >
         {sourceLabel(props.entry.source_app)}

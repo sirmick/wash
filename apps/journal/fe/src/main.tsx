@@ -16,7 +16,7 @@
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component } from 'solid-js';
-import { defineWashApp, tokens } from '@wash/ui';
+import { defineWashApp, severityColor, tokens } from '@wash/ui';
 import { RefreshCw, ShieldAlert, Search } from 'lucide-solid';
 
 // ----- types (mirror cmd/wash-journal wire structs) -----
@@ -54,13 +54,8 @@ const SYSTEM_KEY = '__system__';
 // Lucide-style colour cues per priority. journald priority levels
 // (man 3 syslog):
 //   0 emerg · 1 alert · 2 crit · 3 err · 4 warning · 5 notice · 6 info · 7 debug
-const priorityColor = (p: number): string => {
-  if (p <= 3) return '#ff7a7a';  // err and worse — red
-  if (p === 4) return '#f0c050';  // warning — amber
-  if (p === 5) return '#c0d8ff';  // notice — pale blue
-  if (p === 7) return '#666';     // debug — dim
-  return '#bbb';                   // info / unknown
-};
+// Severity → line color comes from @wash/ui's shared severityColor so
+// journal and syslogs can't drift apart.
 
 const priorityLabel = (p: number): string =>
   ['emerg', 'alert', 'crit', 'err', 'warn', 'notice', 'info', 'debug'][p] ?? '?';
@@ -358,8 +353,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     'align-items': 'center',
     gap: `${tokens.spaceMd}px`,
     padding: `${tokens.spaceSm}px ${tokens.spaceMd}px`,
-    background: kind === 'denied' ? '#3a2a12' : tokens.bgDanger,
-    'border-bottom': `1px solid ${kind === 'denied' ? '#7a5a20' : tokens.borderDanger}`,
+    background: kind === 'denied' ? tokens.bgDenied : tokens.bgDanger,
+    'border-bottom': `1px solid ${kind === 'denied' ? tokens.borderDenied : tokens.borderDanger}`,
     color: tokens.fg,
     'font-size': tokens.fontSizeMd,
   });
@@ -376,7 +371,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     'grid-template-columns': '90px 110px 1fr',
     gap: `${tokens.spaceMd}px`,
     padding: `1px ${tokens.spaceMd}px`,
-    'border-left': `2px solid ${priorityColor(p)}`,
+    'border-left': `2px solid ${severityColor(p)}`,
     'white-space': 'pre-wrap' as const,
     'word-break': 'break-word' as const,
   });
@@ -430,7 +425,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                   onClick={() => onPickUnit(u.name)}
                   title={`${u.name}\n${u.active}/${u.sub}\n${u.description}`}
                 >
-                  <span style={{ color: failed ? '#ff7a7a' : 'inherit' }}>
+                  <span style={{ color: failed ? tokens.sevError : 'inherit' }}>
                     {failed ? '● ' : ''}
                     {shown}
                   </span>
@@ -526,7 +521,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               style={{
                 background: '#5a3a12',
                 color: tokens.fg,
-                border: `1px solid #7a5a20`,
+                border: `1px solid ${tokens.borderDenied}`,
                 'border-radius': `${tokens.radiusSm}px`,
                 padding: '4px 10px',
                 cursor: 'pointer',
@@ -565,7 +560,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             {(l) => (
               <div data-testid="journal-row" style={rowStyle(l.priority)}>
                 <span style={{ color: tokens.fgDim }}>{fmtTime(l.ts)}</span>
-                <span style={{ color: priorityColor(l.priority), 'white-space': 'nowrap', overflow: 'hidden', 'text-overflow': 'ellipsis' }}>
+                <span style={{ color: severityColor(l.priority), 'white-space': 'nowrap', overflow: 'hidden', 'text-overflow': 'ellipsis' }}>
                   {shortUnit(l.unit, l.ident)}
                 </span>
                 <span>{l.message}</span>

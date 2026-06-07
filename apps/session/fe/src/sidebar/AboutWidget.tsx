@@ -12,6 +12,7 @@
 
 import type { Component, JSX } from 'solid-js';
 import { Show } from 'solid-js';
+import { tokens } from '@wash/ui';
 
 export interface AboutSystemInfo {
   hostname?: string;
@@ -76,7 +77,7 @@ const IdentityRow: Component<{ info: () => AboutSystemInfo | null }> = (props) =
     <div
       data-testid="about-identity"
       style={{
-        font: '11px ui-monospace,Menlo,Consolas,monospace',
+        font: `11px ${tokens.fontMono}`,
         opacity: 0.7,
         'line-height': 1.4,
       }}
@@ -128,7 +129,7 @@ const Bar: Component<{
       <div
         style={{
           height: '6px',
-          background: '#1d1d30',
+          background: tokens.bgRowHover,
           'border-radius': '3px',
           overflow: 'hidden',
         }}

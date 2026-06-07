@@ -19,6 +19,10 @@ export interface SectionProps {
   title: string;
   /** Optional Lucide sprite icon name rendered left of the title. */
   icon?: string;
+  /** Optional color for the icon glyph only — gives each section a bit
+   *  of per-widget identity without tinting the chevron/badge. Falls
+   *  back to `accent`, then a neutral grey. */
+  iconColor?: string;
   state: SectionState;
   /** Flip between expanded and collapsed. */
   onToggle: () => void;
@@ -81,7 +85,7 @@ export const Section: Component<SectionProps> = (props) => {
           <span
             style={{
               'flex-shrink': 0,
-              color: props.accent ?? '#a0a0b0',
+              color: props.iconColor ?? props.accent ?? '#a0a0b0',
               display: 'inline-flex',
               'align-items': 'center',
             }}

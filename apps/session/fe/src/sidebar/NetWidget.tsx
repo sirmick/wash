@@ -10,6 +10,7 @@
 
 import type { Component } from 'solid-js';
 import { For, Show } from 'solid-js';
+import { tokens } from '@wash/ui';
 
 export interface NetDiag {
   path: string;
@@ -41,14 +42,14 @@ export interface NetWidgetProps {
 function statusColor(status: string): string {
   switch (status) {
     case 'await-confirm':
-      return '#d0a040';
+      return tokens.accentAmber;
     case 'committed':
-      return '#3aa050';
+      return tokens.accentGreen;
     case 'reverted':
     case 'failed':
-      return '#a02d2d';
+      return tokens.borderDanger;
     default:
-      return '#7a7a8a';
+      return tokens.fgMuted;
   }
 }
 
@@ -82,13 +83,13 @@ export const NetWidget: Component<NetWidgetProps> = (props) => {
         />
         <span style={{ color: '#ddd', flex: 1 }}>{status()}</span>
         <Show when={st()?.phase}>
-          <span style={{ opacity: 0.6, font: '10px ui-monospace,Menlo,Consolas,monospace' }}>{st()!.phase}</span>
+          <span style={{ opacity: 0.6, font: `10px ${tokens.fontMono}` }}>{st()!.phase}</span>
         </Show>
       </div>
 
       {/* Live addressing: the IP of every non-local, non-docker interface. */}
       <Show when={props.ifaces().length > 0} fallback={
-        <span data-testid="net-noaddr" style={{ opacity: 0.45, font: '10px ui-monospace,Menlo,Consolas,monospace' }}>
+        <span data-testid="net-noaddr" style={{ opacity: 0.45, font: `10px ${tokens.fontMono}` }}>
           no addressed interfaces
         </span>
       }>
@@ -97,9 +98,9 @@ export const NetWidget: Component<NetWidgetProps> = (props) => {
             {(ifc) => (
               <div
                 data-testid={`net-iface-${ifc.name}`}
-                style={{ display: 'flex', gap: '6px', 'align-items': 'baseline', font: '10px ui-monospace,Menlo,Consolas,monospace' }}
+                style={{ display: 'flex', gap: '6px', 'align-items': 'baseline', font: `10px ${tokens.fontMono}` }}
               >
-                <span style={{ color: '#8fb0e0', 'min-width': '52px' }}>{ifc.name}</span>
+                <span style={{ color: tokens.accentBlue, 'min-width': '52px' }}>{ifc.name}</span>
                 <span style={{ color: '#cfd0d4', flex: 1, 'word-break': 'break-all' }}>{ifc.ips.join('  ')}</span>
               </div>
             )}
@@ -120,17 +121,17 @@ export const NetWidget: Component<NetWidgetProps> = (props) => {
             gap: '3px',
           }}
         >
-          <span style={{ color: '#d0a040' }}>awaiting confirmation</span>
+          <span style={{ color: tokens.accentAmber }}>awaiting confirmation</span>
           <For each={summary()}>
             {(line) => (
-              <span style={{ opacity: 0.85, font: '10px ui-monospace,Menlo,Consolas,monospace' }}>{line}</span>
+              <span style={{ opacity: 0.85, font: `10px ${tokens.fontMono}` }}>{line}</span>
             )}
           </For>
         </div>
       </Show>
 
       <Show when={errs().length > 0}>
-        <span data-testid="net-errcount" style={{ color: '#e0a0a0' }}>
+        <span data-testid="net-errcount" style={{ color: tokens.fgDanger }}>
           {errs().length} validation error{errs().length === 1 ? '' : 's'}
         </span>
       </Show>
@@ -142,11 +143,11 @@ export const NetWidget: Component<NetWidgetProps> = (props) => {
         style={{
           background: 'transparent',
           color: '#ddd',
-          border: '1px solid #3a3a4a',
+          border: `1px solid ${tokens.borderMenu}`,
           'border-radius': '3px',
           padding: '3px 8px',
           cursor: 'pointer',
-          font: '11px ui-sans-serif,system-ui,sans-serif',
+          font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
           'align-self': 'flex-start',
         }}
       >

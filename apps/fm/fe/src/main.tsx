@@ -1416,7 +1416,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               data-testid="fm-empty"
               style={{
                 padding: '20px 16px',
-                color: '#666',
+                color: tokens.fgDim,
                 'font-style': 'italic',
                 'font-size': '13px',
               }}
@@ -1668,8 +1668,8 @@ const ColumnHeader: Component<{
       style={{
         background: 'transparent',
         border: 'none',
-        color: '#aaa',
-        font: '11px ui-sans-serif,system-ui,sans-serif',
+        color: tokens.fgMuted,
+        font: `11px ${tokens.fontSans}`,
         cursor: 'pointer',
         padding: '0 8px',
         height: `${HEADER_ROW_H}px`,
@@ -1690,8 +1690,8 @@ const ColumnHeader: Component<{
       style={{
         position: 'sticky',
         top: 0,
-        background: '#10101a',
-        'border-bottom': '1px solid #2a2a3a',
+        background: tokens.bgMenu,
+        'border-bottom': `1px solid ${tokens.borderMenu}`,
         display: 'grid',
         'grid-template-columns': rowGridCols,
         'z-index': 2,
@@ -1757,17 +1757,17 @@ const TreeRow: Component<{
         'align-items': 'center',
         padding: '3px 8px',
         background: props.isDropTarget
-          ? '#2a3a5a'
+          ? tokens.bgRowSelected
           : props.selected
-          ? '#23234a'
+          ? tokens.bgRowSelected
           : hover()
-          ? '#1d1d30'
+          ? tokens.bgRowHover
           : 'transparent',
-        color: '#eee',
+        color: tokens.fg,
         cursor: 'pointer',
         'user-select': 'none',
-        font: '13px ui-sans-serif,system-ui,sans-serif',
-        outline: props.isDropTarget ? '1px solid #4a6ab0' : 'none',
+        font: `13px ${tokens.fontSans}`,
+        outline: props.isDropTarget ? `1px solid ${tokens.borderFocus}` : 'none',
       }}
     >
       {/* name cell — chevron + icon + name, indented by depth */}
@@ -1841,7 +1841,7 @@ const TreeRow: Component<{
 
 const cellNumStyle: JSX.CSSProperties = {
   opacity: 0.6,
-  font: '11px ui-monospace,Menlo,Consolas,monospace',
+  font: `11px ${tokens.fontMono}`,
   'text-align': 'right',
   'white-space': 'nowrap',
   overflow: 'hidden',
@@ -1877,9 +1877,9 @@ const PendingNewRow: Component<{
         'align-items': 'center',
         gap: '4px',
         padding: '3px 8px 3px 8px',
-        background: '#1d1d40',
-        color: '#eee',
-        font: '13px ui-sans-serif,system-ui,sans-serif',
+        background: tokens.bgRowSelected,
+        color: tokens.fg,
+        font: `13px ${tokens.fontSans}`,
       }}
     >
       <span style={{ width: '12px' }} />
@@ -1909,12 +1909,12 @@ const PendingNewRow: Component<{
 };
 
 const inlineInputStyle: JSX.CSSProperties = {
-  background: '#10101a',
-  color: '#eee',
-  border: '1px solid #3a3a6a',
-  'border-radius': '3px',
+  background: tokens.bgMenu,
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderFocus}`,
+  'border-radius': `${tokens.radiusSm}px`,
   padding: '2px 6px',
-  font: '12px ui-monospace,Menlo,Consolas,monospace',
+  font: `12px ${tokens.fontMono}`,
   outline: 'none',
   width: '100%',
   'box-sizing': 'border-box',
@@ -1974,7 +1974,7 @@ const InfoSection: Component<{
   };
 
   return (
-    <div style={{ 'border-bottom': '1px solid #2a2a3a', background: '#15152a' }}>
+    <div style={{ 'border-bottom': `1px solid ${tokens.borderMenu}`, background: tokens.bgMenu }}>
       <button
         type="button"
         data-testid="fm-info-toggle"
@@ -2085,8 +2085,8 @@ const EditableRow: Component<{
               'text-overflow': 'ellipsis',
               'white-space': 'nowrap',
               padding: '1px 4px',
-              'border-radius': '3px',
-              'border-bottom': '1px dashed #2a2a3a',
+              'border-radius': `${tokens.radiusSm}px`,
+              'border-bottom': `1px dashed ${tokens.borderMenu}`,
             }}
             title="click to edit"
           >
@@ -2196,7 +2196,7 @@ const ConfirmDeleteOverlay: Component<{
       <div
         data-testid="fm-confirm-delete-name"
         style={{
-          font: '12px ui-monospace,Menlo,Consolas,monospace',
+          font: `12px ${tokens.fontMono}`,
           opacity: 0.8,
           'word-break': 'break-all',
         }}
@@ -2240,7 +2240,7 @@ const ReplaceConfirmOverlay: Component<{
       <div
         data-testid="fm-confirm-replace-path"
         style={{
-          font: '12px ui-monospace,Menlo,Consolas,monospace',
+          font: `12px ${tokens.fontMono}`,
           opacity: 0.8,
           'word-break': 'break-all',
         }}
@@ -2314,16 +2314,16 @@ const AutocompleteDropdown: Component<{
       data-testid="fm-complete"
       style={{
         position: 'absolute',
-        background: '#15152a',
-        border: '1px solid #2a2a3a',
-        'border-radius': '4px',
+        background: tokens.bgMenu,
+        border: `1px solid ${tokens.borderMenu}`,
+        'border-radius': `${tokens.radiusMd}px`,
         padding: '2px 0',
         'min-width': '240px',
         'max-height': '280px',
         'overflow-y': 'auto',
         'box-shadow': '0 8px 20px rgba(0,0,0,0.5)',
         'z-index': 1500,
-        font: '12px ui-monospace,Menlo,Consolas,monospace',
+        font: `12px ${tokens.fontMono}`,
         left: `${pos().left}px`,
         top: `${pos().top}px`,
         width: `${pos().width}px`,
@@ -2336,8 +2336,8 @@ const AutocompleteDropdown: Component<{
             style={{
               padding: '4px 8px',
               cursor: 'pointer',
-              color: '#eee',
-              background: i() === props.idx ? '#23234a' : 'transparent',
+              color: tokens.fg,
+              background: i() === props.idx ? tokens.bgRowSelected : 'transparent',
               'white-space': 'nowrap',
               overflow: 'hidden',
               'text-overflow': 'ellipsis',
@@ -2363,28 +2363,28 @@ const toolbarStyle: JSX.CSSProperties = {
   'align-items': 'center',
   gap: '4px',
   padding: '0 8px',
-  background: '#181828',
+  background: tokens.bgWindow,
 };
 
 const iconBtnStyle: JSX.CSSProperties = {
   background: 'transparent',
-  color: '#eee',
-  border: '1px solid #2a2a3a',
-  'border-radius': '3px',
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}px`,
   padding: '4px 8px',
   cursor: 'pointer',
-  font: '13px ui-sans-serif,system-ui,sans-serif',
+  font: `13px ${tokens.fontSans}`,
   'min-width': '30px',
 };
 
 const pathInputStyle: JSX.CSSProperties = {
   flex: 1,
-  background: '#10101a',
-  color: '#eee',
-  border: '1px solid #2a2a3a',
-  'border-radius': '3px',
+  background: tokens.bgMenu,
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}px`,
   padding: '4px 8px',
-  font: '12px ui-sans-serif, system-ui, sans-serif',
+  font: `12px ${tokens.fontSans}`,
   outline: 'none',
 };
 
@@ -2392,20 +2392,20 @@ const bodyStyle: JSX.CSSProperties = {
   display: 'grid',
   'grid-template-columns': '1fr 1fr',
   overflow: 'hidden',
-  'border-top': '1px solid #2a2a3a',
-  'border-bottom': '1px solid #2a2a3a',
+  'border-top': `1px solid ${tokens.borderMenu}`,
+  'border-bottom': `1px solid ${tokens.borderMenu}`,
 };
 
 const treeStyle: JSX.CSSProperties = {
   overflow: 'auto',
-  background: '#181828',
+  background: tokens.bgWindow,
   padding: '0 0 4px 0',
 };
 
 const previewStyle: JSX.CSSProperties = {
   overflow: 'auto',
   padding: '10px 12px',
-  font: '12px ui-monospace,Menlo,Consolas,monospace',
+  font: `12px ${tokens.fontMono}`,
   'white-space': 'pre',
   background: '#0c0c14',
 };
@@ -2417,17 +2417,17 @@ const infoToggleStyle: JSX.CSSProperties = {
   'box-sizing': 'border-box',
   'text-align': 'left',
   background: 'transparent',
-  color: '#aaa',
+  color: tokens.fgMuted,
   border: 'none',
   padding: '0 8px',
   cursor: 'pointer',
-  font: '11px ui-sans-serif,system-ui,sans-serif',
+  font: `11px ${tokens.fontSans}`,
 };
 
 const infoBodyStyle: JSX.CSSProperties = {
   padding: '8px 12px 12px',
-  font: '12px ui-monospace,Menlo,Consolas,monospace',
-  'border-top': '1px solid #2a2a3a',
+  font: `12px ${tokens.fontMono}`,
+  'border-top': `1px solid ${tokens.borderMenu}`,
 };
 
 // ---- helpers ----
@@ -2452,5 +2452,5 @@ const EntryIcon: Component<{ entry: Entry }> = (props) => {
 // ---- custom element wrapper ----
 
 defineWashApp('wash-app-fm', (props) => <App {...props} />, {
-  style: 'display:grid;grid-template-rows:36px 1fr 22px;width:100%;height:100%;background:#10101a;color:#eee;font:13px ui-sans-serif,system-ui,sans-serif;box-sizing:border-box;position:relative',
+  style: `display:grid;grid-template-rows:36px 1fr 22px;width:100%;height:100%;background:${tokens.bgMenu};color:${tokens.fg};font:13px ${tokens.fontSans};box-sizing:border-box;position:relative`,
 });

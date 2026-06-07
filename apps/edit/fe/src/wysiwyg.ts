@@ -104,7 +104,7 @@ function injectStyles() {
 .wash-wysiwyg pre {
   font-family: ${tokens.fontMono};
   font-size: 0.92em;
-  background: #10101a;
+  background: ${tokens.bgInset};
   border: 1px solid ${tokens.borderMenu};
   border-radius: ${tokens.radiusMd}px;
   padding: 10px 12px;

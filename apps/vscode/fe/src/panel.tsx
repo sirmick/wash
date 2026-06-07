@@ -159,7 +159,7 @@ const logStyle: JSX.CSSProperties = {
   margin: 0,
   'max-height': '180px',
   overflow: 'auto',
-  background: '#10101a',
+  background: tokens.bgInset,
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusMd}px`,
   padding: '8px 10px',
@@ -173,7 +173,7 @@ const warnStyle: JSX.CSSProperties = {
   display: 'inline-flex',
   'align-items': 'center',
   gap: '6px',
-  color: '#fca5a5',
+  color: tokens.fgDanger,
   font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
 };
 
