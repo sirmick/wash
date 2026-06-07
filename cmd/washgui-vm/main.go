@@ -27,6 +27,7 @@ const guestIP = "10.0.2.15" // qemu user-net default guest addr (slirp)
 func main() {
 	image := flag.String("image", "out/vm/openwrt.img", "OpenWRT image with wash baked (WASH_GUI=1)")
 	port := flag.Int("port", 8080, "host port → the VM's wash :11000 (bound 0.0.0.0)")
+	nics := flag.Int("nics", 3, "extra ethernet adapters (eth1..ethN) for segments to bind to")
 	flag.Parse()
 
 	if _, err := os.Stat(*image); err != nil {
@@ -37,10 +38,17 @@ func main() {
 	defer stop()
 
 	const mac = "52:54:00:9a:b1:01"
-	// A qemu user-net NIC with host:port → guest:11000; loopback-safe, no bridge.
+	// eth0: a qemu user-net NIC with host:port → guest:11000; loopback-safe, no
+	// bridge. This is the management plane (don't bind segments to it).
 	extra := []string{
 		"-netdev", fmt.Sprintf("user,id=net0,hostfwd=tcp:0.0.0.0:%d-%s:11000", *port, guestIP),
 		"-device", "virtio-net-pci,netdev=net0,mac=" + mac,
+	}
+	// eth1..ethN: extra adapters for segments to bind to — isolated dummy L2
+	// segments (socket-mcast on unique groups, no other members), so the GUI has
+	// real ports to attach WAN/LAN to. No upstream traffic on this single box.
+	for n := 1; n <= *nics; n++ {
+		extra = append(extra, vm.MCastLAN(fmt.Sprintf("e%d", n), fmt.Sprintf("230.0.0.%d", 40+n), 26500+n, fmt.Sprintf("52:54:00:9a:b1:1%d", n))...)
 	}
 
 	fmt.Println("booting an OpenWRT microVM with the wash desktop …")
