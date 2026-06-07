@@ -22,6 +22,7 @@ import {
   type Segment, type SegForm,
 } from "./segment-model.ts";
 import { matrixZones, cellState, toggleForward, setInput, type MZone, type CellState } from "./matrix-model.ts";
+import { projectHosts, upsertHost, removeHost, type HostEntry } from "./hosts-model.ts";
 import type { Descriptor, ObjectDescriptor } from "./objectform-model.ts";
 import descriptorJson from "./generated/descriptor.json";
 import i18nJson from "./generated/i18n.json";
@@ -205,8 +206,9 @@ function NetApp(props: WashAppProps) {
   const can = (f: string) => caps().features.has(f);
   const canKind = (k: string) => caps().kinds.has(k);
   const [links, setLinks] = createSignal<string[]>([]); // physical NICs from the backend
-  const [adding, setAdding] = createSignal<null | "ethernet" | "vlan" | "bridge" | "wifi" | "wireguard" | "network">(null);
+  const [adding, setAdding] = createSignal<null | "ethernet" | "vlan" | "bridge" | "wifi" | "wireguard" | "network" | "host">(null);
   const [editSeg, setEditSeg] = createSignal<Segment | null>(null); // segment being edited (router bundle)
+  const [editHost, setEditHost] = createSignal<HostEntry | null>(null); // host being edited (reservation/DNS)
 
   // Wifi gating + state. wifiCapable shows the +Wifi button (the renderer can
   // express wifi AND a radio is present); wifiLive enables the live scan/connect
@@ -526,6 +528,15 @@ function NetApp(props: WashAppProps) {
   const toggleCell = (src: string, dest: string) => setDraft((d) => toggleForward(d, src, dest) as Config);
   const toggleInput = (zone: string, cur: string) => setDraft((d) => setInput(d, zone, cur === "ACCEPT" ? "REJECT" : "ACCEPT") as Config);
 
+  // Hosts: unified DHCP reservations + static DNS (hosts-model kernel), edited into
+  // the same draft.
+  const draftHosts = createMemo<HostEntry[]>(() => projectHosts(draft()));
+  const saveHost = (e: HostEntry, orig?: HostEntry) => {
+    setDraft((d) => upsertHost(d, e, orig?.name) as Config);
+    setAdding(null); setEditHost(null);
+  };
+  const delHost = (e: HostEntry) => setDraft((d) => removeHost(d, e) as Config);
+
   // Poll the scan while the dialog is open on an NM-live box (~2.5s; the effect
   // re-runs when `adding` changes and onCleanup clears the interval on close).
   createEffect(() => {
@@ -578,6 +589,7 @@ function NetApp(props: WashAppProps) {
         <div class="wash-net-add">
           <Show when={routerCaps()}>
             <button data-testid="add-network" class="wash-net-btn primary" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setEditSeg(null); setAdding("network"); }}><Icon name="git-branch" /> Network</button>
+            <button data-testid="add-host" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setEditHost(null); setAdding("host"); }}><Icon name="plus" /> Host</button>
           </Show>
           <button data-testid="add-ethernet" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setConfigureDevice(""); setAdding("ethernet"); }}><Icon name="ethernet-port" /> Ethernet</button>
           <button data-testid="add-vlan" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("vlan")} onClick={() => setAdding("vlan")}><Icon name="git-branch" /> VLAN</button>
@@ -599,6 +611,13 @@ function NetApp(props: WashAppProps) {
             initial={editSeg() ? segForm(editSeg()!) : undefined}
             onCancel={() => { setAdding(null); setEditSeg(null); }}
             onSave={(f) => saveNetwork(f, editSeg() ?? undefined)}
+          />
+        </Show>
+        <Show when={adding() === "host"}>
+          <HostWizard
+            initial={editHost() ?? undefined}
+            onCancel={() => { setAdding(null); setEditHost(null); }}
+            onSave={(e) => saveHost(e, editHost() ?? undefined)}
           />
         </Show>
         <Show when={adding() === "ethernet" || editIface()}>
@@ -655,6 +674,27 @@ function NetApp(props: WashAppProps) {
 
         <Show when={routerCaps() && matrixZonesList().length >= 2}>
           <FirewallMatrix zones={matrixZonesList()} state={cellAt} onToggle={toggleCell} onInput={toggleInput} />
+        </Show>
+
+        <Show when={routerCaps() && draftHosts().length > 0}>
+          <section class="wash-net-segments" data-testid="net-hosts">
+            <h2 class="wash-net-seg-h">Hosts &amp; DNS</h2>
+            <For each={draftHosts()}>
+              {(h) => (
+                <div class="wash-net-conn" data-testid={`host-${h.name}`} data-kind={h.mac ? "reservation" : "dns"}>
+                  <div class="wash-net-conn-main">
+                    <span class="wash-net-conn-name"><Icon name={h.mac ? "ethernet-port" : "git-branch"} /> {h.name}</span>
+                    <span class="wash-net-conn-kind">{h.mac ? "reservation" : "DNS"}</span>
+                    <span class="wash-net-conn-dev">{h.ip}{h.mac ? ` · ${h.mac}` : ""}</span>
+                  </div>
+                  <div class="wash-net-conn-actions">
+                    <button class="wash-net-btn ghost" data-testid={`host-edit-${h.name}`} title="Edit" disabled={busy() || adding() !== null} onClick={() => { setEditHost(h); setAdding("host"); }}><Icon name="git-branch" /> Edit</button>
+                    <button class="wash-net-btn ghost" data-testid={`host-del-${h.name}`} title="Remove" disabled={busy() || adding() !== null} onClick={() => delHost(h)}><Icon name="trash" /> Remove</button>
+                  </div>
+                </div>
+              )}
+            </For>
+          </section>
         </Show>
 
         <div class="wash-net-list">
@@ -980,6 +1020,39 @@ function NetworkWizard(props: { parents: string[]; ports: string[]; initial?: Se
       <div class="wash-net-wizard-actions">
         <button class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
         <button data-testid="net-save" class="wash-net-btn primary" disabled={!valid()} onClick={submit}>{editing ? "Save" : "Create"}</button>
+      </div>
+    </div>
+  );
+}
+
+// HostWizard adds/edits one unified host entry (plan §7.3): a name → IP, plus an
+// optional MAC. With a MAC it's a DHCP reservation (and resolves in DNS for free);
+// without, a pure static DNS record (a dotted FQDN entered verbatim is a
+// split-horizon override). One gesture for both.
+function HostWizard(props: { initial?: HostEntry; onCancel: () => void; onSave: (e: HostEntry) => void }) {
+  const editing = !!props.initial;
+  const [name, setName] = createSignal(props.initial?.name ?? "");
+  const [ip, setIp] = createSignal(props.initial?.ip ?? "");
+  const [mac, setMac] = createSignal(props.initial?.mac ?? "");
+  const valid = () => !!name() && /^\d+\.\d+\.\d+\.\d+$/.test(ip());
+  return (
+    <div class="wash-net-wizard" data-testid="host-wizard">
+      <div class="wash-net-wizard-title">{editing ? `Edit host ${props.initial!.name}` : "New host"}</div>
+      <label class="wash-net-field">
+        <span class="wash-net-label">Name</span>
+        <input data-testid="host-name" value={name()} disabled={editing} onInput={(e) => setName(e.currentTarget.value)} placeholder="printer  (or nas.example.com)" />
+      </label>
+      <label class="wash-net-field">
+        <span class="wash-net-label">IP</span>
+        <input data-testid="host-ip" value={ip()} onInput={(e) => setIp(e.currentTarget.value)} placeholder="10.0.0.20" />
+      </label>
+      <label class="wash-net-field">
+        <span class="wash-net-label">MAC (reservation)</span>
+        <input data-testid="host-mac" value={mac()} onInput={(e) => setMac(e.currentTarget.value)} placeholder="optional — blank = DNS only" />
+      </label>
+      <div class="wash-net-wizard-actions">
+        <button class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
+        <button data-testid="host-save" class="wash-net-btn primary" disabled={!valid()} onClick={() => props.onSave({ name: name(), ip: ip(), mac: mac().trim() || undefined })}>{editing ? "Save" : "Add"}</button>
       </div>
     </div>
   );
