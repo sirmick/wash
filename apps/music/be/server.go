@@ -54,6 +54,10 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		return nil
 	})
 
+	// Bridge the FE's playback state ↔ the com.wash.audio control plane
+	// (now-playing in the sidebar, transport/volume from the sidebar).
+	registerAudioRelay(bus)
+
 	go serveAndPublish(c, instanceID, p)
 }
 

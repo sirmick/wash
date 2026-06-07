@@ -111,6 +111,7 @@ func onReady(c *sdk.Conn, _ string, _ uint32) {
 	registerBulkGateway(bus)
 	registerPrivGateway(bus)
 	registerNetGateway(bus)
+	registerAudioGateway(bus)
 	// state forwarder: notify, bulk, and priv all push
 	// {kind:"state", state:...} cross-app. Branch on the sender's
 	// AppID to re-brand for the FE under a service-specific kind.
@@ -163,6 +164,7 @@ const (
 	BulkAppID   = "com.wash.bulk"
 	PrivAppID   = "com.wash.priv"
 	NetdAppID   = "com.wash.netd"
+	AudioAppID  = "com.wash.audio"
 )
 
 // serviceFEKind maps a service app id to the FE-side kind we
@@ -178,6 +180,8 @@ func serviceFEKind(appID string) string {
 		return "priv.state"
 	case NetdAppID:
 		return "net.state"
+	case AudioAppID:
+		return "audio.state"
 	}
 	return ""
 }
@@ -193,6 +197,30 @@ func registerNetGateway(bus *sdk.Bus) {
 	})
 	sdk.HandleVoid(bus, "net_unsubscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
 		return conn.SendAppMsgTo(wire.Recipient{AppID: NetdAppID}, map[string]any{"kind": "unsubscribe"})
+	})
+}
+
+// registerAudioGateway forwards the sidebar's subscribe/control ops to
+// the com.wash.audio control plane (docs/AUDIO.md §3). State pushes
+// return as {kind:"state"} and are re-branded to "audio.state" by the
+// shared state forwarder. control addresses one source by id; the
+// service relays the transport command to the owning producer.
+func registerAudioGateway(bus *sdk.Bus) {
+	sdk.HandleVoid(bus, "audio_subscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
+		return conn.SendAppMsgTo(wire.Recipient{AppID: AudioAppID}, map[string]any{"kind": "subscribe"})
+	})
+	sdk.HandleVoid(bus, "audio_unsubscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
+		return conn.SendAppMsgTo(wire.Recipient{AppID: AudioAppID}, map[string]any{"kind": "unsubscribe"})
+	})
+	sdk.HandleVoid(bus, "audio_control", func(conn *sdk.Conn, _ string, req audioControlReq) error {
+		return conn.SendAppMsgTo(wire.Recipient{AppID: AudioAppID}, map[string]any{
+			"kind": "control", "id": req.ID, "action": req.Action,
+		})
+	})
+	sdk.HandleVoid(bus, "audio_set_master_volume", func(conn *sdk.Conn, _ string, req audioVolReq) error {
+		return conn.SendAppMsgTo(wire.Recipient{AppID: AudioAppID}, map[string]any{
+			"kind": "set_master_volume", "value": req.Value,
+		})
 	})
 }
 
@@ -295,6 +323,15 @@ type bulkResolveConflictReq struct {
 	Action string `json:"action"`
 }
 
+type audioControlReq struct {
+	ID     string `json:"id"`
+	Action string `json:"action"`
+}
+
+type audioVolReq struct {
+	Value float64 `json:"value"`
+}
+
 type privReqIDReq struct {
 	ReqID string `json:"req_id"`
 }
@@ -367,10 +404,11 @@ const washIcon = "layout-dashboard"
 // requests. data is the JSON the FE sent via app_msg.send, decoded
 // into map[string]any.
 //
-//   {"action":"launch","app_id":"…"}        — spawn an app
-//   {"action":"spawn_root","app_id":"…"}    — ask wash-priv to spawn
-//                                              an app as root
-//   {"kind":"desktop.request"}              — re-ship desktop.config
+//	{"action":"launch","app_id":"…"}        — spawn an app
+//	{"action":"spawn_root","app_id":"…"}    — ask wash-priv to spawn
+//	                                           an app as root
+//	{"kind":"desktop.request"}              — re-ship desktop.config
+//
 // onAppMsg handles the action-keyed launcher messages — these
 // predate the bus and use `action` instead of `kind`. The bus
 // dispatches kind-shaped messages first; this is the fallback.

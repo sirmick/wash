@@ -25,7 +25,7 @@ GOFLAGS += -cover -coverpkg=github.com/sirmick/wash/...
 endif
 
 OUT     := out
-BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net wash-music
+BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net wash-music wash-audio
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -409,6 +409,12 @@ $(OUT)/wash-music: $(MUSIC_STAMP) | $(OUT)
 .PHONY: $(OUT)/wash-notify
 $(OUT)/wash-notify: | $(OUT)
 	$(call go_build,$@,apps/notify/be/cmd)
+
+# wash-audio is the audio control-plane service (docs/AUDIO.md §3): no
+# window, no FE bundle. .PHONY for the same reason as wash-notify.
+.PHONY: $(OUT)/wash-audio
+$(OUT)/wash-audio: | $(OUT)
+	$(call go_build,$@,apps/audio/be/cmd)
 
 # wash-netd is the privileged networking background service (docs/NET.md
 # §2.11): reserved id com.wash.netd. It now supplies the settings Network

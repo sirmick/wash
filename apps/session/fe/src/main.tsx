@@ -22,6 +22,7 @@ import { BulkWidget, type BulkJob } from './sidebar/BulkWidget';
 import { BulkConflictOverlay, type BulkConflict } from './sidebar/BulkConflictOverlay';
 import { PrivWidget, type PrivReq } from './sidebar/PrivWidget';
 import { NetWidget, type NetState, type NetIface } from './sidebar/NetWidget';
+import { AudioWidget, type AudioState } from './sidebar/AudioWidget';
 import { PrivUnlockOverlay, type PrivUnlockState } from './sidebar/PrivUnlockOverlay';
 
 interface CatalogApp {
@@ -205,6 +206,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     bulk: 'collapsed',
     priv: 'collapsed',
     net: 'collapsed',
+    audio: 'collapsed',
   });
   // Host stats (CPU% / mem%) — pushed by the session BE every 5s as
   // a `host.stats` app_msg. Null until the first tick lands.
@@ -228,6 +230,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [netState, setNetState] = createSignal<NetState | null>(null);
   // Live interface IPs from the session BE's host-stats ticker (host.ifaces).
   const [netIfaces, setNetIfaces] = createSignal<NetIface[]>([]);
+  // Audio mixer — com.wash.audio's StateService snapshot (sources +
+  // master volume), forwarded by the session BE as audio.state.
+  const [audioState, setAudioState] = createSignal<AudioState | null>(null);
   // persistSidebar is debounced so a flurry of toggles doesn't
   // hammer the BE's save_state path. Matches the wash-edit cadence.
   let persistTimer: number | null = null;
@@ -311,6 +316,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     return '';
   };
   const NET_ACCENT = '#6090e0';
+  // audioBadge — show a play glyph while something is actively playing,
+  // empty otherwise. Mirrors the other section badges' "needs attention"
+  // semantics (here: "sound is on").
+  const audioBadge = (): string => {
+    const playing = (audioState()?.sources ?? []).some((s) => s.status === 'playing');
+    return playing ? '♪' : '';
+  };
+  const AUDIO_ACCENT = '#30c060';
   let screenshotTimer = 0;
   let currentObjectURL: string | null = null;
 
@@ -583,6 +596,19 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           }
           return;
         }
+        case 'audio.state': {
+          // com.wash.audio's StateService snapshot: {sources, master_volume,
+          // master_mute}. Auto-expand when a source first appears so the
+          // user sees what started playing.
+          const next = data.state as unknown as AudioState;
+          const had = (audioState()?.sources?.length ?? 0) > 0;
+          const has = (next?.sources?.length ?? 0) > 0;
+          setAudioState(next ?? null);
+          if (has && !had) {
+            autoExpandSection('audio');
+          }
+          return;
+        }
         case 'priv.req.new':
         case 'priv.req.update': {
           // Per-request transitions arrive in addition to the full
@@ -636,6 +662,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     window.wash.sendAppMsg(props.instance, { kind: 'bulk_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'priv_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'net_subscribe' });
+    window.wash.sendAppMsg(props.instance, { kind: 'audio_subscribe' });
     props.host.addEventListener('wash:msg', onMsg);
 
     // wash:state restores the persisted sidebar config on (re)mount.
@@ -718,6 +745,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         window.wash.sendAppMsg(props.instance, { kind: 'bulk_unsubscribe' });
         window.wash.sendAppMsg(props.instance, { kind: 'priv_unsubscribe' });
         window.wash.sendAppMsg(props.instance, { kind: 'net_unsubscribe' });
+        window.wash.sendAppMsg(props.instance, { kind: 'audio_unsubscribe' });
       } catch {
         /* ignore — connection may already be torn down */
       }
@@ -832,6 +860,25 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           badge={netBadge()}
         >
           <NetWidget state={netState} ifaces={netIfaces} onConfigure={() => launchApp('com.wash.net')} />
+        </Section>
+        <Section
+          id="audio"
+          title="Audio"
+          icon="music"
+          accent={AUDIO_ACCENT}
+          state={sectionStates().audio ?? 'collapsed'}
+          onToggle={() => toggleSection('audio')}
+          badge={audioBadge()}
+        >
+          <AudioWidget
+            state={audioState}
+            onControl={(id, action) =>
+              window.wash.sendAppMsg(props.instance, { kind: 'audio_control', id, action })
+            }
+            onMasterVolume={(value) =>
+              window.wash.sendAppMsg(props.instance, { kind: 'audio_set_master_volume', value })
+            }
+          />
         </Section>
       </Sidebar>
       <BulkConflictOverlay

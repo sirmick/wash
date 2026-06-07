@@ -1,6 +1,7 @@
 # AUDIO — wash audio subsystem & music player
 
-Status: design approved 2026-06-06 (branch `wash-audio`). M1 in progress.
+Status: design approved 2026-06-06 (branch `wash-audio`). M1 + M3 done and
+e2e-green; M2 (library/playlist/skins) next.
 
 This document describes wash's audio subsystem and its first consumer, a
 Winamp-skinned music player. The defining constraint shapes everything:
