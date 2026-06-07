@@ -7,6 +7,7 @@ import type {
   Snapshot,
   Disk,
   Partition,
+  Filesystem,
   Manager,
   MDArray,
   LVMVG,
@@ -20,6 +21,7 @@ import type {
 
 export type RowKind =
   | 'section'
+  | 'fs'
   | 'disk'
   | 'part'
   | 'md'
@@ -47,6 +49,16 @@ function section(id: string, name: string): Row {
 export function buildRows(snap: Snapshot | null): Row[] {
   if (!snap) return [];
   const rows: Row[] = [];
+
+  // Filesystems first — the df-style list (incl. ZFS datasets, btrfs, LVM
+  // volumes), populated unprivileged from /proc/mounts + statfs.
+  const filesystems = snap.filesystems ?? [];
+  if (filesystems.length > 0) {
+    rows.push(section('sec-fs', 'Filesystems'));
+    for (const fs of filesystems) {
+      rows.push({ id: `fs:${fs.mount}`, depth: 1, kind: 'fs', name: fs.mount, data: fs, selectable: true });
+    }
+  }
 
   const disks = snap.disks ?? [];
   rows.push(section('sec-disks', 'Disks'));
@@ -124,4 +136,4 @@ export function usagePct(used: number, total: number): number {
 }
 
 // Re-exported for the detail pane's narrowing convenience.
-export type { Disk, Partition, MDArray, LVMVG, LVMLV, BtrfsFS, BtrfsSubvol, ZPool, ZVdev, ZDataset };
+export type { Disk, Partition, Filesystem, MDArray, LVMVG, LVMLV, BtrfsFS, BtrfsSubvol, ZPool, ZVdev, ZDataset };

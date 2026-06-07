@@ -59,8 +59,9 @@ func collectSnapshot(ctx context.Context, run RunFunc) Snapshot {
 	}
 
 	snap := Snapshot{
-		TS:    nowUnix(),
-		Disks: collectDisks(),
+		TS:          nowUnix(),
+		Disks:       collectDisks(),
+		Filesystems: collectFilesystems(),
 	}
 
 	for _, p := range providers {

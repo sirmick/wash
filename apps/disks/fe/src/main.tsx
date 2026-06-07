@@ -20,12 +20,14 @@ import {
   Database,
   FolderTree,
   CircleDot,
+  Gauge,
 } from 'lucide-solid';
 import { buildRows, findRow, usagePct, type Row } from './topology.ts';
 import type {
   Snapshot,
   Disk,
   Partition,
+  Filesystem,
   Mount,
   MDArray,
   LVMVG,
@@ -85,6 +87,8 @@ function RowIcon(props: { row: Row }): JSX.Element {
   const k = props.row.kind;
   const size = 14;
   switch (k) {
+    case 'fs':
+      return <Gauge size={size} />;
     case 'disk': {
       const d = props.row.data as Disk;
       return d.rotational ? <HardDrive size={size} /> : <HardDriveDownload size={size} />;
@@ -317,6 +321,10 @@ const RowTrailing: Component<{ row: Row }> = (props) => {
   const text = () => {
     const r = props.row;
     switch (r.kind) {
+      case 'fs': {
+        const fs = r.data as Filesystem;
+        return fs.total > 0 ? `${usagePct(fs.used, fs.total).toFixed(0)}%` : fs.fstype;
+      }
       case 'disk':
         return fmtBytes((r.data as Disk).size);
       case 'part': {
@@ -354,6 +362,7 @@ const Detail: Component<{
   return (
     <div style={{ padding: '16px 20px', overflow: 'auto', height: '100%', 'box-sizing': 'border-box' }}>
       <Switch>
+        <Match when={props.row.kind === 'fs'}><FsDetail fs={props.row.data as Filesystem} /></Match>
         <Match when={props.row.kind === 'disk'}>
           <DiskDetail
             disk={props.row.data as Disk}
@@ -479,6 +488,20 @@ const SmartPanel: Component<{ disk: Disk; smart: SmartState | undefined; onCheck
     </div>
   );
 };
+
+const FsDetail: Component<{ fs: Filesystem }> = (props) => (
+  <>
+    <Title t={props.fs.mount} />
+    <KV k="source" v={props.fs.source} />
+    <KV k="type" v={props.fs.fstype} />
+    <Show when={props.fs.total > 0}>
+      <div style={{ padding: '6px 0', 'max-width': '420px' }}>
+        <FullnessBar used={props.fs.used} total={props.fs.total} />
+      </div>
+      <KV k="available" v={fmtBytes(props.fs.avail)} />
+    </Show>
+  </>
+);
 
 const PartDetail: Component<{ part: Partition }> = (props) => (
   <>

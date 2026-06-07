@@ -41,9 +41,15 @@ test.describe('wash-disks browser', () => {
     await expect(el).toBeVisible();
 
     // Sections + a physical disk row from the fake snapshot.
-    await expect(el.locator('[data-testid="disks-section-sec-disks"]')).toBeVisible({ timeout: 6_000 });
+    await expect(el.locator('[data-testid="disks-section-sec-fs"]')).toBeVisible({ timeout: 6_000 });
+    await expect(el.locator('[data-testid="disks-section-sec-disks"]')).toBeVisible();
     await expect(el.locator('[data-testid="disks-section-sec-vol"]')).toBeVisible();
     await expect(el.locator('[data-testid="disks-row-disk:nvme0n1"]')).toBeVisible();
+
+    // Filesystem-oriented list incl. a ZFS dataset (unprivileged, no scan).
+    await expect(el.locator('[data-testid="disks-row-fs:/tank/ds"]')).toBeVisible();
+    await el.locator('[data-testid="disks-row-fs:/tank/ds"]').click();
+    await expect(el.locator('[data-testid="disks-fullness"]')).toBeVisible();
 
     // Every manager kind has a row.
     await expect(el.locator('[data-testid="disks-row-md:md0"]')).toBeVisible();

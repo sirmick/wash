@@ -66,6 +66,43 @@ func TestUnescapeMount(t *testing.T) {
 	}
 }
 
+func TestCollectFilesystems(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mounts")
+	// Real filesystems (incl. zfs datasets + an LVM mapper) + pseudo mounts.
+	content := "" +
+		"/dev/sda1 / ext4 rw,relatime 0 0\n" +
+		"proc /proc proc rw 0 0\n" +
+		"tmpfs /run tmpfs rw 0 0\n" +
+		"tank /tank zfs rw 0 0\n" +
+		"tank/ds /tank/ds zfs rw 0 0\n" +
+		"/dev/mapper/vg0-home /home ext4 rw 0 0\n" +
+		"cgroup2 /sys/fs/cgroup cgroup2 rw 0 0\n"
+	mustWrite(t, path, content)
+	defer swap(&procMounts, path)()
+
+	fss := collectFilesystems()
+	mounts := map[string]string{} // mount → fstype
+	for _, fs := range fss {
+		mounts[fs.Mount] = fs.FSType
+	}
+	// Real filesystems kept (statfs fails on fake paths → zero usage, still listed).
+	for _, m := range []string{"/", "/tank", "/tank/ds", "/home"} {
+		if _, ok := mounts[m]; !ok {
+			t.Errorf("missing filesystem %s; got %v", m, mounts)
+		}
+	}
+	// Pseudo filesystems excluded.
+	for _, m := range []string{"/proc", "/run", "/sys/fs/cgroup"} {
+		if _, ok := mounts[m]; ok {
+			t.Errorf("pseudo fs %s should be excluded", m)
+		}
+	}
+	if mounts["/tank/ds"] != "zfs" {
+		t.Errorf("zfs dataset not typed zfs: %v", mounts)
+	}
+}
+
 // TestCollectDisks builds a synthetic /sys/block tree and asserts the disk +
 // partition assembly, holders, and the whole-disk-vs-partition split.
 func TestCollectDisks(t *testing.T) {

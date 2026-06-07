@@ -11,9 +11,25 @@ type Snapshot struct {
 	IntMS        int          `json:"interval_ms"`
 	Capabilities Capabilities `json:"capabilities"`
 	Disks        []Disk       `json:"disks"`
+	// Filesystems is a flat, df-style list of every real mounted filesystem —
+	// including ZFS datasets, btrfs, and LVM volumes, which mount as their own
+	// fstype in /proc/mounts. Built unprivileged in the poll, so these surface
+	// without the privileged "Scan volumes".
+	Filesystems []Filesystem `json:"filesystems"`
 	// Managers carries logical-storage groups (md, lvm, btrfs, zfs) and is
 	// present only for detected managers. Empty on a plain box.
 	Managers []Manager `json:"managers"`
+}
+
+// Filesystem is one mounted filesystem with its fullness. Source is the
+// device path for block filesystems, or the dataset/pool name for ZFS.
+type Filesystem struct {
+	Source string `json:"source"` // "/dev/sda1", "tank/ds", "vgtest-lvtest"
+	Mount  string `json:"mount"`
+	FSType string `json:"fstype"`
+	Used   uint64 `json:"used"`
+	Total  uint64 `json:"total"`
+	Avail  uint64 `json:"avail"`
 }
 
 // Capabilities advertises which managers this host supports, so the FE can

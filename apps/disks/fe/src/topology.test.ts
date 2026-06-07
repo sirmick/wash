@@ -11,6 +11,10 @@ function sampleSnapshot(): Snapshot {
     ts: 1,
     interval_ms: 3000,
     capabilities: { smart: true, md: true, lvm: true, btrfs: true, zfs: true },
+    filesystems: [
+      { source: '/dev/sda1', mount: '/', fstype: 'ext4', used: 200, total: 500, avail: 300 },
+      { source: 'tank/ds', mount: '/tank/ds', fstype: 'zfs', used: 290, total: 790, avail: 500 },
+    ],
     disks: [
       {
         name: 'sda', path: '/dev/sda', model: 'X', serial: '', wwn: '',
@@ -34,6 +38,15 @@ function sampleSnapshot(): Snapshot {
 
 test('buildRows: null snapshot → empty', () => {
   assert.deepEqual(buildRows(null), []);
+});
+
+test('buildRows: filesystem rows incl. zfs dataset', () => {
+  const rows = buildRows(sampleSnapshot());
+  const byId = (id: string) => rows.find((r) => r.id === id);
+  assert.ok(byId('sec-fs'), 'Filesystems section present');
+  const zfs = byId('fs:/tank/ds')!;
+  assert.equal(zfs.kind, 'fs');
+  assert.equal((zfs.data as any).fstype, 'zfs');
 });
 
 test('buildRows: sections + disk/partition nesting', () => {

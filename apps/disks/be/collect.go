@@ -310,6 +310,59 @@ func unescapeMount(s string) string {
 	return b.String()
 }
 
+// pseudoFS are kernel/virtual filesystem types excluded from the df-style
+// Filesystems list — they aren't storage the user cares about sizing.
+var pseudoFS = map[string]bool{
+	"proc": true, "sysfs": true, "devtmpfs": true, "devpts": true, "tmpfs": true,
+	"cgroup": true, "cgroup2": true, "mqueue": true, "debugfs": true, "tracefs": true,
+	"securityfs": true, "pstore": true, "bpf": true, "configfs": true, "fusectl": true,
+	"hugetlbfs": true, "ramfs": true, "autofs": true, "binfmt_misc": true,
+	"rpc_pipefs": true, "nsfs": true, "overlay": true, "squashfs": true,
+	"selinuxfs": true, "efivarfs": true, "fuse.gvfsd-fuse": true, "fuse.portal": true,
+}
+
+// collectFilesystems parses /proc/mounts into the df-style list: every real
+// (non-pseudo) mounted filesystem with its statfs fullness. Unprivileged, so
+// ZFS datasets / btrfs / LVM volumes all appear in the poll without a scan.
+// Deduped by mountpoint (the last mount at a path wins, as df shows).
+func collectFilesystems() []Filesystem {
+	b, err := os.ReadFile(procMounts)
+	if err != nil {
+		return nil
+	}
+	seen := map[string]int{} // mountpoint → index in out
+	var out []Filesystem
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 3 {
+			continue
+		}
+		fstype := f[2]
+		if pseudoFS[fstype] || strings.HasPrefix(fstype, "fuse.") {
+			continue
+		}
+		fs := Filesystem{
+			Source: unescapeMount(f[0]),
+			Mount:  unescapeMount(f[1]),
+			FSType: fstype,
+		}
+		if total, used, avail, ok := statfsUsage(fs.Mount); ok {
+			// Skip zero-size mounts (e.g. empty autofs-style entries).
+			if total == 0 {
+				continue
+			}
+			fs.Total, fs.Used, fs.Avail = total, used, avail
+		}
+		if i, dup := seen[fs.Mount]; dup {
+			out[i] = fs
+			continue
+		}
+		seen[fs.Mount] = len(out)
+		out = append(out, fs)
+	}
+	return out
+}
+
 // statfsUsage returns total/used/avail bytes for a mountpoint via statfs(2).
 // Used = total - free (free includes root-reserved space; avail excludes it).
 func statfsUsage(point string) (total, used, avail uint64, ok bool) {

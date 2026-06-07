@@ -93,10 +93,20 @@ func fakeSnapshot() Snapshot {
 		},
 	}}
 
+	filesystems := []Filesystem{
+		{Source: "/dev/nvme0n1p2", Mount: "/", FSType: "ext4", Total: 500 * gb, Used: 210 * gb, Avail: 290 * gb},
+		{Source: "/dev/nvme0n1p1", Mount: "/boot/efi", FSType: "vfat", Total: 511 * (1 << 20), Used: 60 * (1 << 20), Avail: 451 * (1 << 20)},
+		{Source: "/dev/mapper/vg0-home", Mount: "/home", FSType: "ext4", Total: 1000 * gb, Used: 620 * gb, Avail: 380 * gb},
+		{Source: "media", Mount: "/media", FSType: "btrfs", Total: 4000 * gb, Used: 1500 * gb, Avail: 2500 * gb},
+		{Source: "tank", Mount: "/tank", FSType: "zfs", Total: 5000 * gb, Used: 0, Avail: 5000 * gb},
+		{Source: "tank/ds", Mount: "/tank/ds", FSType: "zfs", Total: 7900 * gb, Used: 2900 * gb, Avail: 5000 * gb},
+	}
+
 	return Snapshot{
 		TS:           1_700_000_000,
 		Capabilities: Capabilities{SMART: true, MD: true, LVM: true, Btrfs: true, ZFS: true},
 		Disks:        []Disk{nvme, hdd},
+		Filesystems:  filesystems,
 		Managers:     []Manager{mdMgr, lvmMgr, btrfsMgr, zfsMgr},
 	}
 }

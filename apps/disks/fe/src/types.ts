@@ -54,12 +54,22 @@ export interface Manager {
   objects: unknown[] | null;
 }
 
+export interface Filesystem {
+  source: string;
+  mount: string;
+  fstype: string;
+  used: number;
+  total: number;
+  avail: number;
+}
+
 export interface Snapshot {
   kind: 'snapshot';
   ts: number;
   interval_ms: number;
   capabilities: Capabilities;
   disks: Disk[] | null;
+  filesystems: Filesystem[] | null;
   managers: Manager[] | null;
 }
 
