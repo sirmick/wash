@@ -6,6 +6,13 @@ server, wireless AP). It's the second half of the UCI work: the backend
 the UI is the real design effort. This doc fixes the shape so the build is
 forms-and-wiring, not open questions.
 
+**Revision 2026-06-07 — tabbed architecture.** The router plane is reorganised from
+one long scroll into **capability-gated tabs** (Interfaces · Networks · Firewall ·
+Hosts & DNS · Advanced), built on an explicit **carrier (L2) vs segment (L3)
+split**, with **create/delete as closure operations**. See §4 (where it lives),
+§4b (tab architecture) and §8c (create/delete closure). The §7 screen specs stand
+— they become the *content* of the tabs.
+
 Companion to `docs/NET.md` (§11 Phase D) and `docs/NET-BACKENDS.md`.
 
 ## 1. The canonical config we're designing for
@@ -81,14 +88,72 @@ Everything below maps back to making *this* config easy and safe to express.
    live interface, a forwarding references live zones, a pool's range fits its
    subnet) are validated in netd, surfaced in the FE — never trusted from the FE.
 
-## 4. Where it lives
+## 4. Where it lives — one app, capability-gated tabs
 
-Same app — `com.wash.net` — **un-greying** the existing locked sections, gated on
-caps. Not a separate router app: a box is type-2 *or* type-1 by which backend is
-active, and the caps already drive what shows. On UCI/OpenWRT the router sections
-light up; on NM/networkd they stay hidden. The app's left nav grows from
-"Connections" to: **Networks · Firewall · Hosts · Port forwards · DNS/DHCP ·
-Wireless · Advanced**.
+Same app — `com.wash.net` — never a separate router app. A box is type-2 *or*
+type-1 by which backend is active, and caps drive what shows. The window is
+**tabbed, and the tab strip is itself capability-gated**:
+
+- **Workstation (type-2, NM/networkd).** `routerCaps()` false → **no tab strip at
+  all**: just the Interfaces plane (today's Connections view) with in-place
+  addressing and `+Ethernet/VLAN/Bridge/WireGuard/Wi-Fi`. *Unchanged from today* —
+  the workstation experience **is** "tab 1, tabs hidden."
+- **Router (type-1, UCI).** Router caps unlock tabs 2–5 above the same content. No
+  mode toggle, no second app, no migration — the same `wash-app-net`, more tabs.
+
+This supersedes the earlier flat left-nav (Networks · Firewall · Hosts · Port
+forwards · DNS/DHCP · Wireless · Advanced): those screens become the *content* of
+the ordered tabs in §4b. The locked-section un-greying (`Firewall 🔒` etc.) still
+applies — caps reveal tabs rather than inline sections.
+
+## 4b. Tab architecture — the carrier/segment split
+
+The router plane read as confusing because one scroll mixed **two altitudes**: the
+*segment/intent* layer (a LAN = bridge + IP + zone + DHCP) and the raw *link* layer
+(bare adapters, unconfigured ports) — stacked vertically with nothing saying
+they're a stack. Workstation mode feels clean precisely because it only has the
+link layer. Tabs make the stack **explicit** and walk it left→right, bottom→top.
+
+**Governing rule — addressing can only live in one place.** UCI already hands us
+the seam: `config device` (the carrier) holds no IP; `config interface`
+(proto/ipaddr) holds all of it. We adopt it as law:
+
+- **Carrier = L2, never an IP.** Adapters, bridges, VLANs, bonds, **VPN/WireGuard
+  tunnel *devices***. These live on **Interfaces**.
+- **Segment = L3, always the IP.** A segment = "one carrier + addressing (+ zone +
+  DHCP)." An "interface with an IP" is just a **degenerate segment** (one carrier,
+  addressing, no zone/pool) — the same object type as a full LAN, emptier.
+
+So a double-assignment is **structurally impossible** — only one object holds
+proto/ipaddr. What changes per posture is *which tab renders it*, not where it's
+stored: workstation renders the degenerate segment **inline** on the interface row;
+router renders the same object as a **Networks** row, and Interfaces shows that IP
+**read-only** as context (`br-lan.10 → serves LAN · 10.10.0.1/24`, deep-linked to
+the Networks row). The mode flip is free — the object never moves, the view does.
+
+### The tabs (left→right = bottom of the stack up)
+
+| # | Tab | Owns (edit authority) | Subsumes (old §7) |
+|---|-----|-----------------------|-------------------|
+| 1 | **Interfaces** | carriers: adapters, **bridges, VLANs, bonds, VPN tunnels** + link-level config (membership, VID, MTU, key/endpoint, up/down). Incl. the **L2 port/VLAN matrix** (below). No L3. | new (workstation Connections view, promoted) |
+| 2 | **Networks** | segments: carrier + addressing + zone + DHCP pool + egress | §7.1 |
+| 3 | **Firewall** | zone×zone matrix + port-forwards + rules/NAT | §7.2, §7.4 |
+| 4 | **Hosts & DNS** | reservations + static DNS + DNS/DHCP defaults | §7.3, §7.5 |
+| 5 | **Advanced** | raw-object escape hatch | §7.7 |
+
+Order = the dependency chain: no Network without a carrier, no firewalling a zone
+that doesn't exist, no reserving a host on a network that isn't up. Wireless AP
+(§7.6) is a carrier that joins a segment — **placement open** (§10): a 6th tab, or a
+section of Interfaces. Leaning 6th tab, to keep Interfaces about wired carriers.
+
+### The one genuinely new screen: the L2 port/VLAN matrix
+
+Bridge-VLAN tagging — "for each member port, tagged/untagged per VLAN" (trunk vs
+access) — is richer than today's flat bridge editor and wants its own **port × VLAN
+matrix** on Interfaces. Pleasing symmetry: an **L2 port/VLAN matrix on Interfaces**
+and the **L3 zone×zone matrix on Firewall** — the same interaction idiom at two
+layers of the stack. Everything else on each tab is the existing §7 forms, routed
+to the right tab.
 
 ## 5. Requirement → model → UI map
 
@@ -263,6 +328,53 @@ suite already covers the model→UCI→netifd last mile). `harbor.config` is the
 acceptance fixture: "parses to N segments + M edges + a WG egress + ~90 DNS records,
 K quarantined." No `washnet-seg` CLI — the consumers are the UI and the test.
 
+## 8c. Create & delete as closure operations
+
+A segment is a **bundle with a dependency closure**, so create and delete are
+mirror images over that closure — both pure functions in the segment lens
+(`internal/washnet/segment`); the UI just stages what they return into the existing
+draft/diff/apply path.
+
+**Delete = tear down the owned closure (reference-aware, not flat).** Deleting LAN:
+
+- *deletes what the segment owns* — its L3 `Interface`, `DHCPPool`, `Zone`, and the
+  `Host`/`Domain` records scoped to it;
+- *cascades now-dangling references* — every `Forwarding`/`FirewallRule`/`Redirect`
+  whose src/dest was the `lan` zone, routes with `device=lan` (a forwarding to a
+  deleted zone is just garbage);
+- ***detaches but keeps the carrier*** — `br-lan.10`/`eth0` is not owned; deleting
+  the network frees its carrier back to **Interfaces** as a bare/unconfigured
+  adapter. **Orphan carriers linger — decided** (reusable; the user may rewire; a
+  wizard-auto-created VLAN is cheap to leave). A *shared* carrier (`br-lan` backing
+  three VLANs) obviously survives — only an exclusive VLAN sub-interface goes.
+
+No special "are you sure" modal: the delete **stages the whole closure as dirty
+changes**, and the existing pending-bar/diff shows the blast radius ("removing LAN:
+zone lan, pool, 2 forwardings, 2 reservations") before Apply.
+
+**Create = materialize a role template (the inverse).** `role` is the template
+selector (already on `Segment`):
+
+- **+WAN** → DHCP-client v4 + DHCPv6 v6 (`reqprefix` for PD, §10b) interface,
+  `Zone{wan, Input:REJECT, Masq, MTUFix}`, the standard wan allow-rules, **and
+  forwardings from existing internal zones → wan** so existing LANs get internet at
+  once. **Retroactive wiring — decided:** creating WAN *after* the LANs auto-adds
+  the internal→wan forwardings (wizard checkbox "give internet to: ☑ LAN ☑ IoT ☐
+  Cams").
+- **+LAN** → static `192.168.N.1/24`, a DHCP pool, `Zone{lan, Input:ACCEPT}`, a
+  LAN→WAN forwarding if a WAN exists.
+- **+IoT/guest role** → same shape, firewall stance flips to **isolated**: forward
+  to `wan` only. The role picks both the addressing defaults *and* the firewall
+  posture.
+
+Aggressive boilerplate is safe because every scaffold stages as a visible diff and
+applies through commit-confirm — a lock-out auto-reverts on the confirm timeout.
+
+`materializeSegment(role, ctx)` / `removeSegment(seg, model)` already exist (§8b);
+this extends them with cross-segment wiring (create) and the reference closure
+(delete). Keeping it in the kernel keeps it unit-testable; the round-trip law (§8b)
+still governs.
+
 ## 9. Delivery order
 
 Ship one screen at a time; each is independently useful and testable. Backend, caps,
@@ -270,17 +382,28 @@ and model are done (§2); the segment lens is the next foundation.
 
 1. ~~**UCI backend** — `backendsel` + OpenWRT test.~~ **Done**, proven by the live
    M0–M3 e2e + `net-demo` (§2).
-2. **Segment projection** (§8b) — `Project`/`Materialize` + the round-trip property
+2. **Tab chrome + Interfaces tab** (§4, §4b) — the capability-gated tab strip
+   (hidden when `routerCaps()` false, so workstation is unchanged), and promote
+   today's Connections view to the **Interfaces** tab (carriers only; addressing
+   shown read-only as segment context in router mode).
+3. **Segment projection** (§8b) — `Project`/`Materialize` + the round-trip property
    test + the `harbor.config` golden. The foundation the bundle and matrix render.
-3. **Networks (segments)** — create/edit VLAN + WAN bundles over the projection.
-4. **Hosts** — unified reservations + static DNS (small, high-value, unblocks DHCP→DNS).
-5. **Firewall matrix** — the centerpiece; needs zones from step 3.
-6. **Port forwards + internal-access** — needs the `Reflection` model field + split-DNS.
-7. **DNS/DHCP defaults**, then **Wireless AP**.
-8. **Advanced** raw view — mostly free; polish last.
+4. **Create/delete closure** (§8c) — extend `materializeSegment`/`removeSegment`
+   with role templates (retroactive wan-forwarding wiring) and the delete reference
+   closure (orphan carriers linger). Pure-kernel, unit-tested.
+5. **Networks (segments)** — create/edit VLAN + WAN bundles over the projection.
+6. **Hosts & DNS** — unified reservations + static DNS + DNS/DHCP defaults.
+7. **Firewall matrix** — the centerpiece; needs zones from step 5.
+8. **Port forwards + internal-access** — needs the `Reflection` model field + split-DNS (folds into the Firewall tab).
+9. **L2 port/VLAN matrix** (§4b) — the one new screen: trunk/access tagging on the Interfaces tab. Needed for the multi-port + trunk case.
+10. **Wireless AP** (placement §10), then **Advanced** raw view — mostly free; polish last.
 
 ## 10. Open questions
 
+- **Wireless AP placement (§4b):** its own 6th tab, or a section of the Interfaces
+  tab? An AP is a carrier that joins a segment (L2 access into it), so it fits
+  Interfaces, but a radio/SSID screen is substantial enough to warrant its own tab.
+  Leaning 6th tab.
 - **Hosts name entry:** auto-detect bare-name vs FQDN by the dot, or an explicit
   "local name / full domain" field?
 - **Matrix scale:** with many segments the grid grows N²; at what point do we need a
@@ -289,6 +412,11 @@ and model are done (§2); the segment lens is the next foundation.
 - **WAN/Router row semantics:** confirm the "Router" column (zone `Input`) is how we
   want to express "which segments can reach router services," vs a separate
   "Services" screen.
+
+**Resolved (2026-06-07):** carrier/segment split — addressing lives only on the
+segment, carriers are L2-only (§4b). Workstation = tabs-hidden degenerate case, one
+window for both (§4). Orphan carriers linger on delete; retroactive wan-forwarding
+wiring on create (§8c).
 
 ## 10b. IPv6 (router plane)
 

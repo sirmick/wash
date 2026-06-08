@@ -72,9 +72,20 @@ export function projectDraft(cfg: Cfg): Segment[] {
   return out;
 }
 
+// ensureForwarding adds a blanket zone→zone Forwarding if absent (idempotent).
+const ensureForwarding = (c: Cfg, src: string, dest: string) => {
+  c.Forwardings = c.Forwardings ?? [];
+  if (!c.Forwardings.some((x: any) => x.Src === src && x.Dest === dest)) c.Forwardings.push({ Src: src, Dest: dest });
+};
+
 // materializeSegment returns a NEW config with the segment bundle staged
 // (Device if VLAN + Interface static gateway + Zone + DHCPPool), replacing any
 // objects the old (orig) or new segment owned. Pure: it clones the input.
+//
+// On CREATE (no orig), it also scaffolds the cross-segment internet forwardings
+// (NET-ROUTER-UI.md §8c): a new LAN forwards out every existing WAN, and a new
+// WAN retroactively gives every existing internal network internet. Edits never
+// touch forwardings — the user's firewall matrix is preserved.
 export function materializeSegment(cfg: Cfg, f: SegForm, orig?: Segment): Cfg {
   const next = structuredClone(cfg) as Cfg;
   const names = new Set([f.name, orig?.name].filter(Boolean) as string[]);
@@ -113,6 +124,14 @@ export function materializeSegment(cfg: Cfg, f: SegForm, orig?: Segment): Cfg {
     if (!(next.Zones ?? []).some((z: any) => (z.Networks ?? []).includes(f.name))) {
       next.Zones = [...(next.Zones ?? []), { Name: f.name, Networks: [f.name], Input: "REJECT", Output: "ACCEPT", Forward: "REJECT", Masq: true }];
     }
+    // Retroactive wiring: a WAN created after the LANs lights them up — forward
+    // every existing internal (non-masq) network out this new uplink.
+    if (!orig) {
+      for (const z of next.Zones ?? []) {
+        if (z.Masq || z.Name === f.name || (z.Networks ?? []).length === 0) continue;
+        ensureForwarding(next, z.Name, f.name);
+      }
+    }
     return next;
   }
 
@@ -124,18 +143,135 @@ export function materializeSegment(cfg: Cfg, f: SegForm, orig?: Segment): Cfg {
     if (f.dns) pool.DHCPOption = [`6,${f.dns}`];
     next.Pools = [...(next.Pools ?? []), pool];
   }
+  // Give a freshly-created LAN internet: forward it out every existing WAN.
+  // (Isolation only governs inter-LAN forwarding, so an isolated segment still
+  // reaches the WAN.) Edits keep the user's matrix untouched.
+  if (!orig) {
+    for (const z of next.Zones ?? []) {
+      if (z.Masq) ensureForwarding(next, f.name, z.Name);
+    }
+  }
   return next;
 }
 
-// removeSegment returns a NEW config with a segment's whole bundle stripped.
+// removeSegment returns a NEW config with a segment's dependency closure torn
+// down (NET-ROUTER-UI.md §8c): the L3 interface + its DHCP pool + the firewall
+// zone it owns, AND a cascade of every reference to that zone (forwardings,
+// firewall rules, redirects) and routing tied to the interface (routes, policy
+// rules) — so no dangling reference to a deleted zone/interface is left behind.
+//
+// The CARRIER is deliberately KEPT: deleting a network frees its VLAN/bridge
+// device (or bare port) back to the Interfaces plane as an orphan, reusable
+// adapter — it is not owned by the segment ("keep orphan", §8c).
 export function removeSegment(cfg: Cfg, seg: Segment): Cfg {
   const next = structuredClone(cfg) as Cfg;
-  const dev = (next.Interfaces ?? []).find((i) => i.Name === seg.name)?.Device;
-  next.Interfaces = (next.Interfaces ?? []).filter((i) => i.Name !== seg.name);
-  if (dev) next.Devices = (next.Devices ?? []).filter((x) => x.Name !== dev);
-  next.Zones = (next.Zones ?? []).filter((z: any) => !((z.Networks ?? []).length === 1 && z.Networks[0] === seg.name));
-  next.Pools = (next.Pools ?? []).filter((p: any) => p.Interface !== seg.name);
+  const ifaceName = seg.name;
+  // The zone(s) this segment exclusively owns (single-network, this interface).
+  // A WAN may share a zone (the stock wan zone spans wan+wan6) — leave shared
+  // zones, only cascade the ones solely this interface's.
+  const ownedZones = new Set(
+    (next.Zones ?? [])
+      .filter((z: any) => (z.Networks ?? []).length === 1 && z.Networks[0] === ifaceName)
+      .map((z: any) => z.Name as string),
+  );
+  const refsZone = (o: any) => ownedZones.has(o.Src) || ownedZones.has(o.Dest);
+
+  // L3 + DHCP.
+  next.Interfaces = (next.Interfaces ?? []).filter((i) => i.Name !== ifaceName);
+  next.Pools = (next.Pools ?? []).filter((p: any) => p.Interface !== ifaceName);
+  // Owned zone + the cascade of everything that referenced it.
+  next.Zones = (next.Zones ?? []).filter((z: any) => !ownedZones.has(z.Name));
+  next.Forwardings = (next.Forwardings ?? []).filter((f: any) => !refsZone(f));
+  next.FwRules = (next.FwRules ?? []).filter((r: any) => !refsZone(r));
+  next.Redirects = (next.Redirects ?? []).filter((r: any) => !refsZone(r));
+  // Routing tied to the interface (e.g. a VPN-egress route + policy-rule trio),
+  // and a tunnel's WireGuard peers.
+  next.Routes = (next.Routes ?? []).filter((r: any) => r.Interface !== ifaceName);
+  next.PolicyRules = (next.PolicyRules ?? []).filter((r: any) => r.In !== ifaceName && r.Out !== ifaceName);
+  next.WGPeers = (next.WGPeers ?? []).filter((p: any) => p.Interface !== ifaceName);
   return next;
+}
+
+// removeCarrier drops a constructed L2 carrier (bridge / VLAN / bond device) from
+// the Interfaces tab. If a network still sits on it, that segment's bundle is torn
+// down first (removeSegment — which keeps the carrier as an orphan), then the
+// now-free device and any interface directly on it are removed. Member ports
+// return to the free-adapter pool automatically (they're derived from links()).
+export function removeCarrier(cfg: Cfg, device: string, servesName?: string): Cfg {
+  let next: Cfg = servesName ? removeSegment(cfg, { name: servesName } as Segment) : cfg;
+  next = structuredClone(next) as Cfg;
+  next.Devices = (next.Devices ?? []).filter((d) => d.Name !== device);
+  next.Interfaces = (next.Interfaces ?? []).filter((i) => i.Device !== device);
+  return next;
+}
+
+// --- carrier inventory (Interfaces tab, NET-ROUTER-UI.md §4b) -----------------
+// The L2 view: every link the box has (physical adapters, bridges, VLANs, bonds,
+// VPN tunnels) with its link-level detail and a READ-ONLY note of which segment
+// it serves (addressing lives on the segment, shown here only as context). A
+// carrier with no L3 interface bound is an `orphan` — a free, reusable adapter
+// (incl. the carrier a deleted network left behind, §8c "keep orphan").
+export type CarrierKind = "Adapter" | "Bridge" | "VLAN" | "Bond" | "Tunnel";
+export type CarrierRow = {
+  name: string;
+  kind: CarrierKind;
+  device: string; // the device/port name an action targets
+  detail: string; // members / parent.vid / "bridged in X" / "trunk"
+  serves?: { name: string; role: Segment["role"]; addr: string }; // read-only L3 context
+  orphan: boolean; // no interface bound — a free/reusable carrier
+};
+
+export function projectCarriers(cfg: Cfg, links: string[] = []): CarrierRow[] {
+  const ifaces = cfg.Interfaces ?? [];
+  const devs = cfg.Devices ?? [];
+  const ifByDev = new Map<string, Iface>();
+  for (const i of ifaces) if (i.Device) ifByDev.set(i.Device, i);
+  const segByName = new Map(projectDraft(cfg).map((s) => [s.name, s] as const));
+  const servesOf = (devName: string): CarrierRow["serves"] | undefined => {
+    const i = ifByDev.get(devName);
+    if (!i || i.Name === "loopback") return undefined;
+    const s = segByName.get(i.Name);
+    const addr = s?.addrs?.[0] ?? (i.Proto?._tag === "dhcp" ? "DHCP" : "");
+    return { name: i.Name, role: s?.role ?? "lan", addr };
+  };
+  const bridgeOf = new Map<string, string>(); // member port → bridge name
+  const vlanParents = new Set<string>();
+  for (const d of devs) {
+    if (d.Type === "bridge") (d.Ports ?? []).forEach((p) => bridgeOf.set(p, d.Name));
+    if (d.Type === "8021q" && d.Ifname) vlanParents.add(d.Ifname);
+  }
+
+  const rows: CarrierRow[] = [];
+  // Physical adapters first (the box's hardware), each classified by how it's used.
+  for (const l of links) {
+    const serves = servesOf(l);
+    if (serves) rows.push({ name: l, kind: "Adapter", device: l, detail: "", serves, orphan: false });
+    else if (bridgeOf.has(l)) rows.push({ name: l, kind: "Adapter", device: l, detail: `bridged in ${bridgeOf.get(l)}`, orphan: false });
+    else if (vlanParents.has(l)) rows.push({ name: l, kind: "Adapter", device: l, detail: "trunk (carries VLANs)", orphan: false });
+    else rows.push({ name: l, kind: "Adapter", device: l, detail: "", orphan: true });
+  }
+  // Constructed L2 devices.
+  for (const d of devs) {
+    if (d.Type === "bridge") {
+      const serves = servesOf(d.Name);
+      rows.push({ name: d.Name, kind: "Bridge", device: d.Name, detail: `ports: ${(d.Ports ?? []).join(", ") || "—"}`, serves, orphan: !serves });
+    } else if (d.Type === "8021q") {
+      const serves = servesOf(d.Name);
+      rows.push({ name: d.Name, kind: "VLAN", device: d.Name, detail: `VLAN ${d.VID} on ${d.Ifname}`, serves, orphan: !serves });
+    } else if (d.Type === "bond") {
+      const serves = servesOf(d.Name);
+      rows.push({ name: d.Name, kind: "Bond", device: d.Name, detail: `ports: ${(d.Ports ?? []).join(", ") || "—"}`, serves, orphan: !serves });
+    }
+  }
+  // VPN tunnels: a WireGuard interface IS its own carrier (no backing Device).
+  for (const i of ifaces) {
+    if (i.Proto?._tag !== "wireguard") continue;
+    rows.push({
+      name: i.Name, kind: "Tunnel", device: i.Device ?? i.Name, detail: "WireGuard",
+      serves: { name: i.Name, role: "vpn", addr: (i.Proto?.Addresses ?? [])[0] ?? "" }, orphan: false,
+    });
+  }
+  return rows;
 }
 
 // segFormFrom builds the wizard's initial state from an existing segment by

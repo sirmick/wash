@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import {
-  materializeSegment, removeSegment, projectDraft, segFormFrom, carrierLabel,
+  materializeSegment, removeSegment, removeCarrier, projectDraft, projectCarriers, segFormFrom, carrierLabel,
   type Cfg, type SegForm, type Segment,
 } from "./segment-model.ts";
 
@@ -93,14 +93,15 @@ test("edit replaces (no duplication); changing the VID swaps the vlan device", (
   assert.equal(find(c1.Interfaces, (i) => i.Name === "iot").Device, "switch.7");
 });
 
-test("remove strips the whole bundle", () => {
+test("remove tears down the L3 bundle but KEEPS the orphan carrier", () => {
   const c0 = materializeSegment({}, lanForm());
   const seg = projectDraft(c0)[0];
   const c1 = removeSegment(c0, seg);
   assert.equal((c1.Interfaces ?? []).length, 0);
-  assert.equal((c1.Devices ?? []).length, 0);
   assert.equal((c1.Zones ?? []).length, 0);
   assert.equal((c1.Pools ?? []).length, 0);
+  // the VLAN carrier lingers as a reusable orphan adapter (§8c "keep orphan")
+  assert.deepEqual((c1.Devices ?? []).map((d) => d.Name), ["switch.6"]);
 });
 
 test("projectDraft round-trips a materialized segment; loopback omitted", () => {
@@ -193,4 +194,98 @@ test("WAN reuses an existing (multi-network) wan zone rather than duplicating it
   assert.deepEqual((c.Zones as any[])[0].Networks, ["wan", "wan6"], "stock zone untouched");
   // the new wan interface makes it a WAN segment (masq zone contains it)
   assert.equal(projectDraft(c).find((s) => s.name === "wan")!.role, "wan");
+});
+
+// --- closures (§8c): cascade delete + create-time forwarding wiring ----------
+
+test("remove cascades zone refs (forwardings/rules/redirects) + iface routing", () => {
+  let c: Cfg = materializeSegment({}, lanForm({ name: "iot" }));
+  c.Zones = [...(c.Zones ?? []), { Name: "wan", Networks: ["wan"], Masq: true, Input: "REJECT" }];
+  c.Forwardings = [{ Src: "iot", Dest: "wan" }, { Src: "lan", Dest: "wan" }];
+  c.FwRules = [{ Src: "iot", Dest: "wan" }, { Src: "lan", Dest: "iot" }];
+  c.Redirects = [{ Name: "r", Src: "wan", Dest: "iot" }, { Name: "r2", Src: "wan", Dest: "lan" }];
+  c.Routes = [{ Interface: "iot", Table: "vpn" }, { Interface: "lan" }];
+  c.PolicyRules = [{ In: "iot", Lookup: "vpn" }, { In: "lan" }];
+
+  const seg = find(projectDraft(c), (s) => s.name === "iot");
+  const out = removeSegment(c, seg);
+
+  assert.deepEqual(out.Forwardings, [{ Src: "lan", Dest: "wan" }], "iot forwarding cascaded, lan's kept");
+  assert.equal((out.FwRules ?? []).length, 0, "both rules referenced iot");
+  assert.deepEqual((out.Redirects ?? []).map((r: any) => r.Name), ["r2"], "only the iot redirect cascaded");
+  assert.deepEqual((out.Routes ?? []).map((r: any) => r.Interface), ["lan"], "iot route gone");
+  assert.deepEqual((out.PolicyRules ?? []).map((r: any) => r.In), ["lan"], "iot policy-rule gone");
+  assert.ok(!(out.Zones ?? []).some((z: any) => z.Name === "iot"), "iot zone gone");
+  assert.ok((out.Zones ?? []).some((z: any) => z.Name === "wan"), "shared wan zone survives");
+});
+
+test("create wires internet: LAN out an existing WAN, and WAN retro-wires existing LANs", () => {
+  // WAN first, then a LAN → lan→wan added automatically
+  let c = materializeSegment({}, wanForm({ name: "wan" }));
+  c = materializeSegment(c, lanForm({ name: "lan", carrierKind: "port", port: "eth1" }));
+  assert.ok((c.Forwardings ?? []).some((f: any) => f.Src === "lan" && f.Dest === "wan"), "lan→wan on LAN create");
+
+  // fresh box: two LANs first, then the WAN → retroactive wiring for both
+  let d: Cfg = materializeSegment({}, lanForm({ name: "lan", carrierKind: "port", port: "eth1" }));
+  d = materializeSegment(d, lanForm({ name: "iot", carrierKind: "port", port: "eth2" }));
+  assert.equal((d.Forwardings ?? []).length, 0, "no WAN yet → nothing wired");
+  d = materializeSegment(d, wanForm({ name: "wan" }));
+  const fwd = (d.Forwardings ?? []).map((f: any) => `${f.Src}->${f.Dest}`).sort();
+  assert.deepEqual(fwd, ["iot->wan", "lan->wan"], "WAN create retro-wires every internal net");
+});
+
+test("removeCarrier drops an orphan bridge (frees its ports); leaves segments alone", () => {
+  let c: Cfg = materializeSegment({}, lanForm({ name: "lan", carrierKind: "bridge", members: ["eth1", "eth2"] }));
+  // user deletes the network first → keep-orphan leaves br-lan as an orphan carrier
+  c = removeSegment(c, projectDraft(c)[0]);
+  assert.ok((c.Devices ?? []).some((d) => d.Name === "br-lan"), "orphan bridge lingers");
+  const out = removeCarrier(c, "br-lan");
+  assert.equal((out.Devices ?? []).length, 0, "bridge device removed");
+  // eth1/eth2 are no longer claimed by any device → free adapters again
+  const rows = projectCarriers(out, ["eth1", "eth2"]);
+  assert.ok(rows.every((r) => r.orphan), "former members are free adapters");
+});
+
+test("removeCarrier on an in-use bridge tears down the segment on it too", () => {
+  const c: Cfg = materializeSegment({}, lanForm({ name: "lan", carrierKind: "bridge", members: ["eth1", "eth2"] }));
+  const out = removeCarrier(c, "br-lan", "lan");
+  assert.equal((out.Devices ?? []).length, 0, "bridge gone");
+  assert.equal((out.Interfaces ?? []).length, 0, "served interface gone");
+  assert.equal((out.Zones ?? []).length, 0, "its zone gone");
+  assert.equal((out.Pools ?? []).length, 0, "its pool gone");
+});
+
+test("projectCarriers classifies adapters, bridges, VLANs, orphans, and tunnels", () => {
+  // a LAN bridged over eth1+eth2, a VLAN on eth3 (orphan after a delete), eth4 free,
+  // eth0 the WAN, plus a WG tunnel.
+  let c: Cfg = materializeSegment({}, lanForm({ name: "lan", carrierKind: "bridge", members: ["eth1", "eth2"] }));
+  c = materializeSegment(c, wanForm({ name: "wan", port: "eth0" }));
+  // an orphan VLAN device (carrier a deleted network left behind)
+  c.Devices = [...(c.Devices ?? []), { Name: "eth3.20", Type: "8021q", Ifname: "eth3", VID: 20 }];
+  c.Interfaces = [...(c.Interfaces ?? []), { Name: "vpn0", Device: "vpn0", Proto: { _tag: "wireguard", Addresses: ["10.9.0.1/24"] } }];
+
+  const rows = projectCarriers(c, ["eth0", "eth1", "eth2", "eth3", "eth4"]);
+  const by = (n: string) => rows.find((r) => r.name === n)!;
+
+  assert.equal(by("eth0").serves?.name, "wan", "eth0 carries the WAN");
+  assert.equal(by("eth1").detail, "bridged in br-lan");
+  assert.equal(by("eth1").orphan, false);
+  assert.equal(by("eth3").detail, "trunk (carries VLANs)", "eth3 is a VLAN parent");
+  assert.equal(by("eth4").orphan, true, "eth4 is a free adapter");
+  assert.equal(by("br-lan").kind, "Bridge");
+  assert.equal(by("br-lan").serves?.name, "lan");
+  assert.equal(by("eth3.20").kind, "VLAN");
+  assert.equal(by("eth3.20").orphan, true, "the leftover VLAN device is an orphan carrier");
+  assert.equal(by("vpn0").kind, "Tunnel");
+  assert.equal(by("vpn0").serves?.role, "vpn");
+});
+
+test("editing a segment does NOT auto-add forwardings (user matrix preserved)", () => {
+  let c = materializeSegment({}, wanForm({ name: "wan" }));
+  c = materializeSegment(c, lanForm({ name: "lan", carrierKind: "port", port: "eth1" }));
+  // user deletes the lan→wan forwarding, then edits the LAN
+  c.Forwardings = [];
+  const seg = find(projectDraft(c), (s) => s.name === "lan");
+  const after = materializeSegment(c, segFormFrom(c, seg, ["sw"], ["eth1"]), seg);
+  assert.equal((after.Forwardings ?? []).length, 0, "edit must not re-add the forwarding");
 });

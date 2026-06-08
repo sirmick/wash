@@ -19,8 +19,8 @@ import { ObjectForm } from "./ObjectForm.tsx";
 import { setAtPath } from "./setAtPath.ts";
 import { descriptorFor } from "./objectform-model.ts";
 import {
-  carrierLabel, materializeSegment, projectDraft, removeSegment, segFormFrom,
-  type Segment, type SegForm,
+  carrierLabel, materializeSegment, projectCarriers, projectDraft, removeCarrier, removeSegment, segFormFrom,
+  type CarrierRow, type Segment, type SegForm,
 } from "./segment-model.ts";
 import { matrixZones, cellState, toggleForward, setInput, type MZone, type CellState } from "./matrix-model.ts";
 import { projectHosts, upsertHost, removeHost, type HostEntry } from "./hosts-model.ts";
@@ -198,6 +198,10 @@ function Icon(p: { name: string; size?: number }) {
   );
 }
 
+// carrierIcon maps a carrier kind to its sprite glyph (Interfaces tab inventory).
+const carrierIcon = (k: CarrierRow["kind"]): string =>
+  k === "Bridge" ? "git-merge" : k === "VLAN" ? "git-branch" : k === "Tunnel" ? "shield" : k === "Bond" ? "git-merge" : "ethernet-port";
+
 export function NetApp(props: WashAppProps) {
   const [config, setConfig] = createSignal<Config>({ Interfaces: [], Devices: [] }); // committed baseline (from netd)
   const [draft, setDraft] = createSignal<Config>({ Interfaces: [], Devices: [] });  // staged edits, not yet applied
@@ -227,6 +231,10 @@ export function NetApp(props: WashAppProps) {
     return all.filter((i) => !managed.has(i.Name));
   });
   const [links, setLinks] = createSignal<string[]>([]); // physical NICs from the backend
+  // The Interfaces-tab carrier inventory (router plane): every link the box has,
+  // with read-only "serves <segment>" context and orphan carriers surfaced.
+  // (Declared after links() — createMemo evals eagerly, so it can't precede it: TDZ.)
+  const carriers = createMemo<CarrierRow[]>(() => projectCarriers(draft(), links()));
   const [adding, setAdding] = createSignal<null | "ethernet" | "vlan" | "bridge" | "wifi" | "wireguard" | "network" | "host">(null);
   const [editSeg, setEditSeg] = createSignal<Segment | null>(null); // segment being edited (router bundle)
   const [editHost, setEditHost] = createSignal<HostEntry | null>(null); // host being edited (reservation/DNS)
@@ -243,6 +251,27 @@ export function NetApp(props: WashAppProps) {
   const [wifiEnabled, setWifiEnabled] = createSignal(true); // NM's software wifi switch
   const wifiCapable = createMemo(() => canKind("wireless/wifi-iface") && wifiRadio());
   const [editIface, setEditIface] = createSignal<Interface | null>(null);
+
+  // Router-plane tabs (NET-ROUTER-UI.md §4b). The strip only shows under
+  // routerCaps(); a workstation has no tabs (the Interfaces plane is the whole
+  // app). Default lands on Networks — the router's primary work surface.
+  type Tab = "interfaces" | "networks" | "firewall" | "hosts" | "advanced";
+  const [tab, setTab] = createSignal<Tab>("networks");
+  const TABS: { id: Tab; label: string }[] = [
+    { id: "interfaces", label: "Interfaces" },
+    { id: "networks", label: "Networks" },
+    { id: "firewall", label: "Firewall" },
+    { id: "hosts", label: "Hosts & DNS" },
+    { id: "advanced", label: "Advanced" },
+  ];
+  // The Interfaces plane (raw carriers + their add buttons) is the whole UI on a
+  // workstation, and tab 1 on a router. carrierAdds gates the +Ethernet/VLAN/
+  // Bridge/WireGuard/Wi-Fi buttons — link-level carriers live on Interfaces.
+  const carrierAdds = () => !routerCaps() || tab() === "interfaces";
+  // The add bar shows when the active context has an add affordance: the
+  // Interfaces plane (carrier adds) or the Networks / Hosts tabs. Firewall and
+  // Advanced have none, so no bar renders there.
+  const showToolbar = () => carrierAdds() || (routerCaps() && (tab() === "networks" || tab() === "hosts"));
 
   const [status, setStatus] = createSignal("idle");
   const [events, setEvents] = createSignal<ApplyEvent[]>([]);
@@ -355,6 +384,21 @@ export function NetApp(props: WashAppProps) {
       if (r.kind === "validate_ok") setDiagnostics((r.diagnostics ?? []) as Diagnostic[]);
     }, 400);
     onCleanup(() => window.clearTimeout(t));
+  });
+
+  // Router mode needs more room (tabs + the firewall matrix + segment cards) than
+  // the workstation default (574w, set in the manifest before caps are known). The
+  // manifest can't know the backend, so widen the window once when caps reveal a
+  // router — and only if the user hasn't already made it wider themselves.
+  let widened = false;
+  createEffect(() => {
+    if (!routerCaps() || widened) return;
+    widened = true;
+    try {
+      const me = (window.wash?.windows?.() ?? []).find((w) => w.instanceID === props.instance);
+      const TARGET = 920;
+      if (me && me.w < TARGET) window.wash.resizeWindow(me.windowID, TARGET, Math.max(me.h, 620));
+    } catch { /* no window API (unit/ctest harness) — ignore */ }
   });
 
   const applyState = (s: any) => {
@@ -557,6 +601,10 @@ export function NetApp(props: WashAppProps) {
     setAdding(null); setEditSeg(null);
   };
   const removeNetwork = (seg: Segment) => setDraft((d) => removeSegment(d, seg) as Config);
+  // Remove a constructed carrier (bridge / VLAN / bond / VPN tunnel) from the
+  // Interfaces tab. If a network sits on it, that segment is torn down too
+  // (removeCarrier handles the closure); member ports return to the adapter pool.
+  const removeCarrierRow = (c: CarrierRow) => setDraft((d) => removeCarrier(d, c.device, c.serves?.name) as Config);
   const segForm = (seg: Segment): SegForm => segFormFrom(draft(), seg, vlanParents(), links());
 
   // Firewall matrix: the zone×zone access policy (matrix-model kernel), edited into
@@ -657,29 +705,50 @@ export function NetApp(props: WashAppProps) {
   return (
     <div class="wash-net-app">
       <style>{STYLE}</style>
-      <header class="wash-net-head">
-        <div class="wash-net-add">
-          <Show when={routerCaps()}>
-            <button data-testid="add-network" class="wash-net-btn primary" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setEditSeg(null); setAdding("network"); }}><Icon name="git-branch" /> Network</button>
+      {/* Tab strip — router plane only (NET-ROUTER-UI.md §4b); a workstation has
+          no header at all (the add bar below is its top bar). */}
+      <Show when={routerCaps()}>
+        <header class="wash-net-head">
+          <nav class="wash-net-tabs" data-testid="net-tabs">
+            <For each={TABS}>
+              {(t) => (
+                <button class="wash-net-tab" classList={{ active: tab() === t.id }} data-testid={`net-tab-${t.id}`}
+                  aria-selected={tab() === t.id} onClick={() => setTab(t.id)}>{t.label}</button>
+              )}
+            </For>
+          </nav>
+        </header>
+      </Show>
+      {/* Add bar — its own row below the tabs (NET-ROUTER-UI.md §4b); the buttons
+          are contextual to the active tab. Tabs with no add affordance (Firewall,
+          Advanced) render no bar at all. On a workstation it's the top bar. */}
+      <Show when={showToolbar()}>
+        <div class="wash-net-toolbar" data-testid="net-toolbar">
+          <span class="wash-net-addlabel">Add</span>
+          {/* Networks tab: the single router add path (+ Network materializes the
+              carrier + segment bundle). */}
+          <Show when={routerCaps() && tab() === "networks"}>
+            <button data-testid="add-network" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setEditSeg(null); setAdding("network"); }}><Icon name="git-branch" /> Network</button>
+          </Show>
+          {/* + Host belongs to the Hosts & DNS tab, not Networks. */}
+          <Show when={routerCaps() && tab() === "hosts"}>
             <button data-testid="add-host" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setEditHost(null); setAdding("host"); }}><Icon name="plus" /> Host</button>
           </Show>
-          {/* On a router, + Network (VLAN / port / bridge carrier + role)
-              supersedes the workstation Ethernet/VLAN/Bridge flows — hide them so
-              there's one obvious add path (a bridged LAN is a Network with a
-              "Bridge (multiple ports)" carrier). */}
-          <Show when={!routerCaps()}>
+          {/* Interfaces plane (workstation = whole app; router = tab 1): link-level
+              carriers — Ethernet/VLAN/Bridge/WireGuard/Wi-Fi. */}
+          <Show when={carrierAdds()}>
             <button data-testid="add-ethernet" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setConfigureDevice(""); setAdding("ethernet"); }}><Icon name="ethernet-port" /> Ethernet</button>
             <button data-testid="add-vlan" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("vlan")} onClick={() => setAdding("vlan")}><Icon name="git-branch" /> VLAN</button>
             <button data-testid="add-bridge" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("bridge")} onClick={() => setAdding("bridge")}><Icon name="git-merge" /> Bridge</button>
           </Show>
-          <Show when={can("wireguard")}>
+          <Show when={can("wireguard") && carrierAdds()}>
             <button data-testid="add-wireguard" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => setAdding("wireguard")}><Icon name="shield" /> WireGuard</button>
           </Show>
-          <Show when={wifiCapable()}>
+          <Show when={wifiCapable() && carrierAdds()}>
             <button data-testid="add-wifi" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => setAdding("wifi")}><Icon name="wifi" /> Wi-Fi</button>
           </Show>
         </div>
-      </header>
+      </Show>
 
       <div class="wash-net-body">
         <Show when={diagnostics().length > 0}>
@@ -733,7 +802,7 @@ export function NetApp(props: WashAppProps) {
           <WifiDialog live={wifiLive()} busy={busy()} enabled={wifiEnabled()} aps={aps()} scanning={scanning()} onScan={() => void scanWifi()} onToggleRadio={toggleRadio} onConnect={connectWifi} onCancel={() => setAdding(null)} />
         </Show>
 
-        <Show when={routerCaps()}>
+        <Show when={routerCaps() && tab() === "networks"}>
           <section class="wash-net-segments" data-testid="net-segments">
             <h2 class="wash-net-seg-h">Networks</h2>
             <For each={draftSegments()} fallback={<div class="wash-net-empty">No networks yet — use + Network.</div>}>
@@ -763,13 +832,19 @@ export function NetApp(props: WashAppProps) {
           </section>
         </Show>
 
-        <Show when={routerCaps() && matrixZonesList().length >= 2}>
-          <FirewallMatrix zones={matrixZonesList()} state={cellAt} onToggle={toggleCell} onInput={toggleInput} />
+        <Show when={routerCaps() && tab() === "firewall"}>
+          <Show when={matrixZonesList().length >= 2}
+            fallback={<div class="wash-net-empty">Add at least two networks to set firewall policy.</div>}>
+            <FirewallMatrix zones={matrixZonesList()} state={cellAt} onToggle={toggleCell} onInput={toggleInput} />
+          </Show>
         </Show>
 
-        <Show when={routerCaps() && draftHosts().length > 0}>
+        <Show when={routerCaps() && tab() === "hosts"}>
           <section class="wash-net-segments" data-testid="net-hosts">
             <h2 class="wash-net-seg-h">Hosts &amp; DNS</h2>
+            <Show when={draftHosts().length === 0}>
+              <div class="wash-net-empty">No reservations or DNS records yet — use + Host.</div>
+            </Show>
             <For each={draftHosts()}>
               {(h) => (
                 <div class="wash-net-conn" data-testid={`host-${h.name}`} data-kind={h.mac ? "reservation" : "dns"}>
@@ -788,7 +863,7 @@ export function NetApp(props: WashAppProps) {
           </section>
         </Show>
 
-        <Show when={routerCaps()}>
+        <Show when={routerCaps() && tab() === "advanced"}>
           <section class="wash-net-segments" data-testid="net-advanced">
             <h2 class="wash-net-seg-h wash-net-adv-toggle" data-testid="adv-toggle" onClick={() => setShowAdv(!showAdv())}>Advanced (raw objects) {showAdv() ? "▾" : "▸"}</h2>
             <Show when={showAdv()}>
@@ -819,6 +894,45 @@ export function NetApp(props: WashAppProps) {
           </section>
         </Show>
 
+        {/* Interfaces tab (router): the carrier inventory — L2 links with a
+            read-only "serves <segment>" note + orphan carriers (NET-ROUTER-UI.md
+            §4b). Addressing is shown only as context; it's edited on Networks. */}
+        <Show when={routerCaps() && tab() === "interfaces"}>
+          <div class="wash-net-list" data-testid="net-carriers">
+            <For each={carriers()} fallback={<div class="wash-net-empty">No adapters detected.</div>}>
+              {(c) => (
+                <div class="wash-net-conn" data-testid={`carrier-${c.name}`} data-kind={c.kind} data-device={c.device} data-status={c.orphan ? "unconfigured" : "clean"} data-role={c.serves?.role}>
+                  <div class="wash-net-conn-main">
+                    <span class="wash-net-conn-name"><Icon name={carrierIcon(c.kind)} /> {c.name}</span>
+                    <span class="wash-net-conn-kind">{c.kind}</span>
+                    <Show when={c.detail}><span class="wash-net-conn-dev">{c.detail}</span></Show>
+                    <Show when={c.orphan}><span class="wash-net-badge" data-badge="unconfigured">unconfigured</span></Show>
+                  </div>
+                  <Show when={c.serves}>
+                    <div class="wash-net-conn-sub">
+                      → serves <button class="wash-net-link" data-testid={`carrier-serves-${c.name}`} onClick={() => setTab("networks")}>{c.serves!.name}</button>
+                      <Show when={c.serves!.addr}><span> · {c.serves!.addr}</span></Show>
+                    </div>
+                  </Show>
+                  <div class="wash-net-conn-actions">
+                    <Show when={c.orphan && c.kind !== "Tunnel"}>
+                      <button class="wash-net-btn ghost" data-testid={`carrier-configure-${c.name}`} disabled={busy() || adding() !== null} title="Use this carrier for a network" onClick={() => { setEditSeg(null); setAdding("network"); }}><Icon name="plus" /> Configure</button>
+                    </Show>
+                    {/* Remove a constructed carrier (bridge / VLAN / bond / tunnel).
+                        Physical adapters are hardware — no remove. */}
+                    <Show when={c.kind === "Bridge" || c.kind === "VLAN" || c.kind === "Bond" || c.kind === "Tunnel"}>
+                      <button class="wash-net-btn ghost" data-testid={`carrier-del-${c.name}`} disabled={busy() || adding() !== null}
+                        title={c.serves ? `Removes this ${c.kind.toLowerCase()} and the ${c.serves.name} network on it` : `Remove this ${c.kind.toLowerCase()}`}
+                        onClick={() => removeCarrierRow(c)}><Icon name="trash" /> Remove</button>
+                    </Show>
+                  </div>
+                </div>
+              )}
+            </For>
+          </div>
+        </Show>
+
+        <Show when={!routerCaps()}>
         <div class="wash-net-list">
           <For each={wifiConns()}>
             {(w) => (
@@ -889,6 +1003,7 @@ export function NetApp(props: WashAppProps) {
             )}
           </For>
         </div>
+        </Show>
 
         <Show when={!routerCaps()}>
           <div class="wash-net-greyed">
@@ -1414,9 +1529,16 @@ function WireGuardWizard(props: { onCancel: () => void; onCreate: (name: string,
 const STYLE = `
 .wash-net-app { display:flex; flex-direction:column; height:100%; background:#181828; color:#eee;
   font:13px ui-sans-serif, system-ui, sans-serif; position:relative; }
-.wash-net-head { display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border-bottom:1px solid #2a2a3a; }
+.wash-net-head { display:flex; align-items:stretch; padding:0 6px; border-bottom:1px solid #2a2a3a; }
 .wash-net-head h1 { font-size:14px; font-weight:600; margin:0; }
-.wash-net-add { display:flex; gap:6px; }
+.wash-net-toolbar { display:flex; gap:6px; flex-wrap:wrap; align-items:center; padding:8px 12px; border-bottom:1px solid #2a2a3a; }
+.wash-net-addlabel { font-size:12px; font-weight:600; color:#8a8a96; align-self:center; margin-right:2px; }
+.wash-net-addlabel::after { content:":"; }
+.wash-net-tabs { display:flex; gap:2px; align-items:stretch; }
+.wash-net-tab { background:transparent; border:none; border-bottom:2px solid transparent; color:#9a9aa6;
+  padding:10px 12px; font-size:12px; font-weight:600; cursor:pointer; }
+.wash-net-tab:hover { color:#cfd0d4; }
+.wash-net-tab.active { color:#8fb0e0; border-bottom-color:#33558a; }
 .wash-net-body { flex:1; overflow:auto; padding:10px 12px; }
 .wash-net-list { display:flex; flex-direction:column; gap:6px; }
 .wash-net-empty { opacity:.6; font-size:12px; padding:16px; text-align:center; }
@@ -1427,6 +1549,8 @@ const STYLE = `
 .wash-net-conn-kind { font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:#8fb0e0; border:1px solid #33415a; border-radius:9px; padding:1px 7px; }
 .wash-net-conn-dev { font-size:11px; opacity:.6; font-family:ui-monospace,Menlo,monospace; }
 .wash-net-conn-sub { grid-column:1; font-size:11px; opacity:.7; }
+.wash-net-link { background:none; border:none; padding:0; color:#8fb0e0; font:inherit; cursor:pointer; text-decoration:underline; text-underline-offset:2px; }
+.wash-net-link:hover { color:#aecbf0; }
 .wash-net-segments { display:flex; flex-direction:column; gap:6px; margin-bottom:14px; }
 .wash-net-seg-h { font-size:12px; text-transform:uppercase; letter-spacing:.06em; opacity:.55; margin:0 0 2px; font-weight:600; }
 .wash-net-seg-detail { grid-column:1; display:flex; gap:8px; align-items:center; font-size:11px; opacity:.7; font-family:ui-monospace,Menlo,monospace; }
