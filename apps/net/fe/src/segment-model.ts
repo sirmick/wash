@@ -29,6 +29,7 @@ export type SegForm = {
   address: string;             // lan gateway / wan static CIDR, e.g. 10.0.20.1/24
   dhcp: boolean; start: number; limit: number; lease: string; dns: string; // lan DHCP server
   isolate: boolean;            // lan zone forward REJECT (default) vs ACCEPT
+  egress?: string;             // "" / "wan" = normal WAN; a WireGuard iface name = route out that VPN tunnel
 };
 
 // Loose structural shapes — segment logic only touches these fields; the app's
@@ -147,15 +148,58 @@ export function materializeSegment(cfg: Cfg, f: SegForm, orig?: Segment): Cfg {
     if (f.dns) pool.DHCPOption = [`6,${f.dns}`];
     next.Pools = [...(next.Pools ?? []), pool];
   }
-  // Give a freshly-created LAN internet: forward it out every existing WAN.
-  // (Isolation only governs inter-LAN forwarding, so an isolated segment still
-  // reaches the WAN.) Edits keep the user's matrix untouched.
-  if (!orig) {
-    for (const z of next.Zones ?? []) {
-      if (z.Masq) ensureForwarding(next, f.name, z.Name);
-    }
-  }
+  applyEgress(next, f);
   return next;
+}
+
+// egressTable is a stable routing-table id per VPN tunnel (so several segments
+// out the same tunnel share its table, and different tunnels don't collide).
+function egressTable(wg: string): number {
+  let h = 0;
+  for (const c of wg) h = (h + c.charCodeAt(0)) % 90;
+  return 100 + h;
+}
+
+// ensureVpnZone gives a WireGuard tunnel a masquerading firewall zone so segments
+// can egress (NAT) out of it.
+function ensureVpnZone(cfg: Cfg, wg: string): void {
+  cfg.Zones = cfg.Zones ?? [];
+  if (!(cfg.Zones as any[]).some((z) => z.Name === wg)) {
+    (cfg.Zones as any[]).push({ Name: wg, Networks: [wg], Input: "REJECT", Output: "ACCEPT", Forward: "REJECT", Masq: true });
+  }
+}
+
+// applyEgress routes a LAN segment to the internet: out the WAN (default) or out a
+// VPN tunnel (NET-ROUTER-UI §7.1). VPN egress materializes the policy-routing trio
+// with NO new model — a `PolicyRule{in: seg, lookup: table}`, a default `Route` via
+// the tunnel in that table, and a blackhole `Route` (the leak-proof kill-switch).
+// It first strips the segment's prior egress (the egress forwarding + its policy
+// rule) so switching WAN⇄VPN is clean; non-egress forwardings (the matrix) survive.
+function applyEgress(cfg: Cfg, f: SegForm): void {
+  const seg = f.name;
+  const wgIfaces = new Set((cfg.Interfaces ?? []).filter((i: any) => i.Proto?._tag === "wireguard").map((i: any) => i.Name));
+  const masqZones = new Set((cfg.Zones ?? []).filter((z: any) => z.Masq).map((z: any) => z.Name as string));
+  const egressDest = new Set<string>([...masqZones, ...wgIfaces]);
+  // strip this segment's previous egress (forwarding to a WAN/VPN zone + its rule)
+  cfg.Forwardings = (cfg.Forwardings ?? []).filter((x: any) => !(x.Src === seg && egressDest.has(x.Dest)));
+  cfg.PolicyRules = (cfg.PolicyRules ?? []).filter((r: any) => r.In !== seg);
+
+  const wg = f.egress;
+  if (wg && wg !== "wan" && wgIfaces.has(wg)) {
+    const table = String(egressTable(wg));
+    ensureVpnZone(cfg, wg);
+    ensureForwarding(cfg, seg, wg); // segment → the VPN zone
+    cfg.PolicyRules = [...(cfg.PolicyRules ?? []), { In: seg, Lookup: table }];
+    cfg.Routes = cfg.Routes ?? [];
+    const R = cfg.Routes as any[];
+    if (!R.some((r) => r.Interface === wg && r.Table === table)) R.push({ Interface: wg, Target: "0.0.0.0/0", Table: table });
+    if (!R.some((r) => r.Type === "blackhole" && r.Table === table)) R.push({ Target: "0.0.0.0/0", Table: table, Type: "blackhole", Metric: 100 });
+    return;
+  }
+  // WAN egress: (re-)assert the segment forwards out every WAN zone. The egress
+  // forwarding is owned by this choice; non-egress (inter-segment) forwardings —
+  // the user's matrix — are untouched.
+  for (const z of masqZones) if (!wgIfaces.has(z)) ensureForwarding(cfg, seg, z);
 }
 
 // removeSegment returns a NEW config with a segment's dependency closure torn
@@ -285,8 +329,12 @@ export function segFormFrom(cfg: Cfg, seg: Segment, parents: string[], ports: st
   const iface = (cfg.Interfaces ?? []).find((i) => i.Name === seg.name);
   const pool = (cfg.Pools ?? []).find((p: any) => p.Interface === seg.name);
   const zone = (cfg.Zones ?? []).find((z: any) => (z.Networks ?? []).length === 1 && z.Networks[0] === seg.name);
+  // egress = the WireGuard tunnel this segment forwards out of, else WAN.
+  const wgIfaces = new Set((cfg.Interfaces ?? []).filter((i: any) => i.Proto?._tag === "wireguard").map((i: any) => i.Name));
+  const egress = (cfg.Forwardings ?? []).find((f: any) => f.Src === seg.name && wgIfaces.has(f.Dest))?.Dest ?? "wan";
   return {
     name: seg.name,
+    egress,
     role: seg.role === "wan" ? "wan" : "lan",
     carrierKind: seg.carrier.kind === "vlan" ? "vlan" : seg.carrier.kind === "bridge" ? "bridge" : "port",
     parent: seg.carrier.kind === "vlan" ? (seg.carrier.port ?? "") : (parents[0] ?? ""),

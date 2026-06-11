@@ -239,6 +239,8 @@ export function NetApp(props: WashAppProps) {
   // Routed numbered VLANs from the fabric table — bindable as Network carriers
   // (br-lan.<id>). Transit VLANs (no L3 sub-device) are excluded.
   const fabricVlans = createMemo<number[]>(() => projectFabric(draft()).plan.vlans.filter((v) => v.routed && v.id !== NATIVE).map((v) => v.id));
+  // WireGuard tunnels in the draft — offered as per-segment VPN egress (§7.1).
+  const vpnTunnels = createMemo<string[]>(() => (draft().Interfaces ?? []).filter((i: any) => i.Proto?._tag === "wireguard").map((i: any) => i.Name));
   const [adding, setAdding] = createSignal<null | "ethernet" | "vlan" | "bridge" | "wifi" | "wireguard" | "network" | "host">(null);
   const [editSeg, setEditSeg] = createSignal<Segment | null>(null); // segment being edited (router bundle)
   const [editHost, setEditHost] = createSignal<HostEntry | null>(null); // host being edited (reservation/DNS)
@@ -776,6 +778,7 @@ export function NetApp(props: WashAppProps) {
             parents={vlanParents()}
             ports={links()}
             fabricVlans={fabricVlans()}
+            vpnTunnels={vpnTunnels()}
             initial={editSeg() ? segForm(editSeg()!) : undefined}
             onCancel={() => { setAdding(null); setEditSeg(null); }}
             onSave={(f) => saveNetwork(f, editSeg() ?? undefined)}
@@ -1184,7 +1187,7 @@ function BridgeWizard(props: { members: string[]; onCancel: () => void; onCreate
 // thinks of as "a network," materialized to Device(if VLAN)+Interface+Zone+Pool by
 // saveNetwork. v1 = a LAN segment carried by a VLAN tag or an untagged port, a
 // static gateway address, an optional DHCP server, and the isolation default.
-function NetworkWizard(props: { parents: string[]; ports: string[]; fabricVlans: number[]; initial?: SegForm; onCancel: () => void; onSave: (f: SegForm) => void }) {
+function NetworkWizard(props: { parents: string[]; ports: string[]; fabricVlans: number[]; vpnTunnels: string[]; initial?: SegForm; onCancel: () => void; onSave: (f: SegForm) => void }) {
   const editing = !!props.initial;
   const i = props.initial;
   const [name, setName] = createSignal(i?.name ?? "");
@@ -1205,6 +1208,7 @@ function NetworkWizard(props: { parents: string[]; ports: string[]; fabricVlans:
   const [isolate, setIsolate] = createSignal(i?.isolate ?? true);
   const [role, setRole] = createSignal<"lan" | "wan">(i?.role ?? "lan");
   const [proto, setProto] = createSignal<"static" | "dhcp">(i?.proto ?? "dhcp");
+  const [egress, setEgress] = createSignal<string>(i?.egress || "wan"); // "wan" or a wg tunnel name
   const pickRole = (r: "lan" | "wan") => {
     setRole(r);
     if (!editing && (name() === "" || name() === "wan")) setName(r === "wan" ? "wan" : "");
@@ -1220,7 +1224,7 @@ function NetworkWizard(props: { parents: string[]; ports: string[]; fabricVlans:
   const submit = () => props.onSave({
     name: name(), role: role(), carrierKind: carrierKind(), parent: parent(), vid: vid(), port: port(),
     members: Array.from(members()), proto: proto(),
-    address: address(), dhcp: dhcp(), start: start(), limit: limit(), lease: lease(), dns: dns(), isolate: isolate(),
+    address: address(), dhcp: dhcp(), start: start(), limit: limit(), lease: lease(), dns: dns(), isolate: isolate(), egress: egress(),
   });
 
   return (
@@ -1314,6 +1318,17 @@ function NetworkWizard(props: { parents: string[]; ports: string[]; fabricVlans:
         <span class="wash-net-label">Isolate</span>
         <input data-testid="net-isolate" type="checkbox" checked={isolate()} onChange={(e) => setIsolate(e.currentTarget.checked)} />
       </label>
+      {/* Egress: out the WAN (default) or out a VPN tunnel (policy-routed with a
+          leak-proof kill-switch). Only offered when a WireGuard tunnel exists. */}
+      <Show when={props.vpnTunnels.length}>
+        <label class="wash-net-field">
+          <span class="wash-net-label">Egress</span>
+          <select data-testid="net-egress" value={egress()} onChange={(e) => setEgress(e.currentTarget.value)}>
+            <option value="wan">WAN (normal internet)</option>
+            <For each={props.vpnTunnels}>{(t) => <option value={t}>VPN: {t} (kill-switch)</option>}</For>
+          </select>
+        </label>
+      </Show>
       <label class="wash-net-field">
         <span class="wash-net-label">DHCP server</span>
         <input data-testid="net-dhcp" type="checkbox" checked={dhcp()} onChange={(e) => setDhcp(e.currentTarget.checked)} />

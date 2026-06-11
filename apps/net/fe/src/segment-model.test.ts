@@ -289,12 +289,37 @@ test("projectCarriers classifies adapters, bridges, VLANs, orphans, and tunnels"
   assert.equal(by("vpn0").serves?.role, "vpn");
 });
 
-test("editing a segment does NOT auto-add forwardings (user matrix preserved)", () => {
+test("editing a segment preserves the user's inter-segment matrix", () => {
   let c = materializeSegment({}, wanForm({ name: "wan" }));
   c = materializeSegment(c, lanForm({ name: "lan", carrierKind: "port", port: "eth1" }));
-  // user deletes the lan→wan forwarding, then edits the LAN
-  c.Forwardings = [];
+  c = materializeSegment(c, lanForm({ name: "cam", carrierKind: "port", port: "eth2" }));
+  // user adds a custom lan→cam forwarding (the firewall matrix)
+  c.Forwardings = [...(c.Forwardings ?? []), { Src: "lan", Dest: "cam" }];
   const seg = find(projectDraft(c), (s) => s.name === "lan");
   const after = materializeSegment(c, segFormFrom(c, seg, ["sw"], ["eth1"]), seg);
-  assert.equal((after.Forwardings ?? []).length, 0, "edit must not re-add the forwarding");
+  assert.ok((after.Forwardings ?? []).some((f: any) => f.Src === "lan" && f.Dest === "cam"), "custom matrix forwarding preserved");
+});
+
+test("VPN egress materializes the policy-routing trio + kill-switch", () => {
+  const base: Cfg = { Interfaces: [{ Name: "wg0", Device: "wg0", Proto: { _tag: "wireguard" } }] };
+  const c = materializeSegment(base, lanForm({ name: "priv", carrierKind: "port", port: "eth1", egress: "wg0" }));
+  assert.ok((c.Forwardings ?? []).some((f: any) => f.Src === "priv" && f.Dest === "wg0"), "priv → vpn zone (not wan)");
+  const rule = find(c.PolicyRules, (r: any) => r.In === "priv");
+  assert.ok(rule.Lookup, "policy rule has a lookup table");
+  assert.ok((c.Routes ?? []).some((r: any) => r.Interface === "wg0" && r.Table === rule.Lookup), "default route via wg0");
+  assert.ok((c.Routes ?? []).some((r: any) => r.Type === "blackhole" && r.Table === rule.Lookup), "blackhole kill-switch");
+  assert.equal(find(c.Zones, (z: any) => z.Name === "wg0").Masq, true, "tunnel got a masq zone");
+});
+
+test("switching egress VPN→WAN cleans the policy rule + re-adds WAN", () => {
+  const base: Cfg = {
+    Interfaces: [{ Name: "wg0", Device: "wg0", Proto: { _tag: "wireguard" } }],
+    Zones: [{ Name: "wan", Networks: ["wan"], Masq: true }],
+  };
+  let c = materializeSegment(base, lanForm({ name: "priv", carrierKind: "port", port: "eth1", egress: "wg0" }));
+  const seg = find(projectDraft(c), (s) => s.name === "priv");
+  c = materializeSegment(c, lanForm({ name: "priv", carrierKind: "port", port: "eth1", egress: "wan" }), seg);
+  assert.ok(!(c.PolicyRules ?? []).some((r: any) => r.In === "priv"), "policy rule removed");
+  assert.ok(!(c.Forwardings ?? []).some((f: any) => f.Src === "priv" && f.Dest === "wg0"), "vpn forwarding removed");
+  assert.ok((c.Forwardings ?? []).some((f: any) => f.Src === "priv" && f.Dest === "wan"), "wan egress restored");
 });

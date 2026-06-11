@@ -18,11 +18,19 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/sirmick/wash/wash-vm/vm"
+)
+
+// markers the guest prints; matched by regex so the echoed command line (which
+// contains the literal "$A"/"$?") never matches — only the substituted result.
+var (
+	leaseRe  = regexp.MustCompile(`LEASE=(\d+\.\d+\.\d+\.\d+)`)
+	resultRe = regexp.MustCompile(`RESULT:(\d+)`)
 )
 
 type seg struct {
@@ -50,13 +58,14 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	const group = "230.0.0.90"
+	// one isolated L2 per segment — a DISTINCT multicast group (not just port).
+	segGroup := func(i int) string { return fmt.Sprintf("230.0.0.%d", 90+i) }
 
 	// router: eth0 = slirp WAN (real internet), eth1.. = one access port per segment.
 	fmt.Println("booting the segmented router …")
 	nics := []string{"-netdev", "user,id=wan", "-device", "virtio-net-pci,netdev=wan,mac=52:54:00:bb:00:01"}
 	for i := range segs {
-		nics = append(nics, vm.MCastLAN(fmt.Sprintf("a%d", i), group, *base+i, fmt.Sprintf("52:54:00:bb:00:%02x", i+2))...)
+		nics = append(nics, vm.MCastLAN(fmt.Sprintf("a%d", i), segGroup(i), *base, fmt.Sprintf("52:54:00:bb:00:%02x", i+2))...)
 	}
 	router, err := vm.LaunchOpenWRT(ctx, vm.OpenWRTOpts{Disk: *image, Mem: "256M", Extra: nics})
 	if err != nil {
@@ -70,7 +79,7 @@ func main() {
 	probes := map[string]*vm.OpenWRT{}
 	for i, s := range segs {
 		fmt.Printf("booting probe %s (VLAN %d) …\n", s.name, s.vid)
-		pn := vm.MCastLAN("p", group, *base+i, fmt.Sprintf("52:54:00:bb:01:%02x", i+1))
+		pn := vm.MCastLAN("p", segGroup(i), *base, fmt.Sprintf("52:54:00:bb:01:%02x", i+1))
 		p, err := vm.LaunchOpenWRT(ctx, vm.OpenWRTOpts{Disk: *image, Mem: "192M", Extra: pn})
 		if err != nil {
 			die("probe %s launch: %v", s.name, err)
@@ -126,34 +135,38 @@ func applyRouter(ctx context.Context, w *vm.OpenWRT) {
 	if err != nil || !strings.Contains(out, "APPLIED") {
 		die("router apply failed: %v\n%s", err, out)
 	}
-	// wait for the WAN lease (NAT needs it).
-	for i := 0; i < 20; i++ {
-		o, _ := w.Run(ctx, "ip -4 -o addr show eth0 2>/dev/null | grep -c 'inet '")
-		if strings.Contains(lastLine(o), "1") {
+	// wait until the router itself can reach the internet (WAN DHCP + NAT up).
+	for i := 0; i < 25; i++ {
+		o, _ := w.Run(ctx, "ping -c1 -W2 8.8.8.8 >/dev/null 2>&1; echo RESULT:$?")
+		if m := resultRe.FindStringSubmatch(o); m != nil && m[1] == "0" {
 			break
 		}
 		time.Sleep(2 * time.Second)
 	}
+	// diagnostic: VLAN L3 devices + dnsmasq.
+	d, _ := w.Run(ctx, "echo DIAG:; ip -br -4 addr show 2>/dev/null | grep 'br-lan\\.' ; pidof dnsmasq >/dev/null && echo dnsmasq=up || echo dnsmasq=down")
+	if i := strings.Index(d, "DIAG:"); i >= 0 {
+		fmt.Printf("  router: %s\n", strings.Join(strings.Fields(d[i+5:]), " "))
+	}
 }
 
 func probeUp(ctx context.Context, w *vm.OpenWRT, s seg) string {
-	// untagged access port: just DHCP on eth0.
-	script := `
+	// stock OpenWRT enslaves eth0 into its own br-lan — detach it, then statically
+	// address the bare port on this segment (untagged access into its VLAN). Static
+	// rather than DHCP keeps the test deterministic; the matrix measures routing.
+	ip := strings.TrimSuffix(s.gw, ".1") + ".50"
+	script := fmt.Sprintf(`
+/etc/init.d/network stop >/dev/null 2>&1
+/etc/init.d/dnsmasq stop >/dev/null 2>&1
+ip link set eth0 nomaster 2>/dev/null
+ip addr flush dev eth0 2>/dev/null
 ip link set eth0 up 2>/dev/null
-udhcpc -i eth0 -n -t 12 -q >/dev/null 2>&1
-echo IP=$(ip -4 -o addr show eth0 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-`
-	out, err := w.Run(ctx, script)
-	if err != nil {
+ip addr add %s/24 dev eth0 2>/dev/null
+ip route add default via %s 2>/dev/null
+echo "LEASE=%s end"
+`, ip, s.gw, ip)
+	if _, err := w.Run(ctx, script); err != nil {
 		die("probe %s up: %v", s.name, err)
-	}
-	ip := "(no lease)"
-	for _, line := range strings.Split(out, "\n") {
-		if i := strings.Index(line, "IP="); i >= 0 {
-			if v := strings.TrimSpace(line[i+3:]); v != "" {
-				ip = v
-			}
-		}
 	}
 	probeAddr[s.name] = ip
 	return ip
@@ -166,8 +179,9 @@ func pingAll(ctx context.Context, w *vm.OpenWRT, targets [][2]string) map[string
 			res[t[0]] = false
 			continue
 		}
-		out, _ := w.Run(ctx, fmt.Sprintf("ping -c1 -W2 %s >/dev/null 2>&1 && echo Y || echo N", t[1]))
-		res[t[0]] = strings.Contains(lastLine(out), "Y")
+		out, _ := w.Run(ctx, fmt.Sprintf("ping -c1 -W2 %s >/dev/null 2>&1; echo RESULT:$?", t[1]))
+		m := resultRe.FindStringSubmatch(out)
+		res[t[0]] = m != nil && m[1] == "0"
 	}
 	return res
 }
@@ -211,10 +225,6 @@ func assertPolicy(r map[string]map[string]bool) bool {
 	return ok
 }
 
-func lastLine(s string) string {
-	lines := strings.Split(strings.TrimRight(s, "\r\n"), "\n")
-	return lines[len(lines)-1]
-}
 
 func boolToCode(ok bool) int {
 	if ok {
