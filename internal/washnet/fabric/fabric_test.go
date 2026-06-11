@@ -92,16 +92,28 @@ func TestLensStableProperty(t *testing.T) {
 	}
 }
 
+func hasVLAN(b []model.BridgeVLAN, vid int) bool {
+	for _, x := range b {
+		if x.VLAN == vid {
+			return true
+		}
+	}
+	return false
+}
+
 func TestMaterializeShapes(t *testing.T) {
 	// plain bridge: no filtering, no bridge-vlan.
 	d, b := Materialize(Plan{Ports: []Port{{Name: "eth1", Untagged: 1}, {Name: "eth2", Untagged: 1}}})
 	if len(d) != 1 || d[0].Name != "br-lan" || d[0].VLANFiltering || len(b) != 0 {
 		t.Fatalf("plain bridge wrong: %#v / %#v", d, b)
 	}
-	// lone tagged uplink → sub-interface, no bridge.
-	d, b = Materialize(Plan{Ports: []Port{{Name: "eth0", Tagged: []int{100}}}})
-	if len(d) != 1 || d[0].Name != "eth0.100" || d[0].Type != "8021q" || len(b) != 0 {
-		t.Fatalf("sub-iface wrong: %#v / %#v", d, b)
+	// a tagged trunk port stays a br-lan member (no sub-interface), filtering on.
+	d, b = Materialize(Plan{VLANs: []VLAN{{ID: 100, Routed: true}}, Ports: []Port{{Name: "eth0", Tagged: []int{100}}}})
+	if len(d) != 1 || d[0].Name != BridgeName || !d[0].VLANFiltering {
+		t.Fatalf("tagged trunk should be a filtering br-lan member: %#v", d)
+	}
+	if !hasVLAN(b, 100) {
+		t.Fatalf("expected a bridge-vlan 100: %#v", b)
 	}
 	// transit VLAN renders local '0'.
 	_, b = Materialize(Plan{

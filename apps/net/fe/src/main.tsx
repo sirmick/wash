@@ -23,7 +23,7 @@ import {
   type CarrierRow, type Segment, type SegForm,
 } from "./segment-model.ts";
 import { matrixZones, cellState, toggleForward, setInput, type MZone, type CellState } from "./matrix-model.ts";
-import { bridgeVlans, bridgePorts, isVlanAware, cellState as l2Cell, cycleCell as l2Cycle, addVlan as l2AddVlan, removeVlan as l2RemoveVlan, isTransit as l2IsTransit, setTransit as l2SetTransit } from "./l2-matrix-model.ts";
+import { projectFabric, setFabric, cycle as fCycle, cellOf, vlanColumns, isRouted, addVlan as fAddVlan, removeVlan as fRemoveVlan, setRouted, NATIVE, type Plan } from "./fabric-model.ts";
 import { projectHosts, upsertHost, removeHost, type HostEntry } from "./hosts-model.ts";
 import type { Descriptor, ObjectDescriptor, Diagnostic } from "./objectform-model.ts";
 import descriptorJson from "./generated/descriptor.json";
@@ -236,6 +236,9 @@ export function NetApp(props: WashAppProps) {
   // with read-only "serves <segment>" context and orphan carriers surfaced.
   // (Declared after links() — createMemo evals eagerly, so it can't precede it: TDZ.)
   const carriers = createMemo<CarrierRow[]>(() => projectCarriers(draft(), links()));
+  // Routed numbered VLANs from the fabric table — bindable as Network carriers
+  // (br-lan.<id>). Transit VLANs (no L3 sub-device) are excluded.
+  const fabricVlans = createMemo<number[]>(() => projectFabric(draft()).plan.vlans.filter((v) => v.routed && v.id !== NATIVE).map((v) => v.id));
   const [adding, setAdding] = createSignal<null | "ethernet" | "vlan" | "bridge" | "wifi" | "wireguard" | "network" | "host">(null);
   const [editSeg, setEditSeg] = createSignal<Segment | null>(null); // segment being edited (router bundle)
   const [editHost, setEditHost] = createSignal<HostEntry | null>(null); // host being edited (reservation/DNS)
@@ -735,10 +738,13 @@ export function NetApp(props: WashAppProps) {
           <Show when={routerCaps() && tab() === "hosts"}>
             <button data-testid="add-host" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setEditHost(null); setAdding("host"); }}><Icon name="plus" /> Host</button>
           </Show>
-          {/* Interfaces plane (workstation = whole app; router = tab 1): link-level
-              carriers — Ethernet/VLAN/Bridge/WireGuard/Wi-Fi. */}
+          {/* Interfaces plane: link-level carriers. On a router, VLANs and bridging
+              are owned by the box-wide fabric table (§4c), so +VLAN / +Bridge are
+              workstation-only; +Ethernet/WireGuard/Wi-Fi stay on both. */}
           <Show when={carrierAdds()}>
             <button data-testid="add-ethernet" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setConfigureDevice(""); setAdding("ethernet"); }}><Icon name="ethernet-port" /> Ethernet</button>
+          </Show>
+          <Show when={!routerCaps()}>
             <button data-testid="add-vlan" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("vlan")} onClick={() => setAdding("vlan")}><Icon name="git-branch" /> VLAN</button>
             <button data-testid="add-bridge" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("bridge")} onClick={() => setAdding("bridge")}><Icon name="git-merge" /> Bridge</button>
           </Show>
@@ -769,6 +775,7 @@ export function NetApp(props: WashAppProps) {
           <NetworkWizard
             parents={vlanParents()}
             ports={links()}
+            fabricVlans={fabricVlans()}
             initial={editSeg() ? segForm(editSeg()!) : undefined}
             onCancel={() => { setAdding(null); setEditSeg(null); }}
             onSave={(f) => saveNetwork(f, editSeg() ?? undefined)}
@@ -931,10 +938,8 @@ export function NetApp(props: WashAppProps) {
               )}
             </For>
           </div>
-          {/* L2 port/VLAN matrix per bridge (NET-ROUTER-UI.md §4b). */}
-          <For each={(draft().Devices ?? []).filter((d: any) => d.Type === "bridge")}>
-            {(d: any) => <SwitchMatrix cfg={draft()} bridge={d.Name} busy={busy()} onChange={(c) => setDraft(c)} />}
-          </For>
+          {/* Unified box-wide L2 fabric table (NET-ROUTER-UI.md §4c). */}
+          <FabricTable cfg={draft()} links={links()} busy={busy()} onChange={(c) => setDraft(c)} />
         </Show>
 
         <Show when={!routerCaps()}>
@@ -1179,13 +1184,15 @@ function BridgeWizard(props: { members: string[]; onCancel: () => void; onCreate
 // thinks of as "a network," materialized to Device(if VLAN)+Interface+Zone+Pool by
 // saveNetwork. v1 = a LAN segment carried by a VLAN tag or an untagged port, a
 // static gateway address, an optional DHCP server, and the isolation default.
-function NetworkWizard(props: { parents: string[]; ports: string[]; initial?: SegForm; onCancel: () => void; onSave: (f: SegForm) => void }) {
+function NetworkWizard(props: { parents: string[]; ports: string[]; fabricVlans: number[]; initial?: SegForm; onCancel: () => void; onSave: (f: SegForm) => void }) {
   const editing = !!props.initial;
   const i = props.initial;
   const [name, setName] = createSignal(i?.name ?? "");
-  const [carrierKind, setCarrierKind] = createSignal<"vlan" | "port" | "bridge">(i?.carrierKind ?? "vlan");
+  // Default a fresh LAN to a Switch VLAN when the fabric table has one (the
+  // unified path); else fall back to a classic VLAN tag.
+  const [carrierKind, setCarrierKind] = createSignal<"vlan" | "port" | "bridge" | "switch">(i?.carrierKind ?? (props.fabricVlans.length ? "switch" : "vlan"));
   const [parent, setParent] = createSignal(i?.parent ?? props.parents[0] ?? "");
-  const [vid, setVid] = createSignal(i?.vid ?? 10);
+  const [vid, setVid] = createSignal(i?.vid ?? props.fabricVlans[0] ?? 10);
   const [port, setPort] = createSignal(i?.port ?? props.ports[0] ?? "");
   const [members, setMembers] = createSignal<Set<string>>(new Set(i?.members ?? []));
   const toggleMember = (d: string) => setMembers((s) => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n; });
@@ -1201,12 +1208,13 @@ function NetworkWizard(props: { parents: string[]; ports: string[]; initial?: Se
   const pickRole = (r: "lan" | "wan") => {
     setRole(r);
     if (!editing && (name() === "" || name() === "wan")) setName(r === "wan" ? "wan" : "");
-    if (!editing) setCarrierKind(r === "wan" ? "port" : "vlan");
+    if (!editing) setCarrierKind(r === "wan" ? "port" : props.fabricVlans.length ? "switch" : "vlan");
   };
 
   const cidrOK = () => /\/\d+$/.test(address());
   const carrierOK = () => carrierKind() === "port" ? !!port()
     : carrierKind() === "bridge" ? members().size > 0
+    : carrierKind() === "switch" ? vid() > 0
     : (!!parent() && vid() >= 1 && vid() <= 4094);
   const valid = () => !!name() && carrierOK() && (role() === "wan" ? (proto() === "static" ? cidrOK() : true) : cidrOK());
   const submit = () => props.onSave({
@@ -1232,12 +1240,21 @@ function NetworkWizard(props: { parents: string[]; ports: string[]; initial?: Se
       <label class="wash-net-field">
         <span class="wash-net-label">Carrier</span>
         <select data-testid="net-carrier" value={carrierKind()} onChange={(e) => setCarrierKind(e.currentTarget.value as any)}>
+          <Show when={props.fabricVlans.length}><option value="switch">Switch VLAN</option></Show>
           <option value="vlan">VLAN tag</option>
           <option value="port">Untagged port</option>
           <option value="bridge">Bridge (multiple ports)</option>
         </select>
       </label>
       <Switch>
+        <Match when={carrierKind() === "switch"}>
+          <label class="wash-net-field">
+            <span class="wash-net-label">Switch VLAN</span>
+            <select data-testid="net-switch-vlan" value={vid()} onChange={(e) => setVid(parseInt(e.currentTarget.value || "0", 10))}>
+              <For each={props.fabricVlans}>{(v) => <option value={v}>VLAN {v} (br-lan.{v})</option>}</For>
+            </select>
+          </label>
+        </Match>
         <Match when={carrierKind() === "vlan"}>
           <label class="wash-net-field">
             <span class="wash-net-label">Trunk</span>
@@ -1402,64 +1419,69 @@ function FirewallMatrix(props: {
   );
 }
 
-// SwitchMatrix is the L2 port×VLAN grid for one VLAN-aware bridge (NET-ROUTER-UI
-// §4b): rows = the bridge's member ports, columns = its VLANs, each cell cycles
-// · → U* (untagged + PVID, an access port) → T (tagged, a trunk). Edits write
-// `config bridge-vlan` via the pure l2-matrix kernel. A plain bridge offers
-// "Enable VLANs" first (turns vlan_filtering on + seeds VLAN 1).
-function SwitchMatrix(props: { cfg: Config; bridge: string; busy: boolean; onChange: (c: Config) => void }) {
+// FabricTable is the unified, box-wide L2 fabric grid (NET-ROUTER-UI.md §4c):
+// rows = every physical port, columns = the Native (untagged) domain + each VLAN,
+// cells cycle · → U* (untagged + PVID, access) → T (tagged, trunk). One table owns
+// the whole switch — plain bridging is the Native column, VLANs are the rest. Edits
+// go through the pure fabric lens, which picks the UCI idiom (bare port / eth.N
+// sub-iface / plain or vlan-filtering br-lan) by topology. Per-VLAN routed⇄transit
+// (the `local` flag) controls whether the router terminates the VLAN at L3.
+function FabricTable(props: { cfg: Config; links: string[]; busy: boolean; onChange: (c: Config) => void }) {
   const [newVid, setNewVid] = createSignal<number>(10);
-  const ports = () => bridgePorts(props.cfg, props.bridge);
-  const vlans = () => bridgeVlans(props.cfg, props.bridge);
-  const aware = () => isVlanAware(props.cfg, props.bridge);
-  const glyph = (s: { state: string; pvid: boolean }) => (s.state === "none" ? "·" : s.state === "tagged" ? "T" : s.pvid ? "U*" : "U");
+  const plan = (): Plan => projectFabric(props.cfg).plan;
+  const cols = () => vlanColumns(plan());
+  const rows = () => {
+    const names = new Set<string>(props.links);
+    for (const p of plan().ports) names.add(p.name);
+    return [...names].sort();
+  };
+  const apply = (p: Plan) => props.onChange(setFabric(props.cfg, p) as Config);
+  const glyph = (s: string) => (s === "none" ? "·" : s === "tagged" ? "T" : "U*");
+  const label = (v: number) => (v === NATIVE ? "Native" : `V${v}`);
   return (
-    <section class="wash-net-l2" data-testid={`l2-${props.bridge}`}>
+    <section class="wash-net-l2" data-testid="fabric-table">
       <div class="wash-net-l2-head">
-        <h2 class="wash-net-seg-h">{props.bridge} — port VLANs</h2>
-        <Show when={aware()} fallback={
-          <button class="wash-net-btn ghost" data-testid={`l2-enable-${props.bridge}`} disabled={props.busy}
-            title="Make this bridge VLAN-aware" onClick={() => props.onChange(l2AddVlan(props.cfg, props.bridge, 1) as Config)}><Icon name="git-branch" /> Enable VLANs</button>
-        }>
-          <div class="wash-net-l2-addv">
-            <input type="number" min="1" max="4094" data-testid={`l2-newvid-${props.bridge}`} value={newVid()}
-              onInput={(e) => setNewVid(parseInt(e.currentTarget.value || "0", 10))} />
-            <button class="wash-net-btn ghost" data-testid={`l2-addvlan-${props.bridge}`}
-              disabled={props.busy || newVid() < 1 || newVid() > 4094 || vlans().includes(newVid())}
-              onClick={() => props.onChange(l2AddVlan(props.cfg, props.bridge, newVid()) as Config)}><Icon name="plus" /> VLAN</button>
-          </div>
-        </Show>
+        <h2 class="wash-net-seg-h">Switch — ports &amp; VLANs</h2>
+        <div class="wash-net-l2-addv">
+          <input type="number" min="2" max="4094" data-testid="fabric-newvid" value={newVid()}
+            onInput={(e) => setNewVid(parseInt(e.currentTarget.value || "0", 10))} />
+          <button class="wash-net-btn ghost" data-testid="fabric-addvlan"
+            disabled={props.busy || newVid() < 2 || newVid() > 4094 || cols().includes(newVid())}
+            onClick={() => apply(fAddVlan(plan(), newVid()))}><Icon name="plus" /> VLAN</button>
+        </div>
       </div>
-      <Show when={aware() && vlans().length > 0}>
-        <div class="wash-net-grid wash-net-l2-grid" style={{ "grid-template-columns": `minmax(64px,auto) repeat(${vlans().length}, minmax(46px,1fr))` }}>
+      <Show when={rows().length > 0} fallback={<div class="wash-net-empty">No ethernet ports detected.</div>}>
+        <div class="wash-net-grid wash-net-l2-grid" style={{ "grid-template-columns": `minmax(64px,auto) repeat(${cols().length}, minmax(56px,1fr))` }}>
           <div class="wash-net-grid-corner">port \ vlan</div>
-          <For each={vlans()}>
+          <For each={cols()}>
             {(v) => (
-              <div class="wash-net-grid-h" classList={{ "wash-net-l2-transit": l2IsTransit(props.cfg, props.bridge, v) }}>
-                <span>V{v}<button class="wash-net-l2-vdel" data-testid={`l2-delvlan-${props.bridge}-${v}`} title={`Remove VLAN ${v}`} disabled={props.busy} onClick={() => props.onChange(l2RemoveVlan(props.cfg, props.bridge, v) as Config)}>×</button></span>
-                <button class="wash-net-l2-vmode" data-transit={l2IsTransit(props.cfg, props.bridge, v)} data-testid={`l2-mode-${props.bridge}-${v}`} disabled={props.busy}
-                  title={l2IsTransit(props.cfg, props.bridge, v) ? `Transit — switched only, no ${props.bridge}.${v} adapter here. Click to route.` : `Routed — terminates at ${props.bridge}.${v} (bindable on Networks). Click for switch-only.`}
-                  onClick={() => props.onChange(l2SetTransit(props.cfg, props.bridge, v, !l2IsTransit(props.cfg, props.bridge, v)) as Config)}>{l2IsTransit(props.cfg, props.bridge, v) ? "transit" : "routed"}</button>
+              <div class="wash-net-grid-h" classList={{ "wash-net-l2-transit": v !== NATIVE && !isRouted(plan(), v) }}>
+                <span>{label(v)}<Show when={v !== NATIVE}><button class="wash-net-l2-vdel" data-testid={`fabric-delvlan-${v}`} title={`Remove VLAN ${v}`} disabled={props.busy} onClick={() => apply(fRemoveVlan(plan(), v))}>×</button></Show></span>
+                <Show when={v !== NATIVE}>
+                  <button class="wash-net-l2-vmode" data-transit={!isRouted(plan(), v)} data-testid={`fabric-mode-${v}`} disabled={props.busy}
+                    title={isRouted(plan(), v) ? `Routed — terminates at br-lan.${v} (bindable on Networks). Click for switch-only.` : `Transit — switched only, no br-lan.${v} adapter. Click to route.`}
+                    onClick={() => apply(setRouted(plan(), v, !isRouted(plan(), v)))}>{isRouted(plan(), v) ? "routed" : "transit"}</button>
+                </Show>
               </div>
             )}
           </For>
-          <For each={ports()} fallback={<div class="wash-net-empty" style={{ "grid-column": "1 / -1" }}>No ports on this bridge — add some via the Bridge editor.</div>}>
-            {(p) => (
+          <For each={rows()}>
+            {(port) => (
               <>
-                <div class="wash-net-grid-rh">{p}</div>
-                <For each={vlans()}>
+                <div class="wash-net-grid-rh">{port}</div>
+                <For each={cols()}>
                   {(v) => (
-                    <button class="wash-net-cell wash-net-l2-cell" data-testid={`l2-cell-${props.bridge}-${p}-${v}`}
-                      data-state={l2Cell(props.cfg, props.bridge, p, v).state} disabled={props.busy}
-                      title={`${p} in VLAN ${v} — click: untagged → tagged → none`}
-                      onClick={() => props.onChange(l2Cycle(props.cfg, props.bridge, p, v) as Config)}>{glyph(l2Cell(props.cfg, props.bridge, p, v))}</button>
+                    <button class="wash-net-cell wash-net-l2-cell" data-testid={`fabric-cell-${port}-${v}`}
+                      data-state={cellOf(plan(), port, v)} disabled={props.busy}
+                      title={`${port} in ${label(v)} — click: untagged → tagged → none`}
+                      onClick={() => apply(fCycle(plan(), port, v))}>{glyph(cellOf(plan(), port, v))}</button>
                   )}
                 </For>
               </>
             )}
           </For>
         </div>
-        <div class="wash-net-l2-legend"><b>U*</b> untagged + PVID (access) · <b>T</b> tagged (trunk) · <b>·</b> not a member · <b>routed</b> terminates at <code>{props.bridge}.&lt;id&gt;</code> (bindable on Networks) · <b>transit</b> switched only, no adapter</div>
+        <div class="wash-net-l2-legend"><b>U*</b> untagged + PVID (access) · <b>T</b> tagged (trunk) · <b>·</b> not a member · <b>Native</b> = the untagged LAN (plain bridging) · <b>routed</b> terminates at <code>br-lan.&lt;id&gt;</code> (Networks) · <b>transit</b> switched only</div>
       </Show>
     </section>
   );

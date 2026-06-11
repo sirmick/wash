@@ -93,6 +93,15 @@ test("edit replaces (no duplication); changing the VID swaps the vlan device", (
   assert.equal(find(c1.Interfaces, (i) => i.Name === "iot").Device, "switch.7");
 });
 
+test("switch carrier binds br-lan.<vid> and creates no device (the fabric owns it)", () => {
+  const c = materializeSegment({}, lanForm({ name: "iot", carrierKind: "switch", vid: 20 }));
+  const iface = find(c.Interfaces, (i) => i.Name === "iot");
+  assert.equal(iface.Device, "br-lan.20");
+  assert.equal((c.Devices ?? []).length, 0, "no device created — br-lan.20 comes from the fabric table");
+  assert.ok(find(c.Zones, (z: any) => z.Name === "iot"));
+  assert.ok(find(c.Pools, (p: any) => p.Interface === "iot"));
+});
+
 test("remove tears down the L3 bundle but KEEPS the orphan carrier", () => {
   const c0 = materializeSegment({}, lanForm());
   const seg = projectDraft(c0)[0];

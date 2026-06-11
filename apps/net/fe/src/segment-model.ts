@@ -21,7 +21,7 @@ export type Segment = { name: string; role: "lan" | "wan" | "vpn"; carrier: Carr
 export type SegForm = {
   name: string;
   role: "lan" | "wan";
-  carrierKind: "vlan" | "port" | "bridge";
+  carrierKind: "vlan" | "port" | "bridge" | "switch";
   parent: string; vid: number; // vlan tag on a trunk
   port: string;                // untagged port
   members: string[];           // bridge member ports (carrierKind === "bridge")
@@ -96,10 +96,14 @@ export function materializeSegment(cfg: Cfg, f: SegForm, orig?: Segment): Cfg {
   // multi-network/shared (the stock wan zone spans wan+wan6) — leave those.
   next.Zones = (next.Zones ?? []).filter((z: any) => !((z.Networks ?? []).length === 1 && names.has(z.Networks[0])));
 
-  // Carrier (shared by both roles): a VLAN device, a bridge of ports, or an
-  // untagged port.
+  // Carrier (shared by both roles): a switch VLAN (an existing br-lan.<vid> from
+  // the fabric table — bind, create nothing), a classic VLAN device, a bridge of
+  // ports, or an untagged port.
   let device = f.port;
-  if (f.carrierKind === "vlan") {
+  if (f.carrierKind === "switch") {
+    device = `br-lan.${f.vid}`; // the fabric (§4c) already owns this sub-device
+    if (oldDev && oldDev !== device) next.Devices = (next.Devices ?? []).filter((dev) => dev.Name !== oldDev);
+  } else if (f.carrierKind === "vlan") {
     device = `${f.parent}.${f.vid}`;
     next.Devices = (next.Devices ?? []).filter((dev) => dev.Name !== oldDev && dev.Name !== device);
     next.Devices = [...(next.Devices ?? []), { Name: device, Type: "8021q", Ifname: f.parent, VID: f.vid }];

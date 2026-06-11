@@ -17,7 +17,6 @@
 package fabric
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 
@@ -61,137 +60,89 @@ func (p Port) tagged(v int) bool {
 	return false
 }
 
-// Materialize turns a Plan into the L2 device layer (devices + bridge-vlans).
+// filteringOn: the bridge is VLAN-aware once any numbered VLAN exists (even an
+// empty one — so its column persists) or any port is tagged. Native-only is a
+// plain bridge.
+func filteringOn(p Plan) bool {
+	for _, v := range p.VLANs {
+		if v.ID != NativeVID {
+			return true
+		}
+	}
+	for _, pt := range p.Ports {
+		if len(pt.Tagged) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// Materialize turns a Plan into the L2 device layer. Every port with a membership
+// joins br-lan (a trunk port is a tagged member, not a sub-interface; a single
+// native port stays a plain bridge, never bare). When filtering, every VLAN —
+// incl. portless ones — gets a bridge-vlan so its column persists.
 func Materialize(p Plan) ([]model.Device, []model.BridgeVLAN) {
 	routed := map[int]bool{NativeVID: true}
 	for _, v := range p.VLANs {
 		routed[v.ID] = v.Routed
 	}
-	// member ports per VLAN (untagged or tagged), to know what's shared.
-	members := map[int][]string{}
-	for _, pt := range p.Ports {
-		if pt.Untagged != 0 {
-			members[pt.Untagged] = append(members[pt.Untagged], pt.Name)
-		}
-		for _, v := range pt.Tagged {
-			members[v] = append(members[v], pt.Name)
-		}
-	}
-	shared := func(pt Port) bool {
-		if pt.Untagged != 0 && len(members[pt.Untagged]) > 1 {
-			return true
-		}
-		for _, v := range pt.Tagged {
-			if len(members[v]) > 1 {
-				return true
-			}
-		}
-		return false
-	}
-
-	var devices []model.Device
-	var subs []model.Device
 	var brPorts []string
 	for _, pt := range p.Ports {
-		hasTag := len(pt.Tagged) > 0
-		hasUntag := pt.Untagged != 0
-		switch {
-		case !hasTag && !hasUntag:
-			// not in any VLAN — a free port, no device.
-		case hasTag && !hasUntag && !shared(pt):
-			// lone tagged uplink → sub-interface(s).
-			tags := append([]int(nil), pt.Tagged...)
-			sort.Ints(tags)
-			for _, v := range tags {
-				subs = append(subs, model.Device{Name: fmt.Sprintf("%s.%d", pt.Name, v), Type: "8021q", Ifname: pt.Name, VID: v})
-			}
-		case hasUntag && !hasTag && pt.Untagged == NativeVID && !shared(pt):
-			// lone native-untagged port → bare, no device.
-		default:
+		if pt.Untagged != 0 || len(pt.Tagged) > 0 {
 			brPorts = append(brPorts, pt.Name)
 		}
 	}
+	sort.Strings(brPorts)
+	filtering := filteringOn(p)
 
-	if len(brPorts) > 0 {
-		sort.Strings(brPorts)
+	var devices []model.Device
+	if len(brPorts) > 0 || filtering {
 		dev := model.Device{Name: BridgeName, Type: "bridge", Ports: brPorts}
-		if bridgeNeedsFiltering(p, brPorts) {
+		if filtering {
 			dev.VLANFiltering = true
 		}
 		devices = append(devices, dev)
 	}
-	bvlans := materializeBridgeVlans(p, brPorts, routed)
-	devices = append(devices, subs...)
-	return devices, bvlans
-}
 
-// bridgeNeedsFiltering: a bridge is VLAN-aware unless its ports share only the
-// plain native domain (no tags, no numbered VLAN).
-func bridgeNeedsFiltering(p Plan, brPorts []string) bool {
-	in := map[string]bool{}
-	for _, n := range brPorts {
-		in[n] = true
-	}
-	vids := map[int]bool{}
-	anyTag := false
-	for _, pt := range p.Ports {
-		if !in[pt.Name] {
-			continue
-		}
-		if pt.Untagged != 0 {
-			vids[pt.Untagged] = true
-		}
-		for _, v := range pt.Tagged {
-			vids[v] = true
-			anyTag = true
-		}
-	}
-	return anyTag || len(vids) > 1 || (len(vids) == 1 && !vids[NativeVID])
-}
-
-func materializeBridgeVlans(p Plan, brPorts []string, routed map[int]bool) []model.BridgeVLAN {
-	if len(brPorts) == 0 || !bridgeNeedsFiltering(p, brPorts) {
-		return nil // no bridge, or a plain (unfiltered) bridge → no bridge-vlan sections
-	}
-	in := map[string]bool{}
-	for _, n := range brPorts {
-		in[n] = true
-	}
-	vids := map[int]bool{}
-	for _, pt := range p.Ports {
-		if !in[pt.Name] {
-			continue
-		}
-		if pt.Untagged != 0 {
-			vids[pt.Untagged] = true
-		}
-		for _, v := range pt.Tagged {
-			vids[v] = true
-		}
-	}
-	ids := make([]int, 0, len(vids))
-	for v := range vids {
-		ids = append(ids, v)
-	}
-	sort.Ints(ids)
-	var out []model.BridgeVLAN
-	for _, v := range ids {
-		var ports []string
-		for _, name := range brPorts {
-			pt := findPort(p.Ports, name)
-			if pt.Untagged == v {
-				ports = append(ports, name+":u*")
-			} else if pt.tagged(v) {
-				ports = append(ports, name+":t")
+	var bvlans []model.BridgeVLAN
+	if filtering {
+		vidSet := map[int]bool{NativeVID: true}
+		for _, v := range p.VLANs {
+			if v.ID != NativeVID {
+				vidSet[v.ID] = true
 			}
 		}
-		bv := model.BridgeVLAN{Device: BridgeName, VLAN: v, Ports: ports}
-		if !routed[v] {
-			bv.Local = "0"
+		for _, pt := range p.Ports {
+			if pt.Untagged != 0 {
+				vidSet[pt.Untagged] = true
+			}
+			for _, v := range pt.Tagged {
+				vidSet[v] = true
+			}
 		}
-		out = append(out, bv)
+		ids := make([]int, 0, len(vidSet))
+		for v := range vidSet {
+			ids = append(ids, v)
+		}
+		sort.Ints(ids)
+		for _, v := range ids {
+			var ports []string
+			for _, name := range brPorts {
+				pt := findPort(p.Ports, name)
+				if pt.Untagged == v {
+					ports = append(ports, name+":u*")
+				} else if pt.tagged(v) {
+					ports = append(ports, name+":t")
+				}
+			}
+			bv := model.BridgeVLAN{Device: BridgeName, VLAN: v, Ports: ports}
+			if !routed[v] {
+				bv.Local = "0"
+			}
+			bvlans = append(bvlans, bv)
+		}
 	}
-	return out
+	return devices, bvlans
 }
 
 func findPort(ports []Port, name string) Port {
@@ -224,19 +175,11 @@ func Project(devices []model.Device, bvlans []model.BridgeVLAN) (Plan, []model.D
 	var br *model.Device
 	for i := range devices {
 		d := devices[i]
-		switch {
-		case d.Type == "bridge" && d.Name == BridgeName:
+		if d.Type == "bridge" && d.Name == BridgeName {
 			b := d
 			br = &b
-		case d.Type == "8021q":
-			// eth0.10 → port eth0 tagged in 10.
-			pt := port(d.Ifname)
-			if !pt.tagged(d.VID) {
-				pt.Tagged = append(pt.Tagged, d.VID)
-			}
-			setVlan(d.VID, true)
-		default:
-			leftovers = append(leftovers, d)
+		} else {
+			leftovers = append(leftovers, d) // 8021q sub-ifaces + everything else are not table-owned
 		}
 	}
 
@@ -248,6 +191,9 @@ func Project(devices []model.Device, bvlans []model.BridgeVLAN) (Plan, []model.D
 			}
 			setVlan(NativeVID, true)
 		} else {
+			for _, n := range br.Ports {
+				port(n) // member rows show even if a bridge-vlan omits them
+			}
 			for _, bv := range bvlans {
 				if bv.Device != BridgeName {
 					continue

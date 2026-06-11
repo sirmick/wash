@@ -1,0 +1,199 @@
+# Segmented home router — the "north star" config the accessibility matrix tests.
+# Four internal segments behind one trunk, each its own VLAN + zone, plus a WAN
+# uplink and a WireGuard egress for the privacy VLAN. Policy (who can reach whom):
+#
+#   lan      trusted     → internet (WAN) + may reach iot & cam (manage/view)
+#   iot      isolated    → internet only; cannot reach lan / cam / pirate
+#   cam      quarantined → NOTHING, not even the internet (only lan→cam inbound)
+#   pirate   privacy     → internet ONLY via the VPN tunnel (kill-switch); isolated
+#
+# Port map (eth0 = VM management plane, untouched):
+#   eth1  WAN uplink (DHCP)
+#   eth2  access → lan  (untagged VLAN 10)   10.10.0.1/24
+#   eth3  access → iot  (untagged VLAN 20)   10.20.0.1/24
+#   eth4  access → cam  (untagged VLAN 30)   10.30.0.1/24
+#   eth5  trunk → VLAN 10/20/30/40 tagged (to AP / switch / probes)
+#   pirate (VLAN 40, 10.40.0.1/24) rides the trunk only; egress via wg0
+#
+# Applied with `uci batch`. WireGuard keys are placeholders — the test harness
+# generates a real keypair + peer (the wg-exit) at run time.
+
+# ===== network =====
+delete network.@device[0]
+delete network.lan
+delete network.wan
+delete network.wan6
+
+# the switch: one VLAN-aware bridge; access ports + the trunk
+set network.brlan=device
+set network.brlan.name='br-lan'
+set network.brlan.type='bridge'
+set network.brlan.vlan_filtering='1'
+add_list network.brlan.ports='eth2'
+add_list network.brlan.ports='eth3'
+add_list network.brlan.ports='eth4'
+add_list network.brlan.ports='eth5'
+set network.v10=bridge-vlan
+set network.v10.device='br-lan'
+set network.v10.vlan='10'
+add_list network.v10.ports='eth2:u*'
+add_list network.v10.ports='eth5:t'
+set network.v20=bridge-vlan
+set network.v20.device='br-lan'
+set network.v20.vlan='20'
+add_list network.v20.ports='eth3:u*'
+add_list network.v20.ports='eth5:t'
+set network.v30=bridge-vlan
+set network.v30.device='br-lan'
+set network.v30.vlan='30'
+add_list network.v30.ports='eth4:u*'
+add_list network.v30.ports='eth5:t'
+set network.v40=bridge-vlan
+set network.v40.device='br-lan'
+set network.v40.vlan='40'
+add_list network.v40.ports='eth5:t'
+
+set network.lan=interface
+set network.lan.device='br-lan.10'
+set network.lan.proto='static'
+set network.lan.ipaddr='10.10.0.1'
+set network.lan.netmask='255.255.255.0'
+set network.lan.ip6assign='64'
+set network.iot=interface
+set network.iot.device='br-lan.20'
+set network.iot.proto='static'
+set network.iot.ipaddr='10.20.0.1'
+set network.iot.netmask='255.255.255.0'
+set network.iot.ip6assign='64'
+set network.cam=interface
+set network.cam.device='br-lan.30'
+set network.cam.proto='static'
+set network.cam.ipaddr='10.30.0.1'
+set network.cam.netmask='255.255.255.0'
+set network.pirate=interface
+set network.pirate.device='br-lan.40'
+set network.pirate.proto='static'
+set network.pirate.ipaddr='10.40.0.1'
+set network.pirate.netmask='255.255.255.0'
+
+# WAN — DHCP v4 + v6 with prefix delegation (IPv6 expected to work mostly)
+set network.wan=interface
+set network.wan.device='eth1'
+set network.wan.proto='dhcp'
+set network.wan6=interface
+set network.wan6.device='eth1'
+set network.wan6.proto='dhcpv6'
+set network.wan6.reqprefix='auto'
+
+# WireGuard egress for the privacy VLAN (peer = the wg-exit)
+set network.wg0=interface
+set network.wg0.proto='wireguard'
+set network.wg0.private_key='PRIVATE_KEY_PLACEHOLDER'
+set network.wg0.listen_port='51820'
+add_list network.wg0.addresses='10.99.0.2/24'
+set network.wgpeer=wireguard_wg0
+set network.wgpeer.public_key='PEER_PUBLIC_KEY_PLACEHOLDER'
+set network.wgpeer.endpoint_host='WG_EXIT_HOST'
+set network.wgpeer.endpoint_port='51820'
+add_list network.wgpeer.allowed_ips='0.0.0.0/0'
+add_list network.wgpeer.allowed_ips='::/0'
+set network.wgpeer.persistent_keepalive='25'
+
+# policy routing: pirate egresses out wg0 (table 100), with a blackhole
+# kill-switch so it can never leak to the WAN if the tunnel drops.
+set network.pirate_rule=rule
+set network.pirate_rule.in='pirate'
+set network.pirate_rule.lookup='100'
+set network.vpn_route=route
+set network.vpn_route.interface='wg0'
+set network.vpn_route.target='0.0.0.0/0'
+set network.vpn_route.table='100'
+set network.killswitch=route
+set network.killswitch.target='0.0.0.0/0'
+set network.killswitch.table='100'
+set network.killswitch.type='blackhole'
+set network.killswitch.metric='100'
+
+# ===== dhcp =====
+set dhcp.lan.interface='lan'
+set dhcp.lan.start='100'
+set dhcp.lan.limit='150'
+set dhcp.lan.leasetime='12h'
+set dhcp.iot=dhcp
+set dhcp.iot.interface='iot'
+set dhcp.iot.start='100'
+set dhcp.iot.limit='150'
+set dhcp.iot.leasetime='12h'
+set dhcp.cam=dhcp
+set dhcp.cam.interface='cam'
+set dhcp.cam.start='100'
+set dhcp.cam.limit='150'
+set dhcp.cam.leasetime='12h'
+set dhcp.pirate=dhcp
+set dhcp.pirate.interface='pirate'
+set dhcp.pirate.start='100'
+set dhcp.pirate.limit='150'
+set dhcp.pirate.leasetime='12h'
+
+# ===== firewall =====
+# each segment its own zone; forwardings encode the access policy. Defaults
+# (input/forward REJECT) keep everything quarantined unless explicitly allowed.
+set firewall.lz=zone
+set firewall.lz.name='lan'
+add_list firewall.lz.network='lan'
+set firewall.lz.input='ACCEPT'
+set firewall.lz.output='ACCEPT'
+set firewall.lz.forward='REJECT'
+set firewall.iz=zone
+set firewall.iz.name='iot'
+add_list firewall.iz.network='iot'
+set firewall.iz.input='ACCEPT'
+set firewall.iz.output='ACCEPT'
+set firewall.iz.forward='REJECT'
+set firewall.cz=zone
+set firewall.cz.name='cam'
+add_list firewall.cz.network='cam'
+set firewall.cz.input='ACCEPT'
+set firewall.cz.output='ACCEPT'
+set firewall.cz.forward='REJECT'
+set firewall.pz=zone
+set firewall.pz.name='pirate'
+add_list firewall.pz.network='pirate'
+set firewall.pz.input='ACCEPT'
+set firewall.pz.output='ACCEPT'
+set firewall.pz.forward='REJECT'
+set firewall.wz=zone
+set firewall.wz.name='wan'
+add_list firewall.wz.network='wan'
+add_list firewall.wz.network='wan6'
+set firewall.wz.input='REJECT'
+set firewall.wz.output='ACCEPT'
+set firewall.wz.forward='REJECT'
+set firewall.wz.masq='1'
+set firewall.wz.mtu_fix='1'
+set firewall.vz=zone
+set firewall.vz.name='vpn'
+add_list firewall.vz.network='wg0'
+set firewall.vz.input='REJECT'
+set firewall.vz.output='ACCEPT'
+set firewall.vz.forward='REJECT'
+set firewall.vz.masq='1'
+set firewall.vz.mtu_fix='1'
+
+# forwardings = the allowed flows
+set firewall.f_lan_wan=forwarding
+set firewall.f_lan_wan.src='lan'
+set firewall.f_lan_wan.dest='wan'
+set firewall.f_lan_iot=forwarding
+set firewall.f_lan_iot.src='lan'
+set firewall.f_lan_iot.dest='iot'
+set firewall.f_lan_cam=forwarding
+set firewall.f_lan_cam.src='lan'
+set firewall.f_lan_cam.dest='cam'
+set firewall.f_iot_wan=forwarding
+set firewall.f_iot_wan.src='iot'
+set firewall.f_iot_wan.dest='wan'
+set firewall.f_pirate_vpn=forwarding
+set firewall.f_pirate_vpn.src='pirate'
+set firewall.f_pirate_vpn.dest='vpn'
+# (no cam→* and no pirate→wan: cam is fully quarantined, pirate only via the VPN)
