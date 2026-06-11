@@ -35,6 +35,7 @@ type Config struct {
 	Globals     []Globals
 	Interfaces  []Interface
 	Devices     []Device
+	BridgeVLANs []BridgeVLAN
 	Routes      []Route
 	PolicyRules []PolicyRule
 	WGPeers     []WGPeer
@@ -146,10 +147,36 @@ type Device struct {
 	Ifname string   `uci:"ifname"`     // vlan/macvlan parent link
 	VID    int      `uci:"vid"`        // 802.1q vlan id
 	MTU    int      `uci:"mtu"`
+	// VLANFiltering turns a bridge into a VLAN-aware switch: its ports' VLAN
+	// membership is then carved by BridgeVLAN sections (config bridge-vlan), and
+	// each VLAN surfaces as a `<bridge>.<vid>` sub-device an Interface can bind.
+	// Omitted (no `option vlan_filtering`) unless set — a plain bridge is unchanged.
+	VLANFiltering bool `uci:"vlan_filtering"`
 }
 
 func (Device) UCIPackage() string { return "network" }
 func (Device) UCISection() string { return "device" }
+
+// BridgeVLAN is a `config bridge-vlan`: one VLAN on a VLAN-aware bridge, with the
+// member ports that carry it. Each Ports entry is "<port>" (tagged) or
+// "<port>:u" / "<port>:u*" / "<port>:t" — netifd's egress-tagging syntax, where
+// `u` is untagged, `*` marks the port's PVID (its native/ingress VLAN), and `t`
+// is tagged. The matrix UI (NET-ROUTER-UI.md §4b) reads/writes exactly these.
+type BridgeVLAN struct {
+	Device string   `uci:"device" ui:"ref=device"`
+	VLAN   int      `uci:"vlan"`
+	Ports  []string `uci:"ports,list"`
+	// Local is OpenWRT's `option local` (default "1" = the bridge terminates the
+	// VLAN locally, so a `<bridge>.<vid>` L3 sub-device exists and can be routed).
+	// "0" = transit: the VLAN is switched between member ports but NOT terminated
+	// here — no sub-device, no Network. A tri-state string, not a bool, because the
+	// codec omits false/zero and OpenWRT's default is on: "" = default (routed),
+	// "0" = transit. The matrix's per-VLAN Routed⇄Transit toggle writes this.
+	Local string `uci:"local"`
+}
+
+func (BridgeVLAN) UCIPackage() string { return "network" }
+func (BridgeVLAN) UCISection() string { return "bridge-vlan" }
 
 type Route struct {
 	Interface string       `uci:"interface" ui:"ref=interface"`

@@ -77,6 +77,21 @@ func TestRoundTripTable(t *testing.T) {
 		},
 		"wifi open": {SSIDs: []model.WifiIface{{Name: "guest", Device: "radio0", Mode: "ap", SSID: "guest", Encryption: model.EncNone{}}}},
 		"ipv6 ula":  {Globals: []model.Globals{{Name: "globals", ULAPrefix: netip.MustParsePrefix("fdca::/48")}}},
+		"vlan-filtering bridge (access + trunk)": {
+			Devices: []model.Device{{
+				Name: "br-lan", Type: "bridge", VLANFiltering: true,
+				Ports: []string{"eth1", "eth2", "eth3", "eth4"},
+			}},
+			BridgeVLANs: []model.BridgeVLAN{
+				{Device: "br-lan", VLAN: 1, Ports: []string{"eth1:u*", "eth2:u*", "eth4:u*"}},
+				{Device: "br-lan", VLAN: 20, Ports: []string{"eth3:u*", "eth4:t"}},
+				{Device: "br-lan", VLAN: 30, Ports: []string{"eth4:t"}, Local: "0"}, // transit (not routed here)
+			},
+			Interfaces: []model.Interface{
+				{Name: "lan", Device: "br-lan.1", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("10.10.0.1/24")}}},
+				{Name: "iot", Device: "br-lan.20", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("10.20.0.1/24")}}},
+			},
+		},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) { roundTrip(t, c) })

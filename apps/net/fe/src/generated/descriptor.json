@@ -219,6 +219,46 @@
           "option": "mtu",
           "widget": "number",
           "labelKey": "Device.MTU"
+        },
+        {
+          "name": "VLANFiltering",
+          "option": "vlan_filtering",
+          "widget": "toggle",
+          "labelKey": "Device.VLANFiltering"
+        }
+      ]
+    },
+    {
+      "kind": "network/bridge-vlan",
+      "package": "network",
+      "section": "bridge-vlan",
+      "goType": "BridgeVLAN",
+      "fields": [
+        {
+          "name": "Device",
+          "option": "device",
+          "widget": "ref",
+          "ref": "device",
+          "labelKey": "BridgeVLAN.Device"
+        },
+        {
+          "name": "VLAN",
+          "option": "vlan",
+          "widget": "number",
+          "labelKey": "BridgeVLAN.VLAN"
+        },
+        {
+          "name": "Ports",
+          "option": "ports",
+          "widget": "list-text",
+          "list": true,
+          "labelKey": "BridgeVLAN.Ports"
+        },
+        {
+          "name": "Local",
+          "option": "local",
+          "widget": "text",
+          "labelKey": "BridgeVLAN.Local"
         }
       ]
     },

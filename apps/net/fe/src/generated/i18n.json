@@ -1,4 +1,8 @@
 {
+  "BridgeVLAN.Device": "Device",
+  "BridgeVLAN.Local": "Local",
+  "BridgeVLAN.Ports": "Ports",
+  "BridgeVLAN.VLAN": "VLAN",
   "CNAME.Alias": "Alias",
   "CNAME.Target": "Target",
   "DHCPPool.DHCPOption": "DHCPOption",
@@ -23,6 +27,7 @@
   "Device.Ports": "Ports",
   "Device.Type": "Type",
   "Device.VID": "VID",
+  "Device.VLANFiltering": "VLANFiltering",
   "Dnsmasq.BogusPriv": "Bogus Priv",
   "Dnsmasq.Domain": "Domain",
   "Dnsmasq.DomainNeeded": "Domain Needed",

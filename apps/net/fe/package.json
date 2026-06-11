@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "test": "tsx --test src/objectform-model.test.ts src/segment-model.test.ts src/matrix-model.test.ts src/hosts-model.test.ts",
+    "test": "tsx --test src/objectform-model.test.ts src/segment-model.test.ts src/matrix-model.test.ts src/hosts-model.test.ts src/l2-matrix-model.test.ts",
     "gen": "cd ../../.. && go run ./cmd/washnet-uigen -out apps/net/fe/src/generated"
   },
   "dependencies": {

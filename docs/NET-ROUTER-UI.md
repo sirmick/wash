@@ -155,6 +155,76 @@ and the **L3 zone×zone matrix on Firewall** — the same interaction idiom at t
 layers of the stack. Everything else on each tab is the existing §7 forms, routed
 to the right tab.
 
+## 4c. The unified L2 fabric table (bridging + VLANs, one view)
+
+Revision 2026-06-10. The two ways to make a VLAN — a classic `eth0.10` sub-interface
+("tag one uplink") and bridge-VLAN filtering ("carve a switch") — plus plain
+bridging are **the same operation at different scales**. We collapse all three into
+one **box-global port × VLAN table**, and a pure lens picks the idiomatic UCI shape
+by topology so "adapter vs bridge vs sub-interface" disappears as a user concept.
+
+**Confirmed decisions (2026-06-10, home-router scope):**
+- **VLANs are box-global** — VLAN 10 is *the* VLAN 10 everywhere (one broadcast
+  domain). This is what makes a single table coherent.
+- **One auto-named `br-lan`** holds all switch ports; the user never sees/picks the
+  bridge name.
+- **A lone tagged uplink stays a sub-interface** (`eth0.100`) — idiomatic, no
+  pointless 1-port bridge.
+- **Plain bridging folds in** as a **"Native/untagged" column**: ports `U*` in
+  Native share the untagged LAN. No VLANs in play → a plain bridge (or bare port),
+  filtering off; the moment a numbered VLAN shares the fabric, Native becomes the
+  PVID (VLAN 1) and filtering turns on.
+
+### The abstract model (`Plan`)
+```
+Plan {
+  vlans: [{ id, routed }]          // box-global; id 1 = Native/untagged default
+  ports: [{ name, untagged?: vid, tagged: [vid…] }]   // ≤1 PVID + N tagged per port
+}
+```
+The matrix is `port × vlan → · / U* / T`, with the routed⇄transit flag per VLAN
+(`local`, §4b). Rows are **physical ports only** — bridges/sub-ifaces are derived;
+VPN tunnels and bonds are not switch fabric and stay separate (bonds → leftovers
+for now).
+
+### `Materialize(plan) → Config` (deterministic, idiom by topology)
+Group ports into **L2 domains** = connected components over "share any VLAN id."
+Per component:
+- **single port, native-untagged only, unshared** → bare `eth0` (no device).
+- **single port, tagged VLAN(s) only, unshared** → `eth0.<vid>` sub-interface(s).
+- **only native, ≥2 ports** → a plain `br-lan` (no filtering, no bridge-vlan).
+- **multi-port / mixed tag+untag / shares a VLAN** → one `br-lan` + `vlan_filtering`
+  + a `bridge-vlan` per VLAN carrying the ports' `:u*`/`:t`, `local '0'` for transit.
+
+Hardware aligns for free: DSA switch ports land in the filtered bridge (offloaded);
+a lone uplink stays a sub-interface. Each *routed* VLAN's L3 binds (on Networks) to
+its derived carrier (`br-lan.10` / `eth0.100` / bare port).
+
+### `Project(Config) → (plan, leftovers)` — the inverse
+- `config device 8021q` (`eth0.10`) → port `eth0` **tagged** in 10.
+- `bridge-vlan` ports → per-port `:u*`/`:t`/`:u` membership.
+- plain bridge members → **untagged in Native**; bare port w/ interface → Native, own domain.
+- **leftovers** (macvlan, QinQ/stacked, bond-VLANs, non-canonical) → preserved
+  **verbatim**, surfaced in Advanced. Projection is *total* even when not pretty.
+
+### The law
+`Materialize(Project(c)) == c` for every config wash itself emits; external shapes
+round-trip through *leftovers*, untouched. Lives in Go (`internal/washnet/fabric`)
+as the authoritative lens — a pure property test (zero VMs), with `harbor.config`
+(secrets — never echo) as the acceptance golden. The FE mirrors it or calls netd.
+
+### The UI it drives
+One box-wide table on Interfaces: rows = physical ports, columns = **Native** +
+numbered VLANs, `· / U* / T` cells, routed/transit per column, `+ VLAN` adds a
+column. **The per-bridge SwitchMatrix (§4b), the classic "+VLAN on a trunk"
+carrier, and the standalone Bridge editor all collapse into this one table.**
+
+### Delivery (supersedes the per-bridge matrix)
+1. **Go lens** (`Project`/`Materialize`) + round-trip property test + `harbor.config`
+   golden — no UI change; prove round-trip first.
+2. **Swap the UI** to the box-wide table; retire the duplicate VLAN/bridge entries.
+3. Polish (Native-tagged-on-trunk edge, bond handling).
+
 ## 5. Requirement → model → UI map
 
 | Requirement | Model kinds | UI surface | Status |

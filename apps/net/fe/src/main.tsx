@@ -23,6 +23,7 @@ import {
   type CarrierRow, type Segment, type SegForm,
 } from "./segment-model.ts";
 import { matrixZones, cellState, toggleForward, setInput, type MZone, type CellState } from "./matrix-model.ts";
+import { bridgeVlans, bridgePorts, isVlanAware, cellState as l2Cell, cycleCell as l2Cycle, addVlan as l2AddVlan, removeVlan as l2RemoveVlan, isTransit as l2IsTransit, setTransit as l2SetTransit } from "./l2-matrix-model.ts";
 import { projectHosts, upsertHost, removeHost, type HostEntry } from "./hosts-model.ts";
 import type { Descriptor, ObjectDescriptor, Diagnostic } from "./objectform-model.ts";
 import descriptorJson from "./generated/descriptor.json";
@@ -930,6 +931,10 @@ export function NetApp(props: WashAppProps) {
               )}
             </For>
           </div>
+          {/* L2 port/VLAN matrix per bridge (NET-ROUTER-UI.md §4b). */}
+          <For each={(draft().Devices ?? []).filter((d: any) => d.Type === "bridge")}>
+            {(d: any) => <SwitchMatrix cfg={draft()} bridge={d.Name} busy={busy()} onChange={(c) => setDraft(c)} />}
+          </For>
         </Show>
 
         <Show when={!routerCaps()}>
@@ -1397,6 +1402,69 @@ function FirewallMatrix(props: {
   );
 }
 
+// SwitchMatrix is the L2 port×VLAN grid for one VLAN-aware bridge (NET-ROUTER-UI
+// §4b): rows = the bridge's member ports, columns = its VLANs, each cell cycles
+// · → U* (untagged + PVID, an access port) → T (tagged, a trunk). Edits write
+// `config bridge-vlan` via the pure l2-matrix kernel. A plain bridge offers
+// "Enable VLANs" first (turns vlan_filtering on + seeds VLAN 1).
+function SwitchMatrix(props: { cfg: Config; bridge: string; busy: boolean; onChange: (c: Config) => void }) {
+  const [newVid, setNewVid] = createSignal<number>(10);
+  const ports = () => bridgePorts(props.cfg, props.bridge);
+  const vlans = () => bridgeVlans(props.cfg, props.bridge);
+  const aware = () => isVlanAware(props.cfg, props.bridge);
+  const glyph = (s: { state: string; pvid: boolean }) => (s.state === "none" ? "·" : s.state === "tagged" ? "T" : s.pvid ? "U*" : "U");
+  return (
+    <section class="wash-net-l2" data-testid={`l2-${props.bridge}`}>
+      <div class="wash-net-l2-head">
+        <h2 class="wash-net-seg-h">{props.bridge} — port VLANs</h2>
+        <Show when={aware()} fallback={
+          <button class="wash-net-btn ghost" data-testid={`l2-enable-${props.bridge}`} disabled={props.busy}
+            title="Make this bridge VLAN-aware" onClick={() => props.onChange(l2AddVlan(props.cfg, props.bridge, 1) as Config)}><Icon name="git-branch" /> Enable VLANs</button>
+        }>
+          <div class="wash-net-l2-addv">
+            <input type="number" min="1" max="4094" data-testid={`l2-newvid-${props.bridge}`} value={newVid()}
+              onInput={(e) => setNewVid(parseInt(e.currentTarget.value || "0", 10))} />
+            <button class="wash-net-btn ghost" data-testid={`l2-addvlan-${props.bridge}`}
+              disabled={props.busy || newVid() < 1 || newVid() > 4094 || vlans().includes(newVid())}
+              onClick={() => props.onChange(l2AddVlan(props.cfg, props.bridge, newVid()) as Config)}><Icon name="plus" /> VLAN</button>
+          </div>
+        </Show>
+      </div>
+      <Show when={aware() && vlans().length > 0}>
+        <div class="wash-net-grid wash-net-l2-grid" style={{ "grid-template-columns": `minmax(64px,auto) repeat(${vlans().length}, minmax(46px,1fr))` }}>
+          <div class="wash-net-grid-corner">port \ vlan</div>
+          <For each={vlans()}>
+            {(v) => (
+              <div class="wash-net-grid-h" classList={{ "wash-net-l2-transit": l2IsTransit(props.cfg, props.bridge, v) }}>
+                <span>V{v}<button class="wash-net-l2-vdel" data-testid={`l2-delvlan-${props.bridge}-${v}`} title={`Remove VLAN ${v}`} disabled={props.busy} onClick={() => props.onChange(l2RemoveVlan(props.cfg, props.bridge, v) as Config)}>×</button></span>
+                <button class="wash-net-l2-vmode" data-transit={l2IsTransit(props.cfg, props.bridge, v)} data-testid={`l2-mode-${props.bridge}-${v}`} disabled={props.busy}
+                  title={l2IsTransit(props.cfg, props.bridge, v) ? `Transit — switched only, no ${props.bridge}.${v} adapter here. Click to route.` : `Routed — terminates at ${props.bridge}.${v} (bindable on Networks). Click for switch-only.`}
+                  onClick={() => props.onChange(l2SetTransit(props.cfg, props.bridge, v, !l2IsTransit(props.cfg, props.bridge, v)) as Config)}>{l2IsTransit(props.cfg, props.bridge, v) ? "transit" : "routed"}</button>
+              </div>
+            )}
+          </For>
+          <For each={ports()} fallback={<div class="wash-net-empty" style={{ "grid-column": "1 / -1" }}>No ports on this bridge — add some via the Bridge editor.</div>}>
+            {(p) => (
+              <>
+                <div class="wash-net-grid-rh">{p}</div>
+                <For each={vlans()}>
+                  {(v) => (
+                    <button class="wash-net-cell wash-net-l2-cell" data-testid={`l2-cell-${props.bridge}-${p}-${v}`}
+                      data-state={l2Cell(props.cfg, props.bridge, p, v).state} disabled={props.busy}
+                      title={`${p} in VLAN ${v} — click: untagged → tagged → none`}
+                      onClick={() => props.onChange(l2Cycle(props.cfg, props.bridge, p, v) as Config)}>{glyph(l2Cell(props.cfg, props.bridge, p, v))}</button>
+                  )}
+                </For>
+              </>
+            )}
+          </For>
+        </div>
+        <div class="wash-net-l2-legend"><b>U*</b> untagged + PVID (access) · <b>T</b> tagged (trunk) · <b>·</b> not a member · <b>routed</b> terminates at <code>{props.bridge}.&lt;id&gt;</code> (bindable on Networks) · <b>transit</b> switched only, no adapter</div>
+      </Show>
+    </section>
+  );
+}
+
 // WireGuardWizard builds a WG tunnel: the local endpoint (name + private key +
 // optional listen port + tunnel addresses) and a list of peers. The private key
 // seeds generated; only the PRIVATE key is needed here (the backend derives our
@@ -1590,6 +1658,23 @@ const STYLE = `
 .wash-net-cell[data-state="self"] { background:transparent; border-color:transparent; color:#444; cursor:default; }
 .wash-net-cell[data-input="ACCEPT"] { color:#5fd75f; }
 .wash-net-cell[data-input="REJECT"] { color:#d07070; }
+.wash-net-l2 { margin:12px 0 16px; }
+.wash-net-l2-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.wash-net-l2-addv { display:flex; gap:4px; align-items:center; }
+.wash-net-l2-addv input { width:5em; background:#16161f; border:1px solid #33415a; border-radius:5px; color:#cfd0d4; padding:3px 6px; font-size:12px; }
+.wash-net-l2-grid { margin-top:6px; }
+.wash-net-l2-grid .wash-net-grid-h { display:flex; flex-direction:column; align-items:center; gap:3px; }
+.wash-net-l2-transit { opacity:.65; }
+.wash-net-l2-vmode { font-size:8px; text-transform:uppercase; letter-spacing:.04em; border:1px solid #2e5a38; background:#16301c; color:#5fd75f; border-radius:8px; padding:0 5px; cursor:pointer; line-height:1.5; }
+.wash-net-l2-vmode[data-transit="true"] { border-color:#5a4a20; background:#2a2410; color:#d0a040; }
+.wash-net-l2-vmode:disabled { opacity:.6; cursor:default; }
+.wash-net-l2-cell[data-state="none"] { background:#16161f; color:#555; border-color:#2a2a3a; }
+.wash-net-l2-cell[data-state="untagged"] { background:#16301c; color:#5fd75f; border-color:#2e5a38; font-weight:600; }
+.wash-net-l2-cell[data-state="tagged"] { background:#241a36; color:#b48ae8; border-color:#6a4aa0; font-weight:600; }
+.wash-net-l2-vdel { background:none; border:none; color:#777; cursor:pointer; margin-left:5px; font-size:13px; line-height:1; }
+.wash-net-l2-vdel:hover { color:#e06060; }
+.wash-net-l2-legend { font-size:10px; opacity:.6; margin-top:6px; }
+.wash-net-l2-legend code { font-family:ui-monospace,Menlo,monospace; }
 .wash-net-adv-toggle { cursor:pointer; user-select:none; }
 .wash-net-adv-kind { margin:6px 0 10px; }
 .wash-net-adv-h { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:600; color:#8fb0e0; margin-bottom:4px; }

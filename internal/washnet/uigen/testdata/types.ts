@@ -61,6 +61,14 @@ export interface Device {
   Ifname?: string;
   VID?: number;
   MTU?: number;
+  VLANFiltering?: boolean;
+}
+
+export interface BridgeVLAN {
+  Device?: string;
+  VLAN?: number;
+  Ports?: string[];
+  Local?: string;
 }
 
 export interface Route {
@@ -214,6 +222,7 @@ export interface Config {
   Globals?: Globals[];
   Interfaces?: Interface[];
   Devices?: Device[];
+  BridgeVLANs?: BridgeVLAN[];
   Routes?: Route[];
   PolicyRules?: PolicyRule[];
   WGPeers?: WGPeer[];
