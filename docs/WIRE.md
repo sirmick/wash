@@ -278,6 +278,12 @@ Carries window/lifecycle control and the FE half of app messages.
 - `{"t":"panel.read.ok","req_id":…,"channel_id":N,"size":…}` — an app's
   settings-panel bundle will stream on `channel_id` (`kind:"bundle"`).
 - `{"t":"panel.read.err","req_id":…,"code":"…","msg":"…"}`
+- `{"t":"clipboard.data","req_id":…,"mime":"…","text":"…"}` — reply to
+  a shell `clipboard.get`.
+- `{"t":"clipboard.changed","mime":"…","text":"…"}` — broadcast to
+  every shell except the setter on any clipboard change (app- or
+  shell-originated). Unlike the §9 notice this carries the content,
+  so FE consumers (sidebar widget) need no follow-up get.
 - the `catalog` message carries a `panels` list (one
   `{app_id, section, element, icon?, order?}` per app declaring
   `settings_panel`) alongside `apps`.
@@ -308,6 +314,12 @@ Carries window/lifecycle control and the FE half of app messages.
   (docs/QOS.md §5).
 - `{"t":"log","level":"…","source":"…","msg":"…","stack":"…"?}` — FE
   log lines mirrored to the BE for visibility.
+- `{"t":"clipboard.set","mime":"…","text":"…"}` — write the router-held
+  clipboard on behalf of an app FE (window.wash.clipboardSetText).
+  Text-only on this surface: channel 0 is JSON, where the §9 `data`
+  bytes field would force base64.
+- `{"t":"clipboard.get","req_id":…}` — read it; router replies with
+  `clipboard.data` carrying the same `req_id`.
 
 ## 9. App event channel (channel 1, JSON)
 

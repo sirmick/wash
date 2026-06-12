@@ -23,6 +23,7 @@ import { BulkConflictOverlay, type BulkConflict } from './sidebar/BulkConflictOv
 import { PrivWidget, type PrivReq } from './sidebar/PrivWidget';
 import { NetWidget, type NetState, type NetIface } from './sidebar/NetWidget';
 import { AudioWidget, type AudioState } from './sidebar/AudioWidget';
+import { ClipboardWidget } from './sidebar/ClipboardWidget';
 import { PrivUnlockOverlay, type PrivUnlockState } from './sidebar/PrivUnlockOverlay';
 
 interface CatalogApp {
@@ -207,6 +208,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     priv: 'collapsed',
     net: 'collapsed',
     audio: 'collapsed',
+    clipboard: 'collapsed',
   });
   // Host stats (CPU% / mem%) — pushed by the session BE every 5s as
   // a `host.stats` app_msg. Null until the first tick lands.
@@ -883,6 +885,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               window.wash.sendAppMsg(props.instance, { kind: 'audio_set_master_volume', value })
             }
           />
+        </Section>
+        <Section
+          id="clipboard"
+          title="Clipboard"
+          icon="clipboard"
+          iconColor={tokens.accentCyan}
+          state={sectionStates().clipboard ?? 'collapsed'}
+          onToggle={() => toggleSection('clipboard')}
+        >
+          <ClipboardWidget />
         </Section>
       </Sidebar>
       <BulkConflictOverlay

@@ -14,6 +14,7 @@ import { onCleanup, onMount } from 'solid-js';
 import type { Component } from 'solid-js';
 
 import { tokens } from './tokens';
+import { washCopyText, washPasteText } from './clipboard';
 
 export interface TerminalAPI {
   focus: () => void;
@@ -90,6 +91,14 @@ export const Terminal: Component<TerminalProps> = (props) => {
     try { fit.fit(); } catch { /* fit itself rejected; next tick will retry */ }
   };
 
+  // pasteWash inserts the wash clipboard at the cursor through
+  // xterm's paste path (bracketed-paste aware, CR-normalized).
+  const pasteWash = () => {
+    void washPasteText().then((text) => {
+      if (text && term) term.paste(text);
+    });
+  };
+
   onMount(() => {
     term = new XTerm({
       fontFamily: props.fontFamily ?? tokens.fontMono,
@@ -98,7 +107,28 @@ export const Terminal: Component<TerminalProps> = (props) => {
       cursorBlink: true,
       allowProposedApi: true,
     });
-    if (props.customKeyHandler) term.attachCustomKeyEventHandler(props.customKeyHandler);
+    // Clipboard keys are component-level so every terminal in wash
+    // behaves the same; the consumer's customKeyHandler runs after.
+    // Ctrl+Shift+C copies the selection (plain Ctrl+C must stay
+    // SIGINT); Ctrl+Shift+V pastes the wash clipboard (plain Ctrl+V
+    // stays the browser's native system-clipboard paste, which xterm
+    // receives as a paste event).
+    term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
+      if (ev.type === 'keydown' && ev.ctrlKey && ev.shiftKey) {
+        if (ev.key === 'C' || ev.key === 'c') {
+          const sel = term?.getSelection();
+          if (sel) {
+            washCopyText(sel);
+            return false;
+          }
+        }
+        if (ev.key === 'V' || ev.key === 'v') {
+          pasteWash();
+          return false;
+        }
+      }
+      return props.customKeyHandler ? props.customKeyHandler(ev) : true;
+    });
     fit = new FitAddon();
     term.loadAddon(fit);
     term.open(hostEl);
@@ -109,6 +139,33 @@ export const Terminal: Component<TerminalProps> = (props) => {
       } else {
         props.onInput?.(bytes);
       }
+    });
+
+    // PuTTY-style mouse clipboard. Select = copy: xterm keeps its own
+    // selection model (not a DOM selection), so on selection-end we
+    // push the selected text into the wash clipboard + mirror it to
+    // the system clipboard while the mouseup gesture is live.
+    // Right-click = paste, native context menu suppressed — the menu
+    // offered nothing usable here anyway (its Paste needs a system
+    // clipboard read the insecure context forbids).
+    const onMouseUp = () => {
+      const sel = term?.getSelection();
+      if (sel) washCopyText(sel);
+    };
+    const onContextMenu = (ev: MouseEvent) => {
+      ev.preventDefault();
+      // Consumers (edit's text area, future panes) hang their own
+      // contextmenu handlers on ancestors — the terminal's paste
+      // gesture must not also open those menus.
+      ev.stopPropagation();
+      term?.focus();
+      pasteWash();
+    };
+    hostEl.addEventListener('mouseup', onMouseUp);
+    hostEl.addEventListener('contextmenu', onContextMenu);
+    onCleanup(() => {
+      hostEl.removeEventListener('mouseup', onMouseUp);
+      hostEl.removeEventListener('contextmenu', onContextMenu);
     });
 
     // Test hook: expose the live Terminal on the host element so
