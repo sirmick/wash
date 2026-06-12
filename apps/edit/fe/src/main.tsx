@@ -14,7 +14,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { FilePicker, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens } from '@wash/ui';
+import { ConfirmDialog, FilePicker, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens } from '@wash/ui';
 import type { TerminalAPI } from '@wash/ui';
 import {
   joinPath, baseName, parentPath,
@@ -256,6 +256,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     | { mode: 'open' }
     | { mode: 'save'; tabID: string; suggestedName: string }
   >(null);
+  // reloadPrompt drives the "changed on disk" modal. Non-null while a
+  // tab with unsaved edits has had its file modified externally; the
+  // user chooses Reload (discard edits, load disk content) or Keep.
+  // Clean tabs reload silently and never reach this signal.
+  const [reloadPrompt, setReloadPrompt] = createSignal<
+    | null
+    | { tabID: string; displayName: string; diskContent: string }
+  >(null);
 
   // Terminal pane state. termTabs is ordered; activeTermID points
   // at one of them (or '' when no terminals). termOpen toggles the
@@ -386,6 +394,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     };
     setTabs([...tabs(), tab]);
     setActiveID(tab.id);
+    // Watch the file's directory so an external edit (another editor,
+    // a build step, git) surfaces as a reload prompt. fileWatch dedups
+    // per dir and is independent of the sidebar's fsWatch, whose subs
+    // get torn down on tree-collapse.
+    fileWatch.watch(parentPath(path));
   };
 
   // openDiffTab reads `otherPath` from disk and creates a tab that
@@ -459,6 +472,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     if (idx < 0) return;
     const next = cur.slice(0, idx).concat(cur.slice(idx + 1));
     setTabs(next);
+    // Release the parent-dir watch if no surviving tab still lives in
+    // that directory. Refcounted BE-side, so this is safe even when
+    // the sidebar also watches the same dir.
+    const closedPath = cur[idx].path;
+    if (closedPath) {
+      const dir = parentPath(closedPath);
+      if (!next.some((t) => t.path && parentPath(t.path) === dir)) {
+        fileWatch.unwatch(dir);
+      }
+    }
+    // If this tab had a pending reload prompt, drop it.
+    if (reloadPrompt()?.tabID === id) setReloadPrompt(null);
     // Destroy the TipTap editor for this tab if one was created.
     // The ref callback won't fire again on the gone-from-DOM mount,
     // so we'd otherwise leak the editor + its event listeners.
@@ -562,6 +587,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         : x);
     setTabs(updated);
     setActiveID(newPath);
+    // Watch the destination dir so the freshly-saved tab tracks
+    // external edits just like an opened file.
+    fileWatch.watch(parentPath(newPath));
     setDirtyIDs((s) => {
       if (!s.has(src.id)) return s;
       const out = new Set(s);
@@ -920,6 +948,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       if (!evPath) return;
       fsWatch.scheduleRefresh(parentPath(evPath));
       fsWatch.scheduleRefresh(evPath);
+      // If the changed path is an open file, reconcile its buffer
+      // against the new disk content (silent reload when clean, prompt
+      // when there are unsaved edits).
+      void maybeReloadFromDisk(evPath);
       return;
     }
     // Terminal lifecycle messages: term.opened pairs the
@@ -1161,6 +1193,21 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     unwatchKind: 'fs.unwatch',
   });
 
+  // fileWatch tracks the parent directories of open file tabs, kept
+  // separate from the sidebar's fsWatch so tree-collapse (which
+  // unwatches whole subtrees) can't strand an open file's watch. It
+  // only uses the watch/unwatch dedup — refreshes are handled per-file
+  // by maybeReloadFromDisk, so shouldRefresh is a no-op. The BE refMap
+  // refcounts per path, so a dir watched by both instances stays alive
+  // until both release it and still delivers one event per change.
+  const fileWatch = createWatch({
+    send,
+    refresh: () => {},
+    shouldRefresh: () => false,
+    watchKind: 'fs.watch',
+    unwatchKind: 'fs.unwatch',
+  });
+
   const toggleExpand = (path: string) => {
     if (expanded[path]) {
       // Collapsing — also collapse + unwatch the whole subtree
@@ -1326,6 +1373,91 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       if (dirty) out.add(id); else out.delete(id);
       return out;
     });
+  };
+
+  // maybeReloadFromDisk reconciles an open file tab against a fresh
+  // read after fileWatch reported its directory changed. Self-saves
+  // and chmod/touch noise fall out for free: we only act when the disk
+  // content actually differs from the tab's baseline (last-known
+  // on-disk bytes). Clean tabs reload silently; dirty tabs raise the
+  // reload prompt so the user's unsaved edits aren't clobbered.
+  const maybeReloadFromDisk = async (path: string) => {
+    if (!path) return;
+    const tab = tabs().find((t) => t.path === path);
+    // Diff and binary tabs aren't live-editable buffers; leave them.
+    if (!tab || tab.diff || tab.binary) return;
+    // Already prompting for this tab — the write+chmod burst that one
+    // save fires would otherwise re-read and re-arm repeatedly.
+    if (reloadPrompt()?.tabID === tab.id) return;
+    const reply = await sendWithReply({ kind: 'read', path });
+    // File vanished or went unreadable (deleted, perms, became a dir):
+    // keep the buffer so the user can still save it back out.
+    if (reply.kind !== 'read_ok' || reply.binary) return;
+    const disk = String(reply.content ?? '');
+    // Re-find: the tab may have closed during the async read.
+    const cur = tabs().find((t) => t.id === tab.id);
+    if (!cur || cur.path !== path) return;
+    if (disk === cur.baseline) return; // no material change (incl. our own save)
+    if (dirtyIDs().has(cur.id)) {
+      setReloadPrompt({ tabID: cur.id, displayName: cur.displayName, diskContent: disk });
+    } else {
+      applyReload(cur.id, disk);
+    }
+  };
+
+  // applyReload swaps a tab's content to the freshly-read disk version
+  // and clears its dirty marker. Mirrors the wysiwyg<->source toggle
+  // path: drive the live editor directly for the active CM tab, drop
+  // the captured state for the rest so they re-seed from the new
+  // baseline on next activation.
+  const applyReload = (tabID: string, disk: string) => {
+    const t = tabs().find((x) => x.id === tabID);
+    if (!t) return;
+    if (t.mode === 'wysiwyg') {
+      setTabs(tabs().map((x) => x.id === tabID
+        ? { ...x, baseline: disk, wysCache: disk, state: null } : x));
+      const h = wysHandles.get(tabID);
+      if (h) { h.setMarkdown(disk); h.markClean(); }
+    } else {
+      setTabs(tabs().map((x) => x.id === tabID
+        ? { ...x, baseline: disk, state: null, scrollTop: 0 } : x));
+      if (tabID === activeID() && editorView) {
+        editorView.setState(EditorState.create({
+          doc: disk,
+          extensions: extensionsForTab({ ...t, baseline: disk }),
+        }));
+        editorView.dispatch({ effects: langCompartment.reconfigure(langExtensions()) });
+      }
+    }
+    markTabDirty(tabID, false);
+    persist();
+  };
+
+  // confirmReload — user chose Reload: discard their edits and load the
+  // disk version captured when the prompt was raised.
+  const confirmReload = () => {
+    const p = reloadPrompt();
+    setReloadPrompt(null);
+    if (p) applyReload(p.tabID, p.diskContent);
+  };
+
+  // dismissReload — user chose Keep editing: hold their buffer but
+  // adopt the disk version as the new baseline so (a) we don't re-prompt
+  // for the same change and (b) the "modified" indicator now reflects
+  // divergence from what's actually on disk. For an active CM tab we
+  // capture the live editor state first, so the tabs() update doesn't
+  // let the active-tab effect re-seed from baseline and lose the edits.
+  const dismissReload = () => {
+    const p = reloadPrompt();
+    setReloadPrompt(null);
+    if (!p) return;
+    const isActive = activeID() === p.tabID;
+    const liveState = isActive && editorView ? editorView.state : undefined;
+    setTabs(tabs().map((x) => x.id === p.tabID
+      ? { ...x, baseline: p.diskContent, ...(liveState ? { state: liveState } : {}) }
+      : x));
+    const t = tabs().find((x) => x.id === p.tabID);
+    if (t) markTabDirty(p.tabID, tabContent(t) !== p.diskContent);
   };
 
   // mountWysiwyg creates the TipTap handle for `tabID` against the
@@ -1829,6 +1961,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       // refresh timers. Idempotent BE-side.
       fsWatch.unwatchWhere(() => true);
       fsWatch.dispose();
+      fileWatch.unwatchWhere(() => true);
+      fileWatch.dispose();
       // <Terminal> components handle their own xterm disposal +
       // raw-channel unsubscribe via onCleanup; just drop the API
       // map so we're not holding references after teardown.
@@ -2379,6 +2513,28 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         onCancel={() => setPicker(null)}
         data-testid="edit-picker"
       />
+
+      {/* Changed-on-disk prompt — only raised for tabs with unsaved
+          edits; clean tabs reload silently. */}
+      <Show when={reloadPrompt()}>
+        <ConfirmDialog
+          title="File changed on disk"
+          confirmLabel="Reload"
+          cancelLabel="Keep editing"
+          danger
+          onConfirm={confirmReload}
+          onCancel={dismissReload}
+          data-testid="edit-reload-dialog"
+          confirmTestid="edit-reload-confirm"
+          cancelTestid="edit-reload-keep"
+        >
+          <div style={{ color: tokens.fgDim, 'max-width': '380px', 'line-height': '1.4' }}>
+            <strong style={{ color: tokens.fg }}>{reloadPrompt()!.displayName}</strong>{' '}
+            was modified outside the editor. Reloading discards your unsaved
+            changes; keep editing to preserve them.
+          </div>
+        </ConfirmDialog>
+      </Show>
 
       {/* right-click context menu — fires on row right-click. */}
       <Show when={ctxMenu()}>
