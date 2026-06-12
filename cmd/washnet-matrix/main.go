@@ -124,37 +124,18 @@ func matrixTargets() [][2]string {
 }
 
 func applyRouter(ctx context.Context, w *vm.OpenWRT) {
-	var b strings.Builder
-	// Clear the STOCK firewall zones/forwardings first — OpenWRT ships lan+wan
-	// zones, so re-adding our own would duplicate the names and fw4 would refuse
-	// to load (→ kernel default-drop). These are shell loops, before the uci batch.
-	b.WriteString("while uci -q delete firewall.@zone[0]; do :; done\n")
-	b.WriteString("while uci -q delete firewall.@forwarding[0]; do :; done\n")
-	b.WriteString("uci batch <<'UCI'\n")
-	b.WriteString("delete network.@device[0]\ndelete network.lan\ndelete network.wan\ndelete network.wan6\n")
-	b.WriteString("set network.wan=interface\nset network.wan.device='eth0'\nset network.wan.proto='dhcp'\n")
-	b.WriteString("set network.brlan=device\nset network.brlan.name='br-lan'\nset network.brlan.type='bridge'\nset network.brlan.vlan_filtering='1'\n")
-	for i := range segs {
-		fmt.Fprintf(&b, "add_list network.brlan.ports='eth%d'\n", i+1)
-	}
-	for i, s := range segs {
-		fmt.Fprintf(&b, "set network.v%d=bridge-vlan\nset network.v%d.device='br-lan'\nset network.v%d.vlan='%d'\nadd_list network.v%d.ports='eth%d:u*'\n", s.vid, s.vid, s.vid, s.vid, s.vid, i+1)
-		fmt.Fprintf(&b, "set network.%s=interface\nset network.%s.device='br-lan.%d'\nset network.%s.proto='static'\nset network.%s.ipaddr='%s'\nset network.%s.netmask='255.255.255.0'\n", s.name, s.name, s.vid, s.name, s.name, s.gw, s.name)
-		fmt.Fprintf(&b, "set dhcp.%s=dhcp\nset dhcp.%s.interface='%s'\nset dhcp.%s.start='100'\nset dhcp.%s.limit='150'\nset dhcp.%s.leasetime='12h'\n", s.name, s.name, s.name, s.name, s.name, s.name)
-		fmt.Fprintf(&b, "set firewall.z%s=zone\nset firewall.z%s.name='%s'\nadd_list firewall.z%s.network='%s'\nset firewall.z%s.input='ACCEPT'\nset firewall.z%s.output='ACCEPT'\nset firewall.z%s.forward='REJECT'\n", s.name, s.name, s.name, s.name, s.name, s.name, s.name, s.name)
-	}
-	b.WriteString("set firewall.zwan=zone\nset firewall.zwan.name='wan'\nadd_list firewall.zwan.network='wan'\nset firewall.zwan.input='REJECT'\nset firewall.zwan.output='ACCEPT'\nset firewall.zwan.forward='REJECT'\nset firewall.zwan.masq='1'\nset firewall.zwan.mtu_fix='1'\n")
-	fwd := [][2]string{{"lan", "wan"}, {"lan", "iot"}, {"lan", "cam"}, {"iot", "wan"}}
-	for i, f := range fwd {
-		fmt.Fprintf(&b, "set firewall.f%d=forwarding\nset firewall.f%d.src='%s'\nset firewall.f%d.dest='%s'\n", i, i, f[0], i, f[1])
-	}
+	// Write the three config files WHOLESALE (replacing OpenWRT's stock files
+	// entirely) rather than mutating — no stock-zone collisions, and the config is
+	// the same shape the wash net app emits. Then apply with ordered reloads.
+	writeFile(ctx, w, "network", routerNetwork())
+	writeFile(ctx, w, "firewall", routerFirewall())
+	writeFile(ctx, w, "dhcp", routerDHCP())
 	// network restart is ASYNC — fw4 must reload only AFTER the VLAN L3 devices
 	// exist, else the zones bind to nothing and input falls to default-drop (the
 	// known UCI-applier reload-ordering bug). Wait for br-lan.10, then reload fw4.
-	b.WriteString("UCI\nuci commit\n/etc/init.d/network restart >/dev/null 2>&1\n")
-	b.WriteString("for i in $(seq 1 20); do ip link show br-lan.10 >/dev/null 2>&1 && break; sleep 1; done\nsleep 2\n")
-	b.WriteString("/etc/init.d/firewall restart >/dev/null 2>&1\nsleep 3\necho APPLIED\n")
-	out, err := w.Run(ctx, b.String())
+	out, err := w.Run(ctx, "/etc/init.d/network restart >/dev/null 2>&1\n"+
+		"for i in $(seq 1 20); do ip link show br-lan.10 >/dev/null 2>&1 && break; sleep 1; done\nsleep 2\n"+
+		"/etc/init.d/firewall restart >/dev/null 2>&1\nsleep 3\necho APPLIED")
 	if err != nil || !strings.Contains(out, "APPLIED") {
 		die("router apply failed: %v\n%s", err, out)
 	}
@@ -171,6 +152,56 @@ func applyRouter(ctx context.Context, w *vm.OpenWRT) {
 	if i := strings.Index(d, "DIAG:"); i >= 0 {
 		fmt.Printf("  router: %s\n", strings.Join(strings.Fields(d[i+5:]), " "))
 	}
+}
+
+// writeFile drops a UCI config file wholesale into the guest (heredoc, quoted
+// delimiter so nothing expands), replacing OpenWRT's stock one.
+func writeFile(ctx context.Context, w *vm.OpenWRT, name, content string) {
+	out, err := w.Run(ctx, fmt.Sprintf("cat > /etc/config/%s <<'CFGEOF'\n%s\nCFGEOF\necho WROTE=%s", name, content, name))
+	if err != nil || !strings.Contains(out, "WROTE="+name) {
+		die("write /etc/config/%s: %v\n%s", name, err, out)
+	}
+}
+
+func routerNetwork() string {
+	var b strings.Builder
+	b.WriteString("config interface 'loopback'\n\toption device 'lo'\n\toption proto 'static'\n\toption ipaddr '127.0.0.1'\n\toption netmask '255.0.0.0'\n\n")
+	b.WriteString("config interface 'wan'\n\toption device 'eth0'\n\toption proto 'dhcp'\n\n")
+	b.WriteString("config device\n\toption name 'br-lan'\n\toption type 'bridge'\n\toption vlan_filtering '1'\n")
+	for i := range segs {
+		fmt.Fprintf(&b, "\tlist ports 'eth%d'\n", i+1)
+	}
+	b.WriteString("\n")
+	for i, s := range segs {
+		fmt.Fprintf(&b, "config bridge-vlan\n\toption device 'br-lan'\n\toption vlan '%d'\n\tlist ports 'eth%d:u*'\n\n", s.vid, i+1)
+	}
+	for _, s := range segs {
+		fmt.Fprintf(&b, "config interface '%s'\n\toption device 'br-lan.%d'\n\toption proto 'static'\n\toption ipaddr '%s'\n\toption netmask '255.255.255.0'\n\n", s.name, s.vid, s.gw)
+	}
+	return b.String()
+}
+
+func routerFirewall() string {
+	var b strings.Builder
+	b.WriteString("config defaults\n\toption syn_flood '1'\n\toption input 'REJECT'\n\toption output 'ACCEPT'\n\toption forward 'REJECT'\n\n")
+	for _, s := range segs {
+		fmt.Fprintf(&b, "config zone\n\toption name '%s'\n\tlist network '%s'\n\toption input 'ACCEPT'\n\toption output 'ACCEPT'\n\toption forward 'REJECT'\n\n", s.name, s.name)
+	}
+	b.WriteString("config zone\n\toption name 'wan'\n\tlist network 'wan'\n\toption input 'REJECT'\n\toption output 'ACCEPT'\n\toption forward 'REJECT'\n\toption masq '1'\n\toption mtu_fix '1'\n\n")
+	// policy: lan→wan/iot/cam, iot→wan; cam→nothing (quarantined incl. internet)
+	for _, f := range [][2]string{{"lan", "wan"}, {"lan", "iot"}, {"lan", "cam"}, {"iot", "wan"}} {
+		fmt.Fprintf(&b, "config forwarding\n\toption src '%s'\n\toption dest '%s'\n\n", f[0], f[1])
+	}
+	return b.String()
+}
+
+func routerDHCP() string {
+	var b strings.Builder
+	b.WriteString("config dnsmasq\n\toption domainneeded '1'\n\toption localise_queries '1'\n\toption rebind_protection '1'\n\toption local '/lan/'\n\toption domain 'lan'\n\toption expandhosts '1'\n\toption authoritative '1'\n\toption leasefile '/tmp/dhcp.leases'\n\n")
+	for _, s := range segs {
+		fmt.Fprintf(&b, "config dhcp '%s'\n\toption interface '%s'\n\toption start '100'\n\toption limit '150'\n\toption leasetime '12h'\n\n", s.name, s.name)
+	}
+	return b.String()
 }
 
 func probeUp(ctx context.Context, w *vm.OpenWRT, s seg) string {
@@ -191,6 +222,15 @@ echo "LEASE=%s end"
 `, ip, s.gw, ip)
 	if _, err := w.Run(ctx, script); err != nil {
 		die("probe %s up: %v", s.name, err)
+	}
+	// Wait until the gateway answers (the point-to-point link + router firewall
+	// have settled) — kills the run-to-run flakiness of pinging too early.
+	for i := 0; i < 15; i++ {
+		o, _ := w.Run(ctx, fmt.Sprintf("ping -c1 -W1 %s >/dev/null 2>&1; echo RESULT:$?", s.gw))
+		if m := resultRe.FindStringSubmatch(o); m != nil && m[1] == "0" {
+			break
+		}
+		time.Sleep(2 * time.Second)
 	}
 	probeAddr[s.name] = ip
 	return ip
