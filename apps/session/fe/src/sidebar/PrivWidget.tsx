@@ -15,7 +15,7 @@
 
 import type { Component } from 'solid-js';
 import { For, Show } from 'solid-js';
-import { washAssetUrl } from '@wash/ui';
+import { tokens, washAssetUrl } from '@wash/ui';
 
 export type PrivStatus = 'queued' | 'running' | 'done' | 'rejected' | 'error';
 export type PrivKind = 'run' | 'spawn' | 'run_inline';
@@ -118,7 +118,7 @@ const LockBar: Component<{ locked: () => boolean; onLock: () => void }> = (props
             'border-radius': '3px',
             padding: '1px 6px',
             cursor: 'pointer',
-            font: '10px ui-sans-serif,system-ui,sans-serif',
+            font: `10px ${tokens.fontSans}`,
           }}
         >
           lock now
@@ -144,7 +144,7 @@ const PrivRow: Component<{ req: PrivReq; onApprove: () => void; onReject: () => 
       style={{
         padding: '6px 8px',
         background: 'rgba(255,255,255,0.02)',
-        border: '1px solid #2a2a3a',
+        border: `1px solid ${tokens.borderMenu}`,
         'border-radius': '3px',
         display: 'flex',
         'flex-direction': 'column',
@@ -175,7 +175,7 @@ const PrivRow: Component<{ req: PrivReq; onApprove: () => void; onReject: () => 
         </span>
         <span
           style={{
-            font: '10px ui-monospace,Menlo,Consolas,monospace',
+            font: `10px ${tokens.fontMono}`,
             opacity: 0.6,
             'flex-shrink': 0,
           }}
@@ -185,7 +185,7 @@ const PrivRow: Component<{ req: PrivReq; onApprove: () => void; onReject: () => 
       </div>
       <div
         style={{
-          font: '10px ui-monospace,Menlo,Consolas,monospace',
+          font: `10px ${tokens.fontMono}`,
           opacity: 0.55,
           'word-break': 'break-all',
         }}
@@ -204,13 +204,13 @@ const PrivRow: Component<{ req: PrivReq; onApprove: () => void; onReject: () => 
             data-testid={`priv-approve-${props.req.req_id}`}
             onClick={props.onApprove}
             style={{
-              background: '#2d5a2d',
+              background: tokens.bgSuccess,
               color: '#fff',
-              border: '1px solid #3d7a3d',
+              border: `1px solid ${tokens.fgSuccess}`,
               'border-radius': '3px',
               padding: '2px 8px',
               cursor: 'pointer',
-              font: '11px ui-sans-serif,system-ui,sans-serif',
+              font: `11px ${tokens.fontSans}`,
               'font-weight': 600,
             }}
           >
@@ -223,11 +223,11 @@ const PrivRow: Component<{ req: PrivReq; onApprove: () => void; onReject: () => 
             style={{
               background: 'transparent',
               color: '#ddd',
-              border: '1px solid #3a3a4a',
+              border: `1px solid ${tokens.borderMenu}`,
               'border-radius': '3px',
               padding: '2px 8px',
               cursor: 'pointer',
-              font: '11px ui-sans-serif,system-ui,sans-serif',
+              font: `11px ${tokens.fontSans}`,
             }}
           >
             reject
@@ -238,8 +238,8 @@ const PrivRow: Component<{ req: PrivReq; onApprove: () => void; onReject: () => 
         <div
           style={{
             opacity: 0.85,
-            color: '#e0a0a0',
-            font: '10px ui-monospace,Menlo,Consolas,monospace',
+            color: tokens.fgDanger,
+            font: `10px ${tokens.fontMono}`,
           }}
         >
           exit {props.req.exit_code}

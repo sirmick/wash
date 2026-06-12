@@ -12,7 +12,7 @@
 import { For, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { Plus, X } from 'lucide-solid';
-import { Terminal, defineWashApp } from '@wash/ui';
+import { Terminal, defineWashApp, tokens } from '@wash/ui';
 import type { TerminalAPI } from '@wash/ui';
 
 interface BEMessage {
@@ -192,16 +192,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 type="button"
                 data-testid={`term-tab-${tab.channelID}`}
                 style={{
-                  background: isActive() ? '#33387a' : 'transparent',
-                  color: '#eee',
+                  background: isActive() ? tokens.bgRowSelected : 'transparent',
+                  color: tokens.fg,
                   border: 'none',
-                  'border-top': isActive() ? '2px solid #66c' : '2px solid transparent',
+                  'border-top': isActive()
+                    ? `2px solid ${tokens.accentBlue}`
+                    : '2px solid transparent',
                   // Rounded only on top — the bottom meets the bar's
                   // border-bottom flush, matching browser-tab idiom.
-                  'border-radius': '6px 6px 0 0',
+                  'border-radius': `${tokens.radiusLg}px ${tokens.radiusLg}px 0 0`,
                   padding: '0 6px 0 10px',
                   cursor: 'pointer',
-                  font: '12px ui-monospace,Menlo,Consolas,monospace',
+                  font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
                   display: 'flex',
                   'align-items': 'center',
                   gap: '8px',
@@ -298,8 +300,8 @@ function shortShellName(p: string): string {
 
 const tabBarStyle: JSX.CSSProperties = {
   height: `${TAB_BAR_HEIGHT}px`,
-  background: '#181828',
-  'border-bottom': '1px solid #2a2a3a',
+  background: tokens.bgWindow,
+  'border-bottom': `1px solid ${tokens.borderMenu}`,
   display: 'flex',
   'align-items': 'stretch',
   gap: '2px',
@@ -308,22 +310,23 @@ const tabBarStyle: JSX.CSSProperties = {
   padding: '4px 4px 0',
   'overflow-x': 'auto',
   'overflow-y': 'hidden',
-  font: '12px ui-monospace,Menlo,Consolas,monospace',
+  font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
   'flex-shrink': 0,
 };
 
 const addBtnStyle: JSX.CSSProperties = {
   background: 'transparent',
-  color: '#eee',
+  color: tokens.fg,
   border: 'none',
   padding: '0 10px',
   cursor: 'pointer',
-  font: '14px ui-monospace,Menlo,Consolas,monospace',
+  font: `14px ${tokens.fontMono}`,
   opacity: 0.8,
 };
 
 // ---- custom element ----
 
 defineWashApp('wash-app-term', (props) => <App {...props} />, {
-  style: 'display:flex;flex-direction:column;width:100%;height:100%;box-sizing:border-box;background:#000;color:#eee;overflow:hidden',
+  // background stays true black — the terminal canvas, not chrome.
+  style: `display:flex;flex-direction:column;width:100%;height:100%;box-sizing:border-box;background:#000;color:${tokens.fg};overflow:hidden`,
 });

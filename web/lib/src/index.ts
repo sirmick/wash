@@ -2,6 +2,7 @@
 
 export { tokens } from './tokens';
 export type { Tokens } from './tokens';
+export { severityColor } from './severity';
 export { Button } from './button';
 export type { ButtonProps, ButtonVariant, ButtonSize } from './button';
 export { Menu, MenuItem, MenuSeparator } from './menu';

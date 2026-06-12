@@ -7,6 +7,7 @@ export const tokens = {
   // Surfaces.
   bgWindow: '#181828',
   bgMenu: '#15152a',
+  bgInset: '#10101a', // sunken surface — inputs, log/code panes; darker than the window
   bgRow: 'transparent',
   bgRowHover: '#202037',
   bgRowSelected: '#2a2a4a',
@@ -25,6 +26,43 @@ export const tokens = {
   // Danger / destructive accents (delete, replace).
   bgDanger: '#7a1f1f',
   borderDanger: '#a02d2d',
+  fgDanger: '#fca5a5',
+
+  // Semantic status tones — bg/fg pairs for state badges and chips
+  // (service active/failed, package install ok/fail, vscode warn…).
+  // One vocabulary so every app's status pill reads the same.
+  bgSuccess: '#1c3d24',
+  fgSuccess: '#86efac',
+  bgWarning: '#3a3a1c',
+  fgWarning: '#fde047',
+  bgInfo: '#1c2d3d',
+  fgInfo: '#93c5fd',
+  bgNeutral: '#1f1f2a', // pairs with fgMuted for "inactive/static"
+
+  // Permission-denied banner — distinct amber-brown so it reads as
+  // "blocked, not broken" next to the red danger banner.
+  bgDenied: '#3a2a12',
+  borderDenied: '#7a5a20',
+
+  // Log/priority severities — text colors for log lines and level
+  // strips, brighter than the status tones since they sit on rows.
+  // See severityColor() for the syslog-priority → color mapping.
+  sevError: '#ff7a7a',
+  sevWarn: '#f0c050',
+  sevNotice: '#c0d8ff',
+  sevInfo: '#bbb',
+  sevDebug: '#666',
+
+  // Accent hues — soft pastels on dark, the same register as the
+  // launcher's generated accentFor() hues so hand-picked and hashed
+  // accents share one visual language. Used to tint icons/badges that
+  // want a per-widget identity (e.g. the right-sidebar section icons).
+  accentRed: '#e26060',
+  accentAmber: '#e0b25f',
+  accentGreen: '#5fbf85',
+  accentCyan: '#5fb6c8',
+  accentBlue: '#6090e0',
+  accentViolet: '#9a90e0',
 
   // Spacing.
   spaceXs: 4,

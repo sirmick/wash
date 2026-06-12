@@ -506,11 +506,11 @@ const AppCard: Component<{ app: CatalogApp }> = (props) => {
         <span>{a.instancing}</span>
         <Show when={a.disabled}>
           <span style={dotStyle}>·</span>
-          <span style={{ ...tagStyle, color: '#c8a04a' }} title={a.reason}>disabled</span>
+          <span style={{ ...tagStyle, color: tokens.fgWarning }} title={a.reason}>disabled</span>
         </Show>
         <Show when={a.root_variant}>
           <span style={dotStyle}>·</span>
-          <span style={{ ...tagStyle, color: '#d97757' }}>root variant</span>
+          <span style={{ ...tagStyle, color: tokens.accentRed }}>root variant</span>
         </Show>
       </div>
     </div>
@@ -696,7 +696,7 @@ const mutedStyle: JSX.CSSProperties = {
 };
 
 const devBadgeStyle: JSX.CSSProperties = {
-  background: '#a04040',
+  background: tokens.borderDanger,
   color: '#fff',
   padding: '0 6px',
   'border-radius': '2px',

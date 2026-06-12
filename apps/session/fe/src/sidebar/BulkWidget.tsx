@@ -8,6 +8,7 @@
 
 import type { Component } from 'solid-js';
 import { For, Show } from 'solid-js';
+import { tokens } from '@wash/ui';
 
 export interface BulkJob {
   job_id: string;
@@ -65,10 +66,10 @@ const BulkRow: Component<{ job: BulkJob; onCancel: () => void }> = (props) => {
   const isTerminal = () =>
     props.job.status === 'done' || props.job.status === 'failed' || props.job.status === 'cancelled';
   const barColor = () => {
-    if (props.job.status === 'failed') return '#a02d2d';
-    if (props.job.status === 'cancelled') return '#7a7a7a';
-    if (props.job.status === 'done') return '#3aa050';
-    return '#4a6ab0';
+    if (props.job.status === 'failed') return tokens.borderDanger;
+    if (props.job.status === 'cancelled') return tokens.fgMuted;
+    if (props.job.status === 'done') return tokens.accentGreen;
+    return tokens.accentBlue;
   };
   return (
     <div
@@ -77,7 +78,7 @@ const BulkRow: Component<{ job: BulkJob; onCancel: () => void }> = (props) => {
       style={{
         padding: '6px 8px',
         background: 'rgba(255,255,255,0.02)',
-        border: '1px solid #2a2a3a',
+        border: `1px solid ${tokens.borderMenu}`,
         'border-radius': '3px',
         display: 'flex',
         'flex-direction': 'column',
@@ -110,7 +111,7 @@ const BulkRow: Component<{ job: BulkJob; onCancel: () => void }> = (props) => {
             <span
               data-testid={`bulk-status-${props.job.job_id}`}
               style={{
-                font: '10px ui-monospace,Menlo,Consolas,monospace',
+                font: `10px ${tokens.fontMono}`,
                 opacity: 0.65,
                 'flex-shrink': 0,
               }}
@@ -126,11 +127,11 @@ const BulkRow: Component<{ job: BulkJob; onCancel: () => void }> = (props) => {
             style={{
               background: 'transparent',
               color: '#ddd',
-              border: '1px solid #3a3a4a',
+              border: `1px solid ${tokens.borderMenu}`,
               'border-radius': '3px',
               padding: '1px 6px',
               cursor: 'pointer',
-              font: '10px ui-sans-serif,system-ui,sans-serif',
+              font: `10px ${tokens.fontSans}`,
               'flex-shrink': 0,
             }}
           >
@@ -143,7 +144,7 @@ const BulkRow: Component<{ job: BulkJob; onCancel: () => void }> = (props) => {
         data-fraction={fraction().toFixed(3)}
         style={{
           height: '4px',
-          background: '#1d1d30',
+          background: tokens.bgRowHover,
           'border-radius': '2px',
           overflow: 'hidden',
         }}
@@ -161,8 +162,8 @@ const BulkRow: Component<{ job: BulkJob; onCancel: () => void }> = (props) => {
         <div
           style={{
             opacity: 0.85,
-            color: '#e0a0a0',
-            font: '10px ui-monospace,Menlo,Consolas,monospace',
+            color: tokens.fgDanger,
+            font: `10px ${tokens.fontMono}`,
             'word-break': 'break-all',
           }}
         >

@@ -134,7 +134,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       </Match>
       <Match when={phase() === 'error'}>
         <Centered>
-          <p style={{ ...bodyStyle, color: '#e06c75', 'white-space': 'pre-wrap' }}>{error()}</p>
+          <p style={{ ...bodyStyle, color: tokens.fgDanger, 'white-space': 'pre-wrap' }}>{error()}</p>
           <Button onClick={retry}>Try again</Button>
         </Centered>
       </Match>
@@ -149,6 +149,8 @@ const Centered: Component<{ children: JSX.Element }> = (props) => (
 );
 
 const Spinner: Component = () => (
+  // #007acc is the VS Code brand blue — kept literal so the spinner
+  // matches the embedded editor rather than wash's theme tokens.
   <div style={{ width: '28px', height: '28px', border: '3px solid rgba(255,255,255,0.2)', 'border-top-color': '#007acc', 'border-radius': '50%', animation: 'wash-vscode-spin 0.8s linear infinite' }} />
 );
 
@@ -166,5 +168,7 @@ style.textContent = '@keyframes wash-vscode-spin{to{transform:rotate(360deg)}}';
 document.head.appendChild(style);
 
 defineWashApp('wash-app-vscode-workbench', (props) => <App {...props} />, {
+  // #1e1e1e is the VS Code editor background — kept literal so the
+  // window chrome matches the embedded iframe, not wash's theme tokens.
   style: `display:block;width:100%;height:100%;overflow:hidden;background:#1e1e1e;color:${tokens.fg};box-sizing:border-box`,
 });

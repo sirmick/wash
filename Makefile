@@ -25,7 +25,7 @@ GOFLAGS += -cover -coverpkg=github.com/sirmick/wash/...
 endif
 
 OUT     := out
-BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net wash-music wash-audio
+BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-disks wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net wash-music wash-audio
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -118,6 +118,9 @@ SETTINGS_STAMP  := $(SETTINGS_ASSETS)/.stamp
 TOP_ASSETS      := apps/top/be/assets
 TOP_STAMP       := $(TOP_ASSETS)/.stamp
 
+DISKS_ASSETS    := apps/disks/be/assets
+DISKS_STAMP     := $(DISKS_ASSETS)/.stamp
+
 JOURNAL_ASSETS  := apps/journal/be/assets
 JOURNAL_STAMP   := $(JOURNAL_ASSETS)/.stamp
 
@@ -202,6 +205,10 @@ web-settings: web-deps
 web-top: web-deps
 	@$(PNPM) --filter @wash/app-top run build
 
+.PHONY: web-disks
+web-disks: web-deps
+	@$(PNPM) --filter @wash/app-disks run build
+
 .PHONY: web-journal
 web-journal: web-deps
 	@$(PNPM) --filter @wash/app-journal run build
@@ -280,6 +287,9 @@ $(SETTINGS_STAMP): web-settings
 
 $(TOP_STAMP): web-top
 	$(call embed_dist,apps/top/fe/dist,$(TOP_ASSETS))
+
+$(DISKS_STAMP): web-disks
+	$(call embed_dist,apps/disks/fe/dist,$(DISKS_ASSETS))
 
 $(JOURNAL_STAMP): web-journal
 	$(call embed_dist,apps/journal/fe/dist,$(JOURNAL_ASSETS))
@@ -366,6 +376,9 @@ $(OUT)/wash-settings: $(SETTINGS_STAMP) | $(OUT)
 
 $(OUT)/wash-top: $(TOP_STAMP) | $(OUT)
 	$(call go_build,$@,apps/top/be/cmd)
+
+$(OUT)/wash-disks: $(DISKS_STAMP) | $(OUT)
+	$(call go_build,$@,apps/disks/be/cmd)
 
 # wash-priv is a background service (M7): no window, no FE bundle,
 # no embedded assets. Its UI lives in the session sidebar; crypto
@@ -524,7 +537,7 @@ test-app: $(OUT)/wash-priv-fakesudo
 # "pattern all:assets: no matching files found" — local dev
 # accidentally works because the standalone wash-router build
 # rule already chains through ROUTER_STAMP.
-MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP) $(VSCODE_WB_STAMP) $(NET_STAMP) $(MUSIC_STAMP) $(VSCODE_STAMP) $(NETD_STAMP)
+MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(DISKS_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP) $(VSCODE_WB_STAMP) $(NET_STAMP) $(MUSIC_STAMP) $(VSCODE_STAMP) $(NETD_STAMP)
 
 # Adding wash_test_app to the tags pulls the test app's blank-import
 # in (which is otherwise excluded by cmd/wash/imports_test.go's
@@ -599,6 +612,15 @@ vm-image-fedora: $(OUT)/wash
 .PHONY: vm-net-test
 vm-net-test: $(OUT)/wash
 	go test ./wash-vm/vm/ -run 'Ubuntu|Debian|Fedora' -v
+
+# vm-disks-test: the wash-disks Tier-4 real-kernel gate (docs/STORAGE.md) — boot
+# the Alpine image with virtio scratch disks, build real md/LVM/btrfs, and assert
+# wash-disks' providers parse them via --dump-snapshot. Needs the storage image
+# (vm-image bakes the tooling). Set WASH_VM_ZFS=1 (and rebuild vm-image with it)
+# to also exercise ZFS. Skips cleanly without kvm/qemu/image.
+.PHONY: vm-disks-test
+vm-disks-test: $(OUT)/wash
+	go test ./wash-vm/vm/ -run TestDisksRealKernel -v -count=1
 
 # vm-chrome: the minimal host chrome the proxy serves (docs/NET.md §8.3) —
 # tabs for Console + Wash. The wash UI (shell.js + app bundles) comes over the

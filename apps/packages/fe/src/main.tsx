@@ -653,9 +653,9 @@ const installedBadgeStyle: JSX.CSSProperties = {
 // package neutral row chrome.
 const kindBadgeStyle: JSX.CSSProperties = {
   'font-size': tokens.fontSizeSm,
-  color: '#9ec7ff',
-  background: 'rgba(88, 166, 255, 0.16)',
-  border: '1px solid rgba(88, 166, 255, 0.4)',
+  color: tokens.fgInfo,
+  background: tokens.bgInfo,
+  border: `1px solid ${tokens.borderFocus}`,
   padding: '0 6px',
   'border-radius': `${tokens.radiusSm}px`,
   'font-weight': 'normal',
@@ -673,11 +673,11 @@ const rowSummaryStyle: JSX.CSSProperties = {
 // Success/failure accent colors. Pulled out as constants so the
 // header tint and the status icon agree. Greens picked to match the
 // tokens palette — a dim background tint plus a brighter glyph.
-const successColor = '#3fb950';
-const successBg = 'rgba(63, 185, 80, 0.12)';
-const successBorder = 'rgba(63, 185, 80, 0.5)';
-const failureBg = 'rgba(248, 81, 73, 0.14)';
-const failureBorder = 'rgba(248, 81, 73, 0.55)';
+const successColor = tokens.fgSuccess;
+const successBg = tokens.bgSuccess;
+const successBorder = tokens.fgSuccess;
+const failureBg = tokens.bgDanger;
+const failureBorder = tokens.fgDanger;
 
 const termPaneStyle: JSX.CSSProperties = {
   display: 'flex',
@@ -733,5 +733,5 @@ defineWashApp('wash-app-packages', (props) => <App {...props} />, {
   // Menus themselves portal to document.body with position:fixed,
   // so they don't depend on the host being a containing block.
   style:
-    'display:flex;flex-direction:column;width:100%;height:100%;box-sizing:border-box;background:#181828;color:#eee;overflow:hidden;position:relative',
+    `display:flex;flex-direction:column;width:100%;height:100%;box-sizing:border-box;background:${tokens.bgWindow};color:${tokens.fg};overflow:hidden;position:relative`,
 });

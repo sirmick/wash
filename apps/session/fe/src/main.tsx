@@ -305,7 +305,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // privAccent — red trust tint used on the priv section header,
   // matching the (now-removed) priv window's titlebar stripe and the
   // ROOT-flagged window treatment in window.tsx.
-  const PRIV_ACCENT = '#e26060';
+  const PRIV_ACCENT = tokens.accentRed;
   // netBadge — flag when netd wants attention: "!" while a change awaits
   // confirmation (the lock-out window), the status verb on a terminal
   // outcome, empty when idle/committed.
@@ -315,7 +315,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     if (s === 'failed' || s === 'reverted') return s;
     return '';
   };
-  const NET_ACCENT = '#6090e0';
+  const NET_ACCENT = tokens.accentBlue;
   // audioBadge — show a play glyph while something is actively playing,
   // empty otherwise. Mirrors the other section badges' "needs attention"
   // semantics (here: "sound is on").
@@ -323,7 +323,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const playing = (audioState()?.sources ?? []).some((s) => s.status === 'playing');
     return playing ? '♪' : '';
   };
-  const AUDIO_ACCENT = '#30c060';
+  const AUDIO_ACCENT = tokens.accentGreen;
   let screenshotTimer = 0;
   let currentObjectURL: string | null = null;
 
@@ -777,6 +777,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           id="viewport"
           title="Viewport"
           icon="layout-grid"
+          iconColor={tokens.accentCyan}
           state={sectionStates().viewport ?? 'expanded'}
           onToggle={() => toggleSection('viewport')}
         >
@@ -788,6 +789,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           id="about"
           title="About"
           icon="info"
+          iconColor={tokens.accentViolet}
           state={sectionStates().about ?? 'collapsed'}
           onToggle={() => toggleSection('about')}
         >
@@ -800,6 +802,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           id="notify"
           title="Notifications"
           icon="bell"
+          iconColor={tokens.accentAmber}
           state={sectionStates().notify ?? 'collapsed'}
           onToggle={() => toggleSection('notify')}
           badge={notifyBadge()}
@@ -814,6 +817,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           id="bulk"
           title="Bulk Ops"
           icon="list-checks"
+          iconColor={tokens.accentGreen}
           state={sectionStates().bulk ?? 'collapsed'}
           onToggle={() => toggleSection('bulk')}
           badge={bulkBadge()}
@@ -1076,7 +1080,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
             position: 'absolute',
             left: '32px',
             top: '24px',
-            color: '#eee',
+            color: tokens.fg,
             font: '14px system-ui,sans-serif',
             'pointer-events': 'none',
             'max-width': '480px',
@@ -1112,7 +1116,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
               <span
                 data-testid="desktop-banner-session-name"
                 style={{
-                  font: '500 12px ui-monospace,Menlo,Consolas,monospace',
+                  font: `500 12px ${tokens.fontMono}`,
                   opacity: 0.55,
                 }}
               >
@@ -1124,7 +1128,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
             data-testid="desktop-banner-hw"
             style={{
               'margin-top': '2px',
-              font: '12px ui-monospace,Menlo,Consolas,monospace',
+              font: `12px ${tokens.fontMono}`,
               opacity: 0.6,
               'text-shadow': '0 1px 2px rgba(0,0,0,0.6)',
             }}
@@ -1136,7 +1140,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
               data-testid="desktop-banner-ifaces"
               style={{
                 'margin-top': '2px',
-                font: '12px ui-monospace,Menlo,Consolas,monospace',
+                font: `12px ${tokens.fontMono}`,
                 opacity: 0.55,
                 'text-shadow': '0 1px 2px rgba(0,0,0,0.6)',
               }}
@@ -1161,7 +1165,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
                 data-testid="desktop-banner-router"
                 style={{
                   'margin-top': '6px',
-                  font: '11px ui-monospace,Menlo,Consolas,monospace',
+                  font: `11px ${tokens.fontMono}`,
                   opacity: 0.45,
                   'text-shadow': '0 1px 2px rgba(0,0,0,0.6)',
                   display: 'flex',
@@ -1419,7 +1423,7 @@ const IconButton: Component<{
       onClick={props.onClick}
       style={{
         background: hover() ? 'rgba(255,255,255,0.08)' : 'transparent',
-        color: '#eee',
+        color: tokens.fg,
         border: '1px solid transparent',
         width: '32px',
         height: '32px',
@@ -1462,7 +1466,7 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
       }}
       style={{
         background: props.win.focused ? '#33387a' : 'rgba(255,255,255,0.04)',
-        color: '#eee',
+        color: tokens.fg,
         border: `1px solid ${props.win.focused ? '#4a4f8d' : 'transparent'}`,
         padding: '0 12px',
         height: '28px',
@@ -1616,7 +1620,7 @@ const Palette: Component<{
     >
       <div
         style={{
-          background: '#181828',
+          background: tokens.bgWindow,
           border: '1px solid #2a2a4a',
           'border-radius': '8px',
           'min-width': '380px',
@@ -1639,7 +1643,7 @@ const Palette: Component<{
             'box-sizing': 'border-box',
             padding: '14px 16px',
             background: 'transparent',
-            color: '#eee',
+            color: tokens.fg,
             border: 'none',
             'border-bottom': '1px solid #2a2a4a',
             outline: 'none',
@@ -1695,7 +1699,7 @@ const PaletteRow: Component<{
         width: '100%',
         padding: '8px 16px',
         background: props.selected ? '#2a2a4a' : 'transparent',
-        color: '#eee',
+        color: tokens.fg,
         border: 'none',
         'text-align': 'left',
         cursor: 'pointer',
@@ -1809,12 +1813,12 @@ const clockStyle: JSX.CSSProperties = {
 
 const emptyStyle: JSX.CSSProperties = {
   padding: '10px 14px',
-  color: '#888',
+  color: tokens.fgMuted,
   'font-size': '13px',
 };
 
 // ---- custom element wrapper ----
 
 defineWashApp('wash-app-session', (props) => <App {...props} />, {
-  style: 'display:block;position:absolute;inset:0;background:radial-gradient(circle at 30% 20%, #1a1a32 0, #0a0a18 75%);color:#eee;font:14px system-ui,sans-serif;overflow:hidden',
+  style: `display:block;position:absolute;inset:0;background:radial-gradient(circle at 30% 20%, #1a1a32 0, #0a0a18 75%);color:${tokens.fg};font:14px system-ui,sans-serif;overflow:hidden`,
 });

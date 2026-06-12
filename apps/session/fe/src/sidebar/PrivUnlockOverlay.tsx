@@ -12,7 +12,7 @@
 
 import type { Component, JSX } from 'solid-js';
 import { Show, createSignal } from 'solid-js';
-import { Button } from '@wash/ui';
+import { Button, tokens } from '@wash/ui';
 import { b64decode, b64encode, encryptPassword } from './privCrypto';
 
 export interface PrivUnlockState {
@@ -104,15 +104,15 @@ const UnlockModal: Component<{
   };
 
   const panelStyle: JSX.CSSProperties = {
-    background: '#181828',
+    background: tokens.bgWindow,
     border: '1px solid #6a2a2a', // red accent — root chain
     'border-radius': '8px',
     padding: '20px 22px',
     'min-width': '380px',
     'max-width': '480px',
     'box-shadow': '0 16px 40px rgba(0,0,0,0.6)',
-    color: '#eee',
-    font: '13px ui-sans-serif,system-ui,sans-serif',
+    color: tokens.fg,
+    font: `13px ${tokens.fontSans}`,
     animation: 'wash-pop-in 140ms ease-out',
   };
 
@@ -133,7 +133,7 @@ const UnlockModal: Component<{
           wash-priv needs your sudo password to approve request
           <span
             style={{
-              font: '11px ui-monospace,Menlo,Consolas,monospace',
+              font: `11px ${tokens.fontMono}`,
               opacity: 0.85,
               'margin-left': '4px',
             }}
@@ -155,10 +155,10 @@ const UnlockModal: Component<{
             'box-sizing': 'border-box',
             padding: '8px 10px',
             background: 'rgba(0,0,0,0.25)',
-            color: '#eee',
+            color: tokens.fg,
             border: '1px solid #3a3a5a',
             'border-radius': '4px',
-            font: '13px ui-monospace,Menlo,Consolas,monospace',
+            font: `13px ${tokens.fontMono}`,
             'margin-bottom': '8px',
           }}
         />
@@ -166,7 +166,7 @@ const UnlockModal: Component<{
           <div
             data-testid="priv-unlock-error"
             style={{
-              color: '#e0a0a0',
+              color: tokens.fgDanger,
               'font-size': '11px',
               'margin-bottom': '8px',
             }}

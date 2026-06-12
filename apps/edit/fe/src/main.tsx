@@ -1485,7 +1485,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       // up. Otherwise input/button/label heights diverge by a few
       // pixels and the labels read as too high.
       '.cm-textfield': {
-        background: '#10101a',
+        background: tokens.bgInset,
         color: tokens.fg,
         border: `1px solid ${tokens.borderMenu}`,
         borderRadius: `${tokens.radiusSm}px`,
@@ -2807,7 +2807,7 @@ const sidebarHeaderBtnStyle: JSX.CSSProperties = {
 
 const renameInputStyle: JSX.CSSProperties = {
   width: '100%',
-  background: '#10101a',
+  background: tokens.bgInset,
   color: tokens.fg,
   border: `1px solid ${tokens.borderFocus}`,
   'border-radius': `${tokens.radiusSm}px`,
@@ -2830,8 +2830,8 @@ function rowStyleDropAware(selected: boolean, dropTarget: boolean, depth: number
   if (!dropTarget) return base;
   return {
     ...base,
-    background: '#2a3a5a',
-    outline: '1px solid #4a6ab0',
+    background: tokens.bgRowSelected,
+    outline: `1px solid ${tokens.borderFocus}`,
   };
 }
 

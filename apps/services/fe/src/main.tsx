@@ -339,10 +339,10 @@ const ServiceRow: Component<{
 // Tone → colours. The tone + label decision is the unit-tested kernel
 // (service-status.ts); this component only maps tone to presentation.
 const TONE_STYLE: Record<BadgeTone, { bg: string; fg: string }> = {
-  failed: { bg: '#5b1d1d', fg: '#fca5a5' },
-  active: { bg: '#1c3d24', fg: '#86efac' },
-  transitioning: { bg: '#3a3a1c', fg: '#fde047' },
-  inactive: { bg: '#1f1f2a', fg: tokens.fgDim },
+  failed: { bg: tokens.bgDanger, fg: tokens.fgDanger },
+  active: { bg: tokens.bgSuccess, fg: tokens.fgSuccess },
+  transitioning: { bg: tokens.bgWarning, fg: tokens.fgWarning },
+  inactive: { bg: tokens.bgNeutral, fg: tokens.fgDim },
 };
 
 const StatusBadge: Component<{ active: string; sub: string }> = (props) => {
@@ -369,16 +369,16 @@ const StatusBadge: Component<{ active: string; sub: string }> = (props) => {
 const EnabledChip: Component<{ enabled: string }> = (props) => {
   if (!props.enabled) return <span style={chipDimStyle}>—</span>;
   const map: Record<string, { bg: string; fg: string }> = {
-    enabled:   { bg: '#1c2d3d', fg: '#93c5fd' },
-    disabled:  { bg: '#1f1f2a', fg: tokens.fgDim },
-    static:    { bg: '#262338', fg: '#c4b5fd' },
-    masked:    { bg: '#3d1c1c', fg: '#fca5a5' },
-    alias:     { bg: '#262338', fg: '#c4b5fd' },
-    linked:    { bg: '#262338', fg: '#c4b5fd' },
-    indirect:  { bg: '#1f1f2a', fg: tokens.fgDim },
-    generated: { bg: '#1f1f2a', fg: tokens.fgDim },
+    enabled:   { bg: tokens.bgInfo, fg: tokens.fgInfo },
+    disabled:  { bg: tokens.bgNeutral, fg: tokens.fgDim },
+    static:    { bg: tokens.bgNeutral, fg: '#c4b5fd' },
+    masked:    { bg: tokens.bgDanger, fg: tokens.fgDanger },
+    alias:     { bg: tokens.bgNeutral, fg: '#c4b5fd' },
+    linked:    { bg: tokens.bgNeutral, fg: '#c4b5fd' },
+    indirect:  { bg: tokens.bgNeutral, fg: tokens.fgDim },
+    generated: { bg: tokens.bgNeutral, fg: tokens.fgDim },
   };
-  const t = map[props.enabled] ?? { bg: '#1f1f2a', fg: tokens.fgDim };
+  const t = map[props.enabled] ?? { bg: tokens.bgNeutral, fg: tokens.fgDim };
   return <span style={{ ...chipStyle, background: t.bg, color: t.fg }}>{props.enabled}</span>;
 };
 
@@ -409,7 +409,7 @@ const searchWrapStyle: JSX.CSSProperties = {
   display: 'inline-flex',
   'align-items': 'center',
   gap: '6px',
-  background: '#10101a',
+  background: tokens.bgInset,
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusSm}px`,
   padding: '0 8px',
@@ -505,7 +505,7 @@ const errStyle: JSX.CSSProperties = {
   'align-items': 'center',
   gap: '4px',
   font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
-  color: '#fca5a5',
+  color: tokens.fgDanger,
   'margin-top': '2px',
 };
 
