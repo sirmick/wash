@@ -103,6 +103,65 @@ test.describe('music + audio control plane (full shell + sidebar)', () => {
   });
 });
 
+// Chromeless window (docs/AUDIO.md §2): the music window drops the wash
+// titlebar/border so Webamp's own Winamp titlebar is the only titlebar
+// (no double chrome) and sits flush (no black margin). Because Webamp
+// renders its UI as a <body> overlay, the FE reparents #webamp into the
+// window slot and drives move/close/minimize from Winamp's native chrome
+// via window.wash — this proves that wiring.
+test.describe('music chromeless window chrome', () => {
+  test.use({ routerOpts: { apps: ['session', 'music', 'audio'] } });
+
+  test('no wash titlebar; Winamp titlebar drives move/close/minimize', async ({ page, router }) => {
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    await router.controlRequest({ t: 'launch', app_id: 'com.wash.music' });
+    await expect(page.getByRole('slider', { name: 'Volume Bar' })).toBeVisible();
+
+    // The frame hosting wash-app-music carries no wash titlebar, and
+    // Webamp's root is reparented inside the host (not a body overlay).
+    const frame = page.locator('.wash-window', { has: page.locator('wash-app-music') });
+    await expect(frame.locator('.wash-titlebar')).toHaveCount(0);
+    expect(
+      await page.evaluate(() =>
+        document.querySelector('wash-app-music')!.contains(document.querySelector('#webamp')),
+      ),
+    ).toBe(true);
+
+    const winID = await page.evaluate(
+      () => window.wash.windows().find((x) => x.element === 'wash-app-music')!.windowID,
+    );
+    const pos = (id: number) =>
+      page.evaluate((i) => {
+        const w = window.wash.windows().find((x) => x.windowID === i)!;
+        return { x: w.x, y: w.y, state: w.state };
+      }, id);
+
+    // Dragging Webamp's main-window titlebar moves the wash window (not
+    // just the Winamp window inside it).
+    const before = await pos(winID);
+    const box = (await page.locator('#title-bar').boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2 + 90, { steps: 8 });
+    await page.mouse.up();
+    await expect.poll(() => pos(winID).then((p) => ({ x: p.x, y: p.y }))).toEqual({
+      x: before.x + 120,
+      y: before.y + 90,
+    });
+
+    // Winamp minimize minimizes the wash window; the UI survives.
+    await page.locator('#minimize').click();
+    await expect.poll(() => pos(winID).then((p) => p.state)).toBe('minimized');
+
+    // Restore, then Winamp close closes the wash window.
+    await page.evaluate((id) => window.wash.restoreWindow(id), winID);
+    await expect(page.getByRole('slider', { name: 'Volume Bar' })).toBeVisible();
+    await page.locator('#close').click();
+    await expect(page.locator('wash-app-music')).toHaveCount(0);
+  });
+});
+
 // M2: the library scan. Point WASH_MUSIC_DIR at a seeded folder and the
 // BE serves those files over ingress; the FE builds the webamp playlist
 // from them (docs/AUDIO.md §5). Filenames with spaces exercise the

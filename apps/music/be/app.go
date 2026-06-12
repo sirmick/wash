@@ -38,10 +38,13 @@ const version = "0.1.0"
 // AppID is this app's reserved id.
 const AppID = "com.wash.music"
 
-// musicIcon is a lucide "music" glyph as an inline SVG, tinted with the
-// app accent (a '#' is %23-encoded in the data URI). Windowed apps must
-// supply an icon; the same glyph fronts the launcher entry.
-const musicIcon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%2330c060" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`
+// musicIcon — Lucide sprite symbol name. Like every other app icon it
+// is a name resolved against the shared /icons.svg sprite (launcher,
+// taskbar, window titlebar all do <use href="icons.svg#name">); the
+// manifest accent tints it. The same "music" glyph fronts the sidebar
+// Audio widget. (A data: URI here would resolve to icons.svg#data:… and
+// render blank everywhere.)
+const musicIcon = "music"
 
 var def *sdk.AppDef
 
@@ -50,10 +53,12 @@ func init() {
 	if err != nil {
 		log.Printf("wash-music: assets sub: %v", err)
 	}
-	// Classic Winamp is pixel-locked; the window is fixed-size and
-	// non-resizable (docs/AUDIO.md §2). 300×420 fits Webamp's stacked
-	// main+playlist windows with a little margin. True borderless is a
-	// WM feature for later — for now Webamp draws inside a normal frame.
+	// Classic Winamp is pixel-locked. The window is chromeless (no wash
+	// titlebar/border) and sized to Webamp's main-window footprint
+	// (275×116) so the Winamp UI sits flush with no black margin and its
+	// own titlebar is the only titlebar (docs/AUDIO.md §2). The FE drives
+	// move/close through window.wash from Webamp's native chrome; EQ and
+	// playlist open as Webamp's own sub-windows below the frame.
 	resizable := false
 	def = &sdk.AppDef{
 		Manifest: sdk.Manifest{
@@ -66,7 +71,7 @@ func init() {
 			Icon:            musicIcon,
 			Accent:          "#30c060",
 			Instancing:      sdk.InstancingSingle,
-			Window:          &sdk.WindowHints{DefaultWidth: 300, DefaultHeight: 420, Resizable: &resizable},
+			Window:          &sdk.WindowHints{DefaultWidth: 275, DefaultHeight: 116, Resizable: &resizable, Chromeless: true},
 		},
 		Assets:  sub,
 		OnReady: onReady,

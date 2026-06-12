@@ -73,11 +73,22 @@ library, serves files over ingress, and registers/reports playback to
 `com.wash.audio`.
 
 Window geometry: classic Winamp is pixel-locked (main window 275×116; EQ and
-playlist are fixed sub-windows Webamp draws inside its own container). v1 puts
-Webamp inside a normal wash frame with `WindowHints{Resizable:false}` sized to
-Webamp's footprint. True borderless/chromeless windows are a WM feature for
-later (`WindowHints` has no borderless flag today); when it lands, the music
-window goes chromeless and Webamp draws the entire Winamp titlebar itself.
+playlist are fixed sub-windows). The window is **chromeless** —
+`WindowHints{Resizable:false, Chromeless:true}` sized to the main window's
+275×116 footprint. The shell renders a chromeless window with no titlebar and
+no border (`web/shell/src/window.tsx`), so Webamp's own Winamp titlebar is the
+only titlebar (no double chrome) and the UI sits flush (no black margin).
+
+Webamp renders its UI as a `#webamp` overlay appended to `<body>` (it does not
+render into the node passed to `renderWhenReady`), so the FE reparents `#webamp`
+into the window slot and pins the main window to the slot origin; the EQ and
+playlist stack below and the whole `#webamp` moves as one. Because there is no
+wash titlebar, the FE drives the window from Winamp's native chrome via
+`window.wash`: a drag on the main-window titlebar is intercepted (capture-phase,
+suppressing Webamp's own drag) and translated into `moveWindow`; the minimize
+button calls `minimizeWindow`; and Webamp's `onClose` calls `closeWindow`. The
+generic `WindowHints.Chromeless` flag is reusable by any future app that ships a
+pixel-locked native UI.
 
 ## 3. Control plane — `AudioState`
 

@@ -31,6 +31,74 @@ function MusicApp(props: WashAppProps) {
 
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
 
+  // The window is chromeless (apps/music/be/app.go sets
+  // WindowHints.Chromeless): there is no wash titlebar, so Webamp's own
+  // Winamp titlebar is the single titlebar and must drive the wash
+  // window. windowID is the id the shell stamps on the host element at
+  // mount (data-wash-window); we use it to call window.wash.{move,close,
+  // minimize}Window from Webamp's native chrome.
+  const windowID = Number(props.host.getAttribute('data-wash-window') || 0);
+  const winInfo = () => window.wash.windows().find((w) => w.windowID === windowID);
+
+  // Translate a drag on Webamp's main-window titlebar into a wash window
+  // move. Bound in the CAPTURE phase on the host so it runs before
+  // Webamp's own (React, mousedown-based) drag handler, which we then
+  // suppress with stopImmediatePropagation — otherwise the Winamp window
+  // would slide around inside the frame instead of moving the frame.
+  // Titlebar controls (clutterbar, options menu, minimize, shade, close)
+  // are excluded so they keep working and Webamp handles them natively.
+  function onHostMouseDown(e: MouseEvent) {
+    const t = e.target as HTMLElement;
+    // Winamp minimize → minimize the wash window. Webamp's own onMinimize
+    // doesn't fire for the classic-skin button, and there's no wash
+    // titlebar to minimize from, so we drive it ourselves (restore via the
+    // taskbar). #shade (window-shade roll-up) and #close stay with Webamp.
+    if (t.closest('#minimize') && windowID) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      window.wash.minimizeWindow(windowID);
+      return;
+    }
+    if (!t.closest('#title-bar')) return;
+    if (t.closest('#clutter-bar, #option, #shade, #close')) return;
+    const info = winInfo();
+    if (!info || !windowID) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    window.wash.focusWindow(windowID);
+    const sx = e.clientX;
+    const sy = e.clientY;
+    const ox = info.x;
+    const oy = info.y;
+    // Clamp to the virtual-desktop plane (VIEWPORTS_PER_AXIS² = 3² cells)
+    // so the window can't be dragged fully off-screen — the same bound
+    // the shell's own titlebar drag applies.
+    const maxX = window.innerWidth * 3 - info.w;
+    const maxY = window.innerHeight * 3 - info.h;
+    let raf = 0;
+    let nx = ox;
+    let ny = oy;
+    // Coalesce moves to one in-flight animation frame; the resize handle
+    // streams geometry the same way (web/shell/src/window.tsx).
+    const flush = () => {
+      raf = 0;
+      window.wash.moveWindow(windowID, nx, ny);
+    };
+    const onMove = (m: MouseEvent) => {
+      nx = Math.round(Math.max(0, Math.min(maxX, ox + (m.clientX - sx))));
+      ny = Math.round(Math.max(0, Math.min(maxY, oy + (m.clientY - sy))));
+      if (!raf) raf = requestAnimationFrame(flush);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      if (raf) cancelAnimationFrame(raf);
+      window.wash.moveWindow(windowID, nx, ny);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }
+
   // snapshot reads webamp's public store + getters into our report shape.
   // Everything is guarded: webamp's internal state shape is not a stable
   // contract, and a bad read must never break playback or reporting.
@@ -97,7 +165,32 @@ function MusicApp(props: WashAppProps) {
     if (webamp) return; // single Winamp per window
     const wa = new Webamp(); // default (built-in) classic skin
     webamp = wa;
+    // Closing the Winamp player closes the wash window. (Minimize is
+    // handled in onHostMouseDown — onMinimize doesn't fire for the
+    // classic-skin button.)
+    wa.onClose(() => windowID && window.wash.closeWindow(windowID));
     await wa.renderWhenReady(container);
+    // Webamp appends its root (#webamp) to <body> and floats its windows
+    // as body overlays — it does not render into the node we passed. Pull
+    // it into our window slot so the Winamp UI lives INSIDE the wash
+    // window (pans with the viewport, obeys z-order, minimizes with the
+    // window, and our titlebar-drag interception sees the events).
+    const webampEl = document.getElementById('webamp');
+    const mainEl = document.getElementById('main-window');
+    if (webampEl && mainEl) {
+      container.appendChild(webampEl);
+      webampEl.style.position = 'absolute';
+      // Webamp positions its windows in absolute page coords computed from
+      // where the container sat at render time, so the main window lands
+      // offset from our slot. Counter-translate #webamp so the main window
+      // pins to the slot's top-left; the EQ/playlist stack stays directly
+      // below it and the whole #webamp (all three windows) then moves as
+      // one with the wash window.
+      const cr = container.getBoundingClientRect();
+      const mr = mainEl.getBoundingClientRect();
+      webampEl.style.left = `${Math.round(-(mr.left - cr.left))}px`;
+      webampEl.style.top = `${Math.round(-(mr.top - cr.top))}px`;
+    }
     const tracks = m.tracks.map((t) => ({
       url: t.url,
       metaData: { title: t.title, artist: t.artist ?? '' },
@@ -130,7 +223,14 @@ function MusicApp(props: WashAppProps) {
       else if (m?.kind === 'audio.cmd') handleCmd(m as AudioCmd);
     };
     props.host.addEventListener('wash:msg', onMsg);
-    onCleanup(() => props.host.removeEventListener('wash:msg', onMsg));
+    // Capture-phase so we intercept Webamp's titlebar drag (see
+    // onHostMouseDown). Harmless before Webamp renders — nothing matches
+    // #title-bar yet.
+    props.host.addEventListener('mousedown', onHostMouseDown, true);
+    onCleanup(() => {
+      props.host.removeEventListener('wash:msg', onMsg);
+      props.host.removeEventListener('mousedown', onHostMouseDown, true);
+    });
     send({ kind: 'tracks', id: 'm-tracks' });
   });
 
@@ -149,5 +249,9 @@ function MusicApp(props: WashAppProps) {
 }
 
 defineWashApp('wash-app-music', MusicApp, {
-  style: 'display:block;width:100%;height:100%;overflow:hidden;background:#000;',
+  // The window is chromeless and sized to Webamp's main window, so the
+  // host needs no backdrop (transparent — no black margin) and must not
+  // clip: Webamp's EQ/playlist sub-windows open beyond the main window's
+  // box and should stay visible.
+  style: 'display:block;width:100%;height:100%;overflow:visible;background:transparent;',
 });

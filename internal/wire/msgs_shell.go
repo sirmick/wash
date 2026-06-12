@@ -209,6 +209,11 @@ type SessionWindow struct {
 	// from SO_PEERCRED at attach time and from the reserved-id
 	// list — never from anything the app declares.
 	IsRoot bool `json:"is_root,omitempty"`
+	// Chromeless mirrors the app manifest's WindowHints.Chromeless: the
+	// shell renders this window with no titlebar/border, letting the
+	// guest surface (e.g. Webamp's Winamp UI) own its full chrome. The
+	// app drives move/close via the window.wash API.
+	Chromeless bool `json:"chromeless,omitempty"`
 	// Pre-min/max geometry; preserved so restoreWindow returns to the
 	// user-set frame even after a chain of min → max → restore.
 	RestoreX int32  `json:"restore_x,omitempty"`
