@@ -63,7 +63,7 @@ func init() {
 	def = &sdk.AppDef{
 		Manifest: sdk.Manifest{
 			ID:              AppID,
-			Name:            "Music",
+			Name:            "Washamp",
 			Version:         version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-music",

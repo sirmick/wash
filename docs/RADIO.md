@@ -25,8 +25,8 @@ This plan is unbuilt — design only.
 - No content hosting, no recording, no re-streaming to others.
 - No proprietary directories (TuneIn/iHeart) or anything needing a paid
   key or restrictive ToS.
-- Not Webamp — this is a wash-native UI (Solid + `@wash/ui`). Music keeps
-  the Winamp skin; Radio is a normal wash window.
+- Not Webamp — this is a wash-native UI (Solid + `@wash/ui`). Washamp
+  keeps the Winamp skin; Radio is a normal wash window.
 
 ## 2. Directory source — Radio Browser
 

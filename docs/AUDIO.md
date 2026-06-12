@@ -162,7 +162,7 @@ owning producer. Pure renderer; the gateway does the wiring.
   art; no third-party art bundled).
 
 - **M3 — control plane + sidebar.** `com.wash.audio` (`StateService`) +
-  session gateway + `AudioWidget`. Music registers/reports; sidebar shows
+  session gateway + `AudioWidget`. Washamp registers/reports; sidebar shows
   now-playing + master volume + transport and drives the player cross-app.
 
 - **M4+ — deferred.** Persistence (keep playing on window close) via a
