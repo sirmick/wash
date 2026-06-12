@@ -624,6 +624,19 @@ net-demo: $(OUT)/washnet-demo
 	@test -f $(OUT)/vm/openwrt.img || { echo "missing $(OUT)/vm/openwrt.img — run: make vm-image-openwrt"; exit 1; }
 	$(OUT)/washnet-demo --image $(OUT)/vm/openwrt.img --base-port 8001
 
+# net-matrix: the accessibility-matrix gate — boots a wash-configured segmented
+# router microVM + one probe per segment (lan/iot/cam, each on its own loopback
+# mcast L2) and asserts the isolation matrix (cam quarantined incl. internet,
+# iot/cam ↛ lan, lan → cam). Exits non-zero on any policy violation, so it gates.
+# PHONY binary target — see net-demo above (FE-less Go-binary rebuild gotcha).
+.PHONY: $(OUT)/washnet-matrix
+$(OUT)/washnet-matrix: | $(OUT)
+	$(call go_build,$@,cmd/washnet-matrix)
+.PHONY: net-matrix
+net-matrix: $(OUT)/washnet-matrix
+	@test -f $(OUT)/vm/openwrt.img || { echo "missing $(OUT)/vm/openwrt.img — run: make vm-image-openwrt"; exit 1; }
+	$(OUT)/washnet-matrix --image $(OUT)/vm/openwrt.img --base-port 27300
+
 # ----- meta -----
 
 .PHONY: linux-arm64
