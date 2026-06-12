@@ -6,4 +6,5 @@ packages:
   - "apps/*/fe"
   - "wash-display/fe"
 allowBuilds:
+  core-js: false
   esbuild: true
