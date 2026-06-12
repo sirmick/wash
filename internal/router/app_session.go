@@ -666,9 +666,10 @@ func (inst *AppInstance) handleWindowCreate(m wire.EvtWindowCreate) error {
 		element = inst.Manifest.Element
 	}
 	inst.router.log("window.create instance=%s win=%d role=%q element=%q", inst.InstanceID, win, m.Role, element)
+	chromeless := inst.Manifest.Window != nil && inst.Manifest.Window.Chromeless
 	inst.router.broadcastPatches(inst.router.winSession.createWindow(
 		win, inst.InstanceID, element, inst.Manifest.Icon,
-		inst.Manifest.Accent, title, m.W, m.H, inst.IsRoot()))
+		inst.Manifest.Accent, title, m.W, m.H, inst.IsRoot(), chromeless))
 	return inst.WriteEvt(wire.NewEvtWindowCreated(m.ReqID, win))
 }
 

@@ -8,8 +8,8 @@
   },
   "dependencies": {
     "@wash/ui": "workspace:*",
-    "solid-js": "^1.9.13",
-    "webamp": "^2.2.0"
+    "lucide-solid": "^1.16.0",
+    "solid-js": "^1.9.13"
   },
   "devDependencies": {
     "typescript": "^5.5.4",

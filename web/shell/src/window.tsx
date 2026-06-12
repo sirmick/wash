@@ -188,11 +188,18 @@ export function FloatingWindow(props: WindowProps) {
   const FRAME_BORDER = 1;
 
   const frameStyle = () => {
+    // Chromeless windows (e.g. wash-washamp's Webamp) drop the frame
+    // entirely: no titlebar, no border, transparent background — the
+    // guest surface paints its own chrome edge-to-edge. We keep the
+    // drop shadow so the floating window still reads as separate from
+    // the desktop behind it.
+    const chromeless = !!props.win.chromeless;
     const base = {
       position: 'absolute' as const,
-      background: '#222',
-      border:
-        focused() === props.win.windowID
+      background: chromeless ? 'transparent' : '#222',
+      border: chromeless
+        ? 'none'
+        : focused() === props.win.windowID
           ? '1px solid #66c'
           : '1px solid #444',
       'box-shadow': '0 6px 24px rgba(0,0,0,0.4)',
@@ -247,16 +254,19 @@ export function FloatingWindow(props: WindowProps) {
     // useful when dragging into a viewport boundary to gauge how
     // far you've moved.
     const dragging = dragX() !== null;
+    // w/h is CONTENT (slot) size; a chromed frame adds a fixed titlebar +
+    // 1px border per side, so the slot equals the stored size exactly —
+    // guest surfaces fill it with no titlebar-height clip, and geometry
+    // feedback can't shrink-spiral. A chromeless frame adds neither, so
+    // the frame IS the content box.
+    const bd = chromeless ? 0 : FRAME_BORDER;
+    const tb = chromeless ? 0 : TITLEBAR_H;
     return {
       ...base,
       left: `${x}px`,
       top: `${y}px`,
-      // w/h is CONTENT (slot) size; the frame is that plus chrome (fixed
-      // titlebar + 1px border per side), so the slot equals the stored size
-      // exactly — guest surfaces fill it with no titlebar-height clip, and
-      // geometry feedback can't shrink-spiral.
-      width: `${w + FRAME_BORDER * 2}px`,
-      height: `${h + TITLEBAR_H + FRAME_BORDER * 2}px`,
+      width: `${w + bd * 2}px`,
+      height: `${h + tb + bd * 2}px`,
       opacity: dragging ? 0.72 : 1,
     };
   };
@@ -312,6 +322,7 @@ export function FloatingWindow(props: WindowProps) {
       onDragEnter={onWindowDragEnter}
       style={frameStyle()}
     >
+      <Show when={!props.win.chromeless}>
       <div
         class="wash-titlebar"
         onPointerDown={onTitlebarPointerDown}
@@ -392,28 +403,31 @@ export function FloatingWindow(props: WindowProps) {
           <X size={14} />
         </button>
       </div>
-      <div ref={slot} style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
+      </Show>
+      <div ref={slot} style={{ flex: 1, overflow: props.win.chromeless ? 'visible' : 'auto', position: 'relative' }}>
         <Show when={props.win.crashed}>
           <CrashPane info={props.win.crashed!} title={props.win.title} />
         </Show>
       </div>
-      <div
-        class="wash-resize-handle"
-        data-testid="window-resize"
-        onPointerDown={onResizeHandlePointerDown}
-        title="Resize"
-        style={{
-          position: 'absolute',
-          right: '0',
-          bottom: '0',
-          width: '14px',
-          height: '14px',
-          cursor: 'nwse-resize',
-          'z-index': '1',
-          background:
-            'linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0.18) 70%, transparent 70%)',
-        }}
-      />
+      <Show when={!props.win.chromeless}>
+        <div
+          class="wash-resize-handle"
+          data-testid="window-resize"
+          onPointerDown={onResizeHandlePointerDown}
+          title="Resize"
+          style={{
+            position: 'absolute',
+            right: '0',
+            bottom: '0',
+            width: '14px',
+            height: '14px',
+            cursor: 'nwse-resize',
+            'z-index': '1',
+            background:
+              'linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0.18) 70%, transparent 70%)',
+          }}
+        />
+      </Show>
     </div>
   );
 }

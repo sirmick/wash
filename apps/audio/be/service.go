@@ -46,30 +46,20 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 			map[string]any{"kind": "cmd", "action": "volume", "value": mv})
 	})
 
-	// report: a producer pushes its live playback fields. We only touch
-	// the mutable fields; identity/kind stay as registered.
-	sdk.HandleFromVoid(bus, "report", func(_ *sdk.Conn, _ string, req reportReq, from wire.Sender) error {
+	// report: a producer pushes its live playback fields. When it went
+	// playing, applyReport makes it the active source and returns the
+	// other playing sources to pause (single-play exclusivity); we relay
+	// a pause cmd to each. See docs/AUDIO.md §3.
+	sdk.HandleFromVoid(bus, "report", func(conn *sdk.Conn, _ string, req reportReq, from wire.Sender) error {
 		if from.InstanceID == "" {
 			return nil
 		}
-		svc.Mutate(func(s *State) {
-			for i := range s.Sources {
-				if s.Sources[i].ID == from.InstanceID {
-					s.Sources[i].Title = req.Title
-					s.Sources[i].Artist = req.Artist
-					s.Sources[i].Status = req.Status
-					s.Sources[i].PosSec = req.Pos
-					s.Sources[i].DurSec = req.Dur
-					return
-				}
-			}
-			// A report before register (race): adopt it as a source.
-			s.Sources = upsertFront(s.Sources, Source{
-				ID: from.InstanceID, AppID: from.AppID, Kind: KindFEDecoded,
-				Title: req.Title, Artist: req.Artist, Status: req.Status,
-				PosSec: req.Pos, DurSec: req.Dur,
-			})
-		})
+		var pause []string
+		svc.Mutate(func(s *State) { pause = applyReport(s, from.InstanceID, from.AppID, req) })
+		for _, id := range pause {
+			_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: id},
+				map[string]any{"kind": "cmd", "action": "pause"})
+		}
 		return nil
 	})
 
@@ -78,7 +68,12 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		if from.InstanceID == "" {
 			return nil
 		}
-		svc.Mutate(func(s *State) { s.Sources = removeByID(s.Sources, from.InstanceID) })
+		svc.Mutate(func(s *State) {
+			s.Sources = removeByID(s.Sources, from.InstanceID)
+			if s.ActiveID == from.InstanceID {
+				s.ActiveID = ""
+			}
+		})
 		return nil
 	})
 
@@ -113,6 +108,44 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		}
 		return nil
 	})
+}
+
+// applyReport updates s for a producer's report and enforces single-play
+// exclusivity: when the producer went `playing`, it becomes the active
+// source and every OTHER currently-playing source is flipped to paused
+// and returned so the caller can relay it a pause cmd. Pure (no I/O) so
+// the policy is unit-testable. See docs/AUDIO.md §3.
+func applyReport(s *State, id, appID string, req reportReq) (pause []string) {
+	found := false
+	for i := range s.Sources {
+		if s.Sources[i].ID == id {
+			s.Sources[i].Title = req.Title
+			s.Sources[i].Artist = req.Artist
+			s.Sources[i].Status = req.Status
+			s.Sources[i].PosSec = req.Pos
+			s.Sources[i].DurSec = req.Dur
+			found = true
+			break
+		}
+	}
+	if !found {
+		// A report before register (race): adopt it as a source.
+		s.Sources = upsertFront(s.Sources, Source{
+			ID: id, AppID: appID, Kind: KindFEDecoded,
+			Title: req.Title, Artist: req.Artist, Status: req.Status,
+			PosSec: req.Pos, DurSec: req.Dur,
+		})
+	}
+	if req.Status == "playing" {
+		s.ActiveID = id
+		for i := range s.Sources {
+			if s.Sources[i].ID != id && s.Sources[i].Status == "playing" {
+				pause = append(pause, s.Sources[i].ID)
+				s.Sources[i].Status = "paused"
+			}
+		}
+	}
+	return pause
 }
 
 // upsertFront replaces a same-id source in place (preserving order) or

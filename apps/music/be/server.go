@@ -1,309 +1,98 @@
 package music
 
 import (
-	"bytes"
-	"context"
-	"encoding/binary"
-	"io/fs"
 	"log"
-	"math"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
-	"path"
 	"path/filepath"
-	"sort"
-	"strings"
 	"sync"
-	"time"
 
+	"github.com/sirmick/wash/internal/audiorelay"
+	"github.com/sirmick/wash/internal/medialib"
 	"github.com/sirmick/wash/internal/sdk"
 )
 
-// maxTracks caps a library scan so a huge music folder can't blow up the
-// tracks message (or the playlist). The cap is logged when hit.
-const maxTracks = 500
-
-// audioExts are the file extensions we surface from the library. The
-// browser's <audio> decodes them (Case 1, docs/AUDIO.md §1) — the BE
-// never decodes, so this is just "what we hand to the FE".
-var audioExts = map[string]bool{
-	".mp3": true, ".wav": true, ".ogg": true, ".oga": true, ".opus": true,
-	".flac": true, ".m4a": true, ".aac": true, ".webm": true,
-}
-
-// track is one playlist entry handed to the FE. URL is fully resolved
-// (ingress path for local files, absolute for streams); the FE feeds it
-// straight to webamp.
-type track struct {
-	URL    string `json:"url"`
-	Title  string `json:"title"`
-	Artist string `json:"artist"`
-}
-
-// player holds the per-instance ingress state. The FE may ask for the
-// track list before the BE has finished publishing ingress, so the
-// "tracks" reply waits on ready.
+// player holds the per-instance scan root + ingress base. The FE asks for
+// a scan (optionally with a new root); the reply may race ingress
+// publishing, so the handler waits on ready.
 type player struct {
-	mu     sync.Mutex
-	tracks []track
-	ready  chan struct{}
+	mu    sync.Mutex
+	root  string // current os scan root
+	base  string // ingress base, set once before ready closes
+	ready chan struct{}
+}
+
+func (p *player) getRoot() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.root
+}
+
+func (p *player) setRoot(r string) {
+	p.mu.Lock()
+	p.root = r
+	p.mu.Unlock()
 }
 
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-music ready instance=%s window=%d", instanceID, windowID)
 	bus := sdk.NewBus(c)
-	p := &player{ready: make(chan struct{})}
+	// Folder browsing (the @wash/ui FilePicker talks fs.* to us).
+	sdk.EnableFilePicker(c)
+	// Producer bridge to com.wash.audio (now-playing/transport/sidebar).
+	audiorelay.Register(bus)
 
-	// FE → BE: hand back the resolved track list once the file server is
-	// published. Reply from a goroutine because ingress may not be ready
-	// yet and bus handlers run on the read goroutine — blocking here
-	// would stall dispatch.
-	sdk.HandleVoid(bus, "tracks", func(conn *sdk.Conn, id string, _ struct{}) error {
+	p := &player{root: medialib.DefaultDir(), ready: make(chan struct{})}
+	sessionRoot := c.Session().Root
+
+	// scan: (re)scan the current — or a newly-picked — folder and hand the
+	// FE the resolved track list. Replies from a goroutine because ingress
+	// may not be published yet.
+	sdk.HandleVoid(bus, "scan", func(conn *sdk.Conn, id string, req scanReq) error {
 		go func() {
-			select {
-			case <-p.ready:
-			case <-conn.Done():
-				return
+			<-p.ready
+			if req.Root != "" {
+				// The FilePicker path is confined to the session fs root;
+				// map it back to an os path for medialib.
+				osRoot := filepath.Join(sessionRoot, req.Root)
+				if isDir(osRoot) {
+					p.setRoot(osRoot)
+				}
 			}
-			p.mu.Lock()
-			tracks := p.tracks
-			p.mu.Unlock()
-			_ = conn.SendAppMsg(map[string]any{"kind": "tracks_ok", "id": id, "tracks": tracks})
+			root := p.getRoot()
+			entries := medialib.Scan(root)
+			tracks := make([]trackMsg, len(entries))
+			for i, e := range entries {
+				tracks[i] = trackMsg{URL: p.base + "lib/" + medialib.EscapePath(e.Rel), Title: e.Title}
+			}
+			_ = conn.SendAppMsg(map[string]any{
+				"kind": "scan_ok", "id": id, "root": root, "tracks": tracks,
+			})
+			log.Printf("wash-music: %d track(s) from %q", len(tracks), root)
 		}()
 		return nil
 	})
 
-	// Bridge the FE's playback state ↔ the com.wash.audio control plane.
-	registerAudioRelay(bus)
-
-	go serveAndPublish(c, instanceID, p)
-}
-
-// serveAndPublish stands up a Range-capable HTTP file server (rooted at
-// the music library) on a per-instance unix socket, publishes it through
-// the router's ingress proxy, then resolves the playlist URLs against the
-// returned base path.
-func serveAndPublish(c *sdk.Conn, instanceID string, p *player) {
-	root := musicDir()
-	lib := scanLibrary(root)
-
-	sock := filepath.Join(os.TempDir(), "wash-music-"+instanceID+".sock")
-	_ = os.Remove(sock)
-	ln, err := net.Listen("unix", sock)
-	if err != nil {
-		log.Printf("wash-music: listen %s: %v", sock, err)
-		return
-	}
-
-	mux := http.NewServeMux()
-	// /lib/<relpath> serves library files. http.FileServer handles Range
-	// + path cleaning; os.DirFS confines reads to the library root.
-	if root != "" {
-		mux.Handle("/lib/", http.StripPrefix("/lib/", http.FileServer(http.FS(os.DirFS(root)))))
-	}
-	// /sample.wav is the always-present fallback so the player is never
-	// empty (and the M1 e2e stays valid when no library is configured).
-	wav := sampleWAV()
-	mux.HandleFunc("/sample.wav", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "audio/wav")
-		http.ServeContent(w, r, "sample.wav", time.Unix(0, 0), bytes.NewReader(wav))
-	})
-	srv := &http.Server{Handler: mux}
-	go func() { _ = srv.Serve(ln) }()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	base, err := c.PublishIngress(ctx, "unix", sock)
-	if err != nil {
-		log.Printf("wash-music: publish ingress: %v", err)
-		_ = srv.Close()
-		_ = os.Remove(sock)
-		return
-	}
-
-	tracks := resolveTracks(base, lib)
-	p.mu.Lock()
-	p.tracks = tracks
-	p.mu.Unlock()
-	close(p.ready)
-	log.Printf("wash-music: %d track(s) from %q, serving at %s", len(tracks), root, base)
-
 	go func() {
-		<-c.Done()
-		_ = c.UnpublishIngress(base)
-		_ = srv.Close()
-		_ = os.Remove(sock)
+		base, err := medialib.Serve(c, instanceID, "wash-music-", p.getRoot)
+		if err != nil {
+			log.Printf("wash-music: serve: %v", err)
+			return
+		}
+		p.base = base // single writer, before ready closes (happens-before)
+		close(p.ready)
 	}()
 }
 
-// musicDir resolves the library root: $WASH_MUSIC_DIR, else ~/Music.
-// Returns "" if neither resolves to an existing directory (→ the player
-// falls back to the sample track).
-func musicDir() string {
-	if d := os.Getenv("WASH_MUSIC_DIR"); d != "" {
-		if isDir(d) {
-			return d
-		}
-		return ""
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	d := filepath.Join(home, "Music")
-	if isDir(d) {
-		return d
-	}
-	return ""
-}
-
-func isDir(p string) bool {
-	fi, err := os.Stat(p)
+func isDir(pth string) bool {
+	fi, err := os.Stat(pth)
 	return err == nil && fi.IsDir()
 }
 
-// libEntry is a scanned file before its URL is resolved against ingress.
-type libEntry struct {
-	rel   string // forward-slash relative path under root
-	title string
+type scanReq struct {
+	Root string `json:"root"`
 }
 
-// scanLibrary walks root for audio files (recursive, hidden dirs
-// skipped), capped at maxTracks, sorted by path for deterministic order.
-func scanLibrary(root string) []libEntry {
-	if root == "" {
-		return nil
-	}
-	var out []libEntry
-	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			if p != root && strings.HasPrefix(d.Name(), ".") {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !audioExts[strings.ToLower(filepath.Ext(d.Name()))] {
-			return nil
-		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return nil
-		}
-		out = append(out, libEntry{rel: filepath.ToSlash(rel), title: stem(d.Name())})
-		if len(out) >= maxTracks {
-			log.Printf("wash-music: library scan hit cap (%d); ignoring the rest", maxTracks)
-			return fs.SkipAll
-		}
-		return nil
-	})
-	sort.Slice(out, func(i, j int) bool { return out[i].rel < out[j].rel })
-	return out
-}
-
-// resolveTracks turns scanned entries + configured streams into the FE
-// track list. Local files get an escaped ingress URL; streams pass
-// through verbatim. Falls back to the sample when there's nothing.
-func resolveTracks(base string, lib []libEntry) []track {
-	var tracks []track
-	for _, e := range lib {
-		tracks = append(tracks, track{
-			URL:   base + "lib/" + escapePath(e.rel),
-			Title: e.title,
-		})
-	}
-	for _, s := range streams() {
-		tracks = append(tracks, track{URL: s, Title: streamLabel(s)})
-	}
-	if len(tracks) == 0 {
-		tracks = append(tracks, track{URL: base + "sample.wav", Title: "Wash Test Tone", Artist: "wash-audio"})
-	}
-	return tracks
-}
-
-// streams reads $WASH_MUSIC_STREAMS (comma-separated absolute URLs) —
-// web radio / Icecast endpoints the <audio> element plays natively.
-func streams() []string {
-	raw := os.Getenv("WASH_MUSIC_STREAMS")
-	if raw == "" {
-		return nil
-	}
-	var out []string
-	for _, s := range strings.Split(raw, ",") {
-		s = strings.TrimSpace(s)
-		if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-func streamLabel(s string) string {
-	if u, err := url.Parse(s); err == nil && u.Host != "" {
-		return u.Host
-	}
-	return s
-}
-
-// escapePath percent-escapes each path segment while keeping the
-// separators, so filenames with spaces/unicode resolve through ingress.
-func escapePath(rel string) string {
-	parts := strings.Split(rel, "/")
-	for i, p := range parts {
-		parts[i] = url.PathEscape(p)
-	}
-	return path.Join(parts...)
-}
-
-func stem(name string) string {
-	return strings.TrimSuffix(name, filepath.Ext(name))
-}
-
-// sampleWAV synthesizes a 3-second 440 Hz sine as a 16-bit mono PCM
-// WAV. License-clean placeholder so the player is never empty when no
-// library is configured. A short linear fade in/out avoids the click an
-// abrupt start/stop would produce.
-func sampleWAV() []byte {
-	const (
-		sampleRate = 44100
-		seconds    = 3
-		freq       = 440.0
-		amp        = 0.25
-		fade       = 0.05
-	)
-	n := sampleRate * seconds
-	dataLen := n * 2 // 16-bit mono
-
-	var buf bytes.Buffer
-	le := binary.LittleEndian
-	buf.WriteString("RIFF")
-	_ = binary.Write(&buf, le, uint32(36+dataLen))
-	buf.WriteString("WAVE")
-	buf.WriteString("fmt ")
-	_ = binary.Write(&buf, le, uint32(16))           // PCM fmt chunk size
-	_ = binary.Write(&buf, le, uint16(1))            // audio format: PCM
-	_ = binary.Write(&buf, le, uint16(1))            // channels: mono
-	_ = binary.Write(&buf, le, uint32(sampleRate))   // sample rate
-	_ = binary.Write(&buf, le, uint32(sampleRate*2)) // byte rate
-	_ = binary.Write(&buf, le, uint16(2))            // block align
-	_ = binary.Write(&buf, le, uint16(16))           // bits per sample
-	buf.WriteString("data")
-	_ = binary.Write(&buf, le, uint32(dataLen))
-
-	for i := 0; i < n; i++ {
-		t := float64(i) / float64(sampleRate)
-		env := 1.0
-		if t < fade {
-			env = t / fade
-		} else if t > seconds-fade {
-			env = (seconds - t) / fade
-		}
-		v := amp * env * math.Sin(2*math.Pi*freq*t)
-		_ = binary.Write(&buf, le, int16(v*32767))
-	}
-	return buf.Bytes()
+type trackMsg struct {
+	URL   string `json:"url"`
+	Title string `json:"title"`
 }

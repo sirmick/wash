@@ -92,6 +92,10 @@ export interface SessionWindow {
   // the privilege-chain reserved set). When true the WM paints a red
   // stripe + ROOT label on the titlebar. Never set by the app itself.
   is_root?: boolean;
+  // chromeless drops the wash titlebar/border so the guest surface
+  // draws its own chrome (e.g. Webamp's Winamp UI). Mirrors the app
+  // manifest's WindowHints.Chromeless.
+  chromeless?: boolean;
 }
 
 interface ShellSessionSnapshot {

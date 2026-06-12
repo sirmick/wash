@@ -277,6 +277,14 @@ type WindowHints struct {
 	MinWidth      uint32 `json:"min_width,omitempty"`
 	MinHeight     uint32 `json:"min_height,omitempty"`
 	Resizable     *bool  `json:"resizable,omitempty"`
+	// Chromeless drops the wash window frame (titlebar + border) so the
+	// guest surface fills the whole window and draws its own chrome.
+	// Used by apps that ship a pixel-locked native UI — wash-washamp
+	// embeds Webamp, which paints the classic Winamp titlebar itself;
+	// a wash titlebar on top would double it. The shell still owns the
+	// window (z-order, focus, taskbar); the app drives move/close via
+	// the window.wash API. Implies non-resizable.
+	Chromeless bool `json:"chromeless,omitempty"`
 }
 
 // HasCapability reports whether the manifest declares cap.

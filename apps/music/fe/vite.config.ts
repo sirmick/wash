@@ -1,9 +1,8 @@
 import { defineConfig } from 'vite';
 import solid from 'vite-plugin-solid';
 
-// webamp (and its bundled React) is bundled INTO index.js — only the
-// shell-provided runtimes (solid-js, @wash/ui) are externalized, same
-// as every other wash app FE.
+// Only the shell-provided runtimes (solid-js, @wash/ui) are externalized,
+// same as every other wash app FE.
 export default defineConfig({
   plugins: [solid()],
   build: {

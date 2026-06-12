@@ -1,153 +1,258 @@
-// wash-music FE — embeds Webamp (the JS classic-Winamp skin engine)
-// inside a wash window, feeds it Case-1 tracks served by the BE over the
-// ingress proxy (docs/AUDIO.md §1, §2), and bridges playback to the
-// com.wash.audio control plane (§3): it reports now-playing/status/
-// position up to the service (→ sidebar) and obeys transport/volume
-// commands coming back down.
+// wash-music FE — a minimalist NATIVE local music player (docs/MUSIC.md):
+// a recursive track list of one selectable folder, basic transport, a
+// now-playing info panel, and an in-window volume (model A). Plain wash
+// UI built from the @wash/ui media kit + FilePicker; an <audio> element
+// does playback (Case-1 fe-decoded over the BE's ingress), and the player
+// registers with com.wash.audio (sidebar now-playing + transport).
 
-import { defineWashApp, type WashAppProps } from '@wash/ui';
-import { onCleanup, onMount } from 'solid-js';
-import Webamp from 'webamp';
+import {
+  Button,
+  FilePicker,
+  MediaList,
+  NowPlaying,
+  SeekBar,
+  TransportControls,
+  VolumeSlider,
+  createAudioSource,
+  defineWashApp,
+  tokens,
+  type AudioSource,
+  type WashAppProps,
+} from '@wash/ui';
+import { createSignal, onCleanup, onMount } from 'solid-js';
+import { FolderOpen, Volume2 } from 'lucide-solid';
 
-interface TracksOk {
-  kind: 'tracks_ok';
-  // URLs are fully resolved by the BE (ingress path for local files,
-  // absolute for streams), so the FE feeds them straight to webamp.
-  tracks: { url: string; title: string; artist?: string }[];
+interface Track {
+  url: string;
+  title: string;
 }
-
-interface AudioCmd {
-  kind: 'audio.cmd';
-  action: 'play' | 'pause' | 'next' | 'prev' | 'stop' | 'volume';
-  value?: number; // 0..1 for volume
+interface ScanOk {
+  kind: 'scan_ok';
+  root: string;
+  tracks: Track[];
 }
 
 function MusicApp(props: WashAppProps) {
-  let container!: HTMLDivElement;
-  let webamp: Webamp | undefined;
-  // Latest current-track identity, captured from onTrackDidChange (the
-  // store doesn't carry per-track duration, so we match by url below).
-  let cur = { url: '', title: '', artist: '' };
+  let audioEl!: HTMLAudioElement;
+  let audio: AudioSource | undefined;
 
+  const [tracks, setTracks] = createSignal<Track[]>([]);
+  const [root, setRoot] = createSignal('');
+  const [index, setIndex] = createSignal(-1); // playing track
+  const [selected, setSelected] = createSignal(-1); // keyboard focus
+  const [status, setStatus] = createSignal('stopped');
+  const [pos, setPos] = createSignal(0);
+  const [dur, setDur] = createSignal(0);
+  const [srcVol, setSrcVol] = createSignal(1); // in-window volume (model A)
+  const [pickerOpen, setPickerOpen] = createSignal(false);
+  let masterVol = 1; // from the service's volume cmd; el.volume = master × src
+
+  const current = () => tracks()[index()];
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
+  const applyVolume = () => {
+    if (audioEl) audioEl.volume = masterVol * srcVol();
+  };
 
-  // snapshot reads webamp's public store + getters into our report shape.
-  // Everything is guarded: webamp's internal state shape is not a stable
-  // contract, and a bad read must never break playback or reporting.
-  function snapshot(wa: Webamp) {
-    let status = 'stopped';
-    let pos = 0;
-    let dur = 0;
-    let title = cur.title;
-    let artist = cur.artist;
-    try {
-      status = wa.getMediaStatus().toLowerCase(); // PLAYING|PAUSED|STOPPED
-      pos = wa.store.getState().media.timeElapsed ?? 0;
-      const t = wa.getPlaylistTracks().find((x) => x.url === cur.url);
-      if (t) {
-        dur = (t as { duration?: number }).duration ?? 0;
-        title = t.title ?? title;
-        artist = t.artist ?? artist;
-      }
-    } catch {
-      /* ignore — keep last-known fields */
+  function loadAndPlay(i: number) {
+    const t = tracks()[i];
+    if (!t) return;
+    setIndex(i);
+    setSelected(i);
+    audioEl.src = t.url;
+    applyVolume();
+    void audioEl.play().catch(() => {});
+  }
+  function play() {
+    if (index() < 0) {
+      if (tracks().length) loadAndPlay(0);
+      return;
     }
-    return { title, artist, status, pos, dur };
+    void audioEl.play().catch(() => {});
   }
+  const pause = () => audioEl?.pause();
+  const next = () => {
+    const n = tracks().length;
+    if (n) loadAndPlay((index() + 1 + n) % n);
+  };
+  const prev = () => {
+    const n = tracks().length;
+    if (n) loadAndPlay((index() - 1 + n) % n);
+  };
+  const seek = (s: number) => {
+    if (audioEl) audioEl.currentTime = s;
+  };
 
-  // report is throttled: webamp's store ticks position roughly per second,
-  // and we don't want to flood the bus on every store mutation.
-  let reportTimer: number | null = null;
-  function scheduleReport() {
-    if (reportTimer != null) return;
-    reportTimer = window.setTimeout(() => {
-      reportTimer = null;
-      if (!webamp) return;
-      send({ kind: 'audio_report', ...snapshot(webamp) });
-    }, 400);
-  }
-
-  function handleCmd(c: AudioCmd) {
-    const wa = webamp;
-    if (!wa) return;
-    switch (c.action) {
+  // Transport/volume relayed from the service (sidebar) → drive the player.
+  function onCmd(action: string, value?: number) {
+    switch (action) {
       case 'play':
-        wa.play();
+        play();
         break;
       case 'pause':
-        wa.pause();
+        pause();
         break;
       case 'stop':
-        wa.stop();
+        pause();
+        if (audioEl) audioEl.currentTime = 0;
         break;
       case 'next':
-        wa.nextTrack();
+        next();
         break;
       case 'prev':
-        wa.previousTrack();
+        prev();
         break;
       case 'volume':
-        if (typeof c.value === 'number') wa.setVolume(Math.round(c.value * 100));
+        if (typeof value === 'number') {
+          masterVol = value;
+          applyVolume();
+        }
         break;
     }
-    scheduleReport();
   }
 
-  async function initWebamp(m: TracksOk) {
-    if (webamp) return; // single Winamp per window
-    const wa = new Webamp(); // default (built-in) classic skin
-    webamp = wa;
-    await wa.renderWhenReady(container);
-    const tracks = m.tracks.map((t) => ({
-      url: t.url,
-      metaData: { title: t.title, artist: t.artist ?? '' },
-    }));
-    wa.appendTracks(tracks);
-
-    // Track identity for duration/title matching + sidebar now-playing.
-    wa.onTrackDidChange((info) => {
-      cur = {
-        url: info?.url ?? '',
-        title: info?.metaData.title ?? '',
-        artist: info?.metaData.artist ?? '',
-      };
-      scheduleReport();
-    });
-    // Any store change (play/pause/seek/volume/position) → re-report.
-    wa.__onStateChange(scheduleReport);
-
-    // Register with the control plane, seeding now-playing from track 0.
-    const first = m.tracks[0];
-    send({ kind: 'audio_register', title: first?.title ?? '', artist: first?.artist ?? '' });
-    cur = { url: tracks[0]?.url ?? '', title: first?.title ?? '', artist: first?.artist ?? '' };
-    scheduleReport();
-  }
+  const folderLabel = () => {
+    const r = root();
+    if (!r) return 'No folder';
+    const parts = r.split('/').filter(Boolean);
+    return parts[parts.length - 1] || r;
+  };
 
   onMount(() => {
+    audio = createAudioSource({
+      instance: props.instance,
+      host: props.host,
+      snapshot: () => ({ title: current()?.title ?? '', status: status(), pos: pos(), dur: dur() }),
+      onCmd,
+    });
     const onMsg = (ev: Event) => {
       const m = (ev as CustomEvent).detail as { kind?: string };
-      if (m?.kind === 'tracks_ok') void initWebamp(m as TracksOk);
-      else if (m?.kind === 'audio.cmd') handleCmd(m as AudioCmd);
+      if (m?.kind === 'scan_ok') {
+        const s = m as ScanOk;
+        setTracks(s.tracks);
+        setRoot(s.root);
+        setIndex(-1);
+        setSelected(s.tracks.length ? 0 : -1);
+        audio?.register({ title: s.tracks[0]?.title ?? '' });
+      }
     };
     props.host.addEventListener('wash:msg', onMsg);
     onCleanup(() => props.host.removeEventListener('wash:msg', onMsg));
-    send({ kind: 'tracks', id: 'm-tracks' });
+    send({ kind: 'scan', id: 'm-scan' });
   });
 
-  onCleanup(() => {
-    send({ kind: 'audio_unregister' });
-    webamp?.dispose();
-  });
+  onCleanup(() => audio?.dispose());
 
   return (
     <div
-      ref={container}
-      data-testid="music-webamp"
-      style={{ position: 'relative', width: '100%', height: '100%' }}
-    />
+      style={{
+        display: 'flex',
+        'flex-direction': 'column',
+        height: '100%',
+        padding: `${tokens.spaceLg}px`,
+        gap: `${tokens.spaceMd}px`,
+        'box-sizing': 'border-box',
+      }}
+    >
+      <NowPlaying
+        data-testid="music-nowplaying"
+        title={current()?.title ?? '—'}
+        subtitle={folderLabel()}
+        meta={`${tracks().length} ${tracks().length === 1 ? 'track' : 'tracks'}`}
+      />
+
+      {/* folder row */}
+      <div
+        style={{
+          display: 'flex',
+          'align-items': 'center',
+          gap: `${tokens.spaceMd}px`,
+          'font-size': tokens.fontSizeSm,
+          color: tokens.fgMuted,
+        }}
+      >
+        <FolderOpen size={13} />
+        <span
+          style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}
+          title={root()}
+        >
+          {root() || 'No folder selected'}
+        </span>
+        <Button data-testid="pick-folder" onClick={() => setPickerOpen(true)}>
+          Change…
+        </Button>
+      </div>
+
+      <MediaList
+        data-testid="track-list"
+        items={tracks()}
+        selected={selected()}
+        playing={index()}
+        onSelect={setSelected}
+        onActivate={loadAndPlay}
+        empty="No audio files in this folder"
+        row={(t: Track, _i, playing) => (
+          <>
+            <span style={{ width: '14px', 'flex-shrink': 0, display: 'inline-flex', 'align-items': 'center' }}>
+              {playing ? <Volume2 size={11} /> : null}
+            </span>
+            <span style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+              {t.title}
+            </span>
+          </>
+        )}
+      />
+
+      <SeekBar pos={pos()} dur={dur()} onSeek={seek} />
+
+      <div style={{ display: 'flex', 'align-items': 'center', gap: `${tokens.spaceLg}px` }}>
+        <TransportControls status={status()} onPrev={prev} onPlay={play} onPause={pause} onNext={next} />
+        <div style={{ flex: 1 }}>
+          <VolumeSlider
+            value={srcVol()}
+            onInput={(v) => {
+              setSrcVol(v);
+              applyVolume();
+            }}
+          />
+        </div>
+      </div>
+
+      <FilePicker
+        open={pickerOpen()}
+        mode="directory"
+        host={props.host}
+        hostInstanceID={props.instance}
+        start={root()}
+        data-testid="folder-picker"
+        onConfirm={(p) => {
+          setPickerOpen(false);
+          send({ kind: 'scan', id: 'm-scan', root: p });
+        }}
+        onCancel={() => setPickerOpen(false)}
+      />
+
+      <audio
+        ref={audioEl}
+        style={{ display: 'none' }}
+        onPlay={() => {
+          setStatus('playing');
+          audio?.report();
+        }}
+        onPause={() => {
+          setStatus('paused');
+          audio?.report();
+        }}
+        onTimeUpdate={() => {
+          setPos(audioEl.currentTime);
+          audio?.report();
+        }}
+        onLoadedMetadata={() => setDur(audioEl.duration || 0)}
+        onEnded={next}
+      />
+    </div>
   );
 }
 
 defineWashApp('wash-app-music', MusicApp, {
-  style: 'display:block;width:100%;height:100%;overflow:hidden;background:#000;',
+  style: `display:block;width:100%;height:100%;background:${tokens.bgWindow};color:${tokens.fg};`,
 });

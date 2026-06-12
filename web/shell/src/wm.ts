@@ -49,6 +49,10 @@ export interface Win {
   // isRoot is router-attested; renders the red ROOT stripe in the
   // titlebar. See SessionWindow.is_root in main.tsx.
   isRoot?: boolean;
+  // chromeless drops the wash titlebar + border so the guest surface
+  // (e.g. Webamp) fills the frame and draws its own chrome. Mirrors
+  // the app manifest's WindowHints.Chromeless.
+  chromeless?: boolean;
   // crashed is set when the BE process exited abnormally. The window
   // stays mounted (geometry intact) but FloatingWindow swaps in the
   // crash tombstone instead of the dead custom element. Router-side
@@ -175,6 +179,7 @@ function fromSessionWindow(sw: SessionWindow): Win {
     restoreW: sw.restore_w,
     restoreH: sw.restore_h,
     isRoot: sw.is_root,
+    chromeless: sw.chromeless,
   };
 }
 
