@@ -7,8 +7,14 @@ app — `docs/AUDIO.md`). It shares the audio control plane + ingress, but
 the UI is plain wash (Solid + `@wash/ui`), not a Winamp skin.
 
 Unbuilt — design only. Sibling of `docs/RADIO.md`; both follow the same
-**list + transport + info** skeleton and should share a tiny audio-source
-client (§7).
+**list + transport + info** skeleton.
+
+**Architecture (decided 2026-06-12):** Music and Radio (and a future
+video player) are **separate thin apps over shared libraries** — *not* one
+app with modes/tabs, *not* one package with multiple registrations. The
+reuse lives in libraries, so apps stay cheap and focused (the fm/disks/net
+idiom). Shared foundation (§7): `internal/medialib` (Go scan/serve), a
+`@wash/ui` media kit, and `@wash/audio-client`.
 
 ## 1. Scope — minimalist
 
@@ -77,22 +83,34 @@ Sensible, compact: **title · artist · album** (tags, else filename), plus
 **duration** and **codec/bitrate**. Duration/bitrate from the BE tag read
 (or the `<audio>`/`loadedmetadata`); art deferred.
 
-## 6. Volume — OPEN (see chat discussion)
+## 6. Volume — DECIDED (model A)
 
-Recommended: an **in-window volume slider = this source's volume**, applied
-client-side as `el.volume = masterVolume × sourceVolume` (the model in
-`docs/AUDIO.md §3` — per-source `volume` already exists; the sidebar slider
-stays the **master**). The app reports its `sourceVolume` so state stays
-truthful. Alternatives discussed in chat: (B) no in-window volume, rely on
-the sidebar master only; (C) the in-window slider drives master directly.
-Pick one before build.
+An **in-window volume slider = this source's volume**, applied client-side
+as `el.volume = masterVolume × sourceVolume` (`docs/AUDIO.md §3` — per-source
+`volume`; the sidebar slider stays the **master**). The app reports its
+`sourceVolume` so state stays truthful. (Rejected: sidebar-master-only; or
+the in-window slider driving master directly.)
 
-## 7. Shared audio-source client
+## 7. Shared foundation (architecture A)
 
-Washamp + Music + Radio all do the same register / report / unregister +
-receive-transport dance. Extract a tiny FE helper
-`@wash/audio-client`: `createAudioSource({title, onCmd}) → { report, set,
-dispose }`. Build it here, reuse in Radio, optionally retrofit Washamp.
+Per the decision above, the reuse lives in libraries that Music, Radio,
+the future video player, and the sidebar all consume:
+
+- **`internal/medialib`** (Go) — recursive folder scan → entries (+ tag
+  read), and Range ingress serve. Shared by Music + Washamp (+ video).
+- **`@wash/ui` media kit** (Solid components, extracted from the sidebar
+  `AudioWidget` — its 3rd+ consumers): `TransportControls` (prev/play-pause/
+  next), `VolumeSlider`, `NowPlaying` (info header), `MediaList` (selectable
+  list w/ playing-indicator + render-prop rows), optional `SeekBar`
+  (`seekable` flag: Music seeks, Radio is live).
+- **`@wash/audio-client`** (FE logic) — `createAudioSource({title, onCmd})
+  → { report, set, dispose }` for the `com.wash.audio` register/report/
+  transport dance; the service's active-source + single-play exclusivity
+  (`docs/AUDIO.md §3`) then makes the sidebar one global transport.
+
+Build order: the shared kit + service policy first (AUDIO.md M4),
+refactoring the sidebar onto it; then Music, then Radio, then (later) video
+— each a thin app on this foundation.
 
 ## 8. Testing (e2e, hermetic)
 

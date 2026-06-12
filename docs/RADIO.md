@@ -6,8 +6,13 @@ stations only — we list public stream URLs operators publish and play
 them; we host no content (VLC/Kodi model).
 
 Unbuilt — design only. Sibling of `docs/MUSIC.md`; same **list +
-transport + info** skeleton and shared audio-source client (§7). Where
-Music's "list" is files in a folder, Radio's "list" is stations.
+transport + info** skeleton. Where Music's "list" is files in a folder,
+Radio's "list" is stations.
+
+**Architecture (decided 2026-06-12):** a **separate thin app over shared
+libraries** (architecture A — see `docs/MUSIC.md`), reusing
+`internal/medialib`, the `@wash/ui` media kit, and `@wash/audio-client`.
+Not a mode of a combined app.
 
 ## 1. Scope — minimalist
 
@@ -105,15 +110,17 @@ fetch + cache). The curated list (A) is just shipped data.
   free.
 - Reconnect-on-drop; clear "stream offline" state for dead stations.
 
-## 6. Volume — OPEN (shared with Music, see chat)
+## 6. Volume — DECIDED (model A)
 
-Same decision as `docs/MUSIC.md §6`: recommended in-window per-source
-volume + sidebar master, `el.volume = masterVolume × sourceVolume`.
+Same as `docs/MUSIC.md §6`: in-window per-source volume + sidebar master,
+`el.volume = masterVolume × sourceVolume`.
 
-## 7. Shared audio-source client
+## 7. Shared foundation
 
-Same `@wash/audio-client` helper as Music (`createAudioSource`). Build in
-Music, reuse here.
+Same as `docs/MUSIC.md §7`: `internal/medialib` (here the "serve" leg is
+the §4 stream-proxy rather than a file server), the `@wash/ui` media kit
+(`TransportControls`/`NowPlaying`/`MediaList`/`VolumeSlider`; `SeekBar` runs
+in non-seekable "live" mode), and `@wash/audio-client`.
 
 ## 8. Data path
 
