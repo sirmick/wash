@@ -7,6 +7,7 @@
 
 import type { Component } from 'solid-js';
 import { Show } from 'solid-js';
+import { Pause, Play, SkipBack, SkipForward, Volume2 } from 'lucide-solid';
 
 export interface AudioSource {
   id: string;
@@ -34,11 +35,14 @@ export interface AudioWidgetProps {
 }
 
 const btn = {
+  display: 'inline-flex',
+  'align-items': 'center',
+  'justify-content': 'center',
   background: 'transparent',
   color: '#cfd0d4',
   border: '1px solid #2a2a3a',
   'border-radius': '3px',
-  padding: '3px 8px',
+  padding: '4px 10px',
   cursor: 'pointer',
   font: '12px ui-sans-serif,system-ui,sans-serif',
 } as const;
@@ -137,8 +141,9 @@ export const AudioWidget: Component<AudioWidgetProps> = (props) => {
                 style={btn}
                 onClick={() => props.onControl(src().id, 'prev')}
                 title="Previous"
+                aria-label="Previous"
               >
-                ⏮
+                <SkipBack size={14} />
               </button>
               <Show
                 when={src().status === 'playing'}
@@ -149,8 +154,9 @@ export const AudioWidget: Component<AudioWidgetProps> = (props) => {
                     style={btn}
                     onClick={() => props.onControl(src().id, 'play')}
                     title="Play"
+                    aria-label="Play"
                   >
-                    ▶
+                    <Play size={14} />
                   </button>
                 }
               >
@@ -160,8 +166,9 @@ export const AudioWidget: Component<AudioWidgetProps> = (props) => {
                   style={btn}
                   onClick={() => props.onControl(src().id, 'pause')}
                   title="Pause"
+                  aria-label="Pause"
                 >
-                  ⏸
+                  <Pause size={14} />
                 </button>
               </Show>
               <button
@@ -170,8 +177,9 @@ export const AudioWidget: Component<AudioWidgetProps> = (props) => {
                 style={btn}
                 onClick={() => props.onControl(src().id, 'next')}
                 title="Next"
+                aria-label="Next"
               >
-                ⏭
+                <SkipForward size={14} />
               </button>
             </div>
           </>
@@ -182,7 +190,7 @@ export const AudioWidget: Component<AudioWidgetProps> = (props) => {
       <label
         style={{ display: 'flex', 'align-items': 'center', gap: '6px', 'font-size': '10px', opacity: 0.8 }}
       >
-        <span>vol</span>
+        <Volume2 size={13} aria-label="Volume" />
         <input
           data-testid="audio-volume"
           type="range"
