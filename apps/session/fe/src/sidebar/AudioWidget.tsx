@@ -1,13 +1,14 @@
 // AudioWidget renders the mixer state fed by com.wash.audio (the audio
 // control plane, docs/AUDIO.md §3). The service is the source of truth;
-// this widget is a pure renderer + command emitter. It shows the active
-// source's now-playing + transport, and the master volume. Playback
-// itself lives in each producer's FE — the buttons here send commands
-// the service relays to the owning producer.
+// this widget is a pure renderer + command emitter. It shows/drives the
+// ACTIVE source (state.active_id, the thing playing or last-played) and
+// the master volume; playback lives in each producer's FE. The transport
+// cluster + now-playing line come from the shared @wash/ui media kit, so
+// the sidebar and the Music/Radio windows stay identical.
 
 import type { Component } from 'solid-js';
 import { Show } from 'solid-js';
-import { Pause, Play, SkipBack, SkipForward, Volume2 } from 'lucide-solid';
+import { NowPlaying, TransportControls, VolumeSlider } from '@wash/ui';
 
 export interface AudioSource {
   id: string;
@@ -22,6 +23,8 @@ export interface AudioSource {
 
 export interface AudioState {
   sources: AudioSource[];
+  /** the source the widget shows/drives; falls back to the front source. */
+  active_id?: string;
   master_volume: number;
   master_mute: boolean;
 }
@@ -34,19 +37,6 @@ export interface AudioWidgetProps {
   onMasterVolume: (value: number) => void;
 }
 
-const btn = {
-  display: 'inline-flex',
-  'align-items': 'center',
-  'justify-content': 'center',
-  background: 'transparent',
-  color: '#cfd0d4',
-  border: '1px solid #2a2a3a',
-  'border-radius': '3px',
-  padding: '4px 10px',
-  cursor: 'pointer',
-  font: '12px ui-sans-serif,system-ui,sans-serif',
-} as const;
-
 function fmt(sec: number): string {
   if (!sec || sec < 0) return '0:00';
   const m = Math.floor(sec / 60);
@@ -55,7 +45,12 @@ function fmt(sec: number): string {
 }
 
 export const AudioWidget: Component<AudioWidgetProps> = (props) => {
-  const active = () => props.state()?.sources?.[0] ?? null;
+  // The active source = service-chosen active_id, else the front source.
+  const active = (): AudioSource | null => {
+    const st = props.state();
+    if (!st || !st.sources?.length) return null;
+    return st.sources.find((s) => s.id === st.active_id) ?? st.sources[0];
+  };
   const master = () => props.state()?.master_volume ?? 1;
 
   return (
@@ -82,25 +77,14 @@ export const AudioWidget: Component<AudioWidgetProps> = (props) => {
       >
         {(src) => (
           <>
-            <div data-testid="audio-nowplaying" data-status={src().status}>
-              <div
-                style={{
-                  'font-weight': 600,
-                  color: '#ddd',
-                  overflow: 'hidden',
-                  'text-overflow': 'ellipsis',
-                  'white-space': 'nowrap',
-                  'font-size': '12px',
-                }}
-              >
-                {src().title || 'Unknown'}
-              </div>
-              <div style={{ opacity: 0.7, 'font-size': '11px' }}>
-                {src().artist || src().app_id.replace('com.wash.', '')}
-              </div>
-            </div>
+            <NowPlaying
+              data-testid="audio-nowplaying"
+              data-status={src().status}
+              title={src().title}
+              subtitle={src().artist || src().app_id.replace('com.wash.', '')}
+            />
 
-            {/* progress */}
+            {/* progress (sidebar-specific; apps use a SeekBar) */}
             <div
               style={{
                 display: 'flex',
@@ -133,74 +117,19 @@ export const AudioWidget: Component<AudioWidgetProps> = (props) => {
               <span>{fmt(src().dur_sec)}</span>
             </div>
 
-            {/* transport */}
-            <div style={{ display: 'flex', gap: '6px', 'justify-content': 'center' }}>
-              <button
-                type="button"
-                data-testid="audio-prev"
-                style={btn}
-                onClick={() => props.onControl(src().id, 'prev')}
-                title="Previous"
-                aria-label="Previous"
-              >
-                <SkipBack size={14} />
-              </button>
-              <Show
-                when={src().status === 'playing'}
-                fallback={
-                  <button
-                    type="button"
-                    data-testid="audio-play"
-                    style={btn}
-                    onClick={() => props.onControl(src().id, 'play')}
-                    title="Play"
-                    aria-label="Play"
-                  >
-                    <Play size={14} />
-                  </button>
-                }
-              >
-                <button
-                  type="button"
-                  data-testid="audio-pause"
-                  style={btn}
-                  onClick={() => props.onControl(src().id, 'pause')}
-                  title="Pause"
-                  aria-label="Pause"
-                >
-                  <Pause size={14} />
-                </button>
-              </Show>
-              <button
-                type="button"
-                data-testid="audio-next"
-                style={btn}
-                onClick={() => props.onControl(src().id, 'next')}
-                title="Next"
-                aria-label="Next"
-              >
-                <SkipForward size={14} />
-              </button>
-            </div>
+            <TransportControls
+              status={src().status}
+              onPrev={() => props.onControl(src().id, 'prev')}
+              onPlay={() => props.onControl(src().id, 'play')}
+              onPause={() => props.onControl(src().id, 'pause')}
+              onNext={() => props.onControl(src().id, 'next')}
+            />
           </>
         )}
       </Show>
 
       {/* master volume — always shown so the user can set level pre-play */}
-      <label
-        style={{ display: 'flex', 'align-items': 'center', gap: '6px', 'font-size': '10px', opacity: 0.8 }}
-      >
-        <Volume2 size={13} aria-label="Volume" />
-        <input
-          data-testid="audio-volume"
-          type="range"
-          min="0"
-          max="100"
-          value={Math.round(master() * 100)}
-          style={{ flex: 1 }}
-          onInput={(e) => props.onMasterVolume(Number(e.currentTarget.value) / 100)}
-        />
-      </label>
+      <VolumeSlider value={master()} onInput={(v) => props.onMasterVolume(v)} />
     </div>
   );
 };

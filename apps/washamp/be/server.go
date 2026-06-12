@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sirmick/wash/internal/audiorelay"
 	"github.com/sirmick/wash/internal/sdk"
 )
 
@@ -105,7 +106,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	})
 
 	// Bridge the FE's playback state ↔ the com.wash.audio control plane.
-	registerAudioRelay(bus)
+	audiorelay.Register(bus)
 
 	go serveAndPublish(c, instanceID, p)
 }

@@ -5,7 +5,7 @@
 // position up to the service (→ sidebar) and obeys transport/volume
 // commands coming back down.
 
-import { defineWashApp, type WashAppProps } from '@wash/ui';
+import { createAudioSource, defineWashApp, type AudioSource, type WashAppProps } from '@wash/ui';
 import { onCleanup, onMount } from 'solid-js';
 import Webamp from 'webamp';
 
@@ -19,15 +19,13 @@ interface TracksOk {
   skins?: { name: string; url: string }[];
 }
 
-interface AudioCmd {
-  kind: 'audio.cmd';
-  action: 'play' | 'pause' | 'next' | 'prev' | 'stop' | 'volume';
-  value?: number; // 0..1 for volume
-}
-
 function WashampApp(props: WashAppProps) {
   let container!: HTMLDivElement;
   let webamp: Webamp | undefined;
+  // Producer bridge to com.wash.audio (register/report/transport), shared
+  // by every wash media app. Created in onMount; drives + is driven by the
+  // sidebar.
+  let audio: AudioSource | undefined;
   // Webamp's root (#webamp), reparented into our slot (see initWebamp).
   let webampEl: HTMLElement | null = null;
   // Latest current-track identity, captured from onTrackDidChange (the
@@ -189,22 +187,15 @@ function WashampApp(props: WashAppProps) {
     return { title, artist, status, pos, dur };
   }
 
-  // report is throttled: webamp's store ticks position roughly per second,
-  // and we don't want to flood the bus on every store mutation.
-  let reportTimer: number | null = null;
-  function scheduleReport() {
-    if (reportTimer != null) return;
-    reportTimer = window.setTimeout(() => {
-      reportTimer = null;
-      if (!webamp) return;
-      send({ kind: 'audio_report', ...snapshot(webamp) });
-    }, 400);
-  }
+  // Throttled report via the shared audio source (coalesces the ~per-second
+  // store ticks). audio is created in onMount; calls before then no-op.
+  const scheduleReport = () => audio?.report();
 
-  function handleCmd(c: AudioCmd) {
+  // A transport/volume command relayed from the service (sidebar).
+  function handleCmd(action: string, value?: number) {
     const wa = webamp;
     if (!wa) return;
-    switch (c.action) {
+    switch (action) {
       case 'play':
         wa.play();
         break;
@@ -221,7 +212,7 @@ function WashampApp(props: WashAppProps) {
         wa.previousTrack();
         break;
       case 'volume':
-        if (typeof c.value === 'number') wa.setVolume(Math.round(c.value * 100));
+        if (typeof value === 'number') wa.setVolume(Math.round(value * 100));
         break;
     }
     scheduleReport();
@@ -285,16 +276,23 @@ function WashampApp(props: WashAppProps) {
 
     // Register with the control plane, seeding now-playing from track 0.
     const first = m.tracks[0];
-    send({ kind: 'audio_register', title: first?.title ?? '', artist: first?.artist ?? '' });
+    audio?.register({ title: first?.title ?? '', artist: first?.artist ?? '' });
     cur = { url: tracks[0]?.url ?? '', title: first?.title ?? '', artist: first?.artist ?? '' };
     scheduleReport();
   }
 
   onMount(() => {
+    // Producer bridge: transport/volume cmds drive webamp; reports read a
+    // fresh snapshot. (audio.cmd is handled here, not in onMsg below.)
+    audio = createAudioSource({
+      instance: props.instance,
+      host: props.host,
+      snapshot: () => (webamp ? snapshot(webamp) : { title: '', status: 'stopped' }),
+      onCmd: (action, value) => handleCmd(action, value),
+    });
     const onMsg = (ev: Event) => {
       const m = (ev as CustomEvent).detail as { kind?: string };
       if (m?.kind === 'tracks_ok') void initWebamp(m as TracksOk);
-      else if (m?.kind === 'audio.cmd') handleCmd(m as AudioCmd);
     };
     props.host.addEventListener('wash:msg', onMsg);
     // Capture-phase so we intercept Webamp's titlebar drag (see
@@ -314,7 +312,7 @@ function WashampApp(props: WashAppProps) {
   });
 
   onCleanup(() => {
-    send({ kind: 'audio_unregister' });
+    audio?.dispose();
     webamp?.dispose();
   });
 

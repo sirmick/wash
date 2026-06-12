@@ -55,11 +55,16 @@ const (
 )
 
 // State is the public mixer state. Sources is ordered most-recently-
-// registered first so the sidebar renders the active source on top.
+// registered first.
 type State struct {
-	Sources      []Source `json:"sources"`
-	MasterVolume float64  `json:"master_volume"`
-	MasterMute   bool     `json:"master_mute"`
+	Sources []Source `json:"sources"`
+	// ActiveID is the source the sidebar shows + drives: whichever last
+	// went playing, kept across pause so the widget still targets "the
+	// thing you'd resume". Empty before anything plays (the widget then
+	// falls back to the front source). See docs/AUDIO.md §3.
+	ActiveID     string  `json:"active_id"`
+	MasterVolume float64 `json:"master_volume"`
+	MasterMute   bool    `json:"master_mute"`
 }
 
 // Source is one thing making (or able to make) sound. ID is the
