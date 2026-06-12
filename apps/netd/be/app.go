@@ -97,6 +97,12 @@ type NetState struct {
 	// Refresh asks the FE to re-fetch `current` — pushed after netd reads the
 	// box's config out-of-band via a privileged escalation (see liveConfig).
 	Refresh bool `json:"refresh,omitempty"`
+	// UCI is the live config rendered to UCI text (one `# /etc/config/<pkg>`
+	// block per package) — the read-only "current configuration" view in the
+	// Settings Network panel. It's wash's CANONICAL model serialized as UCI, so
+	// off-OpenWRT it's wash's normalized view, not the literal system files. Like
+	// Backend, publish() stamps it onto every state from the live config.
+	UCI string `json:"uci,omitempty"`
 }
 
 // assetsFS embeds the settings "Network" panel bundle (panel.js), staged
@@ -766,8 +772,39 @@ func publish(s NetState) {
 		// subscriber that joins mid-apply still learns which backend is running.
 		s.Backend, s.Available = info.active, info.available
 		s.WifiRadio, s.WifiLive = wifiRadio, wifiLive
+		s.UCI = renderLiveUCI()
 		svc.Mutate(func(cur *NetState) { *cur = s })
 	}
+}
+
+// renderLiveUCI serializes the live config to a single UCI text blob, one
+// `# /etc/config/<pkg>` block per non-empty package in a stable order — the
+// read-only view shown in the Settings Network panel. Source is liveConfig()
+// (same as the `current` RPC), so on first read it triggers netd's one-shot
+// privileged refresh just like the panel/window do. Errors render as "".
+func renderLiveUCI() string {
+	byPkg, err := codec.Render(liveConfig())
+	if err != nil {
+		log.Printf("wash-netd: render live UCI: %v", err)
+		return ""
+	}
+	pkgs := make([]string, 0, len(byPkg))
+	for pkg := range byPkg {
+		pkgs = append(pkgs, pkg)
+	}
+	sort.Strings(pkgs)
+	var b strings.Builder
+	for _, pkg := range pkgs {
+		txt := strings.TrimSpace(byPkg[pkg])
+		if txt == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "# /etc/config/%s\n%s\n", pkg, txt)
+	}
+	return b.String()
 }
 
 // --- wire request/response types -------------------------------------------

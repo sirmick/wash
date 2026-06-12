@@ -30,14 +30,18 @@ const Panel = (props: SettingsPanelProps) => {
   const [mode, setMode] = createSignal('auto'); // persisted renderer choice
   const [active, setActive] = createSignal(''); // what netd reports running
   const [available, setAvailable] = createSignal<string[]>([]);
+  const [uci, setUci] = createSignal(''); // live config rendered as UCI (read-only)
 
   onMount(() => {
     const offCfg = port.readConfig('network', (v) => setMode((v as { backend?: string }).backend || 'auto'));
     const offMsg = port.onMessage((p) => {
       if (p.kind !== 'state') return;
-      const s = ((p as { state?: { backend?: string; available?: string[] } }).state) || {};
+      const s = ((p as { state?: { backend?: string; available?: string[]; uci?: string } }).state) || {};
       setActive(s.backend ?? '');
       setAvailable(Array.isArray(s.available) ? s.available : []);
+      // publish() stamps uci on every state; omitempty drops it when empty, so an
+      // absent field means "no managed config" (reflect it, don't keep stale text).
+      setUci(s.uci ?? '');
     });
     port.send({ kind: 'subscribe' });
     onCleanup(() => {
@@ -96,6 +100,33 @@ const Panel = (props: SettingsPanelProps) => {
           </div>
         </div>
       </Section>
+      <Section title="Current configuration (UCI)">
+        <div style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}>
+          <div style={{ opacity: 0.7, font: `${tokens.fontSizeMd} ${tokens.fontSans}`, 'max-width': '440px', 'line-height': 1.5 }}>
+            <Show
+              when={active() === 'nm'}
+              fallback={<>What wash is enforcing on this box, rendered to UCI (read-only). Edit it in the Network window.</>}
+            >
+              wash-managed interfaces only — NetworkManager owns the rest. wash's view rendered to UCI (read-only).
+            </Show>
+          </div>
+          <Show
+            when={uci().trim()}
+            fallback={
+              <div style={{ opacity: 0.5, font: `${tokens.fontSizeMd} ${tokens.fontMono}`, padding: '8px 0' }}>
+                {active() && active() !== 'fake' ? '(no managed configuration)' : 'loading…'}
+              </div>
+            }
+          >
+            <pre data-testid="net-uci" style={uciPreStyle}>{uci()}</pre>
+            <div>
+              <SmallBtn onClick={() => navigator.clipboard?.writeText(uci())} data-testid="net-uci-copy">
+                Copy
+              </SmallBtn>
+            </div>
+          </Show>
+        </div>
+      </Section>
       <Section title="Network settings">
         <div>
           <SmallBtn onClick={() => port.launch(NET_APP)} data-testid="net-open">
@@ -105,6 +136,21 @@ const Panel = (props: SettingsPanelProps) => {
       </Section>
     </div>
   );
+};
+
+const uciPreStyle: JSX.CSSProperties = {
+  margin: 0,
+  'max-height': '320px',
+  overflow: 'auto',
+  background: tokens.bgMenu,
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusMd}px`,
+  padding: '10px 12px',
+  font: `${tokens.fontSizeBase} ${tokens.fontMono}`,
+  'line-height': 1.45,
+  'white-space': 'pre',
+  'user-select': 'text',
 };
 
 const textInputStyle: JSX.CSSProperties = {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/netip"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -253,6 +254,33 @@ func TestApplyThenConfirmPromotesLiveConfig(t *testing.T) {
 	}
 	if got := svc.Snapshot().Status; got != "committed" {
 		t.Fatalf("status=%q, want committed", got)
+	}
+}
+
+// TestStatePushCarriesLiveUCI confirms publish() stamps the live config rendered
+// to UCI onto the state snapshot — the read-only "Current configuration (UCI)"
+// view the Settings Network panel reads from state.uci. Before any config it's
+// empty; after a committed apply it carries the rendered interface.
+func TestStatePushCarriesLiveUCI(t *testing.T) {
+	router, cleanup := connectNetd(t)
+	defer cleanup()
+
+	if u := svc.Snapshot().UCI; u != "" {
+		t.Fatalf("empty live config should render no UCI, got %q", u)
+	}
+
+	if reply := call(t, router, netSender, "apply", map[string]any{"config": ifaceConfig()}); reply["kind"] != "apply_ok" {
+		t.Fatalf("apply: %v", reply)
+	}
+	if cr := call(t, router, netSender, "confirm", nil); cr["kind"] != "confirm_ok" {
+		t.Fatalf("confirm: %v", cr)
+	}
+
+	uci := svc.Snapshot().UCI
+	for _, want := range []string{"# /etc/config/network", "config interface 'lan'", "10.0.0.1/24"} {
+		if !strings.Contains(uci, want) {
+			t.Fatalf("state UCI missing %q:\n%s", want, uci)
+		}
 	}
 }
 
