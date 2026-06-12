@@ -188,7 +188,7 @@ export function FloatingWindow(props: WindowProps) {
   const FRAME_BORDER = 1;
 
   const frameStyle = () => {
-    // Chromeless windows (e.g. wash-music's Webamp) drop the frame
+    // Chromeless windows (e.g. wash-washamp's Webamp) drop the frame
     // entirely: no titlebar, no border, transparent background — the
     // guest surface paints its own chrome edge-to-edge. We keep the
     // drop shadow so the floating window still reads as separate from

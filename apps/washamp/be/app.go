@@ -1,5 +1,5 @@
-// Package music is wash-music (com.wash.music) — the Winamp-skinned
-// music player window (docs/AUDIO.md §2). It embeds the apps/music/fe
+// Package music is wash-washamp (com.wash.washamp) — the Winamp-skinned
+// music player window (docs/AUDIO.md §2). It embeds the apps/washamp/fe
 // bundle, which renders Webamp (the JS implementation of the classic
 // Winamp 2 skin engine), and serves audio to the browser over the
 // ingress reverse-proxy as Case-1 "fe-decoded" sources: the BE hands
@@ -18,7 +18,7 @@
 //
 // `base` is the ingress path (e.g. "/app/<token>/"); the FE loads each
 // track at base+file. Same router origin as the shell, so no CORS.
-package music
+package washamp
 
 import (
 	"context"
@@ -36,7 +36,7 @@ var assetsFS embed.FS
 const version = "0.1.0"
 
 // AppID is this app's reserved id.
-const AppID = "com.wash.music"
+const AppID = "com.wash.washamp"
 
 // musicIcon — Lucide sprite symbol name. Like every other app icon it
 // is a name resolved against the shared /icons.svg sprite (launcher,
@@ -51,7 +51,7 @@ var def *sdk.AppDef
 func init() {
 	sub, err := fs.Sub(assetsFS, "assets")
 	if err != nil {
-		log.Printf("wash-music: assets sub: %v", err)
+		log.Printf("wash-washamp: assets sub: %v", err)
 	}
 	// Classic Winamp is pixel-locked. The window is chromeless (no wash
 	// titlebar/border) and sized to Webamp's main-window footprint
@@ -66,7 +66,7 @@ func init() {
 			Name:            "Washamp",
 			Version:         version,
 			ProtocolVersion: sdk.ProtocolVersion,
-			Element:         "wash-app-music",
+			Element:         "wash-app-washamp",
 			Surface:         sdk.SurfaceWindow,
 			Icon:            musicIcon,
 			Accent:          "#30c060",
@@ -77,7 +77,7 @@ func init() {
 		OnReady: onReady,
 	}
 	registry.Register(&registry.App{
-		Name:     "wash-music",
+		Name:     "wash-washamp",
 		Manifest: def.Manifest,
 		Assets:   def.Assets,
 		Run:      run,

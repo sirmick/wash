@@ -2,7 +2,7 @@
 
 A native wash app for browsing and playing internet radio (Icecast /
 Shoutcast-style streams). It is the full version of the stream seed
-already in wash-music (`$WASH_MUSIC_STREAMS`): a proper station browser
+already in wash-washamp (`$WASH_MUSIC_STREAMS`): a proper station browser
 with a wash-native UI, reusing the audio control plane and the ingress
 proxy. **Free/open directory only** — we list public stream URLs the
 station operators publish and play them; we host no content (same model

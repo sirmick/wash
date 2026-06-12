@@ -1,4 +1,4 @@
-package music
+package washamp
 
 import (
 	"github.com/sirmick/wash/internal/sdk"

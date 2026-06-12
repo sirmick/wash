@@ -1,4 +1,4 @@
-// wash-music FE — embeds Webamp (the JS classic-Winamp skin engine)
+// wash-washamp FE — embeds Webamp (the JS classic-Winamp skin engine)
 // inside a wash window, feeds it Case-1 tracks served by the BE over the
 // ingress proxy (docs/AUDIO.md §1, §2), and bridges playback to the
 // com.wash.audio control plane (§3): it reports now-playing/status/
@@ -25,7 +25,7 @@ interface AudioCmd {
   value?: number; // 0..1 for volume
 }
 
-function MusicApp(props: WashAppProps) {
+function WashampApp(props: WashAppProps) {
   let container!: HTMLDivElement;
   let webamp: Webamp | undefined;
   // Webamp's root (#webamp), reparented into our slot (see initWebamp).
@@ -41,7 +41,7 @@ function MusicApp(props: WashAppProps) {
 
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
 
-  // The window is chromeless (apps/music/be/app.go sets
+  // The window is chromeless (apps/washamp/be/app.go sets
   // WindowHints.Chromeless): there is no wash titlebar, so Webamp's own
   // Winamp titlebar is the single titlebar and must drive the wash
   // window. windowID is the id the shell stamps on the host element at
@@ -327,7 +327,7 @@ function MusicApp(props: WashAppProps) {
   );
 }
 
-defineWashApp('wash-app-music', MusicApp, {
+defineWashApp('wash-app-washamp', WashampApp, {
   // The window is chromeless and sized to Webamp's main window, so the
   // host needs no backdrop (transparent — no black margin) and must not
   // clip: Webamp's EQ/playlist sub-windows open beyond the main window's

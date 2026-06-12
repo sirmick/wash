@@ -6,7 +6,7 @@
 // service is the one global observer of all sources, so it is also where
 // ducking/exclusivity policy lands later.
 //
-// Producers (e.g. com.wash.music) register and report their playback
+// Producers (e.g. com.wash.washamp) register and report their playback
 // over cross-app app_msg; the router stamps the producer's attested
 // identity, and the service keys each source by the producer's
 // InstanceID (never a caller-supplied id). Subscribers (the session

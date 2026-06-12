@@ -63,7 +63,7 @@ no audio bytes.** It is a registry of who is making sound plus master
 volume/mute. Because it is the only global observer of all sources, it is the
 natural (later) home for ducking/exclusivity policy.
 
-### `com.wash.music` — Winamp window
+### `com.wash.washamp` — Winamp window
 
 `surface=window`, `InstancingSingle` (one Winamp). FE embeds **Webamp**
 (npm `webamp`, MIT) for the pixel-perfect classic-skin UI, playlist, EQ, and
@@ -143,7 +143,7 @@ owning producer. Pure renderer; the gateway does the wiring.
 
 ## 5. Milestones
 
-- **M1 — Webamp plays a track over ingress.** Scaffold `apps/music/{be,fe}`.
+- **M1 — Webamp plays a track over ingress.** Scaffold `apps/washamp/{be,fe}`.
   BE: fixed non-resizable window; Range-capable file server on a unix socket →
   `PublishIngress`; serve a bundled sample track. FE: embed `webamp`,
   `renderInto` the host, default skin, `setTracksToPlay` with the ingress URL.

@@ -40,7 +40,7 @@ const VSCODE_WB_BIN = join(REPO_ROOT, 'out', 'wash-vscode-workbench');
 const DISPLAY_BIN = join(REPO_ROOT, 'out', 'wash-display');
 const NET_BIN = join(REPO_ROOT, 'out', 'wash-net');
 const NETD_BIN = join(REPO_ROOT, 'out', 'wash-netd');
-const MUSIC_BIN = join(REPO_ROOT, 'out', 'wash-music');
+const WASHAMP_BIN = join(REPO_ROOT, 'out', 'wash-washamp');
 const AUDIO_BIN = join(REPO_ROOT, 'out', 'wash-audio');
 const FAKESUDO_BIN = join(REPO_ROOT, 'out', 'wash-priv-fakesudo');
 export const SUDO_BIN = join(REPO_ROOT, 'out', 'wash-sudo');
@@ -302,11 +302,11 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
     }
     bins.push(NETD_BIN);
   }
-  if (wanted.includes('music')) {
-    if (!existsSync(MUSIC_BIN)) {
-      throw new Error(`missing wash-music: ${MUSIC_BIN}`);
+  if (wanted.includes('washamp')) {
+    if (!existsSync(WASHAMP_BIN)) {
+      throw new Error(`missing wash-washamp: ${WASHAMP_BIN}`);
     }
-    bins.push(MUSIC_BIN);
+    bins.push(WASHAMP_BIN);
   }
   if (wanted.includes('audio')) {
     if (!existsSync(AUDIO_BIN)) {

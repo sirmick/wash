@@ -1,7 +1,7 @@
 // M1 full-stack music e2e (docs/AUDIO.md §5): the Winamp-skinned player
 // driven in kiosk mode — no shell, no sidebar. Proves the Case-1 audio
 // pipeline end to end:
-//   1. the wash-music window mounts and Webamp renders (the JS classic
+//   1. the wash-washamp window mounts and Webamp renders (the JS classic
 //      Winamp skin engine paints its main window),
 //   2. the FE↔BE `tracks` round-trip drives the playlist (our synthesized
 //      sample track appears), and
@@ -41,10 +41,10 @@ function minimalWav(): Buffer {
 // library contents) pin an EMPTY WASH_MUSIC_DIR so they're hermetic —
 // otherwise the BE scans the developer's real ~/Music and the playlist
 // assertions break.
-const emptyMusicDir = mkdtempSync(join(tmpdir(), 'wash-music-empty-'));
+const emptyMusicDir = mkdtempSync(join(tmpdir(), 'wash-washamp-empty-'));
 
-test.describe('music app (kiosk, host-side full stack)', () => {
-  test.use({ routerOpts: { kiosk: 'com.wash.music', apps: ['music'], extraEnv: { WASH_MUSIC_DIR: emptyMusicDir } } });
+test.describe('washamp app (kiosk, host-side full stack)', () => {
+  test.use({ routerOpts: { kiosk: 'com.wash.washamp', apps: ['washamp'], extraEnv: { WASH_MUSIC_DIR: emptyMusicDir } } });
 
   test('renders Webamp and serves the track over ingress', async ({ page, router }) => {
     // Catch the ingress fetch for the sample track. Register the waiter
@@ -58,7 +58,7 @@ test.describe('music app (kiosk, host-side full stack)', () => {
     await page.goto(router.url);
 
     // The window mounts.
-    await expect(page.locator('wash-app-music')).toBeVisible();
+    await expect(page.locator('wash-app-washamp')).toBeVisible();
 
     // Webamp painted — a real, sized control (the volume slider) is
     // visible. The #webamp root itself is 0×0 (its windows are absolutely
@@ -82,8 +82,8 @@ test.describe('music app (kiosk, host-side full stack)', () => {
 // to the sidebar; and a transport command from the sidebar round-trips
 // back to webamp. Proves the whole producer → service → sidebar → producer
 // loop (docs/AUDIO.md §3).
-test.describe('music + audio control plane (full shell + sidebar)', () => {
-  test.use({ routerOpts: { apps: ['session', 'music', 'audio'], extraEnv: { WASH_MUSIC_DIR: emptyMusicDir } } });
+test.describe('washamp + audio control plane (full shell + sidebar)', () => {
+  test.use({ routerOpts: { apps: ['session', 'washamp', 'audio'], extraEnv: { WASH_MUSIC_DIR: emptyMusicDir } } });
 
   test('now-playing reaches the sidebar; transport round-trips to webamp', async ({ page, router }) => {
     await page.goto(router.url);
@@ -91,7 +91,7 @@ test.describe('music + audio control plane (full shell + sidebar)', () => {
 
     // Launch the Winamp window. Its FE renders webamp and registers with
     // com.wash.audio (which auto-spawned as a background singleton).
-    await router.controlRequest({ t: 'launch', app_id: 'com.wash.music' });
+    await router.controlRequest({ t: 'launch', app_id: 'com.wash.washamp' });
     await expect(page.getByRole('slider', { name: 'Volume Bar' })).toBeVisible();
 
     // The source propagates music → audio → session gateway → sidebar.
@@ -112,16 +112,16 @@ test.describe('music + audio control plane (full shell + sidebar)', () => {
 // Now-playing label: Webamp rewrites a tag-less file's title to "Unknown"
 // once it reads the (missing) ID3 tags, so the FE anchors the sidebar
 // label to the BE-provided filename stem instead of Webamp's read-back.
-test.describe('music now-playing label (tag-less file)', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'wash-music-tagless-'));
+test.describe('washamp now-playing label (tag-less file)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wash-washamp-tagless-'));
   writeFileSync(join(dir, 'Tagless Track.wav'), minimalWav());
 
-  test.use({ routerOpts: { apps: ['session', 'music', 'audio'], extraEnv: { WASH_MUSIC_DIR: dir } } });
+  test.use({ routerOpts: { apps: ['session', 'washamp', 'audio'], extraEnv: { WASH_MUSIC_DIR: dir } } });
 
   test('sidebar shows the filename label, not Unknown', async ({ page, router }) => {
     await page.goto(router.url);
     await expect(page.locator('wash-app-session')).toBeVisible();
-    await router.controlRequest({ t: 'launch', app_id: 'com.wash.music' });
+    await router.controlRequest({ t: 'launch', app_id: 'com.wash.washamp' });
     await expect(page.getByRole('slider', { name: 'Volume Bar' })).toBeVisible();
     const nowPlaying = page.locator('[data-testid="audio-nowplaying"]');
     await expect(nowPlaying).toBeVisible();
@@ -136,27 +136,27 @@ test.describe('music now-playing label (tag-less file)', () => {
 // renders its UI as a <body> overlay, the FE reparents #webamp into the
 // window slot and drives move/close/minimize from Winamp's native chrome
 // via window.wash — this proves that wiring.
-test.describe('music chromeless window chrome', () => {
-  test.use({ routerOpts: { apps: ['session', 'music', 'audio'], extraEnv: { WASH_MUSIC_DIR: emptyMusicDir } } });
+test.describe('washamp chromeless window chrome', () => {
+  test.use({ routerOpts: { apps: ['session', 'washamp', 'audio'], extraEnv: { WASH_MUSIC_DIR: emptyMusicDir } } });
 
   test('no wash titlebar; Winamp titlebar drives move/close/minimize', async ({ page, router }) => {
     await page.goto(router.url);
     await expect(page.locator('wash-app-session')).toBeVisible();
-    await router.controlRequest({ t: 'launch', app_id: 'com.wash.music' });
+    await router.controlRequest({ t: 'launch', app_id: 'com.wash.washamp' });
     await expect(page.getByRole('slider', { name: 'Volume Bar' })).toBeVisible();
 
-    // The frame hosting wash-app-music carries no wash titlebar, and
+    // The frame hosting wash-app-washamp carries no wash titlebar, and
     // Webamp's root is reparented inside the host (not a body overlay).
-    const frame = page.locator('.wash-window', { has: page.locator('wash-app-music') });
+    const frame = page.locator('.wash-window', { has: page.locator('wash-app-washamp') });
     await expect(frame.locator('.wash-titlebar')).toHaveCount(0);
     expect(
       await page.evaluate(() =>
-        document.querySelector('wash-app-music')!.contains(document.querySelector('#webamp')),
+        document.querySelector('wash-app-washamp')!.contains(document.querySelector('#webamp')),
       ),
     ).toBe(true);
 
     const winID = await page.evaluate(
-      () => window.wash.windows().find((x) => x.element === 'wash-app-music')!.windowID,
+      () => window.wash.windows().find((x) => x.element === 'wash-app-washamp')!.windowID,
     );
     const pos = (id: number) =>
       page.evaluate((i) => {
@@ -185,7 +185,7 @@ test.describe('music chromeless window chrome', () => {
     await page.evaluate((id) => window.wash.restoreWindow(id), winID);
     await expect(page.getByRole('slider', { name: 'Volume Bar' })).toBeVisible();
     await page.locator('#close').click();
-    await expect(page.locator('wash-app-music')).toHaveCount(0);
+    await expect(page.locator('wash-app-washamp')).toHaveCount(0);
   });
 });
 
@@ -193,12 +193,12 @@ test.describe('music chromeless window chrome', () => {
 // BE serves those files over ingress; the FE builds the webamp playlist
 // from them (docs/AUDIO.md §5). Filenames with spaces exercise the
 // per-segment URL escaping.
-test.describe('music app library scan', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'wash-music-lib-'));
+test.describe('washamp app library scan', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wash-washamp-lib-'));
   writeFileSync(join(dir, 'Alpha Song.wav'), minimalWav());
   writeFileSync(join(dir, 'Beta Tune.wav'), minimalWav());
 
-  test.use({ routerOpts: { kiosk: 'com.wash.music', apps: ['music'], extraEnv: { WASH_MUSIC_DIR: dir } } });
+  test.use({ routerOpts: { kiosk: 'com.wash.washamp', apps: ['washamp'], extraEnv: { WASH_MUSIC_DIR: dir } } });
 
   test('serves the seeded folder as the playlist', async ({ page, router }) => {
     await page.goto(router.url);

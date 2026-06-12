@@ -1,4 +1,4 @@
-package music
+package washamp
 
 import (
 	"bytes"
@@ -80,7 +80,7 @@ type player struct {
 }
 
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
-	log.Printf("wash-music ready instance=%s window=%d", instanceID, windowID)
+	log.Printf("wash-washamp ready instance=%s window=%d", instanceID, windowID)
 	bus := sdk.NewBus(c)
 	p := &player{ready: make(chan struct{})}
 
@@ -118,11 +118,11 @@ func serveAndPublish(c *sdk.Conn, instanceID string, p *player) {
 	root := musicDir()
 	lib := scanLibrary(root)
 
-	sock := filepath.Join(os.TempDir(), "wash-music-"+instanceID+".sock")
+	sock := filepath.Join(os.TempDir(), "wash-washamp-"+instanceID+".sock")
 	_ = os.Remove(sock)
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
-		log.Printf("wash-music: listen %s: %v", sock, err)
+		log.Printf("wash-washamp: listen %s: %v", sock, err)
 		return
 	}
 
@@ -152,7 +152,7 @@ func serveAndPublish(c *sdk.Conn, instanceID string, p *player) {
 	defer cancel()
 	base, err := c.PublishIngress(ctx, "unix", sock)
 	if err != nil {
-		log.Printf("wash-music: publish ingress: %v", err)
+		log.Printf("wash-washamp: publish ingress: %v", err)
 		_ = srv.Close()
 		_ = os.Remove(sock)
 		return
@@ -168,7 +168,7 @@ func serveAndPublish(c *sdk.Conn, instanceID string, p *player) {
 	p.skins = skins
 	p.mu.Unlock()
 	close(p.ready)
-	log.Printf("wash-music: %d track(s) from %q, serving at %s", len(tracks), root, base)
+	log.Printf("wash-washamp: %d track(s) from %q, serving at %s", len(tracks), root, base)
 
 	go func() {
 		<-c.Done()
@@ -236,7 +236,7 @@ func scanLibrary(root string) []libEntry {
 		}
 		out = append(out, libEntry{rel: filepath.ToSlash(rel), title: stem(d.Name())})
 		if len(out) >= maxTracks {
-			log.Printf("wash-music: library scan hit cap (%d); ignoring the rest", maxTracks)
+			log.Printf("wash-washamp: library scan hit cap (%d); ignoring the rest", maxTracks)
 			return fs.SkipAll
 		}
 		return nil
