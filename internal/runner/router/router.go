@@ -154,6 +154,8 @@ func Run(args []string) int {
 	name := fs.String("name", "", "human-readable session name; surfaced in stat RPC and /proc/<pid>/cmdline. Informational; immutable.")
 	idleTimeout := fs.Duration("idle-timeout", 0, "self-exit after this duration with no attached shell. Zero disables; default 30m when --listen-unix is set.")
 	allowUID := fs.Uint("allow-uid", 0, "uid whose SCM_RIGHTS handoffs the --listen-unix listener accepts (SO_PEERCRED-verified). Zero defaults to the router's own uid.")
+	authToken := fs.String("auth-token", "", "explicit token gating the --transport=ws TCP listener (/, /ws, /screenshot). Empty ⇒ a random 128-bit token is generated and logged at startup. Ignored for --listen-unix and byte-stream transports, which are gated by OS perms / device ownership.")
+	noAuth := fs.Bool("no-auth", false, "serve the --transport=ws listener with NO token gate. The bound address then hands a full session to anyone who can reach it — only for trusted-loopback dev.")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
 		// flag already printed the message.
@@ -196,6 +198,25 @@ func Run(args []string) int {
 		allowUIDVal = uint32(os.Getuid())
 	}
 
+	// Token gate: armed only for the standalone TCP listener
+	// (--transport=ws, no --listen-unix). The unix-socket and
+	// byte-stream transports carry their own access control (OS perms /
+	// device ownership) and never bind an open port, so they stay
+	// ungated.
+	authTokenVal := ""
+	tcpListener := *transport == "ws" && *listenUnix == ""
+	if tcpListener && !*noAuth {
+		authTokenVal = *authToken
+		if authTokenVal == "" {
+			t, err := router.MintToken()
+			if err != nil {
+				log.New(os.Stderr, "wash-router ", 0).Printf("mint auth token: %v", err)
+				return 1
+			}
+			authTokenVal = t
+		}
+	}
+
 	cfg := router.Config{
 		Listen:        firstNonEmpty(*listen, os.Getenv("WASH_LISTEN"), defaultListen),
 		AppsDirs:      router.SplitAppsDir(firstNonEmpty(*appsDir, os.Getenv("WASH_APPS_DIR"), defaultAppsDir())),
@@ -211,10 +232,18 @@ func Run(args []string) int {
 		Name:          *name,
 		IdleTimeout:   idleTimeoutVal,
 		AllowUID:      allowUIDVal,
+		AuthToken:     authTokenVal,
 	}
 
 	logger := log.New(os.Stderr, "wash-router ", log.LstdFlags|log.Lmsgprefix)
 	logf := func(format string, args ...any) { logger.Printf(format, args...) }
+
+	switch {
+	case authTokenVal != "":
+		logger.Printf("auth token enabled — open: http://%s/?token=%s", cfg.Listen, authTokenVal)
+	case tcpListener && *noAuth:
+		logger.Printf("WARNING: --no-auth — the %s listener serves a full session to anyone who can reach it.", cfg.Listen)
+	}
 
 	reg := router.NewRegistry()
 	// Trust gate for reservedIDs (e.g. com.wash.priv). Two opt-in
