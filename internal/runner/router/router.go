@@ -156,6 +156,7 @@ func Run(args []string) int {
 	allowUID := fs.Uint("allow-uid", 0, "uid whose SCM_RIGHTS handoffs the --listen-unix listener accepts (SO_PEERCRED-verified). Zero defaults to the router's own uid.")
 	authToken := fs.String("auth-token", "", "explicit token gating the --transport=ws TCP listener (/, /ws, /screenshot). Empty ⇒ a random 128-bit token is generated and logged at startup. Ignored for --listen-unix and byte-stream transports, which are gated by OS perms / device ownership.")
 	noAuth := fs.Bool("no-auth", false, "serve the --transport=ws listener with NO token gate. The bound address then hands a full session to anyone who can reach it — only for trusted-loopback dev.")
+	authTokenFile := fs.String("auth-token-file", "", "path the gate token is written to (mode 0600) and recovered from. Empty ⇒ a per-pid file under $XDG_RUNTIME_DIR/wash (or /tmp/wash-<uid>), removed on clean exit. An explicit path that already holds a token is reused as-is, so the token (and existing browser cookies) survive a restart.")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
 		// flag already printed the message.
@@ -203,17 +204,47 @@ func Run(args []string) int {
 	// byte-stream transports carry their own access control (OS perms /
 	// device ownership) and never bind an open port, so they stay
 	// ungated.
+	//
+	// Token resolution order: explicit --auth-token wins; else an
+	// existing --auth-token-file is reused (so a restart keeps the same
+	// token and live browser cookies stay valid); else mint a fresh one.
+	// The resolved token is persisted to a 0600 file so it's recoverable
+	// long after the startup line has scrolled off the console — the
+	// console-is-huge-and-the-token's-gone case.
 	authTokenVal := ""
+	tokenFilePath := ""
+	tokenFileIsDefault := false
 	tcpListener := *transport == "ws" && *listenUnix == ""
 	if tcpListener && !*noAuth {
-		authTokenVal = *authToken
-		if authTokenVal == "" {
-			t, err := router.MintToken()
-			if err != nil {
-				log.New(os.Stderr, "wash-router ", 0).Printf("mint auth token: %v", err)
-				return 1
+		tokenFilePath = *authTokenFile
+		if tokenFilePath == "" {
+			tokenFilePath = defaultTokenFilePath(os.Getpid())
+			tokenFileIsDefault = true
+		}
+		switch {
+		case *authToken != "":
+			authTokenVal = *authToken
+		default:
+			if existing, err := readTokenFile(tokenFilePath); err == nil && existing != "" {
+				authTokenVal = existing
+			} else {
+				t, err := router.MintToken()
+				if err != nil {
+					log.New(os.Stderr, "wash-router ", 0).Printf("mint auth token: %v", err)
+					return 1
+				}
+				authTokenVal = t
 			}
-			authTokenVal = t
+		}
+		if err := writeTokenFile(tokenFilePath, authTokenVal); err != nil {
+			log.New(os.Stderr, "wash-router ", 0).Printf("write token file %s: %v", tokenFilePath, err)
+			return 1
+		}
+		// A per-pid default file is this process's to clean up; an
+		// explicit --auth-token-file is the operator's and is left in
+		// place so the next run can reuse it.
+		if tokenFileIsDefault {
+			defer func() { _ = os.Remove(tokenFilePath) }()
 		}
 	}
 
@@ -238,9 +269,18 @@ func Run(args []string) int {
 	logger := log.New(os.Stderr, "wash-router ", log.LstdFlags|log.Lmsgprefix)
 	logf := func(format string, args ...any) { logger.Printf(format, args...) }
 
+	tokenURL := fmt.Sprintf("http://%s/?token=%s", cfg.Listen, authTokenVal)
 	switch {
 	case authTokenVal != "":
-		logger.Printf("auth token enabled — open: http://%s/?token=%s", cfg.Listen, authTokenVal)
+		logger.Printf("auth token enabled — open: %s", tokenURL)
+		logger.Printf("  token also saved to %s (cat it if this line scrolls away)", tokenFilePath)
+		// If we're attached to an interactive terminal, let the operator
+		// reprint the URL on demand (press Enter) so a long-lived router
+		// whose console history is gone can still surface its token
+		// without a restart. No-ops when stdin isn't a foreground TTY
+		// (systemd, nohup, &, pipes) — there the token file is the
+		// recovery path.
+		startTokenReprint(tokenURL, tokenFilePath, logger)
 	case tcpListener && *noAuth:
 		logger.Printf("WARNING: --no-auth — the %s listener serves a full session to anyone who can reach it.", cfg.Listen)
 	}
