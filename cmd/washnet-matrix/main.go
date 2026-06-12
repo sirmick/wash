@@ -58,14 +58,16 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	// one isolated L2 per segment — a DISTINCT multicast group (not just port).
-	segGroup := func(i int) string { return fmt.Sprintf("230.0.0.%d", 90+i) }
 
-	// router: eth0 = slirp WAN (real internet), eth1.. = one access port per segment.
+	// Each segment is an isolated point-to-point socket link (the router listens,
+	// the probe connects) — a direct L2 wire, no multicast echo to confuse the
+	// VLAN bridge. Untagged probes; the router's br-lan does the VLAN filtering.
 	fmt.Println("booting the segmented router …")
 	nics := []string{"-netdev", "user,id=wan", "-device", "virtio-net-pci,netdev=wan,mac=52:54:00:bb:00:01"}
 	for i := range segs {
-		nics = append(nics, vm.MCastLAN(fmt.Sprintf("a%d", i), segGroup(i), *base, fmt.Sprintf("52:54:00:bb:00:%02x", i+2))...)
+		nics = append(nics,
+			"-netdev", fmt.Sprintf("socket,id=a%d,listen=127.0.0.1:%d", i, *base+i),
+			"-device", fmt.Sprintf("virtio-net-pci,netdev=a%d,mac=52:54:00:bb:00:%02x", i, i+2))
 	}
 	router, err := vm.LaunchOpenWRT(ctx, vm.OpenWRTOpts{Disk: *image, Mem: "256M", Extra: nics})
 	if err != nil {
@@ -79,7 +81,10 @@ func main() {
 	probes := map[string]*vm.OpenWRT{}
 	for i, s := range segs {
 		fmt.Printf("booting probe %s (VLAN %d) …\n", s.name, s.vid)
-		pn := vm.MCastLAN("p", segGroup(i), *base, fmt.Sprintf("52:54:00:bb:01:%02x", i+1))
+		pn := []string{
+			"-netdev", fmt.Sprintf("socket,id=p,connect=127.0.0.1:%d", *base+i),
+			"-device", fmt.Sprintf("virtio-net-pci,netdev=p,mac=52:54:00:bb:01:%02x", i+1),
+		}
 		p, err := vm.LaunchOpenWRT(ctx, vm.OpenWRTOpts{Disk: *image, Mem: "192M", Extra: pn})
 		if err != nil {
 			die("probe %s launch: %v", s.name, err)
@@ -87,6 +92,14 @@ func main() {
 		defer p.Close()
 		probes[s.name] = p
 		fmt.Printf("  • %s probe leased %s\n", s.name, probeUp(ctx, p, s))
+	}
+
+	// debug the lan link before the full matrix.
+	if d, _ := probes[segs[0].name].Run(ctx, "echo DBG:; ip -br link show eth0; ip -br -4 addr show eth0; ip route show; ping -c2 -W2 "+segs[0].gw+" 2>&1 | tail -3; echo GW=$?"); true {
+		fmt.Printf("--- %s probe link ---\n%s\n", segs[0].name, trimDiag(d))
+	}
+	if d, _ := router.Run(ctx, "echo DBG:; ip -br link show | grep -E 'eth1|br-lan'"); true {
+		fmt.Printf("--- router ports ---\n%s\n", trimDiag(d))
 	}
 
 	fmt.Println("\nrunning the accessibility matrix …")
@@ -238,4 +251,18 @@ func boolToCode(ok bool) int {
 func die(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "washnet-matrix: "+format+"\n", a...)
 	os.Exit(2)
+}
+
+func trimDiag(s string) string {
+	if i := strings.Index(s, "DBG:"); i >= 0 {
+		s = s[i+4:]
+	}
+	var out []string
+	for _, l := range strings.Split(s, "\n") {
+		l = strings.TrimRight(l, "\r")
+		if t := strings.TrimSpace(l); t != "" && !strings.Contains(t, "WASHMK") && !strings.HasPrefix(t, "echo ") && !strings.HasPrefix(t, "ip ") && !strings.HasPrefix(t, "ping ") {
+			out = append(out, "    "+t)
+		}
+	}
+	return strings.Join(out, "\n")
 }
