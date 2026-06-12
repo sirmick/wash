@@ -145,7 +145,7 @@ func TestIPv6DualStack(t *testing.T) {
 			Name:   "wan",
 			Device: "eth0",
 			Proto: model.StaticProto{
-				IPAddr:  netip.MustParsePrefix("192.0.2.10/24"),
+				IPAddr:  []netip.Prefix{netip.MustParsePrefix("192.0.2.10/24")},
 				Gateway: netip.MustParseAddr("192.0.2.1"),
 				IP6Addr: netip.MustParsePrefix("2001:db8::10/64"),
 				IP6Gw:   netip.MustParseAddr("2001:db8::1"),
@@ -175,7 +175,7 @@ func TestIPv6DualStack(t *testing.T) {
 	}
 	got := cfg2.Interfaces[0].Proto.(model.StaticProto)
 	want := cfg.Interfaces[0].Proto.(model.StaticProto)
-	if got.IPAddr != want.IPAddr || got.IP6Addr != want.IP6Addr || got.Gateway != want.Gateway || got.IP6Gw != want.IP6Gw {
+	if got.Primary() != want.Primary() || got.IP6Addr != want.IP6Addr || got.Gateway != want.Gateway || got.IP6Gw != want.IP6Gw {
 		t.Errorf("dual-stack round-trip mismatch:\ngot  %+v\nwant %+v", got, want)
 	}
 }

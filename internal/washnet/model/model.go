@@ -35,6 +35,7 @@ type Config struct {
 	Globals     []Globals
 	Interfaces  []Interface
 	Devices     []Device
+	BridgeVLANs []BridgeVLAN
 	Routes      []Route
 	PolicyRules []PolicyRule
 	WGPeers     []WGPeer
@@ -73,6 +74,11 @@ type Interface struct {
 	Name   string      `uci:",name"`
 	Device string      `uci:"device" ui:"group=general,ref=device"`
 	Proto  ProtoConfig `uci:"proto,union" ui:"group=general"`
+	// IP6Assign delegates a /N prefix to this interface from an upstream PD
+	// (OpenWRT's `option ip6assign '60'`) — the standard router-LAN IPv6 pattern.
+	// Interface-level (independent of proto). Zero = unset/omitted. UCI-only; the
+	// link-renderer backends (NM/networkd/netplan) ignore it.
+	IP6Assign int `uci:"ip6assign" ui:"group=ipv6"`
 }
 
 func (Interface) UCIPackage() string { return "network" }
@@ -86,14 +92,28 @@ type NoneProto struct{}
 func (NoneProto) UCITag() string { return "none" }
 
 type StaticProto struct {
-	IPAddr   netip.Prefix `uci:"ipaddr" ui:"group=addressing"`
-	Gateway  netip.Addr   `uci:"gateway" ui:"group=addressing"`
-	IP6Addr  netip.Prefix `uci:"ip6addr" ui:"group=addressing"`
-	IP6Gw    netip.Addr   `uci:"ip6gw" ui:"group=addressing"`
-	DNS      []netip.Addr `uci:"dns,list" ui:"group=addressing"`
+	// IPAddr is one or more CIDRs on the interface (OpenWRT `list ipaddr`); the
+	// first is the conventional primary. A stock box's split `option ipaddr` +
+	// `option netmask` is folded to a CIDR and promoted into this list on parse
+	// (codec.normalizeIPAddr). Multiple addresses match real routers — e.g.
+	// harbor's switch carries both 172.16.16.1/24 and 192.168.1.8/24.
+	IPAddr  []netip.Prefix `uci:"ipaddr,list" ui:"group=addressing"`
+	Gateway netip.Addr     `uci:"gateway" ui:"group=addressing"`
+	IP6Addr netip.Prefix   `uci:"ip6addr" ui:"group=addressing"`
+	IP6Gw   netip.Addr     `uci:"ip6gw" ui:"group=addressing"`
+	DNS     []netip.Addr   `uci:"dns,list" ui:"group=addressing"`
 }
 
 func (StaticProto) UCITag() string { return "static" }
+
+// Primary returns the conventional primary address (the first configured), or
+// the zero Prefix if none — for single-address backends and required checks.
+func (p StaticProto) Primary() netip.Prefix {
+	if len(p.IPAddr) > 0 {
+		return p.IPAddr[0]
+	}
+	return netip.Prefix{}
+}
 
 type DHCPProto struct {
 	IPv4     bool   `uci:"ipv4"`     // request a DHCPv4 lease
@@ -127,10 +147,36 @@ type Device struct {
 	Ifname string   `uci:"ifname"`     // vlan/macvlan parent link
 	VID    int      `uci:"vid"`        // 802.1q vlan id
 	MTU    int      `uci:"mtu"`
+	// VLANFiltering turns a bridge into a VLAN-aware switch: its ports' VLAN
+	// membership is then carved by BridgeVLAN sections (config bridge-vlan), and
+	// each VLAN surfaces as a `<bridge>.<vid>` sub-device an Interface can bind.
+	// Omitted (no `option vlan_filtering`) unless set — a plain bridge is unchanged.
+	VLANFiltering bool `uci:"vlan_filtering"`
 }
 
 func (Device) UCIPackage() string { return "network" }
 func (Device) UCISection() string { return "device" }
+
+// BridgeVLAN is a `config bridge-vlan`: one VLAN on a VLAN-aware bridge, with the
+// member ports that carry it. Each Ports entry is "<port>" (tagged) or
+// "<port>:u" / "<port>:u*" / "<port>:t" — netifd's egress-tagging syntax, where
+// `u` is untagged, `*` marks the port's PVID (its native/ingress VLAN), and `t`
+// is tagged. The matrix UI (NET-ROUTER-UI.md §4b) reads/writes exactly these.
+type BridgeVLAN struct {
+	Device string   `uci:"device" ui:"ref=device"`
+	VLAN   int      `uci:"vlan"`
+	Ports  []string `uci:"ports,list"`
+	// Local is OpenWRT's `option local` (default "1" = the bridge terminates the
+	// VLAN locally, so a `<bridge>.<vid>` L3 sub-device exists and can be routed).
+	// "0" = transit: the VLAN is switched between member ports but NOT terminated
+	// here — no sub-device, no Network. A tri-state string, not a bool, because the
+	// codec omits false/zero and OpenWRT's default is on: "" = default (routed),
+	// "0" = transit. The matrix's per-VLAN Routed⇄Transit toggle writes this.
+	Local string `uci:"local"`
+}
+
+func (BridgeVLAN) UCIPackage() string { return "network" }
+func (BridgeVLAN) UCISection() string { return "bridge-vlan" }
 
 type Route struct {
 	Interface string       `uci:"interface" ui:"ref=interface"`
@@ -138,6 +184,12 @@ type Route struct {
 	Gateway   netip.Addr   `uci:"gateway"`
 	Metric    int          `uci:"metric"`
 	Table     string       `uci:"table"`
+	// Type is the route disposition: "" (unset = unicast) or one of OpenWRT's
+	// special types — notably "blackhole" for a VPN kill-switch (a blackhole
+	// default route in the tunnel's table, so a segment routed out the VPN can't
+	// leak to WAN if the tunnel drops). blackhole/unreachable/prohibit take no
+	// gateway.
+	Type string `uci:"type" ui:"group=general"`
 }
 
 func (Route) UCIPackage() string { return "network" }
@@ -278,6 +330,12 @@ type DHCPPool struct {
 	Ignore    bool   `uci:"ignore"`
 	RA        string `uci:"ra"`
 	DHCPv6    string `uci:"dhcpv6"`
+	// DHCPOption carries raw dnsmasq DHCP options handed to clients of this pool,
+	// each "code,value" (OpenWRT's `list dhcp_option`). The per-segment DNS server
+	// is option 6 (e.g. "6,10.0.0.53" to point a segment at a specific resolver
+	// instead of the router); NTP is 42. The segment layer types DNS on top of
+	// this; the model keeps it as the faithful UCI primitive.
+	DHCPOption []string `uci:"dhcp_option,list" ui:"group=advanced"`
 }
 
 func (DHCPPool) UCIPackage() string { return "dhcp" }

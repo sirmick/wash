@@ -12,6 +12,7 @@ const (
 	BackendNetworkd = backendsel.Networkd
 	BackendNetplan  = backendsel.Netplan
 	BackendIfupdown = backendsel.Ifupdown
+	BackendUCI      = backendsel.UCI
 	BackendFake     = backendsel.Fake
 )
 

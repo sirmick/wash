@@ -32,7 +32,7 @@ func TestRoundTripTable(t *testing.T) {
 		"static iface with dns": {Interfaces: []model.Interface{{
 			Name: "lan", Device: "br-lan",
 			Proto: model.StaticProto{
-				IPAddr: netip.MustParsePrefix("10.0.0.1/24"),
+				IPAddr: []netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")},
 				DNS:    []netip.Addr{netip.MustParseAddr("1.1.1.1"), netip.MustParseAddr("8.8.8.8")},
 			},
 		}}},
@@ -59,12 +59,39 @@ func TestRoundTripTable(t *testing.T) {
 			Pools: []model.DHCPPool{{Name: "lan", Interface: "lan", Start: 100, Limit: 150, LeaseTime: "12h"}},
 			Hosts: []model.Host{{Name: "nas", MAC: "aa:bb:cc:dd:ee:ff", IP: netip.MustParseAddr("192.168.1.10")}},
 		},
+		"pool with per-segment dns + ntp option": {
+			Pools: []model.DHCPPool{{
+				Name: "iot", Interface: "iot", Start: 50, Limit: 150, LeaseTime: "12h",
+				DHCPOption: []string{"6,192.168.15.1", "42,192.168.15.1"},
+			}},
+		},
+		"blackhole kill-switch route": {
+			Routes: []model.Route{
+				{Interface: "wg", Target: netip.MustParsePrefix("0.0.0.0/0"), Table: "vpn"},
+				{Target: netip.MustParsePrefix("0.0.0.0/0"), Table: "vpn", Type: "blackhole", Metric: 100},
+			},
+		},
 		"wifi psk2": {
 			Radios: []model.WifiDevice{{Name: "radio0", Type: "mac80211", Band: "5g", Channel: "36", Country: "US"}},
 			SSIDs:  []model.WifiIface{{Name: "ap0", Device: "radio0", Mode: "ap", SSID: "wash", Network: "lan", Encryption: model.EncPSK2{Key: "secret"}}},
 		},
 		"wifi open": {SSIDs: []model.WifiIface{{Name: "guest", Device: "radio0", Mode: "ap", SSID: "guest", Encryption: model.EncNone{}}}},
 		"ipv6 ula":  {Globals: []model.Globals{{Name: "globals", ULAPrefix: netip.MustParsePrefix("fdca::/48")}}},
+		"vlan-filtering bridge (access + trunk)": {
+			Devices: []model.Device{{
+				Name: "br-lan", Type: "bridge", VLANFiltering: true,
+				Ports: []string{"eth1", "eth2", "eth3", "eth4"},
+			}},
+			BridgeVLANs: []model.BridgeVLAN{
+				{Device: "br-lan", VLAN: 1, Ports: []string{"eth1:u*", "eth2:u*", "eth4:u*"}},
+				{Device: "br-lan", VLAN: 20, Ports: []string{"eth3:u*", "eth4:t"}},
+				{Device: "br-lan", VLAN: 30, Ports: []string{"eth4:t"}, Local: "0"}, // transit (not routed here)
+			},
+			Interfaces: []model.Interface{
+				{Name: "lan", Device: "br-lan.1", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("10.10.0.1/24")}}},
+				{Name: "iot", Device: "br-lan.20", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("10.20.0.1/24")}}},
+			},
+		},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) { roundTrip(t, c) })
@@ -109,6 +136,12 @@ func genConfig(r *rand.Rand) model.Config {
 		})
 	}
 	for i, n := 0, r.Intn(2); i < n; i++ {
+		if r.Intn(3) == 0 { // a blackhole route: no gateway, special type
+			c.Routes = append(c.Routes, model.Route{
+				Target: netip.PrefixFrom(randAddr4(r), 16), Table: "vpn", Type: "blackhole", Metric: r.Intn(10),
+			})
+			continue
+		}
 		c.Routes = append(c.Routes, model.Route{
 			Interface: "lan", Target: netip.PrefixFrom(randAddr4(r), 16), Gateway: randAddr4(r), Metric: r.Intn(10),
 		})
@@ -124,9 +157,13 @@ func genConfig(r *rand.Rand) model.Config {
 		})
 	}
 	for i, n := 0, r.Intn(2); i < n; i++ {
-		c.Pools = append(c.Pools, model.DHCPPool{
+		p := model.DHCPPool{
 			Name: fmt.Sprintf("pool%d", i), Interface: "lan", Start: r.Intn(200), Limit: r.Intn(200), LeaseTime: "12h",
-		})
+		}
+		if r.Intn(2) == 0 {
+			p.DHCPOption = []string{"6," + randAddr4(r).String()}
+		}
+		c.Pools = append(c.Pools, p)
 	}
 	for i, n := 0, r.Intn(3); i < n; i++ {
 		c.Hosts = append(c.Hosts, model.Host{
@@ -160,7 +197,10 @@ func genProto(r *rand.Rand) model.ProtoConfig {
 	case 0:
 		return model.NoneProto{}
 	case 1:
-		p := model.StaticProto{IPAddr: netip.PrefixFrom(randAddr4(r), 24)}
+		var p model.StaticProto
+		for j, n := 0, 1+r.Intn(2); j < n; j++ { // 1–2 addresses
+			p.IPAddr = append(p.IPAddr, netip.PrefixFrom(randAddr4(r), 24))
+		}
 		if r.Intn(2) == 0 {
 			p.Gateway = randAddr4(r)
 		}

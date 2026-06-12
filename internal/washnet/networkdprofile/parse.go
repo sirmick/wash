@@ -139,7 +139,7 @@ func parseProto(secs []iniSection) (model.ProtoConfig, error) {
 				return nil, fmt.Errorf("address %q: %w", a, err)
 			}
 			if pfx.Addr().Is4() {
-				sp.IPAddr = pfx
+				sp.IPAddr = append(sp.IPAddr, pfx)
 			} else {
 				sp.IP6Addr = pfx
 			}

@@ -29,7 +29,7 @@ export interface PPPoEProto {
 }
 
 export interface StaticProto {
-  IPAddr?: string;
+  IPAddr?: string[];
   Gateway?: string;
   IP6Addr?: string;
   IP6Gw?: string;
@@ -51,6 +51,7 @@ export interface Interface {
   Name?: string;
   Device?: string;
   Proto?: ProtoConfig;
+  IP6Assign?: number;
 }
 
 export interface Device {
@@ -60,6 +61,14 @@ export interface Device {
   Ifname?: string;
   VID?: number;
   MTU?: number;
+  VLANFiltering?: boolean;
+}
+
+export interface BridgeVLAN {
+  Device?: string;
+  VLAN?: number;
+  Ports?: string[];
+  Local?: string;
 }
 
 export interface Route {
@@ -68,6 +77,7 @@ export interface Route {
   Gateway?: string;
   Metric?: number;
   Table?: string;
+  Type?: string;
 }
 
 export interface PolicyRule {
@@ -166,6 +176,7 @@ export interface DHCPPool {
   Ignore?: boolean;
   RA?: string;
   DHCPv6?: string;
+  DHCPOption?: string[];
 }
 
 export interface Host {
@@ -211,6 +222,7 @@ export interface Config {
   Globals?: Globals[];
   Interfaces?: Interface[];
   Devices?: Device[];
+  BridgeVLANs?: BridgeVLAN[];
   Routes?: Route[];
   PolicyRules?: PolicyRule[];
   WGPeers?: WGPeer[];

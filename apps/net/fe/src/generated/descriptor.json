@@ -104,8 +104,9 @@
                   {
                     "name": "IPAddr",
                     "option": "ipaddr",
-                    "widget": "cidr",
+                    "widget": "list-cidr",
                     "group": "addressing",
+                    "list": true,
                     "labelKey": "StaticProto.IPAddr"
                   },
                   {
@@ -166,6 +167,13 @@
               }
             ]
           }
+        },
+        {
+          "name": "IP6Assign",
+          "option": "ip6assign",
+          "widget": "number",
+          "group": "ipv6",
+          "labelKey": "Interface.IP6Assign"
         }
       ]
     },
@@ -211,6 +219,46 @@
           "option": "mtu",
           "widget": "number",
           "labelKey": "Device.MTU"
+        },
+        {
+          "name": "VLANFiltering",
+          "option": "vlan_filtering",
+          "widget": "toggle",
+          "labelKey": "Device.VLANFiltering"
+        }
+      ]
+    },
+    {
+      "kind": "network/bridge-vlan",
+      "package": "network",
+      "section": "bridge-vlan",
+      "goType": "BridgeVLAN",
+      "fields": [
+        {
+          "name": "Device",
+          "option": "device",
+          "widget": "ref",
+          "ref": "device",
+          "labelKey": "BridgeVLAN.Device"
+        },
+        {
+          "name": "VLAN",
+          "option": "vlan",
+          "widget": "number",
+          "labelKey": "BridgeVLAN.VLAN"
+        },
+        {
+          "name": "Ports",
+          "option": "ports",
+          "widget": "list-text",
+          "list": true,
+          "labelKey": "BridgeVLAN.Ports"
+        },
+        {
+          "name": "Local",
+          "option": "local",
+          "widget": "text",
+          "labelKey": "BridgeVLAN.Local"
         }
       ]
     },
@@ -250,6 +298,13 @@
           "option": "table",
           "widget": "text",
           "labelKey": "Route.Table"
+        },
+        {
+          "name": "Type",
+          "option": "type",
+          "widget": "text",
+          "group": "general",
+          "labelKey": "Route.Type"
         }
       ]
     },
@@ -744,6 +799,14 @@
           "option": "dhcpv6",
           "widget": "text",
           "labelKey": "DHCPPool.DHCPv6"
+        },
+        {
+          "name": "DHCPOption",
+          "option": "dhcp_option",
+          "widget": "list-text",
+          "group": "advanced",
+          "list": true,
+          "labelKey": "DHCPPool.DHCPOption"
         }
       ]
     },

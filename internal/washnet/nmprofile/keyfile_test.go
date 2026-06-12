@@ -144,7 +144,7 @@ func TestIPv6DualStack(t *testing.T) {
 			Name:   "wan",
 			Device: "eth0",
 			Proto: model.StaticProto{
-				IPAddr:  netip.MustParsePrefix("192.0.2.10/24"),
+				IPAddr:  []netip.Prefix{netip.MustParsePrefix("192.0.2.10/24")},
 				Gateway: netip.MustParseAddr("192.0.2.1"),
 				IP6Addr: netip.MustParsePrefix("2001:db8::10/64"),
 				IP6Gw:   netip.MustParseAddr("2001:db8::1"),

@@ -102,7 +102,7 @@ func TestApplyWritesUnitsAndReloads(t *testing.T) {
 
 	cfg := model.Config{
 		Devices:    []model.Device{{Name: "br0", Type: "bridge", Ports: []string{"eth1", "eth2"}}},
-		Interfaces: []model.Interface{{Name: "lan", Device: "br0", Proto: model.StaticProto{IPAddr: netip.MustParsePrefix("192.168.1.1/24")}}},
+		Interfaces: []model.Interface{{Name: "lan", Device: "br0", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("192.168.1.1/24")}}}},
 	}
 	token, err := a.Apply(backend.RenderPlan{Target: cfg})
 	if err != nil {
@@ -170,7 +170,7 @@ func TestApplyRollbackRestores(t *testing.T) {
 	}
 
 	cfg := model.Config{Interfaces: []model.Interface{
-		{Name: "wan", Device: "eth0", Proto: model.StaticProto{IPAddr: netip.MustParsePrefix("10.0.0.2/24")}},
+		{Name: "wan", Device: "eth0", Proto: model.StaticProto{IPAddr: []netip.Prefix{netip.MustParsePrefix("10.0.0.2/24")}}},
 	}}
 	token, err := a.Apply(backend.RenderPlan{Target: cfg})
 	if err != nil {

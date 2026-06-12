@@ -113,7 +113,7 @@ func readData(t *testing.T, router wire.FrameTransport, timeout time.Duration, p
 func ifaceConfig() map[string]any {
 	return map[string]any{
 		"Interfaces": []any{
-			map[string]any{"Name": "lan", "Proto": map[string]any{"_tag": "static", "IPAddr": "10.0.0.1/24"}},
+			map[string]any{"Name": "lan", "Proto": map[string]any{"_tag": "static", "IPAddr": []any{"10.0.0.1/24"}}},
 		},
 	}
 }

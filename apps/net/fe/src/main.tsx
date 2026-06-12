@@ -9,21 +9,46 @@
 // the schema-driven editor for one interface's addressing. Every change runs through
 // netd validate → apply (commit-confirm) → the box.
 
-import { createEffect, createMemo, createSignal, onCleanup, onMount, For, Show } from "solid-js";
-import { defineWashApp, tokens, washAssetUrl, type WashAppProps } from "@wash/ui";
+import { createEffect, createMemo, createSignal, onCleanup, onMount, For, Show, Switch, Match } from "solid-js";
+import { defineWashApp, washAssetUrl, type WashAppProps } from "@wash/ui";
 import { x25519 } from "@noble/curves/ed25519.js";
 
 import { ApplyTerminal, type ApplyEvent } from "./ApplyTerminal.tsx";
 import { WifiDialog, type AP } from "./WifiDialog.tsx";
 import { ObjectForm } from "./ObjectForm.tsx";
 import { setAtPath } from "./setAtPath.ts";
-import type { Descriptor, ObjectDescriptor } from "./objectform-model.ts";
+import { descriptorFor } from "./objectform-model.ts";
+import {
+  carrierLabel, materializeSegment, projectCarriers, projectDraft, removeCarrier, removeSegment, segFormFrom,
+  type CarrierRow, type Segment, type SegForm,
+} from "./segment-model.ts";
+import { matrixZones, cellState, toggleForward, setInput, type MZone, type CellState } from "./matrix-model.ts";
+import { projectFabric, setFabric, cycle as fCycle, cellOf, vlanColumns, isRouted, addVlan as fAddVlan, removeVlan as fRemoveVlan, setRouted, NATIVE, type Plan } from "./fabric-model.ts";
+import { projectHosts, upsertHost, removeHost, type HostEntry } from "./hosts-model.ts";
+import type { Descriptor, ObjectDescriptor, Diagnostic } from "./objectform-model.ts";
 import descriptorJson from "./generated/descriptor.json";
 import i18nJson from "./generated/i18n.json";
 
 const desc = descriptorJson as unknown as Descriptor;
 const i18n = i18nJson as Record<string, string>;
 const label = (k: string) => i18n[k] ?? k.split(".").pop() ?? k;
+
+// ADVANCED_KINDS: the raw object kinds the Advanced view exposes (escape hatch) —
+// the ones not (fully) covered by Networks/Firewall/Hosts. kind is the descriptor
+// key (package/section); field is the Config array. Forwardings are excluded (the
+// matrix owns them); segments' interface/device/zone/pool live in Networks.
+const ADVANCED_KINDS: { kind: string; field: string; title: string }[] = [
+  { kind: "dhcp/dnsmasq", field: "Dnsmasq", title: "DNS / DHCP defaults" },
+  { kind: "firewall/redirect", field: "Redirects", title: "Port forwards" },
+  { kind: "firewall/rule", field: "FwRules", title: "Firewall rules" },
+  { kind: "firewall/nat", field: "NATs", title: "SNAT" },
+  { kind: "firewall/ipset", field: "IPSets", title: "IP sets" },
+  { kind: "network/route", field: "Routes", title: "Static routes" },
+  { kind: "network/rule", field: "PolicyRules", title: "Policy routing" },
+  { kind: "network/wireguard_peer", field: "WGPeers", title: "WireGuard peers" },
+  { kind: "dhcp/cname", field: "CNAMEs", title: "DNS aliases (CNAME)" },
+  { kind: "network/globals", field: "Globals", title: "Network globals" },
+];
 const ifaceDesc = desc.objects.find((o) => o.kind === "network/interface")!;
 // A proto-only slice of the Interface descriptor: the wizards are bespoke
 // containers (NIC picker / VID / members), but the ADDRESSING they all share is
@@ -45,7 +70,7 @@ const addressingDesc: ObjectDescriptor = {
 
 type Proto = {
   _tag: string;
-  IPAddr?: string; Gateway?: string; IP6Addr?: string; IP6Gw?: string; DNS?: string[];
+  IPAddr?: string[]; Gateway?: string; IP6Addr?: string; IP6Gw?: string; DNS?: string[];
   Hostname?: string; IPv4?: boolean; IPv6?: boolean;
   // wireguard variant: the local tunnel endpoint (the peer set lives in
   // Config.WGPeers, a separate kind keyed by this interface's Name).
@@ -136,6 +161,8 @@ type WGPeer = {
   PersistentKeepalive?: number; RouteAllowedIPs?: boolean;
 };
 type Config = { Interfaces?: Interface[]; Devices?: Device[]; WGPeers?: WGPeer[]; Radios?: any[]; SSIDs?: any[]; [k: string]: any };
+// Carrier/Segment/SegForm + the segment form↔objects logic live in the pure
+// segment-model kernel (imported above); this component is the thin shell.
 // WifiConn mirrors netd's wifi_status row (an active 802-11-wireless connection).
 type WifiConn = { name: string; device: string };
 // Caps mirrors netd's generic capability wire (docs/NET.md §2.7): the supported
@@ -152,7 +179,7 @@ const toCaps = (raw: any): Caps => ({
 const protoLabel = (p?: Proto): string => {
   if (!p) return "—";
   switch (p._tag) {
-    case "static": return `static ${p.IPAddr ?? ""}`;
+    case "static": return `static ${(p.IPAddr ?? []).join(", ")}`;
     case "dhcp": return "DHCP";
     case "none": return "no IP";
     case "wireguard": return "WireGuard";
@@ -172,14 +199,51 @@ function Icon(p: { name: string; size?: number }) {
   );
 }
 
-function NetApp(props: WashAppProps) {
+// carrierIcon maps a carrier kind to its sprite glyph (Interfaces tab inventory).
+const carrierIcon = (k: CarrierRow["kind"]): string =>
+  k === "Bridge" ? "git-merge" : k === "VLAN" ? "git-branch" : k === "Tunnel" ? "shield" : k === "Bond" ? "git-merge" : "ethernet-port";
+
+export function NetApp(props: WashAppProps) {
   const [config, setConfig] = createSignal<Config>({ Interfaces: [], Devices: [] }); // committed baseline (from netd)
   const [draft, setDraft] = createSignal<Config>({ Interfaces: [], Devices: [] });  // staged edits, not yet applied
   const [caps, setCaps] = createSignal<Caps>(emptyCaps());
   const can = (f: string) => caps().features.has(f);
   const canKind = (k: string) => caps().kinds.has(k);
+  // routerCaps: the backend can express router segments (firewall zone + DHCP
+  // server) — UCI does, NM/workstation doesn't. Gates the Networks panel + the
+  // "+ Network" button so a fresh router (no segments yet) can still add one.
+  // (Declared before the memos below — createMemo runs eagerly, so a memo that
+  // calls routerCaps must not precede its declaration: TDZ.)
+  // Kind keys are package/section (model.Kinds) — "firewall/zone", "dhcp/dhcp".
+  const routerCaps = () => canKind("firewall/zone") && canKind("dhcp/dhcp");
+  // draftSegments is the live router-UI grouping of the draft (segment-model
+  // kernel) so the Networks panel reflects staged create/edit/remove immediately.
+  const draftSegments = createMemo<Segment[]>(() => projectDraft(draft()));
+  // Router-shaped iff some segment owns a zone or a pool (a workstation's segments
+  // are bare interfaces). Gates the Networks panel — the router plane (plan §4).
+  const isRouter = () => draftSegments().some((s) => s.zone || s.pool);
+  // On a router, the managed-network interfaces (those with a zone/pool) live in
+  // the Networks panel — keep them out of the raw connections list below to avoid
+  // showing each segment twice. Workstations keep the full flat list.
+  const looseConnections = createMemo<Interface[]>(() => {
+    const all = draft().Interfaces ?? [];
+    if (!routerCaps()) return all;
+    const managed = new Set(draftSegments().filter((s) => s.zone || s.pool).map((s) => s.name));
+    return all.filter((i) => !managed.has(i.Name));
+  });
   const [links, setLinks] = createSignal<string[]>([]); // physical NICs from the backend
-  const [adding, setAdding] = createSignal<null | "ethernet" | "vlan" | "bridge" | "wifi" | "wireguard">(null);
+  // The Interfaces-tab carrier inventory (router plane): every link the box has,
+  // with read-only "serves <segment>" context and orphan carriers surfaced.
+  // (Declared after links() — createMemo evals eagerly, so it can't precede it: TDZ.)
+  const carriers = createMemo<CarrierRow[]>(() => projectCarriers(draft(), links()));
+  // Routed numbered VLANs from the fabric table — bindable as Network carriers
+  // (br-lan.<id>). Transit VLANs (no L3 sub-device) are excluded.
+  const fabricVlans = createMemo<number[]>(() => projectFabric(draft()).plan.vlans.filter((v) => v.routed && v.id !== NATIVE).map((v) => v.id));
+  // WireGuard tunnels in the draft — offered as per-segment VPN egress (§7.1).
+  const vpnTunnels = createMemo<string[]>(() => (draft().Interfaces ?? []).filter((i: any) => i.Proto?._tag === "wireguard").map((i: any) => i.Name));
+  const [adding, setAdding] = createSignal<null | "ethernet" | "vlan" | "bridge" | "wifi" | "wireguard" | "network" | "host">(null);
+  const [editSeg, setEditSeg] = createSignal<Segment | null>(null); // segment being edited (router bundle)
+  const [editHost, setEditHost] = createSignal<HostEntry | null>(null); // host being edited (reservation/DNS)
 
   // Wifi gating + state. wifiCapable shows the +Wifi button (the renderer can
   // express wifi AND a radio is present); wifiLive enables the live scan/connect
@@ -194,8 +258,30 @@ function NetApp(props: WashAppProps) {
   const wifiCapable = createMemo(() => canKind("wireless/wifi-iface") && wifiRadio());
   const [editIface, setEditIface] = createSignal<Interface | null>(null);
 
+  // Router-plane tabs (NET-ROUTER-UI.md §4b). The strip only shows under
+  // routerCaps(); a workstation has no tabs (the Interfaces plane is the whole
+  // app). Default lands on Networks — the router's primary work surface.
+  type Tab = "interfaces" | "networks" | "firewall" | "hosts" | "advanced";
+  const [tab, setTab] = createSignal<Tab>("networks");
+  const TABS: { id: Tab; label: string }[] = [
+    { id: "interfaces", label: "Interfaces" },
+    { id: "networks", label: "Networks" },
+    { id: "firewall", label: "Firewall" },
+    { id: "hosts", label: "Hosts & DNS" },
+    { id: "advanced", label: "Advanced" },
+  ];
+  // The Interfaces plane (raw carriers + their add buttons) is the whole UI on a
+  // workstation, and tab 1 on a router. carrierAdds gates the +Ethernet/VLAN/
+  // Bridge/WireGuard/Wi-Fi buttons — link-level carriers live on Interfaces.
+  const carrierAdds = () => !routerCaps() || tab() === "interfaces";
+  // The add bar shows when the active context has an add affordance: the
+  // Interfaces plane (carrier adds) or the Networks / Hosts tabs. Firewall and
+  // Advanced have none, so no bar renders there.
+  const showToolbar = () => carrierAdds() || (routerCaps() && (tab() === "networks" || tab() === "hosts"));
+
   const [status, setStatus] = createSignal("idle");
   const [events, setEvents] = createSignal<ApplyEvent[]>([]);
+  const [diagnostics, setDiagnostics] = createSignal<Diagnostic[]>([]); // validation errors/warnings on the draft
   const [confirmWindowMs, setConfirmWindowMs] = createSignal(0);
   const [deadline, setDeadline] = createSignal(0);
   const [remaining, setRemaining] = createSignal(0);
@@ -293,10 +379,39 @@ function NetApp(props: WashAppProps) {
     });
   };
 
+  // Live validation: when the staged draft is dirty, validate it against netd
+  // (debounced) and surface diagnostics — so config errors show as you edit, not
+  // only on Apply. A clean draft clears them (don't flag the committed config).
+  createEffect(() => {
+    const c = draft();
+    if (dirtyCount() === 0) { setDiagnostics([]); return; }
+    const t = window.setTimeout(async () => {
+      const r = await sendWithReply("validate", { config: c });
+      if (r.kind === "validate_ok") setDiagnostics((r.diagnostics ?? []) as Diagnostic[]);
+    }, 400);
+    onCleanup(() => window.clearTimeout(t));
+  });
+
+  // Router mode needs more room (tabs + the firewall matrix + segment cards) than
+  // the workstation default (574w, set in the manifest before caps are known). The
+  // manifest can't know the backend, so widen the window once when caps reveal a
+  // router — and only if the user hasn't already made it wider themselves.
+  let widened = false;
+  createEffect(() => {
+    if (!routerCaps() || widened) return;
+    widened = true;
+    try {
+      const me = (window.wash?.windows?.() ?? []).find((w) => w.instanceID === props.instance);
+      const TARGET = 920;
+      if (me && me.w < TARGET) window.wash.resizeWindow(me.windowID, TARGET, Math.max(me.h, 620));
+    } catch { /* no window API (unit/ctest harness) — ignore */ }
+  });
+
   const applyState = (s: any) => {
     if (!s) return;
     if (typeof s.status === "string") setStatus(s.status);
     if (Array.isArray(s.events)) setEvents(s.events as ApplyEvent[]);
+    if (Array.isArray(s.diagnostics)) setDiagnostics(s.diagnostics as Diagnostic[]);
 
     if (typeof s.confirm_window_ms === "number") {
       setConfirmWindowMs(s.confirm_window_ms);
@@ -405,7 +520,10 @@ function NetApp(props: WashAppProps) {
     }
   };
   // Discard all staged edits locally (no backend round-trip) — back to committed.
-  const discardDraft = () => { setStatus("idle"); setEvents([]); setDraft(structuredClone(config())); };
+  const discardDraft = () => { setStatus("idle"); setEvents([]); setDiagnostics([]); setDraft(structuredClone(config())); };
+  // Normalize a diagnostic severity (BE sends "error"/"warning"; tolerate 0/1).
+  const diagSev = (s: Diagnostic["severity"]): "error" | "warning" => (s === "error" || s === 0 ? "error" : "warning");
+  const hasErrors = () => diagnostics().some((d) => diagSev(d.severity) === "error");
 
   const finish = (kind: "confirm" | "revert") => async () => {
     const r = await sendWithReply(kind, {}, 30000);
@@ -483,6 +601,68 @@ function NetApp(props: WashAppProps) {
     setAdding(null);
   };
 
+  // Segment bundle: stage / strip / prefill via the pure segment-model kernel.
+  const saveNetwork = (f: SegForm, orig?: Segment) => {
+    setDraft((d) => materializeSegment(d, f, orig) as Config);
+    setAdding(null); setEditSeg(null);
+  };
+  const removeNetwork = (seg: Segment) => setDraft((d) => removeSegment(d, seg) as Config);
+  // Remove a constructed carrier (bridge / VLAN / bond / VPN tunnel) from the
+  // Interfaces tab. If a network sits on it, that segment is torn down too
+  // (removeCarrier handles the closure); member ports return to the adapter pool.
+  const removeCarrierRow = (c: CarrierRow) => setDraft((d) => removeCarrier(d, c.device, c.serves?.name) as Config);
+  const segForm = (seg: Segment): SegForm => segFormFrom(draft(), seg, vlanParents(), links());
+
+  // Firewall matrix: the zone×zone access policy (matrix-model kernel), edited into
+  // the same draft. block↔allow toggles a Forwarding; the Router column toggles a
+  // zone's Input. Custom (rule-backed) cells are read-only here — edited in Advanced.
+  const matrixZonesList = createMemo<MZone[]>(() => matrixZones(draft()));
+  const cellAt = (src: string, dest: string): CellState => cellState(draft(), src, dest);
+  const toggleCell = (src: string, dest: string) => setDraft((d) => toggleForward(d, src, dest) as Config);
+  const toggleInput = (zone: string, cur: string) => setDraft((d) => setInput(d, zone, cur === "ACCEPT" ? "REJECT" : "ACCEPT") as Config);
+
+  // Hosts: unified DHCP reservations + static DNS (hosts-model kernel), edited into
+  // the same draft.
+  const draftHosts = createMemo<HostEntry[]>(() => projectHosts(draft()));
+  const saveHost = (e: HostEntry, orig?: HostEntry) => {
+    setDraft((d) => upsertHost(d, e, orig?.name) as Config);
+    setAdding(null); setEditHost(null);
+  };
+  const delHost = (e: HostEntry) => setDraft((d) => removeHost(d, e) as Config);
+
+  // Advanced (raw objects): the schema-driven escape hatch (plan §7.7) — ObjectForm
+  // over the kinds the bespoke screens don't fully cover, edited directly into the
+  // draft. Each object is edited independently (pathPrefix="" so setAtPath works on
+  // the single object, not the whole config). Collapsed by default.
+  const [showAdv, setShowAdv] = createSignal(false);
+  const advChange = (field: string, i: number, path: string, v: unknown) => setDraft((d) => {
+    const next = structuredClone(d) as any;
+    const arr = (next[field] ?? []) as any[];
+    arr[i] = setAtPath(arr[i] ?? {}, path.split("."), v);
+    next[field] = arr;
+    return next as Config;
+  });
+  const advAdd = (field: string) => setDraft((d) => {
+    const next = structuredClone(d) as any;
+    next[field] = [...((next[field] ?? []) as any[]), {}];
+    return next as Config;
+  });
+  const advRemove = (field: string, i: number) => setDraft((d) => {
+    const next = structuredClone(d) as any;
+    const arr = [...((next[field] ?? []) as any[])];
+    arr.splice(i, 1);
+    next[field] = arr;
+    return next as Config;
+  });
+  const advRefOptions = (kind: string): string[] => {
+    switch (kind) {
+      case "interface": return (draft().Interfaces ?? []).map((i) => i.Name);
+      case "zone": return ((draft().Zones ?? []) as any[]).map((z) => z.Name);
+      case "device": return (draft().Devices ?? []).map((dv) => dv.Name);
+      default: return [];
+    }
+  };
+
   // Poll the scan while the dialog is open on an NM-live box (~2.5s; the effect
   // re-runs when `adding` changes and onCleanup clears the interval on close).
   createEffect(() => {
@@ -531,21 +711,86 @@ function NetApp(props: WashAppProps) {
   return (
     <div class="wash-net-app">
       <style>{STYLE}</style>
-      <header class="wash-net-head">
-        <div class="wash-net-add">
-          <button data-testid="add-ethernet" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setConfigureDevice(""); setAdding("ethernet"); }}><Icon name="ethernet-port" /> Ethernet</button>
-          <button data-testid="add-vlan" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("vlan")} onClick={() => setAdding("vlan")}><Icon name="git-branch" /> VLAN</button>
-          <button data-testid="add-bridge" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("bridge")} onClick={() => setAdding("bridge")}><Icon name="git-merge" /> Bridge</button>
-          <Show when={can("wireguard")}>
+      {/* Tab strip — router plane only (NET-ROUTER-UI.md §4b); a workstation has
+          no header at all (the add bar below is its top bar). */}
+      <Show when={routerCaps()}>
+        <header class="wash-net-head">
+          <nav class="wash-net-tabs" data-testid="net-tabs">
+            <For each={TABS}>
+              {(t) => (
+                <button class="wash-net-tab" classList={{ active: tab() === t.id }} data-testid={`net-tab-${t.id}`}
+                  aria-selected={tab() === t.id} onClick={() => setTab(t.id)}>{t.label}</button>
+              )}
+            </For>
+          </nav>
+        </header>
+      </Show>
+      {/* Add bar — its own row below the tabs (NET-ROUTER-UI.md §4b); the buttons
+          are contextual to the active tab. Tabs with no add affordance (Firewall,
+          Advanced) render no bar at all. On a workstation it's the top bar. */}
+      <Show when={showToolbar()}>
+        <div class="wash-net-toolbar" data-testid="net-toolbar">
+          <span class="wash-net-addlabel">Add</span>
+          {/* Networks tab: the single router add path (+ Network materializes the
+              carrier + segment bundle). */}
+          <Show when={routerCaps() && tab() === "networks"}>
+            <button data-testid="add-network" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setEditSeg(null); setAdding("network"); }}><Icon name="git-branch" /> Network</button>
+          </Show>
+          {/* + Host belongs to the Hosts & DNS tab, not Networks. */}
+          <Show when={routerCaps() && tab() === "hosts"}>
+            <button data-testid="add-host" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setEditHost(null); setAdding("host"); }}><Icon name="plus" /> Host</button>
+          </Show>
+          {/* Interfaces plane: link-level carriers. On a router, VLANs and bridging
+              are owned by the box-wide fabric table (§4c), so +VLAN / +Bridge are
+              workstation-only; +Ethernet/WireGuard/Wi-Fi stay on both. */}
+          <Show when={carrierAdds()}>
+            <button data-testid="add-ethernet" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setConfigureDevice(""); setAdding("ethernet"); }}><Icon name="ethernet-port" /> Ethernet</button>
+          </Show>
+          <Show when={!routerCaps()}>
+            <button data-testid="add-vlan" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("vlan")} onClick={() => setAdding("vlan")}><Icon name="git-branch" /> VLAN</button>
+            <button data-testid="add-bridge" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("bridge")} onClick={() => setAdding("bridge")}><Icon name="git-merge" /> Bridge</button>
+          </Show>
+          <Show when={can("wireguard") && carrierAdds()}>
             <button data-testid="add-wireguard" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => setAdding("wireguard")}><Icon name="shield" /> WireGuard</button>
           </Show>
-          <Show when={wifiCapable()}>
+          <Show when={wifiCapable() && carrierAdds()}>
             <button data-testid="add-wifi" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => setAdding("wifi")}><Icon name="wifi" /> Wi-Fi</button>
           </Show>
         </div>
-      </header>
+      </Show>
 
       <div class="wash-net-body">
+        <Show when={diagnostics().length > 0}>
+          <div class="wash-net-diags" data-testid="net-diags">
+            <For each={diagnostics()}>
+              {(d) => (
+                <div class="wash-net-diag" data-sev={diagSev(d.severity)}>
+                  <span class="wash-net-diag-sev">{diagSev(d.severity) === "error" ? "✕" : "⚠"}</span>
+                  <span class="wash-net-diag-msg">{d.message}</span>
+                  <span class="wash-net-diag-path">{d.path}</span>
+                </div>
+              )}
+            </For>
+          </div>
+        </Show>
+        <Show when={adding() === "network"}>
+          <NetworkWizard
+            parents={vlanParents()}
+            ports={links()}
+            fabricVlans={fabricVlans()}
+            vpnTunnels={vpnTunnels()}
+            initial={editSeg() ? segForm(editSeg()!) : undefined}
+            onCancel={() => { setAdding(null); setEditSeg(null); }}
+            onSave={(f) => saveNetwork(f, editSeg() ?? undefined)}
+          />
+        </Show>
+        <Show when={adding() === "host"}>
+          <HostWizard
+            initial={editHost() ?? undefined}
+            onCancel={() => { setAdding(null); setEditHost(null); }}
+            onSave={(e) => saveHost(e, editHost() ?? undefined)}
+          />
+        </Show>
         <Show when={adding() === "ethernet" || editIface()}>
           <EthernetWizard
             nics={editIface() ? [] : links()}
@@ -568,6 +813,139 @@ function NetApp(props: WashAppProps) {
           <WifiDialog live={wifiLive()} busy={busy()} enabled={wifiEnabled()} aps={aps()} scanning={scanning()} onScan={() => void scanWifi()} onToggleRadio={toggleRadio} onConnect={connectWifi} onCancel={() => setAdding(null)} />
         </Show>
 
+        <Show when={routerCaps() && tab() === "networks"}>
+          <section class="wash-net-segments" data-testid="net-segments">
+            <h2 class="wash-net-seg-h">Networks</h2>
+            <For each={draftSegments()} fallback={<div class="wash-net-empty">No networks yet — use + Network.</div>}>
+              {(s) => (
+                <div class="wash-net-conn" data-testid={`segment-${s.name}`} data-role={s.role} data-carrier={s.carrier.kind}>
+                  <div class="wash-net-conn-main">
+                    <span class="wash-net-conn-name">
+                      <Icon name={s.role === "vpn" ? "shield" : s.role === "wan" ? "ethernet-port" : "git-branch"} /> {s.name}
+                    </span>
+                    <span class="wash-net-conn-kind" data-testid={`segment-role-${s.name}`}>{s.role.toUpperCase()}</span>
+                    <span class="wash-net-conn-dev">{carrierLabel(s.carrier)}</span>
+                  </div>
+                  <div class="wash-net-seg-detail">
+                    <Show when={(s.addrs ?? []).length > 0}><span>{(s.addrs ?? []).join(", ")}</span></Show>
+                    <Show when={s.pool}><span class="wash-net-seg-tag">DHCP</span></Show>
+                    <Show when={s.zone}><span class="wash-net-seg-tag">zone {s.zone}</span></Show>
+                  </div>
+                  <Show when={s.role !== "vpn"}>
+                    <div class="wash-net-conn-actions">
+                      <button class="wash-net-btn ghost" data-testid={`segment-edit-${s.name}`} title="Edit this network" disabled={busy() || adding() !== null || editIface() !== null} onClick={() => { setEditSeg(s); setAdding("network"); }}><Icon name="git-branch" /> Edit</button>
+                      <button class="wash-net-btn ghost" data-testid={`segment-del-${s.name}`} title="Remove this network" disabled={busy() || adding() !== null} onClick={() => removeNetwork(s)}><Icon name="trash" /> Remove</button>
+                    </div>
+                  </Show>
+                </div>
+              )}
+            </For>
+          </section>
+        </Show>
+
+        <Show when={routerCaps() && tab() === "firewall"}>
+          <Show when={matrixZonesList().length >= 2}
+            fallback={<div class="wash-net-empty">Add at least two networks to set firewall policy.</div>}>
+            <FirewallMatrix zones={matrixZonesList()} state={cellAt} onToggle={toggleCell} onInput={toggleInput} />
+          </Show>
+        </Show>
+
+        <Show when={routerCaps() && tab() === "hosts"}>
+          <section class="wash-net-segments" data-testid="net-hosts">
+            <h2 class="wash-net-seg-h">Hosts &amp; DNS</h2>
+            <Show when={draftHosts().length === 0}>
+              <div class="wash-net-empty">No reservations or DNS records yet — use + Host.</div>
+            </Show>
+            <For each={draftHosts()}>
+              {(h) => (
+                <div class="wash-net-conn" data-testid={`host-${h.name}`} data-kind={h.mac ? "reservation" : "dns"}>
+                  <div class="wash-net-conn-main">
+                    <span class="wash-net-conn-name"><Icon name={h.mac ? "ethernet-port" : "git-branch"} /> {h.name}</span>
+                    <span class="wash-net-conn-kind">{h.mac ? "reservation" : "DNS"}</span>
+                    <span class="wash-net-conn-dev">{h.ip}{h.mac ? ` · ${h.mac}` : ""}</span>
+                  </div>
+                  <div class="wash-net-conn-actions">
+                    <button class="wash-net-btn ghost" data-testid={`host-edit-${h.name}`} title="Edit" disabled={busy() || adding() !== null} onClick={() => { setEditHost(h); setAdding("host"); }}><Icon name="git-branch" /> Edit</button>
+                    <button class="wash-net-btn ghost" data-testid={`host-del-${h.name}`} title="Remove" disabled={busy() || adding() !== null} onClick={() => delHost(h)}><Icon name="trash" /> Remove</button>
+                  </div>
+                </div>
+              )}
+            </For>
+          </section>
+        </Show>
+
+        <Show when={routerCaps() && tab() === "advanced"}>
+          <section class="wash-net-segments" data-testid="net-advanced">
+            <h2 class="wash-net-seg-h wash-net-adv-toggle" data-testid="adv-toggle" onClick={() => setShowAdv(!showAdv())}>Advanced (raw objects) {showAdv() ? "▾" : "▸"}</h2>
+            <Show when={showAdv()}>
+              <For each={ADVANCED_KINDS}>
+                {(k) => {
+                  const od = descriptorFor(desc, k.kind);
+                  if (!od) return null;
+                  const items = () => ((draft() as any)[k.field] ?? []) as any[];
+                  return (
+                    <div class="wash-net-adv-kind">
+                      <div class="wash-net-adv-h">
+                        <span>{k.title}</span>
+                        <button class="wash-net-btn ghost" data-testid={`adv-add-${k.field}`} disabled={busy()} onClick={() => advAdd(k.field)}><Icon name="plus" /> Add</button>
+                      </div>
+                      <For each={items()}>
+                        {(item, i) => (
+                          <div class="wash-net-adv-item">
+                            <ObjectForm object={od} value={item} pathPrefix="" label={label} refOptions={advRefOptions} onChange={(path, v) => advChange(k.field, i(), path, v)} />
+                            <button class="wash-net-btn ghost" data-testid={`adv-del-${k.field}-${i()}`} disabled={busy()} onClick={() => advRemove(k.field, i())}><Icon name="trash" /> Remove</button>
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                  );
+                }}
+              </For>
+            </Show>
+          </section>
+        </Show>
+
+        {/* Interfaces tab (router): the carrier inventory — L2 links with a
+            read-only "serves <segment>" note + orphan carriers (NET-ROUTER-UI.md
+            §4b). Addressing is shown only as context; it's edited on Networks. */}
+        <Show when={routerCaps() && tab() === "interfaces"}>
+          <div class="wash-net-list" data-testid="net-carriers">
+            <For each={carriers()} fallback={<div class="wash-net-empty">No adapters detected.</div>}>
+              {(c) => (
+                <div class="wash-net-conn" data-testid={`carrier-${c.name}`} data-kind={c.kind} data-device={c.device} data-status={c.orphan ? "unconfigured" : "clean"} data-role={c.serves?.role}>
+                  <div class="wash-net-conn-main">
+                    <span class="wash-net-conn-name"><Icon name={carrierIcon(c.kind)} /> {c.name}</span>
+                    <span class="wash-net-conn-kind">{c.kind}</span>
+                    <Show when={c.detail}><span class="wash-net-conn-dev">{c.detail}</span></Show>
+                    <Show when={c.orphan}><span class="wash-net-badge" data-badge="unconfigured">unconfigured</span></Show>
+                  </div>
+                  <Show when={c.serves}>
+                    <div class="wash-net-conn-sub">
+                      → serves <button class="wash-net-link" data-testid={`carrier-serves-${c.name}`} onClick={() => setTab("networks")}>{c.serves!.name}</button>
+                      <Show when={c.serves!.addr}><span> · {c.serves!.addr}</span></Show>
+                    </div>
+                  </Show>
+                  <div class="wash-net-conn-actions">
+                    <Show when={c.orphan && c.kind !== "Tunnel"}>
+                      <button class="wash-net-btn ghost" data-testid={`carrier-configure-${c.name}`} disabled={busy() || adding() !== null} title="Use this carrier for a network" onClick={() => { setEditSeg(null); setAdding("network"); }}><Icon name="plus" /> Configure</button>
+                    </Show>
+                    {/* Remove a constructed carrier (bridge / VLAN / bond / tunnel).
+                        Physical adapters are hardware — no remove. */}
+                    <Show when={c.kind === "Bridge" || c.kind === "VLAN" || c.kind === "Bond" || c.kind === "Tunnel"}>
+                      <button class="wash-net-btn ghost" data-testid={`carrier-del-${c.name}`} disabled={busy() || adding() !== null}
+                        title={c.serves ? `Removes this ${c.kind.toLowerCase()} and the ${c.serves.name} network on it` : `Remove this ${c.kind.toLowerCase()}`}
+                        onClick={() => removeCarrierRow(c)}><Icon name="trash" /> Remove</button>
+                    </Show>
+                  </div>
+                </div>
+              )}
+            </For>
+          </div>
+          {/* Unified box-wide L2 fabric table (NET-ROUTER-UI.md §4c). */}
+          <FabricTable cfg={draft()} links={links()} busy={busy()} onChange={(c) => setDraft(c)} />
+        </Show>
+
+        <Show when={!routerCaps()}>
         <div class="wash-net-list">
           <For each={wifiConns()}>
             {(w) => (
@@ -583,7 +961,7 @@ function NetApp(props: WashAppProps) {
               </div>
             )}
           </For>
-          <For each={draft().Interfaces ?? []} fallback={<Show when={removed().length === 0}><div class="wash-net-empty">No connections yet — use + Ethernet / + VLAN / + Bridge.</div></Show>}>
+          <For each={looseConnections()} fallback={<Show when={removed().length === 0 && !routerCaps()}><div class="wash-net-empty">No connections yet — use + Ethernet / + VLAN / + Bridge.</div></Show>}>
             {(iface) => {
               const d = devByName().get(iface.Device ?? "");
               const st = () => statusOf(iface);
@@ -638,13 +1016,16 @@ function NetApp(props: WashAppProps) {
             )}
           </For>
         </div>
+        </Show>
 
-        <div class="wash-net-greyed">
-          <Show when={!can("zones")}><span class="wash-net-lock">Firewall 🔒</span></Show>
-          <Show when={!can("dhcp-server")}><span class="wash-net-lock">DHCP server 🔒</span></Show>
-          <Show when={!can("ap")}><span class="wash-net-lock">Access point 🔒</span></Show>
-          <span class="wash-net-hint">available in router mode</span>
-        </div>
+        <Show when={!routerCaps()}>
+          <div class="wash-net-greyed">
+            <span class="wash-net-lock">Firewall 🔒</span>
+            <span class="wash-net-lock">DHCP server 🔒</span>
+            <span class="wash-net-lock">Access point 🔒</span>
+            <span class="wash-net-hint">available in router mode</span>
+          </div>
+        </Show>
       </div>
 
       <Show when={dirtyCount() > 0 && status() !== "applying" && status() !== "await-confirm"}>
@@ -653,7 +1034,7 @@ function NetApp(props: WashAppProps) {
             {dirtyCount()} pending change{dirtyCount() === 1 ? "" : "s"} — not applied yet
           </span>
           <button class="wash-net-btn" data-testid="discard-changes" disabled={busy()} onClick={discardDraft}><Icon name="x" /> Discard</button>
-          <button class="wash-net-btn primary" data-testid="apply-button" disabled={busy()} onClick={() => void applyDraft()}><Icon name="check" /> Apply</button>
+          <button class="wash-net-btn primary" data-testid="apply-button" disabled={busy() || hasErrors()} title={hasErrors() ? "fix the validation errors above first" : ""} onClick={() => void applyDraft()}><Icon name="check" /> Apply</button>
         </div>
       </Show>
 
@@ -683,13 +1064,13 @@ const PROTO_LABELS: Record<string, string> = {
   "variant.pppoe": "PPPoE",
   "variant.wireguard": "WireGuard",
   // Friendly field labels for the addressing fragment.
-  "StaticProto.IPAddr": "IPv4 address",
+  "StaticProto.IPAddr": "IPv4 addresses",
   "StaticProto.Gateway": "IPv4 gateway",
   "StaticProto.IP6Addr": "IPv6 address",
   "StaticProto.IP6Gw": "IPv6 gateway",
   "StaticProto.DNS": "DNS servers",
-  "DHCPProto.IPv4": "IPv4 (DHCP)",
-  "DHCPProto.IPv6": "IPv6 (DHCP / SLAAC)",
+  "DHCPProto.IPv4": "Automatic IPv4 (DHCP)",
+  "DHCPProto.IPv6": "Automatic IPv6 (SLAAC / DHCPv6)",
   "DHCPProto.Hostname": "DHCP hostname",
 };
 const addrLabel = (k: string) => PROTO_LABELS[k] ?? label(k);
@@ -799,6 +1180,325 @@ function BridgeWizard(props: { members: string[]; onCancel: () => void; onCreate
         <button data-testid="bridge-create" class="wash-net-btn primary" disabled={!name() || picked().size === 0} onClick={() => props.onCreate(name(), Array.from(picked()), proto())}>Create</button>
       </div>
     </div>
+  );
+}
+
+// NetworkWizard is the router segment bundle (plan §7.1): one form that the user
+// thinks of as "a network," materialized to Device(if VLAN)+Interface+Zone+Pool by
+// saveNetwork. v1 = a LAN segment carried by a VLAN tag or an untagged port, a
+// static gateway address, an optional DHCP server, and the isolation default.
+function NetworkWizard(props: { parents: string[]; ports: string[]; fabricVlans: number[]; vpnTunnels: string[]; initial?: SegForm; onCancel: () => void; onSave: (f: SegForm) => void }) {
+  const editing = !!props.initial;
+  const i = props.initial;
+  const [name, setName] = createSignal(i?.name ?? "");
+  // Default a fresh LAN to a Switch VLAN when the fabric table has one (the
+  // unified path); else fall back to a classic VLAN tag.
+  const [carrierKind, setCarrierKind] = createSignal<"vlan" | "port" | "bridge" | "switch">(i?.carrierKind ?? (props.fabricVlans.length ? "switch" : "vlan"));
+  const [parent, setParent] = createSignal(i?.parent ?? props.parents[0] ?? "");
+  const [vid, setVid] = createSignal(i?.vid ?? props.fabricVlans[0] ?? 10);
+  const [port, setPort] = createSignal(i?.port ?? props.ports[0] ?? "");
+  const [members, setMembers] = createSignal<Set<string>>(new Set(i?.members ?? []));
+  const toggleMember = (d: string) => setMembers((s) => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n; });
+  const [address, setAddress] = createSignal(i?.address ?? "");
+  const [dhcp, setDhcp] = createSignal(i?.dhcp ?? true);
+  const [start, setStart] = createSignal(i?.start ?? 100);
+  const [limit, setLimit] = createSignal(i?.limit ?? 150);
+  const [lease, setLease] = createSignal(i?.lease ?? "12h");
+  const [dns, setDns] = createSignal(i?.dns ?? "");
+  const [isolate, setIsolate] = createSignal(i?.isolate ?? true);
+  const [role, setRole] = createSignal<"lan" | "wan">(i?.role ?? "lan");
+  const [proto, setProto] = createSignal<"static" | "dhcp">(i?.proto ?? "dhcp");
+  const [egress, setEgress] = createSignal<string>(i?.egress || "wan"); // "wan" or a wg tunnel name
+  const pickRole = (r: "lan" | "wan") => {
+    setRole(r);
+    if (!editing && (name() === "" || name() === "wan")) setName(r === "wan" ? "wan" : "");
+    if (!editing) setCarrierKind(r === "wan" ? "port" : props.fabricVlans.length ? "switch" : "vlan");
+  };
+
+  const cidrOK = () => /\/\d+$/.test(address());
+  const carrierOK = () => carrierKind() === "port" ? !!port()
+    : carrierKind() === "bridge" ? members().size > 0
+    : carrierKind() === "switch" ? vid() > 0
+    : (!!parent() && vid() >= 1 && vid() <= 4094);
+  const valid = () => !!name() && carrierOK() && (role() === "wan" ? (proto() === "static" ? cidrOK() : true) : cidrOK());
+  const submit = () => props.onSave({
+    name: name(), role: role(), carrierKind: carrierKind(), parent: parent(), vid: vid(), port: port(),
+    members: Array.from(members()), proto: proto(),
+    address: address(), dhcp: dhcp(), start: start(), limit: limit(), lease: lease(), dns: dns(), isolate: isolate(), egress: egress(),
+  });
+
+  return (
+    <div class="wash-net-wizard" data-testid="network-wizard">
+      <div class="wash-net-wizard-title">{editing ? `Edit network ${i!.name}` : "New network"}</div>
+      <div class="wash-net-field">
+        <span class="wash-net-label">Type</span>
+        <div class="wash-net-chips" data-testid="net-role">
+          <button type="button" class="wash-net-chip" classList={{ on: role() === "lan" }} data-role="lan" data-testid="role-lan" disabled={editing} onClick={() => pickRole("lan")}><Icon name="git-branch" /> LAN segment</button>
+          <button type="button" class="wash-net-chip" classList={{ on: role() === "wan" }} data-role="wan" data-testid="role-wan" disabled={editing} onClick={() => pickRole("wan")}><Icon name="ethernet-port" /> WAN uplink</button>
+        </div>
+      </div>
+      <label class="wash-net-field">
+        <span class="wash-net-label">Name</span>
+        <input data-testid="net-name" value={name()} disabled={editing} onInput={(e) => setName(e.currentTarget.value)} placeholder={role() === "wan" ? "wan" : "iot"} />
+      </label>
+      <label class="wash-net-field">
+        <span class="wash-net-label">Carrier</span>
+        <select data-testid="net-carrier" value={carrierKind()} onChange={(e) => setCarrierKind(e.currentTarget.value as any)}>
+          <Show when={props.fabricVlans.length}><option value="switch">Switch VLAN</option></Show>
+          <option value="vlan">VLAN tag</option>
+          <option value="port">Untagged port</option>
+          <option value="bridge">Bridge (multiple ports)</option>
+        </select>
+      </label>
+      <Switch>
+        <Match when={carrierKind() === "switch"}>
+          <label class="wash-net-field">
+            <span class="wash-net-label">Switch VLAN</span>
+            <select data-testid="net-switch-vlan" value={vid()} onChange={(e) => setVid(parseInt(e.currentTarget.value || "0", 10))}>
+              <For each={props.fabricVlans}>{(v) => <option value={v}>VLAN {v} (br-lan.{v})</option>}</For>
+            </select>
+          </label>
+        </Match>
+        <Match when={carrierKind() === "vlan"}>
+          <label class="wash-net-field">
+            <span class="wash-net-label">Trunk</span>
+            <select data-testid="net-parent" value={parent()} onChange={(e) => setParent(e.currentTarget.value)}>
+              <For each={props.parents}>{(d) => <option value={d}>{d}</option>}</For>
+            </select>
+          </label>
+          <label class="wash-net-field">
+            <span class="wash-net-label">VLAN ID</span>
+            <input data-testid="net-vid" type="number" min="1" max="4094" value={vid()} onInput={(e) => setVid(parseInt(e.currentTarget.value || "0", 10))} />
+          </label>
+        </Match>
+        <Match when={carrierKind() === "bridge"}>
+          <div class="wash-net-field">
+            <span class="wash-net-label">Ports</span>
+            <div class="wash-net-members" data-testid="net-members">
+              <For each={props.ports} fallback={<span class="wash-net-hint">no free ports</span>}>
+                {(d) => <label class="wash-net-member"><input data-testid={`net-member-${d}`} type="checkbox" checked={members().has(d)} onChange={() => toggleMember(d)} /> {d}</label>}
+              </For>
+            </div>
+          </div>
+        </Match>
+        <Match when={carrierKind() === "port"}>
+          <label class="wash-net-field">
+            <span class="wash-net-label">Port</span>
+            <select data-testid="net-port" value={port()} onChange={(e) => setPort(e.currentTarget.value)}>
+              <For each={props.ports}>{(d) => <option value={d}>{d}</option>}</For>
+            </select>
+          </label>
+        </Match>
+      </Switch>
+      {/* WAN uplink: proto + (static) address; masquerade is implied. */}
+      <Show when={role() === "wan"}>
+        <label class="wash-net-field">
+          <span class="wash-net-label">Uplink</span>
+          <select data-testid="net-proto" value={proto()} onChange={(e) => setProto(e.currentTarget.value as any)}>
+            <option value="dhcp">DHCP (automatic)</option>
+            <option value="static">Static</option>
+          </select>
+        </label>
+        <Show when={proto() === "static"}>
+          <label class="wash-net-field">
+            <span class="wash-net-label">WAN address</span>
+            <input data-testid="net-wan-address" value={address()} onInput={(e) => setAddress(e.currentTarget.value)} placeholder="203.0.113.2/24" />
+          </label>
+        </Show>
+        <div class="wash-net-field"><span class="wash-net-label">NAT</span><span class="wash-net-derived">masquerade on (LANs reach the internet via the firewall matrix)</span></div>
+      </Show>
+
+      {/* LAN segment: gateway address + isolation + DHCP server. */}
+      <Show when={role() === "lan"}>
+      <label class="wash-net-field">
+        <span class="wash-net-label">Router address</span>
+        <input data-testid="net-address" value={address()} onInput={(e) => setAddress(e.currentTarget.value)} placeholder="10.0.20.1/24" />
+      </label>
+      <label class="wash-net-field">
+        <span class="wash-net-label">Isolate</span>
+        <input data-testid="net-isolate" type="checkbox" checked={isolate()} onChange={(e) => setIsolate(e.currentTarget.checked)} />
+      </label>
+      {/* Egress: out the WAN (default) or out a VPN tunnel (policy-routed with a
+          leak-proof kill-switch). Only offered when a WireGuard tunnel exists. */}
+      <Show when={props.vpnTunnels.length}>
+        <label class="wash-net-field">
+          <span class="wash-net-label">Egress</span>
+          <select data-testid="net-egress" value={egress()} onChange={(e) => setEgress(e.currentTarget.value)}>
+            <option value="wan">WAN (normal internet)</option>
+            <For each={props.vpnTunnels}>{(t) => <option value={t}>VPN: {t} (kill-switch)</option>}</For>
+          </select>
+        </label>
+      </Show>
+      <label class="wash-net-field">
+        <span class="wash-net-label">DHCP server</span>
+        <input data-testid="net-dhcp" type="checkbox" checked={dhcp()} onChange={(e) => setDhcp(e.currentTarget.checked)} />
+      </label>
+      <Show when={dhcp()}>
+        <div class="wash-net-field">
+          <span class="wash-net-label">Range / lease</span>
+          <span class="wash-net-dhcp-row">
+            <input data-testid="net-start" type="number" min="2" max="254" value={start()} onInput={(e) => setStart(parseInt(e.currentTarget.value || "0", 10))} title="start offset" />
+            <input data-testid="net-limit" type="number" min="1" max="253" value={limit()} onInput={(e) => setLimit(parseInt(e.currentTarget.value || "0", 10))} title="count" />
+            <input data-testid="net-lease" value={lease()} onInput={(e) => setLease(e.currentTarget.value)} title="lease time" />
+          </span>
+        </div>
+        <label class="wash-net-field">
+          <span class="wash-net-label">DNS for clients</span>
+          <input data-testid="net-dns" value={dns()} onInput={(e) => setDns(e.currentTarget.value)} placeholder="(router) — or 192.168.15.1" />
+        </label>
+      </Show>
+      </Show>
+      <div class="wash-net-wizard-actions">
+        <button class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
+        <button data-testid="net-save" class="wash-net-btn primary" disabled={!valid()} onClick={submit}>{editing ? "Save" : "Create"}</button>
+      </div>
+    </div>
+  );
+}
+
+// HostWizard adds/edits one unified host entry (plan §7.3): a name → IP, plus an
+// optional MAC. With a MAC it's a DHCP reservation (and resolves in DNS for free);
+// without, a pure static DNS record (a dotted FQDN entered verbatim is a
+// split-horizon override). One gesture for both.
+function HostWizard(props: { initial?: HostEntry; onCancel: () => void; onSave: (e: HostEntry) => void }) {
+  const editing = !!props.initial;
+  const [name, setName] = createSignal(props.initial?.name ?? "");
+  const [ip, setIp] = createSignal(props.initial?.ip ?? "");
+  const [mac, setMac] = createSignal(props.initial?.mac ?? "");
+  const valid = () => !!name() && /^\d+\.\d+\.\d+\.\d+$/.test(ip());
+  return (
+    <div class="wash-net-wizard" data-testid="host-wizard">
+      <div class="wash-net-wizard-title">{editing ? `Edit host ${props.initial!.name}` : "New host"}</div>
+      <label class="wash-net-field">
+        <span class="wash-net-label">Name</span>
+        <input data-testid="host-name" value={name()} disabled={editing} onInput={(e) => setName(e.currentTarget.value)} placeholder="printer  (or nas.example.com)" />
+      </label>
+      <label class="wash-net-field">
+        <span class="wash-net-label">IP</span>
+        <input data-testid="host-ip" value={ip()} onInput={(e) => setIp(e.currentTarget.value)} placeholder="10.0.0.20" />
+      </label>
+      <label class="wash-net-field">
+        <span class="wash-net-label">MAC (reservation)</span>
+        <input data-testid="host-mac" value={mac()} onInput={(e) => setMac(e.currentTarget.value)} placeholder="optional — blank = DNS only" />
+      </label>
+      <div class="wash-net-wizard-actions">
+        <button class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
+        <button data-testid="host-save" class="wash-net-btn primary" disabled={!valid()} onClick={() => props.onSave({ name: name(), ip: ip(), mac: mac().trim() || undefined })}>{editing ? "Save" : "Add"}</button>
+      </div>
+    </div>
+  );
+}
+
+// FirewallMatrix is the zone×zone access grid (plan §7.2): rows = source zone,
+// columns = destination zone + a Router column (the zone's Input policy). A cell
+// click toggles block↔allow (a Forwarding); custom (rule-backed) cells are
+// read-only here (edited in Advanced). The grid is one CSS-grid container; every
+// header/cell is a direct child (Solid fragments add no wrappers).
+function FirewallMatrix(props: {
+  zones: MZone[];
+  state: (src: string, dest: string) => CellState;
+  onToggle: (src: string, dest: string) => void;
+  onInput: (zone: string, cur: string) => void;
+}) {
+  const glyph = (s: CellState) => (s === "allow" ? "✓" : s === "custom" ? "rules" : "✕");
+  return (
+    <section class="wash-net-matrix" data-testid="net-matrix">
+      <h2 class="wash-net-seg-h">Firewall — who can reach whom</h2>
+      <div class="wash-net-grid" style={{ "grid-template-columns": `auto repeat(${props.zones.length + 1}, minmax(54px, 1fr))` }}>
+        <div class="wash-net-grid-corner">src → dst</div>
+        <For each={props.zones}>{(z) => <div class="wash-net-grid-h" title={z.masq ? "WAN / egress (masquerade)" : ""}>{z.name}<Show when={z.masq}><span class="wan-mark"> ⬈</span></Show></div>}</For>
+        <div class="wash-net-grid-h" title="Reach the router's own services (DNS/DHCP/admin)">Router</div>
+        <For each={props.zones}>
+          {(row) => (
+            <>
+              <div class="wash-net-grid-rh">{row.name}</div>
+              <For each={props.zones}>
+                {(col) => (
+                  <Show when={row.name !== col.name} fallback={<div class="wash-net-cell" data-state="self">—</div>}>
+                    <button
+                      class="wash-net-cell" data-testid={`cell-${row.name}-${col.name}`} data-state={props.state(row.name, col.name)}
+                      disabled={props.state(row.name, col.name) === "custom"}
+                      title={props.state(row.name, col.name) === "custom" ? "custom rules — edit in Advanced" : `${row.name} → ${col.name}`}
+                      onClick={() => props.onToggle(row.name, col.name)}
+                    >{glyph(props.state(row.name, col.name))}</button>
+                  </Show>
+                )}
+              </For>
+              <button class="wash-net-cell" data-testid={`input-${row.name}`} data-input={row.input}
+                title={`${row.name} → router services`} onClick={() => props.onInput(row.name, row.input)}>{row.input === "ACCEPT" ? "✓" : "✕"}</button>
+            </>
+          )}
+        </For>
+      </div>
+    </section>
+  );
+}
+
+// FabricTable is the unified, box-wide L2 fabric grid (NET-ROUTER-UI.md §4c):
+// rows = every physical port, columns = the Native (untagged) domain + each VLAN,
+// cells cycle · → U* (untagged + PVID, access) → T (tagged, trunk). One table owns
+// the whole switch — plain bridging is the Native column, VLANs are the rest. Edits
+// go through the pure fabric lens, which picks the UCI idiom (bare port / eth.N
+// sub-iface / plain or vlan-filtering br-lan) by topology. Per-VLAN routed⇄transit
+// (the `local` flag) controls whether the router terminates the VLAN at L3.
+function FabricTable(props: { cfg: Config; links: string[]; busy: boolean; onChange: (c: Config) => void }) {
+  const [newVid, setNewVid] = createSignal<number>(10);
+  const plan = (): Plan => projectFabric(props.cfg).plan;
+  const cols = () => vlanColumns(plan());
+  const rows = () => {
+    const names = new Set<string>(props.links);
+    for (const p of plan().ports) names.add(p.name);
+    return [...names].sort();
+  };
+  const apply = (p: Plan) => props.onChange(setFabric(props.cfg, p) as Config);
+  const glyph = (s: string) => (s === "none" ? "·" : s === "tagged" ? "T" : "U*");
+  const label = (v: number) => (v === NATIVE ? "Native" : `V${v}`);
+  return (
+    <section class="wash-net-l2" data-testid="fabric-table">
+      <div class="wash-net-l2-head">
+        <h2 class="wash-net-seg-h">Switch — ports &amp; VLANs</h2>
+        <div class="wash-net-l2-addv">
+          <input type="number" min="2" max="4094" data-testid="fabric-newvid" value={newVid()}
+            onInput={(e) => setNewVid(parseInt(e.currentTarget.value || "0", 10))} />
+          <button class="wash-net-btn ghost" data-testid="fabric-addvlan"
+            disabled={props.busy || newVid() < 2 || newVid() > 4094 || cols().includes(newVid())}
+            onClick={() => apply(fAddVlan(plan(), newVid()))}><Icon name="plus" /> VLAN</button>
+        </div>
+      </div>
+      <Show when={rows().length > 0} fallback={<div class="wash-net-empty">No ethernet ports detected.</div>}>
+        <div class="wash-net-grid wash-net-l2-grid" style={{ "grid-template-columns": `minmax(64px,auto) repeat(${cols().length}, minmax(56px,1fr))` }}>
+          <div class="wash-net-grid-corner">port \ vlan</div>
+          <For each={cols()}>
+            {(v) => (
+              <div class="wash-net-grid-h" classList={{ "wash-net-l2-transit": v !== NATIVE && !isRouted(plan(), v) }}>
+                <span>{label(v)}<Show when={v !== NATIVE}><button class="wash-net-l2-vdel" data-testid={`fabric-delvlan-${v}`} title={`Remove VLAN ${v}`} disabled={props.busy} onClick={() => apply(fRemoveVlan(plan(), v))}>×</button></Show></span>
+                <Show when={v !== NATIVE}>
+                  <button class="wash-net-l2-vmode" data-transit={!isRouted(plan(), v)} data-testid={`fabric-mode-${v}`} disabled={props.busy}
+                    title={isRouted(plan(), v) ? `Routed — terminates at br-lan.${v} (bindable on Networks). Click for switch-only.` : `Transit — switched only, no br-lan.${v} adapter. Click to route.`}
+                    onClick={() => apply(setRouted(plan(), v, !isRouted(plan(), v)))}>{isRouted(plan(), v) ? "routed" : "transit"}</button>
+                </Show>
+              </div>
+            )}
+          </For>
+          <For each={rows()}>
+            {(port) => (
+              <>
+                <div class="wash-net-grid-rh">{port}</div>
+                <For each={cols()}>
+                  {(v) => (
+                    <button class="wash-net-cell wash-net-l2-cell" data-testid={`fabric-cell-${port}-${v}`}
+                      data-state={cellOf(plan(), port, v)} disabled={props.busy}
+                      title={`${port} in ${label(v)} — click: untagged → tagged → none`}
+                      onClick={() => apply(fCycle(plan(), port, v))}>{glyph(cellOf(plan(), port, v))}</button>
+                  )}
+                </For>
+              </>
+            )}
+          </For>
+        </div>
+        <div class="wash-net-l2-legend"><b>U*</b> untagged + PVID (access) · <b>T</b> tagged (trunk) · <b>·</b> not a member · <b>Native</b> = the untagged LAN (plain bridging) · <b>routed</b> terminates at <code>br-lan.&lt;id&gt;</code> (Networks) · <b>transit</b> switched only</div>
+      </Show>
+    </section>
   );
 }
 
@@ -931,77 +1631,141 @@ function WireGuardWizard(props: { onCancel: () => void; onCreate: (name: string,
   );
 }
 
-// Chrome (surfaces, borders, text, fonts, radii) and accent text colors
-// pull from @wash/ui tokens. The remaining bare hexes below are a
-// net-local palette with no shared-token equivalent: the dark outline-
-// chip border companions to the accents (#2e5a38/#4a4030/#5a2e2e/
-// #33415a), the brand "primary" button blue (#3a5a9a/#456bb5), the
-// apply-terminal confirm-banner ambers, and the WireGuard import box.
 const STYLE = `
-.wash-net-app { display:flex; flex-direction:column; height:100%; background:${tokens.bgWindow}; color:${tokens.fg};
-  font:${tokens.fontSizeBase} ${tokens.fontSans}; position:relative; }
-.wash-net-head { display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border-bottom:1px solid ${tokens.borderMenu}; }
+.wash-net-app { display:flex; flex-direction:column; height:100%; background:#181828; color:#eee;
+  font:13px ui-sans-serif, system-ui, sans-serif; position:relative; }
+.wash-net-head { display:flex; align-items:stretch; padding:0 6px; border-bottom:1px solid #2a2a3a; }
 .wash-net-head h1 { font-size:14px; font-weight:600; margin:0; }
-.wash-net-add { display:flex; gap:6px; }
+.wash-net-toolbar { display:flex; gap:6px; flex-wrap:wrap; align-items:center; padding:8px 12px; border-bottom:1px solid #2a2a3a; }
+.wash-net-addlabel { font-size:12px; font-weight:600; color:#8a8a96; align-self:center; margin-right:2px; }
+.wash-net-addlabel::after { content:":"; }
+.wash-net-tabs { display:flex; gap:2px; align-items:stretch; }
+.wash-net-tab { background:transparent; border:none; border-bottom:2px solid transparent; color:#9a9aa6;
+  padding:10px 12px; font-size:12px; font-weight:600; cursor:pointer; }
+.wash-net-tab:hover { color:#cfd0d4; }
+.wash-net-tab.active { color:#8fb0e0; border-bottom-color:#33558a; }
 .wash-net-body { flex:1; overflow:auto; padding:10px 12px; }
 .wash-net-list { display:flex; flex-direction:column; gap:6px; }
 .wash-net-empty { opacity:.6; font-size:12px; padding:16px; text-align:center; }
 .wash-net-conn { display:grid; grid-template-columns:1fr auto; grid-template-rows:auto auto; gap:2px 8px;
-                 border:1px solid ${tokens.borderMenu}; border-radius:${tokens.radiusLg}px; padding:8px 10px; align-items:center; }
+                 border:1px solid #2a2a3a; border-radius:6px; padding:8px 10px; align-items:center; }
 .wash-net-conn-main { display:flex; align-items:baseline; gap:8px; }
 .wash-net-conn-name { font-weight:600; font-size:13px; }
-.wash-net-conn-kind { font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:${tokens.accentBlue}; border:1px solid #33415a; border-radius:9px; padding:1px 7px; }
-.wash-net-conn-dev { font-size:11px; opacity:.6; font-family:${tokens.fontMono}; }
+.wash-net-conn-kind { font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:#8fb0e0; border:1px solid #33415a; border-radius:9px; padding:1px 7px; }
+.wash-net-conn-dev { font-size:11px; opacity:.6; font-family:ui-monospace,Menlo,monospace; }
 .wash-net-conn-sub { grid-column:1; font-size:11px; opacity:.7; }
+.wash-net-link { background:none; border:none; padding:0; color:#8fb0e0; font:inherit; cursor:pointer; text-decoration:underline; text-underline-offset:2px; }
+.wash-net-link:hover { color:#aecbf0; }
+.wash-net-segments { display:flex; flex-direction:column; gap:6px; margin-bottom:14px; }
+.wash-net-seg-h { font-size:12px; text-transform:uppercase; letter-spacing:.06em; opacity:.55; margin:0 0 2px; font-weight:600; }
+.wash-net-seg-detail { grid-column:1; display:flex; gap:8px; align-items:center; font-size:11px; opacity:.7; font-family:ui-monospace,Menlo,monospace; }
+.wash-net-seg-tag { font-family:inherit; opacity:1; color:#8fb0e0; border:1px solid #33415a; border-radius:9px; padding:0 6px; }
+/* role colour-coding: LAN blue · WAN violet · VPN teal — consistent across the
+   type chips, segment cards, and role badges. */
+.wash-net-conn[data-role="wan"] { border-color:#4a3a66; background:#191622; }
+.wash-net-conn[data-role="vpn"] { border-color:#244a4a; background:#161e1e; }
+.wash-net-conn[data-role="wan"] .wash-net-conn-kind { color:#b48ae8; border-color:#5a3f8a; }
+.wash-net-conn[data-role="vpn"] .wash-net-conn-kind { color:#5fc7c7; border-color:#2e5a5a; }
+.wash-net-chips { display:flex; gap:8px; }
+.wash-net-chip { display:inline-flex; align-items:center; gap:5px; border:1px solid #33415a; background:#16161f; color:#9a9aa6; border-radius:16px; padding:5px 14px; cursor:pointer; font-size:12px; font-weight:600; }
+.wash-net-chip:hover:not(:disabled) { border-color:#4a4a6a; color:#cfd0d4; }
+.wash-net-chip:disabled { opacity:.55; cursor:default; }
+.wash-net-chip.on[data-role="lan"] { background:#16243a; color:#8fb0e0; border-color:#33558a; }
+.wash-net-chip.on[data-role="wan"] { background:#241a36; color:#b48ae8; border-color:#6a4aa0; }
+.wash-net-grid-h .wan-mark { color:#b48ae8; }
+.wash-net-dhcp-row { display:flex; gap:6px; }
+.wash-net-dhcp-row input { width:5.5em; }
+.wash-net-diags { display:flex; flex-direction:column; gap:4px; margin-bottom:12px; }
+.wash-net-diag { display:flex; gap:8px; align-items:baseline; font-size:12px; padding:6px 10px; border-radius:6px; border:1px solid; }
+.wash-net-diag[data-sev="error"] { background:#2a1518; border-color:#5a2e30; color:#e09098; }
+.wash-net-diag[data-sev="warning"] { background:#2a2410; border-color:#5a4a20; color:#d0b060; }
+.wash-net-diag-sev { font-weight:700; }
+.wash-net-diag-msg { flex:1; }
+.wash-net-diag-path { opacity:.6; font-family:ui-monospace,Menlo,monospace; font-size:11px; }
+.wash-net-matrix { margin-bottom:14px; }
+.wash-net-grid { display:grid; gap:2px; font-size:11px; }
+.wash-net-grid-corner { opacity:.5; padding:3px 6px; font-size:10px; }
+.wash-net-grid-h { text-align:center; padding:3px 4px; font-weight:600; color:#8fb0e0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wash-net-grid-rh { padding:3px 6px; font-weight:600; display:flex; align-items:center; }
+.wash-net-cell { border:1px solid #2a2a3a; border-radius:4px; background:#16161f; color:#eee; cursor:pointer; padding:4px 0; font-size:11px; }
+.wash-net-cell:hover:not(:disabled) { border-color:#4a4a6a; }
+.wash-net-cell[data-state="allow"] { background:#16301c; color:#5fd75f; border-color:#2e5a38; }
+.wash-net-cell[data-state="block"] { background:#2a1518; color:#d07070; border-color:#5a2e30; }
+.wash-net-cell[data-state="custom"] { background:#2a2410; color:#d0a040; border-color:#5a4a20; cursor:default; }
+.wash-net-cell[data-state="self"] { background:transparent; border-color:transparent; color:#444; cursor:default; }
+.wash-net-cell[data-input="ACCEPT"] { color:#5fd75f; }
+.wash-net-cell[data-input="REJECT"] { color:#d07070; }
+.wash-net-l2 { margin:12px 0 16px; }
+.wash-net-l2-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.wash-net-l2-addv { display:flex; gap:4px; align-items:center; }
+.wash-net-l2-addv input { width:5em; background:#16161f; border:1px solid #33415a; border-radius:5px; color:#cfd0d4; padding:3px 6px; font-size:12px; }
+.wash-net-l2-grid { margin-top:6px; }
+.wash-net-l2-grid .wash-net-grid-h { display:flex; flex-direction:column; align-items:center; gap:3px; }
+.wash-net-l2-transit { opacity:.65; }
+.wash-net-l2-vmode { font-size:8px; text-transform:uppercase; letter-spacing:.04em; border:1px solid #2e5a38; background:#16301c; color:#5fd75f; border-radius:8px; padding:0 5px; cursor:pointer; line-height:1.5; }
+.wash-net-l2-vmode[data-transit="true"] { border-color:#5a4a20; background:#2a2410; color:#d0a040; }
+.wash-net-l2-vmode:disabled { opacity:.6; cursor:default; }
+.wash-net-l2-cell[data-state="none"] { background:#16161f; color:#555; border-color:#2a2a3a; }
+.wash-net-l2-cell[data-state="untagged"] { background:#16301c; color:#5fd75f; border-color:#2e5a38; font-weight:600; }
+.wash-net-l2-cell[data-state="tagged"] { background:#241a36; color:#b48ae8; border-color:#6a4aa0; font-weight:600; }
+.wash-net-l2-vdel { background:none; border:none; color:#777; cursor:pointer; margin-left:5px; font-size:13px; line-height:1; }
+.wash-net-l2-vdel:hover { color:#e06060; }
+.wash-net-l2-legend { font-size:10px; opacity:.6; margin-top:6px; }
+.wash-net-l2-legend code { font-family:ui-monospace,Menlo,monospace; }
+.wash-net-adv-toggle { cursor:pointer; user-select:none; }
+.wash-net-adv-kind { margin:6px 0 10px; }
+.wash-net-adv-h { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:600; color:#8fb0e0; margin-bottom:4px; }
+.wash-net-adv-item { border:1px solid #2a2a3a; border-radius:6px; padding:6px 8px; margin-bottom:4px; display:flex; flex-direction:column; gap:4px; }
+.wash-net-adv-item .wash-net-btn { align-self:flex-end; }
 .wash-net-conn-actions { grid-row:1 / span 2; grid-column:2; display:flex; gap:4px; align-items:center; }
 .wash-net-conn[data-status="new"] { border-color:#2e5a38; }
 .wash-net-conn[data-status="edited"] { border-color:#4a4030; }
 .wash-net-conn.removed { opacity:.6; border-style:dashed; }
 .wash-net-conn.removed .wash-net-conn-name { text-decoration:line-through; }
-.wash-net-badge { font-size:9px; text-transform:uppercase; letter-spacing:.05em; border-radius:${tokens.radiusXl}px; padding:1px 6px; border:1px solid; }
-.wash-net-badge[data-badge="new"] { color:${tokens.accentGreen}; border-color:#2e5a38; }
-.wash-net-badge[data-badge="edited"] { color:${tokens.accentAmber}; border-color:#4a4030; }
-.wash-net-badge[data-badge="removed"] { color:${tokens.accentRed}; border-color:#5a2e2e; }
-.wash-net-pending { display:flex; align-items:center; gap:10px; padding:8px 12px; border-top:1px solid ${tokens.borderMenu};
+.wash-net-badge { font-size:9px; text-transform:uppercase; letter-spacing:.05em; border-radius:8px; padding:1px 6px; border:1px solid; }
+.wash-net-badge[data-badge="new"] { color:#3aa050; border-color:#2e5a38; }
+.wash-net-badge[data-badge="edited"] { color:#d0a040; border-color:#4a4030; }
+.wash-net-badge[data-badge="removed"] { color:#e06060; border-color:#5a2e2e; }
+.wash-net-pending { display:flex; align-items:center; gap:10px; padding:8px 12px; border-top:1px solid #2a2a3a;
   background:#1a1a30; flex-shrink:0; }
-.wash-net-pending-msg { flex:1; font-size:12px; color:${tokens.accentAmber}; }
-.wash-net-greyed { display:flex; gap:10px; align-items:center; margin-top:14px; padding-top:10px; border-top:1px dashed ${tokens.borderMenu}; }
+.wash-net-pending-msg { flex:1; font-size:12px; color:#d0a040; }
+.wash-net-greyed { display:flex; gap:10px; align-items:center; margin-top:14px; padding-top:10px; border-top:1px dashed #2a2a3a; }
 .wash-net-lock { font-size:12px; opacity:.45; }
 .wash-net-hint { font-size:11px; opacity:.4; font-style:italic; }
-.wash-net-wizard { border:1px solid ${tokens.borderFocus}; border-radius:${tokens.radiusXl}px; padding:10px 12px; margin-bottom:12px; background:${tokens.bgMenu}; }
+.wash-net-wizard { border:1px solid #3a3a6a; border-radius:8px; padding:10px 12px; margin-bottom:12px; background:#15152a; }
 .wash-net-wizard-title { font-size:13px; font-weight:600; margin-bottom:8px; }
 .wash-net-wizard-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:10px; }
 .wash-net-field { display:grid; grid-template-columns:130px 1fr; align-items:center; gap:8px; margin:5px 0; }
 .wash-net-label { font-size:12px; opacity:.85; }
-.wash-net-derived { font-size:12px; font-family:${tokens.fontMono}; opacity:.8; }
+.wash-net-derived { font-size:12px; font-family:ui-monospace,Menlo,monospace; opacity:.8; }
 .wash-net-field input, .wash-net-field select, .wash-net-field textarea {
-  background:${tokens.bgMenu}; color:${tokens.fg}; border:1px solid ${tokens.borderMenu}; border-radius:${tokens.radiusMd}px; padding:3px 6px; font:inherit; }
+  background:#15152a; color:#eee; border:1px solid #2a2a3a; border-radius:4px; padding:3px 6px; font:inherit; }
 .wash-net-field input:focus, .wash-net-field select:focus, .wash-net-field textarea:focus {
-  outline:none; border-color:${tokens.borderFocus}; }
-.wash-net-field textarea { resize:vertical; font:${tokens.fontSizeMd} ${tokens.fontMono}; }
+  outline:none; border-color:#3a3a6a; }
+.wash-net-field textarea { resize:vertical; font:12px ui-monospace, Menlo, Consolas, monospace; }
 .wash-net-reflist { display:flex; flex-wrap:wrap; gap:8px; }
 .wash-net-reflist label { display:flex; gap:4px; align-items:center; font-size:12px; }
-.wash-net-diag { grid-column:2; font-size:11px; color:${tokens.accentAmber}; }
-.wash-net-field.error input, .wash-net-field.error select, .wash-net-field.error textarea { border-color:${tokens.borderDanger}; }
-.wash-net-field.error .wash-net-diag { color:${tokens.accentRed}; }
+.wash-net-diag { grid-column:2; font-size:11px; color:#d0a040; }
+.wash-net-field.error input, .wash-net-field.error select, .wash-net-field.error textarea { border-color:#a02d2d; }
+.wash-net-field.error .wash-net-diag { color:#e06060; }
 .wash-net-members { display:flex; flex-wrap:wrap; gap:10px; }
 .wash-net-addressing { margin-top:6px; }
 .wash-net-addressing .wash-net-form { padding:0; }
 .wash-net-group { border:none; padding:0; margin:0; }
 .wash-net-method { margin:5px 0; }
-.wash-net-method select { width:100%; background:${tokens.bgMenu}; color:${tokens.fg}; border:1px solid ${tokens.borderMenu}; border-radius:${tokens.radiusMd}px; padding:4px 6px; font:inherit; }
-.wash-net-method select:focus { outline:none; border-color:${tokens.borderFocus}; }
+.wash-net-method select { width:100%; background:#15152a; color:#eee; border:1px solid #2a2a3a; border-radius:4px; padding:4px 6px; font:inherit; }
+.wash-net-method select:focus { outline:none; border-color:#3a3a6a; }
 .wash-net-grouplabel { font-size:11px; opacity:.6; text-transform:uppercase; letter-spacing:.04em; margin:6px 0 2px; }
 .wash-net-wg-key { display:flex; gap:6px; }
 .wash-net-wg-key input { flex:1; min-width:0; }
 .wash-net-wg-endpoint { display:flex; gap:6px; }
 .wash-net-wg-endpoint input:first-child { flex:1; min-width:0; }
 .wash-net-wg-endpoint input:last-child { width:72px; }
-.wash-net-wg-peer { border:1px solid ${tokens.borderMenu}; border-radius:${tokens.radiusMd}px; padding:6px 8px; margin:4px 0; }
+.wash-net-wg-peer { border:1px solid #2a2a3a; border-radius:4px; padding:6px 8px; margin:4px 0; }
 .wash-net-wg-import { display:flex; flex-direction:column; gap:6px; margin:4px 0 8px; padding:8px;
-  background:#15151f; border:1px solid ${tokens.borderMenu}; border-radius:${tokens.radiusMd}px; }
-.wash-net-wg-importbox { width:100%; box-sizing:border-box; resize:vertical; font:${tokens.fontSizeSm} ${tokens.fontMono};
-  background:#101018; color:#cfd0d4; border:1px solid ${tokens.borderMenu}; border-radius:${tokens.radiusSm}px; padding:5px 6px; }
+  background:#15151f; border:1px solid #2a2a3a; border-radius:4px; }
+.wash-net-wg-importbox { width:100%; box-sizing:border-box; resize:vertical; font:11px ui-monospace,Menlo,Consolas,monospace;
+  background:#101018; color:#cfd0d4; border:1px solid #2a2a3a; border-radius:3px; padding:5px 6px; }
 .wash-net-wg-importbar { display:flex; align-items:center; gap:6px; }
 .wash-net-wg-importerr { color:#e0a0a0; font-size:11px; }
 .wash-net-addressing .wash-net-group { margin:0 0 6px; }
@@ -1011,32 +1775,53 @@ const STYLE = `
 .wash-net-wifi-off { display:flex; align-items:center; gap:10px; padding:8px 0; }
 .wash-net-aplist { display:flex; flex-direction:column; gap:3px; max-height:160px; overflow:auto; margin-top:4px; }
 .wash-net-ap { display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%;
-  background:${tokens.bgMenu}; color:${tokens.fg}; border:1px solid ${tokens.borderMenu}; border-radius:${tokens.radiusMd}px; padding:5px 9px; font:inherit; cursor:pointer; text-align:left; }
-.wash-net-ap:hover { background:#22223a; border-color:${tokens.borderFocus}; }
+  background:#15152a; color:#eee; border:1px solid #2a2a3a; border-radius:4px; padding:5px 9px; font:inherit; cursor:pointer; text-align:left; }
+.wash-net-ap:hover { background:#22223a; border-color:#3a3a6a; }
 .wash-net-ap[data-inuse="1"] { border-color:#2e5a38; }
 .wash-net-ap-ssid { font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.wash-net-ap-meta { font-size:12px; opacity:.7; flex-shrink:0; font-family:${tokens.fontMono}; }
-.wash-net-btn { display:inline-flex; align-items:center; gap:5px; background:${tokens.bgRowHover}; color:${tokens.fg}; border:1px solid ${tokens.borderMenu}; border-radius:${tokens.radiusMd}px; padding:4px 10px; font:inherit; cursor:pointer; }
+.wash-net-ap-meta { font-size:12px; opacity:.7; flex-shrink:0; font-family:ui-monospace,Menlo,monospace; }
+.wash-net-btn { display:inline-flex; align-items:center; gap:5px; background:#202037; color:#eee; border:1px solid #2a2a3a; border-radius:4px; padding:4px 10px; font:inherit; cursor:pointer; }
 .wash-net-ico { flex-shrink:0; opacity:.9; }
-.wash-net-btn:hover:not(:disabled) { background:${tokens.bgRowSelected}; }
+.wash-net-btn:hover:not(:disabled) { background:#2a2a4a; }
 .wash-net-btn.primary { background:#3a5a9a; border-color:#3a5a9a; color:#fff; }
 .wash-net-btn.primary:hover:not(:disabled) { background:#456bb5; }
 .wash-net-btn.ghost { background:transparent; opacity:.7; }
 .wash-net-btn:disabled { opacity:.4; cursor:default; }
 
 /* --- apply terminal (B3) --- */
-.wash-net-apply { border-top:1px solid ${tokens.borderMenu}; display:flex; flex-direction:column; flex-shrink:0; }
-.wash-net-rail { display:flex; align-items:center; gap:6px; padding:8px 12px 4px; }
-.wash-net-chip { font-size:10px; text-transform:uppercase; letter-spacing:.04em; padding:2px 8px; border-radius:10px; border:1px solid #33363d; color:#7a7d85; }
-.wash-net-chip[data-state="done"] { color:${tokens.accentGreen}; border-color:#2e5a38; }
-.wash-net-chip[data-state="active"] { color:${tokens.accentAmber}; border-color:#4a4030; animation:wash-pulse 1.2s ease-in-out infinite; }
-.wash-net-chip[data-state="bad"] { color:${tokens.accentRed}; border-color:#5a2e2e; }
-@keyframes wash-pulse { 0%,100% { opacity:1; } 50% { opacity:.5; } }
-.wash-net-log { max-height:120px; overflow:auto; margin:0 12px; padding:4px 0; font:${tokens.fontSizeSm} ${tokens.fontMono}; }
+.wash-net-apply { border-top:1px solid #2a2a3a; display:flex; flex-direction:column; flex-shrink:0; }
+
+/* Apply progress stepper — connected nodes that tick Plan→Confirm. Each step is
+   a node (number / spinner / ✓ / ✕) with a connector to the previous one that
+   fills as the transaction advances. Replaces the old pill row. */
+.wash-net-steps { list-style:none; display:flex; align-items:flex-start; margin:0; padding:11px 18px 5px; }
+.wash-net-step { position:relative; flex:1; display:flex; flex-direction:column; align-items:center; gap:5px; min-width:0; }
+.wash-net-step::before { content:""; position:absolute; top:10px; right:50%; left:-50%; height:2px; background:#2f323a; z-index:0; }
+.wash-net-step:first-child::before { display:none; }
+.wash-net-step[data-state="done"]::before, .wash-net-step[data-state="active"]::before { background:#2e6a3a; }
+.wash-net-step[data-state="bad"]::before { background:#6a3030; }
+.wash-net-stepnode { position:relative; z-index:1; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+  font-size:11px; font-weight:700; border:2px solid #33363d; background:#15151d; color:#7a7d85; box-sizing:border-box; transition:border-color .2s, background .2s; }
+.wash-net-stepglyph { line-height:1; }
+.wash-net-step[data-state="done"] .wash-net-stepnode { background:#2e6a3a; border-color:#2e6a3a; color:#d6f0d6; }
+.wash-net-step[data-state="active"] .wash-net-stepnode { border-color:#5a8cd0; color:#9cc0ef; background:#15151d; box-shadow:0 0 0 3px rgba(90,140,208,.16); }
+.wash-net-step[data-state="bad"] .wash-net-stepnode { background:#6a3030; border-color:#6a3030; color:#f2cccc; }
+.wash-net-steplabel { font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:#7a7d85; }
+.wash-net-step[data-state="done"] .wash-net-steplabel { color:#5f9a6f; }
+.wash-net-step[data-state="active"] .wash-net-steplabel { color:#9cc0ef; }
+.wash-net-step[data-state="bad"] .wash-net-steplabel { color:#d68a8a; }
+.wash-net-spin { width:9px; height:9px; border-radius:50%; border:2px solid rgba(156,192,239,.28); border-top-color:#9cc0ef; animation:wash-spin .7s linear infinite; }
+@keyframes wash-spin { to { transform:rotate(360deg); } }
+.wash-net-statdot { width:8px; height:8px; border-radius:50%; background:#5a5d65; flex-shrink:0; }
+.wash-net-statdot[data-status="applying"], .wash-net-statdot[data-status="await-confirm"] { background:#d0a040; animation:wash-pulse 1.2s ease-in-out infinite; }
+.wash-net-statdot[data-status="committed"] { background:#3aa050; }
+.wash-net-statdot[data-status="reverted"], .wash-net-statdot[data-status="failed"] { background:#e06060; }
+@keyframes wash-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
+.wash-net-log { max-height:120px; overflow:auto; margin:0 12px; padding:4px 0; font:11px ui-monospace, Menlo, Consolas, monospace; }
 .wash-net-logline { display:flex; gap:8px; padding:1px 0; }
 .wash-net-logphase { color:#6a6d75; min-width:80px; text-transform:uppercase; }
-.wash-net-logline[data-level="warn"] .wash-net-logmsg { color:${tokens.accentAmber}; }
-.wash-net-logline[data-level="error"] .wash-net-logmsg { color:${tokens.accentRed}; }
+.wash-net-logline[data-level="warn"] .wash-net-logmsg { color:#d0a040; }
+.wash-net-logline[data-level="error"] .wash-net-logmsg { color:#e06060; }
 .wash-net-applybar { display:flex; align-items:center; gap:8px; padding:8px 12px; }
 .wash-net-status { flex:1; font-size:12px; opacity:.8; font-variant:tabular-nums; }
 /* Confirm prompt: a banner pinned to the top of the app (over the header),
@@ -1045,9 +1830,9 @@ const STYLE = `
 .wash-net-confirm { position:absolute; top:0; left:0; right:0; z-index:50;
   display:flex; align-items:center; gap:8px; padding:8px 12px;
   background:#23201a; border-bottom:1px solid #4a4030; box-shadow:0 4px 12px rgba(0,0,0,.45); }
-.wash-net-countdown { flex:1; position:relative; height:22px; border-radius:${tokens.radiusMd}px; overflow:hidden; background:#1b1d22; border:1px solid #4a4030; display:flex; align-items:center; }
+.wash-net-countdown { flex:1; position:relative; height:22px; border-radius:4px; overflow:hidden; background:#1b1d22; border:1px solid #4a4030; display:flex; align-items:center; }
 .wash-net-countbar { position:absolute; inset:0 auto 0 0; background:rgba(208,160,64,.18); transition:width .25s linear; }
 .wash-net-counttext { position:relative; padding:0 8px; font-size:11px; color:#e8c878; }
 `;
 
-defineWashApp("wash-app-net", NetApp, { style: `display:block;height:100%;overflow:hidden;font:${tokens.fontSizeBase}/1.5 ${tokens.fontSans};color:${tokens.fg};` });
+defineWashApp("wash-app-net", NetApp, { style: "display:block;height:100%;overflow:hidden;font:13px/1.5 ui-sans-serif,system-ui,sans-serif;color:#cfd0d4;" });

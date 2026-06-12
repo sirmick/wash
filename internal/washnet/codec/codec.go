@@ -103,7 +103,14 @@ func collectFields(v reflect.Value) (name string, lines []string, err error) {
 			if !ok {
 				return "", nil, fmt.Errorf("union field %s does not implement UCITag", t.Field(i).Name)
 			}
-			lines = append(lines, fmt.Sprintf("\toption %s '%s'", optName, tagger.UCITag()))
+			tag := tagger.UCITag()
+			// A v6-only DHCP interface renders as OpenWRT's distinct `proto
+			// 'dhcpv6'` (inverse of normalizeDHCPv6), so it round-trips a real
+			// box's wan6. Dual-stack/v4 stays `dhcp`.
+			if d, ok := fv.Interface().(model.DHCPProto); ok && d.IPv6 && !d.IPv4 {
+				tag = "dhcpv6"
+			}
+			lines = append(lines, fmt.Sprintf("\toption %s '%s'", optName, tag))
 			_, sub, serr := collectFields(reflect.ValueOf(fv.Interface()))
 			if serr != nil {
 				return "", nil, serr
@@ -226,6 +233,8 @@ func Parse(files map[string]string) (model.Config, error) {
 			if !ok {
 				continue
 			}
+			normalizeIPAddr(sec)
+			normalizeDHCPv6(sec.opts)
 			elem := reflect.New(b.elemType).Elem()
 			if err := fillFields(elem, sec); err != nil {
 				return c, fmt.Errorf("package %q section %q %q: %w", pkg, sec.typ, sec.name, err)
@@ -235,6 +244,74 @@ func Parse(files map[string]string) (model.Config, error) {
 		}
 	}
 	return c, nil
+}
+
+// normalizeIPAddr reconciles the two ways a box expresses interface addresses
+// with wash's single list field (`ipaddr,list`): it folds a split
+// `option ipaddr` + `option netmask` into one CIDR (combineNetmask), then
+// promotes any scalar `option ipaddr` into the `ipaddr` list — so a stock box
+// (split form), an authored `option ipaddr '10.0.0.1/24'`, and a modern
+// `list ipaddr` all parse into StaticProto.IPAddr. The maps are shared with the
+// section, so mutating them in place is enough.
+func normalizeIPAddr(sec section) {
+	combineNetmask(sec.opts)
+	if addr, ok := sec.opts["ipaddr"]; ok && addr != "" {
+		sec.lists["ipaddr"] = append(sec.lists["ipaddr"], addr)
+		delete(sec.opts, "ipaddr")
+		delete(sec.opts, "netmask")
+	}
+}
+
+// combineNetmask folds OpenWRT's split IPv4 addressing (`option ipaddr '1.2.3.4'`
+// + `option netmask '255.255.255.0'`) into a single CIDR `ipaddr`. No-op unless a
+// maskless ipaddr AND a netmask are both present. IPv6 always uses a prefix
+// (`ip6addr 'fd00::1/64'`), so it needs no equivalent.
+func combineNetmask(opts map[string]string) {
+	addr, hasAddr := opts["ipaddr"]
+	mask, hasMask := opts["netmask"]
+	if !hasAddr || !hasMask || addr == "" || strings.Contains(addr, "/") {
+		return
+	}
+	if n, ok := netmaskBits(mask); ok {
+		opts["ipaddr"] = addr + "/" + strconv.Itoa(n)
+	}
+}
+
+// normalizeDHCPv6 maps OpenWRT's distinct `proto 'dhcpv6'` (the v6-only DHCP
+// uplink, e.g. wan6) onto wash's single dual-stack DHCP proto with the IPv6
+// family flag — so it reads as DHCPProto{IPv6:true} instead of failing the union
+// lookup (which aborted the whole network parse). The inverse is in collectFields
+// (a v6-only DHCPProto renders back as `proto 'dhcpv6'`). UCI-specific impedance:
+// OpenWRT splits dual-stack into two interfaces (dhcp + dhcpv6); wash uses one.
+func normalizeDHCPv6(opts map[string]string) {
+	if opts["proto"] == "dhcpv6" {
+		opts["proto"] = "dhcp"
+		opts["ipv6"] = "1"
+		delete(opts, "ipv4") // dhcpv6 is v6-only
+	}
+}
+
+// netmaskBits converts a dotted IPv4 netmask to its prefix length, rejecting a
+// non-contiguous mask.
+func netmaskBits(mask string) (int, bool) {
+	a, err := netip.ParseAddr(mask)
+	if err != nil || !a.Is4() {
+		return 0, false
+	}
+	b := a.As4()
+	m := uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+	ones, seenZero := 0, false
+	for i := 31; i >= 0; i-- {
+		if m&(1<<uint(i)) != 0 {
+			if seenZero {
+				return 0, false // ones after a zero — not a valid contiguous mask
+			}
+			ones++
+		} else {
+			seenZero = true
+		}
+	}
+	return ones, true
 }
 
 func fillFields(v reflect.Value, sec section) error {

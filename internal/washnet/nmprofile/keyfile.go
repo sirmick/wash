@@ -291,11 +291,19 @@ func renderIPv4(k *keyfile, proto model.ProtoConfig) error {
 	switch p := proto.(type) {
 	case model.StaticProto:
 		k.kv("method", "manual")
-		addr := p.IPAddr.String() // NM address1 = "addr/prefix[,gateway]"
-		if p.Gateway.IsValid() {
-			addr += "," + p.Gateway.String()
+		// NM: addressN = "addr/prefix[,gateway]"; the gateway rides the first.
+		n := 0
+		for _, a := range p.IPAddr {
+			if !a.IsValid() {
+				continue
+			}
+			s := a.String()
+			if n == 0 && p.Gateway.IsValid() {
+				s += "," + p.Gateway.String()
+			}
+			n++
+			k.kv(fmt.Sprintf("address%d", n), s)
 		}
-		k.kv("address1", addr)
 		if dns := dnsByFamily(p.DNS, true); dns != "" {
 			k.kv("dns", dns)
 		}

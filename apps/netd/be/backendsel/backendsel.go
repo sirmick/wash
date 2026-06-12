@@ -9,6 +9,7 @@ import (
 	"github.com/sirmick/wash/apps/netd/be/netplan"
 	"github.com/sirmick/wash/apps/netd/be/networkd"
 	"github.com/sirmick/wash/apps/netd/be/nm"
+	"github.com/sirmick/wash/apps/netd/be/uci"
 	"github.com/sirmick/wash/internal/washnet/backend"
 	"github.com/sirmick/wash/internal/washnet/model"
 )
@@ -20,6 +21,7 @@ const (
 	Networkd = "networkd"
 	Netplan  = "netplan"  // Ubuntu (and netplan-on-Debian) authority layer
 	Ifupdown = "ifupdown" // classic Debian /etc/network/interfaces
+	UCI      = "uci"      // OpenWRT — the type-1/router backend (whole gateway)
 	Fake     = "fake"
 )
 
@@ -33,6 +35,7 @@ type Applier interface {
 
 // Detections is the read-only probe result per backend, in auto-precedence order.
 type Detections struct {
+	UCI      backend.Detection
 	Netplan  backend.Detection
 	NM       backend.Detection
 	Networkd backend.Detection
@@ -42,6 +45,7 @@ type Detections struct {
 // Probe runs every backend's Detect() (read-only).
 func Probe() Detections {
 	return Detections{
+		UCI:      uci.Detect(),
 		Netplan:  netplan.Detect(),
 		NM:       nm.Detect(),
 		Networkd: networkd.Detect(),
@@ -56,10 +60,14 @@ func Probe() Detections {
 // manager wins (NM, networkd, ifupdown), then the available-but-idle fallbacks.
 func Choose(mode string, d Detections) (string, string) {
 	switch mode {
-	case NM, Networkd, Netplan, Ifupdown, Fake:
+	case NM, Networkd, Netplan, Ifupdown, UCI, Fake:
 		return mode, "forced (WASH_NETD_BACKEND=" + mode + ")"
 	case Auto:
 		switch {
+		case d.UCI.Active:
+			// OpenWRT is unambiguous — none of NM/networkd/netplan/ifupdown run
+			// there — so an active UCI box takes precedence outright.
+			return UCI, "auto: OpenWRT/UCI is the active config authority"
 		case d.Netplan.Active:
 			return Netplan, "auto: netplan is the active config authority"
 		case d.NM.Active:
@@ -68,6 +76,8 @@ func Choose(mode string, d Detections) (string, string) {
 			return Networkd, "auto: systemd-networkd is the active manager"
 		case d.Ifupdown.Active:
 			return Ifupdown, "auto: ifupdown (/etc/network/interfaces) is the active manager"
+		case d.UCI.Available:
+			return UCI, "auto: uci available"
 		case d.Netplan.Available:
 			return Netplan, "auto: netplan available"
 		case d.NM.Available:
@@ -96,6 +106,8 @@ func New(name string) Applier {
 		return netplan.NewApplier()
 	case Ifupdown:
 		return ifupdown.NewApplier()
+	case UCI:
+		return uci.NewApplier()
 	}
 	return nil
 }
@@ -103,6 +115,9 @@ func New(name string) Applier {
 // Available lists the backends Detect() found usable here.
 func Available(d Detections) []string {
 	var out []string
+	if d.UCI.Available {
+		out = append(out, UCI)
+	}
 	if d.Netplan.Available {
 		out = append(out, Netplan)
 	}

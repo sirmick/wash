@@ -29,9 +29,8 @@ test('eth(DHCP) + bridge(eth1,eth2) + vlan(eth3.100): real NM accepts all three'
   await expect(page.locator('wash-app-session')).toBeVisible({ timeout: 40_000 });
   await expect(page.locator('#spec')).toContainText('served from VM', { timeout: 40_000 });
 
-  // Network is hidden from the start-menu catalog (manifest.Hidden); launch it
-  // the supported way — the sidebar's Network section → Configure…, which
-  // spawn.requests com.wash.net (spawn works for hidden apps).
+  // Launch Network via the sidebar's Network section → Configure…, which
+  // spawn.requests com.wash.net (it's also in the start-menu catalog now).
   await page.locator('[data-testid="sidebar-section-header-net"]').click();
   await page.locator('[data-testid="net-configure"]').click();
   const net = page.locator('wash-app-net');

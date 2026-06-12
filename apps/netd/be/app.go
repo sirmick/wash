@@ -50,6 +50,7 @@ import (
 	"github.com/sirmick/wash/internal/washnet/change"
 	"github.com/sirmick/wash/internal/washnet/codec"
 	"github.com/sirmick/wash/internal/washnet/model"
+	"github.com/sirmick/wash/internal/washnet/segment"
 	"github.com/sirmick/wash/internal/washnet/txn"
 	"github.com/sirmick/wash/internal/washnet/ucibuf"
 	"github.com/sirmick/wash/internal/washnet/validate"
@@ -96,6 +97,12 @@ type NetState struct {
 	// Refresh asks the FE to re-fetch `current` — pushed after netd reads the
 	// box's config out-of-band via a privileged escalation (see liveConfig).
 	Refresh bool `json:"refresh,omitempty"`
+	// UCI is the live config rendered to UCI text (one `# /etc/config/<pkg>`
+	// block per package) — the read-only "current configuration" view in the
+	// Settings Network panel. It's wash's CANONICAL model serialized as UCI, so
+	// off-OpenWRT it's wash's normalized view, not the literal system files. Like
+	// Backend, publish() stamps it onto every state from the live config.
+	UCI string `json:"uci,omitempty"`
 }
 
 // assetsFS embeds the settings "Network" panel bundle (panel.js), staged
@@ -513,7 +520,8 @@ func registerHandlers(bus *sdk.Bus) {
 		if err := authz(from); err != nil {
 			return currentResp{}, err
 		}
-		data, err := codec.EncodeJSON(liveConfig())
+		live := liveConfig()
+		data, err := codec.EncodeJSON(live)
 		if err != nil {
 			return currentResp{}, sdk.Errf(sdk.ErrInternal, "encode current: %v", err)
 		}
@@ -522,7 +530,8 @@ func registerHandlers(bus *sdk.Bus) {
 			return currentResp{}, sdk.Errf(sdk.ErrInternal, "decode current: %v", err)
 		}
 		return currentResp{
-			Config: m, Devices: applier.Devices(), Caps: capsToDTO(applier.Capabilities()),
+			Config: m, Segments: projectSegments(live),
+			Devices: applier.Devices(), Caps: capsToDTO(applier.Capabilities()),
 			WifiRadio: wifiRadio, WifiLive: wifiLive, WifiDevices: wifi.RadioDevices(),
 		}, nil
 	})
@@ -763,8 +772,39 @@ func publish(s NetState) {
 		// subscriber that joins mid-apply still learns which backend is running.
 		s.Backend, s.Available = info.active, info.available
 		s.WifiRadio, s.WifiLive = wifiRadio, wifiLive
+		s.UCI = renderLiveUCI()
 		svc.Mutate(func(cur *NetState) { *cur = s })
 	}
+}
+
+// renderLiveUCI serializes the live config to a single UCI text blob, one
+// `# /etc/config/<pkg>` block per non-empty package in a stable order — the
+// read-only view shown in the Settings Network panel. Source is liveConfig()
+// (same as the `current` RPC), so on first read it triggers netd's one-shot
+// privileged refresh just like the panel/window do. Errors render as "".
+func renderLiveUCI() string {
+	byPkg, err := codec.Render(liveConfig())
+	if err != nil {
+		log.Printf("wash-netd: render live UCI: %v", err)
+		return ""
+	}
+	pkgs := make([]string, 0, len(byPkg))
+	for pkg := range byPkg {
+		pkgs = append(pkgs, pkg)
+	}
+	sort.Strings(pkgs)
+	var b strings.Builder
+	for _, pkg := range pkgs {
+		txt := strings.TrimSpace(byPkg[pkg])
+		if txt == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "# /etc/config/%s\n%s\n", pkg, txt)
+	}
+	return b.String()
 }
 
 // --- wire request/response types -------------------------------------------
@@ -833,10 +873,62 @@ type wifiActionResp struct {
 // currentResp carries the box's live config (the FE-JSON interchange, as a
 // structured map — not raw bytes, which the router would base64-encode) plus the
 // backend's capabilities so the FE greys what this backend can't do.
+// segmentDTO is the router-UI grouping view of the live config (segment.Project):
+// per segment, its computed role/carrier plus the NAMES of the model objects it
+// owns. The FE looks the union-correct objects up in Config by name — so the
+// projection logic stays single-sourced in Go (tested) with no object re-encoding
+// or FE-side drift. Loopback is omitted (never a user-facing segment).
+type segmentDTO struct {
+	Name    string     `json:"name"`
+	Role    string     `json:"role"` // lan | wan | vpn
+	Carrier carrierDTO `json:"carrier"`
+	Device  string     `json:"device,omitempty"`
+	Zone    string     `json:"zone,omitempty"`
+	Pool    string     `json:"pool,omitempty"`
+	Addrs   []string   `json:"addrs,omitempty"`
+}
+
+type carrierDTO struct {
+	Kind    string   `json:"kind"` // untagged | vlan | bridge
+	Port    string   `json:"port,omitempty"`
+	VID     int      `json:"vid,omitempty"`
+	Members []string `json:"members,omitempty"`
+}
+
+// projectSegments runs the segment lens over the live config and flattens the
+// nodes to DTOs (loopback omitted). Names reference objects already in Config.
+func projectSegments(c model.Config) []segmentDTO {
+	var out []segmentDTO
+	for _, s := range segment.Project(c).Segments {
+		if s.Iface.Device == "lo" || s.Name == "loopback" {
+			continue
+		}
+		car := s.Carrier()
+		d := segmentDTO{
+			Name:    s.Name,
+			Role:    string(s.Role()),
+			Carrier: carrierDTO{Kind: string(car.Kind), Port: car.Port, VID: car.VID, Members: car.Members},
+			Addrs:   s.StaticAddrs(),
+		}
+		if s.Device != nil {
+			d.Device = s.Device.Name
+		}
+		if s.Zone != nil {
+			d.Zone = s.Zone.Name
+		}
+		if s.Pool != nil {
+			d.Pool = s.Pool.Name
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
 type currentResp struct {
-	Config  map[string]any `json:"config"`
-	Caps    capsDTO        `json:"caps"`
-	Devices []string       `json:"devices"` // managed links for the Add wizards
+	Config   map[string]any `json:"config"`
+	Segments []segmentDTO   `json:"segments"` // segment.Project grouping (read view)
+	Caps     capsDTO        `json:"caps"`
+	Devices  []string       `json:"devices"` // managed links for the Add wizards
 	// Wifi gating, delivered on the deterministic `current` fetch (not only the
 	// async net.state push): WifiRadio + the renderer's wifi cap show the +Wifi
 	// button, WifiLive enables the scan/connect picker, WifiDevices names the

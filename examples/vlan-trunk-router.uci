@@ -1,0 +1,120 @@
+# Example wash/OpenWRT router: an internal LAN split into VLANs on untagged
+# access ports, a WAN uplink (isolated), all VLANs carried tagged over one trunk.
+# Applied via `uci batch`. Port map (eth0 is the VM management plane, untouched):
+#
+#   eth1  WAN uplink (DHCP, isolated, masq)
+#   eth2  access port → LAN  (untagged VLAN 10) → 10.10.0.1/24
+#   eth3  access port → IoT  (untagged VLAN 20) → 10.20.0.1/24
+#   eth4  access port → Cams (untagged VLAN 30) → 10.30.0.1/24
+#   eth5  trunk → tagged VLAN 10/20/30 (to an AP / managed switch)
+#
+# This is exactly what the wash UI produces: Interfaces tab = the switch fabric
+# (br-lan vlan_filtering + bridge-vlan per VLAN); Networks tab = the L3 per VLAN
+# (Switch-VLAN carriers) + the WAN; Firewall = each VLAN its own zone, isolated,
+# only internal→wan forwarding (internet), WAN inbound rejected.
+
+# ----- network -----
+# scrub the stock single-bridge LAN + wan/wan6 first
+delete network.@device[0]
+delete network.lan
+delete network.wan
+delete network.wan6
+
+# the switch: one VLAN-aware bridge over the four switch ports
+set network.brlan=device
+set network.brlan.name='br-lan'
+set network.brlan.type='bridge'
+set network.brlan.vlan_filtering='1'
+add_list network.brlan.ports='eth2'
+add_list network.brlan.ports='eth3'
+add_list network.brlan.ports='eth4'
+add_list network.brlan.ports='eth5'
+
+set network.v10=bridge-vlan
+set network.v10.device='br-lan'
+set network.v10.vlan='10'
+add_list network.v10.ports='eth2:u*'
+add_list network.v10.ports='eth5:t'
+set network.v20=bridge-vlan
+set network.v20.device='br-lan'
+set network.v20.vlan='20'
+add_list network.v20.ports='eth3:u*'
+add_list network.v20.ports='eth5:t'
+set network.v30=bridge-vlan
+set network.v30.device='br-lan'
+set network.v30.vlan='30'
+add_list network.v30.ports='eth4:u*'
+add_list network.v30.ports='eth5:t'
+
+# L3 per VLAN (each rides br-lan.<vid>)
+set network.lan=interface
+set network.lan.device='br-lan.10'
+set network.lan.proto='static'
+set network.lan.ipaddr='10.10.0.1'
+set network.lan.netmask='255.255.255.0'
+set network.iot=interface
+set network.iot.device='br-lan.20'
+set network.iot.proto='static'
+set network.iot.ipaddr='10.20.0.1'
+set network.iot.netmask='255.255.255.0'
+set network.cams=interface
+set network.cams.device='br-lan.30'
+set network.cams.proto='static'
+set network.cams.ipaddr='10.30.0.1'
+set network.cams.netmask='255.255.255.0'
+set network.wan=interface
+set network.wan.device='eth1'
+set network.wan.proto='dhcp'
+
+# ----- dhcp (a pool per internal VLAN) -----
+set dhcp.lan.interface='lan'
+set dhcp.lan.start='100'
+set dhcp.lan.limit='150'
+set dhcp.lan.leasetime='12h'
+set dhcp.iot=dhcp
+set dhcp.iot.interface='iot'
+set dhcp.iot.start='100'
+set dhcp.iot.limit='150'
+set dhcp.iot.leasetime='12h'
+set dhcp.cams=dhcp
+set dhcp.cams.interface='cams'
+set dhcp.cams.start='100'
+set dhcp.cams.limit='150'
+set dhcp.cams.leasetime='12h'
+
+# ----- firewall: each VLAN its own zone, isolated; only internal→wan -----
+set firewall.lz=zone
+set firewall.lz.name='lan'
+add_list firewall.lz.network='lan'
+set firewall.lz.input='ACCEPT'
+set firewall.lz.output='ACCEPT'
+set firewall.lz.forward='REJECT'
+set firewall.iz=zone
+set firewall.iz.name='iot'
+add_list firewall.iz.network='iot'
+set firewall.iz.input='ACCEPT'
+set firewall.iz.output='ACCEPT'
+set firewall.iz.forward='REJECT'
+set firewall.cz=zone
+set firewall.cz.name='cams'
+add_list firewall.cz.network='cams'
+set firewall.cz.input='ACCEPT'
+set firewall.cz.output='ACCEPT'
+set firewall.cz.forward='REJECT'
+set firewall.wz=zone
+set firewall.wz.name='wan'
+add_list firewall.wz.network='wan'
+set firewall.wz.input='REJECT'
+set firewall.wz.output='ACCEPT'
+set firewall.wz.forward='REJECT'
+set firewall.wz.masq='1'
+set firewall.wz.mtu_fix='1'
+set firewall.fl=forwarding
+set firewall.fl.src='lan'
+set firewall.fl.dest='wan'
+set firewall.fi=forwarding
+set firewall.fi.src='iot'
+set firewall.fi.dest='wan'
+set firewall.fc=forwarding
+set firewall.fc.src='cams'
+set firewall.fc.dest='wan'

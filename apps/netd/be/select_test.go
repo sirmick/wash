@@ -54,6 +54,14 @@ func TestChooseBackend(t *testing.T) {
 		{"auto: ifupdown active beats networkd available", BackendAuto, detections{Networkd: avail, Ifupdown: active}, BackendIfupdown},
 		{"auto: NM active beats ifupdown active", BackendAuto, detections{NM: active, Ifupdown: active}, BackendNM},
 		{"auto: ifupdown available only", BackendAuto, detections{Ifupdown: avail}, BackendIfupdown},
+
+		// UCI (OpenWRT): forced + the type-1/router authority. OpenWRT runs none
+		// of the others, so an active UCI box wins outright; available is a fallback.
+		{"forced uci", BackendUCI, detections{}, BackendUCI},
+		{"auto: UCI active wins outright", BackendAuto, detections{UCI: active}, BackendUCI},
+		{"auto: UCI active beats everything", BackendAuto, detections{UCI: active, Netplan: active, NM: active, Networkd: active, Ifupdown: active}, BackendUCI},
+		{"auto: UCI available only", BackendAuto, detections{UCI: avail}, BackendUCI},
+		{"auto: NM active beats UCI available", BackendAuto, detections{UCI: avail, NM: active}, BackendNM},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

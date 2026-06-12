@@ -53,7 +53,7 @@ func AddGuestNetwork(_ model.Config, p GuestNetwork) (change.ChangeSet, error) {
 		},
 		Apply: func(c model.Config) (model.Config, error) {
 			c.Interfaces = appendCopy(c.Interfaces, model.Interface{
-				Name: p.Interface, Proto: model.StaticProto{IPAddr: p.Gateway},
+				Name: p.Interface, Proto: model.StaticProto{IPAddr: []netip.Prefix{p.Gateway}},
 			})
 			c.Zones = appendCopy(c.Zones, model.Zone{
 				Name: p.Zone, Networks: []string{p.Interface},
