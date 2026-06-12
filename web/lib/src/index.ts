@@ -26,8 +26,8 @@ export type {
   DefineSettingsPanelOptions,
 } from './define-settings-panel';
 export { Section, Row, SmallBtn, Select, ServiceBadge } from './panel-kit';
-export { TransportControls, VolumeSlider, NowPlaying } from './media';
-export type { TransportControlsProps, VolumeSliderProps, NowPlayingProps } from './media';
+export { TransportControls, VolumeSlider, NowPlaying, SeekBar, MediaList } from './media';
+export type { TransportControlsProps, VolumeSliderProps, NowPlayingProps, SeekBarProps, MediaListProps } from './media';
 export { createAudioSource } from './audio-source';
 export type { AudioSource, AudioSnapshot, AudioSourceOptions } from './audio-source';
 export { washAssetUrl } from './assets';

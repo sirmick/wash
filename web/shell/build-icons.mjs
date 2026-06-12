@@ -31,6 +31,8 @@ const ICONS = [
   'settings',       // wash-settings
   'activity',       // wash-top
   'music',          // wash-washamp + sidebar Audio widget
+  'list-music',     // wash-music (native player)
+  'radio',          // wash-radio (planned)
   'hard-drive',     // wash-disks
   'shield-check',   // wash-priv (privilege gateway)
   'scroll-text',    // wash-journal + wash-syslogs (sister apps, shared icon)

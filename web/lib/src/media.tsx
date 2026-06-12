@@ -4,7 +4,7 @@
 // in one file like panel-kit.tsx.
 
 import type { Component, JSX } from 'solid-js';
-import { Show } from 'solid-js';
+import { For, Show } from 'solid-js';
 import { Pause, Play, SkipBack, SkipForward, Volume2 } from 'lucide-solid';
 import { tokens } from './tokens';
 
@@ -107,7 +107,7 @@ export const VolumeSlider: Component<VolumeSliderProps> = (props) => (
       min="0"
       max="100"
       value={Math.round(props.value * 100)}
-      style={{ flex: 1 }}
+      style={{ flex: 1, 'accent-color': tokens.accentGreen }}
       onInput={(e) => props.onInput(Number(e.currentTarget.value) / 100)}
     />
   </label>
@@ -152,3 +152,143 @@ export const NowPlaying: Component<NowPlayingProps> = (props) => (
     </Show>
   </div>
 );
+
+function fmtTime(sec: number): string {
+  if (!sec || sec < 0 || !isFinite(sec)) return '0:00';
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+export interface SeekBarProps {
+  pos: number;
+  dur: number;
+  /** seekable (Music) shows a draggable bar + total; non-seekable (Radio)
+   *  shows "● LIVE" and elapsed only. Default true. */
+  seekable?: boolean;
+  onSeek?: (sec: number) => void;
+}
+
+/** Elapsed · progress · total. Click/drag to seek when seekable. */
+export const SeekBar: Component<SeekBarProps> = (props) => {
+  const seekable = () => props.seekable !== false;
+  return (
+    <div
+      style={{
+        display: 'flex',
+        'align-items': 'center',
+        gap: '8px',
+        'font-size': tokens.fontSizeSm,
+        color: tokens.fgMuted,
+        'font-variant': 'tabular-nums',
+      }}
+    >
+      <span>{fmtTime(props.pos)}</span>
+      <Show
+        when={seekable()}
+        fallback={
+          <div style={{ flex: 1, height: '4px', background: tokens.bgNeutral, 'border-radius': '2px' }} />
+        }
+      >
+        <input
+          data-testid="seek"
+          type="range"
+          min="0"
+          max={Math.max(1, Math.floor(props.dur))}
+          value={Math.floor(props.pos)}
+          style={{ flex: 1, 'accent-color': tokens.accentGreen }}
+          onInput={(e) => props.onSeek?.(Number(e.currentTarget.value))}
+        />
+      </Show>
+      <span>{seekable() ? fmtTime(props.dur) : '● LIVE'}</span>
+    </div>
+  );
+};
+
+export interface MediaListProps<T> {
+  items: readonly T[];
+  /** selected (focused) row index, -1 for none. */
+  selected: number;
+  /** currently-playing row index, -1/undefined for none. */
+  playing?: number;
+  onSelect: (i: number) => void;
+  /** Enter / double-click on a row. */
+  onActivate: (i: number) => void;
+  /** render a row's content (left grows, right shrinks). */
+  row: (item: T, i: number, playing: boolean) => JSX.Element;
+  empty?: JSX.Element;
+  'data-testid'?: string;
+}
+
+/** A scrollable, keyboard-navigable (↑/↓/Enter) selectable list with a
+ *  playing-row accent. Rows are render-prop so each app supplies its own. */
+export function MediaList<T>(props: MediaListProps<T>): JSX.Element {
+  const onKey = (e: KeyboardEvent) => {
+    const n = props.items.length;
+    if (!n) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      props.onSelect(Math.min(n - 1, props.selected + 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      props.onSelect(Math.max(0, (props.selected < 0 ? 0 : props.selected) - 1));
+    } else if (e.key === 'Enter' && props.selected >= 0) {
+      e.preventDefault();
+      props.onActivate(props.selected);
+    }
+  };
+  return (
+    <div
+      data-testid={props['data-testid']}
+      tabindex={0}
+      onKeyDown={onKey}
+      style={{
+        flex: 1,
+        'min-height': 0,
+        overflow: 'auto',
+        background: tokens.bgNeutral,
+        'border-radius': `${tokens.radiusSm}px`,
+        outline: 'none',
+      }}
+    >
+      <Show
+        when={props.items.length}
+        fallback={
+          <div style={{ padding: '16px', color: tokens.fgDim, 'font-style': 'italic', 'font-size': tokens.fontSizeSm }}>
+            {props.empty ?? 'nothing here'}
+          </div>
+        }
+      >
+        <For each={props.items}>
+          {(item, i) => {
+            const sel = () => props.selected === i();
+            const isPlaying = () => props.playing === i();
+            return (
+              <div
+                data-testid={`media-row-${i()}`}
+                data-selected={sel() ? 'true' : undefined}
+                data-playing={isPlaying() ? 'true' : undefined}
+                onClick={() => props.onSelect(i())}
+                onDblClick={() => props.onActivate(i())}
+                style={{
+                  display: 'flex',
+                  'align-items': 'center',
+                  gap: '8px',
+                  padding: '4px 10px',
+                  cursor: 'default',
+                  'user-select': 'none',
+                  'border-left': `2px solid ${isPlaying() ? tokens.accentGreen : 'transparent'}`,
+                  background: sel() ? tokens.bgRowSelected : 'transparent',
+                  color: isPlaying() ? tokens.accentGreen : tokens.fg,
+                  'font-size': tokens.fontSizeBase,
+                }}
+              >
+                {props.row(item, i(), isPlaying())}
+              </div>
+            );
+          }}
+        </For>
+      </Show>
+    </div>
+  );
+}

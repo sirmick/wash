@@ -1,0 +1,19 @@
+{
+  "name": "@wash/app-music",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@wash/ui": "workspace:*",
+    "lucide-solid": "^1.16.0",
+    "solid-js": "^1.9.13"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vite": "^5.4.10",
+    "vite-plugin-solid": "^2.10.2"
+  }
+}
