@@ -675,6 +675,7 @@ declare global {
       log(level: 'error' | 'warn' | 'info' | 'debug', source: string, msg: string, stack?: string): void;
       openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
       writeRaw(channelID: number, bytes: Uint8Array): void;
+      rawBufferedAmount(): number;
     };
   }
 }
@@ -744,6 +745,9 @@ window.wash = {
   },
   writeRaw(channelID, bytes) {
     conn.sendRaw(channelID, bytes);
+  },
+  rawBufferedAmount() {
+    return conn.bufferedAmount();
   },
 };
 

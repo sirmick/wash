@@ -39,6 +39,11 @@ export interface SocketLike {
   onclose: ((ev: CloseEvent) => unknown) | null;
   send(data: ArrayBuffer | Uint8Array): void;
   close(code?: number, reason?: string): void;
+  // Bytes queued in the socket's send buffer but not yet handed to the
+  // network. Present on the browser WebSocket; the virtio transport
+  // doesn't expose it (and isn't network-throttled the same way), so
+  // it's optional and treated as 0 when absent.
+  readonly bufferedAmount?: number;
 }
 
 const HEADER_BYTES = 8;

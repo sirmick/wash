@@ -6,10 +6,12 @@
 // - Below preview: collapsible info section (perms, size, mtime,
 //   symlink target if relevant).
 // - Toolbar: Home, Back, Up, editable path (Enter to navigate),
-//   Reload, Sort dropdown (sort key + show-hidden toggle).
+//   Reload, New file/folder, Upload files/folder, Sort dropdown.
 // - Right-click on a row: Open · Copy path · Show info.
-// v1 is read-only. Future: rename/delete/symlink (v2),
-// move/copy (v3).
+// - Mutations: rename/delete/create/symlink + drag-move/copy.
+// - Upload: OS files in via the toolbar pickers or an external
+//   drag-drop (recursive for folders); bytes stream over the bus
+//   (be/upload.go), progress shows in the wash-bulk sidebar widget.
 //
 // Solid drives the rendering — state mutations automatically re-run
 // just the views that read them. No more "I changed a field but
@@ -18,7 +20,7 @@
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, defineWashApp, tokens } from '@wash/ui';
+import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, defineWashApp, tokens } from '@wash/ui';
 import {
   baseName, formatDate, humanSize, joinPath, octalPerm, parentPath, ancestorChain,
   createBus,
@@ -26,6 +28,9 @@ import {
   DRAG_MIME, dragPayload, dropEffectFor, hasWashDrag, readDragPaths,
   flattenTree,
   withReplacePrompt as runReplaceFlow,
+  entriesFromDataTransfer, entriesFromFileList, planUpload,
+  readBlobChunks, encodeRecordHeader, uploadEndMarker,
+  type UploadItem,
 } from '@wash/fs-client';
 import {
   type NavHistory, emptyHistory, initAt, pushPath, back, forward, at,
@@ -53,6 +58,8 @@ import {
   RotateCw,
   Square,
   Trash2,
+  Upload,
+  FolderUp,
 } from 'lucide-solid';
 
 interface PersistedState {
@@ -99,6 +106,27 @@ type MenuState =
   | null;
 
 const HOME_FALLBACK = '/';
+
+// Upload send-buffer backpressure thresholds. writeRaw queues bytes
+// into the single shell WebSocket's send buffer; awaitUploadDrain
+// pauses the producer once more than UPLOAD_SEND_HWM is buffered and
+// resumes once it drains below UPLOAD_SEND_LWM. Keeping the buffer
+// small is what lets a sidebar cancel (an interactive control frame)
+// reach the BE without waiting behind the whole file's bytes.
+const UPLOAD_SEND_HWM = 1 << 20; // 1 MiB
+const UPLOAD_SEND_LWM = 256 * 1024; // 256 KiB
+
+// awaitUploadDrain blocks until the shell socket's send buffer falls
+// below the low-water mark (or the upload is cancelled). Returns
+// immediately when the buffer is already under the high-water mark, so
+// it's cheap to call after every chunk. Transports without a
+// bufferedAmount (virtio) report 0 and never block.
+async function awaitUploadDrain(cancelled: () => boolean): Promise<void> {
+  if (window.wash.rawBufferedAmount() < UPLOAD_SEND_HWM) return;
+  while (window.wash.rawBufferedAmount() > UPLOAD_SEND_LWM && !cancelled()) {
+    await new Promise((r) => setTimeout(r, 15));
+  }
+}
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ---- reactive state ----
@@ -334,6 +362,40 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       }
       case 'clipboard_files_state': {
         setFilesClipboard(parseClipboardState(m.op, m.paths));
+        return;
+      }
+      case 'upload_channel': {
+        // BE opened the raw channel for this upload — hand its id to the
+        // awaiting streamer.
+        const id = String(m.upload_id);
+        const resolve = pendingUploadChannels.get(id);
+        if (resolve) {
+          pendingUploadChannels.delete(id);
+          resolve(Number(m.channel_id));
+        }
+        return;
+      }
+      case 'upload_done': {
+        // Terminal status from the BE reader. Resolve the done waiter,
+        // and unblock any still-pending channel waiter (e.g. the BE
+        // failed before the channel opened) with the -1 sentinel.
+        const id = String(m.upload_id);
+        const chResolve = pendingUploadChannels.get(id);
+        if (chResolve) {
+          pendingUploadChannels.delete(id);
+          chResolve(-1);
+        }
+        const doneResolve = pendingUploadDone.get(id);
+        if (doneResolve) {
+          pendingUploadDone.delete(id);
+          doneResolve(String(m.status));
+        }
+        return;
+      }
+      case 'upload_cancelled': {
+        // A sidebar cancel was relayed (bulk → fm). Flag the id so the
+        // streaming loop stops writing.
+        cancelledUploads.add(String(m.upload_id));
         return;
       }
     }
@@ -806,6 +868,36 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // length>1 means we route through bulk-ops for everything.
   const [dropMenu, setDropMenu] = createSignal<{ x: number; y: number; srcs: string[]; targetDir: string } | null>(null);
 
+  // uploadDropActive highlights the list pane while an EXTERNAL (OS)
+  // file drag hovers over it — distinct from the per-row dropTarget
+  // highlight used for internal moves. Cleared on drop / dragleave.
+  const [uploadDropActive, setUploadDropActive] = createSignal(false);
+
+  // uploadConflict drives the pre-flight "N files already exist"
+  // overlay. Like askReplace it resolves a promise with the user's
+  // choice — 'replace' (overwrite), 'skip' (only new files), or null
+  // (cancel the whole upload).
+  const [uploadConflict, setUploadConflict] =
+    createSignal<{ existing: number; total: number; resolve: (p: 'replace' | 'skip' | null) => void } | null>(null);
+
+  // cancelledUploads holds upload_ids the BE told us to stop (a
+  // sidebar cancel relayed through wash-bulk). Non-reactive — the
+  // streaming loop just polls it. See the upload_cancelled BE message.
+  const cancelledUploads = new Set<string>();
+
+  // The byte stream rides a raw wash channel the BE opens after
+  // upload_begin; these one-shot maps bridge the async BE pushes
+  // (upload_channel carries the channel id, upload_done the terminal
+  // status) back to the awaiting runUpload promise, keyed by upload_id.
+  const pendingUploadChannels = new Map<string, (channelID: number) => void>();
+  const pendingUploadDone = new Map<string, (status: string) => void>();
+
+  // Hidden native inputs that back the toolbar Upload buttons — the
+  // only way to reach OS files from the browser. dirInputEl gets the
+  // webkitdirectory attribute in onMount (no clean JSX typing for it).
+  let fileInputEl!: HTMLInputElement;
+  let dirInputEl!: HTMLInputElement;
+
   // Drag payload parsing + drop-accept logic (DRAG_MIME, readDragPaths,
   // dragPayload, hasWashDrag, dropEffectFor) live in ./dnd.ts
   // (framework-free, unit-tested). The thin DOM handlers below own only
@@ -843,6 +935,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // otherwise) — without this, Mac users get no feedback that
   // the modifier is actually doing something.
   const onRowDragOver = (ev: DragEvent, rowPath: string) => {
+    // External OS file drag → mark the folder row as an upload target.
+    if (isExternalFileDrag(ev.dataTransfer)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.dataTransfer!.dropEffect = 'copy';
+      if (dropTargetPath() !== rowPath) setDropTargetPath(rowPath);
+      return;
+    }
     if (!hasWashDrag(ev.dataTransfer)) return;
     ev.preventDefault();
     ev.stopPropagation();
@@ -851,6 +951,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   const onRowDrop = (ev: DragEvent, rowPath: string) => {
+    if (isExternalFileDrag(ev.dataTransfer)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      setDropTargetPath('');
+      setUploadDropActive(false);
+      collectFromDrop(ev.dataTransfer!, rowPath);
+      return;
+    }
     const paths = readDragPaths(ev.dataTransfer);
     if (paths.length === 0) return;
     ev.preventDefault();
@@ -864,13 +972,36 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   const onListDragOver = (ev: DragEvent) => {
+    // External OS file drag → highlight the whole pane (drop lands in
+    // the current dir).
+    if (isExternalFileDrag(ev.dataTransfer)) {
+      ev.preventDefault();
+      ev.dataTransfer!.dropEffect = 'copy';
+      if (!uploadDropActive()) setUploadDropActive(true);
+      if (dropTargetPath() !== '') setDropTargetPath('');
+      return;
+    }
     if (!hasWashDrag(ev.dataTransfer)) return;
     ev.preventDefault();
     ev.dataTransfer!.dropEffect = dropEffectFor(ev.altKey);
     if (dropTargetPath() !== '') setDropTargetPath('');
   };
 
+  const onListDragLeave = (ev: DragEvent) => {
+    // Only clear when the pointer actually left the pane (dragleave
+    // also fires when crossing into child rows).
+    const to = ev.relatedTarget as Node | null;
+    if (!to || !(ev.currentTarget as HTMLElement).contains(to)) setUploadDropActive(false);
+  };
+
   const onListDrop = (ev: DragEvent) => {
+    setUploadDropActive(false);
+    if (isExternalFileDrag(ev.dataTransfer)) {
+      ev.preventDefault();
+      setDropTargetPath('');
+      collectFromDrop(ev.dataTransfer!, dirOfSelection());
+      return;
+    }
     const paths = readDragPaths(ev.dataTransfer);
     if (paths.length === 0) return;
     ev.preventDefault();
@@ -905,6 +1036,135 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // selected" for paths that no longer exist.
     setSelection(new Set());
     selectionAnchor = null;
+  };
+
+  // ---- upload: OS files → confined fs ----
+  //
+  // Two entry points feed the same runUpload pipeline: an external OS
+  // file/folder drag dropped onto the tree, and the toolbar Upload
+  // buttons (a <input type=file [webkitdirectory]> picker). The bytes
+  // stream over fm's own bus (upload_begin/chunk/end in be/upload.go);
+  // progress surfaces in the wash-bulk sidebar widget as an external
+  // job. Conflicts are resolved once, up front, via uploadConflict.
+
+  // isExternalFileDrag distinguishes an OS file drag (carries the
+  // synthetic "Files" type, NOT our wash MIME) from an internal
+  // row drag. Internal drags are handled by the move/copy path.
+  const isExternalFileDrag = (dt: DataTransfer | null): boolean =>
+    !!dt && !hasWashDrag(dt) && Array.from(dt.types).includes('Files');
+
+  // askUploadPolicy shows the conflict overlay and resolves the
+  // chosen policy (or null to cancel).
+  const askUploadPolicy = (existing: number, total: number): Promise<'replace' | 'skip' | null> =>
+    new Promise((resolve) => setUploadConflict({ existing, total, resolve }));
+
+  // collectFromDrop snapshots the drop's entries (recursing into
+  // dropped folders) and uploads them into targetDir. Called
+  // synchronously from the drop handler so webkitGetAsEntry is read
+  // while the DataTransfer is still alive.
+  const collectFromDrop = (dt: DataTransfer, targetDir: string) => {
+    void entriesFromDataTransfer(dt.items).then((items) => runUpload(items, targetDir));
+  };
+
+  // onUploadInput handles a picker selection. The folder picker
+  // populates webkitRelativePath; the file picker leaves it empty.
+  const onUploadInput = (el: HTMLInputElement) => {
+    const files = el.files;
+    if (!files || files.length === 0) return;
+    const items = entriesFromFileList(files);
+    el.value = ''; // allow re-picking the same file later
+    void runUpload(items, dirOfSelection());
+  };
+
+  // waitFor builds a one-shot promise registered in `map` under id,
+  // with a timeout fallback so a lost BE push can't hang the upload.
+  const waitFor = <T,>(map: Map<string, (v: T) => void>, id: string, ms: number, onTimeout: T): Promise<T> =>
+    new Promise<T>((resolve) => {
+      let settled = false;
+      const done = (v: T) => {
+        if (settled) return;
+        settled = true;
+        map.delete(id);
+        resolve(v);
+      };
+      map.set(id, done);
+      setTimeout(() => done(onTimeout), ms);
+    });
+
+  // runUpload is the pipeline: pre-flight conflict check → optional
+  // prompt → begin → stream each file's bytes over the raw channel →
+  // wait for the BE's done push. Progress + cancellation live in
+  // wash-bulk; here we only pump bytes and, on completion, refresh the
+  // destination listing so the new rows show.
+  const runUpload = async (items: UploadItem[], destDir: string) => {
+    if (items.length === 0 || !destDir) return;
+    const chk = await sendWithReply({ kind: 'upload_check', dest: destDir, rels: items.map((i) => i.relPath) });
+    if (chk.kind === 'upload_check_err') {
+      setStatusOverride(`upload: ${String(chk.msg ?? chk.code ?? 'failed')}`);
+      return;
+    }
+    const conflicts = new Set<string>((chk.conflicts as string[]) ?? []);
+    let policy: 'replace' | 'skip' = 'replace';
+    if (conflicts.size > 0) {
+      const choice = await askUploadPolicy(conflicts.size, items.length);
+      if (!choice) return; // cancelled
+      policy = choice;
+    }
+    const plan = planUpload(items, conflicts, policy);
+    if (plan.entries.length === 0) {
+      setStatusOverride('upload: nothing new to upload');
+      return;
+    }
+    const begin = await sendWithReply({
+      kind: 'upload_begin',
+      dest: destDir,
+      total_bytes: plan.totalBytes,
+      policy,
+      labels: plan.labels,
+    });
+    if (begin.kind !== 'upload_begin_ok') {
+      setStatusOverride(`upload: ${String(begin.msg ?? begin.code ?? 'failed')}`);
+      return;
+    }
+    const uploadID = String(begin.upload_id);
+    // The BE opens the raw channel asynchronously and pushes its id.
+    const channelID = await waitFor(pendingUploadChannels, uploadID, 15_000, -1);
+    try {
+      if (channelID >= 0) {
+        // Stream each file as [header][bytes]; the BE reassembles by
+        // reading the framed records. A zero-byte file is just a header.
+        const donePromise = waitFor(pendingUploadDone, uploadID, 60_000, 'timeout');
+        stream: for (const it of plan.entries) {
+          if (cancelledUploads.has(uploadID)) break;
+          window.wash.writeRaw(channelID, encodeRecordHeader(it.relPath, it.file.size));
+          for await (const chunk of readBlobChunks(it.file)) {
+            if (cancelledUploads.has(uploadID)) break stream;
+            window.wash.writeRaw(channelID, chunk);
+            // Backpressure: writeRaw queues into the single shell
+            // socket's send buffer. Without pacing, the whole file
+            // lands there at once and head-of-line blocks the cancel
+            // control frame behind megabytes of data — so a sidebar
+            // cancel never reaches the BE until the upload has already
+            // drained. Keep the buffer small so the (interactive)
+            // cancel frame jumps ahead and this loop's own cancel
+            // check actually fires mid-stream.
+            await awaitUploadDrain(() => cancelledUploads.has(uploadID));
+          }
+        }
+        if (!cancelledUploads.has(uploadID)) {
+          window.wash.writeRaw(channelID, uploadEndMarker());
+        }
+        await donePromise;
+      }
+    } finally {
+      cancelledUploads.delete(uploadID);
+      pendingUploadChannels.delete(uploadID);
+      pendingUploadDone.delete(uploadID);
+      // Reveal the new rows without waiting for fs.watch (which never
+      // fires for a still-collapsed destination folder).
+      expandDir(destDir);
+      invalidateAndList(destDir);
+    }
   };
 
   // commitSymlink creates a symlink at targetDir/basename(src)
@@ -1202,6 +1462,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ---- lifecycle: events ----
 
   onMount(() => {
+    // webkitdirectory has no clean JSX typing — set it as an attribute
+    // so the folder picker recurses (populating webkitRelativePath).
+    dirInputEl.setAttribute('webkitdirectory', '');
+    dirInputEl.setAttribute('directory', '');
     const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail as BEMessage);
     const onState = (ev: Event) => {
       const s = (ev as CustomEvent).detail as PersistedState | null;
@@ -1364,9 +1628,44 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         >
           <FolderPlus size={14} />
         </button>
+        <button
+          type="button"
+          data-testid="fm-upload"
+          title="Upload files"
+          style={iconBtnStyle}
+          onClick={() => fileInputEl.click()}
+        >
+          <Upload size={14} />
+        </button>
+        <button
+          type="button"
+          data-testid="fm-upload-folder"
+          title="Upload folder"
+          style={iconBtnStyle}
+          onClick={() => dirInputEl.click()}
+        >
+          <FolderUp size={14} />
+        </button>
         <button type="button" data-testid="fm-sort" title="Sort" style={iconBtnStyle} onClick={openSortMenu}>
           <ArrowUpDown size={14} />
         </button>
+        {/* Hidden native pickers backing the Upload buttons — the only
+            way to read OS files from the browser. */}
+        <input
+          ref={fileInputEl!}
+          type="file"
+          multiple
+          data-testid="fm-upload-input"
+          style={{ display: 'none' }}
+          onChange={(e) => onUploadInput(e.currentTarget)}
+        />
+        <input
+          ref={dirInputEl!}
+          type="file"
+          data-testid="fm-upload-folder-input"
+          style={{ display: 'none' }}
+          onChange={(e) => onUploadInput(e.currentTarget)}
+        />
       </div>
 
       {/* body: tree + splitter + preview/info */}
@@ -1376,8 +1675,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       >
         <div
           data-testid="fm-list"
-          style={treeStyle}
+          data-upload-active={uploadDropActive() ? 'true' : undefined}
+          style={uploadDropActive() ? { ...treeStyle, 'box-shadow': `inset 0 0 0 2px ${tokens.accentBlue}` } : treeStyle}
           onDragOver={onListDragOver}
+          onDragLeave={onListDragLeave}
           onDrop={onListDrop}
           onClick={(ev) => {
             // Background click clears the selection — native FM
@@ -1592,6 +1893,28 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             const c = replaceConfirm();
             setReplaceConfirm(null);
             c?.resolve(false);
+          }}
+        />
+      </Show>
+
+      <Show when={uploadConflict()}>
+        <UploadConflictOverlay
+          existing={uploadConflict()!.existing}
+          total={uploadConflict()!.total}
+          onReplace={() => {
+            const c = uploadConflict();
+            setUploadConflict(null);
+            c?.resolve('replace');
+          }}
+          onSkip={() => {
+            const c = uploadConflict();
+            setUploadConflict(null);
+            c?.resolve('skip');
+          }}
+          onCancel={() => {
+            const c = uploadConflict();
+            setUploadConflict(null);
+            c?.resolve(null);
           }}
         />
       </Show>
@@ -2258,6 +2581,54 @@ const ReplaceConfirmOverlay: Component<{
     </ConfirmDialog>
   );
 };
+
+// UploadConflictOverlay — the single pre-flight prompt shown when an
+// upload would overwrite existing files. Three outcomes: Replace all
+// (overwrite), Skip existing (upload only the new files), or Cancel
+// (abort the whole upload). Resolving once up front avoids a
+// per-file stall mid-transfer.
+const UploadConflictOverlay: Component<{
+  existing: number;
+  total: number;
+  onReplace: () => void;
+  onSkip: () => void;
+  onCancel: () => void;
+}> = (props) => {
+  const plural = (n: number) => (n === 1 ? '' : 's');
+  return (
+    <Overlay onDismiss={props.onCancel} data-testid="fm-upload-conflict">
+      <div style={{ 'font-weight': 600, 'margin-bottom': '6px' }}>Files already exist</div>
+      <div style={{ 'font-size': '12px', opacity: 0.8 }}>
+        {props.existing} of {props.total} file{plural(props.total)} already exist at the destination.
+      </div>
+      <div style={{ display: 'flex', gap: '8px', 'justify-content': 'flex-end', 'margin-top': '14px' }}>
+        <button type="button" data-testid="fm-upload-conflict-cancel" onClick={props.onCancel} style={uploadBtnStyle(false)}>
+          Cancel
+        </button>
+        <button type="button" data-testid="fm-upload-conflict-skip" onClick={props.onSkip} style={uploadBtnStyle(false)}>
+          Skip existing
+        </button>
+        <button type="button" data-testid="fm-upload-conflict-replace" onClick={props.onReplace} style={uploadBtnStyle(true)}>
+          Replace all
+        </button>
+      </div>
+    </Overlay>
+  );
+};
+
+// uploadBtnStyle mirrors overlay.tsx's confirmBtnStyle (kept local —
+// it's not exported from @wash/ui). danger tints the Replace action.
+function uploadBtnStyle(danger: boolean): JSX.CSSProperties {
+  return {
+    background: danger ? tokens.bgDanger : 'transparent',
+    color: tokens.fg,
+    border: `1px solid ${danger ? tokens.borderDanger : tokens.borderMenu}`,
+    'border-radius': `${tokens.radiusSm}px`,
+    padding: '5px 12px',
+    cursor: 'pointer',
+    font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  };
+}
 
 // DropMenu — the small context menu that appears when the user
 // holds Alt while dropping a drag. Offers Move and Symlink (copy
