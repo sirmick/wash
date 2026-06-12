@@ -991,7 +991,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // Only clear when the pointer actually left the pane (dragleave
     // also fires when crossing into child rows).
     const to = ev.relatedTarget as Node | null;
-    if (!to || !(ev.currentTarget as HTMLElement).contains(to)) setUploadDropActive(false);
+    if (!to || !(ev.currentTarget as HTMLElement).contains(to)) {
+      setUploadDropActive(false);
+      // An OS-file drag has no dragend in our app (the source is the
+      // OS), so a folder-row highlight set by onRowDragOver would
+      // otherwise stick after the drag leaves the window. Internal
+      // drags clear it via onDragEnd; clear it here for external ones.
+      setDropTargetPath('');
+    }
   };
 
   const onListDrop = (ev: DragEvent) => {
@@ -1027,9 +1034,23 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   const dispatchBulkMove = (paths: string[], targetDir: string) => {
     if (!targetDir) return;
+    // Apply the same guards commitMove enforces for the single-file
+    // path, so a multi-select drop can't enqueue an invalid bulk job:
+    //   - moving a folder into itself or its own descendant (would
+    //     error in bulk-ops; reject up front with the same message).
+    //   - same-parent drops are no-ops, not moves — drop them silently
+    //     rather than queuing a redundant rename.
+    for (const src of paths) {
+      if (targetDir === src || targetDir.startsWith(src + '/')) {
+        setStatusOverride('move: cannot move a folder into itself');
+        return;
+      }
+    }
+    const movable = paths.filter((src) => parentPath(src) !== targetDir);
+    if (movable.length === 0) return; // everything already there
     window.wash.sendAppMsgTo(
       { app_id: 'com.wash.bulk' },
-      { kind: 'enqueue', op: 'move', paths, dest: targetDir },
+      { kind: 'enqueue', op: 'move', paths: movable, dest: targetDir },
     );
     // Source paths are about to vanish — drop them from the
     // selection so the status bar doesn't keep claiming "N
@@ -1676,7 +1697,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         <div
           data-testid="fm-list"
           data-upload-active={uploadDropActive() ? 'true' : undefined}
-          style={uploadDropActive() ? { ...treeStyle, 'box-shadow': `inset 0 0 0 2px ${tokens.accentBlue}` } : treeStyle}
+          // External drag over empty list space → the whole pane is the
+          // landing zone (drop = upload into the current dir). A solid
+          // accent ring + faint blue wash makes that obvious, matching
+          // the per-folder-row drop affordance.
+          style={uploadDropActive()
+            ? { ...treeStyle, 'box-shadow': `inset 0 0 0 2px ${tokens.borderDropTarget}`, background: tokens.bgDropTarget }
+            : treeStyle}
           onDragOver={onListDragOver}
           onDragLeave={onListDragLeave}
           onDrop={onListDrop}
@@ -2080,7 +2107,7 @@ const TreeRow: Component<{
         'align-items': 'center',
         padding: '3px 8px',
         background: props.isDropTarget
-          ? tokens.bgRowSelected
+          ? tokens.bgDropTarget
           : props.selected
           ? tokens.bgRowSelected
           : hover()
@@ -2090,7 +2117,11 @@ const TreeRow: Component<{
         cursor: 'pointer',
         'user-select': 'none',
         font: `13px ${tokens.fontSans}`,
-        outline: props.isDropTarget ? `1px solid ${tokens.borderFocus}` : 'none',
+        // A solid accent ring (inset so it isn't clipped by the row
+        // bounds) makes the landing folder pop out unmistakably from a
+        // merely-selected row during a drag.
+        'box-shadow': props.isDropTarget ? `inset 0 0 0 2px ${tokens.borderDropTarget}` : 'none',
+        outline: 'none',
       }}
     >
       {/* name cell — chevron + icon + name, indented by depth */}

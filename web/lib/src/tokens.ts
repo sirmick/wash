@@ -12,11 +12,17 @@ export const tokens = {
   bgRowHover: '#202037',
   bgRowSelected: '#2a2a4a',
   bgBackdrop: 'rgba(0,0,0,0.45)',
+  // Drag-and-drop landing zone. A blue-tinted surface that reads
+  // clearly different from the purple-grey row selection, so "this is
+  // where the drop lands" is unmistakable during a drag. Pairs with
+  // borderDropTarget (a solid accent-blue ring).
+  bgDropTarget: '#1e2b50',
 
   // Borders.
   borderMenu: '#2a2a3a',
   borderWindow: '#2a2a3a',
   borderFocus: '#3a3a6a',
+  borderDropTarget: '#6090e0', // == accentBlue; the drop-zone ring
 
   // Foreground.
   fg: '#eee',
