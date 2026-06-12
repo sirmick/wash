@@ -311,6 +311,42 @@ func TestAuthRateLimitResetOnSuccess(t *testing.T) {
 	}
 }
 
+func TestAuthCheckPreflight(t *testing.T) {
+	ts, client := newTestServer(t)
+
+	// Unauthed: 401 with JSON pointing at /login.
+	resp, err := client.Get(ts.URL + "/auth/check")
+	if err != nil {
+		t.Fatalf("GET /auth/check: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("unauthed /auth/check = %d, want 401", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), `"login_url":"/login"`) {
+		t.Errorf("body %q missing login_url", body)
+	}
+
+	// Authenticate, then the preflight should 204.
+	authResp, err := client.PostForm(ts.URL+"/auth", url.Values{
+		"user":     []string{"alice"},
+		"password": []string{"hunter2"},
+	})
+	if err != nil {
+		t.Fatalf("POST /auth: %v", err)
+	}
+	authResp.Body.Close()
+	resp2, err := client.Get(ts.URL + "/auth/check")
+	if err != nil {
+		t.Fatalf("GET /auth/check after auth: %v", err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNoContent {
+		t.Errorf("authed /auth/check = %d, want 204", resp2.StatusCode)
+	}
+}
+
 func TestLogoutClearsCookie(t *testing.T) {
 	ts, client := newTestServer(t)
 	// Authenticate first.

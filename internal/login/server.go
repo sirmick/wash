@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -165,6 +166,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/", s.handleRoot)
 	mux.HandleFunc("/login", s.handleLogin)
 	mux.HandleFunc("/auth", s.handleAuth)
+	mux.HandleFunc("/auth/check", s.handleAuthCheck)
 	mux.HandleFunc("/logout", s.handleLogout)
 	mux.HandleFunc("/ws", s.handleWS)
 	mux.HandleFunc("/ws/s/", s.handleWSSpecific)
@@ -648,6 +650,22 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Redirect(w, r, dst, http.StatusFound)
 	}
+}
+
+// handleAuthCheck is the FE reconnect preflight: 204 when the session
+// cookie is valid, 401 otherwise. The shell hits this when its WS
+// handshake is refused, to tell an expired cookie ("go to login_url")
+// apart from a transient router drop ("keep reconnecting"). It never
+// redirects — a 302 here would be opaque to the fetch() caller, which
+// is the whole bug we're routing around.
+func (s *Server) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.identityFromRequest(r); ok {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _ = io.WriteString(w, `{"authenticated":false,"login_url":"/login"}`)
 }
 
 // handleLogout clears the cookie and, when authed, optionally
