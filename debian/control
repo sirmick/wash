@@ -24,6 +24,13 @@ Description: lightweight remote-admin desktop environment
 
 Package: wash-display
 Architecture: amd64 arm64
+# Opt-in, mirroring rpm's `%bcond_with display` and alpine's WASH_DISPLAY=1:
+# wash-display is a C++/CMake build (wlroots/codec stack) NOT produced by the
+# default `build.sh --standalone`, so populating it unconditionally aborts
+# dh_install ("missing files: out/wash-display"). Gate the whole binary
+# package behind a build profile — without `DEB_BUILD_PROFILES=pkg.wash.display`
+# dpkg-buildpackage skips it, and the main wash package builds clean.
+Build-Profiles: <pkg.wash.display>
 Depends: ${misc:Depends},
          ${shlibs:Depends},
          wash (= ${binary:Version}),

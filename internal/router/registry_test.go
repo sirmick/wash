@@ -13,6 +13,14 @@ func writeExec(t *testing.T, path string, mode os.FileMode) {
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), mode); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+	// os.WriteFile's mode is filtered by the process umask, so a
+	// caller asking for 0o777 actually gets e.g. 0o755 under umask
+	// 022 (the GitHub Actions default) — which silently flips the
+	// trust posture these tests assert on. Chmod is NOT umask-masked,
+	// so set the exact mode the test intends.
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatalf("chmod %s: %v", path, err)
+	}
 }
 
 func TestExecutablesIn_DiscoversRegularBinary(t *testing.T) {

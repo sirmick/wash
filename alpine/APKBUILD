@@ -10,9 +10,15 @@ depends="libcap shadow"
 # No makedepends: binaries are prebuilt in the source tarball.
 options="!check !strip"
 install="$pkgname.pre-install $pkgname.post-install $pkgname.post-deinstall"
-# Optional native display subpackage — only populated when the source
-# tarball was built with WASH_DISPLAY=1 (out/wash-display present).
-subpackages="$pkgname-display:_display"
+# Optional native display subpackage — opt-in via WASH_DISPLAY=1 (set by a
+# packager who built out/wash-display, the C++/wlroots binary the default
+# build omits). abuild's prepare_subpackages runs for EVERY entry listed
+# here regardless of what the split function returns, so listing it
+# unconditionally aborts the build when the binary is absent ("Missing
+# .../pkg/wash-display"). Only list it when opted in — mirrors deb's
+# `pkg.wash.display` build profile and rpm's `%bcond_with display`.
+subpackages=""
+[ -n "$WASH_DISPLAY" ] && subpackages="$pkgname-display:_display"
 source="wash_$pkgver.tar.xz"
 # pre-built binaries; no upstream sha to verify
 builddir="$srcdir/wash-$pkgver"
