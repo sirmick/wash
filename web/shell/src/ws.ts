@@ -140,4 +140,16 @@ export class Conn {
   sendRaw(channelID: number, payload: Uint8Array, cls: Class = CLASS_BULK): void {
     this.ws.send(encodeFrame({ flags: flagsWithClass(FLAG_END, cls), channel: channelID, payload }));
   }
+
+  /**
+   * Bytes still queued in the socket's send buffer. A bulk producer
+   * (e.g. fm's file upload) polls this to apply backpressure: without
+   * it the producer dumps the whole payload into the buffer at once,
+   * head-of-line blocking later control frames (like a cancel) behind
+   * megabytes of data on this single socket. Returns 0 for transports
+   * that don't expose it (virtio).
+   */
+  bufferedAmount(): number {
+    return this.ws.bufferedAmount ?? 0;
+  }
 }

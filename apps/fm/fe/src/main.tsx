@@ -107,6 +107,27 @@ type MenuState =
 
 const HOME_FALLBACK = '/';
 
+// Upload send-buffer backpressure thresholds. writeRaw queues bytes
+// into the single shell WebSocket's send buffer; awaitUploadDrain
+// pauses the producer once more than UPLOAD_SEND_HWM is buffered and
+// resumes once it drains below UPLOAD_SEND_LWM. Keeping the buffer
+// small is what lets a sidebar cancel (an interactive control frame)
+// reach the BE without waiting behind the whole file's bytes.
+const UPLOAD_SEND_HWM = 1 << 20; // 1 MiB
+const UPLOAD_SEND_LWM = 256 * 1024; // 256 KiB
+
+// awaitUploadDrain blocks until the shell socket's send buffer falls
+// below the low-water mark (or the upload is cancelled). Returns
+// immediately when the buffer is already under the high-water mark, so
+// it's cheap to call after every chunk. Transports without a
+// bufferedAmount (virtio) report 0 and never block.
+async function awaitUploadDrain(cancelled: () => boolean): Promise<void> {
+  if (window.wash.rawBufferedAmount() < UPLOAD_SEND_HWM) return;
+  while (window.wash.rawBufferedAmount() > UPLOAD_SEND_LWM && !cancelled()) {
+    await new Promise((r) => setTimeout(r, 15));
+  }
+}
+
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ---- reactive state ----
   const [path, setPath] = createSignal('');
@@ -1119,6 +1140,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           for await (const chunk of readBlobChunks(it.file)) {
             if (cancelledUploads.has(uploadID)) break stream;
             window.wash.writeRaw(channelID, chunk);
+            // Backpressure: writeRaw queues into the single shell
+            // socket's send buffer. Without pacing, the whole file
+            // lands there at once and head-of-line blocks the cancel
+            // control frame behind megabytes of data — so a sidebar
+            // cancel never reaches the BE until the upload has already
+            // drained. Keep the buffer small so the (interactive)
+            // cancel frame jumps ahead and this loop's own cancel
+            // check actually fires mid-stream.
+            await awaitUploadDrain(() => cancelledUploads.has(uploadID));
           }
         }
         if (!cancelledUploads.has(uploadID)) {

@@ -14,10 +14,10 @@
 //     job that reaches a terminal state.
 //   - BE transitions asserted through the router log (bulk-ops job=…).
 //
-// Cancel is intentionally not e2e-tested: it depends on clicking the
-// sidebar cancel mid-stream, which races the (sub-second, local) byte
-// transfer. The relay path (bulk → fm upload_cancel) is covered by the
-// wash-bulk unit tests + the upload_cancelled FE handler.
+// Mid-stream cancel from the sidebar is covered separately in
+// fm-upload-cancel.spec.ts, which throttles the connection via CDP so
+// the transfer stays in-flight long enough to click cancel (a local
+// upload otherwise finishes sub-second).
 
 import { test, expect, seedSimpleTree } from '../fixtures/router';
 import { existsSync, readFileSync, mkdirSync, writeFileSync, mkdtempSync } from 'node:fs';

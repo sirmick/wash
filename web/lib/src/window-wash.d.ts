@@ -96,6 +96,11 @@ interface WashGlobals {
   log(level: WashLogLevel, source: string, msg: string, stack?: string): void;
   openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
   writeRaw(channelID: number, bytes: Uint8Array): void;
+  // Bytes queued in the shell socket's send buffer. A bulk producer
+  // streaming over writeRaw (e.g. fm's upload) polls this to pace
+  // itself, so it doesn't head-of-line block control frames (like a
+  // cancel) behind its data. 0 on transports that don't expose it.
+  rawBufferedAmount(): number;
 }
 
 interface Window {
