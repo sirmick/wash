@@ -3,6 +3,7 @@ package music
 import (
 	"bytes"
 	"context"
+	"embed"
 	"encoding/binary"
 	"io/fs"
 	"log"
@@ -20,6 +21,32 @@ import (
 
 	"github.com/sirmick/wash/internal/sdk"
 )
+
+// skinsFS holds the bundled classic-skin .wsz files, served over ingress
+// and offered to Webamp as initialSkin + availableSkins (the Options →
+// Skins menu). These are the webamp project's own demo skins.
+//
+//go:embed skins/*.wsz
+var skinsFS embed.FS
+
+// bundledSkins maps each .wsz to a display name. Order matters: index 0
+// is the default skin the player opens with; all appear in the skins
+// menu so the user can switch.
+var bundledSkins = []struct{ Name, File string }{
+	{"Winamp5 Classified", "Winamp5-Classified.wsz"},
+	{"HP-49G Calculator", "HPCalc-HP49G.wsz"},
+	{"Internet Archive", "Internet-Archive.wsz"},
+	{"Green Dimension V2", "Green-Dimension-V2.wsz"},
+	{"TopazAmp", "TopazAmp1-2.wsz"},
+	{"Mac OSX Aqua", "MacOSXAqua1-5.wsz"},
+	{"Vizor", "Vizor1-01.wsz"},
+}
+
+// skin is one entry in the FE's skin list (resolved ingress URL).
+type skin struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
 
 // maxTracks caps a library scan so a huge music folder can't blow up the
 // tracks message (or the playlist). The cap is logged when hit.
@@ -48,6 +75,7 @@ type track struct {
 type player struct {
 	mu     sync.Mutex
 	tracks []track
+	skins  []skin
 	ready  chan struct{}
 }
 
@@ -69,8 +97,9 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 			}
 			p.mu.Lock()
 			tracks := p.tracks
+			skins := p.skins
 			p.mu.Unlock()
-			_ = conn.SendAppMsg(map[string]any{"kind": "tracks_ok", "id": id, "tracks": tracks})
+			_ = conn.SendAppMsg(map[string]any{"kind": "tracks_ok", "id": id, "tracks": tracks, "skins": skins})
 		}()
 		return nil
 	})
@@ -110,6 +139,12 @@ func serveAndPublish(c *sdk.Conn, instanceID string, p *player) {
 		w.Header().Set("Content-Type", "audio/wav")
 		http.ServeContent(w, r, "sample.wav", time.Unix(0, 0), bytes.NewReader(wav))
 	})
+	// /skins/<name>.wsz serves the embedded classic skins (Range handled
+	// by http.FileServer). Same origin as the shell, so Webamp's fetch of
+	// the .wsz has no CORS issue.
+	if sub, err := fs.Sub(skinsFS, "skins"); err == nil {
+		mux.Handle("/skins/", http.StripPrefix("/skins/", http.FileServer(http.FS(sub))))
+	}
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(ln) }()
 
@@ -124,8 +159,13 @@ func serveAndPublish(c *sdk.Conn, instanceID string, p *player) {
 	}
 
 	tracks := resolveTracks(base, lib)
+	skins := make([]skin, len(bundledSkins))
+	for i, s := range bundledSkins {
+		skins[i] = skin{Name: s.Name, URL: base + "skins/" + s.File}
+	}
 	p.mu.Lock()
 	p.tracks = tracks
+	p.skins = skins
 	p.mu.Unlock()
 	close(p.ready)
 	log.Printf("wash-music: %d track(s) from %q, serving at %s", len(tracks), root, base)

@@ -14,6 +14,9 @@ interface TracksOk {
   // URLs are fully resolved by the BE (ingress path for local files,
   // absolute for streams), so the FE feeds them straight to webamp.
   tracks: { url: string; title: string; artist?: string }[];
+  // Bundled classic skins served over ingress; index 0 is the default
+  // (initialSkin), all populate Webamp's Options → Skins menu.
+  skins?: { name: string; url: string }[];
 }
 
 interface AudioCmd {
@@ -25,9 +28,16 @@ interface AudioCmd {
 function MusicApp(props: WashAppProps) {
   let container!: HTMLDivElement;
   let webamp: Webamp | undefined;
+  // Webamp's root (#webamp), reparented into our slot (see initWebamp).
+  let webampEl: HTMLElement | null = null;
   // Latest current-track identity, captured from onTrackDidChange (the
   // store doesn't carry per-track duration, so we match by url below).
   let cur = { url: '', title: '', artist: '' };
+  // BE-provided labels keyed by url. Webamp rewrites a playlist track's
+  // title to "Unknown" once it reads a tag-less file's (missing) ID3
+  // tags, so for now-playing we anchor to the BE label (the filename
+  // stem / stream label) instead of trusting Webamp's read-back.
+  const trackMeta = new Map<string, { title: string; artist: string }>();
 
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
 
@@ -39,6 +49,61 @@ function MusicApp(props: WashAppProps) {
   // minimize}Window from Webamp's native chrome.
   const windowID = Number(props.host.getAttribute('data-wash-window') || 0);
   const winInfo = () => window.wash.windows().find((w) => w.windowID === windowID);
+
+  // DPI handling. The Winamp skin is bitmap pixel-art, so it's only
+  // naturally crisp at an integer device-pixel scale; on a fractional-DPI
+  // display (e.g. 1.5x) the native size maps to a non-integer device grid
+  // and the pixels double unevenly. Two modes:
+  //   'crisp'  — counter-scale #webamp so pixels land on an integer device
+  //              multiple (round(dpr): 1x / 2x). Pixel-perfect, but the
+  //              player changes physical size at fractional DPI.
+  //   'smooth' — keep native size; render pixel-perfect at integer DPI and
+  //              fall back to smooth (anti-aliased) interpolation only at
+  //              fractional DPI. Never resizes; slightly soft at 1.5x.
+  const SCALE_MODE: 'crisp' | 'smooth' = 'crisp';
+  let snapDpr = 0;
+  function applyDpiSnap() {
+    const main = document.getElementById('main-window');
+    if (!webampEl || !main) return;
+    const dpr = window.devicePixelRatio || 1;
+    snapDpr = dpr;
+    const integerDpi = Math.abs(dpr - Math.round(dpr)) < 0.01;
+    // 'crisp' counter-scales fractional DPI onto an integer device grid;
+    // 'smooth' always renders at native size.
+    const k = SCALE_MODE === 'crisp' ? Math.max(1, Math.round(dpr)) / dpr : 1;
+    webampEl.style.transformOrigin = '0 0';
+    webampEl.style.transform = k === 1 ? 'none' : `scale(${k})`;
+    // In 'smooth' mode, drop Webamp's image-rendering:pixelated so a
+    // fractional-DPI upscale is anti-aliased instead of blockily doubled.
+    // At integer DPI native rendering is already exact, so keep it crisp.
+    setSmoothRendering(SCALE_MODE === 'smooth' && !integerDpi);
+    // Re-pin the (now scaled) main window to the slot's top-left.
+    const cr = container.getBoundingClientRect();
+    const mr = main.getBoundingClientRect();
+    const curLeft = parseFloat(webampEl.style.left) || 0;
+    const curTop = parseFloat(webampEl.style.top) || 0;
+    webampEl.style.left = `${Math.round(curLeft - (mr.left - cr.left))}px`;
+    webampEl.style.top = `${Math.round(curTop - (mr.top - cr.top))}px`;
+    // Hug the (possibly scaled) main window so the chromeless frame matches.
+    if (windowID) window.wash.resizeWindow(windowID, Math.round(mr.width), Math.round(mr.height));
+  }
+  // Toggle a one-off stylesheet that forces smooth image-rendering over
+  // Webamp's pixelated default across the whole #webamp subtree.
+  let smoothStyle: HTMLStyleElement | null = null;
+  function setSmoothRendering(on: boolean) {
+    if (on && !smoothStyle) {
+      smoothStyle = document.createElement('style');
+      smoothStyle.textContent =
+        '#webamp, #webamp * { image-rendering: auto !important; }';
+      document.head.appendChild(smoothStyle);
+    } else if (!on && smoothStyle) {
+      smoothStyle.remove();
+      smoothStyle = null;
+    }
+  }
+  const onWindowResize = () => {
+    if (window.devicePixelRatio !== snapDpr) applyDpiSnap();
+  };
 
   // Translate a drag on Webamp's main-window titlebar into a wash window
   // move. Bound in the CAPTURE phase on the host so it runs before
@@ -112,11 +177,12 @@ function MusicApp(props: WashAppProps) {
       status = wa.getMediaStatus().toLowerCase(); // PLAYING|PAUSED|STOPPED
       pos = wa.store.getState().media.timeElapsed ?? 0;
       const t = wa.getPlaylistTracks().find((x) => x.url === cur.url);
-      if (t) {
-        dur = (t as { duration?: number }).duration ?? 0;
-        title = t.title ?? title;
-        artist = t.artist ?? artist;
-      }
+      if (t) dur = (t as { duration?: number }).duration ?? 0;
+      // Prefer the BE label, then our last-known, then Webamp's read-back
+      // (which may be an empty/"Unknown" tag) — `||` so empties don't win.
+      const be = trackMeta.get(cur.url);
+      title = be?.title || cur.title || t?.title || title;
+      artist = be?.artist || cur.artist || t?.artist || artist;
     } catch {
       /* ignore — keep last-known fields */
     }
@@ -163,7 +229,15 @@ function MusicApp(props: WashAppProps) {
 
   async function initWebamp(m: TracksOk) {
     if (webamp) return; // single Winamp per window
-    const wa = new Webamp(); // default (built-in) classic skin
+    // Open with the BE's first bundled skin and expose the rest in the
+    // Options → Skins menu. Falls back to Webamp's built-in skin if the
+    // BE sent none.
+    const skins = m.skins ?? [];
+    const wa = new Webamp(
+      skins.length
+        ? { initialSkin: { url: skins[0].url }, availableSkins: skins }
+        : undefined,
+    );
     webamp = wa;
     // Closing the Winamp player closes the wash window. (Minimize is
     // handled in onHostMouseDown — onMinimize doesn't fire for the
@@ -175,34 +249,34 @@ function MusicApp(props: WashAppProps) {
     // it into our window slot so the Winamp UI lives INSIDE the wash
     // window (pans with the viewport, obeys z-order, minimizes with the
     // window, and our titlebar-drag interception sees the events).
-    const webampEl = document.getElementById('webamp');
-    const mainEl = document.getElementById('main-window');
-    if (webampEl && mainEl) {
+    webampEl = document.getElementById('webamp');
+    if (webampEl) {
       container.appendChild(webampEl);
       webampEl.style.position = 'absolute';
-      // Webamp positions its windows in absolute page coords computed from
-      // where the container sat at render time, so the main window lands
-      // offset from our slot. Counter-translate #webamp so the main window
-      // pins to the slot's top-left; the EQ/playlist stack stays directly
-      // below it and the whole #webamp (all three windows) then moves as
-      // one with the wash window.
-      const cr = container.getBoundingClientRect();
-      const mr = mainEl.getBoundingClientRect();
-      webampEl.style.left = `${Math.round(-(mr.left - cr.left))}px`;
-      webampEl.style.top = `${Math.round(-(mr.top - cr.top))}px`;
+      webampEl.style.left = '0';
+      webampEl.style.top = '0';
+      // Counter-scale for the display DPI and pin the main window to the
+      // slot top-left; the EQ/playlist stack follows below and the whole
+      // #webamp moves as one with the wash window.
+      applyDpiSnap();
     }
     const tracks = m.tracks.map((t) => ({
       url: t.url,
       metaData: { title: t.title, artist: t.artist ?? '' },
     }));
+    for (const t of m.tracks) trackMeta.set(t.url, { title: t.title, artist: t.artist ?? '' });
     wa.appendTracks(tracks);
 
     // Track identity for duration/title matching + sidebar now-playing.
+    // Anchor the label to the BE map (Webamp's info.metaData gets
+    // overwritten to "Unknown" for tag-less files) and fall back to it.
     wa.onTrackDidChange((info) => {
+      const url = info?.url ?? '';
+      const be = trackMeta.get(url);
       cur = {
-        url: info?.url ?? '',
-        title: info?.metaData.title ?? '',
-        artist: info?.metaData.artist ?? '',
+        url,
+        title: be?.title || info?.metaData.title || '',
+        artist: be?.artist || info?.metaData.artist || '',
       };
       scheduleReport();
     });
@@ -227,9 +301,14 @@ function MusicApp(props: WashAppProps) {
     // onHostMouseDown). Harmless before Webamp renders — nothing matches
     // #title-bar yet.
     props.host.addEventListener('mousedown', onHostMouseDown, true);
+    // A DPI change (e.g. dragging to a monitor at a different scale) fires
+    // a window resize; re-snap when devicePixelRatio actually changed.
+    window.addEventListener('resize', onWindowResize);
     onCleanup(() => {
       props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('mousedown', onHostMouseDown, true);
+      window.removeEventListener('resize', onWindowResize);
+      setSmoothRendering(false);
     });
     send({ kind: 'tracks', id: 'm-tracks' });
   });

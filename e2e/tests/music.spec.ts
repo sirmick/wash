@@ -37,8 +37,14 @@ function minimalWav(): Buffer {
   return buf; // samples left as zero (silence)
 }
 
+// Tests that assert the sample-tone fallback (or just don't care about
+// library contents) pin an EMPTY WASH_MUSIC_DIR so they're hermetic —
+// otherwise the BE scans the developer's real ~/Music and the playlist
+// assertions break.
+const emptyMusicDir = mkdtempSync(join(tmpdir(), 'wash-music-empty-'));
+
 test.describe('music app (kiosk, host-side full stack)', () => {
-  test.use({ routerOpts: { kiosk: 'com.wash.music', apps: ['music'] } });
+  test.use({ routerOpts: { kiosk: 'com.wash.music', apps: ['music'], extraEnv: { WASH_MUSIC_DIR: emptyMusicDir } } });
 
   test('renders Webamp and serves the track over ingress', async ({ page, router }) => {
     // Catch the ingress fetch for the sample track. Register the waiter
@@ -77,7 +83,7 @@ test.describe('music app (kiosk, host-side full stack)', () => {
 // back to webamp. Proves the whole producer → service → sidebar → producer
 // loop (docs/AUDIO.md §3).
 test.describe('music + audio control plane (full shell + sidebar)', () => {
-  test.use({ routerOpts: { apps: ['session', 'music', 'audio'] } });
+  test.use({ routerOpts: { apps: ['session', 'music', 'audio'], extraEnv: { WASH_MUSIC_DIR: emptyMusicDir } } });
 
   test('now-playing reaches the sidebar; transport round-trips to webamp', async ({ page, router }) => {
     await page.goto(router.url);
@@ -103,6 +109,27 @@ test.describe('music + audio control plane (full shell + sidebar)', () => {
   });
 });
 
+// Now-playing label: Webamp rewrites a tag-less file's title to "Unknown"
+// once it reads the (missing) ID3 tags, so the FE anchors the sidebar
+// label to the BE-provided filename stem instead of Webamp's read-back.
+test.describe('music now-playing label (tag-less file)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wash-music-tagless-'));
+  writeFileSync(join(dir, 'Tagless Track.wav'), minimalWav());
+
+  test.use({ routerOpts: { apps: ['session', 'music', 'audio'], extraEnv: { WASH_MUSIC_DIR: dir } } });
+
+  test('sidebar shows the filename label, not Unknown', async ({ page, router }) => {
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    await router.controlRequest({ t: 'launch', app_id: 'com.wash.music' });
+    await expect(page.getByRole('slider', { name: 'Volume Bar' })).toBeVisible();
+    const nowPlaying = page.locator('[data-testid="audio-nowplaying"]');
+    await expect(nowPlaying).toBeVisible();
+    await expect(nowPlaying).toContainText('Tagless Track');
+    await expect(nowPlaying).not.toContainText('Unknown');
+  });
+});
+
 // Chromeless window (docs/AUDIO.md §2): the music window drops the wash
 // titlebar/border so Webamp's own Winamp titlebar is the only titlebar
 // (no double chrome) and sits flush (no black margin). Because Webamp
@@ -110,7 +137,7 @@ test.describe('music + audio control plane (full shell + sidebar)', () => {
 // window slot and drives move/close/minimize from Winamp's native chrome
 // via window.wash — this proves that wiring.
 test.describe('music chromeless window chrome', () => {
-  test.use({ routerOpts: { apps: ['session', 'music', 'audio'] } });
+  test.use({ routerOpts: { apps: ['session', 'music', 'audio'], extraEnv: { WASH_MUSIC_DIR: emptyMusicDir } } });
 
   test('no wash titlebar; Winamp titlebar drives move/close/minimize', async ({ page, router }) => {
     await page.goto(router.url);
