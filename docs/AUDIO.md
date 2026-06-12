@@ -133,13 +133,38 @@ multiply applied by each producer's FE: `el.volume = masterVolume * source.volum
 (and `el.muted = masterMute || source.muted`). No central audio graph, no
 centralizing of bytes — the service only moves state.
 
+### Active source + single-play exclusivity
+
+The service is the only global observer, so it owns two cross-source
+policies (the sidebar and producers stay dumb):
+
+- **Active source.** `AudioState` carries an `activeId` — the source the
+  sidebar shows + drives. It's set to whichever source last went
+  `playing`, and *kept across pause* so the widget still targets "the
+  thing you'd resume" when nothing is playing. (Before this, the sidebar
+  just showed `sources[0]` — the newest-registered, not the playing one.)
+- **Single-play exclusivity (default on).** When a producer `report`s
+  `status:"playing"`, the service relays a `pause` `cmd` to every *other*
+  source currently `playing`. So starting Music auto-pauses Washamp/Radio
+  (and a future video) — one thing plays at a time. Producers never learn
+  about each other; no feedback loop (the paused one reports `paused`,
+  which doesn't re-trigger). This is the natural seam for richer
+  ducking/exclusivity later (e.g. duck-don't-pause for chimes).
+
+Together these make the sidebar a single global transport for "whatever is
+playing now" across every media app.
+
 ## 4. Sidebar
 
 `AudioWidget` in `apps/session/fe/src/sidebar/` subscribes to `AudioState`
 through the session BE gateway (the `NotifyWidget` pattern exactly): now-playing
 title/artist/progress, transport buttons, master volume slider, per-source
-mute. Transport buttons send cross-app messages the service relays to the
-owning producer. Pure renderer; the gateway does the wiring.
+mute. It shows/drives the **active source** (`activeId`, §3); transport
+buttons send cross-app messages the service relays to the owning producer.
+Pure renderer; the gateway does the wiring. The transport cluster +
+now-playing line are the same extracted `@wash/ui` media components the
+Music/Radio (and future video) windows use, so all three places stay
+consistent.
 
 ## 5. Milestones
 
@@ -165,10 +190,17 @@ owning producer. Pure renderer; the gateway does the wiring.
   session gateway + `AudioWidget`. Washamp registers/reports; sidebar shows
   now-playing + master volume + transport and drives the player cross-app.
 
-- **M4+ — deferred.** Persistence (keep playing on window close) via a
-  persistent host element owned outside the closable window; per-source
-  volume + ducking policy in the service; **Case 2** server-live audio folded
-  into the display/wayland WebRTC milestone.
+- **M4 — service policy + shared media kit.** `activeId` + single-play
+  exclusivity in `com.wash.audio` (§3); per-source volume (model A — in-app
+  volume slider, `el.volume = master × source`); extract the shared
+  `@wash/ui` media components (`TransportControls`/`NowPlaying`/`MediaList`/
+  `VolumeSlider`) + `@wash/audio-client` from `AudioWidget`, refactoring the
+  sidebar to consume them. Foundation for the native Music/Radio apps
+  (`docs/MUSIC.md`, `docs/RADIO.md`) and a future video player.
+
+- **M5+ — deferred.** Persistence (keep playing on window close) via a
+  persistent host element owned outside the closable window; **Case 2**
+  server-live audio folded into the display/wayland WebRTC milestone.
 
 ## 6. Non-goals (v1)
 
