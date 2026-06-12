@@ -37,8 +37,14 @@ function minimalWav(): Buffer {
   return buf; // samples left as zero (silence)
 }
 
+// Both fallback-track suites pin WASH_MUSIC_DIR to a path that doesn't
+// exist: the BE resolves that to "no library" and serves the synthesized
+// sample track these tests assert on. Without the pin the app scans the
+// host's real ~/Music when one exists and the playlist is unpredictable.
+const NO_LIBRARY = { WASH_MUSIC_DIR: join(tmpdir(), 'wash-e2e-no-music-library') };
+
 test.describe('music app (kiosk, host-side full stack)', () => {
-  test.use({ routerOpts: { kiosk: 'com.wash.music', apps: ['music'] } });
+  test.use({ routerOpts: { kiosk: 'com.wash.music', apps: ['music'], extraEnv: NO_LIBRARY } });
 
   test('renders Webamp and serves the track over ingress', async ({ page, router }) => {
     // Catch the ingress fetch for the sample track. Register the waiter
@@ -77,7 +83,7 @@ test.describe('music app (kiosk, host-side full stack)', () => {
 // back to webamp. Proves the whole producer → service → sidebar → producer
 // loop (docs/AUDIO.md §3).
 test.describe('music + audio control plane (full shell + sidebar)', () => {
-  test.use({ routerOpts: { apps: ['session', 'music', 'audio'] } });
+  test.use({ routerOpts: { apps: ['session', 'music', 'audio'], extraEnv: NO_LIBRARY } });
 
   test('now-playing reaches the sidebar; transport round-trips to webamp', async ({ page, router }) => {
     await page.goto(router.url);
