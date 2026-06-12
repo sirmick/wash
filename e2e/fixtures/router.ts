@@ -42,6 +42,7 @@ const NET_BIN = join(REPO_ROOT, 'out', 'wash-net');
 const NETD_BIN = join(REPO_ROOT, 'out', 'wash-netd');
 const WASHAMP_BIN = join(REPO_ROOT, 'out', 'wash-washamp');
 const MUSIC_BIN = join(REPO_ROOT, 'out', 'wash-music');
+const RADIO_BIN = join(REPO_ROOT, 'out', 'wash-radio');
 const AUDIO_BIN = join(REPO_ROOT, 'out', 'wash-audio');
 const FAKESUDO_BIN = join(REPO_ROOT, 'out', 'wash-priv-fakesudo');
 export const SUDO_BIN = join(REPO_ROOT, 'out', 'wash-sudo');
@@ -314,6 +315,12 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
       throw new Error(`missing wash-music: ${MUSIC_BIN}`);
     }
     bins.push(MUSIC_BIN);
+  }
+  if (wanted.includes('radio')) {
+    if (!existsSync(RADIO_BIN)) {
+      throw new Error(`missing wash-radio: ${RADIO_BIN}`);
+    }
+    bins.push(RADIO_BIN);
   }
   if (wanted.includes('audio')) {
     if (!existsSync(AUDIO_BIN)) {
