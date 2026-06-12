@@ -17,7 +17,7 @@
 // just the views that read them. No more "I changed a field but
 // forgot to re-render" bugs.
 
-import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
 import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, defineWashApp, tokens } from '@wash/ui';
@@ -199,6 +199,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // used as one end of a Shift-click range.
   const [selection, setSelection] = createSignal<Set<string>>(new Set());
   let selectionAnchor: string | null = null;
+
+  // All selection writes route through applySelection so each carries a
+  // `reason` label. The label is a breadcrumb the selection invariant
+  // (checkSelectionInvariant, defined once visibleRows exists) reports
+  // when it catches a divergence — it names the most recent explicit
+  // selection write, which helps tell "this click left a ghost" apart
+  // from "a background listing change orphaned an older selection".
+  let lastSelectionWrite = 'init';
+  const applySelection = (next: Set<string>, reason: string) => {
+    lastSelectionWrite = reason;
+    setSelection(next);
+  };
 
   // Files clipboard — mirrors the router clipboard's
   // application/x-wash-paths slot, kept in sync by the BE pushing
@@ -438,7 +450,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // "Home → drag file to empty pane" path would target the
     // still-selected previous folder rather than the current
     // location (dirOfSelection prefers the selection over path()).
-    setSelection(new Set());
+    applySelection(new Set(), 'navigate');
     selectionAnchor = null;
 
     // Eager state commit: path + input + history move now, before
@@ -499,7 +511,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       visibleRows().map((r) => r.path),
       { shift: ev.shiftKey, ctrlOrMeta: ev.ctrlKey || ev.metaKey },
     );
-    setSelection(result.selection);
+    applySelection(result.selection, 'row-click');
     selectionAnchor = result.anchor;
     setSelectedEntry(entry);
     if (isPlain) setStatusOverride(null);
@@ -708,7 +720,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       op: 'delete',
       paths,
     });
-    setSelection(new Set());
+    applySelection(new Set(), 'bulk-delete-clear');
     setSelectedEntry(null);
   };
 
@@ -1055,7 +1067,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // Source paths are about to vanish — drop them from the
     // selection so the status bar doesn't keep claiming "N
     // selected" for paths that no longer exist.
-    setSelection(new Set());
+    applySelection(new Set(), 'bulk-move-clear');
     selectionAnchor = null;
   };
 
@@ -1428,6 +1440,44 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // automatically as folders expand/collapse.
   const visibleCount = createMemo(() => visibleRows().length);
 
+  // ---- selection invariant (observe-only, always on) ----
+  //
+  // `selection` is a free-floating set of paths that nothing reconciles
+  // against the listing, so a change underneath a live selection — an
+  // fs.watch delete/rename from another window, a finished bulk job, a
+  // sort / hidden-files toggle, or collapsing a selected row's parent —
+  // can leave "ghost" paths in the set: still counted by the status bar
+  // and still handed to delete/drag/copy, but no longer a real row.
+  //
+  // STRICT check: every selected path must be a currently-VISIBLE row.
+  // We only LOG a violation (no auto-prune) so the trigger isn't masked
+  // while we hunt the root cause. The log carries lastSelectionWrite as
+  // a breadcrumb. Deduped by the ghost signature so a persistent ghost
+  // logs once per change, not on every reactive tick.
+  let lastGhostSig = '';
+  createEffect(() => {
+    const sel = selection();
+    const visible = new Set(visibleRows().map((r) => r.path));
+    const ghosts: string[] = [];
+    for (const p of sel) if (!visible.has(p)) ghosts.push(p);
+    const sig = ghosts.length ? ghosts.slice().sort().join('\n') : '';
+    if (sig === lastGhostSig) return;
+    lastGhostSig = sig;
+    if (ghosts.length === 0) return;
+    // untrack path() so the cursor moving doesn't re-run this check.
+    console.error(
+      '[fm] selection invariant: selected paths are not in the visible list',
+      {
+        lastSelectionWrite,
+        ghosts,
+        ghostCount: ghosts.length,
+        selectionSize: sel.size,
+        visibleCount: visible.size,
+        cursor: untrack(() => path()),
+      },
+    );
+  });
+
   // statusBar text — derived. While statusOverride is set (drop /
   // error / clipboard feedback), show it; otherwise the live
   // visible-entry count. Errors render in red at full opacity so
@@ -1475,7 +1525,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // implicitly replaces the selection with just that row, so the
     // menu action operates on what was clicked, not on a stale
     // selection elsewhere.
-    if (!selection().has(p)) setSelection(new Set([p]));
+    if (!selection().has(p)) applySelection(new Set([p]), 'context-menu-select');
     if (entry.type === 'file') sendRead(p);
     setMenu({ kind: 'context', left: ev.clientX, top: ev.clientY, entry, path: p });
   };
@@ -1530,7 +1580,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         }
         if (ev.key === 'Escape' && sel.size > 0) {
           ev.preventDefault();
-          setSelection(new Set());
+          applySelection(new Set(), 'escape-clear');
           return;
         }
       }
@@ -1540,7 +1590,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         if (ev.key === 'a' || ev.key === 'A') {
           // Select-all = every currently-visible row in the tree.
           ev.preventDefault();
-          setSelection(new Set(visibleRows().map((r) => r.path)));
+          applySelection(new Set(visibleRows().map((r) => r.path)), 'select-all');
           return;
         }
         if ((ev.key === 'N' || ev.key === 'n') && ev.shiftKey) {
@@ -1712,7 +1762,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             // convention. Only fire when the click hit the list
             // container itself (not a row that bubbled up).
             if (ev.target === ev.currentTarget && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey) {
-              setSelection(new Set());
+              applySelection(new Set(), 'background-clear');
               selectionAnchor = null;
             }
           }}
