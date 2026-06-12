@@ -36,9 +36,8 @@ test('VM-served wash UI round-trips a model edit to in-guest netd', async ({ vm,
   await expect(page.locator('#pane-console')).toContainText('Linux', { timeout: 20_000 });
   await page.locator('#tab-wash').click();
 
-  // Network is hidden from the start-menu catalog (manifest.Hidden); launch it
-  // the supported way — the sidebar's Network section → Configure…, which
-  // spawn.requests com.wash.net (spawn works for hidden apps).
+  // Launch Network via the sidebar's Network section → Configure…, which
+  // spawn.requests com.wash.net (it's also in the start-menu catalog now).
   await page.locator('[data-testid="sidebar-section-header-net"]').click();
   await page.locator('[data-testid="net-configure"]').click();
 

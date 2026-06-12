@@ -73,13 +73,11 @@ func init() {
 			Surface:         sdk.SurfaceWindow,
 			Icon:            netIcon,
 			Accent:          "#6090e0",
-			// Kept out of the launcher catalog: the network UI is reached
-			// from the sidebar's Wi-Fi affordance and the Settings → Network
-			// pane (both spawn it via spawn.request), so a start-menu row
-			// would be redundant. Still fully spawnable.
-			Hidden:          true,
-			Instancing:      sdk.InstancingSingle,
-			Window:          &sdk.WindowHints{DefaultWidth: 574, DefaultHeight: 620},
+			// Listed in the launcher catalog (network glyph) alongside the
+			// sidebar Wi-Fi affordance and the Settings → Network pane, which
+			// also spawn it via spawn.request.
+			Instancing: sdk.InstancingSingle,
+			Window:     &sdk.WindowHints{DefaultWidth: 574, DefaultHeight: 620},
 		},
 		Assets:  sub,
 		OnReady: onReady,
