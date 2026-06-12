@@ -106,6 +106,73 @@ test.describe('wash-edit wysiwyg', () => {
     await expect(editor.locator('[data-testid="edit-cm"]')).toBeHidden();
   });
 
+  test('Ctrl+F finds and highlights matches; Escape dismisses', async ({ page, router }) => {
+    const editor = await openEditor(page, router);
+    await editor.locator('[data-testid="edit-entry-notes.md"]').dblclick();
+    const host = editor.locator(`[data-testid="edit-wf-host-${join(router.fmRoot, 'notes.md')}"]`);
+    await expect(host.locator('h1')).toContainText('Notes');
+
+    // Ctrl+F from inside the document opens the wysiwyg find bar
+    // (NOT CodeMirror's panel — CM stays hidden under the wf layer).
+    await host.locator('[data-testid="edit-wf-body"]').click();
+    await page.keyboard.press('Control+f');
+    const bar = editor.locator('[data-testid="edit-wf-find"]');
+    await expect(bar).toBeVisible();
+    await expect(bar.locator('[data-testid="edit-wf-find-input"]')).toBeFocused();
+
+    // Type a query — the match highlights in the document and the
+    // counter reads 1/1 ("first" appears once in the seed).
+    await page.keyboard.type('first');
+    await expect(bar.locator('[data-testid="edit-wf-find-count"]')).toHaveText('1/1');
+    await expect(host.locator('.wash-find-match')).toHaveCount(1);
+    await expect(host.locator('.wash-find-current')).toHaveText('first');
+
+    // Escape closes the bar and drops the highlights.
+    await page.keyboard.press('Escape');
+    await expect(bar).toBeHidden();
+    await expect(host.locator('.wash-find-match')).toHaveCount(0);
+  });
+
+  test('Enter cycles matches; Replace All rewrites and saves', async ({ page, router }) => {
+    const editor = await openEditor(page, router);
+    await editor.locator('[data-testid="edit-entry-notes.md"]').dblclick();
+    const host = editor.locator(`[data-testid="edit-wf-host-${join(router.fmRoot, 'notes.md')}"]`);
+    await expect(host.locator('h1')).toContainText('Notes');
+
+    // Edit → Find & Replace opens the same bar.
+    await editor.locator('[data-testid="edit-menubar-edit"]').click();
+    await page.locator('[data-testid="edit-menu-replace"]').click();
+    const bar = editor.locator('[data-testid="edit-wf-find"]');
+    await expect(bar).toBeVisible();
+
+    // "o" hits "Notes", "one", and "two" (case-insensitive) — Enter
+    // advances through all three and wraps back to the first.
+    await page.keyboard.type('o');
+    const count = bar.locator('[data-testid="edit-wf-find-count"]');
+    await expect(count).toHaveText('1/3');
+    await page.keyboard.press('Enter');
+    await expect(count).toHaveText('2/3');
+    await page.keyboard.press('Enter');
+    await expect(count).toHaveText('3/3');
+    await page.keyboard.press('Enter');
+    await expect(count).toHaveText('1/3');
+
+    // Replace all "one" → "uno": doc updates, tab dirties, save
+    // round-trips the rewritten markdown to disk.
+    await bar.locator('[data-testid="edit-wf-find-input"]').fill('one');
+    await bar.locator('[data-testid="edit-wf-replace-input"]').fill('uno');
+    await bar.locator('[data-testid="edit-wf-replace-all"]').click();
+    await expect(host.locator('ul li').first()).toHaveText('uno');
+
+    const tab = editor.locator(`[data-testid="edit-tab-${join(router.fmRoot, 'notes.md')}"]`);
+    await expect(tab).toHaveAttribute('data-dirty', 'true');
+    await page.keyboard.press('Control+s');
+    await expect.poll(() => {
+      try { return readFileSync(join(router.fmRoot, 'notes.md'), 'utf8'); }
+      catch { return ''; }
+    }, { timeout: 5000 }).toContain('- uno');
+  });
+
   test('non-.md files stay in source view', async ({ page, router }) => {
     const editor = await openEditor(page, router);
     await editor.locator('[data-testid="edit-entry-plain.txt"]').dblclick();

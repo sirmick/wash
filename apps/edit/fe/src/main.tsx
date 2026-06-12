@@ -89,6 +89,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Code as CodeIcon,
   File as FileIcon,
   Folder as FolderIcon,
@@ -107,7 +108,7 @@ import {
   Strikethrough,
   Table as TableIcon,
 } from 'lucide-solid';
-import { createWysiwyg, isMarkdownPath, type WysiwygHandle } from './wysiwyg';
+import { createWysiwyg, isMarkdownPath, type WysiwygHandle, type WysiwygSearchState } from './wysiwyg';
 
 interface Entry {
   name: string;
@@ -288,6 +289,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // because TipTap is imperative and the handle holds a live DOM
   // mount the framework should not re-render.
   const wysHandles = new Map<string, WysiwygHandle>();
+
+  // wysFindOpen shows the find/replace bar over the WYSIWYG editor.
+  // CM tabs keep using CodeMirror's own search panel; this bar only
+  // exists because TipTap has no built-in equivalent. The bar itself
+  // (WysFindBar) owns query/replace text and per-tab re-binding.
+  const [wysFindOpen, setWysFindOpen] = createSignal(false);
 
   // openMenu is the open dropdown's id ('' = none). It's set when
   // the user clicks a menubar button; menubarOffsets stores each
@@ -798,9 +805,23 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     redo(editorView);
   };
   const cmdFind = () => {
+    // WYSIWYG tabs get the TipTap find bar — CM's panel would open
+    // against the hidden source view and search the wrong document.
+    if (activeTab()?.mode === 'wysiwyg') {
+      setWysFindOpen(true);
+      return;
+    }
     if (!editorView) return;
     editorView.focus();
     openSearchPanel(editorView);
+  };
+  // closeWysFind tears the bar down, drops the highlights, and hands
+  // focus back to the document — CM's closeSearchPanel contract.
+  const closeWysFind = () => {
+    setWysFindOpen(false);
+    const h = wysHandles.get(activeID());
+    h?.search.clear();
+    h?.focus();
   };
   // Cut/Copy/Paste route through document.execCommand, which is
   // technically deprecated but is the only path that lets a menu
@@ -1862,6 +1883,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const onKey = (ev: KeyboardEvent) => {
       const cmd = ev.ctrlKey || ev.metaKey;
 
+      // Escape with the WYSIWYG find bar up closes it from anywhere
+      // in the window (the bar's inputs handle their own Escape and
+      // stop propagation before this fires). Checked ahead of the
+      // sidebar Escape-deselect so find-dismiss wins.
+      if (ev.key === 'Escape' && !cmd && !ev.altKey && wysFindOpen() && activeTab()?.mode === 'wysiwyg') {
+        ev.preventDefault();
+        closeWysFind();
+        return;
+      }
+
       // Sidebar-only plain keys: F2, Delete, Backspace, Escape.
       // Guarded so CM's own bindings (Backspace = delete char,
       // Escape = close search panel) still win when CM is focused.
@@ -1936,6 +1967,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         ev.preventDefault();
         openNewTerm();
         return;
+      }
+      // Ctrl+F / Ctrl+H: find (and replace) in a WYSIWYG tab. Source
+      // tabs are CM's territory — its searchKeymap handles Mod-f when
+      // the editor is focused, so we deliberately fall through here.
+      if ((ev.key === 'f' || ev.key === 'F' || ev.key === 'h' || ev.key === 'H') && !ev.shiftKey) {
+        if (activeTab()?.mode === 'wysiwyg') {
+          ev.preventDefault();
+          setWysFindOpen(true);
+          return;
+        }
       }
       // Ctrl+Shift+P: toggle the active tab between WYSIWYG and
       // source view. No-op for non-markdown tabs (toggleWysiwyg
@@ -2383,6 +2424,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 />
               )}
             </For>
+            <Show when={wysFindOpen() && activeTab()?.mode === 'wysiwyg'}>
+              <WysFindBar
+                handle={() => wysHandles.get(activeID())}
+                onClose={closeWysFind}
+              />
+            </Show>
             <Show when={!activeTab() || activeTab()?.binary}>
               <div data-testid="edit-placeholder" style={placeholderOverlayStyle}>
                 <Show when={!activeTab()}>
@@ -2733,6 +2780,116 @@ const WysiwygToolbar: Component<{ tab: () => Tab; handle: () => WysiwygHandle | 
   );
 };
 
+// WysFindBar is the find/replace overlay for WYSIWYG tabs — the
+// TipTap counterpart of CodeMirror's search panel. It owns the query
+// and replacement drafts; matching, highlighting, and replacement all
+// live in the editor's search plugin behind WysiwygHandle.search.
+//
+// The `handle` accessor is reactive: switching to another wysiwyg tab
+// while the bar is open re-runs the query against the new editor and
+// clears the highlights off the old one.
+const WysFindBar: Component<{
+  handle: () => WysiwygHandle | undefined;
+  onClose: () => void;
+}> = (props) => {
+  const [query, setQuery] = createSignal('');
+  const [repl, setRepl] = createSignal('');
+  const [hits, setHits] = createSignal<WysiwygSearchState>({ count: 0, current: -1 });
+  let findInput!: HTMLInputElement;
+  let boundHandle: WysiwygHandle | undefined;
+
+  createEffect(() => {
+    const h = props.handle();
+    if (h === boundHandle) return;
+    boundHandle?.search.clear();
+    boundHandle = h;
+    if (h && query()) setHits(h.search.set(query()));
+  });
+  // Live count: the plugin rescans on every doc change, so mirror its
+  // state into the display after each transaction (typing in the
+  // document with the bar open keeps "n/m" honest).
+  createEffect(() => {
+    const h = props.handle();
+    if (!h) return;
+    const refresh = () => setHits(h.search.state());
+    h.editor.on('transaction', refresh);
+    onCleanup(() => { h.editor.off('transaction', refresh); });
+  });
+  onMount(() => findInput.focus());
+  // Unmount without onClose (tab closed, mode toggled) still drops
+  // the highlights. search.clear() is destroy-safe and idempotent.
+  onCleanup(() => boundHandle?.search.clear());
+
+  const onQueryInput = (v: string) => {
+    setQuery(v);
+    const h = props.handle();
+    if (h) setHits(h.search.set(v));
+  };
+  const nav = (dir: 'next' | 'prev') => {
+    const h = props.handle();
+    if (h) setHits(dir === 'next' ? h.search.next() : h.search.prev());
+  };
+  const doReplace = (all: boolean) => {
+    const h = props.handle();
+    if (h) setHits(all ? h.search.replaceAll(repl()) : h.search.replace(repl()));
+  };
+  // Enter cycles matches (Shift reverses); Escape closes. Handled on
+  // the inputs with stopPropagation so the app-level Escape handler
+  // doesn't double-fire.
+  const onFindKey = (ev: KeyboardEvent) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); nav(ev.shiftKey ? 'prev' : 'next'); }
+    if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); props.onClose(); }
+  };
+  const onReplKey = (ev: KeyboardEvent) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); doReplace(false); }
+    if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); props.onClose(); }
+  };
+
+  return (
+    <div data-testid="edit-wf-find" style={findBarStyle}>
+      <div style={findRowStyle}>
+        <input
+          ref={findInput}
+          data-testid="edit-wf-find-input"
+          placeholder="Find"
+          value={query()}
+          onInput={(ev) => onQueryInput(ev.currentTarget.value)}
+          onKeyDown={onFindKey}
+          style={findInputStyle}
+        />
+        <span data-testid="edit-wf-find-count" style={findCountStyle}>
+          {query() ? `${hits().count ? hits().current + 1 : 0}/${hits().count}` : ''}
+        </span>
+        <button type="button" data-testid="edit-wf-find-prev" onMouseDown={(e) => e.preventDefault()} title="Previous match (Shift+Enter)" onClick={() => nav('prev')} style={toolbarBtnStyle}>
+          <ChevronUp size={14} />
+        </button>
+        <button type="button" data-testid="edit-wf-find-next" onMouseDown={(e) => e.preventDefault()} title="Next match (Enter)" onClick={() => nav('next')} style={toolbarBtnStyle}>
+          <ChevronDown size={14} />
+        </button>
+        <button type="button" data-testid="edit-wf-find-close" onMouseDown={(e) => e.preventDefault()} title="Close (Escape)" onClick={props.onClose} style={toolbarBtnStyle}>
+          ×
+        </button>
+      </div>
+      <div style={findRowStyle}>
+        <input
+          data-testid="edit-wf-replace-input"
+          placeholder="Replace"
+          value={repl()}
+          onInput={(ev) => setRepl(ev.currentTarget.value)}
+          onKeyDown={onReplKey}
+          style={findInputStyle}
+        />
+        <button type="button" data-testid="edit-wf-replace-one" onMouseDown={(e) => e.preventDefault()} title="Replace current match (Enter)" onClick={() => doReplace(false)} style={findButtonStyle}>
+          Replace
+        </button>
+        <button type="button" data-testid="edit-wf-replace-all" onMouseDown={(e) => e.preventDefault()} title="Replace all matches" onClick={() => doReplace(true)} style={findButtonStyle}>
+          All
+        </button>
+      </div>
+    </div>
+  );
+};
+
 // EntryIcon picks the lucide glyph for a given entry type. Mirrors
 // the helper of the same name in wash-fm so the sidebar tree looks
 // identical to fm's: folder, file, symlink, or fallback file.
@@ -3050,6 +3207,67 @@ const toolbarSepStyle: JSX.CSSProperties = {
   height: '16px',
   background: tokens.borderMenu,
   margin: '0 4px',
+};
+
+// Find/replace bar for WYSIWYG tabs — floats top-right over the
+// document like VSCode's widget; inputs/buttons sized to match the
+// CM search panel's .cm-textfield/.cm-button theme above.
+const findBarStyle: JSX.CSSProperties = {
+  position: 'absolute',
+  top: '8px',
+  right: '24px',
+  'z-index': 5,
+  display: 'flex',
+  'flex-direction': 'column',
+  gap: '4px',
+  padding: '6px 8px',
+  background: tokens.bgMenu,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusMd}px`,
+  'box-shadow': tokens.shadowMenu,
+};
+
+const findRowStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'center',
+  gap: '4px',
+};
+
+const findInputStyle: JSX.CSSProperties = {
+  background: tokens.bgInset,
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}px`,
+  padding: '0 6px',
+  height: '22px',
+  width: '160px',
+  'box-sizing': 'border-box',
+  font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
+  outline: 'none',
+};
+
+const findCountStyle: JSX.CSSProperties = {
+  color: tokens.fgDim,
+  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  'min-width': '34px',
+  'text-align': 'right',
+  'white-space': 'nowrap',
+};
+
+const findButtonStyle: JSX.CSSProperties = {
+  background: 'transparent',
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}px`,
+  padding: '0 10px',
+  height: '22px',
+  'box-sizing': 'border-box',
+  display: 'inline-flex',
+  'align-items': 'center',
+  'justify-content': 'center',
+  'line-height': 1,
+  cursor: 'pointer',
+  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
 };
 
 const tabBarStyle: JSX.CSSProperties = {

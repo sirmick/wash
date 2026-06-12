@@ -11,6 +11,9 @@
 // save — documented in main.tsx.
 
 import { Editor, Extension } from '@tiptap/core';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
+import type { Node as PMNode } from '@tiptap/pm/model';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
 import { Table } from '@tiptap/extension-table';
@@ -29,6 +32,13 @@ export interface WysiwygOpts {
   onDirtyChange?: (dirty: boolean) => void;
 }
 
+// Find/replace state as reported to the find bar: total match count
+// plus the 0-based index of the current match (-1 when none).
+export interface WysiwygSearchState {
+  count: number;
+  current: number;
+}
+
 export interface WysiwygHandle {
   editor: Editor;
   getMarkdown(): string;
@@ -36,6 +46,15 @@ export interface WysiwygHandle {
   destroy(): void;
   focus(): void;
   markClean(): void;
+  search: {
+    set(query: string): WysiwygSearchState;
+    next(): WysiwygSearchState;
+    prev(): WysiwygSearchState;
+    replace(repl: string): WysiwygSearchState;
+    replaceAll(repl: string): WysiwygSearchState;
+    clear(): void;
+    state(): WysiwygSearchState;
+  };
 }
 
 // Tab-style keyboard binding: in TipTap a plain Tab key would move
@@ -57,6 +76,107 @@ const ListTab = Extension.create({
         return false;
       },
     };
+  },
+});
+
+// ---- find / replace ----
+//
+// ProseMirror has no built-in document search, so the WYSIWYG side
+// carries its own tiny plugin: plain-text case-insensitive matching
+// with inline decorations for every hit plus a distinct class on the
+// current one. The find bar in main.tsx drives it exclusively through
+// the WysiwygHandle.search API — the plugin never owns UI.
+
+interface SearchMatch {
+  from: number;
+  to: number;
+}
+
+interface SearchPluginState {
+  query: string;
+  matches: SearchMatch[];
+  current: number; // index into matches, -1 when none
+}
+
+const searchKey = new PluginKey<SearchPluginState>('washSearch');
+
+// findMatches scans every textblock, flattening its inline text nodes
+// into one string so a match can span mark boundaries (e.g. "foo**bar**"
+// matches "foobar"). Non-text inline nodes (images, hard breaks)
+// contribute a NUL sentinel so matches can't silently swallow them.
+function findMatches(doc: PMNode, query: string): SearchMatch[] {
+  const out: SearchMatch[] = [];
+  if (!query) return out;
+  const q = query.toLowerCase();
+  doc.descendants((node, pos) => {
+    if (!node.isTextblock) return true;
+    let text = '';
+    const segs: { start: number; end: number; pos: number }[] = [];
+    node.content.forEach((child, offset) => {
+      if (child.isText && child.text) {
+        segs.push({ start: text.length, end: text.length + child.text.length, pos: pos + 1 + offset });
+        text += child.text;
+      } else {
+        text += '\u0000';
+      }
+    });
+    const posAt = (off: number): number | null => {
+      for (const s of segs) if (off >= s.start && off < s.end) return s.pos + (off - s.start);
+      return null;
+    };
+    const lower = text.toLowerCase();
+    let i = lower.indexOf(q);
+    while (i >= 0) {
+      const from = posAt(i);
+      const last = posAt(i + q.length - 1);
+      if (from != null && last != null) out.push({ from, to: last + 1 });
+      i = lower.indexOf(q, i + q.length);
+    }
+    return false; // children already consumed via the flat scan above
+  });
+  return out;
+}
+
+// The dispatcher (handle.search below) computes the desired query +
+// current index and ships them via meta; apply() recomputes matches
+// against the post-transaction doc. Plain doc edits with an active
+// query also rescan so highlights track typing — the scan is a linear
+// string pass, cheap at editor-document sizes.
+const SearchExt = Extension.create({
+  name: 'washSearch',
+  addProseMirrorPlugins() {
+    return [
+      new Plugin<SearchPluginState>({
+        key: searchKey,
+        state: {
+          init: () => ({ query: '', matches: [], current: -1 }),
+          apply(tr, prev): SearchPluginState {
+            const meta = tr.getMeta(searchKey) as { query: string; current: number } | undefined;
+            if (meta) {
+              const matches = findMatches(tr.doc, meta.query);
+              const current = matches.length ? Math.min(Math.max(meta.current, 0), matches.length - 1) : -1;
+              return { query: meta.query, matches, current };
+            }
+            if (tr.docChanged && prev.query) {
+              const matches = findMatches(tr.doc, prev.query);
+              const current = matches.length ? Math.min(Math.max(prev.current, 0), matches.length - 1) : -1;
+              return { query: prev.query, matches, current };
+            }
+            return prev;
+          },
+        },
+        props: {
+          decorations(state) {
+            const s = searchKey.getState(state);
+            if (!s || !s.matches.length) return DecorationSet.empty;
+            return DecorationSet.create(state.doc, s.matches.map((m, i) =>
+              Decoration.inline(m.from, m.to, {
+                class: i === s.current ? 'wash-find-match wash-find-current' : 'wash-find-match',
+              })));
+          },
+        },
+      }),
+    ];
   },
 });
 
@@ -171,6 +291,15 @@ function injectStyles() {
   outline-offset: 2px;
 }
 .wash-wysiwyg ::selection { background: ${tokens.bgRowSelected}; }
+/* Find/replace match highlights — same palette as the CM source
+   view's .cm-searchMatch so the two modes read identically. */
+.wash-wysiwyg .wash-find-match {
+  background: rgba(180, 180, 80, 0.25);
+  outline: 1px solid rgba(180, 180, 80, 0.5);
+}
+.wash-wysiwyg .wash-find-current {
+  background: rgba(180, 180, 80, 0.5);
+}
 `;
   document.head.appendChild(style);
 }
@@ -206,6 +335,7 @@ export function createWysiwyg(opts: WysiwygOpts): WysiwygHandle {
       TaskList,
       TaskItem.configure({ nested: true }),
       ListTab,
+      SearchExt,
       Markdown.configure({
         html: true,
         tightLists: true,
@@ -237,6 +367,90 @@ export function createWysiwyg(opts: WysiwygOpts): WysiwygHandle {
   if (opts.content) {
     editor.commands.setContent(opts.content, { emitUpdate: false });
   }
+
+  // ---- search API ----
+  // All methods guard on isDestroyed because the find bar holds the
+  // handle across teardown races (wysiwyg→source toggle destroys the
+  // editor before Solid unmounts the bar).
+  const searchState = (): WysiwygSearchState => {
+    if (editor.isDestroyed) return { count: 0, current: -1 };
+    const s = searchKey.getState(editor.state);
+    return { count: s?.matches.length ?? 0, current: s?.current ?? -1 };
+  };
+  // Scroll the current match into view inside the .wash-wysiwyg
+  // scroll container. Decorations don't move the selection, so we
+  // walk to the match's DOM node directly.
+  const scrollToCurrent = () => {
+    const s = searchKey.getState(editor.state);
+    if (!s || s.current < 0) return;
+    const m = s.matches[s.current];
+    const dom = editor.view.domAtPos(m.from);
+    const el = dom.node instanceof HTMLElement ? dom.node : dom.node.parentElement;
+    el?.scrollIntoView({ block: 'nearest' });
+  };
+  const dispatchSearch = (query: string, current: number): WysiwygSearchState => {
+    if (editor.isDestroyed) return { count: 0, current: -1 };
+    editor.view.dispatch(editor.state.tr.setMeta(searchKey, { query, current }));
+    scrollToCurrent();
+    return searchState();
+  };
+  const search: WysiwygHandle['search'] = {
+    // set() re-anchors to the first match at/after the caret so a
+    // fresh Ctrl+F finds "the next occurrence from here", like CM.
+    set: (query: string) => {
+      if (editor.isDestroyed) return { count: 0, current: -1 };
+      const caret = editor.state.selection.from;
+      const matches = findMatches(editor.state.doc, query);
+      let cur = matches.findIndex((m) => m.from >= caret);
+      if (cur < 0) cur = matches.length ? 0 : -1;
+      return dispatchSearch(query, cur);
+    },
+    next: () => {
+      const s = searchState();
+      if (!s.count || editor.isDestroyed) return s;
+      const q = searchKey.getState(editor.state)!.query;
+      return dispatchSearch(q, (s.current + 1) % s.count);
+    },
+    prev: () => {
+      const s = searchState();
+      if (!s.count || editor.isDestroyed) return s;
+      const q = searchKey.getState(editor.state)!.query;
+      return dispatchSearch(q, (s.current - 1 + s.count) % s.count);
+    },
+    // replace() swaps the current match; the plugin's docChanged
+    // rescan keeps the same index, which now points at what was the
+    // following match — so repeated Replace walks the document.
+    replace: (repl: string) => {
+      if (editor.isDestroyed) return { count: 0, current: -1 };
+      const s = searchKey.getState(editor.state);
+      if (!s || s.current < 0) return searchState();
+      const m = s.matches[s.current];
+      editor.view.dispatch(editor.state.tr.insertText(repl, m.from, m.to));
+      scrollToCurrent();
+      return searchState();
+    },
+    // replaceAll() applies right-to-left in one transaction so earlier
+    // replacements don't shift later match positions (and it's a
+    // single undo step).
+    replaceAll: (repl: string) => {
+      if (editor.isDestroyed) return { count: 0, current: -1 };
+      const s = searchKey.getState(editor.state);
+      if (!s || !s.matches.length) return searchState();
+      const tr = editor.state.tr;
+      for (let i = s.matches.length - 1; i >= 0; i--) {
+        tr.insertText(repl, s.matches[i].from, s.matches[i].to);
+      }
+      editor.view.dispatch(tr);
+      return searchState();
+    },
+    clear: () => {
+      if (editor.isDestroyed) return;
+      const s = searchKey.getState(editor.state);
+      if (s?.query) dispatchSearch('', -1);
+    },
+    state: searchState,
+  };
+
   return {
     editor,
     getMarkdown: () => getMd(editor),
@@ -256,6 +470,7 @@ export function createWysiwyg(opts: WysiwygOpts): WysiwygHandle {
         opts.onDirtyChange?.(false);
       }
     },
+    search,
   };
 }
 
