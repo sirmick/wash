@@ -45,7 +45,7 @@ var segs = []seg{
 	{"cam", 30, "10.30.0.1"},
 }
 
-var internet = [][2]string{{"internet-v4", "8.8.8.8"}}
+var internet = [][2]string{{"internet", "1.1.1.1"}}
 
 var probeAddr = map[string]string{} // segment -> leased probe IP
 
@@ -125,6 +125,11 @@ func matrixTargets() [][2]string {
 
 func applyRouter(ctx context.Context, w *vm.OpenWRT) {
 	var b strings.Builder
+	// Clear the STOCK firewall zones/forwardings first — OpenWRT ships lan+wan
+	// zones, so re-adding our own would duplicate the names and fw4 would refuse
+	// to load (→ kernel default-drop). These are shell loops, before the uci batch.
+	b.WriteString("while uci -q delete firewall.@zone[0]; do :; done\n")
+	b.WriteString("while uci -q delete firewall.@forwarding[0]; do :; done\n")
 	b.WriteString("uci batch <<'UCI'\n")
 	b.WriteString("delete network.@device[0]\ndelete network.lan\ndelete network.wan\ndelete network.wan6\n")
 	b.WriteString("set network.wan=interface\nset network.wan.device='eth0'\nset network.wan.proto='dhcp'\n")
@@ -143,7 +148,12 @@ func applyRouter(ctx context.Context, w *vm.OpenWRT) {
 	for i, f := range fwd {
 		fmt.Fprintf(&b, "set firewall.f%d=forwarding\nset firewall.f%d.src='%s'\nset firewall.f%d.dest='%s'\n", i, i, f[0], i, f[1])
 	}
-	b.WriteString("UCI\nuci commit\n/etc/init.d/network restart >/dev/null 2>&1\n/etc/init.d/firewall restart >/dev/null 2>&1\nsleep 6\necho '=GW='; ip -4 -o addr show 2>/dev/null | grep -oE 'br-lan\\.[0-9]+|eth0 .*inet [0-9.]+' | head\necho APPLIED\n")
+	// network restart is ASYNC — fw4 must reload only AFTER the VLAN L3 devices
+	// exist, else the zones bind to nothing and input falls to default-drop (the
+	// known UCI-applier reload-ordering bug). Wait for br-lan.10, then reload fw4.
+	b.WriteString("UCI\nuci commit\n/etc/init.d/network restart >/dev/null 2>&1\n")
+	b.WriteString("for i in $(seq 1 20); do ip link show br-lan.10 >/dev/null 2>&1 && break; sleep 1; done\nsleep 2\n")
+	b.WriteString("/etc/init.d/firewall restart >/dev/null 2>&1\nsleep 3\necho APPLIED\n")
 	out, err := w.Run(ctx, b.String())
 	if err != nil || !strings.Contains(out, "APPLIED") {
 		die("router apply failed: %v\n%s", err, out)
@@ -156,8 +166,8 @@ func applyRouter(ctx context.Context, w *vm.OpenWRT) {
 		}
 		time.Sleep(2 * time.Second)
 	}
-	// diagnostic: VLAN L3 devices + dnsmasq.
-	d, _ := w.Run(ctx, "echo DIAG:; ip -br -4 addr show 2>/dev/null | grep 'br-lan\\.' ; pidof dnsmasq >/dev/null && echo dnsmasq=up || echo dnsmasq=down")
+	// diagnostic: forwardings + masq loaded? + ip_forward + a forward count.
+	d, _ := w.Run(ctx, "echo DIAG:; echo ipfwd=$(cat /proc/sys/net/ipv4/ip_forward); echo fwds=$(uci show firewall | grep -c =forwarding); echo masq=$(nft list table inet fw4 2>/dev/null | grep -c masquerade); echo fwdrules=$(nft list table inet fw4 2>/dev/null | grep -cE 'jump forward|accept')")
 	if i := strings.Index(d, "DIAG:"); i >= 0 {
 		fmt.Printf("  router: %s\n", strings.Join(strings.Fields(d[i+5:]), " "))
 	}
@@ -171,6 +181,7 @@ func probeUp(ctx context.Context, w *vm.OpenWRT, s seg) string {
 	script := fmt.Sprintf(`
 /etc/init.d/network stop >/dev/null 2>&1
 /etc/init.d/dnsmasq stop >/dev/null 2>&1
+/etc/init.d/firewall stop >/dev/null 2>&1
 ip link set eth0 nomaster 2>/dev/null
 ip addr flush dev eth0 2>/dev/null
 ip link set eth0 up 2>/dev/null
@@ -192,7 +203,13 @@ func pingAll(ctx context.Context, w *vm.OpenWRT, targets [][2]string) map[string
 			res[t[0]] = false
 			continue
 		}
-		out, _ := w.Run(ctx, fmt.Sprintf("ping -c1 -W2 %s >/dev/null 2>&1; echo RESULT:$?", t[1]))
+		// internet via TCP (qemu slirp NATs TCP, not ICMP); everything else by ping
+		// (-c3 — the first packet is often lost to ARP; exit 0 if any reply).
+		cmd := fmt.Sprintf("ping -c3 -W1 %s >/dev/null 2>&1; echo RESULT:$?", t[1])
+		if strings.HasPrefix(t[0], "internet") {
+			cmd = fmt.Sprintf("wget -q -T4 -O /dev/null http://%s/ 2>/dev/null; echo RESULT:$?", t[1])
+		}
+		out, _ := w.Run(ctx, cmd)
 		m := resultRe.FindStringSubmatch(out)
 		res[t[0]] = m != nil && m[1] == "0"
 	}
@@ -231,10 +248,12 @@ func assertPolicy(r map[string]map[string]bool) bool {
 	check("lan reaches the internet", r["lan"]["internet-v4"])
 	check("iot reaches the internet", r["iot"]["internet-v4"])
 	check("cam is quarantined from the internet", !r["cam"]["internet-v4"])
-	check("lan can reach the cam segment (view cameras)", r["lan"]["cam-gw"])
-	check("iot cannot reach lan", !r["iot"]["lan-gw"])
-	check("iot cannot reach cam", !r["iot"]["cam-gw"])
-	check("cam cannot reach lan", !r["cam"]["lan-gw"])
+	// isolation is a FORWARD property → test probe→probe, not the gateway (a
+	// gateway ping is router INPUT, allowed by every zone's input policy).
+	check("lan can reach a cam host (view cameras)", r["lan"]["cam-probe"])
+	check("iot cannot reach a lan host", !r["iot"]["lan-probe"])
+	check("iot cannot reach a cam host", !r["iot"]["cam-probe"])
+	check("cam cannot reach a lan host", !r["cam"]["lan-probe"])
 	return ok
 }
 
