@@ -33,18 +33,37 @@ type pubStation struct {
 	Codec string `json:"codec"`
 }
 
-// curated free/open stations — SomaFM + Radio Paradise (Icecast, proper
-// HTTP, direct streams; classic Shoutcast "ICY 200" servers need special
-// handling and are out of scope for v1). docs/RADIO.md §2.
+// curated free/open stations — SomaFM + Radio Paradise + BassDrive
+// (Icecast/HTTP, direct streams; classic Shoutcast "ICY 200" servers need
+// special handling and are out of scope). The Codec field carries a short
+// genre label (handier than the bitrate for browsing). docs/RADIO.md §2.
 var curated = []station{
-	{Name: "SomaFM — Groove Salad", URL: "https://ice1.somafm.com/groovesalad-128-mp3", Codec: "mp3 128k"},
-	{Name: "SomaFM — Drone Zone", URL: "https://ice1.somafm.com/dronezone-128-mp3", Codec: "mp3 128k"},
-	{Name: "SomaFM — Indie Pop Rocks", URL: "https://ice1.somafm.com/indiepop-128-mp3", Codec: "mp3 128k"},
-	{Name: "SomaFM — Lush", URL: "https://ice1.somafm.com/lush-128-mp3", Codec: "mp3 128k"},
-	{Name: "SomaFM — DEF CON Radio", URL: "https://ice1.somafm.com/defcon-128-mp3", Codec: "mp3 128k"},
-	{Name: "SomaFM — Secret Agent", URL: "https://ice1.somafm.com/secretagent-128-mp3", Codec: "mp3 128k"},
-	{Name: "SomaFM — Beat Blender", URL: "https://ice1.somafm.com/beatblender-128-mp3", Codec: "mp3 128k"},
-	{Name: "Radio Paradise — Main", URL: "https://stream.radioparadise.com/mp3-128", Codec: "mp3 128k"},
+	// electronic / chill
+	{Name: "SomaFM — Groove Salad", URL: "https://ice1.somafm.com/groovesalad-128-mp3", Codec: "chill"},
+	{Name: "SomaFM — Beat Blender", URL: "https://ice1.somafm.com/beatblender-128-mp3", Codec: "deep house"},
+	{Name: "SomaFM — The Trip", URL: "https://ice1.somafm.com/thetrip-128-mp3", Codec: "prog house"},
+	{Name: "SomaFM — cliqhop idm", URL: "https://ice1.somafm.com/cliqhop-128-mp3", Codec: "IDM"},
+	{Name: "SomaFM — PopTron", URL: "https://ice1.somafm.com/poptron-128-mp3", Codec: "electropop"},
+	{Name: "SomaFM — Vaporwaves", URL: "https://ice1.somafm.com/vaporwaves-128-mp3", Codec: "vaporwave"},
+	// drum & bass / dubstep
+	{Name: "BassDrive", URL: "http://chi.bassdrive.co/", Codec: "drum & bass"},
+	{Name: "SomaFM — Fluid", URL: "https://ice1.somafm.com/fluid-128-mp3", Codec: "dnb / future soul"},
+	{Name: "SomaFM — Dub Step Beyond", URL: "https://ice1.somafm.com/dubstep-128-mp3", Codec: "dubstep"},
+	// ambient / space
+	{Name: "SomaFM — Drone Zone", URL: "https://ice1.somafm.com/dronezone-128-mp3", Codec: "ambient"},
+	{Name: "SomaFM — Synphaera", URL: "https://ice1.somafm.com/synphaera-128-mp3", Codec: "ambient space"},
+	// rock / metal
+	{Name: "SomaFM — BAGeL Radio", URL: "https://ice1.somafm.com/bagel-128-mp3", Codec: "alt / modern rock"},
+	{Name: "Radio Paradise — Rock", URL: "https://stream.radioparadise.com/rock-128", Codec: "rock"},
+	{Name: "SomaFM — Metal Detector", URL: "https://ice1.somafm.com/metal-128-mp3", Codec: "metal"},
+	// indie / pop / vocal
+	{Name: "SomaFM — Indie Pop Rocks", URL: "https://ice1.somafm.com/indiepop-128-mp3", Codec: "indie pop"},
+	{Name: "SomaFM — Underground 80s", URL: "https://ice1.somafm.com/u80s-128-mp3", Codec: "80s"},
+	{Name: "SomaFM — Lush", URL: "https://ice1.somafm.com/lush-128-mp3", Codec: "vocal chill"},
+	// lounge / eclectic
+	{Name: "SomaFM — Secret Agent", URL: "https://ice1.somafm.com/secretagent-128-mp3", Codec: "spy lounge"},
+	{Name: "SomaFM — DEF CON Radio", URL: "https://ice1.somafm.com/defcon-128-mp3", Codec: "hacker"},
+	{Name: "Radio Paradise — Main", URL: "https://stream.radioparadise.com/mp3-128", Codec: "eclectic"},
 }
 
 // streamClient has no overall timeout (the body is an endless stream); the
