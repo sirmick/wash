@@ -9,17 +9,35 @@ import type { AddressInfo } from 'node:net';
 let server: Server;
 let streamUrl: string;
 
+// Fake Icecast: when the proxy asks for ICY metadata, interleave a
+// StreamTitle block every `metaint` audio bytes.
 test.beforeAll(async () => {
+  const metaint = 64;
+  const title = "StreamTitle='Now Playing Track';";
+  const padLen = Math.ceil(title.length / 16) * 16;
+  const metaBuf = Buffer.alloc(padLen);
+  metaBuf.write(title);
+  const lenByte = Buffer.from([padLen / 16]);
   server = createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'audio/mpeg' });
-    res.write(Buffer.alloc(8192));
+    const icy = req.headers['icy-metadata'] === '1';
+    const headers: Record<string, string> = { 'Content-Type': 'audio/mpeg' };
+    if (icy) headers['icy-metaint'] = String(metaint);
+    res.writeHead(200, headers);
+    const block = () => {
+      res.write(Buffer.alloc(metaint));
+      if (icy) {
+        res.write(lenByte);
+        res.write(metaBuf);
+      }
+    };
+    block();
     const iv = setInterval(() => {
       try {
-        res.write(Buffer.alloc(1024));
+        block();
       } catch {
         clearInterval(iv);
       }
-    }, 200);
+    }, 80);
     req.on('close', () => clearInterval(iv));
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
@@ -53,10 +71,13 @@ test.describe('radio app (native player)', () => {
     const resp = await streamed;
     expect(resp.status()).toBe(200);
 
-    // The tuned row is marked playing and now-playing reaches the sidebar.
+    // The tuned row is marked playing.
     await expect(rows.last()).toHaveAttribute('data-playing', 'true');
+
+    // The live ICY StreamTitle propagates to the app + the sidebar.
+    await expect(page.locator('[data-testid="radio-nowplaying"]')).toContainText('Now Playing Track');
     const nowPlaying = page.locator('[data-testid="audio-nowplaying"]');
     await expect(nowPlaying).toBeVisible();
-    await expect(nowPlaying).toContainText('127.0.0.1');
+    await expect(nowPlaying).toContainText('Now Playing Track');
   });
 });

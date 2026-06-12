@@ -1,7 +1,9 @@
 package radio
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -115,6 +117,10 @@ func serveAndPublish(c *sdk.Conn, instanceID string, s *svc) {
 		log.Printf("wash-radio: listen %s: %v", sock, err)
 		return
 	}
+	// onTitle pushes a live ICY track title to this instance's FE.
+	onTitle := func(title string) {
+		_ = c.SendAppMsg(map[string]any{"kind": "now_playing", "title": title})
+	}
 	mux := http.NewServeMux()
 	// /stream?i=N reverse-proxies station N. Same origin as the shell, so
 	// the browser's <audio> has no mixed-content/CORS problem.
@@ -131,7 +137,7 @@ func serveAndPublish(c *sdk.Conn, instanceID string, s *svc) {
 			http.NotFound(w, r)
 			return
 		}
-		proxyStream(w, r, upstream)
+		proxyStream(w, r, upstream, onTitle)
 	})
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(ln) }()
@@ -159,16 +165,20 @@ func serveAndPublish(c *sdk.Conn, instanceID string, s *svc) {
 	}()
 }
 
-// proxyStream connects to upstream and streams its body to w, flushing
-// each chunk so the browser gets continuous audio. The browser cancelling
-// (pause / station switch) closes r.Context() → the copy unwinds.
-func proxyStream(w http.ResponseWriter, r *http.Request, upstream string) {
+// proxyStream connects to upstream (requesting ICY metadata) and streams
+// the audio to w, flushing each chunk. If the upstream interleaves ICY
+// metadata (icy-metaint), we strip those blocks from the forwarded bytes
+// (the browser's <audio> can't parse them) and push each new StreamTitle
+// to the FE via onTitle. The browser cancelling (pause / station switch)
+// closes r.Context() → the copy unwinds.
+func proxyStream(w http.ResponseWriter, r *http.Request, upstream string, onTitle func(string)) {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstream, nil)
 	if err != nil {
 		http.Error(w, "bad upstream", http.StatusBadGateway)
 		return
 	}
 	req.Header.Set("User-Agent", "wash-radio/0.1")
+	req.Header.Set("Icy-MetaData", "1")
 	resp, err := streamClient.Do(req)
 	if err != nil {
 		http.Error(w, "upstream unreachable", http.StatusBadGateway)
@@ -180,21 +190,87 @@ func proxyStream(w http.ResponseWriter, r *http.Request, upstream string) {
 	}
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
-	buf := make([]byte, 32*1024)
-	for {
-		n, rerr := resp.Body.Read(buf)
-		if n > 0 {
-			if _, werr := w.Write(buf[:n]); werr != nil {
-				return
-			}
-			if flusher != nil {
-				flusher.Flush()
-			}
-		}
-		if rerr != nil {
-			return
+	flush := func() {
+		if flusher != nil {
+			flusher.Flush()
 		}
 	}
+
+	metaint, _ := strconv.Atoi(resp.Header.Get("Icy-Metaint"))
+	buf := make([]byte, 32*1024)
+
+	// No ICY metadata → straight streaming copy.
+	if metaint <= 0 {
+		for {
+			n, rerr := resp.Body.Read(buf)
+			if n > 0 {
+				if _, werr := w.Write(buf[:n]); werr != nil {
+					return
+				}
+				flush()
+			}
+			if rerr != nil {
+				return
+			}
+		}
+	}
+
+	// ICY: forward `metaint` audio bytes, then read+strip a metadata block.
+	var last string
+	remaining := metaint
+	lenb := make([]byte, 1)
+	for {
+		if remaining > 0 {
+			toRead := remaining
+			if toRead > len(buf) {
+				toRead = len(buf)
+			}
+			n, rerr := resp.Body.Read(buf[:toRead])
+			if n > 0 {
+				if _, werr := w.Write(buf[:n]); werr != nil {
+					return
+				}
+				flush()
+				remaining -= n
+			}
+			if rerr != nil {
+				return
+			}
+			continue
+		}
+		if _, err := io.ReadFull(resp.Body, lenb); err != nil {
+			return
+		}
+		if mlen := int(lenb[0]) * 16; mlen > 0 {
+			mbuf := make([]byte, mlen)
+			if _, err := io.ReadFull(resp.Body, mbuf); err != nil {
+				return
+			}
+			if title := parseStreamTitle(string(bytes.TrimRight(mbuf, "\x00"))); title != "" && title != last {
+				last = title
+				onTitle(title)
+			}
+		}
+		remaining = metaint
+	}
+}
+
+// parseStreamTitle pulls the track out of an ICY metadata block, e.g.
+// `StreamTitle='Artist - Track';StreamUrl='…';`.
+func parseStreamTitle(meta string) string {
+	const key = "StreamTitle='"
+	i := strings.Index(meta, key)
+	if i < 0 {
+		return ""
+	}
+	rest := meta[i+len(key):]
+	if j := strings.Index(rest, "';"); j >= 0 {
+		return rest[:j]
+	}
+	if j := strings.LastIndex(rest, "'"); j >= 0 {
+		return rest[:j]
+	}
+	return ""
 }
 
 // envStations parses $WASH_RADIO_STATIONS — comma-separated "Name|url"

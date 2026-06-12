@@ -44,6 +44,7 @@ function RadioApp(props: WashAppProps) {
   const [status, setStatus] = createSignal('stopped');
   const [srcVol, setSrcVol] = createSignal(1);
   const [addUrl, setAddUrl] = createSignal('');
+  const [icyTitle, setIcyTitle] = createSignal(''); // live track from ICY metadata
   let masterVol = 1;
 
   const current = () => stations()[index()];
@@ -57,6 +58,7 @@ function RadioApp(props: WashAppProps) {
     if (!st || !base()) return;
     setIndex(i);
     setSelected(i);
+    setIcyTitle(''); // clear the previous station's track
     nonce += 1;
     audioEl.src = `${base()}stream?i=${i}&n=${nonce}`;
     applyVolume();
@@ -115,12 +117,15 @@ function RadioApp(props: WashAppProps) {
     audio = createAudioSource({
       instance: props.instance,
       host: props.host,
-      snapshot: () => ({ title: current()?.name ?? '', status: status(), pos: 0, dur: 0 }),
+      snapshot: () => ({ title: icyTitle() || current()?.name || '', status: status(), pos: 0, dur: 0 }),
       onCmd,
     });
     const onMsg = (ev: Event) => {
-      const m = (ev as CustomEvent).detail as { kind?: string };
-      if (m?.kind === 'stations_ok') {
+      const m = (ev as CustomEvent).detail as { kind?: string; title?: string };
+      if (m?.kind === 'now_playing') {
+        setIcyTitle(m.title ?? '');
+        audio?.report();
+      } else if (m?.kind === 'stations_ok') {
         const s = m as StationsOk;
         const had = stations().length;
         setStations(s.stations);
@@ -154,8 +159,8 @@ function RadioApp(props: WashAppProps) {
     >
       <NowPlaying
         data-testid="radio-nowplaying"
-        title={current()?.name ?? '—'}
-        subtitle={current() ? current()!.codec : `${stations().length} stations`}
+        title={icyTitle() || current()?.name || '—'}
+        subtitle={icyTitle() ? current()?.name : current() ? current()!.codec : `${stations().length} stations`}
         meta={status() === 'playing' ? '● LIVE' : ''}
       />
 
