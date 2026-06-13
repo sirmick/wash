@@ -14,7 +14,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { ConfirmDialog, FilePicker, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens } from '@wash/ui';
+import { ConfirmDialog, FilePicker, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens, washCopyText, washPasteText } from '@wash/ui';
 import type { TerminalAPI } from '@wash/ui';
 import {
   joinPath, baseName, parentPath,
@@ -327,6 +327,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     | null
     | { x: number; y: number; entry: Entry; path: string }
   >(null);
+  // textCtxMenu drives the right-click menu over the editor TEXT
+  // area (CM + wysiwyg layers) — Cut/Copy/Paste against the wash
+  // clipboard. Distinct from ctxMenu, which owns the sidebar rows.
+  const [textCtxMenu, setTextCtxMenu] = createSignal<{ x: number; y: number } | null>(null);
+
   // untitledCounter — monotonically increasing index for naming
   // fresh Untitled-N buffers. Resets only on app remount.
   let untitledCounter = 0;
@@ -823,16 +828,59 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     h?.search.clear();
     h?.focus();
   };
-  // Cut/Copy/Paste route through document.execCommand, which is
-  // technically deprecated but is the only path that lets a menu
-  // click drive the clipboard (programmatic Clipboard API needs a
-  // user gesture on the menu item — it has one, but Permissions
-  // around 'clipboard-write' are inconsistent across browsers).
-  // CodeMirror's own keybindings remain the recommended path.
-  const cmdClipboard = (op: 'cut' | 'copy' | 'paste') => {
-    if (!editorView) return;
-    editorView.focus();
-    try { document.execCommand(op); } catch { /* ignore — best effort */ }
+  // Cut/Copy/Paste against the active editor model (CM or TipTap),
+  // backed by the wash clipboard. Copy/cut mirror to the system
+  // clipboard via washCopyText (the menu/context click is the user
+  // gesture that allows it); paste reads the wash clipboard — the
+  // system clipboard isn't programmatically readable on an insecure
+  // origin, so external content enters via Ctrl+V (native paste)
+  // which the shell's copy/paste listeners fold into the wash side.
+  const selectedEditorText = (): string => {
+    const t = activeTab();
+    if (!t) return '';
+    if (t.mode === 'wysiwyg') {
+      const h = wysHandles.get(t.id);
+      if (!h) return '';
+      const st = h.editor.state;
+      return st.doc.textBetween(st.selection.from, st.selection.to, '\n');
+    }
+    if (!editorView) return '';
+    const sel = editorView.state.selection.main;
+    return editorView.state.sliceDoc(sel.from, sel.to);
+  };
+  const cmdCopy = () => {
+    const text = selectedEditorText();
+    if (text) washCopyText(text);
+  };
+  const cmdCut = () => {
+    const text = selectedEditorText();
+    if (!text) return;
+    washCopyText(text);
+    const t = activeTab();
+    if (t?.mode === 'wysiwyg') {
+      wysHandles.get(t.id)?.editor.chain().focus().deleteSelection().run();
+    } else if (editorView) {
+      editorView.focus();
+      editorView.dispatch(editorView.state.replaceSelection(''));
+    }
+  };
+  const cmdPaste = () => {
+    void washPasteText().then((text) => {
+      if (!text) return;
+      const t = activeTab();
+      if (t?.mode === 'wysiwyg') {
+        const h = wysHandles.get(t.id);
+        if (!h) return;
+        h.editor.commands.focus();
+        // pasteText runs ProseMirror's normal paste pipeline, so
+        // tiptap-markdown's transformPastedText applies — pasting
+        // "# title" gives a heading, same as a native Ctrl+V.
+        h.editor.view.pasteText(text);
+      } else if (editorView) {
+        editorView.focus();
+        editorView.dispatch({ ...editorView.state.replaceSelection(text), scrollIntoView: true });
+      }
+    });
   };
 
   // toggleWysiwyg flips the active tab's editor mode. .md files that
@@ -2110,9 +2158,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             <MenuItem label="Undo" trailing={<kbd style={kbdStyle}>Ctrl+Z</kbd>} onClick={run(cmdUndo)} data-testid="edit-menu-undo" />
             <MenuItem label="Redo" trailing={<kbd style={kbdStyle}>Ctrl+Shift+Z</kbd>} onClick={run(cmdRedo)} data-testid="edit-menu-redo" />
             <MenuSeparator />
-            <MenuItem label="Cut" trailing={<kbd style={kbdStyle}>Ctrl+X</kbd>} onClick={run(() => cmdClipboard('cut'))} data-testid="edit-menu-cut" />
-            <MenuItem label="Copy" trailing={<kbd style={kbdStyle}>Ctrl+C</kbd>} onClick={run(() => cmdClipboard('copy'))} data-testid="edit-menu-copy" />
-            <MenuItem label="Paste" trailing={<kbd style={kbdStyle}>Ctrl+V</kbd>} onClick={run(() => cmdClipboard('paste'))} data-testid="edit-menu-paste" />
+            <MenuItem label="Cut" trailing={<kbd style={kbdStyle}>Ctrl+X</kbd>} onClick={run(cmdCut)} data-testid="edit-menu-cut" />
+            <MenuItem label="Copy" trailing={<kbd style={kbdStyle}>Ctrl+C</kbd>} onClick={run(cmdCopy)} data-testid="edit-menu-copy" />
+            <MenuItem label="Paste" trailing={<kbd style={kbdStyle}>Ctrl+V</kbd>} onClick={run(cmdPaste)} data-testid="edit-menu-paste" />
             <MenuSeparator />
             <MenuItem label="Find" trailing={<kbd style={kbdStyle}>Ctrl+F</kbd>} onClick={run(cmdFind)} data-testid="edit-menu-find" />
             <MenuItem label="Find & Replace" trailing={<kbd style={kbdStyle}>Ctrl+H</kbd>} onClick={run(cmdFind)} data-testid="edit-menu-replace" />
@@ -2399,7 +2447,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               Each editor layer owns its own focus and keyboard; the
               app-level keydown handler still fires because it's on
               props.host above them. */}
-          <div style={editorBodyStyle}>
+          <div
+            style={editorBodyStyle}
+            onContextMenu={(ev) => {
+              // Right-click over the text layers opens the wash
+              // Cut/Copy/Paste menu (the native menu's Paste can't
+              // read the system clipboard on an insecure origin
+              // anyway). No menu without a tab to act on.
+              if (!activeTab() || activeTab()?.binary) return;
+              ev.preventDefault();
+              setTextCtxMenu({ x: ev.clientX, y: ev.clientY });
+            }}
+          >
             <div
               ref={editorMountEl!}
               data-testid="edit-cm"
@@ -2584,6 +2643,20 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       </Show>
 
       {/* right-click context menu — fires on row right-click. */}
+      {/* editor text-area context menu: wash clipboard actions. */}
+      <Show when={textCtxMenu()}>
+        <Menu
+          x={textCtxMenu()!.x}
+          y={textCtxMenu()!.y}
+          onDismiss={() => setTextCtxMenu(null)}
+          data-testid="edit-text-ctx-menu"
+        >
+          <MenuItem label="Cut" onClick={() => { setTextCtxMenu(null); cmdCut(); }} data-testid="edit-text-ctx-cut" />
+          <MenuItem label="Copy" onClick={() => { setTextCtxMenu(null); cmdCopy(); }} data-testid="edit-text-ctx-copy" />
+          <MenuItem label="Paste" onClick={() => { setTextCtxMenu(null); cmdPaste(); }} data-testid="edit-text-ctx-paste" />
+        </Menu>
+      </Show>
+
       <Show when={ctxMenu()}>
         <Menu
           x={ctxMenu()!.x}

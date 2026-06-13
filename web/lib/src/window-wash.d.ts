@@ -101,6 +101,13 @@ interface WashGlobals {
   // itself, so it doesn't head-of-line block control frames (like a
   // cancel) behind its data. 0 on transports that don't expose it.
   rawBufferedAmount(): number;
+  // Router-held clipboard — the wash-internal clipboard every app
+  // shares. Distinct from the browser's system clipboard, which is
+  // gesture-gated; the washCopyText helper in @wash/ui bridges the
+  // two where the browser allows.
+  clipboardSetText(text: string): void;
+  clipboardGetText(): Promise<string>;
+  onClipboardChanged(cb: (c: { mime: string; text: string }) => void): () => void;
 }
 
 interface Window {

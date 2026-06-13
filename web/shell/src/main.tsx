@@ -183,6 +183,14 @@ const windowsSub = new Sub<WindowInfo[]>([]);
 const viewportSub = new Sub<{ vx: number; vy: number }>({ vx: 0, vy: 0 });
 const screenSub = new Sub<{ w: number; h: number }>({ w: window.innerWidth, h: window.innerHeight });
 
+// Router-held clipboard, mirrored shell-side. The Sub carries the
+// latest content pushed by clipboard.changed broadcasts; gets resolve
+// through pendingClipboardGets (req_id → resolver), same shape the Go
+// SDK uses for its ClipboardGet round-trip.
+const clipboardSub = new Sub<{ mime: string; text: string }>({ mime: '', text: '' });
+const pendingClipboardGets = new Map<number, (text: string) => void>();
+let clipboardReqID = 0;
+
 function wsURL(): string {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
   // When the page URL carries ?s=<sessid>, route the WS at the
@@ -332,6 +340,20 @@ conn = new Conn(
         // Forget any pending credit count — channel is gone, no
         // point sending credit for a dead id.
         creditTracker.forget(u.channel_id);
+        break;
+      }
+      case 'clipboard.data': {
+        const d = msg as { req_id: number; mime: string; text: string };
+        const wait = pendingClipboardGets.get(d.req_id);
+        if (wait) {
+          pendingClipboardGets.delete(d.req_id);
+          wait(d.text);
+        }
+        break;
+      }
+      case 'clipboard.changed': {
+        const c = msg as { mime: string; text: string };
+        clipboardSub.set({ mime: c.mime, text: c.text });
         break;
       }
     }
@@ -697,6 +719,12 @@ declare global {
       openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
       writeRaw(channelID: number, bytes: Uint8Array): void;
       rawBufferedAmount(): number;
+      // Router-held clipboard (the wash-internal clipboard every app
+      // shares). Text-only on this surface; see clipboard.ts in
+      // @wash/ui for the system-clipboard mirroring helpers.
+      clipboardSetText(text: string): void;
+      clipboardGetText(): Promise<string>;
+      onClipboardChanged(cb: (c: { mime: string; text: string }) => void): () => void;
     };
   }
 }
@@ -770,7 +798,54 @@ window.wash = {
   rawBufferedAmount() {
     return conn.bufferedAmount();
   },
+  clipboardSetText(text) {
+    clipboardSub.set({ mime: 'text/plain', text });
+    conn.sendCtrl({ t: 'clipboard.set', mime: 'text/plain', text });
+  },
+  clipboardGetText() {
+    // Always round-trip — content set by app BEs before this shell
+    // attached isn't in the local mirror. The mirror only serves as
+    // the timeout/disconnect fallback.
+    const reqID = ++clipboardReqID;
+    return new Promise<string>((resolve) => {
+      pendingClipboardGets.set(reqID, resolve);
+      try {
+        conn.sendCtrl({ t: 'clipboard.get', req_id: reqID });
+      } catch {
+        pendingClipboardGets.delete(reqID);
+        resolve(clipboardSub.value.text);
+      }
+      // WS hiccup safety: resolve with the local mirror rather than
+      // hanging a paste forever.
+      setTimeout(() => {
+        if (pendingClipboardGets.delete(reqID)) resolve(clipboardSub.value.text);
+      }, 3000);
+    });
+  },
+  onClipboardChanged(cb) {
+    return clipboardSub.on(cb);
+  },
 };
+
+// Mirror every native copy/cut anywhere in the shell into the wash
+// clipboard. This is what makes editor→terminal flow work without
+// app-side wiring: Ctrl+C in CodeMirror/TipTap raises a real copy
+// event whose selection we can read. The native copy continues to the
+// system clipboard untouched. Guarded for the synthetic copies our
+// own mirror helper fires (data-wash-clipboard-mirror) so a wash→
+// system mirror doesn't echo back as a second set.
+document.addEventListener('copy', (ev) => {
+  const t = ev.target as HTMLElement | null;
+  if (t && t.closest?.('[data-wash-clipboard-mirror]')) return;
+  const sel = String(document.getSelection() ?? '');
+  if (sel) window.wash.clipboardSetText(sel);
+});
+document.addEventListener('cut', (ev) => {
+  const t = ev.target as HTMLElement | null;
+  if (t && t.closest?.('[data-wash-clipboard-mirror]')) return;
+  const sel = String(document.getSelection() ?? '');
+  if (sel) window.wash.clipboardSetText(sel);
+});
 
 // Auto-capture browser errors so they show up server-side.
 window.addEventListener('error', (ev: ErrorEvent) => {

@@ -72,6 +72,23 @@ const (
 	// Router → shell, asset pull rejected. Code mirrors §13.
 	TShellAssetReadErr = "asset.read.err"
 
+	// Shell ↔ router clipboard. The same router-held clipboard the
+	// per-app event channel reaches via §9 clipboard.* — these tags
+	// expose it on the shell channel so app FRONTENDS can use it
+	// through window.wash without a BE round-trip. Text-only on this
+	// surface (JSON channel; []byte would base64) — mime tags the
+	// payload for future richness but Text carries it.
+	//
+	// Shell → router.
+	TShellClipboardSet = "clipboard.set"
+	TShellClipboardGet = "clipboard.get"
+	// Router → shell, clipboard.get reply.
+	TShellClipboardData = "clipboard.data"
+	// Router → shell, broadcast on every clipboard change (including
+	// changes made by app BEs via the §9 path). Carries the content
+	// so consumers (sidebar widget) don't need a follow-up get.
+	TShellClipboardChanged = "clipboard.changed"
+
 	// Shell → router, settings-panel bundle pull. Read the cached
 	// panel.js bytes (Entry.PanelBundle) for an app that declared a
 	// SettingsPanel. Mirrors asset.read but keyed by app id and served
@@ -467,6 +484,57 @@ type ShellChannelCredit struct {
 
 func NewShellChannelCredit(channelID, n uint32) ShellChannelCredit {
 	return ShellChannelCredit{T: TShellChannelCredit, ChannelID: channelID, N: n}
+}
+
+// ShellClipboardSet writes text into the router-held clipboard on
+// behalf of the browser shell (window.wash.clipboardSetText). The
+// router broadcasts the change to every app BE and every OTHER shell.
+type ShellClipboardSet struct {
+	T    string `json:"t"`
+	Mime string `json:"mime"`
+	Text string `json:"text"`
+}
+
+func NewShellClipboardSet(mime, text string) ShellClipboardSet {
+	return ShellClipboardSet{T: TShellClipboardSet, Mime: mime, Text: text}
+}
+
+// ShellClipboardGet requests the clipboard's current content; the
+// router replies with ShellClipboardData carrying the same ReqID.
+type ShellClipboardGet struct {
+	T     string `json:"t"`
+	ReqID uint64 `json:"req_id"`
+}
+
+func NewShellClipboardGet(reqID uint64) ShellClipboardGet {
+	return ShellClipboardGet{T: TShellClipboardGet, ReqID: reqID}
+}
+
+// ShellClipboardData is the clipboard.get reply. Non-text content
+// (future mimes) is surfaced as empty Text with the mime preserved.
+type ShellClipboardData struct {
+	T     string `json:"t"`
+	ReqID uint64 `json:"req_id"`
+	Mime  string `json:"mime"`
+	Text  string `json:"text"`
+}
+
+func NewShellClipboardData(reqID uint64, mime, text string) ShellClipboardData {
+	return ShellClipboardData{T: TShellClipboardData, ReqID: reqID, Mime: mime, Text: text}
+}
+
+// ShellClipboardChanged announces a clipboard change to shells.
+// Unlike the §9 event-channel notice (mime only), this carries the
+// content: shells fan out to FE consumers (sidebar preview, paste
+// handlers) that would otherwise each issue a get.
+type ShellClipboardChanged struct {
+	T    string `json:"t"`
+	Mime string `json:"mime"`
+	Text string `json:"text"`
+}
+
+func NewShellClipboardChanged(mime, text string) ShellClipboardChanged {
+	return ShellClipboardChanged{T: TShellClipboardChanged, Mime: mime, Text: text}
 }
 
 // ShellAppCrashed reports that an app BE process exited abnormally.

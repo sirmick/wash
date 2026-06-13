@@ -25,6 +25,7 @@ export {
   fontById,
 } from './terminal';
 export type { TerminalProps, TerminalAPI, TermFont } from './terminal';
+export { washCopyText, washPasteText, systemCopyText, systemCopyTextChecked } from './clipboard';
 export { defineWashApp } from './define-app';
 export type { WashAppProps, DefineWashAppOptions } from './define-app';
 export { defineSettingsPanel, PANEL_PORT_PROP } from './define-settings-panel';

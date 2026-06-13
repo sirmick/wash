@@ -224,6 +224,10 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		return s.handleAssetRead(m)
 	case wire.ShellPanelRead:
 		return s.handlePanelRead(m)
+	case wire.ShellClipboardSet:
+		return s.handleShellClipboardSet(m)
+	case wire.ShellClipboardGet:
+		return s.handleShellClipboardGet(m)
 	}
 	s.router.log("shell: unexpected ctrl msg %T", msg)
 	return nil

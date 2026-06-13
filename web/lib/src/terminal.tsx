@@ -19,6 +19,7 @@ import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
 import { washAssetUrl } from './assets';
 import { Menu, MenuItem, MenuSeparator } from './menu';
+import { washCopyText, washPasteText } from './clipboard';
 
 // ---- font registry ----
 
@@ -194,6 +195,14 @@ export const Terminal: Component<TerminalProps> = (props) => {
 
   const effectiveSize = () => clampSize(props.fontSize ?? TERM_DEFAULT_FONT_SIZE);
 
+  // pasteWash inserts the wash clipboard at the cursor through
+  // xterm's paste path (bracketed-paste aware, CR-normalized).
+  const pasteWash = () => {
+    void washPasteText().then((text) => {
+      if (text && term) term.paste(text);
+    });
+  };
+
   onMount(() => {
     const initialFamily = props.fontFamily ?? fontById(props.fontId).stack;
     term = new XTerm({
@@ -203,7 +212,28 @@ export const Terminal: Component<TerminalProps> = (props) => {
       cursorBlink: true,
       allowProposedApi: true,
     });
-    if (props.customKeyHandler) term.attachCustomKeyEventHandler(props.customKeyHandler);
+    // Clipboard keys are component-level so every terminal in wash
+    // behaves the same; the consumer's customKeyHandler runs after.
+    // Ctrl+Shift+C copies the selection (plain Ctrl+C must stay
+    // SIGINT); Ctrl+Shift+V pastes the wash clipboard (plain Ctrl+V
+    // stays the browser's native system-clipboard paste, which xterm
+    // receives as a paste event).
+    term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
+      if (ev.type === 'keydown' && ev.ctrlKey && ev.shiftKey) {
+        if (ev.key === 'C' || ev.key === 'c') {
+          const sel = term?.getSelection();
+          if (sel) {
+            washCopyText(sel);
+            return false;
+          }
+        }
+        if (ev.key === 'V' || ev.key === 'v') {
+          pasteWash();
+          return false;
+        }
+      }
+      return props.customKeyHandler ? props.customKeyHandler(ev) : true;
+    });
     fit = new FitAddon();
     term.loadAddon(fit);
     term.open(hostEl);
@@ -214,6 +244,22 @@ export const Terminal: Component<TerminalProps> = (props) => {
       } else {
         props.onInput?.(bytes);
       }
+    });
+
+    // PuTTY-style select = copy: xterm keeps its own selection model
+    // (not a DOM selection), so on selection-end we push the selected
+    // text into the wash clipboard + mirror it to the system clipboard
+    // while the mouseup gesture is live. (Right-click opens the wash
+    // context menu below — Copy/Paste + font controls — rather than
+    // PuTTY's instant paste, since the menu is the font picker's only
+    // entry point.)
+    const onMouseUp = () => {
+      const sel = term?.getSelection();
+      if (sel) washCopyText(sel);
+    };
+    hostEl.addEventListener('mouseup', onMouseUp);
+    onCleanup(() => {
+      hostEl.removeEventListener('mouseup', onMouseUp);
     });
 
     // Test hook: expose the live Terminal on the host element so
@@ -296,17 +342,21 @@ export const Terminal: Component<TerminalProps> = (props) => {
     setMenu({ x: ev.clientX, y: ev.clientY });
   };
 
+  // Menu Copy/Paste ride the wash clipboard, not navigator.clipboard:
+  // on the plain-HTTP LAN origin wash ships on, navigator.clipboard is
+  // undefined and would silently no-op. washCopyText still mirrors to
+  // the system clipboard while the click gesture is live; pasteWash
+  // goes through term.paste(), so the text rides the same path as
+  // typed input and honors bracketed-paste mode.
   const doCopy = () => {
     const sel = term?.getSelection() ?? '';
-    if (sel) navigator.clipboard?.writeText(sel).catch(() => {});
+    if (sel) washCopyText(sel);
     setMenu(null);
   };
 
   const doPaste = () => {
-    // term.paste() emits onData, so the text rides the same path as
-    // typed input (writeRaw in channel mode, onInput otherwise) and
-    // honors bracketed-paste mode.
-    navigator.clipboard?.readText().then((t) => { if (t) term?.paste(t); }).catch(() => {});
+    term?.focus();
+    pasteWash();
     setMenu(null);
   };
 

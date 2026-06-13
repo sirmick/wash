@@ -104,6 +104,9 @@ test.describe('terminal font + copy/paste menu', () => {
     const host = await openTerminal(page, router.url);
 
     // ---- copy ----
+    // Menu Copy rides the wash clipboard and mirrors to the system
+    // clipboard while the click gesture is live — assert the mirror
+    // (the wash-clipboard side is covered by clipboard-*.spec.ts).
     await host.click();
     await page.keyboard.type('wash-copy-marker');
     // Select everything currently on screen, then copy via the menu.
@@ -116,7 +119,9 @@ test.describe('terminal font + copy/paste menu', () => {
     expect(clip).toContain('wash-copy-marker');
 
     // ---- paste ----
-    await page.evaluate(() => navigator.clipboard.writeText('wash-paste-marker'));
+    // Menu Paste reads the WASH clipboard (navigator.clipboard is
+    // absent on the LAN origin wash ships on), so seed that.
+    await page.evaluate(() => (window as any).wash.clipboardSetText('wash-paste-marker'));
     await host.click({ button: 'right' });
     await page.locator('[data-testid="term-ctx-paste"]').click();
     // Pasted text lands at the prompt (echoed by the shell).

@@ -45,6 +45,7 @@ const ICONS = [
   'network',        // sidebar Network widget (matches wash-net app icon)
   'bell',           // sidebar Notifications widget
   'lock',           // priv widget lock-state indicator
+  'clipboard',      // sidebar Clipboard widget
   'unlock',         // priv widget unlock-state indicator
 
   // wash-net app chrome (the Network app pulls these from the shared sprite

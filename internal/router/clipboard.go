@@ -34,11 +34,30 @@ func (c *clipboardState) get() (string, []byte) {
 }
 
 // handleClipboardSet stores new content and broadcasts a "changed"
-// event to every connected app except the one that set it.
+// event to every connected app except the one that set it, plus
+// every attached shell (the FE-side consumers).
 func (inst *AppInstance) handleClipboardSet(m wire.EvtClipboardSet) error {
 	inst.router.clipboard.set(m.Mime, m.Data)
 	inst.router.broadcastClipboardChanged(inst, m.Mime)
+	inst.router.broadcastShellClipboardChanged(nil, m.Mime, string(m.Data))
 	return nil
+}
+
+// handleShellClipboardSet is the window.wash path: a browser shell
+// wrote the clipboard. App BEs all get the §9 notice; other shells
+// get the shell-channel notice (the setter already knows).
+func (s *ShellSession) handleShellClipboardSet(m wire.ShellClipboardSet) error {
+	s.router.clipboard.set(m.Mime, []byte(m.Text))
+	s.router.broadcastClipboardChanged(nil, m.Mime)
+	s.router.broadcastShellClipboardChanged(s, m.Mime, m.Text)
+	return nil
+}
+
+// handleShellClipboardGet replies with the current content on the
+// requesting shell's control channel.
+func (s *ShellSession) handleShellClipboardGet(m wire.ShellClipboardGet) error {
+	mime, data := s.router.clipboard.get()
+	return s.WriteCtrl(wire.NewShellClipboardData(m.ReqID, mime, string(data)))
 }
 
 // handleClipboardGet replies on the requester's event channel.
@@ -60,6 +79,21 @@ func (r *Router) broadcastClipboardChanged(except *AppInstance, mime string) {
 	for _, inst := range snap {
 		if err := inst.WriteEvt(notice); err != nil {
 			r.log("clipboard.changed → %s: %v", inst.AppID, err)
+		}
+	}
+}
+
+// broadcastShellClipboardChanged pushes the new clipboard content to
+// every attached shell except the setter (nil = notify all shells,
+// used when the change came from an app BE rather than a shell).
+func (r *Router) broadcastShellClipboardChanged(except *ShellSession, mime, text string) {
+	notice := wire.NewShellClipboardChanged(mime, text)
+	for _, s := range r.shellList() {
+		if s == except {
+			continue
+		}
+		if err := s.WriteCtrl(notice); err != nil {
+			r.log("clipboard.changed → shell: %v", err)
 		}
 	}
 }
