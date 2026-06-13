@@ -1,7 +1,7 @@
 Source: wash
 Section: admin
 Priority: optional
-Maintainer: wash maintainers <wash@example.invalid>
+Maintainer: sirmick <sirmick@gmail.com>
 Build-Depends: debhelper-compat (= 13)
 Standards-Version: 4.6.0
 Rules-Requires-Root: no

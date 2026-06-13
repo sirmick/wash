@@ -137,5 +137,5 @@ fi
 exit 0
 
 %changelog
-* Thu May 28 2026 wash maintainers <wash@example.invalid> - 0.9.0-1
+* Thu May 28 2026 sirmick <sirmick@gmail.com> - 0.9.0-1
 - Initial packaging.

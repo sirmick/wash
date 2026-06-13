@@ -7,7 +7,7 @@ wash (0.9.0-1) unstable; urgency=low
     networking (wash-net/netd), storage (wash-disks), and the audio/media apps.
   * Build/test/packaging unified behind a goal-oriented `make` interface.
 
- -- wash maintainers <wash@example.invalid>  Sat, 13 Jun 2026 00:00:00 +0000
+ -- sirmick <sirmick@gmail.com>  Sat, 13 Jun 2026 00:00:00 +0000
 
 wash (0.8.0-1) unstable; urgency=low
 
@@ -15,4 +15,4 @@ wash (0.8.0-1) unstable; urgency=low
     (session, fm, term, edit, bulk, priv, settings, top, syslogs,
     services, packages, journal, about, sudo, launch).
 
- -- wash maintainers <wash@example.invalid>  Thu, 28 May 2026 00:00:00 +0000
+ -- sirmick <sirmick@gmail.com>  Thu, 28 May 2026 00:00:00 +0000
