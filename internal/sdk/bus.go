@@ -525,7 +525,7 @@ type replyTo struct {
 func (b *Bus) sendOk(c *Conn, kind, id string, resp any, to *replyTo) {
 	out, err := envelope(kind+"_ok", id, resp)
 	if err != nil {
-		log.Printf("bus: %s_ok encode: %v", kind, err)
+		log.Printf("bus: %s %s_ok encode id=%q: %v", b.appID(), kind, id, err)
 		return
 	}
 	b.ship(c, out, to)
@@ -550,6 +550,8 @@ func (b *Bus) ship(c *Conn, payload map[string]any, to *replyTo) {
 	if to != nil {
 		class = to.class
 	}
+	// A reply that can't be shipped strands the requester (it hangs or
+	// times out with no trace anywhere) — the failure must be logged.
 	if to != nil && to.from.InstanceID != "" {
 		if to.reqID != "" {
 			payload["req_id"] = to.reqID
@@ -557,23 +559,32 @@ func (b *Bus) ship(c *Conn, payload map[string]any, to *replyTo) {
 		// Address by InstanceID so the reply always lands on the
 		// specific caller, not a sibling singleton instance.
 		recipient := wire.Recipient{InstanceID: to.from.InstanceID}
+		var err error
 		switch class {
 		case wire.ClassBulk:
-			_ = c.SendAppMsgToBulk(recipient, payload)
+			err = c.SendAppMsgToBulk(recipient, payload)
 		case wire.ClassBackground:
-			_ = c.SendAppMsgToBackground(recipient, payload)
+			err = c.SendAppMsgToBackground(recipient, payload)
 		default:
-			_ = c.SendAppMsgTo(recipient, payload)
+			err = c.SendAppMsgTo(recipient, payload)
+		}
+		if err != nil {
+			log.Printf("bus: %s ship %v to=%s req_id=%q: %v",
+				b.appID(), payload["kind"], to.from.InstanceID, to.reqID, err)
 		}
 		return
 	}
+	var err error
 	switch class {
 	case wire.ClassBulk:
-		_ = c.SendAppMsgBulk(payload)
+		err = c.SendAppMsgBulk(payload)
 	case wire.ClassBackground:
-		_ = c.SendAppMsgBackground(payload)
+		err = c.SendAppMsgBackground(payload)
 	default:
-		_ = c.SendAppMsg(payload)
+		err = c.SendAppMsg(payload)
+	}
+	if err != nil {
+		log.Printf("bus: %s ship %v to FE: %v", b.appID(), payload["kind"], err)
 	}
 }
 

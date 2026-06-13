@@ -108,6 +108,12 @@ type Conn struct {
 	chanMu   sync.Mutex
 	channels map[uint32]*RawChannel
 
+	// droppedChans records channel ids whose bytes arrived after the
+	// channel left the registry, so the drop is logged once per id —
+	// the close race is normal, a persistent drop is a wiring bug.
+	droppedMu    sync.Mutex
+	droppedChans map[uint32]bool
+
 	// pendingOpens correlates ChannelOpen req_id ↔ the goroutine
 	// waiting for the response (in OpenChannel).
 	openMu       sync.Mutex

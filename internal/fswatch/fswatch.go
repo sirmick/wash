@@ -36,6 +36,7 @@ package fswatch
 import (
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 
 	"github.com/fsnotify/fsnotify"
@@ -257,6 +258,11 @@ func (m *Manager) Watch(path string) (*Sub, error) {
 	ps, existing := m.paths[path]
 	if !existing {
 		if err := m.w.Add(path); err != nil {
+			// Logged here as well as returned: callers historically
+			// surface this only as an FE error, and the usual cause —
+			// the inotify instance/watch limit, often from leaked
+			// processes — is invisible without a server-side line.
+			log.Printf("fswatch: watch %q failed: %v (hitting fs.inotify.max_user_instances/watches? check for leaked watcher processes)", path, err)
 			return nil, fmt.Errorf("watch %q: %w", path, err)
 		}
 		ps = &pathState{subs: make(map[*Sub]struct{})}

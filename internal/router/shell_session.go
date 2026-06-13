@@ -208,13 +208,8 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 	case wire.ShellWindowState:
 		return s.handleWindowState(m)
 	case wire.ShellAppMsgSend:
-		var probe struct {
-			Data struct {
-				Kind string `json:"kind"`
-			} `json:"data"`
-		}
-		_ = json.Unmarshal(f.Payload, &probe)
-		s.router.log("shell→BE app_msg.send inst=%s data.kind=%q", m.InstanceID, probe.Data.Kind)
+		// Deliberately not logged here: this is the FE→BE hot path.
+		// Failures are logged in handleAppMsgSend; successes are noise.
 		return s.handleAppMsgSend(m, f.Class())
 	case wire.ShellLog:
 		return s.handleShellLog(m)
@@ -507,6 +502,10 @@ func (s *ShellSession) handleAppMsgSend(m wire.ShellAppMsgSend, class wire.Class
 	}
 	inst := s.router.appByInstance(m.InstanceID)
 	if inst == nil {
+		// FE message for an instance that's gone (or never existed) —
+		// the sender gets no reply and no error, so this line is the
+		// only trace.
+		s.router.log("shell app_msg: dropping message for unknown instance=%s", m.InstanceID)
 		return nil
 	}
 	return inst.WriteEvtClass(wire.NewEvtAppMsg(inst.WindowID, m.Data), class)

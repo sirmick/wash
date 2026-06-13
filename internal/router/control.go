@@ -436,30 +436,39 @@ func (r *Router) controlPrivRun(ctx context.Context, conn net.Conn, rd *bufio.Re
 		line, err := rd.ReadBytes('\n')
 		if err != nil {
 			// Notify wash-priv that the CLI side hung up so it can
-			// kill any in-flight subprocess.
-			_ = target.WriteEvt(wire.NewEvtAppMsgFrom(target.WindowID,
+			// kill any in-flight subprocess. If even that fails, the
+			// subprocess may run on unsupervised — worth a line.
+			if werr := target.WriteEvt(wire.NewEvtAppMsgFrom(target.WindowID,
 				map[string]any{"kind": "cli.disconnect", "req_id": first.ReqID},
-				from))
+				from)); werr != nil {
+				r.log("priv.run req_id=%s: cli.disconnect to wash-priv lost: %v", first.ReqID, werr)
+			}
 			return
 		}
 		var next controlReq
 		if err := json.Unmarshal(line, &next); err != nil {
 			continue // tolerate junk lines rather than tear the session down
 		}
+		var fwd map[string]any
 		switch next.T {
 		case "priv.stdin":
-			fwd := map[string]any{
+			fwd = map[string]any{
 				"kind":   "stdin",
 				"req_id": first.ReqID,
 				"bytes":  next.StreamBytes, // base64; wash-priv decodes
 			}
-			_ = target.WriteEvt(wire.NewEvtAppMsgFrom(target.WindowID, fwd, from))
 		case "priv.stdin.close":
-			fwd := map[string]any{"kind": "stdin_close", "req_id": first.ReqID}
-			_ = target.WriteEvt(wire.NewEvtAppMsgFrom(target.WindowID, fwd, from))
+			fwd = map[string]any{"kind": "stdin_close", "req_id": first.ReqID}
 		case "priv.cancel":
-			fwd := map[string]any{"kind": "cancel", "req_id": first.ReqID}
-			_ = target.WriteEvt(wire.NewEvtAppMsgFrom(target.WindowID, fwd, from))
+			fwd = map[string]any{"kind": "cancel", "req_id": first.ReqID}
+		}
+		if fwd == nil {
+			continue
+		}
+		// A lost forward leaves wash-sudo's caller hanging (stdin that
+		// never arrives, a cancel that never lands) with no trace.
+		if werr := target.WriteEvt(wire.NewEvtAppMsgFrom(target.WindowID, fwd, from)); werr != nil {
+			r.log("priv.run req_id=%s: forward %s to wash-priv lost: %v", first.ReqID, next.T, werr)
 		}
 	}
 }

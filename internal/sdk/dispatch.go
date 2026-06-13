@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	"github.com/sirmick/wash/internal/wire"
 )
@@ -30,7 +31,18 @@ func (c *Conn) dispatch(f wire.Frame) error {
 	rc := c.lookupChannel(f.Channel)
 	if rc == nil {
 		// Bytes for a channel we no longer track — drop. Happens
-		// briefly between local Close and the router's ChannelClosed.
+		// briefly between local Close and the router's ChannelClosed,
+		// so log only the first drop per channel id.
+		c.droppedMu.Lock()
+		if c.droppedChans == nil {
+			c.droppedChans = map[uint32]bool{}
+		}
+		first := !c.droppedChans[f.Channel]
+		c.droppedChans[f.Channel] = true
+		c.droppedMu.Unlock()
+		if first {
+			log.Printf("sdk: dropping bytes for untracked channel %d (len=%d)", f.Channel, len(f.Payload))
+		}
 		return nil
 	}
 	// Copy the payload — the frame's buffer may be reused on the

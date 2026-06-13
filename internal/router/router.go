@@ -629,14 +629,19 @@ func (r *Router) bringUp(ctx context.Context, inst *AppInstance) {
 		}
 		patches = r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon, inst.Manifest.Accent, inst.Manifest.Name, defW, defH, inst.IsRoot(), chromeless)
 	}
+	// The one "this instance exists" line — without it the registered
+	// set can't be reconstructed from the log.
+	r.log("app %s up instance=%s win=%d", inst.AppID, inst.InstanceID, inst.WindowID)
 	if err := r.declareAppToAllShells(ctx, inst); err != nil {
-		r.log("declare: %v", err)
+		r.log("declare %s instance=%s: %v", inst.AppID, inst.InstanceID, err)
 	}
 	if len(patches) > 0 {
 		r.broadcastPatches(patches)
 	}
 	if inst.WindowID != 0 {
-		_ = inst.WriteEvt(wire.NewEvtWindowMapped(inst.WindowID))
+		if err := inst.WriteEvt(wire.NewEvtWindowMapped(inst.WindowID)); err != nil {
+			r.log("app %s instance=%s: initial WindowMapped lost: %v", inst.AppID, inst.InstanceID, err)
+		}
 	}
 }
 
@@ -739,7 +744,7 @@ func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*Ap
 	r.bringUp(ctx, inst)
 	go func() {
 		if err := inst.loop(context.Background()); err != nil {
-			r.log("app %s loop: %v", inst.AppID, err)
+			r.log("app %s loop instance=%s: %v", inst.AppID, inst.InstanceID, err)
 		}
 		_ = transport.Close()
 		_ = cmd.Wait()

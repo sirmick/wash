@@ -233,7 +233,7 @@ func (s *HTTPServer) handleWS(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	t := NewWSTransport(ctx, ws)
 	if err := s.router.HandleShell(ctx, t); err != nil && !errors.Is(err, context.Canceled) {
-		s.router.log("shell session: %v", err)
+		s.router.log("shell session from=%s: %v", r.RemoteAddr, err)
 	}
 }
 
