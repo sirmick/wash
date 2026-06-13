@@ -76,6 +76,9 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	// Persist the FE's small state blob (the selected folder) — redelivered
 	// as wash:state on the next mount.
 	sdk.HandleVoid(bus, "save_state", func(conn *sdk.Conn, _ string, req saveStateReq) error {
+		// Logged so the e2e can wait for a persist to actually land before it
+		// reloads (a fixed timeout races the FE→BE→disk round-trip under load).
+		log.Printf("wash-music: save_state")
 		return conn.SaveState(req.State)
 	})
 

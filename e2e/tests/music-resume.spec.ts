@@ -51,8 +51,10 @@ test.describe('music app playback persistence', () => {
     await page.locator('[data-testid="media-row-1"]').dblclick();
     await expect(page.locator('[data-testid="media-row-1"]')).toHaveAttribute('data-playing', 'true');
 
-    // Let the 300ms persist debounce flush before reloading.
-    await page.waitForTimeout(600);
+    // Wait for the persist to actually land in the BE (router-logged) before
+    // reloading — a fixed timeout races the FE→BE→disk round-trip under load,
+    // which is the historical source of this test's full-suite flakiness.
+    await router.waitForLog(/wash-music: save_state/);
     await page.reload();
 
     // Restored: the same track is the current one (now-playing shows

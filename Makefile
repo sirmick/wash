@@ -974,9 +974,11 @@ unit-test: wash fe-unit component
 	go test -count=1 -p 1 -timeout 120s ./...
 
 # e2e-test: the full Playwright suite (standalone layout); builds the test app.
+# e2e/ is NOT a workspace member, so --ignore-workspace is required to install
+# its own deps (incl. playwright) into e2e/node_modules.
 .PHONY: e2e-test
 e2e-test: test-app
-	cd e2e && $(PNPM) install --silent
+	cd e2e && $(PNPM) install --ignore-workspace --silent
 	cd e2e && $(PNPM) exec playwright install chromium
 	cd e2e && $(PNPM) test
 
@@ -1011,7 +1013,7 @@ coverage:
 	rm -rf "$(COVERDIR)"; mkdir -p "$(COVERDIR)/unit" "$(COVERDIR)/e2e" "$(COVERDIR)/merged"
 	COVER=1 $(MAKE) test-app   # instrumented binaries the e2e will exercise
 	go test -count=1 -p 1 -timeout 120s -coverpkg=./... ./... -args -test.gocoverdir="$(COVERDIR)/unit"
-	cd e2e && $(PNPM) install --silent && $(PNPM) exec playwright install chromium
+	cd e2e && $(PNPM) install --ignore-workspace --silent && $(PNPM) exec playwright install chromium
 	cd e2e && GOCOVERDIR="$(COVERDIR)/e2e" $(PNPM) test
 	go tool covdata merge   -i="$(COVERDIR)/unit,$(COVERDIR)/e2e" -o="$(COVERDIR)/merged"
 	go tool covdata textfmt -i="$(COVERDIR)/merged" -o="$(COVERDIR)/coverage.txt"
