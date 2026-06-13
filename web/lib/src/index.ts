@@ -15,8 +15,16 @@ export { FilePicker } from './file-picker';
 export type { FilePickerProps, FilterSpec } from './file-picker';
 export { Splitter } from './splitter';
 export type { SplitterProps, SplitterOrientation } from './splitter';
-export { Terminal } from './terminal';
-export type { TerminalProps, TerminalAPI } from './terminal';
+export {
+  Terminal,
+  TERM_FONTS,
+  TERM_DEFAULT_FONT_ID,
+  TERM_DEFAULT_FONT_SIZE,
+  TERM_MIN_FONT_SIZE,
+  TERM_MAX_FONT_SIZE,
+  fontById,
+} from './terminal';
+export type { TerminalProps, TerminalAPI, TermFont } from './terminal';
 export { defineWashApp } from './define-app';
 export type { WashAppProps, DefineWashAppOptions } from './define-app';
 export { defineSettingsPanel, PANEL_PORT_PROP } from './define-settings-panel';

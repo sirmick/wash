@@ -12,7 +12,7 @@
 import { For, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { Plus, X } from 'lucide-solid';
-import { Terminal, defineWashApp, tokens } from '@wash/ui';
+import { Terminal, TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, defineWashApp, tokens } from '@wash/ui';
 import type { TerminalAPI } from '@wash/ui';
 
 interface BEMessage {
@@ -35,6 +35,9 @@ interface PersistedTabRow {
 interface PersistedState {
   tabs?: PersistedTabRow[];
   active?: number;
+  // Font choice is window-wide: every tab in this window shares it.
+  font_id?: string;
+  font_size?: number;
 }
 
 // TAB_BAR_HEIGHT — 32 (was 28) leaves 4px of breathing room above the
@@ -46,6 +49,11 @@ const TAB_BAR_HEIGHT = 32;
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [tabs, setTabs] = createSignal<TabMeta[]>([]);
   const [active, setActive] = createSignal(0);
+  // Window-wide font choice, driven into every <Terminal>. The
+  // right-click menu reports changes back here so they persist and
+  // apply across all tabs at once.
+  const [fontId, setFontId] = createSignal(TERM_DEFAULT_FONT_ID);
+  const [fontSize, setFontSize] = createSignal(TERM_DEFAULT_FONT_SIZE);
 
   // Imperative <Terminal> handles keyed by channel id. Populated
   // by each <Terminal>'s onReady callback; dropped on tab close.
@@ -97,6 +105,19 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const openNewTab = () => send({ kind: 'new_tab' });
   const requestCloseTab = (channelID: number) => send({ kind: 'close_tab', channel_id: channelID });
 
+  // ---- font choice (window-wide, persisted) ----
+
+  const changeFontId = (id: string) => {
+    if (fontId() === id) return;
+    setFontId(id);
+    persist();
+  };
+  const changeFontSize = (px: number) => {
+    if (fontSize() === px) return;
+    setFontSize(px);
+    persist();
+  };
+
   // ---- BE ----
 
   const handleBE = (m: BEMessage) => {
@@ -122,11 +143,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const state: PersistedState = {
       tabs: tabs().map((t) => ({ channel_id: t.channelID, shell: t.shell })),
       active: active() || undefined,
+      font_id: fontId(),
+      font_size: fontSize(),
     };
     send({ kind: 'save_state', state });
   };
 
   const restoreFrom = (s: PersistedState) => {
+    if (s.font_id) setFontId(s.font_id);
+    if (s.font_size) setFontSize(s.font_size);
     if (!s.tabs?.length) return;
     for (const t of s.tabs) addTab(Number(t.channel_id), t.shell);
     if (s.active && tabs().some((t) => t.channelID === s.active)) {
@@ -268,6 +293,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 <Terminal
                   channelId={tab.channelID}
                   customKeyHandler={onTermKey}
+                  fontId={fontId()}
+                  fontSize={fontSize()}
+                  onFontIdChange={changeFontId}
+                  onFontSizeChange={changeFontSize}
                   onReady={(api) => {
                     apis.set(tab.channelID, api);
                     if (active() === tab.channelID) api.focus();
