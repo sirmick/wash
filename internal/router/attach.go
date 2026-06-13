@@ -302,7 +302,7 @@ func controlFrame(m any) wire.Frame {
 func (r *Router) startFreshAttach(ctx context.Context, inst *AppInstance) {
 	r.bringUp(ctx, inst)
 	if err := inst.loop(context.Background()); err != nil {
-		r.log("app %s loop: %v", inst.AppID, err)
+		r.log("app %s loop instance=%s: %v", inst.AppID, inst.InstanceID, err)
 	}
 	// Terminal-attached BE death is the conn-closure: any non-
 	// expectedExit drop is a tombstone-worthy event. We can't read

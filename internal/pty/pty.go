@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -101,16 +102,18 @@ func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint1
 	go func() {
 		_, copyErr := io.Copy(ch, f)
 		if !isPtyTerm(copyErr) {
-			// Real I/O error — caller's onClose still fires, but log
-			// via the channel comment chain. The session struct has
-			// no logger; callers who want one wrap onClose.
+			// Real I/O error, not the normal EOF/EIO of a closing pty —
+			// without this line the session just goes dark.
+			log.Printf("pty: win=%d shell=%s pty→channel copy: %v", windowID, shellPath, copyErr)
 		}
 		s.closeWithReason("pty eof")
 	}()
 	// channel → pty
 	go func() {
 		_, copyErr := io.Copy(f, ch)
-		_ = copyErr // teardown happens via pty close on the other side
+		if !isPtyTerm(copyErr) {
+			log.Printf("pty: win=%d shell=%s channel→pty copy: %v", windowID, shellPath, copyErr)
+		}
 		// Channel torn down — kill the shell so the other goroutine
 		// sees EOF on the pty fd.
 		if cmd.Process != nil {
@@ -119,9 +122,14 @@ func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint1
 	}()
 	// Reaper goroutine: cmd.Wait() so the OS doesn't carry a zombie
 	// once the shell exits. The io.Copy goroutines see EOF on pty
-	// closure next.
+	// closure next. The exit status is the one fact a "my terminal
+	// died" report needs, so it is always logged.
 	go func() {
-		_ = cmd.Wait()
+		if err := cmd.Wait(); err != nil {
+			log.Printf("pty: win=%d shell=%s exited: %v", windowID, shellPath, err)
+		} else {
+			log.Printf("pty: win=%d shell=%s exited cleanly", windowID, shellPath)
+		}
 	}()
 
 	return s, nil

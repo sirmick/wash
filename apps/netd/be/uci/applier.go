@@ -2,9 +2,11 @@ package uci
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -77,24 +79,42 @@ func (a *Applier) Apply(p backend.RenderPlan) (backend.RollbackToken, error) {
 	a.lastHadRoute = a.route()
 	a.mu.Unlock()
 
+	var touched []string
 	for _, pkg := range managedPackages {
 		text, ok := files[pkg]
 		if !ok {
 			continue // model has no objects for this package — leave it as-is
 		}
 		if err := a.writePkg(pkg, text); err != nil {
+			log.Printf("uci: apply token=%s write pkg=%s: %v", token, pkg, err)
 			return token, err
 		}
+		touched = append(touched, pkg)
 	}
-	for _, pkg := range managedPackages {
-		if _, ok := files[pkg]; !ok {
-			continue
-		}
+	// Log the planned reload sequence BEFORE executing it — reload
+	// ordering is exactly what goes wrong when an apply half-takes,
+	// and the trail must exist even if a reload wedges the box.
+	log.Printf("uci: apply token=%s wrote pkgs=%v, reload order=%v", token, touched, reloadPlan(touched))
+	for _, pkg := range touched {
 		if cmd := reloadCmd[pkg]; len(cmd) > 0 {
-			_, _ = a.run.run(cmd[0], cmd[1:]...)
+			if out, err := a.run.run(cmd[0], cmd[1:]...); err != nil {
+				log.Printf("uci: apply token=%s reload pkg=%s (best-effort): %v output=%q", token, pkg, err, out)
+			}
 		}
 	}
 	return token, nil
+}
+
+// reloadPlan renders the reload commands that will run for the touched
+// packages, in execution order, for the pre-reload log line.
+func reloadPlan(pkgs []string) []string {
+	var plan []string
+	for _, pkg := range pkgs {
+		if cmd := reloadCmd[pkg]; len(cmd) > 0 {
+			plan = append(plan, pkg+":"+strings.Join(cmd, " "))
+		}
+	}
+	return plan
 }
 
 // Verify is the commit-confirm lock-out check shared by the file-renderer
@@ -140,14 +160,21 @@ func (a *Applier) Rollback(token backend.RollbackToken) error {
 	if !ok {
 		return nil
 	}
+	log.Printf("uci: rollback token=%s restoring pkgs=%d, reload order=%v", token, len(snap), reloadPlan(managedPackages))
 	for _, pkg := range managedPackages {
 		if text, ok := snap[pkg]; ok {
-			_ = a.writePkg(pkg, text)
+			if err := a.writePkg(pkg, text); err != nil {
+				// A rollback that can't restore a package is the worst
+				// state the box can be in — it must never be silent.
+				log.Printf("uci: rollback token=%s restore pkg=%s FAILED: %v", token, pkg, err)
+			}
 		}
 	}
 	for _, pkg := range managedPackages {
 		if cmd := reloadCmd[pkg]; len(cmd) > 0 {
-			_, _ = a.run.run(cmd[0], cmd[1:]...)
+			if out, err := a.run.run(cmd[0], cmd[1:]...); err != nil {
+				log.Printf("uci: rollback token=%s reload pkg=%s (best-effort): %v output=%q", token, pkg, err, out)
+			}
 		}
 	}
 	return nil

@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -629,8 +630,9 @@ func (m *Manager) moveOne(job *Job, src, dst string, sticky *stickyConflict) err
 			// Source dir wasn't empty after merging — could happen
 			// if a child move was skipped. Leaving it is the right
 			// outcome; just don't bump (we already counted via the
-			// children).
-			_ = err
+			// children). Logged because "merge done but the source
+			// folder is still there" is otherwise inexplicable.
+			log.Printf("bulkops: merge left source dir behind: %s: %v", src, err)
 		}
 		m.bumpDone(job, 1)
 		return nil

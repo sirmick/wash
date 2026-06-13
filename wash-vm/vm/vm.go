@@ -170,7 +170,9 @@ func (vm *VM) dialCtl(ctx context.Context, path string, timeout time.Duration) (
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
-	return nil, fmt.Errorf("timeout after %s", timeout)
+	// Include the console tail like WaitReady does — a boot that never
+	// brings up the control plane explains itself on the console.
+	return nil, fmt.Errorf("timeout after %s waiting for control plane\nconsole:\n%s", timeout, vm.ConsoleLog())
 }
 
 // WaitReady blocks until the guest agent's hello arrives, or ctx/timeout

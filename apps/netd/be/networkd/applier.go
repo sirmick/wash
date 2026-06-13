@@ -2,8 +2,10 @@ package networkd
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,19 +81,37 @@ func (a *Applier) Apply(p backend.RenderPlan) (backend.RollbackToken, error) {
 	a.lastHadRoute = a.route()
 	a.mu.Unlock()
 
+	// The applier can take the box offline; every step it takes must
+	// leave a trail (unit set, reload, per-link reconfigure results).
+	log.Printf("networkd: apply token=%s dir=%s units=%v", token, a.dir, unitNames(units))
 	if err := writeDir(a.dir, units); err != nil {
+		log.Printf("networkd: apply token=%s write units: %v", token, err)
 		return token, err
 	}
 	if _, err := a.run.run("networkctl", "reload"); err != nil {
+		log.Printf("networkd: apply token=%s: %v", token, err)
 		return token, err
 	}
 	// reconfigure re-applies the reloaded config to each touched link. Best-effort
 	// per link: a link that isn't present yet (e.g. a vlan being created) errors
-	// harmlessly, and the reload already armed it for when it appears.
+	// harmlessly, and the reload already armed it for when it appears — but
+	// best-effort must not mean silent, so failures are logged.
 	for _, link := range affectedLinks(p.Target) {
-		_, _ = a.run.run("networkctl", "reconfigure", link)
+		if _, err := a.run.run("networkctl", "reconfigure", link); err != nil {
+			log.Printf("networkd: apply token=%s reconfigure %s (best-effort): %v", token, link, err)
+		}
 	}
 	return token, nil
+}
+
+// unitNames returns the sorted filenames of a unit set, for log lines.
+func unitNames(units map[string]string) []string {
+	names := make([]string, 0, len(units))
+	for n := range units {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // Verify is the commit-confirm health check (docs/NET.md §7, §2.9): the lock-out
@@ -110,9 +130,11 @@ func (a *Applier) Verify(model.Config) error {
 		// No default route to lose ⇒ no lock-out risk; a disconnected box is a
 		// valid result (an interface set to none/no-IP, or awaiting carrier), so
 		// don't require connectivity — networkd answering is enough.
+		log.Printf("networkd: verify: no default route before apply, skipping lock-out poll")
 		return nil
 	}
 
+	log.Printf("networkd: verify: had default route before apply, polling window=%s", a.window)
 	time.Sleep(a.settle)
 	const need = 3 // consecutive present samples ≈ 1.5s of stability
 	streak := 0
@@ -145,16 +167,21 @@ func (a *Applier) Rollback(token backend.RollbackToken) error {
 	if !ok {
 		return fmt.Errorf("rollback: unknown token %q", token)
 	}
+	log.Printf("networkd: rollback token=%s restoring units=%v", token, unitNames(snap))
 	if err := restoreDir(a.dir, snap); err != nil {
+		log.Printf("networkd: rollback token=%s restore units: %v", token, err)
 		return err
 	}
 	if _, err := a.run.run("networkctl", "reload"); err != nil {
+		log.Printf("networkd: rollback token=%s: %v", token, err)
 		return err
 	}
 	// Reload re-reads the restored units; reconfigure re-applies them to the live
 	// links so the revert actually takes (the lock-out's whole point).
 	for _, link := range linksOf(snap) {
-		_, _ = a.run.run("networkctl", "reconfigure", link)
+		if _, err := a.run.run("networkctl", "reconfigure", link); err != nil {
+			log.Printf("networkd: rollback token=%s reconfigure %s (best-effort): %v", token, link, err)
+		}
 	}
 	return nil
 }

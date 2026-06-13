@@ -7,6 +7,7 @@ package medialib
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net"
 	"net/http"
@@ -81,6 +82,9 @@ func Scan(root string) []Entry {
 	var out []Entry
 	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
+			// Skip but say so — a library that scans to zero tracks
+			// because the root is unreadable should explain itself.
+			log.Printf("medialib: scan %s: %v (skipped)", p, err)
 			return nil
 		}
 		if d.IsDir() {
@@ -142,7 +146,11 @@ func Serve(c *sdk.Conn, instanceID, sockPrefix string, rootFn func() string) (st
 		http.StripPrefix("/lib/", http.FileServer(http.FS(os.DirFS(root)))).ServeHTTP(w, r)
 	})
 	srv := &http.Server{Handler: mux}
-	go func() { _ = srv.Serve(ln) }()
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("medialib: file server stopped: %v", err)
+		}
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

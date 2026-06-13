@@ -204,7 +204,7 @@ func (s *Spawner) Spawn(id Identity, name string) (Session, error) {
 	}
 
 	if err := cmd.Start(); err != nil {
-		return Session{}, fmt.Errorf("start wash-router: %w", err)
+		return Session{}, fmt.Errorf("start wash-router bin=%s uid=%d gid=%d: %w", bin, id.UID, id.GID, err)
 	}
 	pid := cmd.Process.Pid
 

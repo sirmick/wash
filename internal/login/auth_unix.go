@@ -136,7 +136,11 @@ func (a *suAuth) Authenticate(user, password string) (Identity, error) {
 		}
 		return Identity{}, fmt.Errorf("su wait: %w", err)
 	case <-time.After(a.timeout):
-		return Identity{}, ErrInvalidCredentials
+		// Wrap rather than return ErrInvalidCredentials bare: a hung su
+		// (PAM misconfig, missing binary) must be distinguishable from a
+		// wrong password in the auth-rejection log line. errors.Is still
+		// matches, so callers treat it as a credentials failure.
+		return Identity{}, fmt.Errorf("%w (su timed out after %s)", ErrInvalidCredentials, a.timeout)
 	}
 }
 

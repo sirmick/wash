@@ -2,6 +2,7 @@ package nmprofile
 
 import (
 	"fmt"
+	"log"
 	"net/netip"
 	"sort"
 	"strconv"
@@ -138,7 +139,13 @@ func parseWireGuard(conn map[string]string, ini map[string]map[string]string) (m
 	if w := ini["wireguard"]; w != nil {
 		wg.PrivateKey = w["private-key"]
 		if lp := w["listen-port"]; lp != "" {
-			wg.ListenPort, _ = strconv.Atoi(lp)
+			n, err := strconv.Atoi(lp)
+			if err != nil {
+				// Warn, don't silently default to 0 — a wg interface that
+				// quietly loses its port is a debugging dead end.
+				log.Printf("nmprofile: %s: invalid listen-port %q ignored", name, lp)
+			}
+			wg.ListenPort = n
 		}
 	}
 	wg.Addresses = append(parseAddrs(ini["ipv4"]), parseAddrs(ini["ipv6"])...)
@@ -157,7 +164,11 @@ func parseWireGuard(conn map[string]string, ini map[string]map[string]string) (m
 		}
 		p.PresharedKey = kv["preshared-key"]
 		if k := kv["persistent-keepalive"]; k != "" {
-			p.PersistentKeepalive, _ = strconv.Atoi(k)
+			n, err := strconv.Atoi(k)
+			if err != nil {
+				log.Printf("nmprofile: %s peer %s: invalid persistent-keepalive %q ignored", name, p.PublicKey, k)
+			}
+			p.PersistentKeepalive = n
 		}
 		peers = append(peers, p)
 	}
@@ -209,7 +220,10 @@ func parseEndpoint(ep string) (string, int) {
 	} else if i := strings.LastIndex(ep, ":"); i >= 0 {
 		host, portStr = ep[:i], ep[i+1:]
 	}
-	port, _ := strconv.Atoi(portStr)
+	port, err := strconv.Atoi(portStr)
+	if err != nil && portStr != "" {
+		log.Printf("nmprofile: invalid port in endpoint %q ignored", ep)
+	}
 	return host, port
 }
 

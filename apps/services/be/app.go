@@ -278,6 +278,13 @@ func runAction(req ActionReq) {
 		return
 	}
 	ok, exit, stderr := dispatchAction(req)
+	// Server-side audit line: these are privileged systemctl/service
+	// mutations and the FE toast is the only other record.
+	if ok {
+		log.Printf("wash-services: %s %s ok", req.Op, req.Name)
+	} else {
+		log.Printf("wash-services: %s %s failed exit=%d stderr=%q", req.Op, req.Name, exit, stderr)
+	}
 	if err := st.conn.SendAppMsg(ActionResp{
 		Kind: "action_done", Name: req.Name, Op: req.Op,
 		OK: ok, Exit: exit, Stderr: stderr,

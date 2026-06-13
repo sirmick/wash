@@ -13,14 +13,24 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"strings"
 	"syscall"
 )
 
 func main() {
-	_ = syscall.Setgid(0)
-	_ = syscall.Setuid(0)
+	if err := syscall.Setgid(0); err != nil {
+		fmt.Fprintf(os.Stderr, "washvm-rootexec: setgid(0): %v\n", err)
+	}
+	if err := syscall.Setuid(0); err != nil {
+		fmt.Fprintf(os.Stderr, "washvm-rootexec: setuid(0): %v\n", err)
+	}
 	argv := append([]string{"wash-netd"}, os.Args[1:]...)
+	// Pre-exec trace: this is a setuid-root privilege boundary, so the
+	// "about to exec as root" line must exist before control transfers.
+	fmt.Fprintf(os.Stderr, "washvm-rootexec: uid=%d exec /usr/lib/wash/wash argv=%q\n",
+		os.Getuid(), strings.Join(argv, " "))
 	if err := syscall.Exec("/usr/lib/wash/wash", argv, os.Environ()); err != nil {
 		os.Stderr.WriteString("washvm-rootexec: exec wash-netd: " + err.Error() + "\n")
 		os.Exit(127)

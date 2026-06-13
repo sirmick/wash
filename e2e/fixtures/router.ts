@@ -354,6 +354,13 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   const args = [
     '--listen',
     `127.0.0.1:${port}`,
+    // The standalone ws listener token-gates GET /, /ws and /screenshot
+    // by default (wash-auth-harden). This harness is the documented
+    // trusted-loopback case: every router is per-test, bound to
+    // 127.0.0.1 on an ephemeral port, and torn down with the test —
+    // and the auth gate itself is covered by auth-harden.spec.ts via
+    // the login fixture's per-user routers.
+    '--no-auth',
     '--apps-dir',
     appsDir,
     '--control-socket',

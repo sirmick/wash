@@ -18,6 +18,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"os"
@@ -233,6 +234,7 @@ func registerHandlers(b *sdk.Bus) {
 	})
 	sdk.Handle(b, "write", func(_ *sdk.Conn, _ string, req writeReq) (wfs.WriteReply, error) {
 		abs, n, err := fmFS.Write(req.Path, []byte(req.Content), maxWriteBytes)
+		logOp("write", fmt.Sprintf("path=%q bytes=%d", fallbackPath(abs, req.Path), n), err)
 		if err != nil {
 			return wfs.WriteReply{}, fsErr(err, fallbackPath(abs, req.Path))
 		}
@@ -240,6 +242,8 @@ func registerHandlers(b *sdk.Bus) {
 	})
 	sdk.Handle(b, "rename", func(_ *sdk.Conn, _ string, req renameReq) (wfs.RenameReply, error) {
 		src, dst, err := fmFS.Rename(req.From, req.To, req.Replace)
+		logOp("rename", fmt.Sprintf("from=%q to=%q replace=%v",
+			fallbackPath(src, req.From), fallbackPath(dst, req.To), req.Replace), err)
 		if err != nil {
 			return wfs.RenameReply{}, fsErr(err, fallbackPath(src, req.From))
 		}
@@ -247,6 +251,7 @@ func registerHandlers(b *sdk.Bus) {
 	})
 	sdk.Handle(b, "delete", func(_ *sdk.Conn, _ string, req pathReq) (wfs.PathReply, error) {
 		abs, err := fmFS.Delete(req.Path)
+		logOp("delete", fmt.Sprintf("path=%q", fallbackPath(abs, req.Path)), err)
 		if err != nil {
 			return wfs.PathReply{}, fsErr(err, fallbackPath(abs, req.Path))
 		}
@@ -254,6 +259,7 @@ func registerHandlers(b *sdk.Bus) {
 	})
 	sdk.Handle(b, "create_file", func(_ *sdk.Conn, _ string, req pathReq) (wfs.PathReply, error) {
 		abs, err := fmFS.CreateFile(req.Path)
+		logOp("create_file", fmt.Sprintf("path=%q", fallbackPath(abs, req.Path)), err)
 		if err != nil {
 			return wfs.PathReply{}, fsErr(err, fallbackPath(abs, req.Path))
 		}
@@ -261,6 +267,7 @@ func registerHandlers(b *sdk.Bus) {
 	})
 	sdk.Handle(b, "create_dir", func(_ *sdk.Conn, _ string, req pathReq) (wfs.PathReply, error) {
 		abs, err := fmFS.CreateDir(req.Path)
+		logOp("create_dir", fmt.Sprintf("path=%q", fallbackPath(abs, req.Path)), err)
 		if err != nil {
 			return wfs.PathReply{}, fsErr(err, fallbackPath(abs, req.Path))
 		}
@@ -278,8 +285,10 @@ func registerHandlers(b *sdk.Bus) {
 		if err != nil {
 			return wfs.PathReply{}, fsErr(err, req.Path)
 		}
-		if err := os.Chmod(abs, os.FileMode(mode&0o7777)); err != nil {
-			return wfs.PathReply{}, fsErr(err, abs)
+		cerr := os.Chmod(abs, os.FileMode(mode&0o7777))
+		logOp("chmod", fmt.Sprintf("path=%q mode=%04o", abs, mode&0o7777), cerr)
+		if cerr != nil {
+			return wfs.PathReply{}, fsErr(cerr, abs)
 		}
 		return wfs.PathReply{Path: abs}, nil
 	})
@@ -336,6 +345,18 @@ func registerHandlers(b *sdk.Bus) {
 }
 
 // ----- handler bodies -----
+
+// logOp is the server-side audit line for every destructive fs op.
+// The FE toast that reports these errors is dismissed in seconds;
+// this line is the durable trail. detail is pre-formatted key=value
+// context, paths first.
+func logOp(op, detail string, err error) {
+	if err != nil {
+		log.Printf("fm: %s %s: %v", op, detail, err)
+		return
+	}
+	log.Printf("fm: %s %s ok", op, detail)
+}
 
 // listReplyFor lists the directory at path. Auto-resolves "" to
 // initialPath() so the on-mount paint can reuse the handler shape.
@@ -418,8 +439,10 @@ func doChown(req chownReq) (wfs.PathReply, error) {
 		}
 		gid = n
 	}
-	if err := os.Chown(abs, uid, gid); err != nil {
-		return wfs.PathReply{}, fsErr(err, abs)
+	cerr := os.Chown(abs, uid, gid)
+	logOp("chown", fmt.Sprintf("path=%q uid=%d gid=%d", abs, uid, gid), cerr)
+	if cerr != nil {
+		return wfs.PathReply{}, fsErr(cerr, abs)
 	}
 	return wfs.PathReply{Path: abs}, nil
 }
@@ -445,12 +468,14 @@ func doSymlink(req symlinkReq) (wfs.SymlinkReply, error) {
 			return wfs.SymlinkReply{}, fsErr(err, link)
 		}
 	}
-	if err := os.Symlink(req.Target, link); err != nil {
-		code := wfs.ErrCode(err)
-		if errors.Is(err, os.ErrExist) {
+	serr := os.Symlink(req.Target, link)
+	logOp("symlink", fmt.Sprintf("link=%q target=%q replace=%v", link, req.Target, req.Replace), serr)
+	if serr != nil {
+		code := wfs.ErrCode(serr)
+		if errors.Is(serr, os.ErrExist) {
 			code = "exists"
 		}
-		return wfs.SymlinkReply{}, sdk.Err{Code: code, Msg: err.Error()}
+		return wfs.SymlinkReply{}, sdk.Err{Code: code, Msg: serr.Error()}
 	}
 	return wfs.SymlinkReply{Target: req.Target, LinkPath: link}, nil
 }

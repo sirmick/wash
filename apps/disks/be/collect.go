@@ -1,6 +1,7 @@
 package disks
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -39,6 +40,8 @@ func isPhysicalDisk(name string) bool {
 func collectDisks() []Disk {
 	entries, err := os.ReadDir(sysBlock)
 	if err != nil {
+		// A disks app showing zero disks should say why in the log.
+		log.Printf("wash-disks: read %s: %v", sysBlock, err)
 		return nil
 	}
 	stats := readDiskstats()
@@ -151,6 +154,7 @@ type diskstat struct {
 func readDiskstats() map[string]diskstat {
 	b, err := os.ReadFile(procDiskstats)
 	if err != nil {
+		log.Printf("wash-disks: read %s: %v", procDiskstats, err)
 		return nil
 	}
 	out := map[string]diskstat{}
@@ -182,6 +186,7 @@ type mountInfo struct {
 func readMounts() map[string]mountInfo {
 	b, err := os.ReadFile(procMounts)
 	if err != nil {
+		log.Printf("wash-disks: read %s: %v", procMounts, err)
 		return nil
 	}
 	out := map[string]mountInfo{}
@@ -212,6 +217,11 @@ func readDevDiskMap(kind string) map[string]string {
 	dir := filepath.Join(devDisk, kind)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		// Absent dir is normal (no labeled/uuid'd devices yet);
+		// anything else is worth a line.
+		if !os.IsNotExist(err) {
+			log.Printf("wash-disks: read %s: %v", dir, err)
+		}
 		return nil
 	}
 	out := map[string]string{}

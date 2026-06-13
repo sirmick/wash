@@ -71,6 +71,11 @@ type streamCtl struct {
 	stderrAcc  []byte // unprivileged stderr — inspected for perm denied
 	closedOnce sync.Once
 	closed     atomic.Bool
+
+	// parseDrops counts JSON-looking lines that failed to decode.
+	// Logged on the first drop only — journalctl interleaving non-JSON
+	// warnings is known-normal, a *stream* of failures is not.
+	parseDrops atomic.Int64
 }
 
 const flushAt = 200
@@ -288,6 +293,9 @@ func (s *streamCtl) handleLine(line []byte) {
 	}
 	var raw map[string]any
 	if err := json.Unmarshal(line, &raw); err != nil {
+		if s.parseDrops.Add(1) == 1 {
+			log.Printf("wash-journal: dropping unparseable journalctl line (logged once per stream): %v", err)
+		}
 		return
 	}
 	entry := LogEntry{

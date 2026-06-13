@@ -17,6 +17,7 @@ package sdk
 
 import (
 	"context"
+	"log"
 	"os"
 	"runtime"
 	"strconv"
@@ -62,9 +63,11 @@ func (c *Conn) startHeartbeat(ctx context.Context) {
 				return
 			case <-t.C:
 				if err := c.writeEvt(buildRuntimeStats(c.def)); err != nil {
-					// Conn closed under us — loop exits via ctx on
-					// the next iteration. No need to log; the parent
-					// Run() will surface the close.
+					// Usually just the conn closing under us, but a
+					// write failure on a live conn means About-panel
+					// stats silently freeze — one line so the stop is
+					// attributable either way.
+					log.Printf("sdk: heartbeat stopped: %v", err)
 					return
 				}
 			}

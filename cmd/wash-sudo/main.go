@@ -151,9 +151,12 @@ func newReqID() string {
 // and stdout/stderr the other, exits with the wrapped command's
 // code.
 func runCommand(sock string, argv []string, reason string, window bool, noPrompt bool, env map[string]string) int {
+	// reqID exists before the dial so even a dial failure is
+	// correlatable with wash-priv's queue / audit log.
+	reqID := newReqID()
 	conn, err := dial(sock)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "wash-sudo: dial %s: %v\n", sock, err)
+		fmt.Fprintf(os.Stderr, "wash-sudo: req_id=%s dial %s: %v\n", reqID, sock, err)
 		return 1
 	}
 	defer conn.Close()
@@ -161,7 +164,7 @@ func runCommand(sock string, argv []string, reason string, window bool, noPrompt
 	cwd, _ := os.Getwd()
 	req := map[string]any{
 		"t":      "priv.run",
-		"req_id": newReqID(),
+		"req_id": reqID,
 		"argv":   argv,
 		"cwd":    cwd,
 	}

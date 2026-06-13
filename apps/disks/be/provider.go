@@ -2,6 +2,7 @@ package disks
 
 import (
 	"context"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -107,12 +108,20 @@ func scanPrivileged(ctx context.Context, run RunFunc) []Manager {
 	}
 	out, err := run(ctx, []string{"sh", "-c", sb.String()}, "scan storage volumes (LVM / btrfs / ZFS)")
 	if err != nil {
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.name
+		}
+		log.Printf("wash-disks: privileged scan providers=%v failed: %v", names, err)
 		return nil
 	}
 	sections := splitProviderSections(string(out))
 	var mgrs []Manager
 	for _, e := range entries {
 		mgr, present, err := e.sp.ParseScan(sections[e.name])
+		if err != nil {
+			log.Printf("wash-disks: %s scan parse: %v", e.name, err)
+		}
 		if err == nil && present {
 			mgrs = append(mgrs, mgr)
 		}

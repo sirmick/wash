@@ -53,13 +53,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	name := *backendFlag
+	// Record where the backend choice came from — an apply against the
+	// wrong backend is a forensics question, not a guess.
+	name, src := *backendFlag, "flag"
 	if name == "" {
-		name = os.Getenv("WASH_NETD_BACKEND")
+		name, src = os.Getenv("WASH_NETD_BACKEND"), "env"
 	}
 	if name == "" {
-		name, _ = backendsel.Autodetect()
+		var why string
+		name, why = backendsel.Autodetect()
+		src = "autodetect: " + why
 	}
+	fmt.Fprintf(os.Stderr, "washnet-apply: backend=%s (%s)\n", name, src)
 	a := backendsel.New(name)
 	if a == nil {
 		fmt.Fprintf(os.Stderr, "washnet-apply: no live backend for %q\n", name)
@@ -81,7 +86,12 @@ func main() {
 		os.Exit(1)
 	}
 	if err := a.Verify(cfg); err != nil {
-		_ = a.Rollback(token)
+		if rerr := a.Rollback(token); rerr != nil {
+			// Failed verify + failed rollback is the worst state the box
+			// can be in — say so explicitly instead of claiming REVERTED.
+			fmt.Fprintf(os.Stderr, "washnet-apply: ROLLBACK FAILED after failed verify: %v (verify: %v)\n", rerr, err)
+			os.Exit(1)
+		}
 		fmt.Fprintf(os.Stderr, "washnet-apply: REVERTED (verify failed): %v\n", err)
 		os.Exit(1)
 	}

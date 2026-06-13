@@ -43,6 +43,7 @@ test('Proto <select> reactively swaps variant fields and emits the right path', 
 
   const select = () => container.querySelector('.wash-net-method select') as HTMLSelectElement;
   const cidrs = () => container.querySelectorAll('input[data-widget="cidr"]');
+  const lists = () => container.querySelectorAll('textarea');
   const checks = () => container.querySelectorAll('input[type="checkbox"]');
 
   // DHCP: per-family toggles, no static address fields.
@@ -55,12 +56,14 @@ test('Proto <select> reactively swaps variant fields and emits the right path', 
   fireEvent.change(select(), { target: { value: 'static' } });
   expect(calls.at(-1)).toEqual(['Interfaces[0].Proto', { _tag: 'static' }]);
   expect(select().value).toBe('static');
-  expect(cidrs().length).toBe(2); // IPAddr + IP6Addr
+  expect(cidrs().length).toBe(1); // IP6Addr (IPAddr is a list-cidr textarea now)
+  expect(lists().length).toBe(2); // IPAddr (list-cidr) + DNS (list-ip)
 
   // → none ("Disabled"): no variant fields at all.
   fireEvent.change(select(), { target: { value: 'none' } });
   expect(select().value).toBe('none');
   expect(cidrs().length).toBe(0);
+  expect(lists().length).toBe(0);
   expect(checks().length).toBe(0);
 
   // → back to DHCP: toggles return.

@@ -764,10 +764,14 @@ func (inst *AppInstance) handleAppRestart(m wire.EvtAppRestart) error {
 	go func() {
 		newID, code, err := inst.router.restartBackgroundApp(m.AppID)
 		if err != nil {
-			_ = inst.WriteEvt(wire.NewEvtAppRestartErr(m.ReqID, code, err.Error()))
+			if werr := inst.WriteEvt(wire.NewEvtAppRestartErr(m.ReqID, code, err.Error())); werr != nil {
+				inst.router.log("restart %s: err reply to instance=%s lost: %v (restart error was: %v)", m.AppID, inst.InstanceID, werr, err)
+			}
 			return
 		}
-		_ = inst.WriteEvt(wire.NewEvtAppRestartOk(m.ReqID, newID))
+		if werr := inst.WriteEvt(wire.NewEvtAppRestartOk(m.ReqID, newID)); werr != nil {
+			inst.router.log("restart %s: ok reply to instance=%s lost: %v", m.AppID, inst.InstanceID, werr)
+		}
 	}()
 	return nil
 }
@@ -813,10 +817,14 @@ func (r *Router) spawnChild(target *Entry, requester *AppInstance) {
 	inst, err := r.spawnAndRun(context.Background(), target, false)
 	if err != nil {
 		r.log("spawn %s: %v", target.Manifest.ID, err)
-		_ = requester.WriteEvt(wire.NewEvtSpawnErr(target.Manifest.ID, wire.ErrCodeInternal, err.Error()))
+		if werr := requester.WriteEvt(wire.NewEvtSpawnErr(target.Manifest.ID, wire.ErrCodeInternal, err.Error())); werr != nil {
+			r.log("spawn %s: err reply to instance=%s lost: %v", target.Manifest.ID, requester.InstanceID, werr)
+		}
 		return
 	}
-	_ = requester.WriteEvt(wire.NewEvtSpawnOk(target.Manifest.ID, inst.InstanceID))
+	if werr := requester.WriteEvt(wire.NewEvtSpawnOk(target.Manifest.ID, inst.InstanceID)); werr != nil {
+		r.log("spawn %s: ok reply to instance=%s lost: %v (spawned instance=%s)", target.Manifest.ID, requester.InstanceID, werr, inst.InstanceID)
+	}
 }
 
 // requestClose initiates the X-style close handshake (WIRE.md §10).

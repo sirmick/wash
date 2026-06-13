@@ -19,6 +19,7 @@
 #include "compositor.hpp"
 #endif
 
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -144,6 +145,10 @@ static void handle_display_open(wash::WireConn& conn, const wash::json& data) {
 }
 
 static int run() {
+    // Identity line first: stale-binary debugging keeps recurring, and
+    // version+proto in the log is what settles "which build is this?".
+    std::fprintf(stderr, "wash-display: starting version=%s proto=%d pid=%d\n",
+                 kVersion, kProto, static_cast<int>(::getpid()));
     const char* sock = std::getenv("WASH_DISPLAY");
     if (!sock || !*sock) {
         std::fprintf(stderr, "wash-display: WASH_DISPLAY not set (run via the router)\n");
@@ -156,14 +161,16 @@ static int run() {
 
     int fd = dial(sock);
     if (fd < 0) {
-        std::fprintf(stderr, "wash-display: dial %s failed\n", sock);
+        std::fprintf(stderr, "wash-display: dial %s failed: %s\n", sock, std::strerror(errno));
         return 1;
     }
 
     wash::WireConn conn(fd);
     std::string instanceID;
     if (!conn.handshake(appID, kVersion, kProto, token, instanceID)) {
-        std::fprintf(stderr, "wash-display: handshake failed\n");
+        std::fprintf(stderr,
+                     "wash-display: handshake failed (app_id=%s version=%s proto=%d token_present=%d)\n",
+                     appID.c_str(), kVersion, kProto, token.empty() ? 0 : 1);
         return 1;
     }
     std::fprintf(stderr, "wash-display: attached instance=%s\n", instanceID.c_str());

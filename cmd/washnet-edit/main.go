@@ -31,10 +31,13 @@ func main() {
 }
 
 func run() error {
-	name := os.Getenv("WASH_NETD_BACKEND")
+	name, src := os.Getenv("WASH_NETD_BACKEND"), "env"
 	if name == "" {
-		name, _ = backendsel.Autodetect()
+		var why string
+		name, why = backendsel.Autodetect()
+		src = "autodetect: " + why
 	}
+	fmt.Fprintf(os.Stderr, "washnet-edit: backend=%s (%s)\n", name, src)
 	a := backendsel.New(name)
 	if a == nil {
 		return fmt.Errorf("no live backend for %q", name)
@@ -87,7 +90,9 @@ func run() error {
 		return fmt.Errorf("apply failed: %w", err)
 	}
 	if err := a.Verify(newCfg); err != nil {
-		_ = a.Rollback(token)
+		if rerr := a.Rollback(token); rerr != nil {
+			return fmt.Errorf("ROLLBACK FAILED after failed verify: %v (verify: %w)", rerr, err)
+		}
 		return fmt.Errorf("reverted (verify failed): %w", err)
 	}
 

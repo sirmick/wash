@@ -8,6 +8,8 @@ package txn
 
 import (
 	"fmt"
+	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,7 +69,7 @@ func Apply(base, target model.Config, applier backend.Applier) (*Job, error) {
 	}
 
 	j.diff = change.Compute(base, target)
-	j.emit("render", "info", fmt.Sprintf("rendering %d change(s)", len(j.diff.Entries)))
+	j.emit("render", "info", fmt.Sprintf("rendering %d change(s): %s", len(j.diff.Entries), diffSummary(j.diff)))
 	if _, err := applier.Render(target); err != nil {
 		j.emit("render", "error", err.Error())
 		j.state = Failed
@@ -86,8 +88,13 @@ func Apply(base, target model.Config, applier backend.Applier) (*Job, error) {
 	j.emit("verify", "info", "verifying applied state")
 	if err := applier.Verify(target); err != nil {
 		j.emit("verify", "error", "verify failed: "+err.Error())
-		_ = applier.Rollback(tok)
-		j.emit("reverted", "warn", "auto-reverted after failed verify")
+		if rerr := applier.Rollback(tok); rerr != nil {
+			// Failed verify + failed rollback is the worst state the box
+			// can be in — never report it as a clean revert.
+			j.emit("reverted", "error", "ROLLBACK FAILED after failed verify: "+rerr.Error())
+		} else {
+			j.emit("reverted", "warn", "auto-reverted after failed verify")
+		}
 		j.state = Reverted
 		return j, nil
 	}
@@ -187,6 +194,27 @@ func (j *Job) emit(phase, level, msg string) {
 func (j *Job) emitLocked(phase, level, msg string) {
 	j.seq++
 	j.events = append(j.events, Event{Seq: j.seq, Phase: phase, Level: level, Msg: msg})
+	// Mirror every phase event to the server log: the FE apply terminal
+	// shows this stream, but if the apply severs connectivity the FE is
+	// gone and the log is the only surviving trail.
+	log.Printf("washnet-txn: %s [%s] %s", phase, level, msg)
+}
+
+// diffSummary renders the diff entries ("~ network/iface lan, + firewall/zone
+// wan") so the trail records WHAT changed, not just how many things did.
+// Capped — a huge first-takeover diff shouldn't flood the event stream.
+func diffSummary(d change.Diff) string {
+	const maxShown = 20
+	sym := map[change.Op]string{change.OpAdd: "+", change.OpRemove: "-", change.OpUpdate: "~"}
+	parts := make([]string, 0, len(d.Entries))
+	for i, e := range d.Entries {
+		if i == maxShown {
+			parts = append(parts, fmt.Sprintf("… %d more", len(d.Entries)-maxShown))
+			break
+		}
+		parts = append(parts, sym[e.Op]+" "+e.Kind+" "+e.Name)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func errorCount(ds []validate.Diagnostic) int {

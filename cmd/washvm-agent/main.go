@@ -6,6 +6,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 
@@ -28,9 +29,11 @@ func main() {
 	if len(os.Args) > 2 {
 		dataPort = os.Args[2]
 	}
+	// Stderr goes to the VM console, which the host harness tails on
+	// boot failure — every exit path must say why it died.
 	f, err := os.OpenFile(ctlPort, os.O_RDWR, 0)
 	if err != nil {
-		// Nothing to talk to; nothing to do.
+		fmt.Fprintf(os.Stderr, "washvm-agent: open ctl port %s: %v\n", ctlPort, err)
 		os.Exit(1)
 	}
 	defer f.Close()
@@ -39,6 +42,7 @@ func main() {
 	// mode would line-buffer and mangle CR/LF and the frame would never arrive.
 	// Don't rely on busybox stty; do it here.
 	if err := makeRaw(int(f.Fd())); err != nil {
+		fmt.Fprintf(os.Stderr, "washvm-agent: raw mode on %s: %v\n", ctlPort, err)
 		os.Exit(1)
 	}
 
@@ -49,6 +53,8 @@ func main() {
 		if df, err := os.OpenFile(dataPort, os.O_RDWR, 0); err == nil {
 			_ = makeRaw(int(df.Fd()))
 			go echoFrames(df)
+		} else {
+			fmt.Fprintf(os.Stderr, "washvm-agent: open data port %s: %v (echo plane disabled)\n", dataPort, err)
 		}
 	}
 
@@ -56,6 +62,7 @@ func main() {
 	// avoids the host→guest UART-FIFO overflow race at startup (the host must
 	// not send a request until it has seen this hello).
 	if err := proto.WriteFrame(f, proto.Response{Out: "hello"}); err != nil {
+		fmt.Fprintf(os.Stderr, "washvm-agent: write hello on %s: %v\n", ctlPort, err)
 		os.Exit(1)
 	}
 
@@ -63,10 +70,12 @@ func main() {
 		var req proto.Request
 		if err := proto.ReadFrame(f, &req); err != nil {
 			// EOF / closed control plane: the VM is going away.
+			fmt.Fprintf(os.Stderr, "washvm-agent: ctl read: %v (exiting)\n", err)
 			return
 		}
 		resp := run(req)
 		if err := proto.WriteFrame(f, &resp); err != nil {
+			fmt.Fprintf(os.Stderr, "washvm-agent: ctl write id=%d: %v (exiting)\n", req.ID, err)
 			return
 		}
 	}
