@@ -133,6 +133,32 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         if (api) api.write('\r\n\x1b[31mwash-term: ' + String(m.msg) + '\x1b[0m\r\n');
         return;
       }
+      case 'sessions':
+        reconcile((m.sessions ?? []) as PersistedTabRow[]);
+        return;
+    }
+  };
+
+  // reconcile aligns the restored tab list with the BE's live pty
+  // set (the list_sessions reply). Restored state can be stale in
+  // both directions: a pty that exited while the browser was
+  // detached (its tab_closed was dropped — the router doesn't
+  // buffer app_msgs for detached shells) leaves a dead tab, and a
+  // save that never flushed can miss a live one.
+  const reconcile = (rows: PersistedTabRow[]) => {
+    const live = new Map(rows.map((r) => [Number(r.channel_id), String(r.shell ?? 'shell')]));
+    const wasActive = active();
+    for (const t of tabs()) {
+      if (!live.has(t.channelID)) removeTab(t.channelID);
+    }
+    for (const [id, shell] of live) {
+      if (!tabs().some((t) => t.channelID === id)) addTab(id, shell);
+    }
+    // addTab steals activation; put it back if the original
+    // active tab is still alive.
+    if (wasActive && live.has(wasActive) && active() !== wasActive) {
+      setActive(wasActive);
+      persist();
     }
   };
 
@@ -157,6 +183,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     if (s.active && tabs().some((t) => t.channelID === s.active)) {
       setActive(s.active);
     }
+    // The restored list may be stale (ptys that died while the
+    // browser was detached); ask the BE for the live set and
+    // reconcile when the `sessions` reply lands.
+    send({ kind: 'list_sessions' });
   };
 
   // ---- keyboard shortcuts ----
