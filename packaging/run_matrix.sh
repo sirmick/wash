@@ -289,7 +289,9 @@ docker build -f "$ROOT/packaging/Dockerfile.build" \
 echo ">>> [phase B] cores (parallel x$JOBS): $(printf '%s\n' "${rows[@]}" | cut -d'|' -f4 | sort -u | tr '\n' ' ')"
 for arch in $(printf '%s\n' "${rows[@]}" | cut -d'|' -f4 | sort -u); do
     gate
-    ( build_core "$arch" >"$DIST/phase-core-$arch.log" 2>&1; echo $? >"$DIST/phase-core-$arch.rc" ) &
+    ( s=$SECONDS; printf '  ▸ core %-26s building…\n' "$arch"
+      build_core "$arch" >"$DIST/phase-core-$arch.log" 2>&1; rc=$?; echo $rc >"$DIST/phase-core-$arch.rc"
+      printf '  %s core %-26s %3ds  (see dist/phase-core-%s.log)\n' "$([ $rc = 0 ] && echo ✓ || echo ✗FAIL)" "$arch" "$((SECONDS-s))" "$arch" ) &
 done
 wait
 
@@ -304,7 +306,9 @@ if [[ "${WASH_PKG_DISPLAY:-}" == "1" ]]; then
         [[ -n "${seen_disp[$dkey]:-}" ]] && continue
         seen_disp[$dkey]=1
         gate
-        ( build_display "$base" "$goarch" >"$DIST/phase-disp-$dkey.log" 2>&1; echo $? >"$DIST/phase-disp-$dkey.rc" ) &
+        ( s=$SECONDS; printf '  ▸ display %-23s building… (vendored wlroots; emulated for arm64/riscv64 — slow)\n' "$dkey"
+          build_display "$base" "$goarch" >"$DIST/phase-disp-$dkey.log" 2>&1; rc=$?; echo $rc >"$DIST/phase-disp-$dkey.rc"
+          printf '  %s display %-23s %3ds  (see dist/phase-disp-%s.log)\n' "$([ $rc = 0 ] && echo ✓ || echo ✗FAIL)" "$dkey" "$((SECONDS-s))" "$dkey" ) &
     done
     wait
 fi
@@ -312,8 +316,11 @@ fi
 # Phase D: per-row package build (parallel, isolated contexts).
 echo ">>> [phase D] package rows (parallel x$JOBS): ${#rows[@]} rows"
 for r in "${rows[@]}"; do
+    IFS='|' read -r tag _ _ _ _ <<<"$r"
     gate
-    ( process_row "$r" ) &
+    ( s=$SECONDS; printf '  ▸ pkg %-30s building…\n' "$tag"
+      process_row "$r"
+      printf '  %s pkg %-30s %3ds  %s\n' "$(grep -q ': OK' "$DIST/$tag.result" 2>/dev/null && echo ✓ || echo ✗FAIL)" "$tag" "$((SECONDS-s))" "$(sed 's/^[^:]*: *//' "$DIST/$tag.result" 2>/dev/null)" ) &
 done
 wait
 
@@ -330,5 +337,8 @@ for r in "${rows[@]}"; do
     echo "  $line"
     case "$line" in *FAIL*|*"NO RESULT"*|*"NO BINTAR"*|*"NO ARTIFACT"*) fail=1;; esac
 done
-echo; echo "Packages: $PKG_DIR/<tag>/   Logs: $DIST/<tag>.log"
+echo
+echo "Built packages → $PKG_DIR/  (per-row logs: $DIST/<tag>.log)"
+find "$PKG_DIR" -maxdepth 2 \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' -o -name '*.tgz' \) 2>/dev/null \
+    | sort | while read -r f; do printf '  %-6s %s\n' "$(du -h "$f" | cut -f1)" "$f"; done
 exit $fail

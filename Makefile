@@ -175,10 +175,13 @@ all: $(TARGETS)
 # (all/multicall are the underlying targets; wash/wash-multicall are the verbs.)
 .PHONY: wash
 wash: all
-	@echo "wash: built $(words $(TARGETS)) binaries → $(OUT)/$(if $(filter $(OUT)/wash-display,$(TARGETS)),  (incl. wash-display),  (no wash-display — set WASH_DISPLAY=1 or install wlroots to add it))"
+	@echo "wash: built $(words $(TARGETS)) binaries$(if $(filter $(OUT)/wash-display,$(TARGETS)),  (incl. wash-display),  (no wash-display — set WASH_DISPLAY=1 or install wlroots))"
+	@echo "  → $(abspath $(OUT))/   (run: make run)"
 
 .PHONY: wash-multicall
 wash-multicall: multicall
+	@echo "wash-multicall: busybox layout assembled"
+	@echo "  → $(abspath $(OUT))/multicall/   ($(words $(wildcard $(OUT)/multicall/*)) entries: wash + wash-* symlinks)"
 
 $(OUT):
 	mkdir -p $(OUT)
