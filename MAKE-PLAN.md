@@ -119,5 +119,5 @@ fix run-browser/run-qemu "run one or the other" comments — they're independent
 Session began: "pick up pkg-hermetic, reconcile with main, push." That's committed on local
 main (unpushed): pkg-hermetic merge (502261e), `-no-auth` boot-smoke + parallel matrix
 (e3e1255), capability-aware front door (270b1eb), multicall out-split (05dad96). The ORIGINAL
-endpoint — **push to remote + green GH Actions — is still pending** (this make work precedes it
-so the push is elegant + tested).
+endpoint — **push to remote + green GH Actions — is DONE** (pushed 2026-06-13 `606d5ed` via
+`make push`; ci.yml + demo.yml both green). This make work landed first so the push was tested.
