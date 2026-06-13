@@ -9,7 +9,7 @@ func validPanelManifest() Manifest {
 	return Manifest{
 		ID:              "com.wash.display",
 		Name:            "Wash Display",
-		Version:         "0.8.0",
+		Version:         "0.9.0",
 		ProtocolVersion: ProtocolVersion,
 		Surface:         SurfaceBackground,
 		Instancing:      InstancingSingleton,

@@ -31,7 +31,7 @@ var assetsFS embed.FS
 //go:embed default-wallpaper.png
 var defaultWallpaper []byte
 
-const version = "0.8.0"
+const version = "0.9.0"
 
 var def *sdk.AppDef
 

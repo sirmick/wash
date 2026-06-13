@@ -14,7 +14,7 @@ func multiWinManifest(caps ...string) *Manifest {
 	return &Manifest{
 		ID:              "com.wash.disptest",
 		Name:            "Disp Test",
-		Version:         "0.8.0",
+		Version:         "0.9.0",
 		ProtocolVersion: ProtocolVersion,
 		Element:         "wash-app-disptest",
 		Surface:         SurfaceWindow,
@@ -113,7 +113,7 @@ func TestMultiWindowCreateChannelDestroy(t *testing.T) {
 	go func() { defer close(shellDone); _ = r.HandleShell(context.Background(), shellPair.EndA()) }()
 
 	// Handshake: identity → ack (primary window), then EvtWindowMapped.
-	writeCtrl(t, app, wire.NewIdentity("com.wash.disptest", ProtocolVersion, "0.8.0"))
+	writeCtrl(t, app, wire.NewIdentity("com.wash.disptest", ProtocolVersion, "0.9.0"))
 	ack, ok := readCtrl(t, app).(wire.IdentityAck)
 	if !ok || ack.WindowID == 0 {
 		t.Fatalf("expected IdentityAck with a window, got %+v", ack)
@@ -181,7 +181,7 @@ func TestWindowCreateRequiresCapability(t *testing.T) {
 	appDone := make(chan struct{})
 	go func() { defer close(appDone); _ = r.HandleApp(context.Background(), appPair.EndA(), multiWinManifest(), nil) }()
 
-	writeCtrl(t, app, wire.NewIdentity("com.wash.disptest", ProtocolVersion, "0.8.0"))
+	writeCtrl(t, app, wire.NewIdentity("com.wash.disptest", ProtocolVersion, "0.9.0"))
 	ack, ok := readCtrl(t, app).(wire.IdentityAck)
 	if !ok || ack.WindowID == 0 {
 		t.Fatalf("expected IdentityAck with a window, got %+v", ack)

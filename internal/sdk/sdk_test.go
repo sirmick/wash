@@ -85,7 +85,7 @@ func aboutDef(assets map[string]string) *AppDef {
 		Manifest: Manifest{
 			ID:              "com.wash.about",
 			Name:            "About wash",
-			Version:         "0.8.0",
+			Version:         "0.9.0",
 			ProtocolVersion: 1,
 			Element:         "wash-app-about",
 			Surface:         SurfaceWindow,

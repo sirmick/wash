@@ -15,7 +15,7 @@ func bgManifest(id string) *Manifest {
 	return &Manifest{
 		ID:              id,
 		Name:            "BG " + id,
-		Version:         "0.8.0",
+		Version:         "0.9.0",
 		ProtocolVersion: ProtocolVersion,
 		Surface:         SurfaceBackground,
 		Instancing:      InstancingSingleton,

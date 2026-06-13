@@ -1,3 +1,14 @@
+wash (0.9.0-1) unstable; urgency=low
+
+  * Hermetic native packaging: deb/rpm/apk built from a source-only tarball
+    inside sanitized per-distro Docker images, across amd64/arm64/riscv64.
+  * Optional wash-display compositor package (amd64/arm64) with vendored wlroots.
+  * Multi-user wash-login, the background service tier (notify/bulk/priv),
+    networking (wash-net/netd), storage (wash-disks), and the audio/media apps.
+  * Build/test/packaging unified behind a goal-oriented `make` interface.
+
+ -- wash maintainers <wash@example.invalid>  Sat, 13 Jun 2026 00:00:00 +0000
+
 wash (0.8.0-1) unstable; urgency=low
 
   * Initial packaging: wash-router plus the v0 app set

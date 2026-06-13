@@ -101,7 +101,7 @@ func TestValidateBackgroundSurface(t *testing.T) {
 	m := &Manifest{
 		ID:              "com.wash.notify",
 		Name:            "Notifications",
-		Version:         "0.8.0",
+		Version:         "0.9.0",
 		ProtocolVersion: ProtocolVersion,
 		Surface:         SurfaceBackground,
 		Instancing:      InstancingSingleton,

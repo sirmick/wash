@@ -203,7 +203,7 @@ func TestCatalogFiltersSurfaceBackground(t *testing.T) {
 	reg.RegisterEntry(&Entry{
 		Path: "/tmp/wash-about",
 		Manifest: &Manifest{
-			ID: "com.wash.about", Name: "About wash", Version: "0.8.0",
+			ID: "com.wash.about", Name: "About wash", Version: "0.9.0",
 			ProtocolVersion: ProtocolVersion, Element: "wash-app-about",
 			Surface: SurfaceWindow, Icon: "data:image/svg+xml,W",
 			Instancing: InstancingMulti,
@@ -212,7 +212,7 @@ func TestCatalogFiltersSurfaceBackground(t *testing.T) {
 	reg.RegisterEntry(&Entry{
 		Path: "/tmp/wash-notify",
 		Manifest: &Manifest{
-			ID: "com.wash.notify", Name: "Notifications", Version: "0.8.0",
+			ID: "com.wash.notify", Name: "Notifications", Version: "0.9.0",
 			ProtocolVersion: ProtocolVersion,
 			Surface:         SurfaceBackground, Instancing: InstancingSingleton,
 		},
@@ -220,7 +220,7 @@ func TestCatalogFiltersSurfaceBackground(t *testing.T) {
 	reg.RegisterEntry(&Entry{
 		Path: "/tmp/wash-session",
 		Manifest: &Manifest{
-			ID: "com.wash.session", Name: "Session", Version: "0.8.0",
+			ID: "com.wash.session", Name: "Session", Version: "0.9.0",
 			ProtocolVersion: ProtocolVersion, Element: "wash-app-session",
 			Surface: SurfaceDesktop, Icon: "data:image/svg+xml,S",
 			Instancing: InstancingSingleton,

@@ -17,7 +17,7 @@ func notifyManifest() *Manifest {
 	return &Manifest{
 		ID:              NotifyAppID,
 		Name:            "Notifications",
-		Version:         "0.8.0",
+		Version:         "0.9.0",
 		ProtocolVersion: ProtocolVersion,
 		Surface:         SurfaceBackground,
 		Instancing:      InstancingSingleton,
@@ -30,7 +30,7 @@ func notifyManifest() *Manifest {
 // used in spine_test.go.
 func connectApp(t *testing.T, pp *wiretest.PipePair, appID string) string {
 	t.Helper()
-	writeCtrl(t, pp.EndB(), wire.NewIdentity(appID, ProtocolVersion, "0.8.0"))
+	writeCtrl(t, pp.EndB(), wire.NewIdentity(appID, ProtocolVersion, "0.9.0"))
 	ack, ok := readCtrl(t, pp.EndB()).(wire.IdentityAck)
 	if !ok {
 		t.Fatalf("%s: expected IdentityAck", appID)

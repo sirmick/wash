@@ -58,7 +58,7 @@ func TestQoSSoakInteractiveLatencyUnderBulkFlood(t *testing.T) {
 	manifest := sdk.Manifest{
 		ID:              "com.wash.test",
 		Name:            "QoS Soak",
-		Version:         "0.8.0",
+		Version:         "0.9.0",
 		ProtocolVersion: sdk.ProtocolVersion,
 		Element:         "wash-app-test",
 		Surface:         sdk.SurfaceWindow,

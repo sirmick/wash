@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.8.0
+Version:        0.9.0
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -137,5 +137,5 @@ fi
 exit 0
 
 %changelog
-* Thu May 28 2026 wash maintainers <wash@example.invalid> - 0.8.0-1
+* Thu May 28 2026 wash maintainers <wash@example.invalid> - 0.9.0-1
 - Initial packaging.

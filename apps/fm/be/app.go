@@ -37,7 +37,7 @@ import (
 var assetsFS embed.FS
 
 const (
-	version = "0.8.0"
+	version = "0.9.0"
 
 	// Cap on preview/read size to keep memory bounded.
 	maxReadBytes = 256 * 1024

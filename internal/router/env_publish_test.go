@@ -31,7 +31,7 @@ func hasEnv(env []string, key, val string) bool {
 // window.mapped event, leaving the app ready to send further events.
 func drainToIdentityAck(t *testing.T, app wire.FrameTransport) {
 	t.Helper()
-	writeCtrl(t, app, wire.NewIdentity("com.wash.disptest", ProtocolVersion, "0.8.0"))
+	writeCtrl(t, app, wire.NewIdentity("com.wash.disptest", ProtocolVersion, "0.9.0"))
 	ack, ok := readCtrl(t, app).(wire.IdentityAck)
 	if !ok || ack.WindowID == 0 {
 		t.Fatalf("expected IdentityAck with a window, got %+v", ack)

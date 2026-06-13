@@ -39,7 +39,7 @@ import (
 //go:embed all:assets
 var assetsFS embed.FS
 
-const version = "0.8.0"
+const version = "0.9.0"
 
 // AppID is this app's id. NetdAppID is the privileged service it relays to —
 // declared locally (not imported) so the two apps stay independently buildable

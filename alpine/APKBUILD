@@ -1,6 +1,6 @@
 # Maintainer: wash maintainers <wash@example.invalid>
 pkgname=wash
-pkgver=0.8.0
+pkgver=0.9.0
 pkgrel=1
 pkgdesc="Lightweight remote-admin desktop environment"
 url="https://github.com/sirmick/wash"
