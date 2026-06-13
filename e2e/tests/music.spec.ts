@@ -3,7 +3,7 @@
 // streams it over ingress, and now-playing reaches the sidebar via
 // com.wash.audio.
 import { test, expect } from '../fixtures/router';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -61,5 +61,46 @@ test.describe('music app (native player)', () => {
     const nowPlaying = page.locator('[data-testid="audio-nowplaying"]');
     await expect(nowPlaying).toBeVisible();
     await expect(nowPlaying).toContainText('Alpha Song');
+  });
+});
+
+// Folder selection persists across reload: pick a subfolder via the
+// FilePicker (narrowing the recursive list), then reload and confirm the
+// app restored that folder rather than the default.
+test.describe('music app folder persistence', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wash-music-persist-'));
+  writeFileSync(join(dir, 'Root Song.wav'), minimalWav());
+  mkdirSync(join(dir, 'sub'));
+  writeFileSync(join(dir, 'sub', 'Sub Song.wav'), minimalWav());
+
+  // Confine the fs sandbox to `dir` so the FilePicker browses it (and the
+  // BE's session-root → os-path mapping is exercised).
+  test.use({ routerOpts: { apps: ['session', 'music', 'audio'], extraEnv: { WASH_MUSIC_DIR: dir, WASH_FS_ROOT: dir } } });
+
+  test('remembers the picked folder across reload', async ({ page, router }) => {
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    await router.controlRequest({ t: 'launch', app_id: 'com.wash.music' });
+
+    const list = page.locator('[data-testid="track-list"]');
+    await expect(list).toContainText('Root Song');
+    await expect(list).toContainText('Sub Song'); // recursive scan sees both
+
+    // Pick the sub/ folder via the FilePicker (directory mode).
+    await page.locator('[data-testid="pick-folder"]').click();
+    const picker = page.locator('[data-testid="folder-picker"]');
+    await expect(picker).toBeVisible();
+    await picker.locator('[data-testid="fp-entry-sub"]').click();
+    await picker.locator('[data-testid="fp-confirm"]').click();
+
+    // Now only the subfolder's track.
+    await expect(list).toContainText('Sub Song');
+    await expect(list).not.toContainText('Root Song');
+
+    // Reload → the picked folder is restored (still only Sub Song).
+    await page.reload();
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    await expect(list).toContainText('Sub Song');
+    await expect(list).not.toContainText('Root Song');
   });
 });

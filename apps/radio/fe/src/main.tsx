@@ -1,10 +1,11 @@
 // wash-radio FE — a minimalist NATIVE internet-radio player
-// (docs/RADIO.md): a station list, basic transport, a now-playing panel.
-// The BE reverse-proxies the upstream stream over ingress (same-origin, so
-// no mixed-content/CORS); the FE plays it with <audio> and registers with
-// com.wash.audio. Same kit as the Music app; the "list" is stations and
-// the SeekBar runs in non-seekable LIVE mode. (Live ICY track metadata is
-// a planned M2; now-playing is the station name for now.)
+// (docs/RADIO.md): a station list (curated + your pasted URLs), basic
+// transport, a now-playing panel with the live ICY track, favorites, and
+// offline feedback. The BE reverse-proxies the upstream stream over
+// ingress (same-origin, so no mixed-content/CORS); the FE plays it with
+// <audio> and registers with com.wash.audio. Same kit as the Music app;
+// the "list" is stations and the SeekBar runs in non-seekable LIVE mode.
+// Favorites + pasted stations + last-tuned persist via app_state.
 
 import {
   Button,
@@ -19,8 +20,8 @@ import {
   type AudioSource,
   type WashAppProps,
 } from '@wash/ui';
-import { createSignal, onCleanup, onMount } from 'solid-js';
-import { Plus, Radio } from 'lucide-solid';
+import { createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { Plus, Radio, Star } from 'lucide-solid';
 
 interface Station {
   name: string;
@@ -31,20 +32,35 @@ interface StationsOk {
   base: string;
   stations: Station[];
 }
+interface Custom {
+  name: string;
+  url: string;
+}
+interface PersistedRadio {
+  custom?: Custom[];
+  favs?: string[];
+  last?: string;
+}
+type Row = Station & { be: number };
 
 function RadioApp(props: WashAppProps) {
   let audioEl!: HTMLAudioElement;
   let audio: AudioSource | undefined;
   let nonce = 0;
+  let customStations: Custom[] = []; // user-added; persisted + re-added on mount
+  let lastName = ''; // last-tuned station name (persisted)
+  let registered = false;
 
   const [stations, setStations] = createSignal<Station[]>([]);
   const [base, setBase] = createSignal('');
-  const [index, setIndex] = createSignal(-1); // tuned station
-  const [selected, setSelected] = createSignal(-1);
+  const [index, setIndex] = createSignal(-1); // tuned station (BE index)
+  const [selectedDisplay, setSelectedDisplay] = createSignal(-1);
   const [status, setStatus] = createSignal('stopped');
   const [srcVol, setSrcVol] = createSignal(1);
   const [addUrl, setAddUrl] = createSignal('');
-  const [icyTitle, setIcyTitle] = createSignal(''); // live track from ICY metadata
+  const [icyTitle, setIcyTitle] = createSignal(''); // live ICY track
+  const [favs, setFavs] = createSignal<Set<string>>(new Set());
+  const [offline, setOffline] = createSignal(false);
   let masterVol = 1;
 
   const current = () => stations()[index()];
@@ -52,22 +68,45 @@ function RadioApp(props: WashAppProps) {
   const applyVolume = () => {
     if (audioEl) audioEl.volume = masterVol * srcVol();
   };
+  const persist = () =>
+    send({ kind: 'save_state', state: { custom: customStations, favs: [...favs()], last: lastName } });
 
-  function tune(i: number) {
-    const st = stations()[i];
+  // Favorites float to the top (stable); each row keeps its BE index so we
+  // tune the right station regardless of display order.
+  const rows = createMemo<Row[]>(() => {
+    const f = favs();
+    return stations()
+      .map((s, i) => ({ ...s, be: i }))
+      .sort((a, b) => (f.has(b.name) ? 1 : 0) - (f.has(a.name) ? 1 : 0));
+  });
+  const playingDisplay = () => rows().findIndex((r) => r.be === index());
+
+  function toggleFav(name: string) {
+    const f = new Set(favs());
+    if (f.has(name)) f.delete(name);
+    else f.add(name);
+    setFavs(f);
+    persist();
+  }
+
+  function tune(be: number) {
+    const st = stations()[be];
     if (!st || !base()) return;
-    setIndex(i);
-    setSelected(i);
-    setIcyTitle(''); // clear the previous station's track
+    setIndex(be);
+    setSelectedDisplay(rows().findIndex((r) => r.be === be));
+    setIcyTitle('');
+    setOffline(false);
+    lastName = st.name;
+    persist();
     nonce += 1;
-    audioEl.src = `${base()}stream?i=${i}&n=${nonce}`;
+    audioEl.src = `${base()}stream?i=${be}&n=${nonce}`;
     applyVolume();
     void audioEl.play().catch(() => {});
     audio?.report();
   }
   function play() {
     if (index() < 0) {
-      if (stations().length) tune(0);
+      if (stations().length) tune(rows()[Math.max(0, selectedDisplay())]?.be ?? 0);
       return;
     }
     void audioEl.play().catch(() => {});
@@ -106,11 +145,15 @@ function RadioApp(props: WashAppProps) {
     }
   }
 
+  const sendCustom = () => send({ kind: 'set_custom', id: 'r-set', stations: customStations });
+
   function addStation() {
     const u = addUrl().trim();
     if (!u) return;
     setAddUrl('');
-    send({ kind: 'add', id: 'r-add', url: u });
+    customStations = [...customStations, { name: u, url: u }];
+    persist();
+    sendCustom();
   }
 
   onMount(() => {
@@ -127,21 +170,39 @@ function RadioApp(props: WashAppProps) {
         audio?.report();
       } else if (m?.kind === 'stations_ok') {
         const s = m as StationsOk;
-        const had = stations().length;
         setStations(s.stations);
         setBase(s.base);
         if (index() < 0) {
-          setSelected(s.stations.length ? 0 : -1);
-          audio?.register({ title: s.stations[0]?.name ?? '' });
-        } else if (s.stations.length > had) {
-          // a freshly-added station → focus it
-          setSelected(s.stations.length - 1);
+          // Re-select the last-tuned station once it's present (converges
+          // as persisted custom stations get re-added), else the first row.
+          let di = lastName ? rows().findIndex((r) => r.name === lastName) : -1;
+          if (di < 0) di = s.stations.length ? 0 : -1;
+          setSelectedDisplay(di);
+          if (!registered && s.stations.length) {
+            registered = true;
+            audio?.register({ title: rows()[di]?.name ?? '' });
+          }
         }
       }
     };
+    // wash:state (always fires on mount, null = first launch): restore
+    // favorites + pasted stations + last-tuned, then fetch the list and
+    // re-add the persisted custom stations to the fresh BE.
+    const onState = (ev: Event) => {
+      const st = (ev as CustomEvent).detail as PersistedRadio | null;
+      customStations = st?.custom ?? [];
+      lastName = st?.last ?? '';
+      setFavs(new Set(st?.favs ?? []));
+      // One idempotent message both fetches the list and (re)sets the
+      // pasted stations — no duplicates if the BE instance survived a reload.
+      sendCustom();
+    };
     props.host.addEventListener('wash:msg', onMsg);
-    onCleanup(() => props.host.removeEventListener('wash:msg', onMsg));
-    send({ kind: 'stations', id: 'r-stations' });
+    props.host.addEventListener('wash:state', onState);
+    onCleanup(() => {
+      props.host.removeEventListener('wash:msg', onMsg);
+      props.host.removeEventListener('wash:state', onState);
+    });
   });
 
   onCleanup(() => audio?.dispose());
@@ -161,28 +222,49 @@ function RadioApp(props: WashAppProps) {
         data-testid="radio-nowplaying"
         title={icyTitle() || current()?.name || '—'}
         subtitle={icyTitle() ? current()?.name : current() ? current()!.codec : `${stations().length} stations`}
-        meta={status() === 'playing' ? '● LIVE' : ''}
+        meta={status() === 'playing' ? '● LIVE' : offline() ? '⚠ offline' : ''}
       />
 
       <MediaList
         data-testid="station-list"
-        items={stations()}
-        selected={selected()}
-        playing={index()}
-        onSelect={setSelected}
-        onActivate={tune}
+        items={rows()}
+        selected={selectedDisplay()}
+        playing={playingDisplay()}
+        onSelect={setSelectedDisplay}
+        onActivate={(di) => tune(rows()[di].be)}
         empty="No stations"
-        row={(st: Station, _i, playing) => (
-          <>
-            <span style={{ width: '14px', 'flex-shrink': 0, display: 'inline-flex', 'align-items': 'center' }}>
-              {playing ? <Radio size={11} /> : null}
-            </span>
-            <span style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
-              {st.name}
-            </span>
-            <span style={{ color: tokens.fgMuted, 'font-size': tokens.fontSizeSm, 'flex-shrink': 0 }}>{st.codec}</span>
-          </>
-        )}
+        row={(r: Row, _di, playing) => {
+          const fav = () => favs().has(r.name);
+          return (
+            <>
+              <span style={{ width: '14px', 'flex-shrink': 0, display: 'inline-flex', 'align-items': 'center' }}>
+                {playing ? <Radio size={11} /> : null}
+              </span>
+              <span style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+                {r.name}
+              </span>
+              <span style={{ color: tokens.fgMuted, 'font-size': tokens.fontSizeSm, 'flex-shrink': 0 }}>{r.codec}</span>
+              <span
+                data-testid={`fav-${r.be}`}
+                data-fav={fav() ? 'true' : undefined}
+                title={fav() ? 'Unfavorite' : 'Favorite'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleFav(r.name);
+                }}
+                style={{
+                  'flex-shrink': 0,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  'align-items': 'center',
+                  color: fav() ? tokens.accentAmber : tokens.fgDim,
+                }}
+              >
+                <Star size={13} fill={fav() ? 'currentColor' : 'none'} />
+              </span>
+            </>
+          );
+        }}
       />
 
       {/* paste a stream URL */}
@@ -236,11 +318,15 @@ function RadioApp(props: WashAppProps) {
         style={{ display: 'none' }}
         onPlay={() => {
           setStatus('playing');
+          setOffline(false);
           audio?.report();
         }}
         onPause={() => {
           setStatus('paused');
           audio?.report();
+        }}
+        onError={() => {
+          if (index() >= 0) setOffline(true);
         }}
       />
     </div>

@@ -46,9 +46,14 @@ function MusicApp(props: WashAppProps) {
   const [srcVol, setSrcVol] = createSignal(1); // in-window volume (model A)
   const [pickerOpen, setPickerOpen] = createSignal(false);
   let masterVol = 1; // from the service's volume cmd; el.volume = master × src
+  // The folder the user picked (the FilePicker path we send to scan); kept
+  // so it persists across remount. Empty = default ($WASH_MUSIC_DIR/~/Music).
+  let pickedPath = '';
 
   const current = () => tracks()[index()];
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
+  const persist = () => send({ kind: 'save_state', state: { pick: pickedPath } });
+  const scan = (root?: string) => send(root ? { kind: 'scan', id: 'm-scan', root } : { kind: 'scan', id: 'm-scan' });
   const applyVolume = () => {
     if (audioEl) audioEl.volume = masterVol * srcVol();
   };
@@ -135,9 +140,19 @@ function MusicApp(props: WashAppProps) {
         audio?.register({ title: s.tracks[0]?.title ?? '' });
       }
     };
+    // wash:state drives the first scan: restore the saved folder, else
+    // default. Always fires on mount (null = first launch).
+    const onState = (ev: Event) => {
+      const s = (ev as CustomEvent).detail as { pick?: string } | null;
+      pickedPath = s?.pick || '';
+      scan(pickedPath || undefined);
+    };
     props.host.addEventListener('wash:msg', onMsg);
-    onCleanup(() => props.host.removeEventListener('wash:msg', onMsg));
-    send({ kind: 'scan', id: 'm-scan' });
+    props.host.addEventListener('wash:state', onState);
+    onCleanup(() => {
+      props.host.removeEventListener('wash:msg', onMsg);
+      props.host.removeEventListener('wash:state', onState);
+    });
   });
 
   onCleanup(() => audio?.dispose());
@@ -226,7 +241,9 @@ function MusicApp(props: WashAppProps) {
         data-testid="folder-picker"
         onConfirm={(p) => {
           setPickerOpen(false);
-          send({ kind: 'scan', id: 'm-scan', root: p });
+          pickedPath = p;
+          scan(p);
+          persist();
         }}
         onCancel={() => setPickerOpen(false)}
       />

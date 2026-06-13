@@ -80,4 +80,33 @@ test.describe('radio app (native player)', () => {
     await expect(nowPlaying).toBeVisible();
     await expect(nowPlaying).toContainText('Now Playing Track');
   });
+
+  test('persists pasted stations + favorites across reload; shows offline', async ({ page, router }) => {
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    await router.controlRequest({ t: 'launch', app_id: 'com.wash.radio' });
+    const list = page.locator('[data-testid="station-list"]');
+    await expect(list).toContainText('SomaFM');
+
+    // Paste a custom station + favorite the first curated one.
+    await page.locator('[data-testid="add-url"]').fill('http://example.invalid/x');
+    await page.locator('[data-testid="add-station"]').click();
+    await expect(list).toContainText('example.invalid');
+    await page.locator('[data-testid="fav-0"]').click();
+    await expect(page.locator('[data-testid="fav-0"]')).toHaveAttribute('data-fav', 'true');
+
+    // Reload → window remounts, state restored from app_state.
+    await page.reload();
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    await expect(list).toContainText('example.invalid'); // pasted station persisted
+    expect(await list.getByText('example.invalid').count()).toBe(1); // not duplicated
+    await expect(page.locator('[data-testid="fav-0"]')).toHaveAttribute('data-fav', 'true'); // favorite persisted
+
+    // Tuning an unreachable station surfaces an offline state (not silence).
+    await page.locator('[data-testid="add-url"]').fill('http://127.0.0.1:1/dead');
+    await page.locator('[data-testid="add-station"]').click();
+    const deadRow = list.locator('[data-testid^="media-row-"]').last();
+    await deadRow.dblclick();
+    await expect(page.locator('[data-testid="radio-nowplaying"]')).toContainText('offline', { timeout: 10_000 });
+  });
 });

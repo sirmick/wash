@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/sirmick/wash/internal/audiorelay"
@@ -51,10 +52,10 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		go func() {
 			<-p.ready
 			if req.Root != "" {
-				// The FilePicker path is confined to the session fs root;
-				// map it back to an os path for medialib.
-				osRoot := filepath.Join(sessionRoot, req.Root)
-				if isDir(osRoot) {
+				// The FilePicker returns an absolute os path; accept it only
+				// if it's inside the session fs sandbox and a real directory.
+				osRoot := filepath.Clean(req.Root)
+				if withinRoot(sessionRoot, osRoot) && isDir(osRoot) {
 					p.setRoot(osRoot)
 				}
 			}
@@ -70,6 +71,12 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 			log.Printf("wash-music: %d track(s) from %q", len(tracks), root)
 		}()
 		return nil
+	})
+
+	// Persist the FE's small state blob (the selected folder) — redelivered
+	// as wash:state on the next mount.
+	sdk.HandleVoid(bus, "save_state", func(conn *sdk.Conn, _ string, req saveStateReq) error {
+		return conn.SaveState(req.State)
 	})
 
 	go func() {
@@ -88,6 +95,16 @@ func isDir(pth string) bool {
 	return err == nil && fi.IsDir()
 }
 
+// withinRoot reports whether p is inside the session fs root. An empty or
+// "/" root means unconfined (dev), so anything is allowed.
+func withinRoot(root, p string) bool {
+	if root == "" || root == "/" {
+		return true
+	}
+	root = filepath.Clean(root)
+	return p == root || strings.HasPrefix(p, root+string(filepath.Separator))
+}
+
 type scanReq struct {
 	Root string `json:"root"`
 }
@@ -95,4 +112,8 @@ type scanReq struct {
 type trackMsg struct {
 	URL   string `json:"url"`
 	Title string `json:"title"`
+}
+
+type saveStateReq struct {
+	State any `json:"state"`
 }

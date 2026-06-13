@@ -71,16 +71,25 @@ var curated = []station{
 var streamClient = &http.Client{Timeout: 0}
 
 type svc struct {
-	mu       sync.Mutex
-	stations []station
-	base     string
-	ready    chan struct{}
+	mu     sync.Mutex
+	fixed  []station // env + curated (immutable)
+	custom []station // user-pasted; replaced wholesale by set_custom
+	base   string
+	ready  chan struct{}
+}
+
+// all returns the full station list (index space the FE addresses via
+// /stream?i=N): fixed first, then custom.
+func (s *svc) all() []station {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append(append([]station(nil), s.fixed...), s.custom...)
 }
 
 func (s *svc) snapshot() ([]station, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]station(nil), s.stations...), s.base
+	return append(append([]station(nil), s.fixed...), s.custom...), s.base
 }
 
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
@@ -90,7 +99,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 
 	s := &svc{ready: make(chan struct{})}
 	// env test stations first, then curated.
-	s.stations = append(envStations(), curated...)
+	s.fixed = append(envStations(), curated...)
 
 	reply := func(conn *sdk.Conn, id string) {
 		<-s.ready
@@ -107,23 +116,38 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		go reply(conn, id)
 		return nil
 	})
-	// FE → BE: add a user-pasted stream URL.
-	sdk.HandleVoid(bus, "add", func(conn *sdk.Conn, id string, req addReq) error {
-		if req.URL == "" {
-			return nil
-		}
-		name := strings.TrimSpace(req.Name)
-		if name == "" {
-			name = req.URL
+	// FE → BE: replace the user's custom (pasted) stations wholesale. The
+	// FE owns the canonical list (persisted in app_state) and re-sends it
+	// on mount, so this is idempotent — no duplicates across reload.
+	sdk.HandleVoid(bus, "set_custom", func(conn *sdk.Conn, id string, req setCustomReq) error {
+		cs := make([]station, 0, len(req.Stations))
+		for _, c := range req.Stations {
+			if c.URL == "" {
+				continue
+			}
+			name := strings.TrimSpace(c.Name)
+			if name == "" {
+				name = c.URL
+			}
+			cs = append(cs, station{Name: name, URL: c.URL, Codec: "stream"})
 		}
 		s.mu.Lock()
-		s.stations = append(s.stations, station{Name: name, URL: req.URL, Codec: "stream"})
+		s.custom = cs
 		s.mu.Unlock()
 		go reply(conn, id)
 		return nil
 	})
+	// Persist the FE's small state blob (favorites + pasted stations +
+	// last-tuned), redelivered as wash:state on the next mount.
+	sdk.HandleVoid(bus, "save_state", func(conn *sdk.Conn, _ string, req saveStateReq) error {
+		return conn.SaveState(req.State)
+	})
 
 	go serveAndPublish(c, instanceID, s)
+}
+
+type saveStateReq struct {
+	State any `json:"state"`
 }
 
 // serveAndPublish stands up the /stream proxy on a per-instance unix
@@ -145,18 +169,13 @@ func serveAndPublish(c *sdk.Conn, instanceID string, s *svc) {
 	// the browser's <audio> has no mixed-content/CORS problem.
 	mux.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
 		i, err := strconv.Atoi(r.URL.Query().Get("i"))
-		s.mu.Lock()
-		ok := err == nil && i >= 0 && i < len(s.stations)
-		var upstream string
-		if ok {
-			upstream = s.stations[i].URL
-		}
-		s.mu.Unlock()
+		all := s.all()
+		ok := err == nil && i >= 0 && i < len(all)
 		if !ok {
 			http.NotFound(w, r)
 			return
 		}
-		proxyStream(w, r, upstream, onTitle)
+		proxyStream(w, r, all[i].URL, onTitle)
 	})
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(ln) }()
@@ -174,7 +193,7 @@ func serveAndPublish(c *sdk.Conn, instanceID string, s *svc) {
 	s.base = base
 	s.mu.Unlock()
 	close(s.ready)
-	log.Printf("wash-radio: %d station(s), serving at %s", len(s.stations), base)
+	log.Printf("wash-radio: %d station(s), serving at %s", len(s.all()), base)
 
 	go func() {
 		<-c.Done()
@@ -314,7 +333,11 @@ func envStations() []station {
 	return out
 }
 
-type addReq struct {
+type setCustomReq struct {
+	Stations []customStation `json:"stations"`
+}
+
+type customStation struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`
 }
