@@ -1,7 +1,8 @@
 # AUDIO — wash audio subsystem & music player
 
-Status: design approved 2026-06-06 (branch `wash-audio`). M1, M2, M3 done and
-e2e-green. M4+ (persistence, per-source volume, Case 2) deferred.
+Status: **implemented** (0.9.0; ex-branch `wash-audio`). M1–M4 done and
+e2e-green — incl. per-source volume + active-source / single-play
+exclusivity. Cross-window persistence and server-live audio (Case 2) deferred.
 
 This document describes wash's audio subsystem and its first consumer, a
 Winamp-skinned music player. The defining constraint shapes everything:

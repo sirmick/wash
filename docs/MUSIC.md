@@ -6,7 +6,8 @@ recursive track list from a single selectable folder. This is the
 app — `docs/AUDIO.md`). It shares the audio control plane + ingress, but
 the UI is plain wash (Solid + `@wash/ui`), not a Winamp skin.
 
-Unbuilt — design only. Sibling of `docs/RADIO.md`; both follow the same
+**Implemented** — shipped in 0.9.0 (`apps/music/`, `com.wash.music`),
+e2e-tested. Sibling of `docs/RADIO.md`; both follow the same
 **list + transport + info** skeleton.
 
 **Architecture (decided 2026-06-12):** Music and Radio (and a future

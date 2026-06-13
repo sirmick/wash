@@ -5,9 +5,10 @@ transport, a simple station list, and a now-playing info panel. Free/open
 stations only — we list public stream URLs operators publish and play
 them; we host no content (VLC/Kodi model).
 
-Unbuilt — design only. Sibling of `docs/MUSIC.md`; same **list +
-transport + info** skeleton. Where Music's "list" is files in a folder,
-Radio's "list" is stations.
+**Implemented** — shipped in 0.9.0 (`apps/radio/`, `com.wash.radio`),
+e2e-tested, with live ICY now-playing titles + favorites. Sibling of
+`docs/MUSIC.md`; same **list + transport + info** skeleton. Where Music's
+"list" is files in a folder, Radio's "list" is stations.
 
 **Architecture (decided 2026-06-12):** a **separate thin app over shared
 libraries** (architecture A — see `docs/MUSIC.md`), reusing
