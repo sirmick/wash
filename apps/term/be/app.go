@@ -272,9 +272,15 @@ func registerHandlers(b *sdk.Bus) {
 		st.mu.Lock()
 		rows := make([]map[string]any, 0, len(st.sessions))
 		for id, s := range st.sessions {
+			cols, sessRows := s.Size()
 			rows = append(rows, map[string]any{
 				"channel_id": uint64(id),
 				"shell":      s.Shell,
+				// Current pty geometry: the restored xterm opens at
+				// this grid so the scrollback replay renders at the
+				// width it was emitted for, then reflows to fit.
+				"cols": uint64(cols),
+				"rows": uint64(sessRows),
 			})
 		}
 		st.mu.Unlock()

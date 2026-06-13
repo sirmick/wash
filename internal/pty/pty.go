@@ -34,8 +34,23 @@ type Session struct {
 	// for tab labels (wash-term uses it).
 	Shell string
 
+	// sizeMu guards cols/rows — the last geometry applied to the
+	// PTY. A reattaching FE asks for it (via wash-term's
+	// list_sessions) so the restored xterm can open at the same
+	// grid the scrollback replay was rendered for, then reflow.
+	sizeMu sync.Mutex
+	cols   uint16
+	rows   uint16
+
 	closeOnce sync.Once
 	onClose   func(s *Session, reason string)
+}
+
+// Size returns the last cols/rows applied to the PTY.
+func (s *Session) Size() (cols, rows uint16) {
+	s.sizeMu.Lock()
+	defer s.sizeMu.Unlock()
+	return s.cols, s.rows
 }
 
 // ID returns the wash channel id for the session — every PTY has a
@@ -94,6 +109,8 @@ func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint1
 		cmd:     cmd,
 		ch:      ch,
 		Shell:   shellPath,
+		cols:    cols,
+		rows:    rows,
 		onClose: onClose,
 	}
 
@@ -130,6 +147,9 @@ func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint1
 // Resize updates the PTY's winsize. The shell inside receives
 // SIGWINCH automatically.
 func (s *Session) Resize(cols, rows uint16) error {
+	s.sizeMu.Lock()
+	s.cols, s.rows = cols, rows
+	s.sizeMu.Unlock()
 	return creackpty.Setsize(s.pty, &creackpty.Winsize{Cols: cols, Rows: rows})
 }
 

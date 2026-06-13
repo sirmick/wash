@@ -13,7 +13,7 @@ import { For, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { Plus, X } from 'lucide-solid';
 import { Terminal, TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, defineWashApp, tokens } from '@wash/ui';
-import type { TerminalAPI } from '@wash/ui';
+import type { TermModes, TerminalAPI } from '@wash/ui';
 
 interface BEMessage {
   kind: string;
@@ -23,6 +23,19 @@ interface BEMessage {
 interface TabMeta {
   channelID: number;
   shell: string;
+  // pending: restored from saved state and waiting for the BE's
+  // `sessions` reply before the xterm mounts — the reply carries the
+  // pty's current cols/rows so the scrollback replay renders at the
+  // grid it was emitted for. Cleared by reconcile() (or its timeout
+  // fallback, so a hung BE can't leave blank tabs forever).
+  pending?: boolean;
+  // init: the grid to open the restored xterm at (from `sessions`).
+  init?: { cols: number; rows: number };
+  // modes: last tracked terminal-mode state (alt-screen, bracketed
+  // paste, mouse, …) — persisted so a reattach can re-seed modes
+  // whose set-sequences scrolled out of the 256KB replay window.
+  // Mutated in place (not reactive) — only read at persist/mount.
+  modes?: TermModes;
 }
 
 // The on-the-wire/saved schema uses snake_case to match the rest of
@@ -30,6 +43,15 @@ interface TabMeta {
 interface PersistedTabRow {
   channel_id: number;
   shell: string;
+  modes?: TermModes;
+}
+
+// One row of the BE's `sessions` reply (list_sessions).
+interface SessionRow {
+  channel_id: number;
+  shell?: string;
+  cols?: number;
+  rows?: number;
 }
 
 interface PersistedState {
@@ -64,11 +86,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   const send = (m: unknown) => window.wash.sendAppMsg(props.instance, m);
 
+  // Reconcile/persist timers (cleared on unmount).
+  let pendingFallback: ReturnType<typeof setTimeout> | undefined;
+  let modesTimer: ReturnType<typeof setTimeout> | undefined;
+
   // ---- tab lifecycle ----
 
-  const addTab = (channelID: number, shellPath: string) => {
+  const addTab = (channelID: number, shellPath: string, extra?: Partial<TabMeta>) => {
     if (tabs().some((t) => t.channelID === channelID)) return;
-    setTabs([...tabs(), { channelID, shell: shellPath }]);
+    setTabs([...tabs(), { channelID, shell: shellPath, ...extra }]);
     setActive(channelID);
     persist();
     // xterm setup happens in the per-tab onMount below.
@@ -134,7 +160,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         return;
       }
       case 'sessions':
-        reconcile((m.sessions ?? []) as PersistedTabRow[]);
+        reconcile((m.sessions ?? []) as SessionRow[]);
         return;
     }
   };
@@ -144,15 +170,43 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // both directions: a pty that exited while the browser was
   // detached (its tab_closed was dropped — the router doesn't
   // buffer app_msgs for detached shells) leaves a dead tab, and a
-  // save that never flushed can miss a live one.
-  const reconcile = (rows: PersistedTabRow[]) => {
-    const live = new Map(rows.map((r) => [Number(r.channel_id), String(r.shell ?? 'shell')]));
+  // save that never flushed can miss a live one. The reply also
+  // carries each pty's current grid, which unblocks the pending
+  // (not-yet-mounted) restored tabs at the right initial size.
+  const reconcile = (rows: SessionRow[]) => {
+    if (pendingFallback) {
+      clearTimeout(pendingFallback);
+      pendingFallback = undefined;
+    }
+    const live = new Map(rows.map((r) => [Number(r.channel_id), r]));
     const wasActive = active();
     for (const t of tabs()) {
       if (!live.has(t.channelID)) removeTab(t.channelID);
     }
-    for (const [id, shell] of live) {
-      if (!tabs().some((t) => t.channelID === id)) addTab(id, shell);
+    // Unblock pending tabs with their pty's grid. Only pending tabs
+    // get fresh objects — replacing a mounted tab's object would
+    // remount its xterm and wipe the live buffer.
+    setTabs(
+      tabs().map((t) => {
+        if (!t.pending) return t;
+        const r = live.get(t.channelID);
+        const cols = Number(r?.cols ?? 0);
+        const rws = Number(r?.rows ?? 0);
+        return {
+          ...t,
+          pending: false,
+          init: cols > 1 && rws > 1 ? { cols, rows: rws } : undefined,
+        };
+      }),
+    );
+    for (const [id, r] of live) {
+      if (!tabs().some((t) => t.channelID === id)) {
+        const cols = Number(r.cols ?? 0);
+        const rws = Number(r.rows ?? 0);
+        addTab(id, String(r.shell ?? 'shell'), {
+          init: cols > 1 && rws > 1 ? { cols, rows: rws } : undefined,
+        });
+      }
     }
     // addTab steals activation; put it back if the original
     // active tab is still alive.
@@ -167,7 +221,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const persist = () => {
     if (!props.instance) return;
     const state: PersistedState = {
-      tabs: tabs().map((t) => ({ channel_id: t.channelID, shell: t.shell })),
+      tabs: tabs().map((t) => ({ channel_id: t.channelID, shell: t.shell, modes: t.modes })),
       active: active() || undefined,
       font_id: fontId(),
       font_size: fontSize(),
@@ -175,18 +229,39 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     send({ kind: 'save_state', state });
   };
 
+  // onTabModes records a tab's tracked terminal-mode state and
+  // persists it debounced — mode flips arrive in bursts (app start,
+  // alt-screen enter/exit) and each persist is a router round-trip.
+  const onTabModes = (tab: TabMeta, m: TermModes) => {
+    tab.modes = m;
+    if (modesTimer) clearTimeout(modesTimer);
+    modesTimer = setTimeout(persist, 500);
+  };
+
   const restoreFrom = (s: PersistedState) => {
     if (s.font_id) setFontId(s.font_id);
     if (s.font_size) setFontSize(s.font_size);
+    // The restored list may be stale (ptys that died while the
+    // browser was detached); ask the BE for the live set and
+    // reconcile when the `sessions` reply lands. Restored tabs stay
+    // pending (no xterm) until then — the reply carries the grid the
+    // replay must render at. The fallback unblocks them at container
+    // size if the reply never comes, so a hung BE degrades to the
+    // old behaviour instead of blank tabs.
+    send({ kind: 'list_sessions' });
     if (!s.tabs?.length) return;
-    for (const t of s.tabs) addTab(Number(t.channel_id), t.shell);
+    for (const t of s.tabs) {
+      addTab(Number(t.channel_id), t.shell, { pending: true, modes: t.modes });
+    }
     if (s.active && tabs().some((t) => t.channelID === s.active)) {
       setActive(s.active);
     }
-    // The restored list may be stale (ptys that died while the
-    // browser was detached); ask the BE for the live set and
-    // reconcile when the `sessions` reply lands.
-    send({ kind: 'list_sessions' });
+    pendingFallback = setTimeout(() => {
+      pendingFallback = undefined;
+      if (tabs().some((t) => t.pending)) {
+        setTabs(tabs().map((t) => (t.pending ? { ...t, pending: false } : t)));
+      }
+    }, 2000);
   };
 
   // ---- keyboard shortcuts ----
@@ -231,6 +306,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     onCleanup(() => {
       props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('wash:state', onState);
+      if (pendingFallback) clearTimeout(pendingFallback);
+      if (modesTimer) clearTimeout(modesTimer);
       apis.clear();
       sizes.clear();
     });
@@ -320,13 +397,21 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 }}
                 ref={(el) => { hostEl = el; }}
               >
-                <Terminal
+                {/* Pending tabs (restored, awaiting the `sessions`
+                    reply) mount no xterm yet: reconcile() replaces
+                    the tab object, and <For> re-renders this row
+                    with the pty's grid in tab.init. */}
+                {!tab.pending && <Terminal
                   channelId={tab.channelID}
                   customKeyHandler={onTermKey}
                   fontId={fontId()}
                   fontSize={fontSize()}
                   onFontIdChange={changeFontId}
                   onFontSizeChange={changeFontSize}
+                  initialCols={tab.init?.cols}
+                  initialRows={tab.init?.rows}
+                  initialModes={tab.modes}
+                  onModesChanged={(m) => onTabModes(tab, m)}
                   onReady={(api) => {
                     apis.set(tab.channelID, api);
                     if (active() === tab.channelID) api.focus();
@@ -340,7 +425,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                     sizes.set(tab.channelID, { cols, rows });
                     sendResize(tab.channelID, cols, rows);
                   }}
-                />
+                />}
               </div>
             );
           }}

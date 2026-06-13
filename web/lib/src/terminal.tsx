@@ -91,6 +91,47 @@ async function ensureFontLoaded(f: TermFont): Promise<void> {
   }
 }
 
+// TermModes is the terminal-mode state a reattaching consumer
+// persists and re-seeds. The 256KB scrollback replay only carries the
+// byte TAIL of a session, so mode-setting sequences emitted once at
+// app start (alt-screen 1049, bracketed paste 2004, mouse 1000/1002/
+// 1006, application cursor keys 1, cursor visibility 25, …) can fall
+// outside the window — reattaching into a long-running vim/htop then
+// renders into the wrong buffer with dead mouse/paste handling.
+//
+// Tracked from the byte stream via xterm's own parser hooks (no
+// bespoke VT parsing) and reported through onModesChanged; fed back
+// on remount via initialModes, which is written into the fresh xterm
+// BEFORE the replay so alt-screen content paints into the right
+// buffer. SGR/charset state is deliberately NOT tracked — apps
+// re-emit it with every drawing batch, so it is always in-window.
+export interface TermModes {
+  // DECSET/DECRST private modes by number: true = set (h), false =
+  // explicitly reset (l). Untouched modes are absent (default state).
+  // JSON round-trips turn the keys into strings; consumers treat the
+  // index type as cosmetic.
+  dec: Record<number, boolean>;
+  // ESC = (application keypad, true) / ESC > (normal, false).
+  keypad?: boolean;
+}
+
+// modesToSeq synthesizes the escape sequence that restores m on a
+// fresh terminal. Numeric order keeps the output deterministic.
+function modesToSeq(m: TermModes): string {
+  let s = '';
+  const ns = Object.keys(m.dec)
+    .map(Number)
+    .filter((n) => Number.isFinite(n) && n > 0)
+    .sort((a, b) => a - b);
+  for (const n of ns) s += `\x1b[?${n}${m.dec[n] ? 'h' : 'l'}`;
+  if (m.keypad !== undefined) s += m.keypad ? '\x1b=' : '\x1b>';
+  return s;
+}
+
+// Bound on distinct tracked mode numbers — a guardrail against a
+// hostile/buggy stream growing the persisted blob without limit.
+const MAX_TRACKED_MODES = 64;
+
 export interface TerminalAPI {
   focus: () => void;
   fit: () => void;
@@ -98,6 +139,7 @@ export interface TerminalAPI {
   cols: () => number;
   rows: () => number;
   xterm: () => XTerm | null;
+  modes: () => TermModes;
 }
 
 export interface TerminalProps {
@@ -131,6 +173,21 @@ export interface TerminalProps {
   contextMenu?: boolean;
   onFontIdChange?: (id: string) => void;
   onFontSizeChange?: (px: number) => void;
+  // initialCols/initialRows open the fresh xterm at a specific grid
+  // instead of fitting to the container — set them to the pty's
+  // current size on reattach so the scrollback replay renders at the
+  // width it was emitted for. After the replay drains, the component
+  // fits to the container and xterm reflows soft-wrapped lines.
+  // Read once at mount.
+  initialCols?: number;
+  initialRows?: number;
+  // initialModes re-seeds persisted terminal-mode state (see
+  // TermModes) into the fresh xterm before any replay bytes. Read
+  // once at mount.
+  initialModes?: TermModes;
+  // onModesChanged fires whenever the tracked mode state changes;
+  // consumers persist it (debounced) for the next remount.
+  onModesChanged?: (m: TermModes) => void;
 }
 
 export const Terminal: Component<TerminalProps> = (props) => {
@@ -170,6 +227,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
     props.onResize(term.cols, term.rows);
   };
 
+  // holdFits suppresses every fit while a restored session's replay
+  // is still parsing — xterm.write is async, and a ResizeObserver
+  // tick (or font effect) landing mid-drain would refit to the
+  // container before the replay rendered at the pty's old grid.
+  // Cleared by the drain's write-callback in onMount.
+  let holdFits = false;
+
   // Skip fit when the host is too small to address — the consumer
   // typically toggles tabs via display:none, which sends a 0×0
   // ResizeObserver tick. FitAddon would resize xterm to its 2×1
@@ -179,7 +243,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
   // Skipping degenerate sizes keeps the buffer intact across
   // hide/show cycles.
   const safeFit = () => {
-    if (!fit) return;
+    if (!fit || holdFits) return;
     const r = hostEl.getBoundingClientRect();
     if (r.width < 10 || r.height < 10) return;
     try { fit.fit(); } catch { /* fit itself rejected; next tick will retry */ }
@@ -194,9 +258,44 @@ export const Terminal: Component<TerminalProps> = (props) => {
 
   const effectiveSize = () => clampSize(props.fontSize ?? TERM_DEFAULT_FONT_SIZE);
 
+  // ---- terminal-mode tracking (see TermModes) ----
+
+  const decModes: Record<number, boolean> = {};
+  let keypad: boolean | undefined;
+  const emitModes = () => props.onModesChanged?.({ dec: { ...decModes }, keypad });
+  // noteDec records CSI ? … h/l. Always returns false so xterm's own
+  // handler still runs — we observe the stream, never consume it.
+  const noteDec = (params: (number | number[])[], on: boolean): boolean => {
+    let changed = false;
+    for (const p of params) {
+      const n = Array.isArray(p) ? p[0] : p;
+      if (typeof n !== 'number' || n <= 0) continue;
+      if (decModes[n] === on) continue;
+      if (!(n in decModes) && Object.keys(decModes).length >= MAX_TRACKED_MODES) continue;
+      decModes[n] = on;
+      changed = true;
+    }
+    if (changed) emitModes();
+    return false;
+  };
+  const noteKeypad = (on: boolean): boolean => {
+    if (keypad !== on) {
+      keypad = on;
+      emitModes();
+    }
+    return false;
+  };
+
   onMount(() => {
     const initialFamily = props.fontFamily ?? fontById(props.fontId).stack;
+    // A restored session opens at the pty's existing grid so the
+    // replay renders correctly; a fresh one fits to the container.
+    const restoredGrid =
+      (props.initialCols ?? 0) > 1 && (props.initialRows ?? 0) > 1
+        ? { cols: props.initialCols, rows: props.initialRows }
+        : undefined;
     term = new XTerm({
+      ...restoredGrid,
       fontFamily: initialFamily,
       fontSize: effectiveSize(),
       theme: props.theme ?? { background: '#000000' },
@@ -204,6 +303,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
       allowProposedApi: true,
     });
     if (props.customKeyHandler) term.attachCustomKeyEventHandler(props.customKeyHandler);
+    if (props.onModesChanged || props.initialModes) {
+      term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (p) => noteDec(p, true));
+      term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, (p) => noteDec(p, false));
+      term.parser.registerEscHandler({ final: '=' }, () => noteKeypad(true));
+      term.parser.registerEscHandler({ final: '>' }, () => noteKeypad(false));
+    }
     fit = new FitAddon();
     term.loadAddon(fit);
     term.open(hostEl);
@@ -225,20 +330,50 @@ export const Terminal: Component<TerminalProps> = (props) => {
     // open() but the layout pass that gives the host its real size
     // hasn't run yet on first mount. requestAnimationFrame fires
     // after layout, so fit() sees the true cell count.
+    //
+    // Order depends on the mount kind. Fresh session: fit first so
+    // initial output paints into the real viewport, not the 80×24
+    // default. Restored session (initialCols/Rows set): drain the
+    // replay FIRST, at the pty's old grid — the bytes hard-wrap at
+    // that width — then fit; xterm reflows soft-wrapped lines to the
+    // live container. Persisted modes are re-seeded ahead of either
+    // drain so alt-screen replay content lands in the right buffer.
+    const restored = !!restoredGrid;
+    holdFits = restored;
     requestAnimationFrame(() => {
-      safeFit();
+      if (props.initialModes) {
+        const seq = modesToSeq(props.initialModes);
+        if (seq) term!.write(seq);
+      }
+      if (!restored) safeFit();
       const drain = pending ?? [];
       pending = null;
-      for (const b of drain) term!.write(b);
-      reportResize();
-      props.onReady?.({
-        focus: () => term?.focus(),
-        fit: () => { safeFit(); reportResize(); },
-        write: (data) => term?.write(data),
-        cols: () => term?.cols ?? 0,
-        rows: () => term?.rows ?? 0,
-        xterm: () => term,
-      });
+      const finish = () => {
+        if (restored) {
+          holdFits = false;
+          safeFit();
+        }
+        reportResize();
+        props.onReady?.({
+          focus: () => term?.focus(),
+          fit: () => { safeFit(); reportResize(); },
+          write: (data) => term?.write(data),
+          cols: () => term?.cols ?? 0,
+          rows: () => term?.rows ?? 0,
+          xterm: () => term,
+          modes: () => ({ dec: { ...decModes }, keypad }),
+        });
+      };
+      if (restored && drain.length) {
+        // xterm.write parses asynchronously; the reflow fit must not
+        // run until the replay has rendered at the old grid, so it
+        // rides the final chunk's write-callback.
+        for (let i = 0; i < drain.length - 1; i++) term!.write(drain[i]);
+        term!.write(drain[drain.length - 1], finish);
+      } else {
+        for (const b of drain) term!.write(b);
+        finish();
+      }
     });
 
     const ro = new ResizeObserver(() => {

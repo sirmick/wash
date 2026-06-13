@@ -14,8 +14,8 @@ app's FE state, shell (terminal) sessions, and the background-service tier.
 | A4 second tab gets no raw bytes | Documented as v1 single-shell (ARCHITECTURE.md). No code change. |
 | A5 FE map residue | Not fixed — bounded, no correctness impact. |
 | B1 stale tab after pty exit while detached | FIXED — term FE sends `list_sessions` after restore; BE replies with live set; FE drops dead tabs / adopts unknown live ones. e2e: term-reconcile.spec.ts. |
-| B2 replay starts mid-sequence | FIXED (partial) — wrap-gated `realignReplay` trims torn UTF-8/CSI heads before replay. Lost DECSET modes + torn OSC remain (needs a VT-state tracker; not attempted). |
-| B3 replay not reflowed on resize | Not fixed — xterm-side reflow of historical bytes isn't tractable; cosmetic until next redraw. |
+| B2 replay starts mid-sequence + lost modes | FIXED — (1) wrap-gated `realignReplay` (router) trims torn UTF-8/CSI heads; (2) the term FE tracks DECSET private modes + keypad mode from the byte stream via xterm parser hooks, persists them through `wash:state`, and re-seeds them into the fresh xterm *before* the replay — so alt-screen / bracketed-paste / mouse / app-cursor-keys survive even when their set-sequences scrolled out of the 256KB window. e2e: term-modes-resize.spec.ts. Torn OSC tails (title strings) still unhandled — rare, cosmetic. |
+| B3 replay not reflowed on resize | FIXED — the BE's `list_sessions` reply carries each pty's current grid; the restored xterm opens at that grid (replay renders at the width it was emitted for), then refits to the container and reflows soft-wrapped lines, pushing the new grid to the pty (SIGWINCH). e2e: term-modes-resize.spec.ts. |
 | B4 scrollback cap | By design; documented. |
 | C washamp/music/radio playback state | FIXED — all three persist track/position/volume (+shuffle/repeat for washamp, favorites already there for radio); restore to paused-at-position, resume on click. Washamp skin choice remains unrecoverable (Webamp discards the skin source URL; no skin-change event). |
 | edit 250ms debounce window | Mitigated by A2 (saves queue while offline). Debounce itself unchanged. |
@@ -166,12 +166,18 @@ round-trip, reconnect→login legibility. Not covered: pty-exit-while-detached
 keystroke/save loss during the down window (A2), media app state (C),
 two-tab behavior (A4).
 
-## Priority order
+## Priority order — all addressed on this branch
 
-1. **A1+B1**: term mount-time `list_sessions` reconcile (closes the worst
-   user-visible hole) and write down the "FE must pull on mount" invariant.
-2. **A2**: readyState guard + small outbound queue (or at least drop-with-
-   banner) in ws.ts; flush pending `save_state` before unload.
-3. **C**: washamp/music/radio playback-state persistence.
-4. **B2/B3**: replay hygiene (UTF-8/CSI realignment, mode re-emit, reflow).
-5. **A3/A4**: document the durability tiers and the single-shell assumption.
+1. **A1+B1** ✓: term mount-time `list_sessions` reconcile + the "FE must
+   pull on mount" invariant in ARCHITECTURE.md.
+2. **A2** ✓: bounded outbound queue in ws.ts (flush on reopen, drop-whole on
+   overflow/auth-death).
+3. **C** ✓: washamp/music/radio playback-state persistence.
+4. **B2/B3** ✓: replay hygiene — router-side UTF-8/CSI realignment, FE-side
+   mode tracking + re-seed, and old-grid replay + reflow on resize.
+5. **A3/A4** ✓: durability tiers + single-shell assumption documented.
+
+Remaining known gaps (not blocking, recorded for later): torn OSC tails in
+replay (B2, rare/cosmetic), FE map residue on in-page reconnect (A5,
+bounded), washamp skin choice unrecoverable (Webamp API limitation),
+true multi-shell raw-channel sharing (A4, deliberate v1 scope).
