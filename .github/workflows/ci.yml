@@ -110,3 +110,29 @@ jobs:
           path: dist/packages/**
           if-no-files-found: warn
           retention-days: 14
+
+  # release: on a vX.Y.Z tag, publish the built .deb/.rpm/.apk to the repo's
+  # Releases page (the prominent, downloadable spot) — in addition to the
+  # per-run Artifacts above. Only runs once the packages are green.
+  release:
+    name: release
+    runs-on: ubuntu-24.04
+    needs: [package]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Publish packages to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/**/*.deb
+            artifacts/**/*.rpm
+            artifacts/**/*.apk
+            artifacts/**/*.tgz
+          generate_release_notes: true
+          fail_on_unmatched_files: false

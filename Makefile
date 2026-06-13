@@ -1029,6 +1029,23 @@ coverage:
 test-all: all-test
 	WASH_PKG_DISPLAY=$(or $(WASH_PKG_DISPLAY),1) $(MAKE) all-package
 
+# push: the pre-push gate — run exactly what .github/workflows/ci.yml runs
+# (unit + e2e, then the amd64 wash packages + the OpenWRT smoke), and `git push`
+# ONLY if all of it passes. So a red build never reaches the remote / GH Actions.
+# Each step is sequential and fail-fast: the first failure aborts before push.
+# Override the push target with ARGS, e.g. `make push ARGS="origin HEAD"`.
+.PHONY: push
+push:
+	$(MAKE) unit-test
+	$(MAKE) e2e-test
+	$(MAKE) amd64-ubuntu24-wash-package
+	$(MAKE) amd64-debian13-wash-package
+	$(MAKE) amd64-fedora40-wash-package
+	$(MAKE) amd64-alpine321-wash-package
+	$(MAKE) openwrt-smoke
+	@echo "════ push: CI-equivalent gate passed ✓ — pushing ════"
+	git push $(ARGS)
+
 # Dev mode: Vite serves the shell with HMR at :5173 and proxies /ws to
 # the router at 0.0.0.0:11000. Open http://localhost:5173/ in a
 # browser. Editing files under web/shell/src triggers HMR; editing
