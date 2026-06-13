@@ -32,6 +32,18 @@ interface ScanOk {
   tracks: Track[];
 }
 
+// Saved FE state (wash:state round-trip). Besides the picked folder,
+// playback position survives a reload: track + seek + volume restore
+// to a paused-at-position player (autoplay is both blocked by the
+// browser and surprising; one click resumes).
+interface PersistedState {
+  pick?: string;
+  track_url?: string;
+  track_title?: string;
+  pos?: number;
+  vol?: number;
+}
+
 function MusicApp(props: WashAppProps) {
   let audioEl!: HTMLAudioElement;
   let audio: AudioSource | undefined;
@@ -50,9 +62,33 @@ function MusicApp(props: WashAppProps) {
   // so it persists across remount. Empty = default ($WASH_MUSIC_DIR/~/Music).
   let pickedPath = '';
 
+  // Restore bookkeeping: the saved track to re-select once scan_ok
+  // delivers the track list, and the position to seek to once the
+  // <audio> element has metadata for it.
+  let restore: PersistedState | null = null;
+  let pendingSeek = -1;
+  let lastPersistedPos = 0;
+  let persistTimer: ReturnType<typeof setTimeout> | undefined;
+
   const current = () => tracks()[index()];
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
-  const persist = () => send({ kind: 'save_state', state: { pick: pickedPath } });
+  const persist = () => {
+    lastPersistedPos = pos();
+    const state: PersistedState = {
+      pick: pickedPath,
+      track_url: current()?.url,
+      track_title: current()?.title,
+      pos: pos(),
+      vol: srcVol(),
+    };
+    send({ kind: 'save_state', state });
+  };
+  // Debounced persist for high-frequency sources (volume drag,
+  // timeupdate) so the router isn't spammed with app_state patches.
+  const schedulePersist = () => {
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(persist, 300);
+  };
   const scan = (root?: string) => send(root ? { kind: 'scan', id: 'm-scan', root } : { kind: 'scan', id: 'm-scan' });
   const applyVolume = () => {
     if (audioEl) audioEl.volume = masterVol * srcVol();
@@ -66,6 +102,7 @@ function MusicApp(props: WashAppProps) {
     audioEl.src = t.url;
     applyVolume();
     void audioEl.play().catch(() => {});
+    persist();
   }
   function play() {
     if (index() < 0) {
@@ -135,16 +172,39 @@ function MusicApp(props: WashAppProps) {
         const s = m as ScanOk;
         setTracks(s.tracks);
         setRoot(s.root);
-        setIndex(-1);
-        setSelected(s.tracks.length ? 0 : -1);
-        audio?.register({ title: s.tracks[0]?.title ?? '' });
+        // Re-select the saved track (by URL, falling back to title)
+        // when this scan is the restore-driven one.
+        let idx = -1;
+        if (restore) {
+          idx = s.tracks.findIndex((t) => t.url === restore!.track_url);
+          if (idx < 0 && restore.track_title) {
+            idx = s.tracks.findIndex((t) => t.title === restore!.track_title);
+          }
+        }
+        if (idx >= 0) {
+          const t = s.tracks[idx];
+          setIndex(idx);
+          setSelected(idx);
+          pendingSeek = restore?.pos ?? 0;
+          audioEl.src = t.url;
+          applyVolume();
+          setStatus('paused');
+          audio?.register({ title: t.title });
+        } else {
+          setIndex(-1);
+          setSelected(s.tracks.length ? 0 : -1);
+          audio?.register({ title: s.tracks[0]?.title ?? '' });
+        }
+        restore = null;
       }
     };
     // wash:state drives the first scan: restore the saved folder, else
     // default. Always fires on mount (null = first launch).
     const onState = (ev: Event) => {
-      const s = (ev as CustomEvent).detail as { pick?: string } | null;
+      const s = (ev as CustomEvent).detail as PersistedState | null;
       pickedPath = s?.pick || '';
+      if (s?.vol != null) setSrcVol(s.vol);
+      if (s?.track_url || s?.track_title) restore = s;
       scan(pickedPath || undefined);
     };
     props.host.addEventListener('wash:msg', onMsg);
@@ -155,7 +215,10 @@ function MusicApp(props: WashAppProps) {
     });
   });
 
-  onCleanup(() => audio?.dispose());
+  onCleanup(() => {
+    if (persistTimer) clearTimeout(persistTimer);
+    audio?.dispose();
+  });
 
   return (
     <div
@@ -227,6 +290,7 @@ function MusicApp(props: WashAppProps) {
             onInput={(v) => {
               setSrcVol(v);
               applyVolume();
+              schedulePersist();
             }}
           />
         </div>
@@ -258,12 +322,24 @@ function MusicApp(props: WashAppProps) {
         onPause={() => {
           setStatus('paused');
           audio?.report();
+          persist();
         }}
         onTimeUpdate={() => {
           setPos(audioEl.currentTime);
           audio?.report();
+          // Keep the saved position roughly current so a reload
+          // resumes near where playback was, without persisting on
+          // every 250ms tick.
+          if (Math.abs(pos() - lastPersistedPos) > 5) schedulePersist();
         }}
-        onLoadedMetadata={() => setDur(audioEl.duration || 0)}
+        onLoadedMetadata={() => {
+          setDur(audioEl.duration || 0);
+          if (pendingSeek > 0) {
+            audioEl.currentTime = pendingSeek;
+            setPos(pendingSeek);
+            pendingSeek = -1;
+          }
+        }}
         onEnded={next}
       />
     </div>

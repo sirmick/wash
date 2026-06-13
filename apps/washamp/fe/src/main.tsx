@@ -19,6 +19,21 @@ interface TracksOk {
   skins?: { name: string; url: string }[];
 }
 
+// Saved FE state (wash:state round-trip): current track, position,
+// volume (Webamp's 0–100 scale), shuffle/repeat. Restored to a
+// paused-at-track player — the saved position is applied on the
+// first play (seeking unloaded media is a no-op in Webamp).
+// Skin choice is NOT here: Webamp loads skin data and discards the
+// source URL, and exposes no skin-change event, so the user's pick
+// is unknowable from the public API. Known gap.
+interface PersistedWashamp {
+  track_url?: string;
+  pos?: number;
+  vol?: number;
+  shuffle?: boolean;
+  repeat?: boolean;
+}
+
 function WashampApp(props: WashAppProps) {
   let container!: HTMLDivElement;
   let webamp: Webamp | undefined;
@@ -36,8 +51,52 @@ function WashampApp(props: WashAppProps) {
   // tags, so for now-playing we anchor to the BE label (the filename
   // stem / stream label) instead of trusting Webamp's read-back.
   const trackMeta = new Map<string, { title: string; artist: string }>();
+  // Restore bookkeeping: the wash:state blob held until tracks_ok
+  // builds the playlist, and the saved position applied on first play.
+  let saved: PersistedWashamp | null = null;
+  let pendingSeek = -1;
+  let lastPersisted: PersistedWashamp = {};
+  let persistTimer: ReturnType<typeof setTimeout> | undefined;
 
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
+
+  // readPersistable pulls the current playback blob out of Webamp.
+  // Guarded like snapshot(): the store shape is not a stable contract.
+  function readPersistable(wa: Webamp): PersistedWashamp {
+    const out: PersistedWashamp = { track_url: cur.url, pos: 0, vol: 100 };
+    try {
+      const media = wa.store.getState().media as { timeElapsed?: number; volume?: number };
+      out.pos = media.timeElapsed ?? 0;
+      out.vol = media.volume ?? 100;
+      out.shuffle = wa.isShuffleEnabled();
+      out.repeat = wa.isRepeatEnabled();
+    } catch {
+      /* keep partial blob */
+    }
+    return out;
+  }
+
+  // maybePersist saves when something durable actually changed —
+  // __onStateChange fires ~per-second during playback, so position
+  // changes are persisted only past a 5s drift. Debounced so bursts
+  // (volume drag) coalesce into one app_state write.
+  function maybePersist() {
+    const wa = webamp;
+    if (!wa) return;
+    const s = readPersistable(wa);
+    if (
+      s.track_url === lastPersisted.track_url &&
+      Math.abs((s.pos ?? 0) - (lastPersisted.pos ?? 0)) < 5 &&
+      s.vol === lastPersisted.vol &&
+      s.shuffle === lastPersisted.shuffle &&
+      s.repeat === lastPersisted.repeat
+    ) {
+      return;
+    }
+    lastPersisted = s;
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(() => send({ kind: 'save_state', state: s }), 300);
+  }
 
   // The window is chromeless (apps/washamp/be/app.go sets
   // WindowHints.Chromeless): there is no wash titlebar, so Webamp's own
@@ -271,13 +330,51 @@ function WashampApp(props: WashAppProps) {
       };
       scheduleReport();
     });
-    // Any store change (play/pause/seek/volume/position) → re-report.
-    wa.__onStateChange(scheduleReport);
+    // Any store change (play/pause/seek/volume/position) → re-report,
+    // keep the saved blob current, and apply a restored position once
+    // playback actually starts (seekToTime on unloaded media no-ops).
+    wa.__onStateChange(() => {
+      scheduleReport();
+      if (pendingSeek > 0) {
+        try {
+          if (String(wa.getMediaStatus()).toUpperCase() === 'PLAYING') {
+            const s = pendingSeek;
+            pendingSeek = -1;
+            wa.seekToTime(s);
+          }
+        } catch {
+          pendingSeek = -1;
+        }
+      }
+      maybePersist();
+    });
 
     // Register with the control plane, seeding now-playing from track 0.
     const first = m.tracks[0];
     audio?.register({ title: first?.title ?? '', artist: first?.artist ?? '' });
     cur = { url: tracks[0]?.url ?? '', title: first?.title ?? '', artist: first?.artist ?? '' };
+
+    // Restore the saved playback blob now that the playlist exists.
+    // The player comes back paused on the saved track; the first play
+    // resumes from the saved position via pendingSeek above.
+    if (saved) {
+      try {
+        if (saved.vol != null) wa.setVolume(saved.vol);
+        if (saved.shuffle && !wa.isShuffleEnabled()) wa.toggleShuffle();
+        if (saved.repeat && !wa.isRepeatEnabled()) wa.toggleRepeat();
+        const idx = m.tracks.findIndex((t) => t.url === saved!.track_url);
+        if (idx >= 0) {
+          wa.setCurrentTrack(idx); // does not autoplay while stopped
+          const t = m.tracks[idx];
+          cur = { url: t.url, title: t.title, artist: t.artist ?? '' };
+          if ((saved.pos ?? 0) > 0) pendingSeek = saved.pos!;
+        }
+        lastPersisted = readPersistable(wa);
+      } catch {
+        /* restore is best-effort; a fresh player is the fallback */
+      }
+      saved = null;
+    }
     scheduleReport();
   }
 
@@ -294,6 +391,14 @@ function WashampApp(props: WashAppProps) {
       const m = (ev as CustomEvent).detail as { kind?: string };
       if (m?.kind === 'tracks_ok') void initWebamp(m as TracksOk);
     };
+    // wash:state always fires before any queued wash:msg (api.ts
+    // delivery order), so `saved` is populated before tracks_ok
+    // triggers initWebamp's restore.
+    const onState = (ev: Event) => {
+      const s = (ev as CustomEvent).detail as PersistedWashamp | null;
+      if (s?.track_url || s?.vol != null) saved = s;
+    };
+    props.host.addEventListener('wash:state', onState);
     props.host.addEventListener('wash:msg', onMsg);
     // Capture-phase so we intercept Webamp's titlebar drag (see
     // onHostMouseDown). Harmless before Webamp renders — nothing matches
@@ -303,9 +408,11 @@ function WashampApp(props: WashAppProps) {
     // a window resize; re-snap when devicePixelRatio actually changed.
     window.addEventListener('resize', onWindowResize);
     onCleanup(() => {
+      props.host.removeEventListener('wash:state', onState);
       props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('mousedown', onHostMouseDown, true);
       window.removeEventListener('resize', onWindowResize);
+      if (persistTimer) clearTimeout(persistTimer);
       setSmoothRendering(false);
     });
     send({ kind: 'tracks', id: 'm-tracks' });
