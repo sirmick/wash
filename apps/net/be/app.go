@@ -49,12 +49,12 @@ const (
 	NetdAppID = "com.wash.netd"
 )
 
-// netIcon is the lucide "network" glyph as an inline SVG — the same icon the
-// session sidebar's Network section renders from the shared sprite (icons.svg
-// #network), so the app and the sidebar match. Manifest requires an icon for
-// windowed apps; kept tiny to stay well under the 64KB cap. %23 is an encoded
-// '#' (the accent hex color substituted for lucide's currentColor stroke).
-const netIcon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%236090e0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/></svg>`
+// netIcon is the lucide "network" glyph — the shell renders an app's icon as a
+// sprite id (window.tsx: <use href="icons.svg#<icon>">), the same glyph the
+// session sidebar's Network section uses, so app/launcher/taskbar/sidebar all
+// match. (A data: URI doesn't work here — it'd become icons.svg#data:… and
+// render nothing; every other app passes a bare lucide name like "radio".)
+const netIcon = "network"
 
 var def *sdk.AppDef
 
