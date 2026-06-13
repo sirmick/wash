@@ -333,6 +333,35 @@ $(VSCODE_STAMP): web-vscode
 $(NETD_STAMP): web-netd
 	$(call embed_dist,apps/netd/fe/dist,$(NETD_ASSETS))
 
+# ----- shared-vendor coherence guard -----
+#
+# App FE bundles EXTERNALIZE the shared deps (@wash/ui, solid-js,
+# xterm): at runtime the shell's import map resolves them to /vendor/*
+# files that ship inside wash-router (and wash-login's shell copy) —
+# see web/shell/build-vendor.mjs. So a targeted `make out/wash-<app>`
+# that picks up changed web/lib sources pairs a fresh app bundle with
+# a router still serving the OLD vendor chunk, and the app dies at
+# load with "module '@wash/ui' does not provide an export named …".
+# This guard rebuilds the vendor carriers first whenever the vendor
+# inputs are newer than the wash-router binary. In a full `make` it's
+# a no-op: wash-router/wash-login lead BINS and are already fresh by
+# the time any app binary's prerequisites run.
+.PHONY: vendor-sync
+vendor-sync:
+	@if [ ! -f $(OUT)/wash-router ] || \
+	   [ -n "$$(find web/lib/src web/lib/package.json web/shell/build-vendor.mjs -newer $(OUT)/wash-router -print -quit)" ]; then \
+		echo "== web/lib newer than $(OUT)/wash-router: rebuilding shared /vendor carriers (wash-router, wash-login) first"; \
+		$(MAKE) --no-print-directory $(OUT)/wash-router $(OUT)/wash-login; \
+	fi
+
+# Every binary embedding an FE bundle that externalizes shared deps.
+$(OUT)/wash-session $(OUT)/wash-about $(OUT)/wash-test $(OUT)/wash-term \
+$(OUT)/wash-fm $(OUT)/wash-edit $(OUT)/wash-vscode $(OUT)/wash-vscode-workbench \
+$(OUT)/wash-settings $(OUT)/wash-top $(OUT)/wash-disks $(OUT)/wash-journal \
+$(OUT)/wash-syslogs $(OUT)/wash-services $(OUT)/wash-packages $(OUT)/wash-net \
+$(OUT)/wash-washamp $(OUT)/wash-music $(OUT)/wash-radio $(OUT)/wash-netd \
+$(OUT)/wash-display: vendor-sync
+
 # ----- go stage -----
 
 $(OUT)/wash-router: $(ROUTER_STAMP) | $(OUT)
