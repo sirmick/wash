@@ -1,10 +1,10 @@
 # Build the wash RISC-V browser demo and deploy it to GitHub Pages.
 #
 # Triggers:
-#   * push to main (auto-deploy)
+#   * push to main → rebuild + deploy (EVERY push, so the demo always
+#     mirrors main)
+#   * pull_request to main → build-only sanity check (no deploy)
 #   * workflow_dispatch (manual re-run from the Actions tab)
-#   * push to any branch under a path that affects the demo
-#     (build-only, no deploy — sanity check on PRs)
 #
 # Build path mirrors wash-vm/web/README.md § "Deploy as static HTML":
 #   1. Build the wash shell bundle (web/shell → dist/)
@@ -24,34 +24,13 @@
 name: demo
 
 on:
+  # Rebuild + redeploy the live demo on EVERY push to main, so
+  # sirmick.github.io/wash always mirrors main (not only when demo-relevant
+  # paths changed). The Docker layer cache keeps a no-source-change run cheap.
   push:
     branches: [main]
-    paths:
-      - 'wash-vm/**'
-      - 'web/shell/**'
-      - 'web/lib/**'
-      - 'web/ui/**'
-      - 'apps/**'
-      - 'cmd/**'
-      - 'internal/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'Makefile'
-      - '.github/workflows/demo.yml'
   pull_request:
     branches: [main]
-    paths:
-      - 'wash-vm/**'
-      - 'web/shell/**'
-      - 'web/lib/**'
-      - 'web/ui/**'
-      - 'apps/**'
-      - 'cmd/**'
-      - 'internal/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'Makefile'
-      - '.github/workflows/demo.yml'
   workflow_dispatch:
 
 permissions:
