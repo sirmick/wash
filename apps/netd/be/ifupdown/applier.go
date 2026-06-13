@@ -2,6 +2,7 @@ package ifupdown
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"sync"
@@ -72,11 +73,18 @@ func (a *Applier) Apply(p backend.RenderPlan) (backend.RollbackToken, error) {
 	a.lastHadRoute = a.route()
 	a.mu.Unlock()
 
+	log.Printf("ifupdown: apply token=%s writing %s, bouncing interfaces", token, a.path)
 	if err := os.WriteFile(a.path, []byte(files[ifupdownprofile.FileName]), 0o644); err != nil {
 		return token, err
 	}
-	_, _ = a.run.run("ifdown", "-a")
+	// ifdown is best-effort (an interface that was never up errors
+	// harmlessly) but not silent — its output is the trail when the
+	// bounce strands the box.
+	if out, err := a.run.run("ifdown", "-a"); err != nil {
+		log.Printf("ifupdown: apply token=%s ifdown -a (best-effort): %v output=%q", token, err, out)
+	}
 	if _, err := a.run.run("ifup", "-a"); err != nil {
+		log.Printf("ifupdown: apply token=%s: %v", token, err)
 		return token, err
 	}
 	return token, nil
@@ -123,13 +131,22 @@ func (a *Applier) Rollback(token backend.RollbackToken) error {
 	if !ok {
 		return fmt.Errorf("rollback: unknown token %q", token)
 	}
+	log.Printf("ifupdown: rollback token=%s restoring %s", token, a.path)
 	if snap == "" {
-		_ = os.Remove(a.path)
+		if err := os.Remove(a.path); err != nil && !os.IsNotExist(err) {
+			log.Printf("ifupdown: rollback token=%s remove %s: %v", token, a.path, err)
+		}
 	} else if err := os.WriteFile(a.path, []byte(snap), 0o644); err != nil {
+		log.Printf("ifupdown: rollback token=%s restore %s FAILED: %v", token, a.path, err)
 		return err
 	}
-	_, _ = a.run.run("ifdown", "-a")
+	if out, err := a.run.run("ifdown", "-a"); err != nil {
+		log.Printf("ifupdown: rollback token=%s ifdown -a (best-effort): %v output=%q", token, err, out)
+	}
 	_, err := a.run.run("ifup", "-a")
+	if err != nil {
+		log.Printf("ifupdown: rollback token=%s: %v", token, err)
+	}
 	return err
 }
 

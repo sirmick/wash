@@ -2,6 +2,7 @@ package netplanprofile
 
 import (
 	"fmt"
+	"log"
 	"net/netip"
 	"sort"
 	"strconv"
@@ -119,12 +120,17 @@ func protoFrom(d device) model.ProtoConfig {
 	}
 	var sp model.StaticProto
 	for _, a := range d.Addresses {
-		if p, err := netip.ParsePrefix(a); err == nil {
-			if p.Addr().Is4() {
-				sp.IPAddr = append(sp.IPAddr, p)
-			} else {
-				sp.IP6Addr = p
-			}
+		p, err := netip.ParsePrefix(a)
+		if err != nil {
+			// Warn, don't silently drop — an address that vanishes on the
+			// read path would get removed from the box on the next apply.
+			log.Printf("netplanprofile: invalid address %q dropped: %v", a, err)
+			continue
+		}
+		if p.Addr().Is4() {
+			sp.IPAddr = append(sp.IPAddr, p)
+		} else {
+			sp.IP6Addr = p
 		}
 	}
 	for _, r := range d.Routes {

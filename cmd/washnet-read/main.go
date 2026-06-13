@@ -20,13 +20,16 @@ func main() {
 	backendFlag := flag.String("backend", "", "backend: nm|networkd|netplan|ifupdown (default: $WASH_NETD_BACKEND or autodetect)")
 	flag.Parse()
 
-	name := *backendFlag
+	name, src := *backendFlag, "flag"
 	if name == "" {
-		name = os.Getenv("WASH_NETD_BACKEND")
+		name, src = os.Getenv("WASH_NETD_BACKEND"), "env"
 	}
 	if name == "" {
-		name, _ = backendsel.Autodetect()
+		var why string
+		name, why = backendsel.Autodetect()
+		src = "autodetect: " + why
 	}
+	fmt.Fprintf(os.Stderr, "washnet-read: backend=%s (%s)\n", name, src)
 	a := backendsel.New(name)
 	if a == nil {
 		fmt.Fprintf(os.Stderr, "washnet-read: no live backend for %q\n", name)
