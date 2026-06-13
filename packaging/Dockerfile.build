@@ -1,0 +1,129 @@
+# Dockerfile.build — wash's sanitized build environment.
+#
+# A per-distro base image carrying the cross-cutting toolchain the distros
+# can't supply at the versions wash pins:
+#   - Go      (go.mod: go 1.25.x)   — distro Go is too old everywhere
+#   - Node 22 + pnpm 11             — for the Vite frontend builds
+#   - a C/C++ toolchain + git + xz  — base build prerequisites
+#
+# Dockerfile.deb / Dockerfile.rpm do `FROM wash-build:<tag>` and add only
+# the packaging-specific bits (debhelper / rpm-build) on top, then compile
+# the binaries from the source tarball IN the container — so a shipped
+# package never inherits whatever Go/Node/cmake the host happens to have.
+#
+# Build args:
+#   BASE         distro base image (ubuntu:24.04, debian:12, fedora:40, …)
+#   GO_VERSION   pinned Go toolchain (keep in sync with go.mod)
+#   NODE_VERSION pinned Node major.minor.patch
+#   PNPM_VERSION pinned pnpm (activated via corepack)
+#   WITH_DISPLAY when "1", also install the wlroots/wayland/webp/cmake
+#                stack so the optional wash-display compositor can build.
+#                Only meaningful on distros shipping wlroots 0.17
+#                (ubuntu:24.04, fedora:40).
+#
+# Usage (driven by packaging/run_matrix.sh):
+#   docker build -f packaging/Dockerfile.build \
+#     --build-arg BASE=ubuntu:24.04 -t wash-build:ubuntu-24.04 packaging
+
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ARG GO_VERSION=1.25.10
+ARG NODE_VERSION=22.22.2
+ARG PNPM_VERSION=11.1.3
+ARG WITH_DISPLAY=0
+ARG DEBIAN_FRONTEND=noninteractive
+
+# ---------- base prerequisites (apt or dnf) ------------------------------
+# A tiny shim so one Dockerfile serves both family trees: install curl /
+# git / xz / a C/C++ compiler however the base distro does it.
+RUN set -eux; \
+    if command -v apt-get >/dev/null 2>&1; then \
+        apt-get update; \
+        apt-get install -y --no-install-recommends \
+            ca-certificates curl git xz-utils tar build-essential pkg-config; \
+        rm -rf /var/lib/apt/lists/*; \
+    elif command -v dnf >/dev/null 2>&1; then \
+        dnf install -y --setopt=install_weak_deps=False \
+            ca-certificates curl git xz tar gcc gcc-c++ make pkgconf-pkg-config; \
+        dnf clean all; \
+    else \
+        echo "unsupported base: no apt-get or dnf" >&2; exit 1; \
+    fi
+
+# ---------- Go (pinned upstream tarball) ---------------------------------
+# The toolchain itself is the build-host arch (amd64); Go cross-compiles to
+# any GOARCH from here, so arm64/riscv64 targets need no separate toolchain.
+RUN set -eux; \
+    case "$(uname -m)" in \
+        x86_64)  goarch=amd64 ;; \
+        aarch64) goarch=arm64 ;; \
+        riscv64) goarch=riscv64 ;; \
+        *) echo "unsupported build-host arch $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${goarch}.tar.gz" -o /tmp/go.tgz; \
+    tar -C /usr/local -xzf /tmp/go.tgz; \
+    rm /tmp/go.tgz; \
+    /usr/local/go/bin/go version
+ENV PATH=/usr/local/go/bin:/usr/local/node/bin:$PATH \
+    GOTOOLCHAIN=local
+
+# ---------- Node + pnpm (pinned upstream tarball) -------------------------
+# Node ships no official riscv64 build, so on riscv64 we SKIP Node — the
+# Vite FE is arch-independent and is built on the amd64 host instead (the FE
+# assets / wash-display panel.js are copied into the native-arch build). The
+# Go core + wash-display compile fine without Node.
+RUN set -eux; \
+    case "$(uname -m)" in \
+        x86_64)  narch=x64 ;; \
+        aarch64) narch=arm64 ;; \
+        *) narch="" ;; \
+    esac; \
+    if [ -z "$narch" ]; then \
+        echo "no Node for $(uname -m) — skipping (FE builds on the amd64 host)"; \
+    else \
+        curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${narch}.tar.xz" -o /tmp/node.txz; \
+        mkdir -p /usr/local/node; \
+        tar -C /usr/local/node --strip-components=1 -xJf /tmp/node.txz; \
+        rm /tmp/node.txz; \
+        node --version; npm --version; \
+        npm install -g "pnpm@${PNPM_VERSION}"; \
+        pnpm --version; \
+    fi
+# pnpm via npm rather than corepack: the corepack bundled with the pinned
+# Node carries a stale signing-key list and rejects current pnpm releases
+# ("Cannot find matching keyid"). A direct npm install avoids the dance.
+
+# ---------- optional: wash-display + vendored-wlroots build deps ----------
+# We build the VENDORED wlroots 0.17.4 (wash-display/third_party/wlroots), so
+# the distro need not ship wlroots at all — only wlroots' base deps + the
+# meson/ninja/cmake toolchain. Trimmed config (headless + pixman + Xwayland,
+# no gles/vulkan/drm/gbm) → no mesa/EGL. Needs wayland-server >= 1.22, which
+# is why display targets ubuntu:24.04 / fedora:40 / debian:13 (not bookworm).
+RUN set -eux; \
+    if [ "$WITH_DISPLAY" = "1" ]; then \
+        if command -v apt-get >/dev/null 2>&1; then \
+            apt-get update; \
+            apt-get install -y --no-install-recommends \
+                cmake meson ninja-build \
+                libwayland-dev wayland-protocols libdrm-dev \
+                libxkbcommon-dev libpixman-1-dev libwebp-dev \
+                libdisplay-info-dev hwdata \
+                libxcb1-dev libxcb-composite0-dev libxcb-icccm4-dev \
+                libxcb-render-util0-dev libxcb-res0-dev libxcb-ewmh-dev \
+                xwayland; \
+            rm -rf /var/lib/apt/lists/*; \
+        elif command -v dnf >/dev/null 2>&1; then \
+            dnf install -y --setopt=install_weak_deps=False \
+                cmake meson ninja-build \
+                wayland-devel wayland-protocols-devel libdrm-devel \
+                libxkbcommon-devel pixman-devel libwebp-devel \
+                libdisplay-info-devel hwdata \
+                libxcb-devel xcb-util-wm-devel xcb-util-renderutil-devel \
+                xorg-x11-server-Xwayland-devel; \
+            dnf clean all; \
+        fi; \
+    fi
+
+WORKDIR /src
+CMD ["/bin/bash"]

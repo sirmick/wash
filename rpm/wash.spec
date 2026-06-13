@@ -13,7 +13,14 @@ Source0:        wash_%{version}.tar.xz
 # empty output that some hosts refuse.
 %global debug_package %{nil}
 %global _build_id_links none
-BuildArch:      x86_64
+# wash-display carries an intentional rpath (/usr/lib/wash) to find its
+# bundled private libwlroots.so; Fedora's check-rpaths would otherwise fail
+# the build on it.
+%global __brp_check_rpaths %{nil}
+# Arch is selected by the caller via `rpmbuild --target <arch>` (x86_64,
+# aarch64, riscv64) so one spec serves every target; the matching prebuilt
+# binaries are staged under out/ by the build container. No BuildArch pin —
+# that would hard-wire x86_64 and block cross-arch builds.
 
 Requires:       shadow-utils
 Requires:       libcap
@@ -57,6 +64,12 @@ for bin in wash-router wash-login wash-session wash-about wash-fm wash-term \
 done
 %if %{with display}
 install -m 0755 out/wash-display %{buildroot}%{_bindir}/wash-display
+# Bundled, private libwlroots.so (vendored 0.17.4). Lives in /usr/lib/wash
+# (NOT %%{_libdir}, which is /usr/lib64 on Fedora) to match wash-display's
+# rpath, so the layout is identical across distros. rpm's auto-deps emit a
+# Provides for its soname, which satisfies the binary's auto-Require.
+install -d -m 0755 %{buildroot}/usr/lib/wash
+install -m 0755 out/lib/libwlroots.so.* %{buildroot}/usr/lib/wash/
 %endif
 install -d -m 0755 %{buildroot}%{_sysconfdir}/wash
 
@@ -85,6 +98,8 @@ install -d -m 0755 %{buildroot}%{_sysconfdir}/wash
 %if %{with display}
 %files display
 %{_bindir}/wash-display
+%dir /usr/lib/wash
+/usr/lib/wash/libwlroots.so.*
 %endif
 
 %pre

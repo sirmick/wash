@@ -19,6 +19,11 @@ ARG VERSION=0.8.0
 # ---------- build stage --------------------------------------------------
 FROM ${BASE} AS build
 ARG VERSION
+# WASH_DISPLAY reaches the APKBUILD via the environment: it declares the
+# wash-display subpackage only when set, so a plain core build stays clean.
+# (Alpine display isn't built in the matrix; this just keeps the gate honest.)
+ARG WASH_DISPLAY=0
+ENV WASH_DISPLAY=${WASH_DISPLAY}
 
 RUN apk add --no-cache alpine-sdk sudo coreutils xz tar \
         libcap shadow \
@@ -54,15 +59,21 @@ WORKDIR /home/builder/wash
 # doesn't know where to find our pre-staged tarball. Pin it via env.
 ENV SRCDEST=/var/cache/distfiles
 
-# Keys for signing the apk (private key in ~/.abuild). `abuild
-# checksum` computes the source sha512 and writes it back into
-# APKBUILD; the subsequent `abuild` runs the full pipeline.
-RUN abuild-keygen -a -n \
-    && sudo cp /home/builder/.abuild/*.rsa.pub /etc/apk/keys/ \
-    && abuild checksum \
-    && abuild -P /home/builder/packages
+# Keys for signing the apk (private key in ~/.abuild). Split across a
+# root step (no sudo): under qemu-user emulation the setuid bit on sudo
+# isn't honored ("effective uid is not 0 ... nosuid"), which broke the
+# arm64/riscv64 rows. Generate the key as builder, install the pubkey as
+# root, then run abuild as builder.
+RUN abuild-keygen -a -n
+USER root
 # Install the freshly generated pubkey into /etc/apk/keys so abuild's
-# index-creation step trusts the package it just signed.
+# index-creation step (below) trusts the package it just signed.
+RUN cp /home/builder/.abuild/*.rsa.pub /etc/apk/keys/
+USER builder
+# `abuild checksum` computes the source sha512 + writes it into APKBUILD;
+# the subsequent `abuild -P` runs the full package pipeline.
+RUN abuild checksum \
+    && abuild -P /home/builder/packages
 
 USER root
 RUN mkdir -p /pkg /tests \
@@ -98,8 +109,14 @@ RUN set -eux; \
 # Distro-integration tests against real apk + openrc (where present).
 # openrc-in-container is friendly enough that systemd's PID-1 caveat
 # doesn't apply here.
-RUN /tests/packages_distro.test -test.v
-RUN /tests/services_distro.test -test.v
+# Distro-integration tests are arch-independent (apt/dnf/apk parsing + argv);
+# they are slow + flaky under qemu, so run them only on native (amd64) rows —
+# the amd64 row for each distro already covers the per-distro logic.
+ARG RUN_DISTRO_TESTS=1
+RUN if [ "$RUN_DISTRO_TESTS" = "1" ]; then \
+        /tests/packages_distro.test -test.v; \
+        /tests/services_distro.test -test.v; \
+    else echo "distro-integration tests skipped (non-native/emulated arch)"; fi
 
 # Daemon boot smoke. busybox wget is fine for this.
 RUN set -eux; \

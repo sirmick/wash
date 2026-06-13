@@ -1,125 +1,238 @@
 #!/usr/bin/env bash
-# Build wash packages across (distro, arch) and verify each via the
-# corresponding Dockerfile's test stage.
+# Build wash packages across (distro, arch, kind) and verify each — all in
+# Docker, nothing compiled on the host.
 #
-# Per-row sequence:
-#   1. docker build the two-stage image (build → test). The test
-#      stage's last RUN is the daemon-boot smoke; a failing build
-#      means a failing row.
-#   2. extract the produced .deb/.rpm/.apk from the image into
-#      dist/packages/<tag>/.
+# Pipeline:
+#   1. make-source-tarball.sh                  → SOURCE-only tarball.
+#   2. Dockerfile.build  (per distro)          → wash-build:<tag>, the
+#        sanitized build env (pinned Go + Node + pnpm; + the vendored-wlroots
+#        build deps when WITH_DISPLAY=1).
+#   3. Dockerfile.binaries (per arch, amd64    → compiles the pure-Go core
+#        host, cross GOARCH — it's static          (FE + Go) into out/. Built
+#        so this is fast and identical              ONCE per arch, shared by
+#        across distros)                            every row of that arch.
+#   4. Dockerfile.display (per distro+arch,    → builds wash-display + the
+#        buildx --platform + qemu — C++/           vendored wlroots 0.17.4
+#        wlroots can't cross-compile)               natively for the target
+#                                                   arch; folded into the bintar.
+#   5. Dockerfile.<kind> (buildx --platform)   → packages source+out into a
+#        → .deb/.rpm/.apk/.tgz, then the test       native-arch package and
+#        stage installs it and runs the smoke        runs the install smoke
+#        + distro-integration tests (emulated         under qemu (so arm64/
+#        for non-amd64).                              riscv64 get real verify).
 #
-# All four rows run independently. set -e governs host-side staging
-# (must succeed); the matrix loop is set +e so one bad distro doesn't
-# mask the rest. Per-row OK/FAIL summary at the end.
+# Env:
+#   WASH_PKG_VERSION    default 0.8.0
+#   WASH_PKG_TARGETS    newline-separated override of the row list
+#   WASH_PKG_DISPLAY=1  also build the wash-display display rows
+#   WASH_PKG_NO_BUILD=1 reuse already-staged tarballs/artifacts (skip compile)
+#   CORE_BUILDER_BASE   distro image for the (distro-independent) core build;
+#                       default ubuntu:24.04
 
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+docker info >/dev/null 2>&1 || { echo "docker not usable" >&2; exit 1; }
+docker buildx version >/dev/null 2>&1 || { echo "docker buildx required (multi-arch builds)" >&2; exit 1; }
+
 VERSION="${WASH_PKG_VERSION:-0.8.0}"
+CORE_BUILDER_BASE="${CORE_BUILDER_BASE:-ubuntu:24.04}"
 BUILD_CTX="$ROOT/packaging/build-ctx"
 DIST="$ROOT/dist"
 PKG_DIR="$DIST/packages"
-TARBALL_NAME="wash_${VERSION}.tar.xz"
+SRC_TARBALL="$BUILD_CTX/wash_${VERSION}.src.tar.xz"
 
-# (image-tag, platform, BASE, kind)  kind ∈ {deb, rpm, apk}.
-# Override the matrix with a newline-separated WASH_PKG_TARGETS:
-#   WASH_PKG_TARGETS=$'ubuntu-24.04-amd64 linux/amd64 ubuntu:24.04 deb' \
-#     ./packaging/run_matrix.sh
+# (tag  base  kind  goarch  display)  kind ∈ {deb,rpm,apk,openwrt}.
+# Display rows (display=1) are skipped unless WASH_PKG_DISPLAY=1, and only
+# target wlroots-buildable distros (wayland-server >= 1.22): ubuntu 24.04,
+# fedora 40, debian 13 (trixie) — NOT debian 12 (wayland 1.21). Alpine =
+# core only (no display) per design.
 TARGETS=(
-  "ubuntu-24.04-amd64      linux/amd64    ubuntu:24.04                    deb"
-  "debian-12-amd64         linux/amd64    debian:12                       deb"
-  "fedora-40-amd64         linux/amd64    fedora:40                       rpm"
-  "alpine-3.21-amd64       linux/amd64    alpine:3.21                     apk"
-  "openwrt-24.10.6-x86_64  linux/amd64    openwrt/rootfs:x86-64-24.10.6   openwrt"
+  "ubuntu-24.04-amd64      ubuntu:24.04                    deb      amd64    0"
+  "ubuntu-24.04-arm64      ubuntu:24.04                    deb      arm64    0"
+  "ubuntu-24.04-riscv64    ubuntu:24.04                    deb      riscv64  0"
+  "debian-13-amd64         debian:13                       deb      amd64    0"
+  "debian-13-arm64         debian:13                       deb      arm64    0"
+  "debian-13-riscv64       debian:13                       deb      riscv64  0"
+  "fedora-40-amd64         fedora:40                       rpm      amd64    0"
+  "fedora-40-arm64         fedora:40                       rpm      arm64    0"
+  # NOTE: no fedora riscv64 — Fedora publishes no riscv64 container image,
+  # so buildx --platform linux/riscv64 has no base to build on. (ubuntu /
+  # debian DO ship riscv64 images, so those riscv64 rows work.)
+  "alpine-3.21-amd64       alpine:3.21                     apk      amd64    0"
+  "alpine-3.21-arm64       alpine:3.21                     apk      arm64    0"
+  "alpine-3.21-riscv64     alpine:3.21                     apk      riscv64  0"
+  # ---- optional native wash-display (WASH_PKG_DISPLAY=1) ----
+  "ubuntu-24.04-amd64-display    ubuntu:24.04  deb  amd64    1"
+  "ubuntu-24.04-arm64-display    ubuntu:24.04  deb  arm64    1"
+  "ubuntu-24.04-riscv64-display  ubuntu:24.04  deb  riscv64  1"
+  "debian-13-amd64-display       debian:13     deb  amd64    1"
+  "debian-13-arm64-display       debian:13     deb  arm64    1"
+  "debian-13-riscv64-display     debian:13     deb  riscv64  1"
+  "fedora-40-amd64-display       fedora:40     rpm  amd64    1"
+  "fedora-40-arm64-display       fedora:40     rpm  arm64    1"
+  # (no fedora riscv64 display — see fedora riscv64 note above)
 )
 if [[ -n "${WASH_PKG_TARGETS:-}" ]]; then
-  mapfile -t TARGETS <<<"$WASH_PKG_TARGETS"
+  mapfile -t TARGETS <<<"${WASH_PKG_TARGETS}"
 fi
 
-# ----- host-side staging (set -e: must succeed) -----
+slug() { echo "$1" | tr ':/' '--'; }
+bintar_path() { echo "$BUILD_CTX/bintar-$1.tar.xz"; }
+
+# ----- host-side staging (set -e) -----
 set -e
+mkdir -p "$BUILD_CTX" "$DIST" "$PKG_DIR"
 
 if [[ "${WASH_PKG_NO_BUILD:-}" != "1" ]]; then
-  echo ">>> 1. Build wash-* binaries (clean standalone)"
-  # Force a clean rebuild so the packager doesn't trip over
-  # multicall-mode symlinks left in out/ by a prior --multicall run.
-  # (`debian/rules` overrides dh_auto_clean to a no-op so the binaries
-  # survive dh's clean phase, but symlinks pointing at a missing
-  # `wash` multicall binary would still tank dh_install.)
-  rm -rf "$ROOT/out"
-  "$ROOT/build.sh" --standalone
+  echo ">>> 1. Source tarball"
+  WASH_PKG_VERSION="$VERSION" "$ROOT/packaging/make-source-tarball.sh" >/dev/null
+  mv -f "$DIST/wash_${VERSION}.tar.xz" "$SRC_TARBALL"
+  echo "    staged $(du -h "$SRC_TARBALL" | cut -f1) (source)"
 fi
+trap 'docker container prune -f >/dev/null 2>&1 || true' EXIT
 
-echo ">>> 2. Precompile distro_integration test binaries (static, cross-distro)"
-mkdir -p "$ROOT/out"
-CGO_ENABLED=0 go test -c -tags=distro_integration -trimpath \
-  -o "$ROOT/out/packages_distro.test" ./apps/packages/be
-CGO_ENABLED=0 go test -c -tags=distro_integration -trimpath \
-  -o "$ROOT/out/services_distro.test" ./apps/services/be
-chmod 0755 "$ROOT/out/packages_distro.test" "$ROOT/out/services_distro.test"
+# build_core <goarch> — compile the pure-Go core for <goarch> (amd64 host,
+# cross). Produces $(bintar_path core-<goarch>) = source + core out/.
+build_core() {
+  local goarch="$1" key="core-$1"
+  local bintar; bintar="$(bintar_path "$key")"
+  [[ "${WASH_PKG_NO_BUILD:-}" == "1" && -f "$bintar" ]] && { echo "    reuse $bintar"; return 0; }
 
-echo ">>> 3. Stage source tarball ($BUILD_CTX/$TARBALL_NAME)"
-mkdir -p "$BUILD_CTX"
-rm -f "$BUILD_CTX"/*.tar.xz
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"; docker container prune -f >/dev/null 2>&1 || true' EXIT
-SRCDIR="$TMPDIR/wash-${VERSION}"
-mkdir -p "$SRCDIR"
-# Mirror ferrite's exclude set; trim wash-vm/ (huge, irrelevant to
-# packaging) and dist/ (would recurse on the artefact dir).
-rsync -a \
-    --exclude='node_modules/' \
-    --exclude='.git/' \
-    --exclude='dist/' \
-    --exclude='wash-vm/' \
-    --exclude='packaging/build-ctx/' \
-    --exclude='e2e/test-results/' \
-    --exclude='e2e/node_modules/' \
-    --exclude='*.log' \
-    "$ROOT/" "$SRCDIR/"
-tar -cJf "$BUILD_CTX/$TARBALL_NAME" -C "$TMPDIR" "wash-${VERSION}"
-echo "    staged $(du -h "$BUILD_CTX/$TARBALL_NAME" | cut -f1)"
+  local builder="wash-build:$(slug "$CORE_BUILDER_BASE")"
+  echo ">>> build-env  $builder"
+  docker build -f "$ROOT/packaging/Dockerfile.build" \
+      --build-arg BASE="$CORE_BUILDER_BASE" --build-arg WITH_DISPLAY=0 \
+      -t "$builder" "$ROOT/packaging" || return 1
 
-# ----- matrix loop (set +e: per-row tolerant) -----
+  local bin_tag="wash-binaries:$key"
+  echo ">>> compile    $bin_tag  (GOARCH=$goarch, core)"
+  docker build -f "$ROOT/packaging/Dockerfile.binaries" \
+      --build-arg BUILDER="$builder" --build-arg VERSION="$VERSION" \
+      --build-arg GOARCH="$goarch" -t "$bin_tag" "$BUILD_CTX" || return 1
+
+  local tmp; tmp="$(mktemp -d)"; local srcdir="$tmp/wash-${VERSION}"
+  mkdir -p "$srcdir/out"
+  tar -xJf "$SRC_TARBALL" --strip-components=1 -C "$srcdir" || { rm -rf "$tmp"; return 1; }
+  local cid; cid="$(docker create "$bin_tag")" || { rm -rf "$tmp"; return 1; }
+  docker cp "$cid:/src/out/." "$srcdir/out/" >/dev/null || { docker rm "$cid">/dev/null 2>&1; rm -rf "$tmp"; return 1; }
+  docker rm "$cid" >/dev/null
+  tar -cJf "$bintar" -C "$tmp" "wash-${VERSION}" || { rm -rf "$tmp"; return 1; }
+  rm -rf "$tmp"
+  echo "    staged $(du -h "$bintar" | cut -f1) (source+core)"
+}
+
+# build_display <base> <goarch> — build wash-display + vendored wlroots for
+# the target arch in a native (buildx/qemu) container. Stages the binary +
+# bundled lib under $BUILD_CTX/disp-<key>/.
+build_display() {
+  local base="$1" goarch="$2" key="$(slug "$1")-$2-display"
+  local dispdir="$BUILD_CTX/disp-$key"
+  # Reuse the staged native build unless forced — the wlroots+wash-display
+  # compile is the expensive (emulated) step and depends only on the C/C++
+  # source, not on packaging metadata. WASH_PKG_REBUILD_DISPLAY=1 forces it.
+  [[ "${WASH_PKG_REBUILD_DISPLAY:-}" != "1" && -x "$dispdir/wash-display" ]] && { echo "    reuse $dispdir (staged)"; return 0; }
+
+  local plat="linux/$goarch"
+  local builder="wash-build-disp:$(slug "$base")-$goarch"
+  echo ">>> build-env  $builder  (display, $plat)"
+  docker buildx build --platform "$plat" --load -f "$ROOT/packaging/Dockerfile.build" \
+      --build-arg BASE="$base" --build-arg WITH_DISPLAY=1 \
+      -t "$builder" "$ROOT/packaging" || return 1
+
+  local dispimg="wash-display-bin:$(slug "$base")-$goarch"
+  echo ">>> compile    $dispimg  (wash-display + vendored wlroots, $plat)"
+  # FE_BUILDER is the amd64 core builder (has Node) — it builds the
+  # arch-independent panel.js on the build host; BUILDER (target arch) does
+  # the native wlroots + wash-display compile.
+  docker buildx build --platform "$plat" --load -f "$ROOT/packaging/Dockerfile.display" \
+      --build-arg FE_BUILDER="wash-build:$(slug "$CORE_BUILDER_BASE")" \
+      --build-arg BUILDER="$builder" --build-arg VERSION="$VERSION" \
+      -t "$dispimg" "$BUILD_CTX" || return 1
+
+  rm -rf "$dispdir"; mkdir -p "$dispdir/lib"
+  local cid; cid="$(docker create --platform "$plat" "$dispimg")" || return 1
+  docker cp "$cid:/src/out/wash-display" "$dispdir/wash-display" >/dev/null || { docker rm "$cid">/dev/null 2>&1; return 1; }
+  docker cp "$cid:/src/out/lib/." "$dispdir/lib/" >/dev/null || { docker rm "$cid">/dev/null 2>&1; return 1; }
+  docker rm "$cid" >/dev/null
+  echo "    staged $dispdir ($(file -b "$dispdir/wash-display" | cut -d, -f1-2))"
+}
+
+# assemble_display_bintar <goarch> <base> — core bintar + display artifacts
+# → a per-row source+out tarball. Echoes its path.
+assemble_display_bintar() {
+  local goarch="$1" base="$2"
+  local core; core="$(bintar_path "core-$goarch")"
+  local dispdir="$BUILD_CTX/disp-$(slug "$base")-$goarch-display"
+  local out="$BUILD_CTX/bintar-$(slug "$base")-$goarch-display.tar.xz"
+  local tmp; tmp="$(mktemp -d)"
+  tar -xJf "$core" -C "$tmp"
+  cp "$dispdir/wash-display" "$tmp/wash-${VERSION}/out/wash-display"
+  mkdir -p "$tmp/wash-${VERSION}/out/lib"
+  cp -P "$dispdir"/lib/* "$tmp/wash-${VERSION}/out/lib/"
+  tar -cJf "$out" -C "$tmp" "wash-${VERSION}"
+  rm -rf "$tmp"
+  echo "$out"
+}
+
+# ----- matrix loop (set +e) -----
 set +e
-
-mkdir -p "$DIST" "$PKG_DIR"
 results=()
+declare -A CORE_DONE=() DISP_DONE=()
 for row in "${TARGETS[@]}"; do
-    read -r tag platform base kind <<<"$row"
-    image="wash-pkg:$tag"
-    log="$DIST/${tag}.log"
-    pkg_out="$PKG_DIR/$tag"
+    read -r tag base kind goarch display <<<"$row"
+    [[ -z "$tag" ]] && continue
+    [[ "$display" == "1" && "${WASH_PKG_DISPLAY:-}" != "1" ]] && continue
 
     echo
     echo "════════════════════════════════════════════════════════════"
-    echo "[matrix] $tag  (BASE=$base, platform=$platform, kind=$kind)"
-    echo "[matrix] log: $log"
+    echo "[matrix] $tag  (base=$base kind=$kind goarch=$goarch display=$display)"
     echo "════════════════════════════════════════════════════════════"
+    log="$DIST/${tag}.log"; : > "$log"
 
-    if ! docker build \
-            --platform "$platform" \
-            -f "$ROOT/packaging/Dockerfile.$kind" \
-            --build-arg BASE="$base" \
-            --build-arg VERSION="$VERSION" \
-            -t "$image" \
-            "$BUILD_CTX" 2>&1 | tee "$log"; then
-        results+=("$tag: FAIL  (see $log)")
-        continue
+    # 1. core (shared per arch)
+    if [[ -z "${CORE_DONE[$goarch]:-}" ]]; then
+        if build_core "$goarch" > >(tee -a "$log") 2>&1; then CORE_DONE[$goarch]=1
+        else results+=("$tag: CORE FAIL (see $log)"); continue; fi
     fi
 
-    # Extract built artefact out of the test image to dist/packages/<tag>/
+    # 2+3. display (per distro+arch) + assemble row bintar
+    if [[ "$display" == "1" ]]; then
+        dkey="$(slug "$base")-$goarch-display"
+        if [[ -z "${DISP_DONE[$dkey]:-}" ]]; then
+            if build_display "$base" "$goarch" > >(tee -a "$log") 2>&1; then DISP_DONE[$dkey]=1
+            else results+=("$tag: DISPLAY FAIL (see $log)"); continue; fi
+        fi
+        bintar="$(assemble_display_bintar "$goarch" "$base" 2>>"$log")"
+    else
+        bintar="$(bintar_path "core-$goarch")"
+    fi
+    [[ -f "$bintar" ]] || { results+=("$tag: NO BINTAR (see $log)"); continue; }
+    cp -f "$bintar" "$BUILD_CTX/wash_${VERSION}.tar.xz"
+
+    # 4. package (native arch via buildx → full smoke, even emulated)
+    image="wash-pkg:$tag"; pkg_out="$PKG_DIR/$tag"
+    # Distro-integration tests (apt/dnf/apk parsing) are arch-independent and
+    # slow/flaky under qemu — run them only on the native amd64 rows.
+    run_distro_tests=0; [[ "$goarch" == "amd64" ]] && run_distro_tests=1
+    if ! docker buildx build --platform "linux/$goarch" --load \
+            -f "$ROOT/packaging/Dockerfile.$kind" \
+            --build-arg BASE="$base" --build-arg VERSION="$VERSION" \
+            --build-arg WASH_DISPLAY="$display" \
+            --build-arg RUN_DISTRO_TESTS="$run_distro_tests" \
+            -t "$image" "$BUILD_CTX" >>"$log" 2>&1; then
+        results+=("$tag: PACKAGE FAIL (see $log)"); continue
+    fi
+
     rm -rf "$pkg_out"; mkdir -p "$pkg_out"
-    cid="$(docker create "$image")"
+    cid="$(docker create --platform "linux/$goarch" "$image")"
     docker cp "$cid:/pkg/." "$pkg_out/" >/dev/null 2>&1 || true
     docker rm "$cid" >/dev/null 2>&1 || true
     artifact="$(find "$pkg_out" -maxdepth 1 \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' -o -name '*.tgz' \) | sort | head -1)"
     if [[ -n "$artifact" ]]; then
-        size="$(du -h "$artifact" | cut -f1)"
-        results+=("$tag: OK   $size $(basename "$artifact")")
+        results+=("$tag: OK  $(du -h "$artifact" | cut -f1)  $(basename "$artifact")")
     else
         results+=("$tag: BUILD_OK but NO ARTIFACT (see $log)")
     fi
@@ -130,9 +243,7 @@ echo "════════════════════════�
 echo "[matrix] SUMMARY"
 echo "════════════════════════════════════════════════════════════"
 for r in "${results[@]}"; do echo "  $r"; done
-echo
-echo "Built images:"
-docker images "wash-pkg" 2>/dev/null | head -20
-echo
-echo "Packages: $PKG_DIR/<tag>/"
-echo "Logs:     $DIST/<tag>.log"
+echo; echo "Packages: $PKG_DIR/<tag>/   Logs: $DIST/<tag>.log"
+
+fail=0; for r in "${results[@]}"; do [[ "$r" == *FAIL* ]] && fail=1; done
+exit $fail

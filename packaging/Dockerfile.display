@@ -1,0 +1,49 @@
+# Dockerfile.display — build the native wash-display compositor (+ the
+# vendored wlroots 0.17.4 it links) for a target arch, via buildx --platform
+# + qemu. This is the one genuinely-native piece: C++/wlroots can't sanely
+# cross-compile, so it builds in a container OF the target arch (emulated for
+# arm64/riscv64). The Go core + the rest of the FE come from the amd64
+# cross-build (Dockerfile.binaries); run_matrix folds this image's
+# /src/out/wash-display + /src/out/lib into that arch's package.
+#
+# The settings-panel FE (wash-display/fe/dist/panel.js) is arch-independent,
+# so it's built once on the native build host ($BUILDPLATFORM, where Node
+# exists) and copied into the target stage — which is also what lets riscv64
+# work, where Node has no build.
+#
+# Usage (driven by run_matrix.sh):
+#   docker buildx build --platform linux/arm64 --load \
+#     -f packaging/Dockerfile.display \
+#     --build-arg BUILDER=wash-build:debian-13-display \
+#     --build-arg VERSION=0.8.0 \
+#     -t wash-display-bin:debian-13-arm64 packaging/build-ctx
+
+# FE_BUILDER is an amd64 image with Node (e.g. the core wash-build); it builds
+# the arch-independent panel.js. BUILDER is the TARGET-arch image (display deps)
+# that compiles wlroots + wash-display. They MUST differ in arch: the FE stage
+# pins $BUILDPLATFORM (amd64), so its base must have an amd64 variant.
+ARG FE_BUILDER=wash-build:ubuntu-24.04
+ARG BUILDER=wash-build:debian-13-display
+ARG VERSION=0.8.0
+
+# ---- FE stage: build panel.js on the native build host ($BUILDPLATFORM) ----
+FROM --platform=$BUILDPLATFORM ${FE_BUILDER} AS fe
+ARG VERSION
+WORKDIR /src
+COPY wash_${VERSION}.src.tar.xz /tmp/source.tar.xz
+RUN tar -xJf /tmp/source.tar.xz --strip-components=1 -C /src
+RUN make web-display   # → wash-display/fe/dist/panel.js (needs Node; amd64 here)
+
+# ---- build stage: vendored wlroots + wash-display for the TARGET arch ------
+FROM ${BUILDER} AS build
+ARG VERSION
+WORKDIR /src
+COPY wash_${VERSION}.src.tar.xz /tmp/source.tar.xz
+RUN tar -xJf /tmp/source.tar.xz --strip-components=1 -C /src
+# Arch-independent panel.js from the FE stage, so this stage needs no Node.
+COPY --from=fe /src/wash-display/fe/dist /src/wash-display/fe/dist
+# Build vendored wlroots (trimmed) + link wash-display against it, bundling
+# libwlroots.so into out/lib (PANEL_PREBUILT=1 → don't re-run the Vite FE).
+RUN make WASH_DISPLAY=1 WLROOTS_VENDORED=1 PANEL_PREBUILT=1 out/wash-display \
+ && test -x out/wash-display \
+ && ls -l out/lib/libwlroots.so*

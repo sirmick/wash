@@ -1,42 +1,67 @@
-# Builds a .deb from the source tarball staged by run_matrix.sh, then
-# verifies the resulting layout in a clean stage. Two-stage pattern
-# lifted from ferrite/packaging.
+# Builds a .deb from the source tarball staged by run_matrix.sh (which now
+# carries binaries compiled in the sanitized build container), then verifies
+# the layout in a clean stage. Two-stage pattern lifted from ferrite.
 #
 # Usage (driven by packaging/run_matrix.sh):
 #   docker build -f packaging/Dockerfile.deb \
-#     --build-arg BASE=ubuntu:24.04 \
-#     --build-arg VERSION=0.8.0 \
-#     -t wash-pkg:ubuntu-24.04-amd64 \
-#     packaging/build-ctx
+#     --build-arg BASE=ubuntu:24.04 --build-arg VERSION=0.8.0 \
+#     --build-arg PKG_ARCH=amd64 --build-arg WASH_DISPLAY=0 \
+#     -t wash-pkg:ubuntu-24.04-amd64 packaging/build-ctx
 #
 # Build context (set up by run_matrix.sh):
-#   ./wash_<ver>.tar.xz   — source tarball incl. prebuilt out/wash-*
+#   ./wash_<ver>.tar.xz   — source + prebuilt out/wash-* (container-built)
 
 ARG BASE=ubuntu:24.04
 ARG VERSION=0.8.0
+# PKG_ARCH: Debian arch to stamp (amd64 | arm64 | riscv64). The matching
+# prebuilt binaries are already under out/ (cross-compiled by the build
+# container), so dpkg-buildpackage just packages them for that arch.
+ARG PKG_ARCH=amd64
+# WASH_DISPLAY=1 also builds the optional wash-display package (gated by the
+# pkg.wash.display build profile; needs the wlroots stack at dep-calc time).
+ARG WASH_DISPLAY=0
 
 # ---------- build stage --------------------------------------------------
 FROM ${BASE} AS build
 ARG VERSION
+ARG PKG_ARCH
+ARG WASH_DISPLAY
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential debhelper xz-utils \
+        build-essential debhelper dpkg-dev xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 COPY wash_${VERSION}.tar.xz /tmp/source.tar.xz
 # Extract into /src directly (strip the wash-VERSION/ wrapper dir).
 # dpkg-buildpackage looks for debian/ in cwd; output .deb lands in /.
-RUN tar -xJf /tmp/source.tar.xz --strip-components=1 -C /src \
-    && dpkg-buildpackage -us -uc -b -d \
-    && mkdir -p /pkg /tests \
-    && cp /*.deb /pkg/ \
-    && cp out/packages_distro.test /tests/ \
-    && cp out/services_distro.test /tests/
+RUN set -eux; \
+    tar -xJf /tmp/source.tar.xz --strip-components=1 -C /src; \
+    profiles=""; \
+    if [ "$WASH_DISPLAY" = "1" ]; then \
+        # dh_shlibdeps maps wash-display's NEEDED sonames -> packages via the
+        # installed runtime libs' dpkg shlibs metadata, so they must be here.
+        apt-get update; \
+        apt-get install -y --no-install-recommends \
+            libwayland-dev libdrm-dev libxkbcommon-dev libpixman-1-dev \
+            libwebp-dev libdisplay-info-dev \
+            libxcb1-dev libxcb-icccm4-dev libxcb-ewmh-dev \
+            libxcb-render-util0-dev libxcb-res0-dev libxcb-composite0-dev; \
+        rm -rf /var/lib/apt/lists/*; \
+        profiles="--build-profiles=pkg.wash.display"; \
+    fi; \
+    dpkg-buildpackage -us -uc -b -d $profiles; \
+    mkdir -p /pkg /tests; \
+    cp /*.deb /pkg/; \
+    cp out/packages_distro.test /tests/; \
+    cp out/services_distro.test /tests/
 
 # ---------- test stage (clean image, no build deps) ----------------------
+# Only reached for native rows; run_matrix.sh builds cross-arch rows with
+# --target build (can't run a foreign-arch binary without qemu-user binfmt).
 FROM ${BASE} AS test
+ARG WASH_DISPLAY
 ARG DEBIAN_FRONTEND=noninteractive
 
 COPY --from=build /pkg/*.deb /pkg/
@@ -57,14 +82,25 @@ RUN set -eux; \
     [ "$(stat -c '%U %a' /usr/bin/wash-priv)" = "root 755" ]; \
     getent passwd wash-system >/dev/null; \
     getent group wash >/dev/null; \
-    test -d /etc/wash
+    test -d /etc/wash; \
+    if [ "$WASH_DISPLAY" = "1" ]; then \
+        test -x /usr/bin/wash-display; \
+        ldd /usr/bin/wash-display | grep -q "libwlroots.so.* => /usr/lib/wash/" || { echo "FAIL: bundled libwlroots not resolved via rpath"; ldd /usr/bin/wash-display | grep -i wlroots; exit 1; }; \
+        echo "wash-display OK (bundled wlroots resolved via /usr/lib/wash)"; \
+    fi
 
 # Distro-integration tests against the host's real apt + systemd
 # (where present). The container isn't running systemd as PID 1, so
 # systemd tests skip via the /run/systemd/system guard — apt is what
 # we're proving here.
-RUN /tests/packages_distro.test -test.v
-RUN /tests/services_distro.test -test.v
+# Distro-integration tests are arch-independent (apt/dnf/apk parsing + argv);
+# they are slow + flaky under qemu, so run them only on native (amd64) rows —
+# the amd64 row for each distro already covers the per-distro logic.
+ARG RUN_DISTRO_TESTS=1
+RUN if [ "$RUN_DISTRO_TESTS" = "1" ]; then \
+        /tests/packages_distro.test -test.v; \
+        /tests/services_distro.test -test.v; \
+    else echo "distro-integration tests skipped (non-native/emulated arch)"; fi
 
 # Daemon boot smoke: --version, then --listen → curl → kill.
 #

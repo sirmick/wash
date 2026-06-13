@@ -178,12 +178,27 @@ func (s *Spawner) Spawn(id Identity, name string) (Session, error) {
 	}
 
 	cmd := exec.Command(bin, args...)
-	// Don't inherit wash-login's stdout/stderr by default — for dev
-	// it's useful, for production noisy. Punt: forward to a logger
-	// in a follow-up. For now: pipe to /dev/null so the spawn
-	// doesn't pollute wash-login's stderr.
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+	// Capture the router's stdout+stderr to a per-session log under the
+	// run-root. Discarding them (/dev/null) makes a wedged or crashing
+	// session impossible to diagnose after the fact — the router's app
+	// registration, handoff, and shell errors all vanish. The file is
+	// opened here as wash-login and inherited as an fd, so the setuid'd
+	// child keeps writing to it without needing its own open; we chown it
+	// to the target user so they (and `journalctl`-less ops) can read it.
+	// Falls back to wash-login's own stderr (→ journald under systemd)
+	// rather than /dev/null if the file can't be created.
+	logPath := filepath.Join(uidDir, "router-"+sessid+".log")
+	if logFile, lerr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640); lerr == nil {
+		if uint32(os.Geteuid()) != id.UID {
+			_ = logFile.Chown(int(id.UID), int(id.GID))
+		}
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+		defer logFile.Close() // child inherits the fd; our copy closes after Start
+	} else {
+		cmd.Stdout = os.Stderr
+		cmd.Stderr = os.Stderr
+	}
 
 	// Setuid only when target differs from self. Avoids the
 	// "Operation not permitted" surface in dev where wash-login

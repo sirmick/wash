@@ -301,12 +301,24 @@ func (r *Registry) Entries() []*Entry {
 	return out
 }
 
+// appBinPrefix marks files the scan treats as candidate wash apps.
+// Discovery exec-probes each candidate (`<bin> --wash-manifest`), so it
+// must NOT run arbitrary executables: pointing apps-dir at a populated
+// /usr/bin (1500+ unrelated binaries) would otherwise exec every one of
+// them — slow, and a real hang/side-effect risk (some block on stdin).
+// Wash apps are always installed as wash-<name> (standalone binaries or
+// multicall symlinks to a single `wash`), so the prefix is a cheap, safe
+// filter. A future self-describing scheme (ELF note / sidecar manifest)
+// could drop the naming requirement entirely — see docs/MATRIX.md.
+const appBinPrefix = "wash-"
+
 // executablesIn returns the absolute paths of regular +x files in
-// dir, in name order. Symlinks pointing at a regular +x file are
-// included — the multi-call layout installs wash-term, wash-fm, …
-// as symlinks to a single `wash` binary, and the catalog scan has
-// to see them. Broken or non-executable symlinks are silently
-// skipped, same as a non-executable regular file.
+// dir whose name begins with appBinPrefix, in name order. Symlinks
+// pointing at a regular +x file are included — the multi-call layout
+// installs wash-term, wash-fm, … as symlinks to a single `wash`
+// binary, and the catalog scan has to see them. Broken or
+// non-executable symlinks are silently skipped, same as a
+// non-executable regular file.
 func executablesIn(dir string) ([]string, error) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
@@ -314,6 +326,12 @@ func executablesIn(dir string) ([]string, error) {
 	}
 	var out []string
 	for _, e := range ents {
+		// Cheapest filter first: only wash-<name> files are app
+		// candidates, so a crowded apps-dir (e.g. /usr/bin) never
+		// exec-probes unrelated binaries. See appBinPrefix.
+		if !strings.HasPrefix(e.Name(), appBinPrefix) {
+			continue
+		}
 		path := filepath.Join(dir, e.Name())
 		// Lstat for the dirent — skips real subdirectories without
 		// following symlinks. A symlink-to-dir lstat's as a symlink

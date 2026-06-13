@@ -1,0 +1,60 @@
+# Dockerfile.binaries — compile wash's binaries inside the sanitized build
+# environment (packaging/Dockerfile.build), from the SOURCE tarball.
+#
+# This is the "spin up a docker to build" step: it replaces the old host
+# `build.sh` + `go test -c` so a shipped package's binaries are never built
+# against whatever Go / Node / cmake the host happens to carry. run_matrix.sh
+# extracts /out from the resulting image and feeds it to the per-distro
+# package Dockerfiles unchanged.
+#
+# Build args:
+#   BUILDER       the wash-build:<tag> base image to compile in
+#   VERSION       upstream version (selects the source tarball name)
+#   GOARCH        target Go architecture (amd64 | arm64 | riscv64).
+#                 The pure-Go core is CGO_ENABLED=0, so cross-compiling is
+#                 just an env var — no cross toolchain, no qemu.
+#   WASH_DISPLAY  when "1", also build the native wash-display compositor
+#                 (never for riscv64 — the Makefile gates it off). The
+#                 BUILDER must have been built WITH_DISPLAY=1 on a distro
+#                 that ships wlroots 0.17.
+#
+# Usage (driven by packaging/run_matrix.sh):
+#   docker build -f packaging/Dockerfile.binaries \
+#     --build-arg BUILDER=wash-build:ubuntu-24.04 \
+#     --build-arg VERSION=0.8.0 --build-arg GOARCH=arm64 \
+#     -t wash-binaries:ubuntu-24.04-arm64 packaging/build-ctx
+
+ARG BUILDER=wash-build:ubuntu-24.04
+FROM ${BUILDER} AS build
+
+ARG VERSION=0.8.0
+ARG GOARCH=amd64
+ARG WASH_DISPLAY=0
+
+WORKDIR /src
+# The SOURCE-only tarball (run_matrix stages it as wash_<ver>.src.tar.xz;
+# the binary-augmented wash_<ver>.tar.xz is assembled later, per row).
+COPY wash_${VERSION}.src.tar.xz /tmp/source.tar.xz
+RUN tar -xJf /tmp/source.tar.xz --strip-components=1 -C /src
+
+# Compile the full standalone binary set (FE Vite builds run first via the
+# Makefile's per-binary embed stamps) for the requested arch.
+RUN make GOARCH=${GOARCH} all
+
+# distro_integration test binaries — run in each package Dockerfile's test
+# stage against the row's real apt/dnf/apk + service manager. Static, so
+# they cross-compile the same way the core does.
+RUN CGO_ENABLED=0 GOARCH=${GOARCH} go test -c -tags=distro_integration -trimpath \
+        -o out/packages_distro.test ./apps/packages/be \
+ && CGO_ENABLED=0 GOARCH=${GOARCH} go test -c -tags=distro_integration -trimpath \
+        -o out/services_distro.test ./apps/services/be \
+ && chmod 0755 out/packages_distro.test out/services_distro.test
+
+# NOTE: wash-display is NOT built here. It's C++/wlroots and can't sanely
+# cross-compile, so it's built per-arch in a native (buildx/qemu) container
+# by packaging/Dockerfile.display and folded into the package by run_matrix.sh.
+# This image is the fast amd64 cross-build of the pure-Go core only.
+
+# Thin extraction stage: run_matrix.sh does `docker create` + `docker cp`
+# against this image's /src/out to land the binaries on the host as the
+# invoking user (avoids root-owned files a bind-mount build would leave).
