@@ -131,6 +131,7 @@ func Launch(ctx context.Context, o Opts) (*VM, error) {
 	qemuCtx, cancel := context.WithCancel(context.Background())
 	vm.cancel = cancel
 	vm.cmd = exec.CommandContext(qemuCtx, o.QEMU, args...)
+	setPdeathsig(vm.cmd) // qemu dies with us — no orphan VMs on SIGKILL/panic/interrupt
 	vm.cmd.Stderr = vm.stderr
 	if err := vm.cmd.Start(); err != nil {
 		cancel()
