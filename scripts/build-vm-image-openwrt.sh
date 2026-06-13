@@ -46,7 +46,10 @@ echo ">> extract the BIOS ext4-combined image"
 GZ="openwrt-$VER-x86-64-generic-ext4-combined.img.gz"
 docker cp "wash-owrt-ib:/builder/bin/targets/x86/64/$GZ" "$OUT/openwrt.img.gz"
 docker rm -f wash-owrt-ib >/dev/null 2>&1 || true
-gunzip -f "$OUT/openwrt.img.gz"
+# gunzip exits 2 on the harmless "trailing garbage ignored" warning the Image
+# Builder's .img.gz sometimes carries — decompression still succeeds, so treat a
+# present output image as success and only fail if no image was produced.
+gunzip -f "$OUT/openwrt.img.gz" || [ -s "$OUT/openwrt.img" ] || { echo "openwrt: gunzip produced no image" >&2; exit 1; }
 qemu-img resize -f raw "$OUT/openwrt.img" 256M   # headroom for apply/leases (sparse)
 
 echo ">> done:"
