@@ -13,6 +13,7 @@ import {
   uploadEndMarker,
   readBlobChunks,
   entriesFromFileList,
+  entriesFromDataTransfer,
   type UploadItem,
   type BlobLike,
 } from './upload.ts';
@@ -150,4 +151,76 @@ test('entriesFromFileList drops entries with unsafe relative paths', () => {
     items.map((i) => i.relPath),
     ['ok.txt'],
   );
+});
+
+// ---- entriesFromDataTransfer: resilient directory walk ----
+//
+// Fakes of the FileSystemEntry API so the recursion (and its error
+// handling) can be unit-tested without a real OS drag. `fail:true` makes
+// a file's .file() or a directory's readEntries() reject — the path that
+// must be survived, not propagated.
+
+function fileEntry(name: string, opts: { fail?: boolean } = {}): FileSystemEntry {
+  return {
+    isFile: true,
+    isDirectory: false,
+    name,
+    file: (resolve: (f: File) => void, reject: (e: unknown) => void) =>
+      opts.fail ? reject(new Error('unreadable file')) : resolve({ name, size: 1 } as unknown as File),
+  } as unknown as FileSystemEntry;
+}
+
+function dirEntry(name: string, children: FileSystemEntry[], opts: { fail?: boolean } = {}): FileSystemEntry {
+  return {
+    isFile: false,
+    isDirectory: true,
+    name,
+    createReader: () => {
+      let drained = false;
+      return {
+        readEntries: (resolve: (e: FileSystemEntry[]) => void, reject: (e: unknown) => void) => {
+          if (opts.fail) return reject(new Error('unreadable dir'));
+          if (drained) return resolve([]);
+          drained = true;
+          resolve(children);
+        },
+      };
+    },
+  } as unknown as FileSystemEntry;
+}
+
+function itemList(entries: FileSystemEntry[]): DataTransferItemList {
+  const items = entries.map((e) => ({ kind: 'file', webkitGetAsEntry: () => e, getAsFile: () => null }));
+  return items as unknown as DataTransferItemList;
+}
+
+test('entriesFromDataTransfer skips an unreadable file but keeps its siblings', async () => {
+  const tree = dirEntry('d', [fileEntry('a.txt'), fileEntry('bad.txt', { fail: true }), fileEntry('c.txt')]);
+  const items = await entriesFromDataTransfer(itemList([tree]));
+  assert.deepEqual(items.map((i) => i.relPath), ['d/a.txt', 'd/c.txt']);
+});
+
+test('entriesFromDataTransfer skips an unreadable subdirectory but keeps readable siblings', async () => {
+  const tree = dirEntry('root', [
+    fileEntry('top.txt'),
+    dirEntry('locked', [fileEntry('secret.txt')], { fail: true }),
+    dirEntry('open', [fileEntry('inner.txt')]),
+  ]);
+  const items = await entriesFromDataTransfer(itemList([tree]));
+  assert.deepEqual(items.map((i) => i.relPath), ['root/top.txt', 'root/open/inner.txt']);
+});
+
+test('entriesFromDataTransfer survives a wholly-unreadable root and still collects the others', async () => {
+  const items = await entriesFromDataTransfer(
+    itemList([fileEntry('boom.txt', { fail: true }), dirEntry('d', [fileEntry('ok.txt')]), fileEntry('loose.txt')]),
+  );
+  assert.deepEqual(items.map((i) => i.relPath), ['d/ok.txt', 'loose.txt']);
+});
+
+test('entriesFromDataTransfer drops traversal-unsafe names mid-walk without aborting', async () => {
+  // A FE-side sanitizeRel reject (defensive — webkitGetAsEntry names
+  // shouldn't contain "..") must skip just that entry.
+  const tree = dirEntry('d', [fileEntry('..'), fileEntry('good.txt')]);
+  const items = await entriesFromDataTransfer(itemList([tree]));
+  assert.deepEqual(items.map((i) => i.relPath), ['d/good.txt']);
 });

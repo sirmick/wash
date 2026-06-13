@@ -182,18 +182,36 @@ export async function entriesFromDataTransfer(items: DataTransferItemList): Prom
   return out;
 }
 
+// walkEntry is RESILIENT by design: a single unreadable file or
+// directory (a permission error, a file deleted between drag and read, a
+// flaky readEntries) must not abort the whole drop — the user dragged a
+// tree in and expects everything readable to land. So each file read and
+// each directory listing is guarded; a failure skips that entry (or that
+// subtree) and the walk continues with its siblings, so walkEntry never
+// rejects. Without this, one bad leaf rejected the entire
+// entriesFromDataTransfer promise — which collectFromDrop fires with no
+// catch — so NOTHING uploaded and the failure was silent.
 async function walkEntry(entry: FileSystemEntry, prefix: string, out: UploadItem[]): Promise<void> {
   if (entry.isFile) {
-    const file = await fileFromEntry(entry as FileSystemFileEntry);
+    let file: File;
+    try {
+      file = await fileFromEntry(entry as FileSystemFileEntry);
+    } catch {
+      return; // unreadable file — skip it, keep the rest of the drop
+    }
     const rel = sanitizeRel(prefix + entry.name);
     if (rel) out.push({ relPath: rel, file });
     return;
   }
   if (entry.isDirectory) {
-    const reader = (entry as FileSystemDirectoryEntry).createReader();
-    const children = await readAllEntries(reader);
+    let children: FileSystemEntry[];
+    try {
+      children = await readAllEntries((entry as FileSystemDirectoryEntry).createReader());
+    } catch {
+      return; // unreadable directory — skip the subtree, keep the rest
+    }
     for (const c of children) {
-      await walkEntry(c, prefix + entry.name + '/', out);
+      await walkEntry(c, prefix + entry.name + '/', out); // each child guards itself
     }
   }
 }

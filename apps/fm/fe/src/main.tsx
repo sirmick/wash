@@ -116,6 +116,24 @@ const HOME_FALLBACK = '/';
 const UPLOAD_SEND_HWM = 1 << 20; // 1 MiB
 const UPLOAD_SEND_LWM = 256 * 1024; // 256 KiB
 
+// How long to wait for the BE's terminal upload_done AFTER we've sent the
+// end marker (or a cancel closed the channel). This bounds only the
+// finalize step — NOT the byte stream, which for a large/slow OS-folder
+// drop can legitimately run for minutes. A flat timeout spanning the
+// whole transfer would falsely declare a slow-but-healthy upload "done"
+// mid-stream.
+const UPLOAD_FINALIZE_MS = 30_000;
+
+// How often the streaming loop hands the event loop a real macrotask so
+// incoming control messages (a sidebar cancel) and user input get
+// processed mid-stream. awaitUploadDrain only yields a macrotask when the
+// send buffer FILLS — for a bulk upload of many small files it never
+// does, so without a periodic yield the producer loop runs microtask-only
+// and starves the WS message pump (cancel unseen) and the UI (the cancel
+// button can't even be clicked) until the whole job is queued. Time-
+// sliced so a huge file count doesn't pay a macrotask per file.
+const UPLOAD_YIELD_MS = 50;
+
 // awaitUploadDrain blocks until the shell socket's send buffer falls
 // below the low-water mark (or the upload is cancelled). Returns
 // immediately when the buffer is already under the high-water mark, so
@@ -1086,17 +1104,36 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const isExternalFileDrag = (dt: DataTransfer | null): boolean =>
     !!dt && !hasWashDrag(dt) && Array.from(dt.types).includes('Files');
 
-  // askUploadPolicy shows the conflict overlay and resolves the
-  // chosen policy (or null to cancel).
-  const askUploadPolicy = (existing: number, total: number): Promise<'replace' | 'skip' | null> =>
-    new Promise((resolve) => setUploadConflict({ existing, total, resolve }));
+  // askUploadPolicy shows the conflict overlay and resolves the chosen
+  // policy (or null to cancel). There is a SINGLE uploadConflict signal /
+  // overlay, so two uploads that both hit conflicts (e.g. two OS drops in
+  // quick succession) must SERIALIZE their prompts: we chain on
+  // promptTail so the second overlay only appears once the first is
+  // answered. Without this the second setUploadConflict clobbered the
+  // first, and the first runUpload's await never resolved — it hung,
+  // silently, forever, and that upload simply never happened.
+  let promptTail: Promise<unknown> = Promise.resolve();
+  const askUploadPolicy = (existing: number, total: number): Promise<'replace' | 'skip' | null> => {
+    const shown = promptTail.then(
+      () => new Promise<'replace' | 'skip' | null>((resolve) => setUploadConflict({ existing, total, resolve })),
+    );
+    promptTail = shown.catch(() => {});
+    return shown;
+  };
+
+  // onUploadFailure surfaces an unexpected upload rejection (a bus
+  // timeout on upload_check/begin, a writeRaw on a torn-down channel,
+  // etc.) as a status line instead of an unhandled promise rejection —
+  // both runUpload entry points (drop + picker) route their tails here.
+  const onUploadFailure = (e: unknown) =>
+    setStatusOverride(`upload: ${e instanceof Error ? e.message : 'failed'}`);
 
   // collectFromDrop snapshots the drop's entries (recursing into
   // dropped folders) and uploads them into targetDir. Called
   // synchronously from the drop handler so webkitGetAsEntry is read
   // while the DataTransfer is still alive.
   const collectFromDrop = (dt: DataTransfer, targetDir: string) => {
-    void entriesFromDataTransfer(dt.items).then((items) => runUpload(items, targetDir));
+    void entriesFromDataTransfer(dt.items).then((items) => runUpload(items, targetDir)).catch(onUploadFailure);
   };
 
   // onUploadInput handles a picker selection. The folder picker
@@ -1106,7 +1143,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     if (!files || files.length === 0) return;
     const items = entriesFromFileList(files);
     el.value = ''; // allow re-picking the same file later
-    void runUpload(items, dirOfSelection());
+    void runUpload(items, dirOfSelection()).catch(onUploadFailure);
   };
 
   // waitFor builds a one-shot promise registered in `map` under id,
@@ -1164,14 +1201,27 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const channelID = await waitFor(pendingUploadChannels, uploadID, 15_000, -1);
     try {
       if (channelID >= 0) {
-        // Stream each file as [header][bytes]; the BE reassembles by
-        // reading the framed records. A zero-byte file is just a header.
-        const donePromise = waitFor(pendingUploadDone, uploadID, 60_000, 'timeout');
+        // Register the done waiter BEFORE streaming so we never miss an
+        // early terminal push — but with NO timeout spanning the stream
+        // (a large/slow OS-folder drop can run for minutes). It's a bare
+        // one-shot resolver; the finalize window is bounded after the end
+        // marker below. finally unregisters it either way.
+        const donePromise = new Promise<string>((resolve) => pendingUploadDone.set(uploadID, resolve));
+        // breatheIfDue hands the event loop a real macrotask at most once
+        // per UPLOAD_YIELD_MS so a sidebar cancel (and UI input) is seen
+        // mid-stream even when the send buffer never fills — the
+        // many-small-files case awaitUploadDrain alone doesn't cover.
+        let lastYield = Date.now();
+        const breatheIfDue = async () => {
+          if (Date.now() - lastYield < UPLOAD_YIELD_MS) return;
+          await new Promise((r) => setTimeout(r, 0));
+          lastYield = Date.now();
+        };
         stream: for (const it of plan.entries) {
+          await breatheIfDue();
           if (cancelledUploads.has(uploadID)) break;
           window.wash.writeRaw(channelID, encodeRecordHeader(it.relPath, it.file.size));
           for await (const chunk of readBlobChunks(it.file)) {
-            if (cancelledUploads.has(uploadID)) break stream;
             window.wash.writeRaw(channelID, chunk);
             // Backpressure: writeRaw queues into the single shell
             // socket's send buffer. Without pacing, the whole file
@@ -1182,12 +1232,19 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             // cancel frame jumps ahead and this loop's own cancel
             // check actually fires mid-stream.
             await awaitUploadDrain(() => cancelledUploads.has(uploadID));
+            await breatheIfDue();
+            if (cancelledUploads.has(uploadID)) break stream;
           }
         }
         if (!cancelledUploads.has(uploadID)) {
           window.wash.writeRaw(channelID, uploadEndMarker());
         }
-        await donePromise;
+        // Bound ONLY the finalize: the BE emits upload_done shortly after
+        // it reads the end marker (or after a cancel closes the channel).
+        // If that push is lost, stop waiting after UPLOAD_FINALIZE_MS so
+        // the listing still refreshes — but the long stream above was
+        // never on the clock.
+        await Promise.race([donePromise, new Promise((r) => setTimeout(r, UPLOAD_FINALIZE_MS))]);
       }
     } finally {
       cancelledUploads.delete(uploadID);
