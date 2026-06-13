@@ -1,9 +1,9 @@
 # wash — internals
 
 A code map of what's in the tree right now. The companion docs cover
-intent ([ARCHITECTURE.md](ARCHITECTURE.md)), wire format
-([WIRE.md](WIRE.md)), and the v1 plan ([PLAN.md](PLAN.md)). This one
-just tells you where the code is and how the pieces fit together.
+intent ([ARCHITECTURE.md](ARCHITECTURE.md)) and wire format
+([WIRE.md](WIRE.md)). This one just tells you where the code is and how
+the pieces fit together.
 
 ## Layout
 

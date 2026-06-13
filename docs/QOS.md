@@ -1,6 +1,6 @@
 # wash — QoS & flow control (draft)
 
-Status: draft for Phase 6a (see [PLAN.md](PLAN.md)). Subsumes the deferred
+Status: draft for Phase 6a. Subsumes the deferred
 "raw discipline + credit backpressure" item in [WIRE.md §15](WIRE.md). Read
 that first for frame format and channel model — this doc only adds the QoS
 layer on top.

@@ -584,10 +584,8 @@ docs/               see below
 | [INTERNALS.md](docs/INTERNALS.md) | Code map: what lives where, how the pieces fit, what the SDK gives you. |
 | [MULTIUSER.md](docs/MULTIUSER.md) | wash-login: browser auth, per-user routers, SCM_RIGHTS handoff, sessions. |
 | [MATRIX.md](docs/MATRIX.md) | Distro packaging — apt/dnf/apk backends, the package matrix, install layout. |
-| [TINYEMU.md](docs/TINYEMU.md) | The WASM RISC-V emulator: kernel format, shims, debug loop. |
 | [DISPLAY.md](docs/DISPLAY.md) | The native X/Wayland compositor (`wash-display`): build reality, capture pipeline, wire client. |
 | [NET.md](docs/NET.md) | Networking app + privileged daemon (`wash-net`/`wash-netd`): UCI-shaped model, backends. |
-| [PLAN.md](docs/PLAN.md) | The v1 plan this is built against. |
 | [TESTING.md](docs/TESTING.md) | Test tiers, the `make` test verbs, holistic coverage, VM-backed e2e, CI, gotchas. |
 | [TECH_DEBT.md](docs/TECH_DEBT.md) / [AUDIT.md](docs/AUDIT.md) | Known debt and a code-quality audit. |
 
