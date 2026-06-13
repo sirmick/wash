@@ -51,13 +51,30 @@ func TestExecutablesIn_DiscoversSymlinkToExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Both should show up; symlink-name and the real binary.
-	if len(got) != 2 {
-		t.Fatalf("got %v, want 2 entries", got)
+	// The wash-about symlink is an app candidate; the bare `wash`
+	// dispatcher is filtered by the wash- prefix (it's the multicall
+	// entrypoint, not an app), so only the symlink is returned.
+	if len(got) != 1 || got[0] != link {
+		t.Fatalf("got %v, want [%s]", got, link)
 	}
-	// Sorted: wash, wash-about.
-	if got[0] != target || got[1] != link {
-		t.Fatalf("got %v, want [%s %s]", got, target, link)
+}
+
+func TestExecutablesIn_SkipsNonWashPrefixed(t *testing.T) {
+	dir := t.TempDir()
+	// A wash app and an unrelated executable (as a crowded /usr/bin
+	// would hold). Only the wash- one is an app candidate; the other
+	// must never be exec-probed.
+	app := filepath.Join(dir, "wash-about")
+	writeExec(t, app, 0o755)
+	writeExec(t, filepath.Join(dir, "tree"), 0o755)
+	writeExec(t, filepath.Join(dir, "washnt"), 0o755) // close-but-not wash-
+
+	got, err := executablesIn(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != app {
+		t.Fatalf("got %v, want [%s] (only the wash- prefixed binary)", got, app)
 	}
 }
 

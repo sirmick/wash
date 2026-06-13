@@ -4,21 +4,24 @@ pkgver=0.8.0
 pkgrel=1
 pkgdesc="Lightweight remote-admin desktop environment"
 url="https://github.com/sirmick/wash"
-arch="x86_64"
+arch="x86_64 aarch64 riscv64"
 license="MIT"
 depends="libcap shadow"
 # No makedepends: binaries are prebuilt in the source tarball.
 options="!check !strip"
 install="$pkgname.pre-install $pkgname.post-install $pkgname.post-deinstall"
-# Optional native display subpackage — opt-in via WASH_DISPLAY=1 (set by a
-# packager who built out/wash-display, the C++/wlroots binary the default
-# build omits). abuild's prepare_subpackages runs for EVERY entry listed
-# here regardless of what the split function returns, so listing it
-# unconditionally aborts the build when the binary is absent ("Missing
-# .../pkg/wash-display"). Only list it when opted in — mirrors deb's
-# `pkg.wash.display` build profile and rpm's `%bcond_with display`.
+# Optional native display subpackage. Declared ONLY when the build
+# container produced out/wash-display (WASH_DISPLAY=1) — abuild's
+# prepare_subpackages runs for EVERY entry listed here regardless of what
+# the split function returns, so a declared-but-empty subpackage aborts the
+# build ("Missing .../pkg/wash-display"). The Dockerfile.apk flow always
+# sets WASH_DISPLAY to 0 or 1, so test for "1" explicitly (a bare -n check
+# would fire on "0"). Mirrors deb's `pkg.wash.display` build profile and
+# rpm's `%bcond_with display`.
 subpackages=""
-[ -n "$WASH_DISPLAY" ] && subpackages="$pkgname-display:_display"
+if [ "${WASH_DISPLAY:-0}" = "1" ]; then
+	subpackages="$pkgname-display:_display"
+fi
 source="wash_$pkgver.tar.xz"
 # pre-built binaries; no upstream sha to verify
 builddir="$srcdir/wash-$pkgver"

@@ -153,7 +153,7 @@ func Run(args []string) int {
 	listenUnix := fs.String("listen-unix", "", `multi-user ctl socket path. When set, the router does not bind --listen; instead it listens on this Unix socket for SCM_RIGHTS handoffs from wash-login (see docs/MULTIUSER.md). Mutually exclusive with --transport=virtio-console / --transport=serial / --transport=fd.`)
 	name := fs.String("name", "", "human-readable session name; surfaced in stat RPC and /proc/<pid>/cmdline. Informational; immutable.")
 	idleTimeout := fs.Duration("idle-timeout", 0, "self-exit after this duration with no attached shell. Zero disables; default 30m when --listen-unix is set.")
-	allowUID := fs.Uint("allow-uid", 0, "uid whose SCM_RIGHTS handoffs the --listen-unix listener accepts (SO_PEERCRED-verified). Zero defaults to the router's own uid.")
+	allowUID := fs.Uint("allow-uid", 0, "uid whose SCM_RIGHTS handoffs the --listen-unix listener accepts (SO_PEERCRED-verified). When UNSET, defaults to the router's own uid; pass it explicitly (including 0 for root — the production wash-login runs as root) to override.")
 	authToken := fs.String("auth-token", "", "explicit token gating the --transport=ws TCP listener (/, /ws, /screenshot). Empty ⇒ a random 128-bit token is generated and logged at startup. Ignored for --listen-unix and byte-stream transports, which are gated by OS perms / device ownership.")
 	noAuth := fs.Bool("no-auth", false, "serve the --transport=ws listener with NO token gate. The bound address then hands a full session to anyone who can reach it — only for trusted-loopback dev.")
 	authTokenFile := fs.String("auth-token-file", "", "path the gate token is written to (mode 0600) and recovered from. Empty ⇒ a per-pid file under $XDG_RUNTIME_DIR/wash (or /tmp/wash-<uid>), removed on clean exit. An explicit path that already holds a token is reused as-is, so the token (and existing browser cookies) survive a restart.")
@@ -194,8 +194,22 @@ func Run(args []string) int {
 	if *listenUnix != "" && idleTimeoutVal == 0 {
 		idleTimeoutVal = 30 * time.Minute
 	}
+	// allow-uid: honor an explicitly-passed value literally — including 0,
+	// which is root. The production wash-login runs as root and is the
+	// SCM_RIGHTS handoff source, so it spawns routers with `--allow-uid 0`
+	// and must be accepted. Only when --allow-uid is entirely UNSET do we
+	// default to the router's own uid. (Previously 0 doubled as the "use
+	// own uid" sentinel, so a root wash-login's `--allow-uid 0` resolved to
+	// the spawned router's uid and rejected root's handoff — multi-user
+	// login silently failed with "router unreachable" in the browser.)
+	allowUIDSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "allow-uid" {
+			allowUIDSet = true
+		}
+	})
 	allowUIDVal := uint32(*allowUID)
-	if *listenUnix != "" && allowUIDVal == 0 {
+	if *listenUnix != "" && !allowUIDSet {
 		allowUIDVal = uint32(os.Getuid())
 	}
 

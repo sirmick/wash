@@ -1,8 +1,10 @@
 #!/usr/bin/make -f
-# wash's source tarball ships prebuilt static Go binaries under out/.
-# debhelper's auto_build / auto_test / strip / dwz steps are all no-ops:
-#   - nothing to compile
-#   - tests run on the host before tarball assembly
+# By the time dpkg-buildpackage runs, the wash-* binaries already exist
+# under out/ — compiled in the sanitized build container (packaging/
+# Dockerfile.binaries) and shipped inside this source tarball. debhelper's
+# auto_build / auto_test / strip / dwz steps are therefore all no-ops:
+#   - nothing left to compile
+#   - tests ran in the build container before the tarball was assembled
 #   - binaries are already stripped via -ldflags="-s -w"
 #   - static Go binaries have no DWARF dh_dwz can process
 
@@ -18,5 +20,24 @@ override_dh_auto_build:
 override_dh_auto_test:
 override_dh_strip:
 override_dh_dwz:
+
+# Neither package PROVIDES a shared library — they ship executables only —
+# so dh_makeshlibs has nothing to generate. Skip it: on a cross build it
+# would otherwise shell out to <arch>-linux-gnu-objdump (cross binutils we
+# don't install), breaking the arm64/riscv64 rows.
+override_dh_makeshlibs:
+
+# The pure-Go `wash` package is fully static → no shared-library deps to
+# compute (and dh_shlibdeps would just churn). The optional wash-display
+# package, by contrast, links wlroots/wayland/webp dynamically, so it DOES
+# need ${shlibs:Depends} filled in — but only when its build profile is
+# active. Run dh_shlibdeps for that package alone, when it's being built.
 override_dh_shlibdeps:
-# Pure-Go static binaries → no shared-library deps to compute.
+ifneq (,$(filter pkg.wash.display,$(DEB_BUILD_PROFILES)))
+	# wash-display links the bundled, private libwlroots.so under /usr/lib/wash
+	# (rpath). Point dpkg-shlibdeps at that staged dir with -l so it resolves
+	# libwlroots internally (no external pkg) while still computing the real
+	# deps for wlroots' OWN needs (wayland-server, libdrm, pixman, xkbcommon,
+	# xcb*, xwayland) from the system shlibs.
+	dh_shlibdeps -p wash-display -- -l$(CURDIR)/debian/wash-display/usr/lib/wash
+endif

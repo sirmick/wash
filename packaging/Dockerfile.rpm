@@ -1,23 +1,27 @@
-# Builds a .rpm from the source tarball + spec staged by run_matrix.sh,
-# then verifies the resulting layout in a clean stage. Mirror of
-# Dockerfile.deb adapted for dnf / rpmbuild.
+# Builds a .rpm from the source tarball + spec staged by run_matrix.sh (the
+# tarball carries binaries compiled in the sanitized build container), then
+# verifies the layout in a clean stage. Mirror of Dockerfile.deb for rpmbuild.
 #
 # Usage (driven by packaging/run_matrix.sh):
 #   docker build -f packaging/Dockerfile.rpm \
-#     --build-arg BASE=fedora:40 \
-#     --build-arg VERSION=0.8.0 \
-#     -t wash-pkg:fedora-40-amd64 \
-#     packaging/build-ctx
-#
-# Build context (set up by run_matrix.sh):
-#   ./wash_<ver>.tar.xz
+#     --build-arg BASE=fedora:40 --build-arg VERSION=0.8.0 \
+#     --build-arg PKG_ARCH=x86_64 --build-arg WASH_DISPLAY=0 \
+#     -t wash-pkg:fedora-40-amd64 packaging/build-ctx
 
 ARG BASE=fedora:40
 ARG VERSION=0.8.0
+# PKG_ARCH: rpm target arch (x86_64 | aarch64 | riscv64), passed to
+# `rpmbuild --target`. The matching prebuilt binaries are already under out/.
+ARG PKG_ARCH=x86_64
+# WASH_DISPLAY=1 also builds the optional wash-display subpackage
+# (`rpmbuild --with display`; gated by %bcond_with display in the spec).
+ARG WASH_DISPLAY=0
 
 # ---------- build stage --------------------------------------------------
 FROM ${BASE} AS build
 ARG VERSION
+ARG PKG_ARCH
+ARG WASH_DISPLAY
 
 RUN dnf install -y --setopt=install_weak_deps=False \
         rpm-build xz tar \
@@ -26,21 +30,28 @@ RUN dnf install -y --setopt=install_weak_deps=False \
 WORKDIR /root/rpmbuild
 COPY wash_${VERSION}.tar.xz /tmp/source.tar.xz
 
-# Stage: extract once to grab the spec + test binaries, then place
-# the tarball in SOURCES/ for rpmbuild's %prep autosetup.
-RUN mkdir -p BUILD RPMS SOURCES SPECS SRPMS \
-    && mkdir -p /tmp/extract \
-    && tar -xJf /tmp/source.tar.xz -C /tmp/extract \
-    && cp /tmp/source.tar.xz SOURCES/wash_${VERSION}.tar.xz \
-    && cp /tmp/extract/wash-${VERSION}/rpm/wash.spec SPECS/wash.spec \
-    && rpmbuild -bb SPECS/wash.spec \
-    && mkdir -p /pkg /tests \
-    && cp RPMS/*/*.rpm /pkg/ \
-    && cp /tmp/extract/wash-${VERSION}/out/packages_distro.test /tests/ \
-    && cp /tmp/extract/wash-${VERSION}/out/services_distro.test /tests/
+# Extract once to grab the spec + test binaries, then place the tarball in
+# SOURCES/ for rpmbuild's %prep autosetup. rpm's automatic find-requires
+# records wash-display's dynamic sonames (libwlroots/libwebp/...) — resolved
+# from the distro at install time, so no -devel libs are needed here.
+RUN set -eux; \
+    mkdir -p BUILD RPMS SOURCES SPECS SRPMS /tmp/extract; \
+    tar -xJf /tmp/source.tar.xz -C /tmp/extract; \
+    cp /tmp/source.tar.xz SOURCES/wash_${VERSION}.tar.xz; \
+    cp /tmp/extract/wash-${VERSION}/rpm/wash.spec SPECS/wash.spec; \
+    with_display=""; \
+    if [ "$WASH_DISPLAY" = "1" ]; then with_display="--with display"; fi; \
+    rpmbuild -bb $with_display SPECS/wash.spec; \
+    mkdir -p /pkg /tests; \
+    cp RPMS/*/*.rpm /pkg/; \
+    cp /tmp/extract/wash-${VERSION}/out/packages_distro.test /tests/; \
+    cp /tmp/extract/wash-${VERSION}/out/services_distro.test /tests/
 
 # ---------- test stage (clean image, no build deps) ----------------------
+# Only reached for native rows; run_matrix.sh builds cross-arch rows with
+# --target build (a foreign-arch binary can't run without qemu-user binfmt).
 FROM ${BASE} AS test
+ARG WASH_DISPLAY
 
 COPY --from=build /pkg/*.rpm /pkg/
 COPY --from=build /tests /tests
@@ -60,11 +71,22 @@ RUN set -eux; \
     [ "$(stat -c '%U %a' /usr/bin/wash-priv)" = "root 755" ]; \
     getent passwd wash-system >/dev/null; \
     getent group wash >/dev/null; \
-    test -d /etc/wash
+    test -d /etc/wash; \
+    if [ "$WASH_DISPLAY" = "1" ]; then \
+        test -x /usr/bin/wash-display; \
+        ldd /usr/bin/wash-display | grep -q "libwlroots.so.* => /usr/lib/wash/" || { echo "FAIL: bundled libwlroots not resolved via rpath"; ldd /usr/bin/wash-display | grep -i wlroots; exit 1; }; \
+        echo "wash-display OK (bundled wlroots resolved via /usr/lib/wash)"; \
+    fi
 
 # Distro-integration tests against real dnf + rpm.
-RUN /tests/packages_distro.test -test.v
-RUN /tests/services_distro.test -test.v
+# Distro-integration tests are arch-independent (apt/dnf/apk parsing + argv);
+# they are slow + flaky under qemu, so run them only on native (amd64) rows —
+# the amd64 row for each distro already covers the per-distro logic.
+ARG RUN_DISTRO_TESTS=1
+RUN if [ "$RUN_DISTRO_TESTS" = "1" ]; then \
+        /tests/packages_distro.test -test.v; \
+        /tests/services_distro.test -test.v; \
+    else echo "distro-integration tests skipped (non-native/emulated arch)"; fi
 
 # Daemon boot smoke. See Dockerfile.deb for the empty-apps-dir rationale.
 RUN set -eux; \

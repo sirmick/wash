@@ -1,1 +1,2 @@
-out/wash-display       usr/bin
+out/wash-display        usr/bin
+out/lib/libwlroots.so.* usr/lib/wash

@@ -39,11 +39,45 @@ not just `cp out/* /usr/bin/`.
   shape ferrite uses. nfpm's single-yaml convenience isn't worth
   losing per-format scriptlet idioms (systemd unit registration,
   openrc runlevel links, user/group creation).
-- **One static binary in, one package out.** Build stages do no
-  compilation. The source tarball staged on the host already includes
-  prebuilt `out/wash-*` static binaries; the container's job is
-  `dpkg-buildpackage` / `rpmbuild` / `abuild` over an already-built
-  tree. No Go toolchain in any container.
+- **Sanitized build environment — compile in Docker, never on the
+  host.** A `make-source-tarball.sh` produces a SOURCE-only tarball;
+  `packaging/Dockerfile.build` is a per-distro base image carrying the
+  pinned toolchain (Go 1.25 + Node 22 + pnpm 11, plus the wlroots stack
+  when `WITH_DISPLAY=1`); `packaging/Dockerfile.binaries` compiles
+  `out/wash-*` inside that image for a given `GOARCH`. The packaging
+  Dockerfiles then `dpkg-buildpackage` / `rpmbuild` / `abuild` over the
+  resulting source+`out/` tree (their `rules`/`%build` stay no-ops —
+  the binaries are genuinely prebuilt, just prebuilt hermetically). A
+  shipped package therefore never inherits whatever Go/Node/cmake the
+  host happens to carry. Network IS allowed during the in-container
+  build (`go mod download`, `pnpm install`); fully-offline vendoring is
+  a later hardening step.
+- **Pure-Go core is distro-independent and cross-compiles; wash-display
+  is native.** The core is `CGO_ENABLED=0` static, so its binaries are
+  byte-identical across distros — cross-compiled ONCE per arch on the
+  amd64 host (`Dockerfile.binaries`, just a `GOARCH` env, no qemu) and
+  shared by every row. wash-display is C++ linked against wlroots and
+  can't sanely cross-compile, so it builds in a container OF the target
+  arch via `docker buildx --platform` + qemu-user (`Dockerfile.display`),
+  emulated for arm64/riscv64. The arch-independent Vite FE (panel.js) is
+  built on the amd64 host (`$BUILDPLATFORM`) and copied in — which is
+  also what makes riscv64 work, since Node ships no riscv64 build.
+- **wash-display bundles its own wlroots (vendored 0.17.4).** It links
+  the vendored `wash-display/third_party/wlroots` (built trimmed:
+  headless + pixman + Xwayland; no gles/vulkan/drm/gbm), NOT the distro's
+  libwlroots — so the compositor is pinned to the wlroots API
+  `compositor.cpp` targets, independent of whatever the distro ships
+  (debian 13 has 0.18, ubuntu/fedora 0.17, many have none). The shared
+  lib is bundled in the package under `/usr/lib/wash` and found via an
+  rpath; the package depends only on wlroots' base libs
+  (wayland-server ≥ 1.22, libdrm, pixman, xkbcommon, xcb*, xwayland),
+  which is the one hard floor — it rules out debian 12 (wayland 1.21),
+  hence display targets ubuntu 24.04 / fedora 40 / debian 13.
+- **Packaging + verify run native (emulated).** Each package is built
+  with `docker buildx --platform`, so even arm64/riscv64 rows run the
+  full install smoke + distro-integration + daemon-boot under qemu
+  rather than skipping. (A real arm64/riscv64 host builds the same
+  thing natively and fast — no qemu.)
 
 ## Workstreams
 
@@ -240,9 +274,11 @@ container is friendlier; runs unprivileged.
 | Matrix scope | Unit + distro-integration Go tests + install smoke. **No Playwright in the matrix.** |
 | Host e2e suite | Unchanged. Stubbed PATH dev loop stays as-is. |
 | Packaging tool | Native per-format (`dpkg-buildpackage`, `rpmbuild`, `abuild`). Not nfpm. |
-| Build inside container? | No. Static binaries go in via the source tarball. |
-| Backends required | apt (exists), dnf (new), apk (new). procd / OpenWRT deferred. |
-| Distro list | alpine 3.21, debian 12, fedora 40, ubuntu 24.04. amd64 only in v1. |
+| Build inside container? | **Yes** — sanitized build env (`Dockerfile.build` → `Dockerfile.binaries`). Pinned Go/Node/pnpm, never the host toolchain. |
+| Backends required | apt (exists), dnf (new), apk (new), OpenWRT tgz. |
+| Distro list | alpine 3.21, debian 12, fedora 40, ubuntu 24.04, openwrt 24.10. |
+| Arch list | amd64 (full verify), arm64 + riscv64 (deb/rpm; built cross, verify skipped without binfmt). |
+| Optional display package | `wash-display` (deb/rpm), gated by `WASH_PKG_DISPLAY=1`; vendored wlroots 0.17.4 bundled; ubuntu 24.04 / fedora 40 / debian 13 (wayland ≥ 1.22) × amd64/arm64/riscv64. NOT debian 12, NOT alpine. |
 | Init systems exercised | systemd (debian/fedora/ubuntu), openrc (alpine). |
 | Smoke target package | `tree` — present in all four repos, removable, no side effects. |
 | User/group | `wash-system:wash`, created in postinst, removed only on purge. |
@@ -253,8 +289,10 @@ container is friendlier; runs unprivileged.
 
 | Item | Reason |
 |---|---|
-| Multi-arch (arm64, riscv64) | Land amd64 matrix first, add rows after. |
-| procd / OpenWRT row | Distinct base image; no native procd init script today. |
+| arm64/riscv64 verify boot-smoke | Built cross on amd64; running the foreign-arch binary needs qemu-user binfmt. Rows build the package and skip the smoke without it. |
+| wash-display on arm64 | Declared (`Architecture: amd64 arm64`) but not built in the matrix — the C++ compositor needs a native (qemu-emulated) arm64 build. amd64 first. |
+| Fully-offline build | Network is allowed during the in-container build today; `go mod vendor` + a vendored pnpm store is a later hardening step. |
+| procd / OpenWRT init | OpenWRT row ships a binary tgz; no native procd init script yet. |
 | Repo publishing (apt repo, copr, alpine community) | Out of v1. `dist/packages/<tag>/` artifacts are enough. |
 | Convergence with wash-vm | Different problem (architecture portability vs. distro portability). |
 | Auto-update / apt pinning / dnf module setup | Not v1. |
@@ -364,13 +402,17 @@ rpm/                           # NEW tree
 alpine/                        # NEW tree
 
 packaging/
-  Dockerfile.deb               # NEW
-  Dockerfile.rpm               # NEW
-  Dockerfile.apk               # NEW
-  run_matrix.sh                # NEW
+  make-source-tarball.sh       # SOURCE-only tarball (git ls-files based)
+  Dockerfile.build             # sanitized build env: Go/Node/pnpm (+display)
+  Dockerfile.binaries          # compile out/ in that env, per GOARCH
+  Dockerfile.deb               # ubuntu, debian   (PKG_ARCH, WASH_DISPLAY)
+  Dockerfile.rpm               # fedora           (PKG_ARCH, WASH_DISPLAY)
+  Dockerfile.apk               # alpine
+  Dockerfile.openwrt           # openwrt (binary tgz)
+  run_matrix.sh                # (tag base kind goarch display) rows
   build-ctx/                   # gitignored; populated by run_matrix.sh
 
-Makefile                       # add: matrix target → packaging/run_matrix.sh
+Makefile                       # linux-{amd64,arm64,riscv64}, packages target
 ```
 
 ## Glossary

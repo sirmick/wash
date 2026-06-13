@@ -384,10 +384,57 @@ $(OUT)/wash-test: $(TEST_STAMP) | $(OUT)
 web-display: web-deps
 	@$(PNPM) --filter @wash/app-display run build
 
-$(OUT)/wash-display: web-display $(wildcard wash-display/src/*) $(wildcard wash-display/fe/dist/*) wash-display/CMakeLists.txt | $(OUT)
-	cmake -S wash-display -B wash-display/build -DCMAKE_BUILD_TYPE=Release >/dev/null
+# Vendored wlroots (wash-display/third_party/wlroots, 0.17.4). WLROOTS_VENDORED=1
+# builds it to a private prefix and links wash-display against THAT instead of
+# the distro's libwlroots — pinning the compositor to the wlroots API version
+# compositor.cpp targets, independent of whatever (if any) wlroots the distro
+# ships. The shared lib is bundled in the package under $(WASH_LIBDIR) and
+# found at runtime via an rpath. Trimmed to the headless backend + pixman
+# renderer + Xwayland (no gles2/vulkan/drm/gbm/session) so it needs only
+# wayland(>=1.22)/libdrm/pixman/xkbcommon/xcb/xwayland — no mesa/EGL. The
+# build env supplies meson + ninja + those -dev libs (see Dockerfile.build).
+WLROOTS_VENDORED ?=
+WLROOTS_SRC      := wash-display/third_party/wlroots
+WLROOTS_PREFIX   := $(abspath wash-display/.wlroots)
+WLROOTS_PC       := $(WLROOTS_PREFIX)/lib/pkgconfig/wlroots.pc
+# Private lib dir the package installs the bundled libwlroots.so into, and the
+# rpath wash-display carries to find it (absolute; /usr/bin/wash-display →
+# /usr/lib/wash). Staged into out/lib/ for the packagers' .install/%files.
+WASH_LIBDIR      := /usr/lib/wash
+
+$(WLROOTS_PC):
+	meson setup $(WLROOTS_SRC)/build $(WLROOTS_SRC) \
+	  -Dexamples=false -Drenderers= -Dallocators= -Dbackends= \
+	  -Dsession=disabled -Dxwayland=enabled -Dxcb-errors=disabled \
+	  --default-library=shared --libdir=lib --prefix=$(WLROOTS_PREFIX) \
+	  --buildtype=release
+	ninja -C $(WLROOTS_SRC)/build
+	ninja -C $(WLROOTS_SRC)/build install
+
+ifeq ($(WLROOTS_VENDORED),1)
+WASH_DISPLAY_PREREQ := $(WLROOTS_PC)
+WASH_DISPLAY_PKGCFG := PKG_CONFIG_PATH="$(WLROOTS_PREFIX)/lib/pkgconfig:$$PKG_CONFIG_PATH"
+WASH_DISPLAY_RPATH  := -DCMAKE_INSTALL_RPATH=$(WASH_LIBDIR) -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+endif
+
+# PANEL_PREBUILT=1 means wash-display/fe/dist/panel.js is already present
+# (built elsewhere — e.g. on the amd64 build host) so the wash-display build
+# must NOT depend on web-display. This is what lets the native-arch display
+# build run on riscv64, where Node (and thus the Vite FE build) is unavailable.
+ifeq ($(PANEL_PREBUILT),1)
+WASH_DISPLAY_WEB :=
+else
+WASH_DISPLAY_WEB := web-display
+endif
+
+$(OUT)/wash-display: $(WASH_DISPLAY_WEB) $(WASH_DISPLAY_PREREQ) $(wildcard wash-display/src/*) $(wildcard wash-display/fe/dist/*) wash-display/CMakeLists.txt | $(OUT)
+	$(WASH_DISPLAY_PKGCFG) cmake -S wash-display -B wash-display/build -DCMAKE_BUILD_TYPE=Release $(WASH_DISPLAY_RPATH) >/dev/null
 	cmake --build wash-display/build
 	cp wash-display/build/wash-display $@ && chmod 0755 $@
+ifeq ($(WLROOTS_VENDORED),1)
+	mkdir -p $(OUT)/lib
+	cp -P $(WLROOTS_PREFIX)/lib/libwlroots.so* $(OUT)/lib/
+endif
 
 $(OUT)/wash-term: $(TERM_STAMP) | $(OUT)
 	$(call go_build,$@,apps/term/be/cmd)
@@ -739,9 +786,23 @@ net-matrix: $(OUT)/washnet-matrix
 
 # ----- meta -----
 
-.PHONY: linux-arm64
+# Cross-arch convenience targets. The core is CGO_ENABLED=0 static, so these
+# are plain GOARCH cross-compiles — no cross toolchain, no qemu. wash-display
+# is C++/native and is gated off for riscv64 (see its TARGETS guard above).
+.PHONY: linux-amd64 linux-arm64 linux-riscv64
+linux-amd64:
+	$(MAKE) GOARCH=amd64 all
 linux-arm64:
 	$(MAKE) GOARCH=arm64 all
+linux-riscv64:
+	$(MAKE) GOARCH=riscv64 all
+
+# packages: build + verify the native .deb/.rpm/.apk/.tgz across the distro
+# (and arch) matrix, each compiled in the sanitized Docker build environment.
+# WASH_PKG_DISPLAY=1 adds the optional wash-display rows. Needs Docker.
+.PHONY: packages
+packages:
+	./packaging/run_matrix.sh
 
 # wash-vm: build the full RISC-V Linux VM (kernel + firmware + rootfs)
 # and install artifacts where wash-vm/web's index.html expects them.
