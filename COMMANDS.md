@@ -26,6 +26,7 @@ make all-test           unit + multicall-smoke + e2e + net + disks  (the VM tier
 make coverage           instrumented build → merged go-unit + e2e coverage report under coverage/
 make verify             quick go-only gate: go vet + go test + static-ELF check
 make test-all           all-test + all-package (the whole pyramid)
+make screenshots        regenerate docs/screenshots/*.png (Playwright capture in e2e/capture/; NOT part of e2e-test; the display shot needs out/wash-display + xclock)
 ```
 
 ## PACKAGE   (hermetic in Docker; live per-row progress; WASH_PKG_JOBS=N concurrency)

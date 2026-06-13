@@ -10,7 +10,7 @@ home server, a Raspberry Pi, or a RISC-V emulator compiled to WASM.**
 > in ~3 seconds. The whole thing is ~24 MiB of static assets served
 > straight from GitHub Pages — no backend, no relay, no account.
 
-![A wash desktop with Files, Terminal, Editor, System Monitor, Settings, Services, Packages and About windows open](docs/screenshots/desktop-montage.png)
+![A wash desktop: a Washamp audio player, a Terminal, and the Files window open over the wallpaper, with the system sidebar (workspace pager + widgets) on the right and a taskbar along the bottom](docs/screenshots/desktop-montage.png)
 
 wash is **not** pixel-streamed remote desktop (no VNC, no RDP, no video
 codec). Every surface is HTML the desktop owns and renders locally;
@@ -79,16 +79,25 @@ turns it into a **single static binary plus a browser**:
 
 ## Screenshots
 
+These are generated, not hand-shot: `make screenshots` poses real app
+windows in a throwaway router and captures them with Playwright into
+`docs/screenshots/` (deterministic, seeded layout — see
+`e2e/capture/`). The hero montage above is from the same run.
+
 | | |
 |---|---|
-| **Desktop** — wallpaper, system banner, workspace pager + sidebar widgets, taskbar | **Files** — tree + preview, watch, mutations |
-| ![desktop](docs/screenshots/desktop.png) | ![file manager](docs/screenshots/fm.png) |
-| **Terminal** — tabbed xterm.js over local PTYs | **Editor** — CodeMirror 6, tree, tabs, embedded terminal |
-| ![terminal](docs/screenshots/term.png) | ![editor](docs/screenshots/edit.png) |
-| **System Monitor** — live CPU / mem / net / disk + process table from `/proc` | **Services** — systemd / openrc / procd units, start/stop/enable |
-| ![top](docs/screenshots/top.png) | ![services](docs/screenshots/services.png) |
-| **Packages** — apt / dnf / apk front-end | **Settings** — wallpaper, clock, taskbar |
-| ![packages](docs/screenshots/packages.png) | ![settings](docs/screenshots/settings.png) |
+| **Files** — tree + preview, live watch, mutations | **Terminal** — tabbed xterm.js over real local PTYs |
+| ![file manager](docs/screenshots/fm.png) | ![terminal](docs/screenshots/term.png) |
+| **Editor** — CodeMirror 6, file tree, tabs, embedded terminal | **Washamp** — a Webamp (Winamp-skinned) audio player |
+| ![editor](docs/screenshots/edit.png) | ![washamp](docs/screenshots/music.png) |
+| **Network** — interfaces, VLAN switch, firewall, plan→apply→verify | **Settings** — wallpaper, clock, taskbar |
+| ![network](docs/screenshots/net.png) | ![settings](docs/screenshots/settings.png) |
+
+**Display** — real X11/Wayland clients (here `xclock`) launched from a
+wash terminal, composited into native wash windows by the bundled
+`wash-display` compositor:
+
+![display](docs/screenshots/display.png)
 
 ---
 
@@ -105,29 +114,56 @@ A **surface** declares how an app presents: `window` (a normal
 window), `desktop` (the chrome itself), or `background` (a headless
 service, no window).
 
+The chrome:
+
 | App | ID | Surface | What it does |
 |---|---|---|---|
 | **session** | `com.wash.session` | desktop | The desktop chrome — taskbar, launcher, wallpaper, workspace pager, system banner, and the right-hand sidebar widget host. Autoboots on connect. Watches `~/.config/wash/desktop.json` and live-reloads. Acts as the gateway that subscribes to the background services and feeds their state to the sidebar widgets. |
-| **about** | `com.wash.about` | window | Build / router / host facts plus a live Go-runtime process table polled from the router. The launch-flow smoke test. |
-| **term** | `com.wash.term` | window | Terminal emulator — tabbed xterm.js over local PTYs (`internal/pty`). `--exec ARGS` runs a one-shot command; `--login` starts a login shell (used by the Root Terminal). |
-| **fm** | `com.wash.fm` | window | File manager — tree + preview. List, read, write, rename, delete, chmod/chown, symlink, live `fswatch`. Cut/copy/paste synced across windows via the router clipboard. Sandboxable with `--fs-root`. |
-| **edit** | `com.wash.edit` | window | Text editor — CodeMirror 6 with a sidebar tree, tabs, an embedded terminal pane, and a file picker. "Open in fm" spawns the file manager (uses `spawn`). |
-| **top** | `com.wash.top` | window | System monitor — reads `/proc` directly, no daemon. Live CPU / memory / network / disk, per-process detail, and signal/kill. Pauses its stream while minimized. |
+
+Windowed apps (open from the launcher):
+
+| App | ID | Surface | What it does |
+|---|---|---|---|
+| **fm** — Files | `com.wash.fm` | window | File manager — tree + preview. List, read, write, rename, delete, chmod/chown, symlink, live `fswatch`. Upload from the OS (picker + external drag-drop, recursive dirs). Cut/copy/paste synced across windows via the router clipboard. Sandboxable with `--fs-root`. |
+| **term** — Terminal | `com.wash.term` | window | Terminal emulator — tabbed xterm.js over local PTYs (`internal/pty`). `--exec ARGS` runs a one-shot command; `--login` starts a login shell (used by the Root Terminal). |
+| **edit** — Editor | `com.wash.edit` | window | Text editor — CodeMirror 6 with a sidebar tree, tabs, an embedded terminal pane, and a file picker. Reloads on external change. "Open in fm" spawns the file manager (uses `spawn`). |
+| **top** — System Monitor | `com.wash.top` | window | System monitor — reads `/proc` directly, no daemon. Live CPU / memory / network / disk, per-process detail, and signal/kill. Pauses its stream while minimized. |
 | **services** | `com.wash.services` | window | Init-system manager — detects systemd / openrc / procd, lists units, and runs start/stop/restart/enable/disable through wash-priv. Deep-links into the matching log viewer for a unit. |
 | **journal** | `com.wash.journal` | window | systemd-journald viewer — streams parsed `journalctl` JSON with unit / priority / time filters. Tries unprivileged first; offers "Read with root" via wash-priv on permission denied. |
-| **syslogs** | `com.wash.syslogs` | window | Classic `/var/log/*.log` viewer — `tail -F` one file at a time. The non-systemd sibling of journal; same privilege-escalation fallback. |
+| **syslogs** — System Logs | `com.wash.syslogs` | window | Classic `/var/log/*.log` viewer — `tail -F` one file at a time. The non-systemd sibling of journal; same privilege-escalation fallback. |
 | **packages** | `com.wash.packages` | window | Package-manager front-end — auto-detects apt / dnf / apk. Search, install, remove, upgrade; mutations stream into an embedded terminal through wash-priv. |
+| **net** — Network | `com.wash.net` | window | Networking — interfaces, networks/VLANs, firewall, hosts & DNS, routing, Wi-Fi. A UCI-shaped model rendered to **NetworkManager / systemd-networkd / UCI** backends by capability, with a plan → render → apply → verify → confirm flow and automatic rollback. Drives the `netd` daemon. |
+| **disks** — Disks | `com.wash.disks` | window | Storage manager — disks, partitions, md-RAID, LVM, btrfs, ZFS, and SMART health. Privileged operations go through wash-priv. |
+| **washamp** — Washamp | `com.wash.washamp` | window | Audio player — a chromeless [Webamp](https://webamp.org) (Winamp 2.x) player with the classic skins, playlist, and a skin switcher. Reports now-playing/transport to the `audio` service for the sidebar widget. |
+| **music** — Music | `com.wash.music` | window | Minimalist native music player — point it at one folder, get a recursive track list with tags. The lightweight counterpart to Washamp. |
+| **radio** — Radio | `com.wash.radio` | window | Internet radio — curated SomaFM + Radio Browser "popular" + paste-a-URL. The BE proxies the stream and surfaces ICY now-playing metadata. |
+| **vscode** — VS Code | `com.wash.vscode` | window | Full VS Code (code-server) embedded in a wash window via the per-instance HTTP/WS **ingress** proxy. Backed by the `vscode` service (below). |
 | **settings** | `com.wash.settings` | window | Desktop preferences — wallpaper, clock format, taskbar position. Writes `~/.config/wash/desktop.json` atomically; session fswatches and reloads. |
-| **bulk** | `com.wash.bulk` | background | Singleton job queue + worker for recursive delete / move / copy. fm enqueues jobs; conflicts block until the user resolves them in the sidebar widget. |
-| **notify** | `com.wash.notify` | background | Notification service — any app posts notifications; notify keeps capped history and feeds the sidebar widget; the router also fans them out as transient toasts. |
-| **priv** | `com.wash.priv` | background | The single privilege primitive. Other apps ask priv to run / spawn a registered binary as root; the user approves in a queue UI; the sudo password lives only in BE memory with an idle timeout. Windows backed by root wear a red **ROOT** stripe. |
+| **about** — About wash | `com.wash.about` | window | Build / router / host facts plus a live Go-runtime process table polled from the router. The launch-flow smoke test. |
 | **test** | `com.wash.test` | window | E2E target — hidden from the catalog unless `--show-hidden`. Drives the Playwright suite. Built with `make test-app`. |
+
+Background services (no window — they feed sidebar widgets and back the apps above):
+
+| App | ID | Surface | What it does |
+|---|---|---|---|
+| **bulk** — Bulk Ops | `com.wash.bulk` | background | Singleton job queue + worker for recursive delete / move / copy. fm enqueues jobs; conflicts block until the user resolves them in the sidebar widget. |
+| **notify** — Notifications | `com.wash.notify` | background | Notification service — any app posts notifications; notify keeps capped history and feeds the sidebar widget; the router also fans them out as transient toasts. |
+| **priv** — Privileged Actions | `com.wash.priv` | background | The single privilege primitive. Other apps ask priv to run / spawn a registered binary as root; the user approves in a queue UI; the sudo password lives only in BE memory with an idle timeout. Windows backed by root wear a red **ROOT** stripe. |
+| **netd** | `com.wash.netd` | background | The privileged networking backend — validates and applies the net app's plan through NM / networkd / UCI. Reserved-id singleton; the net app relays to it cross-app. |
+| **audio** | `com.wash.audio` | background | Audio control-plane — aggregates now-playing/transport state from Washamp / Music / Radio and feeds the sidebar Audio widget. |
+| **vscode** (service) | `com.wash.vscode` | background | Manages the code-server process + the ingress route that the VS Code window connects through. |
+
+Not an app but supervised the same way: **wash-display**, a native C++
+Wayland compositor (vendored wlroots). The router starts it on demand;
+X11/Wayland clients launched from a wash terminal map as
+`wash-app-display` windows (see the Display screenshot above).
 
 **Cross-app wiring:** services → journal/syslogs (log deep-links);
 packages / services / journal / syslogs → priv (privileged actions);
-fm → bulk (file jobs); session → notify / bulk / priv (sidebar
-widgets). All of it travels as router-attested `app_msg` — apps never
-hold references to each other, only the router does.
+fm → bulk (file jobs); net → netd (apply); Washamp / Music / Radio →
+audio (now-playing); session → notify / bulk / priv / audio / net
+(sidebar widgets). All of it travels as router-attested `app_msg` —
+apps never hold references to each other, only the router does.
 
 ## CLI tools
 
@@ -182,8 +218,8 @@ automatically; click the launcher (bottom-left) to open apps.
 Prefer one file instead of twenty? Build the **multicall** binary:
 
 ```bash
-make multicall       # ./out/wash + wash-<app> symlinks beside it
-./out/wash-router    # the symlink dispatches into the one binary
+make wash-multicall      # ./out/multicall/wash + wash-<app> symlinks beside it
+./out/multicall/wash-router   # the symlink dispatches into the one binary
 ```
 
 Everything is a `make` verb: `make wash` / `make wash-multicall` to build,
@@ -253,7 +289,7 @@ run the router in watch mode:
 ./out/wash-router --dev
 ```
 
-`--dev` watches the app binaries. Rebuild an app (`make wash-fm`, say)
+`--dev` watches the app binaries. Rebuild an app (`make out/wash-fm`, say)
 and the router kills running instances and pushes a `shell.reload` so
 the new bundle takes over live. Rebuilding the router itself triggers
 a self-re-exec.
@@ -268,6 +304,10 @@ VM (upstream Linux 6.6 LTS riscv64 + OpenSBI + a buildroot/musl
 rootfs) on **TinyEMU compiled to WASM**, talking to the browser over a
 multiport virtio-console. Everything builds in Docker — no host
 cross-toolchain required.
+
+One shot: **`make browser-run-vm`** builds the artifacts and serves the
+demo on <http://localhost:12000> (login `wash` / `wash`). The steps
+below show the individual pieces:
 
 ```bash
 # 1. Build the VM artifacts (kernel + firmware + rootfs + wasm). Docker only.
@@ -569,15 +609,20 @@ common flows, but you can also drive any single subsystem directly:
 | **wash-vm** (in-browser RISC-V VM) | `make -C wash-vm/image all` | `wash-vm/test/*.mjs` (ad-hoc repro scripts) | Docker only |
 
 `make unit-test` runs `go vet` + `go test` + the FE unit tiers; `make
-e2e-test` the Playwright suite. `make all-test` sweeps both `--standalone`
-and `--multicall` layouts plus the kvm net/disks gates; `make net-test` and
-`make disks-test` run those gates alone; `make all-package` the packaging
-matrix. (`make verify` stays a quick go-only gate: vet + test + static-ELF.)
+e2e-test` the Playwright suite (standalone layout). `make all-test` is the
+whole pyramid — unit + `multicall-smoke` + e2e + the kvm `net-test` /
+`disks-test` gates (the VM tiers boot the **multicall** layout in-VM, so
+that argv[0]-dispatch surface is covered without re-running the whole e2e
+suite twice); `make net-test` and `make disks-test` run those gates alone;
+`make all-package` the packaging matrix. `make coverage` produces the
+merged go-unit + e2e report under `coverage/`. (`make verify` stays a quick
+go-only gate: vet + test + static-ELF.) `make screenshots` regenerates the
+`docs/screenshots/` shots.
 
 **See [docs/TESTING.md](docs/TESTING.md)** for the full picture: what each
-tier proves, the `make` test verbs, holistic coverage (`--coverage` →
-merged go-unit + e2e, ~71%) and its gaps, the VM-backed e2e (`--vm`), what
-CI runs, and the test-tier gotchas.
+tier proves, the `make` test verbs, holistic coverage (`make coverage` →
+merged go-unit + e2e, ~71%) and its gaps, the VM-backed e2e, what CI runs,
+and the test-tier gotchas.
 
 > **Note:** a fresh `git clone` builds the Go core, frontends, and wash-vm
 > with no surprises. The native **wash-display** compositor is opt-in and

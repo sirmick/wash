@@ -1006,6 +1006,20 @@ e2e-test: test-app
 	cd e2e && $(PNPM) exec playwright install chromium
 	cd e2e && $(PNPM) test
 
+# screenshots: regenerate the docs/screenshots/*.png marketing shots by posing
+# real app windows in a throwaway router and capturing them with Playwright.
+# Driven by its OWN config (NOT part of e2e-test). Deterministic (seeded window
+# layout). The `display.png` shot is best-effort: it needs out/wash-display +
+# an X client (xclock) on the host — run `make wash` first to build the
+# compositor, otherwise that one shot self-skips.
+.PHONY: screenshots
+screenshots: test-app
+	cd e2e && $(PNPM) install --ignore-workspace --silent
+	cd e2e && $(PNPM) exec playwright install chromium
+	cd e2e && $(PNPM) exec playwright test -c playwright.screenshots.config.ts
+	@echo "screenshots: wrote → $(abspath docs/screenshots)/"
+	@ls -1 docs/screenshots/*.png 2>/dev/null | sed 's,^,  ,'
+
 # net-test: the kvm network tier — builds the openwrt + per-distro images, then
 # runs the segmentation gate + per-distro backend read/apply + browser net-vm e2e.
 .PHONY: net-test
