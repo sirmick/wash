@@ -103,6 +103,10 @@ RUN if [ "$RUN_DISTRO_TESTS" = "1" ]; then \
     else echo "distro-integration tests skipped (non-native/emulated arch)"; fi
 
 # Daemon boot smoke: --version, then --listen → curl → kill.
+# -no-auth: the ws listener is token-gated by default (a random token
+# is generated + logged), so an ungated GET / would 401. This smoke just
+# proves the binary boots + serves HTTP on a throwaway loopback container,
+# so we disable the gate rather than scrape the token from the log.
 #
 # Empty apps-dir: prevents wash-router from rejecting non-app files
 # under /usr/bin. We're verifying the binary boots + serves HTTP,
@@ -111,7 +115,7 @@ RUN if [ "$RUN_DISTRO_TESTS" = "1" ]; then \
 RUN set -eux; \
     /usr/bin/wash-router -version; \
     mkdir -p /tmp/empty-apps; \
-    /usr/bin/wash-router -listen 127.0.0.1:11000 -apps-dir /tmp/empty-apps > /tmp/router.log 2>&1 & \
+    /usr/bin/wash-router -no-auth -listen 127.0.0.1:11000 -apps-dir /tmp/empty-apps > /tmp/router.log 2>&1 & \
     ROUTER=$!; \
     ok=0; \
     for i in 1 2 3 4 5 6 7 8 9 10; do \

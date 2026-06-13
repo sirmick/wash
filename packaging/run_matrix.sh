@@ -65,15 +65,16 @@ TARGETS=(
   "alpine-3.21-arm64       alpine:3.21                     apk      arm64    0"
   "alpine-3.21-riscv64     alpine:3.21                     apk      riscv64  0"
   # ---- optional native wash-display (WASH_PKG_DISPLAY=1) ----
+  # amd64 + arm64 only — wash-display is not built for riscv64 (debian/control
+  # ships it Architecture: amd64 arm64). The riscv64 build image has no Node,
+  # and `make out/wash-display` pulls vendor-sync → web-deps → pnpm, so a
+  # riscv64-display row fails; riscv64 gets the core package, no display subpkg.
   "ubuntu-24.04-amd64-display    ubuntu:24.04  deb  amd64    1"
   "ubuntu-24.04-arm64-display    ubuntu:24.04  deb  arm64    1"
-  "ubuntu-24.04-riscv64-display  ubuntu:24.04  deb  riscv64  1"
   "debian-13-amd64-display       debian:13     deb  amd64    1"
   "debian-13-arm64-display       debian:13     deb  arm64    1"
-  "debian-13-riscv64-display     debian:13     deb  riscv64  1"
   "fedora-40-amd64-display       fedora:40     rpm  amd64    1"
   "fedora-40-arm64-display       fedora:40     rpm  arm64    1"
-  # (no fedora riscv64 display — see fedora riscv64 note above)
 )
 if [[ -n "${WASH_PKG_TARGETS:-}" ]]; then
   mapfile -t TARGETS <<<"${WASH_PKG_TARGETS}"
@@ -179,71 +180,130 @@ assemble_display_bintar() {
 
 # ----- matrix loop (set +e) -----
 set +e
-results=()
-declare -A CORE_DONE=() DISP_DONE=()
+
+# ----- parallel matrix -----
+# Rows are independent docker builds. The only shared mutable state in the old
+# serial loop was $BUILD_CTX/wash_${VERSION}.tar.xz (clobbered per row), so we
+# give each row its OWN context dir (ctx-<tag>/ holding just the tarball — the
+# package Dockerfiles COPY only wash_<ver>.tar.xz). Shared per-arch core builds
+# and per-(distro,arch) display builds are hoisted into barrier'd phases so they
+# run once, not per row.
+#
+# WASH_PKG_JOBS bounds concurrency (default 4). The heavy rows are emulated
+# arm64/riscv64 builds whose meson/ninja already saturate cores internally, so a
+# handful in flight keeps the box busy without thrashing.
+JOBS="${WASH_PKG_JOBS:-4}"
+gate() { while (( $(jobs -rp | wc -l) >= JOBS )); do wait -n; done; }
+
+# enabled rows (skip display rows unless opted in)
+rows=()
 for row in "${TARGETS[@]}"; do
     read -r tag base kind goarch display <<<"$row"
     [[ -z "$tag" ]] && continue
     [[ "$display" == "1" && "${WASH_PKG_DISPLAY:-}" != "1" ]] && continue
+    rows+=("$tag|$base|$kind|$goarch|$display")
+done
 
-    echo
-    echo "════════════════════════════════════════════════════════════"
-    echo "[matrix] $tag  (base=$base kind=$kind goarch=$goarch display=$display)"
-    echo "════════════════════════════════════════════════════════════"
-    log="$DIST/${tag}.log"; : > "$log"
-
-    # 1. core (shared per arch)
-    if [[ -z "${CORE_DONE[$goarch]:-}" ]]; then
-        if build_core "$goarch" > >(tee -a "$log") 2>&1; then CORE_DONE[$goarch]=1
-        else results+=("$tag: CORE FAIL (see $log)"); continue; fi
-    fi
-
-    # 2+3. display (per distro+arch) + assemble row bintar
+# process_row <tag|base|kind|goarch|display> — stages 2-4 for one row in its own
+# build context. Writes a one-line verdict to $DIST/<tag>.result and build
+# output to $DIST/<tag>.log. Assumes its arch core (+ display) is already built.
+process_row() {
+    local tag base kind goarch display
+    IFS='|' read -r tag base kind goarch display <<<"$1"
+    local log="$DIST/${tag}.log" res="$DIST/${tag}.result"
+    : > "$log"
+    local bintar
     if [[ "$display" == "1" ]]; then
-        dkey="$(slug "$base")-$goarch-display"
-        if [[ -z "${DISP_DONE[$dkey]:-}" ]]; then
-            if build_display "$base" "$goarch" > >(tee -a "$log") 2>&1; then DISP_DONE[$dkey]=1
-            else results+=("$tag: DISPLAY FAIL (see $log)"); continue; fi
-        fi
         bintar="$(assemble_display_bintar "$goarch" "$base" 2>>"$log")"
     else
         bintar="$(bintar_path "core-$goarch")"
     fi
-    [[ -f "$bintar" ]] || { results+=("$tag: NO BINTAR (see $log)"); continue; }
-    cp -f "$bintar" "$BUILD_CTX/wash_${VERSION}.tar.xz"
+    [[ -f "$bintar" ]] || { echo "$tag: NO BINTAR (see $log)" >"$res"; return; }
 
-    # 4. package (native arch via buildx → full smoke, even emulated)
-    image="wash-pkg:$tag"; pkg_out="$PKG_DIR/$tag"
+    # Per-row context so parallel rows don't clobber a shared tarball.
+    local ctx="$BUILD_CTX/ctx-$tag"
+    rm -rf "$ctx"; mkdir -p "$ctx"
+    cp -f "$bintar" "$ctx/wash_${VERSION}.tar.xz"
+
+    local image="wash-pkg:$tag" pkg_out="$PKG_DIR/$tag"
     # Distro-integration tests (apt/dnf/apk parsing) are arch-independent and
     # slow/flaky under qemu — run them only on the native amd64 rows.
-    run_distro_tests=0; [[ "$goarch" == "amd64" ]] && run_distro_tests=1
+    local run_distro_tests=0; [[ "$goarch" == "amd64" ]] && run_distro_tests=1
     if ! docker buildx build --platform "linux/$goarch" --load \
             -f "$ROOT/packaging/Dockerfile.$kind" \
             --build-arg BASE="$base" --build-arg VERSION="$VERSION" \
             --build-arg WASH_DISPLAY="$display" \
             --build-arg RUN_DISTRO_TESTS="$run_distro_tests" \
-            -t "$image" "$BUILD_CTX" >>"$log" 2>&1; then
-        results+=("$tag: PACKAGE FAIL (see $log)"); continue
+            -t "$image" "$ctx" >>"$log" 2>&1; then
+        echo "$tag: PACKAGE FAIL (see $log)" >"$res"; rm -rf "$ctx"; return
     fi
+    rm -rf "$ctx"
 
     rm -rf "$pkg_out"; mkdir -p "$pkg_out"
-    cid="$(docker create --platform "linux/$goarch" "$image")"
+    local cid; cid="$(docker create --platform "linux/$goarch" "$image" 2>>"$log")"
     docker cp "$cid:/pkg/." "$pkg_out/" >/dev/null 2>&1 || true
     docker rm "$cid" >/dev/null 2>&1 || true
-    artifact="$(find "$pkg_out" -maxdepth 1 \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' -o -name '*.tgz' \) | sort | head -1)"
+    local artifact; artifact="$(find "$pkg_out" -maxdepth 1 \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' -o -name '*.tgz' \) | sort | head -1)"
     if [[ -n "$artifact" ]]; then
-        results+=("$tag: OK  $(du -h "$artifact" | cut -f1)  $(basename "$artifact")")
+        echo "$tag: OK  $(du -h "$artifact" | cut -f1)  $(basename "$artifact")" >"$res"
     else
-        results+=("$tag: BUILD_OK but NO ARTIFACT (see $log)")
+        echo "$tag: BUILD_OK but NO ARTIFACT (see $log)" >"$res"
     fi
-done
+}
 
+# Phase A: shared core build-env once, so parallel build_core calls cache-hit it
+# instead of racing N identical `docker build -t wash-build:...`.
+echo ">>> [phase A] core build-env  $CORE_BUILDER_BASE"
+docker build -f "$ROOT/packaging/Dockerfile.build" \
+    --build-arg BASE="$CORE_BUILDER_BASE" --build-arg WITH_DISPLAY=0 \
+    -t "wash-build:$(slug "$CORE_BUILDER_BASE")" "$ROOT/packaging" \
+    >"$DIST/phase-build-env.log" 2>&1 \
+    || { echo "[matrix] core build-env FAILED (see $DIST/phase-build-env.log)"; exit 1; }
+
+# Phase B: per-arch core (parallel).
+echo ">>> [phase B] cores (parallel x$JOBS): $(printf '%s\n' "${rows[@]}" | cut -d'|' -f4 | sort -u | tr '\n' ' ')"
+for arch in $(printf '%s\n' "${rows[@]}" | cut -d'|' -f4 | sort -u); do
+    gate
+    ( build_core "$arch" >"$DIST/phase-core-$arch.log" 2>&1; echo $? >"$DIST/phase-core-$arch.rc" ) &
+done
+wait
+
+# Phase C: per-(distro,arch) display (parallel) — display rows only.
+if [[ "${WASH_PKG_DISPLAY:-}" == "1" ]]; then
+    echo ">>> [phase C] displays (parallel x$JOBS)"
+    declare -A seen_disp=()
+    for r in "${rows[@]}"; do
+        IFS='|' read -r tag base kind goarch display <<<"$r"
+        [[ "$display" == "1" ]] || continue
+        dkey="$(slug "$base")-$goarch"
+        [[ -n "${seen_disp[$dkey]:-}" ]] && continue
+        seen_disp[$dkey]=1
+        gate
+        ( build_display "$base" "$goarch" >"$DIST/phase-disp-$dkey.log" 2>&1; echo $? >"$DIST/phase-disp-$dkey.rc" ) &
+    done
+    wait
+fi
+
+# Phase D: per-row package build (parallel, isolated contexts).
+echo ">>> [phase D] package rows (parallel x$JOBS): ${#rows[@]} rows"
+for r in "${rows[@]}"; do
+    gate
+    ( process_row "$r" ) &
+done
+wait
+
+# ----- summary (in TARGETS order) -----
 echo
 echo "════════════════════════════════════════════════════════════"
-echo "[matrix] SUMMARY"
+echo "[matrix] SUMMARY  (jobs=$JOBS)"
 echo "════════════════════════════════════════════════════════════"
-for r in "${results[@]}"; do echo "  $r"; done
+fail=0
+for r in "${rows[@]}"; do
+    IFS='|' read -r tag _ _ _ _ <<<"$r"
+    line="$(cat "$DIST/${tag}.result" 2>/dev/null)"
+    [[ -z "$line" ]] && line="$tag: NO RESULT (see $DIST/${tag}.log)"
+    echo "  $line"
+    case "$line" in *FAIL*|*"NO RESULT"*|*"NO BINTAR"*|*"NO ARTIFACT"*) fail=1;; esac
+done
 echo; echo "Packages: $PKG_DIR/<tag>/   Logs: $DIST/<tag>.log"
-
-fail=0; for r in "${results[@]}"; do [[ "$r" == *FAIL* ]] && fail=1; done
 exit $fail
