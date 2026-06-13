@@ -1013,12 +1013,25 @@ disks-test: vm-image
 	$(MAKE) vm-disks-test
 
 # all-test: every test, BOTH layouts (standalone + multicall). Does NOT package.
-.PHONY: all-test
-all-test: unit-test e2e-test net-test disks-test
-	@echo "all-test: standalone tiers passed — sweeping the multicall layout…"
+# multicall-smoke: the multicall layout's UNIQUE risk surface — argv[0] dispatch
+# through the wash-<app> symlinks — NOT a re-run of the whole suite. App logic is
+# identical to standalone, and the kvm/browser VM tiers already BOOT multicall in
+# real Linux (their images bake out/multicall), so deep integration is covered
+# there. Here: build the layout, the one package the multicall tag changes
+# (cmd/wash), and the bundle-registration + a launch/spawn spec.
+.PHONY: multicall-smoke
+multicall-smoke: test-app
 	$(MAKE) TEST_APP=1 multicall
-	go test -count=1 -p 1 -timeout 120s -tags=multicall $(GO_UNIT_PKGS)
-	cd e2e && WASH_E2E_MULTICALL=1 $(PNPM) test
+	go test -count=1 -tags=multicall ./cmd/wash/...
+	cd e2e && $(PNPM) install --ignore-workspace --silent && $(PNPM) exec playwright install chromium
+	cd e2e && WASH_E2E_MULTICALL=1 $(PNPM) exec playwright test single-file.spec.ts kiosk-test-app.spec.ts --workers=1
+
+# all-test: the full suite ONCE (standalone) + an early multicall smoke + the kvm
+# net/disks gates (which boot the multicall layout in-VM = real multicall
+# integration). No full-suite duplication across layouts.
+.PHONY: all-test
+all-test: unit-test multicall-smoke e2e-test net-test disks-test
+	@echo "all-test: green — standalone full + multicall smoke + kvm VM gates (multicall in-VM)"
 
 # coverage: instrumented build (COVER=1 → go build -cover) → go-unit + e2e
 # counters merged into one module-wide report under $(COVERDIR). App BEs with no
