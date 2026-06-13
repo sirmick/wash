@@ -24,6 +24,7 @@ make disks-test         vm-disks-test real-kernel storage gate   (builds alpine 
 make all-test           every test, BOTH layouts (standalone + multicall); no packaging
 make test-all           all-test + all-package (the whole pyramid)
 make verify             quick go-only gate: go vet + go test + static-ELF check
+make coverage           instrumented build → merged go-unit + e2e coverage report under coverage/
 ```
 
 ## PACKAGE   (hermetic in Docker; WASH_PKG_JOBS=N concurrency)

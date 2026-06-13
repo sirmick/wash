@@ -69,7 +69,7 @@ It exits non-zero on the first failing tier; output streams to stdout
 ## Coverage
 
 ```sh
-make verify   # (a `make coverage` verb is TODO — see COMMANDS.md)
+make coverage
 # → coverage/coverage.txt   (open: go tool cover -html=coverage/coverage.txt)
 ```
 

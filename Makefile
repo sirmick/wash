@@ -1001,6 +1001,25 @@ all-test: unit-test e2e-test net-test disks-test
 	go test -count=1 -p 1 -timeout 120s -tags=multicall ./...
 	cd e2e && WASH_E2E_MULTICALL=1 $(PNPM) test
 
+# coverage: instrumented build (COVER=1 → go build -cover) → go-unit + e2e
+# counters merged into one module-wide report under $(COVERDIR). App BEs with no
+# _test.go still show real coverage because the e2e suite drives them — each
+# spawned process flushes covmeta/covcounters on SIGTERM (internal/sdk/coverage.go).
+COVERDIR ?= $(CURDIR)/coverage
+.PHONY: coverage
+coverage:
+	rm -rf "$(COVERDIR)"; mkdir -p "$(COVERDIR)/unit" "$(COVERDIR)/e2e" "$(COVERDIR)/merged"
+	COVER=1 $(MAKE) test-app   # instrumented binaries the e2e will exercise
+	go test -count=1 -p 1 -timeout 120s -coverpkg=./... ./... -args -test.gocoverdir="$(COVERDIR)/unit"
+	cd e2e && $(PNPM) install --silent && $(PNPM) exec playwright install chromium
+	cd e2e && GOCOVERDIR="$(COVERDIR)/e2e" $(PNPM) test
+	go tool covdata merge   -i="$(COVERDIR)/unit,$(COVERDIR)/e2e" -o="$(COVERDIR)/merged"
+	go tool covdata textfmt -i="$(COVERDIR)/merged" -o="$(COVERDIR)/coverage.txt"
+	@echo "── module total (merged unit + e2e) ──"
+	go tool covdata percent -i="$(COVERDIR)/merged" | sort
+	go tool cover -func="$(COVERDIR)/coverage.txt" | tail -1
+	@echo "coverage profile: $(COVERDIR)/coverage.txt"
+
 # test-all: the whole pyramid — every test (both layouts + kvm net/disks gates)
 # then the full packaging matrix. = all-test + all-package. Long; needs docker +
 # /dev/kvm + qemu. WASH_PKG_DISPLAY=1 includes the display package rows.
