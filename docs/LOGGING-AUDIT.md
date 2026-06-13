@@ -1,5 +1,9 @@
 # Logging audit — 2026-06-12
 
+> **Status: implemented** on branch `wash-logging`, one commit per tier
+> (P0 → P3). The findings below are the audit that drove those commits;
+> line numbers refer to the pre-fix tree.
+
 Scope: all Go backends (`internal/`, `apps/*/be`, `cmd/`), wash-display C++.
 Method: per-subsystem sweep for (1) silent failures, (2) missing context,
 (3) noise, (4) inconsistent mechanisms, (5) unlogged lifecycle/state
@@ -115,6 +119,32 @@ The applier can take a box offline; it currently records almost nothing.
 - `apps/disks/be/collect.go:40,152,183,213`: /sys, diskstats, mounts,
   by-uuid read failures return empty silently — a disks app showing zero
   disks should say why in the log.
+
+## FE → BE forwarding (web/shell)
+
+The shell already owned the right hooks: `window.wash.log()` (app opt-in),
+`window error` + `unhandledrejection` auto-capture, and a `console.*`
+mirror — all funneled through the `ShellLog` ctrl msg, printed by the
+router as `browser/<source> [level] <msg>`. Apps' FEs are custom elements
+in the shell document, so this covers every app with no per-app wiring.
+
+What was NOT robust (fixed on this branch, all in `shellLog`):
+
+- **Disconnected loss.** Lines were dropped whenever the WS wasn't open —
+  and boot/reconnect windows are exactly when errors cluster. Now ring-
+  buffered (100 entries) and flushed on (re)open, with an overflow line
+  when the buffer wrapped.
+- **No size cap.** One `console.log(hugeObject)` ballooned a ctrl frame.
+  msg capped at 4 KiB, stack at 8 KiB.
+- **No flood guard.** An error loop (render error per frame) spammed the
+  WS and router log. Budget of 20 forwarded lines/sec; suppressed lines
+  are counted and reported, not silently lost.
+
+Known gap, left alone: the login page (wash-login's own document,
+pre-router) has no forwarding — errors there exist only in the browser.
+Adding an HTTP log endpoint to wash-login is new attack surface for a
+page whose whole job is to be small; revisit only if login-page bugs
+recur.
 
 ## Non-goals / leave alone
 

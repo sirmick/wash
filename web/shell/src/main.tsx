@@ -703,15 +703,87 @@ declare global {
 
 type LogLevel = 'error' | 'warn' | 'info' | 'debug';
 
+// shellLog hardening: the naive version dropped lines whenever the WS
+// wasn't open — and boot/reconnect windows are exactly when errors
+// cluster. So: (1) lines that can't be sent are ring-buffered and
+// flushed when the connection (re)opens; (2) msg/stack are capped so
+// one console.log(hugeObject) can't balloon a ctrl frame; (3) a
+// per-second budget stops an error loop from flooding the router log
+// (suppressed lines are counted and reported, not lost silently).
+const LOG_MSG_CAP = 4096;
+const LOG_STACK_CAP = 8192;
+const LOG_BUF_CAP = 100;
+const LOG_RATE_MAX = 20; // forwarded lines per second
+
+type LogEntry = { t: 'log'; level: LogLevel; source: string; msg: string; stack?: string };
+const logBuf: LogEntry[] = [];
+let logBufDropped = 0;
+let logWsUp = false;
+let logRateWindow = 0;
+let logRateCount = 0;
+let logSuppressed = 0;
+
 function shellLog(level: LogLevel, source: string, msg: string, stack?: string) {
-  // Best-effort — drop silently if the WS isn't open. Avoid recursing
-  // through console.error since we wrap it below.
-  try {
-    conn.sendCtrl({ t: 'log', level, source, msg, ...(stack ? { stack } : {}) });
-  } catch {
-    /* ignore */
+  if (msg.length > LOG_MSG_CAP) msg = msg.slice(0, LOG_MSG_CAP) + '…[truncated]';
+  if (stack && stack.length > LOG_STACK_CAP) stack = stack.slice(0, LOG_STACK_CAP) + '…[truncated]';
+
+  const now = Date.now();
+  if (now - logRateWindow >= 1000) {
+    logRateWindow = now;
+    logRateCount = 0;
+    if (logSuppressed > 0) {
+      const n = logSuppressed;
+      logSuppressed = 0;
+      sendLogEntry({ t: 'log', level: 'warn', source: 'shell', msg: `log flood: suppressed ${n} line(s) in the last burst` });
+    }
+  }
+  if (logRateCount >= LOG_RATE_MAX) {
+    logSuppressed++;
+    return;
+  }
+  logRateCount++;
+  sendLogEntry({ t: 'log', level, source, msg, ...(stack ? { stack } : {}) });
+}
+
+function sendLogEntry(entry: LogEntry) {
+  // Avoid recursing through console.error (we wrap it below): all
+  // failure handling here is silent buffering, never logging.
+  if (logWsUp) {
+    try {
+      conn.sendCtrl(entry);
+      return;
+    } catch {
+      /* fall through to buffer */
+    }
+  }
+  if (logBuf.length >= LOG_BUF_CAP) {
+    logBuf.shift();
+    logBufDropped++;
+  }
+  logBuf.push(entry);
+}
+
+function flushLogBuf() {
+  if (logBufDropped > 0) {
+    const n = logBufDropped;
+    logBufDropped = 0;
+    logBuf.unshift({ t: 'log', level: 'warn', source: 'shell', msg: `log buffer overflowed while disconnected: ${n} oldest line(s) dropped` });
+  }
+  while (logBuf.length > 0) {
+    const entry = logBuf.shift()!;
+    try {
+      conn.sendCtrl(entry);
+    } catch {
+      logBuf.unshift(entry);
+      return; // still not writable; retry on the next open
+    }
   }
 }
+
+conn.onState((s) => {
+  logWsUp = s === 'open';
+  if (logWsUp) flushLogBuf();
+});
 
 window.wash = {
   sendAppMsg(instanceID, data) {
