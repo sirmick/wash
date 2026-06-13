@@ -40,6 +40,7 @@ interface PersistedRadio {
   custom?: Custom[];
   favs?: string[];
   last?: string;
+  vol?: number;
 }
 type Row = Station & { be: number };
 
@@ -68,8 +69,18 @@ function RadioApp(props: WashAppProps) {
   const applyVolume = () => {
     if (audioEl) audioEl.volume = masterVol * srcVol();
   };
+  let persistTimer: ReturnType<typeof setTimeout> | undefined;
   const persist = () =>
-    send({ kind: 'save_state', state: { custom: customStations, favs: [...favs()], last: lastName } });
+    send({
+      kind: 'save_state',
+      state: { custom: customStations, favs: [...favs()], last: lastName, vol: srcVol() },
+    });
+  // Debounced variant for the volume slider — drags fire onInput per
+  // tick and each persist is a router app_state broadcast.
+  const schedulePersist = () => {
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(persist, 300);
+  };
 
   // Favorites float to the top (stable); each row keeps its BE index so we
   // tune the right station regardless of display order.
@@ -193,6 +204,10 @@ function RadioApp(props: WashAppProps) {
       customStations = st?.custom ?? [];
       lastName = st?.last ?? '';
       setFavs(new Set(st?.favs ?? []));
+      if (st?.vol != null) {
+        setSrcVol(st.vol);
+        applyVolume();
+      }
       // One idempotent message both fetches the list and (re)sets the
       // pasted stations — no duplicates if the BE instance survived a reload.
       sendCustom();
@@ -205,7 +220,10 @@ function RadioApp(props: WashAppProps) {
     });
   });
 
-  onCleanup(() => audio?.dispose());
+  onCleanup(() => {
+    if (persistTimer) clearTimeout(persistTimer);
+    audio?.dispose();
+  });
 
   return (
     <div
@@ -308,6 +326,7 @@ function RadioApp(props: WashAppProps) {
             onInput={(v) => {
               setSrcVol(v);
               applyVolume();
+              schedulePersist();
             }}
           />
         </div>

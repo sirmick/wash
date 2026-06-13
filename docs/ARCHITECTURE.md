@@ -112,6 +112,35 @@ program plus an embedded frontend (FE) web-component bundle.
 - Backpressure propagates end to end: browser ⇄ WS ⇄ router ⇄ socket ⇄ app
   loop. The router relays raw frames straight into WS binary frames.
 
+## Reconnect & durability
+
+App BE processes survive browser disconnects; the shell FE remounts
+everything from the router's snapshot on (re)connect. The contract has
+three load-bearing rules:
+
+- **FE must pull on mount.** BE→FE `app_msg` sent while no shell is
+  attached is silently dropped — only raw channels are ring-buffered
+  (256KB) for replay. Any FE that depends on BE pushes must re-request
+  its snapshot on mount (fm's `request_initial`, term's
+  `list_sessions`, priv's `hello`, the sidebar's per-service
+  resubscribe). State that must survive a reload goes through the save
+  path: FE → `save_state` app_msg → BE `SaveState` → router
+  `app_state` blob → `wash:state` on remount.
+- **Durability tiers.** Router-held state (`app_state`, window
+  geometry, channel ring buffers) survives shell reconnects but NOT a
+  router restart — it is router-process memory by design. Disk-backed
+  state (desktop.json, priv audit log) survives both. Pick the tier
+  deliberately.
+- **One shell owns a raw channel.** Ctrl/app_msg broadcasts reach
+  every attached shell, but a raw channel binds to exactly one
+  (`channelBinding.shell`); a second simultaneous tab gets windows and
+  app_state but no terminal bytes. v1 is effectively single-shell;
+  saved-state changes reach a second tab only on its next refresh.
+
+The FE side buffers outbound frames while the WS is down (bounded,
+flushed FIFO on reconnect — `web/shell/src/ws.ts`), so keystrokes and
+`save_state` writes issued during the reconnect window are not lost.
+
 ## Services vs. apps
 
 Three tiers, distinguished by `manifest.surface`:

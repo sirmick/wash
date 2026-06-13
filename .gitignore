@@ -50,3 +50,16 @@ branches/
 
 # go test --coverage output (./test.sh --coverage)
 coverage/
+
+# Stray playwright run artifact when a suite is invoked from the repo
+# root rather than e2e/ (the e2e/ one is already ignored above).
+/test-results/
+
+# Local-only net scratch: harbor.config is a raw RouterOS export of the
+# author's home router used as a real-world reference while building the
+# net app — it carries live credentials, so it stays out of the tree
+# (any committed golden fixture must be a scrubbed copy). test-net.py is
+# the external Proxmox segmentation script cmd/washnet-matrix is modeled
+# on, kept here for reference only.
+/harbor.config
+/test-net.py

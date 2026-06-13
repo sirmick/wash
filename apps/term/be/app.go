@@ -262,6 +262,30 @@ func registerHandlers(b *sdk.Bus) {
 		go openTab(c, c.WindowID(), uint16(cols), uint16(rows))
 		return nil
 	})
+	// list_sessions is the FE's mount-time reconcile: a `tab_closed`
+	// sent while no shell was attached is dropped by the router (only
+	// raw channels are buffered for replay), so the tab list the FE
+	// restores from saved app_state can name ptys that died during
+	// the detach. The FE asks for the live set after restoring and
+	// drops/adopts tabs to match.
+	sdk.HandleVoid(b, "list_sessions", func(c *sdk.Conn, _ string, _ struct{}) error {
+		st.mu.Lock()
+		rows := make([]map[string]any, 0, len(st.sessions))
+		for id, s := range st.sessions {
+			cols, sessRows := s.Size()
+			rows = append(rows, map[string]any{
+				"channel_id": uint64(id),
+				"shell":      s.Shell,
+				// Current pty geometry: the restored xterm opens at
+				// this grid so the scrollback replay renders at the
+				// width it was emitted for, then reflows to fit.
+				"cols": uint64(cols),
+				"rows": uint64(sessRows),
+			})
+		}
+		st.mu.Unlock()
+		return c.SendAppMsg(map[string]any{"kind": "sessions", "sessions": rows})
+	})
 	sdk.HandleVoid(b, "close_tab", func(_ *sdk.Conn, _ string, req closeTabReq) error {
 		if req.ChannelID == 0 {
 			return nil

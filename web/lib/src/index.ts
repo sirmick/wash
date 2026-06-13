@@ -24,7 +24,7 @@ export {
   TERM_MAX_FONT_SIZE,
   fontById,
 } from './terminal';
-export type { TerminalProps, TerminalAPI, TermFont } from './terminal';
+export type { TerminalProps, TerminalAPI, TermFont, TermModes } from './terminal';
 export { washCopyText, washPasteText, systemCopyText, systemCopyTextChecked } from './clipboard';
 export { defineWashApp } from './define-app';
 export type { WashAppProps, DefineWashAppOptions } from './define-app';
