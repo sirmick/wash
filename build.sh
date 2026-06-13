@@ -4,8 +4,10 @@
 # Layout modes (binary shape; mutually exclusive; default --standalone):
 #   --standalone (default) — N separate binaries under out/ (one
 #                            per wash-<name>). Production layout.
-#   --multicall            — single out/wash binary (busybox-style)
-#                            with wash-<name> symlinks in out/. Smaller
+#   --multicall            — single wash binary (busybox-style) + its
+#                            wash-<name> symlinks, assembled in their own
+#                            out/multicall/ dir (kept separate from the
+#                            standalone binaries in out/). Smaller
 #                            footprint; all apps share one Go runtime.
 #   --both                 — both of the above (for test.sh --both).
 #
@@ -166,7 +168,7 @@ plan_line() { printf '  %-3s %-16s %s\n' "$1" "$2" "$3"; }
 if [[ "$dry" == "1" ]]; then
   echo "build.sh: plan ($(go env GOOS 2>/dev/null)/$(go env GOARCH 2>/dev/null), -j$jobs)"
   [[ "$build_standalone"  == "1" ]] && plan_line "✓" "standalone"  "per-app binaries → out/"
-  [[ "$build_multicall"   == "1" ]] && plan_line "✓" "multicall"   "out/wash + symlinks"
+  [[ "$build_multicall"   == "1" ]] && plan_line "✓" "multicall"   "out/multicall/ (wash + symlinks)"
   [[ "$build_display"     == "1" ]] && plan_line "✓" "wash-display" "compositor ($([[ $display_vendored == 1 ]] && echo 'vendored wlroots — slow' || echo 'system wlroots'))"
   [[ "$build_display"     != "1" ]] && plan_line "–" "wash-display" "${display_note:-not requested (./build.sh --display)}"
   [[ "$want_vm_helpers"   == "1" ]] && plan_line "✓" "vm helpers"  "washvm-run, washnet-demo, washnet-matrix"
@@ -211,38 +213,34 @@ build_standalone_layout() {
 }
 
 build_multicall_layout() {
-  echo "build.sh: multicall (single wash binary + symlinks)"
+  echo "build.sh: multicall (single wash binary + symlinks → out/multicall/)"
   # Real binaries the multi-call layout still needs:
   #   wash               — the dispatcher itself (router + launch + apps)
   #   wash-sudo          — CLI; suid-on-symlink no-ops, so this stays its
   #                        own file (skipped with --no-sudo)
   #   wash-priv-fakesudo — test-only sudo stub
+  # out/wash stays at the repo-root out/ as the canonical artifact (the VM
+  # images, the riscv rootfs, and packaging all bake it from there); we just
+  # also assemble a self-contained runnable image under out/multicall/.
   local targets=(out/wash)
   [[ "$test_app" == "1" ]] && targets+=(out/wash-priv-fakesudo)
   [[ "$no_sudo" != "1" ]]  && targets+=(out/wash-sudo)
   make "${make_args[@]}" "${targets[@]}"
-  # Clear any stale per-app + CLI binaries left over from a prior
-  # standalone build so install-symlinks can lay down its links without
-  # "refused: not a symlink" warnings. wash-sudo + wash-priv-fakesudo are
-  # real binaries — never replace them.
-  local name f
-  for name in $(./out/wash list-apps) wash-router wash-launch; do
-    f="out/$name"
-    [[ -e "$f" || -L "$f" ]] || continue
-    [[ -L "$f" ]] && continue
-    case "$name" in wash|wash-sudo|wash-priv-fakesudo) continue;; esac
-    rm -f "$f"
-  done
-  # In --both the standalone build already put real binaries at the app
-  # paths; install-symlinks refuses to clobber them (correct) — filter
-  # that noise but keep the tally.
-  if [[ "$build_standalone" == "1" ]]; then
-    ./out/wash install-symlinks ./out 2>&1 | grep -v "^refused:" || true
-    built+=("multicall"$'\t'"out/wash (symlinks skip real standalone binaries)")
-  else
-    ./out/wash install-symlinks ./out
-    built+=("multicall"$'\t'"out/wash + wash-* symlinks")
-  fi
+  # Assemble the multicall layout in its OWN directory so it never shares a
+  # folder with the standalone binaries in out/ — no more "refused: not a
+  # symlink" collisions in --both. Hardlink the dispatcher (not a symlink:
+  # the router resolves its app dir from its real executable's directory, so
+  # a hardlink keeps discovery rooted at out/multicall/ while a symlink would
+  # bounce it back to out/). Hardlink costs no disk; fall back to a copy if
+  # out/ ever spans a filesystem boundary.
+  rm -rf out/multicall && mkdir -p out/multicall
+  cp -l out/wash out/multicall/wash 2>/dev/null || cp out/wash out/multicall/wash
+  # wash-sudo + wash-priv-fakesudo are real binaries install-symlinks won't
+  # touch — copy them in so out/multicall/ is a complete, runnable image.
+  [[ "$test_app" == "1" && -e out/wash-priv-fakesudo ]] && cp out/wash-priv-fakesudo out/multicall/
+  [[ "$no_sudo" != "1"  && -e out/wash-sudo          ]] && cp out/wash-sudo          out/multicall/
+  ./out/multicall/wash install-symlinks ./out/multicall
+  built+=("multicall"$'\t'"out/multicall/ (wash + wash-* symlinks)")
 }
 
 build_display_binary() {

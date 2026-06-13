@@ -3,11 +3,9 @@
 #
 # Modes:
 #   --standalone (default) — exec out/wash-router (the per-app layout).
-#   --multicall            — exec out/wash-router as a symlink to
-#                            out/wash. install-symlinks materializes
-#                            this if missing; both binaries are
-#                            assumed present (build.sh --both / .
-#                            --multicall covers it).
+#   --multicall            — exec out/multicall/wash-router (a symlink to
+#                            out/multicall/wash). build.sh --multicall /
+#                            --both assembles that dir.
 #
 # Other flags:
 #   --no-build       — skip the build.sh step
@@ -87,13 +85,15 @@ if [[ "$fm_seed" == "1" ]]; then
   "$REPO/scripts/fm-seed.sh" "$fm_root"
 fi
 
-# Multi-call mode: out/wash-router is a symlink to out/wash. Confirm
-# the symlink exists before launching, and warn if both layouts
-# coexist (operator probably wants one or the other).
+# Multi-call mode: the runnable image lives in out/multicall/ (wash +
+# wash-* symlinks), assembled by build.sh. Pick the router from there;
+# standalone mode runs the per-app binary in out/.
+router_bin="$REPO/out/wash-router"
 if [[ "$mode" == "multicall" ]]; then
-  if [[ ! -L "$REPO/out/wash-router" ]]; then
-    echo "run.sh: out/wash-router isn't a symlink; running install-symlinks" >&2
-    "$REPO/out/wash" install-symlinks "$REPO/out"
+  router_bin="$REPO/out/multicall/wash-router"
+  if [[ ! -e "$router_bin" ]]; then
+    echo "run.sh: $router_bin missing — run ./build.sh --multicall (or --both) first" >&2
+    exit 1
   fi
 fi
 
@@ -112,10 +112,10 @@ LOG=/tmp/wash-router.log
 
 if [[ "$tail_log" == "1" ]]; then
   echo "run.sh: foreground tail of $LOG"
-  exec "$REPO/out/wash-router" "${args[@]}" 2>&1 | tee -a "$LOG"
+  exec "$router_bin" "${args[@]}" 2>&1 | tee -a "$LOG"
 fi
 
-nohup "$REPO/out/wash-router" "${args[@]}" >>"$LOG" 2>&1 &
+nohup "$router_bin" "${args[@]}" >>"$LOG" 2>&1 &
 router_pid=$!
 
 # Wait for "listening on" before returning so the caller can hit the
