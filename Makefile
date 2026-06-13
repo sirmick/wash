@@ -684,9 +684,20 @@ $(OUT)/wash: $(MULTICALL_STAMPS) | $(OUT)
 	  -tags=$(MULTICALL_TAGS) \
 	  -o $@ ./cmd/wash && chmod 0755 $@
 
+# multicall: assemble the busybox layout in its OWN dir (out/multicall/) so it
+# never collides with the standalone binaries in out/ — the e2e fixture and
+# run.sh resolve the layout there (the out-split, commit f812c0b). The
+# dispatcher is hardlinked (discovery stays rooted at out/multicall/); wash-sudo
+# + wash-priv-fakesudo are real binaries install-symlinks won't touch, so copy
+# them in when present to make out/multicall/ a complete runnable image.
+MC_DIR := $(OUT)/multicall
 .PHONY: multicall
 multicall: $(OUT)/wash
-	$(OUT)/wash install-symlinks $(OUT)
+	rm -rf $(MC_DIR) && mkdir -p $(MC_DIR)
+	cp -l $(OUT)/wash $(MC_DIR)/wash 2>/dev/null || cp $(OUT)/wash $(MC_DIR)/wash
+	@[ -e $(OUT)/wash-priv-fakesudo ] && cp $(OUT)/wash-priv-fakesudo $(MC_DIR)/ || true
+	@[ -e $(OUT)/wash-sudo ]          && cp $(OUT)/wash-sudo          $(MC_DIR)/ || true
+	./$(MC_DIR)/wash install-symlinks ./$(MC_DIR)
 
 # Cross-compile-friendly variant: builds the multicall binary but
 # does NOT run it (no install-symlinks). Used by wash-vm/image/
@@ -967,11 +978,14 @@ component: web-deps
 # unit-test: go vet + go test ./... + the FE unit tiers. Builds first (the app
 # packages //go:embed their assets, so go test won't compile on a bare tree).
 # -p 1: the loopback package wires router+sdk over in-memory pipes and mustn't
-# race other in-process tests for goroutine scheduling.
+# race other in-process tests for goroutine scheduling. wash-vm/vm is excluded —
+# it's the kvm VM-integration suite (boots real qemu when images are present,
+# blowing the unit timeout); cover it via net-test / disks-test instead.
+GO_UNIT_PKGS = $$(go list ./... | grep -v '/wash-vm/vm$$')
 .PHONY: unit-test
 unit-test: wash fe-unit component
 	go vet ./...
-	go test -count=1 -p 1 -timeout 120s ./...
+	go test -count=1 -p 1 -timeout 120s $(GO_UNIT_PKGS)
 
 # e2e-test: the full Playwright suite (standalone layout); builds the test app.
 # e2e/ is NOT a workspace member, so --ignore-workspace is required to install
@@ -1000,7 +1014,7 @@ disks-test: vm-image
 all-test: unit-test e2e-test net-test disks-test
 	@echo "all-test: standalone tiers passed — sweeping the multicall layout…"
 	$(MAKE) TEST_APP=1 multicall
-	go test -count=1 -p 1 -timeout 120s -tags=multicall ./...
+	go test -count=1 -p 1 -timeout 120s -tags=multicall $(GO_UNIT_PKGS)
 	cd e2e && WASH_E2E_MULTICALL=1 $(PNPM) test
 
 # coverage: instrumented build (COVER=1 → go build -cover) → go-unit + e2e
