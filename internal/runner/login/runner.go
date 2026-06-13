@@ -28,7 +28,7 @@ import (
 const version = "0.8.0"
 
 const (
-	defaultListen      = "0.0.0.0:11000"
+	defaultListen      = "0.0.0.0:10000"
 	systemSecretPath   = "/etc/wash/secret.key"
 	userSecretSubpath  = "wash/secret.key"
 )

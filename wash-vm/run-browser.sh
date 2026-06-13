@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # run-browser.sh — start the in-browser (TinyEMU RISC-V) wash-vm dev server on
-# :13000. The page boots the WASM VM in the tab; the wash desktop + login are
+# :12000. The page boots the WASM VM in the tab; the wash desktop + login are
 # served BY the VM over the virtio-console channel (wash-vm/UNIFY.md), the dev
 # server only hosts index.html + the bridge + the VM artifacts.
 #
-#   wash-vm/run-browser.sh            # → http://localhost:13000
+#   wash-vm/run-browser.sh            # → http://localhost:12000
 #   PORT=9000 wash-vm/run-browser.sh  # override the port
 #
 # Companion to run-qemu.sh, which serves the same wash UI from a real QEMU VM on
@@ -14,7 +14,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
 
-PORT="${PORT:-13000}"
+PORT="${PORT:-12000}"
 HOST="${HOST:-0.0.0.0}"   # 0.0.0.0 = reachable from other devices on the LAN
 export PORT HOST
 
