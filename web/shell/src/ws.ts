@@ -57,6 +57,21 @@ export class Conn {
   private loginURL: string | null = null;
   // Injectable for tests; defaults to the platform fetch.
   private fetchImpl: typeof fetch;
+  // Outbound frames produced while the socket is down. WebSocket.send
+  // on a closed socket silently discards, so without this queue every
+  // keystroke / app_msg / save_state issued during the reconnect
+  // window vanishes. Flushed FIFO the moment the replacement socket
+  // opens (before state handlers run, so queued frames keep their
+  // causal order ahead of anything a handler sends on 'open').
+  // Channel ids and instance ids survive a reconnect router-side, so
+  // replaying the frames verbatim is safe; frames for a channel that
+  // closed during the detach are dropped by the router with a log.
+  private pending: Uint8Array[] = [];
+  private pendingBytes = 0;
+  // Cap on queued bytes. On overflow the whole queue is dropped —
+  // delivering a gap-toothed middle of a byte stream is worse than
+  // delivering none of it.
+  static readonly MAX_PENDING_BYTES = 1 << 20;
 
   /**
    * Construct from a URL (default: real WebSocket) or a SocketFactory
@@ -106,6 +121,7 @@ export class Conn {
     this.ws.binaryType = 'arraybuffer';
     this.ws.onopen = () => {
       this.reconnectAttempts = 0;
+      this.flushPending();
       this.setState('open');
       resolveReady?.();
     };
@@ -117,6 +133,7 @@ export class Conn {
     this.ws.onmessage = (ev) => this.onMessage(ev);
     this.ws.onclose = () => {
       if (this.closedByUser) {
+        this.clearPending();
         this.setState('closed');
         return;
       }
@@ -142,6 +159,7 @@ export class Conn {
   private async reconnectTick(): Promise<void> {
     if (this.closedByUser) return;
     if (this.wantAuthProbe && (await this.authGone())) {
+      this.clearPending();
       this.setState('unauthenticated');
       return;
     }
@@ -207,7 +225,7 @@ export class Conn {
    */
   sendCtrl(msg: unknown, cls: Class = CLASS_INTERACTIVE): void {
     const payload = encodeCtrl(msg);
-    this.ws.send(encodeFrame({ flags: flagsWithClass(FLAG_END, cls), channel: 0, payload }));
+    this.sendFrame(encodeFrame({ flags: flagsWithClass(FLAG_END, cls), channel: 0, payload }));
   }
 
   /**
@@ -219,7 +237,43 @@ export class Conn {
    * other apps' bulk traffic on the way to the router.
    */
   sendRaw(channelID: number, payload: Uint8Array, cls: Class = CLASS_BULK): void {
-    this.ws.send(encodeFrame({ flags: flagsWithClass(FLAG_END, cls), channel: channelID, payload }));
+    this.sendFrame(encodeFrame({ flags: flagsWithClass(FLAG_END, cls), channel: channelID, payload }));
+  }
+
+  // sendFrame writes when the socket is open, queues while it is
+  // reconnecting, and discards once the connection is terminally
+  // gone (closed by us, or auth-dead — the page is headed to /login
+  // and a stale queue must not replay into a fresh session).
+  private sendFrame(frame: Uint8Array): void {
+    if (this.state === 'open') {
+      this.ws.send(frame);
+      return;
+    }
+    if (this.closedByUser || this.state === 'closed' || this.state === 'unauthenticated') return;
+    this.pending.push(frame);
+    this.pendingBytes += frame.byteLength;
+    if (this.pendingBytes > Conn.MAX_PENDING_BYTES) {
+      console.warn(
+        `wash: dropping ${this.pending.length} queued frames (${this.pendingBytes} bytes) — offline too long`,
+      );
+      this.clearPending();
+    }
+  }
+
+  private flushPending(): void {
+    const frames = this.pending;
+    this.clearPending();
+    for (const f of frames) this.ws.send(f);
+  }
+
+  private clearPending(): void {
+    this.pending = [];
+    this.pendingBytes = 0;
+  }
+
+  /** Frames currently queued awaiting reconnect (tests/diagnostics). */
+  pendingCount(): number {
+    return this.pending.length;
   }
 
   /**
