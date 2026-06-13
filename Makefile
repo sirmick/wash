@@ -950,7 +950,7 @@ all-clean: clean tmp-clean docker-clean
 distclean: all-clean
 
 .PHONY: verify
-verify: all
+verify: test-app
 	go vet ./...
 	go test ./...
 	@for f in $(TARGETS); do \
@@ -982,8 +982,11 @@ component: web-deps
 # it's the kvm VM-integration suite (boots real qemu when images are present,
 # blowing the unit timeout); cover it via net-test / disks-test instead.
 GO_UNIT_PKGS = $$(go list ./... | grep -v '/wash-vm/vm$$')
+# Build via test-app (TEST_APP=1) not bare wash: `go vet/test ./...` compiles
+# apps/test/be, which //go:embeds assets only produced under TEST_APP=1 — without
+# them vet fails "pattern all:assets: no matching files found" on a clean tree.
 .PHONY: unit-test
-unit-test: wash fe-unit component
+unit-test: test-app fe-unit component
 	go vet ./...
 	go test -count=1 -p 1 -timeout 120s $(GO_UNIT_PKGS)
 
