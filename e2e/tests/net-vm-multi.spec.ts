@@ -68,7 +68,7 @@ test('eth(DHCP) + bridge(eth1,eth2) + vlan(eth3.100): real NM accepts all three'
   await net.locator('[data-testid="apply-button"]').click();
   await expect(net.locator('[data-testid="apply-confirm"]')).toBeVisible({ timeout: 60_000 });
   await net.locator('[data-testid="keep-button"]').click();
-  await expect(net.locator('.wash-net-status')).toHaveText('committed', { timeout: 30_000 });
+  await expect(net.locator('.wash-net-status')).toHaveAttribute('data-status', 'committed', { timeout: 30_000 });
 
   // All three coexist in the reloaded list — read back from live NM keyfiles, so
   // this is the proof real NM in the VM accepted every shape together.

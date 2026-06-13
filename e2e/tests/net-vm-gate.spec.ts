@@ -63,7 +63,7 @@ test('VM-served wash UI round-trips a model edit to in-guest netd', async ({ vm,
 
   // Keep the change → netd confirms → committed, and eth0 lists.
   await net.locator('[data-testid="keep-button"]').click();
-  await expect(net.locator('.wash-net-status')).toHaveText('committed', { timeout: 20_000 });
+  await expect(net.locator('.wash-net-status')).toHaveAttribute('data-status', 'committed', { timeout: 20_000 });
   await expect(net.locator('[data-kind="Ethernet"][data-device="eth0"]')).toBeVisible({ timeout: 20_000 });
 
   // The other commit-confirm branch in-VM: stage eth1, Apply, then Discard →
@@ -74,7 +74,7 @@ test('VM-served wash UI round-trips a model edit to in-guest netd', async ({ vm,
   await net.locator('[data-testid="apply-button"]').click();
   await expect(net.locator('[data-testid="apply-confirm"]')).toBeVisible({ timeout: 20_000 });
   await net.locator('[data-testid="discard-button"]').click();
-  await expect(net.locator('.wash-net-status')).toHaveText('reverted', { timeout: 20_000 });
+  await expect(net.locator('.wash-net-status')).toHaveAttribute('data-status', 'reverted', { timeout: 20_000 });
   // Reverted → the list reloads from netd.Live() (live NM keyfiles) and eth1 is
   // gone: the rollback actually took on real NM, not just in the UI.
   await expect(net.locator('[data-kind="Ethernet"][data-device="eth1"]')).toHaveCount(0);
