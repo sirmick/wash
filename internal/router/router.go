@@ -1082,6 +1082,13 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 		var replay []byte
 		if b.buf != nil {
 			replay = b.buf.Snapshot()
+			if b.buf.Truncated() {
+				// The ring wrapped while detached: the snapshot
+				// starts at an arbitrary byte, possibly mid-rune
+				// or mid-escape. Trim to a clean boundary so the
+				// replay doesn't open with garbage.
+				replay = realignReplay(replay)
+			}
 		}
 		id := b.channelID
 		win := b.windowID

@@ -67,3 +67,45 @@ func (r *ringBuffer) Len() int {
 	}
 	return r.head
 }
+
+// Truncated reports whether the buffer has wrapped — i.e. the oldest
+// bytes have been overwritten and a Snapshot no longer starts at the
+// true beginning of the stream.
+func (r *ringBuffer) Truncated() bool { return r.full }
+
+// realignReplay trims the head of a TRUNCATED scrollback snapshot so
+// the replay does not start mid-UTF-8 rune or mid-escape-sequence.
+// A wrapped ring buffer cuts the stream at an arbitrary byte; feeding
+// xterm a torn CSI tail (e.g. `8;2;120m`) or a dangling continuation
+// byte renders as garbage. Only called after data loss has already
+// happened, so dropping a few more leading bytes is strictly an
+// improvement; never call it on an un-wrapped buffer.
+//
+// Two cheap repairs, no full VT parser:
+//   - drop leading UTF-8 continuation bytes (0x80–0xBF)
+//   - if the head reads as the tail of a torn CSI — parameter bytes
+//     (digits ; : ?) immediately followed by a final byte — drop
+//     through the final byte. Bounded scan; plain text bails out at
+//     the first non-parameter, non-final character.
+//
+// Torn OSC tails (title strings ending in BEL/ST) are not detectable
+// without real parsing and are left alone.
+func realignReplay(b []byte) []byte {
+	i := 0
+	for i < len(b) && i < 3 && b[i]&0xC0 == 0x80 {
+		i++
+	}
+	b = b[i:]
+	const maxScan = 16
+	for j := 0; j < len(b) && j < maxScan; j++ {
+		c := b[j]
+		if (c >= '0' && c <= '9') || c == ';' || c == ':' || c == '?' {
+			continue
+		}
+		if j > 0 && c >= 0x40 && c <= 0x7E {
+			return b[j+1:]
+		}
+		break
+	}
+	return b
+}
