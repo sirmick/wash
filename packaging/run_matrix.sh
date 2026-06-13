@@ -64,6 +64,10 @@ TARGETS=(
   "alpine-3.21-amd64       alpine:3.21                     apk      amd64    0"
   "alpine-3.21-arm64       alpine:3.21                     apk      arm64    0"
   "alpine-3.21-riscv64     alpine:3.21                     apk      riscv64  0"
+  # OpenWRT: runtime-only smoke (no native .ipk) — exercises the opkg/procd
+  # backends end-to-end in a real OpenWRT container. Not selected by all-package
+  # unless asked; `make openwrt-smoke` runs just this row.
+  "openwrt-24.10.6-x86_64  openwrt/rootfs:x86-64-24.10.6   openwrt  amd64    0"
   # ---- optional native wash-display (WASH_PKG_DISPLAY=1) ----
   # amd64 + arm64 only — wash-display is not built for riscv64 (debian/control
   # ships it Architecture: amd64 arm64). The riscv64 build image has no Node,
@@ -212,6 +216,7 @@ for row in "${TARGETS[@]}"; do
     [[ -z "$tag" ]] && continue
     row_wanted "$tag" || continue
     [[ "$display" == "1" && -z "$want_rows" && "${WASH_PKG_DISPLAY:-}" != "1" ]] && continue
+    [[ "$kind" == "openwrt" && -z "$want_rows" ]] && continue   # smoke, not a package; opt-in only
     rows+=("$tag|$base|$kind|$goarch|$display")
 done
 if [[ -n "$want_rows" && ${#rows[@]} -eq 0 ]]; then
@@ -252,6 +257,12 @@ process_row() {
         echo "$tag: PACKAGE FAIL (see $log)" >"$res"; rm -rf "$ctx"; return
     fi
     rm -rf "$ctx"
+
+    # OpenWRT is a runtime smoke (no native package) — the Dockerfile's test
+    # stage IS the verdict, so a clean build is a pass; nothing to extract.
+    if [[ "$kind" == "openwrt" ]]; then
+        echo "$tag: OK  (runtime smoke — no package)" >"$res"; return
+    fi
 
     rm -rf "$pkg_out"; mkdir -p "$pkg_out"
     local cid; cid="$(docker create --platform "linux/$goarch" "$image" 2>>"$log")"

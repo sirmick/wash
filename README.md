@@ -172,8 +172,8 @@ privilege primitive, expects Linux semantics).
 ```bash
 git clone https://github.com/sirmick/wash.git
 cd wash
-make                 # builds every binary into ./out/
-./out/wash-router    # serves http://localhost:11000/
+make wash            # build every binary into ./out/  (+ wash-display if wlroots is present)
+make run             # or: ./out/wash-router  — serves http://localhost:11000/
 ```
 
 Open **`http://localhost:11000/`**. The session app boots
@@ -186,9 +186,11 @@ make multicall       # ./out/wash + wash-<app> symlinks beside it
 ./out/wash-router    # the symlink dispatches into the one binary
 ```
 
-The `build.sh` / `run.sh` / `test.sh` scripts wrap these with handy
-flags (`--standalone` / `--multicall` / `--both`, `--fm-seed`,
-`--no-build`, parallel jobs); run any of them with `--help`.
+Everything is a `make` verb: `make wash` / `make wash-multicall` to build,
+`make run` to launch the router, `make dev` for the Vite HMR loop,
+`make unit-test` / `make e2e-test` / `make all-test`, `make all-clean`, and
+`make <arch>-<platform>-<pkg>-package` for native packages. The full list is
+in [COMMANDS.md](COMMANDS.md).
 
 ---
 
@@ -546,35 +548,34 @@ docs/               see below
 | [DISPLAY.md](docs/DISPLAY.md) | The native X/Wayland compositor (`wash-display`): build reality, capture pipeline, wire client. |
 | [NET.md](docs/NET.md) | Networking app + privileged daemon (`wash-net`/`wash-netd`): UCI-shaped model, backends. |
 | [PLAN.md](docs/PLAN.md) | The v1 plan this is built against. |
-| [TESTING.md](docs/TESTING.md) | Test tiers, `./test.sh` flags, holistic coverage (`--coverage`), VM-backed e2e (`--vm`), CI, gotchas. |
+| [TESTING.md](docs/TESTING.md) | Test tiers, the `make` test verbs, holistic coverage, VM-backed e2e, CI, gotchas. |
 | [TECH_DEBT.md](docs/TECH_DEBT.md) / [AUDIT.md](docs/AUDIT.md) | Known debt and a code-quality audit. |
 
 ## Building & testing each part
 
 wash covers a lot of ground; each part builds and tests on its own. The
-top-level `./build.sh` / `./test.sh` (both take `--help`) wrap the common
-flows, but you can also drive any single subsystem directly:
+`make` verbs (`make wash`, `make unit-test`, `make e2e-test`, …) drive the
+common flows, but you can also drive any single subsystem directly:
 
 | Part | Build | Test | Prereqs |
 |---|---|---|---|
-| **Go core + apps** | `make` (→ `out/`) | `go test ./...`, or one package: `go test ./apps/fm/...` | Go ≥ 1.25 |
-| **Frontend logic units** | — | `node --test --conditions=browser <files>` (run by `./test.sh`; the `browser` condition makes Solid resolve its reactive build) | pnpm, Node ≥ 22 |
+| **Go core + apps** | `make wash` (→ `out/`) | `go test ./...`, or one package: `go test ./apps/fm/...` | Go ≥ 1.25 |
+| **Frontend logic units** | — | `node --test --conditions=browser <files>` (run by `make unit-test`; the `browser` condition makes Solid resolve its reactive build) | pnpm, Node ≥ 22 |
 | **Frontend components** | — | `pnpm exec vitest run` (scopes `*.ctest.tsx` via `vitest.config.ts`) | pnpm |
-| **End-to-end** | `make test-app` (builds the world + test app) | `make e2e` *or* `pnpm -C e2e exec playwright test` | Chromium (auto-downloaded first run); free inotify instances (`e2e/global-setup.ts` pre-flights this) |
-| **VM-backed e2e** (net, real microvm) | `./test.sh --vm` (or `make e2e-vm`) — builds the Alpine image + host chrome + `washvm-run` | `net-vm-gate` / `net-vm-multi` drive the wash UI served over the wire by a booted VM; they self-skip until the artifacts + host are ready | `/dev/kvm` + `qemu-system-x86_64` + Docker |
-| **Distro packages** | `./packaging/run_matrix.sh` | runs inside the same matrix (smoke + boot + distro-integration) | Docker |
-| **wash-display** (native compositor) | `WASH_DISPLAY=1 make` | local smoke harness only (not in CI) — see [`wash-display/README.md`](wash-display/README.md) | CMake + system wlroots/wayland `-dev` libs |
+| **End-to-end** | `make test-app` (builds the world + test app) | `make e2e-test` *or* `pnpm -C e2e exec playwright test` | Chromium (auto-downloaded first run); free inotify instances (`e2e/global-setup.ts` pre-flights this) |
+| **VM-backed e2e** (net, real microvm) | `make net-test` — builds the openwrt + distro + Alpine images, then runs the gates | `net-vm-gate` / `net-vm-multi` drive the wash UI served over the wire by a booted VM; they self-skip until the artifacts + host are ready | `/dev/kvm` + `qemu-system-x86_64` + Docker |
+| **Distro packages** | `make all-package` (or one leaf: `make amd64-ubuntu24-wash-package`) | runs inside the same matrix (smoke + boot + distro-integration) | Docker |
+| **wash-display** (native compositor) | `make wash` (auto when wlroots present) / `WASH_DISPLAY=1 make wash` | local smoke harness only (not in CI) — see [`wash-display/README.md`](wash-display/README.md) | CMake + system wlroots/wayland `-dev` libs |
 | **wash-vm** (in-browser RISC-V VM) | `make -C wash-vm/image all` | `wash-vm/test/*.mjs` (ad-hoc repro scripts) | Docker only |
 
-`make verify` is the all-in-one gate: `go vet` + `go test` + a static-ELF
-check on every binary. `./test.sh` sweeps `--standalone` / `--multicall` /
-`--both` layouts and runs all four test tiers; `--filter` and `--workers`
-pass through to Playwright. Opt-in extras: `--coverage` (merged go-unit +
-e2e coverage report), `--vm` (the VM-backed net e2e above), `--distro`
-(the packaging matrix).
+`make unit-test` runs `go vet` + `go test` + the FE unit tiers; `make
+e2e-test` the Playwright suite. `make all-test` sweeps both `--standalone`
+and `--multicall` layouts plus the kvm net/disks gates; `make net-test` and
+`make disks-test` run those gates alone; `make all-package` the packaging
+matrix. (`make verify` stays a quick go-only gate: vet + test + static-ELF.)
 
 **See [docs/TESTING.md](docs/TESTING.md)** for the full picture: what each
-tier proves, every `./test.sh` flag, holistic coverage (`--coverage` →
+tier proves, the `make` test verbs, holistic coverage (`--coverage` →
 merged go-unit + e2e, ~71%) and its gaps, the VM-backed e2e (`--vm`), what
 CI runs, and the test-tier gotchas.
 

@@ -2,13 +2,14 @@
 
 How wash is tested, how to run each tier, and what coverage means here.
 
-`./test.sh` is the single entry point — it builds, then runs every tier.
+`make` is the interface — each test verb builds its own prereqs, then runs that tier.
 The [README test matrix](../README.md#building--testing-each-part) is the
 quick "how do I run X" reference; this doc is the why + the depth.
 
 ```sh
-./test.sh                # build + all tiers (standalone layout)
-./test.sh --help         # every flag
+make unit-test           # go vet + go test + FE-unit + component
+make e2e-test            # Playwright
+make all-test            # every tier, both layouts (see COMMANDS.md)
 ```
 
 ---
@@ -26,10 +27,10 @@ pure kernels.
 | **FE pure/reactive** | `node --test` (`*.test.ts`), `--conditions=browser` for Solid reactivity | framework-free kernels + Solid reactive logic, no DOM | `node --test --conditions=browser <files>` |
 | **FE component** | `vitest` + `vite-plugin-solid` + `jsdom` (`*.ctest.tsx`) | real component mount + DOM/events | `pnpm exec vitest run` |
 | **e2e** | Playwright (Chromium) | the whole stack, on the host | `pnpm -C e2e exec playwright test <spec>` |
-| **VM-backed e2e** | Playwright + a real Alpine microvm | the wash UI served *over the wire* from inside a booted VM (§ below) | `./test.sh --vm` |
+| **VM-backed e2e** | Playwright + a real Alpine microvm | the wash UI served *over the wire* from inside a booted VM (§ below) | `make net-test` |
 | **Distro packaging** | Docker matrix | deb/rpm/apk/openwrt install + boot | `./packaging/run_matrix.sh` |
 
-Roughly (counts drift — `./test.sh` prints the live tally): ~370 Go test
+Roughly (counts drift — the test run prints the live tally): ~370 Go test
 functions across 31 packages, ~175 FE unit cases (21 files), ~17 component
 cases (5 files), ~270 e2e tests (49 specs).
 
@@ -48,7 +49,7 @@ Coverage (below) makes this concrete: app BEs read 0% at the unit layer but
 
 ---
 
-## `./test.sh` — modes & flags
+## make test verbs
 
 | Flag | Effect |
 |---|---|
@@ -61,14 +62,14 @@ Coverage (below) makes this concrete: app BEs read 0% at the unit layer but
 | `--distro` / `--only-distro` | the Docker packaging matrix |
 
 It exits non-zero on the first failing tier; output streams to stdout
-(`./test.sh 2>&1 | tee /tmp/test.log` to capture).
+(`make all-test 2>&1 | tee /tmp/test.log` to capture).
 
 ---
 
 ## Coverage
 
 ```sh
-./test.sh --coverage
+make verify   # (a `make coverage` verb is TODO — see COMMANDS.md)
 # → coverage/coverage.txt   (open: go tool cover -html=coverage/coverage.txt)
 ```
 
@@ -100,7 +101,7 @@ no handler is installed, and shutdown behaviour is byte-for-byte unchanged.
   networkd D-Bus backends are deliberately bypassed. Run them on a host
   with NetworkManager to exercise the real path.
 - **`internal/washvm/*`, `wash-vm/vm`**: only the VM-backed e2e drives these
-  — covered when you run `./test.sh --vm` on a KVM host (their counters
+  — covered when you run `make net-test` on a KVM host (their counters
   still need the same flush treatment as the SDK to be merged).
 - **priv lock / reject / idle-wipe / `secureUnlock`**: e2e covers the
   approve→unlock→exec happy path; the reject/lock/idle/secure-erase paths
@@ -125,8 +126,7 @@ real stack — login, asset-over-wire, the net→netd cross-app relay, and a
 real in-guest commit-confirm transaction with live auto-revert.
 
 ```sh
-./test.sh --vm                      # preflight + build artifacts + run them
-./test.sh --vm --no-unit --filter net-vm   # just the VM specs
+make net-test                       # build the images + run the net gates + net-vm e2e
 make e2e-vm                         # equivalent make entry point
 ```
 
@@ -135,21 +135,22 @@ the missing list) and builds three artifacts the specs need:
 `out/vm/{vmlinuz,initramfs.gz}` (the image — `scripts/build-vm-image-alpine.sh`,
 renders an Alpine+NetworkManager rootfs via Docker), `out/vm-chrome/`
 (the host chrome), and `out/washvm-run` (the host VM runner/proxy). Without
-those the specs **self-skip** with a one-line "run `./test.sh --vm`" hint —
+those the specs **self-skip** with a one-line "run `make net-test`" hint —
 they don't fail. A FE/shell change that affects the VM-served UI requires a
 rebuild (`--vm` re-bakes the image), since the shell is served from inside
 the VM.
 
-> These specs are not in the default `./test.sh` build (the artifacts +
+> These specs are not in the default `make e2e-test` build (the artifacts +
 > KVM aren't always present), so they're easy to forget. If you touch the
-> net app, the apply/commit flow, or window layout, run `./test.sh --vm` —
+> net app, the apply/commit flow, or window layout, run `make net-test` —
 > a regression there only shows up here.
 
 ---
 
 ## CI
 
-`.github/workflows/test.yml` runs `./test.sh` on every push to `main` and
+`.github/workflows/ci.yml` runs `make unit-test` + `make e2e-test` (then the
+package builds) on every push to `main` and
 every PR, in two parallel jobs: **unit** (`--no-e2e`: build + FE unit + go
 unit) and **e2e** (`--no-unit`: build + Playwright, with Chromium + e2e
 deps installed). The VM-backed and distro tiers are not in CI (they need
@@ -161,7 +162,7 @@ KVM / Docker-in-Docker); run them locally.
 
 - **Reactive Solid unit tests need `--conditions=browser`** — the default
   resolves Solid's non-reactive SSR build, so memos silently don't
-  recompute. `./test.sh` sets it; a raw `node --test` won't.
+  recompute. `make unit-test` sets it; a raw `node --test` won't.
 - **Kernels must live in their own `*.ts` module**, not be imported from an
   app's `main.tsx` — the top-level `defineWashApp`/`window` use there breaks
   `node:test`.

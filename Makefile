@@ -855,6 +855,12 @@ $(1)-package:
 endef
 $(foreach m,$(PKG_MAP),$(eval $(call PKG_LEAF_RULE,$(firstword $(subst =, ,$(m))),$(lastword $(subst =, ,$(m))))))
 
+# openwrt-smoke: the OpenWRT runtime row (no native .ipk — exercises the opkg/
+# procd backends end-to-end in an OpenWRT container). Not a package leaf.
+.PHONY: openwrt-smoke
+openwrt-smoke:
+	WASH_PKG_ROWS=openwrt-24.10.6-x86_64 ./packaging/run_matrix.sh
+
 # Back-compat alias (deprecated; use all-package).
 .PHONY: packages
 packages: all-package
