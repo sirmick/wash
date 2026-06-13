@@ -28,6 +28,14 @@ type ShellSession struct {
 	// receiver.
 	declared map[string]bool
 
+	// bundleSent is guarded by writeMu — which instances' app bundles
+	// have already been shipped to THIS shell. Both the snapshot replay
+	// (HandleShell) and declareAppToAllShells can target the same
+	// shell+instance, and delivering the bundle twice runs the app's
+	// customElements.define() twice (a thrown "already defined"). Deliver
+	// once per shell+instance; reconnect is a fresh ShellSession.
+	bundleSent map[string]bool
+
 	// scheduler holds frames bound for the FE in per-class queues
 	// (see internal/router/qos.go and docs/QOS.md). Producers
 	// (writeCtrlLocked, WriteRawFrame, broadcastPatches) call
@@ -87,6 +95,7 @@ func (s *ShellSession) declareInstanceLocked(inst *AppInstance) error {
 func (s *ShellSession) undeclareInstance(instanceID string) {
 	s.writeMu.Lock()
 	delete(s.declared, instanceID)
+	delete(s.bundleSent, instanceID)
 	s.writeMu.Unlock()
 }
 

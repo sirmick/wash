@@ -1035,6 +1035,22 @@ func (r *Router) replayBundleToShell(s *ShellSession, inst *AppInstance) {
 	if entry == nil || len(entry.Bundle) == 0 {
 		return
 	}
+	// Deliver each instance's bundle to a given shell at most once. The
+	// snapshot replay (HandleShell) and declareAppToAllShells can both target
+	// the same shell+instance under a timing window; a second delivery re-runs
+	// the app's customElements.define() and throws. Atomic check-and-set so
+	// only the first caller proceeds.
+	s.writeMu.Lock()
+	if s.bundleSent == nil {
+		s.bundleSent = make(map[string]bool)
+	}
+	if s.bundleSent[inst.InstanceID] {
+		s.writeMu.Unlock()
+		return
+	}
+	s.bundleSent[inst.InstanceID] = true
+	s.writeMu.Unlock()
+
 	bytes := entry.Bundle
 	id := r.allocChannelID()
 	if err := s.WriteCtrl(wire.NewShellChannelBindBundle(id, inst.InstanceID)); err != nil {
