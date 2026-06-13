@@ -10,8 +10,15 @@
 
 import { test, expect } from '../fixtures/router';
 
+// These flows assert the WORKSTATION lens (Connections list + carrier add
+// buttons). The fake backend defaults to caps.Full(), which since the fabric
+// rework renders the ROUTER lens (Networks tab first, carrier adds moved to
+// the Interfaces tab, no conn-* rows) — so every describe pins
+// WASH_NETD_CAPS=workstation, the NM capability profile a real laptop shows.
+const workstation = { WASH_NETD_CAPS: 'workstation' };
+
 test.describe('net app (kiosk, host-side full stack)', () => {
-  test.use({ routerOpts: { kiosk: 'com.wash.net', apps: ['net', 'netd'] } });
+  test.use({ routerOpts: { kiosk: 'com.wash.net', apps: ['net', 'netd'], extraEnv: workstation } });
 
   test('mounts and loads caps from netd', async ({ page, router }) => {
     await page.goto(router.url);
@@ -33,10 +40,12 @@ test.describe('net app (kiosk, host-side full stack)', () => {
     await expect(wizard).toBeVisible();
 
     const addressing = wizard.locator('[data-testid="addressing"]');
-    // Static address fields render as <input data-widget="cidr"> (ObjectForm) —
-    // they exist ONLY under the static variant (IPv4 + IPv6 address), so their
-    // presence is an i18n-independent proof the section expanded.
+    // Static address fields exist ONLY under the static variant, so their
+    // presence is an i18n-independent proof the section expanded: IP6Addr as
+    // <input data-widget="cidr">, IPAddr as a list-cidr <textarea> (one CIDR
+    // per line — multiple addresses per interface) alongside the DNS list.
     const ipFields = addressing.locator('input[data-widget="cidr"]');
+    const ipLists = addressing.locator('textarea');
 
     // Default method is DHCP: no static IP field yet (the reported bug was that
     // it never appeared after switching to static).
@@ -46,14 +55,17 @@ test.describe('net app (kiosk, host-side full stack)', () => {
     // inside the addressing block (the Interface picker is a sibling, outside it).
     await addressing.locator('select').selectOption({ label: 'Manual (static IP)' });
 
-    // The section expands: both the IPv4 and IPv6 static address inputs appear.
-    await expect(ipFields).toHaveCount(2);
+    // The section expands: the IPv6 input and the v4-address + DNS lists appear.
+    await expect(ipFields).toHaveCount(1);
+    await expect(ipLists).toHaveCount(2);
     await expect(ipFields.first()).toBeVisible();
 
     // And it round-trips back: typing an address keeps the form on static (the
     // path-routing bug also dropped subsequent edits into a stray "" key).
-    await ipFields.first().fill('192.168.50.10/24');
-    await expect(ipFields.first()).toHaveValue('192.168.50.10/24');
+    // The list widget commits on change, so blur it explicitly.
+    await ipLists.first().fill('192.168.50.10/24');
+    await ipLists.first().blur();
+    await expect(ipLists.first()).toHaveValue('192.168.50.10/24');
     await expect(net.locator('[data-testid="eth-create"]')).toBeEnabled();
   });
 
@@ -80,7 +92,7 @@ test.describe('net app (kiosk, host-side full stack)', () => {
     // Keep → netd confirms → committed (the fake applier's Confirm path); the
     // reloaded connection is now clean (no badge).
     await net.locator('[data-testid="keep-button"]').click();
-    await expect(net.locator('.wash-net-status')).toHaveText('committed');
+    await expect(net.locator('.wash-net-status')).toHaveAttribute('data-status', 'committed');
     await expect(net.locator('[data-testid="conn-eth0"]')).toHaveAttribute('data-status', 'clean');
   });
 
@@ -106,7 +118,7 @@ test.describe('net app (kiosk, host-side full stack)', () => {
 // builds the model correctly and it round-trips through netd. The fake backend
 // advertises CanWireGuard (caps.Full), so the +WireGuard button shows host-side.
 test.describe('net app wireguard (kiosk, full FE→net→netd)', () => {
-  test.use({ routerOpts: { kiosk: 'com.wash.net', apps: ['net', 'netd'] } });
+  test.use({ routerOpts: { kiosk: 'com.wash.net', apps: ['net', 'netd'], extraEnv: workstation } });
 
   test('add a WireGuard tunnel → apply → committed', async ({ page, router }) => {
     await page.goto(router.url);
@@ -149,7 +161,7 @@ test.describe('net app wireguard (kiosk, full FE→net→netd)', () => {
     await net.locator('[data-testid="apply-button"]').click();
     await expect(net.locator('[data-testid="apply-confirm"]')).toBeVisible();
     await net.locator('[data-testid="keep-button"]').click();
-    await expect(net.locator('.wash-net-status')).toHaveText('committed');
+    await expect(net.locator('.wash-net-status')).toHaveAttribute('data-status', 'committed');
     await expect(net.locator('[data-testid="conn-wg0"]')).toHaveAttribute('data-status', 'clean');
   });
 
@@ -206,7 +218,7 @@ test.describe('net app wireguard (kiosk, full FE→net→netd)', () => {
 // nmcli path is covered in the VM gate.
 test.describe('net app wifi (kiosk, full FE→net→netd relay)', () => {
   test.describe('radio switched off', () => {
-    test.use({ routerOpts: { kiosk: 'com.wash.net', apps: ['net', 'netd'], extraEnv: { WASH_NETD_WIFI: 'off' } } });
+    test.use({ routerOpts: { kiosk: 'com.wash.net', apps: ['net', 'netd'], extraEnv: { ...workstation, WASH_NETD_WIFI: 'off' } } });
 
     test('scan reports disabled → "Turn on Wi-Fi" toggle appears', async ({ page, router }) => {
       await page.goto(router.url);
@@ -228,7 +240,7 @@ test.describe('net app wifi (kiosk, full FE→net→netd relay)', () => {
   });
 
   test.describe('radio enabled with an AP', () => {
-    test.use({ routerOpts: { kiosk: 'com.wash.net', apps: ['net', 'netd'], extraEnv: { WASH_NETD_WIFI: 'on' } } });
+    test.use({ routerOpts: { kiosk: 'com.wash.net', apps: ['net', 'netd'], extraEnv: { ...workstation, WASH_NETD_WIFI: 'on' } } });
 
     test('scan returns the AP → picker lists it', async ({ page, router }) => {
       await page.goto(router.url);
@@ -247,7 +259,7 @@ test.describe('net app wifi (kiosk, full FE→net→netd relay)', () => {
 });
 
 test.describe('net app addressing (kiosk)', () => {
-  test.use({ routerOpts: { kiosk: 'com.wash.net', apps: ['net', 'netd'] } });
+  test.use({ routerOpts: { kiosk: 'com.wash.net', apps: ['net', 'netd'], extraEnv: workstation } });
 
   test('IP method select toggles the variant fields every switch', async ({ page, router }) => {
     await page.goto(router.url);
@@ -256,22 +268,26 @@ test.describe('net app addressing (kiosk)', () => {
     await net.locator('[data-testid="add-ethernet"]').click();
     const addr = net.locator('[data-testid="addressing"]');
     const cidr = addr.locator('input[data-widget="cidr"]');
+    const lists = addr.locator('textarea');
     const method = addr.locator('select');
     // DHCP default: family checkboxes present, no static address fields.
     await expect(cidr).toHaveCount(0);
     await expect(addr.locator('input[type="checkbox"]')).toHaveCount(2); // IPv4 + IPv6 (DHCP)
     await method.selectOption({ label: 'Manual (static IP)' });
-    await expect(cidr).toHaveCount(2);                                   // v4 + v6 address
+    await expect(cidr).toHaveCount(1);                                   // IP6Addr
+    await expect(lists).toHaveCount(2);                                  // IPAddr (list-cidr) + DNS
     // Through Disabled (no fields) — the fieldless variant used to throw inside
     // the reactive form() and freeze every later switch.
     await method.selectOption({ label: 'Disabled (no IP)' });
     await expect(cidr).toHaveCount(0);
     await expect(addr.locator('input')).toHaveCount(0);                  // none: zero inputs
+    await expect(lists).toHaveCount(0);
     await method.selectOption({ label: 'Automatic (DHCP)' });
     await expect(addr.locator('input[type="checkbox"]')).toHaveCount(2); // dhcp fields came back
     await expect(cidr).toHaveCount(0);
     await method.selectOption({ label: 'Manual (static IP)' });
-    await expect(cidr).toHaveCount(2);                                   // static again
+    await expect(cidr).toHaveCount(1);                                   // static again
+    await expect(lists).toHaveCount(2);
   });
 });
 
@@ -279,7 +295,7 @@ test.describe('net app addressing (kiosk)', () => {
 // the fake backend. The v6-only DHCP case also exercises the codec's `proto
 // dhcpv6` render/parse (the OpenWRT impedance fix) on the host tier.
 test.describe('net app IPv6 addressing (kiosk)', () => {
-  test.use({ routerOpts: { kiosk: 'com.wash.net', apps: ['net', 'netd'] } });
+  test.use({ routerOpts: { kiosk: 'com.wash.net', apps: ['net', 'netd'], extraEnv: workstation } });
 
   test('static dual-stack (v4 + IPv6) commits and round-trips', async ({ page, router }) => {
     await page.goto(router.url);
@@ -288,15 +304,18 @@ test.describe('net app IPv6 addressing (kiosk)', () => {
     await net.locator('[data-testid="add-ethernet"]').click();
     const addr = net.locator('[data-testid="addressing"]');
     await addr.locator('select').selectOption({ label: 'Manual (static IP)' });
-    // cidr[0] = IPv4 address, cidr[1] = IPv6 — set both (dual-stack static).
-    const cidr = addr.locator('input[data-widget="cidr"]');
-    await cidr.first().fill('192.168.50.10/24');
-    await cidr.nth(1).fill('fd00:1234::1/64');
+    // v4 addresses live in the list-cidr textarea (one per line); IPv6 is the
+    // single cidr input — set both (dual-stack static). The textarea commits
+    // on change, so blur it explicitly.
+    const v4 = addr.locator('textarea').first();
+    await v4.fill('192.168.50.10/24');
+    await v4.blur();
+    await addr.locator('input[data-widget="cidr"]').first().fill('fd00:1234::1/64');
     await net.locator('[data-testid="eth-create"]').click();
     await net.locator('[data-testid="apply-button"]').click();
     await expect(net.locator('[data-testid="apply-confirm"]')).toBeVisible();
     await net.locator('[data-testid="keep-button"]').click();
-    await expect(net.locator('.wash-net-status')).toHaveText('committed');
+    await expect(net.locator('.wash-net-status')).toHaveAttribute('data-status', 'committed');
     // Clean after reload ⇒ the IPv6 address survived encode → netd → decode.
     await expect(net.locator('[data-testid="conn-eth0"]')).toHaveAttribute('data-status', 'clean');
   });
@@ -316,7 +335,7 @@ test.describe('net app IPv6 addressing (kiosk)', () => {
     await net.locator('[data-testid="apply-button"]').click();
     await expect(net.locator('[data-testid="apply-confirm"]')).toBeVisible();
     await net.locator('[data-testid="keep-button"]').click();
-    await expect(net.locator('.wash-net-status')).toHaveText('committed');
+    await expect(net.locator('.wash-net-status')).toHaveAttribute('data-status', 'committed');
     await expect(net.locator('[data-testid="conn-eth0"]')).toHaveAttribute('data-status', 'clean');
   });
 });

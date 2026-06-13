@@ -1,8 +1,10 @@
 package netd
 
 import (
+	"os"
 	"sync"
 
+	"github.com/sirmick/wash/apps/netd/be/nm"
 	"github.com/sirmick/wash/internal/washnet/backend"
 	"github.com/sirmick/wash/internal/washnet/caps"
 	"github.com/sirmick/wash/internal/washnet/codec"
@@ -31,7 +33,17 @@ func newFakeApplier() *fakeApplier { return &fakeApplier{} }
 
 // Capabilities reports Full so B1a gates nothing — the whole Advanced UI is
 // editable offline. Real backends advertise a subset and the UI greys the rest.
-func (a *fakeApplier) Capabilities() caps.Capabilities { return caps.Full() }
+//
+// WASH_NETD_CAPS=workstation swaps in the NM profile (no firewall/dhcp kinds),
+// so the FE renders the workstation lens instead of the router one — the
+// host-side e2e uses it to exercise the Connections-list flows a real
+// NM-backed machine shows. Mirrors the WASH_NETD_WIFI fake-selection knob.
+func (a *fakeApplier) Capabilities() caps.Capabilities {
+	if os.Getenv("WASH_NETD_CAPS") == "workstation" {
+		return nm.Capabilities()
+	}
+	return caps.Full()
+}
 
 func (a *fakeApplier) Render(c model.Config) (backend.Artifacts, error) {
 	files, err := codec.Render(c)
