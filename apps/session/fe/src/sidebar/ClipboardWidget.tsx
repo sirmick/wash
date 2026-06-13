@@ -11,11 +11,13 @@
 //     the text, which we fold into the wash clipboard.
 //
 // Quiet by design: no auto-expand on clipboard changes (every copy
-// would pop the section open), no badge.
+// would pop the section open), no badge. The one standing exception:
+// a warning line when the system bridge is degraded — insecure origin
+// (no navigator.clipboard) or the browser refusing the write.
 
 import type { Component, JSX } from 'solid-js';
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
-import { systemCopyText, tokens } from '@wash/ui';
+import { systemCopyTextChecked, tokens } from '@wash/ui';
 
 export const ClipboardWidget: Component = () => {
   const [text, setText] = createSignal('');
@@ -37,10 +39,22 @@ export const ClipboardWidget: Component = () => {
     });
   });
 
+  // Insecure origin (plain HTTP on the LAN): navigator.clipboard is
+  // undefined, so outbound copy is execCommand best-effort and inbound
+  // is paste-gesture only. Static per page load.
+  const insecure = !window.isSecureContext;
+  // Latched when a copy attempt actually fails (execCommand refused,
+  // or clipboard-write permission denied on a secure origin); cleared
+  // by the next success.
+  const [copyBlocked, setCopyBlocked] = createSignal(false);
+
   const copyToSystem = () => {
     const t = text();
     if (!t) return;
-    showFlash(systemCopyText(t) ? 'copied to system' : 'copy blocked');
+    void systemCopyTextChecked(t).then((ok) => {
+      setCopyBlocked(!ok);
+      showFlash(ok ? 'copied to system' : 'copy blocked');
+    });
   };
 
   const onImportPaste = (ev: ClipboardEvent) => {
@@ -119,6 +133,16 @@ export const ClipboardWidget: Component = () => {
       <Show when={flash()}>
         <div data-testid="clipboard-flash" style={{ font: `11px ${tokens.fontSans}`, color: tokens.fgDim }}>
           ✓ {flash()}
+        </div>
+      </Show>
+      <Show when={copyBlocked() || insecure}>
+        <div
+          data-testid="clipboard-warning"
+          style={{ font: `11px ${tokens.fontSans}`, color: tokens.fgWarning }}
+        >
+          {copyBlocked()
+            ? '⚠ system copy blocked by the browser'
+            : '⚠ no HTTPS — system copy is best-effort; import only via the paste box'}
         </div>
       </Show>
     </div>

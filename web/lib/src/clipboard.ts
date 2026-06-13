@@ -24,6 +24,25 @@ export function systemCopyText(text: string): boolean {
     void navigator.clipboard.writeText(text).catch(() => { /* permission denied — best effort */ });
     return true;
   }
+  return execCommandCopy(text);
+}
+
+// systemCopyTextChecked is systemCopyText that reports the TRUE
+// outcome: where systemCopyText optimistically returns true as soon
+// as navigator.clipboard exists, this resolves false when the browser
+// rejects the write (clipboard-write permission blocked). Same
+// user-gesture requirement — the copy is initiated synchronously,
+// only the verdict is async. For UI that surfaces copy failures
+// (sidebar ClipboardWidget); fire-and-forget callers keep the sync
+// variant.
+export function systemCopyTextChecked(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText) {
+    return navigator.clipboard.writeText(text).then(() => true, () => false);
+  }
+  return Promise.resolve(execCommandCopy(text));
+}
+
+function execCommandCopy(text: string): boolean {
   const ta = document.createElement('textarea');
   ta.value = text;
   ta.setAttribute('data-wash-clipboard-mirror', '1');
