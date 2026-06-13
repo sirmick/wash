@@ -17,35 +17,48 @@ import { createServer, createConnection } from 'node:net';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = resolve(__dirname, '..', '..');
-const ROUTER_BIN = join(REPO_ROOT, 'out', 'wash-router');
-const SESSION_BIN = join(REPO_ROOT, 'out', 'wash-session');
-const ABOUT_BIN = join(REPO_ROOT, 'out', 'wash-about');
-const TEST_BIN = join(REPO_ROOT, 'out', 'wash-test');
-const TERM_BIN = join(REPO_ROOT, 'out', 'wash-term');
-const LAUNCH_BIN = join(REPO_ROOT, 'out', 'wash-launch');
-const FM_BIN = join(REPO_ROOT, 'out', 'wash-fm');
-const BULK_BIN = join(REPO_ROOT, 'out', 'wash-bulk');
-const EDIT_BIN = join(REPO_ROOT, 'out', 'wash-edit');
-const PRIV_BIN = join(REPO_ROOT, 'out', 'wash-priv');
-const JOURNAL_BIN = join(REPO_ROOT, 'out', 'wash-journal');
-const SETTINGS_BIN = join(REPO_ROOT, 'out', 'wash-settings');
-const TOP_BIN = join(REPO_ROOT, 'out', 'wash-top');
-const DISKS_BIN = join(REPO_ROOT, 'out', 'wash-disks');
-const SYSLOGS_BIN = join(REPO_ROOT, 'out', 'wash-syslogs');
-const SERVICES_BIN = join(REPO_ROOT, 'out', 'wash-services');
-const PACKAGES_BIN = join(REPO_ROOT, 'out', 'wash-packages');
-const NOTIFY_BIN = join(REPO_ROOT, 'out', 'wash-notify');
-const VSCODE_BIN = join(REPO_ROOT, 'out', 'wash-vscode');
-const VSCODE_WB_BIN = join(REPO_ROOT, 'out', 'wash-vscode-workbench');
-const DISPLAY_BIN = join(REPO_ROOT, 'out', 'wash-display');
-const NET_BIN = join(REPO_ROOT, 'out', 'wash-net');
-const NETD_BIN = join(REPO_ROOT, 'out', 'wash-netd');
-const WASHAMP_BIN = join(REPO_ROOT, 'out', 'wash-washamp');
-const MUSIC_BIN = join(REPO_ROOT, 'out', 'wash-music');
-const RADIO_BIN = join(REPO_ROOT, 'out', 'wash-radio');
-const AUDIO_BIN = join(REPO_ROOT, 'out', 'wash-audio');
-const FAKESUDO_BIN = join(REPO_ROOT, 'out', 'wash-priv-fakesudo');
-export const SUDO_BIN = join(REPO_ROOT, 'out', 'wash-sudo');
+// Binary layout: the standalone per-app binaries live in out/; the multicall
+// build assembles its own self-contained image (wash + wash-* symlinks) under
+// out/multicall/. Point app binaries at whichever layout this run exercises so
+// `./test.sh --multicall` (no standalone build) resolves them too.
+const MULTICALL = process.env.WASH_E2E_MULTICALL === '1';
+const BIN_DIR = MULTICALL ? join(REPO_ROOT, 'out', 'multicall') : join(REPO_ROOT, 'out');
+// Resolve a wash-* binary basename to its path. Everything is under BIN_DIR
+// except the native C++ compositor, which is never part of the multicall
+// binary and so only ever lives at out/wash-display.
+const binPath = (name: string): string =>
+  name === 'wash-display' ? join(REPO_ROOT, 'out', 'wash-display') : join(BIN_DIR, name);
+
+// Single source of truth: every app a test can request → the wash-* binaries
+// staged into its apps dir when requested. Adding an app is ONE line here —
+// the AppName type, the existence checks, and staging all derive from it.
+// (vscode also pulls its hidden workbench window; display is the compositor.)
+const APP_BINS = {
+  session: ['wash-session'], about: ['wash-about'], test: ['wash-test'],
+  term: ['wash-term'], fm: ['wash-fm'], bulk: ['wash-bulk'], edit: ['wash-edit'],
+  notify: ['wash-notify'], priv: ['wash-priv'], journal: ['wash-journal'],
+  settings: ['wash-settings'], top: ['wash-top'], disks: ['wash-disks'],
+  syslogs: ['wash-syslogs'], services: ['wash-services'], packages: ['wash-packages'],
+  net: ['wash-net'], netd: ['wash-netd'], washamp: ['wash-washamp'],
+  music: ['wash-music'], radio: ['wash-radio'], audio: ['wash-audio'],
+  vscode: ['wash-vscode', 'wash-vscode-workbench'],
+  display: ['wash-display'],
+} satisfies Record<string, readonly string[]>;
+type AppName = keyof typeof APP_BINS;
+
+// Binaries every router needs (the dispatcher + the default app set + the
+// launch CLI), checked up front so a missing build fails with a clear error.
+const REQUIRED = ['wash-router', 'wash-session', 'wash-about', 'wash-test',
+  'wash-term', 'wash-fm', 'wash-bulk', 'wash-edit', 'wash-launch'];
+
+// Binaries referenced directly (not via the apps table): the spawn target, the
+// launch CLI, the compositor skip-check, fakesudo wiring, and the exported
+// sudo path used by priv.spec.
+const ROUTER_BIN = binPath('wash-router');
+const LAUNCH_BIN = binPath('wash-launch');
+const DISPLAY_BIN = binPath('wash-display');
+const FAKESUDO_BIN = binPath('wash-priv-fakesudo');
+export const SUDO_BIN = binPath('wash-sudo');
 
 // wash-display is the native (C++/CMake/wlroots) compositor — not built by
 // build.sh and not present on a dep-less checkout or CI. Specs that need
@@ -103,8 +116,8 @@ export interface RouterHandle {
 export interface RouterOptions {
   /** kiosk mode: --no-session + --initial-app=<appID>. */
   kiosk?: string;
-  /** include these binaries in the apps dir; defaults to all five. */
-  apps?: ('session' | 'about' | 'test' | 'term' | 'fm' | 'bulk' | 'priv' | 'journal' | 'settings' | 'top' | 'disks' | 'syslogs' | 'services' | 'packages' | 'edit' | 'vscode' | 'display' | 'net' | 'netd')[];
+  /** apps to stage into the apps dir; see APP_BINS. Defaults to the core set. */
+  apps?: AppName[];
   /** include manifest.hidden apps in the catalog. */
   showHidden?: boolean;
   /** extra wash-router args. */
@@ -183,10 +196,12 @@ function stageApps(binaries: string[]): string {
     chmodSync(washDest, 0o755);
     for (const bin of binaries) {
       const name = bin.split('/').pop()!;
-      // wash-sudo and wash-priv-fakesudo stay as real separate
-      // binaries — they're never built into the multi-call wash. Copy
-      // them in as-is so the priv chain still works.
-      if (name === 'wash-sudo' || name === 'wash-priv-fakesudo') {
+      // wash-sudo, wash-priv-fakesudo, and wash-display stay as real
+      // separate binaries — none are built into the multi-call wash
+      // (wash-display is the native C++ compositor). Copy them in as-is;
+      // symlinking them to `wash` would dispatch the Go multicall instead,
+      // so the priv chain / compositor would never launch.
+      if (name === 'wash-sudo' || name === 'wash-priv-fakesudo' || name === 'wash-display') {
         const dest = join(dir, name);
         copyFileSync(bin, dest);
         chmodSync(dest, 0o755);
@@ -206,135 +221,32 @@ function stageApps(binaries: string[]): string {
 }
 
 export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandle> {
-  for (const b of [ROUTER_BIN, SESSION_BIN, ABOUT_BIN, TEST_BIN, TERM_BIN, FM_BIN, BULK_BIN, EDIT_BIN, LAUNCH_BIN]) {
-    if (!existsSync(b)) {
-      throw new Error(`missing binary: ${b}\n(make TEST_APP=1 from the repo root)`);
+  for (const name of REQUIRED) {
+    const p = binPath(name);
+    if (!existsSync(p)) {
+      throw new Error(`missing binary: ${p}\n(make TEST_APP=1 from the repo root)`);
     }
   }
-  const wanted = opts.apps ?? ['session', 'about', 'test', 'term', 'fm', 'bulk', 'edit', 'notify'];
+  const wanted: AppName[] = opts.apps ?? ['session', 'about', 'test', 'term', 'fm', 'bulk', 'edit', 'notify'];
   // fakesudo:true implies wash-priv in the apps dir — the BE is what
   // reads WASH_PRIV_SUDO_BIN, so without it the test wires the env
   // var into a process that never receives it.
   if (opts.fakesudo && !wanted.includes('priv')) {
     wanted.push('priv');
   }
+  // Stage every requested app's binaries (deduped — a default-set app the
+  // caller also names explicitly shouldn't be staged twice). netd is a
+  // background singleton the router auto-spawns once its binary is present;
+  // net relays validate/apply to it cross-app (fake applier on the host unless
+  // WASH_NETD_BACKEND=nm — the in-VM real-NM capstone is net-vm-gate.spec.ts).
   const bins: string[] = [];
-  if (wanted.includes('session')) bins.push(SESSION_BIN);
-  if (wanted.includes('about')) bins.push(ABOUT_BIN);
-  if (wanted.includes('test')) bins.push(TEST_BIN);
-  if (wanted.includes('term')) bins.push(TERM_BIN);
-  if (wanted.includes('fm')) bins.push(FM_BIN);
-  if (wanted.includes('bulk')) bins.push(BULK_BIN);
-  if (wanted.includes('edit')) bins.push(EDIT_BIN);
-  if (wanted.includes('display')) {
-    if (!existsSync(DISPLAY_BIN)) {
-      throw new Error(`missing wash-display: ${DISPLAY_BIN} (cmake --build wash-display/build)`);
-    }
-    bins.push(DISPLAY_BIN);
-  }
-  if (wanted.includes('priv')) {
-    if (!existsSync(PRIV_BIN)) {
-      throw new Error(`missing wash-priv: ${PRIV_BIN}`);
-    }
-    bins.push(PRIV_BIN);
-  }
-  if (wanted.includes('journal')) {
-    if (!existsSync(JOURNAL_BIN)) {
-      throw new Error(`missing wash-journal: ${JOURNAL_BIN}`);
-    }
-    bins.push(JOURNAL_BIN);
-  }
-  if (wanted.includes('settings')) {
-    if (!existsSync(SETTINGS_BIN)) {
-      throw new Error(`missing wash-settings: ${SETTINGS_BIN}`);
-    }
-    bins.push(SETTINGS_BIN);
-  }
-  if (wanted.includes('top')) {
-    if (!existsSync(TOP_BIN)) {
-      throw new Error(`missing wash-top: ${TOP_BIN}`);
-    }
-    bins.push(TOP_BIN);
-  }
-  if (wanted.includes('disks')) {
-    if (!existsSync(DISKS_BIN)) {
-      throw new Error(`missing wash-disks: ${DISKS_BIN}`);
-    }
-    bins.push(DISKS_BIN);
-  }
-  if (wanted.includes('syslogs')) {
-    if (!existsSync(SYSLOGS_BIN)) {
-      throw new Error(`missing wash-syslogs: ${SYSLOGS_BIN}`);
-    }
-    bins.push(SYSLOGS_BIN);
-  }
-  if (wanted.includes('services')) {
-    if (!existsSync(SERVICES_BIN)) {
-      throw new Error(`missing wash-services: ${SERVICES_BIN}`);
-    }
-    bins.push(SERVICES_BIN);
-  }
-  if (wanted.includes('packages')) {
-    if (!existsSync(PACKAGES_BIN)) {
-      throw new Error(`missing wash-packages: ${PACKAGES_BIN}`);
-    }
-    bins.push(PACKAGES_BIN);
-  }
-  if (wanted.includes('notify')) {
-    if (!existsSync(NOTIFY_BIN)) {
-      throw new Error(`missing wash-notify: ${NOTIFY_BIN}`);
-    }
-    bins.push(NOTIFY_BIN);
-  }
-  // The Network window app + its privileged backing service. netd is a
-  // background singleton (Surface=background), auto-spawned by the router once
-  // its binary is in the apps dir — net relays validate/apply to it cross-app.
-  // netd defaults to the FAKE applier (real NM only when WASH_NETD_BACKEND=nm),
-  // so this whole stack runs deterministically on the host — no VM. The in-VM
-  // real-NM capstone is net-vm-gate.spec.ts.
-  if (wanted.includes('net')) {
-    if (!existsSync(NET_BIN)) {
-      throw new Error(`missing wash-net: ${NET_BIN}`);
-    }
-    bins.push(NET_BIN);
-  }
-  if (wanted.includes('netd')) {
-    if (!existsSync(NETD_BIN)) {
-      throw new Error(`missing wash-netd: ${NETD_BIN}`);
-    }
-    bins.push(NETD_BIN);
-  }
-  if (wanted.includes('washamp')) {
-    if (!existsSync(WASHAMP_BIN)) {
-      throw new Error(`missing wash-washamp: ${WASHAMP_BIN}`);
-    }
-    bins.push(WASHAMP_BIN);
-  }
-  if (wanted.includes('music')) {
-    if (!existsSync(MUSIC_BIN)) {
-      throw new Error(`missing wash-music: ${MUSIC_BIN}`);
-    }
-    bins.push(MUSIC_BIN);
-  }
-  if (wanted.includes('radio')) {
-    if (!existsSync(RADIO_BIN)) {
-      throw new Error(`missing wash-radio: ${RADIO_BIN}`);
-    }
-    bins.push(RADIO_BIN);
-  }
-  if (wanted.includes('audio')) {
-    if (!existsSync(AUDIO_BIN)) {
-      throw new Error(`missing wash-audio: ${AUDIO_BIN}`);
-    }
-    bins.push(AUDIO_BIN);
-  }
-  if (wanted.includes('vscode')) {
-    // The manager window (owns code-server) + the hidden workbench window.
-    for (const b of [VSCODE_BIN, VSCODE_WB_BIN]) {
-      if (!existsSync(b)) {
-        throw new Error(`missing vscode binary: ${b}`);
+  for (const app of new Set(wanted)) {
+    for (const name of APP_BINS[app]) {
+      const p = binPath(name);
+      if (!existsSync(p)) {
+        throw new Error(`missing ${name} (for app "${app}"): ${p}`);
       }
-      bins.push(b);
+      bins.push(p);
     }
   }
   const appsDir = stageApps(bins);
