@@ -9,7 +9,17 @@
 #
 # Other flags:
 #   --no-unit              — skip go tests
+#   --no-lint              — skip `go vet ./...` (static analysis tier)
 #   --no-e2e               — skip playwright suite
+#   --vm-gates             — also run the kvm micro-vm + network gates:
+#                            net-matrix (segmentation), vm-net-test
+#                            (per-distro netplan/ifupdown/networkd read+
+#                            apply), vm-disks-test (real-kernel md/LVM/
+#                            btrfs). Builds the microvm images it needs
+#                            first. Needs /dev/kvm + qemu + docker. This is
+#                            the Go/qemu tier; --vm is the browser net-vm
+#                            e2e tier — orthogonal, combine for full VM
+#                            coverage.
 #   --distro               — also run the distro-integration matrix
 #                            (apps/packages/be + apps/services/be under
 #                            -tags=distro_integration). Delegates to
@@ -53,11 +63,13 @@ cd "$REPO"
 
 mode=standalone
 do_unit=1
+do_lint=1
 do_e2e=1
 do_build=1
 do_distro=0
 do_coverage=0
 do_vm=0
+do_vm_gates=0
 filter=""
 # Playwright workers. The fixture allocates a unique port + tmpdir
 # per test, so >1 is safe in principle; default to half the CPU
@@ -70,7 +82,9 @@ while [[ $# -gt 0 ]]; do
     --multicall|--bb|--busybox) mode=multicall; shift;;
     --both)       mode=both; shift;;
     --no-unit)    do_unit=0; shift;;
+    --no-lint)    do_lint=0; shift;;
     --no-e2e)     do_e2e=0; shift;;
+    --vm-gates)   do_vm_gates=1; shift;;
     --no-build)   do_build=0; shift;;
     --distro)     do_distro=1; shift;;
     --only-distro) do_distro=1; do_unit=0; do_e2e=0; do_build=0; shift;;
@@ -141,6 +155,51 @@ fi
 # each twice with different settings. They redirect to /tmp logs so a
 # downstream `tail` survives the script exit.
 
+run_lint() {
+  echo
+  echo "════ test.sh: lint (go vet) ════"
+  # Static analysis tier — mirrors `make verify`. Layout-independent, so it
+  # runs once. Cheap relative to the build/test it gates.
+  if go vet ./...; then
+    echo "test.sh: lint PASS"
+  else
+    echo "test.sh: lint FAIL" >&2
+    return 1
+  fi
+}
+
+# run_vm_gates — the kvm-backed micro-vm + network tier (NOT the net-vm e2e,
+# which rides --vm through the Playwright run). Boots real qemu microvms:
+#   net-matrix     network segmentation policy (OpenWRT router + per-seg probes)
+#   vm-net-test    per-distro backend read/apply (netplan/ifupdown/networkd)
+#   vm-disks-test  real-kernel storage (md/LVM/btrfs) provider parsing
+# Builds the images each needs first (make is idempotent). Self-skips host
+# checks; returns non-zero if any gate fails.
+run_vm_gates() {
+  echo
+  echo "════ test.sh: vm/net gates (kvm micro-vm + network) ════"
+  local miss=()
+  [[ -e /dev/kvm ]] || miss+=("/dev/kvm")
+  command -v qemu-system-x86_64 >/dev/null 2>&1 || miss+=("qemu-system-x86_64")
+  command -v docker >/dev/null 2>&1 || miss+=("docker")
+  if (( ${#miss[@]} > 0 )); then
+    echo "test.sh: --vm-gates needs: ${miss[*]}" >&2
+    return 1
+  fi
+  echo "test.sh: building micro-vm images (idempotent; slow first time)…"
+  make -C "$REPO" vm-image vm-image-openwrt vm-image-ubuntu vm-image-debian vm-image-fedora
+  local rc=0
+  make -C "$REPO" net-matrix    || rc=1
+  make -C "$REPO" vm-net-test   || rc=1
+  make -C "$REPO" vm-disks-test || rc=1
+  if [[ "$rc" == "0" ]]; then
+    echo "test.sh: vm/net gates PASS"
+  else
+    echo "test.sh: vm/net gates FAIL" >&2
+    return 1
+  fi
+}
+
 run_unit() {
   local label="$1"; shift
   echo
@@ -198,10 +257,40 @@ run_fe_unit() {
   fi
 }
 
+# ensure_e2e_deps — the e2e package has its own lockfile and is NOT a member of
+# the root pnpm workspace, so a root `pnpm install` skips it. Bootstrap it here
+# (idempotent) rather than dying mid-run with "playwright not found": the test
+# runner should provision its own test deps the same way it builds binaries.
+ensure_e2e_deps() {
+  [[ -x "$REPO/e2e/node_modules/.bin/playwright" ]] && return 0
+  echo "test.sh: e2e deps missing — installing (pnpm --dir e2e install --ignore-workspace)…"
+  pnpm --dir "$REPO/e2e" install --ignore-workspace
+  # Playwright's browser binary is separate from the npm package.
+  "$REPO/e2e/node_modules/.bin/playwright" install chromium
+}
+
+# e2e_skip_note — surface WHY specs will self-skip before the run, so a
+# "N skipped" tally is never a mystery to reverse-engineer afterwards. Mirrors
+# the capability gates in e2e/fixtures/{router,vm}.ts.
+e2e_skip_note() {
+  local notes=()
+  [[ -e "$REPO/out/wash-display" ]] || \
+    notes+=("wash-display not built → 4 display specs skip   (./build.sh --display)")
+  if [[ ! -e /dev/kvm ]] || ! command -v qemu-system-x86_64 >/dev/null 2>&1 \
+       || [[ ! -e "$REPO/out/vm/vmlinuz" || ! -e "$REPO/out/washvm-run" ]]; then
+    notes+=("VM artifacts absent  → 2 net-vm specs skip       (./test.sh --vm)")
+  fi
+  (( ${#notes[@]} == 0 )) && return 0
+  echo "test.sh: expected e2e skips on this host —"
+  printf '  · %s\n' "${notes[@]}"
+}
+
 run_e2e() {
   local label="$1"; shift
   echo
   echo "════ test.sh: e2e ($label) ════"
+  ensure_e2e_deps
+  e2e_skip_note
   rm -rf "$REPO/e2e/test-results"/*
   local extra=()
   [[ -n "$filter" ]] && extra+=("$filter")
@@ -263,8 +352,9 @@ run_distro() {
   fi
 }
 
-# FE unit + component tests are layout-independent — run them once up
-# front when unit tests are enabled, before the per-mode go/e2e sequence.
+# Lint (go vet) + FE unit + component tests are layout-independent — run them
+# once up front, before the per-mode go/e2e sequence.
+[[ "$do_lint" == "1" ]] && run_lint
 [[ "$do_unit" == "1" ]] && run_fe_unit node
 [[ "$do_unit" == "1" ]] && run_component_unit vitest
 
@@ -295,6 +385,9 @@ esac
 # Distro-integration matrix (opt-in; Docker-based, owns its own
 # distro fan-out so it runs once regardless of standalone/multicall).
 [[ "$do_distro" == "1" ]] && run_distro
+
+# kvm micro-vm + network gates (opt-in; needs /dev/kvm + qemu + docker).
+[[ "$do_vm_gates" == "1" ]] && run_vm_gates
 
 # Coverage report: merge the unit + e2e counter pods into one profile
 # and print the module-wide total + per-function breakdown. This is the

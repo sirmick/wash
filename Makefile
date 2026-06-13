@@ -815,10 +815,17 @@ vm:
 .PHONY: rv
 rv: vm
 
+# clean: in-tree build artifacts (out/, FE dist, embedded BE assets, packaging
+# output, wash-display native build, test/coverage). distclean: also /tmp junk,
+# the matrix Docker images, node_modules + Go cache (true from-scratch).
+# Both delegate to clean.sh (single source of truth; spares tmp/ + branches/).
 .PHONY: clean
 clean:
-	rm -rf $(OUT)
-	rm -rf web/*/dist apps/*/fe/dist
+	./clean.sh
+
+.PHONY: distclean
+distclean:
+	./clean.sh --all
 
 .PHONY: verify
 verify: all
@@ -828,6 +835,16 @@ verify: all
 		file "$$f" | grep -qi 'statically' || { echo "$$f is not statically linked"; exit 1; }; \
 	done
 	@echo "verify: ok"
+
+# test-all: the whole pyramid in one command — lint (go vet) + FE-unit +
+# component + go unit + Playwright e2e (both standalone & multicall layouts),
+# the packaging matrix (deb/rpm/apk/openwrt, +display via WASH_PKG_DISPLAY),
+# and the kvm micro-vm + network gates (net-matrix, vm-net-test, vm-disks-test).
+# Delegates to test.sh so CI and local run the identical steps. Long; needs
+# docker + /dev/kvm + qemu. WASH_PKG_DISPLAY=1 to include the display rows.
+.PHONY: test-all
+test-all:
+	WASH_PKG_DISPLAY=$(or $(WASH_PKG_DISPLAY),1) ./test.sh --both --distro --vm --vm-gates
 
 # Dev mode: Vite serves the shell with HMR at :5173 and proxies /ws to
 # the router at 0.0.0.0:11000. Open http://localhost:5173/ in a
