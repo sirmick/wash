@@ -71,8 +71,8 @@ done
 
 if [[ "$do_build" == "1" ]]; then
   case "$mode" in
-    multicall) "$REPO/build.sh" --multicall;;
-    *)         "$REPO/build.sh" --standalone;;
+    multicall) make -C "$REPO" wash-multicall;;
+    *)         make -C "$REPO" wash;;
   esac
 fi
 
@@ -92,7 +92,7 @@ router_bin="$REPO/out/wash-router"
 if [[ "$mode" == "multicall" ]]; then
   router_bin="$REPO/out/multicall/wash-router"
   if [[ ! -e "$router_bin" ]]; then
-    echo "run.sh: $router_bin missing — run ./build.sh --multicall (or --both) first" >&2
+    echo "run.sh: $router_bin missing — run 'make wash-multicall' first" >&2
     exit 1
   fi
 fi

@@ -195,14 +195,28 @@ set +e
 JOBS="${WASH_PKG_JOBS:-4}"
 gate() { while (( $(jobs -rp | wc -l) >= JOBS )); do wait -n; done; }
 
-# enabled rows (skip display rows unless opted in)
+# enabled rows (skip display rows unless opted in).
+# WASH_PKG_ROWS=<space/comma list of tag globs> builds only matching rows — the
+# per-(arch,distro,pkg) make leaves set it to a single tag (e.g.
+# "ubuntu-24.04-amd64" or "fedora-40-amd64-display"). A matched display row is
+# included even without WASH_PKG_DISPLAY=1 (asking for it IS opting in).
 rows=()
+want_rows="${WASH_PKG_ROWS:-}"; want_rows="${want_rows//,/ }"
+row_wanted() {  # $1=tag ; true if no filter, or tag matches a glob in want_rows
+    [[ -z "$want_rows" ]] && return 0
+    local pat; for pat in $want_rows; do [[ "$1" == $pat ]] && return 0; done
+    return 1
+}
 for row in "${TARGETS[@]}"; do
     read -r tag base kind goarch display <<<"$row"
     [[ -z "$tag" ]] && continue
-    [[ "$display" == "1" && "${WASH_PKG_DISPLAY:-}" != "1" ]] && continue
+    row_wanted "$tag" || continue
+    [[ "$display" == "1" && -z "$want_rows" && "${WASH_PKG_DISPLAY:-}" != "1" ]] && continue
     rows+=("$tag|$base|$kind|$goarch|$display")
 done
+if [[ -n "$want_rows" && ${#rows[@]} -eq 0 ]]; then
+    echo "run_matrix: WASH_PKG_ROWS='$WASH_PKG_ROWS' matched no rows" >&2; exit 2
+fi
 
 # process_row <tag|base|kind|goarch|display> — stages 2-4 for one row in its own
 # build context. Writes a one-line verdict to $DIST/<tag>.result and build

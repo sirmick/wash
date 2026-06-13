@@ -61,7 +61,16 @@ endif
 # CGO_ENABLED=0 core (docs/DISPLAY.md §8). The wire client builds with
 # just a C++17 compiler; the compositor sources are enabled in
 # wash-display/CMakeLists.txt once wlroots/libdatachannel are present.
-WASH_DISPLAY ?=
+# Auto-detect: when WASH_DISPLAY is unset, build the compositor iff a usable
+# system wlroots is present (pkg-config) and we're not cross-building riscv64 —
+# so `make wash` quietly includes display on a dev box that has the deps, with
+# no surprise vendored compile where it doesn't. WASH_DISPLAY=1 forces it
+# (vendored wlroots compile if no system one); WASH_DISPLAY=0 skips it.
+ifeq ($(origin WASH_DISPLAY),undefined)
+ifneq ($(GOARCH),riscv64)
+WASH_DISPLAY := $(shell for v in wlroots-0.19 wlroots-0.18 wlroots-0.17 wlroots; do pkg-config --exists $$v 2>/dev/null && { echo 1; break; }; done)
+endif
+endif
 ifeq ($(WASH_DISPLAY),1)
 ifneq ($(GOARCH),riscv64)
 TARGETS += $(OUT)/wash-display
@@ -158,6 +167,18 @@ NETD_STAMP      := $(NETD_ASSETS)/.stamp
 
 .PHONY: all
 all: $(TARGETS)
+
+# ----- build verbs -----
+# `make wash` is the standalone build for this host: the per-app binaries, plus
+# wash-display when its deps are present (auto-detected above; WASH_DISPLAY=0/1
+# overrides). `make wash-multicall` is the busybox layout under out/multicall/.
+# (all/multicall are the underlying targets; wash/wash-multicall are the verbs.)
+.PHONY: wash
+wash: all
+	@echo "wash: built $(words $(TARGETS)) binaries → $(OUT)/$(if $(filter $(OUT)/wash-display,$(TARGETS)),  (incl. wash-display),  (no wash-display — set WASH_DISPLAY=1 or install wlroots to add it))"
+
+.PHONY: wash-multicall
+wash-multicall: multicall
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -797,12 +818,46 @@ linux-arm64:
 linux-riscv64:
 	$(MAKE) GOARCH=riscv64 all
 
-# packages: build + verify the native .deb/.rpm/.apk/.tgz across the distro
-# (and arch) matrix, each compiled in the sanitized Docker build environment.
-# WASH_PKG_DISPLAY=1 adds the optional wash-display rows. Needs Docker.
-.PHONY: packages
-packages:
+# ----- packaging -----
+# all-package builds the whole native .deb/.rpm/.apk matrix in the sanitized
+# Docker build env (WASH_PKG_JOBS=N concurrency; WASH_PKG_DISPLAY=1 adds display
+# rows). The per-leaf targets below build ONE (arch,distro,pkg) row each.
+.PHONY: all-package
+all-package:
 	./packaging/run_matrix.sh
+
+# Per-leaf package targets: <arch>-<platform>-<pkg>-package → one matrix row.
+# PKG_MAP pairs the make stem with its run_matrix tag — keep in sync with
+# packaging/run_matrix.sh TARGETS. Display leaves auto-set WASH_PKG_DISPLAY=1.
+PKG_MAP := \
+  amd64-ubuntu24-wash=ubuntu-24.04-amd64 \
+  arm64-ubuntu24-wash=ubuntu-24.04-arm64 \
+  riscv64-ubuntu24-wash=ubuntu-24.04-riscv64 \
+  amd64-debian13-wash=debian-13-amd64 \
+  arm64-debian13-wash=debian-13-arm64 \
+  riscv64-debian13-wash=debian-13-riscv64 \
+  amd64-fedora40-wash=fedora-40-amd64 \
+  arm64-fedora40-wash=fedora-40-arm64 \
+  amd64-alpine321-wash=alpine-3.21-amd64 \
+  arm64-alpine321-wash=alpine-3.21-arm64 \
+  riscv64-alpine321-wash=alpine-3.21-riscv64 \
+  amd64-ubuntu24-display=ubuntu-24.04-amd64-display \
+  arm64-ubuntu24-display=ubuntu-24.04-arm64-display \
+  amd64-debian13-display=debian-13-amd64-display \
+  arm64-debian13-display=debian-13-arm64-display \
+  amd64-fedora40-display=fedora-40-amd64-display \
+  arm64-fedora40-display=fedora-40-arm64-display
+
+define PKG_LEAF_RULE
+.PHONY: $(1)-package
+$(1)-package:
+	WASH_PKG_ROWS=$(2) $(if $(findstring -display,$(2)),WASH_PKG_DISPLAY=1 )./packaging/run_matrix.sh
+endef
+$(foreach m,$(PKG_MAP),$(eval $(call PKG_LEAF_RULE,$(firstword $(subst =, ,$(m))),$(lastword $(subst =, ,$(m))))))
+
+# Back-compat alias (deprecated; use all-package).
+.PHONY: packages
+packages: all-package
 
 # wash-vm: build the full RISC-V Linux VM (kernel + firmware + rootfs)
 # and install artifacts where wash-vm/web's index.html expects them.
@@ -815,17 +870,67 @@ vm:
 .PHONY: rv
 rv: vm
 
-# clean: in-tree build artifacts (out/, FE dist, embedded BE assets, packaging
-# output, wash-display native build, test/coverage). distclean: also /tmp junk,
-# the matrix Docker images, node_modules + Go cache (true from-scratch).
-# Both delegate to clean.sh (single source of truth; spares tmp/ + branches/).
+# ----- vm verbs -----  (<platform>-image-vm builds an image; <platform>-run-vm serves)
+.PHONY: alpine-image-vm ubuntu-image-vm debian-image-vm fedora-image-vm openwrt-image-vm browser-image-vm
+alpine-image-vm:  vm-image
+ubuntu-image-vm:  vm-image-ubuntu
+debian-image-vm:  vm-image-debian
+fedora-image-vm:  vm-image-fedora
+openwrt-image-vm: vm-image-openwrt
+browser-image-vm: vm
+
+.PHONY: browser-run-vm qemu-run-vm
+# browser VM: build the riscv artifacts, then the dev server serves them on :12000.
+browser-run-vm: browser-image-vm
+	wash-vm/run-browser.sh
+# qemu (wemu) surface: run-qemu.sh builds vm-image+chrome+washvm-run itself → :13000.
+qemu-run-vm:
+	wash-vm/run-qemu.sh
+
+# ----- run verb -----  (dev = HMR loop, below; run = built standalone router :11000)
+.PHONY: run
+run: wash
+	$(OUT)/wash-router
+
+# ----- clean verbs -----
+# Explicit path lists (never rm tmp/ branches/ harbor.config test-net.py .git).
+# clean = build artifacts; tmp-clean = + /tmp runtime junk; docker-clean = + the
+# matrix images; all-clean = everything (incl. node_modules + Go cache).
 .PHONY: clean
 clean:
-	./clean.sh
+	rm -rf $(OUT)
+	rm -rf web/*/dist apps/*/fe/dist wash-display/fe/dist
+	rm -rf apps/*/be/assets cmd/*/assets internal/apps/*/assets internal/runner/*/assets internal/login/assets/shell
+	rm -rf web/shell/public/vendor
+	rm -rf dist packaging/build-ctx
+	rm -rf wash-display/build wash-display/third_party/wlroots/build wash-display/.wlroots
+	rm -f  wash-display/*.deb
+	rm -rf e2e/test-results e2e/playwright-report test-results coverage
+	rm -rf wash wash-router image image-rv web/demo .understand-anything
+	@echo "clean: build artifacts removed"
 
+.PHONY: tmp-clean
+tmp-clean:
+	-find /tmp -maxdepth 1 -name 'wash-*' -type d -exec rm -rf {} + 2>/dev/null
+	-find /tmp -maxdepth 1 -name 'wash-*' \( -name '*.png' -o -name '*.log' \) -delete 2>/dev/null
+	-rm -rf /tmp/wd-smoke
+	@echo "tmp-clean: /tmp runtime junk removed (sockets kept)"
+
+.PHONY: docker-clean
+docker-clean:
+	-docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E '^(wash-build|wash-binaries|wash-display-bin|wash-pkg)' | xargs -r docker rmi -f
+	-docker buildx prune -f
+	@echo "docker-clean: matrix images + buildx cache removed"
+
+.PHONY: all-clean
+all-clean: clean tmp-clean docker-clean
+	rm -rf node_modules web/*/node_modules e2e/node_modules
+	-go clean -cache
+	@echo "all-clean: everything removed (node_modules + go cache too)"
+
+# Back-compat alias.
 .PHONY: distclean
-distclean:
-	./clean.sh --all
+distclean: all-clean
 
 .PHONY: verify
 verify: all
@@ -836,15 +941,66 @@ verify: all
 	done
 	@echo "verify: ok"
 
-# test-all: the whole pyramid in one command — lint (go vet) + FE-unit +
-# component + go unit + Playwright e2e (both standalone & multicall layouts),
-# the packaging matrix (deb/rpm/apk/openwrt, +display via WASH_PKG_DISPLAY),
-# and the kvm micro-vm + network gates (net-matrix, vm-net-test, vm-disks-test).
-# Delegates to test.sh so CI and local run the identical steps. Long; needs
-# docker + /dev/kvm + qemu. WASH_PKG_DISPLAY=1 to include the display rows.
+# ----- test verbs -----
+# Each builds its own prereqs and streams output (no redirection). unit-test/
+# e2e-test are the standalone layout; all-test also sweeps the multicall layout.
+# net-test/disks-test boot real qemu microvms (need /dev/kvm; gates self-skip).
+
+# fe-unit: Node's built-in runner over web/** + apps/** *.test.ts (framework-free
+# logic + solid reactive logic via --conditions=browser). Layout-independent.
+.PHONY: fe-unit
+fe-unit: web-deps
+	@files=$$(find web apps -path '*/node_modules' -prune -o -name '*.test.ts' -not -path '*/dist/*' -print); \
+	  if [ -z "$$files" ]; then echo "fe-unit: no test files"; else node --test --conditions=browser $$files; fi
+
+# component: vitest + jsdom mounting real Solid components (*.ctest.tsx).
+.PHONY: component
+component: web-deps
+	$(PNPM) exec vitest run --passWithNoTests
+
+# unit-test: go vet + go test ./... + the FE unit tiers. Builds first (the app
+# packages //go:embed their assets, so go test won't compile on a bare tree).
+# -p 1: the loopback package wires router+sdk over in-memory pipes and mustn't
+# race other in-process tests for goroutine scheduling.
+.PHONY: unit-test
+unit-test: wash fe-unit component
+	go vet ./...
+	go test -count=1 -p 1 -timeout 120s ./...
+
+# e2e-test: the full Playwright suite (standalone layout); builds the test app.
+.PHONY: e2e-test
+e2e-test: test-app
+	cd e2e && $(PNPM) install --silent
+	cd e2e && $(PNPM) exec playwright install chromium
+	cd e2e && $(PNPM) test
+
+# net-test: the kvm network tier — builds the openwrt + per-distro images, then
+# runs the segmentation gate + per-distro backend read/apply + browser net-vm e2e.
+.PHONY: net-test
+net-test: vm-image-openwrt vm-image-ubuntu vm-image-debian vm-image-fedora
+	$(MAKE) net-matrix
+	$(MAKE) vm-net-test
+	$(MAKE) e2e-vm
+
+# disks-test: the real-kernel storage gate (md/LVM/btrfs); builds the alpine image.
+.PHONY: disks-test
+disks-test: vm-image
+	$(MAKE) vm-disks-test
+
+# all-test: every test, BOTH layouts (standalone + multicall). Does NOT package.
+.PHONY: all-test
+all-test: unit-test e2e-test net-test disks-test
+	@echo "all-test: standalone tiers passed — sweeping the multicall layout…"
+	$(MAKE) TEST_APP=1 multicall
+	go test -count=1 -p 1 -timeout 120s -tags=multicall ./...
+	cd e2e && WASH_E2E_MULTICALL=1 $(PNPM) test
+
+# test-all: the whole pyramid — every test (both layouts + kvm net/disks gates)
+# then the full packaging matrix. = all-test + all-package. Long; needs docker +
+# /dev/kvm + qemu. WASH_PKG_DISPLAY=1 includes the display package rows.
 .PHONY: test-all
-test-all:
-	WASH_PKG_DISPLAY=$(or $(WASH_PKG_DISPLAY),1) ./test.sh --both --distro --vm --vm-gates
+test-all: all-test
+	WASH_PKG_DISPLAY=$(or $(WASH_PKG_DISPLAY),1) $(MAKE) all-package
 
 # Dev mode: Vite serves the shell with HMR at :5173 and proxies /ws to
 # the router at 0.0.0.0:11000. Open http://localhost:5173/ in a
