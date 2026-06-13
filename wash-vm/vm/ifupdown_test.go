@@ -94,7 +94,7 @@ func TestDebianIfupdownRead(t *testing.T) {
 		"option type 'bridge'",
 		"list ports 'eth1'",
 		"list ports 'eth2'",
-		"option ipaddr '10.0.50.1/24'",
+		"list ipaddr '10.0.50.1/24'",
 	} {
 		if !strings.Contains(uci, want) {
 			t.Fatalf("wash ifupdown read missing %q — the backend didn't reconstruct the box:\n%s", want, uci)
