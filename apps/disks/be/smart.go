@@ -77,12 +77,14 @@ func runSmart(c *sdk.Conn, name string) {
 		[]string{"smartctl", "-aj", "/dev/" + name},
 		"read SMART health for "+name)
 	if err != nil {
+		log.Printf("wash-disks: smartctl dev=%s priv run: %v", name, err)
 		_ = c.SendAppMsg(smartMsg{Kind: "smart_err", Name: name, Error: err.Error()})
 		return
 	}
 	// smartctl returns a non-zero bitmask exit even on benign warnings, but
 	// still prints the JSON document; parse stdout regardless of Exit.
 	if len(r.Stdout) == 0 {
+		log.Printf("wash-disks: smartctl dev=%s no output exit=%d stderr=%q", name, r.Exit, r.Stderr)
 		msg := "smartctl produced no output"
 		if len(r.Stderr) > 0 {
 			msg = string(r.Stderr)

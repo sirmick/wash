@@ -26,6 +26,15 @@ type auditRecord struct {
 	Error       string   `json:"error,omitempty"`
 	DurationMs  int64    `json:"duration_ms,omitempty"`
 	Reason      string   `json:"reason,omitempty"`
+	// Router-attested wash-sudo caller identity, when the sender is a
+	// cli-* session. Without these the audit row says which app asked
+	// but not which process/tty drove it.
+	CliPID int64 `json:"cli_pid,omitempty"`
+	// Pointer so a root caller (uid 0) still serializes — omitempty
+	// would silently drop the one uid an audit reader cares most about.
+	CliUID  *int64 `json:"cli_uid,omitempty"`
+	CliComm string `json:"cli_comm,omitempty"`
+	CliTTY  string `json:"cli_tty,omitempty"`
 }
 
 // auditRecordFromRequest builds an audit row from a request and the
@@ -49,6 +58,13 @@ func auditRecordFromRequest(r *Request, decision string) auditRecord {
 	}
 	if !r.StartedAt.IsZero() && !r.FinishedAt.IsZero() {
 		rec.DurationMs = r.FinishedAt.Sub(r.StartedAt).Milliseconds()
+	}
+	if o := r.CliOrigin; o != nil {
+		rec.CliPID = o.PID
+		uid := o.UID
+		rec.CliUID = &uid
+		rec.CliComm = o.Comm
+		rec.CliTTY = o.TTY
 	}
 	return rec
 }

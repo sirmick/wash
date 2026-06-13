@@ -751,8 +751,11 @@ func (s *Server) endAllSessions(uid uint32) {
 
 // identityFromRequest pulls and verifies the session cookie. Returns
 // the payload + true on success, zero + false on any failure (missing,
-// expired, bad signature, malformed). Failures are NOT logged here —
-// every page load on a logged-out session would otherwise spam.
+// expired, bad signature, malformed). A missing cookie is NOT logged —
+// every page load on a logged-out session would otherwise spam. A
+// cookie that is present but fails verification IS logged (reason +
+// client IP, never the value): that's either expiry or tampering, and
+// both deserve a trail.
 func (s *Server) identityFromRequest(r *http.Request) (Payload, bool) {
 	c, err := r.Cookie(CookieName)
 	if err != nil {
@@ -760,6 +763,7 @@ func (s *Server) identityFromRequest(r *http.Request) (Payload, bool) {
 	}
 	p, err := s.signer.Verify(c.Value)
 	if err != nil {
+		s.log.Printf("auth: cookie rejected from=%s path=%s: %v", s.clientIP(r), r.URL.Path, err)
 		return Payload{}, false
 	}
 	return p, true

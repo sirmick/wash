@@ -1104,10 +1104,15 @@ func runSudo(sudoBin, binary string, args []string, instanceID, token string, pw
 	}
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
+			log.Printf("wash-priv: runSudo %s instance=%s exit=%d", binary, instanceID, ee.ExitCode())
 			return ee.ExitCode(), nil
 		}
+		log.Printf("wash-priv: runSudo %s instance=%s: %v", binary, instanceID, err)
 		return -1, err
 	}
+	// Positive audit trail: clean privileged spawns must be visible
+	// too, not just failures.
+	log.Printf("wash-priv: runSudo %s instance=%s exit=0", binary, instanceID)
 	return 0, nil
 }
 
