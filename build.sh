@@ -1,48 +1,34 @@
 #!/usr/bin/env bash
-# build.sh — wash build entrypoint.
+# build.sh — build wash for this machine.
 #
-# Layout modes (binary shape; mutually exclusive; default --standalone):
-#   --standalone (default) — N separate binaries under out/ (one
-#                            per wash-<name>). Production layout.
-#   --multicall            — single wash binary (busybox-style) + its
-#                            wash-<name> symlinks, assembled in their own
-#                            out/multicall/ dir (kept separate from the
-#                            standalone binaries in out/). Smaller
-#                            footprint; all apps share one Go runtime.
-#   --both                 — both of the above (for test.sh --both).
+# No flags builds the standalone per-app binaries into out/ (the production
+# layout). Flags below add to or switch what gets built. Every run ends with a
+# summary of what was built and what this host could build but didn't.
 #
-# Extra targets (additive; combine with any layout mode):
-#   --display              — also build the native wash-display
-#                            compositor (C++/CMake/wlroots, its own
-#                            project — NOT the Go build). Uses a system
-#                            wlroots if pkg-config finds one, else
-#                            compiles the vendored 0.17 copy (slow).
-#   --vm-helpers           — also build the host VM helper CLIs
-#                            (washvm-run, washnet-demo, washnet-matrix).
-#                            Pure Go; the --vm / --vm-gates test tiers
-#                            need them.
+# Layout (pick one; default --standalone):
+#   --standalone   per-app binaries in out/                       (production)
+#   --multicall    one wash binary + its symlinks in out/multicall/   (smaller)
+#   --both         both layouts (used by test.sh --both)
 #
-# Everything this host can build:
-#   --all                  — both layouts + vm helpers + wash-display
-#                            (only when a system wlroots is present, so
-#                            --all never triggers a surprise wlroots
-#                            compile — use --display for that). Does NOT
-#                            build the VM *images* (test fixtures; make
-#                            vm-image*) or the riscv browser demo
-#                            (make rv) — neither is a host binary.
+# Also build (add to any layout):
+#   --display      the native wash-display compositor. Needs wlroots — uses a
+#                  system one if present, else compiles the vendored copy (slow).
+#   --vm-helpers   the host VM helper CLIs (washvm-run, washnet-demo/-matrix).
+#   --browser-vm   the in-browser riscv emulator demo. Needs docker; serve with
+#                  `cd wash-vm/web && node server/server.mjs` → http://localhost:5180
+#   --all          everything this host can: both layouts + vm-helpers +
+#                  wash-display (only with a system wlroots — never a surprise
+#                  vendored compile). NOT the browser VM or the VM test images.
 #
-# Modifiers:
-#   --no-test-app          — exclude wash-test + fakesudo stub
-#   --no-sudo              — skip wash-sudo (headless/kiosk)
-#   --clean                — make clean first
-#   -j <N> | --jobs <N>    — parallel make jobs. Default: nproc.
-#   -n | --dry-run         — print the build plan + summary; build nothing.
-#   -h | --help            — this header.
+# Options:
+#   --no-test-app  exclude the test app + fakesudo stub
+#   --no-sudo      skip wash-sudo (headless / kiosk)
+#   --clean        run `make clean` first
+#   -j <N>         parallel make jobs (default: nproc)
+#   -n, --dry-run  print the plan, build nothing
+#   -h, --help     show this text
 #
-# Every run ends with a capability summary: what was built, and what
-# this host *could* build but didn't (with the command to get it) — so
-# a missing compositor or VM image is never a silent surprise later.
-# All forms pass TEST_APP=1 unless --no-test-app.
+# (TEST_APP=1 is passed unless --no-test-app.)
 
 set -euo pipefail
 SECONDS=0
@@ -60,6 +46,7 @@ jobs=0
 no_sudo=0
 want_display=0     # set by --display (force) or --all (if system wlroots)
 want_vm_helpers=0  # set by --vm-helpers or --all
+want_browser_vm=0  # set by --browser-vm (the in-browser riscv demo)
 all=0
 dry=0
 
@@ -72,6 +59,8 @@ while [[ $# -gt 0 ]]; do
     --all)          all=1; mode=both; want_vm_helpers=1; shift;;
     --display)      want_display=1; shift;;
     --vm-helpers)   want_vm_helpers=1; shift;;
+    --browser-vm|--browservm|--bvm)
+                    want_browser_vm=1; shift;;
     --no-test-app)  test_app=0; shift;;
     --no-sudo)      no_sudo=1; shift;;
     --clean)        clean=1; shift;;
@@ -79,7 +68,9 @@ while [[ $# -gt 0 ]]; do
     -j|--jobs)      jobs="$2"; shift 2;;
     -j*)            jobs="${1#-j}"; shift;;
     -h|--help)
-      sed -n '1,/^set -euo/p' "$0" | sed 's/^# \{0,1\}//' | sed '$d'
+      # Print the header comment block as help (skip the shebang on line 1,
+      # stop before `set -euo`).
+      sed -n '2,/^set -euo/p' "$0" | sed 's/^# \{0,1\}//' | sed '$d'
       exit 0
       ;;
     *)
@@ -91,7 +82,8 @@ while [[ $# -gt 0 ]]; do
         --multi*|--busy*|--bb*)    echo "  did you mean --multicall?" >&2;;
         --disp*|--compositor)      echo "  did you mean --display?" >&2;;
         --vm-image*|--images)      echo "  VM images are a test fixture: make vm-image* (or ./test.sh --vm)" >&2;;
-        --vm*|--helpers)           echo "  did you mean --vm-helpers?" >&2;;
+        --browser*|--riscv|--demo) echo "  did you mean --browser-vm?" >&2;;
+        --vm*|--helpers)           echo "  did you mean --vm-helpers? (or --browser-vm for the in-browser demo)" >&2;;
         --both*|--all-layouts)     echo "  did you mean --both?" >&2;;
       esac
       echo "(use --help to list flags)" >&2
@@ -155,6 +147,14 @@ elif [[ "$all" == "1" ]]; then
   fi
 fi
 
+# --browser-vm cross-builds the riscv image entirely inside Docker containers,
+# so docker is the one hard prereq. Fail fast (before any host build) if asked
+# for it without docker.
+if [[ "$want_browser_vm" == "1" ]] && ! command -v docker >/dev/null 2>&1; then
+  echo "build.sh: --browser-vm needs docker (the riscv image is cross-built in containers)" >&2
+  exit 2
+fi
+
 # ── build plan (booleans the executor + summary both read) ────────────────
 build_standalone=0; build_multicall=0
 case "$mode" in
@@ -173,8 +173,9 @@ if [[ "$dry" == "1" ]]; then
   [[ "$build_display"     != "1" ]] && plan_line "–" "wash-display" "${display_note:-not requested (./build.sh --display)}"
   [[ "$want_vm_helpers"   == "1" ]] && plan_line "✓" "vm helpers"  "washvm-run, washnet-demo, washnet-matrix"
   [[ "$want_vm_helpers"   != "1" ]] && plan_line "–" "vm helpers"  "not requested (./build.sh --vm-helpers)"
+  [[ "$want_browser_vm"   == "1" ]] && plan_line "✓" "browser VM"  "in-browser riscv demo (make vm + shell FE)"
+  [[ "$want_browser_vm"   != "1" ]] && plan_line "–" "browser VM"  "not requested (./build.sh --browser-vm)"
   plan_line "–" "vm images" "test fixtures — make vm-image* (or ./test.sh --vm)"
-  plan_line "–" "riscv demo" "browser/cross artifact — make rv"
   echo "build.sh: dry run — nothing built."
   exit 0
 fi
@@ -257,12 +258,66 @@ build_vm_helpers() {
   built+=("vm helpers"$'\t'"washvm-run, washnet-demo, washnet-matrix")
 }
 
+build_browser_vm() {
+  echo "build.sh: browser VM (in-browser riscv emulator — docker cross-build, slow first time)"
+  # `make vm` cross-builds the riscv rootfs + kernel + firmware + WASM in Docker
+  # and installs them into wash-vm/web/public/tinyemu/.
+  make "${make_args[@]}" vm
+  # The demo server serves the wash shell FE over the wire, so build it too —
+  # then the image is ready to serve with no extra step.
+  pnpm -F @wash/shell build
+  # Drop a convenience launcher at out/wash-vm so it's one command to run. The
+  # heredoc is quoted ('LAUNCH') — nothing expands now; the script resolves its
+  # own paths at run time.
+  cat > out/wash-vm <<'LAUNCH'
+#!/usr/bin/env bash
+# wash-vm — launch the in-browser RISC-V wash demo. Generated by
+# `./build.sh --browser-vm`; lives in out/ (gitignored). Just run it:
+#   ./out/wash-vm            # serve at http://localhost:5180
+#   PORT=8080 ./out/wash-vm  # serve on another port
+# It serves the demo page; the RISC-V machine boots client-side in your
+# browser and auto-starts wash inside the guest.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$HERE/.." && pwd)"
+WEB="$REPO/wash-vm/web"
+TINYEMU="$WEB/public/tinyemu"
+missing=()
+for f in wash-kernel.bin wash-rootfs.ext2 riscvemu64-wasm.wasm; do
+  [[ -e "$TINYEMU/$f" ]] || missing+=("wash-vm/web/public/tinyemu/$f")
+done
+[[ -d "$REPO/web/shell/dist" ]] || missing+=("web/shell/dist (the wash UI)")
+if (( ${#missing[@]} )); then
+  echo "wash-vm: missing build output:" >&2
+  printf '  - %s\n' "${missing[@]}" >&2
+  echo "wash-vm: run  ./build.sh --browser-vm  first." >&2
+  exit 1
+fi
+# wash-vm/web is NOT a root pnpm-workspace member, so a plain install skips it.
+if [[ ! -x "$WEB/node_modules/.bin/vite" ]]; then
+  echo "wash-vm: installing web deps (pnpm install --ignore-workspace)…"
+  ( cd "$WEB" && pnpm install --ignore-workspace )
+fi
+PORT="${PORT:-5180}"; HOST="${HOST:-0.0.0.0}"
+echo "wash-vm: serving the in-browser RISC-V wash demo"
+echo "wash-vm:   → http://localhost:$PORT   (binds $HOST; Ctrl-C to stop)"
+if command -v xdg-open >/dev/null 2>&1; then
+  ( sleep 1.5; xdg-open "http://localhost:$PORT" >/dev/null 2>&1 || true ) &
+fi
+cd "$WEB"
+exec env PORT="$PORT" HOST="$HOST" node server/server.mjs
+LAUNCH
+  chmod 0755 out/wash-vm
+  built+=("browser VM"$'\t'"./out/wash-vm to serve (→ http://localhost:5180)")
+}
+
 # Order: app layouts first (standalone before multicall so --both's
 # symlink pass sees the real binaries), then the optional extras.
 [[ "$build_standalone" == "1" ]] && build_standalone_layout
 [[ "$build_multicall"  == "1" ]] && build_multicall_layout
 [[ "$build_display"    == "1" ]] && build_display_binary
 [[ "$want_vm_helpers"  == "1" ]] && build_vm_helpers
+[[ "$want_browser_vm"  == "1" ]] && build_browser_vm
 
 # ── summary ───────────────────────────────────────────────────────────────
 echo
@@ -277,8 +332,10 @@ fi
 if [[ "$want_vm_helpers" != "1" ]]; then
   printf '  – %-13s%s\n' "vm helpers" "not built (./build.sh --vm-helpers)"
 fi
+if [[ "$want_browser_vm" != "1" ]]; then
+  printf '  – %-13s%s\n' "browser VM" "in-browser riscv demo (./build.sh --browser-vm)"
+fi
 printf '  – %-13s%s\n' "vm images" "test fixtures, not host binaries (make vm-image* / ./test.sh --vm)"
-printf '  – %-13s%s\n' "riscv demo" "browser/cross artifact (make rv)"
 # Sizes of the two binaries people most often sanity-check.
 ls -lh out/wash-router out/wash 2>/dev/null | awk '{printf "  · %s\t%s\n",$5,$9}' || true
 echo "build.sh: done"
