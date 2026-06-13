@@ -908,8 +908,12 @@ qemu-run-vm:
 	wash-vm/run-qemu.sh
 
 # ----- run verb -----  (dev = HMR loop, below; run = built standalone router :11000)
+# run does NOT rebuild — it execs whatever `make wash` last produced, so it's
+# instant and `make wash && make run` doesn't build twice. Run `make wash` to
+# pick up changes; `make dev` is the auto-rebuilding HMR loop.
 .PHONY: run
-run: wash
+run:
+	@test -x $(OUT)/wash-router || { echo "run: $(OUT)/wash-router not built — run 'make wash' first" >&2; exit 1; }
 	$(OUT)/wash-router
 
 # ----- clean verbs -----
