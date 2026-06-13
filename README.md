@@ -587,7 +587,7 @@ docs/               see below
 | [DISPLAY.md](docs/DISPLAY.md) | The native X/Wayland compositor (`wash-display`): build reality, capture pipeline, wire client. |
 | [NET.md](docs/NET.md) | Networking app + privileged daemon (`wash-net`/`wash-netd`): UCI-shaped model, backends. |
 | [TESTING.md](docs/TESTING.md) | Test tiers, the `make` test verbs, holistic coverage, VM-backed e2e, CI, gotchas. |
-| [TECH_DEBT.md](docs/TECH_DEBT.md) / [AUDIT.md](docs/AUDIT.md) | Known debt and a code-quality audit. |
+| [TECH_DEBT.md](docs/TECH_DEBT.md) / [CORE_AUDIT.md](docs/CORE_AUDIT.md) | Known debt and the core audit / next tranche of work. |
 
 ## Building & testing each part
 

@@ -1,4 +1,10 @@
-# wash — audit remediation plan (2026-06-10)
+# wash — core audit (next tranche of work)
+
+> The standing core-audit / remediation plan (originated 2026-06-10). This
+> is the live backlog: Phase 1 (security hardening) shipped; Phases 2–3
+> (friction killers + structural splits) are the next tranche. Supersedes
+> the one-off `AUDIT.md` snapshot (deleted; in git history).
+
 
 Findings from a full-codebase audit (security, duplication/smell,
 feature-addition friction) turned into an ordered work plan. Scope was
