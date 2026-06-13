@@ -108,6 +108,10 @@ func Run(args []string) int {
 	secretKey := fs.String("secret-key", "", fmt.Sprintf("path to the HMAC secret used to sign session cookies. Empty picks %s when writable, else $XDG_CONFIG_HOME/wash/secret.key (or ~/.config/wash/secret.key).", systemSecretPath))
 	secretGenerate := fs.Bool("secret-generate", true, "generate the secret-key file if it doesn't exist (mode 0600). Default on for OOTB; pass --secret-generate=false to fail noisily on production installs that expect a pre-provisioned key.")
 	cookieSecure := fs.Bool("cookie-secure", false, "set the Secure flag on session cookies. Required when a TLS terminator is in front; leave off for plain-HTTP loopback dev.")
+	allowInsecureCookie := fs.Bool("allow-insecure-cookie", false, "permit the production auth backend to bind a non-loopback address WITHOUT --cookie-secure. Off by default: an unguarded public bind ships session cookies + passwords over plain HTTP. Only pass this when something else (a tunnel you trust) terminates TLS but can't set Secure.")
+	trustedProxies := fs.String("trusted-proxies", "", "comma-separated CIDRs of TLS terminators whose X-Forwarded-For header is believed (for audit logs + the per-IP /auth rate-limit key). Empty ⇒ XFF ignored, RemoteAddr used.")
+	maxAuthFails := fs.Int("auth-max-fails", 0, "failed /auth attempts (per username and per client IP) within --auth-window before lockout. Zero uses the built-in default (5).")
+	authWindow := fs.Duration("auth-window", 0, "sliding window over which failed /auth attempts are counted. Zero uses the built-in default (15m).")
 	cookieTTL := fs.Duration("cookie-ttl", login.DefaultCookieTTL, "how long a freshly-minted session cookie is valid for")
 	authTest := fs.String("auth-test", "", `dev/CI-only test backend: --auth-test "user:password" hard-codes one allowed credential. When set, overrides the default su+pty backend.`)
 	authTestUID := fs.Uint("auth-test-uid", 0, "uid to attach to a successful --auth-test login (default: this process's uid)")
@@ -136,15 +140,34 @@ func Run(args []string) int {
 
 	logger := log.New(os.Stderr, "wash-login ", log.LstdFlags|log.Lmsgprefix)
 
-	// Non-loopback default: wash-login is a network service. Warn
-	// loudly when there's no TLS terminator in front so credentials
-	// + cookies don't cross plain HTTP on an untrusted segment.
+	// Non-loopback bind on plain HTTP means credentials + session
+	// cookies cross the wire unencrypted. For the production su
+	// backend that's a hard error — refuse to start rather than ship
+	// a silently-insecure service. The dev/CI --auth-test backend is
+	// exempt (e2e binds non-loopback freely), and --allow-insecure-cookie
+	// is the explicit escape hatch for a trusted external tunnel.
 	if !isLoopback(*listen) && !*cookieSecure {
-		logger.Printf("WARNING: --listen %s on plain HTTP — credentials + session cookies cross the wire unencrypted.", *listen)
-		logger.Printf("         Front wash-login with nginx/Caddy/Tailscale-serve for TLS and pass --cookie-secure,")
-		logger.Printf("         or restrict --listen to 127.0.0.1 and tunnel (SSH -L / WireGuard).")
+		switch {
+		case *authTest != "":
+			logger.Printf("WARNING: --listen %s on plain HTTP (--auth-test dev backend) — cookies cross the wire unencrypted.", *listen)
+		case *allowInsecureCookie:
+			logger.Printf("WARNING: --listen %s on plain HTTP with --allow-insecure-cookie — credentials + cookies cross the wire unencrypted.", *listen)
+		default:
+			logger.Printf("refusing to bind %s on plain HTTP: session cookies + passwords would cross the wire unencrypted.", *listen)
+			logger.Printf("  Front wash-login with nginx/Caddy/Tailscale-serve for TLS and pass --cookie-secure,")
+			logger.Printf("  restrict --listen to 127.0.0.1 and tunnel (SSH -L / WireGuard),")
+			logger.Printf("  or pass --allow-insecure-cookie if a trusted tunnel already terminates TLS.")
+			return 2
+		}
 	}
 	_ = *insecureListen // deprecated, retained for arg-compatibility
+
+	// Parse trusted-proxy CIDRs up front so a typo fails fast.
+	trusted, err := parseTrustedProxies(*trustedProxies)
+	if err != nil {
+		logger.Printf("--trusted-proxies: %v", err)
+		return 2
+	}
 
 	// Always construct a passwd-backed UserLister; even the
 	// --auth-test path uses it for the user-list UX (when not
@@ -201,13 +224,16 @@ func Run(args []string) int {
 	showUsers := *userList != "hide"
 
 	cfg := login.Config{
-		Auth:         auth,
-		Signer:       signer,
-		TTL:          *cookieTTL,
-		CookieSecure: *cookieSecure,
-		Logger:       logger,
-		Users:        lister,
-		ShowUsers:    showUsers,
+		Auth:           auth,
+		Signer:         signer,
+		TTL:            *cookieTTL,
+		CookieSecure:   *cookieSecure,
+		Logger:         logger,
+		Users:          lister,
+		ShowUsers:      showUsers,
+		MaxAuthFails:   *maxAuthFails,
+		AuthWindow:     *authWindow,
+		TrustedProxies: trusted,
 	}
 	if !*noHandoff {
 		routerBin := resolveRouterBinary(*routerBinary)
@@ -289,6 +315,38 @@ func isLoopback(addr string) bool {
 		return true
 	}
 	return false
+}
+
+// parseTrustedProxies turns a comma-separated CIDR list into
+// *net.IPNet values. Empty input is valid (no trusted proxies). A
+// bare IP is accepted as a /32 or /128.
+func parseTrustedProxies(s string) ([]*net.IPNet, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	var out []*net.IPNet
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if !strings.Contains(part, "/") {
+			if ip := net.ParseIP(part); ip != nil {
+				if ip.To4() != nil {
+					part += "/32"
+				} else {
+					part += "/128"
+				}
+			}
+		}
+		_, n, err := net.ParseCIDR(part)
+		if err != nil {
+			return nil, fmt.Errorf("invalid CIDR %q: %w", part, err)
+		}
+		out = append(out, n)
+	}
+	return out, nil
 }
 
 // resolveRouterBinary looks for wash-router. Explicit override wins;

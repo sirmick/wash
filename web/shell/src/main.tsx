@@ -538,6 +538,19 @@ function onWindowClose(windowID: number): void {
 const [connState, setConnState] = createSignal<ConnState>('connecting');
 conn.onState(setConnState);
 
+// When the reconnect loop gives up on auth grounds, bounce to the
+// login page (wash-login) so the user re-authenticates. The raw router
+// reports no login_url — recovery there is reopening the token URL, so
+// we leave the banner up instead of redirecting nowhere.
+createEffect(() => {
+  if (connState() !== 'unauthenticated') return;
+  const url = conn.loginRedirect();
+  if (url) {
+    // A short beat so the banner paints before navigation.
+    setTimeout(() => { location.href = url; }, 800);
+  }
+});
+
 // Ctrl+Alt+Arrows pan one viewport. Listening at the document level
 // means the chord works regardless of which (if any) window has focus.
 // Apps inside windows that want to swallow these keys can preventDefault
@@ -614,9 +627,9 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => (
         top: '10px',
         left: '50%',
         transform: 'translateX(-50%)',
-        background: props.state === 'closed' ? '#5a1a1a' : '#3a2a1a',
+        background: props.state === 'closed' || props.state === 'unauthenticated' ? '#5a1a1a' : '#3a2a1a',
         color: '#eee',
-        border: `1px solid ${props.state === 'closed' ? '#a04040' : '#a07040'}`,
+        border: `1px solid ${props.state === 'closed' || props.state === 'unauthenticated' ? '#a04040' : '#a07040'}`,
         'border-radius': '6px',
         padding: '6px 14px',
         font: '12px ui-sans-serif,system-ui,sans-serif',
@@ -629,6 +642,10 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => (
       {props.state === 'connecting' && 'connecting…'}
       {props.state === 'reconnecting' && 'router unreachable — reconnecting…'}
       {props.state === 'closed' && 'disconnected'}
+      {props.state === 'unauthenticated' &&
+        (conn.loginRedirect()
+          ? 'session expired — redirecting to log in…'
+          : 'session expired — reopen your token URL to reconnect')}
     </div>
   </Show>
 );

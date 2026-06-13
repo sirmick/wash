@@ -59,6 +59,10 @@ func newIngressRegistry(log Logger) *ingressRegistry {
 	return &ingressRegistry{log: log, byToken: make(map[string]*ingressBackend)}
 }
 
+// MintToken exposes mintToken to callers outside the package (the
+// router runner mints the listener's auth token with it).
+func MintToken() (string, error) { return mintToken() }
+
 // mintToken returns 16 random bytes hex-encoded (128 bits) — wide
 // enough that the token is the access boundary on its own.
 func mintToken() (string, error) {

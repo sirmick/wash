@@ -213,6 +213,140 @@ func TestAuthFailureRedirectsBack(t *testing.T) {
 	}
 }
 
+// rateLimitedServer builds a test server whose /auth throttle trips
+// after maxFails failures, so the lockout path is reachable in a unit
+// test without thousands of requests.
+func rateLimitedServer(t *testing.T, maxFails int) (*httptest.Server, *http.Client) {
+	t.Helper()
+	auth, err := NewTestAuth("alice:hunter2", 1000, 1000, "/bin/sh")
+	if err != nil {
+		t.Fatalf("NewTestAuth: %v", err)
+	}
+	srv, err := NewServer(Config{
+		Auth:         auth,
+		Signer:       signerForTest(t),
+		Logger:       log.New(io.Discard, "", 0),
+		MaxAuthFails: maxFails,
+		AuthWindow:   time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	jar, _ := newCookieJar(ts.URL)
+	client := &http.Client{
+		Jar: jar,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	return ts, client
+}
+
+func TestAuthRateLimitLocksOut(t *testing.T) {
+	ts, client := rateLimitedServer(t, 3)
+	post := func(pw string) *http.Response {
+		resp, err := client.PostForm(ts.URL+"/auth", url.Values{
+			"user":     []string{"alice"},
+			"password": []string{pw},
+		})
+		if err != nil {
+			t.Fatalf("POST /auth: %v", err)
+		}
+		return resp
+	}
+	// 3 wrong attempts are each accepted-and-rejected (302 to /login?err).
+	for i := 0; i < 3; i++ {
+		resp := post("wrong")
+		loc := resp.Header.Get("Location")
+		resp.Body.Close()
+		if !strings.HasPrefix(loc, "/login?err=Invalid") {
+			t.Fatalf("attempt %d: Location %q, want invalid-credentials redirect", i, loc)
+		}
+	}
+	// 4th attempt is throttled BEFORE auth — even the correct password
+	// is rejected with the too-many-attempts redirect + Retry-After.
+	resp := post("hunter2")
+	defer resp.Body.Close()
+	loc := resp.Header.Get("Location")
+	if !strings.Contains(loc, "Too+many+attempts") {
+		t.Fatalf("4th attempt Location %q, want too-many-attempts redirect", loc)
+	}
+	if resp.Header.Get("Retry-After") == "" {
+		t.Error("throttled response missing Retry-After header")
+	}
+	for _, c := range resp.Cookies() {
+		if c.Name == CookieName {
+			t.Error("throttled attempt must not mint a session cookie")
+		}
+	}
+}
+
+func TestAuthRateLimitResetOnSuccess(t *testing.T) {
+	ts, client := rateLimitedServer(t, 3)
+	post := func(pw string) *http.Response {
+		resp, err := client.PostForm(ts.URL+"/auth", url.Values{
+			"user":     []string{"alice"},
+			"password": []string{pw},
+		})
+		if err != nil {
+			t.Fatalf("POST /auth: %v", err)
+		}
+		return resp
+	}
+	// Two failures, then a success clears the counter.
+	post("wrong").Body.Close()
+	post("wrong").Body.Close()
+	ok := post("hunter2")
+	ok.Body.Close()
+	// After the reset, two more failures still shouldn't lock out (we'd
+	// need 3 consecutive). The next correct login must succeed.
+	post("wrong").Body.Close()
+	post("wrong").Body.Close()
+	resp := post("hunter2")
+	defer resp.Body.Close()
+	if loc := resp.Header.Get("Location"); loc != "/" {
+		t.Fatalf("post-reset login Location %q, want / (success)", loc)
+	}
+}
+
+func TestAuthCheckPreflight(t *testing.T) {
+	ts, client := newTestServer(t)
+
+	// Unauthed: 401 with JSON pointing at /login.
+	resp, err := client.Get(ts.URL + "/auth/check")
+	if err != nil {
+		t.Fatalf("GET /auth/check: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("unauthed /auth/check = %d, want 401", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), `"login_url":"/login"`) {
+		t.Errorf("body %q missing login_url", body)
+	}
+
+	// Authenticate, then the preflight should 204.
+	authResp, err := client.PostForm(ts.URL+"/auth", url.Values{
+		"user":     []string{"alice"},
+		"password": []string{"hunter2"},
+	})
+	if err != nil {
+		t.Fatalf("POST /auth: %v", err)
+	}
+	authResp.Body.Close()
+	resp2, err := client.Get(ts.URL + "/auth/check")
+	if err != nil {
+		t.Fatalf("GET /auth/check after auth: %v", err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNoContent {
+		t.Errorf("authed /auth/check = %d, want 204", resp2.StatusCode)
+	}
+}
+
 func TestLogoutClearsCookie(t *testing.T) {
 	ts, client := newTestServer(t)
 	// Authenticate first.

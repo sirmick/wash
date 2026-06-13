@@ -12,20 +12,26 @@
 import {
   CLASS_BULK,
   CLASS_INTERACTIVE,
-  Class,
+  type Class,
   decodeFrame,
   encodeCtrl,
   encodeFrame,
   flagsWithClass,
   FLAG_END,
   decodeCtrl,
-} from './wire';
-import type { SocketLike } from './virtio';
+} from './wire.ts';
+import type { SocketLike } from './virtio.ts';
 
 export type CtrlHandler = (msg: any) => void;
 export type RawHandler = (channelID: number, bytes: Uint8Array) => void;
 export type StateHandler = (state: ConnState) => void;
-export type ConnState = 'connecting' | 'open' | 'reconnecting' | 'closed';
+// 'unauthenticated' is terminal: the reconnect loop stops because the
+// server refused the handshake on auth grounds (expired wash-login
+// cookie, or a rotated raw-router token), not a transient drop. The
+// shell turns this into a "log in again" / "reopen token URL" prompt
+// instead of spinning on 'reconnecting' forever — see the /auth/check
+// preflight below.
+export type ConnState = 'connecting' | 'open' | 'reconnecting' | 'closed' | 'unauthenticated';
 
 /** Factory returning a fresh SocketLike each call. Reconnect calls it. */
 export type SocketFactory = () => SocketLike;
@@ -40,14 +46,33 @@ export class Conn {
   private state: ConnState = 'connecting';
   private reconnectAttempts = 0;
   private closedByUser = false;
+  // Only HTTP(S)-backed sockets (real WebSocket from a URL) get the
+  // /auth/check preflight; a virtio/serial factory has no same-origin
+  // auth endpoint to probe, so it keeps the plain backoff loop.
+  private wantAuthProbe: boolean;
+  // Where to send the user when auth is gone. Populated from the
+  // /auth/check 401 body ("/login" for wash-login; null for the raw
+  // router, whose recovery is "reopen the token URL"). Read by the UI
+  // once state goes 'unauthenticated'.
+  private loginURL: string | null = null;
+  // Injectable for tests; defaults to the platform fetch.
+  private fetchImpl: typeof fetch;
 
   /**
    * Construct from a URL (default: real WebSocket) or a SocketFactory
-   * (e.g. VirtioConsoleSocket factory from `virtio.ts`).
+   * (e.g. VirtioConsoleSocket factory from `virtio.ts`). opts.fetchImpl
+   * overrides the auth-probe fetch (tests only).
    */
-  constructor(urlOrFactory: string | SocketFactory, handler: CtrlHandler, rawHandler: RawHandler) {
+  constructor(
+    urlOrFactory: string | SocketFactory,
+    handler: CtrlHandler,
+    rawHandler: RawHandler,
+    opts?: { fetchImpl?: typeof fetch },
+  ) {
     this.handler = handler;
     this.rawHandler = rawHandler;
+    this.wantAuthProbe = typeof urlOrFactory === 'string';
+    this.fetchImpl = opts?.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
     this.factory =
       typeof urlOrFactory === 'string'
         ? () => new WebSocket(urlOrFactory) as unknown as SocketLike
@@ -58,6 +83,10 @@ export class Conn {
   }
 
   ready(): Promise<void> { return this.opening; }
+
+  /** The redirect target when state is 'unauthenticated', or null when
+   * recovery is out-of-band (raw router: reopen the token URL). */
+  loginRedirect(): string | null { return this.loginURL; }
 
   onState(fn: StateHandler): () => void {
     this.stateHandlers.add(fn);
@@ -96,10 +125,62 @@ export class Conn {
       this.reconnectAttempts += 1;
       this.setState('reconnecting');
       setTimeout(() => {
-        if (this.closedByUser) return;
-        this.connect();
+        void this.reconnectTick();
       }, delay);
     };
+  }
+
+  // reconnectTick fires after the backoff delay. Before blindly
+  // re-dialing, it asks the server whether the close was an auth
+  // failure: a refused WS handshake (expired cookie / rotated token)
+  // is indistinguishable from a network drop at the WebSocket API
+  // level — both surface only as onclose. The /auth/check preflight
+  // disambiguates: a 401 there means "stop looping, the user must
+  // re-authenticate"; anything else (200/204, or the probe itself
+  // failing because the server is unreachable) means "transient, keep
+  // reconnecting".
+  private async reconnectTick(): Promise<void> {
+    if (this.closedByUser) return;
+    if (this.wantAuthProbe && (await this.authGone())) {
+      this.setState('unauthenticated');
+      return;
+    }
+    if (this.closedByUser) return;
+    this.connect();
+  }
+
+  // authGone probes /auth/check. Returns true only on a definitive
+  // 401 (or an opaque redirect to a login page); a network error
+  // returns false so we keep retrying rather than falsely declaring
+  // the session dead when the server is merely down.
+  private async authGone(): Promise<boolean> {
+    try {
+      const base = typeof location !== 'undefined' ? location.href : 'http://localhost/';
+      const resp = await this.fetchImpl(new URL('/auth/check', base).href, {
+        credentials: 'same-origin',
+        redirect: 'manual',
+        cache: 'no-store',
+      });
+      if (resp.type === 'opaqueredirect') {
+        // A 3xx to a login page — treated as not-authenticated. We
+        // can't read the body of an opaque redirect, so fall back to
+        // the default login path.
+        this.loginURL = '/login';
+        return true;
+      }
+      if (resp.status === 401) {
+        try {
+          const body = (await resp.json()) as { login_url?: string | null };
+          this.loginURL = body.login_url ?? null;
+        } catch {
+          this.loginURL = null;
+        }
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
   }
 
   private onMessage(ev: MessageEvent) {

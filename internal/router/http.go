@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,44 @@ import (
 
 	"github.com/coder/websocket"
 )
+
+// routerCookieName holds the token presented on the first ?token= load
+// so subsequent requests (and the WS upgrade) don't carry it in the URL.
+const routerCookieName = "wash_router"
+
+// tokenPromptHTML is the 401 body shown when the token gate is on and
+// the request lacks a valid token — the operator reopens the URL the
+// router logged at startup.
+const tokenPromptHTML = `<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>wash — token required</title>
+<body style="background:#111;color:#eee;font:14px/1.4 system-ui,sans-serif;padding:2em">
+<h1>wash router — token required</h1>
+<p>This router is protected by a token. Open the URL it printed at
+startup (<code>http://&lt;host&gt;:&lt;port&gt;/?token=…</code>), or
+restart it with <code>--no-auth</code> for an unauthenticated
+listener.</p>
+</body>
+</html>`
+
+// tokenOK reports whether the request carries the router token via the
+// wash_router cookie or a ?token= query param (constant-time compared).
+// When the configured token is empty the gate is disabled and every
+// request passes — the unix/byte-stream transports rely on this.
+func (s *HTTPServer) tokenOK(r *http.Request) bool {
+	token := s.router.cfg.AuthToken
+	if token == "" {
+		return true
+	}
+	if c, err := r.Cookie(routerCookieName); err == nil &&
+		subtle.ConstantTimeCompare([]byte(c.Value), []byte(token)) == 1 {
+		return true
+	}
+	if q := r.URL.Query().Get("token"); q != "" &&
+		subtle.ConstantTimeCompare([]byte(q), []byte(token)) == 1 {
+		return true
+	}
+	return false
+}
 
 // fallbackIndexHTML is the placeholder shell served when no embedded
 // assets are present. Production builds always embed the real shell;
@@ -45,6 +84,7 @@ func NewHTTPServer(r *Router, assets http.FileSystem) *HTTPServer {
 	r.SetAssets(assets)
 	s := &HTTPServer{router: r, assets: assets, mux: http.NewServeMux()}
 	s.mux.HandleFunc("/ws", s.handleWS)
+	s.mux.HandleFunc("/auth/check", s.handleAuthCheck)
 	s.mux.HandleFunc("/screenshot", s.handleScreenshot)
 	// Generic ingress: /app/<token>/* reverse-proxies to an app-
 	// published HTTP/WS backend. More specific than "/", so the mux
@@ -66,6 +106,10 @@ func (s *HTTPServer) handleScreenshot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.tokenOK(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	dir := s.router.cfg.ScreenshotDir
@@ -101,11 +145,56 @@ func (s *HTTPServer) handleScreenshot(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, name)
 }
 
+// handleAuthCheck is the FE reconnect preflight: 204 when the request
+// is authorized (or the gate is off), 401 otherwise. It never gates
+// itself — it's how the shell tells "auth gone, reopen the token URL"
+// apart from a transient socket drop. login_url is null here (the raw
+// router has no login page to redirect to); wash-login's equivalent
+// endpoint supplies "/login".
+func (s *HTTPServer) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
+	if s.tokenOK(r) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _ = io.WriteString(w, `{"authenticated":false,"login_url":null}`)
+}
+
 func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
 func (s *HTTPServer) handleRoot(w http.ResponseWriter, r *http.Request) {
+	if s.router.cfg.AuthToken != "" {
+		// First load with ?token=: stamp the token into an HttpOnly
+		// cookie and 302 to the same path WITHOUT the query, so the
+		// token doesn't linger in history / Referer. (No Secure flag:
+		// the raw router serves plain HTTP; the token is the same
+		// secret already in the URL, and SameSite=Strict + HttpOnly
+		// still apply.)
+		if q := r.URL.Query().Get("token"); q != "" && s.tokenOK(r) {
+			http.SetCookie(w, &http.Cookie{
+				Name:     routerCookieName,
+				Value:    q,
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteStrictMode,
+			})
+			u := *r.URL
+			query := u.Query()
+			query.Del("token")
+			u.RawQuery = query.Encode()
+			http.Redirect(w, r, u.RequestURI(), http.StatusFound)
+			return
+		}
+		if !s.tokenOK(r) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = io.WriteString(w, tokenPromptHTML)
+			return
+		}
+	}
 	if s.assets == nil {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -125,6 +214,12 @@ func (s *HTTPServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) handleWS(w http.ResponseWriter, r *http.Request) {
+	if !s.tokenOK(r) {
+		// 401 instead of an upgrade. The FE distinguishes this from a
+		// transient drop via the /auth/check preflight.
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		// localhost-only build means the same-origin guard is fine
 		// for v0.0; tighten in v0.1.

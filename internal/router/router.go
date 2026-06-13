@@ -92,6 +92,19 @@ type Config struct {
 	// account). Multi-tenant deployments set this to the
 	// wash-system uid that owns wash-login.
 	AllowUID uint32
+
+	// AuthToken gates the TCP/HTTP listener (cfg.Listen / --transport=ws):
+	// GET /, /ws and /screenshot require this token, presented as a
+	// ?token= query (which is then stamped into the wash_router cookie)
+	// or the cookie itself. Empty disables the gate — correct for the
+	// unix-socket (--listen-unix, OS-perm gated) and byte-stream
+	// (virtio/serial/fd, device-owned) paths, which never expose an
+	// open TCP port. The standalone ws router generates one at startup
+	// unless --no-auth is set. The token is the credential: it proves
+	// the caller is the operator who launched the router (Jupyter-style),
+	// not a network stranger — there's no PAM here because the router
+	// already runs as one fixed user.
+	AuthToken string
 }
 
 // Logger is a minimal sink; cmd/wash-router supplies a real one.

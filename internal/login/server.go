@@ -22,10 +22,13 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -60,6 +63,8 @@ type Server struct {
 	killer     func(pid int) error  // overrideable for tests; default syscall.Kill(pid, SIGTERM)
 	users      UserLister           // nil = no user list on login form
 	showUsers  bool                 // false = always omit list even if users != nil
+	authLimit  *rateLimiter         // /auth failure throttle (never nil)
+	trustedXFF []*net.IPNet         // peers whose X-Forwarded-For we believe
 }
 
 // Config drives Server construction.
@@ -88,6 +93,16 @@ type Config struct {
 	// the user enumeration pass --user-list=hide.
 	Users     UserLister
 	ShowUsers bool
+	// MaxAuthFails / AuthWindow tune the /auth failure throttle.
+	// Zero values fall back to defaultMaxAuthFails / defaultAuthWindow.
+	MaxAuthFails int
+	AuthWindow   time.Duration
+	// TrustedProxies are the peer networks (the TLS terminator in
+	// front) whose X-Forwarded-For header we believe — for both audit
+	// logging and the per-IP rate-limit key. Empty ⇒ XFF is ignored
+	// and RemoteAddr is used, so a direct client can't spoof its way
+	// into another IP's rate-limit bucket.
+	TrustedProxies []*net.IPNet
 }
 
 // NewServer returns a fully-wired Server. The Auth and Signer must
@@ -140,6 +155,8 @@ func NewServer(cfg Config) (*Server, error) {
 		killer:     killer,
 		users:      cfg.Users,
 		showUsers:  cfg.ShowUsers,
+		authLimit:  newRateLimiter(cfg.MaxAuthFails, cfg.AuthWindow),
+		trustedXFF: cfg.TrustedProxies,
 	}, nil
 }
 
@@ -149,6 +166,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/", s.handleRoot)
 	mux.HandleFunc("/login", s.handleLogin)
 	mux.HandleFunc("/auth", s.handleAuth)
+	mux.HandleFunc("/auth/check", s.handleAuthCheck)
 	mux.HandleFunc("/logout", s.handleLogout)
 	mux.HandleFunc("/ws", s.handleWS)
 	mux.HandleFunc("/ws/s/", s.handleWSSpecific)
@@ -570,13 +588,28 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login?err=Username+and+password+required", http.StatusFound)
 		return
 	}
+	ip := s.clientIP(r)
+	userKey, ipKey := "u:"+user, "ip:"+ip
+	// Throttle before the credentials ever reach the Authenticator: a
+	// locked-out attempt costs no PAM call and leaks no timing.
+	if !s.authLimit.allowed(userKey, ipKey) {
+		retry := s.authLimit.retryAfter(userKey, ipKey)
+		s.log.Printf("auth: user=%q from=%s rate-limited (retry in %s)", user, ip, retry.Round(time.Second))
+		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Round(time.Second).Seconds())))
+		http.Redirect(w, r, "/login?err=Too+many+attempts.+Try+again+later.", http.StatusSeeOther)
+		return
+	}
 	id, err := s.auth.Authenticate(user, password)
 	if err != nil {
-		// Log on the server with detail; show a generic message.
-		s.log.Printf("auth: user=%q from=%s rejected: %v", user, clientIP(r), err)
+		// Count the failure against both the username and the client IP,
+		// then show a generic message (detail goes to the server log).
+		s.authLimit.fail(userKey, ipKey)
+		s.log.Printf("auth: user=%q from=%s rejected: %v", user, ip, err)
 		http.Redirect(w, r, "/login?err=Invalid+credentials", http.StatusFound)
 		return
 	}
+	// Success clears any accumulated failures for this user + IP.
+	s.authLimit.reset(userKey, ipKey)
 	payload := Payload{
 		UID:     id.UID,
 		Name:    id.Name,
@@ -597,7 +630,7 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteStrictMode,
 		Expires:  time.Unix(payload.Expires, 0),
 	})
-	s.log.Printf("auth: user=%q uid=%d from=%s ok", id.Name, id.UID, clientIP(r))
+	s.log.Printf("auth: user=%q uid=%d from=%s ok", id.Name, id.UID, ip)
 
 	// Dispatch on the action button the user clicked. "new" → name
 	// prompt page → /sessions/new. "signin" (default; also what
@@ -617,6 +650,22 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Redirect(w, r, dst, http.StatusFound)
 	}
+}
+
+// handleAuthCheck is the FE reconnect preflight: 204 when the session
+// cookie is valid, 401 otherwise. The shell hits this when its WS
+// handshake is refused, to tell an expired cookie ("go to login_url")
+// apart from a transient router drop ("keep reconnecting"). It never
+// redirects — a 302 here would be opaque to the fetch() caller, which
+// is the whole bug we're routing around.
+func (s *Server) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.identityFromRequest(r); ok {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _ = io.WriteString(w, `{"authenticated":false,"login_url":"/login"}`)
 }
 
 // handleLogout clears the cookie and, when authed, optionally
@@ -716,14 +765,40 @@ func (s *Server) identityFromRequest(r *http.Request) (Payload, bool) {
 	return p, true
 }
 
-// clientIP returns a usable peer identifier for log lines. nginx /
-// other TLS terminators stuff the real client IP into
-// X-Forwarded-For; honour it when present so audit lines aren't all
-// "127.0.0.1" on production deployments. Trust here is bounded — we
-// only log this string; it isn't a security boundary.
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		return xff
+// clientIP returns the peer IP used for both audit log lines and the
+// per-IP rate-limit bucket. A TLS terminator in front stuffs the real
+// client address into X-Forwarded-For, but a *direct* client can set
+// that header too — so we only believe XFF when the immediate peer
+// (RemoteAddr) is in the configured trusted-proxy set. Otherwise an
+// attacker would rotate a forged XFF to dodge per-IP throttling. We
+// take the left-most XFF entry (the original client) and fall back to
+// RemoteAddr's host when there's no trusted proxy or the header is
+// absent.
+func (s *Server) clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
 	}
-	return r.RemoteAddr
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" && s.peerTrusted(host) {
+		first := strings.TrimSpace(strings.SplitN(xff, ",", 2)[0])
+		if first != "" {
+			return first
+		}
+	}
+	return host
+}
+
+// peerTrusted reports whether host (a bare IP) is in the trusted-proxy
+// set whose X-Forwarded-For we honour.
+func (s *Server) peerTrusted(host string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, n := range s.trustedXFF {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
