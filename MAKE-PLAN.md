@@ -5,14 +5,18 @@ Goal: one goal-oriented `make` interface; the existing scripts become the engine
 delegates to (they don't disappear — they stop being what you type).
 
 ## Principle
-- **`make` = the goal-verb layer.** Each target builds its own prerequisites and delegates
-  the heavy lifting to the scripts:
-  `make wash`→`build.sh` · `make unit-test`→`test.sh --no-e2e` · `make all-clean`→`clean.sh --all`
-  · `make <arch>-<plat>-<pkg>-package`→`run_matrix.sh` (single-row filter).
-- **Defaults live in the binaries/scripts, NOT in the make facade.** Make never passes
-  `PORT=`/`--listen` overrides; it just invokes the script, which already defaults correctly.
-- Scripts stay as the capability-aware front doors (build.sh already does auto-wlroots +
-  "what this host could build but didn't" summary).
+- **`make` = THE interface AND the implementation.** `build.sh` / `clean.sh` / `test.sh` are
+  **DELETED in this sweep** — their logic moves into make recipes (and small *internal* helpers
+  under `scripts/lib/` only where make is genuinely awkward; never user-facing build/clean/test
+  scripts again). KEPT as engines make calls: `run_matrix.sh` (packaging — leaves call it with a
+  single-row filter), the VM serve scripts (`run-browser.sh` / `run-qemu.sh`), the
+  `build-vm-image-*.sh` helpers, and the dev helpers (`dev-restart.sh` / `dev-kill.sh`).
+- **Defaults live in the binaries, NOT in make.** Make never passes `PORT=`/`--listen` overrides.
+- **Output streams to stdout/stderr — no redirection, hide nothing.** Interactive build/test/run
+  output is never swallowed. (Spawned *background* children that outlive the foreground may still
+  log to run-root files for after-the-fact diagnosis — e.g. spawn.go's per-session router log.)
+  Cleaning up the noisy build/test log output is a **SEPARATE session**, not this sweep.
+- **Docs sweep:** README + docs/* fully updated to the make verbs as part of this work.
 
 ## Naming conventions
 - Build product → named for the artifact: `make wash`, `make wash-multicall`
@@ -87,22 +91,29 @@ fix run-browser/run-qemu "run one or the other" comments — they're independent
 - fixtures: `fm-seed`, `seed-bulk-fixture`
 - NO `install`/`deploy` verb — installation falls out of the native packages.
 
-## OPEN — to discuss next
-1. **Parallel build bits** — parallelize the host build (FE builds / Go binaries) like the
-   matrix was parallelized? `make -j` already does Go; the FE Vite builds are the serial part.
-2. **GitHub Actions** — point test.yml/matrix.yml at the new make verbs
-   (`./test.sh --no-e2e`→`make unit-test`, etc.); confirm the matrix CI stays amd64-core + the
-   `-no-auth` boot-smoke fix; decide if any new targets get CI coverage.
-3. **stdout/stderr destination** — where spawned-process logs go (router→per-session log under
-   run-root already done in spawn.go; standardize the rest? dev/run/vm logs to files vs stdout).
-4. Micro-decisions: `qemu-run-vm` vs `wemu-run-vm`; `net-demo` keep vs `openwrt-run-vm`;
+## DECIDED
+- **stdout/stderr:** no redirection, hide nothing (see Principle). Log cleanup = separate session.
+- **Scripts:** build.sh/clean.sh/test.sh deleted; logic into make. Docs fully updated.
+
+## OPEN — to discuss
+1. **GitHub Actions** — desired shape: **build → run tests → some package builds**, starting
+   **amd64-only** (and discuss from there). CI can run: `make wash`, `make unit-test`,
+   `make e2e-test`; CANNOT run net-test/disks-test (no /dev/kvm) — those stay local. Package job:
+   amd64 `wash` packages for ubuntu/debian/fedora/alpine (matrix.yml is already amd64-core +
+   the `-no-auth` boot-smoke fix). Decide: consolidate the 4 workflows (demo/matrix/prebuild/test)?
+   keep demo (github-pages browser-VM) separate? jobs vs one pipeline? display in CI yet?
+2. **Parallel build bits** — `make -jN` already fans out Go; confirm the 23 `web-*` Vite builds
+   parallelize (no false serial dep) and default `make wash` to `-j$(nproc)`.
+3. Micro-decisions: `qemu-run-vm` vs `wemu-run-vm`; `net-demo` keep vs `openwrt-run-vm`;
    clean tiers (4 targets vs clean+all-clean).
 
 ## Implementation order (once locked)
-1. Add the make targets (generated leaves via `$(foreach)` over the matrix def).
-2. Point CI workflows at the make verbs.
-3. Regenerate COMMANDS.md to match.
-4. Then close Thread A: commit, push to remote, get GH Actions green.
+1. Add the make targets (generated leaves via `$(foreach)` over the matrix def); move
+   build/clean/test logic into recipes (+ scripts/lib helpers where needed).
+2. **Delete build.sh / clean.sh / test.sh.**
+3. Rewire CI workflows to the make verbs (build → test → amd64 packages).
+4. Update README + docs/* + regenerate COMMANDS.md.
+5. Then close Thread A: push to remote, get GH Actions green.
 
 ## Context (where this came from)
 Session began: "pick up pkg-hermetic, reconcile with main, push." That's committed on local
