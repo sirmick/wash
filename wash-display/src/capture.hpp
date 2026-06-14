@@ -27,7 +27,16 @@ public:
     // capture reads `surface`'s current texture into the pooled buffer.
     // Returns true on success; false if the surface has no texture yet
     // or readback failed. `renderer` is the compositor's renderer.
-    bool capture(struct wlr_surface* surface, struct wlr_renderer* renderer);
+    //
+    // When crop_w/crop_h are > 0, only that surface-local sub-rect is read
+    // back. This strips the GTK client-side-decoration shadow margin: xdg
+    // toplevels report their visible bounds via wlr_xdg_surface_get_geometry,
+    // and we capture only that rect so the transparent CSD margin (which would
+    // flatten to black in the alpha-less XRGB read-back) never reaches the
+    // encoder. Zero/omit for the full surface (X11 apps, popups). Coords are
+    // surface-local = texture pixels at scale 1.0 (DISPLAY.md — DPI fixed 1.0).
+    bool capture(struct wlr_surface* surface, struct wlr_renderer* renderer,
+                 int crop_x = 0, int crop_y = 0, int crop_w = 0, int crop_h = 0);
 
     const uint8_t* data() const { return buf_.data(); }
     int width() const { return w_; }

@@ -49,14 +49,27 @@ namespace wash {
 // Set once in compositor.cpp after wlr_allocator_autocreate().
 extern struct wlr_allocator* g_capture_allocator;
 
-bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* renderer) {
+bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* renderer,
+                             int crop_x, int crop_y, int crop_w, int crop_h) {
     if (!surface || !renderer) return false;
 
     struct wlr_texture* texture = wlr_surface_get_texture(surface);
     if (!texture) return false;
 
-    int w = (int)texture->width;
-    int h = (int)texture->height;
+    const int tw = (int)texture->width;
+    const int th = (int)texture->height;
+    if (tw <= 0 || th <= 0) return false;
+
+    // Resolve the capture rect. A caller-supplied crop (xdg window geometry,
+    // sans the CSD shadow margin) is clamped to the texture; with no crop we
+    // take the whole buffer. src_{x,y} offsets the read-back into the texture.
+    int src_x = 0, src_y = 0, w = tw, h = th;
+    if (crop_w > 0 && crop_h > 0) {
+        src_x = crop_x < 0 ? 0 : (crop_x > tw ? tw : crop_x);
+        src_y = crop_y < 0 ? 0 : (crop_y > th ? th : crop_y);
+        w = crop_w > tw - src_x ? tw - src_x : crop_w;
+        h = crop_h > th - src_y ? th - src_y : crop_h;
+    }
     if (w <= 0 || h <= 0) return false;
 
     // The texture's own renderer is the one that can read it back.
@@ -106,6 +119,15 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
     struct wlr_render_texture_options tex_opts;
     std::memset(&tex_opts, 0, sizeof tex_opts);
     tex_opts.texture = texture;
+    // Sample the crop sub-rect of the source texture (src_box is in texture
+    // coords; a zeroed src_box means "whole texture", so only set it when
+    // cropping) and blit it to the top-left of the w×h target.
+    if (src_x || src_y || w != tw || h != th) {
+        tex_opts.src_box.x = src_x;
+        tex_opts.src_box.y = src_y;
+        tex_opts.src_box.width = w;
+        tex_opts.src_box.height = h;
+    }
     tex_opts.dst_box.x = 0;
     tex_opts.dst_box.y = 0;
     tex_opts.dst_box.width = w;
@@ -166,10 +188,12 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
     pixman_region32_init(&damage);
     wlr_surface_get_effective_damage(surface, &damage);
     const pixman_box32_t* ext = pixman_region32_extents(&damage);
-    int x0 = ext->x1 < 0 ? 0 : ext->x1;
-    int y0 = ext->y1 < 0 ? 0 : ext->y1;
-    int x1 = ext->x2 > w ? w : ext->x2;
-    int y1 = ext->y2 > h ? h : ext->y2;
+    // Damage is surface-local (full buffer); shift into crop-local coords
+    // (subtract the crop origin) and clamp to the cropped frame.
+    int x0 = ext->x1 - src_x; if (x0 < 0) x0 = 0;
+    int y0 = ext->y1 - src_y; if (y0 < 0) y0 = 0;
+    int x1 = ext->x2 - src_x; if (x1 > w) x1 = w;
+    int y1 = ext->y2 - src_y; if (y1 > h) y1 = h;
     bool empty = !pixman_region32_not_empty(&damage) || x1 <= x0 || y1 <= y0;
     pixman_region32_fini(&damage);
 

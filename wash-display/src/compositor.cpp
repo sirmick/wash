@@ -261,11 +261,13 @@ static void sink_open(WindowSink& s, WireConn* conn, const std::string& title,
 // message on the video channel. No-op until the window + channel exist.
 // This is the capture.cpp + encode.cpp seam, shared by both paths.
 static void sink_frame(WindowSink& s, WireConn* conn, struct wlr_surface* surface,
-                       struct wlr_renderer* renderer) {
+                       struct wlr_renderer* renderer,
+                       int crop_x = 0, int crop_y = 0, int crop_w = 0, int crop_h = 0) {
     if (!s.win || !s.video_chan) return; // not mapped / no sink
     // capture returns false when nothing changed (empty damage) — skip
-    // the frame entirely, the per-frame win of damage tracking.
-    if (!s.cap.capture(surface, renderer)) return;
+    // the frame entirely, the per-frame win of damage tracking. The crop
+    // (when set) is the xdg window geometry, stripping the CSD shadow margin.
+    if (!s.cap.capture(surface, renderer, crop_x, crop_y, crop_w, crop_h)) return;
 
     // Tell the router when the content size changed so the shell frame
     // tracks it (window.geometry). Fire-and-forget; only on actual change.
@@ -420,9 +422,15 @@ void toplevel_commit(struct wl_listener* listener, void* /*data*/) {
         return;
     }
     // Capture the just-committed buffer → WebP → one framed message on
-    // the video channel (shared sink path; same as the X11 surfaces).
+    // the video channel (shared sink path; same as the X11 surfaces). Crop
+    // to the xdg window geometry so the GTK CSD shadow margin (transparent,
+    // and otherwise flattened to a black border) is excluded. geo is the
+    // surface-local visible rect; {0,0,0,0} (e.g. a client that never set
+    // geometry) falls through to a full-surface capture.
+    struct wlr_box geo{};
+    wlr_xdg_surface_get_geometry(t->xdg_toplevel->base, &geo);
     sink_frame(t->sink, t->server->conn, t->xdg_toplevel->base->surface,
-               t->server->renderer);
+               t->server->renderer, geo.x, geo.y, geo.width, geo.height);
 }
 
 // toplevel_request_maximize / _fullscreen: ack the client's request by

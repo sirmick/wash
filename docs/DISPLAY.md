@@ -466,6 +466,23 @@ clients the real logical screen geometry. **M5b** (deferred): HiDPI — output s
 `wlr_fractional_scale_v1` + FE devicePixelRatio coordinate scaling in M1; and
 `wlr_output_management_v1` for clients that want to *drive* output config (rare).
 
+### M5c — crop to xdg window geometry (CSD shadow margin) ✅
+GTK/GNOME apps draw client-side decorations *despite* our forced
+`SERVER_SIDE` xdg-decoration (the protocol is advisory; GTK ignores it),
+including a wide transparent drop-shadow margin around the visible window.
+The capture read-back is alpha-less (`XRGB`), so that margin flattened to a
+**black border**. `capture.cpp` now crops the read-back to the surface's
+`wlr_xdg_surface_get_geometry` rect (threaded through `sink_frame`,
+geometry computed in `toplevel_commit`); the shadow margin never reaches
+the encoder, and the captured pixels now match the geometry already
+reported to the WM. X11 surfaces and popups keep full-surface capture
+(no xdg geometry; no CSD shadow in the X clients tested). Verified by
+`e2e/capture/display-probe.cap.ts` (gnome-calculator 482×619 → 360×497,
+non-blank 61% → 100%). **Deferred:** preserving alpha end-to-end (ARGB
+read-back + WebP-with-alpha + FE transparent compositing) for rounded
+corners / genuinely shaped windows — a non-goal while wash wraps every
+guest in its own opaque server-side frame.
+
 ### Out of scope here — M6 throughput
 WebRTC/VP9 (for Firefox scroll/video parity) + audio service hookup are a separate,
 larger track ([[wash_display_codecs]], [[wash_audio_plan]]).
