@@ -486,3 +486,21 @@ Input/clipboard/popups are tested at two levels:
      `GDK_BACKEND` (`wayland` → xdg_popup, `x11` → override-redirect). It's also the
      **manual debug surface**: launch it from a wash terminal and watch input land,
      menus open as overlays, and copy/paste bridge.
+
+### Running locally (manual)
+```bash
+WASH_DISPLAY=1 make wash        # build everything incl. out/wash-display
+make run                        # router on :11000 (or: out/wash-router -no-auth -listen 0.0.0.0:11000 -apps-dir ./out)
+```
+Open `http://localhost:11000`, launch the Terminal app, and run the test guest
+(above) — it inherits `DISPLAY`/`WAYLAND_DISPLAY` from the shell (DISPLAY_ENV.md).
+The compositor's logs land in the router's stderr.
+
+> **Aside — router spawn race (fixed here).** Running the *full* app set (not the
+> minimal e2e config) crowds the first browser-connect background-app sweep and
+> exposed a pre-existing router race: a fast child could dial back before its
+> pid-keyed pending-attach slot was registered, fall through to the fresh-attach
+> branch, and get killed by `spawnAndRun`'s 10s timeout. Fixed by holding
+> `pendingMu` across `Spawn` + register (`internal/router/router.go`). Unrelated to
+> the display feature, but it's why an X client could "die after ~10s" on a fresh
+> session. See [[wash_router_spawn_race]].

@@ -7,7 +7,34 @@ wash wire. It is **C++/CMake**, built entirely separately from the
 `CGO_ENABLED=0` Go core — the native wlroots/codec deps never touch the
 static Go binaries. Design and internals: [`docs/DISPLAY.md`](../docs/DISPLAY.md).
 
+Windows are **interactive**, not just streamed: pointer (move/click/scroll)
+and keyboard with router-authoritative focus, bidirectional clipboard
+(Wayland + X11), menus/dropdowns as positioned overlays (Wayland xdg-popup
+and X11 override-redirect), and cursor-shape forwarding. See
+[`docs/DISPLAY.md` §12](../docs/DISPLAY.md) for the milestone breakdown and
+what's deferred (HiDPI, bitmap cursors, popup keyboard focus, WebRTC/audio).
+
 It is **opt-in**: a normal `make` does not build it.
+
+## Try it (manual)
+
+`tools/display-testguest.py` is a tiny PyGObject **GTK3** guest (no build) that
+exercises every interactive feature for manual debugging — a right-click
+menu, copy/paste (`c`/`v`/`m` keys), and a status label echoing input. Run it
+**from a wash terminal** (so it inherits the compositor's
+`DISPLAY`/`WAYLAND_DISPLAY`):
+
+```bash
+GDK_BACKEND=wayland python3 tools/display-testguest.py   # xdg_popup menus
+GDK_BACKEND=x11      python3 tools/display-testguest.py   # override-redirect menus (p4v's path)
+```
+
+The compositor shares the router's log, so the plumbing is observable there:
+`inject … button`, `popup mapped` / `X11 popup mapped`, `clipboard guest->wash`,
+`cursor … shape=`. The faked-BE contract e2e (`e2e/tests/display.spec.ts`)
+runs in CI without a compositor; the real-client checks
+(`display-input-smoke.spec.ts`, `display-guest.spec.ts`) are gated out of the
+default `make e2e`.
 
 ## Build
 
