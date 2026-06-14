@@ -24,13 +24,27 @@
 name: demo
 
 on:
-  # Rebuild + redeploy the live demo on EVERY push to main, so
-  # sirmick.github.io/wash always mirrors main (not only when demo-relevant
-  # paths changed). The Docker layer cache keeps a no-source-change run cheap.
+  # Rebuild + redeploy the live demo when something that affects it changes —
+  # app/shell/VM code, not docs or native-packaging. The demo bakes the
+  # multicall wash binary + the shell bundle, so any Go/TS/FE change matters;
+  # *.md / docs / packaging / the OTHER workflows don't. paths-ignore errs
+  # toward running (a mixed push still builds), so the live demo never goes
+  # stale — it just stops rebuilding for doc/packaging-only pushes.
   push:
     branches: [main]
+    paths-ignore: &demo-ignore
+      - '**.md'
+      - 'docs/**'
+      - 'packaging/**'
+      - 'debian/**'
+      - 'rpm/**'
+      - 'alpine/**'
+      - 'e2e/**'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/prebuild.yml'
   pull_request:
     branches: [main]
+    paths-ignore: *demo-ignore
   workflow_dispatch:
 
 permissions:
@@ -39,12 +53,14 @@ permissions:
   id-token: write
   pull-requests: write   # to comment on PRs with the artifact link
 
-# A new push supersedes an in-flight deploy. We let the in-flight
-# build finish (so PR feedback isn't lost), but only the latest
-# successful build deploys to Pages.
+# A new push supersedes an in-flight build: cancel it (per-ref) so a burst of
+# commits only builds+deploys the LATEST instead of queuing every one (the old
+# fixed-group + cancel:false ran them all back-to-back — ~18 min each). Per-ref
+# so a PR build never cancels a main deploy; Pages-deploy serialization is
+# handled separately by the github-pages environment.
 concurrency:
-  group: demo-pages
-  cancel-in-progress: false
+  group: demo-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
