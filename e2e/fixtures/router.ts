@@ -381,8 +381,12 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
     fakesudoLog,
     log: () => logBuf,
     waitForLog: (re, timeout = 5_000) => waitForRegex(() => logBuf, re, timeout),
-    controlRequest: (req, timeoutMs = 5_000) => controlRoundtrip(controlSocket, req, timeoutMs),
-    async sendAppMsg(instanceID, data, timeoutMs = 5_000) {
+    // 12s (was 5s): a BE→router control round-trip can exceed 5s under the
+    // full-parallel e2e load (8 workers × routers + ~40 BE apps), flaking
+    // fm-be etc. with "control socket timeout". 12s stays under the 15s
+    // per-test timeout so a genuine hang still fails the test.
+    controlRequest: (req, timeoutMs = 12_000) => controlRoundtrip(controlSocket, req, timeoutMs),
+    async sendAppMsg(instanceID, data, timeoutMs = 12_000) {
       const req: Record<string, unknown> = {
         t: 'msg',
         instance_id: instanceID,
