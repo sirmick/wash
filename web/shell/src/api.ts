@@ -3,7 +3,7 @@
 // (catalog, open windows) and to request actions (spawn via app_msg,
 // focus, close).
 
-import type { Origin } from './clients';
+import { type Origin, parseInstanceId, compoundInstanceId } from './clients';
 
 export interface CatalogApp {
   id: string;
@@ -148,11 +148,17 @@ export function clearSavedState(instanceID: string): void {
 // replaceSavedStates replaces the entire cache. Used on snapshot
 // processing to drop any stale entries from instances the router no
 // longer knows about.
-export function replaceSavedStates(states: Record<string, unknown> | undefined): void {
-  savedStates.clear();
+export function replaceSavedStates(origin: Origin, states: Record<string, unknown> | undefined): void {
+  // app_state from a session.snapshot is keyed by BARE instance id and is
+  // authoritative only for the router it came from. Drop this origin's
+  // existing (compound-keyed) entries, then set the new ones compound —
+  // other origins' saved states are untouched.
+  for (const k of [...savedStates.keys()]) {
+    if (parseInstanceId(k).origin === origin) savedStates.delete(k);
+  }
   if (states) {
-    for (const [k, v] of Object.entries(states)) {
-      if (v != null) savedStates.set(k, v);
+    for (const [bare, v] of Object.entries(states)) {
+      if (v != null) savedStates.set(compoundInstanceId(origin, bare), v);
     }
   }
 }

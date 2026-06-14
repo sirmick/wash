@@ -9,7 +9,7 @@
 
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
 import { registerMountedElement, unregisterMountedElement } from './api';
-import { tagFor } from './clients';
+import { tagFor, compoundInstanceId } from './clients';
 import { hostColor } from './host-colors';
 import {
   VIEWPORTS_PER_AXIS,
@@ -57,7 +57,10 @@ export function FloatingWindow(props: WindowProps) {
     // instantiates the bundle the remote router served, not a same-named
     // local element); the manifest tag unchanged for local windows.
     const el = document.createElement(tagFor(props.win.origin, props.win.element));
-    el.setAttribute('data-wash-instance', props.win.instanceID);
+    // The app-facing instance id is origin-tagged so window.wash routes the
+    // app's messages back to the owning router; local ids stay unprefixed.
+    const cid = compoundInstanceId(props.win.origin, props.win.instanceID);
+    el.setAttribute('data-wash-instance', cid);
     // window_id lets per-window shell built-ins (the <wash-app-display>
     // video decoder) find their video channel via the display-window
     // registry. Backward-compatible: existing app elements ignore it.
@@ -69,11 +72,11 @@ export function FloatingWindow(props: WindowProps) {
     // dispatches them. Without this, apps that set up their
     // listeners inside onMount (e.g. wash-fm) miss the wash:state
     // event entirely and never initialize their FE state.
-    queueMicrotask(() => registerMountedElement(props.win.instanceID, el));
+    queueMicrotask(() => registerMountedElement(cid, el));
     window.wash.focusWindow(props.win.windowID);
   });
   onCleanup(() => {
-    unregisterMountedElement(props.win.instanceID);
+    unregisterMountedElement(compoundInstanceId(props.win.origin, props.win.instanceID));
   });
 
   const onTitlebarPointerDown = (ev: PointerEvent) => {

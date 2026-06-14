@@ -52,6 +52,16 @@ export function parseInstanceId(id: string): { origin: Origin; bare: string } {
   return { origin: id.slice(0, i), bare: id.slice(i + 1) };
 }
 
+/**
+ * compoundChannelId keys a per-connection numeric channel id by origin
+ * for the shared accumulator maps (bundle bytes, raw subscribers), so
+ * channel 5 on two routers don't collide in one module-level map. Always
+ * prefixed (even for LOCAL) — these are internal keys, never app-facing.
+ */
+export function compoundChannelId(origin: Origin, channelID: number): string {
+  return origin + SEP + channelID;
+}
+
 // ---- Registry ----
 
 const clientByOrigin = new Map<Origin, RouterClient>();

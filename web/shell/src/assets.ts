@@ -3,7 +3,7 @@
 // through here, and ChannelUnbind triggers a dynamic import.
 
 import { wlog } from './diag';
-import { type Origin, LOCAL_ORIGIN } from './clients';
+import { type Origin, LOCAL_ORIGIN, compoundInstanceId, compoundChannelId } from './clients';
 
 interface Pending {
   channelID: number;
@@ -16,10 +16,12 @@ interface Pending {
   origin: Origin;
 }
 
-// Keyed by instance_id — the router announces which channel maps to
-// which instance via ShellChannelBind {kind:"bundle", instance_id}.
-const pendingByInstance = new Map<string, Pending>();
-const instanceByChannel = new Map<number, string>();
+// Keyed by COMPOUND ids (origin-tagged) — the router announces which
+// channel maps to which instance via ShellChannelBind {kind:"bundle",
+// instance_id}, and channel/instance ids are per-connection, so two
+// routers' bundle channels must not collide in these shared maps.
+const pendingByInstance = new Map<string, Pending>(); // compoundInstanceId → Pending
+const instanceByChannel = new Map<string, string>(); // compoundChannelId → compoundInstanceId
 
 // beginBundle registers a fresh accumulator for instanceID waiting on
 // channelID. Returns the promise that resolves once the import has
@@ -32,8 +34,9 @@ export function beginBundle(channelID: number, instanceID: string, origin: Origi
     reject = rej;
   });
   const p: Pending = { channelID, chunks: [], resolve, reject, promise, origin };
-  pendingByInstance.set(instanceID, p);
-  instanceByChannel.set(channelID, instanceID);
+  const ik = compoundInstanceId(origin, instanceID);
+  pendingByInstance.set(ik, p);
+  instanceByChannel.set(compoundChannelId(origin, channelID), ik);
   return promise;
 }
 
@@ -64,10 +67,10 @@ function runImport(url: string, origin: Origin): Promise<void> {
 // pushBundleBytes accumulates raw frames arriving on a bundle channel.
 // Returns true if the bytes were consumed, false otherwise (which the
 // caller treats as a normal raw-channel frame).
-export function pushBundleBytes(channelID: number, bytes: Uint8Array): boolean {
-  const instanceID = instanceByChannel.get(channelID);
-  if (instanceID == null) return false;
-  const p = pendingByInstance.get(instanceID);
+export function pushBundleBytes(channelID: number, bytes: Uint8Array, origin: Origin = LOCAL_ORIGIN): boolean {
+  const ik = instanceByChannel.get(compoundChannelId(origin, channelID));
+  if (ik == null) return false;
+  const p = pendingByInstance.get(ik);
   if (!p) return false;
   p.chunks.push(bytes);
   return true;
@@ -77,10 +80,11 @@ export function pushBundleBytes(channelID: number, bytes: Uint8Array): boolean {
 // channel closes. Concatenates the chunks, builds a blob URL, dynamic-
 // imports it (the bundle's customElements.define side effect makes
 // the element tag live), then resolves the waiting promise.
-export function finishBundle(channelID: number): void {
-  const instanceID = instanceByChannel.get(channelID);
+export function finishBundle(channelID: number, origin: Origin = LOCAL_ORIGIN): void {
+  const ck = compoundChannelId(origin, channelID);
+  const instanceID = instanceByChannel.get(ck);
   if (instanceID == null) return;
-  instanceByChannel.delete(channelID);
+  instanceByChannel.delete(ck);
   const p = pendingByInstance.get(instanceID);
   if (!p) return;
   pendingByInstance.delete(instanceID);

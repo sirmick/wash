@@ -1,54 +1,79 @@
 // RouterClient — one connection to one wash router, plus the
 // per-connection dispatch state that hangs off it.
 //
-// Today the shell talks to exactly one router (the local one). The
-// remote-apps work (docs/REMOTE.md, R2) makes the browser a client of
-// N routers — its local one plus one per remote host reached over an
-// `ssh -L` tunnel. This class is the unit that gets instantiated once
-// per connection: each owns its own transport (Conn), its credit
-// ledger, and the maps that are keyed by router-assigned ids
-// (channel/instance/window). Those ids are per-connection — channel 42
-// on router A is unrelated to channel 42 on router B — so they must
-// live on the client, not at module scope.
-//
-// M1a (this commit) extracts the class and moves the connection-scoped
-// state onto it, still with a single instance. M1b introduces the
-// multi-client registry; M1c threads origin through the dispatch so a
-// second router's windows can be composited into the same desktop.
+// The shell is a client of N routers (docs/REMOTE.md, R2): its local one
+// plus one per remote host over an `ssh -L` tunnel. Each connection is a
+// RouterClient: it owns its transport (Conn), its credit ledger, and the
+// maps keyed by router-assigned ids (channel/instance/window) — ids that
+// are scoped per-connection, so they live on the client, never at module
+// scope. Its dispatch is built by a per-origin handler factory so every
+// incoming message is tagged with this client's origin.
 
 import { Conn, type CtrlHandler, type RawHandler, type SocketFactory } from './ws';
 import { CreditTracker } from './credit';
+import { type Origin } from './clients';
+
+export interface ClientHandlers {
+  onCtrl: CtrlHandler;
+  onRaw: RawHandler;
+}
 
 export class RouterClient {
+  /** Which router this client talks to (LOCAL for the shell's own). */
+  readonly origin: Origin;
   /** Transport to this router (one wash frame per binary message). */
   readonly conn: Conn;
   /** Per-channel flow-control ledger for this connection (QOS.md §5). */
   readonly credit: CreditTracker;
 
-  // ---- Per-connection dispatch state ----
-  // All keyed by router-assigned ids, which are scoped to this
-  // connection. channelOwner records which window an open raw channel
-  // is rooted at, for cleanup on window/channel teardown.
+  // ---- Per-connection dispatch state (bare router ids; this instance is
+  // the namespace, so channel 5 here ≠ channel 5 on another client). ----
   readonly channelOwner = new Map<number, number>(); // channel_id → window_id
-  // Declared instances, so window.create can resolve element by id.
   readonly instances = new Map<string, { element: string; surface: string }>();
-  // Resolves once an instance's bundle has imported (customElements.define
-  // has run). The router can race window.create ahead of the bundle, so
-  // the create path awaits this.
   readonly bundleReady = new Map<string, Promise<void>>();
-  // Window ids already first-sighted, for viewport auto-relocation of
-  // freshly-spawned windows.
   readonly seenWindowIDs = new Set<number>();
-  // Outstanding clipboard.get round-trips (req_id → resolver).
   readonly pendingClipboardGets = new Map<number, (text: string) => void>();
 
-  constructor(transport: string | SocketFactory, onCtrl: CtrlHandler, onRaw: RawHandler) {
-    // credit's callback sends over this.conn, which is assigned just
-    // below — the callback never fires until the first raw frame is
-    // absorbed, well after construction, so the forward reference is safe.
+  constructor(
+    origin: Origin,
+    transport: string | SocketFactory,
+    makeHandlers: (client: RouterClient) => ClientHandlers,
+  ) {
+    this.origin = origin;
+    // credit's callback sends over this.conn, assigned just below — it
+    // never fires until the first raw frame is absorbed, well after
+    // construction, so the forward reference is safe.
     this.credit = new CreditTracker((channelID, n) => {
       this.conn.sendCtrl({ t: 'channel.credit', ch: channelID, n });
     });
+    // makeHandlers closes over `this`; the returned closures aren't invoked
+    // until messages arrive (post-construction), so reading this.conn etc.
+    // inside them is safe.
+    const { onCtrl, onRaw } = makeHandlers(this);
     this.conn = new Conn(transport, onCtrl, onRaw);
+  }
+
+  // waitForBundle resolves once an instance's bundle has imported (and its
+  // customElements.define has run). The channel.bind for the bundle can
+  // arrive just after app.declared, so poll briefly for the promise.
+  waitForBundle(instanceID: string): Promise<void> {
+    const existing = this.bundleReady.get(instanceID);
+    if (existing) return existing;
+    return new Promise((resolve, reject) => {
+      const start = Date.now();
+      const check = () => {
+        const p = this.bundleReady.get(instanceID);
+        if (p) {
+          p.then(resolve, reject);
+          return;
+        }
+        if (Date.now() - start > 10_000) {
+          reject(new Error(`bundle for ${instanceID} not announced within 10s`));
+          return;
+        }
+        setTimeout(check, 25);
+      };
+      check();
+    });
   }
 }
