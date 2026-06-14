@@ -34,8 +34,10 @@ import (
 	"embed"
 	"io/fs"
 	"log"
+	"sync"
 
 	"github.com/sirmick/wash/internal/apps/registry"
+	"github.com/sirmick/wash/internal/pty"
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/wire"
 )
@@ -137,6 +139,72 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 		}
 		return conn.SendAppMsg(map[string]any{"kind": "remote.state", "state": req.State})
 	})
+
+	// Interactive SSH auth (docs/REMOTE.md §6.1, mechanism a). The
+	// supervisor is BatchMode-only and reports a host down with code
+	// "auth" when no usable key is in the agent; wash-connect owns the
+	// fix. auth_begin spawns ssh-add in a pty bound to this window's
+	// channel; the FE renders an xterm on it so the user types their key
+	// passphrase once. ssh-add loads the key into the agent and exits;
+	// the FE then re-issues connect, which now succeeds under BatchMode.
+	// The supervisor never sees a prompt — it stays the sole tunnel owner.
+	registerAuth(bus)
+}
+
+// authState holds the single in-flight ssh-add session. wash-connect is
+// singleton (one window), so one session at a time; a new auth_begin
+// supersedes any prior.
+var authState struct {
+	mu      sync.Mutex
+	session *pty.Session
+}
+
+func registerAuth(bus *sdk.Bus) {
+	sdk.HandleVoid(bus, "auth_begin", func(conn *sdk.Conn, _ string, req authBeginReq) error {
+		// Supersede any prior session so a retried auth doesn't leak a pty.
+		authState.mu.Lock()
+		if authState.session != nil {
+			authState.session.CloseWithReason("superseded")
+			authState.session = nil
+		}
+		authState.mu.Unlock()
+
+		argv := []string{"ssh-add"}
+		if req.KeyFile != "" {
+			argv = append(argv, req.KeyFile)
+		}
+		// OpenChannel can't run on the SDK read goroutine — spawn off it.
+		go func() {
+			sess, err := pty.Open(context.Background(), conn, conn.WindowID(), 80, 24, argv, pty.WithWashEnv,
+				func(s *pty.Session, reason string) {
+					authState.mu.Lock()
+					if authState.session == s {
+						authState.session = nil
+					}
+					authState.mu.Unlock()
+					_ = conn.SendAppMsg(map[string]any{"kind": "auth_closed", "host": req.Host, "reason": reason})
+				})
+			if err != nil {
+				log.Printf("wash-connect: ssh-add open: %v", err)
+				_ = conn.SendAppMsg(map[string]any{"kind": "auth_error", "host": req.Host, "msg": err.Error()})
+				return
+			}
+			authState.mu.Lock()
+			authState.session = sess
+			authState.mu.Unlock()
+			_ = conn.SendAppMsg(map[string]any{"kind": "auth_opened", "host": req.Host, "channel_id": uint64(sess.ID())})
+		}()
+		return nil
+	})
+	sdk.HandleVoid(bus, "auth_cancel", func(_ *sdk.Conn, _ string, _ struct{}) error {
+		authState.mu.Lock()
+		if authState.session != nil {
+			authState.session.CloseWithReason("cancelled")
+			authState.session = nil
+		}
+		authState.mu.Unlock()
+		return nil
+	})
 }
 
 type connectReq struct {
@@ -146,6 +214,13 @@ type connectReq struct {
 
 type disconnectReq struct {
 	Host string `json:"host"`
+}
+
+// authBeginReq starts an ssh-add session for Host. KeyFile is optional —
+// empty runs `ssh-add` (default keys), set runs `ssh-add <keyfile>`.
+type authBeginReq struct {
+	Host    string `json:"host"`
+	KeyFile string `json:"key_file"`
 }
 
 // stateRelay captures the `state` field of the supervisor's StateService

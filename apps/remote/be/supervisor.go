@@ -101,18 +101,31 @@ func (s *supervisor) run(ctx context.Context, host string, localPort, remotePort
 
 	endpoint := fmt.Sprintf("ws://127.0.0.1:%d/ws", localPort)
 	up := make(chan struct{}, 1)
+	// tail accumulates the last few stderr lines so an exit-with-error
+	// can be classified (auth refusal vs. anything else). Guarded — the
+	// two scan goroutines write it concurrently.
+	var tailMu sync.Mutex
+	var tail []string
 	// The remote wash-router logs "listening on <addr>" once bound; ssh
 	// forwards that to our stdout/stderr. That line is our readiness
 	// signal — tunnel + router are live, the shell can attach.
 	scan := func(r io.Reader) {
 		sc := bufio.NewScanner(r)
 		for sc.Scan() {
-			if strings.Contains(sc.Text(), "listening on ") {
+			line := sc.Text()
+			if strings.Contains(line, "listening on ") {
 				select {
 				case up <- struct{}{}:
 				default:
 				}
+				continue
 			}
+			tailMu.Lock()
+			tail = append(tail, line)
+			if len(tail) > 10 {
+				tail = tail[len(tail)-10:]
+			}
+			tailMu.Unlock()
 		}
 	}
 	go scan(stdout)
@@ -132,11 +145,41 @@ func (s *supervisor) run(ctx context.Context, host string, localPort, remotePort
 		return // user-initiated disconnect; disconnect() already removed the host
 	default:
 	}
+	tailMu.Lock()
+	stderrTail := strings.Join(tail, "\n")
+	tailMu.Unlock()
 	msg := ""
 	if err != nil {
 		msg = err.Error()
 	}
-	s.setHost(host, HostState{Host: host, Origin: host, Status: StatusDown, Error: msg})
+	hs := HostState{Host: host, Origin: host, Status: StatusDown, Error: msg}
+	// Classify auth refusal so wash-connect can offer the ssh-add widget
+	// (docs/REMOTE.md §6.1). BatchMode never prompts, so a missing/locked
+	// key surfaces as "Permission denied (publickey…)" and ssh exits 255.
+	if isAuthFailure(stderrTail) {
+		hs.Code = "auth"
+		if msg == "" {
+			hs.Error = "ssh authentication failed"
+		}
+	}
+	s.setHost(host, hs)
+}
+
+// isAuthFailure reports whether ssh's stderr indicates an authentication
+// refusal (vs. a network/host error). These are the BatchMode signatures
+// for "no usable credential" — the case the ssh-add widget fixes.
+func isAuthFailure(stderr string) bool {
+	for _, sig := range []string{
+		"Permission denied",
+		"No more authentication methods",
+		"Too many authentication failures",
+		"Host key verification failed",
+	} {
+		if strings.Contains(stderr, sig) {
+			return true
+		}
+	}
+	return false
 }
 
 // disconnect tears down a host's ssh process (which takes the remote

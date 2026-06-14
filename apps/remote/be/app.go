@@ -63,6 +63,12 @@ type HostState struct {
 	// (the local end of the ssh -L forward). Empty until status == up.
 	LocalEndpoint string `json:"local_endpoint,omitempty"`
 	Error         string `json:"error,omitempty"`
+	// Code classifies a StatusDown. "auth" means SSH refused
+	// authentication under BatchMode (no usable key in the agent) — the
+	// signal for wash-connect to offer its ssh-add auth widget and retry
+	// (docs/REMOTE.md §6.1, mechanism a). The supervisor itself never
+	// prompts; it stays BatchMode-only. Empty for non-auth failures.
+	Code string `json:"code,omitempty"`
 }
 
 // State is the published state shape.

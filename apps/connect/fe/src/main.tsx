@@ -12,7 +12,7 @@
 
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { defineWashApp, tokens } from '@wash/ui';
+import { defineWashApp, tokens, Terminal } from '@wash/ui';
 
 // ----- wire types -----
 
@@ -24,6 +24,9 @@ interface HostState {
   status: HostStatus;
   local_endpoint?: string;
   error?: string;
+  // code classifies a "down" status. "auth" means SSH refused auth under
+  // BatchMode — the cue to offer the ssh-add widget (docs/REMOTE.md §6.1).
+  code?: string;
 }
 
 interface RemoteState {
@@ -75,6 +78,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // catalogs is a per-origin snapshot kept in a plain object so a catalog
   // arriving (or emptying) re-renders the matching host's app list.
   const [catalogs, setCatalogs] = createSignal<Record<string, CatalogApp[]>>({});
+  // Interactive SSH auth (mechanism a): when the BE opens an ssh-add pty
+  // it sends the raw channel id; we mount a Terminal on it. auth tracks
+  // the host being authenticated + the channel; null = no auth in flight.
+  const [auth, setAuth] = createSignal<{ host: string; channel: number } | null>(null);
 
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
 
@@ -105,13 +112,35 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   const handleBE = (m: any) => {
-    if (m?.kind === 'remote.state') {
-      const st = (m.state ?? {}) as RemoteState;
-      const list = Array.isArray(st.hosts) ? st.hosts : [];
-      setHosts(list);
-      reconcileAttachments(list);
+    switch (m?.kind) {
+      case 'remote.state': {
+        const st = (m.state ?? {}) as RemoteState;
+        const list = Array.isArray(st.hosts) ? st.hosts : [];
+        setHosts(list);
+        reconcileAttachments(list);
+        break;
+      }
+      case 'auth_opened':
+        // The ssh-add pty is live on m.channel_id — mount its terminal.
+        setAuth({ host: String(m.host ?? ''), channel: Number(m.channel_id) });
+        break;
+      case 'auth_closed': {
+        // ssh-add exited (key loaded, or the user gave up). Tear the
+        // terminal down and retry the connect — if the key loaded, the
+        // BatchMode connect now succeeds; if not, we land back on "auth".
+        const a = auth();
+        setAuth(null);
+        if (a?.host) send({ kind: 'connect', host: a.host });
+        break;
+      }
+      case 'auth_error':
+        setAuth(null);
+        break;
     }
   };
+
+  const beginAuth = (host: string) => send({ kind: 'auth_begin', host });
+  const cancelAuth = () => { send({ kind: 'auth_cancel' }); setAuth(null); };
 
   onMount(() => {
     const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail);
@@ -180,15 +209,36 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                   apps={launchable(h.origin)}
                   onDisconnect={() => disconnect(h.host)}
                   onLaunch={(appID) => launch(h.origin, appID)}
+                  onAuth={() => beginAuth(h.host)}
                 />
               )}
             </For>
           </div>
         </Show>
       </div>
+
+      <Show when={auth()}>
+        <AuthOverlay host={auth()!.host} channel={auth()!.channel} onCancel={cancelAuth} />
+      </Show>
     </div>
   );
 };
+
+// AuthOverlay hosts the ssh-add pty terminal (docs/REMOTE.md §6.1). The
+// user types their key passphrase here; ssh-add loads it into the agent
+// and exits, which the BE reports as auth_closed (driving the retry).
+const AuthOverlay: Component<{ host: string; channel: number; onCancel: () => void }> = (props) => (
+  <div style={authOverlayStyle} data-testid="connect-auth">
+    <div style={authHeaderStyle}>
+      <span>Unlock SSH key for <strong>{props.host}</strong> — run <code>ssh-add</code></span>
+      <button type="button" onClick={props.onCancel} style={disconnectBtnStyle} data-testid="connect-auth-cancel" title="Cancel">✕</button>
+    </div>
+    <div style={authTermStyle}>
+      <Terminal channelId={props.channel} initialCols={80} initialRows={24} contextMenu={false} />
+    </div>
+    <div style={authHintStyle}>Enter your key passphrase above. When the key loads, the connection retries automatically.</div>
+  </div>
+);
 
 const Header: Component = () => (
   <div style={headerStyle}>
@@ -207,8 +257,10 @@ const HostCard: Component<{
   apps: CatalogApp[];
   onDisconnect: () => void;
   onLaunch: (appID: string) => void;
+  onAuth: () => void;
 }> = (props) => {
   const color = () => hostColor(props.host.origin);
+  const needsAuth = () => props.host.status === 'down' && props.host.code === 'auth';
   return (
     <div style={{ ...hostCardStyle, 'border-left': `3px solid ${color()}` }} data-testid={`connect-host-${props.host.origin}`}>
       <div style={hostHeaderStyle}>
@@ -217,6 +269,11 @@ const HostCard: Component<{
         <span style={hostStatusStyle} data-testid="connect-host-status" data-status={props.host.status}>
           {statusLabel(props.host.status)}
         </span>
+        <Show when={needsAuth()}>
+          <button type="button" onClick={props.onAuth} style={authBtnStyle} data-testid="connect-authenticate">
+            Authenticate
+          </button>
+        </Show>
         <button type="button" onClick={props.onDisconnect} style={disconnectBtnStyle} title="Disconnect" data-testid="connect-disconnect">
           ✕
         </button>
@@ -273,6 +330,7 @@ const SpriteIcon: Component<{ name: string; size: number }> = (props) => (
 // ----- styles -----
 
 const shellStyle: JSX.CSSProperties = {
+  position: 'relative',
   display: 'grid',
   'grid-template-rows': 'auto 1fr',
   height: '100%',
@@ -383,6 +441,50 @@ const disconnectBtnStyle: JSX.CSSProperties = {
   font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
   padding: '0 2px',
   'line-height': 1,
+};
+
+const authBtnStyle: JSX.CSSProperties = {
+  background: 'transparent',
+  color: tokens.accentAmber,
+  border: `1px solid ${tokens.accentAmber}`,
+  'border-radius': `${tokens.radiusSm}px`,
+  cursor: 'pointer',
+  font: `600 ${tokens.fontSizeSm} ${tokens.fontSans}`,
+  padding: '2px 8px',
+  'white-space': 'nowrap',
+};
+
+const authOverlayStyle: JSX.CSSProperties = {
+  position: 'absolute',
+  inset: '0',
+  background: tokens.bgWindow,
+  display: 'flex',
+  'flex-direction': 'column',
+  'z-index': 10,
+};
+
+const authHeaderStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'center',
+  gap: '8px',
+  padding: '10px 14px',
+  'border-bottom': `1px solid ${tokens.borderMenu}`,
+  background: tokens.bgMenu,
+  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+};
+
+const authTermStyle: JSX.CSSProperties = {
+  flex: 1,
+  'min-height': 0,
+  background: '#000',
+  padding: '6px',
+};
+
+const authHintStyle: JSX.CSSProperties = {
+  padding: '8px 14px',
+  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  color: tokens.fgMuted,
+  'border-top': `1px solid ${tokens.borderMenu}`,
 };
 
 const errorStyle: JSX.CSSProperties = {

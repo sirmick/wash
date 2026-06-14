@@ -57,3 +57,33 @@ func TestBuildSSHArgsForwardMatchesListen(t *testing.T) {
 		t.Errorf("listen port wrong: %v", args)
 	}
 }
+
+// TestIsAuthFailure pins the classification that drives wash-connect's
+// ssh-add widget (docs/REMOTE.md §6.1): auth refusals get code "auth" (so
+// the FE offers Authenticate), while network/host errors do not (no key
+// will fix them).
+func TestIsAuthFailure(t *testing.T) {
+	auth := []string{
+		"user@host: Permission denied (publickey).",
+		"Permission denied (publickey,password).",
+		"Received disconnect from 10.0.0.5 port 22:2: Too many authentication failures",
+		"Host key verification failed.",
+		"ssh: No more authentication methods to try.",
+	}
+	for _, s := range auth {
+		if !isAuthFailure(s) {
+			t.Errorf("expected auth failure for %q", s)
+		}
+	}
+	notAuth := []string{
+		"ssh: connect to host host port 22: Connection refused",
+		"ssh: Could not resolve hostname nope: Name or service not known",
+		"channel_setup_fwd_listener_tcpip: cannot listen to port: 40001",
+		"",
+	}
+	for _, s := range notAuth {
+		if isAuthFailure(s) {
+			t.Errorf("did not expect auth failure for %q", s)
+		}
+	}
+}
