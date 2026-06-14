@@ -1044,7 +1044,10 @@ unit-test: test-app fe-unit component
 e2e-test: test-app
 	cd e2e && $(PNPM) install --ignore-workspace --silent
 	cd e2e && $(PNPM) exec playwright install chromium
-	cd e2e && $(PNPM) test
+	# WASH_E2E_SKIP_VM=1: mirror CI (which has no VM artifacts) — the heavy
+	# KVM-backed net-vm tiers run under `make net-test` / `make e2e-vm`, not
+	# the standalone suite, so a local VM image can't make push diverge + flake.
+	cd e2e && WASH_E2E_SKIP_VM=1 $(PNPM) test
 
 # screenshots: regenerate the docs/screenshots/*.png marketing shots by posing
 # real app windows in a throwaway router and capturing them with Playwright.

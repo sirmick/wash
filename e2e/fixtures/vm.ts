@@ -24,6 +24,14 @@ const CHROME = join(REPO_ROOT, 'out', 'vm-chrome'); // make vm-chrome
 
 /** Returns a human reason to skip, or null when the VM gate can run here. */
 export function vmSkipReason(): string | null {
+  // The standalone e2e suite (`make e2e-test` / `make push`) mirrors CI,
+  // which never has VM artifacts — so skip the heavy KVM-backed VM tiers
+  // there even when images happen to be present locally (otherwise they run
+  // only under push, diverge from CI, and flake on VM/NM boot timing). They
+  // run under `make net-test` / `make e2e-vm`, which don't set this.
+  if (process.env.WASH_E2E_SKIP_VM === '1') {
+    return 'WASH_E2E_SKIP_VM=1 (VM tiers run under make net-test / make e2e-vm)';
+  }
   // Host prerequisites first (not buildable): KVM + qemu.
   if (!existsSync('/dev/kvm')) return '/dev/kvm not available (VM e2e needs KVM)';
   try {
@@ -39,7 +47,7 @@ export function vmSkipReason(): string | null {
     !existsSync(INITRAMFS) ||
     !existsSync(join(CHROME, 'chrome.js'))
   ) {
-    return 'VM e2e artifacts not built — run `./test.sh --vm` (or `make e2e-vm`)';
+    return 'VM e2e artifacts not built — run `make e2e-vm` (or `make net-test`)';
   }
   return null;
 }
