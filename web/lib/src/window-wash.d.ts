@@ -69,6 +69,19 @@ interface WashGlobals {
   sendAppMsgTo(recipient: WashRecipient, data: unknown): void;
   catalog(): WashCatalogApp[];
   onCatalog(cb: (apps: WashCatalogApp[]) => void): () => void;
+  // Remote-host APIs (docs/REMOTE.md §6.1), used by wash-connect.
+  // catalogFor returns the apps a connected origin advertises (LOCAL or a
+  // remote host reached over an ssh -L tunnel); onRemoteCatalog fires when
+  // any remote catalog changes (apps empty on disconnect). launchOn asks
+  // the router at `origin` to spawn appID — the only launch path for a
+  // remote host, which runs --no-session. attachRemote/detachRemote open
+  // and tear down the second connection the supervisor's endpoint points
+  // at, compositing the host's windows into this desktop.
+  catalogFor(origin: string): WashCatalogApp[];
+  onRemoteCatalog(cb: (ev: { origin: string; apps: WashCatalogApp[] }) => void): () => void;
+  launchOn(origin: string, appID: string): void;
+  attachRemote(origin: string, url: string): void;
+  detachRemote(origin: string): void;
   // App-supplied settings panels. loadSettingsPanel fetches+imports the
   // panel bundle so its custom element is defined; the promise resolves
   // once it's mountable. Used by the settings app to host panels other

@@ -25,7 +25,7 @@ GOFLAGS += -cover -coverpkg=github.com/sirmick/wash/...
 endif
 
 OUT     := out
-BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-disks wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net wash-washamp wash-music wash-radio wash-audio wash-remote
+BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-disks wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net wash-washamp wash-music wash-radio wash-audio wash-remote wash-connect
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -131,6 +131,9 @@ SESSION_STAMP  := $(SESSION_ASSETS)/.stamp
 ABOUT_ASSETS   := apps/about/be/assets
 ABOUT_STAMP    := $(ABOUT_ASSETS)/.stamp
 
+CONNECT_ASSETS := apps/connect/be/assets
+CONNECT_STAMP  := $(CONNECT_ASSETS)/.stamp
+
 TEST_ASSETS    := apps/test/be/assets
 TEST_STAMP     := $(TEST_ASSETS)/.stamp
 
@@ -226,6 +229,10 @@ web-session: web-deps
 .PHONY: web-about
 web-about: web-deps
 	@$(PNPM) --filter @wash/app-about run build
+
+.PHONY: web-connect
+web-connect: web-deps
+	@$(PNPM) --filter @wash/app-connect run build
 
 .PHONY: web-test
 web-test: web-deps
@@ -325,6 +332,9 @@ $(SESSION_STAMP): web-session
 $(ABOUT_STAMP): web-about
 	$(call embed_dist,apps/about/fe/dist,$(ABOUT_ASSETS))
 
+$(CONNECT_STAMP): web-connect
+	$(call embed_dist,apps/connect/fe/dist,$(CONNECT_ASSETS))
+
 $(TEST_STAMP): web-test
 	$(call embed_dist,apps/test/fe/dist,$(TEST_ASSETS))
 
@@ -406,7 +416,7 @@ $(OUT)/wash-fm $(OUT)/wash-edit $(OUT)/wash-vscode $(OUT)/wash-vscode-workbench 
 $(OUT)/wash-settings $(OUT)/wash-top $(OUT)/wash-disks $(OUT)/wash-journal \
 $(OUT)/wash-syslogs $(OUT)/wash-services $(OUT)/wash-packages $(OUT)/wash-net \
 $(OUT)/wash-washamp $(OUT)/wash-music $(OUT)/wash-radio $(OUT)/wash-netd \
-$(OUT)/wash-display: vendor-sync
+$(OUT)/wash-connect $(OUT)/wash-display: vendor-sync
 
 # ----- go stage -----
 
@@ -418,6 +428,9 @@ $(OUT)/wash-session: $(SESSION_STAMP) | $(OUT)
 
 $(OUT)/wash-about: $(ABOUT_STAMP) | $(OUT)
 	$(call go_build,$@,apps/about/be/cmd)
+
+$(OUT)/wash-connect: $(CONNECT_STAMP) | $(OUT)
+	$(call go_build,$@,apps/connect/be/cmd)
 
 $(OUT)/wash-test: $(TEST_STAMP) | $(OUT)
 	$(call go_build,$@,apps/test/be/cmd)
