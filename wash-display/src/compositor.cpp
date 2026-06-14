@@ -487,9 +487,14 @@ struct Popup {
 };
 
 // Popups by their video-popup channel id, so injected input (which has no
-// wash win to key on) can reach the popup surface. Compositor-thread only
-// (popup_map and inject_input both run there) → no lock needed.
-static std::map<uint32_t, Popup*> g_popup_reg;
+// wash win to key on) can reach the popup surface. Surface-based so both
+// xdg_popups and X11 override-redirect menus share one registry.
+// Compositor-thread only (map + inject_input both run there) → no lock.
+struct PopupTarget {
+    struct wlr_surface* surface = nullptr;
+    Server* server = nullptr;
+};
+static std::map<uint32_t, PopupTarget> g_popup_reg;
 
 // popup_root_and_offset walks the popup parent chain to the owning
 // toplevel, accumulating each popup's geometry offset, and returns that
@@ -549,7 +554,7 @@ void popup_map(struct wl_listener* listener, void* /*data*/) {
     }
     popup_send_geometry(p);
     p->geo_sent = true;
-    g_popup_reg[p->chan] = p; // so injected input can find this surface
+    g_popup_reg[p->chan] = PopupTarget{p->popup->base->surface, p->server};
     wlr_log(WLR_INFO, "wash-display: popup mapped parent_win=%u chan=%u off=%d,%d",
             root, p->chan, ox, oy);
 }
@@ -689,10 +694,73 @@ struct XSurface {
     bool surface_listeners = false; // map/unmap/commit currently wired
 
     WindowSink sink;
+
+    // Override-redirect popup mode (menus/tooltips): streams to a parent
+    // window's overlay over a video-popup channel instead of being a wash
+    // window (DISPLAY.md §12 M3b). Mutually exclusive with sink.win.
+    bool is_popup = false;
+    uint32_t popup_chan = 0;
+    int sent_x = 0, sent_y = 0;
 };
+
+// The most-recently-mapped normal X toplevel — the fallback parent for an
+// override-redirect menu that doesn't set transient-for.
+static XSurface* g_active_x_toplevel = nullptr;
+
+// xpopup_send_geometry writes the offset control frame (< 45 bytes JSON).
+static void xpopup_send_geometry(XSurface* x) {
+    json g = {{"x", x->sent_x}, {"y", x->sent_y}};
+    std::string s = g.dump();
+    x->server->conn->write_channel(x->popup_chan, (const uint8_t*)s.data(), s.size());
+}
+
+// xpopup_map maps an override-redirect X window as a parent-window overlay.
+// Parent = transient-for if set+mapped, else the active toplevel; offset is
+// the menu's X-root position minus the parent's (X shares one root coord
+// space, so this is the offset within the parent window's content frame).
+static bool xpopup_map(XSurface* x) {
+    XSurface* parent = nullptr;
+    if (x->xsurf->parent && x->xsurf->parent->data)
+        parent = static_cast<XSurface*>(x->xsurf->parent->data);
+    if (!parent || parent->is_popup || !parent->sink.win)
+        parent = g_active_x_toplevel;
+    if (!parent || !parent->sink.win) {
+        wlr_log(WLR_INFO, "wash-display: X11 override-redirect with no parent toplevel — dropping");
+        return false;
+    }
+    uint32_t w = x->xsurf->width  > 0 ? (uint32_t)x->xsurf->width  : 1;
+    uint32_t h = x->xsurf->height > 0 ? (uint32_t)x->xsurf->height : 1;
+    wlr_xwayland_surface_configure(x->xsurf, x->xsurf->x, x->xsurf->y,
+                                   (uint16_t)w, (uint16_t)h);
+    x->popup_chan = x->server->conn->open_channel_kind(parent->sink.win, "video-popup");
+    if (!x->popup_chan) {
+        wlr_log(WLR_INFO, "wash-display: X11 popup channel open failed (no shell?)");
+        return false;
+    }
+    x->sent_x = x->xsurf->x - parent->xsurf->x;
+    x->sent_y = x->xsurf->y - parent->xsurf->y;
+    xpopup_send_geometry(x);
+    g_popup_reg[x->popup_chan] = PopupTarget{x->xsurf->surface, x->server};
+    wlr_log(WLR_INFO, "wash-display: X11 popup mapped parent_win=%u chan=%u off=%d,%d",
+            parent->sink.win, x->popup_chan, x->sent_x, x->sent_y);
+    return true;
+}
+
+static void xpopup_close(XSurface* x) {
+    if (!x->popup_chan) return;
+    g_popup_reg.erase(x->popup_chan);
+    std::string s = json{{"close", true}}.dump();
+    x->server->conn->write_channel(x->popup_chan, (const uint8_t*)s.data(), s.size());
+    x->popup_chan = 0;
+}
 
 void xsurface_map(struct wl_listener* listener, void* /*data*/) {
     XSurface* x = wl_container_of(listener, x, map);
+    // Override-redirect = a menu/tooltip → overlay on the parent window.
+    if (x->xsurf->override_redirect) {
+        x->is_popup = xpopup_map(x);
+        return;
+    }
     const char* title = x->xsurf->title;
     std::string ttl = title ? title : "X11 Window";
     uint32_t w = x->xsurf->width  > 0 ? (uint32_t)x->xsurf->width  : (uint32_t)kScreenW;
@@ -703,16 +771,39 @@ void xsurface_map(struct wl_listener* listener, void* /*data*/) {
                                    (uint16_t)w, (uint16_t)h);
     sink_open(x->sink, x->server->conn, ttl, w, h);
     register_win(x->sink.win, WinRef::X11, x);
+    g_active_x_toplevel = x; // fallback parent for override-redirect menus
 }
 
 void xsurface_unmap(struct wl_listener* listener, void* /*data*/) {
     XSurface* x = wl_container_of(listener, x, unmap);
+    if (x->is_popup) {
+        xpopup_close(x);
+        x->is_popup = false;
+        return;
+    }
+    if (g_active_x_toplevel == x) g_active_x_toplevel = nullptr;
     unregister_win(x->sink.win);
     sink_close(x->sink, x->server->conn);
 }
 
 void xsurface_commit(struct wl_listener* listener, void* /*data*/) {
     XSurface* x = wl_container_of(listener, x, commit);
+    if (x->is_popup) {
+        if (!x->popup_chan) return;
+        if (!x->sink.cap.capture(x->xsurf->surface, x->server->renderer)) return;
+        if (!x->sink.enc_ready || x->sink.enc.width() != x->sink.cap.width() ||
+            x->sink.enc.height() != x->sink.cap.height()) {
+            x->sink.enc_ready = x->sink.enc.init(x->sink.cap.width(), x->sink.cap.height());
+            if (!x->sink.enc_ready) return;
+        }
+        std::vector<uint8_t> frame = x->sink.enc.encode_frame(
+            x->sink.cap.data(), x->sink.cap.stride(), x->sink.cap.width(),
+            x->sink.cap.height(), x->sink.cap.dirty_x, x->sink.cap.dirty_y,
+            x->sink.cap.dirty_w, x->sink.cap.dirty_h, now_ms());
+        if (!frame.empty())
+            x->server->conn->write_channel(x->popup_chan, frame.data(), frame.size());
+        return;
+    }
     sink_frame(x->sink, x->server->conn, x->xsurf->surface, x->server->renderer);
 }
 
@@ -742,15 +833,26 @@ static void xsurface_drop_surface_listeners(XSurface* x) {
 
 void xsurface_dissociate(struct wl_listener* listener, void* /*data*/) {
     XSurface* x = wl_container_of(listener, x, dissociate);
-    unregister_win(x->sink.win);
-    sink_close(x->sink, x->server->conn);
+    if (x->is_popup) {
+        xpopup_close(x);
+        x->is_popup = false;
+    } else {
+        if (g_active_x_toplevel == x) g_active_x_toplevel = nullptr;
+        unregister_win(x->sink.win);
+        sink_close(x->sink, x->server->conn);
+    }
     xsurface_drop_surface_listeners(x);
 }
 
 void xsurface_destroy(struct wl_listener* listener, void* /*data*/) {
     XSurface* x = wl_container_of(listener, x, destroy);
-    unregister_win(x->sink.win);
-    sink_close(x->sink, x->server->conn);
+    if (x->is_popup) {
+        xpopup_close(x);
+    } else {
+        if (g_active_x_toplevel == x) g_active_x_toplevel = nullptr;
+        unregister_win(x->sink.win);
+        sink_close(x->sink, x->server->conn);
+    }
     xsurface_drop_surface_listeners(x);
     wl_list_remove(&x->associate.link);
     wl_list_remove(&x->dissociate.link);
@@ -765,10 +867,13 @@ void server_new_xwayland_surface(struct wl_listener* listener, void* data) {
     auto* x = new XSurface();
     x->server = server;
     x->xsurf = xsurf;
+    // Lets an override-redirect menu resolve its parent toplevel's wash win
+    // via xsurf->parent->data (xpopup_map).
+    xsurf->data = x;
 
     // associate/dissociate bracket the inner wlr_surface's validity;
-    // destroy is the X window going away. (override_redirect popups are
-    // treated as plain windows in v1 — role/popup mapping is a follow-up.)
+    // destroy is the X window going away. Override-redirect surfaces map as
+    // parent-window overlays (xsurface_map branches on override_redirect).
     x->associate.notify = xsurface_associate;
     wl_signal_add(&xsurf->events.associate, &x->associate);
     x->dissociate.notify = xsurface_dissociate;
@@ -884,8 +989,8 @@ static void inject_input(const json& data) {
     if (uint32_t pc = data.value("popup_chan", 0U); pc) {
         auto it = g_popup_reg.find(pc);
         if (it == g_popup_reg.end()) return;
-        surface = it->second->popup->base->surface;
-        srv = it->second->server;
+        surface = it->second.surface;
+        srv = it->second.server;
     } else {
         uint32_t win = data.value("win", 0U);
         if (!resolve_win(win, &surface, &srv)) return;
@@ -1023,6 +1128,7 @@ void handle_set_selection(struct wl_listener* listener, void* /*data*/) {
     const char* chosen = pick_mime(src);
     if (!chosen) return;
     std::string washmime = std::strncmp(chosen, "image/", 6) == 0 ? chosen : "text/plain";
+    wlr_log(WLR_INFO, "wash-display: clipboard guest->wash mime=%s", chosen);
 
     int fds[2];
     if (pipe(fds) != 0) return;
@@ -1113,6 +1219,7 @@ static void install_wash_source(Server* srv, const std::string& mime) {
     }
     srv->wash_source = &w->base;
     wlr_seat_set_selection(srv->seat, &w->base, wl_display_next_serial(srv->display));
+    wlr_log(WLR_INFO, "wash-display: clipboard wash->guest offered mime=%s", mime.c_str());
 }
 
 // post_clip_offer marshals a clipboard.changed (reader thread) onto the
