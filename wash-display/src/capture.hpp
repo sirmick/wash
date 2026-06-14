@@ -16,6 +16,8 @@
 
 #include <cstdint>
 #include <vector>
+#include <map>
+#include <cstdint>
 
 struct wlr_surface;
 struct wlr_renderer;
@@ -48,8 +50,9 @@ public:
     int height() const { return h_; }
     int stride() const { return stride_; }
 
-    // Dirty rectangle for this frame. v1 captures full-surface, so this
-    // is the whole surface; damage-tracked sub-rects are a follow-up.
+    // Dirty rectangle for this frame, in cropped-buffer coords. The whole
+    // tree is composited, but only the union of the surfaces that actually
+    // changed (see seq_) is encoded/sent — M7 tree-aware damage.
     int dirty_x = 0, dirty_y = 0, dirty_w = 0, dirty_h = 0;
 
 private:
@@ -60,6 +63,11 @@ private:
     // (DISPLAY.md §11 — never alloc per frame).
     void* render_buf_ = nullptr;
     int rb_w_ = 0, rb_h_ = 0;
+    // Per-surface last-seen commit seq, keyed by surface pointer. A surface
+    // contributes to the dirty rect only when its seq advances, so a static
+    // surface's stale last-commit damage (e.g. a browser's root/CSD layer,
+    // damaged once at startup) doesn't force a full-frame encode every frame.
+    std::map<struct wlr_surface*, uint32_t> seq_;
 };
 
 } // namespace wash

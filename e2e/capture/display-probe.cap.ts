@@ -147,6 +147,30 @@ test.describe('display-probe', () => {
     await captureApp(page, router, 'gnome-calculator', 'gnome-calculator', { timeout: 30_000 });
   });
 
+  // Dynamic check: damage tracking only matters for UPDATES (the first frame
+  // is always full). Type into the calculator and confirm the typed digits +
+  // result land via partial frames on the persistent FE canvas.
+  test('calc-dynamic (incremental damage)', async ({ page, router }) => {
+    test.setTimeout(60_000);
+    if (!existsSync('/usr/bin/gnome-calculator')) test.skip(true, 'gnome-calculator missing');
+    await bootWithTerminal(page, router);
+    await page.keyboard.type('gnome-calculator\n', { delay: 8 });
+    await router.waitForLog(/window\.create .*element="wash-app-display"/, 30_000);
+    const display = win(page, 'wash-app-display').first();
+    await expect(display).toBeVisible({ timeout: 20_000 });
+    await settle(page, 2000);
+    const w = await display.evaluate((n) => Number(n.getAttribute('data-wash-window')));
+    await page.evaluate((id) => (window as any).wash.focusWindow(id), w);
+    await display.click({ position: { x: 180, y: 250 } }); // focus the calc surface
+    await settle(page, 500);
+    await page.keyboard.type('1337*2', { delay: 120 });
+    await settle(page, 800);
+    await page.keyboard.press('Enter'); // 1337*2 = 2674
+    await settle(page, 1500);
+    await display.screenshot({ path: join(SHOTS, 'calc-dynamic.win.png') });
+    dumpLog(router, 'calc-dynamic');
+  });
+
   test('testguest — wayland (xdg_popup)', async ({ page, router }) => {
     test.setTimeout(60_000);
     await bootWithTerminal(page, router);

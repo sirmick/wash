@@ -295,8 +295,9 @@ static void sink_frame(WindowSink& s, WireConn* conn, struct wlr_surface* surfac
 
     conn->write_channel(s.video_chan, frame.data(), frame.size());
     if ((++s.seq % 60) == 1) {
-        wlr_log(WLR_INFO, "wash-display: win=%u frame seq=%u (%zu B) %dx%d",
-                s.win, s.seq, frame.size(), s.cap.width(), s.cap.height());
+        wlr_log(WLR_INFO, "wash-display: win=%u frame seq=%u (%zu B) %dx%d dirty=%dx%d@%d,%d",
+                s.win, s.seq, frame.size(), s.cap.width(), s.cap.height(),
+                s.cap.dirty_w, s.cap.dirty_h, s.cap.dirty_x, s.cap.dirty_y);
     }
 }
 
@@ -390,12 +391,12 @@ void output_frame(struct wl_listener* listener, void* /*data*/) {
         if (sig == t->sink.tree_sig) continue; // nothing committed → skip
         t->sink.tree_sig = sig;
         // Crop to xdg window geometry (drops the CSD shadow margin); the tree
-        // composite then pulls in subsurface content. force_full because a
-        // subsurface change leaves the root's damage region empty.
+        // composite pulls in subsurface content, and capture computes the
+        // dirty rect from the per-surface seq it tracks (M7 damage).
         struct wlr_box geo{};
         wlr_xdg_surface_get_geometry(t->xdg_toplevel->base, &geo);
         sink_frame(t->sink, out->server->conn, root, out->server->renderer,
-                   geo.x, geo.y, geo.width, geo.height, /*force_full=*/true);
+                   geo.x, geo.y, geo.width, geo.height);
     }
 }
 

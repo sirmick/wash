@@ -50,32 +50,87 @@ namespace wash {
 extern struct wlr_allocator* g_capture_allocator;
 
 namespace {
-// Composite the surface tree (root + subsurfaces) into the render target.
-// wlr_surface_for_each_surface walks the whole tree giving each surface's
-// offset (sx,sy) in root-surface coords; we draw each textured surface at
-// (sx,sy) minus the crop origin, so subsurface content (e.g. a browser's
-// web-content surface) lands in the buffer. The render pass clips to the
-// target, so the root's transparent CSD shadow margin (outside the crop)
-// is dropped. Surfaces without a texture (not yet committed) are skipped.
+// Composite the surface tree (root + subsurfaces) into the render target AND
+// accumulate the dirty rect. wlr_surface_for_each_surface walks the whole tree
+// giving each surface's offset (sx,sy) in root-surface coords; we draw each
+// textured surface at (sx,sy) minus the crop origin, so subsurface content
+// (e.g. a browser's web-content surface) lands in the buffer. The render pass
+// clips to the target, so the root's transparent CSD shadow margin (outside
+// the crop) is dropped. Surfaces without a texture are skipped.
+//
+// Damage: a surface contributes to the dirty rect only when its commit seq
+// advances since we last saw it (`seq`), so a static layer's stale last-commit
+// damage doesn't inflate every frame. A seq advance with empty effective
+// damage falls back to the surface's full bounds (a buffer swap without an
+// explicit damage request must still be redrawn). A never-before-seen surface
+// flags `any_new` so the caller takes a full frame (layout changed).
 struct CompositeCtx {
     struct wlr_render_pass* pass;
     int off_x;   // crop origin x in root-surface coords
     int off_y;   // crop origin y
+    int buf_w;   // target bounds (for clamping damage)
+    int buf_h;
     int drawn;   // count of textured surfaces composited
+    std::map<struct wlr_surface*, uint32_t>* prev; // last frame's seqs (read)
+    std::map<struct wlr_surface*, uint32_t>* next; // this frame's seqs (write)
+    bool any_new;          // a surface not previously seen → full frame
+    bool have_dmg;         // accumulator below is valid
+    int dx0, dy0, dx1, dy1; // dirty bbox in buffer coords
 };
 void composite_surface_cb(struct wlr_surface* s, int sx, int sy, void* data) {
     auto* c = static_cast<CompositeCtx*>(data);
     struct wlr_texture* tex = wlr_surface_get_texture(s);
     if (!tex) return;
+    const int ox = sx - c->off_x, oy = sy - c->off_y;
     struct wlr_render_texture_options o;
     std::memset(&o, 0, sizeof o);
     o.texture = tex;
-    o.dst_box.x = sx - c->off_x;
-    o.dst_box.y = sy - c->off_y;
+    o.dst_box.x = ox;
+    o.dst_box.y = oy;
     o.dst_box.width = (int)tex->width;
     o.dst_box.height = (int)tex->height;
     wlr_render_pass_add_texture(c->pass, &o);
     c->drawn++;
+
+    // Did this surface change since last frame? Record into `next` regardless
+    // (the caller swaps next→prev, which prunes surfaces no longer in the tree
+    // and so is safe against surface-pointer reuse).
+    const uint32_t cur = s->current.seq;
+    (*c->next)[s] = cur;
+    auto it = c->prev->find(s);
+    bool changed;
+    if (it == c->prev->end()) { changed = true; c->any_new = true; }
+    else changed = (it->second != cur);
+    if (!changed) return;
+
+    // Its dirty region (surface-local) → buffer coords. Fall back to the
+    // surface's full bounds when the client committed without explicit damage.
+    int x0, y0, x1, y1;
+    pixman_region32_t dmg;
+    pixman_region32_init(&dmg);
+    wlr_surface_get_effective_damage(s, &dmg);
+    if (pixman_region32_not_empty(&dmg)) {
+        const pixman_box32_t* e = pixman_region32_extents(&dmg);
+        x0 = e->x1 + ox; y0 = e->y1 + oy; x1 = e->x2 + ox; y1 = e->y2 + oy;
+    } else {
+        x0 = ox; y0 = oy; x1 = ox + (int)tex->width; y1 = oy + (int)tex->height;
+    }
+    pixman_region32_fini(&dmg);
+
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > c->buf_w) x1 = c->buf_w;
+    if (y1 > c->buf_h) y1 = c->buf_h;
+    if (x1 <= x0 || y1 <= y0) return;
+    if (!c->have_dmg) {
+        c->have_dmg = true;
+        c->dx0 = x0; c->dy0 = y0; c->dx1 = x1; c->dy1 = y1;
+    } else {
+        if (x0 < c->dx0) c->dx0 = x0;
+        if (y0 < c->dy0) c->dy0 = y0;
+        if (x1 > c->dx1) c->dx1 = x1;
+        if (y1 > c->dy1) c->dy1 = y1;
+    }
 }
 } // namespace
 
@@ -151,10 +206,25 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
     struct wlr_render_pass* pass = wlr_renderer_begin_buffer_pass(r, render_buf, &pass_opts);
     if (!pass) return false;
 
-    CompositeCtx ctx{ pass, src_x, src_y, 0 };
+    std::map<struct wlr_surface*, uint32_t> next;
+    CompositeCtx ctx{ pass, src_x, src_y, w, h, 0, &seq_, &next, false, false, 0, 0, 0, 0 };
     wlr_surface_for_each_surface(surface, composite_surface_cb, &ctx);
     if (!wlr_render_pass_submit(pass)) return false;
     if (ctx.drawn == 0) return false; // nothing textured yet
+    seq_.swap(next); // adopt this frame's seqs (prunes vanished surfaces)
+
+    // Decide the dirty rect from the tree walk. A resize/first-frame, a
+    // newly-appeared surface, or an explicit force_full means the whole
+    // window; otherwise the union of the surfaces that actually changed. If
+    // something committed but nothing visibly changed, skip the frame.
+    if (full_capture || ctx.any_new) {
+        dirty_x = 0; dirty_y = 0; dirty_w = w; dirty_h = h;
+    } else if (ctx.have_dmg) {
+        dirty_x = ctx.dx0; dirty_y = ctx.dy0;
+        dirty_w = ctx.dx1 - ctx.dx0; dirty_h = ctx.dy1 - ctx.dy0;
+    } else {
+        return false;
+    }
 
     // Grow-only CPU buffer (no per-frame alloc) and read the pixels back.
     stride_ = w * 4;
@@ -177,10 +247,11 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
     wlr_renderer_end(r);
     if (!ok) return false;
 
-    // RGBX -> BGRX: swap the R and B channels for the BGRA encoder.
-    for (int y = 0; y < h; y++) {
+    // RGBX -> BGRX: swap R and B for the BGRA encoder, over the dirty rect
+    // only (the encoder reads just that sub-rect; the rest of buf_ is unused).
+    for (int y = dirty_y; y < dirty_y + dirty_h; y++) {
         uint8_t* row = buf_.data() + (size_t)y * stride_;
-        for (int x = 0; x < w; x++) {
+        for (int x = dirty_x; x < dirty_x + dirty_w; x++) {
             uint8_t* px = row + (size_t)x * 4;
             uint8_t t = px[0];
             px[0] = px[2];
@@ -190,41 +261,6 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
 
     w_ = w;
     h_ = h;
-
-    // Damage tracking: encode/send only the changed sub-rect. On a full
-    // capture (first frame or resize) the whole surface is dirty. Else use
-    // the surface's effective damage (surface-local; matches buffer coords
-    // at scale 1) bounding box, clamped to the surface. Empty damage with
-    // no size change means nothing visibly changed → skip the frame
-    // (return false) so we don't re-encode/transmit an identical image.
-    if (full_capture) {
-        dirty_x = 0;
-        dirty_y = 0;
-        dirty_w = w;
-        dirty_h = h;
-        return true;
-    }
-
-    pixman_region32_t damage;
-    pixman_region32_init(&damage);
-    wlr_surface_get_effective_damage(surface, &damage);
-    const pixman_box32_t* ext = pixman_region32_extents(&damage);
-    // Damage is surface-local (full buffer); shift into crop-local coords
-    // (subtract the crop origin) and clamp to the cropped frame.
-    int x0 = ext->x1 - src_x; if (x0 < 0) x0 = 0;
-    int y0 = ext->y1 - src_y; if (y0 < 0) y0 = 0;
-    int x1 = ext->x2 - src_x; if (x1 > w) x1 = w;
-    int y1 = ext->y2 - src_y; if (y1 > h) y1 = h;
-    bool empty = !pixman_region32_not_empty(&damage) || x1 <= x0 || y1 <= y0;
-    pixman_region32_fini(&damage);
-
-    if (empty) {
-        return false; // nothing changed; caller skips this frame
-    }
-    dirty_x = x0;
-    dirty_y = y0;
-    dirty_w = x1 - x0;
-    dirty_h = y1 - y0;
     return true;
 }
 

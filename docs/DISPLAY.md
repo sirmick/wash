@@ -509,10 +509,25 @@ Two changes close this:
 Verified by `display-probe.cap.ts`: Firefox `about:robots` renders fully
 (0% → 100% non-blank), with every existing app (xclock/xeyes/xlogo/
 gnome-calculator/GTK guest both backends/3-window montage) still green.
-**Deferred:** tree-aware damage tracking — the xdg path now full-frame
-encodes on any change (the X11 path keeps damage rects); fine for v1, a
-bandwidth optimization later. (Firefox-over-X11 maps a 1×1 window without a
-resizing WM — a Firefox quirk, unrelated to capture.)
+(Firefox-over-X11 maps a 1×1 window without a resizing WM — a Firefox quirk,
+unrelated to capture.)
+
+**Tree-aware damage.** The whole tree is composited each frame, but only the
+union of the surfaces that *actually changed* is encoded/sent. `capture.cpp`
+keeps a per-surface `current.seq` map (`SurfaceCapture::seq_`): a surface
+contributes to the dirty rect only when its seq advances, so a static layer's
+stale last-commit damage (e.g. a browser's root/CSD surface, damaged once at
+startup) never inflates the frame. A seq advance with empty effective damage
+falls back to that surface's full bounds (a buffer swap without an explicit
+damage request still redraws); a never-seen surface forces a full frame
+(layout changed); the map is rebuilt each walk so vanished surfaces are
+pruned (pointer-reuse safe). The WebP encoder already encodes only the dirty
+sub-rect, and the FE composites it onto its persistent canvas. Measured on
+the calculator probe (`calc-dynamic`): typing produces ~100 B caret frames
+(`2×29`) and small input/result rects (`72×29`, `326×64`) instead of a
+~3.5 KB full 360×497 frame each keystroke — 10 full frames out of 157.
+*Further optimization (deferred):* read back only the dirty rect, not the
+whole buffer (the read-back is still full; only encode/transmit is cropped).
 
 ### Out of scope here — M6 throughput
 WebRTC/VP9 (for Firefox scroll/video parity) + audio service hookup are a separate,
