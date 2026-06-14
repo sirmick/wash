@@ -231,18 +231,20 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
     size_t need = (size_t)stride_ * (size_t)h;
     if (buf_.size() < need) buf_.resize(need);
 
-    // Read back as XBGR8888 (-> GL_RGBA in the gles2 format table), NOT
-    // XRGB8888 (-> GL_BGRA_EXT): the latter needs GL_EXT_read_format_bgra,
-    // which Mesa's surfaceless/llvmpipe GLES2 context does not advertise, so
-    // glReadPixels would fail ("missing GL_EXT_read_format_bgra extension").
-    // GL_RGBA read-back is mandatory and always available. The bytes then
-    // land as R,G,B,X; the WebP encoder wants B,G,R,X (WebPEncodeBGRA), so
-    // we swap R<->B in place below.
+    // Read back only the dirty sub-rect (src=dst=dirty origin, full stride →
+    // the pixels land at their real position in buf_; the rest of buf_ keeps
+    // last frame's bytes, which the encoder doesn't read). On a full frame the
+    // rect is the whole window, so this is the previous behaviour.
+    // Format note: XBGR8888 (-> GL_RGBA), NOT XRGB8888 (-> GL_BGRA_EXT): the
+    // latter needs GL_EXT_read_format_bgra, which Mesa's surfaceless/llvmpipe
+    // GLES2 context does not advertise, so glReadPixels would fail. GL_RGBA is
+    // mandatory and always available; bytes land R,G,B,X and the WebP encoder
+    // wants B,G,R,X (WebPEncodeBGRA), so we swap R<->B below.
     if (!wlr_renderer_begin_with_buffer(r, render_buf)) return false;
     bool ok = wlr_renderer_read_pixels(
         r, DRM_FORMAT_XBGR8888,
-        (uint32_t)stride_, (uint32_t)w, (uint32_t)h,
-        /*src_x*/ 0, /*src_y*/ 0, /*dst_x*/ 0, /*dst_y*/ 0,
+        (uint32_t)stride_, (uint32_t)dirty_w, (uint32_t)dirty_h,
+        /*src_x*/ dirty_x, /*src_y*/ dirty_y, /*dst_x*/ dirty_x, /*dst_y*/ dirty_y,
         buf_.data());
     wlr_renderer_end(r);
     if (!ok) return false;

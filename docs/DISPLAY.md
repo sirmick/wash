@@ -526,8 +526,15 @@ sub-rect, and the FE composites it onto its persistent canvas. Measured on
 the calculator probe (`calc-dynamic`): typing produces ~100 B caret frames
 (`2×29`) and small input/result rects (`72×29`, `326×64`) instead of a
 ~3.5 KB full 360×497 frame each keystroke — 10 full frames out of 157.
-*Further optimization (deferred):* read back only the dirty rect, not the
-whole buffer (the read-back is still full; only encode/transmit is cropped).
+
+The read-back is also cropped to the dirty rect: `wlr_renderer_read_pixels`
+takes the rect as src+dst at the same origin with the full destination
+stride, so the pixels land at their real position in the pooled CPU buffer
+and the rest keeps last frame's bytes (which the encoder never reads). The
+R↔B swap is likewise dirty-rect-only. So a partial frame now does a
+dirty-sized glReadPixels + swap + WebP encode — the whole per-frame cost
+scales with damage, not window size. (Full frames — first map, resize, a
+new subsurface — read the whole window, as before.)
 
 ### Out of scope here — M6 throughput
 WebRTC/VP9 (for Firefox scroll/video parity) + audio service hookup are a separate,
