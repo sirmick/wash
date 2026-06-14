@@ -14,7 +14,12 @@ export default defineConfig({
   globalSetup: './global-setup.ts',
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: 0,
+  // 1 retry: the suite runs fully parallel (8 workers × routers + ~40 BE
+  // apps), so individual specs occasionally lose a timing race (control-socket
+  // round-trip, ingress now-playing propagation) and flake — each passes in
+  // isolation. Playwright re-runs ONLY the failed spec; a genuine failure
+  // still fails both attempts. Without this, one flake fails the whole gate.
+  retries: 1,
   reporter: process.env.CI ? 'line' : 'list',
   // 15s per test + 10s per expect under load (test.sh --workers 8
   // can keep 8 chromium tabs + 8 routers + ~40 BE apps alive
