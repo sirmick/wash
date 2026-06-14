@@ -339,7 +339,7 @@ Every tagged release ships native packages for all four distros.
 These URLs always resolve to the latest:
 
 A real native install your OS verifies and tracks — **no `curl … | sh`**.
-`dnf`/`apk` install straight from the URL; `apt` wants a local file first:
+Only `dnf` installs straight from a URL; `apt` and `apk` want the file local first:
 
 ```bash
 # Ubuntu 24.04
@@ -353,8 +353,9 @@ sudo apt install -y ./wash-debian-13-amd64.deb
 # Fedora 40 — installs from the URL directly
 sudo dnf install -y https://github.com/sirmick/wash/releases/latest/download/wash-fedora-40-amd64.rpm
 
-# Alpine 3.21 — installs from the URL directly
-sudo apk add --allow-untrusted https://github.com/sirmick/wash/releases/latest/download/wash-alpine-3.21-amd64.apk
+# Alpine 3.21 (apk wants a local file, like apt)
+wget https://github.com/sirmick/wash/releases/latest/download/wash-alpine-3.21-amd64.apk
+sudo apk add --allow-untrusted ./wash-alpine-3.21-amd64.apk
 ```
 
 These are **stable filenames** (no version) that always resolve to the
