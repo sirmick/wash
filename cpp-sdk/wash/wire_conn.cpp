@@ -1,11 +1,72 @@
 #include "wire_conn.hpp"
 
 #include <cstdio>
+#include <cstdint>
+#include <string>
 #include <vector>
 #include <sys/socket.h>
 #include <unistd.h>
 
 namespace wash {
+
+namespace {
+// Minimal RFC 4648 base64. The router base64s clipboard byte fields on the
+// JSON wire (encoding/json's default for []byte), so the C++ side must
+// match — JSON has no native byte type. (See [[wash_cbor_json_pitfall]].)
+constexpr char kB64[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+std::string b64_encode(const std::vector<uint8_t>& in) {
+    std::string out;
+    out.reserve(((in.size() + 2) / 3) * 4);
+    size_t i = 0;
+    for (; i + 3 <= in.size(); i += 3) {
+        uint32_t n = (in[i] << 16) | (in[i + 1] << 8) | in[i + 2];
+        out += kB64[(n >> 18) & 63];
+        out += kB64[(n >> 12) & 63];
+        out += kB64[(n >> 6) & 63];
+        out += kB64[n & 63];
+    }
+    if (size_t rem = in.size() - i; rem == 1) {
+        uint32_t n = in[i] << 16;
+        out += kB64[(n >> 18) & 63];
+        out += kB64[(n >> 12) & 63];
+        out += "==";
+    } else if (rem == 2) {
+        uint32_t n = (in[i] << 16) | (in[i + 1] << 8);
+        out += kB64[(n >> 18) & 63];
+        out += kB64[(n >> 12) & 63];
+        out += kB64[(n >> 6) & 63];
+        out += '=';
+    }
+    return out;
+}
+
+std::vector<uint8_t> b64_decode(const std::string& in) {
+    auto val = [](char c) -> int {
+        if (c >= 'A' && c <= 'Z') return c - 'A';
+        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+        if (c >= '0' && c <= '9') return c - '0' + 52;
+        if (c == '+') return 62;
+        if (c == '/') return 63;
+        return -1; // padding / whitespace / invalid
+    };
+    std::vector<uint8_t> out;
+    out.reserve(in.size() / 4 * 3);
+    int acc = 0, bits = 0;
+    for (char c : in) {
+        int v = val(c);
+        if (v < 0) continue; // skip '=' and any stray bytes
+        acc = (acc << 6) | v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back((uint8_t)((acc >> bits) & 0xFF));
+        }
+    }
+    return out;
+}
+} // namespace
 
 WireConn::~WireConn() {
     stop();
@@ -148,6 +209,23 @@ void WireConn::reader_loop() {
                 uint32_t win = m.value("win", 0U);
                 window_cmd_handler_(t, win, 0, 0);
             }
+        } else if (t == "clipboard.data") {
+            // Reply to clipboard_get (req/reply). data is base64 on the wire.
+            uint64_t rid = m.value("req_id", 0ULL);
+            std::lock_guard<std::mutex> lk(clip_mu_);
+            auto it = clip_pending_.find(rid);
+            if (it != clip_pending_.end()) {
+                it->second.ok = true;
+                it->second.done = true;
+                it->second.mime = m.value("mime", "");
+                it->second.data = b64_decode(m.value("data", ""));
+                clip_cv_.notify_all();
+            }
+        } else if (t == "clipboard.changed") {
+            // Some other app set the clipboard; claim the guest selection so
+            // a paste pulls wash's content (DISPLAY.md §7).
+            if (clipboard_changed_handler_)
+                clipboard_changed_handler_(m.value("mime", ""));
         } else if (t == "window.focus" || t == "window.unfocus") {
             // Router → app: the WM gave/took keyboard focus for `win`.
             // Focus is router-authoritative (docs/DISPLAY.md §6): the
@@ -167,6 +245,7 @@ void WireConn::reader_loop() {
     // Wake any blocked callers so they fail instead of hanging.
     { std::lock_guard<std::mutex> lk(win_mu_); win_cv_.notify_all(); }
     { std::lock_guard<std::mutex> lk(chan_mu_); chan_cv_.notify_all(); }
+    { std::lock_guard<std::mutex> lk(clip_mu_); clip_cv_.notify_all(); }
 }
 
 uint32_t WireConn::create_window(const std::string& title, uint32_t w, uint32_t h,
@@ -275,6 +354,34 @@ void WireConn::remove_subscriber(const std::string& instanceID) {
 bool WireConn::publish_env(const json& env) {
     json m = {{"t", "env.publish"}, {"env", env}};
     return write_json(CH_EVENT, m);
+}
+
+void WireConn::clipboard_set(const std::string& mime, const std::vector<uint8_t>& data) {
+    json m = {{"t", "clipboard.set"}, {"mime", mime}, {"data", b64_encode(data)}};
+    write_json(CH_EVENT, m);
+}
+
+bool WireConn::clipboard_get(std::string& mime, std::vector<uint8_t>& data) {
+    if (!alive_.load()) return false;
+    uint64_t req = next_req();
+    { std::lock_guard<std::mutex> lk(clip_mu_); clip_pending_[req] = ClipReply{}; }
+
+    json m = {{"t", "clipboard.get"}, {"req_id", req}};
+    if (!write_json(CH_EVENT, m)) {
+        std::lock_guard<std::mutex> lk(clip_mu_);
+        clip_pending_.erase(req);
+        return false;
+    }
+
+    std::unique_lock<std::mutex> lk(clip_mu_);
+    clip_cv_.wait(lk, [&] { return clip_pending_[req].done || !alive_.load(); });
+    ClipReply r = std::move(clip_pending_[req]);
+    clip_pending_.erase(req);
+    lk.unlock();
+    if (!r.ok) return false;
+    mime = std::move(r.mime);
+    data = std::move(r.data);
+    return true;
 }
 
 void WireConn::note_wayland_display(const std::string& wd) {

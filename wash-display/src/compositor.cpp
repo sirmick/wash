@@ -21,12 +21,14 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <fcntl.h>
 #include <linux/input-event-codes.h>
 #include <map>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unistd.h>
 #include <unordered_map>
 #include <vector>
@@ -132,6 +134,15 @@ struct Server {
     // gets keys WITH correct modifier state (shift/ctrl/etc.).
     struct wl_listener vkbd_key;
     struct wl_listener vkbd_modifiers;
+
+    // Clipboard bridge (DISPLAY.md §7). request_set_selection accepts a
+    // guest taking the selection; set_selection fires on every change (incl.
+    // X11 via the xwm bridge) and mirrors guest→wash. wash_source is the
+    // data source we install for wash→guest paste — skipped when we see it
+    // come back through set_selection (avoids a copy loop).
+    struct wl_listener req_set_selection;
+    struct wl_listener set_selection;
+    struct wlr_data_source* wash_source = nullptr;
 
 #ifdef WASH_DISPLAY_XWAYLAND
     struct wlr_xwayland* xwayland = nullptr;
@@ -729,6 +740,8 @@ static void inject_input(const json& data) {
             bool down = e.value("state", std::string()) == "down";
             wlr_seat_pointer_notify_button(
                 seat, t, code, down ? WLR_BUTTON_PRESSED : WLR_BUTTON_RELEASED);
+            wlr_log(WLR_INFO, "wash-display: inject win=%u button %s %s", win,
+                    btn.c_str(), down ? "down" : "up");
             ptr_touched = true;
         } else if (ev == "axis") {
             ensure_enter(g_ptr_x, g_ptr_y);
@@ -759,6 +772,8 @@ static void inject_input(const json& data) {
                                ? WL_KEYBOARD_KEY_STATE_PRESSED
                                : WL_KEYBOARD_KEY_STATE_RELEASED;
                 wlr_keyboard_notify_key(&srv->vkbd, &ke);
+                wlr_log(WLR_INFO, "wash-display: inject win=%u key keycode=%u %s", win,
+                        kc, ke.state == WL_KEYBOARD_KEY_STATE_PRESSED ? "down" : "up");
             }
         }
         // "motion_rel" (pointer-lock / relative) is deferred — needs
@@ -778,6 +793,155 @@ void vkbd_handle_modifiers(struct wl_listener* listener, void* /*data*/) {
     Server* s = wl_container_of(listener, s, vkbd_modifiers);
     wlr_seat_set_keyboard(s->seat, &s->vkbd);
     wlr_seat_keyboard_notify_modifiers(s->seat, &s->vkbd.modifiers);
+}
+
+// --- clipboard bridge (DISPLAY.md §7) ------------------------------
+//
+// wash's clipboard is eager + router-held; Wayland/X11 selections are lazy
+// + owner-served. We bridge both directions reusing clipboard.set/get:
+//   guest→wash: a guest takes the selection → we read its bytes → clipboard.set
+//   wash→guest: clipboard.changed → install a data source that serves
+//               wash's bytes on demand (lazy) to whoever pastes.
+// X11 is automatic: wlroots' xwm bridges X11 CLIPBOARD ↔ the seat selection
+// once the seat is set, so handling the Wayland seat selection covers both.
+
+static Server* g_server = nullptr;          // set in run_compositor
+static std::mutex g_clip_mu;
+static std::vector<std::string> g_clip_offers; // pending wash→guest mimes
+
+// pick_mime returns the best-matching offered mime from a source, or null.
+static const char* pick_mime(struct wlr_data_source* src) {
+    const char* text = nullptr;
+    const char* image = nullptr;
+    // Iterate the wl_array by hand: the wl_array_for_each macro assigns
+    // void*->char** unchecked, which is an error under C++.
+    char** items = static_cast<char**>(src->mime_types.data);
+    size_t count = src->mime_types.size / sizeof(char*);
+    for (size_t i = 0; i < count; i++) {
+        const char* mt = items[i];
+        if (!mt) continue;
+        if (std::strcmp(mt, "text/plain;charset=utf-8") == 0) return mt; // best
+        if (!text && (std::strcmp(mt, "text/plain") == 0 ||
+                      std::strcmp(mt, "UTF8_STRING") == 0))
+            text = mt;
+        if (!image && std::strcmp(mt, "image/png") == 0) image = mt;
+    }
+    return text ? text : image;
+}
+
+// guest→wash: a guest (Wayland client, or X11 app via xwm) took ownership of
+// the selection. Read it through a pipe and store it in wash's clipboard.
+void handle_set_selection(struct wl_listener* listener, void* /*data*/) {
+    Server* s = wl_container_of(listener, s, set_selection);
+    struct wlr_data_source* src = s->seat->selection_source;
+    if (!src || src == s->wash_source) return; // empty, or our own → no loop
+    const char* chosen = pick_mime(src);
+    if (!chosen) return;
+    std::string washmime = std::strncmp(chosen, "image/", 6) == 0 ? chosen : "text/plain";
+
+    int fds[2];
+    if (pipe(fds) != 0) return;
+    // Hand the write end to the owner; it fills it asynchronously.
+    wlr_data_source_send(src, chosen, fds[1]);
+    close(fds[1]);
+    int rfd = fds[0];
+    WireConn* conn = s->conn;
+    std::thread([conn, washmime, rfd] {
+        std::vector<uint8_t> buf;
+        char tmp[4096];
+        ssize_t n;
+        while ((n = read(rfd, tmp, sizeof tmp)) > 0)
+            buf.insert(buf.end(), tmp, tmp + n);
+        close(rfd);
+        if (conn && !buf.empty()) conn->clipboard_set(washmime, buf);
+    }).detach();
+}
+
+// request_set_selection: a Wayland client asks to own the selection. Accept
+// it (X11 owners go straight through wlr_seat_set_selection via xwm, so they
+// don't pass here — but both end up firing set_selection above).
+void handle_request_set_selection(struct wl_listener* listener, void* data) {
+    Server* s = wl_container_of(listener, s, req_set_selection);
+    auto* ev = static_cast<struct wlr_seat_request_set_selection_event*>(data);
+    wlr_seat_set_selection(s->seat, ev->source, ev->serial);
+}
+
+// wash→guest: a data source backed by wash's clipboard. Its bytes are pulled
+// lazily (clipboard.get) only when a guest actually pastes.
+struct WashClipSource {
+    struct wlr_data_source base; // MUST be first (cast target)
+    Server* server = nullptr;
+};
+
+void wash_src_send(struct wlr_data_source* source, const char* /*mime*/, int32_t fd) {
+    auto* w = reinterpret_cast<WashClipSource*>(source);
+    WireConn* conn = w->server ? w->server->conn : nullptr;
+    // Pull + write off-thread: clipboard.get blocks on the router reply and
+    // the write can block on a slow consumer; neither should stall the
+    // compositor event loop.
+    std::thread([conn, fd] {
+        std::string mime;
+        std::vector<uint8_t> bytes;
+        if (conn && conn->clipboard_get(mime, bytes)) {
+            const uint8_t* p = bytes.data();
+            size_t left = bytes.size();
+            while (left) {
+                ssize_t n = write(fd, p, left);
+                if (n <= 0) break;
+                p += n;
+                left -= (size_t)n;
+            }
+        }
+        close(fd);
+    }).detach();
+}
+
+void wash_src_destroy(struct wlr_data_source* source) {
+    auto* w = reinterpret_cast<WashClipSource*>(source);
+    if (w->server && w->server->wash_source == source) w->server->wash_source = nullptr;
+    delete w;
+}
+
+static const struct wlr_data_source_impl wash_src_impl = {
+    /*send*/ wash_src_send, /*accept*/ nullptr, /*destroy*/ wash_src_destroy,
+    /*dnd_drop*/ nullptr, /*dnd_finish*/ nullptr, /*dnd_action*/ nullptr};
+
+// install_wash_source claims the seat selection with a source that serves
+// wash's clipboard, advertising a small mime set so common guests match.
+static void install_wash_source(Server* srv, const std::string& mime) {
+    if (!srv || !srv->seat) return;
+    auto* w = new WashClipSource();
+    wlr_data_source_init(&w->base, &wash_src_impl);
+    w->server = srv;
+    auto add = [&](const char* mt) {
+        char** p = static_cast<char**>(wl_array_add(&w->base.mime_types, sizeof(char*)));
+        if (p) *p = strdup(mt);
+    };
+    if (mime.rfind("image/", 0) == 0) {
+        add(mime.c_str());
+    } else {
+        add("text/plain;charset=utf-8");
+        add("text/plain");
+        add("UTF8_STRING");
+        add("STRING");
+        add("TEXT");
+    }
+    srv->wash_source = &w->base;
+    wlr_seat_set_selection(srv->seat, &w->base, wl_display_next_serial(srv->display));
+}
+
+// post_clip_offer marshals a clipboard.changed (reader thread) onto the
+// compositor thread, where the seat selection may be touched.
+static void post_clip_offer(const std::string& mime) {
+    {
+        std::lock_guard<std::mutex> lk(g_clip_mu);
+        g_clip_offers.push_back(mime);
+    }
+    if (g_cmd_pipe[1] >= 0) {
+        char b = 1;
+        ssize_t n = write(g_cmd_pipe[1], &b, 1);
+        (void)n;
+    }
 }
 
 // --- apply window commands on the compositor thread ----------------
@@ -865,6 +1029,14 @@ int on_cmd_pipe(int fd, uint32_t /*mask*/, void* /*data*/) {
         inputs.swap(g_inputs);
     }
     for (const auto& d : inputs) inject_input(d);
+
+    // wash→guest clipboard offers (claim the seat selection).
+    std::vector<std::string> offers;
+    {
+        std::lock_guard<std::mutex> lk(g_clip_mu);
+        offers.swap(g_clip_offers);
+    }
+    for (const auto& mime : offers) install_wash_source(g_server, mime);
     return 0;
 }
 
@@ -1007,6 +1179,18 @@ int run_compositor(WireConn& conn) {
         wl_signal_add(&server.vkbd.events.modifiers, &server.vkbd_modifiers);
         wlr_log(WLR_INFO, "wash-display: seat0 up (pointer+keyboard, vkbd=%d)",
                 (int)server.vkbd_inited);
+
+        // Clipboard bridge (DISPLAY.md §7). g_server lets the compositor-
+        // thread drain install the wash→guest source; the two seat
+        // listeners cover guest→wash (incl. X11 via xwm). clipboard.changed
+        // (reader thread) is marshalled to the compositor thread.
+        g_server = &server;
+        server.req_set_selection.notify = handle_request_set_selection;
+        wl_signal_add(&server.seat->events.request_set_selection,
+                      &server.req_set_selection);
+        server.set_selection.notify = handle_set_selection;
+        wl_signal_add(&server.seat->events.set_selection, &server.set_selection);
+        conn.on_clipboard_changed([](const std::string& mime) { post_clip_offer(mime); });
     } else {
         wlr_log(WLR_ERROR, "wash-display: seat create failed — input disabled");
     }
