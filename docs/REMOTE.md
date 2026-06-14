@@ -197,18 +197,48 @@ The services (notify/bulk/audio/priv/netd) are BE-only and ship **zero** FE.
 Consequence: **the sidebar has no element-collision problem** — A already owns
 the widget code; it just needs more data, tagged by host.
 
-### 6.1 New widget — Hosts / remote connections
+### 6.1 Connecting to hosts — the `wash-connect` app (supersedes the Hosts sidebar widget)
 
-A new sidebar widget is the user-facing face of the tunnel supervisor:
+**Decision (2026-06-13):** the connect UI is a dedicated window app
+**`wash-connect` (`com.wash.connect`)**, not a sidebar widget. A normal app is
+self-contained (its own BE+FE), has room for a real UI, follows the standard
+wash pattern, and avoids the session-FE coupling + BE-gateway + cross-element
+subscribe dance a sidebar widget needs. (The session BE gateway built in
+`fda1d8b` becomes unused — leave harmless or revert.)
 
-- Lists known/connected hosts with live state (`up` / `reconnecting` / `down`),
-  each shown in its assigned accent colour (§11).
-- Connect / disconnect / reconnect actions; "launch app on host" entry point.
-- Surfaces the supervisor's status so a frozen remote window has an explanation
-  ("hostB reconnecting…") rather than appearing hung.
+`wash-connect` is the user-facing face of the **`com.wash.remote` background
+supervisor** (§3/§9 — already built):
 
-This is also the natural home for host colour assignment and the launcher's
-remote section.
+- a sidebar button / launcher entry opens the `wash-connect` window;
+- **enter a hostname → Connect** → its BE sends `remote_connect{host}` cross-app
+  to `com.wash.remote`, which SSHes out and brings up B's router and reports a
+  local endpoint + status (`starting`/`up`/`reconnecting`/`down`), shown in the
+  host colour (§11);
+- once up, **`wash-connect` lists B's wash apps** (B's catalog, delivered over
+  the shell's second RouterClient) and **you pick one to launch**;
+- disconnect / reconnect per host.
+
+**Architecture:** `com.wash.remote` stays the **background** supervisor so remote
+sessions persist when you close the `wash-connect` window; `wash-connect` is its
+window front-end (BE subscribes to `com.wash.remote` cross-app). Host colour
+assignment + override (§11) moves into `wash-connect`.
+
+**Three shared backend bits make "list → launch" real (needed regardless of the
+UI surface):**
+1. **Un-guard B's catalog per-origin** (M1f guarded non-local catalogs off) so the
+   app can list the remote host's apps; expose it to the FE per origin.
+2. A **shell→router `ShellLaunch{app_id}` ctrl verb** + `window.wash.launchOn(
+   origin, appID)` — B runs `--no-session`, so there's no session BE to route a
+   launch through; the router grows a direct launch verb (it already spawns via
+   its control socket).
+3. **`window.wash.attachRemote(origin,url)` / `detachRemote(origin)`** + a
+   `wm.dropOrigin(origin)` so the FE attaches the endpoint the supervisor reports
+   and drops a host's windows on disconnect.
+
+*(Open question to confirm on resume: the recommended split is background
+supervisor + window front-end, as above. The simpler-but-non-persistent
+alternative is to fold the SSH supervision into `wash-connect`'s own BE and drop
+`com.wash.remote` — then closing the window drops all remote sessions.)*
 
 ### 6.2 Existing widgets become multi-host aware
 
@@ -349,12 +379,12 @@ Each host gets a stable **accent colour** drawn from a palette consistent with
 colour is the single thread tying the experience together:
 
 - **Window stripe** in the host colour (§5).
-- **Sidebar Hosts widget** entries and status dots in the host colour (§6.1).
+- **`wash-connect` app** host entries and status dots in the host colour (§6.1).
 - **Merged-widget entries** (notify/bulk/priv) tinted/tagged by host colour (§6.2).
 - **priv modal** banded in the host colour (§10).
 
 Colour assignment (deterministic hash of hostname → palette slot, with manual
-override in the Hosts widget) lives in the Hosts widget. Local (A) is neutral /
+override in `wash-connect`) lives in `wash-connect`. Local (A) is neutral /
 unstriped so "no stripe" reads unambiguously as "this machine."
 
 ---
@@ -416,7 +446,10 @@ router-log assertions on the BE).
 - **M2 — persistent B router + tunnel supervisor + launch flow.** Invoked from A;
   probe-over-SSH bundle (version-keyed cache); browser-refresh reattach;
   freeze/thaw on SSH blip.
-- **M3 — Hosts sidebar widget.** Connect/disconnect/status; host colour assignment;
+- **M3 — `wash-connect` window app.** Host input → connect → app list → launch;
+  per-host status + colour; fronts `com.wash.remote`. (Supersedes the Hosts
+  sidebar widget. Needs: catalog un-guard per-origin, `ShellLaunch` verb,
+  `window.wash.attachRemote/launchOn`.) Connect/disconnect/status; host colour;
   remote launcher entry.
 - **M4 — multi-host-aware widgets.** Notify/bulk/priv merged + colour-coded; priv
   prompt host attribution.
