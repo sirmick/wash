@@ -21,7 +21,8 @@
 
 import { test, expect, displaySkipReason } from '../fixtures/router';
 import type { Page, Locator } from '@playwright/test';
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -184,6 +185,48 @@ test.describe('display-probe', () => {
     // so (per display-guest.spec.ts) we don't gate the x11 variant on it.
     dumpLog(router, 'guest-x11');
   });
+
+  // Firefox is the subsurface stress test: it renders web content into
+  // wl_subsurfaces, so the wayland path exposes whether our single-root-
+  // surface capture sees subsurface content. The x11 path (Xwayland presents
+  // ONE composited buffer per window) is the control / workaround.
+  const FF = ['/opt/firefox/firefox', '/usr/bin/firefox-bin'].find((p) => existsSync(p));
+  for (const [name, prefix] of [
+    ['firefox-wayland', 'MOZ_ENABLE_WAYLAND=1'],
+    ['firefox-x11', 'MOZ_ENABLE_WAYLAND=0 GDK_BACKEND=x11'],
+  ] as const) {
+    test(name, async ({ page, router }) => {
+      test.setTimeout(120_000);
+      if (!FF) test.skip(true, 'native firefox not found (/opt/firefox/firefox)');
+      await bootWithTerminal(page, router);
+      // Fresh profile + -no-remote so FF maps its own toplevel. about:robots
+      // renders offline.
+      const prof = mkdtempSync(join(tmpdir(), 'ffprof-'));
+      await page.keyboard.type(
+        `${prefix} ${FF} -no-remote -profile ${prof} about:robots\n`, { delay: 8 });
+      await router.waitForLog(/window\.create .*element="wash-app-display"/, 45_000);
+      const display = win(page, 'wash-app-display').first();
+      await expect(display).toBeVisible({ timeout: 20_000 });
+      // Poll for real content (FF cold-starts slowly): distinguishes EVER
+      // paints (timing) from never (subsurface-capture gap).
+      let stats: any = null;
+      const t0 = Date.now();
+      for (let i = 0; i < 40; i++) {
+        await settle(page, 1000);
+        stats = await canvasStats(display).catch(() => null);
+        if (stats && stats.nonBlankPct > 5) break;
+      }
+      const secs = Math.round((Date.now() - t0) / 1000);
+      await display.screenshot({ path: join(SHOTS, `${name}.win.png`) });
+      await page.screenshot({ path: join(SHOTS, `${name}.full.png`) });
+      dumpLog(router, name);
+      const verdict = stats
+        ? `canvas ${stats.w}x${stats.h} uniqueColors=${stats.uniqueColors} nonBlank=${stats.nonBlankPct}% (after ${secs}s)`
+        : 'canvas: (probe failed)';
+      writeFileSync(join(SHOTS, `${name}.verdict.txt`), verdict + '\n');
+      console.log(`[${name}] ${verdict}`);
+    });
+  }
 
   test('montage — three X11 apps at once', async ({ page, router }) => {
     test.setTimeout(60_000);

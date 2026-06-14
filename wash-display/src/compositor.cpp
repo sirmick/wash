@@ -176,6 +176,8 @@ struct WindowSink {
     SurfaceCapture cap;      // pooled BGRA capture
     SurfaceEncoder enc;      // WebP framer
     bool enc_ready = false;
+    uint64_t tree_sig = ~0ull; // last captured surface-tree signature (M7);
+                               // sentinel forces the first capture
 };
 
 // --- window-command registry + cross-thread queue ------------------
@@ -262,12 +264,14 @@ static void sink_open(WindowSink& s, WireConn* conn, const std::string& title,
 // This is the capture.cpp + encode.cpp seam, shared by both paths.
 static void sink_frame(WindowSink& s, WireConn* conn, struct wlr_surface* surface,
                        struct wlr_renderer* renderer,
-                       int crop_x = 0, int crop_y = 0, int crop_w = 0, int crop_h = 0) {
+                       int crop_x = 0, int crop_y = 0, int crop_w = 0, int crop_h = 0,
+                       bool force_full = false) {
     if (!s.win || !s.video_chan) return; // not mapped / no sink
     // capture returns false when nothing changed (empty damage) — skip
     // the frame entirely, the per-frame win of damage tracking. The crop
-    // (when set) is the xdg window geometry, stripping the CSD shadow margin.
-    if (!s.cap.capture(surface, renderer, crop_x, crop_y, crop_w, crop_h)) return;
+    // (when set) is the xdg window geometry, stripping the CSD shadow margin;
+    // force_full bypasses the damage skip for tree-driven captures (M7).
+    if (!s.cap.capture(surface, renderer, crop_x, crop_y, crop_w, crop_h, force_full)) return;
 
     // Tell the router when the content size changed so the shell frame
     // tracks it (window.geometry). Fire-and-forget; only on actual change.
@@ -344,12 +348,55 @@ struct Output {
     struct wl_listener destroy;
 };
 
+// tree_signature sums each surface's per-commit seq across the whole tree
+// (root + subsurfaces) and folds in the surface count, so it changes on ANY
+// commit anywhere in the window — including a desynchronized subsurface
+// repaint that never touches the root surface (M7). Cheap: no readback.
+struct SigAcc { uint64_t sum = 0; uint32_t count = 0; };
+static void sig_cb(struct wlr_surface* s, int /*sx*/, int /*sy*/, void* data) {
+    auto* a = static_cast<SigAcc*>(data);
+    a->sum += s->current.seq;
+    a->count++;
+}
+static uint64_t tree_signature(struct wlr_surface* root) {
+    SigAcc a;
+    wlr_surface_for_each_surface(root, sig_cb, &a);
+    return (a.sum << 16) ^ a.count;
+}
+
 void output_frame(struct wl_listener* listener, void* /*data*/) {
     Output* out = wl_container_of(listener, out, frame);
     wlr_scene_output_commit(out->scene_output, nullptr);
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     wlr_scene_output_send_frame_done(out->scene_output, &now);
+
+    // M7: capture each xdg window whose surface tree changed since the last
+    // output frame. This is the capture driver for Wayland toplevels (the
+    // commit-on-root path missed subsurface-only repaints). Snapshot the
+    // registry under the lock, then capture without it (Toplevels are only
+    // freed on this same compositor thread, so the pointers stay valid).
+    std::vector<std::pair<uint32_t, Toplevel*>> xdgs;
+    {
+        std::lock_guard<std::mutex> lk(g_reg_mu);
+        for (auto& [win, ref] : g_win_reg)
+            if (ref.kind == WinRef::XDG && ref.ptr)
+                xdgs.emplace_back(win, static_cast<Toplevel*>(ref.ptr));
+    }
+    for (auto& [win, t] : xdgs) {
+        if (!t->xdg_toplevel) continue;
+        struct wlr_surface* root = t->xdg_toplevel->base->surface;
+        uint64_t sig = tree_signature(root);
+        if (sig == t->sink.tree_sig) continue; // nothing committed → skip
+        t->sink.tree_sig = sig;
+        // Crop to xdg window geometry (drops the CSD shadow margin); the tree
+        // composite then pulls in subsurface content. force_full because a
+        // subsurface change leaves the root's damage region empty.
+        struct wlr_box geo{};
+        wlr_xdg_surface_get_geometry(t->xdg_toplevel->base, &geo);
+        sink_frame(t->sink, out->server->conn, root, out->server->renderer,
+                   geo.x, geo.y, geo.width, geo.height, /*force_full=*/true);
+    }
 }
 
 void output_destroy(struct wl_listener* listener, void* /*data*/) {
@@ -421,16 +468,9 @@ void toplevel_commit(struct wl_listener* listener, void* /*data*/) {
         wlr_xdg_toplevel_set_size(t->xdg_toplevel, 0, 0);
         return;
     }
-    // Capture the just-committed buffer → WebP → one framed message on
-    // the video channel (shared sink path; same as the X11 surfaces). Crop
-    // to the xdg window geometry so the GTK CSD shadow margin (transparent,
-    // and otherwise flattened to a black border) is excluded. geo is the
-    // surface-local visible rect; {0,0,0,0} (e.g. a client that never set
-    // geometry) falls through to a full-surface capture.
-    struct wlr_box geo{};
-    wlr_xdg_surface_get_geometry(t->xdg_toplevel->base, &geo);
-    sink_frame(t->sink, t->server->conn, t->xdg_toplevel->base->surface,
-               t->server->renderer, geo.x, geo.y, geo.width, geo.height);
+    // Capture is driven from output_frame (M7) by a surface-tree change
+    // signal, not here — a root commit doesn't fire for browsers/video that
+    // repaint into desynchronized subsurfaces. Nothing to do per root commit.
 }
 
 // toplevel_request_maximize / _fullscreen: ack the client's request by

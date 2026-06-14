@@ -49,8 +49,39 @@ namespace wash {
 // Set once in compositor.cpp after wlr_allocator_autocreate().
 extern struct wlr_allocator* g_capture_allocator;
 
+namespace {
+// Composite the surface tree (root + subsurfaces) into the render target.
+// wlr_surface_for_each_surface walks the whole tree giving each surface's
+// offset (sx,sy) in root-surface coords; we draw each textured surface at
+// (sx,sy) minus the crop origin, so subsurface content (e.g. a browser's
+// web-content surface) lands in the buffer. The render pass clips to the
+// target, so the root's transparent CSD shadow margin (outside the crop)
+// is dropped. Surfaces without a texture (not yet committed) are skipped.
+struct CompositeCtx {
+    struct wlr_render_pass* pass;
+    int off_x;   // crop origin x in root-surface coords
+    int off_y;   // crop origin y
+    int drawn;   // count of textured surfaces composited
+};
+void composite_surface_cb(struct wlr_surface* s, int sx, int sy, void* data) {
+    auto* c = static_cast<CompositeCtx*>(data);
+    struct wlr_texture* tex = wlr_surface_get_texture(s);
+    if (!tex) return;
+    struct wlr_render_texture_options o;
+    std::memset(&o, 0, sizeof o);
+    o.texture = tex;
+    o.dst_box.x = sx - c->off_x;
+    o.dst_box.y = sy - c->off_y;
+    o.dst_box.width = (int)tex->width;
+    o.dst_box.height = (int)tex->height;
+    wlr_render_pass_add_texture(c->pass, &o);
+    c->drawn++;
+}
+} // namespace
+
 bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* renderer,
-                             int crop_x, int crop_y, int crop_w, int crop_h) {
+                             int crop_x, int crop_y, int crop_w, int crop_h,
+                             bool force_full) {
     if (!surface || !renderer) return false;
 
     struct wlr_texture* texture = wlr_surface_get_texture(surface);
@@ -79,7 +110,7 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
 
     // A size change (or first capture) forces a full-frame dirty rect —
     // the FE canvas is resized and must be fully repainted.
-    bool full_capture = (!render_buf || rb_w_ != w || rb_h_ != h);
+    bool full_capture = force_full || (!render_buf || rb_w_ != w || rb_h_ != h);
 
     // (Re)allocate the pooled render target only when the size changes.
     if (!render_buf || rb_w_ != w || rb_h_ != h) {
@@ -110,30 +141,20 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
         rb_h_ = h;
     }
 
-    // Draw the client texture into the render target.
+    // Composite the surface tree (root + subsurfaces) into the render target.
+    // src_x/src_y are the crop origin: each surface is drawn at its tree
+    // offset minus the origin, and the pass clips to the w×h target. This is
+    // what makes browsers/video (which paint into subsurfaces) capture at all,
+    // and simultaneously drops the CSD shadow margin (outside the crop rect).
     struct wlr_buffer_pass_options pass_opts;
     std::memset(&pass_opts, 0, sizeof pass_opts);
     struct wlr_render_pass* pass = wlr_renderer_begin_buffer_pass(r, render_buf, &pass_opts);
     if (!pass) return false;
 
-    struct wlr_render_texture_options tex_opts;
-    std::memset(&tex_opts, 0, sizeof tex_opts);
-    tex_opts.texture = texture;
-    // Sample the crop sub-rect of the source texture (src_box is in texture
-    // coords; a zeroed src_box means "whole texture", so only set it when
-    // cropping) and blit it to the top-left of the w×h target.
-    if (src_x || src_y || w != tw || h != th) {
-        tex_opts.src_box.x = src_x;
-        tex_opts.src_box.y = src_y;
-        tex_opts.src_box.width = w;
-        tex_opts.src_box.height = h;
-    }
-    tex_opts.dst_box.x = 0;
-    tex_opts.dst_box.y = 0;
-    tex_opts.dst_box.width = w;
-    tex_opts.dst_box.height = h;
-    wlr_render_pass_add_texture(pass, &tex_opts);
+    CompositeCtx ctx{ pass, src_x, src_y, 0 };
+    wlr_surface_for_each_surface(surface, composite_surface_cb, &ctx);
     if (!wlr_render_pass_submit(pass)) return false;
+    if (ctx.drawn == 0) return false; // nothing textured yet
 
     // Grow-only CPU buffer (no per-frame alloc) and read the pixels back.
     stride_ = w * 4;

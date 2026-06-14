@@ -483,6 +483,37 @@ read-back + WebP-with-alpha + FE transparent compositing) for rounded
 corners / genuinely shaped windows — a non-goal while wash wraps every
 guest in its own opaque server-side frame.
 
+### M7 — composite the surface tree (subsurface capture) ✅
+Browsers and video players (Firefox, Chromium, mpv …) render their content
+into **`wl_subsurface`s**, not the root surface. The capture read only the
+root texture (`wlr_surface_get_texture`), so those windows mapped but showed
+a **blank/black body** — confirmed by a tree-enumeration diagnostic: Firefox
+is two surfaces, a root `1332×1024` (the transparent CSD shadow we were
+capturing) and a subsurface at `(26,23)` `1280×972` carrying the actual UI.
+Two changes close this:
+- **Capture composites the whole tree.** `capture.cpp` walks
+  `wlr_surface_for_each_surface` and blits each textured surface into the
+  (geometry-cropped) render target at its tree offset; the pass clips to the
+  target, so the M5c crop still drops the root's shadow margin while
+  subsurface content lands in-frame. Single-surface apps are unchanged.
+- **Capture is driven from `output_frame`, gated by a tree-change signal.**
+  A root commit doesn't fire for a desynchronized subsurface repaint, so the
+  per-root-commit trigger missed browser frames. `output_frame` (which runs
+  continuously) now captures each xdg window whose **tree signature** —
+  `Σ surface.current.seq` folded with the surface count, walked over the
+  whole tree — changed since the last frame. No readback for idle windows;
+  `force_full` bypasses the root-damage skip since subsurface-only repaints
+  leave the root's damage empty. X11 surfaces stay commit-driven (Xwayland
+  presents one composited buffer; no Wayland subsurfaces).
+
+Verified by `display-probe.cap.ts`: Firefox `about:robots` renders fully
+(0% → 100% non-blank), with every existing app (xclock/xeyes/xlogo/
+gnome-calculator/GTK guest both backends/3-window montage) still green.
+**Deferred:** tree-aware damage tracking — the xdg path now full-frame
+encodes on any change (the X11 path keeps damage rects); fine for v1, a
+bandwidth optimization later. (Firefox-over-X11 maps a 1×1 window without a
+resizing WM — a Firefox quirk, unrelated to capture.)
+
 ### Out of scope here — M6 throughput
 WebRTC/VP9 (for Firefox scroll/video parity) + audio service hookup are a separate,
 larger track ([[wash_display_codecs]], [[wash_audio_plan]]).
