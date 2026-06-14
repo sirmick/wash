@@ -13,6 +13,7 @@ import { For, Show, createEffect, createSignal } from 'solid-js';
 import type { Component } from 'solid-js';
 import { type ConnState } from './ws';
 import { RouterClient } from './router-client';
+import { LOCAL_ORIGIN, registerClient, clientForInstance, parseInstanceId } from './clients';
 import { beginBundle, finishBundle, pushBundleBytes } from './assets';
 
 const __washLoadT0 = performance.now();
@@ -370,6 +371,11 @@ const instances = local.instances;
 const bundleReady = local.bundleReady;
 const seenWindowIDs = local.seenWindowIDs;
 const pendingClipboardGets = local.pendingClipboardGets;
+
+// Register the local router as the LOCAL origin. Remote hosts register
+// additional clients (M2); window.wash routes instance-addressed calls
+// to the owning client by parsing the origin off the compound id.
+registerClient(LOCAL_ORIGIN, local);
 
 // deliverAppMsg routes a BE→FE message to its element, queuing if the
 // element hasn't mounted yet (Solid's onMount can run after the next
@@ -809,7 +815,12 @@ conn.onState((s) => {
 
 window.wash = {
   sendAppMsg(instanceID, data) {
-    conn.sendCtrl({ t: 'app_msg.send', instance_id: instanceID, data });
+    // instanceID is the app-facing (possibly origin-tagged) id. Route to
+    // the owning client and send the bare id the router understands. For
+    // a local app this resolves to `local` with the id unchanged.
+    const { bare } = parseInstanceId(instanceID);
+    const client = clientForInstance(instanceID) ?? local;
+    client.conn.sendCtrl({ t: 'app_msg.send', instance_id: bare, data });
   },
   sendAppMsgTo(recipient, data) {
     conn.sendCtrl({ t: 'app_msg.send', to: recipient, data });
