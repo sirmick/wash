@@ -112,6 +112,7 @@ func onReady(c *sdk.Conn, _ string, _ uint32) {
 	registerPrivGateway(bus)
 	registerNetGateway(bus)
 	registerAudioGateway(bus)
+	registerRemoteGateway(bus)
 	// state forwarder: notify, bulk, and priv all push
 	// {kind:"state", state:...} cross-app. Branch on the sender's
 	// AppID to re-brand for the FE under a service-specific kind.
@@ -165,6 +166,7 @@ const (
 	PrivAppID   = "com.wash.priv"
 	NetdAppID   = "com.wash.netd"
 	AudioAppID  = "com.wash.audio"
+	RemoteAppID = "com.wash.remote"
 )
 
 // serviceFEKind maps a service app id to the FE-side kind we
@@ -182,6 +184,8 @@ func serviceFEKind(appID string) string {
 		return "net.state"
 	case AudioAppID:
 		return "audio.state"
+	case RemoteAppID:
+		return "remote.state"
 	}
 	return ""
 }
@@ -222,6 +226,35 @@ func registerAudioGateway(bus *sdk.Bus) {
 			"kind": "set_master_volume", "value": req.Value,
 		})
 	})
+}
+
+// registerRemoteGateway forwards the Hosts widget's subscribe + connect/
+// disconnect to the com.wash.remote service (docs/REMOTE.md R2). Its
+// per-host status pushes return as {kind:"state"} and are re-branded to
+// "remote.state" by the shared state forwarder; the FE then attaches the
+// reported local endpoint as a second RouterClient.
+func registerRemoteGateway(bus *sdk.Bus) {
+	sdk.HandleVoid(bus, "remote_subscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
+		return conn.SendAppMsgTo(wire.Recipient{AppID: RemoteAppID}, map[string]any{"kind": "subscribe"})
+	})
+	sdk.HandleVoid(bus, "remote_unsubscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
+		return conn.SendAppMsgTo(wire.Recipient{AppID: RemoteAppID}, map[string]any{"kind": "unsubscribe"})
+	})
+	sdk.HandleVoid(bus, "remote_connect", func(conn *sdk.Conn, _ string, req remoteHostReq) error {
+		return conn.SendAppMsgTo(wire.Recipient{AppID: RemoteAppID}, map[string]any{
+			"kind": "connect", "host": req.Host, "remote_port": req.RemotePort,
+		})
+	})
+	sdk.HandleVoid(bus, "remote_disconnect", func(conn *sdk.Conn, _ string, req remoteHostReq) error {
+		return conn.SendAppMsgTo(wire.Recipient{AppID: RemoteAppID}, map[string]any{
+			"kind": "disconnect", "host": req.Host,
+		})
+	})
+}
+
+type remoteHostReq struct {
+	Host       string `json:"host"`
+	RemotePort int    `json:"remote_port"`
 }
 
 func registerNotifyGateway(bus *sdk.Bus) {
