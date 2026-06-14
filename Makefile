@@ -875,6 +875,16 @@ $(foreach m,$(PKG_MAP),$(eval $(call PKG_LEAF_RULE,$(firstword $(subst =, ,$(m))
 openwrt-smoke:
 	WASH_PKG_ROWS=openwrt-24.10.6-x86_64 ./packaging/run_matrix.sh
 
+# verify-packages: download the CI-built native packages from GitHub Actions
+# and install + boot-smoke each on a CLEAN matching-distro container (tests the
+# actual released bytes + postinst on a pristine system — stricter than the
+# in-build smoke). Needs docker + an authenticated gh. Pass ROWS="ubuntu24
+# alpine321" to subset; WASH_PKGTEST_RUN=<id> to pin a run (default: latest
+# successful ci.yml on this branch). amd64 only (that's all ci uploads).
+.PHONY: verify-packages
+verify-packages:
+	./packaging/verify-gh-packages.sh $(ROWS)
+
 # Back-compat alias (deprecated; use all-package).
 .PHONY: packages
 packages: all-package
