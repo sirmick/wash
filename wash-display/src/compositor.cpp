@@ -66,6 +66,7 @@ extern "C" {
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
+#include <wlr/types/wlr_xdg_output_v1.h>
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_seat.h>
@@ -97,9 +98,10 @@ struct wlr_allocator* g_capture_allocator = nullptr;
 
 namespace {
 
-// Default virtual screen the headless output advertises to clients.
-constexpr int kScreenW = 1280;
-constexpr int kScreenH = 800;
+// Default virtual screen the headless output advertises to clients. 1080p
+// so maximized/large apps (IDEs, p4v) have room; HiDPI scaling is M5b.
+constexpr int kScreenW = 1920;
+constexpr int kScreenH = 1080;
 
 struct Server {
     struct wl_display* display = nullptr;
@@ -221,6 +223,10 @@ struct Toplevel {
     struct wl_listener unmap;
     struct wl_listener commit;
     struct wl_listener destroy;
+    // Honour client maximize/fullscreen by sizing to the virtual output, so
+    // a "maximize" lands at the full screen rather than being ignored (M5).
+    struct wl_listener request_maximize;
+    struct wl_listener request_fullscreen;
 
     WindowSink sink;         // shared window + capture/encode pipeline
 };
@@ -419,6 +425,23 @@ void toplevel_commit(struct wl_listener* listener, void* /*data*/) {
                t->server->renderer);
 }
 
+// toplevel_request_maximize / _fullscreen: ack the client's request by
+// sizing it to the virtual output (M5). Without this a "maximize" is
+// ignored and the window stays its old size.
+void toplevel_request_maximize(struct wl_listener* listener, void* /*data*/) {
+    Toplevel* t = wl_container_of(listener, t, request_maximize);
+    bool on = t->xdg_toplevel->requested.maximized;
+    wlr_xdg_toplevel_set_maximized(t->xdg_toplevel, on);
+    wlr_xdg_toplevel_set_size(t->xdg_toplevel, on ? kScreenW : 0, on ? kScreenH : 0);
+}
+
+void toplevel_request_fullscreen(struct wl_listener* listener, void* /*data*/) {
+    Toplevel* t = wl_container_of(listener, t, request_fullscreen);
+    bool on = t->xdg_toplevel->requested.fullscreen;
+    wlr_xdg_toplevel_set_fullscreen(t->xdg_toplevel, on);
+    wlr_xdg_toplevel_set_size(t->xdg_toplevel, on ? kScreenW : 0, on ? kScreenH : 0);
+}
+
 void toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
     Toplevel* t = wl_container_of(listener, t, destroy);
     unregister_win(t->sink.win);
@@ -427,6 +450,8 @@ void toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
     wl_list_remove(&t->unmap.link);
     wl_list_remove(&t->commit.link);
     wl_list_remove(&t->destroy.link);
+    wl_list_remove(&t->request_maximize.link);
+    wl_list_remove(&t->request_fullscreen.link);
     delete t;
 }
 
@@ -676,6 +701,10 @@ void server_new_xdg_toplevel(struct wl_listener* listener, void* data) {
     // 0.17: wlr_xdg_toplevel has no destroy signal; the destroy signal
     // lives on the backing wlr_xdg_surface (xdg_toplevel->base).
     wl_signal_add(&xdg_toplevel->base->events.destroy, &t->destroy);
+    t->request_maximize.notify = toplevel_request_maximize;
+    wl_signal_add(&xdg_toplevel->events.request_maximize, &t->request_maximize);
+    t->request_fullscreen.notify = toplevel_request_fullscreen;
+    wl_signal_add(&xdg_toplevel->events.request_fullscreen, &t->request_fullscreen);
 }
 
 #ifdef WASH_DISPLAY_XWAYLAND
@@ -1437,6 +1466,10 @@ int run_compositor(WireConn& conn) {
     server.scene = wlr_scene_create();
     server.scene_layout =
         wlr_scene_attach_output_layout(server.scene, server.output_layout);
+
+    // xdg-output: clients querying logical output geometry (screen size for
+    // maximize/centering) get the real virtual-output dimensions (M5).
+    wlr_xdg_output_manager_v1_create(server.display, server.output_layout);
 
     server.new_output.notify = server_new_output;
     wl_signal_add(&server.backend->events.new_output, &server.new_output);

@@ -448,17 +448,23 @@ in-band as a sub-45-byte JSON control frame; pixel frames are ≥45 bytes.
 - Deferred: popup keyboard focus; the X11 clipboard guest→wash leg rides wlroots' xwm
   X→Wayland selection sync (the wash-side bridge is M2, verified on Wayland).
 
-### M4 — cursor shape forwarding (planned)
-The browser already shows a cursor over the canvas; forward the guest's cursor *shape*
-(`request_set_cursor` / `wlr_cursor_shape_v1` / Xwayland xcb cursor) as a small
-app_msg → FE maps to CSS `canvas.style.cursor`. Custom-bitmap cursors composite into
-the frame later (M4b), using the reserved WS-header cursor fields (`wsframe.hpp`).
+### M4 — cursor shape forwarding ✅
+The guest names its cursor via **cursor-shape-v1**; the compositor
+(`wlr_cursor_shape_manager_v1` + `request_set_shape`) forwards the name to the
+pointer-focused window's element on its video channel as a sub-45-byte JSON control
+frame (`{cursor:"<name>"}`), and the element sets it as the CSS cursor — the
+protocol's names ARE the CSS keywords. Recent Xwayland uses cursor-shape-v1, so X11
+apps get correct cursors; the browser already shows *a* cursor, so this is shape
+fidelity. **M4b** (deferred): bitmap cursors (`request_set_cursor` with a surface)
+composited via the reserved WS-header cursor fields.
 
-### M5 — output size / RandR / HiDPI (planned)
-Raise the default virtual output (1280×800 today) and add
-`wlr_xdg_output_manager_v1` + `wlr_output_management_v1` so a maximizing app sees real
-screen dims. HiDPI (M5b): output scale + `wlr_fractional_scale_v1` + FE DPR coord
-scaling in M1.
+### M5 — output size / maximize ✅
+Virtual output is now **1920×1080** (was 1280×800) so large/maximized apps fit;
+client maximize/fullscreen requests are honoured (`request_maximize` /
+`request_fullscreen` → sized to the output), and `wlr_xdg_output_manager_v1` gives
+clients the real logical screen geometry. **M5b** (deferred): HiDPI — output scale +
+`wlr_fractional_scale_v1` + FE devicePixelRatio coordinate scaling in M1; and
+`wlr_output_management_v1` for clients that want to *drive* output config (rare).
 
 ### Out of scope here — M6 throughput
 WebRTC/VP9 (for Firefox scroll/video parity) + audio service hookup are a separate,
