@@ -885,6 +885,13 @@ openwrt-smoke:
 verify-packages:
 	./packaging/verify-gh-packages.sh $(ROWS)
 
+# run-package: install a CI-built package in a clean container and SERVE the
+# packaged desktop on a published port (browse it) — install proof you can
+# click around. ROW=ubuntu24|debian13|fedora40|alpine321, PORT=11000. -no-auth.
+.PHONY: run-package
+run-package:
+	ROW=$(ROW) PORT=$(PORT) ./packaging/run-gh-package.sh
+
 # Back-compat alias (deprecated; use all-package).
 .PHONY: packages
 packages: all-package
