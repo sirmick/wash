@@ -509,8 +509,14 @@ Two changes close this:
 Verified by `display-probe.cap.ts`: Firefox `about:robots` renders fully
 (0% → 100% non-blank), with every existing app (xclock/xeyes/xlogo/
 gnome-calculator/GTK guest both backends/3-window montage) still green.
-(Firefox-over-X11 maps a 1×1 window without a resizing WM — a Firefox quirk,
-unrelated to capture.)
+**Not Firefox-specific:** Chromium (Blink) renders too, and video works both
+ways — a 640×480 30fps clip via `gst-play` (glimagesink, GL into the surface)
+delivers at the full ~30fps (~9 KB/WebP-frame, whole-region damage as
+expected for video), and the same clip in a Firefox `<video>` (decoded into a
+**subsurface**, picked up by the tree composite) plays at ~38fps. (Firefox-
+over-X11 maps a 1×1 window without a resizing WM — a Firefox quirk, unrelated
+to capture. Chromium draws its own CSD window-control buttons inside its
+content → a cosmetic double titlebar, a polish item not a capture issue.)
 
 **Tree-aware damage.** The whole tree is composited each frame, but only the
 union of the surfaces that *actually changed* is encoded/sent. `capture.cpp`

@@ -57,6 +57,21 @@ async function bootWithTerminal(page: Page, router: any): Promise<void> {
   await settle(page, 300);
 }
 
+// Derive delivered fps from the throttled compositor log: "frame seq=N" lines
+// are emitted every 60 frames with a HH:MM:SS.mmm timestamp, so the seq delta
+// over the time delta between the first and last such line is the frame rate.
+function fpsFromLog(log: string): number {
+  const re = /(\d\d):(\d\d):(\d\d)\.(\d\d\d).*frame seq=(\d+)/g;
+  const pts: { t: number; seq: number }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(log))) {
+    pts.push({ t: +m[1] * 3600 + +m[2] * 60 + +m[3] + +m[4] / 1000, seq: +m[5] });
+  }
+  if (pts.length < 2) return 0;
+  const a = pts[0], b = pts[pts.length - 1];
+  return b.t > a.t ? Math.round((b.seq - a.seq) / (b.t - a.t)) : 0;
+}
+
 // Dump the log lines that matter for the display feature to <name>.log.
 function dumpLog(router: any, name: string): void {
   const lines = router.log().split('\n').filter((l: string) =>
@@ -251,6 +266,85 @@ test.describe('display-probe', () => {
       console.log(`[${name}] ${verdict}`);
     });
   }
+
+  // Video throughput: a 30fps clip stresses the damage→readback→WebP path
+  // (each video frame damages the whole video region). gst-play uses
+  // glimagesink (GL into the window). We let it play, screenshot a frame, and
+  // derive the delivered frame rate from the throttled per-60-frame log.
+  // Generate the clip (gitignored) before running these:
+  //   ffmpeg -f lavfi -i testsrc2=size=640x480:rate=30:duration=12 \
+  //          -pix_fmt yuv420p tmp/washtest.mp4
+  const VIDEO = resolve(__dirname, '..', '..', 'tmp', 'washtest.mp4');
+  test('gst-video (wayland throughput)', async ({ page, router }) => {
+    test.setTimeout(60_000);
+    if (!existsSync(VIDEO)) test.skip(true, 'tmp/washtest.mp4 not generated');
+    await bootWithTerminal(page, router);
+    await page.keyboard.type(`gst-play-1.0 ${VIDEO}\n`, { delay: 8 });
+    await router.waitForLog(/window\.create .*element="wash-app-display"/, 25_000);
+    const display = win(page, 'wash-app-display').first();
+    await expect(display).toBeVisible({ timeout: 20_000 });
+    await settle(page, 4000); // let it play
+    const stats = await canvasStats(display).catch(() => null);
+    await display.screenshot({ path: join(SHOTS, 'gst-video.win.png') });
+    dumpLog(router, 'gst-video');
+    // Derive fps: consecutive "frame seq=N" log lines are 60 frames apart.
+    const fps = fpsFromLog(router.log());
+    const verdict = `${stats ? `canvas ${stats.w}x${stats.h} nonBlank=${stats.nonBlankPct}%` : 'no canvas'} delivered≈${fps}fps`;
+    writeFileSync(join(SHOTS, 'gst-video.verdict.txt'), verdict + '\n');
+    console.log(`[gst-video] ${verdict}`);
+  });
+
+  test('firefox-video (subsurface video)', async ({ page, router }) => {
+    test.setTimeout(90_000);
+    const FFbin = ['/opt/firefox/firefox', '/usr/bin/firefox-bin'].find((p) => existsSync(p));
+    if (!FFbin || !existsSync(VIDEO)) test.skip(true, 'firefox or test video missing');
+    await bootWithTerminal(page, router);
+    const prof = mkdtempSync(join(tmpdir(), 'ffprof-'));
+    await page.keyboard.type(
+      `MOZ_ENABLE_WAYLAND=1 ${FFbin} -no-remote -profile ${prof} file://${VIDEO}\n`, { delay: 8 });
+    await router.waitForLog(/window\.create .*element="wash-app-display"/, 45_000);
+    const display = win(page, 'wash-app-display').first();
+    await expect(display).toBeVisible({ timeout: 20_000 });
+    await settle(page, 6000); // FF cold start + autoplay
+    const stats = await canvasStats(display).catch(() => null);
+    await display.screenshot({ path: join(SHOTS, 'firefox-video.win.png') });
+    dumpLog(router, 'firefox-video');
+    const fps = fpsFromLog(router.log());
+    const verdict = `${stats ? `canvas ${stats.w}x${stats.h} nonBlank=${stats.nonBlankPct}%` : 'no canvas'} delivered≈${fps}fps`;
+    writeFileSync(join(SHOTS, 'firefox-video.verdict.txt'), verdict + '\n');
+    console.log(`[firefox-video] ${verdict}`);
+  });
+
+  // Chromium (snap on this box) — a second browser engine to confirm the
+  // subsurface path isn't Firefox-specific. Snap confinement may block the
+  // compositor socket; if no window maps we learn that.
+  test('chromium (wayland)', async ({ page, router }) => {
+    test.setTimeout(90_000);
+    if (existsSync('/usr/bin/snap') === false) test.skip(true, 'no chromium');
+    await bootWithTerminal(page, router);
+    const prof = mkdtempSync(join(tmpdir(), 'chr-'));
+    await page.keyboard.type(
+      `chromium --ozone-platform=wayland --no-first-run --user-data-dir=${prof} about:blank\n`,
+      { delay: 8 });
+    let mapped = true;
+    await router.waitForLog(/window\.create .*element="wash-app-display"/, 40_000).catch(() => { mapped = false; });
+    if (!mapped) {
+      dumpLog(router, 'chromium');
+      writeFileSync(join(SHOTS, 'chromium.verdict.txt'), 'no window mapped (snap sandbox?)\n');
+      console.log('[chromium] no window mapped — likely snap confinement');
+      return;
+    }
+    const display = win(page, 'wash-app-display').first();
+    await expect(display).toBeVisible({ timeout: 20_000 });
+    await settle(page, 5000);
+    const stats = await canvasStats(display).catch(() => null);
+    await display.screenshot({ path: join(SHOTS, 'chromium.win.png') });
+    await page.screenshot({ path: join(SHOTS, 'chromium.full.png') });
+    dumpLog(router, 'chromium');
+    const verdict = stats ? `canvas ${stats.w}x${stats.h} nonBlank=${stats.nonBlankPct}%` : 'no canvas';
+    writeFileSync(join(SHOTS, 'chromium.verdict.txt'), verdict + '\n');
+    console.log(`[chromium] ${verdict}`);
+  });
 
   test('montage — three X11 apps at once', async ({ page, router }) => {
     test.setTimeout(60_000);
