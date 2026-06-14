@@ -25,7 +25,7 @@ GOFLAGS += -cover -coverpkg=github.com/sirmick/wash/...
 endif
 
 OUT     := out
-BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-disks wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net wash-washamp wash-music wash-radio wash-audio
+BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-disks wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net wash-washamp wash-music wash-radio wash-audio wash-remote
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -578,6 +578,14 @@ $(OUT)/wash-notify: | $(OUT)
 .PHONY: $(OUT)/wash-audio
 $(OUT)/wash-audio: | $(OUT)
 	$(call go_build,$@,apps/audio/be/cmd)
+
+# wash-remote is the A-side remote-hosts connectivity service
+# (docs/REMOTE.md R2): it brings up wash-router on remote hosts over ssh
+# and forwards them locally. No window, no FE bundle. .PHONY for the same
+# reason as wash-notify.
+.PHONY: $(OUT)/wash-remote
+$(OUT)/wash-remote: | $(OUT)
+	$(call go_build,$@,apps/remote/be/cmd)
 
 # wash-netd is the privileged networking background service (docs/NET.md
 # §2.11): reserved id com.wash.netd. It now supplies the settings Network
