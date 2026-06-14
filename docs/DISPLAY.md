@@ -378,3 +378,78 @@ wash-display on a wlroots-equipped runner; kept out of the default `make e2e`.
   for SDP/ICE (size, ordering) or whether a dedicated signalling channel kind is cleaner.
 - **Security**: a window-spawning capability is a chrome-DoS vector; consider a per-
   instance window cap (count limit) enforced router-side.
+
+---
+
+## 12. Interactivity milestones (input / clipboard / native polish)
+
+The compositor in §9a streamed pixels but was **view-only** — commits 9 (input) and
+11 (clipboard) were never built, so windows received no mouse/keyboard and the
+clipboard didn't bridge. This section tracks closing that gap. Each milestone is
+test-gated (the contract e2e runs without a compositor; a real-stack smoke uses
+`out/wash-display` + `xclock`, gated out of default `make e2e`).
+
+### M0 — input/clipboard contract fixtures ✅
+`apps/test/be` decodes + logs `app_msg{kind:"input"}` per event (routing by the
+**payload** `win`, since cross-instance app_msgs land on the instance's primary
+window). `e2e/tests/display.spec.ts` asserts the §6 input contract (control-socket
+driven) and the §7 clipboard contract (two instances; `clipboard_get` echoes its
+`id` so the control socket correlates the reply). CI-green, no compositor.
+
+### M1 — input: seat, pointer, keyboard, focus ✅
+- `compositor.cpp` creates `wlr_seat` + a virtual keyboard with a default xkb keymap
+  — which also **fixes the latent NULL seat** previously handed to
+  `wlr_xwayland_set_seat` (Xwayland's keyboard would have aborted under load).
+- Pointer (`enter`/`motion`/`button`/`axis`/`frame`) and keyboard injection, resolved
+  `win → surface` via `g_win_reg`. Keys go through the virtual keyboard
+  (`wlr_keyboard_notify_key`) so xkb modifier state is correct (the tinywl pattern).
+- Input is marshalled from the WireConn reader thread onto the compositor thread over
+  the existing self-pipe (`g_cmd_pipe`), alongside resize/close.
+- `window.focus`/`window.unfocus` are now dispatched in `cpp-sdk/wash/wire_conn.cpp`
+  and applied as seat keyboard focus (router-authoritative — DISPLAY.md §6).
+- FE `web/shell/src/wash-app-display.ts` captures pointer/key/wheel, coalesces motion
+  to one batch per `requestAnimationFrame`, maps to surface-local coords (DPR 1.0),
+  and sends to the owning instance via `window.wash.sendAppMsgTo`. Right-click and
+  browser shortcuts are suppressed while a guest is focused. `motion_rel` (pointer
+  lock) is deferred.
+- **Verified** end to end by `display-input-smoke.spec.ts`: clicking + typing on a
+  real `xclock` window's canvas is injected into the live wlroots surface.
+
+### M2 — clipboard bridge ✅
+Reuses wash `clipboard.*` (no new wire). `cpp-sdk` `WireConn` gains
+`clipboard_set`/`clipboard_get` (req/reply) + an `on_clipboard_changed` hook, with
+base64 for the byte field (matches the Go SDK's `[]byte` wire encoding — see
+[[wash_cbor_json_pitfall]]). The compositor bridges: `request_set_selection` accepts a
+Wayland client taking the selection; `set_selection` mirrors any guest selection
+(incl. X11 via the xwm bridge — automatic now the seat exists) into wash; and
+`clipboard.changed` installs a lazy `wlr_data_source` that serves wash's bytes to a
+pasting guest on demand. Loop-safe (own source skipped; the router excludes the setter
+from the broadcast). PRIMARY (middle-click) selection is the deferred **M2b**.
+*Remaining verification:* real-app copy/paste smoke needs a clipboard-capable client
+(xterm / a Wayland app); the wash-side wire is covered by the M0 contract test.
+
+### M3 — popups / override-redirect (planned)
+Real apps' menus/dropdowns/tooltips. **Cross-cutting** (not display-local): the wire
+`EvtWindowCreate` has `Role`/`ParentWin` but **no position**, and the router
+(`app_session.go:597`) currently maps popups as ordinary toplevels. Needs: (a) popup
+x/y offset on the create contract, (b) router honouring role/parent_win + position
+into the session/patch model, (c) shell rendering popups borderless positioned
+relative to the parent, (d) compositor handling the xdg-popup role
+(`server_new_xdg_toplevel` currently drops non-toplevels) via `wlr_xdg_positioner`,
+and X11 `override_redirect` surfaces as borderless popups.
+
+### M4 — cursor shape forwarding (planned)
+The browser already shows a cursor over the canvas; forward the guest's cursor *shape*
+(`request_set_cursor` / `wlr_cursor_shape_v1` / Xwayland xcb cursor) as a small
+app_msg → FE maps to CSS `canvas.style.cursor`. Custom-bitmap cursors composite into
+the frame later (M4b), using the reserved WS-header cursor fields (`wsframe.hpp`).
+
+### M5 — output size / RandR / HiDPI (planned)
+Raise the default virtual output (1280×800 today) and add
+`wlr_xdg_output_manager_v1` + `wlr_output_management_v1` so a maximizing app sees real
+screen dims. HiDPI (M5b): output scale + `wlr_fractional_scale_v1` + FE DPR coord
+scaling in M1.
+
+### Out of scope here — M6 throughput
+WebRTC/VP9 (for Firefox scroll/video parity) + audio service hookup are a separate,
+larger track ([[wash_display_codecs]], [[wash_audio_plan]]).
