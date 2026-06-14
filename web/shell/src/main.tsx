@@ -11,7 +11,8 @@
 import { render } from 'solid-js/web';
 import { For, Show, createEffect, createSignal } from 'solid-js';
 import type { Component } from 'solid-js';
-import { Conn, type ConnState } from './ws';
+import { type ConnState } from './ws';
+import { RouterClient } from './router-client';
 import { beginBundle, finishBundle, pushBundleBytes } from './assets';
 
 const __washLoadT0 = performance.now();
@@ -51,7 +52,6 @@ import {
   subscribeRaw,
 } from './api';
 import './wash-app-display';
-import { CreditTracker } from './credit';
 import { showToast } from './notify';
 import { virtioConsoleFactory } from './virtio';
 
@@ -137,11 +137,6 @@ interface ShellChannelUnbind {
   reason?: string;
 }
 
-// channelOwner records which window an open raw channel is rooted at,
-// so the shell can clean up subscribers when the window goes away or
-// the router unbinds the channel.
-const channelOwner = new Map<number, number>(); // channel_id → window_id
-
 interface ShellNotify {
   t: 'notify';
   instance_id: string;
@@ -161,16 +156,6 @@ export interface ShellAppCrashed {
   log: string;
 }
 
-// Track declared instances so window.create can resolve element by id.
-const instances = new Map<string, { element: string; surface: string }>();
-
-// bundleReady is the promise that resolves once an instance's bundle
-// has been imported (and customElements.define has run). The
-// router can race ShellWindowCreate ahead of the bundle finishing,
-// so handleWindowCreate must wait — otherwise document.createElement
-// produces an HTMLUnknownElement and connectedCallback never fires.
-const bundleReady = new Map<string, Promise<void>>();
-
 // Reactive subs the chrome (mounted via window.wash) listens to.
 const catalogSub = new Sub<CatalogApp[]>([]);
 const panelsSub = new Sub<PanelDesc[]>([]);
@@ -188,7 +173,6 @@ const screenSub = new Sub<{ w: number; h: number }>({ w: window.innerWidth, h: w
 // through pendingClipboardGets (req_id → resolver), same shape the Go
 // SDK uses for its ClipboardGet round-trip.
 const clipboardSub = new Sub<{ mime: string; text: string }>({ mime: '', text: '' });
-const pendingClipboardGets = new Map<number, (text: string) => void>();
 let clipboardReqID = 0;
 
 function wsURL(): string {
@@ -238,20 +222,11 @@ function pickTransport(): string | (() => import('./ws').SocketFactory extends (
   return virtioConsoleFactory(bus, portN) as any;
 }
 
-// Credit tracker for per-channel flow control (QOS.md §5). Bytes
-// absorbed on each raw channel count toward a running tally;
-// crossing the replenish threshold emits one channel.credit{ch,n}
-// frame so the router-side Bulk producer doesn't stall.
-//
-// The sender closes over `conn`, which is assigned just below. JS
-// closure semantics make this safe — the closure isn't *called*
-// until the first raw frame arrives, by which point conn is bound.
-let conn: Conn;
-const creditTracker = new CreditTracker((channelID, n) => {
-  conn.sendCtrl({ t: 'channel.credit', ch: channelID, n });
-});
-
-conn = new Conn(
+// The shell's single connection to its local router. RouterClient owns
+// the transport, the credit ledger, and the per-connection dispatch
+// maps (channel/instance/window ids are scoped to one connection).
+// M1b turns this lone `local` into a registry of clients, one per host.
+const local = new RouterClient(
   pickTransport() as any,
   (msg) => {
     switch (msg.t) {
@@ -384,6 +359,18 @@ conn = new Conn(
   },
 );
 
+// By-reference handles into the one client so the dispatch closures
+// above and the window.wash methods below read unchanged. These are the
+// single-client bridge; M1b/M1c remove them as the multi-client registry
+// threads origin through each call site.
+const conn = local.conn;
+const creditTracker = local.credit;
+const channelOwner = local.channelOwner;
+const instances = local.instances;
+const bundleReady = local.bundleReady;
+const seenWindowIDs = local.seenWindowIDs;
+const pendingClipboardGets = local.pendingClipboardGets;
+
 // deliverAppMsg routes a BE→FE message to its element, queuing if the
 // element hasn't mounted yet (Solid's onMount can run after the next
 // WS message is processed).
@@ -496,14 +483,12 @@ function handleCrash(msg: ShellAppCrashed): void {
   });
 }
 
-// Tracks windowIDs we've already first-sighted. The wm store can't
-// serve this on its own: applySessionPatch defers the upsert for an
-// unseen window behind waitForBundle, so a window-in-flight isn't
-// in `windows` yet. Without a separate set, every BE patch that
-// arrives before the bundle resolves looks "fresh" and we'd
-// re-relocate the same window N times.
-const seenWindowIDs = new Set<number>();
-
+// seenWindowIDs (on RouterClient) tracks first-sighted windows for the
+// viewport auto-relocation below: the wm store can't serve this on its
+// own because applySessionPatch defers an unseen window's upsert behind
+// waitForBundle, so a window-in-flight isn't in `windows` yet — without
+// the set, every pre-bundle patch looks "fresh" and we'd re-relocate the
+// same window N times.
 function handlePatch(msg: ShellSessionPatch): void {
   // Apply app_state ops first so when a window upsert in the same
   // patch triggers a remount, wash:state carries the latest blob.
