@@ -515,8 +515,7 @@ delivers at the full ~30fps (~9 KB/WebP-frame, whole-region damage as
 expected for video), and the same clip in a Firefox `<video>` (decoded into a
 **subsurface**, picked up by the tree composite) plays at ~38fps. (Firefox-
 over-X11 maps a 1×1 window without a resizing WM — a Firefox quirk, unrelated
-to capture. Chromium draws its own CSD window-control buttons inside its
-content → a cosmetic double titlebar, a polish item not a capture issue.)
+to capture. Chromium's own CSD titlebar used to double wash's — fixed by M8.)
 
 **Tree-aware damage.** The whole tree is composited each frame, but only the
 union of the surfaces that *actually changed* is encoded/sent. `capture.cpp`
@@ -541,6 +540,42 @@ R↔B swap is likewise dirty-rect-only. So a partial frame now does a
 dirty-sized glReadPixels + swap + WebP encode — the whole per-frame cost
 scales with damage, not window size. (Full frames — first map, resize, a
 new subsurface — read the whole window, as before.)
+
+### M8 — chromeless CSD windows + the move bridge ✅
+Modern toolkits (GTK4/libadwaita, Chromium, Firefox) draw their own
+decorations (CSD) and ignore forced SSD — an experiment confirmed it (GTK4
+never engages xdg-decoration; Chromium engages but draws CSD anyway;
+`GTK_CSD=0` is a GTK3-only no-op). So a wash frame on top doubled the
+titlebar. M8 renders Wayland guests **chromeless** and lets their own chrome
+be the only one:
+- **Per-window chromeless.** `EvtWindowCreate` gains a `Chromeless` field (the
+  manifest hint is per-app; the compositor needs per-window). `create_window`
+  forwards it; the router ORs it with the manifest hint; the FE already renders
+  chromeless (Washamp). wash-display marks Wayland xdg toplevels chromeless,
+  X11 surfaces framed (xclock has no CSD titlebar, so it keeps a wash frame to
+  grab). xdg-decoration now answers CLIENT_SIDE (consistent with chromeless).
+- **The move bridge.** A chromeless window has no wash titlebar, so dragging
+  the guest's OWN titlebar must move it. The guest's `xdg_toplevel.move`
+  request is relayed to its `<wash-app-display>` as a `{move:true}` control
+  frame (same sub-45-byte video-channel path as cursor-shape M4). The element
+  holds the pointer capture, so it then drives the wash window via
+  `window.wash.moveWindow` following the pointer (a synthetic button-up is sent
+  to the guest first, ending its CSD grab cleanly — xdg-shell semantics). Close
+  works via the guest's own button (input injection); maximize/fullscreen were
+  M5.
+- **Input-offset fix (pre-existing M5c bug, surfaced here).** The capture is
+  cropped to the xdg geometry, so the FE's canvas-relative coords are relative
+  to the crop origin — but input injection wasn't adding it back, so every
+  pointer event on a CSD window was offset by the shadow margin. Earlier
+  position-tolerant tests masked it; a precise titlebar drag did not. Fixed by
+  adding `wlr_xdg_surface_get_geometry().{x,y}` to injected coords.
+
+Verified by `display-probe.cap.ts`: Chromium/gnome-calculator/Firefox/GTK
+guest map `chromeless=1` (single chrome); xclock + x11 guest stay framed; and
+`csd-move` drags the calculator's libadwaita headerbar → `request_move` →
+the wash window moves 242px. **Deferred (M8b):** bridge `xdg_toplevel.resize`
+(edge drags) the same way; an app that draws NO decorations gets no titlebar
+(close via taskbar; rare for real apps).
 
 ### Out of scope here — M6 throughput
 WebRTC/VP9 (for Firefox scroll/video parity) + audio service hookup are a separate,

@@ -15,6 +15,7 @@
 // PNG, auto-detected by createImageBitmap from the magic bytes.
 
 import { registerDisplayWindow, subscribeRaw, unregisterDisplayWindow } from './api';
+import { moveLocal, windowById, screenSize, VIEWPORTS_PER_AXIS } from './wm';
 
 // Frame header layout (little-endian). See mac-phoenix client.js and
 // docs/DISPLAY.md. Only the dirty-rect + full-surface size are used; the
@@ -80,6 +81,17 @@ export class WashAppDisplay extends HTMLElement {
 
   // Active popup overlays, keyed by their video-popup channel id.
   private popups = new Map<number, PopupOverlay>();
+
+  // Interactive-move state (M8). A CSD guest (chromeless window) requests an
+  // xdg_toplevel.move when its own titlebar is dragged; the compositor relays
+  // it as a {move:true} control frame. We then drag the wash window following
+  // the pointer (this element holds the pointer capture), instead of
+  // forwarding motion to the guest. moveAnchor records the pointer + window
+  // origin at grab time; lastClientX/Y track the live pointer.
+  private moving = false;
+  private moveAnchor: { px: number; py: number; ox: number; oy: number } | null = null;
+  private lastClientX = 0;
+  private lastClientY = 0;
 
   connectedCallback(): void {
     const winAttr = this.getAttribute('data-wash-window');
@@ -164,10 +176,20 @@ export class WashAppDisplay extends HTMLElement {
     this.style.outline = 'none';
 
     const onPointerMove = (ev: PointerEvent) => {
+      this.lastClientX = ev.clientX;
+      this.lastClientY = ev.clientY;
+      // While dragging the window (CSD guest's titlebar move, M8) we drive
+      // the wash window instead of forwarding motion to the guest.
+      if (this.moving) {
+        this.applyMove(ev);
+        return;
+      }
       this.queueMotion(ev);
       this.scheduleFlush();
     };
     const onPointerDown = (ev: PointerEvent) => {
+      this.lastClientX = ev.clientX;
+      this.lastClientY = ev.clientY;
       // Capture so a drag that leaves the element still delivers move/up
       // (dragging a scrollbar, selecting text, etc.). Focus for keys.
       try {
@@ -181,6 +203,12 @@ export class WashAppDisplay extends HTMLElement {
       this.flushNow();
     };
     const onPointerUp = (ev: PointerEvent) => {
+      this.lastClientX = ev.clientX;
+      this.lastClientY = ev.clientY;
+      if (this.moving) {
+        this.endMove();
+        return;
+      }
       this.queueMotion(ev);
       this.queue({ ev: 'button', btn: BUTTON_NAME[ev.button] ?? 'left', state: 'up' });
       this.flushNow();
@@ -251,6 +279,44 @@ export class WashAppDisplay extends HTMLElement {
     this.pending.push(e);
   }
 
+  // --- interactive move (M8) -----------------------------------------
+  // beginMove starts dragging the wash window in response to a CSD guest's
+  // xdg_toplevel.move (relayed as a {move:true} control frame). We hold the
+  // pointer capture, so subsequent pointermove/up land here; we drive the
+  // window (moveLocal for 60fps optimism) and commit once on release. The
+  // grab is anchored at the live pointer + the window's current origin.
+  private beginMove(): void {
+    if (this.windowID < 0 || this.moving) return;
+    const w = windowById(this.windowID);
+    if (!w) return;
+    this.moving = true;
+    this.moveAnchor = { px: this.lastClientX, py: this.lastClientY, ox: w.x, oy: w.y };
+    // The guest requested the move off a press it will never see released
+    // (we're taking over the grab — xdg-shell semantics). Send a synthetic
+    // button-up so its CSD drag state resets cleanly.
+    this.queue({ ev: 'button', btn: 'left', state: 'up' });
+    this.flushNow();
+  }
+
+  private applyMove(ev: PointerEvent): void {
+    const a = this.moveAnchor;
+    if (!a || this.windowID < 0) return;
+    const w = windowById(this.windowID);
+    const s = screenSize();
+    const maxX = s.w * VIEWPORTS_PER_AXIS - (w ? w.w : 0);
+    const maxY = s.h * VIEWPORTS_PER_AXIS - (w ? w.h : 0);
+    const x = Math.round(Math.max(0, Math.min(maxX, a.ox + (ev.clientX - a.px))));
+    const y = Math.round(Math.max(0, Math.min(maxY, a.oy + (ev.clientY - a.py))));
+    moveLocal(this.windowID, x, y); // live; router commit happens on release
+  }
+
+  private endMove(): void {
+    this.moving = false;
+    this.moveAnchor = null;
+    const w = windowById(this.windowID);
+    if (w) window.wash?.moveWindow(this.windowID, w.x, w.y);
+  }
+
   // scheduleFlush batches motion to one send per animation frame.
   private scheduleFlush(): void {
     if (this.rafID) return;
@@ -299,13 +365,16 @@ export class WashAppDisplay extends HTMLElement {
   private onFrame(bytes: Uint8Array): void {
     if (!this.canvas || !this.ctx) return;
     // Sub-header frames on the video channel are JSON control messages, not
-    // pixels — currently {cursor:"<css-name>"} from cursor-shape-v1 (M4).
+    // pixels — {cursor:"<css-name>"} from cursor-shape-v1 (M4), or {move:true}
+    // when a CSD guest drags its own titlebar and asks for a move (M8).
     if (bytes.length < HEADER_BYTES) {
       try {
         const ctrl = JSON.parse(new TextDecoder().decode(bytes));
         if (typeof ctrl.cursor === 'string') {
           this.style.cursor = ctrl.cursor;
           if (this.canvas) this.canvas.style.cursor = ctrl.cursor;
+        } else if (ctrl.move === true) {
+          this.beginMove();
         }
       } catch {
         /* ignore malformed control frame */

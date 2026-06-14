@@ -346,6 +346,37 @@ test.describe('display-probe', () => {
     console.log(`[chromium] ${verdict}`);
   });
 
+  // M8 move bridge: dragging a chromeless guest's OWN titlebar should move
+  // the wash window. The drag is injected → guest requests xdg_toplevel.move
+  // → compositor relays {move:true} → wash-app-display drives the wash window.
+  test('csd-move (drag titlebar moves window)', async ({ page, router }) => {
+    test.setTimeout(60_000);
+    if (!existsSync('/usr/bin/gnome-calculator')) test.skip(true, 'no calc');
+    await bootWithTerminal(page, router);
+    await page.keyboard.type('gnome-calculator\n', { delay: 8 });
+    await router.waitForLog(/window\.create .*element="wash-app-display"/, 30_000);
+    const winEl = win(page, 'wash-app-display').first();
+    await expect(winEl).toBeVisible({ timeout: 20_000 });
+    await settle(page, 2500);
+    const id = await winEl.locator('wash-app-display').evaluate((n) => Number(n.getAttribute('data-wash-window')));
+    await page.evaluate((w) => (window as any).wash.focusWindow(w), id);
+    const before = (await winEl.boundingBox())!;
+    // Grab the libadwaita headerbar in clearly-empty space (between the Undo
+    // button on the left and the Basic dropdown in the centre).
+    const sx = before.x + 120, sy = before.y + 22;
+    await page.mouse.move(sx, sy);
+    await page.mouse.down();
+    await page.mouse.move(sx + 160, sy + 100, { steps: 14 });
+    await page.mouse.up();
+    await settle(page, 700);
+    const after = (await winEl.boundingBox())!;
+    dumpLog(router, 'csd-move');
+    await page.screenshot({ path: join(SHOTS, 'csd-move.full.png') });
+    const moved = Math.abs(after.x - before.x) + Math.abs(after.y - before.y);
+    console.log(`[csd-move] before=(${Math.round(before.x)},${Math.round(before.y)}) after=(${Math.round(after.x)},${Math.round(after.y)}) moved=${Math.round(moved)}px`);
+    expect(moved).toBeGreaterThan(40);
+  });
+
   test('montage — three X11 apps at once', async ({ page, router }) => {
     test.setTimeout(60_000);
     await bootWithTerminal(page, router);

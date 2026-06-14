@@ -229,6 +229,7 @@ struct Toplevel {
     // a "maximize" lands at the full screen rather than being ignored (M5).
     struct wl_listener request_maximize;
     struct wl_listener request_fullscreen;
+    struct wl_listener request_move;
 
     WindowSink sink;         // shared window + capture/encode pipeline
 };
@@ -487,6 +488,20 @@ void toplevel_request_maximize(struct wl_listener* listener, void* /*data*/) {
     wlr_xdg_toplevel_set_size(t->xdg_toplevel, on ? kScreenW : 0, on ? kScreenH : 0);
 }
 
+// toplevel_request_move: the guest asks for an interactive move (its CSD
+// titlebar was dragged). wash owns window position and chromeless windows
+// have no wash titlebar, so relay the intent to the FE element as a control
+// frame on the video channel; the FE then drags the wash window following the
+// pointer (M8). The grab serial is implicit — we already injected the press.
+void toplevel_request_move(struct wl_listener* listener, void* /*data*/) {
+    Toplevel* t = wl_container_of(listener, t, request_move);
+    if (!t->sink.video_chan) return;
+    std::string msg = json{{"move", true}}.dump();
+    t->server->conn->write_channel(t->sink.video_chan,
+                                   (const uint8_t*)msg.data(), msg.size());
+    wlr_log(WLR_INFO, "wash-display: win=%u request_move -> FE", t->sink.win);
+}
+
 void toplevel_request_fullscreen(struct wl_listener* listener, void* /*data*/) {
     Toplevel* t = wl_container_of(listener, t, request_fullscreen);
     bool on = t->xdg_toplevel->requested.fullscreen;
@@ -504,6 +519,7 @@ void toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
     wl_list_remove(&t->destroy.link);
     wl_list_remove(&t->request_maximize.link);
     wl_list_remove(&t->request_fullscreen.link);
+    wl_list_remove(&t->request_move.link);
     delete t;
 }
 
@@ -759,6 +775,8 @@ void server_new_xdg_toplevel(struct wl_listener* listener, void* data) {
     wl_signal_add(&xdg_toplevel->events.request_maximize, &t->request_maximize);
     t->request_fullscreen.notify = toplevel_request_fullscreen;
     wl_signal_add(&xdg_toplevel->events.request_fullscreen, &t->request_fullscreen);
+    t->request_move.notify = toplevel_request_move;
+    wl_signal_add(&xdg_toplevel->events.request_move, &t->request_move);
 }
 
 #ifdef WASH_DISPLAY_XWAYLAND
@@ -1118,6 +1136,22 @@ static void inject_input(const json& data) {
     uint32_t t = (uint32_t)now_ms();
     bool ptr_touched = false;
 
+    // The capture is cropped to the xdg window geometry (M5c — drops the CSD
+    // shadow margin), so the FE's canvas-relative coords are relative to that
+    // crop origin, not the full surface. Add the geometry origin back so
+    // injected pointer coords are true surface-local; otherwise every event on a
+    // CSD window is offset by the shadow margin. X11 surfaces and popups have
+    // no xdg geometry → zero offset.
+    int crop_ox = 0, crop_oy = 0;
+    if (!data.value("popup_chan", 0U)) {
+        if (struct wlr_xdg_surface* xs = wlr_xdg_surface_try_from_wlr_surface(surface)) {
+            struct wlr_box geo{};
+            wlr_xdg_surface_get_geometry(xs, &geo);
+            crop_ox = geo.x;
+            crop_oy = geo.y;
+        }
+    }
+
     auto ensure_enter = [&](double x, double y) {
         if (g_ptr_surface != surface) {
             wlr_seat_pointer_notify_enter(seat, surface, x, y);
@@ -1128,7 +1162,7 @@ static void inject_input(const json& data) {
     for (const auto& e : data["events"]) {
         const std::string ev = e.value("ev", std::string());
         if (ev == "motion") {
-            double x = e.value("x", 0.0), y = e.value("y", 0.0);
+            double x = e.value("x", 0.0) + crop_ox, y = e.value("y", 0.0) + crop_oy;
             ensure_enter(x, y);
             wlr_seat_pointer_notify_motion(seat, t, x, y);
             g_ptr_x = x;
