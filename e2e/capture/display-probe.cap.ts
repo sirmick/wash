@@ -377,6 +377,37 @@ test.describe('display-probe', () => {
     expect(moved).toBeGreaterThan(40);
   });
 
+  // M8b resize bridge: dragging a chromeless guest's own resize edge/corner
+  // should resize the wash window (guest requests xdg_toplevel.resize →
+  // {resize:<edges>} → wash-app-display drives the box → window.resize repaints
+  // the guest).
+  test('csd-resize (drag corner resizes window)', async ({ page, router }) => {
+    test.setTimeout(60_000);
+    if (!existsSync('/usr/bin/gnome-calculator')) test.skip(true, 'no calc');
+    await bootWithTerminal(page, router);
+    await page.keyboard.type('gnome-calculator\n', { delay: 8 });
+    await router.waitForLog(/window\.create .*element="wash-app-display"/, 30_000);
+    const winEl = win(page, 'wash-app-display').first();
+    await expect(winEl).toBeVisible({ timeout: 20_000 });
+    await settle(page, 2500);
+    const id = await winEl.locator('wash-app-display').evaluate((n) => Number(n.getAttribute('data-wash-window')));
+    await page.evaluate((w) => (window as any).wash.focusWindow(w), id);
+    const before = (await winEl.boundingBox())!;
+    // Grab the bottom-right corner resize region (a few px in from the edge).
+    const sx = before.x + before.width - 3, sy = before.y + before.height - 3;
+    await page.mouse.move(sx, sy);
+    await page.mouse.down();
+    await page.mouse.move(sx + 140, sy + 120, { steps: 14 });
+    await page.mouse.up();
+    await settle(page, 900);
+    const after = (await winEl.boundingBox())!;
+    dumpLog(router, 'csd-resize');
+    await page.screenshot({ path: join(SHOTS, 'csd-resize.full.png') });
+    const grew = after.width - before.width + (after.height - before.height);
+    console.log(`[csd-resize] before=${Math.round(before.width)}x${Math.round(before.height)} after=${Math.round(after.width)}x${Math.round(after.height)} grew=${Math.round(grew)}px`);
+    expect(grew).toBeGreaterThan(40);
+  });
+
   test('montage — three X11 apps at once', async ({ page, router }) => {
     test.setTimeout(60_000);
     await bootWithTerminal(page, router);

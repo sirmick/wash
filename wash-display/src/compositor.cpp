@@ -230,6 +230,7 @@ struct Toplevel {
     struct wl_listener request_maximize;
     struct wl_listener request_fullscreen;
     struct wl_listener request_move;
+    struct wl_listener request_resize;
 
     WindowSink sink;         // shared window + capture/encode pipeline
 };
@@ -502,6 +503,21 @@ void toplevel_request_move(struct wl_listener* listener, void* /*data*/) {
     wlr_log(WLR_INFO, "wash-display: win=%u request_move -> FE", t->sink.win);
 }
 
+// toplevel_request_resize: the guest's CSD edge/corner was dragged. Like
+// request_move, relay the intent (with the edge bitmask) to the FE element as
+// a {resize:<edges>} control frame; the FE drives the wash window size, which
+// rounds back through window.resize → set_size to repaint the guest (M8b).
+void toplevel_request_resize(struct wl_listener* listener, void* data) {
+    Toplevel* t = wl_container_of(listener, t, request_resize);
+    auto* ev = static_cast<struct wlr_xdg_toplevel_resize_event*>(data);
+    if (!t->sink.video_chan) return;
+    std::string msg = json{{"resize", (int)ev->edges}}.dump();
+    t->server->conn->write_channel(t->sink.video_chan,
+                                   (const uint8_t*)msg.data(), msg.size());
+    wlr_log(WLR_INFO, "wash-display: win=%u request_resize edges=%u -> FE",
+            t->sink.win, ev->edges);
+}
+
 void toplevel_request_fullscreen(struct wl_listener* listener, void* /*data*/) {
     Toplevel* t = wl_container_of(listener, t, request_fullscreen);
     bool on = t->xdg_toplevel->requested.fullscreen;
@@ -520,6 +536,7 @@ void toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
     wl_list_remove(&t->request_maximize.link);
     wl_list_remove(&t->request_fullscreen.link);
     wl_list_remove(&t->request_move.link);
+    wl_list_remove(&t->request_resize.link);
     delete t;
 }
 
@@ -777,6 +794,8 @@ void server_new_xdg_toplevel(struct wl_listener* listener, void* data) {
     wl_signal_add(&xdg_toplevel->events.request_fullscreen, &t->request_fullscreen);
     t->request_move.notify = toplevel_request_move;
     wl_signal_add(&xdg_toplevel->events.request_move, &t->request_move);
+    t->request_resize.notify = toplevel_request_resize;
+    wl_signal_add(&xdg_toplevel->events.request_resize, &t->request_resize);
 }
 
 #ifdef WASH_DISPLAY_XWAYLAND

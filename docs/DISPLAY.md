@@ -573,9 +573,23 @@ be the only one:
 Verified by `display-probe.cap.ts`: Chromium/gnome-calculator/Firefox/GTK
 guest map `chromeless=1` (single chrome); xclock + x11 guest stay framed; and
 `csd-move` drags the calculator's libadwaita headerbar → `request_move` →
-the wash window moves 242px. **Deferred (M8b):** bridge `xdg_toplevel.resize`
-(edge drags) the same way; an app that draws NO decorations gets no titlebar
-(close via taskbar; rare for real apps).
+the wash window moves 242px.
+
+**M8b — resize.** A chromeless window needs to be resizable too. The guest's
+own resize edge can't be used: GTK/libadwaita put the resize grab in the CSD
+shadow margin, which M5c crops away, so `xdg_toplevel.resize` never fires from
+the visible edge (confirmed). Instead the shell renders its **bottom-right
+resize grip for chromeless windows** too (invisible — just the `nwse-resize`
+cursor), reusing the existing live-streaming resize: drag → `window.resize` →
+the compositor's `set_size` reconfigures the guest, which repaints at the new
+size. (The compositor *also* relays `xdg_toplevel.resize` as a `{resize:<edges>}`
+control frame for the rare app whose grab is inside the geometry — a bonus
+path; the grip is the reliable one.) `csd-resize` drags the calculator's
+corner → 360×497 → 500×617, guest reconfigured live. Apps with a natural max
+size (e.g. the calculator) letterbox inside an over-large box; apps that fill
+(browsers) don't. **Deferred:** top/left/edge grips (only bottom-right today,
+same as framed windows); an app that draws NO decorations has no titlebar to
+move (close via its own button / taskbar; rare for real apps).
 
 ### Out of scope here — M6 throughput
 WebRTC/VP9 (for Firefox scroll/video parity) + audio service hookup are a separate,

@@ -15,7 +15,15 @@
 // PNG, auto-detected by createImageBitmap from the magic bytes.
 
 import { registerDisplayWindow, subscribeRaw, unregisterDisplayWindow } from './api';
-import { moveLocal, windowById, screenSize, VIEWPORTS_PER_AXIS } from './wm';
+import { moveLocal, resizeLocal, windowById, screenSize, VIEWPORTS_PER_AXIS } from './wm';
+
+// xdg_toplevel resize edge bitmask (matches wlroots / xdg-shell).
+const EDGE_TOP = 1;
+const EDGE_BOTTOM = 2;
+const EDGE_LEFT = 4;
+const EDGE_RIGHT = 8;
+const MIN_W = 100;
+const MIN_H = 60;
 
 // Frame header layout (little-endian). See mac-phoenix client.js and
 // docs/DISPLAY.md. Only the dirty-rect + full-surface size are used; the
@@ -92,6 +100,13 @@ export class WashAppDisplay extends HTMLElement {
   private moveAnchor: { px: number; py: number; ox: number; oy: number } | null = null;
   private lastClientX = 0;
   private lastClientY = 0;
+  // Interactive-resize state (M8b), same model as move but driven by the
+  // guest's xdg_toplevel.resize (a {resize:<edges>} control frame). Top/left
+  // edges move the origin as well as the size.
+  private resizing = false;
+  private resizeAnchor:
+    | { px: number; py: number; ox: number; oy: number; ow: number; oh: number; edges: number }
+    | null = null;
 
   connectedCallback(): void {
     const winAttr = this.getAttribute('data-wash-window');
@@ -178,10 +193,14 @@ export class WashAppDisplay extends HTMLElement {
     const onPointerMove = (ev: PointerEvent) => {
       this.lastClientX = ev.clientX;
       this.lastClientY = ev.clientY;
-      // While dragging the window (CSD guest's titlebar move, M8) we drive
-      // the wash window instead of forwarding motion to the guest.
+      // While dragging the window (CSD guest's titlebar move/resize, M8/M8b)
+      // we drive the wash window instead of forwarding motion to the guest.
       if (this.moving) {
         this.applyMove(ev);
+        return;
+      }
+      if (this.resizing) {
+        this.applyResize(ev);
         return;
       }
       this.queueMotion(ev);
@@ -207,6 +226,10 @@ export class WashAppDisplay extends HTMLElement {
       this.lastClientY = ev.clientY;
       if (this.moving) {
         this.endMove();
+        return;
+      }
+      if (this.resizing) {
+        this.endResize();
         return;
       }
       this.queueMotion(ev);
@@ -317,6 +340,54 @@ export class WashAppDisplay extends HTMLElement {
     if (w) window.wash?.moveWindow(this.windowID, w.x, w.y);
   }
 
+  // --- interactive resize (M8b) --------------------------------------
+  // Driven by the guest's xdg_toplevel.resize ({resize:<edges>}). Like move,
+  // we take over the grab (button-up to the guest), update the wash window box
+  // live (resizeLocal, + moveLocal when a top/left edge shifts the origin),
+  // and commit once on release. The router's window.resize round-trips to the
+  // compositor's set_size, repainting the guest at the new size.
+  private beginResize(edges: number): void {
+    if (this.windowID < 0 || this.resizing || this.moving) return;
+    const w = windowById(this.windowID);
+    if (!w) return;
+    this.resizing = true;
+    this.resizeAnchor = { px: this.lastClientX, py: this.lastClientY, ox: w.x, oy: w.y, ow: w.w, oh: w.h, edges };
+    this.queue({ ev: 'button', btn: 'left', state: 'up' });
+    this.flushNow();
+  }
+
+  private applyResize(ev: PointerEvent): void {
+    const a = this.resizeAnchor;
+    if (!a || this.windowID < 0) return;
+    const dx = ev.clientX - a.px;
+    const dy = ev.clientY - a.py;
+    let x = a.ox, y = a.oy, w = a.ow, h = a.oh;
+    if (a.edges & EDGE_RIGHT) w = Math.max(MIN_W, a.ow + dx);
+    if (a.edges & EDGE_LEFT) {
+      w = Math.max(MIN_W, a.ow - dx);
+      x = a.ox + (a.ow - w); // keep the right edge fixed
+    }
+    if (a.edges & EDGE_BOTTOM) h = Math.max(MIN_H, a.oh + dy);
+    if (a.edges & EDGE_TOP) {
+      h = Math.max(MIN_H, a.oh - dy);
+      y = a.oy + (a.oh - h); // keep the bottom edge fixed
+    }
+    w = Math.round(w);
+    h = Math.round(h);
+    resizeLocal(this.windowID, w, h);
+    if (Math.round(x) !== a.ox || Math.round(y) !== a.oy) moveLocal(this.windowID, Math.round(x), Math.round(y));
+  }
+
+  private endResize(): void {
+    const edges = this.resizeAnchor?.edges ?? 0;
+    this.resizing = false;
+    this.resizeAnchor = null;
+    const w = windowById(this.windowID);
+    if (!w) return;
+    window.wash?.resizeWindow(this.windowID, w.w, w.h);
+    if (edges & (EDGE_LEFT | EDGE_TOP)) window.wash?.moveWindow(this.windowID, w.x, w.y);
+  }
+
   // scheduleFlush batches motion to one send per animation frame.
   private scheduleFlush(): void {
     if (this.rafID) return;
@@ -375,6 +446,8 @@ export class WashAppDisplay extends HTMLElement {
           if (this.canvas) this.canvas.style.cursor = ctrl.cursor;
         } else if (ctrl.move === true) {
           this.beginMove();
+        } else if (typeof ctrl.resize === 'number') {
+          this.beginResize(ctrl.resize);
         }
       } catch {
         /* ignore malformed control frame */
