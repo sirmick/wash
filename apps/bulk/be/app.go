@@ -17,6 +17,8 @@ package bulk
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"sync"
 
@@ -116,7 +118,7 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 	bus := sdk.NewBus(c)
 	svc = sdk.NewStateService(bus, State{})
 	mgr = bulkops.New(
-		bulkops.WithOnUpdate(jobUpdateHandler()),
+		bulkops.WithOnUpdate(jobUpdateHandler(c)),
 		bulkops.WithOnConflict(conflictHandler(c)),
 	)
 	registerHandlers(bus)
@@ -266,7 +268,7 @@ func conflictHandler(c *sdk.Conn) func(bulkops.ConflictInfo) bulkops.ConflictAct
 // jobUpdateHandler builds the onUpdate callback that pushes every
 // queue transition into the StateService state. The router log emit
 // is what e2e waitForLog assertions observe transitions through.
-func jobUpdateHandler() func(bulkops.Job) {
+func jobUpdateHandler(c *sdk.Conn) func(bulkops.Job) {
 	return func(j bulkops.Job) {
 		log.Printf("bulk-ops job=%s op=%s status=%s done=%d total=%d err=%q",
 			j.ID, j.Op, j.Status, j.Done, j.Total, j.Error)
@@ -287,7 +289,47 @@ func jobUpdateHandler() func(bulkops.Job) {
 				}
 			}
 		}
+		// User-facing toast on terminal states. Cancelled is omitted —
+		// the user just initiated it, a toast would be noise.
+		switch j.Status {
+		case bulkops.StatusDone:
+			c.Info(opVerb(j.Op, true), opSummary(j))
+		case bulkops.StatusFailed:
+			c.Fail(opVerb(j.Op, false), errors.New(j.Error))
+		}
 	}
+}
+
+// opVerb renders the toast title for a bulk op outcome, e.g.
+// ("move", true) -> "Move complete", ("copy", false) -> "Copy failed".
+func opVerb(op bulkops.Op, ok bool) string {
+	name := "Operation"
+	switch op {
+	case bulkops.OpDelete:
+		name = "Delete"
+	case bulkops.OpMove:
+		name = "Move"
+	case bulkops.OpCopy:
+		name = "Copy"
+	}
+	if ok {
+		return name + " complete"
+	}
+	return name + " failed"
+}
+
+// opSummary renders the toast body: item count plus destination for
+// move/copy. "3 items" / "3 items → /home/mick/dst".
+func opSummary(j bulkops.Job) string {
+	noun := "item"
+	if len(j.Paths) != 1 {
+		noun = "items"
+	}
+	s := fmt.Sprintf("%d %s", len(j.Paths), noun)
+	if j.Dest != "" {
+		s += " → " + j.Dest
+	}
+	return s
 }
 
 // publishJobs republishes State.Jobs as the worker-driven jobs

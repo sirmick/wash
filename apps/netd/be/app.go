@@ -30,6 +30,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -299,6 +300,7 @@ func autoRevert(job *txn.Job) {
 	_ = job.Revert()
 	log.Printf("wash-netd: auto-reverted (not confirmed within %s)", ConfirmTimeout)
 	publish(NetState{Status: string(txn.Reverted), Summary: []string{"auto-reverted: not confirmed in time"}, Events: eventDTOs(job)})
+	conn.Warn("Network change reverted", "Not confirmed in time")
 }
 
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
@@ -560,6 +562,7 @@ func registerHandlers(bus *sdk.Bus) {
 		// re-validates internally but doesn't return the findings).
 		if ds := validate.Validate(cfg, applier.Capabilities()); errorCount(ds) > 0 {
 			publish(NetState{Status: "failed", Diagnostics: nonNilDiags(ds)})
+			conn.Fail("Network apply failed", errors.New(firstErrMsg(ds)))
 			return applyResp{State: string(txn.Failed), Diagnostics: nonNilDiags(ds)}, nil
 		}
 		mu.Lock()
@@ -587,6 +590,7 @@ func registerHandlers(bus *sdk.Bus) {
 			})
 		case txn.Reverted:
 			publish(NetState{Status: string(txn.Reverted), Phase: lastPhase(job), Events: eventDTOs(job)})
+			conn.Warn("Network change rolled back", "Apply failed and was reverted")
 		}
 		return resp, nil
 	})
@@ -604,6 +608,7 @@ func registerHandlers(bus *sdk.Bus) {
 			return statusResp{}, sdk.Errf(sdk.ErrInternal, "confirm: %v", err)
 		}
 		publish(NetState{Status: string(txn.Committed), Events: eventDTOs(job)})
+		conn.Info("Network change applied", "")
 		return statusResp{State: string(job.State())}, nil
 	})
 
@@ -1025,6 +1030,17 @@ func lastPhase(j *txn.Job) string {
 		return ""
 	}
 	return evs[len(evs)-1].Phase
+}
+
+// firstErrMsg returns the first error-severity diagnostic message, for
+// use as a notification body. Empty if there are no error diagnostics.
+func firstErrMsg(ds []validate.Diagnostic) string {
+	for _, d := range ds {
+		if d.Severity == validate.Error {
+			return d.Message
+		}
+	}
+	return ""
 }
 
 func errorCount(ds []validate.Diagnostic) int {

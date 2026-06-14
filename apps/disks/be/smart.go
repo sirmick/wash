@@ -3,6 +3,7 @@ package disks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"os"
 	"strconv"
@@ -79,6 +80,7 @@ func runSmart(c *sdk.Conn, name string) {
 	if err != nil {
 		log.Printf("wash-disks: smartctl dev=%s priv run: %v", name, err)
 		_ = c.SendAppMsg(smartMsg{Kind: "smart_err", Name: name, Error: err.Error()})
+		c.Fail("SMART check failed: "+name, err)
 		return
 	}
 	// smartctl returns a non-zero bitmask exit even on benign warnings, but
@@ -90,16 +92,27 @@ func runSmart(c *sdk.Conn, name string) {
 			msg = string(r.Stderr)
 		}
 		_ = c.SendAppMsg(smartMsg{Kind: "smart_err", Name: name, Error: msg})
+		c.Fail("SMART check failed: "+name, errors.New(msg))
 		return
 	}
 	rep, perr := parseSmartJSON(r.Stdout)
 	if perr != nil {
 		log.Printf("wash-disks smart parse %s: %v", name, perr)
 		_ = c.SendAppMsg(smartMsg{Kind: "smart_err", Name: name, Error: "could not parse smartctl output"})
+		c.Fail("SMART check failed: "+name, errors.New("could not parse smartctl output"))
 		return
 	}
 	rep.Name = name
 	_ = c.SendAppMsg(smartMsg{Kind: "smart_ok", Name: name, Report: rep})
+	// A failing self-assessment is a needs-attention event worth a toast
+	// even though the panel shows the full report. A healthy result gets a
+	// brief confirmation; no toast when the drive doesn't report status.
+	switch {
+	case rep.HaveStatus && !rep.Passed:
+		c.Warn("SMART warning: "+name, "Drive reports failing health")
+	case rep.HaveStatus:
+		c.Info("SMART check passed: "+name, "")
+	}
 }
 
 // smartctlJSON is the subset of `smartctl -aj` we read. Covers both ATA

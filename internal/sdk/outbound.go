@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sync"
 
 	"github.com/sirmick/wash/internal/wire"
@@ -331,6 +332,42 @@ func (c *Conn) Notify(title, body, level string) error {
 		level = wire.NotifyLevelInfo
 	}
 	return c.writeEvt(wire.NewEvtNotify(title, body, level))
+}
+
+// Info / Warn / Fail are the ergonomic, one-liner toast helpers built on
+// Notify. Unlike Notify they are best-effort and fire-and-forget: each
+// dispatches on a fresh goroutine and logs (rather than returns) any
+// write error. The goroutine matters because these are meant to be
+// called from inside SDK dispatch callbacks — an inline conn write there
+// can fill the router's bounded send queue and head-of-line-stall intake
+// of the next inbound message (see apps/notify/be re-emit). Reach for
+// these in app code; use raw Notify only when you must observe the error.
+func (c *Conn) Info(title, body string) { c.notifyBG(title, body, wire.NotifyLevelInfo) }
+func (c *Conn) Warn(title, body string) { c.notifyBG(title, body, wire.NotifyLevelWarn) }
+
+// Fail posts an error toast and returns err unchanged, so it slots into
+// an existing error-return path without an extra statement:
+//
+//	if err != nil {
+//		return c.Fail("Upload failed", err)
+//	}
+//
+// A nil err yields an empty body (title-only error toast).
+func (c *Conn) Fail(title string, err error) error {
+	body := ""
+	if err != nil {
+		body = err.Error()
+	}
+	c.notifyBG(title, body, wire.NotifyLevelError)
+	return err
+}
+
+func (c *Conn) notifyBG(title, body, level string) {
+	go func() {
+		if err := c.Notify(title, body, level); err != nil {
+			log.Printf("sdk notify: %s: %v", title, err)
+		}
+	}()
 }
 
 // SaveState persists the app's FE state blob router-side. The router

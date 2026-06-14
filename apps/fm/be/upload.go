@@ -366,6 +366,14 @@ func finishUpload(c *sdk.Conn, s *uploadSession) {
 		s.done.Store(s.total)
 	}
 	reportJob(c, s, status)
+	// User-facing toast. Cancelled is omitted — the user just initiated
+	// it, so a toast would be noise.
+	switch status {
+	case "done":
+		c.Info("Upload complete", s.dest)
+	case "failed":
+		c.Fail("Upload failed", errors.New(s.failedMsg()))
+	}
 	_ = bus.Emit("upload_done", map[string]any{"upload_id": s.id, "status": status})
 }
 
