@@ -318,6 +318,9 @@ func registerHandlers(b *sdk.Bus) {
 	// Upload ingestion (OS files → confined fs); see upload.go.
 	registerUploadHandlers(b)
 
+	// Download egress (confined fs → browser save); see download.go.
+	registerDownloadHandlers(b)
+
 	// Fire-and-forget commands (no reply).
 	sdk.HandleVoid(b, "request_initial", func(_ *sdk.Conn, _ string, _ struct{}) error {
 		reply, err := listReplyFor("", initialPath())

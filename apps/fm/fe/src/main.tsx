@@ -428,6 +428,34 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         cancelledUploads.add(String(m.upload_id));
         return;
       }
+      case 'download_channel': {
+        // BE opened the raw channel for this download — hand its id to
+        // the awaiting receiver so it can subscribe for bytes.
+        const id = String(m.download_id);
+        const resolve = pendingDownloadChannels.get(id);
+        if (resolve) {
+          pendingDownloadChannels.delete(id);
+          resolve(Number(m.channel_id));
+        }
+        return;
+      }
+      case 'download_done': {
+        // Terminal status: all bytes are flushed, finalize the save.
+        // Also unblock a still-pending channel waiter (BE failed before
+        // the channel opened) with the -1 sentinel.
+        const id = String(m.download_id);
+        const chResolve = pendingDownloadChannels.get(id);
+        if (chResolve) {
+          pendingDownloadChannels.delete(id);
+          chResolve(-1);
+        }
+        const doneResolve = pendingDownloadDone.get(id);
+        if (doneResolve) {
+          pendingDownloadDone.delete(id);
+          doneResolve(String(m.status));
+        }
+        return;
+      }
     }
   };
 
@@ -922,6 +950,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const pendingUploadChannels = new Map<string, (channelID: number) => void>();
   const pendingUploadDone = new Map<string, (status: string) => void>();
 
+  // Download egress mirrors upload's async handshake: the BE opens a raw
+  // channel and pushes its id (download_channel), streams the file/zip
+  // bytes, then signals completion (download_done). Keyed by download_id.
+  const pendingDownloadChannels = new Map<string, (channelID: number) => void>();
+  const pendingDownloadDone = new Map<string, (status: string) => void>();
+
   // Hidden native inputs that back the toolbar Upload buttons — the
   // only way to reach OS files from the browser. dirInputEl gets the
   // webkitdirectory attribute in onMount (no clean JSX typing for it).
@@ -1255,6 +1289,66 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       expandDir(destDir);
       invalidateAndList(destDir);
     }
+  };
+
+  // runDownload asks the BE to stream one-or-more confined paths back to
+  // the browser. A lone file comes as-is; a directory or a multi-select
+  // arrives as a single zip. We open the raw channel the BE announces,
+  // concatenate every chunk, and on download_done synthesize an <a
+  // download> click to drop it in the browser's downloads. The terminal
+  // toast (Download ready / failed) is fired BE-side.
+  const runDownload = async (paths: string[]) => {
+    if (paths.length === 0) return;
+    const begin = await sendWithReply({ kind: 'download_begin', paths });
+    if (begin.kind !== 'download_begin_ok') {
+      setStatusOverride(`download: ${String(begin.msg ?? begin.code ?? 'failed')}`);
+      return;
+    }
+    const downloadID = String(begin.download_id);
+    const filename = String(begin.filename);
+    const channelID = await waitFor(pendingDownloadChannels, downloadID, 15_000, -1);
+    if (channelID < 0) {
+      setStatusOverride('download: channel never opened');
+      return;
+    }
+    const chunks: Uint8Array[] = [];
+    const unsubscribe = window.wash.openRawChannel(channelID, (bytes) => {
+      // Copy: the shell may reuse the backing buffer after the callback.
+      chunks.push(bytes.slice());
+    });
+    // No timeout spanning the stream — a big zip can run a while. The BE
+    // emits download_done right after the last frame flushes.
+    const donePromise = new Promise<string>((resolve) => pendingDownloadDone.set(downloadID, resolve));
+    try {
+      const status = await donePromise;
+      if (status === 'done') {
+        saveBytes(filename, chunks);
+      } else {
+        setStatusOverride(`download: ${filename} failed`);
+      }
+    } finally {
+      unsubscribe();
+      pendingDownloadChannels.delete(downloadID);
+      pendingDownloadDone.delete(downloadID);
+    }
+  };
+
+  // saveBytes drops a Blob into the browser's downloads under name via a
+  // synthetic anchor click. data-testid on the anchor lets the e2e assert
+  // the trigger fired without depending on the OS download chrome.
+  const saveBytes = (name: string, chunks: Uint8Array[]) => {
+    const blob = new Blob(chunks as BlobPart[], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.dataset.testid = 'fm-download-anchor';
+    a.dataset.name = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Revoke after a tick so the navigation/save has picked up the URL.
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
   };
 
   // commitSymlink creates a symlink at targetDir/basename(src)
@@ -1981,6 +2075,23 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             closeMenu();
             send({ kind: 'clipboard_copy_path', path: m.path });
           }}
+          downloadLabel={(() => {
+            const p = (menu() as { path: string }).path;
+            const sel = selection();
+            return sel.size >= 2 && sel.has(p) ? `Download ${sel.size} items` : 'Download';
+          })()}
+          onDownload={() => {
+            const m = menu() as { path: string };
+            closeMenu();
+            // Mirror Delete: a 2+ selection that includes the clicked row
+            // downloads the whole set (zipped); otherwise just the row.
+            const sel = selection();
+            if (sel.size >= 2 && sel.has(m.path)) {
+              void runDownload(Array.from(sel));
+            } else {
+              void runDownload([m.path]);
+            }
+          }}
           onInfo={() => {
             closeMenu();
             if (!infoOpen()) toggleInfo();
@@ -2620,6 +2731,8 @@ const ContextMenu: Component<{
   onOpen: () => void;
   onCopy: () => void;
   onInfo: () => void;
+  onDownload: () => void;
+  downloadLabel: string;
   onRename: () => void;
   onDelete: () => void;
   onDismiss: () => void;
@@ -2628,6 +2741,7 @@ const ContextMenu: Component<{
     <Menu data-testid="fm-context-menu" x={props.left} y={props.top} onDismiss={props.onDismiss}>
       <MenuItem data-testid="fm-ctx-open" label="Open" onClick={props.onOpen} />
       <MenuItem data-testid="fm-ctx-copy" label="Copy path" onClick={props.onCopy} />
+      <MenuItem data-testid="fm-ctx-download" label={props.downloadLabel} onClick={props.onDownload} />
       <MenuItem data-testid="fm-ctx-info" label="Show info" onClick={props.onInfo} />
       <MenuSeparator />
       <MenuItem data-testid="fm-ctx-rename" label="Rename" onClick={props.onRename} />
