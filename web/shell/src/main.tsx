@@ -13,7 +13,7 @@ import { For, Show, createEffect, createSignal } from 'solid-js';
 import type { Component } from 'solid-js';
 import { type ConnState } from './ws';
 import { RouterClient } from './router-client';
-import { LOCAL_ORIGIN, registerClient, clientForInstance, clientForOrigin, parseInstanceId } from './clients';
+import { LOCAL_ORIGIN, registerClient, registerTag, clientForInstance, clientForOrigin, parseInstanceId } from './clients';
 import { beginBundle, finishBundle, pushBundleBytes } from './assets';
 
 const __washLoadT0 = performance.now();
@@ -378,6 +378,12 @@ const pendingClipboardGets = local.pendingClipboardGets;
 // additional clients (M2); window.wash routes instance-addressed calls
 // to the owning client by parsing the origin off the compound id.
 registerClient(LOCAL_ORIGIN, local);
+
+// Let a remote app bundle report the per-origin mangled element tag it
+// defined (web/lib defineWashApp), so the mount sites instantiate the same
+// tag via clients.tagFor(). No-op for local bundles (which never mangle).
+(window as unknown as { __washRegisterTag?: (o: string, m: string, r: string) => void }).__washRegisterTag =
+  registerTag;
 
 // deliverAppMsg routes a BE→FE message to its element, queuing if the
 // element hasn't mounted yet (Solid's onMount can run after the next

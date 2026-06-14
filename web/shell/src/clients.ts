@@ -87,3 +87,31 @@ export function clientForInstance(id: string): RouterClient | undefined {
 export function origins(): Origin[] {
   return [...clientByOrigin.keys()];
 }
+
+// ---- Per-origin custom-element tag registry ----
+//
+// Custom element tags are global by name in the DOM, so A's wash-fm and
+// B's wash-fm both calling customElements.define('wash-app-fm') collide
+// (the second is silently dropped, leaving B's window backed by A's code).
+// For a remote origin the app bundle's defineWashApp (web/lib) mangles its
+// tag to `${tag}-${slug(origin)}`, defines under that, and records the
+// mapping here via the window.__washRegisterTag hook the shell installs.
+// The shell's mount sites then create the mangled tag via tagFor(). LOCAL
+// apps never mangle (the import-origin global is unset), so this registry
+// stays empty for them and tagFor() returns the manifest tag unchanged.
+
+const tagByKey = new Map<string, string>(); // `${origin}␟${manifestTag}` → realTag
+
+/** registerTag records the mangled tag a remote origin defined for an app. */
+export function registerTag(origin: Origin, manifestTag: string, realTag: string): void {
+  tagByKey.set(origin + SEP + manifestTag, realTag);
+}
+
+/**
+ * tagFor returns the actual custom-element tag to instantiate for a
+ * window: the per-origin mangled tag if the bundle registered one, else
+ * the manifest tag (always the case for LOCAL).
+ */
+export function tagFor(origin: Origin, manifestTag: string): string {
+  return tagByKey.get(origin + SEP + manifestTag) ?? manifestTag;
+}

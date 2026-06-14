@@ -45,7 +45,25 @@ export function defineWashApp(
   App: Component<WashAppProps>,
   options: DefineWashAppOptions = {},
 ): void {
-  if (customElements.get(tag)) return;
+  // Remote-apps tag mangling (docs/REMOTE.md R2): when the shell imports
+  // this bundle on behalf of a REMOTE router, it sets __washImportOrigin
+  // so two routers serving the same app don't collide on one global tag.
+  // We define under a per-origin tag and report the mapping so the shell's
+  // mount sites instantiate the same tag. For a LOCAL import (or a
+  // standalone/HMR load) the global is unset and behaviour is unchanged.
+  const g = globalThis as unknown as {
+    __washImportOrigin?: string;
+    __washRegisterTag?: (origin: string, manifestTag: string, realTag: string) => void;
+  };
+  let realTag: `wash-app-${string}` = tag;
+  const importOrigin = g.__washImportOrigin;
+  if (importOrigin) {
+    const slug = importOrigin.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'r';
+    realTag = `${tag}-${slug}` as `wash-app-${string}`;
+    g.__washRegisterTag?.(importOrigin, tag, realTag);
+  }
+
+  if (customElements.get(realTag)) return;
 
   class WashAppElement extends HTMLElement {
     private cleanup?: () => void;
@@ -64,5 +82,5 @@ export function defineWashApp(
     }
   }
 
-  customElements.define(tag, WashAppElement);
+  customElements.define(realTag, WashAppElement);
 }

@@ -3,6 +3,7 @@
 // through here, and ChannelUnbind triggers a dynamic import.
 
 import { wlog } from './diag';
+import { type Origin, LOCAL_ORIGIN } from './clients';
 
 interface Pending {
   channelID: number;
@@ -10,6 +11,9 @@ interface Pending {
   resolve: () => void;
   reject: (err: Error) => void;
   promise: Promise<void>;
+  // Origin of the router that served this bundle, so the import can be
+  // tagged for per-origin element mangling (web/lib defineWashApp).
+  origin: Origin;
 }
 
 // Keyed by instance_id — the router announces which channel maps to
@@ -20,17 +24,41 @@ const instanceByChannel = new Map<number, string>();
 // beginBundle registers a fresh accumulator for instanceID waiting on
 // channelID. Returns the promise that resolves once the import has
 // run (or rejects on failure).
-export function beginBundle(channelID: number, instanceID: string): Promise<void> {
+export function beginBundle(channelID: number, instanceID: string, origin: Origin = LOCAL_ORIGIN): Promise<void> {
   let resolve!: () => void;
   let reject!: (err: Error) => void;
   const promise = new Promise<void>((res, rej) => {
     resolve = res;
     reject = rej;
   });
-  const p: Pending = { channelID, chunks: [], resolve, reject, promise };
+  const p: Pending = { channelID, chunks: [], resolve, reject, promise, origin };
   pendingByInstance.set(instanceID, p);
   instanceByChannel.set(channelID, instanceID);
   return promise;
+}
+
+// Bundle imports are serialized through one chain so the shared
+// __washImportOrigin global — read by web/lib defineWashApp during the
+// import's synchronous customElements.define — is never set for the wrong
+// bundle when two arrive concurrently. It is set only for REMOTE origins;
+// local/standalone imports leave it unset so their path is byte-for-byte
+// unchanged.
+let importChain: Promise<void> = Promise.resolve();
+
+function runImport(url: string, origin: Origin): Promise<void> {
+  const g = globalThis as unknown as { __washImportOrigin?: string };
+  const next = importChain.then(async () => {
+    if (origin && origin !== LOCAL_ORIGIN) g.__washImportOrigin = origin;
+    else delete g.__washImportOrigin;
+    try {
+      await import(/* @vite-ignore */ url);
+    } finally {
+      delete g.__washImportOrigin;
+    }
+  });
+  // Keep the chain alive even if one import rejects.
+  importChain = next.catch(() => {});
+  return next;
 }
 
 // pushBundleBytes accumulates raw frames arriving on a bundle channel.
@@ -71,7 +99,7 @@ export function finishBundle(channelID: number): void {
     wlog(`bundle PENDING after 5s: inst=${instanceID} ch=${channelID} viz=${document.visibilityState} focus=${document.hasFocus()}`);
   }, 5000);
 
-  import(/* @vite-ignore */ url)
+  runImport(url, p.origin)
     .then(() => {
       settled = true;
       clearTimeout(watchdog);

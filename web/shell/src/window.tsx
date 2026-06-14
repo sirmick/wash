@@ -9,6 +9,7 @@
 
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
 import { registerMountedElement, unregisterMountedElement } from './api';
+import { tagFor } from './clients';
 import {
   VIEWPORTS_PER_AXIS,
   CrashInfo,
@@ -51,7 +52,10 @@ export function FloatingWindow(props: WindowProps) {
       window.wash.focusWindow(props.win.windowID);
       return;
     }
-    const el = document.createElement(props.win.element);
+    // tagFor returns the per-origin mangled tag for a remote window (so it
+    // instantiates the bundle the remote router served, not a same-named
+    // local element); the manifest tag unchanged for local windows.
+    const el = document.createElement(tagFor(props.win.origin, props.win.element));
     el.setAttribute('data-wash-instance', props.win.instanceID);
     // window_id lets per-window shell built-ins (the <wash-app-display>
     // video decoder) find their video channel via the display-window
