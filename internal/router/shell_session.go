@@ -220,6 +220,8 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		// Deliberately not logged here: this is the FE→BE hot path.
 		// Failures are logged in handleAppMsgSend; successes are noise.
 		return s.handleAppMsgSend(m, f.Class())
+	case wire.ShellLaunch:
+		return s.handleLaunch(m)
 	case wire.ShellLog:
 		return s.handleShellLog(m)
 	case wire.ShellChannelCredit:
@@ -522,6 +524,48 @@ func (s *ShellSession) handleAppMsgSend(m wire.ShellAppMsgSend, class wire.Class
 		return nil
 	}
 	return inst.WriteEvtClass(wire.NewEvtAppMsg(inst.WindowID, m.Data), class)
+}
+
+// handleLaunch spawns an app by id on behalf of the shell (docs/REMOTE.md
+// §6.1). This is the no-session-BE launch path: host B runs --no-session,
+// so wash-connect can't route a launcher click through a session app and
+// asks B's router directly. Mirrors controlLaunch (control.go) — refuse
+// desktop-surface (the autoboot session owns the desktop), route
+// background singletons through resolveRecipient, spawn the rest — but
+// fire-and-forget: success surfaces as the usual app.declared + window,
+// and there is no response frame, so failures are logged here only.
+func (s *ShellSession) handleLaunch(m wire.ShellLaunch) error {
+	if m.AppID == "" {
+		s.router.log("shell launch: missing app_id")
+		return nil
+	}
+	entry := s.router.reg.ByID(m.AppID)
+	if entry == nil || !entry.Enabled() {
+		s.router.log("shell launch %s: unknown or disabled app", m.AppID)
+		return nil
+	}
+	if entry.Manifest.ProtocolVersion != ProtocolVersion {
+		s.router.log("shell launch %s: protocol mismatch", m.AppID)
+		return nil
+	}
+	if entry.Manifest.Surface == SurfaceDesktop {
+		s.router.log("shell launch %s: refusing desktop-surface app", m.AppID)
+		return nil
+	}
+	if entry.Manifest.Surface == SurfaceBackground {
+		// Singleton table is consulted first (returns the running one),
+		// spawning on demand otherwise — same as controlLaunch.
+		if _, code, err := s.router.resolveRecipient(context.Background(), wire.Recipient{AppID: m.AppID}); err != nil {
+			s.router.log("shell launch %s: %s: %v", m.AppID, code, err)
+		}
+		return nil
+	}
+	go func() {
+		if _, err := s.router.spawnAndRun(context.Background(), entry, false); err != nil {
+			s.router.log("shell launch %s: %v", m.AppID, err)
+		}
+	}()
+	return nil
 }
 
 // WriteCtrl encodes m as JSON and writes a shell control-channel frame.

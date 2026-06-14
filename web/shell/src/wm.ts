@@ -330,6 +330,17 @@ export function dismissCrashed(origin: Origin, windowID: number): void {
   if (isFocused({ origin, windowID })) setFocused(null);
 }
 
+// dropOrigin removes every window belonging to a remote origin — called
+// when a host disconnects (docs/REMOTE.md §6.1/§9): the supervisor reports
+// the host down and the shell detaches its RouterClient, so its frozen
+// windows must leave the desktop. Clears focus if it pointed at this host.
+// LOCAL is never dropped (the seat's own desktop).
+export function dropOrigin(origin: Origin): void {
+  if (origin === LOCAL_ORIGIN) return;
+  setWindows((prev) => prev.filter((w) => w.origin !== origin));
+  if (focused()?.origin === origin) setFocused(null);
+}
+
 function upsertWindow(w: Win): void {
   const idx = windows.findIndex((x) => x.origin === w.origin && x.windowID === w.windowID);
   if (idx < 0) {

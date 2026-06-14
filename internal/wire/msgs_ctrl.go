@@ -304,6 +304,9 @@ func DecodeCtrl(data []byte) (any, error) {
 	case TShellAppMsgSend:
 		var m ShellAppMsgSend
 		return m, json.Unmarshal(data, &m)
+	case TShellLaunch:
+		var m ShellLaunch
+		return m, json.Unmarshal(data, &m)
 	case TShellAppMsgDeliver:
 		var m ShellAppMsgDeliver
 		return m, json.Unmarshal(data, &m)

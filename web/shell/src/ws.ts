@@ -99,6 +99,24 @@ export class Conn {
 
   ready(): Promise<void> { return this.opening; }
 
+  /**
+   * close terminally tears this connection down: it stops the reconnect
+   * loop (closedByUser), drops any queued frames, and closes the socket.
+   * Used when a remote host is detached (docs/REMOTE.md §6.1) — unlike a
+   * transport blip (which reconnects), a user disconnect must not re-dial.
+   * Idempotent.
+   */
+  close(): void {
+    this.closedByUser = true;
+    this.clearPending();
+    this.setState('closed');
+    try {
+      this.ws?.close();
+    } catch {
+      /* already closed */
+    }
+  }
+
   /** The redirect target when state is 'unauthenticated', or null when
    * recovery is out-of-band (raw router: reopen the token URL). */
   loginRedirect(): string | null { return this.loginURL; }

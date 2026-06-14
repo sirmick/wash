@@ -17,6 +17,7 @@ import {
   type Origin,
   LOCAL_ORIGIN,
   registerClient,
+  unregisterClient,
   registerTag,
   clientForInstance,
   clientForOrigin,
@@ -45,6 +46,7 @@ import {
   viewport,
   viewportFor,
   windows,
+  dropOrigin,
   type Win,
 } from './wm';
 import { Desktop } from './desktop';
@@ -169,8 +171,27 @@ export interface ShellAppCrashed {
 }
 
 // Reactive subs the chrome (mounted via window.wash) listens to.
+// catalogSub is the LOCAL router's catalog (drives the launcher).
 const catalogSub = new Sub<CatalogApp[]>([]);
 const panelsSub = new Sub<PanelDesc[]>([]);
+
+// Remote routers' catalogs, keyed by origin (docs/REMOTE.md §6.1). A
+// remote host's catalog arrives on connect exactly like the local one;
+// wash-connect lists it to offer "launch on B". remoteCatalogSub fires
+// with {origin, apps} whenever any remote catalog updates (or empties on
+// disconnect), so a subscriber re-reads catalogFor() for its origin.
+const remoteCatalogs = new Map<Origin, CatalogApp[]>();
+const remoteCatalogSub = new Sub<{ origin: Origin; apps: CatalogApp[] } | null>(null);
+
+/** catalogFor returns a router's catalog by origin (LOCAL or a remote host). */
+function catalogFor(origin: Origin): CatalogApp[] {
+  return origin === LOCAL_ORIGIN ? catalogSub.value : remoteCatalogs.get(origin) ?? [];
+}
+
+/** clearRemoteCatalog drops a host's catalog on disconnect and notifies. */
+function clearRemoteCatalog(origin: Origin): void {
+  if (remoteCatalogs.delete(origin)) remoteCatalogSub.set({ origin, apps: [] });
+}
 const windowsSub = new Sub<WindowInfo[]>([]);
 // viewportSub mirrors the Solid viewport signal into the cross-element
 // pub/sub the session app subscribes to via window.wash.onViewport.
@@ -243,14 +264,20 @@ function makeHandlers(client: RouterClient): ClientHandlers {
   return {
   onCtrl: (msg) => {
     switch (msg.t) {
-      case 'catalog':
-        // The launcher is driven by the local catalog; a remote host's
-        // catalog feeds its launcher section in M3.
+      case 'catalog': {
+        // The local catalog drives the launcher + settings panels. A
+        // remote host's catalog is stored per-origin so wash-connect can
+        // list "apps you can launch on B" (docs/REMOTE.md §6.1).
+        const c = msg as ShellCatalog;
         if (isLocal) {
-          catalogSub.set((msg as ShellCatalog).apps);
-          panelsSub.set((msg as ShellCatalog).panels ?? []);
+          catalogSub.set(c.apps);
+          panelsSub.set(c.panels ?? []);
+        } else {
+          remoteCatalogs.set(client.origin, c.apps);
+          remoteCatalogSub.set({ origin: client.origin, apps: c.apps });
         }
         break;
+      }
       case 'app.declared':
         handleAppDeclared(client, msg as ShellAppDeclared);
         break;
@@ -404,10 +431,30 @@ const pendingClipboardGets = local.pendingClipboardGets;
 // for the two-router test below; M2's com.wash.remote service drives it
 // for real.
 function addClient(origin: Origin, url: string): RouterClient {
+  // Idempotent: re-attaching an already-connected origin (e.g. the
+  // supervisor re-reporting 'up') reuses the live client rather than
+  // opening a duplicate WS and shadowing the first in the registry.
+  const existing = clientForOrigin(origin);
+  if (existing) return existing;
   const client = new RouterClient(origin, url, makeHandlers);
   registerClient(origin, client);
   void client.conn.ready();
   return client;
+}
+
+// detachClient tears down a remote origin's connection and scrubs every
+// trace of it from the desktop (docs/REMOTE.md §6.1/§9): close the WS
+// (no reconnect — this is a deliberate disconnect, not a blip), drop the
+// origin's windows, clear its catalog, and unregister it. LOCAL is never
+// detachable (it's the seat's own router).
+function detachClient(origin: Origin): void {
+  if (origin === LOCAL_ORIGIN) return;
+  const client = clientForOrigin(origin);
+  if (!client) return;
+  client.conn.close();
+  dropOrigin(origin);
+  clearRemoteCatalog(origin);
+  unregisterClient(origin);
 }
 
 {
@@ -715,6 +762,24 @@ declare global {
       sendAppMsgTo(recipient: Recipient, data: unknown): void;
       catalog(): CatalogApp[];
       onCatalog(cb: (apps: CatalogApp[]) => void): () => void;
+      // Remote-host catalogs (docs/REMOTE.md §6.1). catalogFor returns the
+      // apps a given origin (LOCAL or a connected remote host) advertises;
+      // onRemoteCatalog fires whenever any remote catalog changes (apps
+      // empty on disconnect). wash-connect uses these to list B's apps.
+      catalogFor(origin: string): CatalogApp[];
+      onRemoteCatalog(cb: (ev: { origin: string; apps: CatalogApp[] }) => void): () => void;
+      // launchOn asks the router at `origin` to spawn appID (docs/REMOTE.md
+      // §6.1). For a remote host (which runs --no-session) this is the only
+      // launch path — there is no session BE there. Fire-and-forget: the
+      // launched window composites in via the normal app.declared flow.
+      launchOn(origin: string, appID: string): void;
+      // attachRemote opens a second connection to a remote host's router
+      // (the local end of an ssh -L tunnel the com.wash.remote supervisor
+      // set up) and composites its windows into this desktop, tagged by
+      // origin. detachRemote tears it down and drops the host's windows.
+      // wash-connect drives these from the supervisor's reported endpoint.
+      attachRemote(origin: string, url: string): void;
+      detachRemote(origin: string): void;
       // App-supplied settings panels (from the catalog's `panels` list).
       // loadSettingsPanel fetches+imports the panel bundle so its custom
       // element is defined; the promise resolves once it's mountable.
@@ -859,6 +924,27 @@ window.wash = {
   },
   catalog: () => catalogSub.value,
   onCatalog: (cb) => catalogSub.on(cb),
+  catalogFor: (origin) => catalogFor(origin),
+  onRemoteCatalog: (cb) => remoteCatalogSub.on((ev) => { if (ev) cb(ev); }),
+  launchOn(origin, appID) {
+    const client = clientForOrigin(origin);
+    if (!client) {
+      console.warn('wash: launchOn unknown origin', origin);
+      return;
+    }
+    client.conn.sendCtrl({ t: 'shell.launch', app_id: appID });
+  },
+  attachRemote(origin, url) {
+    if (origin === LOCAL_ORIGIN || !url) return;
+    try {
+      addClient(origin, url);
+    } catch (e) {
+      console.error('wash: attachRemote', origin, e);
+    }
+  },
+  detachRemote(origin) {
+    detachClient(origin);
+  },
   settingsPanels: () => panelsSub.value,
   onSettingsPanels: (cb: (panels: PanelDesc[]) => void) => panelsSub.on(cb),
   loadSettingsPanel: (appID: string) => loadSettingsPanel((m) => conn.sendCtrl(m), appID),

@@ -32,6 +32,14 @@ const (
 	//     (direct)}; router resolves and forwards as EvtAppMsg.
 	TShellAppMsgSend = "app_msg.send"
 	TShellLog        = "log"
+	// Shell → router, "launch this app id." Used for remote-apps
+	// (docs/REMOTE.md §6.1): host B runs --no-session, so there is no
+	// session BE to route a launcher click through — the shell asks B's
+	// router to spawn directly, the same path its control socket uses.
+	// Fire-and-forget: success surfaces as the usual app.declared +
+	// window; the router logs failures. Refuses desktop-surface apps
+	// (only the autoboot session owns the desktop), mirroring controlLaunch.
+	TShellLaunch = "shell.launch"
 
 	// Router → shell (BE → FE relay).
 	TShellAppMsgDeliver = "app_msg.deliver"
@@ -390,6 +398,18 @@ func NewShellAppMsgSend(instanceID string, data json.RawMessage) ShellAppMsgSend
 // To set, InstanceID unused.
 func NewShellAppMsgSendTo(r Recipient, data json.RawMessage) ShellAppMsgSend {
 	return ShellAppMsgSend{T: TShellAppMsgSend, Data: data, To: &r}
+}
+
+// ShellLaunch is the FE asking this shell's router to launch an app by
+// id (docs/REMOTE.md §6.1). Sent over a remote host's RouterClient so
+// wash-connect can launch on B without a session BE there.
+type ShellLaunch struct {
+	T     string `json:"t"`
+	AppID string `json:"app_id"`
+}
+
+func NewShellLaunch(appID string) ShellLaunch {
+	return ShellLaunch{T: TShellLaunch, AppID: appID}
 }
 
 // ShellAppMsgDeliver is the reverse: a BE → FE message, relayed to
