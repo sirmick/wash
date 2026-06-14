@@ -298,7 +298,20 @@ export class WashAppDisplay extends HTMLElement {
 
   private onFrame(bytes: Uint8Array): void {
     if (!this.canvas || !this.ctx) return;
-    if (bytes.length < HEADER_BYTES) return;
+    // Sub-header frames on the video channel are JSON control messages, not
+    // pixels — currently {cursor:"<css-name>"} from cursor-shape-v1 (M4).
+    if (bytes.length < HEADER_BYTES) {
+      try {
+        const ctrl = JSON.parse(new TextDecoder().decode(bytes));
+        if (typeof ctrl.cursor === 'string') {
+          this.style.cursor = ctrl.cursor;
+          if (this.canvas) this.canvas.style.cursor = ctrl.cursor;
+        }
+      } catch {
+        /* ignore malformed control frame */
+      }
+      return;
+    }
 
     let header: FrameHeader;
     try {

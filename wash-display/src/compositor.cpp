@@ -71,6 +71,7 @@ extern "C" {
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_pointer.h>
+#include <wlr/types/wlr_cursor_shape_v1.h>
 #include <wlr/interfaces/wlr_keyboard.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
@@ -143,6 +144,13 @@ struct Server {
     struct wl_listener req_set_selection;
     struct wl_listener set_selection;
     struct wlr_data_source* wash_source = nullptr;
+
+    // cursor-shape-v1: clients name their cursor (text/pointer/resize/…); we
+    // forward the NAME to the focused window's element, which sets it as the
+    // CSS cursor. Bitmap cursors (request_set_cursor with a surface) are
+    // deferred (M4b). DISPLAY.md §12 (M4).
+    struct wlr_cursor_shape_manager_v1* cursor_shape_mgr = nullptr;
+    struct wl_listener cursor_shape_request;
 
 #ifdef WASH_DISPLAY_XWAYLAND
     struct wlr_xwayland* xwayland = nullptr;
@@ -898,6 +906,9 @@ static std::vector<json> g_inputs;
 // motion reuse the last position.
 static struct wlr_surface* g_ptr_surface = nullptr;
 static double g_ptr_x = 0.0, g_ptr_y = 0.0;
+// The wash window the pointer is currently over (0 if over a popup), so a
+// cursor-shape change can be routed to that window's video channel (M4).
+static uint32_t g_ptr_win = 0;
 
 // winref_surface / winref_server pull the inner wlr_surface and owning
 // Server out of a registry entry. The surface may be null (X11 surface not
@@ -936,6 +947,21 @@ static bool resolve_win(uint32_t win, struct wlr_surface** surf, Server** srv) {
     *surf = winref_surface(ref);
     *srv = winref_server(ref);
     return *surf != nullptr && *srv != nullptr;
+}
+
+// win_video_chan returns a window's per-window video channel (0 if unknown),
+// used to route cursor-shape control frames to the right element.
+static uint32_t win_video_chan(uint32_t win) {
+    std::lock_guard<std::mutex> lk(g_reg_mu);
+    auto it = g_win_reg.find(win);
+    if (it == g_win_reg.end()) return 0;
+    if (it->second.kind == WinRef::XDG)
+        return static_cast<Toplevel*>(it->second.ptr)->sink.video_chan;
+#ifdef WASH_DISPLAY_XWAYLAND
+    return static_cast<XSurface*>(it->second.ptr)->sink.video_chan;
+#else
+    return 0;
+#endif
 }
 
 // code_to_keycode maps a DOM KeyboardEvent.code to a Linux evdev keycode
@@ -991,9 +1017,11 @@ static void inject_input(const json& data) {
         if (it == g_popup_reg.end()) return;
         surface = it->second.surface;
         srv = it->second.server;
+        g_ptr_win = 0; // over a popup → cursor-shape routing skips it (v1)
     } else {
         uint32_t win = data.value("win", 0U);
         if (!resolve_win(win, &surface, &srv)) return;
+        g_ptr_win = win;
     }
     if (!surface || !srv || !srv->seat) return;
     if (!data.contains("events") || !data["events"].is_array()) return;
@@ -1083,6 +1111,26 @@ void vkbd_handle_modifiers(struct wl_listener* listener, void* /*data*/) {
     Server* s = wl_container_of(listener, s, vkbd_modifiers);
     wlr_seat_set_keyboard(s->seat, &s->vkbd);
     wlr_seat_keyboard_notify_modifiers(s->seat, &s->vkbd.modifiers);
+}
+
+// --- cursor shape (cursor-shape-v1) → FE CSS cursor (M4) ------------
+//
+// A client names its cursor (text/pointer/ew-resize/…); we forward the
+// name on the focused window's video channel as a sub-45-byte JSON control
+// frame ({cursor:"<name>"}), and the element sets it as the CSS cursor. The
+// cursor-shape names are the CSS cursor keywords, so the mapping is identity.
+void handle_cursor_shape(struct wl_listener* listener, void* data) {
+    Server* s = wl_container_of(listener, s, cursor_shape_request);
+    auto* ev = static_cast<struct wlr_cursor_shape_manager_v1_request_set_shape_event*>(data);
+    if (ev->device_type != WLR_CURSOR_SHAPE_MANAGER_V1_DEVICE_TYPE_POINTER) return;
+    if (!g_ptr_win) return; // pointer over a popup (v1: skip) or nothing
+    uint32_t chan = win_video_chan(g_ptr_win);
+    if (!chan) return;
+    const char* name = wlr_cursor_shape_v1_name(ev->shape);
+    std::string msg = json{{"cursor", name ? name : "default"}}.dump();
+    s->conn->write_channel(chan, (const uint8_t*)msg.data(), msg.size());
+    wlr_log(WLR_INFO, "wash-display: cursor win=%u shape=%s", g_ptr_win,
+            name ? name : "default");
 }
 
 // --- clipboard bridge (DISPLAY.md §7) ------------------------------
@@ -1483,6 +1531,16 @@ int run_compositor(WireConn& conn) {
         server.set_selection.notify = handle_set_selection;
         wl_signal_add(&server.seat->events.set_selection, &server.set_selection);
         conn.on_clipboard_changed([](const std::string& mime) { post_clip_offer(mime); });
+
+        // cursor-shape-v1: forward named cursors to the focused window's
+        // element as a CSS cursor (M4). Modern toolkits + recent Xwayland
+        // use this; bitmap cursors (request_set_cursor) are deferred (M4b).
+        server.cursor_shape_mgr = wlr_cursor_shape_manager_v1_create(server.display, 1);
+        if (server.cursor_shape_mgr) {
+            server.cursor_shape_request.notify = handle_cursor_shape;
+            wl_signal_add(&server.cursor_shape_mgr->events.request_set_shape,
+                          &server.cursor_shape_request);
+        }
     } else {
         wlr_log(WLR_ERROR, "wash-display: seat create failed — input disabled");
     }

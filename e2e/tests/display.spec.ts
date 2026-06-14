@@ -221,6 +221,24 @@ test.describe('multi-window display contract', () => {
     await router.waitForLog(new RegExp(`popup_chan=${chan} events=`), 5_000);
   });
 
+  test('browser: a cursor control frame sets the element CSS cursor (M4)', async ({ page, router }) => {
+    // §12 M4: a guest names its cursor (cursor-shape-v1) → the compositor
+    // forwards {cursor:"<css-name>"} as a sub-45-byte control frame on the
+    // window's video channel → the element sets it as the CSS cursor. Driven
+    // here via the fake-display cursor mode (real cursor-shape-v1 use is
+    // toolkit/Xwayland-dependent, so the contract is locked this way).
+    await page.goto(router.url);
+    const launched = await router.controlRequest({ t: 'launch', app_id: 'com.wash.test' });
+    const inst = launched.instance_id as string;
+    const resp = await router.sendAppMsg(inst, { kind: 'display_open', id: 'c1', n: 1 });
+    const win = ((resp.windows ?? []) as Array<{ win: number }>)[0].win;
+    const el = page.locator(`wash-app-display[data-wash-window="${win}"]`);
+    await el.waitFor({ state: 'visible' });
+
+    await router.sendAppMsg(inst, { kind: 'display_cursor', win, cursor: 'text' });
+    await expect.poll(async () => el.evaluate((n) => (n as HTMLElement).style.cursor)).toBe('text');
+  });
+
   test('clipboard bridges between instances (the §7 clipboard contract)', async ({ router }) => {
     // wash's clipboard is eager + router-held: clipboard.set broadcasts
     // clipboard.changed to every OTHER app, and clipboard.get returns the

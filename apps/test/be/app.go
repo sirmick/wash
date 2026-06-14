@@ -428,6 +428,25 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			log.Printf("wash-test popup win=%d channel=%d off=%d,%d", parent, ch.ID(), px, py)
 			sendEvent(c, map[string]any{"kind": "popup_opened", "id": id, "channel": uint64(ch.ID())})
 		}()
+	case "display_cursor":
+		// Push a cursor control frame on a display window's video channel —
+		// the fake-display analogue of a guest naming its cursor via
+		// cursor-shape-v1 (DISPLAY.md §12 M4). < 45 bytes, so the element
+		// reads it as a {cursor} control, not a pixel frame.
+		win := uint32(sdk.ToUint64(m["win"]))
+		name, _ := m["cursor"].(string)
+		if name == "" {
+			name = "default"
+		}
+		st.mu.Lock()
+		ch := st.displayChans[win]
+		st.mu.Unlock()
+		if ch != nil {
+			if _, err := ch.Write([]byte(fmt.Sprintf(`{"cursor":%q}`, name))); err != nil {
+				log.Printf("wash-test display_cursor: %v", err)
+			}
+			log.Printf("wash-test display_cursor win=%d cursor=%s", win, name)
+		}
 	case "display_close":
 		id, _ := m["id"].(string)
 		var win uint32
