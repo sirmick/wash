@@ -426,6 +426,21 @@ func (c *Conn) UnpublishIngress(path string) error {
 	return c.writeEvt(wire.NewEvtIngressUnpublish(path))
 }
 
+// RegisterPeer records (origin → a local socket) with the router for the
+// remote-apps relay (docs/REMOTE.md). After com.wash.remote ssh -L's a unix
+// socket to host B's router, it registers it here; a browser then attaches
+// the origin and the router splices a muxed channel to the socket. network
+// is "unix" (addr is a socket path) or "tcp" (addr is host:port). Gated
+// router-side to com.wash.remote. Fire-and-forget.
+func (c *Conn) RegisterPeer(origin, network, addr string) error {
+	return c.writeEvt(wire.NewEvtPeerRegister(origin, network, addr))
+}
+
+// UnregisterPeer drops an origin's relay registration. Idempotent.
+func (c *Conn) UnregisterPeer(origin string) error {
+	return c.writeEvt(wire.NewEvtPeerUnregister(origin))
+}
+
 // RestartApp asks the router to cycle a background singleton service:
 // terminate its running instance, GC its windows/channels, and spawn a
 // fresh one. Returns the new instance id. Blocks until the router

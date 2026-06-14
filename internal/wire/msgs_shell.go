@@ -40,6 +40,13 @@ const (
 	// window; the router logs failures. Refuses desktop-surface apps
 	// (only the autoboot session owns the desktop), mirroring controlLaunch.
 	TShellLaunch = "shell.launch"
+	// Shell → router, remote-apps relay (docs/REMOTE.md). peer.attach asks
+	// A's router to dial the socket the supervisor registered for this
+	// origin (host B), allocate a channel, and splice it verbatim to that
+	// socket — so B's wire rides this one connection. The router replies
+	// with a channel.bind{kind:"peer", origin}. peer.detach tears it down.
+	TShellPeerAttach = "peer.attach"
+	TShellPeerDetach = "peer.detach"
 
 	// Router → shell (BE → FE relay).
 	TShellAppMsgDeliver = "app_msg.deliver"
@@ -412,6 +419,28 @@ func NewShellLaunch(appID string) ShellLaunch {
 	return ShellLaunch{T: TShellLaunch, AppID: appID}
 }
 
+// ShellPeerAttach / ShellPeerDetach drive the remote-apps relay
+// (docs/REMOTE.md). Origin names the remote host (== the supervisor's
+// registered origin). attach makes A dial the registered socket + splice a
+// fresh "peer" channel to it; detach tears that channel + socket down.
+type ShellPeerAttach struct {
+	T      string `json:"t"`
+	Origin string `json:"origin"`
+}
+
+func NewShellPeerAttach(origin string) ShellPeerAttach {
+	return ShellPeerAttach{T: TShellPeerAttach, Origin: origin}
+}
+
+type ShellPeerDetach struct {
+	T      string `json:"t"`
+	Origin string `json:"origin"`
+}
+
+func NewShellPeerDetach(origin string) ShellPeerDetach {
+	return ShellPeerDetach{T: TShellPeerDetach, Origin: origin}
+}
+
 // ShellAppMsgDeliver is the reverse: a BE → FE message, relayed to
 // the shell. The shell forwards it to the matching mounted element
 // as a CustomEvent.
@@ -467,6 +496,10 @@ type ShellChannelBind struct {
 	WindowID   uint32 `json:"window_id"`
 	Kind       string `json:"kind,omitempty"`
 	InstanceID string `json:"instance_id,omitempty"`
+	// Origin names the remote host whose wire a Kind="peer" channel
+	// carries (docs/REMOTE.md). The shell routes this channel's bytes to
+	// the matching origin's RouterClient. Empty for all other kinds.
+	Origin string `json:"origin,omitempty"`
 }
 
 // NewShellChannelBind binds an app-opened raw channel to a window. The

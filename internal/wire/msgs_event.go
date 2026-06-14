@@ -127,6 +127,17 @@ const (
 	TEvtIngressPublished = "ingress.published"
 	TEvtIngressUnpublish = "ingress.unpublish"
 	TEvtIngressErr       = "ingress.err"
+
+	// Peer relay (docs/REMOTE.md, remote-apps R2). The com.wash.remote
+	// supervisor, after bringing up host B's router over ssh -L to a local
+	// unix socket, registers (origin → that socket) with A's router. A
+	// browser then attaches via the shell peer.attach verb, and A splices a
+	// muxed channel verbatim to the socket — B's wire reaches the browser
+	// over the one connection it already has to A (the "one port" rule).
+	// Gated to the supervisor's app id (dialing arbitrary sockets is not for
+	// any app). app → router.
+	TEvtPeerRegister   = "peer.register"
+	TEvtPeerUnregister = "peer.unregister"
 )
 
 // EvtWindowMapped: router → app, "the window is now visible".
@@ -562,6 +573,32 @@ func NewEvtIngressPublished(reqID uint64, path, token string) EvtIngressPublishe
 	return EvtIngressPublished{T: TEvtIngressPublished, ReqID: reqID, Path: path, Token: token}
 }
 
+// EvtPeerRegister — app → router — register (origin → a local socket) for
+// the remote-apps relay. Network is "unix" (Addr is a socket path) or "tcp"
+// (Addr is host:port on loopback). The router dials this socket when a shell
+// peer.attaches the origin and splices a muxed channel to it. Fire-and-forget.
+type EvtPeerRegister struct {
+	T       string `json:"t"`
+	Origin  string `json:"origin"`
+	Network string `json:"network"`
+	Addr    string `json:"addr"`
+}
+
+func NewEvtPeerRegister(origin, network, addr string) EvtPeerRegister {
+	return EvtPeerRegister{T: TEvtPeerRegister, Origin: origin, Network: network, Addr: addr}
+}
+
+// EvtPeerUnregister — app → router — drop an origin's relay registration.
+// Idempotent. Fire-and-forget.
+type EvtPeerUnregister struct {
+	T      string `json:"t"`
+	Origin string `json:"origin"`
+}
+
+func NewEvtPeerUnregister(origin string) EvtPeerUnregister {
+	return EvtPeerUnregister{T: TEvtPeerUnregister, Origin: origin}
+}
+
 // EvtIngressUnpublish — app → router — drop a previously published
 // route by its path. Idempotent: unpublishing an unknown/already-gone
 // path is a no-op. Fire-and-forget (no reply).
@@ -841,6 +878,12 @@ func DecodeEvt(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TEvtRuntimeStats:
 		var m EvtRuntimeStats
+		return m, json.Unmarshal(data, &m)
+	case TEvtPeerRegister:
+		var m EvtPeerRegister
+		return m, json.Unmarshal(data, &m)
+	case TEvtPeerUnregister:
+		var m EvtPeerUnregister
 		return m, json.Unmarshal(data, &m)
 	case TEvtIngressPublish:
 		var m EvtIngressPublish

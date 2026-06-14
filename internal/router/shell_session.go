@@ -45,6 +45,12 @@ type ShellSession struct {
 	// drainerDone is closed by the drainer goroutine on exit so
 	// HandleShell can wait for it during teardown.
 	drainerDone chan struct{}
+
+	// peerChannels tracks this shell's remote-apps relay channels
+	// (docs/REMOTE.md), channel id → binding, so they're torn down (socket
+	// closed, pump unblocked) when the shell disconnects. Guarded by peerMu.
+	peerMu       sync.Mutex
+	peerChannels map[uint32]*channelBinding
 }
 
 // declareInstance sends ShellAppDeclared (and ShellWindowCreate for
@@ -105,12 +111,17 @@ func (s *ShellSession) undeclareInstance(instanceID string) {
 // the world), then runs the frame loop.
 func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	sess := &ShellSession{
-		Transport:   t,
-		router:      r,
-		scheduler:   NewScheduler(),
-		drainerDone: make(chan struct{}),
+		Transport:    t,
+		router:       r,
+		scheduler:    NewScheduler(),
+		drainerDone:  make(chan struct{}),
+		peerChannels: make(map[uint32]*channelBinding),
 	}
 	defer t.Close()
+	// Close any remote-apps relay sockets this shell opened, so a browser
+	// disconnect tears down its ssh -L'd peer connections (and unblocks
+	// their pump goroutines) instead of leaking them.
+	defer sess.closeAllPeers()
 	defer func() {
 		// Stop the drainer first so it doesn't try to write to a
 		// closing transport, then wait for it to exit.
@@ -199,6 +210,15 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 			s.router.log("shell: drop raw frame on channel %d (owned by another shell)", f.Channel)
 			return nil
 		}
+		// Remote-apps relay (docs/REMOTE.md): a peer channel's endpoint is
+		// the ssh -L'd socket, not an app. Write the browser's bytes (host
+		// B's wire) verbatim — A never decodes them.
+		if b.peerConn != nil {
+			if _, err := b.peerConn.Write(f.Payload); err != nil {
+				s.router.closeChannel(f.Channel, "peer write: "+err.Error())
+			}
+			return nil
+		}
 		return b.app.writeRawFrame(f.Channel, f.Payload)
 	}
 	msg, err := wire.DecodeCtrl(f.Payload)
@@ -222,6 +242,11 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		return s.handleAppMsgSend(m, f.Class())
 	case wire.ShellLaunch:
 		return s.handleLaunch(m)
+	case wire.ShellPeerAttach:
+		return s.handlePeerAttach(m)
+	case wire.ShellPeerDetach:
+		s.detachPeer(m.Origin)
+		return nil
 	case wire.ShellLog:
 		return s.handleShellLog(m)
 	case wire.ShellChannelCredit:

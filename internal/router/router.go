@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -142,6 +143,13 @@ type Router struct {
 	channelsMu sync.Mutex
 	channels   map[uint32]*channelBinding
 
+	// peers maps a remote-host origin → the local socket the supervisor
+	// (com.wash.remote) ssh -L'd to reach host B's router. A shell
+	// peer.attaches an origin and the router splices a channel to this
+	// socket (docs/REMOTE.md). Guarded by peersMu.
+	peersMu sync.Mutex
+	peers   map[string]peerTarget
+
 	// appMsgWatchers lets a non-shell caller (e.g. the control
 	// socket's `msg` op) wait for a specific outbound app_msg keyed
 	// by the request-id convention in the payload. Stored as
@@ -246,6 +254,7 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		cliSessions:       make(map[string]*cliSession),
 		backgroundStarted: make(map[string]bool),
 		ingress:           newIngressRegistry(log),
+		peers:             make(map[string]peerTarget),
 	}
 }
 
@@ -545,6 +554,14 @@ type channelBinding struct {
 	windowID  uint32 // the shell-side window the channel is rooted at
 	kind      string // wire.ChannelKindGeneric or wire.ChannelKindBundle
 
+	// peerConn is set for a remote-apps relay channel (kind="peer",
+	// docs/REMOTE.md): the endpoint is this socket (an ssh -L'd unix
+	// socket reaching host B) instead of an app. Raw frames on the channel
+	// are written verbatim to it; a pump goroutine copies the reverse.
+	// origin names the host (for logs + the channel.bind to the shell).
+	peerConn net.Conn
+	origin   string
+
 	// shellMu guards shell + buf. Held briefly during forward and
 	// rebind paths.
 	shellMu sync.Mutex
@@ -592,10 +609,18 @@ func (r *Router) closeChannel(id uint32, reason string) {
 	if b.app != nil {
 		_ = b.app.writeCtrl(wire.NewChannelClosed(id, reason))
 	}
+	// Remote-apps relay: close the ssh -L'd socket (unblocks the pump) and
+	// drop it from the owning shell's tracking.
+	if b.peerConn != nil {
+		_ = b.peerConn.Close()
+	}
 	b.shellMu.Lock()
 	sh := b.shell
 	b.shellMu.Unlock()
 	if sh != nil {
+		if b.peerConn != nil {
+			sh.untrackPeer(id)
+		}
 		_ = sh.WriteCtrl(wire.NewShellChannelUnbind(id, reason))
 	}
 }
