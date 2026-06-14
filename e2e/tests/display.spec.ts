@@ -101,4 +101,113 @@ test.describe('multi-window display contract', () => {
       )
       .toMatchObject({ w: 1, h: 1, a: 255 });
   });
+
+  test('BE decodes a batched input app_msg (the §6 input contract)', async ({ router }) => {
+    // The wash-display input contract (docs/DISPLAY.md §6): the FE batches
+    // pointer/keyboard/scroll events into one app_msg {kind:"input", win,
+    // events:[...]} per rAF, and the BE injects them into the focused
+    // surface. Here we drive that app_msg straight through the control
+    // socket (no compositor, no DOM) to lock the BE decode + per-event
+    // logging — the FE→BE DOM-driven path is exercised once the
+    // <wash-app-display> element captures input (M1). The router delivers
+    // a cross-instance app_msg on the instance's primary window, so the BE
+    // must route by the payload's "win", not the app_msg win.
+    const launched = await router.controlRequest({ t: 'launch', app_id: 'com.wash.test' });
+    expect(launched.t).toBe('launched');
+    const inst = launched.instance_id as string;
+
+    const opened = await router.sendAppMsg(inst, { kind: 'display_open', id: 'i1', n: 1 });
+    const wins = (opened.windows ?? []) as Array<{ win: number }>;
+    expect(wins).toHaveLength(1);
+    const win = wins[0].win;
+
+    await router.sendAppMsg(inst, {
+      kind: 'input',
+      win,
+      events: [
+        { ev: 'motion', x: 312, y: 88 },
+        { ev: 'button', btn: 'left', state: 'down' },
+        { ev: 'button', btn: 'left', state: 'up' },
+        { ev: 'axis', axis: 'v', delta: -120 },
+        { ev: 'key', code: 'KeyA', state: 'down' },
+        { ev: 'key', code: 'KeyA', state: 'up' },
+      ],
+    });
+
+    // Each event decodes to its own router-log line, keyed by the payload win.
+    await router.waitForLog(new RegExp(`wash-test input win=${win} events=6`), 5_000);
+    await router.waitForLog(new RegExp(`wash-test input win=${win} ev=motion x=312 y=88`), 5_000);
+    await router.waitForLog(new RegExp(`wash-test input win=${win} ev=button btn=left state=down`), 5_000);
+    await router.waitForLog(new RegExp(`wash-test input win=${win} ev=axis axis=v delta=-120`), 5_000);
+    await router.waitForLog(new RegExp(`wash-test input win=${win} ev=key code=KeyA state=down`), 5_000);
+  });
+
+  test('browser: <wash-app-display> forwards real pointer/key/wheel input', async ({ page, router }) => {
+    // The FE half of the §6 input contract: with a shell loaded, the
+    // built-in element captures DOM pointer/keyboard/wheel events and
+    // batches them to the owning instance as app_msg{kind:"input"}. We use
+    // the test app's fake-display window (element wash-app-display) and
+    // assert the test BE logged the decoded events — proving capture,
+    // coalescing, coordinate mapping, and the FE→instance route end to end.
+    await page.goto(router.url);
+
+    const launched = await router.controlRequest({ t: 'launch', app_id: 'com.wash.test' });
+    expect(launched.t).toBe('launched');
+    const inst = launched.instance_id as string;
+
+    const resp = await router.sendAppMsg(inst, { kind: 'display_open', id: 'fi', n: 1 });
+    const wins = (resp.windows ?? []) as Array<{ win: number }>;
+    expect(wins).toHaveLength(1);
+    const win = wins[0].win;
+
+    const el = page.locator(`wash-app-display[data-wash-window="${win}"]`);
+    await el.waitFor({ state: 'visible', timeout: 10_000 });
+
+    // The test app also has its own primary window (element wash-app-test);
+    // raise the display window so it's the topmost surface at the click
+    // point (otherwise the primary window intercepts the pointer).
+    await page.evaluate((w) => window.wash.focusWindow(w), win);
+
+    // Pointer: hover then click. Playwright drives real pointer+mouse
+    // events, so the element's pointermove/down/up listeners fire.
+    await el.hover();
+    await el.click();
+    await router.waitForLog(new RegExp(`wash-test input win=${win} ev=motion`), 5_000);
+    await router.waitForLog(new RegExp(`wash-test input win=${win} ev=button btn=left state=down`), 5_000);
+
+    // Keyboard: the click focused the element; press a key → code KeyA.
+    await page.keyboard.press('a');
+    await router.waitForLog(new RegExp(`wash-test input win=${win} ev=key code=KeyA state=down`), 5_000);
+
+    // Wheel: a vertical scroll over the canvas → an axis event.
+    await el.hover();
+    await page.mouse.wheel(0, 120);
+    // (the element is already raised + focused from the click above)
+    await router.waitForLog(new RegExp(`wash-test input win=${win} ev=axis axis=v`), 5_000);
+  });
+
+  test('clipboard bridges between instances (the §7 clipboard contract)', async ({ router }) => {
+    // wash's clipboard is eager + router-held: clipboard.set broadcasts
+    // clipboard.changed to every OTHER app, and clipboard.get returns the
+    // bytes. wash-display will bridge this to the Wayland/X11 selection
+    // (M2); here we prove the wire vocabulary with two test instances so a
+    // later display copy/paste rides a known-good path. The setter is
+    // excluded from its own broadcast, hence two instances.
+    const a = await router.controlRequest({ t: 'launch', app_id: 'com.wash.test' });
+    const b = await router.controlRequest({ t: 'launch', app_id: 'com.wash.test' });
+    const instA = a.instance_id as string;
+    const instB = b.instance_id as string;
+    expect(instA).not.toBe(instB);
+
+    // A sets the clipboard; B (a different instance) sees clipboard.changed.
+    await router.sendAppMsg(instA, { kind: 'clipboard_set', mime: 'text/plain', text: 'cl-12345' });
+    await router.waitForLog(/wash-test clipboard\.changed mime=text\/plain/, 5_000);
+
+    // B reads it back; the reply (clipboard_get_ok) echoes the request id so
+    // the control socket correlates it, and carries the round-tripped bytes.
+    const got = await router.sendAppMsg(instB, { kind: 'clipboard_get', id: 'cg1' });
+    expect(got.type).toBe('clipboard_get_ok');
+    expect(got.mime).toBe('text/plain');
+    expect(got.text).toBe('cl-12345');
+  });
 });

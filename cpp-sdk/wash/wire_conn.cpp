@@ -148,10 +148,20 @@ void WireConn::reader_loop() {
                 uint32_t win = m.value("win", 0U);
                 window_cmd_handler_(t, win, 0, 0);
             }
+        } else if (t == "window.focus" || t == "window.unfocus") {
+            // Router → app: the WM gave/took keyboard focus for `win`.
+            // Focus is router-authoritative (docs/DISPLAY.md §6): the
+            // compositor sets wl_seat keyboard focus to the matching
+            // surface so injected keys land in the right window. Marshalled
+            // onto the wlroots thread like the other window commands.
+            if (window_cmd_handler_) {
+                uint32_t win = m.value("win", 0U);
+                window_cmd_handler_(t, win, 0, 0);
+            }
         } else if (t == "shutdown") {
             break;
         }
-        // Other window.* events (focus, etc.) are ignored for now.
+        // Other window.* events are ignored for now.
     }
     alive_.store(false);
     // Wake any blocked callers so they fail instead of hanging.

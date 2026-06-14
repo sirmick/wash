@@ -23,10 +23,12 @@
 #include <cstdlib>
 #include <ctime>
 #include <fcntl.h>
+#include <linux/input-event-codes.h>
 #include <map>
 #include <mutex>
 #include <string>
 #include <unistd.h>
+#include <unordered_map>
 #include <vector>
 #include <xkbcommon/xkbcommon.h>
 
@@ -66,6 +68,8 @@ extern "C" {
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_keyboard.h>
+#include <wlr/types/wlr_pointer.h>
+#include <wlr/interfaces/wlr_keyboard.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
 #include <wlr/util/box.h>
@@ -122,6 +126,12 @@ struct Server {
     struct wlr_seat* seat = nullptr;
     struct wlr_keyboard vkbd;       // virtual keyboard backing the seat
     bool vkbd_inited = false;
+    // The virtual keyboard's key/modifier signals drive the seat (tinywl
+    // pattern): wlr_keyboard_notify_key updates xkb state and fires these,
+    // and we forward to wlr_seat_keyboard_notify_* so the focused client
+    // gets keys WITH correct modifier state (shift/ctrl/etc.).
+    struct wl_listener vkbd_key;
+    struct wl_listener vkbd_modifiers;
 
 #ifdef WASH_DISPLAY_XWAYLAND
     struct wlr_xwayland* xwayland = nullptr;
@@ -585,11 +595,196 @@ void server_new_xwayland_surface(struct wl_listener* listener, void* data) {
 }
 #endif // WASH_DISPLAY_XWAYLAND
 
+// --- input injection (DISPLAY.md §6) -------------------------------
+//
+// The FE <wash-app-display> element batches pointer/keyboard/scroll events
+// into one app_msg {kind:"input", win, events:[...]} per rAF. main.cpp's
+// app_msg handler (reader thread) pushes each payload onto g_inputs and
+// wakes the self-pipe; on_cmd_pipe drains + injects them HERE on the
+// compositor thread, where wlroots is safe to touch.
+static std::mutex g_input_mu;
+static std::vector<json> g_inputs;
+
+// Pointer focus + last position, compositor-thread-only. A motion to a new
+// surface re-enters the seat pointer there; buttons/axis without a fresh
+// motion reuse the last position.
+static struct wlr_surface* g_ptr_surface = nullptr;
+static double g_ptr_x = 0.0, g_ptr_y = 0.0;
+
+// winref_surface / winref_server pull the inner wlr_surface and owning
+// Server out of a registry entry. The surface may be null (X11 surface not
+// yet associated). Caller holds no lock; the WinRef was already copied out
+// of g_win_reg under g_reg_mu.
+static struct wlr_surface* winref_surface(const WinRef& ref) {
+    if (ref.kind == WinRef::XDG) {
+        Toplevel* t = static_cast<Toplevel*>(ref.ptr);
+        return t->xdg_toplevel->base->surface;
+    }
+#ifdef WASH_DISPLAY_XWAYLAND
+    XSurface* x = static_cast<XSurface*>(ref.ptr);
+    return x->xsurf ? x->xsurf->surface : nullptr;
+#else
+    return nullptr;
+#endif
+}
+static Server* winref_server(const WinRef& ref) {
+    if (ref.kind == WinRef::XDG) return static_cast<Toplevel*>(ref.ptr)->server;
+#ifdef WASH_DISPLAY_XWAYLAND
+    return static_cast<XSurface*>(ref.ptr)->server;
+#else
+    return nullptr;
+#endif
+}
+
+// resolve_win looks up a wash window id and returns its surface + server.
+static bool resolve_win(uint32_t win, struct wlr_surface** surf, Server** srv) {
+    WinRef ref;
+    {
+        std::lock_guard<std::mutex> lk(g_reg_mu);
+        auto it = g_win_reg.find(win);
+        if (it == g_win_reg.end()) return false;
+        ref = it->second;
+    }
+    *surf = winref_surface(ref);
+    *srv = winref_server(ref);
+    return *surf != nullptr && *srv != nullptr;
+}
+
+// code_to_keycode maps a DOM KeyboardEvent.code to a Linux evdev keycode
+// (KEY_* from <linux/input-event-codes.h>). The xkb keymap turns the evdev
+// code (+8 internally) into the keysym, so this table is layout-agnostic —
+// only physical-key identity matters here. Returns 0 for unmapped codes.
+static uint32_t code_to_keycode(const std::string& c) {
+    static const std::unordered_map<std::string, uint32_t> m = {
+        {"KeyA", KEY_A}, {"KeyB", KEY_B}, {"KeyC", KEY_C}, {"KeyD", KEY_D},
+        {"KeyE", KEY_E}, {"KeyF", KEY_F}, {"KeyG", KEY_G}, {"KeyH", KEY_H},
+        {"KeyI", KEY_I}, {"KeyJ", KEY_J}, {"KeyK", KEY_K}, {"KeyL", KEY_L},
+        {"KeyM", KEY_M}, {"KeyN", KEY_N}, {"KeyO", KEY_O}, {"KeyP", KEY_P},
+        {"KeyQ", KEY_Q}, {"KeyR", KEY_R}, {"KeyS", KEY_S}, {"KeyT", KEY_T},
+        {"KeyU", KEY_U}, {"KeyV", KEY_V}, {"KeyW", KEY_W}, {"KeyX", KEY_X},
+        {"KeyY", KEY_Y}, {"KeyZ", KEY_Z},
+        {"Digit1", KEY_1}, {"Digit2", KEY_2}, {"Digit3", KEY_3},
+        {"Digit4", KEY_4}, {"Digit5", KEY_5}, {"Digit6", KEY_6},
+        {"Digit7", KEY_7}, {"Digit8", KEY_8}, {"Digit9", KEY_9},
+        {"Digit0", KEY_0},
+        {"Enter", KEY_ENTER}, {"Escape", KEY_ESC}, {"Backspace", KEY_BACKSPACE},
+        {"Tab", KEY_TAB}, {"Space", KEY_SPACE}, {"Minus", KEY_MINUS},
+        {"Equal", KEY_EQUAL}, {"BracketLeft", KEY_LEFTBRACE},
+        {"BracketRight", KEY_RIGHTBRACE}, {"Backslash", KEY_BACKSLASH},
+        {"Semicolon", KEY_SEMICOLON}, {"Quote", KEY_APOSTROPHE},
+        {"Backquote", KEY_GRAVE}, {"Comma", KEY_COMMA}, {"Period", KEY_DOT},
+        {"Slash", KEY_SLASH}, {"CapsLock", KEY_CAPSLOCK},
+        {"ShiftLeft", KEY_LEFTSHIFT}, {"ShiftRight", KEY_RIGHTSHIFT},
+        {"ControlLeft", KEY_LEFTCTRL}, {"ControlRight", KEY_RIGHTCTRL},
+        {"AltLeft", KEY_LEFTALT}, {"AltRight", KEY_RIGHTALT},
+        {"MetaLeft", KEY_LEFTMETA}, {"MetaRight", KEY_RIGHTMETA},
+        {"ArrowUp", KEY_UP}, {"ArrowDown", KEY_DOWN},
+        {"ArrowLeft", KEY_LEFT}, {"ArrowRight", KEY_RIGHT},
+        {"Home", KEY_HOME}, {"End", KEY_END}, {"PageUp", KEY_PAGEUP},
+        {"PageDown", KEY_PAGEDOWN}, {"Insert", KEY_INSERT}, {"Delete", KEY_DELETE},
+        {"F1", KEY_F1}, {"F2", KEY_F2}, {"F3", KEY_F3}, {"F4", KEY_F4},
+        {"F5", KEY_F5}, {"F6", KEY_F6}, {"F7", KEY_F7}, {"F8", KEY_F8},
+        {"F9", KEY_F9}, {"F10", KEY_F10}, {"F11", KEY_F11}, {"F12", KEY_F12},
+    };
+    auto it = m.find(c);
+    return it == m.end() ? 0 : it->second;
+}
+
+// inject_input applies one FE input payload to its target surface. Routes
+// by the payload's "win" (NOT the app_msg envelope win — cross-instance
+// app_msgs arrive on the instance's primary window). Compositor thread only.
+static void inject_input(const json& data) {
+    uint32_t win = data.value("win", 0U);
+    struct wlr_surface* surface = nullptr;
+    Server* srv = nullptr;
+    if (!resolve_win(win, &surface, &srv) || !srv->seat) return;
+    if (!data.contains("events") || !data["events"].is_array()) return;
+
+    struct wlr_seat* seat = srv->seat;
+    uint32_t t = (uint32_t)now_ms();
+    bool ptr_touched = false;
+
+    auto ensure_enter = [&](double x, double y) {
+        if (g_ptr_surface != surface) {
+            wlr_seat_pointer_notify_enter(seat, surface, x, y);
+            g_ptr_surface = surface;
+        }
+    };
+
+    for (const auto& e : data["events"]) {
+        const std::string ev = e.value("ev", std::string());
+        if (ev == "motion") {
+            double x = e.value("x", 0.0), y = e.value("y", 0.0);
+            ensure_enter(x, y);
+            wlr_seat_pointer_notify_motion(seat, t, x, y);
+            g_ptr_x = x;
+            g_ptr_y = y;
+            ptr_touched = true;
+        } else if (ev == "button") {
+            ensure_enter(g_ptr_x, g_ptr_y);
+            const std::string btn = e.value("btn", std::string("left"));
+            uint32_t code = btn == "right"  ? BTN_RIGHT
+                          : btn == "middle" ? BTN_MIDDLE
+                                            : BTN_LEFT;
+            bool down = e.value("state", std::string()) == "down";
+            wlr_seat_pointer_notify_button(
+                seat, t, code, down ? WLR_BUTTON_PRESSED : WLR_BUTTON_RELEASED);
+            ptr_touched = true;
+        } else if (ev == "axis") {
+            ensure_enter(g_ptr_x, g_ptr_y);
+            const std::string ax = e.value("axis", std::string("v"));
+            double delta = e.value("delta", 0.0);
+            enum wlr_axis_orientation orient =
+                ax == "h" ? WLR_AXIS_ORIENTATION_HORIZONTAL
+                          : WLR_AXIS_ORIENTATION_VERTICAL;
+            // The FE forwards a 120-per-notch high-resolution delta (the
+            // wheel convention). wlroots wants a continuous `value` plus the
+            // discrete hi-res step; ~15 units per notch matches a real wheel.
+            double value = delta / 120.0 * 15.0;
+            wlr_seat_pointer_notify_axis(seat, t, orient, value, (int32_t)delta,
+                                         WLR_AXIS_SOURCE_WHEEL);
+            ptr_touched = true;
+        } else if (ev == "key") {
+            uint32_t kc = code_to_keycode(e.value("code", std::string()));
+            if (kc && srv->vkbd_inited) {
+                // Drive the virtual keyboard: this updates xkb state and
+                // fires vkbd.events.key/modifiers, which forward to the seat
+                // (so the client gets the key WITH modifier state). Focus
+                // must already be set via window.focus.
+                struct wlr_keyboard_key_event ke{};
+                ke.time_msec = t;
+                ke.keycode = kc;
+                ke.update_state = true;
+                ke.state = e.value("state", std::string()) == "down"
+                               ? WL_KEYBOARD_KEY_STATE_PRESSED
+                               : WL_KEYBOARD_KEY_STATE_RELEASED;
+                wlr_keyboard_notify_key(&srv->vkbd, &ke);
+            }
+        }
+        // "motion_rel" (pointer-lock / relative) is deferred — needs
+        // wlr_relative_pointer + a locked-pointer constraint.
+    }
+    if (ptr_touched) wlr_seat_pointer_notify_frame(seat);
+}
+
+// --- virtual-keyboard → seat forwarding ----------------------------
+void vkbd_handle_key(struct wl_listener* listener, void* data) {
+    Server* s = wl_container_of(listener, s, vkbd_key);
+    auto* ev = static_cast<struct wlr_keyboard_key_event*>(data);
+    wlr_seat_set_keyboard(s->seat, &s->vkbd);
+    wlr_seat_keyboard_notify_key(s->seat, ev->time_msec, ev->keycode, ev->state);
+}
+void vkbd_handle_modifiers(struct wl_listener* listener, void* /*data*/) {
+    Server* s = wl_container_of(listener, s, vkbd_modifiers);
+    wlr_seat_set_keyboard(s->seat, &s->vkbd);
+    wlr_seat_keyboard_notify_modifiers(s->seat, &s->vkbd.modifiers);
+}
+
 // --- apply window commands on the compositor thread ----------------
 
 // apply_win_cmd resolves a wash window id to its surface and applies a
-// resize/close. Runs on the compositor thread (from the event-loop pipe
-// handler), so wlroots calls are safe. Unknown win (already gone) is a
+// resize/close/focus. Runs on the compositor thread (from the event-loop
+// pipe handler), so wlroots calls are safe. Unknown win (already gone) is a
 // no-op.
 static void apply_win_cmd(const WinCmd& c) {
     wlr_log(WLR_INFO, "wash-display: apply win cmd t=%s win=%u %ux%u",
@@ -604,6 +799,25 @@ static void apply_win_cmd(const WinCmd& c) {
             return;
         }
         ref = it->second;
+    }
+    // Focus is generic across surface kinds: set/clear the seat's keyboard
+    // focus so injected keys land in (only) the focused window's surface.
+    // Router-authoritative (DISPLAY.md §6) — the WM decides who has focus.
+    if (c.t == "window.focus" || c.t == "window.unfocus") {
+        Server* srv = winref_server(ref);
+        struct wlr_surface* surface = winref_surface(ref);
+        if (srv && srv->seat) {
+            if (c.t == "window.focus" && surface) {
+                struct wlr_keyboard* kb = wlr_seat_get_keyboard(srv->seat);
+                wlr_seat_keyboard_notify_enter(srv->seat, surface,
+                                               kb ? kb->keycodes : nullptr,
+                                               kb ? kb->num_keycodes : 0,
+                                               kb ? &kb->modifiers : nullptr);
+            } else {
+                wlr_seat_keyboard_notify_clear_focus(srv->seat);
+            }
+        }
+        return;
     }
     if (ref.kind == WinRef::XDG) {
         Toplevel* t = static_cast<Toplevel*>(ref.ptr);
@@ -643,10 +857,32 @@ int on_cmd_pipe(int fd, uint32_t /*mask*/, void* /*data*/) {
         cmds.swap(g_cmds);
     }
     for (const auto& c : cmds) apply_win_cmd(c);
+
+    // Input events ride the SAME wakeup byte (separate queue, higher volume).
+    std::vector<json> inputs;
+    {
+        std::lock_guard<std::mutex> lk(g_input_mu);
+        inputs.swap(g_inputs);
+    }
+    for (const auto& d : inputs) inject_input(d);
     return 0;
 }
 
 } // namespace
+
+void post_input(const json& data) {
+    {
+        std::lock_guard<std::mutex> lk(g_input_mu);
+        g_inputs.push_back(data);
+    }
+    // Wake the compositor thread via the same self-pipe the window commands
+    // use. Byte value is irrelevant — on_cmd_pipe drains both queues.
+    if (g_cmd_pipe[1] >= 0) {
+        char b = 1;
+        ssize_t n = write(g_cmd_pipe[1], &b, 1);
+        (void)n;
+    }
+}
 
 int run_compositor(WireConn& conn) {
     wlr_log_init(WLR_INFO, nullptr);
@@ -728,6 +964,51 @@ int run_compositor(WireConn& conn) {
         server.new_toplevel_decoration.notify = server_new_toplevel_decoration;
         wl_signal_add(&server.xdg_decoration->events.new_toplevel_decoration,
                       &server.new_toplevel_decoration);
+    }
+
+    // Seat + virtual keyboard (DISPLAY.md §6). MUST exist before
+    // wlr_xwayland_set_seat below: Xwayland's core keyboard binds to the
+    // seat keymap, and without it the X server aborts ("Failed to compile
+    // keymap"). The seat also carries injected pointer/keyboard input — no
+    // physical devices exist on the headless backend.
+    server.seat = wlr_seat_create(server.display, "seat0");
+    if (server.seat) {
+        wlr_seat_set_capabilities(
+            server.seat, WL_SEAT_CAPABILITY_POINTER | WL_SEAT_CAPABILITY_KEYBOARD);
+
+        static const struct wlr_keyboard_impl vkbd_impl = {
+            /*name*/ "wash-vkbd", /*led_update*/ nullptr};
+        wlr_keyboard_init(&server.vkbd, &vkbd_impl, "wash-vkbd");
+
+        // Default xkb keymap (all-NULL rules → system default, typically
+        // evdev/us). The keymap is layout authority; the FE only forwards
+        // physical-key identity (KeyboardEvent.code → evdev keycode).
+        struct xkb_context* xkb = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+        struct xkb_rule_names rules{};
+        struct xkb_keymap* keymap =
+            xkb ? xkb_keymap_new_from_names(xkb, &rules, XKB_KEYMAP_COMPILE_NO_FLAGS)
+                : nullptr;
+        if (keymap) {
+            wlr_keyboard_set_keymap(&server.vkbd, keymap);
+            xkb_keymap_unref(keymap);
+        } else {
+            wlr_log(WLR_ERROR, "wash-display: xkb keymap compile failed — keys disabled");
+        }
+        if (xkb) xkb_context_unref(xkb);
+
+        wlr_seat_set_keyboard(server.seat, &server.vkbd);
+        server.vkbd_inited = (keymap != nullptr);
+
+        // Forward the virtual keyboard's key/modifier signals to the seat so
+        // injected keys carry correct modifier state (tinywl pattern).
+        server.vkbd_key.notify = vkbd_handle_key;
+        wl_signal_add(&server.vkbd.events.key, &server.vkbd_key);
+        server.vkbd_modifiers.notify = vkbd_handle_modifiers;
+        wl_signal_add(&server.vkbd.events.modifiers, &server.vkbd_modifiers);
+        wlr_log(WLR_INFO, "wash-display: seat0 up (pointer+keyboard, vkbd=%d)",
+                (int)server.vkbd_inited);
+    } else {
+        wlr_log(WLR_ERROR, "wash-display: seat create failed — input disabled");
     }
 
 #ifdef WASH_DISPLAY_XWAYLAND

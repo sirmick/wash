@@ -44,16 +44,31 @@ function parseHeader(view: DataView): FrameHeader {
   };
 }
 
+// One input batch flushed to the BE per rAF (motion) or immediately
+// (button/key/wheel). Events are surface-relative ints; see docs/DISPLAY.md §6.
+type InputEvent = Record<string, string | number>;
+
+// DOM mouse button → wash button name.
+const BUTTON_NAME: Record<number, string> = { 0: 'left', 1: 'middle', 2: 'right' };
+
 export class WashAppDisplay extends HTMLElement {
   private canvas?: HTMLCanvasElement;
   private ctx?: CanvasRenderingContext2D | null;
   private windowID = -1;
+  private instanceID = '';
   private unsubscribe?: () => void;
   private errorCount = 0;
+
+  // Pending input batch + rAF handle. Motion coalesces (one per frame);
+  // buttons/keys/wheel flush immediately so clicks/keystrokes stay snappy.
+  private pending: InputEvent[] = [];
+  private rafID = 0;
+  private inputCleanup?: () => void;
 
   connectedCallback(): void {
     const winAttr = this.getAttribute('data-wash-window');
     this.windowID = winAttr != null ? parseInt(winAttr, 10) : -1;
+    this.instanceID = this.getAttribute('data-wash-instance') ?? '';
 
     if (!this.canvas) {
       // Render the guest buffer at native 1:1 pixels, anchored top-left,
@@ -90,6 +105,11 @@ export class WashAppDisplay extends HTMLElement {
     if (this.windowID >= 0) {
       registerDisplayWindow(this.windowID, this);
     }
+
+    // Forward pointer/keyboard/scroll to the owning wash-display instance.
+    if (this.windowID >= 0 && this.instanceID) {
+      this.setupInput();
+    }
   }
 
   disconnectedCallback(): void {
@@ -104,6 +124,140 @@ export class WashAppDisplay extends HTMLElement {
       }
       this.unsubscribe = undefined;
     }
+    if (this.inputCleanup) {
+      this.inputCleanup();
+      this.inputCleanup = undefined;
+    }
+    if (this.rafID) {
+      cancelAnimationFrame(this.rafID);
+      this.rafID = 0;
+    }
+  }
+
+  // --- input capture (docs/DISPLAY.md §6) ----------------------------
+
+  // setupInput wires DOM pointer/keyboard/wheel listeners on this element
+  // and forwards them, surface-relative, to the wash-display BE which
+  // injects them into the real wlroots surface.
+  private setupInput(): void {
+    // Make the element focusable so it can receive key events when its
+    // window is active; clicking it (below) gives it DOM focus. The outline
+    // would be visual noise over guest pixels.
+    this.tabIndex = 0;
+    this.style.outline = 'none';
+
+    const onPointerMove = (ev: PointerEvent) => {
+      this.queueMotion(ev);
+      this.scheduleFlush();
+    };
+    const onPointerDown = (ev: PointerEvent) => {
+      // Capture so a drag that leaves the element still delivers move/up
+      // (dragging a scrollbar, selecting text, etc.). Focus for keys.
+      try {
+        this.setPointerCapture(ev.pointerId);
+      } catch {
+        /* not all pointer types are capturable */
+      }
+      this.focus({ preventScroll: true });
+      this.queueMotion(ev);
+      this.queue({ ev: 'button', btn: BUTTON_NAME[ev.button] ?? 'left', state: 'down' });
+      this.flushNow();
+    };
+    const onPointerUp = (ev: PointerEvent) => {
+      this.queueMotion(ev);
+      this.queue({ ev: 'button', btn: BUTTON_NAME[ev.button] ?? 'left', state: 'up' });
+      this.flushNow();
+    };
+    const onWheel = (ev: WheelEvent) => {
+      // Forward both axes; deltaMode 0 (pixels) is the common case, the BE
+      // treats the value as a ~120-per-notch hi-res wheel delta. Negate to
+      // match wlroots' positive-down convention. preventDefault stops the
+      // shell scrolling underneath.
+      ev.preventDefault();
+      if (ev.deltaY) this.queue({ ev: 'axis', axis: 'v', delta: Math.round(ev.deltaY) });
+      if (ev.deltaX) this.queue({ ev: 'axis', axis: 'h', delta: Math.round(ev.deltaX) });
+      this.flushNow();
+    };
+    const onKeyDown = (ev: KeyboardEvent) => {
+      // Keep browser shortcuts/scroll from firing while a guest is focused;
+      // the guest owns the keyboard. (Repeat is the client's job, so a
+      // synthetic repeat — ev.repeat — still forwards as a fresh down.)
+      ev.preventDefault();
+      this.queue({ ev: 'key', code: ev.code, state: 'down' });
+      this.flushNow();
+    };
+    const onKeyUp = (ev: KeyboardEvent) => {
+      ev.preventDefault();
+      this.queue({ ev: 'key', code: ev.code, state: 'up' });
+      this.flushNow();
+    };
+    // Right-click must reach the guest, not pop the browser menu.
+    const onContextMenu = (ev: Event) => ev.preventDefault();
+
+    this.addEventListener('pointermove', onPointerMove);
+    this.addEventListener('pointerdown', onPointerDown);
+    this.addEventListener('pointerup', onPointerUp);
+    this.addEventListener('wheel', onWheel, { passive: false });
+    this.addEventListener('keydown', onKeyDown);
+    this.addEventListener('keyup', onKeyUp);
+    this.addEventListener('contextmenu', onContextMenu);
+
+    this.inputCleanup = () => {
+      this.removeEventListener('pointermove', onPointerMove);
+      this.removeEventListener('pointerdown', onPointerDown);
+      this.removeEventListener('pointerup', onPointerUp);
+      this.removeEventListener('wheel', onWheel);
+      this.removeEventListener('keydown', onKeyDown);
+      this.removeEventListener('keyup', onKeyUp);
+      this.removeEventListener('contextmenu', onContextMenu);
+    };
+  }
+
+  // queueMotion appends (coalescing) a surface-relative motion event. The
+  // canvas is drawn 1:1 at top-left (DPR 1.0), so surface coords are the
+  // offset into the canvas box. Consecutive motions collapse to the latest.
+  private queueMotion(ev: PointerEvent): void {
+    const box = this.canvas && this.canvas.width > 0 ? this.canvas : this;
+    const r = box.getBoundingClientRect();
+    const x = Math.max(0, Math.round(ev.clientX - r.left));
+    const y = Math.max(0, Math.round(ev.clientY - r.top));
+    const last = this.pending[this.pending.length - 1];
+    if (last && last.ev === 'motion') {
+      last.x = x;
+      last.y = y;
+    } else {
+      this.pending.push({ ev: 'motion', x, y });
+    }
+  }
+
+  private queue(e: InputEvent): void {
+    this.pending.push(e);
+  }
+
+  // scheduleFlush batches motion to one send per animation frame.
+  private scheduleFlush(): void {
+    if (this.rafID) return;
+    this.rafID = requestAnimationFrame(() => {
+      this.rafID = 0;
+      this.flushNow();
+    });
+  }
+
+  // flushNow sends the pending batch as one app_msg to the wash-display
+  // instance (addressed by instance_id; the BE routes by the payload win).
+  private flushNow(): void {
+    if (this.rafID) {
+      cancelAnimationFrame(this.rafID);
+      this.rafID = 0;
+    }
+    if (this.pending.length === 0) return;
+    const events = this.pending;
+    this.pending = [];
+    if (typeof window === 'undefined' || !window.wash) return;
+    window.wash.sendAppMsgTo(
+      { instance_id: this.instanceID },
+      { kind: 'input', win: this.windowID, events },
+    );
   }
 
   // attachVideoChannel subscribes to the raw byte stream for the window's

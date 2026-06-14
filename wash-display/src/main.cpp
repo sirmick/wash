@@ -194,6 +194,15 @@ static int run() {
         } else if (kind == "display_open") {
             std::thread(handle_display_open, std::ref(conn), data).detach();
         }
+#ifdef WASH_DISPLAY_COMPOSITOR
+        else if (kind == "input") {
+            // FE <wash-app-display> → injected pointer/keyboard input
+            // (DISPLAY.md §6). post_input only enqueues + wakes the
+            // compositor thread (no blocking), so it's safe from here on
+            // the reader thread. Target window is data["win"].
+            wash::post_input(data);
+        }
+#endif
     });
 
     conn.start();

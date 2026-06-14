@@ -259,19 +259,65 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			log.Printf("wash-test clipboard_set: %v", err)
 		}
 	case "clipboard_get":
+		// Echo the request id so a control-socket await_id can correlate the
+		// reply (same pattern as display_open). ClipboardGet blocks on the
+		// router reply, so it MUST run off the read goroutine.
+		id, _ := m["id"].(string)
 		go func() {
 			mime, data, err := c.ClipboardGet(context.Background())
 			if err != nil {
 				log.Printf("wash-test clipboard_get: %v", err)
 				return
 			}
+			log.Printf("wash-test clipboard_get_ok mime=%s bytes=%d", mime, len(data))
+			// kind:"event"+type for the FE's nested dispatch; top-level "id"
+			// lets a control-socket await_id correlate the reply.
 			sendEvent(c, map[string]any{
 				"kind": "event",
 				"type": "clipboard_get_ok",
+				"id":   id,
 				"mime": mime,
 				"text": string(data),
 			})
 		}()
+	case "input":
+		// wash-display input contract (docs/DISPLAY.md §6): the FE
+		// <wash-app-display> element batches pointer/keyboard/scroll events
+		// into one app_msg per rAF. The real BE (wash-display) injects these
+		// into the focused wlroots surface; here we just decode + log each
+		// event so the e2e can assert the FE→BE round-trip (capture,
+		// coalescing, coordinate mapping) without a compositor. Note the
+		// target window is the payload's "win", NOT the app_msg win arg —
+		// the router delivers cross-instance app_msgs on the primary window.
+		dwin := uint32(sdk.ToUint64(m["win"]))
+		evs, _ := m["events"].([]any)
+		log.Printf("wash-test input win=%d events=%d", dwin, len(evs))
+		for _, e := range evs {
+			em := sdk.AsMap(e)
+			if em == nil {
+				continue
+			}
+			switch sdk.ToString(em["ev"]) {
+			case "motion":
+				log.Printf("wash-test input win=%d ev=motion x=%d y=%d",
+					dwin, sdk.ToInt64(em["x"]), sdk.ToInt64(em["y"]))
+			case "motion_rel":
+				log.Printf("wash-test input win=%d ev=motion_rel dx=%d dy=%d",
+					dwin, sdk.ToInt64(em["dx"]), sdk.ToInt64(em["dy"]))
+			case "button":
+				log.Printf("wash-test input win=%d ev=button btn=%s state=%s",
+					dwin, sdk.ToString(em["btn"]), sdk.ToString(em["state"]))
+			case "axis":
+				log.Printf("wash-test input win=%d ev=axis axis=%s delta=%d",
+					dwin, sdk.ToString(em["axis"]), sdk.ToInt64(em["delta"]))
+			case "key":
+				log.Printf("wash-test input win=%d ev=key code=%s state=%s",
+					dwin, sdk.ToString(em["code"]), sdk.ToString(em["state"]))
+			default:
+				log.Printf("wash-test input win=%d ev=%s (unknown)",
+					dwin, sdk.ToString(em["ev"]))
+			}
+		}
 	case "open_echo":
 		// OpenChannel must NOT be called from a callback that runs on
 		// the SDK's read goroutine — the response arrives on that
