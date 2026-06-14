@@ -105,6 +105,17 @@ type Config struct {
 	// not a network stranger — there's no PAM here because the router
 	// already runs as one fixed user.
 	AuthToken string
+
+	// AllowCrossOrigin relaxes the /ws same-origin check so a browser can
+	// open a shell connection to this router from a *different* origin.
+	// Needed for remote apps (docs/REMOTE.md R2): the user's desktop is
+	// served by router A, but its shell opens a second connection to
+	// router B (reached over an ssh -L tunnel), whose Host differs from
+	// the page's Origin. Only set on a router intended to be reached
+	// cross-origin — it is gated by the SSH tunnel / loopback bind, not by
+	// the same-origin policy. The unix-socket/multi-user path already skips
+	// the check (it sits behind wash-login).
+	AllowCrossOrigin bool
 }
 
 // Logger is a minimal sink; cmd/wash-router supplies a real one.

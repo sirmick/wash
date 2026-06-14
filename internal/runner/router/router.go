@@ -156,6 +156,7 @@ func Run(args []string) int {
 	allowUID := fs.Uint("allow-uid", 0, "uid whose SCM_RIGHTS handoffs the --listen-unix listener accepts (SO_PEERCRED-verified). When UNSET, defaults to the router's own uid; pass it explicitly (including 0 for root — the production wash-login runs as root) to override.")
 	authToken := fs.String("auth-token", "", "explicit token gating the --transport=ws TCP listener (/, /ws, /screenshot). Empty ⇒ a random 128-bit token is generated and logged at startup. Ignored for --listen-unix and byte-stream transports, which are gated by OS perms / device ownership.")
 	noAuth := fs.Bool("no-auth", false, "serve the --transport=ws listener with NO token gate. The bound address then hands a full session to anyone who can reach it — only for trusted-loopback dev.")
+	allowCrossOrigin := fs.Bool("allow-cross-origin", false, "relax the /ws same-origin check so a browser can open a shell connection from a different origin. Needed for remote apps (docs/REMOTE.md R2): a desktop served by router A opens a second connection to this router (B) over an ssh -L tunnel. Gate it with the tunnel/loopback bind, not the same-origin policy.")
 	authTokenFile := fs.String("auth-token-file", "", "path the gate token is written to (mode 0600) and recovered from. Empty ⇒ a per-pid file under $XDG_RUNTIME_DIR/wash (or /tmp/wash-<uid>), removed on clean exit. An explicit path that already holds a token is reused as-is, so the token (and existing browser cookies) survive a restart.")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
@@ -263,21 +264,22 @@ func Run(args []string) int {
 	}
 
 	cfg := router.Config{
-		Listen:        firstNonEmpty(*listen, os.Getenv("WASH_LISTEN"), defaultListen),
-		AppsDirs:      router.SplitAppsDir(firstNonEmpty(*appsDir, os.Getenv("WASH_APPS_DIR"), defaultAppsDir())),
-		SessionAppID:  firstNonEmpty(*sessionID, os.Getenv("WASH_SESSION_APP_ID"), defaultSessionAppID),
-		NoSession:     *noSession,
-		InitialAppID:  *initialApp,
-		ShowHidden:    *showHidden,
-		ControlSocket: cs,
-		ScreenshotDir: sd,
-		Dev:           *dev || os.Getenv("WASH_DEV") != "",
-		FSRoot:        normRoot,
-		ListenUnix:    *listenUnix,
-		Name:          *name,
-		IdleTimeout:   idleTimeoutVal,
-		AllowUID:      allowUIDVal,
-		AuthToken:     authTokenVal,
+		Listen:           firstNonEmpty(*listen, os.Getenv("WASH_LISTEN"), defaultListen),
+		AppsDirs:         router.SplitAppsDir(firstNonEmpty(*appsDir, os.Getenv("WASH_APPS_DIR"), defaultAppsDir())),
+		SessionAppID:     firstNonEmpty(*sessionID, os.Getenv("WASH_SESSION_APP_ID"), defaultSessionAppID),
+		NoSession:        *noSession,
+		InitialAppID:     *initialApp,
+		ShowHidden:       *showHidden,
+		ControlSocket:    cs,
+		ScreenshotDir:    sd,
+		Dev:              *dev || os.Getenv("WASH_DEV") != "",
+		FSRoot:           normRoot,
+		ListenUnix:       *listenUnix,
+		Name:             *name,
+		IdleTimeout:      idleTimeoutVal,
+		AllowUID:         allowUIDVal,
+		AuthToken:        authTokenVal,
+		AllowCrossOrigin: *allowCrossOrigin,
 	}
 
 	logger := log.New(os.Stderr, "wash-router ", log.LstdFlags|log.Lmsgprefix)
