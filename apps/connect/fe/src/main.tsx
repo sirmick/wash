@@ -33,6 +33,14 @@ interface RemoteState {
   hosts: HostState[];
 }
 
+// Bookmark is a saved connect target (persisted on disk by the BE). app_id
+// empty = host-only; set = connect then auto-launch that app.
+interface Bookmark {
+  host: string;
+  app_id?: string;
+  label?: string;
+}
+
 type CatalogApp = ReturnType<typeof window.wash.catalogFor>[number];
 
 // ----- host accent colour -----
@@ -82,8 +90,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // it sends the raw channel id; we mount a Terminal on it. auth tracks
   // the host being authenticated + the channel; null = no auth in flight.
   const [auth, setAuth] = createSignal<{ host: string; channel: number } | null>(null);
+  const [bookmarks, setBookmarks] = createSignal<Bookmark[]>([]);
 
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
+
+  // pendingLaunch maps an origin we connected via a bookmark → the app to
+  // launch once that host is up and its catalog has arrived.
+  const pendingLaunch = new Map<string, string>();
 
   // attached tracks origins we've called attachRemote for, so a repeated
   // "up" push (e.g. on reconnect) doesn't open a duplicate connection and
@@ -136,23 +149,56 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       case 'auth_error':
         setAuth(null);
         break;
+      case 'bookmarks':
+        setBookmarks(Array.isArray(m.bookmarks) ? (m.bookmarks as Bookmark[]) : []);
+        break;
     }
   };
 
   const beginAuth = (host: string) => send({ kind: 'auth_begin', host });
   const cancelAuth = () => { send({ kind: 'auth_cancel' }); setAuth(null); };
 
+  // tryPendingLaunch fires a bookmark's deferred launch once the host is
+  // attached and its catalog actually lists the app.
+  const tryPendingLaunch = (origin: string) => {
+    const appID = pendingLaunch.get(origin);
+    if (!appID) return;
+    if (window.wash.catalogFor(origin).some((a) => a.id === appID)) {
+      window.wash.launchOn(origin, appID);
+      pendingLaunch.delete(origin);
+    }
+  };
+
+  // ----- bookmarks -----
+  const persistBookmarks = (next: Bookmark[]) => {
+    setBookmarks(next);
+    send({ kind: 'bookmarks_save', bookmarks: next });
+  };
+  const sameBookmark = (a: Bookmark, b: Bookmark) => a.host === b.host && (a.app_id ?? '') === (b.app_id ?? '');
+  const addBookmark = (bm: Bookmark) => {
+    if (bookmarks().some((x) => sameBookmark(x, bm))) return; // dedup
+    persistBookmarks([...bookmarks(), bm]);
+  };
+  const removeBookmark = (bm: Bookmark) => persistBookmarks(bookmarks().filter((x) => !sameBookmark(x, bm)));
+  const openBookmark = (bm: Bookmark) => {
+    send({ kind: 'connect', host: bm.host });
+    if (bm.app_id) pendingLaunch.set(bm.host, bm.app_id); // origin === host
+  };
+
   onMount(() => {
     const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail);
     props.host.addEventListener('wash:msg', onMsg);
-    // Subscribe to the supervisor's host state (relayed via our BE).
+    // Subscribe to the supervisor's host state (relayed via our BE) and
+    // load saved bookmarks.
     send({ kind: 'subscribe' });
+    send({ kind: 'bookmarks_load' });
     // Seed + track each host's catalog (delivered over the shell's second
-    // RouterClient once attached).
-    const seed: Record<string, CatalogApp[]> = {};
-    setCatalogs(seed);
+    // RouterClient once attached). A freshly-arrived catalog may satisfy a
+    // bookmark's deferred launch.
+    setCatalogs({});
     const offCatalog = window.wash.onRemoteCatalog((ev) => {
       setCatalogs((c) => ({ ...c, [ev.origin]: ev.apps }));
+      tryPendingLaunch(ev.origin);
     });
     onCleanup(() => {
       props.host.removeEventListener('wash:msg', onMsg);
@@ -197,6 +243,26 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           </button>
         </div>
 
+        <Show when={bookmarks().length > 0}>
+          <div style={bookmarksBarStyle} data-testid="connect-bookmarks">
+            <For each={bookmarks()}>
+              {(bm) => (
+                <div style={bookmarkChipStyle} data-testid="connect-bookmark">
+                  <button
+                    type="button"
+                    style={bookmarkOpenStyle}
+                    onClick={() => openBookmark(bm)}
+                    title={bm.app_id ? `Connect to ${bm.host} and launch ${bm.app_id}` : `Connect to ${bm.host}`}
+                  >
+                    {bm.label || (bm.app_id ? `${bm.app_id} · ${bm.host}` : bm.host)}
+                  </button>
+                  <button type="button" style={bookmarkRemoveStyle} onClick={() => removeBookmark(bm)} title="Remove bookmark">✕</button>
+                </div>
+              )}
+            </For>
+          </div>
+        </Show>
+
         <Show
           when={hosts().length > 0}
           fallback={<div style={emptyStyle}>No remote hosts. Enter a host above to connect.</div>}
@@ -210,6 +276,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                   onDisconnect={() => disconnect(h.host)}
                   onLaunch={(appID) => launch(h.origin, appID)}
                   onAuth={() => beginAuth(h.host)}
+                  onBookmarkHost={() => addBookmark({ host: h.host, label: h.host })}
+                  onBookmarkApp={(app) => addBookmark({ host: h.host, app_id: app.id, label: `${app.name} · ${h.host}` })}
                 />
               )}
             </For>
@@ -258,6 +326,8 @@ const HostCard: Component<{
   onDisconnect: () => void;
   onLaunch: (appID: string) => void;
   onAuth: () => void;
+  onBookmarkHost: () => void;
+  onBookmarkApp: (app: CatalogApp) => void;
 }> = (props) => {
   const color = () => hostColor(props.host.origin);
   const needsAuth = () => props.host.status === 'down' && props.host.code === 'auth';
@@ -274,6 +344,9 @@ const HostCard: Component<{
             Authenticate
           </button>
         </Show>
+        <button type="button" onClick={props.onBookmarkHost} style={iconBtnStyle} title="Bookmark this host" data-testid="connect-bookmark-host">
+          ☆
+        </button>
         <button type="button" onClick={props.onDisconnect} style={disconnectBtnStyle} title="Disconnect" data-testid="connect-disconnect">
           ✕
         </button>
@@ -289,20 +362,31 @@ const HostCard: Component<{
           <div style={appsGridStyle} data-testid="connect-apps">
             <For each={props.apps}>
               {(app) => (
-                <button
-                  type="button"
-                  style={appBtnStyle}
-                  onClick={() => props.onLaunch(app.id)}
-                  data-testid={`connect-launch-${app.id}`}
-                  title={app.id}
-                >
-                  <span style={appIconStyle}>
-                    <Show when={app.icon} fallback={<span style={{ opacity: 0.3 }}>·</span>}>
-                      <SpriteIcon name={app.icon!} size={16} />
-                    </Show>
-                  </span>
-                  <span style={appNameStyle}>{app.name}</span>
-                </button>
+                <div style={appRowStyle}>
+                  <button
+                    type="button"
+                    style={appBtnStyle}
+                    onClick={() => props.onLaunch(app.id)}
+                    data-testid={`connect-launch-${app.id}`}
+                    title={app.id}
+                  >
+                    <span style={appIconStyle}>
+                      <Show when={app.icon} fallback={<span style={{ opacity: 0.3 }}>·</span>}>
+                        <SpriteIcon name={app.icon!} size={16} />
+                      </Show>
+                    </span>
+                    <span style={appNameStyle}>{app.name}</span>
+                  </button>
+                  <button
+                    type="button"
+                    style={appPinStyle}
+                    onClick={() => props.onBookmarkApp(app)}
+                    title={`Bookmark ${app.name} on this host`}
+                    data-testid={`connect-pin-${app.id}`}
+                  >
+                    ☆
+                  </button>
+                </div>
               )}
             </For>
           </div>
@@ -397,6 +481,55 @@ const emptyStyle: JSX.CSSProperties = {
   color: tokens.fgMuted,
   'text-align': 'center',
   font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+};
+
+const bookmarksBarStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'flex-wrap': 'wrap',
+  gap: '6px',
+  'margin-bottom': '16px',
+};
+
+const bookmarkChipStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'stretch',
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}px`,
+  overflow: 'hidden',
+  background: tokens.bgMenu,
+};
+
+const bookmarkOpenStyle: JSX.CSSProperties = {
+  background: 'transparent',
+  color: tokens.fg,
+  border: 'none',
+  cursor: 'pointer',
+  padding: '4px 8px',
+  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  'max-width': '220px',
+  overflow: 'hidden',
+  'text-overflow': 'ellipsis',
+  'white-space': 'nowrap',
+};
+
+const bookmarkRemoveStyle: JSX.CSSProperties = {
+  background: 'transparent',
+  color: tokens.fgMuted,
+  border: 'none',
+  'border-left': `1px solid ${tokens.borderMenu}`,
+  cursor: 'pointer',
+  padding: '0 6px',
+  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+};
+
+const iconBtnStyle: JSX.CSSProperties = {
+  background: 'transparent',
+  color: tokens.fgMuted,
+  border: 'none',
+  cursor: 'pointer',
+  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  padding: '0 2px',
+  'line-height': 1,
 };
 
 const hostsListStyle: JSX.CSSProperties = { display: 'flex', 'flex-direction': 'column', gap: '10px' };
@@ -505,6 +638,13 @@ const appsGridStyle: JSX.CSSProperties = {
   gap: '6px',
 };
 
+const appRowStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'stretch',
+  gap: '2px',
+  'min-width': 0,
+};
+
 const appBtnStyle: JSX.CSSProperties = {
   display: 'flex',
   'align-items': 'center',
@@ -516,8 +656,20 @@ const appBtnStyle: JSX.CSSProperties = {
   'border-radius': `${tokens.radiusSm}px`,
   cursor: 'pointer',
   'min-width': 0,
+  flex: 1,
   font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
   'text-align': 'left',
+};
+
+const appPinStyle: JSX.CSSProperties = {
+  background: tokens.bgWindow,
+  color: tokens.fgMuted,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}px`,
+  cursor: 'pointer',
+  padding: '0 6px',
+  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  flex: '0 0 auto',
 };
 
 const appIconStyle: JSX.CSSProperties = {

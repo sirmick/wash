@@ -149,6 +149,39 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 	// the FE then re-issues connect, which now succeeds under BatchMode.
 	// The supervisor never sees a prompt — it stays the sole tunnel owner.
 	registerAuth(bus)
+
+	// Bookmarks (docs/REMOTE.md §6.1) — long-lived host[+app] targets the
+	// FE saves and replays for one-click connect/launch. Persisted to
+	// disk (see bookmarks.go), unlike router-memory FE state.
+	registerBookmarks(bus)
+}
+
+func registerBookmarks(bus *sdk.Bus) {
+	push := func(conn *sdk.Conn) error {
+		bms, err := loadBookmarks()
+		if err != nil {
+			log.Printf("wash-connect: load bookmarks: %v", err)
+			bms = []Bookmark{}
+		}
+		return conn.SendAppMsg(map[string]any{"kind": "bookmarks", "bookmarks": bms})
+	}
+	sdk.HandleVoid(bus, "bookmarks_load", func(conn *sdk.Conn, _ string, _ struct{}) error {
+		return push(conn)
+	})
+	sdk.HandleVoid(bus, "bookmarks_save", func(conn *sdk.Conn, _ string, req bookmarksSaveReq) error {
+		if err := saveBookmarks(req.Bookmarks); err != nil {
+			log.Printf("wash-connect: save bookmarks: %v", err)
+			// Re-push the on-disk truth so the FE doesn't drift from a
+			// failed write.
+			return push(conn)
+		}
+		// Echo the saved set back as the authoritative list.
+		return conn.SendAppMsg(map[string]any{"kind": "bookmarks", "bookmarks": req.Bookmarks})
+	})
+}
+
+type bookmarksSaveReq struct {
+	Bookmarks []Bookmark `json:"bookmarks"`
 }
 
 // authState holds the single in-flight ssh-add session. wash-connect is
