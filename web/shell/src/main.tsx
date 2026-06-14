@@ -13,7 +13,7 @@ import { For, Show, createEffect, createSignal } from 'solid-js';
 import type { Component } from 'solid-js';
 import { type ConnState } from './ws';
 import { RouterClient } from './router-client';
-import { LOCAL_ORIGIN, registerClient, clientForInstance, parseInstanceId } from './clients';
+import { LOCAL_ORIGIN, registerClient, clientForInstance, clientForOrigin, parseInstanceId } from './clients';
 import { beginBundle, finishBundle, pushBundleBytes } from './assets';
 
 const __washLoadT0 = performance.now();
@@ -25,7 +25,8 @@ import {
   applySessionSnapshot,
   desktop,
   dismissCrashed,
-  focused,
+  isFocused,
+  originForWindow,
   markCrashed,
   mountDesktop,
   moveLocal,
@@ -35,6 +36,7 @@ import {
   viewport,
   viewportFor,
   windows,
+  type Win,
 } from './wm';
 import { Desktop } from './desktop';
 import { FloatingWindow } from './window';
@@ -388,16 +390,18 @@ function deliverAppMsg(msg: ShellAppMsgDeliver) {
 // custom elements (the session chrome) can subscribe without taking
 // a Solid dep.
 createEffect(() => {
-  const focusedID = focused();
   const s = screenSize();
   windowsSub.set(
     windows.map((w) => ({
+      origin: w.origin,
       windowID: w.windowID,
       instanceID: w.instanceID,
       element: w.element,
       icon: w.icon,
       title: w.title,
-      focused: focusedID === w.windowID,
+      // isFocused() reads the focused signal, so this effect re-runs on
+      // focus change.
+      focused: isFocused(w),
       state: w.state,
       x: w.x,
       y: w.y,
@@ -471,7 +475,7 @@ function waitForBundleByInstance(instanceID: string): Promise<void> {
 // instances don't linger.
 function handleSnapshot(msg: ShellSessionSnapshot): void {
   replaceSavedStates(msg.app_state);
-  applySessionSnapshot(msg.windows, waitForBundle);
+  applySessionSnapshot(LOCAL_ORIGIN, msg.windows, waitForBundle);
 }
 
 // handleCrash marks the matching window crashed in the WM store so
@@ -480,7 +484,7 @@ function handleSnapshot(msg: ShellSessionSnapshot): void {
 // patch right after this; wm.applySessionPatch ignores deletes for
 // already-crashed windows so the tombstone survives.
 function handleCrash(msg: ShellAppCrashed): void {
-  markCrashed(msg.instance_id, {
+  markCrashed(LOCAL_ORIGIN, msg.instance_id, {
     appID: msg.app_id,
     exitCode: msg.exit_code,
     signal: msg.signal,
@@ -531,6 +535,7 @@ function handlePatch(msg: ShellSessionPatch): void {
     }
   }
   applySessionPatch(
+    LOCAL_ORIGIN,
     msg.patches.filter((p) => p.op !== 'app_state'),
     waitForBundle,
   );
@@ -547,13 +552,12 @@ function waitForBundle(instanceID: string): Promise<void> {
 // Crashed windows are FE-only tombstones — the router-side state was
 // already torn down on abnormal exit, so a close_clicked would have
 // nowhere to land. Drop them directly out of the WM store.
-function onWindowClose(windowID: number): void {
-  const w = windows.find((x) => x.windowID === windowID);
-  if (w?.crashed) {
-    dismissCrashed(windowID);
+function onWindowClose(win: Win): void {
+  if (win.crashed) {
+    dismissCrashed(win.origin, win.windowID);
     return;
   }
-  conn.sendCtrl({ t: 'window.close_clicked', window_id: windowID });
+  (clientForOrigin(win.origin) ?? local).conn.sendCtrl({ t: 'window.close_clicked', window_id: win.windowID });
   // The actual removal happens when the router sends window.destroy.
 }
 
@@ -813,6 +817,14 @@ conn.onState((s) => {
   if (logWsUp) flushLogBuf();
 });
 
+// wmSend routes a window-manager intent to the router that owns the
+// window. The session chrome addresses windows by bare id; originForWindow
+// resolves the owning origin (LOCAL while ids are unique — see wm.ts).
+function wmSend(windowID: number, msg: Record<string, unknown>): void {
+  const client = clientForOrigin(originForWindow(windowID)) ?? local;
+  client.conn.sendCtrl(msg);
+}
+
 window.wash = {
   sendAppMsg(instanceID, data) {
     // instanceID is the app-facing (possibly origin-tagged) id. Route to
@@ -835,28 +847,29 @@ window.wash = {
   focusWindow(id) {
     // Local raise gives instant visual focus feedback; the router's
     // patch will confirm the z bump moments later.
-    raiseLocal(id);
-    conn.sendCtrl({ t: 'window.focus', window_id: id });
+    const origin = originForWindow(id);
+    raiseLocal(origin, id);
+    wmSend(id, { t: 'window.focus', window_id: id });
   },
   closeWindow(id) {
-    conn.sendCtrl({ t: 'window.close_clicked', window_id: id });
+    wmSend(id, { t: 'window.close_clicked', window_id: id });
   },
   moveWindow(id, x, y) {
-    conn.sendCtrl({ t: 'window.move', window_id: id, x, y });
+    wmSend(id, { t: 'window.move', window_id: id, x, y });
   },
   resizeWindow(id, w, h) {
-    conn.sendCtrl({ t: 'window.resize', window_id: id, w, h });
+    wmSend(id, { t: 'window.resize', window_id: id, w, h });
   },
   minimizeWindow(id) {
-    conn.sendCtrl({ t: 'window.state', window_id: id, state: 'minimized' });
+    wmSend(id, { t: 'window.state', window_id: id, state: 'minimized' });
   },
   maximizeWindow(id) {
-    conn.sendCtrl({ t: 'window.state', window_id: id, state: 'maximized' });
+    wmSend(id, { t: 'window.state', window_id: id, state: 'maximized' });
   },
   restoreWindow(id) {
-    conn.sendCtrl({ t: 'window.state', window_id: id, state: 'normal' });
+    wmSend(id, { t: 'window.state', window_id: id, state: 'normal' });
     // Restoring also brings to front + grabs focus.
-    conn.sendCtrl({ t: 'window.focus', window_id: id });
+    wmSend(id, { t: 'window.focus', window_id: id });
   },
   viewports: () => ({ perAxis: VIEWPORTS_PER_AXIS }),
   getViewport: () => viewportSub.value,

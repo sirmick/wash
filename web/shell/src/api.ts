@@ -3,6 +3,8 @@
 // (catalog, open windows) and to request actions (spawn via app_msg,
 // focus, close).
 
+import type { Origin } from './clients';
+
 export interface CatalogApp {
   id: string;
   name: string;
@@ -30,6 +32,8 @@ export interface PanelDesc {
 }
 
 export interface WindowInfo {
+  /** Origin (router) the window belongs to; LOCAL for the shell's own. */
+  origin: Origin;
   windowID: number;
   instanceID: string;
   element: string;

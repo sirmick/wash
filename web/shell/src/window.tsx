@@ -12,7 +12,7 @@ import { registerMountedElement, unregisterMountedElement } from './api';
 import {
   VIEWPORTS_PER_AXIS,
   CrashInfo,
-  focused,
+  isFocused,
   moveLocal,
   raiseLocal,
   resizeLocal,
@@ -25,7 +25,7 @@ import { washAssetUrl } from '@wash/ui';
 
 export interface WindowProps {
   win: Win;
-  onClose: (windowID: number) => void;
+  onClose: (win: Win) => void;
 }
 
 export function FloatingWindow(props: WindowProps) {
@@ -105,7 +105,7 @@ export function FloatingWindow(props: WindowProps) {
         // override so frameStyle reads the new position the next
         // frame, not the stale props.win.x while waiting for the
         // router's session.patch to land.
-        moveLocal(props.win.windowID, x, y);
+        moveLocal(props.win.origin, props.win.windowID, x, y);
         window.wash.moveWindow(props.win.windowID, x, y);
       }
       setDragX(null);
@@ -166,7 +166,7 @@ export function FloatingWindow(props: WindowProps) {
       const w = resizeW();
       const h = resizeH();
       if (w != null && h != null && (w !== origW || h !== origH)) {
-        resizeLocal(props.win.windowID, w, h);
+        resizeLocal(props.win.origin, props.win.windowID, w, h);
         window.wash.resizeWindow(props.win.windowID, w, h);
       }
       setResizeW(null);
@@ -199,7 +199,7 @@ export function FloatingWindow(props: WindowProps) {
       background: chromeless ? 'transparent' : '#222',
       border: chromeless
         ? 'none'
-        : focused() === props.win.windowID
+        : isFocused(props.win)
           ? '1px solid #66c'
           : '1px solid #444',
       'box-shadow': '0 6px 24px rgba(0,0,0,0.4)',
@@ -291,9 +291,9 @@ export function FloatingWindow(props: WindowProps) {
   const titlebarBackground = () => {
     if (props.win.crashed) return '#8a1d1d';
     if (props.win.isRoot) {
-      return focused() === props.win.windowID ? '#7a1f1f' : '#5a1818';
+      return isFocused(props.win) ? '#7a1f1f' : '#5a1818';
     }
-    return focused() === props.win.windowID ? '#33387a' : '#2a2a2a';
+    return isFocused(props.win) ? '#33387a' : '#2a2a2a';
   };
 
   // Icon color matches the source app's manifest accent. Apps that
@@ -394,7 +394,7 @@ export function FloatingWindow(props: WindowProps) {
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
-            props.onClose(props.win.windowID);
+            props.onClose(props.win);
           }}
           data-testid="window-close"
           style={titlebarBtnStyle}
