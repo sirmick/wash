@@ -41,6 +41,7 @@ const APP_BINS = {
   syslogs: ['wash-syslogs'], services: ['wash-services'], packages: ['wash-packages'],
   net: ['wash-net'], netd: ['wash-netd'], washamp: ['wash-washamp'],
   music: ['wash-music'], radio: ['wash-radio'], audio: ['wash-audio'],
+  connect: ['wash-connect'], remote: ['wash-remote'],
   vscode: ['wash-vscode', 'wash-vscode-workbench'],
   display: ['wash-display'],
 } satisfies Record<string, readonly string[]>;
