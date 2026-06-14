@@ -22,6 +22,7 @@ import { BulkWidget, type BulkJob } from './sidebar/BulkWidget';
 import { BulkConflictOverlay, type BulkConflict } from './sidebar/BulkConflictOverlay';
 import { PrivWidget, type PrivReq } from './sidebar/PrivWidget';
 import { NetWidget, type NetState, type NetIface } from './sidebar/NetWidget';
+import { RemoteWidget, type RemoteHost } from './sidebar/RemoteWidget';
 import { AudioWidget, type AudioState } from './sidebar/AudioWidget';
 import { ClipboardWidget } from './sidebar/ClipboardWidget';
 import { PrivUnlockOverlay, type PrivUnlockState } from './sidebar/PrivUnlockOverlay';
@@ -207,6 +208,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     bulk: 'collapsed',
     priv: 'collapsed',
     net: 'collapsed',
+    remote: 'collapsed',
     audio: 'collapsed',
     clipboard: 'collapsed',
   });
@@ -230,6 +232,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // Net — com.wash.netd status snapshot (status/phase/summary/diagnostics),
   // fed by the session BE's net.state forwarder. Null until first push.
   const [netState, setNetState] = createSignal<NetState | null>(null);
+  // Remote-host sessions, fed by the session BE's remote.state forwarder
+  // (com.wash.remote supervisor). Glanceable list; wash-connect manages.
+  const [remoteHosts, setRemoteHosts] = createSignal<RemoteHost[]>([]);
   // Live interface IPs from the session BE's host-stats ticker (host.ifaces).
   const [netIfaces, setNetIfaces] = createSignal<NetIface[]>([]);
   // Audio mixer — com.wash.audio's StateService snapshot (sources +
@@ -318,6 +323,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     return '';
   };
   const NET_ACCENT = tokens.accentBlue;
+  // remoteBadge — count of currently-connected remote hosts ("up"),
+  // empty when none. The glanceable "how many sessions are open."
+  const remoteBadge = (): string => {
+    const up = remoteHosts().filter((h) => h.status === 'up').length;
+    return up > 0 ? String(up) : '';
+  };
+  const REMOTE_ACCENT = tokens.accentViolet;
   // audioBadge — show a play glyph while something is actively playing,
   // empty otherwise. Mirrors the other section badges' "needs attention"
   // semantics (here: "sound is on").
@@ -598,6 +610,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           }
           return;
         }
+        case 'remote.state': {
+          // com.wash.remote's StateService snapshot: {hosts:[…]}. Just
+          // mirror it into the sidebar's glanceable list — wash-connect
+          // owns connect/auth/launch, so no auto-expand here.
+          const st = data.state as unknown as { hosts?: RemoteHost[] };
+          setRemoteHosts(Array.isArray(st?.hosts) ? st.hosts : []);
+          return;
+        }
         case 'audio.state': {
           // com.wash.audio's StateService snapshot: {sources, master_volume,
           // master_mute}. Auto-expand when a source first appears so the
@@ -664,6 +684,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     window.wash.sendAppMsg(props.instance, { kind: 'bulk_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'priv_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'net_subscribe' });
+    window.wash.sendAppMsg(props.instance, { kind: 'remote_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'audio_subscribe' });
     props.host.addEventListener('wash:msg', onMsg);
 
@@ -866,6 +887,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           badge={netBadge()}
         >
           <NetWidget state={netState} ifaces={netIfaces} onConfigure={() => launchApp('com.wash.net')} />
+        </Section>
+        <Section
+          id="remote"
+          title="Remote"
+          icon="server-cog"
+          accent={REMOTE_ACCENT}
+          state={sectionStates().remote ?? 'collapsed'}
+          onToggle={() => toggleSection('remote')}
+          badge={remoteBadge()}
+        >
+          <RemoteWidget hosts={remoteHosts} onManage={() => launchApp('com.wash.connect')} />
         </Section>
         <Section
           id="audio"
