@@ -831,10 +831,32 @@ e2e-vm: vm-image vm-chrome $(OUT)/washvm-run
 	cd e2e && $(PNPM) exec playwright install chromium
 	cd e2e && $(PNPM) exec playwright test net-vm-gate net-vm-multi
 
+# e2e-remote-vm: the wash-remote (R2) two-VM capstone (docs/REMOTE.md). Boots
+# VM-A (desktop) + VM-B (ssh host) on a shared mcast L2 and drives wash-connect
+# to SSH into B and composite a B app window into A — proving the real ssh
+# bring-up the host-process connect-launch spec stubs out. Needs qemu + /dev/kvm
+# + the openssh-baked image (RENDER_VER bump); self-skips otherwise.
+.PHONY: e2e-remote-vm
+e2e-remote-vm: vm-image vm-chrome $(OUT)/washvm-remote-run
+	cd e2e && $(PNPM) install --ignore-workspace --silent
+	cd e2e && $(PNPM) exec playwright install chromium
+	cd e2e && $(PNPM) exec playwright test remote-vm
+
+.PHONY: $(OUT)/washvm-remote-run
+$(OUT)/washvm-remote-run: | $(OUT)
+	$(call go_build,$@,cmd/washvm-remote-run)
+
 # run-vm: boot the baked image and serve the wash UI for manual poking.
 .PHONY: run-vm
 run-vm: vm-image vm-chrome $(OUT)/washvm-run
 	$(OUT)/washvm-run --chrome $(VM_CHROME) --addr 127.0.0.1:8080
+
+# run-remote-vm: boot both VMs (desktop + ssh host) + serve VM-A for manual
+# wash-connect poking against a real second host. The interactive sibling of
+# e2e-remote-vm.
+.PHONY: run-remote-vm
+run-remote-vm: vm-image vm-chrome $(OUT)/washvm-remote-run
+	$(OUT)/washvm-remote-run --chrome $(VM_CHROME) --addr 127.0.0.1:8080
 
 # net-demo: launch 3 OpenWRT microVMs (one wash-configured two-VLAN router + two
 # DHCP workstations) on a shared loopback L2 segment, each console in the browser
