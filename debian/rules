@@ -21,6 +21,19 @@ override_dh_auto_test:
 override_dh_strip:
 override_dh_dwz:
 
+# Install the wash package's binaries from the single source-of-truth list
+# (packaging/wash.binaries, generated from the Makefile's BINS). This replaces
+# a hand-maintained debian/wash.install so a new app ships automatically — the
+# drift that left net/media/vscode out of 0.9.0 can't recur. dh_install still
+# runs afterward to process the optional wash-display package's own .install.
+override_dh_install:
+	install -d debian/wash/usr/bin
+	while read -r b; do \
+	  [ -n "$$b" ] || continue; \
+	  install -m0755 out/$$b debian/wash/usr/bin/$$b; \
+	done < packaging/wash.binaries
+	dh_install
+
 # Neither package PROVIDES a shared library — they ship executables only —
 # so dh_makeshlibs has nothing to generate. Skip it: on a cross build it
 # would otherwise shell out to <arch>-linux-gnu-objdump (cross binutils we

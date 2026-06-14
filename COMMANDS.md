@@ -37,6 +37,8 @@ make <arch>-<platform>-<pkg>-package     one leaf (17):
     display: {amd64,arm64} × {ubuntu24,debian13,fedora40}    (deb/rpm only)
     e.g.  make amd64-ubuntu24-wash-package    make arm64-fedora40-display-package
 make openwrt-smoke               OpenWRT runtime smoke (opkg/procd; no .ipk)
+make gen-pkg-binaries            regenerate packaging/wash.binaries from BINS (the one list deb/rpm/apk install) — run after adding an app
+make check-pkg-binaries          fail if packaging/wash.binaries drifted from BINS (runs inside unit-test/CI so a new app can't miss the packages)
 make verify-packages             download CI-built packages from GH + install/boot-smoke each on a clean distro container (needs docker + gh; amd64 only; ROWS="ubuntu24 alpine321" to subset)
 make run-package                 install a CI-built package in a clean container + SERVE the packaged desktop on a published port to browse it (ROW=ubuntu24 PORT=11000; -no-auth; Ctrl-C stops)
 ```

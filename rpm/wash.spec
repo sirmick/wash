@@ -55,13 +55,16 @@ compositor stack the pure-Go core deliberately avoids.
 # Source tarball already ships prebuilt static binaries under out/.
 
 %install
+# Install from the single source-of-truth list (packaging/wash.binaries,
+# generated from the Makefile's BINS) and emit the matching %%files list, so a
+# new app ships automatically — no hand-maintained binary list to drift.
 install -d %{buildroot}%{_bindir}
-for bin in wash-router wash-login wash-session wash-about wash-fm wash-term \
-           wash-edit wash-bulk wash-priv wash-journal wash-notify \
-           wash-settings wash-top wash-disks wash-syslogs wash-services wash-packages \
-           wash-launch wash-sudo; do
+: > wash.files
+while read -r bin; do
+    [ -n "$bin" ] || continue
     install -m 0755 out/$bin %{buildroot}%{_bindir}/$bin
-done
+    echo "%{_bindir}/$bin" >> wash.files
+done < packaging/wash.binaries
 %if %{with display}
 install -m 0755 out/wash-display %{buildroot}%{_bindir}/wash-display
 # Bundled, private libwlroots.so (vendored 0.17.4). Lives in /usr/lib/wash
@@ -73,26 +76,7 @@ install -m 0755 out/lib/libwlroots.so.* %{buildroot}/usr/lib/wash/
 %endif
 install -d -m 0755 %{buildroot}%{_sysconfdir}/wash
 
-%files
-%{_bindir}/wash-router
-%{_bindir}/wash-login
-%{_bindir}/wash-session
-%{_bindir}/wash-about
-%{_bindir}/wash-fm
-%{_bindir}/wash-term
-%{_bindir}/wash-edit
-%{_bindir}/wash-bulk
-%{_bindir}/wash-priv
-%{_bindir}/wash-journal
-%{_bindir}/wash-notify
-%{_bindir}/wash-settings
-%{_bindir}/wash-top
-%{_bindir}/wash-disks
-%{_bindir}/wash-syslogs
-%{_bindir}/wash-services
-%{_bindir}/wash-packages
-%{_bindir}/wash-launch
-%{_bindir}/wash-sudo
+%files -f wash.files
 %dir %{_sysconfdir}/wash
 
 %if %{with display}

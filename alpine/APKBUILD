@@ -34,12 +34,12 @@ build() {
 package() {
     cd "$builddir"
     install -d "$pkgdir/usr/bin"
-    for bin in wash-router wash-login wash-session wash-about wash-fm wash-term \
-               wash-edit wash-bulk wash-priv wash-journal wash-notify \
-               wash-settings wash-top wash-disks wash-syslogs wash-services wash-packages \
-               wash-launch wash-sudo; do
-        install -m 0755 out/$bin "$pkgdir/usr/bin/$bin"
-    done
+    # Install from the single source-of-truth list (packaging/wash.binaries,
+    # generated from the Makefile's BINS) so a new app ships automatically.
+    while read -r bin; do
+        [ -n "$bin" ] || continue
+        install -m 0755 "out/$bin" "$pkgdir/usr/bin/$bin"
+    done < packaging/wash.binaries
     install -d -m 0755 "$pkgdir/etc/wash"
 }
 

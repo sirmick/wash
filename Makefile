@@ -39,6 +39,28 @@ endif
 
 TARGETS := $(addprefix $(OUT)/,$(BINS))
 
+# --- packaged-binary single source of truth -------------------------------
+# packaging/wash.binaries is the ONE list every native package (deb/rpm/apk)
+# installs into /usr/bin — derived from BINS, so adding an app ships it
+# everywhere automatically. (wash-display is the deliberate exception: its
+# dynamic wlroots/wayland deps make it a SEPARATE package, so it's never in
+# BINS.) `make gen-pkg-binaries` regenerates the file; `make check-pkg-binaries`
+# fails if it's drifted from BINS (wired into CI so a new app can't silently
+# miss the packages — the drift that left net/media/vscode out of 0.9.0).
+.PHONY: print-bins gen-pkg-binaries check-pkg-binaries
+print-bins:
+	@printf '%s\n' $(BINS)
+
+gen-pkg-binaries:
+	@printf '%s\n' $(BINS) > packaging/wash.binaries
+	@echo "wrote packaging/wash.binaries ($(words $(BINS)) entries)"
+
+check-pkg-binaries:
+	@printf '%s\n' $(BINS) | diff -u packaging/wash.binaries - >/dev/null \
+	  || { echo "packaging/wash.binaries is stale vs BINS — run 'make gen-pkg-binaries'"; \
+	       printf '%s\n' $(BINS) | diff -u packaging/wash.binaries - || true; exit 1; }
+	@echo "packaging/wash.binaries in sync with BINS ($(words $(BINS)) entries)"
+
 # Privileged escalation CLIs that com.wash.netd runs through wash-priv:
 # washnet-read snapshots the box's config, washnet-wifi drives the polkit-gated
 # radio/connect/forget. netd locates them next to its own binary, so the host
@@ -1011,6 +1033,7 @@ GO_UNIT_PKGS = $$(go list ./... | grep -v '/wash-vm/vm$$')
 # them vet fails "pattern all:assets: no matching files found" on a clean tree.
 .PHONY: unit-test
 unit-test: test-app fe-unit component
+	$(MAKE) -s check-pkg-binaries
 	go vet ./...
 	go test -count=1 -p 1 -timeout 120s $(GO_UNIT_PKGS)
 
