@@ -249,7 +249,7 @@ void WireConn::reader_loop() {
 }
 
 uint32_t WireConn::create_window(const std::string& title, uint32_t w, uint32_t h,
-                                 const std::string& role, uint32_t parent) {
+                                 const std::string& role, uint32_t parent, bool chromeless) {
     if (!alive_.load()) return 0;
     uint64_t req = next_req();
     { std::lock_guard<std::mutex> lk(win_mu_); win_pending_[req] = Reply{}; }
@@ -259,6 +259,7 @@ uint32_t WireConn::create_window(const std::string& title, uint32_t w, uint32_t 
         {"role", role}, {"title", title}, {"w", w}, {"h", h},
     };
     if (parent) m["parent_win"] = parent;
+    if (chromeless) m["chromeless"] = true;
     if (!write_json(CH_EVENT, m)) {
         std::lock_guard<std::mutex> lk(win_mu_);
         win_pending_.erase(req);

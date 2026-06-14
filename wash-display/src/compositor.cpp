@@ -246,10 +246,10 @@ static uint64_t now_ms() {
 // (browser); without one the router replies "no shell attached" and we
 // get 0 — capture still runs but frames drop until a shell binds.
 static void sink_open(WindowSink& s, WireConn* conn, const std::string& title,
-                      uint32_t w, uint32_t h) {
-    s.win = conn->create_window(title, w, h);
-    wlr_log(WLR_INFO, "wash-display: mapped \"%s\" %ux%u -> win=%u",
-            title.c_str(), w, h, s.win);
+                      uint32_t w, uint32_t h, bool chromeless) {
+    s.win = conn->create_window(title, w, h, "toplevel", 0, chromeless);
+    wlr_log(WLR_INFO, "wash-display: mapped \"%s\" %ux%u -> win=%u chromeless=%d",
+            title.c_str(), w, h, s.win, (int)chromeless);
     if (s.win) {
         s.video_chan = conn->open_video_channel(s.win);
         if (s.video_chan)
@@ -450,8 +450,11 @@ void toplevel_map(struct wl_listener* listener, void* /*data*/) {
     uint32_t h = geo.height > 0 ? (uint32_t)geo.height : (uint32_t)kScreenH;
 
     // Blocking wire round-trip; safe here (compositor thread, not the
-    // WireConn reader thread).
-    sink_open(t->sink, t->server->conn, ttl, w, h);
+    // WireConn reader thread). Wayland xdg toplevels are chromeless: every
+    // modern toolkit (GTK/Qt/Chromium/Firefox) draws its own decorations
+    // (CSD), so a wash frame on top would double the titlebar (M8). The
+    // guest's own button closes it; Super+drag in the shell moves it.
+    sink_open(t->sink, t->server->conn, ttl, w, h, /*chromeless=*/true);
     register_win(t->sink.win, WinRef::XDG, t);
 }
 
@@ -504,14 +507,16 @@ void toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
     delete t;
 }
 
-// --- xdg-decoration: force server-side -----------------------------
+// --- xdg-decoration: force client-side (M8) ------------------------
 //
-// A client (e.g. GTK) that supports xdg-decoration asks the compositor
-// whether it should draw its own decorations. We always answer
-// SERVER_SIDE: wash draws the window frame, so the client must NOT draw
-// a titlebar/border (which would appear as a frame inside the wash
-// window). One Decoration per toplevel; we re-force the mode on every
-// client request_mode and self-clean on destroy.
+// We answer CLIENT_SIDE: Wayland toplevels are rendered chromeless (no wash
+// frame), so the client must draw its OWN titlebar/buttons. This pairs with
+// the chromeless window (sink_open) to give exactly ONE set of decorations.
+// In practice the toolkits that matter (GTK4/libadwaita, Chromium) draw CSD
+// regardless of what we answer — forcing CLIENT_SIDE just makes the apps that
+// DO honour the protocol (Qt/KDE) also draw their own, instead of expecting a
+// server frame we no longer draw. One Decoration per toplevel; re-forced on
+// every client request_mode, self-cleaned on destroy.
 struct Decoration {
     struct wlr_xdg_toplevel_decoration_v1* deco = nullptr;
     struct wl_listener request_mode;
@@ -521,7 +526,7 @@ struct Decoration {
 void decoration_request_mode(struct wl_listener* listener, void* /*data*/) {
     Decoration* d = wl_container_of(listener, d, request_mode);
     wlr_xdg_toplevel_decoration_v1_set_mode(
-        d->deco, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+        d->deco, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
 }
 
 void decoration_destroy(struct wl_listener* listener, void* /*data*/) {
@@ -541,7 +546,7 @@ void server_new_toplevel_decoration(struct wl_listener* /*listener*/, void* data
     wl_signal_add(&deco->events.destroy, &d->destroy);
     // Force the initial mode now (the client may not send a request).
     wlr_xdg_toplevel_decoration_v1_set_mode(
-        deco, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+        deco, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
 }
 
 // --- xdg popups (menus/dropdowns/tooltips) → parent-window overlay -----
@@ -855,7 +860,9 @@ void xsurface_map(struct wl_listener* listener, void* /*data*/) {
     // own requested geometry so they paint at the expected dimensions.
     wlr_xwayland_surface_configure(x->xsurf, x->xsurf->x, x->xsurf->y,
                                    (uint16_t)w, (uint16_t)h);
-    sink_open(x->sink, x->server->conn, ttl, w, h);
+    // X11 clients (xclock, etc.) don't draw CSD — keep the wash frame so
+    // they have a titlebar to move/close (M8: only Wayland is chromeless).
+    sink_open(x->sink, x->server->conn, ttl, w, h, /*chromeless=*/false);
     register_win(x->sink.win, WinRef::X11, x);
     g_active_x_toplevel = x; // fallback parent for override-redirect menus
 }

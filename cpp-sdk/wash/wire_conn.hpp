@@ -75,9 +75,11 @@ public:
 
     // create_window sends window.create and blocks for window.created /
     // window.create.err. Returns the window id, or 0 on failure.
-    // Blocking: never call from the AppMsgHandler.
+    // chromeless drops the wash frame for this window (CSD guests draw
+    // their own). Blocking: never call from the AppMsgHandler.
     uint32_t create_window(const std::string& title, uint32_t w, uint32_t h,
-                           const std::string& role = "toplevel", uint32_t parent = 0);
+                           const std::string& role = "toplevel", uint32_t parent = 0,
+                           bool chromeless = false);
 
     // destroy_window is fire-and-forget (window.destroy on CH_EVENT).
     void destroy_window(uint32_t win);
