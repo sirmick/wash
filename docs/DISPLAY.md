@@ -428,15 +428,25 @@ from the broadcast). PRIMARY (middle-click) selection is the deferred **M2b**.
 *Remaining verification:* real-app copy/paste smoke needs a clipboard-capable client
 (xterm / a Wayland app); the wash-side wire is covered by the M0 contract test.
 
-### M3 — popups / override-redirect (planned)
-Real apps' menus/dropdowns/tooltips. **Cross-cutting** (not display-local): the wire
-`EvtWindowCreate` has `Role`/`ParentWin` but **no position**, and the router
-(`app_session.go:597`) currently maps popups as ordinary toplevels. Needs: (a) popup
-x/y offset on the create contract, (b) router honouring role/parent_win + position
-into the session/patch model, (c) shell rendering popups borderless positioned
-relative to the parent, (d) compositor handling the xdg-popup role
-(`server_new_xdg_toplevel` currently drops non-toplevels) via `wlr_xdg_positioner`,
-and X11 `override_redirect` surfaces as borderless popups.
+### M3 — popups / override-redirect ✅
+Real apps' menus/dropdowns/tooltips. Done **display-local** — NOT the cross-cutting
+WM change first feared. A popup is not a wash window: it streams to its parent
+window's `<wash-app-display>` over a new **additive** channel kind
+`ChannelKindVideoPopup="video-popup"` (the router relays the kind opaquely —
+`handleChannelOpen` passes `m.Kind` through — so zero router/window/patch/WM change),
+and the element draws it as a `position:fixed` overlay canvas on `<body>` that can
+overflow the window box, forwarding its own pointer/wheel input keyed by the popup
+channel (popups have no win → `g_popup_reg`, surface-based). The popup's offset rides
+in-band as a sub-45-byte JSON control frame; pixel frames are ≥45 bytes.
+
+- **M3a (Wayland)**: `server_new_xdg_toplevel` now handles the `xdg_popup` role
+  (previously dropped); offset from `popup->current.geometry` accumulated up the
+  parent chain to the root toplevel.
+- **M3b (X11)**: `xsurface_map` branches on `override_redirect` → same overlay path,
+  parented to the transient-for window (else the most-recently-mapped toplevel),
+  offset = `menu.xy − parent.xy` in X root coords. This is p4v's / Qt-X11's menu path.
+- Deferred: popup keyboard focus; the X11 clipboard guest→wash leg rides wlroots' xwm
+  X→Wayland selection sync (the wash-side bridge is M2, verified on Wayland).
 
 ### M4 — cursor shape forwarding (planned)
 The browser already shows a cursor over the canvas; forward the guest's cursor *shape*
@@ -453,3 +463,20 @@ scaling in M1.
 ### Out of scope here — M6 throughput
 WebRTC/VP9 (for Firefox scroll/video parity) + audio service hookup are a separate,
 larger track ([[wash_display_codecs]], [[wash_audio_plan]]).
+
+### Testing — two layers
+Input/clipboard/popups are tested at two levels:
+
+1. **Contract (CI, no compositor)** — `e2e/tests/display.spec.ts` drives the hidden
+   test app (`apps/test`), which *fakes* the BE (canned frames, no real surface): it
+   proves the wire/FE/router plumbing — the input app_msg shape + coordinate mapping,
+   the clipboard `clipboard.*` vocabulary, and the popup overlay/`popup_chan` input
+   routing. Runs everywhere.
+2. **Real client (needs `out/wash-display` + an app)** — kept out of default `make e2e`:
+   - `display-input-smoke.spec.ts`: click + type on a real `xclock` window.
+   - `display-guest.spec.ts`: drives `tools/display-testguest.py`, a dependency-free
+     **PyGObject GTK3** guest (right-click menu, copy/paste, visible input feedback;
+     keyboard triggers `c`/`v`/`m`). One script covers **both** popup paths via
+     `GDK_BACKEND` (`wayland` → xdg_popup, `x11` → override-redirect). It's also the
+     **manual debug surface**: launch it from a wash terminal and watch input land,
+     menus open as overlays, and copy/paste bridge.
