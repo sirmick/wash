@@ -126,13 +126,28 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+      # Stage each package under a STABLE, version-less name
+      # (wash-<distro>-<arch>.<ext>) AND its native versioned name. The
+      # stable names are what the README's one-liners depend on via
+      # https://github.com/sirmick/wash/releases/latest/download/<name> —
+      # without this step a vX.Y.Z release would only carry the versioned
+      # dpkg/rpm/apk names and those URLs would 404. The artifact layout is
+      # artifacts/<row>/<distro>-<arch>/<pkg>, so the package's parent dir
+      # is exactly "<distro>-<arch>".
+      - name: Stage release assets (stable + versioned names)
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find artifacts -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' -o -name '*.tgz' \) | while read -r f; do
+            slug=$(basename "$(dirname "$f")")     # e.g. ubuntu-24.04-amd64
+            ext=${f##*.}
+            cp "$f" "release/wash-$slug.$ext"      # stable: wash-ubuntu-24.04-amd64.deb
+            cp "$f" "release/$(basename "$f")"     # native: wash_0.9.0-1_amd64.deb
+          done
+          echo "── release assets ──"; ls -1 release
       - name: Publish packages to the GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/**/*.deb
-            artifacts/**/*.rpm
-            artifacts/**/*.apk
-            artifacts/**/*.tgz
+          files: release/*
           generate_release_notes: true
           fail_on_unmatched_files: false
