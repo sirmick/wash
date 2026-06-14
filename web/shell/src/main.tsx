@@ -193,12 +193,21 @@ let clipboardReqID = 0;
 
 function wsURL(): string {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const params = new URLSearchParams(window.location.search);
+  // M0 remote-apps transport spike (docs/REMOTE.md): ?remote=<ws-url>
+  // points the shell at an arbitrary router instead of this origin's.
+  // With `ssh -L 127.0.0.1:PORT:<B-router-sock>` this connects the
+  // shell to host B's router through the tunnel, proving the wire +
+  // replayBundleToShell delivery end to end. (The simultaneous second
+  // connection that composites a single B window arrives with the M1
+  // RouterClient registry; this override is the single-conn spike.)
+  const remote = params.get('remote');
+  if (remote) return remote;
   // When the page URL carries ?s=<sessid>, route the WS at the
   // sessid-specific endpoint so wash-login attaches to that session
   // instead of auto-picking. Bare /ws is used when no preference is
   // declared — wash-login then spawns (0 sessions) or attaches to
   // the lone one (1 session) by default.
-  const params = new URLSearchParams(window.location.search);
   const sessid = params.get('s');
   const path = sessid ? `/ws/s/${encodeURIComponent(sessid)}/` : '/ws';
   return `${proto}://${window.location.host}${path}`;
