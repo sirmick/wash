@@ -10,6 +10,7 @@
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
 import { registerMountedElement, unregisterMountedElement } from './api';
 import { tagFor } from './clients';
+import { hostColor } from './host-colors';
 import {
   VIEWPORTS_PER_AXIS,
   CrashInfo,
@@ -326,6 +327,28 @@ export function FloatingWindow(props: WindowProps) {
       onDragEnter={onWindowDragEnter}
       style={frameStyle()}
     >
+      {/* Per-host colour stripe: a thin band at the very top of the frame
+          identifies which remote host a window belongs to. Null (no stripe)
+          for LOCAL windows, so "no stripe" means "this machine". Works for
+          chromeless windows too — it sits above the guest surface's edge. */}
+      <Show when={hostColor(props.win.origin)}>
+        {(c) => (
+          <div
+            data-testid="wash-host-stripe"
+            data-origin={props.win.origin}
+            style={{
+              position: 'absolute',
+              top: '0',
+              left: '0',
+              right: '0',
+              height: '3px',
+              background: c(),
+              'z-index': 3,
+              'pointer-events': 'none',
+            }}
+          />
+        )}
+      </Show>
       <Show when={!props.win.chromeless}>
       <div
         class="wash-titlebar"
