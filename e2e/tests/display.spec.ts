@@ -135,7 +135,7 @@ test.describe('multi-window display contract', () => {
     });
 
     // Each event decodes to its own router-log line, keyed by the payload win.
-    await router.waitForLog(new RegExp(`wash-test input win=${win} events=6`), 5_000);
+    await router.waitForLog(new RegExp(`wash-test input win=${win} popup_chan=0 events=6`), 5_000);
     await router.waitForLog(new RegExp(`wash-test input win=${win} ev=motion x=312 y=88`), 5_000);
     await router.waitForLog(new RegExp(`wash-test input win=${win} ev=button btn=left state=down`), 5_000);
     await router.waitForLog(new RegExp(`wash-test input win=${win} ev=axis axis=v delta=-120`), 5_000);
@@ -184,6 +184,41 @@ test.describe('multi-window display contract', () => {
     await page.mouse.wheel(0, 120);
     // (the element is already raised + focused from the click above)
     await router.waitForLog(new RegExp(`wash-test input win=${win} ev=axis axis=v`), 5_000);
+  });
+
+  test('browser: a popup renders as a positioned overlay + forwards input (M3)', async ({ page, router }) => {
+    // §12 M3: a child surface (menu/dropdown) of a display window streams
+    // over a "video-popup" channel and the parent's <wash-app-display>
+    // draws it as a fixed-position overlay canvas that can overflow the
+    // window. Clicking the overlay forwards input keyed by the popup
+    // channel (popups have no wash win). Driven via the test app's
+    // fake-display popup mode — no compositor.
+    await page.goto(router.url);
+    const launched = await router.controlRequest({ t: 'launch', app_id: 'com.wash.test' });
+    const inst = launched.instance_id as string;
+
+    const resp = await router.sendAppMsg(inst, { kind: 'display_open', id: 'p1', n: 1 });
+    const win = ((resp.windows ?? []) as Array<{ win: number }>)[0].win;
+    await page.locator(`wash-app-display[data-wash-window="${win}"]`).waitFor({ state: 'visible' });
+
+    // Open a popup at offset (40,50) on that window.
+    const opened = await router.sendAppMsg(inst, { kind: 'popup_open', id: 'pop', win, x: 40, y: 50 });
+    const chan = opened.channel as number;
+    expect(chan).toBeGreaterThan(0);
+
+    // A fixed-position overlay canvas appears on <body> (not inside the
+    // window — so it can overflow), positioned near parent-origin + offset.
+    const overlay = page.locator('body > canvas[style*="fixed"]');
+    await overlay.first().waitFor({ state: 'attached', timeout: 10_000 });
+    expect(await overlay.count()).toBeGreaterThanOrEqual(1);
+
+    // Click the overlay → input is forwarded keyed by the popup channel,
+    // not a win (the BE logs popup_chan=<chan>).
+    // force: the canned popup frame is 1×1, too small for the actionability
+    // hit-test; we only care that the click reaches the overlay's listeners.
+    await overlay.first().click({ force: true });
+    await router.waitForLog(new RegExp(`wash-test input win=0 popup_chan=${chan} `), 5_000);
+    await router.waitForLog(new RegExp(`popup_chan=${chan} events=`), 5_000);
   });
 
   test('clipboard bridges between instances (the §7 clipboard contract)', async ({ router }) => {

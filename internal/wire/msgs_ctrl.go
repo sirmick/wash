@@ -154,6 +154,15 @@ const (
 	// shell to mount its display decoder component on the bound channel
 	// rather than treating it as opaque bytes. See docs/DISPLAY.md §5.
 	ChannelKindVideo = "video"
+	// "video-popup" is a video stream for a *child* surface (an X/Wayland
+	// xdg_popup or override-redirect menu) of an existing display window.
+	// window_id names the PARENT display window; the shell draws it as a
+	// positioned overlay canvas on that window's <wash-app-display> element
+	// (which can overflow the window box, like a real menu). The popup's
+	// offset rides in-band on the channel (a sub-45-byte JSON control frame;
+	// pixel frames are always ≥45 bytes). The router relays this kind
+	// opaquely — no router/WM change. See docs/DISPLAY.md §12 (M3).
+	ChannelKindVideoPopup = "video-popup"
 )
 
 // ChannelOpen — app → router — requests a new raw channel bound to

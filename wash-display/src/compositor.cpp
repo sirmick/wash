@@ -462,6 +462,168 @@ void server_new_toplevel_decoration(struct wl_listener* /*listener*/, void* data
         deco, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
 }
 
+// --- xdg popups (menus/dropdowns/tooltips) → parent-window overlay -----
+//
+// A popup is NOT a wash window: it streams to its root toplevel's
+// <wash-app-display> element as a positioned overlay canvas (so it can
+// overflow the window box, like a real menu). Pixels ride a "video-popup"
+// channel opened on the PARENT win; the popup's offset (relative to the
+// root toplevel's geometry) rides in-band as a sub-45-byte JSON control
+// frame. No wash window, no WM/router change (DISPLAY.md §12 M3).
+struct Popup {
+    Server* server = nullptr;
+    struct wlr_xdg_popup* popup = nullptr;
+    uint32_t parent_win = 0; // root toplevel's wash win
+    uint32_t chan = 0;       // video-popup channel on parent_win
+    int sent_x = 0, sent_y = 0;
+    bool geo_sent = false;
+    SurfaceCapture cap;
+    SurfaceEncoder enc;
+    bool enc_ready = false;
+    struct wl_listener map;
+    struct wl_listener unmap;
+    struct wl_listener commit;
+    struct wl_listener destroy;
+};
+
+// Popups by their video-popup channel id, so injected input (which has no
+// wash win to key on) can reach the popup surface. Compositor-thread only
+// (popup_map and inject_input both run there) → no lock needed.
+static std::map<uint32_t, Popup*> g_popup_reg;
+
+// popup_root_and_offset walks the popup parent chain to the owning
+// toplevel, accumulating each popup's geometry offset, and returns that
+// toplevel's wash win + the popup's offset relative to it. False if the
+// chain doesn't end at a mapped toplevel (no win yet).
+static bool popup_root_and_offset(struct wlr_xdg_popup* popup, uint32_t* root_win,
+                                  int* ox, int* oy) {
+    int x = 0, y = 0;
+    struct wlr_xdg_popup* p = popup;
+    for (int guard = 0; guard < 16 && p; guard++) {
+        x += p->current.geometry.x;
+        y += p->current.geometry.y;
+        struct wlr_surface* parent = p->parent;
+        if (!parent) return false;
+        struct wlr_xdg_surface* pxs = wlr_xdg_surface_try_from_wlr_surface(parent);
+        if (!pxs) return false;
+        if (pxs->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
+            Toplevel* t = static_cast<Toplevel*>(pxs->data);
+            if (!t || !t->sink.win) return false;
+            *root_win = t->sink.win;
+            *ox = x;
+            *oy = y;
+            return true;
+        }
+        if (pxs->role == WLR_XDG_SURFACE_ROLE_POPUP) {
+            p = pxs->popup;
+            continue;
+        }
+        return false;
+    }
+    return false;
+}
+
+// popup_send_geometry writes the in-band control frame (small JSON, always
+// < 45 bytes so the FE tells it apart from pixel frames).
+static void popup_send_geometry(Popup* p) {
+    json g = {{"x", p->sent_x}, {"y", p->sent_y}};
+    std::string s = g.dump();
+    p->server->conn->write_channel(p->chan, (const uint8_t*)s.data(), s.size());
+}
+
+void popup_map(struct wl_listener* listener, void* /*data*/) {
+    Popup* p = wl_container_of(listener, p, map);
+    uint32_t root = 0;
+    int ox = 0, oy = 0;
+    if (!popup_root_and_offset(p->popup, &root, &ox, &oy)) {
+        wlr_log(WLR_INFO, "wash-display: popup with no mapped root toplevel — dropping");
+        return;
+    }
+    p->parent_win = root;
+    p->sent_x = ox;
+    p->sent_y = oy;
+    p->chan = p->server->conn->open_channel_kind(root, "video-popup");
+    if (!p->chan) {
+        wlr_log(WLR_INFO, "wash-display: popup channel open failed (no shell?) win=%u", root);
+        return;
+    }
+    popup_send_geometry(p);
+    p->geo_sent = true;
+    g_popup_reg[p->chan] = p; // so injected input can find this surface
+    wlr_log(WLR_INFO, "wash-display: popup mapped parent_win=%u chan=%u off=%d,%d",
+            root, p->chan, ox, oy);
+}
+
+void popup_unmap(struct wl_listener* listener, void* /*data*/) {
+    Popup* p = wl_container_of(listener, p, unmap);
+    if (p->chan) {
+        g_popup_reg.erase(p->chan);
+        // Tell the FE to drop the overlay (close control frame).
+        std::string s = json{{"close", true}}.dump();
+        p->server->conn->write_channel(p->chan, (const uint8_t*)s.data(), s.size());
+        p->chan = 0;
+    }
+}
+
+void popup_commit(struct wl_listener* listener, void* /*data*/) {
+    Popup* p = wl_container_of(listener, p, commit);
+    if (!p->chan) return;
+    // Reposition (reactive popups) → resend geometry.
+    uint32_t root = 0;
+    int ox = 0, oy = 0;
+    if (popup_root_and_offset(p->popup, &root, &ox, &oy) &&
+        (ox != p->sent_x || oy != p->sent_y)) {
+        p->sent_x = ox;
+        p->sent_y = oy;
+        popup_send_geometry(p);
+    }
+    // Capture → WebP → one framed message (≥45 bytes; the FE distinguishes
+    // it from the JSON control frame by length).
+    struct wlr_surface* surface = p->popup->base->surface;
+    if (!p->cap.capture(surface, p->server->renderer)) return;
+    if (!p->enc_ready || p->enc.width() != p->cap.width() ||
+        p->enc.height() != p->cap.height()) {
+        p->enc_ready = p->enc.init(p->cap.width(), p->cap.height());
+        if (!p->enc_ready) return;
+    }
+    std::vector<uint8_t> frame = p->enc.encode_frame(
+        p->cap.data(), p->cap.stride(), p->cap.width(), p->cap.height(),
+        p->cap.dirty_x, p->cap.dirty_y, p->cap.dirty_w, p->cap.dirty_h, now_ms());
+    if (!frame.empty())
+        p->server->conn->write_channel(p->chan, frame.data(), frame.size());
+}
+
+void popup_destroy(struct wl_listener* listener, void* /*data*/) {
+    Popup* p = wl_container_of(listener, p, destroy);
+    if (p->chan) {
+        g_popup_reg.erase(p->chan);
+        std::string s = json{{"close", true}}.dump();
+        p->server->conn->write_channel(p->chan, (const uint8_t*)s.data(), s.size());
+    }
+    wl_list_remove(&p->map.link);
+    wl_list_remove(&p->unmap.link);
+    wl_list_remove(&p->commit.link);
+    wl_list_remove(&p->destroy.link);
+    delete p;
+}
+
+void new_xdg_popup(Server* server, struct wlr_xdg_popup* popup) {
+    auto* p = new Popup();
+    p->server = server;
+    p->popup = popup;
+    // Scene the popup so it gets frame-done callbacks and keeps repainting;
+    // position in the scene is irrelevant (we capture the surface directly).
+    wlr_scene_xdg_surface_create(&server->scene->tree, popup->base);
+    p->map.notify = popup_map;
+    wl_signal_add(&popup->base->surface->events.map, &p->map);
+    p->unmap.notify = popup_unmap;
+    wl_signal_add(&popup->base->surface->events.unmap, &p->unmap);
+    p->commit.notify = popup_commit;
+    wl_signal_add(&popup->base->surface->events.commit, &p->commit);
+    p->destroy.notify = popup_destroy;
+    wl_signal_add(&popup->base->events.destroy, &p->destroy);
+}
+
 void server_new_xdg_toplevel(struct wl_listener* listener, void* data) {
     Server* server = wl_container_of(listener, server, new_xdg_toplevel);
     // 0.17: wlr_xdg_shell has no new_toplevel signal; it emits new_surface
@@ -469,6 +631,13 @@ void server_new_xdg_toplevel(struct wl_listener* listener, void* data) {
     // (popups are parented by their toplevel's scene tree, not wash
     // windows); 0.18's new_toplevel did this filtering for us.
     auto* xdg_surface = static_cast<struct wlr_xdg_surface*>(data);
+    // Popups (menus, dropdowns, tooltips) stream to the parent window's
+    // element as an overlay rather than becoming wash windows (DISPLAY.md
+    // §12 M3). 0.18's new_toplevel would have filtered these for us.
+    if (xdg_surface->role == WLR_XDG_SURFACE_ROLE_POPUP) {
+        new_xdg_popup(server, xdg_surface->popup);
+        return;
+    }
     if (xdg_surface->role != WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
         return;
     }
@@ -480,6 +649,9 @@ void server_new_xdg_toplevel(struct wl_listener* listener, void* data) {
     t->scene_tree =
         wlr_scene_xdg_surface_create(&server->scene->tree, xdg_toplevel->base);
     t->scene_tree->node.data = t;
+    // Lets a popup resolve its root toplevel's wash win via the parent
+    // surface's xdg_surface->data (popup_root_and_offset).
+    xdg_toplevel->base->data = t;
 
     t->map.notify = toplevel_map;
     wl_signal_add(&xdg_toplevel->base->surface->events.map, &t->map);
@@ -705,12 +877,25 @@ static uint32_t code_to_keycode(const std::string& c) {
 // by the payload's "win" (NOT the app_msg envelope win — cross-instance
 // app_msgs arrive on the instance's primary window). Compositor thread only.
 static void inject_input(const json& data) {
-    uint32_t win = data.value("win", 0U);
     struct wlr_surface* surface = nullptr;
     Server* srv = nullptr;
-    if (!resolve_win(win, &surface, &srv) || !srv->seat) return;
+    // Target is either a wash window (toplevel/X11) or a popup overlay,
+    // which has no win and is keyed by its video-popup channel instead.
+    if (uint32_t pc = data.value("popup_chan", 0U); pc) {
+        auto it = g_popup_reg.find(pc);
+        if (it == g_popup_reg.end()) return;
+        surface = it->second->popup->base->surface;
+        srv = it->second->server;
+    } else {
+        uint32_t win = data.value("win", 0U);
+        if (!resolve_win(win, &surface, &srv)) return;
+    }
+    if (!surface || !srv || !srv->seat) return;
     if (!data.contains("events") || !data["events"].is_array()) return;
 
+    // For logging only: the win, or popup_chan negated-ish as "p<chan>".
+    uint32_t log_tgt = data.value("popup_chan", 0U) ? data.value("popup_chan", 0U)
+                                                    : data.value("win", 0U);
     struct wlr_seat* seat = srv->seat;
     uint32_t t = (uint32_t)now_ms();
     bool ptr_touched = false;
@@ -740,7 +925,7 @@ static void inject_input(const json& data) {
             bool down = e.value("state", std::string()) == "down";
             wlr_seat_pointer_notify_button(
                 seat, t, code, down ? WLR_BUTTON_PRESSED : WLR_BUTTON_RELEASED);
-            wlr_log(WLR_INFO, "wash-display: inject win=%u button %s %s", win,
+            wlr_log(WLR_INFO, "wash-display: inject win=%u button %s %s", log_tgt,
                     btn.c_str(), down ? "down" : "up");
             ptr_touched = true;
         } else if (ev == "axis") {
@@ -772,7 +957,7 @@ static void inject_input(const json& data) {
                                ? WL_KEYBOARD_KEY_STATE_PRESSED
                                : WL_KEYBOARD_KEY_STATE_RELEASED;
                 wlr_keyboard_notify_key(&srv->vkbd, &ke);
-                wlr_log(WLR_INFO, "wash-display: inject win=%u key keycode=%u %s", win,
+                wlr_log(WLR_INFO, "wash-display: inject win=%u key keycode=%u %s", log_tgt,
                         kc, ke.state == WL_KEYBOARD_KEY_STATE_PRESSED ? "down" : "up");
             }
         }

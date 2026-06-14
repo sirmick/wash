@@ -51,6 +51,19 @@ type InputEvent = Record<string, string | number>;
 // DOM mouse button → wash button name.
 const BUTTON_NAME: Record<number, string> = { 0: 'left', 1: 'middle', 2: 'right' };
 
+// A child-surface (menu/dropdown) overlay: a canvas positioned in viewport
+// space relative to the parent window, fed by a "video-popup" channel.
+// See docs/DISPLAY.md §12 (M3).
+interface PopupOverlay {
+  channelID: number;
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D | null;
+  x: number; // offset relative to the parent window's content origin
+  y: number;
+  unsub?: () => void;
+  cleanup: () => void;
+}
+
 export class WashAppDisplay extends HTMLElement {
   private canvas?: HTMLCanvasElement;
   private ctx?: CanvasRenderingContext2D | null;
@@ -64,6 +77,9 @@ export class WashAppDisplay extends HTMLElement {
   private pending: InputEvent[] = [];
   private rafID = 0;
   private inputCleanup?: () => void;
+
+  // Active popup overlays, keyed by their video-popup channel id.
+  private popups = new Map<number, PopupOverlay>();
 
   connectedCallback(): void {
     const winAttr = this.getAttribute('data-wash-window');
@@ -124,6 +140,7 @@ export class WashAppDisplay extends HTMLElement {
       }
       this.unsubscribe = undefined;
     }
+    for (const ch of [...this.popups.keys()]) this.removePopup(ch);
     if (this.inputCleanup) {
       this.inputCleanup();
       this.inputCleanup = undefined;
@@ -253,11 +270,16 @@ export class WashAppDisplay extends HTMLElement {
     if (this.pending.length === 0) return;
     const events = this.pending;
     this.pending = [];
+    this.sendInput({ win: this.windowID }, events);
+  }
+
+  // sendInput posts one input batch to the wash-display instance. `target`
+  // is {win} for the window itself or {popup_chan} for a popup overlay (the
+  // BE routes by whichever is set).
+  private sendInput(target: Record<string, number>, events: InputEvent[]): void {
+    if (events.length === 0) return;
     if (typeof window === 'undefined' || !window.wash) return;
-    window.wash.sendAppMsgTo(
-      { instance_id: this.instanceID },
-      { kind: 'input', win: this.windowID, events },
-    );
+    window.wash.sendAppMsgTo({ instance_id: this.instanceID }, { kind: 'input', ...target, events });
   }
 
   // attachVideoChannel subscribes to the raw byte stream for the window's
@@ -318,6 +340,171 @@ export class WashAppDisplay extends HTMLElement {
         bitmap.close?.();
       })
       .catch((e) => this.logError('decode/draw failed', e));
+  }
+
+  // --- popup overlays (DISPLAY.md §12 M3) ----------------------------
+
+  // attachPopupChannel subscribes to a child-surface (menu/dropdown)
+  // channel. Frames < HEADER_BYTES are JSON control (geometry / close);
+  // frames ≥ HEADER_BYTES are WS pixel frames (same format as the main
+  // stream). Called by the display registry on channel.bind kind=video-popup.
+  attachPopupChannel(channelID: number): void {
+    if (this.popups.has(channelID)) return;
+    const unsub = subscribeRaw(channelID, (bytes) => this.onPopupBytes(channelID, bytes));
+    // The overlay canvas is created lazily on the first pixel frame; record
+    // the subscription now so close/teardown always works.
+    const placeholder: PopupOverlay = {
+      channelID,
+      canvas: undefined as unknown as HTMLCanvasElement,
+      ctx: null,
+      x: 0,
+      y: 0,
+      unsub,
+      cleanup: () => {},
+    };
+    this.popups.set(channelID, placeholder);
+  }
+
+  private onPopupBytes(channelID: number, bytes: Uint8Array): void {
+    const p = this.popups.get(channelID);
+    if (!p) return;
+    if (bytes.length < HEADER_BYTES) {
+      // Control frame: { x, y } geometry update, or { close: true }.
+      let ctrl: { x?: number; y?: number; close?: boolean };
+      try {
+        ctrl = JSON.parse(new TextDecoder().decode(bytes));
+      } catch {
+        return;
+      }
+      if (ctrl.close) {
+        this.removePopup(channelID);
+        return;
+      }
+      if (typeof ctrl.x === 'number') p.x = ctrl.x;
+      if (typeof ctrl.y === 'number') p.y = ctrl.y;
+      if (p.canvas) this.repositionPopup(p);
+      return;
+    }
+    // Pixel frame.
+    let header: FrameHeader;
+    try {
+      header = parseHeader(new DataView(bytes.buffer, bytes.byteOffset, HEADER_BYTES));
+    } catch (e) {
+      this.logError('popup header parse failed', e);
+      return;
+    }
+    const payload = bytes.subarray(HEADER_BYTES);
+    if (payload.length === 0) return;
+    const copy = payload.slice();
+    if (!p.canvas) this.ensurePopupCanvas(p);
+    createImageBitmap(new Blob([copy]))
+      .then((bitmap) => {
+        const live = this.popups.get(channelID);
+        if (!live || !live.canvas || !live.ctx) {
+          bitmap.close?.();
+          return;
+        }
+        const cv = live.canvas;
+        if (header.frameW > 0 && cv.width !== header.frameW) {
+          cv.width = header.frameW;
+          cv.style.width = header.frameW + 'px';
+        }
+        if (header.frameH > 0 && cv.height !== header.frameH) {
+          cv.height = header.frameH;
+          cv.style.height = header.frameH + 'px';
+        }
+        live.ctx.drawImage(bitmap, header.dirtyX, header.dirtyY);
+        bitmap.close?.();
+        this.repositionPopup(live);
+      })
+      .catch((e) => this.logError('popup decode/draw failed', e));
+  }
+
+  // ensurePopupCanvas builds the overlay canvas: position:fixed on <body>
+  // (so it can overflow the parent window box, like a real menu), above the
+  // window stack, forwarding its own pointer/wheel input keyed by the popup
+  // channel (the BE has no win for a popup).
+  private ensurePopupCanvas(p: PopupOverlay): void {
+    const cv = document.createElement('canvas');
+    cv.style.position = 'fixed';
+    cv.style.zIndex = '2147483646';
+    cv.style.imageRendering = 'auto';
+    cv.style.pointerEvents = 'auto';
+    document.body.appendChild(cv);
+    p.canvas = cv;
+    p.ctx = cv.getContext('2d');
+
+    const surfacePos = (ev: PointerEvent) => {
+      const r = cv.getBoundingClientRect();
+      return {
+        x: Math.max(0, Math.round(ev.clientX - r.left)),
+        y: Math.max(0, Math.round(ev.clientY - r.top)),
+      };
+    };
+    const tgt = { popup_chan: p.channelID };
+    const onMove = (ev: PointerEvent) => {
+      const { x, y } = surfacePos(ev);
+      this.sendInput(tgt, [{ ev: 'motion', x, y }]);
+    };
+    const onDown = (ev: PointerEvent) => {
+      const { x, y } = surfacePos(ev);
+      this.sendInput(tgt, [
+        { ev: 'motion', x, y },
+        { ev: 'button', btn: BUTTON_NAME[ev.button] ?? 'left', state: 'down' },
+      ]);
+    };
+    const onUp = (ev: PointerEvent) => {
+      const { x, y } = surfacePos(ev);
+      this.sendInput(tgt, [
+        { ev: 'motion', x, y },
+        { ev: 'button', btn: BUTTON_NAME[ev.button] ?? 'left', state: 'up' },
+      ]);
+    };
+    const onWheel = (ev: WheelEvent) => {
+      ev.preventDefault();
+      const evs: InputEvent[] = [];
+      if (ev.deltaY) evs.push({ ev: 'axis', axis: 'v', delta: Math.round(ev.deltaY) });
+      if (ev.deltaX) evs.push({ ev: 'axis', axis: 'h', delta: Math.round(ev.deltaX) });
+      this.sendInput(tgt, evs);
+    };
+    cv.addEventListener('pointermove', onMove);
+    cv.addEventListener('pointerdown', onDown);
+    cv.addEventListener('pointerup', onUp);
+    cv.addEventListener('wheel', onWheel, { passive: false });
+    p.cleanup = () => {
+      cv.removeEventListener('pointermove', onMove);
+      cv.removeEventListener('pointerdown', onDown);
+      cv.removeEventListener('pointerup', onUp);
+      cv.removeEventListener('wheel', onWheel);
+      cv.remove();
+    };
+    this.repositionPopup(p);
+  }
+
+  // repositionPopup places the overlay in viewport space at the parent
+  // window's content origin plus the popup's offset. Recomputed each frame
+  // so it tracks the window if it moves.
+  private repositionPopup(p: PopupOverlay): void {
+    if (!p.canvas || !this.canvas) return;
+    const r = this.canvas.getBoundingClientRect();
+    p.canvas.style.left = Math.round(r.left + p.x) + 'px';
+    p.canvas.style.top = Math.round(r.top + p.y) + 'px';
+  }
+
+  private removePopup(channelID: number): void {
+    const p = this.popups.get(channelID);
+    if (!p) return;
+    this.popups.delete(channelID);
+    try {
+      p.unsub?.();
+    } catch {
+      /* ignore */
+    }
+    try {
+      p.cleanup();
+    } catch {
+      /* ignore */
+    }
   }
 
   private logError(msg: string, e: unknown): void {

@@ -296,13 +296,17 @@ void WireConn::confirm_close(uint32_t win, bool allow) {
 }
 
 uint32_t WireConn::open_video_channel(uint32_t win) {
+    return open_channel_kind(win, "video");
+}
+
+uint32_t WireConn::open_channel_kind(uint32_t win, const std::string& kind) {
     if (!alive_.load()) return 0;
     uint64_t req = next_req();
     { std::lock_guard<std::mutex> lk(chan_mu_); chan_pending_[req] = Reply{}; }
 
     json m = {
         {"t", "channel.open"}, {"req_id", req},
-        {"window_id", win}, {"kind", "video"},
+        {"window_id", win}, {"kind", kind},
     };
     if (!write_json(CH_CONTROL, m)) {
         std::lock_guard<std::mutex> lk(chan_mu_);

@@ -99,6 +99,11 @@ public:
     // when no browser is bound yet). Blocking: not from AppMsgHandler.
     uint32_t open_video_channel(uint32_t win);
 
+    // open_channel_kind is open_video_channel with an explicit kind hint
+    // (e.g. "video-popup" for a child-surface overlay channel bound to a
+    // PARENT window). Same blocking/reply semantics. DISPLAY.md §12 (M3).
+    uint32_t open_channel_kind(uint32_t win, const std::string& kind);
+
     // write_channel writes one raw frame (e.g. a framed video message)
     // on an already-open channel id.
     bool write_channel(uint32_t channelID, const uint8_t* data, size_t n);

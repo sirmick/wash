@@ -42,6 +42,7 @@ import {
   Sub,
   WindowInfo,
   bindVideoChannel,
+  bindPopupChannel,
   closeRawSubscriber,
   deliverRaw,
   deliverToInstance,
@@ -309,6 +310,12 @@ conn = new Conn(
           // channelOwner mapping too (drives channel.unbind cleanup).
           channelOwner.set(b.channel_id, b.window_id);
           bindVideoChannel(b.window_id, b.channel_id);
+        } else if (b.kind === 'video-popup') {
+          // Child surface (menu/dropdown) of a display window: window_id is
+          // the PARENT win. The parent's <wash-app-display> renders it as a
+          // positioned overlay canvas. Bytes still flow via deliverRaw.
+          channelOwner.set(b.channel_id, b.window_id);
+          bindPopupChannel(b.window_id, b.channel_id);
         } else {
           channelOwner.set(b.channel_id, b.window_id);
         }

@@ -230,10 +230,15 @@ export function closeRawSubscriber(channelID: number): void {
 
 interface DisplayElement extends HTMLElement {
   attachVideoChannel(channelID: number): void;
+  // Optional: a child-surface (menu/dropdown) overlay channel for this
+  // window. Implemented by <wash-app-display>; see DISPLAY.md §12 (M3).
+  attachPopupChannel?(channelID: number): void;
 }
 
 const displayWindows = new Map<number, DisplayElement>();
 const videoChannelForWindow = new Map<number, number>();
+// Popup channels that arrived before the parent element registered, per win.
+const pendingPopupChannels = new Map<number, number[]>();
 
 export function registerDisplayWindow(windowID: number, el: DisplayElement): void {
   displayWindows.set(windowID, el);
@@ -243,6 +248,17 @@ export function registerDisplayWindow(windowID: number, el: DisplayElement): voi
       el.attachVideoChannel(ch);
     } catch (e) {
       console.error('wash: attachVideoChannel (register):', e);
+    }
+  }
+  const pops = pendingPopupChannels.get(windowID);
+  if (pops && el.attachPopupChannel) {
+    pendingPopupChannels.delete(windowID);
+    for (const c of pops) {
+      try {
+        el.attachPopupChannel(c);
+      } catch (e) {
+        console.error('wash: attachPopupChannel (register):', e);
+      }
     }
   }
 }
@@ -268,6 +284,25 @@ export function bindVideoChannel(windowID: number, channelID: number): void {
       console.error('wash: attachVideoChannel (bind):', e);
     }
   }
+}
+
+// bindPopupChannel routes a child-surface (menu/dropdown) overlay channel
+// to the PARENT window's display element. Called from main.tsx's
+// channel.bind handler when kind === "video-popup". If the element isn't
+// mounted yet, the channel is stashed and replayed on register.
+export function bindPopupChannel(parentWindowID: number, channelID: number): void {
+  const el = displayWindows.get(parentWindowID);
+  if (el && el.attachPopupChannel) {
+    try {
+      el.attachPopupChannel(channelID);
+    } catch (e) {
+      console.error('wash: attachPopupChannel (bind):', e);
+    }
+    return;
+  }
+  const list = pendingPopupChannels.get(parentWindowID) ?? [];
+  list.push(channelID);
+  pendingPopupChannels.set(parentWindowID, list);
 }
 
 // forgetVideoChannel clears the stashed video channel for a window.
