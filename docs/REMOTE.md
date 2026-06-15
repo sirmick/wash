@@ -395,6 +395,16 @@ reconnect loop is the existing shell reconnect logic, instantiated per origin.
 
 - **SSH is the boundary.** Reaching B's router requires the SSH session; B exposes
   no wash port. Scope the key with `command=…,restrict` to the launcher only.
+- **B's raw listener is a `0600` unix socket, NOT loopback TCP.** A loopback TCP
+  listener (`127.0.0.1:RP`) is reachable by *any local user on B* — an
+  unauthenticated full wash session, a local privilege escalation on a shared
+  host. `--listen-raw unix:/path` (chmod `0600` by the router after bind) makes
+  the listener uid-only, so "reaching it requires the SSH session" is actually
+  true. The relay's flow control is credit-windowed and Bulk-class (yields to
+  the local desktop; a remote flood can't OOM A or the browser); the FE caps a
+  declared frame length at `wire.MaxPayload` so a hostile stream can't balloon
+  memory. Only `com.wash.remote` may register a relay socket (router-attested
+  app id), and the FE references origins, never paths — no arbitrary-dial surface.
 - **Code provenance — the real escalation.** A runs **B's FE JavaScript inside the
   shell origin**. A is no longer relaying opaque frames; it executes remote-authored
   code in the user's desktop. This is fine *only* under SSH-gated, user-named hosts

@@ -78,15 +78,25 @@ func (s *ShellSession) handlePeerAttach(m wire.ShellPeerAttach) error {
 	if m.Origin == "" {
 		return nil
 	}
+	// Idempotent: one relay channel per (shell, origin). A repeated attach
+	// (buggy FE, reconnect) must not dial another socket + leak a channel.
+	s.peerMu.Lock()
+	for _, b := range s.peerChannels {
+		if b.origin == m.Origin {
+			s.peerMu.Unlock()
+			return nil
+		}
+	}
+	s.peerMu.Unlock()
 	target, ok := s.router.lookupPeer(m.Origin)
 	if !ok {
 		s.router.log("peer attach %s: no registration", m.Origin)
-		return nil
+		return s.WriteCtrl(wire.NewShellPeerError(m.Origin, "no registration for origin"))
 	}
 	conn, err := net.Dial(target.network, target.addr)
 	if err != nil {
 		s.router.log("peer attach %s: dial %s://%s: %v", m.Origin, target.network, target.addr, err)
-		return nil
+		return s.WriteCtrl(wire.NewShellPeerError(m.Origin, "dial failed: "+err.Error()))
 	}
 	id := s.router.allocChannelID()
 	b := &channelBinding{
@@ -113,10 +123,15 @@ func (s *ShellSession) handlePeerAttach(m wire.ShellPeerAttach) error {
 }
 
 // pumpPeerToShell copies the relay socket → the shell channel: host B's
-// wire bytes become raw frames the FE feeds to B's RouterClient. Interactive
-// class so B's control traffic isn't held behind A's bulk credit window
-// (QOS isolation of the relayed stream is a later refinement). Exits when
-// the socket closes or the shell write fails; closeChannel cleans both up.
+// wire bytes become raw frames the FE feeds to B's RouterClient. Bulk class
+// so the whole remote stream is flow-controlled by the channel's credit
+// window (the FE replenishes as it absorbs) AND yields to A's LOCAL
+// interactive traffic in the scheduler — a remote app must not starve the
+// local desktop, and a B flood must not OOM A/the browser. (B's own
+// interactive/bulk split is flattened here: A treats the relay as opaque
+// bytes — preserving it would need per-class relay channels, a later
+// refinement; docs/REMOTE.md §7.) Exits when the socket closes or the shell
+// write fails; closeChannel cleans both up.
 func (r *Router) pumpPeerToShell(b *channelBinding) {
 	buf := make([]byte, 32*1024)
 	for {
@@ -124,7 +139,7 @@ func (r *Router) pumpPeerToShell(b *channelBinding) {
 		if n > 0 {
 			payload := make([]byte, n)
 			copy(payload, buf[:n])
-			if werr := b.shell.WriteRawFrameClass(b.channelID, payload, wire.ClassInteractive); werr != nil {
+			if werr := b.shell.WriteRawFrameClass(b.channelID, payload, wire.ClassBulk); werr != nil {
 				break
 			}
 		}

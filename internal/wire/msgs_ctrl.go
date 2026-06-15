@@ -319,6 +319,9 @@ func DecodeCtrl(data []byte) (any, error) {
 	case TShellPeerDetach:
 		var m ShellPeerDetach
 		return m, json.Unmarshal(data, &m)
+	case TShellPeerError:
+		var m ShellPeerError
+		return m, json.Unmarshal(data, &m)
 	case TShellAppMsgDeliver:
 		var m ShellAppMsgDeliver
 		return m, json.Unmarshal(data, &m)

@@ -230,7 +230,7 @@ func Run(args []string) int {
 	authTokenVal := ""
 	tokenFilePath := ""
 	tokenFileIsDefault := false
-	tcpListener := *transport == "ws" && *listenUnix == ""
+	tcpListener := *transport == "ws" && *listenUnix == "" && *listenRaw == ""
 	if tcpListener && !*noAuth {
 		tokenFilePath = *authTokenFile
 		if tokenFilePath == "" {
@@ -532,6 +532,13 @@ func runRawListener(ctx context.Context, r *router.Router, network, address stri
 	}
 	defer ln.Close()
 	if network == "unix" {
+		// 0600 so ONLY this uid can connect — the socket is the wash session
+		// (no token), reached solely via the ssh -L from A (docs/REMOTE.md
+		// §10). Without this, default umask could leave it group/other-
+		// connectable, defeating the "ssh is the boundary" guarantee.
+		if cerr := os.Chmod(address, 0o600); cerr != nil {
+			return fmt.Errorf("chmod relay socket: %w", cerr)
+		}
 		defer os.Remove(address)
 	}
 	// "listening on" is the readiness marker com.wash.remote greps for over

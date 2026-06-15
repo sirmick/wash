@@ -47,6 +47,10 @@ const (
 	// with a channel.bind{kind:"peer", origin}. peer.detach tears it down.
 	TShellPeerAttach = "peer.attach"
 	TShellPeerDetach = "peer.detach"
+	// Router → shell: a peer.attach could not be satisfied (no registration
+	// for the origin, or the dial failed). Surfaces what was otherwise a
+	// silent "host up but no apps". Carries the origin + a reason.
+	TShellPeerError = "peer.error"
 
 	// Router → shell (BE → FE relay).
 	TShellAppMsgDeliver = "app_msg.deliver"
@@ -439,6 +443,19 @@ type ShellPeerDetach struct {
 
 func NewShellPeerDetach(origin string) ShellPeerDetach {
 	return ShellPeerDetach{T: TShellPeerDetach, Origin: origin}
+}
+
+// ShellPeerError — router → shell — a peer.attach failed (no registration /
+// dial error). Lets the FE log it instead of silently showing a host with
+// no apps.
+type ShellPeerError struct {
+	T      string `json:"t"`
+	Origin string `json:"origin"`
+	Msg    string `json:"msg"`
+}
+
+func NewShellPeerError(origin, msg string) ShellPeerError {
+	return ShellPeerError{T: TShellPeerError, Origin: origin, Msg: msg}
 }
 
 // ShellAppMsgDeliver is the reverse: a BE → FE message, relayed to

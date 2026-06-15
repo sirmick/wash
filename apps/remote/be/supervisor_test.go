@@ -15,26 +15,27 @@ func indexOf(ss []string, want string) int {
 }
 
 func TestBuildSSHArgs(t *testing.T) {
-	args := buildSSHArgs("user@host", "/tmp/wash/b.sock", 11000)
+	args := buildSSHArgs("user@host", "/tmp/a/A.sock", "/tmp/wash-relay-deadbeef.sock")
 	joined := strings.Join(args, " ")
 
 	for _, want := range []string{
-		"/tmp/wash/b.sock:127.0.0.1:11000", // the -L unix-socket forward spec
+		"/tmp/a/A.sock:/tmp/wash-relay-deadbeef.sock", // -L unix→unix forward
 		"BatchMode=yes",
 		"ExitOnForwardFailure=yes",
 		"wash-router",
 		"--listen-raw",
-		"tcp:127.0.0.1:11000", // raw-wire listener (no HTTP/WS)
+		"unix:/tmp/wash-relay-deadbeef.sock", // raw-wire UNIX listener on B (chmod 0600 there)
 		"--no-session",
 		"--no-auth",
+		"--control-socket", "/tmp/wash-relay-deadbeef.sock.ctl", // unique ctl socket (spawn needs it; avoids B-desktop collision)
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("buildSSHArgs missing %q\n  got: %v", want, args)
 		}
 	}
-	// No TCP port should bind on A's loopback; only the unix socket forwards.
-	if strings.Contains(joined, "--listen ") || strings.Contains(joined, "--allow-cross-origin") {
-		t.Errorf("relay must use --listen-raw + unix socket, not --listen/--allow-cross-origin: %v", args)
+	// No TCP loopback listener on B (multi-user-reachable), no ws listener.
+	if strings.Contains(joined, "tcp:127.0.0.1") || strings.Contains(joined, "--listen ") || strings.Contains(joined, "--allow-cross-origin") {
+		t.Errorf("relay must use a unix socket end to end, not tcp loopback / --listen: %v", args)
 	}
 
 	// The SSH target host must precede the remote command, or ssh would
@@ -46,14 +47,16 @@ func TestBuildSSHArgs(t *testing.T) {
 	}
 }
 
-func TestBuildSSHArgsForwardMatchesListen(t *testing.T) {
-	args := buildSSHArgs("h", "/run/x.sock", 9999)
-	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "/run/x.sock:127.0.0.1:9999") {
-		t.Errorf("forward spec wrong: %v", args)
+// TestRemoteSockPathUnique: per-connection B socket paths must not collide.
+func TestRemoteSockPathUnique(t *testing.T) {
+	a, b := remoteSockPath(), remoteSockPath()
+	if a == b {
+		t.Errorf("remoteSockPath not unique: %s == %s", a, b)
 	}
-	if !strings.Contains(joined, "tcp:127.0.0.1:9999") {
-		t.Errorf("raw listen target wrong: %v", args)
+	for _, p := range []string{a, b} {
+		if !strings.HasPrefix(p, "/tmp/wash-relay-") || !strings.HasSuffix(p, ".sock") {
+			t.Errorf("unexpected socket path shape: %s", p)
+		}
 	}
 }
 

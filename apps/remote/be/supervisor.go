@@ -3,6 +3,7 @@ package remote
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -16,10 +17,14 @@ import (
 	"github.com/sirmick/wash/internal/sdk"
 )
 
-// defaultRemotePort is the loopback port wash-router binds on the remote
-// host (and the far end of the ssh -L forward) when connect doesn't
-// specify one.
-const defaultRemotePort = 11000
+// remoteSockPath returns a unique B-side socket path for one connection.
+// On B the raw router binds it and chmods it 0600 (uid-only); a per-
+// connection name avoids collisions between concurrent sessions.
+func remoteSockPath() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return "/tmp/wash-relay-" + hex.EncodeToString(b[:]) + ".sock"
+}
 
 // supervisor owns one ssh process per host and mirrors their state into
 // the StateService the FE subscribes to. It also registers each host's
@@ -64,27 +69,35 @@ func (s *supervisor) sockPath(host string) string {
 // it (the "one port" relay, docs/REMOTE.md) — nothing binds a TCP port on
 // A's loopback, and B's router is reached solely through this tunnel, so
 // SSH is the access boundary (§10).
-func buildSSHArgs(host, localSock string, remotePort int) []string {
+func buildSSHArgs(host, localSock, remoteSock string) []string {
 	return []string{
 		"-o", "BatchMode=yes",            // never block on an interactive prompt
 		"-o", "ExitOnForwardFailure=yes", // fail fast if the -L bind can't be set up
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
-		"-L", fmt.Sprintf("%s:127.0.0.1:%d", localSock, remotePort),
+		// Forward a local unix socket to a REMOTE UNIX SOCKET (not a loopback
+		// TCP port): B's raw router chmods it 0600, so only the ssh'd uid on B
+		// can reach it. A loopback TCP listener would be reachable by ANY
+		// local user on B — a full unauthenticated wash session (docs/REMOTE.md
+		// §10). The unix socket makes "reaching it requires the SSH session"
+		// actually true.
+		"-L", fmt.Sprintf("%s:%s", localSock, remoteSock),
 		host,
 		"wash-router",
-		"--listen-raw", fmt.Sprintf("tcp:127.0.0.1:%d", remotePort),
+		"--listen-raw", "unix:" + remoteSock,
 		"--no-session",
 		"--no-auth",
+		// A UNIQUE control socket (not the default /tmp/wash-<uid>.sock, which
+		// would collide with B's own desktop router). It's required: a spawned
+		// app dials it (WASH_DISPLAY) to attach back to the router, so launches
+		// on B fail without one.
+		"--control-socket", remoteSock + ".ctl",
 	}
 }
 
 // connect brings up (or no-ops if already up) a connection to host.
-func (s *supervisor) connect(host string, remotePort int) {
-	if remotePort == 0 {
-		remotePort = defaultRemotePort
-	}
+func (s *supervisor) connect(host string, _ int) {
 	s.mu.Lock()
 	if _, ok := s.procs[host]; ok {
 		s.mu.Unlock()
@@ -95,11 +108,12 @@ func (s *supervisor) connect(host string, remotePort int) {
 	s.mu.Unlock()
 
 	s.setHost(host, HostState{Host: host, Origin: host, Status: StatusStarting})
-	go s.run(ctx, host, remotePort)
+	go s.run(ctx, host)
 }
 
-func (s *supervisor) run(ctx context.Context, host string, remotePort int) {
-	sock := s.sockPath(host)
+func (s *supervisor) run(ctx context.Context, host string) {
+	sock := s.sockPath(host)            // A side: in a 0700 temp dir
+	remoteSock := remoteSockPath()      // B side: unique per connection, chmod 0600 there
 	defer func() {
 		s.mu.Lock()
 		delete(s.procs, host)
@@ -113,7 +127,7 @@ func (s *supervisor) run(ctx context.Context, host string, remotePort int) {
 	// ssh -L refuses to bind a unix socket whose file already exists.
 	_ = os.Remove(sock)
 
-	cmd := exec.CommandContext(ctx, s.sshPath, buildSSHArgs(host, sock, remotePort)...)
+	cmd := exec.CommandContext(ctx, s.sshPath, buildSSHArgs(host, sock, remoteSock)...)
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
 	if err := cmd.Start(); err != nil {

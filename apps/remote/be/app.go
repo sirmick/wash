@@ -25,7 +25,7 @@
 //
 // Wire shape — state pushed to subscribers:
 //
-//	{ "kind":"state", "state": { "hosts":[ {host,origin,status,local_endpoint,error}, ... ] } }
+//	{ "kind":"state", "state": { "hosts":[ {host,origin,status,error,code}, ... ] } }
 package remote
 
 import (
@@ -59,10 +59,7 @@ type HostState struct {
 	// distinct so a friendly label can diverge from the SSH target later).
 	Origin string `json:"origin"`
 	Status string `json:"status"`
-	// LocalEndpoint is the ws:// URL the shell opens a RouterClient to
-	// (the local end of the ssh -L forward). Empty until status == up.
-	LocalEndpoint string `json:"local_endpoint,omitempty"`
-	Error         string `json:"error,omitempty"`
+	Error  string `json:"error,omitempty"`
 	// Code classifies a StatusDown. "auth" means SSH refused
 	// authentication under BatchMode (no usable key in the agent) — the
 	// signal for wash-connect to offer its ssh-add auth widget and retry

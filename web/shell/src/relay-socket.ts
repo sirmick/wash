@@ -18,6 +18,10 @@ import { type SocketLike } from './virtio.ts';
 import { type Conn } from './ws.ts';
 
 const HEADER_BYTES = 8;
+// Mirrors wire.MaxPayload (16 MiB). The real-WebSocket path enforces this in
+// decodeFrame; a stream transport must enforce it itself, or a malicious /
+// corrupted peer declaring a huge length makes us buffer until OOM.
+const MAX_PAYLOAD = 16 * 1024 * 1024;
 
 export class RelayChannelSocket implements SocketLike {
   binaryType: 'arraybuffer' = 'arraybuffer';
@@ -82,6 +86,12 @@ export class RelayChannelSocket implements SocketLike {
   private drainBuffer(): void {
     while (this.buf.length >= HEADER_BYTES) {
       const length = new DataView(this.buf.buffer, this.buf.byteOffset + 4, 4).getUint32(0, false);
+      if (length > MAX_PAYLOAD) {
+        console.error(`wash: relay frame length ${length} exceeds ${MAX_PAYLOAD} — closing`);
+        this.onerror?.({ type: 'error' } as unknown as Event);
+        this.close();
+        return;
+      }
       const total = HEADER_BYTES + length;
       if (this.buf.length < total) break;
       if (this._onmessage == null) break; // setter re-drains on attach

@@ -47,6 +47,10 @@ export interface SocketLike {
 }
 
 const HEADER_BYTES = 8;
+// Mirrors wire.MaxPayload (16 MiB). A stream transport must cap the declared
+// length itself (the WebSocket path does it in decodeFrame), or a corrupted /
+// hostile stream declaring a huge length makes us buffer until OOM.
+const MAX_PAYLOAD = 16 * 1024 * 1024;
 
 // Defensive diagnostic sink — used to surface frames being held in
 // the buffer because no consumer is attached yet. Normal during
@@ -152,6 +156,11 @@ export class VirtioConsoleSocket implements SocketLike {
   private drainBuffer(): void {
     while (this.buf.length >= HEADER_BYTES) {
       const length = new DataView(this.buf.buffer, this.buf.byteOffset + 4, 4).getUint32(0, false);
+      if (length > MAX_PAYLOAD) {
+        vlogWarn(`virtio[port=${this.portN}] frame length ${length} exceeds ${MAX_PAYLOAD} — closing`);
+        this.close();
+        return;
+      }
       const total = HEADER_BYTES + length;
       if (this.buf.length < total) break;
       if (this._onmessage == null) {

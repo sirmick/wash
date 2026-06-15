@@ -22,7 +22,6 @@ interface HostState {
   host: string;
   origin: string;
   status: HostStatus;
-  local_endpoint?: string;
   error?: string;
   // code classifies a "down" status. "auth" means SSH refused auth under
   // BatchMode — the cue to offer the ssh-add widget (docs/REMOTE.md §6.1).
@@ -109,11 +108,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       if (h.status === 'up') {
         live.add(h.origin);
         if (!attached.has(h.origin)) {
-          // No local_endpoint in the one-port relay model: attachRemote with
-          // no url asks the shell to mux this host over its single connection
-          // to A (docs/REMOTE.md). A direct endpoint, if ever present, still
-          // works (co-located / tests).
-          window.wash.attachRemote(h.origin, h.local_endpoint);
+          // One-port relay: attachRemote with no url asks the shell to mux
+          // this host over its single connection to A (docs/REMOTE.md).
+          window.wash.attachRemote(h.origin);
           attached.add(h.origin);
         }
       }

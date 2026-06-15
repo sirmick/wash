@@ -404,6 +404,15 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         }
         break;
       }
+      case 'peer.error': {
+        // Remote-apps relay attach failed (no registration / dial). Log it
+        // (forwarded to the router) so a host that's "up" but shows no apps
+        // isn't a silent mystery. wash-connect can surface it later.
+        if (!isLocal) break;
+        const e = msg as { origin: string; msg: string };
+        console.warn(`wash: relay attach failed for ${e.origin}: ${e.msg}`);
+        break;
+      }
       case 'clipboard.changed': {
         // Cross-host clipboard sync is M5; mirror only the local router's.
         if (!isLocal) break;
@@ -416,12 +425,14 @@ function makeHandlers(client: RouterClient): ClientHandlers {
   onRaw: (channelID, bytes) => {
     // Remote-apps relay: a peer channel's bytes are host B's wire — feed
     // them to its RelayChannelSocket (which deframes + drives B's Conn).
-    // Peer channels only ever bind on the local connection. Interactive
-    // class (the router's pump), so no credit replenish.
+    // Peer channels only ever bind on the local connection. The router pumps
+    // these Bulk-class, so replenish A's credit window as we absorb — that's
+    // the backpressure that keeps a B flood from overrunning the browser.
     if (isLocal) {
       const peer = peerSockets.get(channelID);
       if (peer) {
         peer.sock.feed(bytes);
+        client.credit.absorbed(channelID, bytes.length);
         return;
       }
     }
@@ -988,9 +999,11 @@ window.wash = {
   attachRemote(origin, url) {
     if (origin === LOCAL_ORIGIN) return;
     if (url) {
-      // Direct second WebSocket (co-located / tests). Violates the one-port
-      // rule, so it's not the production path — kept for the host two-router
-      // e2e and same-machine use.
+      // Direct second connection to a reachable router (browser co-located
+      // with B, e.g. two routers on one host). Valid but bypasses the relay,
+      // so the supervisor never uses it — production always goes through the
+      // one-port relay below. This branch backs the host-process FE-merge
+      // e2e (connect-launch / ?peer=), where both routers are local.
       try {
         addClient(origin, url);
       } catch (e) {
