@@ -591,6 +591,28 @@ size (e.g. the calculator) letterbox inside an over-large box; apps that fill
 same as framed windows); an app that draws NO decorations has no titlebar to
 move (close via its own button / taskbar; rare for real apps).
 
+### M8c — alpha (shaped popups: rounded corners + drop shadow) ✅
+A guest's context menu is a *shaped* surface — rounded corners and a drop
+shadow that are transparent in the client buffer. The capture read back as
+`XBGR8888` (alpha dropped), so those transparent regions flattened to **black**,
+boxing every menu. The toplevel CSD shadow was sidestoppable by cropping
+(M5c), but a popup *is* the shaped thing, so it needs real alpha end-to-end:
+- **Capture** (`capture.cpp`): render target `ARGB8888` (was XRGB), the
+  per-surface composite blits with `WLR_RENDER_BLEND_MODE_NONE` (copy the
+  client's alpha verbatim into the reused buffer rather than blending against
+  stale pixels), and read back `ABGR8888` (was XBGR). The R↔B swap keeps the
+  alpha byte; the WebP encoder already imports BGRA-with-alpha.
+- **FE** (`wash-app-display.ts`): `clearRect` the dirty rect before each
+  `drawImage` so transparent pixels *replace* the previous frame instead of
+  source-over-blending onto it (both the window and popup canvases).
+
+Opaque app content (alpha=255) is unchanged — xclock/calculator/Firefox/
+Chromium all still render identically; the testguest's right-click menu now
+composites its rounded corners + shadow over the window beneath instead of a
+black box. *Note:* client alpha is premultiplied and imported into WebP as
+straight, so a soft shadow's mid-alpha pixels skew slightly dark — fine for
+the hard-edged corners; un-premultiply later if soft shadows need it.
+
 ### Out of scope here — M6 throughput
 WebRTC/VP9 (for Firefox scroll/video parity) + audio service hookup are a separate,
 larger track ([[wash_display_codecs]], [[wash_audio_plan]]).

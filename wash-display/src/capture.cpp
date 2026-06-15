@@ -89,6 +89,10 @@ void composite_surface_cb(struct wlr_surface* s, int sx, int sy, void* data) {
     o.dst_box.y = oy;
     o.dst_box.width = (int)tex->width;
     o.dst_box.height = (int)tex->height;
+    // COPY, not blend: write the surface's pixels INCLUDING alpha verbatim
+    // into the (reused, uncleared) target. Blending would composite against
+    // stale frame data and lose the client's transparency (M8c).
+    o.blend_mode = WLR_RENDER_BLEND_MODE_NONE;
     wlr_render_pass_add_texture(c->pass, &o);
     c->drawn++;
 
@@ -185,7 +189,11 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
         uint64_t modifiers[1] = { DRM_FORMAT_MOD_LINEAR };
         struct wlr_drm_format fmt;
         std::memset(&fmt, 0, sizeof fmt);
-        fmt.format = DRM_FORMAT_XRGB8888;
+        // ARGB (alpha-capable), not XRGB: popups (menus) are shaped — rounded
+        // corners + drop shadow are transparent in the client buffer, and we
+        // must preserve that alpha or it flattens to black (M8c). Opaque app
+        // content has alpha=255 and is unaffected.
+        fmt.format = DRM_FORMAT_ARGB8888;
         fmt.len = 1;
         fmt.capacity = 1;
         fmt.modifiers = modifiers;
@@ -235,14 +243,14 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
     // the pixels land at their real position in buf_; the rest of buf_ keeps
     // last frame's bytes, which the encoder doesn't read). On a full frame the
     // rect is the whole window, so this is the previous behaviour.
-    // Format note: XBGR8888 (-> GL_RGBA), NOT XRGB8888 (-> GL_BGRA_EXT): the
+    // Format note: ABGR8888 (-> GL_RGBA), NOT ARGB8888 (-> GL_BGRA_EXT): the
     // latter needs GL_EXT_read_format_bgra, which Mesa's surfaceless/llvmpipe
     // GLES2 context does not advertise, so glReadPixels would fail. GL_RGBA is
-    // mandatory and always available; bytes land R,G,B,X and the WebP encoder
-    // wants B,G,R,X (WebPEncodeBGRA), so we swap R<->B below.
+    // mandatory and always available; bytes land R,G,B,A and the WebP encoder
+    // wants B,G,R,A (WebPEncodeBGRA), so we swap R<->B below (alpha kept).
     if (!wlr_renderer_begin_with_buffer(r, render_buf)) return false;
     bool ok = wlr_renderer_read_pixels(
-        r, DRM_FORMAT_XBGR8888,
+        r, DRM_FORMAT_ABGR8888,
         (uint32_t)stride_, (uint32_t)dirty_w, (uint32_t)dirty_h,
         /*src_x*/ dirty_x, /*src_y*/ dirty_y, /*dst_x*/ dirty_x, /*dst_y*/ dirty_y,
         buf_.data());

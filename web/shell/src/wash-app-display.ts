@@ -491,6 +491,10 @@ export class WashAppDisplay extends HTMLElement {
             canvas.style.height = header.frameH + 'px';
           }
         }
+        // Clear the dirty rect first so transparent pixels REPLACE (not
+        // source-over blend onto) the previous frame — required now that
+        // frames carry real alpha (M8c: shaped popups, rounded corners).
+        ctx.clearRect(header.dirtyX, header.dirtyY, bitmap.width, bitmap.height);
         ctx.drawImage(bitmap, header.dirtyX, header.dirtyY);
         bitmap.close?.();
       })
@@ -568,6 +572,9 @@ export class WashAppDisplay extends HTMLElement {
           cv.height = header.frameH;
           cv.style.height = header.frameH + 'px';
         }
+        // Clear first so the menu's transparent rounded corners / shadow
+        // replace prior pixels rather than blending (M8c alpha).
+        live.ctx.clearRect(header.dirtyX, header.dirtyY, bitmap.width, bitmap.height);
         live.ctx.drawImage(bitmap, header.dirtyX, header.dirtyY);
         bitmap.close?.();
         this.repositionPopup(live);
