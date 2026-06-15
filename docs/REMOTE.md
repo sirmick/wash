@@ -1,10 +1,13 @@
 # wash remote apps — run an app on another host, displayed in this desktop
 
-Status: **design only** (2026-06-13). Plan of record for launching wash apps on
-a *remote* machine entirely from the local desktop and having their windows
-appear, live and interactive, **in the local desktop** — colour-striped per host,
-with the sidebar made host-aware. SSH is the transport and the trust boundary;
-no new network listener, no recursive router.
+Status: **implemented** (2026-06-14; branch `wash-remote`). M1 (multi-homed
+shell), M2a (`com.wash.remote` supervisor), M3 (`wash-connect` app), the **one-
+port relay** (§2), and a two-VM real-ssh e2e are done and green. M2e (durable
+B-router across an ssh drop), M4/M5 (multi-host widgets + services), and M6
+(hardening) remain. Launching wash apps on a *remote* machine entirely from the
+local desktop, windows appearing live + interactive **in the local desktop** —
+colour-striped per host. SSH is the transport and the trust boundary; no new
+network listener, no recursive router; the browser keeps **one** connection (§2).
 
 The end effect: sitting in desktop **A**, with SSH credentials to host **B**, you
 pick a host + an app and its window opens among your local windows. Refreshing
@@ -32,16 +35,17 @@ attribution — all driven from A, requiring nothing on B beyond a normal wash
 install and SSH access.
 
 **The chosen model is R2: a multi-homed shell, never a recursive router.** A's
-browser becomes a client of *two* routers — its local one and B's, reached over
-an `ssh -L` tunnel — and composites B's windows into A's window manager. Each
-router stays **flat**; B is ordinary wash. The merge lives in the **frontend**,
-not in either router. This is deliberate (see §13): the alternatives (A's router
-hosting a remote *process*, or A's router *federating* B's router) drag in
-`/proc`-based attach, no-local-pid lifecycle, cross-host service misrouting, and —
-for federation — putting the trusted core on B's data path and breaking the
-verbatim-splice invariant. R2 avoids all of it because **B is just normal wash**
-and B's data plane reaches the browser directly through the tunnel; A's router is
-never on B's hot path.
+browser is a client of *two* routers — its local one and B's — and composites B's
+windows into A's window manager. The merge lives in the **frontend**, not in
+either router. The browser holds **one** physical connection (to A): B's wire is
+multiplexed over it as a relay channel that A splices **verbatim** to an `ssh -L`'d
+socket reaching B (§2, the "one port" rule). This is deliberate (see §13): the
+alternatives (A's router hosting a remote *process*, or A's router *federating*
+B's router) drag in `/proc`-based attach, no-local-pid lifecycle, cross-host
+service misrouting, and — for federation — making the trusted core *interpret* B's
+wire and breaking the verbatim-splice invariant. R2 avoids all of it because **B
+is just normal wash** and **A's router never decodes B's frames** — it copies
+opaque bytes, the same dumb-pipe role the ssh client already plays.
 
 **Non-goals (v1).**
 - **Audio output from remote apps** — sound is physical and comes out of *B's*
@@ -63,16 +67,44 @@ never on B's hot path.
 
 ---
 
-## 2. Topology & transport
+## 2. Topology & transport — the "one port" relay
 
-Three independent connections, and the whole design hinges on decoupling them
-correctly:
+The browser keeps **exactly one** connection — to A. B's wire is **multiplexed
+over that single connection** as a relay channel, which A's router **splices
+verbatim** to an `ssh -L`'d socket reaching B. The browser never opens a second
+socket and never names a B address — it only ever talks to A (the wash "one
+port" rule).
 
 ```
-  Browser ──WS──> A's router            (local; unchanged)
-  Browser ──WS──> [local port on A] ──ssh -L──> B's router   (the remote leg)
-  A ───────────────── ssh ─────────────────────> B           (the tunnel itself)
+  Browser ──one connection──▶ A's router ──demux──┬─ ch0 + A's channels → A (HandleShell)
+                                                  └─ peer-channel(B) ─io.Copy─▶ unix socket
+                                                          (verbatim; A never decodes B's frames)
+                                                                          │ ssh -L
+                                                                          ▼
+                                                          B's wash-router  --listen-raw
 ```
+
+So there are still three *logical* legs — the browser↔A connection, the `ssh -L`
+A→B, and the ssh session — but the browser↔B "leg" is **carried inside** the
+browser↔A connection, not a separate WebSocket. This is what makes R2 work for a
+remote browser, the wash-vm proxy, or an in-browser VM, none of which can reach
+A's loopback: everything funnels through the one connection to A.
+
+**Why a relay, not a recursive router (§13):** A copies opaque bytes between the
+peer channel and the socket — the same dumb-pipe role the ssh client already
+plays. A's *router* never parses, re-namespaces, or owns B's frames; the merge
+stays in the FE. "A never interprets B's wire" is the invariant, not "B's bytes
+never touch A" (they always do, via ssh).
+
+**The pieces.** B serves the raw wire on a socket with `wash-router
+--listen-raw unix:/path | tcp:host:port` (no HTTP/WebSocket, no token). The A-side
+`com.wash.remote` supervisor runs `ssh -L <unix-socket>:127.0.0.1:RP host
+wash-router --listen-raw tcp:127.0.0.1:RP` and registers (origin → that socket)
+with A's router via a capability-gated `peer.register` (only the supervisor may
+register). A browser attaches with `peer.attach{origin}`; A's router dials the
+socket, allocates a `kind:"peer"` channel, and splices. **B's sshd must permit
+port forwarding** (`AllowTcpForwarding`/`AllowStreamLocalForwarding`) — the relay
+is an `ssh -L`; a remote-side refusal is silent on A.
 
 **SSH is the transport and the access control.** B's router binds **loopback on
 B with no token**; reaching it requires the SSH session, full stop. No wash port
@@ -151,15 +183,24 @@ namespace). R2 introduces:
 - **Per-origin app wiring.** The app-context handed to a mounted element is bound
   to *its* `RouterClient`, so all of its I/O (app_msg, raw channels, future video)
   flows on the right connection.
+- **Per-origin transport.** A remote `RouterClient`'s "socket" is a
+  `RelayChannelSocket` — a `SocketLike` that sends each B frame as a raw frame on
+  the relay channel of A's connection and reassembles B's length-prefixed frames
+  from A's arbitrarily-chunked relay bytes (the same role `VirtioConsoleSocket`
+  plays for the v86 transport). B speaks ordinary shell-wire end to end; only the
+  *carrier* differs from the local client (a muxed channel vs. a real WebSocket).
 - **Element-tag collision handling.** Custom-element tags are global by name in
   the DOM: A's and B's wash-fm both `customElements.define('wash-app-fm', …)`.
   Resolve by per-origin tag mangling or scoped/realm-isolated bundle loading.
   (This affects *app windows* only — the sidebar is immune; see §6.) No choice of
   merge-location avoids this; it is a DOM fact.
 
-**Guardrail:** the second connection lives in the **browser**, never in A's
-router. A multi-homed shell keeps every router flat; A-router-dials-B-router would
-be the forbidden recursion ([ARCHITECTURE.md](ARCHITECTURE.md)).
+**Guardrail:** A multi-homed shell keeps every router flat. The relay channel
+makes A's router carry B's bytes, but **opaquely** (`io.Copy` between the channel
+and the socket) — A's router still never decodes B's wire, so it stays verbatim
+transport, not an interpreter. A-router-*terminating*-B-router (federation) would
+be the forbidden recursion ([ARCHITECTURE.md](ARCHITECTURE.md)); a byte splice is
+not (§13).
 
 ---
 
@@ -414,13 +455,22 @@ presenting B's apps as local (a recursive/federating router).
 
 - **Its only real wins** are a single window model (no multi-origin FE WM) and
   cross-host app_msg — neither of which we need for "a remote app as a window."
-- **Its costs are severe:** it puts the trusted core on B's hot data path (vs R2,
-  where B's frames never touch A's router), breaks the verbatim-splice invariant,
-  forks the router into flat/gateway modes, couples failure domains, grows the
-  most security-critical component's attack surface — and **does not even solve the
-  element-collision DOM problem**, which is orthogonal to where the merge lives.
+- **Its costs are severe:** it makes the trusted core *interpret* B's wire on its
+  hot path, breaks the verbatim-splice invariant, forks the router into
+  flat/gateway modes, couples failure domains, grows the most security-critical
+  component's attack surface — and **does not even solve the element-collision DOM
+  problem**, which is orthogonal to where the merge lives.
 - **It violates the architecture's central rule** ("flat router + supervision tree,
   never a recursive router" — [ARCHITECTURE.md](ARCHITECTURE.md)).
+
+**The one-port relay (§2) is NOT this.** A's router copies B's bytes between the
+peer channel and the ssh socket with `io.Copy` — it never decodes a B frame,
+never re-namespaces, never forks into a gateway mode. That is the same dumb-pipe
+role A's ssh *client* already plays, and the FE still does the merge. The
+distinguishing line is **"does A's router parse B's frames?"** — relay: no;
+federation: yes. The relay stays on the right side of it. (B's bytes transiting
+machine A was always true — via ssh — so "B's frames never touch A" was never the
+real invariant; "A never interprets them" is.)
 
 If cross-host *control-plane* integration (A's app messaging B's service, unified
 services) ever becomes a hard requirement, build it as a **separate federation
