@@ -80,7 +80,7 @@ interface WashGlobals {
   catalogFor(origin: string): WashCatalogApp[];
   onRemoteCatalog(cb: (ev: { origin: string; apps: WashCatalogApp[] }) => void): () => void;
   launchOn(origin: string, appID: string): void;
-  attachRemote(origin: string, url: string): void;
+  attachRemote(origin: string, url?: string): void;
   detachRemote(origin: string): void;
   // App-supplied settings panels. loadSettingsPanel fetches+imports the
   // panel bundle so its custom element is defined; the promise resolves

@@ -25,6 +25,7 @@ import {
   compoundInstanceId,
 } from './clients';
 import { beginBundle, finishBundle, pushBundleBytes } from './assets';
+import { RelayChannelSocket } from './relay-socket';
 
 const __washLoadT0 = performance.now();
 import { washFetch, handleAssetReadOK, handleAssetReadErr, pushAssetBytes, finishAsset } from './wash-fetch';
@@ -143,6 +144,8 @@ interface ShellChannelBind {
   window_id: number;
   kind?: string;
   instance_id?: string;
+  // origin names the remote host for a kind="peer" relay channel.
+  origin?: string;
 }
 
 interface ShellChannelUnbind {
@@ -182,6 +185,12 @@ const panelsSub = new Sub<PanelDesc[]>([]);
 // disconnect), so a subscriber re-reads catalogFor() for its origin.
 const remoteCatalogs = new Map<Origin, CatalogApp[]>();
 const remoteCatalogSub = new Sub<{ origin: Origin; apps: CatalogApp[] } | null>(null);
+
+// Remote-apps relay (docs/REMOTE.md, "one port"): a host's entire wire
+// rides a single raw channel of the LOCAL connection. peerSockets maps that
+// channel id → the RelayChannelSocket feeding the host's RouterClient.
+// Keyed by the local channel id (peer channels only ever bind on `local`).
+const peerSockets = new Map<number, { origin: Origin; sock: RelayChannelSocket }>();
 
 /** catalogFor returns a router's catalog by origin (LOCAL or a remote host). */
 function catalogFor(origin: Origin): CatalogApp[] {
@@ -335,6 +344,10 @@ function makeHandlers(client: RouterClient): ClientHandlers {
             client.channelOwner.set(b.channel_id, b.window_id);
             bindVideoChannel(b.window_id, b.channel_id);
           }
+        } else if (b.kind === 'peer' && isLocal) {
+          // Remote-apps relay: A spliced this channel to host B. Stand up a
+          // RouterClient for the origin whose transport is this channel.
+          attachPeerChannel(b.channel_id, b.origin ?? '');
         } else {
           client.channelOwner.set(b.channel_id, b.window_id);
         }
@@ -356,6 +369,17 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         break;
       case 'channel.unbind': {
         const u = msg as ShellChannelUnbind;
+        // Remote-apps relay channel gone (A tore down the peer): drop the
+        // host's RouterClient + windows. Do this before the generic cleanup.
+        if (isLocal) {
+          const peer = peerSockets.get(u.channel_id);
+          if (peer) {
+            peerSockets.delete(u.channel_id);
+            peer.sock.close();
+            detachClient(peer.origin);
+            break;
+          }
+        }
         // Try each accumulator in turn; harmless on miss.
         finishBundle(u.channel_id, client.origin);
         if (isLocal) {
@@ -390,6 +414,17 @@ function makeHandlers(client: RouterClient): ClientHandlers {
     }
   },
   onRaw: (channelID, bytes) => {
+    // Remote-apps relay: a peer channel's bytes are host B's wire — feed
+    // them to its RelayChannelSocket (which deframes + drives B's Conn).
+    // Peer channels only ever bind on the local connection. Interactive
+    // class (the router's pump), so no credit replenish.
+    if (isLocal) {
+      const peer = peerSockets.get(channelID);
+      if (peer) {
+        peer.sock.feed(bytes);
+        return;
+      }
+    }
     // Bundle bytes (per origin) first, so a remote bundle channel id can't
     // be mistaken for a local asset channel. Asset/panel accumulators are a
     // local-only concern (the shell fetching its own assets/panels).
@@ -440,6 +475,22 @@ function addClient(origin: Origin, url: string): RouterClient {
   registerClient(origin, client);
   void client.conn.ready();
   return client;
+}
+
+// attachPeerChannel stands up a remote host's RouterClient whose transport
+// is a relay channel of the LOCAL connection (docs/REMOTE.md, "one port"):
+// A spliced this channel to host B's router, so B's wire arrives here. The
+// RelayChannelSocket deframes it; the RouterClient merges B's windows into
+// the desktop exactly like a direct connection would. Driven by the
+// channel.bind{kind:"peer"} A sends after a peer.attach.
+function attachPeerChannel(channelID: number, origin: Origin): void {
+  if (!origin || origin === LOCAL_ORIGIN) return;
+  if (clientForOrigin(origin)) return; // already attached
+  const sock = new RelayChannelSocket(local.conn, channelID);
+  peerSockets.set(channelID, { origin, sock });
+  const client = new RouterClient(origin, () => sock, makeHandlers);
+  registerClient(origin, client);
+  void client.conn.ready();
 }
 
 // detachClient tears down a remote origin's connection and scrubs every
@@ -778,7 +829,7 @@ declare global {
       // set up) and composites its windows into this desktop, tagged by
       // origin. detachRemote tears it down and drops the host's windows.
       // wash-connect drives these from the supervisor's reported endpoint.
-      attachRemote(origin: string, url: string): void;
+      attachRemote(origin: string, url?: string): void;
       detachRemote(origin: string): void;
       // App-supplied settings panels (from the catalog's `panels` list).
       // loadSettingsPanel fetches+imports the panel bundle so its custom
@@ -935,14 +986,31 @@ window.wash = {
     client.conn.sendCtrl({ t: 'shell.launch', app_id: appID });
   },
   attachRemote(origin, url) {
-    if (origin === LOCAL_ORIGIN || !url) return;
-    try {
-      addClient(origin, url);
-    } catch (e) {
-      console.error('wash: attachRemote', origin, e);
+    if (origin === LOCAL_ORIGIN) return;
+    if (url) {
+      // Direct second WebSocket (co-located / tests). Violates the one-port
+      // rule, so it's not the production path — kept for the host two-router
+      // e2e and same-machine use.
+      try {
+        addClient(origin, url);
+      } catch (e) {
+        console.error('wash: attachRemote', origin, e);
+      }
+      return;
     }
+    // Relay path (one port): ask A's router to splice a peer channel to the
+    // socket the supervisor registered. The channel.bind reply stands up B's
+    // RouterClient (attachPeerChannel). Works over any transport to A.
+    local.conn.sendCtrl({ t: 'peer.attach', origin });
   },
   detachRemote(origin) {
+    // Tear down A's relay (→ channel.unbind → detachClient) and detach
+    // locally too (covers the direct-WS case / an attach that never bound).
+    try {
+      local.conn.sendCtrl({ t: 'peer.detach', origin });
+    } catch {
+      /* local conn down — detachClient still scrubs FE state */
+    }
     detachClient(origin);
   },
   settingsPanels: () => panelsSub.value,
