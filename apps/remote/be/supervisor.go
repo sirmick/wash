@@ -3,10 +3,13 @@ package remote
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
-	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -19,42 +22,59 @@ import (
 const defaultRemotePort = 11000
 
 // supervisor owns one ssh process per host and mirrors their state into
-// the StateService the FE subscribes to.
+// the StateService the FE subscribes to. It also registers each host's
+// local relay socket with A's router (so a browser can attach it).
 type supervisor struct {
-	svc      *sdk.StateService[State]
-	sshPath  string                 // injectable for tests
-	freePort func() (int, error)    // injectable for tests
+	svc     *sdk.StateService[State]
+	conn    *sdk.Conn // for RegisterPeer/UnregisterPeer with A's router
+	sshPath string    // injectable for tests
+	sockDir string    // dir holding per-host ssh -L unix sockets
 
 	mu    sync.Mutex
 	procs map[string]context.CancelFunc
 }
 
-func newSupervisor(svc *sdk.StateService[State]) *supervisor {
+func newSupervisor(svc *sdk.StateService[State], conn *sdk.Conn) *supervisor {
+	// Per-instance dir for the ssh -L unix sockets. Same user as A's
+	// router (this is its child), so the router can dial them.
+	dir, err := os.MkdirTemp("", "wash-remote-")
+	if err != nil {
+		dir = os.TempDir()
+	}
 	return &supervisor{
-		svc:      svc,
-		sshPath:  "ssh",
-		freePort: freeLocalPort,
-		procs:    map[string]context.CancelFunc{},
+		svc:     svc,
+		conn:    conn,
+		sshPath: "ssh",
+		sockDir: dir,
+		procs:   map[string]context.CancelFunc{},
 	}
 }
 
-// buildSSHArgs builds the argv for the bring-up ssh: forward a local port
-// to the remote loopback router port, then run wash-router there bound to
-// that port with cross-origin allowed, no desktop, and no token gate — the
-// remote router is loopback-only and reached solely through this tunnel,
-// so SSH is the access boundary (docs/REMOTE.md §10).
-func buildSSHArgs(host string, localPort, remotePort int) []string {
+// sockPath returns this host's ssh -L unix socket path (deterministic per
+// host, short enough to stay under the ~108-byte sun_path limit).
+func (s *supervisor) sockPath(host string) string {
+	sum := sha256.Sum256([]byte(host))
+	return filepath.Join(s.sockDir, hex.EncodeToString(sum[:8])+".sock")
+}
+
+// buildSSHArgs builds the argv for the bring-up ssh: forward a LOCAL UNIX
+// SOCKET to host B's loopback router port, then run wash-router there in
+// raw-wire mode (--listen-raw, no HTTP/WebSocket) bound to that port. A's
+// router dials the local socket and splices a browser's muxed channel to
+// it (the "one port" relay, docs/REMOTE.md) — nothing binds a TCP port on
+// A's loopback, and B's router is reached solely through this tunnel, so
+// SSH is the access boundary (§10).
+func buildSSHArgs(host, localSock string, remotePort int) []string {
 	return []string{
 		"-o", "BatchMode=yes",            // never block on an interactive prompt
 		"-o", "ExitOnForwardFailure=yes", // fail fast if the -L bind can't be set up
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
-		"-L", fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", localPort, remotePort),
+		"-L", fmt.Sprintf("%s:127.0.0.1:%d", localSock, remotePort),
 		host,
 		"wash-router",
-		"--listen", fmt.Sprintf("127.0.0.1:%d", remotePort),
-		"--allow-cross-origin",
+		"--listen-raw", fmt.Sprintf("tcp:127.0.0.1:%d", remotePort),
 		"--no-session",
 		"--no-auth",
 	}
@@ -70,28 +90,30 @@ func (s *supervisor) connect(host string, remotePort int) {
 		s.mu.Unlock()
 		return
 	}
-	localPort, err := s.freePort()
-	if err != nil {
-		s.mu.Unlock()
-		s.setHost(host, HostState{Host: host, Origin: host, Status: StatusDown, Error: "no free local port: " + err.Error()})
-		return
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.procs[host] = cancel
 	s.mu.Unlock()
 
 	s.setHost(host, HostState{Host: host, Origin: host, Status: StatusStarting})
-	go s.run(ctx, host, localPort, remotePort)
+	go s.run(ctx, host, remotePort)
 }
 
-func (s *supervisor) run(ctx context.Context, host string, localPort, remotePort int) {
+func (s *supervisor) run(ctx context.Context, host string, remotePort int) {
+	sock := s.sockPath(host)
 	defer func() {
 		s.mu.Lock()
 		delete(s.procs, host)
 		s.mu.Unlock()
+		_ = os.Remove(sock)
+		if s.conn != nil {
+			_ = s.conn.UnregisterPeer(host)
+		}
 	}()
 
-	cmd := exec.CommandContext(ctx, s.sshPath, buildSSHArgs(host, localPort, remotePort)...)
+	// ssh -L refuses to bind a unix socket whose file already exists.
+	_ = os.Remove(sock)
+
+	cmd := exec.CommandContext(ctx, s.sshPath, buildSSHArgs(host, sock, remotePort)...)
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
 	if err := cmd.Start(); err != nil {
@@ -99,7 +121,6 @@ func (s *supervisor) run(ctx context.Context, host string, localPort, remotePort
 		return
 	}
 
-	endpoint := fmt.Sprintf("ws://127.0.0.1:%d/ws", localPort)
 	up := make(chan struct{}, 1)
 	// tail accumulates the last few stderr lines so an exit-with-error
 	// can be classified (auth refusal vs. anything else). Guarded — the
@@ -134,7 +155,18 @@ func (s *supervisor) run(ctx context.Context, host string, localPort, remotePort
 	go func() {
 		select {
 		case <-up:
-			s.setHost(host, HostState{Host: host, Origin: host, Status: StatusUp, LocalEndpoint: endpoint})
+			// Register the relay socket with A's router BEFORE reporting up,
+			// so the FE (which attaches on seeing "up") finds the
+			// registration when its peer.attach arrives (the state push that
+			// triggers attach is sent after this, on the same conn — causal
+			// order holds). The FE attaches via the relay; no ws endpoint.
+			if s.conn != nil {
+				if err := s.conn.RegisterPeer(host, "unix", sock); err != nil {
+					s.setHost(host, HostState{Host: host, Origin: host, Status: StatusDown, Error: "register peer: " + err.Error()})
+					return
+				}
+			}
+			s.setHost(host, HostState{Host: host, Origin: host, Status: StatusUp})
 		case <-ctx.Done():
 		}
 	}()
@@ -217,13 +249,4 @@ func (s *supervisor) removeHost(host string) {
 		}
 		st.Hosts = out
 	})
-}
-
-func freeLocalPort() (int, error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, err
-	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port, nil
 }

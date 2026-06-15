@@ -106,7 +106,7 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 	log.Printf("wash-remote ready instance=%s", instanceID)
 	bus := sdk.NewBus(c)
 	svc := sdk.NewStateService(bus, State{})
-	sup := newSupervisor(svc)
+	sup := newSupervisor(svc, c)
 
 	sdk.HandleFromVoid(bus, "connect", func(_ *sdk.Conn, _ string, req connectReq, _ wire.Sender) error {
 		if req.Host == "" {
