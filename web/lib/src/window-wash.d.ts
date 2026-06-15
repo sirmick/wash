@@ -109,6 +109,13 @@ interface WashGlobals {
   log(level: WashLogLevel, source: string, msg: string, stack?: string): void;
   openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
   writeRaw(channelID: number, bytes: Uint8Array): void;
+  // Origin-scoped raw API (docs/REMOTE.md §4): an app that can run on a
+  // remote host routes its raw channels (pty, file stream) to that host's
+  // connection via these, passing its props.origin — bare openRawChannel/
+  // writeRaw above always address the LOCAL router.
+  openRawChannelFor(origin: string, channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
+  writeRawFor(origin: string, channelID: number, bytes: Uint8Array): void;
+  rawBufferedAmountFor(origin: string): number;
   // Bytes queued in the shell socket's send buffer. A bulk producer
   // streaming over writeRaw (e.g. fm's upload) polls this to pace
   // itself, so it doesn't head-of-line block control frames (like a

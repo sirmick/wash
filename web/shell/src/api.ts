@@ -3,7 +3,7 @@
 // (catalog, open windows) and to request actions (spawn via app_msg,
 // focus, close).
 
-import { type Origin, parseInstanceId, compoundInstanceId } from './clients';
+import { type Origin, parseInstanceId, compoundInstanceId, compoundChannelId } from './clients';
 
 export interface CatalogApp {
   id: string;
@@ -96,15 +96,18 @@ const pendingMessages = new Map<string, unknown[]>();
 // session.snapshot / session.patch deliveries.
 const savedStates = new Map<string, unknown>();
 
-// rawSubscribers maps channel id → callback for incoming raw bytes.
-// Elements register via window.wash.openRawChannel; the shell's WS
-// handler dispatches matching frames through.
-const rawSubscribers = new Map<number, (bytes: Uint8Array) => void>();
+// rawSubscribers maps an ORIGIN-SCOPED channel key → callback for
+// incoming raw bytes. Keyed by compoundChannelId(origin, channel) so a
+// remote host's channel 5 never collides with a local app's channel 5
+// (docs/REMOTE.md §4 — per-origin app wiring). Elements register via
+// window.wash.openRawChannelFor; the per-client WS dispatch routes
+// matching frames through with that client's origin.
+const rawSubscribers = new Map<string, (bytes: Uint8Array) => void>();
 // pendingRaw queues bytes that arrive on a channel before any
 // subscriber registers (the BE typically writes its first byte the
 // moment the router binds the channel, ahead of the BE → FE
-// app_msg that tells the FE the channel id).
-const pendingRaw = new Map<number, Uint8Array[]>();
+// app_msg that tells the FE the channel id). Same origin-scoped key.
+const pendingRaw = new Map<string, Uint8Array[]>();
 
 export function registerMountedElement(instanceID: string, el: HTMLElement): void {
   mountedElements.set(instanceID, el);
@@ -186,37 +189,40 @@ export function deliverToInstance(instanceID: string, data: unknown): void {
 // writeRaw. v0.1 uses one-callback-per-channel; if a future need
 // arises we can move to a small EventTarget per channel.
 
-export function deliverRaw(channelID: number, bytes: Uint8Array): void {
-  const cb = rawSubscribers.get(channelID);
+export function deliverRaw(origin: Origin, channelID: number, bytes: Uint8Array): void {
+  const key = compoundChannelId(origin, channelID);
+  const cb = rawSubscribers.get(key);
   if (cb) {
     cb(bytes);
     return;
   }
-  let q = pendingRaw.get(channelID);
+  let q = pendingRaw.get(key);
   if (!q) {
     q = [];
-    pendingRaw.set(channelID, q);
+    pendingRaw.set(key, q);
   }
   q.push(bytes);
 }
 
-export function subscribeRaw(channelID: number, cb: (bytes: Uint8Array) => void): () => void {
-  rawSubscribers.set(channelID, cb);
-  const q = pendingRaw.get(channelID);
+export function subscribeRaw(origin: Origin, channelID: number, cb: (bytes: Uint8Array) => void): () => void {
+  const key = compoundChannelId(origin, channelID);
+  rawSubscribers.set(key, cb);
+  const q = pendingRaw.get(key);
   if (q) {
-    pendingRaw.delete(channelID);
+    pendingRaw.delete(key);
     for (const b of q) cb(b);
   }
   return () => {
-    if (rawSubscribers.get(channelID) === cb) {
-      rawSubscribers.delete(channelID);
+    if (rawSubscribers.get(key) === cb) {
+      rawSubscribers.delete(key);
     }
   };
 }
 
-export function closeRawSubscriber(channelID: number): void {
-  rawSubscribers.delete(channelID);
-  pendingRaw.delete(channelID);
+export function closeRawSubscriber(origin: Origin, channelID: number): void {
+  const key = compoundChannelId(origin, channelID);
+  rawSubscribers.delete(key);
+  pendingRaw.delete(key);
 }
 
 // ---- Display window ↔ video channel registry ----

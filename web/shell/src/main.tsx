@@ -391,7 +391,7 @@ function makeHandlers(client: RouterClient): ClientHandlers {
           forgetVideoChannel(u.channel_id);
         }
         client.channelOwner.delete(u.channel_id);
-        closeRawSubscriber(u.channel_id);
+        closeRawSubscriber(client.origin, u.channel_id);
         // Forget any pending credit count — channel is gone.
         client.credit.forget(u.channel_id);
         break;
@@ -450,7 +450,7 @@ function makeHandlers(client: RouterClient): ClientHandlers {
       if (pushAssetBytes(channelID, bytes)) return;
       if (pushPanelBytes(channelID, bytes)) return;
     }
-    deliverRaw(channelID, bytes);
+    deliverRaw(client.origin, channelID, bytes);
     // Bulk-class raw flows drain the router-side credit window — replenish
     // via channel.credit as we absorb. Bundle bytes returned early above.
     client.credit.absorbed(channelID, bytes.length);
@@ -876,6 +876,13 @@ declare global {
       openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
       writeRaw(channelID: number, bytes: Uint8Array): void;
       rawBufferedAmount(): number;
+      // Origin-scoped raw API (docs/REMOTE.md §4): route a channel to a
+      // specific host's connection so a remote app's pty/file stream isn't
+      // mis-routed to (or collided with) the local router. origin comes from
+      // the app's props.origin.
+      openRawChannelFor(origin: string, channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
+      writeRawFor(origin: string, channelID: number, bytes: Uint8Array): void;
+      rawBufferedAmountFor(origin: string): number;
       // Router-held clipboard (the wash-internal clipboard every app
       // shares). Text-only on this surface; see clipboard.ts in
       // @wash/ui for the system-clipboard mirroring helpers.
@@ -1072,14 +1079,27 @@ window.wash = {
   log(level, source, msg, stack) {
     shellLog(level, source, msg, stack);
   },
+  // Bare raw API — addresses the LOCAL router. The *For variants below
+  // take an origin so a remote app's raw channel (pty, file stream) routes
+  // to its own host's connection (docs/REMOTE.md §4); apps that can run
+  // remote must use those with their props.origin.
   openRawChannel(channelID, onBytes) {
-    return subscribeRaw(channelID, onBytes);
+    return subscribeRaw(LOCAL_ORIGIN, channelID, onBytes);
   },
   writeRaw(channelID, bytes) {
     conn.sendRaw(channelID, bytes);
   },
   rawBufferedAmount() {
     return conn.bufferedAmount();
+  },
+  openRawChannelFor(origin, channelID, onBytes) {
+    return subscribeRaw(origin, channelID, onBytes);
+  },
+  writeRawFor(origin, channelID, bytes) {
+    (clientForOrigin(origin) ?? local).conn.sendRaw(channelID, bytes);
+  },
+  rawBufferedAmountFor(origin) {
+    return (clientForOrigin(origin) ?? local).conn.bufferedAmount();
   },
   clipboardSetText(text) {
     clipboardSub.set({ mime: 'text/plain', text });

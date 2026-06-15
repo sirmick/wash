@@ -23,6 +23,14 @@ export interface WashAppProps {
   instance: string;
   /** The host custom element. Apps listen for wash:msg / wash:state on it. */
   host: HTMLElement;
+  /**
+   * The window's origin — "local" for a local app, or the remote host id
+   * for an app composited from another machine (docs/REMOTE.md §4). Pass it
+   * to window.wash.{openRawChannelFor,writeRawFor,rawBufferedAmountFor} (and
+   * the @wash/ui Terminal's `origin` prop) so raw channels route to the
+   * owning host. Apps that only use app_msg can ignore it.
+   */
+  origin: string;
 }
 
 export interface DefineWashAppOptions {
@@ -73,7 +81,8 @@ export function defineWashApp(
         this.style.cssText = options.style;
       }
       const instance = this.getAttribute('data-wash-instance') ?? '';
-      this.cleanup = render(() => App({ instance, host: this }), this);
+      const origin = this.getAttribute('data-wash-origin') || 'local';
+      this.cleanup = render(() => App({ instance, host: this, origin }), this);
     }
 
     disconnectedCallback() {

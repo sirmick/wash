@@ -68,7 +68,7 @@ interface PersistedState {
 // flat block rather than a row of pickable controls.
 const TAB_BAR_HEIGHT = 32;
 
-const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
+const App: Component<{ instance: string; host: HTMLElement; origin: string }> = (props) => {
   const [tabs, setTabs] = createSignal<TabMeta[]>([]);
   const [active, setActive] = createSignal(0);
   // Window-wide font choice, driven into every <Terminal>. The
@@ -403,6 +403,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                     with the pty's grid in tab.init. */}
                 {!tab.pending && <Terminal
                   channelId={tab.channelID}
+                  origin={props.origin}
                   customKeyHandler={onTermKey}
                   fontId={fontId()}
                   fontSize={fontSize()}

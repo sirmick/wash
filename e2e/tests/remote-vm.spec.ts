@@ -53,3 +53,40 @@ test('connect to a second VM over real ssh and composite its app window', async 
   const stripe = page.locator(`[data-testid="wash-host-stripe"][data-origin="${REMOTE_HOST}"]`);
   await expect(stripe).toBeVisible({ timeout: 60_000 });
 });
+
+test('a remote wash-term pty round-trips over the relay', async ({ remoteVm, page }) => {
+  test.setTimeout(240_000);
+
+  await page.goto(remoteVm.url);
+  await vmLogin(page);
+  await expect(page.locator('wash-app-session')).toBeVisible({ timeout: 60_000 });
+  await page.locator('[data-testid="sidebar-section-header-remote"]').click();
+  await page.locator('[data-testid="remote-manage"]').click();
+  const connect = page.locator('wash-app-connect');
+  await expect(connect).toBeVisible({ timeout: 30_000 });
+  await connect.locator('[data-testid="connect-host-input"]').fill(REMOTE_HOST);
+  await connect.locator('[data-testid="connect-submit"]').click();
+  await expect(connect.locator('[data-testid="connect-host-status"]')).toHaveAttribute('data-status', 'up', { timeout: 90_000 });
+
+  // Launch wash-term ON B — a RAW-channel app (pty). Its keystrokes and
+  // output ride origin-scoped raw channels over the relay (docs/REMOTE.md §4),
+  // class-aware (keystrokes interactive, output bulk).
+  await connect.locator('[data-testid="connect-launch-com.wash.term"]').click();
+
+  // The remote terminal composites and its B-side pty prints a prompt — that
+  // prompt arriving proves B→A raw delivery (origin-scoped, not collided).
+  const term = page.locator('.xterm').first();
+  await expect(term).toBeVisible({ timeout: 60_000 });
+  await expect(term).toContainText(/[$#>]/, { timeout: 30_000 });
+
+  // Type into it: keystroke → A → relay → B's pty → echo → relay → xterm.
+  // The marker round-tripping is the whole raw path working remotely.
+  // The xterm auto-focuses its textarea on mount, so it already holds DOM
+  // keyboard focus — no click needed. (A click would land on wash-connect,
+  // which is still open listing B's apps and visually overlaps the fresh term;
+  // its window z-order is irrelevant to where keystrokes route.)
+  const marker = 'WASH_RELAY_PTY_OK';
+  await page.keyboard.type(`echo ${marker}`);
+  await page.keyboard.press('Enter');
+  await expect(term).toContainText(marker, { timeout: 20_000 });
+});

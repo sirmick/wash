@@ -15,6 +15,7 @@
 // PNG, auto-detected by createImageBitmap from the magic bytes.
 
 import { registerDisplayWindow, subscribeRaw, unregisterDisplayWindow } from './api';
+import { LOCAL_ORIGIN } from './clients';
 
 // Frame header layout (little-endian). See mac-phoenix client.js and
 // docs/DISPLAY.md. Only the dirty-rect + full-surface size are used; the
@@ -117,7 +118,9 @@ export class WashAppDisplay extends HTMLElement {
         /* ignore */
       }
     }
-    this.unsubscribe = subscribeRaw(channelID, (bytes) => this.onFrame(bytes));
+    // Video is local-only today (remote video rides the M5 WebRTC track),
+    // so the display channel is always on the local router.
+    this.unsubscribe = subscribeRaw(LOCAL_ORIGIN, channelID, (bytes) => this.onFrame(bytes));
   }
 
   private onFrame(bytes: Uint8Array): void {

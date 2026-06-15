@@ -139,14 +139,14 @@ const UPLOAD_YIELD_MS = 50;
 // immediately when the buffer is already under the high-water mark, so
 // it's cheap to call after every chunk. Transports without a
 // bufferedAmount (virtio) report 0 and never block.
-async function awaitUploadDrain(cancelled: () => boolean): Promise<void> {
-  if (window.wash.rawBufferedAmount() < UPLOAD_SEND_HWM) return;
-  while (window.wash.rawBufferedAmount() > UPLOAD_SEND_LWM && !cancelled()) {
+async function awaitUploadDrain(origin: string, cancelled: () => boolean): Promise<void> {
+  if (window.wash.rawBufferedAmountFor(origin) < UPLOAD_SEND_HWM) return;
+  while (window.wash.rawBufferedAmountFor(origin) > UPLOAD_SEND_LWM && !cancelled()) {
     await new Promise((r) => setTimeout(r, 15));
   }
 }
 
-const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
+const App: Component<{ instance: string; host: HTMLElement; origin: string }> = (props) => {
   // ---- reactive state ----
   const [path, setPath] = createSignal('');
   const [selectedEntry, setSelectedEntry] = createSignal<Entry | null>(null);
@@ -1220,9 +1220,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         stream: for (const it of plan.entries) {
           await breatheIfDue();
           if (cancelledUploads.has(uploadID)) break;
-          window.wash.writeRaw(channelID, encodeRecordHeader(it.relPath, it.file.size));
+          window.wash.writeRawFor(props.origin, channelID, encodeRecordHeader(it.relPath, it.file.size));
           for await (const chunk of readBlobChunks(it.file)) {
-            window.wash.writeRaw(channelID, chunk);
+            window.wash.writeRawFor(props.origin, channelID, chunk);
             // Backpressure: writeRaw queues into the single shell
             // socket's send buffer. Without pacing, the whole file
             // lands there at once and head-of-line blocks the cancel
@@ -1231,13 +1231,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             // drained. Keep the buffer small so the (interactive)
             // cancel frame jumps ahead and this loop's own cancel
             // check actually fires mid-stream.
-            await awaitUploadDrain(() => cancelledUploads.has(uploadID));
+            await awaitUploadDrain(props.origin, () => cancelledUploads.has(uploadID));
             await breatheIfDue();
             if (cancelledUploads.has(uploadID)) break stream;
           }
         }
         if (!cancelledUploads.has(uploadID)) {
-          window.wash.writeRaw(channelID, uploadEndMarker());
+          window.wash.writeRawFor(props.origin, channelID, uploadEndMarker());
         }
         // Bound ONLY the finalize: the BE emits upload_done shortly after
         // it reads the end marker (or after a cancel closes the channel).

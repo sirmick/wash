@@ -61,6 +61,10 @@ export function FloatingWindow(props: WindowProps) {
     // app's messages back to the owning router; local ids stay unprefixed.
     const cid = compoundInstanceId(props.win.origin, props.win.instanceID);
     el.setAttribute('data-wash-instance', cid);
+    // The window's origin (LOCAL or a remote host) — defineWashApp reads it
+    // into props.origin so the app routes its raw channels to the right
+    // host's connection (docs/REMOTE.md §4).
+    el.setAttribute('data-wash-origin', props.win.origin);
     // window_id lets per-window shell built-ins (the <wash-app-display>
     // video decoder) find their video channel via the display-window
     // registry. Backward-compatible: existing app elements ignore it.
