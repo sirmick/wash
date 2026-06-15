@@ -1,6 +1,7 @@
 package router
 
 import (
+	"bytes"
 	"net"
 
 	"github.com/sirmick/wash/internal/wire"
@@ -122,28 +123,35 @@ func (s *ShellSession) handlePeerAttach(m wire.ShellPeerAttach) error {
 	return nil
 }
 
-// pumpPeerToShell copies the relay socket → the shell channel: host B's
-// wire bytes become raw frames the FE feeds to B's RouterClient. Bulk class
-// so the whole remote stream is flow-controlled by the channel's credit
-// window (the FE replenishes as it absorbs) AND yields to A's LOCAL
-// interactive traffic in the scheduler — a remote app must not starve the
-// local desktop, and a B flood must not OOM A/the browser. (B's own
-// interactive/bulk split is flattened here: A treats the relay as opaque
-// bytes — preserving it would need per-class relay channels, a later
-// refinement; docs/REMOTE.md §7.) Exits when the socket closes or the shell
-// write fails; closeChannel cleans both up.
+// pumpPeerToShell copies the relay socket → the shell channel, ONE B-frame
+// at a time, preserving each frame's wire CLASS for the scheduler
+// (docs/REMOTE.md §7). This is the "header-aware, payload-opaque" relay: A
+// reads B's frame header (class + length) to frame + schedule, but never
+// interprets the payload — it re-emits the frame's bytes verbatim. So B's
+// interactive frames (keystrokes, focus) bypass credit and jump ahead of B's
+// bulk (pty/file output), which is credit-throttled and yields to A's LOCAL
+// interactive traffic. Without this, a remote bulk stream head-of-line-blocks
+// the remote terminal. (Per-CHANNEL isolation — two concurrent B bulk streams
+// each with their own window — is a deliberate later step; §7.)
+//
+// "Header-only" is the invariant: A touches bytes 0..7 (flags=class, length)
+// to delimit + class the frame; the payload is forwarded unchanged. It is NOT
+// federation (§13): A decodes no ctrl verb, models no B state.
 func (r *Router) pumpPeerToShell(b *channelBinding) {
-	buf := make([]byte, 32*1024)
+	t := wire.NewStreamTransport(b.peerConn)
+	var buf bytes.Buffer
 	for {
-		n, err := b.peerConn.Read(buf)
-		if n > 0 {
-			payload := make([]byte, n)
-			copy(payload, buf[:n])
-			if werr := b.shell.WriteRawFrameClass(b.channelID, payload, wire.ClassBulk); werr != nil {
-				break
-			}
-		}
+		f, err := t.ReadFrame()
 		if err != nil {
+			break
+		}
+		buf.Reset()
+		if eerr := wire.EncodeFrame(&buf, f); eerr != nil {
+			continue // can't happen for a frame we just read; skip, stay in sync
+		}
+		payload := append([]byte(nil), buf.Bytes()...)
+		// One B-frame → one relay frame, scheduled at B's own class.
+		if werr := b.shell.WriteRawFrameClass(b.channelID, payload, f.Class()); werr != nil {
 			break
 		}
 	}

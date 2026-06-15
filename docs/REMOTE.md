@@ -332,6 +332,24 @@ get a fresh snapshot on (re)subscribe, not a replay of events missed while
 disconnected. A notification or job-completion that fires during an SSH blip is
 lost. Acceptable; note it in the UI where it matters.
 
+**Relay QoS — the relay is class-aware, not opaque.** A forwards B's wire **one
+frame at a time, preserving each frame's wire CLASS** (it reads the 8-byte
+header for class + length; the payload is forwarded verbatim — header yes,
+payload never; not federation, §13). So B's *interactive* frames (keystrokes,
+focus, control, the bundle) bypass credit and jump the queue, while B's *bulk*
+(pty output, file streams) is credit-windowed and yields to A's **local**
+interactive traffic — a remote `cp` flooding output can't make the remote
+terminal choppy, and a remote bulk stream can't OOM A or the browser. This is
+load-bearing for the M4/M5 raw-channel apps (`wash-term`, file, video); without
+it, B's bulk would head-of-line-block B's interactive on a single lane.
+
+What it does **not** yet do: isolate **two concurrent B bulk streams** (a file
+upload *and* a video share one credit window and interleave FIFO). That needs
+one relay channel per B-channel — deliberately deferred; the common case
+(interactive vs bulk) is handled, and concurrent-bulk degrades gracefully rather
+than breaking. (The opaque single-Bulk-lane v0 of the relay is the prior commit;
+this is its class-preserving successor — same single channel, smarter framing.)
+
 ---
 
 ## 8. State & persistence — where the backing stores sit

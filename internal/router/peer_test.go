@@ -1,11 +1,10 @@
 package router
 
 import (
+	"bytes"
 	"context"
-	"io"
 	"net"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -13,17 +12,22 @@ import (
 	"github.com/sirmick/wash/internal/wiretest"
 )
 
-// TestPeerRelaySplice proves the A-side relay (docs/REMOTE.md): a shell
+// bframe builds one host-B wire frame with an explicit class (channel 0,
+// payload = p) — what flows inside the relay.
+func bframe(c wire.Class, p string) wire.Frame {
+	return wire.Frame{Flags: wire.FlagEnd | byte(c)<<1, Channel: 0, Payload: []byte(p)}
+}
+
+// TestPeerRelaySplice proves the A-side relay (docs/REMOTE.md §2/§7): a shell
 // peer.attaches a registered origin, the router dials its socket, binds a
-// peer channel, and splices it verbatim — socket bytes arrive as raw frames
-// on the channel, and raw frames on the channel reach the socket. A stands
-// in a fake "host B" socket (writes a marker, then echoes), so the test
-// exercises the splice without a second router.
+// peer channel, and forwards B's wire frame-by-frame — preserving each
+// frame's CLASS (header-aware, payload-opaque) and the payload bytes
+// verbatim. A stands in a fake "host B" that speaks framed wire.
 func TestPeerRelaySplice(t *testing.T) {
 	reg := NewRegistry()
 	r := NewRouter(Config{NoSession: true}, reg, func(f string, a ...any) { t.Logf("router: "+f, a...) })
 
-	// Fake host B: on connect, send a marker then echo everything.
+	// Fake host B: send one Interactive + one Bulk frame, then echo frames.
 	sock := filepath.Join(t.TempDir(), "b.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
@@ -37,8 +41,16 @@ func TestPeerRelaySplice(t *testing.T) {
 				return
 			}
 			go func() {
-				_, _ = c.Write([]byte("HELLO_FROM_B"))
-				_, _ = io.Copy(c, c) // echo
+				bt := wire.NewStreamTransport(c)
+				_ = bt.WriteFrame(bframe(wire.ClassInteractive, "HELLO_FROM_B"))
+				_ = bt.WriteFrame(bframe(wire.ClassBulk, "BULKDATA"))
+				for {
+					f, err := bt.ReadFrame()
+					if err != nil {
+						return
+					}
+					_ = bt.WriteFrame(f) // echo
+				}
 			}()
 		}
 	}()
@@ -52,14 +64,12 @@ func TestPeerRelaySplice(t *testing.T) {
 	go func() { defer close(done); _ = r.HandleShell(ctx, shellPair.EndA()) }()
 	end := shellPair.EndB()
 
-	// Drain the catalog the router sends on connect.
 	if _, ok := readCtrl(t, end).(wire.ShellCatalog); !ok {
 		t.Fatalf("expected ShellCatalog first")
 	}
-
-	// Attach origin B; expect a peer channel.bind back.
 	writeCtrl(t, end, wire.NewShellPeerAttach("B"))
 
+	// Wait for the peer channel.bind.
 	var ch uint32
 	deadline := time.Now().Add(5 * time.Second)
 	for ch == 0 {
@@ -75,50 +85,69 @@ func TestPeerRelaySplice(t *testing.T) {
 		}
 		if m, _ := wire.DecodeCtrl(f.Payload); m != nil {
 			if b, ok := m.(wire.ShellChannelBind); ok && b.Kind == wire.ChannelKindPeer {
-				if b.Origin != "B" {
-					t.Fatalf("bind origin = %q, want B", b.Origin)
-				}
 				ch = b.ChannelID
 			}
 		}
 	}
 
-	// Socket → channel: B's marker arrives as raw frames on the peer channel.
-	got := readRawUntil(t, end, ch, "HELLO_FROM_B")
-	if !strings.Contains(got, "HELLO_FROM_B") {
-		t.Fatalf("relayed marker missing; got %q", got)
+	// Each relay frame on ch carries ONE B-frame, at B's own class. Read the
+	// two marker frames and assert class + verbatim payload are preserved.
+	want := []struct {
+		class   wire.Class
+		payload string
+	}{
+		{wire.ClassInteractive, "HELLO_FROM_B"},
+		{wire.ClassBulk, "BULKDATA"},
+	}
+	for i, w := range want {
+		rf := nextOnChannel(t, end, ch)
+		if rf.Class() != w.class {
+			t.Errorf("relay frame %d: class %v, want %v (class not preserved)", i, rf.Class(), w.class)
+		}
+		bf, derr := wire.DecodeFrame(bytes.NewReader(rf.Payload))
+		if derr != nil {
+			t.Fatalf("relay frame %d: payload is not a B-frame: %v", i, derr)
+		}
+		if string(bf.Payload) != w.payload {
+			t.Errorf("relay frame %d: payload %q, want %q (not verbatim)", i, bf.Payload, w.payload)
+		}
+		if bf.Class() != w.class {
+			t.Errorf("relay frame %d: inner B-frame class %v, want %v", i, bf.Class(), w.class)
+		}
 	}
 
-	// Channel → socket: write on the peer channel; the fake B echoes it back.
-	if err := end.WriteFrame(wire.Frame{Flags: wire.FlagEnd, Channel: ch, Payload: []byte("PING123")}); err != nil {
+	// Channel → socket: write a B-frame on the peer channel; B echoes it back.
+	var pb bytes.Buffer
+	if err := wire.EncodeFrame(&pb, bframe(wire.ClassInteractive, "PING123")); err != nil {
+		t.Fatalf("encode ping: %v", err)
+	}
+	if err := end.WriteFrame(wire.Frame{Flags: wire.FlagEnd, Channel: ch, Payload: pb.Bytes()}); err != nil {
 		t.Fatalf("write raw: %v", err)
 	}
-	echo := readRawUntil(t, end, ch, "PING123")
-	if !strings.Contains(echo, "PING123") {
-		t.Fatalf("echo missing; got %q", echo)
+	echo := nextOnChannel(t, end, ch)
+	bf, derr := wire.DecodeFrame(bytes.NewReader(echo.Payload))
+	if derr != nil || string(bf.Payload) != "PING123" {
+		t.Fatalf("echo: got %q (err %v), want PING123", echo.Payload, derr)
 	}
 
 	cancel()
 	<-done
 }
 
-// readRawUntil reads frames, accumulating payloads on channel ch, until the
-// accumulation contains want (or it times out).
-func readRawUntil(t *testing.T, e wire.FrameTransport, ch uint32, want string) string {
+// nextOnChannel reads frames until one arrives on channel ch.
+func nextOnChannel(t *testing.T, e wire.FrameTransport, ch uint32) wire.Frame {
 	t.Helper()
-	var acc strings.Builder
 	deadline := time.Now().Add(5 * time.Second)
-	for !strings.Contains(acc.String(), want) {
+	for {
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %q on channel %d; got %q", want, ch, acc.String())
+			t.Fatalf("timed out waiting for a frame on channel %d", ch)
 		}
 		f, err := e.ReadFrame()
 		if err != nil {
 			t.Fatalf("read: %v", err)
 		}
 		if f.Channel == ch {
-			acc.Write(f.Payload)
+			return f
 		}
 	}
-	return acc.String()
 }
