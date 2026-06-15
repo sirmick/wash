@@ -106,9 +106,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const reconcileAttachments = (list: HostState[]) => {
     const live = new Set<string>();
     for (const h of list) {
-      if (h.status === 'up' && h.local_endpoint) {
+      if (h.status === 'up') {
         live.add(h.origin);
         if (!attached.has(h.origin)) {
+          // No local_endpoint in the one-port relay model: attachRemote with
+          // no url asks the shell to mux this host over its single connection
+          // to A (docs/REMOTE.md). A direct endpoint, if ever present, still
+          // works (co-located / tests).
           window.wash.attachRemote(h.origin, h.local_endpoint);
           attached.add(h.origin);
         }

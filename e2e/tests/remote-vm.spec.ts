@@ -1,21 +1,14 @@
 // wash-remote (R2) capstone: two real VMs, real SSH (docs/REMOTE.md).
 //
 // VM-A serves the desktop (browser attached via the chrome proxy); VM-B is a
-// separate host running sshd + wash. From A's desktop we open wash-connect and
-// connect to B over a genuine `ssh -L` driven by com.wash.remote, asserting the
-// host reaches "connected" — i.e. the supervisor SSHed in, started B's
-// wash-router, and saw it bind. This is the half the host-process e2e
-// (connect-launch.spec.ts) stubs out: the real cross-machine ssh bring-up.
-//
-// Why this stops at "connected" (not the composited B window): R2's *second*
-// connection — the browser opening a WebSocket to the local end of the ssh -L
-// forward — assumes the browser shares a localhost with A's router + tunnel.
-// That holds in the product (one desktop machine) and is proven in-process by
-// connect-launch.spec.ts. It does NOT hold under the wash-vm proxy, which puts
-// the browser on the host while A's router + ssh -L live inside VM-A — so the
-// browser can't reach VM-A's 127.0.0.1:<fwd>. The two specs together cover the
-// whole path; a single-process real-ssh-AND-composite test would need a
-// co-located browser (host desktop A + VM-B remote) — a separate harness.
+// separate host running sshd + wash. From A's desktop we open wash-connect,
+// connect to B over a genuine `ssh -L` driven by com.wash.remote, and launch an
+// app ON B — asserting its window composites into A's desktop with the per-host
+// stripe. End to end: the supervisor's real cross-machine ssh bring-up, the
+// one-port relay (B's wire muxed over the browser's single connection to A and
+// spliced to the ssh -L'd unix socket), and per-origin bundle delivery — all
+// over the wash-vm proxy, which works precisely because the browser only ever
+// talks to A (the "one port" rule), never to B directly.
 
 import { test, expect, remoteVmSkipReason, vmLogin, REMOTE_HOST } from '../fixtures/remote-vm';
 
@@ -24,8 +17,8 @@ test.beforeEach(() => {
   test.skip(reason !== null, reason ?? '');
 });
 
-test('connect to a second VM over real ssh — supervisor brings up B', async ({ remoteVm, page }) => {
-  test.setTimeout(240_000); // two VM boots + ssh wiring + tunnelled router bring-up
+test('connect to a second VM over real ssh and composite its app window', async ({ remoteVm, page }) => {
+  test.setTimeout(240_000); // two VM boots + ssh wiring + tunnelled router + bundle
 
   await page.goto(remoteVm.url);
   await vmLogin(page);
@@ -43,13 +36,20 @@ test('connect to a second VM over real ssh — supervisor brings up B', async ({
   await connect.locator('[data-testid="connect-host-input"]').fill(REMOTE_HOST);
   await connect.locator('[data-testid="connect-submit"]').click();
 
-  // The host card reaches "connected" once com.wash.remote SSHed into B,
-  // started B's wash-router, and saw it bind ("listening on") — the real
-  // cross-machine ssh -L bring-up. (FE compositing of B's window is proven
-  // in-process by connect-launch.spec.ts; see the header for why the proxy
-  // topology can't carry the browser's second connection.)
+  // The host reaches "connected" once com.wash.remote SSHed in, started B's
+  // wash-router (--listen-raw), and registered the relay socket; the FE then
+  // attaches via the muxed peer channel (one port).
   const status = connect.locator('[data-testid="connect-host-status"]');
   await expect(status).toHaveAttribute('data-status', 'up', { timeout: 90_000 });
-  // No error surfaced on the host card (a clean bring-up, not a flap).
-  await expect(connect.locator(`[data-testid="connect-host-${REMOTE_HOST}"] [data-testid="connect-host-dot"]`)).toBeVisible();
+
+  // B's catalog arrives over the relay channel; launch About on B.
+  await expect(connect.locator('[data-testid="connect-launch-com.wash.about"]')).toBeVisible({ timeout: 30_000 });
+  await connect.locator('[data-testid="connect-launch-com.wash.about"]').click();
+
+  // B's app window composites into A's desktop, host-striped with B's origin.
+  // The stripe renders only after B's bundle imports over the relay — so this
+  // proves the whole path: real ssh, the one-port mux, the A-side splice, and
+  // cross-machine per-origin bundle delivery.
+  const stripe = page.locator(`[data-testid="wash-host-stripe"][data-origin="${REMOTE_HOST}"]`);
+  await expect(stripe).toBeVisible({ timeout: 60_000 });
 });

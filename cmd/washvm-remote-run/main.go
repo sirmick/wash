@@ -128,10 +128,15 @@ func setupRemote(ctx context.Context, a, b *vm.VM) error {
 	// B: bring up sshd. Host keys + privsep dir + run the daemon. The wash
 	// user already exists (image), with a real shell + password, so pubkey
 	// auth is the only thing left to wire.
+	// AllowTcpForwarding/AllowStreamLocalForwarding must be on: the relay
+	// works by A doing ssh -L <socket>:127.0.0.1:RP — B's sshd has to permit
+	// the forward to B's loopback router port. (A remote-side refusal is
+	// silent on A — ExitOnForwardFailure only catches local bind failures —
+	// which is exactly how this first showed up as "0 bytes from B".)
 	if err := exec(ctx, b,
 		"ssh-keygen -A; mkdir -p /var/empty /run/sshd; "+
 			"su wash -c 'mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'; "+
-			"/usr/sbin/sshd",
+			"/usr/sbin/sshd -o AllowTcpForwarding=yes -o AllowStreamLocalForwarding=yes",
 	); err != nil {
 		return fmt.Errorf("VM-B sshd: %w", err)
 	}
