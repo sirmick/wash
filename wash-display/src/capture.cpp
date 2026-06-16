@@ -89,10 +89,11 @@ void composite_surface_cb(struct wlr_surface* s, int sx, int sy, void* data) {
     o.dst_box.y = oy;
     o.dst_box.width = (int)tex->width;
     o.dst_box.height = (int)tex->height;
-    // COPY, not blend: write the surface's pixels INCLUDING alpha verbatim
-    // into the (reused, uncleared) target. Blending would composite against
-    // stale frame data and lose the client's transparency (M8c).
-    o.blend_mode = WLR_RENDER_BLEND_MODE_NONE;
+    // src-over blend (premultiplied, the default): a surface's transparent
+    // pixels let the layer beneath show through. The target is cleared to
+    // transparent before the walk, so the bottom surface blends onto nothing
+    // (= verbatim) and upper subsurfaces composite correctly (M8c).
+    o.blend_mode = WLR_RENDER_BLEND_MODE_PREMULTIPLIED;
     wlr_render_pass_add_texture(c->pass, &o);
     c->drawn++;
 
@@ -213,6 +214,18 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
     std::memset(&pass_opts, 0, sizeof pass_opts);
     struct wlr_render_pass* pass = wlr_renderer_begin_buffer_pass(r, render_buf, &pass_opts);
     if (!pass) return false;
+
+    // Clear the (reused) target to transparent first, then composite the tree
+    // with src-over blending below — so a subsurface's transparent margin
+    // (e.g. a browser's omnibox-dropdown overlay) shows the layer BENEATH it
+    // instead of overwriting it. The whole tree is redrawn every frame, so a
+    // full clear is correct (damage only limits read-back/encode, not this).
+    struct wlr_render_rect_options clear;
+    std::memset(&clear, 0, sizeof clear);
+    clear.box = { 0, 0, w, h };
+    clear.color = { 0.f, 0.f, 0.f, 0.f };
+    clear.blend_mode = WLR_RENDER_BLEND_MODE_NONE;
+    wlr_render_pass_add_rect(pass, &clear);
 
     std::map<struct wlr_surface*, uint32_t> next;
     CompositeCtx ctx{ pass, src_x, src_y, w, h, 0, &seq_, &next, false, false, 0, 0, 0, 0 };
