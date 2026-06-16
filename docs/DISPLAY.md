@@ -609,9 +609,29 @@ boxing every menu. The toplevel CSD shadow was sidestoppable by cropping
 Opaque app content (alpha=255) is unchanged — xclock/calculator/Firefox/
 Chromium all still render identically; the testguest's right-click menu now
 composites its rounded corners + shadow over the window beneath instead of a
-black box. *Note:* client alpha is premultiplied and imported into WebP as
-straight, so a soft shadow's mid-alpha pixels skew slightly dark — fine for
-the hard-edged corners; un-premultiply later if soft shadows need it.
+black box. Client alpha is premultiplied, so the read-back swap loop also
+**un-premultiplies** (`rgb = rgb*255/a` for `0<a<255`) before the WebP import
+expects straight alpha — without it a soft drop-shadow's mid-alpha pixels read
+too dark (a grey halo around menus).
+
+### M8d — popup pointer grab (menus stay open / dismiss right) ✅
+A menu OWNS the pointer while open (xdg_popup grab, or X11 override-redirect).
+We route input by which surface the pointer is over, so once a menu opened, a
+stray event on the PARENT window reached the app and it dismissed the menu
+instantly — the "X11 popovers don't work anywhere" symptom (worst on X11,
+whose override-redirect menus always grab). Fix: a **grab stack**
+(`g_popup_grabs`, pushed when a grabbing popup maps — `wlr_xdg_popup.seat` set,
+or any X11 override-redirect — popped on unmap, a stack so nested submenus
+restore the parent). While non-empty, `inject_input` redirects parent-window
+pointer events to the top grab's surface, converting parent-canvas coords to
+popup-local (subtract the popup's offset). So motion over the parent keeps the
+menu alive, and a press landing outside the popup bounds reaches the menu
+client as an outside-click → it dismisses itself (releasing the grab).
+Verified: the testguest menu (both backends) stays open across a parent move
+and closes on item-select with the grab released (no stuck state).
+*Limits:* a click on a DIFFERENT app / the desktop doesn't dismiss (the grab is
+display-instance-local, not a global seat grab); keyboard menu nav (arrows)
+isn't routed yet.
 
 ### Out of scope here — M6 throughput
 WebRTC/VP9 (for Firefox scroll/video parity) + audio service hookup are a separate,

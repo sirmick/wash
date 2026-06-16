@@ -257,8 +257,12 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
     wlr_renderer_end(r);
     if (!ok) return false;
 
-    // RGBX -> BGRX: swap R and B for the BGRA encoder, over the dirty rect
-    // only (the encoder reads just that sub-rect; the rest of buf_ is unused).
+    // RGBA -> BGRA for the encoder (swap R<->B), over the dirty rect only, and
+    // UN-PREMULTIPLY: Wayland client buffers carry premultiplied alpha, but
+    // WebP (WebPPictureImportBGRA) wants straight alpha — without this, a soft
+    // drop-shadow's mid-alpha pixels stay multiplied and read too dark (the
+    // "menu looked wrong" halo, M8c). Opaque (a=255) and clear (a=0) pixels are
+    // untouched; only 0<a<255 is divided back out.
     for (int y = dirty_y; y < dirty_y + dirty_h; y++) {
         uint8_t* row = buf_.data() + (size_t)y * stride_;
         for (int x = dirty_x; x < dirty_x + dirty_w; x++) {
@@ -266,6 +270,13 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
             uint8_t t = px[0];
             px[0] = px[2];
             px[2] = t;
+            uint8_t a = px[3];
+            if (a != 0 && a != 255) {
+                int b = px[0] * 255 / a, g = px[1] * 255 / a, rr = px[2] * 255 / a;
+                px[0] = b > 255 ? 255 : (uint8_t)b;
+                px[1] = g > 255 ? 255 : (uint8_t)g;
+                px[2] = rr > 255 ? 255 : (uint8_t)rr;
+            }
         }
     }
 

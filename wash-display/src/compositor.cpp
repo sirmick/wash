@@ -616,6 +616,29 @@ struct PopupTarget {
 };
 static std::map<uint32_t, PopupTarget> g_popup_reg;
 
+// Active popup pointer-grabs (M8d). A menu (xdg_popup with a grab, or an X11
+// override-redirect menu) OWNS the pointer while open: input over the PARENT
+// window must reach the menu so a click-outside dismisses it and motion keeps
+// the menu alive — otherwise the app sees a stray parent event and closes the
+// menu instantly (the "X11 popovers don't work" symptom). A stack so nested
+// submenus restore the parent menu's grab when they close. off_x/off_y is the
+// popup's offset within the parent content (canvas space = sent_x/sent_y), so
+// parent-window coords convert to popup-local by subtracting it.
+struct PopupGrab {
+    struct wlr_surface* surface = nullptr;
+    Server* server = nullptr;
+    int off_x = 0, off_y = 0;
+};
+static std::vector<PopupGrab> g_popup_grabs;
+static void push_popup_grab(struct wlr_surface* s, Server* srv, int ox, int oy) {
+    g_popup_grabs.push_back(PopupGrab{s, srv, ox, oy});
+}
+static void pop_popup_grab(struct wlr_surface* s) {
+    for (auto it = g_popup_grabs.begin(); it != g_popup_grabs.end(); ++it) {
+        if (it->surface == s) { g_popup_grabs.erase(it); return; }
+    }
+}
+
 // popup_root_and_offset walks the popup parent chain to the owning
 // toplevel, accumulating each popup's geometry offset, and returns that
 // toplevel's wash win + the popup's offset relative to it. False if the
@@ -675,12 +698,16 @@ void popup_map(struct wl_listener* listener, void* /*data*/) {
     popup_send_geometry(p);
     p->geo_sent = true;
     g_popup_reg[p->chan] = PopupTarget{p->popup->base->surface, p->server};
-    wlr_log(WLR_INFO, "wash-display: popup mapped parent_win=%u chan=%u off=%d,%d",
-            root, p->chan, ox, oy);
+    // A popup that requested a seat grab (menus, not tooltips) owns the pointer.
+    if (p->popup->seat)
+        push_popup_grab(p->popup->base->surface, p->server, ox, oy);
+    wlr_log(WLR_INFO, "wash-display: popup mapped parent_win=%u chan=%u off=%d,%d grab=%d",
+            root, p->chan, ox, oy, p->popup->seat ? 1 : 0);
 }
 
 void popup_unmap(struct wl_listener* listener, void* /*data*/) {
     Popup* p = wl_container_of(listener, p, unmap);
+    pop_popup_grab(p->popup->base->surface);
     if (p->chan) {
         g_popup_reg.erase(p->chan);
         // Tell the FE to drop the overlay (close control frame).
@@ -869,6 +896,8 @@ static bool xpopup_map(XSurface* x) {
     x->sent_y = x->xsurf->y - parent->xsurf->y;
     xpopup_send_geometry(x);
     g_popup_reg[x->popup_chan] = PopupTarget{x->xsurf->surface, x->server};
+    // X11 override-redirect menus take an X pointer grab — own the pointer.
+    push_popup_grab(x->xsurf->surface, x->server, x->sent_x, x->sent_y);
     wlr_log(WLR_INFO, "wash-display: X11 popup mapped parent_win=%u chan=%u off=%d,%d",
             parent->sink.win, x->popup_chan, x->sent_x, x->sent_y);
     return true;
@@ -876,6 +905,7 @@ static bool xpopup_map(XSurface* x) {
 
 static void xpopup_close(XSurface* x) {
     if (!x->popup_chan) return;
+    pop_popup_grab(x->xsurf->surface);
     g_popup_reg.erase(x->popup_chan);
     std::string s = json{{"close", true}}.dump();
     x->server->conn->write_channel(x->popup_chan, (const uint8_t*)s.data(), s.size());
@@ -1132,44 +1162,52 @@ static uint32_t code_to_keycode(const std::string& c) {
 static void inject_input(const json& data) {
     struct wlr_surface* surface = nullptr;
     Server* srv = nullptr;
-    // Target is either a wash window (toplevel/X11) or a popup overlay,
-    // which has no win and is keyed by its video-popup channel instead.
+    // coord_d{x,y} is added to the FE's payload coords to map them into the
+    // target surface's local space (see each branch).
+    int coord_dx = 0, coord_dy = 0;
     if (uint32_t pc = data.value("popup_chan", 0U); pc) {
+        // Pointer is over the popup overlay → straight to the popup surface;
+        // the overlay's coords are already popup-local.
         auto it = g_popup_reg.find(pc);
         if (it == g_popup_reg.end()) return;
         surface = it->second.surface;
         srv = it->second.server;
         g_ptr_win = 0; // over a popup → cursor-shape routing skips it (v1)
+    } else if (!g_popup_grabs.empty()) {
+        // A menu holds a pointer grab (M8d): parent-window input is redirected
+        // to it. Parent-canvas coords → popup-local by subtracting the popup's
+        // offset within the parent. A press that lands outside the popup bounds
+        // reaches the menu client as an outside-click → it dismisses itself
+        // (and the parent never sees the stray event that used to kill it).
+        PopupGrab& gr = g_popup_grabs.back();
+        surface = gr.surface;
+        srv = gr.server;
+        g_ptr_win = 0;
+        coord_dx = -gr.off_x;
+        coord_dy = -gr.off_y;
     } else {
         uint32_t win = data.value("win", 0U);
         if (!resolve_win(win, &surface, &srv)) return;
         g_ptr_win = win;
+        // The capture is cropped to the xdg window geometry (M5c — drops the
+        // CSD shadow margin), so the FE's canvas coords are relative to the
+        // crop origin. Add it back for true surface-local coords (X11 has no
+        // xdg geometry → zero).
+        if (struct wlr_xdg_surface* xs = wlr_xdg_surface_try_from_wlr_surface(surface)) {
+            struct wlr_box geo{};
+            wlr_xdg_surface_get_geometry(xs, &geo);
+            coord_dx = geo.x;
+            coord_dy = geo.y;
+        }
     }
     if (!surface || !srv || !srv->seat) return;
     if (!data.contains("events") || !data["events"].is_array()) return;
 
-    // For logging only: the win, or popup_chan negated-ish as "p<chan>".
     uint32_t log_tgt = data.value("popup_chan", 0U) ? data.value("popup_chan", 0U)
                                                     : data.value("win", 0U);
     struct wlr_seat* seat = srv->seat;
     uint32_t t = (uint32_t)now_ms();
     bool ptr_touched = false;
-
-    // The capture is cropped to the xdg window geometry (M5c — drops the CSD
-    // shadow margin), so the FE's canvas-relative coords are relative to that
-    // crop origin, not the full surface. Add the geometry origin back so
-    // injected pointer coords are true surface-local; otherwise every event on a
-    // CSD window is offset by the shadow margin. X11 surfaces and popups have
-    // no xdg geometry → zero offset.
-    int crop_ox = 0, crop_oy = 0;
-    if (!data.value("popup_chan", 0U)) {
-        if (struct wlr_xdg_surface* xs = wlr_xdg_surface_try_from_wlr_surface(surface)) {
-            struct wlr_box geo{};
-            wlr_xdg_surface_get_geometry(xs, &geo);
-            crop_ox = geo.x;
-            crop_oy = geo.y;
-        }
-    }
 
     auto ensure_enter = [&](double x, double y) {
         if (g_ptr_surface != surface) {
@@ -1181,7 +1219,7 @@ static void inject_input(const json& data) {
     for (const auto& e : data["events"]) {
         const std::string ev = e.value("ev", std::string());
         if (ev == "motion") {
-            double x = e.value("x", 0.0) + crop_ox, y = e.value("y", 0.0) + crop_oy;
+            double x = e.value("x", 0.0) + coord_dx, y = e.value("y", 0.0) + coord_dy;
             ensure_enter(x, y);
             wlr_seat_pointer_notify_motion(seat, t, x, y);
             g_ptr_x = x;
