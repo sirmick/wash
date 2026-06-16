@@ -140,7 +140,7 @@ void composite_surface_cb(struct wlr_surface* s, int sx, int sy, void* data) {
 
 bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* renderer,
                              int crop_x, int crop_y, int crop_w, int crop_h,
-                             bool force_full) {
+                             bool force_full, bool preserve_alpha) {
     if (!surface || !renderer) return false;
 
     struct wlr_texture* texture = wlr_surface_get_texture(surface);
@@ -270,12 +270,17 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
             uint8_t t = px[0];
             px[0] = px[2];
             px[2] = t;
-            uint8_t a = px[3];
-            if (a != 0 && a != 255) {
-                int b = px[0] * 255 / a, g = px[1] * 255 / a, rr = px[2] * 255 / a;
-                px[0] = b > 255 ? 255 : (uint8_t)b;
-                px[1] = g > 255 ? 255 : (uint8_t)g;
-                px[2] = rr > 255 ? 255 : (uint8_t)rr;
+            if (!preserve_alpha) {
+                px[3] = 255; // opaque window: ignore stray client alpha so the
+                             // desktop/other windows never show through chrome
+            } else {
+                uint8_t a = px[3];
+                if (a != 0 && a != 255) {
+                    int b = px[0] * 255 / a, g = px[1] * 255 / a, rr = px[2] * 255 / a;
+                    px[0] = b > 255 ? 255 : (uint8_t)b;
+                    px[1] = g > 255 ? 255 : (uint8_t)g;
+                    px[2] = rr > 255 ? 255 : (uint8_t)rr;
+                }
             }
         }
     }

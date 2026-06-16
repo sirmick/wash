@@ -732,7 +732,7 @@ void popup_commit(struct wl_listener* listener, void* /*data*/) {
     // Capture → WebP → one framed message (≥45 bytes; the FE distinguishes
     // it from the JSON control frame by length).
     struct wlr_surface* surface = p->popup->base->surface;
-    if (!p->cap.capture(surface, p->server->renderer)) return;
+    if (!p->cap.capture(surface, p->server->renderer, 0, 0, 0, 0, false, /*preserve_alpha=*/true)) return;
     if (!p->enc_ready || p->enc.width() != p->cap.width() ||
         p->enc.height() != p->cap.height()) {
         p->enc_ready = p->enc.init(p->cap.width(), p->cap.height());
@@ -950,7 +950,7 @@ void xsurface_commit(struct wl_listener* listener, void* /*data*/) {
     XSurface* x = wl_container_of(listener, x, commit);
     if (x->is_popup) {
         if (!x->popup_chan) return;
-        if (!x->sink.cap.capture(x->xsurf->surface, x->server->renderer)) return;
+        if (!x->sink.cap.capture(x->xsurf->surface, x->server->renderer, 0, 0, 0, 0, false, /*preserve_alpha=*/true)) return;
         if (!x->sink.enc_ready || x->sink.enc.width() != x->sink.cap.width() ||
             x->sink.enc.height() != x->sink.cap.height()) {
             x->sink.enc_ready = x->sink.enc.init(x->sink.cap.width(), x->sink.cap.height());
