@@ -25,8 +25,11 @@ export interface FileClientOptions {
   instance: string;
   /** the host element to listen on for the file_channel/file_done pushes. */
   host: HTMLElement;
-  /** max cached blob URLs before FIFO eviction (default 200). */
+  /** max cached THUMBNAIL (dim>0) blob URLs before FIFO eviction (default 300). */
   maxCache?: number;
+  /** max cached FULL-image (dim=0) blob URLs (default 16). Kept separate from
+   *  thumbnails so thumbnail churn can't revoke the on-screen image. */
+  maxFull?: number;
   /** max in-flight fetches (default 6) — the rest queue. */
   maxConcurrent?: number;
   /** per-request timeout in ms (default 30_000). */
@@ -53,7 +56,13 @@ interface ChannelInfo {
 let seq = 0;
 
 export function createFileClient(opts: FileClientOptions): FileClient {
-  const maxCache = opts.maxCache ?? 200;
+  const maxThumb = opts.maxCache ?? 300;
+  // Full-resolution images get their OWN small cache, kept SEPARATE from the
+  // thumbnail cache. Otherwise churning thumbnails (a folder of thousands)
+  // would FIFO-evict and revoke the blob URL of the image currently on
+  // screen — the displayed <img> would break. The current image is always
+  // the most-recently-added to fullCache, so it never gets evicted.
+  const maxFull = opts.maxFull ?? 16;
   const maxConcurrent = opts.maxConcurrent ?? 6;
   const timeoutMs = opts.timeoutMs ?? 30_000;
 
@@ -61,10 +70,11 @@ export function createFileClient(opts: FileClientOptions): FileClient {
   const onChannel = new Map<string, (info: ChannelInfo) => void>();
   const onDone = new Map<string, (r: { status: string; error?: string }) => void>();
 
-  // cache: `${dim}:${path}` → blob-URL promise; resolvedUrl mirrors it once
-  // settled so eviction/dispose can revoke. Map iteration order = insertion
-  // order → FIFO eviction (fine for scroll-driven thumbnail loads).
-  const cache = new Map<string, Promise<string>>();
+  // Two `${dim}:${path}` → blob-URL-promise caches, bucketed by full
+  // (dim===0) vs thumbnail (dim>0). resolvedUrl mirrors both once settled so
+  // eviction/dispose can revoke. Map iteration order = insertion order → FIFO.
+  const fullCache = new Map<string, Promise<string>>();
+  const thumbCache = new Map<string, Promise<string>>();
   const resolvedUrl = new Map<string, string>();
 
   let active = 0;
@@ -147,12 +157,16 @@ export function createFileClient(opts: FileClientOptions): FileClient {
   const url = (path: string, o?: FileUrlOptions): Promise<string> => {
     const dim = o?.dim && o.dim > 0 ? Math.round(o.dim) : 0;
     const k = `${dim}:${path}`;
+    const cache = dim === 0 ? fullCache : thumbCache;
+    const cap = dim === 0 ? maxFull : maxThumb;
     const hit = cache.get(k);
     if (hit) return hit;
     const p = fetchOne(path, dim)
       .then((u) => {
         resolvedUrl.set(k, u);
-        if (cache.size > maxCache) {
+        // Evict only within this bucket — never let thumbnails revoke a full
+        // image (or vice versa).
+        if (cache.size > cap) {
           const oldest = cache.keys().next().value as string | undefined;
           if (oldest !== undefined && oldest !== k) {
             cache.delete(oldest);
@@ -177,7 +191,8 @@ export function createFileClient(opts: FileClientOptions): FileClient {
     opts.host.removeEventListener('wash:msg', onMsg);
     for (const u of resolvedUrl.values()) URL.revokeObjectURL(u);
     resolvedUrl.clear();
-    cache.clear();
+    fullCache.clear();
+    thumbCache.clear();
     onChannel.clear();
     onDone.clear();
   };
