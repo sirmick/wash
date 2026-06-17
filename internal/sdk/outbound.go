@@ -303,6 +303,14 @@ func (c *Conn) SpawnRequest(appID string) error {
 	return c.writeEvt(wire.NewEvtSpawnRequest(appID))
 }
 
+// OpenPath asks the router to open path in whichever app registered for its
+// extension (manifest Opens), launching it with `--open <path>`. The caller
+// doesn't choose the target. Requires the CapOpen capability. Fire-and-forget
+// (no result callback) — an unhandled extension is dropped router-side.
+func (c *Conn) OpenPath(path string) error {
+	return c.writeEvt(wire.NewEvtOpenRequest(path))
+}
+
 // PrepareSpawn asks the router to mint a pending-attach record for a
 // child the *caller* will fork+exec itself (typical use: wash-priv
 // launching a binary under sudo). The reply arrives asynchronously

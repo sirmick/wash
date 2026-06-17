@@ -94,6 +94,16 @@ func init() {
 			// router to spawn fm via SpawnRequest. The router checks
 			// this capability before honoring the request.
 			Capabilities: []string{sdk.CapSpawn},
+			// Text/code extensions the editor handles for open routing
+			// (fm double-click → router → wash-edit --open <path>).
+			Opens: []string{
+				".txt", ".md", ".markdown", ".rst", ".log", ".csv", ".tsv",
+				".go", ".ts", ".tsx", ".js", ".jsx", ".json", ".py", ".rb",
+				".rs", ".c", ".h", ".cc", ".cpp", ".hpp", ".java", ".kt",
+				".sh", ".bash", ".zsh", ".fish", ".html", ".css", ".scss",
+				".xml", ".yaml", ".yml", ".toml", ".ini", ".conf", ".env",
+				".sql", ".lua", ".pl", ".php", ".swift", ".gitignore",
+			},
 		},
 		Assets:  sub,
 		OnReady: onReady,
@@ -132,6 +142,13 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		log.Printf("wash-edit ready instance=%s window=%d (unconfined)", instanceID, windowID)
 	} else {
 		log.Printf("wash-edit ready instance=%s window=%d root=%s", instanceID, windowID, root)
+	}
+
+	// Launched via the router's open routing (fm double-click → wash-edit
+	// --open <path>): drive the FE to that file. cmd.open_file is the same
+	// hook external drivers already use, so the FE opens it in a tab.
+	if p := c.LaunchOpenPath(); p != "" {
+		_ = bus.Emit("cmd.open_file", map[string]any{"path": p})
 	}
 }
 

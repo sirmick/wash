@@ -69,6 +69,13 @@ const (
 	TEvtSpawnOk      = "spawn.ok"
 	TEvtSpawnErr     = "spawn.err"
 
+	// TEvtOpenRequest — app → router, "open this file in its handler". The
+	// router resolves the path's extension to a registered app (manifest
+	// Opens) and spawns it with `--open <path>`. Requires CapOpen. The
+	// caller doesn't name the target — that's what distinguishes it from
+	// spawn. Fire-and-forget (no ok/err reply); unresolved paths are logged.
+	TEvtOpenRequest = "open.request"
+
 	// EvtAppRestart / Ok / Err — cycle a background singleton service
 	// (docs/SETTINGS.md §5). app → router app.restart{app_id} with a
 	// req_id; router → app app.restart.ok{instance_id} (the freshly
@@ -381,6 +388,16 @@ func NewEvtSpawnRequest(appID string) EvtSpawnRequest {
 // type; Prepare=true; ReqID required for the caller's correlation.
 func NewEvtPrepareSpawnRequest(reqID uint64, appID string) EvtSpawnRequest {
 	return EvtSpawnRequest{T: TEvtSpawnRequest, ReqID: reqID, AppID: appID, Prepare: true}
+}
+
+// EvtOpenRequest: app → router, open Path in its registered handler.
+type EvtOpenRequest struct {
+	T    string `json:"t"`
+	Path string `json:"path"`
+}
+
+func NewEvtOpenRequest(path string) EvtOpenRequest {
+	return EvtOpenRequest{T: TEvtOpenRequest, Path: path}
 }
 
 // EvtSpawnOk: router → app, spawn succeeded.
@@ -846,6 +863,9 @@ func DecodeEvt(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TEvtSpawnRequest:
 		var m EvtSpawnRequest
+		return m, json.Unmarshal(data, &m)
+	case TEvtOpenRequest:
+		var m EvtOpenRequest
 		return m, json.Unmarshal(data, &m)
 	case TEvtSpawnOk:
 		var m EvtSpawnOk

@@ -20,6 +20,7 @@ const (
 	CapWindows      = wire.CapWindows
 	CapEnvPublish   = wire.CapEnvPublish
 	CapRestart      = wire.CapRestart
+	CapOpen         = wire.CapOpen
 )
 
 // Manifest / WindowHints / RootVariant alias the canonical wire

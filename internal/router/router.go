@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -719,7 +720,29 @@ func (r *Router) tearDown(inst *AppInstance) {
 // instancing:"singleton" and an instance is already running, return
 // THAT instance instead of starting a second one. This is how
 // sentinel addressing converges every dispatch on the same process.
-func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*AppInstance, error) {
+// resolveOpen finds the registered app that handles path's extension via
+// each manifest's Opens (wash's mime association). First enabled match wins
+// (registry order is stable). Returns nil if the path has no extension or no
+// app claims it — the caller logs and drops the open.
+func (r *Router) resolveOpen(path string) *Entry {
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext == "" {
+		return nil
+	}
+	for _, e := range r.reg.Entries() {
+		if !e.Enabled() {
+			continue
+		}
+		for _, o := range e.Manifest.Opens {
+			if strings.ToLower(o) == ext {
+				return e
+			}
+		}
+	}
+	return nil
+}
+
+func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool, extraArgs ...string) (*AppInstance, error) {
 	if entry.Manifest.Instancing == InstancingSingleton {
 		if existing := r.singletonInstance(entry.Manifest.ID); existing != nil {
 			return existing, nil
@@ -740,7 +763,7 @@ func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*Ap
 	// browser-connect sweep, which spawns several background apps at once.)
 	ch := make(chan attachResult, 1)
 	r.pendingMu.Lock()
-	sr, err := Spawn(entry.Path, entry.Manifest.ID, r.cfg.ControlSocket, r.spawnEnv())
+	sr, err := Spawn(entry.Path, entry.Manifest.ID, r.cfg.ControlSocket, r.spawnEnv(), extraArgs)
 	if err != nil {
 		r.pendingMu.Unlock()
 		return nil, fmt.Errorf("spawn %s: %w", entry.Manifest.ID, err)

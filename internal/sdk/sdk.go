@@ -194,6 +194,20 @@ func (c *Conn) Session() wire.Session { return c.session }
 // Manifest exposes the app's manifest.
 func (c *Conn) Manifest() *Manifest { return &c.def.Manifest }
 
+// LaunchOpenPath returns the file path the app was launched to open, parsed
+// from the `--open <path>` argv the router injects for an open.request (see
+// CapOpen / docs/IMAGES.md). Empty when launched normally. Apps that handle
+// opens read this in OnReady and drive their FE to that file.
+func (c *Conn) LaunchOpenPath() string {
+	args := os.Args
+	for i := 1; i+1 < len(args); i++ {
+		if args[i] == "--open" {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
 // Main is the canonical entrypoint for a wash app.
 //
 //   - If invoked as `<binary> --wash-manifest`, prints the manifest as

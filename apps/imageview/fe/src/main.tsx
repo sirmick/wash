@@ -101,31 +101,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   onMount(() => {
     const onMsg = (ev: Event) => {
       const m = (ev as CustomEvent).detail as
-        | { kind?: string; dir?: string; images?: ImageItem[]; path?: string }
+        | { kind?: string; dir?: string; images?: ImageItem[]; open?: string }
         | undefined;
-      if (m?.kind === 'scan_ok') {
-        const imgs = m.images ?? [];
-        setImages(imgs);
-        setIndex(0);
-        resetView();
-      } else if (m?.kind === 'open_file' && m.path) {
-        // piece 4: the router launched us on a specific image. Scan its
-        // folder, then select that file once the list lands.
-        wantPath = m.path;
-        send({ kind: 'scan', dir: dirOf(m.path) });
-      }
+      if (m?.kind !== 'scan_ok') return;
+      const imgs = m.images ?? [];
+      setImages(imgs);
+      // `open` (set when the router launched us with --open) selects that
+      // image; otherwise start at the first.
+      const openIdx = m.open ? imgs.findIndex((im) => im.path === m.open) : -1;
+      setIndex(openIdx >= 0 ? openIdx : 0);
+      resetView();
     };
-    // After scan_ok, jump to the requested open path if any.
-    createEffect(() => {
-      if (!wantPath) return;
-      const i = images().findIndex((im) => im.path === wantPath);
-      if (i >= 0) {
-        setIndex(i);
-        resetView();
-        wantPath = '';
-      }
-    });
-
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
         e.preventDefault();
@@ -158,10 +144,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       fileClient.dispose();
     });
   });
-
-  // wantPath: a path the router asked us to open, applied once it appears
-  // in the scanned list. Plain var — only read/written on the same tick.
-  let wantPath = '';
 
   return (
     <>
@@ -272,11 +254,6 @@ const Thumb: Component<{
     </div>
   );
 };
-
-function dirOf(p: string): string {
-  const i = p.lastIndexOf('/');
-  return i > 0 ? p.slice(0, i) : '/';
-}
 
 // ---- styles ----
 

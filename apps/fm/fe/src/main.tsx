@@ -305,6 +305,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // (no manual click-timer state — we lean on native dblclick.)
   let pathInputEl!: HTMLInputElement;
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
+  // openFile hands a file to its registered handler app via the router's
+  // open routing (BE confines, then conn.OpenPath). Used on file double-click.
+  const openFile = (p: string) => send({ kind: 'open', path: p });
 
   // Request/reply correlation + timeout live in ./bus.ts (unit-tested).
   // sendWithReply is kept as an alias so the call sites below read the
@@ -2114,6 +2117,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                     selectPath(row.path, true);
                     return;
                   }
+                  // A file: hand it to its registered app (image viewer,
+                  // editor, …) via the router's open routing.
+                  openFile(row.path);
                 }}
                 onToggle={() => toggleExpand(row.path)}
                 onContextMenu={(ev) => openContextMenu(ev, row.entry, row.path)}
@@ -2155,7 +2161,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 dir={selectedPath()}
                 entries={listings[selectedPath()] ?? []}
                 fileUrl={(p, dim) => fileClient.url(p, { dim })}
-                onOpen={selectFromGrid}
+                onSelect={selectFromGrid}
+                onActivate={(p, e) => (e.type === 'dir' ? selectPath(p, true) : openFile(p))}
               />
             </Show>
           </div>
@@ -2210,7 +2217,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             const m = menu() as { entry: Entry; path: string };
             closeMenu();
             if (m.entry.type === 'symlink') followSymlink(m.entry, m.path);
-            else selectPath(m.path, true);
+            else if (m.entry.type === 'dir') selectPath(m.path, true);
+            else openFile(m.path);
           }}
           onCopy={() => {
             const m = menu() as { path: string };
@@ -3280,7 +3288,8 @@ const FolderGrid: Component<{
   dir: string;
   entries: Entry[];
   fileUrl: (path: string, dim: number) => Promise<string>;
-  onOpen: (path: string, entry: Entry) => void;
+  onSelect: (path: string, entry: Entry) => void;
+  onActivate: (path: string, entry: Entry) => void;
 }> = (props) => (
   <div data-testid="fm-folder-grid" style={folderGridStyle}>
     <Show
@@ -3293,7 +3302,8 @@ const FolderGrid: Component<{
             entry={e}
             path={joinPath(props.dir, e.name)}
             fileUrl={props.fileUrl}
-            onOpen={props.onOpen}
+            onSelect={props.onSelect}
+            onActivate={props.onActivate}
           />
         )}
       </For>
@@ -3309,7 +3319,8 @@ const FolderTile: Component<{
   entry: Entry;
   path: string;
   fileUrl: (path: string, dim: number) => Promise<string>;
-  onOpen: (path: string, entry: Entry) => void;
+  onSelect: (path: string, entry: Entry) => void;
+  onActivate: (path: string, entry: Entry) => void;
 }> = (props) => {
   const [thumb, setThumb] = createSignal<string | null>(null);
   const [failed, setFailed] = createSignal(false);
@@ -3336,8 +3347,8 @@ const FolderTile: Component<{
       data-type={props.entry.type}
       style={tileStyle}
       title={props.entry.name}
-      onClick={() => props.onOpen(props.path, props.entry)}
-      onDblClick={() => props.onOpen(props.path, props.entry)}
+      onClick={() => props.onSelect(props.path, props.entry)}
+      onDblClick={() => props.onActivate(props.path, props.entry)}
     >
       <div style={tileThumbStyle}>
         <Show when={thumb() && !failed()} fallback={<EntryIcon entry={props.entry} size={34} />}>

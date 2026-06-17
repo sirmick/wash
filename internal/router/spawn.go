@@ -27,11 +27,12 @@ import (
 // per-spawn ring buffer captures the tail for crash reporting. On
 // abnormal exit the router pulls the tail out of LogTail() and
 // ships it to the shell as a ShellAppCrashed event.
-func Spawn(binary, appID, display string, extraEnv []string) (*SpawnResult, error) {
+func Spawn(binary, appID, display string, extraEnv, extraArgs []string) (*SpawnResult, error) {
 	if display == "" {
 		return nil, fmt.Errorf("spawn %s: WASH_DISPLAY (control socket) is required — was the router started with --control-socket none?", appID)
 	}
-	cmd := exec.Command(binary)
+	// extraArgs are appended to argv (e.g. ["--open", path] for open.request).
+	cmd := exec.Command(binary, extraArgs...)
 	// Apps inherit the router's environment (HOME, PATH, $SHELL, …)
 	// so a terminal can run real shell sessions and a launched
 	// program can find its own files. The wash-specific env vars

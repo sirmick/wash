@@ -185,6 +185,12 @@ const (
 	// privileged action — the settings app is the canonical holder.
 	// Restricted router-side to surface=background targets.
 	CapRestart = "restart"
+
+	// CapOpen lets an app ask the router to open a file path in whichever
+	// app registered for that extension (the open.request event). Narrower
+	// than CapSpawn: the caller can't pick the target app, only hand off a
+	// file to its declared handler. The file manager is the canonical holder.
+	CapOpen = "open"
 )
 
 // MaxIconBytes is the cap on the inline icon data URI per WIRE.md §5.1.
@@ -210,6 +216,13 @@ type Manifest struct {
 	Instancing   string       `json:"instancing"`
 	Capabilities []string     `json:"capabilities"`
 	Window       *WindowHints `json:"window,omitempty"`
+
+	// Opens declares the file extensions this app handles for the
+	// open.request flow (wash's mime-association): lowercase, dot-prefixed
+	// (".png", ".md"). The router builds an extension→app index from every
+	// manifest's Opens; opening a path launches its handler with
+	// `--open <path>`. First registered handler for an extension wins.
+	Opens []string `json:"opens,omitempty"`
 
 	// SettingsPanel, when set, declares a control panel this app
 	// supplies to the settings host. The host discovers it via

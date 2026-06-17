@@ -86,6 +86,7 @@ func init() {
 			Icon:            fmIcon,
 			Accent:          "#6090e0",
 			Instancing:      sdk.InstancingMulti,
+			Capabilities:    []string{sdk.CapOpen},
 			Window:          &sdk.WindowHints{DefaultWidth: 760, DefaultHeight: 520},
 		},
 		Assets:             sub,
@@ -152,6 +153,10 @@ type listReq struct {
 }
 
 type readReq struct {
+	Path string `json:"path"`
+}
+
+type openReq struct {
 	Path string `json:"path"`
 }
 
@@ -325,6 +330,17 @@ func registerHandlers(b *sdk.Bus) {
 	// Image bytes / thumbnails over a raw channel, for the folder-grid
 	// preview. Confined to the same fs root as every other fm operation.
 	thumbs.RegisterServer(b, fmFS.Confine)
+
+	// open: double-clicking a file in the FE asks the router to open it in
+	// whichever app registered for the extension (image viewer, editor, …).
+	// Confine first so we never hand the router a path outside our root.
+	sdk.HandleVoid(b, "open", func(conn *sdk.Conn, _ string, req openReq) error {
+		abs, err := fmFS.Confine(req.Path)
+		if err != nil {
+			return fsErr(err, req.Path)
+		}
+		return conn.OpenPath(abs)
+	})
 
 	// Fire-and-forget commands (no reply).
 	sdk.HandleVoid(b, "request_initial", func(_ *sdk.Conn, _ string, _ struct{}) error {

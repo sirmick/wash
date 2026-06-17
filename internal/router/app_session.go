@@ -357,6 +357,12 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 			return inst.handlePrepareSpawn(m)
 		}
 		return inst.handleSpawnRequest(m)
+	case wire.TEvtOpenRequest:
+		var m wire.EvtOpenRequest
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.handleOpenRequest(m)
 	case wire.TEvtEnvPublish:
 		var m wire.EvtEnvPublish
 		if err := json.Unmarshal(payload, &m); err != nil {
@@ -728,6 +734,29 @@ func (inst *AppInstance) handleSpawnRequest(m wire.EvtSpawnRequest) error {
 	return nil
 }
 
+// handleOpenRequest resolves m.Path's extension to a registered handler app
+// (manifest Opens) and spawns it with `--open <path>`. Gated on CapOpen.
+// Fire-and-forget: an unhandled extension, protocol mismatch, or spawn
+// failure is logged, not replied — the caller keeps its own fallback (e.g.
+// fm's inline preview).
+func (inst *AppInstance) handleOpenRequest(m wire.EvtOpenRequest) error {
+	if !inst.Manifest.HasCapability(CapOpen) {
+		inst.router.log("open: instance=%s lacks CapOpen", inst.InstanceID)
+		return nil
+	}
+	target := inst.router.resolveOpen(m.Path)
+	if target == nil {
+		inst.router.log("open: no handler for %q", m.Path)
+		return nil
+	}
+	if target.Manifest.ProtocolVersion != ProtocolVersion {
+		inst.router.log("open: handler %s protocol mismatch", target.Manifest.ID)
+		return nil
+	}
+	go inst.router.spawnForOpen(target, m.Path)
+	return nil
+}
+
 // handlePrepareSpawn enforces the prepare_spawn capability, mints an
 // instance id + attach token, and replies with a prepared
 // EvtSpawnOk so the calling app can fork+exec the registered binary
@@ -839,6 +868,15 @@ func (r *Router) spawnChild(target *Entry, requester *AppInstance) {
 	}
 	if werr := requester.WriteEvt(wire.NewEvtSpawnOk(target.Manifest.ID, inst.InstanceID)); werr != nil {
 		r.log("spawn %s: ok reply to instance=%s lost: %v (spawned instance=%s)", target.Manifest.ID, requester.InstanceID, werr, inst.InstanceID)
+	}
+}
+
+// spawnForOpen launches an open-request target with `--open <path>`. Unlike
+// spawnChild it sends no spawn ok/err back to the requester — open is
+// fire-and-forget — so a failure is only logged.
+func (r *Router) spawnForOpen(target *Entry, path string) {
+	if _, err := r.spawnAndRun(context.Background(), target, false, "--open", path); err != nil {
+		r.log("open: spawn %s for %q: %v", target.Manifest.ID, path, err)
 	}
 }
 

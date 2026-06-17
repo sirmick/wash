@@ -71,7 +71,13 @@ func init() {
 			Accent:          "#d0876f",
 			Instancing:      sdk.InstancingMulti,
 			Capabilities:    []string{},
-			Window:          &sdk.WindowHints{DefaultWidth: 900, DefaultHeight: 640},
+			// Image extensions this app handles for open routing (fm
+			// double-click → router → wash-imageview --open <path>).
+			Opens: []string{
+				".jpg", ".jpeg", ".png", ".gif", ".webp",
+				".bmp", ".svg", ".avif", ".ico", ".tiff", ".tif",
+			},
+			Window: &sdk.WindowHints{DefaultWidth: 900, DefaultHeight: 640},
 		},
 		Assets:  sub,
 		OnReady: onReady,
@@ -112,15 +118,30 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	// Image bytes + thumbnails over a raw channel, confined to the fs root.
 	thumbs.RegisterServer(bus, ivFS.Confine)
 
+	// launchOpen: the file the router told us to open (--open argv). The
+	// first default scan resolves to its folder and tells the FE to select
+	// it; consumed after, so later folder switches behave normally.
+	launchOpen := c.LaunchOpenPath()
+
 	// scan lists the image files in a directory (the open path's folder,
 	// or the default) and pushes them to the FE.
 	sdk.HandleVoid(bus, "scan", func(_ *sdk.Conn, _ string, req scanReq) error {
 		dir := req.Dir
+		open := ""
 		if dir == "" {
-			dir = defaultDir()
+			if launchOpen != "" {
+				dir, open, launchOpen = filepath.Dir(launchOpen), launchOpen, ""
+			} else {
+				dir = defaultDir()
+			}
 		}
 		abs, images := scanImages(dir)
-		_ = bus.Emit("scan_ok", map[string]any{"dir": abs, "images": images})
+		payload := map[string]any{"dir": abs, "images": images}
+		if open != "" {
+			// Match the item path format scanImages emits so the FE selects it.
+			payload["open"] = filepath.Join(abs, filepath.Base(open))
+		}
+		_ = bus.Emit("scan_ok", payload)
 		return nil
 	})
 }
