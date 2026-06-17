@@ -34,6 +34,10 @@ export interface AudioSource {
   register(meta: { title: string; artist?: string }): void;
   /** schedule a throttled report from snapshot(). */
   report(): void;
+  /** report a locally-driven output-volume change (0..1) up to the service,
+   *  so the sidebar's master slider tracks the app's own volume control.
+   *  Throttled (latest wins) so a slider drag coalesces. */
+  reportVolume(vol: number): void;
   /** unregister + detach the cmd listener. */
   dispose(): void;
 }
@@ -69,17 +73,39 @@ export function createAudioSource(opts: AudioSourceOptions): AudioSource {
     timer = window.setTimeout(flush, opts.throttleMs ?? 400);
   };
 
+  // Volume reports get their own throttle: a slider drag fires a burst of
+  // per-tick changes, and we only need the service to land on the final
+  // value (latest-wins) rather than relay every intermediate step.
+  let volTimer: number | null = null;
+  let pendingVol: number | null = null;
+  const flushVol = () => {
+    volTimer = null;
+    if (pendingVol != null) {
+      send({ kind: 'audio_report_volume', value: pendingVol });
+      pendingVol = null;
+    }
+  };
+
   return {
     register(meta) {
       send({ kind: 'audio_register', title: meta.title, artist: meta.artist ?? '' });
       report();
     },
     report,
+    reportVolume(vol) {
+      pendingVol = vol;
+      if (volTimer != null) return;
+      volTimer = window.setTimeout(flushVol, opts.throttleMs ?? 400);
+    },
     dispose() {
       opts.host.removeEventListener('wash:msg', onMsg);
       if (timer != null) {
         window.clearTimeout(timer);
         timer = null;
+      }
+      if (volTimer != null) {
+        window.clearTimeout(volTimer);
+        volTimer = null;
       }
       send({ kind: 'audio_unregister' });
     },

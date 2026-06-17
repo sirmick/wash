@@ -57,6 +57,11 @@ function WashampApp(props: WashAppProps) {
   let pendingSeek = -1;
   let lastPersisted: PersistedWashamp = {};
   let persistTimer: ReturnType<typeof setTimeout> | undefined;
+  // Last volume (0..100) we've synced with the audio service, used to tell a
+  // local change (user moved the Webamp knob → report it up so the sidebar
+  // tracks) apart from a service-driven one (handleCmd set it → don't bounce
+  // it back). -1 until the first sync.
+  let lastVolume = -1;
 
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
 
@@ -271,10 +276,33 @@ function WashampApp(props: WashAppProps) {
         wa.previousTrack();
         break;
       case 'volume':
-        if (typeof value === 'number') wa.setVolume(Math.round(value * 100));
+        if (typeof value === 'number') {
+          // Record before applying: the resulting onStateChange must see
+          // this as already-synced and not report it back to the service.
+          lastVolume = Math.round(value * 100);
+          wa.setVolume(lastVolume);
+        }
         break;
     }
     scheduleReport();
+  }
+
+  // syncVolumeToService pushes a locally-driven Webamp volume change up to
+  // the control plane so the sidebar's master slider tracks it. Only fires
+  // when the volume differs from what we last synced (lastVolume), so a
+  // service-driven setVolume — or any non-volume store tick — is a no-op.
+  function syncVolumeToService() {
+    const wa = webamp;
+    if (!wa || !audio) return;
+    let v: number;
+    try {
+      v = (wa.store.getState().media as { volume?: number }).volume ?? 100;
+    } catch {
+      return;
+    }
+    if (v === lastVolume) return;
+    lastVolume = v;
+    audio.reportVolume(v / 100);
   }
 
   async function initWebamp(m: TracksOk) {
@@ -335,6 +363,7 @@ function WashampApp(props: WashAppProps) {
     // playback actually starts (seekToTime on unloaded media no-ops).
     wa.__onStateChange(() => {
       scheduleReport();
+      syncVolumeToService();
       if (pendingSeek > 0) {
         try {
           if (String(wa.getMediaStatus()).toUpperCase() === 'PLAYING') {
@@ -359,7 +388,13 @@ function WashampApp(props: WashAppProps) {
     // resumes from the saved position via pendingSeek above.
     if (saved) {
       try {
-        if (saved.vol != null) wa.setVolume(saved.vol);
+        // Seed lastVolume so the restore's setVolume isn't mistaken for a
+        // user change and pushed up as the new master — the service hands us
+        // the real master via the register cmd instead.
+        if (saved.vol != null) {
+          lastVolume = saved.vol;
+          wa.setVolume(saved.vol);
+        }
         if (saved.shuffle && !wa.isShuffleEnabled()) wa.toggleShuffle();
         if (saved.repeat && !wa.isRepeatEnabled()) wa.toggleRepeat();
         const idx = m.tracks.findIndex((t) => t.url === saved!.track_url);

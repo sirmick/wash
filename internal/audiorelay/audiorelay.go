@@ -39,6 +39,12 @@ func Register(bus *sdk.Bus) {
 	sdk.HandleVoid(bus, "audio_unregister", func(conn *sdk.Conn, _ string, _ struct{}) error {
 		return to(conn, map[string]any{"kind": "unregister"})
 	})
+	// audio_report_volume: the producer's own volume control moved (e.g. the
+	// Webamp slider). Push it up as the new master so the sidebar tracks it;
+	// the service skips echoing the cmd back to us (see report_volume).
+	sdk.HandleVoid(bus, "audio_report_volume", func(conn *sdk.Conn, _ string, req volumeReq) error {
+		return to(conn, map[string]any{"kind": "report_volume", "value": req.Value})
+	})
 
 	// service → FE: transport/volume command.
 	sdk.HandleFromVoid(bus, "cmd", func(conn *sdk.Conn, _ string, req cmdReq, from wire.Sender) error {
@@ -69,4 +75,8 @@ type reportReq struct {
 type cmdReq struct {
 	Action string   `json:"action"`
 	Value  *float64 `json:"value"`
+}
+
+type volumeReq struct {
+	Value float64 `json:"value"`
 }
