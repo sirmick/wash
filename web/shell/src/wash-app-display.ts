@@ -176,6 +176,10 @@ export class WashAppDisplay extends HTMLElement {
       cancelAnimationFrame(this.rafID);
       this.rafID = 0;
     }
+    // Reset drag state so a reconnected element (custom elements can be
+    // re-adopted into the DOM) doesn't start stuck mid-move/resize.
+    this.moving = false;
+    this.resizing = false;
   }
 
   // --- input capture (docs/DISPLAY.md §6) ----------------------------

@@ -17,7 +17,6 @@
 #include <cstdint>
 #include <vector>
 #include <map>
-#include <cstdint>
 
 struct wlr_surface;
 struct wlr_renderer;
@@ -26,6 +25,11 @@ namespace wash {
 
 class SurfaceCapture {
 public:
+    SurfaceCapture() = default;
+    // Drops the pooled GPU render target so a closed window doesn't leak it.
+    ~SurfaceCapture();
+    SurfaceCapture(const SurfaceCapture&) = delete;            // owns a wlr_buffer
+    SurfaceCapture& operator=(const SurfaceCapture&) = delete;
     // capture reads `surface`'s current texture into the pooled buffer.
     // Returns true on success; false if the surface has no texture yet
     // or readback failed. `renderer` is the compositor's renderer.

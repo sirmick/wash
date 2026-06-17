@@ -232,7 +232,6 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
     wlr_surface_for_each_surface(surface, composite_surface_cb, &ctx);
     if (!wlr_render_pass_submit(pass)) return false;
     if (ctx.drawn == 0) return false; // nothing textured yet
-    seq_.swap(next); // adopt this frame's seqs (prunes vanished surfaces)
 
     // Decide the dirty rect from the tree walk. A resize/first-frame, a
     // newly-appeared surface, or an explicit force_full means the whole
@@ -298,9 +297,22 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
         }
     }
 
+    // Adopt this frame's seqs ONLY now that the read-back succeeded — if it
+    // had failed above we keep the old seqs so the changed surfaces are
+    // retried next frame instead of being treated as already-encoded (which
+    // would drop their update and leave stale pixels). Prunes vanished surfaces.
+    seq_.swap(next);
+
     w_ = w;
     h_ = h;
     return true;
+}
+
+SurfaceCapture::~SurfaceCapture() {
+    // Drop the pooled GPU render target (allocated lazily, reused across
+    // frames, previously freed only on resize) so closing a window doesn't
+    // leak its wlr_buffer.
+    if (render_buf_) wlr_buffer_drop((struct wlr_buffer*)render_buf_);
 }
 
 } // namespace wash

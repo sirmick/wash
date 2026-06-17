@@ -67,3 +67,7 @@ coverage/
 # on, kept here for reference only.
 /harbor.config
 /test-net.py
+
+# Python bytecode (test guests)
+__pycache__/
+*.pyc
