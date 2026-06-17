@@ -1209,36 +1209,52 @@ static void inject_input(const json& data) {
     uint32_t t = (uint32_t)now_ms();
     bool ptr_touched = false;
 
-    auto ensure_enter = [&](double x, double y) {
-        if (g_ptr_surface != surface) {
-            wlr_seat_pointer_notify_enter(seat, surface, x, y);
-            g_ptr_surface = surface;
+    // Pointer focus follows the actual (sub)surface under the cursor, not just
+    // the root toplevel. Clients like Chromium/Electron render dropdowns,
+    // <select> popups and other interactive content into wl_subsurfaces; we
+    // must descend with wlr_surface_surface_at and enter THAT child with its
+    // own surface-local coords. Entering only the root surface lands the click
+    // on the wrong surface and the child widget never sees it — the omnibox
+    // "click does nothing, keyboard works" bug. g_ptr_x/g_ptr_y stay in the
+    // resolved-target's local space (root toplevel / popup); cx/cy carry the
+    // descended child-local coords for the current event.
+    double cx = 0, cy = 0;
+    auto focus_child = [&](double rx, double ry) -> struct wlr_surface* {
+        double sx = 0, sy = 0;
+        struct wlr_surface* child = wlr_surface_surface_at(surface, rx, ry, &sx, &sy);
+        if (!child) { child = surface; sx = rx; sy = ry; } // over a margin / no input region
+        if (g_ptr_surface != child) {
+            wlr_seat_pointer_notify_enter(seat, child, sx, sy);
+            g_ptr_surface = child;
         }
+        cx = sx; cy = sy;
+        return child;
     };
 
     for (const auto& e : data["events"]) {
         const std::string ev = e.value("ev", std::string());
         if (ev == "motion") {
             double x = e.value("x", 0.0) + coord_dx, y = e.value("y", 0.0) + coord_dy;
-            ensure_enter(x, y);
-            wlr_seat_pointer_notify_motion(seat, t, x, y);
             g_ptr_x = x;
             g_ptr_y = y;
+            focus_child(x, y);
+            wlr_seat_pointer_notify_motion(seat, t, cx, cy);
             ptr_touched = true;
         } else if (ev == "button") {
-            ensure_enter(g_ptr_x, g_ptr_y);
             const std::string btn = e.value("btn", std::string("left"));
             uint32_t code = btn == "right"  ? BTN_RIGHT
                           : btn == "middle" ? BTN_MIDDLE
                                             : BTN_LEFT;
             bool down = e.value("state", std::string()) == "down";
+            struct wlr_surface* child = focus_child(g_ptr_x, g_ptr_y);
             wlr_seat_pointer_notify_button(
                 seat, t, code, down ? WLR_BUTTON_PRESSED : WLR_BUTTON_RELEASED);
-            wlr_log(WLR_INFO, "wash-display: inject win=%u button %s %s", log_tgt,
-                    btn.c_str(), down ? "down" : "up");
+            wlr_log(WLR_INFO, "wash-display: inject win=%u button %s %s @ %.0f,%.0f%s",
+                    log_tgt, btn.c_str(), down ? "down" : "up", cx, cy,
+                    child != surface ? " [subsurface]" : "");
             ptr_touched = true;
         } else if (ev == "axis") {
-            ensure_enter(g_ptr_x, g_ptr_y);
+            focus_child(g_ptr_x, g_ptr_y);
             const std::string ax = e.value("axis", std::string("v"));
             double delta = e.value("delta", 0.0);
             enum wlr_axis_orientation orient =
