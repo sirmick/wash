@@ -41,6 +41,8 @@ export { TransportControls, VolumeSlider, NowPlaying, SeekBar, MediaList } from 
 export type { TransportControlsProps, VolumeSliderProps, NowPlayingProps, SeekBarProps, MediaListProps } from './media';
 export { createAudioSource } from './audio-source';
 export type { AudioSource, AudioSnapshot, AudioSourceOptions } from './audio-source';
+export { createFileClient } from './file-client';
+export type { FileClient, FileClientOptions, FileUrlOptions } from './file-client';
 export { washAssetUrl } from './assets';
 export { IngressFrame } from './ingress-frame';
 export type { IngressFrameProps } from './ingress-frame';
