@@ -332,23 +332,37 @@ get a fresh snapshot on (re)subscribe, not a replay of events missed while
 disconnected. A notification or job-completion that fires during an SSH blip is
 lost. Acceptable; note it in the UI where it matters.
 
-**Relay QoS — the relay is class-aware, not opaque.** A forwards B's wire **one
-frame at a time, preserving each frame's wire CLASS** (it reads the 8-byte
+**Relay QoS — the relay is class-aware, and creditless.** A forwards B's wire
+**one frame at a time, preserving each frame's wire CLASS** (it reads the 8-byte
 header for class + length; the payload is forwarded verbatim — header yes,
 payload never; not federation, §13). So B's *interactive* frames (keystrokes,
-focus, control, the bundle) bypass credit and jump the queue, while B's *bulk*
-(pty output, file streams) is credit-windowed and yields to A's **local**
-interactive traffic — a remote `cp` flooding output can't make the remote
-terminal choppy, and a remote bulk stream can't OOM A or the browser. This is
-load-bearing for the M4/M5 raw-channel apps (`wash-term`, file, video); without
-it, B's bulk would head-of-line-block B's interactive on a single lane.
+focus, control, the bundle) jump A's strict-priority scheduler ahead of B's
+*bulk* (pty output, file streams), which yields to A's **local** interactive
+traffic — a remote `cp` flooding output can't make the remote terminal choppy.
 
-What it does **not** yet do: isolate **two concurrent B bulk streams** (a file
-upload *and* a video share one credit window and interleave FIFO). That needs
-one relay channel per B-channel — deliberately deferred; the common case
-(interactive vs bulk) is handled, and concurrent-bulk degrades gracefully rather
-than breaking. (The opaque single-Bulk-lane v0 of the relay is the prior commit;
-this is its class-preserving successor — same single channel, smarter framing.)
+The relay peer channel carries **no credit window of its own** (`channelBinding.
+noCredit`). Flow control is end to end and B's job: B already paces *each* of its
+inner channels by the FE's per-channel credit (the FE's B-`RouterClient` grants
+credit on B's channels as it absorbs them, §4). An A-side aggregate window would
+only **double-gate** the same flow — and worse, its blocking credit `Reserve`
+runs in the single `pumpPeerToShell` goroutine, so once that one window emptied
+(routine under any sustained download) the pump couldn't read B's *next*
+interactive frame: the very head-of-line block the class-preservation exists to
+prevent, reintroduced at the read boundary. Creditless, the pump never blocks
+reading B's socket. A-side memory stays bounded because B can only have its
+per-channel windows' worth in flight, and the FE throttles B by withholding
+credit on B's inner channels the moment it stops absorbing; the only remaining
+backstop is A's `scheduler.Submit` blocking when its Bulk queue fills, which
+happens only when the FE is genuinely wedged (and B is throttled by then anyway).
+
+This also makes **concurrent B bulk streams** fair for free: two downloads (or a
+download + video) are both Bulk, interleave FIFO in A's scheduler, and each is
+independently paced by *its own* B-side per-channel window — no shared relay
+window couples them, and neither can starve the other or the remote terminal. No
+per-B-channel relay demux is needed; per-class scheduling + B's per-channel
+credit already deliver the isolation a demux was going to add. (History: the v0
+relay was an opaque single Bulk lane; then class-preserving but A-credit-gated;
+this is the creditless successor — same single channel, simpler and HOL-free.)
 
 ---
 
@@ -418,8 +432,9 @@ reconnect loop is the existing shell reconnect logic, instantiated per origin.
   unauthenticated full wash session, a local privilege escalation on a shared
   host. `--listen-raw unix:/path` (chmod `0600` by the router after bind) makes
   the listener uid-only, so "reaching it requires the SSH session" is actually
-  true. The relay's flow control is credit-windowed and Bulk-class (yields to
-  the local desktop; a remote flood can't OOM A or the browser); the FE caps a
+  true. The relay's flow control is end-to-end (B's per-channel credit, §7) and
+  Bulk yields to the local desktop in A's scheduler; A's buffering is bounded by
+  B's per-channel windows (a remote flood can't OOM A), and the FE caps a
   declared frame length at `wire.MaxPayload` so a hostile stream can't balloon
   memory. Only `com.wash.remote` may register a relay socket (router-attested
   app id), and the FE references origins, never paths — no arbitrary-dial surface.

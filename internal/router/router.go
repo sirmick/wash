@@ -572,12 +572,23 @@ type channelBinding struct {
 	// channel (docs/QOS.md §5). Bulk-class router→shell writes
 	// reserve from it; the FE replenishes via channel.credit on
 	// the shell control channel. Interactive-class writes
-	// (bundle/replay transactional flows) bypass it.
+	// (bundle/replay transactional flows) bypass it. Nil when
+	// noCredit is set (relay channels — see below).
 	credit *ChannelCredit
+
+	// noCredit skips the per-channel credit ledger entirely. Set for
+	// remote-apps relay (peer) channels: the relay is a verbatim conduit
+	// and host B already does per-channel flow control end-to-end (the FE
+	// credits B's inner channels as it absorbs them, docs/REMOTE.md §7). An
+	// A-side window would only double-gate — and worse, its blocking
+	// Reserve runs in the single pumpPeerToShell goroutine, so an exhausted
+	// aggregate window head-of-line-blocks B's interactive frames behind
+	// B's bulk. Creditless, the relay never blocks reading B's socket.
+	noCredit bool
 }
 
 func (r *Router) registerChannel(b *channelBinding) {
-	if b.credit == nil {
+	if b.credit == nil && !b.noCredit {
 		b.credit = NewChannelCredit(DefaultChannelCredit)
 	}
 	r.channelsMu.Lock()

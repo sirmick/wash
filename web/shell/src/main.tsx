@@ -26,7 +26,6 @@ import {
 } from './clients';
 import { beginBundle, finishBundle, pushBundleBytes } from './assets';
 import { RelayChannelSocket } from './relay-socket';
-import { CLASS_BULK, classOf } from './wire';
 
 const __washLoadT0 = performance.now();
 import { washFetch, handleAssetReadOK, handleAssetReadErr, pushAssetBytes, finishAsset } from './wash-fetch';
@@ -426,19 +425,16 @@ function makeHandlers(client: RouterClient): ClientHandlers {
   onRaw: (channelID, bytes) => {
     // Remote-apps relay: a peer channel's bytes are host B's wire — feed
     // them to its RelayChannelSocket (which deframes + drives B's Conn).
-    // Peer channels only ever bind on the local connection. The router
-    // forwards one B-frame per raw frame, preserving B's class (docs/REMOTE.md
-    // §7); only Bulk frames reserved credit there, so replenish only for those
-    // — matching the router keeps the window accounting correct (B's
-    // interactive bypasses credit and isn't throttled). The class is byte 0 of
-    // the relayed B-frame.
+    // Peer channels only ever bind on the local connection. The peer channel
+    // is a CREDITLESS verbatim conduit on A (docs/REMOTE.md §7): we emit no
+    // channel.credit for it. Flow control is end to end — B's RouterClient
+    // (peer.sock's Conn) credits each of B's INNER channels as it absorbs
+    // them, which is the real backpressure; an A-side window would only
+    // double-gate and head-of-line-block B's interactive behind B's bulk.
     if (isLocal) {
       const peer = peerSockets.get(channelID);
       if (peer) {
         peer.sock.feed(bytes);
-        if (bytes.length > 0 && classOf(bytes[0]) === CLASS_BULK) {
-          client.credit.absorbed(channelID, bytes.length);
-        }
         return;
       }
     }

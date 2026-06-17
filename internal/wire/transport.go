@@ -40,6 +40,14 @@ func (s *StreamTransport) ReadFrame() (Frame, error) {
 	return DecodeFrame(s.rwc)
 }
 
+// ReadFrameRaw reads one frame and returns its complete wire bytes
+// (header + payload) without decoding the payload — see DecodeFrameRaw.
+// The relay's verbatim splice uses it to avoid a decode/re-encode per
+// frame.
+func (s *StreamTransport) ReadFrameRaw() ([]byte, error) {
+	return DecodeFrameRaw(s.rwc)
+}
+
 func (s *StreamTransport) WriteFrame(f Frame) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

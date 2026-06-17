@@ -5,6 +5,7 @@ import (
 	"context"
 	"net"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,6 +129,109 @@ func TestPeerRelaySplice(t *testing.T) {
 	bf, derr := wire.DecodeFrame(bytes.NewReader(echo.Payload))
 	if derr != nil || string(bf.Payload) != "PING123" {
 		t.Fatalf("echo: got %q (err %v), want PING123", echo.Payload, derr)
+	}
+
+	cancel()
+	<-done
+}
+
+// TestPeerRelayNoHeadOfLineBlocking is the regression for the creditless
+// verbatim relay (docs/REMOTE.md §7). Host B sends more Bulk bytes than the
+// old per-channel credit window (64 KiB) WITHOUT the FE ever granting credit,
+// then an Interactive frame. Under the old design the pump blocked in a credit
+// Reserve on the second bulk frame and never even read the interactive one —
+// B's terminal froze behind a download. Creditless, the pump never blocks
+// reading B's socket, so the interactive frame is forwarded (and, being higher
+// priority, arrives promptly) even though no credit was issued.
+func TestPeerRelayNoHeadOfLineBlocking(t *testing.T) {
+	reg := NewRegistry()
+	r := NewRouter(Config{NoSession: true}, reg, func(f string, a ...any) { t.Logf("router: "+f, a...) })
+
+	// Fake host B: two 50 KiB Bulk frames (100 KiB > the 64 KiB window the
+	// relay channel used to carry), then a small Interactive marker.
+	big := strings.Repeat("X", 50*1024)
+	sock := filepath.Join(t.TempDir(), "b.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				bt := wire.NewStreamTransport(c)
+				_ = bt.WriteFrame(bframe(wire.ClassBulk, big))
+				_ = bt.WriteFrame(bframe(wire.ClassBulk, big))
+				_ = bt.WriteFrame(bframe(wire.ClassInteractive, "AFTER_BULK"))
+				<-make(chan struct{}) // hold the conn open
+			}()
+		}
+	}()
+
+	r.registerPeer("B", "unix", sock)
+
+	shellPair := wiretest.NewPipePair()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); _ = r.HandleShell(ctx, shellPair.EndA()) }()
+	end := shellPair.EndB()
+
+	if _, ok := readCtrl(t, end).(wire.ShellCatalog); !ok {
+		t.Fatalf("expected ShellCatalog first")
+	}
+	writeCtrl(t, end, wire.NewShellPeerAttach("B"))
+
+	var ch uint32
+	deadline := time.Now().Add(5 * time.Second)
+	for ch == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("never received peer channel.bind")
+		}
+		f, err := end.ReadFrame()
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if f.Channel != ChannelControl {
+			continue
+		}
+		if m, _ := wire.DecodeCtrl(f.Payload); m != nil {
+			if b, ok := m.(wire.ShellChannelBind); ok && b.Kind == wire.ChannelKindPeer {
+				ch = b.ChannelID
+			}
+		}
+	}
+
+	// The FE issues NO channel.credit. Watch relay frames for the interactive
+	// marker. If credit gated the relay, the pump would be parked on the second
+	// bulk frame's Reserve and the marker would never be forwarded. Read in a
+	// goroutine + select-on-timeout so that regression fails fast here rather
+	// than hanging on a blocked ReadFrame until the go-test deadline.
+	found := make(chan struct{})
+	go func() {
+		for {
+			f, err := end.ReadFrame()
+			if err != nil {
+				return
+			}
+			if f.Channel != ch {
+				continue
+			}
+			bf, derr := wire.DecodeFrame(bytes.NewReader(f.Payload))
+			if derr == nil && bf.Class() == wire.ClassInteractive && string(bf.Payload) == "AFTER_BULK" {
+				close(found)
+				return
+			}
+		}
+	}()
+	select {
+	case <-found:
+	case <-time.After(5 * time.Second):
+		t.Fatal("interactive marker never arrived — relay head-of-line-blocked on bulk")
 	}
 
 	cancel()

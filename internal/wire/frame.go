@@ -102,7 +102,16 @@ func (f Frame) End() bool { return f.Flags&FlagEnd != 0 }
 // implicit default for any sender that hasn't set class bits) maps to
 // ClassInteractive — the safe default per QOS.md §3.
 func (f Frame) Class() Class {
-	return Class((f.Flags & flagClassMask) >> flagClassShift)
+	return ClassOfFlags(f.Flags)
+}
+
+// ClassOfFlags returns the priority class encoded in a frame's flags
+// byte. Useful for code that holds a frame's raw wire bytes and needs
+// its class without decoding the whole frame — the remote-apps relay's
+// verbatim splice (peer.go) reads the class from byte 0 to schedule the
+// frame while forwarding the payload opaquely.
+func ClassOfFlags(flags byte) Class {
+	return Class((flags & flagClassMask) >> flagClassShift)
 }
 
 // WithClass returns a copy of f with the class bits set to c. Used
@@ -193,4 +202,44 @@ func DecodeFrame(r io.Reader) (Frame, error) {
 		}
 	}
 	return f, nil
+}
+
+// DecodeFrameRaw reads exactly one frame from r and returns its complete
+// wire bytes (header + payload) as a single slice, WITHOUT separating the
+// payload into a Frame. The remote-apps relay (peer.go) uses this for its
+// verbatim splice: it needs only the frame's class (byte 0) and length to
+// delimit and schedule the frame, never the decoded payload — so a full
+// DecodeFrame followed by a re-EncodeFrame is wasted CPU + an allocation
+// per frame. The returned slice is freshly allocated and owned by the
+// caller. Validates the same v0.0 invariants as DecodeFrame (length cap,
+// reserved bits, END), so a malformed B-frame can't desync the stream.
+func DecodeFrameRaw(r io.Reader) ([]byte, error) {
+	var hdr [headerSize]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, ErrShortHeader
+		}
+		return nil, err
+	}
+	length := binary.BigEndian.Uint32(hdr[4:8])
+	if length > MaxPayload {
+		return nil, fmt.Errorf("%w: announced %d", ErrOversizeFrame, length)
+	}
+	if hdr[0]&flagReserved != 0 {
+		return nil, ErrReservedFlag
+	}
+	if hdr[0]&FlagEnd == 0 {
+		return nil, ErrEndNotSet
+	}
+	buf := make([]byte, headerSize+int(length))
+	copy(buf, hdr[:])
+	if length > 0 {
+		if _, err := io.ReadFull(r, buf[headerSize:]); err != nil {
+			if errors.Is(err, io.ErrUnexpectedEOF) {
+				return nil, ErrShortPayload
+			}
+			return nil, err
+		}
+	}
+	return buf, nil
 }

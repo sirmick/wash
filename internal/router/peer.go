@@ -1,7 +1,6 @@
 package router
 
 import (
-	"bytes"
 	"net"
 
 	"github.com/sirmick/wash/internal/wire"
@@ -106,6 +105,11 @@ func (s *ShellSession) handlePeerAttach(m wire.ShellPeerAttach) error {
 		shell:     s,
 		peerConn:  conn,
 		origin:    m.Origin,
+		// Creditless: the relay is a verbatim conduit; B does its own
+		// per-channel flow control end-to-end (docs/REMOTE.md §7). An
+		// A-side window would double-gate and head-of-line-block B's
+		// interactive behind B's bulk in the single pump goroutine.
+		noCredit: true,
 	}
 	s.router.registerChannel(b)
 	s.trackPeer(b)
@@ -126,32 +130,38 @@ func (s *ShellSession) handlePeerAttach(m wire.ShellPeerAttach) error {
 // pumpPeerToShell copies the relay socket → the shell channel, ONE B-frame
 // at a time, preserving each frame's wire CLASS for the scheduler
 // (docs/REMOTE.md §7). This is the "header-aware, payload-opaque" relay: A
-// reads B's frame header (class + length) to frame + schedule, but never
-// interprets the payload — it re-emits the frame's bytes verbatim. So B's
-// interactive frames (keystrokes, focus) bypass credit and jump ahead of B's
-// bulk (pty/file output), which is credit-throttled and yields to A's LOCAL
-// interactive traffic. Without this, a remote bulk stream head-of-line-blocks
-// the remote terminal. (Per-CHANNEL isolation — two concurrent B bulk streams
-// each with their own window — is a deliberate later step; §7.)
+// reads B's frame header (class + length) to delimit + schedule it, but never
+// interprets the payload — it forwards the frame's bytes verbatim. So B's
+// interactive frames (keystrokes, focus) jump ahead of B's bulk (pty/file
+// output) in A's strict-priority scheduler. Without this, a remote bulk stream
+// head-of-line-blocks the remote terminal.
 //
-// "Header-only" is the invariant: A touches bytes 0..7 (flags=class, length)
-// to delimit + class the frame; the payload is forwarded unchanged. It is NOT
-// federation (§13): A decodes no ctrl verb, models no B state.
+// The peer channel is CREDITLESS (channelBinding.noCredit): the only thing
+// that could make this single goroutine block on a per-frame basis is a credit
+// Reserve, and that would reintroduce the very HOL we class-preserve to avoid
+// (the pump can't read B's next interactive frame while parked on a bulk
+// frame's window). Flow control is B's job — B already paces each of its inner
+// channels by the FE's credit, end to end — so A needs no window of its own.
+// The remaining backstop is scheduler.Submit blocking when A's bulk queue
+// fills, which only happens when the FE is genuinely wedged (and B is throttled
+// by then anyway). Per-CHANNEL isolation across the relay is therefore
+// unnecessary: per-class scheduling + B's per-channel credit already give it.
+//
+// DecodeFrameRaw returns B's whole frame (header+payload) as one slice with no
+// re-encode/copy; the class is byte 0. "Header-only" is the invariant: A
+// touches bytes 0..7 to delimit + class the frame; the payload is forwarded
+// unchanged. It is NOT federation (§13): A decodes no ctrl verb, models no B
+// state.
 func (r *Router) pumpPeerToShell(b *channelBinding) {
 	t := wire.NewStreamTransport(b.peerConn)
-	var buf bytes.Buffer
 	for {
-		f, err := t.ReadFrame()
+		raw, err := t.ReadFrameRaw()
 		if err != nil {
 			break
 		}
-		buf.Reset()
-		if eerr := wire.EncodeFrame(&buf, f); eerr != nil {
-			continue // can't happen for a frame we just read; skip, stay in sync
-		}
-		payload := append([]byte(nil), buf.Bytes()...)
-		// One B-frame → one relay frame, scheduled at B's own class.
-		if werr := b.shell.WriteRawFrameClass(b.channelID, payload, f.Class()); werr != nil {
+		// One B-frame → the payload of one relay frame, scheduled at B's own
+		// class (byte 0). Verbatim: no decode/re-encode, no credit gate.
+		if werr := b.shell.WriteRawFrameClass(b.channelID, raw, wire.ClassOfFlags(raw[0])); werr != nil {
 			break
 		}
 	}
