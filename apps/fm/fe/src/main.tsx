@@ -28,6 +28,7 @@ import {
   createWatch,
   DRAG_MIME, dragPayload, dropEffectFor, hasWashDrag, readDragPaths,
   flattenTree,
+  sortedFiltered,
   withReplacePrompt as runReplaceFlow,
   entriesFromDataTransfer, entriesFromFileList, planUpload,
   readBlobChunks, encodeRecordHeader, uploadEndMarker,
@@ -167,6 +168,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // knows which directory's listing to render — path() doesn't move on a
   // folder single-click. Kept in sync at every setSelectedEntry site.
   const [selectedPath, setSelectedPath] = createSignal('');
+  // gridDir is the folder whose contents the preview dock shows as a grid,
+  // kept INDEPENDENT of selectedEntry so clicking/right-clicking a tile in
+  // the grid (which updates selectedEntry for the info panel + selection)
+  // doesn't flip the dock to a file preview and hide the grid. '' = show the
+  // file preview instead. Set when a folder becomes the preview target
+  // (tree folder click, navigate-into); grid tile clicks never change it.
+  const [gridDir, setGridDir] = createSignal('');
   // fileClient streams image bytes/thumbnails from the BE over a raw
   // channel (no HTTP) and hands back blob URLs for the grid's <img>s.
   const fileClient: FileClient = createFileClient({ instance: props.instance, host: props.host });
@@ -578,6 +586,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     setPath(p);
     setSelectedEntry(entry);
     setSelectedPath(p);
+    // Navigating into a folder shows its grid; to a file shows the preview.
+    // Unknown (not-yet-listed) targets are folders in practice (navigation).
+    setGridDir(entry?.type === 'file' || entry?.type === 'symlink' ? '' : p);
     setPathInputValue(p);
     if (pushHistory) {
       setNavHistory(pushPath(navHistory(), p));
@@ -607,7 +618,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // Selection drives action targets (Delete, Ctrl+V paste-dest,
   // etc.) — `path()` is reserved for the explicit "where am I"
   // cursor that only moves on double-click or path-bar navigation.
-  const onRowClick = (rowPath: string, entry: Entry, ev: MouseEvent) => {
+  // orderedPaths is the domain a Shift-range select runs over — the tree's
+  // visible rows by default, or the folder grid's sorted entries when a
+  // tile is clicked (so range-select works on whichever surface you're in).
+  const onRowClick = (
+    rowPath: string,
+    entry: Entry,
+    ev: MouseEvent,
+    orderedPaths: string[] = visibleRows().map((r) => r.path),
+  ) => {
     const focusForFile = (p: string) => {
       // For a file, single click DOES update path + preview —
       // there's no "navigate into a file" so this is the normal
@@ -623,13 +642,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const result = nextSelection(
       { selection: selection(), anchor: selectionAnchor },
       rowPath,
-      visibleRows().map((r) => r.path),
+      orderedPaths,
       { shift: ev.shiftKey, ctrlOrMeta: ev.ctrlKey || ev.metaKey },
     );
     applySelection(result.selection, 'row-click');
     selectionAnchor = result.anchor;
     setSelectedEntry(entry);
     setSelectedPath(rowPath);
+    // A folder row drives the dock to its grid; a file row drives the file
+    // preview. (Grid tile clicks use gridClick, which leaves gridDir alone.)
+    setGridDir(entry.type === 'dir' ? rowPath : '');
     if (isPlain) setStatusOverride(null);
     if (entry.type === 'file') {
       focusForFile(rowPath);
@@ -641,22 +663,22 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }
   };
 
-  // selectFromGrid handles a click on a folder-grid tile: select the
-  // entry (so info/preview follow) and either drill into a subfolder's
-  // grid or preview a file — mirroring a plain row click.
-  const selectFromGrid = (p: string, entry: Entry) => {
+  // gridClick handles a single click on a folder-grid tile: update the
+  // shared selection (Shift-range over the grid's order) and the info panel,
+  // but leave gridDir alone so the grid stays put (it's a browse/select
+  // view — double-click drills folders / opens files).
+  const gridClick = (p: string, entry: Entry, ev: MouseEvent) => {
     setStatusOverride(null);
-    applySelection(new Set([p]), 'grid-click');
-    selectionAnchor = p;
+    const result = nextSelection(
+      { selection: selection(), anchor: selectionAnchor },
+      p,
+      gridPaths(),
+      { shift: ev.shiftKey, ctrlOrMeta: ev.ctrlKey || ev.metaKey },
+    );
+    applySelection(result.selection, 'grid-click');
+    selectionAnchor = result.anchor;
     setSelectedEntry(entry);
     setSelectedPath(p);
-    if (entry.type === 'dir') {
-      if (!listings[p]) sendList(p);
-    } else {
-      setPath(p);
-      setPathInputValue(p);
-      if (entry.type === 'file') sendRead(p);
-    }
   };
 
   const navigateTo = (p: string) => selectPath(p || '/', true);
@@ -861,6 +883,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     applySelection(new Set(), 'bulk-delete-clear');
     setSelectedEntry(null);
     setSelectedPath('');
+    setGridDir('');
   };
 
   const performDelete = async () => {
@@ -885,6 +908,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       setPathInputValue(par);
       setSelectedEntry(null);
       setSelectedPath('');
+      setGridDir('');
       setPreviewContent(null);
     } else if (reply.kind === 'delete_err' && reply.code === 'not_empty') {
       dispatchBulkDelete([target]);
@@ -1688,6 +1712,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // automatically as folders expand/collapse.
   const visibleCount = createMemo(() => visibleRows().length);
 
+  // gridEntries is the previewed folder's listing, sorted/filtered by the
+  // SAME comparator the tree uses (sortedFiltered, @wash/fs-client) so the
+  // folder grid follows the toolbar sort + show-hidden state. The grid's
+  // Shift-range domain is these paths in order.
+  const gridEntries = createMemo<Entry[]>(() =>
+    sortedFiltered(listings[gridDir()] ?? [], {
+      key: sortKey(),
+      desc: sortDesc(),
+      showHidden: showHidden(),
+    }),
+  );
+  const gridPaths = (): string[] => gridEntries().map((e) => joinPath(gridDir(), e.name));
+
   // ---- selection invariant (observe-only, always on) ----
   //
   // `selection` is a free-floating set of paths that nothing reconciles
@@ -2149,20 +2186,27 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               open={infoOpen()}
               onToggle={toggleInfo}
               entry={selectedEntry()}
-              path={path()}
+              path={selectedPath()}
               onChmod={commitChmod}
               onChown={commitChown}
             />
             <Show
-              when={selectedEntry()?.type === 'dir'}
+              when={gridDir() !== ''}
               fallback={<PreviewPane content={previewContent()} />}
             >
               <FolderGrid
-                dir={selectedPath()}
-                entries={listings[selectedPath()] ?? []}
+                dir={gridDir()}
+                entries={gridEntries()}
                 fileUrl={(p, dim) => fileClient.url(p, { dim })}
-                onSelect={selectFromGrid}
+                isSelected={(p) => selection().has(p)}
+                isDropTarget={(p) => dropTargetPath() === p}
+                onClick={gridClick}
                 onActivate={(p, e) => (e.type === 'dir' ? selectPath(p, true) : openFile(p))}
+                onContextMenu={openContextMenu}
+                onDragStart={onDragStart}
+                onDragEnd={onDragEnd}
+                onDragOver={onRowDragOver}
+                onDrop={onRowDrop}
               />
             </Show>
           </div>
@@ -3285,12 +3329,24 @@ const GRID_THUMB = 160; // requested thumbnail max edge px
 // FolderGrid renders a directory's entries as icon/thumbnail tiles in the
 // preview pane (shown when a folder is selected). Thumbnails stream lazily
 // via fileUrl; non-images and undecodable formats fall back to an icon.
+// FolderGrid renders a directory's entries as icon/thumbnail tiles in the
+// preview pane (shown when a folder is selected). It's a second view over the
+// tree's machinery: tiles use the SAME selection / context-menu / drag-drop
+// handlers the rows use (threaded in from App), so multi-select, the
+// right-click menu, and move/copy work identically.
 const FolderGrid: Component<{
   dir: string;
   entries: Entry[];
   fileUrl: (path: string, dim: number) => Promise<string>;
-  onSelect: (path: string, entry: Entry) => void;
+  isSelected: (path: string) => boolean;
+  isDropTarget: (path: string) => boolean;
+  onClick: (path: string, entry: Entry, ev: MouseEvent) => void;
   onActivate: (path: string, entry: Entry) => void;
+  onContextMenu: (ev: MouseEvent, entry: Entry, path: string) => void;
+  onDragStart: (ev: DragEvent, path: string) => void;
+  onDragEnd: () => void;
+  onDragOver: (ev: DragEvent, path: string) => void;
+  onDrop: (ev: DragEvent, path: string) => void;
 }> = (props) => (
   <Show
     when={props.entries.length > 0}
@@ -3309,15 +3365,25 @@ const FolderGrid: Component<{
       tileHeight={GRID_TILE_H}
       gap={6}
       style={folderGridStyle}
-      renderItem={(e) => (
-        <FolderTile
-          entry={e}
-          path={joinPath(props.dir, e.name)}
-          fileUrl={props.fileUrl}
-          onSelect={props.onSelect}
-          onActivate={props.onActivate}
-        />
-      )}
+      renderItem={(e) => {
+        const path = joinPath(props.dir, e.name);
+        return (
+          <FolderTile
+            entry={e}
+            path={path}
+            fileUrl={props.fileUrl}
+            selected={props.isSelected(path)}
+            isDropTarget={props.isDropTarget(path)}
+            onClick={props.onClick}
+            onActivate={props.onActivate}
+            onContextMenu={props.onContextMenu}
+            onDragStart={props.onDragStart}
+            onDragEnd={props.onDragEnd}
+            onDragOver={props.onDragOver}
+            onDrop={props.onDrop}
+          />
+        );
+      }}
     />
   </Show>
 );
@@ -3325,16 +3391,25 @@ const FolderGrid: Component<{
 // FolderTile shows one entry. For thumbnailable images it fetches a
 // thumbnail when scrolled into view (IntersectionObserver) — so a big
 // folder doesn't request every image at once — and falls back to the
-// file-type icon on miss or while loading.
+// file-type icon on miss or while loading. Selection / drop visuals and
+// drag-drop mirror TreeRow; drop handlers are wired only on folder tiles.
 const FolderTile: Component<{
   entry: Entry;
   path: string;
   fileUrl: (path: string, dim: number) => Promise<string>;
-  onSelect: (path: string, entry: Entry) => void;
+  selected: boolean;
+  isDropTarget: boolean;
+  onClick: (path: string, entry: Entry, ev: MouseEvent) => void;
   onActivate: (path: string, entry: Entry) => void;
+  onContextMenu: (ev: MouseEvent, entry: Entry, path: string) => void;
+  onDragStart: (ev: DragEvent, path: string) => void;
+  onDragEnd: () => void;
+  onDragOver: (ev: DragEvent, path: string) => void;
+  onDrop: (ev: DragEvent, path: string) => void;
 }> = (props) => {
   const [thumb, setThumb] = createSignal<string | null>(null);
   const [failed, setFailed] = createSignal(false);
+  const [hover, setHover] = createSignal(false);
   let el: HTMLDivElement | undefined;
   onMount(() => {
     if (!isThumbable(props.entry) || !el) return;
@@ -3351,19 +3426,40 @@ const FolderTile: Component<{
     io.observe(el);
     onCleanup(() => io.disconnect());
   });
+  const isDir = () => props.entry.type === 'dir';
   return (
     <div
       ref={el}
       data-testid={`fm-tile-${props.entry.name}`}
       data-type={props.entry.type}
-      style={tileStyle}
+      data-selected={props.selected ? 'true' : undefined}
+      data-drop-target={props.isDropTarget ? 'true' : undefined}
+      draggable="true"
+      style={{
+        ...tileStyle,
+        background: props.isDropTarget
+          ? tokens.bgDropTarget
+          : props.selected
+          ? tokens.bgRowSelected
+          : hover()
+          ? tokens.bgRowHover
+          : 'transparent',
+        'box-shadow': props.isDropTarget ? `inset 0 0 0 2px ${tokens.borderDropTarget}` : 'none',
+      }}
       title={props.entry.name}
-      onClick={() => props.onSelect(props.path, props.entry)}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onClick={(ev) => props.onClick(props.path, props.entry, ev)}
       onDblClick={() => props.onActivate(props.path, props.entry)}
+      onContextMenu={(ev) => props.onContextMenu(ev, props.entry, props.path)}
+      onDragStart={(ev) => props.onDragStart(ev, props.path)}
+      onDragEnd={props.onDragEnd}
+      onDragOver={isDir() ? (ev) => props.onDragOver(ev, props.path) : undefined}
+      onDrop={isDir() ? (ev) => props.onDrop(ev, props.path) : undefined}
     >
       <div style={tileThumbStyle}>
         <Show when={thumb() && !failed()} fallback={<EntryIcon entry={props.entry} size={34} />}>
-          <img src={thumb()!} alt="" style={tileImgStyle} />
+          <img src={thumb()!} alt="" style={tileImgStyle} draggable={false} />
         </Show>
       </div>
       <span style={tileNameStyle}>{props.entry.name}</span>

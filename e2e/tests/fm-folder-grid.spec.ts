@@ -51,4 +51,41 @@ test.describe('fm folder-grid preview', () => {
     const thumb = page.locator('[data-testid="fm-tile-cat.png"] img');
     await expect(thumb).toHaveAttribute('src', /^blob:/, { timeout: 10_000 });
   });
+
+  test('grid tiles support Ctrl multi-select (shared selection kernel)', async ({ page, router }) => {
+    await openFm(page, router);
+    await page.locator('[data-testid="fm-entry-pics"]').click();
+    await expect(page.locator('[data-testid="fm-folder-grid"]')).toBeVisible();
+
+    await page.locator('[data-testid="fm-tile-cat.png"]').click();
+    await page.locator('[data-testid="fm-tile-dog.png"]').click({ modifiers: ['Control'] });
+
+    // Both tiles are selected (data-selected mirrors the shared selection set).
+    await expect(page.locator('[data-testid="fm-tile-cat.png"][data-selected="true"]')).toBeVisible();
+    await expect(page.locator('[data-testid="fm-tile-dog.png"][data-selected="true"]')).toBeVisible();
+  });
+
+  test('right-clicking a grid tile opens the shared context menu', async ({ page, router }) => {
+    await openFm(page, router);
+    await page.locator('[data-testid="fm-entry-pics"]').click();
+    await expect(page.locator('[data-testid="fm-folder-grid"]')).toBeVisible();
+
+    await page.locator('[data-testid="fm-tile-cat.png"]').click({ button: 'right' });
+    await expect(page.locator('[data-testid="fm-context-menu"]')).toBeVisible();
+    await expect(page.locator('[data-testid="fm-ctx-open"]')).toBeVisible();
+    await expect(page.locator('[data-testid="fm-ctx-rename"]')).toBeVisible();
+  });
+
+  test('grid follows the global sort (name order by default)', async ({ page, router }) => {
+    await openFm(page, router);
+    await page.locator('[data-testid="fm-entry-pics"]').click();
+    await expect(page.locator('[data-testid="fm-folder-grid"]')).toBeVisible();
+
+    // sortedFiltered orders the grid the same as the tree: dirs first, then
+    // case-insensitive name. cat.png < dog.png < notes.txt.
+    const names = await page.locator('[data-testid^="fm-tile-"]').evaluateAll((els) =>
+      els.map((e) => e.getAttribute('data-testid')!.replace('fm-tile-', '')),
+    );
+    expect(names).toEqual(['cat.png', 'dog.png', 'notes.txt']);
+  });
 });
