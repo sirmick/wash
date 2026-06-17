@@ -28,7 +28,7 @@ GOFLAGS += -cover -coverpkg=github.com/sirmick/wash/...
 endif
 
 OUT     := out
-BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-disks wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net wash-washamp wash-music wash-radio wash-audio wash-remote wash-connect
+BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-disks wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net wash-washamp wash-music wash-radio wash-audio wash-remote wash-connect wash-imageview
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -136,6 +136,8 @@ ABOUT_STAMP    := $(ABOUT_ASSETS)/.stamp
 
 CONNECT_ASSETS := apps/connect/be/assets
 CONNECT_STAMP  := $(CONNECT_ASSETS)/.stamp
+IMAGEVIEW_ASSETS := apps/imageview/be/assets
+IMAGEVIEW_STAMP  := $(IMAGEVIEW_ASSETS)/.stamp
 
 TEST_ASSETS    := apps/test/be/assets
 TEST_STAMP     := $(TEST_ASSETS)/.stamp
@@ -236,6 +238,9 @@ web-about: web-deps
 .PHONY: web-connect
 web-connect: web-deps
 	@$(PNPM) --filter @wash/app-connect run build
+.PHONY: web-imageview
+web-imageview: web-deps
+	@$(PNPM) --filter @wash/app-imageview run build
 
 .PHONY: web-test
 web-test: web-deps
@@ -337,6 +342,8 @@ $(ABOUT_STAMP): web-about
 
 $(CONNECT_STAMP): web-connect
 	$(call embed_dist,apps/connect/fe/dist,$(CONNECT_ASSETS))
+$(IMAGEVIEW_STAMP): web-imageview
+	$(call embed_dist,apps/imageview/fe/dist,$(IMAGEVIEW_ASSETS))
 
 $(TEST_STAMP): web-test
 	$(call embed_dist,apps/test/fe/dist,$(TEST_ASSETS))
@@ -419,7 +426,8 @@ $(OUT)/wash-fm $(OUT)/wash-edit $(OUT)/wash-vscode $(OUT)/wash-vscode-workbench 
 $(OUT)/wash-settings $(OUT)/wash-top $(OUT)/wash-disks $(OUT)/wash-journal \
 $(OUT)/wash-syslogs $(OUT)/wash-services $(OUT)/wash-packages $(OUT)/wash-net \
 $(OUT)/wash-washamp $(OUT)/wash-music $(OUT)/wash-radio $(OUT)/wash-netd \
-$(OUT)/wash-connect $(OUT)/wash-display: vendor-sync
+$(OUT)/wash-connect $(OUT)/wash-imageview \
+$(OUT)/wash-display: vendor-sync
 
 # ----- go stage -----
 
@@ -434,6 +442,8 @@ $(OUT)/wash-about: $(ABOUT_STAMP) | $(OUT)
 
 $(OUT)/wash-connect: $(CONNECT_STAMP) | $(OUT)
 	$(call go_build,$@,apps/connect/be/cmd)
+$(OUT)/wash-imageview: $(IMAGEVIEW_STAMP) | $(OUT)
+	$(call go_build,$@,apps/imageview/be/cmd)
 
 $(OUT)/wash-test: $(TEST_STAMP) | $(OUT)
 	$(call go_build,$@,apps/test/be/cmd)
@@ -711,7 +721,7 @@ test-app: $(OUT)/wash-priv-fakesudo
 # "pattern all:assets: no matching files found" — local dev
 # accidentally works because the standalone wash-router build
 # rule already chains through ROUTER_STAMP.
-MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(CONNECT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(DISKS_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP) $(VSCODE_WB_STAMP) $(NET_STAMP) $(WASHAMP_STAMP) $(MUSIC_STAMP) $(RADIO_STAMP) $(VSCODE_STAMP) $(NETD_STAMP)
+MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(CONNECT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(DISKS_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP) $(VSCODE_WB_STAMP) $(NET_STAMP) $(WASHAMP_STAMP) $(MUSIC_STAMP) $(RADIO_STAMP) $(VSCODE_STAMP) $(NETD_STAMP) $(IMAGEVIEW_STAMP)
 
 # Adding wash_test_app to the tags pulls the test app's blank-import
 # in (which is otherwise excluded by cmd/wash/imports_test.go's

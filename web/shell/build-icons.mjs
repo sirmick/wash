@@ -22,6 +22,7 @@ const ICONS = [
   'folder',         // wash-fm
   'terminal',       // wash-term
   'info',           // wash-about
+  'image',          // wash-imageview
   'layout-dashboard', // wash-session (mostly hidden in catalog)
   'flask-conical',  // wash-test (hidden by default)
   'list-checks',    // wash-bulk
