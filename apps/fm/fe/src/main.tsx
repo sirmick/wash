@@ -54,6 +54,8 @@ import {
   FolderPlus,
   Home as HomeIcon,
   Link2,
+  PanelRightClose,
+  PanelRightOpen,
   Pencil,
   RotateCw,
   Square,
@@ -69,7 +71,11 @@ interface PersistedState {
   sort_desc?: boolean;
   show_hidden?: boolean;
   info_open?: boolean;
-  split_pct?: number;
+  // preview_w: fixed pixel width of the right preview/info dock.
+  // preview_open: whether the dock is shown at all. (Replaces the old
+  // split_pct percentage model — see the previewW/previewOpen signals.)
+  preview_w?: number;
+  preview_open?: boolean;
 }
 
 interface Entry {
@@ -160,11 +166,51 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [sortDesc, setSortDesc] = createSignal(false);
   const [showHidden, setShowHidden] = createSignal(false);
   const [infoOpen, setInfoOpen] = createSignal(false);
-  // splitPct is the percentage width of the tree pane in the body
-  // grid; the rest (minus the 4px splitter) goes to the preview/info
-  // pane. Adjustable via the draggable splitter; persisted.
-  const [splitPct, setSplitPct] = createSignal(50);
+  // The preview/info dock is a FIXED-WIDTH right column (previewW px),
+  // not a percentage — so the tree absorbs every extra pixel as the
+  // window grows and a wide window no longer starves filenames.
+  // previewOpen toggles the whole dock (toolbar button + Ctrl/Cmd+I).
+  // Both persist.
+  const [previewW, setPreviewW] = createSignal(PREVIEW_DEFAULT_W);
+  const [previewOpen, setPreviewOpen] = createSignal(true);
   let bodyEl!: HTMLDivElement;
+  // bodyW tracks the body grid's width (ResizeObserver in onMount) so we
+  // can clamp the dock to leave the tree at least TREE_MIN_W and derive
+  // the tree's own width for responsive column density.
+  const [bodyW, setBodyW] = createSignal(0);
+  // effPreviewW: the dock width actually applied — previewW, but never so
+  // wide it pushes the tree below TREE_MIN_W on a small window.
+  const effPreviewW = createMemo(() => {
+    const bw = bodyW();
+    if (bw <= 0) return previewW();
+    return Math.min(previewW(), Math.max(PREVIEW_MIN_W, bw - TREE_MIN_W - SPLITTER_W));
+  });
+  // gridCols: body template. Dock hidden → the tree is the only column.
+  const gridCols = createMemo(() =>
+    previewOpen() ? `1fr ${SPLITTER_W}px ${effPreviewW()}px` : '1fr',
+  );
+  // treeW: width available to the tree, for the column-density breakpoints.
+  const treeW = createMemo(() => {
+    const bw = bodyW();
+    if (bw <= 0) return 0;
+    return previewOpen() ? Math.max(0, bw - effPreviewW() - SPLITTER_W) : bw;
+  });
+  // cols: which tree columns currently fit (see colsFor).
+  const cols = createMemo<ColCfg>(() => colsFor(treeW()));
+  // onSplitChange converts the Splitter's divider-position percent into a
+  // dock pixel width (the dock is everything right of the divider) and
+  // clamps it so neither pane starves.
+  const onSplitChange = (pct: number) => {
+    const bw = bodyW() || bodyEl?.clientWidth || 0;
+    if (bw <= 0) return;
+    const px = Math.round(bw * (1 - pct / 100));
+    const max = Math.max(PREVIEW_MIN_W, bw - TREE_MIN_W - SPLITTER_W);
+    setPreviewW(Math.max(PREVIEW_MIN_W, Math.min(px, max)));
+  };
+  const togglePreview = () => {
+    setPreviewOpen(!previewOpen());
+    persist();
+  };
   const [home, setHome] = createSignal(HOME_FALLBACK);
   const [rootInitialized, setRootInitialized] = createSignal(false);
   const [pathInputValue, setPathInputValue] = createSignal('');
@@ -1487,9 +1533,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
-  // Body splitter: drag-to-resize between tree and preview/info
-  // panes. The Splitter primitive (@wash/ui) owns the gesture; we
-  // own splitPct, the body grid template, and persistence.
+  // Body splitter: drag-to-resize the fixed-width preview/info dock.
+  // The Splitter primitive (@wash/ui) owns the gesture; onSplitChange
+  // turns its divider percent into the dock's pixel width, and we own
+  // the body grid template (gridCols) and persistence.
 
   // ---- state persistence ----
 
@@ -1502,7 +1549,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       sort_desc: sortDesc(),
       show_hidden: showHidden(),
       info_open: infoOpen(),
-      split_pct: splitPct(),
+      preview_w: previewW(),
+      preview_open: previewOpen(),
     };
     send({ kind: 'save_state', state: s });
   };
@@ -1512,7 +1560,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     if (typeof s.sort_desc === 'boolean') setSortDesc(s.sort_desc);
     if (typeof s.show_hidden === 'boolean') setShowHidden(s.show_hidden);
     if (typeof s.info_open === 'boolean') setInfoOpen(s.info_open);
-    if (typeof s.split_pct === 'number') setSplitPct(Math.max(15, Math.min(85, s.split_pct)));
+    if (typeof s.preview_w === 'number') setPreviewW(Math.max(PREVIEW_MIN_W, Math.round(s.preview_w)));
+    if (typeof s.preview_open === 'boolean') setPreviewOpen(s.preview_open);
     if (s.expanded) {
       for (const p of s.expanded) expandDir(p);
     }
@@ -1751,6 +1800,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           startNewFolder();
           return;
         }
+        if (ev.key === 'i' || ev.key === 'I') {
+          // Ctrl/Cmd+I = show/hide the preview/info dock (Finder's
+          // "Get Info" muscle memory).
+          ev.preventDefault();
+          togglePreview();
+          return;
+        }
         // Ctrl+C / Ctrl+X / Ctrl+V — files clipboard. The
         // "copy path text" affordance moved to the right-click
         // context menu's "Copy path" item, freeing Ctrl+C for
@@ -1786,10 +1842,21 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     props.host.addEventListener('wash:state', onState);
     props.host.addEventListener('keydown', onKey);
     if (!props.host.hasAttribute('tabindex')) props.host.setAttribute('tabindex', '0');
+    // Track the body width: the dock clamp (effPreviewW) and the
+    // responsive tree columns (cols) both key off it, so they react to
+    // window resizes and splitter drags without polling.
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) setBodyW(e.contentRect.width);
+    });
+    if (bodyEl) {
+      setBodyW(bodyEl.clientWidth);
+      ro.observe(bodyEl);
+    }
     onCleanup(() => {
       props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('wash:state', onState);
       props.host.removeEventListener('keydown', onKey);
+      ro.disconnect();
     });
   });
 
@@ -1871,6 +1938,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         <button type="button" data-testid="fm-sort" title="Sort" style={iconBtnStyle} onClick={openSortMenu}>
           <ArrowUpDown size={14} />
         </button>
+        <button
+          type="button"
+          data-testid="fm-toggle-preview"
+          aria-pressed={previewOpen()}
+          title={previewOpen() ? 'Hide preview (Ctrl+I)' : 'Show preview (Ctrl+I)'}
+          style={previewOpen() ? iconBtnStyle : { ...iconBtnStyle, opacity: 0.5 }}
+          onClick={togglePreview}
+        >
+          {previewOpen() ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
+        </button>
         {/* Hidden native pickers backing the Upload buttons — the only
             way to read OS files from the browser. */}
         <input
@@ -1893,7 +1970,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       {/* body: tree + splitter + preview/info */}
       <div
         ref={bodyEl!}
-        style={{ ...bodyStyle, 'grid-template-columns': `${splitPct()}% 4px 1fr` }}
+        style={{ ...bodyStyle, 'grid-template-columns': gridCols() }}
       >
         <div
           data-testid="fm-list"
@@ -1921,6 +1998,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           <ColumnHeader
             sortKey={sortKey()}
             sortDesc={sortDesc()}
+            cols={cols()}
             onSort={(k) => {
               if (sortKey() === k) setSortDesc(!sortDesc());
               else { setSortKey(k); setSortDesc(false); }
@@ -1961,6 +2039,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 path={row.path}
                 depth={row.depth}
                 childCount={row.childCount}
+                cols={cols()}
                 selected={selection().has(row.path)}
                 isCurrent={path() === row.path}
                 expanded={!!expanded[row.path]}
@@ -2001,23 +2080,30 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             }}
           </For>
         </div>
-        <Splitter
-          container={bodyEl}
-          onChange={setSplitPct}
-          onCommit={persist}
-          data-testid="fm-splitter"
-        />
-        <div style={{ display: 'grid', 'grid-template-rows': 'auto 1fr', overflow: 'hidden' }}>
-          <InfoSection
-            open={infoOpen()}
-            onToggle={toggleInfo}
-            entry={selectedEntry()}
-            path={path()}
-            onChmod={commitChmod}
-            onChown={commitChown}
+        <Show when={previewOpen()}>
+          <Splitter
+            container={bodyEl}
+            min={5}
+            max={95}
+            onChange={onSplitChange}
+            onCommit={persist}
+            data-testid="fm-splitter"
           />
-          <PreviewPane content={previewContent()} />
-        </div>
+          <div
+            data-testid="fm-preview-dock"
+            style={{ display: 'grid', 'grid-template-rows': 'auto 1fr', overflow: 'hidden', 'min-width': 0 }}
+          >
+            <InfoSection
+              open={infoOpen()}
+              onToggle={toggleInfo}
+              entry={selectedEntry()}
+              path={path()}
+              onChmod={commitChmod}
+              onChown={commitChown}
+            />
+            <PreviewPane content={previewContent()} />
+          </div>
+        </Show>
       </div>
 
       {/* status */}
@@ -2199,15 +2285,38 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
 // ---- sub-components ----
 
-// rowGridCols defines the 4-column layout shared by ColumnHeader
-// and each TreeRow. Tuned so the standard human-size (e.g.
-// "999.9 KB") + date strings ("Dec 15 14:32") fit without
-// truncating in a typical fm window. Column geometry stays
-// fm-specific (don't extract to @wash/ui — apps with different
-// shapes shouldn't share these widths).
+// colsFor (below) defines the responsive column layout shared by
+// ColumnHeader and each TreeRow. The metadata columns are tuned so the
+// standard human-size (e.g. "999.9 KB") + date strings ("Dec 15 14:32")
+// fit without truncating, and drop out as the tree narrows so the Name
+// column keeps its width. Column geometry stays fm-specific (don't
+// extract to @wash/ui — apps with different shapes shouldn't share it).
 const COL_DATE_W = 96;
 const COL_SIZE_W = 76;
-const rowGridCols = `1fr ${COL_SIZE_W}px ${COL_DATE_W}px ${COL_DATE_W}px`;
+
+// Preview/info dock geometry (see the previewW/previewOpen signals).
+const PREVIEW_DEFAULT_W = 320; // modest fixed dock — not half the window
+const PREVIEW_MIN_W = 220;
+const TREE_MIN_W = 240; // the tree never shrinks below this when docked
+const SPLITTER_W = 4;
+
+// ColCfg drives responsive tree columns: as the tree narrows we drop the
+// metadata columns (Created first, then Modified, then Size) so the Name
+// column keeps its width instead of ellipsizing to fit dates. The 0 case
+// (width not yet measured) shows everything so the first paint isn't sparse.
+interface ColCfg {
+  template: string;
+  size: boolean;
+  mtime: boolean;
+  ctime: boolean;
+}
+function colsFor(w: number): ColCfg {
+  if (w === 0 || w >= 560)
+    return { template: `1fr ${COL_SIZE_W}px ${COL_DATE_W}px ${COL_DATE_W}px`, size: true, mtime: true, ctime: true };
+  if (w >= 440) return { template: `1fr ${COL_SIZE_W}px ${COL_DATE_W}px`, size: true, mtime: true, ctime: false };
+  if (w >= 340) return { template: `1fr ${COL_SIZE_W}px`, size: true, mtime: false, ctime: false };
+  return { template: '1fr', size: false, mtime: false, ctime: false };
+}
 
 // HEADER_ROW_H matches the column-header strip to the InfoSection
 // toggle so the two top rows line up across the splitter. The 1px
@@ -2222,6 +2331,7 @@ const HEADER_ROW_H = 22;
 const ColumnHeader: Component<{
   sortKey: SortKey;
   sortDesc: boolean;
+  cols: ColCfg;
   onSort: (k: SortKey) => void;
 }> = (props) => {
   const arrow = (k: SortKey): JSX.Element => {
@@ -2261,15 +2371,15 @@ const ColumnHeader: Component<{
         background: tokens.bgMenu,
         'border-bottom': `1px solid ${tokens.borderMenu}`,
         display: 'grid',
-        'grid-template-columns': rowGridCols,
+        'grid-template-columns': props.cols.template,
         'z-index': 2,
         'user-select': 'none',
       }}
     >
       {cell('Name', 'name', 'left')}
-      {cell('Size', 'size', 'right')}
-      {cell('Modified', 'mtime', 'right')}
-      {cell('Created', 'ctime', 'right')}
+      <Show when={props.cols.size}>{cell('Size', 'size', 'right')}</Show>
+      <Show when={props.cols.mtime}>{cell('Modified', 'mtime', 'right')}</Show>
+      <Show when={props.cols.ctime}>{cell('Created', 'ctime', 'right')}</Show>
     </div>
   );
 };
@@ -2279,6 +2389,7 @@ const TreeRow: Component<{
   path: string;
   depth: number;
   childCount?: number;
+  cols: ColCfg;
   selected: boolean;
   isCurrent: boolean;
   expanded: boolean;
@@ -2321,7 +2432,7 @@ const TreeRow: Component<{
       onContextMenu={props.onContextMenu}
       style={{
         display: 'grid',
-        'grid-template-columns': rowGridCols,
+        'grid-template-columns': props.cols.template,
         'align-items': 'center',
         padding: '3px 8px',
         background: props.isDropTarget
@@ -2396,17 +2507,23 @@ const TreeRow: Component<{
       </span>
       </span>
       {/* Size / item count */}
-      <span style={cellNumStyle}>
-        {props.renaming ? '' : sizeOrCount(props.entry, props.childCount)}
-      </span>
+      <Show when={props.cols.size}>
+        <span style={cellNumStyle}>
+          {props.renaming ? '' : sizeOrCount(props.entry, props.childCount)}
+        </span>
+      </Show>
       {/* Modified */}
-      <span style={cellNumStyle}>
-        {!props.renaming ? formatDate(props.entry.mod_unix) : ''}
-      </span>
+      <Show when={props.cols.mtime}>
+        <span style={cellNumStyle}>
+          {!props.renaming ? formatDate(props.entry.mod_unix) : ''}
+        </span>
+      </Show>
       {/* Created */}
-      <span style={cellNumStyle}>
-        {!props.renaming ? formatDate(props.entry.created_unix) : ''}
-      </span>
+      <Show when={props.cols.ctime}>
+        <span style={cellNumStyle}>
+          {!props.renaming ? formatDate(props.entry.created_unix) : ''}
+        </span>
+      </Show>
     </div>
   );
 };
