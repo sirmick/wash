@@ -154,9 +154,39 @@ window would need the wire-message path — explicitly out of scope.
    fm double-click + edit/imageview handlers.
 5. Finalize: packaging/registration drift check, full test, merge to main.
 
+## Folder-grid interactions (selection / menu / DnD / sort)
+
+The folder grid is a second view over the fm **tree's** existing machinery —
+adding interaction is wiring tiles to the same handlers the rows use, not new
+behaviour:
+
+- **Windowing**: `@wash/ui` `VirtualGrid` renders only the tiles near the
+  viewport (fixed tile height → computed row pitch; raw item refs so `<For>`
+  reuses tiles across scroll). A 2000-image folder mounts ~dozens of nodes.
+- **Selection**: `onRowClick`'s Shift-range domain is parameterized; `gridClick`
+  runs the same `nextSelection` kernel (`selection.ts`) over the grid's order.
+  One shared `selection()` set; tiles render `data-selected`.
+- **Right-click**: tiles call the existing `openContextMenu` / `ContextMenu`.
+- **Drag copy/move**: tiles reuse `onDragStart` / `onRowDragOver` / `onRowDrop`
+  (drop handlers on folder tiles only) — left-drag move, right-drag copy menu.
+- **Sort**: grid renders `sortedFiltered(listing, {sort, showHidden})`
+  (`@wash/fs-client`) — the same comparator the tree uses — so it follows the
+  toolbar sort / column headers.
+- **Double-click**: folder drills in, file opens via the router's open routing.
+
+Key structural point: the grid's visibility is driven by a dedicated `gridDir`
+signal, **independent of `selectedEntry`**. Clicking/right-clicking a tile
+updates `selectedEntry` + `selection` (so the info panel and highlight follow)
+WITHOUT flipping the dock to a file preview and hiding the grid. `gridDir` is set
+only when a folder becomes the preview target (tree folder click / navigate-in).
+
 ## Decisions locked
 
 - **Transport**: WS raw channels (no HTTP, no ingress, no service). Works on the
   browser VM.
 - **Scaler**: zero-dependency, jpeg/png/gif only; WebP/`x/image` deferred.
 - **Text preview**: unchanged (`read_ok` app_msg).
+- **Big folders**: windowed (`VirtualGrid`), not capped — fm grid unbounded,
+  imageview list capped at 5000 (bounds the one `scan_ok` message, not the DOM).
+- **Grid interactions**: reuse the tree's handlers; `gridDir` decouples grid
+  visibility from `selectedEntry`.
