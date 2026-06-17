@@ -4,11 +4,13 @@
 // the BE over a raw channel via @wash/ui's createFileClient (no HTTP), so it
 // works on the in-browser VM too.
 
-import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
+import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { ChevronLeft, ChevronRight, Image as ImageIcon, Maximize, ZoomIn, ZoomOut } from 'lucide-solid';
-import { createFileClient, defineWashApp, tokens } from '@wash/ui';
+import { VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
 import type { FileClient } from '@wash/ui';
+
+const IV_TILE_H = 84; // fixed thumbnail-list tile height (px) for windowing
 
 interface ImageItem {
   name: string;
@@ -46,6 +48,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     setIndex(i);
     resetView();
   };
+  // Select by path so the windowed list (which renders item objects, not
+  // indices) can drive selection without threading positions.
+  const selectByPath = (p: string) => select(images().findIndex((im) => im.path === p));
   const step = (d: number) => {
     const n = images().length;
     if (n === 0) return;
@@ -147,23 +152,28 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   return (
     <>
-      <div data-testid="iv-list" style={listStyle}>
-        <Show
-          when={images().length > 0}
-          fallback={<div style={{ padding: '16px', color: tokens.fgDim, 'font-size': '13px' }}>No images</div>}
-        >
-          <For each={images()}>
-            {(img, i) => (
-              <Thumb
-                img={img}
-                active={i() === index()}
-                fileUrl={(p) => fileClient.url(p, { dim: THUMB_DIM })}
-                onClick={() => select(i())}
-              />
-            )}
-          </For>
-        </Show>
-      </div>
+      <Show
+        when={images().length > 0}
+        fallback={<div data-testid="iv-list" style={{ ...listStyle, padding: '16px', color: tokens.fgDim, 'font-size': '13px' }}>No images</div>}
+      >
+        {/* Windowed: a 2000-image folder renders ~a few dozen tiles. */}
+        <VirtualGrid
+          data-testid="iv-list"
+          items={images()}
+          tileWidth={170}
+          tileHeight={IV_TILE_H}
+          gap={2}
+          style={listStyle}
+          renderItem={(img) => (
+            <Thumb
+              img={img}
+              active={current()?.path === img.path}
+              fileUrl={(p) => fileClient.url(p, { dim: THUMB_DIM })}
+              onClick={() => selectByPath(img.path)}
+            />
+          )}
+        />
+      </Show>
 
       <div data-testid="iv-main" style={mainStyle} onWheel={onWheel} onMouseDown={onDown}>
         <Show when={mainUrl()} fallback={<ImageIcon size={72} color={tokens.fgDim} />}>
@@ -257,10 +267,13 @@ const Thumb: Component<{
 
 // ---- styles ----
 
+// Scroll-container chrome for the windowed list (VirtualGrid owns overflow).
 const listStyle: JSX.CSSProperties = {
-  overflow: 'auto',
+  height: '100%',
+  'min-height': 0,
   background: tokens.bgWindow,
   'border-right': `1px solid ${tokens.borderMenu}`,
+  'box-sizing': 'border-box',
 };
 
 const thumbStyle: JSX.CSSProperties = {
@@ -271,6 +284,9 @@ const thumbStyle: JSX.CSSProperties = {
   padding: '6px 4px',
   cursor: 'pointer',
   'user-select': 'none',
+  height: '100%',
+  overflow: 'hidden',
+  'box-sizing': 'border-box',
 };
 
 const thumbBoxStyle: JSX.CSSProperties = {

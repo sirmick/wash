@@ -36,7 +36,9 @@ var assetsFS embed.FS
 const version = "0.9.0"
 
 // maxImages caps a scan so a huge folder can't blow up the list message.
-const maxImages = 1000
+// The FE list is windowed, so this can be generous; it bounds the one
+// scan_ok message, not the DOM.
+const maxImages = 5000
 
 // ivIcon — Lucide sprite symbol; added to web/shell/build-icons.mjs.
 const ivIcon = "image"

@@ -20,7 +20,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, createFileClient, defineWashApp, tokens } from '@wash/ui';
+import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
 import type { FileClient } from '@wash/ui';
 import {
   baseName, formatDate, humanSize, joinPath, octalPerm, parentPath, ancestorChain,
@@ -3278,7 +3278,8 @@ const THUMB_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif']);
 const isThumbable = (entry: Entry): boolean =>
   entry.type === 'file' && THUMB_EXTS.has(extOf(entry.name));
 
-const GRID_TILE = 100; // tile box px
+const GRID_TILE = 100; // tile box min width px
+const GRID_TILE_H = 104; // fixed tile height px (thumb + name) for windowing
 const GRID_THUMB = 160; // requested thumbnail max edge px
 
 // FolderGrid renders a directory's entries as icon/thumbnail tiles in the
@@ -3291,24 +3292,34 @@ const FolderGrid: Component<{
   onSelect: (path: string, entry: Entry) => void;
   onActivate: (path: string, entry: Entry) => void;
 }> = (props) => (
-  <div data-testid="fm-folder-grid" style={folderGridStyle}>
-    <Show
-      when={props.entries.length > 0}
-      fallback={<div style={{ padding: '16px', color: tokens.fgDim, 'font-style': 'italic', 'font-size': '13px' }}>(empty folder)</div>}
-    >
-      <For each={props.entries}>
-        {(e) => (
-          <FolderTile
-            entry={e}
-            path={joinPath(props.dir, e.name)}
-            fileUrl={props.fileUrl}
-            onSelect={props.onSelect}
-            onActivate={props.onActivate}
-          />
-        )}
-      </For>
-    </Show>
-  </div>
+  <Show
+    when={props.entries.length > 0}
+    fallback={
+      <div data-testid="fm-folder-grid" style={{ ...folderGridStyle, color: tokens.fgDim, 'font-style': 'italic', 'font-size': '13px', padding: '16px' }}>
+        (empty folder)
+      </div>
+    }
+  >
+    {/* Windowed: only the tiles near the viewport mount, so a folder with
+        thousands of images renders ~a few dozen DOM nodes. */}
+    <VirtualGrid
+      data-testid="fm-folder-grid"
+      items={props.entries}
+      tileWidth={GRID_TILE}
+      tileHeight={GRID_TILE_H}
+      gap={6}
+      style={folderGridStyle}
+      renderItem={(e) => (
+        <FolderTile
+          entry={e}
+          path={joinPath(props.dir, e.name)}
+          fileUrl={props.fileUrl}
+          onSelect={props.onSelect}
+          onActivate={props.onActivate}
+        />
+      )}
+    />
+  </Show>
 );
 
 // FolderTile shows one entry. For thumbnailable images it fetches a
@@ -3360,14 +3371,15 @@ const FolderTile: Component<{
   );
 };
 
+// Scroll-container chrome for the windowed grid (VirtualGrid owns the inner
+// grid + overflow). height:100% + min-height:0 lets it fill the dock row and
+// scroll internally instead of collapsing.
 const folderGridStyle: JSX.CSSProperties = {
-  display: 'grid',
-  'grid-template-columns': `repeat(auto-fill, minmax(${GRID_TILE}px, 1fr))`,
-  'align-content': 'start',
-  gap: '6px',
-  padding: '10px',
-  overflow: 'auto',
+  height: '100%',
+  'min-height': 0,
+  padding: '8px',
   background: '#0c0c14',
+  'box-sizing': 'border-box',
 };
 
 const tileStyle: JSX.CSSProperties = {
@@ -3380,6 +3392,8 @@ const tileStyle: JSX.CSSProperties = {
   cursor: 'pointer',
   'user-select': 'none',
   overflow: 'hidden',
+  height: '100%',
+  'box-sizing': 'border-box',
 };
 
 const tileThumbStyle: JSX.CSSProperties = {

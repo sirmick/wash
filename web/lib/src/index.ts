@@ -17,6 +17,8 @@ export { FilePicker } from './file-picker';
 export type { FilePickerProps, FilterSpec } from './file-picker';
 export { Splitter } from './splitter';
 export type { SplitterProps, SplitterOrientation } from './splitter';
+export { VirtualGrid } from './virtual-grid';
+export type { VirtualGridProps } from './virtual-grid';
 export {
   Terminal,
   TERM_FONTS,
