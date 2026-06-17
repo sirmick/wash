@@ -105,7 +105,9 @@ if(WLROOTS_FOUND AND WAYLAND_FOUND AND XKB_FOUND AND PIXMAN_FOUND)
     set(WP_GENERATED "")
     # name -> path-under-pkgdatadir
     foreach(proto
-        "xdg-shell=stable/xdg-shell/xdg-shell.xml")
+        "xdg-shell=stable/xdg-shell/xdg-shell.xml"
+        "cursor-shape-v1=staging/cursor-shape/cursor-shape-v1.xml"
+        "tablet-v2=stable/tablet/tablet-v2.xml")
         string(REPLACE "=" ";" _p ${proto})
         list(GET _p 0 _name)
         list(GET _p 1 _rel)

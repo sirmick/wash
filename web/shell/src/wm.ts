@@ -147,6 +147,13 @@ export function moveLocal(windowID: number, x: number, y: number): void {
   setWindows((w) => w.windowID === windowID, { x, y });
 }
 
+// windowById returns the live window record (or undefined). Used by the
+// display element's move bridge to read a window's current x/y when a CSD
+// guest requests an interactive move (M8).
+export function windowById(windowID: number): Win | undefined {
+  return windows.find((w) => w.windowID === windowID);
+}
+
 export function resizeLocal(windowID: number, w: number, h: number): void {
   setWindows((win) => win.windowID === windowID, { w, h });
 }

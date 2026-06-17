@@ -259,19 +259,66 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			log.Printf("wash-test clipboard_set: %v", err)
 		}
 	case "clipboard_get":
+		// Echo the request id so a control-socket await_id can correlate the
+		// reply (same pattern as display_open). ClipboardGet blocks on the
+		// router reply, so it MUST run off the read goroutine.
+		id, _ := m["id"].(string)
 		go func() {
 			mime, data, err := c.ClipboardGet(context.Background())
 			if err != nil {
 				log.Printf("wash-test clipboard_get: %v", err)
 				return
 			}
+			log.Printf("wash-test clipboard_get_ok mime=%s bytes=%d", mime, len(data))
+			// kind:"event"+type for the FE's nested dispatch; top-level "id"
+			// lets a control-socket await_id correlate the reply.
 			sendEvent(c, map[string]any{
 				"kind": "event",
 				"type": "clipboard_get_ok",
+				"id":   id,
 				"mime": mime,
 				"text": string(data),
 			})
 		}()
+	case "input":
+		// wash-display input contract (docs/DISPLAY.md §6): the FE
+		// <wash-app-display> element batches pointer/keyboard/scroll events
+		// into one app_msg per rAF. The real BE (wash-display) injects these
+		// into the focused wlroots surface; here we just decode + log each
+		// event so the e2e can assert the FE→BE round-trip (capture,
+		// coalescing, coordinate mapping) without a compositor. Note the
+		// target window is the payload's "win", NOT the app_msg win arg —
+		// the router delivers cross-instance app_msgs on the primary window.
+		dwin := uint32(sdk.ToUint64(m["win"]))
+		pchan := uint32(sdk.ToUint64(m["popup_chan"]))
+		evs, _ := m["events"].([]any)
+		log.Printf("wash-test input win=%d popup_chan=%d events=%d", dwin, pchan, len(evs))
+		for _, e := range evs {
+			em := sdk.AsMap(e)
+			if em == nil {
+				continue
+			}
+			switch sdk.ToString(em["ev"]) {
+			case "motion":
+				log.Printf("wash-test input win=%d ev=motion x=%d y=%d",
+					dwin, sdk.ToInt64(em["x"]), sdk.ToInt64(em["y"]))
+			case "motion_rel":
+				log.Printf("wash-test input win=%d ev=motion_rel dx=%d dy=%d",
+					dwin, sdk.ToInt64(em["dx"]), sdk.ToInt64(em["dy"]))
+			case "button":
+				log.Printf("wash-test input win=%d ev=button btn=%s state=%s",
+					dwin, sdk.ToString(em["btn"]), sdk.ToString(em["state"]))
+			case "axis":
+				log.Printf("wash-test input win=%d ev=axis axis=%s delta=%d",
+					dwin, sdk.ToString(em["axis"]), sdk.ToInt64(em["delta"]))
+			case "key":
+				log.Printf("wash-test input win=%d ev=key code=%s state=%s",
+					dwin, sdk.ToString(em["code"]), sdk.ToString(em["state"]))
+			default:
+				log.Printf("wash-test input win=%d ev=%s (unknown)",
+					dwin, sdk.ToString(em["ev"]))
+			}
+		}
 	case "open_echo":
 		// OpenChannel must NOT be called from a callback that runs on
 		// the SDK's read goroutine — the response arrives on that
@@ -346,6 +393,60 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			}
 			sendEvent(c, map[string]any{"kind": "display_opened", "id": id, "windows": windows})
 		}()
+	case "popup_open":
+		// Open a child-surface overlay channel (kind "video-popup") on an
+		// existing display window and push a geometry control frame + one
+		// canned pixel frame — the fake-display analogue of an X/Wayland
+		// menu mapping (docs/DISPLAY.md §12 M3). The shell routes it to the
+		// parent window's <wash-app-display> as a positioned overlay canvas.
+		id, _ := m["id"].(string)
+		parent := uint32(sdk.ToUint64(m["win"]))
+		px := int(sdk.ToInt64(m["x"]))
+		py := int(sdk.ToInt64(m["y"]))
+		go func() {
+			ch, err := c.OpenChannelKind(context.Background(), parent, wire.ChannelKindVideoPopup)
+			if err != nil {
+				log.Printf("wash-test popup_open channel parent=%d: %v", parent, err)
+				sendEvent(c, map[string]any{"kind": "popup_opened", "id": id, "channel": uint64(0)})
+				return
+			}
+			// Geometry control frame (< 45 bytes → the FE reads it as JSON,
+			// not a pixel frame).
+			ctrl := []byte(fmt.Sprintf(`{"x":%d,"y":%d}`, px, py))
+			if _, err := ch.Write(ctrl); err != nil {
+				log.Printf("wash-test popup_open ctrl: %v", err)
+			}
+			if _, err := ch.Write(fakeFrame); err != nil {
+				log.Printf("wash-test popup_open frame: %v", err)
+			}
+			st.mu.Lock()
+			if st.displayChans == nil {
+				st.displayChans = map[uint32]*sdk.RawChannel{}
+			}
+			st.displayChans[parent*100000+ch.ID()] = ch // unique key; cleaned on teardown
+			st.mu.Unlock()
+			log.Printf("wash-test popup win=%d channel=%d off=%d,%d", parent, ch.ID(), px, py)
+			sendEvent(c, map[string]any{"kind": "popup_opened", "id": id, "channel": uint64(ch.ID())})
+		}()
+	case "display_cursor":
+		// Push a cursor control frame on a display window's video channel —
+		// the fake-display analogue of a guest naming its cursor via
+		// cursor-shape-v1 (DISPLAY.md §12 M4). < 45 bytes, so the element
+		// reads it as a {cursor} control, not a pixel frame.
+		win := uint32(sdk.ToUint64(m["win"]))
+		name, _ := m["cursor"].(string)
+		if name == "" {
+			name = "default"
+		}
+		st.mu.Lock()
+		ch := st.displayChans[win]
+		st.mu.Unlock()
+		if ch != nil {
+			if _, err := ch.Write([]byte(fmt.Sprintf(`{"cursor":%q}`, name))); err != nil {
+				log.Printf("wash-test display_cursor: %v", err)
+			}
+			log.Printf("wash-test display_cursor win=%d cursor=%s", win, name)
+		}
 	case "display_close":
 		id, _ := m["id"].(string)
 		var win uint32

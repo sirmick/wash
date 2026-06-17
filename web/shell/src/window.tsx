@@ -409,25 +409,29 @@ export function FloatingWindow(props: WindowProps) {
           <CrashPane info={props.win.crashed!} title={props.win.title} />
         </Show>
       </div>
-      <Show when={!props.win.chromeless}>
-        <div
-          class="wash-resize-handle"
-          data-testid="window-resize"
-          onPointerDown={onResizeHandlePointerDown}
-          title="Resize"
-          style={{
-            position: 'absolute',
-            right: '0',
-            bottom: '0',
-            width: '14px',
-            height: '14px',
-            cursor: 'nwse-resize',
-            'z-index': '1',
-            background:
-              'linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0.18) 70%, transparent 70%)',
-          }}
-        />
-      </Show>
+      {/* Bottom-right resize grip. Rendered for chromeless windows too (M8b)
+          — a CSD guest's own resize edge lives in the shadow margin we crop
+          away, so it's unreachable; this wash-owned grip drives window.resize
+          (→ the guest's set_size) instead. Invisible for chromeless so it
+          doesn't clutter the guest's own chrome; just the resize cursor. */}
+      <div
+        class="wash-resize-handle"
+        data-testid="window-resize"
+        onPointerDown={onResizeHandlePointerDown}
+        title="Resize"
+        style={{
+          position: 'absolute',
+          right: '0',
+          bottom: '0',
+          width: props.win.chromeless ? '18px' : '14px',
+          height: props.win.chromeless ? '18px' : '14px',
+          cursor: 'nwse-resize',
+          'z-index': '1',
+          background: props.win.chromeless
+            ? 'transparent'
+            : 'linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0.18) 70%, transparent 70%)',
+        }}
+      />
     </div>
   );
 }
