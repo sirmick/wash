@@ -36,7 +36,7 @@ import (
 //go:embed all:assets
 var assetsFS embed.FS
 
-const version = "0.9.0"
+const version = "0.9.1"
 
 // servicesIcon — lucide sprite name. server-cog reads as "init
 // system" without colliding with com.wash.settings's gear-shaped

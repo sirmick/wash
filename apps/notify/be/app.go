@@ -54,7 +54,7 @@ import (
 	"github.com/sirmick/wash/internal/wire"
 )
 
-const version = "0.9.0"
+const version = "0.9.1"
 
 // AppID is the reserved app id for the notify service. Exposed so the
 // router (and any consumer that needs to address the service

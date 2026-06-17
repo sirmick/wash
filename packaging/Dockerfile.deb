@@ -4,7 +4,7 @@
 #
 # Usage (driven by packaging/run_matrix.sh):
 #   docker build -f packaging/Dockerfile.deb \
-#     --build-arg BASE=ubuntu:24.04 --build-arg VERSION=0.9.0 \
+#     --build-arg BASE=ubuntu:24.04 --build-arg VERSION=0.9.1 \
 #     --build-arg PKG_ARCH=amd64 --build-arg WASH_DISPLAY=0 \
 #     -t wash-pkg:ubuntu-24.04-amd64 packaging/build-ctx
 #
@@ -12,7 +12,7 @@
 #   ./wash_<ver>.tar.xz   — source + prebuilt out/wash-* (container-built)
 
 ARG BASE=ubuntu:24.04
-ARG VERSION=0.9.0
+ARG VERSION=0.9.1
 # PKG_ARCH: Debian arch to stamp (amd64 | arm64 | riscv64). The matching
 # prebuilt binaries are already under out/ (cross-compiled by the build
 # container), so dpkg-buildpackage just packages them for that arch.

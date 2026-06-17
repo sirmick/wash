@@ -39,7 +39,7 @@ import (
 	"github.com/sirmick/wash/internal/wire"
 )
 
-const version = "0.9.0"
+const version = "0.9.1"
 
 // AppID is the reserved id this app claims. The registry refuses any
 // non-trusted binary from serving this id (see internal/router/

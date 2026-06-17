@@ -29,7 +29,7 @@ import (
 	"time"
 )
 
-const version = "0.9.0"
+const version = "0.9.1"
 
 // Run drives the wash-launch CLI with the given argv (excluding the
 // program name). Returns a process exit code — 0 on success, non-zero

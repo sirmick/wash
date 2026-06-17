@@ -15,7 +15,7 @@
 #   docker buildx build --platform linux/arm64 --load \
 #     -f packaging/Dockerfile.display \
 #     --build-arg BUILDER=wash-build:debian-13-display \
-#     --build-arg VERSION=0.9.0 \
+#     --build-arg VERSION=0.9.1 \
 #     -t wash-display-bin:debian-13-arm64 packaging/build-ctx
 
 # FE_BUILDER is an amd64 image with Node (e.g. the core wash-build); it builds
@@ -24,7 +24,7 @@
 # pins $BUILDPLATFORM (amd64), so its base must have an amd64 variant.
 ARG FE_BUILDER=wash-build:ubuntu-24.04
 ARG BUILDER=wash-build:debian-13-display
-ARG VERSION=0.9.0
+ARG VERSION=0.9.1
 
 # ---- FE stage: build panel.js on the native build host ($BUILDPLATFORM) ----
 FROM --platform=$BUILDPLATFORM ${FE_BUILDER} AS fe

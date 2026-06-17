@@ -45,7 +45,7 @@ import (
 //go:embed all:assets
 var assetsFS embed.FS
 
-const version = "0.9.0"
+const version = "0.9.1"
 
 // syslogsIcon matches wash-journal's "scroll-text". The two apps
 // view different surfaces of the same domain (the journal's

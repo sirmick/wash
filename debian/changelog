@@ -1,3 +1,12 @@
+wash (0.9.1-1) unstable; urgency=low
+
+  * wash-display: native X/Wayland compositor — real X11/Wayland guests run as
+    wash windows (input/clipboard/popups/cursor/1080p output, subsurface
+    capture + damage, chromeless CSD windows with move/resize bridges,
+    shaped-popup alpha, and subsurface pointer-focus for in-window dropdowns).
+
+ -- sirmick <sirmick@gmail.com>  Tue, 16 Jun 2026 21:32:47 -0700
+
 wash (0.9.0-1) unstable; urgency=low
 
   * Hermetic native packaging: deb/rpm/apk built from a source-only tarball

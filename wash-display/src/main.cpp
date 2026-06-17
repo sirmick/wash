@@ -33,7 +33,7 @@
 #include <unistd.h>
 
 static const char* kAppID = "com.wash.display";
-static const char* kVersion = "0.9.0";
+static const char* kVersion = "0.9.1";
 static const int kProto = 1;
 
 // crash_handler dumps a native backtrace to stderr on a fatal signal so

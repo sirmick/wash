@@ -21,13 +21,13 @@
 # Usage (driven by packaging/run_matrix.sh):
 #   docker build -f packaging/Dockerfile.binaries \
 #     --build-arg BUILDER=wash-build:ubuntu-24.04 \
-#     --build-arg VERSION=0.9.0 --build-arg GOARCH=arm64 \
+#     --build-arg VERSION=0.9.1 --build-arg GOARCH=arm64 \
 #     -t wash-binaries:ubuntu-24.04-arm64 packaging/build-ctx
 
 ARG BUILDER=wash-build:ubuntu-24.04
 FROM ${BUILDER} AS build
 
-ARG VERSION=0.9.0
+ARG VERSION=0.9.1
 ARG GOARCH=amd64
 ARG WASH_DISPLAY=0
 

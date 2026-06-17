@@ -28,7 +28,7 @@ import (
 	"github.com/sirmick/wash/internal/wire"
 )
 
-const version = "0.9.0"
+const version = "0.9.1"
 
 // AppID is the reserved app id consumers address. Exported so other
 // apps (fm, the session BE gateway) can reference it without

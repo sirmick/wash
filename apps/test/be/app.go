@@ -73,7 +73,7 @@ func makeFakeFrame(payload []byte) []byte {
 //go:embed all:assets
 var assetsFS embed.FS
 
-const version = "0.9.0"
+const version = "0.9.1"
 
 // state is per-process, shared between callbacks. The test app is
 // single-window per process (instancing=multi), so this is fine.
