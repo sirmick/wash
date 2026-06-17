@@ -31,6 +31,7 @@ import (
 	wfs "github.com/sirmick/wash/internal/fs"
 	"github.com/sirmick/wash/internal/fswatch"
 	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/internal/thumbs"
 )
 
 //go:embed all:assets
@@ -320,6 +321,10 @@ func registerHandlers(b *sdk.Bus) {
 
 	// Download egress (confined fs → browser save); see download.go.
 	registerDownloadHandlers(b)
+
+	// Image bytes / thumbnails over a raw channel, for the folder-grid
+	// preview. Confined to the same fs root as every other fm operation.
+	thumbs.RegisterServer(b, fmFS.Confine)
 
 	// Fire-and-forget commands (no reply).
 	sdk.HandleVoid(b, "request_initial", func(_ *sdk.Conn, _ string, _ struct{}) error {

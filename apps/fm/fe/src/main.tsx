@@ -20,7 +20,8 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, defineWashApp, tokens } from '@wash/ui';
+import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, createFileClient, defineWashApp, tokens } from '@wash/ui';
+import type { FileClient } from '@wash/ui';
 import {
   baseName, formatDate, humanSize, joinPath, octalPerm, parentPath, ancestorChain,
   createBus,
@@ -49,11 +50,16 @@ import {
   ChevronRight,
   ChevronUp,
   File as FileIcon,
+  FileArchive,
+  FileCode,
+  FileImage,
+  FileText,
   FilePlus,
   Folder as FolderIcon,
   FolderPlus,
   Home as HomeIcon,
   Link2,
+  Music,
   PanelRightClose,
   PanelRightOpen,
   Pencil,
@@ -61,6 +67,7 @@ import {
   Square,
   Trash2,
   Upload,
+  Video,
   FolderUp,
 } from 'lucide-solid';
 
@@ -156,6 +163,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // ---- reactive state ----
   const [path, setPath] = createSignal('');
   const [selectedEntry, setSelectedEntry] = createSignal<Entry | null>(null);
+  // selectedPath: the path of selectedEntry(), so the folder-grid preview
+  // knows which directory's listing to render — path() doesn't move on a
+  // folder single-click. Kept in sync at every setSelectedEntry site.
+  const [selectedPath, setSelectedPath] = createSignal('');
+  // fileClient streams image bytes/thumbnails from the BE over a raw
+  // channel (no HTTP) and hands back blob URLs for the grid's <img>s.
+  const fileClient: FileClient = createFileClient({ instance: props.instance, host: props.host });
+  onCleanup(() => fileClient.dispose());
   const [listings, setListings] = createStore<Record<string, Entry[]>>({});
   const [expanded, setExpanded] = createStore<Record<string, true>>({});
   // Back/forward history. The push/back/forward index arithmetic lives
@@ -388,13 +403,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             if (!pathInputValue()) setPathInputValue(p);
           }
           setSelectedEntry(findEntry(path() || p));
+          setSelectedPath(path() || p);
           expandPath(path() || p);
         } else if (parentPath(path()) === p) {
           // Parent listing just arrived — refresh the selection's
           // entry metadata (info pane, etc.) which was stale while
           // we were navigating with no parent listing in hand.
           const fresh = findEntry(path());
-          if (fresh) setSelectedEntry(fresh);
+          if (fresh) {
+            setSelectedEntry(fresh);
+            setSelectedPath(path());
+          }
         }
         pendingNav = null;
         return;
@@ -555,6 +574,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const entry = findEntry(p);  // may be null if par isn't listed
     setPath(p);
     setSelectedEntry(entry);
+    setSelectedPath(p);
     setPathInputValue(p);
     if (pushHistory) {
       setNavHistory(pushPath(navHistory(), p));
@@ -606,10 +626,33 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     applySelection(result.selection, 'row-click');
     selectionAnchor = result.anchor;
     setSelectedEntry(entry);
+    setSelectedPath(rowPath);
     if (isPlain) setStatusOverride(null);
     if (entry.type === 'file') {
       focusForFile(rowPath);
       if (isPlain) sendRead(rowPath);
+    } else if (entry.type === 'dir' && isPlain && !listings[rowPath]) {
+      // Selecting a folder previews its contents as a grid; make sure its
+      // listing is loaded (a plain select doesn't expand the tree row).
+      sendList(rowPath);
+    }
+  };
+
+  // selectFromGrid handles a click on a folder-grid tile: select the
+  // entry (so info/preview follow) and either drill into a subfolder's
+  // grid or preview a file — mirroring a plain row click.
+  const selectFromGrid = (p: string, entry: Entry) => {
+    setStatusOverride(null);
+    applySelection(new Set([p]), 'grid-click');
+    selectionAnchor = p;
+    setSelectedEntry(entry);
+    setSelectedPath(p);
+    if (entry.type === 'dir') {
+      if (!listings[p]) sendList(p);
+    } else {
+      setPath(p);
+      setPathInputValue(p);
+      if (entry.type === 'file') sendRead(p);
     }
   };
 
@@ -814,6 +857,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     });
     applySelection(new Set(), 'bulk-delete-clear');
     setSelectedEntry(null);
+    setSelectedPath('');
   };
 
   const performDelete = async () => {
@@ -837,6 +881,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       setPath(par);
       setPathInputValue(par);
       setSelectedEntry(null);
+      setSelectedPath('');
       setPreviewContent(null);
     } else if (reply.kind === 'delete_err' && reply.code === 'not_empty') {
       dispatchBulkDelete([target]);
@@ -1719,6 +1764,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const openContextMenu = (ev: MouseEvent, entry: Entry, p: string) => {
     ev.preventDefault();
     setSelectedEntry(entry);
+    setSelectedPath(p);
     setPath(p);
     setPathInputValue(p);
     // Native FM convention: right-clicking an unselected row
@@ -2101,7 +2147,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               onChmod={commitChmod}
               onChown={commitChown}
             />
-            <PreviewPane content={previewContent()} />
+            <Show
+              when={selectedEntry()?.type === 'dir'}
+              fallback={<PreviewPane content={previewContent()} />}
+            >
+              <FolderGrid
+                dir={selectedPath()}
+                entries={listings[selectedPath()] ?? []}
+                fileUrl={(p, dim) => fileClient.url(p, { dim })}
+                onOpen={selectFromGrid}
+              />
+            </Show>
           </div>
         </Show>
       </div>
@@ -3172,17 +3228,174 @@ const infoBodyStyle: JSX.CSSProperties = {
 
 // ---- helpers ----
 
-const EntryIcon: Component<{ entry: Entry }> = (props) => {
-  switch (props.entry.type) {
-    case 'dir':
-      return <FolderIcon size={12} />;
-    case 'symlink':
-      return <Link2 size={12} />;
-    case 'file':
-      return <FileIcon size={12} />;
+const EntryIcon: Component<{ entry: Entry; size?: number }> = (props) =>
+  iconForEntry(props.entry, props.size ?? 12);
+
+// iconForEntry picks a lucide glyph for an entry: folders/symlinks by
+// type, files by extension (image/text/code/archive/audio/video), so the
+// tree and the folder grid both read at a glance.
+function iconForEntry(entry: Entry, size: number): JSX.Element {
+  if (entry.type === 'dir') return <FolderIcon size={size} />;
+  if (entry.type === 'symlink') return <Link2 size={size} />;
+  switch (extOf(entry.name)) {
+    case 'png': case 'jpg': case 'jpeg': case 'gif': case 'webp':
+    case 'bmp': case 'svg': case 'ico': case 'tiff': case 'avif':
+      return <FileImage size={size} />;
+    case 'txt': case 'md': case 'rst': case 'log': case 'csv': case 'pdf':
+      return <FileText size={size} />;
+    case 'go': case 'ts': case 'tsx': case 'js': case 'jsx': case 'json':
+    case 'py': case 'rs': case 'c': case 'h': case 'cpp': case 'hpp':
+    case 'sh': case 'html': case 'css': case 'yaml': case 'yml': case 'toml':
+      return <FileCode size={size} />;
+    case 'zip': case 'tar': case 'gz': case 'bz2': case 'xz': case 'zst':
+    case 'rar': case '7z':
+      return <FileArchive size={size} />;
+    case 'mp3': case 'wav': case 'flac': case 'ogg': case 'm4a': case 'aac':
+      return <Music size={size} />;
+    case 'mp4': case 'mkv': case 'mov': case 'avi': case 'webm': case 'm4v':
+      return <Video size={size} />;
     default:
-      return <FileIcon size={12} />;
+      return <FileIcon size={size} />;
   }
+}
+
+function extOf(name: string): string {
+  const i = name.lastIndexOf('.');
+  return i > 0 ? name.slice(i + 1).toLowerCase() : '';
+}
+
+// THUMB_EXTS: formats internal/thumbs can decode (stdlib). Others (e.g.
+// webp/svg) keep their file-type icon rather than a broken thumbnail.
+const THUMB_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif']);
+const isThumbable = (entry: Entry): boolean =>
+  entry.type === 'file' && THUMB_EXTS.has(extOf(entry.name));
+
+const GRID_TILE = 100; // tile box px
+const GRID_THUMB = 160; // requested thumbnail max edge px
+
+// FolderGrid renders a directory's entries as icon/thumbnail tiles in the
+// preview pane (shown when a folder is selected). Thumbnails stream lazily
+// via fileUrl; non-images and undecodable formats fall back to an icon.
+const FolderGrid: Component<{
+  dir: string;
+  entries: Entry[];
+  fileUrl: (path: string, dim: number) => Promise<string>;
+  onOpen: (path: string, entry: Entry) => void;
+}> = (props) => (
+  <div data-testid="fm-folder-grid" style={folderGridStyle}>
+    <Show
+      when={props.entries.length > 0}
+      fallback={<div style={{ padding: '16px', color: tokens.fgDim, 'font-style': 'italic', 'font-size': '13px' }}>(empty folder)</div>}
+    >
+      <For each={props.entries}>
+        {(e) => (
+          <FolderTile
+            entry={e}
+            path={joinPath(props.dir, e.name)}
+            fileUrl={props.fileUrl}
+            onOpen={props.onOpen}
+          />
+        )}
+      </For>
+    </Show>
+  </div>
+);
+
+// FolderTile shows one entry. For thumbnailable images it fetches a
+// thumbnail when scrolled into view (IntersectionObserver) — so a big
+// folder doesn't request every image at once — and falls back to the
+// file-type icon on miss or while loading.
+const FolderTile: Component<{
+  entry: Entry;
+  path: string;
+  fileUrl: (path: string, dim: number) => Promise<string>;
+  onOpen: (path: string, entry: Entry) => void;
+}> = (props) => {
+  const [thumb, setThumb] = createSignal<string | null>(null);
+  const [failed, setFailed] = createSignal(false);
+  let el: HTMLDivElement | undefined;
+  onMount(() => {
+    if (!isThumbable(props.entry) || !el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const en of entries) {
+          if (!en.isIntersecting) continue;
+          io.disconnect();
+          props.fileUrl(props.path, GRID_THUMB).then(setThumb).catch(() => setFailed(true));
+        }
+      },
+      { rootMargin: '120px' },
+    );
+    io.observe(el);
+    onCleanup(() => io.disconnect());
+  });
+  return (
+    <div
+      ref={el}
+      data-testid={`fm-tile-${props.entry.name}`}
+      data-type={props.entry.type}
+      style={tileStyle}
+      title={props.entry.name}
+      onClick={() => props.onOpen(props.path, props.entry)}
+      onDblClick={() => props.onOpen(props.path, props.entry)}
+    >
+      <div style={tileThumbStyle}>
+        <Show when={thumb() && !failed()} fallback={<EntryIcon entry={props.entry} size={34} />}>
+          <img src={thumb()!} alt="" style={tileImgStyle} />
+        </Show>
+      </div>
+      <span style={tileNameStyle}>{props.entry.name}</span>
+    </div>
+  );
+};
+
+const folderGridStyle: JSX.CSSProperties = {
+  display: 'grid',
+  'grid-template-columns': `repeat(auto-fill, minmax(${GRID_TILE}px, 1fr))`,
+  'align-content': 'start',
+  gap: '6px',
+  padding: '10px',
+  overflow: 'auto',
+  background: '#0c0c14',
+};
+
+const tileStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'flex-direction': 'column',
+  'align-items': 'center',
+  gap: '4px',
+  padding: '6px 4px',
+  'border-radius': `${tokens.radiusMd}px`,
+  cursor: 'pointer',
+  'user-select': 'none',
+  overflow: 'hidden',
+};
+
+const tileThumbStyle: JSX.CSSProperties = {
+  width: '100%',
+  height: '64px',
+  display: 'flex',
+  'align-items': 'center',
+  'justify-content': 'center',
+  color: tokens.fgMuted,
+};
+
+const tileImgStyle: JSX.CSSProperties = {
+  'max-width': '100%',
+  'max-height': '64px',
+  'object-fit': 'contain',
+  'border-radius': `${tokens.radiusSm}px`,
+  background: '#000',
+};
+
+const tileNameStyle: JSX.CSSProperties = {
+  'font-size': '11px',
+  color: tokens.fg,
+  'max-width': '100%',
+  overflow: 'hidden',
+  'text-overflow': 'ellipsis',
+  'white-space': 'nowrap',
+  'text-align': 'center',
 };
 
 // Pure path/format helpers (joinPath, parentPath, baseName, humanSize,
