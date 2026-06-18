@@ -580,7 +580,7 @@ const searchInputStyle: JSX.CSSProperties = {
   padding: '0 10px 0 28px',
   background: tokens.bgMenu,
   border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusMd}px`,
+  'border-radius': `${tokens.radiusMd}`,
   color: tokens.fg,
   font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
   outline: 'none',
@@ -644,7 +644,7 @@ const installedBadgeStyle: JSX.CSSProperties = {
   color: tokens.fgMuted,
   background: tokens.bgRowSelected,
   padding: '1px 6px',
-  'border-radius': `${tokens.radiusSm}px`,
+  'border-radius': `${tokens.radiusSm}`,
   'font-weight': 'normal',
 };
 
@@ -657,7 +657,7 @@ const kindBadgeStyle: JSX.CSSProperties = {
   background: tokens.bgInfo,
   border: `1px solid ${tokens.borderFocus}`,
   padding: '0 6px',
-  'border-radius': `${tokens.radiusSm}px`,
+  'border-radius': `${tokens.radiusSm}`,
   'font-weight': 'normal',
 };
 

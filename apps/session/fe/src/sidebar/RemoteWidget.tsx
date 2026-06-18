@@ -125,7 +125,7 @@ const HostEntry: Component<{
             'flex-shrink': 0,
           }}
         />
-        <span style={{ color: '#ddd', flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+        <span style={{ color: tokens.fg, flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
           {props.host.host}
         </span>
         <Show when={up()} fallback={<span style={{ opacity: 0.6, font: `10px ${tokens.fontMono}` }}>{statusLabel(props.host.status)}</span>}>
@@ -194,7 +194,7 @@ export const RemoteWidget: Component<RemoteWidgetProps> = (props) => (
       onClick={() => props.onManage()}
       style={{
         background: 'transparent',
-        color: '#ddd',
+        color: tokens.fg,
         border: `1px solid ${tokens.borderMenu}`,
         'border-radius': '3px',
         padding: '3px 8px',

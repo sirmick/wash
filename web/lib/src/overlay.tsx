@@ -44,7 +44,7 @@ export const Overlay: ParentComponent<OverlayProps> = (props) => {
         style={{
           background: tokens.bgWindow,
           border: `1px solid ${tokens.borderWindow}`,
-          'border-radius': `${tokens.radiusLg}px`,
+          'border-radius': `${tokens.radiusLg}`,
           padding: `${tokens.spaceXl}px ${tokens.spaceXxl}px`,
           'min-width': '280px',
           'max-width': 'calc(100% - 32px)',
@@ -121,7 +121,7 @@ function confirmBtnStyle(danger: boolean): JSX.CSSProperties {
     background: danger ? tokens.bgDanger : 'transparent',
     color: tokens.fg,
     border: `1px solid ${danger ? tokens.borderDanger : tokens.borderMenu}`,
-    'border-radius': `${tokens.radiusSm}px`,
+    'border-radius': `${tokens.radiusSm}`,
     padding: '5px 12px',
     cursor: 'pointer',
     font: `${tokens.fontSizeBase} ${tokens.fontSans}`,

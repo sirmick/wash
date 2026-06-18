@@ -371,10 +371,10 @@ const EnabledChip: Component<{ enabled: string }> = (props) => {
   const map: Record<string, { bg: string; fg: string }> = {
     enabled:   { bg: tokens.bgInfo, fg: tokens.fgInfo },
     disabled:  { bg: tokens.bgNeutral, fg: tokens.fgDim },
-    static:    { bg: tokens.bgNeutral, fg: '#c4b5fd' },
+    static:    { bg: tokens.bgNeutral, fg: tokens.accentViolet },
     masked:    { bg: tokens.bgDanger, fg: tokens.fgDanger },
-    alias:     { bg: tokens.bgNeutral, fg: '#c4b5fd' },
-    linked:    { bg: tokens.bgNeutral, fg: '#c4b5fd' },
+    alias:     { bg: tokens.bgNeutral, fg: tokens.accentViolet },
+    linked:    { bg: tokens.bgNeutral, fg: tokens.accentViolet },
     indirect:  { bg: tokens.bgNeutral, fg: tokens.fgDim },
     generated: { bg: tokens.bgNeutral, fg: tokens.fgDim },
   };
@@ -411,7 +411,7 @@ const searchWrapStyle: JSX.CSSProperties = {
   gap: '6px',
   background: tokens.bgInset,
   border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}px`,
+  'border-radius': `${tokens.radiusSm}`,
   padding: '0 8px',
   height: '22px',
   flex: 1,
@@ -437,7 +437,7 @@ const toolbarBtnStyle: JSX.CSSProperties = {
   height: '22px',
   background: 'transparent',
   border: `1px solid transparent`,
-  'border-radius': `${tokens.radiusSm}px`,
+  'border-radius': `${tokens.radiusSm}`,
   color: tokens.fg,
   cursor: 'pointer',
   padding: 0,
@@ -513,7 +513,7 @@ const badgeStyle: JSX.CSSProperties = {
   display: 'inline-flex',
   'align-items': 'center',
   padding: '2px 8px',
-  'border-radius': `${tokens.radiusSm}px`,
+  'border-radius': `${tokens.radiusSm}`,
   font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
   'white-space': 'nowrap',
 };
@@ -523,7 +523,7 @@ const chipStyle: JSX.CSSProperties = {
   'align-items': 'center',
   'justify-content': 'center',
   padding: '2px 6px',
-  'border-radius': `${tokens.radiusSm}px`,
+  'border-radius': `${tokens.radiusSm}`,
   font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
 };
 
@@ -547,7 +547,7 @@ function iconBtnStyle(active: boolean): JSX.CSSProperties {
     height: '24px',
     background: active ? tokens.bgRowSelected : 'transparent',
     border: `1px solid ${tokens.borderMenu}`,
-    'border-radius': `${tokens.radiusSm}px`,
+    'border-radius': `${tokens.radiusSm}`,
     color: tokens.fg,
     cursor: 'pointer',
     padding: 0,

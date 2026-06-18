@@ -82,7 +82,7 @@ const IdentityRow: Component<{ info: () => AboutSystemInfo | null }> = (props) =
         'line-height': 1.4,
       }}
     >
-      <div data-testid="about-host" style={{ 'font-weight': 600, color: '#ddd' }}>{host()}</div>
+      <div data-testid="about-host" style={{ 'font-weight': 600, color: tokens.fg }}>{host()}</div>
       <div data-testid="about-user">{user()}</div>
     </div>
   );
@@ -92,9 +92,9 @@ const IdentityRow: Component<{ info: () => AboutSystemInfo | null }> = (props) =
  *  percentage. Green-ish at low/mid load, amber past 70%, red past 90%.
  *  Matches the visual language htop uses for ambient monitoring. */
 function percentAccent(pct: number): string {
-  if (pct >= 90) return '#d04040';
-  if (pct >= 70) return '#d0a040';
-  return '#5070d0';
+  if (pct >= 90) return tokens.accentRed;
+  if (pct >= 70) return tokens.accentAmber;
+  return tokens.accentBlue;
 }
 
 function memLabel(s: AboutHostStats | null): string {
@@ -124,7 +124,7 @@ const Bar: Component<{
     <div data-testid={props.testid} data-percent={widthPct().toFixed(1)}>
       <div style={labelRow}>
         <span style={{ opacity: 0.65, 'letter-spacing': '0.05em' }}>{props.label}</span>
-        <span style={{ 'font-variant-numeric': 'tabular-nums', color: '#ddd' }}>{props.valueLabel()}</span>
+        <span style={{ 'font-variant-numeric': 'tabular-nums', color: tokens.fg }}>{props.valueLabel()}</span>
       </div>
       <div
         style={{

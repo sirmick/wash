@@ -17,6 +17,14 @@
 
 import type { Component, JSX } from 'solid-js';
 import { Show } from 'solid-js';
+import { tokens } from '@wash/ui';
+
+// Glassy themed surfaces: the pack's menu/hover surface at partial
+// opacity so the wallpaper shows through the blur, but the tint follows
+// the active pack (dark on Midnight/Tokyo, light on Seoul).
+const GLASS_PANEL = `color-mix(in srgb, ${tokens.bgMenu} 92%, transparent)`;
+const GLASS_TAB = `color-mix(in srgb, ${tokens.bgMenu} 78%, transparent)`;
+const GLASS_TAB_HOVER = `color-mix(in srgb, ${tokens.bgRowHover} 90%, transparent)`;
 
 export type SidebarMode = 'open' | 'hidden';
 
@@ -46,10 +54,10 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       position: 'absolute',
       right: 0,
       width: `${SIDEBAR_OPEN_WIDTH}px`,
-      background: 'rgba(15,15,30,0.92)',
+      background: GLASS_PANEL,
       'backdrop-filter': 'blur(10px)',
       '-webkit-backdrop-filter': 'blur(10px)',
-      'border-left': '1px solid #2a2a4a',
+      'border-left': `1px solid ${tokens.borderMenu}`,
       display: 'flex',
       'flex-direction': 'column',
       'z-index': 9999, // just below taskbar (10000)
@@ -78,14 +86,14 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       position: 'absolute',
       right: 0,
       width: `${SIDEBAR_TAB_WIDTH}px`,
-      background: 'rgba(15,15,30,0.7)',
-      'border-left': '1px solid #2a2a4a',
+      background: GLASS_TAB,
+      'border-left': `1px solid ${tokens.borderMenu}`,
       cursor: 'pointer',
       'z-index': 9998,
       display: 'flex',
       'align-items': 'center',
       'justify-content': 'center',
-      color: '#8a8a9a',
+      color: tokens.fgMuted,
       transition: 'background 120ms, color 120ms',
       'font-size': '11px',
     };
@@ -105,8 +113,8 @@ export const Sidebar: Component<SidebarProps> = (props) => {
     'align-items': 'center',
     'justify-content': 'space-between',
     padding: '0 10px',
-    'border-bottom': '1px solid #2a2a4a',
-    color: '#aaa',
+    'border-bottom': `1px solid ${tokens.borderMenu}`,
+    color: tokens.fgMuted,
     font: '11px ui-sans-serif,system-ui,sans-serif',
     'letter-spacing': '0.1em',
     'text-transform': 'uppercase',
@@ -116,7 +124,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
   const closeBtnStyle: JSX.CSSProperties = {
     background: 'transparent',
     border: 'none',
-    color: '#888',
+    color: tokens.fgDim,
     cursor: 'pointer',
     'font-size': '14px',
     'line-height': 1,
@@ -161,8 +169,8 @@ export const Sidebar: Component<SidebarProps> = (props) => {
           title="Show sidebar (Ctrl+Alt+S)"
           onClick={props.onToggle}
           style={tabStyle()}
-          onMouseEnter={(ev) => (ev.currentTarget.style.background = 'rgba(30,30,50,0.9)')}
-          onMouseLeave={(ev) => (ev.currentTarget.style.background = 'rgba(15,15,30,0.7)')}
+          onMouseEnter={(ev) => (ev.currentTarget.style.background = GLASS_TAB_HOVER)}
+          onMouseLeave={(ev) => (ev.currentTarget.style.background = GLASS_TAB)}
         >
           ‹
         </div>

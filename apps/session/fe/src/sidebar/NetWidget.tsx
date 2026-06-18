@@ -81,7 +81,7 @@ export const NetWidget: Component<NetWidgetProps> = (props) => {
             'flex-shrink': 0,
           }}
         />
-        <span style={{ color: '#ddd', flex: 1 }}>{status()}</span>
+        <span style={{ color: tokens.fg, flex: 1 }}>{status()}</span>
         <Show when={st()?.phase}>
           <span style={{ opacity: 0.6, font: `10px ${tokens.fontMono}` }}>{st()!.phase}</span>
         </Show>
@@ -101,7 +101,7 @@ export const NetWidget: Component<NetWidgetProps> = (props) => {
                 style={{ display: 'flex', gap: '6px', 'align-items': 'baseline', font: `10px ${tokens.fontMono}` }}
               >
                 <span style={{ color: tokens.accentBlue, 'min-width': '52px' }}>{ifc.name}</span>
-                <span style={{ color: '#cfd0d4', flex: 1, 'word-break': 'break-all' }}>{ifc.ips.join('  ')}</span>
+                <span style={{ color: tokens.fg, flex: 1, 'word-break': 'break-all' }}>{ifc.ips.join('  ')}</span>
               </div>
             )}
           </For>
@@ -142,7 +142,7 @@ export const NetWidget: Component<NetWidgetProps> = (props) => {
         onClick={() => props.onConfigure()}
         style={{
           background: 'transparent',
-          color: '#ddd',
+          color: tokens.fg,
           border: `1px solid ${tokens.borderMenu}`,
           'border-radius': '3px',
           padding: '3px 8px',

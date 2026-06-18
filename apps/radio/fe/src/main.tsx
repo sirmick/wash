@@ -305,7 +305,7 @@ function RadioApp(props: WashAppProps) {
             background: tokens.bgInset,
             color: tokens.fg,
             border: `1px solid ${tokens.borderMenu}`,
-            'border-radius': `${tokens.radiusSm}px`,
+            'border-radius': `${tokens.radiusSm}`,
             padding: '4px 8px',
             'font-size': tokens.fontSizeMd,
             outline: 'none',

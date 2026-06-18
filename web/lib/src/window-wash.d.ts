@@ -73,6 +73,13 @@ interface WashGlobals {
   sendAppMsgTo(recipient: WashRecipient, data: unknown): void;
   catalog(): WashCatalogApp[];
   onCatalog(cb: (apps: WashCatalogApp[]) => void): () => void;
+  // Fetch a static asset (theme wallpaper, icon, …) from the router's
+  // asset FS over the WS bus (the asset.read channel) — transport-
+  // agnostic, so it works in the in-browser VM where HTTP/ingress
+  // don't. Path is rooted at the asset namespace (e.g.
+  // "wallpapers/midnight.svg"); resolves from the runtime drop spot
+  // (~/.config/wash/assets) or the embedded chrome.
+  fetchAsset(path: string): Promise<{ bytes: Uint8Array; mime: string }>;
   // Remote-host APIs (docs/REMOTE.md §6.1), used by wash-connect.
   // catalogFor returns the apps a connected origin advertises (LOCAL or a
   // remote host reached over an ssh -L tunnel); onRemoteCatalog fires when

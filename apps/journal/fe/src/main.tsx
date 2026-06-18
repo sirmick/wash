@@ -315,7 +315,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const segGroupStyle = {
     display: 'inline-flex',
     border: `1px solid ${tokens.borderMenu}`,
-    'border-radius': `${tokens.radiusSm}px`,
+    'border-radius': `${tokens.radiusSm}`,
     overflow: 'hidden',
   };
 
@@ -335,7 +335,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     'margin-left': 'auto',
     background: tokens.bgMenu,
     border: `1px solid ${tokens.borderMenu}`,
-    'border-radius': `${tokens.radiusSm}px`,
+    'border-radius': `${tokens.radiusSm}`,
     padding: '2px 6px',
   };
 
@@ -522,7 +522,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 background: '#5a3a12',
                 color: tokens.fg,
                 border: `1px solid ${tokens.borderDenied}`,
-                'border-radius': `${tokens.radiusSm}px`,
+                'border-radius': `${tokens.radiusSm}`,
                 padding: '4px 10px',
                 cursor: 'pointer',
                 'font-size': tokens.fontSizeMd,
@@ -543,7 +543,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 background: 'transparent',
                 color: tokens.fg,
                 border: `1px solid ${tokens.borderDanger}`,
-                'border-radius': `${tokens.radiusSm}px`,
+                'border-radius': `${tokens.radiusSm}`,
                 padding: '3px 10px',
                 cursor: 'pointer',
                 'font-size': tokens.fontSizeMd,

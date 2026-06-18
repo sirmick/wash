@@ -20,16 +20,20 @@ import {
   Section,
   Select,
   SmallBtn,
+  defaultPackId,
   defineWashApp,
+  getPack,
+  packs,
   tokens,
 } from '@wash/ui';
-import type { SettingsPanelPort } from '@wash/ui';
+import type { Pack, SettingsPanelPort } from '@wash/ui';
 import { Image as ImageIcon } from 'lucide-solid';
 
 // DesktopConfig mirrors cmd/wash-session/config.go schema. Optional
 // everywhere — defaults are applied for missing fields so an empty
 // file behaves the same as a never-written one.
 interface DesktopConfig {
+  pack?: string;
   wallpaper?: {
     path?: string;
     mode?: 'cover' | 'contain' | 'tile' | 'center';
@@ -74,6 +78,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [panels, setPanels] = createSignal<WashPanelDesc[]>(window.wash.settingsPanels());
 
   // ---- desktop pane form state ----
+  const [pack, setPack] = createSignal<string>(defaultPackId);
   const [path, setPath] = createSignal<string>('');
   const [mode, setMode] = createSignal<NonNullable<DesktopConfig['wallpaper']>['mode']>(DEFAULTS.mode);
   const [fallback, setFallback] = createSignal<string>(DEFAULTS.fallback);
@@ -140,6 +145,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         cfgSubs.get(domain)?.forEach((cb) => cb(value));
         if (domain !== 'desktop') return;
         const v = value as DesktopConfig;
+        setPack(v.pack ?? defaultPackId);
         setPath(v.wallpaper?.path ?? '');
         setMode(v.wallpaper?.mode ?? DEFAULTS.mode);
         setFallback(v.wallpaper?.fallback_color ?? DEFAULTS.fallback);
@@ -188,6 +194,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const doSave = () => {
     saveTimer = 0;
     const value: DesktopConfig = {
+      pack: pack(),
       wallpaper: {
         path: path() || undefined,
         mode: mode(),
@@ -202,9 +209,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   // Auto-save on any desktop signal change.
   createEffect(() => {
-    path(); mode(); fallback(); format(); showSeconds(); position();
+    pack(); path(); mode(); fallback(); format(); showSeconds(); position();
     scheduleSave();
   });
+
+  // Picking a pack clears any custom wallpaper override so the pack's
+  // own wallpaper shows — the gallery is the "give me this whole look"
+  // path; "Choose image…" is the escape hatch that re-overrides.
+  const selectPack = (id: string) => {
+    setPack(id);
+    setPath('');
+  };
 
   // ---- lifecycle ----
 
@@ -253,6 +268,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         <div style={paneStyle}>
           <Show when={section() === 'desktop'}>
             <DesktopPane
+              pack={pack()}
+              onSelectPack={selectPack}
               path={path()}
               mode={mode() || DEFAULTS.mode}
               fallback={fallback()}
@@ -354,7 +371,7 @@ const RailItem: Component<{ label: string; active: boolean; onClick: () => void 
       border: 'none',
       cursor: 'pointer',
       font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
-      'border-radius': `${tokens.radiusMd}px`,
+      'border-radius': `${tokens.radiusMd}`,
     }}
   >
     {props.label}
@@ -362,6 +379,8 @@ const RailItem: Component<{ label: string; active: boolean; onClick: () => void 
 );
 
 const DesktopPane: Component<{
+  pack: string;
+  onSelectPack: (id: string) => void;
   path: string;
   mode: NonNullable<DesktopConfig['wallpaper']>['mode'];
   fallback: string;
@@ -378,12 +397,26 @@ const DesktopPane: Component<{
 }> = (props) => {
   return (
     <div style={{ display: 'flex', 'flex-direction': 'column', gap: '20px', padding: '4px 4px' }}>
-      <Section title="Wallpaper">
+      <Section title="Theme">
+        <div style={galleryStyle}>
+          <For each={packs}>
+            {(p) => (
+              <PackCard pack={p} active={props.pack === p.id} onSelect={() => props.onSelectPack(p.id)} />
+            )}
+          </For>
+        </div>
+      </Section>
+
+      <Section title="Palette (read-only)">
+        <PaletteSwatches packId={props.pack} />
+      </Section>
+
+      <Section title="Custom wallpaper">
         <div style={{ display: 'flex', gap: '12px', 'align-items': 'flex-start' }}>
           <Thumbnail color={props.fallback} />
           <div style={{ flex: 1, display: 'flex', 'flex-direction': 'column', gap: '6px' }}>
             <div style={pathRowStyle}>
-              <Show when={props.path} fallback={<span style={{ opacity: 0.55 }}>no image — fallback color shown</span>}>
+              <Show when={props.path} fallback={<span style={{ opacity: 0.55 }}>using the pack wallpaper — choose an image to override</span>}>
                 <span style={pathStyle} title={props.path}>{props.path}</span>
               </Show>
             </div>
@@ -465,11 +498,142 @@ const Thumbnail: Component<{ color: string }> = (props) => (
       height: '72px',
       background: props.color,
       border: `1px solid ${tokens.borderMenu}`,
-      'border-radius': `${tokens.radiusMd}px`,
+      'border-radius': `${tokens.radiusMd}`,
       'flex-shrink': 0,
     }}
   />
 );
+
+// PackCard previews one theme: its wallpaper (pulled over the asset.read
+// channel via window.wash.fetchAsset — same path the desktop uses, so
+// the preview is exactly what you'll get) plus a strip of accent swatches
+// from the pack's scheme. Clicking selects it; the active pack is ringed.
+const PackCard: Component<{ pack: Pack; active: boolean; onSelect: () => void }> = (props) => {
+  const [url, setUrl] = createSignal<string>('');
+  onMount(() => {
+    let objURL = '';
+    let cancelled = false;
+    window.wash
+      .fetchAsset(props.pack.wallpaper)
+      .then((a) => {
+        if (cancelled) return;
+        objURL = URL.createObjectURL(new Blob([a.bytes], { type: a.mime || 'image/svg+xml' }));
+        setUrl(objURL);
+      })
+      .catch(() => {/* preview falls back to the scheme's window color */});
+    onCleanup(() => {
+      cancelled = true;
+      if (objURL) URL.revokeObjectURL(objURL);
+    });
+  });
+  // A pack's vars are its colors; fall back to the tokens default (== Midnight)
+  // for any a partial scheme omits.
+  const swatch = (name: string, fallbackHex: string) => props.pack.scheme[name] || fallbackHex;
+  return (
+    <button
+      type="button"
+      onClick={props.onSelect}
+      data-testid={`pack-card-${props.pack.id}`}
+      data-active={props.active}
+      title={props.pack.name}
+      style={{
+        display: 'flex',
+        'flex-direction': 'column',
+        gap: '6px',
+        padding: '6px',
+        background: props.active ? tokens.bgRowSelected : tokens.bgInset,
+        border: `2px solid ${props.active ? tokens.accentBlue : tokens.borderMenu}`,
+        'border-radius': `${tokens.radiusLg}`,
+        cursor: 'pointer',
+        width: '160px',
+      }}
+    >
+      <div
+        style={{
+          width: '100%',
+          height: '90px',
+          background: url()
+            ? `${swatch('--wash-bg-window', '#181828')} url("${url()}") center/cover no-repeat`
+            : swatch('--wash-bg-window', '#181828'),
+          'border-radius': `${tokens.radiusMd}`,
+        }}
+      />
+      <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between', gap: '6px' }}>
+        <span style={{ color: tokens.fg, font: `${tokens.fontSizeBase} ${tokens.fontSans}` }}>{props.pack.name}</span>
+        <div style={{ display: 'flex', gap: '3px' }}>
+          <Swatch c={swatch('--wash-accent-blue', '#6090e0')} />
+          <Swatch c={swatch('--wash-accent-green', '#5fbf85')} />
+          <Swatch c={swatch('--wash-accent-violet', '#9a90e0')} />
+        </div>
+      </div>
+    </button>
+  );
+};
+
+const Swatch: Component<{ c: string }> = (props) => (
+  <span
+    style={{
+      width: '12px',
+      height: '12px',
+      'border-radius': '50%',
+      background: props.c,
+      border: `1px solid ${tokens.borderMenu}`,
+      display: 'inline-block',
+    }}
+  />
+);
+
+// PaletteSwatches lists the active pack's --wash-* color tokens as a
+// read-only grid (swatch + name + value) so the palette can be reviewed
+// and critiqued by name. Non-color scheme entries (radius, fonts) skip.
+const PaletteSwatches: Component<{ packId: string }> = (props) => {
+  const colors = () =>
+    Object.entries(getPack(props.packId).scheme).filter(([, v]) => /^(#|rgb|color-mix)/.test(v));
+  return (
+    <div
+      style={{
+        display: 'grid',
+        'grid-template-columns': 'repeat(auto-fill, minmax(220px, 1fr))',
+        gap: '3px 16px',
+      }}
+    >
+      <For each={colors()}>
+        {([name, val]) => (
+          <div
+            data-testid={`palette-${name.replace('--wash-', '')}`}
+            title={`${name}: ${val}`}
+            style={{ display: 'flex', 'align-items': 'center', gap: '7px', overflow: 'hidden' }}
+          >
+            <span
+              style={{
+                width: '18px',
+                height: '14px',
+                background: val,
+                border: `1px solid ${tokens.borderMenu}`,
+                'border-radius': tokens.radiusSm,
+                'flex-shrink': 0,
+              }}
+            />
+            <span
+              style={{
+                color: tokens.fg,
+                font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+                overflow: 'hidden',
+                'text-overflow': 'ellipsis',
+                'white-space': 'nowrap',
+              }}
+            >
+              {name.replace('--wash-', '')}
+            </span>
+            <span style={{ color: tokens.fgDim, font: `${tokens.fontSizeSm} ${tokens.fontMono}`, 'flex-shrink': 0 }}>
+              {val}
+            </span>
+          </div>
+        )}
+      </For>
+    </div>
+  );
+};
 
 // normalizeHex coerces #fff / random text into a valid 7-char hex
 // for <input type=color> (which only accepts #rrggbb).
@@ -507,6 +671,12 @@ const paneStyle: JSX.CSSProperties = {
   overflow: 'auto',
 };
 
+const galleryStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'flex-wrap': 'wrap',
+  gap: '12px',
+};
+
 const pathRowStyle: JSX.CSSProperties = {
   font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
   opacity: 0.85,
@@ -527,7 +697,7 @@ const textInputStyle: JSX.CSSProperties = {
   background: tokens.bgMenu,
   color: tokens.fg,
   border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusMd}px`,
+  'border-radius': `${tokens.radiusMd}`,
   padding: '4px 8px',
   font: `${tokens.fontSizeBase} ${tokens.fontMono}`,
   outline: 'none',

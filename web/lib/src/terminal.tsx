@@ -20,6 +20,35 @@ import { tokens } from './tokens';
 import { washAssetUrl } from './assets';
 import { Menu, MenuItem, MenuSeparator } from './menu';
 import { washCopyText, washPasteText } from './clipboard';
+import { washAppearance, onAppearanceChange } from './packs';
+
+// Terminal palettes by pack appearance. The component uses these when no
+// explicit `theme` prop is given, and flips live when the pack changes.
+// Dark is the canonical Solarized Dark; light is a clean WHITE terminal
+// (not cream) with an ANSI set tuned to read on white.
+export const TERM_THEME_DARK: ITheme = {
+  background: '#002b36', foreground: '#839496',
+  cursor: '#93a1a1', cursorAccent: '#002b36', selectionBackground: '#073642',
+  black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900',
+  blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
+  brightBlack: '#002b36', brightRed: '#cb4b16', brightGreen: '#586e75', brightYellow: '#657b83',
+  brightBlue: '#839496', brightMagenta: '#6c71c4', brightCyan: '#93a1a1', brightWhite: '#fdf6e3',
+};
+export const TERM_THEME_LIGHT: ITheme = {
+  background: '#ffffff', foreground: '#2b2b2b',
+  cursor: '#2b2b2b', cursorAccent: '#ffffff', selectionBackground: '#cfe0ff',
+  black: '#2b2b2b', red: '#c0341d', green: '#1d7a37', yellow: '#8a6d00',
+  blue: '#1c5fd6', magenta: '#9426a8', cyan: '#0a7e8c', white: '#cfcfcf',
+  brightBlack: '#6b6b6b', brightRed: '#e0402a', brightGreen: '#2a9a4a', brightYellow: '#a88500',
+  brightBlue: '#3a7bff', brightMagenta: '#b944cc', brightCyan: '#1aa0b0', brightWhite: '#000000',
+};
+const termThemeFor = (a: 'light' | 'dark'): ITheme => (a === 'light' ? TERM_THEME_LIGHT : TERM_THEME_DARK);
+
+// Concrete monospace fallback shown while a bundled woff2 loads. MUST be a
+// real font stack, never a CSS var() — xterm measures cell width on a
+// canvas, which can't resolve var(), so a var() string yields the wrong
+// cell width (wide letter-spacing) on first load.
+const TERM_FALLBACK_STACK = 'ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", monospace';
 
 // ---- font registry ----
 
@@ -42,7 +71,7 @@ export interface TermFont {
 // /fonts/*). xterm's canvas renderer ignores ligatures, so these are
 // chosen for their glyph shapes, not Fira/JetBrains ligature sets.
 export const TERM_FONTS: TermFont[] = [
-  { id: 'system', label: 'System Mono', stack: tokens.fontMono },
+  { id: 'system', label: 'System Mono', stack: TERM_FALLBACK_STACK },
   {
     id: 'jetbrains-mono',
     label: 'JetBrains Mono',
@@ -312,10 +341,15 @@ export const Terminal: Component<TerminalProps> = (props) => {
       ...restoredGrid,
       fontFamily: initialFamily,
       fontSize: effectiveSize(),
-      theme: props.theme ?? { background: '#000000' },
+      theme: props.theme ?? termThemeFor(washAppearance()),
       cursorBlink: true,
       allowProposedApi: true,
     });
+    // When the consumer didn't pin a theme, follow the active pack:
+    // flip the xterm palette live as the pack's appearance changes.
+    if (!props.theme) {
+      onCleanup(onAppearanceChange((a) => { if (term) term.options.theme = termThemeFor(a); }));
+    }
     // Clipboard keys are component-level so every terminal in wash
     // behaves the same; the consumer's customKeyHandler runs after.
     // Ctrl+Shift+C copies the selection (plain Ctrl+C must stay
@@ -466,7 +500,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
       applyFamily(f.stack);
       return;
     }
-    applyFamily(tokens.fontMono);
+    applyFamily(TERM_FALLBACK_STACK);
     void ensureFontLoaded(f).then(() => {
       // Guard against a fast re-selection landing here stale.
       if (fontById(props.fontId).id === f.id) applyFamily(f.stack);
@@ -595,7 +629,7 @@ const stepBtnStyle: JSX.CSSProperties = {
   background: tokens.bgRowSelected,
   color: tokens.fg,
   border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusMd}px`,
+  'border-radius': `${tokens.radiusMd}`,
   cursor: 'pointer',
   'font-size': '14px',
   'line-height': '1',

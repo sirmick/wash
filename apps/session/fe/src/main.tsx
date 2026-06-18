@@ -10,7 +10,8 @@
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Menu, MenuItem, defineWashApp, tokens, washAssetUrl } from '@wash/ui';
+import { Menu, MenuItem, accentColor, applyScheme, defineWashApp, getPack, tokens, washAssetUrl } from '@wash/ui';
+import type { Pack } from '@wash/ui';
 import { toBlob } from 'html-to-image';
 import { Camera, Search, PanelRightOpen } from 'lucide-solid';
 import { Sidebar, type SidebarMode } from './sidebar/Sidebar';
@@ -64,11 +65,15 @@ interface WindowInfo {
   viewport: { vx: number; vy: number };
 }
 
-// DesktopConfigMsg mirrors the BE's desktop.config app_msg. Bytes
-// arrive as base64 — the router CBOR→JSON normalizer encodes byte
-// strings that way (see internal/router/app_session.go toJSON).
+// DesktopConfigMsg mirrors the BE's desktop.config app_msg. `bytes` is
+// present only for a user's *custom* wallpaper image; it arrives as
+// base64 (the router CBOR→JSON normalizer encodes byte strings that
+// way, see internal/router/app_session.go toJSON). For the built-in
+// default `bytes` is null and we render the bundled SVG instead — the
+// default never crosses the wire.
 interface DesktopConfigMsg {
   kind: 'desktop.config';
+  pack?: string;
   wallpaper: {
     mode?: 'cover' | 'contain' | 'tile' | 'center' | '';
     fallback_color?: string;
@@ -154,27 +159,48 @@ function rootEntryFor(src: CatalogApp): CatalogApp | null {
   };
 }
 
-// accentFor returns the brand color for a catalog row. Apps that
-// declare `accent` in their manifest get that exact color; the rest
-// fall back to a deterministic hue derived from the id so no
-// launcher row ends up monochrome. Saturation + lightness are fixed
-// so the palette stays in the same visual register as the
-// hand-picked accents — only the hue varies.
+// accentFor returns the brand color for a catalog row, resolved onto the
+// pack's themeable accent palette so launcher icons re-skin with the pack:
+// a manifest `accent` (hue name or hex) snaps to the nearest accent token;
+// apps without one are hashed deterministically onto the ring by id.
 function accentFor(app: CatalogApp): string {
-  if (app.accent) return app.accent;
-  let h = 0;
-  for (let i = 0; i < app.id.length; i++) {
-    h = ((h << 5) - h + app.id.charCodeAt(i)) | 0;
-  }
-  // Map to 0..359°, fixed S/L for "soft pastel on dark" look.
-  return `hsl(${Math.abs(h) % 360} 55% 65%)`;
+  return accentColor(app.id, app.accent);
 }
 
 // ROOT_ICON_COLOR — the tint applied to root-row icons in the start
 // menu and command palette. Bright enough to stand out on the dark
 // menu background but not so loud that the row feels destructive.
 // Single source of truth so both rendering sites stay consistent.
-const ROOT_ICON_COLOR = '#e26060';
+const ROOT_ICON_COLOR = tokens.accentRed;
+
+// describeErr coerces a thrown value into a legible string. html-to-image
+// and the DOM can reject with non-Error values (an Event, a failed <img>,
+// a plain object) — for those String(err) is the useless "[object Object]".
+// Tease out the real cause so the screenshot status + log name it.
+function describeErr(err: unknown): string {
+  if (err instanceof Error) return err.message || err.name;
+  if (typeof err === 'string') return err;
+  if (typeof HTMLImageElement !== 'undefined' && err instanceof HTMLImageElement) {
+    return `image failed: ${err.src || '(no src)'}`;
+  }
+  if (err instanceof Event) {
+    const t = err.target as { src?: string; href?: string } | null;
+    return `${err.type}${t?.src ? ` ${t.src}` : t?.href ? ` ${t.href}` : ''}`;
+  }
+  if (err && typeof err === 'object') {
+    const o = err as Record<string, unknown>;
+    if (typeof o.message === 'string' && o.message) return o.message;
+    if (typeof o.src === 'string') return `resource failed: ${o.src}`;
+    try {
+      const s = JSON.stringify(err);
+      if (s && s !== '{}') return s;
+    } catch {
+      /* circular — fall through */
+    }
+    return (err.constructor && err.constructor.name) || Object.prototype.toString.call(err);
+  }
+  return String(err);
+}
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ---- reactive state ----
@@ -350,6 +376,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const AUDIO_ACCENT = tokens.accentGreen;
   let screenshotTimer = 0;
   let currentObjectURL: string | null = null;
+  // The active theme pack — drives the start-menu icon (the scheme vars
+  // and wallpaper are applied imperatively in applyDesktopConfig). Seeded
+  // with the default so the first paint, before desktop.config arrives,
+  // is already correct.
+  const [activePack, setActivePack] = createSignal<Pack>(getPack(null));
 
   let paletteInputEl: HTMLInputElement | undefined;
 
@@ -416,44 +447,72 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   // ---- desktop config ----
 
-  // applyDesktopConfig pushes wallpaper bytes + mode + fallback color
-  // onto the host element's inline style and updates clock/taskbar
-  // signals. Object URLs are revoked when they're replaced — the
-  // browser keeps the blob alive until the URL is gone, and a long
-  // session with many wallpaper changes would otherwise leak memory.
+  // applyDesktopConfig applies the active pack (scheme vars on the root
+  // + start icon + default wallpaper), then layers the wallpaper bytes /
+  // mode / fallback color onto the host element's inline style and
+  // updates clock/taskbar signals. Object URLs are revoked when they're
+  // replaced — the browser keeps the blob alive until the URL is gone,
+  // and a long session with many wallpaper changes would otherwise leak.
   const applyDesktopConfig = (cfg: DesktopConfigMsg) => {
-    const wp = cfg.wallpaper || {};
-    const fallback = wp.fallback_color || 'radial-gradient(circle at 30% 20%, #1a1a32 0, #0a0a18 75%)';
-    const mode = wp.mode || 'cover';
-    let imageCSS: string | null = null;
-    let nextURL: string | null = null;
-    if (wp.bytes) {
-      const bytes = decodeBase64(wp.bytes);
-      const blob = new Blob([bytes], { type: wp.mime || 'application/octet-stream' });
-      nextURL = URL.createObjectURL(blob);
-      imageCSS = `url("${nextURL}")`;
-    }
-    // Apply to host. Always set fallback as background-color so an
-    // image with transparency still shows it; image overlays on top.
-    const host = props.host;
-    if (imageCSS) {
-      host.style.background = `${imageCSS} center/cover no-repeat ${fallback.startsWith('radial-') ? '#0a0a18' : fallback}`;
-      host.style.backgroundSize = mode === 'tile' ? 'auto' : mode === 'center' ? 'auto' : mode; // 'cover' | 'contain'
-      host.style.backgroundRepeat = mode === 'tile' ? 'repeat' : 'no-repeat';
-      host.style.backgroundPosition = 'center';
-    } else {
-      host.style.background = fallback;
-      host.style.backgroundSize = '';
-      host.style.backgroundRepeat = '';
-      host.style.backgroundPosition = '';
-    }
-    if (currentObjectURL) URL.revokeObjectURL(currentObjectURL);
-    currentObjectURL = nextURL;
+    // Resolve + apply the pack. Scheme vars go on document.documentElement
+    // so they cascade into every open app (light DOM); see packs.ts.
+    const pack = getPack(cfg.pack);
+    applyScheme(document.documentElement, pack);
+    setActivePack(pack);
+
+    void applyWallpaper(pack, cfg.wallpaper || {});
 
     setClockFormat(cfg.clock?.format === '12h' ? '12h' : '24h');
     setShowSeconds(!!cfg.clock?.show_seconds);
     setTaskbarPosition(cfg.taskbar?.position === 'top' ? 'top' : 'bottom');
     setClock(formatClock(clockFormat(), showSeconds()));
+  };
+
+  // applyWallpaper paints the desktop background. The bytes come from
+  // one of two places: a user's *custom* image (base64 over the wire in
+  // the config) or the active pack's wallpaper asset, pulled from the
+  // router via window.wash.fetchAsset (the transport-agnostic asset.read
+  // channel — works in the in-browser VM where a plain HTTP url() can't).
+  // Async, so a generation counter drops a stale fetch if a newer
+  // desktop.config lands first. Object URLs are revoked when replaced.
+  let wallpaperGen = 0;
+  const applyWallpaper = async (pack: Pack, wp: DesktopConfigMsg['wallpaper']) => {
+    const gen = ++wallpaperGen;
+    const fallback = wp.fallback_color || 'radial-gradient(circle at 30% 20%, #1a1a32 0, #0a0a18 75%)';
+    const mode = wp.mode || 'cover';
+    const host = props.host;
+    // paint() applies the resolved background, but only if this is still
+    // the latest call; otherwise it revokes the just-made URL and bails.
+    const paint = (imageCSS: string, objURL: string | null) => {
+      if (gen !== wallpaperGen) {
+        if (objURL) URL.revokeObjectURL(objURL);
+        return;
+      }
+      host.style.background = `${imageCSS} center/cover no-repeat ${fallback.startsWith('radial-') ? '#0a0a18' : fallback}`;
+      host.style.backgroundSize = mode === 'tile' ? 'auto' : mode === 'center' ? 'auto' : mode; // 'cover' | 'contain'
+      host.style.backgroundRepeat = mode === 'tile' ? 'repeat' : 'no-repeat';
+      host.style.backgroundPosition = 'center';
+      if (currentObjectURL) URL.revokeObjectURL(currentObjectURL);
+      currentObjectURL = objURL;
+    };
+    if (wp.bytes) {
+      const url = URL.createObjectURL(new Blob([decodeBase64(wp.bytes)], { type: wp.mime || 'application/octet-stream' }));
+      paint(`url("${url}")`, url);
+      return;
+    }
+    if (!window.wash?.fetchAsset) {
+      // No transport-agnostic fetch (older shell / standalone): fall back
+      // to a plain HTTP asset URL. Won't render in the in-browser VM.
+      paint(`url("${washAssetUrl(pack.wallpaper)}")`, null);
+      return;
+    }
+    try {
+      const a = await window.wash.fetchAsset(pack.wallpaper);
+      const url = URL.createObjectURL(new Blob([a.bytes], { type: a.mime || 'image/svg+xml' }));
+      paint(`url("${url}")`, url);
+    } catch (err) {
+      console.warn(`wash-session: wallpaper fetch ${pack.wallpaper}:`, err);
+    }
   };
 
   // ---- screenshot ----
@@ -475,25 +534,45 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   const captureScreenshot = async () => {
     setStatus('capturing…', 0);
+    const fail = (msg: string) => {
+      setStatus(msg, 6_000);
+      window.wash?.log?.('warn', 'wash-session', `screenshot: ${msg}`);
+    };
     try {
-      const blob = await toBlob(document.documentElement, {
-        cacheBust: false,
-        pixelRatio: window.devicePixelRatio || 1,
-      });
+      // html-to-image is fragile on two things that the desktop routinely
+      // has open, so harden against both:
+      //  - cross-origin iframes (ingress apps: vscode, code-server, the
+      //    browser VM) throw a SecurityError when cloned — skip them so one
+      //    embedded app can't fail the whole capture (it just renders blank).
+      //  - web-font embedding fetches @font-face CSS, which can hang or 404;
+      //    skipFonts uses the already-rendered text instead.
+      // And cap the wait so a heavy desktop can never hang the button.
+      const blob = await Promise.race([
+        toBlob(document.documentElement, {
+          cacheBust: false,
+          pixelRatio: window.devicePixelRatio || 1,
+          skipFonts: true,
+          filter: (node) => !(node instanceof HTMLIFrameElement),
+          // If a single embedded image can't be inlined, substitute a
+          // transparent pixel instead of rejecting the whole capture.
+          imagePlaceholder:
+            'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC',
+        }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
+      ]);
       if (!blob) {
-        setStatus('capture failed', 4_000);
+        fail('capture failed (timed out or empty)');
         return;
       }
       const resp = await fetch('/screenshot', { method: 'POST', body: blob });
       if (!resp.ok) {
-        const msg = await resp.text();
-        setStatus(`save failed: ${msg}`, 5_000);
+        fail(`save failed: ${(await resp.text()).slice(0, 80)}`);
         return;
       }
       const name = (await resp.text()).trim();
       setStatus(`saved ${name}`, 4_000);
     } catch (err) {
-      setStatus(`error: ${err instanceof Error ? err.message : String(err)}`, 5_000);
+      fail(`error: ${describeErr(err)}`);
     }
   };
 
@@ -1002,7 +1081,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           title="Apps"
           onClick={toggleMenu}
         >
-          <img src={washAssetUrl('wash-logo.svg')} width="20" height="20" alt="wash" style={{ display: 'block' }} />
+          <Show
+            when={activePack().startIconSVG}
+            fallback={<img src={washAssetUrl('wash-logo.svg')} width="20" height="20" alt="wash" style={{ display: 'block' }} />}
+          >
+            <span
+              style={{ display: 'block', width: '20px', height: '20px' }}
+              // eslint-disable-next-line solid/no-innerhtml -- pack start icons are built-in, trusted SVG markup
+              innerHTML={activePack().startIconSVG}
+            />
+          </Show>
         </IconButton>
         <IconButton
           testid="palette-open"
@@ -1161,7 +1249,13 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
             position: 'absolute',
             left: '32px',
             top: '24px',
-            color: tokens.fg,
+            // Over the wallpaper, not chrome — a pack whose chrome text is
+            // dark on a dark wallpaper (NT) overrides --wash-banner-fg.
+            color: `var(--wash-banner-fg, ${tokens.fg})`,
+            // Themed legibility halo: the pack's own surface color behind
+            // the text so the banner stands out against any wallpaper —
+            // a light glow on light packs, a dark one on dark packs.
+            'text-shadow': `0 1px 6px ${tokens.bgWindow}, 0 0 3px ${tokens.bgWindow}`,
             font: '14px system-ui,sans-serif',
             'pointer-events': 'none',
             'max-width': '480px',
@@ -1266,10 +1360,10 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
                   <span
                     data-testid="desktop-banner-router-dev"
                     style={{
-                      background: '#a04040',
+                      background: tokens.accentRed,
                       color: '#fff',
                       padding: '0 6px',
-                      'border-radius': '2px',
+                      'border-radius': tokens.radiusSm,
                       'font-weight': 700,
                       'letter-spacing': '0.05em',
                       opacity: 1,
@@ -1403,9 +1497,9 @@ const PagerCell: Component<{
     top: `${top()}px`,
     width: `${props.cellW}px`,
     height: `${props.cellH}px`,
-    background: props.active ? 'rgba(80,90,180,0.28)' : 'rgba(255,255,255,0.04)',
-    border: props.active ? '1.5px solid #6a7adf' : '1px solid #2a2a4a',
-    'border-radius': '3px',
+    background: props.active ? `color-mix(in srgb, ${tokens.accentBlue} 28%, transparent)` : `color-mix(in srgb, ${tokens.fg} 4%, transparent)`,
+    border: props.active ? `1.5px solid ${tokens.accentBlue}` : `1px solid ${tokens.borderMenu}`,
+    'border-radius': tokens.radiusSm,
     cursor: 'pointer',
     overflow: 'hidden',
     'box-sizing': 'border-box',
@@ -1462,9 +1556,9 @@ const PagerWindow: Component<{
       top: `${r.top}px`,
       width: `${r.width}px`,
       height: `${r.height}px`,
-      background: props.win.focused ? 'rgba(120,140,240,0.55)' : 'rgba(200,210,240,0.18)',
-      border: `1px solid ${props.win.focused ? '#a0b0ff' : '#5a6090'}`,
-      'border-radius': '1.5px',
+      background: props.win.focused ? `color-mix(in srgb, ${tokens.accentBlue} 60%, transparent)` : `color-mix(in srgb, ${tokens.fgMuted} 28%, transparent)`,
+      border: `1px solid ${props.win.focused ? tokens.accentBlue : tokens.borderFocus}`,
+      'border-radius': tokens.radiusSm,
       'box-sizing': 'border-box',
       cursor: 'pointer',
     };
@@ -1503,12 +1597,12 @@ const IconButton: Component<{
       onMouseLeave={() => setHover(false)}
       onClick={props.onClick}
       style={{
-        background: hover() ? 'rgba(255,255,255,0.08)' : 'transparent',
+        background: hover() ? `color-mix(in srgb, ${tokens.fg} 8%, transparent)` : 'transparent',
         color: tokens.fg,
         border: '1px solid transparent',
         width: '32px',
         height: '32px',
-        'border-radius': '4px',
+        'border-radius': tokens.radiusMd,
         cursor: 'pointer',
         display: 'flex',
         'align-items': 'center',
@@ -1547,12 +1641,12 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
         window.wash.closeWindow(props.win.windowID, props.win.origin);
       }}
       style={{
-        background: props.win.focused ? '#33387a' : 'rgba(255,255,255,0.04)',
+        background: props.win.focused ? tokens.bgRowSelected : `color-mix(in srgb, ${tokens.fg} 4%, transparent)`,
         color: tokens.fg,
-        border: `1px solid ${props.win.focused ? '#4a4f8d' : 'transparent'}`,
+        border: `1px solid ${props.win.focused ? tokens.borderFocus : 'transparent'}`,
         padding: '0 12px',
         height: '28px',
-        'border-radius': '4px',
+        'border-radius': tokens.radiusMd,
         cursor: 'pointer',
         'max-width': '220px',
         font: '13px system-ui,sans-serif',
@@ -1695,7 +1789,7 @@ const Palette: Component<{
         'align-items': 'flex-start',
         'justify-content': 'center',
         'padding-top': '14vh',
-        background: 'rgba(0,0,0,0.35)',
+        background: tokens.bgBackdrop,
         'z-index': 10002,
         animation: 'wash-fade-in 120ms ease-out',
       }}
@@ -1703,8 +1797,8 @@ const Palette: Component<{
       <div
         style={{
           background: tokens.bgWindow,
-          border: '1px solid #2a2a4a',
-          'border-radius': '8px',
+          border: `1px solid ${tokens.borderMenu}`,
+          'border-radius': tokens.radiusXl,
           'min-width': '380px',
           'max-width': '520px',
           'box-shadow': '0 16px 48px rgba(0,0,0,0.6)',
@@ -1727,7 +1821,7 @@ const Palette: Component<{
             background: 'transparent',
             color: tokens.fg,
             border: 'none',
-            'border-bottom': '1px solid #2a2a4a',
+            'border-bottom': `1px solid ${tokens.borderMenu}`,
             outline: 'none',
             font: '15px system-ui,sans-serif',
           }}
@@ -1780,7 +1874,7 @@ const PaletteRow: Component<{
         gap: '10px',
         width: '100%',
         padding: '8px 16px',
-        background: props.selected ? '#2a2a4a' : 'transparent',
+        background: props.selected ? tokens.bgRowSelected : 'transparent',
         color: tokens.fg,
         border: 'none',
         'text-align': 'left',
@@ -1838,10 +1932,14 @@ const taskbarStyle: JSX.CSSProperties = {
   right: 0,
   bottom: 0,
   height: '40px',
-  background: 'rgba(15,15,30,0.85)',
+  // Sunken surface by default so the bar reads a touch darker than
+  // windows (darker cream on Seoul, deeper on dark packs). A pack can
+  // override --wash-taskbar-bg — NT does, since its inset is white.
+  background: `color-mix(in srgb, var(--wash-taskbar-bg, ${tokens.bgInset}) 88%, transparent)`,
   'backdrop-filter': 'blur(10px)',
   '-webkit-backdrop-filter': 'blur(10px)',
-  'border-top': '1px solid #2a2a4a',
+  // Top edge: a pack can paint a raised highlight here (NT does).
+  'border-top': `1px solid var(--wash-taskbar-top, ${tokens.borderMenu})`,
   display: 'flex',
   'align-items': 'center',
   gap: '4px',
@@ -1857,13 +1955,13 @@ const taskbarStyleTop: JSX.CSSProperties = {
   bottom: undefined,
   top: 0,
   'border-top': undefined,
-  'border-bottom': '1px solid #2a2a4a',
+  'border-bottom': `1px solid ${tokens.borderMenu}`,
 };
 
 const separatorStyle: JSX.CSSProperties = {
   width: '1px',
   height: '22px',
-  background: '#2a2a4a',
+  background: tokens.borderMenu,
   margin: '0 4px',
   'flex-shrink': 0,
 };
@@ -1881,7 +1979,7 @@ const windowListStyle: JSX.CSSProperties = {
 const screenshotStatusStyle: JSX.CSSProperties = {
   'font-size': '12px',
   transition: 'opacity 0.25s',
-  color: '#9aa',
+  color: tokens.fgMuted,
   'white-space': 'nowrap',
   'pointer-events': 'none',
 };

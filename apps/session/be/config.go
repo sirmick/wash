@@ -1,9 +1,14 @@
 // Desktop config: ~/.config/wash/desktop.json. Read at startup,
 // watched via internal/fswatch (the directory, not the file itself —
 // settings.write uses temp+rename which destroys the inode), shipped
-// to the FE as a "desktop.config" app_msg carrying the parsed prefs
-// plus the wallpaper bytes inline (encoding/json base64s []byte
-// fields automatically; the FE decodes back to a Uint8Array).
+// to the FE as a "desktop.config" app_msg carrying the parsed prefs.
+//
+// The built-in default wallpaper is NOT sent over the wire: it's a
+// scalable SVG bundled into the session FE. Only a user's *custom*
+// wallpaper.path is read from disk and shipped inline as bytes
+// (encoding/json base64s []byte fields; the FE decodes to a
+// Uint8Array). So the common case — no custom image — carries no
+// image payload at all.
 //
 // One consumer (wash-session FE) — per [no premature service] this
 // stays a session-app private concern; wash-settings only writes the
@@ -32,6 +37,7 @@ const maxWallpaperBytes = 12 * 1024 * 1024
 // FE applies defaults for missing values so an empty file behaves
 // the same as a never-written one.
 type desktopConfig struct {
+	Pack      string        `json:"pack,omitempty"` // selected theme pack id; "" ⇒ default (Midnight)
 	Wallpaper wallpaperPref `json:"wallpaper"`
 	Clock     clockPref     `json:"clock"`
 	Taskbar   taskbarPref   `json:"taskbar"`
@@ -94,28 +100,32 @@ func loadConfig() (desktopConfig, error) {
 	return cfg, nil
 }
 
-// readWallpaper returns the bytes of cfg.Wallpaper.Path. With no
-// path configured — or the configured file unreadable — it falls
-// back to the embedded default-wallpaper.png so a fresh install
-// still has a wallpaper out of the box.
+// readWallpaper returns the bytes of a custom cfg.Wallpaper.Path. It
+// returns nil bytes for the built-in default: that wallpaper lives in
+// the FE bundle (a scalable SVG, see the session FE), so the BE never
+// ships it over the wire. A nil result tells the FE "use your bundled
+// default". The disk-read path here exists solely for a user's own
+// custom image. With no path configured — or the configured file
+// unreadable/too large — it returns nil and the FE falls back to the
+// bundled default.
 func readWallpaper(cfg desktopConfig) ([]byte, string) {
 	path := cfg.Wallpaper.Path
 	if path == "" {
-		return defaultWallpaper, "image/png"
+		return nil, ""
 	}
 	st, err := os.Stat(path)
 	if err != nil {
 		log.Printf("wash-session: wallpaper stat %s: %v (using default)", path, err)
-		return defaultWallpaper, "image/png"
+		return nil, ""
 	}
 	if st.Size() > maxWallpaperBytes {
 		log.Printf("wash-session: wallpaper %s exceeds %d bytes (using default)", path, maxWallpaperBytes)
-		return defaultWallpaper, "image/png"
+		return nil, ""
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		log.Printf("wash-session: wallpaper read %s: %v (using default)", path, err)
-		return defaultWallpaper, "image/png"
+		return nil, ""
 	}
 	return data, mimeFromExt(path)
 }
@@ -151,6 +161,7 @@ func sendDesktopConfig(c *sdk.Conn) {
 	bytes, mime := readWallpaper(cfg)
 	msg := map[string]any{
 		"kind": "desktop.config",
+		"pack": cfg.Pack,
 		"wallpaper": map[string]any{
 			"mode":           cfg.Wallpaper.Mode,
 			"fallback_color": cfg.Wallpaper.FallbackColor,

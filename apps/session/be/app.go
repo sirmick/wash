@@ -22,15 +22,6 @@ import (
 //go:embed all:assets
 var assetsFS embed.FS
 
-// defaultWallpaper is the fallback image used when desktop.json has
-// no wallpaper.path set (or the file at that path is missing). Source
-// is "04. Catppuccin Mocha" from github.com/fr0st-xyz/wallz (GPL-3.0,
-// compatible with wash's AGPL-3.0). Adds ~360 KB to the session
-// binary — acceptable for a singleton that ships once per install.
-//
-//go:embed default-wallpaper.png
-var defaultWallpaper []byte
-
 const version = "0.9.1"
 
 var def *sdk.AppDef

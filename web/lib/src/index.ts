@@ -1,7 +1,9 @@
 /// <reference path="./window-wash.d.ts" />
 
-export { tokens } from './tokens';
+export { tokens, accentColor } from './tokens';
 export type { Tokens } from './tokens';
+export { packs, defaultPackId, getPack, applyScheme, washAppearance, onAppearanceChange } from './packs';
+export type { Pack } from './packs';
 export { severityColor } from './severity';
 export { Button } from './button';
 export type { ButtonProps, ButtonVariant, ButtonSize } from './button';

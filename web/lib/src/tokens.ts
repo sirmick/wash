@@ -1,74 +1,90 @@
-// Design tokens for @wash/ui. Hardcoded dark theme today; a future
-// theme switcher would swap this object behind a context provider.
+// Design tokens for @wash/ui. Dark theme by default; the color values
+// resolve through CSS custom properties so a "pack" can re-skin the
+// whole desktop live (see web/lib/src/packs.ts). Each color is
+// `var(--wash-<name>, <hex>)`: the literal hex stays as the fallback,
+// so anything rendering before a pack is applied — or with no pack at
+// all — looks exactly as it did before. A pack sets the matching
+// `--wash-*` variables on document.documentElement; because native
+// apps render into light DOM (see define-app.tsx), those vars cascade
+// into every open window and re-theme it with no re-render.
+//
 // Components reference these names rather than literal hex codes so
-// future-themers have one place to change.
+// there's still one place to change. Non-color tokens (spacing, radii,
+// fonts, shadows, z-index, animation) stay literal — they're layout,
+// not palette, and packs don't touch them.
 
 export const tokens = {
   // Surfaces.
-  bgWindow: '#181828',
-  bgMenu: '#15152a',
-  bgInset: '#10101a', // sunken surface — inputs, log/code panes; darker than the window
-  bgRow: 'transparent',
-  bgRowHover: '#202037',
-  bgRowSelected: '#2a2a4a',
-  bgBackdrop: 'rgba(0,0,0,0.45)',
+  bgWindow: 'var(--wash-bg-window, #181828)',
+  bgMenu: 'var(--wash-bg-menu, #15152a)',
+  bgInset: 'var(--wash-bg-inset, #10101a)', // sunken surface — inputs, log/code panes; darker than the window
+  bgRow: 'var(--wash-bg-row, transparent)',
+  bgRowHover: 'var(--wash-bg-row-hover, #202037)',
+  bgRowSelected: 'var(--wash-bg-row-selected, #2a2a4a)',
+  bgBackdrop: 'var(--wash-bg-backdrop, rgba(0,0,0,0.45))',
   // Drag-and-drop landing zone. A blue-tinted surface that reads
   // clearly different from the purple-grey row selection, so "this is
   // where the drop lands" is unmistakable during a drag. Pairs with
   // borderDropTarget (a solid accent-blue ring).
-  bgDropTarget: '#1e2b50',
+  bgDropTarget: 'var(--wash-bg-drop-target, #1e2b50)',
 
   // Borders.
-  borderMenu: '#2a2a3a',
-  borderWindow: '#2a2a3a',
-  borderFocus: '#3a3a6a',
-  borderDropTarget: '#6090e0', // == accentBlue; the drop-zone ring
+  borderMenu: 'var(--wash-border-menu, #2a2a3a)',
+  borderWindow: 'var(--wash-border-window, #2a2a3a)',
+  borderFocus: 'var(--wash-border-focus, #3a3a6a)',
+  borderDropTarget: 'var(--wash-border-drop-target, #6090e0)', // == accentBlue; the drop-zone ring
 
   // Foreground.
-  fg: '#eee',
-  fgMuted: '#888',
-  fgDim: '#666',
+  fg: 'var(--wash-fg, #eee)',
+  fgMuted: 'var(--wash-fg-muted, #888)',
+  fgDim: 'var(--wash-fg-dim, #666)',
 
   // Danger / destructive accents (delete, replace).
-  bgDanger: '#7a1f1f',
-  borderDanger: '#a02d2d',
-  fgDanger: '#fca5a5',
+  bgDanger: 'var(--wash-bg-danger, #7a1f1f)',
+  borderDanger: 'var(--wash-border-danger, #a02d2d)',
+  fgDanger: 'var(--wash-fg-danger, #fca5a5)',
 
   // Semantic status tones — bg/fg pairs for state badges and chips
   // (service active/failed, package install ok/fail, vscode warn…).
   // One vocabulary so every app's status pill reads the same.
-  bgSuccess: '#1c3d24',
-  fgSuccess: '#86efac',
-  bgWarning: '#3a3a1c',
-  fgWarning: '#fde047',
-  bgInfo: '#1c2d3d',
-  fgInfo: '#93c5fd',
-  bgNeutral: '#1f1f2a', // pairs with fgMuted for "inactive/static"
+  bgSuccess: 'var(--wash-bg-success, #1c3d24)',
+  fgSuccess: 'var(--wash-fg-success, #86efac)',
+  bgWarning: 'var(--wash-bg-warning, #3a3a1c)',
+  fgWarning: 'var(--wash-fg-warning, #fde047)',
+  bgInfo: 'var(--wash-bg-info, #1c2d3d)',
+  fgInfo: 'var(--wash-fg-info, #93c5fd)',
+  bgNeutral: 'var(--wash-bg-neutral, #1f1f2a)', // pairs with fgMuted for "inactive/static"
 
   // Permission-denied banner — distinct amber-brown so it reads as
   // "blocked, not broken" next to the red danger banner.
-  bgDenied: '#3a2a12',
-  borderDenied: '#7a5a20',
+  bgDenied: 'var(--wash-bg-denied, #3a2a12)',
+  borderDenied: 'var(--wash-border-denied, #7a5a20)',
 
   // Log/priority severities — text colors for log lines and level
   // strips, brighter than the status tones since they sit on rows.
   // See severityColor() for the syslog-priority → color mapping.
-  sevError: '#ff7a7a',
-  sevWarn: '#f0c050',
-  sevNotice: '#c0d8ff',
-  sevInfo: '#bbb',
-  sevDebug: '#666',
+  sevError: 'var(--wash-sev-error, #ff7a7a)',
+  sevWarn: 'var(--wash-sev-warn, #f0c050)',
+  sevNotice: 'var(--wash-sev-notice, #c0d8ff)',
+  sevInfo: 'var(--wash-sev-info, #bbb)',
+  sevDebug: 'var(--wash-sev-debug, #666)',
 
   // Accent hues — soft pastels on dark, the same register as the
   // launcher's generated accentFor() hues so hand-picked and hashed
   // accents share one visual language. Used to tint icons/badges that
   // want a per-widget identity (e.g. the right-sidebar section icons).
-  accentRed: '#e26060',
-  accentAmber: '#e0b25f',
-  accentGreen: '#5fbf85',
-  accentCyan: '#5fb6c8',
-  accentBlue: '#6090e0',
-  accentViolet: '#9a90e0',
+  accentRed: 'var(--wash-accent-red, #e26060)',
+  accentOrange: 'var(--wash-accent-orange, #e0884f)',
+  accentAmber: 'var(--wash-accent-amber, #e0b25f)',
+  accentLime: 'var(--wash-accent-lime, #a8c45f)',
+  accentGreen: 'var(--wash-accent-green, #5fbf85)',
+  accentTeal: 'var(--wash-accent-teal, #5fc2a8)',
+  accentCyan: 'var(--wash-accent-cyan, #5fb6c8)',
+  accentBlue: 'var(--wash-accent-blue, #6090e0)',
+  accentIndigo: 'var(--wash-accent-indigo, #7a82e0)',
+  accentViolet: 'var(--wash-accent-violet, #9a90e0)',
+  accentMagenta: 'var(--wash-accent-magenta, #c578d8)',
+  accentPink: 'var(--wash-accent-pink, #e074a4)',
 
   // Spacing.
   spaceXs: 4,
@@ -78,15 +94,19 @@ export const tokens = {
   spaceXl: 16,
   spaceXxl: 18,
 
-  // Border radius.
-  radiusSm: 3,
-  radiusMd: 4,
-  radiusLg: 6,
-  radiusXl: 8,
+  // Border radius. var()-backed (with px in the fallback) so a pack can
+  // flatten corners — NT sets these to 0 for square 90s chrome. Call
+  // sites use `${tokens.radiusMd}` WITHOUT a px suffix (px is baked in).
+  radiusSm: 'var(--wash-radius-sm, 3px)',
+  radiusMd: 'var(--wash-radius-md, 4px)',
+  radiusLg: 'var(--wash-radius-lg, 6px)',
+  radiusXl: 'var(--wash-radius-xl, 8px)',
 
-  // Font.
-  fontSans: 'ui-sans-serif, system-ui, sans-serif',
-  fontMono: 'ui-monospace, Menlo, Consolas, monospace',
+  // Font. var()-backed so a pack can swap the family (e.g. NT's
+  // Win9x-ish Tahoma/MS-Sans stack). The comma-bearing fallback is fine —
+  // everything after the var name's first comma is the var() fallback.
+  fontSans: 'var(--wash-font-sans, ui-sans-serif, system-ui, sans-serif)',
+  fontMono: 'var(--wash-font-mono, ui-monospace, Menlo, Consolas, monospace)',
   fontSizeSm: '11px',
   fontSizeMd: '12px',
   fontSizeBase: '13px',
@@ -115,3 +135,94 @@ export const tokens = {
 } as const;
 
 export type Tokens = typeof tokens;
+
+// ---- accent resolution ----
+// Icon colors (launcher rows, titlebar/taskbar) map onto the six themeable
+// accent tokens so they re-skin with the pack, instead of baking a fixed
+// hsl()/hex. The hues below are the approximate angles of the default
+// accent hexes; a declared color snaps to the nearest, and an undeclared
+// one is hashed onto the ring deterministically.
+const ACCENT_RING: ReadonlyArray<{ token: string; hue: number }> = [
+  { token: tokens.accentRed, hue: 0 },
+  { token: tokens.accentOrange, hue: 25 },
+  { token: tokens.accentAmber, hue: 45 },
+  { token: tokens.accentLime, hue: 80 },
+  { token: tokens.accentGreen, hue: 145 },
+  { token: tokens.accentTeal, hue: 168 },
+  { token: tokens.accentCyan, hue: 190 },
+  { token: tokens.accentBlue, hue: 216 },
+  { token: tokens.accentIndigo, hue: 242 },
+  { token: tokens.accentViolet, hue: 268 },
+  { token: tokens.accentMagenta, hue: 300 },
+  { token: tokens.accentPink, hue: 330 },
+];
+const ACCENT_BY_NAME: Readonly<Record<string, string>> = {
+  red: tokens.accentRed,
+  orange: tokens.accentOrange,
+  amber: tokens.accentAmber,
+  lime: tokens.accentLime,
+  green: tokens.accentGreen,
+  teal: tokens.accentTeal,
+  cyan: tokens.accentCyan,
+  blue: tokens.accentBlue,
+  indigo: tokens.accentIndigo,
+  violet: tokens.accentViolet,
+  magenta: tokens.accentMagenta,
+  pink: tokens.accentPink,
+};
+
+// hueOfHex returns the HSL hue (0..359) of #rgb / #rrggbb, or null for a
+// non-hex or a gray (no meaningful hue to snap).
+function hueOfHex(color: string): number | null {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
+  if (!m) return null;
+  let hex = m[1];
+  if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+  const r = parseInt(hex.slice(0, 2), 16) / 255;
+  const g = parseInt(hex.slice(2, 4), 16) / 255;
+  const b = parseInt(hex.slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b);
+  const d = max - Math.min(r, g, b);
+  if (d === 0) return null; // gray
+  let h: number;
+  if (max === r) h = ((g - b) / d) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  return ((Math.round(h * 60) % 360) + 360) % 360;
+}
+
+function nearestAccent(hue: number): string {
+  let best = ACCENT_RING[0];
+  let bestDist = 360;
+  for (const a of ACCENT_RING) {
+    const raw = Math.abs(a.hue - hue);
+    const dist = Math.min(raw, 360 - raw);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = a;
+    }
+  }
+  return best.token;
+}
+
+/**
+ * accentColor resolves an icon's brand color to a pack-themeable accent
+ * token, so it re-skins when the pack changes:
+ *  - a hue name ("red"|"amber"|"green"|"cyan"|"blue"|"violet") → that token;
+ *  - a hex color → the nearest accent hue's token;
+ *  - any other declared color (e.g. a gray) → used verbatim;
+ *  - nothing declared → `seed` hashed deterministically onto the ring, so
+ *    every icon is colored and the same seed always lands on the same hue.
+ */
+export function accentColor(seed: string, declared?: string): string {
+  if (declared) {
+    const named = ACCENT_BY_NAME[declared.toLowerCase()];
+    if (named) return named;
+    const hue = hueOfHex(declared);
+    if (hue !== null) return nearestAccent(hue);
+    return declared;
+  }
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = ((h << 5) - h + seed.charCodeAt(i)) | 0;
+  return ACCENT_RING[Math.abs(h) % ACCENT_RING.length].token;
+}

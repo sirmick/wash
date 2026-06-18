@@ -8,6 +8,7 @@
 // and broadcasts a session.patch back, which lands in the store.
 
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
+import { accentColor, tokens } from '@wash/ui';
 import { registerMountedElement, unregisterMountedElement } from './api';
 import { tagFor, compoundInstanceId } from './clients';
 import { hostColor } from './host-colors';
@@ -206,18 +207,26 @@ export function FloatingWindow(props: WindowProps) {
     // drop shadow so the floating window still reads as separate from
     // the desktop behind it.
     const chromeless = !!props.win.chromeless;
+    // Per-side border colors so a pack can paint a raised 3D bevel
+    // (light top/left, dark bottom/right — the NT look). Both default
+    // to the focus-aware flat color, so non-bevel packs look unchanged.
+    const fb = isFocused(props.win) ? tokens.borderFocus : tokens.borderWindow;
     const base = {
       position: 'absolute' as const,
-      background: chromeless ? 'transparent' : '#222',
-      border: chromeless
-        ? 'none'
-        : isFocused(props.win)
-          ? '1px solid #66c'
-          : '1px solid #444',
-      'box-shadow': '0 6px 24px rgba(0,0,0,0.4)',
+      background: chromeless ? 'transparent' : tokens.bgWindow,
+      'border-style': chromeless ? ('none' as const) : ('solid' as const),
+      'border-width': '1px',
+      'border-top-color': `var(--wash-border-light, ${fb})`,
+      'border-left-color': `var(--wash-border-light, ${fb})`,
+      'border-bottom-color': `var(--wash-border-dark, ${fb})`,
+      'border-right-color': `var(--wash-border-dark, ${fb})`,
+      // Drop shadow by default; a pack can prepend inset edges here to
+      // paint a raised 3D bevel *inside* the frame (NT does), which
+      // reads regardless of the wallpaper behind the window.
+      'box-shadow': 'var(--wash-window-shadow, 0 6px 24px rgba(0,0,0,0.4))',
       display: 'flex',
       'flex-direction': 'column' as const,
-      color: '#eee',
+      color: tokens.fg,
       'box-sizing': 'border-box' as const,
       // Render from the FE's global stacking value (gz), not the router's
       // per-router z: the latter collides across origins, so a focused remote
@@ -304,28 +313,26 @@ export function FloatingWindow(props: WindowProps) {
   // is a brighter red regardless of focus — the tombstone state needs
   // to be unmistakable.
   const titlebarBackground = () => {
-    if (props.win.crashed) return '#8a1d1d';
+    if (props.win.crashed) return tokens.borderDanger;
     if (props.win.isRoot) {
-      return isFocused(props.win) ? '#7a1f1f' : '#5a1818';
+      return isFocused(props.win) ? tokens.bgDanger : `color-mix(in srgb, ${tokens.bgDanger} 70%, #000)`;
     }
-    return isFocused(props.win) ? '#33387a' : '#2a2a2a';
+    // Titlebar bg via override vars (default to the pack's selected/menu
+    // surfaces) so NT can paint a navy active / gray inactive caption.
+    return isFocused(props.win)
+      ? `var(--wash-titlebar-active, ${tokens.bgRowSelected})`
+      : `var(--wash-titlebar-inactive, ${tokens.bgMenu})`;
   };
 
   // Icon color matches the source app's manifest accent. Apps that
-  // didn't declare one fall back to a deterministic HSL hash of
-  // their element tag — same algorithm as the start menu so the
-  // launcher row and the titlebar icon agree. Root windows keep a
-  // muted off-white so the accent doesn't clash with the red
+  // didn't declare one are hashed onto the pack's accent ring by their
+  // element tag — same resolver as the start menu so the launcher row and
+  // the titlebar icon agree, and both re-skin with the pack. Root windows
+  // keep a muted off-white so the accent doesn't clash with the red
   // privilege stripe (which already carries the identity signal).
   const titlebarIconColor = () => {
     if (props.win.isRoot) return undefined;
-    if (props.win.accent) return props.win.accent;
-    let h = 0;
-    const k = props.win.element || props.win.instanceID;
-    for (let i = 0; i < k.length; i++) {
-      h = ((h << 5) - h + k.charCodeAt(i)) | 0;
-    }
-    return `hsl(${Math.abs(h) % 360} 55% 65%)`;
+    return accentColor(props.win.element || props.win.instanceID, props.win.accent);
   };
 
   return (
@@ -400,6 +407,7 @@ export function FloatingWindow(props: WindowProps) {
           'box-sizing': 'border-box',
           padding: '0 8px',
           background: titlebarBackground(),
+          color: `var(--wash-titlebar-fg, ${tokens.fg})`,
           cursor: 'move',
           'user-select': 'none',
           'font-size': '13px',
@@ -534,8 +542,8 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
       style={{
         position: 'absolute',
         inset: '0',
-        background: '#1a0e0e',
-        color: '#f4e4e4',
+        background: `color-mix(in srgb, ${tokens.bgDanger} 55%, #000)`,
+        color: tokens.fgDanger,
         display: 'flex',
         'flex-direction': 'column',
         'box-sizing': 'border-box',
@@ -548,9 +556,9 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
           'align-items': 'center',
           gap: '8px',
           padding: '10px 12px',
-          background: '#3a0f0f',
-          'border-bottom': '1px solid #5a1818',
-          color: '#ffd0d0',
+          background: tokens.bgDanger,
+          'border-bottom': `1px solid ${tokens.borderDanger}`,
+          color: tokens.fgDanger,
           font: '13px ui-sans-serif, system-ui, sans-serif',
         }}
       >
@@ -571,9 +579,9 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
             display: 'flex',
             'align-items': 'center',
             gap: '4px',
-            background: copied() ? '#2d5a2d' : '#5a1818',
-            color: '#fff',
-            border: '1px solid #7a2828',
+            background: copied() ? tokens.bgSuccess : tokens.bgDanger,
+            color: tokens.fg,
+            border: `1px solid ${tokens.borderDanger}`,
             'border-radius': '3px',
             padding: '4px 8px',
             cursor: 'pointer',
@@ -594,8 +602,8 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
           flex: 1,
           margin: '0',
           padding: '10px 12px',
-          background: '#10070a',
-          color: '#f4d0d0',
+          background: `color-mix(in srgb, ${tokens.bgDanger} 40%, #000)`,
+          color: tokens.fgDanger,
           border: 'none',
           outline: 'none',
           resize: 'none',
@@ -612,7 +620,7 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
 
 const titlebarBtnStyle = {
   background: 'transparent',
-  color: '#eee',
+  color: `var(--wash-titlebar-fg, ${tokens.fg})`,
   border: 'none',
   'font-size': '12px',
   cursor: 'pointer',

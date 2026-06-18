@@ -136,6 +136,91 @@ test.describe('wash-settings', () => {
 });
 
 // ---------------------------------------------------------------------
+// Theme packs (docs/PACKS). The Desktop pane's Theme gallery writes a
+// `pack` id to desktop.json; wash-session fswatches it and applies the
+// pack's --wash-* scheme to document.documentElement (cascades into every
+// light-DOM app) plus its wallpaper. Built-in wallpapers are served over
+// the asset.read channel (window.wash.fetchAsset), not bundled.
+// ---------------------------------------------------------------------
+
+test.describe('wash-settings — Theme packs', () => {
+  test.setTimeout(15_000);
+
+  test('Theme gallery renders the built-in pack cards', async ({ page, router }) => {
+    await page.goto(router.url);
+    await router.controlRequest({ t: 'launch', app_id: 'com.wash.settings' });
+    const app = page.locator('wash-app-settings');
+    await expect(app).toBeVisible();
+    // Desktop is the default pane; the Theme gallery sits at its top.
+    await expect(app.locator('[data-testid="pack-card-midnight"]')).toBeVisible();
+    await expect(app.locator('[data-testid="pack-card-tokyo"]')).toBeVisible();
+    await expect(app.locator('[data-testid="pack-card-seoul"]')).toBeVisible();
+    await expect(app.locator('[data-testid="pack-card-nt"]')).toBeVisible();
+    await expect(app.locator('[data-testid="pack-card-oslo"]')).toBeVisible();
+  });
+
+  test('selecting the Seoul pack applies a light scheme', async ({ page, router }) => {
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    await router.controlRequest({ t: 'launch', app_id: 'com.wash.settings' });
+    const app = page.locator('wash-app-settings');
+    await expect(app).toBeVisible();
+    // Seoul is the first light pack — ivory window surface, sumi-ink text.
+    await app.locator('[data-testid="pack-card-seoul"]').click();
+    await expect
+      .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--wash-bg-window').trim()), { timeout: 5_000 })
+      .toBe('#f6efdd');
+  });
+
+  test('selecting a pack writes `pack` to desktop.json and re-themes the live desktop', async ({ page, router }) => {
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    await router.controlRequest({ t: 'launch', app_id: 'com.wash.settings' });
+    const app = page.locator('wash-app-settings');
+    await expect(app).toBeVisible();
+
+    // The active pack's scheme lands as --wash-* vars on documentElement.
+    const bgWindowVar = () =>
+      page.evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue('--wash-bg-window').trim(),
+      );
+    const path = desktopJSONPath(router.xdgConfigHome);
+    const packOnDisk = () => (existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')).pack ?? null : null);
+
+    // Midnight is applied on load (its var == the tokens default).
+    await expect.poll(bgWindowVar, { timeout: 5_000 }).toBe('#181828');
+
+    // Pick Tokyo (Solarized Dark): the scheme re-themes live, and `pack`
+    // persists through the FE → settings.write → desktop.json → fswatch chain.
+    await app.locator('[data-testid="pack-card-tokyo"]').click();
+    await expect.poll(bgWindowVar, { timeout: 5_000 }).toBe('#002b36');
+    await expect.poll(packOnDisk, { timeout: 5_000 }).toBe('tokyo');
+
+    // Back to Midnight: the var reverts (applyScheme clears the prior pack).
+    await app.locator('[data-testid="pack-card-midnight"]').click();
+    await expect.poll(bgWindowVar, { timeout: 5_000 }).toBe('#181828');
+    await expect.poll(packOnDisk, { timeout: 5_000 }).toBe('midnight');
+  });
+
+  test('built-in wallpaper survives the asset.read channel intact (multi-chunk)', async ({ page, router }) => {
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    // fetchAsset pulls the wallpaper over asset.read. The SVG spans several
+    // 64KB frames; a streamer regression (reused buffer) scrambles
+    // multi-chunk payloads, so assert the reassembled bytes are coherent.
+    const r = await page.evaluate(async () => {
+      const a = await window.wash.fetchAsset('wallpapers/midnight.svg');
+      const txt = new TextDecoder().decode(a.bytes);
+      return { len: a.bytes.length, mime: a.mime, head: txt.slice(0, 5), tail: txt.trim().slice(-6) };
+    });
+    expect(r.len).toBeGreaterThan(64 * 1024); // multi-chunk → exercises the streamer
+    expect(r.mime).toBe('image/svg+xml');
+    expect(r.head).toBe('<svg ');
+    expect(r.tail).toBe('</svg>');
+  });
+});
+
+// ---------------------------------------------------------------------
 // Service-control panels (docs/SETTINGS.md §4). These render host-side
 // over the BE's svc.* relay: the panel subscribes to a background
 // service (svc.send), the service pushes snapshots back (svc.recv), and

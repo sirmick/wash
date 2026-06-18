@@ -11,6 +11,7 @@
 
 import type { Component } from 'solid-js';
 import type { JSX } from 'solid-js';
+import { tokens } from '@wash/ui';
 
 export interface ViewportWidgetProps {
   /** Render-prop hand-off so the widget doesn't have to know about
@@ -35,7 +36,7 @@ export const ViewportWidget: Component<ViewportWidgetProps> = (props) => {
         style={{
           'font-size': '11px',
           opacity: 0.55,
-          color: '#aaa',
+          color: tokens.fgMuted,
           'text-align': 'center',
         }}
       >
