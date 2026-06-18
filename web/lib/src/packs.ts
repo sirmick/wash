@@ -250,6 +250,9 @@ const retro: Pack = {
     '--wash-radius-lg': '0',
     '--wash-radius-xl': '0',
     '--wash-taskbar-bg': '#c0c0c0',
+    // Desktop info banner sits over the dark synthwave, so it needs light
+    // text even though the chrome text is black.
+    '--wash-banner-fg': '#e6e9ee',
   },
   wallpaper: 'wallpapers/retro.svg',
 };

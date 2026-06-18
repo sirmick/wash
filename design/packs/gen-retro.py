@@ -27,8 +27,15 @@ out.append('<linearGradient id="sun" x1="0" y1="0" x2="0" y2="1">'
            '<stop offset="0.5" stop-color="#ff8a3a"/>'
            '<stop offset="1" stop-color="#ff4f72"/></linearGradient>')
 out.append(f'<linearGradient id="ground" gradientUnits="userSpaceOnUse" x1="0" y1="{horizon}" x2="0" y2="{H}">'
-           '<stop offset="0" stop-color="#06121a"/>'
-           '<stop offset="1" stop-color="#01060a"/></linearGradient>')
+           '<stop offset="0" stop-color="#0c2a33"/>'
+           '<stop offset="0.5" stop-color="#06141c"/>'
+           '<stop offset="1" stop-color="#02060c"/></linearGradient>')
+# grid line fade — bright teal at the horizon, dimming toward the viewer
+# so the lower grid blends into the ground instead of hard uniform lines.
+out.append(f'<linearGradient id="gridfade" gradientUnits="userSpaceOnUse" x1="0" y1="{horizon}" x2="0" y2="{H}">'
+           '<stop offset="0" stop-color="#46e7de" stop-opacity="0.85"/>'
+           '<stop offset="0.45" stop-color="#22a89f" stop-opacity="0.6"/>'
+           '<stop offset="1" stop-color="#0a3f3b" stop-opacity="0.25"/></linearGradient>')
 out.append('</defs>')
 
 # --- sky + ground ---
@@ -57,11 +64,11 @@ while x < W:
     if random.random() < 0.22:                       # occasional antenna
         ah = random.randint(10, 26)
         out.append(f'<rect x="{x + bw // 2 - 1}" y="{horizon - bh - ah}" width="2" height="{ah}"/>')
-    x += bw + random.randint(1, 6)
+    x += bw                                           # flush — no sky gaps between buildings
 out.append('</g>')
 
 # --- teal neon perspective grid on the ground ---
-out.append('<g stroke="#26b8b2" stroke-width="1.6" opacity="0.72">')
+out.append('<g stroke="url(#gridfade)" stroke-width="1.6">')
 for xb in range(-W, 2 * W + 1, 84):                  # verticals fan from the vanishing point
     out.append(f'<line x1="{cx:.0f}" y1="{horizon}" x2="{xb}" y2="{H}"/>')
 M = 16

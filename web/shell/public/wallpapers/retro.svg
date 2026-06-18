@@ -2,7 +2,8 @@
 <defs>
 <linearGradient id="sky" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="648"><stop offset="0" stop-color="#02030f"/><stop offset="0.45" stop-color="#0a1a52"/><stop offset="0.80" stop-color="#1f4f86"/><stop offset="1" stop-color="#2e7e8c"/></linearGradient>
 <linearGradient id="sun" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffd96b"/><stop offset="0.5" stop-color="#ff8a3a"/><stop offset="1" stop-color="#ff4f72"/></linearGradient>
-<linearGradient id="ground" gradientUnits="userSpaceOnUse" x1="0" y1="648" x2="0" y2="1080"><stop offset="0" stop-color="#06121a"/><stop offset="1" stop-color="#01060a"/></linearGradient>
+<linearGradient id="ground" gradientUnits="userSpaceOnUse" x1="0" y1="648" x2="0" y2="1080"><stop offset="0" stop-color="#0c2a33"/><stop offset="0.5" stop-color="#06141c"/><stop offset="1" stop-color="#02060c"/></linearGradient>
+<linearGradient id="gridfade" gradientUnits="userSpaceOnUse" x1="0" y1="648" x2="0" y2="1080"><stop offset="0" stop-color="#46e7de" stop-opacity="0.85"/><stop offset="0.45" stop-color="#22a89f" stop-opacity="0.6"/><stop offset="1" stop-color="#0a3f3b" stop-opacity="0.25"/></linearGradient>
 </defs>
 <rect x="0" y="0" width="1920" height="648" fill="url(#sky)"/>
 <rect x="0" y="648" width="1920" height="432" fill="url(#ground)"/>
@@ -17,74 +18,76 @@
 <rect x="690" y="602" width="540" height="11" fill="url(#sky)"/>
 <g fill="#000000">
 <rect x="0" y="586" width="30" height="62"/>
-<rect x="31" y="487" width="22" height="161"/>
-<rect x="41" y="476" width="2" height="11"/>
-<rect x="58" y="615" width="26" height="33"/>
-<rect x="70" y="592" width="2" height="23"/>
-<rect x="85" y="601" width="27" height="47"/>
-<rect x="113" y="480" width="46" height="168"/>
-<rect x="135" y="463" width="2" height="17"/>
-<rect x="165" y="475" width="40" height="173"/>
-<rect x="210" y="523" width="38" height="125"/>
-<rect x="228" y="506" width="2" height="17"/>
-<rect x="249" y="590" width="37" height="58"/>
-<rect x="288" y="594" width="37" height="54"/>
-<rect x="330" y="450" width="46" height="198"/>
-<rect x="352" y="434" width="2" height="16"/>
-<rect x="379" y="484" width="23" height="164"/>
-<rect x="407" y="466" width="21" height="182"/>
-<rect x="416" y="443" width="2" height="23"/>
-<rect x="431" y="475" width="34" height="173"/>
-<rect x="468" y="561" width="29" height="87"/>
-<rect x="503" y="562" width="44" height="86"/>
-<rect x="524" y="543" width="2" height="19"/>
-<rect x="552" y="537" width="35" height="111"/>
-<rect x="590" y="606" width="39" height="42"/>
-<rect x="608" y="583" width="2" height="23"/>
-<rect x="631" y="537" width="44" height="111"/>
-<rect x="652" y="512" width="2" height="25"/>
-<rect x="679" y="453" width="21" height="195"/>
-<rect x="688" y="433" width="2" height="20"/>
-<rect x="703" y="535" width="42" height="113"/>
-<rect x="750" y="508" width="45" height="140"/>
-<rect x="771" y="496" width="2" height="12"/>
-<rect x="798" y="446" width="35" height="202"/>
-<rect x="834" y="445" width="43" height="203"/>
-<rect x="882" y="510" width="41" height="138"/>
-<rect x="927" y="453" width="48" height="195"/>
-<rect x="979" y="581" width="31" height="67"/>
-<rect x="1014" y="569" width="21" height="79"/>
-<rect x="1037" y="561" width="43" height="87"/>
-<rect x="1084" y="582" width="22" height="66"/>
-<rect x="1111" y="589" width="28" height="59"/>
-<rect x="1144" y="444" width="28" height="204"/>
-<rect x="1175" y="527" width="41" height="121"/>
-<rect x="1218" y="579" width="22" height="69"/>
-<rect x="1228" y="562" width="2" height="17"/>
-<rect x="1241" y="474" width="35" height="174"/>
-<rect x="1257" y="455" width="2" height="19"/>
-<rect x="1277" y="517" width="24" height="131"/>
-<rect x="1306" y="543" width="38" height="105"/>
-<rect x="1350" y="493" width="47" height="155"/>
-<rect x="1403" y="611" width="41" height="37"/>
-<rect x="1450" y="481" width="45" height="167"/>
-<rect x="1499" y="598" width="32" height="50"/>
-<rect x="1535" y="576" width="21" height="72"/>
-<rect x="1544" y="560" width="2" height="16"/>
-<rect x="1560" y="596" width="25" height="52"/>
-<rect x="1586" y="624" width="23" height="24"/>
-<rect x="1614" y="531" width="23" height="117"/>
-<rect x="1638" y="571" width="47" height="77"/>
-<rect x="1687" y="560" width="40" height="88"/>
-<rect x="1732" y="503" width="31" height="145"/>
-<rect x="1746" y="478" width="2" height="25"/>
-<rect x="1767" y="501" width="35" height="147"/>
-<rect x="1804" y="537" width="23" height="111"/>
-<rect x="1831" y="447" width="46" height="201"/>
-<rect x="1853" y="437" width="2" height="10"/>
-<rect x="1879" y="489" width="50" height="159"/>
+<rect x="30" y="606" width="21" height="42"/>
+<rect x="51" y="531" width="23" height="117"/>
+<rect x="74" y="495" width="49" height="153"/>
+<rect x="97" y="483" width="2" height="12"/>
+<rect x="123" y="517" width="33" height="131"/>
+<rect x="138" y="505" width="2" height="12"/>
+<rect x="156" y="516" width="37" height="132"/>
+<rect x="173" y="503" width="2" height="13"/>
+<rect x="193" y="567" width="50" height="81"/>
+<rect x="243" y="609" width="38" height="39"/>
+<rect x="281" y="612" width="32" height="36"/>
+<rect x="313" y="482" width="21" height="166"/>
+<rect x="334" y="517" width="29" height="131"/>
+<rect x="347" y="504" width="2" height="13"/>
+<rect x="363" y="546" width="38" height="102"/>
+<rect x="401" y="578" width="41" height="70"/>
+<rect x="420" y="562" width="2" height="16"/>
+<rect x="442" y="600" width="31" height="48"/>
+<rect x="473" y="480" width="22" height="168"/>
+<rect x="483" y="464" width="2" height="16"/>
+<rect x="495" y="450" width="35" height="198"/>
+<rect x="530" y="544" width="44" height="104"/>
+<rect x="574" y="508" width="49" height="140"/>
+<rect x="623" y="578" width="27" height="70"/>
+<rect x="650" y="604" width="27" height="44"/>
+<rect x="677" y="498" width="36" height="150"/>
+<rect x="713" y="510" width="43" height="138"/>
+<rect x="756" y="594" width="22" height="54"/>
+<rect x="778" y="537" width="25" height="111"/>
+<rect x="789" y="512" width="2" height="25"/>
+<rect x="803" y="614" width="33" height="34"/>
+<rect x="836" y="482" width="22" height="166"/>
+<rect x="858" y="544" width="48" height="104"/>
+<rect x="906" y="472" width="31" height="176"/>
+<rect x="937" y="508" width="45" height="140"/>
+<rect x="958" y="496" width="2" height="12"/>
+<rect x="982" y="555" width="50" height="93"/>
+<rect x="1032" y="608" width="41" height="40"/>
+<rect x="1051" y="589" width="2" height="19"/>
+<rect x="1073" y="477" width="40" height="171"/>
+<rect x="1113" y="510" width="46" height="138"/>
+<rect x="1159" y="453" width="32" height="195"/>
+<rect x="1191" y="506" width="50" height="142"/>
+<rect x="1241" y="595" width="39" height="53"/>
+<rect x="1280" y="551" width="26" height="97"/>
+<rect x="1292" y="534" width="2" height="17"/>
+<rect x="1306" y="524" width="32" height="124"/>
+<rect x="1338" y="604" width="35" height="44"/>
+<rect x="1354" y="582" width="2" height="22"/>
+<rect x="1373" y="553" width="37" height="95"/>
+<rect x="1410" y="514" width="46" height="134"/>
+<rect x="1456" y="444" width="28" height="204"/>
+<rect x="1484" y="450" width="31" height="198"/>
+<rect x="1515" y="565" width="50" height="83"/>
+<rect x="1539" y="550" width="2" height="15"/>
+<rect x="1565" y="565" width="24" height="83"/>
+<rect x="1589" y="500" width="20" height="148"/>
+<rect x="1609" y="557" width="25" height="91"/>
+<rect x="1634" y="517" width="24" height="131"/>
+<rect x="1658" y="480" width="39" height="168"/>
+<rect x="1697" y="448" width="24" height="200"/>
+<rect x="1721" y="466" width="50" height="182"/>
+<rect x="1771" y="611" width="43" height="37"/>
+<rect x="1814" y="450" width="47" height="198"/>
+<rect x="1861" y="523" width="32" height="125"/>
+<rect x="1893" y="501" width="23" height="147"/>
+<rect x="1916" y="576" width="21" height="72"/>
+<rect x="1925" y="560" width="2" height="16"/>
 </g>
-<g stroke="#26b8b2" stroke-width="1.6" opacity="0.72">
+<g stroke="url(#gridfade)" stroke-width="1.6">
 <line x1="960" y1="648" x2="-1920" y2="1080"/>
 <line x1="960" y1="648" x2="-1836" y2="1080"/>
 <line x1="960" y1="648" x2="-1752" y2="1080"/>

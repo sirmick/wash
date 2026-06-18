@@ -1208,7 +1208,9 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
             position: 'absolute',
             left: '32px',
             top: '24px',
-            color: tokens.fg,
+            // Over the wallpaper, not chrome — a pack whose chrome text is
+            // dark on a dark wallpaper (Retro) overrides --wash-banner-fg.
+            color: `var(--wash-banner-fg, ${tokens.fg})`,
             // Themed legibility halo: the pack's own surface color behind
             // the text so the banner stands out against any wallpaper —
             // a light glow on light packs, a dark one on dark packs.
@@ -1320,7 +1322,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
                       background: tokens.accentRed,
                       color: '#fff',
                       padding: '0 6px',
-                      'border-radius': '2px',
+                      'border-radius': tokens.radiusSm,
                       'font-weight': 700,
                       'letter-spacing': '0.05em',
                       opacity: 1,
@@ -1456,7 +1458,7 @@ const PagerCell: Component<{
     height: `${props.cellH}px`,
     background: props.active ? `color-mix(in srgb, ${tokens.accentBlue} 28%, transparent)` : `color-mix(in srgb, ${tokens.fg} 4%, transparent)`,
     border: props.active ? `1.5px solid ${tokens.accentBlue}` : `1px solid ${tokens.borderMenu}`,
-    'border-radius': '3px',
+    'border-radius': tokens.radiusSm,
     cursor: 'pointer',
     overflow: 'hidden',
     'box-sizing': 'border-box',
@@ -1515,7 +1517,7 @@ const PagerWindow: Component<{
       height: `${r.height}px`,
       background: props.win.focused ? `color-mix(in srgb, ${tokens.accentBlue} 60%, transparent)` : `color-mix(in srgb, ${tokens.fgMuted} 28%, transparent)`,
       border: `1px solid ${props.win.focused ? tokens.accentBlue : tokens.borderFocus}`,
-      'border-radius': '1.5px',
+      'border-radius': tokens.radiusSm,
       'box-sizing': 'border-box',
       cursor: 'pointer',
     };
@@ -1559,7 +1561,7 @@ const IconButton: Component<{
         border: '1px solid transparent',
         width: '32px',
         height: '32px',
-        'border-radius': '4px',
+        'border-radius': tokens.radiusMd,
         cursor: 'pointer',
         display: 'flex',
         'align-items': 'center',
@@ -1603,7 +1605,7 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
         border: `1px solid ${props.win.focused ? tokens.borderFocus : 'transparent'}`,
         padding: '0 12px',
         height: '28px',
-        'border-radius': '4px',
+        'border-radius': tokens.radiusMd,
         cursor: 'pointer',
         'max-width': '220px',
         font: '13px system-ui,sans-serif',
@@ -1755,7 +1757,7 @@ const Palette: Component<{
         style={{
           background: tokens.bgWindow,
           border: `1px solid ${tokens.borderMenu}`,
-          'border-radius': '8px',
+          'border-radius': tokens.radiusXl,
           'min-width': '380px',
           'max-width': '520px',
           'box-shadow': '0 16px 48px rgba(0,0,0,0.6)',
