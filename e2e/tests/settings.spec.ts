@@ -154,6 +154,20 @@ test.describe('wash-settings — Theme packs', () => {
     // Desktop is the default pane; the Theme gallery sits at its top.
     await expect(app.locator('[data-testid="pack-card-midnight"]')).toBeVisible();
     await expect(app.locator('[data-testid="pack-card-tokyo"]')).toBeVisible();
+    await expect(app.locator('[data-testid="pack-card-seoul"]')).toBeVisible();
+  });
+
+  test('selecting the Seoul pack applies a light scheme', async ({ page, router }) => {
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    await router.controlRequest({ t: 'launch', app_id: 'com.wash.settings' });
+    const app = page.locator('wash-app-settings');
+    await expect(app).toBeVisible();
+    // Seoul is the first light pack — ivory window surface, sumi-ink text.
+    await app.locator('[data-testid="pack-card-seoul"]').click();
+    await expect
+      .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--wash-bg-window').trim()), { timeout: 5_000 })
+      .toBe('#f6efdd');
   });
 
   test('selecting a pack writes `pack` to desktop.json and re-themes the live desktop', async ({ page, router }) => {

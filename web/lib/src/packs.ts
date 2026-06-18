@@ -125,8 +125,60 @@ const tokyo: Pack = {
   wallpaper: 'wallpapers/tokyo.svg',
 };
 
+// Seoul — Hwatu (Go-Stop). The first LIGHT pack: warm ivory paper
+// surfaces + sumi-ink text, accents drawn from the cards and the Korean
+// obangsaek palette. Wallpaper is the 삼광 (Samgwang) "three lights"
+// hand — January crane, March cherry curtain, August moon (each bears
+// the 光 "light" mark) — composed side by side on a cream field from
+// hwatu card SVGs (Wikimedia Commons, CC BY-SA 4.0; see CREDITS).
+const seoul: Pack = {
+  id: 'seoul',
+  name: 'Seoul',
+  scheme: {
+    '--wash-bg-window': '#f6efdd', // ivory paper
+    '--wash-bg-menu': '#f0e7cf',
+    '--wash-bg-inset': '#e9dec2', // sunken (slightly deeper on light)
+    '--wash-bg-row': 'transparent',
+    '--wash-bg-row-hover': '#e7dabc',
+    '--wash-bg-row-selected': '#ecd6a6',
+    '--wash-bg-backdrop': 'rgba(40,28,8,0.35)',
+    '--wash-bg-drop-target': '#d4e3ec',
+    '--wash-border-menu': '#d8c9a4',
+    '--wash-border-window': '#cdbb90',
+    '--wash-border-focus': '#2f6ea5', // obangsaek blue
+    '--wash-border-drop-target': '#2f6ea5', // == accent blue
+    '--wash-fg': '#2b2118', // sumi ink
+    '--wash-fg-muted': '#6b5e4a',
+    '--wash-fg-dim': '#978a72',
+    '--wash-bg-danger': '#f7d9d5',
+    '--wash-border-danger': '#d98a82',
+    '--wash-fg-danger': '#b3201a',
+    '--wash-bg-success': '#dbe8cf',
+    '--wash-fg-success': '#3f7a2e',
+    '--wash-bg-warning': '#f3e6c2',
+    '--wash-fg-warning': '#9a6f15',
+    '--wash-bg-info': '#d6e4ef',
+    '--wash-fg-info': '#235f8a',
+    '--wash-bg-neutral': '#e6dcc2',
+    '--wash-bg-denied': '#f0e2c0',
+    '--wash-border-denied': '#c99a4a',
+    '--wash-sev-error': '#c0271f',
+    '--wash-sev-warn': '#9a6f15',
+    '--wash-sev-notice': '#235f8a',
+    '--wash-sev-info': '#4a4030',
+    '--wash-sev-debug': '#8a7d64',
+    '--wash-accent-red': '#cc3433', // obangsaek/hwatu red
+    '--wash-accent-amber': '#cf9b2e', // gold (card tassels)
+    '--wash-accent-green': '#4f8a3f', // dancheong green
+    '--wash-accent-cyan': '#2a9a92',
+    '--wash-accent-blue': '#2f6ea5', // obangsaek blue
+    '--wash-accent-violet': '#8a5fb0',
+  },
+  wallpaper: 'wallpapers/seoul.svg',
+};
+
 /** All built-in packs, in gallery order. Midnight is first / default. */
-export const packs: Pack[] = [midnight, tokyo];
+export const packs: Pack[] = [midnight, tokyo, seoul];
 
 export const defaultPackId = 'midnight';
 
