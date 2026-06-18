@@ -220,7 +220,10 @@ export function FloatingWindow(props: WindowProps) {
       'border-left-color': `var(--wash-border-light, ${fb})`,
       'border-bottom-color': `var(--wash-border-dark, ${fb})`,
       'border-right-color': `var(--wash-border-dark, ${fb})`,
-      'box-shadow': '0 6px 24px rgba(0,0,0,0.4)',
+      // Drop shadow by default; a pack can prepend inset edges here to
+      // paint a raised 3D bevel *inside* the frame (Retro does), which
+      // reads regardless of the wallpaper behind the window.
+      'box-shadow': 'var(--wash-window-shadow, 0 6px 24px rgba(0,0,0,0.4))',
       display: 'flex',
       'flex-direction': 'column' as const,
       color: tokens.fg,

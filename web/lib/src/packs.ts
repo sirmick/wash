@@ -216,13 +216,13 @@ const retro: Pack = {
     '--wash-bg-danger': '#f4cccc',
     '--wash-border-danger': '#c00000',
     '--wash-fg-danger': '#a00000',
-    '--wash-bg-success': '#d4e8d0',
-    '--wash-fg-success': '#008000',
+    '--wash-bg-success': '#a3d9a0', // clearer green — pops on the silver chrome
+    '--wash-fg-success': '#085c08',
     '--wash-bg-warning': '#f4eec4',
     '--wash-fg-warning': '#808000',
     '--wash-bg-info': '#000080', // navy info badge…
     '--wash-fg-info': '#ffffff', // …with white text (Win9x selection look)
-    '--wash-bg-neutral': '#d4d0c8',
+    '--wash-bg-neutral': '#e6e2da', // off-white, distinct from the silver window
     '--wash-bg-denied': '#f0e6c8',
     '--wash-border-denied': '#808000',
     '--wash-sev-error': '#c00000',
@@ -241,8 +241,14 @@ const retro: Pack = {
     '--wash-titlebar-active': '#000080',
     '--wash-titlebar-inactive': '#7f7f7f',
     '--wash-titlebar-fg': '#ffffff',
+    // Window frame. The silver body already cuts a high-contrast edge
+    // against the dark wallpaper, so a *dark* shadow border (the authentic
+    // Win9x bottom-right) just reads as a stray line — and an inset bevel
+    // gets painted over by the app's own background. So the frame is a
+    // LIGHT bevel: bright highlight top-left, soft gray bottom-right, both
+    // of which read on the dark wallpaper as a clean raised frame.
     '--wash-border-light': '#ffffff',
-    '--wash-border-dark': '#808080', // visible shadow edge on any backdrop
+    '--wash-border-dark': '#d4d4d4',
     // Square 90s corners everywhere, and a gray taskbar (the default
     // sunken surface is white here, which looked wrong).
     '--wash-radius-sm': '0',
