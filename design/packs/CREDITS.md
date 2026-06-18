@@ -14,6 +14,13 @@ Vectorized from **"03. Solarized Dark"** by fr0st-xyz
 `vtracer` (`--filter_speckle 6 --color_precision 5`). Source raster kept at
 `design/packs/src/solarized-dark-source.png`.
 
+## Retro — `wallpapers/retro.svg`
+Vectorized from a synthwave wallpaper (wallpaperaccess.com item 4749201,
+"synthwave-4k") with `vtracer` (`--filter_speckle 10 --color_precision 5`).
+Source raster at `design/packs/src/synthwave-source.jpg`. NOTE: source
+licensing is unverified (wallpaperaccess hosts user uploads) — resolve
+before any public release.
+
 ## Oslo — `wallpapers/oslo.svg`
 Vectorized from **"02. Nordic Blue"** by fr0st-xyz
 (<https://github.com/fr0st-xyz/wallz>), GPL-3.0. Minimalist Nordic
