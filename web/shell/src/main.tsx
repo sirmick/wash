@@ -340,22 +340,20 @@ function makeHandlers(client: RouterClient): ClientHandlers {
           // wash-fetch.ts. Nothing to do here.
         } else if (b.kind === 'video') {
           // Per-window video for the built-in <wash-app-display> decoder
-          // (wire.ChannelKindVideo). Local only for now — remote display
-          // video is gated off here (un-gate + origin-scope input to enable;
-          // see docs/REMOTE.md §15.1). The registry (api.ts) handles the
-          // bind-before-mount race; frame bytes still flow via deliverRaw.
-          if (isLocal) {
-            client.channelOwner.set(b.channel_id, b.window_id);
-            bindVideoChannel(client.origin, b.window_id, b.channel_id);
-          }
+          // (wire.ChannelKindVideo). Works for LOCAL and REMOTE origins: a
+          // remote host's display video rides the relay's origin-scoped raw
+          // path, and the registry (api.ts) is keyed by (origin,windowID) so
+          // it never collides with a local window. Frame bytes flow via
+          // deliverRaw; the registry handles the bind-before-mount race.
+          // (docs/REMOTE.md §15.1.)
+          client.channelOwner.set(b.channel_id, b.window_id);
+          bindVideoChannel(client.origin, b.window_id, b.channel_id);
         } else if (b.kind === 'video-popup') {
           // Child surface (menu/dropdown) of a display window: window_id is
           // the PARENT win, drawn as a positioned overlay on its
-          // <wash-app-display>. Same local-only gating as video.
-          if (isLocal) {
-            client.channelOwner.set(b.channel_id, b.window_id);
-            bindPopupChannel(client.origin, b.window_id, b.channel_id);
-          }
+          // <wash-app-display>. Origin-scoped like video.
+          client.channelOwner.set(b.channel_id, b.window_id);
+          bindPopupChannel(client.origin, b.window_id, b.channel_id);
         } else if (b.kind === 'peer' && isLocal) {
           // Remote-apps relay: A spliced this channel to host B. Stand up a
           // RouterClient for the origin whose transport is this channel.
@@ -394,12 +392,13 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         }
         // Try each accumulator in turn; harmless on miss.
         finishBundle(u.channel_id, client.origin);
+        // Drop any stashed video binding (this origin) so a later rebind on
+        // the same window doesn't replay a dead channel to a fresh element.
+        // Runs for remote origins too now that remote display is enabled.
+        forgetVideoChannel(client.origin, u.channel_id);
         if (isLocal) {
           finishAsset(u.channel_id);
           finishPanel(u.channel_id);
-          // Drop any stashed video binding so a later rebind on the same
-          // window doesn't replay this dead channel to a fresh element.
-          forgetVideoChannel(client.origin, u.channel_id);
         }
         client.channelOwner.delete(u.channel_id);
         closeRawSubscriber(client.origin, u.channel_id);

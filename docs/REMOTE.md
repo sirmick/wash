@@ -588,19 +588,22 @@ the display↔video registry is keyed by `(origin, windowID)` and the built-in
 (not a hardcoded local one). So a remote display window can't collide with a
 local one, and its frames would deliver over the relay's origin-scoped raw path.
 
-What it takes to actually turn it on (deliberately gated today so we don't ship
-an untested path):
+FE enablement (steps 1–2) **DONE** (2026-06-18); deployment + test remain:
 
-1. **Un-gate the video bind.** `main.tsx`'s `channel.bind` handler binds video
-   only `if (isLocal)`; the matching `channel.unbind` likewise. Remove the guard
-   so a remote router's video bind reaches `bindVideoChannel(client.origin, …)`.
-2. **Origin-scope display *input*.** Video (B→A) is done; the input channels
-   (pointer / keyboard / clipboard, A→B) must write with `writeRawFor(origin)`
-   the way the terminal already does, so keystrokes reach B's compositor and not
-   a local channel of the same id.
+1. **Un-gate the video bind. DONE.** `main.tsx`'s `channel.bind` binds video +
+   video-popup for any origin now (`bindVideoChannel(client.origin, …)` /
+   `bindPopupChannel`); `channel.unbind` runs `forgetVideoChannel(client.origin,
+   …)` for remote too. Local display e2e unchanged (10/10 green).
+2. **Origin-scope display *input*. DONE.** `<wash-app-display>` posts its input
+   batch via `window.wash.sendAppMsg(this.instanceID, …)` (the compound,
+   origin-tagged instance id) instead of `sendAppMsgTo` over the local conn — so
+   a remote display window's pointer/keyboard reaches its OWN host's
+   wash-display. (Video B→A was already origin-scoped via the registry.)
 3. **Deploy + launch `wash-display` on B.** Its X/Wayland env propagation is
    B-local and already works (a terminal on B launches X clients into B's
-   compositor); nothing remote-specific there.
+   compositor); nothing remote-specific there. NOTE the VM image bakes no
+   display stack today — a remote-display VM test needs wlroots + Xwayland +
+   wash-display + an X app (xlogo) baked into the guest image (the heavy lift).
 4. **Transport / perf.** With the above it runs **WebP-frames-over-relay-over-
    ssh** — correct and fine for light GUI, but heavier than the planned
    **VP9-over-WebRTC** media side-channel ([DISPLAY.md](DISPLAY.md)). WebRTC

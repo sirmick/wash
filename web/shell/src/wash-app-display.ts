@@ -422,11 +422,14 @@ export class WashAppDisplay extends HTMLElement {
 
   // sendInput posts one input batch to the wash-display instance. `target`
   // is {win} for the window itself or {popup_chan} for a popup overlay (the
-  // BE routes by whichever is set).
+  // BE routes by whichever is set). Addressed via sendAppMsg with the
+  // (compound) instance id so a REMOTE display window's input routes to its
+  // own host's wash-display, not the local router (docs/REMOTE.md §15.1) —
+  // sendAppMsgTo would always go over the local connection.
   private sendInput(target: Record<string, number>, events: InputEvent[]): void {
     if (events.length === 0) return;
     if (typeof window === 'undefined' || !window.wash) return;
-    window.wash.sendAppMsgTo({ instance_id: this.instanceID }, { kind: 'input', ...target, events });
+    window.wash.sendAppMsg(this.instanceID, { kind: 'input', ...target, events });
   }
 
   // attachVideoChannel subscribes to the raw byte stream for the window's
