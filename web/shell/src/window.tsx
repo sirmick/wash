@@ -50,7 +50,7 @@ export function FloatingWindow(props: WindowProps) {
     // later, after the element is already mounted; the slot just
     // sits behind the absolute-positioned overlay in that case.
     if (props.win.crashed) {
-      window.wash.focusWindow(props.win.windowID);
+      window.wash.focusWindow(props.win.windowID, props.win.origin);
       return;
     }
     // tagFor returns the per-origin mangled tag for a remote window (so it
@@ -77,7 +77,7 @@ export function FloatingWindow(props: WindowProps) {
     // listeners inside onMount (e.g. wash-fm) miss the wash:state
     // event entirely and never initialize their FE state.
     queueMicrotask(() => registerMountedElement(cid, el));
-    window.wash.focusWindow(props.win.windowID);
+    window.wash.focusWindow(props.win.windowID, props.win.origin);
   });
   onCleanup(() => {
     unregisterMountedElement(compoundInstanceId(props.win.origin, props.win.instanceID));
@@ -85,7 +85,7 @@ export function FloatingWindow(props: WindowProps) {
 
   const onTitlebarPointerDown = (ev: PointerEvent) => {
     ev.preventDefault();
-    window.wash.focusWindow(props.win.windowID);
+    window.wash.focusWindow(props.win.windowID, props.win.origin);
     const startX = ev.clientX;
     const startY = ev.clientY;
     const origX = props.win.x;
@@ -118,7 +118,7 @@ export function FloatingWindow(props: WindowProps) {
         // frame, not the stale props.win.x while waiting for the
         // router's session.patch to land.
         moveLocal(props.win.origin, props.win.windowID, x, y);
-        window.wash.moveWindow(props.win.windowID, x, y);
+        window.wash.moveWindow(props.win.windowID, x, y, props.win.origin);
       }
       setDragX(null);
       setDragY(null);
@@ -127,7 +127,7 @@ export function FloatingWindow(props: WindowProps) {
     target.addEventListener('pointerup', onUp);
   };
 
-  const onWindowPointerDown = () => window.wash.focusWindow(props.win.windowID);
+  const onWindowPointerDown = () => window.wash.focusWindow(props.win.windowID, props.win.origin);
 
   // Pointer events don't fire during an HTML5 drag, so a drag from
   // one window's row to another window never raises the target.
@@ -135,13 +135,13 @@ export function FloatingWindow(props: WindowProps) {
   // to raise the window under the cursor so the user can see the
   // drop target. focusWindow is idempotent — re-entering an already-
   // focused window is a no-op.
-  const onWindowDragEnter = () => window.wash.focusWindow(props.win.windowID);
+  const onWindowDragEnter = () => window.wash.focusWindow(props.win.windowID, props.win.origin);
 
   // Bottom-right resize: track override locally, commit on release.
   const onResizeHandlePointerDown = (ev: PointerEvent) => {
     ev.preventDefault();
     ev.stopPropagation();
-    window.wash.focusWindow(props.win.windowID);
+    window.wash.focusWindow(props.win.windowID, props.win.origin);
     const target = ev.currentTarget as HTMLElement;
     target.setPointerCapture(ev.pointerId);
     const startX = ev.clientX;
@@ -158,7 +158,7 @@ export function FloatingWindow(props: WindowProps) {
       rafPending = null;
       const w = resizeW();
       const h = resizeH();
-      if (w != null && h != null) window.wash.resizeWindow(props.win.windowID, w, h);
+      if (w != null && h != null) window.wash.resizeWindow(props.win.windowID, w, h, props.win.origin);
     };
     const onMove = (m: PointerEvent) => {
       const newW = Math.max(160, Math.round(origW + (m.clientX - startX)));
@@ -179,7 +179,7 @@ export function FloatingWindow(props: WindowProps) {
       const h = resizeH();
       if (w != null && h != null && (w !== origW || h !== origH)) {
         resizeLocal(props.win.origin, props.win.windowID, w, h);
-        window.wash.resizeWindow(props.win.windowID, w, h);
+        window.wash.resizeWindow(props.win.windowID, w, h, props.win.origin);
       }
       setResizeW(null);
       setResizeH(null);
@@ -219,7 +219,10 @@ export function FloatingWindow(props: WindowProps) {
       'flex-direction': 'column' as const,
       color: '#eee',
       'box-sizing': 'border-box' as const,
-      'z-index': props.win.z,
+      // Render from the FE's global stacking value (gz), not the router's
+      // per-router z: the latter collides across origins, so a focused remote
+      // window would otherwise sink behind local windows. See wm.ts Win.gz.
+      'z-index': props.win.gz,
       // Re-enable pointer events inside the viewport cam container,
       // which sets pointer-events:none so clicks in empty space fall
       // through to the desktop surface (taskbar, wallpaper).
@@ -286,9 +289,9 @@ export function FloatingWindow(props: WindowProps) {
   // Double-click the titlebar toggles maximize ↔ normal.
   const onTitlebarDblClick = () => {
     if (props.win.state === 'maximized') {
-      window.wash.restoreWindow(props.win.windowID);
+      window.wash.restoreWindow(props.win.windowID, props.win.origin);
     } else {
-      window.wash.maximizeWindow(props.win.windowID);
+      window.wash.maximizeWindow(props.win.windowID, props.win.origin);
     }
   };
 
@@ -334,27 +337,56 @@ export function FloatingWindow(props: WindowProps) {
       onDragEnter={onWindowDragEnter}
       style={frameStyle()}
     >
-      {/* Per-host colour stripe: a thin band at the very top of the frame
-          identifies which remote host a window belongs to. Null (no stripe)
-          for LOCAL windows, so "no stripe" means "this machine". Works for
-          chromeless windows too — it sits above the guest surface's edge. */}
+      {/* Per-host colour marker: identifies which remote host a window
+          belongs to. Null (no marker) for LOCAL windows, so "no marker"
+          means "this machine". For chromed windows it's a band of diagonal
+          stripes in the host hue sitting in the middle of the titlebar; for
+          chromeless windows (no titlebar) it falls back to a thin top line
+          above the guest surface. */}
       <Show when={hostColor(props.win.origin)}>
-        {(c) => (
-          <div
-            data-testid="wash-host-stripe"
-            data-origin={props.win.origin}
-            style={{
-              position: 'absolute',
-              top: '0',
-              left: '0',
-              right: '0',
-              height: '3px',
-              background: c(),
-              'z-index': 3,
-              'pointer-events': 'none',
-            }}
-          />
-        )}
+        {(c) =>
+          props.win.chromeless ? (
+            <div
+              data-testid="wash-host-stripe"
+              data-origin={props.win.origin}
+              style={{
+                position: 'absolute',
+                top: '0',
+                left: '0',
+                right: '0',
+                height: '3px',
+                background: c(),
+                'z-index': 3,
+                'pointer-events': 'none',
+              }}
+            />
+          ) : (
+            <div
+              data-testid="wash-host-stripe"
+              data-origin={props.win.origin}
+              style={{
+                position: 'absolute',
+                top: '0',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                height: `${TITLEBAR_H}px`,
+                width: '64px',
+                // A few diagonal slashes in the host hue, centred over the
+                // titlebar. The 16px period gives ~four visible stripes
+                // across the band; the gradient is masked to fade the edges
+                // so it reads as a marker, not a hard-edged block.
+                'background-image': `repeating-linear-gradient(-45deg, ${c()} 0 3px, transparent 3px 13px)`,
+                '-webkit-mask-image':
+                  'linear-gradient(90deg, transparent, #000 30%, #000 70%, transparent)',
+                'mask-image':
+                  'linear-gradient(90deg, transparent, #000 30%, #000 70%, transparent)',
+                opacity: 0.9,
+                'z-index': 3,
+                'pointer-events': 'none',
+              }}
+            />
+          )
+        }
       </Show>
       <Show when={!props.win.chromeless}>
       <div
@@ -398,7 +430,7 @@ export function FloatingWindow(props: WindowProps) {
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
-            window.wash.minimizeWindow(props.win.windowID);
+            window.wash.minimizeWindow(props.win.windowID, props.win.origin);
           }}
           data-testid="window-minimize"
           aria-label="Minimize window"
@@ -411,9 +443,9 @@ export function FloatingWindow(props: WindowProps) {
           onClick={(e) => {
             e.stopPropagation();
             if (props.win.state === 'maximized') {
-              window.wash.restoreWindow(props.win.windowID);
+              window.wash.restoreWindow(props.win.windowID, props.win.origin);
             } else {
-              window.wash.maximizeWindow(props.win.windowID);
+              window.wash.maximizeWindow(props.win.windowID, props.win.origin);
             }
           }}
           data-testid="window-maximize"

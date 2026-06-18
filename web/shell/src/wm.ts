@@ -12,7 +12,7 @@ import { createSignal } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import type { SessionPatch, SessionWindow } from './main';
 import { type Origin, LOCAL_ORIGIN } from './clients';
-import { clampViewport, viewportForRect, nextZ } from './viewport-math';
+import { clampViewport, viewportForRect } from './viewport-math';
 import { focusFromSnapshot } from './wm-focus';
 
 export type WinState = 'normal' | 'minimized' | 'maximized';
@@ -43,7 +43,17 @@ export interface Win {
   y: number;
   w: number;
   h: number;
+  // z is the router's per-router stacking value (authoritative WITHIN an
+  // origin). It is NOT comparable across origins — each router counts from
+  // its own zero — so it can't drive cross-desktop stacking on its own.
   z: number;
+  // gz is the FE-arbitrated GLOBAL stacking order: a single monotonic
+  // counter bumped whenever any window (any origin) is raised/focused or
+  // first appears. window.tsx renders z-index from gz, so "bring to front"
+  // works across origins where the colliding per-router z cannot (a remote
+  // window's focus would otherwise be overwritten by B's small B-local z and
+  // sink behind local windows). Below the chrome z-band by construction.
+  gz: number;
   state: WinState;
   // Pre-min/max geometry — kept around so a future "restore" call can
   // return the window to its user-set frame even after a chain of
@@ -83,6 +93,23 @@ export interface FocusRef {
 const [windows, setWindows] = createStore<Win[]>([]);
 const [focused, setFocused] = createSignal<FocusRef | null>(null);
 const [desktop, setDesktop] = createSignal<DesktopMount | null>(null);
+
+// Global stacking counter — the FE's cross-origin z arbiter. Bumped on every
+// raise/focus/first-appearance so the most-recently-raised window has the
+// highest gz regardless of which router owns it. window.tsx renders z-index
+// from gz; see Win.gz.
+let gzCounter = 0;
+function bumpGz(): number {
+  return ++gzCounter;
+}
+
+// raiseGz lifts a window to the top of the global stack without touching
+// focus (focus is set separately by the caller). No-op if the window isn't
+// in the store yet (e.g. a snapshot focus claim for a window still waiting on
+// its bundle — it lands on top anyway via its first-insert gz).
+function raiseGz(origin: Origin, windowID: number): void {
+  setWindows((w) => w.origin === origin && w.windowID === windowID, 'gz', bumpGz());
+}
 
 // isFocused reports whether a given (origin,windowID) is the focused one.
 export function isFocused(ref: { origin: Origin; windowID: number }): boolean {
@@ -163,7 +190,7 @@ export function viewportFor(w: { x: number; y: number; w: number; h: number }): 
 // confirms the change moments later. Kept as a separate export for
 // places that already raise before calling a wire helper.
 export function raiseLocal(origin: Origin, windowID: number): void {
-  setWindows((w) => w.origin === origin && w.windowID === windowID, 'z', nextZ(windows));
+  raiseGz(origin, windowID);
   setFocused({ origin, windowID });
 }
 
@@ -204,6 +231,8 @@ function fromSessionWindow(sw: SessionWindow, origin: Origin): Win {
     w: sw.w,
     h: sw.h,
     z: sw.z,
+    // gz is FE-owned; a real value is stamped at insert time (upsertWindow).
+    gz: 0,
     state: sw.state,
     restoreX: sw.restore_x,
     restoreY: sw.restore_y,
@@ -268,6 +297,7 @@ export function applySessionSnapshot(
   const claim = focusFromSnapshot(sessionWins);
   if (claim != null) {
     setFocused({ origin, windowID: claim });
+    raiseGz(origin, claim);
   } else if (focused()?.origin === origin) {
     setFocused(null);
   }
@@ -295,6 +325,9 @@ export function applySessionPatch(
         setFocused(null);
       } else if (p.window.focused) {
         setFocused({ origin, windowID: w.windowID });
+        // The router raised this window (this or another client focused it) —
+        // lift it to the top of the global stack so cross-origin focus shows.
+        raiseGz(origin, w.windowID);
       }
     } else if (p.op === 'window.delete' && typeof p.window_id === 'number') {
       const id = p.window_id;
@@ -344,8 +377,12 @@ export function dropOrigin(origin: Origin): void {
 function upsertWindow(w: Win): void {
   const idx = windows.findIndex((x) => x.origin === w.origin && x.windowID === w.windowID);
   if (idx < 0) {
-    setWindows((prev) => [...prev, w]);
+    // A new window starts on top of the global stack.
+    setWindows((prev) => [...prev, { ...w, gz: bumpGz() }]);
   } else {
-    setWindows(idx, w);
+    // Router-driven update (geometry/title/state). Preserve the FE's global
+    // stacking value — only an explicit raise (raiseLocal / a focused patch /
+    // a snapshot focus claim) changes gz, never a plain geometry patch.
+    setWindows(idx, { ...w, gz: windows[idx].gz });
   }
 }

@@ -248,12 +248,22 @@ interface DisplayElement extends HTMLElement {
   attachVideoChannel(channelID: number): void;
 }
 
-const displayWindows = new Map<number, DisplayElement>();
-const videoChannelForWindow = new Map<number, number>();
+// Window ids are per-router, so a remote display window can share an id with
+// a local one. Key the registries by (origin, windowID) — same reason raw
+// channels use compoundChannelId — so a remote wash-display window never
+// clobbers a local one's element/channel (docs/REMOTE.md R2). Reuses the
+// channel codec (origin + int → unique string); parseInstanceId reverses it.
+function winKey(origin: Origin, windowID: number): string {
+  return compoundChannelId(origin, windowID);
+}
 
-export function registerDisplayWindow(windowID: number, el: DisplayElement): void {
-  displayWindows.set(windowID, el);
-  const ch = videoChannelForWindow.get(windowID);
+const displayWindows = new Map<string, DisplayElement>();
+const videoChannelForWindow = new Map<string, number>();
+
+export function registerDisplayWindow(origin: Origin, windowID: number, el: DisplayElement): void {
+  const key = winKey(origin, windowID);
+  displayWindows.set(key, el);
+  const ch = videoChannelForWindow.get(key);
   if (ch !== undefined) {
     try {
       el.attachVideoChannel(ch);
@@ -263,20 +273,23 @@ export function registerDisplayWindow(windowID: number, el: DisplayElement): voi
   }
 }
 
-export function unregisterDisplayWindow(windowID: number, el: DisplayElement): void {
+export function unregisterDisplayWindow(origin: Origin, windowID: number, el: DisplayElement): void {
   // Only drop if the registered element is still us — guards against a
   // remount that already re-registered before our disconnect ran.
-  if (displayWindows.get(windowID) === el) {
-    displayWindows.delete(windowID);
+  const key = winKey(origin, windowID);
+  if (displayWindows.get(key) === el) {
+    displayWindows.delete(key);
   }
 }
 
 // bindVideoChannel records (and, if the element is mounted, attaches)
 // the video channel for a window. Called from main.tsx's channel.bind
-// handler when kind === wire.ChannelKindVideo ("video").
-export function bindVideoChannel(windowID: number, channelID: number): void {
-  videoChannelForWindow.set(windowID, channelID);
-  const el = displayWindows.get(windowID);
+// handler when kind === wire.ChannelKindVideo ("video"), scoped to the
+// origin of the router that bound it.
+export function bindVideoChannel(origin: Origin, windowID: number, channelID: number): void {
+  const key = winKey(origin, windowID);
+  videoChannelForWindow.set(key, channelID);
+  const el = displayWindows.get(key);
   if (el) {
     try {
       el.attachVideoChannel(channelID);
@@ -286,13 +299,14 @@ export function bindVideoChannel(windowID: number, channelID: number): void {
   }
 }
 
-// forgetVideoChannel clears the stashed video channel for a window.
-// Called on channel.unbind so a later rebind on the same window id
-// doesn't replay a dead channel to a freshly-mounted element.
-export function forgetVideoChannel(channelID: number): void {
-  for (const [winID, chID] of videoChannelForWindow) {
-    if (chID === channelID) {
-      videoChannelForWindow.delete(winID);
+// forgetVideoChannel clears the stashed video channel for a window of this
+// origin. Called on channel.unbind so a later rebind on the same window id
+// doesn't replay a dead channel to a freshly-mounted element. Scoped to the
+// origin so an unbind on B can't drop a local window's identical channel id.
+export function forgetVideoChannel(origin: Origin, channelID: number): void {
+  for (const [key, chID] of videoChannelForWindow) {
+    if (chID === channelID && parseInstanceId(key).origin === origin) {
+      videoChannelForWindow.delete(key);
       break;
     }
   }

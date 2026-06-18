@@ -66,13 +66,6 @@ export function compoundChannelId(origin: Origin, channelID: number): string {
 
 const clientByOrigin = new Map<Origin, RouterClient>();
 
-// channelToClient routes a raw-channel id (as seen by window.wash's
-// openRawChannel/writeRaw, which take a bare numeric id) back to the
-// client that bound it. Populated by each client's channel.bind handling
-// once remote clients exist (M1f); tab-global because the window.wash raw
-// API has no instance context to disambiguate by.
-export const channelToClient = new Map<number, RouterClient>();
-
 /** registerClient adds (or replaces) the client for an origin. */
 export function registerClient(origin: Origin, client: RouterClient): void {
   clientByOrigin.set(origin, client);

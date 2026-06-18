@@ -105,7 +105,10 @@ function WashampApp(props: WashAppProps) {
   // mount (data-wash-window); we use it to call window.wash.{move,close,
   // minimize}Window from Webamp's native chrome.
   const windowID = Number(props.host.getAttribute('data-wash-window') || 0);
-  const winInfo = () => window.wash.windows().find((w) => w.windowID === windowID);
+  // Window ids are per-router; address this window by (origin, id) so a remote
+  // Washamp doesn't drive a local window of the same id (docs/REMOTE.md R2).
+  const origin = props.origin;
+  const winInfo = () => window.wash.windows().find((w) => w.windowID === windowID && w.origin === origin);
 
   // DPI handling. The Winamp skin is bitmap pixel-art, so it's only
   // naturally crisp at an integer device-pixel scale; on a fractional-DPI
@@ -142,7 +145,7 @@ function WashampApp(props: WashAppProps) {
     webampEl.style.left = `${Math.round(curLeft - (mr.left - cr.left))}px`;
     webampEl.style.top = `${Math.round(curTop - (mr.top - cr.top))}px`;
     // Hug the (possibly scaled) main window so the chromeless frame matches.
-    if (windowID) window.wash.resizeWindow(windowID, Math.round(mr.width), Math.round(mr.height));
+    if (windowID) window.wash.resizeWindow(windowID, Math.round(mr.width), Math.round(mr.height), origin);
   }
   // Toggle a one-off stylesheet that forces smooth image-rendering over
   // Webamp's pixelated default across the whole #webamp subtree.
@@ -178,7 +181,7 @@ function WashampApp(props: WashAppProps) {
     if (t.closest('#minimize') && windowID) {
       e.preventDefault();
       e.stopImmediatePropagation();
-      window.wash.minimizeWindow(windowID);
+      window.wash.minimizeWindow(windowID, origin);
       return;
     }
     if (!t.closest('#title-bar')) return;
@@ -187,7 +190,7 @@ function WashampApp(props: WashAppProps) {
     if (!info || !windowID) return;
     e.preventDefault();
     e.stopImmediatePropagation();
-    window.wash.focusWindow(windowID);
+    window.wash.focusWindow(windowID, origin);
     const sx = e.clientX;
     const sy = e.clientY;
     const ox = info.x;
@@ -204,7 +207,7 @@ function WashampApp(props: WashAppProps) {
     // streams geometry the same way (web/shell/src/window.tsx).
     const flush = () => {
       raf = 0;
-      window.wash.moveWindow(windowID, nx, ny);
+      window.wash.moveWindow(windowID, nx, ny, origin);
     };
     const onMove = (m: MouseEvent) => {
       nx = Math.round(Math.max(0, Math.min(maxX, ox + (m.clientX - sx))));
@@ -215,7 +218,7 @@ function WashampApp(props: WashAppProps) {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
       if (raf) cancelAnimationFrame(raf);
-      window.wash.moveWindow(windowID, nx, ny);
+      window.wash.moveWindow(windowID, nx, ny, origin);
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
@@ -292,7 +295,7 @@ function WashampApp(props: WashAppProps) {
     // Closing the Winamp player closes the wash window. (Minimize is
     // handled in onHostMouseDown — onMinimize doesn't fire for the
     // classic-skin button.)
-    wa.onClose(() => windowID && window.wash.closeWindow(windowID));
+    wa.onClose(() => windowID && window.wash.closeWindow(windowID, origin));
     await wa.renderWhenReady(container);
     // Webamp appends its root (#webamp) to <body> and floats its windows
     // as body overlays — it does not render into the node we passed. Pull

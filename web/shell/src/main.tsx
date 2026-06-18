@@ -342,7 +342,7 @@ function makeHandlers(client: RouterClient): ClientHandlers {
           // only for now; remote video rides the M5 WebRTC track.
           if (isLocal) {
             client.channelOwner.set(b.channel_id, b.window_id);
-            bindVideoChannel(b.window_id, b.channel_id);
+            bindVideoChannel(client.origin, b.window_id, b.channel_id);
           }
         } else if (b.kind === 'peer' && isLocal) {
           // Remote-apps relay: A spliced this channel to host B. Stand up a
@@ -387,7 +387,7 @@ function makeHandlers(client: RouterClient): ClientHandlers {
           finishPanel(u.channel_id);
           // Drop any stashed video binding so a later rebind on the same
           // window doesn't replay this dead channel to a fresh element.
-          forgetVideoChannel(u.channel_id);
+          forgetVideoChannel(client.origin, u.channel_id);
         }
         client.channelOwner.delete(u.channel_id);
         closeRawSubscriber(client.origin, u.channel_id);
@@ -852,13 +852,17 @@ declare global {
       loadSettingsPanel(appID: string): Promise<void>;
       windows(): WindowInfo[];
       onWindowsChanged(cb: (windows: WindowInfo[]) => void): () => void;
-      focusWindow(id: number): void;
-      closeWindow(id: number): void;
-      moveWindow(id: number, x: number, y: number): void;
-      resizeWindow(id: number, w: number, h: number): void;
-      minimizeWindow(id: number): void;
-      maximizeWindow(id: number): void;
-      restoreWindow(id: number): void;
+      // origin (optional) addresses the WM intent to a specific router:
+      // window ids are per-router, so the shell chrome passes the Win's
+      // origin to avoid aiming a remote window at the same-id local one.
+      // Omitted → resolved by bare id (app bundles addressing their own).
+      focusWindow(id: number, origin?: Origin): void;
+      closeWindow(id: number, origin?: Origin): void;
+      moveWindow(id: number, x: number, y: number, origin?: Origin): void;
+      resizeWindow(id: number, w: number, h: number, origin?: Origin): void;
+      minimizeWindow(id: number, origin?: Origin): void;
+      maximizeWindow(id: number, origin?: Origin): void;
+      restoreWindow(id: number, origin?: Origin): void;
       // Virtual-desktop viewport API. The shell pans a viewport-sized
       // camera over a VIEWPORTS_PER_AXIS² plane; setViewport switches
       // cells with a CSS transition. viewportFor returns the cell
@@ -974,10 +978,16 @@ conn.onState((s) => {
 });
 
 // wmSend routes a window-manager intent to the router that owns the
-// window. The session chrome addresses windows by bare id; originForWindow
-// resolves the owning origin (LOCAL while ids are unique — see wm.ts).
-function wmSend(windowID: number, msg: Record<string, unknown>): void {
-  const client = clientForOrigin(originForWindow(windowID)) ?? local;
+// window. Callers that know the origin (the shell's own FloatingWindow,
+// the session taskbar — both hold the Win/WindowInfo) MUST pass it: window
+// ids are per-router, so two origins routinely share id 1, and resolving by
+// bare id alone would aim a remote window's drag at the local window with
+// the same id (the "connect window follows the remote one" bug). The bare-id
+// originForWindow fallback remains only for app bundles that address their
+// own window by id without an origin in hand.
+function wmSend(origin: Origin, windowID: number, msg: Record<string, unknown>): void {
+  void windowID;
+  const client = clientForOrigin(origin) ?? local;
   client.conn.sendCtrl(msg);
 }
 
@@ -1040,32 +1050,33 @@ window.wash = {
   loadSettingsPanel: (appID: string) => loadSettingsPanel((m) => conn.sendCtrl(m), appID),
   windows: () => windowsSub.value,
   onWindowsChanged: (cb) => windowsSub.on(cb),
-  focusWindow(id) {
+  focusWindow(id, origin) {
     // Local raise gives instant visual focus feedback; the router's
     // patch will confirm the z bump moments later.
-    const origin = originForWindow(id);
-    raiseLocal(origin, id);
-    wmSend(id, { t: 'window.focus', window_id: id });
+    const o = origin ?? originForWindow(id);
+    raiseLocal(o, id);
+    wmSend(o, id, { t: 'window.focus', window_id: id });
   },
-  closeWindow(id) {
-    wmSend(id, { t: 'window.close_clicked', window_id: id });
+  closeWindow(id, origin) {
+    wmSend(origin ?? originForWindow(id), id, { t: 'window.close_clicked', window_id: id });
   },
-  moveWindow(id, x, y) {
-    wmSend(id, { t: 'window.move', window_id: id, x, y });
+  moveWindow(id, x, y, origin) {
+    wmSend(origin ?? originForWindow(id), id, { t: 'window.move', window_id: id, x, y });
   },
-  resizeWindow(id, w, h) {
-    wmSend(id, { t: 'window.resize', window_id: id, w, h });
+  resizeWindow(id, w, h, origin) {
+    wmSend(origin ?? originForWindow(id), id, { t: 'window.resize', window_id: id, w, h });
   },
-  minimizeWindow(id) {
-    wmSend(id, { t: 'window.state', window_id: id, state: 'minimized' });
+  minimizeWindow(id, origin) {
+    wmSend(origin ?? originForWindow(id), id, { t: 'window.state', window_id: id, state: 'minimized' });
   },
-  maximizeWindow(id) {
-    wmSend(id, { t: 'window.state', window_id: id, state: 'maximized' });
+  maximizeWindow(id, origin) {
+    wmSend(origin ?? originForWindow(id), id, { t: 'window.state', window_id: id, state: 'maximized' });
   },
-  restoreWindow(id) {
-    wmSend(id, { t: 'window.state', window_id: id, state: 'normal' });
+  restoreWindow(id, origin) {
+    const o = origin ?? originForWindow(id);
+    wmSend(o, id, { t: 'window.state', window_id: id, state: 'normal' });
     // Restoring also brings to front + grabs focus.
-    wmSend(id, { t: 'window.focus', window_id: id });
+    wmSend(o, id, { t: 'window.focus', window_id: id });
   },
   viewports: () => ({ perAxis: VIEWPORTS_PER_AXIS }),
   getViewport: () => viewportSub.value,

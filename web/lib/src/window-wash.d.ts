@@ -48,6 +48,10 @@ interface WashPanelDesc {
 }
 
 interface WashWindowInfo {
+  // Origin (router) the window belongs to; '' / 'local' for this machine,
+  // a remote host's origin for a tunnelled window. Pair (origin, windowID)
+  // is the only unique window identity — ids are per-router.
+  origin: string;
   windowID: number;
   instanceID: string;
   element: string;
@@ -91,13 +95,18 @@ interface WashGlobals {
   loadSettingsPanel(appID: string): Promise<void>;
   windows(): WashWindowInfo[];
   onWindowsChanged(cb: (windows: WashWindowInfo[]) => void): () => void;
-  focusWindow(id: number): void;
-  closeWindow(id: number): void;
-  moveWindow(id: number, x: number, y: number): void;
-  resizeWindow(id: number, w: number, h: number): void;
-  minimizeWindow(id: number): void;
-  maximizeWindow(id: number): void;
-  restoreWindow(id: number): void;
+  // origin (optional) addresses the intent to a specific router. Window ids
+  // are per-router, so two origins routinely share id 1; pass the window's
+  // origin (from WashWindowInfo / props.origin) when known so a remote
+  // window's drag/focus doesn't land on the same-id local window. Omitted →
+  // resolved by bare id against the merged window list.
+  focusWindow(id: number, origin?: string): void;
+  closeWindow(id: number, origin?: string): void;
+  moveWindow(id: number, x: number, y: number, origin?: string): void;
+  resizeWindow(id: number, w: number, h: number, origin?: string): void;
+  minimizeWindow(id: number, origin?: string): void;
+  maximizeWindow(id: number, origin?: string): void;
+  restoreWindow(id: number, origin?: string): void;
   // Virtual-desktop viewport API. The shell pans a viewport-sized
   // camera over a VIEWPORTS_PER_AXIS² plane; setViewport switches
   // cells with a CSS transition.

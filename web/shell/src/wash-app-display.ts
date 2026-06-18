@@ -15,7 +15,7 @@
 // PNG, auto-detected by createImageBitmap from the magic bytes.
 
 import { registerDisplayWindow, subscribeRaw, unregisterDisplayWindow } from './api';
-import { LOCAL_ORIGIN } from './clients';
+import { type Origin, LOCAL_ORIGIN } from './clients';
 
 // Frame header layout (little-endian). See mac-phoenix client.js and
 // docs/DISPLAY.md. Only the dirty-rect + full-surface size are used; the
@@ -49,12 +49,17 @@ export class WashAppDisplay extends HTMLElement {
   private canvas?: HTMLCanvasElement;
   private ctx?: CanvasRenderingContext2D | null;
   private windowID = -1;
+  // The window's origin (which router owns it). Window ids are per-router, so
+  // the registry + raw subscription must be origin-scoped or a remote display
+  // window collides with a local one of the same id (docs/REMOTE.md R2).
+  private origin: Origin = LOCAL_ORIGIN;
   private unsubscribe?: () => void;
   private errorCount = 0;
 
   connectedCallback(): void {
     const winAttr = this.getAttribute('data-wash-window');
     this.windowID = winAttr != null ? parseInt(winAttr, 10) : -1;
+    this.origin = this.getAttribute('data-wash-origin') || LOCAL_ORIGIN;
 
     if (!this.canvas) {
       // Render the guest buffer at native 1:1 pixels, anchored top-left,
@@ -89,13 +94,13 @@ export class WashAppDisplay extends HTMLElement {
     // channel.bind already arrived before mount, the registry replays it
     // immediately by calling attachVideoChannel (see api.ts).
     if (this.windowID >= 0) {
-      registerDisplayWindow(this.windowID, this);
+      registerDisplayWindow(this.origin, this.windowID, this);
     }
   }
 
   disconnectedCallback(): void {
     if (this.windowID >= 0) {
-      unregisterDisplayWindow(this.windowID, this);
+      unregisterDisplayWindow(this.origin, this.windowID, this);
     }
     if (this.unsubscribe) {
       try {
@@ -118,9 +123,11 @@ export class WashAppDisplay extends HTMLElement {
         /* ignore */
       }
     }
-    // Video is local-only today (remote video rides the M5 WebRTC track),
-    // so the display channel is always on the local router.
-    this.unsubscribe = subscribeRaw(LOCAL_ORIGIN, channelID, (bytes) => this.onFrame(bytes));
+    // Subscribe on the window's own origin so a remote display window reads
+    // its host's relayed video channel, not a local channel of the same id.
+    // (Remote video frames don't flow until the bind is un-gated in main.tsx;
+    // this keeps the path origin-correct for when they do.)
+    this.unsubscribe = subscribeRaw(this.origin, channelID, (bytes) => this.onFrame(bytes));
   }
 
   private onFrame(bytes: Uint8Array): void {
