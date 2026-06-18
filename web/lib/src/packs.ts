@@ -188,14 +188,14 @@ const seoul: Pack = {
   wallpaper: 'wallpapers/seoul.svg',
 };
 
-// Retro — a 1990s workstation look (à la Windows NT, but ours): silver
+// NT — a 1990s workstation look (à la Windows NT, but ours): silver
 // surfaces, white sunken fields, black text, a navy/white titlebar and a
 // raised 3D window bevel (via the --wash-titlebar-* / --wash-border-light
 // /dark override vars, which other packs leave unset), on a teal desktop.
 // Accents are the classic VGA 16-color darks. A light theme.
-const retro: Pack = {
-  id: 'retro',
-  name: 'Retro',
+const nt: Pack = {
+  id: 'nt',
+  name: 'NT',
   appearance: 'light',
   scheme: {
     '--wash-bg-window': '#c0c0c0', // silver
@@ -264,7 +264,7 @@ const retro: Pack = {
     '--wash-font-mono': '"Courier New", Courier, monospace',
     '--wash-taskbar-top': '#f4f4f4',
   },
-  wallpaper: 'wallpapers/retro.svg',
+  wallpaper: 'wallpapers/nt.svg',
 };
 
 // Oslo — the Nord palette (arctic blue-grey) + a vectorized Nordic
@@ -317,7 +317,7 @@ const oslo: Pack = {
 };
 
 /** All built-in packs, in gallery order. Midnight is first / default. */
-export const packs: Pack[] = [midnight, tokyo, seoul, retro, oslo];
+export const packs: Pack[] = [midnight, tokyo, seoul, nt, oslo];
 
 export const defaultPackId = 'midnight';
 

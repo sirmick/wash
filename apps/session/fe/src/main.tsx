@@ -1225,7 +1225,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
             left: '32px',
             top: '24px',
             // Over the wallpaper, not chrome — a pack whose chrome text is
-            // dark on a dark wallpaper (Retro) overrides --wash-banner-fg.
+            // dark on a dark wallpaper (NT) overrides --wash-banner-fg.
             color: `var(--wash-banner-fg, ${tokens.fg})`,
             // Themed legibility halo: the pack's own surface color behind
             // the text so the banner stands out against any wallpaper —
@@ -1909,11 +1909,11 @@ const taskbarStyle: JSX.CSSProperties = {
   height: '40px',
   // Sunken surface by default so the bar reads a touch darker than
   // windows (darker cream on Seoul, deeper on dark packs). A pack can
-  // override --wash-taskbar-bg — Retro does, since its inset is white.
+  // override --wash-taskbar-bg — NT does, since its inset is white.
   background: `color-mix(in srgb, var(--wash-taskbar-bg, ${tokens.bgInset}) 88%, transparent)`,
   'backdrop-filter': 'blur(10px)',
   '-webkit-backdrop-filter': 'blur(10px)',
-  // Top edge: a pack can paint a raised highlight here (Retro does).
+  // Top edge: a pack can paint a raised highlight here (NT does).
   'border-top': `1px solid var(--wash-taskbar-top, ${tokens.borderMenu})`,
   display: 'flex',
   'align-items': 'center',

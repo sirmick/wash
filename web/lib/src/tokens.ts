@@ -89,14 +89,14 @@ export const tokens = {
   spaceXxl: 18,
 
   // Border radius. var()-backed (with px in the fallback) so a pack can
-  // flatten corners — Retro sets these to 0 for square 90s chrome. Call
+  // flatten corners — NT sets these to 0 for square 90s chrome. Call
   // sites use `${tokens.radiusMd}` WITHOUT a px suffix (px is baked in).
   radiusSm: 'var(--wash-radius-sm, 3px)',
   radiusMd: 'var(--wash-radius-md, 4px)',
   radiusLg: 'var(--wash-radius-lg, 6px)',
   radiusXl: 'var(--wash-radius-xl, 8px)',
 
-  // Font. var()-backed so a pack can swap the family (e.g. Retro's
+  // Font. var()-backed so a pack can swap the family (e.g. NT's
   // Win9x-ish Tahoma/MS-Sans stack). The comma-bearing fallback is fine —
   // everything after the var name's first comma is the var() fallback.
   fontSans: 'var(--wash-font-sans, ui-sans-serif, system-ui, sans-serif)',

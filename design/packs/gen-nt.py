@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Procedural synthwave wallpaper for the Retro pack — emitted as crisp,
+# Procedural synthwave wallpaper for the NT pack — emitted as crisp,
 # tiny vector SVG (no tracing). Palette chosen to sit with the pack's
 # Win9x chrome: a navy sky fading to teal at the horizon, a teal neon
 # grid (echoing the classic teal desktop), an amber sun, a black skyline.
@@ -81,5 +81,5 @@ out.append('</g>')
 out.append(f'<rect x="0" y="{horizon - 2}" width="{W}" height="3" fill="#3fe3da" opacity="0.85"/>')
 
 out.append('</svg>')
-open('web/shell/public/wallpapers/retro.svg', 'w').write('\n'.join(out))
-print('wrote retro.svg')
+open('web/shell/public/wallpapers/nt.svg', 'w').write('\n'.join(out))
+print('wrote nt.svg')

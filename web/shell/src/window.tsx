@@ -208,7 +208,7 @@ export function FloatingWindow(props: WindowProps) {
     // the desktop behind it.
     const chromeless = !!props.win.chromeless;
     // Per-side border colors so a pack can paint a raised 3D bevel
-    // (light top/left, dark bottom/right — the Retro look). Both default
+    // (light top/left, dark bottom/right — the NT look). Both default
     // to the focus-aware flat color, so non-bevel packs look unchanged.
     const fb = isFocused(props.win) ? tokens.borderFocus : tokens.borderWindow;
     const base = {
@@ -221,7 +221,7 @@ export function FloatingWindow(props: WindowProps) {
       'border-bottom-color': `var(--wash-border-dark, ${fb})`,
       'border-right-color': `var(--wash-border-dark, ${fb})`,
       // Drop shadow by default; a pack can prepend inset edges here to
-      // paint a raised 3D bevel *inside* the frame (Retro does), which
+      // paint a raised 3D bevel *inside* the frame (NT does), which
       // reads regardless of the wallpaper behind the window.
       'box-shadow': 'var(--wash-window-shadow, 0 6px 24px rgba(0,0,0,0.4))',
       display: 'flex',
@@ -318,7 +318,7 @@ export function FloatingWindow(props: WindowProps) {
       return isFocused(props.win) ? tokens.bgDanger : `color-mix(in srgb, ${tokens.bgDanger} 70%, #000)`;
     }
     // Titlebar bg via override vars (default to the pack's selected/menu
-    // surfaces) so Retro can paint a navy active / gray inactive caption.
+    // surfaces) so NT can paint a navy active / gray inactive caption.
     return isFocused(props.win)
       ? `var(--wash-titlebar-active, ${tokens.bgRowSelected})`
       : `var(--wash-titlebar-inactive, ${tokens.bgMenu})`;
