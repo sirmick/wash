@@ -207,14 +207,19 @@ export function FloatingWindow(props: WindowProps) {
     // drop shadow so the floating window still reads as separate from
     // the desktop behind it.
     const chromeless = !!props.win.chromeless;
+    // Per-side border colors so a pack can paint a raised 3D bevel
+    // (light top/left, dark bottom/right — the Retro look). Both default
+    // to the focus-aware flat color, so non-bevel packs look unchanged.
+    const fb = isFocused(props.win) ? tokens.borderFocus : tokens.borderWindow;
     const base = {
       position: 'absolute' as const,
       background: chromeless ? 'transparent' : tokens.bgWindow,
-      border: chromeless
-        ? 'none'
-        : isFocused(props.win)
-          ? `1px solid ${tokens.borderFocus}`
-          : `1px solid ${tokens.borderWindow}`,
+      'border-style': chromeless ? ('none' as const) : ('solid' as const),
+      'border-width': '1px',
+      'border-top-color': `var(--wash-border-light, ${fb})`,
+      'border-left-color': `var(--wash-border-light, ${fb})`,
+      'border-bottom-color': `var(--wash-border-dark, ${fb})`,
+      'border-right-color': `var(--wash-border-dark, ${fb})`,
       'box-shadow': '0 6px 24px rgba(0,0,0,0.4)',
       display: 'flex',
       'flex-direction': 'column' as const,
@@ -309,7 +314,11 @@ export function FloatingWindow(props: WindowProps) {
     if (props.win.isRoot) {
       return isFocused(props.win) ? tokens.bgDanger : `color-mix(in srgb, ${tokens.bgDanger} 70%, #000)`;
     }
-    return isFocused(props.win) ? tokens.bgRowSelected : tokens.bgMenu;
+    // Titlebar bg via override vars (default to the pack's selected/menu
+    // surfaces) so Retro can paint a navy active / gray inactive caption.
+    return isFocused(props.win)
+      ? `var(--wash-titlebar-active, ${tokens.bgRowSelected})`
+      : `var(--wash-titlebar-inactive, ${tokens.bgMenu})`;
   };
 
   // Icon color matches the source app's manifest accent. Apps that
@@ -401,6 +410,7 @@ export function FloatingWindow(props: WindowProps) {
           'box-sizing': 'border-box',
           padding: '0 8px',
           background: titlebarBackground(),
+          color: `var(--wash-titlebar-fg, ${tokens.fg})`,
           cursor: 'move',
           'user-select': 'none',
           'font-size': '13px',
@@ -613,7 +623,7 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
 
 const titlebarBtnStyle = {
   background: 'transparent',
-  color: tokens.fg,
+  color: `var(--wash-titlebar-fg, ${tokens.fg})`,
   border: 'none',
   'font-size': '12px',
   cursor: 'pointer',

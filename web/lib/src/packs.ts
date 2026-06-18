@@ -188,8 +188,67 @@ const seoul: Pack = {
   wallpaper: 'wallpapers/seoul.svg',
 };
 
+// Retro — a 1990s workstation look (à la Windows NT, but ours): silver
+// surfaces, white sunken fields, black text, a navy/white titlebar and a
+// raised 3D window bevel (via the --wash-titlebar-* / --wash-border-light
+// /dark override vars, which other packs leave unset), on a teal desktop.
+// Accents are the classic VGA 16-color darks. A light theme.
+const retro: Pack = {
+  id: 'retro',
+  name: 'Retro',
+  appearance: 'light',
+  scheme: {
+    '--wash-bg-window': '#c0c0c0', // silver
+    '--wash-bg-menu': '#c0c0c0',
+    '--wash-bg-inset': '#ffffff', // white sunken fields
+    '--wash-bg-row': 'transparent',
+    '--wash-bg-row-hover': '#d8d4cc',
+    '--wash-bg-row-selected': '#cdd9f0', // pale blue (readable with black text)
+    '--wash-bg-backdrop': 'rgba(0,0,0,0.35)',
+    '--wash-bg-drop-target': '#cfe0f0',
+    '--wash-border-menu': '#808080',
+    '--wash-border-window': '#808080',
+    '--wash-border-focus': '#000080',
+    '--wash-border-drop-target': '#000080',
+    '--wash-fg': '#000000',
+    '--wash-fg-muted': '#404040',
+    '--wash-fg-dim': '#808080',
+    '--wash-bg-danger': '#f4cccc',
+    '--wash-border-danger': '#c00000',
+    '--wash-fg-danger': '#a00000',
+    '--wash-bg-success': '#d4e8d0',
+    '--wash-fg-success': '#008000',
+    '--wash-bg-warning': '#f4eec4',
+    '--wash-fg-warning': '#808000',
+    '--wash-bg-info': '#d4e0f0',
+    '--wash-fg-info': '#000080',
+    '--wash-bg-neutral': '#d4d0c8',
+    '--wash-bg-denied': '#f0e6c8',
+    '--wash-border-denied': '#808000',
+    '--wash-sev-error': '#c00000',
+    '--wash-sev-warn': '#808000',
+    '--wash-sev-notice': '#000080',
+    '--wash-sev-info': '#404040',
+    '--wash-sev-debug': '#808080',
+    '--wash-accent-red': '#c00000',
+    '--wash-accent-amber': '#808000', // olive
+    '--wash-accent-green': '#008000',
+    '--wash-accent-cyan': '#008080', // teal
+    '--wash-accent-blue': '#000080', // navy
+    '--wash-accent-violet': '#800080', // purple
+    // Chrome override vars (only this pack sets them; window.tsx defaults
+    // everywhere else): navy/white caption + raised bevel.
+    '--wash-titlebar-active': '#000080',
+    '--wash-titlebar-inactive': '#7f7f7f',
+    '--wash-titlebar-fg': '#ffffff',
+    '--wash-border-light': '#ffffff',
+    '--wash-border-dark': '#404040',
+  },
+  wallpaper: 'wallpapers/retro.svg',
+};
+
 /** All built-in packs, in gallery order. Midnight is first / default. */
-export const packs: Pack[] = [midnight, tokyo, seoul];
+export const packs: Pack[] = [midnight, tokyo, seoul, retro];
 
 export const defaultPackId = 'midnight';
 
