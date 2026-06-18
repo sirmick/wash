@@ -14,6 +14,13 @@ Vectorized from **"03. Solarized Dark"** by fr0st-xyz
 `vtracer` (`--filter_speckle 6 --color_precision 5`). Source raster kept at
 `design/packs/src/solarized-dark-source.png`.
 
+## Oslo — `wallpapers/oslo.svg`
+Vectorized from **"02. Nordic Blue"** by fr0st-xyz
+(<https://github.com/fr0st-xyz/wallz>), GPL-3.0. Minimalist Nordic
+mountain-twilight scene traced with `vtracer` (`--filter_speckle 6
+--color_precision 6`). Paired with the Nord palette. Source raster kept at
+`design/packs/src/nordic-blue-source.jpg`.
+
 ## Seoul — `wallpapers/seoul.svg`
 Composed from three Korean **hwatu** (화투) 광/光 "light" cards — January
 crane (송학), March cherry curtain (벚꽃), August moon (공산명월) — the 삼광

@@ -247,8 +247,57 @@ const retro: Pack = {
   wallpaper: 'wallpapers/retro.svg',
 };
 
+// Oslo — the Nord palette (arctic blue-grey) + a vectorized Nordic
+// mountain-twilight wallpaper (from wallz "02. Nordic Blue"). Dark theme.
+const oslo: Pack = {
+  id: 'oslo',
+  name: 'Oslo',
+  appearance: 'dark',
+  scheme: {
+    '--wash-bg-window': '#2e3440', // nord0 polar night
+    '--wash-bg-menu': '#2a2f3a',
+    '--wash-bg-inset': '#272c36',
+    '--wash-bg-row': 'transparent',
+    '--wash-bg-row-hover': '#3b4252', // nord1
+    '--wash-bg-row-selected': '#434c5e', // nord2
+    '--wash-bg-backdrop': 'rgba(0,0,0,0.5)',
+    '--wash-bg-drop-target': '#34495e',
+    '--wash-border-menu': '#3b4252',
+    '--wash-border-window': '#3b4252',
+    '--wash-border-focus': '#5e81ac', // nord10 frost
+    '--wash-border-drop-target': '#88c0d0', // nord8
+    '--wash-fg': '#e5e9f0', // nord5 snow storm
+    '--wash-fg-muted': '#8893a5',
+    '--wash-fg-dim': '#6b7488',
+    '--wash-bg-danger': '#4a2c30',
+    '--wash-border-danger': '#bf616a',
+    '--wash-fg-danger': '#d3868d',
+    '--wash-bg-success': '#2f3a2c',
+    '--wash-fg-success': '#a3be8c', // nord14
+    '--wash-bg-warning': '#3a3528',
+    '--wash-fg-warning': '#ebcb8b', // nord13
+    '--wash-bg-info': '#2a3744',
+    '--wash-fg-info': '#88c0d0', // nord8
+    '--wash-bg-neutral': '#3b4252',
+    '--wash-bg-denied': '#3a3024',
+    '--wash-border-denied': '#a07a4a',
+    '--wash-sev-error': '#bf616a',
+    '--wash-sev-warn': '#ebcb8b',
+    '--wash-sev-notice': '#88c0d0',
+    '--wash-sev-info': '#d8dee9', // nord4
+    '--wash-sev-debug': '#6b7488',
+    '--wash-accent-red': '#bf616a', // nord11 aurora
+    '--wash-accent-amber': '#ebcb8b', // nord13
+    '--wash-accent-green': '#a3be8c', // nord14
+    '--wash-accent-cyan': '#8fbcbb', // nord7 frost
+    '--wash-accent-blue': '#81a1c1', // nord9 frost
+    '--wash-accent-violet': '#b48ead', // nord15
+  },
+  wallpaper: 'wallpapers/oslo.svg',
+};
+
 /** All built-in packs, in gallery order. Midnight is first / default. */
-export const packs: Pack[] = [midnight, tokyo, seoul, retro];
+export const packs: Pack[] = [midnight, tokyo, seoul, retro, oslo];
 
 export const defaultPackId = 'midnight';
 
