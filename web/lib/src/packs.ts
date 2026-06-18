@@ -203,9 +203,9 @@ const retro: Pack = {
     '--wash-bg-inset': '#ffffff', // white sunken fields
     '--wash-bg-row': 'transparent',
     '--wash-bg-row-hover': '#d8d4cc',
-    '--wash-bg-row-selected': '#cdd9f0', // pale blue (readable with black text)
+    '--wash-bg-row-selected': '#8fa8c8', // steel-blue selection (black text still reads)
     '--wash-bg-backdrop': 'rgba(0,0,0,0.35)',
-    '--wash-bg-drop-target': '#cfe0f0',
+    '--wash-bg-drop-target': '#9ec0d8',
     '--wash-border-menu': '#808080',
     '--wash-border-window': '#808080',
     '--wash-border-focus': '#000080',
@@ -220,8 +220,8 @@ const retro: Pack = {
     '--wash-fg-success': '#008000',
     '--wash-bg-warning': '#f4eec4',
     '--wash-fg-warning': '#808000',
-    '--wash-bg-info': '#d4e0f0',
-    '--wash-fg-info': '#000080',
+    '--wash-bg-info': '#000080', // navy info badge…
+    '--wash-fg-info': '#ffffff', // …with white text (Win9x selection look)
     '--wash-bg-neutral': '#d4d0c8',
     '--wash-bg-denied': '#f0e6c8',
     '--wash-border-denied': '#808000',

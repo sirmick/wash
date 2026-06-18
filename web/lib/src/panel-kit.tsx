@@ -80,10 +80,10 @@ export const Select: Component<{
 /** ServiceBadge is the small status pill shared by service panels. */
 export const ServiceBadge: Component<{ tone: 'on' | 'off' | 'busy' | 'absent'; label: string }> = (props) => {
   const palette: Record<string, { bg: string; fg: string }> = {
-    on: { bg: '#1c3d24', fg: '#86efac' },
-    off: { bg: '#1f1f2a', fg: tokens.fgDim },
-    busy: { bg: '#3a3a1c', fg: '#fde047' },
-    absent: { bg: '#3d1c1c', fg: '#fca5a5' },
+    on: { bg: tokens.bgSuccess, fg: tokens.fgSuccess },
+    off: { bg: tokens.bgNeutral, fg: tokens.fgDim },
+    busy: { bg: tokens.bgWarning, fg: tokens.fgWarning },
+    absent: { bg: tokens.bgDanger, fg: tokens.fgDanger },
   };
   const c = palette[props.tone] ?? palette.off;
   return (

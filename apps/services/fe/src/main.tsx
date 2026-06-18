@@ -371,10 +371,10 @@ const EnabledChip: Component<{ enabled: string }> = (props) => {
   const map: Record<string, { bg: string; fg: string }> = {
     enabled:   { bg: tokens.bgInfo, fg: tokens.fgInfo },
     disabled:  { bg: tokens.bgNeutral, fg: tokens.fgDim },
-    static:    { bg: tokens.bgNeutral, fg: '#c4b5fd' },
+    static:    { bg: tokens.bgNeutral, fg: tokens.accentViolet },
     masked:    { bg: tokens.bgDanger, fg: tokens.fgDanger },
-    alias:     { bg: tokens.bgNeutral, fg: '#c4b5fd' },
-    linked:    { bg: tokens.bgNeutral, fg: '#c4b5fd' },
+    alias:     { bg: tokens.bgNeutral, fg: tokens.accentViolet },
+    linked:    { bg: tokens.bgNeutral, fg: tokens.accentViolet },
     indirect:  { bg: tokens.bgNeutral, fg: tokens.fgDim },
     generated: { bg: tokens.bgNeutral, fg: tokens.fgDim },
   };
