@@ -513,25 +513,41 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   const captureScreenshot = async () => {
     setStatus('capturing…', 0);
+    const fail = (msg: string) => {
+      setStatus(msg, 6_000);
+      window.wash?.log?.('warn', 'wash-session', `screenshot: ${msg}`);
+    };
     try {
-      const blob = await toBlob(document.documentElement, {
-        cacheBust: false,
-        pixelRatio: window.devicePixelRatio || 1,
-      });
+      // html-to-image is fragile on two things that the desktop routinely
+      // has open, so harden against both:
+      //  - cross-origin iframes (ingress apps: vscode, code-server, the
+      //    browser VM) throw a SecurityError when cloned — skip them so one
+      //    embedded app can't fail the whole capture (it just renders blank).
+      //  - web-font embedding fetches @font-face CSS, which can hang or 404;
+      //    skipFonts uses the already-rendered text instead.
+      // And cap the wait so a heavy desktop can never hang the button.
+      const blob = await Promise.race([
+        toBlob(document.documentElement, {
+          cacheBust: false,
+          pixelRatio: window.devicePixelRatio || 1,
+          skipFonts: true,
+          filter: (node) => !(node instanceof HTMLIFrameElement),
+        }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
+      ]);
       if (!blob) {
-        setStatus('capture failed', 4_000);
+        fail('capture failed (timed out or empty)');
         return;
       }
       const resp = await fetch('/screenshot', { method: 'POST', body: blob });
       if (!resp.ok) {
-        const msg = await resp.text();
-        setStatus(`save failed: ${msg}`, 5_000);
+        fail(`save failed: ${(await resp.text()).slice(0, 80)}`);
         return;
       }
       const name = (await resp.text()).trim();
       setStatus(`saved ${name}`, 4_000);
     } catch (err) {
-      setStatus(`error: ${err instanceof Error ? err.message : String(err)}`, 5_000);
+      fail(`error: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
