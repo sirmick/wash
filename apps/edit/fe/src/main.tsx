@@ -14,7 +14,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { ConfirmDialog, FilePicker, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens, washCopyText, washPasteText } from '@wash/ui';
+import { ConfirmDialog, FilePicker, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
 import type { TerminalAPI } from '@wash/ui';
 import {
   joinPath, baseName, parentPath,
@@ -54,7 +54,7 @@ import {
   syntaxHighlighting,
   StreamLanguage,
 } from '@codemirror/language';
-import { tags as t } from '@lezer/highlight';
+import { solarizedDarkStyle, solarizedLightStyle } from '@uiw/codemirror-theme-solarized';
 import { javascript } from '@codemirror/lang-javascript';
 import { json } from '@codemirror/lang-json';
 import { markdown } from '@codemirror/lang-markdown';
@@ -1429,6 +1429,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   let editorMountEl!: HTMLDivElement;
   let editorView: EditorView | undefined;
   const langCompartment = new Compartment();
+  // Holds the active syntax-highlight style; reconfigured live when the
+  // pack's light/dark appearance changes (see onMount).
+  const highlightCompartment = new Compartment();
 
   // markTabDirty toggles a tab's entry in dirtyIDs without rewriting
   // the whole set when nothing's changing. Same set semantics as the
@@ -1627,8 +1630,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // semantic completions on top when active.
     autocompletion(),
 
-    // Syntax highlighting — wash-tuned palette in washHighlightStyle.
-    syntaxHighlighting(washHighlightStyle, { fallback: true }),
+    // Syntax highlighting — dark/light swapped by pack appearance.
+    highlightCompartment.of(highlightFor(washAppearance())),
     langCompartment.of([]),
     dirtyListener,
     searchListener,
@@ -1655,8 +1658,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       '.cm-scroller': { font: `${tokens.fontSizeBase} ${tokens.fontMono}` },
       '.cm-content': { padding: '8px 0', caretColor: tokens.fg },
       '.cm-cursor': { borderLeftColor: tokens.fg },
-      '.cm-activeLine': { backgroundColor: 'rgba(255,255,255,0.04)' },
-      '.cm-activeLineGutter': { backgroundColor: 'rgba(255,255,255,0.06)' },
+      '.cm-activeLine': { backgroundColor: `color-mix(in srgb, ${tokens.fg} 4%, transparent)` },
+      '.cm-activeLineGutter': { backgroundColor: `color-mix(in srgb, ${tokens.fg} 6%, transparent)` },
       '.cm-gutters': {
         background: tokens.bgMenu,
         color: tokens.fgDim,
@@ -1788,51 +1791,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     return base;
   };
 
-  // washHighlightStyle replaces CM6's defaultHighlightStyle with a
-  // palette tuned to wash's dark theme — soft purples for keywords,
-  // light greens for strings, warm orange for numbers. Tag set is
-  // the @lezer/highlight standard so every existing lang pack
-  // (javascript / json / markdown + any future @codemirror/lang-*)
-  // hits these styles automatically.
-  const washHighlightStyle = HighlightStyle.define([
-    { tag: t.keyword, color: '#c084fc' },
-    { tag: t.controlKeyword, color: '#c084fc' },
-    { tag: t.moduleKeyword, color: '#c084fc' },
-    { tag: [t.string, t.special(t.string)], color: '#a3e635' },
-    { tag: [t.number, t.bool, t.null, t.atom], color: '#fb923c' },
-    { tag: t.comment, color: tokens.fgMuted, fontStyle: 'italic' },
-    { tag: t.lineComment, color: tokens.fgMuted, fontStyle: 'italic' },
-    { tag: t.blockComment, color: tokens.fgMuted, fontStyle: 'italic' },
-    { tag: t.docComment, color: tokens.fgMuted, fontStyle: 'italic' },
-    { tag: t.regexp, color: '#22d3ee' },
-    { tag: t.escape, color: '#22d3ee' },
-    { tag: t.operator, color: '#94a3b8' },
-    { tag: t.compareOperator, color: '#94a3b8' },
-    { tag: t.logicOperator, color: '#94a3b8' },
-    { tag: t.arithmeticOperator, color: '#94a3b8' },
-    { tag: t.punctuation, color: '#94a3b8' },
-    { tag: t.bracket, color: '#cbd5e1' },
-    { tag: t.brace, color: '#cbd5e1' },
-    { tag: t.paren, color: '#cbd5e1' },
-    { tag: [t.variableName, t.propertyName], color: '#e2e8f0' },
-    { tag: [t.function(t.variableName), t.function(t.propertyName)], color: '#60a5fa' },
-    { tag: t.typeName, color: '#34d399' },
-    { tag: t.className, color: '#34d399' },
-    { tag: t.namespace, color: '#34d399' },
-    { tag: t.tagName, color: '#f472b6' },
-    { tag: t.attributeName, color: '#fbbf24' },
-    { tag: t.heading, color: '#c084fc', fontWeight: 'bold' },
-    { tag: t.heading1, color: '#c084fc', fontWeight: 'bold' },
-    { tag: t.heading2, color: '#c084fc', fontWeight: 'bold' },
-    { tag: t.heading3, color: '#c084fc', fontWeight: 'bold' },
-    { tag: t.link, color: '#60a5fa', textDecoration: 'underline' },
-    { tag: t.url, color: '#60a5fa' },
-    { tag: t.emphasis, fontStyle: 'italic' },
-    { tag: t.strong, fontWeight: 'bold' },
-    { tag: t.strikethrough, textDecoration: 'line-through' },
-    { tag: t.meta, color: tokens.fgMuted },
-    { tag: t.invalid, color: '#ef4444' },
-  ]);
+  // Syntax highlighting uses the off-the-shelf Solarized palettes — the
+  // canonical dual dark/light theme: Solarized Dark styles on dark packs,
+  // Solarized Light on light packs (Seoul), swapped by appearance via
+  // highlightCompartment (see baseExtensions + onMount). The editor chrome
+  // stays wash-token-themed, so it tracks the pack alongside.
+  const solarizedDarkHL = HighlightStyle.define(solarizedDarkStyle);
+  const solarizedLightHL = HighlightStyle.define(solarizedLightStyle);
+  const highlightFor = (a: 'light' | 'dark') =>
+    syntaxHighlighting(a === 'light' ? solarizedLightHL : solarizedDarkHL, { fallback: true });
 
   // langForKey returns a CM6 language pack for an explicit key.
   // Used by both the path-derived default (langForPath) and the
@@ -1908,6 +1875,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       }),
       parent: editorMountEl,
     });
+
+    // Follow the pack: flip the syntax palette dark↔light when the active
+    // pack's appearance changes (the editor chrome already tracks the
+    // tokens). New states pick the right one at create-time via baseExtensions.
+    onCleanup(onAppearanceChange((a) => {
+      editorView?.dispatch({ effects: highlightCompartment.reconfigure(highlightFor(a)) });
+    }));
 
     // App-level keyboard shortcuts. We bind on the host element
     // (not document) so they only fire when this editor window is

@@ -203,23 +203,23 @@ function injectStyles() {
 .wash-wysiwyg:focus { outline: none; }
 .wash-wysiwyg > * { margin: 0 0 0.6em 0; }
 .wash-wysiwyg > *:last-child { margin-bottom: 0; }
-.wash-wysiwyg h1 { font-size: 1.9em; font-weight: 600; margin: 0.6em 0 0.4em; color: #e9d5ff; }
-.wash-wysiwyg h2 { font-size: 1.5em; font-weight: 600; margin: 0.8em 0 0.35em; color: #ddd6fe; }
-.wash-wysiwyg h3 { font-size: 1.25em; font-weight: 600; margin: 0.7em 0 0.3em; color: #ddd6fe; }
+.wash-wysiwyg h1 { font-size: 1.9em; font-weight: 600; margin: 0.6em 0 0.4em; color: ${tokens.accentViolet}; }
+.wash-wysiwyg h2 { font-size: 1.5em; font-weight: 600; margin: 0.8em 0 0.35em; color: ${tokens.accentViolet}; }
+.wash-wysiwyg h3 { font-size: 1.25em; font-weight: 600; margin: 0.7em 0 0.3em; color: ${tokens.accentViolet}; }
 .wash-wysiwyg h4, .wash-wysiwyg h5, .wash-wysiwyg h6 { font-weight: 600; margin: 0.6em 0 0.3em; color: ${tokens.fg}; }
 .wash-wysiwyg p { margin: 0 0 0.6em; }
-.wash-wysiwyg strong { font-weight: 700; color: #fafafa; }
+.wash-wysiwyg strong { font-weight: 700; color: ${tokens.fg}; }
 .wash-wysiwyg em { font-style: italic; }
 .wash-wysiwyg s { color: ${tokens.fgDim}; }
-.wash-wysiwyg a { color: #60a5fa; text-decoration: underline; cursor: pointer; }
+.wash-wysiwyg a { color: ${tokens.accentBlue}; text-decoration: underline; cursor: pointer; }
 .wash-wysiwyg code {
   font-family: ${tokens.fontMono};
   font-size: 0.92em;
-  background: #1a1a2a;
+  background: ${tokens.bgInset};
   border: 1px solid ${tokens.borderMenu};
   border-radius: ${tokens.radiusSm}px;
   padding: 0 4px;
-  color: #fde68a;
+  color: ${tokens.accentAmber};
 }
 .wash-wysiwyg pre {
   font-family: ${tokens.fontMono};
