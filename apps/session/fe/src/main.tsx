@@ -1209,6 +1209,10 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
             left: '32px',
             top: '24px',
             color: tokens.fg,
+            // Themed legibility halo: the pack's own surface color behind
+            // the text so the banner stands out against any wallpaper —
+            // a light glow on light packs, a dark one on dark packs.
+            'text-shadow': `0 1px 6px ${tokens.bgWindow}, 0 0 3px ${tokens.bgWindow}`,
             font: '14px system-ui,sans-serif',
             'pointer-events': 'none',
             'max-width': '480px',
@@ -1885,7 +1889,9 @@ const taskbarStyle: JSX.CSSProperties = {
   right: 0,
   bottom: 0,
   height: '40px',
-  background: `color-mix(in srgb, ${tokens.bgMenu} 85%, transparent)`,
+  // Use the sunken surface so the bar reads a touch darker than windows
+  // (a darker cream on Seoul, a deeper bar on the dark packs).
+  background: `color-mix(in srgb, ${tokens.bgInset} 88%, transparent)`,
   'backdrop-filter': 'blur(10px)',
   '-webkit-backdrop-filter': 'blur(10px)',
   'border-top': `1px solid ${tokens.borderMenu}`,

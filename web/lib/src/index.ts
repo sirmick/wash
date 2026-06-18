@@ -2,7 +2,7 @@
 
 export { tokens } from './tokens';
 export type { Tokens } from './tokens';
-export { packs, defaultPackId, getPack, applyScheme } from './packs';
+export { packs, defaultPackId, getPack, applyScheme, washAppearance, onAppearanceChange } from './packs';
 export type { Pack } from './packs';
 export { severityColor } from './severity';
 export { Button } from './button';

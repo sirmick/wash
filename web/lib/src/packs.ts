@@ -32,6 +32,14 @@ export interface Pack {
   /** Human label for the settings gallery. */
   name: string;
   /**
+   * Whether this is a light or dark theme. Chrome follows the scheme
+   * vars regardless, but content apps with their own local palettes
+   * (terminal xterm theme, editor syntax theme) read this to flip their
+   * theme to match. Exposed to apps as the `--wash-appearance` var +
+   * documentElement color-scheme by applyScheme().
+   */
+  appearance: 'light' | 'dark';
+  /**
    * CSS custom properties applied to document.documentElement. Keys are
    * the `--wash-*` names from tokens.ts; values are this pack's colors.
    * Built-in packs define the full set so the chrome reskins coherently;
@@ -71,6 +79,7 @@ const midnightScheme = (): Record<string, string> => {
 const midnight: Pack = {
   id: 'midnight',
   name: 'Midnight',
+  appearance: 'dark',
   scheme: midnightScheme(),
   wallpaper: 'wallpapers/midnight.svg',
 };
@@ -82,6 +91,7 @@ const midnight: Pack = {
 const tokyo: Pack = {
   id: 'tokyo',
   name: 'Tokyo',
+  appearance: 'dark',
   scheme: {
     '--wash-bg-window': '#002b36', // base03
     '--wash-bg-menu': '#00222c',
@@ -134,6 +144,7 @@ const tokyo: Pack = {
 const seoul: Pack = {
   id: 'seoul',
   name: 'Seoul',
+  appearance: 'light',
   scheme: {
     '--wash-bg-window': '#f6efdd', // ivory paper
     '--wash-bg-menu': '#f0e7cf',
@@ -205,4 +216,34 @@ const allSchemeVars = (): string[] => {
 export function applyScheme(el: HTMLElement, pack: Pack): void {
   for (const name of allSchemeVars()) el.style.removeProperty(name);
   for (const [name, value] of Object.entries(pack.scheme)) el.style.setProperty(name, value);
+  // Appearance: drives content apps (terminal, editor) that carry their
+  // own palette, plus native form controls / scrollbars via color-scheme.
+  el.style.setProperty('--wash-appearance', pack.appearance);
+  el.style.setProperty('color-scheme', pack.appearance);
+}
+
+/** The active pack appearance, read off document.documentElement (set by
+ *  applyScheme). Defaults to 'dark' before any pack applies. */
+export function washAppearance(): 'light' | 'dark' {
+  if (typeof document === 'undefined') return 'dark';
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--wash-appearance').trim();
+  return v === 'light' ? 'light' : 'dark';
+}
+
+/** Fire `cb` whenever the active pack's appearance changes (a pack with a
+ *  different light/dark from the current one is applied). Observes the
+ *  documentElement inline-style attribute that applyScheme writes.
+ *  Returns an unsubscribe fn. */
+export function onAppearanceChange(cb: (appearance: 'light' | 'dark') => void): () => void {
+  if (typeof MutationObserver === 'undefined') return () => {};
+  let last = washAppearance();
+  const obs = new MutationObserver(() => {
+    const now = washAppearance();
+    if (now !== last) {
+      last = now;
+      cb(now);
+    }
+  });
+  obs.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+  return () => obs.disconnect();
 }

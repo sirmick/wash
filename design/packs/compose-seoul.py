@@ -23,9 +23,9 @@ def inner_and_namespace(path, p):
 
 W, H = 1920, 1080
 FIELD = '#efe4ca'
-cardH = 760
-cardW = cardH * VB_W / VB_H          # ~463.6
-gap = 92
+cardH = 608                          # 20% smaller than the original 760
+cardW = cardH * VB_W / VB_H
+gap = 74
 total = 3*cardW + 2*gap
 x0 = (W - total) / 2
 y0 = (H - cardH) / 2                  # vertically centered

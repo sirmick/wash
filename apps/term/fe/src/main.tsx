@@ -634,6 +634,7 @@ const addBtnStyle: JSX.CSSProperties = {
 // ---- custom element ----
 
 defineWashApp('wash-app-term', (props) => <App {...props} />, {
-  // background stays true black — the terminal canvas, not chrome.
-  style: `display:flex;flex-direction:column;width:100%;height:100%;box-sizing:border-box;background:#000;color:${tokens.fg};overflow:hidden`,
+  // Surface follows the pack (near-black on dark packs, cream on light)
+  // so the chrome behind the xterm canvas matches the terminal theme.
+  style: `display:flex;flex-direction:column;width:100%;height:100%;box-sizing:border-box;background:${tokens.bgInset};color:${tokens.fg};overflow:hidden`,
 });

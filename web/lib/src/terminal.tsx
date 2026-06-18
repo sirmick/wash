@@ -20,6 +20,25 @@ import { tokens } from './tokens';
 import { washAssetUrl } from './assets';
 import { Menu, MenuItem, MenuSeparator } from './menu';
 import { washCopyText, washPasteText } from './clipboard';
+import { washAppearance, onAppearanceChange } from './packs';
+
+// Terminal palettes by pack appearance. The component uses these when no
+// explicit `theme` prop is given, and flips live when the pack changes.
+// Dark is the historical pure-black default (xterm fills the rest); light
+// is a cream/sumi palette tuned for legibility on a light pack.
+export const TERM_THEME_DARK: ITheme = { background: '#000000' };
+export const TERM_THEME_LIGHT: ITheme = {
+  background: '#f6efdd',
+  foreground: '#2b2118',
+  cursor: '#2b2118',
+  cursorAccent: '#f6efdd',
+  selectionBackground: '#ddcfa0',
+  black: '#3b3228', red: '#b3201a', green: '#3f7a2e', yellow: '#9a6f15',
+  blue: '#235f8a', magenta: '#8a5fb0', cyan: '#2a8f88', white: '#6b5e4a',
+  brightBlack: '#8a7d64', brightRed: '#cc3433', brightGreen: '#4f8a3f', brightYellow: '#b58416',
+  brightBlue: '#2f6ea5', brightMagenta: '#9a6fc0', brightCyan: '#2a9a92', brightWhite: '#2b2118',
+};
+const termThemeFor = (a: 'light' | 'dark'): ITheme => (a === 'light' ? TERM_THEME_LIGHT : TERM_THEME_DARK);
 
 // ---- font registry ----
 
@@ -312,10 +331,15 @@ export const Terminal: Component<TerminalProps> = (props) => {
       ...restoredGrid,
       fontFamily: initialFamily,
       fontSize: effectiveSize(),
-      theme: props.theme ?? { background: '#000000' },
+      theme: props.theme ?? termThemeFor(washAppearance()),
       cursorBlink: true,
       allowProposedApi: true,
     });
+    // When the consumer didn't pin a theme, follow the active pack:
+    // flip the xterm palette live as the pack's appearance changes.
+    if (!props.theme) {
+      onCleanup(onAppearanceChange((a) => { if (term) term.options.theme = termThemeFor(a); }));
+    }
     // Clipboard keys are component-level so every terminal in wash
     // behaves the same; the consumer's customKeyHandler runs after.
     // Ctrl+Shift+C copies the selection (plain Ctrl+C must stay
