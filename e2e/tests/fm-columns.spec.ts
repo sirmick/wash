@@ -14,6 +14,12 @@ async function openFm(page: import('@playwright/test').Page, router: import('../
   await page.locator('[data-testid="start-menu"]').getByRole('button', { name: /^Files$/ }).click();
   await expect(page.locator('wash-app-fm')).toBeVisible();
   await expect(page.locator('[data-testid="fm-entry-hello.txt"]')).toBeVisible();
+  // Close the preview dock (open by default, ~320px). The fm window is 760px,
+  // so with the dock the tree sits at ~400px and the responsive column logic
+  // (colsFor) drops the Modified/Created columns below 440px. Closing it gives
+  // the tree the full width so all four headers render — what these tests
+  // assert. The responsive collapse itself is covered separately.
+  await page.locator('[data-testid="fm-toggle-preview"]').click();
 }
 
 test.describe('fm column header', () => {

@@ -9,12 +9,12 @@
 # Usage (driven by packaging/run_matrix.sh):
 #   docker build -f packaging/Dockerfile.apk \
 #     --build-arg BASE=alpine:3.21 \
-#     --build-arg VERSION=0.9.0 \
+#     --build-arg VERSION=0.9.1 \
 #     -t wash-pkg:alpine-3.21-amd64 \
 #     packaging/build-ctx
 
 ARG BASE=alpine:3.21
-ARG VERSION=0.9.0
+ARG VERSION=0.9.1
 
 # ---------- build stage --------------------------------------------------
 FROM ${BASE} AS build

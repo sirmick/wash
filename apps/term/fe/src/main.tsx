@@ -9,16 +9,36 @@
 // handle from each <Terminal> via onReady so tab activation can
 // trigger focus/fit.
 
-import { For, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { Plus, X } from 'lucide-solid';
-import { Terminal, TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, defineWashApp, tokens } from '@wash/ui';
+import { Menu, MenuItem, Terminal, TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, defineWashApp, tokens } from '@wash/ui';
 import type { TermModes, TerminalAPI } from '@wash/ui';
 
 interface BEMessage {
   kind: string;
   [k: string]: unknown;
 }
+
+// Color tags a tab can carry, picked from the per-tab right-click
+// menu. Stored by id (not hex) so the swatch tracks the token if the
+// palette shifts; the same accent hues the launcher/badges use, so a
+// tagged terminal reads in wash's one accent language.
+interface TagColor {
+  id: string;
+  label: string;
+  value: string;
+}
+const TAG_COLORS: TagColor[] = [
+  { id: 'red', label: 'Red', value: tokens.accentRed },
+  { id: 'amber', label: 'Amber', value: tokens.accentAmber },
+  { id: 'green', label: 'Green', value: tokens.accentGreen },
+  { id: 'cyan', label: 'Cyan', value: tokens.accentCyan },
+  { id: 'blue', label: 'Blue', value: tokens.accentBlue },
+  { id: 'violet', label: 'Violet', value: tokens.accentViolet },
+];
+const colorHex = (id?: string): string | undefined =>
+  id ? TAG_COLORS.find((c) => c.id === id)?.value : undefined;
 
 interface TabMeta {
   channelID: number;
@@ -44,6 +64,8 @@ interface PersistedTabRow {
   channel_id: number;
   shell: string;
   modes?: TermModes;
+  // color: tag color id (see TAG_COLORS), or absent for untagged.
+  color?: string;
 }
 
 // One row of the BE's `sessions` reply (list_sessions).
@@ -77,6 +99,21 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const [fontId, setFontId] = createSignal(TERM_DEFAULT_FONT_ID);
   const [fontSize, setFontSize] = createSignal(TERM_DEFAULT_FONT_SIZE);
 
+  // Per-tab color tag, keyed by channel id. Kept OUT of the TabMeta
+  // objects on purpose: the term-host <For> below is keyed by object
+  // identity, so replacing a tab's object to change its color would
+  // remount its xterm and wipe scrollback (the same hazard reconcile()
+  // guards against). A side map stays reactive without touching the
+  // tab objects. Persisted alongside each tab row.
+  const [tagColors, setTagColors] = createSignal<Map<number, string>>(new Map());
+  // Per-tab right-click menu (color picker): the tab it targets and
+  // the viewport coords to open at, or null when closed.
+  const [ctxMenu, setCtxMenu] = createSignal<{ id: number; x: number; y: number } | null>(null);
+  // Drag-to-reorder state: the tab being dragged and the tab it would
+  // drop in front of (for the insertion cue). Both null when idle.
+  const [dragId, setDragId] = createSignal<number | null>(null);
+  const [dropTarget, setDropTarget] = createSignal<number | null>(null);
+
   // Imperative <Terminal> handles keyed by channel id. Populated
   // by each <Terminal>'s onReady callback; dropped on tab close.
   const apis = new Map<number, TerminalAPI>();
@@ -103,11 +140,47 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const removeTab = (channelID: number) => {
     apis.delete(channelID);
     sizes.delete(channelID);
+    if (tagColors().has(channelID)) {
+      const next = new Map(tagColors());
+      next.delete(channelID);
+      setTagColors(next);
+    }
     const remaining = tabs().filter((t) => t.channelID !== channelID);
     setTabs(remaining);
     if (active() === channelID) {
       setActive(remaining[0]?.channelID ?? 0);
     }
+    persist();
+  };
+
+  // ---- color tag (per tab, persisted) ----
+
+  // setTabColor writes the side map, not the tab object, so the
+  // tagged tab's xterm stays mounted. colorId undefined clears the tag.
+  const setTabColor = (channelID: number, colorId?: string) => {
+    const next = new Map(tagColors());
+    if (colorId) next.set(channelID, colorId);
+    else next.delete(channelID);
+    setTagColors(next);
+    setCtxMenu(null);
+    persist();
+  };
+
+  // ---- drag to reorder (persisted) ----
+
+  // moveTab drops the dragged tab in front of `beforeID`. It reuses the
+  // existing tab objects (filter + splice keep references intact), so
+  // the term-host <For> sees the same identities and no xterm remounts.
+  const moveTab = (fromID: number, beforeID: number) => {
+    if (fromID === beforeID) return;
+    const cur = tabs();
+    const dragged = cur.find((t) => t.channelID === fromID);
+    if (!dragged) return;
+    const rest = cur.filter((t) => t.channelID !== fromID);
+    const at = rest.findIndex((t) => t.channelID === beforeID);
+    if (at < 0) return;
+    rest.splice(at, 0, dragged);
+    setTabs(rest);
     persist();
   };
 
@@ -221,7 +294,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const persist = () => {
     if (!props.instance) return;
     const state: PersistedState = {
-      tabs: tabs().map((t) => ({ channel_id: t.channelID, shell: t.shell, modes: t.modes })),
+      tabs: tabs().map((t) => ({
+        channel_id: t.channelID,
+        shell: t.shell,
+        modes: t.modes,
+        color: tagColors().get(t.channelID),
+      })),
       active: active() || undefined,
       font_id: fontId(),
       font_size: fontSize(),
@@ -250,9 +328,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // old behaviour instead of blank tabs.
     send({ kind: 'list_sessions' });
     if (!s.tabs?.length) return;
+    const tags = new Map<number, string>();
     for (const t of s.tabs) {
       addTab(Number(t.channel_id), t.shell, { pending: true, modes: t.modes });
+      if (t.color) tags.set(Number(t.channel_id), t.color);
     }
+    if (tags.size) setTagColors(tags);
     if (s.active && tabs().some((t) => t.channelID === s.active)) {
       setActive(s.active);
     }
@@ -319,17 +400,26 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         <For each={tabs()}>
           {(tab) => {
             const isActive = () => active() === tab.channelID;
+            // Tag hue for the top strip: a tagged tab shows its color
+            // always (active or not); untagged falls back to the blue
+            // active-accent / transparent idle pair.
+            const tagHex = () => colorHex(tagColors().get(tab.channelID));
+            const isDragging = () => dragId() === tab.channelID;
+            const isDropBefore = () => dropTarget() === tab.channelID && dragId() !== tab.channelID;
             return (
               <button
                 type="button"
+                draggable={true}
                 data-testid={`term-tab-${tab.channelID}`}
                 style={{
                   background: isActive() ? tokens.bgRowSelected : 'transparent',
                   color: tokens.fg,
                   border: 'none',
                   'border-top': isActive()
-                    ? `2px solid ${tokens.accentBlue}`
-                    : '2px solid transparent',
+                    ? `2px solid ${tagHex() ?? tokens.accentBlue}`
+                    : tagHex()
+                      ? `2px solid ${tagHex()}`
+                      : '2px solid transparent',
                   // Rounded only on top — the bottom meets the bar's
                   // border-bottom flush, matching browser-tab idiom.
                   'border-radius': `${tokens.radiusLg}px ${tokens.radiusLg}px 0 0`,
@@ -340,8 +430,45 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   'align-items': 'center',
                   gap: '8px',
                   'max-width': '200px',
+                  // Dim while dragged; left rule marks the drop slot.
+                  opacity: isDragging() ? 0.4 : 1,
+                  'box-shadow': isDropBefore() ? `inset 3px 0 0 ${tokens.accentBlue}` : undefined,
                 }}
                 onClick={() => activate(tab.channelID)}
+                onContextMenu={(ev) => {
+                  ev.preventDefault();
+                  setCtxMenu({ id: tab.channelID, x: ev.clientX, y: ev.clientY });
+                }}
+                onDragStart={(ev) => {
+                  setDragId(tab.channelID);
+                  if (ev.dataTransfer) {
+                    ev.dataTransfer.effectAllowed = 'move';
+                    // Some browsers refuse to start a drag without data.
+                    ev.dataTransfer.setData('text/plain', String(tab.channelID));
+                  }
+                }}
+                onDragEnd={() => {
+                  setDragId(null);
+                  setDropTarget(null);
+                }}
+                onDragEnter={(ev) => {
+                  if (dragId() === null || dragId() === tab.channelID) return;
+                  ev.preventDefault();
+                  setDropTarget(tab.channelID);
+                }}
+                onDragOver={(ev) => {
+                  if (dragId() === null || dragId() === tab.channelID) return;
+                  ev.preventDefault();
+                  if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
+                }}
+                onDrop={(ev) => {
+                  const from = dragId();
+                  if (from === null) return;
+                  ev.preventDefault();
+                  moveTab(from, tab.channelID);
+                  setDragId(null);
+                  setDropTarget(null);
+                }}
               >
                 <span
                   style={{
@@ -382,6 +509,28 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           <Plus size={14} />
         </button>
       </div>
+      <Show when={ctxMenu()}>
+        {(menu) => (
+          <Menu x={menu().x} y={menu().y} data-testid="term-tab-ctx" onDismiss={() => setCtxMenu(null)}>
+            <MenuItem
+              label="No color"
+              data-testid="term-tag-none"
+              icon={<span style={swatchStyle('transparent', true)} />}
+              onClick={() => setTabColor(menu().id, undefined)}
+            />
+            <For each={TAG_COLORS}>
+              {(c) => (
+                <MenuItem
+                  label={c.label}
+                  data-testid={`term-tag-${c.id}`}
+                  icon={<span style={swatchStyle(c.value)} />}
+                  onClick={() => setTabColor(menu().id, c.id)}
+                />
+              )}
+            </For>
+          </Menu>
+        )}
+      </Show>
       <div style={{ flex: 1, position: 'relative', 'min-height': 0 }}>
         <For each={tabs()}>
           {(tab) => {
@@ -441,6 +590,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 function shortShellName(p: string): string {
   const i = p.lastIndexOf('/');
   return i >= 0 ? p.slice(i + 1) : p;
+}
+
+// swatchStyle — the color dot shown beside each entry in the tag menu.
+// hollow renders the outlined "No color" chip.
+function swatchStyle(color: string, hollow = false): JSX.CSSProperties {
+  return {
+    width: '12px',
+    height: '12px',
+    'border-radius': '50%',
+    background: hollow ? 'transparent' : color,
+    border: `1px solid ${hollow ? tokens.borderMenu : color}`,
+    'box-sizing': 'border-box',
+  };
 }
 
 const tabBarStyle: JSX.CSSProperties = {

@@ -16,6 +16,15 @@
 
 import { registerDisplayWindow, subscribeRaw, unregisterDisplayWindow } from './api';
 import { type Origin, LOCAL_ORIGIN } from './clients';
+import { moveLocal, resizeLocal, windowById, screenSize, VIEWPORTS_PER_AXIS } from './wm';
+
+// xdg_toplevel resize edge bitmask (matches wlroots / xdg-shell).
+const EDGE_TOP = 1;
+const EDGE_BOTTOM = 2;
+const EDGE_LEFT = 4;
+const EDGE_RIGHT = 8;
+const MIN_W = 100;
+const MIN_H = 60;
 
 // Frame header layout (little-endian). See mac-phoenix client.js and
 // docs/DISPLAY.md. Only the dirty-rect + full-surface size are used; the
@@ -45,6 +54,26 @@ function parseHeader(view: DataView): FrameHeader {
   };
 }
 
+// One input batch flushed to the BE per rAF (motion) or immediately
+// (button/key/wheel). Events are surface-relative ints; see docs/DISPLAY.md §6.
+type InputEvent = Record<string, string | number>;
+
+// DOM mouse button → wash button name.
+const BUTTON_NAME: Record<number, string> = { 0: 'left', 1: 'middle', 2: 'right' };
+
+// A child-surface (menu/dropdown) overlay: a canvas positioned in viewport
+// space relative to the parent window, fed by a "video-popup" channel.
+// See docs/DISPLAY.md §12 (M3).
+interface PopupOverlay {
+  channelID: number;
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D | null;
+  x: number; // offset relative to the parent window's content origin
+  y: number;
+  unsub?: () => void;
+  cleanup: () => void;
+}
+
 export class WashAppDisplay extends HTMLElement {
   private canvas?: HTMLCanvasElement;
   private ctx?: CanvasRenderingContext2D | null;
@@ -53,13 +82,42 @@ export class WashAppDisplay extends HTMLElement {
   // the registry + raw subscription must be origin-scoped or a remote display
   // window collides with a local one of the same id (docs/REMOTE.md R2).
   private origin: Origin = LOCAL_ORIGIN;
+  private instanceID = '';
   private unsubscribe?: () => void;
   private errorCount = 0;
+
+  // Pending input batch + rAF handle. Motion coalesces (one per frame);
+  // buttons/keys/wheel flush immediately so clicks/keystrokes stay snappy.
+  private pending: InputEvent[] = [];
+  private rafID = 0;
+  private inputCleanup?: () => void;
+
+  // Active popup overlays, keyed by their video-popup channel id.
+  private popups = new Map<number, PopupOverlay>();
+
+  // Interactive-move state (M8). A CSD guest (chromeless window) requests an
+  // xdg_toplevel.move when its own titlebar is dragged; the compositor relays
+  // it as a {move:true} control frame. We then drag the wash window following
+  // the pointer (this element holds the pointer capture), instead of
+  // forwarding motion to the guest. moveAnchor records the pointer + window
+  // origin at grab time; lastClientX/Y track the live pointer.
+  private moving = false;
+  private moveAnchor: { px: number; py: number; ox: number; oy: number } | null = null;
+  private lastClientX = 0;
+  private lastClientY = 0;
+  // Interactive-resize state (M8b), same model as move but driven by the
+  // guest's xdg_toplevel.resize (a {resize:<edges>} control frame). Top/left
+  // edges move the origin as well as the size.
+  private resizing = false;
+  private resizeAnchor:
+    | { px: number; py: number; ox: number; oy: number; ow: number; oh: number; edges: number }
+    | null = null;
 
   connectedCallback(): void {
     const winAttr = this.getAttribute('data-wash-window');
     this.windowID = winAttr != null ? parseInt(winAttr, 10) : -1;
     this.origin = this.getAttribute('data-wash-origin') || LOCAL_ORIGIN;
+    this.instanceID = this.getAttribute('data-wash-instance') ?? '';
 
     if (!this.canvas) {
       // Render the guest buffer at native 1:1 pixels, anchored top-left,
@@ -96,6 +154,11 @@ export class WashAppDisplay extends HTMLElement {
     if (this.windowID >= 0) {
       registerDisplayWindow(this.origin, this.windowID, this);
     }
+
+    // Forward pointer/keyboard/scroll to the owning wash-display instance.
+    if (this.windowID >= 0 && this.instanceID) {
+      this.setupInput();
+    }
   }
 
   disconnectedCallback(): void {
@@ -110,6 +173,260 @@ export class WashAppDisplay extends HTMLElement {
       }
       this.unsubscribe = undefined;
     }
+    for (const ch of [...this.popups.keys()]) this.removePopup(ch);
+    if (this.inputCleanup) {
+      this.inputCleanup();
+      this.inputCleanup = undefined;
+    }
+    if (this.rafID) {
+      cancelAnimationFrame(this.rafID);
+      this.rafID = 0;
+    }
+    // Reset drag state so a reconnected element (custom elements can be
+    // re-adopted into the DOM) doesn't start stuck mid-move/resize.
+    this.moving = false;
+    this.resizing = false;
+  }
+
+  // --- input capture (docs/DISPLAY.md §6) ----------------------------
+
+  // setupInput wires DOM pointer/keyboard/wheel listeners on this element
+  // and forwards them, surface-relative, to the wash-display BE which
+  // injects them into the real wlroots surface.
+  private setupInput(): void {
+    // Make the element focusable so it can receive key events when its
+    // window is active; clicking it (below) gives it DOM focus. The outline
+    // would be visual noise over guest pixels.
+    this.tabIndex = 0;
+    this.style.outline = 'none';
+
+    const onPointerMove = (ev: PointerEvent) => {
+      this.lastClientX = ev.clientX;
+      this.lastClientY = ev.clientY;
+      // While dragging the window (CSD guest's titlebar move/resize, M8/M8b)
+      // we drive the wash window instead of forwarding motion to the guest.
+      if (this.moving) {
+        this.applyMove(ev);
+        return;
+      }
+      if (this.resizing) {
+        this.applyResize(ev);
+        return;
+      }
+      this.queueMotion(ev);
+      this.scheduleFlush();
+    };
+    const onPointerDown = (ev: PointerEvent) => {
+      this.lastClientX = ev.clientX;
+      this.lastClientY = ev.clientY;
+      // Capture so a drag that leaves the element still delivers move/up
+      // (dragging a scrollbar, selecting text, etc.). Focus for keys.
+      try {
+        this.setPointerCapture(ev.pointerId);
+      } catch {
+        /* not all pointer types are capturable */
+      }
+      this.focus({ preventScroll: true });
+      this.queueMotion(ev);
+      this.queue({ ev: 'button', btn: BUTTON_NAME[ev.button] ?? 'left', state: 'down' });
+      this.flushNow();
+    };
+    const onPointerUp = (ev: PointerEvent) => {
+      this.lastClientX = ev.clientX;
+      this.lastClientY = ev.clientY;
+      if (this.moving) {
+        this.endMove();
+        return;
+      }
+      if (this.resizing) {
+        this.endResize();
+        return;
+      }
+      this.queueMotion(ev);
+      this.queue({ ev: 'button', btn: BUTTON_NAME[ev.button] ?? 'left', state: 'up' });
+      this.flushNow();
+    };
+    const onWheel = (ev: WheelEvent) => {
+      // Forward both axes; deltaMode 0 (pixels) is the common case, the BE
+      // treats the value as a ~120-per-notch hi-res wheel delta. Negate to
+      // match wlroots' positive-down convention. preventDefault stops the
+      // shell scrolling underneath.
+      ev.preventDefault();
+      if (ev.deltaY) this.queue({ ev: 'axis', axis: 'v', delta: Math.round(ev.deltaY) });
+      if (ev.deltaX) this.queue({ ev: 'axis', axis: 'h', delta: Math.round(ev.deltaX) });
+      this.flushNow();
+    };
+    const onKeyDown = (ev: KeyboardEvent) => {
+      // Keep browser shortcuts/scroll from firing while a guest is focused;
+      // the guest owns the keyboard. (Repeat is the client's job, so a
+      // synthetic repeat — ev.repeat — still forwards as a fresh down.)
+      ev.preventDefault();
+      this.queue({ ev: 'key', code: ev.code, state: 'down' });
+      this.flushNow();
+    };
+    const onKeyUp = (ev: KeyboardEvent) => {
+      ev.preventDefault();
+      this.queue({ ev: 'key', code: ev.code, state: 'up' });
+      this.flushNow();
+    };
+    // Right-click must reach the guest, not pop the browser menu.
+    const onContextMenu = (ev: Event) => ev.preventDefault();
+
+    this.addEventListener('pointermove', onPointerMove);
+    this.addEventListener('pointerdown', onPointerDown);
+    this.addEventListener('pointerup', onPointerUp);
+    this.addEventListener('wheel', onWheel, { passive: false });
+    this.addEventListener('keydown', onKeyDown);
+    this.addEventListener('keyup', onKeyUp);
+    this.addEventListener('contextmenu', onContextMenu);
+
+    this.inputCleanup = () => {
+      this.removeEventListener('pointermove', onPointerMove);
+      this.removeEventListener('pointerdown', onPointerDown);
+      this.removeEventListener('pointerup', onPointerUp);
+      this.removeEventListener('wheel', onWheel);
+      this.removeEventListener('keydown', onKeyDown);
+      this.removeEventListener('keyup', onKeyUp);
+      this.removeEventListener('contextmenu', onContextMenu);
+    };
+  }
+
+  // queueMotion appends (coalescing) a surface-relative motion event. The
+  // canvas is drawn 1:1 at top-left (DPR 1.0), so surface coords are the
+  // offset into the canvas box. Consecutive motions collapse to the latest.
+  private queueMotion(ev: PointerEvent): void {
+    const box = this.canvas && this.canvas.width > 0 ? this.canvas : this;
+    const r = box.getBoundingClientRect();
+    const x = Math.max(0, Math.round(ev.clientX - r.left));
+    const y = Math.max(0, Math.round(ev.clientY - r.top));
+    const last = this.pending[this.pending.length - 1];
+    if (last && last.ev === 'motion') {
+      last.x = x;
+      last.y = y;
+    } else {
+      this.pending.push({ ev: 'motion', x, y });
+    }
+  }
+
+  private queue(e: InputEvent): void {
+    this.pending.push(e);
+  }
+
+  // --- interactive move (M8) -----------------------------------------
+  // beginMove starts dragging the wash window in response to a CSD guest's
+  // xdg_toplevel.move (relayed as a {move:true} control frame). We hold the
+  // pointer capture, so subsequent pointermove/up land here; we drive the
+  // window (moveLocal for 60fps optimism) and commit once on release. The
+  // grab is anchored at the live pointer + the window's current origin.
+  private beginMove(): void {
+    if (this.windowID < 0 || this.moving) return;
+    const w = windowById(this.origin, this.windowID);
+    if (!w) return;
+    this.moving = true;
+    this.moveAnchor = { px: this.lastClientX, py: this.lastClientY, ox: w.x, oy: w.y };
+    // The guest requested the move off a press it will never see released
+    // (we're taking over the grab — xdg-shell semantics). Send a synthetic
+    // button-up so its CSD drag state resets cleanly.
+    this.queue({ ev: 'button', btn: 'left', state: 'up' });
+    this.flushNow();
+  }
+
+  private applyMove(ev: PointerEvent): void {
+    const a = this.moveAnchor;
+    if (!a || this.windowID < 0) return;
+    const w = windowById(this.origin, this.windowID);
+    const s = screenSize();
+    const maxX = s.w * VIEWPORTS_PER_AXIS - (w ? w.w : 0);
+    const maxY = s.h * VIEWPORTS_PER_AXIS - (w ? w.h : 0);
+    const x = Math.round(Math.max(0, Math.min(maxX, a.ox + (ev.clientX - a.px))));
+    const y = Math.round(Math.max(0, Math.min(maxY, a.oy + (ev.clientY - a.py))));
+    moveLocal(this.origin, this.windowID, x, y); // live; router commit happens on release
+  }
+
+  private endMove(): void {
+    this.moving = false;
+    this.moveAnchor = null;
+    const w = windowById(this.origin, this.windowID);
+    if (w) window.wash?.moveWindow(this.windowID, w.x, w.y);
+  }
+
+  // --- interactive resize (M8b) --------------------------------------
+  // Driven by the guest's xdg_toplevel.resize ({resize:<edges>}). Like move,
+  // we take over the grab (button-up to the guest), update the wash window box
+  // live (resizeLocal, + moveLocal when a top/left edge shifts the origin),
+  // and commit once on release. The router's window.resize round-trips to the
+  // compositor's set_size, repainting the guest at the new size.
+  private beginResize(edges: number): void {
+    if (this.windowID < 0 || this.resizing || this.moving) return;
+    const w = windowById(this.origin, this.windowID);
+    if (!w) return;
+    this.resizing = true;
+    this.resizeAnchor = { px: this.lastClientX, py: this.lastClientY, ox: w.x, oy: w.y, ow: w.w, oh: w.h, edges };
+    this.queue({ ev: 'button', btn: 'left', state: 'up' });
+    this.flushNow();
+  }
+
+  private applyResize(ev: PointerEvent): void {
+    const a = this.resizeAnchor;
+    if (!a || this.windowID < 0) return;
+    const dx = ev.clientX - a.px;
+    const dy = ev.clientY - a.py;
+    let x = a.ox, y = a.oy, w = a.ow, h = a.oh;
+    if (a.edges & EDGE_RIGHT) w = Math.max(MIN_W, a.ow + dx);
+    if (a.edges & EDGE_LEFT) {
+      w = Math.max(MIN_W, a.ow - dx);
+      x = a.ox + (a.ow - w); // keep the right edge fixed
+    }
+    if (a.edges & EDGE_BOTTOM) h = Math.max(MIN_H, a.oh + dy);
+    if (a.edges & EDGE_TOP) {
+      h = Math.max(MIN_H, a.oh - dy);
+      y = a.oy + (a.oh - h); // keep the bottom edge fixed
+    }
+    w = Math.round(w);
+    h = Math.round(h);
+    resizeLocal(this.origin, this.windowID, w, h);
+    if (Math.round(x) !== a.ox || Math.round(y) !== a.oy) moveLocal(this.origin, this.windowID, Math.round(x), Math.round(y));
+  }
+
+  private endResize(): void {
+    const edges = this.resizeAnchor?.edges ?? 0;
+    this.resizing = false;
+    this.resizeAnchor = null;
+    const w = windowById(this.origin, this.windowID);
+    if (!w) return;
+    window.wash?.resizeWindow(this.windowID, w.w, w.h);
+    if (edges & (EDGE_LEFT | EDGE_TOP)) window.wash?.moveWindow(this.windowID, w.x, w.y);
+  }
+
+  // scheduleFlush batches motion to one send per animation frame.
+  private scheduleFlush(): void {
+    if (this.rafID) return;
+    this.rafID = requestAnimationFrame(() => {
+      this.rafID = 0;
+      this.flushNow();
+    });
+  }
+
+  // flushNow sends the pending batch as one app_msg to the wash-display
+  // instance (addressed by instance_id; the BE routes by the payload win).
+  private flushNow(): void {
+    if (this.rafID) {
+      cancelAnimationFrame(this.rafID);
+      this.rafID = 0;
+    }
+    if (this.pending.length === 0) return;
+    const events = this.pending;
+    this.pending = [];
+    this.sendInput({ win: this.windowID }, events);
+  }
+
+  // sendInput posts one input batch to the wash-display instance. `target`
+  // is {win} for the window itself or {popup_chan} for a popup overlay (the
+  // BE routes by whichever is set).
+  private sendInput(target: Record<string, number>, events: InputEvent[]): void {
+    if (events.length === 0) return;
+    if (typeof window === 'undefined' || !window.wash) return;
+    window.wash.sendAppMsgTo({ instance_id: this.instanceID }, { kind: 'input', ...target, events });
   }
 
   // attachVideoChannel subscribes to the raw byte stream for the window's
@@ -132,7 +449,25 @@ export class WashAppDisplay extends HTMLElement {
 
   private onFrame(bytes: Uint8Array): void {
     if (!this.canvas || !this.ctx) return;
-    if (bytes.length < HEADER_BYTES) return;
+    // Sub-header frames on the video channel are JSON control messages, not
+    // pixels — {cursor:"<css-name>"} from cursor-shape-v1 (M4), or {move:true}
+    // when a CSD guest drags its own titlebar and asks for a move (M8).
+    if (bytes.length < HEADER_BYTES) {
+      try {
+        const ctrl = JSON.parse(new TextDecoder().decode(bytes));
+        if (typeof ctrl.cursor === 'string') {
+          this.style.cursor = ctrl.cursor;
+          if (this.canvas) this.canvas.style.cursor = ctrl.cursor;
+        } else if (ctrl.move === true) {
+          this.beginMove();
+        } else if (typeof ctrl.resize === 'number') {
+          this.beginResize(ctrl.resize);
+        }
+      } catch {
+        /* ignore malformed control frame */
+      }
+      return;
+    }
 
     let header: FrameHeader;
     try {
@@ -170,10 +505,182 @@ export class WashAppDisplay extends HTMLElement {
             canvas.style.height = header.frameH + 'px';
           }
         }
+        // Clear the dirty rect first so transparent pixels REPLACE (not
+        // source-over blend onto) the previous frame — required now that
+        // frames carry real alpha (M8c: shaped popups, rounded corners).
+        ctx.clearRect(header.dirtyX, header.dirtyY, bitmap.width, bitmap.height);
         ctx.drawImage(bitmap, header.dirtyX, header.dirtyY);
         bitmap.close?.();
       })
       .catch((e) => this.logError('decode/draw failed', e));
+  }
+
+  // --- popup overlays (DISPLAY.md §12 M3) ----------------------------
+
+  // attachPopupChannel subscribes to a child-surface (menu/dropdown)
+  // channel. Frames < HEADER_BYTES are JSON control (geometry / close);
+  // frames ≥ HEADER_BYTES are WS pixel frames (same format as the main
+  // stream). Called by the display registry on channel.bind kind=video-popup.
+  attachPopupChannel(channelID: number): void {
+    if (this.popups.has(channelID)) return;
+    const unsub = subscribeRaw(this.origin, channelID, (bytes) => this.onPopupBytes(channelID, bytes));
+    // The overlay canvas is created lazily on the first pixel frame; record
+    // the subscription now so close/teardown always works.
+    const placeholder: PopupOverlay = {
+      channelID,
+      canvas: undefined as unknown as HTMLCanvasElement,
+      ctx: null,
+      x: 0,
+      y: 0,
+      unsub,
+      cleanup: () => {},
+    };
+    this.popups.set(channelID, placeholder);
+  }
+
+  private onPopupBytes(channelID: number, bytes: Uint8Array): void {
+    const p = this.popups.get(channelID);
+    if (!p) return;
+    if (bytes.length < HEADER_BYTES) {
+      // Control frame: { x, y } geometry update, or { close: true }.
+      let ctrl: { x?: number; y?: number; close?: boolean };
+      try {
+        ctrl = JSON.parse(new TextDecoder().decode(bytes));
+      } catch {
+        return;
+      }
+      if (ctrl.close) {
+        this.removePopup(channelID);
+        return;
+      }
+      if (typeof ctrl.x === 'number') p.x = ctrl.x;
+      if (typeof ctrl.y === 'number') p.y = ctrl.y;
+      if (p.canvas) this.repositionPopup(p);
+      return;
+    }
+    // Pixel frame.
+    let header: FrameHeader;
+    try {
+      header = parseHeader(new DataView(bytes.buffer, bytes.byteOffset, HEADER_BYTES));
+    } catch (e) {
+      this.logError('popup header parse failed', e);
+      return;
+    }
+    const payload = bytes.subarray(HEADER_BYTES);
+    if (payload.length === 0) return;
+    const copy = payload.slice();
+    if (!p.canvas) this.ensurePopupCanvas(p);
+    createImageBitmap(new Blob([copy]))
+      .then((bitmap) => {
+        const live = this.popups.get(channelID);
+        if (!live || !live.canvas || !live.ctx) {
+          bitmap.close?.();
+          return;
+        }
+        const cv = live.canvas;
+        if (header.frameW > 0 && cv.width !== header.frameW) {
+          cv.width = header.frameW;
+          cv.style.width = header.frameW + 'px';
+        }
+        if (header.frameH > 0 && cv.height !== header.frameH) {
+          cv.height = header.frameH;
+          cv.style.height = header.frameH + 'px';
+        }
+        // Clear first so the menu's transparent rounded corners / shadow
+        // replace prior pixels rather than blending (M8c alpha).
+        live.ctx.clearRect(header.dirtyX, header.dirtyY, bitmap.width, bitmap.height);
+        live.ctx.drawImage(bitmap, header.dirtyX, header.dirtyY);
+        bitmap.close?.();
+        this.repositionPopup(live);
+      })
+      .catch((e) => this.logError('popup decode/draw failed', e));
+  }
+
+  // ensurePopupCanvas builds the overlay canvas: position:fixed on <body>
+  // (so it can overflow the parent window box, like a real menu), above the
+  // window stack, forwarding its own pointer/wheel input keyed by the popup
+  // channel (the BE has no win for a popup).
+  private ensurePopupCanvas(p: PopupOverlay): void {
+    const cv = document.createElement('canvas');
+    cv.style.position = 'fixed';
+    cv.style.zIndex = '2147483646';
+    cv.style.imageRendering = 'auto';
+    cv.style.pointerEvents = 'auto';
+    document.body.appendChild(cv);
+    p.canvas = cv;
+    p.ctx = cv.getContext('2d');
+
+    const surfacePos = (ev: PointerEvent) => {
+      const r = cv.getBoundingClientRect();
+      return {
+        x: Math.max(0, Math.round(ev.clientX - r.left)),
+        y: Math.max(0, Math.round(ev.clientY - r.top)),
+      };
+    };
+    const tgt = { popup_chan: p.channelID };
+    const onMove = (ev: PointerEvent) => {
+      const { x, y } = surfacePos(ev);
+      this.sendInput(tgt, [{ ev: 'motion', x, y }]);
+    };
+    const onDown = (ev: PointerEvent) => {
+      const { x, y } = surfacePos(ev);
+      this.sendInput(tgt, [
+        { ev: 'motion', x, y },
+        { ev: 'button', btn: BUTTON_NAME[ev.button] ?? 'left', state: 'down' },
+      ]);
+    };
+    const onUp = (ev: PointerEvent) => {
+      const { x, y } = surfacePos(ev);
+      this.sendInput(tgt, [
+        { ev: 'motion', x, y },
+        { ev: 'button', btn: BUTTON_NAME[ev.button] ?? 'left', state: 'up' },
+      ]);
+    };
+    const onWheel = (ev: WheelEvent) => {
+      ev.preventDefault();
+      const evs: InputEvent[] = [];
+      if (ev.deltaY) evs.push({ ev: 'axis', axis: 'v', delta: Math.round(ev.deltaY) });
+      if (ev.deltaX) evs.push({ ev: 'axis', axis: 'h', delta: Math.round(ev.deltaX) });
+      this.sendInput(tgt, evs);
+    };
+    cv.addEventListener('pointermove', onMove);
+    cv.addEventListener('pointerdown', onDown);
+    cv.addEventListener('pointerup', onUp);
+    cv.addEventListener('wheel', onWheel, { passive: false });
+    p.cleanup = () => {
+      cv.removeEventListener('pointermove', onMove);
+      cv.removeEventListener('pointerdown', onDown);
+      cv.removeEventListener('pointerup', onUp);
+      cv.removeEventListener('wheel', onWheel);
+      cv.remove();
+    };
+    this.repositionPopup(p);
+  }
+
+  // repositionPopup places the overlay in viewport space at the parent
+  // window's content origin plus the popup's offset. Recomputed each frame
+  // so it tracks the window if it moves.
+  private repositionPopup(p: PopupOverlay): void {
+    if (!p.canvas || !this.canvas) return;
+    const r = this.canvas.getBoundingClientRect();
+    p.canvas.style.left = Math.round(r.left + p.x) + 'px';
+    p.canvas.style.top = Math.round(r.top + p.y) + 'px';
+  }
+
+  private removePopup(channelID: number): void {
+    const p = this.popups.get(channelID);
+    if (!p) return;
+    this.popups.delete(channelID);
+    try {
+      p.unsub?.();
+    } catch {
+      /* ignore */
+    }
+    try {
+      p.cleanup();
+    } catch {
+      /* ignore */
+    }
   }
 
   private logError(msg: string, e: unknown): void {

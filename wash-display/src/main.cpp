@@ -33,7 +33,7 @@
 #include <unistd.h>
 
 static const char* kAppID = "com.wash.display";
-static const char* kVersion = "0.9.0";
+static const char* kVersion = "0.9.1";
 static const int kProto = 1;
 
 // crash_handler dumps a native backtrace to stderr on a fatal signal so
@@ -194,6 +194,15 @@ static int run() {
         } else if (kind == "display_open") {
             std::thread(handle_display_open, std::ref(conn), data).detach();
         }
+#ifdef WASH_DISPLAY_COMPOSITOR
+        else if (kind == "input") {
+            // FE <wash-app-display> → injected pointer/keyboard input
+            // (DISPLAY.md §6). post_input only enqueues + wakes the
+            // compositor thread (no blocking), so it's safe from here on
+            // the reader thread. Target window is data["win"].
+            wash::post_input(data);
+        }
+#endif
     });
 
     conn.start();

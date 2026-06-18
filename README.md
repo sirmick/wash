@@ -20,7 +20,7 @@ windows, a workspace pager, a system sidebar — where the window
 manager runs *in the browser* and each application is an independent,
 one-file program that a transport-only **router** supervises.
 
-License: **AGPL-3.0**. Current version: **0.9.0**.
+License: **AGPL-3.0**. Current version: **0.9.1**.
 
 ---
 
@@ -390,35 +390,38 @@ build stays fast.
 Every tagged release ships native packages for all four distros.
 These URLs always resolve to the latest:
 
+A real native install your OS verifies and tracks — **no `curl … | sh`**.
+Only `dnf` installs straight from a URL; `apt` and `apk` want the file local first:
+
 ```bash
-# Ubuntu / Debian
-wget https://github.com/sirmick/wash/releases/latest/download/wash-ubuntu-24.04-amd64.deb
-sudo apt install ./wash-ubuntu-24.04-amd64.deb
+# Ubuntu 24.04
+curl -fLO https://github.com/sirmick/wash/releases/latest/download/wash-ubuntu-24.04-amd64.deb
+sudo apt install -y ./wash-ubuntu-24.04-amd64.deb
 
-wget https://github.com/sirmick/wash/releases/latest/download/wash-debian-12-amd64.deb
-sudo apt install ./wash-debian-12-amd64.deb
+# Debian 13
+curl -fLO https://github.com/sirmick/wash/releases/latest/download/wash-debian-13-amd64.deb
+sudo apt install -y ./wash-debian-13-amd64.deb
 
-# Fedora
-sudo dnf install https://github.com/sirmick/wash/releases/latest/download/wash-fedora-40-amd64.rpm
+# Fedora 40 — installs from the URL directly
+sudo dnf install -y https://github.com/sirmick/wash/releases/latest/download/wash-fedora-40-amd64.rpm
 
-# Alpine
+# Alpine 3.21 (apk wants a local file, like apt)
 wget https://github.com/sirmick/wash/releases/latest/download/wash-alpine-3.21-amd64.apk
 sudo apk add --allow-untrusted ./wash-alpine-3.21-amd64.apk
-
-# OpenWRT (binary tarball — extract to /usr/bin)
-wget https://github.com/sirmick/wash/releases/latest/download/wash-openwrt-24.10.6-x86_64.tgz
-sudo tar -xzf wash-openwrt-24.10.6-x86_64.tgz -C /usr/bin
 ```
 
-All five are stable filenames — they don't include the version. The
-release page at <https://github.com/sirmick/wash/releases/latest> has
-the same downloads if you'd rather click than `wget`.
+These are **stable filenames** (no version) that always resolve to the
+newest release — the page at
+<https://github.com/sirmick/wash/releases/latest> has the same files if you'd
+rather click. **amd64 only** for now (CI builds amd64); arm64/riscv64 and
+OpenWRT build from source (below). Once installed, start a single-user
+session with `wash-router` and open <http://localhost:11000/>.
 
 ### Build from source
 
 ```bash
 ./packaging/run_matrix.sh                       # all rows → dist/packages/<tag>/
-WASH_PKG_VERSION=0.9.0 ./packaging/run_matrix.sh # pin the version
+WASH_PKG_VERSION=0.9.1 ./packaging/run_matrix.sh # pin the version
 ```
 
 Each row does a two-stage Docker build: it builds the package

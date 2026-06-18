@@ -47,7 +47,7 @@ import (
 var assetsFS embed.FS
 
 const (
-	version = "0.9.0"
+	version = "0.9.1"
 
 	// maxConfigBytes caps the JSON payload written through
 	// settings.write. desktop.json is a few hundred bytes; this is

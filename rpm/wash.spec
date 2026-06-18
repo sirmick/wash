@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.9.0
+Version:        0.9.1
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -121,5 +121,7 @@ fi
 exit 0
 
 %changelog
+* Tue Jun 16 2026 sirmick <sirmick@gmail.com> - 0.9.1-1
+- wash-display: native X/Wayland compositor (guests run as wash windows).
 * Thu May 28 2026 sirmick <sirmick@gmail.com> - 0.9.0-1
 - Initial packaging.

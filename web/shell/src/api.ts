@@ -246,6 +246,9 @@ export function closeRawSubscriber(origin: Origin, channelID: number): void {
 
 interface DisplayElement extends HTMLElement {
   attachVideoChannel(channelID: number): void;
+  // Optional: a child-surface (menu/dropdown) overlay channel for this
+  // window. Implemented by <wash-app-display>; see DISPLAY.md §12 (M3).
+  attachPopupChannel?(channelID: number): void;
 }
 
 // Window ids are per-router, so a remote display window can share an id with
@@ -259,6 +262,9 @@ function winKey(origin: Origin, windowID: number): string {
 
 const displayWindows = new Map<string, DisplayElement>();
 const videoChannelForWindow = new Map<string, number>();
+// Popup channels that arrived before the parent element registered, per
+// (origin, window).
+const pendingPopupChannels = new Map<string, number[]>();
 
 export function registerDisplayWindow(origin: Origin, windowID: number, el: DisplayElement): void {
   const key = winKey(origin, windowID);
@@ -269,6 +275,17 @@ export function registerDisplayWindow(origin: Origin, windowID: number, el: Disp
       el.attachVideoChannel(ch);
     } catch (e) {
       console.error('wash: attachVideoChannel (register):', e);
+    }
+  }
+  const pops = pendingPopupChannels.get(key);
+  if (pops && el.attachPopupChannel) {
+    pendingPopupChannels.delete(key);
+    for (const c of pops) {
+      try {
+        el.attachPopupChannel(c);
+      } catch (e) {
+        console.error('wash: attachPopupChannel (register):', e);
+      }
     }
   }
 }
@@ -297,6 +314,27 @@ export function bindVideoChannel(origin: Origin, windowID: number, channelID: nu
       console.error('wash: attachVideoChannel (bind):', e);
     }
   }
+}
+
+// bindPopupChannel routes a child-surface (menu/dropdown) overlay channel
+// to the PARENT window's display element. Called from main.tsx's
+// channel.bind handler when kind === "video-popup". Origin-scoped like the
+// video registry (window ids are per-router). If the element isn't mounted
+// yet, the channel is stashed and replayed on register.
+export function bindPopupChannel(origin: Origin, parentWindowID: number, channelID: number): void {
+  const key = winKey(origin, parentWindowID);
+  const el = displayWindows.get(key);
+  if (el && el.attachPopupChannel) {
+    try {
+      el.attachPopupChannel(channelID);
+    } catch (e) {
+      console.error('wash: attachPopupChannel (bind):', e);
+    }
+    return;
+  }
+  const list = pendingPopupChannels.get(key) ?? [];
+  list.push(channelID);
+  pendingPopupChannels.set(key, list);
 }
 
 // forgetVideoChannel clears the stashed video channel for a window of this

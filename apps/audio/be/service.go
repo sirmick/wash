@@ -108,6 +108,33 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		}
 		return nil
 	})
+
+	// report_volume: a producer's own volume control moved (e.g. the Webamp
+	// slider). Adopt it as the new master so the sidebar's slider tracks it
+	// (the StateService push updates subscribers), and fan the change to the
+	// OTHER producers so a single master still scales them all. The reporter
+	// is skipped on purpose — it's already at this volume, and echoing the
+	// cmd back would bounce through its onStateChange into another report.
+	sdk.HandleFromVoid(bus, "report_volume", func(conn *sdk.Conn, _ string, req volumeReq, from wire.Sender) error {
+		if from.InstanceID == "" {
+			return nil
+		}
+		v := clamp01(req.Value)
+		var ids []string
+		svc.Mutate(func(s *State) {
+			s.MasterVolume = v
+			for _, src := range s.Sources {
+				if src.ID != from.InstanceID {
+					ids = append(ids, src.ID)
+				}
+			}
+		})
+		for _, id := range ids {
+			_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: id},
+				map[string]any{"kind": "cmd", "action": "volume", "value": v})
+		}
+		return nil
+	})
 }
 
 // applyReport updates s for a producer's report and enforces single-play

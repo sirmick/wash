@@ -297,20 +297,6 @@ type pendingAttach struct {
 	kiosk bool
 }
 
-// registerPendingAttach reserves the pid slot before Spawn returns
-// — the child could in principle dial fast enough that the
-// control-socket handler runs before spawnAndRun reaches its
-// select. Caller MUST unregister via takePendingAttach (or via
-// the deferred cleanup) once the spawn completes one way or the
-// other so stale entries don't leak.
-func (r *Router) registerPendingAttach(pid int, kiosk bool) chan attachResult {
-	ch := make(chan attachResult, 1)
-	r.pendingMu.Lock()
-	r.pendingAttach[pid] = &pendingAttach{ch: ch, kiosk: kiosk}
-	r.pendingMu.Unlock()
-	return ch
-}
-
 // takePendingAttach claims and removes the pending entry for pid.
 // Returns (rec, true) if found. The caller is responsible for
 // writing the attach result before another goroutine starts a
@@ -742,19 +728,28 @@ func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool) (*Ap
 	if r.cfg.ControlSocket == "" {
 		return nil, fmt.Errorf("spawn %s: control socket disabled (apps dial WASH_DISPLAY)", entry.Manifest.ID)
 	}
+	// Spawn and register the pid's pending-attach slot atomically under
+	// pendingMu. cmd.Start has already returned by the time Spawn does, so
+	// a fast child (e.g. a Go background app dialing back instantly) could
+	// otherwise be processed by the control-socket attach handler BEFORE
+	// the slot exists — falling through to the fresh-attach branch while
+	// this spawnAndRun keeps waiting on a channel that never fires, then
+	// killing the (healthy) child on the 10s timeout. takePendingAttach
+	// contends on this same mutex, so holding it across Start + insert
+	// makes the handler block until the slot is in place. (Bit the first
+	// browser-connect sweep, which spawns several background apps at once.)
+	ch := make(chan attachResult, 1)
+	r.pendingMu.Lock()
 	sr, err := Spawn(entry.Path, entry.Manifest.ID, r.cfg.ControlSocket, r.spawnEnv())
 	if err != nil {
+		r.pendingMu.Unlock()
 		return nil, fmt.Errorf("spawn %s: %w", entry.Manifest.ID, err)
 	}
 	cmd := sr.Cmd
 	startedAt := time.Now()
 	pid := cmd.Process.Pid
-	// Register the pending channel BEFORE the spawn could plausibly
-	// dial back; cmd.Start has already returned, so the child may
-	// already be running. takePendingAttach in the control-socket
-	// handler will only match this pid if registerPendingAttach
-	// has been called first. The lock keeps the operations ordered.
-	ch := r.registerPendingAttach(pid, kiosk)
+	r.pendingAttach[pid] = &pendingAttach{ch: ch, kiosk: kiosk}
+	r.pendingMu.Unlock()
 	defer func() {
 		// Best-effort: in case of timeout/cancel the channel still
 		// hangs around if we leave it. takePendingAttach is safe to

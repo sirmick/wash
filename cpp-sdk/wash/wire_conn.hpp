@@ -49,6 +49,14 @@ public:
     using WindowCmdHandler =
         std::function<void(const std::string& t, uint32_t win, uint32_t w, uint32_t h)>;
 
+    // Called on the reader thread when the router-held clipboard changes
+    // (some OTHER app called clipboard.set — the setter is excluded). The
+    // clipboard bridge uses this to claim the Wayland/X11 selection so a
+    // guest can paste wash's clipboard (DISPLAY.md §7). MUST NOT block /
+    // call clipboard_get directly here (the reply arrives on this thread);
+    // offload, or marshal onto the compositor thread.
+    using ClipboardChangedHandler = std::function<void(const std::string& mime)>;
+
     explicit WireConn(int fd) : fd_(fd) {}
     ~WireConn();
 
@@ -67,9 +75,11 @@ public:
 
     // create_window sends window.create and blocks for window.created /
     // window.create.err. Returns the window id, or 0 on failure.
-    // Blocking: never call from the AppMsgHandler.
+    // chromeless drops the wash frame for this window (CSD guests draw
+    // their own). Blocking: never call from the AppMsgHandler.
     uint32_t create_window(const std::string& title, uint32_t w, uint32_t h,
-                           const std::string& role = "toplevel", uint32_t parent = 0);
+                           const std::string& role = "toplevel", uint32_t parent = 0,
+                           bool chromeless = false);
 
     // destroy_window is fire-and-forget (window.destroy on CH_EVENT).
     void destroy_window(uint32_t win);
@@ -91,6 +101,11 @@ public:
     // when no browser is bound yet). Blocking: not from AppMsgHandler.
     uint32_t open_video_channel(uint32_t win);
 
+    // open_channel_kind is open_video_channel with an explicit kind hint
+    // (e.g. "video-popup" for a child-surface overlay channel bound to a
+    // PARENT window). Same blocking/reply semantics. DISPLAY.md §12 (M3).
+    uint32_t open_channel_kind(uint32_t win, const std::string& kind);
+
     // write_channel writes one raw frame (e.g. a framed video message)
     // on an already-open channel id.
     bool write_channel(uint32_t channelID, const uint8_t* data, size_t n);
@@ -102,6 +117,23 @@ public:
     // send_app_msg_to addresses a specific instance (e.g. the settings
     // panel that subscribed) via app_msg.to{instance_id}.
     bool send_app_msg_to(const std::string& instanceID, const json& data);
+
+    // --- clipboard bridge (DISPLAY.md §7) -----------------------------
+    // clipboard_set stores (mime, bytes) in the router-held clipboard
+    // (clipboard.set on CH_EVENT, fire-and-forget). Used for guest→wash
+    // copies. Bytes are base64'd on the JSON wire (matching the Go SDK's
+    // []byte encoding); see [[wash_cbor_json_pitfall]].
+    void clipboard_set(const std::string& mime, const std::vector<uint8_t>& data);
+
+    // clipboard_get fetches the current clipboard (clipboard.get → blocks
+    // for clipboard.data). Used for wash→guest paste. Returns false on
+    // socket death. Blocking: never call from the reader-thread callbacks
+    // (AppMsgHandler / ClipboardChangedHandler) — deadlocks the reply.
+    bool clipboard_get(std::string& mime, std::vector<uint8_t>& data);
+
+    void on_clipboard_changed(ClipboardChangedHandler h) {
+        clipboard_changed_handler_ = std::move(h);
+    }
 
     // publish_env sends env.publish: WASH_*-namespaced env hints the
     // router merges into every app it later spawns (docs/DISPLAY_ENV.md),
@@ -158,6 +190,18 @@ private:
 
     AppMsgHandler app_msg_handler_;
     WindowCmdHandler window_cmd_handler_;
+    ClipboardChangedHandler clipboard_changed_handler_;
+
+    // clipboard.get req/reply, mirroring win_pending_/chan_pending_.
+    struct ClipReply {
+        bool done = false;
+        bool ok = false;
+        std::string mime;
+        std::vector<uint8_t> data;
+    };
+    std::mutex clip_mu_;
+    std::condition_variable clip_cv_;
+    std::map<uint64_t, ClipReply> clip_pending_;
 
     // display.state snapshot. state_mu_ guards the string; the count is
     // atomic so map/unmap (compositor thread) and a subscribe (reader

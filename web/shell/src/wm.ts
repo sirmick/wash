@@ -203,6 +203,14 @@ export function moveLocal(origin: Origin, windowID: number, x: number, y: number
   setWindows((w) => w.origin === origin && w.windowID === windowID, { x, y });
 }
 
+// windowById returns the live window record for (origin, windowID), or
+// undefined. Used by the display element's move bridge to read a window's
+// current x/y when a CSD guest requests an interactive move (M8). Origin-
+// scoped because window ids are per-router (docs/REMOTE.md R2).
+export function windowById(origin: Origin, windowID: number): Win | undefined {
+  return windows.find((w) => w.origin === origin && w.windowID === windowID);
+}
+
 export function resizeLocal(origin: Origin, windowID: number, w: number, h: number): void {
   setWindows((win) => win.origin === origin && win.windowID === windowID, { w, h });
 }

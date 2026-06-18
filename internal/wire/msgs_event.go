@@ -283,6 +283,13 @@ type EvtWindowCreate struct {
 	// manifest element (the common case). A multi-window app can name a
 	// per-window decoder/view here (e.g. the built-in "wash-app-display").
 	Element string `json:"element,omitempty"`
+	// Chromeless drops the wash window frame for THIS window (per-window,
+	// unlike the manifest's WindowHints.Chromeless which is per-app). The
+	// native compositor (wash-display) sets it for guests that draw their
+	// own decorations (CSD) — GTK/Chromium/etc. — so wash doesn't double
+	// the titlebar. The shell still owns z-order/focus/taskbar; Super+drag
+	// moves the window, and the guest's own button closes it.
+	Chromeless bool `json:"chromeless,omitempty"`
 }
 
 func NewEvtWindowCreate(reqID uint64, role string, parentWin uint32, title string, w, h uint32, element string) EvtWindowCreate {

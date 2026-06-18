@@ -58,6 +58,7 @@ import {
   Sub,
   WindowInfo,
   bindVideoChannel,
+  bindPopupChannel,
   closeRawSubscriber,
   deliverRaw,
   deliverToInstance,
@@ -338,11 +339,22 @@ function makeHandlers(client: RouterClient): ClientHandlers {
           // Asset channel: local-only, keyed by (req_id, channel_id) in
           // wash-fetch.ts. Nothing to do here.
         } else if (b.kind === 'video') {
-          // Per-window video (wash-display, wire.ChannelKindVideo) — local
-          // only for now; remote video rides the M5 WebRTC track.
+          // Per-window video for the built-in <wash-app-display> decoder
+          // (wire.ChannelKindVideo). Local only for now — remote display
+          // video is gated off here (un-gate + origin-scope input to enable;
+          // see docs/REMOTE.md §15.1). The registry (api.ts) handles the
+          // bind-before-mount race; frame bytes still flow via deliverRaw.
           if (isLocal) {
             client.channelOwner.set(b.channel_id, b.window_id);
             bindVideoChannel(client.origin, b.window_id, b.channel_id);
+          }
+        } else if (b.kind === 'video-popup') {
+          // Child surface (menu/dropdown) of a display window: window_id is
+          // the PARENT win, drawn as a positioned overlay on its
+          // <wash-app-display>. Same local-only gating as video.
+          if (isLocal) {
+            client.channelOwner.set(b.channel_id, b.window_id);
+            bindPopupChannel(client.origin, b.window_id, b.channel_id);
           }
         } else if (b.kind === 'peer' && isLocal) {
           // Remote-apps relay: A spliced this channel to host B. Stand up a

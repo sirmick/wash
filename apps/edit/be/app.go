@@ -40,7 +40,7 @@ import (
 var assetsFS embed.FS
 
 const (
-	version = "0.9.0"
+	version = "0.9.1"
 
 	// Cap on read size. Bigger files are still listed; the editor
 	// surfaces a "too large to open here" placeholder rather than
