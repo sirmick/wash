@@ -29,7 +29,7 @@ import (
 var assetsFS embed.FS
 
 const (
-	version = "0.9.1"
+	version = "0.9.2"
 
 	// defaultIntervalMS is the snapshot cadence in milliseconds.
 	// 2s = htop's default; brisk enough to feel live, slow enough

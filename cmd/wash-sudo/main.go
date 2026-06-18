@@ -41,7 +41,7 @@ import (
 	"strings"
 )
 
-const version = "0.9.1"
+const version = "0.9.2"
 
 func main() {
 	reason := flag.String("reason", "", "freeform note shown in wash-priv's approval row")

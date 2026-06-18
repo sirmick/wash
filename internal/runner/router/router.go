@@ -35,7 +35,7 @@ import (
 	"github.com/sirmick/wash/internal/wire"
 )
 
-const version = "0.9.1"
+const version = "0.9.2"
 
 const (
 	defaultListen       = "0.0.0.0:11000"

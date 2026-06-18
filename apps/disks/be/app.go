@@ -36,7 +36,7 @@ import (
 var assetsFS embed.FS
 
 const (
-	version = "0.9.1"
+	version = "0.9.2"
 
 	// defaultIntervalMS is the snapshot cadence. Disk topology and
 	// fullness change slowly; 3s keeps I/O rates lively without churn.

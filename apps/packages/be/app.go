@@ -39,7 +39,7 @@ import (
 //go:embed all:assets
 var assetsFS embed.FS
 
-const version = "0.9.1"
+const version = "0.9.2"
 
 // Icon: lucide "package" — the universal box glyph. Matches the
 // metaphor without colliding with file-manager (folder) or services

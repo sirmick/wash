@@ -22,7 +22,7 @@ import (
 //go:embed all:assets
 var assetsFS embed.FS
 
-const version = "0.9.1"
+const version = "0.9.2"
 
 var def *sdk.AppDef
 
