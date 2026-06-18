@@ -75,57 +75,58 @@ const midnight: Pack = {
   wallpaper: 'wallpapers/midnight.svg',
 };
 
-// Tokyo Night — a deep blue-violet scheme. Second of the planned set;
-// its palette is final, but it reuses Midnight's flower wallpaper until
-// its own vectorized art lands (then point this at wallpapers/tokyo-night.svg).
-const tokyoNight: Pack = {
-  id: 'tokyo-night',
-  name: 'Tokyo Night',
+// Tokyo — Solarized Dark. A neon Kabukichō alley (vectorized from a
+// flat-illustration wallpaper) on the canonical Solarized base03 field,
+// with the full Solarized accent set for the chrome. First of the
+// city-named packs.
+const tokyo: Pack = {
+  id: 'tokyo',
+  name: 'Tokyo',
   scheme: {
-    '--wash-bg-window': '#1a1b26',
-    '--wash-bg-menu': '#16161e',
-    '--wash-bg-inset': '#13141c',
+    '--wash-bg-window': '#002b36', // base03
+    '--wash-bg-menu': '#00222c',
+    '--wash-bg-inset': '#001a22',
     '--wash-bg-row': 'transparent',
-    '--wash-bg-row-hover': '#292e42',
-    '--wash-bg-row-selected': '#343a55',
+    '--wash-bg-row-hover': '#073642', // base02
+    '--wash-bg-row-selected': '#0d4a5a',
     '--wash-bg-backdrop': 'rgba(0,0,0,0.5)',
-    '--wash-bg-drop-target': '#2a3a5e',
-    '--wash-border-menu': '#2a2e3f',
-    '--wash-border-window': '#2a2e3f',
-    '--wash-border-focus': '#3d59a1',
-    '--wash-border-drop-target': '#7aa2f7',
-    '--wash-fg': '#c0caf5',
-    '--wash-fg-muted': '#565f89',
-    '--wash-fg-dim': '#414868',
-    '--wash-bg-danger': '#5a2230',
-    '--wash-border-danger': '#8a3346',
-    '--wash-fg-danger': '#f7768e',
-    '--wash-bg-success': '#1f3a2e',
-    '--wash-fg-success': '#9ece6a',
-    '--wash-bg-warning': '#3a341c',
-    '--wash-fg-warning': '#e0af68',
-    '--wash-bg-info': '#1c2d4a',
-    '--wash-fg-info': '#7aa2f7',
-    '--wash-bg-neutral': '#20212e',
-    '--wash-bg-denied': '#3a2a12',
-    '--wash-border-denied': '#7a5a20',
-    '--wash-sev-error': '#f7768e',
-    '--wash-sev-warn': '#e0af68',
-    '--wash-sev-notice': '#7dcfff',
-    '--wash-sev-info': '#a9b1d6',
-    '--wash-sev-debug': '#565f89',
-    '--wash-accent-red': '#f7768e',
-    '--wash-accent-amber': '#e0af68',
-    '--wash-accent-green': '#9ece6a',
-    '--wash-accent-cyan': '#7dcfff',
-    '--wash-accent-blue': '#7aa2f7',
-    '--wash-accent-violet': '#bb9af7',
+    '--wash-bg-drop-target': '#0a3d52',
+    '--wash-border-menu': '#073642',
+    '--wash-border-window': '#073642',
+    '--wash-border-focus': '#1a6088',
+    '--wash-border-drop-target': '#268bd2', // == accent blue
+    '--wash-fg': '#93a1a1', // base1
+    '--wash-fg-muted': '#657b83', // base00
+    '--wash-fg-dim': '#586e75', // base01
+    '--wash-bg-danger': '#3a161a',
+    '--wash-border-danger': '#99342f',
+    '--wash-fg-danger': '#e8746f',
+    '--wash-bg-success': '#243010',
+    '--wash-fg-success': '#9aab33',
+    '--wash-bg-warning': '#33290a',
+    '--wash-fg-warning': '#cba43a',
+    '--wash-bg-info': '#06303d',
+    '--wash-fg-info': '#3cb6ab',
+    '--wash-bg-neutral': '#073642',
+    '--wash-bg-denied': '#33200a',
+    '--wash-border-denied': '#8a5418',
+    '--wash-sev-error': '#e8746f',
+    '--wash-sev-warn': '#d4a02a',
+    '--wash-sev-notice': '#4ab3c0',
+    '--wash-sev-info': '#839496', // base0
+    '--wash-sev-debug': '#586e75',
+    '--wash-accent-red': '#dc322f', // Solarized red
+    '--wash-accent-amber': '#b58900', // yellow
+    '--wash-accent-green': '#859900', // green
+    '--wash-accent-cyan': '#2aa198', // cyan
+    '--wash-accent-blue': '#268bd2', // blue
+    '--wash-accent-violet': '#6c71c4', // violet
   },
-  wallpaper: 'wallpapers/midnight.svg',
+  wallpaper: 'wallpapers/tokyo.svg',
 };
 
 /** All built-in packs, in gallery order. Midnight is first / default. */
-export const packs: Pack[] = [midnight, tokyoNight];
+export const packs: Pack[] = [midnight, tokyo];
 
 export const defaultPackId = 'midnight';
 

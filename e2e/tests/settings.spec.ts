@@ -153,7 +153,7 @@ test.describe('wash-settings — Theme packs', () => {
     await expect(app).toBeVisible();
     // Desktop is the default pane; the Theme gallery sits at its top.
     await expect(app.locator('[data-testid="pack-card-midnight"]')).toBeVisible();
-    await expect(app.locator('[data-testid="pack-card-tokyo-night"]')).toBeVisible();
+    await expect(app.locator('[data-testid="pack-card-tokyo"]')).toBeVisible();
   });
 
   test('selecting a pack writes `pack` to desktop.json and re-themes the live desktop', async ({ page, router }) => {
@@ -174,11 +174,11 @@ test.describe('wash-settings — Theme packs', () => {
     // Midnight is applied on load (its var == the tokens default).
     await expect.poll(bgWindowVar, { timeout: 5_000 }).toBe('#181828');
 
-    // Pick Tokyo Night: the scheme re-themes live, and `pack` persists
-    // through the FE → settings.write → desktop.json → fswatch chain.
-    await app.locator('[data-testid="pack-card-tokyo-night"]').click();
-    await expect.poll(bgWindowVar, { timeout: 5_000 }).toBe('#1a1b26');
-    await expect.poll(packOnDisk, { timeout: 5_000 }).toBe('tokyo-night');
+    // Pick Tokyo (Solarized Dark): the scheme re-themes live, and `pack`
+    // persists through the FE → settings.write → desktop.json → fswatch chain.
+    await app.locator('[data-testid="pack-card-tokyo"]').click();
+    await expect.poll(bgWindowVar, { timeout: 5_000 }).toBe('#002b36');
+    await expect.poll(packOnDisk, { timeout: 5_000 }).toBe('tokyo');
 
     // Back to Midnight: the var reverts (applyScheme clears the prior pack).
     await app.locator('[data-testid="pack-card-midnight"]').click();
