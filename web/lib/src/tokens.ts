@@ -74,11 +74,17 @@ export const tokens = {
   // accents share one visual language. Used to tint icons/badges that
   // want a per-widget identity (e.g. the right-sidebar section icons).
   accentRed: 'var(--wash-accent-red, #e26060)',
+  accentOrange: 'var(--wash-accent-orange, #e0884f)',
   accentAmber: 'var(--wash-accent-amber, #e0b25f)',
+  accentLime: 'var(--wash-accent-lime, #a8c45f)',
   accentGreen: 'var(--wash-accent-green, #5fbf85)',
+  accentTeal: 'var(--wash-accent-teal, #5fc2a8)',
   accentCyan: 'var(--wash-accent-cyan, #5fb6c8)',
   accentBlue: 'var(--wash-accent-blue, #6090e0)',
+  accentIndigo: 'var(--wash-accent-indigo, #7a82e0)',
   accentViolet: 'var(--wash-accent-violet, #9a90e0)',
+  accentMagenta: 'var(--wash-accent-magenta, #c578d8)',
+  accentPink: 'var(--wash-accent-pink, #e074a4)',
 
   // Spacing.
   spaceXs: 4,
@@ -138,19 +144,31 @@ export type Tokens = typeof tokens;
 // one is hashed onto the ring deterministically.
 const ACCENT_RING: ReadonlyArray<{ token: string; hue: number }> = [
   { token: tokens.accentRed, hue: 0 },
-  { token: tokens.accentAmber, hue: 40 },
+  { token: tokens.accentOrange, hue: 25 },
+  { token: tokens.accentAmber, hue: 45 },
+  { token: tokens.accentLime, hue: 80 },
   { token: tokens.accentGreen, hue: 145 },
-  { token: tokens.accentCyan, hue: 191 },
-  { token: tokens.accentBlue, hue: 217 },
-  { token: tokens.accentViolet, hue: 250 },
+  { token: tokens.accentTeal, hue: 168 },
+  { token: tokens.accentCyan, hue: 190 },
+  { token: tokens.accentBlue, hue: 216 },
+  { token: tokens.accentIndigo, hue: 242 },
+  { token: tokens.accentViolet, hue: 268 },
+  { token: tokens.accentMagenta, hue: 300 },
+  { token: tokens.accentPink, hue: 330 },
 ];
 const ACCENT_BY_NAME: Readonly<Record<string, string>> = {
   red: tokens.accentRed,
+  orange: tokens.accentOrange,
   amber: tokens.accentAmber,
+  lime: tokens.accentLime,
   green: tokens.accentGreen,
+  teal: tokens.accentTeal,
   cyan: tokens.accentCyan,
   blue: tokens.accentBlue,
+  indigo: tokens.accentIndigo,
   violet: tokens.accentViolet,
+  magenta: tokens.accentMagenta,
+  pink: tokens.accentPink,
 };
 
 // hueOfHex returns the HSL hue (0..359) of #rgb / #rrggbb, or null for a

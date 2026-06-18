@@ -126,11 +126,17 @@ const tokyo: Pack = {
     '--wash-sev-info': '#839496', // base0
     '--wash-sev-debug': '#586e75',
     '--wash-accent-red': '#dc322f', // Solarized red
+    '--wash-accent-orange': '#cb4b16', // Solarized orange
     '--wash-accent-amber': '#b58900', // yellow
+    '--wash-accent-lime': '#8a9410',
     '--wash-accent-green': '#859900', // green
+    '--wash-accent-teal': '#1f9e8a',
     '--wash-accent-cyan': '#2aa198', // cyan
     '--wash-accent-blue': '#268bd2', // blue
+    '--wash-accent-indigo': '#4a63c4',
     '--wash-accent-violet': '#6c71c4', // violet
+    '--wash-accent-magenta': '#d33682', // Solarized magenta
+    '--wash-accent-pink': '#db5a96',
   },
   wallpaper: 'wallpapers/tokyo.svg',
 };
@@ -179,11 +185,17 @@ const seoul: Pack = {
     '--wash-sev-info': '#4a4030',
     '--wash-sev-debug': '#8a7d64',
     '--wash-accent-red': '#cc3433', // obangsaek/hwatu red
+    '--wash-accent-orange': '#cf6a2e',
     '--wash-accent-amber': '#cf9b2e', // gold (card tassels)
+    '--wash-accent-lime': '#7d9a35',
     '--wash-accent-green': '#4f8a3f', // dancheong green
+    '--wash-accent-teal': '#2a9a6e',
     '--wash-accent-cyan': '#2a9a92',
     '--wash-accent-blue': '#2f6ea5', // obangsaek blue
+    '--wash-accent-indigo': '#4a5aa8',
     '--wash-accent-violet': '#8a5fb0',
+    '--wash-accent-magenta': '#a83f8c',
+    '--wash-accent-pink': '#c2517e',
   },
   wallpaper: 'wallpapers/seoul.svg',
 };
@@ -231,11 +243,17 @@ const nt: Pack = {
     '--wash-sev-info': '#404040',
     '--wash-sev-debug': '#808080',
     '--wash-accent-red': '#c00000',
+    '--wash-accent-orange': '#c05000',
     '--wash-accent-amber': '#808000', // olive
+    '--wash-accent-lime': '#408000',
     '--wash-accent-green': '#008000',
+    '--wash-accent-teal': '#008060',
     '--wash-accent-cyan': '#008080', // teal
     '--wash-accent-blue': '#000080', // navy
+    '--wash-accent-indigo': '#303090',
     '--wash-accent-violet': '#800080', // purple
+    '--wash-accent-magenta': '#a000a0',
+    '--wash-accent-pink': '#c04070',
     // Chrome override vars (only this pack sets them; window.tsx defaults
     // everywhere else): navy/white caption + raised bevel.
     '--wash-titlebar-active': '#000080',
@@ -307,11 +325,17 @@ const oslo: Pack = {
     '--wash-sev-info': '#d8dee9', // nord4
     '--wash-sev-debug': '#6b7488',
     '--wash-accent-red': '#bf616a', // nord11 aurora
+    '--wash-accent-orange': '#d08770', // nord12
     '--wash-accent-amber': '#ebcb8b', // nord13
+    '--wash-accent-lime': '#c0cf8e',
     '--wash-accent-green': '#a3be8c', // nord14
+    '--wash-accent-teal': '#8fc2b0',
     '--wash-accent-cyan': '#8fbcbb', // nord7 frost
     '--wash-accent-blue': '#81a1c1', // nord9 frost
+    '--wash-accent-indigo': '#5e81ac', // nord10 frost
     '--wash-accent-violet': '#b48ead', // nord15
+    '--wash-accent-magenta': '#c490b5',
+    '--wash-accent-pink': '#d3a0b8',
   },
   wallpaper: 'wallpapers/oslo.svg',
 };
