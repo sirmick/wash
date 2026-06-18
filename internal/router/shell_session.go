@@ -294,9 +294,20 @@ func (s *ShellSession) handleAssetRead(m wire.ShellAssetRead) error {
 	if st.IsDir() {
 		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeBadRequest, "is a directory"))
 	}
+	// Read the whole file up front, then stream stable, non-overlapping
+	// slices of it. WriteRawFrameClass hands the payload to the scheduler,
+	// which drainLoop flushes ASYNCHRONOUSLY without copying — so a reused
+	// read buffer would be overwritten before its frame is sent, scrambling
+	// any asset larger than one chunk. (The bundle streamer slices one
+	// whole buffer for exactly this reason.) Assets are small, so the
+	// whole-file read is cheap.
+	data, rerr := io.ReadAll(f)
+	if rerr != nil {
+		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeInternal, rerr.Error()))
+	}
 	ct := mime.TypeByExtension(path.Ext(clean))
 	id := s.router.allocChannelID()
-	if err := s.WriteCtrl(wire.NewShellAssetReadOK(m.ReqID, id, st.Size(), ct)); err != nil {
+	if err := s.WriteCtrl(wire.NewShellAssetReadOK(m.ReqID, id, int64(len(data)), ct)); err != nil {
 		return err
 	}
 	// Bind so the shell knows the channel id maps to an asset stream.
@@ -307,22 +318,16 @@ func (s *ShellSession) handleAssetRead(m wire.ShellAssetRead) error {
 	}); err != nil {
 		return err
 	}
-	// Stream bytes. Same Interactive class as bundle delivery so the
+	// Stream in chunks, slicing the stable buffer. Interactive class so the
 	// strict-priority scheduler can't let the Unbind overtake data.
 	const chunkSize = 64 * 1024
-	buf := make([]byte, chunkSize)
-	for {
-		n, rerr := f.Read(buf)
-		if n > 0 {
-			if werr := s.WriteRawFrameClass(id, buf[:n], wire.ClassInteractive); werr != nil {
-				return werr
-			}
+	for off := 0; off < len(data); off += chunkSize {
+		end := off + chunkSize
+		if end > len(data) {
+			end = len(data)
 		}
-		if rerr == io.EOF {
-			break
-		}
-		if rerr != nil {
-			return s.WriteCtrl(wire.NewShellChannelUnbind(id, "read error: "+rerr.Error()))
+		if werr := s.WriteRawFrameClass(id, data[off:end], wire.ClassInteractive); werr != nil {
+			return werr
 		}
 	}
 	return s.WriteCtrl(wire.NewShellChannelUnbind(id, "asset complete"))
