@@ -96,7 +96,7 @@ const BulkRow: Component<{ job: BulkJob; onCancel: () => void }> = (props) => {
       >
         <span
           style={{
-            color: '#ddd',
+            color: tokens.fg,
             overflow: 'hidden',
             'text-overflow': 'ellipsis',
             'white-space': 'nowrap',
@@ -126,7 +126,7 @@ const BulkRow: Component<{ job: BulkJob; onCancel: () => void }> = (props) => {
             onClick={props.onCancel}
             style={{
               background: 'transparent',
-              color: '#ddd',
+              color: tokens.fg,
               border: `1px solid ${tokens.borderMenu}`,
               'border-radius': '3px',
               padding: '1px 6px',

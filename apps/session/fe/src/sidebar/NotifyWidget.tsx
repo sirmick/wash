@@ -122,7 +122,7 @@ const NotifyRow: Component<{ entry: NotifyEntry; onMarkRead: () => void }> = (pr
         <span
           style={{
             'font-weight': 600,
-            color: '#ddd',
+            color: tokens.fg,
             overflow: 'hidden',
             'text-overflow': 'ellipsis',
             'white-space': 'nowrap',

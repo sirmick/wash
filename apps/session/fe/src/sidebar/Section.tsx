@@ -9,7 +9,7 @@
 
 import type { Component, JSX } from 'solid-js';
 import { Show } from 'solid-js';
-import { washAssetUrl } from '@wash/ui';
+import { tokens, washAssetUrl } from '@wash/ui';
 
 export type SectionState = 'collapsed' | 'expanded';
 
@@ -47,10 +47,10 @@ export const Section: Component<SectionProps> = (props) => {
     gap: '6px',
     padding: '0 8px',
     cursor: 'pointer',
-    background: 'rgba(255,255,255,0.02)',
-    'border-bottom': '1px solid #1f1f30',
+    background: `color-mix(in srgb, ${tokens.fg} 4%, transparent)`,
+    'border-bottom': `1px solid ${tokens.borderMenu}`,
     'user-select': 'none',
-    color: '#ddd',
+    color: tokens.fg,
     font: '12px ui-sans-serif,system-ui,sans-serif',
     'letter-spacing': '0.02em',
     'text-transform': 'uppercase',
@@ -66,7 +66,7 @@ export const Section: Component<SectionProps> = (props) => {
     'justify-content': 'center',
     transition: 'transform 120ms',
     transform: isOpen() ? 'rotate(90deg)' : 'rotate(0deg)',
-    color: props.accent ?? '#8a8a9a',
+    color: props.accent ?? tokens.fgMuted,
   });
 
   return (
@@ -85,7 +85,7 @@ export const Section: Component<SectionProps> = (props) => {
           <span
             style={{
               'flex-shrink': 0,
-              color: props.iconColor ?? props.accent ?? '#a0a0b0',
+              color: props.iconColor ?? props.accent ?? tokens.fgMuted,
               display: 'inline-flex',
               'align-items': 'center',
             }}
@@ -111,7 +111,7 @@ export const Section: Component<SectionProps> = (props) => {
               'font-size': '10px',
               padding: '1px 6px',
               'border-radius': '8px',
-              background: props.accent ?? '#3a3a5a',
+              background: props.accent ?? tokens.accentBlue,
               color: '#fff',
               'font-weight': 700,
               'text-transform': 'none',
@@ -127,8 +127,8 @@ export const Section: Component<SectionProps> = (props) => {
           data-testid={`sidebar-section-body-${props.id}`}
           style={{
             padding: '8px 10px',
-            'border-bottom': '1px solid #1f1f30',
-            color: '#ccc',
+            'border-bottom': `1px solid ${tokens.borderMenu}`,
+            color: tokens.fg,
             font: '12px ui-sans-serif,system-ui,sans-serif',
           }}
         >

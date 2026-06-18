@@ -8,6 +8,7 @@
 // and broadcasts a session.patch back, which lands in the store.
 
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
+import { tokens } from '@wash/ui';
 import { registerMountedElement, unregisterMountedElement } from './api';
 import { tagFor, compoundInstanceId } from './clients';
 import { hostColor } from './host-colors';
@@ -208,16 +209,16 @@ export function FloatingWindow(props: WindowProps) {
     const chromeless = !!props.win.chromeless;
     const base = {
       position: 'absolute' as const,
-      background: chromeless ? 'transparent' : '#222',
+      background: chromeless ? 'transparent' : tokens.bgWindow,
       border: chromeless
         ? 'none'
         : isFocused(props.win)
-          ? '1px solid #66c'
-          : '1px solid #444',
+          ? `1px solid ${tokens.borderFocus}`
+          : `1px solid ${tokens.borderWindow}`,
       'box-shadow': '0 6px 24px rgba(0,0,0,0.4)',
       display: 'flex',
       'flex-direction': 'column' as const,
-      color: '#eee',
+      color: tokens.fg,
       'box-sizing': 'border-box' as const,
       // Render from the FE's global stacking value (gz), not the router's
       // per-router z: the latter collides across origins, so a focused remote
@@ -304,11 +305,11 @@ export function FloatingWindow(props: WindowProps) {
   // is a brighter red regardless of focus — the tombstone state needs
   // to be unmistakable.
   const titlebarBackground = () => {
-    if (props.win.crashed) return '#8a1d1d';
+    if (props.win.crashed) return tokens.borderDanger;
     if (props.win.isRoot) {
-      return isFocused(props.win) ? '#7a1f1f' : '#5a1818';
+      return isFocused(props.win) ? tokens.bgDanger : `color-mix(in srgb, ${tokens.bgDanger} 70%, #000)`;
     }
-    return isFocused(props.win) ? '#33387a' : '#2a2a2a';
+    return isFocused(props.win) ? tokens.bgRowSelected : tokens.bgMenu;
   };
 
   // Icon color matches the source app's manifest accent. Apps that
@@ -534,8 +535,8 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
       style={{
         position: 'absolute',
         inset: '0',
-        background: '#1a0e0e',
-        color: '#f4e4e4',
+        background: `color-mix(in srgb, ${tokens.bgDanger} 55%, #000)`,
+        color: tokens.fgDanger,
         display: 'flex',
         'flex-direction': 'column',
         'box-sizing': 'border-box',
@@ -548,9 +549,9 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
           'align-items': 'center',
           gap: '8px',
           padding: '10px 12px',
-          background: '#3a0f0f',
-          'border-bottom': '1px solid #5a1818',
-          color: '#ffd0d0',
+          background: tokens.bgDanger,
+          'border-bottom': `1px solid ${tokens.borderDanger}`,
+          color: tokens.fgDanger,
           font: '13px ui-sans-serif, system-ui, sans-serif',
         }}
       >
@@ -571,9 +572,9 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
             display: 'flex',
             'align-items': 'center',
             gap: '4px',
-            background: copied() ? '#2d5a2d' : '#5a1818',
-            color: '#fff',
-            border: '1px solid #7a2828',
+            background: copied() ? tokens.bgSuccess : tokens.bgDanger,
+            color: tokens.fg,
+            border: `1px solid ${tokens.borderDanger}`,
             'border-radius': '3px',
             padding: '4px 8px',
             cursor: 'pointer',
@@ -594,8 +595,8 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
           flex: 1,
           margin: '0',
           padding: '10px 12px',
-          background: '#10070a',
-          color: '#f4d0d0',
+          background: `color-mix(in srgb, ${tokens.bgDanger} 40%, #000)`,
+          color: tokens.fgDanger,
           border: 'none',
           outline: 'none',
           resize: 'none',
@@ -612,7 +613,7 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
 
 const titlebarBtnStyle = {
   background: 'transparent',
-  color: '#eee',
+  color: tokens.fg,
   border: 'none',
   'font-size': '12px',
   cursor: 'pointer',

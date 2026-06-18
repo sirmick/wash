@@ -8,7 +8,7 @@
 
 import type { Component } from 'solid-js';
 import { Show } from 'solid-js';
-import { NowPlaying, TransportControls, VolumeSlider } from '@wash/ui';
+import { NowPlaying, TransportControls, VolumeSlider, tokens } from '@wash/ui';
 
 export interface AudioSource {
   id: string;
@@ -100,7 +100,7 @@ export const AudioWidget: Component<AudioWidgetProps> = (props) => {
                 style={{
                   flex: 1,
                   height: '4px',
-                  background: '#23252c',
+                  background: tokens.bgInset,
                   'border-radius': '2px',
                   overflow: 'hidden',
                 }}
@@ -110,7 +110,7 @@ export const AudioWidget: Component<AudioWidgetProps> = (props) => {
                   style={{
                     height: '100%',
                     width: `${src().dur_sec ? Math.min(100, (src().pos_sec / src().dur_sec) * 100) : 0}%`,
-                    background: '#30c060',
+                    background: tokens.accentGreen,
                   }}
                 />
               </div>

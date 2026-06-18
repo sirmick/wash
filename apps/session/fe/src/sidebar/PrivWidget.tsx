@@ -94,10 +94,10 @@ const LockBar: Component<{ locked: () => boolean; onLock: () => void }> = (props
         'align-items': 'center',
         'justify-content': 'space-between',
         padding: '4px 6px',
-        background: props.locked() ? 'rgba(80,80,100,0.18)' : 'rgba(160,60,60,0.22)',
+        background: props.locked() ? `color-mix(in srgb, ${tokens.fgMuted} 18%, transparent)` : `color-mix(in srgb, ${tokens.accentRed} 22%, transparent)`,
         'border-radius': '3px',
         'font-size': '11px',
-        color: '#ddd',
+        color: tokens.fg,
       }}
     >
       <span style={{ display: 'inline-flex', 'align-items': 'center', gap: '6px' }}>
@@ -113,8 +113,8 @@ const LockBar: Component<{ locked: () => boolean; onLock: () => void }> = (props
           onClick={props.onLock}
           style={{
             background: 'transparent',
-            color: '#ddd',
-            border: '1px solid #6a2a2a',
+            color: tokens.fg,
+            border: `1px solid ${tokens.borderDanger}`,
             'border-radius': '3px',
             padding: '1px 6px',
             cursor: 'pointer',
@@ -162,7 +162,7 @@ const PrivRow: Component<{ req: PrivReq; onApprove: () => void; onReject: () => 
       >
         <span
           style={{
-            color: '#ddd',
+            color: tokens.fg,
             overflow: 'hidden',
             'text-overflow': 'ellipsis',
             'white-space': 'nowrap',
@@ -222,7 +222,7 @@ const PrivRow: Component<{ req: PrivReq; onApprove: () => void; onReject: () => 
             onClick={props.onReject}
             style={{
               background: 'transparent',
-              color: '#ddd',
+              color: tokens.fg,
               border: `1px solid ${tokens.borderMenu}`,
               'border-radius': '3px',
               padding: '2px 8px',

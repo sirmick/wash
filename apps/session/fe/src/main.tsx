@@ -179,7 +179,7 @@ function accentFor(app: CatalogApp): string {
 // menu and command palette. Bright enough to stand out on the dark
 // menu background but not so loud that the row feels destructive.
 // Single source of truth so both rendering sites stay consistent.
-const ROOT_ICON_COLOR = '#e26060';
+const ROOT_ICON_COLOR = tokens.accentRed;
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ---- reactive state ----
@@ -1313,7 +1313,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
                   <span
                     data-testid="desktop-banner-router-dev"
                     style={{
-                      background: '#a04040',
+                      background: tokens.accentRed,
                       color: '#fff',
                       padding: '0 6px',
                       'border-radius': '2px',
@@ -1450,8 +1450,8 @@ const PagerCell: Component<{
     top: `${top()}px`,
     width: `${props.cellW}px`,
     height: `${props.cellH}px`,
-    background: props.active ? 'rgba(80,90,180,0.28)' : 'rgba(255,255,255,0.04)',
-    border: props.active ? '1.5px solid #6a7adf' : '1px solid #2a2a4a',
+    background: props.active ? `color-mix(in srgb, ${tokens.accentBlue} 28%, transparent)` : `color-mix(in srgb, ${tokens.fg} 4%, transparent)`,
+    border: props.active ? `1.5px solid ${tokens.accentBlue}` : `1px solid ${tokens.borderMenu}`,
     'border-radius': '3px',
     cursor: 'pointer',
     overflow: 'hidden',
@@ -1509,8 +1509,8 @@ const PagerWindow: Component<{
       top: `${r.top}px`,
       width: `${r.width}px`,
       height: `${r.height}px`,
-      background: props.win.focused ? 'rgba(120,140,240,0.55)' : 'rgba(200,210,240,0.18)',
-      border: `1px solid ${props.win.focused ? '#a0b0ff' : '#5a6090'}`,
+      background: props.win.focused ? `color-mix(in srgb, ${tokens.accentBlue} 60%, transparent)` : `color-mix(in srgb, ${tokens.fgMuted} 28%, transparent)`,
+      border: `1px solid ${props.win.focused ? tokens.accentBlue : tokens.borderFocus}`,
       'border-radius': '1.5px',
       'box-sizing': 'border-box',
       cursor: 'pointer',
@@ -1550,7 +1550,7 @@ const IconButton: Component<{
       onMouseLeave={() => setHover(false)}
       onClick={props.onClick}
       style={{
-        background: hover() ? 'rgba(255,255,255,0.08)' : 'transparent',
+        background: hover() ? `color-mix(in srgb, ${tokens.fg} 8%, transparent)` : 'transparent',
         color: tokens.fg,
         border: '1px solid transparent',
         width: '32px',
@@ -1594,9 +1594,9 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
         window.wash.closeWindow(props.win.windowID, props.win.origin);
       }}
       style={{
-        background: props.win.focused ? '#33387a' : 'rgba(255,255,255,0.04)',
+        background: props.win.focused ? tokens.bgRowSelected : `color-mix(in srgb, ${tokens.fg} 4%, transparent)`,
         color: tokens.fg,
-        border: `1px solid ${props.win.focused ? '#4a4f8d' : 'transparent'}`,
+        border: `1px solid ${props.win.focused ? tokens.borderFocus : 'transparent'}`,
         padding: '0 12px',
         height: '28px',
         'border-radius': '4px',
@@ -1742,7 +1742,7 @@ const Palette: Component<{
         'align-items': 'flex-start',
         'justify-content': 'center',
         'padding-top': '14vh',
-        background: 'rgba(0,0,0,0.35)',
+        background: tokens.bgBackdrop,
         'z-index': 10002,
         animation: 'wash-fade-in 120ms ease-out',
       }}
@@ -1750,7 +1750,7 @@ const Palette: Component<{
       <div
         style={{
           background: tokens.bgWindow,
-          border: '1px solid #2a2a4a',
+          border: `1px solid ${tokens.borderMenu}`,
           'border-radius': '8px',
           'min-width': '380px',
           'max-width': '520px',
@@ -1774,7 +1774,7 @@ const Palette: Component<{
             background: 'transparent',
             color: tokens.fg,
             border: 'none',
-            'border-bottom': '1px solid #2a2a4a',
+            'border-bottom': `1px solid ${tokens.borderMenu}`,
             outline: 'none',
             font: '15px system-ui,sans-serif',
           }}
@@ -1827,7 +1827,7 @@ const PaletteRow: Component<{
         gap: '10px',
         width: '100%',
         padding: '8px 16px',
-        background: props.selected ? '#2a2a4a' : 'transparent',
+        background: props.selected ? tokens.bgRowSelected : 'transparent',
         color: tokens.fg,
         border: 'none',
         'text-align': 'left',
@@ -1885,10 +1885,10 @@ const taskbarStyle: JSX.CSSProperties = {
   right: 0,
   bottom: 0,
   height: '40px',
-  background: 'rgba(15,15,30,0.85)',
+  background: `color-mix(in srgb, ${tokens.bgMenu} 85%, transparent)`,
   'backdrop-filter': 'blur(10px)',
   '-webkit-backdrop-filter': 'blur(10px)',
-  'border-top': '1px solid #2a2a4a',
+  'border-top': `1px solid ${tokens.borderMenu}`,
   display: 'flex',
   'align-items': 'center',
   gap: '4px',
@@ -1904,13 +1904,13 @@ const taskbarStyleTop: JSX.CSSProperties = {
   bottom: undefined,
   top: 0,
   'border-top': undefined,
-  'border-bottom': '1px solid #2a2a4a',
+  'border-bottom': `1px solid ${tokens.borderMenu}`,
 };
 
 const separatorStyle: JSX.CSSProperties = {
   width: '1px',
   height: '22px',
-  background: '#2a2a4a',
+  background: tokens.borderMenu,
   margin: '0 4px',
   'flex-shrink': 0,
 };
@@ -1928,7 +1928,7 @@ const windowListStyle: JSX.CSSProperties = {
 const screenshotStatusStyle: JSX.CSSProperties = {
   'font-size': '12px',
   transition: 'opacity 0.25s',
-  color: '#9aa',
+  color: tokens.fgMuted,
   'white-space': 'nowrap',
   'pointer-events': 'none',
 };
