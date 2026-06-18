@@ -1017,6 +1017,12 @@ window.wash = {
   },
   catalog: () => catalogSub.value,
   onCatalog: (cb) => catalogSub.on(cb),
+  // Pull a static asset (theme wallpaper, icon, …) from the router's
+  // asset FS over the WS bus — transport-agnostic, so it works in the
+  // in-browser VM where HTTP/ingress don't. Resolves from the runtime
+  // drop spot (~/.config/wash/assets) or the embedded chrome. Always
+  // the local router (asset.read is local-only).
+  fetchAsset: (path) => washFetch((msg) => conn.sendCtrl(msg), path),
   catalogFor: (origin) => catalogFor(origin),
   onRemoteCatalog: (cb) => remoteCatalogSub.on((ev) => { if (ev) cb(ev); }),
   launchOn(origin, appID) {

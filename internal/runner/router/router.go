@@ -116,14 +116,54 @@ func defaultAppsDir() string {
 	return filepath.Dir(exe)
 }
 
-// shellAssets exposes the embedded shell-runtime directory rooted at
-// the "assets" subtree as the HTTP server's filesystem.
+// shellAssets exposes the shell-runtime filesystem served over HTTP and
+// the transport-agnostic asset.read channel. It's an overlay: a runtime
+// drop directory (~/.config/wash/assets) shadows the embedded chrome, so
+// a user can drop assets — theme wallpapers, icons — there and have them
+// served live with no rebuild, while built-in chrome stays in the binary.
 func shellAssets() (http.FileSystem, error) {
 	sub, err := fs.Sub(assetsFS, "assets")
 	if err != nil {
 		return nil, err
 	}
-	return http.FS(sub), nil
+	embedded := http.FS(sub)
+	dir := userAssetsDir()
+	if dir == "" {
+		return embedded, nil
+	}
+	return overlayFS{disk: http.Dir(dir), embedded: embedded}, nil
+}
+
+// userAssetsDir is the runtime drop spot overlaid on the embedded
+// assets: $XDG_CONFIG_HOME/wash/assets (or ~/.config/wash/assets). A
+// dedicated subdir, not ~/.config/wash itself, so config files
+// (desktop.json) are never web-served. "" if no home is resolvable.
+func userAssetsDir() string {
+	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
+		return filepath.Join(d, "wash", "assets")
+	}
+	if h, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(h, ".config", "wash", "assets")
+	}
+	return ""
+}
+
+// overlayFS serves a path from the disk drop spot when it exists there,
+// else from the embedded fallback. Disk wins, so a dropped file shadows
+// a built-in of the same name. The drop spot is the user's own config
+// dir (trusted); a missing disk file simply falls through to the embed.
+type overlayFS struct {
+	disk     http.FileSystem
+	embedded http.FileSystem
+}
+
+func (o overlayFS) Open(name string) (http.File, error) {
+	if o.disk != nil {
+		if f, err := o.disk.Open(name); err == nil {
+			return f, nil
+		}
+	}
+	return o.embedded.Open(name)
 }
 
 // Run drives the wash-router with the given argv (excluding the

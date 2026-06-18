@@ -1,74 +1,84 @@
-// Design tokens for @wash/ui. Hardcoded dark theme today; a future
-// theme switcher would swap this object behind a context provider.
+// Design tokens for @wash/ui. Dark theme by default; the color values
+// resolve through CSS custom properties so a "pack" can re-skin the
+// whole desktop live (see web/lib/src/packs.ts). Each color is
+// `var(--wash-<name>, <hex>)`: the literal hex stays as the fallback,
+// so anything rendering before a pack is applied — or with no pack at
+// all — looks exactly as it did before. A pack sets the matching
+// `--wash-*` variables on document.documentElement; because native
+// apps render into light DOM (see define-app.tsx), those vars cascade
+// into every open window and re-theme it with no re-render.
+//
 // Components reference these names rather than literal hex codes so
-// future-themers have one place to change.
+// there's still one place to change. Non-color tokens (spacing, radii,
+// fonts, shadows, z-index, animation) stay literal — they're layout,
+// not palette, and packs don't touch them.
 
 export const tokens = {
   // Surfaces.
-  bgWindow: '#181828',
-  bgMenu: '#15152a',
-  bgInset: '#10101a', // sunken surface — inputs, log/code panes; darker than the window
-  bgRow: 'transparent',
-  bgRowHover: '#202037',
-  bgRowSelected: '#2a2a4a',
-  bgBackdrop: 'rgba(0,0,0,0.45)',
+  bgWindow: 'var(--wash-bg-window, #181828)',
+  bgMenu: 'var(--wash-bg-menu, #15152a)',
+  bgInset: 'var(--wash-bg-inset, #10101a)', // sunken surface — inputs, log/code panes; darker than the window
+  bgRow: 'var(--wash-bg-row, transparent)',
+  bgRowHover: 'var(--wash-bg-row-hover, #202037)',
+  bgRowSelected: 'var(--wash-bg-row-selected, #2a2a4a)',
+  bgBackdrop: 'var(--wash-bg-backdrop, rgba(0,0,0,0.45))',
   // Drag-and-drop landing zone. A blue-tinted surface that reads
   // clearly different from the purple-grey row selection, so "this is
   // where the drop lands" is unmistakable during a drag. Pairs with
   // borderDropTarget (a solid accent-blue ring).
-  bgDropTarget: '#1e2b50',
+  bgDropTarget: 'var(--wash-bg-drop-target, #1e2b50)',
 
   // Borders.
-  borderMenu: '#2a2a3a',
-  borderWindow: '#2a2a3a',
-  borderFocus: '#3a3a6a',
-  borderDropTarget: '#6090e0', // == accentBlue; the drop-zone ring
+  borderMenu: 'var(--wash-border-menu, #2a2a3a)',
+  borderWindow: 'var(--wash-border-window, #2a2a3a)',
+  borderFocus: 'var(--wash-border-focus, #3a3a6a)',
+  borderDropTarget: 'var(--wash-border-drop-target, #6090e0)', // == accentBlue; the drop-zone ring
 
   // Foreground.
-  fg: '#eee',
-  fgMuted: '#888',
-  fgDim: '#666',
+  fg: 'var(--wash-fg, #eee)',
+  fgMuted: 'var(--wash-fg-muted, #888)',
+  fgDim: 'var(--wash-fg-dim, #666)',
 
   // Danger / destructive accents (delete, replace).
-  bgDanger: '#7a1f1f',
-  borderDanger: '#a02d2d',
-  fgDanger: '#fca5a5',
+  bgDanger: 'var(--wash-bg-danger, #7a1f1f)',
+  borderDanger: 'var(--wash-border-danger, #a02d2d)',
+  fgDanger: 'var(--wash-fg-danger, #fca5a5)',
 
   // Semantic status tones — bg/fg pairs for state badges and chips
   // (service active/failed, package install ok/fail, vscode warn…).
   // One vocabulary so every app's status pill reads the same.
-  bgSuccess: '#1c3d24',
-  fgSuccess: '#86efac',
-  bgWarning: '#3a3a1c',
-  fgWarning: '#fde047',
-  bgInfo: '#1c2d3d',
-  fgInfo: '#93c5fd',
-  bgNeutral: '#1f1f2a', // pairs with fgMuted for "inactive/static"
+  bgSuccess: 'var(--wash-bg-success, #1c3d24)',
+  fgSuccess: 'var(--wash-fg-success, #86efac)',
+  bgWarning: 'var(--wash-bg-warning, #3a3a1c)',
+  fgWarning: 'var(--wash-fg-warning, #fde047)',
+  bgInfo: 'var(--wash-bg-info, #1c2d3d)',
+  fgInfo: 'var(--wash-fg-info, #93c5fd)',
+  bgNeutral: 'var(--wash-bg-neutral, #1f1f2a)', // pairs with fgMuted for "inactive/static"
 
   // Permission-denied banner — distinct amber-brown so it reads as
   // "blocked, not broken" next to the red danger banner.
-  bgDenied: '#3a2a12',
-  borderDenied: '#7a5a20',
+  bgDenied: 'var(--wash-bg-denied, #3a2a12)',
+  borderDenied: 'var(--wash-border-denied, #7a5a20)',
 
   // Log/priority severities — text colors for log lines and level
   // strips, brighter than the status tones since they sit on rows.
   // See severityColor() for the syslog-priority → color mapping.
-  sevError: '#ff7a7a',
-  sevWarn: '#f0c050',
-  sevNotice: '#c0d8ff',
-  sevInfo: '#bbb',
-  sevDebug: '#666',
+  sevError: 'var(--wash-sev-error, #ff7a7a)',
+  sevWarn: 'var(--wash-sev-warn, #f0c050)',
+  sevNotice: 'var(--wash-sev-notice, #c0d8ff)',
+  sevInfo: 'var(--wash-sev-info, #bbb)',
+  sevDebug: 'var(--wash-sev-debug, #666)',
 
   // Accent hues — soft pastels on dark, the same register as the
   // launcher's generated accentFor() hues so hand-picked and hashed
   // accents share one visual language. Used to tint icons/badges that
   // want a per-widget identity (e.g. the right-sidebar section icons).
-  accentRed: '#e26060',
-  accentAmber: '#e0b25f',
-  accentGreen: '#5fbf85',
-  accentCyan: '#5fb6c8',
-  accentBlue: '#6090e0',
-  accentViolet: '#9a90e0',
+  accentRed: 'var(--wash-accent-red, #e26060)',
+  accentAmber: 'var(--wash-accent-amber, #e0b25f)',
+  accentGreen: 'var(--wash-accent-green, #5fbf85)',
+  accentCyan: 'var(--wash-accent-cyan, #5fb6c8)',
+  accentBlue: 'var(--wash-accent-blue, #6090e0)',
+  accentViolet: 'var(--wash-accent-violet, #9a90e0)',
 
   // Spacing.
   spaceXs: 4,

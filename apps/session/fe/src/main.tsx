@@ -10,7 +10,8 @@
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Menu, MenuItem, defineWashApp, tokens, washAssetUrl } from '@wash/ui';
+import { Menu, MenuItem, applyScheme, defineWashApp, getPack, tokens, washAssetUrl } from '@wash/ui';
+import type { Pack } from '@wash/ui';
 import { toBlob } from 'html-to-image';
 import { Camera, Search, PanelRightOpen } from 'lucide-solid';
 import { Sidebar, type SidebarMode } from './sidebar/Sidebar';
@@ -64,11 +65,15 @@ interface WindowInfo {
   viewport: { vx: number; vy: number };
 }
 
-// DesktopConfigMsg mirrors the BE's desktop.config app_msg. Bytes
-// arrive as base64 — the router CBOR→JSON normalizer encodes byte
-// strings that way (see internal/router/app_session.go toJSON).
+// DesktopConfigMsg mirrors the BE's desktop.config app_msg. `bytes` is
+// present only for a user's *custom* wallpaper image; it arrives as
+// base64 (the router CBOR→JSON normalizer encodes byte strings that
+// way, see internal/router/app_session.go toJSON). For the built-in
+// default `bytes` is null and we render the bundled SVG instead — the
+// default never crosses the wire.
 interface DesktopConfigMsg {
   kind: 'desktop.config';
+  pack?: string;
   wallpaper: {
     mode?: 'cover' | 'contain' | 'tile' | 'center' | '';
     fallback_color?: string;
@@ -350,6 +355,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const AUDIO_ACCENT = tokens.accentGreen;
   let screenshotTimer = 0;
   let currentObjectURL: string | null = null;
+  // The active theme pack — drives the start-menu icon (the scheme vars
+  // and wallpaper are applied imperatively in applyDesktopConfig). Seeded
+  // with the default so the first paint, before desktop.config arrives,
+  // is already correct.
+  const [activePack, setActivePack] = createSignal<Pack>(getPack(null));
 
   let paletteInputEl: HTMLInputElement | undefined;
 
@@ -416,44 +426,72 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   // ---- desktop config ----
 
-  // applyDesktopConfig pushes wallpaper bytes + mode + fallback color
-  // onto the host element's inline style and updates clock/taskbar
-  // signals. Object URLs are revoked when they're replaced — the
-  // browser keeps the blob alive until the URL is gone, and a long
-  // session with many wallpaper changes would otherwise leak memory.
+  // applyDesktopConfig applies the active pack (scheme vars on the root
+  // + start icon + default wallpaper), then layers the wallpaper bytes /
+  // mode / fallback color onto the host element's inline style and
+  // updates clock/taskbar signals. Object URLs are revoked when they're
+  // replaced — the browser keeps the blob alive until the URL is gone,
+  // and a long session with many wallpaper changes would otherwise leak.
   const applyDesktopConfig = (cfg: DesktopConfigMsg) => {
-    const wp = cfg.wallpaper || {};
-    const fallback = wp.fallback_color || 'radial-gradient(circle at 30% 20%, #1a1a32 0, #0a0a18 75%)';
-    const mode = wp.mode || 'cover';
-    let imageCSS: string | null = null;
-    let nextURL: string | null = null;
-    if (wp.bytes) {
-      const bytes = decodeBase64(wp.bytes);
-      const blob = new Blob([bytes], { type: wp.mime || 'application/octet-stream' });
-      nextURL = URL.createObjectURL(blob);
-      imageCSS = `url("${nextURL}")`;
-    }
-    // Apply to host. Always set fallback as background-color so an
-    // image with transparency still shows it; image overlays on top.
-    const host = props.host;
-    if (imageCSS) {
-      host.style.background = `${imageCSS} center/cover no-repeat ${fallback.startsWith('radial-') ? '#0a0a18' : fallback}`;
-      host.style.backgroundSize = mode === 'tile' ? 'auto' : mode === 'center' ? 'auto' : mode; // 'cover' | 'contain'
-      host.style.backgroundRepeat = mode === 'tile' ? 'repeat' : 'no-repeat';
-      host.style.backgroundPosition = 'center';
-    } else {
-      host.style.background = fallback;
-      host.style.backgroundSize = '';
-      host.style.backgroundRepeat = '';
-      host.style.backgroundPosition = '';
-    }
-    if (currentObjectURL) URL.revokeObjectURL(currentObjectURL);
-    currentObjectURL = nextURL;
+    // Resolve + apply the pack. Scheme vars go on document.documentElement
+    // so they cascade into every open app (light DOM); see packs.ts.
+    const pack = getPack(cfg.pack);
+    applyScheme(document.documentElement, pack);
+    setActivePack(pack);
+
+    void applyWallpaper(pack, cfg.wallpaper || {});
 
     setClockFormat(cfg.clock?.format === '12h' ? '12h' : '24h');
     setShowSeconds(!!cfg.clock?.show_seconds);
     setTaskbarPosition(cfg.taskbar?.position === 'top' ? 'top' : 'bottom');
     setClock(formatClock(clockFormat(), showSeconds()));
+  };
+
+  // applyWallpaper paints the desktop background. The bytes come from
+  // one of two places: a user's *custom* image (base64 over the wire in
+  // the config) or the active pack's wallpaper asset, pulled from the
+  // router via window.wash.fetchAsset (the transport-agnostic asset.read
+  // channel — works in the in-browser VM where a plain HTTP url() can't).
+  // Async, so a generation counter drops a stale fetch if a newer
+  // desktop.config lands first. Object URLs are revoked when replaced.
+  let wallpaperGen = 0;
+  const applyWallpaper = async (pack: Pack, wp: DesktopConfigMsg['wallpaper']) => {
+    const gen = ++wallpaperGen;
+    const fallback = wp.fallback_color || 'radial-gradient(circle at 30% 20%, #1a1a32 0, #0a0a18 75%)';
+    const mode = wp.mode || 'cover';
+    const host = props.host;
+    // paint() applies the resolved background, but only if this is still
+    // the latest call; otherwise it revokes the just-made URL and bails.
+    const paint = (imageCSS: string, objURL: string | null) => {
+      if (gen !== wallpaperGen) {
+        if (objURL) URL.revokeObjectURL(objURL);
+        return;
+      }
+      host.style.background = `${imageCSS} center/cover no-repeat ${fallback.startsWith('radial-') ? '#0a0a18' : fallback}`;
+      host.style.backgroundSize = mode === 'tile' ? 'auto' : mode === 'center' ? 'auto' : mode; // 'cover' | 'contain'
+      host.style.backgroundRepeat = mode === 'tile' ? 'repeat' : 'no-repeat';
+      host.style.backgroundPosition = 'center';
+      if (currentObjectURL) URL.revokeObjectURL(currentObjectURL);
+      currentObjectURL = objURL;
+    };
+    if (wp.bytes) {
+      const url = URL.createObjectURL(new Blob([decodeBase64(wp.bytes)], { type: wp.mime || 'application/octet-stream' }));
+      paint(`url("${url}")`, url);
+      return;
+    }
+    if (!window.wash?.fetchAsset) {
+      // No transport-agnostic fetch (older shell / standalone): fall back
+      // to a plain HTTP asset URL. Won't render in the in-browser VM.
+      paint(`url("${washAssetUrl(pack.wallpaper)}")`, null);
+      return;
+    }
+    try {
+      const a = await window.wash.fetchAsset(pack.wallpaper);
+      const url = URL.createObjectURL(new Blob([a.bytes], { type: a.mime || 'image/svg+xml' }));
+      paint(`url("${url}")`, url);
+    } catch (err) {
+      console.warn(`wash-session: wallpaper fetch ${pack.wallpaper}:`, err);
+    }
   };
 
   // ---- screenshot ----
@@ -1002,7 +1040,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           title="Apps"
           onClick={toggleMenu}
         >
-          <img src={washAssetUrl('wash-logo.svg')} width="20" height="20" alt="wash" style={{ display: 'block' }} />
+          <Show
+            when={activePack().startIconSVG}
+            fallback={<img src={washAssetUrl('wash-logo.svg')} width="20" height="20" alt="wash" style={{ display: 'block' }} />}
+          >
+            <span
+              style={{ display: 'block', width: '20px', height: '20px' }}
+              // eslint-disable-next-line solid/no-innerhtml -- pack start icons are built-in, trusted SVG markup
+              innerHTML={activePack().startIconSVG}
+            />
+          </Show>
         </IconButton>
         <IconButton
           testid="palette-open"
