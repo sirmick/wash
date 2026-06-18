@@ -91,7 +91,15 @@ export interface FocusRef {
 }
 
 const [windows, setWindows] = createStore<Win[]>([]);
-const [focused, setFocused] = createSignal<FocusRef | null>(null);
+// focused is a (origin,windowID) ref, so it must compare by VALUE — without
+// this equals, re-focusing the already-focused window sets a fresh object each
+// time, firing the signal and re-rendering every focus-dependent view (e.g.
+// the taskbar pills). That recreated a pill's DOM between the two clicks of a
+// dblclick, so onDblClick never fired (taskbar pill → snap-to-viewport broke).
+const [focused, setFocused] = createSignal<FocusRef | null>(null, {
+  equals: (a, b) =>
+    a === b || (a != null && b != null && a.origin === b.origin && a.windowID === b.windowID),
+});
 const [desktop, setDesktop] = createSignal<DesktopMount | null>(null);
 
 // Global stacking counter — the FE's cross-origin z arbiter. Bumped on every

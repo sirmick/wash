@@ -35,7 +35,9 @@ const APPS: AppBundle[] = [
   // Session grew significantly in M4–M7: sidebar shell, 5 widget
   // components, bulk conflict + priv unlock overlays, and noble crypto
   // (P-256 / HKDF / AES-GCM, ~30 KB) for the priv password handshake.
-  { name: 'session', dir: 'apps/session/fe/dist', maxBytes: 170_000 },
+  // +~8 KB for the Remote sidebar widget's per-host app-launch dropdown
+  // (docs/REMOTE.md): icon list + popup menu.
+  { name: 'session', dir: 'apps/session/fe/dist', maxBytes: 185_000 },
   // about grew into the system-info panel: build/host/Go-runtime
   // process table/registered-apps/browser sections + sortable table.
   // 30 KB headroom keeps a brake on further growth.

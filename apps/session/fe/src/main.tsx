@@ -1526,6 +1526,7 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
   return (
     <button
       type="button"
+      data-testid="taskbar-pill"
       title={`${minimized() ? '[minimized] ' : ''}${props.win.title} — dblclick to jump to its viewport, right-click to close`}
       onClick={() => {
         if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID, props.win.origin);

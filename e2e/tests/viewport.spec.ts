@@ -68,7 +68,9 @@ test.describe('viewport', () => {
     await page.waitForTimeout(280);
 
     // About's titlebar appears in the taskbar as a pill. Dblclick it.
-    const pill = page.locator('wash-app-session button:has-text("About")').first();
+    // (Scoped by testid: "About" also names a sidebar section, so a bare
+    // button:has-text("About") could match that section's header instead.)
+    const pill = page.locator('[data-testid="taskbar-pill"]').filter({ hasText: 'About' }).first();
     await pill.dblclick();
     await page.waitForTimeout(280);
 
