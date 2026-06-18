@@ -173,6 +173,35 @@ function accentFor(app: CatalogApp): string {
 // Single source of truth so both rendering sites stay consistent.
 const ROOT_ICON_COLOR = tokens.accentRed;
 
+// describeErr coerces a thrown value into a legible string. html-to-image
+// and the DOM can reject with non-Error values (an Event, a failed <img>,
+// a plain object) — for those String(err) is the useless "[object Object]".
+// Tease out the real cause so the screenshot status + log name it.
+function describeErr(err: unknown): string {
+  if (err instanceof Error) return err.message || err.name;
+  if (typeof err === 'string') return err;
+  if (typeof HTMLImageElement !== 'undefined' && err instanceof HTMLImageElement) {
+    return `image failed: ${err.src || '(no src)'}`;
+  }
+  if (err instanceof Event) {
+    const t = err.target as { src?: string; href?: string } | null;
+    return `${err.type}${t?.src ? ` ${t.src}` : t?.href ? ` ${t.href}` : ''}`;
+  }
+  if (err && typeof err === 'object') {
+    const o = err as Record<string, unknown>;
+    if (typeof o.message === 'string' && o.message) return o.message;
+    if (typeof o.src === 'string') return `resource failed: ${o.src}`;
+    try {
+      const s = JSON.stringify(err);
+      if (s && s !== '{}') return s;
+    } catch {
+      /* circular — fall through */
+    }
+    return (err.constructor && err.constructor.name) || Object.prototype.toString.call(err);
+  }
+  return String(err);
+}
+
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ---- reactive state ----
   const [catalog, setCatalog] = createSignal<CatalogApp[]>(window.wash.catalog());
@@ -524,6 +553,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           pixelRatio: window.devicePixelRatio || 1,
           skipFonts: true,
           filter: (node) => !(node instanceof HTMLIFrameElement),
+          // If a single embedded image can't be inlined, substitute a
+          // transparent pixel instead of rejecting the whole capture.
+          imagePlaceholder:
+            'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC',
         }),
         new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
       ]);
@@ -539,7 +572,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       const name = (await resp.text()).trim();
       setStatus(`saved ${name}`, 4_000);
     } catch (err) {
-      fail(`error: ${err instanceof Error ? err.message : String(err)}`);
+      fail(`error: ${describeErr(err)}`);
     }
   };
 
