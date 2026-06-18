@@ -253,6 +253,10 @@ const retro: Pack = {
     // Desktop info banner sits over the dark synthwave, so it needs light
     // text even though the chrome text is black.
     '--wash-banner-fg': '#e6e9ee',
+    // Win9x-ish type + a raised light top edge on the taskbar (3D pop).
+    '--wash-font-sans': 'Tahoma, "MS Sans Serif", Geneva, Verdana, sans-serif',
+    '--wash-font-mono': '"Courier New", Courier, monospace',
+    '--wash-taskbar-top': '#f4f4f4',
   },
   wallpaper: 'wallpapers/retro.svg',
 };

@@ -1897,7 +1897,8 @@ const taskbarStyle: JSX.CSSProperties = {
   background: `color-mix(in srgb, var(--wash-taskbar-bg, ${tokens.bgInset}) 88%, transparent)`,
   'backdrop-filter': 'blur(10px)',
   '-webkit-backdrop-filter': 'blur(10px)',
-  'border-top': `1px solid ${tokens.borderMenu}`,
+  // Top edge: a pack can paint a raised highlight here (Retro does).
+  'border-top': `1px solid var(--wash-taskbar-top, ${tokens.borderMenu})`,
   display: 'flex',
   'align-items': 'center',
   gap: '4px',

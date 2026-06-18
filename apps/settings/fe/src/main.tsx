@@ -22,6 +22,7 @@ import {
   SmallBtn,
   defaultPackId,
   defineWashApp,
+  getPack,
   packs,
   tokens,
 } from '@wash/ui';
@@ -406,6 +407,10 @@ const DesktopPane: Component<{
         </div>
       </Section>
 
+      <Section title="Palette (read-only)">
+        <PaletteSwatches packId={props.pack} />
+      </Section>
+
       <Section title="Custom wallpaper">
         <div style={{ display: 'flex', gap: '12px', 'align-items': 'flex-start' }}>
           <Thumbnail color={props.fallback} />
@@ -577,6 +582,58 @@ const Swatch: Component<{ c: string }> = (props) => (
     }}
   />
 );
+
+// PaletteSwatches lists the active pack's --wash-* color tokens as a
+// read-only grid (swatch + name + value) so the palette can be reviewed
+// and critiqued by name. Non-color scheme entries (radius, fonts) skip.
+const PaletteSwatches: Component<{ packId: string }> = (props) => {
+  const colors = () =>
+    Object.entries(getPack(props.packId).scheme).filter(([, v]) => /^(#|rgb|color-mix)/.test(v));
+  return (
+    <div
+      style={{
+        display: 'grid',
+        'grid-template-columns': 'repeat(auto-fill, minmax(220px, 1fr))',
+        gap: '3px 16px',
+      }}
+    >
+      <For each={colors()}>
+        {([name, val]) => (
+          <div
+            data-testid={`palette-${name.replace('--wash-', '')}`}
+            title={`${name}: ${val}`}
+            style={{ display: 'flex', 'align-items': 'center', gap: '7px', overflow: 'hidden' }}
+          >
+            <span
+              style={{
+                width: '18px',
+                height: '14px',
+                background: val,
+                border: `1px solid ${tokens.borderMenu}`,
+                'border-radius': tokens.radiusSm,
+                'flex-shrink': 0,
+              }}
+            />
+            <span
+              style={{
+                color: tokens.fg,
+                font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+                overflow: 'hidden',
+                'text-overflow': 'ellipsis',
+                'white-space': 'nowrap',
+              }}
+            >
+              {name.replace('--wash-', '')}
+            </span>
+            <span style={{ color: tokens.fgDim, font: `${tokens.fontSizeSm} ${tokens.fontMono}`, 'flex-shrink': 0 }}>
+              {val}
+            </span>
+          </div>
+        )}
+      </For>
+    </div>
+  );
+};
 
 // normalizeHex coerces #fff / random text into a valid 7-char hex
 // for <input type=color> (which only accepts #rrggbb).

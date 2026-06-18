@@ -96,9 +96,11 @@ export const tokens = {
   radiusLg: 'var(--wash-radius-lg, 6px)',
   radiusXl: 'var(--wash-radius-xl, 8px)',
 
-  // Font.
-  fontSans: 'ui-sans-serif, system-ui, sans-serif',
-  fontMono: 'ui-monospace, Menlo, Consolas, monospace',
+  // Font. var()-backed so a pack can swap the family (e.g. Retro's
+  // Win9x-ish Tahoma/MS-Sans stack). The comma-bearing fallback is fine —
+  // everything after the var name's first comma is the var() fallback.
+  fontSans: 'var(--wash-font-sans, ui-sans-serif, system-ui, sans-serif)',
+  fontMono: 'var(--wash-font-mono, ui-monospace, Menlo, Consolas, monospace)',
   fontSizeSm: '11px',
   fontSizeMd: '12px',
   fontSizeBase: '13px',
