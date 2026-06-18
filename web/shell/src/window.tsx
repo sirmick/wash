@@ -8,7 +8,7 @@
 // and broadcasts a session.patch back, which lands in the store.
 
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
-import { tokens } from '@wash/ui';
+import { accentColor, tokens } from '@wash/ui';
 import { registerMountedElement, unregisterMountedElement } from './api';
 import { tagFor, compoundInstanceId } from './clients';
 import { hostColor } from './host-colors';
@@ -325,20 +325,14 @@ export function FloatingWindow(props: WindowProps) {
   };
 
   // Icon color matches the source app's manifest accent. Apps that
-  // didn't declare one fall back to a deterministic HSL hash of
-  // their element tag — same algorithm as the start menu so the
-  // launcher row and the titlebar icon agree. Root windows keep a
-  // muted off-white so the accent doesn't clash with the red
+  // didn't declare one are hashed onto the pack's accent ring by their
+  // element tag — same resolver as the start menu so the launcher row and
+  // the titlebar icon agree, and both re-skin with the pack. Root windows
+  // keep a muted off-white so the accent doesn't clash with the red
   // privilege stripe (which already carries the identity signal).
   const titlebarIconColor = () => {
     if (props.win.isRoot) return undefined;
-    if (props.win.accent) return props.win.accent;
-    let h = 0;
-    const k = props.win.element || props.win.instanceID;
-    for (let i = 0; i < k.length; i++) {
-      h = ((h << 5) - h + k.charCodeAt(i)) | 0;
-    }
-    return `hsl(${Math.abs(h) % 360} 55% 65%)`;
+    return accentColor(props.win.element || props.win.instanceID, props.win.accent);
   };
 
   return (

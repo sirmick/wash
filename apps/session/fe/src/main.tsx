@@ -10,7 +10,7 @@
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Menu, MenuItem, applyScheme, defineWashApp, getPack, tokens, washAssetUrl } from '@wash/ui';
+import { Menu, MenuItem, accentColor, applyScheme, defineWashApp, getPack, tokens, washAssetUrl } from '@wash/ui';
 import type { Pack } from '@wash/ui';
 import { toBlob } from 'html-to-image';
 import { Camera, Search, PanelRightOpen } from 'lucide-solid';
@@ -159,20 +159,12 @@ function rootEntryFor(src: CatalogApp): CatalogApp | null {
   };
 }
 
-// accentFor returns the brand color for a catalog row. Apps that
-// declare `accent` in their manifest get that exact color; the rest
-// fall back to a deterministic hue derived from the id so no
-// launcher row ends up monochrome. Saturation + lightness are fixed
-// so the palette stays in the same visual register as the
-// hand-picked accents — only the hue varies.
+// accentFor returns the brand color for a catalog row, resolved onto the
+// pack's themeable accent palette so launcher icons re-skin with the pack:
+// a manifest `accent` (hue name or hex) snaps to the nearest accent token;
+// apps without one are hashed deterministically onto the ring by id.
 function accentFor(app: CatalogApp): string {
-  if (app.accent) return app.accent;
-  let h = 0;
-  for (let i = 0; i < app.id.length; i++) {
-    h = ((h << 5) - h + app.id.charCodeAt(i)) | 0;
-  }
-  // Map to 0..359°, fixed S/L for "soft pastel on dark" look.
-  return `hsl(${Math.abs(h) % 360} 55% 65%)`;
+  return accentColor(app.id, app.accent);
 }
 
 // ROOT_ICON_COLOR — the tint applied to root-row icons in the start

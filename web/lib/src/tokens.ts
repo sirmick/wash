@@ -129,3 +129,82 @@ export const tokens = {
 } as const;
 
 export type Tokens = typeof tokens;
+
+// ---- accent resolution ----
+// Icon colors (launcher rows, titlebar/taskbar) map onto the six themeable
+// accent tokens so they re-skin with the pack, instead of baking a fixed
+// hsl()/hex. The hues below are the approximate angles of the default
+// accent hexes; a declared color snaps to the nearest, and an undeclared
+// one is hashed onto the ring deterministically.
+const ACCENT_RING: ReadonlyArray<{ token: string; hue: number }> = [
+  { token: tokens.accentRed, hue: 0 },
+  { token: tokens.accentAmber, hue: 40 },
+  { token: tokens.accentGreen, hue: 145 },
+  { token: tokens.accentCyan, hue: 191 },
+  { token: tokens.accentBlue, hue: 217 },
+  { token: tokens.accentViolet, hue: 250 },
+];
+const ACCENT_BY_NAME: Readonly<Record<string, string>> = {
+  red: tokens.accentRed,
+  amber: tokens.accentAmber,
+  green: tokens.accentGreen,
+  cyan: tokens.accentCyan,
+  blue: tokens.accentBlue,
+  violet: tokens.accentViolet,
+};
+
+// hueOfHex returns the HSL hue (0..359) of #rgb / #rrggbb, or null for a
+// non-hex or a gray (no meaningful hue to snap).
+function hueOfHex(color: string): number | null {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
+  if (!m) return null;
+  let hex = m[1];
+  if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+  const r = parseInt(hex.slice(0, 2), 16) / 255;
+  const g = parseInt(hex.slice(2, 4), 16) / 255;
+  const b = parseInt(hex.slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b);
+  const d = max - Math.min(r, g, b);
+  if (d === 0) return null; // gray
+  let h: number;
+  if (max === r) h = ((g - b) / d) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  return ((Math.round(h * 60) % 360) + 360) % 360;
+}
+
+function nearestAccent(hue: number): string {
+  let best = ACCENT_RING[0];
+  let bestDist = 360;
+  for (const a of ACCENT_RING) {
+    const raw = Math.abs(a.hue - hue);
+    const dist = Math.min(raw, 360 - raw);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = a;
+    }
+  }
+  return best.token;
+}
+
+/**
+ * accentColor resolves an icon's brand color to a pack-themeable accent
+ * token, so it re-skins when the pack changes:
+ *  - a hue name ("red"|"amber"|"green"|"cyan"|"blue"|"violet") → that token;
+ *  - a hex color → the nearest accent hue's token;
+ *  - any other declared color (e.g. a gray) → used verbatim;
+ *  - nothing declared → `seed` hashed deterministically onto the ring, so
+ *    every icon is colored and the same seed always lands on the same hue.
+ */
+export function accentColor(seed: string, declared?: string): string {
+  if (declared) {
+    const named = ACCENT_BY_NAME[declared.toLowerCase()];
+    if (named) return named;
+    const hue = hueOfHex(declared);
+    if (hue !== null) return nearestAccent(hue);
+    return declared;
+  }
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = ((h << 5) - h + seed.charCodeAt(i)) | 0;
+  return ACCENT_RING[Math.abs(h) % ACCENT_RING.length].token;
+}
