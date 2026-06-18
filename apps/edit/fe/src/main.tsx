@@ -230,7 +230,7 @@ interface Tab {
   wysCache?: string;
 }
 
-const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
+const App: Component<{ instance: string; host: HTMLElement; origin: string }> = (props) => {
   // ---- reactive state ----
 
   // listings is a directory cache; key = absolute path. The tree
@@ -2576,6 +2576,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                     <Show when={t.channelID > 0}>
                       <Terminal
                         channelId={t.channelID}
+                        origin={props.origin}
                         onReady={(api) => {
                           termAPIs.set(t.channelID, api);
                           if (activeTermID() === t.id) api.focus();

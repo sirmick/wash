@@ -48,6 +48,10 @@ interface WashPanelDesc {
 }
 
 interface WashWindowInfo {
+  // Origin (router) the window belongs to; '' / 'local' for this machine,
+  // a remote host's origin for a tunnelled window. Pair (origin, windowID)
+  // is the only unique window identity — ids are per-router.
+  origin: string;
   windowID: number;
   instanceID: string;
   element: string;
@@ -69,6 +73,19 @@ interface WashGlobals {
   sendAppMsgTo(recipient: WashRecipient, data: unknown): void;
   catalog(): WashCatalogApp[];
   onCatalog(cb: (apps: WashCatalogApp[]) => void): () => void;
+  // Remote-host APIs (docs/REMOTE.md §6.1), used by wash-connect.
+  // catalogFor returns the apps a connected origin advertises (LOCAL or a
+  // remote host reached over an ssh -L tunnel); onRemoteCatalog fires when
+  // any remote catalog changes (apps empty on disconnect). launchOn asks
+  // the router at `origin` to spawn appID — the only launch path for a
+  // remote host, which runs --no-session. attachRemote/detachRemote open
+  // and tear down the second connection the supervisor's endpoint points
+  // at, compositing the host's windows into this desktop.
+  catalogFor(origin: string): WashCatalogApp[];
+  onRemoteCatalog(cb: (ev: { origin: string; apps: WashCatalogApp[] }) => void): () => void;
+  launchOn(origin: string, appID: string): void;
+  attachRemote(origin: string, url?: string): void;
+  detachRemote(origin: string): void;
   // App-supplied settings panels. loadSettingsPanel fetches+imports the
   // panel bundle so its custom element is defined; the promise resolves
   // once it's mountable. Used by the settings app to host panels other
@@ -78,13 +95,18 @@ interface WashGlobals {
   loadSettingsPanel(appID: string): Promise<void>;
   windows(): WashWindowInfo[];
   onWindowsChanged(cb: (windows: WashWindowInfo[]) => void): () => void;
-  focusWindow(id: number): void;
-  closeWindow(id: number): void;
-  moveWindow(id: number, x: number, y: number): void;
-  resizeWindow(id: number, w: number, h: number): void;
-  minimizeWindow(id: number): void;
-  maximizeWindow(id: number): void;
-  restoreWindow(id: number): void;
+  // origin (optional) addresses the intent to a specific router. Window ids
+  // are per-router, so two origins routinely share id 1; pass the window's
+  // origin (from WashWindowInfo / props.origin) when known so a remote
+  // window's drag/focus doesn't land on the same-id local window. Omitted →
+  // resolved by bare id against the merged window list.
+  focusWindow(id: number, origin?: string): void;
+  closeWindow(id: number, origin?: string): void;
+  moveWindow(id: number, x: number, y: number, origin?: string): void;
+  resizeWindow(id: number, w: number, h: number, origin?: string): void;
+  minimizeWindow(id: number, origin?: string): void;
+  maximizeWindow(id: number, origin?: string): void;
+  restoreWindow(id: number, origin?: string): void;
   // Virtual-desktop viewport API. The shell pans a viewport-sized
   // camera over a VIEWPORTS_PER_AXIS² plane; setViewport switches
   // cells with a CSS transition.
@@ -96,6 +118,13 @@ interface WashGlobals {
   log(level: WashLogLevel, source: string, msg: string, stack?: string): void;
   openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
   writeRaw(channelID: number, bytes: Uint8Array): void;
+  // Origin-scoped raw API (docs/REMOTE.md §4): an app that can run on a
+  // remote host routes its raw channels (pty, file stream) to that host's
+  // connection via these, passing its props.origin — bare openRawChannel/
+  // writeRaw above always address the LOCAL router.
+  openRawChannelFor(origin: string, channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
+  writeRawFor(origin: string, channelID: number, bytes: Uint8Array): void;
+  rawBufferedAmountFor(origin: string): number;
   // Bytes queued in the shell socket's send buffer. A bulk producer
   // streaming over writeRaw (e.g. fm's upload) polls this to pace
   // itself, so it doesn't head-of-line block control frames (like a

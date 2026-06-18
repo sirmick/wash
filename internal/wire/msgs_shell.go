@@ -32,6 +32,25 @@ const (
 	//     (direct)}; router resolves and forwards as EvtAppMsg.
 	TShellAppMsgSend = "app_msg.send"
 	TShellLog        = "log"
+	// Shell → router, "launch this app id." Used for remote-apps
+	// (docs/REMOTE.md §6.1): host B runs --no-session, so there is no
+	// session BE to route a launcher click through — the shell asks B's
+	// router to spawn directly, the same path its control socket uses.
+	// Fire-and-forget: success surfaces as the usual app.declared +
+	// window; the router logs failures. Refuses desktop-surface apps
+	// (only the autoboot session owns the desktop), mirroring controlLaunch.
+	TShellLaunch = "shell.launch"
+	// Shell → router, remote-apps relay (docs/REMOTE.md). peer.attach asks
+	// A's router to dial the socket the supervisor registered for this
+	// origin (host B), allocate a channel, and splice it verbatim to that
+	// socket — so B's wire rides this one connection. The router replies
+	// with a channel.bind{kind:"peer", origin}. peer.detach tears it down.
+	TShellPeerAttach = "peer.attach"
+	TShellPeerDetach = "peer.detach"
+	// Router → shell: a peer.attach could not be satisfied (no registration
+	// for the origin, or the dial failed). Surfaces what was otherwise a
+	// silent "host up but no apps". Carries the origin + a reason.
+	TShellPeerError = "peer.error"
 
 	// Router → shell (BE → FE relay).
 	TShellAppMsgDeliver = "app_msg.deliver"
@@ -392,6 +411,53 @@ func NewShellAppMsgSendTo(r Recipient, data json.RawMessage) ShellAppMsgSend {
 	return ShellAppMsgSend{T: TShellAppMsgSend, Data: data, To: &r}
 }
 
+// ShellLaunch is the FE asking this shell's router to launch an app by
+// id (docs/REMOTE.md §6.1). Sent over a remote host's RouterClient so
+// wash-connect can launch on B without a session BE there.
+type ShellLaunch struct {
+	T     string `json:"t"`
+	AppID string `json:"app_id"`
+}
+
+func NewShellLaunch(appID string) ShellLaunch {
+	return ShellLaunch{T: TShellLaunch, AppID: appID}
+}
+
+// ShellPeerAttach / ShellPeerDetach drive the remote-apps relay
+// (docs/REMOTE.md). Origin names the remote host (== the supervisor's
+// registered origin). attach makes A dial the registered socket + splice a
+// fresh "peer" channel to it; detach tears that channel + socket down.
+type ShellPeerAttach struct {
+	T      string `json:"t"`
+	Origin string `json:"origin"`
+}
+
+func NewShellPeerAttach(origin string) ShellPeerAttach {
+	return ShellPeerAttach{T: TShellPeerAttach, Origin: origin}
+}
+
+type ShellPeerDetach struct {
+	T      string `json:"t"`
+	Origin string `json:"origin"`
+}
+
+func NewShellPeerDetach(origin string) ShellPeerDetach {
+	return ShellPeerDetach{T: TShellPeerDetach, Origin: origin}
+}
+
+// ShellPeerError — router → shell — a peer.attach failed (no registration /
+// dial error). Lets the FE log it instead of silently showing a host with
+// no apps.
+type ShellPeerError struct {
+	T      string `json:"t"`
+	Origin string `json:"origin"`
+	Msg    string `json:"msg"`
+}
+
+func NewShellPeerError(origin, msg string) ShellPeerError {
+	return ShellPeerError{T: TShellPeerError, Origin: origin, Msg: msg}
+}
+
 // ShellAppMsgDeliver is the reverse: a BE → FE message, relayed to
 // the shell. The shell forwards it to the matching mounted element
 // as a CustomEvent.
@@ -447,6 +513,10 @@ type ShellChannelBind struct {
 	WindowID   uint32 `json:"window_id"`
 	Kind       string `json:"kind,omitempty"`
 	InstanceID string `json:"instance_id,omitempty"`
+	// Origin names the remote host whose wire a Kind="peer" channel
+	// carries (docs/REMOTE.md). The shell routes this channel's bytes to
+	// the matching origin's RouterClient. Empty for all other kinds.
+	Origin string `json:"origin,omitempty"`
 }
 
 // NewShellChannelBind binds an app-opened raw channel to a window. The

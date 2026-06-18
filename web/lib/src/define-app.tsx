@@ -23,6 +23,14 @@ export interface WashAppProps {
   instance: string;
   /** The host custom element. Apps listen for wash:msg / wash:state on it. */
   host: HTMLElement;
+  /**
+   * The window's origin — "local" for a local app, or the remote host id
+   * for an app composited from another machine (docs/REMOTE.md §4). Pass it
+   * to window.wash.{openRawChannelFor,writeRawFor,rawBufferedAmountFor} (and
+   * the @wash/ui Terminal's `origin` prop) so raw channels route to the
+   * owning host. Apps that only use app_msg can ignore it.
+   */
+  origin: string;
 }
 
 export interface DefineWashAppOptions {
@@ -45,7 +53,25 @@ export function defineWashApp(
   App: Component<WashAppProps>,
   options: DefineWashAppOptions = {},
 ): void {
-  if (customElements.get(tag)) return;
+  // Remote-apps tag mangling (docs/REMOTE.md R2): when the shell imports
+  // this bundle on behalf of a REMOTE router, it sets __washImportOrigin
+  // so two routers serving the same app don't collide on one global tag.
+  // We define under a per-origin tag and report the mapping so the shell's
+  // mount sites instantiate the same tag. For a LOCAL import (or a
+  // standalone/HMR load) the global is unset and behaviour is unchanged.
+  const g = globalThis as unknown as {
+    __washImportOrigin?: string;
+    __washRegisterTag?: (origin: string, manifestTag: string, realTag: string) => void;
+  };
+  let realTag: `wash-app-${string}` = tag;
+  const importOrigin = g.__washImportOrigin;
+  if (importOrigin) {
+    const slug = importOrigin.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'r';
+    realTag = `${tag}-${slug}` as `wash-app-${string}`;
+    g.__washRegisterTag?.(importOrigin, tag, realTag);
+  }
+
+  if (customElements.get(realTag)) return;
 
   class WashAppElement extends HTMLElement {
     private cleanup?: () => void;
@@ -55,7 +81,8 @@ export function defineWashApp(
         this.style.cssText = options.style;
       }
       const instance = this.getAttribute('data-wash-instance') ?? '';
-      this.cleanup = render(() => App({ instance, host: this }), this);
+      const origin = this.getAttribute('data-wash-origin') || 'local';
+      this.cleanup = render(() => App({ instance, host: this, origin }), this);
     }
 
     disconnectedCallback() {
@@ -64,5 +91,5 @@ export function defineWashApp(
     }
   }
 
-  customElements.define(tag, WashAppElement);
+  customElements.define(realTag, WashAppElement);
 }

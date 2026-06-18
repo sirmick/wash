@@ -154,6 +154,12 @@ const (
 	// shell to mount its display decoder component on the bound channel
 	// rather than treating it as opaque bytes. See docs/DISPLAY.md §5.
 	ChannelKindVideo = "video"
+	// "peer" carries a remote host's entire shell wire, multiplexed over
+	// the browser's single connection to A (docs/REMOTE.md). The router
+	// splices this channel verbatim to an ssh -L'd socket reaching host B;
+	// the shell feeds its bytes to a second RouterClient (origin = the bound
+	// ShellChannelBind.Origin). Opaque to A — never decoded router-side.
+	ChannelKindPeer = "peer"
 	// "video-popup" is a video stream for a *child* surface (an X/Wayland
 	// xdg_popup or override-redirect menu) of an existing display window.
 	// window_id names the PARENT display window; the shell draws it as a
@@ -312,6 +318,18 @@ func DecodeCtrl(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TShellAppMsgSend:
 		var m ShellAppMsgSend
+		return m, json.Unmarshal(data, &m)
+	case TShellLaunch:
+		var m ShellLaunch
+		return m, json.Unmarshal(data, &m)
+	case TShellPeerAttach:
+		var m ShellPeerAttach
+		return m, json.Unmarshal(data, &m)
+	case TShellPeerDetach:
+		var m ShellPeerDetach
+		return m, json.Unmarshal(data, &m)
+	case TShellPeerError:
+		var m ShellPeerError
 		return m, json.Unmarshal(data, &m)
 	case TShellAppMsgDeliver:
 		var m ShellAppMsgDeliver

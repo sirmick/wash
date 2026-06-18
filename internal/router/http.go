@@ -221,9 +221,11 @@ func (s *HTTPServer) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		// localhost-only build means the same-origin guard is fine
-		// for v0.0; tighten in v0.1.
-		InsecureSkipVerify: false,
+		// Same-origin by default. AllowCrossOrigin opts out so a remote
+		// router can accept a shell connection from another origin (the
+		// remote-apps R2 case — the page is served by router A, this is
+		// router B reached over an ssh -L tunnel). docs/REMOTE.md §10.
+		InsecureSkipVerify: s.router.cfg.AllowCrossOrigin,
 	})
 	if err != nil {
 		s.router.log("ws accept: %v", err)

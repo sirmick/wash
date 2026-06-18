@@ -11,8 +11,21 @@
 import { render } from 'solid-js/web';
 import { For, Show, createEffect, createSignal } from 'solid-js';
 import type { Component } from 'solid-js';
-import { Conn, type ConnState } from './ws';
+import { type ConnState } from './ws';
+import { RouterClient, type ClientHandlers } from './router-client';
+import {
+  type Origin,
+  LOCAL_ORIGIN,
+  registerClient,
+  unregisterClient,
+  registerTag,
+  clientForInstance,
+  clientForOrigin,
+  parseInstanceId,
+  compoundInstanceId,
+} from './clients';
 import { beginBundle, finishBundle, pushBundleBytes } from './assets';
+import { RelayChannelSocket } from './relay-socket';
 
 const __washLoadT0 = performance.now();
 import { washFetch, handleAssetReadOK, handleAssetReadErr, pushAssetBytes, finishAsset } from './wash-fetch';
@@ -23,7 +36,8 @@ import {
   applySessionSnapshot,
   desktop,
   dismissCrashed,
-  focused,
+  isFocused,
+  originForWindow,
   markCrashed,
   mountDesktop,
   moveLocal,
@@ -33,6 +47,8 @@ import {
   viewport,
   viewportFor,
   windows,
+  dropOrigin,
+  type Win,
 } from './wm';
 import { Desktop } from './desktop';
 import { FloatingWindow } from './window';
@@ -52,7 +68,6 @@ import {
   subscribeRaw,
 } from './api';
 import './wash-app-display';
-import { CreditTracker } from './credit';
 import { showToast } from './notify';
 import { virtioConsoleFactory } from './virtio';
 
@@ -130,6 +145,8 @@ interface ShellChannelBind {
   window_id: number;
   kind?: string;
   instance_id?: string;
+  // origin names the remote host for a kind="peer" relay channel.
+  origin?: string;
 }
 
 interface ShellChannelUnbind {
@@ -137,11 +154,6 @@ interface ShellChannelUnbind {
   channel_id: number;
   reason?: string;
 }
-
-// channelOwner records which window an open raw channel is rooted at,
-// so the shell can clean up subscribers when the window goes away or
-// the router unbinds the channel.
-const channelOwner = new Map<number, number>(); // channel_id → window_id
 
 interface ShellNotify {
   t: 'notify';
@@ -162,19 +174,34 @@ export interface ShellAppCrashed {
   log: string;
 }
 
-// Track declared instances so window.create can resolve element by id.
-const instances = new Map<string, { element: string; surface: string }>();
-
-// bundleReady is the promise that resolves once an instance's bundle
-// has been imported (and customElements.define has run). The
-// router can race ShellWindowCreate ahead of the bundle finishing,
-// so handleWindowCreate must wait — otherwise document.createElement
-// produces an HTMLUnknownElement and connectedCallback never fires.
-const bundleReady = new Map<string, Promise<void>>();
-
 // Reactive subs the chrome (mounted via window.wash) listens to.
+// catalogSub is the LOCAL router's catalog (drives the launcher).
 const catalogSub = new Sub<CatalogApp[]>([]);
 const panelsSub = new Sub<PanelDesc[]>([]);
+
+// Remote routers' catalogs, keyed by origin (docs/REMOTE.md §6.1). A
+// remote host's catalog arrives on connect exactly like the local one;
+// wash-connect lists it to offer "launch on B". remoteCatalogSub fires
+// with {origin, apps} whenever any remote catalog updates (or empties on
+// disconnect), so a subscriber re-reads catalogFor() for its origin.
+const remoteCatalogs = new Map<Origin, CatalogApp[]>();
+const remoteCatalogSub = new Sub<{ origin: Origin; apps: CatalogApp[] } | null>(null);
+
+// Remote-apps relay (docs/REMOTE.md, "one port"): a host's entire wire
+// rides a single raw channel of the LOCAL connection. peerSockets maps that
+// channel id → the RelayChannelSocket feeding the host's RouterClient.
+// Keyed by the local channel id (peer channels only ever bind on `local`).
+const peerSockets = new Map<number, { origin: Origin; sock: RelayChannelSocket }>();
+
+/** catalogFor returns a router's catalog by origin (LOCAL or a remote host). */
+function catalogFor(origin: Origin): CatalogApp[] {
+  return origin === LOCAL_ORIGIN ? catalogSub.value : remoteCatalogs.get(origin) ?? [];
+}
+
+/** clearRemoteCatalog drops a host's catalog on disconnect and notifies. */
+function clearRemoteCatalog(origin: Origin): void {
+  if (remoteCatalogs.delete(origin)) remoteCatalogSub.set({ origin, apps: [] });
+}
 const windowsSub = new Sub<WindowInfo[]>([]);
 // viewportSub mirrors the Solid viewport signal into the cross-element
 // pub/sub the session app subscribes to via window.wash.onViewport.
@@ -189,17 +216,25 @@ const screenSub = new Sub<{ w: number; h: number }>({ w: window.innerWidth, h: w
 // through pendingClipboardGets (req_id → resolver), same shape the Go
 // SDK uses for its ClipboardGet round-trip.
 const clipboardSub = new Sub<{ mime: string; text: string }>({ mime: '', text: '' });
-const pendingClipboardGets = new Map<number, (text: string) => void>();
 let clipboardReqID = 0;
 
 function wsURL(): string {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const params = new URLSearchParams(window.location.search);
+  // M0 remote-apps transport spike (docs/REMOTE.md): ?remote=<ws-url>
+  // points the shell at an arbitrary router instead of this origin's.
+  // With `ssh -L 127.0.0.1:PORT:<B-router-sock>` this connects the
+  // shell to host B's router through the tunnel, proving the wire +
+  // replayBundleToShell delivery end to end. (The simultaneous second
+  // connection that composites a single B window arrives with the M1
+  // RouterClient registry; this override is the single-conn spike.)
+  const remote = params.get('remote');
+  if (remote) return remote;
   // When the page URL carries ?s=<sessid>, route the WS at the
   // sessid-specific endpoint so wash-login attaches to that session
   // instead of auto-picking. Bare /ws is used when no preference is
   // declared — wash-login then spawns (0 sessions) or attaches to
   // the lone one (1 session) by default.
-  const params = new URLSearchParams(window.location.search);
   const sessid = params.get('s');
   const path = sessid ? `/ws/s/${encodeURIComponent(sessid)}/` : '/ws';
   return `${proto}://${window.location.host}${path}`;
@@ -230,40 +265,45 @@ function pickTransport(): string | (() => import('./ws').SocketFactory extends (
   return virtioConsoleFactory(bus, portN) as any;
 }
 
-// Credit tracker for per-channel flow control (QOS.md §5). Bytes
-// absorbed on each raw channel count toward a running tally;
-// crossing the replenish threshold emits one channel.credit{ch,n}
-// frame so the router-side Bulk producer doesn't stall.
-//
-// The sender closes over `conn`, which is assigned just below. JS
-// closure semantics make this safe — the closure isn't *called*
-// until the first raw frame arrives, by which point conn is bound.
-let conn: Conn;
-const creditTracker = new CreditTracker((channelID, n) => {
-  conn.sendCtrl({ t: 'channel.credit', ch: channelID, n });
-});
-
-conn = new Conn(
-  pickTransport() as any,
-  (msg) => {
+// makeHandlers builds the per-connection dispatch for a RouterClient,
+// tagging every incoming message with that client's origin so a remote
+// router's apps/windows merge into the one desktop without colliding with
+// the local router's ids. The local client is just origin === LOCAL.
+function makeHandlers(client: RouterClient): ClientHandlers {
+  const isLocal = client.origin === LOCAL_ORIGIN;
+  return {
+  onCtrl: (msg) => {
     switch (msg.t) {
-      case 'catalog':
-        catalogSub.set((msg as ShellCatalog).apps);
-        panelsSub.set((msg as ShellCatalog).panels ?? []);
+      case 'catalog': {
+        // The local catalog drives the launcher + settings panels. A
+        // remote host's catalog is stored per-origin so wash-connect can
+        // list "apps you can launch on B" (docs/REMOTE.md §6.1).
+        const c = msg as ShellCatalog;
+        if (isLocal) {
+          catalogSub.set(c.apps);
+          panelsSub.set(c.panels ?? []);
+        } else {
+          remoteCatalogs.set(client.origin, c.apps);
+          remoteCatalogSub.set({ origin: client.origin, apps: c.apps });
+        }
         break;
+      }
       case 'app.declared':
-        handleAppDeclared(msg as ShellAppDeclared);
+        handleAppDeclared(client, msg as ShellAppDeclared);
         break;
       case 'session.snapshot':
-        handleSnapshot(msg as ShellSessionSnapshot);
+        handleSnapshot(client, msg as ShellSessionSnapshot);
         break;
       case 'session.patch':
-        handlePatch(msg as ShellSessionPatch);
+        handlePatch(client, msg as ShellSessionPatch);
         break;
       case 'app_msg.deliver':
-        deliverAppMsg(msg as ShellAppMsgDeliver);
+        deliverAppMsg(client, msg as ShellAppMsgDeliver);
         break;
       case 'notify': {
+        // Remote-host notifications merge into the tray in M4; for now only
+        // the local router's toasts show.
+        if (!isLocal) break;
         const n = msg as ShellNotify;
         showToast({
           instanceID: n.instance_id,
@@ -274,14 +314,13 @@ conn = new Conn(
         break;
       }
       case 'app.crashed':
-        handleCrash(msg as ShellAppCrashed);
+        handleCrash(client, msg as ShellAppCrashed);
         break;
       case 'shell.reload': {
-        // Dev-mode signal from the router: a watched binary
-        // changed and our embedded bundles are stale. Reload
-        // the page so the next shell.js + app bundles fetch
-        // fresh. The router's re-exec / app respawn happens
-        // independently; we just need to drop our cached state.
+        // Dev-mode signal: only the LOCAL router may bounce the page (a
+        // remote host must never reload the whole desktop). The router's
+        // re-exec / app respawn happens independently.
+        if (!isLocal) break;
         // eslint-disable-next-line no-console
         console.info('wash shell: reload requested by router');
         window.location.reload();
@@ -290,119 +329,251 @@ conn = new Conn(
       case 'channel.bind': {
         const b = msg as ShellChannelBind;
         if (b.kind === 'bundle' && b.instance_id) {
-          // Bundle delivery channel — start accumulating until the
+          // Bundle delivery channel — accumulate (per origin) until the
           // matching channel.unbind triggers the dynamic import.
-          bundleReady.set(b.instance_id, beginBundle(b.channel_id, b.instance_id));
+          client.bundleReady.set(b.instance_id, beginBundle(b.channel_id, b.instance_id, client.origin));
         } else if (b.kind === 'bundle') {
-          // Settings-panel bundle channel: kind=bundle with no
-          // instance_id. Accumulation is keyed by channel_id via the
-          // preceding panel.read.ok (panels.ts). Nothing to do here.
+          // Settings-panel bundle channel (no instance_id): local-only,
+          // keyed by channel_id in panels.ts. Nothing to do here.
         } else if (b.kind === 'asset') {
-          // Asset channel: state lives in wash-fetch.ts, keyed by
-          // (req_id, channel_id) via the preceding asset.read.ok.
-          // Nothing to do here.
+          // Asset channel: local-only, keyed by (req_id, channel_id) in
+          // wash-fetch.ts. Nothing to do here.
         } else if (b.kind === 'video') {
-          // Per-window video stream for the built-in <wash-app-display>
-          // decoder (wire.ChannelKindVideo). Record window→channel and
-          // attach to the element if it's already mounted; the registry
-          // (api.ts) handles the bind-before-mount race. Frame bytes
-          // still flow through the generic raw path below, so we keep the
-          // channelOwner mapping too (drives channel.unbind cleanup).
-          channelOwner.set(b.channel_id, b.window_id);
-          bindVideoChannel(b.window_id, b.channel_id);
+          // Per-window video for the built-in <wash-app-display> decoder
+          // (wire.ChannelKindVideo). Local only for now — remote display
+          // video is gated off here (un-gate + origin-scope input to enable;
+          // see docs/REMOTE.md §15.1). The registry (api.ts) handles the
+          // bind-before-mount race; frame bytes still flow via deliverRaw.
+          if (isLocal) {
+            client.channelOwner.set(b.channel_id, b.window_id);
+            bindVideoChannel(client.origin, b.window_id, b.channel_id);
+          }
         } else if (b.kind === 'video-popup') {
           // Child surface (menu/dropdown) of a display window: window_id is
-          // the PARENT win. The parent's <wash-app-display> renders it as a
-          // positioned overlay canvas. Bytes still flow via deliverRaw.
-          channelOwner.set(b.channel_id, b.window_id);
-          bindPopupChannel(b.window_id, b.channel_id);
+          // the PARENT win, drawn as a positioned overlay on its
+          // <wash-app-display>. Same local-only gating as video.
+          if (isLocal) {
+            client.channelOwner.set(b.channel_id, b.window_id);
+            bindPopupChannel(client.origin, b.window_id, b.channel_id);
+          }
+        } else if (b.kind === 'peer' && isLocal) {
+          // Remote-apps relay: A spliced this channel to host B. Stand up a
+          // RouterClient for the origin whose transport is this channel.
+          attachPeerChannel(b.channel_id, b.origin ?? '');
         } else {
-          channelOwner.set(b.channel_id, b.window_id);
+          client.channelOwner.set(b.channel_id, b.window_id);
         }
         break;
       }
+      // asset.read / panel.read are the shell fetching its OWN assets +
+      // settings panels from its router — a local-only concern.
       case 'asset.read.ok':
-        handleAssetReadOK(msg as { req_id: number; channel_id: number; size: number; mime?: string });
+        if (isLocal) handleAssetReadOK(msg as { req_id: number; channel_id: number; size: number; mime?: string });
         break;
       case 'asset.read.err':
-        handleAssetReadErr(msg as { req_id: number; code: string; msg?: string });
+        if (isLocal) handleAssetReadErr(msg as { req_id: number; code: string; msg?: string });
         break;
       case 'panel.read.ok':
-        handlePanelReadOK(msg as { req_id: number; channel_id: number; size: number });
+        if (isLocal) handlePanelReadOK(msg as { req_id: number; channel_id: number; size: number });
         break;
       case 'panel.read.err':
-        handlePanelReadErr(msg as { req_id: number; code: string; msg?: string });
+        if (isLocal) handlePanelReadErr(msg as { req_id: number; code: string; msg?: string });
         break;
       case 'channel.unbind': {
         const u = msg as ShellChannelUnbind;
+        // Remote-apps relay channel gone (A tore down the peer): drop the
+        // host's RouterClient + windows. Do this before the generic cleanup.
+        if (isLocal) {
+          const peer = peerSockets.get(u.channel_id);
+          if (peer) {
+            peerSockets.delete(u.channel_id);
+            peer.sock.close();
+            detachClient(peer.origin);
+            break;
+          }
+        }
         // Try each accumulator in turn; harmless on miss.
-        finishBundle(u.channel_id);
-        finishAsset(u.channel_id);
-        finishPanel(u.channel_id);
-        channelOwner.delete(u.channel_id);
-        closeRawSubscriber(u.channel_id);
-        // Drop any stashed video binding so a later rebind on the same
-        // window doesn't replay this dead channel to a fresh element.
-        forgetVideoChannel(u.channel_id);
-        // Forget any pending credit count — channel is gone, no
-        // point sending credit for a dead id.
-        creditTracker.forget(u.channel_id);
+        finishBundle(u.channel_id, client.origin);
+        if (isLocal) {
+          finishAsset(u.channel_id);
+          finishPanel(u.channel_id);
+          // Drop any stashed video binding so a later rebind on the same
+          // window doesn't replay this dead channel to a fresh element.
+          forgetVideoChannel(client.origin, u.channel_id);
+        }
+        client.channelOwner.delete(u.channel_id);
+        closeRawSubscriber(client.origin, u.channel_id);
+        // Forget any pending credit count — channel is gone.
+        client.credit.forget(u.channel_id);
         break;
       }
       case 'clipboard.data': {
         const d = msg as { req_id: number; mime: string; text: string };
-        const wait = pendingClipboardGets.get(d.req_id);
+        const wait = client.pendingClipboardGets.get(d.req_id);
         if (wait) {
-          pendingClipboardGets.delete(d.req_id);
+          client.pendingClipboardGets.delete(d.req_id);
           wait(d.text);
         }
         break;
       }
+      case 'peer.error': {
+        // Remote-apps relay attach failed (no registration / dial). Log it
+        // (forwarded to the router) so a host that's "up" but shows no apps
+        // isn't a silent mystery. wash-connect can surface it later.
+        if (!isLocal) break;
+        const e = msg as { origin: string; msg: string };
+        console.warn(`wash: relay attach failed for ${e.origin}: ${e.msg}`);
+        break;
+      }
       case 'clipboard.changed': {
+        // Cross-host clipboard sync is M5; mirror only the local router's.
+        if (!isLocal) break;
         const c = msg as { mime: string; text: string };
         clipboardSub.set({ mime: c.mime, text: c.text });
         break;
       }
     }
   },
-  (channelID, bytes) => {
-    // Asset (washFetch) and bundle (kind=bundle) channels divert
-    // bytes into their own accumulators; everything else flows to the
-    // per-channel raw subscriber (xterm's pty, etc.).
-    if (pushAssetBytes(channelID, bytes)) return;
-    if (pushBundleBytes(channelID, bytes)) return;
-    if (pushPanelBytes(channelID, bytes)) return;
-    deliverRaw(channelID, bytes);
-    // Bulk-class raw flows (terminal output, file content) drain
-    // the router-side credit window — replenish via channel.credit
-    // as we absorb. Bundle bytes were returned-early above; those
-    // flow Interactive class and bypass the credit ledger on the
-    // BE side, so emitting credit for them is a no-op but cheap.
-    creditTracker.absorbed(channelID, bytes.length);
+  onRaw: (channelID, bytes) => {
+    // Remote-apps relay: a peer channel's bytes are host B's wire — feed
+    // them to its RelayChannelSocket (which deframes + drives B's Conn).
+    // Peer channels only ever bind on the local connection. The peer channel
+    // is a CREDITLESS verbatim conduit on A (docs/REMOTE.md §7): we emit no
+    // channel.credit for it. Flow control is end to end — B's RouterClient
+    // (peer.sock's Conn) credits each of B's INNER channels as it absorbs
+    // them, which is the real backpressure; an A-side window would only
+    // double-gate and head-of-line-block B's interactive behind B's bulk.
+    if (isLocal) {
+      const peer = peerSockets.get(channelID);
+      if (peer) {
+        peer.sock.feed(bytes);
+        return;
+      }
+    }
+    // Bundle bytes (per origin) first, so a remote bundle channel id can't
+    // be mistaken for a local asset channel. Asset/panel accumulators are a
+    // local-only concern (the shell fetching its own assets/panels).
+    if (pushBundleBytes(channelID, bytes, client.origin)) return;
+    if (isLocal) {
+      if (pushAssetBytes(channelID, bytes)) return;
+      if (pushPanelBytes(channelID, bytes)) return;
+    }
+    deliverRaw(client.origin, channelID, bytes);
+    // Bulk-class raw flows drain the router-side credit window — replenish
+    // via channel.credit as we absorb. Bundle bytes returned early above.
+    client.credit.absorbed(channelID, bytes.length);
   },
-);
+  };
+}
+
+// The shell's connection to its local router. Remote hosts add more
+// clients via addClient(); makeHandlers tags each client's dispatch with
+// its origin so they merge into one desktop.
+const local = new RouterClient(LOCAL_ORIGIN, pickTransport() as any, makeHandlers);
+registerClient(LOCAL_ORIGIN, local);
+
+// Local-only handles for window.wash / logging / __washDiag, which address
+// the shell's own router directly.
+const conn = local.conn;
+const instances = local.instances;
+const bundleReady = local.bundleReady;
+const pendingClipboardGets = local.pendingClipboardGets;
+
+// Let a remote app bundle report the per-origin mangled element tag it
+// defined (web/lib defineWashApp), so the mount sites instantiate the same
+// tag via clients.tagFor(). No-op for local bundles (which never mangle).
+(window as unknown as { __washRegisterTag?: (o: string, m: string, r: string) => void }).__washRegisterTag =
+  registerTag;
+
+// addClient opens a second connection to another router (a remote host
+// reached over an ssh -L tunnel) and registers it under `origin`, so its
+// windows composite into this desktop. Wired to ?peer=<origin>@<ws-url>
+// for the two-router test below; M2's com.wash.remote service drives it
+// for real.
+function addClient(origin: Origin, url: string): RouterClient {
+  // Idempotent: re-attaching an already-connected origin (e.g. the
+  // supervisor re-reporting 'up') reuses the live client rather than
+  // opening a duplicate WS and shadowing the first in the registry.
+  const existing = clientForOrigin(origin);
+  if (existing) return existing;
+  const client = new RouterClient(origin, url, makeHandlers);
+  registerClient(origin, client);
+  void client.conn.ready();
+  return client;
+}
+
+// attachPeerChannel stands up a remote host's RouterClient whose transport
+// is a relay channel of the LOCAL connection (docs/REMOTE.md, "one port"):
+// A spliced this channel to host B's router, so B's wire arrives here. The
+// RelayChannelSocket deframes it; the RouterClient merges B's windows into
+// the desktop exactly like a direct connection would. Driven by the
+// channel.bind{kind:"peer"} A sends after a peer.attach.
+function attachPeerChannel(channelID: number, origin: Origin): void {
+  if (!origin || origin === LOCAL_ORIGIN) return;
+  if (clientForOrigin(origin)) return; // already attached
+  const sock = new RelayChannelSocket(local.conn, channelID);
+  peerSockets.set(channelID, { origin, sock });
+  const client = new RouterClient(origin, () => sock, makeHandlers);
+  registerClient(origin, client);
+  void client.conn.ready();
+}
+
+// detachClient tears down a remote origin's connection and scrubs every
+// trace of it from the desktop (docs/REMOTE.md §6.1/§9): close the WS
+// (no reconnect — this is a deliberate disconnect, not a blip), drop the
+// origin's windows, clear its catalog, and unregister it. LOCAL is never
+// detachable (it's the seat's own router).
+function detachClient(origin: Origin): void {
+  if (origin === LOCAL_ORIGIN) return;
+  const client = clientForOrigin(origin);
+  if (!client) return;
+  client.conn.close();
+  dropOrigin(origin);
+  clearRemoteCatalog(origin);
+  unregisterClient(origin);
+}
+
+{
+  // ?peer=<origin>@<ws-url> (repeatable) attaches remote routers — the
+  // M1f manual test harness (two local routers) and a stand-in until the
+  // Hosts sidebar widget (M3) drives connections.
+  for (const spec of new URLSearchParams(window.location.search).getAll('peer')) {
+    const at = spec.indexOf('@');
+    if (at <= 0) continue;
+    const origin = spec.slice(0, at);
+    const url = spec.slice(at + 1);
+    if (origin === LOCAL_ORIGIN || !url) continue;
+    try {
+      addClient(origin, url);
+    } catch (e) {
+      console.error('wash: addClient', origin, e);
+    }
+  }
+}
 
 // deliverAppMsg routes a BE→FE message to its element, queuing if the
 // element hasn't mounted yet (Solid's onMount can run after the next
 // WS message is processed).
-function deliverAppMsg(msg: ShellAppMsgDeliver) {
-  deliverToInstance(msg.instance_id, msg.data);
+function deliverAppMsg(client: RouterClient, msg: ShellAppMsgDeliver) {
+  deliverToInstance(compoundInstanceId(client.origin, msg.instance_id), msg.data);
 }
 
 // Mirror Solid's windows store into the cross-element Sub so vanilla
 // custom elements (the session chrome) can subscribe without taking
 // a Solid dep.
 createEffect(() => {
-  const focusedID = focused();
   const s = screenSize();
   windowsSub.set(
     windows.map((w) => ({
+      origin: w.origin,
       windowID: w.windowID,
       instanceID: w.instanceID,
       element: w.element,
       icon: w.icon,
       title: w.title,
-      focused: focusedID === w.windowID,
+      // isFocused() reads the focused signal, so this effect re-runs on
+      // focus change.
+      focused: isFocused(w),
       state: w.state,
       x: w.x,
       y: w.y,
@@ -424,7 +595,7 @@ createEffect(() => {
   viewportSub.set(viewport());
 });
 
-function handleAppDeclared(msg: ShellAppDeclared): void {
+function handleAppDeclared(client: RouterClient, msg: ShellAppDeclared): void {
   // Background services have no FE — no bundle, no element, no mount.
   // The shell ignores the declaration: the BE talks to other apps via
   // cross-app app_msg, and nothing on this side ever needs to address
@@ -432,9 +603,13 @@ function handleAppDeclared(msg: ShellAppDeclared): void {
   if ((msg.surface as string) === 'background') {
     return;
   }
-  instances.set(msg.instance_id, { element: msg.element, surface: msg.surface });
+  client.instances.set(msg.instance_id, { element: msg.element, surface: msg.surface });
   if (msg.surface === 'desktop') {
-    waitForBundleByInstance(msg.instance_id)
+    // Only the LOCAL router owns the desktop chrome; a remote host's
+    // desktop surface is ignored (we composite its windows, not its shell).
+    if (client.origin !== LOCAL_ORIGIN) return;
+    client
+      .waitForBundle(msg.instance_id)
       .then(() => mountDesktop({ instanceID: msg.instance_id, element: msg.element }))
       .catch((err) => console.error('wash: desktop bundle:', err));
   }
@@ -442,41 +617,12 @@ function handleAppDeclared(msg: ShellAppDeclared): void {
   // window-create path awaits the bundle promise the same way.
 }
 
-// waitForBundleByInstance polls bundleReady — the channel.bind for
-// the bundle may arrive slightly after the app.declared, so we wait
-// briefly for it to land.
-function waitForBundleByInstance(instanceID: string): Promise<void> {
-  const existing = bundleReady.get(instanceID);
-  if (existing) return existing;
-  // The channel.bind {kind:bundle} may not have arrived yet — poll
-  // the map until it does. This loop runs ~zero times in practice
-  // because the router sends app.declared then ChannelBind back-to-
-  // back, but it's defensive against frame-order surprises.
-  return new Promise((resolve, reject) => {
-    const start = Date.now();
-    const check = () => {
-      const p = bundleReady.get(instanceID);
-      if (p) {
-        p.then(resolve, reject);
-        return;
-      }
-      if (Date.now() - start > 10_000) {
-        reject(new Error(`bundle for ${instanceID} not announced within 10s`));
-        return;
-      }
-      setTimeout(check, 25);
-    };
-    check();
-  });
-}
-
-// handleSnapshot rebuilds the local WM state from the router's
-// canonical view. Sent on connect/reconnect. The app_state cache is
-// replaced wholesale so stale entries from no-longer-running
-// instances don't linger.
-function handleSnapshot(msg: ShellSessionSnapshot): void {
-  replaceSavedStates(msg.app_state);
-  applySessionSnapshot(msg.windows, waitForBundle);
+// handleSnapshot rebuilds a router's WM state from its canonical view.
+// Sent on connect/reconnect. The app_state cache is replaced per-origin so
+// stale entries from no-longer-running instances don't linger.
+function handleSnapshot(client: RouterClient, msg: ShellSessionSnapshot): void {
+  replaceSavedStates(client.origin, msg.app_state);
+  applySessionSnapshot(client.origin, msg.windows, (id) => client.waitForBundle(id));
 }
 
 // handleCrash marks the matching window crashed in the WM store so
@@ -484,8 +630,8 @@ function handleSnapshot(msg: ShellSessionSnapshot): void {
 // (dead) custom element. The router still ships a window-delete
 // patch right after this; wm.applySessionPatch ignores deletes for
 // already-crashed windows so the tombstone survives.
-function handleCrash(msg: ShellAppCrashed): void {
-  markCrashed(msg.instance_id, {
+function handleCrash(client: RouterClient, msg: ShellAppCrashed): void {
+  markCrashed(client.origin, msg.instance_id, {
     appID: msg.app_id,
     exitCode: msg.exit_code,
     signal: msg.signal,
@@ -494,20 +640,18 @@ function handleCrash(msg: ShellAppCrashed): void {
   });
 }
 
-// Tracks windowIDs we've already first-sighted. The wm store can't
-// serve this on its own: applySessionPatch defers the upsert for an
-// unseen window behind waitForBundle, so a window-in-flight isn't
-// in `windows` yet. Without a separate set, every BE patch that
-// arrives before the bundle resolves looks "fresh" and we'd
-// re-relocate the same window N times.
-const seenWindowIDs = new Set<number>();
-
-function handlePatch(msg: ShellSessionPatch): void {
+// seenWindowIDs (on RouterClient) tracks first-sighted windows for the
+// viewport auto-relocation below: the wm store can't serve this on its
+// own because applySessionPatch defers an unseen window's upsert behind
+// waitForBundle, so a window-in-flight isn't in `windows` yet — without
+// the set, every pre-bundle patch looks "fresh" and we'd re-relocate the
+// same window N times.
+function handlePatch(client: RouterClient, msg: ShellSessionPatch): void {
   // Apply app_state ops first so when a window upsert in the same
   // patch triggers a remount, wash:state carries the latest blob.
   for (const p of msg.patches) {
     if (p.op === 'app_state' && typeof p.instance_id === 'string') {
-      setSavedState(p.instance_id, p.state ?? null);
+      setSavedState(compoundInstanceId(client.origin, p.instance_id), p.state ?? null);
     }
   }
   // First-sight detection for viewport auto-relocation: any
@@ -525,42 +669,38 @@ function handlePatch(msg: ShellSessionPatch): void {
   const s = screenSize();
   const moves: Array<{ id: number; x: number; y: number }> = [];
   for (const p of msg.patches) {
-    if (p.op === 'window.upsert' && p.window && !seenWindowIDs.has(p.window.window_id)) {
+    if (p.op === 'window.upsert' && p.window && !client.seenWindowIDs.has(p.window.window_id)) {
       if (vp.vx !== 0 || vp.vy !== 0) {
         p.window.x = p.window.x + vp.vx * s.w;
         p.window.y = p.window.y + vp.vy * s.h;
         moves.push({ id: p.window.window_id, x: p.window.x, y: p.window.y });
       }
-      seenWindowIDs.add(p.window.window_id);
+      client.seenWindowIDs.add(p.window.window_id);
     }
     if (p.op === 'window.delete' && typeof p.window_id === 'number') {
-      seenWindowIDs.delete(p.window_id);
+      client.seenWindowIDs.delete(p.window_id);
     }
   }
   applySessionPatch(
+    client.origin,
     msg.patches.filter((p) => p.op !== 'app_state'),
-    waitForBundle,
+    (id) => client.waitForBundle(id),
   );
   for (const m of moves) {
-    conn.sendCtrl({ t: 'window.move', window_id: m.id, x: m.x, y: m.y });
+    client.conn.sendCtrl({ t: 'window.move', window_id: m.id, x: m.x, y: m.y });
   }
-}
-
-function waitForBundle(instanceID: string): Promise<void> {
-  return waitForBundleByInstance(instanceID);
 }
 
 // Bridge a window's close-button click into the WS protocol.
 // Crashed windows are FE-only tombstones — the router-side state was
 // already torn down on abnormal exit, so a close_clicked would have
 // nowhere to land. Drop them directly out of the WM store.
-function onWindowClose(windowID: number): void {
-  const w = windows.find((x) => x.windowID === windowID);
-  if (w?.crashed) {
-    dismissCrashed(windowID);
+function onWindowClose(win: Win): void {
+  if (win.crashed) {
+    dismissCrashed(win.origin, win.windowID);
     return;
   }
-  conn.sendCtrl({ t: 'window.close_clicked', window_id: windowID });
+  (clientForOrigin(win.origin) ?? local).conn.sendCtrl({ t: 'window.close_clicked', window_id: win.windowID });
   // The actual removal happens when the router sends window.destroy.
 }
 
@@ -698,6 +838,24 @@ declare global {
       sendAppMsgTo(recipient: Recipient, data: unknown): void;
       catalog(): CatalogApp[];
       onCatalog(cb: (apps: CatalogApp[]) => void): () => void;
+      // Remote-host catalogs (docs/REMOTE.md §6.1). catalogFor returns the
+      // apps a given origin (LOCAL or a connected remote host) advertises;
+      // onRemoteCatalog fires whenever any remote catalog changes (apps
+      // empty on disconnect). wash-connect uses these to list B's apps.
+      catalogFor(origin: string): CatalogApp[];
+      onRemoteCatalog(cb: (ev: { origin: string; apps: CatalogApp[] }) => void): () => void;
+      // launchOn asks the router at `origin` to spawn appID (docs/REMOTE.md
+      // §6.1). For a remote host (which runs --no-session) this is the only
+      // launch path — there is no session BE there. Fire-and-forget: the
+      // launched window composites in via the normal app.declared flow.
+      launchOn(origin: string, appID: string): void;
+      // attachRemote opens a second connection to a remote host's router
+      // (the local end of an ssh -L tunnel the com.wash.remote supervisor
+      // set up) and composites its windows into this desktop, tagged by
+      // origin. detachRemote tears it down and drops the host's windows.
+      // wash-connect drives these from the supervisor's reported endpoint.
+      attachRemote(origin: string, url?: string): void;
+      detachRemote(origin: string): void;
       // App-supplied settings panels (from the catalog's `panels` list).
       // loadSettingsPanel fetches+imports the panel bundle so its custom
       // element is defined; the promise resolves once it's mountable.
@@ -706,13 +864,17 @@ declare global {
       loadSettingsPanel(appID: string): Promise<void>;
       windows(): WindowInfo[];
       onWindowsChanged(cb: (windows: WindowInfo[]) => void): () => void;
-      focusWindow(id: number): void;
-      closeWindow(id: number): void;
-      moveWindow(id: number, x: number, y: number): void;
-      resizeWindow(id: number, w: number, h: number): void;
-      minimizeWindow(id: number): void;
-      maximizeWindow(id: number): void;
-      restoreWindow(id: number): void;
+      // origin (optional) addresses the WM intent to a specific router:
+      // window ids are per-router, so the shell chrome passes the Win's
+      // origin to avoid aiming a remote window at the same-id local one.
+      // Omitted → resolved by bare id (app bundles addressing their own).
+      focusWindow(id: number, origin?: Origin): void;
+      closeWindow(id: number, origin?: Origin): void;
+      moveWindow(id: number, x: number, y: number, origin?: Origin): void;
+      resizeWindow(id: number, w: number, h: number, origin?: Origin): void;
+      minimizeWindow(id: number, origin?: Origin): void;
+      maximizeWindow(id: number, origin?: Origin): void;
+      restoreWindow(id: number, origin?: Origin): void;
       // Virtual-desktop viewport API. The shell pans a viewport-sized
       // camera over a VIEWPORTS_PER_AXIS² plane; setViewport switches
       // cells with a CSS transition. viewportFor returns the cell
@@ -726,6 +888,13 @@ declare global {
       openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
       writeRaw(channelID: number, bytes: Uint8Array): void;
       rawBufferedAmount(): number;
+      // Origin-scoped raw API (docs/REMOTE.md §4): route a channel to a
+      // specific host's connection so a remote app's pty/file stream isn't
+      // mis-routed to (or collided with) the local router. origin comes from
+      // the app's props.origin.
+      openRawChannelFor(origin: string, channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
+      writeRawFor(origin: string, channelID: number, bytes: Uint8Array): void;
+      rawBufferedAmountFor(origin: string): number;
       // Router-held clipboard (the wash-internal clipboard every app
       // shares). Text-only on this surface; see clipboard.ts in
       // @wash/ui for the system-clipboard mirroring helpers.
@@ -820,45 +989,106 @@ conn.onState((s) => {
   if (logWsUp) flushLogBuf();
 });
 
+// wmSend routes a window-manager intent to the router that owns the
+// window. Callers that know the origin (the shell's own FloatingWindow,
+// the session taskbar — both hold the Win/WindowInfo) MUST pass it: window
+// ids are per-router, so two origins routinely share id 1, and resolving by
+// bare id alone would aim a remote window's drag at the local window with
+// the same id (the "connect window follows the remote one" bug). The bare-id
+// originForWindow fallback remains only for app bundles that address their
+// own window by id without an origin in hand.
+function wmSend(origin: Origin, windowID: number, msg: Record<string, unknown>): void {
+  void windowID;
+  const client = clientForOrigin(origin) ?? local;
+  client.conn.sendCtrl(msg);
+}
+
 window.wash = {
   sendAppMsg(instanceID, data) {
-    conn.sendCtrl({ t: 'app_msg.send', instance_id: instanceID, data });
+    // instanceID is the app-facing (possibly origin-tagged) id. Route to
+    // the owning client and send the bare id the router understands. For
+    // a local app this resolves to `local` with the id unchanged.
+    const { bare } = parseInstanceId(instanceID);
+    const client = clientForInstance(instanceID) ?? local;
+    client.conn.sendCtrl({ t: 'app_msg.send', instance_id: bare, data });
   },
   sendAppMsgTo(recipient, data) {
     conn.sendCtrl({ t: 'app_msg.send', to: recipient, data });
   },
   catalog: () => catalogSub.value,
   onCatalog: (cb) => catalogSub.on(cb),
+  catalogFor: (origin) => catalogFor(origin),
+  onRemoteCatalog: (cb) => remoteCatalogSub.on((ev) => { if (ev) cb(ev); }),
+  launchOn(origin, appID) {
+    const client = clientForOrigin(origin);
+    if (!client) {
+      console.warn('wash: launchOn unknown origin', origin);
+      return;
+    }
+    client.conn.sendCtrl({ t: 'shell.launch', app_id: appID });
+  },
+  attachRemote(origin, url) {
+    if (origin === LOCAL_ORIGIN) return;
+    if (url) {
+      // Direct second connection to a reachable router (browser co-located
+      // with B, e.g. two routers on one host). Valid but bypasses the relay,
+      // so the supervisor never uses it — production always goes through the
+      // one-port relay below. This branch backs the host-process FE-merge
+      // e2e (connect-launch / ?peer=), where both routers are local.
+      try {
+        addClient(origin, url);
+      } catch (e) {
+        console.error('wash: attachRemote', origin, e);
+      }
+      return;
+    }
+    // Relay path (one port): ask A's router to splice a peer channel to the
+    // socket the supervisor registered. The channel.bind reply stands up B's
+    // RouterClient (attachPeerChannel). Works over any transport to A.
+    local.conn.sendCtrl({ t: 'peer.attach', origin });
+  },
+  detachRemote(origin) {
+    // Tear down A's relay (→ channel.unbind → detachClient) and detach
+    // locally too (covers the direct-WS case / an attach that never bound).
+    try {
+      local.conn.sendCtrl({ t: 'peer.detach', origin });
+    } catch {
+      /* local conn down — detachClient still scrubs FE state */
+    }
+    detachClient(origin);
+  },
   settingsPanels: () => panelsSub.value,
   onSettingsPanels: (cb: (panels: PanelDesc[]) => void) => panelsSub.on(cb),
   loadSettingsPanel: (appID: string) => loadSettingsPanel((m) => conn.sendCtrl(m), appID),
   windows: () => windowsSub.value,
   onWindowsChanged: (cb) => windowsSub.on(cb),
-  focusWindow(id) {
+  focusWindow(id, origin) {
     // Local raise gives instant visual focus feedback; the router's
     // patch will confirm the z bump moments later.
-    raiseLocal(id);
-    conn.sendCtrl({ t: 'window.focus', window_id: id });
+    const o = origin ?? originForWindow(id);
+    raiseLocal(o, id);
+    wmSend(o, id, { t: 'window.focus', window_id: id });
   },
-  closeWindow(id) {
-    conn.sendCtrl({ t: 'window.close_clicked', window_id: id });
+  closeWindow(id, origin) {
+    wmSend(origin ?? originForWindow(id), id, { t: 'window.close_clicked', window_id: id });
   },
-  moveWindow(id, x, y) {
-    conn.sendCtrl({ t: 'window.move', window_id: id, x, y });
+  moveWindow(id, x, y, origin) {
+    wmSend(origin ?? originForWindow(id), id, { t: 'window.move', window_id: id, x, y });
   },
-  resizeWindow(id, w, h) {
-    conn.sendCtrl({ t: 'window.resize', window_id: id, w, h });
+  resizeWindow(id, w, h, origin) {
+    wmSend(origin ?? originForWindow(id), id, { t: 'window.resize', window_id: id, w, h });
   },
-  minimizeWindow(id) {
-    conn.sendCtrl({ t: 'window.state', window_id: id, state: 'minimized' });
+  minimizeWindow(id, origin) {
+    wmSend(origin ?? originForWindow(id), id, { t: 'window.state', window_id: id, state: 'minimized' });
   },
-  maximizeWindow(id) {
-    conn.sendCtrl({ t: 'window.state', window_id: id, state: 'maximized' });
+  maximizeWindow(id, origin) {
+    wmSend(origin ?? originForWindow(id), id, { t: 'window.state', window_id: id, state: 'maximized' });
   },
-  restoreWindow(id) {
-    conn.sendCtrl({ t: 'window.state', window_id: id, state: 'normal' });
+  restoreWindow(id, origin) {
+    const o = origin ?? originForWindow(id);
+    wmSend(o, id, { t: 'window.state', window_id: id, state: 'normal' });
     // Restoring also brings to front + grabs focus.
-    conn.sendCtrl({ t: 'window.focus', window_id: id });
+    wmSend(o, id, { t: 'window.focus', window_id: id });
   },
   viewports: () => ({ perAxis: VIEWPORTS_PER_AXIS }),
   getViewport: () => viewportSub.value,
@@ -868,14 +1098,27 @@ window.wash = {
   log(level, source, msg, stack) {
     shellLog(level, source, msg, stack);
   },
+  // Bare raw API — addresses the LOCAL router. The *For variants below
+  // take an origin so a remote app's raw channel (pty, file stream) routes
+  // to its own host's connection (docs/REMOTE.md §4); apps that can run
+  // remote must use those with their props.origin.
   openRawChannel(channelID, onBytes) {
-    return subscribeRaw(channelID, onBytes);
+    return subscribeRaw(LOCAL_ORIGIN, channelID, onBytes);
   },
   writeRaw(channelID, bytes) {
     conn.sendRaw(channelID, bytes);
   },
   rawBufferedAmount() {
     return conn.bufferedAmount();
+  },
+  openRawChannelFor(origin, channelID, onBytes) {
+    return subscribeRaw(origin, channelID, onBytes);
+  },
+  writeRawFor(origin, channelID, bytes) {
+    (clientForOrigin(origin) ?? local).conn.sendRaw(channelID, bytes);
+  },
+  rawBufferedAmountFor(origin) {
+    return (clientForOrigin(origin) ?? local).conn.bufferedAmount();
   },
   clipboardSetText(text) {
     clipboardSub.set({ mime: 'text/plain', text });

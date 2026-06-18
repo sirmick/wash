@@ -15,7 +15,7 @@ import { Button, FilePicker, IngressFrame, defineWashApp, tokens } from '@wash/u
 
 type Phase = 'choosing' | 'launching' | 'ready' | 'absent' | 'error';
 
-const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
+const App: Component<{ instance: string; host: HTMLElement; origin: string }> = (props) => {
   // Cold launch starts at the folder prompt. A wash:state restore (on
   // refresh) flips us straight to launching with the saved folder.
   const [phase, setPhase] = createSignal<Phase>('choosing');
@@ -54,9 +54,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         if (!m.installed && phase() !== 'ready') setPhase('absent');
         break;
       case 'shutdown': {
-        // The service is going away — close this window too.
-        const win = window.wash.windows().find((w) => w.instanceID === props.instance);
-        if (win) window.wash.closeWindow(win.windowID);
+        // The service is going away — close this window too. Address our own
+        // window by (origin, id): props.instance is the origin-tagged compound
+        // id, which never matches the bare window-list instanceID for a remote
+        // instance (docs/REMOTE.md R2). data-wash-window is our bare id.
+        const id = Number(props.host.getAttribute('data-wash-window') || 0);
+        if (id) window.wash.closeWindow(id, props.origin);
         break;
       }
       case 'exited':
@@ -102,8 +105,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   const closeSelf = () => {
-    const win = window.wash.windows().find((w) => w.instanceID === props.instance);
-    if (win) window.wash.closeWindow(win.windowID);
+    // (origin, id) — see the shutdown handler above; props.instance is the
+    // compound id, data-wash-window our bare window id.
+    const id = Number(props.host.getAttribute('data-wash-window') || 0);
+    if (id) window.wash.closeWindow(id, props.origin);
   };
 
   return (

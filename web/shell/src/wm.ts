@@ -11,7 +11,8 @@
 import { createSignal } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import type { SessionPatch, SessionWindow } from './main';
-import { clampViewport, viewportForRect, nextZ } from './viewport-math';
+import { type Origin, LOCAL_ORIGIN } from './clients';
+import { clampViewport, viewportForRect } from './viewport-math';
 import { focusFromSnapshot } from './wm-focus';
 
 export type WinState = 'normal' | 'minimized' | 'maximized';
@@ -25,6 +26,11 @@ export interface CrashInfo {
 }
 
 export interface Win {
+  // Which router this window belongs to. Window/instance ids are scoped
+  // to a connection, so identity in the merged store is (origin,windowID)
+  // — never windowID alone. LOCAL for the shell's own router; a remote
+  // host's origin for tunnelled windows (docs/REMOTE.md R2).
+  origin: Origin;
   windowID: number;
   instanceID: string;
   element: string;
@@ -37,7 +43,17 @@ export interface Win {
   y: number;
   w: number;
   h: number;
+  // z is the router's per-router stacking value (authoritative WITHIN an
+  // origin). It is NOT comparable across origins — each router counts from
+  // its own zero — so it can't drive cross-desktop stacking on its own.
   z: number;
+  // gz is the FE-arbitrated GLOBAL stacking order: a single monotonic
+  // counter bumped whenever any window (any origin) is raised/focused or
+  // first appears. window.tsx renders z-index from gz, so "bring to front"
+  // works across origins where the colliding per-router z cannot (a remote
+  // window's focus would otherwise be overwritten by B's small B-local z and
+  // sink behind local windows). Below the chrome z-band by construction.
+  gz: number;
   state: WinState;
   // Pre-min/max geometry — kept around so a future "restore" call can
   // return the window to its user-set frame even after a chain of
@@ -66,9 +82,49 @@ export interface DesktopMount {
   element: string;
 }
 
+// A focus reference is (origin, windowID): at most one window is focused
+// across the whole merged desktop, but its identity must name the origin
+// so the same windowID on two routers isn't confused.
+export interface FocusRef {
+  origin: Origin;
+  windowID: number;
+}
+
 const [windows, setWindows] = createStore<Win[]>([]);
-const [focused, setFocused] = createSignal<number | null>(null);
+const [focused, setFocused] = createSignal<FocusRef | null>(null);
 const [desktop, setDesktop] = createSignal<DesktopMount | null>(null);
+
+// Global stacking counter — the FE's cross-origin z arbiter. Bumped on every
+// raise/focus/first-appearance so the most-recently-raised window has the
+// highest gz regardless of which router owns it. window.tsx renders z-index
+// from gz; see Win.gz.
+let gzCounter = 0;
+function bumpGz(): number {
+  return ++gzCounter;
+}
+
+// raiseGz lifts a window to the top of the global stack without touching
+// focus (focus is set separately by the caller). No-op if the window isn't
+// in the store yet (e.g. a snapshot focus claim for a window still waiting on
+// its bundle — it lands on top anyway via its first-insert gz).
+function raiseGz(origin: Origin, windowID: number): void {
+  setWindows((w) => w.origin === origin && w.windowID === windowID, 'gz', bumpGz());
+}
+
+// isFocused reports whether a given (origin,windowID) is the focused one.
+export function isFocused(ref: { origin: Origin; windowID: number }): boolean {
+  const f = focused();
+  return f != null && f.origin === ref.origin && f.windowID === ref.windowID;
+}
+
+// originForWindow resolves which router owns a windowID, for the
+// window.wash WM intents that are still addressed by bare id (the session
+// chrome's taskbar). Unambiguous while ids are unique in the store; the
+// id-collision case across origins is handled when remote clients land
+// (M1f) by addressing intents with their origin directly.
+export function originForWindow(windowID: number): Origin {
+  return windows.find((w) => w.windowID === windowID)?.origin ?? LOCAL_ORIGIN;
+}
 
 // Virtual desktop is a VIEWPORTS_PER_AXIS² grid of viewports — windows
 // live in one big plane (W*VIEWPORTS × H*VIEWPORTS in screen-pixel
@@ -133,9 +189,9 @@ export function viewportFor(w: { x: number; y: number; w: number; h: number }): 
 // raiseLocal bumps a window to the front locally; the router's patch
 // confirms the change moments later. Kept as a separate export for
 // places that already raise before calling a wire helper.
-export function raiseLocal(windowID: number): void {
-  setWindows((w) => w.windowID === windowID, 'z', nextZ(windows));
-  setFocused(windowID);
+export function raiseLocal(origin: Origin, windowID: number): void {
+  raiseGz(origin, windowID);
+  setFocused({ origin, windowID });
 }
 
 // moveLocal / resizeLocal write x/y/w/h to the store immediately so
@@ -143,19 +199,20 @@ export function raiseLocal(windowID: number): void {
 // snapping back to the pre-commit position while waiting for the
 // router's session.patch. The router's patch is canonical and will
 // overwrite these moments later — usually with the same values.
-export function moveLocal(windowID: number, x: number, y: number): void {
-  setWindows((w) => w.windowID === windowID, { x, y });
+export function moveLocal(origin: Origin, windowID: number, x: number, y: number): void {
+  setWindows((w) => w.origin === origin && w.windowID === windowID, { x, y });
 }
 
-// windowById returns the live window record (or undefined). Used by the
-// display element's move bridge to read a window's current x/y when a CSD
-// guest requests an interactive move (M8).
-export function windowById(windowID: number): Win | undefined {
-  return windows.find((w) => w.windowID === windowID);
+// windowById returns the live window record for (origin, windowID), or
+// undefined. Used by the display element's move bridge to read a window's
+// current x/y when a CSD guest requests an interactive move (M8). Origin-
+// scoped because window ids are per-router (docs/REMOTE.md R2).
+export function windowById(origin: Origin, windowID: number): Win | undefined {
+  return windows.find((w) => w.origin === origin && w.windowID === windowID);
 }
 
-export function resizeLocal(windowID: number, w: number, h: number): void {
-  setWindows((win) => win.windowID === windowID, { w, h });
+export function resizeLocal(origin: Origin, windowID: number, w: number, h: number): void {
+  setWindows((win) => win.origin === origin && win.windowID === windowID, { w, h });
 }
 
 export function mountDesktop(d: DesktopMount): void {
@@ -166,9 +223,11 @@ export function unmountDesktop(): void {
   setDesktop(null);
 }
 
-// fromSessionWindow projects the wire shape onto the local Win.
-function fromSessionWindow(sw: SessionWindow): Win {
+// fromSessionWindow projects the wire shape onto the local Win, stamping
+// the origin of the router the snapshot/patch arrived from.
+function fromSessionWindow(sw: SessionWindow, origin: Origin): Win {
   return {
+    origin,
     windowID: sw.window_id,
     instanceID: sw.instance_id,
     element: sw.element,
@@ -180,6 +239,8 @@ function fromSessionWindow(sw: SessionWindow): Win {
     w: sw.w,
     h: sw.h,
     z: sw.z,
+    // gz is FE-owned; a real value is stamped at insert time (upsertWindow).
+    gz: 0,
     state: sw.state,
     restoreX: sw.restore_x,
     restoreY: sw.restore_y,
@@ -219,6 +280,7 @@ function mountWhenReady(
 // Existing windows whose ids are absent in the snapshot are removed —
 // this is the reconnect path; the snapshot is authoritative.
 export function applySessionSnapshot(
+  origin: Origin,
   sessionWins: SessionWindow[],
   waitForBundle: (instanceID: string) => Promise<void>,
 ): void {
@@ -226,28 +288,40 @@ export function applySessionSnapshot(
   for (const sw of sessionWins) {
     keep.add(sw.window_id);
   }
-  // Drop windows that aren't in the new snapshot.
-  setWindows((prev) => prev.filter((w) => keep.has(w.windowID)));
+  // Drop windows of THIS origin that aren't in the new snapshot; other
+  // origins' windows are untouched (a snapshot is authoritative only for
+  // the router it came from). This is the load-bearing multi-router line:
+  // without the origin guard, B's reconnect snapshot would wipe A's
+  // windows.
+  setWindows((prev) => prev.filter((w) => w.origin !== origin || keep.has(w.windowID)));
 
   for (const sw of sessionWins) {
-    const w = fromSessionWindow(sw);
+    const w = fromSessionWindow(sw, origin);
     mountWhenReady(w, waitForBundle, 'snapshot');
   }
-  // Reconcile focus to the snapshot's claim (or null → clear local focus
-  // on the reconnect / no-claim path). See wm-focus.focusFromSnapshot.
-  setFocused(focusFromSnapshot(sessionWins));
+  // Reconcile focus to THIS origin's claim. A claim → focus it; no claim →
+  // clear focus only if the currently-focused window belongs to this
+  // origin (another origin's focus is left intact). See wm-focus.
+  const claim = focusFromSnapshot(sessionWins);
+  if (claim != null) {
+    setFocused({ origin, windowID: claim });
+    raiseGz(origin, claim);
+  } else if (focused()?.origin === origin) {
+    setFocused(null);
+  }
 }
 
 // applySessionPatch applies a batch of mutations in order. Upserts
 // wait for the bundle if the instance hasn't been declared yet.
 export function applySessionPatch(
+  origin: Origin,
   patches: SessionPatch[],
   waitForBundle: (instanceID: string) => Promise<void>,
 ): void {
   for (const p of patches) {
     if (p.op === 'window.upsert' && p.window) {
-      const w = fromSessionWindow(p.window);
-      const existed = windows.find((x) => x.windowID === w.windowID) != null;
+      const w = fromSessionWindow(p.window, origin);
+      const existed = windows.find((x) => x.origin === origin && x.windowID === w.windowID) != null;
       if (existed) {
         upsertWindow(w);
       } else {
@@ -255,10 +329,13 @@ export function applySessionPatch(
         // (immediately for built-ins, else after its bundle lands).
         mountWhenReady(w, waitForBundle, 'patch');
       }
-      if (w.state === 'minimized' && focused() === w.windowID) {
+      if (w.state === 'minimized' && isFocused(w)) {
         setFocused(null);
       } else if (p.window.focused) {
-        setFocused(w.windowID);
+        setFocused({ origin, windowID: w.windowID });
+        // The router raised this window (this or another client focused it) —
+        // lift it to the top of the global stack so cross-origin focus shows.
+        raiseGz(origin, w.windowID);
       }
     } else if (p.op === 'window.delete' && typeof p.window_id === 'number') {
       const id = p.window_id;
@@ -266,10 +343,10 @@ export function applySessionPatch(
       // become FE-only tombstones the user dismisses by clicking
       // close. The router has already torn down its side; we just
       // hold the geometry + crash info until the user is done.
-      const w = windows.find((x) => x.windowID === id);
+      const w = windows.find((x) => x.origin === origin && x.windowID === id);
       if (w?.crashed) continue;
-      setWindows((prev) => prev.filter((w) => w.windowID !== id));
-      if (focused() === id) setFocused(null);
+      setWindows((prev) => prev.filter((x) => !(x.origin === origin && x.windowID === id)));
+      if (isFocused({ origin, windowID: id })) setFocused(null);
     }
   }
 }
@@ -279,8 +356,8 @@ export function applySessionPatch(
 // If the window isn't currently in the store (rare race: the BE
 // crashed before its window-upsert reached the shell), this is a
 // no-op — there's nothing to tombstone.
-export function markCrashed(instanceID: string, info: CrashInfo): void {
-  const idx = windows.findIndex((w) => w.instanceID === instanceID);
+export function markCrashed(origin: Origin, instanceID: string, info: CrashInfo): void {
+  const idx = windows.findIndex((w) => w.origin === origin && w.instanceID === instanceID);
   if (idx < 0) return;
   setWindows(idx, 'crashed', info);
 }
@@ -289,16 +366,31 @@ export function markCrashed(instanceID: string, info: CrashInfo): void {
 // close button on a crashed window calls this directly rather than
 // sending window.close_clicked — the router-side state is already
 // gone.
-export function dismissCrashed(windowID: number): void {
-  setWindows((prev) => prev.filter((w) => w.windowID !== windowID));
-  if (focused() === windowID) setFocused(null);
+export function dismissCrashed(origin: Origin, windowID: number): void {
+  setWindows((prev) => prev.filter((w) => !(w.origin === origin && w.windowID === windowID)));
+  if (isFocused({ origin, windowID })) setFocused(null);
+}
+
+// dropOrigin removes every window belonging to a remote origin — called
+// when a host disconnects (docs/REMOTE.md §6.1/§9): the supervisor reports
+// the host down and the shell detaches its RouterClient, so its frozen
+// windows must leave the desktop. Clears focus if it pointed at this host.
+// LOCAL is never dropped (the seat's own desktop).
+export function dropOrigin(origin: Origin): void {
+  if (origin === LOCAL_ORIGIN) return;
+  setWindows((prev) => prev.filter((w) => w.origin !== origin));
+  if (focused()?.origin === origin) setFocused(null);
 }
 
 function upsertWindow(w: Win): void {
-  const idx = windows.findIndex((x) => x.windowID === w.windowID);
+  const idx = windows.findIndex((x) => x.origin === w.origin && x.windowID === w.windowID);
   if (idx < 0) {
-    setWindows((prev) => [...prev, w]);
+    // A new window starts on top of the global stack.
+    setWindows((prev) => [...prev, { ...w, gz: bumpGz() }]);
   } else {
-    setWindows(idx, w);
+    // Router-driven update (geometry/title/state). Preserve the FE's global
+    // stacking value — only an explicit raise (raiseLocal / a focused patch /
+    // a snapshot focus claim) changes gz, never a plain geometry patch.
+    setWindows(idx, { ...w, gz: windows[idx].gz });
   }
 }

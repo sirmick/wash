@@ -45,6 +45,12 @@ type ShellSession struct {
 	// drainerDone is closed by the drainer goroutine on exit so
 	// HandleShell can wait for it during teardown.
 	drainerDone chan struct{}
+
+	// peerChannels tracks this shell's remote-apps relay channels
+	// (docs/REMOTE.md), channel id → binding, so they're torn down (socket
+	// closed, pump unblocked) when the shell disconnects. Guarded by peerMu.
+	peerMu       sync.Mutex
+	peerChannels map[uint32]*channelBinding
 }
 
 // declareInstance sends ShellAppDeclared (and ShellWindowCreate for
@@ -105,12 +111,17 @@ func (s *ShellSession) undeclareInstance(instanceID string) {
 // the world), then runs the frame loop.
 func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	sess := &ShellSession{
-		Transport:   t,
-		router:      r,
-		scheduler:   NewScheduler(),
-		drainerDone: make(chan struct{}),
+		Transport:    t,
+		router:       r,
+		scheduler:    NewScheduler(),
+		drainerDone:  make(chan struct{}),
+		peerChannels: make(map[uint32]*channelBinding),
 	}
 	defer t.Close()
+	// Close any remote-apps relay sockets this shell opened, so a browser
+	// disconnect tears down its ssh -L'd peer connections (and unblocks
+	// their pump goroutines) instead of leaking them.
+	defer sess.closeAllPeers()
 	defer func() {
 		// Stop the drainer first so it doesn't try to write to a
 		// closing transport, then wait for it to exit.
@@ -199,6 +210,15 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 			s.router.log("shell: drop raw frame on channel %d (owned by another shell)", f.Channel)
 			return nil
 		}
+		// Remote-apps relay (docs/REMOTE.md): a peer channel's endpoint is
+		// the ssh -L'd socket, not an app. Write the browser's bytes (host
+		// B's wire) verbatim — A never decodes them.
+		if b.peerConn != nil {
+			if _, err := b.peerConn.Write(f.Payload); err != nil {
+				s.router.closeChannel(f.Channel, "peer write: "+err.Error())
+			}
+			return nil
+		}
 		return b.app.writeRawFrame(f.Channel, f.Payload)
 	}
 	msg, err := wire.DecodeCtrl(f.Payload)
@@ -220,6 +240,13 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		// Deliberately not logged here: this is the FE→BE hot path.
 		// Failures are logged in handleAppMsgSend; successes are noise.
 		return s.handleAppMsgSend(m, f.Class())
+	case wire.ShellLaunch:
+		return s.handleLaunch(m)
+	case wire.ShellPeerAttach:
+		return s.handlePeerAttach(m)
+	case wire.ShellPeerDetach:
+		s.detachPeer(m.Origin)
+		return nil
 	case wire.ShellLog:
 		return s.handleShellLog(m)
 	case wire.ShellChannelCredit:
@@ -522,6 +549,48 @@ func (s *ShellSession) handleAppMsgSend(m wire.ShellAppMsgSend, class wire.Class
 		return nil
 	}
 	return inst.WriteEvtClass(wire.NewEvtAppMsg(inst.WindowID, m.Data), class)
+}
+
+// handleLaunch spawns an app by id on behalf of the shell (docs/REMOTE.md
+// §6.1). This is the no-session-BE launch path: host B runs --no-session,
+// so wash-connect can't route a launcher click through a session app and
+// asks B's router directly. Mirrors controlLaunch (control.go) — refuse
+// desktop-surface (the autoboot session owns the desktop), route
+// background singletons through resolveRecipient, spawn the rest — but
+// fire-and-forget: success surfaces as the usual app.declared + window,
+// and there is no response frame, so failures are logged here only.
+func (s *ShellSession) handleLaunch(m wire.ShellLaunch) error {
+	if m.AppID == "" {
+		s.router.log("shell launch: missing app_id")
+		return nil
+	}
+	entry := s.router.reg.ByID(m.AppID)
+	if entry == nil || !entry.Enabled() {
+		s.router.log("shell launch %s: unknown or disabled app", m.AppID)
+		return nil
+	}
+	if entry.Manifest.ProtocolVersion != ProtocolVersion {
+		s.router.log("shell launch %s: protocol mismatch", m.AppID)
+		return nil
+	}
+	if entry.Manifest.Surface == SurfaceDesktop {
+		s.router.log("shell launch %s: refusing desktop-surface app", m.AppID)
+		return nil
+	}
+	if entry.Manifest.Surface == SurfaceBackground {
+		// Singleton table is consulted first (returns the running one),
+		// spawning on demand otherwise — same as controlLaunch.
+		if _, code, err := s.router.resolveRecipient(context.Background(), wire.Recipient{AppID: m.AppID}); err != nil {
+			s.router.log("shell launch %s: %s: %v", m.AppID, code, err)
+		}
+		return nil
+	}
+	go func() {
+		if _, err := s.router.spawnAndRun(context.Background(), entry, false); err != nil {
+			s.router.log("shell launch %s: %v", m.AppID, err)
+		}
+	}()
+	return nil
 }
 
 // WriteCtrl encodes m as JSON and writes a shell control-channel frame.

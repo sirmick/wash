@@ -25,7 +25,7 @@ GOFLAGS += -cover -coverpkg=github.com/sirmick/wash/...
 endif
 
 OUT     := out
-BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-disks wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net wash-washamp wash-music wash-radio wash-audio
+BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-disks wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net wash-washamp wash-music wash-radio wash-audio wash-remote wash-connect
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -131,6 +131,9 @@ SESSION_STAMP  := $(SESSION_ASSETS)/.stamp
 ABOUT_ASSETS   := apps/about/be/assets
 ABOUT_STAMP    := $(ABOUT_ASSETS)/.stamp
 
+CONNECT_ASSETS := apps/connect/be/assets
+CONNECT_STAMP  := $(CONNECT_ASSETS)/.stamp
+
 TEST_ASSETS    := apps/test/be/assets
 TEST_STAMP     := $(TEST_ASSETS)/.stamp
 
@@ -226,6 +229,10 @@ web-session: web-deps
 .PHONY: web-about
 web-about: web-deps
 	@$(PNPM) --filter @wash/app-about run build
+
+.PHONY: web-connect
+web-connect: web-deps
+	@$(PNPM) --filter @wash/app-connect run build
 
 .PHONY: web-test
 web-test: web-deps
@@ -325,6 +332,9 @@ $(SESSION_STAMP): web-session
 $(ABOUT_STAMP): web-about
 	$(call embed_dist,apps/about/fe/dist,$(ABOUT_ASSETS))
 
+$(CONNECT_STAMP): web-connect
+	$(call embed_dist,apps/connect/fe/dist,$(CONNECT_ASSETS))
+
 $(TEST_STAMP): web-test
 	$(call embed_dist,apps/test/fe/dist,$(TEST_ASSETS))
 
@@ -406,7 +416,7 @@ $(OUT)/wash-fm $(OUT)/wash-edit $(OUT)/wash-vscode $(OUT)/wash-vscode-workbench 
 $(OUT)/wash-settings $(OUT)/wash-top $(OUT)/wash-disks $(OUT)/wash-journal \
 $(OUT)/wash-syslogs $(OUT)/wash-services $(OUT)/wash-packages $(OUT)/wash-net \
 $(OUT)/wash-washamp $(OUT)/wash-music $(OUT)/wash-radio $(OUT)/wash-netd \
-$(OUT)/wash-display: vendor-sync
+$(OUT)/wash-connect $(OUT)/wash-display: vendor-sync
 
 # ----- go stage -----
 
@@ -418,6 +428,9 @@ $(OUT)/wash-session: $(SESSION_STAMP) | $(OUT)
 
 $(OUT)/wash-about: $(ABOUT_STAMP) | $(OUT)
 	$(call go_build,$@,apps/about/be/cmd)
+
+$(OUT)/wash-connect: $(CONNECT_STAMP) | $(OUT)
+	$(call go_build,$@,apps/connect/be/cmd)
 
 $(OUT)/wash-test: $(TEST_STAMP) | $(OUT)
 	$(call go_build,$@,apps/test/be/cmd)
@@ -579,6 +592,14 @@ $(OUT)/wash-notify: | $(OUT)
 $(OUT)/wash-audio: | $(OUT)
 	$(call go_build,$@,apps/audio/be/cmd)
 
+# wash-remote is the A-side remote-hosts connectivity service
+# (docs/REMOTE.md R2): it brings up wash-router on remote hosts over ssh
+# and forwards them locally. No window, no FE bundle. .PHONY for the same
+# reason as wash-notify.
+.PHONY: $(OUT)/wash-remote
+$(OUT)/wash-remote: | $(OUT)
+	$(call go_build,$@,apps/remote/be/cmd)
+
 # wash-netd is the privileged networking background service (docs/NET.md
 # §2.11): reserved id com.wash.netd. It now supplies the settings Network
 # panel (panel.js), so its binary embeds NETD_STAMP's assets. .PHONY +
@@ -687,7 +708,7 @@ test-app: $(OUT)/wash-priv-fakesudo
 # "pattern all:assets: no matching files found" — local dev
 # accidentally works because the standalone wash-router build
 # rule already chains through ROUTER_STAMP.
-MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(DISKS_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP) $(VSCODE_WB_STAMP) $(NET_STAMP) $(WASHAMP_STAMP) $(MUSIC_STAMP) $(RADIO_STAMP) $(VSCODE_STAMP) $(NETD_STAMP)
+MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(CONNECT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(DISKS_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP) $(VSCODE_WB_STAMP) $(NET_STAMP) $(WASHAMP_STAMP) $(MUSIC_STAMP) $(RADIO_STAMP) $(VSCODE_STAMP) $(NETD_STAMP)
 
 # Adding wash_test_app to the tags pulls the test app's blank-import
 # in (which is otherwise excluded by cmd/wash/imports_test.go's
@@ -810,10 +831,32 @@ e2e-vm: vm-image vm-chrome $(OUT)/washvm-run
 	cd e2e && $(PNPM) exec playwright install chromium
 	cd e2e && $(PNPM) exec playwright test net-vm-gate net-vm-multi
 
+# e2e-remote-vm: the wash-remote (R2) two-VM capstone (docs/REMOTE.md). Boots
+# VM-A (desktop) + VM-B (ssh host) on a shared mcast L2 and drives wash-connect
+# to SSH into B and composite a B app window into A — proving the real ssh
+# bring-up the host-process connect-launch spec stubs out. Needs qemu + /dev/kvm
+# + the openssh-baked image (RENDER_VER bump); self-skips otherwise.
+.PHONY: e2e-remote-vm
+e2e-remote-vm: vm-image vm-chrome $(OUT)/washvm-remote-run
+	cd e2e && $(PNPM) install --ignore-workspace --silent
+	cd e2e && $(PNPM) exec playwright install chromium
+	cd e2e && $(PNPM) exec playwright test remote-vm
+
+.PHONY: $(OUT)/washvm-remote-run
+$(OUT)/washvm-remote-run: | $(OUT)
+	$(call go_build,$@,cmd/washvm-remote-run)
+
 # run-vm: boot the baked image and serve the wash UI for manual poking.
 .PHONY: run-vm
 run-vm: vm-image vm-chrome $(OUT)/washvm-run
 	$(OUT)/washvm-run --chrome $(VM_CHROME) --addr 127.0.0.1:8080
+
+# run-remote-vm: boot both VMs (desktop + ssh host) + serve VM-A for manual
+# wash-connect poking against a real second host. The interactive sibling of
+# e2e-remote-vm.
+.PHONY: run-remote-vm
+run-remote-vm: vm-image vm-chrome $(OUT)/washvm-remote-run
+	$(OUT)/washvm-remote-run --chrome $(VM_CHROME) --addr 127.0.0.1:8080
 
 # net-demo: launch 3 OpenWRT microVMs (one wash-configured two-VLAN router + two
 # DHCP workstations) on a shared loopback L2 segment, each console in the browser

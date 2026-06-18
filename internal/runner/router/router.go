@@ -156,7 +156,9 @@ func Run(args []string) int {
 	allowUID := fs.Uint("allow-uid", 0, "uid whose SCM_RIGHTS handoffs the --listen-unix listener accepts (SO_PEERCRED-verified). When UNSET, defaults to the router's own uid; pass it explicitly (including 0 for root — the production wash-login runs as root) to override.")
 	authToken := fs.String("auth-token", "", "explicit token gating the --transport=ws TCP listener (/, /ws, /screenshot). Empty ⇒ a random 128-bit token is generated and logged at startup. Ignored for --listen-unix and byte-stream transports, which are gated by OS perms / device ownership.")
 	noAuth := fs.Bool("no-auth", false, "serve the --transport=ws listener with NO token gate. The bound address then hands a full session to anyone who can reach it — only for trusted-loopback dev.")
+	allowCrossOrigin := fs.Bool("allow-cross-origin", false, "relax the /ws same-origin check so a browser can open a shell connection from a different origin. Needed for remote apps (docs/REMOTE.md R2): a desktop served by router A opens a second connection to this router (B) over an ssh -L tunnel. Gate it with the tunnel/loopback bind, not the same-origin policy.")
 	authTokenFile := fs.String("auth-token-file", "", "path the gate token is written to (mode 0600) and recovered from. Empty ⇒ a per-pid file under $XDG_RUNTIME_DIR/wash (or /tmp/wash-<uid>), removed on clean exit. An explicit path that already holds a token is reused as-is, so the token (and existing browser cookies) survive a restart.")
+	listenRaw := fs.String("listen-raw", "", `serve the shell wire (raw length-prefixed frames, NO HTTP/WebSocket) on a listening socket: "unix:/path" or "tcp:host:port". Each accepted connection is one shell (HandleShell over a StreamTransport). This is host B's endpoint for the remote-apps relay (docs/REMOTE.md): A's com.wash.remote ssh -L's a unix socket to here, and A's router splices a browser's muxed channel to it. Replaces --listen for that role; gated by the ssh tunnel + socket perms, so no token/origin check applies.`)
 	showVersion := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
 		// flag already printed the message.
@@ -228,7 +230,7 @@ func Run(args []string) int {
 	authTokenVal := ""
 	tokenFilePath := ""
 	tokenFileIsDefault := false
-	tcpListener := *transport == "ws" && *listenUnix == ""
+	tcpListener := *transport == "ws" && *listenUnix == "" && *listenRaw == ""
 	if tcpListener && !*noAuth {
 		tokenFilePath = *authTokenFile
 		if tokenFilePath == "" {
@@ -263,21 +265,22 @@ func Run(args []string) int {
 	}
 
 	cfg := router.Config{
-		Listen:        firstNonEmpty(*listen, os.Getenv("WASH_LISTEN"), defaultListen),
-		AppsDirs:      router.SplitAppsDir(firstNonEmpty(*appsDir, os.Getenv("WASH_APPS_DIR"), defaultAppsDir())),
-		SessionAppID:  firstNonEmpty(*sessionID, os.Getenv("WASH_SESSION_APP_ID"), defaultSessionAppID),
-		NoSession:     *noSession,
-		InitialAppID:  *initialApp,
-		ShowHidden:    *showHidden,
-		ControlSocket: cs,
-		ScreenshotDir: sd,
-		Dev:           *dev || os.Getenv("WASH_DEV") != "",
-		FSRoot:        normRoot,
-		ListenUnix:    *listenUnix,
-		Name:          *name,
-		IdleTimeout:   idleTimeoutVal,
-		AllowUID:      allowUIDVal,
-		AuthToken:     authTokenVal,
+		Listen:           firstNonEmpty(*listen, os.Getenv("WASH_LISTEN"), defaultListen),
+		AppsDirs:         router.SplitAppsDir(firstNonEmpty(*appsDir, os.Getenv("WASH_APPS_DIR"), defaultAppsDir())),
+		SessionAppID:     firstNonEmpty(*sessionID, os.Getenv("WASH_SESSION_APP_ID"), defaultSessionAppID),
+		NoSession:        *noSession,
+		InitialAppID:     *initialApp,
+		ShowHidden:       *showHidden,
+		ControlSocket:    cs,
+		ScreenshotDir:    sd,
+		Dev:              *dev || os.Getenv("WASH_DEV") != "",
+		FSRoot:           normRoot,
+		ListenUnix:       *listenUnix,
+		Name:             *name,
+		IdleTimeout:      idleTimeoutVal,
+		AllowUID:         allowUIDVal,
+		AuthToken:        authTokenVal,
+		AllowCrossOrigin: *allowCrossOrigin,
 	}
 
 	logger := log.New(os.Stderr, "wash-router ", log.LstdFlags|log.Lmsgprefix)
@@ -373,6 +376,35 @@ func Run(args []string) int {
 	// when we run over fd:3 / unix sockets).
 	r.SetAssets(assets)
 
+	// Remote-apps relay endpoint (docs/REMOTE.md): serve the raw shell wire
+	// on a listening socket, one HandleShell per accepted connection. This is
+	// host B's side of the relay — A's com.wash.remote ssh -L's a unix socket
+	// here and A's router splices a browser's muxed channel to it. It bypasses
+	// the ws/unix/transport machinery entirely (no HTTP, no token, no origin
+	// check): the ssh tunnel + socket perms are the boundary.
+	if *listenRaw != "" {
+		network, addr, perr := parseListenRaw(*listenRaw)
+		if perr != nil {
+			logger.Printf("--listen-raw: %v", perr)
+			return 2
+		}
+		rctx, rcancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer rcancel()
+		if cs != "" {
+			go func() {
+				if err := r.ListenControl(rctx); err != nil {
+					logf("control socket: %v", err)
+				}
+			}()
+		}
+		if err := runRawListener(rctx, r, network, addr, logf); err != nil {
+			logger.Printf("listen-raw: %v", err)
+			return 1
+		}
+		logf("shutdown complete")
+		return 0
+	}
+
 	// Parse transport selection up-front so we error before any
 	// listener / fs work happens on a bad flag.
 	transportScheme, transportPath, err := parseTransport(*transport)
@@ -467,6 +499,73 @@ func Run(args []string) int {
 	}
 	logf("shutdown complete")
 	return 0
+}
+
+// parseListenRaw splits a --listen-raw value ("unix:/path" or
+// "tcp:host:port") into a net.Listen (network, address) pair.
+func parseListenRaw(s string) (network, address string, err error) {
+	i := strings.Index(s, ":")
+	if i < 0 {
+		return "", "", fmt.Errorf("expected unix:/path or tcp:host:port, got %q", s)
+	}
+	switch scheme := s[:i]; scheme {
+	case "unix":
+		return "unix", s[i+1:], nil
+	case "tcp":
+		return "tcp", s[i+1:], nil
+	default:
+		return "", "", fmt.Errorf("unknown scheme %q (want unix or tcp)", scheme)
+	}
+}
+
+// runRawListener serves the raw shell wire on a listening socket: each
+// accepted connection gets its own HandleShell over a StreamTransport (the
+// ws path minus HTTP/WebSocket framing). For unix sockets it removes a
+// stale socket file first and on shutdown. Blocks until ctx is cancelled.
+func runRawListener(ctx context.Context, r *router.Router, network, address string, logf func(string, ...any)) error {
+	if network == "unix" {
+		_ = os.Remove(address) // clear a stale socket from a previous run
+	}
+	ln, err := net.Listen(network, address)
+	if err != nil {
+		return err
+	}
+	defer ln.Close()
+	if network == "unix" {
+		// 0600 so ONLY this uid can connect — the socket is the wash session
+		// (no token), reached solely via the ssh -L from A (docs/REMOTE.md
+		// §10). Without this, default umask could leave it group/other-
+		// connectable, defeating the "ssh is the boundary" guarantee.
+		if cerr := os.Chmod(address, 0o600); cerr != nil {
+			return fmt.Errorf("chmod relay socket: %w", cerr)
+		}
+		defer os.Remove(address)
+	}
+	// "listening on" is the readiness marker com.wash.remote greps for over
+	// ssh (apps/remote/be/supervisor.go), so keep the wording.
+	logf("listening on %s://%s", network, address)
+	go func() {
+		<-ctx.Done()
+		ln.Close() // unblocks Accept
+	}()
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return nil // clean shutdown
+			default:
+				return err
+			}
+		}
+		go func() {
+			defer conn.Close()
+			// One browser session per connection (the ssh -L forwards a fresh
+			// connection per attach). No SessionOpen/Close splitter — that's
+			// for a single shared serial; here each viewer has its own conn.
+			_ = r.HandleShell(ctx, wire.NewStreamTransport(conn))
+		}()
+	}
 }
 
 // parseTransport splits the --transport flag value into its scheme and

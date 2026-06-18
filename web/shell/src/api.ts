@@ -3,6 +3,8 @@
 // (catalog, open windows) and to request actions (spawn via app_msg,
 // focus, close).
 
+import { type Origin, parseInstanceId, compoundInstanceId, compoundChannelId } from './clients';
+
 export interface CatalogApp {
   id: string;
   name: string;
@@ -30,6 +32,8 @@ export interface PanelDesc {
 }
 
 export interface WindowInfo {
+  /** Origin (router) the window belongs to; LOCAL for the shell's own. */
+  origin: Origin;
   windowID: number;
   instanceID: string;
   element: string;
@@ -92,15 +96,18 @@ const pendingMessages = new Map<string, unknown[]>();
 // session.snapshot / session.patch deliveries.
 const savedStates = new Map<string, unknown>();
 
-// rawSubscribers maps channel id → callback for incoming raw bytes.
-// Elements register via window.wash.openRawChannel; the shell's WS
-// handler dispatches matching frames through.
-const rawSubscribers = new Map<number, (bytes: Uint8Array) => void>();
+// rawSubscribers maps an ORIGIN-SCOPED channel key → callback for
+// incoming raw bytes. Keyed by compoundChannelId(origin, channel) so a
+// remote host's channel 5 never collides with a local app's channel 5
+// (docs/REMOTE.md §4 — per-origin app wiring). Elements register via
+// window.wash.openRawChannelFor; the per-client WS dispatch routes
+// matching frames through with that client's origin.
+const rawSubscribers = new Map<string, (bytes: Uint8Array) => void>();
 // pendingRaw queues bytes that arrive on a channel before any
 // subscriber registers (the BE typically writes its first byte the
 // moment the router binds the channel, ahead of the BE → FE
-// app_msg that tells the FE the channel id).
-const pendingRaw = new Map<number, Uint8Array[]>();
+// app_msg that tells the FE the channel id). Same origin-scoped key.
+const pendingRaw = new Map<string, Uint8Array[]>();
 
 export function registerMountedElement(instanceID: string, el: HTMLElement): void {
   mountedElements.set(instanceID, el);
@@ -144,11 +151,17 @@ export function clearSavedState(instanceID: string): void {
 // replaceSavedStates replaces the entire cache. Used on snapshot
 // processing to drop any stale entries from instances the router no
 // longer knows about.
-export function replaceSavedStates(states: Record<string, unknown> | undefined): void {
-  savedStates.clear();
+export function replaceSavedStates(origin: Origin, states: Record<string, unknown> | undefined): void {
+  // app_state from a session.snapshot is keyed by BARE instance id and is
+  // authoritative only for the router it came from. Drop this origin's
+  // existing (compound-keyed) entries, then set the new ones compound —
+  // other origins' saved states are untouched.
+  for (const k of [...savedStates.keys()]) {
+    if (parseInstanceId(k).origin === origin) savedStates.delete(k);
+  }
   if (states) {
-    for (const [k, v] of Object.entries(states)) {
-      if (v != null) savedStates.set(k, v);
+    for (const [bare, v] of Object.entries(states)) {
+      if (v != null) savedStates.set(compoundInstanceId(origin, bare), v);
     }
   }
 }
@@ -176,37 +189,40 @@ export function deliverToInstance(instanceID: string, data: unknown): void {
 // writeRaw. v0.1 uses one-callback-per-channel; if a future need
 // arises we can move to a small EventTarget per channel.
 
-export function deliverRaw(channelID: number, bytes: Uint8Array): void {
-  const cb = rawSubscribers.get(channelID);
+export function deliverRaw(origin: Origin, channelID: number, bytes: Uint8Array): void {
+  const key = compoundChannelId(origin, channelID);
+  const cb = rawSubscribers.get(key);
   if (cb) {
     cb(bytes);
     return;
   }
-  let q = pendingRaw.get(channelID);
+  let q = pendingRaw.get(key);
   if (!q) {
     q = [];
-    pendingRaw.set(channelID, q);
+    pendingRaw.set(key, q);
   }
   q.push(bytes);
 }
 
-export function subscribeRaw(channelID: number, cb: (bytes: Uint8Array) => void): () => void {
-  rawSubscribers.set(channelID, cb);
-  const q = pendingRaw.get(channelID);
+export function subscribeRaw(origin: Origin, channelID: number, cb: (bytes: Uint8Array) => void): () => void {
+  const key = compoundChannelId(origin, channelID);
+  rawSubscribers.set(key, cb);
+  const q = pendingRaw.get(key);
   if (q) {
-    pendingRaw.delete(channelID);
+    pendingRaw.delete(key);
     for (const b of q) cb(b);
   }
   return () => {
-    if (rawSubscribers.get(channelID) === cb) {
-      rawSubscribers.delete(channelID);
+    if (rawSubscribers.get(key) === cb) {
+      rawSubscribers.delete(key);
     }
   };
 }
 
-export function closeRawSubscriber(channelID: number): void {
-  rawSubscribers.delete(channelID);
-  pendingRaw.delete(channelID);
+export function closeRawSubscriber(origin: Origin, channelID: number): void {
+  const key = compoundChannelId(origin, channelID);
+  rawSubscribers.delete(key);
+  pendingRaw.delete(key);
 }
 
 // ---- Display window ↔ video channel registry ----
@@ -235,14 +251,25 @@ interface DisplayElement extends HTMLElement {
   attachPopupChannel?(channelID: number): void;
 }
 
-const displayWindows = new Map<number, DisplayElement>();
-const videoChannelForWindow = new Map<number, number>();
-// Popup channels that arrived before the parent element registered, per win.
-const pendingPopupChannels = new Map<number, number[]>();
+// Window ids are per-router, so a remote display window can share an id with
+// a local one. Key the registries by (origin, windowID) — same reason raw
+// channels use compoundChannelId — so a remote wash-display window never
+// clobbers a local one's element/channel (docs/REMOTE.md R2). Reuses the
+// channel codec (origin + int → unique string); parseInstanceId reverses it.
+function winKey(origin: Origin, windowID: number): string {
+  return compoundChannelId(origin, windowID);
+}
 
-export function registerDisplayWindow(windowID: number, el: DisplayElement): void {
-  displayWindows.set(windowID, el);
-  const ch = videoChannelForWindow.get(windowID);
+const displayWindows = new Map<string, DisplayElement>();
+const videoChannelForWindow = new Map<string, number>();
+// Popup channels that arrived before the parent element registered, per
+// (origin, window).
+const pendingPopupChannels = new Map<string, number[]>();
+
+export function registerDisplayWindow(origin: Origin, windowID: number, el: DisplayElement): void {
+  const key = winKey(origin, windowID);
+  displayWindows.set(key, el);
+  const ch = videoChannelForWindow.get(key);
   if (ch !== undefined) {
     try {
       el.attachVideoChannel(ch);
@@ -250,9 +277,9 @@ export function registerDisplayWindow(windowID: number, el: DisplayElement): voi
       console.error('wash: attachVideoChannel (register):', e);
     }
   }
-  const pops = pendingPopupChannels.get(windowID);
+  const pops = pendingPopupChannels.get(key);
   if (pops && el.attachPopupChannel) {
-    pendingPopupChannels.delete(windowID);
+    pendingPopupChannels.delete(key);
     for (const c of pops) {
       try {
         el.attachPopupChannel(c);
@@ -263,20 +290,23 @@ export function registerDisplayWindow(windowID: number, el: DisplayElement): voi
   }
 }
 
-export function unregisterDisplayWindow(windowID: number, el: DisplayElement): void {
+export function unregisterDisplayWindow(origin: Origin, windowID: number, el: DisplayElement): void {
   // Only drop if the registered element is still us — guards against a
   // remount that already re-registered before our disconnect ran.
-  if (displayWindows.get(windowID) === el) {
-    displayWindows.delete(windowID);
+  const key = winKey(origin, windowID);
+  if (displayWindows.get(key) === el) {
+    displayWindows.delete(key);
   }
 }
 
 // bindVideoChannel records (and, if the element is mounted, attaches)
 // the video channel for a window. Called from main.tsx's channel.bind
-// handler when kind === wire.ChannelKindVideo ("video").
-export function bindVideoChannel(windowID: number, channelID: number): void {
-  videoChannelForWindow.set(windowID, channelID);
-  const el = displayWindows.get(windowID);
+// handler when kind === wire.ChannelKindVideo ("video"), scoped to the
+// origin of the router that bound it.
+export function bindVideoChannel(origin: Origin, windowID: number, channelID: number): void {
+  const key = winKey(origin, windowID);
+  videoChannelForWindow.set(key, channelID);
+  const el = displayWindows.get(key);
   if (el) {
     try {
       el.attachVideoChannel(channelID);
@@ -288,10 +318,12 @@ export function bindVideoChannel(windowID: number, channelID: number): void {
 
 // bindPopupChannel routes a child-surface (menu/dropdown) overlay channel
 // to the PARENT window's display element. Called from main.tsx's
-// channel.bind handler when kind === "video-popup". If the element isn't
-// mounted yet, the channel is stashed and replayed on register.
-export function bindPopupChannel(parentWindowID: number, channelID: number): void {
-  const el = displayWindows.get(parentWindowID);
+// channel.bind handler when kind === "video-popup". Origin-scoped like the
+// video registry (window ids are per-router). If the element isn't mounted
+// yet, the channel is stashed and replayed on register.
+export function bindPopupChannel(origin: Origin, parentWindowID: number, channelID: number): void {
+  const key = winKey(origin, parentWindowID);
+  const el = displayWindows.get(key);
   if (el && el.attachPopupChannel) {
     try {
       el.attachPopupChannel(channelID);
@@ -300,18 +332,19 @@ export function bindPopupChannel(parentWindowID: number, channelID: number): voi
     }
     return;
   }
-  const list = pendingPopupChannels.get(parentWindowID) ?? [];
+  const list = pendingPopupChannels.get(key) ?? [];
   list.push(channelID);
-  pendingPopupChannels.set(parentWindowID, list);
+  pendingPopupChannels.set(key, list);
 }
 
-// forgetVideoChannel clears the stashed video channel for a window.
-// Called on channel.unbind so a later rebind on the same window id
-// doesn't replay a dead channel to a freshly-mounted element.
-export function forgetVideoChannel(channelID: number): void {
-  for (const [winID, chID] of videoChannelForWindow) {
-    if (chID === channelID) {
-      videoChannelForWindow.delete(winID);
+// forgetVideoChannel clears the stashed video channel for a window of this
+// origin. Called on channel.unbind so a later rebind on the same window id
+// doesn't replay a dead channel to a freshly-mounted element. Scoped to the
+// origin so an unbind on B can't drop a local window's identical channel id.
+export function forgetVideoChannel(origin: Origin, channelID: number): void {
+  for (const [key, chID] of videoChannelForWindow) {
+    if (chID === channelID && parseInstanceId(key).origin === origin) {
+      videoChannelForWindow.delete(key);
       break;
     }
   }

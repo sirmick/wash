@@ -33,6 +33,7 @@ License: **AGPL-3.0**. Current version: **0.9.1**.
 - [Footprint — how little it uses](#footprint--how-little-it-uses)
 - [Quickstart](#quickstart)
 - [Connecting](#connecting)
+- [Remote apps](#remote-apps)
 - [Development loop](#development-loop)
 - [Running the browser demo locally](#running-the-browser-demo-locally)
 - [Packaging (deb / rpm / apk)](#packaging-deb--rpm--apk)
@@ -70,6 +71,10 @@ turns it into a **single static binary plus a browser**:
   monitor reads `/proc`, the package manager drives `apt`/`dnf`/`apk`,
   the service manager drives `systemd`/`openrc`/`procd`. No
   reimplemented userland.
+- **Other machines, too.** Point the **Connect** app at `user@host`
+  and that machine's apps composite into your desktop over plain SSH —
+  one connection, no extra ports, each host colour-tinted. See
+  [Remote apps](#remote-apps).
 - **Tiny.** The router idles around **25 MB RSS**; a full desktop
   session — router plus a dozen app processes — sits near **100 MB
   RSS** total. The browser demo runs an *entire Linux system* in a
@@ -138,6 +143,7 @@ Windowed apps (open from the launcher):
 | **music** — Music | `com.wash.music` | window | Minimalist native music player — point it at one folder, get a recursive track list with tags. The lightweight counterpart to Washamp. |
 | **radio** — Radio | `com.wash.radio` | window | Internet radio — curated SomaFM + Radio Browser "popular" + paste-a-URL. The BE proxies the stream and surfaces ICY now-playing metadata. |
 | **vscode** — VS Code | `com.wash.vscode` | window | Full VS Code (code-server) embedded in a wash window via the per-instance HTTP/WS **ingress** proxy. Backed by the `vscode` service (below). |
+| **connect** — Remote | `com.wash.connect` | window | Connect to another host over SSH and run **its** apps in this desktop — their windows composite in, tinted with the host's colour, over your single existing connection (no extra ports opened). Per-host app-launch dropdown, bookmarks, and an `ssh-add` unlock flow for passphrased keys. Fronts the `remote` supervisor (below). See [Remote apps](#remote-apps). |
 | **settings** | `com.wash.settings` | window | Desktop preferences — wallpaper, clock format, taskbar position. Writes `~/.config/wash/desktop.json` atomically; session fswatches and reloads. |
 | **about** — About wash | `com.wash.about` | window | Build / router / host facts plus a live Go-runtime process table polled from the router. The launch-flow smoke test. |
 | **test** | `com.wash.test` | window | E2E target — hidden from the catalog unless `--show-hidden`. Drives the Playwright suite. Built with `make test-app`. |
@@ -152,6 +158,7 @@ Background services (no window — they feed sidebar widgets and back the apps a
 | **netd** | `com.wash.netd` | background | The privileged networking backend — validates and applies the net app's plan through NM / networkd / UCI. Reserved-id singleton; the net app relays to it cross-app. |
 | **audio** | `com.wash.audio` | background | Audio control-plane — aggregates now-playing/transport state from Washamp / Music / Radio and feeds the sidebar Audio widget. |
 | **vscode** (service) | `com.wash.vscode` | background | Manages the code-server process + the ingress route that the VS Code window connects through. |
+| **remote** | `com.wash.remote` | background | Remote-host supervisor — opens and superintends the SSH connections wash-connect drives, reports per-host status (incl. auth-needed), and registers the multiplexed "peer" wire the shell splices to each host. See [Remote apps](#remote-apps). |
 
 Not an app but supervised the same way: **wash-display**, a native C++
 Wayland compositor (vendored wlroots). The router starts it on demand;
@@ -161,8 +168,9 @@ X11/Wayland clients launched from a wash terminal map as
 **Cross-app wiring:** services → journal/syslogs (log deep-links);
 packages / services / journal / syslogs → priv (privileged actions);
 fm → bulk (file jobs); net → netd (apply); Washamp / Music / Radio →
-audio (now-playing); session → notify / bulk / priv / audio / net
-(sidebar widgets). All of it travels as router-attested `app_msg` —
+audio (now-playing); connect → remote (SSH supervision); session →
+notify / bulk / priv / audio / net / remote (sidebar widgets). All of
+it travels as router-attested `app_msg` —
 apps never hold references to each other, only the router does.
 
 ## CLI tools
@@ -272,6 +280,50 @@ wash-login speaks plain HTTP — **always put TLS in front of it** (it
 needs `CAP_SETUID`/`CAP_SETGID`/`CAP_KILL`, nothing more). Full
 design, flags, and the `/run/wash/<uid>/sessions/` layout are in
 [docs/MULTIUSER.md](docs/MULTIUSER.md).
+
+---
+
+## Remote apps
+
+Run apps from **another machine** inside your wash desktop. Open the
+**Connect** app, type an SSH target (`user@host`), and Connect — that
+host's app windows composite into your desktop, each tinted with the
+host's own colour so you always know which machine a window lives on.
+A terminal from `build01`, a file manager from `db-prod`, and your
+local editor share one desktop, one taskbar, one clipboard.
+
+It's the multi-homed-shell model, **not** a federated router:
+
+- **SSH is the only transport and the whole trust boundary.** The
+  remote `wash-router` binds a loopback unix socket with no token; the
+  only way to reach it is through your SSH session. No wash port faces
+  the network on the remote host.
+- **One port, one connection.** Your browser keeps its single
+  connection to the local router. The remote host's wire is
+  multiplexed over it as a `peer` channel that the local router splices
+  **verbatim** to the `ssh -L`'d socket — it never parses the remote's
+  frames (a relay, not a router-of-routers). Works over every
+  transport: a plain WebSocket, the VM proxy, an in-browser VM.
+- **The merge lives in the browser.** The shell is a client of two
+  routers at once and merges their window/focus streams into one
+  desktop, routing each intent back to the host that owns the window.
+  Window ids are per-router, so identity is always `(host, window)`.
+- **Apps don't know they're remote.** Any wash app runs unmodified on
+  the far side; the machine-half (PTYs, file ops, spawn) is correctly
+  host-local, and the presentation-half attaches at your seat.
+
+Typical use:
+
+```text
+Connect → type  user@host  → Launch        # connect; the app dropdown opens
+pick an app from the dropdown                # it composites in, host-tinted
+★ to bookmark the host for next time         # passphrased key? an ssh-add unlock appears
+```
+
+Connected hosts also show in the desktop's right-hand **Remote**
+sidebar widget, each with its own launch dropdown. Full design — the
+service split, the per-host security model, and the wire relay — is in
+[docs/REMOTE.md](docs/REMOTE.md).
 
 ---
 

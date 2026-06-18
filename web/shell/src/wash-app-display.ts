@@ -15,6 +15,7 @@
 // PNG, auto-detected by createImageBitmap from the magic bytes.
 
 import { registerDisplayWindow, subscribeRaw, unregisterDisplayWindow } from './api';
+import { type Origin, LOCAL_ORIGIN } from './clients';
 import { moveLocal, resizeLocal, windowById, screenSize, VIEWPORTS_PER_AXIS } from './wm';
 
 // xdg_toplevel resize edge bitmask (matches wlroots / xdg-shell).
@@ -77,6 +78,10 @@ export class WashAppDisplay extends HTMLElement {
   private canvas?: HTMLCanvasElement;
   private ctx?: CanvasRenderingContext2D | null;
   private windowID = -1;
+  // The window's origin (which router owns it). Window ids are per-router, so
+  // the registry + raw subscription must be origin-scoped or a remote display
+  // window collides with a local one of the same id (docs/REMOTE.md R2).
+  private origin: Origin = LOCAL_ORIGIN;
   private instanceID = '';
   private unsubscribe?: () => void;
   private errorCount = 0;
@@ -111,6 +116,7 @@ export class WashAppDisplay extends HTMLElement {
   connectedCallback(): void {
     const winAttr = this.getAttribute('data-wash-window');
     this.windowID = winAttr != null ? parseInt(winAttr, 10) : -1;
+    this.origin = this.getAttribute('data-wash-origin') || LOCAL_ORIGIN;
     this.instanceID = this.getAttribute('data-wash-instance') ?? '';
 
     if (!this.canvas) {
@@ -146,7 +152,7 @@ export class WashAppDisplay extends HTMLElement {
     // channel.bind already arrived before mount, the registry replays it
     // immediately by calling attachVideoChannel (see api.ts).
     if (this.windowID >= 0) {
-      registerDisplayWindow(this.windowID, this);
+      registerDisplayWindow(this.origin, this.windowID, this);
     }
 
     // Forward pointer/keyboard/scroll to the owning wash-display instance.
@@ -157,7 +163,7 @@ export class WashAppDisplay extends HTMLElement {
 
   disconnectedCallback(): void {
     if (this.windowID >= 0) {
-      unregisterDisplayWindow(this.windowID, this);
+      unregisterDisplayWindow(this.origin, this.windowID, this);
     }
     if (this.unsubscribe) {
       try {
@@ -314,7 +320,7 @@ export class WashAppDisplay extends HTMLElement {
   // grab is anchored at the live pointer + the window's current origin.
   private beginMove(): void {
     if (this.windowID < 0 || this.moving) return;
-    const w = windowById(this.windowID);
+    const w = windowById(this.origin, this.windowID);
     if (!w) return;
     this.moving = true;
     this.moveAnchor = { px: this.lastClientX, py: this.lastClientY, ox: w.x, oy: w.y };
@@ -328,19 +334,19 @@ export class WashAppDisplay extends HTMLElement {
   private applyMove(ev: PointerEvent): void {
     const a = this.moveAnchor;
     if (!a || this.windowID < 0) return;
-    const w = windowById(this.windowID);
+    const w = windowById(this.origin, this.windowID);
     const s = screenSize();
     const maxX = s.w * VIEWPORTS_PER_AXIS - (w ? w.w : 0);
     const maxY = s.h * VIEWPORTS_PER_AXIS - (w ? w.h : 0);
     const x = Math.round(Math.max(0, Math.min(maxX, a.ox + (ev.clientX - a.px))));
     const y = Math.round(Math.max(0, Math.min(maxY, a.oy + (ev.clientY - a.py))));
-    moveLocal(this.windowID, x, y); // live; router commit happens on release
+    moveLocal(this.origin, this.windowID, x, y); // live; router commit happens on release
   }
 
   private endMove(): void {
     this.moving = false;
     this.moveAnchor = null;
-    const w = windowById(this.windowID);
+    const w = windowById(this.origin, this.windowID);
     if (w) window.wash?.moveWindow(this.windowID, w.x, w.y);
   }
 
@@ -352,7 +358,7 @@ export class WashAppDisplay extends HTMLElement {
   // compositor's set_size, repainting the guest at the new size.
   private beginResize(edges: number): void {
     if (this.windowID < 0 || this.resizing || this.moving) return;
-    const w = windowById(this.windowID);
+    const w = windowById(this.origin, this.windowID);
     if (!w) return;
     this.resizing = true;
     this.resizeAnchor = { px: this.lastClientX, py: this.lastClientY, ox: w.x, oy: w.y, ow: w.w, oh: w.h, edges };
@@ -378,15 +384,15 @@ export class WashAppDisplay extends HTMLElement {
     }
     w = Math.round(w);
     h = Math.round(h);
-    resizeLocal(this.windowID, w, h);
-    if (Math.round(x) !== a.ox || Math.round(y) !== a.oy) moveLocal(this.windowID, Math.round(x), Math.round(y));
+    resizeLocal(this.origin, this.windowID, w, h);
+    if (Math.round(x) !== a.ox || Math.round(y) !== a.oy) moveLocal(this.origin, this.windowID, Math.round(x), Math.round(y));
   }
 
   private endResize(): void {
     const edges = this.resizeAnchor?.edges ?? 0;
     this.resizing = false;
     this.resizeAnchor = null;
-    const w = windowById(this.windowID);
+    const w = windowById(this.origin, this.windowID);
     if (!w) return;
     window.wash?.resizeWindow(this.windowID, w.w, w.h);
     if (edges & (EDGE_LEFT | EDGE_TOP)) window.wash?.moveWindow(this.windowID, w.x, w.y);
@@ -434,7 +440,11 @@ export class WashAppDisplay extends HTMLElement {
         /* ignore */
       }
     }
-    this.unsubscribe = subscribeRaw(channelID, (bytes) => this.onFrame(bytes));
+    // Subscribe on the window's own origin so a remote display window reads
+    // its host's relayed video channel, not a local channel of the same id.
+    // (Remote video frames don't flow until the bind is un-gated in main.tsx;
+    // this keeps the path origin-correct for when they do.)
+    this.unsubscribe = subscribeRaw(this.origin, channelID, (bytes) => this.onFrame(bytes));
   }
 
   private onFrame(bytes: Uint8Array): void {
@@ -513,7 +523,7 @@ export class WashAppDisplay extends HTMLElement {
   // stream). Called by the display registry on channel.bind kind=video-popup.
   attachPopupChannel(channelID: number): void {
     if (this.popups.has(channelID)) return;
-    const unsub = subscribeRaw(channelID, (bytes) => this.onPopupBytes(channelID, bytes));
+    const unsub = subscribeRaw(this.origin, channelID, (bytes) => this.onPopupBytes(channelID, bytes));
     // The overlay canvas is created lazily on the first pixel frame; record
     // the subscription now so close/teardown always works.
     const placeholder: PopupOverlay = {

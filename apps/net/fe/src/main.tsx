@@ -401,9 +401,14 @@ export function NetApp(props: WashAppProps) {
     if (!routerCaps() || widened) return;
     widened = true;
     try {
-      const me = (window.wash?.windows?.() ?? []).find((w) => w.instanceID === props.instance);
+      // Address our own window by (origin, windowID): window ids are
+      // per-router, and props.instance is the origin-tagged compound id which
+      // never equals the window list's bare instanceID for a remote instance
+      // (docs/REMOTE.md R2). data-wash-window carries our bare window id.
+      const myWindowID = Number(props.host.getAttribute('data-wash-window') || 0);
+      const me = (window.wash?.windows?.() ?? []).find((w) => w.origin === props.origin && w.windowID === myWindowID);
       const TARGET = 920;
-      if (me && me.w < TARGET) window.wash.resizeWindow(me.windowID, TARGET, Math.max(me.h, 620));
+      if (me && me.w < TARGET) window.wash.resizeWindow(me.windowID, TARGET, Math.max(me.h, 620), props.origin);
     } catch { /* no window API (unit/ctest harness) — ignore */ }
   });
 

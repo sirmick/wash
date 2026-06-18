@@ -22,6 +22,7 @@ import { BulkWidget, type BulkJob } from './sidebar/BulkWidget';
 import { BulkConflictOverlay, type BulkConflict } from './sidebar/BulkConflictOverlay';
 import { PrivWidget, type PrivReq } from './sidebar/PrivWidget';
 import { NetWidget, type NetState, type NetIface } from './sidebar/NetWidget';
+import { RemoteWidget, type RemoteHost } from './sidebar/RemoteWidget';
 import { AudioWidget, type AudioState } from './sidebar/AudioWidget';
 import { ClipboardWidget } from './sidebar/ClipboardWidget';
 import { PrivUnlockOverlay, type PrivUnlockState } from './sidebar/PrivUnlockOverlay';
@@ -44,6 +45,11 @@ interface CatalogApp {
 }
 
 interface WindowInfo {
+  // Origin (router) the window belongs to. Pair (origin, windowID) is the
+  // only unique identity — ids are per-router — so the pager/taskbar pass
+  // it to WM intents to address a remote window's twin-id local sibling
+  // correctly (docs/REMOTE.md R2).
+  origin: string;
   windowID: number;
   instanceID: string;
   element: string;
@@ -207,6 +213,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     bulk: 'collapsed',
     priv: 'collapsed',
     net: 'collapsed',
+    remote: 'collapsed',
     audio: 'collapsed',
     clipboard: 'collapsed',
   });
@@ -230,6 +237,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // Net — com.wash.netd status snapshot (status/phase/summary/diagnostics),
   // fed by the session BE's net.state forwarder. Null until first push.
   const [netState, setNetState] = createSignal<NetState | null>(null);
+  // Remote-host sessions, fed by the session BE's remote.state forwarder
+  // (com.wash.remote supervisor). Glanceable list; wash-connect manages.
+  const [remoteHosts, setRemoteHosts] = createSignal<RemoteHost[]>([]);
+  // Bumped on every remote-catalog change so the sidebar's per-host launch
+  // dropdowns re-render; the catalogs themselves live in the shell (a
+  // connected host stays attached even after wash-connect closes, so
+  // window.wash.catalogFor / launchOn work straight from here).
+  const [remoteCatVer, setRemoteCatVer] = createSignal(0);
   // Live interface IPs from the session BE's host-stats ticker (host.ifaces).
   const [netIfaces, setNetIfaces] = createSignal<NetIface[]>([]);
   // Audio mixer — com.wash.audio's StateService snapshot (sources +
@@ -318,6 +333,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     return '';
   };
   const NET_ACCENT = tokens.accentBlue;
+  // remoteBadge — count of currently-connected remote hosts ("up"),
+  // empty when none. The glanceable "how many sessions are open."
+  const remoteBadge = (): string => {
+    const up = remoteHosts().filter((h) => h.status === 'up').length;
+    return up > 0 ? String(up) : '';
+  };
+  const REMOTE_ACCENT = tokens.accentViolet;
   // audioBadge — show a play glyph while something is actively playing,
   // empty otherwise. Mirrors the other section badges' "needs attention"
   // semantics (here: "sound is on").
@@ -354,6 +376,26 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   const launchApp = (appID: string) => {
     window.wash.sendAppMsg(props.instance, { action: 'launch', app_id: appID });
+  };
+
+  // ---- remote hosts (sidebar) ----
+  // appsForHost lists a connected host's launchable apps (window surface,
+  // enabled). Reads remoteCatVer() so it re-runs when a catalog changes.
+  const appsForHost = (origin: string) => {
+    remoteCatVer();
+    return window.wash
+      .catalogFor(origin)
+      .filter((a) => a.surface === 'window' && !a.disabled)
+      .map((a) => ({ id: a.id, name: a.name, icon: a.icon }));
+  };
+  const launchOnHost = (origin: string, appID: string) => window.wash.launchOn(origin, appID);
+  // openConnect focuses an already-open wash-connect window (singleton launch
+  // is a no-op that doesn't raise it — the old "Manage does nothing" bug),
+  // else launches it. Used to add new hosts / manage auth + bookmarks.
+  const openConnect = () => {
+    const w = windows().find((x) => x.element === 'wash-app-connect');
+    if (w) window.wash.focusWindow(w.windowID, w.origin);
+    else launchApp('com.wash.connect');
   };
 
   // launchPick handles both regular catalog rows and synthetic root
@@ -510,6 +552,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   onMount(() => {
     const offCat = window.wash.onCatalog(setCatalog);
+    const offRemoteCat = window.wash.onRemoteCatalog(() => setRemoteCatVer((v) => v + 1));
     const offWin = window.wash.onWindowsChanged(setWindows);
     const offVp = window.wash.onViewport(setVp);
     const offScreen = window.wash.onScreenSize(setScreen);
@@ -598,6 +641,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           }
           return;
         }
+        case 'remote.state': {
+          // com.wash.remote's StateService snapshot: {hosts:[…]}. Just
+          // mirror it into the sidebar's glanceable list — wash-connect
+          // owns connect/auth/launch, so no auto-expand here.
+          const st = data.state as unknown as { hosts?: RemoteHost[] };
+          setRemoteHosts(Array.isArray(st?.hosts) ? st.hosts : []);
+          return;
+        }
         case 'audio.state': {
           // com.wash.audio's StateService snapshot: {sources, master_volume,
           // master_mute}. Auto-expand when a source first appears so the
@@ -664,6 +715,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     window.wash.sendAppMsg(props.instance, { kind: 'bulk_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'priv_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'net_subscribe' });
+    window.wash.sendAppMsg(props.instance, { kind: 'remote_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'audio_subscribe' });
     props.host.addEventListener('wash:msg', onMsg);
 
@@ -734,6 +786,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
     onCleanup(() => {
       offCat();
+      offRemoteCat();
       offWin();
       offVp();
       offScreen();
@@ -866,6 +919,22 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           badge={netBadge()}
         >
           <NetWidget state={netState} ifaces={netIfaces} onConfigure={() => launchApp('com.wash.net')} />
+        </Section>
+        <Section
+          id="remote"
+          title="Remote"
+          icon="monitor"
+          accent={REMOTE_ACCENT}
+          state={sectionStates().remote ?? 'collapsed'}
+          onToggle={() => toggleSection('remote')}
+          badge={remoteBadge()}
+        >
+          <RemoteWidget
+            hosts={remoteHosts}
+            appsFor={appsForHost}
+            onLaunch={launchOnHost}
+            onManage={openConnect}
+          />
         </Section>
         <Section
           id="audio"
@@ -1403,8 +1472,8 @@ const PagerWindow: Component<{
   const onClick = (ev: MouseEvent) => {
     ev.stopPropagation();
     window.wash.setViewport(props.cell.vx, props.cell.vy);
-    if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID);
-    else window.wash.focusWindow(props.win.windowID);
+    if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID, props.win.origin);
+    else window.wash.focusWindow(props.win.windowID, props.win.origin);
   };
   return (
     <div
@@ -1459,8 +1528,8 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
       type="button"
       title={`${minimized() ? '[minimized] ' : ''}${props.win.title} — dblclick to jump to its viewport, right-click to close`}
       onClick={() => {
-        if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID);
-        else window.wash.focusWindow(props.win.windowID);
+        if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID, props.win.origin);
+        else window.wash.focusWindow(props.win.windowID, props.win.origin);
       }}
       onDblClick={() => {
         // Snap the camera to the cell holding this window, then focus
@@ -1469,12 +1538,12 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
         // both end states converge on "focused & visible".
         const v = props.win.viewport;
         window.wash.setViewport(v.vx, v.vy);
-        if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID);
-        else window.wash.focusWindow(props.win.windowID);
+        if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID, props.win.origin);
+        else window.wash.focusWindow(props.win.windowID, props.win.origin);
       }}
       onContextMenu={(ev) => {
         ev.preventDefault();
-        window.wash.closeWindow(props.win.windowID);
+        window.wash.closeWindow(props.win.windowID, props.win.origin);
       }}
       style={{
         background: props.win.focused ? '#33387a' : 'rgba(255,255,255,0.04)',

@@ -150,6 +150,10 @@ export interface TerminalProps {
   // pass 0) to manage I/O externally — push output via api.write()
   // from onReady, and receive input via onInput.
   channelId?: number;
+  // origin routes the pty raw channel to the owning host's connection
+  // (docs/REMOTE.md §4) — pass the app's props.origin so a terminal on a
+  // remote host isn't mis-routed to the local router. Defaults to local.
+  origin?: string;
   // onInput fires for every keystroke / paste when the caller is
   // managing I/O externally (no channelId). Ignored when channelId
   // is set — the component routes through window.wash.writeRaw in
@@ -217,8 +221,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
     else term?.write(bytes);
   };
   const channelId = props.channelId ?? 0;
+  const origin = props.origin ?? 'local';
   const unsub = channelId > 0
-    ? window.wash.openRawChannel(channelId, writeOrBuffer)
+    ? window.wash.openRawChannelFor(origin, channelId, writeOrBuffer)
     : () => {};
 
   const encoder = new TextEncoder();
@@ -345,7 +350,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
     term.onData((s) => {
       const bytes = encoder.encode(s);
       if (channelId > 0) {
-        window.wash.writeRaw(channelId, bytes);
+        window.wash.writeRawFor(origin, channelId, bytes);
       } else {
         props.onInput?.(bytes);
       }

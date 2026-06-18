@@ -37,11 +37,15 @@ NM_PKGS="networkmanager networkmanager-cli networkmanager-wifi dbus polkit wpa_s
 # (LVM/btrfs/ZFS topology) needs it. The guest desktop runs as the unprivileged
 # 'wash' user, so without sudo priv has nothing to escalate through.
 STORAGE_PKGS="mdadm lvm2 btrfs-progs e2fsprogs sudo"
+# openssh (client + server): the wash-remote two-VM e2e (docs/REMOTE.md)
+# brings up host B's wash-router over a real ssh -L from host A. Tiny, and the
+# server is inert until the harness starts sshd, so it's baked unconditionally.
+REMOTE_PKGS="openssh"
 ZFS_PKGS=""
 if [ "${WASH_VM_ZFS:-0}" = "1" ]; then
   ZFS_PKGS="zfs zfs-lts"
 fi
-PKGS="$NM_PKGS $STORAGE_PKGS $ZFS_PKGS"
+PKGS="$NM_PKGS $STORAGE_PKGS $REMOTE_PKGS $ZFS_PKGS"
 # The guest runs the wash desktop as the unprivileged 'wash' user (in the netdev
 # group so NM/polkit lets it manage networking — see 49-wash-nm.rules).
 # Create the wash user AND give it a real shadow password ("wash"): the login
@@ -50,7 +54,7 @@ PKGS="$NM_PKGS $STORAGE_PKGS $ZFS_PKGS"
 WASH_USER_SETUP="addgroup -S netdev 2>/dev/null; adduser -D -h /home/wash -s /bin/bash -G netdev wash; echo 'wash:wash' | chpasswd"
 ROOTFS_TAR="$BUILD/alpine-nm.tar"
 PKG_MARK="$BUILD/.alpine-nm.pkgs"
-RENDER_VER="5-sudo" # bump to force a re-render when this setup changes (added sudo)
+RENDER_VER="6-openssh" # bump to force a re-render when this setup changes (added openssh)
 if [ ! -f "$ROOTFS_TAR" ] || [ "$(cat "$PKG_MARK" 2>/dev/null)" != "$ALPINE_VER:$RENDER_VER:$PKGS" ]; then
   echo ">> rendering Alpine+NM+OpenRC rootfs via Docker (host has no apk)"
   command -v docker >/dev/null || { echo "!! docker required to build the NM rootfs" >&2; exit 1; }
@@ -153,6 +157,13 @@ install -Dm755 "$BUILD/washnet-wifi" "$RFS/usr/bin/washnet-wifi"
 # trampoline (cpio -R 0:0 below makes it root-owned so the setuid bit grants
 # root). Shared with every distro image — see scripts/lib/wash-vm-payload.sh.
 wvm_stage_payload "$RFS" "$BUILD" "$WASH_BIN"
+
+# Put wash-router on the default PATH so a non-login ssh session can run it
+# (the wash-remote e2e: A's com.wash.remote does `ssh B wash-router …`). The
+# multicall dispatches on argv[0], so this symlink (basename wash-router) runs
+# the router. /usr/lib/wash is NOT on the bare sshd PATH (/usr/bin:/bin), hence
+# the /usr/bin entry.
+ln -sf ../lib/wash/wash "$RFS/usr/bin/wash-router"
 
 # sudoers for the unprivileged 'wash' desktop user: NOPASSWD so wash-priv's
 # `sudo -S` escalation works in this headless demo VM without PAM/shadow setup

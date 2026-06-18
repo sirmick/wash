@@ -410,6 +410,19 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 		}
 		inst.router.recordRuntimeStats(inst.InstanceID, m)
 		return nil
+	case wire.TEvtPeerRegister:
+		var m wire.EvtPeerRegister
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.handlePeerRegister(m)
+	case wire.TEvtPeerUnregister:
+		var m wire.EvtPeerUnregister
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		inst.router.unregisterPeer(m.Origin)
+		return nil
 	case wire.TEvtIngressPublish:
 		var m wire.EvtIngressPublish
 		if err := json.Unmarshal(payload, &m); err != nil {

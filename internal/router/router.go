@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -105,6 +106,17 @@ type Config struct {
 	// not a network stranger — there's no PAM here because the router
 	// already runs as one fixed user.
 	AuthToken string
+
+	// AllowCrossOrigin relaxes the /ws same-origin check so a browser can
+	// open a shell connection to this router from a *different* origin.
+	// Needed for remote apps (docs/REMOTE.md R2): the user's desktop is
+	// served by router A, but its shell opens a second connection to
+	// router B (reached over an ssh -L tunnel), whose Host differs from
+	// the page's Origin. Only set on a router intended to be reached
+	// cross-origin — it is gated by the SSH tunnel / loopback bind, not by
+	// the same-origin policy. The unix-socket/multi-user path already skips
+	// the check (it sits behind wash-login).
+	AllowCrossOrigin bool
 }
 
 // Logger is a minimal sink; cmd/wash-router supplies a real one.
@@ -130,6 +142,13 @@ type Router struct {
 
 	channelsMu sync.Mutex
 	channels   map[uint32]*channelBinding
+
+	// peers maps a remote-host origin → the local socket the supervisor
+	// (com.wash.remote) ssh -L'd to reach host B's router. A shell
+	// peer.attaches an origin and the router splices a channel to this
+	// socket (docs/REMOTE.md). Guarded by peersMu.
+	peersMu sync.Mutex
+	peers   map[string]peerTarget
 
 	// appMsgWatchers lets a non-shell caller (e.g. the control
 	// socket's `msg` op) wait for a specific outbound app_msg keyed
@@ -235,6 +254,7 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		cliSessions:       make(map[string]*cliSession),
 		backgroundStarted: make(map[string]bool),
 		ingress:           newIngressRegistry(log),
+		peers:             make(map[string]peerTarget),
 	}
 }
 
@@ -520,6 +540,14 @@ type channelBinding struct {
 	windowID  uint32 // the shell-side window the channel is rooted at
 	kind      string // wire.ChannelKindGeneric or wire.ChannelKindBundle
 
+	// peerConn is set for a remote-apps relay channel (kind="peer",
+	// docs/REMOTE.md): the endpoint is this socket (an ssh -L'd unix
+	// socket reaching host B) instead of an app. Raw frames on the channel
+	// are written verbatim to it; a pump goroutine copies the reverse.
+	// origin names the host (for logs + the channel.bind to the shell).
+	peerConn net.Conn
+	origin   string
+
 	// shellMu guards shell + buf. Held briefly during forward and
 	// rebind paths.
 	shellMu sync.Mutex
@@ -530,12 +558,23 @@ type channelBinding struct {
 	// channel (docs/QOS.md §5). Bulk-class router→shell writes
 	// reserve from it; the FE replenishes via channel.credit on
 	// the shell control channel. Interactive-class writes
-	// (bundle/replay transactional flows) bypass it.
+	// (bundle/replay transactional flows) bypass it. Nil when
+	// noCredit is set (relay channels — see below).
 	credit *ChannelCredit
+
+	// noCredit skips the per-channel credit ledger entirely. Set for
+	// remote-apps relay (peer) channels: the relay is a verbatim conduit
+	// and host B already does per-channel flow control end-to-end (the FE
+	// credits B's inner channels as it absorbs them, docs/REMOTE.md §7). An
+	// A-side window would only double-gate — and worse, its blocking
+	// Reserve runs in the single pumpPeerToShell goroutine, so an exhausted
+	// aggregate window head-of-line-blocks B's interactive frames behind
+	// B's bulk. Creditless, the relay never blocks reading B's socket.
+	noCredit bool
 }
 
 func (r *Router) registerChannel(b *channelBinding) {
-	if b.credit == nil {
+	if b.credit == nil && !b.noCredit {
 		b.credit = NewChannelCredit(DefaultChannelCredit)
 	}
 	r.channelsMu.Lock()
@@ -567,10 +606,18 @@ func (r *Router) closeChannel(id uint32, reason string) {
 	if b.app != nil {
 		_ = b.app.writeCtrl(wire.NewChannelClosed(id, reason))
 	}
+	// Remote-apps relay: close the ssh -L'd socket (unblocks the pump) and
+	// drop it from the owning shell's tracking.
+	if b.peerConn != nil {
+		_ = b.peerConn.Close()
+	}
 	b.shellMu.Lock()
 	sh := b.shell
 	b.shellMu.Unlock()
 	if sh != nil {
+		if b.peerConn != nil {
+			sh.untrackPeer(id)
+		}
 		_ = sh.WriteCtrl(wire.NewShellChannelUnbind(id, reason))
 	}
 }
