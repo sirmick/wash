@@ -1,74 +1,105 @@
 # Resume prompt — wash remote apps (R2)
 
-Paste the block below into a fresh session (run from `/home/mick/wash`, the
-worktree is `branches/wash-remote`). Memory (`wash_remote_plan.md`), the design
-doc (`docs/REMOTE.md`), and the plan file
-(`~/.claude/plans/joyful-wibbling-duckling.md`) have the full context.
+Paste the block below into a fresh session (run `make` from the worktree root
+`/home/mick/wash/branches/wash-remote`). Full context: memory
+`wash_remote_plan.md` + `wash_remote_vm_topology.md`, the design doc
+`docs/REMOTE.md`, and `git log`.
 
 ---
 
-You're continuing the **remote-apps (R2)** feature on the worktree
-`branches/wash-remote` (off `main`; main is clean). Run all `make` from the
-worktree root. Read memory `wash_remote_plan.md` + `docs/REMOTE.md` first.
+You're continuing **remote-apps (R2)** on worktree `branches/wash-remote`
+(off `main`). Read memory `wash_remote_plan.md` + `docs/REMOTE.md §2/§4/§7`
+first. **30 commits ahead of main, 35 behind; working tree clean.** HEAD =
+`3da93a9`.
 
-**State (17 commits, working tree clean; all build+unit+component green, full
-e2e not yet run):**
-- **M1 done + proven** — multi-homed shell (RouterClient, per-origin window
-  store, tag-mangle, host stripe). `e2e/tests/remote-apps.spec.ts` green.
-- **M2a done** — `com.wash.remote` background supervisor (`apps/remote/be`):
-  BatchMode `ssh -L`, brings up B's `wash-router --allow-cross-origin
-  --no-session --no-auth`, publishes `{status, local_endpoint, code}`.
-- **M3 done — `wash-connect` (`com.wash.connect`) window app shipped:**
-  - Plumbing: `window.wash.catalogFor/onRemoteCatalog`, `shell.launch` ctrl
-    verb + `launchOn`, `attachRemote/detachRemote` + `wm.dropOrigin`.
-  - wash-connect `apps/connect/{be,fe}`: BE relays to the supervisor; FE does
-    host input → per-host colour card → attach → app list → launch.
-    `e2e/tests/connect-launch.spec.ts` proves attach→catalog→launch→detach.
-  - Interactive SSH auth (mechanism a): supervisor reports auth refusal as
-    down+`code:"auth"`; wash-connect spawns `ssh-add` in a pty (`internal/pty`)
-    rendered in a `@wash/ui` Terminal overlay; on close it retries connect.
-  - Bookmarks: disk-persisted (`$XDG_CONFIG_HOME/wash/connect.json`); chip →
-    connect (+ auto-launch a bookmarked app); ☆ to add.
-  - Sidebar: `RemoteWidget` glanceable open-sessions list (fed by the session
-    BE's existing `remote.state` forwarder), Manage → opens wash-connect.
+## State — the one-port relay is DONE and green
 
-**NEXT TASKS (in order):**
-1. **M2e — persist B's router across an SSH drop + reconnect.** The supervisor
-   today ties B's router lifetime to the `ssh` process (`run()` in
-   `apps/remote/be/supervisor.go`); a blip kills B's apps. Start B's router
-   detached (`systemd-run --user` or a tiny supervisor) so an SSH drop is a
-   transport blip: re-dial with backoff, report `reconnecting`, windows freeze
-   then thaw (docs/REMOTE.md §2/§9). The FE freeze-on-blip is part of this.
-2. **Capstone two-VM Playwright e2e.** VM-A = desktop (browser via the wash-vm
-   proxy, reuse `e2e/fixtures/vm.ts`), VM-B = sshd + wash. A brings up B over
-   *real* ssh via com.wash.remote; assert a striped B window composites and that
-   the ssh-add widget unlocks a passphrased key. Needs VM images with sshd+wash.
-3. **M4/M5** — multi-host notify/bulk/priv merge + priv host attribution;
-   clipboard sync hub; remote **raw-channel** apps (term/file-stream/video are
-   still local-keyed — see the gap note in `wash_remote_plan.md`); cross-origin
-   **z-band** (focused-host windows on top, kept below chrome z 9999/10000).
-4. **M6** — hardening (multi-tenancy, provenance/priv-phishing review,
-   reconnect-audit alignment, B router teardown/linger policy).
+Everything below is committed and verified (go test wire+router, fe-unit 272,
+host-process relay e2e 3/3 `connect-launch`+`remote-apps`, **2-VM real-ssh relay
+2/2** `remote-vm.spec.ts` — composite + pty round-trip):
 
-Then **full e2e** → merge to main (ask local-up-a-level vs remote, clean up).
+- **One-port relay.** Browser keeps ONE connection to A; B's wire is muxed over
+  a `kind:"peer"` channel and A splices it **verbatim** to an `ssh -L`'d unix
+  socket. `internal/router/peer.go`, `runner/router --listen-raw`,
+  `apps/remote/be/supervisor.go`. Not federation (§13).
+- **Origin-aware FE raw channels (`1cc7dc2`).** Remote **term/edit/fm** work:
+  `deliverRaw/subscribeRaw` key on `compoundChannelId(origin, ch)`;
+  `data-wash-origin` stamped on every app host element; `origin` threaded to
+  `openRawChannelFor/writeRawFor/rawBufferedAmountFor` + the @wash/ui Terminal.
+- **Creditless class-preserving relay (`3da93a9`, the connection-path audit).**
+  The relay is a pure byte conduit: per-frame CLASS preserved (interactive jumps
+  bulk in A's scheduler), but **no A-side credit window** — flow control is B's
+  per-channel credit, end to end. Killed a head-of-line block (the old
+  per-frame credit `Reserve` ran in the single pump goroutine) and the per-frame
+  decode/re-encode/copy (new `wire.DecodeFrameRaw`/`ReadFrameRaw`). Regression:
+  `TestPeerRelayNoHeadOfLineBlocking`.
 
-**The full ssh-auth + bookmark-add loops need a real ssh-agent/key/host**, so
-they're manual two-VM verification; the BE classification + bookmark disk
-round-trip + the widget renderers are unit/component-tested.
+## NEXT — recommended order
 
-**Discipline:** worktree workflow; commit on build+unit green; run the FULL e2e
-before any push. FE checks: `make web-shell`, `make fe-unit`, `make component`.
-e2e: `cd e2e && pnpm install --ignore-workspace` then `pnpm exec playwright test
-<spec>` (needs the out/ tree built — `make TEST_APP=1 out/wash-<app>`).
+1. **MERGE `wash-remote` → `main`.** The relay work is at a clean green stop.
+   Ask local-up-a-level vs remote; then clean up the worktree. Do this FIRST —
+   it's the prerequisite for (2)/(3), because the **download feature lives on
+   main** (commit `c6cb47f`, NOT on this branch), and the next items are
+   downloads × relay.
 
-**Manual two-VM test that works TODAY (no wash-connect needed):**
+2. **R3 (on main, after merge) — stream downloads to disk, not to a Blob.**
+   This *completes the backpressure chain the creditless relay opened.* Today
+   `apps/fm/fe` concatenates every download chunk into an in-memory array → one
+   `Blob`. With the relay now creditless, the FE's writable sink is the LAST
+   place backpressure can live — and an infinite RAM sink credits B at full
+   speed, pulling whole files into the browser. Switch to the File System Access
+   API (`showSaveFilePicker` → `createWritable` → stream chunks; Blob fallback):
+   a slow disk → writable backpressure → slower absorb → slower B credit → B
+   paces itself. Fixes both the memory ceiling under many/large concurrent
+   downloads AND closes the flow-control loop end to end. Test it as a **remote**
+   download over the relay (the thing the whole audit was about).
+
+3. **R4 (after R3, only when measurable) — window/segment sizing.** A single
+   remote download is RTT-bound to `DefaultChannelCredit` (64 KiB) per credit
+   round-trip, and over the relay that RTT is the ssh hop. Larger window and/or
+   a write chunk smaller than the window lets one download fill the pipe. It's a
+   knob (`internal/router/credit.go` `DefaultChannelCredit` + the fm bufio size)
+   — **measure first** on a real post-merge remote download; don't guess.
+
+## Older R2 milestones still open (lower priority than 1–3)
+
+- **M2e — persist B's router across an SSH drop.** Supervisor ties B's router to
+  the `ssh` process (`apps/remote/be/supervisor.go`); a blip kills B's apps.
+  Start B's router detached so a drop is a transport blip: re-dial with backoff,
+  report `reconnecting`, freeze→thaw windows (docs/REMOTE.md §2/§9).
+- **M4/M5** — multi-host notify/bulk/priv merge + priv host attribution;
+  clipboard sync hub; cross-origin **z-band** (focused-host windows on top,
+  below chrome z 9999/10000).
+- **M6** — hardening (multi-tenancy, provenance/priv-phishing review,
+  reconnect-audit alignment, B-router teardown/linger policy).
+
+## OPEN THREAD — unfinished bug bash
+
+User reported "something serious funky gone wrong with **rendering content**"
+and took a screenshot "with the feature you just made" — but the image never
+reached the session (not attached, none on disk). NOT diagnosed. On resume: ask
+for the screenshot again (or a path), and which app + local-or-relay. A repro
+harness (`?peer=` two local routers, launch remote term/fm, screenshot) was 90%
+working — `e2e/tests/remote-apps.spec.ts` + the `startRouter` fixture is the
+pattern.
+
+## Discipline & commands
+
+- Worktree workflow; commit on build+unit green; FULL e2e before any push.
+- BE: `go test ./internal/...`. FE: `make web-shell fe-unit component`.
+- Host-process relay e2e: `cd e2e && pnpm exec playwright test
+  connect-launch.spec.ts remote-apps.spec.ts` (needs `out/` built —
+  `make out/wash web-shell test-app`).
+- **2-VM real-ssh e2e** (the capstone): `make vm-image vm-chrome
+  out/washvm-remote-run` then `cd e2e && pnpm exec playwright test
+  remote-vm.spec.ts`. BOTH `vm-image` AND `vm-chrome` — `vm-chrome` serves the
+  `@wash/ui` vendor (`out/vm-chrome`), `vm-image` bakes `shell.js`; a stale
+  `vm-chrome` silently uses an old `defineWashApp` (this bit us once).
+
+## Manual two-VM test (no wash-connect)
+
 ```
-# VM-B:
-wash-router --listen 127.0.0.1:11000 --allow-cross-origin --no-session --no-auth
-# from A's host:
-ssh -L 11001:127.0.0.1:11000 user@vmB
-# browser on A's desktop:  ?peer=vmB@ws://127.0.0.1:11001/ws
-# on VM-B:
-wash-launch --app com.wash.about      # → striped window composites into A
+# VM-B:  wash-router --listen-raw unix:/tmp/b.sock --no-session --no-auth --control-socket /tmp/b.sock.ctl
+# A host: ssh -L /tmp/relay.sock:/tmp/b.sock -o AllowTcpForwarding=yes -o AllowStreamLocalForwarding=yes user@vmB
+# (com.wash.remote does this for you; type the host into wash-connect → Connect → launch an app)
 ```
-With wash-connect: launch it, type the host, Connect, pick an app to launch.

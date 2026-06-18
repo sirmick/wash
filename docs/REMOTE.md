@@ -9,6 +9,18 @@ local desktop, windows appearing live + interactive **in the local desktop** —
 colour-striped per host. SSH is the transport and the trust boundary; no new
 network listener, no recursive router; the browser keeps **one** connection (§2).
 
+UI / polish (2026-06-17): the `wash-connect` window is a two-section host list
+(connected on top, bookmarks below) with a per-host **Launch** dropdown (the
+host's live catalog, icon + name) and connected rows bordered in the host's
+colour; the desktop **Remote** sidebar widget carries the same per-host launch
+dropdown (a connected host stays attached in the shell after the window closes,
+so `catalogFor`/`launchOn` work straight from the sidebar). Two cross-origin
+correctness fixes landed alongside: WM intents (move/focus/resize/state/close)
+are now origin-addressed, and stacking uses an FE-arbitrated global `gz` instead
+of the colliding per-router `z` (so focusing a remote window raises it above
+local ones). Window/instance/raw-channel/display-video registries are all
+origin-scoped — see §"Remote wash-display".
+
 The end effect: sitting in desktop **A**, with SSH credentials to host **B**, you
 pick a host + an app and its window opens among your local windows. Refreshing
 the browser reattaches exactly like today, because the SSH link and B's router
@@ -557,12 +569,46 @@ router-log assertions on the BE).
 
 - **Remote audio output** — needs an audio stream to A (ride [DISPLAY.md](DISPLAY.md)
   WebRTC; coordinate with [AUDIO.md](AUDIO.md)).
-- **Remote GUI/X apps** — needs `wash-display` deployed on B.
+- **Remote GUI/X apps** — see "Remote wash-display" below: no architectural
+  blocker, a small enablement + perf path.
 - **Cross-origin DnD** — real byte transfer between hosts.
 - **Cross-host app_msg / "open with" across hosts** — would require the control-plane
   gateway of §13.
 - **App migration A↔B** preserving FE state — needs `app_id`-correlated state
   transfer (§8).
+
+### 15.1 Remote wash-display (GUI / X / video)
+
+There is **no architectural reason a remote `wash-display` window wouldn't
+work** — the relay (§2) is content-agnostic. It carries *any* of B's raw
+channels verbatim and class-preserving, and a display window's video is just a
+raw channel (`wire.ChannelKindVideo`). The merge state is already origin-safe:
+the display↔video registry is keyed by `(origin, windowID)` and the built-in
+`<wash-app-display>` element subscribes to its frames on its **own** origin
+(not a hardcoded local one). So a remote display window can't collide with a
+local one, and its frames would deliver over the relay's origin-scoped raw path.
+
+What it takes to actually turn it on (deliberately gated today so we don't ship
+an untested path):
+
+1. **Un-gate the video bind.** `main.tsx`'s `channel.bind` handler binds video
+   only `if (isLocal)`; the matching `channel.unbind` likewise. Remove the guard
+   so a remote router's video bind reaches `bindVideoChannel(client.origin, …)`.
+2. **Origin-scope display *input*.** Video (B→A) is done; the input channels
+   (pointer / keyboard / clipboard, A→B) must write with `writeRawFor(origin)`
+   the way the terminal already does, so keystrokes reach B's compositor and not
+   a local channel of the same id.
+3. **Deploy + launch `wash-display` on B.** Its X/Wayland env propagation is
+   B-local and already works (a terminal on B launches X clients into B's
+   compositor); nothing remote-specific there.
+4. **Transport / perf.** With the above it runs **WebP-frames-over-relay-over-
+   ssh** — correct and fine for light GUI, but heavier than the planned
+   **VP9-over-WebRTC** media side-channel ([DISPLAY.md](DISPLAY.md)). WebRTC
+   stays the eventual path for high-FPS / video-heavy remote surfaces; the relay
+   is the zero-extra-infrastructure default.
+
+In short: it's an enablement + an input-channel port + a test, not new
+architecture. WebRTC is an optimization on top, not a prerequisite.
 
 ---
 
