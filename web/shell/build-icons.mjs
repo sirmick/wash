@@ -38,6 +38,7 @@ const ICONS = [
   'scroll-text',    // wash-journal + wash-syslogs (sister apps, shared icon)
   'file-text',      // wash-syslogs sidebar rows
   'server-cog',     // wash-services
+  'monitor',        // wash-connect (remote hosts) + sidebar Remote widget
   'package',        // wash-packages
   'log-out',        // session app "Log out" menu item
   'unplug',         // session app "Disconnect" menu item

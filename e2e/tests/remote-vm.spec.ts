@@ -42,9 +42,11 @@ test('connect to a second VM over real ssh and composite its app window', async 
   const status = connect.locator('[data-testid="connect-host-status"]');
   await expect(status).toHaveAttribute('data-status', 'up', { timeout: 90_000 });
 
-  // B's catalog arrives over the relay channel; launch About on B.
-  await expect(connect.locator('[data-testid="connect-launch-com.wash.about"]')).toBeVisible({ timeout: 30_000 });
-  await connect.locator('[data-testid="connect-launch-com.wash.about"]').click();
+  // The top-bar Launch connected the host; its app dropdown auto-opens once
+  // B's catalog arrives over the relay channel. Pick About from the list.
+  const aboutItem = connect.locator('[data-testid="connect-launch-com.wash.about"]');
+  await expect(aboutItem).toBeVisible({ timeout: 30_000 });
+  await aboutItem.click();
 
   // B's app window composites into A's desktop, host-striped with B's origin.
   // The stripe renders only after B's bundle imports over the relay — so this
@@ -70,8 +72,11 @@ test('a remote wash-term pty round-trips over the relay', async ({ remoteVm, pag
 
   // Launch wash-term ON B — a RAW-channel app (pty). Its keystrokes and
   // output ride origin-scoped raw channels over the relay (docs/REMOTE.md §4),
-  // class-aware (keystrokes interactive, output bulk).
-  await connect.locator('[data-testid="connect-launch-com.wash.term"]').click();
+  // class-aware (keystrokes interactive, output bulk). The Launch dropdown
+  // auto-opens on connect; pick wash-term from the list.
+  const termItem = connect.locator('[data-testid="connect-launch-com.wash.term"]');
+  await expect(termItem).toBeVisible({ timeout: 30_000 });
+  await termItem.click();
 
   // The remote terminal composites and its B-side pty prints a prompt — that
   // prompt arriving proves B→A raw delivery (origin-scoped, not collided).

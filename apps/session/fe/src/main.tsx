@@ -45,6 +45,11 @@ interface CatalogApp {
 }
 
 interface WindowInfo {
+  // Origin (router) the window belongs to. Pair (origin, windowID) is the
+  // only unique identity — ids are per-router — so the pager/taskbar pass
+  // it to WM intents to address a remote window's twin-id local sibling
+  // correctly (docs/REMOTE.md R2).
+  origin: string;
   windowID: number;
   instanceID: string;
   element: string;
@@ -235,6 +240,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // Remote-host sessions, fed by the session BE's remote.state forwarder
   // (com.wash.remote supervisor). Glanceable list; wash-connect manages.
   const [remoteHosts, setRemoteHosts] = createSignal<RemoteHost[]>([]);
+  // Bumped on every remote-catalog change so the sidebar's per-host launch
+  // dropdowns re-render; the catalogs themselves live in the shell (a
+  // connected host stays attached even after wash-connect closes, so
+  // window.wash.catalogFor / launchOn work straight from here).
+  const [remoteCatVer, setRemoteCatVer] = createSignal(0);
   // Live interface IPs from the session BE's host-stats ticker (host.ifaces).
   const [netIfaces, setNetIfaces] = createSignal<NetIface[]>([]);
   // Audio mixer — com.wash.audio's StateService snapshot (sources +
@@ -366,6 +376,26 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   const launchApp = (appID: string) => {
     window.wash.sendAppMsg(props.instance, { action: 'launch', app_id: appID });
+  };
+
+  // ---- remote hosts (sidebar) ----
+  // appsForHost lists a connected host's launchable apps (window surface,
+  // enabled). Reads remoteCatVer() so it re-runs when a catalog changes.
+  const appsForHost = (origin: string) => {
+    remoteCatVer();
+    return window.wash
+      .catalogFor(origin)
+      .filter((a) => a.surface === 'window' && !a.disabled)
+      .map((a) => ({ id: a.id, name: a.name, icon: a.icon }));
+  };
+  const launchOnHost = (origin: string, appID: string) => window.wash.launchOn(origin, appID);
+  // openConnect focuses an already-open wash-connect window (singleton launch
+  // is a no-op that doesn't raise it — the old "Manage does nothing" bug),
+  // else launches it. Used to add new hosts / manage auth + bookmarks.
+  const openConnect = () => {
+    const w = windows().find((x) => x.element === 'wash-app-connect');
+    if (w) window.wash.focusWindow(w.windowID, w.origin);
+    else launchApp('com.wash.connect');
   };
 
   // launchPick handles both regular catalog rows and synthetic root
@@ -522,6 +552,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   onMount(() => {
     const offCat = window.wash.onCatalog(setCatalog);
+    const offRemoteCat = window.wash.onRemoteCatalog(() => setRemoteCatVer((v) => v + 1));
     const offWin = window.wash.onWindowsChanged(setWindows);
     const offVp = window.wash.onViewport(setVp);
     const offScreen = window.wash.onScreenSize(setScreen);
@@ -755,6 +786,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
     onCleanup(() => {
       offCat();
+      offRemoteCat();
       offWin();
       offVp();
       offScreen();
@@ -891,13 +923,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         <Section
           id="remote"
           title="Remote"
-          icon="server-cog"
+          icon="monitor"
           accent={REMOTE_ACCENT}
           state={sectionStates().remote ?? 'collapsed'}
           onToggle={() => toggleSection('remote')}
           badge={remoteBadge()}
         >
-          <RemoteWidget hosts={remoteHosts} onManage={() => launchApp('com.wash.connect')} />
+          <RemoteWidget
+            hosts={remoteHosts}
+            appsFor={appsForHost}
+            onLaunch={launchOnHost}
+            onManage={openConnect}
+          />
         </Section>
         <Section
           id="audio"
@@ -1435,8 +1472,8 @@ const PagerWindow: Component<{
   const onClick = (ev: MouseEvent) => {
     ev.stopPropagation();
     window.wash.setViewport(props.cell.vx, props.cell.vy);
-    if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID);
-    else window.wash.focusWindow(props.win.windowID);
+    if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID, props.win.origin);
+    else window.wash.focusWindow(props.win.windowID, props.win.origin);
   };
   return (
     <div
@@ -1491,8 +1528,8 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
       type="button"
       title={`${minimized() ? '[minimized] ' : ''}${props.win.title} — dblclick to jump to its viewport, right-click to close`}
       onClick={() => {
-        if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID);
-        else window.wash.focusWindow(props.win.windowID);
+        if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID, props.win.origin);
+        else window.wash.focusWindow(props.win.windowID, props.win.origin);
       }}
       onDblClick={() => {
         // Snap the camera to the cell holding this window, then focus
@@ -1501,12 +1538,12 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
         // both end states converge on "focused & visible".
         const v = props.win.viewport;
         window.wash.setViewport(v.vx, v.vy);
-        if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID);
-        else window.wash.focusWindow(props.win.windowID);
+        if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID, props.win.origin);
+        else window.wash.focusWindow(props.win.windowID, props.win.origin);
       }}
       onContextMenu={(ev) => {
         ev.preventDefault();
-        window.wash.closeWindow(props.win.windowID);
+        window.wash.closeWindow(props.win.windowID, props.win.origin);
       }}
       style={{
         background: props.win.focused ? '#33387a' : 'rgba(255,255,255,0.04)',

@@ -57,7 +57,8 @@ const AppID = "com.wash.connect"
 const remoteAppID = "com.wash.remote"
 
 // washIcon — Lucide sprite symbol (already in web/shell/build-icons.mjs).
-const washIcon = "server-cog"
+// "monitor" (a remote machine) — distinct from wash-services' "server-cog".
+const washIcon = "monitor"
 
 var def *sdk.AppDef
 
