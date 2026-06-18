@@ -422,7 +422,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                       : '2px solid transparent',
                   // Rounded only on top — the bottom meets the bar's
                   // border-bottom flush, matching browser-tab idiom.
-                  'border-radius': `${tokens.radiusLg}px ${tokens.radiusLg}px 0 0`,
+                  'border-radius': `${tokens.radiusLg} ${tokens.radiusLg} 0 0`,
                   padding: '0 6px 0 10px',
                   cursor: 'pointer',
                   font: `${tokens.fontSizeMd} ${tokens.fontMono}`,

@@ -623,7 +623,7 @@ const refreshBtnStyle: JSX.CSSProperties = {
   background: 'transparent',
   color: tokens.fg,
   border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}px`,
+  'border-radius': `${tokens.radiusSm}`,
   padding: '4px 10px',
   font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
   cursor: 'pointer',
@@ -709,7 +709,7 @@ const devBadgeStyle: JSX.CSSProperties = {
 const tableScrollStyle: JSX.CSSProperties = {
   overflow: 'auto',
   border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}px`,
+  'border-radius': `${tokens.radiusSm}`,
 };
 
 const tableStyle: JSX.CSSProperties = {
@@ -770,7 +770,7 @@ const appCardStyle: JSX.CSSProperties = {
   padding: '8px 10px',
   background: tokens.bgMenu,
   border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}px`,
+  'border-radius': `${tokens.radiusSm}`,
   'min-width': 0,
 };
 

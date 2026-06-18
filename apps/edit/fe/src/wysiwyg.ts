@@ -217,7 +217,7 @@ function injectStyles() {
   font-size: 0.92em;
   background: ${tokens.bgInset};
   border: 1px solid ${tokens.borderMenu};
-  border-radius: ${tokens.radiusSm}px;
+  border-radius: ${tokens.radiusSm};
   padding: 0 4px;
   color: ${tokens.accentAmber};
 }
@@ -226,7 +226,7 @@ function injectStyles() {
   font-size: 0.92em;
   background: ${tokens.bgInset};
   border: 1px solid ${tokens.borderMenu};
-  border-radius: ${tokens.radiusMd}px;
+  border-radius: ${tokens.radiusMd};
   padding: 10px 12px;
   overflow-x: auto;
   color: ${tokens.fg};
@@ -262,7 +262,7 @@ function injectStyles() {
   width: 14px; height: 14px;
   background: ${tokens.bgWindow};
   border: 1px solid ${tokens.borderMenu};
-  border-radius: ${tokens.radiusSm}px;
+  border-radius: ${tokens.radiusSm};
   cursor: pointer;
   background-repeat: no-repeat;
   background-position: center;
@@ -285,7 +285,7 @@ function injectStyles() {
   min-width: 60px;
 }
 .wash-wysiwyg th { background: ${tokens.bgMenu}; font-weight: 600; }
-.wash-wysiwyg img { max-width: 100%; height: auto; border-radius: ${tokens.radiusSm}px; }
+.wash-wysiwyg img { max-width: 100%; height: auto; border-radius: ${tokens.radiusSm}; }
 .wash-wysiwyg .ProseMirror-selectednode {
   outline: 2px solid ${tokens.borderFocus};
   outline-offset: 2px;

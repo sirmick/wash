@@ -623,7 +623,7 @@ const stepBtnStyle: JSX.CSSProperties = {
   background: tokens.bgRowSelected,
   color: tokens.fg,
   border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusMd}px`,
+  'border-radius': `${tokens.radiusMd}`,
   cursor: 'pointer',
   'font-size': '14px',
   'line-height': '1',

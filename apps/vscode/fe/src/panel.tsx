@@ -161,7 +161,7 @@ const logStyle: JSX.CSSProperties = {
   overflow: 'auto',
   background: tokens.bgInset,
   border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusMd}px`,
+  'border-radius': `${tokens.radiusMd}`,
   padding: '8px 10px',
   font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
   color: tokens.fgDim,

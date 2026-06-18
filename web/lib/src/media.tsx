@@ -15,7 +15,7 @@ const transportBtn: JSX.CSSProperties = {
   background: 'transparent',
   color: tokens.fg,
   border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}px`,
+  'border-radius': `${tokens.radiusSm}`,
   padding: '4px 10px',
   cursor: 'pointer',
 };
@@ -247,7 +247,7 @@ export function MediaList<T>(props: MediaListProps<T>): JSX.Element {
         'min-height': 0,
         overflow: 'auto',
         background: tokens.bgNeutral,
-        'border-radius': `${tokens.radiusSm}px`,
+        'border-radius': `${tokens.radiusSm}`,
         outline: 'none',
       }}
     >

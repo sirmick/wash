@@ -242,7 +242,14 @@ const retro: Pack = {
     '--wash-titlebar-inactive': '#7f7f7f',
     '--wash-titlebar-fg': '#ffffff',
     '--wash-border-light': '#ffffff',
-    '--wash-border-dark': '#404040',
+    '--wash-border-dark': '#808080', // visible shadow edge on any backdrop
+    // Square 90s corners everywhere, and a gray taskbar (the default
+    // sunken surface is white here, which looked wrong).
+    '--wash-radius-sm': '0',
+    '--wash-radius-md': '0',
+    '--wash-radius-lg': '0',
+    '--wash-radius-xl': '0',
+    '--wash-taskbar-bg': '#c0c0c0',
   },
   wallpaper: 'wallpapers/retro.svg',
 };

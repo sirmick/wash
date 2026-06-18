@@ -370,7 +370,7 @@ const RailItem: Component<{ label: string; active: boolean; onClick: () => void 
       border: 'none',
       cursor: 'pointer',
       font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
-      'border-radius': `${tokens.radiusMd}px`,
+      'border-radius': `${tokens.radiusMd}`,
     }}
   >
     {props.label}
@@ -493,7 +493,7 @@ const Thumbnail: Component<{ color: string }> = (props) => (
       height: '72px',
       background: props.color,
       border: `1px solid ${tokens.borderMenu}`,
-      'border-radius': `${tokens.radiusMd}px`,
+      'border-radius': `${tokens.radiusMd}`,
       'flex-shrink': 0,
     }}
   />
@@ -538,7 +538,7 @@ const PackCard: Component<{ pack: Pack; active: boolean; onSelect: () => void }>
         padding: '6px',
         background: props.active ? tokens.bgRowSelected : tokens.bgInset,
         border: `2px solid ${props.active ? tokens.accentBlue : tokens.borderMenu}`,
-        'border-radius': `${tokens.radiusLg}px`,
+        'border-radius': `${tokens.radiusLg}`,
         cursor: 'pointer',
         width: '160px',
       }}
@@ -550,7 +550,7 @@ const PackCard: Component<{ pack: Pack; active: boolean; onSelect: () => void }>
           background: url()
             ? `${swatch('--wash-bg-window', '#181828')} url("${url()}") center/cover no-repeat`
             : swatch('--wash-bg-window', '#181828'),
-          'border-radius': `${tokens.radiusMd}px`,
+          'border-radius': `${tokens.radiusMd}`,
         }}
       />
       <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between', gap: '6px' }}>
@@ -640,7 +640,7 @@ const textInputStyle: JSX.CSSProperties = {
   background: tokens.bgMenu,
   color: tokens.fg,
   border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusMd}px`,
+  'border-radius': `${tokens.radiusMd}`,
   padding: '4px 8px',
   font: `${tokens.fontSizeBase} ${tokens.fontMono}`,
   outline: 'none',
