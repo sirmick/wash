@@ -41,6 +41,17 @@ COPY sbi_domain.c    /opensbi/lib/sbi/sbi_domain.c
 COPY aclint_mswi.c   /opensbi/lib/utils/ipi/aclint_mswi.c
 COPY fdt_ipi_mswi.c  /opensbi/lib/utils/ipi/fdt_ipi_mswi.c
 
+# Quiet banner: the full OpenSBI banner (ASCII-art logo + Domain0/RegionNN
+# table + per-hart dump, ~50 lines) crawls char-by-char through HTIF putchar
+# and dominates the pre-Linux cost, so it stays suppressed via FW_OPTIONS=0x1
+# (NO_BOOT_PRINTS) below. But inject ONE version line BEFORE that gate in
+# sbi_boot_print_banner so the firmware still announces itself — visible and
+# timestampable in the boot console at negligible cost. (Verified captured:
+# the HTIF console mirror shows "OpenSBI v1.5 (wash, quiet banner)".)
+RUN sed -i -e '/^static void sbi_boot_print_banner/{n' -e 'a\' \
+        -e '\tsbi_printf("OpenSBI v%d.%d (wash, quiet banner)\\n", OPENSBI_VERSION_MAJOR, OPENSBI_VERSION_MINOR);' \
+        -e '}' /opensbi/lib/sbi/sbi_init.c
+
 # PLATFORM=generic = DTB-driven, no hardcoded board layout. Reads the
 # FDT pointer in a1 at boot and discovers cpus/clint/plic/virtio from
 # it — exactly the shape TinyEMU's riscv_build_fdt produces.
