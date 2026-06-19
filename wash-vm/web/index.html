@@ -283,6 +283,30 @@
       };
       window.__washBootMark('page script start');
 
+      // Time the wasm compile+instantiate. Emscripten loads
+      // riscvemu64-wasm.wasm via WebAssembly.instantiateStreaming (a fetch,
+      // not XHR), so the XHR tracer never sees it — wrap the WebAssembly
+      // entrypoints to bracket the download+compile span.
+      (function () {
+        var wrap = function (orig, name) {
+          if (typeof orig !== 'function') return orig;
+          return function () {
+            window.__washBootMark(name + ' start');
+            var r = orig.apply(this, arguments);
+            if (r && typeof r.then === 'function') {
+              return r.then(function (v) { window.__washBootMark(name + ' done'); return v; });
+            }
+            window.__washBootMark(name + ' done(sync)');
+            return r;
+          };
+        };
+        if (WebAssembly.instantiateStreaming)
+          WebAssembly.instantiateStreaming = wrap(WebAssembly.instantiateStreaming, 'wasm instantiateStreaming');
+        WebAssembly.instantiate = wrap(WebAssembly.instantiate, 'wasm instantiate');
+        if (WebAssembly.compileStreaming)
+          WebAssembly.compileStreaming = wrap(WebAssembly.compileStreaming, 'wasm compileStreaming');
+      })();
+
       // Tell the wash shell bundles (web/lib washAssetUrl()) where
       // the page's chrome (icons.svg, wash-logo.svg) actually lives.
       // %BASE_URL% is `/` in dev and `/wash/` in the GH Pages prod

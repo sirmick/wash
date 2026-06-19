@@ -248,9 +248,11 @@ const bootFetchSeen = new Set<string>();
   const OrigXHR = window.XMLHttpRequest;
   class TracedXHR extends OrigXHR {
     private _washTraceUrl: string = '';
+    private _washStart = 0;
     open(method: string, url: string | URL, ...rest: unknown[]): void {
       const u = String(url);
       this._washTraceUrl = u;
+      this._washStart = performance.now();
       dbg.log('tinyemu', `xhr.open ${method} ${u}`);
       // Surface what's being fetched in the title bar — gives the user
       // a live "fetching kernel.bin" signal instead of opaque "loading…".
@@ -261,7 +263,14 @@ const bootFetchSeen = new Set<string>();
         window.__washBootMark?.(`fetch start: ${base}`);
       }
       this.addEventListener('load', () => {
-        dbg.log('tinyemu', `xhr.load(${this.status}) ${u} len=${this.response?.byteLength ?? this.responseText?.length ?? '?'}`);
+        const len = this.response?.byteLength ?? this.responseText?.length ?? 0;
+        dbg.log('tinyemu', `xhr.load(${this.status}) ${u} len=${len}`);
+        // Per-asset download duration — skip the many numbered rootfs blocks
+        // (their start marks already show the streaming cadence).
+        if (!/^blk\d/.test(base)) {
+          window.__washBootMark?.(
+            `fetch done: ${base} (+${Math.round(performance.now() - this._washStart)}ms, ${Math.round(len / 1024)}KB)`);
+        }
         if (u.endsWith('.cfg') && this.status === 200) {
           try {
             const text = typeof this.response === 'string'
