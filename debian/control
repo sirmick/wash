@@ -19,8 +19,9 @@ Description: lightweight remote-admin desktop environment
  needing SSH plus a stack of text-only tools.
  .
  This package installs the wash-* binaries to /usr/bin/. wash-router
- is the entry point; per-user multi-session support (wash-login) is
- planned but not yet shipped.
+ is the entry point; wash-login provides the multi-user front door
+ (per-user authenticated sessions) and is granted the capabilities it
+ needs at install time (see docs/MULTIUSER.md).
 
 Package: wash-display
 Architecture: amd64 arm64

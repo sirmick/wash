@@ -4,6 +4,7 @@
 # - create wash-system uid + wash group (idempotent)
 # - chmod the priv binary so the router's trust check accepts it
 #   without WASH_TRUSTED_APPS_DIRS (see internal/router/registry.go)
+# - setcap the wash-login front door for multi-user (cap_setuid etc.)
 # - leave /etc/wash/secret.key absent — wash-login generates it on
 #   first start. Avoids needing entropy at install time.
 
@@ -25,11 +26,26 @@ case "$1" in
             chown root:root /usr/bin/wash-priv
             chmod 0755 /usr/bin/wash-priv
         fi
-        # /etc/wash holds the multi-user HMAC secret once wash-login
-        # ships. Create the dir now (mode 0755) so first-start code
-        # only has to write the key.
+        # /etc/wash holds the multi-user HMAC secret. wash-login
+        # generates it on first start; create the dir now (mode 0755)
+        # so first-start code only has to write the key.
         if [ ! -d /etc/wash ]; then
             install -d -m 0755 /etc/wash
+        fi
+        # wash-login is the multi-user front door: it switches to the
+        # target user's uid/gid and reaps that user's session, which
+        # needs cap_setuid, cap_setgid and cap_kill (see the Makefile's
+        # wash-login-caps target and docs/MULTIUSER.md). Grant them here
+        # so a fresh install is multi-user-ready. Best-effort: setcap
+        # fails on filesystems without xattr support (some containers,
+        # overlay roots) — warn but don't abort, since the single-user
+        # dev path (wash-login uid == target uid) works without caps.
+        if [ -x /usr/bin/wash-login ]; then
+            if ! setcap 'cap_setuid,cap_setgid,cap_kill+ep' /usr/bin/wash-login 2>/dev/null; then
+                echo "wash: warning: could not setcap wash-login (no xattr support?);" >&2
+                echo "wash:   multi-user login disabled until you run:" >&2
+                echo "wash:   setcap 'cap_setuid,cap_setgid,cap_kill+ep' /usr/bin/wash-login" >&2
+            fi
         fi
         ;;
     abort-upgrade|abort-remove|abort-deconfigure)

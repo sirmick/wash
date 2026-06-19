@@ -4,8 +4,12 @@ wash (0.9.1-1) unstable; urgency=low
     wash windows (input/clipboard/popups/cursor/1080p output, subsurface
     capture + damage, chromeless CSD windows with move/resize bridges,
     shaped-popup alpha, and subsurface pointer-focus for in-window dropdowns).
+  * wash-login: grant the multi-user front door its capabilities
+    (cap_setuid,cap_setgid,cap_kill) at install time so a fresh package is
+    multi-user-ready out of the box (best-effort; warns without aborting on
+    filesystems lacking xattr support).
 
- -- sirmick <sirmick@gmail.com>  Tue, 16 Jun 2026 21:32:47 -0700
+ -- sirmick <sirmick@gmail.com>  Fri, 19 Jun 2026 00:00:00 -0700
 
 wash (0.9.0-1) unstable; urgency=low
 

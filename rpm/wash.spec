@@ -105,6 +105,18 @@ if [ -x %{_bindir}/wash-priv ]; then
     chown root:root %{_bindir}/wash-priv
     chmod 0755 %{_bindir}/wash-priv
 fi
+# wash-login is the multi-user front door: switching to the target
+# user's uid/gid and reaping the session needs cap_setuid, cap_setgid
+# and cap_kill (Makefile wash-login-caps / docs/MULTIUSER.md). Grant
+# them so a fresh install is multi-user-ready. Best-effort: setcap
+# fails on filesystems without xattr support — warn, don't fail the
+# transaction, since single-user (login uid == target uid) needs no caps.
+if [ -x %{_bindir}/wash-login ]; then
+    if ! setcap 'cap_setuid,cap_setgid,cap_kill+ep' %{_bindir}/wash-login 2>/dev/null; then
+        echo "wash: warning: could not setcap wash-login (no xattr support?);" >&2
+        echo "wash:   run: setcap 'cap_setuid,cap_setgid,cap_kill+ep' %{_bindir}/wash-login" >&2
+    fi
+fi
 exit 0
 
 %postun
@@ -123,5 +135,7 @@ exit 0
 %changelog
 * Tue Jun 16 2026 sirmick <sirmick@gmail.com> - 0.9.1-1
 - wash-display: native X/Wayland compositor (guests run as wash windows).
+- wash-login: setcap the multi-user front door at install (cap_setuid,
+  cap_setgid, cap_kill) so a fresh package is multi-user-ready.
 * Thu May 28 2026 sirmick <sirmick@gmail.com> - 0.9.0-1
 - Initial packaging.

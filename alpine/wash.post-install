@@ -1,11 +1,24 @@
 #!/bin/sh
-# wash-priv reserved-id trust gate wants root:root 0755 on the binary.
-# APKBUILD declares 0755 install mode but be explicit.
+# - wash-priv reserved-id trust gate wants root:root 0755 on the binary.
+#   APKBUILD declares 0755 install mode but be explicit.
+# - wash-login is the multi-user front door: switching to the target
+#   user's uid/gid and reaping the session needs cap_setuid, cap_setgid
+#   and cap_kill (Makefile wash-login-caps / docs/MULTIUSER.md).
 
 set -e
 
 if [ -x /usr/bin/wash-priv ]; then
     chown root:root /usr/bin/wash-priv
     chmod 0755 /usr/bin/wash-priv
+fi
+# Grant wash-login its caps so a fresh install is multi-user-ready.
+# Best-effort: setcap fails on filesystems without xattr support — warn,
+# don't fail the install, since single-user (login uid == target uid)
+# needs no caps.
+if [ -x /usr/bin/wash-login ]; then
+    if ! setcap 'cap_setuid,cap_setgid,cap_kill+ep' /usr/bin/wash-login 2>/dev/null; then
+        echo "wash: warning: could not setcap wash-login (no xattr support?);" >&2
+        echo "wash:   run: setcap 'cap_setuid,cap_setgid,cap_kill+ep' /usr/bin/wash-login" >&2
+    fi
 fi
 exit 0
