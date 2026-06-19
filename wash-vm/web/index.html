@@ -450,6 +450,14 @@
       (function () {
         var P = 3;
         window.washVports = [];
+        // ccall is a JS function well before the wasm *exports* are populated,
+        // so calling virtio_vport_in_queue_char during the ~3s init window
+        // throws "wasmExports is undefined". Rather than call blindly and drop
+        // the byte (the old code logged + lost it), buffer input until a ccall
+        // actually succeeds (wasmLive) and replay it via flushVp — no console
+        // spam, no dropped handshake bytes.
+        var wasmLive = false;
+        function canCcall() { return typeof Module !== 'undefined' && typeof Module.ccall === 'function'; }
         for (var p = 0; p < P; p++) {
           (function (ix) {
             var pendingIn = [];
@@ -458,13 +466,13 @@
             window.washVports[ix] = {
               port: ix,
               input: function (byte) {
-                if (typeof Module === 'undefined' || typeof Module.ccall !== 'function') {
-                  pendingIn.push(byte);
-                  return;
+                if (wasmLive && canCcall()) {
+                  try {
+                    Module.ccall('virtio_vport_in_queue_char', null, ['number','number'], [ix, byte]);
+                    return;
+                  } catch (e) { wasmLive = false; } // exports went away? buffer + replay
                 }
-                try {
-                  Module.ccall('virtio_vport_in_queue_char', null, ['number','number'], [ix, byte]);
-                } catch (e) { console.error('[washVports['+ix+'].input]', e); }
+                pendingIn.push(byte);
               },
               onOutput: function (bytes) {
                 if (typeof outputCb === 'function') {
@@ -479,20 +487,31 @@
                   try { fn(pendingOut.shift()); } catch (e) { console.error(e); }
                 }
               },
+              // Drain buffered input. Returns false (and keeps the rest) when a
+              // call throws — the wasm exports aren't live yet; retry next tick.
               _flushIn: function () {
                 while (pendingIn.length) {
-                  try { Module.ccall('virtio_vport_in_queue_char', null, ['number','number'], [ix, pendingIn.shift()]); }
-                  catch (e) { console.error('[washVports['+ix+'].flush]', e); break; }
+                  try {
+                    Module.ccall('virtio_vport_in_queue_char', null, ['number','number'], [ix, pendingIn[0]]);
+                    pendingIn.shift();
+                    wasmLive = true;
+                  } catch (e) { return false; }
                 }
+                return true;
               },
             };
           })(p);
         }
         var flushVp = setInterval(function () {
-          if (typeof Module === 'undefined' || typeof Module.ccall !== 'function') return;
-          clearInterval(flushVp);
-          window.__washBootMark('wasm runtime ready (ccall available)');
-          for (var i = 0; i < P; i++) window.washVports[i]._flushIn();
+          if (!canCcall()) return;
+          var ok = true;
+          for (var i = 0; i < P; i++) { if (!window.washVports[i]._flushIn()) ok = false; }
+          // Stop polling only once a real ccall has succeeded — i.e. the wasm
+          // exports are genuinely live (not merely "ccall is a function").
+          if (wasmLive && ok) {
+            window.__washBootMark('wasm exports live; vport input flushed');
+            clearInterval(flushVp);
+          }
         }, 50);
       })();
 
