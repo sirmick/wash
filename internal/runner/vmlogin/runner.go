@@ -48,6 +48,7 @@ func Run(args []string) int {
 	authTestShell := fs.String("auth-test-shell", "/bin/sh", "shell recorded on a successful --auth-test login.")
 	suPath := fs.String("su-path", "", "path to su for unix auth. Empty searches /bin and /usr/bin.")
 	passwdPath := fs.String("passwd-path", "/etc/passwd", "passwd file for the user lookup.")
+	autologin := fs.String("autologin", "", "skip the login prompt and bring wash-router up immediately as this user (browser VM — no auth boundary). uid/gid/shell resolved via --passwd-path.")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	if err := fs.Parse(args); err != nil {
@@ -66,12 +67,6 @@ func Run(args []string) int {
 		return 1
 	}
 
-	auth, err := buildAuth(*authTest, uint32(*authTestUID), uint32(*authTestGID), *authTestShell, *suPath, *passwdPath, logger)
-	if err != nil {
-		logger.Printf("auth: %v", err)
-		return 1
-	}
-
 	routerBin := resolveRouterBinary(*routerBinary)
 	if routerBin == "" {
 		logger.Printf("could not locate wash-router; pass --router-binary")
@@ -81,9 +76,37 @@ func Run(args []string) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	spawn := spawnRouter(devFd, routerBin, *appsDir, logger)
+
+	// Auto-login: bring wash-router up immediately as the named user, no login
+	// prompt. The browser VM is the user's own single-user sandbox — there's no
+	// auth boundary to enforce — so it boots straight to the desktop; the
+	// browser then reattaches to the live router (catalog, not the login form).
+	// No su/password: uid/gid/shell come straight from passwd. On router exit
+	// the supervisor loop (S99wash-router) respawns us.
+	if *autologin != "" {
+		id, err := resolveAutoLoginID(*autologin, *passwdPath)
+		if err != nil {
+			logger.Printf("autologin %q: %v", *autologin, err)
+			return 1
+		}
+		logger.Printf("wash-vmlogin %s up: autologin=%q uid=%d transport=%s router=%s — no login prompt",
+			version, id.Name, id.UID, *transport, routerBin)
+		if err := spawn(ctx, id); err != nil && ctx.Err() == nil {
+			logger.Printf("autologin router: %v", err)
+			return 1
+		}
+		return 0
+	}
+
+	auth, err := buildAuth(*authTest, uint32(*authTestUID), uint32(*authTestGID), *authTestShell, *suPath, *passwdPath, logger)
+	if err != nil {
+		logger.Printf("auth: %v", err)
+		return 1
+	}
 	front := &guest.Front{
 		Auth:   auth,
-		Spawn:  spawnRouter(devFd, routerBin, *appsDir, logger),
+		Spawn:  spawn,
 		Logger: logger,
 	}
 	logger.Printf("wash-vmlogin %s up: transport=%s router=%s apps-dir=%s", version, *transport, routerBin, *appsDir)
@@ -94,6 +117,16 @@ func Run(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// resolveAutoLoginID looks up uid/gid/shell for the --autologin user straight
+// from passwd (no password — the browser VM trusts its single user).
+func resolveAutoLoginID(name, passwdPath string) (guest.Identity, error) {
+	u, err := (&login.PasswdLister{Path: passwdPath}).Lookup(name)
+	if err != nil {
+		return guest.Identity{}, fmt.Errorf("passwd lookup %q in %s: %w", name, passwdPath, err)
+	}
+	return guest.Identity{UID: u.UID, GID: u.GID, Name: u.Name, Shell: u.Shell}, nil
 }
 
 // openChannel resolves the --transport flag to a blocking channel fd. fd:N
@@ -183,8 +216,9 @@ func spawnRouter(devFd int, routerBin, appsDir string, logger *log.Logger) guest
 		attr := &syscall.ProcAttr{
 			// Inherit our environment explicitly — unlike os/exec, raw ForkExec
 			// gives the child an EMPTY env when Env is nil, which would drop the
-			// launcher's HOME/PATH/SHELL/WASH_NETD_BACKEND the desktop needs.
-			Env:   os.Environ(),
+			// launcher's PATH/SHELL/WASH_NETD_BACKEND the desktop needs — but with
+			// HOME/USER/LOGNAME re-pointed at the authed user (see childEnv).
+			Env:   childEnv(id, logger),
 			Files: []uintptr{0, 1, 2, uintptr(devFd)},
 			Sys:   &syscall.SysProcAttr{Credential: resolveCredential(id, logger)},
 		}
@@ -201,6 +235,36 @@ func spawnRouter(devFd int, routerBin, appsDir string, logger *log.Logger) guest
 			}
 		}
 	}
+}
+
+// childEnv is the launcher environment with HOME/USER/LOGNAME re-pointed at
+// the authed user. The launcher runs as root (init), so its os.Environ() has
+// HOME=/root; without this the forked desktop — though setuid to `wash` —
+// would inherit HOME=/root and resolve ~/.config to /root/.config, which it
+// can't write (perm denied on every desktop.json / asset / settings write).
+// We take the home from the passwd entry (falling back to /home/<name>).
+func childEnv(id guest.Identity, logger *log.Logger) []string {
+	home := ""
+	if u, err := user.Lookup(id.Name); err == nil && u.HomeDir != "" {
+		home = u.HomeDir
+	} else if id.Name != "" {
+		home = "/home/" + id.Name
+	}
+	env := make([]string, 0, len(os.Environ())+3)
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "HOME=") || strings.HasPrefix(kv, "USER=") || strings.HasPrefix(kv, "LOGNAME=") {
+			continue // replaced below with the authed user's values
+		}
+		env = append(env, kv)
+	}
+	if home != "" {
+		env = append(env, "HOME="+home)
+	}
+	if id.Name != "" {
+		env = append(env, "USER="+id.Name, "LOGNAME="+id.Name)
+	}
+	logger.Printf("child env: HOME=%q USER=%q", home, id.Name)
+	return env
 }
 
 // resolveCredential builds the setuid credential for the forked wash-router.

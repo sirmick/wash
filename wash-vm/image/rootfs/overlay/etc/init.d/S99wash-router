@@ -87,16 +87,16 @@ start() {
         while :; do
             n=$((n + 1))
             echo "──────── wash-supervisor: launch #$n ────────"
-            echo "wash-supervisor: invoking wash-vmlogin (login front, transport=fd:3)..."
-            # Run wash-vmlogin AS ROOT (no su): it owns the data-plane fd, gates
-            # the channel with the login handshake, and forks wash-router as the
-            # authed user itself (it needs root to setuid + preserve groups —
-            # wash-vm/UNIFY.md). It uses the inherited fd 3 via raw syscalls (no
-            # Go poller, so no khvcd wedge), exactly as wash-router did.
-            # Real auth: the default backend is su(1)/shadow over a PTY — the
-            # same mechanism as wash-login. Log in as wash / wash (the rootfs
-            # users.table sets wash's shadow password).
-            /usr/bin/wash-vmlogin --transport=fd:3 --apps-dir=/usr/lib/wash
+            echo "wash-supervisor: invoking wash-vmlogin (autologin=wash, transport=fd:3)..."
+            # Run wash-vmlogin AS ROOT (no su): it owns the data-plane fd and
+            # forks wash-router as the desktop user itself (it needs root to
+            # setuid + preserve groups — wash-vm/UNIFY.md). It uses the inherited
+            # fd 3 via raw syscalls (no Go poller, so no khvcd wedge).
+            # The browser VM is a single-user sandbox with no auth boundary, so
+            # --autologin wash skips the login form and boots straight to the
+            # wash desktop. wash-vmlogin sets HOME=/home/wash on the forked
+            # router so ~/.config (desktop.json, assets, settings) is writable.
+            /usr/bin/wash-vmlogin --transport=fd:3 --apps-dir=/usr/lib/wash --autologin wash
             rc=$?
             echo "wash-supervisor: wash-vmlogin exited rc=$rc (launch #$n)"
             sleep_for=$(( n > 5 ? 5 : 1 ))
