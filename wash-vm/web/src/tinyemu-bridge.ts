@@ -36,6 +36,7 @@ declare global {
 
 dbg.installErrorCapture();
 dbg.log('demo', 'tinyemu page loaded');
+window.__washBootMark?.('tinyemu-bridge module loaded');
 
 // Flush the inline-HTML stdio buffer captured BEFORE this module loaded.
 // The wasm exits synchronously inside Module.calledRun — the buffer
@@ -239,6 +240,10 @@ function setStage(label: string, state?: State): void {
 // pinpoints whether cfg / bios / kernel / drive fetch is the offender.
 // Also lets us snoop the cfg body to extract VM specs for the title bar.
 const cfgBodies: Record<string, string> = {};
+// Boot-timeline: mark each distinct asset's first fetch (deduped so a
+// block-fetched rootfs doesn't spam). The gap to the next mark is roughly
+// that asset's cold-fetch time — the bulk of "slow to start loading".
+const bootFetchSeen = new Set<string>();
 (() => {
   const OrigXHR = window.XMLHttpRequest;
   class TracedXHR extends OrigXHR {
@@ -251,6 +256,10 @@ const cfgBodies: Record<string, string> = {};
       // a live "fetching kernel.bin" signal instead of opaque "loading…".
       const base = u.split('?')[0].split('/').pop() || u;
       setStage(`fetching ${base}`);
+      if (!bootFetchSeen.has(base)) {
+        bootFetchSeen.add(base);
+        window.__washBootMark?.(`fetch start: ${base}`);
+      }
       this.addEventListener('load', () => {
         dbg.log('tinyemu', `xhr.load(${this.status}) ${u} len=${this.response?.byteLength ?? this.responseText?.length ?? '?'}`);
         if (u.endsWith('.cfg') && this.status === 200) {
@@ -468,10 +477,12 @@ function detectStages(): void {
   if (!loginPromptDetected && (tailContains('login:') || tailContains('# '))) {
     loginPromptDetected = true;
     setStage('ready · shell', 'ready');
+    window.__washBootMark?.('guest userspace ready (shell prompt)');
   }
   if (!washReadyDetected && tailContains('wash-router: starting')) {
     washReadyDetected = true;
     setStage('wash-router up', 'wash');
+    window.__washBootMark?.('wash-router starting in guest');
   }
 }
 

@@ -271,6 +271,18 @@
          jslinux loads so it reads from there. Anything the user puts
          in the actual URL still wins. -->
     <script>
+      // Boot-timeline logging. performance.now() is ms since the page began
+      // loading, so each mark shows where cold-start time goes (the first
+      // uncached load; once the wasm + rootfs are in the HTTP cache it's
+      // quick). Always console.log — the dbg WS bus is dev-only and silent on
+      // the deployed demo — and also feed the dev bus when present.
+      window.__washBootMark = function (phase) {
+        var t = (window.performance && performance.now) ? performance.now() : 0;
+        try { console.log('[boottime] ' + ('     ' + t.toFixed(0)).slice(-6) + 'ms  ' + phase); } catch (e) {}
+        if (window.__washDbgPush) window.__washDbgPush('boottime', t.toFixed(0) + 'ms ' + phase);
+      };
+      window.__washBootMark('page script start');
+
       // Tell the wash shell bundles (web/lib washAssetUrl()) where
       // the page's chrome (icons.svg, wash-logo.svg) actually lives.
       // %BASE_URL% is `/` in dev and `/wash/` in the GH Pages prod
@@ -479,6 +491,7 @@
         var flushVp = setInterval(function () {
           if (typeof Module === 'undefined' || typeof Module.ccall !== 'function') return;
           clearInterval(flushVp);
+          window.__washBootMark('wasm runtime ready (ccall available)');
           for (var i = 0; i < P; i++) window.washVports[i]._flushIn();
         }, 50);
       })();
@@ -507,7 +520,12 @@
           }
         }
       };
+      window.__washVmPrinted = false;
       window.Module.print = function () {
+        if (!window.__washVmPrinted) {
+          window.__washVmPrinted = true;
+          window.__washBootMark('vm first console output (kernel booting)');
+        }
         window.__washDbgPush('tinyemu.stdout', Array.prototype.slice.call(arguments).join(' '));
       };
       window.Module.printErr = function () {
@@ -521,6 +539,8 @@
     <script src="term.js"></script>
     <script src="jslinux.js"></script>
     <script>
+      window.__washBootMark('tinyemu scripts loaded (term.js + jslinux.js)');
+
       // Belt-and-braces: replace Ethernet handlers post-load so any
       // in-progress wss:// dial can't reach the wasm via net_set_carrier.
       if (typeof Ethernet !== 'undefined') {
