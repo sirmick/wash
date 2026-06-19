@@ -418,6 +418,23 @@ let firstKernelByte = true;
 let userspaceDetected = false;
 let loginPromptDetected = false;
 let washReadyDetected = false;
+
+// Full guest-console mirror → console.log, each line stamped with the host
+// wall-clock (performance.now()). This is the boot timeline: every firmware/
+// kernel/userspace line shows exactly when it arrived, so a slow phase is
+// obvious — without embedding time in the firmware or trusting the kernel's
+// own printk timestamps (disabled via printk.time=0 on the cmdline).
+let vmLineBuf = '';
+const vmDec = new TextDecoder('utf-8', { fatal: false });
+function logVmConsole(bytes: Uint8Array): void {
+  vmLineBuf += vmDec.decode(bytes, { stream: true });
+  let nl: number;
+  while ((nl = vmLineBuf.indexOf('\n')) >= 0) {
+    const line = vmLineBuf.slice(0, nl).replace(/\r$/, '');
+    vmLineBuf = vmLineBuf.slice(nl + 1);
+    if (line.length > 0) console.log(`[vm ${Math.round(performance.now())}ms] ${line}`);
+  }
+}
 const tail = new Uint8Array(256);
 let tailLen = 0;
 const td = new TextDecoder('utf-8', { fatal: false });
@@ -569,7 +586,9 @@ const waitForTerm = setInterval(() => {
     if (firstKernelByte) {
       firstKernelByte = false;
       setStage('kernel booting');
+      window.__washBootMark?.('first guest console byte (firmware output)');
     }
+    logVmConsole(bytes); // timestamped per-line mirror → console.log
     feedTail(bytes);
     detectStages();
   };
