@@ -280,6 +280,10 @@
         var t = (window.performance && performance.now) ? performance.now() : 0;
         try { console.log('[boottime] ' + ('     ' + t.toFixed(0)).slice(-6) + 'ms  ' + phase); } catch (e) {}
         if (window.__washDbgPush) window.__washDbgPush('boottime', t.toFixed(0) + 'ms ' + phase);
+        // Structured, readable timeline — any probe (puppet `puppet js`,
+        // devtools, Playwright) can read window.__washBootLog instead of
+        // scraping console. Deploy-once hook; no per-probe redeploys.
+        (window.__washBootLog = window.__washBootLog || []).push({ t: Math.round(t), phase: phase });
       };
       window.__washBootMark('page script start');
 

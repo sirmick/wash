@@ -441,7 +441,12 @@ function logVmConsole(bytes: Uint8Array): void {
   while ((nl = vmLineBuf.indexOf('\n')) >= 0) {
     const line = vmLineBuf.slice(0, nl).replace(/\r$/, '');
     vmLineBuf = vmLineBuf.slice(nl + 1);
-    if (line.length > 0) console.log(`[vm ${Math.round(performance.now())}ms] ${line}`);
+    if (line.length > 0) {
+      const t = Math.round(performance.now());
+      console.log(`[vm ${t}ms] ${line}`);
+      // Same unified timeline as the [boottime] marks (see index.html).
+      (window.__washBootLog = window.__washBootLog || []).push({ t, vm: line });
+    }
   }
 }
 const tail = new Uint8Array(256);
