@@ -103,7 +103,8 @@ remote host (B)                          local desktop (A)
 | `internal/mountsession` | ties data (SFTP mount) + watch (remotewatch.Client → Router) into one lifecycle. |
 | `internal/sftptest` | in-process SSH+SFTP server for tests. |
 | `cmd/wash-fswatchd` | B-side watch daemon (inotify → stdio stream), launched `ssh <host> wash-fswatchd`. Ships in BINS. |
-| `apps/fswatch/be` (`com.wash.fswatch`, `wash-fswatch`) | A-side shared watch service (step 1, local-only): `watch`/`unwatch`/`unwatch_all` over the `Hub`+`Router`, streaming `fs_event` to subscribers. The streaming sibling of `StateService`. |
+| `apps/fswatch/be` (`com.wash.fswatch`, `wash-fswatch`) | A-side shared watch service: `watch`/`unwatch`/`unwatch_all` + `register_mount`/`unregister_mount` over the `Hub`+`Router`, streaming `fs_event` to subscribers. Serves local inotify and remote-mount paths. The streaming sibling of `StateService`. |
+| `internal/sdk` `WatchClient` | the one consumer-side client: relays watch/unwatch to the service and dispatches `fs_event` to per-path callbacks (refcounted). Chains `OnAppMsgFrom`, so it works with or without a Bus. **fm, session, and the filepicker all watch through it — no app runs its own inotify Manager.** |
 | `cmd/wash-mount` | optional standalone FUSE mount CLI (FUSE runtime dep; not in BINS, like wash-display). |
 
 ### Remaining
