@@ -867,6 +867,17 @@ e2e-remote-vm: vm-image vm-chrome $(OUT)/washvm-remote-run
 	cd e2e && $(PNPM) exec playwright install chromium
 	cd e2e && $(PNPM) exec playwright test remote-vm
 
+# e2e-mount-vm: the wash-to-wash MOUNT capstone (docs/MOUNT.md). Same two-VM rig
+# as e2e-remote-vm; from A's desktop it mounts one of B's folders (real SFTP +
+# FUSE), browses it in a local fm, and asserts a B-side change propagates live
+# via the shared watch service — plus a torture test co-driving one folder from
+# a local fm (the mount) and a remote fm (on B). Needs the fuse3-baked image.
+.PHONY: e2e-mount-vm
+e2e-mount-vm: vm-image vm-chrome $(OUT)/washvm-remote-run
+	cd e2e && $(PNPM) install --ignore-workspace --silent
+	cd e2e && $(PNPM) exec playwright install chromium
+	cd e2e && $(PNPM) exec playwright test mount-vm
+
 .PHONY: $(OUT)/washvm-remote-run
 $(OUT)/washvm-remote-run: | $(OUT)
 	$(call go_build,$@,cmd/washvm-remote-run)
