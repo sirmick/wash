@@ -83,8 +83,10 @@ func main() {
 	go func() {
 		<-sig
 		log.Print("unmounting")
-		if err := server.Unmount(); err != nil {
-			log.Printf("unmount: %v (try: fusermount3 -uz %s)", err, mountpoint)
+		// Escalating unmount: never leave a wedged mountpoint behind even if the
+		// backend has gone unresponsive.
+		if err := washmount.Unmount(server, mountpoint); err != nil {
+			log.Printf("unmount: %v", err)
 		}
 	}()
 	server.Wait()
