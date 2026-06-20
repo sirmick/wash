@@ -169,6 +169,11 @@ wvm_stage_payload "$RFS" "$BUILD" "$WASH_BIN"
 # the /usr/bin entry.
 ln -sf ../lib/wash/wash "$RFS/usr/bin/wash-router"
 
+# Same for wash-fswatchd: the wash-to-wash mount's watch channel runs
+# `ssh B wash-fswatchd` (com.wash.fswatch on A opens it), so it must be on the
+# bare sshd PATH too. (The SFTP data channel uses the sftp subsystem, no PATH.)
+ln -sf ../lib/wash/wash "$RFS/usr/bin/wash-fswatchd"
+
 # sudoers for the unprivileged 'wash' desktop user: NOPASSWD so wash-priv's
 # `sudo -S` escalation works in this headless demo VM without PAM/shadow setup
 # (the privileged "Scan volumes" needs root for the LVM/btrfs/ZFS reports).

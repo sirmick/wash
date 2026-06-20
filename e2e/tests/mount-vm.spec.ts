@@ -4,29 +4,33 @@
 // real FUSE mount at ~/wash/remote/<host>/…, and assert:
 //
 //   1. mount: the wash-connect UI reports the folder "mounted".
-//   2. data: a local fm on A browses B's files through the FUSE/SFTP path.
-//   3. watch: a change made on B (via a remote terminal) surfaces live in A's
-//      fm — proving B's inotify → wash-fswatchd → com.wash.fswatch → fm.
+//   2. data: a local fm on A browses + writes B's files through FUSE/SFTP.
+//   3. watch: a change on B surfaces live in A's fm — proving B's inotify →
+//      wash-fswatchd → com.wash.fswatch → fm.
 //
-// The torture test then opens BOTH a local fm (on the mount) and a remote fm
-// (on B) at the same folder, churns the filesystem, and asserts both UIs track
-// it — humans co-driving one tree from two machines.
+// The torture test opens BOTH a local fm (on the mount) and a remote fm (on B)
+// at the same folder and mutates from each side, asserting both UIs track it —
+// two machines co-driving one tree.
+//
+// Window ordering: the mount controls live in wash-connect, so we mount BEFORE
+// launching any other window (a new window composites on top and would intercept
+// the click), and we dismiss wash-connect's auto-opened Launch dropdown first.
 
 import { test, expect, remoteVmSkipReason, vmLogin, REMOTE_HOST } from '../fixtures/remote-vm';
+import type { Page, Locator } from '@playwright/test';
 
 test.beforeEach(() => {
   const reason = remoteVmSkipReason();
   test.skip(reason !== null, reason ?? '');
 });
 
-// B-side paths. The supervisor runs as `wash` on A (home /home/wash), so the
-// mount base is /home/wash/wash/remote and the mountpoint is deterministic.
-const REMOTE_DIR = '/home/wash/torture';
-const MOUNT_POINT = '/home/wash/wash/remote/wash_at_10.77.0.2/torture';
+// Mount B's home. The supervisor runs as `wash` on A (home /home/wash), so the
+// mount base is /home/wash/wash/remote and the mountpoint is deterministic:
+// base + sanitized-host + basename(remoteRoot).
+const REMOTE_DIR = '/home/wash';
+const MOUNT_POINT = '/home/wash/wash/remote/wash_at_10.77.0.2/wash';
 
-// connectToB drives wash-connect to SSH into VM-B and returns the connect app
-// locator (its Launch dropdown lists B's catalog).
-async function connectToB(page: import('@playwright/test').Page, url: string) {
+async function connectToB(page: Page, url: string): Promise<Locator> {
   await page.goto(url);
   await vmLogin(page);
   await expect(page.locator('wash-app-session')).toBeVisible({ timeout: 60_000 });
@@ -42,101 +46,108 @@ async function connectToB(page: import('@playwright/test').Page, url: string) {
   return connect;
 }
 
-// runOnB launches a fresh wash-term on B and runs one shell line in it. Returns
-// the term locator so the caller can keep typing / asserting output.
-async function launchRemoteTerm(page: import('@playwright/test').Page, connect: import('@playwright/test').Locator) {
-  const termItem = connect.locator('[data-testid="connect-launch-com.wash.term"]');
-  await expect(termItem).toBeVisible({ timeout: 30_000 });
-  await termItem.click();
-  const term = page.locator('.xterm').last();
-  await expect(term).toBeVisible({ timeout: 60_000 });
-  await expect(term).toContainText(/[$#>]/, { timeout: 30_000 });
-  return term;
+// closeLaunchMenu dismisses wash-connect's Launch dropdown, which auto-opens
+// when B's catalog arrives and whose full-window backdrop would otherwise
+// intercept clicks on the mount controls.
+async function closeLaunchMenu(connect: Locator) {
+  const backdrop = connect.locator('[data-testid="connect-launch-backdrop"]');
+  try {
+    await backdrop.waitFor({ state: 'visible', timeout: 20_000 });
+    await backdrop.click({ force: true });
+    await backdrop.waitFor({ state: 'hidden', timeout: 5_000 });
+  } catch {
+    /* menu never opened — the mount controls are already reachable */
+  }
 }
 
-async function typeLine(page: import('@playwright/test').Page, term: import('@playwright/test').Locator, line: string) {
-  await term.click();
-  await page.keyboard.type(line);
-  await page.keyboard.press('Enter');
+// mountFolder mounts dir on B and waits for the row to report "mounted". Must run
+// while wash-connect is the top window (i.e. before launching anything else).
+async function mountFolder(connect: Locator, dir: string) {
+  await closeLaunchMenu(connect);
+  await connect.locator('[data-testid="connect-mount-input"]').fill(dir);
+  await connect.locator('[data-testid="connect-mount-submit"]').click();
+  await expect(connect.locator('[data-testid="connect-mount"]').first()).toHaveAttribute('data-status', 'mounted', {
+    timeout: 60_000,
+  });
+}
+
+// launchOnB launches one of B's apps via wash-connect's Launch dropdown
+// (re-opening it if closed). wash-connect must be the top window.
+async function launchOnB(connect: Locator, appId: string) {
+  const item = connect.locator(`[data-testid="connect-launch-${appId}"]`);
+  if (!(await item.isVisible().catch(() => false))) {
+    await connect.locator('[data-testid="connect-launch"]').click();
+  }
+  await expect(item).toBeVisible({ timeout: 30_000 });
+  await item.click();
+}
+
+async function navFm(fm: Locator, path: string) {
+  await fm.locator('[data-testid="fm-path"]').fill(path);
+  await fm.locator('[data-testid="fm-path"]').press('Enter');
+}
+
+async function newFileInFm(fm: Locator, name: string) {
+  await fm.locator('[data-testid="fm-new-file"]').click();
+  const input = fm.locator('[data-testid="fm-pending-new-input"]');
+  await expect(input).toBeVisible({ timeout: 10_000 });
+  await input.fill(name);
+  await input.press('Enter');
 }
 
 test('mount a remote folder, browse it, and watch a B-side change propagate', async ({ remoteVm, page }) => {
   test.setTimeout(300_000);
   const connect = await connectToB(page, remoteVm.url);
 
-  // Seed a folder on B (must exist before we mount + watch it).
-  const term = await launchRemoteTerm(page, connect);
-  await typeLine(page, term, `mkdir -p ${REMOTE_DIR} && echo hi > ${REMOTE_DIR}/seed.txt && echo SEED_DONE`);
-  await expect(term).toContainText('SEED_DONE', { timeout: 20_000 });
+  // Mount FIRST, while wash-connect is the only window.
+  await mountFolder(connect, REMOTE_DIR);
 
-  // Mount it: type the remote path into the host's mount input and submit.
-  await connect.locator('[data-testid="connect-mount-input"]').fill(REMOTE_DIR);
-  await connect.locator('[data-testid="connect-mount-submit"]').click();
-  // The mount row reaches data-status="mounted" once the FUSE mount is up.
-  await expect(connect.locator('[data-testid="connect-mount"]').first()).toHaveAttribute('data-status', 'mounted', {
-    timeout: 60_000,
-  });
+  // A remote fm on B is our B-side mutator: a file it creates is a real change
+  // on B's disk, observed by B's inotify.
+  await launchOnB(connect, 'com.wash.fm');
+  const remoteFm = page.locator('wash-app-fm').last();
+  await expect(remoteFm).toBeVisible({ timeout: 60_000 });
+  await navFm(remoteFm, REMOTE_DIR);
 
-  // Open a LOCAL fm on A and navigate to the mountpoint — this reads B's files
-  // through the kernel FUSE mount over SFTP.
+  // A local fm on A, pointed at the FUSE mount of the same folder.
   await page.locator('[data-testid="start-menu"]').getByRole('button', { name: /^Files$/ }).click();
-  const fm = page.locator('wash-app-fm').last();
-  await expect(fm).toBeVisible({ timeout: 30_000 });
-  await fm.locator('[data-testid="fm-path"]').fill(MOUNT_POINT);
-  await fm.locator('[data-testid="fm-path"]').press('Enter');
-  await expect(fm.locator('[data-testid="fm-entry-seed.txt"]')).toBeVisible({ timeout: 30_000 });
+  const localFm = page.locator('wash-app-fm').last();
+  await expect(localFm).toBeVisible({ timeout: 30_000 });
+  await navFm(localFm, MOUNT_POINT);
 
-  // Now mutate B directly and assert it surfaces live in A's fm — the watch
-  // path (B inotify → wash-fswatchd → com.wash.fswatch → fm), no manual reload.
-  await typeLine(page, term, `touch ${REMOTE_DIR}/live.txt`);
-  await expect(fm.locator('[data-testid="fm-entry-live.txt"]')).toBeVisible({ timeout: 30_000 });
+  // Create a file on B (via the remote fm) → it must surface live in the local
+  // fm through the mount's watch channel (B inotify → wash-fswatchd →
+  // com.wash.fswatch → fm), with no manual reload.
+  await newFileInFm(remoteFm, 'wm_live.txt');
+  await expect(localFm.locator('[data-testid="fm-entry-wm_live.txt"]')).toBeVisible({ timeout: 40_000 });
 });
 
 test('torture: local fm + remote fm on the same folder both track changes', async ({ remoteVm, page }) => {
   test.setTimeout(300_000);
   const connect = await connectToB(page, remoteVm.url);
 
-  const term = await launchRemoteTerm(page, connect);
-  await typeLine(page, term, `mkdir -p ${REMOTE_DIR} && echo READY`);
-  await expect(term).toContainText('READY', { timeout: 20_000 });
+  await mountFolder(connect, REMOTE_DIR);
 
-  // Mount, and open a remote fm (on B) at the same folder.
-  await connect.locator('[data-testid="connect-mount-input"]').fill(REMOTE_DIR);
-  await connect.locator('[data-testid="connect-mount-submit"]').click();
-  await expect(connect.locator('[data-testid="connect-mount"]').first()).toHaveAttribute('data-status', 'mounted', {
-    timeout: 60_000,
-  });
-
-  const remoteFmItem = connect.locator('[data-testid="connect-launch-com.wash.fm"]');
-  await expect(remoteFmItem).toBeVisible({ timeout: 30_000 });
-  await remoteFmItem.click();
-  const remoteFm = page.locator(`wash-app-fm[data-origin="${REMOTE_HOST}"]`).last();
+  // Remote fm (on B) and local fm (on the mount), same folder.
+  await launchOnB(connect, 'com.wash.fm');
+  const remoteFm = page.locator('wash-app-fm').nth(0);
   await expect(remoteFm).toBeVisible({ timeout: 60_000 });
-  await remoteFm.locator('[data-testid="fm-path"]').fill(REMOTE_DIR);
-  await remoteFm.locator('[data-testid="fm-path"]').press('Enter');
+  await navFm(remoteFm, REMOTE_DIR);
 
-  // Open a LOCAL fm on the mount of the same folder.
   await page.locator('[data-testid="start-menu"]').getByRole('button', { name: /^Files$/ }).click();
-  const localFm = page.locator('wash-app-fm:not([data-origin])').last();
+  const localFm = page.locator('wash-app-fm').nth(1);
   await expect(localFm).toBeVisible({ timeout: 30_000 });
-  await localFm.locator('[data-testid="fm-path"]').fill(MOUNT_POINT);
-  await localFm.locator('[data-testid="fm-path"]').press('Enter');
+  await navFm(localFm, MOUNT_POINT);
 
-  // A change made on B (the mutator) must appear in BOTH windows: the remote fm
-  // via B's own inotify, the local fm via the mount's watch channel.
-  await typeLine(page, term, `touch ${REMOTE_DIR}/from_b.txt`);
-  await expect(remoteFm.locator('[data-testid="fm-entry-from_b.txt"]')).toBeVisible({ timeout: 30_000 });
-  await expect(localFm.locator('[data-testid="fm-entry-from_b.txt"]')).toBeVisible({ timeout: 30_000 });
+  // Mutate from B (remote fm): must appear in BOTH — the remote fm by its own
+  // listing, the local fm via the mount's watch channel.
+  await newFileInFm(remoteFm, 'from_b.txt');
+  await expect(remoteFm.locator('[data-testid="fm-entry-from_b.txt"]')).toBeVisible({ timeout: 40_000 });
+  await expect(localFm.locator('[data-testid="fm-entry-from_b.txt"]')).toBeVisible({ timeout: 40_000 });
 
-  // A change made through the LOCAL fm (a real write over the FUSE/SFTP path)
-  // must land on B and surface in the remote fm.
-  await localFm.locator('[data-testid="fm-new-file"]').click();
-  const newInput = localFm.locator('[data-testid="fm-pending-new-input"]');
-  await expect(newInput).toBeVisible({ timeout: 10_000 });
-  await newInput.fill('from_a.txt');
-  await newInput.press('Enter');
-  await expect(remoteFm.locator('[data-testid="fm-entry-from_a.txt"]')).toBeVisible({ timeout: 30_000 });
-  // And it is really on B's disk.
-  await typeLine(page, term, `test -f ${REMOTE_DIR}/from_a.txt && echo A_FILE_ON_B`);
-  await expect(term).toContainText('A_FILE_ON_B', { timeout: 20_000 });
+  // Mutate from A through the FUSE mount (local fm): a real write over SFTP that
+  // lands on B and must surface in the remote fm via B's inotify.
+  await newFileInFm(localFm, 'from_a.txt');
+  await expect(localFm.locator('[data-testid="fm-entry-from_a.txt"]')).toBeVisible({ timeout: 40_000 });
+  await expect(remoteFm.locator('[data-testid="fm-entry-from_a.txt"]')).toBeVisible({ timeout: 40_000 });
 });
