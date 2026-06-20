@@ -234,6 +234,11 @@ mount -t devpts -o gid=5,mode=620,ptmxmode=666 devpts /dev/pts 2>/dev/null
 [ -e /dev/ptmx ] || ln -s pts/ptmx /dev/ptmx
 mount -t tmpfs shm /dev/shm 2>/dev/null
 for m in virtio_net 8021q bridge fuse; do modprobe "$m" 2>/dev/null; done
+# Relax /dev/fuse: devtmpfs creates it 0600 root:root, and this minimal init
+# doesn't run udev rules for already-loaded modules, so the unprivileged desktop
+# user couldn't fusermount a wash-to-wash mount. World-rw matches the udev rule
+# fuse3 would install. No-op if the fuse module didn't load.
+[ -e /dev/fuse ] && chmod 666 /dev/fuse 2>/dev/null
 # Storage modules for the wash-disks gate: virtio_blk surfaces the qemu scratch
 # disks (/dev/vd*); the rest back md/LVM/btrfs/ZFS. modprobe is a no-op when a
 # module is built-in or absent (e.g. zfs in a non-WASH_VM_ZFS image).

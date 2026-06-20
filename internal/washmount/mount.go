@@ -2,6 +2,7 @@ package washmount
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -59,6 +60,9 @@ func Mount(client *sftp.Client, opts Options) (*fuse.Server, error) {
 	fsOpts := &fs.Options{
 		AttrTimeout:  &attr,
 		EntryTimeout: &entry,
+		// Surface go-fuse diagnostics (incl. fusermount's own stderr) so a mount
+		// failure says *why* — e.g. /dev/fuse perms — instead of just an exit code.
+		Logger: log.New(os.Stderr, "washmount-fuse: ", log.LstdFlags),
 	}
 	fsOpts.MountOptions.AllowOther = opts.AllowOther
 	fsOpts.MountOptions.Debug = opts.Debug
