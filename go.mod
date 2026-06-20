@@ -14,4 +14,10 @@ require (
 
 require github.com/godbus/dbus/v5 v5.2.2
 
-require gopkg.in/yaml.v3 v3.0.1
+require (
+	github.com/hanwen/go-fuse/v2 v2.10.1
+	github.com/pkg/sftp v1.13.10
+	gopkg.in/yaml.v3 v3.0.1
+)
+
+require github.com/kr/fs v0.1.0 // indirect
