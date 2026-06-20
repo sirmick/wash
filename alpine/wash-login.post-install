@@ -1,0 +1,42 @@
+#!/bin/sh
+# wash-login subpackage post-install. This package owns the wash-system user
+# (created by wash-login.pre-install) and the multi-user setup:
+#  - grant wash-login the caps it needs to switch users
+#  - own /etc/wash so wash-login can write secret.key on first start
+#  - add wash-system to group `shadow` for the default /etc/shadow auth backend
+#  - enable + start the OpenRC service (parity with the deb/rpm systemd unit)
+
+set -e
+
+# Caps: switching to the target user and reaping the session needs cap_setuid,
+# cap_setgid, cap_kill (Makefile wash-login-caps / docs/MULTIUSER.md).
+# Best-effort: setcap fails on filesystems without xattr support — warn, don't
+# fail the install, since single-user (login uid == target uid) needs no caps.
+if [ -x /usr/bin/wash-login ]; then
+    if ! setcap 'cap_setuid,cap_setgid,cap_kill+ep' /usr/bin/wash-login 2>/dev/null; then
+        echo "wash-login: warning: could not setcap (no xattr support?);" >&2
+        echo "wash-login:   run: setcap 'cap_setuid,cap_setgid,cap_kill+ep' /usr/bin/wash-login" >&2
+    fi
+fi
+# /etc/wash holds the multi-user HMAC secret; wash-login (running as wash-system)
+# writes secret.key there on first start. Create it owned wash-system:wash 0750.
+# It is deliberately not shipped in the package (apk would reset its owner to the
+# packaged root:root after this script); post-deinstall removes it.
+if getent passwd wash-system >/dev/null 2>&1; then
+    mkdir -p /etc/wash
+    chown wash-system:wash /etc/wash
+    chmod 0750 /etc/wash
+fi
+# The default auth backend reads /etc/shadow; group `shadow` grants that
+# without running wash-login as root. Best-effort.
+if getent group shadow >/dev/null 2>&1; then
+    addgroup wash-system shadow >/dev/null 2>&1 || true
+fi
+# Enable + start the OpenRC service so a fresh install is reachable OOTB.
+# rc-update writes the runlevel symlink even without OpenRC running; rc-service
+# start is best-effort (no-op in a container with no running OpenRC).
+if command -v rc-update >/dev/null 2>&1; then
+    rc-update add wash-login default >/dev/null 2>&1 || true
+    rc-service wash-login start >/dev/null 2>&1 || true
+fi
+exit 0

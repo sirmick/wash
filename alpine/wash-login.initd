@@ -1,0 +1,36 @@
+#!/sbin/openrc-run
+# OpenRC service for the wash multi-user login front door (Alpine's init-system
+# parity with the systemd unit shipped on deb/rpm: packaging/wash-login.service).
+#
+# Runs as the unprivileged wash-system user. The capabilities wash-login needs
+# to switch into the target user and reap that user's session (cap_setuid,
+# cap_setgid, cap_kill) are set on the binary by the package post-install;
+# start-stop-daemon's --user calls initgroups, so wash-system's membership in
+# group `shadow` (added by post-install) lets the default auth backend read
+# /etc/shadow without root.
+#
+# Tunables come from /etc/conf.d/wash-login (WASH_LOGIN_ARGS), which OpenRC
+# sources automatically. That file is the same single-source env file shipped as
+# /etc/default/wash-login on deb/rpm.
+
+name="wash-login"
+description="wash multi-user login front door (web admin desktop over HTTP)"
+
+command="/usr/bin/wash-login"
+command_args="${WASH_LOGIN_ARGS}"
+command_user="wash-system:wash"
+command_background="yes"
+pidfile="/run/wash-login.pid"
+output_log="/var/log/wash-login.log"
+error_log="/var/log/wash-login.log"
+
+depend() {
+	need net
+	after firewall
+	use logger
+}
+
+start_pre() {
+	checkpath --directory --mode 0755 /run
+	checkpath --file --mode 0644 --owner wash-system:wash "${output_log}"
+}

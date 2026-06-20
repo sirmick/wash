@@ -1,0 +1,25 @@
+[Unit]
+Description=wash multi-user login front door (web admin desktop over HTTP)
+Documentation=file:///usr/share/doc/wash/MULTIUSER.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# wash-login runs as a dedicated unprivileged system user. The three
+# file-capabilities it needs to switch into the target user and reap that
+# user's session (cap_setuid, cap_setgid, cap_kill) are set on the binary by
+# the package postinst; SupplementaryGroups=shadow lets the default auth
+# backend read /etc/shadow. NoNewPrivileges is intentionally left off so the
+# binary's file-capabilities take effect on exec. The service deliberately
+# avoids ProtectSystem/PrivateTmp/etc.: wash-login spawns per-user wash-router
+# processes as arbitrary uids across the host, which sandboxing would break.
+User=wash-system
+Group=wash
+SupplementaryGroups=shadow
+EnvironmentFile=-/etc/default/wash-login
+ExecStart=/usr/bin/wash-login $WASH_LOGIN_ARGS
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

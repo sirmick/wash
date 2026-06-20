@@ -24,7 +24,7 @@ ARG PKG_ARCH
 ARG WASH_DISPLAY
 
 RUN dnf install -y --setopt=install_weak_deps=False \
-        rpm-build xz tar \
+        rpm-build xz tar systemd-rpm-macros \
     && dnf clean all
 
 WORKDIR /root/rpmbuild

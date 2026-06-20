@@ -1,6 +1,6 @@
 Name:           wash
 Version:        0.9.1
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
 License:        MIT
@@ -22,8 +22,11 @@ Source0:        wash_%{version}.tar.xz
 # binaries are staged under out/ by the build container. No BuildArch pin —
 # that would hard-wire x86_64 and block cross-arch builds.
 
-Requires:       shadow-utils
-Requires:       libcap
+# The core package ships only the router + app binaries; it creates no user and
+# needs no capabilities, so it carries no shadow-utils/libcap requires (those
+# move to the wash-login subpackage). systemd-rpm-macros is needed at build time
+# for the wash-login subpackage's %systemd_* scriptlets.
+BuildRequires:  systemd-rpm-macros
 
 # Optional native display subpackage. Off by default; build with
 # `rpmbuild --with display` on a host that built out/wash-display
@@ -34,7 +37,23 @@ Requires:       libcap
 wash is a transport-only router and a small family of web-component
 apps that present a Windows/GNOME/macOS-style desktop over HTTP/WS.
 Designed for maintaining Linux machines over the network without
-needing SSH plus a stack of text-only tools.
+needing SSH plus a stack of text-only tools. wash-router runs as the
+invoking user (single-user mode); install wash-login for multi-user access.
+
+%package login
+Summary:        Multi-user login front door for wash
+Requires:       wash = %{version}-%{release}
+Requires:       shadow-utils
+Requires:       libcap
+%{?systemd_requires}
+%description login
+wash-login is the authenticated, multi-user entry point to a wash desktop:
+it presents a login page on 0.0.0.0:10000 and, per session, switches to the
+target user's uid and spawns a wash-router for them. Installed as an enabled
+systemd service running as the unprivileged wash-system user (created by this
+package), granted only the capabilities it needs to switch users (cap_setuid,
+cap_setgid, cap_kill) and membership in group shadow for the default
+/etc/shadow auth backend. Tunables live in /etc/default/wash-login.
 
 %if %{with display}
 %package display
@@ -62,6 +81,9 @@ install -d %{buildroot}%{_bindir}
 : > wash.files
 while read -r bin; do
     [ -n "$bin" ] || continue
+    # wash-login ships in its own subpackage; keep it out of the core list.
+    # packaging/wash.binaries stays the full inventory (CI drift-guard vs BINS).
+    [ "$bin" = wash-login ] && continue
     install -m 0755 out/$bin %{buildroot}%{_bindir}/$bin
     echo "%{_bindir}/$bin" >> wash.files
 done < packaging/wash.binaries
@@ -74,10 +96,21 @@ install -m 0755 out/wash-display %{buildroot}%{_bindir}/wash-display
 install -d -m 0755 %{buildroot}/usr/lib/wash
 install -m 0755 out/lib/libwlroots.so.* %{buildroot}/usr/lib/wash/
 %endif
-install -d -m 0755 %{buildroot}%{_sysconfdir}/wash
+# wash-login subpackage payload: the front-door binary, its systemd unit
+# (single-source packaging/wash-login.service, shared verbatim with debian/),
+# its EnvironmentFile, and the /etc/wash dir it writes secret.key into.
+install -m 0755 out/wash-login %{buildroot}%{_bindir}/wash-login
+install -D -m0644 packaging/wash-login.service %{buildroot}%{_unitdir}/wash-login.service
+install -D -m0644 packaging/wash-login.default %{buildroot}%{_sysconfdir}/default/wash-login
+install -d %{buildroot}%{_sysconfdir}/wash
 
 %files -f wash.files
-%dir %{_sysconfdir}/wash
+
+%files login
+%{_bindir}/wash-login
+%{_unitdir}/wash-login.service
+%config(noreplace) %{_sysconfdir}/default/wash-login
+%attr(0750, wash-system, wash) %dir %{_sysconfdir}/wash
 
 %if %{with display}
 %files display
@@ -86,17 +119,7 @@ install -d -m 0755 %{buildroot}%{_sysconfdir}/wash
 /usr/lib/wash/libwlroots.so.*
 %endif
 
-%pre
-# Create wash-system uid + wash group before the files land so
-# %files ownership claims would be checked correctly. Idempotent.
-getent group wash >/dev/null || groupadd --system wash
-getent passwd wash-system >/dev/null || \
-    useradd --system --gid wash \
-            --home-dir /var/lib/wash \
-            --shell /sbin/nologin \
-            wash-system
-exit 0
-
+# ---- core wash scriptlets -------------------------------------------------
 %post
 # wash-priv reserved-id trust gate wants root:root 0755 — files
 # section already declares 0755 but be explicit in case the rpm
@@ -105,22 +128,46 @@ if [ -x %{_bindir}/wash-priv ]; then
     chown root:root %{_bindir}/wash-priv
     chmod 0755 %{_bindir}/wash-priv
 fi
-# wash-login is the multi-user front door: switching to the target
-# user's uid/gid and reaping the session needs cap_setuid, cap_setgid
-# and cap_kill (Makefile wash-login-caps / docs/MULTIUSER.md). Grant
-# them so a fresh install is multi-user-ready. Best-effort: setcap
-# fails on filesystems without xattr support — warn, don't fail the
-# transaction, since single-user (login uid == target uid) needs no caps.
-if [ -x %{_bindir}/wash-login ]; then
-    if ! setcap 'cap_setuid,cap_setgid,cap_kill+ep' %{_bindir}/wash-login 2>/dev/null; then
-        echo "wash: warning: could not setcap wash-login (no xattr support?);" >&2
-        echo "wash:   run: setcap 'cap_setuid,cap_setgid,cap_kill+ep' %{_bindir}/wash-login" >&2
-    fi
-fi
 exit 0
 
-%postun
-# Only on full uninstall (not upgrade) clean up the user/group.
+# ---- wash-login subpackage scriptlets -------------------------------------
+%pre login
+# Create the wash group + unprivileged wash-system user before the files land
+# so %attr(...,wash-system,wash) /etc/wash resolves. Idempotent.
+getent group wash >/dev/null || groupadd --system wash
+getent passwd wash-system >/dev/null || \
+    useradd --system --gid wash \
+            --home-dir /var/lib/wash \
+            --shell /sbin/nologin \
+            wash-system
+exit 0
+
+%post login
+# Switching to the target user's uid/gid and reaping the session needs
+# cap_setuid, cap_setgid and cap_kill (Makefile wash-login-caps /
+# docs/MULTIUSER.md). Grant them so a fresh install is multi-user-ready.
+# Best-effort: setcap fails on filesystems without xattr support — warn, don't
+# fail the transaction, since single-user (login uid == target uid) needs no caps.
+if [ -x %{_bindir}/wash-login ]; then
+    if ! setcap 'cap_setuid,cap_setgid,cap_kill+ep' %{_bindir}/wash-login 2>/dev/null; then
+        echo "wash-login: warning: could not setcap (no xattr support?);" >&2
+        echo "wash-login:   run: setcap 'cap_setuid,cap_setgid,cap_kill+ep' %{_bindir}/wash-login" >&2
+    fi
+fi
+# The default auth backend reads /etc/shadow; group `shadow` grants that without
+# running wash-login as root (the unit also sets SupplementaryGroups=shadow, but
+# add it at the system level too for least privilege). Best-effort.
+if getent group shadow >/dev/null; then
+    usermod -aG shadow wash-system >/dev/null 2>&1 || true
+fi
+%systemd_post wash-login.service
+
+%preun login
+%systemd_preun wash-login.service
+
+%postun login
+%systemd_postun_with_restart wash-login.service
+# Only on full uninstall (not upgrade) of wash-login clean up its user/group/dir.
 if [ "$1" = "0" ]; then
     if getent passwd wash-system >/dev/null; then
         userdel wash-system >/dev/null 2>&1 || true
@@ -133,6 +180,13 @@ fi
 exit 0
 
 %changelog
+* Fri Jun 19 2026 sirmick <sirmick@gmail.com> - 0.9.1-2
+- Split the multi-user front door into a wash-login subpackage (Requires: wash)
+  that owns the wash-system user, the capabilities, and the systemd service;
+  the core wash package is now just the router + apps (no user/caps/service).
+- wash-login: enabled systemd unit, /etc/default/wash-login, /etc/wash owned
+  wash-system:wash 0750, wash-system added to group shadow — reachable on
+  0.0.0.0:10000 OOTB (parity with the deb).
 * Tue Jun 16 2026 sirmick <sirmick@gmail.com> - 0.9.1-1
 - wash-display: native X/Wayland compositor (guests run as wash windows).
 - wash-login: setcap the multi-user front door at install (cap_setuid,

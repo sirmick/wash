@@ -1,15 +1,29 @@
 # Maintainer: sirmick <sirmick@gmail.com>
 pkgname=wash
 pkgver=0.9.1
-pkgrel=1
+pkgrel=2
 pkgdesc="Lightweight remote-admin desktop environment"
 url="https://github.com/sirmick/wash"
 arch="x86_64 aarch64 riscv64"
 license="MIT"
-depends="libcap shadow"
+# Core wash is just the router + apps; it creates no user and needs no caps, so
+# it carries no depends (the multi-user deps live on the wash-login subpackage).
+depends=""
 # No makedepends: binaries are prebuilt in the source tarball.
 options="!check !strip"
-install="$pkgname.pre-install $pkgname.post-install $pkgname.post-deinstall"
+# All install scripts across the main package AND subpackages must be listed
+# here — abuild does NOT auto-detect them; it routes each "<name>.<action>" to
+# the (sub)package whose name matches the prefix. So wash.post-install attaches
+# to the core package and the wash-login.* scripts attach to the wash-login
+# subpackage (user creation, caps, service enable, teardown).
+install="$pkgname.post-install
+	$pkgname-login.pre-install
+	$pkgname-login.post-install
+	$pkgname-login.post-deinstall"
+# wash-login subpackage: the multi-user front door, always built. Its split
+# function (_login) is below; abuild attaches alpine/wash-login.{pre,post}-install
+# and wash-login.post-deinstall to it by name.
+subpackages="$pkgname-login:_login"
 # Optional native display subpackage. Declared ONLY when the build
 # container produced out/wash-display (WASH_DISPLAY=1) — abuild's
 # prepare_subpackages runs for EVERY entry listed here regardless of what
@@ -18,9 +32,8 @@ install="$pkgname.pre-install $pkgname.post-install $pkgname.post-deinstall"
 # sets WASH_DISPLAY to 0 or 1, so test for "1" explicitly (a bare -n check
 # would fire on "0"). Mirrors deb's `pkg.wash.display` build profile and
 # rpm's `%bcond_with display`.
-subpackages=""
 if [ "${WASH_DISPLAY:-0}" = "1" ]; then
-	subpackages="$pkgname-display:_display"
+	subpackages="$subpackages $pkgname-display:_display"
 fi
 source="wash_$pkgver.tar.xz"
 # pre-built binaries; no upstream sha to verify
@@ -34,13 +47,32 @@ build() {
 package() {
     cd "$builddir"
     install -d "$pkgdir/usr/bin"
-    # Install from the single source-of-truth list (packaging/wash.binaries,
-    # generated from the Makefile's BINS) so a new app ships automatically.
+    # Core package: every binary from the single-source inventory EXCEPT
+    # wash-login (which ships in the wash-login subpackage). wash.binaries stays
+    # the full list (CI drift-guard vs the Makefile's BINS), so filter it here.
     while read -r bin; do
         [ -n "$bin" ] || continue
+        [ "$bin" = wash-login ] && continue
         install -m 0755 "out/$bin" "$pkgdir/usr/bin/$bin"
     done < packaging/wash.binaries
-    install -d -m 0755 "$pkgdir/etc/wash"
+}
+
+_login() {
+    pkgdesc="Multi-user login front door for wash"
+    depends="wash=$pkgver-r$pkgrel libcap shadow"
+    # Not pulled in automatically — installing wash-login is an explicit choice.
+    install_if=""
+    cd "$builddir"
+    # The front-door binary, its OpenRC service (Alpine's init-system parity with
+    # the systemd unit on deb/rpm), and the env file (same single-source
+    # packaging/wash-login.default, installed as the OpenRC confd). /etc/wash is
+    # NOT shipped in the package: apk would record it root:root (fakeroot can't
+    # chown to the not-yet-created wash-system user) and then reset that owner
+    # after post-install. Instead wash-login.post-install creates it owned
+    # wash-system:wash, and post-deinstall removes it (matches the deb).
+    install -Dm0755 out/wash-login "$subpkgdir/usr/bin/wash-login"
+    install -Dm0755 alpine/wash-login.initd "$subpkgdir/etc/init.d/wash-login"
+    install -Dm0644 packaging/wash-login.default "$subpkgdir/etc/conf.d/wash-login"
 }
 
 _display() {

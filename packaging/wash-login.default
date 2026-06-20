@@ -1,0 +1,22 @@
+# Arguments for the wash-login service front door. Installed as
+# /etc/default/wash-login (systemd, sourced via the unit's EnvironmentFile) and
+# as /etc/conf.d/wash-login (OpenRC, sourced automatically by the init script).
+#
+# wash-login binds 0.0.0.0:10000 by design: it is a NETWORK service (see
+# docs/MULTIUSER.md). For any non-loopback bind you must declare a cookie
+# policy, or wash-login refuses to start rather than leak credentials:
+#
+#   --cookie-secure         Sets the Secure flag on session cookies. Use this
+#                           when a TLS terminator (reverse proxy) sits in front
+#                           so the browser reaches wash over HTTPS. RECOMMENDED
+#                           for anything exposed beyond a trusted LAN.
+#
+#   --allow-insecure-cookie Permit plain-HTTP login (no TLS in front). Ships
+#                           passwords and session cookies in the clear — only
+#                           acceptable on a network you fully trust.
+#
+# The shipped default allows plain-HTTP login so a fresh install is reachable
+# and usable out of the box. Put wash behind TLS and switch to --cookie-secure
+# for any exposed deployment. Other useful flags: --listen host:port,
+# --max-sessions-per-uid N, --cookie-ttl DUR (see `wash-login --help`).
+WASH_LOGIN_ARGS="--allow-insecure-cookie"

@@ -1,0 +1,31 @@
+#!/bin/sh
+# wash (core) postinst.
+#
+# The core package ships only the router + app binaries and runs as the
+# invoking user, so it creates no system user and needs no capabilities — the
+# multi-user machinery lives entirely in the wash-login package. The one thing
+# core must do is satisfy wash-priv's trust gate.
+
+set -e
+
+case "$1" in
+    configure)
+        # Trust-check guard: the router's registry refuses reservedID
+        # com.wash.priv from non-root binaries unless mode 0755 root:root
+        # (see internal/router/registry.go).
+        if [ -x /usr/bin/wash-priv ]; then
+            chown root:root /usr/bin/wash-priv
+            chmod 0755 /usr/bin/wash-priv
+        fi
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

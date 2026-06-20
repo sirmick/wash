@@ -4,6 +4,12 @@
 
 set -e
 
+# Stop the service and drop it from the default runlevel before removing the
+# user it runs as. Best-effort (OpenRC may not be running, e.g. in a container).
+if command -v rc-update >/dev/null 2>&1; then
+    rc-service wash-login stop >/dev/null 2>&1 || true
+    rc-update del wash-login default >/dev/null 2>&1 || true
+fi
 if getent passwd wash-system >/dev/null 2>&1; then
     deluser wash-system >/dev/null 2>&1 || true
 fi

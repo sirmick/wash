@@ -1,13 +1,18 @@
 #!/bin/sh
-# wash postrm.
+# wash-login postrm.
 #
-# On purge only: remove the wash-system user, wash group, and /etc/wash.
-# On remove (non-purge) we leave them in place so a reinstall is seamless.
+# This package owns the wash-system user, wash group, and /etc/wash, so it is
+# responsible for tearing them down. On purge only: remove them. On remove
+# (non-purge) we leave them in place so a reinstall is seamless.
 
 set -e
 
 case "$1" in
     purge)
+        # NB: service enable-symlink teardown is handled by the
+        # dh_installsystemd-generated snippet appended below. Do NOT write the
+        # literal debhelper token in a comment: dh_installdeb substitutes it
+        # wherever it appears, which would splice the snippet mid-comment.
         if getent passwd wash-system >/dev/null; then
             deluser --quiet --system wash-system >/dev/null 2>&1 || true
         fi

@@ -1,0 +1,68 @@
+#!/bin/sh
+# wash-login postinst.
+#
+# wash-login is the multi-user front door. This package owns the system user it
+# runs as and all the multi-user setup:
+#  - create the wash group + unprivileged wash-system user (idempotent)
+#  - add wash-system to group `shadow` so the default /etc/shadow auth backend
+#    works without running as root
+#  - setcap the binary with the caps it needs to switch users
+#  - own /etc/wash so wash-login can write secret.key on first start
+#  - enable + start wash-login.service (appended below by dh_installsystemd)
+#
+# /etc/wash/secret.key is left absent — wash-login generates it on first start,
+# avoiding the need for entropy at install time.
+
+set -e
+
+case "$1" in
+    configure)
+        if ! getent group wash >/dev/null; then
+            addgroup --system wash
+        fi
+        if ! getent passwd wash-system >/dev/null; then
+            adduser --system --ingroup wash \
+                --home /var/lib/wash --no-create-home \
+                --shell /usr/sbin/nologin wash-system
+        fi
+        # The default auth backend reads /etc/shadow; group `shadow` grants that
+        # without running wash-login as root — it relies on file-caps plus this
+        # membership for least privilege. Best-effort.
+        if getent group shadow >/dev/null; then
+            adduser wash-system shadow >/dev/null 2>&1 || true
+        fi
+        # /etc/wash holds the multi-user HMAC secret. wash-login (running as
+        # wash-system) generates secret.key on first start, so the dir must be
+        # owned by wash-system, not root. Mode 0750: private to group wash.
+        install -d -m 0750 -o wash-system -g wash /etc/wash
+        # Switching to the target user's uid/gid and reaping that user's session
+        # needs cap_setuid, cap_setgid and cap_kill (see the Makefile's
+        # wash-login-caps target and docs/MULTIUSER.md). Grant them so a fresh
+        # install is multi-user-ready. Best-effort: setcap fails on filesystems
+        # without xattr support (some containers, overlay roots) — warn but
+        # don't abort, since the single-user dev path (wash-login uid == target
+        # uid) works without caps.
+        if [ -x /usr/bin/wash-login ]; then
+            if ! setcap 'cap_setuid,cap_setgid,cap_kill+ep' /usr/bin/wash-login 2>/dev/null; then
+                echo "wash-login: warning: could not setcap (no xattr support?);" >&2
+                echo "wash-login:   multi-user login disabled until you run:" >&2
+                echo "wash-login:   setcap 'cap_setuid,cap_setgid,cap_kill+ep' /usr/bin/wash-login" >&2
+            fi
+        fi
+        # Enabling + starting wash-login.service is appended below by the
+        # dh_installsystemd-generated snippet (it picks up the unit staged into
+        # this package by debian/rules). Do NOT write the literal debhelper token
+        # in a comment: dh_installdeb substitutes it wherever it appears, which
+        # would splice the snippet mid-comment.
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

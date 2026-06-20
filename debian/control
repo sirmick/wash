@@ -8,9 +8,7 @@ Rules-Requires-Root: no
 
 Package: wash
 Architecture: any
-Depends: ${misc:Depends},
-         adduser,
-         libcap2-bin
+Depends: ${misc:Depends}
 Recommends: ca-certificates
 Description: lightweight remote-admin desktop environment
  wash is a transport-only router and a small family of web-component
@@ -18,10 +16,27 @@ Description: lightweight remote-admin desktop environment
  Designed for maintaining Linux machines over the network without
  needing SSH plus a stack of text-only tools.
  .
- This package installs the wash-* binaries to /usr/bin/. wash-router
- is the entry point; wash-login provides the multi-user front door
- (per-user authenticated sessions) and is granted the capabilities it
- needs at install time (see docs/MULTIUSER.md).
+ This package installs the core wash-* binaries to /usr/bin/. wash-router
+ is the entry point and runs as the invoking user (single-user mode). For
+ per-user authenticated multi-user access install the wash-login package;
+ for native X/Wayland app windows install wash-display.
+
+Package: wash-login
+Architecture: any
+Depends: ${misc:Depends},
+         wash (= ${binary:Version}),
+         adduser,
+         libcap2-bin
+Description: multi-user login front door for wash
+ wash-login is the authenticated, multi-user entry point to a wash desktop:
+ it presents a login page on 0.0.0.0:10000 and, per session, switches to the
+ target user's uid and spawns a wash-router for them.
+ .
+ Installed as an enabled systemd service running as the unprivileged
+ wash-system user (created by this package), granted only the capabilities it
+ needs to switch users (cap_setuid, cap_setgid, cap_kill) and membership in
+ group shadow for the default /etc/shadow auth backend. Tunables live in
+ /etc/default/wash-login; see docs/MULTIUSER.md.
 
 Package: wash-display
 Architecture: amd64 arm64

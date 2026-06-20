@@ -1,3 +1,22 @@
+wash (0.9.1-2) unstable; urgency=low
+
+  * Split the multi-user front door into its own wash-login package. The core
+    wash package is now just the router + apps (single-user, no system user or
+    capabilities); wash-login (Depends: wash) owns the wash-system user, the
+    capabilities, and the service.
+  * wash-login ships an enabled systemd unit running as the unprivileged
+    wash-system user, so a fresh install is reachable on 0.0.0.0:10000 out of
+    the box rather than installing dormant binaries.
+  * wash-login postinst creates wash-system, adds it to group `shadow` (default
+    /etc/shadow auth backend), grants the binary cap_setuid,cap_setgid,cap_kill,
+    and owns /etc/wash as wash-system:wash 0750 so secret.key can be written on
+    first start without root.
+  * Add /etc/default/wash-login: declares the cookie policy passed to
+    wash-login (ships --allow-insecure-cookie for plain-HTTP LAN use; switch
+    to --cookie-secure behind a TLS terminator).
+
+ -- sirmick <sirmick@gmail.com>  Fri, 19 Jun 2026 16:45:00 -0700
+
 wash (0.9.1-1) unstable; urgency=low
 
   * wash-display: native X/Wayland compositor — real X11/Wayland guests run as
