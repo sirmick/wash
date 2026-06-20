@@ -1800,6 +1800,24 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // automatically as folders expand/collapse.
   const visibleCount = createMemo(() => visibleRows().length);
 
+  // Scroll the current row into view when the cursor moves (Home / Back /
+  // Forward / Up / path-bar / double-click). Without this the tree only
+  // re-bolds the current row in place — on a big tree the target is often
+  // off-screen, so a Home click looked like "nothing happened" even though
+  // it navigated. Depends on visibleRows() too so it retries once the row
+  // actually mounts (its listing may still be in flight when path() changes).
+  // block:'nearest' is a no-op when the row is already visible, so ordinary
+  // in-view selections don't jump.
+  createEffect(() => {
+    const cur = path();
+    visibleRows();
+    if (!cur) return;
+    queueMicrotask(() => {
+      const row = props.host.querySelector(`[data-testid="fm-list"] [data-path="${CSS.escape(cur)}"]`);
+      (row as HTMLElement | null)?.scrollIntoView({ block: 'nearest' });
+    });
+  });
+
   // gridEntries is the previewed folder's listing, sorted/filtered by the
   // SAME comparator the tree uses (sortedFiltered, @wash/fs-client) so the
   // folder grid follows the toolbar sort + show-hidden state. The grid's
