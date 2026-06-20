@@ -11,6 +11,7 @@
 
 import { For, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { JSX } from 'solid-js';
+import { computeVirtualWindow } from './virtual-window';
 
 export interface VirtualGridProps<T> {
   items: readonly T[];
@@ -56,14 +57,24 @@ export function VirtualGrid<T>(props: VirtualGridProps<T>): JSX.Element {
 
   // padding eats into usable width; assume the caller's style padding is
   // symmetric and small — column math uses the content box clientWidth.
-  const cols = createMemo(() => Math.max(1, Math.floor((vw() + gap()) / (props.tileWidth + gap()))));
-  const rowH = createMemo(() => props.tileHeight + gap());
-  const totalRows = createMemo(() => Math.ceil(props.items.length / cols()));
-  const totalH = createMemo(() => Math.max(0, totalRows() * rowH() - gap()));
-  const startRow = createMemo(() => Math.max(0, Math.floor(scrollTop() / rowH()) - overscan()));
-  const endRow = createMemo(() => Math.min(totalRows(), Math.ceil((scrollTop() + vh()) / rowH()) + overscan()));
+  const win = createMemo(() =>
+    computeVirtualWindow({
+      count: props.items.length,
+      tileWidth: props.tileWidth,
+      tileHeight: props.tileHeight,
+      gap: gap(),
+      overscan: overscan(),
+      vw: vw(),
+      vh: vh(),
+      scrollTop: scrollTop(),
+    }),
+  );
+  const cols = () => win().cols;
+  const rowH = () => win().rowH;
+  const totalH = () => win().totalH;
+  const startRow = () => win().startRow;
   // Slice the original refs so <For> reuses tiles that persist across scroll.
-  const visible = createMemo(() => props.items.slice(startRow() * cols(), endRow() * cols()));
+  const visible = createMemo(() => props.items.slice(win().startIndex, win().endIndex));
 
   return (
     <div
