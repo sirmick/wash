@@ -69,6 +69,7 @@ import {
   Folder as FolderIcon,
   FolderPlus,
   HardDrive,
+  Hash,
   Home as HomeIcon,
   Link2,
   Music,
@@ -3411,8 +3412,10 @@ const EXT_ICON: Record<string, (size: number) => JSX.Element> = {};
   group('csv tsv psv xls xlsx xlsm xlsb ods numbers parquet arrow feather', (s) => <FileSpreadsheet size={s} />);
   // Presentations.
   group('ppt pptx pps ppsx odp', (s) => <Presentation size={s} />);
+  // Markdown — its own glyph (the `#` heading mark), distinct from plain prose.
+  group('md markdown mdx mkd mdown mkdn mdwn', (s) => <Hash size={s} />);
   // Prose / documents.
-  group('txt text md markdown mdx rst adoc asciidoc org tex bib rtf nfo log doc docx odt pages wpd pdf xps', (s) => <FileText size={s} />);
+  group('txt text rst adoc asciidoc org tex bib rtf nfo log doc docx odt pages wpd pdf xps', (s) => <FileText size={s} />);
   // E-books.
   group('epub mobi azw azw3 kfx fb2 djvu cbz cbr', (s) => <BookOpen size={s} />);
   // Fonts.
