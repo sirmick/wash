@@ -103,6 +103,7 @@ remote host (B)                          local desktop (A)
 | `internal/mountsession` | ties data (SFTP mount) + watch (remotewatch.Client → Router) into one lifecycle. |
 | `internal/sftptest` | in-process SSH+SFTP server for tests. |
 | `cmd/wash-fswatchd` | B-side watch daemon (inotify → stdio stream), launched `ssh <host> wash-fswatchd`. Ships in BINS. |
+| `apps/fswatch/be` (`com.wash.fswatch`, `wash-fswatch`) | A-side shared watch service (step 1, local-only): `watch`/`unwatch`/`unwatch_all` over the `Hub`+`Router`, streaming `fs_event` to subscribers. The streaming sibling of `StateService`. |
 | `cmd/wash-mount` | optional standalone FUSE mount CLI (FUSE runtime dep; not in BINS, like wash-display). |
 
 ### Remaining
