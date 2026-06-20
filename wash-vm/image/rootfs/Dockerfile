@@ -20,8 +20,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Buildroot LTS. Bump version here and rebuild to pick up upstream
 # package/toolchain updates.
 ARG BR_VERSION=2024.02
-RUN git clone --depth=1 -b $BR_VERSION \
-        https://git.buildroot.net/buildroot /buildroot
+# Clone from the GitHub mirror (github.com/buildroot/buildroot), NOT the
+# upstream self-hosted git.buildroot.net cgit server: the latter intermittently
+# aborts the pack transfer mid-clone ("early EOF" / "remote: aborting due to
+# possible repository corruption on the remote side"), which flaked the demo
+# rootfs build repeatedly. Retry a few times to ride out transient blips on the
+# mirror too; fail the layer if no attempt produced a working clone.
+RUN for i in 1 2 3; do \
+        rm -rf /buildroot; \
+        git clone --depth=1 -b $BR_VERSION \
+            https://github.com/buildroot/buildroot.git /buildroot && break; \
+        echo "buildroot clone attempt $i failed; retrying in 5s..."; sleep 5; \
+    done; \
+    [ -d /buildroot/.git ]
 WORKDIR /buildroot
 
 # Defconfig drives the buildroot configuration. Caching: this layer
