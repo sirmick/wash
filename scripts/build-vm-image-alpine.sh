@@ -174,6 +174,13 @@ ln -sf ../lib/wash/wash "$RFS/usr/bin/wash-router"
 # bare sshd PATH too. (The SFTP data channel uses the sftp subsystem, no PATH.)
 ln -sf ../lib/wash/wash "$RFS/usr/bin/wash-fswatchd"
 
+# fusermount3 must be setuid-root: go-fuse (the unprivileged desktop user) opens
+# /dev/fuse then execs fusermount3 to do the privileged mount(2) (CAP_SYS_ADMIN).
+# Alpine's fuse3 doesn't ship it setuid; force the bit. cpio -R 0:0 below makes
+# it root-owned, so the setuid bit then grants root (same mechanism as the netd
+# trampoline). Without this a wash-to-wash mount fails "fusermount exited 256".
+[ -e "$RFS/usr/bin/fusermount3" ] && chmod u+s "$RFS/usr/bin/fusermount3"
+
 # sudoers for the unprivileged 'wash' desktop user: NOPASSWD so wash-priv's
 # `sudo -S` escalation works in this headless demo VM without PAM/shadow setup
 # (the privileged "Scan volumes" needs root for the LVM/btrfs/ZFS reports).
