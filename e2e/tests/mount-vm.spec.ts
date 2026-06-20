@@ -80,6 +80,13 @@ async function launchOnB(connect: Locator, appId: string) {
   await item.click();
 }
 
+// openLocalApp opens the start menu (the "Apps" taskbar button) and launches a
+// LOCAL app by its menu label.
+async function openLocalApp(page: Page, name: RegExp) {
+  await page.locator('button[title="Apps"]').click();
+  await page.locator('[data-testid="start-menu"]').getByRole('button', { name }).click();
+}
+
 async function navFm(scope: Locator, path: string) {
   await scope.locator('[data-testid="fm-path"]').fill(path);
   await scope.locator('[data-testid="fm-path"]').press('Enter');
@@ -106,7 +113,7 @@ test('mount a remote folder, browse it, and watch a B-side change propagate', as
   await expect(term).toContainText(/[$#>]/, { timeout: 30_000 });
 
   // Local fm on A, pointed at the FUSE mount.
-  await page.locator('[data-testid="start-menu"]').getByRole('button', { name: /^Files$/ }).click();
+  await openLocalApp(page, /^Files$/);
   const localFm = page.locator('wash-app-fm');
   await expect(localFm).toBeVisible({ timeout: 30_000 });
   await navFm(localFm, MOUNT_POINT);
@@ -135,7 +142,7 @@ test('torture: local fm + remote fm on the same folder both track changes', asyn
 
   // Local fm (on the mount). The mangled remote tag means `wash-app-fm` is the
   // local one only.
-  await page.locator('[data-testid="start-menu"]').getByRole('button', { name: /^Files$/ }).click();
+  await openLocalApp(page, /^Files$/);
   const localFm = page.locator('wash-app-fm');
   await expect(localFm).toBeVisible({ timeout: 30_000 });
   await navFm(localFm, MOUNT_POINT);
