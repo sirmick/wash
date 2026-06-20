@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/fswatch"
+	"github.com/sirmick/wash/internal/remotewatch"
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/wire"
 	"github.com/sirmick/wash/internal/wiretest"
@@ -60,6 +63,9 @@ func connectFswatch(t *testing.T) (wire.FrameTransport, func()) {
 			localMgr.Close()
 		}
 		hub, router, localMgr = nil, nil, nil
+		mountsMu.Lock()
+		mounts = map[string]*mountReg{}
+		mountsMu.Unlock()
 	}
 	return pp.EndB(), cleanup
 }
@@ -147,5 +153,62 @@ func TestServiceStreamsLocalEvents(t *testing.T) {
 	}
 	if op, _ := ev["op"].(string); op == "" {
 		t.Fatalf("event missing op: %v", ev)
+	}
+}
+
+// TestServiceRegisterMountRemoteWatch drives the remote path end to end: the
+// supervisor registers a mount, a consumer watches a path under it, and a change
+// on the (faked) remote host surfaces at the local mountpoint, path-translated —
+// all through the same service the local consumers use.
+func TestServiceRegisterMountRemoteWatch(t *testing.T) {
+	if mgr, err := fswatch.New(); err != nil {
+		t.Skipf("no inotify in this env: %v", err)
+	} else {
+		mgr.Close()
+	}
+
+	// Fake remote host: a Feed served over a pipe, standing in for wash-fswatchd.
+	remoteFeed := fswatch.NewFeed()
+	defer remoteFeed.Close()
+	aEnd, bEnd := net.Pipe()
+	defer aEnd.Close()
+	defer bEnd.Close()
+	go remotewatch.Serve(bEnd, remoteFeed)
+
+	// Hand the service the pipe instead of spawning ssh wash-fswatchd.
+	orig := openWatchChannel
+	openWatchChannel = func(string) (io.ReadWriteCloser, error) { return aEnd, nil }
+	defer func() { openWatchChannel = orig }()
+
+	router, cleanup := connectFswatch(t)
+	defer cleanup()
+
+	// Supervisor registers: remote /srv mounted at /mnt/host.
+	writeControl(t, router, map[string]any{
+		"kind": KindRegisterMount, "host": "h", "remote_root": "/srv", "mount_point": "/mnt/host",
+	}, "i-sup")
+	// Consumer watches a path under the mount.
+	writeControl(t, router, map[string]any{"kind": KindWatch, "path": "/mnt/host/dir"}, "i-sub")
+
+	// Keep emitting the remote change until it propagates through register →
+	// client → watch → wire → Serve → translate → Hub → push.
+	stop := make(chan struct{})
+	go func() {
+		tick := time.NewTicker(50 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+				remoteFeed.Emit(fswatch.Event{Op: fswatch.OpCreated, Path: "/srv/dir/x"})
+			}
+		}
+	}()
+	defer close(stop)
+
+	ev := readEventTo(t, router, "i-sub", 3*time.Second)
+	if p, _ := ev["path"].(string); p != "/mnt/host/dir/x" {
+		t.Fatalf("remote event path = %q; want /mnt/host/dir/x (translation failed)", p)
 	}
 }

@@ -25,10 +25,15 @@ package fswatchsvc
 
 import (
 	"context"
+	"io"
 	"log"
+	"os"
+	"os/exec"
+	"sync"
 
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/fswatch"
+	"github.com/sirmick/wash/internal/remotewatch"
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/wire"
 )
@@ -44,10 +49,22 @@ const (
 	KindUnwatch    = "unwatch"
 	KindUnwatchAll = "unwatch_all"
 	KindEvent      = "fs_event"
+
+	// register_mount / unregister_mount are sent by the mount supervisor
+	// (com.wash.remote) when it FUSE-mounts / unmounts a remote tree, so the
+	// service routes watches under that mountpoint to the remote host's inotify.
+	KindRegisterMount   = "register_mount"
+	KindUnregisterMount = "unregister_mount"
 )
 
 type watchReq struct {
 	Path string `json:"path"`
+}
+
+type mountReq struct {
+	Host       string `json:"host"`
+	RemoteRoot string `json:"remote_root"`
+	MountPoint string `json:"mount_point"`
 }
 
 var (
@@ -132,6 +149,111 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 		hub.RemoveSubscriber(from.InstanceID)
 		return nil
 	})
+
+	sdk.HandleFromVoid(bus, KindRegisterMount, func(_ *sdk.Conn, _ string, req mountReq, _ wire.Sender) error {
+		registerMount(req)
+		return nil
+	})
+	sdk.HandleFromVoid(bus, KindUnregisterMount, func(_ *sdk.Conn, _ string, req mountReq, _ wire.Sender) error {
+		unregisterMount(req.MountPoint)
+		return nil
+	})
+}
+
+// openWatchChannel opens the wash watch stream to a remote host — by default
+// `ssh <host> wash-fswatchd`, the daemon that streams the host's inotify.
+// Overridable in tests.
+var openWatchChannel = func(host string) (io.ReadWriteCloser, error) {
+	cmd := exec.Command("ssh",
+		"-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=accept-new",
+		host, "wash-fswatchd")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return &procRWC{r: stdout, w: stdin, cmd: cmd}, nil
+}
+
+type mountReg struct {
+	client *remotewatch.Client
+	rwc    io.ReadWriteCloser
+}
+
+var (
+	mountsMu sync.Mutex
+	mounts   = map[string]*mountReg{} // keyed by mountpoint
+)
+
+// registerMount opens the watch channel to host and routes watches under
+// mountPoint to it. The data-side FUSE mount is the supervisor's job; this is
+// watch-only.
+func registerMount(req mountReq) {
+	if req.MountPoint == "" || req.Host == "" {
+		return
+	}
+	mountsMu.Lock()
+	_, exists := mounts[req.MountPoint]
+	mountsMu.Unlock()
+	if exists {
+		return
+	}
+	rwc, err := openWatchChannel(req.Host)
+	if err != nil {
+		log.Printf("wash-fswatch: open watch channel to %s: %v", req.Host, err)
+		return
+	}
+	client := remotewatch.NewClient(rwc, remotewatch.PathMap{
+		MountPoint: req.MountPoint,
+		RemoteRoot: req.RemoteRoot,
+	})
+	router.Mount(req.MountPoint, client) // Router owns/closes the client
+	mountsMu.Lock()
+	mounts[req.MountPoint] = &mountReg{client: client, rwc: rwc}
+	mountsMu.Unlock()
+	log.Printf("wash-fswatch: registered mount %s -> %s:%s", req.MountPoint, req.Host, req.RemoteRoot)
+}
+
+func unregisterMount(mountPoint string) {
+	if mountPoint == "" {
+		return
+	}
+	mountsMu.Lock()
+	reg := mounts[mountPoint]
+	delete(mounts, mountPoint)
+	mountsMu.Unlock()
+	if reg == nil {
+		return
+	}
+	router.Unmount(mountPoint) // closes the remotewatch.Client
+	_ = reg.rwc.Close()        // tears down the ssh wash-fswatchd subprocess
+}
+
+// procRWC adapts an ssh subprocess's stdio into one io.ReadWriteCloser; Close
+// kills the subprocess.
+type procRWC struct {
+	r   io.Reader
+	w   io.WriteCloser
+	cmd *exec.Cmd
+}
+
+func (p *procRWC) Read(b []byte) (int, error)  { return p.r.Read(b) }
+func (p *procRWC) Write(b []byte) (int, error) { return p.w.Write(b) }
+func (p *procRWC) Close() error {
+	p.w.Close()
+	if p.cmd != nil && p.cmd.Process != nil {
+		_ = p.cmd.Process.Kill()
+		_ = p.cmd.Wait()
+	}
+	return nil
 }
 
 func eventPayload(ev fswatch.Event) map[string]any {
