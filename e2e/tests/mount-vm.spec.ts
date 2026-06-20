@@ -4,17 +4,18 @@
 // real FUSE mount at ~/wash/remote/<host>/…, and assert:
 //
 //   1. mount: the wash-connect UI reports the folder "mounted".
-//   2. data: a local fm on A browses + writes B's files through FUSE/SFTP.
-//   3. watch: a change on B surfaces live in A's fm — proving B's inotify →
+//   2. data: a local fm on A browses B's files through FUSE/SFTP.
+//   3. watch: a change on B surfaces live in A's fm — B's inotify →
 //      wash-fswatchd → com.wash.fswatch → fm.
 //
 // The torture test opens BOTH a local fm (on the mount) and a remote fm (on B)
-// at the same folder and mutates from each side, asserting both UIs track it —
-// two machines co-driving one tree.
+// at the same folder and mutates from each side, asserting both UIs track it.
 //
-// Window ordering: the mount controls live in wash-connect, so we mount BEFORE
-// launching any other window (a new window composites on top and would intercept
-// the click), and we dismiss wash-connect's auto-opened Launch dropdown first.
+// Notes: (a) the mount controls live in wash-connect, so we mount BEFORE opening
+// any other window (a new window composites on top and would intercept the
+// click). (b) A remote app's custom-element tag is mangled per origin
+// (`wash-app-fm-<slug>`), so `wash-app-fm` matches only the LOCAL fm; the remote
+// fm is reached through its host-striped window.
 
 import { test, expect, remoteVmSkipReason, vmLogin, REMOTE_HOST } from '../fixtures/remote-vm';
 import type { Page, Locator } from '@playwright/test';
@@ -25,8 +26,7 @@ test.beforeEach(() => {
 });
 
 // Mount B's home. The supervisor runs as `wash` on A (home /home/wash), so the
-// mount base is /home/wash/wash/remote and the mountpoint is deterministic:
-// base + sanitized-host + basename(remoteRoot).
+// mountpoint is deterministic: base + sanitized-host + basename(remoteRoot).
 const REMOTE_DIR = '/home/wash';
 const MOUNT_POINT = '/home/wash/wash/remote/wash_at_10.77.0.2/wash';
 
@@ -46,9 +46,8 @@ async function connectToB(page: Page, url: string): Promise<Locator> {
   return connect;
 }
 
-// closeLaunchMenu dismisses wash-connect's Launch dropdown, which auto-opens
-// when B's catalog arrives and whose full-window backdrop would otherwise
-// intercept clicks on the mount controls.
+// closeLaunchMenu dismisses wash-connect's Launch dropdown (auto-opens on
+// connect; its full-window backdrop would intercept the mount click).
 async function closeLaunchMenu(connect: Locator) {
   const backdrop = connect.locator('[data-testid="connect-launch-backdrop"]');
   try {
@@ -56,12 +55,11 @@ async function closeLaunchMenu(connect: Locator) {
     await backdrop.click({ force: true });
     await backdrop.waitFor({ state: 'hidden', timeout: 5_000 });
   } catch {
-    /* menu never opened — the mount controls are already reachable */
+    /* menu never opened — controls already reachable */
   }
 }
 
-// mountFolder mounts dir on B and waits for the row to report "mounted". Must run
-// while wash-connect is the top window (i.e. before launching anything else).
+// Mounts dir on B; must run while wash-connect is the top window.
 async function mountFolder(connect: Locator, dir: string) {
   await closeLaunchMenu(connect);
   await connect.locator('[data-testid="connect-mount-input"]').fill(dir);
@@ -75,21 +73,21 @@ async function mountFolder(connect: Locator, dir: string) {
 // (re-opening it if closed). wash-connect must be the top window.
 async function launchOnB(connect: Locator, appId: string) {
   const item = connect.locator(`[data-testid="connect-launch-${appId}"]`);
-  if (!(await item.isVisible().catch(() => false))) {
+  for (let i = 0; i < 3 && !(await item.isVisible().catch(() => false)); i++) {
     await connect.locator('[data-testid="connect-launch"]').click();
   }
   await expect(item).toBeVisible({ timeout: 30_000 });
   await item.click();
 }
 
-async function navFm(fm: Locator, path: string) {
-  await fm.locator('[data-testid="fm-path"]').fill(path);
-  await fm.locator('[data-testid="fm-path"]').press('Enter');
+async function navFm(scope: Locator, path: string) {
+  await scope.locator('[data-testid="fm-path"]').fill(path);
+  await scope.locator('[data-testid="fm-path"]').press('Enter');
 }
 
-async function newFileInFm(fm: Locator, name: string) {
-  await fm.locator('[data-testid="fm-new-file"]').click();
-  const input = fm.locator('[data-testid="fm-pending-new-input"]');
+async function newFileInFm(scope: Locator, name: string) {
+  await scope.locator('[data-testid="fm-new-file"]').click();
+  const input = scope.locator('[data-testid="fm-pending-new-input"]');
   await expect(input).toBeVisible({ timeout: 10_000 });
   await input.fill(name);
   await input.press('Enter');
@@ -99,26 +97,25 @@ test('mount a remote folder, browse it, and watch a B-side change propagate', as
   test.setTimeout(300_000);
   const connect = await connectToB(page, remoteVm.url);
 
-  // Mount FIRST, while wash-connect is the only window.
+  // Mount FIRST (wash-connect is the only window), then launch a B terminal as
+  // the mutator — driven via .xterm, so its mangled element tag doesn't matter.
   await mountFolder(connect, REMOTE_DIR);
+  await launchOnB(connect, 'com.wash.term');
+  const term = page.locator('.xterm').last();
+  await expect(term).toBeVisible({ timeout: 60_000 });
+  await expect(term).toContainText(/[$#>]/, { timeout: 30_000 });
 
-  // A remote fm on B is our B-side mutator: a file it creates is a real change
-  // on B's disk, observed by B's inotify.
-  await launchOnB(connect, 'com.wash.fm');
-  const remoteFm = page.locator('wash-app-fm').last();
-  await expect(remoteFm).toBeVisible({ timeout: 60_000 });
-  await navFm(remoteFm, REMOTE_DIR);
-
-  // A local fm on A, pointed at the FUSE mount of the same folder.
+  // Local fm on A, pointed at the FUSE mount.
   await page.locator('[data-testid="start-menu"]').getByRole('button', { name: /^Files$/ }).click();
-  const localFm = page.locator('wash-app-fm').last();
+  const localFm = page.locator('wash-app-fm');
   await expect(localFm).toBeVisible({ timeout: 30_000 });
   await navFm(localFm, MOUNT_POINT);
 
-  // Create a file on B (via the remote fm) → it must surface live in the local
-  // fm through the mount's watch channel (B inotify → wash-fswatchd →
-  // com.wash.fswatch → fm), with no manual reload.
-  await newFileInFm(remoteFm, 'wm_live.txt');
+  // Create a file on B (real change on B's disk) — it must surface live in the
+  // local fm through the mount's watch channel, no reload.
+  await term.click();
+  await page.keyboard.type('touch /home/wash/wm_live.txt');
+  await page.keyboard.press('Enter');
   await expect(localFm.locator('[data-testid="fm-entry-wm_live.txt"]')).toBeVisible({ timeout: 40_000 });
 });
 
@@ -128,25 +125,29 @@ test('torture: local fm + remote fm on the same folder both track changes', asyn
 
   await mountFolder(connect, REMOTE_DIR);
 
-  // Remote fm (on B) and local fm (on the mount), same folder.
+  // Remote fm (on B): reached through its host-striped window (its element tag
+  // is mangled per origin). Launch it, then scope all ops to that window.
   await launchOnB(connect, 'com.wash.fm');
-  const remoteFm = page.locator('wash-app-fm').nth(0);
-  await expect(remoteFm).toBeVisible({ timeout: 60_000 });
+  const stripe = page.locator(`[data-testid="wash-host-stripe"][data-origin="${REMOTE_HOST}"]`);
+  await expect(stripe).toBeVisible({ timeout: 60_000 });
+  const remoteFm = page.locator('.wash-window', { has: stripe });
   await navFm(remoteFm, REMOTE_DIR);
 
+  // Local fm (on the mount). The mangled remote tag means `wash-app-fm` is the
+  // local one only.
   await page.locator('[data-testid="start-menu"]').getByRole('button', { name: /^Files$/ }).click();
-  const localFm = page.locator('wash-app-fm').nth(1);
+  const localFm = page.locator('wash-app-fm');
   await expect(localFm).toBeVisible({ timeout: 30_000 });
   await navFm(localFm, MOUNT_POINT);
 
-  // Mutate from B (remote fm): must appear in BOTH — the remote fm by its own
-  // listing, the local fm via the mount's watch channel.
+  // Mutate from B (remote fm): appears in BOTH — remote fm by its own listing,
+  // local fm via the mount's watch channel.
   await newFileInFm(remoteFm, 'from_b.txt');
   await expect(remoteFm.locator('[data-testid="fm-entry-from_b.txt"]')).toBeVisible({ timeout: 40_000 });
   await expect(localFm.locator('[data-testid="fm-entry-from_b.txt"]')).toBeVisible({ timeout: 40_000 });
 
   // Mutate from A through the FUSE mount (local fm): a real write over SFTP that
-  // lands on B and must surface in the remote fm via B's inotify.
+  // lands on B and surfaces in the remote fm via B's inotify.
   await newFileInFm(localFm, 'from_a.txt');
   await expect(localFm.locator('[data-testid="fm-entry-from_a.txt"]')).toBeVisible({ timeout: 40_000 });
   await expect(remoteFm.locator('[data-testid="fm-entry-from_a.txt"]')).toBeVisible({ timeout: 40_000 });
