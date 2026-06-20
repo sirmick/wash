@@ -6,8 +6,8 @@
 
 import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { ChevronLeft, ChevronRight, Image as ImageIcon, Maximize, ZoomIn, ZoomOut } from 'lucide-solid';
-import { VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
+import { ChevronLeft, ChevronRight, FolderOpen, Image as ImageIcon, ImagePlus, Maximize, ZoomIn, ZoomOut } from 'lucide-solid';
+import { FilePicker, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
 import type { FileClient } from '@wash/ui';
 
 const IV_TILE_H = 84; // fixed thumbnail-list tile height (px) for windowing
@@ -28,12 +28,25 @@ const isThumbable = (name: string): boolean => {
   return i > 0 && THUMB_EXTS.has(name.slice(i + 1).toLowerCase());
 };
 
+// Picker filter: images first, then all files. The picker compiles the
+// `re` source case-sensitively, so the All-files escape hatch covers
+// uppercase extensions the regex would otherwise hide.
+const IMAGE_FILTERS = [
+  { label: 'Images', re: '\\.(jpe?g|png|gif|webp|bmp|svg|avif|ico|tiff?)$' },
+  { label: 'All files', re: '' },
+];
+
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [images, setImages] = createSignal<ImageItem[]>([]);
   const [index, setIndex] = createSignal(0);
   const [zoom, setZoom] = createSignal(1);
   const [pan, setPan] = createSignal({ x: 0, y: 0 });
   const [mainUrl, setMainUrl] = createSignal<string | null>(null);
+  // dir: the folder currently listed — tracks scan_ok so the Open dialog
+  // starts where the user is. picker: the open dialog's mode, null = closed
+  // ('open' = pick an image, 'directory' = pick a folder).
+  const [dir, setDir] = createSignal('');
+  const [picker, setPicker] = createSignal<'open' | 'directory' | null>(null);
 
   const fileClient: FileClient = createFileClient({ instance: props.instance, host: props.host });
   const send = (m: unknown) => window.wash.sendAppMsg(props.instance, m);
@@ -109,6 +122,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         | { kind?: string; dir?: string; images?: ImageItem[]; open?: string }
         | undefined;
       if (m?.kind !== 'scan_ok') return;
+      if (m.dir) setDir(m.dir);
       const imgs = m.images ?? [];
       setImages(imgs);
       // `open` (set when the router launched us with --open) selects that
@@ -118,6 +132,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       resetView();
     };
     const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'o' || e.key === 'O')) {
+        e.preventDefault();
+        // Ctrl+O → open an image; Ctrl+Shift+O → open a folder.
+        setPicker(e.shiftKey ? 'directory' : 'open');
+        return;
+      }
       if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
         e.preventDefault();
         step(1);
@@ -152,10 +172,33 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   return (
     <>
-      <Show
-        when={images().length > 0}
-        fallback={<div data-testid="iv-list" style={{ ...listStyle, padding: '16px', color: tokens.fgDim, 'font-size': '13px' }}>No images</div>}
-      >
+      <div style={leftColStyle}>
+        <div style={listHeaderStyle}>
+          <span style={listTitleStyle}>Images</span>
+          <div style={{ flex: 1 }} />
+          <button
+            type="button"
+            data-testid="iv-open-folder"
+            title="Open folder… (Ctrl+Shift+O)"
+            style={openBtnStyle}
+            onClick={() => setPicker('directory')}
+          >
+            <FolderOpen size={15} />
+          </button>
+          <button
+            type="button"
+            data-testid="iv-open-image"
+            title="Open image… (Ctrl+O)"
+            style={openBtnStyle}
+            onClick={() => setPicker('open')}
+          >
+            <ImagePlus size={15} />
+          </button>
+        </div>
+        <Show
+          when={images().length > 0}
+          fallback={<div data-testid="iv-list" style={{ ...listStyle, padding: '16px', color: tokens.fgDim, 'font-size': '13px' }}>No images</div>}
+        >
         {/* Windowed: a 2000-image folder renders ~a few dozen tiles. */}
         <VirtualGrid
           data-testid="iv-list"
@@ -173,7 +216,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             />
           )}
         />
-      </Show>
+        </Show>
+      </div>
 
       <div data-testid="iv-main" style={mainStyle} onWheel={onWheel} onMouseDown={onDown}>
         <Show when={mainUrl()} fallback={<ImageIcon size={72} color={tokens.fgDim} />}>
@@ -218,6 +262,24 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           </div>
         </Show>
       </div>
+
+      {/* Open dialog: pick a folder (scan it) or a single image (scan its
+          folder + select it). Confirm sends `scan {dir}`; the BE resolves a
+          file vs folder. */}
+      <FilePicker
+        open={picker() !== null}
+        mode={picker() ?? 'open'}
+        host={props.host}
+        hostInstanceID={props.instance}
+        start={dir()}
+        filters={IMAGE_FILTERS}
+        onConfirm={(p) => {
+          setPicker(null);
+          send({ kind: 'scan', dir: p });
+        }}
+        onCancel={() => setPicker(null)}
+        data-testid="iv-picker"
+      />
     </>
   );
 };
@@ -267,12 +329,53 @@ const Thumb: Component<{
 
 // ---- styles ----
 
-// Scroll-container chrome for the windowed list (VirtualGrid owns overflow).
-const listStyle: JSX.CSSProperties = {
+// Left column: a fixed Open-toolbar header above the windowed list.
+const leftColStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'flex-direction': 'column',
   height: '100%',
   'min-height': 0,
   background: tokens.bgWindow,
   'border-right': `1px solid ${tokens.borderMenu}`,
+  overflow: 'hidden',
+};
+
+const listHeaderStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'center',
+  gap: '4px',
+  padding: '6px 8px',
+  'border-bottom': `1px solid ${tokens.borderMenu}`,
+  background: tokens.bgMenu,
+  'flex-shrink': 0,
+};
+
+const listTitleStyle: JSX.CSSProperties = {
+  'font-size': '11px',
+  color: tokens.fgMuted,
+  'font-weight': 600,
+  'text-transform': 'uppercase',
+  'letter-spacing': '0.04em',
+};
+
+const openBtnStyle: JSX.CSSProperties = {
+  display: 'inline-flex',
+  'align-items': 'center',
+  'justify-content': 'center',
+  width: '26px',
+  height: '24px',
+  background: 'transparent',
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}px`,
+  cursor: 'pointer',
+};
+
+// Scroll-container chrome for the windowed list (VirtualGrid owns overflow).
+const listStyle: JSX.CSSProperties = {
+  flex: 1,
+  'min-height': 0,
+  background: tokens.bgWindow,
   'box-sizing': 'border-box',
 };
 

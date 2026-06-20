@@ -114,11 +114,18 @@ New app, `Surface: window`, `Instancing: multi`, lucide icon `image`.
 - **BE**: import `internal/thumbs`; scan the opened image's sibling folder for
   image files (cap + sort); serve full bytes + thumbnails over the channel
   helper. Parse the `--open <path>` launch arg (see open-routing) to know which
-  image to show first and which folder to list.
+  image to show first and which folder to list. `scan {dir}` accepts either a
+  folder (list it) or a single image file (list its folder + pre-select it), so
+  the Open dialog's two modes share one message. Calls `sdk.EnableFilePicker`
+  (same bridge as wash-edit) so the in-app dialog reaches the BE's fs.
 - **FE**: left thumbnail list (Splitter) + main view. Main view is a single
   `<img>` at full bytes with `transform: scale()+translate()`: wheel = zoom,
   drag = pan, a fit/reset control, arrow keys = prev/next. Scope is deliberately
   small — zoom/pan/prev-next, no edit/rotate in v1.
+- **Open dialog**: a header strip above the thumbnail list with two buttons —
+  Open folder (`@wash/ui` `<FilePicker mode="directory">`) and Open image
+  (`mode="open"` + image filter) — plus Ctrl+O (image) / Ctrl+Shift+O (folder).
+  Confirm sends `scan {dir}`; the BE resolves file-vs-folder. Mirrors wash-edit.
 
 Full new-app wiring checklist: `apps/imageview/{be,fe}`, `be/cmd/main.go`,
 `cmd/wash/imports_imageview.go`, Makefile (`BINS`, `*_ASSETS`/`*_STAMP`,

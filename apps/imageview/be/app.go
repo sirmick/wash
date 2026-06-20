@@ -115,6 +115,13 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		log.Printf("wash-imageview: sandbox root=%s (from router session)", root)
 	}
 	ivFS = wfs.New(root)
+
+	// FilePicker bridge for the Open dialog (Open folder / Open image).
+	// Install before NewBus so the bus wraps it: fs.* messages route to the
+	// picker, everything else (scan, get_file) flows through the bus.
+	// Mirrors wash-edit.
+	sdk.EnableFilePicker(c)
+
 	bus := sdk.NewBus(c)
 
 	// Image bytes + thumbnails over a raw channel, confined to the fs root.
@@ -135,6 +142,13 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 				dir, open, launchOpen = filepath.Dir(launchOpen), launchOpen, ""
 			} else {
 				dir = defaultDir()
+			}
+		} else if abs, err := ivFS.Confine(dir); err == nil {
+			// The Open dialog hands us either a folder ("Open folder") or a
+			// single image ("Open image"). For a file, scan its folder and
+			// pre-select it — same shape as the --open launch path.
+			if fi, err := os.Stat(abs); err == nil && !fi.IsDir() {
+				dir, open = filepath.Dir(dir), dir
 			}
 		}
 		abs, images := scanImages(dir)
