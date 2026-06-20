@@ -16,6 +16,25 @@ Wants=network-online.target
 User=wash-system
 Group=wash
 SupplementaryGroups=shadow
+# Provision /run/wash as wash-system:wash mode 2770. Group-writable + setgid so
+# the per-uid wash-router processes (which wash-login grants supplementary group
+# wash) can create /run/wash/<uid>/sessions/ as themselves, with the setgid bit
+# landing those dirs + ctl sockets group=wash for wash-login to dial — no chown,
+# wash-system needs no CAP_CHOWN. Preserve=yes keeps the dir (and every live
+# per-user session beneath it) across wash-login restarts (Restart=always);
+# without it systemd would wipe /run/wash on every restart and orphan sessions.
+RuntimeDirectory=wash
+RuntimeDirectoryMode=2770
+RuntimeDirectoryPreserve=yes
+# Re-assert the file-capabilities before each start. The postinst already sets
+# them, but a setcap'd binary loses its xattr whenever it is delivered through
+# a channel that drops security.* xattrs — notably container images built and
+# exported via `docker export`/OCI, and unprivileged-LXC templates (where a
+# host-set cap carries the wrong userns rootid anyway). Running setcap here, as
+# root (the leading +), inside the booted namespace makes the unit self-healing
+# regardless of how the binary arrived. Best-effort: ignore failure on rootfs
+# without xattr support, where the dev path (login as wash-system) still works.
+ExecStartPre=+/bin/sh -c "setcap 'cap_setuid,cap_setgid,cap_kill+ep' /usr/bin/wash-login || true"
 EnvironmentFile=-/etc/default/wash-login
 ExecStart=/usr/bin/wash-login $WASH_LOGIN_ARGS
 Restart=always

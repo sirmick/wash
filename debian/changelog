@@ -1,3 +1,19 @@
+wash (0.9.1-3) unstable; urgency=low
+
+  * wash-login: least-privilege per-session runtime dirs. The per-user
+    wash-router (already setuid'd to the target user, now also granted group
+    wash as a supplementary group) creates its own /run/wash/<uid>/sessions/
+    and ctl socket as itself — wash-login no longer creates+chowns them (it
+    has no CAP_CHOWN, so that chown failed silently and broke multi-user
+    spawns). The runtime root is provisioned mode 2770 group wash (setgid) via
+    RuntimeDirectory=, so ownership + group propagate with no privileged chown.
+  * wash-login.service: RuntimeDirectory=wash, RuntimeDirectoryMode=2770,
+    RuntimeDirectoryPreserve=yes (live sessions survive a wash-login restart).
+  * wash-router: new --log-file; the router opens its own per-session log as
+    the target user (owned by them, no chown).
+
+ -- sirmick <sirmick@gmail.com>  Fri, 19 Jun 2026 20:30:00 -0700
+
 wash (0.9.1-2) unstable; urgency=low
 
   * Split the multi-user front door into its own wash-login package. The core

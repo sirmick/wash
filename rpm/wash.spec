@@ -1,6 +1,6 @@
 Name:           wash
 Version:        0.9.1
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
 License:        MIT
@@ -180,6 +180,12 @@ fi
 exit 0
 
 %changelog
+* Fri Jun 19 2026 sirmick <sirmick@gmail.com> - 0.9.1-3
+- wash-login: least-privilege per-session runtime dirs — the setuid'd
+  wash-router (granted group wash as a supplementary group) creates its own
+  /run/wash/<uid>/sessions/ + socket; wash-login no longer chowns (it has no
+  CAP_CHOWN). Runtime root is 2770 group wash (setgid) so ownership/group
+  propagate without a privileged chown. wash-router gains --log-file.
 * Fri Jun 19 2026 sirmick <sirmick@gmail.com> - 0.9.1-2
 - Split the multi-user front door into a wash-login subpackage (Requires: wash)
   that owns the wash-system user, the capabilities, and the systemd service;

@@ -32,5 +32,11 @@ depend() {
 
 start_pre() {
 	checkpath --directory --mode 0755 /run
+	# Runtime root for per-user sessions. 2770 group=wash + setgid so the
+	# per-uid wash-router processes (granted supplementary group wash by
+	# wash-login) can create their session dirs under it, with sockets landing
+	# group=wash for wash-login to dial — no chown, wash-system stays
+	# unprivileged. start_pre runs as root, so it can set the owner.
+	checkpath --directory --mode 2770 --owner wash-system:wash /run/wash
 	checkpath --file --mode 0644 --owner wash-system:wash "${output_log}"
 }

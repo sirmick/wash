@@ -199,6 +199,7 @@ func Run(args []string) int {
 	allowCrossOrigin := fs.Bool("allow-cross-origin", false, "relax the /ws same-origin check so a browser can open a shell connection from a different origin. Needed for remote apps (docs/REMOTE.md R2): a desktop served by router A opens a second connection to this router (B) over an ssh -L tunnel. Gate it with the tunnel/loopback bind, not the same-origin policy.")
 	authTokenFile := fs.String("auth-token-file", "", "path the gate token is written to (mode 0600) and recovered from. Empty ⇒ a per-pid file under $XDG_RUNTIME_DIR/wash (or /tmp/wash-<uid>), removed on clean exit. An explicit path that already holds a token is reused as-is, so the token (and existing browser cookies) survive a restart.")
 	listenRaw := fs.String("listen-raw", "", `serve the shell wire (raw length-prefixed frames, NO HTTP/WebSocket) on a listening socket: "unix:/path" or "tcp:host:port". Each accepted connection is one shell (HandleShell over a StreamTransport). This is host B's endpoint for the remote-apps relay (docs/REMOTE.md): A's com.wash.remote ssh -L's a unix socket to here, and A's router splices a browser's muxed channel to it. Replaces --listen for that role; gated by the ssh tunnel + socket perms, so no token/origin check applies.`)
+	logFile := fs.String("log-file", "", "redirect stdout+stderr to this file (created mode 0640, parent dir made on demand). Used by wash-login for per-session router logs: the router runs as the target user, so the log is owned by them and readable without privilege. Empty leaves stdout/stderr inherited from the parent.")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
 		// flag already printed the message.
@@ -209,6 +210,19 @@ func Run(args []string) int {
 	if *showVersion {
 		fmt.Printf("wash-router %s\n", bi)
 		return 0
+	}
+
+	// --log-file: redirect stdout+stderr to a per-session log before any
+	// logger is constructed. Done at the fd level (dup2 onto 1 and 2) so it
+	// captures the package loggers (all log.New(os.Stderr, ...)) AND anything
+	// the router itself execs. The router runs as the target uid under
+	// wash-login, so the file lands owned by that user — no chown needed.
+	// Best-effort: a failure leaves the inherited fds in place (output then
+	// flows to wash-login's journal) rather than aborting the session.
+	if *logFile != "" {
+		if err := redirectOutput(*logFile); err != nil {
+			log.New(os.Stderr, "wash-router ", 0).Printf("log-file %s: %v (falling back to inherited stderr)", *logFile, err)
+		}
 	}
 
 	cs := *controlSocket
@@ -793,4 +807,32 @@ func firstNonEmpty(s ...string) string {
 		}
 	}
 	return ""
+}
+
+// redirectOutput points stdout (fd 1) and stderr (fd 2) at path, creating the
+// parent dir and the file on demand. Done at the fd level via dup2 so every
+// writer that captured os.Stdout/os.Stderr — including loggers constructed
+// later and any child processes — lands in the same file. The opened *os.File
+// is intentionally leaked: its fd is duplicated onto 1/2 which live for the
+// process lifetime, and closing the original would not affect the dups.
+func redirectOutput(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	if err != nil {
+		return err
+	}
+	// Dup3 (not Dup2): syscall.Dup2 is absent on linux/arm64 and linux/riscv64,
+	// which only expose dup3. The fresh fd is always >= 3, so it differs from
+	// 1/2 (Dup3 rejects oldfd == newfd), and flags=0 matches dup2 semantics.
+	fd := int(f.Fd())
+	if err := syscall.Dup3(fd, int(os.Stdout.Fd()), 0); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := syscall.Dup3(fd, int(os.Stderr.Fd()), 0); err != nil {
+		return err
+	}
+	return nil
 }

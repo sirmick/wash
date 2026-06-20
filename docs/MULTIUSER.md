@@ -339,8 +339,20 @@ Linux capabilities** and **membership in group `wash`**:
 Group `wash` grants dial-access to the per-user router ctl sockets.
 Sockets are `mode 0660 group wash` so only wash-login (and the
 owning user) can connect — the group inheritance happens
-automatically because `/run/wash/<uid>/sessions/` is created with
-the setgid bit (mode 02750) when the wash group exists.
+automatically because the runtime root `/run/wash` is `mode 2770
+group wash` (setgid), so the setgid bit + group `wash` propagate down
+to `/run/wash/<uid>/`, `sessions/`, and the socket itself.
+
+Crucially, wash-login does **not** create or chown those per-uid
+directories — it has no `CAP_CHOWN`. The per-user router (already
+setuid'd to the target uid, and granted group `wash` as a
+*supplementary* group via `CAP_SETGID`) `MkdirAll`s its own
+`sessions/` dir and ctl socket as itself. They land owned
+`<user>:wash` with no privileged chown anywhere. wash-login only
+needs to write the per-uid `spawn.lock` (at `/run/wash/spawn-<uid>.lock`,
+which it owns) to serialize concurrent first-spawns. Regular users
+aren't in group `wash`, so they can't write `/run/wash` to pre-create
+(squat) another uid's directory.
 
 ### What this trust model means in practice
 
@@ -402,11 +414,14 @@ short-circuits the setuid call.
 /etc/wash/
     secret.key                # HMAC key for cookies. Mode 0600, owner wash-system.
 
-/run/wash/
-    <uid>/                    # Mode 0700, owner the user.
-        sessions/
+/run/wash/                    # Mode 2770 group wash (setgid), owner wash-system.
+                              # Provisioned by systemd RuntimeDirectory= / the
+                              # OpenRC initd; normalised by wash-login on spawn.
+    spawn-<uid>.lock          # Per-uid flock for spawn serialization. Owner wash-system.
+    <uid>/                    # Made by the target-uid router. Owner <user>:wash (setgid).
+        router-<sessid>.log   # Router stdout/stderr. Owner <user>:wash.
+        sessions/             # Owner <user>:wash (setgid).
             <sessid>.sock     # Per-router Unix socket. Mode 0660, group wash.
-        spawn.lock            # flock target for spawn serialization.
 
 binary layout:
     /usr/bin/wash-login       # Privileged front door.
@@ -416,8 +431,12 @@ binary layout:
 
 The privileged-surface contract:
 
-- `/run/wash/<uid>/` mode 0700 owned by the user — only the user's
-  processes and root can enter.
+- `/run/wash` mode 2770 group `wash` (setgid), owner wash-system —
+  only wash-system and group-`wash` processes can write here. The
+  setgid bit propagates group `wash` to everything created beneath it.
+- `/run/wash/<uid>/` owned `<user>:wash`, created by the target-uid
+  router itself (no privileged chown) — the user owns it; wash-login
+  reaches in via group `wash`.
 - `/run/wash/<uid>/sessions/<sessid>.sock` mode 0660 group `wash` —
   wash-login (member of group wash) can dial; the user can read/write
   their own sockets; nothing else has access.
@@ -510,7 +529,9 @@ naturally; this section is the checklist.
 2. **/etc/shadow group dance.** Document `usermod -aG shadow
    wash-system` in install instructions.
 3. **Concurrent first-spawn race.** Per-uid `flock` on
-   `/run/wash/<uid>/spawn.lock` around the spawn path. (M3.)
+   `/run/wash/spawn-<uid>.lock` around the spawn path. (M3.) The lock
+   lives at the run-root (wash-login-owned), not under `/run/wash/<uid>/`,
+   because that dir is created later by the target-uid router.
 4. **Disabled-shell accounts.** Reject after credential check. (M2.)
 5. **Brute-force protection.** Delegate to nginx `limit_req_zone`.
 6. **Plaintext-HTTP guard.** Refuse non-loopback bind without

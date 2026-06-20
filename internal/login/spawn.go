@@ -103,52 +103,45 @@ func (s *Spawner) Spawn(id Identity, name string) (Session, error) {
 		return Session{}, fmt.Errorf("generate sessid: %w", err)
 	}
 
-	// Lay out the per-uid run directory + sessions subdir.
+	// Per-uid run directory + sessions subdir layout.
 	//
-	// When the wash group exists (production installs), the
-	// sessions/ dir gets mode 02750 with group=wash. The setgid bit
-	// makes child sockets inherit the group automatically — the
-	// router doesn't need to know about groups, and wash-login (in
-	// group wash) can dial the per-user sockets. Single-user / dev
-	// installs without the wash group fall back to 0700 owner-only;
-	// wash-login runs as the same user in that mode so peer-cred
-	// + ownership both pass.
+	// These are created by the spawned router IN THE TARGET UID's setuid
+	// context (the router MkdirAll's its --listen-unix parent and --log-file
+	// parent as itself), NOT here. wash-login runs as the unprivileged
+	// wash-system user without CAP_CHOWN, so it cannot create a dir and hand
+	// it to another uid — an os.Chown to the target would fail silently and
+	// leave the dir wash-system-owned and unwritable by the router. Instead:
+	//
+	//   - The runtime root (/run/wash) is wash-system:wash mode 2770 (setgid).
+	//     The setgid bit propagates group=wash AND the setgid bit down to every
+	//     dir the router MkdirAll's under it, so the per-uid dir, sessions/, and
+	//     the ctl socket all land group=wash automatically — wash-login (in
+	//     group wash) can dial them, no chown anywhere.
+	//   - The router is granted group wash as a SUPPLEMENTARY group (below), so
+	//     it can create its dirs under the group-writable root while its primary
+	//     gid stays the user's own (user files keep the user's group).
+	//   - Squat-safety: regular users aren't in group wash, so they cannot write
+	//     /run/wash and pre-create /run/wash/<other-uid>; only routers wash-login
+	//     grants group wash (via CAP_SETGID) can.
+	//
+	// Dev / single-user (target uid == wash-login's own uid, typically no wash
+	// group): no setuid, the router runs as the same user, and the run root is a
+	// user-owned $XDG_RUNTIME_DIR/wash or /tmp/wash-<uid> the router writes to
+	// directly.
 	uidDir := filepath.Join(s.runRoot(), strconv.FormatUint(uint64(id.UID), 10))
 	sessionsDir := filepath.Join(uidDir, "sessions")
-	sessionsMode := os.FileMode(0o700)
-	uidDirMode := os.FileMode(0o700)
 	washGID, gerr := LookupGroupGID(WashGroupName)
-	if gerr == nil {
-		sessionsMode = 0o2750 // setgid bit so socket children inherit group
-		uidDirMode = 0o750
-	}
-	if err := os.MkdirAll(uidDir, uidDirMode); err != nil {
-		return Session{}, fmt.Errorf("mkdir %s: %w", uidDir, err)
-	}
-	if err := os.MkdirAll(sessionsDir, sessionsMode); err != nil {
-		return Session{}, fmt.Errorf("mkdir %s: %w", sessionsDir, err)
-	}
-	// Apply the mode explicitly: MkdirAll honours umask, which on
-	// most systems strips group bits we want here.
-	_ = os.Chmod(uidDir, uidDirMode)
-	_ = os.Chmod(sessionsDir, sessionsMode)
-	// Ownership: when wash-login isn't the target user, the dirs
-	// need to be owned by the target user (so the spawned router can
-	// write under them) AND group=wash (so wash-login can enter).
-	if uint32(os.Geteuid()) != id.UID {
-		group := int(id.GID)
-		if gerr == nil {
-			group = int(washGID)
-		}
-		_ = os.Chown(uidDir, int(id.UID), group)
-		_ = os.Chown(sessionsDir, int(id.UID), group)
+	if err := s.ensureRunRoot(gerr == nil, washGID); err != nil {
+		return Session{}, err
 	}
 
-	// Per-uid flock around the spawn so concurrent /ws hits don't
-	// both decide to spawn. The lock is held only for the spawn
-	// itself; once the ctl socket exists, the lock can be dropped
-	// and follow-up attaches go through normally.
-	lockPath := filepath.Join(uidDir, "spawn.lock")
+	// Per-uid flock around the spawn so concurrent /ws hits don't both decide
+	// to spawn. It lives directly under the run root (which wash-login owns /
+	// can write), NOT under the per-uid dir — that dir is created later by the
+	// target-uid router, so it doesn't exist yet at lock time. The lock is held
+	// only for the spawn itself; once the ctl socket exists it's dropped and
+	// follow-up attaches go through normally.
+	lockPath := filepath.Join(s.runRoot(), fmt.Sprintf("spawn-%d.lock", id.UID))
 	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return Session{}, fmt.Errorf("open spawn lock: %w", err)
@@ -165,10 +158,18 @@ func (s *Spawner) Spawn(id Identity, name string) (Session, error) {
 	if bin == "" {
 		bin = "wash-router"
 	}
+	// Per-session router log. The router opens it itself (--log-file) under its
+	// own uid, so it lands owned by the target user (readable without
+	// privilege) and its parent dir is created in the setuid context alongside
+	// the socket dir — wash-login never touches it (it couldn't chown it
+	// anyway). A failure to open is best-effort inside the router (output then
+	// falls back to the inherited fds → wash-login's journal).
+	logPath := filepath.Join(uidDir, "router-"+sessid+".log")
 	args := []string{
 		"--listen-unix", sock,
 		"--name", name,
 		"--allow-uid", strconv.FormatUint(uint64(s.AllowUID), 10),
+		"--log-file", logPath,
 	}
 	if s.AppsDir != "" {
 		args = append(args, "--apps-dir", s.AppsDir)
@@ -178,37 +179,30 @@ func (s *Spawner) Spawn(id Identity, name string) (Session, error) {
 	}
 
 	cmd := exec.Command(bin, args...)
-	// Capture the router's stdout+stderr to a per-session log under the
-	// run-root. Discarding them (/dev/null) makes a wedged or crashing
-	// session impossible to diagnose after the fact — the router's app
-	// registration, handoff, and shell errors all vanish. The file is
-	// opened here as wash-login and inherited as an fd, so the setuid'd
-	// child keeps writing to it without needing its own open; we chown it
-	// to the target user so they (and `journalctl`-less ops) can read it.
-	// Falls back to wash-login's own stderr (→ journald under systemd)
-	// rather than /dev/null if the file can't be created.
-	logPath := filepath.Join(uidDir, "router-"+sessid+".log")
-	if logFile, lerr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640); lerr == nil {
-		if uint32(os.Geteuid()) != id.UID {
-			_ = logFile.Chown(int(id.UID), int(id.GID))
-		}
-		cmd.Stdout = logFile
-		cmd.Stderr = logFile
-		defer logFile.Close() // child inherits the fd; our copy closes after Start
-	} else {
-		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
-	}
+	// Until the router opens its --log-file, its earliest startup output
+	// inherits wash-login's stderr (→ journald under systemd) rather than
+	// /dev/null, so a crash-before-logging is still diagnosable.
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
 
 	// Setuid only when target differs from self. Avoids the
 	// "Operation not permitted" surface in dev where wash-login
 	// runs unprivileged and target == self.
 	if uint32(os.Geteuid()) != id.UID {
+		cred := &syscall.Credential{
+			Uid: id.UID,
+			Gid: id.GID,
+		}
+		// Grant group wash as a supplementary group (not the primary gid, so
+		// the user's own files keep the user's group) so the router can create
+		// its dirs under the group-writable, setgid /run/wash and dial nothing
+		// — the setgid bit lands everything group=wash for wash-login to reach.
+		// Requires CAP_SETGID, which wash-system has.
+		if gerr == nil {
+			cred.Groups = []uint32{washGID}
+		}
 		cmd.SysProcAttr = &syscall.SysProcAttr{
-			Credential: &syscall.Credential{
-				Uid: id.UID,
-				Gid: id.GID,
-			},
+			Credential: cred,
 			// Detach from wash-login's controlling tty / session so
 			// signals to wash-login don't fan out to all child
 			// routers. Each router is its own session leader.
@@ -272,6 +266,41 @@ func (s *Spawner) runRoot() string {
 		return s.RunRoot
 	}
 	return "/run/wash"
+}
+
+// ensureRunRoot makes the runtime root exist with the perms the target-uid
+// routers need to create their per-uid dirs beneath it.
+//
+// Production (wash group present): mode 2770 group=wash. Group-writable so a
+// router granted supplementary group wash can mkdir /run/wash/<uid>; setgid so
+// that dir, sessions/, and the ctl socket all inherit group=wash for wash-login
+// to reach. The owner stays whoever we run as (wash-system). In a packaged
+// install the dir is provisioned first by systemd RuntimeDirectory / the OpenRC
+// initd, so MkdirAll is a no-op and we just normalise the mode; the chmod/chown
+// are best-effort (we may not own a foreign-provisioned root). chgrp to wash
+// needs only group membership (we're in group wash), not CAP_CHOWN.
+//
+// Dev / single-user (no wash group): a plain 0700 owner dir — the router runs
+// as the same user and writes it directly.
+func (s *Spawner) ensureRunRoot(hasWashGroup bool, washGID uint32) error {
+	root := s.runRoot()
+	// NB: Go encodes setgid as os.ModeSetgid (a high bit), NOT the octal 0o2000
+	// — passing a literal 0o2770 to Chmod/Mkdir silently sets plain 0770 and
+	// drops setgid. Use os.ModeSetgid|0o770 so the bit actually lands; without
+	// it the per-uid dirs + ctl socket don't inherit group wash and wash-login
+	// can't dial them.
+	mode := os.FileMode(0o700)
+	if hasWashGroup {
+		mode = os.ModeSetgid | 0o770
+	}
+	if err := os.MkdirAll(root, mode); err != nil {
+		return fmt.Errorf("mkdir run-root %s: %w", root, err)
+	}
+	if hasWashGroup {
+		_ = os.Chmod(root, os.ModeSetgid|0o770) // umask strips setgid; a pre-existing dir keeps its mode
+		_ = os.Chown(root, -1, int(washGID))
+	}
+	return nil
 }
 
 // generateSessID returns "s-XXXXXXXX" with 8 random hex chars
