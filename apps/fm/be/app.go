@@ -25,12 +25,13 @@ import (
 	"os/user"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sirmick/wash/internal/apps/registry"
 	wfs "github.com/sirmick/wash/internal/fs"
-	"github.com/sirmick/wash/internal/fswatch"
 	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/internal/wire"
 )
 
 //go:embed all:assets
@@ -50,11 +51,21 @@ const (
 )
 
 var (
-	fmRoot  string
-	fmFS    *wfs.FS
-	fmWatch *fswatch.RefMap
-	bus     *sdk.Bus
+	fmRoot string
+	fmFS   *wfs.FS
+	bus    *sdk.Bus
+
+	// Watching is delegated to the shared com.wash.fswatch service: fm relays
+	// watch/unwatch to it and re-emits its fs_event pushes to the FE. svcWatchRefs
+	// refcounts paths so fm sends one watch on first interest and one unwatch on
+	// last — the dedup the old in-process RefMap provided.
+	svcWatchMu   sync.Mutex
+	svcWatchRefs = map[string]int{}
 )
+
+// fswatchAppID is the shared watch service fm relays to. Duplicated rather than
+// imported — the contract is the app-id (same convention as wash-connect).
+const fswatchAppID = "com.wash.fswatch"
 
 // fileClipboardMime is the mime fm uses to round-trip a multi-path
 // cut/copy state through the router clipboard service. Cross-fm-
@@ -112,11 +123,6 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		log.Printf("wash-fm: sandbox root=%s (from router session)", fmRoot)
 	}
 	fmFS = wfs.New(fmRoot)
-	if mgr, err := fswatch.New(); err != nil {
-		log.Printf("wash-fm: fswatch unavailable: %v", err)
-	} else {
-		fmWatch = fswatch.NewRefMap(mgr)
-	}
 
 	bus = sdk.NewBus(c)
 	registerHandlers(bus)
@@ -213,9 +219,9 @@ type saveStateReq struct {
 	State any `json:"state"`
 }
 
-// fsEvent is the watch-fired message the BE pushes to the FE
-// whenever a fswatch.Sub reports a change. Unsolicited (Emit), not
-// a reply, so no id.
+// fsEvent is the watch-fired message the BE pushes to the FE whenever the
+// com.wash.fswatch service reports a change under a watched path. Unsolicited
+// (Emit), not a reply, so no id.
 type fsEvent struct {
 	Op   string `json:"op"`
 	Path string `json:"path"`
@@ -302,7 +308,15 @@ func registerHandlers(b *sdk.Bus) {
 		return doWatch(c, req.Path)
 	})
 	sdk.Handle(b, "unwatch", func(_ *sdk.Conn, _ string, req pathReq) (wfs.PathReply, error) {
-		return doUnwatch(req.Path)
+		return doUnwatch(c, req.Path)
+	})
+	// fs_event pushes arrive from com.wash.fswatch for paths this fm asked it to
+	// watch; re-emit them to the FE unchanged (same shape the FE already handles).
+	sdk.HandleFromVoid(b, "fs_event", func(_ *sdk.Conn, _ string, ev fsEvent, from wire.Sender) error {
+		if from.AppID != fswatchAppID {
+			return nil // only trust the watch service
+		}
+		return bus.Emit("fs_event", ev)
 	})
 	sdk.Handle(b, "complete", func(_ *sdk.Conn, _ string, req completeReq) (completeResp, error) {
 		matches := fmFS.Complete(req.Partial, 0)
@@ -484,9 +498,6 @@ func doSymlink(req symlinkReq) (wfs.SymlinkReply, error) {
 }
 
 func doWatch(c *sdk.Conn, path string) (wfs.PathReply, error) {
-	if fmWatch == nil {
-		return wfs.PathReply{}, sdk.Errf("unavailable", "fswatch unavailable")
-	}
 	if path == "" {
 		return wfs.PathReply{}, sdk.Errf(sdk.ErrBadRequest, "missing path")
 	}
@@ -494,30 +505,28 @@ func doWatch(c *sdk.Conn, path string) (wfs.PathReply, error) {
 	if err != nil {
 		return wfs.PathReply{}, fsErr(err, path)
 	}
-	sub, first, err := fmWatch.Watch(abs)
-	if err != nil {
-		return wfs.PathReply{}, sdk.Err{Code: sdk.ErrIO, Msg: err.Error()}
-	}
+	svcWatchMu.Lock()
+	first := svcWatchRefs[abs] == 0
+	svcWatchRefs[abs]++
+	svcWatchMu.Unlock()
 	if first {
-		// One forwarder goroutine per Sub. The RefMap keeps the Sub
-		// alive across multiple subscribers; the goroutine exits
-		// when the last Unwatch closes the events channel.
-		go func(s *fswatch.Sub) {
-			for ev := range s.Events() {
-				if err := bus.Emit("fs_event", fsEvent{Op: ev.Op.String(), Path: ev.Path}); err != nil {
-					log.Printf("wash-fm send fs_event: %v", err)
-					return
-				}
-			}
-		}(sub)
+		// First interest in this path: ask the shared watch service to watch it.
+		// It streams fs_event back to this instance (the router stamps us as the
+		// sender, so it knows where to deliver).
+		if err := c.SendAppMsgTo(wire.Recipient{AppID: fswatchAppID}, map[string]any{
+			"kind": "watch",
+			"path": abs,
+		}); err != nil {
+			svcWatchMu.Lock()
+			svcWatchRefs[abs]--
+			svcWatchMu.Unlock()
+			return wfs.PathReply{}, sdk.Err{Code: sdk.ErrIO, Msg: err.Error()}
+		}
 	}
 	return wfs.PathReply{Path: abs}, nil
 }
 
-func doUnwatch(path string) (wfs.PathReply, error) {
-	if fmWatch == nil {
-		return wfs.PathReply{Path: path}, nil
-	}
+func doUnwatch(c *sdk.Conn, path string) (wfs.PathReply, error) {
 	if path == "" {
 		return wfs.PathReply{}, sdk.Errf(sdk.ErrBadRequest, "missing path")
 	}
@@ -525,7 +534,22 @@ func doUnwatch(path string) (wfs.PathReply, error) {
 	if err != nil {
 		return wfs.PathReply{}, fsErr(err, path)
 	}
-	fmWatch.Unwatch(abs)
+	svcWatchMu.Lock()
+	if svcWatchRefs[abs] > 0 {
+		svcWatchRefs[abs]--
+	}
+	last := svcWatchRefs[abs] == 0
+	if last {
+		delete(svcWatchRefs, abs)
+	}
+	svcWatchMu.Unlock()
+	if last {
+		// Last interest gone: release the service-side watch.
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: fswatchAppID}, map[string]any{
+			"kind": "unwatch",
+			"path": abs,
+		})
+	}
 	return wfs.PathReply{Path: abs}, nil
 }
 
