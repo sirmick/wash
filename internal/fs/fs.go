@@ -15,6 +15,7 @@
 package fs
 
 import (
+	"bufio"
 	"errors"
 	"os"
 	"os/user"
@@ -22,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -43,7 +45,7 @@ var ErrOutsideRoot = errors.New("path is outside the configured root")
 // wash-fs returns to its callers.
 type Entry struct {
 	Name        string `json:"name"`
-	Type        string `json:"type"` // "dir" | "file" | "symlink" | "other"
+	Type        string `json:"type"` // "dir"|"file"|"symlink"|"blockdev"|"chardev"|"fifo"|"socket"|"other"
 	Size        int64  `json:"size"`
 	ModUnix     int64  `json:"mod_unix"`
 	CreatedUnix int64  `json:"created_unix"`
@@ -55,6 +57,18 @@ type Entry struct {
 	Group       string `json:"group,omitempty"`
 	LinkTo      string `json:"link_to,omitempty"`
 	LinkErr     string `json:"link_err,omitempty"`
+	Broken      bool   `json:"broken,omitempty"` // symlink whose target can't be reached
+
+	// Display hints, computed for the *calling* process's identity
+	// (uid + supplementary groups). Each is omitempty with the polarity
+	// chosen so "true" is the notable/rare state — the common case is
+	// absent on the wire. The FE turns these into colours/badges.
+	Mount    bool `json:"mount,omitempty"`     // dir is a mount point (from /proc/self/mountinfo)
+	Exec     bool `json:"exec,omitempty"`      // regular file the caller may execute
+	ReadOnly bool `json:"read_only,omitempty"` // caller may not write it
+	NoEnter  bool `json:"no_enter,omitempty"`  // dir the caller may not enter (no x)
+	Setuid   bool `json:"setuid,omitempty"`    // setuid bit set
+	Setgid   bool `json:"setgid,omitempty"`    // setgid bit set
 }
 
 // FS is a sandboxed read accessor. Construct with New(root). Methods
@@ -138,8 +152,12 @@ func (f *FS) List(p string, maxEntries int) (entries []Entry, abs string, trunca
 	out := make([]Entry, 0, len(infos))
 	owners := map[uint32]string{}
 	groups := map[uint32]string{}
+	mounts := mountPoints()
 	for _, fi := range infos {
 		e := entryFor(abs, fi, owners, groups)
+		if e.Type == "dir" && mounts[filepath.Join(abs, fi.Name())] {
+			e.Mount = true
+		}
 		out = append(out, e)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -281,15 +299,43 @@ func entryFor(absDir string, fi os.FileInfo, owners, groups map[uint32]string) E
 	if e.Type == "symlink" {
 		if target, err := os.Readlink(full); err == nil {
 			e.LinkTo = target
+			// Readlink succeeds even for a dangling link (it only reads the
+			// target string). Follow it with Stat to learn if the target is
+			// actually reachable; a failure (missing target, ELOOP) means
+			// the link is broken.
+			if _, serr := os.Stat(full); serr != nil {
+				e.Broken = true
+			}
 		} else {
 			e.LinkErr = err.Error()
+		}
+	}
+	// Access hints for the caller's identity. Symlinks carry the link's
+	// own (meaningless) perms, so skip them — the FE colours a symlink by
+	// Broken instead. setuid/setgid come from the full mode.
+	if e.Type != "symlink" {
+		m := fi.Mode()
+		e.Setuid = m&os.ModeSetuid != 0
+		e.Setgid = m&os.ModeSetgid != 0
+		w, x := selfPerm(m, e.UID, e.GID)
+		e.ReadOnly = !w
+		switch e.Type {
+		case "dir":
+			e.NoEnter = !x
+		case "file":
+			e.Exec = x
 		}
 	}
 	return e
 }
 
-func typeOf(fi os.FileInfo) string {
-	m := fi.Mode()
+func typeOf(fi os.FileInfo) string { return kindFromMode(fi.Mode()) }
+
+// kindFromMode maps a FileMode to the wire `type` string. Split out from
+// typeOf so it's unit-testable without real device nodes (which need root
+// to mknod). Order matters: ModeCharDevice is only meaningful alongside
+// ModeDevice.
+func kindFromMode(m os.FileMode) string {
 	switch {
 	case m.IsDir():
 		return "dir"
@@ -297,9 +343,114 @@ func typeOf(fi os.FileInfo) string {
 		return "symlink"
 	case m.IsRegular():
 		return "file"
+	case m&os.ModeDevice != 0 && m&os.ModeCharDevice != 0:
+		return "chardev"
+	case m&os.ModeDevice != 0:
+		return "blockdev"
+	case m&os.ModeNamedPipe != 0:
+		return "fifo"
+	case m&os.ModeSocket != 0:
+		return "socket"
 	default:
 		return "other"
 	}
+}
+
+// self is the calling process's identity, used to compute per-entry
+// access hints (exec / read-only / no-enter). Loaded once: a process's
+// uid + supplementary groups don't change under us.
+var (
+	selfOnce   sync.Once
+	selfUID    uint32
+	selfIsRoot bool
+	selfGroups map[uint32]bool
+)
+
+func loadSelf() {
+	selfUID = uint32(os.Getuid())
+	selfIsRoot = os.Geteuid() == 0
+	selfGroups = map[uint32]bool{uint32(os.Getgid()): true}
+	if gs, err := os.Getgroups(); err == nil {
+		for _, g := range gs {
+			selfGroups[uint32(g)] = true
+		}
+	}
+}
+
+// selfPerm returns whether the calling process may read/write/execute a
+// file with the given mode/owner, applying the standard Unix triad
+// resolution (owner, else group, else other) plus the root override.
+func selfPerm(mode os.FileMode, uid, gid uint32) (w, x bool) {
+	selfOnce.Do(loadSelf)
+	return permFor(mode, selfIsRoot, selfUID == uid, selfGroups[gid])
+}
+
+// permFor is the pure triad-resolution core of selfPerm, split out so it
+// can be unit-tested without the process's real identity. Returns whether
+// the resolved identity may write / execute. root writes anything and may
+// execute when any exec bit is set (Linux semantics).
+func permFor(mode os.FileMode, isRoot, isOwner, inGroup bool) (w, x bool) {
+	perm := mode.Perm()
+	if isRoot {
+		return true, perm&0o111 != 0
+	}
+	var bits os.FileMode
+	switch {
+	case isOwner:
+		bits = (perm >> 6) & 7
+	case inGroup:
+		bits = (perm >> 3) & 7
+	default:
+		bits = perm & 7
+	}
+	return bits&0o2 != 0, bits&0o1 != 0
+}
+
+// mountPoints returns the set of absolute mount-point paths from
+// /proc/self/mountinfo. Used by List to flag directories that are mount
+// boundaries (catches bind mounts a parent/child st_dev compare would
+// miss). Returns nil (an empty set lookups against safely) on any read
+// error — mount flagging is a hint, never load-bearing.
+func mountPoints() map[string]bool {
+	f, err := os.Open("/proc/self/mountinfo")
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	set := make(map[string]bool, 64)
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for sc.Scan() {
+		// mountinfo field 5 (1-based) is the mount point; whitespace in
+		// paths is octal-escaped (\040 etc.), so Fields is safe here.
+		fields := strings.Fields(sc.Text())
+		if len(fields) < 5 {
+			continue
+		}
+		set[unescapeMountPath(fields[4])] = true
+	}
+	return set
+}
+
+// unescapeMountPath decodes the octal escapes mountinfo uses for space
+// (\040), tab (\011), newline (\012) and backslash (\134) in paths.
+func unescapeMountPath(s string) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+3 < len(s) {
+			if n, err := strconv.ParseInt(s[i+1:i+4], 8, 16); err == nil {
+				b.WriteByte(byte(n))
+				i += 3
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 // formatPerm renders the low 9 bits in conventional rwxrwxrwx form.

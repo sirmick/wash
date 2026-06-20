@@ -202,3 +202,26 @@ only when a folder becomes the preview target (tree folder click / navigate-in).
   imageview list capped at 5000 (bounds the one `scan_ok` message, not the DOM).
 - **Grid interactions**: reuse the tree's handlers; `gridDir` decouples grid
   visibility from `selectedEntry`.
+
+## Entry display hints (tree + grid)
+
+Beyond the per-extension icon (`EXT_ICON`, ~360 exts / 18 kinds), entries carry
+richer cues. The BE (`internal/fs`) computes the identity-dependent ones for the
+**calling process's** uid + supplementary groups; the FE turns them into one
+`data-hint` colour + optional badge.
+
+- **Icons by kind**: special dirs by absolute path (`/dev`→Cpu, `/sys`→Cog,
+  `/proc`+`/run`→Activity), **mount points**→HardDrive (flagged from
+  `/proc/self/mountinfo`), and the special file kinds the kernel distinguishes —
+  `blockdev`→Disc, `chardev`/`fifo`→Cable, `socket`→Network (previously all
+  collapsed to `other`).
+- **Colour** (`data-hint`, precedence high→low): broken symlink → red
+  (`fgDanger`; detected by *following* the link, since `readlink` succeeds on a
+  dangling one); **executable** file → green (`accentGreen`, exec wins);
+  read-only / un-enterable dir → dim (`fgMuted`); hidden dotfile → dim.
+  Read-only and exec are uid-aware (owner/group/other triad + root override).
+- **Badge**: setuid/setgid → amber `ShieldAlert` (security cue).
+
+Device nodes / mount points need root to create, so they're Go-unit-tested
+(`internal/fs/hints_test.go`: `kindFromMode`, `permFor`, mountinfo parse); the
+colour/badge wiring is e2e-tested (`fm-hints.spec.ts`, chmod'd fixtures).

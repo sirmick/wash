@@ -50,9 +50,14 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  Activity,
   Binary,
   BookOpen,
+  Cable,
+  Cog,
+  Cpu,
   Database,
+  Disc,
   File as FileIcon,
   FileArchive,
   FileCode,
@@ -73,12 +78,14 @@ import {
   Home as HomeIcon,
   Link2,
   Music,
+  Network,
   Package,
   PanelRightClose,
   PanelRightOpen,
   Pencil,
   Presentation,
   RotateCw,
+  ShieldAlert,
   Square,
   Trash2,
   Upload,
@@ -102,7 +109,7 @@ interface PersistedState {
 
 interface Entry {
   name: string;
-  type: 'dir' | 'file' | 'symlink' | 'other';
+  type: 'dir' | 'file' | 'symlink' | 'blockdev' | 'chardev' | 'fifo' | 'socket' | 'other';
   size: number;
   mod_unix: number;
   created_unix: number;
@@ -114,6 +121,15 @@ interface Entry {
   group?: string;
   link_to?: string;
   link_err?: string;
+  broken?: boolean; // symlink whose target can't be reached
+  // BE-computed display hints (uid-aware; see internal/fs Entry). Each is
+  // present only in its notable state (omitempty on the wire).
+  mount?: boolean; // dir is a mount point
+  exec?: boolean; // regular file the user may execute
+  read_only?: boolean; // user may not write it
+  no_enter?: boolean; // dir the user may not enter
+  setuid?: boolean;
+  setgid?: boolean;
 }
 
 interface BEMessage {
@@ -2602,6 +2618,7 @@ const TreeRow: Component<{
       data-testid={`fm-entry-${props.entry.name}`}
       data-type={props.entry.type}
       data-path={props.path}
+      data-hint={entryHint(props.entry)}
       data-selected={props.selected ? 'true' : undefined}
       data-drop-target={props.isDropTarget ? 'true' : undefined}
       draggable="true"
@@ -2637,13 +2654,16 @@ const TreeRow: Component<{
         outline: 'none',
       }}
     >
-      {/* name cell — chevron + icon + name, indented by depth */}
+      {/* name cell — chevron + icon + name, indented by depth. The tint
+          (exec/read-only/broken-link/hidden) colours both icon (currentColor)
+          and name; default falls back to the row's fg. */}
       <span style={{
         display: 'flex',
         'align-items': 'center',
         gap: '4px',
         'padding-left': `${props.depth * 12}px`,
         overflow: 'hidden',
+        color: entryTint(props.entry) ?? tokens.fg,
       }}>
       <span
         data-testid={`fm-chevron-${props.entry.name}`}
@@ -2660,7 +2680,7 @@ const TreeRow: Component<{
         </Show>
       </span>
       <span style={{ width: '14px', display: 'inline-flex', 'align-items': 'center', 'justify-content': 'center', opacity: 0.8, 'flex-shrink': 0 }}>
-        <EntryIcon entry={props.entry} />
+        <EntryIcon entry={props.entry} path={props.path} />
       </span>
       <span style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap', 'font-weight': props.isCurrent ? 'bold' : 'normal' }}>
         <Show
@@ -2689,6 +2709,7 @@ const TreeRow: Component<{
           />
         </Show>
       </span>
+      <SetidBadge entry={props.entry} />
       </span>
       {/* Size / item count */}
       <Show when={props.cols.size}>
@@ -3356,18 +3377,85 @@ const infoBodyStyle: JSX.CSSProperties = {
 
 // ---- helpers ----
 
-const EntryIcon: Component<{ entry: Entry; size?: number }> = (props) =>
-  iconForEntry(props.entry, props.size ?? 12);
+const EntryIcon: Component<{ entry: Entry; size?: number; path?: string }> = (props) =>
+  iconForEntry(props.entry, props.size ?? 12, props.path);
 
-// iconForEntry picks a lucide glyph for an entry: folders/symlinks by type,
-// files by extension via EXT_ICON, so the tree and the folder grid both read
-// at a glance. Unknown extensions fall back to the generic file glyph.
-function iconForEntry(entry: Entry, size: number): JSX.Element {
-  if (entry.type === 'dir') return <FolderIcon size={size} />;
-  if (entry.type === 'symlink') return <Link2 size={size} />;
-  const render = EXT_ICON[extOf(entry.name)];
-  return render ? render(size) : <FileIcon size={size} />;
+// SPECIAL_DIR maps well-known pseudo-filesystem roots to a distinct glyph,
+// matched on the FULL absolute path — never the name, since ~/dev, src/sys
+// etc. are everyday folders. Only meaningful when fm browses the real root
+// (unconfined); harmless otherwise.
+const SPECIAL_DIR: Record<string, (size: number) => JSX.Element> = {
+  '/dev': (s) => <Cpu size={s} />,
+  '/sys': (s) => <Cog size={s} />,
+  '/proc': (s) => <Activity size={s} />,
+  '/run': (s) => <Activity size={s} />,
+};
+
+// iconForEntry picks a lucide glyph: dirs (special-path → mount → folder),
+// symlinks, the special file kinds (block/char/fifo/socket), then regular
+// files by extension via EXT_ICON, so tree and grid both read at a glance.
+function iconForEntry(entry: Entry, size: number, path?: string): JSX.Element {
+  switch (entry.type) {
+    case 'dir':
+      if (path && SPECIAL_DIR[path]) return SPECIAL_DIR[path](size);
+      if (entry.mount) return <HardDrive size={size} />;
+      return <FolderIcon size={size} />;
+    case 'symlink':
+      return <Link2 size={size} />;
+    case 'blockdev':
+      return <Disc size={size} />;
+    case 'chardev':
+    case 'fifo':
+      return <Cable size={size} />;
+    case 'socket':
+      return <Network size={size} />;
+    default: {
+      const render = EXT_ICON[extOf(entry.name)];
+      return render ? render(size) : <FileIcon size={size} />;
+    }
+  }
 }
+
+// entryHint classifies an entry for colouring, highest precedence first: a
+// broken symlink reads as an error; an executable file is the salient "you
+// can run this" (exec wins, per design); read-only / un-enterable and hidden
+// dotfiles dim back. Exposed as data-hint on the row/tile for e2e + styling.
+type EntryHint = 'broken' | 'exec' | 'readonly' | 'hidden';
+function entryHint(entry: Entry): EntryHint | undefined {
+  if (entry.type === 'symlink' && (entry.broken || entry.link_err)) return 'broken';
+  if (entry.type === 'file' && entry.exec) return 'exec';
+  if (entry.read_only || entry.no_enter) return 'readonly';
+  if (entry.name.startsWith('.')) return 'hidden';
+  return undefined;
+}
+
+const HINT_COLOR: Record<EntryHint, string> = {
+  broken: tokens.fgDanger,
+  exec: tokens.accentGreen,
+  readonly: tokens.fgMuted,
+  hidden: tokens.fgMuted,
+};
+
+// entryTint is the colour for an entry's name + icon, or undefined for the
+// default foreground.
+function entryTint(entry: Entry): string | undefined {
+  const h = entryHint(entry);
+  return h ? HINT_COLOR[h] : undefined;
+}
+
+// SetidBadge renders a small amber shield on setuid/setgid files — a security
+// hint that this runs with elevated identity. Nothing for ordinary files.
+const SetidBadge: Component<{ entry: Entry }> = (props) => (
+  <Show when={props.entry.setuid || props.entry.setgid}>
+    <span
+      data-testid="fm-setid-badge"
+      title={props.entry.setuid ? 'setuid' : 'setgid'}
+      style={{ display: 'inline-flex', 'align-items': 'center', 'margin-left': '4px', color: tokens.accentAmber, 'flex-shrink': 0 }}
+    >
+      <ShieldAlert size={11} />
+    </span>
+  </Show>
+);
 
 // EXT_ICON maps a (lowercased, no-dot) file extension to a lucide glyph
 // renderer. Built once from space-separated groups so adding a type is a
@@ -3577,6 +3665,7 @@ const FolderTile: Component<{
       ref={el}
       data-testid={`fm-tile-${props.entry.name}`}
       data-type={props.entry.type}
+      data-hint={entryHint(props.entry)}
       data-selected={props.selected ? 'true' : undefined}
       data-drop-target={props.isDropTarget ? 'true' : undefined}
       draggable="true"
@@ -3602,12 +3691,15 @@ const FolderTile: Component<{
       onDragOver={isDir() ? (ev) => props.onDragOver(ev, props.path) : undefined}
       onDrop={isDir() ? (ev) => props.onDrop(ev, props.path) : undefined}
     >
-      <div style={tileThumbStyle}>
-        <Show when={thumb() && !failed()} fallback={<EntryIcon entry={props.entry} size={34} />}>
+      <div style={{ ...tileThumbStyle, color: entryTint(props.entry) ?? tileThumbStyle.color }}>
+        <Show when={thumb() && !failed()} fallback={<EntryIcon entry={props.entry} path={props.path} size={34} />}>
           <img src={thumb()!} alt="" style={tileImgStyle} draggable={false} />
         </Show>
       </div>
-      <span style={tileNameStyle}>{props.entry.name}</span>
+      <span style={{ ...tileNameStyle, color: entryTint(props.entry) ?? tileNameStyle.color, display: 'inline-flex', 'align-items': 'center', 'justify-content': 'center', gap: '2px' }}>
+        <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{props.entry.name}</span>
+        <SetidBadge entry={props.entry} />
+      </span>
     </div>
   );
 };
