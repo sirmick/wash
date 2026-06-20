@@ -25,7 +25,7 @@ GOFLAGS += -cover -coverpkg=github.com/sirmick/wash/...
 endif
 
 OUT     := out
-BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-disks wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net wash-washamp wash-music wash-radio wash-audio wash-remote wash-connect wash-fswatchd
+BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-disks wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net wash-washamp wash-music wash-radio wash-audio wash-remote wash-connect wash-fswatchd wash-fswatch
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -608,6 +608,14 @@ $(OUT)/wash-remote: | $(OUT)
 .PHONY: $(OUT)/wash-fswatchd
 $(OUT)/wash-fswatchd: | $(OUT)
 	$(call go_build,$@,cmd/wash-fswatchd)
+
+# wash-fswatch is the A-side shared filesystem-watch service (com.wash.fswatch):
+# one process watches on behalf of every app (collapsing N inotify instances)
+# and serves remote-mount paths via the remote daemon. No window, no FE bundle.
+# .PHONY for the same FE-less-Go-binary reason as wash-notify.
+.PHONY: $(OUT)/wash-fswatch
+$(OUT)/wash-fswatch: | $(OUT)
+	$(call go_build,$@,apps/fswatch/be/cmd)
 
 # wash-mount is the OPTIONAL standalone FUSE mount CLI (needs the FUSE kmod +
 # fusermount3 at runtime — absent in the in-browser VM and locked-down hosts).

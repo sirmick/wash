@@ -27,4 +27,5 @@ wash-audio
 wash-remote
 wash-connect
 wash-fswatchd
+wash-fswatch
 wash-sudo
