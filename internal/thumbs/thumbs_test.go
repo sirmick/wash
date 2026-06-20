@@ -1,12 +1,14 @@
 package thumbs
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // writePNG writes a w×h test image (a simple two-tone split so averaging
@@ -99,6 +101,66 @@ func TestGetInvalidatesOnMtimeChange(t *testing.T) {
 	os.Remove(src)
 	if _, err := Get(src, mt+1, sz, 64); err == nil {
 		t.Fatal("expected miss/error for changed mtime, got nil")
+	}
+}
+
+func TestGCOnceEvictsLRU(t *testing.T) {
+	dir := t.TempDir()
+	// 10 entries of 1000 bytes each = 10_000 total. Stamp ascending
+	// mtimes so eviction order is deterministic (oldest first).
+	base := time.Now().Add(-time.Hour)
+	for i := 0; i < 10; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("%02d.jpg", i))
+		if err := os.WriteFile(p, make([]byte, 1000), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		mt := base.Add(time.Duration(i) * time.Minute)
+		if err := os.Chtimes(p, mt, mt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A non-thumb file must be left untouched by the sweep.
+	keep := filepath.Join(dir, "keep.txt")
+	if err := os.WriteFile(keep, make([]byte, 5000), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Budget 5000 → target 0.8*5000 = 4000. From 10_000 of .jpg the sweep
+	// deletes oldest until total <= 4000: removes 00..05 (6 files), then
+	// breaks with 4000 left (04..09... i.e. 06..09 survive).
+	gcOnce(dir, 5000)
+
+	for i := 0; i < 6; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("%02d.jpg", i))
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("%02d.jpg should have been evicted (err=%v)", i, err)
+		}
+	}
+	for i := 6; i < 10; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("%02d.jpg", i))
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%02d.jpg should have survived: %v", i, err)
+		}
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("non-.jpg file should be untouched: %v", err)
+	}
+}
+
+func TestGCOnceUnderBudgetNoop(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 3; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("%02d.jpg", i))
+		if err := os.WriteFile(p, make([]byte, 100), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gcOnce(dir, 1<<20) // 1 MiB budget, way above 300 bytes → nothing deleted
+	for i := 0; i < 3; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("%02d.jpg", i))
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%02d.jpg should survive an under-budget sweep: %v", i, err)
+		}
 	}
 }
 

@@ -61,7 +61,12 @@ out of scope for v1 and degrade to the file-type icon; adding
 - **Cache**: `~/.cache/wash/thumbs/` (`os.UserCacheDir` + `wash/thumbs`, fallback
   `~/.cache`). Key = `sha256(abspath | mtime | size | dim)`. Atomic temp+rename
   (mirrors `internal/fs/mutate.go`). Cache invalidates implicitly on mtime/size
-  change — no watching.
+  change — no watching. **Bounded** by a least-recently-used sweep: a new-entry
+  write kicks a rate-limited (≤1 scan / 5 min / process) background GC that, when
+  the dir exceeds the byte budget (`DefaultCacheBudget` 256 MiB, override with
+  `WASH_THUMB_CACHE_MB`), deletes oldest-mtime `.jpg`s down to 80% of it. Cache
+  hits refresh mtime (when already >1h stale) so a hot-but-old thumbnail isn't
+  the first evicted.
 - **API** (sketch):
   - `Get(absPath string, mtime, size int64, maxDim int) (cachePath string, err error)`
     — generate-if-absent, return the cached JPEG path.
