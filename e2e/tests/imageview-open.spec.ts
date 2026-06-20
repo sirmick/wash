@@ -87,3 +87,28 @@ test.describe('imageview open dialog', () => {
     await expect(page.locator('[data-testid="iv-picker"]')).toContainText('Open File');
   });
 });
+
+// Regression: the rest of the suite always sets WASH_FM_ROOT, which the router
+// adopts as its fs sandbox root — so an UNCONFINED viewer (no root) was never
+// exercised. It defaulted its root to "/", and wfs.New("/") is a degenerate
+// sandbox (Confine tests hasPrefix(path, "//")) that rejects every real path →
+// "No images" for any absolute dir. This guards the unconfined path.
+const UNCONFINED_DIR = '/tmp/wash-iv-unconfined-e2e';
+
+test.describe('imageview unconfined (no sandbox root)', () => {
+  test.use({ routerOpts: { apps: ['session', 'about', 'imageview'], extraEnv: { WASH_IMAGEVIEW_DIR: UNCONFINED_DIR } } });
+
+  test.beforeAll(() => {
+    mkdirSync(UNCONFINED_DIR, { recursive: true });
+    writeFileSync(join(UNCONFINED_DIR, 'unconfined.png'), PNG);
+  });
+
+  test('lists + loads images from an absolute dir when the router is unconfined', async ({ page, router }) => {
+    await openViewer(page, router); // auto-scans WASH_IMAGEVIEW_DIR on mount
+    // The thumbnail (and its blob src) appearing proves Confine accepted the
+    // absolute path — i.e. the viewer is genuinely unconfined, not pinned to "/".
+    const thumb = page.locator('wash-app-imageview [data-testid="iv-thumb-unconfined.png"]');
+    await expect(thumb).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('wash-app-imageview [data-testid="iv-image"]')).toBeVisible({ timeout: 10_000 });
+  });
+});

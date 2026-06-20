@@ -109,9 +109,13 @@ type imageItem struct {
 
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-imageview ready instance=%s window=%d", instanceID, windowID)
-	root := "/"
-	if r := c.Session().Root; r != "" {
-		root = r
+	// Empty root = unconfined (browse anywhere), matching wash-fm / wash-edit.
+	// NOT "/" — wfs.New("/") is a degenerate sandbox: Confine tests
+	// hasPrefix(path, root+"/") == "//", which rejects every real path, so the
+	// viewer would see nothing outside "/" itself. The router ships a non-empty
+	// Root only when a sandbox is actually configured.
+	root := c.Session().Root
+	if root != "" {
 		log.Printf("wash-imageview: sandbox root=%s (from router session)", root)
 	}
 	ivFS = wfs.New(root)
