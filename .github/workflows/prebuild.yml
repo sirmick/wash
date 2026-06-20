@@ -43,9 +43,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # Build only the slow, rarely-changing pieces. The rootfs is
       # the per-push variable piece; demo.yml owns it.
@@ -67,7 +67,7 @@ jobs:
       # in place. Keep the tag stable so demo.yml's download URL
       # doesn't need updating.
       - name: Publish / update vm-blobs release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: vm-blobs
           name: "wash-vm prebuilt blobs"

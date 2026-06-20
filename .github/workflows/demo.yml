@@ -66,22 +66,22 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.25'
 
-      - uses: pnpm/action-setup@v3
+      - uses: pnpm/action-setup@v6
         with:
           version: 9
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: 'pnpm'
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # The workspace packages (web/shell, web/lib, apps/*/fe).
       - name: pnpm install (workspace)
@@ -166,7 +166,7 @@ jobs:
       # Pages artifact — only consumed by the deploy job on main.
       # Skipped on PRs since they don't deploy.
       - if: github.event_name != 'pull_request'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: wash-vm/web/dist
 
@@ -174,7 +174,7 @@ jobs:
       # authors (and post-mortem debuggers) can grab the exact
       # built bytes from the Actions UI / `gh run download`. Lives
       # 7 days by default.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: demo-dist-${{ github.run_id }}
           path: wash-vm/web/dist
@@ -188,7 +188,7 @@ jobs:
       # rewritten in place on subsequent pushes to the same PR.
       - if: github.event_name == 'pull_request'
         name: Comment artifact link on PR
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: demo-build
           message: |
@@ -208,4 +208,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
