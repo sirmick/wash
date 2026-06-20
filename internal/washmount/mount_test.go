@@ -1,104 +1,13 @@
 package washmount
 
 import (
-	"crypto/ed25519"
-	"crypto/rand"
-	"net"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/pkg/sftp"
-	"golang.org/x/crypto/ssh"
+	"github.com/sirmick/wash/internal/sftptest"
 )
-
-// startTestSFTP stands up an in-process SSH server that answers the sftp
-// subsystem, serving the real filesystem. It is the far-end "remote machine"
-// for the mount, with no external sshd or VM required.
-func startTestSFTP(t *testing.T) string {
-	t.Helper()
-
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("gen host key: %v", err)
-	}
-	signer, err := ssh.NewSignerFromKey(priv)
-	if err != nil {
-		t.Fatalf("signer: %v", err)
-	}
-	cfg := &ssh.ServerConfig{NoClientAuth: true}
-	cfg.AddHostKey(signer)
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	t.Cleanup(func() { ln.Close() })
-
-	go func() {
-		for {
-			nConn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go serveSSHConn(nConn, cfg)
-		}
-	}()
-	return ln.Addr().String()
-}
-
-func serveSSHConn(nConn net.Conn, cfg *ssh.ServerConfig) {
-	conn, chans, reqs, err := ssh.NewServerConn(nConn, cfg)
-	if err != nil {
-		return
-	}
-	defer conn.Close()
-	go ssh.DiscardRequests(reqs)
-	for newChan := range chans {
-		if newChan.ChannelType() != "session" {
-			newChan.Reject(ssh.UnknownChannelType, "only session")
-			continue
-		}
-		ch, chReqs, err := newChan.Accept()
-		if err != nil {
-			continue
-		}
-		go func() {
-			for req := range chReqs {
-				// The sftp subsystem request payload is a length-prefixed string.
-				ok := req.Type == "subsystem" && len(req.Payload) >= 4 && string(req.Payload[4:]) == "sftp"
-				req.Reply(ok, nil)
-				if ok {
-					srv, err := sftp.NewServer(ch)
-					if err == nil {
-						srv.Serve()
-					}
-					ch.Close()
-				}
-			}
-		}()
-	}
-}
-
-func dialSFTP(t *testing.T, addr string) *sftp.Client {
-	t.Helper()
-	sshClient, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
-		User:            "test",
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("ssh dial: %v", err)
-	}
-	t.Cleanup(func() { sshClient.Close() })
-	client, err := sftp.NewClient(sshClient)
-	if err != nil {
-		t.Fatalf("sftp client: %v", err)
-	}
-	t.Cleanup(func() { client.Close() })
-	return client
-}
 
 // TestMountRoundTrip is the Tier-1 gate: a real FUSE mount backed by SFTP, with
 // every operation exercised through the kernel via the os package, and the
@@ -111,7 +20,12 @@ func TestMountRoundTrip(t *testing.T) {
 	backing := t.TempDir() // what the "remote" actually stores
 	mnt := t.TempDir()     // where it appears locally
 
-	client := dialSFTP(t, startTestSFTP(t))
+	client, cleanup, err := sftptest.New()
+	if err != nil {
+		t.Fatalf("sftp test server: %v", err)
+	}
+	t.Cleanup(cleanup)
+
 	server, err := Mount(client, Options{
 		MountPoint: mnt,
 		RemoteRoot: backing,
