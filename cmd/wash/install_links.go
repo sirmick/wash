@@ -50,7 +50,7 @@ func runInstallSymlinks(args []string) error {
 	for n := range registry.All() {
 		names = append(names, n)
 	}
-	names = append(names, "wash-router", "wash-launch", "wash-vmlogin")
+	names = append(names, "wash-router", "wash-launch", "wash-vmlogin", "wash-fswatchd")
 
 	var made, skipped, refused int
 	for _, appName := range names {
