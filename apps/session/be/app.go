@@ -70,9 +70,9 @@ func run(ctx context.Context) error { return sdk.Run(ctx, def) }
 func onReady(c *sdk.Conn, _ string, _ uint32) {
 	sendDesktopConfig(c)
 	sendSystemInfo(c)
-	startConfigWatcher(c)
-	startHostStats(c)
 	bus := sdk.NewBus(c)
+	startConfigWatcher(c, sdk.NewWatchClient(c))
+	startHostStats(c)
 	sdk.HandleVoid(bus, "desktop.request", func(conn *sdk.Conn, _ string, _ struct{}) error {
 		sendDesktopConfig(conn)
 		// Resend the banner facts too so a late-connecting shell (or

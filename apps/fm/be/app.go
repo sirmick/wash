@@ -25,13 +25,11 @@ import (
 	"os/user"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/sirmick/wash/internal/apps/registry"
 	wfs "github.com/sirmick/wash/internal/fs"
 	"github.com/sirmick/wash/internal/sdk"
-	"github.com/sirmick/wash/internal/wire"
 )
 
 //go:embed all:assets
@@ -51,21 +49,11 @@ const (
 )
 
 var (
-	fmRoot string
-	fmFS   *wfs.FS
-	bus    *sdk.Bus
-
-	// Watching is delegated to the shared com.wash.fswatch service: fm relays
-	// watch/unwatch to it and re-emits its fs_event pushes to the FE. svcWatchRefs
-	// refcounts paths so fm sends one watch on first interest and one unwatch on
-	// last — the dedup the old in-process RefMap provided.
-	svcWatchMu   sync.Mutex
-	svcWatchRefs = map[string]int{}
+	fmRoot  string
+	fmFS    *wfs.FS
+	bus     *sdk.Bus
+	fmWatch *sdk.WatchClient // watching is delegated to the shared com.wash.fswatch service
 )
-
-// fswatchAppID is the shared watch service fm relays to. Duplicated rather than
-// imported — the contract is the app-id (same convention as wash-connect).
-const fswatchAppID = "com.wash.fswatch"
 
 // fileClipboardMime is the mime fm uses to round-trip a multi-path
 // cut/copy state through the router clipboard service. Cross-fm-
@@ -231,6 +219,7 @@ type fsEvent struct {
 
 func registerHandlers(b *sdk.Bus) {
 	c := b.Conn()
+	fmWatch = sdk.NewWatchClient(c) // intercepts the service's fs_event pushes
 
 	sdk.Handle(b, "list", func(_ *sdk.Conn, _ string, req listReq) (wfs.ListReply, error) {
 		return listReplyFor("", req.Path)
@@ -305,18 +294,10 @@ func registerHandlers(b *sdk.Bus) {
 		return doSymlink(req)
 	})
 	sdk.Handle(b, "watch", func(_ *sdk.Conn, _ string, req pathReq) (wfs.PathReply, error) {
-		return doWatch(c, req.Path)
+		return doWatch(req.Path)
 	})
 	sdk.Handle(b, "unwatch", func(_ *sdk.Conn, _ string, req pathReq) (wfs.PathReply, error) {
-		return doUnwatch(c, req.Path)
-	})
-	// fs_event pushes arrive from com.wash.fswatch for paths this fm asked it to
-	// watch; re-emit them to the FE unchanged (same shape the FE already handles).
-	sdk.HandleFromVoid(b, "fs_event", func(_ *sdk.Conn, _ string, ev fsEvent, from wire.Sender) error {
-		if from.AppID != fswatchAppID {
-			return nil // only trust the watch service
-		}
-		return bus.Emit("fs_event", ev)
+		return doUnwatch(req.Path)
 	})
 	sdk.Handle(b, "complete", func(_ *sdk.Conn, _ string, req completeReq) (completeResp, error) {
 		matches := fmFS.Complete(req.Partial, 0)
@@ -497,7 +478,7 @@ func doSymlink(req symlinkReq) (wfs.SymlinkReply, error) {
 	return wfs.SymlinkReply{Target: req.Target, LinkPath: link}, nil
 }
 
-func doWatch(c *sdk.Conn, path string) (wfs.PathReply, error) {
+func doWatch(path string) (wfs.PathReply, error) {
 	if path == "" {
 		return wfs.PathReply{}, sdk.Errf(sdk.ErrBadRequest, "missing path")
 	}
@@ -505,28 +486,18 @@ func doWatch(c *sdk.Conn, path string) (wfs.PathReply, error) {
 	if err != nil {
 		return wfs.PathReply{}, fsErr(err, path)
 	}
-	svcWatchMu.Lock()
-	first := svcWatchRefs[abs] == 0
-	svcWatchRefs[abs]++
-	svcWatchMu.Unlock()
-	if first {
-		// First interest in this path: ask the shared watch service to watch it.
-		// It streams fs_event back to this instance (the router stamps us as the
-		// sender, so it knows where to deliver).
-		if err := c.SendAppMsgTo(wire.Recipient{AppID: fswatchAppID}, map[string]any{
-			"kind": "watch",
-			"path": abs,
-		}); err != nil {
-			svcWatchMu.Lock()
-			svcWatchRefs[abs]--
-			svcWatchMu.Unlock()
-			return wfs.PathReply{}, sdk.Err{Code: sdk.ErrIO, Msg: err.Error()}
+	// Delegate to the shared watch service; re-emit its changes to the FE.
+	if err := fmWatch.Watch(abs, func(ev sdk.WatchEvent) {
+		if err := bus.Emit("fs_event", fsEvent{Op: ev.Op, Path: ev.Path}); err != nil {
+			log.Printf("wash-fm send fs_event: %v", err)
 		}
+	}); err != nil {
+		return wfs.PathReply{}, sdk.Err{Code: sdk.ErrIO, Msg: err.Error()}
 	}
 	return wfs.PathReply{Path: abs}, nil
 }
 
-func doUnwatch(c *sdk.Conn, path string) (wfs.PathReply, error) {
+func doUnwatch(path string) (wfs.PathReply, error) {
 	if path == "" {
 		return wfs.PathReply{}, sdk.Errf(sdk.ErrBadRequest, "missing path")
 	}
@@ -534,22 +505,7 @@ func doUnwatch(c *sdk.Conn, path string) (wfs.PathReply, error) {
 	if err != nil {
 		return wfs.PathReply{}, fsErr(err, path)
 	}
-	svcWatchMu.Lock()
-	if svcWatchRefs[abs] > 0 {
-		svcWatchRefs[abs]--
-	}
-	last := svcWatchRefs[abs] == 0
-	if last {
-		delete(svcWatchRefs, abs)
-	}
-	svcWatchMu.Unlock()
-	if last {
-		// Last interest gone: release the service-side watch.
-		_ = c.SendAppMsgTo(wire.Recipient{AppID: fswatchAppID}, map[string]any{
-			"kind": "unwatch",
-			"path": abs,
-		})
-	}
+	fmWatch.Unwatch(abs)
 	return wfs.PathReply{Path: abs}, nil
 }
 
