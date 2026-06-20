@@ -50,20 +50,33 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  Binary,
+  BookOpen,
+  Database,
   File as FileIcon,
   FileArchive,
   FileCode,
+  FileCog,
+  FileDiff,
   FileImage,
+  FileJson,
+  FileKey,
+  FileSpreadsheet,
+  FileTerminal,
   FileText,
+  FileType,
   FilePlus,
   Folder as FolderIcon,
   FolderPlus,
+  HardDrive,
   Home as HomeIcon,
   Link2,
   Music,
+  Package,
   PanelRightClose,
   PanelRightOpen,
   Pencil,
+  Presentation,
   RotateCw,
   Square,
   Trash2,
@@ -3345,32 +3358,73 @@ const infoBodyStyle: JSX.CSSProperties = {
 const EntryIcon: Component<{ entry: Entry; size?: number }> = (props) =>
   iconForEntry(props.entry, props.size ?? 12);
 
-// iconForEntry picks a lucide glyph for an entry: folders/symlinks by
-// type, files by extension (image/text/code/archive/audio/video), so the
-// tree and the folder grid both read at a glance.
+// iconForEntry picks a lucide glyph for an entry: folders/symlinks by type,
+// files by extension via EXT_ICON, so the tree and the folder grid both read
+// at a glance. Unknown extensions fall back to the generic file glyph.
 function iconForEntry(entry: Entry, size: number): JSX.Element {
   if (entry.type === 'dir') return <FolderIcon size={size} />;
   if (entry.type === 'symlink') return <Link2 size={size} />;
-  switch (extOf(entry.name)) {
-    case 'png': case 'jpg': case 'jpeg': case 'gif': case 'webp':
-    case 'bmp': case 'svg': case 'ico': case 'tiff': case 'avif':
-      return <FileImage size={size} />;
-    case 'txt': case 'md': case 'rst': case 'log': case 'csv': case 'pdf':
-      return <FileText size={size} />;
-    case 'go': case 'ts': case 'tsx': case 'js': case 'jsx': case 'json':
-    case 'py': case 'rs': case 'c': case 'h': case 'cpp': case 'hpp':
-    case 'sh': case 'html': case 'css': case 'yaml': case 'yml': case 'toml':
-      return <FileCode size={size} />;
-    case 'zip': case 'tar': case 'gz': case 'bz2': case 'xz': case 'zst':
-    case 'rar': case '7z':
-      return <FileArchive size={size} />;
-    case 'mp3': case 'wav': case 'flac': case 'ogg': case 'm4a': case 'aac':
-      return <Music size={size} />;
-    case 'mp4': case 'mkv': case 'mov': case 'avi': case 'webm': case 'm4v':
-      return <Video size={size} />;
-    default:
-      return <FileIcon size={size} />;
-  }
+  const render = EXT_ICON[extOf(entry.name)];
+  return render ? render(size) : <FileIcon size={size} />;
+}
+
+// EXT_ICON maps a (lowercased, no-dot) file extension to a lucide glyph
+// renderer. Built once from space-separated groups so adding a type is a
+// one-word edit. Keep each extension in exactly one group. A renderer
+// (size) => JSX rather than the component itself sidesteps lucide's prop
+// typing and keeps iconForEntry a plain table lookup.
+const EXT_ICON: Record<string, (size: number) => JSX.Element> = {};
+{
+  const group = (exts: string, render: (size: number) => JSX.Element) => {
+    for (const e of exts.split(/\s+/)) if (e) EXT_ICON[e] = render;
+  };
+  // Raster/vector images + camera raw + design sources.
+  group(
+    'png jpg jpeg gif webp bmp svg ico icns tiff tif avif heic heif jxl jfif apng raw cr2 cr3 nef arw orf rw2 dng psd xcf eps ai sketch',
+    (s) => <FileImage size={s} />,
+  );
+  // Video containers.
+  // NB: `ts` is TypeScript (code), never MPEG transport stream, so it's absent here.
+  group('mp4 m4v mkv mov avi webm flv wmv mpeg mpg mpe 3gp 3g2 ogv m2ts vob asf rm rmvb', (s) => <Video size={s} />);
+  // Audio.
+  group('mp3 wav flac ogg oga opus m4a aac wma aiff aif aifc mid midi amr ape alac dsf wv', (s) => <Music size={s} />);
+  // Generic compressed archives.
+  group('zip tar gz tgz bz2 tbz tbz2 xz txz zst zstd rar 7z lz lz4 lzma lzo cab arj sit sitx z', (s) => <FileArchive size={s} />);
+  // Installable / distribution packages.
+  group('deb rpm apk aab jar war ear nupkg gem whl egg xpi vsix crx snap flatpak appimage msi msix pkg', (s) => <Package size={s} />);
+  // Disk / filesystem images. (`dmg` is a disk image; macOS .pkg installers
+  // are in the package group above.)
+  group('iso img dmg vhd vhdx qcow qcow2 vdi vmdk squashfs', (s) => <HardDrive size={s} />);
+  // Shell + scripting-as-command.
+  group('sh bash zsh fish ksh csh tcsh bat cmd ps1 psm1 awk sed', (s) => <FileTerminal size={s} />);
+  // Compiled / source code + web/markup + styles.
+  group(
+    'go rs c cc cpp cxx c++ h hh hpp hxx m mm cs java kt kts scala swift rb php phtml pl pm lua r jl dart clj cljs cljc cljx ex exs erl hrl hs lhs ml mli fsharp fs fsx fsi vala nim zig v sv d groovy gradle ino pas pp f f90 f95 cob cbl tcl rkt scm lisp el coffee elm purs re res ' +
+      'js mjs cjs jsx ts tsx mts cts html htm xhtml xml xaml svelte vue astro css scss sass less styl pug haml ejs hbs handlebars njk twig',
+    (s) => <FileCode size={s} />,
+  );
+  // JSON-family data.
+  group('json json5 jsonc jsonl ndjson geojson topojson har map webmanifest', (s) => <FileJson size={s} />);
+  // Config / settings.
+  group('yaml yml toml ini cfg conf config env properties prefs plist editorconfig babelrc eslintrc prettierrc dockerignore gitconfig hcl tf tfvars nomad', (s) => <FileCog size={s} />);
+  // Tabular / spreadsheets.
+  group('csv tsv psv xls xlsx xlsm xlsb ods numbers parquet arrow feather', (s) => <FileSpreadsheet size={s} />);
+  // Presentations.
+  group('ppt pptx pps ppsx odp', (s) => <Presentation size={s} />);
+  // Prose / documents.
+  group('txt text md markdown mdx rst adoc asciidoc org tex bib rtf nfo log doc docx odt pages wpd pdf xps', (s) => <FileText size={s} />);
+  // E-books.
+  group('epub mobi azw azw3 kfx fb2 djvu cbz cbr', (s) => <BookOpen size={s} />);
+  // Fonts.
+  group('ttf otf ttc woff woff2 eot pfb pfa', (s) => <FileType size={s} />);
+  // Keys / certs / secrets.
+  group('key pem crt cer der pub ppk pfx p12 p7b jks keystore gpg pgp asc sig csr kbx', (s) => <FileKey size={s} />);
+  // Databases.
+  group('db sqlite sqlite3 db3 sql dump mdb accdb dbf rdb bson realm', (s) => <Database size={s} />);
+  // Binaries / objects / bytecode.
+  group('exe dll so dylib o a lib bin wasm class pyc pyo pyd elf ko obj wat node', (s) => <Binary size={s} />);
+  // Diffs / patches.
+  group('diff patch rej orig', (s) => <FileDiff size={s} />);
 }
 
 function extOf(name: string): string {
