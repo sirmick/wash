@@ -1153,6 +1153,64 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     handleMoveDrop(paths, rowPath);
   };
 
+  // ---- folder-grid pane drop zone ----
+  // The folder grid lives in the preview dock, OUTSIDE the tree's list-pane
+  // drop zone, so it needs its own container-level handlers to accept a drop
+  // INTO the shown folder (gridDir) — the grid analogue of onListDrop's
+  // "drop into the current dir". Folder TILES still claim their own drops
+  // (onRowDragOver/Drop with stopPropagation); everything else — empty
+  // space, a file/image tile, an empty folder — falls through to here.
+  // gridUploadActive rings the grid pane for an external file drag, kept
+  // separate from uploadDropActive so the left tree pane doesn't also light
+  // up.
+  const [gridUploadActive, setGridUploadActive] = createSignal(false);
+
+  const onGridPaneDragOver = (ev: DragEvent) => {
+    if (isExternalFileDrag(ev.dataTransfer)) {
+      ev.preventDefault();
+      ev.dataTransfer!.dropEffect = 'copy';
+      if (!gridUploadActive()) setGridUploadActive(true);
+      if (dropTargetPath() !== '') setDropTargetPath('');
+      return;
+    }
+    if (!hasWashDrag(ev.dataTransfer)) return;
+    ev.preventDefault();
+    ev.dataTransfer!.dropEffect = dropEffectFor(ev.altKey);
+    if (dropTargetPath() !== '') setDropTargetPath('');
+  };
+
+  // dragleave bubbles up from tiles, so this also clears a folder-tile
+  // highlight left by an aborted external drag (which has no dragend) —
+  // the gap the tree closes via onListDragLeave.
+  const onGridPaneDragLeave = (ev: DragEvent) => {
+    const to = ev.relatedTarget as Node | null;
+    if (!to || !(ev.currentTarget as HTMLElement).contains(to)) {
+      setGridUploadActive(false);
+      setDropTargetPath('');
+    }
+  };
+
+  const onGridPaneDrop = (ev: DragEvent) => {
+    setGridUploadActive(false);
+    const dir = gridDir();
+    if (!dir) return;
+    if (isExternalFileDrag(ev.dataTransfer)) {
+      ev.preventDefault();
+      setDropTargetPath('');
+      collectFromDrop(ev.dataTransfer!, dir);
+      return;
+    }
+    const paths = readDragPaths(ev.dataTransfer);
+    if (paths.length === 0) return;
+    ev.preventDefault();
+    setDropTargetPath('');
+    if (ev.altKey) {
+      setDropMenu({ x: ev.clientX + 8, y: ev.clientY + 8, srcs: paths, targetDir: dir });
+      return;
+    }
+    handleMoveDrop(paths, dir);
+  };
+
   const onListDragOver = (ev: DragEvent) => {
     // External OS file drag → highlight the whole pane (drop lands in
     // the current dir).
@@ -2200,6 +2258,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 fileUrl={(p, dim) => fileClient.url(p, { dim })}
                 isSelected={(p) => selection().has(p)}
                 isDropTarget={(p) => dropTargetPath() === p}
+                uploadActive={gridUploadActive()}
                 onClick={gridClick}
                 onActivate={(p, e) => (e.type === 'dir' ? selectPath(p, true) : openFile(p))}
                 onContextMenu={openContextMenu}
@@ -2207,6 +2266,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 onDragEnd={onDragEnd}
                 onDragOver={onRowDragOver}
                 onDrop={onRowDrop}
+                onPaneDragOver={onGridPaneDragOver}
+                onPaneDragLeave={onGridPaneDragLeave}
+                onPaneDrop={onGridPaneDrop}
               />
             </Show>
           </div>
@@ -3340,6 +3402,8 @@ const FolderGrid: Component<{
   fileUrl: (path: string, dim: number) => Promise<string>;
   isSelected: (path: string) => boolean;
   isDropTarget: (path: string) => boolean;
+  /** the shown folder itself is an external-upload drop target right now. */
+  uploadActive: boolean;
   onClick: (path: string, entry: Entry, ev: MouseEvent) => void;
   onActivate: (path: string, entry: Entry) => void;
   onContextMenu: (ev: MouseEvent, entry: Entry, path: string) => void;
@@ -3347,11 +3411,31 @@ const FolderGrid: Component<{
   onDragEnd: () => void;
   onDragOver: (ev: DragEvent, path: string) => void;
   onDrop: (ev: DragEvent, path: string) => void;
-}> = (props) => (
+  // Container-level drop handlers: a drop anywhere on the pane that a folder
+  // tile didn't claim lands in the shown folder (props.dir). See the
+  // onGridPane* handlers in App.
+  onPaneDragOver: (ev: DragEvent) => void;
+  onPaneDragLeave: (ev: DragEvent) => void;
+  onPaneDrop: (ev: DragEvent) => void;
+}> = (props) => {
+  // Whole-pane accent ring when the shown folder is the active upload target
+  // (external OS file drag) — matches the tree pane's data-upload-active look.
+  const paneStyle = (): JSX.CSSProperties =>
+    props.uploadActive
+      ? { ...folderGridStyle, 'box-shadow': `inset 0 0 0 2px ${tokens.borderDropTarget}`, background: tokens.bgDropTarget }
+      : folderGridStyle;
+  return (
   <Show
     when={props.entries.length > 0}
     fallback={
-      <div data-testid="fm-folder-grid" style={{ ...folderGridStyle, color: tokens.fgDim, 'font-style': 'italic', 'font-size': '13px', padding: '16px' }}>
+      <div
+        data-testid="fm-folder-grid"
+        data-upload-active={props.uploadActive ? 'true' : undefined}
+        style={{ ...paneStyle(), color: tokens.fgDim, 'font-style': 'italic', 'font-size': '13px', padding: '16px' }}
+        onDragOver={props.onPaneDragOver}
+        onDragLeave={props.onPaneDragLeave}
+        onDrop={props.onPaneDrop}
+      >
         (empty folder)
       </div>
     }
@@ -3364,7 +3448,10 @@ const FolderGrid: Component<{
       tileWidth={GRID_TILE}
       tileHeight={GRID_TILE_H}
       gap={6}
-      style={folderGridStyle}
+      style={paneStyle()}
+      onDragOver={props.onPaneDragOver}
+      onDragLeave={props.onPaneDragLeave}
+      onDrop={props.onPaneDrop}
       renderItem={(e) => {
         const path = joinPath(props.dir, e.name);
         return (
@@ -3386,7 +3473,8 @@ const FolderGrid: Component<{
       }}
     />
   </Show>
-);
+  );
+};
 
 // FolderTile shows one entry. For thumbnailable images it fetches a
 // thumbnail when scrolled into view (IntersectionObserver) — so a big

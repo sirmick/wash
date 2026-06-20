@@ -26,6 +26,13 @@ export interface VirtualGridProps<T> {
   /** style for the scroll container (background, padding, border, …). */
   style?: JSX.CSSProperties;
   'data-testid'?: string;
+  /** optional drag-drop handlers on the scroll container, so the grid can
+   *  act as a drop target for its own backing collection (e.g. fm's folder
+   *  grid accepting a drop into the shown directory). Tiles that want their
+   *  own drop behaviour stopPropagation in renderItem. */
+  onDragOver?: (ev: DragEvent) => void;
+  onDragLeave?: (ev: DragEvent) => void;
+  onDrop?: (ev: DragEvent) => void;
 }
 
 export function VirtualGrid<T>(props: VirtualGridProps<T>): JSX.Element {
@@ -63,6 +70,9 @@ export function VirtualGrid<T>(props: VirtualGridProps<T>): JSX.Element {
       ref={container}
       data-testid={props['data-testid']}
       onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+      onDragOver={props.onDragOver}
+      onDragLeave={props.onDragLeave}
+      onDrop={props.onDrop}
       style={{ overflow: 'auto', position: 'relative', ...(props.style ?? {}) }}
     >
       {/* full-height spacer so the scrollbar reflects the whole collection */}
