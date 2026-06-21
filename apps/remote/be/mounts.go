@@ -61,8 +61,43 @@ type mountManager struct {
 
 type mountEntry struct {
 	server *fuse.Server
+	conn   *sftpConn
+}
+
+// sftpConn is the per-mount ssh transport behind a reconnecting FUSE mount.
+// dial() re-execs `ssh -s sftp` on each call (the first mount, and again after a
+// drop), reaping the prior dead subprocess; closeCurrent() tears the live one
+// down on unmount.
+type sftpConn struct {
+	sshPath, host string
+
+	mu     sync.Mutex
 	cmd    *exec.Cmd
 	client *sftp.Client
+}
+
+func (c *sftpConn) dial() (*sftp.Client, error) {
+	client, cmd, err := dialSFTP(c.sshPath, c.host)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	prev := c.cmd
+	c.cmd, c.client = cmd, client
+	c.mu.Unlock()
+	killCmd(prev) // reap the dropped subprocess, if any
+	return client, nil
+}
+
+func (c *sftpConn) closeCurrent() {
+	c.mu.Lock()
+	client, cmd := c.client, c.cmd
+	c.client, c.cmd = nil, nil
+	c.mu.Unlock()
+	if client != nil {
+		client.Close()
+	}
+	killCmd(cmd)
 }
 
 func newMountManager(svc *sdk.StateService[State], conn *sdk.Conn) *mountManager {
@@ -124,8 +159,8 @@ var (
 		return client, cmd, nil
 	}
 
-	mountFUSE = func(client *sftp.Client, opts washmount.Options) (*fuse.Server, error) {
-		return washmount.Mount(client, opts)
+	mountWithDialer = func(dial func() (*sftp.Client, error), opts washmount.Options) (*fuse.Server, error) {
+		return washmount.MountWithDialer(dial, opts)
 	}
 )
 
@@ -157,20 +192,25 @@ func (m *mountManager) mount(host, remoteRoot string) {
 		fail("mkdir", err)
 		return
 	}
-	client, cmd, err := dialSFTP(m.sshPath, host)
-	if err != nil {
+	conn := &sftpConn{sshPath: m.sshPath, host: host}
+	// Eagerly probe so an unreachable host / bad auth fails the mount now rather
+	// than appearing mounted and erroring on first access. The FUSE backend dials
+	// its own connection lazily (and re-dials after a drop) via conn.dial.
+	if probe, err := conn.dial(); err != nil {
 		fail("ssh sftp", err)
 		return
+	} else {
+		probe.Close()
+		conn.closeCurrent()
 	}
-	server, err := mountFUSE(client, washmount.Options{MountPoint: mp, RemoteRoot: remoteRoot})
+	server, err := mountWithDialer(conn.dial, washmount.Options{MountPoint: mp, RemoteRoot: remoteRoot})
 	if err != nil {
-		client.Close()
-		killCmd(cmd)
+		conn.closeCurrent()
 		fail("mount", err)
 		return
 	}
 	m.mu.Lock()
-	m.entries[mp] = &mountEntry{server: server, cmd: cmd, client: client}
+	m.entries[mp] = &mountEntry{server: server, conn: conn}
 	m.mu.Unlock()
 
 	// Ask the shared watch service to stream this mount's changes (it opens its
@@ -202,10 +242,7 @@ func (m *mountManager) unmount(mp string) {
 		})
 	}
 	_ = washmount.Unmount(e.server, mp)
-	if e.client != nil {
-		e.client.Close()
-	}
-	killCmd(e.cmd)
+	e.conn.closeCurrent()
 	m.removeMount(mp)
 }
 
