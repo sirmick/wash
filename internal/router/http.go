@@ -89,7 +89,7 @@ func NewHTTPServer(r *Router, assets http.FileSystem) *HTTPServer {
 	// Generic ingress: /app/<token>/* reverse-proxies to an app-
 	// published HTTP/WS backend. More specific than "/", so the mux
 	// routes it here. See ingress.go.
-	s.mux.HandleFunc("/app/", s.handleAppProxy)
+	s.mux.HandleFunc("/app/", s.router.handleIngress)
 	s.mux.HandleFunc("/", s.handleRoot)
 	return s
 }
