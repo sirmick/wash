@@ -206,16 +206,10 @@ func (m *mountManager) mount(host, remoteRoot string, persist bool) {
 		return
 	}
 	conn := &sftpConn{sshPath: m.sshPath, host: host}
-	// Eagerly probe so an unreachable host / bad auth fails the mount now rather
-	// than appearing mounted and erroring on first access. The FUSE backend dials
-	// its own connection lazily (and re-dials after a drop) via conn.dial.
-	if probe, err := conn.dial(); err != nil {
-		fail("ssh sftp", err)
-		return
-	} else {
-		probe.Close()
-		conn.closeCurrent()
-	}
+	// MountWithDialer dials eagerly: it fails fast on an unreachable host / bad
+	// auth and seeds a live client so the mount works on first access (no lazy
+	// first-op dial that could stall the process cd'ing in), and re-dials via
+	// conn.dial after a drop.
 	server, err := mountWithDialer(conn.dial, washmount.Options{MountPoint: mp, RemoteRoot: remoteRoot})
 	if err != nil {
 		conn.closeCurrent()

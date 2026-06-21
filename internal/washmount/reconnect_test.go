@@ -135,3 +135,40 @@ func TestMountReconnectsAfterDrop(t *testing.T) {
 		t.Fatalf("expected a re-dial after the drop, got %d dials", d)
 	}
 }
+
+// TestMountWriteReachesBackend isolates the write path the torture exercises: a
+// file created THROUGH the mount must actually land on the backing store.
+func TestMountWriteReachesBackend(t *testing.T) {
+	if _, err := os.Stat("/dev/fuse"); err != nil {
+		t.Skipf("no /dev/fuse: %v", err)
+	}
+	backing := t.TempDir()
+	mnt := t.TempDir()
+	addr, stopServer, err := sftptest.NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopServer()
+	dial := func() (*sftp.Client, error) {
+		c, _, err := sftptest.Dial(addr)
+		return c, err
+	}
+	server, err := MountWithDialer(dial, Options{MountPoint: mnt, RemoteRoot: backing, OpTimeout: 5 * time.Second})
+	if err != nil {
+		t.Skipf("mount failed (FUSE?): %v", err)
+	}
+	t.Cleanup(func() { Unmount(server, mnt) })
+
+	// Create + write through the mount (what the fm's new-file does, then a write).
+	if err := os.WriteFile(filepath.Join(mnt, "hello.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatalf("write through mount: %v", err)
+	}
+	// It must exist on the backing store with the right content.
+	b, err := os.ReadFile(filepath.Join(backing, "hello.txt"))
+	if err != nil {
+		t.Fatalf("read backing: %v", err)
+	}
+	if string(b) != "hi" {
+		t.Fatalf("backing content = %q; want hi", b)
+	}
+}

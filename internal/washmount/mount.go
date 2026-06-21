@@ -72,6 +72,15 @@ func mount(dial func() (*sftp.Client, error), ownsClient bool, opts Options) (*f
 		gid:        orU32(opts.GID, uint32(os.Getgid())),
 		sem:        make(chan struct{}, orInt(opts.MaxInflight, 16)),
 	}
+	// Dial once up front: fail fast on an unreachable host, and seed the live
+	// client so the mount is usable on its very first op — no lazy first-op dial
+	// that could race or stall the process that just cd'd into the mount. The
+	// dialer is still used for reconnects after a drop.
+	c, err := dial()
+	if err != nil {
+		return nil, fmt.Errorf("washmount: initial dial: %w", err)
+	}
+	root.cur = c
 	rootNode := &sftpNode{root: root}
 
 	attr := orDur(opts.AttrTimeout, 3*time.Second)
