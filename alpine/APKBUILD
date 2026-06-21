@@ -1,11 +1,11 @@
 # Maintainer: sirmick <sirmick@gmail.com>
 pkgname=wash
 pkgver=0.9.1
-pkgrel=3
+pkgrel=4
 pkgdesc="Lightweight remote-admin desktop environment"
 url="https://github.com/sirmick/wash"
 arch="x86_64 aarch64 riscv64"
-license="MIT"
+license="AGPL-3.0-or-later"
 # Core wash is just the router + apps; it creates no user and needs no caps, so
 # it carries no depends (the multi-user deps live on the wash-login subpackage).
 depends=""

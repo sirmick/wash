@@ -1,9 +1,9 @@
 Name:           wash
 Version:        0.9.1
-Release:        3%{?dist}
+Release:        4%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
-License:        MIT
+License:        AGPL-3.0-or-later
 URL:            https://github.com/sirmick/wash
 Source0:        wash_%{version}.tar.xz
 
@@ -202,6 +202,11 @@ fi
 exit 0
 
 %changelog
+* Sat Jun 20 2026 sirmick <sirmick@gmail.com> - 0.9.1-4
+- Ship the multi-call binary by default: one /usr/bin/wash + relative wash-<app>
+  symlinks (installed 118M -> 21M). wash-login/wash-sudo stay real binaries.
+- Man pages per applet (.so stubs) + bash completion; %license LICENSE.
+- Fix license metadata to AGPL-3.0-or-later (was wrongly MIT). -buildvcs=false.
 * Fri Jun 19 2026 sirmick <sirmick@gmail.com> - 0.9.1-3
 - wash-login: least-privilege per-session runtime dirs — the setuid'd
   wash-router (granted group wash as a supplementary group) creates its own
