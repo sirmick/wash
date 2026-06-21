@@ -108,6 +108,14 @@ type Session struct {
 	// dialog with a countdown, say) should treat the absence as
 	// "use the conservative default" rather than guessing.
 	CloseGraceMs uint32 `json:"close_grace_ms,omitempty"`
+
+	// OpenExts is the session-wide file-association table: the union of
+	// every enabled app's manifest Opens (lowercased, dot-prefixed, e.g.
+	// ".png"). An app that opens files (wash-fm) reads it to tell, before
+	// asking the router to open a path, whether any handler app is
+	// registered for the extension — so it can fall back (to an inline
+	// preview, say) instead of firing an open that the router would drop.
+	OpenExts []string `json:"open_exts,omitempty"`
 }
 
 // IdentityAck is the router's reply (§6 step 3). WindowID is omitted

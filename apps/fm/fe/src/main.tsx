@@ -343,9 +343,39 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // (no manual click-timer state — we lean on native dblclick.)
   let pathInputEl!: HTMLInputElement;
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
-  // openFile hands a file to its registered handler app via the router's
-  // open routing (BE confines, then conn.OpenPath). Used on file double-click.
-  const openFile = (p: string) => send({ kind: 'open', path: p });
+  // openExts: the session file-association table (extensions, no dot, lower-
+  // case) any app registered to open. null until the BE replies to
+  // get_open_exts (requested on mount). Used by openFile to pick open-in-app
+  // vs. fall-back-to-preview.
+  const [openExts, setOpenExts] = createSignal<Set<string> | null>(null);
+  // openFile handles a file double-click: if an app is registered for its
+  // extension, hand it to the router's open routing (BE confines, then
+  // conn.OpenPath); otherwise fall back to showing it in the preview pane,
+  // so a double-click is never a dead no-op. Before the table loads (null),
+  // stay optimistic and route to open — the common case.
+  const openFile = (p: string) => {
+    const exts = openExts();
+    if (exts && !exts.has(extOf(baseName(p)))) {
+      previewInDock(p);
+      return;
+    }
+    send({ kind: 'open', path: p });
+  };
+  // previewInDock shows an unhandled file in the preview pane (opening the
+  // dock if it was closed) — the double-click fallback. The preceding single
+  // click already requested the read when the dock was open; this makes the
+  // result visible and explains why nothing launched.
+  const previewInDock = (p: string) => {
+    if (!previewOpen()) setPreviewOpen(true);
+    const entry = findEntry(p);
+    if (entry) {
+      setSelectedEntry(entry);
+      setSelectedPath(p);
+    }
+    setGridDir('');
+    setStatusInfo(`No app for ${baseName(p)} — showing preview`);
+    sendRead(p);
+  };
 
   // Request/reply correlation + timeout live in ./bus.ts (unit-tested).
   // sendWithReply is kept as an alias so the call sites below read the
@@ -424,6 +454,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // fs_event).
     if (bus.tryResolve(m)) return;
     switch (m.kind) {
+      case 'open_exts': {
+        // The session file-association table — normalize to dot-less,
+        // lowercase extensions for the extOf() comparison in openFile.
+        const raw = (m.exts as string[] | undefined) ?? [];
+        setOpenExts(new Set(raw.map((e) => e.replace(/^\./, '').toLowerCase())));
+        return;
+      }
       case 'list_ok': {
         const p = String(m.path);
         const entries = m.entries as Entry[];
@@ -2057,6 +2094,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     props.host.addEventListener('wash:msg', onMsg);
     props.host.addEventListener('wash:state', onState);
     props.host.addEventListener('keydown', onKey);
+    // Ask the BE for the session's file-association table (which extensions
+    // any app can open) so double-click can fall back to preview when none.
+    send({ kind: 'get_open_exts' });
     if (!props.host.hasAttribute('tabindex')) props.host.setAttribute('tabindex', '0');
     // Track the body width: the dock clamp (effPreviewW) and the
     // responsive tree columns (cols) both key off it, so they react to

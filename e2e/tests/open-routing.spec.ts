@@ -16,6 +16,8 @@ const PNG = Buffer.from(
 function seedOpenables(root: string): void {
   writeFileSync(join(root, 'photo.png'), PNG);
   writeFileSync(join(root, 'notes.md'), '# notes\n\nhello from the editor\n');
+  // No app registers ".xyz" → double-click falls back to the preview pane.
+  writeFileSync(join(root, 'mystery.xyz'), 'UNHANDLED-PREVIEW-BODY\n');
 }
 
 test.use({
@@ -57,5 +59,19 @@ test.describe('open routing', () => {
     await page.locator('[data-testid="fm-entry-notes.md"]').dblclick();
 
     await expect(page.locator('wash-app-edit')).toBeVisible({ timeout: 15_000 });
+  });
+
+  test('double-clicking a file with no registered handler falls back to preview', async ({ page, router }) => {
+    await openFm(page, router);
+    await expect(page.locator('[data-testid="fm-entry-mystery.xyz"]')).toBeVisible();
+
+    await page.locator('[data-testid="fm-entry-mystery.xyz"]').dblclick();
+
+    // It shows in the preview pane instead of launching anything…
+    await expect(page.locator('wash-app-fm [data-testid="fm-preview"]')).toContainText('UNHANDLED-PREVIEW-BODY', { timeout: 5_000 });
+    await expect(page.locator('wash-app-fm [data-testid="fm-status"]')).toContainText(/no app for/i);
+    // …and no editor/viewer window was spawned for it.
+    await expect(page.locator('wash-app-edit')).toHaveCount(0);
+    await expect(page.locator('wash-app-imageview')).toHaveCount(0);
   });
 });

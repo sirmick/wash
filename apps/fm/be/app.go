@@ -342,6 +342,15 @@ func registerHandlers(b *sdk.Bus) {
 		return conn.OpenPath(abs)
 	})
 
+	// get_open_exts: the FE asks for the session's file-association table (the
+	// union of every app's manifest Opens, shipped in the handshake Session)
+	// so a double-click can tell an openable file from one with no handler —
+	// and fall back to the inline preview instead of firing an open the router
+	// would drop. Race-free: the FE requests it on mount.
+	sdk.HandleVoid(b, "get_open_exts", func(conn *sdk.Conn, _ string, _ struct{}) error {
+		return b.Emit("open_exts", map[string]any{"exts": conn.Session().OpenExts})
+	})
+
 	// Fire-and-forget commands (no reply).
 	sdk.HandleVoid(b, "request_initial", func(_ *sdk.Conn, _ string, _ struct{}) error {
 		reply, err := listReplyFor("", initialPath())

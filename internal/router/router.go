@@ -470,7 +470,31 @@ func (r *Router) handshakeSession() *wire.Session {
 	return &wire.Session{
 		Root:         r.cfg.FSRoot,
 		CloseGraceMs: uint32(closeGrace / time.Millisecond),
+		OpenExts:     r.openExts(),
 	}
+}
+
+// openExts is the union of every enabled app's manifest Opens — the
+// session-wide file-association table the FE consults (via Session) to
+// decide whether a path can open in a handler app. Sorted + de-duped;
+// matches resolveOpen's lowercased extension comparison.
+func (r *Router) openExts() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, e := range r.reg.Entries() {
+		if !e.Enabled() || e.Manifest == nil {
+			continue
+		}
+		for _, o := range e.Manifest.Opens {
+			lo := strings.ToLower(o)
+			if !seen[lo] {
+				seen[lo] = true
+				out = append(out, lo)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // allocInstanceID returns a fresh per-process instance id. The format
