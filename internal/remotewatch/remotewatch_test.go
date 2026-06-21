@@ -1,12 +1,104 @@
 package remotewatch
 
 import (
+	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/sirmick/wash/internal/fswatch"
 )
+
+// waitForPath emits ev on feed repeatedly until the translated wantLocal event
+// arrives on sub (ignoring any stale buffered events), or the deadline passes.
+func waitForPath(t *testing.T, feed *fswatch.Feed, sub fswatch.Subscription, ev fswatch.Event, wantLocal string) {
+	t.Helper()
+	deadline := time.After(8 * time.Second)
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		feed.Emit(ev)
+		select {
+		case got, ok := <-sub.Events():
+			if !ok {
+				t.Fatal("sub closed unexpectedly")
+			}
+			if got.Path == wantLocal {
+				return
+			}
+		case <-tick.C:
+		case <-deadline:
+			t.Fatalf("timeout waiting for %s", wantLocal)
+		}
+	}
+}
+
+// TestClientReconnectsAndResubscribes is the watch-path chaos case: drop the
+// client's channel and a later change still arrives — proving the client
+// re-dialed AND re-sent its active watch so B re-subscribed.
+func TestClientReconnectsAndResubscribes(t *testing.T) {
+	remoteFeed := fswatch.NewFeed() // B-side source, shared across reconnects
+	defer remoteFeed.Close()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go Serve(conn, remoteFeed) // a fresh Server per connection, same Feed
+		}
+	}()
+
+	var mu sync.Mutex
+	var curConn net.Conn
+	dials := 0
+	dial := func() (io.ReadWriteCloser, error) {
+		c, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			return nil, err
+		}
+		mu.Lock()
+		curConn = c
+		dials++
+		mu.Unlock()
+		return c, nil
+	}
+
+	pm := PathMap{MountPoint: "/mnt/host", RemoteRoot: "/srv"}
+	client := NewReconnectingClient(dial, pm)
+	defer client.Close()
+
+	sub, err := client.Watch("/mnt/host/dir")
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+
+	// Works before the drop.
+	waitForPath(t, remoteFeed, sub, fswatch.Event{Op: fswatch.OpCreated, Path: "/srv/dir/x"}, "/mnt/host/dir/x")
+
+	// Kill the client's connection.
+	mu.Lock()
+	cc := curConn
+	mu.Unlock()
+	cc.Close()
+
+	// After reconnect + re-subscribe, a new change still arrives.
+	waitForPath(t, remoteFeed, sub, fswatch.Event{Op: fswatch.OpModified, Path: "/srv/dir/y"}, "/mnt/host/dir/y")
+
+	mu.Lock()
+	d := dials
+	mu.Unlock()
+	if d < 2 {
+		t.Fatalf("expected a re-dial after the drop, got %d dials", d)
+	}
+}
 
 func TestPathMapRoundTrip(t *testing.T) {
 	pm := PathMap{MountPoint: "/mnt/host", RemoteRoot: "/home/user"}

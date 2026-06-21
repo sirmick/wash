@@ -20,10 +20,12 @@ package remotewatch
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/sirmick/wash/internal/fswatch"
 )
@@ -85,9 +87,9 @@ func Serve(rw io.ReadWriteCloser, src fswatch.Source) error {
 }
 
 type server struct {
-	rw   io.ReadWriteCloser
-	src  fswatch.Source
-	enc  *json.Encoder
+	rw    io.ReadWriteCloser
+	src   fswatch.Source
+	enc   *json.Encoder
 	encMu sync.Mutex // serialize concurrent forward-goroutine writes
 
 	mu   sync.Mutex
@@ -166,47 +168,154 @@ func (s *server) closeAll() {
 
 // ---- A side: Client ----
 
-// Client is the A-side of the watch stream. It implements fswatch.Source, so a
-// path under a remote mount can be watched through it exactly as a local path
-// is watched through the inotify Manager.
-type Client struct {
-	rw   io.ReadWriteCloser
-	feed *fswatch.Feed
-	pm   PathMap
+// errFixedTransport stops the connect loop for a NewClient (no reconnect): once
+// its single transport dies there is nothing to re-dial.
+var errFixedTransport = errors.New("remotewatch: fixed transport, no reconnect")
 
-	encMu sync.Mutex
-	enc   *json.Encoder
+// Client is the A-side of the watch stream. It implements fswatch.Source, so a
+// path under a remote mount can be watched through it exactly as a local path is
+// watched through the inotify Manager. The Feed is stable across reconnects, so
+// consumer Subscriptions (and the Hub's) survive a dropped channel: the connect
+// loop re-dials and re-sends every active watch, transparently resubscribing.
+type Client struct {
+	dial func() (io.ReadWriteCloser, error)
+	pm   PathMap
+	feed *fswatch.Feed
+	stop chan struct{}
+
+	mu      sync.Mutex
+	rw      io.ReadWriteCloser
+	enc     *json.Encoder
+	watched map[string]int // active remote paths (refcount) — re-sent on reconnect
+	closed  bool
 }
 
 var _ fswatch.Source = (*Client)(nil)
 
-// NewClient wraps the channel to B and starts reading events into a Feed.
+// NewClient wraps a single fixed channel to B (no reconnect). Once it dies the
+// client stops.
 func NewClient(rw io.ReadWriteCloser, pm PathMap) *Client {
-	c := &Client{rw: rw, feed: fswatch.NewFeed(), pm: pm, enc: json.NewEncoder(rw)}
-	go c.readLoop()
+	used := false
+	return newClient(func() (io.ReadWriteCloser, error) {
+		if used {
+			return nil, errFixedTransport
+		}
+		used = true
+		return rw, nil
+	}, pm)
+}
+
+// NewReconnectingClient re-dials the watch channel after a drop (dial re-opens
+// `ssh <host> wash-fswatchd` in the service), re-subscribing the active watches
+// so live updates self-heal across a transient ssh failure.
+func NewReconnectingClient(dial func() (io.ReadWriteCloser, error), pm PathMap) *Client {
+	return newClient(dial, pm)
+}
+
+func newClient(dial func() (io.ReadWriteCloser, error), pm PathMap) *Client {
+	c := &Client{
+		dial:    dial,
+		pm:      pm,
+		feed:    fswatch.NewFeed(),
+		stop:    make(chan struct{}),
+		watched: map[string]int{},
+	}
+	go c.run()
 	return c
 }
 
 // Watch subscribes to localPath (under the mountpoint), asking B to watch the
-// translated remote path. The returned Subscription's Close also tells B to
-// unwatch, so the remote watch is released when the last local consumer goes.
+// translated remote path. Closing the Subscription releases the remote watch.
 func (c *Client) Watch(localPath string) (fswatch.Subscription, error) {
 	sub, err := c.feed.Watch(localPath)
 	if err != nil {
 		return nil, err
 	}
 	remote := c.pm.ToRemote(localPath)
-	c.send(msg{Op: "watch", Path: remote})
+	c.mu.Lock()
+	c.watched[remote]++
+	if c.enc != nil { // send now if connected; else attach() re-sends on the next dial
+		_ = c.enc.Encode(msg{Op: "watch", Path: remote})
+	}
+	c.mu.Unlock()
 	return &clientSub{Subscription: sub, c: c, remote: remote}, nil
 }
 
-// Close stops the client and its Feed. The channel to B is the caller's.
+// Close stops the connect loop and the Feed.
 func (c *Client) Close() error {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closed = true
+	rw := c.rw
+	c.rw, c.enc = nil, nil
+	c.mu.Unlock()
+	close(c.stop)
+	if rw != nil {
+		rw.Close() // unblock a parked serve()
+	}
 	return c.feed.Close()
 }
 
-func (c *Client) readLoop() {
-	sc := bufio.NewScanner(c.rw)
+// run dials, serves until the transport dies, and re-dials (with backoff) until
+// Close. errFixedTransport ends it (a NewClient has no second transport).
+func (c *Client) run() {
+	backoff := 100 * time.Millisecond
+	for {
+		select {
+		case <-c.stop:
+			return
+		default:
+		}
+		rw, err := c.dial()
+		if err != nil {
+			if errors.Is(err, errFixedTransport) {
+				return
+			}
+			log.Printf("remotewatch: client dial: %v (retry in %s)", err, backoff)
+			select {
+			case <-time.After(backoff):
+			case <-c.stop:
+				return
+			}
+			if backoff < 5*time.Second {
+				backoff *= 2
+			}
+			continue
+		}
+		backoff = 100 * time.Millisecond
+		c.attach(rw)
+		c.serve(rw) // blocks until the transport dies or Close
+		c.detach(rw)
+	}
+}
+
+// attach makes rw current and re-subscribes every active watch, so a reconnect
+// transparently restores the consumer's subscriptions on B.
+func (c *Client) attach(rw io.ReadWriteCloser) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.rw = rw
+	c.enc = json.NewEncoder(rw)
+	for remote := range c.watched {
+		_ = c.enc.Encode(msg{Op: "watch", Path: remote})
+	}
+}
+
+func (c *Client) detach(rw io.ReadWriteCloser) {
+	c.mu.Lock()
+	if c.rw == rw {
+		c.rw, c.enc = nil, nil
+	}
+	c.mu.Unlock()
+	rw.Close()
+}
+
+// serve reads events off rw into the Feed until rw dies.
+func (c *Client) serve(rw io.ReadWriteCloser) {
+	sc := bufio.NewScanner(rw)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
 		var m msg
@@ -221,17 +330,8 @@ func (c *Client) readLoop() {
 		if !ok {
 			continue
 		}
-		// Translate B's path into local space before it enters the Feed, so
-		// every consumer sees only local paths.
+		// Translate B's path into local space before it enters the Feed.
 		c.feed.Emit(fswatch.Event{Op: op, Path: c.pm.ToLocal(m.Path)})
-	}
-}
-
-func (c *Client) send(m msg) {
-	c.encMu.Lock()
-	defer c.encMu.Unlock()
-	if err := c.enc.Encode(m); err != nil {
-		log.Printf("remotewatch: client send: %v", err)
 	}
 }
 
@@ -244,6 +344,17 @@ type clientSub struct {
 }
 
 func (s *clientSub) Close() {
-	s.c.send(msg{Op: "unwatch", Path: s.remote})
+	c := s.c
+	c.mu.Lock()
+	if c.watched[s.remote] > 0 {
+		c.watched[s.remote]--
+	}
+	if c.watched[s.remote] == 0 {
+		delete(c.watched, s.remote)
+		if c.enc != nil {
+			_ = c.enc.Encode(msg{Op: "unwatch", Path: s.remote})
+		}
+	}
+	c.mu.Unlock()
 	s.Subscription.Close()
 }

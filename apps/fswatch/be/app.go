@@ -185,7 +185,6 @@ var openWatchChannel = func(host string) (io.ReadWriteCloser, error) {
 
 type mountReg struct {
 	client *remotewatch.Client
-	rwc    io.ReadWriteCloser
 }
 
 var (
@@ -206,18 +205,19 @@ func registerMount(req mountReq) {
 	if exists {
 		return
 	}
-	rwc, err := openWatchChannel(req.Host)
-	if err != nil {
-		log.Printf("wash-fswatch: open watch channel to %s: %v", req.Host, err)
-		return
-	}
-	client := remotewatch.NewClient(rwc, remotewatch.PathMap{
+	// Reconnecting watch client: dial re-opens `ssh <host> wash-fswatchd` after a
+	// drop, re-subscribing the active watches so live updates self-heal across a
+	// transient ssh failure. The Client owns each dialed channel (closes it).
+	host := req.Host
+	client := remotewatch.NewReconnectingClient(func() (io.ReadWriteCloser, error) {
+		return openWatchChannel(host)
+	}, remotewatch.PathMap{
 		MountPoint: req.MountPoint,
 		RemoteRoot: req.RemoteRoot,
 	})
 	router.Mount(req.MountPoint, client) // Router owns/closes the client
 	mountsMu.Lock()
-	mounts[req.MountPoint] = &mountReg{client: client, rwc: rwc}
+	mounts[req.MountPoint] = &mountReg{client: client}
 	mountsMu.Unlock()
 	log.Printf("wash-fswatch: registered mount %s -> %s:%s", req.MountPoint, req.Host, req.RemoteRoot)
 }
@@ -233,8 +233,7 @@ func unregisterMount(mountPoint string) {
 	if reg == nil {
 		return
 	}
-	router.Unmount(mountPoint) // closes the remotewatch.Client
-	_ = reg.rwc.Close()        // tears down the ssh wash-fswatchd subprocess
+	router.Unmount(mountPoint) // closes the Client, which tears down the live ssh
 }
 
 // procRWC adapts an ssh subprocess's stdio into one io.ReadWriteCloser; Close
