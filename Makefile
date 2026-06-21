@@ -11,7 +11,10 @@
 
 GOOS    ?= linux
 GOARCH  ?= amd64
-GOFLAGS := -trimpath -ldflags=-s\ -w -tags netgo,osusergo
+# -buildvcs=false: Go otherwise stamps the binary with VCS revision + a
+# "modified" dirty flag, which makes builds non-reproducible (Debian/Fedora
+# reproducible-builds care). -trimpath already strips paths.
+GOFLAGS := -trimpath -buildvcs=false -ldflags=-s\ -w -tags netgo,osusergo
 
 # COVER=1 builds coverage-instrumented binaries (`go build -cover`),
 # attributing coverage across the whole module. Used by
@@ -733,7 +736,7 @@ endif
 # cheap when nothing changed.
 .PHONY: $(OUT)/wash
 $(OUT)/wash: $(MULTICALL_STAMPS) | $(OUT)
-	$(GO_ENV) go build -trimpath -ldflags="-s -w" \
+	$(GO_ENV) go build -trimpath -buildvcs=false -ldflags="-s -w" \
 	  -tags=$(MULTICALL_TAGS) \
 	  -o $@ ./cmd/wash && chmod 0755 $@
 
