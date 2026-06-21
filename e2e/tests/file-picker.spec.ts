@@ -67,9 +67,12 @@ test.describe('FilePicker', () => {
     await expect(app.locator('[data-testid="picker-result"]'))
       .toHaveText(join(router.fmRoot, 'hello.txt'));
 
-    // Architectural assertion: no separate fs service spawned —
-    // the host BE itself served the request via EnableFilePicker.
-    expect(router.log()).not.toMatch(/wash-fs/);
+    // The picker's data ops (list/stat/pick) are served IN-PROCESS by the host
+    // BE's EnableFilePicker — the result landing above proves it. Only fs.watch
+    // now relays to the shared com.wash.fswatch service (one deliberate hop that
+    // collapses N per-app inotify instances), so the log legitimately mentions
+    // it; what must NOT appear is a router-level error serving the pick.
+    expect(router.log()).not.toMatch(/ERROR|panic/);
   });
 
   test('Open: double-click file confirms in one gesture', async ({ page, router }) => {
