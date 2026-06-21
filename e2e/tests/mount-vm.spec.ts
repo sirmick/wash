@@ -141,7 +141,9 @@ test('torture: local fm + remote fm on the same folder both track changes', asyn
 
   await mountFolder(connect, REMOTE_DIR);
 
-  // Remote fm (on B) and local fm (on the mount), same folder.
+  // Open the remote fm (on B) FIRST — it must be launched while wash-connect is
+  // on top — then the local fm (on the mount). Cascade puts the local fm down-
+  // right and on top, with the remote fm's titlebar exposed up-left.
   await launchOnB(connect, 'com.wash.fm');
   const remoteFm = remoteWindow(page);
   await expect(remoteFm).toBeVisible({ timeout: 60_000 });
@@ -152,17 +154,17 @@ test('torture: local fm + remote fm on the same folder both track changes', asyn
   await expect(localFm).toBeVisible({ timeout: 30_000 });
   await navFm(localFm, MOUNT_POINT);
 
-  // Mutate from B (remote fm): appears in BOTH — remote fm by its own listing,
-  // local fm via the mount's watch channel.
+  // Mutate from A first (local fm is the top window — no raise). A real write
+  // over FUSE/SFTP that lands on B and surfaces in the remote fm via B's inotify.
+  await newFileInFm(localFm, 'from_a.txt');
+  await expect(localFm.locator('[data-testid="fm-entry-from_a.txt"]')).toBeVisible({ timeout: 40_000 });
+  await expect(remoteFm.locator('[data-testid="fm-entry-from_a.txt"]')).toBeVisible({ timeout: 40_000 });
+
+  // Then mutate from B: raise the remote fm (its titlebar is exposed up-left,
+  // not covered by the local fm) and create a file. It must appear in BOTH — the
+  // remote fm by its own listing, the local fm via the mount's watch channel.
   await raiseWindow(remoteFm);
   await newFileInFm(remoteFm, 'from_b.txt');
   await expect(remoteFm.locator('[data-testid="fm-entry-from_b.txt"]')).toBeVisible({ timeout: 40_000 });
   await expect(localFm.locator('[data-testid="fm-entry-from_b.txt"]')).toBeVisible({ timeout: 40_000 });
-
-  // Mutate from A through the FUSE mount (local fm): a real write over SFTP that
-  // lands on B and surfaces in the remote fm via B's inotify.
-  await raiseWindow(localFm);
-  await newFileInFm(localFm, 'from_a.txt');
-  await expect(localFm.locator('[data-testid="fm-entry-from_a.txt"]')).toBeVisible({ timeout: 40_000 });
-  await expect(remoteFm.locator('[data-testid="fm-entry-from_a.txt"]')).toBeVisible({ timeout: 40_000 });
 });
