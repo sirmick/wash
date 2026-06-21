@@ -20,6 +20,7 @@ case "$1" in
             delgroup --quiet --system wash >/dev/null 2>&1 || true
         fi
         rm -rf /etc/wash
+        rm -rf /var/lib/wash
         ;;
     remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
         ;;

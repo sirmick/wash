@@ -35,6 +35,13 @@ case "$1" in
         # wash-system) generates secret.key on first start, so the dir must be
         # owned by wash-system, not root. Mode 0750: private to group wash.
         install -d -m 0750 -o wash-system -g wash /etc/wash
+        # /var/lib/wash is wash-system's HOME. The out-of-the-box desktop runs
+        # as wash-system (before real users are configured), so its apps resolve
+        # $HOME for ~/.config/wash and ~/.cache — e.g. wash-edit/wash-fm open
+        # there and wash-vscode downloads code-server into ~/.cache/wash. The
+        # adduser above passes --no-create-home, so create it here owned by the
+        # user; without it those apps hit a missing/unwritable $HOME.
+        install -d -m 0750 -o wash-system -g wash /var/lib/wash
         # Switching to the target user's uid/gid and reaping that user's session
         # needs cap_setuid, cap_setgid and cap_kill (see the Makefile's
         # wash-login-caps target and docs/MULTIUSER.md). Grant them so a fresh

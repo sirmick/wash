@@ -21,8 +21,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -184,6 +186,13 @@ func (s *Spawner) Spawn(id Identity, name string) (Session, error) {
 	// /dev/null, so a crash-before-logging is still diagnosable.
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
+	// Re-point HOME/USER/LOGNAME at the authed user. wash-login runs as
+	// wash-system (HOME=/var/lib/wash); without this the router — though
+	// spawned under the target uid below — inherits wash-system's HOME and
+	// resolves ~/.config/wash, ~/.cache, and the fm/edit start dir to a path
+	// the user can't write (perm denied; wash-vscode's code-server download
+	// was the visible failure). Mirrors the vmlogin launcher's childEnv.
+	cmd.Env = childEnv(id)
 
 	// Setuid only when target differs from self. Avoids the
 	// "Operation not permitted" surface in dev where wash-login
@@ -312,6 +321,36 @@ func generateSessID() (string, error) {
 		return "", err
 	}
 	return "s-" + hex.EncodeToString(buf[:]), nil
+}
+
+// childEnv is wash-login's environment with HOME/USER/LOGNAME re-pointed at the
+// authed user, for the spawned wash-router. wash-login runs as wash-system, so
+// its os.Environ() carries HOME=/var/lib/wash; the router is setuid to the
+// target uid but env is NOT uid-derived, so without this it would resolve ~ to
+// wash-system's home — unwritable by the user. The home comes from the user's
+// passwd entry, falling back to /home/<name>. Mirrors vmlogin's childEnv.
+func childEnv(id Identity) []string {
+	home := ""
+	if u, err := user.Lookup(id.Name); err == nil && u.HomeDir != "" {
+		home = u.HomeDir
+	} else if id.Name != "" {
+		home = "/home/" + id.Name
+	}
+	parent := os.Environ()
+	env := make([]string, 0, len(parent)+3)
+	for _, kv := range parent {
+		if strings.HasPrefix(kv, "HOME=") || strings.HasPrefix(kv, "USER=") || strings.HasPrefix(kv, "LOGNAME=") {
+			continue // replaced below with the authed user's values
+		}
+		env = append(env, kv)
+	}
+	if home != "" {
+		env = append(env, "HOME="+home)
+	}
+	if id.Name != "" {
+		env = append(env, "USER="+id.Name, "LOGNAME="+id.Name)
+	}
+	return env
 }
 
 // processAlive reports whether pid exists in the process table.

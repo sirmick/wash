@@ -1160,10 +1160,15 @@ unit-test: test-app fe-unit component
 .PHONY: e2e-test
 e2e-test: test-app
 	# The multicall layout is what ships, so the FULL suite runs against it
-	# (busybox-style wash-<app> symlinks → out/wash). Build the dispatcher + run
-	# its argv[0]-dispatch unit tests first, then Playwright with
-	# WASH_E2E_MULTICALL=1 (the fixture stages out/wash + symlinks).
-	$(MAKE) TEST_APP=1 out/wash
+	# (busybox-style wash-<app> symlinks → out/wash). Build the FULL layout —
+	# not just the dispatcher — because the fixture resolves every wash-<app>
+	# under out/multicall/ (its existence checks + binPath read there). `make
+	# multicall` rm -rf's and regenerates the symlinks from the current
+	# dispatcher, so a newly-added app (e.g. wash-fswatch, wash-imageview) is
+	# always present; building bare out/wash leaves a stale layout and the
+	# fixture fails with "missing binary: out/multicall/wash-<app>". Then run the
+	# argv[0]-dispatch unit tests and Playwright with WASH_E2E_MULTICALL=1.
+	$(MAKE) TEST_APP=1 multicall
 	go test -count=1 -tags=multicall ./cmd/wash/...
 	cd e2e && $(PNPM) install --ignore-workspace --silent
 	cd e2e && $(PNPM) exec playwright install chromium
