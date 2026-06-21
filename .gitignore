@@ -71,3 +71,6 @@ coverage/
 # Python bytecode (test guests)
 __pycache__/
 *.pyc
+
+# Local dev-estate deploy notes (machine-specific; not part of the project)
+/docs/DEPLOY-ESTATE.md
