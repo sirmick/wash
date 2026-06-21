@@ -134,7 +134,7 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 			return nil
 		}
 		return conn.SendAppMsgTo(wire.Recipient{AppID: remoteAppID}, map[string]any{
-			"kind": "mount", "host": req.Host, "remote_root": req.RemoteRoot,
+			"kind": "mount", "host": req.Host, "remote_root": req.RemoteRoot, "persist": req.Persist,
 		})
 	})
 	sdk.HandleVoid(bus, "unmount", func(conn *sdk.Conn, _ string, req unmountReq) error {
@@ -269,6 +269,7 @@ type disconnectReq struct {
 type mountReq struct {
 	Host       string `json:"host"`
 	RemoteRoot string `json:"remote_root"`
+	Persist    bool   `json:"persist"`
 }
 
 type unmountReq struct {

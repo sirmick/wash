@@ -122,11 +122,12 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 	})
 
 	mounts := newMountManager(svc, c)
+	mounts.restoreMounts() // re-establish "reconnect at launch" mounts
 	sdk.HandleFromVoid(bus, "mount", func(_ *sdk.Conn, _ string, req mountCtlReq, _ wire.Sender) error {
 		if req.Host == "" {
 			return nil
 		}
-		go mounts.mount(req.Host, req.RemoteRoot) // mounting blocks on ssh + FUSE
+		go mounts.mount(req.Host, req.RemoteRoot, req.Persist) // mounting blocks on ssh + FUSE
 		return nil
 	})
 	sdk.HandleFromVoid(bus, "unmount", func(_ *sdk.Conn, _ string, req unmountCtlReq, _ wire.Sender) error {

@@ -314,7 +314,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                     onDisconnect={() => disconnect(h.host)}
                     onAuth={() => beginAuth(h.host)}
                     onToggleBookmark={() => (isBookmarked(h.host) ? removeBookmark(h.host) : addBookmark(h.host))}
-                    onMount={(root) => send({ kind: 'mount', host: h.host, remote_root: root })}
+                    onMount={(root, persist) => send({ kind: 'mount', host: h.host, remote_root: root, persist })}
                     onUnmount={(mp) => send({ kind: 'unmount', mount_point: mp })}
                   />
                 )}
@@ -362,7 +362,7 @@ const HostRow: Component<{
   onDisconnect: () => void;
   onAuth: () => void;
   onToggleBookmark: () => void;
-  onMount: (remoteRoot: string) => void;
+  onMount: (remoteRoot: string, persist: boolean) => void;
   onUnmount: (mountPoint: string) => void;
 }> = (props) => {
   const color = () => hostColor(props.host.origin);
@@ -421,14 +421,15 @@ const HostRow: Component<{
 // as a volume in the file manager.
 const MountsSection: Component<{
   mounts: MountState[];
-  onMount: (remoteRoot: string) => void;
+  onMount: (remoteRoot: string, persist: boolean) => void;
   onUnmount: (mountPoint: string) => void;
 }> = (props) => {
   const [path, setPath] = createSignal('');
+  const [persist, setPersist] = createSignal(false);
   const submit = () => {
     const p = path().trim();
     if (!p) return;
-    props.onMount(p);
+    props.onMount(p, persist());
     setPath('');
   };
   const statusText = (mt: MountState) =>
@@ -466,6 +467,15 @@ const MountsSection: Component<{
           Mount
         </button>
       </div>
+      <label style={mountPersistStyle} title="Re-establish this mount when wash next starts">
+        <input
+          type="checkbox"
+          checked={persist()}
+          onChange={(e) => setPersist(e.currentTarget.checked)}
+          data-testid="connect-mount-persist"
+        />
+        Reconnect at launch
+      </label>
     </div>
   );
 };
@@ -693,6 +703,15 @@ const mountStatusStyle: JSX.CSSProperties = {
 };
 
 const mountAddStyle: JSX.CSSProperties = { display: 'flex', gap: '6px' };
+
+const mountPersistStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'center',
+  gap: '6px',
+  color: tokens.fgMuted,
+  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  cursor: 'pointer',
+};
 
 const mountInputStyle: JSX.CSSProperties = {
   flex: 1,

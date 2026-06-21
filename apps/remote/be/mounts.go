@@ -40,6 +40,9 @@ type MountState struct {
 type mountCtlReq struct {
 	Host       string `json:"host"`
 	RemoteRoot string `json:"remote_root"`
+	// Persist saves the mount so it re-establishes when com.wash.remote next
+	// starts (login / reboot) — the "reconnect at launch" option.
+	Persist bool `json:"persist"`
 }
 
 type unmountCtlReq struct {
@@ -60,8 +63,9 @@ type mountManager struct {
 }
 
 type mountEntry struct {
-	server *fuse.Server
-	conn   *sftpConn
+	server           *fuse.Server
+	conn             *sftpConn
+	host, remoteRoot string // for forgetting a persisted mount on unmount
 }
 
 // sftpConn is the per-mount ssh transport behind a reconnecting FUSE mount.
@@ -164,9 +168,18 @@ var (
 	}
 )
 
+// restoreMounts re-establishes every persisted ("reconnect at launch") mount.
+// Run once at startup; each mount is best-effort and async.
+func (m *mountManager) restoreMounts() {
+	for _, sm := range loadSavedMounts() {
+		go m.mount(sm.Host, sm.RemoteRoot, true)
+	}
+}
+
 // mount brings up a FUSE mount of host:remoteRoot and registers its watch with
-// com.wash.fswatch. Blocks on the ssh handshake + mount; run it in a goroutine.
-func (m *mountManager) mount(host, remoteRoot string) {
+// com.wash.fswatch. If persist, it is saved for re-mount at next launch. Blocks
+// on the ssh handshake + mount; run it in a goroutine.
+func (m *mountManager) mount(host, remoteRoot string, persist bool) {
 	if host == "" {
 		return
 	}
@@ -210,8 +223,12 @@ func (m *mountManager) mount(host, remoteRoot string) {
 		return
 	}
 	m.mu.Lock()
-	m.entries[mp] = &mountEntry{server: server, conn: conn}
+	m.entries[mp] = &mountEntry{server: server, conn: conn, host: host, remoteRoot: remoteRoot}
 	m.mu.Unlock()
+
+	if persist {
+		addSavedMount(host, remoteRoot) // reconnect at launch
+	}
 
 	// Ask the shared watch service to stream this mount's changes (it opens its
 	// own ssh wash-fswatchd to the host).
@@ -243,6 +260,7 @@ func (m *mountManager) unmount(mp string) {
 	}
 	_ = washmount.Unmount(e.server, mp)
 	e.conn.closeCurrent()
+	removeSavedMount(e.host, e.remoteRoot) // an explicit unmount also stops re-mounting at launch
 	m.removeMount(mp)
 }
 
