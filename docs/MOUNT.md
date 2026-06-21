@@ -148,6 +148,12 @@ stays the standalone/test path). Access today is by navigating fm to
 `~/wash/remote/<host>/…`; the fm Places/Volumes sidebar is deferred.
 `cmd/wash-mount` stays a headless/dev tool.
 
+**Reconnect at launch.** A mount can be ticked persistent (a wash-connect
+checkbox): the supervisor saves it to `$XDG_CONFIG_HOME/wash/mounts.json` and
+re-establishes it when `com.wash.remote` next starts (login / reboot). Combined
+with the on-drop reconnect (§8), a saved mount survives both a transient ssh
+drop and a full restart.
+
 ---
 
 ## 6. Robustness
