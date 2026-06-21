@@ -28,10 +28,10 @@ import (
 // after a crashed mounter) still gets steps 2 and 3.
 func Unmount(server *fuse.Server, mountpoint string) error {
 	if server != nil {
-		if err := server.Unmount(); err == nil {
-			return nil
-		} else {
+		if err := server.Unmount(); err != nil {
 			log.Printf("washmount: graceful unmount failed mp=%s: %v; escalating", mountpoint, err)
+		} else {
+			return nil
 		}
 	}
 	return forceUnmount(mountpoint)
@@ -43,10 +43,10 @@ func forceUnmount(mountpoint string) error {
 	// from the namespace we can no longer stat it to find the connection.
 	minor, minorErr := fuseConnMinor(mountpoint)
 
-	if err := lazyDetach(mountpoint); err == nil {
-		return nil
-	} else {
+	if err := lazyDetach(mountpoint); err != nil {
 		log.Printf("washmount: lazy detach failed mp=%s: %v; aborting connection", mountpoint, err)
+	} else {
+		return nil
 	}
 
 	// Last resort: abort the kernel-side connection so every parked request
@@ -69,10 +69,10 @@ func forceUnmount(mountpoint string) error {
 // unprivileged) and falling back to the umount2 syscall with MNT_DETACH.
 func lazyDetach(mountpoint string) error {
 	if path, err := exec.LookPath("fusermount3"); err == nil {
-		if out, err := exec.Command(path, "-uz", mountpoint).CombinedOutput(); err == nil {
-			return nil
-		} else {
+		if out, err := exec.Command(path, "-uz", mountpoint).CombinedOutput(); err != nil {
 			log.Printf("washmount: fusermount3 -uz %s: %v: %s", mountpoint, err, out)
+		} else {
+			return nil
 		}
 	}
 	// Fallback: lazy umount syscall (needs privilege or an unprivileged

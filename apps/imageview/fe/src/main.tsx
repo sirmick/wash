@@ -9,6 +9,7 @@ import type { Component, JSX } from 'solid-js';
 import { ChevronLeft, ChevronRight, FolderOpen, Image as ImageIcon, ImagePlus, Maximize, ZoomIn, ZoomOut } from 'lucide-solid';
 import { FilePicker, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
 import type { FileClient } from '@wash/ui';
+import { isThumbableName } from '@wash/fs-client';
 
 const IV_TILE_H = 84; // fixed thumbnail-list tile height (px) for windowing
 
@@ -20,13 +21,6 @@ interface ImageItem {
 const THUMB_DIM = 96;
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 8;
-// Extensions internal/thumbs can decode → show a real thumbnail; others
-// (webp/svg/…) still display full-res in the main view, but list as an icon.
-const THUMB_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif']);
-const isThumbable = (name: string): boolean => {
-  const i = name.lastIndexOf('.');
-  return i > 0 && THUMB_EXTS.has(name.slice(i + 1).toLowerCase());
-};
 
 // Picker filter: images first, then all files. The picker compiles the
 // `re` source case-sensitively, so the All-files escape hatch covers
@@ -295,7 +289,7 @@ const Thumb: Component<{
   const [url, setUrl] = createSignal<string | null>(null);
   let el: HTMLDivElement | undefined;
   onMount(() => {
-    if (!isThumbable(props.img.name) || !el) return;
+    if (!isThumbableName(props.img.name) || !el) return;
     const io = new IntersectionObserver(
       (entries) => {
         for (const en of entries) {

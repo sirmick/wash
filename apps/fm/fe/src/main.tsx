@@ -23,7 +23,8 @@ import type { Component, JSX } from 'solid-js';
 import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
 import type { FileClient } from '@wash/ui';
 import {
-  baseName, formatDate, humanSize, joinPath, octalPerm, parentPath, ancestorChain,
+  baseName, extName, formatDate, humanSize, joinPath, octalPerm, parentPath, ancestorChain,
+  isThumbableName,
   createBus,
   createWatch,
   DRAG_MIME, DRAG_ORIGIN_MIME, dragPayload, dropEffectFor, hasWashDrag, readDragPaths, readDragOrigin, crossOrigin,
@@ -355,7 +356,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // stay optimistic and route to open — the common case.
   const openFile = (p: string) => {
     const exts = openExts();
-    if (exts && !exts.has(extOf(baseName(p)))) {
+    if (exts && !exts.has(extName(baseName(p)))) {
       previewInDock(p);
       return;
     }
@@ -456,7 +457,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     switch (m.kind) {
       case 'open_exts': {
         // The session file-association table — normalize to dot-less,
-        // lowercase extensions for the extOf() comparison in openFile.
+        // lowercase extensions for the extName() comparison in openFile.
         const raw = (m.exts as string[] | undefined) ?? [];
         setOpenExts(new Set(raw.map((e) => e.replace(/^\./, '').toLowerCase())));
         return;
@@ -3492,7 +3493,7 @@ function iconForEntry(entry: Entry, size: number, path?: string): JSX.Element {
     case 'socket':
       return <Network size={size} />;
     default: {
-      const render = EXT_ICON[extOf(entry.name)];
+      const render = EXT_ICON[extName(entry.name)];
       return render ? render(size) : <FileIcon size={size} />;
     }
   }
@@ -3600,16 +3601,8 @@ const EXT_ICON: Record<string, (size: number) => JSX.Element> = {};
   group('diff patch rej orig', (s) => <FileDiff size={s} />);
 }
 
-function extOf(name: string): string {
-  const i = name.lastIndexOf('.');
-  return i > 0 ? name.slice(i + 1).toLowerCase() : '';
-}
-
-// THUMB_EXTS: formats internal/thumbs can decode (stdlib). Others (e.g.
-// webp/svg) keep their file-type icon rather than a broken thumbnail.
-const THUMB_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif']);
 const isThumbable = (entry: Entry): boolean =>
-  entry.type === 'file' && THUMB_EXTS.has(extOf(entry.name));
+  entry.type === 'file' && isThumbableName(entry.name);
 
 const GRID_TILE = 100; // tile box min width px
 const GRID_TILE_H = 104; // fixed tile height px (thumb + name) for windowing

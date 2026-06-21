@@ -256,6 +256,9 @@ importers:
 
   apps/imageview/fe:
     dependencies:
+      '@wash/fs-client':
+        specifier: workspace:*
+        version: link:../../../web/fs-client
       '@wash/ui':
         specifier: workspace:*
         version: link:../../../web/lib

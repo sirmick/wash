@@ -10,11 +10,14 @@ export {
   joinPath,
   parentPath,
   baseName,
+  extName,
   ancestorChain,
   humanSize,
   formatDate,
   octalPerm,
 } from './paths.ts';
+
+export { THUMBABLE_EXTS, isThumbableName } from './thumbable.ts';
 
 export { createBus } from './bus.ts';
 export type { Bus, BEMessage, Clock } from './bus.ts';

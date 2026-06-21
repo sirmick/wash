@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 
-import { joinPath, parentPath, baseName, ancestorChain, humanSize, formatDate, octalPerm } from './paths.ts';
+import { joinPath, parentPath, baseName, extName, ancestorChain, humanSize, formatDate, octalPerm } from './paths.ts';
 
 test('joinPath: appends with a separator', () => {
   assert.equal(joinPath('/home', 'mick'), '/home/mick');
@@ -38,6 +38,21 @@ test('baseName: returns the trailing segment', () => {
 
 test('baseName: a name with no slash is returned whole', () => {
   assert.equal(baseName('a.txt'), 'a.txt');
+});
+
+test('extName: lowercased extension without the dot', () => {
+  assert.equal(extName('photo.JPG'), 'jpg');
+  assert.equal(extName('archive.tar.gz'), 'gz');
+});
+
+test('extName: no extension yields empty string', () => {
+  assert.equal(extName('README'), '');
+  assert.equal(extName('trailing.'), '');
+});
+
+test('extName: a leading-dot dotfile is extensionless', () => {
+  assert.equal(extName('.bashrc'), '');
+  assert.equal(extName('.config'), '');
 });
 
 test('humanSize: bytes under 1K are shown raw', () => {

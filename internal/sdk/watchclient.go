@@ -4,13 +4,9 @@ import (
 	"path"
 	"sync"
 
+	"github.com/sirmick/wash/internal/fswatchproto"
 	"github.com/sirmick/wash/internal/wire"
 )
-
-// FsWatchAppID is the shared filesystem-watch service every app watches through.
-// Duplicated rather than imported — the contract is the app-id (same convention
-// as wash-connect's reference to com.wash.remote).
-const FsWatchAppID = "com.wash.fswatch"
 
 // WatchEvent is a filesystem change delivered to a WatchClient callback.
 type WatchEvent struct {
@@ -27,7 +23,7 @@ type WatchCallback func(WatchEvent)
 // OnReady; it installs the single fs_event handler so multiple watchers in one
 // app don't collide on that kind.
 //
-// Refcounting matches the old in-process RefMap: repeated Watch of a path sends
+// Refcounting is client-side: repeated Watch of a path sends
 // one watch to the service (and the first caller's callback is the consumer);
 // the underlying watch is released when the last Unwatch lands. The service
 // already fans a directory's events to that directory, so a callback registered
@@ -53,7 +49,7 @@ func NewWatchClient(c *Conn) *WatchClient {
 	}
 	prev := c.def.OnAppMsgFrom
 	c.def.OnAppMsgFrom = func(conn *Conn, win uint32, data any, from wire.Sender) {
-		if from.AppID == FsWatchAppID && wc.tryHandle(data) {
+		if from.AppID == fswatchproto.AppID && wc.tryHandle(data) {
 			return
 		}
 		if prev != nil {
@@ -70,7 +66,7 @@ func (wc *WatchClient) tryHandle(data any) bool {
 	if !ok {
 		return false
 	}
-	if kind, _ := m["kind"].(string); kind != "fs_event" {
+	if kind, _ := m["kind"].(string); kind != fswatchproto.KindEvent {
 		return false
 	}
 	op, _ := m["op"].(string)
@@ -93,8 +89,8 @@ func (wc *WatchClient) Watch(path string, cb WatchCallback) error {
 	}
 	wc.mu.Unlock()
 	if first {
-		if err := wc.conn.SendAppMsgTo(wire.Recipient{AppID: FsWatchAppID}, map[string]any{
-			"kind": "watch",
+		if err := wc.conn.SendAppMsgTo(wire.Recipient{AppID: fswatchproto.AppID}, map[string]any{
+			"kind": fswatchproto.KindWatch,
 			"path": path,
 		}); err != nil {
 			wc.mu.Lock()
@@ -121,8 +117,8 @@ func (wc *WatchClient) Unwatch(path string) {
 	}
 	wc.mu.Unlock()
 	if last {
-		_ = wc.conn.SendAppMsgTo(wire.Recipient{AppID: FsWatchAppID}, map[string]any{
-			"kind": "unwatch",
+		_ = wc.conn.SendAppMsgTo(wire.Recipient{AppID: fswatchproto.AppID}, map[string]any{
+			"kind": fswatchproto.KindUnwatch,
 			"path": path,
 		})
 	}

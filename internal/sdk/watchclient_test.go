@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sirmick/wash/internal/fswatchproto"
 	"github.com/sirmick/wash/internal/wire"
 )
 
@@ -17,8 +18,8 @@ func readToService(t *testing.T, router wire.FrameTransport) map[string]any {
 	if !ok {
 		t.Fatalf("expected EvtAppMsg, got %T", got)
 	}
-	if m.To == nil || m.To.AppID != FsWatchAppID {
-		t.Fatalf("recipient = %v, want AppID %q", m.To, FsWatchAppID)
+	if m.To == nil || m.To.AppID != fswatchproto.AppID {
+		t.Fatalf("recipient = %v, want AppID %q", m.To, fswatchproto.AppID)
 	}
 	return decodeAppMsgData(t, m.Data)
 }
@@ -52,7 +53,7 @@ func TestWatchClientRelaysAndDispatches(t *testing.T) {
 	// An fs_event from the service for a child of /d reaches the callback.
 	writeEvt(t, router, wire.NewEvtAppMsgFrom(0, map[string]any{
 		"kind": "fs_event", "op": "modified", "path": "/d/x",
-	}, wire.Sender{AppID: FsWatchAppID, InstanceID: "i-svc"}))
+	}, wire.Sender{AppID: fswatchproto.AppID, InstanceID: "i-svc"}))
 
 	select {
 	case ev := <-got:

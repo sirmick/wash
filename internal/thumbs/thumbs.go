@@ -29,7 +29,9 @@ import (
 
 	// Decoder registrations. jpeg is imported non-blank for Encode; png
 	// and gif are blank imports purely to register their decoders with
-	// image.Decode.
+	// image.Decode. This set is mirrored by THUMBABLE_EXTS in
+	// web/fs-client/src/thumbable.ts — keep the two in sync if a format is
+	// added or dropped (the FE uses it to decide which entries get a thumb).
 	_ "image/gif"
 	_ "image/png"
 )

@@ -20,6 +20,15 @@ export function baseName(p: string): string {
   return i < 0 ? p : p.slice(i + 1);
 }
 
+// extName returns the lowercase extension of a file NAME (no leading dot),
+// or "" when there's none. Pass a basename, not a path: a dotfile with no
+// extension ("/.config") and a dot only in a parent dir must both yield "".
+// i must be > 0 so a leading-dot dotfile ("/.bashrc") is extensionless.
+export function extName(name: string): string {
+  const i = name.lastIndexOf('.');
+  return i > 0 ? name.slice(i + 1).toLowerCase() : '';
+}
+
 // ancestorChain returns the path's ancestors from the root down to p
 // inclusive: "/a/b/c" → ["/", "/a", "/a/b", "/a/b/c"]. "/" (or any
 // path with no segments) → ["/"]. fm's expandPath walks this chain

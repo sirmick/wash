@@ -33,6 +33,7 @@ import (
 
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/fswatch"
+	"github.com/sirmick/wash/internal/fswatchproto"
 	"github.com/sirmick/wash/internal/remotewatch"
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/wire"
@@ -40,21 +41,18 @@ import (
 
 const version = "0.1.0"
 
-// AppID is the reserved-DNS id of the shared watch service.
-const AppID = "com.wash.fswatch"
-
-// Wire vocabulary. Exported so consumer code uses the same strings.
+// The wire vocabulary is owned by internal/fswatchproto (a dependency-free
+// leaf the consumers — internal/sdk's WatchClient, apps/remote — import too,
+// so the strings have one source of truth). Aliased here for local brevity.
 const (
-	KindWatch      = "watch"
-	KindUnwatch    = "unwatch"
-	KindUnwatchAll = "unwatch_all"
-	KindEvent      = "fs_event"
+	AppID = fswatchproto.AppID
 
-	// register_mount / unregister_mount are sent by the mount supervisor
-	// (com.wash.remote) when it FUSE-mounts / unmounts a remote tree, so the
-	// service routes watches under that mountpoint to the remote host's inotify.
-	KindRegisterMount   = "register_mount"
-	KindUnregisterMount = "unregister_mount"
+	KindWatch           = fswatchproto.KindWatch
+	KindUnwatch         = fswatchproto.KindUnwatch
+	KindUnwatchAll      = fswatchproto.KindUnwatchAll
+	KindEvent           = fswatchproto.KindEvent
+	KindRegisterMount   = fswatchproto.KindRegisterMount
+	KindUnregisterMount = fswatchproto.KindUnregisterMount
 )
 
 type watchReq struct {

@@ -10,15 +10,11 @@ import (
 	"github.com/pkg/sftp"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
+	"github.com/sirmick/wash/internal/fswatchproto"
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/washmount"
 	"github.com/sirmick/wash/internal/wire"
 )
-
-// fswatchAppID is the shared watch service this supervisor tells about each
-// mount, so changes on the remote host stream to local watchers. Duplicated
-// rather than imported — the contract is the app-id.
-const fswatchAppID = "com.wash.fswatch"
 
 // Mount status values, surfaced to the FE under each host.
 const (
@@ -227,8 +223,8 @@ func (m *mountManager) mount(host, remoteRoot string, persist bool) {
 	// Ask the shared watch service to stream this mount's changes (it opens its
 	// own ssh wash-fswatchd to the host).
 	if m.conn != nil {
-		_ = m.conn.SendAppMsgTo(wire.Recipient{AppID: fswatchAppID}, map[string]any{
-			"kind":        "register_mount",
+		_ = m.conn.SendAppMsgTo(wire.Recipient{AppID: fswatchproto.AppID}, map[string]any{
+			"kind":        fswatchproto.KindRegisterMount,
 			"host":        host,
 			"remote_root": remoteRoot,
 			"mount_point": mp,
@@ -247,8 +243,8 @@ func (m *mountManager) unmount(mp string) {
 		return
 	}
 	if m.conn != nil {
-		_ = m.conn.SendAppMsgTo(wire.Recipient{AppID: fswatchAppID}, map[string]any{
-			"kind":        "unregister_mount",
+		_ = m.conn.SendAppMsgTo(wire.Recipient{AppID: fswatchproto.AppID}, map[string]any{
+			"kind":        fswatchproto.KindUnregisterMount,
 			"mount_point": mp,
 		})
 	}

@@ -37,8 +37,6 @@ type msg struct {
 	Change string `json:"change,omitempty"` // event only: created|modified|deleted
 }
 
-func changeString(op fswatch.Op) string { return op.String() }
-
 func opFromChange(s string) (fswatch.Op, bool) {
 	switch s {
 	case "created":
@@ -133,7 +131,7 @@ func (s *server) startWatch(remotePath string) {
 
 	go func() {
 		for ev := range sub.Events() {
-			s.send(msg{Op: "event", Path: ev.Path, Change: changeString(ev.Op)})
+			s.send(msg{Op: "event", Path: ev.Path, Change: ev.Op.String()})
 		}
 	}()
 }
