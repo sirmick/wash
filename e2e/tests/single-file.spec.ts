@@ -44,7 +44,11 @@ const APPS: AppBundle[] = [
   { name: 'about',   dir: 'apps/about/fe/dist',   maxBytes: 30_000 },
   { name: 'test',    dir: 'apps/test/fe/dist',    maxBytes: 30_000 },
   { name: 'term',    dir: 'apps/term/fe/dist',    maxBytes: 30_000 },
-  { name: 'fm',      dir: 'apps/fm/fe/dist',      maxBytes: 100_000 },
+  // fm grew with the image pipeline: folder-grid preview + VirtualGrid +
+  // file-client, the ~360-extension lucide icon map (~20 new glyphs), the
+  // uid-aware display-hint colours/badges, and the cross-origin DnD guard.
+  // ~14 KB raw (only ~28 KB gzipped on the wire); headroom still brakes bloat.
+  { name: 'fm',      dir: 'apps/fm/fe/dist',      maxBytes: 120_000 },
   // vscode is the install/launch state machine + IngressFrame; the
   // workbench is code-server (external), so this stays small. (The old
   // apps/vscode/fe bundle was removed — its FE folded into the workbench
