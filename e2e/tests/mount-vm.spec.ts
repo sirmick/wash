@@ -168,3 +168,39 @@ test('torture: local fm + remote fm on the same folder both track changes', asyn
   await expect(remoteFm.locator('[data-testid="fm-entry-from_b.txt"]')).toBeVisible({ timeout: 40_000 });
   await expect(localFm.locator('[data-testid="fm-entry-from_b.txt"]')).toBeVisible({ timeout: 40_000 });
 });
+
+test('chaos: killing the data ssh self-heals — a post-kill change still reaches the fm', async ({ remoteVm, page }) => {
+  test.setTimeout(300_000);
+  const connect = await connectToB(page, remoteVm.url);
+
+  await mountFolder(connect, REMOTE_DIR);
+
+  // A B terminal backgrounds a touch loop, so files keep appearing on B across
+  // the kill — a file created AFTER the kill proves the data path reconnected.
+  await launchOnB(connect, 'com.wash.term');
+  const bterm = page.locator('.xterm').last();
+  await expect(bterm).toBeVisible({ timeout: 60_000 });
+  await expect(bterm).toContainText(/[$#>]/, { timeout: 30_000 });
+  await page.keyboard.type('for i in $(seq 1 40); do touch /home/wash/chaos_$i.txt; sleep 1; done &');
+  await page.keyboard.press('Enter');
+
+  // Local fm on the mount; an early file confirms the mount works.
+  await openLocalApp(page, /^Files$/);
+  const localFm = localFmWindow(page);
+  await expect(localFm).toBeVisible({ timeout: 30_000 });
+  await navFm(localFm, MOUNT_POINT);
+  await expect(localFm.locator('[data-testid="fm-entry-chaos_3.txt"]')).toBeVisible({ timeout: 40_000 });
+
+  // Kill the data ssh on A via a LOCAL terminal. The watch channel (a separate
+  // ssh wash-fswatchd) survives, so it keeps firing fs_events that drive the fm
+  // re-list — which must re-dial the dropped SFTP connection.
+  await openLocalApp(page, /^Terminal$/);
+  const aterm = page.locator('.xterm').last();
+  await expect(aterm).toBeVisible({ timeout: 30_000 });
+  await expect(aterm).toContainText(/[$#>]/, { timeout: 30_000 });
+  await page.keyboard.type('pkill -f sftp');
+  await page.keyboard.press('Enter');
+
+  // A file created well after the kill still surfaces → the mount self-healed.
+  await expect(localFm.locator('[data-testid="fm-entry-chaos_30.txt"]')).toBeVisible({ timeout: 90_000 });
+});
