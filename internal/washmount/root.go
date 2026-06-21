@@ -19,12 +19,9 @@ package washmount
 import (
 	"context"
 	"errors"
-	"io"
 	"io/fs"
 	"log"
-	"net"
 	"os"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -138,20 +135,25 @@ func (r *sftpRoot) run(ctx context.Context, what string, fn func(cl *sftp.Client
 
 // isConnError reports whether err means the SFTP transport itself died (vs a
 // per-file error like ENOENT), so the mount should drop the client and re-dial.
+//
+// Rather than match transport error strings (which differ between an ssh.Dial
+// client and a NewClientPipe-over-subprocess client — the supervisor uses the
+// latter), classify by what is NOT a transport death: a *sftp.StatusError is a
+// real per-file server response, and the os.Is sentinels are per-file too.
+// Anything else over a network/pipe transport is a dead channel — treat it as
+// one so the next op reconnects. Being over-eager only costs a cheap re-dial.
 func isConnError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
-		return true
+	var se *sftp.StatusError
+	if errors.As(err, &se) {
+		return false // the server answered → a per-file error, not a dead channel
 	}
-	s := err.Error()
-	for _, sig := range []string{"EOF", "connection lost", "broken pipe", "use of closed", "connection reset"} {
-		if strings.Contains(s, sig) {
-			return true
-		}
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrExist) || errors.Is(err, os.ErrPermission) {
+		return false
 	}
-	return false
+	return true
 }
 
 // toErrno maps a backend error to the errno the kernel expects. Anything we

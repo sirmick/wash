@@ -184,3 +184,50 @@ func emitUntilReceived(t *testing.T, bFeed *fswatch.Feed, sub fswatch.Subscripti
 		}
 	}
 }
+
+// TestClientNoSpuriousReconnect guards the inotify-leak failure mode: a stable
+// connection must NOT re-dial (each re-dial spawns a fresh wash-fswatchd on B,
+// leaking inotify instances). Watch a path, sit idle, assert dials stays at 1.
+func TestClientNoSpuriousReconnect(t *testing.T) {
+	remoteFeed := fswatch.NewFeed()
+	defer remoteFeed.Close()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go Serve(conn, remoteFeed)
+		}
+	}()
+	var mu sync.Mutex
+	dials := 0
+	dial := func() (io.ReadWriteCloser, error) {
+		c, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			return nil, err
+		}
+		mu.Lock()
+		dials++
+		mu.Unlock()
+		return c, nil
+	}
+	client := NewReconnectingClient(dial, PathMap{MountPoint: "/mnt", RemoteRoot: "/srv"})
+	defer client.Close()
+	sub, _ := client.Watch("/mnt/dir")
+	defer sub.Close()
+	// Confirm it's connected + delivering, then sit idle.
+	waitForPath(t, remoteFeed, sub, fswatch.Event{Op: fswatch.OpCreated, Path: "/srv/dir/x"}, "/mnt/dir/x")
+	time.Sleep(2 * time.Second)
+	mu.Lock()
+	d := dials
+	mu.Unlock()
+	if d != 1 {
+		t.Fatalf("stable connection re-dialed %d times (want 1) — spurious reconnect leaks wash-fswatchd", d)
+	}
+}
