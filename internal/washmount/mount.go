@@ -30,15 +30,32 @@ type Options struct {
 	AllowOther bool
 	// UID/GID is the ownership presented locally. Zero defaults to the caller.
 	UID, GID uint32
+	// MaxInflight bounds concurrent SFTP ops so a burst can't swamp the single
+	// channel (head-of-line). Zero selects a sane default.
+	MaxInflight int
 	// Debug dumps the raw FUSE protocol traffic.
 	Debug bool
 }
 
-// Mount exposes client's filesystem at opts.MountPoint as a kernel FUSE mount.
-// It returns the running server; call server.Unmount() to detach, or
-// server.Wait() to block until it is unmounted. The caller owns client and must
-// keep it open for the lifetime of the mount.
+// Mount exposes client's filesystem at opts.MountPoint as a kernel FUSE mount,
+// against a fixed client (no reconnect). The caller owns client and keeps it
+// open for the mount's lifetime. See MountWithDialer for a self-healing mount.
 func Mount(client *sftp.Client, opts Options) (*fuse.Server, error) {
+	// A fixed-client mount is a dialer that always returns the same client; the
+	// client is borrowed (not closed on a drop), and a real drop simply EIOs
+	// (re-dial returns the same dead client) — recovery needs MountWithDialer.
+	return mount(func() (*sftp.Client, error) { return client, nil }, false, opts)
+}
+
+// MountWithDialer is Mount with reconnect: dial (re)establishes the SFTP client,
+// and the mount calls it again after a connection drop, so a transient ssh
+// failure self-heals on the next op without unmounting. dial-created clients are
+// owned (closed when dropped).
+func MountWithDialer(dial func() (*sftp.Client, error), opts Options) (*fuse.Server, error) {
+	return mount(dial, true, opts)
+}
+
+func mount(dial func() (*sftp.Client, error), ownsClient bool, opts Options) (*fuse.Server, error) {
 	if opts.MountPoint == "" {
 		return nil, fmt.Errorf("washmount: empty mount point")
 	}
@@ -47,11 +64,13 @@ func Mount(client *sftp.Client, opts Options) (*fuse.Server, error) {
 		remoteRoot = "/"
 	}
 	root := &sftpRoot{
-		client:    client,
-		base:      remoteRoot,
-		opTimeout: orDur(opts.OpTimeout, 30*time.Second),
-		uid:       orU32(opts.UID, uint32(os.Getuid())),
-		gid:       orU32(opts.GID, uint32(os.Getgid())),
+		dial:       dial,
+		ownsClient: ownsClient,
+		base:       remoteRoot,
+		opTimeout:  orDur(opts.OpTimeout, 30*time.Second),
+		uid:        orU32(opts.UID, uint32(os.Getuid())),
+		gid:        orU32(opts.GID, uint32(os.Getgid())),
+		sem:        make(chan struct{}, orInt(opts.MaxInflight, 16)),
 	}
 	rootNode := &sftpNode{root: root}
 
@@ -78,6 +97,13 @@ func Mount(client *sftp.Client, opts Options) (*fuse.Server, error) {
 
 func orDur(v, def time.Duration) time.Duration {
 	if v == 0 {
+		return def
+	}
+	return v
+}
+
+func orInt(v, def int) int {
+	if v <= 0 {
 		return def
 	}
 	return v

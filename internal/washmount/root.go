@@ -19,9 +19,12 @@ package washmount
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"log"
+	"net"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -32,7 +35,19 @@ import (
 
 // sftpRoot is shared state for every node in one mounted filesystem.
 type sftpRoot struct {
-	client *sftp.Client
+	// dial (re)establishes the SFTP client. The mount calls it lazily and again
+	// after a connection drop, so a transient ssh failure self-heals on the next
+	// op — the FUSE mount stays mounted; ops just EIO until the next dial wins.
+	// For a fixed-client mount it returns the same client every time.
+	dial       func() (*sftp.Client, error)
+	ownsClient bool // close a dead client we dialed (not a borrowed fixed one)
+
+	clientMu sync.Mutex
+	cur      *sftp.Client // current live client; nil before first dial / after a drop
+
+	// sem bounds in-flight SFTP ops so a burst can't swamp the single channel
+	// (head-of-line blocking). Buffered to the configured max.
+	sem chan struct{}
 
 	// base is the remote path exposed as the mount root. A node's full remote
 	// path is base joined with the node's position in the inode tree, so it
@@ -48,25 +63,95 @@ type sftpRoot struct {
 	uid, gid uint32
 }
 
-// run executes a blocking SFTP call under a deadline. The call itself cannot be
-// cancelled (pkg/sftp predates context), so on timeout we abandon the goroutine
-// — it unblocks when the connection eventually errors — and return EIO to the
-// kernel immediately. This is the single most important rule of a network FUSE
-// fs: never make the kernel wait on something that can wait forever.
-func (r *sftpRoot) run(ctx context.Context, what string, fn func() error) syscall.Errno {
+// cli returns a live SFTP client, dialing one if none is current (the first op,
+// or the first op after a drop). A failed dial surfaces as EIO; the op after
+// retries the dial.
+func (r *sftpRoot) cli() (*sftp.Client, error) {
+	r.clientMu.Lock()
+	defer r.clientMu.Unlock()
+	if r.cur != nil {
+		return r.cur, nil
+	}
+	c, err := r.dial()
+	if err != nil {
+		return nil, err
+	}
+	r.cur = c
+	return c, nil
+}
+
+// markDead drops c if it is the current client, so the next cli() re-dials. The
+// kernel/app retrying the EIO'd op is what drives the reconnect — no monitor
+// goroutine, no in-line retry. (Open file handles from the dead client stay
+// dead; apps re-open on EIO.)
+func (r *sftpRoot) markDead(c *sftp.Client) {
+	r.clientMu.Lock()
+	defer r.clientMu.Unlock()
+	if r.cur == c {
+		r.cur = nil
+		if r.ownsClient {
+			c.Close()
+		}
+	}
+}
+
+// run executes a blocking SFTP call under a deadline, bounded by the concurrency
+// semaphore, against a live (re-dialed if needed) client. The call itself cannot
+// be cancelled (pkg/sftp predates context), so on timeout we abandon the
+// goroutine — it unblocks when the connection eventually errors — and return EIO
+// to the kernel immediately. Never make the kernel wait on something that can
+// wait forever. A transport-level failure drops the client so the next op
+// reconnects.
+func (r *sftpRoot) run(ctx context.Context, what string, fn func(cl *sftp.Client) error) syscall.Errno {
 	cctx, cancel := context.WithTimeout(ctx, r.opTimeout)
 	defer cancel()
 
+	// Bound in-flight ops; never block past the deadline.
+	select {
+	case r.sem <- struct{}{}:
+		defer func() { <-r.sem }()
+	case <-cctx.Done():
+		log.Printf("washmount: op queue full op=%s: returning EIO", what)
+		return syscall.EIO
+	}
+
+	cl, err := r.cli()
+	if err != nil {
+		log.Printf("washmount: connect for op=%s: %v", what, err)
+		return toErrno(err)
+	}
+
 	done := make(chan error, 1) // buffered so the abandoned goroutine never leaks on send
-	go func() { done <- fn() }()
+	go func() { done <- fn(cl) }()
 
 	select {
 	case err := <-done:
+		if isConnError(err) {
+			r.markDead(cl) // next op re-dials
+		}
 		return toErrno(err)
 	case <-cctx.Done():
 		log.Printf("washmount: op timed out op=%s timeout=%s: returning EIO", what, r.opTimeout)
 		return syscall.EIO
 	}
+}
+
+// isConnError reports whether err means the SFTP transport itself died (vs a
+// per-file error like ENOENT), so the mount should drop the client and re-dial.
+func isConnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	s := err.Error()
+	for _, sig := range []string{"EOF", "connection lost", "broken pipe", "use of closed", "connection reset"} {
+		if strings.Contains(s, sig) {
+			return true
+		}
+	}
+	return false
 }
 
 // toErrno maps a backend error to the errno the kernel expects. Anything we

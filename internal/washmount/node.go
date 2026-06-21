@@ -70,8 +70,8 @@ func (n *sftpNode) newChild(ctx context.Context, p string, fi os.FileInfo) *fs.I
 
 func (n *sftpNode) Getattr(ctx context.Context, _ fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	var fi os.FileInfo
-	if errno := n.root.run(ctx, "lstat", func() (err error) {
-		fi, err = n.root.client.Lstat(n.rpath())
+	if errno := n.root.run(ctx, "lstat", func(cl *sftp.Client) (err error) {
+		fi, err = cl.Lstat(n.rpath())
 		return
 	}); errno != 0 {
 		return errno
@@ -83,8 +83,8 @@ func (n *sftpNode) Getattr(ctx context.Context, _ fs.FileHandle, out *fuse.AttrO
 func (n *sftpNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	p := path.Join(n.rpath(), name)
 	var fi os.FileInfo
-	if errno := n.root.run(ctx, "lstat", func() (err error) {
-		fi, err = n.root.client.Lstat(p)
+	if errno := n.root.run(ctx, "lstat", func(cl *sftp.Client) (err error) {
+		fi, err = cl.Lstat(p)
 		return
 	}); errno != 0 {
 		return nil, errno
@@ -95,8 +95,8 @@ func (n *sftpNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 
 func (n *sftpNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	var infos []os.FileInfo
-	if errno := n.root.run(ctx, "readdir", func() (err error) {
-		infos, err = n.root.client.ReadDir(n.rpath())
+	if errno := n.root.run(ctx, "readdir", func(cl *sftp.Client) (err error) {
+		infos, err = cl.ReadDir(n.rpath())
 		return
 	}); errno != 0 {
 		return nil, errno
@@ -114,8 +114,8 @@ func (n *sftpNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 
 func (n *sftpNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	var f *sftp.File
-	if errno := n.root.run(ctx, "open", func() (err error) {
-		f, err = n.root.client.OpenFile(n.rpath(), int(flags))
+	if errno := n.root.run(ctx, "open", func(cl *sftp.Client) (err error) {
+		f, err = cl.OpenFile(n.rpath(), int(flags))
 		return
 	}); errno != 0 {
 		return nil, 0, errno
@@ -126,7 +126,7 @@ func (n *sftpNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint3
 func (n *sftpNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	h := f.(*fileHandle)
 	var num int
-	if errno := n.root.run(ctx, "read", func() error {
+	if errno := n.root.run(ctx, "read", func(cl *sftp.Client) error {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		nn, err := h.f.ReadAt(dest, off)
@@ -144,7 +144,7 @@ func (n *sftpNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off i
 func (n *sftpNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
 	h := f.(*fileHandle)
 	var num int
-	if errno := n.root.run(ctx, "write", func() (err error) {
+	if errno := n.root.run(ctx, "write", func(cl *sftp.Client) (err error) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		num, err = h.f.WriteAt(data, off)
@@ -168,7 +168,7 @@ func (n *sftpNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
 
 func (n *sftpNode) Release(ctx context.Context, f fs.FileHandle) syscall.Errno {
 	h := f.(*fileHandle)
-	return n.root.run(ctx, "close", func() error {
+	return n.root.run(ctx, "close", func(cl *sftp.Client) error {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		return h.f.Close()
@@ -178,22 +178,22 @@ func (n *sftpNode) Release(ctx context.Context, f fs.FileHandle) syscall.Errno {
 func (n *sftpNode) Create(ctx context.Context, name string, flags, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
 	p := path.Join(n.rpath(), name)
 	var f *sftp.File
-	if errno := n.root.run(ctx, "create", func() (err error) {
-		f, err = n.root.client.OpenFile(p, int(flags)|os.O_CREATE)
+	if errno := n.root.run(ctx, "create", func(cl *sftp.Client) (err error) {
+		f, err = cl.OpenFile(p, int(flags)|os.O_CREATE)
 		return
 	}); errno != 0 {
 		return nil, nil, 0, errno
 	}
 	// SFTP OpenFile carries no mode, so set permissions after creation.
-	if errno := n.root.run(ctx, "chmod", func() error {
-		return n.root.client.Chmod(p, os.FileMode(mode)&os.ModePerm)
+	if errno := n.root.run(ctx, "chmod", func(cl *sftp.Client) error {
+		return cl.Chmod(p, os.FileMode(mode)&os.ModePerm)
 	}); errno != 0 {
 		f.Close()
 		return nil, nil, 0, errno
 	}
 	var fi os.FileInfo
-	if errno := n.root.run(ctx, "lstat", func() (err error) {
-		fi, err = n.root.client.Lstat(p)
+	if errno := n.root.run(ctx, "lstat", func(cl *sftp.Client) (err error) {
+		fi, err = cl.Lstat(p)
 		return
 	}); errno != 0 {
 		f.Close()
@@ -205,16 +205,16 @@ func (n *sftpNode) Create(ctx context.Context, name string, flags, mode uint32, 
 
 func (n *sftpNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	p := path.Join(n.rpath(), name)
-	if errno := n.root.run(ctx, "mkdir", func() error {
-		return n.root.client.Mkdir(p)
+	if errno := n.root.run(ctx, "mkdir", func(cl *sftp.Client) error {
+		return cl.Mkdir(p)
 	}); errno != 0 {
 		return nil, errno
 	}
 	// Best-effort mode; mkdir in SFTP does not take one.
-	n.root.run(ctx, "chmod", func() error { return n.root.client.Chmod(p, os.FileMode(mode)&os.ModePerm) })
+	n.root.run(ctx, "chmod", func(cl *sftp.Client) error { return cl.Chmod(p, os.FileMode(mode)&os.ModePerm) })
 	var fi os.FileInfo
-	if errno := n.root.run(ctx, "lstat", func() (err error) {
-		fi, err = n.root.client.Lstat(p)
+	if errno := n.root.run(ctx, "lstat", func(cl *sftp.Client) (err error) {
+		fi, err = cl.Lstat(p)
 		return
 	}); errno != 0 {
 		return nil, errno
@@ -224,14 +224,14 @@ func (n *sftpNode) Mkdir(ctx context.Context, name string, mode uint32, out *fus
 }
 
 func (n *sftpNode) Rmdir(ctx context.Context, name string) syscall.Errno {
-	return n.root.run(ctx, "rmdir", func() error {
-		return n.root.client.RemoveDirectory(path.Join(n.rpath(), name))
+	return n.root.run(ctx, "rmdir", func(cl *sftp.Client) error {
+		return cl.RemoveDirectory(path.Join(n.rpath(), name))
 	})
 }
 
 func (n *sftpNode) Unlink(ctx context.Context, name string) syscall.Errno {
-	return n.root.run(ctx, "unlink", func() error {
-		return n.root.client.Remove(path.Join(n.rpath(), name))
+	return n.root.run(ctx, "unlink", func(cl *sftp.Client) error {
+		return cl.Remove(path.Join(n.rpath(), name))
 	})
 }
 
@@ -242,24 +242,24 @@ func (n *sftpNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 	}
 	from := path.Join(n.rpath(), name)
 	to := path.Join(np.rpath(), newName)
-	return n.root.run(ctx, "rename", func() error {
+	return n.root.run(ctx, "rename", func(cl *sftp.Client) error {
 		// PosixRename atomically replaces the target if the server supports the
 		// extension; it is the right default for a rename-over-existing.
-		return n.root.client.PosixRename(from, to)
+		return cl.PosixRename(from, to)
 	})
 }
 
 func (n *sftpNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	if sz, ok := in.GetSize(); ok {
-		if errno := n.root.run(ctx, "truncate", func() error {
-			return n.root.client.Truncate(n.rpath(), int64(sz))
+		if errno := n.root.run(ctx, "truncate", func(cl *sftp.Client) error {
+			return cl.Truncate(n.rpath(), int64(sz))
 		}); errno != 0 {
 			return errno
 		}
 	}
 	if mode, ok := in.GetMode(); ok {
-		if errno := n.root.run(ctx, "chmod", func() error {
-			return n.root.client.Chmod(n.rpath(), os.FileMode(mode)&os.ModePerm)
+		if errno := n.root.run(ctx, "chmod", func(cl *sftp.Client) error {
+			return cl.Chmod(n.rpath(), os.FileMode(mode)&os.ModePerm)
 		}); errno != 0 {
 			return errno
 		}
@@ -273,16 +273,16 @@ func (n *sftpNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAtt
 		if !mok {
 			mtime = time.Now()
 		}
-		if errno := n.root.run(ctx, "chtimes", func() error {
-			return n.root.client.Chtimes(n.rpath(), atime, mtime)
+		if errno := n.root.run(ctx, "chtimes", func(cl *sftp.Client) error {
+			return cl.Chtimes(n.rpath(), atime, mtime)
 		}); errno != 0 {
 			return errno
 		}
 	}
 	// Report the post-change state.
 	var fi os.FileInfo
-	if errno := n.root.run(ctx, "lstat", func() (err error) {
-		fi, err = n.root.client.Lstat(n.rpath())
+	if errno := n.root.run(ctx, "lstat", func(cl *sftp.Client) (err error) {
+		fi, err = cl.Lstat(n.rpath())
 		return
 	}); errno != 0 {
 		return errno
@@ -293,8 +293,8 @@ func (n *sftpNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAtt
 
 func (n *sftpNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
 	var target string
-	if errno := n.root.run(ctx, "readlink", func() (err error) {
-		target, err = n.root.client.ReadLink(n.rpath())
+	if errno := n.root.run(ctx, "readlink", func(cl *sftp.Client) (err error) {
+		target, err = cl.ReadLink(n.rpath())
 		return
 	}); errno != 0 {
 		return nil, errno
@@ -304,14 +304,14 @@ func (n *sftpNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
 
 func (n *sftpNode) Symlink(ctx context.Context, target, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	p := path.Join(n.rpath(), name)
-	if errno := n.root.run(ctx, "symlink", func() error {
-		return n.root.client.Symlink(target, p)
+	if errno := n.root.run(ctx, "symlink", func(cl *sftp.Client) error {
+		return cl.Symlink(target, p)
 	}); errno != 0 {
 		return nil, errno
 	}
 	var fi os.FileInfo
-	if errno := n.root.run(ctx, "lstat", func() (err error) {
-		fi, err = n.root.client.Lstat(p)
+	if errno := n.root.run(ctx, "lstat", func(cl *sftp.Client) (err error) {
+		fi, err = cl.Lstat(p)
 		return
 	}); errno != 0 {
 		return nil, errno
