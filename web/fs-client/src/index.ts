@@ -27,7 +27,10 @@ export type { Watch, WatchOptions } from './watch.ts';
 
 export {
   DRAG_MIME,
+  DRAG_ORIGIN_MIME,
   readDragPaths,
+  readDragOrigin,
+  crossOrigin,
   hasWashDrag,
   dropEffectFor,
   dragPayload,

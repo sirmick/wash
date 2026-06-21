@@ -26,7 +26,7 @@ import {
   baseName, formatDate, humanSize, joinPath, octalPerm, parentPath, ancestorChain,
   createBus,
   createWatch,
-  DRAG_MIME, dragPayload, dropEffectFor, hasWashDrag, readDragPaths,
+  DRAG_MIME, DRAG_ORIGIN_MIME, dragPayload, dropEffectFor, hasWashDrag, readDragPaths, readDragOrigin, crossOrigin,
   flattenTree,
   sortedFiltered,
   withReplacePrompt as runReplaceFlow,
@@ -1128,10 +1128,31 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     ev.dataTransfer.effectAllowed = 'copyMove';
     const paths = dragPayload(p, selection());
     ev.dataTransfer.setData(DRAG_MIME, JSON.stringify(paths));
+    // Tag the drag with this window's shell origin so a drop in another
+    // window can tell a same-host move (allowed) from a cross-host one
+    // (rejected — the paths mean nothing to the other router's fs).
+    ev.dataTransfer.setData(DRAG_ORIGIN_MIME, props.origin);
     // text/plain is a friendly fallback for drops onto non-wash
     // targets (terminals, editors). Newline-joined matches what
     // most apps expect for multi-path copy.
     ev.dataTransfer.setData('text/plain', paths.join('\n'));
+  };
+
+  // rejectCrossOriginDrop guards the internal-move drop paths: a drag from a
+  // different shell origin (a remote fm window over wash-remote) carries
+  // paths in THAT host's filesystem, which this window's router can't move
+  // (it'd rename the wrong file or fail). Reject with a status flash until a
+  // real cross-host transfer exists (docs/REMOTE.md — deferred non-goal).
+  // Returns true (and consumes the event) when it rejected.
+  const rejectCrossOriginDrop = (ev: DragEvent): boolean => {
+    if (!crossOrigin(readDragOrigin(ev.dataTransfer), props.origin)) return false;
+    ev.preventDefault();
+    ev.stopPropagation();
+    setDropTargetPath('');
+    setUploadDropActive(false);
+    setGridUploadActive(false);
+    setStatusOverride("Can't move between machines yet");
+    return true;
   };
 
   const onDragEnd = () => {
@@ -1171,6 +1192,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       collectFromDrop(ev.dataTransfer!, rowPath);
       return;
     }
+    if (rejectCrossOriginDrop(ev)) return;
     const paths = readDragPaths(ev.dataTransfer);
     if (paths.length === 0) return;
     ev.preventDefault();
@@ -1230,6 +1252,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       collectFromDrop(ev.dataTransfer!, dir);
       return;
     }
+    if (rejectCrossOriginDrop(ev)) return;
     const paths = readDragPaths(ev.dataTransfer);
     if (paths.length === 0) return;
     ev.preventDefault();
@@ -1279,6 +1302,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       collectFromDrop(ev.dataTransfer!, dirOfSelection());
       return;
     }
+    if (rejectCrossOriginDrop(ev)) return;
     const paths = readDragPaths(ev.dataTransfer);
     if (paths.length === 0) return;
     ev.preventDefault();

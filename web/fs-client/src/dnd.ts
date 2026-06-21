@@ -60,3 +60,25 @@ export function dropEffectFor(altKey: boolean): 'copy' | 'move' {
 export function dragPayload(rowPath: string, selection: ReadonlySet<string>): string[] {
   return selection.has(rowPath) ? Array.from(selection) : [rowPath];
 }
+
+// DRAG_ORIGIN_MIME carries the source window's shell *origin* (see
+// web/shell/src/clients.ts: 'local', or a remote host token under
+// wash-remote). A drag's paths are only meaningful within the origin that
+// produced them — moving them via a different origin's router would hit the
+// wrong filesystem. The drop handler reads this to reject cross-origin
+// moves (docs/REMOTE.md lists cross-origin DnD as a deferred non-goal).
+export const DRAG_ORIGIN_MIME = 'application/x-wash-origin';
+
+// readDragOrigin returns the drag's source origin, or '' when the drag
+// predates origin-tagging (wash-edit, an older fm) — readable at drop time.
+export function readDragOrigin(dt: DragData | null | undefined): string {
+  if (!dt) return '';
+  return dt.getData(DRAG_ORIGIN_MIME) || '';
+}
+
+// crossOrigin reports whether a drag came from a different origin than the
+// dropping window. An unknown ('' — legacy) source origin is treated as
+// same-origin, so single-host behaviour is unchanged.
+export function crossOrigin(dragOrigin: string, myOrigin: string): boolean {
+  return dragOrigin !== '' && dragOrigin !== myOrigin;
+}

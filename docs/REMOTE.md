@@ -72,7 +72,13 @@ opaque bytes, the same dumb-pipe role the ssh client already plays.
   and "open with" / file associations do not cross hosts. A remote app is a
   self-contained island talking only to its own FE and its own B-side services.
 - **Cross-origin drag-and-drop** between an A window and a B window (it is a real
-  byte transfer, scp-like — deferred).
+  byte transfer, scp-like — deferred). Until then fm **rejects** such a drop with
+  a status flash rather than attempting it: a drag carries its source window's
+  origin (`application/x-wash-origin`, from the app's `props.origin`), and the
+  drop handler bails when it differs from the dropping window's origin — without
+  this the destination router would run `rename()` on the source paths in *its*
+  filesystem (wrong file on a same-path collision, else not-found). Same-origin
+  drops (incl. between two windows on one host) are unaffected.
 - **Recursive / federating routers.** Never. If cross-host *control-plane*
   integration is ever wanted, it is a separate gateway process, not the router
   (see §13).

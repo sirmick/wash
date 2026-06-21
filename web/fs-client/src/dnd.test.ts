@@ -6,9 +6,12 @@ import { strict as assert } from 'node:assert';
 
 import {
   DRAG_MIME,
+  DRAG_ORIGIN_MIME,
+  crossOrigin,
   dragPayload,
   dropEffectFor,
   hasWashDrag,
+  readDragOrigin,
   readDragPaths,
   type DragData,
 } from './dnd.ts';
@@ -85,6 +88,26 @@ test('dragPayload carries just the row when it is not part of the selection', ()
 
 test('dragPayload carries just the row when the selection is empty', () => {
   assert.deepEqual(dragPayload('/z', new Set()), ['/z']);
+});
+
+// ---- readDragOrigin / crossOrigin (wash-remote cross-host guard) ----
+
+test('readDragOrigin returns the tagged origin, else "" (legacy drag)', () => {
+  assert.equal(readDragOrigin(fakeTransfer({ [DRAG_ORIGIN_MIME]: 'local' })), 'local');
+  assert.equal(readDragOrigin(fakeTransfer({ [DRAG_ORIGIN_MIME]: 'buzz.home.arpa' })), 'buzz.home.arpa');
+  assert.equal(readDragOrigin(fakeTransfer({ [DRAG_MIME]: '[]' })), ''); // no origin tag
+  assert.equal(readDragOrigin(null), '');
+});
+
+test('crossOrigin is true only when both origins are known and differ', () => {
+  assert.equal(crossOrigin('local', 'buzz'), true); // local → remote host
+  assert.equal(crossOrigin('buzz', 'local'), true); // remote → local
+  assert.equal(crossOrigin('hostA', 'hostB'), true); // two different remotes
+  assert.equal(crossOrigin('local', 'local'), false); // same host
+  assert.equal(crossOrigin('buzz', 'buzz'), false); // same remote host
+  // Unknown source origin (legacy drag, wash-edit) is treated same-origin.
+  assert.equal(crossOrigin('', 'local'), false);
+  assert.equal(crossOrigin('', 'buzz'), false);
 });
 
 // ---- round-trip: dragPayload → JSON → readDragPaths ----
