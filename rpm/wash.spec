@@ -107,11 +107,28 @@ install -m 0755 out/wash-login %{buildroot}%{_bindir}/wash-login
 install -D -m0644 packaging/wash-login.service %{buildroot}%{_unitdir}/wash-login.service
 install -D -m0644 packaging/wash-login.default %{buildroot}%{_sysconfdir}/default/wash-login
 install -d %{buildroot}%{_sysconfdir}/wash
+# Man pages: source wash.1 + a .so redirect stub per applet (rpmlint wants a
+# man page per binary). Bash completion for the dispatcher. Appended to wash.files.
+install -D -m0644 packaging/wash.1 %{buildroot}%{_mandir}/man1/wash.1
+echo "%{_mandir}/man1/wash.1*" >> wash.files
+while read -r bin; do
+    [ -n "$bin" ] || continue
+    case "$bin" in wash-login|wash-display) continue ;; esac
+    echo ".so man1/wash.1" > %{buildroot}%{_mandir}/man1/$bin.1
+    echo "%{_mandir}/man1/$bin.1*" >> wash.files
+done < packaging/wash.binaries
+install -D -m0644 packaging/wash.bash %{buildroot}%{_datadir}/bash-completion/completions/wash
+echo "%{_datadir}/bash-completion/completions/wash" >> wash.files
+# wash-login subpackage man stub (.so → wash.1 from the wash package, Requires wash).
+install -d %{buildroot}%{_mandir}/man1
+echo ".so man1/wash.1" > %{buildroot}%{_mandir}/man1/wash-login.1
 
 %files -f wash.files
+%license LICENSE
 
 %files login
 %{_bindir}/wash-login
+%{_mandir}/man1/wash-login.1*
 %{_unitdir}/wash-login.service
 %config(noreplace) %{_sysconfdir}/default/wash-login
 %attr(0750, wash-system, wash) %dir %{_sysconfdir}/wash

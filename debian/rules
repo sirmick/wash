@@ -50,6 +50,21 @@ override_dh_install:
 	install -D -m0755 out/wash-login debian/wash-login/usr/bin/wash-login
 	install -D -m0644 packaging/wash-login.service debian/wash-login/usr/lib/systemd/system/wash-login.service
 	install -D -m0644 packaging/wash-login.default debian/wash-login/etc/default/wash-login
+	# Man pages: one source (packaging/wash.1) + a .so redirect stub per applet
+	# so every /usr/bin entry has a man page (lintian binary-without-manpage).
+	# Stubs generated from wash.binaries; wash-login's lives in its own package.
+	install -D -m0644 packaging/wash.1 debian/wash/usr/share/man/man1/wash.1
+	while read -r b; do \
+	  [ -n "$$b" ] || continue; \
+	  case "$$b" in wash-login|wash-display) continue ;; esac; \
+	  echo '.so man1/wash.1' > debian/wash/usr/share/man/man1/$$b.1; \
+	  chmod 0644 debian/wash/usr/share/man/man1/$$b.1; \
+	done < packaging/wash.binaries
+	install -d debian/wash-login/usr/share/man/man1
+	echo '.so man1/wash.1' > debian/wash-login/usr/share/man/man1/wash-login.1
+	chmod 0644 debian/wash-login/usr/share/man/man1/wash-login.1
+	# Bash completion for the multicall dispatcher.
+	install -D -m0644 packaging/wash.bash debian/wash/usr/share/bash-completion/completions/wash
 	dh_install
 
 # Neither package PROVIDES a shared library — they ship executables only —

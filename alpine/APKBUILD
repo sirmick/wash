@@ -58,6 +58,15 @@ package() {
         case "$bin" in wash-login|wash-sudo|wash-display) continue ;; esac
         ln -sf wash "$pkgdir/usr/bin/$bin"
     done < packaging/wash.binaries
+    # Man pages: source wash.1 + a .so redirect stub per applet (mandoc resolves
+    # .so). Bash completion for the dispatcher.
+    install -Dm0644 packaging/wash.1 "$pkgdir/usr/share/man/man1/wash.1"
+    while read -r bin; do
+        [ -n "$bin" ] || continue
+        case "$bin" in wash-login|wash-display) continue ;; esac
+        echo ".so man1/wash.1" > "$pkgdir/usr/share/man/man1/$bin.1"
+    done < packaging/wash.binaries
+    install -Dm0644 packaging/wash.bash "$pkgdir/usr/share/bash-completion/completions/wash"
 }
 
 _login() {
@@ -76,6 +85,9 @@ _login() {
     install -Dm0755 out/wash-login "$subpkgdir/usr/bin/wash-login"
     install -Dm0755 alpine/wash-login.initd "$subpkgdir/etc/init.d/wash-login"
     install -Dm0644 packaging/wash-login.default "$subpkgdir/etc/conf.d/wash-login"
+    # Man stub (.so → wash.1 from the wash package; depends=wash).
+    mkdir -p "$subpkgdir/usr/share/man/man1"
+    echo ".so man1/wash.1" > "$subpkgdir/usr/share/man/man1/wash-login.1"
 }
 
 _display() {

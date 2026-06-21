@@ -1,0 +1,67 @@
+.TH WASH 1 "2026" "wash" "wash manual"
+.SH NAME
+wash \- lightweight remote-admin desktop environment (multi-call binary)
+.SH SYNOPSIS
+.B wash
+.RI [ subcommand ]
+.br
+.B wash-<app>
+.RI [ options ]
+.SH DESCRIPTION
+.B wash
+is a transport-only router and a family of web-component apps that present a
+Windows/GNOME/macOS-style desktop over HTTP/WS, for maintaining Linux machines
+over the network.
+.PP
+It is shipped as a single
+.B busybox\-style multi-call binary:
+.I /usr/bin/wash
+dispatches on its invocation name (argv[0]), and each
+.I /usr/bin/wash-<app>
+is a symlink to it. Running a symlink launches that applet; running
+.B wash
+directly accepts subcommands.
+.PP
+The multi-user front door
+.RB ( wash-login )
+and the privileged sudo helper
+.RB ( wash-sudo )
+are separate real binaries, not symlinks.
+.SH OPTIONS
+Each applet accepts its own options. Two are common to all:
+.TP
+.B \-\-version
+Print the version and exit.
+.TP
+.B \-\-help
+Print applet usage and exit.
+.SH APPLETS
+The set of applets matches the
+.I wash-*
+symlinks under
+.IR /usr/bin .
+Notable entry points:
+.TP
+.B wash-router
+The transport router (single-user entry point).
+.TP
+.B wash-login
+Multi-user authenticated login front door (separate package
+.BR wash-login ).
+.TP
+.B wash-term ", " wash-fm ", " wash-edit ", " wash-settings ", ...
+Desktop applications. Run
+.B wash-<app> --help
+for per-applet usage.
+.SH FILES
+.TP
+.I /usr/bin/wash
+The multi-call dispatcher.
+.TP
+.I /etc/default/wash-login
+Arguments for the wash-login service (when the wash-login package is installed).
+.SH SEE ALSO
+.BR wash-login (1),
+.B /usr/share/doc/wash/MULTIUSER.md
+.SH AUTHOR
+sirmick <sirmick@gmail.com>
