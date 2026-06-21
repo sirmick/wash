@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 
 	"github.com/sirmick/wash/internal/apps/registry"
+	"github.com/sirmick/wash/internal/runner/fswatchd"
 	"github.com/sirmick/wash/internal/runner/launch"
 	routerrun "github.com/sirmick/wash/internal/runner/router"
 	"github.com/sirmick/wash/internal/wire"
@@ -60,6 +61,8 @@ func main() {
 		if vmloginRun != nil {
 			os.Exit(vmloginRun(os.Args[1:]))
 		}
+	case "wash-fswatchd":
+		os.Exit(fswatchd.Run(os.Args[1:]))
 	}
 
 	a := registry.Get(name)

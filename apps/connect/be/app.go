@@ -129,6 +129,22 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 			"kind": "disconnect", "host": req.Host,
 		})
 	})
+	sdk.HandleVoid(bus, "mount", func(conn *sdk.Conn, _ string, req mountReq) error {
+		if req.Host == "" {
+			return nil
+		}
+		return conn.SendAppMsgTo(wire.Recipient{AppID: remoteAppID}, map[string]any{
+			"kind": "mount", "host": req.Host, "remote_root": req.RemoteRoot, "persist": req.Persist,
+		})
+	})
+	sdk.HandleVoid(bus, "unmount", func(conn *sdk.Conn, _ string, req unmountReq) error {
+		if req.MountPoint == "" {
+			return nil
+		}
+		return conn.SendAppMsgTo(wire.Recipient{AppID: remoteAppID}, map[string]any{
+			"kind": "unmount", "mount_point": req.MountPoint,
+		})
+	})
 
 	// Supervisor → FE. The supervisor's StateService pushes {kind:"state",
 	// state:{hosts:[…]}}; re-brand to "remote.state" so the FE dispatcher
@@ -248,6 +264,16 @@ type connectReq struct {
 
 type disconnectReq struct {
 	Host string `json:"host"`
+}
+
+type mountReq struct {
+	Host       string `json:"host"`
+	RemoteRoot string `json:"remote_root"`
+	Persist    bool   `json:"persist"`
+}
+
+type unmountReq struct {
+	MountPoint string `json:"mount_point"`
 }
 
 // authBeginReq starts an ssh-add session for Host. KeyFile is optional —

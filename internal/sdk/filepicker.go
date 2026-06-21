@@ -3,10 +3,8 @@ package sdk
 import (
 	"log"
 	"strings"
-	"sync"
 
 	wfs "github.com/sirmick/wash/internal/fs"
-	"github.com/sirmick/wash/internal/fswatch"
 )
 
 // EnableFilePicker installs a handler chain that lets @wash/ui's
@@ -31,10 +29,10 @@ import (
 // picker-specific, it's "fs.* dispatch for this app".
 func EnableFilePicker(c *Conn) {
 	fsa := wfs.New(c.session.Root)
-	ws := newWatchState()
+	wc := NewWatchClient(c) // watches via the shared com.wash.fswatch service
 	prev := c.def.OnAppMsg
 	c.def.OnAppMsg = func(conn *Conn, win uint32, data any) {
-		if handled := dispatchPicker(conn, fsa, ws, data); handled {
+		if handled := dispatchPicker(conn, fsa, wc, data); handled {
 			return
 		}
 		if prev != nil {
@@ -43,42 +41,10 @@ func EnableFilePicker(c *Conn) {
 	}
 }
 
-// watchState wraps a lazily-constructed fswatch.RefMap. Lazy because
-// an app that never calls fs.watch shouldn't allocate an inotify
-// watcher. The RefMap inside handles refcounting so two FE surfaces
-// (editor sidebar + embedded FilePicker) watching the same path
-// share one underlying Sub.
-type watchState struct {
-	mu     sync.Mutex
-	mgr    *fswatch.Manager
-	refMap *fswatch.RefMap
-}
-
-func newWatchState() *watchState { return &watchState{} }
-
-// ensureRefMap lazily constructs the fswatch.Manager + RefMap.
-// Returns nil on failure (fswatch.New can fail on resource limits
-// — inotify instance caps, etc); callers should reply "unavailable".
-func (w *watchState) ensureRefMap() *fswatch.RefMap {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.refMap != nil {
-		return w.refMap
-	}
-	mgr, err := fswatch.New()
-	if err != nil {
-		log.Printf("sdk.EnableFilePicker: fswatch unavailable: %v", err)
-		return nil
-	}
-	w.mgr = mgr
-	w.refMap = fswatch.NewRefMap(mgr)
-	return w.refMap
-}
-
 // dispatchPicker returns true when the message had a recognized
 // fs.* kind (handled or errored with a reply); false when the host
 // should keep dispatching.
-func dispatchPicker(c *Conn, fsa *wfs.FS, ws *watchState, data any) bool {
+func dispatchPicker(c *Conn, fsa *wfs.FS, wc *WatchClient, data any) bool {
 	m, ok := data.(map[string]any)
 	if !ok {
 		return false
@@ -140,10 +106,10 @@ func dispatchPicker(c *Conn, fsa *wfs.FS, ws *watchState, data any) bool {
 		})
 	case "fs.watch":
 		path, _ := m["path"].(string)
-		doWatch(c, fsa, ws, id, path)
+		doWatch(c, fsa, wc, id, path)
 	case "fs.unwatch":
 		path, _ := m["path"].(string)
-		doUnwatch(c, fsa, ws, id, path)
+		doUnwatch(c, fsa, wc, id, path)
 	default:
 		// Unknown fs.* — leave for the host so a future extension
 		// could be handled there. Returning false keeps the chain
@@ -153,11 +119,10 @@ func dispatchPicker(c *Conn, fsa *wfs.FS, ws *watchState, data any) bool {
 	return true
 }
 
-// doWatch subscribes the connection to fsnotify events under path
-// and (on first subscribe) starts a goroutine that re-emits them
-// as fs.watch_event app_msgs. Calls for an already-watched path
-// bump the refcount; the existing goroutine keeps forwarding.
-func doWatch(c *Conn, fsa *wfs.FS, ws *watchState, id, path string) {
+// doWatch subscribes the connection to changes under path via the shared watch
+// service, re-emitting each as an fs.watch_event app_msg to the FE. Repeated
+// watches of a path refcount inside the WatchClient.
+func doWatch(c *Conn, fsa *wfs.FS, wc *WatchClient, id, path string) {
 	if path == "" {
 		pickerReply(c, "fs.watch_err", id, map[string]any{
 			"path": path, "code": "bad_request", "msg": "missing path",
@@ -171,44 +136,26 @@ func doWatch(c *Conn, fsa *wfs.FS, ws *watchState, id, path string) {
 		})
 		return
 	}
-	refMap := ws.ensureRefMap()
-	if refMap == nil {
-		pickerReply(c, "fs.watch_err", id, map[string]any{
-			"path": abs, "code": "unavailable", "msg": "fswatch not available",
-		})
-		return
-	}
-	sub, first, err := refMap.Watch(abs)
-	if err != nil {
+	if err := wc.Watch(abs, func(ev WatchEvent) {
+		if err := c.SendAppMsg(map[string]any{
+			"kind": "fs.watch_event",
+			"op":   ev.Op,
+			"path": ev.Path,
+		}); err != nil {
+			log.Printf("sdk.EnableFilePicker: fs.watch_event: %v", err)
+		}
+	}); err != nil {
 		pickerReply(c, "fs.watch_err", id, map[string]any{
 			"path": abs, "code": "io", "msg": err.Error(),
 		})
 		return
 	}
-	if first {
-		// One goroutine per fswatch.Sub. Lives as long as the Sub:
-		// the last Unwatch closes it, the events channel drains, the
-		// loop returns.
-		go func(s *fswatch.Sub) {
-			for ev := range s.Events() {
-				if err := c.SendAppMsg(map[string]any{
-					"kind": "fs.watch_event",
-					"op":   ev.Op.String(),
-					"path": ev.Path,
-				}); err != nil {
-					log.Printf("sdk.EnableFilePicker: fs.watch_event: %v", err)
-					return
-				}
-			}
-		}(sub)
-	}
 	pickerReply(c, "fs.watch_ok", id, map[string]any{"path": abs})
 }
 
-// doUnwatch decrements the refcount for path. The underlying Sub
-// is only closed when the count reaches zero. Unwatching a path
-// that isn't tracked is a no-op success.
-func doUnwatch(c *Conn, fsa *wfs.FS, ws *watchState, id, path string) {
+// doUnwatch releases one reference to path. Unwatching an untracked path is a
+// no-op success.
+func doUnwatch(c *Conn, fsa *wfs.FS, wc *WatchClient, id, path string) {
 	if path == "" {
 		pickerReply(c, "fs.unwatch_err", id, map[string]any{
 			"path": path, "code": "bad_request", "msg": "missing path",
@@ -222,9 +169,7 @@ func doUnwatch(c *Conn, fsa *wfs.FS, ws *watchState, id, path string) {
 		pickerReply(c, "fs.unwatch_ok", id, map[string]any{"path": path})
 		return
 	}
-	if ws.refMap != nil {
-		ws.refMap.Unwatch(abs)
-	}
+	wc.Unwatch(abs)
 	pickerReply(c, "fs.unwatch_ok", id, map[string]any{"path": abs})
 }
 

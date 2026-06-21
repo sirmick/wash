@@ -70,7 +70,8 @@ type HostState struct {
 
 // State is the published state shape.
 type State struct {
-	Hosts []HostState `json:"hosts"`
+	Hosts  []HostState  `json:"hosts"`
+	Mounts []MountState `json:"mounts,omitempty"`
 }
 
 var def *sdk.AppDef
@@ -117,6 +118,23 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 			return nil
 		}
 		sup.disconnect(req.Host)
+		return nil
+	})
+
+	mounts := newMountManager(svc, c)
+	mounts.restoreMounts() // re-establish "reconnect at launch" mounts
+	sdk.HandleFromVoid(bus, "mount", func(_ *sdk.Conn, _ string, req mountCtlReq, _ wire.Sender) error {
+		if req.Host == "" {
+			return nil
+		}
+		go mounts.mount(req.Host, req.RemoteRoot, req.Persist) // mounting blocks on ssh + FUSE
+		return nil
+	})
+	sdk.HandleFromVoid(bus, "unmount", func(_ *sdk.Conn, _ string, req unmountCtlReq, _ wire.Sender) error {
+		if req.MountPoint == "" {
+			return nil
+		}
+		go mounts.unmount(req.MountPoint)
 		return nil
 	})
 }

@@ -33,8 +33,21 @@ interface HostState {
   code?: string;
 }
 
+type MountStatus = 'mounting' | 'mounted' | 'error';
+
+// MountState is one remote folder mounted locally over SFTP, surfaced under its
+// host. mount_point is the local path (~/wash/remote/<host>/<base>).
+interface MountState {
+  host: string;
+  remote_root: string;
+  mount_point: string;
+  status: MountStatus;
+  error?: string;
+}
+
 interface RemoteState {
   hosts: HostState[];
+  mounts?: MountState[];
 }
 
 // Bookmark is a saved connect target (persisted on disk by the BE). Host-
@@ -87,6 +100,7 @@ function statusLabel(s: HostStatus): string {
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [hosts, setHosts] = createSignal<HostState[]>([]);
+  const [mounts, setMounts] = createSignal<MountState[]>([]);
   const [hostInput, setHostInput] = createSignal('');
   // catalogs is a per-origin snapshot kept in a plain object so a catalog
   // arriving (or emptying) re-renders the matching host's app list.
@@ -141,6 +155,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         const st = (m.state ?? {}) as RemoteState;
         const list = Array.isArray(st.hosts) ? st.hosts : [];
         setHosts(list);
+        setMounts(Array.isArray(st.mounts) ? st.mounts : []);
         reconcileAttachments(list);
         break;
       }
@@ -290,6 +305,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                   <HostRow
                     host={h}
                     apps={launchable(h.origin)}
+                    mounts={mounts().filter((mt) => mt.host === h.host)}
                     bookmarked={isBookmarked(h.host)}
                     menuOpen={menuFor() === h.origin}
                     onToggleMenu={() => setMenuFor(menuFor() === h.origin ? null : h.origin)}
@@ -298,6 +314,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                     onDisconnect={() => disconnect(h.host)}
                     onAuth={() => beginAuth(h.host)}
                     onToggleBookmark={() => (isBookmarked(h.host) ? removeBookmark(h.host) : addBookmark(h.host))}
+                    onMount={(root, persist) => send({ kind: 'mount', host: h.host, remote_root: root, persist })}
+                    onUnmount={(mp) => send({ kind: 'unmount', mount_point: mp })}
                   />
                 )}
               </For>
@@ -335,6 +353,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 const HostRow: Component<{
   host: HostState;
   apps: CatalogApp[];
+  mounts: MountState[];
   bookmarked: boolean;
   menuOpen: boolean;
   onToggleMenu: () => void;
@@ -343,6 +362,8 @@ const HostRow: Component<{
   onDisconnect: () => void;
   onAuth: () => void;
   onToggleBookmark: () => void;
+  onMount: (remoteRoot: string, persist: boolean) => void;
+  onUnmount: (mountPoint: string) => void;
 }> = (props) => {
   const color = () => hostColor(props.host.origin);
   const up = () => props.host.status === 'up';
@@ -388,6 +409,73 @@ const HostRow: Component<{
       <Show when={props.host.error && !needsAuth()}>
         <div style={errorStyle}>{props.host.error}</div>
       </Show>
+      <Show when={up()}>
+        <MountsSection mounts={props.mounts} onMount={props.onMount} onUnmount={props.onUnmount} />
+      </Show>
+    </div>
+  );
+};
+
+// MountsSection lists a host's mounted folders and lets you mount another by
+// remote path. The mounted tree appears at ~/wash/remote/<host>/… and shows up
+// as a volume in the file manager.
+const MountsSection: Component<{
+  mounts: MountState[];
+  onMount: (remoteRoot: string, persist: boolean) => void;
+  onUnmount: (mountPoint: string) => void;
+}> = (props) => {
+  const [path, setPath] = createSignal('');
+  const [persist, setPersist] = createSignal(false);
+  const submit = () => {
+    const p = path().trim();
+    if (!p) return;
+    props.onMount(p, persist());
+    setPath('');
+  };
+  const statusText = (mt: MountState) =>
+    mt.status === 'mounted' ? '✓ mounted' : mt.status === 'mounting' ? 'mounting…' : (mt.error || 'mount failed');
+  return (
+    <div style={mountsStyle} data-testid="connect-mounts">
+      <For each={props.mounts}>
+        {(mt) => (
+          <div style={mountRowStyle} data-testid="connect-mount" data-status={mt.status} data-mount={mt.mount_point}>
+            <span style={mountPathStyle} title={mt.mount_point}>{mt.remote_root}</span>
+            <span style={mountStatusStyle}>{statusText(mt)}</span>
+            <button
+              type="button"
+              onClick={() => props.onUnmount(mt.mount_point)}
+              style={iconBtnStyle}
+              title="Unmount"
+              data-testid="connect-unmount"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+      </For>
+      <div style={mountAddStyle}>
+        <input
+          type="text"
+          value={path()}
+          onInput={(e) => setPath(e.currentTarget.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+          placeholder="mount a remote folder (e.g. /home/user)"
+          style={mountInputStyle}
+          data-testid="connect-mount-input"
+        />
+        <button type="button" onClick={submit} style={mountBtnStyle} data-testid="connect-mount-submit">
+          Mount
+        </button>
+      </div>
+      <label style={mountPersistStyle} title="Re-establish this mount when wash next starts">
+        <input
+          type="checkbox"
+          checked={persist()}
+          onChange={(e) => setPersist(e.currentTarget.checked)}
+          data-testid="connect-mount-persist"
+        />
+        Reconnect at launch
+      </label>
     </div>
   );
 };
@@ -582,6 +670,67 @@ const addBtnStyle: JSX.CSSProperties = {
   'border-radius': `${tokens.radiusSm}`,
   padding: '7px 14px',
   font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  cursor: 'pointer',
+  'white-space': 'nowrap',
+  'flex-shrink': 0,
+};
+
+const mountsStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'flex-direction': 'column',
+  gap: '5px',
+  'margin-top': '8px',
+  'padding-top': '8px',
+  'border-top': `1px solid ${tokens.borderMenu}`,
+};
+
+const mountRowStyle: JSX.CSSProperties = { display: 'flex', 'align-items': 'center', gap: '8px' };
+
+const mountPathStyle: JSX.CSSProperties = {
+  flex: 1,
+  color: tokens.fg,
+  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  overflow: 'hidden',
+  'text-overflow': 'ellipsis',
+  'white-space': 'nowrap',
+  'min-width': 0,
+};
+
+const mountStatusStyle: JSX.CSSProperties = {
+  color: tokens.fgMuted,
+  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  'flex-shrink': 0,
+};
+
+const mountAddStyle: JSX.CSSProperties = { display: 'flex', gap: '6px' };
+
+const mountPersistStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'center',
+  gap: '6px',
+  color: tokens.fgMuted,
+  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  cursor: 'pointer',
+};
+
+const mountInputStyle: JSX.CSSProperties = {
+  flex: 1,
+  background: tokens.bgWindow,
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}`,
+  padding: '5px 8px',
+  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  'min-width': 0,
+};
+
+const mountBtnStyle: JSX.CSSProperties = {
+  background: 'transparent',
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}`,
+  padding: '5px 12px',
+  font: `600 ${tokens.fontSizeSm} ${tokens.fontSans}`,
   cursor: 'pointer',
   'white-space': 'nowrap',
   'flex-shrink': 0,

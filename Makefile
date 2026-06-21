@@ -28,7 +28,7 @@ GOFLAGS += -cover -coverpkg=github.com/sirmick/wash/...
 endif
 
 OUT     := out
-BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-disks wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net wash-washamp wash-music wash-radio wash-audio wash-remote wash-connect wash-imageview
+BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-disks wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net wash-washamp wash-music wash-radio wash-audio wash-remote wash-connect wash-imageview wash-fswatchd wash-fswatch
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -613,6 +613,31 @@ $(OUT)/wash-audio: | $(OUT)
 $(OUT)/wash-remote: | $(OUT)
 	$(call go_build,$@,apps/remote/be/cmd)
 
+# wash-fswatchd is the B-side watch daemon for wash-to-wash mounts: it runs
+# inotify on the remote wash host and streams change events over ssh stdio to
+# the mounting host (the "wash channel"; SFTP carries the bytes). inotify-only,
+# no FUSE dependency, so it ships on every wash host. .PHONY for the same
+# FE-less-Go-binary reason as wash-notify.
+.PHONY: $(OUT)/wash-fswatchd
+$(OUT)/wash-fswatchd: | $(OUT)
+	$(call go_build,$@,cmd/wash-fswatchd)
+
+# wash-fswatch is the A-side shared filesystem-watch service (com.wash.fswatch):
+# one process watches on behalf of every app (collapsing N inotify instances)
+# and serves remote-mount paths via the remote daemon. No window, no FE bundle.
+# .PHONY for the same FE-less-Go-binary reason as wash-notify.
+.PHONY: $(OUT)/wash-fswatch
+$(OUT)/wash-fswatch: | $(OUT)
+	$(call go_build,$@,apps/fswatch/be/cmd)
+
+# wash-mount is the OPTIONAL standalone FUSE mount CLI (needs the FUSE kmod +
+# fusermount3 at runtime — absent in the in-browser VM and locked-down hosts).
+# Kept out of BINS/packaging like wash-display; the mount LIBRARY ships inside
+# wash-remote. Build explicitly: `make $(OUT)/wash-mount` or `go build ./cmd/wash-mount`.
+.PHONY: $(OUT)/wash-mount
+$(OUT)/wash-mount: | $(OUT)
+	$(call go_build,$@,cmd/wash-mount)
+
 # wash-netd is the privileged networking background service (docs/NET.md
 # §2.11): reserved id com.wash.netd. It now supplies the settings Network
 # panel (panel.js), so its binary embeds NETD_STAMP's assets. .PHONY +
@@ -879,6 +904,17 @@ e2e-remote-vm: vm-image vm-chrome $(OUT)/washvm-remote-run
 	cd e2e && $(PNPM) install --ignore-workspace --silent
 	cd e2e && $(PNPM) exec playwright install chromium
 	cd e2e && $(PNPM) exec playwright test remote-vm
+
+# e2e-mount-vm: the wash-to-wash MOUNT capstone (docs/MOUNT.md). Same two-VM rig
+# as e2e-remote-vm; from A's desktop it mounts one of B's folders (real SFTP +
+# FUSE), browses it in a local fm, and asserts a B-side change propagates live
+# via the shared watch service — plus a torture test co-driving one folder from
+# a local fm (the mount) and a remote fm (on B). Needs the fuse3-baked image.
+.PHONY: e2e-mount-vm
+e2e-mount-vm: vm-image vm-chrome $(OUT)/washvm-remote-run
+	cd e2e && $(PNPM) install --ignore-workspace --silent
+	cd e2e && $(PNPM) exec playwright install chromium
+	cd e2e && $(PNPM) exec playwright test mount-vm
 
 .PHONY: $(OUT)/washvm-remote-run
 $(OUT)/washvm-remote-run: | $(OUT)

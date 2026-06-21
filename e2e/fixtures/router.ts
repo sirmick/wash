@@ -50,8 +50,11 @@ type AppName = keyof typeof APP_BINS;
 
 // Binaries every router needs (the dispatcher + the default app set + the
 // launch CLI), checked up front so a missing build fails with a clear error.
+// wash-fswatch is the shared filesystem-watch service: fm/edit/filepicker/
+// settings all relay watch to com.wash.fswatch, which the router auto-spawns on
+// first reference — so it must be staged in every router or watching is dead.
 const REQUIRED = ['wash-router', 'wash-session', 'wash-about', 'wash-test',
-  'wash-term', 'wash-fm', 'wash-bulk', 'wash-edit', 'wash-launch'];
+  'wash-term', 'wash-fm', 'wash-bulk', 'wash-edit', 'wash-launch', 'wash-fswatch'];
 
 // Binaries referenced directly (not via the apps table): the spawn target, the
 // launch CLI, the compositor skip-check, fakesudo wiring, and the exported
@@ -251,6 +254,11 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
       bins.push(p);
     }
   }
+  // Always stage the shared filesystem-watch service: fm/edit/filepicker/
+  // settings relay watch to com.wash.fswatch, which the router auto-spawns on
+  // first reference — so its binary must be present in every router's apps dir,
+  // independent of which apps a test requested.
+  bins.push(binPath('wash-fswatch'));
   const appsDir = stageApps(bins);
   // wash-priv claims a reservedID (com.wash.priv) which the registry
   // refuses from a non-root-owned binary by default. The e2e dir is

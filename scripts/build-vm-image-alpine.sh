@@ -40,7 +40,11 @@ STORAGE_PKGS="mdadm lvm2 btrfs-progs e2fsprogs sudo"
 # openssh (client + server): the wash-remote two-VM e2e (docs/REMOTE.md)
 # brings up host B's wash-router over a real ssh -L from host A. Tiny, and the
 # server is inert until the harness starts sshd, so it's baked unconditionally.
-REMOTE_PKGS="openssh"
+# openssh: the wash-remote relay + wash-to-wash SFTP data channel. fuse3:
+# fusermount3 + the fuse kmod, so a wash-to-wash mount can FUSE-mount a remote
+# tree locally (docs/MOUNT.md). linux-lts ships CONFIG_FUSE=m; we modprobe it at
+# boot below.
+REMOTE_PKGS="openssh fuse3"
 ZFS_PKGS=""
 if [ "${WASH_VM_ZFS:-0}" = "1" ]; then
   ZFS_PKGS="zfs zfs-lts"
@@ -165,6 +169,18 @@ wvm_stage_payload "$RFS" "$BUILD" "$WASH_BIN"
 # the /usr/bin entry.
 ln -sf ../lib/wash/wash "$RFS/usr/bin/wash-router"
 
+# Same for wash-fswatchd: the wash-to-wash mount's watch channel runs
+# `ssh B wash-fswatchd` (com.wash.fswatch on A opens it), so it must be on the
+# bare sshd PATH too. (The SFTP data channel uses the sftp subsystem, no PATH.)
+ln -sf ../lib/wash/wash "$RFS/usr/bin/wash-fswatchd"
+
+# fusermount3 must be setuid-root: go-fuse (the unprivileged desktop user) opens
+# /dev/fuse then execs fusermount3 to do the privileged mount(2) (CAP_SYS_ADMIN).
+# Alpine's fuse3 doesn't ship it setuid; force the bit. cpio -R 0:0 below makes
+# it root-owned, so the setuid bit then grants root (same mechanism as the netd
+# trampoline). Without this a wash-to-wash mount fails "fusermount exited 256".
+[ -e "$RFS/usr/bin/fusermount3" ] && chmod u+s "$RFS/usr/bin/fusermount3"
+
 # sudoers for the unprivileged 'wash' desktop user: NOPASSWD so wash-priv's
 # `sudo -S` escalation works in this headless demo VM without PAM/shadow setup
 # (the privileged "Scan volumes" needs root for the LVM/btrfs/ZFS reports).
@@ -224,7 +240,12 @@ mkdir -p /home/wash && chown -R wash /home/wash 2>/dev/null
 mount -t devpts -o gid=5,mode=620,ptmxmode=666 devpts /dev/pts 2>/dev/null
 [ -e /dev/ptmx ] || ln -s pts/ptmx /dev/ptmx
 mount -t tmpfs shm /dev/shm 2>/dev/null
-for m in virtio_net 8021q bridge; do modprobe "$m" 2>/dev/null; done
+for m in virtio_net 8021q bridge fuse; do modprobe "$m" 2>/dev/null; done
+# Relax /dev/fuse: devtmpfs creates it 0600 root:root, and this minimal init
+# doesn't run udev rules for already-loaded modules, so the unprivileged desktop
+# user couldn't fusermount a wash-to-wash mount. World-rw matches the udev rule
+# fuse3 would install. No-op if the fuse module didn't load.
+[ -e /dev/fuse ] && chmod 666 /dev/fuse 2>/dev/null
 # Storage modules for the wash-disks gate: virtio_blk surfaces the qemu scratch
 # disks (/dev/vd*); the rest back md/LVM/btrfs/ZFS. modprobe is a no-op when a
 # module is built-in or absent (e.g. zfs in a non-WASH_VM_ZFS image).

@@ -24,7 +24,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sirmick/wash/internal/fswatch"
 	"github.com/sirmick/wash/internal/sdk"
 )
 
@@ -186,7 +185,7 @@ func sendDesktopConfig(c *sdk.Conn) {
 // sends desktop.config on every event. Coalesces bursts via a small
 // debounce — settings.write is one rename but editors can fire
 // multiple events; we don't want to ship the image twice in 50ms.
-func startConfigWatcher(c *sdk.Conn) {
+func startConfigWatcher(c *sdk.Conn, wc *sdk.WatchClient) {
 	dir := configDir()
 	if dir == "" {
 		return
@@ -195,49 +194,38 @@ func startConfigWatcher(c *sdk.Conn) {
 		log.Printf("wash-session: mkdir %s: %v", dir, err)
 		return
 	}
-	mgr, err := fswatch.New()
-	if err != nil {
-		log.Printf("wash-session: fswatch unavailable: %v", err)
-		return
-	}
-	sub, err := mgr.Watch(dir)
-	if err != nil {
-		log.Printf("wash-session: watch %s: %v", dir, err)
-		mgr.Close()
-		return
-	}
 	target := configFilePath()
-	// Tie the watcher's lifetime to the connection. Without this the
-	// inotify FD and the events-range goroutine survive every closed
-	// session window — and the e2e harness has hit the inotify
-	// instance limit in the past from exactly this kind of leak.
+	var (
+		mu      sync.Mutex
+		pending bool
+	)
+	// Watch the config directory through the shared com.wash.fswatch service
+	// (one inotify instance for the whole desktop, not one per app), debouncing
+	// the burst a settings write fires.
+	if err := wc.Watch(dir, func(ev sdk.WatchEvent) {
+		if ev.Path != target {
+			return
+		}
+		mu.Lock()
+		if pending {
+			mu.Unlock()
+			return
+		}
+		pending = true
+		mu.Unlock()
+		time.AfterFunc(60*time.Millisecond, func() {
+			mu.Lock()
+			pending = false
+			mu.Unlock()
+			sendDesktopConfig(c)
+		})
+	}); err != nil {
+		log.Printf("wash-session: watch %s: %v", dir, err)
+		return
+	}
+	// Release the service-side watch when the connection ends.
 	go func() {
 		<-c.Done()
-		sub.Close()
-		mgr.Close()
-	}()
-	go func() {
-		var (
-			mu      sync.Mutex
-			pending bool
-		)
-		for ev := range sub.Events() {
-			if ev.Path != target {
-				continue
-			}
-			mu.Lock()
-			if pending {
-				mu.Unlock()
-				continue
-			}
-			pending = true
-			mu.Unlock()
-			time.AfterFunc(60*time.Millisecond, func() {
-				mu.Lock()
-				pending = false
-				mu.Unlock()
-				sendDesktopConfig(c)
-			})
-		}
+		wc.Unwatch(dir)
 	}()
 }
