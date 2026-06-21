@@ -94,17 +94,17 @@ A `surface=background` service (`docs/ARCHITECTURE.md`, the M1–M7 tier):
 The model is not the hard part — the **encode/transport loop** is. Tier 3
 is screenshot → infer → action → re-screenshot. With a capable accelerator
 the inference step is not the bottleneck; the loop is bounded by wash's
-frame path, which today has known gaps:
+frame path. Most of the gaps once listed here are now **closed** (post
+`wash-display-io`): the compositor does **damage-tracked encode** (per-surface
+commit seq, dirty-rect only — not full-frame-every-commit), and frames are
+**self-describing** — exact `frame_width`/`frame_height` ride in-band in the
+45-byte header, so an agent always knows the dimensions it's grounding against
+without a separate `window.resize` event.
 
-- **No damage tracking** — full frame every commit. The agent loop is the
-  forcing function to add damage-tracked encode.
-- **`window.resize` not emitted** — the agent must know exact frame
-  dimensions it's grounding against, or tier-3 clicks land wrong.
-- **DPI fixed at 1.0** — coordinate grounding is resolution-sensitive;
-  scaling must be reported with the frame.
-
-(See `docs/DISPLAY.md` "known gaps".) Fixing these is the tier-3
-prerequisite — not GPU sizing.
+- **DPI fixed at 1.0** — the one remaining gap. Coordinate grounding is
+  resolution-sensitive; scale is not yet reported with the frame, so tier-3
+  clicks mis-ground on a HiDPI host. This is the tier-3 prerequisite — not GPU
+  sizing. (See `docs/DISPLAY.md` "known gaps", M5b.)
 
 ## 3. Packaging
 
