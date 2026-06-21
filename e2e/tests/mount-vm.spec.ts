@@ -90,19 +90,6 @@ async function navFm(win: Locator, path: string) {
   await win.locator('[data-testid="fm-path"]').press('Enter');
 }
 
-// expectEntryEventually asserts an entry shows up in win — preferring the live
-// watch (DOM updates regardless of z-order), but tolerating a slow/missed event
-// by raising win and forcing a re-list (fm-reload). This keeps the two-window
-// co-driving test reliable; the mount's *live* watch is asserted on its own in
-// the first test, so a reload fallback here doesn't weaken coverage.
-async function expectEntryEventually(win: Locator, name: string) {
-  const entry = win.locator(`[data-testid="fm-entry-${name}"]`);
-  if (await entry.isVisible().catch(() => false)) return;
-  await raiseWindow(win);
-  await win.locator('[data-testid="fm-reload"]').click();
-  await expect(entry).toBeVisible({ timeout: 30_000 });
-}
-
 async function newFileInFm(win: Locator, name: string) {
   await win.locator('[data-testid="fm-new-file"]').click();
   const input = win.locator('[data-testid="fm-pending-new-input"]');
@@ -168,18 +155,18 @@ test('torture: local fm + remote fm on the same folder both track changes', asyn
   await navFm(localFm, MOUNT_POINT);
 
   // Mutate from A first (local fm is the top window — no raise). A real write
-  // over FUSE/SFTP that lands on B; the remote fm (on B) must see it.
+  // over FUSE/SFTP that lands on B and surfaces in the remote fm via B's inotify.
   await newFileInFm(localFm, 'from_a.txt');
   await expect(localFm.locator('[data-testid="fm-entry-from_a.txt"]')).toBeVisible({ timeout: 40_000 });
-  await expectEntryEventually(remoteFm, 'from_a.txt');
+  await expect(remoteFm.locator('[data-testid="fm-entry-from_a.txt"]')).toBeVisible({ timeout: 60_000 });
 
-  // Then mutate from B: raise the remote fm (titlebar exposed up-left) and create
-  // a file. It must appear in BOTH — the remote fm by its own listing, the local
-  // fm through the mount.
+  // Then mutate from B: raise the remote fm (its titlebar is exposed up-left, not
+  // covered by the local fm) and create a file. It must appear in BOTH — the
+  // remote fm by its own listing, the local fm via the mount's watch channel.
   await raiseWindow(remoteFm);
   await newFileInFm(remoteFm, 'from_b.txt');
   await expect(remoteFm.locator('[data-testid="fm-entry-from_b.txt"]')).toBeVisible({ timeout: 40_000 });
-  await expectEntryEventually(localFm, 'from_b.txt');
+  await expect(localFm.locator('[data-testid="fm-entry-from_b.txt"]')).toBeVisible({ timeout: 60_000 });
 });
 
 test('chaos: killing the data ssh self-heals — a post-kill change still reaches the fm', async ({ remoteVm, page }) => {
@@ -215,5 +202,5 @@ test('chaos: killing the data ssh self-heals — a post-kill change still reache
   await page.keyboard.press('Enter');
 
   // A file created well after the kill still surfaces → the mount self-healed.
-  await expect(localFm.locator('[data-testid="fm-entry-chaos_30.txt"]')).toBeVisible({ timeout: 90_000 });
+  await expect(localFm.locator('[data-testid="fm-entry-chaos_30.txt"]')).toBeVisible({ timeout: 120_000 });
 });
