@@ -126,8 +126,9 @@ packaging matrix) is green.
    is the nicer entry point.
 3. **wash-native data backend** for wash peers (push-watch + relay reuse), behind
    the existing `Backend` seam — SFTP stays the universal floor.
-4. **Reconnect supervisor + bounded concurrency**, and the **Tier-2 two-VM chaos
-   gate** (kill/latency/partition → no-wedge, reconnect-recover, abort frees).
+4. **Watch-path reconnect** (the data path + bounded concurrency are done) and a
+   **UI-driven two-VM chaos gate** (kill ssh in the VM → fm recovers) — the
+   reconnect logic is already covered by a Go-level chaos test.
 5. **ControlMaster** to fold data + watch + desktop onto one ssh connection.
 
 ---
@@ -189,10 +190,14 @@ FUSE; it fails at mount time, surfaced as a `MountState{status:"error"}`.
 - **Multiple ssh connections per host.** Data (`ssh -s sftp`), watch
   (`ssh wash-fswatchd`), and the wash-remote desktop relay are separate ssh
   sessions on the shared agent. ControlMaster consolidation is deferred.
-- **No reconnect / durability.** An ssh drop leaves the mount stale or wedged;
-  recovery is a manual unmount (the escape hatch always frees it). No reconnect
-  supervisor, no bounded-concurrency backpressure on the SFTP channel, and the
-  Tier-2 chaos gate isn't built.
+- **Partial reconnect.** The **data path self-heals**: a dropped ssh re-dials on
+  the next op without unmounting (`washmount.MountWithDialer`; the supervisor
+  re-execs `ssh -s sftp`), and in-flight ops are bounded by a concurrency
+  semaphore. The **watch path does not yet reconnect** — if the `wash-fswatchd`
+  ssh drops, live updates stop until remount (data stays correct; the kernel
+  attr-timeout gives eventual consistency). Reconnect is proven by a Go-level
+  chaos test (kill the connection → recover); a **UI-driven two-VM chaos gate**
+  (kill ssh in the VM, assert the fm recovers) is not yet built.
 - **Single-uid visibility.** The mount is not `allow_other`, so only the mounting
   user's processes see it (true "every process" within that user's session, not
   cross-user).
