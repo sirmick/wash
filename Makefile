@@ -797,9 +797,13 @@ $(OUT)/washvm-run: | $(OUT)
 	$(call go_build,$@,cmd/washvm-run)
 
 # vm-image: the bootable Alpine microvm image baking the real wash desktop.
-# Depends on the multicall binary (the script bakes out/wash).
+# The Alpine guest runs wash-vmlogin as its login front (build-vm-image-alpine.sh),
+# so the baked multicall MUST include the washvmlogin dispatch — build out/wash
+# with WASH_VMLOGIN=1 (a sub-make, since MULTICALL_TAGS is fixed at parse time).
+# Without it the guest's wash-vmlogin is a no-op and the VM never serves a login.
 .PHONY: vm-image
-vm-image: $(OUT)/wash
+vm-image:
+	$(MAKE) WASH_VMLOGIN=1 $(OUT)/wash
 	sh scripts/build-vm-image-alpine.sh
 
 # Per-distro backend test-bed images (docs/NET-BACKENDS.md §6): Ubuntu/netplan
