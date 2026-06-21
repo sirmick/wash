@@ -136,6 +136,13 @@ type Router struct {
 	apps   map[string]*AppInstance // by instance id
 	byWin  map[uint32]*AppInstance // by window id (0 keys are skipped)
 	shells map[*ShellSession]struct{}
+	// headShell is the most-recently fully-attached shell — the
+	// "foreground" connection. New terminal/raw channels bind to it
+	// (instead of an arbitrary shells[0]) and reattach migrates
+	// terminal channels to it, so a terminal follows the current
+	// connection across reconnects / stacked WS connections. Guarded
+	// by mu; nil when no shell is attached. See reattachChannelsToShell.
+	headShell *ShellSession
 
 	nextWindow   atomic.Uint32
 	nextInstance atomic.Uint64
@@ -918,6 +925,26 @@ func (r *Router) shellList() []*ShellSession {
 	return out
 }
 
+// headShellOrAny returns the foreground head shell (the most recently
+// attached, where new terminal channels should bind) if it's still
+// attached, else any attached shell, else nil. Picking the head instead
+// of an arbitrary map-order shell is what makes a freshly-opened
+// terminal show up on the connection the user is actually looking at
+// when several shells are stacked (e.g. reconnect zombies).
+func (r *Router) headShellOrAny() *ShellSession {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.headShell != nil {
+		if _, ok := r.shells[r.headShell]; ok {
+			return r.headShell
+		}
+	}
+	for s := range r.shells {
+		return s
+	}
+	return nil
+}
+
 // registerApp inserts inst into the maps. It's the caller's job to
 // have populated inst.WindowID (0 = no window).
 func (r *Router) registerApp(inst *AppInstance) {
@@ -1089,6 +1116,9 @@ func (r *Router) registerShell(s *ShellSession) {
 func (r *Router) unregisterShell(s *ShellSession) {
 	r.mu.Lock()
 	delete(r.shells, s)
+	if r.headShell == s {
+		r.headShell = nil
+	}
 	r.mu.Unlock()
 
 	// Detach any channels owned by this shell. The channel itself
@@ -1175,6 +1205,12 @@ func (r *Router) replayBundleToShell(s *ShellSession, inst *AppInstance) {
 //
 // Called once per shell session, immediately after the snapshot.
 func (r *Router) reattachChannelsToShell(s *ShellSession) {
+	// This shell is now the foreground head: new channels bind here and
+	// terminal channels migrate here below.
+	r.mu.Lock()
+	r.headShell = s
+	r.mu.Unlock()
+
 	r.channelsMu.Lock()
 	bindings := make([]*channelBinding, 0, len(r.channels))
 	for _, b := range r.channels {
@@ -1184,7 +1220,16 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 
 	for _, b := range bindings {
 		b.shellMu.Lock()
-		if b.shell != nil {
+		if b.shell == s {
+			b.shellMu.Unlock()
+			continue
+		}
+		// Migrate to the new head so a terminal follows the current
+		// connection — even when the old owner shell is still live
+		// (a stacked/zombie WS). Exception: a live peer (remote-relay)
+		// channel stays pinned to its original connection; its pump
+		// goroutine writes to that shell and must not be stolen.
+		if b.shell != nil && b.peerConn != nil {
 			b.shellMu.Unlock()
 			continue
 		}

@@ -205,6 +205,13 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		}
 		b.shellMu.Lock()
 		owner := b.shell
+		if owner == nil && b.peerConn == nil {
+			// Orphaned terminal/raw channel — its shell detached after
+			// the reattach pass (a reconnect race). The shell now
+			// driving it adopts it so input isn't black-holed.
+			b.shell = s
+			owner = s
+		}
 		b.shellMu.Unlock()
 		if owner != s {
 			s.router.log("shell: drop raw frame on channel %d (owned by another shell)", f.Channel)
