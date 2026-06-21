@@ -22,9 +22,12 @@ work=$(mktemp -d -t wash-rootfs-rv.XXXXXX)
 trap 'rm -rf "$work"' EXIT
 
 echo "==> cross-compiling wash multicall binary (linux/riscv64)"
+# WASH_VMLOGIN=1: this is the VM image, so compile in the wash-vmlogin dispatch
+# (wash-vm/guest is present here; the distro packaging build omits it).
 make -C "$REPO_ROOT" \
     GOARCH=riscv64 \
     OUT="$work/washrv64" \
+    WASH_VMLOGIN=1 \
     multicall-bin \
     >/dev/null
 

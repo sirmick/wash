@@ -47,13 +47,16 @@ build() {
 package() {
     cd "$builddir"
     install -d "$pkgdir/usr/bin"
-    # Core package: every binary from the single-source inventory EXCEPT
-    # wash-login (which ships in the wash-login subpackage). wash.binaries stays
-    # the full list (CI drift-guard vs the Makefile's BINS), so filter it here.
+    # Multicall layout: the dispatcher (out/wash) once + a relative symlink per
+    # wash-<app> from the canonical name list (packaging/wash.binaries, the CI
+    # drift-guard vs BINS). wash-sudo is a real standalone helper; wash-login is
+    # the subpackage (file-caps can't be shared); wash-display is the cgo subpackage.
+    install -m 0755 out/wash      "$pkgdir/usr/bin/wash"
+    install -m 0755 out/wash-sudo "$pkgdir/usr/bin/wash-sudo"
     while read -r bin; do
         [ -n "$bin" ] || continue
-        [ "$bin" = wash-login ] && continue
-        install -m 0755 "out/$bin" "$pkgdir/usr/bin/$bin"
+        case "$bin" in wash-login|wash-sudo|wash-display) continue ;; esac
+        ln -sf wash "$pkgdir/usr/bin/$bin"
     done < packaging/wash.binaries
 }
 

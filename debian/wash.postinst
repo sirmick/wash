@@ -12,10 +12,12 @@ case "$1" in
     configure)
         # Trust-check guard: the router's registry refuses reservedID
         # com.wash.priv from non-root binaries unless mode 0755 root:root
-        # (see internal/router/registry.go).
-        if [ -x /usr/bin/wash-priv ]; then
-            chown root:root /usr/bin/wash-priv
-            chmod 0755 /usr/bin/wash-priv
+        # (see internal/router/registry.go). wash-priv is a symlink to the
+        # multicall binary, and the check os.Stat()s through the symlink, so the
+        # anchor that must be root:root 0755 is /usr/bin/wash itself.
+        if [ -e /usr/bin/wash ]; then
+            chown root:root /usr/bin/wash
+            chmod 0755 /usr/bin/wash
         fi
         ;;
     abort-upgrade|abort-remove|abort-deconfigure)

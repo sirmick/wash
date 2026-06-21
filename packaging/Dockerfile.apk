@@ -102,7 +102,7 @@ RUN set -eux; \
     test -x /usr/bin/wash-packages; \
     test -x /usr/bin/wash-services; \
     test -x /usr/bin/wash-login; \
-    [ "$(stat -c '%U %a' /usr/bin/wash-priv)" = "root 755" ]; \
+    [ -L /usr/bin/wash-priv ];     [ "$(readlink /usr/bin/wash-priv)" = wash ];     [ "$(stat -c '%U %a' /usr/bin/wash)" = "root 755" ]; \
     getent passwd wash-system >/dev/null; \
     getent group wash >/dev/null; \
     test -d /etc/wash

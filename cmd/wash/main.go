@@ -28,9 +28,12 @@ import (
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/runner/launch"
 	routerrun "github.com/sirmick/wash/internal/runner/router"
-	vmloginrun "github.com/sirmick/wash/internal/runner/vmlogin"
 	"github.com/sirmick/wash/internal/wire"
 )
+
+// vmloginRun dispatches `wash-vmlogin` when the washvmlogin build tag is set
+// (see vmlogin_on.go / vmlogin_off.go). nil in the default packaging multicall.
+var vmloginRun func([]string) int
 
 func main() {
 	name := filepath.Base(os.Args[0])
@@ -50,7 +53,13 @@ func main() {
 	case "wash-launch":
 		os.Exit(launch.Run(os.Args[1:]))
 	case "wash-vmlogin":
-		os.Exit(vmloginrun.Run(os.Args[1:]))
+		// vmlogin pulls in wash-vm/guest (the in-browser/wemu VM login front),
+		// which is pruned from the distro source tarball. It's compiled in only
+		// with -tags=washvmlogin (the VM image build); otherwise vmloginRun is
+		// nil and we fall through to the registry/not-found path.
+		if vmloginRun != nil {
+			os.Exit(vmloginRun(os.Args[1:]))
+		}
 	}
 
 	a := registry.Get(name)

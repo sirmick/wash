@@ -27,22 +27,26 @@ override_dh_dwz:
 # drift that left net/media/vscode out of 0.9.0 can't recur. dh_install still
 # runs afterward to process the optional wash-display package's own .install.
 override_dh_install:
-	# Core `wash` package: every binary from the single-source inventory EXCEPT
-	# wash-login, which ships in its own package. packaging/wash.binaries stays
-	# the full list (CI drift-guard vs the Makefile's BINS), so filter it here.
-	install -d debian/wash/usr/bin
+	# Core `wash` package: the multicall dispatcher (out/wash) holds the Go
+	# runtime + SDK + crypto/tls ONCE; every wash-<app> is a RELATIVE symlink to
+	# it (lintian wants relative symlinks within /usr/bin). packaging/wash.binaries
+	# is the canonical name list (CI drift-guard vs the Makefile's BINS). Two names
+	# are NOT symlinks: wash-login ships in its own package (its file-caps must not
+	# be shared) and wash-sudo is a real standalone helper (not in the multicall).
+	install -D -m0755 out/wash       debian/wash/usr/bin/wash
+	install -D -m0755 out/wash-sudo  debian/wash/usr/bin/wash-sudo
 	while read -r b; do \
 	  [ -n "$$b" ] || continue; \
-	  [ "$$b" = wash-login ] && continue; \
-	  install -m0755 out/$$b debian/wash/usr/bin/$$b; \
+	  case "$$b" in wash-login|wash-sudo|wash-display) continue ;; esac; \
+	  ln -sf wash debian/wash/usr/bin/$$b; \
 	done < packaging/wash.binaries
-	# `wash-login` package: the front-door binary + its systemd unit
-	# (single-source packaging/wash-login.service, shared verbatim with the rpm)
-	# + its EnvironmentFile. The default dh_installsystemd step finds the staged
-	# unit and appends enable/start snippets to debian/wash-login.postinst at the
-	# #DEBHELPER# marker. NB: never write the literal debhelper token in a
-	# maintscript comment — dh_installdeb substitutes it wherever it appears,
-	# splicing the snippet mid-comment (a dash syntax error at install time).
+	# `wash-login` package: a REAL standalone binary (cap_setuid/setgid/kill are
+	# per-inode, so it can't share the multicall) + its systemd unit
+	# (single-source packaging/wash-login.service) + EnvironmentFile. The default
+	# dh_installsystemd step finds the staged unit and appends enable/start
+	# snippets to debian/wash-login.postinst at the #DEBHELPER# marker. NB: never
+	# write the literal debhelper token in a maintscript comment — dh_installdeb
+	# substitutes it wherever it appears, splicing the snippet mid-comment.
 	install -D -m0755 out/wash-login debian/wash-login/usr/bin/wash-login
 	install -D -m0644 packaging/wash-login.service debian/wash-login/usr/lib/systemd/system/wash-login.service
 	install -D -m0644 packaging/wash-login.default debian/wash-login/etc/default/wash-login

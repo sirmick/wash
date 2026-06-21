@@ -7,8 +7,10 @@
 
 set -e
 
-if [ -x /usr/bin/wash-priv ]; then
-    chown root:root /usr/bin/wash-priv
-    chmod 0755 /usr/bin/wash-priv
+# wash-priv is a symlink to the multicall binary; the trust check stat()s
+# through it, so the anchor that must be root:root 0755 is /usr/bin/wash.
+if [ -e /usr/bin/wash ]; then
+    chown root:root /usr/bin/wash
+    chmod 0755 /usr/bin/wash
 fi
 exit 0

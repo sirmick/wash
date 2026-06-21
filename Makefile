@@ -719,6 +719,13 @@ ifneq ($(TEST_APP),)
 MULTICALL_TAGS := $(MULTICALL_TAGS),wash_test_app
 MULTICALL_STAMPS += $(TEST_STAMP)
 endif
+# WASH_VMLOGIN=1 compiles in the `wash-vmlogin` dispatch (internal/runner/vmlogin
+# → wash-vm/guest, the in-browser/wemu VM login). OFF by default: the distro
+# source tarball prunes wash-vm/, so the packaged multicall must build without
+# it. The VM image build (wash-vm/image/rootfs/build.sh) sets WASH_VMLOGIN=1.
+ifneq ($(WASH_VMLOGIN),)
+MULTICALL_TAGS := $(MULTICALL_TAGS),washvmlogin
+endif
 
 # .PHONY: the stamps key only on FE assets, so a Go-source change (router,
 # vmlogin, any app BE) would otherwise leave out/wash — and thus the baked VM
@@ -753,6 +760,20 @@ multicall: $(OUT)/wash
 # the binary's arch differs from the host's (no qemu-user binfmt).
 .PHONY: multicall-bin
 multicall-bin: $(OUT)/wash
+
+# package-tree: exactly the binaries the native packages (deb/rpm/apk) install.
+# The multicall dispatcher (out/wash) holds the Go runtime + wash SDK + crypto/tls
+# ONCE; every wash-<app> ships as a symlink to it (created at package time from
+# packaging/wash.binaries). Two binaries MUST stay standalone and are built here
+# alongside it:
+#   - wash-login: its file-capabilities (cap_setuid,cap_setgid,cap_kill) live on
+#     the inode, so folding it into the shared multicall would leak setuid to
+#     every applet. Keep it a separate binary with its own caps.
+#   - wash-sudo:  not part of the multicall (real separate helper).
+# wash-display (cgo/wlroots) is built separately when WASH_DISPLAY=1.
+.PHONY: package-tree
+package-tree: $(OUT)/wash $(OUT)/wash-login $(OUT)/wash-sudo
+	@echo "package-tree: out/wash (multicall) + out/wash-login + out/wash-sudo ready"
 
 # Full-stack e2e: builds everything (incl. test app), then runs the
 # Playwright suite. Browser binary download is one-time and cached.
@@ -1085,12 +1106,17 @@ unit-test: test-app fe-unit component
 # its own deps (incl. playwright) into e2e/node_modules.
 .PHONY: e2e-test
 e2e-test: test-app
+	# The multicall layout is what ships, so the FULL suite runs against it
+	# (busybox-style wash-<app> symlinks → out/wash). Build the dispatcher + run
+	# its argv[0]-dispatch unit tests first, then Playwright with
+	# WASH_E2E_MULTICALL=1 (the fixture stages out/wash + symlinks).
+	$(MAKE) TEST_APP=1 out/wash
+	go test -count=1 -tags=multicall ./cmd/wash/...
 	cd e2e && $(PNPM) install --ignore-workspace --silent
 	cd e2e && $(PNPM) exec playwright install chromium
 	# WASH_E2E_SKIP_VM=1: mirror CI (which has no VM artifacts) — the heavy
-	# KVM-backed net-vm tiers run under `make net-test` / `make e2e-vm`, not
-	# the standalone suite, so a local VM image can't make push diverge + flake.
-	cd e2e && WASH_E2E_SKIP_VM=1 $(PNPM) test
+	# KVM-backed net-vm tiers run under `make net-test` / `make e2e-vm`.
+	cd e2e && WASH_E2E_SKIP_VM=1 WASH_E2E_MULTICALL=1 $(PNPM) test
 
 # screenshots: regenerate the docs/screenshots/*.png marketing shots by posing
 # real app windows in a throwaway router and capturing them with Playwright.
@@ -1119,26 +1145,23 @@ net-test: vm-image-openwrt vm-image-ubuntu vm-image-debian vm-image-fedora
 disks-test: vm-image
 	$(MAKE) vm-disks-test
 
-# all-test: every test, BOTH layouts (standalone + multicall). Does NOT package.
-# multicall-smoke: the multicall layout's UNIQUE risk surface — argv[0] dispatch
-# through the wash-<app> symlinks — NOT a re-run of the whole suite. App logic is
-# identical to standalone, and the kvm/browser VM tiers already BOOT multicall in
-# real Linux (their images bake out/multicall), so deep integration is covered
-# there. Here: build the layout, the one package the multicall tag changes
-# (cmd/wash), and the bundle-registration + a launch/spawn spec.
-.PHONY: multicall-smoke
-multicall-smoke: test-app
-	$(MAKE) TEST_APP=1 multicall
-	go test -count=1 -tags=multicall ./cmd/wash/...
+# all-test: every test, BOTH layouts. Does NOT package. The MULTICALL layout is
+# what ships now, so it gets the full suite (e2e-test). standalone-smoke covers
+# the per-app-binary layout's UNIQUE risk surface — separate-process spawn of
+# out/wash-<app> — NOT a re-run of the whole suite (app logic is identical).
+# Build the 29 binaries + a launch/spawn + single-file spec against them.
+.PHONY: standalone-smoke
+standalone-smoke: test-app
+	$(MAKE) TEST_APP=1 all
 	cd e2e && $(PNPM) install --ignore-workspace --silent && $(PNPM) exec playwright install chromium
-	cd e2e && WASH_E2E_MULTICALL=1 $(PNPM) exec playwright test single-file.spec.ts kiosk-test-app.spec.ts --workers=1
+	cd e2e && $(PNPM) exec playwright test single-file.spec.ts kiosk-test-app.spec.ts --workers=1
 
-# all-test: the full suite ONCE (standalone) + an early multicall smoke + the kvm
-# net/disks gates (which boot the multicall layout in-VM = real multicall
-# integration). No full-suite duplication across layouts.
+# all-test: the full suite ONCE against the MULTICALL layout (e2e-test) + a
+# standalone smoke + the kvm net/disks gates (which boot the multicall layout
+# in-VM). No full-suite duplication across layouts.
 .PHONY: all-test
-all-test: unit-test multicall-smoke e2e-test net-test disks-test
-	@echo "all-test: green — standalone full + multicall smoke + kvm VM gates (multicall in-VM)"
+all-test: unit-test e2e-test standalone-smoke net-test disks-test
+	@echo "all-test: green — multicall full (e2e) + standalone smoke + kvm VM gates"
 
 # coverage: instrumented build (COVER=1 → go build -cover) → go-unit + e2e
 # counters merged into one module-wide report under $(COVERDIR). App BEs with no

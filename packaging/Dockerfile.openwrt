@@ -34,19 +34,23 @@ COPY wash_${VERSION}.tar.xz /tmp/source.tar.xz
 # Pipe through xz since busybox tar can't decompress xz directly.
 RUN xz -dc /tmp/source.tar.xz | tar -x -C /tmp/extract \
     && SRC=/tmp/extract/wash-${VERSION} \
-    && BINS="wash-router wash-login wash-session wash-about wash-fm \
+    # Multicall layout: one dispatcher (out/wash) + relative wash-<app> symlinks.
+    # wash-login (file-caps) and wash-sudo stay real. APPS is the OpenWRT subset
+    # exposed as symlinks (router/launch/priv dispatch through the multicall).
+    && APPS="wash-router wash-session wash-about wash-fm \
             wash-term wash-edit wash-bulk wash-priv wash-journal \
             wash-notify wash-settings wash-top wash-disks wash-syslogs \
-            wash-services wash-packages wash-launch wash-sudo" \
-    && for bin in $BINS; do \
-        cp "$SRC/out/$bin" "/usr/bin/$bin" && chmod 0755 "/usr/bin/$bin"; \
-    done \
-    && chown root:root /usr/bin/wash-priv \
+            wash-services wash-packages wash-launch" \
+    && cp "$SRC/out/wash"       /usr/bin/wash       && chmod 0755 /usr/bin/wash \
+    && cp "$SRC/out/wash-sudo"  /usr/bin/wash-sudo  && chmod 0755 /usr/bin/wash-sudo \
+    && cp "$SRC/out/wash-login" /usr/bin/wash-login && chmod 0755 /usr/bin/wash-login \
+    && for a in $APPS; do ln -sf wash "/usr/bin/$a"; done \
+    && chown root:root /usr/bin/wash \
     && mkdir -p /tests \
     && cp "$SRC/out/packages_distro.test" /tests/ \
     && cp "$SRC/out/services_distro.test" /tests/ \
     && mkdir -p /pkg \
-    && (cd /usr/bin && tar -czf /pkg/wash-openwrt-24.10.6-x86_64.tgz $BINS)
+    && (cd /usr/bin && tar -czf /pkg/wash-openwrt-24.10.6-x86_64.tgz wash wash-sudo wash-login $APPS)
 
 # wash-system uid + wash group. The openwrt/rootfs image doesn't ship
 # busybox's adduser/addgroup applets (and shadow-utils would need an
@@ -62,7 +66,8 @@ RUN test -x /usr/bin/wash-router \
     && test -x /usr/bin/wash-priv \
     && test -x /usr/bin/wash-packages \
     && test -x /usr/bin/wash-services \
-    && [ "$(ls -l /usr/bin/wash-priv | awk '{print $1" "$3}')" = "-rwxr-xr-x root" ] \
+    && [ -L /usr/bin/wash-priv ] \
+    && [ "$(ls -l /usr/bin/wash | awk '{print $1" "$3}')" = "-rwxr-xr-x root" ] \
     && grep -q '^wash-system:' /etc/passwd \
     && grep -q '^wash:' /etc/group \
     && test -d /etc/wash

@@ -37,9 +37,10 @@ WORKDIR /src
 COPY wash_${VERSION}.src.tar.xz /tmp/source.tar.xz
 RUN tar -xJf /tmp/source.tar.xz --strip-components=1 -C /src
 
-# Compile the full standalone binary set (FE Vite builds run first via the
-# Makefile's per-binary embed stamps) for the requested arch.
-RUN make GOARCH=${GOARCH} all
+# Compile the packaging binary set: the multicall dispatcher (out/wash) plus the
+# two standalone binaries (wash-login caps, wash-sudo). The wash-<app> symlinks
+# are created at package time. FE Vite builds run first via the asset stamps.
+RUN make GOARCH=${GOARCH} package-tree
 
 # distro_integration test binaries — run in each package Dockerfile's test
 # stage against the row's real apt/dnf/apk + service manager. Static, so

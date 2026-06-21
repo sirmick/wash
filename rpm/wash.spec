@@ -74,17 +74,21 @@ compositor stack the pure-Go core deliberately avoids.
 # Source tarball already ships prebuilt static binaries under out/.
 
 %install
-# Install from the single source-of-truth list (packaging/wash.binaries,
-# generated from the Makefile's BINS) and emit the matching %%files list, so a
-# new app ships automatically — no hand-maintained binary list to drift.
+# Multicall layout: install the dispatcher (out/wash) once + a relative symlink
+# per wash-<app> from the canonical name list (packaging/wash.binaries, the CI
+# drift-guard vs BINS). wash-sudo is a real standalone helper; wash-login ships
+# in its own subpackage (file-caps can't be shared); wash-display is the cgo
+# subpackage. Emit the matching %%files list as we go.
 install -d %{buildroot}%{_bindir}
+install -m 0755 out/wash      %{buildroot}%{_bindir}/wash
+install -m 0755 out/wash-sudo %{buildroot}%{_bindir}/wash-sudo
 : > wash.files
+echo "%{_bindir}/wash" >> wash.files
+echo "%{_bindir}/wash-sudo" >> wash.files
 while read -r bin; do
     [ -n "$bin" ] || continue
-    # wash-login ships in its own subpackage; keep it out of the core list.
-    # packaging/wash.binaries stays the full inventory (CI drift-guard vs BINS).
-    [ "$bin" = wash-login ] && continue
-    install -m 0755 out/$bin %{buildroot}%{_bindir}/$bin
+    case "$bin" in wash-login|wash-sudo|wash-display) continue ;; esac
+    ln -sf wash %{buildroot}%{_bindir}/$bin
     echo "%{_bindir}/$bin" >> wash.files
 done < packaging/wash.binaries
 %if %{with display}
@@ -121,12 +125,13 @@ install -d %{buildroot}%{_sysconfdir}/wash
 
 # ---- core wash scriptlets -------------------------------------------------
 %post
-# wash-priv reserved-id trust gate wants root:root 0755 — files
-# section already declares 0755 but be explicit in case the rpm
-# extractor preserved a different mode.
-if [ -x %{_bindir}/wash-priv ]; then
-    chown root:root %{_bindir}/wash-priv
-    chmod 0755 %{_bindir}/wash-priv
+# wash-priv reserved-id trust gate wants root:root 0755. wash-priv is a symlink
+# to the multicall binary and the check stat()s through it, so the anchor that
+# must be root:root 0755 is %{_bindir}/wash itself. (The %%files mode already
+# declares it; be explicit in case the extractor preserved a different mode.)
+if [ -e %{_bindir}/wash ]; then
+    chown root:root %{_bindir}/wash
+    chmod 0755 %{_bindir}/wash
 fi
 exit 0
 
