@@ -9,6 +9,39 @@ package fs
 
 import "encoding/json"
 
+// Request payloads shared by wash-fm and wash-edit (FE → BE). The two BEs
+// register identical handlers for these verbs; the shapes live here next to
+// the matching *Reply types so they can't drift.
+
+// ListReq / ReadReq / PathReq are single-path requests. PathReq backs every
+// generic path verb (delete, create_file, create_dir, watch, unwatch).
+type ListReq struct {
+	Path string `json:"path"`
+}
+
+// ReadReq requests a file's contents.
+type ReadReq struct {
+	Path string `json:"path"`
+}
+
+// PathReq is a bare path argument shared by the path-only verbs.
+type PathReq struct {
+	Path string `json:"path"`
+}
+
+// WriteReq writes Content to Path.
+type WriteReq struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+// RenameReq renames From → To; Replace allows clobbering an existing dest.
+type RenameReq struct {
+	From    string `json:"from"`
+	To      string `json:"to"`
+	Replace bool   `json:"replace"`
+}
+
 // ListReply is the BE → FE response payload for a list request.
 type ListReply struct {
 	Path      string  `json:"path"`
@@ -58,4 +91,17 @@ type SymlinkReply struct {
 // JSON (e.g. test harness debug surfaces).
 func MarshalReply(v any) ([]byte, error) {
 	return json.Marshal(v)
+}
+
+// LooksBinary reports whether a byte slice appears to be binary content,
+// using the heuristic wash-fm and wash-edit both need: a NUL byte in the
+// sampled prefix means "don't render as text" (it sets ReadReply.Binary).
+// Callers pass the chunk they already read.
+func LooksBinary(b []byte) bool {
+	for _, c := range b {
+		if c == 0 {
+			return true
+		}
+	}
+	return false
 }
