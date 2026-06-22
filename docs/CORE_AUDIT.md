@@ -88,11 +88,27 @@ worktree flow: `wash-hardening` (phase 1) and `wash-friction`
 >   washamp/vscode-workbench/services). fm/edit (createBus correlation),
 >   term/session (multi-listener), wash-test (raw element) keep bespoke setups.
 >   Verified via per-app e2e.
+> - **2.3 vite factory — DONE.** 22 `apps/*/fe/vite.config.ts` collapse to
+>   `washAppConfig()` in `@wash/ui/vite-app`; per-app overrides only.
 > - **2.4 — PARTIAL.** Shared fm/edit request structs + `looksBinary` moved to
 >   `internal/fs`; net error-reply standardization and `bus.Emit`-swallow
 >   annotations deferred (see commit msg for why).
-> - **2.3 rest (Overlay adoption, token leaks, vite factory) and 2.2 (app
->   registry) — TODO.** Sparkline left local (components diverged, like fmtBytes).
+>
+> **Examined and deliberately NOT done (divergence traps, like fmtBytes):**
+> - **2.3 sparkline** — top `Sparkline` uses pre-normalized [0..1] data, disks/
+>   MirrorSparkline scale by a windowed max; dims + box differ. ~5 shared lines.
+> - **2.3 Overlay adoption** — session's PrivUnlock/BulkConflict overlays are
+>   `position: fixed` (screen-scoped, z-index 12000); `@wash/ui.Overlay` is
+>   `absolute` (window-scoped). Adopting would shrink a security modal to the
+>   app window. Would need a screen-scope mode on Overlay + careful e2e.
+> - **2.3 token leaks** — the sidebar/disks/top colors overlap the chart/meter
+>   palette that `[[wash UX tokens]]` keeps local on purpose; only the genuine
+>   chrome subset should tokenize, and that needs screenshot verification.
+>
+> **Still genuinely TODO:**
+> - **2.2 app registry** — the big build-system rewrite (Makefile templating +
+>   generated imports + 3 packaging lists + e2e fixture + icon check). Needs the
+>   full e2e AND the package-matrix gate; best as its own focused pass.
 
 ### 2.1 `internal/version` package  ← biggest win per effort
 
