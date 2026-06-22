@@ -11,20 +11,21 @@
 //
 // Wire shape between this FE and its BE half:
 //
-//   FE → BE  : { kind: "list",  path }                     id-correlated
-//                { kind: "read",  path }
-//                { kind: "write", path, content }
-//                fs.* messages handled by sdk.EnableFilePicker
+//	FE → BE  : { kind: "list",  path }                     id-correlated
+//	             { kind: "read",  path }
+//	             { kind: "write", path, content }
+//	             fs.* messages handled by sdk.EnableFilePicker
 //
-//   BE → FE  : { kind: "list_ok", id?, path, entries, truncated }
-//                { kind: "read_ok", id?, path, content, size, binary, truncated }
-//                { kind: "write_ok", id?, path, bytes }
-//                { kind: "<op>_err", id?, path?, code, msg }
+//	BE → FE  : { kind: "list_ok", id?, path, entries, truncated }
+//	             { kind: "read_ok", id?, path, content, size, binary, truncated }
+//	             { kind: "write_ok", id?, path, bytes }
+//	             { kind: "<op>_err", id?, path?, code, msg }
 package edit
 
 import (
 	"context"
 	"embed"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 	"os"
@@ -40,8 +41,6 @@ import (
 var assetsFS embed.FS
 
 const (
-	version = "0.9.2"
-
 	// Cap on read size. Bigger files are still listed; the editor
 	// surfaces a "too large to open here" placeholder rather than
 	// trying to hold them in memory. Generous enough for any source
@@ -82,7 +81,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.edit",
 			Name:            "Editor",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-edit",
 			Surface:         sdk.SurfaceWindow,

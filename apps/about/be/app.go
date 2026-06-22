@@ -16,6 +16,7 @@ package about
 import (
 	"context"
 	"embed"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 	"os"
@@ -30,8 +31,6 @@ import (
 
 //go:embed all:assets
 var assetsFS embed.FS
-
-const version = "0.9.2"
 
 // washIcon — Lucide sprite symbol name. The shell's sprite already
 // includes "info" via web/shell/build-icons.mjs.
@@ -67,7 +66,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.about",
 			Name:            "About wash",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-about",
 			Surface:         sdk.SurfaceWindow,
@@ -252,7 +251,7 @@ func gatherInfo() aboutInfo {
 
 func gatherBuild() buildBlock {
 	return buildBlock{
-		AppVersion:      version,
+		AppVersion:      version.Version,
 		ProtocolVersion: sdk.ProtocolVersion,
 		RouterVersion:   os.Getenv("WASH_ROUTER_VERSION"),
 		RouterCommit:    os.Getenv("WASH_ROUTER_COMMIT"),

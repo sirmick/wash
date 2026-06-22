@@ -32,6 +32,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 	"os"
@@ -47,8 +48,6 @@ import (
 var assetsFS embed.FS
 
 const (
-	version = "0.9.2"
-
 	// maxConfigBytes caps the JSON payload written through
 	// settings.write. desktop.json is a few hundred bytes; this is
 	// a sanity guard against the FE shipping something nuts.
@@ -66,7 +65,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.settings",
 			Name:            "Settings",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-settings",
 			Surface:         sdk.SurfaceWindow,

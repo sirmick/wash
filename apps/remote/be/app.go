@@ -30,14 +30,13 @@ package remote
 
 import (
 	"context"
+	"github.com/sirmick/wash/internal/version"
 	"log"
 
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/wire"
 )
-
-const version = "0.9.0"
 
 // AppID is the reserved-DNS id of the remote-hosts service.
 const AppID = "com.wash.remote"
@@ -81,7 +80,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              AppID,
 			Name:            "Remote Hosts",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Surface:         sdk.SurfaceBackground,
 			Instancing:      sdk.InstancingSingleton,

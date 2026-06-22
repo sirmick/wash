@@ -32,6 +32,7 @@ package syslogs
 import (
 	"context"
 	"embed"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 	"sync"
@@ -44,8 +45,6 @@ import (
 
 //go:embed all:assets
 var assetsFS embed.FS
-
-const version = "0.9.2"
 
 // syslogsIcon matches wash-journal's "scroll-text". The two apps
 // view different surfaces of the same domain (the journal's
@@ -75,7 +74,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.syslogs",
 			Name:            "System Logs",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-syslogs",
 			Surface:         sdk.SurfaceWindow,

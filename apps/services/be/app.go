@@ -23,6 +23,7 @@ package services
 import (
 	"context"
 	"embed"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 	"sync"
@@ -35,8 +36,6 @@ import (
 
 //go:embed all:assets
 var assetsFS embed.FS
-
-const version = "0.9.2"
 
 // servicesIcon — lucide sprite name. server-cog reads as "init
 // system" without colliding with com.wash.settings's gear-shaped
@@ -120,7 +119,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.services",
 			Name:            "Services",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-services",
 			Surface:         sdk.SurfaceWindow,

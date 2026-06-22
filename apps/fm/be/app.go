@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 	"os"
@@ -37,8 +38,6 @@ import (
 var assetsFS embed.FS
 
 const (
-	version = "0.9.2"
-
 	// Cap on preview/read size to keep memory bounded.
 	maxReadBytes = 256 * 1024
 	// Cap on directory listing size — huge dirs (e.g. /usr/bin) get
@@ -78,7 +77,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.fm",
 			Name:            "Files",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-fm",
 			Surface:         sdk.SurfaceWindow,

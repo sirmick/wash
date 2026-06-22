@@ -14,7 +14,12 @@ GOARCH  ?= amd64
 # -buildvcs=false: Go otherwise stamps the binary with VCS revision + a
 # "modified" dirty flag, which makes builds non-reproducible (Debian/Fedora
 # reproducible-builds care). -trimpath already strips paths.
-GOFLAGS := -trimpath -buildvcs=false -ldflags=-s\ -w -tags netgo,osusergo
+#
+# VERSION is the single source of truth (root VERSION file); -X stamps it into
+# internal/version.Version so no binary carries a hardcoded version literal.
+# The package default must match VERSION for a bare `go build`.
+VERSION := $(shell cat $(dir $(lastword $(MAKEFILE_LIST)))VERSION)
+GOFLAGS := -trimpath -buildvcs=false -ldflags=-s\ -w\ -X\ github.com/sirmick/wash/internal/version.Version=$(VERSION) -tags netgo,osusergo
 
 # COVER=1 builds coverage-instrumented binaries (`go build -cover`),
 # attributing coverage across the whole module. Used by
