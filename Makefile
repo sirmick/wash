@@ -33,7 +33,48 @@ GOFLAGS += -cover -coverpkg=github.com/sirmick/wash/...
 endif
 
 OUT     := out
-BINS    := wash-router wash-login wash-session wash-about wash-term wash-fm wash-bulk wash-edit wash-vscode wash-vscode-workbench wash-settings wash-top wash-disks wash-priv wash-journal wash-syslogs wash-services wash-packages wash-launch wash-notify wash-netd wash-net wash-washamp wash-music wash-radio wash-audio wash-remote wash-connect wash-imageview wash-fswatchd wash-fswatch
+
+# --- single source of truth: the app roster (CORE_AUDIT §2.2) ---------------
+# Adding a windowed app is ONE line below (+ its apps/<app>/{fe,be} tree and a
+# manifest icon). Each app's per-app web build, asset-embed stamp, binary rule,
+# vendor-sync membership, multicall stamp, BINS+packaging entry, and multicall
+# import are all DERIVED from these lists via the $(foreach)/$(eval) templates
+# further down — no more ~6 hand-edited Makefile sites per app.
+#
+#   FE_APPS       windowed apps. Build apps/<app>/fe → embed into
+#                 apps/<app>/be/assets → go build apps/<app>/be/cmd. The binary
+#                 rule is stamp-gated (rebuild keys on the FE asset bundle), as
+#                 windowed apps always have been.
+#   FE_PANEL_APPS background services that ALSO ship a settings panel.js, so
+#                 they embed FE assets like a windowed app — but their binary
+#                 rule is .PHONY so a Go-only change still relinks (the FE stamp
+#                 wouldn't catch it; see [[wash makefile phony goservice]]).
+#   SVC_APPS      FE-less background services under apps/<app>/be/cmd: binary
+#                 rule only (no web/embed), .PHONY for the same reason.
+#
+# Not in these lists (deliberately hand-written below — they aren't uniform
+# apps): wash-router / wash-login embed the shell runtime; wash-launch /
+# wash-fswatchd / wash-sudo are cmd/-rooted CLIs; wash-display is the C++/CMake
+# compositor; the gated `test` app is woven in where TEST_APP applies.
+FE_APPS := session about connect imageview term fm edit vscode-workbench \
+           settings top disks journal syslogs services packages net \
+           washamp music radio
+FE_PANEL_APPS := vscode netd
+SVC_APPS := bulk priv notify audio remote fswatch
+
+# Every app that embeds an FE asset bundle (windowed + panel). Drives the
+# embed-stamp / vendor-sync / multicall-stamp derivations. The gated `test` app
+# is added to these where TEST_APP is set.
+ASSET_APPS := $(FE_APPS) $(FE_PANEL_APPS)
+
+# BINS is derived. wash-router / wash-login lead the list because vendor-sync
+# relies on them being built first (they carry the shared /vendor chunks); then
+# the app roster, then the hand-written CLIs. wash-sudo is appended below.
+BINS := wash-router wash-login \
+        $(addprefix wash-,$(FE_APPS)) \
+        $(addprefix wash-,$(FE_PANEL_APPS)) \
+        $(addprefix wash-,$(SVC_APPS)) \
+        wash-launch wash-fswatchd
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -133,72 +174,10 @@ ROUTER_STAMP   := $(ROUTER_ASSETS)/.stamp
 LOGIN_SHELL_ASSETS := internal/login/assets/shell
 LOGIN_SHELL_STAMP  := $(LOGIN_SHELL_ASSETS)/.stamp
 
-SESSION_ASSETS := apps/session/be/assets
-SESSION_STAMP  := $(SESSION_ASSETS)/.stamp
-
-ABOUT_ASSETS   := apps/about/be/assets
-ABOUT_STAMP    := $(ABOUT_ASSETS)/.stamp
-
-CONNECT_ASSETS := apps/connect/be/assets
-CONNECT_STAMP  := $(CONNECT_ASSETS)/.stamp
-IMAGEVIEW_ASSETS := apps/imageview/be/assets
-IMAGEVIEW_STAMP  := $(IMAGEVIEW_ASSETS)/.stamp
-
-TEST_ASSETS    := apps/test/be/assets
-TEST_STAMP     := $(TEST_ASSETS)/.stamp
-
-TERM_ASSETS    := apps/term/be/assets
-TERM_STAMP     := $(TERM_ASSETS)/.stamp
-
-FM_ASSETS      := apps/fm/be/assets
-FM_STAMP       := $(FM_ASSETS)/.stamp
-
-EDIT_ASSETS    := apps/edit/be/assets
-EDIT_STAMP     := $(EDIT_ASSETS)/.stamp
-
-SETTINGS_ASSETS := apps/settings/be/assets
-SETTINGS_STAMP  := $(SETTINGS_ASSETS)/.stamp
-
-TOP_ASSETS      := apps/top/be/assets
-TOP_STAMP       := $(TOP_ASSETS)/.stamp
-
-DISKS_ASSETS    := apps/disks/be/assets
-DISKS_STAMP     := $(DISKS_ASSETS)/.stamp
-
-JOURNAL_ASSETS  := apps/journal/be/assets
-JOURNAL_STAMP   := $(JOURNAL_ASSETS)/.stamp
-
-SYSLOGS_ASSETS  := apps/syslogs/be/assets
-SYSLOGS_STAMP   := $(SYSLOGS_ASSETS)/.stamp
-
-SERVICES_ASSETS := apps/services/be/assets
-SERVICES_STAMP  := $(SERVICES_ASSETS)/.stamp
-
-PACKAGES_ASSETS := apps/packages/be/assets
-PACKAGES_STAMP  := $(PACKAGES_ASSETS)/.stamp
-
-
-VSCODE_WB_ASSETS := apps/vscode-workbench/be/assets
-VSCODE_WB_STAMP  := $(VSCODE_WB_ASSETS)/.stamp
-
-NET_ASSETS      := apps/net/be/assets
-NET_STAMP       := $(NET_ASSETS)/.stamp
-
-WASHAMP_ASSETS    := apps/washamp/be/assets
-WASHAMP_STAMP     := $(WASHAMP_ASSETS)/.stamp
-MUSIC_ASSETS      := apps/music/be/assets
-MUSIC_STAMP       := $(MUSIC_ASSETS)/.stamp
-RADIO_ASSETS      := apps/radio/be/assets
-RADIO_STAMP       := $(RADIO_ASSETS)/.stamp
-
-# wash-vscode / wash-netd are background services, but each supplies a
-# settings panel (panel.js) embedded in its binary, so they get an
-# asset stamp like the windowed apps.
-VSCODE_ASSETS   := apps/vscode/be/assets
-VSCODE_STAMP    := $(VSCODE_ASSETS)/.stamp
-
-NETD_ASSETS     := apps/netd/be/assets
-NETD_STAMP      := $(NETD_ASSETS)/.stamp
+# Per-app asset/stamp paths are uniform — apps/<app>/be/assets/.stamp — and are
+# computed inline by the app-rule templates below, so no per-app *_ASSETS /
+# *_STAMP variables are needed. (ROUTER_STAMP / LOGIN_SHELL_STAMP above are the
+# two exceptions: they embed the shell runtime, not an app FE bundle.)
 
 .PHONY: all
 all: $(TARGETS)
@@ -232,94 +211,9 @@ web-deps:
 web-shell: web-deps
 	@$(PNPM) --filter @wash/shell run build
 
-.PHONY: web-session
-web-session: web-deps
-	@$(PNPM) --filter @wash/app-session run build
-
-.PHONY: web-about
-web-about: web-deps
-	@$(PNPM) --filter @wash/app-about run build
-
-.PHONY: web-connect
-web-connect: web-deps
-	@$(PNPM) --filter @wash/app-connect run build
-.PHONY: web-imageview
-web-imageview: web-deps
-	@$(PNPM) --filter @wash/app-imageview run build
-
-.PHONY: web-test
-web-test: web-deps
-	@$(PNPM) --filter @wash/app-test run build
-
-.PHONY: web-term
-web-term: web-deps
-	@$(PNPM) --filter @wash/app-term run build
-
-.PHONY: web-fm
-web-fm: web-deps
-	@$(PNPM) --filter @wash/app-fm run build
-
-.PHONY: web-edit
-web-edit: web-deps
-	@$(PNPM) --filter @wash/app-edit run build
-
-.PHONY: web-vscode-workbench
-web-vscode-workbench: web-deps
-	@$(PNPM) --filter @wash/app-vscode-workbench run build
-
-.PHONY: web-settings
-web-settings: web-deps
-	@$(PNPM) --filter @wash/app-settings run build
-
-.PHONY: web-top
-web-top: web-deps
-	@$(PNPM) --filter @wash/app-top run build
-
-.PHONY: web-disks
-web-disks: web-deps
-	@$(PNPM) --filter @wash/app-disks run build
-
-.PHONY: web-journal
-web-journal: web-deps
-	@$(PNPM) --filter @wash/app-journal run build
-
-.PHONY: web-syslogs
-web-syslogs: web-deps
-	@$(PNPM) --filter @wash/app-syslogs run build
-
-.PHONY: web-services
-web-services: web-deps
-	@$(PNPM) --filter @wash/app-services run build
-
-.PHONY: web-packages
-web-packages: web-deps
-	@$(PNPM) --filter @wash/app-packages run build
-
-.PHONY: web-net
-web-net: web-deps
-	@$(PNPM) --filter @wash/app-net run build
-
-.PHONY: web-washamp
-web-washamp: web-deps
-	@$(PNPM) --filter @wash/app-washamp run build
-
-.PHONY: web-music
-web-music: web-deps
-	@$(PNPM) --filter @wash/app-music run build
-
-.PHONY: web-radio
-web-radio: web-deps
-	@$(PNPM) --filter @wash/app-radio run build
-
-.PHONY: web-vscode
-web-vscode: web-deps
-	@$(PNPM) --filter @wash/app-vscode run build
-
-.PHONY: web-netd
-web-netd: web-deps
-	@$(PNPM) --filter @wash/app-netd run build
-
-# embed-into-cmd helper. Usage: $(call embed,<src dist dir>,<dst assets dir>)
+# Per-app `web-<app>` targets are generated by the app-rule templates below
+# (web-shell above is the router's shell bundle; web-display is hand-written
+# near the wash-display rule). embed-into-cmd helper. Usage: $(call embed,<src dist dir>,<dst assets dir>)
 #
 # Files land under cmd/<bin>/assets/ and are picked up by //go:embed
 # all:assets. Brotli precompression was removed: the router's
@@ -339,70 +233,52 @@ $(ROUTER_STAMP): web-shell
 $(LOGIN_SHELL_STAMP): $(ROUTER_STAMP)
 	$(call embed_dist,$(ROUTER_ASSETS),$(LOGIN_SHELL_ASSETS))
 
-$(SESSION_STAMP): web-session
-	$(call embed_dist,apps/session/fe/dist,$(SESSION_ASSETS))
+# ----- app-rule templates (CORE_AUDIT §2.2) -----
+# One $(foreach)/$(eval) pass turns the FE_APPS / FE_PANEL_APPS / SVC_APPS lists
+# into the per-app web build, embed stamp, and binary rules that used to be
+# hand-maintained ~6 sites each. Modelled on the PKG_LEAF_RULE
+# $(foreach …,$(eval …)) idiom further down. `$$` defers expansion to rule-eval
+# time; `$(1)` is the app name substituted by $(call) at generation time.
 
-$(ABOUT_STAMP): web-about
-	$(call embed_dist,apps/about/fe/dist,$(ABOUT_ASSETS))
+# FE build + asset-embed stamp (windowed / panel / the gated test app).
+define web_embed_rule
+.PHONY: web-$(1)
+web-$(1): web-deps
+	@$$(PNPM) --filter @wash/app-$(1) run build
 
-$(CONNECT_STAMP): web-connect
-	$(call embed_dist,apps/connect/fe/dist,$(CONNECT_ASSETS))
-$(IMAGEVIEW_STAMP): web-imageview
-	$(call embed_dist,apps/imageview/fe/dist,$(IMAGEVIEW_ASSETS))
+apps/$(1)/be/assets/.stamp: web-$(1)
+	$$(call embed_dist,apps/$(1)/fe/dist,apps/$(1)/be/assets)
+endef
 
-$(TEST_STAMP): web-test
-	$(call embed_dist,apps/test/fe/dist,$(TEST_ASSETS))
+# Windowed-app binary: stamp-gated (the FE bundle is the rebuild key, as
+# windowed apps have always been — deliberately NOT .PHONY). vendor-sync runs
+# first so a targeted rebuild can't pair a fresh app bundle with a stale
+# /vendor carrier (see the vendor-sync rule).
+define fe_bin_rule
+$$(OUT)/wash-$(1): apps/$(1)/be/assets/.stamp vendor-sync | $$(OUT)
+	$$(call go_build,$$@,apps/$(1)/be/cmd)
+endef
 
-$(TERM_STAMP): web-term
-	$(call embed_dist,apps/term/fe/dist,$(TERM_ASSETS))
+# Panel-service binary: embeds a settings panel.js like a windowed app, but
+# .PHONY so a Go-only change still relinks ([[wash makefile phony goservice]]).
+define panel_bin_rule
+.PHONY: $$(OUT)/wash-$(1)
+$$(OUT)/wash-$(1): apps/$(1)/be/assets/.stamp vendor-sync | $$(OUT)
+	$$(call go_build,$$@,apps/$(1)/be/cmd)
+endef
 
-$(FM_STAMP): web-fm
-	$(call embed_dist,apps/fm/fe/dist,$(FM_ASSETS))
+# FE-less Go service: binary rule only (no web/embed), .PHONY for the same
+# FE-less-Go reason.
+define svc_bin_rule
+.PHONY: $$(OUT)/wash-$(1)
+$$(OUT)/wash-$(1): | $$(OUT)
+	$$(call go_build,$$@,apps/$(1)/be/cmd)
+endef
 
-$(EDIT_STAMP): web-edit
-	$(call embed_dist,apps/edit/fe/dist,$(EDIT_ASSETS))
-
-$(VSCODE_WB_STAMP): web-vscode-workbench
-	$(call embed_dist,apps/vscode-workbench/fe/dist,$(VSCODE_WB_ASSETS))
-
-$(SETTINGS_STAMP): web-settings
-	$(call embed_dist,apps/settings/fe/dist,$(SETTINGS_ASSETS))
-
-$(TOP_STAMP): web-top
-	$(call embed_dist,apps/top/fe/dist,$(TOP_ASSETS))
-
-$(DISKS_STAMP): web-disks
-	$(call embed_dist,apps/disks/fe/dist,$(DISKS_ASSETS))
-
-$(JOURNAL_STAMP): web-journal
-	$(call embed_dist,apps/journal/fe/dist,$(JOURNAL_ASSETS))
-
-$(SYSLOGS_STAMP): web-syslogs
-	$(call embed_dist,apps/syslogs/fe/dist,$(SYSLOGS_ASSETS))
-
-$(SERVICES_STAMP): web-services
-	$(call embed_dist,apps/services/fe/dist,$(SERVICES_ASSETS))
-
-$(PACKAGES_STAMP): web-packages
-	$(call embed_dist,apps/packages/fe/dist,$(PACKAGES_ASSETS))
-
-$(NET_STAMP): web-net
-	$(call embed_dist,apps/net/fe/dist,$(NET_ASSETS))
-
-$(WASHAMP_STAMP): web-washamp
-	$(call embed_dist,apps/washamp/fe/dist,$(WASHAMP_ASSETS))
-
-$(MUSIC_STAMP): web-music
-	$(call embed_dist,apps/music/fe/dist,$(MUSIC_ASSETS))
-
-$(RADIO_STAMP): web-radio
-	$(call embed_dist,apps/radio/fe/dist,$(RADIO_ASSETS))
-
-$(VSCODE_STAMP): web-vscode
-	$(call embed_dist,apps/vscode/fe/dist,$(VSCODE_ASSETS))
-
-$(NETD_STAMP): web-netd
-	$(call embed_dist,apps/netd/fe/dist,$(NETD_ASSETS))
+$(foreach a,$(FE_APPS) $(FE_PANEL_APPS) test,$(eval $(call web_embed_rule,$(a))))
+$(foreach a,$(FE_APPS) test,$(eval $(call fe_bin_rule,$(a))))
+$(foreach a,$(FE_PANEL_APPS),$(eval $(call panel_bin_rule,$(a))))
+$(foreach a,$(SVC_APPS),$(eval $(call svc_bin_rule,$(a))))
 
 # ----- shared-vendor coherence guard -----
 #
@@ -425,13 +301,10 @@ vendor-sync:
 		$(MAKE) --no-print-directory $(OUT)/wash-router $(OUT)/wash-login; \
 	fi
 
-# Every binary embedding an FE bundle that externalizes shared deps.
-$(OUT)/wash-session $(OUT)/wash-about $(OUT)/wash-test $(OUT)/wash-term \
-$(OUT)/wash-fm $(OUT)/wash-edit $(OUT)/wash-vscode $(OUT)/wash-vscode-workbench \
-$(OUT)/wash-settings $(OUT)/wash-top $(OUT)/wash-disks $(OUT)/wash-journal \
-$(OUT)/wash-syslogs $(OUT)/wash-services $(OUT)/wash-packages $(OUT)/wash-net \
-$(OUT)/wash-washamp $(OUT)/wash-music $(OUT)/wash-radio $(OUT)/wash-netd \
-$(OUT)/wash-connect $(OUT)/wash-imageview \
+# Every app binary that embeds an FE bundle externalizing shared deps gets a
+# vendor-sync prereq inline (see the fe_bin_rule / panel_bin_rule templates).
+# wash-display embeds its settings panel the same way but is hand-written below,
+# so it's listed here.
 $(OUT)/wash-display: vendor-sync
 
 # ----- go stage -----
@@ -439,19 +312,11 @@ $(OUT)/wash-display: vendor-sync
 $(OUT)/wash-router: $(ROUTER_STAMP) | $(OUT)
 	$(call go_build,$@,cmd/wash-router)
 
-$(OUT)/wash-session: $(SESSION_STAMP) | $(OUT)
-	$(call go_build,$@,apps/session/be/cmd)
-
-$(OUT)/wash-about: $(ABOUT_STAMP) | $(OUT)
-	$(call go_build,$@,apps/about/be/cmd)
-
-$(OUT)/wash-connect: $(CONNECT_STAMP) | $(OUT)
-	$(call go_build,$@,apps/connect/be/cmd)
-$(OUT)/wash-imageview: $(IMAGEVIEW_STAMP) | $(OUT)
-	$(call go_build,$@,apps/imageview/be/cmd)
-
-$(OUT)/wash-test: $(TEST_STAMP) | $(OUT)
-	$(call go_build,$@,apps/test/be/cmd)
+# The per-app windowed/panel/service binary rules (wash-session, wash-about,
+# wash-fm, wash-bulk, wash-vscode, …) are generated by the app-rule templates
+# in the web-stage section above. Only the non-app specials remain hand-written
+# here: wash-router (above), wash-display (below, C++/CMake), and the cmd/-rooted
+# CLIs wash-fswatchd / wash-mount / wash-launch / wash-login / wash-sudo.
 
 # wash-display is C++/CMake, not Go. Build the settings panel FE first
 # (web-display) so CMake can embed fe/dist/panel.js as raw bytes at
@@ -513,111 +378,6 @@ ifeq ($(WLROOTS_VENDORED),1)
 	cp -P $(WLROOTS_PREFIX)/lib/libwlroots.so* $(OUT)/lib/
 endif
 
-$(OUT)/wash-term: $(TERM_STAMP) | $(OUT)
-	$(call go_build,$@,apps/term/be/cmd)
-
-$(OUT)/wash-fm: $(FM_STAMP) | $(OUT)
-	$(call go_build,$@,apps/fm/be/cmd)
-
-# wash-bulk is a background service (M6): no window, no FE bundle,
-# no embedded assets. Other apps' enqueue calls land here via cross-
-# app app_msg; state ships back via sdk.StateService subscribers.
-# .PHONY: see wash-notify for the rationale.
-.PHONY: $(OUT)/wash-bulk
-$(OUT)/wash-bulk: | $(OUT)
-	$(call go_build,$@,apps/bulk/be/cmd)
-
-$(OUT)/wash-edit: $(EDIT_STAMP) | $(OUT)
-	$(call go_build,$@,apps/edit/be/cmd)
-
-# wash-vscode is a background service that now supplies the settings
-# Developer panel (panel.js), so its binary embeds VSCODE_STAMP's assets.
-# Still .PHONY (like wash-notify): the stamp prereq stages the FE first,
-# and .PHONY forces go_build to re-run so a Go-only change is picked up
-# even when the stamp didn't change. go_build is cheap (Go's build cache).
-.PHONY: $(OUT)/wash-vscode
-$(OUT)/wash-vscode: $(VSCODE_STAMP) | $(OUT)
-	$(call go_build,$@,apps/vscode/be/cmd)
-
-$(OUT)/wash-vscode-workbench: $(VSCODE_WB_STAMP) | $(OUT)
-	$(call go_build,$@,apps/vscode-workbench/be/cmd)
-
-$(OUT)/wash-settings: $(SETTINGS_STAMP) | $(OUT)
-	$(call go_build,$@,apps/settings/be/cmd)
-
-$(OUT)/wash-top: $(TOP_STAMP) | $(OUT)
-	$(call go_build,$@,apps/top/be/cmd)
-
-$(OUT)/wash-disks: $(DISKS_STAMP) | $(OUT)
-	$(call go_build,$@,apps/disks/be/cmd)
-
-# wash-priv is a background service (M7): no window, no FE bundle,
-# no embedded assets. Its UI lives in the session sidebar; crypto
-# handshake moved into the session FE bundle.
-# .PHONY: see wash-notify for the rationale.
-.PHONY: $(OUT)/wash-priv
-$(OUT)/wash-priv: | $(OUT)
-	$(call go_build,$@,apps/priv/be/cmd)
-
-$(OUT)/wash-journal: $(JOURNAL_STAMP) | $(OUT)
-	$(call go_build,$@,apps/journal/be/cmd)
-
-$(OUT)/wash-syslogs: $(SYSLOGS_STAMP) | $(OUT)
-	$(call go_build,$@,apps/syslogs/be/cmd)
-
-$(OUT)/wash-services: $(SERVICES_STAMP) | $(OUT)
-	$(call go_build,$@,apps/services/be/cmd)
-
-$(OUT)/wash-packages: $(PACKAGES_STAMP) | $(OUT)
-	$(call go_build,$@,apps/packages/be/cmd)
-
-# wash-net is the windowed network UI (docs/NET.md §2.11). It embeds the
-# apps/net/fe bundle and relays to the privileged wash-netd service. The
-# NET_STAMP dep stages the FE into apps/net/be/assets before the go build.
-$(OUT)/wash-net: $(NET_STAMP) | $(OUT)
-	$(call go_build,$@,apps/net/be/cmd)
-
-# wash-washamp is the windowed Winamp-skinned player (docs/AUDIO.md). It
-# embeds the apps/washamp/fe Webamp bundle and serves audio over ingress.
-$(OUT)/wash-washamp: $(WASHAMP_STAMP) | $(OUT)
-	$(call go_build,$@,apps/washamp/be/cmd)
-
-# wash-music is the native local music player (docs/MUSIC.md): a wash-UI
-# window over internal/medialib (scan + ingress serve).
-$(OUT)/wash-music: $(MUSIC_STAMP) | $(OUT)
-	$(call go_build,$@,apps/music/be/cmd)
-
-# wash-radio is the native internet-radio player (docs/RADIO.md): a wash-UI
-# window whose BE reverse-proxies the upstream stream over ingress.
-$(OUT)/wash-radio: $(RADIO_STAMP) | $(OUT)
-	$(call go_build,$@,apps/radio/be/cmd)
-
-# wash-notify is a background service: no window, no FE bundle, no
-# embedded assets. Other apps' c.Notify() calls land here via the
-# router's fan-out (see relayNotify in internal/router/app_session.go).
-#
-# .PHONY so `make all` always re-runs `go build`. The Go toolchain
-# does its own incremental check on source mtimes; without this the
-# target's lack of source-stamp dep would let make consider an
-# already-built binary up-to-date even after a .go change.
-.PHONY: $(OUT)/wash-notify
-$(OUT)/wash-notify: | $(OUT)
-	$(call go_build,$@,apps/notify/be/cmd)
-
-# wash-audio is the audio control-plane service (docs/AUDIO.md §3): no
-# window, no FE bundle. .PHONY for the same reason as wash-notify.
-.PHONY: $(OUT)/wash-audio
-$(OUT)/wash-audio: | $(OUT)
-	$(call go_build,$@,apps/audio/be/cmd)
-
-# wash-remote is the A-side remote-hosts connectivity service
-# (docs/REMOTE.md R2): it brings up wash-router on remote hosts over ssh
-# and forwards them locally. No window, no FE bundle. .PHONY for the same
-# reason as wash-notify.
-.PHONY: $(OUT)/wash-remote
-$(OUT)/wash-remote: | $(OUT)
-	$(call go_build,$@,apps/remote/be/cmd)
-
 # wash-fswatchd is the B-side watch daemon for wash-to-wash mounts: it runs
 # inotify on the remote wash host and streams change events over ssh stdio to
 # the mounting host (the "wash channel"; SFTP carries the bytes). inotify-only,
@@ -627,14 +387,6 @@ $(OUT)/wash-remote: | $(OUT)
 $(OUT)/wash-fswatchd: | $(OUT)
 	$(call go_build,$@,cmd/wash-fswatchd)
 
-# wash-fswatch is the A-side shared filesystem-watch service (com.wash.fswatch):
-# one process watches on behalf of every app (collapsing N inotify instances)
-# and serves remote-mount paths via the remote daemon. No window, no FE bundle.
-# .PHONY for the same FE-less-Go-binary reason as wash-notify.
-.PHONY: $(OUT)/wash-fswatch
-$(OUT)/wash-fswatch: | $(OUT)
-	$(call go_build,$@,apps/fswatch/be/cmd)
-
 # wash-mount is the OPTIONAL standalone FUSE mount CLI (needs the FUSE kmod +
 # fusermount3 at runtime — absent in the in-browser VM and locked-down hosts).
 # Kept out of BINS/packaging like wash-display; the mount LIBRARY ships inside
@@ -642,14 +394,6 @@ $(OUT)/wash-fswatch: | $(OUT)
 .PHONY: $(OUT)/wash-mount
 $(OUT)/wash-mount: | $(OUT)
 	$(call go_build,$@,cmd/wash-mount)
-
-# wash-netd is the privileged networking background service (docs/NET.md
-# §2.11): reserved id com.wash.netd. It now supplies the settings Network
-# panel (panel.js), so its binary embeds NETD_STAMP's assets. .PHONY +
-# stamp prereq for the same reason as wash-vscode above.
-.PHONY: $(OUT)/wash-netd
-$(OUT)/wash-netd: $(NETD_STAMP) | $(OUT)
-	$(call go_build,$@,apps/netd/be/cmd)
 
 # washnet-read / washnet-wifi: netd's privileged helpers (run via wash-priv).
 # Pure Go CLIs — no FE, no embedded assets, no stamp — so .PHONY forces a
@@ -739,10 +483,9 @@ test-app: $(OUT)/wash-priv-fakesudo
 # materializes the wash-<name> symlinks. Standalone per-app
 # binaries (BINS above) are unaffected.
 #
-# Only includes extracted apps (Phase 4+: wash-about so far).
-# Adding an app: extract into apps/<name>/be/, drop a
-# cmd/wash/imports_<name>.go blank-import, add its asset stamp to
-# the dep list below.
+# Adding an app: add it to the app roster (FE_APPS / FE_PANEL_APPS / SVC_APPS at
+# the top) and run `make gen-imports`; its multicall import + asset stamp follow
+# automatically — no edits here.
 # Note ROUTER_STAMP + LOGIN_SHELL_STAMP: cmd/wash imports
 # internal/runner/router (which `//go:embed`s internal/runner/
 # router/assets) and internal/runner/login → internal/login
@@ -750,17 +493,19 @@ test-app: $(OUT)/wash-priv-fakesudo
 # multicall's dep list, a clean checkout fails to compile with
 # "pattern all:assets: no matching files found" — local dev
 # accidentally works because the standalone wash-router build
-# rule already chains through ROUTER_STAMP.
-MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) $(ABOUT_STAMP) $(CONNECT_STAMP) $(SETTINGS_STAMP) $(TOP_STAMP) $(DISKS_STAMP) $(JOURNAL_STAMP) $(SYSLOGS_STAMP) $(SERVICES_STAMP) $(PACKAGES_STAMP) $(SESSION_STAMP) $(FM_STAMP) $(TERM_STAMP) $(EDIT_STAMP) $(VSCODE_WB_STAMP) $(NET_STAMP) $(WASHAMP_STAMP) $(MUSIC_STAMP) $(RADIO_STAMP) $(VSCODE_STAMP) $(NETD_STAMP) $(IMAGEVIEW_STAMP)
+# rule already chains through ROUTER_STAMP. The app stamps are every
+# FE-bundle-embedding app (ASSET_APPS); the gated test app is added below.
+MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) \
+                    $(foreach a,$(ASSET_APPS),apps/$(a)/be/assets/.stamp)
 
 # Adding wash_test_app to the tags pulls the test app's blank-import
-# in (which is otherwise excluded by cmd/wash/imports_test.go's
+# in (which is otherwise excluded by cmd/wash/imports_apptest.go's
 # wash_test_app build constraint). Mirrors the standalone TEST_APP=1
 # convention.
 MULTICALL_TAGS := multicall,netgo,osusergo
 ifneq ($(TEST_APP),)
 MULTICALL_TAGS := $(MULTICALL_TAGS),wash_test_app
-MULTICALL_STAMPS += $(TEST_STAMP)
+MULTICALL_STAMPS += apps/test/be/assets/.stamp
 endif
 # WASH_VMLOGIN=1 compiles in the `wash-vmlogin` dispatch (internal/runner/vmlogin
 # → wash-vm/guest, the in-browser/wemu VM login). OFF by default: the distro
