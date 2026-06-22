@@ -82,12 +82,17 @@ worktree flow: `wash-hardening` (phase 1) and `wash-friction`
 >   stamped through `-ldflags -X`; 33 per-binary literals removed.
 > - **2.3 format — DONE.** `@wash/ui/format` (`fmtBytes`/`fmtRate`/`fmtUptime`/
 >   `fmtClockTime`), byte/rate display standardized on KB/MB/GB desktop-wide.
+> - **2.3 createAppBus — DONE.** `@wash/ui` `createAppBus` centralizes the
+>   wash:msg/wash:state listener+cleanup+send plumbing; migrated 13 apps
+>   (about/connect/disks/journal/syslogs/packages/imageview/top/music/radio/
+>   washamp/vscode-workbench/services). fm/edit (createBus correlation),
+>   term/session (multi-listener), wash-test (raw element) keep bespoke setups.
+>   Verified via per-app e2e.
 > - **2.4 — PARTIAL.** Shared fm/edit request structs + `looksBinary` moved to
 >   `internal/fs`; net error-reply standardization and `bus.Emit`-swallow
 >   annotations deferred (see commit msg for why).
-> - **2.3 rest (createAppBus, Overlay adoption, token leaks, vite factory) and
->   2.2 (app registry) — TODO.** Each needs the full e2e / build-matrix gate to
->   land safely; sparkline left local (the components diverged, like fmtBytes).
+> - **2.3 rest (Overlay adoption, token leaks, vite factory) and 2.2 (app
+>   registry) — TODO.** Sparkline left local (components diverged, like fmtBytes).
 
 ### 2.1 `internal/version` package  ← biggest win per effort
 
