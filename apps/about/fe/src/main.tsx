@@ -13,7 +13,7 @@
 
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { defineWashApp, tokens } from '@wash/ui';
+import { defineWashApp, fmtBytes, fmtUptime, tokens } from '@wash/ui';
 
 // ----- wire types -----
 
@@ -77,27 +77,7 @@ interface RuntimeTable {
 type CatalogApp = ReturnType<typeof window.wash.catalog>[number];
 
 // ----- format helpers -----
-
-function fmtBytes(n: number): string {
-  if (!n) return '—';
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-
-function fmtUptime(sec: number): string {
-  if (sec < 60) return `${sec}s`;
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  if (m < 60) return `${m}m ${s}s`;
-  const h = Math.floor(m / 60);
-  const mm = m % 60;
-  if (h < 24) return `${h}h ${mm}m`;
-  const d = Math.floor(h / 24);
-  const hh = h % 24;
-  return `${d}d ${hh}h`;
-}
+// fmtBytes / fmtUptime now come from @wash/ui (shared across apps).
 
 function formatBuilt(s: string): string {
   const m = s.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);

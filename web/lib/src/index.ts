@@ -5,6 +5,7 @@ export type { Tokens } from './tokens';
 export { packs, defaultPackId, getPack, applyScheme, washAppearance, onAppearanceChange } from './packs';
 export type { Pack } from './packs';
 export { severityColor } from './severity';
+export { fmtBytes, fmtRate, fmtUptime, fmtClockTime } from './format';
 export { Button } from './button';
 export type { ButtonProps, ButtonVariant, ButtonSize } from './button';
 export { Menu, MenuItem, MenuSeparator } from './menu';

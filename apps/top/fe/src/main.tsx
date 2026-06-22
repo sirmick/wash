@@ -15,7 +15,7 @@
 import { For, Index, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { ConfirmDialog, defineWashApp, tokens } from '@wash/ui';
+import { ConfirmDialog, defineWashApp, fmtBytes, fmtRate, tokens } from '@wash/ui';
 import { filterSortProcs, type SortKey } from './procsort.ts';
 import {
   ChevronDown,
@@ -113,22 +113,6 @@ function computeCPUUsed(prev: CPURow | undefined, cur: CPURow): number {
 
 function sumCPU(c: CPURow): number {
   return c.User + c.Nice + c.System + c.Idle + c.IOWait + c.IRQ + c.SoftIRQ + c.Steal;
-}
-
-function fmtBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} K`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(0)} M`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(1)} G`;
-}
-
-// fmtRate renders bytes-per-second with units. Used by net + disk
-// meters and their popover rows.
-function fmtRate(bps: number): string {
-  if (bps < 1024) return `${bps.toFixed(0)} B/s`;
-  if (bps < 1024 * 1024) return `${(bps / 1024).toFixed(1)} K/s`;
-  if (bps < 1024 * 1024 * 1024) return `${(bps / 1024 / 1024).toFixed(1)} M/s`;
-  return `${(bps / 1024 / 1024 / 1024).toFixed(2)} G/s`;
 }
 
 // rateDelta computes bytes/s from two cumulative-byte samples taken

@@ -16,7 +16,7 @@
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component } from 'solid-js';
-import { defineWashApp, severityColor, tokens } from '@wash/ui';
+import { defineWashApp, fmtClockTime, severityColor, tokens } from '@wash/ui';
 import { RefreshCw, ShieldAlert, Search } from 'lucide-solid';
 
 // ----- types (mirror cmd/wash-journal wire structs) -----
@@ -60,18 +60,6 @@ const SYSTEM_KEY = '__system__';
 const priorityLabel = (p: number): string =>
   ['emerg', 'alert', 'crit', 'err', 'warn', 'notice', 'info', 'debug'][p] ?? '?';
 
-// fmtTime renders a journald µs timestamp as HH:MM:SS.mmm in local
-// time. Matches `journalctl -o short-precise` enough that users feel
-// at home.
-function fmtTime(ts: number): string {
-  if (!ts) return '            ';
-  const d = new Date(ts / 1000);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  const ms = String(d.getMilliseconds()).padStart(3, '0');
-  return `${hh}:${mm}:${ss}.${ms}`;
-}
 
 // shortUnit trims a unit name for the row prefix. We drop `.service`
 // because every visible row is .service in v1; saves ~9 chars.
@@ -559,7 +547,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           <For each={filteredLines()}>
             {(l) => (
               <div data-testid="journal-row" style={rowStyle(l.priority)}>
-                <span style={{ color: tokens.fgDim }}>{fmtTime(l.ts)}</span>
+                <span style={{ color: tokens.fgDim }}>{fmtClockTime(l.ts)}</span>
                 <span style={{ color: severityColor(l.priority), 'white-space': 'nowrap', overflow: 'hidden', 'text-overflow': 'ellipsis' }}>
                   {shortUnit(l.unit, l.ident)}
                 </span>
