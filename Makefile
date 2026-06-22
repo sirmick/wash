@@ -148,6 +148,15 @@ check-imports:
 	   diff -rq "$$tmp/committed" "$$tmp" --exclude=committed || true; exit 1; \
 	 fi
 
+# check-icons: assert every registered app's manifest icon(s) exist in the shell
+# sprite (web/shell/build-icons.mjs). A missing icon renders blank at runtime
+# with no error, so this catches it at build time. Implemented as a multicall-
+# tagged Go test (cmd/wash/icons_test.go) where the registry is populated; it
+# also runs as part of e2e-test's `go test -tags=multicall ./cmd/wash/...`.
+.PHONY: check-icons
+check-icons:
+	@go test -count=1 -tags=multicall -run TestManifestIconsInSprite ./cmd/wash/
+
 # Privileged escalation CLIs that com.wash.netd runs through wash-priv:
 # washnet-read snapshots the box's config, washnet-wifi drives the polkit-gated
 # radio/connect/forget. netd locates them next to its own binary, so the host

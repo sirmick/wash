@@ -255,7 +255,9 @@ type Manifest struct {
 type RootVariant struct {
 	// Name override for the launcher row. Default: "<Name> (root)".
 	Name string `json:"name,omitempty"`
-	// Icon override (lucide sprite symbol name). Default: shield-alert.
+	// Icon override (lucide sprite symbol name). When empty the launcher
+	// reuses the source app's own icon (session rootEntryFor:
+	// `src.root_variant.icon ?? src.icon`).
 	Icon string `json:"icon,omitempty"`
 	// Args appended to the child process argv (e.g. ["--login"] for
 	// wash-term so root's shell sources profile/bashrc).
