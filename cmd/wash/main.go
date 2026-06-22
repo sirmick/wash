@@ -24,6 +24,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/runner/fswatchd"
@@ -67,7 +68,7 @@ func main() {
 
 	a := registry.Get(name)
 	if a == nil {
-		fmt.Fprintf(os.Stderr, "wash: no app registered for %q — was this binary built with -tags=no_app_%s?\n", name, trimWashPrefix(name))
+		fmt.Fprintf(os.Stderr, "wash: no app registered for %q — was this binary built with -tags=no_app_%s?\n", name, noAppTag(name))
 		os.Exit(2)
 	}
 	dispatchApp(a)
@@ -190,13 +191,15 @@ Subcommands:
   wash --wash-manifest            (not valid — manifests are per-app)`)
 }
 
-// trimWashPrefix strips a leading "wash-" so error messages can
-// suggest the right `no_app_<X>` tag. Falls back to the full name
-// if the input doesn't start with "wash-".
-func trimWashPrefix(s string) string {
+// noAppTag maps a binary name to its `no_app_<X>` opt-out tag: strip the
+// leading "wash-" and replace any remaining "-" with "_" so the suggestion is
+// a valid Go build tag (e.g. wash-vscode-workbench → no_app_vscode_workbench).
+// Matches the tag gen-imports stamps onto cmd/wash/imports_<X>.go. Falls back
+// to the full name if the input doesn't start with "wash-".
+func noAppTag(s string) string {
 	const p = "wash-"
 	if len(s) > len(p) && s[:len(p)] == p {
-		return s[len(p):]
+		s = s[len(p):]
 	}
-	return s
+	return strings.ReplaceAll(s, "-", "_")
 }
