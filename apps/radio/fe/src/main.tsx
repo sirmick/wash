@@ -14,6 +14,7 @@ import {
   SeekBar,
   TransportControls,
   VolumeSlider,
+  createAppBus,
   createAudioSource,
   defineWashApp,
   tokens,
@@ -65,7 +66,6 @@ function RadioApp(props: WashAppProps) {
   let masterVol = 1;
 
   const current = () => stations()[index()];
-  const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
   const applyVolume = () => {
     if (audioEl) audioEl.volume = masterVol * srcVol();
   };
@@ -167,56 +167,54 @@ function RadioApp(props: WashAppProps) {
     sendCustom();
   }
 
+  const handleBE = (m: { kind?: string; title?: string }) => {
+    if (m?.kind === 'now_playing') {
+      setIcyTitle(m.title ?? '');
+      audio?.report();
+    } else if (m?.kind === 'stations_ok') {
+      const s = m as StationsOk;
+      setStations(s.stations);
+      setBase(s.base);
+      if (index() < 0) {
+        // Re-select the last-tuned station once it's present (converges
+        // as persisted custom stations get re-added), else the first row.
+        let di = lastName ? rows().findIndex((r) => r.name === lastName) : -1;
+        if (di < 0) di = s.stations.length ? 0 : -1;
+        setSelectedDisplay(di);
+        if (!registered && s.stations.length) {
+          registered = true;
+          audio?.register({ title: rows()[di]?.name ?? '' });
+        }
+      }
+    }
+  };
+  // wash:state (always fires on mount, null = first launch): restore
+  // favorites + pasted stations + last-tuned, then fetch the list and
+  // re-add the persisted custom stations to the fresh BE.
+  const handleState = (st: PersistedRadio | null) => {
+    customStations = st?.custom ?? [];
+    lastName = st?.last ?? '';
+    setFavs(new Set(st?.favs ?? []));
+    if (st?.vol != null) {
+      setSrcVol(st.vol);
+      applyVolume();
+    }
+    // One idempotent message both fetches the list and (re)sets the
+    // pasted stations — no duplicates if the BE instance survived a reload.
+    sendCustom();
+  };
+
+  const { send } = createAppBus(props, {
+    onMsg: handleBE,
+    onState: (s) => handleState(s as PersistedRadio | null),
+  });
+
   onMount(() => {
     audio = createAudioSource({
       instance: props.instance,
       host: props.host,
       snapshot: () => ({ title: icyTitle() || current()?.name || '', status: status(), pos: 0, dur: 0 }),
       onCmd,
-    });
-    const onMsg = (ev: Event) => {
-      const m = (ev as CustomEvent).detail as { kind?: string; title?: string };
-      if (m?.kind === 'now_playing') {
-        setIcyTitle(m.title ?? '');
-        audio?.report();
-      } else if (m?.kind === 'stations_ok') {
-        const s = m as StationsOk;
-        setStations(s.stations);
-        setBase(s.base);
-        if (index() < 0) {
-          // Re-select the last-tuned station once it's present (converges
-          // as persisted custom stations get re-added), else the first row.
-          let di = lastName ? rows().findIndex((r) => r.name === lastName) : -1;
-          if (di < 0) di = s.stations.length ? 0 : -1;
-          setSelectedDisplay(di);
-          if (!registered && s.stations.length) {
-            registered = true;
-            audio?.register({ title: rows()[di]?.name ?? '' });
-          }
-        }
-      }
-    };
-    // wash:state (always fires on mount, null = first launch): restore
-    // favorites + pasted stations + last-tuned, then fetch the list and
-    // re-add the persisted custom stations to the fresh BE.
-    const onState = (ev: Event) => {
-      const st = (ev as CustomEvent).detail as PersistedRadio | null;
-      customStations = st?.custom ?? [];
-      lastName = st?.last ?? '';
-      setFavs(new Set(st?.favs ?? []));
-      if (st?.vol != null) {
-        setSrcVol(st.vol);
-        applyVolume();
-      }
-      // One idempotent message both fetches the list and (re)sets the
-      // pasted stations — no duplicates if the BE instance survived a reload.
-      sendCustom();
-    };
-    props.host.addEventListener('wash:msg', onMsg);
-    props.host.addEventListener('wash:state', onState);
-    onCleanup(() => {
-      props.host.removeEventListener('wash:msg', onMsg);
-      props.host.removeEventListener('wash:state', onState);
     });
   });
 

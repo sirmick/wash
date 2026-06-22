@@ -8,10 +8,10 @@
 // diffs consecutive snapshots for read/write rates, like wash-top). The
 // stream pauses while the window is minimized.
 
-import { For, Match, Show, Switch, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Match, Show, Switch, createMemo, createSignal, onMount } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { defineWashApp, fmtBytes, fmtRate, tokens } from '@wash/ui';
+import { createAppBus, defineWashApp, fmtBytes, fmtRate, tokens } from '@wash/ui';
 import {
   HardDrive,
   HardDriveDownload,
@@ -184,8 +184,6 @@ function MountBlock(props: { mount: Mount | null }): JSX.Element {
 // ---- app ----
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
-  const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
-
   const [snapshot, setSnapshot] = createSignal<Snapshot | null>(null);
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   // Per-disk I/O rate rings, keyed by device name.
@@ -238,11 +236,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
+  const { send } = createAppBus(props, { onMsg: handleBE });
+
   onMount(() => {
-    const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail);
-    props.host.addEventListener('wash:msg', onMsg);
     send({ kind: 'request_snapshot' });
-    onCleanup(() => props.host.removeEventListener('wash:msg', onMsg));
   });
 
   const rows = createMemo(() => buildRows(snapshot()));

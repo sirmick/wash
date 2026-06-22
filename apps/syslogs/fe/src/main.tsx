@@ -16,7 +16,7 @@
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component } from 'solid-js';
-import { defineWashApp, fmtBytes, fmtClockTime, severityColor, tokens } from '@wash/ui';
+import { createAppBus, defineWashApp, fmtBytes, fmtClockTime, severityColor, tokens } from '@wash/ui';
 import { RefreshCw, ShieldAlert, Search, FileText } from 'lucide-solid';
 
 interface LogFile {
@@ -53,8 +53,6 @@ function fmtRelTime(mtime: number): string {
 }
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
-  const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
-
   // ----- state -----
 
   const [files, setFiles] = createSignal<LogFile[]>([]);
@@ -100,6 +98,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         return;
     }
   };
+
+  const { send } = createAppBus(props, { onMsg: handleBE });
 
   // ----- send select / lifecycle -----
 
@@ -161,8 +161,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ----- mount -----
 
   onMount(() => {
-    const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail);
-    props.host.addEventListener('wash:msg', onMsg);
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key === '/' && document.activeElement !== filterEl) {
         ev.preventDefault();
@@ -171,7 +169,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     };
     props.host.addEventListener('keydown', onKey as EventListener);
     onCleanup(() => {
-      props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('keydown', onKey as EventListener);
     });
   });

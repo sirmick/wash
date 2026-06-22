@@ -6,6 +6,8 @@ export { packs, defaultPackId, getPack, applyScheme, washAppearance, onAppearanc
 export type { Pack } from './packs';
 export { severityColor } from './severity';
 export { fmtBytes, fmtRate, fmtUptime, fmtClockTime } from './format';
+export { createAppBus } from './app-bus';
+export type { AppBus, AppBusMessage, AppBusOptions } from './app-bus';
 export { Button } from './button';
 export type { ButtonProps, ButtonVariant, ButtonSize } from './button';
 export { Menu, MenuItem, MenuSeparator } from './menu';

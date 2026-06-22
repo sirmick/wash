@@ -16,7 +16,7 @@
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component } from 'solid-js';
-import { defineWashApp, fmtClockTime, severityColor, tokens } from '@wash/ui';
+import { createAppBus, defineWashApp, fmtClockTime, severityColor, tokens } from '@wash/ui';
 import { RefreshCw, ShieldAlert, Search } from 'lucide-solid';
 
 // ----- types (mirror cmd/wash-journal wire structs) -----
@@ -69,8 +69,6 @@ function shortUnit(u: string, ident: string): string {
 }
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
-  const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
-
   // ----- state -----
 
   const [units, setUnits] = createSignal<Unit[]>([]);
@@ -131,6 +129,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       }
     }
   };
+
+  const { send } = createAppBus(props, { onMsg: handleBE });
 
   // ----- send select / lifecycle -----
 
@@ -227,8 +227,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ----- mount -----
 
   onMount(() => {
-    const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail);
-    props.host.addEventListener('wash:msg', onMsg);
     // Slash key focuses the filter — terminal-app muscle memory.
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key === '/' && document.activeElement !== filterEl) {
@@ -238,7 +236,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     };
     props.host.addEventListener('keydown', onKey as EventListener);
     onCleanup(() => {
-      props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('keydown', onKey as EventListener);
     });
   });
