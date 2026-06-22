@@ -77,6 +77,18 @@ worktree flow: `wash-hardening` (phase 1) and `wash-friction`
 
 ## Phase 2 — friction killers (branch: wash-friction)
 
+> **Progress (branch wash-friction):**
+> - **2.1 — DONE.** `internal/version.Version`, single source via root `VERSION`,
+>   stamped through `-ldflags -X`; 33 per-binary literals removed.
+> - **2.3 format — DONE.** `@wash/ui/format` (`fmtBytes`/`fmtRate`/`fmtUptime`/
+>   `fmtClockTime`), byte/rate display standardized on KB/MB/GB desktop-wide.
+> - **2.4 — PARTIAL.** Shared fm/edit request structs + `looksBinary` moved to
+>   `internal/fs`; net error-reply standardization and `bus.Emit`-swallow
+>   annotations deferred (see commit msg for why).
+> - **2.3 rest (createAppBus, Overlay adoption, token leaks, vite factory) and
+>   2.2 (app registry) — TODO.** Each needs the full e2e / build-matrix gate to
+>   land safely; sparkline left local (the components diverged, like fmtBytes).
+
 ### 2.1 `internal/version` package  ← biggest win per effort
 
 - The version string is hardcoded in ~80 places: every
