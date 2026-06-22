@@ -93,6 +93,18 @@ worktree flow: `wash-hardening` (phase 1) and `wash-friction`
 > - **2.4 — PARTIAL.** Shared fm/edit request structs + `looksBinary` moved to
 >   `internal/fs`; net error-reply standardization and `bus.Emit`-swallow
 >   annotations deferred (see commit msg for why).
+> - **2.2 app registry — DONE.** Three roster lists (`FE_APPS` /
+>   `FE_PANEL_APPS` / `SVC_APPS`) + a `$(foreach)/$(eval)` pass drive every
+>   per-app Makefile rule (web build, embed stamp, binary, vendor-sync,
+>   MULTICALL_STAMPS) and `BINS`; `make gen-imports` generates the
+>   `cmd/wash/imports_*.go` blank-imports; `make check-icons` (a multicall Go
+>   test) gates manifest-icon ↔ sprite. Adding an app is one roster line +
+>   `make gen-imports`. The audit's "packaging ×3" and "e2e fixture ×3" were
+>   already single-source (wash.binaries loop / `APP_BINS` map) so untouched.
+>   Verified no-behavior-change: identical out/ set, byte-identical binaries +
+>   embedded bundles, identical multicall registration + symlink sets; fixed 3
+>   latent `no_app_*` opt-out tag bugs + a stale RootVariant icon doc surfaced
+>   by the icon check. Gates: unit + e2e + the 17-leaf package matrix.
 >
 > **Examined and deliberately NOT done (divergence traps, like fmtBytes):**
 > - **2.3 sparkline** — top `Sparkline` uses pre-normalized [0..1] data, disks/
@@ -105,10 +117,10 @@ worktree flow: `wash-hardening` (phase 1) and `wash-friction`
 >   palette that `[[wash UX tokens]]` keeps local on purpose; only the genuine
 >   chrome subset should tokenize, and that needs screenshot verification.
 >
-> **Still genuinely TODO:**
-> - **2.2 app registry** — the big build-system rewrite (Makefile templating +
->   generated imports + 3 packaging lists + e2e fixture + icon check). Needs the
->   full e2e AND the package-matrix gate; best as its own focused pass.
+> **Still genuinely TODO:** nothing in Phase 2 — the deferred 2.3 divergence
+> traps above are deliberate no-ops, and 2.4's remainder is annotation-only.
+> (2.2's optional stretch — a `wash new-app` scaffold — is left for when a new
+> app is actually being added.)
 
 ### 2.1 `internal/version` package  ← biggest win per effort
 
@@ -135,19 +147,29 @@ registration systems:
 | e2e fixture ×3 sites | `e2e/fixtures/router.ts` (`<APP>_BIN`, type union, `if (wanted...)` block) |
 | icon sprite | `web/shell/build-icons.mjs` `ICONS` array |
 
-Plan, incremental:
-1. Makefile `define app_rule` + `$(foreach ...)` templating over a
-   single `APPS :=` list. Also structurally fixes the
-   `.PHONY`-for-FE-less-services gotcha (bit wash-vscode once).
-2. Generate `cmd/wash/imports_generated.go` from the same list
-   (`go:generate` or a make rule).
-3. Drive the three packaging lists from `APPS` in the build scripts.
-4. Collapse `e2e/fixtures/router.ts` to a generated `BINS` map +
-   `export type AppName = keyof typeof BINS` + a loop instead of the
-   per-app `if` blocks.
-5. Build-time check that every manifest icon exists in the sprite.
-6. (Later) `wash new-app` scaffold — mostly `cp -r` of a template
-   once 1–5 land.
+Plan, incremental (✅ = landed on wash-friction):
+1. ✅ Makefile templating: three roster lists (`FE_APPS` / `FE_PANEL_APPS` /
+   `SVC_APPS`) + `define web_embed_rule|fe_bin_rule|panel_bin_rule|svc_bin_rule`
+   and a `$(foreach …,$(eval …))` pass (modelled on `PKG_LEAF_RULE`). `BINS`,
+   `vendor-sync`, and `MULTICALL_STAMPS` derive from the lists. The `.PHONY`
+   FE-less / panel-service gotcha is encoded in the template choice, not
+   per-app. (Note: the audit's "5 sites / `<APP>_ASSETS` vars" are gone — paths
+   are computed inline as `apps/<app>/be/assets/.stamp`.)
+2. ✅ `make gen-imports` writes the per-app `cmd/wash/imports_<app>.go`
+   blank-imports from the roster (kept per-file, NOT one generated file, so the
+   per-app `!no_app_<app>` opt-out survives); `make check-imports` (run by
+   unit-test) gates drift. Normalized the opt-out tags `no_app_<name - → _>`,
+   fixing music/radio (untagged) + washamp/vscode-workbench (wrong/colliding).
+3. — Already single-source before this pass: deb/rpm/apk install by looping
+   `packaging/wash.binaries` (generated from `BINS`, guarded by
+   `check-pkg-binaries`). Nothing to do.
+4. — Already done: `e2e/fixtures/router.ts` uses an `APP_BINS` map +
+   `type AppName = keyof typeof APP_BINS` + a staging loop.
+5. ✅ `make check-icons` — a multicall Go test (`cmd/wash/icons_test.go`)
+   parsing `build-icons.mjs` and asserting every registered manifest icon is in
+   the sprite; covered by e2e-test's `go test -tags=multicall ./cmd/wash/...`.
+6. (Later) `wash new-app` scaffold — mostly `cp -r` of a template; deferred to
+   when a new app is actually being added.
 
 ### 2.3 Shared FE plumbing in `@wash/ui` / `@wash/fs-client`
 
