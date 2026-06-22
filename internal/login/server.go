@@ -170,6 +170,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/logout", s.handleLogout)
 	mux.HandleFunc("/ws", s.handleWS)
 	mux.HandleFunc("/ws/s/", s.handleWSSpecific)
+	// Generic ingress: /app/<token>/* belongs to an embedded web app
+	// (code-server et al.) published on the user's per-router. The
+	// router binds no TCP in multi-user mode, so we forward the browser
+	// fd to it with the same SCM_RIGHTS handoff used for /ws; the router
+	// serves /app/ over that conn (router.serveHandoffHTTP). More
+	// specific than "/", so the mux routes it here.
+	mux.HandleFunc("/app/", s.handleAppIngress)
 	mux.HandleFunc("/sessions", s.handleSessionsPage)
 	mux.HandleFunc("/sessions/new", s.handleSessionsNew)
 	mux.HandleFunc("/sessions/end", s.handleSessionsEnd)
@@ -179,12 +186,31 @@ func (s *Server) Handler() http.Handler {
 	// origin in multi-user deployments — per-user routers are
 	// Unix-socket only). Authed users get the shell page at /.
 	if sub, err := fs.Sub(shellAssetsFS, "assets/shell"); err == nil {
-		shellHandler := http.FileServer(http.FS(sub))
+		// no-cache: these bundles are unversioned and change on every
+		// wash upgrade. Without it a browser keeps a stale module past an
+		// upgrade — e.g. a cached /vendor/wash-ui.js missing a freshly
+		// added export — and apps that import it die with a module
+		// mismatch. Mirrors the router's own shell-asset headers
+		// (router/http.go handleRoot).
+		shellHandler := noCacheStatic(http.FileServer(http.FS(sub)))
 		for _, prefix := range []string{"/shell.js", "/icons.svg", "/wash-logo.svg", "/vendor/"} {
 			mux.Handle(prefix, shellHandler)
 		}
 	}
 	return mux
+}
+
+// noCacheStatic wraps a static-asset handler so browsers always
+// revalidate the unversioned shell-runtime bundles, picking up a new
+// build on the next navigation instead of serving a stale, incoherent
+// module set after an upgrade.
+func noCacheStatic(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
+		h.ServeHTTP(w, r)
+	})
 }
 
 // handleWS resolves the target session (auto-attach if exactly one
@@ -273,6 +299,51 @@ func (s *Server) handleWSSpecific(w http.ResponseWriter, r *http.Request) {
 	// Unknown sessid for this uid — 404 (don't leak whether it
 	// exists for a different uid).
 	http.NotFound(w, r)
+}
+
+// handleAppIngress proxies a generic-ingress request (/app/<token>/...)
+// to the authenticated user's per-router. Ingress backends (code-server
+// and friends) publish on a specific router and are reached via
+// /app/<token>/; the router binds no TCP in multi-user mode, so we hand
+// the browser fd to it with the same SCM_RIGHTS handoff used for /ws and
+// let the router serve /app/ over that conn (router.serveHandoffHTTP).
+//
+// Auth is required even though the 128-bit token is itself a capability:
+// the iframe always carries the session cookie (same origin), so demand
+// it as defense-in-depth and to keep pre-auth traffic off the per-user
+// routers entirely.
+//
+// v1 handles the single-session case — the common one. The opaque token
+// can't be mapped to a specific session here, so with several live
+// sessions we can't know which router owns it; that needs a
+// session-namespaced ingress path and is left as a follow-up.
+func (s *Server) handleAppIngress(w http.ResponseWriter, r *http.Request) {
+	if s.sessions == nil || s.spawner == nil {
+		http.Error(w, "session handoff not configured", http.StatusServiceUnavailable)
+		return
+	}
+	payload, ok := s.identityFromRequest(r)
+	if !ok {
+		// An iframe can't meaningfully follow a 302 to the login page,
+		// so 401 rather than redirect.
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	sessions, err := s.sessions.List(payload.UID)
+	if err != nil {
+		s.log.Printf("app: list sessions for uid=%d: %v", payload.UID, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	switch len(sessions) {
+	case 0:
+		http.Error(w, "no active session", http.StatusBadGateway)
+	case 1:
+		s.handoffToSession(w, r, sessions[0])
+	default:
+		s.log.Printf("app: ingress with %d sessions for uid=%d not supported yet", len(sessions), payload.UID)
+		http.Error(w, "ingress is not supported with multiple sessions yet", http.StatusServiceUnavailable)
+	}
 }
 
 // handoffToSession is the common tail end of /ws and /ws/s/<sessid>/:

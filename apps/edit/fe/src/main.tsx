@@ -255,6 +255,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const [picker, setPicker] = createSignal<
     | null
     | { mode: 'open' }
+    | { mode: 'directory' }
     | { mode: 'save'; tabID: string; suggestedName: string }
   >(null);
   // reloadPrompt drives the "changed on disk" modal. Non-null while a
@@ -574,12 +575,30 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // mode we just route through openInTab. In save mode we write
   // the source tab's current doc to the chosen path, then
   // canonicalize the tab (path, displayName, baseline).
+  // setTreeRoot re-roots the left sidebar tree at path: reset the
+  // listing cache + expansion, load the new root, and move the fs
+  // watch. Shared by the BE-driven cmd.set_root and the File →
+  // Open Folder… action so both re-root identically.
+  const setTreeRoot = (path: string) => {
+    if (!path) return;
+    setRoot(path);
+    setListings({});
+    setExpanded({});
+    void loadDir(path);
+    fsWatch.watch(path);
+  };
+
   const pickerConfirm = async (chosen: string) => {
     const cur = picker();
     setPicker(null);
     if (!cur) return;
     if (cur.mode === 'open') {
       void openInTab(chosen);
+      return;
+    }
+    if (cur.mode === 'directory') {
+      // Open Folder…: point the sidebar tree at the chosen directory.
+      setTreeRoot(chosen);
       return;
     }
     const src = tabs().find((t) => t.id === cur.tabID);
@@ -982,13 +1001,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       return;
     }
     if (m.kind === 'cmd.set_root') {
-      const path = String(m.path ?? '');
-      if (!path) return;
-      setRoot(path);
-      setListings({});
-      setExpanded({});
-      void loadDir(path);
-      fsWatch.watch(path);
+      setTreeRoot(String(m.path ?? ''));
       return;
     }
     if (m.kind === 'cmd.open_diff') {
@@ -2120,6 +2133,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           <Menu x={menuAnchor().x} y={menuAnchor().y} onDismiss={closeMenu} data-testid="edit-menu-file">
             <MenuItem label="New" trailing={<kbd style={kbdStyle}>Ctrl+N</kbd>} onClick={run(newUntitled)} data-testid="edit-menu-new" />
             <MenuItem label="Open…" trailing={<kbd style={kbdStyle}>Ctrl+O</kbd>} onClick={run(() => setPicker({ mode: 'open' }))} data-testid="edit-menu-open" />
+            <MenuItem label="Open Folder…" onClick={run(() => setPicker({ mode: 'directory' }))} data-testid="edit-menu-open-folder" />
             <MenuSeparator />
             <MenuItem label="Save" trailing={<kbd style={kbdStyle}>Ctrl+S</kbd>} disabled={!activeTab()} onClick={run(() => void saveActive())} data-testid="edit-menu-save" />
             <MenuItem label="Save As…" trailing={<kbd style={kbdStyle}>Ctrl+Shift+S</kbd>} disabled={!activeTab()} onClick={run(saveAsActive)} data-testid="edit-menu-save-as" />

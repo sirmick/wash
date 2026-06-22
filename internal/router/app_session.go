@@ -275,13 +275,17 @@ func (inst *AppInstance) handleChannelOpen(m wire.ChannelOpen) error {
 	if !inst.ownsWindow(m.WindowID) {
 		return inst.writeCtrl(wire.NewChannelOpenErr(m.ReqID, wire.ErrCodeForbidden, "window not owned by app"))
 	}
-	// v0.1: one shell. Pick it (any). For multi-shell we'd need the
-	// app to specify, or open one channel per shell.
-	shells := inst.router.shellList()
-	if len(shells) == 0 {
+	// Bind to the foreground head shell — the connection the user is
+	// actually looking at — not an arbitrary shells[0]. With several
+	// shells stacked (reconnect zombies / multiple tabs) shells[0] is
+	// map-order-random, so a terminal's PTY output would land on the
+	// wrong connection and the window would hang with no prompt.
+	// (True multi-head fanout — every shell sees every terminal — is
+	// the tracked follow-up.)
+	shell := inst.router.headShellOrAny()
+	if shell == nil {
 		return inst.writeCtrl(wire.NewChannelOpenErr(m.ReqID, wire.ErrCodeInternal, "no shell attached"))
 	}
-	shell := shells[0]
 	id := inst.router.allocChannelID()
 	b := &channelBinding{
 		channelID: id,

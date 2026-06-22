@@ -22,7 +22,7 @@
 #        for non-amd64).                              riscv64 get real verify).
 #
 # Env:
-#   WASH_PKG_VERSION    default 0.9.1
+#   WASH_PKG_VERSION    default 0.9.2
 #   WASH_PKG_TARGETS    newline-separated override of the row list
 #   WASH_PKG_DISPLAY=1  also build the wash-display display rows
 #   WASH_PKG_NO_BUILD=1 reuse already-staged tarballs/artifacts (skip compile)
@@ -37,7 +37,7 @@ cd "$ROOT"
 docker info >/dev/null 2>&1 || { echo "docker not usable" >&2; exit 1; }
 docker buildx version >/dev/null 2>&1 || { echo "docker buildx required (multi-arch builds)" >&2; exit 1; }
 
-VERSION="${WASH_PKG_VERSION:-0.9.1}"
+VERSION="${WASH_PKG_VERSION:-0.9.2}"
 CORE_BUILDER_BASE="${CORE_BUILDER_BASE:-ubuntu:24.04}"
 BUILD_CTX="$ROOT/packaging/build-ctx"
 DIST="$ROOT/dist"

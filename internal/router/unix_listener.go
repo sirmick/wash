@@ -13,6 +13,7 @@ package router
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -151,6 +153,20 @@ func (r *Router) handleHandoff(ctx context.Context, ctl *net.UnixConn) {
 	// upgrade bytes wash-login captured before handing off.
 	conn := &replayConn{Conn: nc, replay: replay}
 
+	// Generic-ingress requests (/app/<token>/...) are plain HTTP — many
+	// keep-alive asset fetches plus the backend's own WS upgrades — not
+	// the single shell-WS attach the /ws path expects. Peek the request
+	// path out of the replay bytes (which carry the whole first request)
+	// without disturbing conn, and serve those through a real http.Server
+	// over the handoff conn. wash-login forwards them with the same
+	// SCM_RIGHTS handoff it uses for /ws (server.go handleAppIngress), so
+	// in multi-user mode the per-user router — which binds no TCP — still
+	// serves its ingress routes.
+	if strings.HasPrefix(peekHandoffPath(replay), "/app/") {
+		r.serveHandoffHTTP(ctx, conn)
+		return
+	}
+
 	// Bound the read for the HTTP header so a malformed peer can't
 	// keep this goroutine alive forever waiting for "\r\n\r\n".
 	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
@@ -226,6 +242,105 @@ func (r *Router) serveHandoffWS(ctx context.Context, w http.ResponseWriter, req 
 	if err := r.HandleShell(sessCtx, t); err != nil && !errors.Is(err, context.Canceled) {
 		r.log("ctl handoff shell session: %v", err)
 	}
+}
+
+// peekHandoffPath parses just the request line + headers out of the
+// replay bytes (the first request wash-login captured before the
+// handoff) to recover the request path, without touching the live conn.
+// Returns "" when the replay doesn't parse — the caller then falls
+// through to the shell-WS path, which re-reads the request from the conn
+// itself, so a peek miss never strands a handoff.
+func peekHandoffPath(replay []byte) string {
+	req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(replay)))
+	if err != nil {
+		return ""
+	}
+	return req.URL.Path
+}
+
+// serveHandoffHTTP serves a handed-off conn as an HTTP/1.1 keep-alive
+// connection through the router's ingress mux. The conn still carries
+// the full first request in its replay prefix, so http.Server reads it
+// (and any subsequent keep-alive requests, and the WS-upgrade hijack the
+// ingress reverse-proxy performs for code-server's own sockets) until
+// the peer closes the conn or ctx cancels. One handoff == one browser
+// TCP connection == one short-lived http.Server.
+func (r *Router) serveHandoffHTTP(ctx context.Context, conn net.Conn) {
+	ln := newSingleConnListener(conn)
+	srv := &http.Server{
+		Handler:           r.ingressMux(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	go func() {
+		<-ctx.Done()
+		_ = srv.Close()
+	}()
+	// Serve returns once the listener closes: the single-conn listener
+	// trips its own Close when the served conn is closed (peer hangup),
+	// and srv.Close() trips it on ctx cancel.
+	_ = srv.Serve(ln)
+}
+
+// ingressMux routes /app/<token>/* to the shared ingress reverse-proxy.
+// It is the handoff-path equivalent of the /app/ route the direct-TCP
+// HTTPServer mounts (http.go); both dispatch to Router.handleIngress so
+// single-user and multi-user deployments proxy identically.
+func (r *Router) ingressMux() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/app/", r.handleIngress)
+	return mux
+}
+
+// singleConnListener is a net.Listener that yields exactly one
+// already-open conn and then blocks Accept until Close. http.Server
+// wants a Listener; this adapts our single handoff conn to that shape.
+// The yielded conn is wrapped so its Close trips the listener, letting
+// http.Server.Serve return when the peer hangs up.
+type singleConnListener struct {
+	ch   chan net.Conn
+	done chan struct{}
+	once sync.Once
+}
+
+func newSingleConnListener(conn net.Conn) *singleConnListener {
+	l := &singleConnListener{ch: make(chan net.Conn, 1), done: make(chan struct{})}
+	l.ch <- &closeNotifyConn{Conn: conn, onClose: l.Close}
+	return l
+}
+
+func (l *singleConnListener) Accept() (net.Conn, error) {
+	select {
+	case c := <-l.ch:
+		return c, nil
+	case <-l.done:
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *singleConnListener) Close() error {
+	l.once.Do(func() { close(l.done) })
+	return nil
+}
+
+func (l *singleConnListener) Addr() net.Addr { return handoffAddr{} }
+
+type handoffAddr struct{}
+
+func (handoffAddr) Network() string { return "unix" }
+func (handoffAddr) String() string  { return "ws-handoff" }
+
+// closeNotifyConn fires onClose exactly once when the conn is closed,
+// so the single-conn listener can unblock its Accept and let
+// http.Server.Serve return instead of hanging forever.
+type closeNotifyConn struct {
+	net.Conn
+	once    sync.Once
+	onClose func() error
+}
+
+func (c *closeNotifyConn) Close() error {
+	c.once.Do(func() { _ = c.onClose() })
+	return c.Conn.Close()
 }
 
 // recvHandoffMsg reads one Recvmsg on ctl, expecting exactly one fd

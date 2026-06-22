@@ -1,3 +1,20 @@
+wash (0.9.2-1) unstable; urgency=low
+
+  * wash-login: proxy generic ingress (/app/) through the multi-user front.
+    Ingress-backed apps (vscode/code-server, any embedded web app) 404'd in
+    multi-user deployments because /app/<token>/* is served by the router's
+    HTTP handler, but behind wash-login the router binds no TCP (ctl-socket
+    fd-handoff only). wash-login now has an authenticated /app/ route that
+    resolves the session and hands the conn off (SCM_RIGHTS), staying out of
+    the data path; the router's handoff is now path-aware (/app/ -> keep-alive
+    http.Server over a shared ingress mux; /ws unchanged). v1 single-session.
+  * no-cache headers on wash-login's unversioned shell assets (stops stale
+    wash-ui.js after upgrades).
+  * edit: File -> Open Folder... re-roots the left tree at a chosen dir.
+  * router: terminal follows the foreground shell across stacked connections.
+
+ -- sirmick <sirmick@gmail.com>  Sun, 21 Jun 2026 00:00:00 -0700
+
 wash (0.9.1-4) unstable; urgency=low
 
   * Ship the busybox-style multi-call binary by default: one /usr/bin/wash

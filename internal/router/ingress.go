@@ -175,35 +175,41 @@ func newIngressProxy(network, addr, basePath string, log Logger) *httputil.Rever
 	}
 }
 
-// handleAppProxy serves /app/<token>/<rest...>: resolve the token,
+// handleIngress serves /app/<token>/<rest...>: resolve the token,
 // strip the prefix, and reverse-proxy to the backend. A bare
 // /app/<token> (no trailing slash) redirects so the embedded app's
 // relative asset URLs resolve under the base path.
-func (s *HTTPServer) handleAppProxy(w http.ResponseWriter, r *http.Request) {
-	rest := strings.TrimPrefix(r.URL.Path, "/app/")
-	if rest == r.URL.Path || rest == "" {
-		http.NotFound(w, r)
+//
+// It lives on the Router (not HTTPServer) because two front-ends mount
+// it: the direct-TCP HTTPServer mux (single-user / dev — http.go) and
+// the multi-user SCM_RIGHTS handoff served over the ctl socket
+// (unix_listener.go serveHandoffHTTP). Both share this one body so the
+// proxy semantics can't drift between deployment modes.
+func (r *Router) handleIngress(w http.ResponseWriter, req *http.Request) {
+	rest := strings.TrimPrefix(req.URL.Path, "/app/")
+	if rest == req.URL.Path || rest == "" {
+		http.NotFound(w, req)
 		return
 	}
 	token, sub, found := strings.Cut(rest, "/")
 	if token == "" {
-		http.NotFound(w, r)
+		http.NotFound(w, req)
 		return
 	}
 	if !found {
-		http.Redirect(w, r, "/app/"+token+"/", http.StatusMovedPermanently)
+		http.Redirect(w, req, "/app/"+token+"/", http.StatusMovedPermanently)
 		return
 	}
-	be := s.router.ingress.lookup(token)
+	be := r.ingress.lookup(token)
 	if be == nil {
 		http.Error(w, "unknown or expired ingress", http.StatusGone)
 		return
 	}
 	// Rewrite to backend-relative path. Clearing RawPath lets
 	// net/http recompute the encoded form from Path.
-	r.URL.Path = "/" + sub
-	r.URL.RawPath = ""
-	be.proxy.ServeHTTP(w, r)
+	req.URL.Path = "/" + sub
+	req.URL.RawPath = ""
+	be.proxy.ServeHTTP(w, req)
 }
 
 // handleIngressPublish is the router side of the publish RPC.
