@@ -7,7 +7,8 @@
     "build": "vite build"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./vite-app": "./vite-app.mjs"
   },
   "peerDependencies": {
     "@xterm/addon-fit": "^0.10.0",

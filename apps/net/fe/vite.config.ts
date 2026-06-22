@@ -1,20 +1,6 @@
 import { defineConfig } from 'vite';
-import solid from 'vite-plugin-solid';
+import { washAppConfig } from '@wash/ui/vite-app';
 
-export default defineConfig({
-  plugins: [solid()],
-  build: {
-    outDir: 'dist',
-    emptyOutDir: true,
-    target: 'es2022',
-    sourcemap: false,
-    lib: {
-      entry: 'src/main.tsx',
-      formats: ['es'],
-      fileName: () => 'index.js',
-    },
-    rollupOptions: {
-      external: ['solid-js', 'solid-js/web', 'solid-js/store', '@wash/ui'],
-    },
-  },
-});
+// Library build for the wash-app-net element / panel. Shared config
+// lives in @wash/ui/vite-app; only per-app overrides are passed here.
+export default defineConfig(washAppConfig());
