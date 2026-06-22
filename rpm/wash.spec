@@ -1,6 +1,6 @@
 Name:           wash
-Version:        0.9.1
-Release:        4%{?dist}
+Version:        0.9.3
+Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
 License:        AGPL-3.0-or-later
@@ -202,6 +202,12 @@ fi
 exit 0
 
 %changelog
+* Mon Jun 22 2026 sirmick <sirmick@gmail.com> - 0.9.3-1
+- build: a single app roster drives the per-app Makefile rules, the multicall
+  imports (make gen-imports), and a manifest-icon sprite check (CORE_AUDIT 2.2).
+- Sync the rpm package version to 0.9.3 (it had been stranded at 0.9.1 while
+  deb/binaries moved to 0.9.2).
+
 * Sat Jun 20 2026 sirmick <sirmick@gmail.com> - 0.9.1-4
 - Ship the multi-call binary by default: one /usr/bin/wash + relative wash-<app>
   symlinks (installed 118M -> 21M). wash-login/wash-sudo stay real binaries.
