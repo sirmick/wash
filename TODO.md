@@ -56,6 +56,12 @@ P2/P3 merges).
   `as` casts — give them discriminated-union types.
 - [ ] **(optional) Phase 7** — same playbook for `session` / `top`.
 
+## system monitor (top)
+
+- [ ] **`% mem` and RSS look wrong.** The memory percentage and RSS columns
+  in the system monitor display funny/incorrect values — investigate the
+  per-process mem accounting (`apps/top/be`) and the FE formatting.
+
 ## wash-fm
 
 - [ ] **Expand-folder scroll anchoring.** Expanding a folder inserts rows
