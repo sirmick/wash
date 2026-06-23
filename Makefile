@@ -157,6 +157,27 @@ check-imports:
 check-icons:
 	@go test -count=1 -tags=multicall -run TestManifestIconsInSprite ./cmd/wash/
 
+# check-versions: the version single-source guard. The root VERSION file is the
+# master — the Makefile stamps it into every binary via -ldflags, and packaging
+# (run_matrix.sh / make-source-tarball.sh) now defaults its package version to
+# it. This asserts the version literals that AREN'T auto-derived — the Go
+# bare-build default and the native-package metadata (deb changelog, rpm spec,
+# alpine APKBUILD) — all match it, so a bump that misses a file fails CI instead
+# of silently shipping a mismatched / unbuildable package (the drift that
+# stranded rpm/apk at 0.9.1 while deb/binaries moved on). FE package.json
+# versions and the README are cosmetic and intentionally not guarded. Wired into
+# unit-test beside check-pkg-binaries / check-imports.
+.PHONY: check-versions
+check-versions:
+	@v=`cat VERSION`; rc=0; \
+	 ck() { if [ "$$2" != "$$v" ]; then echo "  version drift: $$1 is '$$2', expected '$$v'"; rc=1; fi; }; \
+	 ck internal/version/version.go "`sed -n 's/^var Version = \"\([^\"]*\)\".*/\1/p' internal/version/version.go | head -1`"; \
+	 ck debian/changelog            "`sed -n '1s/^wash (\([0-9.]*\)-.*/\1/p' debian/changelog`"; \
+	 ck rpm/wash.spec               "`awk '/^Version:/{print $$2; exit}' rpm/wash.spec`"; \
+	 ck alpine/APKBUILD             "`sed -n 's/^pkgver=//p' alpine/APKBUILD | head -1`"; \
+	 if [ $$rc -eq 0 ]; then echo "check-versions: deb/rpm/apk + Go default all match VERSION ($$v)"; \
+	 else echo "check-versions: align the above with the root VERSION file ($$v)"; exit 1; fi
+
 # Privileged escalation CLIs that com.wash.netd runs through wash-priv:
 # washnet-read snapshots the box's config, washnet-wifi drives the polkit-gated
 # radio/connect/forget. netd locates them next to its own binary, so the host
@@ -949,6 +970,7 @@ GO_UNIT_PKGS = $$(go list ./... | grep -v '/wash-vm/vm$$')
 unit-test: test-app fe-unit component
 	$(MAKE) -s check-pkg-binaries
 	$(MAKE) -s check-imports
+	$(MAKE) -s check-versions
 	go vet ./...
 	go test -count=1 -p 1 -timeout 120s $(GO_UNIT_PKGS)
 
