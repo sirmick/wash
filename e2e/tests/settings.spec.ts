@@ -155,7 +155,7 @@ test.describe('wash-settings — Theme packs', () => {
     await expect(app.locator('[data-testid="pack-card-midnight"]')).toBeVisible();
     await expect(app.locator('[data-testid="pack-card-tokyo"]')).toBeVisible();
     await expect(app.locator('[data-testid="pack-card-seoul"]')).toBeVisible();
-    await expect(app.locator('[data-testid="pack-card-nt"]')).toBeVisible();
+    await expect(app.locator('[data-testid="pack-card-copland"]')).toBeVisible();
     await expect(app.locator('[data-testid="pack-card-oslo"]')).toBeVisible();
   });
 

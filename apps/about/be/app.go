@@ -20,10 +20,12 @@ import (
 	"log"
 	"os"
 	"os/user"
+	"runtime"
 	"sync/atomic"
 	"time"
 
 	"github.com/sirmick/wash/internal/apps/registry"
+	"github.com/sirmick/wash/internal/hostmeta"
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/wire"
 )
@@ -238,6 +240,10 @@ type hostBlock struct {
 	UID       int    `json:"uid"`
 	Username  string `json:"username,omitempty"`
 	Hostname  string `json:"hostname,omitempty"`
+	Cores     int    `json:"cores,omitempty"`
+	Arch      string `json:"arch,omitempty"`
+	Kernel    string `json:"kernel,omitempty"`
+	Distro    string `json:"distro,omitempty"`
 	Workdir   string `json:"workdir,omitempty"`
 	UptimeSec int64  `json:"uptime_sec"`
 }
@@ -264,6 +270,10 @@ func gatherBuild() buildBlock {
 func gatherHost() hostBlock {
 	h := hostBlock{
 		UID:       os.Getuid(),
+		Cores:     runtime.NumCPU(),
+		Arch:      hostmeta.Arch(),
+		Kernel:    hostmeta.Kernel(),
+		Distro:    hostmeta.Distro(),
 		UptimeSec: int64(time.Since(startedAt).Seconds()),
 	}
 	if hn, err := os.Hostname(); err == nil {

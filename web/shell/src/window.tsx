@@ -582,7 +582,7 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
             background: copied() ? tokens.bgSuccess : tokens.bgDanger,
             color: tokens.fg,
             border: `1px solid ${tokens.borderDanger}`,
-            'border-radius': '3px',
+            'border-radius': tokens.radiusSm,
             padding: '4px 8px',
             cursor: 'pointer',
             font: 'inherit',

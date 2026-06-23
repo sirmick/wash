@@ -101,7 +101,7 @@ export const AudioWidget: Component<AudioWidgetProps> = (props) => {
                   flex: 1,
                   height: '4px',
                   background: tokens.bgInset,
-                  'border-radius': '2px',
+                  'border-radius': tokens.radiusSm,
                   overflow: 'hidden',
                 }}
               >

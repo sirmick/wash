@@ -155,6 +155,7 @@ const seoul: Pack = {
     '--wash-bg-window': '#f6efdd', // ivory paper
     '--wash-bg-menu': '#f0e7cf',
     '--wash-bg-inset': '#e9dec2', // sunken (slightly deeper on light)
+    '--wash-bg-canvas': '#fdf6e3', // editor/terminal canvas — Solarized-light base3 (pairs with the light syntax theme)
     '--wash-bg-row': 'transparent',
     '--wash-bg-row-hover': '#e7dabc',
     '--wash-bg-row-selected': '#ecd6a6',
@@ -200,89 +201,91 @@ const seoul: Pack = {
   wallpaper: 'wallpapers/seoul.svg',
 };
 
-// NT — a 1990s workstation look (à la Windows NT, but ours): silver
-// surfaces, white sunken fields, black text, a navy/white titlebar and a
-// raised 3D window bevel (via the --wash-titlebar-* / --wash-border-light
-// /dark override vars, which other packs leave unset), on a teal desktop.
-// Accents are the classic VGA 16-color darks. A light theme.
-const nt: Pack = {
-  id: 'nt',
-  name: 'NT',
+// Copland — Mac OS 8.5/9 "Platinum" appearance (named for Apple's Copland,
+// the next-gen Mac OS whose Platinum look shipped in 8.5/9). Five shades of
+// platinum grey, white sunken fields, black text, a light-grey pinstripe
+// titlebar (NOT a colored caption), a raised 3D bevel, and a periwinkle-blue
+// selection highlight — all sampled straight off a Mac OS 9 Appearance
+// control-panel screenshot. Replaced the old Windows-NT pack. The wallpaper
+// is a vectorized 1997 vintage-sunset design on black, so the platinum
+// windows pop. A light theme.
+const copland: Pack = {
+  id: 'copland',
+  name: 'Copland',
   appearance: 'light',
   scheme: {
-    '--wash-bg-window': '#c0c0c0', // silver
-    '--wash-bg-menu': '#c0c0c0',
+    '--wash-bg-window': '#e0e0e0', // platinum (the dominant grey in the screenshot)
+    '--wash-bg-menu': '#dddddd', // tabs / menu surfaces
     '--wash-bg-inset': '#ffffff', // white sunken fields
+    '--wash-bg-canvas': '#ffffff', // editor/terminal canvas — Mac white
     '--wash-bg-row': 'transparent',
-    '--wash-bg-row-hover': '#d8d4cc',
-    '--wash-bg-row-selected': '#8fa8c8', // steel-blue selection (black text still reads)
-    '--wash-bg-backdrop': 'rgba(0,0,0,0.35)',
-    '--wash-bg-drop-target': '#9ec0d8',
-    '--wash-border-menu': '#808080',
-    '--wash-border-window': '#808080',
-    '--wash-border-focus': '#000080',
-    '--wash-border-drop-target': '#000080',
+    '--wash-bg-row-hover': '#d0d0d0',
+    '--wash-bg-row-selected': '#9aa0d6', // periwinkle-blue highlight (black text still reads)
+    '--wash-bg-backdrop': 'rgba(0,0,0,0.3)',
+    '--wash-bg-drop-target': '#c0c0f0', // light periwinkle (the screenshot's selection fill)
+    '--wash-border-menu': '#9a9a9a',
+    '--wash-border-window': '#555555',
+    '--wash-border-focus': '#606090', // dark periwinkle (active/focus)
+    '--wash-border-drop-target': '#606090',
     '--wash-fg': '#000000',
-    '--wash-fg-muted': '#404040',
+    '--wash-fg-muted': '#555555',
     '--wash-fg-dim': '#808080',
-    '--wash-bg-danger': '#f4cccc',
-    '--wash-border-danger': '#c00000',
+    '--wash-bg-danger': '#f0d4d4',
+    '--wash-border-danger': '#a85050',
     '--wash-fg-danger': '#a00000',
-    '--wash-bg-success': '#a3d9a0', // clearer green — pops on the silver chrome
-    '--wash-fg-success': '#085c08',
-    '--wash-bg-warning': '#f4eec4',
-    '--wash-fg-warning': '#808000',
-    '--wash-bg-info': '#000080', // navy info badge…
-    '--wash-fg-info': '#ffffff', // …with white text (Win9x selection look)
-    '--wash-bg-neutral': '#e6e2da', // off-white, distinct from the silver window
-    '--wash-bg-denied': '#f0e6c8',
-    '--wash-border-denied': '#808000',
-    '--wash-sev-error': '#c00000',
-    '--wash-sev-warn': '#808000',
-    '--wash-sev-notice': '#000080',
-    '--wash-sev-info': '#404040',
+    '--wash-bg-success': '#d4e6cc',
+    '--wash-fg-success': '#2e6e2e',
+    '--wash-bg-warning': '#efe6c2',
+    '--wash-fg-warning': '#7a5e10',
+    '--wash-bg-info': '#9aa0d6', // periwinkle info badge…
+    '--wash-fg-info': '#1a1a40', // …with deep-blue text (Platinum highlight look)
+    '--wash-bg-neutral': '#d0d0d0',
+    '--wash-bg-denied': '#ece0c4',
+    '--wash-border-denied': '#9a7a30',
+    '--wash-sev-error': '#b00000',
+    '--wash-sev-warn': '#7a5e10',
+    '--wash-sev-notice': '#4a4a8a',
+    '--wash-sev-info': '#444444',
     '--wash-sev-debug': '#808080',
-    '--wash-accent-red': '#c00000',
-    '--wash-accent-orange': '#c05000',
-    '--wash-accent-amber': '#808000', // olive
-    '--wash-accent-lime': '#408000',
-    '--wash-accent-green': '#008000',
-    '--wash-accent-teal': '#008060',
-    '--wash-accent-cyan': '#008080', // teal
-    '--wash-accent-blue': '#000080', // navy
-    '--wash-accent-indigo': '#303090',
-    '--wash-accent-violet': '#800080', // purple
-    '--wash-accent-magenta': '#a000a0',
-    '--wash-accent-pink': '#c04070',
+    '--wash-accent-red': '#cc3b33',
+    '--wash-accent-orange': '#dd7a2e',
+    '--wash-accent-amber': '#caa23a',
+    '--wash-accent-lime': '#7faa3c',
+    '--wash-accent-green': '#3f9a52',
+    '--wash-accent-teal': '#2f9a8c',
+    '--wash-accent-cyan': '#2f95ac',
+    '--wash-accent-blue': '#6c72b8', // Platinum periwinkle
+    '--wash-accent-indigo': '#5a60a8',
+    '--wash-accent-violet': '#8a5fb0',
+    '--wash-accent-magenta': '#b23f95',
+    '--wash-accent-pink': '#cc5b86',
     // Chrome override vars (only this pack sets them; window.tsx defaults
-    // everywhere else): navy/white caption + raised bevel.
-    '--wash-titlebar-active': '#000080',
-    '--wash-titlebar-inactive': '#7f7f7f',
-    '--wash-titlebar-fg': '#ffffff',
-    // Window frame. The silver body already cuts a high-contrast edge
-    // against the dark wallpaper, so a *dark* shadow border (the authentic
-    // Win9x bottom-right) just reads as a stray line — and an inset bevel
-    // gets painted over by the app's own background. So the frame is a
-    // LIGHT bevel: bright highlight top-left, soft gray bottom-right, both
-    // of which read on the dark wallpaper as a clean raised frame.
+    // everywhere else): a light platinum pinstripe caption with black,
+    // centered title text — the Mac OS 9 look, not a colored caption.
+    '--wash-titlebar-active': '#cccccc',
+    '--wash-titlebar-inactive': '#dddddd',
+    '--wash-titlebar-fg': '#000000',
+    // Raised Platinum bevel: bright highlight top-left, mid-grey bottom-right.
     '--wash-border-light': '#ffffff',
-    '--wash-border-dark': '#d4d4d4',
-    // Square 90s corners everywhere, and a gray taskbar (the default
-    // sunken surface is white here, which looked wrong).
+    '--wash-border-dark': '#909090',
+    // Square corners everywhere — the crisp Platinum/9x look.
     '--wash-radius-sm': '0',
     '--wash-radius-md': '0',
     '--wash-radius-lg': '0',
     '--wash-radius-xl': '0',
-    '--wash-taskbar-bg': '#c0c0c0',
-    // Desktop info banner sits over the dark synthwave, so it needs light
-    // text even though the chrome text is black.
-    '--wash-banner-fg': '#e6e9ee',
-    // Win9x-ish type + a raised light top edge on the taskbar (3D pop).
-    '--wash-font-sans': 'Tahoma, "MS Sans Serif", Geneva, Verdana, sans-serif',
-    '--wash-font-mono': '"Courier New", Courier, monospace',
-    '--wash-taskbar-top': '#f4f4f4',
+    '--wash-taskbar-bg': '#cccccc',
+    // Desktop info banner sits over the black 1997 wallpaper → light text.
+    '--wash-banner-fg': '#e8e8f0',
+    // Classic Mac type + a raised light top edge on the taskbar (3D pop).
+    '--wash-font-sans': 'Geneva, "Lucida Grande", Verdana, Helvetica, sans-serif',
+    '--wash-font-mono': 'Monaco, "Courier New", monospace',
+    '--wash-taskbar-top': '#ffffff',
+    // Start menu sits flush in the bottom-left corner, rising straight off
+    // the taskbar (40px) — the classic Win9x/Platinum look, no float gap.
+    '--wash-startmenu-left': '0',
+    '--wash-startmenu-bottom': '40px',
   },
-  wallpaper: 'wallpapers/nt.svg',
+  wallpaper: 'wallpapers/copland.svg',
 };
 
 // Oslo — the Nord palette (arctic blue-grey) + a vectorized Nordic
@@ -341,7 +344,7 @@ const oslo: Pack = {
 };
 
 /** All built-in packs, in gallery order. Midnight is first / default. */
-export const packs: Pack[] = [midnight, tokyo, seoul, nt, oslo];
+export const packs: Pack[] = [midnight, tokyo, seoul, copland, oslo];
 
 export const defaultPackId = 'midnight';
 

@@ -1667,7 +1667,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     ]),
 
     EditorView.theme({
-      '&': { height: '100%', background: tokens.bgWindow, color: tokens.fg },
+      '&': { height: '100%', background: tokens.bgCanvas, color: tokens.fg },
       '.cm-scroller': { font: `${tokens.fontSizeBase} ${tokens.fontMono}` },
       '.cm-content': { padding: '8px 0', caretColor: tokens.fg },
       '.cm-cursor': { borderLeftColor: tokens.fg },
@@ -3118,7 +3118,7 @@ const langHintStyle: JSX.CSSProperties = {
 };
 
 const termPaneStyle: JSX.CSSProperties = {
-  background: '#000',
+  background: tokens.bgCanvas,
   display: 'flex',
   'flex-direction': 'column',
   overflow: 'hidden',
@@ -3136,7 +3136,7 @@ const termBodyStyle: JSX.CSSProperties = {
   flex: 1,
   position: 'relative',
   overflow: 'hidden',
-  background: '#000',
+  background: tokens.bgCanvas,
 };
 
 const termNewBtnStyle: JSX.CSSProperties = {

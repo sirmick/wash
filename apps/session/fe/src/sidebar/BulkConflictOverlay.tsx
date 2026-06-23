@@ -68,7 +68,7 @@ const ConflictModal: Component<{
   const panelStyle: JSX.CSSProperties = {
     background: tokens.bgWindow,
     border: '1px solid #3a3a6a',
-    'border-radius': '8px',
+    'border-radius': tokens.radiusXl,
     padding: '20px 22px',
     'min-width': '420px',
     'max-width': '600px',
@@ -92,7 +92,7 @@ const ConflictModal: Component<{
             'margin-bottom': '14px',
             padding: '8px 10px',
             background: 'rgba(0,0,0,0.25)',
-            'border-radius': '4px',
+            'border-radius': tokens.radiusMd,
           }}
         >
           {c().dst}

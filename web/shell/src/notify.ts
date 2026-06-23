@@ -5,6 +5,8 @@
 // persistence, no DND. Future direction is delegation to the
 // session chrome (DE owns the UX), but for now the shell renders.
 
+import { tokens } from '@wash/ui';
+
 export interface ToastInput {
   instanceID: string;
   title: string;
@@ -37,14 +39,17 @@ function ensureContainer(): HTMLDivElement {
   return div;
 }
 
+// Toast background per level — the semantic status tones, so toasts
+// re-skin with the pack (and read correctly on light themes, where the
+// tone goes light and tokens.fg goes dark) instead of staying dark.
 function colorFor(level: ToastInput['level']): string {
   switch (level) {
     case 'error':
-      return '#7a2a2a';
+      return tokens.bgDanger;
     case 'warn':
-      return '#7a5e2a';
+      return tokens.bgWarning;
     default:
-      return '#2a3a7a';
+      return tokens.bgInfo;
   }
 }
 
@@ -57,9 +62,9 @@ export function showToast(t: ToastInput): void {
   card.style.cssText = [
     'pointer-events:auto',
     `background:${colorFor(t.level)}`,
-    'color:#eee',
+    `color:${tokens.fg}`,
     'border:1px solid rgba(255,255,255,0.08)',
-    'border-radius:6px',
+    `border-radius:${tokens.radiusLg}`,
     'padding:10px 12px',
     'font:13px system-ui,sans-serif',
     'box-shadow:0 6px 18px rgba(0,0,0,0.5)',

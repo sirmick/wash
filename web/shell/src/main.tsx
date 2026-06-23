@@ -26,6 +26,7 @@ import {
 } from './clients';
 import { beginBundle, finishBundle, pushBundleBytes } from './assets';
 import { RelayChannelSocket } from './relay-socket';
+import { tokens } from '@wash/ui';
 
 const __washLoadT0 = performance.now();
 import { washFetch, handleAssetReadOK, handleAssetReadErr, pushAssetBytes, finishAsset } from './wash-fetch';
@@ -795,9 +796,9 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => (
         top: '10px',
         left: '50%',
         transform: 'translateX(-50%)',
-        background: props.state === 'closed' || props.state === 'unauthenticated' ? '#5a1a1a' : '#3a2a1a',
-        color: '#eee',
-        border: `1px solid ${props.state === 'closed' || props.state === 'unauthenticated' ? '#a04040' : '#a07040'}`,
+        background: props.state === 'closed' || props.state === 'unauthenticated' ? tokens.bgDanger : tokens.bgDenied,
+        color: tokens.fg,
+        border: `1px solid ${props.state === 'closed' || props.state === 'unauthenticated' ? tokens.borderDanger : tokens.borderDenied}`,
         'border-radius': '6px',
         padding: '6px 14px',
         font: '12px ui-sans-serif,system-ui,sans-serif',

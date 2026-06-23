@@ -18,6 +18,14 @@ export const tokens = {
   bgWindow: 'var(--wash-bg-window, #181828)',
   bgMenu: 'var(--wash-bg-menu, #15152a)',
   bgInset: 'var(--wash-bg-inset, #10101a)', // sunken surface — inputs, log/code panes; darker than the window
+  // Dead-black content canvas — the editor text surface and integrated
+  // terminal containers. Distinct from bgInset because these want a true
+  // black ("out-of-the-box Linux terminal") on dark packs, not the
+  // slightly-tinted sunken grey. On dark packs this stays #000; LIGHT
+  // packs override --wash-bg-canvas to their paper/white so the same
+  // surface reads correctly there (Seoul = Solarized-light cream, NT =
+  // white). Dark packs that omit it inherit the dead-black fallback.
+  bgCanvas: 'var(--wash-bg-canvas, #000000)',
   bgRow: 'var(--wash-bg-row, transparent)',
   bgRowHover: 'var(--wash-bg-row-hover, #202037)',
   bgRowSelected: 'var(--wash-bg-row-selected, #2a2a4a)',
@@ -101,6 +109,13 @@ export const tokens = {
   radiusMd: 'var(--wash-radius-md, 4px)',
   radiusLg: 'var(--wash-radius-lg, 6px)',
   radiusXl: 'var(--wash-radius-xl, 8px)',
+
+  // Start-menu anchor: distance from the screen's bottom-left corner.
+  // var-backed so a pack can float the menu off the edge + taskbar
+  // instead of sitting near-flush (Copland nudges it out). `bottom` =
+  // taskbar height (40px) + the gap above it; default is a 6px gap.
+  startMenuLeft: 'var(--wash-startmenu-left, 6px)',
+  startMenuBottom: 'var(--wash-startmenu-bottom, 46px)',
 
   // Font. var()-backed so a pack can swap the family (e.g. NT's
   // Win9x-ish Tahoma/MS-Sans stack). The comma-bearing fallback is fine —

@@ -52,7 +52,7 @@ export const Menu: ParentComponent<MenuProps> = (props) => {
           position: 'fixed',
           background: tokens.bgMenu,
           border: `1px solid ${tokens.borderMenu}`,
-          'border-radius': props.anchor === 'bottom-left' ? `${tokens.radiusXl}` : `${tokens.radiusMd}`,
+          'border-radius': `${tokens.radiusMd}`,
           padding: '4px 0',
           'min-width': '160px',
           'box-shadow': tokens.shadowMenu,
@@ -70,7 +70,7 @@ export const Menu: ParentComponent<MenuProps> = (props) => {
 
 function positionFor(p: MenuProps): JSX.CSSProperties {
   if (p.anchor === 'bottom-left') {
-    return { left: '6px', bottom: '46px' };
+    return { left: tokens.startMenuLeft, bottom: tokens.startMenuBottom };
   }
   return {
     left: `${p.x ?? 0}px`,
@@ -122,25 +122,25 @@ export const MenuItem: Component<MenuItemProps> = (props) => {
       style={{
         display: 'flex',
         'align-items': 'center',
-        gap: props.icon ? '10px' : undefined,
+        gap: props.icon ? '8px' : undefined,
         width: '100%',
         'text-align': 'left',
         background: !props.disabled && hover() ? tokens.bgRowSelected : 'transparent',
         color: tokens.fg,
         border: 'none',
-        'border-radius': `${tokens.radiusMd}`,
-        padding: '6px 14px',
+        'border-radius': `${tokens.radiusSm}`,
+        padding: '4px 10px',
         cursor: props.disabled ? 'not-allowed' : 'pointer',
         opacity: props.disabled ? 0.5 : 1,
-        font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+        font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
         transition: 'background 0.05s',
       }}
     >
       <Show when={props.icon}>
         <span
           style={{
-            width: '22px',
-            height: '22px',
+            width: '18px',
+            height: '18px',
             'flex-shrink': 0,
             display: 'inline-flex',
             'align-items': 'center',

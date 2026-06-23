@@ -129,7 +129,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
     'font-size': '14px',
     'line-height': 1,
     padding: '2px 6px',
-    'border-radius': '3px',
+    'border-radius': tokens.radiusSm,
   };
 
   return (
