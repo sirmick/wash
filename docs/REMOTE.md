@@ -258,6 +258,10 @@ the widget code; it just needs more data, tagged by host.
 
 ### 6.1 Connecting to hosts — the `wash-connect` app (supersedes the Hosts sidebar widget)
 
+> **Companion:** *finding* hosts to connect to (LAN auto-discovery via mDNS, the
+> "On your network" list) is covered in [DISCOVERY.md](DISCOVERY.md). This
+> section covers *connecting* once you have a target.
+
 **Decision (2026-06-13):** the connect UI is a dedicated window app
 **`wash-connect` (`com.wash.connect`)**, not a sidebar widget. A normal app is
 self-contained (its own BE+FE), has room for a real UI, follows the standard
@@ -298,6 +302,17 @@ UI surface):**
 supervisor + window front-end, as above. The simpler-but-non-persistent
 alternative is to fold the SSH supervision into `wash-connect`'s own BE and drop
 `com.wash.remote` — then closing the window drops all remote sessions.)*
+
+**Settings "Remote" panel.** The supervisor (`com.wash.remote`) also supplies a
+settings panel (`wash-settings-panel-remote`, embedded `panel.js`), mirroring how
+`com.wash.netd` supplies the Network panel. It subscribes to the supervisor's
+state and lists the live sessions and mounted folders, each with a graceful
+teardown button — **Disconnect** (`{kind:"disconnect",host}`, cancels the ssh ctx
++ detaches) and **Unmount** (`{kind:"unmount",mount_point}`, the escalating FUSE
+flush → lazy detach → abort). Because the panel talks to the always-running
+supervisor (not the window), it reflects state even when the Connect window was
+never opened; **Open Connect…** launches `com.wash.connect` for adding/launching
+hosts (docs/SETTINGS.md §2 revised).
 
 ### 6.2 Existing widgets become multi-host aware
 

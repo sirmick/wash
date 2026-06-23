@@ -45,9 +45,22 @@ interface MountState {
   error?: string;
 }
 
+// Candidate is a host found on the network (mDNS today) that isn't yet
+// connected or bookmarked — rendered under "On your network". addr is the
+// reliable SSH target (an IP); host is the friendly display name. wash=true
+// means it announced itself as a wash box.
+interface Candidate {
+  host: string;
+  addr: string;
+  port?: number;
+  source: string;
+  wash?: boolean;
+}
+
 interface RemoteState {
   hosts: HostState[];
   mounts?: MountState[];
+  candidates?: Candidate[];
 }
 
 // Bookmark is a saved connect target (persisted on disk by the BE). Host-
@@ -101,6 +114,7 @@ function statusLabel(s: HostStatus): string {
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [hosts, setHosts] = createSignal<HostState[]>([]);
   const [mounts, setMounts] = createSignal<MountState[]>([]);
+  const [candidates, setCandidates] = createSignal<Candidate[]>([]);
   const [hostInput, setHostInput] = createSignal('');
   // catalogs is a per-origin snapshot kept in a plain object so a catalog
   // arriving (or emptying) re-renders the matching host's app list.
@@ -154,6 +168,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         const list = Array.isArray(st.hosts) ? st.hosts : [];
         setHosts(list);
         setMounts(Array.isArray(st.mounts) ? st.mounts : []);
+        setCandidates(Array.isArray(st.candidates) ? st.candidates : []);
         reconcileAttachments(list);
         break;
       }
@@ -202,17 +217,19 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     send({ kind: 'bookmarks_save', bookmarks: next });
   };
   const isBookmarked = (host: string) => bookmarks().some((b) => b.host === host);
-  const addBookmark = (host: string) => {
+  const addBookmark = (host: string, label?: string) => {
     if (!host || isBookmarked(host)) return;
-    persistBookmarks([...bookmarks(), { host, label: host }]);
+    persistBookmarks([...bookmarks(), { host, label: label || host }]);
   };
   const removeBookmark = (host: string) => persistBookmarks(bookmarks().filter((b) => b.host !== host));
 
   // connectHost connects (the host appears in the connected section when up)
   // and queues its Launch dropdown to auto-open once apps arrive.
-  const connectHost = (host: string) => {
+  const connectHost = (host: string, port?: number) => {
     if (!host) return;
-    send({ kind: 'connect', host });
+    // remote_port is only sent for a non-default port (a discovered peer
+    // advertising e.g. 2222); the BE dials it with ssh -p. 0/undefined ⇒ 22.
+    send({ kind: 'connect', host, remote_port: port || 0 });
     pendingOpenMenu.add(host);
   };
 
@@ -267,6 +284,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     return bookmarks().filter((b) => !live.has(b.host));
   };
 
+  // Discovered hosts not already connected (by addr or origin) or saved as a
+  // bookmark — so a candidate disappears from this section the moment you act
+  // on it.
+  const candidateOnly = () => {
+    const live = connectedHostNames();
+    const origins = new Set(hosts().map((h) => h.origin));
+    const saved = new Set(bookmarks().map((b) => b.host));
+    return candidates().filter(
+      (c) => !live.has(c.addr) && !origins.has(c.addr) && !saved.has(c.addr),
+    );
+  };
+
   return (
     <div style={shellStyle}>
       <Header />
@@ -290,7 +319,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         </div>
 
         <Show
-          when={hosts().length > 0 || bookmarkedOnly().length > 0}
+          when={hosts().length > 0 || bookmarkedOnly().length > 0 || candidateOnly().length > 0}
           fallback={<div style={emptyStyle}>No hosts yet. Enter a host above, then Add it or Launch to connect.</div>}
         >
           {/* Connected hosts — bordered in the host's window-hint colour. */}
@@ -329,6 +358,24 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                     bookmark={bm}
                     onLaunch={() => connectHost(bm.host)}
                     onRemove={() => removeBookmark(bm.host)}
+                  />
+                )}
+              </For>
+            </div>
+          </Show>
+
+          {/* Auto-discovered on the local network (mDNS). Connecting uses the
+              addr (an IP, reliable) under your current username; the friendly
+              name is kept as the bookmark label if you save it. */}
+          <Show when={candidateOnly().length > 0}>
+            <div style={sectionLabelStyle}>On your network</div>
+            <div style={listStyle} data-testid="connect-candidates">
+              <For each={candidateOnly()}>
+                {(c) => (
+                  <CandidateRow
+                    candidate={c}
+                    onConnect={() => connectHost(c.addr, c.port)}
+                    onSave={() => addBookmark(c.addr, c.host)}
                   />
                 )}
               </For>
@@ -493,6 +540,37 @@ const BookmarkRow: Component<{
       </button>
       <button type="button" onClick={props.onRemove} style={iconBtnStyle} title="Remove bookmark" data-testid="connect-bookmark-remove">
         ✕
+      </button>
+    </div>
+  </div>
+);
+
+// CandidateRow is a host auto-discovered on the LAN. Connect dials its addr
+// under the current username; the ☆ saves it as a bookmark (addr as target,
+// friendly name as label). A "wash" chip marks a peer that announced itself
+// as a wash box (vs a generic SSH host a future provider might surface).
+const CandidateRow: Component<{
+  candidate: Candidate;
+  onConnect: () => void;
+  onSave: () => void;
+}> = (props) => (
+  <div style={{ ...rowStyle, 'border-color': tokens.borderMenu }} data-testid={`connect-candidate-${props.candidate.addr}`}>
+    <div style={rowMainStyle}>
+      <span style={{ ...dotStyle, background: tokens.accentCyan, opacity: 0.6 }} />
+      <span style={hostNameStyle} title={props.candidate.addr}>
+        {props.candidate.host}
+        <span style={candidateAddrStyle}>
+          {props.candidate.addr}{props.candidate.port ? `:${props.candidate.port}` : ''}
+        </span>
+      </span>
+      <Show when={props.candidate.wash}>
+        <span style={candidateChipStyle} data-testid="connect-candidate-wash">wash</span>
+      </Show>
+      <button type="button" onClick={props.onConnect} style={launchBtnStyle} data-testid="connect-candidate-connect">
+        Connect
+      </button>
+      <button type="button" onClick={props.onSave} style={iconBtnStyle} title="Save as bookmark" data-testid="connect-candidate-save">
+        ☆
       </button>
     </div>
   </div>
@@ -782,6 +860,25 @@ const statusStyle: JSX.CSSProperties = {
   font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
   color: tokens.fgMuted,
   'white-space': 'nowrap',
+};
+
+// candidateAddrStyle is the dim IP shown after a discovered host's name.
+const candidateAddrStyle: JSX.CSSProperties = {
+  'margin-left': '8px',
+  color: tokens.fgMuted,
+  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  'font-weight': 400,
+};
+
+// candidateChipStyle is the small "wash" badge on a discovered wash peer.
+const candidateChipStyle: JSX.CSSProperties = {
+  background: 'transparent',
+  color: tokens.accentCyan,
+  border: `1px solid ${tokens.accentCyan}`,
+  'border-radius': `${tokens.radiusSm}`,
+  font: `600 ${tokens.fontSizeSm} ${tokens.fontSans}`,
+  padding: '1px 6px',
+  'flex-shrink': 0,
 };
 
 const iconBtnStyle: JSX.CSSProperties = {

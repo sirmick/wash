@@ -28,6 +28,10 @@ test.beforeEach(() => {
 
 const REMOTE_DIR = '/home/wash';
 const MOUNT_POINT = '/home/wash/wash/remote/wash_at_10.77.0.2/wash';
+// A second B folder mounted in the lifecycle test, so the Remote panel lists
+// more than one row and per-row unmount can be shown to drop only its own.
+const SECOND_DIR = '/tmp';
+const MOUNT_SECOND = '/home/wash/wash/remote/wash_at_10.77.0.2/tmp';
 
 async function connectToB(page: Page, url: string): Promise<Locator> {
   await page.goto(url);
@@ -63,6 +67,33 @@ async function mountFolder(connect: Locator, dir: string) {
   await expect(connect.locator('[data-testid="connect-mount"]').first()).toHaveAttribute('data-status', 'mounted', {
     timeout: 60_000,
   });
+}
+
+// mountFolderAt mounts dir and waits for the SPECIFIC mount row (addressed by
+// its derived local mount point) to report mounted — so a second mount doesn't
+// race the first()-based assertion above.
+async function mountFolderAt(connect: Locator, dir: string, mountPoint: string) {
+  await closeLaunchMenu(connect);
+  await connect.locator('[data-testid="connect-mount-input"]').fill(dir);
+  await connect.locator('[data-testid="connect-mount-submit"]').click();
+  await expect(connect.locator(`[data-testid="connect-mount"][data-mount="${mountPoint}"]`)).toHaveAttribute(
+    'data-status',
+    'mounted',
+    { timeout: 60_000 },
+  );
+}
+
+// openSettingsRemotePanel opens the Settings window and switches to the
+// "Remote" pane supplied by com.wash.remote, returning the settings app
+// locator. The panel subscribes to A's supervisor on mount, so it reflects the
+// live sessions + mounts the connect window set up.
+async function openSettingsRemotePanel(page: Page): Promise<Locator> {
+  await openLocalApp(page, /^Settings$/);
+  const settings = page.locator('wash-app-settings');
+  await expect(settings).toBeVisible({ timeout: 30_000 });
+  await settings.getByRole('button', { name: 'Remote' }).click();
+  await expect(settings.locator('wash-settings-panel-remote')).toBeAttached({ timeout: 30_000 });
+  return settings;
 }
 
 async function launchOnB(connect: Locator, appId: string) {
@@ -203,4 +234,47 @@ test('chaos: killing the data ssh self-heals — a post-kill change still reache
 
   // A file created well after the kill still surfaces → the mount self-healed.
   await expect(localFm.locator('[data-testid="fm-entry-chaos_30.txt"]')).toBeVisible({ timeout: 120_000 });
+});
+
+// Lifecycle through the Settings "Remote" panel (the supervisor-vended panel,
+// docs/SETTINGS.md / docs/REMOTE.md §6.1): mount two of B's folders, assert the
+// panel lists the live session + both mounts, then tear them down FROM THE PANEL
+// — graceful unmount (escalating FUSE flush → lazy → abort) makes each mount row
+// vanish (only its own), and Disconnect makes the session row vanish. This is
+// the real-host assertion the standalone settings-remote-panel.spec stubs.
+test('Settings Remote panel: mount two folders, assert listed, then unmount + disconnect → gone', async ({ remoteVm, page }) => {
+  test.setTimeout(300_000);
+  const connect = await connectToB(page, remoteVm.url);
+
+  // Mount two distinct B folders from the connect window (its mount controls).
+  await mountFolderAt(connect, REMOTE_DIR, MOUNT_POINT);
+  await mountFolderAt(connect, SECOND_DIR, MOUNT_SECOND);
+
+  const settings = await openSettingsRemotePanel(page);
+
+  // The panel reflects the supervisor's live state: the connected session…
+  const sessionRow = settings.locator(`[data-testid="remote-session-${REMOTE_HOST}"]`);
+  await expect(sessionRow).toBeVisible({ timeout: 30_000 });
+  await expect(sessionRow).toHaveAttribute('data-status', 'up');
+
+  // …and both mounts, each addressed by its derived local mount point.
+  const washRow = settings.locator(`[data-testid="remote-mount"][data-mount="${MOUNT_POINT}"]`);
+  const secondRow = settings.locator(`[data-testid="remote-mount"][data-mount="${MOUNT_SECOND}"]`);
+  await expect(washRow).toBeVisible({ timeout: 30_000 });
+  await expect(secondRow).toBeVisible({ timeout: 30_000 });
+  await expect(settings.locator('[data-testid="remote-mount"]')).toHaveCount(2);
+
+  // Unmount the second folder FROM THE PANEL → its row goes, the first stays.
+  await secondRow.locator('[data-testid="remote-unmount"]').click();
+  await expect(secondRow).toHaveCount(0, { timeout: 60_000 });
+  await expect(washRow).toBeVisible();
+
+  // Unmount the first → no mounts left.
+  await washRow.locator('[data-testid="remote-unmount"]').click();
+  await expect(washRow).toHaveCount(0, { timeout: 60_000 });
+  await expect(settings.locator('[data-testid="remote-mount"]')).toHaveCount(0);
+
+  // Disconnect the session FROM THE PANEL → the session row goes too.
+  await sessionRow.locator('[data-testid="remote-disconnect"]').click();
+  await expect(sessionRow).toHaveCount(0, { timeout: 60_000 });
 });

@@ -15,7 +15,7 @@ func indexOf(ss []string, want string) int {
 }
 
 func TestBuildSSHArgs(t *testing.T) {
-	args := buildSSHArgs("user@host", "/tmp/a/A.sock", "/tmp/wash-relay-deadbeef.sock")
+	args := buildSSHArgs("user@host", "/tmp/a/A.sock", "/tmp/wash-relay-deadbeef.sock", 0)
 	joined := strings.Join(args, " ")
 
 	for _, want := range []string{
@@ -44,6 +44,20 @@ func TestBuildSSHArgs(t *testing.T) {
 	cmdIdx := indexOf(args, "wash-router")
 	if hostIdx < 0 || cmdIdx < 0 || hostIdx > cmdIdx {
 		t.Errorf("host must come before the remote command: hostIdx=%d cmdIdx=%d args=%v", hostIdx, cmdIdx, args)
+	}
+
+	// Default/zero port emits no -p; a non-default port is dialed with -p
+	// (ssh's positional target can't carry host:port).
+	if i := indexOf(args, "-p"); i >= 0 {
+		t.Errorf("default port must not emit -p: %v", args)
+	}
+	p := buildSSHArgs("user@host", "/tmp/a/A.sock", "/tmp/b.sock", 2222)
+	if i := indexOf(p, "-p"); i < 0 || i+1 >= len(p) || p[i+1] != "2222" {
+		t.Errorf("non-default port must emit -p 2222: %v", p)
+	}
+	// -p must precede the positional host, like every other ssh option.
+	if indexOf(p, "-p") > indexOf(p, "user@host") {
+		t.Errorf("-p must come before the host target: %v", p)
 	}
 }
 

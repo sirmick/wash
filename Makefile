@@ -59,8 +59,8 @@ OUT     := out
 FE_APPS := session about connect imageview term fm edit vscode-workbench \
            settings top disks journal syslogs services packages net \
            washamp music radio
-FE_PANEL_APPS := vscode netd
-SVC_APPS := bulk priv notify audio remote fswatch
+FE_PANEL_APPS := vscode netd remote
+SVC_APPS := bulk priv notify audio fswatch
 
 # Every app that embeds an FE asset bundle (windowed + panel). Drives the
 # embed-stamp / vendor-sync / multicall-stamp derivations. The gated `test` app
@@ -688,6 +688,15 @@ vm-net-test: $(OUT)/wash
 .PHONY: vm-disks-test
 vm-disks-test: $(OUT)/wash
 	go test ./wash-vm/vm/ -run TestDisksRealKernel -v -count=1
+
+# mdns-test: the wash-discovery real-multicast gate (docs/DISCOVERY.md) — opens
+# a live mDNS socket on this host, advertises, and browses for its own
+# announcement. Opt-in (not in the default unit tier) because a sandbox may
+# have a multicast iface that drops loopback delivery, which would hang/flake
+# the gate. Skips cleanly when no multicast socket is available.
+.PHONY: mdns-test
+mdns-test:
+	WASH_MDNS_INTEGRATION=1 go test ./internal/mdns/ -run TestLoopbackDiscovery -v -count=1
 
 # vm-chrome: the minimal host chrome the proxy serves (docs/NET.md §8.3) —
 # tabs for Console + Wash. The wash UI (shell.js + app bundles) comes over the

@@ -102,8 +102,10 @@ com.wash.settings`) is identical.
   subscribe/unsubscribe lifecycle.
 
 **Result.** The C++ compositor *does* ship an FE bundle now — but only the
-panel (`panel.js`), embedded raw, not a window FE. vscode/netd likewise
-ship only a panel. Settings has zero per-app vocabulary. A missing package
+panel (`panel.js`), embedded raw, not a window FE. vscode / netd / remote
+likewise ship only a panel — `com.wash.remote` supplies the **Remote** panel
+(live sessions + mounts with graceful teardown; "Open Connect…" opens the
+`com.wash.connect` window). Settings has zero per-app vocabulary. A missing package
 → no descriptor → no section (the old "not installed" hint is gone;
 absence is the signal).
 
