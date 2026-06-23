@@ -14,10 +14,51 @@ import { test, expect, displaySkipReason } from '../fixtures/router';
 import type { Page, Locator } from '@playwright/test';
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { deflateSync } from 'node:zlib';
 
 const SHOTS = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'docs', 'screenshots');
 mkdirSync(SHOTS, { recursive: true });
+
+// --- a tiny self-contained PNG encoder ------------------------------------
+// So the image-viewer shot has real pictures to thumbnail without committing
+// binary fixtures. RGB, 8-bit, one zlib IDAT — decodable by internal/thumbs.
+function crc32(buf: Buffer): number {
+  let c = ~0;
+  for (let i = 0; i < buf.length; i++) {
+    c ^= buf[i];
+    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
+  }
+  return ~c >>> 0;
+}
+function pngChunk(type: string, data: Buffer): Buffer {
+  const len = Buffer.alloc(4); len.writeUInt32BE(data.length, 0);
+  const td = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+  const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(td), 0);
+  return Buffer.concat([len, td, crc]);
+}
+function writePng(path: string, w: number, h: number,
+                  px: (x: number, y: number) => [number, number, number]): void {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8; ihdr[9] = 2; // 8-bit depth, colour type 2 (RGB)
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  let o = 0;
+  for (let y = 0; y < h; y++) {
+    raw[o++] = 0; // filter: none
+    for (let x = 0; x < w; x++) {
+      const [r, g, b] = px(x, y);
+      raw[o++] = r & 255; raw[o++] = g & 255; raw[o++] = b & 255;
+    }
+  }
+  writeFileSync(path, Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', deflateSync(raw)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]));
+}
 
 // mulberry32 — a tiny deterministic PRNG so the montage layout is reproducible.
 function mkRng(seed: number): () => number {
@@ -45,7 +86,38 @@ function seedShowcase(root: string): void {
     'package main\n\nimport "fmt"\n\nfunc main() {\n\tfmt.Println("hello from wash")\n}\n');
   writeFileSync(join(root, 'Music', 'playlist.m3u'), '#EXTM3U\n');
   writeFileSync(join(root, '.profile'), 'export EDITOR=wash-edit\n');
+
+  // Generated images so the Image Viewer has real thumbnails. These live in
+  // Pictures/ INSIDE the sandbox root, so the fs-root confinement (below) lets
+  // imageview read them — WASH_IMAGEVIEW_DIR points here.
+  const pics = join(root, 'Pictures');
+  writePng(join(pics, 'sunset.png'), 480, 320, (_x, y) => {
+    const t = y / 320;
+    return [Math.round(240 - 60 * t), Math.round(90 + 70 * t), Math.round(120 + 110 * t)];
+  });
+  writePng(join(pics, 'aurora.png'), 480, 320, (x, y) => {
+    const v = Math.sin(x / 36) * Math.cos(y / 48);
+    return [Math.round(20 + 30 * v), Math.round(150 + 90 * v), Math.round(130 + 80 * v)];
+  });
+  writePng(join(pics, 'grid.png'), 400, 400, (x, y) =>
+    ((x >> 5) + (y >> 5)) & 1 ? [38, 42, 64] : [120, 200, 220]);
+  writePng(join(pics, 'rings.png'), 420, 300, (x, y) => {
+    const d = Math.hypot(x - 210, y - 150);
+    const s = (Math.sin(d / 12) + 1) / 2;
+    return [Math.round(60 + 180 * s), Math.round(40 + 120 * (1 - s)), Math.round(160 + 80 * s)];
+  });
 }
+
+// A FIXED, pre-seeded sandbox root. The router honours WASH_FM_ROOT as the
+// global fs-root, confining EVERY app to it (internal/runner/router resolves
+// it via firstNonEmpty(--fs-root, WASH_FS_ROOT, WASH_FM_ROOT)). The fixture's
+// own fmRoot is a random tmpdir, which means imageview can't be pointed at a
+// known folder inside it — so we use a stable root we seed here at module load
+// and hand the router via WASH_FM_ROOT below. Workers=1 ⇒ no cross-run races.
+const ROOT = join(tmpdir(), 'wash-shot-root');
+mkdirSync(ROOT, { recursive: true });
+seedShowcase(ROOT);
+const PICS = join(ROOT, 'Pictures');
 
 // Every app to stage into the per-test apps dir. NOTE: passing `apps` REPLACES
 // the fixture's default core set, so the shell's own apps (session/about/notify)
@@ -53,15 +125,54 @@ function seedShowcase(root: string): void {
 // backend singleton (auto-spawned when its binary is present).
 const STAGE = ['session', 'about', 'test', 'notify',
   'fm', 'term', 'edit', 'washamp', 'net', 'netd', 'settings', 'top',
-  'services', 'packages', 'disks', 'journal', 'display'] as const;
+  'services', 'packages', 'disks', 'journal', 'display',
+  'radio', 'imageview', 'connect', 'remote'] as const;
+
+// Theme each app shot with a different pack so the README grid shows the
+// range. The montage + a few apps stay on the default (Midnight) dark.
+// Packs: midnight (default dark), tokyo (neon), seoul (light paper),
+// copland (Mac OS 9), oslo (cool slate). See web/lib/src/packs.ts.
+const THEME: Record<string, string> = {
+  edit: 'tokyo', about: 'tokyo', radio: 'tokyo',
+  settings: 'seoul', services: 'seoul', imageview: 'seoul',
+  packages: 'copland', connect: 'copland',
+  net: 'oslo', top: 'oslo', disks: 'oslo',
+};
 
 test.describe('screenshots', () => {
-  test.use({ routerOpts: { apps: [...STAGE], fmRoot: true, fmSeed: seedShowcase, xdgConfig: true } });
+  test.use({ routerOpts: {
+    apps: [...STAGE], xdgConfig: true,
+    extraEnv: {
+      // Fixed, pre-seeded fs-root (sandbox) shared by every app this run, so
+      // imageview can be pointed at a known folder inside it.
+      WASH_FM_ROOT: ROOT,
+      WASH_IMAGEVIEW_DIR: PICS,
+      // Deterministic LAN peers for the Connect "On your network" shot; the
+      // no-advertise flag keeps headless runs from broadcasting mDNS. Only the
+      // remote/connect apps read these — harmless for every other shot.
+      WASH_DISCOVERY_STATIC: 'labbox=10.42.0.9:2222,prod-db=10.42.0.10,build01=10.42.0.11',
+      WASH_DISCOVERY_NO_ADVERTISE: '1',
+    },
+  } });
 
   // --- helpers ---------------------------------------------------------------
+  // Seed the active theme pack into the isolated desktop.json BEFORE the
+  // browser connects — wash-session reads it at spawn and the shell applies
+  // the scheme to the document root, so every app window re-skins.
+  function setPack(xdgConfigHome: string, packId: string): void {
+    if (!xdgConfigHome) return;
+    const dir = join(xdgConfigHome, 'wash');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'desktop.json'), JSON.stringify({ pack: packId }));
+  }
   async function bootDesktop(page: Page, url: string): Promise<void> {
     await page.goto(url);
     await expect(page.locator('wash-app-session')).toBeVisible();
+  }
+  // Boot themed: apply the pack assigned to `appKey` (if any) first.
+  async function bootThemed(page: Page, router: { url: string; xdgConfigHome: string }, appKey: string): Promise<void> {
+    if (THEME[appKey]) setPack(router.xdgConfigHome, THEME[appKey]);
+    await bootDesktop(page, router.url);
   }
   async function openApp(page: Page, appId: string): Promise<void> {
     await page.locator('button[title="Apps"]').click();
@@ -177,7 +288,7 @@ test.describe('screenshots', () => {
   });
 
   test('edit', async ({ page, router }) => {
-    await bootDesktop(page, router.url);
+    await bootThemed(page, router, 'edit');
     await openApp(page, 'com.wash.edit');
     const w = win(page, 'wash-app-edit');
     await expect(w).toBeVisible();
@@ -199,7 +310,7 @@ test.describe('screenshots', () => {
   });
 
   test('settings', async ({ page, router }) => {
-    await bootDesktop(page, router.url);
+    await bootThemed(page, router, 'settings');
     await openApp(page, 'com.wash.settings');
     const w = win(page, 'wash-app-settings');
     await expect(w).toBeVisible();
@@ -208,7 +319,7 @@ test.describe('screenshots', () => {
   });
 
   test('net', async ({ page, router }) => {
-    await bootDesktop(page, router.url);
+    await bootThemed(page, router, 'net');
     await openApp(page, 'com.wash.net');
     const w = win(page, 'wash-app-net');
     await expect(w).toBeVisible();
@@ -217,6 +328,90 @@ test.describe('screenshots', () => {
     await w.getByText('Interfaces', { exact: true }).first().click().catch(() => {});
     await settle(page, 1200); // let it enumerate interfaces
     await w.screenshot({ path: join(SHOTS, 'net.png') });
+  });
+
+  test('top', async ({ page, router }) => {
+    await bootThemed(page, router, 'top');
+    await openApp(page, 'com.wash.top');
+    const w = win(page, 'wash-app-top');
+    await expect(w).toBeVisible();
+    await w.locator('[data-testid="top-statusbar"]').waitFor({ timeout: 8000 }).catch(() => {});
+    await settle(page, 900); // let a couple of /proc samples land
+    await w.screenshot({ path: join(SHOTS, 'top.png') });
+  });
+
+  test('services', async ({ page, router }) => {
+    await bootThemed(page, router, 'services');
+    await openApp(page, 'com.wash.services');
+    const w = win(page, 'wash-app-services');
+    await expect(w).toBeVisible();
+    await w.locator('[data-testid="srv-list"]').waitFor({ timeout: 8000 }).catch(() => {});
+    await settle(page, 700);
+    await w.screenshot({ path: join(SHOTS, 'services.png') });
+  });
+
+  test('packages', async ({ page, router }) => {
+    await bootThemed(page, router, 'packages');
+    await openApp(page, 'com.wash.packages');
+    const w = win(page, 'wash-app-packages');
+    await expect(w).toBeVisible();
+    await w.locator('[data-testid="pkg-status"]').waitFor({ timeout: 8000 }).catch(() => {});
+    await settle(page, 700);
+    await w.screenshot({ path: join(SHOTS, 'packages.png') });
+  });
+
+  test('disks', async ({ page, router }) => {
+    await bootThemed(page, router, 'disks');
+    await openApp(page, 'com.wash.disks');
+    const w = win(page, 'wash-app-disks');
+    await expect(w).toBeVisible();
+    await w.locator('[data-testid="disks-list"]').waitFor({ timeout: 8000 }).catch(() => {});
+    await settle(page, 900); // let it scan block devices
+    await w.screenshot({ path: join(SHOTS, 'disks.png') });
+  });
+
+  test('radio', async ({ page, router }) => {
+    await bootThemed(page, router, 'radio');
+    await openApp(page, 'com.wash.radio');
+    const w = win(page, 'wash-app-radio');
+    await expect(w).toBeVisible();
+    await w.locator('[data-testid="station-list"]').waitFor({ timeout: 8000 }).catch(() => {});
+    await settle(page, 700);
+    await w.screenshot({ path: join(SHOTS, 'radio.png') });
+  });
+
+  test('about', async ({ page, router }) => {
+    await bootThemed(page, router, 'about');
+    await openApp(page, 'com.wash.about');
+    const w = win(page, 'wash-app-about');
+    await expect(w).toBeVisible();
+    await settle(page, 900); // host facts + the live runtime process table
+    await w.screenshot({ path: join(SHOTS, 'about.png') });
+  });
+
+  test('imageview', async ({ page, router }) => {
+    await bootThemed(page, router, 'imageview');
+    await openApp(page, 'com.wash.imageview');
+    const w = win(page, 'wash-app-imageview');
+    await expect(w).toBeVisible();
+    // The viewer auto-scans ~/Pictures (seeded above); open the first image.
+    await w.locator('[data-testid="iv-list"]').waitFor({ timeout: 8000 }).catch(() => {});
+    await w.locator('[data-testid^="iv-thumb-"]').first().click().catch(() => {});
+    await settle(page, 900); // let the full image + thumbnails paint
+    await w.screenshot({ path: join(SHOTS, 'imageview.png') });
+  });
+
+  // Connect / Remote — the "On your network" mDNS discovery list, fed by the
+  // deterministic WASH_DISCOVERY_STATIC seam set in routerOpts above.
+  test('connect', async ({ page, router }) => {
+    await bootThemed(page, router, 'connect');
+    await openApp(page, 'com.wash.connect');
+    const w = win(page, 'wash-app-connect');
+    await expect(w).toBeVisible();
+    // Discovery is async; wait for the candidate list to populate.
+    await w.locator('[data-testid="connect-candidates"]').waitFor({ timeout: 12000 }).catch(() => {});
+    await settle(page, 800);
+    await w.screenshot({ path: join(SHOTS, 'connect.png') });
   });
 
   // --- the display compositor (best-effort: needs wash-display + an X client) -

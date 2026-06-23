@@ -89,14 +89,28 @@ windows in a throwaway router and captures them with Playwright into
 `docs/screenshots/` (deterministic, seeded layout — see
 `e2e/capture/`). The hero montage above is from the same run.
 
+Each window below is shot under a **different theme pack** — wash ships
+five (Midnight, Tokyo, Seoul, Copland, Oslo); the desktop reskins live
+from Settings, and every open window follows. So the colour shifts from
+shot to shot are the *same desktop* wearing different packs, not
+different builds.
+
 | | |
 |---|---|
-| **Files** — tree + preview, live watch, mutations | **Terminal** — tabbed xterm.js over real local PTYs |
+| **Files** — tree + preview, live watch, mutations *(Midnight)* | **Terminal** — tabbed xterm.js over real local PTYs *(Midnight)* |
 | ![file manager](docs/screenshots/fm.png) | ![terminal](docs/screenshots/term.png) |
-| **Editor** — CodeMirror 6, file tree, tabs, embedded terminal | **Washamp** — a Webamp (Winamp-skinned) audio player |
-| ![editor](docs/screenshots/edit.png) | ![washamp](docs/screenshots/music.png) |
-| **Network** — interfaces, VLAN switch, firewall, plan→apply→verify | **Settings** — wallpaper, clock, taskbar |
+| **Editor** — CodeMirror 6, file tree, tabs, embedded terminal *(Tokyo)* | **Image Viewer** — thumbnail list + zoom/pan, bytes over the wire *(Seoul)* |
+| ![editor](docs/screenshots/edit.png) | ![image viewer](docs/screenshots/imageview.png) |
+| **Washamp** — a Webamp (Winamp-skinned) audio player *(Midnight)* | **Radio** — curated SomaFM + Radio Browser, ICY metadata *(Tokyo)* |
+| ![washamp](docs/screenshots/music.png) | ![radio](docs/screenshots/radio.png) |
+| **System Monitor** — live `/proc` CPU/mem/net, per-process kill *(Oslo)* | **Disks** — partitions, md/LVM/btrfs/ZFS, SMART *(Oslo)* |
+| ![system monitor](docs/screenshots/top.png) | ![disks](docs/screenshots/disks.png) |
+| **Services** — systemd/openrc/procd units, start/stop *(Seoul)* | **Packages** — apt/dnf/apk search, install, upgrade *(Copland)* |
+| ![services](docs/screenshots/services.png) | ![packages](docs/screenshots/packages.png) |
+| **Network** — interfaces, VLAN switch, firewall, plan→apply→verify *(Oslo)* | **Settings** — wallpaper, clock, taskbar, theme packs *(Seoul)* |
 | ![network](docs/screenshots/net.png) | ![settings](docs/screenshots/settings.png) |
+| **Connect** — SSH to another host + LAN mDNS "On your network" *(Copland)* | **About** — build / router / host facts, live process table *(Tokyo)* |
+| ![connect](docs/screenshots/connect.png) | ![about](docs/screenshots/about.png) |
 
 **Display** — real X11/Wayland clients (here `xclock`) launched from a
 wash terminal, composited into native wash windows by the bundled
@@ -321,10 +335,20 @@ pick an app from the dropdown                # it composites in, host-tinted
 ★ to bookmark the host for next time         # passphrased key? an ssh-add unlock appears
 ```
 
-Connected hosts also show in the desktop's right-hand **Remote**
-sidebar widget, each with its own launch dropdown. Full design — the
-service split, the per-host security model, and the wire relay — is in
-[docs/REMOTE.md](docs/REMOTE.md).
+**On your network.** Connect also discovers other wash hosts on the LAN
+over **mDNS** and lists them under *"On your network"* — click one to
+connect without typing an address. (See
+[docs/DISCOVERY.md](docs/DISCOVERY.md).)
+
+**Mount a remote filesystem.** Beyond running apps, you can mount
+another host's filesystem locally over **SFTP** (FUSE), so local apps
+see the remote tree as ordinary paths. (See [docs/MOUNT.md](docs/MOUNT.md).)
+
+Connected hosts — plus their live sessions and mounts — show in the
+desktop's right-hand **Remote** sidebar widget and in **Settings →
+Remote**, each with its own launch dropdown and a graceful teardown.
+Full design — the service split, the per-host security model, and the
+wire relay — is in [docs/REMOTE.md](docs/REMOTE.md).
 
 ---
 
@@ -642,6 +666,13 @@ docs/               see below
 | [MATRIX.md](docs/MATRIX.md) | Distro packaging — apt/dnf/apk backends, the package matrix, install layout. |
 | [DISPLAY.md](docs/DISPLAY.md) | The native X/Wayland compositor (`wash-display`): build reality, capture pipeline, wire client. |
 | [NET.md](docs/NET.md) | Networking app + privileged daemon (`wash-net`/`wash-netd`): UCI-shaped model, backends. |
+| [REMOTE.md](docs/REMOTE.md) | Remote apps over SSH — the multi-homed shell, the one-port wire relay, the per-host security model. |
+| [DISCOVERY.md](docs/DISCOVERY.md) | LAN mDNS auto-discovery ("On your network") for Connect, and the Settings Remote panel. |
+| [MOUNT.md](docs/MOUNT.md) | Mounting another host's filesystem over SFTP (FUSE), surfaced through the Remote panel. |
+| [STORAGE.md](docs/STORAGE.md) | The Disks app — block devices, md/LVM/btrfs/ZFS, SMART, the real-kernel VM gate. |
+| [AUDIO.md](docs/AUDIO.md) | The audio control-plane service that aggregates now-playing for the sidebar widget. |
+| [MUSIC.md](docs/MUSIC.md) / [RADIO.md](docs/RADIO.md) | The native Music player and the internet Radio app. |
+| [IMAGES.md](docs/IMAGES.md) | The image pipeline — thumbnails over wire raw channels, fm folder preview, the viewer. |
 | [TESTING.md](docs/TESTING.md) | Test tiers, the `make` test verbs, holistic coverage, VM-backed e2e, CI, gotchas. |
 | [TECH_DEBT.md](docs/TECH_DEBT.md) / [CORE_AUDIT.md](docs/CORE_AUDIT.md) | Known debt and the core audit / next tranche of work. |
 

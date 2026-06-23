@@ -47,6 +47,10 @@ tmp/
 # Ad-hoc display-probe capture output (display-probe.cap.ts) — large,
 # host-specific PNGs/logs for local inspection, never committed.
 screenshots/
+# …but the curated marketing shots under docs/screenshots/ ARE committed
+# (generated deterministically by `make screenshots`, referenced from README).
+!docs/screenshots/
+!docs/screenshots/*.png
 
 # Isolated git worktrees for parallel work (e.g. FE refactor) — each
 # is its own branch checkout sharing this repo's objects/history.
