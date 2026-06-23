@@ -32,6 +32,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/sirmick/wash/internal/httpsec"
 )
 
 //go:embed assets/*.html
@@ -65,6 +67,7 @@ type Server struct {
 	showUsers     bool                // false = always omit list even if users != nil
 	authLimit     *rateLimiter        // /auth failure throttle (never nil)
 	trustedXFF    []*net.IPNet        // peers whose X-Forwarded-For we believe
+	hostAllow     []string            // Host-header allowlist; empty = permissive
 }
 
 // Config drives Server construction.
@@ -103,6 +106,12 @@ type Config struct {
 	// and RemoteAddr is used, so a direct client can't spoof its way
 	// into another IP's rate-limit bucket.
 	TrustedProxies []*net.IPNet
+	// HostAllowlist, when non-empty, restricts which Host header values
+	// the login front accepts — a DNS-rebinding defense. Empty (default)
+	// is permissive: every Host passes, so existing deployments are
+	// unaffected. Loopback names are always accepted; add the public
+	// hostname(s) of the login front here to switch on enforcement.
+	HostAllowlist []string
 }
 
 // NewServer returns a fully-wired Server. The Auth and Signer must
@@ -157,6 +166,7 @@ func NewServer(cfg Config) (*Server, error) {
 		showUsers:     cfg.ShowUsers,
 		authLimit:     newRateLimiter(cfg.MaxAuthFails, cfg.AuthWindow),
 		trustedXFF:    cfg.TrustedProxies,
+		hostAllow:     cfg.HostAllowlist,
 	}, nil
 }
 
@@ -197,7 +207,25 @@ func (s *Server) Handler() http.Handler {
 			mux.Handle(prefix, shellHandler)
 		}
 	}
-	return mux
+	return s.harden(mux)
+}
+
+// harden wraps the login mux with the Host-header allowlist (a DNS-
+// rebinding defense, permissive by default) and the baseline security
+// headers — skipping the headers on /app/<token>/ so the embedded
+// backend keeps its own framing/CSP policy.
+func (s *Server) harden(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !httpsec.HostAllowed(r.Host, "", s.hostAllow) {
+			s.log.Printf("login: reject host=%q from=%s reason=not-in-allowlist", r.Host, r.RemoteAddr)
+			http.Error(w, "forbidden host", http.StatusForbidden)
+			return
+		}
+		if !strings.HasPrefix(r.URL.Path, "/app/") {
+			httpsec.SetSecurityHeaders(w.Header())
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // noCacheStatic wraps a static-asset handler so browsers always

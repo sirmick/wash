@@ -118,6 +118,14 @@ type Config struct {
 	// the same-origin policy. The unix-socket/multi-user path already skips
 	// the check (it sits behind wash-login).
 	AllowCrossOrigin bool
+
+	// HostAllowlist, when non-empty, restricts which Host header values the
+	// TCP listener accepts — a DNS-rebinding defense. Empty (the default)
+	// is permissive: every Host passes, so existing LAN / mDNS deployments
+	// are unaffected. Loopback names (localhost, 127.0.0.1, ::1) and the
+	// configured bind host are always accepted; add LAN hostnames here to
+	// switch on enforcement. See hostAllowed in security.go.
+	HostAllowlist []string
 }
 
 // Logger is a minimal sink; cmd/wash-router supplies a real one.

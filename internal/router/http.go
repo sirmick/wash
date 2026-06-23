@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/sirmick/wash/internal/httpsec"
 )
 
 // routerCookieName holds the token presented on the first ?token= load
@@ -162,7 +164,28 @@ func (s *HTTPServer) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !httpsec.HostAllowed(r.Host, s.bindHost(), s.router.cfg.HostAllowlist) {
+		s.router.log("router: rejected host=%q from=%s: not in HostAllowlist", r.Host, r.RemoteAddr)
+		http.Error(w, "forbidden host", http.StatusForbidden)
+		return
+	}
+	// Baseline hardening headers on everything we serve ourselves, but
+	// not on the /app/<token>/ ingress proxy — those responses carry the
+	// embedded backend's own framing/CSP policy.
+	if !strings.HasPrefix(r.URL.Path, "/app/") {
+		httpsec.SetSecurityHeaders(w.Header())
+	}
 	s.mux.ServeHTTP(w, r)
+}
+
+// bindHost is the host part of cfg.Listen (without :port), used by the
+// Host allowlist as an always-accepted name.
+func (s *HTTPServer) bindHost() string {
+	host, _, err := net.SplitHostPort(s.router.cfg.Listen)
+	if err != nil {
+		return s.router.cfg.Listen
+	}
+	return host
 }
 
 func (s *HTTPServer) handleRoot(w http.ResponseWriter, r *http.Request) {

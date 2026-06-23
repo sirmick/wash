@@ -30,11 +30,25 @@ worktree flow: `wash-hardening` (phase 1) and `wash-friction`
 >   `/ws` (`tokenOK`: `wash_router` cookie / `?token=`), which blocks anonymous
 >   LAN access. The doc's literal ask — verify wash-login's **HMAC session
 >   cookie** on the raw router when not fronted by login — is still unimplemented.
-> - **1.2 / 1.3 / 1.4 — still open** (this sweep is starting them).
+> - **1.2 — DONE** (this branch). `internal/httpsec.HostAllowed` — a Host-header
+>   allowlist, **permissive by default** (empty list ⇒ every Host accepted, so
+>   LAN/mDNS deploys are unaffected; loopback names + bind host always pass).
+>   Enforced in `router` `ServeHTTP` (`cfg.HostAllowlist`) and `login` `harden`
+>   (`cfg.HostAllowlist`).
+> - **1.3 — DONE** (this branch). `internal/router.requireLoopbackTCP` rejects an
+>   ingress tcp backend addr that isn't `localhost`/loopback-IP; wired into
+>   `ingress.publish`. (All in-repo publishers use unix sockets, so no behavior
+>   change in practice — it closes the misuse path.)
+> - **1.4 — DONE** (headers); CSP deferred. `internal/httpsec.SetSecurityHeaders`
+>   sets `X-Frame-Options: SAMEORIGIN` + `X-Content-Type-Options: nosniff` +
+>   `Referrer-Policy: same-origin` on router- and login-served responses, skipping
+>   the `/app/<token>/` ingress proxy. A blocking CSP is **not** set yet: the shell
+>   needs xterm/CodeMirror/Webamp inline/worker allowances, so it must be verified
+>   in-browser before landing.
 >
-> **Still genuinely TODO:** 1.1 (HMAC-cookie verification on the raw router),
-> 1.2 (host-header allowlist — permissive by default), 1.3 (ingress loopback
-> enforcement), 1.4 (security headers).
+> **Still genuinely TODO:** 1.1 (verify wash-login's HMAC session cookie on the
+> raw router — the token gate already blocks anonymous LAN access, so this is the
+> defense-in-depth remainder) and the deferred CSP under 1.4.
 
 ### 1.1 Gate `/ws`, `/screenshot`, `/app/` on session auth  ← the one that matters
 
