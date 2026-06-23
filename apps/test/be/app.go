@@ -10,6 +10,7 @@ import (
 	"embed"
 	"encoding/binary"
 	"fmt"
+	"github.com/sirmick/wash/internal/version"
 	"image"
 	"image/color"
 	"image/png"
@@ -73,16 +74,14 @@ func makeFakeFrame(payload []byte) []byte {
 //go:embed all:assets
 var assetsFS embed.FS
 
-const version = "0.9.2"
-
 // state is per-process, shared between callbacks. The test app is
 // single-window per process (instancing=multi), so this is fine.
 type state struct {
-	mu             sync.Mutex
-	conn           *sdk.Conn
-	vetoNextClose  bool
-	pingSeq        int
-	closeReqAllow  bool // last decision returned, for logging
+	mu            sync.Mutex
+	conn          *sdk.Conn
+	vetoNextClose bool
+	pingSeq       int
+	closeReqAllow bool // last decision returned, for logging
 	// displayChans holds the per-window video channels opened by the
 	// fake-display mode, keyed by window id, so display_close can shut
 	// one down. Reference impl for wash-display's per-surface streams.
@@ -102,7 +101,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.test",
 			Name:            "wash test",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-test",
 			Surface:         sdk.SurfaceWindow,
@@ -112,8 +111,8 @@ func init() {
 			// app.restart contract (router restartBackgroundApp) through
 			// a real wire round-trip, not just the router unit tests.
 			Capabilities: []string{sdk.CapSpawn, sdk.CapWindows, sdk.CapRestart},
-			Window:          &sdk.WindowHints{DefaultWidth: 560, DefaultHeight: 480},
-			Hidden:          true,
+			Window:       &sdk.WindowHints{DefaultWidth: 560, DefaultHeight: 480},
+			Hidden:       true,
 		},
 		Assets:             sub,
 		OnReady:            onReady,
@@ -206,11 +205,11 @@ func onSpawnResult(c *sdk.Conn, appID, instanceID string, err error) {
 		log.Printf("wash-test spawn_err %s: %v", appID, err)
 		// err is "code: msg" from the SDK; split for the FE.
 		sendEvent(c, map[string]any{
-			"kind":  "event",
-			"type":  "spawn_err",
+			"kind":   "event",
+			"type":   "spawn_err",
 			"app_id": appID,
-			"code":  "forbidden_or_unknown",
-			"msg":   err.Error(),
+			"code":   "forbidden_or_unknown",
+			"msg":    err.Error(),
 		})
 		return
 	}

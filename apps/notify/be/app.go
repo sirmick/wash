@@ -44,6 +44,7 @@ package notify
 
 import (
 	"context"
+	"github.com/sirmick/wash/internal/version"
 	"log"
 	"strconv"
 	"sync/atomic"
@@ -53,8 +54,6 @@ import (
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/wire"
 )
-
-const version = "0.9.2"
 
 // AppID is the reserved app id for the notify service. Exposed so the
 // router (and any consumer that needs to address the service
@@ -101,7 +100,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              AppID,
 			Name:            "Notifications",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Surface:         sdk.SurfaceBackground,
 			Instancing:      sdk.InstancingSingleton,

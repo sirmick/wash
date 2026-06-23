@@ -20,6 +20,7 @@ package journal
 import (
 	"context"
 	"embed"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 	"sync"
@@ -32,8 +33,6 @@ import (
 
 //go:embed all:assets
 var assetsFS embed.FS
-
-const version = "0.9.2"
 
 // journalIcon — lucide sprite name. scroll-text reads as "log" without
 // looking like a generic document.
@@ -60,7 +59,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.journal",
 			Name:            "Journal",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-journal",
 			Surface:         sdk.SurfaceWindow,

@@ -12,7 +12,7 @@
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { CheckCircle2, Download, RefreshCw, Search, Trash2, X, XCircle } from 'lucide-solid';
-import { Button, ConfirmDialog, Menu, MenuItem, MenuSeparator, StatusBar, Terminal, defineWashApp, tokens } from '@wash/ui';
+import { Button, ConfirmDialog, Menu, MenuItem, MenuSeparator, StatusBar, Terminal, createAppBus, defineWashApp, tokens } from '@wash/ui';
 import type { TerminalAPI } from '@wash/ui';
 
 interface Package {
@@ -74,8 +74,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [lastActionError, setLastActionError] = createSignal('');
 
   let termAPI: TerminalAPI | null = null;
-
-  const send = (m: unknown) => window.wash.sendAppMsg(props.instance, m);
 
   // ---- search ----
 
@@ -177,14 +175,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
+  const { send } = createAppBus(props, { onMsg: (m) => handleBE(m as BEMessage) });
+
   // ---- lifecycle ----
 
   onMount(() => {
-    const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail as BEMessage);
-    props.host.addEventListener('wash:msg', onMsg);
     send({ kind: 'hello' });
     onCleanup(() => {
-      props.host.removeEventListener('wash:msg', onMsg);
       if (searchTimer !== undefined) window.clearTimeout(searchTimer);
     });
   });

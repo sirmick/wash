@@ -28,6 +28,7 @@ import (
 	"context"
 	"embed"
 	"errors"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 
@@ -38,8 +39,6 @@ import (
 
 //go:embed all:assets
 var assetsFS embed.FS
-
-const version = "0.9.2"
 
 // AppID is this app's id. NetdAppID is the privileged service it relays to —
 // declared locally (not imported) so the two apps stay independently buildable
@@ -67,7 +66,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              AppID,
 			Name:            "Network",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-net",
 			Surface:         sdk.SurfaceWindow,

@@ -20,7 +20,7 @@ windows, a workspace pager, a system sidebar — where the window
 manager runs *in the browser* and each application is an independent,
 one-file program that a transport-only **router** supervises.
 
-License: **AGPL-3.0**. Current version: **0.9.1**.
+License: **AGPL-3.0**. Current version: **0.9.3**.
 
 ---
 
@@ -422,7 +422,7 @@ session with `wash-router` and open <http://localhost:11000/>.
 
 ```bash
 ./packaging/run_matrix.sh                       # all rows → dist/packages/<tag>/
-WASH_PKG_VERSION=0.9.1 ./packaging/run_matrix.sh # pin the version
+WASH_PKG_VERSION=0.9.3 ./packaging/run_matrix.sh # pin the version
 ```
 
 Each row does a two-stage Docker build: it builds the package

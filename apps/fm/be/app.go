@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 	"os"
@@ -37,8 +38,6 @@ import (
 var assetsFS embed.FS
 
 const (
-	version = "0.9.2"
-
 	// Cap on preview/read size to keep memory bounded.
 	maxReadBytes = 256 * 1024
 	// Cap on directory listing size — huge dirs (e.g. /usr/bin) get
@@ -78,7 +77,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.fm",
 			Name:            "Files",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-fm",
 			Surface:         sdk.SurfaceWindow,
@@ -142,30 +141,10 @@ func initialPath() string {
 
 // ----- request/response types -----
 
-type listReq struct {
-	Path string `json:"path"`
-}
-
-type readReq struct {
-	Path string `json:"path"`
-}
+// list/read/write/rename/path request shapes are shared with wash-edit and
+// live in internal/fs (wfs.ListReq, ReadReq, WriteReq, RenameReq, PathReq).
 
 type openReq struct {
-	Path string `json:"path"`
-}
-
-type writeReq struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
-}
-
-type renameReq struct {
-	From    string `json:"from"`
-	To      string `json:"to"`
-	Replace bool   `json:"replace"`
-}
-
-type pathReq struct {
 	Path string `json:"path"`
 }
 
@@ -227,13 +206,13 @@ func registerHandlers(b *sdk.Bus) {
 	c := b.Conn()
 	fmWatch = sdk.NewWatchClient(c) // intercepts the service's fs_event pushes
 
-	sdk.Handle(b, "list", func(_ *sdk.Conn, _ string, req listReq) (wfs.ListReply, error) {
+	sdk.Handle(b, "list", func(_ *sdk.Conn, _ string, req wfs.ListReq) (wfs.ListReply, error) {
 		return listReplyFor("", req.Path)
 	})
-	sdk.Handle(b, "read", func(_ *sdk.Conn, _ string, req readReq) (wfs.ReadReply, error) {
+	sdk.Handle(b, "read", func(_ *sdk.Conn, _ string, req wfs.ReadReq) (wfs.ReadReply, error) {
 		return readFile(req.Path)
 	})
-	sdk.Handle(b, "write", func(_ *sdk.Conn, _ string, req writeReq) (wfs.WriteReply, error) {
+	sdk.Handle(b, "write", func(_ *sdk.Conn, _ string, req wfs.WriteReq) (wfs.WriteReply, error) {
 		abs, n, err := fmFS.Write(req.Path, []byte(req.Content), maxWriteBytes)
 		logOp("write", fmt.Sprintf("path=%q bytes=%d", fallbackPath(abs, req.Path), n), err)
 		if err != nil {
@@ -241,7 +220,7 @@ func registerHandlers(b *sdk.Bus) {
 		}
 		return wfs.WriteReply{Path: abs, Bytes: n}, nil
 	})
-	sdk.Handle(b, "rename", func(_ *sdk.Conn, _ string, req renameReq) (wfs.RenameReply, error) {
+	sdk.Handle(b, "rename", func(_ *sdk.Conn, _ string, req wfs.RenameReq) (wfs.RenameReply, error) {
 		src, dst, err := fmFS.Rename(req.From, req.To, req.Replace)
 		logOp("rename", fmt.Sprintf("from=%q to=%q replace=%v",
 			fallbackPath(src, req.From), fallbackPath(dst, req.To), req.Replace), err)
@@ -250,7 +229,7 @@ func registerHandlers(b *sdk.Bus) {
 		}
 		return wfs.RenameReply{From: src, To: dst}, nil
 	})
-	sdk.Handle(b, "delete", func(_ *sdk.Conn, _ string, req pathReq) (wfs.PathReply, error) {
+	sdk.Handle(b, "delete", func(_ *sdk.Conn, _ string, req wfs.PathReq) (wfs.PathReply, error) {
 		abs, err := fmFS.Delete(req.Path)
 		logOp("delete", fmt.Sprintf("path=%q", fallbackPath(abs, req.Path)), err)
 		if err != nil {
@@ -258,7 +237,7 @@ func registerHandlers(b *sdk.Bus) {
 		}
 		return wfs.PathReply{Path: abs}, nil
 	})
-	sdk.Handle(b, "create_file", func(_ *sdk.Conn, _ string, req pathReq) (wfs.PathReply, error) {
+	sdk.Handle(b, "create_file", func(_ *sdk.Conn, _ string, req wfs.PathReq) (wfs.PathReply, error) {
 		abs, err := fmFS.CreateFile(req.Path)
 		logOp("create_file", fmt.Sprintf("path=%q", fallbackPath(abs, req.Path)), err)
 		if err != nil {
@@ -266,7 +245,7 @@ func registerHandlers(b *sdk.Bus) {
 		}
 		return wfs.PathReply{Path: abs}, nil
 	})
-	sdk.Handle(b, "create_dir", func(_ *sdk.Conn, _ string, req pathReq) (wfs.PathReply, error) {
+	sdk.Handle(b, "create_dir", func(_ *sdk.Conn, _ string, req wfs.PathReq) (wfs.PathReply, error) {
 		abs, err := fmFS.CreateDir(req.Path)
 		logOp("create_dir", fmt.Sprintf("path=%q", fallbackPath(abs, req.Path)), err)
 		if err != nil {
@@ -299,10 +278,10 @@ func registerHandlers(b *sdk.Bus) {
 	sdk.Handle(b, "symlink", func(_ *sdk.Conn, _ string, req symlinkReq) (wfs.SymlinkReply, error) {
 		return doSymlink(req)
 	})
-	sdk.Handle(b, "watch", func(_ *sdk.Conn, _ string, req pathReq) (wfs.PathReply, error) {
+	sdk.Handle(b, "watch", func(_ *sdk.Conn, _ string, req wfs.PathReq) (wfs.PathReply, error) {
 		return doWatch(req.Path)
 	})
-	sdk.Handle(b, "unwatch", func(_ *sdk.Conn, _ string, req pathReq) (wfs.PathReply, error) {
+	sdk.Handle(b, "unwatch", func(_ *sdk.Conn, _ string, req wfs.PathReq) (wfs.PathReply, error) {
 		return doUnwatch(req.Path)
 	})
 	sdk.Handle(b, "complete", func(_ *sdk.Conn, _ string, req completeReq) (completeResp, error) {
@@ -427,7 +406,7 @@ func readFile(path string) (wfs.ReadReply, error) {
 		return wfs.ReadReply{}, sdk.Err{Code: sdk.ErrIO, Msg: err.Error()}
 	}
 	chunk := buf[:n]
-	binary := looksBinary(chunk)
+	binary := wfs.LooksBinary(chunk)
 	reply := wfs.ReadReply{
 		Path:      abs,
 		Size:      st.Size(),
@@ -632,15 +611,6 @@ func resolveGID(spec string) (int, error) {
 		return 0, err
 	}
 	return strconv.Atoi(g.Gid)
-}
-
-func looksBinary(b []byte) bool {
-	for _, c := range b {
-		if c == 0 {
-			return true
-		}
-	}
-	return false
 }
 
 // fmIcon — Lucide sprite symbol name.

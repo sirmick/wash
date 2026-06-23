@@ -17,7 +17,7 @@
 
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { defineWashApp, tokens, Terminal } from '@wash/ui';
+import { createAppBus, defineWashApp, tokens, Terminal } from '@wash/ui';
 
 // ----- wire types -----
 
@@ -113,8 +113,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // menuFor holds the origin whose Launch dropdown is open (one at a time).
   const [menuFor, setMenuFor] = createSignal<string | null>(null);
 
-  const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
-
   // pendingOpenMenu holds hosts we just connected via a Launch click; when the
   // host comes up and its catalog lands, its dropdown auto-opens so "Launch"
   // on a new/bookmarked host ends in the same app-picker as a connected one.
@@ -196,6 +194,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
+  const { send } = createAppBus(props, { onMsg: handleBE });
+
   // ----- bookmarks (host-level) -----
   const persistBookmarks = (next: Bookmark[]) => {
     setBookmarks(next);
@@ -217,8 +217,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   onMount(() => {
-    const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail);
-    props.host.addEventListener('wash:msg', onMsg);
     // Subscribe to the supervisor's host state (relayed via our BE) and
     // load saved bookmarks.
     send({ kind: 'subscribe' });
@@ -232,7 +230,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       tryAutoOpenMenu(ev.origin);
     });
     onCleanup(() => {
-      props.host.removeEventListener('wash:msg', onMsg);
       send({ kind: 'unsubscribe' });
       offCatalog();
     });

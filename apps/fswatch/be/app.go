@@ -25,6 +25,7 @@ package fswatchsvc
 
 import (
 	"context"
+	"github.com/sirmick/wash/internal/version"
 	"io"
 	"log"
 	"os"
@@ -38,8 +39,6 @@ import (
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/wire"
 )
-
-const version = "0.1.0"
 
 // The wire vocabulary is owned by internal/fswatchproto (a dependency-free
 // leaf the consumers — internal/sdk's WatchClient, apps/remote — import too,
@@ -80,7 +79,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              AppID,
 			Name:            "FS Watch",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Surface:         sdk.SurfaceBackground,
 			Instancing:      sdk.InstancingSingleton,

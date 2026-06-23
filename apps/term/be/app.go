@@ -23,6 +23,7 @@ import (
 	"embed"
 	"flag"
 	"fmt"
+	"github.com/sirmick/wash/internal/version"
 	"io"
 	"io/fs"
 	"log"
@@ -115,8 +116,6 @@ func fixupLoginEnv() {
 //go:embed all:assets
 var assetsFS embed.FS
 
-const version = "0.9.2"
-
 type state struct {
 	mu       sync.Mutex
 	sessions map[uint32]*pty.Session // by channel id
@@ -135,7 +134,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.term",
 			Name:            "Terminal",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-term",
 			Surface:         sdk.SurfaceWindow,

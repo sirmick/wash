@@ -26,7 +26,10 @@
 # Usage:
 #   packaging/make-source-tarball.sh [version]
 #
-# version precedence: arg > $WASH_PKG_VERSION > debian/changelog > rpm spec.
+# version precedence: arg > $WASH_PKG_VERSION > root VERSION file >
+# debian/changelog > rpm spec. The root VERSION file is the master (it also
+# stamps the binaries via the Makefile); `make check-versions` guards that the
+# changelog/spec/APKBUILD literals all agree with it.
 
 set -euo pipefail
 
@@ -38,6 +41,9 @@ command -v xz  >/dev/null || { echo "xz not installed (apt install xz-utils)" >&
 
 # ----- resolve version -----------------------------------------------------
 VERSION="${1:-${WASH_PKG_VERSION:-}}"
+if [[ -z "$VERSION" && -f VERSION ]]; then
+    VERSION="$(cat VERSION)"
+fi
 if [[ -z "$VERSION" ]] && command -v dpkg-parsechangelog >/dev/null 2>&1; then
     # Upstream version only (strip the Debian -N revision).
     VERSION="$(dpkg-parsechangelog -l debian/changelog -S Version 2>/dev/null | sed 's/-[^-]*$//')"

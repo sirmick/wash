@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 
@@ -21,8 +22,6 @@ import (
 
 //go:embed all:assets
 var assetsFS embed.FS
-
-const version = "0.9.2"
 
 var def *sdk.AppDef
 
@@ -35,7 +34,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.session",
 			Name:            "wash session",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-session",
 			Surface:         sdk.SurfaceDesktop,

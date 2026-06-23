@@ -11,20 +11,21 @@
 //
 // Wire shape between this FE and its BE half:
 //
-//   FE → BE  : { kind: "list",  path }                     id-correlated
-//                { kind: "read",  path }
-//                { kind: "write", path, content }
-//                fs.* messages handled by sdk.EnableFilePicker
+//	FE → BE  : { kind: "list",  path }                     id-correlated
+//	             { kind: "read",  path }
+//	             { kind: "write", path, content }
+//	             fs.* messages handled by sdk.EnableFilePicker
 //
-//   BE → FE  : { kind: "list_ok", id?, path, entries, truncated }
-//                { kind: "read_ok", id?, path, content, size, binary, truncated }
-//                { kind: "write_ok", id?, path, bytes }
-//                { kind: "<op>_err", id?, path?, code, msg }
+//	BE → FE  : { kind: "list_ok", id?, path, entries, truncated }
+//	             { kind: "read_ok", id?, path, content, size, binary, truncated }
+//	             { kind: "write_ok", id?, path, bytes }
+//	             { kind: "<op>_err", id?, path?, code, msg }
 package edit
 
 import (
 	"context"
 	"embed"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 	"os"
@@ -40,8 +41,6 @@ import (
 var assetsFS embed.FS
 
 const (
-	version = "0.9.2"
-
 	// Cap on read size. Bigger files are still listed; the editor
 	// surfaces a "too large to open here" placeholder rather than
 	// trying to hold them in memory. Generous enough for any source
@@ -82,7 +81,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.edit",
 			Name:            "Editor",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-edit",
 			Surface:         sdk.SurfaceWindow,
@@ -154,28 +153,8 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 
 // ----- request/response types -----
 
-type listReq struct {
-	Path string `json:"path"`
-}
-
-type readReq struct {
-	Path string `json:"path"`
-}
-
-type writeReq struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
-}
-
-type renameReq struct {
-	From    string `json:"from"`
-	To      string `json:"to"`
-	Replace bool   `json:"replace"`
-}
-
-type pathReq struct {
-	Path string `json:"path"`
-}
+// list/read/write/rename/path request shapes are shared with wash-fm and
+// live in internal/fs (wfs.ListReq, ReadReq, WriteReq, RenameReq, PathReq).
 
 type spawnReq struct {
 	AppID string `json:"app_id"`
@@ -221,7 +200,7 @@ func registerHandlers(b *sdk.Bus) {
 		_ = c.SendAppMsg(data)
 	})
 
-	sdk.Handle(b, "list", func(_ *sdk.Conn, _ string, req listReq) (wfs.ListReply, error) {
+	sdk.Handle(b, "list", func(_ *sdk.Conn, _ string, req wfs.ListReq) (wfs.ListReply, error) {
 		path := req.Path
 		// "/" gets resolved to a useful default so the FE boot doesn't
 		// have to chain calls.
@@ -242,11 +221,11 @@ func registerHandlers(b *sdk.Bus) {
 		return wfs.ListReply{Path: abs, Entries: entries, Truncated: truncated}, nil
 	})
 
-	sdk.Handle(b, "read", func(_ *sdk.Conn, _ string, req readReq) (wfs.ReadReply, error) {
+	sdk.Handle(b, "read", func(_ *sdk.Conn, _ string, req wfs.ReadReq) (wfs.ReadReply, error) {
 		return doRead(req.Path)
 	})
 
-	sdk.Handle(b, "write", func(_ *sdk.Conn, _ string, req writeReq) (wfs.WriteReply, error) {
+	sdk.Handle(b, "write", func(_ *sdk.Conn, _ string, req wfs.WriteReq) (wfs.WriteReply, error) {
 		abs, n, err := editFS.Write(req.Path, []byte(req.Content), maxWriteBytes)
 		if err != nil {
 			return wfs.WriteReply{}, sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
@@ -254,7 +233,7 @@ func registerHandlers(b *sdk.Bus) {
 		return wfs.WriteReply{Path: abs, Bytes: n}, nil
 	})
 
-	sdk.Handle(b, "rename", func(_ *sdk.Conn, _ string, req renameReq) (wfs.RenameReply, error) {
+	sdk.Handle(b, "rename", func(_ *sdk.Conn, _ string, req wfs.RenameReq) (wfs.RenameReply, error) {
 		src, dst, err := editFS.Rename(req.From, req.To, req.Replace)
 		if err != nil {
 			return wfs.RenameReply{}, sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
@@ -262,7 +241,7 @@ func registerHandlers(b *sdk.Bus) {
 		return wfs.RenameReply{From: src, To: dst}, nil
 	})
 
-	sdk.Handle(b, "delete", func(_ *sdk.Conn, _ string, req pathReq) (wfs.PathReply, error) {
+	sdk.Handle(b, "delete", func(_ *sdk.Conn, _ string, req wfs.PathReq) (wfs.PathReply, error) {
 		abs, err := editFS.Delete(req.Path)
 		if err != nil {
 			return wfs.PathReply{}, sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
@@ -391,7 +370,7 @@ func doRead(path string) (wfs.ReadReply, error) {
 	}
 	buf = buf[:n]
 	truncated := info.Size() > int64(n)
-	binary := looksBinary(buf)
+	binary := wfs.LooksBinary(buf)
 	content := ""
 	if !binary {
 		content = string(buf)
@@ -403,17 +382,6 @@ func doRead(path string) (wfs.ReadReply, error) {
 		Binary:    binary,
 		Truncated: truncated,
 	}, nil
-}
-
-// looksBinary inspects bytes for NUL — wash-fm's heuristic. Good
-// enough for the open-or-bail decision.
-func looksBinary(b []byte) bool {
-	for _, c := range b {
-		if c == 0 {
-			return true
-		}
-	}
-	return false
 }
 
 const editIcon = "file-pen"

@@ -20,6 +20,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"github.com/sirmick/wash/internal/version"
 	"io"
 	"io/fs"
 	"log"
@@ -36,8 +37,6 @@ import (
 var assetsFS embed.FS
 
 const (
-	version = "0.9.2"
-
 	// defaultIntervalMS is the snapshot cadence. Disk topology and
 	// fullness change slowly; 3s keeps I/O rates lively without churn.
 	defaultIntervalMS = 3000
@@ -90,7 +89,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.disks",
 			Name:            "Disks",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-disks",
 			Surface:         sdk.SurfaceWindow,

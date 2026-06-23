@@ -13,7 +13,7 @@
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { defineWashApp, StatusBar, tokens } from '@wash/ui';
+import { createAppBus, defineWashApp, StatusBar, tokens } from '@wash/ui';
 import { serviceBadge, isActive as isActiveState, isFailed as isFailedState, type BadgeTone } from './service-status.ts';
 import {
   Check,
@@ -70,8 +70,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // returned a non-zero exit so the user knows what went wrong.
   const [errors, setErrors] = createSignal<Record<string, string>>({});
 
-  const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
-
   const requestList = () => send({ kind: 'list' });
   const requestAction = (name: string, op: string) => {
     setBusy((b) => ({ ...b, [name]: op }));
@@ -109,6 +107,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
+  const { send } = createAppBus(props, { onMsg: handleBE });
+
   let refreshTimer: number | undefined;
   const tickAutoRefresh = () => {
     if (refreshTimer != null) window.clearInterval(refreshTimer);
@@ -117,14 +117,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   onMount(() => {
-    const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail as BEMessage);
-    props.host.addEventListener('wash:msg', onMsg);
     // First listing is unsolicited from the BE; we also request one
     // here so a re-mount (e.g. SaveState reload) gets fresh data.
     requestList();
     tickAutoRefresh();
     onCleanup(() => {
-      props.host.removeEventListener('wash:msg', onMsg);
       if (refreshTimer != null) window.clearInterval(refreshTimer);
     });
   });

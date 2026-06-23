@@ -15,7 +15,7 @@
 import { For, Index, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { ConfirmDialog, defineWashApp, tokens } from '@wash/ui';
+import { ConfirmDialog, createAppBus, defineWashApp, fmtBytes, fmtRate, tokens } from '@wash/ui';
 import { filterSortProcs, type SortKey } from './procsort.ts';
 import {
   ChevronDown,
@@ -115,22 +115,6 @@ function sumCPU(c: CPURow): number {
   return c.User + c.Nice + c.System + c.Idle + c.IOWait + c.IRQ + c.SoftIRQ + c.Steal;
 }
 
-function fmtBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} K`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(0)} M`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(1)} G`;
-}
-
-// fmtRate renders bytes-per-second with units. Used by net + disk
-// meters and their popover rows.
-function fmtRate(bps: number): string {
-  if (bps < 1024) return `${bps.toFixed(0)} B/s`;
-  if (bps < 1024 * 1024) return `${(bps / 1024).toFixed(1)} K/s`;
-  if (bps < 1024 * 1024 * 1024) return `${(bps / 1024 / 1024).toFixed(1)} M/s`;
-  return `${(bps / 1024 / 1024 / 1024).toFixed(2)} G/s`;
-}
-
 // rateDelta computes bytes/s from two cumulative-byte samples taken
 // `dtMS` apart. Cumulative counters can also reset (driver reload,
 // interface flap) — guard against the negative-delta case.
@@ -172,8 +156,6 @@ function cpuColor(used: number): string {
 // ---- app ----
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
-  const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
-
   const [snapshot, setSnapshot] = createSignal<Snapshot | null>(null);
   const [prevPerCPU, setPrevPerCPU] = createSignal<CPURow[] | null>(null);
   const [prevCPU, setPrevCPU] = createSignal<CPURow | null>(null);
@@ -327,9 +309,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
+  const { send } = createAppBus(props, { onMsg: handleBE });
+
   onMount(() => {
-    const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail);
-    props.host.addEventListener('wash:msg', onMsg);
     // Click-outside: dismiss the CPU popover when the user clicks
     // anywhere that isn't the popover itself or its trigger meter.
     // Registered on the host (light DOM ancestor of everything we
@@ -358,7 +340,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     };
     window.addEventListener('keydown', onKey);
     onCleanup(() => {
-      props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('pointerdown', onDocDown, true);
       window.removeEventListener('keydown', onKey);
     });

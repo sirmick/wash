@@ -13,6 +13,7 @@ import {
   SeekBar,
   TransportControls,
   VolumeSlider,
+  createAppBus,
   createAudioSource,
   defineWashApp,
   tokens,
@@ -71,7 +72,6 @@ function MusicApp(props: WashAppProps) {
   let persistTimer: ReturnType<typeof setTimeout> | undefined;
 
   const current = () => tracks()[index()];
-  const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
   const persist = () => {
     lastPersistedPos = pos();
     const state: PersistedState = {
@@ -159,59 +159,57 @@ function MusicApp(props: WashAppProps) {
     return parts[parts.length - 1] || r;
   };
 
+  const handleBE = (m: { kind?: string }) => {
+    if (m?.kind === 'scan_ok') {
+      const s = m as ScanOk;
+      setTracks(s.tracks);
+      setRoot(s.root);
+      // Re-select the saved track (by URL, falling back to title)
+      // when this scan is the restore-driven one.
+      let idx = -1;
+      if (restore) {
+        idx = s.tracks.findIndex((t) => t.url === restore!.track_url);
+        if (idx < 0 && restore.track_title) {
+          idx = s.tracks.findIndex((t) => t.title === restore!.track_title);
+        }
+      }
+      if (idx >= 0) {
+        const t = s.tracks[idx];
+        setIndex(idx);
+        setSelected(idx);
+        pendingSeek = restore?.pos ?? 0;
+        audioEl.src = t.url;
+        applyVolume();
+        setStatus('paused');
+        audio?.register({ title: t.title });
+      } else {
+        setIndex(-1);
+        setSelected(s.tracks.length ? 0 : -1);
+        audio?.register({ title: s.tracks[0]?.title ?? '' });
+      }
+      restore = null;
+    }
+  };
+  // wash:state drives the first scan: restore the saved folder, else
+  // default. Always fires on mount (null = first launch).
+  const handleState = (s: PersistedState | null) => {
+    pickedPath = s?.pick || '';
+    if (s?.vol != null) setSrcVol(s.vol);
+    if (s?.track_url || s?.track_title) restore = s;
+    scan(pickedPath || undefined);
+  };
+
+  const { send } = createAppBus(props, {
+    onMsg: handleBE,
+    onState: (s) => handleState(s as PersistedState | null),
+  });
+
   onMount(() => {
     audio = createAudioSource({
       instance: props.instance,
       host: props.host,
       snapshot: () => ({ title: current()?.title ?? '', status: status(), pos: pos(), dur: dur() }),
       onCmd,
-    });
-    const onMsg = (ev: Event) => {
-      const m = (ev as CustomEvent).detail as { kind?: string };
-      if (m?.kind === 'scan_ok') {
-        const s = m as ScanOk;
-        setTracks(s.tracks);
-        setRoot(s.root);
-        // Re-select the saved track (by URL, falling back to title)
-        // when this scan is the restore-driven one.
-        let idx = -1;
-        if (restore) {
-          idx = s.tracks.findIndex((t) => t.url === restore!.track_url);
-          if (idx < 0 && restore.track_title) {
-            idx = s.tracks.findIndex((t) => t.title === restore!.track_title);
-          }
-        }
-        if (idx >= 0) {
-          const t = s.tracks[idx];
-          setIndex(idx);
-          setSelected(idx);
-          pendingSeek = restore?.pos ?? 0;
-          audioEl.src = t.url;
-          applyVolume();
-          setStatus('paused');
-          audio?.register({ title: t.title });
-        } else {
-          setIndex(-1);
-          setSelected(s.tracks.length ? 0 : -1);
-          audio?.register({ title: s.tracks[0]?.title ?? '' });
-        }
-        restore = null;
-      }
-    };
-    // wash:state drives the first scan: restore the saved folder, else
-    // default. Always fires on mount (null = first launch).
-    const onState = (ev: Event) => {
-      const s = (ev as CustomEvent).detail as PersistedState | null;
-      pickedPath = s?.pick || '';
-      if (s?.vol != null) setSrcVol(s.vol);
-      if (s?.track_url || s?.track_title) restore = s;
-      scan(pickedPath || undefined);
-    };
-    props.host.addEventListener('wash:msg', onMsg);
-    props.host.addEventListener('wash:state', onState);
-    onCleanup(() => {
-      props.host.removeEventListener('wash:msg', onMsg);
-      props.host.removeEventListener('wash:state', onState);
     });
   });
 

@@ -22,6 +22,7 @@ import (
 	"context"
 	"embed"
 	"encoding/base64"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 	"os/exec"
@@ -39,8 +40,6 @@ import (
 //
 //go:embed all:assets
 var assetsFS embed.FS
-
-const version = "0.1.0"
 
 const logRingMax = 4096
 
@@ -78,7 +77,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.vscode",
 			Name:            "VS Code Service",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Surface:         sdk.SurfaceBackground,
 			// Singleton: one service owns code-server; the settings

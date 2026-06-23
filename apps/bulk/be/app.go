@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/sirmick/wash/internal/version"
 	"log"
 	"sync"
 
@@ -27,8 +28,6 @@ import (
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/wire"
 )
-
-const version = "0.9.2"
 
 // AppID is the reserved app id consumers address. Exported so other
 // apps (fm, the session BE gateway) can reference it without
@@ -94,7 +93,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              AppID,
 			Name:            "Bulk Ops",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Surface:         sdk.SurfaceBackground,
 			Instancing:      sdk.InstancingSingleton,

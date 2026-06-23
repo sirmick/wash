@@ -34,14 +34,13 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/sirmick/wash/internal/version"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 )
-
-const version = "0.9.2"
 
 func main() {
 	reason := flag.String("reason", "", "freeform note shown in wash-priv's approval row")
@@ -56,7 +55,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("wash-sudo %s\n", version)
+		fmt.Printf("wash-sudo %s\n", version.Version)
 		return
 	}
 
@@ -88,9 +87,9 @@ func main() {
 }
 
 // resolveSocket picks the control socket path. Priority:
-//   1. --socket flag
-//   2. WASH_CONTROL_SOCKET env
-//   3. Conventional default /tmp/wash-<uid>.sock (matches router's default)
+//  1. --socket flag
+//  2. WASH_CONTROL_SOCKET env
+//  3. Conventional default /tmp/wash-<uid>.sock (matches router's default)
 func resolveSocket(flagVal string) string {
 	if flagVal != "" {
 		return flagVal

@@ -32,6 +32,7 @@ package connect
 import (
 	"context"
 	"embed"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 	"sync"
@@ -44,8 +45,6 @@ import (
 
 //go:embed all:assets
 var assetsFS embed.FS
-
-const version = "0.9.0"
 
 // AppID is the reserved-DNS id of the connect window app.
 const AppID = "com.wash.connect"
@@ -71,7 +70,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              AppID,
 			Name:            "Connect",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-connect",
 			Surface:         sdk.SurfaceWindow,

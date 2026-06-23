@@ -8,10 +8,10 @@
 // diffs consecutive snapshots for read/write rates, like wash-top). The
 // stream pauses while the window is minimized.
 
-import { For, Match, Show, Switch, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Match, Show, Switch, createMemo, createSignal, onMount } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { defineWashApp, tokens } from '@wash/ui';
+import { createAppBus, defineWashApp, fmtBytes, fmtRate, tokens } from '@wash/ui';
 import {
   HardDrive,
   HardDriveDownload,
@@ -51,22 +51,6 @@ interface SmartState {
 
 const HISTORY_LEN = 48;
 
-function fmtBytes(n: number): string {
-  if (!n || n < 0) return n === 0 ? '0 B' : '—';
-  const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < u.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(i === 0 ? 0 : v < 10 ? 2 : v < 100 ? 1 : 0)} ${u[i]}`;
-}
-
-function fmtRate(bps: number): string {
-  if (bps < 1) return '0';
-  return `${fmtBytes(bps)}/s`;
-}
 
 // rateDelta: bytes/s from two cumulative samples dtMS apart. Guards against
 // counter resets (returns 0) and missing baselines.
@@ -200,8 +184,6 @@ function MountBlock(props: { mount: Mount | null }): JSX.Element {
 // ---- app ----
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
-  const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
-
   const [snapshot, setSnapshot] = createSignal<Snapshot | null>(null);
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   // Per-disk I/O rate rings, keyed by device name.
@@ -254,11 +236,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
+  const { send } = createAppBus(props, { onMsg: handleBE });
+
   onMount(() => {
-    const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail);
-    props.host.addEventListener('wash:msg', onMsg);
     send({ kind: 'request_snapshot' });
-    onCleanup(() => props.host.removeEventListener('wash:msg', onMsg));
   });
 
   const rows = createMemo(() => buildRows(snapshot()));

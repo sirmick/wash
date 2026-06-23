@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/sirmick/wash/internal/version"
 	"log"
 	"net"
 	"net/http"
@@ -25,12 +26,10 @@ import (
 	"github.com/sirmick/wash/internal/login"
 )
 
-const version = "0.9.2"
-
 const (
-	defaultListen      = "0.0.0.0:10000"
-	systemSecretPath   = "/etc/wash/secret.key"
-	userSecretSubpath  = "wash/secret.key"
+	defaultListen     = "0.0.0.0:10000"
+	systemSecretPath  = "/etc/wash/secret.key"
+	userSecretSubpath = "wash/secret.key"
 )
 
 // defaultSecretPath picks /etc/wash/secret.key when wash-login runs
@@ -134,7 +133,7 @@ func Run(args []string) int {
 		return 2
 	}
 	if *showVersion {
-		fmt.Printf("wash-login %s\n", version)
+		fmt.Printf("wash-login %s\n", version.Version)
 		return 0
 	}
 
@@ -268,7 +267,7 @@ func Run(args []string) int {
 	}
 
 	logger.Printf("wash-login %s listening on %s (cookie-secure=%v cookie-ttl=%s)",
-		version, *listen, *cookieSecure, *cookieTTL)
+		version.Version, *listen, *cookieSecure, *cookieTTL)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

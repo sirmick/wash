@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 	"os"
@@ -57,8 +58,6 @@ import (
 	"github.com/sirmick/wash/internal/washnet/validate"
 	"github.com/sirmick/wash/internal/wire"
 )
-
-const version = "0.9.2"
 
 // AppID is the reserved id this service claims. The registry refuses any
 // non-trusted binary from serving it (internal/router/registry.go reservedIDs),
@@ -124,7 +123,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              AppID,
 			Name:            "Network",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Surface:         sdk.SurfaceBackground,
 			Instancing:      sdk.InstancingSingleton,

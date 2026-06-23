@@ -14,16 +14,17 @@
 //
 // External wire (cross-app, via app_msg.send with to={AppID:"com.wash.priv"}):
 //
-//   →  {kind:"run",   req_id, argv, reason?}      # sugar
-//   →  {kind:"spawn", req_id, app_id, args?, reason?}
-//   ←  {kind:"spawned",  req_id, instance_id}
-//   ←  {kind:"result",   req_id, exit_code}
-//   ←  {kind:"rejected", req_id, reason}
-//   ←  {kind:"error",    req_id, code, msg}
+//	→  {kind:"run",   req_id, argv, reason?}      # sugar
+//	→  {kind:"spawn", req_id, app_id, args?, reason?}
+//	←  {kind:"spawned",  req_id, instance_id}
+//	←  {kind:"result",   req_id, exit_code}
+//	←  {kind:"rejected", req_id, reason}
+//	←  {kind:"error",    req_id, code, msg}
 //
 // Internal wire (FE↔BE):
-//   FE→BE  hello, approve, reject, unlock, lock, resync
-//   BE→FE  state, req.new, req.update, unlocked, unlock_err, locked
+//
+//	FE→BE  hello, approve, reject, unlock, lock, resync
+//	BE→FE  state, req.new, req.update, unlocked, unlock_err, locked
 //
 // See AGENTS/ARCHITECTURE for the broader picture. The mock-sudo
 // hook (env WASH_PRIV_SUDO_BIN) is documented at runSudo.
@@ -31,6 +32,7 @@ package priv
 
 import (
 	"context"
+	"github.com/sirmick/wash/internal/version"
 	"log"
 	"os"
 
@@ -38,8 +40,6 @@ import (
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/wire"
 )
-
-const version = "0.9.2"
 
 // AppID is the reserved id this app claims. The registry refuses any
 // non-trusted binary from serving this id (see internal/router/
@@ -58,7 +58,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              AppID,
 			Name:            "Privileged Actions",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Surface:         sdk.SurfaceBackground,
 			Instancing:      sdk.InstancingSingleton,

@@ -37,12 +37,11 @@ package audio
 
 import (
 	"context"
+	"github.com/sirmick/wash/internal/version"
 
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/sdk"
 )
-
-const version = "0.1.0"
 
 // AppID is the reserved app id for the audio control plane.
 const AppID = "com.wash.audio"
@@ -88,7 +87,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              AppID,
 			Name:            "Audio",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Surface:         sdk.SurfaceBackground,
 			Instancing:      sdk.InstancingSingleton,

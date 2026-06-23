@@ -16,6 +16,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/sirmick/wash/internal/version"
 	"io"
 	"log"
 	"os"
@@ -31,8 +32,6 @@ import (
 	"github.com/sirmick/wash/internal/wire"
 	"github.com/sirmick/wash/wash-vm/guest"
 )
-
-const version = "0.1.0"
 
 // Run drives wash-vmlogin with the given argv (excluding the program name).
 func Run(args []string) int {
@@ -55,7 +54,7 @@ func Run(args []string) int {
 		return 2
 	}
 	if *showVersion {
-		fmt.Printf("wash-vmlogin %s\n", version)
+		fmt.Printf("wash-vmlogin %s\n", version.Version)
 		return 0
 	}
 
@@ -91,7 +90,7 @@ func Run(args []string) int {
 			return 1
 		}
 		logger.Printf("wash-vmlogin %s up: autologin=%q uid=%d transport=%s router=%s — no login prompt",
-			version, id.Name, id.UID, *transport, routerBin)
+			version.Version, id.Name, id.UID, *transport, routerBin)
 		if err := spawn(ctx, id); err != nil && ctx.Err() == nil {
 			logger.Printf("autologin router: %v", err)
 			return 1
@@ -109,7 +108,7 @@ func Run(args []string) int {
 		Spawn:  spawn,
 		Logger: logger,
 	}
-	logger.Printf("wash-vmlogin %s up: transport=%s router=%s apps-dir=%s", version, *transport, routerBin, *appsDir)
+	logger.Printf("wash-vmlogin %s up: transport=%s router=%s apps-dir=%s", version.Version, *transport, routerBin, *appsDir)
 
 	if err := front.Serve(ctx, wire.NewStreamTransport(&rawFD{fd: devFd})); err != nil &&
 		ctx.Err() == nil {

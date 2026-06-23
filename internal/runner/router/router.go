@@ -17,6 +17,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/sirmick/wash/internal/version"
 	"io"
 	"io/fs"
 	"log"
@@ -34,8 +35,6 @@ import (
 	"github.com/sirmick/wash/internal/router"
 	"github.com/sirmick/wash/internal/wire"
 )
-
-const version = "0.9.2"
 
 const (
 	defaultListen       = "0.0.0.0:11000"
@@ -56,7 +55,7 @@ type buildInfo struct {
 }
 
 func gatherBuildInfo() buildInfo {
-	bi := buildInfo{Version: version}
+	bi := buildInfo{Version: version.Version}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return bi

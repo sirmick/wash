@@ -18,6 +18,7 @@ package vscodeworkbench
 import (
 	"context"
 	"embed"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 
@@ -28,8 +29,6 @@ import (
 
 //go:embed all:assets
 var assetsFS embed.FS
-
-const version = "0.1.0"
 
 // serviceAppID is the wash-vscode background service (singleton). The
 // router spawns it on demand when first addressed by id.
@@ -51,7 +50,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.vscode.workbench",
 			Name:            "VS Code",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-vscode-workbench",
 			Surface:         sdk.SurfaceWindow,

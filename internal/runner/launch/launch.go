@@ -23,13 +23,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/sirmick/wash/internal/version"
 	"io"
 	"net"
 	"os"
 	"time"
 )
-
-const version = "0.9.2"
 
 // Run drives the wash-launch CLI with the given argv (excluding the
 // program name). Returns a process exit code — 0 on success, non-zero
@@ -50,7 +49,7 @@ func Run(args []string) int {
 	}
 
 	if *showVersion {
-		fmt.Printf("wash-launch %s\n", version)
+		fmt.Printf("wash-launch %s\n", version.Version)
 		return 0
 	}
 

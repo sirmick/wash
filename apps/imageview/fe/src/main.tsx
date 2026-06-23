@@ -7,7 +7,7 @@
 import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { ChevronLeft, ChevronRight, FolderOpen, Image as ImageIcon, ImagePlus, Maximize, ZoomIn, ZoomOut } from 'lucide-solid';
-import { FilePicker, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
+import { FilePicker, VirtualGrid, createAppBus, createFileClient, defineWashApp, tokens } from '@wash/ui';
 import type { FileClient } from '@wash/ui';
 import { isThumbableName } from '@wash/fs-client';
 
@@ -43,7 +43,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [picker, setPicker] = createSignal<'open' | 'directory' | null>(null);
 
   const fileClient: FileClient = createFileClient({ instance: props.instance, host: props.host });
-  const send = (m: unknown) => window.wash.sendAppMsg(props.instance, m);
   const current = (): ImageItem | null => images()[index()] ?? null;
 
   const resetView = () => {
@@ -110,21 +109,21 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     zoomBy(e.deltaY < 0 ? 1.1 : 1 / 1.1);
   };
 
+  const handleBE = (m: { kind?: string; dir?: string; images?: ImageItem[]; open?: string } | undefined) => {
+    if (m?.kind !== 'scan_ok') return;
+    if (m.dir) setDir(m.dir);
+    const imgs = m.images ?? [];
+    setImages(imgs);
+    // `open` (set when the router launched us with --open) selects that
+    // image; otherwise start at the first.
+    const openIdx = m.open ? imgs.findIndex((im) => im.path === m.open) : -1;
+    setIndex(openIdx >= 0 ? openIdx : 0);
+    resetView();
+  };
+
+  const { send } = createAppBus(props, { onMsg: handleBE });
+
   onMount(() => {
-    const onMsg = (ev: Event) => {
-      const m = (ev as CustomEvent).detail as
-        | { kind?: string; dir?: string; images?: ImageItem[]; open?: string }
-        | undefined;
-      if (m?.kind !== 'scan_ok') return;
-      if (m.dir) setDir(m.dir);
-      const imgs = m.images ?? [];
-      setImages(imgs);
-      // `open` (set when the router launched us with --open) selects that
-      // image; otherwise start at the first.
-      const openIdx = m.open ? imgs.findIndex((im) => im.path === m.open) : -1;
-      setIndex(openIdx >= 0 ? openIdx : 0);
-      resetView();
-    };
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && (e.key === 'o' || e.key === 'O')) {
         e.preventDefault();
@@ -147,7 +146,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       }
     };
 
-    props.host.addEventListener('wash:msg', onMsg);
     props.host.addEventListener('keydown', onKey);
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
@@ -156,7 +154,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     send({ kind: 'scan' });
 
     onCleanup(() => {
-      props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('keydown', onKey);
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);

@@ -10,6 +10,7 @@ package music
 import (
 	"context"
 	"embed"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 
@@ -19,8 +20,6 @@ import (
 
 //go:embed all:assets
 var assetsFS embed.FS
-
-const version = "0.1.0"
 
 // AppID is this app's reserved id.
 const AppID = "com.wash.music"
@@ -40,7 +39,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              AppID,
 			Name:            "Music",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-music",
 			Surface:         sdk.SurfaceWindow,

@@ -9,9 +9,9 @@
 // code-server and the service broadcasts a fresh ready{path}; the window
 // re-applies its stored folder so it reloads the same workspace.
 
-import { Match, Switch, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { Match, Switch, createMemo, createSignal } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Button, FilePicker, IngressFrame, defineWashApp, tokens } from '@wash/ui';
+import { Button, FilePicker, IngressFrame, createAppBus, defineWashApp, tokens } from '@wash/ui';
 
 type Phase = 'choosing' | 'launching' | 'ready' | 'absent' | 'error';
 
@@ -22,8 +22,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const [path, setPath] = createSignal('');
   const [folder, setFolder] = createSignal('');
   const [error, setError] = createSignal('');
-
-  const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
 
   const src = createMemo(() => {
     const p = path();
@@ -73,25 +71,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }
   };
 
-  onMount(() => {
-    const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail);
-    props.host.addEventListener('wash:msg', onMsg);
+  // wash:state restores the folder this window opened last time.
+  // Fires on (re)mount when the BE has a persisted blob. Treat a
+  // missing folder as "stay on the picker".
+  const handleState = (s: { folder?: string } | null) => {
+    if (s && typeof s.folder === 'string' && s.folder && phase() === 'choosing') {
+      openFolder(s.folder);
+    }
+  };
 
-    // wash:state restores the folder this window opened last time.
-    // Fires on (re)mount when the BE has a persisted blob. Treat a
-    // missing folder as "stay on the picker".
-    const onState = (ev: Event) => {
-      const s = (ev as CustomEvent).detail as { folder?: string } | null;
-      if (s && typeof s.folder === 'string' && s.folder && phase() === 'choosing') {
-        openFolder(s.folder);
-      }
-    };
-    props.host.addEventListener('wash:state', onState);
-
-    onCleanup(() => {
-      props.host.removeEventListener('wash:msg', onMsg);
-      props.host.removeEventListener('wash:state', onState);
-    });
+  const { send } = createAppBus(props, {
+    onMsg: handleBE,
+    onState: (s) => handleState(s as { folder?: string } | null),
   });
 
   const retry = () => {

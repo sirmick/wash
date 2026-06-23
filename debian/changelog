@@ -1,3 +1,13 @@
+wash (0.9.3-1) unstable; urgency=low
+
+  * build: a single app roster drives all per-app Makefile rules, the
+    multicall imports (make gen-imports), and a manifest-icon ↔ sprite check
+    (make check-icons) — CORE_AUDIT 2.2.
+  * packaging: sync the rpm/apk package version, which was stranded at 0.9.1
+    while deb/binaries had moved to 0.9.2.
+
+ -- sirmick <sirmick@gmail.com>  Mon, 22 Jun 2026 00:00:00 -0700
+
 wash (0.9.2-1) unstable; urgency=low
 
   * wash-login: proxy generic ingress (/app/) through the multi-user front.

@@ -17,6 +17,7 @@ package imageview
 import (
 	"context"
 	"embed"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 	"os"
@@ -32,8 +33,6 @@ import (
 
 //go:embed all:assets
 var assetsFS embed.FS
-
-const version = "0.9.0"
 
 // maxImages caps a scan so a huge folder can't blow up the list message.
 // The FE list is windowed, so this can be generous; it bounds the one
@@ -65,7 +64,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.imageview",
 			Name:            "Image Viewer",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-imageview",
 			Surface:         sdk.SurfaceWindow,

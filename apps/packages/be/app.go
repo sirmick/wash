@@ -27,6 +27,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 	"sync"
@@ -38,8 +39,6 @@ import (
 
 //go:embed all:assets
 var assetsFS embed.FS
-
-const version = "0.9.2"
 
 // Icon: lucide "package" — the universal box glyph. Matches the
 // metaphor without colliding with file-manager (folder) or services
@@ -78,7 +77,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.packages",
 			Name:            "Packages",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-packages",
 			Surface:         sdk.SurfaceWindow,

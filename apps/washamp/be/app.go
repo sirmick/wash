@@ -23,6 +23,7 @@ package washamp
 import (
 	"context"
 	"embed"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 
@@ -32,8 +33,6 @@ import (
 
 //go:embed all:assets
 var assetsFS embed.FS
-
-const version = "0.1.0"
 
 // AppID is this app's reserved id.
 const AppID = "com.wash.washamp"
@@ -64,7 +63,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              AppID,
 			Name:            "Washamp",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-washamp",
 			Surface:         sdk.SurfaceWindow,

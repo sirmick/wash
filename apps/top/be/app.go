@@ -14,6 +14,7 @@ package top
 import (
 	"context"
 	"embed"
+	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 	"os"
@@ -29,8 +30,6 @@ import (
 var assetsFS embed.FS
 
 const (
-	version = "0.9.2"
-
 	// defaultIntervalMS is the snapshot cadence in milliseconds.
 	// 2s = htop's default; brisk enough to feel live, slow enough
 	// that a 500-proc box ships ~50 KB/s.
@@ -108,11 +107,11 @@ type diskDev struct {
 // ---- BE state ----
 
 type be struct {
-	conn      *sdk.Conn
-	sampler   *Sampler
+	conn       *sdk.Conn
+	sampler    *Sampler
 	intervalMS atomic.Int64
-	active    atomic.Bool // set when window is mapped
-	wake      chan struct{} // pokes the snapshot loop after config change
+	active     atomic.Bool   // set when window is mapped
+	wake       chan struct{} // pokes the snapshot loop after config change
 }
 
 var st *be
@@ -128,7 +127,7 @@ func init() {
 		Manifest: sdk.Manifest{
 			ID:              "com.wash.top",
 			Name:            "System Monitor",
-			Version:         version,
+			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
 			Element:         "wash-app-top",
 			Surface:         sdk.SurfaceWindow,

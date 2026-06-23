@@ -5,7 +5,7 @@
 // position up to the service (→ sidebar) and obeys transport/volume
 // commands coming back down.
 
-import { createAudioSource, defineWashApp, type AudioSource, type WashAppProps } from '@wash/ui';
+import { createAppBus, createAudioSource, defineWashApp, type AudioSource, type WashAppProps } from '@wash/ui';
 import { onCleanup, onMount } from 'solid-js';
 import Webamp from 'webamp';
 
@@ -62,8 +62,6 @@ function WashampApp(props: WashAppProps) {
   // tracks) apart from a service-driven one (handleCmd set it → don't bounce
   // it back). -1 until the first sync.
   let lastVolume = -1;
-
-  const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
 
   // readPersistable pulls the current playback blob out of Webamp.
   // Guarded like snapshot(): the store shape is not a stable contract.
@@ -416,6 +414,21 @@ function WashampApp(props: WashAppProps) {
     scheduleReport();
   }
 
+  const handleBE = (m: { kind?: string }) => {
+    if (m?.kind === 'tracks_ok') void initWebamp(m as TracksOk);
+  };
+  // wash:state always fires before any queued wash:msg (api.ts
+  // delivery order), so `saved` is populated before tracks_ok
+  // triggers initWebamp's restore.
+  const handleState = (s: PersistedWashamp | null) => {
+    if (s?.track_url || s?.vol != null) saved = s;
+  };
+
+  const { send } = createAppBus(props, {
+    onMsg: handleBE,
+    onState: (s) => handleState(s as PersistedWashamp | null),
+  });
+
   onMount(() => {
     // Producer bridge: transport/volume cmds drive webamp; reports read a
     // fresh snapshot. (audio.cmd is handled here, not in onMsg below.)
@@ -425,19 +438,6 @@ function WashampApp(props: WashAppProps) {
       snapshot: () => (webamp ? snapshot(webamp) : { title: '', status: 'stopped' }),
       onCmd: (action, value) => handleCmd(action, value),
     });
-    const onMsg = (ev: Event) => {
-      const m = (ev as CustomEvent).detail as { kind?: string };
-      if (m?.kind === 'tracks_ok') void initWebamp(m as TracksOk);
-    };
-    // wash:state always fires before any queued wash:msg (api.ts
-    // delivery order), so `saved` is populated before tracks_ok
-    // triggers initWebamp's restore.
-    const onState = (ev: Event) => {
-      const s = (ev as CustomEvent).detail as PersistedWashamp | null;
-      if (s?.track_url || s?.vol != null) saved = s;
-    };
-    props.host.addEventListener('wash:state', onState);
-    props.host.addEventListener('wash:msg', onMsg);
     // Capture-phase so we intercept Webamp's titlebar drag (see
     // onHostMouseDown). Harmless before Webamp renders — nothing matches
     // #title-bar yet.
@@ -446,8 +446,6 @@ function WashampApp(props: WashAppProps) {
     // a window resize; re-snap when devicePixelRatio actually changed.
     window.addEventListener('resize', onWindowResize);
     onCleanup(() => {
-      props.host.removeEventListener('wash:state', onState);
-      props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('mousedown', onHostMouseDown, true);
       window.removeEventListener('resize', onWindowResize);
       if (persistTimer) clearTimeout(persistTimer);

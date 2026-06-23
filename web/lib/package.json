@@ -1,13 +1,14 @@
 {
   "name": "@wash/ui",
   "private": true,
-  "version": "0.9.2",
+  "version": "0.9.3",
   "type": "module",
   "scripts": {
     "build": "vite build"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./vite-app": "./vite-app.mjs"
   },
   "peerDependencies": {
     "@xterm/addon-fit": "^0.10.0",

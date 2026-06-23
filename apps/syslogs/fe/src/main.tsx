@@ -16,7 +16,7 @@
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component } from 'solid-js';
-import { defineWashApp, severityColor, tokens } from '@wash/ui';
+import { createAppBus, defineWashApp, fmtBytes, fmtClockTime, severityColor, tokens } from '@wash/ui';
 import { RefreshCw, ShieldAlert, Search, FileText } from 'lucide-solid';
 
 interface LogFile {
@@ -42,23 +42,6 @@ const MAX_LINES = 10_000;
 // Severity → line color comes from @wash/ui's shared severityColor so
 // syslogs and journal can't drift apart.
 
-function fmtTime(ts: number): string {
-  if (!ts) return '            ';
-  const d = new Date(ts / 1000);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  const ms = String(d.getMilliseconds()).padStart(3, '0');
-  return `${hh}:${mm}:${ss}.${ms}`;
-}
-
-function fmtBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} K`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} M`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} G`;
-}
-
 function fmtRelTime(mtime: number): string {
   if (!mtime) return '';
   const now = Date.now() / 1000;
@@ -70,8 +53,6 @@ function fmtRelTime(mtime: number): string {
 }
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
-  const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
-
   // ----- state -----
 
   const [files, setFiles] = createSignal<LogFile[]>([]);
@@ -117,6 +98,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         return;
     }
   };
+
+  const { send } = createAppBus(props, { onMsg: handleBE });
 
   // ----- send select / lifecycle -----
 
@@ -178,8 +161,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ----- mount -----
 
   onMount(() => {
-    const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail);
-    props.host.addEventListener('wash:msg', onMsg);
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key === '/' && document.activeElement !== filterEl) {
         ev.preventDefault();
@@ -188,7 +169,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     };
     props.host.addEventListener('keydown', onKey as EventListener);
     onCleanup(() => {
-      props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('keydown', onKey as EventListener);
     });
   });
@@ -469,7 +449,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               }
               return (
                 <div data-testid="syslogs-row" style={rowStyle(l.priority)}>
-                  <span style={{ color: tokens.fgDim }}>{fmtTime(l.ts)}</span>
+                  <span style={{ color: tokens.fgDim }}>{fmtClockTime(l.ts)}</span>
                   <span
                     style={{
                       color: severityColor(l.priority),
