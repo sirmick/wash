@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -69,13 +70,20 @@ func (s *supervisor) sockPath(host string) string {
 // it (the "one port" relay, docs/REMOTE.md) — nothing binds a TCP port on
 // A's loopback, and B's router is reached solely through this tunnel, so
 // SSH is the access boundary (§10).
-func buildSSHArgs(host, localSock, remoteSock string) []string {
-	return []string{
+func buildSSHArgs(host, localSock, remoteSock string, port int) []string {
+	args := []string{
 		"-o", "BatchMode=yes",            // never block on an interactive prompt
 		"-o", "ExitOnForwardFailure=yes", // fail fast if the -L bind can't be set up
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
+	}
+	// A non-default SSH port (e.g. a discovered peer advertising 2222) goes
+	// via -p; ssh's positional target can't carry "host:port".
+	if port != 0 && port != defaultSSHPort {
+		args = append(args, "-p", strconv.Itoa(port))
+	}
+	args = append(args,
 		// Forward a local unix socket to a REMOTE UNIX SOCKET (not a loopback
 		// TCP port): B's raw router chmods it 0600, so only the ssh'd uid on B
 		// can reach it. A loopback TCP listener would be reachable by ANY
@@ -93,11 +101,14 @@ func buildSSHArgs(host, localSock, remoteSock string) []string {
 		// app dials it (WASH_DISPLAY) to attach back to the router, so launches
 		// on B fail without one.
 		"--control-socket", remoteSock + ".ctl",
-	}
+	)
+	return args
 }
 
-// connect brings up (or no-ops if already up) a connection to host.
-func (s *supervisor) connect(host string, _ int) {
+// connect brings up (or no-ops if already up) a connection to host. port is
+// the SSH port to dial (0 == default 22); a discovered peer advertising a
+// non-default port carries it here so the dial actually reaches it.
+func (s *supervisor) connect(host string, port int) {
 	s.mu.Lock()
 	if _, ok := s.procs[host]; ok {
 		s.mu.Unlock()
@@ -108,10 +119,10 @@ func (s *supervisor) connect(host string, _ int) {
 	s.mu.Unlock()
 
 	s.setHost(host, HostState{Host: host, Origin: host, Status: StatusStarting})
-	go s.run(ctx, host)
+	go s.run(ctx, host, port)
 }
 
-func (s *supervisor) run(ctx context.Context, host string) {
+func (s *supervisor) run(ctx context.Context, host string, port int) {
 	sock := s.sockPath(host)            // A side: in a 0700 temp dir
 	remoteSock := remoteSockPath()      // B side: unique per connection, chmod 0600 there
 	defer func() {
@@ -127,7 +138,7 @@ func (s *supervisor) run(ctx context.Context, host string) {
 	// ssh -L refuses to bind a unix socket whose file already exists.
 	_ = os.Remove(sock)
 
-	cmd := exec.CommandContext(ctx, s.sshPath, buildSSHArgs(host, sock, remoteSock)...)
+	cmd := exec.CommandContext(ctx, s.sshPath, buildSSHArgs(host, sock, remoteSock, port)...)
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
 	if err := cmd.Start(); err != nil {

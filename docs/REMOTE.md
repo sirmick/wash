@@ -258,6 +258,10 @@ the widget code; it just needs more data, tagged by host.
 
 ### 6.1 Connecting to hosts — the `wash-connect` app (supersedes the Hosts sidebar widget)
 
+> **Companion:** *finding* hosts to connect to (LAN auto-discovery via mDNS, the
+> "On your network" list) is covered in [DISCOVERY.md](DISCOVERY.md). This
+> section covers *connecting* once you have a target.
+
 **Decision (2026-06-13):** the connect UI is a dedicated window app
 **`wash-connect` (`com.wash.connect`)**, not a sidebar widget. A normal app is
 self-contained (its own BE+FE), has room for a real UI, follows the standard

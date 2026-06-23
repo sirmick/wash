@@ -71,6 +71,9 @@ type HostState struct {
 type State struct {
 	Hosts  []HostState  `json:"hosts"`
 	Mounts []MountState `json:"mounts,omitempty"`
+	// Candidates are hosts found on the network (mDNS today) that the user
+	// hasn't saved or connected to — rendered as an "On your network" list.
+	Candidates []Candidate `json:"candidates,omitempty"`
 }
 
 var def *sdk.AppDef
@@ -104,6 +107,10 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 	bus := sdk.NewBus(c)
 	svc := sdk.NewStateService(bus, State{})
 	sup := newSupervisor(svc, c)
+
+	// LAN discovery — announce this box and browse for peers, mirroring
+	// found hosts into State.Candidates (see discovery.go).
+	newDiscoverer(svc).start()
 
 	sdk.HandleFromVoid(bus, "connect", func(_ *sdk.Conn, _ string, req connectReq, _ wire.Sender) error {
 		if req.Host == "" {

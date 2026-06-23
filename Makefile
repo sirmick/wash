@@ -689,6 +689,15 @@ vm-net-test: $(OUT)/wash
 vm-disks-test: $(OUT)/wash
 	go test ./wash-vm/vm/ -run TestDisksRealKernel -v -count=1
 
+# mdns-test: the wash-discovery real-multicast gate (docs/DISCOVERY.md) — opens
+# a live mDNS socket on this host, advertises, and browses for its own
+# announcement. Opt-in (not in the default unit tier) because a sandbox may
+# have a multicast iface that drops loopback delivery, which would hang/flake
+# the gate. Skips cleanly when no multicast socket is available.
+.PHONY: mdns-test
+mdns-test:
+	WASH_MDNS_INTEGRATION=1 go test ./internal/mdns/ -run TestLoopbackDiscovery -v -count=1
+
 # vm-chrome: the minimal host chrome the proxy serves (docs/NET.md §8.3) —
 # tabs for Console + Wash. The wash UI (shell.js + app bundles) comes over the
 # wire FROM the VM; only the vendored runtimes + this chrome are host-served, so
