@@ -23,7 +23,7 @@
 //   - Coalescing or debouncing. Consumers receive the raw event
 //     stream; if a flurry of writes is noisy, the consumer batches.
 //
-// Why a library, not a router service
+// # Why a library, not a router service
 //
 // Each consumer (fm now, the session-app dialog later, a text editor
 // after that) owns its own watches with its own lifecycle. They do

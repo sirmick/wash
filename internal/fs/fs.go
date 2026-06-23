@@ -7,7 +7,7 @@
 // will move to a wash-fs equivalent if and when a second mutating
 // consumer appears — per the `no-premature-service` discipline.
 //
-// Sandboxing
+// # Sandboxing
 //
 // An FS instance carries a root. Confine resolves every input path
 // to its absolute, cleaned form and rejects paths outside the root

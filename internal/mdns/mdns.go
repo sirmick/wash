@@ -259,9 +259,9 @@ func (s *Server) handleResponse(msg *dnsmessage.Message) {
 		port int
 		text []string
 	}
-	byInstance := map[string]*rec{}        // instance fqdn -> SRV/TXT
-	addrsByHost := map[string][]net.IP{}   // host fqdn -> A addresses
-	var ptrTargets []string                // instance fqdns the PTR points at
+	byInstance := map[string]*rec{}      // instance fqdn -> SRV/TXT
+	addrsByHost := map[string][]net.IP{} // host fqdn -> A addresses
+	var ptrTargets []string              // instance fqdns the PTR points at
 
 	scan := func(rs []dnsmessage.Resource) {
 		for _, r := range rs {

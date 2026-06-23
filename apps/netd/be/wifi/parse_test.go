@@ -8,7 +8,7 @@ func TestSplitTerse(t *testing.T) {
 		want []string
 	}{
 		{`*:home:75:WPA2`, []string{"*", "home", "75", "WPA2"}},
-		{`:My\:Net:60:WPA3`, []string{"", "My:Net", "60", "WPA3"}}, // escaped colon in SSID
+		{`:My\:Net:60:WPA3`, []string{"", "My:Net", "60", "WPA3"}},   // escaped colon in SSID
 		{`*:back\\slash:42:`, []string{"*", `back\slash`, "42", ""}}, // escaped backslash
 		{`:open:88:--`, []string{"", "open", "88", "--"}},
 	}

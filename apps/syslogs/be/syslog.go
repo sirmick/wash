@@ -40,10 +40,10 @@ const (
 // heuristic on the message body. Callers should treat priority<0 as
 // "unknown — render neutral".
 type LogEntry struct {
-	TS       int64  `json:"ts"`             // µs since epoch (0 if unparsed)
+	TS       int64  `json:"ts"`       // µs since epoch (0 if unparsed)
 	Priority int    `json:"priority"` // -1 unknown; 0..7 RFC values
-	Ident    string `json:"ident"`       // program name (sshd, kernel, …)
-	PID      int    `json:"pid"`           // 0 if absent
+	Ident    string `json:"ident"`    // program name (sshd, kernel, …)
+	PID      int    `json:"pid"`      // 0 if absent
 	Message  string `json:"message"`
 	Raw      string `json:"raw"` // original line — fallback view
 }
@@ -382,7 +382,8 @@ var bsdSyslogRE = regexp.MustCompile(
 
 // iso8601RE matches the rsyslog `RSYSLOG_FileFormat` / `--output=iso`
 // prefix that newer setups emit by default:
-//   "2026-05-22T22:38:17.123456+00:00 host program[pid]: msg"
+//
+//	"2026-05-22T22:38:17.123456+00:00 host program[pid]: msg"
 var iso8601RE = regexp.MustCompile(
 	`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:?\d{2})?) +([^ ]+) +([^\[\]: ]+)(?:\[(\d+)\])?: ?(.*)$`,
 )

@@ -16,11 +16,11 @@ type fakeWifi struct {
 	err   error
 }
 
-func (f fakeWifi) Detect() (bool, bool)                            { return true, true }
-func (f fakeWifi) Enabled(context.Context) bool                    { return true }
+func (f fakeWifi) Detect() (bool, bool)                             { return true, true }
+func (f fakeWifi) Enabled(context.Context) bool                     { return true }
 func (f fakeWifi) SetEnabled(context.Context, bool) (string, error) { return "", nil }
-func (f fakeWifi) Scan(context.Context) ([]wifi.AP, error)         { return f.aps, f.err }
-func (f fakeWifi) Status(context.Context) ([]wifi.WifiConn, error) { return f.conns, f.err }
+func (f fakeWifi) Scan(context.Context) ([]wifi.AP, error)          { return f.aps, f.err }
+func (f fakeWifi) Status(context.Context) ([]wifi.WifiConn, error)  { return f.conns, f.err }
 func (f fakeWifi) Connect(context.Context, string, string, string, bool) (string, error) {
 	return "", nil
 }

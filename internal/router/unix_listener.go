@@ -519,4 +519,3 @@ func (r *Router) ReapWhenIdle(ctx context.Context, timeout time.Duration) error 
 		}
 	}
 }
-

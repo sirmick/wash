@@ -46,13 +46,13 @@ type Capabilities struct {
 // ReadBytes/WriteBytes are cumulative /proc/diskstats counters; the FE diffs
 // consecutive snapshots to render bytes/s, exactly like wash-top.
 type Disk struct {
-	Name           string      `json:"name"`   // "sda", "nvme0n1"
-	Path           string      `json:"path"`   // "/dev/sda"
+	Name           string      `json:"name"` // "sda", "nvme0n1"
+	Path           string      `json:"path"` // "/dev/sda"
 	Model          string      `json:"model"`
 	Serial         string      `json:"serial"`
 	WWN            string      `json:"wwn"`
-	Size           uint64      `json:"size"`        // bytes
-	Rotational     bool        `json:"rotational"`  // true = HDD, false = SSD/flash
+	Size           uint64      `json:"size"`       // bytes
+	Rotational     bool        `json:"rotational"` // true = HDD, false = SSD/flash
 	Removable      bool        `json:"removable"`
 	Transport      string      `json:"transport"`   // sata/nvme/usb/virtio/mmc/…
 	ReadBytes      uint64      `json:"read_bytes"`  // cumulative
@@ -104,11 +104,11 @@ type Manager struct {
 // MDArray is one md (software RAID) array. Read entirely from /proc/mdstat
 // and /sys/block/md*/md/ — no root needed.
 type MDArray struct {
-	Name       string     `json:"name"`        // "md0"
-	Path       string     `json:"path"`        // "/dev/md0"
-	Level      string     `json:"level"`       // "raid1", "raid5", …
-	State      string     `json:"state"`       // "clean", "active", "degraded", …
-	Size       uint64     `json:"size"`        // bytes
+	Name       string     `json:"name"`  // "md0"
+	Path       string     `json:"path"`  // "/dev/md0"
+	Level      string     `json:"level"` // "raid1", "raid5", …
+	State      string     `json:"state"` // "clean", "active", "degraded", …
+	Size       uint64     `json:"size"`  // bytes
 	RaidDisks  int        `json:"raid_disks"`
 	Degraded   bool       `json:"degraded"`
 	SyncAction string     `json:"sync_action"` // "idle", "resync", "recover", "check"

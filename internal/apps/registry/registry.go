@@ -29,10 +29,10 @@ import (
 // catalog), the canonical wire manifest, the embedded asset FS, and
 // the entrypoint that runs the app event loop.
 type App struct {
-	Name     string                          // "wash-term", matches argv[0]
-	Manifest wire.Manifest                   // same struct ParseManifest produces
-	Assets   fs.FS                           // //go:embed all:assets
-	Run      func(context.Context) error     // app event loop
+	Name     string                      // "wash-term", matches argv[0]
+	Manifest wire.Manifest               // same struct ParseManifest produces
+	Assets   fs.FS                       // //go:embed all:assets
+	Run      func(context.Context) error // app event loop
 }
 
 var apps = map[string]*App{}

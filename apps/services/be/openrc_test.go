@@ -51,7 +51,7 @@ func TestApplyOpenRCState(t *testing.T) {
 	enabled := map[string]bool{"sshd": true}
 
 	cases := []struct {
-		name             string
+		name                             string
 		wantActive, wantSub, wantEnabled string
 	}{
 		{"sshd", "active", "started", "enabled"},

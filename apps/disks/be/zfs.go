@@ -127,9 +127,9 @@ func parseZfsList(text string) []ZDataset {
 }
 
 type poolStatus struct {
-	state  string
-	scan   string
-	vdevs  []ZVdev
+	state string
+	scan  string
+	vdevs []ZVdev
 }
 
 // parseZpoolStatus parses `zpool status`. The config section is an

@@ -95,7 +95,9 @@ EOF
 echo ok`)
 	run("nohup hostapd /tmp/hostapd.conf >/tmp/hostapd.log 2>&1 </dev/null & echo started")
 	waitFor("hostapd AP enabled", 20*time.Second,
-		func(s string) bool { return strings.Contains(s, "AP-ENABLED") || strings.Contains(s, "Setup of interface done") },
+		func(s string) bool {
+			return strings.Contains(s, "AP-ENABLED") || strings.Contains(s, "Setup of interface done")
+		},
 		"cat /tmp/hostapd.log 2>&1")
 	// Give the AP subnet an address + DHCP so the station gets a real IP — the
 	// connect isn't "done" for NM until L3 comes up, and this proves end-to-end
@@ -108,7 +110,9 @@ echo ok`)
 	// nmcli's `device wifi connect` runs its own scan, so we don't gate on the
 	// (timing-flaky) scan list — the AP is provably visible (iw sees the beacon).
 	waitFor("wlan0 available", 30*time.Second,
-		func(s string) bool { return strings.Contains(s, "wlan0:disconnected") || strings.Contains(s, "wlan0:connected") },
+		func(s string) bool {
+			return strings.Contains(s, "wlan0:disconnected") || strings.Contains(s, "wlan0:connected")
+		},
 		"nmcli -t -f DEVICE,STATE device status 2>&1")
 	connectOut := waitFor("wash connect ok", 45*time.Second, has("OK"),
 		"washnet-wifi -op connect -ssid wash-test-ap -security psk2 -psk testpass123 2>&1")

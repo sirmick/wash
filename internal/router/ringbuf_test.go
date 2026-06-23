@@ -18,11 +18,11 @@ func TestRingBufferShortWrite(t *testing.T) {
 
 func TestRingBufferWrap(t *testing.T) {
 	r := newRingBuffer(8)
-	r.Write([]byte("abcdefgh"))                // exactly full
+	r.Write([]byte("abcdefgh")) // exactly full
 	if got := r.Snapshot(); !bytes.Equal(got, []byte("abcdefgh")) {
 		t.Fatalf("snapshot after full = %q", got)
 	}
-	r.Write([]byte("12"))                       // wraps
+	r.Write([]byte("12")) // wraps
 	if got := r.Snapshot(); !bytes.Equal(got, []byte("cdefgh12")) {
 		t.Fatalf("snapshot after wrap = %q", got)
 	}
@@ -30,7 +30,7 @@ func TestRingBufferWrap(t *testing.T) {
 
 func TestRingBufferOversize(t *testing.T) {
 	r := newRingBuffer(4)
-	r.Write([]byte("1234567890"))               // 10 bytes, cap 4
+	r.Write([]byte("1234567890")) // 10 bytes, cap 4
 	if got := r.Snapshot(); !bytes.Equal(got, []byte("7890")) {
 		t.Fatalf("snapshot = %q", got)
 	}

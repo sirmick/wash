@@ -8,7 +8,7 @@ import (
 // fakeClock is a manually-advanced clock for deterministic window tests.
 type fakeClock struct{ t time.Time }
 
-func (c *fakeClock) now() time.Time   { return c.t }
+func (c *fakeClock) now() time.Time      { return c.t }
 func (c *fakeClock) add(d time.Duration) { c.t = c.t.Add(d) }
 
 // newTestLimiter wires a rateLimiter to a controllable clock.

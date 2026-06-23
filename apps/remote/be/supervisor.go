@@ -72,7 +72,7 @@ func (s *supervisor) sockPath(host string) string {
 // SSH is the access boundary (§10).
 func buildSSHArgs(host, localSock, remoteSock string, port int) []string {
 	args := []string{
-		"-o", "BatchMode=yes",            // never block on an interactive prompt
+		"-o", "BatchMode=yes", // never block on an interactive prompt
 		"-o", "ExitOnForwardFailure=yes", // fail fast if the -L bind can't be set up
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", "ServerAliveInterval=15",
@@ -93,14 +93,14 @@ func buildSSHArgs(host, localSock, remoteSock string, port int) []string {
 		"-L", fmt.Sprintf("%s:%s", localSock, remoteSock),
 		host,
 		"wash-router",
-		"--listen-raw", "unix:" + remoteSock,
+		"--listen-raw", "unix:"+remoteSock,
 		"--no-session",
 		"--no-auth",
 		// A UNIQUE control socket (not the default /tmp/wash-<uid>.sock, which
 		// would collide with B's own desktop router). It's required: a spawned
 		// app dials it (WASH_DISPLAY) to attach back to the router, so launches
 		// on B fail without one.
-		"--control-socket", remoteSock + ".ctl",
+		"--control-socket", remoteSock+".ctl",
 	)
 	return args
 }
@@ -123,8 +123,8 @@ func (s *supervisor) connect(host string, port int) {
 }
 
 func (s *supervisor) run(ctx context.Context, host string, port int) {
-	sock := s.sockPath(host)            // A side: in a 0700 temp dir
-	remoteSock := remoteSockPath()      // B side: unique per connection, chmod 0600 there
+	sock := s.sockPath(host)       // A side: in a 0700 temp dir
+	remoteSock := remoteSockPath() // B side: unique per connection, chmod 0600 there
 	defer func() {
 		s.mu.Lock()
 		delete(s.procs, host)

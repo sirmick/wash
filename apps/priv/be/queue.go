@@ -35,33 +35,33 @@ const (
 type Kind string
 
 const (
-	KindRun        Kind = "run"         // spawn wash-term --exec argv (window)
-	KindSpawn      Kind = "spawn"       // spawn a registered wash app as root
-	KindRunInline  Kind = "run_inline"  // sudo argv directly, stream io to wash-sudo
+	KindRun       Kind = "run"        // spawn wash-term --exec argv (window)
+	KindSpawn     Kind = "spawn"      // spawn a registered wash app as root
+	KindRunInline Kind = "run_inline" // sudo argv directly, stream io to wash-sudo
 )
 
 // Request is one approval-queue entry. Fields here are also what the
 // audit log records and what the FE renders, so add carefully.
 type Request struct {
-	ReqID      string      // requester-chosen
-	Kind       Kind        // run | spawn | run_inline
-	Sender     wire.Sender // router-attested
-	AppID      string      // for KindSpawn: target app to launch
-	Argv       []string    // for KindRun: command for wash-term --exec; for KindSpawn: positional args; for KindRunInline: argv to sudo
-	Cwd        string      // for KindRunInline: working dir
-	Env        map[string]string // for KindRunInline: caller-allowlisted env vars passed via sudo --preserve-env
-	Reason     string      // freeform explanation, escape-stripped before FE render
-	NoPrompt   bool        // KindRunInline: refuse if password cache is empty
-	Pty        bool        // KindRunInline: allocate a PTY instead of pipes
-	Cols       uint16      // KindRunInline+Pty: initial column count
-	Rows       uint16      // KindRunInline+Pty: initial row count
-	CliOrigin  *CliOrigin  // router-attested origin metadata (pid/uid/tty/comm) when sender is a cli-* session
-	Status     Status
-	CreatedAt  time.Time
-	StartedAt  time.Time
-	FinishedAt time.Time
-	ExitCode   int
-	ErrorMsg   string
+	ReqID       string            // requester-chosen
+	Kind        Kind              // run | spawn | run_inline
+	Sender      wire.Sender       // router-attested
+	AppID       string            // for KindSpawn: target app to launch
+	Argv        []string          // for KindRun: command for wash-term --exec; for KindSpawn: positional args; for KindRunInline: argv to sudo
+	Cwd         string            // for KindRunInline: working dir
+	Env         map[string]string // for KindRunInline: caller-allowlisted env vars passed via sudo --preserve-env
+	Reason      string            // freeform explanation, escape-stripped before FE render
+	NoPrompt    bool              // KindRunInline: refuse if password cache is empty
+	Pty         bool              // KindRunInline: allocate a PTY instead of pipes
+	Cols        uint16            // KindRunInline+Pty: initial column count
+	Rows        uint16            // KindRunInline+Pty: initial row count
+	CliOrigin   *CliOrigin        // router-attested origin metadata (pid/uid/tty/comm) when sender is a cli-* session
+	Status      Status
+	CreatedAt   time.Time
+	StartedAt   time.Time
+	FinishedAt  time.Time
+	ExitCode    int
+	ErrorMsg    string
 	SpawnedInst string // populated once a spawn-style child handshakes
 }
 
@@ -1176,4 +1176,3 @@ func stripControl(s string) string {
 	}
 	return string(out)
 }
-

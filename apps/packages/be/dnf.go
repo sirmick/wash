@@ -168,7 +168,7 @@ func (*dnfBackend) UpgradePkgArgv(pkg, kind string) []string {
 func (*dnfBackend) GlobalActions() []GlobalAction {
 	return []GlobalAction{
 		{ID: "update_system", Label: "Update system",
-			Desc: "dnf upgrade — refresh metadata and upgrade everything",
+			Desc:    "dnf upgrade — refresh metadata and upgrade everything",
 			Surface: "toolbar"},
 		{ID: "refresh", Label: "Refresh metadata",
 			Desc: "dnf check-update — refresh the package index"},

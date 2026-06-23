@@ -7,7 +7,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
-
 )
 
 // cliSession is a control-socket connection that has been promoted

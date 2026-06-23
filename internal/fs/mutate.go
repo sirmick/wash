@@ -108,6 +108,7 @@ func (f *FS) CreateDir(p string) (abs string, err error) {
 //   - replace=true and `to` is a non-empty dir → ErrNotEmptyDir
 //     (recursive replace belongs in bulk-ops, not the synchronous
 //     fast path)
+//
 // from == to (resolved) → ErrSamePath.
 func (f *FS) Rename(from, to string, replace bool) (src, dst string, err error) {
 	if from == "" || to == "" {

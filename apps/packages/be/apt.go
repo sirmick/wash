@@ -171,6 +171,7 @@ func (*aptBackend) UpgradePkgArgv(pkg, kind string) []string {
 	}
 	return []string{aptBin(), "-y", "install", "--only-upgrade", pkg}
 }
+
 // GlobalActions enumerates the apt-wide actions surfaced in the
 // FE. "update_system" is the toolbar combo (refresh-then-upgrade,
 // the "I just want everything current" button); the other four

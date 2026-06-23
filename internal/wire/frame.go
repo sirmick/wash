@@ -79,12 +79,12 @@ func (c Class) String() string {
 
 // Errors returned by Frame encoding/decoding.
 var (
-	ErrOversizeFrame  = errors.New("wire: frame length exceeds 16 MiB cap")
+	ErrOversizeFrame   = errors.New("wire: frame length exceeds 16 MiB cap")
 	ErrChannelTooLarge = errors.New("wire: channel id exceeds 24-bit space")
-	ErrReservedFlag   = errors.New("wire: reserved flag bit set")
-	ErrEndNotSet      = errors.New("wire: END flag MUST be set in v0.0")
-	ErrShortHeader    = errors.New("wire: short header")
-	ErrShortPayload   = errors.New("wire: short payload")
+	ErrReservedFlag    = errors.New("wire: reserved flag bit set")
+	ErrEndNotSet       = errors.New("wire: END flag MUST be set in v0.0")
+	ErrShortHeader     = errors.New("wire: short header")
+	ErrShortPayload    = errors.New("wire: short payload")
 )
 
 // Frame is a decoded wash frame. Payload aliases the buffer the caller

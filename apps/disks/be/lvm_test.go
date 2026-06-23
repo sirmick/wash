@@ -53,10 +53,10 @@ func TestParseLvmFullreport(t *testing.T) {
 
 func TestAtou(t *testing.T) {
 	cases := map[string]uint64{
-		"1024":         1024,
-		"1024B":        1024,
-		"<2048B":       2048,
-		"  512 ":       512,
+		"1024":           1024,
+		"1024B":          1024,
+		"<2048B":         2048,
+		"  512 ":         512,
 		"<1099511627776": 1099511627776,
 	}
 	for in, want := range cases {

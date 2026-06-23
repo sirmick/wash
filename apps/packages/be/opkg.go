@@ -141,7 +141,7 @@ func (*opkgBackend) UpgradePkgArgv(pkg, kind string) []string {
 func (*opkgBackend) GlobalActions() []GlobalAction {
 	return []GlobalAction{
 		{ID: "update_system", Label: "Update system",
-			Desc: "opkg update && opkg upgrade — refresh and upgrade all",
+			Desc:    "opkg update && opkg upgrade — refresh and upgrade all",
 			Surface: "toolbar"},
 		{ID: "update", Label: "Update index",
 			Desc: "opkg update"},

@@ -53,11 +53,11 @@ func TestReadMounts(t *testing.T) {
 
 func TestUnescapeMount(t *testing.T) {
 	cases := map[string]string{
-		"plain":           "plain",
-		"a\\040b":         "a b",
-		"tab\\011here":    "tab\there",
-		"back\\134slash":  "back\\slash",
-		"\\040lead":       " lead",
+		"plain":          "plain",
+		"a\\040b":        "a b",
+		"tab\\011here":   "tab\there",
+		"back\\134slash": "back\\slash",
+		"\\040lead":      " lead",
 	}
 	for in, want := range cases {
 		if got := unescapeMount(in); got != want {

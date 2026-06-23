@@ -45,9 +45,9 @@ type LoadAvg struct {
 // whether this iface contributes to the aggregate (vs. only showing
 // in the popover); see realNetIface.
 type NetIface struct {
-	Name           string
+	Name             string
 	RxBytes, TxBytes uint64
-	Real           bool
+	Real             bool
 }
 
 // DiskDev is one row of /proc/diskstats's cumulative sector
@@ -597,8 +597,8 @@ func readDetails(pid int32) Details {
 
 // parseLimits chews /proc/<pid>/limits, which is column-aligned text:
 //
-//   Limit                     Soft Limit           Hard Limit           Units
-//   Max cpu time              unlimited            unlimited            seconds
+//	Limit                     Soft Limit           Hard Limit           Units
+//	Max cpu time              unlimited            unlimited            seconds
 //
 // The fixed-column widths (26, 47, 68) are baked into fs/proc/base.c
 // and haven't changed in over 15 years.

@@ -33,12 +33,12 @@ const batchInterval = 100 * time.Millisecond
 // LogEntry is the wire-shape one journal record. Fields lowercased
 // for the FE; we drop everything we don't render.
 type LogEntry struct {
-	TS       int64  `json:"ts"`               // microseconds since epoch
-	Priority int    `json:"priority"`   // 0..7 (0 = emerg)
-	Unit     string `json:"unit"`           // _SYSTEMD_UNIT
-	Ident    string `json:"ident"`         // SYSLOG_IDENTIFIER or _COMM
-	PID      int    `json:"pid"`             // _PID
-	Message  string `json:"message"`     // MESSAGE
+	TS       int64  `json:"ts"`       // microseconds since epoch
+	Priority int    `json:"priority"` // 0..7 (0 = emerg)
+	Unit     string `json:"unit"`     // _SYSTEMD_UNIT
+	Ident    string `json:"ident"`    // SYSLOG_IDENTIFIER or _COMM
+	PID      int    `json:"pid"`      // _PID
+	Message  string `json:"message"`  // MESSAGE
 }
 
 // streamCtl owns one running journalctl (either direct subprocess or
@@ -363,11 +363,11 @@ func (s *streamCtl) sendState(status, errMsg string) {
 		return
 	}
 	_ = s.conn.SendAppMsg(map[string]any{
-		"kind":   "stream_state",
-		"gen":    s.gen,
-		"status": status,
-		"error":  errMsg,
-		"unit":   s.req.Unit,
+		"kind":    "stream_state",
+		"gen":     s.gen,
+		"status":  status,
+		"error":   errMsg,
+		"unit":    s.req.Unit,
 		"as_root": s.req.AsRoot,
 	})
 }

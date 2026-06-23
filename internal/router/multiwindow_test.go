@@ -108,7 +108,10 @@ func TestMultiWindowCreateChannelDestroy(t *testing.T) {
 	shell := shellPair.EndB()
 
 	appDone := make(chan struct{})
-	go func() { defer close(appDone); _ = r.HandleApp(context.Background(), appPair.EndA(), multiWinManifest(CapWindows), nil) }()
+	go func() {
+		defer close(appDone)
+		_ = r.HandleApp(context.Background(), appPair.EndA(), multiWinManifest(CapWindows), nil)
+	}()
 	shellDone := make(chan struct{})
 	go func() { defer close(shellDone); _ = r.HandleShell(context.Background(), shellPair.EndA()) }()
 
@@ -179,7 +182,10 @@ func TestWindowCreateRequiresCapability(t *testing.T) {
 	appPair := wiretest.NewPipePair()
 	app := appPair.EndB()
 	appDone := make(chan struct{})
-	go func() { defer close(appDone); _ = r.HandleApp(context.Background(), appPair.EndA(), multiWinManifest(), nil) }()
+	go func() {
+		defer close(appDone)
+		_ = r.HandleApp(context.Background(), appPair.EndA(), multiWinManifest(), nil)
+	}()
 
 	writeCtrl(t, app, wire.NewIdentity("com.wash.disptest", ProtocolVersion, "0.9.0"))
 	ack, ok := readCtrl(t, app).(wire.IdentityAck)

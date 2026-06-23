@@ -8,7 +8,7 @@
 //   - lone tagged uplink, unshared                  → eth0.<vid> sub-interface(s)
 //   - ≥2 ports sharing only the native domain       → a plain br-lan bridge
 //   - any tagging / multiple VLANs on shared ports  → one vlan_filtering br-lan
-//                                                      + a bridge-vlan per VLAN
+//   - a bridge-vlan per VLAN
 //
 // Scope: one switch bridge (auto-named br-lan, home-router decision). Devices the
 // lens doesn't model (macvlan, QinQ, bonds, extra bridges) are returned as

@@ -177,4 +177,3 @@ func ensureTerm(env []string, term string) []string {
 	}
 	return out
 }
-

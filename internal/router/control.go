@@ -102,14 +102,14 @@ type controlReq struct {
 	// Fields used by priv.run (wash-sudo). The control handler
 	// promotes the connection to a streaming cliSession and routes
 	// these into wash-priv as a normal cross-app message.
-	ReqID        string            `json:"req_id,omitempty"`
-	Argv         []string          `json:"argv,omitempty"`
-	Cwd          string            `json:"cwd,omitempty"`
-	Reason       string            `json:"reason,omitempty"`
-	Env          map[string]string `json:"env,omitempty"`
-	Window       bool              `json:"window,omitempty"`
-	NoPrompt     bool              `json:"no_prompt,omitempty"`
-	StreamBytes  string            `json:"bytes,omitempty"` // priv.stdin, base64
+	ReqID       string            `json:"req_id,omitempty"`
+	Argv        []string          `json:"argv,omitempty"`
+	Cwd         string            `json:"cwd,omitempty"`
+	Reason      string            `json:"reason,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	Window      bool              `json:"window,omitempty"`
+	NoPrompt    bool              `json:"no_prompt,omitempty"`
+	StreamBytes string            `json:"bytes,omitempty"` // priv.stdin, base64
 }
 
 func (r *Router) handleControl(ctx context.Context, conn net.Conn) {
@@ -360,9 +360,9 @@ func (r *Router) controlPrivRun(ctx context.Context, conn net.Conn, rd *bufio.Re
 	// at least reached the router. Subsequent traffic from wash-priv
 	// (priv.event envelopes) lands on the same conn via writeJSON.
 	if err := session.writeJSON(map[string]any{
-		"t":              "priv.registered",
-		"req_id":         first.ReqID,
-		"cli_instance":   session.instanceID,
+		"t":            "priv.registered",
+		"req_id":       first.ReqID,
+		"cli_instance": session.instanceID,
 	}); err != nil {
 		return
 	}

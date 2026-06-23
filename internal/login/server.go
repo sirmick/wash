@@ -49,22 +49,22 @@ var shellAssetsFS embed.FS
 // Server is the HTTP handler set for wash-login. Construct via
 // NewServer, then call ServeHTTP / mount onto your own listener.
 type Server struct {
-	auth       Authenticator
-	signer     *Signer
-	ttl        time.Duration
-	cookieSec  bool // Secure flag on cookie — false in dev/loopback HTTP
+	auth          Authenticator
+	signer        *Signer
+	ttl           time.Duration
+	cookieSec     bool // Secure flag on cookie — false in dev/loopback HTTP
 	log           *log.Logger
 	tplLogin      *template.Template
 	tplWelcome    *template.Template
 	tplPicker     *template.Template
 	tplNewSession *template.Template
-	sessions   SessionRegistry      // nil = /ws handoff disabled (M2-only mode)
-	spawner    *Spawner             // nil = /ws handoff disabled
-	killer     func(pid int) error  // overrideable for tests; default syscall.Kill(pid, SIGTERM)
-	users      UserLister           // nil = no user list on login form
-	showUsers  bool                 // false = always omit list even if users != nil
-	authLimit  *rateLimiter         // /auth failure throttle (never nil)
-	trustedXFF []*net.IPNet         // peers whose X-Forwarded-For we believe
+	sessions      SessionRegistry     // nil = /ws handoff disabled (M2-only mode)
+	spawner       *Spawner            // nil = /ws handoff disabled
+	killer        func(pid int) error // overrideable for tests; default syscall.Kill(pid, SIGTERM)
+	users         UserLister          // nil = no user list on login form
+	showUsers     bool                // false = always omit list even if users != nil
+	authLimit     *rateLimiter        // /auth failure throttle (never nil)
+	trustedXFF    []*net.IPNet        // peers whose X-Forwarded-For we believe
 }
 
 // Config drives Server construction.
@@ -141,22 +141,22 @@ func NewServer(cfg Config) (*Server, error) {
 		killer = func(pid int) error { return syscall.Kill(pid, syscall.SIGTERM) }
 	}
 	return &Server{
-		auth:       cfg.Auth,
-		signer:     cfg.Signer,
-		ttl:        cfg.TTL,
-		cookieSec:  cfg.CookieSecure,
-		log:        cfg.Logger,
+		auth:          cfg.Auth,
+		signer:        cfg.Signer,
+		ttl:           cfg.TTL,
+		cookieSec:     cfg.CookieSecure,
+		log:           cfg.Logger,
 		tplLogin:      tplLogin,
 		tplWelcome:    tplWelcome,
 		tplPicker:     tplPicker,
 		tplNewSession: tplNewSession,
 		sessions:      cfg.Sessions,
-		spawner:    cfg.Spawner,
-		killer:     killer,
-		users:      cfg.Users,
-		showUsers:  cfg.ShowUsers,
-		authLimit:  newRateLimiter(cfg.MaxAuthFails, cfg.AuthWindow),
-		trustedXFF: cfg.TrustedProxies,
+		spawner:       cfg.Spawner,
+		killer:        killer,
+		users:         cfg.Users,
+		showUsers:     cfg.ShowUsers,
+		authLimit:     newRateLimiter(cfg.MaxAuthFails, cfg.AuthWindow),
+		trustedXFF:    cfg.TrustedProxies,
 	}, nil
 }
 
@@ -742,10 +742,10 @@ func (s *Server) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 // handleLogout clears the cookie and, when authed, optionally
 // SIGTERMs the user's running router(s). Query knobs:
 //
-//   /logout                       cookie clear only.
-//   /logout?end_session=<sessid>  cookie clear + SIGTERM that sessid.
-//   /logout?end_all=true          cookie clear + SIGTERM every router
-//                                 owned by the authed uid.
+//	/logout                       cookie clear only.
+//	/logout?end_session=<sessid>  cookie clear + SIGTERM that sessid.
+//	/logout?end_all=true          cookie clear + SIGTERM every router
+//	                              owned by the authed uid.
 //
 // end_session validates that the named sessid actually belongs to
 // the authed uid before signaling — a logged-in user can't terminate

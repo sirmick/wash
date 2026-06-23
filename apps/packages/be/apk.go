@@ -187,7 +187,7 @@ func (*apkBackend) UpgradePkgArgv(pkg, kind string) []string {
 func (*apkBackend) GlobalActions() []GlobalAction {
 	return []GlobalAction{
 		{ID: "update_system", Label: "Update system",
-			Desc: "apk update && apk upgrade — refresh index and upgrade all",
+			Desc:    "apk update && apk upgrade — refresh index and upgrade all",
 			Surface: "toolbar"},
 		{ID: "update", Label: "Update index",
 			Desc: "apk update"},

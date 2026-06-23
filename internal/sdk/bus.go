@@ -705,4 +705,3 @@ func mintReqID() (string, error) {
 	}
 	return "c-" + hex.EncodeToString(b[:]), nil
 }
-

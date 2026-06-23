@@ -46,15 +46,15 @@ func TestParseAPKSearch(t *testing.T) {
 func TestSplitAPKNameVersion(t *testing.T) {
 	cases := map[string][2]string{
 		// Standard: name + version + release.
-		"bash-5.2.21-r1":            {"bash", "5.2.21-r1"},
-		"bash-completion-2.13-r0":   {"bash-completion", "2.13-r0"},
-		"py3-flask-2.0.1-r2":        {"py3-flask", "2.0.1-r2"},
+		"bash-5.2.21-r1":          {"bash", "5.2.21-r1"},
+		"bash-completion-2.13-r0": {"bash-completion", "2.13-r0"},
+		"py3-flask-2.0.1-r2":      {"py3-flask", "2.0.1-r2"},
 		// Hyphenated name + version + release.
-		"alpine-base-3.21.0-r0":     {"alpine-base", "3.21.0-r0"},
+		"alpine-base-3.21.0-r0": {"alpine-base", "3.21.0-r0"},
 		// No -rN suffix: last segment is the version.
-		"plain-1.0":                 {"plain", "1.0"},
+		"plain-1.0": {"plain", "1.0"},
 		// Single token: name only.
-		"orphan":                    {"orphan", ""},
+		"orphan": {"orphan", ""},
 	}
 	for in, want := range cases {
 		gotName, gotVer := splitAPKNameVersion(in)

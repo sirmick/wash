@@ -47,10 +47,10 @@ func TestSkipInterface(t *testing.T) {
 		{"br-ffffffffffff", true},
 		// Lookalikes that are NOT docker bridges (11 or 13 chars,
 		// non-hex character).
-		{"br-12345678901", false},     // 11 hex chars
-		{"br-1234567890123", false},   // 13 hex chars
-		{"br-1a2b3c4d5e6Z", false},    // non-hex
-		{"br-12345678901g", false},    // 'g' is not a hex digit
+		{"br-12345678901", false},   // 11 hex chars
+		{"br-1234567890123", false}, // 13 hex chars
+		{"br-1a2b3c4d5e6Z", false},  // non-hex
+		{"br-12345678901g", false},  // 'g' is not a hex digit
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
