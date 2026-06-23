@@ -1,3 +1,13 @@
+wash (0.9.4-1) unstable; urgency=low
+
+  * remote: LAN mDNS auto-discovery ("On your network") for wash-connect and a
+    Settings "Remote" panel listing live sessions + mounts with graceful
+    teardown (internal/mdns, internal/hostmeta).
+  * theme: Copland pack, sunwave logo, dead-black terminal/editor, denser
+    start menu, host info in the start header.
+
+ -- sirmick <sirmick@gmail.com>  Mon, 22 Jun 2026 12:00:00 -0700
+
 wash (0.9.3-1) unstable; urgency=low
 
   * build: a single app roster drives all per-app Makefile rules, the

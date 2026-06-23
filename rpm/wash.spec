@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.9.3
+Version:        0.9.4
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -202,6 +202,12 @@ fi
 exit 0
 
 %changelog
+* Mon Jun 22 2026 sirmick <sirmick@gmail.com> - 0.9.4-1
+- remote: LAN mDNS auto-discovery ("On your network") for wash-connect plus a
+  Settings "Remote" panel listing live sessions + mounts with graceful teardown.
+- theme: Copland pack, sunwave logo, dead-black terminal/editor, denser start
+  menu, host info in the start header.
+
 * Mon Jun 22 2026 sirmick <sirmick@gmail.com> - 0.9.3-1
 - build: a single app roster drives the per-app Makefile rules, the multicall
   imports (make gen-imports), and a manifest-icon sprite check (CORE_AUDIT 2.2).
