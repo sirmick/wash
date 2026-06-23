@@ -181,7 +181,7 @@ func TestSessIDFromSock(t *testing.T) {
 		{"", "", false},
 	}
 	for _, tc := range cases {
-		got, ok := sessIDFromSock(tc.sock, 1000)
+		got, ok := sessIDFromSock(tc.sock)
 		if ok != tc.ok || got != tc.want {
 			t.Errorf("sessIDFromSock(%q): got (%q, %v) want (%q, %v)", tc.sock, got, ok, tc.want, tc.ok)
 		}

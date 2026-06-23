@@ -262,31 +262,6 @@ func detectPasswordlessSudo(sudoBin string) bool {
 	return false
 }
 
-// filterEnv returns env with any entries whose key matches one of the
-// excluded names removed. Order preserved.
-func filterEnv(env []string, excluded ...string) []string {
-	out := env[:0:0]
-	for _, kv := range env {
-		idx := strings.IndexByte(kv, '=')
-		if idx < 0 {
-			out = append(out, kv)
-			continue
-		}
-		key := kv[:idx]
-		skip := false
-		for _, ex := range excluded {
-			if key == ex {
-				skip = true
-				break
-			}
-		}
-		if !skip {
-			out = append(out, kv)
-		}
-	}
-	return out
-}
-
 // AttachConn binds the SDK conn at OnReady time. Idempotent.
 func (s *State) AttachConn(c *sdk.Conn) {
 	s.mu.Lock()
@@ -1086,9 +1061,9 @@ func runSudo(sudoBin, binary string, args []string, instanceID, token string, pw
 		"WASH_INSTANCE_ID="+instanceID,
 		"WASH_ATTACH_TOKEN="+token,
 	)
-	// Filter env to remove our own WASH_INSTANCE_ID/etc from the
-	// parent so the child uses the freshly-set ones we just appended.
-	c.Env = overrideEnv(c.Env, map[string]string{
+	// Override our own WASH_INSTANCE_ID/etc inherited from the parent so
+	// the child uses the freshly-set ones we just appended.
+	c.Env = mergeEnv(c.Env, map[string]string{
 		"WASH_INSTANCE_ID":  instanceID,
 		"WASH_ATTACH_TOKEN": token,
 	})
@@ -1126,33 +1101,6 @@ func stdinPipeOnce(pw []byte) *strings.Reader {
 	// alternative (a pipe + goroutine writer) needs cleanup and risks
 	// a dangling FD if sudo dies before consuming.
 	return strings.NewReader(string(buf))
-}
-
-// overrideEnv replaces values in env for keys named in m. Anything
-// not in env is appended. Keeps a stable order so logging is sane.
-func overrideEnv(env []string, m map[string]string) []string {
-	out := env[:0:0]
-	seen := map[string]bool{}
-	for _, kv := range env {
-		idx := strings.IndexByte(kv, '=')
-		if idx < 0 {
-			out = append(out, kv)
-			continue
-		}
-		key := kv[:idx]
-		if newVal, ok := m[key]; ok {
-			out = append(out, key+"="+newVal)
-			seen[key] = true
-			continue
-		}
-		out = append(out, kv)
-	}
-	for k, v := range m {
-		if !seen[k] {
-			out = append(out, k+"="+v)
-		}
-	}
-	return out
 }
 
 // stripControl removes ASCII C0 + DEL + ESC bytes so a malicious
