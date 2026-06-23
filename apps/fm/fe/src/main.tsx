@@ -3435,7 +3435,7 @@ const previewStyle: JSX.CSSProperties = {
   padding: '10px 12px',
   font: `12px ${tokens.fontMono}`,
   'white-space': 'pre',
-  background: '#0c0c14',
+  background: tokens.bgInset,
 };
 
 const infoToggleStyle: JSX.CSSProperties = {
@@ -3786,7 +3786,7 @@ const folderGridStyle: JSX.CSSProperties = {
   height: '100%',
   'min-height': 0,
   padding: '8px',
-  background: '#0c0c14',
+  background: tokens.bgInset,
   'box-sizing': 'border-box',
 };
 
@@ -3818,7 +3818,7 @@ const tileImgStyle: JSX.CSSProperties = {
   'max-height': '64px',
   'object-fit': 'contain',
   'border-radius': `${tokens.radiusSm}px`,
-  background: '#000',
+  background: tokens.bgInset,
 };
 
 const tileNameStyle: JSX.CSSProperties = {

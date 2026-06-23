@@ -110,7 +110,7 @@ export const Section: Component<SectionProps> = (props) => {
             style={{
               'font-size': '10px',
               padding: '1px 6px',
-              'border-radius': '8px',
+              'border-radius': tokens.radiusXl,
               background: props.accent ?? tokens.accentBlue,
               color: '#fff',
               'font-weight': 700,

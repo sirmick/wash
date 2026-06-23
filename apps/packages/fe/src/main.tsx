@@ -217,6 +217,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     return lastExit() === 0 ? 'success' : 'failure';
   };
 
+  // Whether the terminal pane is showing. The <Terminal> stays mounted
+  // (so termAPI is live the instant an action starts — startAction
+  // resets it and reads its cols/rows), but the pane collapses to zero
+  // height while idle so there's no black bar parked under the package
+  // list doing nothing. It expands once an action runs and stays up to
+  // show the result (exit code + output) until the next action begins.
+  const termVisible = (): boolean => action() !== null || lastExit() !== null;
+
   // Action button per row. Three buttons potentially: install (if
   // not installed), upgrade (if installed and supported for its
   // kind), remove (if installed). Tasksel tasks have no per-task
@@ -401,11 +409,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         </Show>
       </div>
 
-      {/* Terminal pane — always rendered; action_stream feeds it.
-          When an action finishes the pane dims and the header tints
-          green (success) or red (failure) so the result reads at a
+      {/* Terminal pane — stays mounted so action_stream always has a live
+          termAPI, but collapses to zero height while idle (hidden until an
+          action runs). When an action finishes the pane dims and the header
+          tints green (success) or red (failure) so the result reads at a
           glance. */}
-      <div style={termPaneStyle} data-testid="pkg-term-pane" data-status={termStatus()}>
+      <div style={termPaneStyle(termVisible())} data-testid="pkg-term-pane" data-status={termStatus()} data-visible={termVisible() ? '1' : '0'}>
         <div style={termHeaderForStatus(termStatus())}>
           <span style={{ display: 'flex', 'align-items': 'center', gap: '6px', color: tokens.fgMuted, 'font-size': tokens.fontSizeMd }}>
             <Show when={termStatus() === 'success'}>
@@ -676,15 +685,24 @@ const successBorder = tokens.fgSuccess;
 const failureBg = tokens.bgDanger;
 const failureBorder = tokens.fgDanger;
 
-const termPaneStyle: JSX.CSSProperties = {
+const termPaneBaseStyle: JSX.CSSProperties = {
   display: 'flex',
   'flex-direction': 'column',
-  height: '40%',
-  'min-height': '180px',
-  'border-top': `1px solid ${tokens.borderMenu}`,
-  background: '#000',
+  background: tokens.bgCanvas,
   'flex-shrink': 0,
+  overflow: 'hidden',
+  transition: 'height 160ms ease, min-height 160ms ease',
 };
+
+// Collapsed (idle) vs expanded (an action ran / is running). Collapsing to
+// zero height — rather than unmounting — keeps the xterm + termAPI alive
+// so startAction can reset and size it immediately.
+function termPaneStyle(visible: boolean): JSX.CSSProperties {
+  if (!visible) {
+    return { ...termPaneBaseStyle, height: '0px', 'min-height': '0px', 'border-top': '1px solid transparent' };
+  }
+  return { ...termPaneBaseStyle, height: '40%', 'min-height': '180px', 'border-top': `1px solid ${tokens.borderMenu}` };
+}
 
 const termHeaderBaseStyle: JSX.CSSProperties = {
   display: 'flex',

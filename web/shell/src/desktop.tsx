@@ -3,6 +3,7 @@
 // windows are absolutely positioned on top.
 
 import { createEffect } from 'solid-js';
+import { tokens } from '@wash/ui';
 import { registerMountedElement, unregisterMountedElement } from './api';
 import { desktop } from './wm';
 
@@ -47,7 +48,9 @@ export function Desktop() {
         // inset:0 here covers the same area without the context.
         position: 'absolute',
         inset: '0',
-        background: '#111',
+        // Bare fallback behind the session app's wallpaper; tokenized so a
+        // light pack doesn't flash near-black before the wallpaper paints.
+        background: tokens.bgWindow,
       }}
     />
   );

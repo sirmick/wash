@@ -79,7 +79,7 @@ const BulkRow: Component<{ job: BulkJob; onCancel: () => void }> = (props) => {
         padding: '6px 8px',
         background: 'rgba(255,255,255,0.02)',
         border: `1px solid ${tokens.borderMenu}`,
-        'border-radius': '3px',
+        'border-radius': tokens.radiusSm,
         display: 'flex',
         'flex-direction': 'column',
         gap: '4px',
@@ -128,7 +128,7 @@ const BulkRow: Component<{ job: BulkJob; onCancel: () => void }> = (props) => {
               background: 'transparent',
               color: tokens.fg,
               border: `1px solid ${tokens.borderMenu}`,
-              'border-radius': '3px',
+              'border-radius': tokens.radiusSm,
               padding: '1px 6px',
               cursor: 'pointer',
               font: `10px ${tokens.fontSans}`,
@@ -145,7 +145,7 @@ const BulkRow: Component<{ job: BulkJob; onCancel: () => void }> = (props) => {
         style={{
           height: '4px',
           background: tokens.bgRowHover,
-          'border-radius': '2px',
+          'border-radius': tokens.radiusSm,
           overflow: 'hidden',
         }}
       >

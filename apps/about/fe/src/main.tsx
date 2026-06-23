@@ -30,6 +30,10 @@ interface HostBlock {
   uid: number;
   username?: string;
   hostname?: string;
+  cores?: number;
+  arch?: string;
+  kernel?: string;
+  distro?: string;
   workdir?: string;
   uptime_sec: number;
 }
@@ -284,6 +288,18 @@ const HostPanel: Component<{ host: HostBlock }> = (props) => (
     </Show>
     <Show when={props.host.username}>
       <KVRow k="User" v={`${props.host.username} (UID ${props.host.uid})`} />
+    </Show>
+    <Show when={props.host.cores || props.host.arch}>
+      <KVRow
+        k="CPU"
+        v={`${props.host.cores ? props.host.cores + ' cores' : ''}${props.host.cores && props.host.arch ? ' · ' : ''}${props.host.arch ?? ''}`}
+      />
+    </Show>
+    <Show when={props.host.kernel}>
+      <KVRow k="Kernel" v={props.host.kernel!} />
+    </Show>
+    <Show when={props.host.distro}>
+      <KVRow k="Distro" v={props.host.distro!} />
     </Show>
     <Show when={props.host.workdir}>
       <KVRow k="Workdir" v={<span style={pathStyle}>{props.host.workdir!}</span>} />

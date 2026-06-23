@@ -106,7 +106,7 @@ const UnlockModal: Component<{
   const panelStyle: JSX.CSSProperties = {
     background: tokens.bgWindow,
     border: '1px solid #6a2a2a', // red accent — root chain
-    'border-radius': '8px',
+    'border-radius': tokens.radiusXl,
     padding: '20px 22px',
     'min-width': '380px',
     'max-width': '480px',
@@ -157,7 +157,7 @@ const UnlockModal: Component<{
             background: 'rgba(0,0,0,0.25)',
             color: tokens.fg,
             border: '1px solid #3a3a5a',
-            'border-radius': '4px',
+            'border-radius': tokens.radiusMd,
             font: `13px ${tokens.fontMono}`,
             'margin-bottom': '8px',
           }}

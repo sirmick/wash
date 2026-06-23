@@ -130,7 +130,7 @@ const Bar: Component<{
         style={{
           height: '6px',
           background: tokens.bgRowHover,
-          'border-radius': '3px',
+          'border-radius': tokens.radiusSm,
           overflow: 'hidden',
         }}
       >

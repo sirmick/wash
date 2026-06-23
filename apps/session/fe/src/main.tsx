@@ -118,6 +118,8 @@ interface SystemInfoMsg {
   fqdn: string;
   username: string;
   cpus: number;
+  /** Friendly CPU architecture label (e.g. "x86-64", "arm64"). */
+  arch: string;
   mem_bytes: number;
   interfaces: IfaceIPs[];
   router?: RouterInfo;
@@ -1133,6 +1135,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         <StartMenu
           apps={catalog()}
           rootRows={rootEntries()}
+          version={sysInfo()?.router?.version}
           onDismiss={() => setMenuOpen(false)}
           onPick={(id) => {
             setMenuOpen(false);
@@ -1308,7 +1311,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
               'text-shadow': '0 1px 2px rgba(0,0,0,0.6)',
             }}
           >
-            {s().cpus || '?'} cores · {formatMem(s().mem_bytes)}
+            {s().cpus || '?'} cores{s().arch ? ` (${s().arch})` : ''} · {formatMem(s().mem_bytes)}
           </div>
           <Show when={s().interfaces && s().interfaces.length > 0}>
             <div
@@ -1673,6 +1676,7 @@ const StartMenu: Component<{
   onDismiss: () => void;
   onLogout: () => void;
   onDisconnect: () => void;
+  version?: string;
 }> = (props) => {
   // Merge synthetic root rows in with the catalog and sort
   // alphabetically. Root rows get a red-tinted icon — that's the
@@ -1698,6 +1702,40 @@ const StartMenu: Component<{
       style={{ 'min-width': '240px', padding: '4px', overflow: 'hidden' }}
     >
       <div class="wash-shimmer-sweep" aria-hidden="true" />
+      {/* Brand header: the wash logo + "wash <version>" in a larger
+          italic face, sitting above the launcher rows. */}
+      <div
+        data-testid="start-menu-brand"
+        style={{
+          display: 'flex',
+          'align-items': 'center',
+          gap: '10px',
+          padding: '6px 10px 9px',
+          'border-bottom': `1px solid ${tokens.borderMenu}`,
+          'margin-bottom': '4px',
+        }}
+      >
+        <img
+          src={washAssetUrl('wash-logo.svg')}
+          width="30"
+          height="30"
+          alt=""
+          style={{ display: 'block', 'flex-shrink': 0 }}
+        />
+        <span
+          style={{
+            'font-size': '18px',
+            'font-style': 'italic',
+            'font-weight': 600,
+            color: tokens.fg,
+            'letter-spacing': '0.2px',
+            'line-height': 1,
+          }}
+        >
+          wash{props.version ? ` ${props.version}` : ''}
+        </span>
+      </div>
+      <div style={{ 'max-height': '56vh', 'overflow-y': 'auto', 'overflow-x': 'hidden' }}>
       <Show when={items().length > 0} fallback={<div style={emptyStyle}>no apps registered</div>}>
         <For each={items()}>
           {(app) => {
@@ -1718,7 +1756,7 @@ const StartMenu: Component<{
               : `start-menu-${app.id}`;
             const iconNode = app.icon ? (
               <span style={{ color: root ? ROOT_ICON_COLOR : accentFor(app), display: 'inline-flex' }}>
-                <SpriteIcon name={app.icon} size={20} />
+                <SpriteIcon name={app.icon} size={16} />
               </span>
             ) : undefined;
             return (
@@ -1740,6 +1778,7 @@ const StartMenu: Component<{
           }}
         </For>
       </Show>
+      </div>
       <div
         aria-hidden="true"
         style={{
@@ -1751,13 +1790,13 @@ const StartMenu: Component<{
       <MenuItem
         data-testid="start-menu-disconnect"
         label="Disconnect"
-        icon={<SpriteIcon name="unplug" size={20} />}
+        icon={<SpriteIcon name="unplug" size={16} />}
         onClick={() => props.onDisconnect()}
       />
       <MenuItem
         data-testid="start-menu-logout"
         label="Log out"
-        icon={<SpriteIcon name="log-out" size={20} />}
+        icon={<SpriteIcon name="log-out" size={16} />}
         onClick={() => props.onLogout()}
       />
     </Menu>

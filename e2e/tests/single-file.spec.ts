@@ -37,7 +37,10 @@ const APPS: AppBundle[] = [
   // (P-256 / HKDF / AES-GCM, ~30 KB) for the priv password handshake.
   // +~8 KB for the Remote sidebar widget's per-host app-launch dropdown
   // (docs/REMOTE.md): icon list + popup menu.
-  { name: 'session', dir: 'apps/session/fe/dist', maxBytes: 185_000 },
+  // +~1 KB: start-menu brand header (logo + "wash <version>"), the CPU-arch
+  // banner field, the radius-token sweep across the sidebar widgets, and the
+  // themeable start-menu offset. Bumped to keep ~9 KB of headroom as a brake.
+  { name: 'session', dir: 'apps/session/fe/dist', maxBytes: 195_000 },
   // about grew into the system-info panel: build/host/Go-runtime
   // process table/registered-apps/browser sections + sortable table.
   // 30 KB headroom keeps a brake on further growth.

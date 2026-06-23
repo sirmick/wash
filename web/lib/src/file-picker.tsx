@@ -703,7 +703,7 @@ const iconBtnStyle: JSX.CSSProperties = {
 
 const pathInputStyle: JSX.CSSProperties = {
   flex: 1,
-  background: '#10101a',
+  background: tokens.bgInset,
   color: tokens.fg,
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusSm}`,
@@ -714,7 +714,7 @@ const pathInputStyle: JSX.CSSProperties = {
 
 const errorStyle: JSX.CSSProperties = {
   padding: '4px 12px',
-  color: '#ff8080',
+  color: tokens.fgDanger,
   font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
 };
 
@@ -748,7 +748,7 @@ function headerCellStyle(_k: SortKey): JSX.CSSProperties {
 const listStyle: JSX.CSSProperties = {
   flex: 1,
   overflow: 'auto',
-  background: '#181828',
+  background: tokens.bgWindow,
 };
 
 const mutedRowStyle: JSX.CSSProperties = {
@@ -806,7 +806,7 @@ const footerStyle: JSX.CSSProperties = {
 };
 
 const selectStyle: JSX.CSSProperties = {
-  background: '#10101a',
+  background: tokens.bgInset,
   color: tokens.fg,
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusSm}`,
@@ -816,9 +816,9 @@ const selectStyle: JSX.CSSProperties = {
 
 function actionBtnStyle(primary: boolean): JSX.CSSProperties {
   return {
-    background: primary ? '#2a3a6a' : 'transparent',
+    background: primary ? tokens.bgRowSelected : 'transparent',
     color: tokens.fg,
-    border: `1px solid ${primary ? '#3a4a8a' : tokens.borderMenu}`,
+    border: `1px solid ${primary ? tokens.borderFocus : tokens.borderMenu}`,
     'border-radius': `${tokens.radiusSm}`,
     padding: '5px 14px',
     cursor: 'pointer',

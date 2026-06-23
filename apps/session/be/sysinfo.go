@@ -19,6 +19,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/sirmick/wash/internal/hostmeta"
 )
 
 // sysInfo is the shape sent to the FE as the "system.info" app_msg.
@@ -28,6 +30,7 @@ type sysInfo struct {
 	FQDN        string     `json:"fqdn"`
 	Username    string     `json:"username"`
 	CPUs        int        `json:"cpus"`
+	Arch        string     `json:"arch"`
 	MemBytes    uint64     `json:"mem_bytes"`
 	Interfaces  []IfaceIPs `json:"interfaces"`
 	Router      RouterInfo `json:"router"`
@@ -59,6 +62,7 @@ type IfaceIPs struct {
 func gatherSysInfo() sysInfo {
 	out := sysInfo{
 		CPUs: runtime.NumCPU(),
+		Arch: hostmeta.Arch(),
 	}
 	if h, err := os.Hostname(); err == nil {
 		out.Hostname = h

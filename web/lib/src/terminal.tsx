@@ -27,12 +27,16 @@ import { washAppearance, onAppearanceChange } from './packs';
 // Dark is the canonical Solarized Dark; light is a clean WHITE terminal
 // (not cream) with an ANSI set tuned to read on white.
 export const TERM_THEME_DARK: ITheme = {
-  background: '#002b36', foreground: '#839496',
-  cursor: '#93a1a1', cursorAccent: '#002b36', selectionBackground: '#073642',
-  black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900',
-  blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
-  brightBlack: '#002b36', brightRed: '#cb4b16', brightGreen: '#586e75', brightYellow: '#657b83',
-  brightBlue: '#839496', brightMagenta: '#6c71c4', brightCyan: '#93a1a1', brightWhite: '#fdf6e3',
+  // Dead-black background like an out-of-the-box Linux terminal, with the
+  // GNOME-Terminal "Tango" ANSI set — the familiar default, readable on
+  // pure black (Solarized's #002b36 base read as washed-out grey and left
+  // a visible bar where a #000 container showed through underneath).
+  background: '#000000', foreground: '#d0d0d0',
+  cursor: '#d0d0d0', cursorAccent: '#000000', selectionBackground: '#3a3a3a',
+  black: '#000000', red: '#cc0000', green: '#4e9a06', yellow: '#c4a000',
+  blue: '#3465a4', magenta: '#75507b', cyan: '#06989a', white: '#d3d7cf',
+  brightBlack: '#555753', brightRed: '#ef2929', brightGreen: '#8ae234', brightYellow: '#fce94f',
+  brightBlue: '#729fcf', brightMagenta: '#ad7fa8', brightCyan: '#34e2e2', brightWhite: '#eeeeec',
 };
 export const TERM_THEME_LIGHT: ITheme = {
   background: '#ffffff', foreground: '#2b2b2b',
