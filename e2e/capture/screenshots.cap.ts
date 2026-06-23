@@ -12,9 +12,9 @@
 
 import { test, expect, displaySkipReason } from '../fixtures/router';
 import type { Page, Locator } from '@playwright/test';
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, readdirSync, copyFileSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { deflateSync } from 'node:zlib';
 
@@ -86,11 +86,28 @@ function seedShowcase(root: string): void {
     'package main\n\nimport "fmt"\n\nfunc main() {\n\tfmt.Println("hello from wash")\n}\n');
   writeFileSync(join(root, 'Music', 'playlist.m3u'), '#EXTM3U\n');
   writeFileSync(join(root, '.profile'), 'export EDITOR=wash-edit\n');
+  seedPictures(join(root, 'Pictures'));
+}
 
-  // Generated images so the Image Viewer has real thumbnails. These live in
-  // Pictures/ INSIDE the sandbox root, so the fs-root confinement (below) lets
-  // imageview read them — WASH_IMAGEVIEW_DIR points here.
-  const pics = join(root, 'Pictures');
+// Populate the Image Viewer's folder. Prefer the user's REAL ~/Pictures (an
+// even spread so the grid isn't ten near-identical frames), copied INTO the
+// sandbox root so the fs-root confinement still lets imageview read them
+// (WASH_IMAGEVIEW_DIR points here). Falls back to generated images on a box
+// with no ~/Pictures so the capture never breaks.
+function seedPictures(pics: string): void {
+  try {
+    const dir = join(homedir(), 'Pictures');
+    const all = readdirSync(dir).filter((n) => /\.(jpe?g|png|gif|webp)$/i.test(n)).sort();
+    if (all.length) {
+      const want = Math.min(9, all.length);
+      for (let i = 0; i < want; i++) {
+        const name = all[Math.floor((i * all.length) / want)];
+        copyFileSync(join(dir, name), join(pics, name));
+      }
+      return;
+    }
+  } catch { /* no ~/Pictures — fall through to generated */ }
+
   writePng(join(pics, 'sunset.png'), 480, 320, (_x, y) => {
     const t = y / 320;
     return [Math.round(240 - 60 * t), Math.round(90 + 70 * t), Math.round(120 + 110 * t)];
@@ -115,6 +132,7 @@ function seedShowcase(root: string): void {
 // known folder inside it — so we use a stable root we seed here at module load
 // and hand the router via WASH_FM_ROOT below. Workers=1 ⇒ no cross-run races.
 const ROOT = join(tmpdir(), 'wash-shot-root');
+rmSync(ROOT, { recursive: true, force: true }); // fresh each run — no stale files from a prior capture
 mkdirSync(ROOT, { recursive: true });
 seedShowcase(ROOT);
 const PICS = join(ROOT, 'Pictures');
@@ -414,28 +432,81 @@ test.describe('screenshots', () => {
     await w.screenshot({ path: join(SHOTS, 'connect.png') });
   });
 
-  // --- the display compositor (best-effort: needs wash-display + an X client) -
-  // Real X11 over the native compositor. Timing matters (DISPLAY_ENV.md §5): the
-  // shell reads DISPLAY at spawn time, so we wait for the autostarted compositor
-  // to bring up Xwayland AND publish its env BEFORE launching the terminal.
+  // --- the display compositor: a FULL-DESKTOP shot with real X11 clients ------
+  // Chromium (a real browser) + xclock are launched from a wash terminal and
+  // composited into native wash windows by wash-display. Timing matters
+  // (DISPLAY_ENV.md §5): the shell reads DISPLAY at spawn time, so we wait for
+  // the autostarted compositor to bring up Xwayland AND publish its env BEFORE
+  // launching the terminal. Captures the whole page, not one window.
+  const chromiumBin = ['/snap/bin/chromium', '/usr/bin/chromium', '/usr/bin/chromium-browser']
+    .find((p) => existsSync(p));
   test('display', async ({ page, router }) => {
-    const reason = displaySkipReason() ?? (existsSync('/usr/bin/xclock') ? null : '/usr/bin/xclock not installed');
+    const reason = displaySkipReason()
+      ?? (existsSync('/usr/bin/xclock') ? null : '/usr/bin/xclock not installed')
+      ?? (chromiumBin ? null : 'chromium not installed');
     test.skip(reason !== null, reason ?? '');
-    test.setTimeout(60_000);
+    test.setTimeout(160_000);
     await bootDesktop(page, router.url);
 
     await router.waitForLog(/Xwayland ready on DISPLAY=/, 25_000);
     await router.waitForLog(/env\.publish from /, 25_000);
 
+    const term = win(page, 'wash-app-term');
     await openApp(page, 'com.wash.term');
     await page.waitForSelector('wash-app-term .xterm-rows', { timeout: 10_000 });
-    await win(page, 'wash-app-term').click();
-    await page.keyboard.type('xclock\n');
+    await moveWinTo(page, term, 40, 40); // terminal top-left, clear of the rest
 
-    await router.waitForLog(/window\.create .*element="wash-app-display"/, 20_000);
-    const display = win(page, 'wash-app-display');
-    await expect(display).toBeVisible({ timeout: 20_000 });
-    await settle(page, 1200);
-    await display.screenshot({ path: join(SHOTS, 'display.png') });
+    // wash-display windows are chromeless (no wash titlebar) so they can't be
+    // dragged after spawn — we control the layout by SPAWN ORDER (last mapped
+    // sits on top) and chromium's --window-position. Launch BOTH from a SINGLE
+    // typed line so we never have to re-click the terminal once chromium covers
+    // it: chromium first, a short sleep, then xclock — so xclock maps last and
+    // stays visible on top.
+    const html =
+      'data:text/html,<body style=margin:0;height:100vh;background:%230b1020;color:%23e6edf3;' +
+      'font-family:system-ui;display:grid;place-items:center>' +
+      '<div style=text-align:center><div style=font-size:46px;font-weight:600>wash</div>' +
+      '<div style=font-size:17px;opacity:.55;margin-top:10px>a real browser, composited into a real window</div></div></body>';
+    const chrome =
+      `${chromiumBin} --ozone-platform=x11 --disable-gpu --no-first-run ` +
+      `--no-default-browser-check --hide-crash-restore-bubble ` +
+      `--window-position=300,235 --window-size=940,600 ` +
+      `--user-data-dir=/tmp/wash-shot-chrome '${html}'`;
+    await term.click();
+    // Fresh chromium profile (no "Restore pages?" bubble) → chromium → sleep →
+    // xclock on top, all in one line.
+    await page.keyboard.type(
+      `rm -rf /tmp/wash-shot-chrome; ${chrome} >/dev/null 2>&1 & ` +
+      `sleep 4; xclock -geometry 190x190 &\n`);
+
+    // Wait for both display windows (chromium + xclock), then let them paint.
+    await expect(async () => {
+      expect(await win(page, 'wash-app-display').count()).toBeGreaterThanOrEqual(2);
+    }).toPass({ timeout: 100_000 });
+    await settle(page, 5000);
+
+    // Sidebar open + hide the host banner (privacy), like the montage.
+    const sidebar = page.locator('[data-testid="sidebar"]');
+    if (!(await sidebar.isVisible())) {
+      await page.locator('[data-testid="sidebar-toggle"]').click().catch(() => {});
+      await settle(page, 400);
+    }
+    await page.evaluate(() => {
+      const hide = (root: Document | ShadowRoot) => {
+        root.querySelectorAll<HTMLElement>(
+          '[data-testid="desktop-banner"],[data-testid="desktop-banner-placeholder"]',
+        ).forEach((el) => { el.style.display = 'none'; });
+        root.querySelectorAll('*').forEach((el) => {
+          if ((el as HTMLElement).shadowRoot) hide((el as HTMLElement).shadowRoot!);
+        });
+      };
+      hide(document);
+    });
+    await settle(page, 400);
+
+    await page.screenshot({ path: join(SHOTS, 'display.png') });
+    // No in-test cleanup: router teardown kills wash-term, whose PTY hangup
+    // takes the backgrounded chromium with it. The next run's `rm -rf` +
+    // --hide-crash-restore-bubble handle any dirty-profile leftover.
   });
 });
