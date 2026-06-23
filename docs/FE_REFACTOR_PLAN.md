@@ -5,8 +5,27 @@ Target: the giant `App()` closures in `apps/fm/fe/src/main.tsx` (2661 lines,
 `apps/edit/fe/src/main.tsx` (3017 lines), which also duplicate a whole
 file-tree subsystem between them.
 
-This is a design + sequenced plan. **Not yet executed.** Decision points
-that need your call are flagged with **[DECIDE]**.
+This is a design + sequenced plan. Decision points that need your call are
+flagged with **[DECIDE]**.
+
+> **Status (2026-06-22 audit sweep):**
+> - **Phases 0–3 — DONE.** FE unit lane (`make fe-unit`, `node --test
+>   --conditions=browser`); shared `@wash/fs-client` package (`web/fs-client/`)
+>   with `paths`/`sort`/`bus`/`watch`/`dnd`/`tree`/`replace-flow`/`upload`
+>   (+ tests); both fm and edit import from it. `[DECIDE]` placement resolved
+>   to `@wash/fs-client`.
+> - **Phase 4 — PIVOTED.** Per `[[wash FE refactor phase4 pivot]]`, extracted
+>   *pure decision kernels* (shared `tree.ts`/`replace-flow.ts`; fm-local
+>   `nav-history.ts`/`clipboard.ts`/`selection.ts`, each tested) instead of the
+>   monolithic `createFmState`/`createNav`/`createClipboard`/`createDerived`
+>   controllers this doc specified. Those named symbols were deliberately NOT
+>   built.
+> - **Phase 5 — NOT done.** `App` was never slimmed to wiring; the fm closure
+>   is still ~2400 lines and there is no `view/` split. (Direct consequence of
+>   the Phase-4 pivot.)
+> - **Phase 6 — HALF done.** edit points at the shared package; `createEditState`
+>   not built.
+> - **Phase 7 (session/top) — untouched, optional.**
 
 ---
 

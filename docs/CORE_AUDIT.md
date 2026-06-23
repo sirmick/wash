@@ -22,6 +22,20 @@ worktree flow: `wash-hardening` (phase 1) and `wash-friction`
 
 ## Phase 1 — security hardening (branch: wash-hardening)
 
+> **Progress (2026-06-22 audit sweep):**
+> - **1.5 — DONE** (landed via `[[wash auth harden]]`, not this branch).
+>   `internal/login/ratelimit.go` (`rateLimiter`/`newRateLimiter`) is wired
+>   as `authLimit` and enforced in `handleAuth` (`internal/login/server.go`).
+> - **1.1 — PARTIAL.** The auth-harden merge added a router-**token** gate on
+>   `/ws` (`tokenOK`: `wash_router` cookie / `?token=`), which blocks anonymous
+>   LAN access. The doc's literal ask — verify wash-login's **HMAC session
+>   cookie** on the raw router when not fronted by login — is still unimplemented.
+> - **1.2 / 1.3 / 1.4 — still open** (this sweep is starting them).
+>
+> **Still genuinely TODO:** 1.1 (HMAC-cookie verification on the raw router),
+> 1.2 (host-header allowlist — permissive by default), 1.3 (ingress loopback
+> enforcement), 1.4 (security headers).
+
 ### 1.1 Gate `/ws`, `/screenshot`, `/app/` on session auth  ← the one that matters
 
 - `internal/router/http.go:47-53` registers all routes with no
@@ -45,6 +59,10 @@ worktree flow: `wash-hardening` (phase 1) and `wash-friction`
   check (1.1) and SameSite-cookie CSRF in one place.
 - Accept: configured bind host, `localhost`, `127.0.0.1`, `[::1]`,
   plus an opt-in list for LAN hostnames.
+- **Permissive by default**: with no allowlist configured the check
+  is a no-op (logs the seen Host but accepts), so existing LAN/mDNS
+  deployments don't break. Enforcement is opt-in via config; only
+  then do off-list Hosts get rejected.
 
 ### 1.3 Ingress: enforce loopback-or-unix backends
 

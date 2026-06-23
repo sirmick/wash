@@ -1,5 +1,11 @@
 # Session prompt — CORE_AUDIT 2.2: single app registry
 
+> **DONE (merged to main, `d8acdfc`).** Items 1–3 (Makefile roster templating,
+> `make gen-imports`, `make check-icons`) and the single-source CI gates all
+> landed; see `docs/CORE_AUDIT.md` §2.2. Only the optional `wash new-app`
+> scaffold (§4 below) is deferred until a new app actually needs it. Kept as a
+> reference for how the registry is wired.
+
 Paste this as the opening prompt for a dedicated session. It is self-contained.
 
 ---
