@@ -87,7 +87,8 @@ turns it into a **single static binary plus a browser**:
 These are generated, not hand-shot: `make screenshots` poses real app
 windows in a throwaway router and captures them with Playwright into
 `docs/screenshots/` (deterministic, seeded layout — see
-`e2e/capture/`). The hero montage above is from the same run.
+`e2e/capture/`, and [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) for how
+to add one). The hero montage above is from the same run.
 
 Each window below is shot under a **different theme pack** — wash ships
 five (Midnight, Tokyo, Seoul, Copland, Oslo); the desktop reskins live
@@ -674,6 +675,7 @@ docs/               see below
 | [MUSIC.md](docs/MUSIC.md) / [RADIO.md](docs/RADIO.md) | The native Music player and the internet Radio app. |
 | [IMAGES.md](docs/IMAGES.md) | The image pipeline — thumbnails over wire raw channels, fm folder preview, the viewer. |
 | [TESTING.md](docs/TESTING.md) | Test tiers, the `make` test verbs, holistic coverage, VM-backed e2e, CI, gotchas. |
+| [SCREENSHOTS.md](docs/SCREENSHOTS.md) | How the marketing shots are generated/themed, and the fs-root sandbox gotcha. |
 | [TECH_DEBT.md](docs/TECH_DEBT.md) / [CORE_AUDIT.md](docs/CORE_AUDIT.md) | Known debt and the core audit / next tranche of work. |
 
 ## Building & testing each part
