@@ -74,3 +74,8 @@ __pycache__/
 
 # Local dev-estate deploy notes (machine-specific; not part of the project)
 /docs/DEPLOY-ESTATE.md
+
+# Source/working imagery (wallpaper EPS/zips, screenshots, converted SVGs);
+# kept locally, not committed — packs reference the embedded copies under
+# web/shell/public/wallpapers/.
+/imagery/
