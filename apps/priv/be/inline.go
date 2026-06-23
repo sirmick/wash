@@ -1,7 +1,6 @@
 package priv
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -229,33 +228,6 @@ func wipeBytes(b []byte) {
 	}
 }
 
-// mergeEnv overlays callerEnv on top of base. Used so the user can
-// add specific env vars via --preserve-env without dropping any of
+// mergeEnv (env.go) overlays callerEnv on top of base — used so the user
+// can add specific env vars via --preserve-env without dropping any of
 // the inherited WASH_* env vars.
-func mergeEnv(base []string, overlay map[string]string) []string {
-	if len(overlay) == 0 {
-		return base
-	}
-	out := make([]string, 0, len(base)+len(overlay))
-	seen := map[string]bool{}
-	for _, kv := range base {
-		idx := bytes.IndexByte([]byte(kv), '=')
-		if idx < 0 {
-			out = append(out, kv)
-			continue
-		}
-		key := kv[:idx]
-		if v, ok := overlay[key]; ok {
-			out = append(out, key+"="+v)
-			seen[key] = true
-			continue
-		}
-		out = append(out, kv)
-	}
-	for k, v := range overlay {
-		if !seen[k] {
-			out = append(out, k+"="+v)
-		}
-	}
-	return out
-}

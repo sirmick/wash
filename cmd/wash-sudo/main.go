@@ -183,7 +183,7 @@ func runCommand(sock string, argv []string, reason string, window bool, noPrompt
 		fmt.Fprintf(os.Stderr, "wash-sudo: write request: %v\n", err)
 		return 1
 	}
-	return drive(conn, req["req_id"].(string), !window)
+	return drive(conn, reqID, !window)
 }
 
 // runApp is --app: spawn a registered wash app as root via the
@@ -197,9 +197,10 @@ func runApp(sock string, appID, reason string, noPrompt bool) int {
 		return 1
 	}
 	defer conn.Close()
+	reqID := newReqID()
 	req := map[string]any{
 		"t":         "priv.run",
-		"req_id":    newReqID(),
+		"req_id":    reqID,
 		"app_id":    appID,
 		"no_prompt": noPrompt,
 		"reason":    reason,
@@ -211,7 +212,7 @@ func runApp(sock string, appID, reason string, noPrompt bool) int {
 	// inline=false: wash-sudo returns on the first "spawned" event
 	// rather than waiting for a priv.result (the spawned app stays
 	// alive in its own window).
-	return drive(conn, req["req_id"].(string), false)
+	return drive(conn, reqID, false)
 }
 
 // runLock asks wash-priv to clear its password cache. Implemented

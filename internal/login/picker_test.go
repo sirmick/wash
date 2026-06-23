@@ -12,17 +12,6 @@ import (
 	"testing"
 )
 
-// fakeSpawner records Spawn calls and returns a pre-canned Session
-// + error per invocation. Used to test picker actions without
-// touching real exec.
-type fakeSpawner struct {
-	mu       sync.Mutex
-	calls    []spawnCall
-	respond  func(id Identity, name string) (Session, error)
-	maxCap   int
-	sessions SessionRegistry
-}
-
 type spawnCall struct {
 	UID  uint32
 	Name string

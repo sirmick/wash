@@ -136,7 +136,7 @@ func (r *ProcRegistry) parseProcEntry(pid int, wantUID uint32) (*Session, error)
 		return nil, nil
 	}
 	exe, _ := os.Readlink(filepath.Join(root, strconv.Itoa(pid), "exe"))
-	sessid, ok := sessIDFromSock(sock, wantUID)
+	sessid, ok := sessIDFromSock(sock)
 	if !ok {
 		return nil, nil
 	}
@@ -252,7 +252,7 @@ func parseRouterArgv(argv []string) (sock, name string, ok bool) {
 // session but its sessid is the file basename minus ".sock". This
 // keeps the registry useful in tests + non-standard deployments
 // without inventing a parallel naming convention.
-func sessIDFromSock(sock string, uid uint32) (string, bool) {
+func sessIDFromSock(sock string) (string, bool) {
 	base := filepath.Base(sock)
 	id := strings.TrimSuffix(base, ".sock")
 	if id == "" || id == base {
