@@ -59,8 +59,8 @@ OUT     := out
 FE_APPS := session about connect imageview term fm edit vscode-workbench \
            settings top disks journal syslogs services packages net \
            washamp music radio
-FE_PANEL_APPS := vscode netd
-SVC_APPS := bulk priv notify audio remote fswatch
+FE_PANEL_APPS := vscode netd remote
+SVC_APPS := bulk priv notify audio fswatch
 
 # Every app that embeds an FE asset bundle (windowed + panel). Drives the
 # embed-stamp / vendor-sync / multicall-stamp derivations. The gated `test` app

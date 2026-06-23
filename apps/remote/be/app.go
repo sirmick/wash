@@ -30,11 +30,13 @@ package remote
 
 import (
 	"context"
-	"github.com/sirmick/wash/internal/version"
+	"embed"
+	"io/fs"
 	"log"
 
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/internal/version"
 	"github.com/sirmick/wash/internal/wire"
 )
 
@@ -76,9 +78,20 @@ type State struct {
 	Candidates []Candidate `json:"candidates,omitempty"`
 }
 
+// assetsFS embeds the settings "Remote" panel bundle (panel.js), staged
+// by the Makefile from apps/remote/fe/dist. wash-remote has no window;
+// this is only the panel the settings app hosts.
+//
+//go:embed all:assets
+var assetsFS embed.FS
+
 var def *sdk.AppDef
 
 func init() {
+	sub, err := fs.Sub(assetsFS, "assets")
+	if err != nil {
+		log.Printf("wash-remote: assets sub: %v", err)
+	}
 	def = &sdk.AppDef{
 		Manifest: sdk.Manifest{
 			ID:              AppID,
@@ -87,12 +100,23 @@ func init() {
 			ProtocolVersion: sdk.ProtocolVersion,
 			Surface:         sdk.SurfaceBackground,
 			Instancing:      sdk.InstancingSingleton,
+			// Settings "Remote" panel: lists live sessions + mounts with
+			// graceful teardown; "Open Connect…" opens the com.wash.connect
+			// window. The supervisor owns the panel (it owns the state and the
+			// disconnect/unmount handlers), mirroring com.wash.netd / the
+			// Network panel.
+			SettingsPanel: &sdk.SettingsPanel{
+				Section: "Remote",
+				Element: "wash-settings-panel-remote",
+			},
 		},
+		Assets:  sub,
 		OnReady: onReady,
 	}
 	registry.Register(&registry.App{
 		Name:     "wash-remote",
 		Manifest: def.Manifest,
+		Assets:   def.Assets,
 		Run:      run,
 	})
 }
