@@ -131,24 +131,23 @@ func (f *Feed) Close() error {
 	f.closed = true
 	for _, set := range f.paths {
 		for s := range set {
-			s.closeOnce.Do(func() {
-				close(s.closed)
-				close(s.events)
-			})
+			s.teardownLocked()
 		}
 	}
 	f.paths = nil
 	return nil
 }
 
-// feedSub is a Manager-free subscription fed by Feed.Emit.
+// feedSub is a Manager-free subscription fed by Feed.Emit. Its whole lifecycle
+// — the events/closed channels AND its membership in feed.paths — is owned by
+// feed.mu. There is no second lock, so teardown can't deadlock against the
+// feed: every close path goes through teardownLocked under that one mutex.
 type feedSub struct {
 	feed   *Feed
 	path   string
 	events chan Event
-
-	closeOnce sync.Once
-	closed    chan struct{}
+	closed chan struct{}
+	done   bool // guarded by feed.mu; true once torn down
 }
 
 func (s *feedSub) Events() <-chan Event { return s.events }
@@ -156,25 +155,27 @@ func (s *feedSub) Path() string         { return s.path }
 
 // Close releases this subscription. Idempotent; safe from any goroutine.
 func (s *feedSub) Close() {
-	s.closeOnce.Do(func() {
-		close(s.closed)
-		s.feed.removeSub(s)
-		close(s.events)
-	})
+	s.feed.mu.Lock()
+	defer s.feed.mu.Unlock()
+	s.teardownLocked()
 }
 
-func (f *Feed) removeSub(s *feedSub) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.closed {
+// teardownLocked closes the sub's channels exactly once and drops it from the
+// feed's path index, all under feed.mu. Idempotent via s.done. Closing events
+// under the same lock Emit holds is what makes the non-blocking send safe — a
+// send and a close can never overlap. Caller holds feed.mu.
+func (s *feedSub) teardownLocked() {
+	if s.done {
 		return
 	}
-	set := f.paths[s.path]
-	if set == nil {
-		return
-	}
-	delete(set, s)
-	if len(set) == 0 {
-		delete(f.paths, s.path)
+	s.done = true
+	close(s.closed)
+	close(s.events)
+	f := s.feed
+	if set := f.paths[s.path]; set != nil {
+		delete(set, s)
+		if len(set) == 0 {
+			delete(f.paths, s.path)
+		}
 	}
 }

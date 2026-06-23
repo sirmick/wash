@@ -103,9 +103,8 @@ type Sub struct {
 	mgr    *Manager
 	path   string
 	events chan Event
-
-	closeOnce sync.Once
-	closed    chan struct{}
+	closed chan struct{}
+	done   bool // guarded by mgr.mu; true once torn down
 }
 
 // New returns a Manager with one fsnotify watcher and a fanout
@@ -288,14 +287,15 @@ func (m *Manager) Close() error {
 		return nil
 	}
 	m.closed = true
-	// Close all subs while holding the lock so no late Watch
-	// races in.
+	// Close all subs while holding the lock so no late Watch races in.
+	// teardownLocked is the single teardown primitive (also used by
+	// Sub.Close) — one mutex owns the whole sub lifecycle, so there is no
+	// second lock to invert against. The OS watches are torn down in bulk
+	// by m.w.Close() below; the per-path Remove teardownLocked issues is
+	// redundant-but-harmless here (error ignored).
 	for _, ps := range m.paths {
 		for s := range ps.subs {
-			s.closeOnce.Do(func() {
-				close(s.closed)
-				close(s.events)
-			})
+			s.teardownLocked()
 		}
 	}
 	m.paths = nil
@@ -318,23 +318,29 @@ func (s *Sub) Path() string { return s.path }
 
 // Close releases this subscription. The Sub's Events channel is
 // closed. If this was the last Sub for the path, the underlying
-// fsnotify watch is removed from the Manager. Idempotent.
+// fsnotify watch is removed from the Manager. Idempotent; safe from
+// any goroutine.
 func (s *Sub) Close() {
-	s.closeOnce.Do(func() {
-		close(s.closed)
-		s.mgr.removeSub(s)
-		close(s.events)
-	})
+	s.mgr.mu.Lock()
+	defer s.mgr.mu.Unlock()
+	s.teardownLocked()
 }
 
-// removeSub decrements the path's refcount and removes the OS watch
-// when it reaches zero. Called from Sub.Close.
-func (m *Manager) removeSub(s *Sub) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
+// teardownLocked closes the sub's channels exactly once and drops it from the
+// path index, removing the OS watch when the path's last sub goes. Everything
+// runs under mgr.mu — the single owner of the sub lifecycle — so Close and
+// Sub.Close can't deadlock against each other (no closeOnce↔mu inversion).
+// Closing events under the lock Manager.dispatch holds is also what keeps the
+// non-blocking send safe: a send and a close can never overlap. Caller holds
+// mgr.mu.
+func (s *Sub) teardownLocked() {
+	if s.done {
 		return
 	}
+	s.done = true
+	close(s.closed)
+	close(s.events)
+	m := s.mgr
 	ps := m.paths[s.path]
 	if ps == nil {
 		return
