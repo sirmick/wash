@@ -78,7 +78,13 @@ func mintToken() (string, error) {
 // socket path or host:port the router will dial.
 func (ir *ingressRegistry) publish(instanceID, network, addr string) (path, token string, err error) {
 	switch network {
-	case "unix", "tcp":
+	case "unix":
+	case "tcp":
+		// A tcp backend is proxied token-keyed but otherwise
+		// unauthenticated; refuse to relay to anything off loopback.
+		if err := requireLoopbackTCP(addr); err != nil {
+			return "", "", err
+		}
 	default:
 		return "", "", fmt.Errorf("ingress: unsupported network %q (want unix|tcp)", network)
 	}
