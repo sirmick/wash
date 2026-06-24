@@ -26,10 +26,12 @@ Vectorized from an AI-generated Australian Aboriginal dot-painting — sun over
 the water, green hinterland, fish + crocodile, a winding river. Traced at the
 highest `vtracer` setting (`--mode polygon --filter_speckle 1
 --color_precision 8 --gradient_step 2`, ~43.5 k shapes). A post-pass
-(`design/packs/circlify.py`) replaces every small, round, well-filled polygon
-(~21.8 k of them) with a real SVG `<circle>` — so the dots are true vector
-dots — honoring vtracer's per-shape `translate()` and preserving draw order,
-then frames the painting with a **black border on a black field**. Minified
+(`design/packs/circlify.py`) replaces every round blob (~33.5 k of them) with
+a real SVG `<circle>` — so the dots are true vector dots — protecting only the
+genuinely elongated shapes (the river, the animal outlines/eyes) and the large
+background fills, honoring vtracer's per-shape `translate()` and preserving
+draw order, then frames the painting with a **black border on a black field**
+(a wide margin so the frame reads strongly). Minified
 with `svgo` (~2.9 MB). Source raster at
 `design/packs/src/dreamtime-source.png`; converter at
 `design/packs/circlify.py`. Paired with the dark Dreamtime palette (black
