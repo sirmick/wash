@@ -1,6 +1,6 @@
 Name:           wash
 Version:        0.9.5
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
 License:        AGPL-3.0-or-later
@@ -205,6 +205,12 @@ fi
 exit 0
 
 %changelog
+* Wed Jun 24 2026 sirmick <sirmick@gmail.com> - 0.9.5-2
+- Package revision bump (no change to installed binaries). Dev build-layout
+  reorg: multicall builds into out/, standalone into out/singlecall/, plus a
+  make wash-display verb. package-tree output is unchanged — functionally
+  identical to 0.9.5-1, rebuilt for a clean estate re-rollout.
+
 * Tue Jun 23 2026 sirmick <sirmick@gmail.com> - 0.9.5-1
 - build: multicall is now the default dev layout (make wash / run / dev); the
   per-app binaries build via make wash-standalone.

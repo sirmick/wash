@@ -1,3 +1,13 @@
+wash (0.9.5-2) unstable; urgency=low
+
+  * Package revision bump (no change to installed binaries). Dev build-layout
+    reorg: the multicall image builds directly into out/ and the per-app
+    standalone binaries move to out/singlecall/; `make wash-display` builds the
+    compositor. package-tree output is unchanged, so the shipped package is
+    functionally identical to 0.9.5-1 — rebuilt for a clean estate re-rollout.
+
+ -- sirmick <sirmick@gmail.com>  Wed, 24 Jun 2026 12:00:00 -0700
+
 wash (0.9.5-1) unstable; urgency=low
 
   * build: multicall is now the default dev layout (`make wash` / `make run` /
