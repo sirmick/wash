@@ -23,6 +23,28 @@ unit-test + e2e-test green gate).
   before it can block (start `default-src 'self'`, expect some
   `style-src 'unsafe-inline'`).
 
+## Multi-user / ingress sharp edges  (wash-login)
+
+- [ ] **vscode (and other `/app/` ingress apps) don't self-heal after a
+  wash-login restart → spurious "unauthorized".** Every `wash-login` restart
+  (notably each estate package upgrade) tears down user sessions *and* the
+  per-launch code-server **ingress token**. The wash shell's `/ws` reconnects
+  and re-auths, so window apps (fm/term/…) recover transparently — but the
+  **vscode-workbench iframe** still points at the now-dead `/app/<token>/`,
+  which wash-login answers with **401 unauthorized** (session gone) or the
+  router with **410 Gone** (stale token). Symptom: vscode shows "unauthorized"
+  while every other app is fine, until you re-open the app or re-login.
+  Ingress apps affected: vscode/vscode-workbench, music, radio, washamp.
+  - Fix: the workbench (`apps/vscode-workbench/fe/src/main.tsx`) should treat a
+    401/410 from its `/app/` iframe as "ingress died" and auto re-call `ensure`
+    (re-mint the token / relaunch code-server), instead of leaving a broken
+    iframe. The 401 path is `internal/login/server.go` `/app/` →
+    `identityFromRequest` fail; the 410 path is the router's stale-token branch.
+  - Diagnosed live on carrier-dev 2026-06-24: server side is healthy
+    (`--auth none` on a unix socket, managed binary) — purely a stale
+    client-side token/session after the 0.9.4→0.9.5 rollout restarts. Not a
+    port/socket collision. See [[wash-login-ingress]], [[wash-debug-carrier-dev]].
+
 ## Backend structural debt  (docs/TECH_DEBT.md P2, docs/CORE_AUDIT.md §3)
 
 - [ ] **`internal/sdk/bus.go` struct→`map[string]any`→struct round-trip.**
