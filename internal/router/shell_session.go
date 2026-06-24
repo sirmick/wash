@@ -203,18 +203,27 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 			s.router.log("shell: drop raw frame on unbound channel %d", f.Channel)
 			return nil
 		}
+		// Authoritative ownership (docs/PTY_ROBUST.md, Fix A): the
+		// foreground head shell is the single driver of every non-peer
+		// terminal channel. A frame from the head always routes — it
+		// adopts the channel on the spot — so a stale/zombie owner can
+		// never black-hole the connection the user is looking at. An
+		// orphaned channel (owner==nil) is adopted by whoever drives it
+		// next. A non-head background shell's input is dropped: the head,
+		// not a cached pointer, decides ownership. Peer (remote-relay)
+		// channels are exempt — their pump owns them and must not be
+		// stolen. isHead() is sampled before shellMu because it takes
+		// r.mu, and r.mu must never be acquired while holding shellMu.
+		head := s.isHead()
 		b.shellMu.Lock()
 		owner := b.shell
-		if owner == nil && b.peerConn == nil {
-			// Orphaned terminal/raw channel — its shell detached after
-			// the reattach pass (a reconnect race). The shell now
-			// driving it adopts it so input isn't black-holed.
+		if b.peerConn == nil && (owner == nil || head) {
 			b.shell = s
 			owner = s
 		}
 		b.shellMu.Unlock()
 		if owner != s {
-			s.router.log("shell: drop raw frame on channel %d (owned by another shell)", f.Channel)
+			s.router.log("shell: drop raw frame on channel %d (owned by another shell, sender not head)", f.Channel)
 			return nil
 		}
 		// Remote-apps relay (docs/REMOTE.md): a peer channel's endpoint is

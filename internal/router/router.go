@@ -1024,6 +1024,20 @@ func (r *Router) headShellOrAny() *ShellSession {
 	return nil
 }
 
+// isHead reports whether s is the current foreground head shell — the
+// authoritative driver of terminal channels (docs/PTY_ROBUST.md, Fix A).
+// Reads headShell under r.mu. Callers in the raw-frame dispatch path
+// MUST sample this before taking a channelBinding's shellMu: shellMu is
+// a leaf lock and r.mu must never be acquired while it is held.
+func (s *ShellSession) isHead() bool {
+	if s.router == nil {
+		return false
+	}
+	s.router.mu.Lock()
+	defer s.router.mu.Unlock()
+	return s.router.headShell == s
+}
+
 // registerApp inserts inst into the maps. It's the caller's job to
 // have populated inst.WindowID (0 = no window).
 func (r *Router) registerApp(inst *AppInstance) {
