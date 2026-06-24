@@ -1,6 +1,8 @@
 package router
 
 import (
+	"context"
+	"io"
 	"testing"
 	"time"
 
@@ -364,10 +366,48 @@ func TestWedge_ResyncOnCreditGrant(t *testing.T) {
 	}
 }
 
-// TestWedge_SlowClientHeadOfLine — (M3, Fix C) one never-reading WS
-// client must not block the single per-shell drainLoop and thereby hang
-// every other terminal on that shell. Needs a write deadline on the
-// FE-bound transport. Pinned here; unskipped when the deadline lands.
+// failWriteTransport fails every FE-bound write — the state a dead-but-
+// open client reaches once wsWriteTimeout trips its stalled write.
+type failWriteTransport struct{}
+
+func (failWriteTransport) ReadFrame() (wire.Frame, error) { return wire.Frame{}, io.EOF }
+func (failWriteTransport) WriteFrame(f wire.Frame) error  { return io.ErrClosedPipe }
+func (failWriteTransport) Close() error                   { return nil }
+
+// TestWedge_SlowClientHeadOfLine — (Fix C) when an FE-bound write fails,
+// the single per-shell drainLoop must tear down (close the scheduler) so
+// blocked producers unblock instead of every terminal on that shell
+// hanging behind one wedged client. In production wsWriteTimeout turns a
+// *stalled* write (dead-but-open client) into exactly this failure — see
+// TestWSWriteTimeout for the deadline itself.
 func TestWedge_SlowClientHeadOfLine(t *testing.T) {
-	t.Skip("M3 (Fix C): drainLoop write deadline not yet implemented — see docs/PTY_ROBUST.md")
+	sess := &ShellSession{
+		Transport:   failWriteTransport{},
+		scheduler:   NewScheduler(),
+		drainerDone: make(chan struct{}),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go sess.drainLoop(ctx)
+
+	// A frame to write → drainLoop attempts it, the write fails, and the
+	// scheduler is closed on the way out.
+	_ = sess.scheduler.Submit(context.Background(),
+		wire.Frame{Flags: wire.FlagEnd, Channel: 5, Payload: []byte("x")}.WithClass(wire.ClassInteractive))
+
+	select {
+	case <-sess.drainerDone:
+		// good — drainLoop tore down on the failed write
+	case <-time.After(2 * time.Second):
+		t.Fatal("drainLoop did not tear down after a failed FE write — producers would hang")
+	}
+
+	// Teardown closed the scheduler, so producers blocked in Submit
+	// unblock with ErrSchedulerClosed rather than pinning forever.
+	select {
+	case <-sess.scheduler.closed:
+		// good — scheduler closed
+	default:
+		t.Error("scheduler not closed after drainLoop teardown")
+	}
 }

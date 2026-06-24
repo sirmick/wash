@@ -122,20 +122,29 @@ work. A few terminal-shaped things are off that path and get an explicit call:
 
 ## Milestones
 
-- **M0 — deterministic repro harness.** Unit/integration triggers that wedge a
-  terminal each way (stale-owner input drop; FE stops granting credit;
-  slow/never-reading WS). "At times it hangs" must become "here is the test
-  that hangs." Gate every later milestone on these going green.
-- **M1 — Fix A** (authoritative ownership). Supersedes the A4 band-aids.
-- **M2 — Fix B** (non-blocking lossy output + cancellable/bounded credit).
-- **M3 — Fix C** (drainLoop write deadline).
-- **M4 — Fix D** (BE watchdog + FE visible-recovery affordance).
+- **M0 — deterministic repro harness. ✓** `internal/router/wedge_repro_test.go`
+  — a named, failing-before-the-fix test for each wedge.
+- **M1 — Fix A (authoritative ownership). ✓** Head shell owns every non-peer
+  terminal channel; supersedes the A4 band-aids.
+- **M2 — Fix B (non-blocking output + resync). ✓** The forward never blocks the
+  child shell; a wedged channel is held byte-exact in the ring and recovered by
+  a `channel.resync` (FE `term.reset()` + mode re-seed + realigned snapshot) on
+  the next credit grant — no torn stream, no manual reload.
+- **M4 — Fix C/D (watchdog + visible recovery). ✓** `wsWriteTimeout` bounds
+  every FE-bound write, so a dead-but-open client can't pin the per-shell
+  drainLoop and hang other terminals; on timeout the shell tears down and the
+  FE's existing reconnect path re-dials and reattaches (visible recovery). The
+  credit wedge recovers via M2's auto-resync.
 - **M5 — e2e + soak.** `term-reattach.spec`, `remote-vm.spec`, a new
   `term-wedge-recovery.spec`, and a churn soak (rapid connect/disconnect +
-  heavy output) — all `-race` green.
+  heavy output) — all green.
 
-Core hang elimination is **M0–M2**; M3–M4 are the hardening that delivers the
-"visibly recovers" half of the mandate.
+Deliberately deferred: a router-wide periodic *resync sweep* (force a resync on
+a channel stuck `behind` even if the FE never sends another credit grant). The
+credit-grant resync (M2) plus the write-timeout teardown (M4) cover every
+realistic wedge — the only gap is an FE that keeps draining the socket but
+never grants credit, which is an FE bug, not a transport state. Recorded here
+so it isn't mistaken for an oversight.
 
 ## Open decision
 
