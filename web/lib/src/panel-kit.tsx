@@ -9,7 +9,7 @@ import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
 
 const sectionTitleStyle: JSX.CSSProperties = {
-  font: `600 ${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.titleSm,
   opacity: 0.7,
   'text-transform': 'uppercase',
   'letter-spacing': '0.04em',
@@ -27,7 +27,7 @@ export const Section: Component<{ title: string; children: JSX.Element }> = (pro
 /** Row is a label + control grid line. */
 export const Row: Component<{ label: string; children: JSX.Element }> = (props) => (
   <div style={{ display: 'grid', 'grid-template-columns': '140px 1fr', gap: '12px', 'align-items': 'center' }}>
-    <div style={{ opacity: 0.7, font: `${tokens.fontSizeBase} ${tokens.fontSans}` }}>{props.label}</div>
+    <div style={{ opacity: 0.7, font: tokens.type.textMd }}>{props.label}</div>
     {props.children}
   </div>
 );
@@ -41,7 +41,7 @@ const smallBtnStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusMd}`,
   padding: '4px 10px',
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   cursor: 'pointer',
 };
 
@@ -62,7 +62,7 @@ const selectStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusMd}`,
   padding: '4px 8px',
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   cursor: 'pointer',
 };
 
@@ -95,7 +95,7 @@ export const ServiceBadge: Component<{ tone: 'on' | 'off' | 'busy' | 'absent'; l
         'align-items': 'center',
         padding: '2px 10px',
         'border-radius': `${tokens.radiusSm}`,
-        font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+        font: tokens.type.textSm,
         background: c.bg,
         color: c.fg,
       }}

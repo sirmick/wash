@@ -2630,7 +2630,7 @@ const ColumnHeader: Component<{
         background: 'transparent',
         border: 'none',
         color: tokens.fgMuted,
-        font: `11px ${tokens.fontSans}`,
+        font: tokens.type.textSm,
         cursor: 'pointer',
         padding: '0 8px',
         height: `${HEADER_ROW_H}px`,
@@ -2729,7 +2729,7 @@ const TreeRow: Component<{
         color: tokens.fg,
         cursor: 'pointer',
         'user-select': 'none',
-        font: `13px ${tokens.fontSans}`,
+        font: tokens.type.textMd,
         // A solid accent ring (inset so it isn't clipped by the row
         // bounds) makes the landing folder pop out unmistakably from a
         // merely-selected row during a drag.
@@ -2818,7 +2818,7 @@ const TreeRow: Component<{
 
 const cellNumStyle: JSX.CSSProperties = {
   opacity: 0.6,
-  font: `11px ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
   'text-align': 'right',
   'white-space': 'nowrap',
   overflow: 'hidden',
@@ -2856,7 +2856,7 @@ const PendingNewRow: Component<{
         padding: '3px 8px 3px 8px',
         background: tokens.bgRowSelected,
         color: tokens.fg,
-        font: `13px ${tokens.fontSans}`,
+        font: tokens.type.textMd,
       }}
     >
       <span style={{ width: '12px' }} />
@@ -2891,7 +2891,7 @@ const inlineInputStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderFocus}`,
   'border-radius': `${tokens.radiusSm}`,
   padding: '2px 6px',
-  font: `12px ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
   outline: 'none',
   width: '100%',
   'box-sizing': 'border-box',
@@ -3176,7 +3176,7 @@ const ConfirmDeleteOverlay: Component<{
       <div
         data-testid="fm-confirm-delete-name"
         style={{
-          font: `12px ${tokens.fontMono}`,
+          font: tokens.type.monoMd,
           opacity: 0.8,
           'word-break': 'break-all',
         }}
@@ -3220,7 +3220,7 @@ const ReplaceConfirmOverlay: Component<{
       <div
         data-testid="fm-confirm-replace-path"
         style={{
-          font: `12px ${tokens.fontMono}`,
+          font: tokens.type.monoMd,
           opacity: 0.8,
           'word-break': 'break-all',
         }}
@@ -3283,7 +3283,7 @@ function uploadBtnStyle(danger: boolean): JSX.CSSProperties {
     'border-radius': `${tokens.radiusSm}`,
     padding: '5px 12px',
     cursor: 'pointer',
-    font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+    font: tokens.type.textMd,
   };
 }
 
@@ -3351,7 +3351,7 @@ const AutocompleteDropdown: Component<{
         'overflow-y': 'auto',
         'box-shadow': '0 8px 20px rgba(0,0,0,0.5)',
         'z-index': 1500,
-        font: `12px ${tokens.fontMono}`,
+        font: tokens.type.monoMd,
         left: `${pos().left}px`,
         top: `${pos().top}px`,
         width: `${pos().width}px`,
@@ -3401,7 +3401,7 @@ const iconBtnStyle: JSX.CSSProperties = {
   'border-radius': `${tokens.radiusSm}`,
   padding: '4px 8px',
   cursor: 'pointer',
-  font: `13px ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   'min-width': '30px',
 };
 
@@ -3412,7 +3412,7 @@ const pathInputStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusSm}`,
   padding: '4px 8px',
-  font: `12px ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   outline: 'none',
 };
 
@@ -3433,7 +3433,7 @@ const treeStyle: JSX.CSSProperties = {
 const previewStyle: JSX.CSSProperties = {
   overflow: 'auto',
   padding: '10px 12px',
-  font: `12px ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
   'white-space': 'pre',
   background: tokens.bgInset,
 };
@@ -3449,12 +3449,12 @@ const infoToggleStyle: JSX.CSSProperties = {
   border: 'none',
   padding: '0 8px',
   cursor: 'pointer',
-  font: `11px ${tokens.fontSans}`,
+  font: tokens.type.textSm,
 };
 
 const infoBodyStyle: JSX.CSSProperties = {
   padding: '8px 12px 12px',
-  font: `12px ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
   'border-top': `1px solid ${tokens.borderMenu}`,
 };
 
@@ -3838,5 +3838,5 @@ const tileNameStyle: JSX.CSSProperties = {
 // ---- custom element wrapper ----
 
 defineWashApp('wash-app-fm', (props) => <App {...props} />, {
-  style: `display:grid;grid-template-rows:36px 1fr 22px;width:100%;height:100%;background:${tokens.bgMenu};color:${tokens.fg};font:13px ${tokens.fontSans};box-sizing:border-box;position:relative`,
+  style: `display:grid;grid-template-rows:36px 1fr 22px;width:100%;height:100%;background:${tokens.bgMenu};color:${tokens.fg};font:${tokens.type.textMd};box-sizing:border-box;position:relative`,
 });

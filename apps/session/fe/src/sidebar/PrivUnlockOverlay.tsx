@@ -112,7 +112,7 @@ const UnlockModal: Component<{
     'max-width': '480px',
     'box-shadow': '0 16px 40px rgba(0,0,0,0.6)',
     color: tokens.fg,
-    font: `13px ${tokens.fontSans}`,
+    font: tokens.type.textMd,
     animation: 'wash-pop-in 140ms ease-out',
   };
 
@@ -121,8 +121,7 @@ const UnlockModal: Component<{
       <div data-testid="priv-unlock-modal" style={panelStyle}>
         <div
           style={{
-            'font-weight': 600,
-            'font-size': '14px',
+            font: tokens.type.titleSm,
             'margin-bottom': '8px',
             color: '#e8a0a0',
           }}
@@ -133,7 +132,7 @@ const UnlockModal: Component<{
           wash-priv needs your sudo password to approve request
           <span
             style={{
-              font: `11px ${tokens.fontMono}`,
+              font: tokens.type.monoSm,
               opacity: 0.85,
               'margin-left': '4px',
             }}
@@ -158,7 +157,7 @@ const UnlockModal: Component<{
             color: tokens.fg,
             border: '1px solid #3a3a5a',
             'border-radius': tokens.radiusMd,
-            font: `13px ${tokens.fontMono}`,
+            font: tokens.type.monoMd,
             'margin-bottom': '8px',
           }}
         />

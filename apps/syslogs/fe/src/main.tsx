@@ -186,7 +186,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     width: '100%',
     background: tokens.bgWindow,
     color: tokens.fg,
-    font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+    font: tokens.type.textMd,
     'box-sizing': 'border-box' as const,
     overflow: 'hidden',
   };
@@ -204,7 +204,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     'justify-content': 'space-between',
     padding: `${tokens.spaceSm}px ${tokens.spaceMd}px`,
     'border-bottom': `1px solid ${tokens.borderMenu}`,
-    font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+    font: tokens.type.textMd,
     opacity: 0.8,
   };
 
@@ -252,7 +252,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     border: 'none',
     outline: 'none',
     color: tokens.fg,
-    font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
+    font: tokens.type.monoMd,
     width: '160px',
   };
 
@@ -270,7 +270,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const logPaneStyle = {
     flex: 1,
     overflow: 'auto',
-    font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
+    font: tokens.type.monoMd,
     padding: `${tokens.spaceSm}px 0`,
   };
 

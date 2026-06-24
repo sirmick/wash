@@ -146,7 +146,7 @@ const Panel = (props: SettingsPanelProps) => {
 
       <Section title="Connections">
         <div style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}>
-          <div style={{ opacity: 0.7, font: `${tokens.fontSizeMd} ${tokens.fontSans}`, 'max-width': '440px', 'line-height': 1.5 }}>
+          <div style={{ opacity: 0.7, font: tokens.type.textMd, 'max-width': '440px', 'line-height': 1.5 }}>
             Add hosts, connect, and launch remote apps in the Connect window.
           </div>
           <div>
@@ -179,7 +179,7 @@ const rowStyle: JSX.CSSProperties = {
 const nameStyle: JSX.CSSProperties = {
   flex: 1,
   'min-width': 0,
-  font: `${tokens.fontSizeBase} ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
   color: tokens.fg,
   overflow: 'hidden',
   'text-overflow': 'ellipsis',
@@ -190,13 +190,12 @@ const nameStyle: JSX.CSSProperties = {
 const hostSuffixStyle: JSX.CSSProperties = {
   'margin-left': '8px',
   color: tokens.fgMuted,
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
-  'font-weight': 400,
+  font: tokens.type.textSm,
 };
 
 const emptyStyle: JSX.CSSProperties = {
   opacity: 0.5,
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   padding: '6px 0',
 };
 

@@ -322,11 +322,14 @@ const copland: Pack = {
     '--wash-taskbar-bg': '#cccccc',
     // Desktop info banner sits over the black 1997 wallpaper → light text.
     '--wash-banner-fg': '#e8e8f0',
-    // Classic Mac type — Chicago, the original Macintosh System UI face
-    // (Susan Kare, 1984). We bundle the scalable TrueType Chicago (see
-    // `fonts` below + web/shell/public/fonts/Chicago-SOURCE.txt) and fall
-    // back to the installed-Mac stack while it loads / if it fails.
-    '--wash-font-sans': 'Chicago, Geneva, "Lucida Grande", Verdana, Helvetica, sans-serif',
+    // Classic Mac type. Chicago — the original Macintosh System UI face
+    // (Susan Kare, 1984; bundled scalable TrueType, see `fonts` below +
+    // web/shell/public/fonts/Chicago-SOURCE.txt) — is used for TITLES only
+    // (the two `type.title*` styles, via --wash-font-title), which is how
+    // the classic Mac used it: window/menu titles in Chicago, body in
+    // Geneva. Body + mono stay on the installed-Mac stacks.
+    '--wash-font-title': 'Chicago, Geneva, "Lucida Grande", Verdana, Helvetica, sans-serif',
+    '--wash-font-sans': 'Geneva, "Lucida Grande", Verdana, Helvetica, sans-serif',
     '--wash-font-mono': 'Monaco, "Courier New", monospace',
     '--wash-taskbar-top': '#ffffff',
     // Start menu sits flush in the bottom-left corner, rising straight off

@@ -93,7 +93,7 @@ const Panel = (props: SettingsPanelProps) => {
               <ServiceBadge tone="on" label={active()} />
             </Show>
           </Row>
-          <div style={{ opacity: 0.7, font: `${tokens.fontSizeMd} ${tokens.fontSans}`, 'max-width': '440px', 'line-height': 1.5 }}>
+          <div style={{ opacity: 0.7, font: tokens.type.textMd, 'max-width': '440px', 'line-height': 1.5 }}>
             Choosing a backend restarts the network service; any open Network window reloads.
             <strong> Automatic</strong> keeps NetworkManager when it's already managing the box (coexist),
             and uses systemd-networkd when wash owns it.
@@ -102,7 +102,7 @@ const Panel = (props: SettingsPanelProps) => {
       </Section>
       <Section title="Current configuration (UCI)">
         <div style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }}>
-          <div style={{ opacity: 0.7, font: `${tokens.fontSizeMd} ${tokens.fontSans}`, 'max-width': '440px', 'line-height': 1.5 }}>
+          <div style={{ opacity: 0.7, font: tokens.type.textMd, 'max-width': '440px', 'line-height': 1.5 }}>
             <Show
               when={active() === 'nm'}
               fallback={<>What wash is enforcing on this box, rendered to UCI (read-only). Edit it in the Network window.</>}
@@ -113,7 +113,7 @@ const Panel = (props: SettingsPanelProps) => {
           <Show
             when={uci().trim()}
             fallback={
-              <div style={{ opacity: 0.5, font: `${tokens.fontSizeMd} ${tokens.fontMono}`, padding: '8px 0' }}>
+              <div style={{ opacity: 0.5, font: tokens.type.monoMd, padding: '8px 0' }}>
                 {active() && active() !== 'fake' ? '(no managed configuration)' : 'loading…'}
               </div>
             }
@@ -147,7 +147,7 @@ const uciPreStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusMd}`,
   padding: '10px 12px',
-  font: `${tokens.fontSizeBase} ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
   'line-height': 1.45,
   'white-space': 'pre',
   'user-select': 'text',
@@ -160,7 +160,7 @@ const textInputStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusMd}`,
   padding: '4px 8px',
-  font: `${tokens.fontSizeBase} ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
   outline: 'none',
 };
 

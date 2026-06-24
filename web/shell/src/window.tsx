@@ -561,7 +561,7 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
         display: 'flex',
         'flex-direction': 'column',
         'box-sizing': 'border-box',
-        font: `12px ${tokens.fontMono}`,
+        font: tokens.type.monoMd,
       }}
     >
       <div
@@ -573,7 +573,7 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
           background: tokens.bgDanger,
           'border-bottom': `1px solid ${tokens.borderDanger}`,
           color: tokens.fgDanger,
-          font: `13px ${tokens.fontSans}`,
+          font: tokens.type.textMd,
         }}
       >
         <AlertOctagon size={16} />

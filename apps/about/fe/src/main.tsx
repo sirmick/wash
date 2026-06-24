@@ -578,7 +578,7 @@ const shellStyle: JSX.CSSProperties = {
   height: '100%',
   background: tokens.bgWindow,
   color: tokens.fg,
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   overflow: 'hidden',
 };
 
@@ -602,12 +602,12 @@ const headerIconStyle: JSX.CSSProperties = {
 };
 
 const headerTitleStyle: JSX.CSSProperties = {
-  font: `600 18px ${tokens.fontSans}`,
+  font: tokens.type.titleLg,
   'line-height': 1.1,
 };
 
 const headerSubtitleStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   color: tokens.fgMuted,
   'margin-top': '2px',
 };
@@ -618,7 +618,7 @@ const refreshBtnStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusSm}`,
   padding: '4px 10px',
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   cursor: 'pointer',
 };
 
@@ -630,7 +630,7 @@ const bodyStyle: JSX.CSSProperties = {
 const loadingStyle: JSX.CSSProperties = {
   padding: '8px 0',
   color: tokens.fgMuted,
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
 };
 
 const sectionStyle: JSX.CSSProperties = {
@@ -638,7 +638,7 @@ const sectionStyle: JSX.CSSProperties = {
 };
 
 const sectionTitleStyle: JSX.CSSProperties = {
-  font: `600 ${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.titleSm,
   color: tokens.fg,
   margin: '0 0 8px',
   'padding-bottom': '4px',
@@ -659,27 +659,27 @@ const kvRowStyle: JSX.CSSProperties = {
   'grid-template-columns': '120px 1fr',
   gap: '12px',
   'align-items': 'baseline',
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
 };
 
 const kvKeyStyle: JSX.CSSProperties = {
   color: tokens.fgMuted,
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
 };
 
 const kvValStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeBase} ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
   'word-break': 'break-word',
   'min-width': 0,
 };
 
 const pathStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
   opacity: 0.85,
 };
 
 const uaStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
   opacity: 0.85,
   'word-break': 'break-all',
 };
@@ -693,10 +693,10 @@ const devBadgeStyle: JSX.CSSProperties = {
   color: '#fff',
   padding: '0 6px',
   'border-radius': '2px',
-  'font-weight': 700,
   'letter-spacing': '0.05em',
   'margin-left': '8px',
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.textSm,
+  'font-weight': 700,
 };
 
 const tableScrollStyle: JSX.CSSProperties = {
@@ -708,7 +708,7 @@ const tableScrollStyle: JSX.CSSProperties = {
 const tableStyle: JSX.CSSProperties = {
   width: '100%',
   'border-collapse': 'collapse',
-  font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
 };
 
 const tableHeadRowStyle: JSX.CSSProperties = {
@@ -717,7 +717,7 @@ const tableHeadRowStyle: JSX.CSSProperties = {
 };
 
 const thStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.textSm,
   color: tokens.fgMuted,
   padding: '6px 10px',
   'text-align': 'left',
@@ -736,7 +736,7 @@ const tdStyle: JSX.CSSProperties = {
 };
 
 const appIDInRowStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
   color: tokens.fgMuted,
   opacity: 0.7,
   'margin-top': '1px',
@@ -746,7 +746,7 @@ const tableFooterStyle: JSX.CSSProperties = {
   display: 'flex',
   'justify-content': 'flex-end',
   'padding-top': '4px',
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
   color: tokens.fgMuted,
 };
 
@@ -786,7 +786,7 @@ const appIconStyle: JSX.CSSProperties = {
 };
 
 const appNameStyle: JSX.CSSProperties = {
-  font: `600 ${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.titleSm,
   flex: 1,
   overflow: 'hidden',
   'text-overflow': 'ellipsis',
@@ -794,7 +794,7 @@ const appNameStyle: JSX.CSSProperties = {
 };
 
 const appIDStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
   color: tokens.fgMuted,
   opacity: 0.85,
   overflow: 'hidden',
@@ -807,7 +807,7 @@ const appMetaStyle: JSX.CSSProperties = {
   'flex-wrap': 'wrap',
   'align-items': 'center',
   gap: '4px',
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
   color: tokens.fgMuted,
 };
 
@@ -816,18 +816,18 @@ const dotStyle: JSX.CSSProperties = {
 };
 
 const tagStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
   color: tokens.fg,
   opacity: 0.7,
 };
 
 const paraStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   color: tokens.fg,
   opacity: 0.85,
   'line-height': 1.5,
 };
 
 defineWashApp('wash-app-about', (props) => <App {...props} />, {
-  style: `display:block;width:100%;height:100%;overflow:hidden;background:${tokens.bgWindow};color:${tokens.fg};font:${tokens.fontSizeBase} ${tokens.fontSans};box-sizing:border-box`,
+  style: `display:block;width:100%;height:100%;overflow:hidden;background:${tokens.bgWindow};color:${tokens.fg};font:${tokens.type.textMd};box-sizing:border-box`,
 });

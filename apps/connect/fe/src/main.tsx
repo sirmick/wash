@@ -1027,7 +1027,7 @@ const shellStyle: JSX.CSSProperties = {
   height: '100%',
   background: tokens.bgWindow,
   color: tokens.fg,
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   overflow: 'hidden',
 };
 
@@ -1050,9 +1050,9 @@ const headerIconStyle: JSX.CSSProperties = {
   opacity: 0.85,
 };
 
-const headerTitleStyle: JSX.CSSProperties = { font: `600 16px ${tokens.fontSans}`, 'line-height': 1.1 };
+const headerTitleStyle: JSX.CSSProperties = { font: tokens.type.titleLg, 'line-height': 1.1 };
 const headerSubtitleStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   color: tokens.fgMuted,
   'margin-top': '2px',
 };
@@ -1068,7 +1068,7 @@ const inputStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusSm}`,
   padding: '7px 10px',
-  font: `${tokens.fontSizeBase} ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
   'min-width': 0,
 };
 
@@ -1078,7 +1078,7 @@ const primaryBtnStyle: JSX.CSSProperties = {
   border: 'none',
   'border-radius': `${tokens.radiusSm}`,
   padding: '7px 14px',
-  font: `600 ${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.titleSm,
   cursor: 'pointer',
   'white-space': 'nowrap',
   'flex-shrink': 0,
@@ -1100,7 +1100,7 @@ const appBtnStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusSm}`,
   padding: '5px 10px',
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   cursor: 'pointer',
   'white-space': 'nowrap',
 };
@@ -1109,7 +1109,7 @@ const appBtnLabelStyle: JSX.CSSProperties = { 'line-height': 1 };
 
 const appsEmptyStyle: JSX.CSSProperties = {
   color: tokens.fgMuted,
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.textSm,
   opacity: 0.7,
 };
 
@@ -1119,7 +1119,7 @@ const moreBtnStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusSm}`,
   padding: '5px 10px',
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   cursor: 'pointer',
   'white-space': 'nowrap',
 };
@@ -1129,7 +1129,7 @@ const autoBadgeStyle: JSX.CSSProperties = {
   color: tokens.accentGreen,
   border: `1px solid ${tokens.accentGreen}`,
   'border-radius': `${tokens.radiusSm}`,
-  font: `600 ${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.titleSm,
   padding: '1px 6px',
   'flex-shrink': 0,
 };
@@ -1148,7 +1148,7 @@ const mountRowStyle: JSX.CSSProperties = { display: 'flex', 'align-items': 'cent
 const mountPathStyle: JSX.CSSProperties = {
   flex: 1,
   color: tokens.fg,
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
   overflow: 'hidden',
   'text-overflow': 'ellipsis',
   'white-space': 'nowrap',
@@ -1157,7 +1157,7 @@ const mountPathStyle: JSX.CSSProperties = {
 
 const mountStatusStyle: JSX.CSSProperties = {
   color: tokens.fgMuted,
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.textSm,
   'flex-shrink': 0,
 };
 
@@ -1170,7 +1170,7 @@ const mountInputStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusSm}`,
   padding: '5px 8px',
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
   'min-width': 0,
 };
 
@@ -1180,7 +1180,7 @@ const mountBtnStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusSm}`,
   padding: '5px 12px',
-  font: `600 ${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.titleSm,
   cursor: 'pointer',
   'white-space': 'nowrap',
   'flex-shrink': 0,
@@ -1206,21 +1206,21 @@ const drawerLabelInputStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusSm}`,
   padding: '5px 8px',
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.textSm,
   'min-width': 0,
 };
 
 const drawerSectionStyle: JSX.CSSProperties = { display: 'flex', 'flex-direction': 'column', gap: '5px' };
 
 const drawerHeadStyle: JSX.CSSProperties = {
-  font: `600 ${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.titleSm,
   color: tokens.fgMuted,
   'text-transform': 'uppercase',
   'letter-spacing': '0.04em',
 };
 
 const drawerHintStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.textSm,
   color: tokens.fgMuted,
   opacity: 0.8,
 };
@@ -1231,7 +1231,7 @@ const drawerCheckStyle: JSX.CSSProperties = {
   display: 'flex',
   'align-items': 'center',
   gap: '5px',
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.textSm,
   cursor: 'pointer',
 };
 
@@ -1246,7 +1246,7 @@ const drawerChipRowStyle: JSX.CSSProperties = {
 };
 
 const drawerChipPathStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
   color: tokens.fg,
   overflow: 'hidden',
   'text-overflow': 'ellipsis',
@@ -1258,11 +1258,11 @@ const emptyStyle: JSX.CSSProperties = {
   padding: '24px 0',
   color: tokens.fgMuted,
   'text-align': 'center',
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
 };
 
 const sectionLabelStyle: JSX.CSSProperties = {
-  font: `600 ${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.titleSm,
   color: tokens.fgMuted,
   'text-transform': 'uppercase',
   'letter-spacing': '0.05em',
@@ -1292,7 +1292,8 @@ const dotStyle: JSX.CSSProperties = {
 };
 
 const hostNameStyle: JSX.CSSProperties = {
-  font: `600 ${tokens.fontSizeBase} ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
+  'font-weight': 600,
   flex: 1,
   overflow: 'hidden',
   'text-overflow': 'ellipsis',
@@ -1300,7 +1301,7 @@ const hostNameStyle: JSX.CSSProperties = {
 };
 
 const statusStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.textSm,
   color: tokens.fgMuted,
   'white-space': 'nowrap',
 };
@@ -1309,8 +1310,7 @@ const statusStyle: JSX.CSSProperties = {
 const candidateAddrStyle: JSX.CSSProperties = {
   'margin-left': '8px',
   color: tokens.fgMuted,
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
-  'font-weight': 400,
+  font: tokens.type.monoSm,
 };
 
 // candidateChipStyle is the small "wash" badge on a discovered wash peer.
@@ -1319,7 +1319,7 @@ const candidateChipStyle: JSX.CSSProperties = {
   color: tokens.accentCyan,
   border: `1px solid ${tokens.accentCyan}`,
   'border-radius': `${tokens.radiusSm}`,
-  font: `600 ${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.titleSm,
   padding: '1px 6px',
   'flex-shrink': 0,
 };
@@ -1329,7 +1329,7 @@ const iconBtnStyle: JSX.CSSProperties = {
   color: tokens.fgMuted,
   border: 'none',
   cursor: 'pointer',
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   padding: '0 4px',
   'line-height': 1,
   'flex-shrink': 0,
@@ -1344,7 +1344,7 @@ const rowConnectBtnStyle: JSX.CSSProperties = {
   border: 'none',
   'border-radius': `${tokens.radiusSm}`,
   cursor: 'pointer',
-  font: `600 ${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.titleSm,
   padding: '4px 11px',
   'white-space': 'nowrap',
   'flex-shrink': 0,
@@ -1359,7 +1359,7 @@ const authBtnStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusSm}`,
   cursor: 'pointer',
-  font: `600 ${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.titleSm,
   padding: '4px 11px',
   'white-space': 'nowrap',
   'flex-shrink': 0,
@@ -1401,7 +1401,7 @@ const menuItemStyle: JSX.CSSProperties = {
   border: 'none',
   'border-radius': `${tokens.radiusSm}`,
   cursor: 'pointer',
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   'text-align': 'left',
   width: '100%',
 };
@@ -1439,7 +1439,7 @@ const authHeaderStyle: JSX.CSSProperties = {
   padding: '10px 14px',
   'border-bottom': `1px solid ${tokens.borderMenu}`,
   background: tokens.bgMenu,
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
 };
 
 const authTermStyle: JSX.CSSProperties = {
@@ -1451,17 +1451,17 @@ const authTermStyle: JSX.CSSProperties = {
 
 const authHintStyle: JSX.CSSProperties = {
   padding: '8px 14px',
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.textSm,
   color: tokens.fgMuted,
   'border-top': `1px solid ${tokens.borderMenu}`,
 };
 
 const errorStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
   color: tokens.fgWarning,
   'word-break': 'break-word',
 };
 
 defineWashApp('wash-app-connect', (props) => <App {...props} />, {
-  style: `display:block;width:100%;height:100%;overflow:hidden;background:${tokens.bgWindow};color:${tokens.fg};font:${tokens.fontSizeBase} ${tokens.fontSans};box-sizing:border-box`,
+  style: `display:block;width:100%;height:100%;overflow:hidden;background:${tokens.bgWindow};color:${tokens.fg};font:${tokens.type.textMd};box-sizing:border-box`,
 });

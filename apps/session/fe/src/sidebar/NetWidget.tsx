@@ -83,13 +83,13 @@ export const NetWidget: Component<NetWidgetProps> = (props) => {
         />
         <span style={{ color: tokens.fg, flex: 1 }}>{status()}</span>
         <Show when={st()?.phase}>
-          <span style={{ opacity: 0.6, font: `10px ${tokens.fontMono}` }}>{st()!.phase}</span>
+          <span style={{ opacity: 0.6, font: tokens.type.monoSm }}>{st()!.phase}</span>
         </Show>
       </div>
 
       {/* Live addressing: the IP of every non-local, non-docker interface. */}
       <Show when={props.ifaces().length > 0} fallback={
-        <span data-testid="net-noaddr" style={{ opacity: 0.45, font: `10px ${tokens.fontMono}` }}>
+        <span data-testid="net-noaddr" style={{ opacity: 0.45, font: tokens.type.monoSm }}>
           no addressed interfaces
         </span>
       }>
@@ -98,7 +98,7 @@ export const NetWidget: Component<NetWidgetProps> = (props) => {
             {(ifc) => (
               <div
                 data-testid={`net-iface-${ifc.name}`}
-                style={{ display: 'flex', gap: '6px', 'align-items': 'baseline', font: `10px ${tokens.fontMono}` }}
+                style={{ display: 'flex', gap: '6px', 'align-items': 'baseline', font: tokens.type.monoSm }}
               >
                 <span style={{ color: tokens.accentBlue, 'min-width': '52px' }}>{ifc.name}</span>
                 <span style={{ color: tokens.fg, flex: 1, 'word-break': 'break-all' }}>{ifc.ips.join('  ')}</span>
@@ -124,7 +124,7 @@ export const NetWidget: Component<NetWidgetProps> = (props) => {
           <span style={{ color: tokens.accentAmber }}>awaiting confirmation</span>
           <For each={summary()}>
             {(line) => (
-              <span style={{ opacity: 0.85, font: `10px ${tokens.fontMono}` }}>{line}</span>
+              <span style={{ opacity: 0.85, font: tokens.type.monoSm }}>{line}</span>
             )}
           </For>
         </div>
@@ -147,7 +147,7 @@ export const NetWidget: Component<NetWidgetProps> = (props) => {
           'border-radius': tokens.radiusSm,
           padding: '3px 8px',
           cursor: 'pointer',
-          font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+          font: tokens.type.textSm,
           'align-self': 'flex-start',
         }}
       >

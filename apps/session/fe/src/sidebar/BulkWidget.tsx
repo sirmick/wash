@@ -111,7 +111,7 @@ const BulkRow: Component<{ job: BulkJob; onCancel: () => void }> = (props) => {
             <span
               data-testid={`bulk-status-${props.job.job_id}`}
               style={{
-                font: `10px ${tokens.fontMono}`,
+                font: tokens.type.monoSm,
                 opacity: 0.65,
                 'flex-shrink': 0,
               }}
@@ -131,7 +131,7 @@ const BulkRow: Component<{ job: BulkJob; onCancel: () => void }> = (props) => {
               'border-radius': tokens.radiusSm,
               padding: '1px 6px',
               cursor: 'pointer',
-              font: `10px ${tokens.fontSans}`,
+              font: tokens.type.textSm,
               'flex-shrink': 0,
             }}
           >
@@ -163,7 +163,7 @@ const BulkRow: Component<{ job: BulkJob; onCancel: () => void }> = (props) => {
           style={{
             opacity: 0.85,
             color: tokens.fgDanger,
-            font: `10px ${tokens.fontMono}`,
+            font: tokens.type.monoSm,
             'word-break': 'break-all',
           }}
         >

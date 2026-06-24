@@ -585,7 +585,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             active={showDetails()}
             data-testid="top-details-toggle"
           >
-            {showDetails() ? <XIcon size={14} /> : <span style={{ font: `${tokens.fontSizeSm} ${tokens.fontMono}` }}>i</span>}
+            {showDetails() ? <XIcon size={14} /> : <span style={{ font: tokens.type.monoSm }}>i</span>}
           </IconBtn>
         </div>
 
@@ -660,7 +660,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           cancelTestid="top-kill-cancel"
         >
           <div style={killBodyStyle}>
-            <div style={{ font: `${tokens.fontSizeMd} ${tokens.fontMono}`, opacity: 0.85 }}>
+            <div style={{ font: tokens.type.monoMd, opacity: 0.85 }}>
               {killTarget()!.Cmd || killTarget()!.Comm}
             </div>
             <div style={{ 'margin-top': '8px', opacity: 0.7 }}>
@@ -901,7 +901,7 @@ const MemMeter: Component<{ mem?: MemRow; history: number[]; load?: LoadRow }> =
         </div>
       </Show>
       <Show when={props.load}>
-        <div style={{ opacity: 0.7, font: `${tokens.fontSizeSm} ${tokens.fontMono}`, 'padding-top': '2px' }}>
+        <div style={{ opacity: 0.7, font: tokens.type.monoSm, 'padding-top': '2px' }}>
           load: {props.load!.L1.toFixed(2)} {props.load!.L5.toFixed(2)} {props.load!.L15.toFixed(2)}
           {' · '}
           {props.load!.Running}/{props.load!.Threads} threads
@@ -1102,7 +1102,7 @@ const DetailsPane: Component<{ details: Details | null; proc: ProcInfo | null }>
     <Show when={p.v !== undefined && p.v !== ''}>
       <div style={{ display: 'grid', 'grid-template-columns': '110px 1fr', gap: '6px', 'padding-bottom': '2px' }}>
         <span style={{ opacity: 0.6 }}>{p.k}</span>
-        <span style={{ 'word-break': 'break-all', font: `${tokens.fontSizeMd} ${tokens.fontMono}` }}>{String(p.v)}</span>
+        <span style={{ 'word-break': 'break-all', font: tokens.type.monoMd }}>{String(p.v)}</span>
       </div>
     </Show>
   );
@@ -1112,7 +1112,7 @@ const DetailsPane: Component<{ details: Details | null; proc: ProcInfo | null }>
         when={props.proc}
         fallback={<div style={{ opacity: 0.6, padding: '8px' }}>select a process to inspect</div>}
       >
-        <div style={{ font: `600 ${tokens.fontSizeBase} ${tokens.fontSans}`, 'padding-bottom': '6px' }}>
+        <div style={{ font: tokens.type.titleSm, 'padding-bottom': '6px' }}>
           PID {props.proc!.PID} — {props.proc!.Comm}
         </div>
         <Row k="user" v={`${props.proc!.User} (uid ${props.proc!.UID})`} />
@@ -1193,7 +1193,7 @@ const layoutStyle: JSX.CSSProperties = {
   height: '100%',
   background: tokens.bgWindow,
   color: tokens.fg,
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
 };
 
 const metersStyle: JSX.CSSProperties = {
@@ -1289,7 +1289,7 @@ const bodyStyle: JSX.CSSProperties = {
 
 const listScrollStyle: JSX.CSSProperties = {
   overflow: 'auto',
-  font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
 };
 
 const detailsPaneStyle: JSX.CSSProperties = {
@@ -1299,7 +1299,7 @@ const detailsPaneStyle: JSX.CSSProperties = {
   background: tokens.bgMenu,
   padding: '8px 10px',
   overflow: 'auto',
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
 };
 
 const detailsDividerStyle: JSX.CSSProperties = {
@@ -1329,7 +1329,7 @@ const headerCellStyle: JSX.CSSProperties = {
   border: 'none',
   background: 'transparent',
   color: tokens.fgMuted,
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.textSm,
   cursor: 'pointer',
   padding: '0 2px',
 };
@@ -1341,12 +1341,12 @@ const cellStyle: JSX.CSSProperties = {
 };
 
 const cpuLabelStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
   opacity: 0.7,
 };
 
 const cpuPctStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
   'text-align': 'right',
   opacity: 0.85,
 };
@@ -1358,7 +1358,7 @@ const filterStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusSm}`,
   padding: '2px 6px',
-  font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
   outline: 'none',
 };
 
@@ -1368,7 +1368,7 @@ const selectStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusSm}`,
   padding: '2px 4px',
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
 };
 
 const iconBtnStyleBase: JSX.CSSProperties = {
@@ -1422,7 +1422,7 @@ const dangerBtnStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderDanger}`,
   'border-radius': `${tokens.radiusSm}`,
   padding: '3px 8px',
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   cursor: 'pointer',
 };
 
@@ -1433,17 +1433,17 @@ const statusBarStyle: JSX.CSSProperties = {
   padding: '2px 8px',
   'border-top': `1px solid ${tokens.borderMenu}`,
   background: tokens.bgMenu,
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
   opacity: 0.85,
 };
 
 const killBodyStyle: JSX.CSSProperties = {
   'max-width': '420px',
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
 };
 
 // ---- custom element ----
 
 defineWashApp('wash-app-top', (props) => <App {...props} />, {
-  style: `display:block;position:relative;width:100%;height:100%;overflow:hidden;background:${tokens.bgWindow};color:${tokens.fg};font:${tokens.fontSizeBase} ${tokens.fontSans};box-sizing:border-box`,
+  style: `display:block;position:relative;width:100%;height:100%;overflow:hidden;background:${tokens.bgWindow};color:${tokens.fg};font:${tokens.type.textMd};box-sizing:border-box`,
 });

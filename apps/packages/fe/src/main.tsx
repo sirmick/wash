@@ -486,7 +486,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               installed package — including the kernel and any held
               dependencies the dist-upgrade resolver pulls in.
             </p>
-            <p style={{ margin: 0, color: tokens.fgMuted, 'font-family': tokens.fontMono, 'font-size': tokens.fontSizeMd }}>
+            <p style={{ margin: 0, color: tokens.fgMuted, font: tokens.type.monoMd }}>
               {confirmAction()!.desc}
             </p>
           </div>
@@ -545,7 +545,7 @@ function menubarBtnStyle(open: boolean): JSX.CSSProperties {
     border: 'none',
     padding: '4px 10px',
     cursor: 'pointer',
-    font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+    font: tokens.type.textMd,
   };
 }
 
@@ -588,7 +588,7 @@ const searchInputStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusMd}`,
   color: tokens.fg,
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   outline: 'none',
   'box-sizing': 'border-box',
 };

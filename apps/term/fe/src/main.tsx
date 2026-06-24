@@ -696,7 +696,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   'border-radius': `${tokens.radiusLg} ${tokens.radiusLg} 0 0`,
                   padding: '0 6px 0 10px',
                   cursor: 'pointer',
-                  font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
+                  font: tokens.type.monoMd,
                   display: 'flex',
                   'align-items': 'center',
                   gap: '8px',
@@ -873,7 +873,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           // "you are root here" cue, not just the badge.
           background: isRootActive() ? tokens.accentRed : tokens.bgMenu,
           color: isRootActive() ? '#ffffff' : tokens.fg,
-          font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+          font: tokens.type.textMd,
           'white-space': 'nowrap',
           overflow: 'hidden',
           'user-select': 'none',
@@ -926,7 +926,7 @@ function menuBarBtnStyle(active: boolean): JSX.CSSProperties {
     padding: '2px 10px',
     height: '24px',
     cursor: 'pointer',
-    font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+    font: tokens.type.textMd,
   };
 }
 
@@ -942,7 +942,7 @@ const tabBarStyle: JSX.CSSProperties = {
   padding: '4px 4px 0',
   'overflow-x': 'auto',
   'overflow-y': 'hidden',
-  font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
   'flex-shrink': 0,
 };
 
@@ -952,7 +952,7 @@ const addBtnStyle: JSX.CSSProperties = {
   border: 'none',
   padding: '0 10px',
   cursor: 'pointer',
-  font: `14px ${tokens.fontMono}`,
+  font: tokens.type.monoLg,
   opacity: 0.8,
 };
 
@@ -964,7 +964,7 @@ const sizeRowStyle: JSX.CSSProperties = {
   gap: '6px',
   padding: '4px 14px',
   color: tokens.fg,
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
 };
 
 const stepBtnStyle: JSX.CSSProperties = {

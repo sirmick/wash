@@ -48,7 +48,7 @@ function baseStyle(v: ButtonVariant, s: ButtonSize): JSX.CSSProperties {
         'border-radius': `${tokens.radiusSm}`,
         padding: `${padY} ${padX}`,
         cursor: 'pointer',
-        font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+        font: tokens.type.textMd,
       };
     case 'ghost':
       return {
@@ -58,7 +58,7 @@ function baseStyle(v: ButtonVariant, s: ButtonSize): JSX.CSSProperties {
         'border-radius': `${tokens.radiusSm}`,
         padding: `${padY} ${padX}`,
         cursor: 'pointer',
-        font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+        font: tokens.type.textMd,
       };
     case 'icon':
       return {
@@ -83,7 +83,7 @@ function baseStyle(v: ButtonVariant, s: ButtonSize): JSX.CSSProperties {
         'border-radius': `${tokens.radiusSm}`,
         padding: `${padY} ${padX}`,
         cursor: 'pointer',
-        font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+        font: tokens.type.textMd,
       };
   }
 }
