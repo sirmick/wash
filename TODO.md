@@ -117,6 +117,10 @@ P2/P3 merges).
   ownership and the new session's frames are dropped. Surfaced repeatedly in
   cluster testing of wash-connect (auto-reconnect cut the frequency by
   reducing peer churn, but did not fix the race). See memory: wash dev loop.
+  Same root as **RECONNECT-AUDIT.md A4** ("raw channels bind to exactly one
+  `b.shell`; reattach claims only detached bindings") — filed there as
+  deliberate v1 single-shell; a remote peer attach is effectively that
+  "second shell", so it now bites in normal use, not just with two tabs.
 - [ ] **Structural fix for wedged ptys (design).** A single dropped/misrouted
   frame currently wedges a terminal with no recovery path. Options to weigh:
   an authoritative pty registry (channel → owning shell/instance, looked up

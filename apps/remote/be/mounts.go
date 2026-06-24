@@ -138,6 +138,14 @@ var (
 		cmd := exec.Command(sshPath,
 			"-o", "BatchMode=yes",
 			"-o", "StrictHostKeyChecking=accept-new",
+			// Surface a silent link death as an ssh error so the FUSE layer
+			// can re-dial (conn.dial), instead of a half-open transport that
+			// wedges every op at the 30s opTimeout. The relay supervisor
+			// already does this; the mount path omitted it
+			// (TODO-sftp-mount-bugs.md High: "op timeout never marks dead").
+			"-o", "ConnectTimeout=10",
+			"-o", "ServerAliveInterval=15",
+			"-o", "ServerAliveCountMax=3",
 			host, "-s", "sftp")
 		wr, err := cmd.StdinPipe()
 		if err != nil {

@@ -142,12 +142,24 @@ func (s *supervisor) run(ctx context.Context, host string, port int) {
 		}
 	}()
 
-	const maxBackoff = 30 * time.Second
+	const (
+		maxBackoff = 30 * time.Second
+		// A connection up at least this long counts as healthy: a later drop
+		// is a fresh incident, so backoff restarts from the floor. Only a fast
+		// re-drop (a flap) keeps escalating — this is the throttle the SFTP-
+		// mount audit (TODO-sftp-mount-bugs.md, "reconnect storm") calls for:
+		// never reset backoff on a dial that didn't prove healthy.
+		minHealthy = 30 * time.Second
+	)
 	backoff := time.Second
 	for {
+		start := time.Now()
 		code, msg := s.runOnce(ctx, host, port, sock)
 		if ctx.Err() != nil {
 			return // user-initiated disconnect; disconnect() removed the host
+		}
+		if time.Since(start) >= minHealthy {
+			backoff = time.Second // the connection was healthy; a fresh drop reconnects fast
 		}
 		if code == "auth" {
 			// A credential refusal won't change on retry — surface it (the FE
