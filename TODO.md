@@ -69,9 +69,14 @@ P2/P3 merges).
 
 ## system monitor (top)
 
-- [ ] **`% mem` and RSS look wrong.** The memory percentage and RSS columns
-  in the system monitor display funny/incorrect values — investigate the
-  per-process mem accounting (`apps/top/be`) and the FE formatting.
+- [x] **`% mem` and RSS look wrong.** Root cause: an off-by-one in
+  `apps/top/be` `parseStat` — every `/proc/<pid>/stat` field after `stime`
+  was read one slot too far, so RSS came back as `rsslim` (field 25, usually
+  `RLIM_INFINITY`) and `%mem` = RSS/total inherited the garbage. Fixed the
+  indices (rss→`rest[21]`, vsize→`rest[20]`, nice→`rest[16]`,
+  num_threads→`rest[17]`, starttime→`rest[19]`); the same drift had also
+  corrupted `virt`/nice/threads/start-time. Pinned by `proc_test.go`. FE
+  formatting was fine.
 
 ## wash-fm
 
