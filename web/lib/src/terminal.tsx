@@ -49,6 +49,76 @@ export const TERM_THEME_LIGHT: ITheme = {
 };
 const termThemeFor = (a: 'light' | 'dark'): ITheme => (a === 'light' ? TERM_THEME_LIGHT : TERM_THEME_DARK);
 
+// Extra named palettes for the Theme menu. These are the canonical
+// upstream color sets (16 ANSI + bg/fg/cursor/selection); the menu pins
+// one, or "Follow desktop" leaves the Dark/Light pair above tracking the
+// pack. appearance tags the palette light/dark so consumers can group or
+// pick a sensible cursorAccent — purely metadata.
+export const TERM_THEME_SOLARIZED_DARK: ITheme = {
+  background: '#002b36', foreground: '#839496',
+  cursor: '#93a1a1', cursorAccent: '#002b36', selectionBackground: '#073642',
+  black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900',
+  blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
+  brightBlack: '#586e75', brightRed: '#cb4b16', brightGreen: '#586e75', brightYellow: '#657b83',
+  brightBlue: '#839496', brightMagenta: '#6c71c4', brightCyan: '#93a1a1', brightWhite: '#fdf6e3',
+};
+export const TERM_THEME_SOLARIZED_LIGHT: ITheme = {
+  background: '#fdf6e3', foreground: '#657b83',
+  cursor: '#586e75', cursorAccent: '#fdf6e3', selectionBackground: '#eee8d5',
+  black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900',
+  blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
+  brightBlack: '#002b36', brightRed: '#cb4b16', brightGreen: '#586e75', brightYellow: '#657b83',
+  brightBlue: '#839496', brightMagenta: '#6c71c4', brightCyan: '#93a1a1', brightWhite: '#fdf6e3',
+};
+export const TERM_THEME_DRACULA: ITheme = {
+  background: '#282a36', foreground: '#f8f8f2',
+  cursor: '#f8f8f2', cursorAccent: '#282a36', selectionBackground: '#44475a',
+  black: '#21222c', red: '#ff5555', green: '#50fa7b', yellow: '#f1fa8c',
+  blue: '#bd93f9', magenta: '#ff79c6', cyan: '#8be9fd', white: '#f8f8f2',
+  brightBlack: '#6272a4', brightRed: '#ff6e6e', brightGreen: '#69ff94', brightYellow: '#ffffa5',
+  brightBlue: '#d6acff', brightMagenta: '#ff92df', brightCyan: '#a4ffff', brightWhite: '#ffffff',
+};
+export const TERM_THEME_GRUVBOX_DARK: ITheme = {
+  background: '#282828', foreground: '#ebdbb2',
+  cursor: '#ebdbb2', cursorAccent: '#282828', selectionBackground: '#504945',
+  black: '#282828', red: '#cc241d', green: '#98971a', yellow: '#d79921',
+  blue: '#458588', magenta: '#b16286', cyan: '#689d6a', white: '#a89984',
+  brightBlack: '#928374', brightRed: '#fb4934', brightGreen: '#b8bb26', brightYellow: '#fabd2f',
+  brightBlue: '#83a598', brightMagenta: '#d3869b', brightCyan: '#8ec07c', brightWhite: '#ebdbb2',
+};
+export const TERM_THEME_NORD: ITheme = {
+  background: '#2e3440', foreground: '#d8dee9',
+  cursor: '#d8dee9', cursorAccent: '#2e3440', selectionBackground: '#434c5e',
+  black: '#3b4252', red: '#bf616a', green: '#a3be8c', yellow: '#ebcb8b',
+  blue: '#81a1c1', magenta: '#b48ead', cyan: '#88c0d0', white: '#e5e9f0',
+  brightBlack: '#4c566a', brightRed: '#bf616a', brightGreen: '#a3be8c', brightYellow: '#ebcb8b',
+  brightBlue: '#81a1c1', brightMagenta: '#b48ead', brightCyan: '#8fbcbb', brightWhite: '#eceff4',
+};
+
+export interface TermTheme {
+  id: string;
+  label: string;
+  appearance: 'dark' | 'light';
+  theme: ITheme;
+}
+
+// The Theme menu's pinnable palettes. The 'dark'/'light' ids match the
+// canonical Dark/Light pair (and the menu testids the e2e suite drives),
+// so they must stay stable.
+export const TERM_THEMES: TermTheme[] = [
+  { id: 'dark', label: 'Dark (Tango)', appearance: 'dark', theme: TERM_THEME_DARK },
+  { id: 'solarized-dark', label: 'Solarized Dark', appearance: 'dark', theme: TERM_THEME_SOLARIZED_DARK },
+  { id: 'dracula', label: 'Dracula', appearance: 'dark', theme: TERM_THEME_DRACULA },
+  { id: 'gruvbox-dark', label: 'Gruvbox Dark', appearance: 'dark', theme: TERM_THEME_GRUVBOX_DARK },
+  { id: 'nord', label: 'Nord', appearance: 'dark', theme: TERM_THEME_NORD },
+  { id: 'light', label: 'Light', appearance: 'light', theme: TERM_THEME_LIGHT },
+  { id: 'solarized-light', label: 'Solarized Light', appearance: 'light', theme: TERM_THEME_SOLARIZED_LIGHT },
+];
+
+export function themeById(id: string | undefined): TermTheme | undefined {
+  return id ? TERM_THEMES.find((t) => t.id === id) : undefined;
+}
+
 // Double-click word selection: treat a "word" as an identifier run
 // ([A-Za-z0-9_]) and break on every other symbol, so double-clicking
 // `bin` in /usr/local/bin selects just that segment. xterm's default
@@ -112,6 +182,15 @@ export const TERM_FONTS: TermFont[] = [
     url: 'fonts/FiraCode-Regular.woff2',
     boldUrl: 'fonts/FiraCode-Bold.woff2',
   },
+  // System stacks: no bundled woff2, so these render only when the
+  // family is installed on the client and otherwise fall back through
+  // the stack to plain monospace. JetBrains/Fira above are always
+  // available (bundled); these widen the choice at zero download cost.
+  { id: 'cascadia-code', label: 'Cascadia Code', stack: '"Cascadia Code", "Cascadia Mono", ui-monospace, monospace' },
+  { id: 'source-code-pro', label: 'Source Code Pro', stack: '"Source Code Pro", ui-monospace, monospace' },
+  { id: 'ubuntu-mono', label: 'Ubuntu Mono', stack: '"Ubuntu Mono", ui-monospace, monospace' },
+  { id: 'dejavu-mono', label: 'DejaVu Sans Mono', stack: '"DejaVu Sans Mono", ui-monospace, monospace' },
+  { id: 'menlo', label: 'Menlo / Consolas', stack: 'Menlo, Consolas, "Liberation Mono", monospace' },
 ];
 
 export const TERM_DEFAULT_FONT_ID = 'system';
@@ -399,16 +478,19 @@ export const Terminal: Component<TerminalProps> = (props) => {
       allowProposedApi: true,
       wordSeparator: TERM_WORD_SEPARATORS,
     });
-    // Theme resolution: an explicit `theme` prop wins; otherwise an
-    // appearanceOverride (set by the menubar's Theme menu) pins dark/light;
-    // otherwise follow the desktop pack's appearance live. A signal bridges
-    // the pack subscription so the effect re-runs on a pack change OR an
-    // override change.
-    if (!props.theme) {
+    // Theme resolution, in priority order: an explicit `theme` prop (a
+    // pinned named palette from the menubar's Theme menu) wins; else an
+    // appearanceOverride pins dark/light; else follow the desktop pack's
+    // appearance live. The effect tracks props.theme too, so switching
+    // the pinned palette applies to the already-mounted xterm without a
+    // remount. A signal bridges the pack subscription so the effect also
+    // re-runs on a live pack change.
+    {
       const [packAppearance, setPackAppearance] = createSignal(washAppearance());
       onCleanup(onAppearanceChange((a) => setPackAppearance(a)));
       createEffect(() => {
-        if (term) term.options.theme = termThemeFor(props.appearanceOverride ?? packAppearance());
+        if (!term) return;
+        term.options.theme = props.theme ?? termThemeFor(props.appearanceOverride ?? packAppearance());
       });
     }
     // Clipboard keys are component-level so every terminal in wash

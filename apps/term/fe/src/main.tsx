@@ -15,7 +15,7 @@ import { Check, Globe, Plus, ShieldAlert, User, X } from 'lucide-solid';
 import {
   Menu, MenuItem, MenuSeparator, Terminal,
   TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, TERM_FONTS,
-  TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE,
+  TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE, TERM_THEMES, themeById,
   defineWashApp, tokens,
 } from '@wash/ui';
 import type { TermModes, TerminalAPI } from '@wash/ui';
@@ -97,7 +97,10 @@ interface PersistedState {
   // Font choice is window-wide: every tab in this window shares it.
   font_id?: string;
   font_size?: number;
-  // Terminal palette override ('dark'/'light'); absent = follow the pack.
+  // Pinned terminal palette id (TERM_THEMES); absent = follow the pack.
+  theme_id?: string;
+  // Legacy: the old binary palette override, read on restore and
+  // migrated to theme_id. No longer written.
   appearance?: 'dark' | 'light';
 }
 
@@ -119,10 +122,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // apply across all tabs at once.
   const [fontId, setFontId] = createSignal(TERM_DEFAULT_FONT_ID);
   const [fontSize, setFontSize] = createSignal(TERM_DEFAULT_FONT_SIZE);
-  // Window-wide terminal palette override: undefined follows the desktop
-  // pack appearance (default), 'dark'/'light' pins it. Set via the Theme
-  // menu; persisted like the font choice.
-  const [appearance, setAppearance] = createSignal<'dark' | 'light' | undefined>(undefined);
+  // Window-wide terminal palette: undefined follows the desktop pack
+  // appearance (default); a TERM_THEMES id pins a named palette (Dark,
+  // Solarized Dark, Dracula, …). Set via the Theme menu; persisted like
+  // the font choice.
+  const [themeId, setThemeId] = createSignal<string | undefined>(undefined);
 
   // Menubar: which top menu is open and the viewport anchor (the clicked
   // button's bottom-left) to paint it at.
@@ -266,10 +270,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     persist();
   };
 
-  // ---- appearance (window-wide, persisted) ----
+  // ---- theme (window-wide, persisted) ----
 
-  const changeAppearance = (a: 'dark' | 'light' | undefined) => {
-    setAppearance(a);
+  // changeTheme pins a named palette by id, or undefined to follow the
+  // desktop pack. The live switch reaches the mounted xterm via the
+  // Terminal's `theme` prop effect — no remount.
+  const changeTheme = (id: string | undefined) => {
+    setThemeId(id);
     persist();
   };
 
@@ -450,7 +457,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       active: active() || undefined,
       font_id: fontId(),
       font_size: fontSize(),
-      appearance: appearance(),
+      theme_id: themeId(),
     };
     send({ kind: 'save_state', state });
   };
@@ -467,7 +474,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const restoreFrom = (s: PersistedState) => {
     if (s.font_id) setFontId(s.font_id);
     if (s.font_size) setFontSize(s.font_size);
-    if (s.appearance) setAppearance(s.appearance);
+    // theme_id is the current field; fall back to the legacy `appearance`
+    // ('dark'/'light' map 1:1 to the same-named theme ids) so windows
+    // saved before named themes keep their palette.
+    if (s.theme_id) setThemeId(s.theme_id);
+    else if (s.appearance) setThemeId(s.appearance);
     // The restored list may be stale (ptys that died while the
     // browser was detached); ask the BE for the live set and
     // reconcile when the `sessions` reply lands. Restored tabs stay
@@ -616,21 +627,20 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           <MenuItem
             label="Follow desktop"
             data-testid="term-menu-theme-auto"
-            trailing={appearance() === undefined ? <Check size={12} /> : undefined}
-            onClick={run(() => changeAppearance(undefined))}
+            trailing={themeId() === undefined ? <Check size={12} /> : undefined}
+            onClick={run(() => changeTheme(undefined))}
           />
-          <MenuItem
-            label="Dark"
-            data-testid="term-menu-theme-dark"
-            trailing={appearance() === 'dark' ? <Check size={12} /> : undefined}
-            onClick={run(() => changeAppearance('dark'))}
-          />
-          <MenuItem
-            label="Light"
-            data-testid="term-menu-theme-light"
-            trailing={appearance() === 'light' ? <Check size={12} /> : undefined}
-            onClick={run(() => changeAppearance('light'))}
-          />
+          <MenuSeparator />
+          <For each={TERM_THEMES}>
+            {(t) => (
+              <MenuItem
+                label={t.label}
+                data-testid={`term-menu-theme-${t.id}`}
+                trailing={themeId() === t.id ? <Check size={12} /> : undefined}
+                onClick={run(() => changeTheme(t.id))}
+              />
+            )}
+          </For>
         </Menu>
       </Show>
       <Show when={openMenu() === 'font'}>
@@ -824,7 +834,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   customKeyHandler={onTermKey}
                   fontId={fontId()}
                   fontSize={fontSize()}
-                  appearanceOverride={appearance()}
+                  theme={themeById(themeId())?.theme}
                   onTitle={(t) => setTabTitle(tab.channelID, t)}
                   initialCols={tab.init?.cols}
                   initialRows={tab.init?.rows}

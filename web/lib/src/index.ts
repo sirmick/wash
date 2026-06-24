@@ -30,8 +30,10 @@ export {
   TERM_MIN_FONT_SIZE,
   TERM_MAX_FONT_SIZE,
   fontById,
+  TERM_THEMES,
+  themeById,
 } from './terminal';
-export type { TerminalProps, TerminalAPI, TermFont, TermModes } from './terminal';
+export type { TerminalProps, TerminalAPI, TermFont, TermModes, TermTheme } from './terminal';
 export { washCopyText, washPasteText, systemCopyText, systemCopyTextChecked } from './clipboard';
 export { defineWashApp } from './define-app';
 export type { WashAppProps, DefineWashAppOptions } from './define-app';
