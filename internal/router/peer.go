@@ -39,6 +39,14 @@ func (inst *AppInstance) handlePeerRegister(m wire.EvtPeerRegister) error {
 		inst.router.log("peer register from %s refused (only %s may register)", inst.AppID, remoteSupervisorAppID)
 		return nil
 	}
+	// No nesting: a relayed endpoint (host B, served via --listen-raw) cannot
+	// itself relay to a further host. wash is a flat multi-homed shell, never a
+	// chain — to reach a host behind this one, the LOCAL desktop connects to it
+	// directly via SSH ProxyJump (docs/REMOTE.md, "we never chain routers").
+	if inst.router.cfg.Relayed {
+		inst.router.log("peer register origin=%s refused: this router is a relayed endpoint — wash connections don't nest", m.Origin)
+		return nil
+	}
 	if m.Origin == "" || m.Addr == "" {
 		return nil
 	}

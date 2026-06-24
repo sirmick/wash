@@ -35,6 +35,7 @@ import (
 	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
+	"os"
 	"sync"
 
 	"github.com/sirmick/wash/internal/apps/registry"
@@ -100,6 +101,24 @@ func run(ctx context.Context) error { return sdk.Run(ctx, def) }
 // onReady wires the relay: FE control ops out to com.wash.remote, and the
 // supervisor's state pushes back to the FE.
 func onReady(c *sdk.Conn, instanceID string, _ uint32) {
+	// No nesting. If this desktop is itself a relayed remote view (the router
+	// was started with --listen-raw — WASH_RELAYED=1), opening Connect here
+	// would try to chain a second hop, which wash deliberately forbids (R2 is a
+	// flat multi-homed shell — docs/REMOTE.md). Complain with a toast and exit;
+	// the router GCs our window. The router-side handlePeerRegister guard is the
+	// hard backstop, but refusing up front spares the user a dead end.
+	if os.Getenv("WASH_RELAYED") == "1" {
+		log.Printf("wash-connect: refusing to open on a relayed desktop instance=%s (wash connections don't nest)", instanceID)
+		// Notify is a synchronous frame write, so the toast is on the wire
+		// before we tear down; Close flushes the transport (graceful FIN after
+		// the data), then exit 0 — a deliberate refusal, not a crash.
+		_ = c.Notify("Connect isn’t available here",
+			"This desktop is itself a remote view, and wash connections don’t nest. "+
+				"Open Connect on your local desktop; to reach a host behind this one, use SSH ProxyJump.",
+			wire.NotifyLevelWarn)
+		c.Close()
+		os.Exit(0)
+	}
 	log.Printf("wash-connect ready instance=%s", instanceID)
 	bus := sdk.NewBus(c)
 

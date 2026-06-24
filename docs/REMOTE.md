@@ -81,7 +81,14 @@ opaque bytes, the same dumb-pipe role the ssh client already plays.
   drops (incl. between two windows on one host) are unaffected.
 - **Recursive / federating routers.** Never. If cross-host *control-plane*
   integration is ever wanted, it is a separate gateway process, not the router
-  (see §13).
+  (see §13). **Enforced:** a relay endpoint (a router started with
+  `--listen-raw` — host B) sets `Config.Relayed`, which (a) makes
+  `handlePeerRegister` refuse any `peer.register` (so a B→C second hop can never
+  be established by *any* app — the hard backstop), and (b) exports
+  `WASH_RELAYED=1` to every spawned app, on which **wash-connect refuses to open
+  with a toast** ("wash connections don't nest — use SSH ProxyJump from your
+  local desktop"). To reach a host behind B, the LOCAL desktop connects to it
+  directly with `ssh -J B C` (the tunnel chains, the routers stay flat).
 
 ---
 

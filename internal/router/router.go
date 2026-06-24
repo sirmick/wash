@@ -78,6 +78,17 @@ type Config struct {
 	// bytes; the router runs the WS upgrade itself and attaches
 	// the resulting WebSocket as a shell view. See docs/MULTIUSER.md.
 	ListenUnix string
+
+	// Relayed marks this router as a remote-apps relay ENDPOINT (started
+	// with --listen-raw): it exists only to be viewed through another
+	// host's shell — the "B" in docs/REMOTE.md — never to front a browser.
+	// Every app it spawns is composited remotely, so the remote-family
+	// apps (com.wash.connect / com.wash.remote) must NOT run or register
+	// peers here: wash is a flat multi-homed shell, never a chain
+	// (R2 — "we never chain routers"). Surfaced to spawned apps as
+	// WASH_RELAYED=1, and enforced router-side in handlePeerRegister.
+	Relayed bool
+
 	// Name is the human-readable session name surfaced in the
 	// stat RPC and in /proc/<pid>/cmdline. Informational only;
 	// the router never makes routing decisions on it. Immutable
@@ -536,6 +547,11 @@ func (r *Router) spawnEnv() []string {
 	var env []string
 	if r.cfg.ControlSocket != "" {
 		env = append(env, "WASH_CONTROL_SOCKET="+r.cfg.ControlSocket)
+	}
+	// Tell spawned apps this desktop is a relayed remote view (--listen-raw
+	// endpoint) so the remote-family apps refuse to nest a connection.
+	if r.cfg.Relayed {
+		env = append(env, "WASH_RELAYED=1")
 	}
 	// WASH_BIN_DIR points at the directory the wash-router binary
 	// lives in — in dev, that's where wash-launch and every wash app

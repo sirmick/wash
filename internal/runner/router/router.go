@@ -329,6 +329,9 @@ func Run(args []string) int {
 		Dev:              *dev || os.Getenv("WASH_DEV") != "",
 		FSRoot:           normRoot,
 		ListenUnix:       *listenUnix,
+		// A --listen-raw router is a remote-apps relay endpoint (host B):
+		// mark it so the remote-family apps refuse to nest here.
+		Relayed:          *listenRaw != "",
 		Name:             *name,
 		IdleTimeout:      idleTimeoutVal,
 		AllowUID:         allowUIDVal,
