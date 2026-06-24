@@ -56,6 +56,15 @@ func TestClassifyKind(t *testing.T) {
 			}
 		})
 	}
+
+	// Every declared bulk suffix must classify as Bulk: lock the
+	// declared list (source of truth) against the function body.
+	for _, suffix := range bulkKindSuffixes {
+		kind := "app" + suffix
+		if got := classifyKind(kind); got != wire.ClassBulk {
+			t.Errorf("classifyKind(%q)=%v want Bulk (suffix %q)", kind, got, suffix)
+		}
+	}
 }
 
 func TestEmitDefaultsInteractive(t *testing.T) {
