@@ -993,6 +993,20 @@ unit-test: test-app fe-unit component
 	go vet ./...
 	go test -count=1 -p 1 -timeout 120s $(GO_UNIT_PKGS)
 
+# test-race: the Go unit suite under the race detector. The concurrency-dense
+# core (router, sdk, fswatch, remotewatch, washmount, bulkops, the per-app
+# backends) is clean today; this gate keeps it that way — a future change that
+# introduces a data race on a path the tests exercise fails here instead of
+# flaking in production. Same package set and -p 1 constraint as unit-test
+# (loopback wires router+sdk over in-memory pipes and mustn't race other
+# in-process tests for goroutine scheduling); wash-vm/vm is excluded with the
+# rest via GO_UNIT_PKGS (its kvm suite boots real qemu and runs minutes under
+# -race). Longer timeout: -race adds ~2-10x runtime. Built like unit-test —
+# app packages //go:embed assets only produced under TEST_APP=1.
+.PHONY: test-race
+test-race: test-app
+	go test -race -count=1 -p 1 -timeout 600s $(GO_UNIT_PKGS)
+
 # e2e-test: the full Playwright suite (standalone layout); builds the test app.
 # e2e/ is NOT a workspace member, so --ignore-workspace is required to install
 # its own deps (incl. playwright) into e2e/node_modules.

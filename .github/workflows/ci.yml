@@ -43,6 +43,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: make unit-test
         run: make unit-test
+      - name: make test-race (go unit suite under the race detector)
+        run: make test-race
 
   e2e:
     name: e2e (playwright)

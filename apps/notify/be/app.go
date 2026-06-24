@@ -195,7 +195,16 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		svc.Mutate(func(s *State) {
 			for i := range s.Notifications {
 				if s.Notifications[i].ID == req.ID {
-					s.Notifications[i].Read = true
+					// Copy-on-write: StateService.Snapshot is a shallow
+					// copy, so an in-place element write would mutate the
+					// backing array a concurrent snapshot reader still
+					// holds (a real data race — caught by `make
+					// test-race`). Rebuild the slice instead; the old
+					// array any prior snapshot points at stays frozen.
+					updated := make([]Notification, len(s.Notifications))
+					copy(updated, s.Notifications)
+					updated[i].Read = true
+					s.Notifications = updated
 					return
 				}
 			}

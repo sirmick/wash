@@ -161,6 +161,16 @@ func (r *Router) pumpPeerToShell(b *channelBinding) {
 		}
 		// One B-frame → the payload of one relay frame, scheduled at B's own
 		// class (byte 0). Verbatim: no decode/re-encode, no credit gate.
+		//
+		// b.shell is read without shellMu, and that is safe BY INVARIANT, not
+		// by luck: a peer binding (peerConn != nil) has its shell pinned at
+		// creation, before this goroutine starts (a happens-before edge), and
+		// reattachChannelsToShell explicitly skips live peer bindings
+		// ("b.shell != nil && b.peerConn != nil → continue"), so nothing ever
+		// reassigns b.shell for the pump's lifetime. The channel closing (which
+		// stops the pump) is the only teardown. If you ever make a peer
+		// binding's shell mutable mid-pump, this read becomes a real data race —
+		// take shellMu here (and add a -race test that reattaches under load).
 		if werr := b.shell.WriteRawFrameClass(b.channelID, raw, wire.ClassOfFlags(raw[0])); werr != nil {
 			break
 		}
