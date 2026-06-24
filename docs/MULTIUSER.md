@@ -408,6 +408,17 @@ dev path — wash-login running as your own uid spawning routers as
 your own uid — works **without caps** because target uid == self uid
 short-circuits the setuid call.
 
+The packages ship an init service for the host's init system: a systemd
+unit (`/usr/lib/systemd/system/wash-login.service`, deb/rpm) and an
+OpenRC service (`/etc/init.d/wash-login`, apk). For hosts with neither —
+containers, a MikroTik RouterOS OCI, anything supervised by
+**supervisord** — an example program is installed (docs only, not
+activated) at `/usr/share/wash-login/supervisord.conf`: copy its
+`[program:wash-login]` stanza into your supervisor config. All three
+read args from the single-source env file `/etc/default/wash-login`
+(`/etc/conf.d/wash-login` on apk), so cookie policy / bind / limits are
+configured in one place regardless of init system.
+
 ## File-system & socket layout
 
 ```

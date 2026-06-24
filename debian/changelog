@@ -5,6 +5,9 @@ wash (0.9.4-1) unstable; urgency=low
     teardown (internal/mdns, internal/hostmeta).
   * theme: Copland pack, sunwave logo, dead-black terminal/editor, denser
     start menu, host info in the start header.
+  * wash-login: ship an example supervisord program at
+    /usr/share/wash-login/supervisord.conf (docs only, not activated) for
+    no-systemd/container hosts; reads the same /etc/default/wash-login args.
 
  -- sirmick <sirmick@gmail.com>  Mon, 22 Jun 2026 12:00:00 -0700
 
