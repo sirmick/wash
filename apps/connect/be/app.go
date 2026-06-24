@@ -117,7 +117,7 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 			return nil
 		}
 		return conn.SendAppMsgTo(wire.Recipient{AppID: remoteAppID}, map[string]any{
-			"kind": "connect", "host": req.Host, "remote_port": req.RemotePort,
+			"kind": "connect", "host": req.Host, "addr": req.Addr, "remote_port": req.RemotePort,
 		})
 	})
 	sdk.HandleVoid(bus, "disconnect", func(conn *sdk.Conn, _ string, req disconnectReq) error {
@@ -158,12 +158,13 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 
 	// Interactive SSH auth (docs/REMOTE.md §6.1, mechanism a). The
 	// supervisor is BatchMode-only and reports a host down with code
-	// "auth" when no usable key is in the agent; wash-connect owns the
-	// fix. auth_begin spawns ssh-add in a pty bound to this window's
-	// channel; the FE renders an xterm on it so the user types their key
-	// passphrase once. ssh-add loads the key into the agent and exits;
-	// the FE then re-issues connect, which now succeeds under BatchMode.
-	// The supervisor never sees a prompt — it stays the sole tunnel owner.
+	// "auth" when no usable key authorises it; wash-connect owns the fix.
+	// auth_begin spawns ssh-copy-id in a pty bound to this window's
+	// channel; the FE renders an xterm on it so the user enters the
+	// target's password once. ssh-copy-id installs our public key into the
+	// target's authorized_keys and exits; the FE then re-issues connect,
+	// which now succeeds under BatchMode. The supervisor never sees a
+	// prompt — it stays the sole tunnel owner.
 	registerAuth(bus)
 
 	// Bookmarks (docs/REMOTE.md §6.1) — long-lived host[+app] targets the
@@ -200,7 +201,7 @@ type bookmarksSaveReq struct {
 	Bookmarks []Bookmark `json:"bookmarks"`
 }
 
-// authState holds the single in-flight ssh-add session. wash-connect is
+// authState holds the single in-flight ssh-copy-id session. wash-connect is
 // singleton (one window), so one session at a time; a new auth_begin
 // supersedes any prior.
 var authState struct {
@@ -218,10 +219,17 @@ func registerAuth(bus *sdk.Bus) {
 		}
 		authState.mu.Unlock()
 
-		argv := []string{"ssh-add"}
+		// ssh-copy-id installs our public key into the target's authorized_keys
+		// after one password prompt, BOOTSTRAPPING trust on a host we have no
+		// key on yet (the common case for a freshly-discovered peer). ssh-add
+		// only helps when a key is *already* authorized but locked — useless
+		// for a first connection. We dial the same target string the connect
+		// uses (a name, so the user's ~/.ssh/config picks the identity).
+		argv := []string{"ssh-copy-id"}
 		if req.KeyFile != "" {
-			argv = append(argv, req.KeyFile)
+			argv = append(argv, "-i", req.KeyFile)
 		}
+		argv = append(argv, req.Host)
 		// OpenChannel can't run on the SDK read goroutine — spawn off it.
 		go func() {
 			sess, err := pty.Open(context.Background(), conn, conn.WindowID(), 80, 24, argv, pty.WithWashEnv,
@@ -234,7 +242,7 @@ func registerAuth(bus *sdk.Bus) {
 					_ = conn.SendAppMsg(map[string]any{"kind": "auth_closed", "host": req.Host, "reason": reason})
 				})
 			if err != nil {
-				log.Printf("wash-connect: ssh-add open: %v", err)
+				log.Printf("wash-connect: ssh-copy-id open: %v", err)
 				_ = conn.SendAppMsg(map[string]any{"kind": "auth_error", "host": req.Host, "msg": err.Error()})
 				return
 			}
@@ -258,6 +266,7 @@ func registerAuth(bus *sdk.Bus) {
 
 type connectReq struct {
 	Host       string `json:"host"`
+	Addr       string `json:"addr"` // optional IP fallback when Host doesn't resolve
 	RemotePort int    `json:"remote_port"`
 }
 
@@ -275,8 +284,9 @@ type unmountReq struct {
 	MountPoint string `json:"mount_point"`
 }
 
-// authBeginReq starts an ssh-add session for Host. KeyFile is optional —
-// empty runs `ssh-add` (default keys), set runs `ssh-add <keyfile>`.
+// authBeginReq starts an ssh-copy-id session for Host (a name, so the user's
+// ssh_config picks the identity). KeyFile is optional — empty copies the
+// default public key, set runs `ssh-copy-id -i <keyfile> <host>`.
 type authBeginReq struct {
 	Host    string `json:"host"`
 	KeyFile string `json:"key_file"`

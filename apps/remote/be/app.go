@@ -146,7 +146,7 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 		if req.Host == "" {
 			return nil
 		}
-		sup.connect(req.Host, req.RemotePort)
+		sup.connect(req.Host, req.Addr, req.RemotePort)
 		return nil
 	})
 	sdk.HandleFromVoid(bus, "disconnect", func(_ *sdk.Conn, _ string, req disconnectReq, _ wire.Sender) error {
@@ -177,6 +177,7 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 
 type connectReq struct {
 	Host       string `json:"host"`
+	Addr       string `json:"addr"` // optional IP fallback when Host doesn't resolve
 	RemotePort int    `json:"remote_port"`
 }
 
