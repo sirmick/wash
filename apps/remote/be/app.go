@@ -100,6 +100,12 @@ func init() {
 			ProtocolVersion: sdk.ProtocolVersion,
 			Surface:         sdk.SurfaceBackground,
 			Instancing:      sdk.InstancingSingleton,
+			// Start at router boot, not on first browser connect: the mDNS
+			// advertiser must run so an idle (unbrowsed) host is still
+			// discoverable on the LAN. Without this, a box only announces
+			// itself after someone has opened its desktop since the last
+			// router restart (the bug behind "didn't detect other hosts").
+			AutostartAtBoot: true,
 			// Settings "Remote" panel: lists live sessions + mounts with
 			// graceful teardown; "Open Connect…" opens the com.wash.connect
 			// window. The supervisor owns the panel (it owns the state and the
