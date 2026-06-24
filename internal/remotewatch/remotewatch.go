@@ -260,7 +260,21 @@ func (c *Client) Close() error {
 // run dials, serves until the transport dies, and re-dials (with backoff) until
 // Close. errFixedTransport ends it (a NewClient has no second transport).
 func (c *Client) run() {
+	// A connection that served at least this long counts as healthy; only then
+	// does backoff reset. A dial that succeeds but dies sooner keeps escalating.
+	const minHealthy = 5 * time.Second
 	backoff := 100 * time.Millisecond
+	grow := func() bool { // sleep `backoff`, then double it; false ⇒ stop requested
+		select {
+		case <-time.After(backoff):
+		case <-c.stop:
+			return false
+		}
+		if backoff < 5*time.Second {
+			backoff *= 2
+		}
+		return true
+	}
 	for {
 		select {
 		case <-c.stop:
@@ -273,20 +287,26 @@ func (c *Client) run() {
 				return
 			}
 			log.Printf("remotewatch: client dial: %v (retry in %s)", err, backoff)
-			select {
-			case <-time.After(backoff):
-			case <-c.stop:
+			if !grow() {
 				return
-			}
-			if backoff < 5*time.Second {
-				backoff *= 2
 			}
 			continue
 		}
-		backoff = 100 * time.Millisecond
+		// dial() only forks ssh — the connection isn't proven until serve() has
+		// run a while. Resetting backoff here (pre-serve) let a dial-succeeds-
+		// but-dies-instantly case (auth fail, host-key change, missing
+		// wash-fswatchd) re-dial with zero delay: a tight ssh fork bomb on both
+		// hosts (TODO-sftp-mount-bugs.md High). So time the serve and reset only
+		// once it proved healthy; an instant death escalates like a dial error.
+		start := time.Now()
 		c.attach(rw)
 		c.serve(rw) // blocks until the transport dies or Close
 		c.detach(rw)
+		if time.Since(start) >= minHealthy {
+			backoff = 100 * time.Millisecond
+		} else if !grow() {
+			return
+		}
 	}
 }
 

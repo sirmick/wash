@@ -125,11 +125,19 @@ func (n *sftpNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint3
 
 func (n *sftpNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	h := f.(*fileHandle)
+	// Read into a PRIVATE buffer, never go-fuse's `dest`. On an op timeout
+	// run() abandons the goroutine while ReadAt is still in flight; if that
+	// goroutine were writing into `dest` (go-fuse pool memory), go-fuse would
+	// recycle the slice to an unrelated request and the late write would
+	// scribble remote bytes into someone else's buffer — cross-request memory
+	// corruption (TODO-sftp-mount-bugs.md Critical). A private buffer the
+	// abandoned goroutine alone retains is harmless to over-write.
+	buf := make([]byte, len(dest))
 	var num int
 	if errno := n.root.run(ctx, "read", func(cl *sftp.Client) error {
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		nn, err := h.f.ReadAt(dest, off)
+		nn, err := h.f.ReadAt(buf, off)
 		num = nn
 		if err != nil && num > 0 { // short read at EOF is success, not error
 			return nil
@@ -138,7 +146,9 @@ func (n *sftpNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off i
 	}); errno != 0 {
 		return nil, errno
 	}
-	return fuse.ReadResultData(dest[:num]), 0
+	// run() returned 0 only after the goroutine finished (channel happens-
+	// before), so buf[:num] is fully written and safe to hand back.
+	return fuse.ReadResultData(buf[:num]), 0
 }
 
 func (n *sftpNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
