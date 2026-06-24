@@ -193,6 +193,15 @@ export interface TerminalAPI {
   rows: () => number;
   xterm: () => XTerm | null;
   modes: () => TermModes;
+  // Imperative edit actions, so window chrome (e.g. the term app's
+  // menubar) can drive copy/paste/selection without re-deriving the
+  // clipboard wiring. copySelection mirrors the selection to the wash +
+  // system clipboards and returns whether there was anything to copy.
+  copySelection: () => boolean;
+  paste: () => void;
+  selectAll: () => void;
+  clearScreen: () => void;
+  hasSelection: () => boolean;
 }
 
 export interface TerminalProps {
@@ -220,6 +229,10 @@ export interface TerminalProps {
   fontId?: string;
   fontSize?: number;
   theme?: ITheme;
+  // appearanceOverride pins the xterm palette to dark or light, ignoring
+  // the desktop pack's appearance. Leave unset to follow the pack live
+  // (the default). `theme` still wins over this when both are given.
+  appearanceOverride?: 'dark' | 'light';
   customKeyHandler?: (ev: KeyboardEvent) => boolean;
   onResize?: (cols: number, rows: number) => void;
   onReady?: (api: TerminalAPI) => void;
@@ -364,15 +377,22 @@ export const Terminal: Component<TerminalProps> = (props) => {
       ...restoredGrid,
       fontFamily: initialFamily,
       fontSize: effectiveSize(),
-      theme: props.theme ?? termThemeFor(washAppearance()),
+      theme: props.theme ?? termThemeFor(props.appearanceOverride ?? washAppearance()),
       cursorBlink: true,
       allowProposedApi: true,
       wordSeparator: TERM_WORD_SEPARATORS,
     });
-    // When the consumer didn't pin a theme, follow the active pack:
-    // flip the xterm palette live as the pack's appearance changes.
+    // Theme resolution: an explicit `theme` prop wins; otherwise an
+    // appearanceOverride (set by the menubar's Theme menu) pins dark/light;
+    // otherwise follow the desktop pack's appearance live. A signal bridges
+    // the pack subscription so the effect re-runs on a pack change OR an
+    // override change.
     if (!props.theme) {
-      onCleanup(onAppearanceChange((a) => { if (term) term.options.theme = termThemeFor(a); }));
+      const [packAppearance, setPackAppearance] = createSignal(washAppearance());
+      onCleanup(onAppearanceChange((a) => setPackAppearance(a)));
+      createEffect(() => {
+        if (term) term.options.theme = termThemeFor(props.appearanceOverride ?? packAppearance());
+      });
     }
     // Clipboard keys are component-level so every terminal in wash
     // behaves the same; the consumer's customKeyHandler runs after.
@@ -436,11 +456,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
     // PuTTY-style select = copy: xterm keeps its own selection model
     // (not a DOM selection), so on selection-end we push the selected
     // text into the wash clipboard + mirror it to the system clipboard
-    // while the mouseup gesture is live. (Right-click opens the wash
-    // context menu below — Copy/Paste + font controls — rather than
-    // PuTTY's instant paste, since the menu is the font picker's only
-    // entry point.)
-    const onMouseUp = () => {
+    // while the mouseup gesture is live. LEFT button only — a right-click
+    // opens the context menu (Copy/Paste + font controls) and must NOT
+    // re-copy the live selection, or right-click-to-Paste would clobber
+    // the clipboard with the selection right before reading it.
+    const onMouseUp = (ev: MouseEvent) => {
+      if (ev.button !== 0) return;
       const sel = term?.getSelection();
       if (sel) washCopyText(sel);
     };
@@ -490,6 +511,16 @@ export const Terminal: Component<TerminalProps> = (props) => {
           rows: () => term?.rows ?? 0,
           xterm: () => term,
           modes: () => ({ dec: { ...decModes }, keypad }),
+          copySelection: () => {
+            const sel = term?.getSelection();
+            if (!sel) return false;
+            washCopyText(sel);
+            return true;
+          },
+          paste: () => pasteWash(),
+          selectAll: () => term?.selectAll(),
+          clearScreen: () => term?.clear(),
+          hasSelection: () => !!term?.hasSelection(),
         });
       };
       if (restored && drain.length) {
