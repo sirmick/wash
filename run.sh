@@ -2,10 +2,11 @@
 # run.sh — start the wash-router from out/ in --dev mode.
 #
 # Modes:
-#   --standalone (default) — exec out/wash-router (the per-app layout).
-#   --multicall            — exec out/multicall/wash-router (a symlink to
-#                            out/multicall/wash). build.sh --multicall /
-#                            --both assembles that dir.
+#   --multicall (default)  — exec out/multicall/wash-router (a symlink to
+#                            out/multicall/wash). `make wash` assembles that dir.
+#                            This is the SHIPPED layout, so dev defaults to it.
+#   --standalone           — exec out/wash-router (the per-app layout, built by
+#                            `make wash-standalone`).
 #
 # Other flags:
 #   --no-build       — skip the build.sh step
@@ -34,7 +35,7 @@ cd "$REPO"
 # netplan/ifupdown autodetect can't find their binaries. (docs/NET-BACKENDS.md)
 export PATH="/usr/sbin:/sbin:$PATH"
 
-mode=standalone
+mode=multicall
 do_build=1
 listen="0.0.0.0:11000"
 fm_root=""
@@ -71,8 +72,8 @@ done
 
 if [[ "$do_build" == "1" ]]; then
   case "$mode" in
-    multicall) make -C "$REPO" wash-multicall;;
-    *)         make -C "$REPO" wash;;
+    standalone) make -C "$REPO" wash-standalone;;
+    *)          make -C "$REPO" wash;;
   esac
 fi
 
@@ -85,16 +86,18 @@ if [[ "$fm_seed" == "1" ]]; then
   "$REPO/scripts/fm-seed.sh" "$fm_root"
 fi
 
-# Multi-call mode: the runnable image lives in out/multicall/ (wash +
-# wash-* symlinks), assembled by build.sh. Pick the router from there;
-# standalone mode runs the per-app binary in out/.
-router_bin="$REPO/out/wash-router"
-if [[ "$mode" == "multicall" ]]; then
-  router_bin="$REPO/out/multicall/wash-router"
-  if [[ ! -e "$router_bin" ]]; then
-    echo "run.sh: $router_bin missing — run 'make wash-multicall' first" >&2
-    exit 1
-  fi
+# Default (multicall) mode: the runnable image lives in out/multicall/ (wash +
+# wash-* symlinks), assembled by `make wash`. Pick the router from there;
+# --standalone mode runs the per-app binary in out/ (`make wash-standalone`).
+router_bin="$REPO/out/multicall/wash-router"
+build_hint="make wash"
+if [[ "$mode" == "standalone" ]]; then
+  router_bin="$REPO/out/wash-router"
+  build_hint="make wash-standalone"
+fi
+if [[ ! -e "$router_bin" ]]; then
+  echo "run.sh: $router_bin missing — run '$build_hint' first" >&2
+  exit 1
 fi
 
 args=(

@@ -251,18 +251,30 @@ LOGIN_SHELL_STAMP  := $(LOGIN_SHELL_ASSETS)/.stamp
 all: $(TARGETS)
 
 # ----- build verbs -----
-# `make wash` is the standalone build for this host: the per-app binaries, plus
-# wash-display when its deps are present (auto-detected above; WASH_DISPLAY=0/1
-# overrides). `make wash-multicall` is the busybox layout under out/multicall/.
-# (all/multicall are the underlying targets; wash/wash-multicall are the verbs.)
+# `make wash` builds the MULTICALL layout — the busybox `wash` dispatcher plus
+# wash-<app> symlinks under out/multicall/, which is exactly what the deb/rpm/apk
+# packages ship. Dev defaults to multicall so the inner loop exercises the same
+# argv[0]-dispatch + exec-probe paths as production (a standalone-only dev build
+# is how the wash-fswatchd --wash-manifest gap hid — see commit ca73b4b).
+# wash-sudo is a real separate helper (not part of the dispatcher), so build it
+# first; `multicall` copies it into out/multicall/ for a complete runnable image.
+# `make wash-standalone` is the per-app-binary layout under out/ (used by the
+# standalone-smoke gate and `run.sh --standalone`).
 .PHONY: wash
-wash: all
-	@echo "wash: built $(words $(TARGETS)) binaries$(if $(filter $(OUT)/wash-display,$(TARGETS)),  (incl. wash-display),  (no wash-display — set WASH_DISPLAY=1 or install wlroots))"
-	@echo "  → $(abspath $(OUT))/   (run: make run)"
+wash: $(OUT)/wash-sudo
+	$(MAKE) multicall
+	@echo "wash: built the multicall layout (busybox wash + wash-* symlinks + wash-sudo — the shipped layout)"
+	@echo "  → $(abspath $(MC_DIR))/   (run: make run)"
 
+.PHONY: wash-standalone
+wash-standalone: all
+	@echo "wash-standalone: built $(words $(TARGETS)) per-app binaries$(if $(filter $(OUT)/wash-display,$(TARGETS)),  (incl. wash-display),  (no wash-display — set WASH_DISPLAY=1 or install wlroots))"
+	@echo "  → $(abspath $(OUT))/"
+
+# Back-compat alias: `make wash-multicall` == `make wash` now (both build the
+# multicall layout). Kept so existing scripts/muscle-memory keep working.
 .PHONY: wash-multicall
-wash-multicall: multicall
-	@echo "wash-multicall: busybox layout assembled"
+wash-multicall: wash
 	@echo "  → $(abspath $(OUT))/multicall/   ($(words $(wildcard $(OUT)/multicall/*)) entries: wash + wash-* symlinks)"
 
 $(OUT):
@@ -906,8 +918,8 @@ qemu-run-vm:
 # pick up changes; `make dev` is the auto-rebuilding HMR loop.
 .PHONY: run
 run:
-	@test -x $(OUT)/wash-router || { echo "run: $(OUT)/wash-router not built — run 'make wash' first" >&2; exit 1; }
-	$(OUT)/wash-router
+	@test -x $(MC_DIR)/wash-router || { echo "run: $(MC_DIR)/wash-router not built — run 'make wash' first" >&2; exit 1; }
+	$(MC_DIR)/wash-router
 
 # ----- clean verbs -----
 # Explicit path lists (never rm tmp/ branches/ harbor.config test-net.py .git).
@@ -1120,15 +1132,12 @@ push:
 # Dev mode: Vite serves the shell with HMR at :5173 and proxies /ws to
 # the router at 0.0.0.0:11000. Open http://localhost:5173/ in a
 # browser. Editing files under web/shell/src triggers HMR; editing
-# Go or app sources still requires re-running `make dev`.
-DEV_APPS := /tmp/wash-dev-apps
-
+# Go or app sources still requires re-running `make dev`. The router is
+# the multicall layout (out/multicall/), matching `make run`.
 .PHONY: dev
-dev: $(OUT)/wash-router $(OUT)/wash-session $(OUT)/wash-about
-	mkdir -p $(DEV_APPS)
-	cp -f $(OUT)/wash-session $(OUT)/wash-about $(DEV_APPS)/
-	@echo "wash dev: router :11000 + Vite :5173 — open http://localhost:5173/"
+dev: wash
+	@echo "wash dev: multicall router :11000 + Vite :5173 — open http://localhost:5173/"
 	@trap 'kill 0' INT TERM EXIT; \
-	  ( WASH_APPS_DIR=$(DEV_APPS) $(OUT)/wash-router ) & \
+	  ( $(MC_DIR)/wash-router ) & \
 	  ( $(PNPM) --filter @wash/shell run dev ) & \
 	  wait

@@ -119,21 +119,25 @@ privilege primitive, expects Linux semantics).
 ```bash
 git clone https://github.com/sirmick/wash.git
 cd wash
-make wash            # build every binary into ./out/  (+ wash-display if wlroots is present)
-make run             # or: ./out/wash-router  — serves http://localhost:11000/
+make wash            # build the multicall layout into ./out/multicall/ (the shipped layout)
+make run             # or: ./out/multicall/wash-router  — serves http://localhost:11000/
 ```
 
 Open **`http://localhost:11000/`**. The session app boots
 automatically; click the launcher (bottom-left) to open apps.
 
-Prefer one file instead of twenty? Build the **multicall** binary:
+`make wash` builds one **multicall** binary (`out/multicall/wash`) with a
+`wash-<app>` symlink per app beside it — exactly what the deb/rpm/apk packages
+ship, so dev runs the same dispatch + probe paths as production. Prefer the
+per-app binaries (one standalone ELF per app under `out/`)? Build the
+**standalone** layout:
 
 ```bash
-make wash-multicall      # ./out/multicall/wash + wash-<app> symlinks beside it
-./out/multicall/wash-router   # the symlink dispatches into the one binary
+make wash-standalone     # one ELF per app under ./out/  (+ wash-display if wlroots is present)
+./out/wash-router        # serves http://localhost:11000/
 ```
 
-Everything is a `make` verb: `make wash` / `make wash-multicall` to build,
+Everything is a `make` verb: `make wash` (multicall) / `make wash-standalone` to build,
 `make run` to launch the router, `make dev` for the Vite HMR loop,
 `make unit-test` / `make e2e-test` / `make all-test`, `make all-clean`, and
 `make <arch>-<platform>-<pkg>-package` for native packages. The full list is
@@ -352,7 +356,7 @@ hot-reload. Edits to Go sources or app FE bundles need a rebuild — or
 run the router in watch mode:
 
 ```bash
-./out/wash-router --dev
+./out/multicall/wash-router --dev
 ```
 
 `--dev` watches the app binaries. Rebuild an app (`make out/wash-fm`, say)
@@ -674,13 +678,13 @@ common flows, but you can also drive any single subsystem directly:
 
 | Part | Build | Test | Prereqs |
 |---|---|---|---|
-| **Go core + apps** | `make wash` (→ `out/`) | `go test ./...`, or one package: `go test ./apps/fm/...` | Go ≥ 1.25 |
+| **Go core + apps** | `make wash` (→ `out/multicall/`) / `make wash-standalone` (→ `out/`) | `go test ./...`, or one package: `go test ./apps/fm/...` | Go ≥ 1.25 |
 | **Frontend logic units** | — | `node --test --conditions=browser <files>` (run by `make unit-test`; the `browser` condition makes Solid resolve its reactive build) | pnpm, Node ≥ 22 |
 | **Frontend components** | — | `pnpm exec vitest run` (scopes `*.ctest.tsx` via `vitest.config.ts`) | pnpm |
 | **End-to-end** | `make test-app` (builds the world + test app) | `make e2e-test` *or* `pnpm -C e2e exec playwright test` | Chromium (auto-downloaded first run); free inotify instances (`e2e/global-setup.ts` pre-flights this) |
 | **VM-backed e2e** (net, real microvm) | `make net-test` — builds the openwrt + distro + Alpine images, then runs the gates | `net-vm-gate` / `net-vm-multi` drive the wash UI served over the wire by a booted VM; they self-skip until the artifacts + host are ready | `/dev/kvm` + `qemu-system-x86_64` + Docker |
 | **Distro packages** | `make all-package` (or one leaf: `make amd64-ubuntu24-wash-package`) | runs inside the same matrix (smoke + boot + distro-integration) | Docker |
-| **wash-display** (native compositor) | `make wash` (auto when wlroots present) / `WASH_DISPLAY=1 make wash` | local smoke harness only (not in CI) — see [`wash-display/README.md`](wash-display/README.md) | CMake + system wlroots/wayland `-dev` libs |
+| **wash-display** (native compositor) | `make wash-standalone` (auto when wlroots present) / `WASH_DISPLAY=1 make wash-standalone` | local smoke harness only (not in CI) — see [`wash-display/README.md`](wash-display/README.md) | CMake + system wlroots/wayland `-dev` libs |
 | **wash-vm** (in-browser RISC-V VM) | `make -C wash-vm/image all` | `wash-vm/test/*.mjs` (ad-hoc repro scripts) | Docker only |
 
 `make unit-test` runs `go vet` + `go test` + the FE unit tiers; `make

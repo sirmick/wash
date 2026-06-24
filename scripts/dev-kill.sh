@@ -2,7 +2,8 @@
 # dev-kill — terminate every wash process this user is running.
 #
 # Catches:
-#   - the live router at /home/mick/wash/out/wash-router
+#   - the live router (out/multicall/wash-router by default, or the
+#     standalone out/wash-router)
 #   - its app children (session, fm, about, term, test) wherever
 #     they were execed from
 #   - leftover binaries from e2e runs (paths under /tmp/wash-e2e-apps-*)
@@ -29,7 +30,7 @@ set -euo pipefail
 # after their app role, so a bare process-name pkill misses
 # e2e-spawned copies whose paths differ from the dev tree.
 
-pkill -9 -f 'out/wash-router'                      2>/dev/null || true
+pkill -9 -f 'out/(multicall/)?wash-router'         2>/dev/null || true
 pkill -9 -f 'wash-(session|fm|term|about|test|bulk)'    2>/dev/null || true
 pkill -9 -f 'wash-e2e-apps'                        2>/dev/null || true
 pkill -9 -f 'tee.*wash-router\.log'                2>/dev/null || true

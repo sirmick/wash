@@ -6,11 +6,11 @@
 # requires a hard kill + sleep first.
 #
 # Sequence:
-#   1. make TEST_APP=1 all      (unless --no-build)
+#   1. make TEST_APP=1 multicall   (unless --no-build) — the SHIPPED layout
 #   2. dev-kill.sh
-#   3. (apps auto-discovered next to the wash-router binary)
+#   3. (apps auto-discovered next to the wash-router symlink in out/multicall/)
 #   4. (optionally) fm-seed.sh into the sandbox root
-#   5. spawn wash-router in background, tee-ing /tmp/wash-router.log
+#   5. spawn out/multicall/wash-router in background, tee-ing /tmp/wash-router.log
 #   6. wait for "listening on" line, then return
 #
 # Flags:
@@ -77,10 +77,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# 1. Build.
+# 1. Build the multicall layout (the shipped one) so the live dev router
+# exercises the same argv[0]-dispatch + exec-probe paths as production.
 if [[ "$build" == "1" ]]; then
-  (cd "$REPO" && make TEST_APP=1 all)
+  (cd "$REPO" && make TEST_APP=1 multicall)
 fi
+ROUTER_BIN="$REPO/out/multicall/wash-router"
 
 # 2. Kill any running wash processes.
 "$REPO/scripts/dev-kill.sh"
@@ -121,12 +123,12 @@ env_kv=()
 
 if [[ "$tail_log" == "1" ]]; then
   echo "dev-restart: foreground tail of $LOG"
-  exec env "${env_kv[@]}" "$REPO/out/wash-router" "${args[@]}" 2>&1 | tee -a "$LOG"
+  exec env "${env_kv[@]}" "$ROUTER_BIN" "${args[@]}" 2>&1 | tee -a "$LOG"
 fi
 
 # Background launch — wait for "listening on" before returning so
 # the caller can immediately start using the router.
-nohup env "${env_kv[@]}" "$REPO/out/wash-router" "${args[@]}" >>"$LOG" 2>&1 &
+nohup env "${env_kv[@]}" "$ROUTER_BIN" "${args[@]}" >>"$LOG" 2>&1 &
 router_pid=$!
 
 for _ in $(seq 1 50); do
