@@ -1,0 +1,74 @@
+// Terminal robustness soak (docs/PTY_ROBUST.md).
+//
+// The terminal must never hang. Two stressors:
+//   1. Reload churn — repeated reloads stack/zombie shells and re-run the
+//      channel-ownership migration (Fix A). After every reload the terminal
+//      must accept input and echo it back (the head shell owns the channel;
+//      a stale owner can't black-hole input, and live forwarding resumes).
+//   2. Heavy output burst — output far exceeding the 64 KiB credit window
+//      must fully drain without hanging (Fix B: the forward never blocks the
+//      child shell), and the terminal stays interactive afterward.
+
+import { test, expect } from '../fixtures/router';
+
+async function openTerminal(page) {
+  await page.locator('button[title="Apps"]').click();
+  await page
+    .locator('[data-testid="start-menu"]')
+    .getByRole('button', { name: 'Terminal', exact: true })
+    .click();
+  const term = page.locator('wash-app-term');
+  await expect(term).toBeVisible();
+  await expect(term).toContainText(/\$|#|>/, { timeout: 10_000 });
+  return term;
+}
+
+test.describe('terminal robustness soak', () => {
+  test('recovers across reload churn — input + output keep working', async ({ page, router }) => {
+    test.setTimeout(90_000);
+    await page.goto(router.url);
+    await openTerminal(page);
+
+    // Reload repeatedly. The wash-term pty is router-supervised and
+    // survives each reload; the new shell becomes the foreground head and
+    // must adopt the terminal channel (Fix A). Proof per round: a unique
+    // command typed after the reload echoes back — both the input path
+    // (head ownership) and the output path (reattach replay + live
+    // forwarding) recovered. A hang here would time out.
+    for (let i = 0; i < 8; i++) {
+      await page.reload();
+      const term = page.locator('wash-app-term');
+      await expect(term).toBeVisible();
+      await expect(term).toContainText(/\$|#|>/, { timeout: 10_000 });
+
+      const marker = `wash-churn-${i}-${Date.now()}`;
+      await term.click();
+      await page.keyboard.type(`echo ${marker}`);
+      await page.keyboard.press('Enter');
+      await expect(term).toContainText(marker, { timeout: 10_000 });
+    }
+  });
+
+  test('heavy output burst drains without hanging the terminal', async ({ page, router }) => {
+    test.setTimeout(60_000);
+    await page.goto(router.url);
+    const term = await openTerminal(page);
+
+    // Emit a burst that dwarfs the 64 KiB per-channel credit window many
+    // times over. If the forward ever blocked on credit/scheduler the
+    // child shell would stall and the final line would never appear.
+    const tag = `burst-${Date.now()}`;
+    await term.click();
+    await page.keyboard.type(`for i in $(seq 1 20000); do echo ${tag}-$i; done; echo ${tag}-END`);
+    await page.keyboard.press('Enter');
+
+    // The terminating marker proves the whole burst drained.
+    await expect(term).toContainText(`${tag}-END`, { timeout: 30_000 });
+
+    // And the terminal is still fully interactive after the burst.
+    const after = `wash-after-burst-${Date.now()}`;
+    await page.keyboard.type(`echo ${after}`);
+    await page.keyboard.press('Enter');
+    await expect(term).toContainText(after, { timeout: 10_000 });
+  });
+});

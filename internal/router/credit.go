@@ -100,6 +100,38 @@ func (c *ChannelCredit) Reserve(ctx context.Context, n uint64) error {
 	}
 }
 
+// TryReserve is the non-blocking variant of Reserve: it debits n bytes
+// and returns true only if the full n is available right now. It never
+// blocks and never waits for a grant. Used by the terminal forward path
+// (docs/PTY_ROBUST.md, Fix B) so a wedged FE — one that has stopped
+// granting credit — can never block the producing goroutine and thereby
+// stall the child shell. A false return means "FE is behind"; the caller
+// holds the bytes in the scrollback ring and resyncs on recovery rather
+// than shipping a torn stream.
+func (c *ChannelCredit) TryReserve(n uint64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sent+n <= c.granted {
+		c.sent += n
+		return true
+	}
+	return false
+}
+
+// Refund returns n previously-reserved bytes to the window. Used when a
+// reserve succeeded but the subsequent enqueue could not proceed (the
+// scheduler queue was full), so the credit was debited for bytes that
+// were never sent. Clamps at zero — never underflows.
+func (c *ChannelCredit) Refund(n uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if n > c.sent {
+		c.sent = 0
+		return
+	}
+	c.sent -= n
+}
+
 // Grant adds n bytes of credit to the channel's budget and wakes
 // any goroutine waiting in Reserve. Returns ErrCreditOverflow if
 // the running total would wrap; the caller MAY close the channel

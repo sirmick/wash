@@ -130,6 +130,10 @@ interface WashGlobals {
   // connection via these, passing its props.origin — bare openRawChannel/
   // writeRaw above always address the LOCAL router.
   openRawChannelFor(origin: string, channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
+  // Resync (docs/PTY_ROBUST.md, Fix B): register a callback the shell runs
+  // when the router asks to reset this channel's terminal before replaying
+  // a scrollback snapshot. Returns an unsubscribe fn.
+  subscribeResyncFor(origin: string, channelID: number, onResync: () => void): () => void;
   writeRawFor(origin: string, channelID: number, bytes: Uint8Array): void;
   rawBufferedAmountFor(origin: string): number;
   // Bytes queued in the shell socket's send buffer. A bulk producer

@@ -221,24 +221,49 @@ func (inst *AppInstance) dispatch(f wire.Frame) error {
 		}
 		// Tee into the scrollback ring buffer (so a future
 		// reattaching shell can replay them) and forward to the
-		// currently-attached shell, if any.
+		// currently-attached shell, if any. The ring is byte-exact
+		// and is written unconditionally — it is the authoritative
+		// recent history that every recovery path (reattach, resync)
+		// replays from.
 		b.shellMu.Lock()
 		if b.buf != nil {
 			b.buf.Write(f.Payload)
 		}
 		sh := b.shell
+		behind := b.behind
 		b.shellMu.Unlock()
 		if sh == nil {
 			// Shell detached — bytes already captured in the buffer;
 			// the next attached shell will replay them.
 			return nil
 		}
-		// Preserve the sender app's class on the forward — if the
-		// app's SDK marked this stream Bulk (pty output), we want
-		// the FE-bound forward to inherit that. The default-Bulk
-		// path in WriteRawFrame is the right answer when the
-		// originating frame doesn't carry an explicit class bit.
-		return sh.WriteRawFrameClass(f.Channel, f.Payload, f.Class())
+		class := f.Class()
+		// Non-blocking terminal output (docs/PTY_ROBUST.md, Fix B).
+		// Credit-gated Bulk output is the wedge-prone path: a blocking
+		// Reserve here runs on the per-app read goroutine, so a wedged
+		// FE that has stopped granting credit would back-pressure all
+		// the way into the child shell's stdout and hang the terminal.
+		// Instead we forward non-blocking: on a would-block we mark the
+		// channel "behind" and suppress live output — held byte-exact
+		// in the ring — until a resync (a clean reset + realigned
+		// snapshot). We never stream past a drop: a hole mid-escape
+		// would strand the terminal in a wrong mode. Peer/noCredit and
+		// Interactive (transactional) forwards keep the lossless path.
+		if class == wire.ClassBulk && b.credit != nil && b.peerConn == nil {
+			if behind {
+				// Already desynced: ring holds the bytes; a resync
+				// (credit recovery, reattach, or the watchdog) replays.
+				return nil
+			}
+			if !sh.tryWriteRawBulk(b, f.Payload) {
+				b.shellMu.Lock()
+				b.behind = true
+				b.shellMu.Unlock()
+				inst.router.log("channel %d: FE behind — suppressing live output until resync", f.Channel)
+			}
+			return nil
+		}
+		return sh.WriteRawFrameClass(f.Channel, f.Payload, class)
 	}
 }
 

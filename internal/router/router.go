@@ -588,11 +588,21 @@ type channelBinding struct {
 	peerConn net.Conn
 	origin   string
 
-	// shellMu guards shell + buf. Held briefly during forward and
-	// rebind paths.
+	// shellMu guards shell + buf + behind. Held briefly during forward
+	// and rebind paths.
 	shellMu sync.Mutex
 	shell   *ShellSession
 	buf     *ringBuffer
+
+	// behind marks a terminal channel whose FE has stopped keeping up:
+	// a non-blocking forward (docs/PTY_ROBUST.md, Fix B) found neither
+	// credit nor scheduler room, so live output is suppressed and held
+	// byte-exact in buf. While behind, NO live bytes are streamed — that
+	// would ship a torn stream (a hole mid-escape leaves the terminal in
+	// a wrong mode). The flag is cleared only by a resync (a clean
+	// reset + realigned snapshot), never by merely resuming. Guarded by
+	// shellMu. Always false for peer/noCredit channels.
+	behind bool
 
 	// credit is the FE-→router flow-control ledger for this
 	// channel (docs/QOS.md §5). Bulk-class router→shell writes
@@ -1010,16 +1020,6 @@ func (r *Router) shellList() []*ShellSession {
 // of an arbitrary map-order shell is what makes a freshly-opened
 // terminal show up on the connection the user is actually looking at
 // when several shells are stacked (e.g. reconnect zombies).
-// isHead reports whether s is the router's current foreground head shell —
-// the authoritative driver for raw channels. dispatch uses it to let the live
-// connection adopt a channel whose recorded owner has gone stale (A4).
-func (s *ShellSession) isHead() bool {
-	r := s.router
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.headShell == s
-}
-
 func (r *Router) headShellOrAny() *ShellSession {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1032,6 +1032,20 @@ func (r *Router) headShellOrAny() *ShellSession {
 		return s
 	}
 	return nil
+}
+
+// isHead reports whether s is the current foreground head shell — the
+// authoritative driver of terminal channels (docs/PTY_ROBUST.md, Fix A).
+// Reads headShell under r.mu. Callers in the raw-frame dispatch path
+// MUST sample this before taking a channelBinding's shellMu: shellMu is
+// a leaf lock and r.mu must never be acquired while it is held.
+func (s *ShellSession) isHead() bool {
+	if s.router == nil {
+		return false
+	}
+	s.router.mu.Lock()
+	defer s.router.mu.Unlock()
+	return s.router.headShell == s
 }
 
 // registerApp inserts inst into the maps. It's the caller's job to
@@ -1323,6 +1337,11 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 			continue
 		}
 		b.shell = s
+		// The Bind + realigned replay below is itself a clean resync,
+		// so clear any "behind" desync flag (docs/PTY_ROBUST.md, Fix B):
+		// a reattaching shell recovers a previously-wedged channel and
+		// live forwarding resumes.
+		b.behind = false
 		var replay []byte
 		if b.buf != nil {
 			replay = b.buf.Snapshot()
@@ -1350,6 +1369,44 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 			}
 		}
 	}
+}
+
+// resyncChannel recovers a terminal channel that went "behind"
+// (docs/PTY_ROBUST.md, Fix B): it sends a channel.resync control so the
+// FE resets that terminal to a clean state, then the realigned
+// scrollback snapshot, then clears the behind flag so live forwarding
+// resumes.
+//
+// The whole sequence runs under shellMu — and the forward's ring append
+// (b.buf.Write) also holds shellMu — so the snapshot is complete as of
+// the lock and no live byte can interleave between the snapshot and the
+// resumed stream: no gap, no torn stream. All enqueues are non-blocking
+// (TrySubmit); if the scheduler can't take them right now the channel
+// stays behind and the next credit grant or the watchdog retries. A
+// retry that re-sends a reset is harmless (idempotent).
+func (r *Router) resyncChannel(b *channelBinding) {
+	b.shellMu.Lock()
+	defer b.shellMu.Unlock()
+	if !b.behind || b.shell == nil || b.peerConn != nil {
+		return
+	}
+	sh := b.shell
+	var replay []byte
+	if b.buf != nil {
+		replay = b.buf.Snapshot()
+		if b.buf.Truncated() {
+			replay = realignReplay(replay)
+		}
+	}
+	if !sh.tryWriteCtrl(wire.NewShellChannelResync(b.channelID, b.windowID, b.kind)) {
+		return // control queue full — stay behind, retry later
+	}
+	if len(replay) > 0 && !sh.tryWriteRawInteractive(b.channelID, replay) {
+		// Reset went out but the snapshot didn't fit; leave behind set so
+		// the next grant resends reset + snapshot (re-reset is harmless).
+		return
+	}
+	b.behind = false
 }
 
 // declareAppToAllShells announces inst to every attached shell via

@@ -203,30 +203,31 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 			s.router.log("shell: drop raw frame on unbound channel %d", f.Channel)
 			return nil
 		}
-		// Read head status before taking shellMu (isHead takes r.mu; never
-		// nest the two — reattachChannelsToShell holds them separately).
+		// Authoritative ownership (docs/PTY_ROBUST.md, Fix A; supersedes
+		// the RECONNECT-AUDIT A4 band-aid): the foreground head shell is
+		// the single driver of every non-peer terminal channel. A frame
+		// from the head always routes — it adopts the channel on the spot
+		// — so a stale/zombie owner (a lingering shell, or a remote-peer
+		// attach that re-shuffled ownership) can never black-hole the
+		// connection the user is looking at, the symptom behind the local
+		// terminal "going black" on connect/disconnect churn. An orphaned
+		// channel (owner==nil) is adopted by whoever drives it next. A
+		// non-head background shell's input is dropped below: the head,
+		// not a cached pointer, decides ownership. Peer (remote-relay)
+		// channels are exempt — their pump is pinned to a specific shell
+		// and must not be stolen. isHead() is sampled before shellMu
+		// because it takes r.mu, and r.mu must never be acquired while
+		// holding shellMu.
 		head := s.isHead()
 		b.shellMu.Lock()
 		owner := b.shell
 		if owner != s && b.peerConn == nil && (owner == nil || head) {
-			// Adopt this raw channel to the sending shell when either it's
-			// orphaned (owner==nil — its shell detached after the reattach
-			// pass, a reconnect race) OR we are the current foreground head.
-			// The head is the authoritative driver, so a stale/lingering
-			// owner (a zombie shell that never tore down, or a remote-peer
-			// attach that re-shuffled ownership) must not strand the live
-			// connection's frames — the symptom behind the local terminal
-			// "going black" on connect/disconnect churn (RECONNECT-AUDIT A4:
-			// raw channels bound to a single b.shell, reattach only claimed
-			// *detached* bindings). A non-head background shell still drops
-			// below. Peer (relay) channels are exempt: their pump is pinned
-			// to a specific shell and must not be stolen.
 			b.shell = s
 			owner = s
 		}
 		b.shellMu.Unlock()
 		if owner != s {
-			s.router.log("shell: drop raw frame on channel %d (owned by another shell)", f.Channel)
+			s.router.log("shell: drop raw frame on channel %d (owned by another shell, sender not head)", f.Channel)
 			return nil
 		}
 		// Remote-apps relay (docs/REMOTE.md): a peer channel's endpoint is
@@ -413,7 +414,14 @@ func (s *ShellSession) handleChannelCredit(m wire.ShellChannelCredit) error {
 		// rather than tearing down the whole shell connection.
 		s.router.log("channel %d: credit overflow, closing: %v", m.ChannelID, err)
 		s.router.closeChannel(m.ChannelID, wire.ErrCodeCreditOverflow)
+		return nil
 	}
+	// The FE granted credit — it's keeping up again. If this channel went
+	// behind during a wedge (live output suppressed to avoid a torn
+	// stream), resync it now: a clean reset + realigned snapshot, after
+	// which live forwarding resumes. No-op if the channel isn't behind.
+	// (docs/PTY_ROBUST.md, Fix B)
+	s.router.resyncChannel(b)
 	return nil
 }
 
@@ -715,6 +723,64 @@ func (s *ShellSession) WriteRawFrameClass(channelID uint32, payload []byte, clas
 		return s.Transport.WriteFrame(f)
 	}
 	return s.scheduler.Submit(context.Background(), f)
+}
+
+// tryWriteRawBulk attempts a non-blocking Bulk raw write: it reserves
+// credit and enqueues to the scheduler without ever blocking. Returns
+// false if the credit window is exhausted OR the scheduler queue is full
+// — i.e. the FE is not keeping up. The forward path (docs/PTY_ROBUST.md,
+// Fix B) treats false as "FE behind" and suppresses live output rather
+// than blocking the per-app read goroutine (which would back-pressure
+// into the child shell and hang the terminal). On a reserve-then-submit
+// failure the credit is refunded so the ledger stays accurate.
+func (s *ShellSession) tryWriteRawBulk(b *channelBinding, payload []byte) bool {
+	n := uint64(len(payload))
+	if b.credit != nil && !b.credit.TryReserve(n) {
+		return false
+	}
+	f := wire.Frame{Flags: wire.FlagEnd, Channel: b.channelID, Payload: payload}.WithClass(wire.ClassBulk)
+	if s.scheduler == nil {
+		if err := s.Transport.WriteFrame(f); err != nil {
+			if b.credit != nil {
+				b.credit.Refund(n)
+			}
+			return false
+		}
+		return true
+	}
+	if !s.scheduler.TrySubmit(f) {
+		if b.credit != nil {
+			b.credit.Refund(n)
+		}
+		return false
+	}
+	return true
+}
+
+// tryWriteCtrl enqueues a control message non-blocking. Returns false if
+// the control queue is full. Used by the resync path (docs/PTY_ROBUST.md)
+// so recovery never blocks a producer holding shellMu.
+func (s *ShellSession) tryWriteCtrl(m any) bool {
+	data, err := wire.EncodeCtrl(m)
+	if err != nil {
+		return false
+	}
+	f := wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: data}.WithClass(wire.ClassControl)
+	if s.scheduler == nil {
+		return s.Transport.WriteFrame(f) == nil
+	}
+	return s.scheduler.TrySubmit(f)
+}
+
+// tryWriteRawInteractive enqueues a raw frame at Interactive class
+// non-blocking, bypassing credit (the resync snapshot is a transactional
+// flow, like reattach replay). Returns false if the queue is full.
+func (s *ShellSession) tryWriteRawInteractive(channelID uint32, payload []byte) bool {
+	f := wire.Frame{Flags: wire.FlagEnd, Channel: channelID, Payload: payload}.WithClass(wire.ClassInteractive)
+	if s.scheduler == nil {
+		return s.Transport.WriteFrame(f) == nil
+	}
+	return s.scheduler.TrySubmit(f)
 }
 
 // drainLoop is the single FE-bound writer goroutine. Pulls frames

@@ -62,11 +62,13 @@ import {
   bindPopupChannel,
   closeRawSubscriber,
   deliverRaw,
+  deliverResync,
   deliverToInstance,
   forgetVideoChannel,
   replaceSavedStates,
   setSavedState,
   subscribeRaw,
+  subscribeResync,
 } from './api';
 import './wash-app-display';
 import { showToast } from './notify';
@@ -154,6 +156,13 @@ interface ShellChannelUnbind {
   t: 'channel.unbind';
   channel_id: number;
   reason?: string;
+}
+
+interface ShellChannelResync {
+  t: 'channel.resync';
+  channel_id: number;
+  window_id: number;
+  kind?: string;
 }
 
 interface ShellNotify {
@@ -256,6 +265,7 @@ type ShellCtrlMsg =
   | ShellPanelReadOK
   | ShellPanelReadErr
   | ShellChannelUnbind
+  | ShellChannelResync
   | ShellClipboardData
   | ShellClipboardChanged
   | ShellPeerError;
@@ -447,6 +457,16 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         } else {
           client.channelOwner.set(b.channel_id, b.window_id);
         }
+        break;
+      }
+      case 'channel.resync': {
+        // The router wants this terminal reset before it replays a
+        // realigned scrollback snapshot (it suppressed live output while
+        // the FE was behind, to avoid a torn stream — docs/PTY_ROBUST.md,
+        // Fix B). Run the channel's resync callback synchronously, BEFORE
+        // the snapshot bytes that follow on the raw channel (same WS
+        // message order), so they render into a reset terminal.
+        deliverResync(client.origin, msg.channel_id);
         break;
       }
       // asset.read / panel.read are the shell fetching its OWN assets +
@@ -978,6 +998,10 @@ declare global {
       // mis-routed to (or collided with) the local router. origin comes from
       // the app's props.origin.
       openRawChannelFor(origin: string, channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
+      // Resync (docs/PTY_ROBUST.md, Fix B): register a callback the shell
+      // runs when the router asks to reset this channel's terminal before
+      // replaying a scrollback snapshot. Returns an unsubscribe fn.
+      subscribeResyncFor(origin: string, channelID: number, onResync: () => void): () => void;
       writeRawFor(origin: string, channelID: number, bytes: Uint8Array): void;
       rawBufferedAmountFor(origin: string): number;
       // Router-held clipboard (the wash-internal clipboard every app
@@ -1204,6 +1228,9 @@ window.wash = {
   },
   openRawChannelFor(origin, channelID, onBytes) {
     return subscribeRaw(origin, channelID, onBytes);
+  },
+  subscribeResyncFor(origin, channelID, onResync) {
+    return subscribeResync(origin, channelID, onResync);
   },
   writeRawFor(origin, channelID, bytes) {
     (clientForOrigin(origin) ?? local).conn.sendRaw(channelID, bytes);

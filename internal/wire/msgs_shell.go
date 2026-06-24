@@ -64,6 +64,15 @@ const (
 	TShellChannelBind   = "channel.bind"
 	TShellChannelUnbind = "channel.unbind"
 
+	// Router → shell, "resync this terminal channel." Sent when a
+	// channel that went "behind" (FE stopped keeping up; live output was
+	// suppressed to avoid a torn stream) can deliver again. The shell
+	// resets the channel's terminal to a clean state and re-seeds its
+	// tracked modes, so the realigned scrollback snapshot that follows
+	// renders correctly instead of being concatenated mid-stream. See
+	// docs/PTY_ROBUST.md, Fix B.
+	TShellChannelResync = "channel.resync"
+
 	// Shell → router, per-channel credit grant. Lets the FE pace
 	// individual raw streams ("I'm slow rendering wash-fm — pause
 	// that channel") without affecting other channels on the same
@@ -525,6 +534,22 @@ type ShellChannelBind struct {
 // pass ChannelKindGeneric ("") for a plain byte stream.
 func NewShellChannelBind(channelID, windowID uint32, kind string) ShellChannelBind {
 	return ShellChannelBind{T: TShellChannelBind, ChannelID: channelID, WindowID: windowID, Kind: kind}
+}
+
+// ShellChannelResync tells the shell to reset the terminal bound to
+// ChannelID before the realigned scrollback snapshot that follows on the
+// raw channel (docs/PTY_ROBUST.md, Fix B). WindowID and Kind mirror the
+// channel's original bind so the shell can locate the right element.
+type ShellChannelResync struct {
+	T         string `json:"t"`
+	ChannelID uint32 `json:"channel_id"`
+	WindowID  uint32 `json:"window_id"`
+	Kind      string `json:"kind,omitempty"`
+}
+
+// NewShellChannelResync builds a channel.resync control message.
+func NewShellChannelResync(channelID, windowID uint32, kind string) ShellChannelResync {
+	return ShellChannelResync{T: TShellChannelResync, ChannelID: channelID, WindowID: windowID, Kind: kind}
 }
 
 func NewShellChannelBindBundle(channelID uint32, instanceID string) ShellChannelBind {
