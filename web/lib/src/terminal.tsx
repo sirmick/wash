@@ -1,10 +1,11 @@
 // Shared xterm.js wrapper. Owns: xterm + FitAddon construction,
 // raw-channel I/O wiring, pre-mount byte buffer, ResizeObserver
 // refit, live font (family/size) application, and a right-click
-// copy/paste/font context menu. Consumers own: tab/pane
-// orchestration, focus policy, keyboard shortcuts (passed in),
-// backend messaging, and persistence of the font choice (fed back
-// in via the fontId/fontSize props + onFont* callbacks).
+// copy/paste context menu. Consumers own: tab/pane orchestration,
+// focus policy, keyboard shortcuts (passed in), backend messaging,
+// the font choice (driven in via the fontId/fontSize props — the
+// picker now lives in the consumer's menubar, not this menu), and
+// the OSC window title (surfaced via onTitle).
 //
 // xterm and addon-fit are externalized to the shared vendor bundle
 // (web/shell/build-vendor.mjs); consumers' vite configs already
@@ -13,12 +14,12 @@
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import type { ITheme } from '@xterm/xterm';
-import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
-import type { Component, JSX } from 'solid-js';
+import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
+import type { Component } from 'solid-js';
 
 import { tokens } from './tokens';
 import { washAssetUrl } from './assets';
-import { Menu, MenuItem, MenuSeparator } from './menu';
+import { Menu, MenuItem } from './menu';
 import { washCopyText, washPasteText } from './clipboard';
 import { washAppearance, onAppearanceChange } from './packs';
 
@@ -236,13 +237,12 @@ export interface TerminalProps {
   customKeyHandler?: (ev: KeyboardEvent) => boolean;
   onResize?: (cols: number, rows: number) => void;
   onReady?: (api: TerminalAPI) => void;
+  // onTitle fires with the terminal's OSC window title (ESC]0;…/ESC]2;…)
+  // whenever the running program sets it — used by the term app to
+  // label the tab. Empty string when the program clears the title.
+  onTitle?: (title: string) => void;
   // contextMenu enables the right-click Copy/Paste menu (default on).
-  // The font controls (size stepper + family list) appear in that
-  // menu only when onFontIdChange is also supplied, so the consumer
-  // can persist the choice.
   contextMenu?: boolean;
-  onFontIdChange?: (id: string) => void;
-  onFontSizeChange?: (px: number) => void;
   // initialCols/initialRows open the fresh xterm at a specific grid
   // instead of fitting to the container — set them to the pty's
   // current size on reattach so the scrollback replay renders at the
@@ -469,6 +469,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
         props.onInput?.(bytes);
       }
     });
+    // OSC window title (set by the shell's PROMPT_COMMAND, vim, ssh, …)
+    // bubbles to the consumer so it can label the tab.
+    if (props.onTitle) term.onTitleChange((t) => props.onTitle?.(t));
 
     // PuTTY-style select = copy: xterm keeps its own selection model
     // (not a DOM selection), so on selection-end we push the selected
@@ -626,12 +629,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
     setMenu(null);
   };
 
-  const showFontMenu = () => !!props.onFontIdChange;
-  const activeFontId = () => props.fontId ?? TERM_DEFAULT_FONT_ID;
-  const stepSize = (delta: number) => {
-    props.onFontSizeChange?.(clampSize((props.fontSize ?? TERM_DEFAULT_FONT_SIZE) + delta));
-  };
-
   return (
     <>
       <div
@@ -658,42 +655,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
               data-testid="term-ctx-paste"
               onClick={doPaste}
             />
-            <Show when={showFontMenu()}>
-              <MenuSeparator />
-              <div style={sizeRowStyle}>
-                <span style={{ flex: 1 }}>Size</span>
-                <button
-                  type="button"
-                  data-testid="term-ctx-size-dec"
-                  style={stepBtnStyle}
-                  onClick={() => stepSize(-1)}
-                >
-                  −
-                </button>
-                <span data-testid="term-ctx-size-val" style={sizeValStyle}>
-                  {effectiveSize()}
-                </span>
-                <button
-                  type="button"
-                  data-testid="term-ctx-size-inc"
-                  style={stepBtnStyle}
-                  onClick={() => stepSize(1)}
-                >
-                  +
-                </button>
-              </div>
-              <MenuSeparator />
-              <For each={TERM_FONTS}>
-                {(f) => (
-                  <MenuItem
-                    label={f.label}
-                    data-testid={`term-ctx-font-${f.id}`}
-                    trailing={activeFontId() === f.id ? <span style={{ opacity: 0.9 }}>✓</span> : undefined}
-                    onClick={() => { props.onFontIdChange?.(f.id); setMenu(null); }}
-                  />
-                )}
-              </For>
-            </Show>
           </Menu>
         )}
       </Show>
@@ -701,34 +662,3 @@ export const Terminal: Component<TerminalProps> = (props) => {
   );
 };
 
-// ---- menu styles ----
-
-const sizeRowStyle: JSX.CSSProperties = {
-  display: 'flex',
-  'align-items': 'center',
-  gap: '6px',
-  padding: '4px 14px',
-  color: tokens.fg,
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
-};
-
-const stepBtnStyle: JSX.CSSProperties = {
-  width: '22px',
-  height: '22px',
-  display: 'inline-flex',
-  'align-items': 'center',
-  'justify-content': 'center',
-  background: tokens.bgRowSelected,
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusMd}`,
-  cursor: 'pointer',
-  'font-size': '14px',
-  'line-height': '1',
-};
-
-const sizeValStyle: JSX.CSSProperties = {
-  'min-width': '24px',
-  'text-align': 'center',
-  'font-variant-numeric': 'tabular-nums',
-};

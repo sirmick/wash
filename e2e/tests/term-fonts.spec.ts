@@ -1,8 +1,8 @@
-// wash-term font + copy/paste UX: the right-click menu offers Copy,
-// Paste, a font-size stepper, and a font-family picker. Font size and
-// family are window-wide (persisted in app state) and apply live to
-// xterm. Copy/paste go through the real browser clipboard so they
-// interop with the host OS.
+// wash-term font + copy/paste UX: the menubar "Font" menu offers a
+// font-size stepper and a font-family picker; the right-click menu
+// offers Copy and Paste. Font size and family are window-wide
+// (persisted in app state) and apply live to xterm. Copy/paste go
+// through the real browser clipboard so they interop with the host OS.
 
 import { test, expect } from '../fixtures/router';
 import type { Page } from '@playwright/test';
@@ -52,30 +52,32 @@ test.describe('terminal font + copy/paste menu', () => {
   test.setTimeout(25_000);
 
   test('size stepper changes xterm font size live', async ({ page, router }) => {
-    const host = await openTerminal(page, router.url);
+    await openTerminal(page, router.url);
 
     // Default is 12px.
     expect(await termOption(page, 'fontSize')).toBe(12);
 
-    await host.click({ button: 'right' });
-    await expect(page.locator('[data-testid="term-context-menu"]')).toBeVisible();
-    await expect(page.locator('[data-testid="term-ctx-size-val"]')).toHaveText('12');
+    // The font controls live in the menubar "Font" menu; the stepper
+    // keeps the menu open across clicks so several steps land in a row.
+    await page.locator('[data-testid="term-menu-font-btn"]').click();
+    await expect(page.locator('[data-testid="term-menu-font"]')).toBeVisible();
+    await expect(page.locator('[data-testid="term-menu-size-val"]')).toHaveText('12');
 
-    await page.locator('[data-testid="term-ctx-size-inc"]').click();
-    await page.locator('[data-testid="term-ctx-size-inc"]').click();
-    await expect(page.locator('[data-testid="term-ctx-size-val"]')).toHaveText('14');
+    await page.locator('[data-testid="term-menu-size-inc"]').click();
+    await page.locator('[data-testid="term-menu-size-inc"]').click();
+    await expect(page.locator('[data-testid="term-menu-size-val"]')).toHaveText('14');
     await expect.poll(() => termOption(page, 'fontSize')).toBe(14);
 
-    await page.locator('[data-testid="term-ctx-size-dec"]').click();
-    await expect(page.locator('[data-testid="term-ctx-size-val"]')).toHaveText('13');
+    await page.locator('[data-testid="term-menu-size-dec"]').click();
+    await expect(page.locator('[data-testid="term-menu-size-val"]')).toHaveText('13');
     await expect.poll(() => termOption(page, 'fontSize')).toBe(13);
   });
 
   test('picking a bundled font loads its woff2 and applies it', async ({ page, router }) => {
-    const host = await openTerminal(page, router.url);
+    await openTerminal(page, router.url);
 
-    await host.click({ button: 'right' });
-    await page.locator('[data-testid="term-ctx-font-fira-code"]').click();
+    await page.locator('[data-testid="term-menu-font-btn"]').click();
+    await page.locator('[data-testid="term-menu-font-fira-code"]').click();
 
     // The woff2 loads asynchronously; xterm swaps to the Fira stack
     // only once the FontFace resolves.

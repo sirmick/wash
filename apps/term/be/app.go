@@ -31,6 +31,7 @@ import (
 	osuser "os/user"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/pty"
@@ -119,9 +120,29 @@ var assetsFS embed.FS
 type state struct {
 	mu       sync.Mutex
 	sessions map[uint32]*pty.Session // by channel id
+	// statusSent dedupes the tab_status poll: the last status key we
+	// pushed per channel, so an idle tab stays off the wire (we only
+	// send when root/ssh/user actually flips). Cleared on tab close.
+	statusSent map[uint32]string
 }
 
 var st state
+
+// hostName is the short box name ("ai", domain stripped) shown in the
+// term status line ("bash as root on ai"). Resolved once — it can't
+// change under a running process.
+var (
+	hostnameOnce sync.Once
+	hostnameVal  string
+)
+
+func hostName() string {
+	hostnameOnce.Do(func() {
+		h, _ := os.Hostname()
+		hostnameVal = strings.SplitN(h, ".", 2)[0]
+	})
+	return hostnameVal
+}
 
 var def *sdk.AppDef
 
@@ -168,6 +189,7 @@ func init() {
 func Def() *sdk.AppDef {
 	parseFlags()
 	st.sessions = make(map[uint32]*pty.Session)
+	st.statusSent = make(map[uint32]string)
 	return def
 }
 
@@ -176,6 +198,7 @@ func Def() *sdk.AppDef {
 func run(ctx context.Context) error {
 	parseFlags()
 	st.sessions = make(map[uint32]*pty.Session)
+	st.statusSent = make(map[uint32]string)
 	return sdk.Run(ctx, def)
 }
 
@@ -210,6 +233,56 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	bus := sdk.NewBus(c)
 	registerHandlers(bus)
 	go openTab(c, windowID, 80, 24)
+	go pollTabStatus(c)
+}
+
+// pollTabStatus walks every live PTY's foreground process group once a
+// second and pushes a tab_status app_msg to the FE whenever a tab's
+// user state changes (normal/root/ssh) — the per-tab badge + status
+// line. Send-on-change keeps an idle window silent. One process serves
+// one window (InstancingMulti spawns a process per instance), so a
+// single ticker on this conn covers all of its tabs; it exits when the
+// conn closes.
+func pollTabStatus(c *sdk.Conn) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-c.Done():
+			return
+		case <-t.C:
+			st.mu.Lock()
+			ids := make([]uint32, 0, len(st.sessions))
+			sessions := make([]*pty.Session, 0, len(st.sessions))
+			for id, s := range st.sessions {
+				ids = append(ids, id)
+				sessions = append(sessions, s)
+			}
+			st.mu.Unlock()
+			for i, sess := range sessions {
+				id := ids[i]
+				fu := sess.ForegroundUser()
+				key := fu.State + "\x00" + fu.User + "\x00" + fu.Target
+				st.mu.Lock()
+				unchanged := st.statusSent[id] == key
+				if !unchanged {
+					st.statusSent[id] = key
+				}
+				st.mu.Unlock()
+				if unchanged {
+					continue
+				}
+				_ = c.SendAppMsg(map[string]any{
+					"kind":       "tab_status",
+					"channel_id": uint64(id),
+					"state":      fu.State,
+					"user":       fu.User,
+					"host":       hostName(),
+					"target":     fu.Target,
+				})
+			}
+		}
+	}
 }
 
 // ----- bus types -----
@@ -325,6 +398,7 @@ func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
 		st.mu.Lock()
 		_, found := st.sessions[s.ID()]
 		delete(st.sessions, s.ID())
+		delete(st.statusSent, s.ID())
 		empty := len(st.sessions) == 0
 		st.mu.Unlock()
 		if !found {

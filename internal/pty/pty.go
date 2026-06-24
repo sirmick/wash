@@ -12,10 +12,13 @@ package pty
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/exec"
+	osuser "os/user"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -61,6 +64,179 @@ func (s *Session) ID() uint32 { return s.ch.ID() }
 // Cmd exposes the wrapped *exec.Cmd for callers that need pid or
 // the OS process handle (signaling, etc).
 func (s *Session) Cmd() *exec.Cmd { return s.cmd }
+
+// ForegroundUser describes the program currently in the PTY's
+// FOREGROUND process group — i.e. what the user is actually looking
+// at, not the idle login shell. wash-term polls this ~1Hz to paint a
+// per-tab badge (normal/root/ssh) and a status line.
+//
+// The classification follows the foreground program, so it flips the
+// instant someone runs `sudo`/`ssh` and flips back when that command
+// exits. State is one of:
+//
+//   - "root" — the foreground program's effective uid is 0. This also
+//     covers `sudo`/`su` while they run, since those are setuid-root.
+//   - "ssh"  — the foreground program is an ssh client. The remote
+//     user is invisible locally; Target is the ssh destination host.
+//   - "user" — anything else; User is the login name of its euid.
+type ForegroundUser struct {
+	State  string // "user" | "root" | "ssh"
+	User   string // login name of the foreground program's euid
+	Target string // ssh destination host, when State == "ssh"
+}
+
+// sshComms are the foreground program names treated as an outbound ssh
+// session. autossh/sshpass are wrappers that exec ssh but can sit in
+// the foreground long enough to be what the user means by "ssh'd out".
+var sshComms = map[string]bool{
+	"ssh": true, "mosh-client": true, "sshpass": true, "autossh": true,
+}
+
+// ForegroundUser inspects /proc for the PTY's foreground process group
+// and classifies it. Everything is best-effort: an unreadable /proc
+// entry degrades to State "user" with an empty name rather than
+// failing. No syscalls on the pty fd — the foreground pgrp is read
+// from the shell's /proc/<pid>/stat tpgid field, so the live io.Copy
+// loop on the master is never disturbed.
+func (s *Session) ForegroundUser() ForegroundUser {
+	out := ForegroundUser{State: "user"}
+	if s.cmd == nil || s.cmd.Process == nil {
+		return out
+	}
+	shellPid := s.cmd.Process.Pid
+	// The foreground pgrp leader's pid == the pgid TIOCGPGRP would
+	// return; reading it from the shell's tpgid avoids touching the fd.
+	fg := foregroundPgrp(shellPid)
+	if fg <= 0 {
+		fg = shellPid
+	}
+	euid := procEUID(fg)
+	out.User = userName(euid)
+	switch {
+	case euid == 0:
+		out.State = "root"
+	case sshComms[procComm(fg)]:
+		out.State = "ssh"
+		out.Target = sshTarget(fg)
+	}
+	return out
+}
+
+// foregroundPgrp returns the foreground process group of pid's
+// controlling terminal — field 8 (tpgid) of /proc/<pid>/stat. The comm
+// field (2) is parenthesized and may itself contain spaces and ')', so
+// we slice past the LAST ')' before splitting; after it the fields are
+// state ppid pgrp session tty_nr tpgid …, making tpgid index 5.
+func foregroundPgrp(pid int) int {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return -1
+	}
+	rp := strings.LastIndexByte(string(data), ')')
+	if rp < 0 {
+		return -1
+	}
+	f := strings.Fields(string(data)[rp+1:])
+	if len(f) < 6 {
+		return -1
+	}
+	n, err := strconv.Atoi(f[5])
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+// procEUID reads the effective uid (2nd field of the Uid: line) from
+// /proc/<pid>/status. Returns -1 when unavailable. The Uid: line stays
+// world-readable even for a setuid-root child (sudo), so the root case
+// is detected without privilege.
+func procEUID(pid int) int {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return -1
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "Uid:") {
+			continue
+		}
+		f := strings.Fields(line)
+		if len(f) >= 3 {
+			if n, err := strconv.Atoi(f[2]); err == nil {
+				return n
+			}
+		}
+		break
+	}
+	return -1
+}
+
+// procComm reads /proc/<pid>/comm (the program's basename).
+func procComm(pid int) string {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// userName resolves uid → login name, falling back to the numeric uid
+// (and "" for an unknown/negative uid).
+func userName(uid int) string {
+	if uid < 0 {
+		return ""
+	}
+	if u, err := osuser.LookupId(strconv.Itoa(uid)); err == nil {
+		return u.Username
+	}
+	return strconv.Itoa(uid)
+}
+
+// sshTarget extracts the destination host from an ssh client's
+// /proc/<pid>/cmdline (NUL-separated argv). It skips option flags and
+// the values of the single-letter flags that take one, returns the
+// first positional argument, and strips a leading user@. Best-effort:
+// an exotic invocation just yields "".
+func sshTarget(pid int) string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return ""
+	}
+	args := strings.Split(strings.TrimRight(string(data), "\x00"), "\x00")
+	return parseSSHTarget(args)
+}
+
+// parseSSHTarget pulls the destination host out of an ssh argv: skip
+// option flags (and the values of single-letter flags that take one),
+// return the first positional argument, and strip a leading user@.
+// Pure so it can be unit-tested without a live process.
+func parseSSHTarget(args []string) string {
+	if len(args) < 2 {
+		return ""
+	}
+	// ssh(1) single-letter options that consume the following argv.
+	const valFlags = "bcDEeFIiJLlmOopQRSWw"
+	for i := 1; i < len(args); i++ {
+		a := args[i]
+		if a == "" {
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			// "-p 2222" consumes the next arg; "-p2222" (value attached)
+			// and long/no-value flags consume nothing extra.
+			if len(a) == 2 && strings.ContainsRune(valFlags, rune(a[1])) {
+				i++
+			}
+			continue
+		}
+		host := a
+		if at := strings.LastIndex(host, "@"); at >= 0 {
+			host = host[at+1:]
+		}
+		return host
+	}
+	return ""
+}
 
 // Open spawns argv inside a fresh PTY and binds it to a new raw
 // channel on conn's window. argv[0] is exec.Command-resolved against

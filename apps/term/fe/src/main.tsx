@@ -11,8 +11,13 @@
 
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Check, Plus, X } from 'lucide-solid';
-import { Menu, MenuItem, MenuSeparator, Terminal, TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, defineWashApp, tokens } from '@wash/ui';
+import { Check, Globe, Plus, ShieldAlert, User, X } from 'lucide-solid';
+import {
+  Menu, MenuItem, MenuSeparator, Terminal,
+  TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, TERM_FONTS,
+  TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE,
+  defineWashApp, tokens,
+} from '@wash/ui';
 import type { TermModes, TerminalAPI } from '@wash/ui';
 
 interface BEMessage {
@@ -58,6 +63,16 @@ interface TabMeta {
   modes?: TermModes;
 }
 
+// TabStatus is the BE's per-tab `tab_status` poll (≈1Hz, sent only on
+// change): what the tab's foreground program is running as. Drives the
+// per-tab badge and the bottom status line. Ephemeral — never persisted.
+interface TabStatus {
+  state: 'user' | 'root' | 'ssh';
+  user: string; // login name (for the "user" state)
+  host: string; // short box name, e.g. "ai"
+  target: string; // ssh destination host (for the "ssh" state)
+}
+
 // The on-the-wire/saved schema uses snake_case to match the rest of
 // wash's JSON conventions.
 interface PersistedTabRow {
@@ -92,6 +107,10 @@ interface PersistedState {
 // flat block rather than a row of pickable controls.
 const TAB_BAR_HEIGHT = 32;
 
+// Tab labels cap here (chars) before ellipsis — a shell sets the OSC
+// title to "user@host: /long/cwd", which would otherwise stretch the tab.
+const TAB_LABEL_MAX = 12;
+
 const App: Component<{ instance: string; host: HTMLElement; origin: string }> = (props) => {
   const [tabs, setTabs] = createSignal<TabMeta[]>([]);
   const [active, setActive] = createSignal(0);
@@ -105,10 +124,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // menu; persisted like the font choice.
   const [appearance, setAppearance] = createSignal<'dark' | 'light' | undefined>(undefined);
 
-  // Menubar: which top menu is open ('edit' | 'tab' | 'theme' | null) and
-  // the viewport anchor (the clicked button's bottom-left) to paint it at.
-  const [openMenu, setOpenMenu] = createSignal<'edit' | 'tab' | 'theme' | null>(null);
+  // Menubar: which top menu is open and the viewport anchor (the clicked
+  // button's bottom-left) to paint it at.
+  const [openMenu, setOpenMenu] = createSignal<'edit' | 'tab' | 'theme' | 'font' | null>(null);
   const [menuAnchor, setMenuAnchor] = createSignal<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Per-tab live OSC title (set by the program via ESC]0;…), keyed by
+  // channel id. Kept in a side map (like tagColors) so updating a title
+  // doesn't replace the TabMeta object and remount the xterm. The tab
+  // shows this over the shell name, truncated; empty/absent = fall back
+  // to the shell basename. Ephemeral: not persisted.
+  const [tabTitles, setTabTitles] = createSignal<Map<number, string>>(new Map());
+  // Per-tab user badge/status from the BE poll (see TabStatus).
+  const [tabStatus, setTabStatus] = createSignal<Map<number, TabStatus>>(new Map());
 
   // Per-tab color tag, keyed by channel id. Kept OUT of the TabMeta
   // objects on purpose: the term-host <For> below is keyed by object
@@ -155,6 +183,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       const next = new Map(tagColors());
       next.delete(channelID);
       setTagColors(next);
+    }
+    if (tabTitles().has(channelID)) {
+      const next = new Map(tabTitles());
+      next.delete(channelID);
+      setTabTitles(next);
+    }
+    if (tabStatus().has(channelID)) {
+      const next = new Map(tabStatus());
+      next.delete(channelID);
+      setTabStatus(next);
     }
     const remaining = tabs().filter((t) => t.channelID !== channelID);
     setTabs(remaining);
@@ -241,7 +279,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // undefined while a tab is still pending (no xterm mounted yet).
   const activeApi = (): TerminalAPI | undefined => apis.get(active());
   // openMenuFor toggles the named top menu, anchoring it under the button.
-  const openMenuFor = (id: 'edit' | 'tab' | 'theme', ev: MouseEvent) => {
+  const openMenuFor = (id: 'edit' | 'tab' | 'theme' | 'font', ev: MouseEvent) => {
     if (openMenu() === id) { setOpenMenu(null); return; }
     const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
     setMenuAnchor({ x: r.left, y: r.bottom + 2 });
@@ -251,6 +289,67 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // run wraps a menu action so the menu closes before it fires (and focus
   // returns to the terminal, so a following paste/type lands in the pty).
   const run = (fn: () => void) => () => { closeMenu(); fn(); activeApi()?.focus(); };
+
+  // stepFontSize nudges the window-wide font size within the supported
+  // range. Used by the Font menu's −/+ stepper; deliberately does NOT
+  // close the menu, so the user can step several times.
+  const stepFontSize = (delta: number) => {
+    const next = Math.max(TERM_MIN_FONT_SIZE, Math.min(TERM_MAX_FONT_SIZE, fontSize() + delta));
+    changeFontSize(next);
+  };
+
+  // ---- tab title (live OSC title, ephemeral) ----
+
+  const setTabTitle = (channelID: number, title: string) => {
+    const t = title.trim();
+    const cur = tabTitles().get(channelID) ?? '';
+    if (t === cur) return;
+    const next = new Map(tabTitles());
+    if (t) next.set(channelID, t);
+    else next.delete(channelID);
+    setTabTitles(next);
+  };
+
+  // fullLabel is the untruncated tab label (OSC title, else shell
+  // basename) — also used as the button's hover tooltip. tabLabel caps
+  // it to TAB_LABEL_MAX chars with an ellipsis so a long "user@host: cwd"
+  // title can't blow out the tab width.
+  const fullLabel = (tab: TabMeta): string =>
+    (tabTitles().get(tab.channelID) ?? '').trim() || shortShellName(tab.shell);
+  const tabLabel = (tab: TabMeta): string => {
+    const s = fullLabel(tab);
+    return s.length > TAB_LABEL_MAX ? s.slice(0, TAB_LABEL_MAX - 1) + '…' : s;
+  };
+
+  // ---- per-tab user badge + status line ----
+
+  // statusBadge is the small icon shown in a tab and in the status bar:
+  // red shield = root, blue globe = ssh, muted user = normal. color
+  // overrides the default (e.g. white on the red root status bar).
+  const statusBadge = (s: TabStatus | undefined, color?: string): JSX.Element => {
+    if (!s) return null;
+    if (s.state === 'root') return <ShieldAlert size={12} color={color ?? tokens.accentRed} />;
+    if (s.state === 'ssh') return <Globe size={12} color={color ?? tokens.accentBlue} />;
+    return <User size={12} color={color} style={{ opacity: 0.55 }} />;
+  };
+
+  const activeStatus = (): TabStatus | undefined => tabStatus().get(active());
+  const isRootActive = (): boolean => activeStatus()?.state === 'root';
+
+  // statusText composes the bottom-bar sentence for the active tab:
+  //   ssh  → "ssh to ‘xyz’"
+  //   root → "bash as root on ai"
+  //   user → "bash as mick on ai"
+  const statusText = (): string => {
+    const tab = tabs().find((t) => t.channelID === active());
+    if (!tab) return '';
+    const shell = shortShellName(tab.shell);
+    const s = activeStatus();
+    if (!s) return shell;
+    if (s.state === 'ssh') return s.target ? `ssh to ‘${s.target}’` : 'ssh session';
+    const who = s.state === 'root' ? 'root' : s.user || 'user';
+    return s.host ? `${shell} as ${who} on ${s.host}` : `${shell} as ${who}`;
+  };
 
   // ---- BE ----
 
@@ -270,6 +369,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       case 'sessions':
         reconcile((m.sessions ?? []) as SessionRow[]);
         return;
+      case 'tab_status': {
+        const id = Number(m.channel_id);
+        const state = String(m.state);
+        const next = new Map(tabStatus());
+        next.set(id, {
+          state: state === 'root' || state === 'ssh' ? state : 'user',
+          user: String(m.user ?? ''),
+          host: String(m.host ?? ''),
+          target: String(m.target ?? ''),
+        });
+        setTabStatus(next);
+        return;
+      }
     }
   };
 
@@ -458,6 +570,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         >
           Theme
         </button>
+        <button
+          type="button"
+          data-testid="term-menu-font-btn"
+          style={menuBarBtnStyle(openMenu() === 'font')}
+          onClick={(ev) => openMenuFor('font', ev)}
+        >
+          Font
+        </button>
       </div>
       <Show when={openMenu() === 'edit'}>
         <Menu x={menuAnchor().x} y={menuAnchor().y} data-testid="term-menu-edit" onDismiss={closeMenu}>
@@ -511,6 +631,30 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             trailing={appearance() === 'light' ? <Check size={12} /> : undefined}
             onClick={run(() => changeAppearance('light'))}
           />
+        </Menu>
+      </Show>
+      <Show when={openMenu() === 'font'}>
+        <Menu x={menuAnchor().x} y={menuAnchor().y} data-testid="term-menu-font" onDismiss={closeMenu}>
+          {/* Size stepper: clicks stay inside the menu so it doesn't
+              close, letting the user step several times and watch the
+              live terminal reflow. */}
+          <div style={sizeRowStyle}>
+            <span style={{ flex: 1 }}>Size</span>
+            <button type="button" data-testid="term-menu-size-dec" style={stepBtnStyle} onClick={() => stepFontSize(-1)}>−</button>
+            <span data-testid="term-menu-size-val" style={sizeValStyle}>{fontSize()}</span>
+            <button type="button" data-testid="term-menu-size-inc" style={stepBtnStyle} onClick={() => stepFontSize(1)}>+</button>
+          </div>
+          <MenuSeparator />
+          <For each={TERM_FONTS}>
+            {(f) => (
+              <MenuItem
+                label={f.label}
+                data-testid={`term-menu-font-${f.id}`}
+                trailing={fontId() === f.id ? <Check size={12} /> : undefined}
+                onClick={run(() => changeFontId(f.id))}
+              />
+            )}
+          </For>
         </Menu>
       </Show>
       <div data-testid="term-tabbar" style={tabBarStyle}>
@@ -588,13 +732,20 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 }}
               >
                 <span
+                  data-testid={`term-tab-badge-${tab.channelID}`}
+                  style={{ display: 'inline-flex', 'align-items': 'center', 'flex-shrink': 0 }}
+                >
+                  {statusBadge(tabStatus().get(tab.channelID))}
+                </span>
+                <span
+                  title={fullLabel(tab)}
                   style={{
                     overflow: 'hidden',
                     'text-overflow': 'ellipsis',
                     'white-space': 'nowrap',
                   }}
                 >
-                  {shortShellName(tab.shell)}
+                  {tabLabel(tab)}
                 </span>
                 <span
                   data-testid={`term-tab-close-${tab.channelID}`}
@@ -674,8 +825,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   fontId={fontId()}
                   fontSize={fontSize()}
                   appearanceOverride={appearance()}
-                  onFontIdChange={changeFontId}
-                  onFontSizeChange={changeFontSize}
+                  onTitle={(t) => setTabTitle(tab.channelID, t)}
                   initialCols={tab.init?.cols}
                   initialRows={tab.init?.rows}
                   initialModes={tab.modes}
@@ -698,6 +848,31 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             );
           }}
         </For>
+      </div>
+      <div
+        data-testid="term-statusbar"
+        style={{
+          display: 'flex',
+          'align-items': 'center',
+          gap: '6px',
+          height: '20px',
+          padding: '0 8px',
+          'flex-shrink': 0,
+          'border-top': `1px solid ${tokens.borderMenu}`,
+          // Splash of red when the active tab is root — a standing
+          // "you are root here" cue, not just the badge.
+          background: isRootActive() ? tokens.accentRed : tokens.bgMenu,
+          color: isRootActive() ? '#ffffff' : tokens.fg,
+          font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+          'white-space': 'nowrap',
+          overflow: 'hidden',
+          'user-select': 'none',
+        }}
+      >
+        <span style={{ display: 'inline-flex', 'align-items': 'center', 'flex-shrink': 0 }}>
+          {statusBadge(activeStatus(), isRootActive() ? '#ffffff' : undefined)}
+        </span>
+        <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis' }}>{statusText()}</span>
       </div>
     </>
   );
@@ -769,6 +944,38 @@ const addBtnStyle: JSX.CSSProperties = {
   cursor: 'pointer',
   font: `14px ${tokens.fontMono}`,
   opacity: 0.8,
+};
+
+// Font menu size-stepper row (moved here from the terminal's old
+// right-click menu).
+const sizeRowStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'center',
+  gap: '6px',
+  padding: '4px 14px',
+  color: tokens.fg,
+  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+};
+
+const stepBtnStyle: JSX.CSSProperties = {
+  width: '22px',
+  height: '22px',
+  display: 'inline-flex',
+  'align-items': 'center',
+  'justify-content': 'center',
+  background: tokens.bgRowSelected,
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusMd}`,
+  cursor: 'pointer',
+  'font-size': '14px',
+  'line-height': '1',
+};
+
+const sizeValStyle: JSX.CSSProperties = {
+  'min-width': '24px',
+  'text-align': 'center',
+  'font-variant-numeric': 'tabular-nums',
 };
 
 // ---- custom element ----
