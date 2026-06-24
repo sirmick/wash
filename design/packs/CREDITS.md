@@ -26,7 +26,7 @@ Vectorized from an AI-generated Australian Aboriginal dot-painting — sun over
 the water, green hinterland, fish + crocodile, a winding river. Traced at the
 highest `vtracer` setting (`--mode polygon --filter_speckle 1
 --color_precision 8 --gradient_step 2`, ~43.5 k shapes). A post-pass
-(`design/packs/circlify.py`) replaces every round blob (~33.5 k of them) with
+(`design/packs/circlify.py`) replaces ~90% of the shapes (~39.8 k round blobs) with
 a real SVG `<circle>` — so the dots are true vector dots — protecting only the
 genuinely elongated shapes (the river, the animal outlines/eyes) and the large
 background fills, honoring vtracer's per-shape `translate()` and preserving

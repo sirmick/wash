@@ -27,7 +27,7 @@ for m in path_re.finditer(src):
         pts=sps[0];xs=[p[0] for p in pts];ys=[p[1] for p in pts]
         w=max(xs)-min(xs);h=max(ys)-min(ys);big=max(w,h);small=min(w,h)
         asp=small/big if big>0 else 0;fr=area(pts)/(w*h) if w*h>0 else 0
-        if 3<=big<=46 and asp>=0.5 and fr>=0.42:
+        if 3<=big<=70 and asp>=0.42 and fr>=0.32:
             cx=(max(xs)+min(xs))/2+tx;cy=(max(ys)+min(ys))/2+ty;r=(w+h)/4*RF
             elems.append(f'<circle cx="{round(cx,1)}" cy="{round(cy,1)}" r="{round(r,1)}" fill="{fill}"/>');nc+=1;done=True
     if not done:

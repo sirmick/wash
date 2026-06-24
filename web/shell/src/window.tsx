@@ -419,7 +419,8 @@ export function FloatingWindow(props: WindowProps) {
           color: `var(--wash-titlebar-fg, ${tokens.fg})`,
           cursor: 'move',
           'user-select': 'none',
-          'font-size': '13px',
+          // Window title uses the title type style (Chicago in Copland, etc.).
+          font: tokens.type.titleSm,
         }}
       >
         {props.win.icon && (

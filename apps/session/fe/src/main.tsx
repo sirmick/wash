@@ -1662,7 +1662,9 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
         'border-radius': tokens.radiusMd,
         cursor: 'pointer',
         'max-width': '220px',
-        font: tokens.type.textMd,
+        // Window name on the start bar uses the title type (matches the
+        // window's own titlebar — Chicago in Copland, etc.).
+        font: tokens.type.titleSm,
         'flex-shrink': 0,
         opacity: minimized() ? 0.6 : 1,
         'font-style': minimized() ? 'italic' : 'normal',
