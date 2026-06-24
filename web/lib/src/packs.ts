@@ -25,6 +25,7 @@
 // `wallpapers/<id>.svg` + a scheme.
 
 import { tokens } from './tokens';
+import { washAssetUrl } from './assets';
 
 export interface Pack {
   /** Stable id stored in desktop.json (`pack` field). */
@@ -56,6 +57,51 @@ export interface Pack {
    * falls back to the served default logo (wash-logo.svg).
    */
   startIconSVG?: string;
+  /**
+   * Optional bundled web fonts this pack wants loaded. Each entry names
+   * a CSS family (the same name the pack's `--wash-font-*` var
+   * references) and the woff2 asset path(s). applyScheme registers them
+   * via the FontFace API — the transport-agnostic path that also works
+   * in the in-browser VM, where a plain CSS `url()` can't reach the
+   * router's asset FS (same reason the terminal loads its fonts this
+   * way). A pack that only references system-installed families omits
+   * this. See web/shell/public/fonts/ for the bundled woff2.
+   */
+  fonts?: PackFont[];
+}
+
+/** A bundled web font a pack loads on apply. */
+export interface PackFont {
+  /** CSS family name — must match what the pack's --wash-font-* var uses. */
+  family: string;
+  /** Regular (400) woff2 asset path, no leading slash (e.g. `fonts/X.woff2`). */
+  url: string;
+  /** Optional bold (700) woff2 asset path. */
+  boldUrl?: string;
+}
+
+// Module-level dedupe so a font loads once across pack switches /
+// multiple applyScheme calls (the same shape the terminal uses for its
+// own bundled fonts). Keyed by family name.
+const loadedPackFonts = new Set<string>();
+
+/**
+ * Register a pack's bundled fonts via the FontFace API. Idempotent and
+ * fire-and-forget: a failed load just leaves the family unregistered, so
+ * the CSS font stack falls through to the next family. No-op under SSR /
+ * where the Font Loading API is absent.
+ */
+function loadPackFonts(pack: Pack): void {
+  if (!pack.fonts || typeof document === 'undefined' || !('fonts' in document)) return;
+  for (const f of pack.fonts) {
+    if (loadedPackFonts.has(f.family)) continue;
+    loadedPackFonts.add(f.family);
+    const faces = [new FontFace(f.family, `url(${washAssetUrl(f.url)})`, { weight: '400' })];
+    if (f.boldUrl) faces.push(new FontFace(f.family, `url(${washAssetUrl(f.boldUrl)})`, { weight: '700' }));
+    Promise.all(faces.map((face) => face.load().then((ld) => document.fonts.add(ld)))).catch(() => {
+      loadedPackFonts.delete(f.family); // allow a later retry
+    });
+  }
 }
 
 // Midnight's palette IS the tokens.ts default: every color token is
@@ -276,8 +322,11 @@ const copland: Pack = {
     '--wash-taskbar-bg': '#cccccc',
     // Desktop info banner sits over the black 1997 wallpaper → light text.
     '--wash-banner-fg': '#e8e8f0',
-    // Classic Mac type + a raised light top edge on the taskbar (3D pop).
-    '--wash-font-sans': 'Geneva, "Lucida Grande", Verdana, Helvetica, sans-serif',
+    // Classic Mac type — Chicago, the original System UI face. We bundle
+    // "Sysfont C" (Alina Sava's OFL revival of Susan Kare's 1984 Chicago;
+    // see `fonts` below + web/shell/public/fonts/Sysfont-LICENSE.txt) and
+    // fall back to the installed-Mac stack while it loads / if it fails.
+    '--wash-font-sans': '"Sysfont C", Geneva, "Lucida Grande", Verdana, Helvetica, sans-serif',
     '--wash-font-mono': 'Monaco, "Courier New", monospace',
     '--wash-taskbar-top': '#ffffff',
     // Start menu sits flush in the bottom-left corner, rising straight off
@@ -286,6 +335,7 @@ const copland: Pack = {
     '--wash-startmenu-bottom': '40px',
   },
   wallpaper: 'wallpapers/copland.svg',
+  fonts: [{ family: 'Sysfont C', url: 'fonts/Sysfont-Regular.woff2' }],
 };
 
 // Oslo — the Nord palette (arctic blue-grey) + a vectorized Nordic
@@ -343,8 +393,94 @@ const oslo: Pack = {
   wallpaper: 'wallpapers/oslo.svg',
 };
 
+// Dreamtime — an Australian Aboriginal dot-painting pack. A LIGHT theme:
+// strong, saturated colors lifted straight off the artwork (golden-ochre
+// sun, burnt orange, turquoise/teal sea, emerald hills, terracotta red)
+// sitting on a warm sandy-cream window background, with deep earth-brown
+// text. The wallpaper is a vectorized dot-painting of a sunrise over the
+// coast — sun, ocean swirls, golden beach with animal tracks, green
+// hinterland. Bundles the rounded-geometric **Quicksand** (OFL) for the
+// chrome, echoing the painting's concentric dots. Strong colors on a
+// lighter ground, as requested.
+const dreamtime: Pack = {
+  id: 'dreamtime',
+  name: 'Dreamtime',
+  appearance: 'light',
+  scheme: {
+    '--wash-bg-window': '#f3e7cf', // warm sand
+    '--wash-bg-menu': '#eeddbf',
+    '--wash-bg-inset': '#e6d3ac', // sunken (deeper warm)
+    '--wash-bg-canvas': '#fbf4e6', // editor/terminal — warm paper white
+    '--wash-bg-row': 'transparent',
+    '--wash-bg-row-hover': '#ead7af',
+    '--wash-bg-row-selected': '#f0c873', // golden-ochre sun (dark text reads)
+    '--wash-bg-backdrop': 'rgba(40,24,8,0.35)',
+    '--wash-bg-drop-target': '#bfe3df', // shallow turquoise
+    '--wash-border-menu': '#d6bd8c',
+    '--wash-border-window': '#c19f66',
+    '--wash-border-focus': '#0f8a8a', // strong teal
+    '--wash-border-drop-target': '#0f8a8a',
+    '--wash-fg': '#3a2412', // deep earth brown
+    '--wash-fg-muted': '#7a5a38',
+    '--wash-fg-dim': '#a3855c',
+    '--wash-bg-danger': '#f4d4cc',
+    '--wash-border-danger': '#c0563f',
+    '--wash-fg-danger': '#a52f1c',
+    '--wash-bg-success': '#d8e8c4',
+    '--wash-fg-success': '#3a7a2a',
+    '--wash-bg-warning': '#f6e2b0',
+    '--wash-fg-warning': '#9a6c10',
+    '--wash-bg-info': '#c9e6e3',
+    '--wash-fg-info': '#136f78',
+    '--wash-bg-neutral': '#e4d3ad',
+    '--wash-bg-denied': '#f1dcb0',
+    '--wash-border-denied': '#bd8c3a',
+    '--wash-sev-error': '#b8341d',
+    '--wash-sev-warn': '#9a6c10',
+    '--wash-sev-notice': '#136f78',
+    '--wash-sev-info': '#4a3624',
+    '--wash-sev-debug': '#9a7c52',
+    '--wash-accent-red': '#c0392b', // terracotta red
+    '--wash-accent-orange': '#e07b1f', // burnt orange
+    '--wash-accent-amber': '#e6a817', // golden sun
+    '--wash-accent-lime': '#8fae2e',
+    '--wash-accent-green': '#3f8f3a', // emerald hinterland
+    '--wash-accent-teal': '#13988c',
+    '--wash-accent-cyan': '#1497a8', // turquoise sea
+    '--wash-accent-blue': '#1f6f9c', // deep ocean
+    '--wash-accent-indigo': '#3a5a9c',
+    '--wash-accent-violet': '#7a4fa3',
+    '--wash-accent-magenta': '#b83a7a',
+    '--wash-accent-pink': '#d2628f',
+    // Chrome: a golden-ochre active caption (the sun) with deep-brown text,
+    // a sandy inactive caption — both light enough for one dark titlebar fg.
+    '--wash-titlebar-active': '#e8b653',
+    '--wash-titlebar-inactive': '#e7d4ab',
+    '--wash-titlebar-fg': '#3a2412',
+    '--wash-taskbar-bg': '#e7d4ab',
+    // Desktop info banner sits over the bright wallpaper → dark text reads
+    // on the sandy beach / sky better than light here.
+    '--wash-banner-fg': '#2a1c0e',
+    // Rounded chrome to match Quicksand's geometry and the painting's dots.
+    '--wash-radius-sm': '5px',
+    '--wash-radius-md': '8px',
+    '--wash-radius-lg': '12px',
+    '--wash-radius-xl': '16px',
+    // Quicksand for the chrome (bundled below).
+    '--wash-font-sans': '"Quicksand", ui-rounded, "Segoe UI", system-ui, sans-serif',
+  },
+  wallpaper: 'wallpapers/dreamtime.svg',
+  fonts: [
+    {
+      family: 'Quicksand',
+      url: 'fonts/Quicksand-Regular.woff2',
+      boldUrl: 'fonts/Quicksand-Bold.woff2',
+    },
+  ],
+};
+
 /** All built-in packs, in gallery order. Midnight is first / default. */
-export const packs: Pack[] = [midnight, tokyo, seoul, copland, oslo];
+export const packs: Pack[] = [midnight, tokyo, seoul, copland, oslo, dreamtime];
 
 export const defaultPackId = 'midnight';
 
@@ -375,6 +511,8 @@ export function applyScheme(el: HTMLElement, pack: Pack): void {
   // own palette, plus native form controls / scrollbars via color-scheme.
   el.style.setProperty('--wash-appearance', pack.appearance);
   el.style.setProperty('color-scheme', pack.appearance);
+  // Kick any bundled web fonts this pack references (fire-and-forget).
+  loadPackFonts(pack);
 }
 
 /** The active pack appearance, read off document.documentElement (set by
