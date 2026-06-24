@@ -588,11 +588,21 @@ type channelBinding struct {
 	peerConn net.Conn
 	origin   string
 
-	// shellMu guards shell + buf. Held briefly during forward and
-	// rebind paths.
+	// shellMu guards shell + buf + behind. Held briefly during forward
+	// and rebind paths.
 	shellMu sync.Mutex
 	shell   *ShellSession
 	buf     *ringBuffer
+
+	// behind marks a terminal channel whose FE has stopped keeping up:
+	// a non-blocking forward (docs/PTY_ROBUST.md, Fix B) found neither
+	// credit nor scheduler room, so live output is suppressed and held
+	// byte-exact in buf. While behind, NO live bytes are streamed — that
+	// would ship a torn stream (a hole mid-escape leaves the terminal in
+	// a wrong mode). The flag is cleared only by a resync (a clean
+	// reset + realigned snapshot), never by merely resuming. Guarded by
+	// shellMu. Always false for peer/noCredit channels.
+	behind bool
 
 	// credit is the FE-→router flow-control ledger for this
 	// channel (docs/QOS.md §5). Bulk-class router→shell writes
@@ -1327,6 +1337,11 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 			continue
 		}
 		b.shell = s
+		// The Bind + realigned replay below is itself a clean resync,
+		// so clear any "behind" desync flag (docs/PTY_ROBUST.md, Fix B):
+		// a reattaching shell recovers a previously-wedged channel and
+		// live forwarding resumes.
+		b.behind = false
 		var replay []byte
 		if b.buf != nil {
 			replay = b.buf.Snapshot()

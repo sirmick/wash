@@ -714,6 +714,38 @@ func (s *ShellSession) WriteRawFrameClass(channelID uint32, payload []byte, clas
 	return s.scheduler.Submit(context.Background(), f)
 }
 
+// tryWriteRawBulk attempts a non-blocking Bulk raw write: it reserves
+// credit and enqueues to the scheduler without ever blocking. Returns
+// false if the credit window is exhausted OR the scheduler queue is full
+// — i.e. the FE is not keeping up. The forward path (docs/PTY_ROBUST.md,
+// Fix B) treats false as "FE behind" and suppresses live output rather
+// than blocking the per-app read goroutine (which would back-pressure
+// into the child shell and hang the terminal). On a reserve-then-submit
+// failure the credit is refunded so the ledger stays accurate.
+func (s *ShellSession) tryWriteRawBulk(b *channelBinding, payload []byte) bool {
+	n := uint64(len(payload))
+	if b.credit != nil && !b.credit.TryReserve(n) {
+		return false
+	}
+	f := wire.Frame{Flags: wire.FlagEnd, Channel: b.channelID, Payload: payload}.WithClass(wire.ClassBulk)
+	if s.scheduler == nil {
+		if err := s.Transport.WriteFrame(f); err != nil {
+			if b.credit != nil {
+				b.credit.Refund(n)
+			}
+			return false
+		}
+		return true
+	}
+	if !s.scheduler.TrySubmit(f) {
+		if b.credit != nil {
+			b.credit.Refund(n)
+		}
+		return false
+	}
+	return true
+}
+
 // drainLoop is the single FE-bound writer goroutine. Pulls frames
 // from the scheduler in strict-priority order and writes them to
 // Transport. Exits on scheduler.Close (graceful) or transport write

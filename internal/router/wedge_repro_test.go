@@ -180,13 +180,113 @@ func TestWedge_BackgroundShellInputDropped(t *testing.T) {
 
 // TestWedge_OutputToWedgedFE — (M2, Fix B) the credit wedge. Forwarding
 // terminal OUTPUT to an FE that has stopped granting credit (wedged but
-// socket-alive) must not block the producing path forever — today
-// WriteRawFrame's Reserve(context.Background()) does exactly that,
-// back-pressuring into the child shell. Pinned here; unskipped when the
-// resync-frame output path lands.
+// socket-alive) must NOT block the producing path — a blocking Reserve
+// on the per-app read goroutine back-pressures into the child shell and
+// hangs the terminal. The non-blocking forward returns promptly, holds
+// the bytes byte-exact in the ring, and marks the channel "behind" so no
+// torn live stream is shipped; recovery is a resync.
 func TestWedge_OutputToWedgedFE(t *testing.T) {
-	t.Skip("M2 (Fix B): non-blocking resync output not yet implemented — see docs/PTY_ROBUST.md")
+	r := NewRouter(Config{}, NewRegistry(), func(string, ...any) {})
+
+	// A wedged FE: attached, head, but never reads/grants credit.
+	s, _, cleanup := newTestShellSession(t)
+	s.router = r
+	defer cleanup()
+	r.registerShell(s)
+	setHead(r, s)
+
+	inst := &AppInstance{AppID: "com.wash.term", InstanceID: "i-term", router: r}
+	const channelID = 9
+	b := &channelBinding{
+		channelID: channelID,
+		kind:      wire.ChannelKindGeneric,
+		app:       inst,
+		shell:     s,
+		buf:       newRingBuffer(ChannelScrollbackBytes),
+		credit:    NewChannelCredit(0), // FE has granted nothing
+	}
+	r.registerChannel(b)
+
+	// The child shell produces output. The forward (per-app read
+	// goroutine) MUST return promptly — blocking here is the hang.
+	payload := []byte("hello from the shell\n")
+	done := make(chan error, 1)
+	go func() {
+		done <- inst.dispatch(wire.Frame{Flags: wire.FlagEnd, Channel: channelID, Payload: payload}.WithClass(wire.ClassBulk))
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("forward returned error: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("forward BLOCKED on a wedged FE — the child shell would hang")
+	}
+
+	// Bytes preserved byte-exact in the ring (recoverable on resync);
+	// channel marked behind so no torn live stream is shipped.
+	b.shellMu.Lock()
+	behind := b.behind
+	b.shellMu.Unlock()
+	if !behind {
+		t.Error("channel not marked behind after FE wedge")
+	}
+	if got := b.buf.Snapshot(); string(got) != string(payload) {
+		t.Errorf("ring snapshot = %q, want %q", got, payload)
+	}
 }
+
+// TestWedge_BehindClearedOnReattach — (M2, Fix B) a reattach recovers a
+// wedged channel: its Bind + realigned replay is a clean resync, so the
+// behind flag clears and live forwarding resumes.
+func TestWedge_BehindClearedOnReattach(t *testing.T) {
+	r := NewRouter(Config{}, NewRegistry(), func(string, ...any) {})
+
+	s1, _, c1 := newTestShellSession(t)
+	s1.router = r
+	defer c1()
+	r.registerShell(s1)
+
+	b := &channelBinding{
+		channelID: 11,
+		kind:      wire.ChannelKindGeneric,
+		shell:     s1,
+		buf:       newRingBuffer(ChannelScrollbackBytes),
+		credit:    NewChannelCredit(0),
+	}
+	r.registerChannel(b)
+	b.shellMu.Lock()
+	b.behind = true // wedged under s1
+	b.shellMu.Unlock()
+
+	// A fresh shell attaches and reattaches channels — the replay it
+	// receives is a clean resync.
+	s2, fe2, c2 := newTestShellSession(t)
+	s2.router = r
+	defer c2()
+	go func() { // drain s2's FE side so reattach writes don't block
+		for {
+			if _, err := fe2.ReadFrame(); err != nil {
+				return
+			}
+		}
+	}()
+	r.registerShell(s2)
+	r.reattachChannelsToShell(s2)
+
+	b.shellMu.Lock()
+	behind := b.behind
+	owner := b.shell
+	b.shellMu.Unlock()
+	if behind {
+		t.Error("behind not cleared by reattach — channel stays frozen after recovery")
+	}
+	if owner != s2 {
+		t.Errorf("channel owner = %p, want reattached s2 %p", owner, s2)
+	}
+}
+
+// TestWedge_SlowClientHeadOfLine — (M3, Fix C) one never-reading WS
 
 // TestWedge_SlowClientHeadOfLine — (M3, Fix C) one never-reading WS
 // client must not block the single per-shell drainLoop and thereby hang
