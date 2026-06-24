@@ -24,12 +24,17 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/login"
+	"github.com/sirmick/wash/internal/mdns"
 )
 
 const (
 	defaultListen     = "0.0.0.0:10000"
 	systemSecretPath  = "/etc/wash/secret.key"
 	userSecretSubpath = "wash/secret.key"
+	// advertiseSSHPort is the SSH port we announce over mDNS as the
+	// remote-apps connect target. The conventional 22; matches the
+	// per-session router's advertisement so the two are byte-identical.
+	advertiseSSHPort = 22
 )
 
 // defaultSecretPath picks /etc/wash/secret.key when wash-login runs
@@ -268,6 +273,26 @@ func Run(args []string) int {
 
 	logger.Printf("wash-login %s listening on %s (cookie-secure=%v cookie-ttl=%s)",
 		version.Version, *listen, *cookieSecure, *cookieTTL)
+
+	// Advertise this box on the LAN so a peer's wash-connect can discover it
+	// even with nobody logged in. The per-session router (com.wash.remote)
+	// also advertises, but only once a user has a live session — login is
+	// always up, so without this an idle multi-user box is invisible.
+	// Advertise-only: browsing for peers happens in each user's connect
+	// window. Best-effort — a socket failure is logged, never fatal — and
+	// honours WASH_DISCOVERY_NO_ADVERTISE via HostServiceInfo. Two identical
+	// advertisers on one box (login + an active session's router) is fine:
+	// mDNS expects multiple responders and a peer dedups by instance.
+	if adv := mdns.HostServiceInfo(advertiseSSHPort); adv != nil {
+		if mdnsSrv, err := mdns.New(mdns.Options{Advertise: adv, Logf: logger.Printf}); err != nil {
+			logger.Printf("discovery: mdns advertise failed: %v (continuing without it)", err)
+		} else {
+			logger.Printf("discovery: advertising host=%q ips=%v on _wash._tcp.local", adv.Instance, adv.IPv4)
+			defer mdnsSrv.Close()
+		}
+	} else {
+		logger.Printf("discovery: NOT advertising (no routable IPv4, or WASH_DISCOVERY_NO_ADVERTISE set)")
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
