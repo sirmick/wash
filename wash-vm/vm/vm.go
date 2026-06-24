@@ -66,8 +66,33 @@ type VM struct {
 	logPath string
 	stderr  *bytes.Buffer
 
-	mu     sync.Mutex
-	nextID uint64
+	// The control plane is single-owner: ctlLoop is the ONLY goroutine that
+	// touches ctl I/O and nextID, so neither needs a lock. Callers (WaitReady,
+	// Exec) hand a ctlReq to reqCh and wait on its reply — selecting on
+	// ctx.Done too, so a caller is never pinned to a hung guest. (The old
+	// design held a mutex across the blocking ReadFrame, so one hung guest
+	// blocked every other caller for the whole deadline; here the caller
+	// returns immediately on cancel while the owner drains the doomed request
+	// behind its deadline.)
+	reqCh     chan ctlReq
+	ctlStop   chan struct{} // closed by Close to stop the owner loop
+	ctlDone   chan struct{} // closed by the owner loop on exit
+	closeOnce sync.Once     // guards ctlStop close against a double Close
+	nextID    uint64        // owned by ctlLoop
+}
+
+// ctlReq is one control-plane exchange handed to ctlLoop. wantHello reads the
+// unsolicited boot "hello" (WaitReady) instead of issuing a command.
+type ctlReq struct {
+	cmd       string
+	wantHello bool
+	deadline  time.Time
+	reply     chan ctlResult // buffered (cap 1): owner never blocks on a gone caller
+}
+
+type ctlResult struct {
+	resp proto.Response
+	err  error
 }
 
 // Launch boots the microvm and connects the control plane. The caller must
@@ -85,6 +110,9 @@ func Launch(ctx context.Context, o Opts) (*VM, error) {
 		dir:     dir,
 		logPath: filepath.Join(dir, "console.log"),
 		stderr:  &bytes.Buffer{},
+		reqCh:   make(chan ctlReq),
+		ctlStop: make(chan struct{}),
+		ctlDone: make(chan struct{}),
 	}
 	ctlPath := filepath.Join(dir, "ctl.sock")
 	dataPath := filepath.Join(dir, "data.sock")
@@ -153,7 +181,79 @@ func Launch(ctx context.Context, o Opts) (*VM, error) {
 	}
 	vm.data = dconn
 	vm.dataT = wire.NewStreamTransport(dconn)
+	// Both planes are up: start the single owner of the control plane. Started
+	// here (not in the struct literal) so the error paths above — which Close
+	// before this point — never leave a loop with a half-open ctl. WaitReady/
+	// Exec are only valid after Launch returns, so nothing races the start.
+	go vm.ctlLoop()
 	return vm, nil
+}
+
+// ctlLoop is the sole owner of the control plane: it serializes every exchange
+// on ctl, so ctl and nextID need no lock. It exits when Close closes ctlStop
+// (Close also closes ctl, which unblocks any ReadFrame in flight).
+func (vm *VM) ctlLoop() {
+	defer close(vm.ctlDone)
+	for {
+		select {
+		case <-vm.ctlStop:
+			return
+		case req := <-vm.reqCh:
+			req.reply <- vm.serve(req)
+		}
+	}
+}
+
+// serve performs one control-plane exchange. Runs only on the ctlLoop
+// goroutine.
+func (vm *VM) serve(req ctlReq) ctlResult {
+	if vm.ctl == nil {
+		return ctlResult{err: fmt.Errorf("vm: control plane not connected")}
+	}
+	if req.wantHello {
+		_ = vm.ctl.SetReadDeadline(req.deadline)
+		var hello proto.Response
+		if err := proto.ReadFrame(vm.ctl, &hello); err != nil {
+			return ctlResult{err: fmt.Errorf("vm: agent not ready: %w\nconsole:\n%s", err, vm.ConsoleLog())}
+		}
+		if hello.Out != "hello" {
+			return ctlResult{err: fmt.Errorf("vm: unexpected hello %q", hello.Out)}
+		}
+		return ctlResult{resp: hello}
+	}
+	_ = vm.ctl.SetDeadline(req.deadline)
+	vm.nextID++
+	id := vm.nextID
+	if err := proto.WriteFrame(vm.ctl, proto.Request{ID: id, Cmd: req.cmd}); err != nil {
+		return ctlResult{err: fmt.Errorf("vm: write: %w", err)}
+	}
+	var resp proto.Response
+	if err := proto.ReadFrame(vm.ctl, &resp); err != nil {
+		return ctlResult{err: fmt.Errorf("vm: read: %w", err)}
+	}
+	return ctlResult{resp: resp}
+}
+
+// do submits a ctlReq and waits for its reply, returning early if ctx is
+// cancelled or the control plane is torn down. The owner goroutine still
+// completes (or deadline-fails) the submitted request — we just stop waiting.
+func (vm *VM) do(ctx context.Context, req ctlReq) (proto.Response, error) {
+	req.reply = make(chan ctlResult, 1)
+	select {
+	case vm.reqCh <- req:
+	case <-ctx.Done():
+		return proto.Response{}, ctx.Err()
+	case <-vm.ctlDone:
+		return proto.Response{}, fmt.Errorf("vm: control plane closed")
+	}
+	select {
+	case res := <-req.reply:
+		return res.resp, res.err
+	case <-ctx.Done():
+		return proto.Response{}, ctx.Err()
+	case <-vm.ctlDone:
+		return proto.Response{}, fmt.Errorf("vm: control plane closed")
+	}
 }
 
 func (vm *VM) dialCtl(ctx context.Context, path string, timeout time.Duration) (net.Conn, error) {
@@ -185,46 +285,20 @@ func (vm *VM) WaitReady(ctx context.Context) error {
 	if !ok {
 		deadline = time.Now().Add(30 * time.Second)
 	}
-	vm.mu.Lock()
-	defer vm.mu.Unlock()
-	if vm.ctl == nil {
-		return fmt.Errorf("vm: control plane not connected")
-	}
-	_ = vm.ctl.SetReadDeadline(deadline)
-	var hello proto.Response
-	if err := proto.ReadFrame(vm.ctl, &hello); err != nil {
-		return fmt.Errorf("vm: agent not ready: %w\nconsole:\n%s", err, vm.ConsoleLog())
-	}
-	if hello.Out != "hello" {
-		return fmt.Errorf("vm: unexpected hello %q", hello.Out)
-	}
-	return nil
+	_, err := vm.do(ctx, ctlReq{wantHello: true, deadline: deadline})
+	return err
 }
 
 // Exec runs a shell command in the guest over the control plane and returns its
-// result. One command is in flight at a time.
+// result. Commands serialize through the control-plane owner goroutine — one is
+// in flight at a time — and a cancelled ctx returns the caller immediately
+// (the owner still finishes or deadline-fails the doomed exchange).
 func (vm *VM) Exec(ctx context.Context, cmd string) (proto.Response, error) {
-	vm.mu.Lock()
-	defer vm.mu.Unlock()
-	if vm.ctl == nil {
-		return proto.Response{}, fmt.Errorf("vm: control plane not connected")
-	}
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		deadline = time.Now().Add(15 * time.Second)
 	}
-	_ = vm.ctl.SetDeadline(deadline)
-
-	vm.nextID++
-	id := vm.nextID
-	if err := proto.WriteFrame(vm.ctl, proto.Request{ID: id, Cmd: cmd}); err != nil {
-		return proto.Response{}, fmt.Errorf("vm: write: %w", err)
-	}
-	var resp proto.Response
-	if err := proto.ReadFrame(vm.ctl, &resp); err != nil {
-		return proto.Response{}, fmt.Errorf("vm: read: %w", err)
-	}
-	return resp, nil
+	return vm.do(ctx, ctlReq{cmd: cmd, deadline: deadline})
 }
 
 // ConsoleLog returns the captured guest console (ttyS0) so far.
@@ -233,8 +307,13 @@ func (vm *VM) ConsoleLog() string {
 	return string(b)
 }
 
-// Close terminates the VM and cleans up.
+// Close terminates the VM and cleans up. Safe to call more than once.
 func (vm *VM) Close() error {
+	// Stop the control-plane owner first, then close ctl to unblock any
+	// ReadFrame it's parked on so it can observe ctlStop and exit. Guarded so
+	// a double Close (e.g. a Launch error path that already Closed, plus a
+	// caller's defer) never panics on a re-close.
+	vm.closeOnce.Do(func() { close(vm.ctlStop) })
 	if vm.ctl != nil {
 		vm.ctl.Close()
 	}
