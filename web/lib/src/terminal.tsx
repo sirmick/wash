@@ -182,14 +182,46 @@ export const TERM_FONTS: TermFont[] = [
     url: 'fonts/FiraCode-Regular.woff2',
     boldUrl: 'fonts/FiraCode-Bold.woff2',
   },
-  // System stacks: no bundled woff2, so these render only when the
-  // family is installed on the client and otherwise fall back through
-  // the stack to plain monospace. JetBrains/Fira above are always
-  // available (bundled); these widen the choice at zero download cost.
+  // Bundled woff2 (web/shell/public/fonts), loaded on demand like the
+  // two above. latin subsets (~12-18KB Reg+Bold) matching the project's
+  // existing bar — xterm.js draws box-drawing/block glyphs itself, so the
+  // font doesn't need them. Licenses ship alongside each woff2.
+  {
+    id: 'source-code-pro',
+    label: 'Source Code Pro',
+    stack: '"Source Code Pro", ui-monospace, Menlo, Consolas, monospace',
+    family: 'Source Code Pro',
+    url: 'fonts/SourceCodePro-Regular.woff2',
+    boldUrl: 'fonts/SourceCodePro-Bold.woff2',
+  },
+  {
+    id: 'ibm-plex-mono',
+    label: 'IBM Plex Mono',
+    stack: '"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace',
+    family: 'IBM Plex Mono',
+    url: 'fonts/IBMPlexMono-Regular.woff2',
+    boldUrl: 'fonts/IBMPlexMono-Bold.woff2',
+  },
+  {
+    id: 'inconsolata',
+    label: 'Inconsolata',
+    stack: '"Inconsolata", ui-monospace, Menlo, Consolas, monospace',
+    family: 'Inconsolata',
+    url: 'fonts/Inconsolata-Regular.woff2',
+    boldUrl: 'fonts/Inconsolata-Bold.woff2',
+  },
+  {
+    id: 'roboto-mono',
+    label: 'Roboto Mono',
+    stack: '"Roboto Mono", ui-monospace, Menlo, Consolas, monospace',
+    family: 'Roboto Mono',
+    url: 'fonts/RobotoMono-Regular.woff2',
+    boldUrl: 'fonts/RobotoMono-Bold.woff2',
+  },
+  // System stacks: no bundled woff2 — render only when the family is
+  // installed on the client, else fall back through the stack to plain
+  // monospace. Cheap extras for users who have them.
   { id: 'cascadia-code', label: 'Cascadia Code', stack: '"Cascadia Code", "Cascadia Mono", ui-monospace, monospace' },
-  { id: 'source-code-pro', label: 'Source Code Pro', stack: '"Source Code Pro", ui-monospace, monospace' },
-  { id: 'ubuntu-mono', label: 'Ubuntu Mono', stack: '"Ubuntu Mono", ui-monospace, monospace' },
-  { id: 'dejavu-mono', label: 'DejaVu Sans Mono', stack: '"DejaVu Sans Mono", ui-monospace, monospace' },
   { id: 'menlo', label: 'Menlo / Consolas', stack: 'Menlo, Consolas, "Liberation Mono", monospace' },
 ];
 
