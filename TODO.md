@@ -128,9 +128,11 @@ P2/P3 merges).
 
 ## Test suite hygiene  (docs/TECH_DEBT.md P3)
 
-- [ ] **e2e fixed-sleep flakiness.** `viewport.spec.ts` uses
-  `waitForTimeout(280/260)` + hardcoded `rgb(...)` color asserts — replace
-  with state-based waits.
+- [x] **e2e fixed-sleep flakiness.** `viewport.spec.ts` no longer uses
+  `waitForTimeout` or `rgb(...)` color asserts: the pager cell now exposes a
+  stable `data-active` attribute (flipped synchronously by `setViewport`,
+  independent of the cam CSS transition) and the spec waits on/asserts that
+  via auto-retrying `toHaveAttribute`. Verified 4× repeat-each, green.
 - [ ] **8-worker suite timing-race flakes** (fm-be / net-vm / music /
   settings) papered over by `retries:1` + a 12s control-socket timeout —
   root-cause properly. (See memory: e2e load flakes.)

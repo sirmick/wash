@@ -1517,6 +1517,7 @@ const PagerCell: Component<{
   return (
     <div
       data-testid={`pager-cell-${props.cell.vx}-${props.cell.vy}`}
+      data-active={props.active ? 'true' : 'false'}
       style={cellStyle()}
       onClick={onCellClick}
     >

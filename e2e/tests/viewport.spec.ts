@@ -1,8 +1,19 @@
 // Virtual-desktop viewport tests: 3x3 pan camera, pager widget,
 // taskbar dblclick snap-to-viewport, Ctrl+Alt+Arrow keybinds, and
 // auto-relocation of newly-spawned windows into the current cell.
+//
+// Active-cell assertions key off the stable data-active attribute on the
+// pager cell (flipped synchronously by setViewport, independent of the cam
+// CSS transition) — Playwright auto-retries toHaveAttribute, so there are no
+// fixed sleeps and no theme-coupled rgb() color asserts to go stale.
 
 import { test, expect } from '../fixtures/router';
+import type { Page } from '@playwright/test';
+
+// The set of pager cells currently marked active (expected: exactly one).
+function activeCells(page: Page) {
+  return page.locator('[data-testid^="pager-cell-"][data-active="true"]');
+}
 
 test.describe('viewport', () => {
   // Race-prone under parallel workers + tight default timeout:
@@ -17,14 +28,10 @@ test.describe('viewport', () => {
     const pager = page.locator('[data-testid="pager"]');
     await expect(pager).toBeVisible();
     // Nine cells.
-    const cells = page.locator('[data-testid^="pager-cell-"]');
-    await expect(cells).toHaveCount(9);
-    // (0,0) is the active one: it has the accent border.
-    const active = page.locator('[data-testid="pager-cell-0-0"]');
-    const border = await active.evaluate((el) => getComputedStyle(el as HTMLElement).borderColor);
-    // Active border is the #6a7adf accent — non-active cells use #2a2a4a.
-    // Just assert it's NOT the muted color.
-    expect(border).not.toBe('rgb(42, 42, 74)');
+    await expect(page.locator('[data-testid^="pager-cell-"]')).toHaveCount(9);
+    // (0,0) is the active one; nothing else is.
+    await expect(page.locator('[data-testid="pager-cell-0-0"]')).toHaveAttribute('data-active', 'true');
+    await expect(activeCells(page)).toHaveCount(1);
   });
 
   test('click pager cell pans the camera', async ({ page, router }) => {
@@ -37,12 +44,13 @@ test.describe('viewport', () => {
 
     // Jump to cell (1, 0).
     await page.locator('[data-testid="pager-cell-1-0"]').click();
+    await expect(page.locator('[data-testid="pager-cell-1-0"]')).toHaveAttribute('data-active', 'true');
+
     // Cam transform reflects the pan. The cam wraps the For-of windows
     // in main.tsx with transform: translate(-W, 0). Solid sets the
     // initial transform to translate(0px, 0px) — so getComputedStyle
-    // never reports 'none'. A 260ms CSS transition then interpolates
-    // toward the new value; poll on the tx component reaching the
-    // target instead of just "anything but none".
+    // never reports 'none'. A CSS transition then interpolates toward the
+    // new value; poll on the tx component reaching the target.
     const cam = page.locator('[data-testid="wash-cam"]');
     const innerW = await page.evaluate(() => window.innerWidth);
     await expect.poll(async () => {
@@ -62,22 +70,18 @@ test.describe('viewport', () => {
     await page.getByRole('button', { name: /About wash/ }).click();
     await expect(page.locator('wash-app-about')).toBeVisible();
 
-    // Pan to (2,2).
+    // Pan to (2,2); wait for the active cell to settle there.
     await page.locator('[data-testid="pager-cell-2-2"]').click();
-    // Wait for the cam transition (220ms).
-    await page.waitForTimeout(280);
+    await expect(page.locator('[data-testid="pager-cell-2-2"]')).toHaveAttribute('data-active', 'true');
 
     // About's titlebar appears in the taskbar as a pill. Dblclick it.
     // (Scoped by testid: "About" also names a sidebar section, so a bare
     // button:has-text("About") could match that section's header instead.)
     const pill = page.locator('[data-testid="taskbar-pill"]').filter({ hasText: 'About' }).first();
     await pill.dblclick();
-    await page.waitForTimeout(280);
 
-    // Active cell is back to (0,0).
-    const active = page.locator('[data-testid="pager-cell-0-0"]');
-    const border = await active.evaluate((el) => getComputedStyle(el as HTMLElement).borderColor);
-    expect(border).not.toBe('rgb(42, 42, 74)');
+    // Active cell snaps back to (0,0) where About lives.
+    await expect(page.locator('[data-testid="pager-cell-0-0"]')).toHaveAttribute('data-active', 'true');
   });
 
   test('Ctrl+Alt+Right pans one viewport', async ({ page, router }) => {
@@ -85,18 +89,15 @@ test.describe('viewport', () => {
     await expect(page.locator('wash-app-session')).toBeVisible();
 
     await page.keyboard.press('Control+Alt+ArrowRight');
-    await page.waitForTimeout(280);
-    const active = page.locator('[data-testid="pager-cell-1-0"]');
-    const border = await active.evaluate((el) => getComputedStyle(el as HTMLElement).borderColor);
-    expect(border).not.toBe('rgb(42, 42, 74)');
+    await expect(page.locator('[data-testid="pager-cell-1-0"]')).toHaveAttribute('data-active', 'true');
   });
 
   test('new windows spawn in the current viewport (auto-relocate)', async ({ page, router }) => {
     await page.goto(router.url);
     await expect(page.locator('wash-app-session')).toBeVisible();
-    // Pan first.
+    // Pan first; wait for the active cell to settle.
     await page.locator('[data-testid="pager-cell-2-1"]').click();
-    await page.waitForTimeout(260);
+    await expect(page.locator('[data-testid="pager-cell-2-1"]')).toHaveAttribute('data-active', 'true');
     // Now spawn About — its rect should land inside cell (2,1)'s
     // pager preview, not in (0,0).
     await page.locator('button[title="Apps"]').click();
