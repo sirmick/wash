@@ -35,8 +35,9 @@ P2/P3 merges).
 - [x] **`bus.go classifyKind` hardcoded suffix matching.** Replaced the
   `strings.HasSuffix` ladder with a declared `bulkKindSuffixes` slice
   (source of truth) that the function iterates; test locks the list.
-- [ ] **`internal/router/control.go controlReq` catch-all union.** One
-  struct serves two protocols (launch/msg + priv.run); split.
+- [x] **`internal/router/control.go controlReq` catch-all union.** Split
+  into `controlHeader` (dispatch peek), `launchMsgReq`, and `privRunReq`
+  via a two-phase decode; wire JSON unchanged. New dispatch routing test.
 - [x] **Collapse the two ringbuf impls.** Unified into a single
   `ringBuffer` (`internal/router/ringbuf.go`): added an internal mutex
   (needed by spawn's two concurrent pipe writers), made `Write` satisfy

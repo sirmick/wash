@@ -89,19 +89,33 @@ func (r *Router) ListenControl(ctx context.Context) error {
 	}
 }
 
-// controlReq is the union of fields any v0.1 control message may
-// carry. Unused fields stay zero for a given op.
-type controlReq struct {
-	T          string          `json:"t"`
+// controlHeader is the tiny dispatch peek: the only field
+// handleControl needs to pick a verb. The full line bytes are then
+// re-decoded into the verb-specific request type — cheap, and it
+// keeps each protocol's fields out of the others' structs.
+type controlHeader struct {
+	T string `json:"t"`
+}
+
+// launchMsgReq carries the fields for the simple `launch` / `msg`
+// verbs. (launch uses only AppID; msg uses the rest.)
+type launchMsgReq struct {
 	AppID      string          `json:"app_id,omitempty"`
 	InstanceID string          `json:"instance_id,omitempty"`
 	Data       json.RawMessage `json:"data,omitempty"`
 	AwaitID    string          `json:"await_id,omitempty"`
 	TimeoutMs  int             `json:"timeout_ms,omitempty"`
+}
 
-	// Fields used by priv.run (wash-sudo). The control handler
-	// promotes the connection to a streaming cliSession and routes
-	// these into wash-priv as a normal cross-app message.
+// privRunReq carries the fields for priv.run (wash-sudo) streaming.
+// The control handler promotes the connection to a streaming
+// cliSession and routes these into wash-priv as a normal cross-app
+// message. The follow-up frames (priv.stdin / priv.cancel / ...) on
+// the upgraded conn reuse this type — they only populate T and
+// StreamBytes.
+type privRunReq struct {
+	T           string            `json:"t"`
+	AppID       string            `json:"app_id,omitempty"`
 	ReqID       string            `json:"req_id,omitempty"`
 	Argv        []string          `json:"argv,omitempty"`
 	Cwd         string            `json:"cwd,omitempty"`
@@ -135,19 +149,42 @@ func (r *Router) handleControl(ctx context.Context, conn net.Conn) {
 	if err != nil {
 		return
 	}
-	var req controlReq
-	if err := json.Unmarshal(line, &req); err != nil {
+	// Two-phase decode: peek `t` to pick the verb, then re-decode the
+	// same bytes into the verb-specific request struct.
+	var hdr controlHeader
+	if err := json.Unmarshal(line, &hdr); err != nil {
 		writeControlResponse(conn, map[string]any{
 			"t": "error", "code": "bad_request", "msg": err.Error(),
 		})
 		return
 	}
-	switch req.T {
+	switch hdr.T {
 	case "launch":
+		var req launchMsgReq
+		if err := json.Unmarshal(line, &req); err != nil {
+			writeControlResponse(conn, map[string]any{
+				"t": "error", "code": "bad_request", "msg": err.Error(),
+			})
+			return
+		}
 		r.controlLaunch(ctx, conn, req.AppID)
 	case "msg":
+		var req launchMsgReq
+		if err := json.Unmarshal(line, &req); err != nil {
+			writeControlResponse(conn, map[string]any{
+				"t": "error", "code": "bad_request", "msg": err.Error(),
+			})
+			return
+		}
 		r.controlMsg(ctx, conn, req)
 	case "priv.run":
+		var req privRunReq
+		if err := json.Unmarshal(line, &req); err != nil {
+			writeControlResponse(conn, map[string]any{
+				"t": "error", "code": "bad_request", "msg": err.Error(),
+			})
+			return
+		}
 		// priv.run upgrades the conn to a streaming session — do NOT
 		// defer close here, the handler owns the lifetime now.
 		r.controlPrivRun(ctx, conn, rd, req)
@@ -221,7 +258,7 @@ func (r *Router) controlLaunch(ctx context.Context, conn net.Conn, appID string)
 // as an APP_MSG event. With await_id set, it subscribes for the
 // matching reply on the instance's outbound app_msg stream and
 // returns it over the socket; without, it acks immediately.
-func (r *Router) controlMsg(ctx context.Context, conn net.Conn, req controlReq) {
+func (r *Router) controlMsg(ctx context.Context, conn net.Conn, req launchMsgReq) {
 	if req.InstanceID == "" {
 		writeControlResponse(conn, map[string]any{
 			"t": "error", "code": "bad_request", "msg": "missing instance_id",
@@ -321,7 +358,7 @@ func writeControlResponse(conn net.Conn, payload map[string]any) {
 // out, which wash-priv triggers via its stream → cliSession.writeJSON
 // path). The handler closes the conn on return — the outer
 // defer in handleControl actually does this.
-func (r *Router) controlPrivRun(ctx context.Context, conn net.Conn, rd *bufio.Reader, first controlReq) {
+func (r *Router) controlPrivRun(ctx context.Context, conn net.Conn, rd *bufio.Reader, first privRunReq) {
 	// Bare-invocation heuristic: `wash-sudo wash-term` (one
 	// positional, no flags, basename matches a registered app's
 	// binary) auto-promotes to spawn mode. Saves the user from
@@ -445,7 +482,7 @@ func (r *Router) controlPrivRun(ctx context.Context, conn net.Conn, rd *bufio.Re
 			}
 			return
 		}
-		var next controlReq
+		var next privRunReq
 		if err := json.Unmarshal(line, &next); err != nil {
 			continue // tolerate junk lines rather than tear the session down
 		}
