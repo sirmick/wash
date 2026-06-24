@@ -250,8 +250,29 @@ func (m *mountManager) unmount(mp string) {
 	}
 	_ = washmount.Unmount(e.server, mp)
 	e.conn.closeCurrent()
+	// Remove the now-empty mountpoint (and prune an emptied host dir up to
+	// baseDir). This is the fs-notify wash-fm needs: it watches the parent via
+	// inotify, so the rmdir fires IN_DELETE and fm drops the stale mount icon.
+	// Without it the empty dir lingers and fm keeps showing a mounted volume.
+	// os.Remove fails (EBUSY) on a still-mounted point, so it can't nuke live
+	// data — it only succeeds once the FUSE detach is real.
+	m.pruneMountDir(mp)
 	removeSavedMount(e.host, e.remoteRoot) // an explicit unmount also stops re-mounting at launch
 	m.removeMount(mp)
+}
+
+// pruneMountDir removes the unmounted mountpoint and any now-empty ancestor
+// dirs, stopping at baseDir (never removing the ~/wash/remote root itself).
+// Each rmdir is best-effort: a non-empty or busy dir just stops the walk.
+func (m *mountManager) pruneMountDir(mp string) {
+	dir := filepath.Clean(mp)
+	base := filepath.Clean(m.baseDir)
+	for dir != base && strings.HasPrefix(dir, base+string(filepath.Separator)) {
+		if err := os.Remove(dir); err != nil {
+			return // non-empty / busy / already gone — stop pruning
+		}
+		dir = filepath.Dir(dir)
+	}
 }
 
 func killCmd(cmd *exec.Cmd) {
