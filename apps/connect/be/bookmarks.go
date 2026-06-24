@@ -17,12 +17,18 @@ import (
 
 const maxBookmarksBytes = 64 * 1024
 
-// Bookmark is one saved connect target. AppID empty = host-only (connect,
-// don't auto-launch). Label is the FE's display string.
+// Bookmark is one saved connect target plus its per-host preferences.
+// Label is the FE's display string. AutoApps / AutoMounts are replayed by
+// the FE the moment the host reaches "up": each app id is launched and each
+// remote path is mounted, so a saved host can bring its working set back
+// with one Connect. AppID is the legacy single-app field (pre-AutoApps),
+// kept for on-disk back-compat; the FE migrates it into AutoApps on load.
 type Bookmark struct {
-	Host  string `json:"host"`
-	AppID string `json:"app_id,omitempty"`
-	Label string `json:"label,omitempty"`
+	Host       string   `json:"host"`
+	Label      string   `json:"label,omitempty"`
+	AutoApps   []string `json:"auto_apps,omitempty"`
+	AutoMounts []string `json:"auto_mounts,omitempty"`
+	AppID      string   `json:"app_id,omitempty"` // legacy; migrated to AutoApps
 }
 
 // bookmarksMu serializes the read-modify-write the FE drives; concurrent

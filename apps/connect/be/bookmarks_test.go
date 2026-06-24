@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -22,7 +23,7 @@ func TestBookmarksRoundTrip(t *testing.T) {
 	}
 
 	want := []Bookmark{
-		{Host: "alice@build01", AppID: "com.wash.term", Label: "term · build01"},
+		{Host: "alice@build01", Label: "term · build01", AutoApps: []string{"com.wash.term"}, AutoMounts: []string{"/home/alice"}},
 		{Host: "root@db", Label: "db"},
 	}
 	if err := saveBookmarks(want); err != nil {
@@ -36,7 +37,7 @@ func TestBookmarksRoundTrip(t *testing.T) {
 		t.Fatalf("len mismatch: got %d want %d (%v)", len(got), len(want), got)
 	}
 	for i := range want {
-		if got[i] != want[i] {
+		if !reflect.DeepEqual(got[i], want[i]) {
 			t.Errorf("bookmark[%d] = %+v, want %+v", i, got[i], want[i])
 		}
 	}
