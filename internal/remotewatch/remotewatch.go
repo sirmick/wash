@@ -359,11 +359,22 @@ type clientSub struct {
 	fswatch.Subscription
 	c      *Client
 	remote string
+	closed bool // guarded by c.mu; makes Close idempotent
 }
 
 func (s *clientSub) Close() {
 	c := s.c
 	c.mu.Lock()
+	if s.closed {
+		// Without this guard a second Close re-enters the count==0 branch and
+		// encodes a SECOND unwatch — with two live subs sharing a remote
+		// (watched[R]=2), double-closing one drives 2→1→0 across the two calls
+		// and unwatches while the sibling is still live, killing its events
+		// (TODO-sftp-mount-bugs.md Low). Mirrors feedSub's done guard.
+		c.mu.Unlock()
+		return
+	}
+	s.closed = true
 	if c.watched[s.remote] > 0 {
 		c.watched[s.remote]--
 	}

@@ -29,9 +29,18 @@ the client so the abandoned goroutine completes and releases `h.mu` promptly
 — the dedicated single-flight worker the audit suggests is no longer needed
 for correctness.
 
-**REMAINING:** the 7 **Low** items (unmount-abort path safety, go-fuse loop
-leak on wedged lazy-detach, double-Close clientSub, mount() TOCTOU, Create
-rollback, Rename posix-rename fallback, Fsync durability).
+**ALSO FIXED — all 7 Lows:** unmount verifies a fuse mount before writing an
+abort file (statfs FUSE_SUPER_MAGIC) + reaps go-fuse loop goroutines on the
+wedged lazy-detach path (abort-then-Wait, only when the abort actually
+happened); `clientSub.Close` is idempotent (no duplicate unwatch); `mount()`
+reserves the mountpoint with a placeholder under the lock (TOCTOU closed);
+`Create`/`Mkdir` roll back the new file/dir on a post-create failure; `Rename`
+falls back to plain SSH_FXP_RENAME when posix-rename is unsupported; `Fsync`
+requests real durability via `(*File).Sync()`, degrading to success on ENOSYS.
+
+**REMAINING: none from this audit.** (All 15 enumerated findings fixed; the
+broader remote deferrals — pty structural rework, remote folder picker, M2e
+durable B-router, cross-subnet discovery — live in TODO.md / docs/REMOTE.md.)
 
 ---
 

@@ -174,10 +174,22 @@ func (n *sftpNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off 
 }
 
 func (n *sftpNode) Fsync(ctx context.Context, f fs.FileHandle, _ uint32) syscall.Errno {
-	// SFTP has no fsync request in the base protocol; the data is already on its
-	// way to the server. Treat as a no-op success rather than ENOSYS, which some
-	// applications treat as fatal.
-	return 0
+	h := f.(*fileHandle)
+	// Request real server-side durability via fsync@openssh.com ((*File).Sync).
+	// A no-op fsync only guarantees the bytes were transmitted, not persisted —
+	// a weakening atomic-save editors rely on (TODO-sftp-mount-bugs.md Low).
+	errno := n.root.run(ctx, "fsync", func(cl *sftp.Client) error {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return h.f.Sync()
+	})
+	// A server without the extension answers OP_UNSUPPORTED → ENOSYS; degrade
+	// to success (data is already sent) rather than failing fsync(2), which
+	// some apps treat as fatal.
+	if errno == syscall.ENOSYS {
+		return 0
+	}
+	return errno
 }
 
 func (n *sftpNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
@@ -202,11 +214,19 @@ func (n *sftpNode) Create(ctx context.Context, name string, flags, mode uint32, 
 	}); errno != 0 {
 		return nil, nil, 0, errno
 	}
-	// SFTP OpenFile carries no mode, so set permissions after creation.
+	// SFTP OpenFile carries no mode, so set permissions after creation. If a
+	// post-create step fails, roll the new file back — otherwise Create returns
+	// an error to the app yet leaves a zero-byte default-mode file behind
+	// (TODO-sftp-mount-bugs.md Low). FUSE Create is new-file semantics (the
+	// kernel does a Lookup first), so removing p is safe.
+	rollback := func() {
+		f.Close()
+		n.root.run(ctx, "create-rollback", func(cl *sftp.Client) error { return cl.Remove(p) })
+	}
 	if errno := n.root.run(ctx, "chmod", func(cl *sftp.Client) error {
 		return cl.Chmod(p, os.FileMode(mode)&os.ModePerm)
 	}); errno != 0 {
-		f.Close()
+		rollback()
 		return nil, nil, 0, errno
 	}
 	var fi os.FileInfo
@@ -214,7 +234,7 @@ func (n *sftpNode) Create(ctx context.Context, name string, flags, mode uint32, 
 		fi, err = cl.Lstat(p)
 		return
 	}); errno != 0 {
-		f.Close()
+		rollback()
 		return nil, nil, 0, errno
 	}
 	n.root.fillAttr(fi, &out.Attr)
@@ -235,6 +255,8 @@ func (n *sftpNode) Mkdir(ctx context.Context, name string, mode uint32, out *fus
 		fi, err = cl.Lstat(p)
 		return
 	}); errno != 0 {
+		// Roll the new dir back so a failed Mkdir doesn't leave one behind.
+		n.root.run(ctx, "mkdir-rollback", func(cl *sftp.Client) error { return cl.RemoveDirectory(p) })
 		return nil, errno
 	}
 	n.root.fillAttr(fi, &out.Attr)
@@ -282,9 +304,26 @@ func (n *sftpNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 			}
 		}
 		// PosixRename atomically replaces the target if the server supports the
-		// extension; it is the right default for a rename-over-existing.
-		return cl.PosixRename(from, to)
+		// posix-rename@openssh.com extension; it is the right default for a
+		// rename-over-existing.
+		err := cl.PosixRename(from, to)
+		if isUnsupported(err) {
+			// Non-OpenSSH server without the extension answers OP_UNSUPPORTED →
+			// every mv would spuriously ENOSYS. Fall back to plain SSH_FXP_RENAME
+			// (TODO-sftp-mount-bugs.md Low). NOREPLACE is already enforced above;
+			// plain rename's clobber semantics vary by server, accepted for this
+			// rare path.
+			return cl.Rename(from, to)
+		}
+		return err
 	})
+}
+
+// isUnsupported reports whether err is the SFTP OP_UNSUPPORTED status (a
+// server that lacks the requested protocol extension).
+func isUnsupported(err error) bool {
+	var se *sftp.StatusError
+	return errors.As(err, &se) && se.Code == uint32(sftp.ErrSshFxOpUnsupported)
 }
 
 func (n *sftpNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
