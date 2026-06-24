@@ -55,6 +55,11 @@ type Scheduler struct {
 	// strict priority order via Next.
 	queues [4]chan wire.Frame
 
+	// Stats accumulates link-health counters (queue saturation, drops,
+	// throughput). Always non-nil after NewScheduler. The drain writer
+	// records egress here too (see ShellSession.drainLoop).
+	Stats *LinkStats
+
 	closeOnce sync.Once
 	closed    chan struct{}
 }
@@ -63,7 +68,7 @@ type Scheduler struct {
 // from ClassQueueSize. The returned Scheduler must be Close()'d when
 // the transport goes away to unblock any in-flight Submit calls.
 func NewScheduler() *Scheduler {
-	s := &Scheduler{closed: make(chan struct{})}
+	s := &Scheduler{closed: make(chan struct{}), Stats: &LinkStats{}}
 	for c, n := range ClassQueueSize {
 		if int(c) >= len(s.queues) {
 			continue
@@ -81,14 +86,29 @@ func NewScheduler() *Scheduler {
 // The frame's class is read from f.Class() (the class bits in the
 // flags byte set by the SDK or by router-side emitters).
 func (s *Scheduler) Submit(ctx context.Context, f wire.Frame) error {
-	q := s.queues[f.Class()]
+	c := f.Class()
+	q := s.queues[c]
 	if q == nil {
 		// Defensive: an unknown class value has no queue. Treat as
 		// Interactive — the default-safe fallback per QOS.md §3.
-		q = s.queues[wire.ClassInteractive]
+		c = wire.ClassInteractive
+		q = s.queues[c]
 	}
+	// Fast path: enqueue without blocking, sampling the resulting depth
+	// for the high-watermark.
 	select {
 	case q <- f:
+		s.Stats.sampleDepth(c, len(q))
+		return nil
+	default:
+	}
+	// Queue at capacity — record the stall, then block (the upstream
+	// backpressure signal). The count is the diagnostic: a climbing
+	// queue_full means a producer is outrunning the FE on that class.
+	s.Stats.recordQueueFull(c)
+	select {
+	case q <- f:
+		s.Stats.sampleDepth(c, len(q))
 		return nil
 	case <-s.closed:
 		return ErrSchedulerClosed
@@ -101,14 +121,18 @@ func (s *Scheduler) Submit(ctx context.Context, f wire.Frame) error {
 // is full. Useful for emitters that prefer drop to block (e.g.
 // telemetry, future Background traffic).
 func (s *Scheduler) TrySubmit(f wire.Frame) bool {
-	q := s.queues[f.Class()]
+	c := f.Class()
+	q := s.queues[c]
 	if q == nil {
-		q = s.queues[wire.ClassInteractive]
+		c = wire.ClassInteractive
+		q = s.queues[c]
 	}
 	select {
 	case q <- f:
+		s.Stats.sampleDepth(c, len(q))
 		return true
 	default:
+		s.Stats.recordDrop(c)
 		return false
 	}
 }
@@ -182,4 +206,15 @@ func (s *Scheduler) Depth(c wire.Class) int {
 		return 0
 	}
 	return len(s.queues[c])
+}
+
+// StatsSnapshot returns a plain-value copy of the link-health counters,
+// folding in the live per-class queue depths. Cheap; safe to call from
+// the stats-emitter ticker concurrently with producers and the drainer.
+func (s *Scheduler) StatsSnapshot() LinkStatsSnapshot {
+	var depth [numClasses]int
+	for c := 0; c < numClasses; c++ {
+		depth[c] = s.Depth(wire.Class(c))
+	}
+	return s.Stats.snapshot(depth)
 }

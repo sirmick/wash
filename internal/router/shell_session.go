@@ -813,5 +813,8 @@ func (s *ShellSession) drainLoop(ctx context.Context) {
 			s.scheduler.Close()
 			return
 		}
+		// Frame is on the wire — account it against its class for the
+		// link-health stats (per-class throughput).
+		s.scheduler.Stats.recordTx(f.Class(), len(f.Payload))
 	}
 }
