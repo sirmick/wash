@@ -32,8 +32,9 @@ P2/P3 merges).
   registries (`pendingOpens`, `pendingClipboardGet`, `requestIDs`/`pending`
   in bus.go) — collapse into one generic correlation helper. Touches
   concurrency; add a focused test.
-- [ ] **`bus.go classifyKind` hardcoded suffix matching.** Replace the
-  `strings.HasSuffix` ladder with a declared mapping.
+- [x] **`bus.go classifyKind` hardcoded suffix matching.** Replaced the
+  `strings.HasSuffix` ladder with a declared `bulkKindSuffixes` slice
+  (source of truth) that the function iterates; test locks the list.
 - [ ] **`internal/router/control.go controlReq` catch-all union.** One
   struct serves two protocols (launch/msg + priv.run); split.
 - [ ] **Collapse the two ringbuf impls.** `ringBuffer`

@@ -441,17 +441,26 @@ func (b *Bus) EmitToBackground(recipient wire.Recipient, kind string, payload an
 	return b.conn.SendAppMsgToBackground(recipient, out)
 }
 
-// classifyKind is the SDK-internal safety net that picks Bulk for
-// well-known streaming verb suffixes when an app called Emit instead
-// of EmitBulk. Keep the suffix list small and conservative.
+// bulkKindSuffixes are the well-known streaming verb suffixes that
+// carry large or high-frequency payloads, so classifyKind tags them
+// Bulk even when an app called Emit instead of EmitBulk. This list is
+// the source of truth — keep it small and conservative.
+var bulkKindSuffixes = []string{
+	".output",
+	".list_reply",
+	".read_reply",
+	".watch_event",
+	".stream",
+}
+
+// classifyKind is the SDK-internal safety net that picks Bulk for the
+// well-known streaming verb suffixes in bulkKindSuffixes when an app
+// called Emit instead of EmitBulk.
 func classifyKind(kind string) wire.Class {
-	switch {
-	case strings.HasSuffix(kind, ".output"),
-		strings.HasSuffix(kind, ".list_reply"),
-		strings.HasSuffix(kind, ".read_reply"),
-		strings.HasSuffix(kind, ".watch_event"),
-		strings.HasSuffix(kind, ".stream"):
-		return wire.ClassBulk
+	for _, suffix := range bulkKindSuffixes {
+		if strings.HasSuffix(kind, suffix) {
+			return wire.ClassBulk
+		}
 	}
 	return wire.ClassInteractive
 }
