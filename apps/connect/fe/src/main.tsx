@@ -33,7 +33,7 @@ interface HostState {
   status: HostStatus;
   error?: string;
   // code classifies a "down" status. "auth" means SSH refused auth under
-  // BatchMode — the cue to offer the ssh-add widget (docs/REMOTE.md §6.1).
+  // BatchMode — the cue to offer the ssh-copy-id widget (docs/REMOTE.md §6.1).
   code?: string;
 }
 
@@ -133,7 +133,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // catalogs is a per-origin snapshot kept in a plain object so a catalog
   // arriving (or emptying) re-renders the matching host's app list.
   const [catalogs, setCatalogs] = createSignal<Record<string, CatalogApp[]>>({});
-  // Interactive SSH auth (mechanism a): when the BE opens an ssh-add pty it
+  // Interactive SSH auth (mechanism a): when the BE opens an ssh-copy-id pty it
   // sends the raw channel id; we mount a Terminal on it. auth tracks the
   // host being authenticated + the channel; null = no auth in flight.
   const [auth, setAuth] = createSignal<{ host: string; channel: number } | null>(null);
@@ -189,11 +189,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         break;
       }
       case 'auth_opened':
-        // The ssh-add pty is live on m.channel_id — mount its terminal.
+        // The ssh-copy-id pty is live on m.channel_id — mount its terminal.
         setAuth({ host: String(m.host ?? ''), channel: Number(m.channel_id) });
         break;
       case 'auth_closed': {
-        // ssh-add exited (key loaded, or the user gave up). Tear the terminal
+        // ssh-copy-id exited (key installed, or the user gave up). Tear the terminal
         // down and retry the connect — if the key loaded, the BatchMode
         // connect now succeeds; if not, we land back on "auth".
         const a = auth();
@@ -285,10 +285,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   // connectHost establishes the session (the host appears under Connected
-  // when up). remote_port is sent only for a non-default port. 0 ⇒ 22.
-  const connectHost = (host: string, port?: number) => {
+  // when up). host is the dial target — pass a NAME so the supervisor lets
+  // ssh read ~/.ssh/config; addr is an optional IP fallback for when the name
+  // doesn't resolve. remote_port is sent only for a non-default port. 0 ⇒ 22.
+  const connectHost = (host: string, port?: number, addr?: string) => {
     if (!host) return;
-    send({ kind: 'connect', host, remote_port: port || 0 });
+    send({ kind: 'connect', host, addr: addr || '', remote_port: port || 0 });
   };
 
   onMount(() => {
@@ -350,15 +352,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     return bookmarks().filter((b) => !live.has(b.host));
   };
 
-  // Discovered hosts not already connected (by addr or origin) or saved — so
-  // a candidate disappears from this section the moment you act on it.
+  // Discovered hosts not already connected or saved — so a candidate
+  // disappears from this section the moment you act on it. We now connect/save
+  // candidates by NAME, but a host could equally be tracked by its IP (a
+  // manual connect, or the pre-name behaviour), so a candidate is "known" if
+  // EITHER its name or its addr matches a connected/origin/saved entry.
   const candidateOnly = () => {
     const live = connectedHostNames();
     const origins = new Set(hosts().map((h) => h.origin));
     const saved = new Set(bookmarks().map((b) => b.host));
-    return candidates().filter(
-      (c) => !live.has(c.addr) && !origins.has(c.addr) && !saved.has(c.addr),
-    );
+    const known = (s: string) => !!s && (live.has(s) || origins.has(s) || saved.has(s));
+    return candidates().filter((c) => !known(c.host) && !known(c.addr));
   };
 
   const empty = () => hosts().length === 0 && bookmarkedOnly().length === 0 && candidateOnly().length === 0;
@@ -472,8 +476,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 {(c) => (
                   <CandidateRow
                     candidate={c}
-                    onConnect={() => connectHost(c.addr, c.port)}
-                    onSave={() => addBookmark(c.addr, c.host)}
+                    onConnect={() => connectHost(c.host || c.addr, c.port, c.addr)}
+                    onSave={() => addBookmark(c.host || c.addr, c.host || c.addr)}
                   />
                 )}
               </For>
@@ -911,7 +915,7 @@ const CandidateRow: Component<{
       <Show when={props.candidate.wash}>
         <span style={candidateChipStyle} data-testid="connect-candidate-wash">wash</span>
       </Show>
-      <button type="button" onClick={props.onConnect} style={primaryBtnStyle} data-testid="connect-candidate-connect">
+      <button type="button" onClick={props.onConnect} style={rowConnectBtnStyle} data-testid="connect-candidate-connect">
         Connect
       </button>
       <button type="button" onClick={props.onSave} style={iconBtnStyle} title="Save as bookmark" data-testid="connect-candidate-save">
@@ -971,19 +975,19 @@ const AppIcon: Component<{ app: CatalogApp; size: number }> = (props) => (
   </Show>
 );
 
-// AuthOverlay hosts the ssh-add pty terminal (docs/REMOTE.md §6.1). The user
-// types their key passphrase here; ssh-add loads it into the agent and exits,
+// AuthOverlay hosts the ssh-copy-id pty terminal (docs/REMOTE.md §6.1). The
+// user enters the host's password here; ssh-copy-id installs their key and exits,
 // which the BE reports as auth_closed (driving the retry).
 const AuthOverlay: Component<{ host: string; channel: number; onCancel: () => void }> = (props) => (
   <div style={authOverlayStyle} data-testid="connect-auth">
     <div style={authHeaderStyle}>
-      <span>Unlock SSH key for <strong>{props.host}</strong> — run <code>ssh-add</code></span>
+      <span>Authorize this machine on <strong>{props.host}</strong> — enter its password</span>
       <button type="button" onClick={props.onCancel} style={iconBtnStyle} data-testid="connect-auth-cancel" title="Cancel">✕</button>
     </div>
     <div style={authTermStyle}>
       <Terminal channelId={props.channel} initialCols={80} initialRows={24} contextMenu={false} />
     </div>
-    <div style={authHintStyle}>Enter your key passphrase above. When the key loads, the connection retries automatically.</div>
+    <div style={authHintStyle}>Enter the host's password above (once). Your SSH key is installed there and the connection retries automatically.</div>
   </div>
 );
 
@@ -1331,14 +1335,32 @@ const iconBtnStyle: JSX.CSSProperties = {
   'flex-shrink': 0,
 };
 
-const authBtnStyle: JSX.CSSProperties = {
-  background: 'transparent',
-  color: tokens.accentAmber,
-  border: `1px solid ${tokens.accentAmber}`,
+// rowConnectBtnStyle is the compact, in-row primary action (candidate
+// "Connect"). The full primaryBtnStyle (7×14, the form's submit CTA) is too
+// heavy inline beside an icon button; this matches the row's scale.
+const rowConnectBtnStyle: JSX.CSSProperties = {
+  background: tokens.accentBlue,
+  color: '#fff',
+  border: 'none',
   'border-radius': `${tokens.radiusSm}`,
   cursor: 'pointer',
   font: `600 ${tokens.fontSizeSm} ${tokens.fontSans}`,
-  padding: '3px 8px',
+  padding: '4px 11px',
+  'white-space': 'nowrap',
+  'flex-shrink': 0,
+};
+// authBtnStyle is the secondary in-row action (Authenticate / Reconnect on a
+// host card). A neutral tokenised button — same shape as the compact connect
+// but outlined rather than filled — so it reads as a secondary affordance and
+// stays inside the design language (no loud standalone amber outline).
+const authBtnStyle: JSX.CSSProperties = {
+  background: 'transparent',
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}`,
+  cursor: 'pointer',
+  font: `600 ${tokens.fontSizeSm} ${tokens.fontSans}`,
+  padding: '4px 11px',
   'white-space': 'nowrap',
   'flex-shrink': 0,
 };

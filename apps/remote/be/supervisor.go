@@ -107,10 +107,20 @@ func buildSSHArgs(host, localSock, remoteSock string, port int) []string {
 	return args
 }
 
-// connect brings up (or no-ops if already up) a connection to host. port is
-// the SSH port to dial (0 == default 22); a discovered peer advertising a
-// non-default port carries it here so the dial actually reaches it.
-func (s *supervisor) connect(host string, port int) {
+// connect brings up (or no-ops if already up) a connection to host. host is
+// the connect identity AND the preferred ssh dial target — passing a NAME (not
+// a pre-resolved IP) is deliberate: ssh then consults the user's ~/.ssh/config
+// (IdentityFile, HostName, User) exactly as `ssh <name>` would. addr is the
+// mDNS-announced IP, kept only as a fallback for a plain LAN where the name
+// doesn't resolve. port is the SSH port (0 == default 22); a discovered peer
+// advertising a non-default port carries it here so the dial actually reaches it.
+func (s *supervisor) connect(host, addr string, port int) {
+	if host == "" {
+		host = addr
+	}
+	if host == "" {
+		return
+	}
 	s.mu.Lock()
 	if _, ok := s.procs[host]; ok {
 		s.mu.Unlock()
@@ -121,7 +131,7 @@ func (s *supervisor) connect(host string, port int) {
 	s.mu.Unlock()
 
 	s.setHost(host, HostState{Host: host, Origin: host, Status: StatusStarting})
-	go s.run(ctx, host, port)
+	go s.run(ctx, host, addr, port)
 }
 
 // run owns one host's connection for its whole lifetime, auto-reconnecting
@@ -130,7 +140,7 @@ func (s *supervisor) connect(host string, port int) {
 // of going dead until the user clicks Reconnect. It stops only on a user
 // disconnect (ctx cancel) or an auth failure (a key refusal won't fix itself
 // on retry — the user must authenticate, which re-issues connect).
-func (s *supervisor) run(ctx context.Context, host string, port int) {
+func (s *supervisor) run(ctx context.Context, host, addr string, port int) {
 	sock := s.sockPath(host) // A side: in a 0700 temp dir; reused across attempts
 	defer func() {
 		s.mu.Lock()
@@ -152,14 +162,29 @@ func (s *supervisor) run(ctx context.Context, host string, port int) {
 		minHealthy = 30 * time.Second
 	)
 	backoff := time.Second
+	// Prefer dialing the name (host) so ssh reads ~/.ssh/config; addr is the
+	// mDNS-announced IP we fall back to once if the name never connects (a
+	// plain LAN with no DNS / no config entry for it).
+	dial := host
+	canFallback := addr != "" && addr != host
 	for {
 		start := time.Now()
-		code, msg := s.runOnce(ctx, host, port, sock)
+		code, msg := s.runOnce(ctx, host, dial, port, sock)
 		if ctx.Err() != nil {
 			return // user-initiated disconnect; disconnect() removed the host
 		}
-		if time.Since(start) >= minHealthy {
+		healthy := time.Since(start) >= minHealthy
+		if healthy {
 			backoff = time.Second // the connection was healthy; a fresh drop reconnects fast
+		}
+		// The name never came up and we have an announced IP to try: it most
+		// likely doesn't resolve here. Switch to the IP and retry immediately,
+		// without burning a backoff on the unresolvable name. Auth failures are
+		// handled below (a wrong/missing key won't be fixed by the IP).
+		if code != "auth" && !healthy && canFallback && dial == host {
+			dial = addr
+			s.setHost(host, HostState{Host: host, Origin: host, Status: StatusStarting, Error: msg})
+			continue
 		}
 		if code == "auth" {
 			// A credential refusal won't change on retry — surface it (the FE
@@ -198,13 +223,16 @@ func (s *supervisor) run(ctx context.Context, host string, port int) {
 // block until the ssh process exits. Returns ("auth", msg) for a credential
 // refusal, ("", msg) for any other drop, or ("", "") when ctx was cancelled
 // (user disconnect). The caller decides whether to reconnect.
-func (s *supervisor) runOnce(ctx context.Context, host string, port int, sock string) (code, errMsg string) {
+// dial is the ssh target for this attempt — the name (so ssh reads
+// ~/.ssh/config) or, on fallback, the announced IP. host stays the connect
+// identity used for peer registration and published state.
+func (s *supervisor) runOnce(ctx context.Context, host, dial string, port int, sock string) (code, errMsg string) {
 	remoteSock := remoteSockPath() // B side: unique per attempt, chmod 0600 there
 
 	// ssh -L refuses to bind a unix socket whose file already exists.
 	_ = os.Remove(sock)
 
-	cmd := exec.CommandContext(ctx, s.sshPath, buildSSHArgs(host, sock, remoteSock, port)...)
+	cmd := exec.CommandContext(ctx, s.sshPath, buildSSHArgs(dial, sock, remoteSock, port)...)
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
 	if err := cmd.Start(); err != nil {
