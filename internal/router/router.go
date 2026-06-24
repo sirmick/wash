@@ -939,6 +939,16 @@ func (r *Router) shellList() []*ShellSession {
 // of an arbitrary map-order shell is what makes a freshly-opened
 // terminal show up on the connection the user is actually looking at
 // when several shells are stacked (e.g. reconnect zombies).
+// isHead reports whether s is the router's current foreground head shell —
+// the authoritative driver for raw channels. dispatch uses it to let the live
+// connection adopt a channel whose recorded owner has gone stale (A4).
+func (s *ShellSession) isHead() bool {
+	r := s.router
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.headShell == s
+}
+
 func (r *Router) headShellOrAny() *ShellSession {
 	r.mu.Lock()
 	defer r.mu.Unlock()
