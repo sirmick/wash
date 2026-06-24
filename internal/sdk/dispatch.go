@@ -220,15 +220,7 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
-		c.clipMu.Lock()
-		ch, ok := c.pendingClipboardGet[m.ReqID]
-		if ok {
-			delete(c.pendingClipboardGet, m.ReqID)
-		}
-		c.clipMu.Unlock()
-		if ok {
-			ch <- clipboardResult{mime: m.Mime, data: m.Data}
-		}
+		c.pendingClipboardGet.resolve(m.ReqID, clipboardResult{mime: m.Mime, data: m.Data})
 	case wire.TEvtClipboardChanged:
 		var m wire.EvtClipboardChanged
 		if err := json.Unmarshal(payload, &m); err != nil {
@@ -269,27 +261,11 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 // resolveRestart hands a result to the RestartApp call waiting on
 // reqID, if any. No-op for an unknown/already-resolved req_id.
 func (c *Conn) resolveRestart(reqID uint64, r restartResult) {
-	c.restartMu.Lock()
-	ch, ok := c.pendingRestart[reqID]
-	if ok {
-		delete(c.pendingRestart, reqID)
-	}
-	c.restartMu.Unlock()
-	if ok {
-		ch <- r
-	}
+	c.pendingRestart.resolve(reqID, r)
 }
 
 // resolveIngress hands a result to the PublishIngress call waiting on
 // reqID, if any. No-op for an unknown/already-resolved req_id.
 func (c *Conn) resolveIngress(reqID uint64, r ingressResult) {
-	c.ingressMu.Lock()
-	ch, ok := c.pendingIngress[reqID]
-	if ok {
-		delete(c.pendingIngress, reqID)
-	}
-	c.ingressMu.Unlock()
-	if ok {
-		ch <- r
-	}
+	c.pendingIngress.resolve(reqID, r)
 }

@@ -164,23 +164,16 @@ func (c *Conn) OpenChannelKind(ctx context.Context, windowID uint32, kind string
 // generic kind today.
 func (c *Conn) openChannelKind(ctx context.Context, windowID uint32, kind string) (*RawChannel, error) {
 	reqID := c.nextReqID.Add(1)
-	waitCh := make(chan openResult, 1)
-	c.openMu.Lock()
-	c.pendingOpens[reqID] = waitCh
-	c.openMu.Unlock()
+	waitCh := c.pendingOpens.register(reqID)
 
 	if err := c.writeCtrl(wire.NewChannelOpenKind(reqID, windowID, kind)); err != nil {
-		c.openMu.Lock()
-		delete(c.pendingOpens, reqID)
-		c.openMu.Unlock()
+		c.pendingOpens.cancel(reqID)
 		return nil, err
 	}
 
 	select {
 	case <-ctx.Done():
-		c.openMu.Lock()
-		delete(c.pendingOpens, reqID)
-		c.openMu.Unlock()
+		c.pendingOpens.cancel(reqID)
 		return nil, ctx.Err()
 	case r := <-waitCh:
 		return r.ch, r.err
@@ -210,17 +203,7 @@ func (c *Conn) lookupChannel(id uint32) *RawChannel {
 // resolveOpen delivers the open's result to the waiting OpenChannel
 // caller. Returns false if no caller is waiting (open was abandoned).
 func (c *Conn) resolveOpen(reqID uint64, result openResult) bool {
-	c.openMu.Lock()
-	waitCh, ok := c.pendingOpens[reqID]
-	if ok {
-		delete(c.pendingOpens, reqID)
-	}
-	c.openMu.Unlock()
-	if !ok {
-		return false
-	}
-	waitCh <- result
-	return true
+	return c.pendingOpens.resolve(reqID, result)
 }
 
 // channelOpenErrFromMsg builds the canonical OpenChannel error.
