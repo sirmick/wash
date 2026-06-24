@@ -99,7 +99,10 @@ func WriteProbe(w io.Writer, m Manifest, bundles []NamedBundle) error {
 func ReadProbe(data []byte) (ProbeHeader, map[string][]byte, error) {
 	nl := bytes.IndexByte(data, '\n')
 	if nl < 0 {
-		return ProbeHeader{}, nil, errors.New("probe: no header newline")
+		if len(data) == 0 {
+			return ProbeHeader{}, nil, errors.New("probe: no header newline (stdout was empty — binary exited 0 without printing a manifest; a non-app helper should reject --wash-manifest with a non-zero exit, see cmd/wash-fswatchd)")
+		}
+		return ProbeHeader{}, nil, fmt.Errorf("probe: no header newline in %d bytes of output: %q", len(data), probeSnippet(data))
 	}
 	var hdr ProbeHeader
 	if err := json.Unmarshal(data[:nl], &hdr); err != nil {
@@ -118,6 +121,17 @@ func ReadProbe(data []byte) (ProbeHeader, map[string][]byte, error) {
 		off += f.Len
 	}
 	return hdr, out, nil
+}
+
+// probeSnippet returns a short, log-safe prefix of malformed probe output
+// for inclusion in error messages. Long payloads are truncated so a
+// runaway binary can't blow up the disable reason.
+func probeSnippet(data []byte) string {
+	const max = 200
+	if len(data) > max {
+		return string(data[:max]) + "…"
+	}
+	return string(data)
 }
 
 // Surface values (WIRE.md §5.1).

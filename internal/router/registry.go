@@ -172,7 +172,9 @@ func (r *Registry) probeAndRegister(ctx context.Context, bin string) {
 	m, bundle, panel, valErr := ParseProbe(data)
 	entry := &Entry{Path: bin, Manifest: m, Bundle: bundle, PanelBundle: panel}
 	if valErr != nil {
-		entry.Reason = valErr.Error()
+		// ParseProbe's wire-level errors carry no path; prefix the binary
+		// so the disabled listing says which one failed and how.
+		entry.Reason = fmt.Sprintf("probe %s: %v", bin, valErr)
 	}
 	r.appendEntry(entry)
 }

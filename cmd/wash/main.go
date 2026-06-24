@@ -63,6 +63,15 @@ func main() {
 			os.Exit(vmloginRun(os.Args[1:]))
 		}
 	case "wash-fswatchd":
+		// Reject the router's app-probe cleanly (exit 2, matching the
+		// other non-app binaries) instead of starting the daemon, which
+		// would read empty probe stdin and exit 0 with no output — the
+		// router then logged a confusing "probe: no header newline". The
+		// standalone cmd/wash-fswatchd shim guards this too; the multicall
+		// dispatch must match.
+		if len(os.Args) >= 2 && os.Args[1] == "--wash-manifest" {
+			os.Exit(2)
+		}
 		os.Exit(fswatchd.Run(os.Args[1:]))
 	}
 
