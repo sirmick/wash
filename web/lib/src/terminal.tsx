@@ -352,6 +352,23 @@ export const Terminal: Component<TerminalProps> = (props) => {
     return false;
   };
 
+  // Resync (docs/PTY_ROBUST.md, Fix B): the router suppressed live output
+  // while this FE was behind (to avoid shipping a torn stream), and now
+  // asks us to reset before it replays a realigned scrollback snapshot.
+  // Reset the xterm to a clean state and re-seed the modes we've tracked
+  // from the byte stream, so the snapshot bytes that arrive next (on the
+  // same channel, in WS order) render correctly instead of being
+  // concatenated mid-stream and leaving the terminal in a wrong mode.
+  const onResync = () => {
+    if (!term) return;
+    term.reset();
+    const seq = modesToSeq({ dec: { ...decModes }, keypad });
+    if (seq) term.write(seq);
+  };
+  const unsubResync = channelId > 0
+    ? window.wash.subscribeResyncFor(origin, channelId, onResync)
+    : () => {};
+
   onMount(() => {
     const initialFamily = props.fontFamily ?? fontById(props.fontId).stack;
     // A restored session opens at the pty's existing grid so the
@@ -513,6 +530,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
     onCleanup(() => {
       ro.disconnect();
       unsub();
+      unsubResync();
       term?.dispose();
       term = null;
       fit = null;

@@ -357,6 +357,9 @@ func DecodeCtrl(data []byte) (any, error) {
 	case TShellChannelUnbind:
 		var m ShellChannelUnbind
 		return m, json.Unmarshal(data, &m)
+	case TShellChannelResync:
+		var m ShellChannelResync
+		return m, json.Unmarshal(data, &m)
 	case TShellChannelCredit:
 		var m ShellChannelCredit
 		return m, json.Unmarshal(data, &m)

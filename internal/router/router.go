@@ -1371,6 +1371,44 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 	}
 }
 
+// resyncChannel recovers a terminal channel that went "behind"
+// (docs/PTY_ROBUST.md, Fix B): it sends a channel.resync control so the
+// FE resets that terminal to a clean state, then the realigned
+// scrollback snapshot, then clears the behind flag so live forwarding
+// resumes.
+//
+// The whole sequence runs under shellMu — and the forward's ring append
+// (b.buf.Write) also holds shellMu — so the snapshot is complete as of
+// the lock and no live byte can interleave between the snapshot and the
+// resumed stream: no gap, no torn stream. All enqueues are non-blocking
+// (TrySubmit); if the scheduler can't take them right now the channel
+// stays behind and the next credit grant or the watchdog retries. A
+// retry that re-sends a reset is harmless (idempotent).
+func (r *Router) resyncChannel(b *channelBinding) {
+	b.shellMu.Lock()
+	defer b.shellMu.Unlock()
+	if !b.behind || b.shell == nil || b.peerConn != nil {
+		return
+	}
+	sh := b.shell
+	var replay []byte
+	if b.buf != nil {
+		replay = b.buf.Snapshot()
+		if b.buf.Truncated() {
+			replay = realignReplay(replay)
+		}
+	}
+	if !sh.tryWriteCtrl(wire.NewShellChannelResync(b.channelID, b.windowID, b.kind)) {
+		return // control queue full — stay behind, retry later
+	}
+	if len(replay) > 0 && !sh.tryWriteRawInteractive(b.channelID, replay) {
+		// Reset went out but the snapshot didn't fit; leave behind set so
+		// the next grant resends reset + snapshot (re-reset is harmless).
+		return
+	}
+	b.behind = false
+}
+
 // declareAppToAllShells announces inst to every attached shell via
 // ShellSession.declareInstance, which dedupes against a parallel
 // declareExistingAppsTo run on the same shell. Also replays the

@@ -410,7 +410,14 @@ func (s *ShellSession) handleChannelCredit(m wire.ShellChannelCredit) error {
 		// rather than tearing down the whole shell connection.
 		s.router.log("channel %d: credit overflow, closing: %v", m.ChannelID, err)
 		s.router.closeChannel(m.ChannelID, wire.ErrCodeCreditOverflow)
+		return nil
 	}
+	// The FE granted credit — it's keeping up again. If this channel went
+	// behind during a wedge (live output suppressed to avoid a torn
+	// stream), resync it now: a clean reset + realigned snapshot, after
+	// which live forwarding resumes. No-op if the channel isn't behind.
+	// (docs/PTY_ROBUST.md, Fix B)
+	s.router.resyncChannel(b)
 	return nil
 }
 
@@ -744,6 +751,32 @@ func (s *ShellSession) tryWriteRawBulk(b *channelBinding, payload []byte) bool {
 		return false
 	}
 	return true
+}
+
+// tryWriteCtrl enqueues a control message non-blocking. Returns false if
+// the control queue is full. Used by the resync path (docs/PTY_ROBUST.md)
+// so recovery never blocks a producer holding shellMu.
+func (s *ShellSession) tryWriteCtrl(m any) bool {
+	data, err := wire.EncodeCtrl(m)
+	if err != nil {
+		return false
+	}
+	f := wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: data}.WithClass(wire.ClassControl)
+	if s.scheduler == nil {
+		return s.Transport.WriteFrame(f) == nil
+	}
+	return s.scheduler.TrySubmit(f)
+}
+
+// tryWriteRawInteractive enqueues a raw frame at Interactive class
+// non-blocking, bypassing credit (the resync snapshot is a transactional
+// flow, like reattach replay). Returns false if the queue is full.
+func (s *ShellSession) tryWriteRawInteractive(channelID uint32, payload []byte) bool {
+	f := wire.Frame{Flags: wire.FlagEnd, Channel: channelID, Payload: payload}.WithClass(wire.ClassInteractive)
+	if s.scheduler == nil {
+		return s.Transport.WriteFrame(f) == nil
+	}
+	return s.scheduler.TrySubmit(f)
 }
 
 // drainLoop is the single FE-bound writer goroutine. Pulls frames

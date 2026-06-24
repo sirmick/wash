@@ -225,6 +225,31 @@ export function closeRawSubscriber(origin: Origin, channelID: number): void {
   pendingRaw.delete(key);
 }
 
+// resyncSubscribers maps an origin-scoped channel key → a callback that
+// resets the channel's terminal before a replay. The router sends a
+// channel.resync (docs/PTY_ROBUST.md, Fix B) when a terminal that went
+// "behind" can deliver again: live output was suppressed to avoid a torn
+// stream, and a clean reset + realigned snapshot now restores it. The
+// callback runs synchronously, BEFORE the snapshot bytes that follow on
+// the raw channel (same WS message order), so the snapshot renders into a
+// reset terminal. Unlike rawSubscribers there is no pending queue — a
+// resync for an unsubscribed channel is a harmless no-op.
+const resyncSubscribers = new Map<string, () => void>();
+
+export function subscribeResync(origin: Origin, channelID: number, cb: () => void): () => void {
+  const key = compoundChannelId(origin, channelID);
+  resyncSubscribers.set(key, cb);
+  return () => {
+    if (resyncSubscribers.get(key) === cb) {
+      resyncSubscribers.delete(key);
+    }
+  };
+}
+
+export function deliverResync(origin: Origin, channelID: number): void {
+  resyncSubscribers.get(compoundChannelId(origin, channelID))?.();
+}
+
 // ---- Display window ↔ video channel registry ----
 //
 // The built-in <wash-app-display> element (wash-app-display.ts) renders

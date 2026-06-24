@@ -288,6 +288,82 @@ func TestWedge_BehindClearedOnReattach(t *testing.T) {
 
 // TestWedge_SlowClientHeadOfLine — (M3, Fix C) one never-reading WS
 
+// TestWedge_ResyncOnCreditGrant — (M2, Fix B) a wedged terminal recovers
+// without a reload: once the FE grants credit again, the router sends a
+// channel.resync (FE resets the xterm) followed by the realigned
+// scrollback snapshot, and clears behind so live output resumes — no
+// torn stream, no manual reattach.
+func TestWedge_ResyncOnCreditGrant(t *testing.T) {
+	r := NewRouter(Config{}, NewRegistry(), func(string, ...any) {})
+
+	s, fe, cleanup := newTestShellSession(t)
+	s.router = r
+	defer cleanup()
+	r.registerShell(s)
+	setHead(r, s)
+
+	inst := &AppInstance{AppID: "com.wash.term", InstanceID: "i-term", router: r}
+	const channelID = 13
+	b := &channelBinding{
+		channelID: channelID,
+		kind:      wire.ChannelKindGeneric,
+		app:       inst,
+		shell:     s,
+		buf:       newRingBuffer(ChannelScrollbackBytes),
+		credit:    NewChannelCredit(0), // FE behind from the start
+	}
+	r.registerChannel(b)
+
+	// Output arrives while the FE is wedged → suppressed, held in ring.
+	payload := []byte("\x1b[32mgreen\x1b[0m prompt$ ")
+	if err := inst.dispatch(wire.Frame{Flags: wire.FlagEnd, Channel: channelID, Payload: payload}.WithClass(wire.ClassBulk)); err != nil {
+		t.Fatalf("forward: %v", err)
+	}
+	b.shellMu.Lock()
+	behind := b.behind
+	b.shellMu.Unlock()
+	if !behind {
+		t.Fatal("precondition: channel should be behind after wedge")
+	}
+
+	// FE catches up and grants credit → triggers a resync.
+	if err := s.handleChannelCredit(wire.NewShellChannelCredit(channelID, 4096)); err != nil {
+		t.Fatalf("credit grant: %v", err)
+	}
+
+	// Expect a channel.resync control then the snapshot replay.
+	sawResync, sawReplay := false, false
+	for i := 0; i < 4 && !(sawResync && sawReplay); i++ {
+		f := readWithin(t, fe, 500*time.Millisecond)
+		switch f.Channel {
+		case ChannelControl:
+			msg, err := wire.DecodeCtrl(f.Payload)
+			if err != nil {
+				t.Fatalf("decode ctrl: %v", err)
+			}
+			if rs, ok := msg.(wire.ShellChannelResync); ok && rs.ChannelID == channelID {
+				sawResync = true
+			}
+		case channelID:
+			if string(f.Payload) == string(payload) {
+				sawReplay = true
+			}
+		}
+	}
+	if !sawResync {
+		t.Error("no channel.resync control sent after credit grant")
+	}
+	if !sawReplay {
+		t.Error("snapshot not replayed after resync")
+	}
+	b.shellMu.Lock()
+	behind = b.behind
+	b.shellMu.Unlock()
+	if behind {
+		t.Error("behind not cleared after resync — live output stays suppressed")
+	}
+}
+
 // TestWedge_SlowClientHeadOfLine — (M3, Fix C) one never-reading WS
 // client must not block the single per-shell drainLoop and thereby hang
 // every other terminal on that shell. Needs a write deadline on the
