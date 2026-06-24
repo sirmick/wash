@@ -40,8 +40,10 @@ fix run-browser/run-qemu "run one or the other" comments — they're independent
 
 ### BUILD
 ```
-[✓] make wash               standalone, auto-includes wash-display if deps present (WASH_DISPLAY=0/1 forces)
-[✓] make wash-multicall     busybox layout (out/multicall/)
+[✓] make wash               multicall layout → out/ (shipped); auto-includes wash-display if deps present (WASH_DISPLAY=0/1 forces)
+[✓] make wash-standalone    per-app ELFs → out/singlecall/
+[✓] make wash-display       native C++/CMake compositor → out/wash-display
+[✓] make wash-multicall     alias of `make wash`
 ```
 ### TEST  (standalone by default; each builds its prereqs)
 ```

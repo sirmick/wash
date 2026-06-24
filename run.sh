@@ -2,11 +2,11 @@
 # run.sh — start the wash-router from out/ in --dev mode.
 #
 # Modes:
-#   --multicall (default)  — exec out/multicall/wash-router (a symlink to
-#                            out/multicall/wash). `make wash` assembles that dir.
+#   --multicall (default)  — exec out/wash-router (a symlink to out/wash).
+#                            `make wash` assembles that layout directly in out/.
 #                            This is the SHIPPED layout, so dev defaults to it.
-#   --standalone           — exec out/wash-router (the per-app layout, built by
-#                            `make wash-standalone`).
+#   --standalone           — exec out/singlecall/wash-router (the per-app layout,
+#                            built by `make wash-standalone`).
 #
 # Other flags:
 #   --no-build       — skip the build.sh step
@@ -86,13 +86,13 @@ if [[ "$fm_seed" == "1" ]]; then
   "$REPO/scripts/fm-seed.sh" "$fm_root"
 fi
 
-# Default (multicall) mode: the runnable image lives in out/multicall/ (wash +
+# Default (multicall) mode: the runnable image lives directly in out/ (wash +
 # wash-* symlinks), assembled by `make wash`. Pick the router from there;
-# --standalone mode runs the per-app binary in out/ (`make wash-standalone`).
-router_bin="$REPO/out/multicall/wash-router"
+# --standalone mode runs the per-app binary in out/singlecall/ (`make wash-standalone`).
+router_bin="$REPO/out/wash-router"
 build_hint="make wash"
 if [[ "$mode" == "standalone" ]]; then
-  router_bin="$REPO/out/wash-router"
+  router_bin="$REPO/out/singlecall/wash-router"
   build_hint="make wash-standalone"
 fi
 if [[ ! -e "$router_bin" ]]; then

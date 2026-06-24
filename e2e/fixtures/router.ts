@@ -17,17 +17,19 @@ import { createServer, createConnection } from 'node:net';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = resolve(__dirname, '..', '..');
-// Binary layout: the standalone per-app binaries live in out/; the multicall
-// build assembles its own self-contained image (wash + wash-* symlinks) under
-// out/multicall/. Point app binaries at whichever layout this run exercises so
+// Binary layout: the default/shipped MULTICALL image (wash + wash-* symlinks)
+// lives directly in out/; the standalone per-app real ELFs live under
+// out/singlecall/. Point app binaries at whichever layout this run exercises so
 // `./test.sh --multicall` (no standalone build) resolves them too.
 const MULTICALL = process.env.WASH_E2E_MULTICALL === '1';
-const BIN_DIR = MULTICALL ? join(REPO_ROOT, 'out', 'multicall') : join(REPO_ROOT, 'out');
-// Resolve a wash-* binary basename to its path. Everything is under BIN_DIR
-// except the native C++ compositor, which is never part of the multicall
-// binary and so only ever lives at out/wash-display.
+const BIN_DIR = MULTICALL ? join(REPO_ROOT, 'out') : join(REPO_ROOT, 'out', 'singlecall');
+// The always-real binaries are never folded into the dispatcher and never become
+// symlinks — they live in out/ in BOTH layouts (the native C++ compositor, plus
+// wash-sudo / wash-priv-fakesudo / wash-login). Everything else resolves under
+// BIN_DIR (out/ for multicall, out/singlecall/ for standalone).
+const ALWAYS_OUT = new Set(['wash-display', 'wash-sudo', 'wash-priv-fakesudo', 'wash-login']);
 const binPath = (name: string): string =>
-  name === 'wash-display' ? join(REPO_ROOT, 'out', 'wash-display') : join(BIN_DIR, name);
+  ALWAYS_OUT.has(name) ? join(REPO_ROOT, 'out', name) : join(BIN_DIR, name);
 
 // Single source of truth: every app a test can request → the wash-* binaries
 // staged into its apps dir when requested. Adding an app is ONE line here —

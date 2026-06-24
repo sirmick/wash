@@ -656,10 +656,11 @@ Input/clipboard/popups are tested at two levels:
 
 ### Running locally (manual)
 ```bash
-# wash-display is a separate (non-multicall) binary, so build the standalone
-# layout — `make wash` (multicall) does not include it.
-WASH_DISPLAY=1 make wash-standalone   # build everything incl. out/wash-display
-./out/wash-router               # router on :11000 over the standalone layout (apps in ./out)
+# wash-display is a separate native binary (its own package), but it sits in
+# out/ alongside the multicall layout. WASH_DISPLAY=1 builds it with the layout;
+# `make wash-display` builds just the compositor.
+WASH_DISPLAY=1 make wash         # multicall layout in out/ + out/wash-display
+make run                         # router on :11000 (out/wash-router)
 ```
 Open `http://localhost:11000`, launch the Terminal app, and run the test guest
 (above) — it inherits `DISPLAY`/`WAYLAND_DISPLAY` from the shell (DISPLAY_ENV.md).

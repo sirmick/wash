@@ -5,8 +5,10 @@ Everything is a `make` verb. Ports (defaults live in the binaries): wash-login
 
 ## BUILD
 ```
-make wash               standalone build → out/  (auto-includes wash-display when wlroots present; WASH_DISPLAY=0/1 overrides)
-make wash-multicall     busybox layout → out/multicall/  (one wash binary + wash-* symlinks)
+make wash               multicall layout → out/  (busybox wash + wash-* symlinks; the shipped layout; auto-includes wash-display when wlroots present, WASH_DISPLAY=0/1 overrides)
+make wash-standalone    per-app ELFs → out/singlecall/  (one standalone binary per app)
+make wash-display       just the native C++/CMake compositor → out/wash-display
+make wash-multicall     alias of `make wash`
 ```
 
 ## RUN / DEV

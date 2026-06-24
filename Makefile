@@ -33,6 +33,11 @@ GOFLAGS += -cover -coverpkg=github.com/sirmick/wash/...
 endif
 
 OUT     := out
+# SC (singlecall) holds the per-app STANDALONE real ELFs (out/singlecall/). The
+# default/shipped MULTICALL layout — the `wash` dispatcher + wash-<app> symlinks —
+# lives directly in out/. The two can't share a dir (a wash-<app> symlink vs a
+# real ELF of the same name collide), so standalone is tucked under out/singlecall/.
+SC      := $(OUT)/singlecall
 
 # --- single source of truth: the app roster (CORE_AUDIT §2.2) ---------------
 # Adding a windowed app is ONE line below (+ its apps/<app>/{fe,be} tree and a
@@ -86,7 +91,13 @@ ifeq ($(WASH_NO_SUDO),)
 BINS += wash-sudo
 endif
 
-TARGETS := $(addprefix $(OUT)/,$(BINS))
+# OUT_ONLY_BINS are never folded into the multicall dispatcher and never become
+# symlinks: they stay REAL in out/ in BOTH layouts (packaging installs them beside
+# the dispatcher; the multicall image just reuses them in place). Everything else
+# in BINS is a symlinkable app/CLI, so its standalone ELF builds into out/singlecall/.
+OUT_ONLY_BINS := wash-login wash-sudo
+SC_BINS       := $(filter-out $(OUT_ONLY_BINS),$(BINS))
+TARGETS := $(addprefix $(SC)/,$(SC_BINS)) $(addprefix $(OUT)/,$(filter $(OUT_ONLY_BINS),$(BINS)))
 
 # --- packaged-binary single source of truth -------------------------------
 # packaging/wash.binaries is the ONE list every native package (deb/rpm/apk)
@@ -190,7 +201,7 @@ TARGETS += $(OUT)/washnet-read $(OUT)/washnet-wifi
 # catalog at runtime via manifest.Hidden.
 TEST_APP ?=
 ifneq ($(TEST_APP),)
-TARGETS += $(OUT)/wash-test
+TARGETS += $(SC)/wash-test
 endif
 
 # wash-display: native X/Wayland compositor BE (C++/CMake, separate
@@ -213,6 +224,10 @@ endif
 ifeq ($(WASH_DISPLAY),1)
 ifneq ($(GOARCH),riscv64)
 TARGETS += $(OUT)/wash-display
+# WASH_DISPLAY_TARGET makes `make wash` (multicall) ALSO build the compositor when
+# display is enabled — it's a separate native binary, never folded into the
+# dispatcher, so it has to be named as an explicit prereq (it's not in BINS).
+WASH_DISPLAY_TARGET := $(OUT)/wash-display
 endif
 endif
 
@@ -252,33 +267,45 @@ all: $(TARGETS)
 
 # ----- build verbs -----
 # `make wash` builds the MULTICALL layout — the busybox `wash` dispatcher plus
-# wash-<app> symlinks under out/multicall/, which is exactly what the deb/rpm/apk
-# packages ship. Dev defaults to multicall so the inner loop exercises the same
-# argv[0]-dispatch + exec-probe paths as production (a standalone-only dev build
-# is how the wash-fswatchd --wash-manifest gap hid — see commit ca73b4b).
-# wash-sudo is a real separate helper (not part of the dispatcher), so build it
-# first; `multicall` copies it into out/multicall/ for a complete runnable image.
-# `make wash-standalone` is the per-app-binary layout under out/ (used by the
-# standalone-smoke gate and `run.sh --standalone`).
+# wash-<app> symlinks, emitted DIRECTLY into out/, which is exactly what the
+# deb/rpm/apk packages ship. Dev defaults to multicall so the inner loop exercises
+# the same argv[0]-dispatch + exec-probe paths as production (a standalone-only dev
+# build is how the wash-fswatchd --wash-manifest gap hid — see commit ca73b4b).
+# wash-sudo is a real separate helper (not folded into the dispatcher) and lives in
+# out/ already, so build it first. With WASH_DISPLAY enabled the compositor
+# (out/wash-display, a separate native binary) is built too. `make wash-standalone`
+# is the per-app-binary layout under out/singlecall/ (the standalone-smoke gate and
+# `run.sh --standalone` use it).
 .PHONY: wash
-wash: $(OUT)/wash-sudo
+wash: $(OUT)/wash-sudo $(WASH_DISPLAY_TARGET)
 	$(MAKE) multicall
-	@echo "wash: built the multicall layout (busybox wash + wash-* symlinks + wash-sudo — the shipped layout)"
-	@echo "  → $(abspath $(MC_DIR))/   (run: make run)"
+	@echo "wash: built the multicall layout (busybox wash + wash-* symlinks + wash-sudo$(if $(WASH_DISPLAY_TARGET), + wash-display) — the shipped layout)"
+	@echo "  → $(abspath $(OUT))/   (run: make run)"
 
 .PHONY: wash-standalone
 wash-standalone: all
 	@echo "wash-standalone: built $(words $(TARGETS)) per-app binaries$(if $(filter $(OUT)/wash-display,$(TARGETS)),  (incl. wash-display),  (no wash-display — set WASH_DISPLAY=1 or install wlroots))"
-	@echo "  → $(abspath $(OUT))/"
+	@echo "  → $(abspath $(SC))/   (+ always-real wash-login/sudo/display in $(abspath $(OUT)))"
+
+# wash-display: build just the native C++/CMake compositor (out/wash-display). It
+# is never part of the multicall dispatcher and ships as a SEPARATE package, so it
+# gets its own verb. `WASH_DISPLAY=1 make wash` builds it alongside the layout;
+# `make wash-display` forces it on its own (vendored wlroots compile if no system
+# one — see WLROOTS_VENDORED).
+.PHONY: wash-display
+wash-display: $(OUT)/wash-display
+	@echo "wash-display: built $(abspath $(OUT))/wash-display (compositor)"
 
 # Back-compat alias: `make wash-multicall` == `make wash` now (both build the
-# multicall layout). Kept so existing scripts/muscle-memory keep working.
+# multicall layout in out/). Kept so existing scripts/muscle-memory keep working.
 .PHONY: wash-multicall
 wash-multicall: wash
-	@echo "  → $(abspath $(OUT))/multicall/   ($(words $(wildcard $(OUT)/multicall/*)) entries: wash + wash-* symlinks)"
 
 $(OUT):
 	mkdir -p $(OUT)
+
+$(SC):
+	mkdir -p $(SC)
 
 # ----- web stage -----
 
@@ -335,23 +362,23 @@ endef
 # first so a targeted rebuild can't pair a fresh app bundle with a stale
 # /vendor carrier (see the vendor-sync rule).
 define fe_bin_rule
-$$(OUT)/wash-$(1): apps/$(1)/be/assets/.stamp vendor-sync | $$(OUT)
+$$(SC)/wash-$(1): apps/$(1)/be/assets/.stamp vendor-sync | $$(SC)
 	$$(call go_build,$$@,apps/$(1)/be/cmd)
 endef
 
 # Panel-service binary: embeds a settings panel.js like a windowed app, but
 # .PHONY so a Go-only change still relinks ([[wash makefile phony goservice]]).
 define panel_bin_rule
-.PHONY: $$(OUT)/wash-$(1)
-$$(OUT)/wash-$(1): apps/$(1)/be/assets/.stamp vendor-sync | $$(OUT)
+.PHONY: $$(SC)/wash-$(1)
+$$(SC)/wash-$(1): apps/$(1)/be/assets/.stamp vendor-sync | $$(SC)
 	$$(call go_build,$$@,apps/$(1)/be/cmd)
 endef
 
 # FE-less Go service: binary rule only (no web/embed), .PHONY for the same
 # FE-less-Go reason.
 define svc_bin_rule
-.PHONY: $$(OUT)/wash-$(1)
-$$(OUT)/wash-$(1): | $$(OUT)
+.PHONY: $$(SC)/wash-$(1)
+$$(SC)/wash-$(1): | $$(SC)
 	$$(call go_build,$$@,apps/$(1)/be/cmd)
 endef
 
@@ -375,10 +402,10 @@ $(foreach a,$(SVC_APPS),$(eval $(call svc_bin_rule,$(a))))
 # the time any app binary's prerequisites run.
 .PHONY: vendor-sync
 vendor-sync:
-	@if [ ! -f $(OUT)/wash-router ] || \
-	   [ -n "$$(find web/lib/src web/lib/package.json web/shell/build-vendor.mjs -newer $(OUT)/wash-router -print -quit)" ]; then \
-		echo "== web/lib newer than $(OUT)/wash-router: rebuilding shared /vendor carriers (wash-router, wash-login) first"; \
-		$(MAKE) --no-print-directory $(OUT)/wash-router $(OUT)/wash-login; \
+	@if [ ! -f $(SC)/wash-router ] || \
+	   [ -n "$$(find web/lib/src web/lib/package.json web/shell/build-vendor.mjs -newer $(SC)/wash-router -print -quit)" ]; then \
+		echo "== web/lib newer than $(SC)/wash-router: rebuilding shared /vendor carriers (wash-router, wash-login) first"; \
+		$(MAKE) --no-print-directory $(SC)/wash-router $(OUT)/wash-login; \
 	fi
 
 # Every app binary that embeds an FE bundle externalizing shared deps gets a
@@ -389,7 +416,7 @@ $(OUT)/wash-display: vendor-sync
 
 # ----- go stage -----
 
-$(OUT)/wash-router: $(ROUTER_STAMP) | $(OUT)
+$(SC)/wash-router: $(ROUTER_STAMP) | $(SC)
 	$(call go_build,$@,cmd/wash-router)
 
 # The per-app windowed/panel/service binary rules (wash-session, wash-about,
@@ -463,8 +490,8 @@ endif
 # the mounting host (the "wash channel"; SFTP carries the bytes). inotify-only,
 # no FUSE dependency, so it ships on every wash host. .PHONY for the same
 # FE-less-Go-binary reason as wash-notify.
-.PHONY: $(OUT)/wash-fswatchd
-$(OUT)/wash-fswatchd: | $(OUT)
+.PHONY: $(SC)/wash-fswatchd
+$(SC)/wash-fswatchd: | $(SC)
 	$(call go_build,$@,cmd/wash-fswatchd)
 
 # wash-mount is the OPTIONAL standalone FUSE mount CLI (needs the FUSE kmod +
@@ -488,7 +515,7 @@ $(OUT)/washnet-wifi: | $(OUT)
 	$(call go_build,$@,cmd/washnet-wifi)
 
 # wash-launch is a CLI, not an app. No FE bundle, no embedded assets.
-$(OUT)/wash-launch: | $(OUT)
+$(SC)/wash-launch: | $(SC)
 	$(call go_build,$@,cmd/wash-launch)
 
 # wash-login is the multi-user front-door (docs/MULTIUSER.md). It
@@ -605,20 +632,16 @@ $(OUT)/wash: $(MULTICALL_STAMPS) | $(OUT)
 	  -tags=$(MULTICALL_TAGS) \
 	  -o $@ ./cmd/wash && chmod 0755 $@
 
-# multicall: assemble the busybox layout in its OWN dir (out/multicall/) so it
-# never collides with the standalone binaries in out/ — the e2e fixture and
-# run.sh resolve the layout there (the out-split, commit f812c0b). The
-# dispatcher is hardlinked (discovery stays rooted at out/multicall/); wash-sudo
-# + wash-priv-fakesudo are real binaries install-symlinks won't touch, so copy
-# them in when present to make out/multicall/ a complete runnable image.
-MC_DIR := $(OUT)/multicall
+# multicall: assemble the busybox layout DIRECTLY in out/ (the default/shipped
+# layout) — the `wash` dispatcher (out/wash) + a wash-<app> symlink per app/CLI.
+# No collision: the standalone per-app real ELFs live separately in out/singlecall/
+# (the out-split, inverted). The always-real binaries (wash-sudo, wash-login,
+# wash-priv-fakesudo, wash-display) already sit in out/ from their own rules and
+# are NOT in install-symlinks' name list, so they're left untouched in place — no
+# copy step needed. install-symlinks refuses to clobber a non-symlink anyway.
 .PHONY: multicall
 multicall: $(OUT)/wash
-	rm -rf $(MC_DIR) && mkdir -p $(MC_DIR)
-	cp -l $(OUT)/wash $(MC_DIR)/wash 2>/dev/null || cp $(OUT)/wash $(MC_DIR)/wash
-	@[ -e $(OUT)/wash-priv-fakesudo ] && cp $(OUT)/wash-priv-fakesudo $(MC_DIR)/ || true
-	@[ -e $(OUT)/wash-sudo ]          && cp $(OUT)/wash-sudo          $(MC_DIR)/ || true
-	./$(MC_DIR)/wash install-symlinks ./$(MC_DIR)
+	./$(OUT)/wash install-symlinks ./$(OUT)
 
 # Cross-compile-friendly variant: builds the multicall binary but
 # does NOT run it (no install-symlinks). Used by wash-vm/image/
@@ -918,8 +941,8 @@ qemu-run-vm:
 # pick up changes; `make dev` is the auto-rebuilding HMR loop.
 .PHONY: run
 run:
-	@test -x $(MC_DIR)/wash-router || { echo "run: $(MC_DIR)/wash-router not built — run 'make wash' first" >&2; exit 1; }
-	$(MC_DIR)/wash-router
+	@test -x $(OUT)/wash-router || { echo "run: $(OUT)/wash-router not built — run 'make wash' first" >&2; exit 1; }
+	$(OUT)/wash-router
 
 # ----- clean verbs -----
 # Explicit path lists (never rm tmp/ branches/ harbor.config test-net.py .git).
@@ -1025,14 +1048,14 @@ test-race: test-app
 .PHONY: e2e-test
 e2e-test: test-app
 	# The multicall layout is what ships, so the FULL suite runs against it
-	# (busybox-style wash-<app> symlinks → out/wash). Build the FULL layout —
-	# not just the dispatcher — because the fixture resolves every wash-<app>
-	# under out/multicall/ (its existence checks + binPath read there). `make
-	# multicall` rm -rf's and regenerates the symlinks from the current
-	# dispatcher, so a newly-added app (e.g. wash-fswatch, wash-imageview) is
-	# always present; building bare out/wash leaves a stale layout and the
-	# fixture fails with "missing binary: out/multicall/wash-<app>". Then run the
-	# argv[0]-dispatch unit tests and Playwright with WASH_E2E_MULTICALL=1.
+	# (busybox-style wash-<app> symlinks → out/wash, directly in out/). Build the
+	# FULL layout — not just the dispatcher — because the fixture resolves every
+	# wash-<app> under out/ (its existence checks + binPath read there). `make
+	# multicall` (re)installs the symlinks from the current dispatcher, so a
+	# newly-added app (e.g. wash-fswatch, wash-imageview) is always present;
+	# building bare out/wash leaves a stale layout and the fixture fails with
+	# "missing binary: out/wash-<app>". Then run the argv[0]-dispatch unit tests
+	# and Playwright with WASH_E2E_MULTICALL=1.
 	$(MAKE) TEST_APP=1 multicall
 	go test -count=1 -tags=multicall ./cmd/wash/...
 	cd e2e && $(PNPM) install --ignore-workspace --silent
@@ -1133,11 +1156,11 @@ push:
 # the router at 0.0.0.0:11000. Open http://localhost:5173/ in a
 # browser. Editing files under web/shell/src triggers HMR; editing
 # Go or app sources still requires re-running `make dev`. The router is
-# the multicall layout (out/multicall/), matching `make run`.
+# the multicall layout (out/), matching `make run`.
 .PHONY: dev
 dev: wash
 	@echo "wash dev: multicall router :11000 + Vite :5173 — open http://localhost:5173/"
 	@trap 'kill 0' INT TERM EXIT; \
-	  ( $(MC_DIR)/wash-router ) & \
+	  ( $(OUT)/wash-router ) & \
 	  ( $(PNPM) --filter @wash/shell run dev ) & \
 	  wait

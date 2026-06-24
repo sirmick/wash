@@ -8,9 +8,9 @@
 # Sequence:
 #   1. make TEST_APP=1 multicall   (unless --no-build) — the SHIPPED layout
 #   2. dev-kill.sh
-#   3. (apps auto-discovered next to the wash-router symlink in out/multicall/)
+#   3. (apps auto-discovered next to the wash-router symlink in out/)
 #   4. (optionally) fm-seed.sh into the sandbox root
-#   5. spawn out/multicall/wash-router in background, tee-ing /tmp/wash-router.log
+#   5. spawn out/wash-router in background, tee-ing /tmp/wash-router.log
 #   6. wait for "listening on" line, then return
 #
 # Flags:
@@ -82,7 +82,7 @@ done
 if [[ "$build" == "1" ]]; then
   (cd "$REPO" && make TEST_APP=1 multicall)
 fi
-ROUTER_BIN="$REPO/out/multicall/wash-router"
+ROUTER_BIN="$REPO/out/wash-router"
 
 # 2. Kill any running wash processes.
 "$REPO/scripts/dev-kill.sh"
