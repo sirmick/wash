@@ -167,6 +167,15 @@ type Router struct {
 	nextInstance atomic.Uint64
 	nextChannel  atomic.Uint32 // starts at 1, returns 2+ via allocChannelID
 
+	// Link-health session totals (docs/QOS.md). linkTotals accumulates
+	// each finished shell connection's counters so the desktop info
+	// panel's MB figures and the About screen survive WS reconnects;
+	// connectCount is the number of shell connections served; started
+	// stamps session (router process) start for the uptime readout.
+	linkTotals   *LinkStats
+	connectCount atomic.Uint64
+	started      time.Time
+
 	channelsMu sync.Mutex
 	channels   map[uint32]*channelBinding
 
@@ -282,7 +291,16 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		backgroundStarted: make(map[string]bool),
 		ingress:           newIngressRegistry(log),
 		peers:             make(map[string]peerTarget),
+		linkTotals:        &LinkStats{},
+		started:           time.Now(),
 	}
+}
+
+// sessionLinkTotals folds the live connection's snapshot into the banked
+// session totals for display (the desktop info panel + About). Banked
+// totals come from already-finished connections; live is the current one.
+func (r *Router) sessionLinkTotals(live wire.LinkStatsSnapshot) wire.LinkStatsSnapshot {
+	return r.linkTotals.snapshot([numClasses]int{}).Plus(live)
 }
 
 // SetAssets installs the embedded shell-runtime FS so TShellAssetRead

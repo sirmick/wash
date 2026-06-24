@@ -10,6 +10,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sirmick/wash/internal/wire"
 )
@@ -122,11 +123,15 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	// disconnect tears down its ssh -L'd peer connections (and unblocks
 	// their pump goroutines) instead of leaking them.
 	defer sess.closeAllPeers()
+	r.connectCount.Add(1)
 	defer func() {
 		// Stop the drainer first so it doesn't try to write to a
 		// closing transport, then wait for it to exit.
 		sess.scheduler.Close()
 		<-sess.drainerDone
+		// Bank this connection's counters into the session running totals
+		// so the desktop info panel + About survive the disconnect.
+		r.linkTotals.add(sess.scheduler.StatsSnapshot())
 	}()
 	go sess.drainLoop(ctx)
 
@@ -183,7 +188,46 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	if err := r.EnsureInitialAppRunning(ctx); err != nil {
 		r.log("ensure initial: %v", err)
 	}
+	go sess.linkStatsLoop(ctx)
 	return sess.loop(ctx)
+}
+
+// linkStatsLoop pushes a link.stats telemetry frame to the FE ~1/s while
+// the connection is up (the desktop info panel + About read it). Control
+// class via SubmitTelemetry: non-blocking, never counted as an app drop,
+// and reliably delivered so health data still arrives under load.
+func (s *ShellSession) linkStatsLoop(ctx context.Context) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.drainerDone:
+			return
+		case <-t.C:
+			s.emitLinkStats()
+		}
+	}
+}
+
+func (s *ShellSession) emitLinkStats() {
+	if s.router == nil || s.scheduler == nil {
+		return
+	}
+	live := s.scheduler.StatsSnapshot()
+	msg := wire.NewShellLinkStats(
+		live,
+		s.router.sessionLinkTotals(live),
+		s.router.connectCount.Load(),
+		time.Since(s.router.started).Milliseconds(),
+	)
+	data, err := wire.EncodeCtrl(msg)
+	if err != nil {
+		return
+	}
+	f := wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: data}.WithClass(wire.ClassControl)
+	s.scheduler.SubmitTelemetry(f)
 }
 
 func (s *ShellSession) loop(ctx context.Context) error {
@@ -195,6 +239,9 @@ func (s *ShellSession) loop(ctx context.Context) error {
 }
 
 func (s *ShellSession) dispatch(f wire.Frame) error {
+	// Ingress accounting (every inbound frame: keystrokes, window intents,
+	// uploaded file content) for the link-health rx figure.
+	s.statsLink().recordRx(len(f.Payload))
 	if f.Channel != ChannelControl {
 		// Channel ≥ 1 on WS: raw byte stream. Forward to the bound
 		// app verbatim on the same channel id.
@@ -713,8 +760,16 @@ func (s *ShellSession) WriteRawFrameClass(channelID uint32, payload []byte, clas
 	// Credit gate (Bulk only; Interactive is transactional).
 	if class == wire.ClassBulk && s.router != nil {
 		if b := s.router.lookupChannel(channelID); b != nil && b.credit != nil {
-			if err := b.credit.Reserve(context.Background(), uint64(len(payload))); err != nil {
-				return err
+			n := uint64(len(payload))
+			// Fast path: credit available now. Otherwise the FE hasn't
+			// granted enough bytes yet — record the credit stall and time
+			// how long the producer is parked (the backpressure signal).
+			if !b.credit.TryReserve(n) {
+				t0 := time.Now()
+				if err := b.credit.Reserve(context.Background(), n); err != nil {
+					return err
+				}
+				s.statsLink().recordCreditStall(time.Since(t0).Nanoseconds())
 			}
 		}
 	}
@@ -736,6 +791,9 @@ func (s *ShellSession) WriteRawFrameClass(channelID uint32, payload []byte, clas
 func (s *ShellSession) tryWriteRawBulk(b *channelBinding, payload []byte) bool {
 	n := uint64(len(payload))
 	if b.credit != nil && !b.credit.TryReserve(n) {
+		// FE behind: credit exhausted, so this live frame is suppressed
+		// (docs/PTY_ROBUST.md Fix B). Count it as a Bulk drop.
+		s.statsLink().recordDrop(wire.ClassBulk)
 		return false
 	}
 	f := wire.Frame{Flags: wire.FlagEnd, Channel: b.channelID, Payload: payload}.WithClass(wire.ClassBulk)

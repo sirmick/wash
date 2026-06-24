@@ -68,6 +68,50 @@ func TestSchedulerTrySubmitDropCounted(t *testing.T) {
 	}
 }
 
+// Session running totals: each finished connection is folded into the
+// router's banked totals (sum), the queue watermark takes the max, and the
+// live connection adds on top via Plus (with the live instantaneous depth).
+func TestLinkStatsSessionFold(t *testing.T) {
+	var totals LinkStats
+	totals.add(wire.LinkStatsSnapshot{
+		TxBytes:      [4]uint64{0, 1000, 0, 0},
+		Dropped:      [4]uint64{0, 2, 0, 0},
+		DepthHi:      [4]uint64{0, 5, 0, 0},
+		RxBytes:      300,
+		CreditStalls: 1,
+	})
+	totals.add(wire.LinkStatsSnapshot{
+		TxBytes:      [4]uint64{0, 500, 0, 0},
+		Dropped:      [4]uint64{0, 1, 0, 0},
+		DepthHi:      [4]uint64{0, 3, 0, 0}, // lower than 5 — watermark must stay 5
+		RxBytes:      200,
+		CreditStalls: 2,
+	})
+	banked := totals.snapshot([numClasses]int{})
+	if banked.TxBytes[wire.ClassBulk] != 1500 {
+		t.Fatalf("banked bulk tx = %d, want 1500", banked.TxBytes[wire.ClassBulk])
+	}
+	if banked.Dropped[wire.ClassBulk] != 3 {
+		t.Fatalf("banked bulk drops = %d, want 3", banked.Dropped[wire.ClassBulk])
+	}
+	if banked.DepthHi[wire.ClassBulk] != 5 {
+		t.Fatalf("banked bulk depth_hi = %d, want 5 (max not sum)", banked.DepthHi[wire.ClassBulk])
+	}
+	if banked.RxBytes != 500 || banked.CreditStalls != 3 {
+		t.Fatalf("banked rx=%d stalls=%d, want 500/3", banked.RxBytes, banked.CreditStalls)
+	}
+
+	// Session total = banked + live current connection.
+	live := wire.LinkStatsSnapshot{TxBytes: [4]uint64{0, 250, 0, 0}, Depth: [4]uint64{0, 7, 0, 0}}
+	sess := banked.Plus(live)
+	if sess.TxBytes[wire.ClassBulk] != 1750 {
+		t.Fatalf("session bulk tx = %d, want 1750", sess.TxBytes[wire.ClassBulk])
+	}
+	if sess.Depth[wire.ClassBulk] != 7 {
+		t.Fatalf("session bulk depth = %d, want 7 (live instantaneous)", sess.Depth[wire.ClassBulk])
+	}
+}
+
 // A blocking Submit onto a full queue records the stall before it parks;
 // a pre-canceled ctx lets us observe the count without a draining goroutine.
 func TestSchedulerSubmitQueueFullCounted(t *testing.T) {

@@ -137,6 +137,22 @@ func (s *Scheduler) TrySubmit(f wire.Frame) bool {
 	}
 }
 
+// SubmitTelemetry enqueues a router-originated telemetry frame
+// (link.stats) without ever blocking and WITHOUT counting a drop on the
+// per-class drop metric — telemetry must not pollute the app-traffic
+// health figure (Background will carry real bulk traffic after the tc
+// reclass). Best-effort: silently skipped if the class queue is full.
+func (s *Scheduler) SubmitTelemetry(f wire.Frame) {
+	q := s.queues[f.Class()]
+	if q == nil {
+		q = s.queues[wire.ClassInteractive]
+	}
+	select {
+	case q <- f:
+	default:
+	}
+}
+
 // Next blocks until a frame is available at the highest currently-
 // non-empty priority class, then returns it. Returns ErrSchedulerClosed
 // after Close.
@@ -211,7 +227,7 @@ func (s *Scheduler) Depth(c wire.Class) int {
 // StatsSnapshot returns a plain-value copy of the link-health counters,
 // folding in the live per-class queue depths. Cheap; safe to call from
 // the stats-emitter ticker concurrently with producers and the drainer.
-func (s *Scheduler) StatsSnapshot() LinkStatsSnapshot {
+func (s *Scheduler) StatsSnapshot() wire.LinkStatsSnapshot {
 	var depth [numClasses]int
 	for c := 0; c < numClasses; c++ {
 		depth[c] = s.Depth(wire.Class(c))

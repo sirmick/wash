@@ -43,6 +43,19 @@ type LinkStats struct {
 	wireBytes atomic.Uint64 // post-compression asset bytes  (set once step (c) lands)
 }
 
+// discardLinkStats is a sink for ShellSessions constructed without a
+// scheduler (isolated unit tests) so the record* helpers stay nil-safe.
+var discardLinkStats = &LinkStats{}
+
+// statsLink returns the live LinkStats for this session, or the discard
+// sink when there's no scheduler (test harnesses).
+func (s *ShellSession) statsLink() *LinkStats {
+	if s.scheduler == nil {
+		return discardLinkStats
+	}
+	return s.scheduler.Stats
+}
+
 func classIndex(c wire.Class) int {
 	if int(c) < 0 || int(c) >= numClasses {
 		// Unknown class is treated as Interactive — the safe default the
@@ -105,32 +118,11 @@ func (l *LinkStats) sampleDepth(c wire.Class, d int) {
 	}
 }
 
-// LinkStatsSnapshot is a plain-value copy of LinkStats for JSON emission
-// (the link.stats control message) and the __washDiag surface. Per-class
-// arrays are indexed by wire.Class; `depth` is the instantaneous queue
-// occupancy sampled at snapshot time (the rest are cumulative).
-type LinkStatsSnapshot struct {
-	TxBytes   [numClasses]uint64 `json:"tx_bytes"`
-	TxFrames  [numClasses]uint64 `json:"tx_frames"`
-	QueueFull [numClasses]uint64 `json:"queue_full"`
-	Dropped   [numClasses]uint64 `json:"dropped"`
-	DepthHi   [numClasses]uint64 `json:"depth_hi"`
-	Depth     [numClasses]uint64 `json:"depth"`
-
-	CreditStalls uint64 `json:"credit_stalls"`
-	CreditWaitNs uint64 `json:"credit_wait_ns"`
-
-	RxBytes  uint64 `json:"rx_bytes"`
-	RxFrames uint64 `json:"rx_frames"`
-
-	RawBytes  uint64 `json:"raw_bytes"`
-	WireBytes uint64 `json:"wire_bytes"`
-}
-
-// snapshot copies the live counters into a plain value, folding in the
-// instantaneous per-class queue depths the caller read from the scheduler.
-func (l *LinkStats) snapshot(depth [numClasses]int) LinkStatsSnapshot {
-	var s LinkStatsSnapshot
+// snapshot copies the live counters into a plain wire value (the type the
+// link.stats message carries), folding in the instantaneous per-class
+// queue depths the caller read from the scheduler.
+func (l *LinkStats) snapshot(depth [numClasses]int) wire.LinkStatsSnapshot {
+	var s wire.LinkStatsSnapshot
 	for i := 0; i < numClasses; i++ {
 		s.TxBytes[i] = l.txBytes[i].Load()
 		s.TxFrames[i] = l.txFrames[i].Load()
@@ -148,4 +140,23 @@ func (l *LinkStats) snapshot(depth [numClasses]int) LinkStatsSnapshot {
 	s.RawBytes = l.rawBytes.Load()
 	s.WireBytes = l.wireBytes.Load()
 	return s
+}
+
+// add folds a snapshot into these counters — used to accumulate each
+// finished connection into the router's session-lifetime running totals.
+// Cumulative fields sum; the queue-depth watermark takes the max.
+func (l *LinkStats) add(s wire.LinkStatsSnapshot) {
+	for i := 0; i < numClasses; i++ {
+		l.txBytes[i].Add(s.TxBytes[i])
+		l.txFrames[i].Add(s.TxFrames[i])
+		l.queueFull[i].Add(s.QueueFull[i])
+		l.dropped[i].Add(s.Dropped[i])
+		l.sampleDepth(wire.Class(i), int(s.DepthHi[i]))
+	}
+	l.creditStalls.Add(s.CreditStalls)
+	l.creditWaitNs.Add(s.CreditWaitNs)
+	l.rxBytes.Add(s.RxBytes)
+	l.rxFrames.Add(s.RxFrames)
+	l.rawBytes.Add(s.RawBytes)
+	l.wireBytes.Add(s.WireBytes)
 }
