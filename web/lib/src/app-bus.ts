@@ -16,9 +16,19 @@ export interface AppBusMessage {
   [k: string]: unknown;
 }
 
-export interface AppBusOptions {
+// AppBusMsgBound is the minimal constraint for createAppBus's message type
+// param: just a `kind` discriminant. A concrete discriminated union (whose
+// members carry only their own fields, no index signature) satisfies this
+// even though it isn't assignable to AppBusMessage's open index signature.
+export type AppBusMsgBound = { kind: string };
+
+// AppBusOptions is generic over the BE→FE message type so an app can pass
+// its own discriminated union (e.g. `{ kind: 'snapshot'; … } | …`) and have
+// each onMsg branch narrow on `kind`. Defaults to the open AppBusMessage for
+// apps that haven't typed their wire shape.
+export interface AppBusOptions<M extends AppBusMsgBound = AppBusMessage> {
   /** Invoked for every wash:msg CustomEvent (a BE→FE app message). */
-  onMsg?: (m: AppBusMessage) => void;
+  onMsg?: (m: M) => void;
   /** Invoked for every wash:state CustomEvent (persisted FE-state restore). */
   onState?: (state: unknown) => void;
 }
@@ -31,15 +41,15 @@ export interface AppBus {
 // createAppBus binds send() to this instance and registers the requested
 // listeners with automatic onCleanup. Call it once during component setup
 // (the top of the App body) so onCleanup attaches to the component owner.
-export function createAppBus(
+export function createAppBus<M extends AppBusMsgBound = AppBusMessage>(
   props: Pick<WashAppProps, 'instance' | 'host'>,
-  opts: AppBusOptions = {},
+  opts: AppBusOptions<M> = {},
 ): AppBus {
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
 
   if (opts.onMsg) {
     const onMsg = opts.onMsg;
-    const handler = (ev: Event) => onMsg((ev as CustomEvent).detail as AppBusMessage);
+    const handler = (ev: Event) => onMsg((ev as CustomEvent).detail as M);
     props.host.addEventListener('wash:msg', handler);
     onCleanup(() => props.host.removeEventListener('wash:msg', handler));
   }

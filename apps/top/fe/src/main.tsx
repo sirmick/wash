@@ -92,6 +92,31 @@ interface Details {
   oom_score?: string;
 }
 
+// BE→FE messages, discriminated by `kind` (the wire envelope's kind
+// field; see internal/sdk/bus.go — request replies map to
+// <kind>_ok / <kind>_err). Each handleBE case narrows to one of these.
+//
+// `details_ok` is the reply to a `details` request: a `Details` body
+// plus the echoed request `id`. `signal_ok` echoes the signal request's
+// pid/sig; `signal_err` carries the SDK error envelope (code/msg).
+type DetailsOK = Details & { kind: 'details_ok'; id?: string };
+
+interface SignalOK {
+  kind: 'signal_ok';
+  id?: string;
+  pid: number;
+  sig: string;
+}
+
+interface SignalErr {
+  kind: 'signal_err';
+  id?: string;
+  code: string;
+  msg: string;
+}
+
+type TopBEMsg = Snapshot | DetailsOK | SignalOK | SignalErr;
+
 // HISTORY_LEN is the sparkline ring-buffer depth. 60 samples × 2s
 // default = 2 minutes; long enough to see a workload settle, short
 // enough that the graphs respond visibly to current activity.
@@ -204,11 +229,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   // ---- BE messages ----
 
-  const handleBE = (m: any) => {
+  const handleBE = (m: TopBEMsg) => {
     switch (m.kind) {
       case 'snapshot': {
         if (paused()) return;
-        const snap = m as Snapshot;
+        const snap = m;
         const prev = snapshot();
         setPrevPerCPU(prev?.per_cpu ?? null);
         setPrevCPU(prev?.cpu ?? null);
@@ -292,7 +317,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         return;
       }
       case 'details_ok': {
-        const d = m as Details;
+        const d = m;
         // Only update if this still matches the selected pid;
         // a click-then-click-elsewhere race could otherwise overwrite.
         if (d.pid === selectedPID()) setDetails(d);
