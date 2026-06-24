@@ -108,14 +108,15 @@ P2/P3 merges).
   systemd `ExecStartPre` as belt-and-suspenders) so `cap_setuid,cap_setgid,
   cap_kill` are set at install time under systemd / OpenRC / supervisord /
   bare container alike. Document the bounding-set caveat.
-- [ ] **Ship a supervisord drop-in** for no-systemd/container hosts — as an
-  example (`/usr/share/wash-login/supervisord.conf` + a doc line), or a
-  small `wash-login-supervisor` subpackage that `Depends: supervisor`. Do
-  NOT install an active conf from the main package.
-  - Raised from the homezone estate (wash under MikroTik RouterOS OCI +
-    supervisord). Acceptance: a Debian+supervisor container serves login
-    on :10000 with working uid-switching, no manual setcap, no hardcoded
-    `--allow-insecure-cookie` downstream.
+- [x] **Ship a supervisord drop-in** for no-systemd/container hosts. Example
+  program (docs only, not activated) installed at
+  `/usr/share/wash-login/supervisord.conf` by all three packagers
+  (deb/rpm/apk); runs wash-login as root (root holds the caps → no setcap)
+  and sources args from the single-source `/etc/default/wash-login`, with a
+  documented hardened `user=wash-system` alternative. Doc line in
+  docs/MULTIUSER.md "Out-of-the-box setup". Config validated with a
+  configparser parse; full Debian+supervisor container acceptance still to
+  run via the package pipeline.
 
 ## Test suite hygiene  (docs/TECH_DEBT.md P3)
 

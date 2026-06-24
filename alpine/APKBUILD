@@ -87,6 +87,8 @@ _login() {
     install -Dm0755 out/wash-login "$subpkgdir/usr/bin/wash-login"
     install -Dm0755 alpine/wash-login.initd "$subpkgdir/etc/init.d/wash-login"
     install -Dm0644 packaging/wash-login.default "$subpkgdir/etc/conf.d/wash-login"
+    # Example supervisord program for no-systemd/container hosts (docs only).
+    install -Dm0644 packaging/wash-login.supervisord.conf "$subpkgdir/usr/share/wash-login/supervisord.conf"
     # Man stub (.so → wash.1 from the wash package; depends=wash). gzip: abuild
     # rejects uncompressed man pages.
     mkdir -p "$subpkgdir/usr/share/man/man1"

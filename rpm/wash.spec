@@ -106,6 +106,8 @@ install -m 0755 out/lib/libwlroots.so.* %{buildroot}/usr/lib/wash/
 install -m 0755 out/wash-login %{buildroot}%{_bindir}/wash-login
 install -D -m0644 packaging/wash-login.service %{buildroot}%{_unitdir}/wash-login.service
 install -D -m0644 packaging/wash-login.default %{buildroot}%{_sysconfdir}/default/wash-login
+# Example supervisord program for no-systemd/container hosts (docs only).
+install -D -m0644 packaging/wash-login.supervisord.conf %{buildroot}%{_datadir}/wash-login/supervisord.conf
 install -d %{buildroot}%{_sysconfdir}/wash
 # Man pages: source wash.1 + a .so redirect stub per applet (rpmlint wants a
 # man page per binary). Bash completion for the dispatcher. Appended to wash.files.
@@ -130,6 +132,7 @@ echo ".so man1/wash.1" > %{buildroot}%{_mandir}/man1/wash-login.1
 %{_bindir}/wash-login
 %{_mandir}/man1/wash-login.1*
 %{_unitdir}/wash-login.service
+%{_datadir}/wash-login/supervisord.conf
 %config(noreplace) %{_sysconfdir}/default/wash-login
 %attr(0750, wash-system, wash) %dir %{_sysconfdir}/wash
 
@@ -207,6 +210,9 @@ exit 0
   Settings "Remote" panel listing live sessions + mounts with graceful teardown.
 - theme: Copland pack, sunwave logo, dead-black terminal/editor, denser start
   menu, host info in the start header.
+- wash-login: ship an example supervisord program at
+  /usr/share/wash-login/supervisord.conf (docs only, not activated) for
+  no-systemd/container hosts; reads the same /etc/default/wash-login args.
 
 * Mon Jun 22 2026 sirmick <sirmick@gmail.com> - 0.9.3-1
 - build: a single app roster drives the per-app Makefile rules, the multicall

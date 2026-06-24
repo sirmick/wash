@@ -50,6 +50,9 @@ override_dh_install:
 	install -D -m0755 out/wash-login debian/wash-login/usr/bin/wash-login
 	install -D -m0644 packaging/wash-login.service debian/wash-login/usr/lib/systemd/system/wash-login.service
 	install -D -m0644 packaging/wash-login.default debian/wash-login/etc/default/wash-login
+	# Example supervisord program for no-systemd/container hosts. Docs only —
+	# shipped under /usr/share/wash-login/, never activated by the package.
+	install -D -m0644 packaging/wash-login.supervisord.conf debian/wash-login/usr/share/wash-login/supervisord.conf
 	# Man pages: one source (packaging/wash.1) + a .so redirect stub per applet
 	# so every /usr/bin entry has a man page (lintian binary-without-manpage).
 	# Stubs generated from wash.binaries; wash-login's lives in its own package.
