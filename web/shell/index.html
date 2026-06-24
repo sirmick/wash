@@ -76,10 +76,95 @@
       opacity: 0;
       animation: wash-shimmer-sweep 900ms ease-out 1 forwards;
     }
+
+    /* Boot splash — rendered from this static markup so there's immediate
+       feedback on a cold/slow connect, before shell.js is even fetched.
+       The shell drives the step list via window.__washBoot (see
+       web/shell/src/boot.ts) and removes the overlay once the desktop
+       wallpaper has actually rendered (the session app dispatches
+       wash:desktop-painted). The inline controller below has a 12s
+       backstop so the splash can never wedge. */
+    #wash-boot {
+      position: fixed; inset: 0; z-index: 999999;
+      display: flex; align-items: center; justify-content: center;
+      background: radial-gradient(circle at 30% 20%, #1a1a32 0, #0a0a18 75%);
+      transition: opacity 380ms ease;
+    }
+    #wash-boot[data-done="1"] { opacity: 0; pointer-events: none; }
+    .wash-boot-card { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+    .wash-boot-logo { width: 72px; height: 72px; animation: wash-boot-pulse 2.2s ease-in-out infinite; }
+    @keyframes wash-boot-pulse { 0%,100% { opacity: .65; transform: scale(1); } 50% { opacity: 1; transform: scale(1.04); } }
+    .wash-boot-title { font: 600 18px system-ui, sans-serif; letter-spacing: .04em; color: #e8e8f5; }
+    .wash-boot-steps { list-style: none; margin: 6px 0 0; padding: 0; min-width: 230px; display: flex; flex-direction: column; gap: 7px; }
+    .wash-boot-step { display: flex; align-items: center; gap: 10px; font: 13px ui-monospace, SFMono-Regular, monospace; color: #99a; }
+    .wash-boot-step[data-state="done"] { color: #7fd1a0; }
+    .wash-boot-step[data-state="fail"] { color: #e88; }
+    .wash-boot-glyph { width: 14px; height: 14px; flex: none; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; }
+    .wash-boot-step[data-state="active"] .wash-boot-glyph {
+      border: 2px solid rgba(255,255,255,.25); border-top-color: #cfe;
+      border-radius: 50%; animation: wash-boot-spin .7s linear infinite;
+    }
+    .wash-boot-step[data-state="done"] .wash-boot-glyph::before { content: "\2713"; }
+    .wash-boot-step[data-state="fail"] .wash-boot-glyph::before { content: "\2715"; }
+    @keyframes wash-boot-spin { to { transform: rotate(360deg); } }
+
+    /* Busy cursor while a freshly-launched app's window is still loading
+       its bundle — wm.ts toggles .wash-launching on <html> across the
+       bundle wait (mountWhenReady), cleared on mount. */
+    html.wash-launching, html.wash-launching * { cursor: progress !important; }
   </style>
 </head>
 <body>
   <div id="root"></div>
+  <div id="wash-boot" role="status" aria-live="polite">
+    <div class="wash-boot-card">
+      <img class="wash-boot-logo" src="/wash-logo.svg" alt="">
+      <div class="wash-boot-title">starting wash…</div>
+      <ul id="wash-boot-steps" class="wash-boot-steps"></ul>
+    </div>
+  </div>
+  <script>
+  // Boot-splash controller. A classic (non-module) script so it runs the
+  // instant the parser reaches it — before the deferred shell module — and
+  // window.__washBoot exists for boot.ts to drive. Idempotent finish().
+  (function () {
+    var overlay = document.getElementById('wash-boot');
+    var box = document.getElementById('wash-boot-steps');
+    var rows = {};
+    var done = false;
+    function row(id) {
+      var r = rows[id];
+      if (!r) {
+        r = document.createElement('li');
+        r.className = 'wash-boot-step';
+        r.innerHTML = '<span class="wash-boot-glyph"></span><span class="wash-boot-label"></span>';
+        box.appendChild(r);
+        rows[id] = r;
+      }
+      return r;
+    }
+    window.__washBoot = {
+      set: function (id, label, state) {
+        if (done) return;
+        var r = row(id);
+        if (label != null) r.querySelector('.wash-boot-label').textContent = label;
+        r.setAttribute('data-state', state || 'active');
+      },
+      finish: function () {
+        if (done) return;
+        done = true;
+        if (!overlay) return;
+        overlay.setAttribute('data-done', '1');
+        setTimeout(function () { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }, 420);
+      }
+    };
+    // First row the instant HTML parses, before the shell module loads.
+    window.__washBoot.set('boot', 'loading shell…', 'active');
+    // Backstop: never wedge the splash if the desktop never signals
+    // (e.g. a --no-session router, or a wallpaper that fails to decode).
+    setTimeout(function () { window.__washBoot.finish(); }, 12000);
+  })();
+  </script>
   <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>

@@ -73,6 +73,7 @@ import {
 import './wash-app-display';
 import { showToast } from './notify';
 import { virtioConsoleFactory } from './virtio';
+import { bootStep, bootFinish } from './boot';
 
 interface ShellCatalog {
   t: 'catalog';
@@ -713,9 +714,16 @@ function handleAppDeclared(client: RouterClient, msg: ShellAppDeclared): void {
     // Only the LOCAL router owns the desktop chrome; a remote host's
     // desktop surface is ignored (we composite its windows, not its shell).
     if (client.origin !== LOCAL_ORIGIN) return;
+    bootStep('desktop', 'loading desktop…', 'active');
     client
       .waitForBundle(msg.instance_id)
-      .then(() => mountDesktop({ instanceID: msg.instance_id, element: msg.element }))
+      .then(() => {
+        mountDesktop({ instanceID: msg.instance_id, element: msg.element });
+        // The session app paints the wallpaper next; the boot splash waits
+        // for its wash:desktop-painted signal (listener below) before it
+        // tears down, so the user never sees a bare desktop mid-load.
+        bootStep('desktop', 'rendering wallpaper…', 'active');
+      })
       .catch((err) => console.error('wash: desktop bundle:', err));
   }
   // surface=window apps mount on their session.window upsert; the
@@ -811,6 +819,38 @@ function onWindowClose(win: Win): void {
 
 const [connState, setConnState] = createSignal<ConnState>('connecting');
 conn.onState(setConnState);
+
+// Boot splash (web/shell/src/boot.ts + the #wash-boot overlay in
+// index.html). The overlay is already showing "loading shell…" from
+// static markup; now that this module has parsed, mark it done and start
+// the connect step. The splash is torn down when the session app reports
+// the wallpaper actually rendered (wash:desktop-painted), with a 12s
+// backstop in index.html so it can never wedge.
+bootStep('boot', 'shell loaded', 'done');
+bootStep('ws', 'connecting to router…', 'active');
+let bootWsSettled = false;
+createEffect(() => {
+  const s = connState();
+  if (s === 'open') {
+    if (!bootWsSettled) {
+      bootWsSettled = true;
+      bootStep('ws', 'connected', 'done');
+    }
+  } else if (s === 'closed' || s === 'unauthenticated') {
+    // Couldn't reach the router on boot — fail the step and drop the
+    // splash so the ConnectionBanner's error shows through underneath.
+    bootStep('ws', s === 'unauthenticated' ? 'session expired' : 'router unreachable', 'fail');
+    bootFinish();
+  }
+});
+window.addEventListener(
+  'wash:desktop-painted',
+  () => {
+    bootStep('desktop', 'desktop ready', 'done');
+    bootFinish();
+  },
+  { once: true },
+);
 
 // When the reconnect loop gives up on auth grounds, bounce to the
 // login page (wash-login) so the user re-authenticates. The raw router

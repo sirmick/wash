@@ -14,6 +14,7 @@ import type { SessionPatch, SessionWindow } from './main';
 import { type Origin, LOCAL_ORIGIN } from './clients';
 import { clampViewport, viewportForRect } from './viewport-math';
 import { focusFromSnapshot } from './wm-focus';
+import { beginWindowLoad, endWindowLoad } from './boot';
 
 export type WinState = 'normal' | 'minimized' | 'maximized';
 
@@ -276,9 +277,14 @@ function mountWhenReady(
     upsertWindow(w);
     return;
   }
+  // Element isn't defined yet — its bundle is in flight. Show the busy
+  // cursor (index.html `.wash-launching`) until the window mounts, so a
+  // freshly-launched app gives immediate "starting…" feedback.
+  beginWindowLoad();
   waitForBundle(w.instanceID)
     .then(() => upsertWindow(w))
-    .catch((err) => console.error(`wash: ${where} window mount:`, err));
+    .catch((err) => console.error(`wash: ${where} window mount:`, err))
+    .finally(() => endWindowLoad());
 }
 
 // applySessionSnapshot replaces the store with the router's full

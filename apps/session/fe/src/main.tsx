@@ -479,6 +479,30 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // Async, so a generation counter drops a stale fetch if a newer
   // desktop.config lands first. Object URLs are revoked when replaced.
   let wallpaperGen = 0;
+  // Tell the shell the desktop background is actually on screen so it can
+  // tear down the boot splash (web/shell boot.ts). Fires once, best-effort.
+  let desktopPainted = false;
+  const signalPainted = () => {
+    if (desktopPainted) return;
+    desktopPainted = true;
+    try {
+      window.dispatchEvent(new CustomEvent('wash:desktop-painted'));
+    } catch {
+      /* no CustomEvent (non-browser test env) — splash backstop covers it */
+    }
+  };
+  // Best-effort decode so "painted" means pixels are ready, not just that
+  // the blob URL was assigned. Swallows errors (e.g. an SVG the browser
+  // declines to decode) — the caller paints + signals regardless.
+  const decodeImage = async (url: string) => {
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+    } catch {
+      /* best-effort */
+    }
+  };
   const applyWallpaper = async (pack: Pack, wp: DesktopConfigMsg['wallpaper']) => {
     const gen = ++wallpaperGen;
     const fallback = wp.fallback_color || 'radial-gradient(circle at 30% 20%, #1a1a32 0, #0a0a18 75%)';
@@ -500,21 +524,30 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     };
     if (wp.bytes) {
       const url = URL.createObjectURL(new Blob([decodeBase64(wp.bytes)], { type: wp.mime || 'application/octet-stream' }));
+      await decodeImage(url);
       paint(`url("${url}")`, url);
+      signalPainted();
       return;
     }
     if (!window.wash?.fetchAsset) {
       // No transport-agnostic fetch (older shell / standalone): fall back
       // to a plain HTTP asset URL. Won't render in the in-browser VM.
       paint(`url("${washAssetUrl(pack.wallpaper)}")`, null);
+      signalPainted();
       return;
     }
     try {
       const a = await window.wash.fetchAsset(pack.wallpaper);
       const url = URL.createObjectURL(new Blob([a.bytes], { type: a.mime || 'image/svg+xml' }));
+      await decodeImage(url);
       paint(`url("${url}")`, url);
+      signalPainted();
     } catch (err) {
       console.warn(`wash-session: wallpaper fetch ${pack.wallpaper}:`, err);
+      // Don't strand the boot splash on a wallpaper failure — the gradient
+      // fallback is already showing; tell the shell we're as painted as
+      // we'll get.
+      signalPainted();
     }
   };
 
