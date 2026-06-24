@@ -203,7 +203,7 @@ func (r *Router) controlLaunch(ctx context.Context, conn net.Conn, appID string)
 		})
 		return
 	}
-	inst, err := r.spawnAndRun(ctx, entry, false)
+	inst, err := r.launchOrRaise(ctx, entry)
 	if err != nil {
 		writeControlResponse(conn, map[string]any{
 			"t": "error", "code": "internal", "msg": err.Error(),

@@ -56,6 +56,17 @@ P2/P3 merges).
   `as` casts — give them discriminated-union types.
 - [ ] **(optional) Phase 7** — same playbook for `session` / `top`.
 
+## window manager / shell
+
+- [x] **"Open X" buttons now raise an already-open app.** Buttons like the
+  Settings box's "Open network settings" launch the target app and bring it
+  to the foreground when it isn't running — but if the app was *already* open,
+  clicking did nothing visible (the existing window stayed in the z-order
+  instead of being raised/focused; instancing=single apps even stacked a
+  duplicate). Fixed at the launch seam: `Router.launchOrRaise` raises the
+  existing window for single/singleton apps across all three launch paths
+  (app spawn-request, launcher `shell.launch`, control-socket launch).
+
 ## system monitor (top)
 
 - [ ] **`% mem` and RSS look wrong.** The memory percentage and RSS columns

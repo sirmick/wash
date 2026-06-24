@@ -598,7 +598,9 @@ func (s *ShellSession) handleLaunch(m wire.ShellLaunch) error {
 		return nil
 	}
 	go func() {
-		if _, err := s.router.spawnAndRun(context.Background(), entry, false); err != nil {
+		// launchOrRaise: a launcher click on an already-open single-window
+		// app surfaces it instead of spawning a duplicate.
+		if _, err := s.router.launchOrRaise(context.Background(), entry); err != nil {
 			s.router.log("shell launch %s: %v", m.AppID, err)
 		}
 	}()
