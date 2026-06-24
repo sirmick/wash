@@ -2,7 +2,9 @@ package washmount
 
 import (
 	"context"
+	"errors"
 	"hash/fnv"
+	"io"
 	"os"
 	"path"
 	"syscall"
@@ -11,6 +13,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/pkg/sftp"
+	"golang.org/x/sys/unix"
 )
 
 // sftpNode is one inode in the mounted tree. Its remote path is derived from its
@@ -139,7 +142,12 @@ func (n *sftpNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off i
 		defer h.mu.Unlock()
 		nn, err := h.f.ReadAt(buf, off)
 		num = nn
-		if err != nil && num > 0 { // short read at EOF is success, not error
+		// EOF is success, not an error — including a zero-byte read at/after
+		// EOF (POSIX returns 0). pkg/sftp returns the bare io.EOF sentinel
+		// (not *sftp.StatusError), which toErrno would otherwise default to
+		// EIO, turning a clean end-of-file into an I/O error
+		// (TODO-sftp-mount-bugs.md). errors.Is covers num>0 and num==0 alike.
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		return err
@@ -250,9 +258,29 @@ func (n *sftpNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 	if !ok {
 		return syscall.EXDEV
 	}
+	// RENAME_EXCHANGE / RENAME_WHITEOUT have no SFTP equivalent. A one-way
+	// PosixRename that returned 0 would make the kernel branch into
+	// ExchangeChild and swap the dentry tree as if both entries still existed
+	// — kernel view diverges from the backing store. Reject rather than lie
+	// (TODO-sftp-mount-bugs.md Medium).
+	if flags&(unix.RENAME_EXCHANGE|unix.RENAME_WHITEOUT) != 0 {
+		return syscall.EINVAL
+	}
 	from := path.Join(n.rpath(), name)
 	to := path.Join(np.rpath(), newName)
+	noreplace := flags&unix.RENAME_NOREPLACE != 0
 	return n.root.run(ctx, "rename", func(cl *sftp.Client) error {
+		if noreplace {
+			// The caller demanded the target not be clobbered, but PosixRename
+			// always replaces. Refuse if it already exists. (Small TOCTOU vs a
+			// concurrent create — the SFTP base protocol has no atomic
+			// no-replace rename; a silent overwrite is the worse failure.)
+			if _, err := cl.Lstat(to); err == nil {
+				return os.ErrExist // → EEXIST
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
 		// PosixRename atomically replaces the target if the server supports the
 		// extension; it is the right default for a rename-over-existing.
 		return cl.PosixRename(from, to)

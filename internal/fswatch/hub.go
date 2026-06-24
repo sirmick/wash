@@ -45,7 +45,7 @@ func (h *Hub) Subscribe(subscriberID, path string) error {
 		}
 		hp = &hubPath{sub: sub, subscribers: make(map[string]struct{}), done: make(chan struct{})}
 		h.paths[path] = hp
-		go h.forward(hp)
+		go h.forward(path, hp)
 	}
 	hp.subscribers[subscriberID] = struct{}{}
 	return nil
@@ -53,11 +53,24 @@ func (h *Hub) Subscribe(subscriberID, path string) error {
 
 // forward fans a path's events to its current subscribers until the path is torn
 // down. The subscriber set is snapshotted under lock, then emit runs unlocked.
-func (h *Hub) forward(hp *hubPath) {
+func (h *Hub) forward(path string, hp *hubPath) {
 	for {
 		select {
 		case ev, ok := <-hp.sub.Events():
 			if !ok {
+				// The underlying watch ended on its own (e.g. the remote feed
+				// closed when its mount was unmounted) — not via our done
+				// channel. Drop this hubPath so a later Subscribe to the same
+				// path opens a FRESH Watch instead of attaching to this dead
+				// entry and never receiving another event
+				// (TODO-sftp-mount-bugs.md Medium: silent event loss after
+				// unregister→re-register). Only delete if the map still points
+				// at us — a concurrent Unsubscribe/Close may have replaced it.
+				h.mu.Lock()
+				if h.paths[path] == hp {
+					delete(h.paths, path)
+				}
+				h.mu.Unlock()
 				return
 			}
 			h.mu.Lock()
