@@ -860,9 +860,10 @@ func (r *Router) takeTokenPending(token string) *tokenPending {
 
 // spawnChild execs target and runs HandleApp on the resulting transport.
 // On success, sends EvtSpawnOk to the requester; on failure,
-// EvtSpawnErr. Backed by the shared spawnAndRun.
+// EvtSpawnErr. Backed by the shared launchOrRaise, so re-launching an
+// already-open single-window app raises it instead of duplicating it.
 func (r *Router) spawnChild(target *Entry, requester *AppInstance) {
-	inst, err := r.spawnAndRun(context.Background(), target, false)
+	inst, err := r.launchOrRaise(context.Background(), target)
 	if err != nil {
 		r.log("spawn %s: %v", target.Manifest.ID, err)
 		if werr := requester.WriteEvt(wire.NewEvtSpawnErr(target.Manifest.ID, wire.ErrCodeInternal, err.Error())); werr != nil {

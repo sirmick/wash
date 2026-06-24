@@ -863,6 +863,77 @@ func (r *Router) spawnAndRun(ctx context.Context, entry *Entry, kiosk bool, extr
 	return inst, nil
 }
 
+// launchOrRaise opens entry for a user "launch" intent — the settings
+// "Open Network…" button, a launcher click, a control-socket launch.
+// For a windowed single-window app (instancing single/singleton) that
+// is already running, it raises the existing window to the foreground
+// and returns that instance instead of starting a duplicate. This is
+// what makes "Open X" surface the already-open window rather than doing
+// nothing (or, for instancing=single, stacking a second window).
+// Multi-instance apps always get a fresh spawn. Callers that handle
+// background/desktop surfaces specially must do so before calling here.
+func (r *Router) launchOrRaise(ctx context.Context, entry *Entry) (*AppInstance, error) {
+	if entry.Manifest.Instancing != InstancingMulti {
+		if existing := r.instanceByApp(entry.Manifest.ID); existing != nil {
+			r.raiseInstanceWindow(existing)
+			return existing, nil
+		}
+	}
+	return r.spawnAndRun(ctx, entry, false)
+}
+
+// instanceByApp returns a currently-running instance for appID, or nil
+// if none. Prefers the singleton slot; otherwise scans the app table
+// (instancing=single isn't indexed there). With single/singleton there
+// is at most one, so the scan is unambiguous. Caller must NOT hold r.mu.
+func (r *Router) instanceByApp(appID string) *AppInstance {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if inst := r.singletons[appID]; inst != nil {
+		return inst
+	}
+	for _, inst := range r.apps {
+		if inst.Manifest != nil && inst.Manifest.ID == appID {
+			return inst
+		}
+	}
+	return nil
+}
+
+// raiseInstanceWindow brings inst's primary window to the foreground —
+// restores it if minimized, raises it to the top of the z-stack, marks
+// it focused, and relays focus/unfocus events to the affected apps. The
+// same end state as a user clicking the window's taskbar pill (see
+// ShellSession.handleWindowFocus), but router-initiated. No-op for a
+// windowless (background/kiosk/desktop) instance.
+func (r *Router) raiseInstanceWindow(inst *AppInstance) {
+	if inst == nil || inst.WindowID == 0 {
+		return
+	}
+	win := inst.WindowID
+	// Un-minimize first so the raise is actually visible.
+	r.broadcastPatches(r.winSession.setState(win, wire.WindowStateNormal))
+	prev := r.winSession.focusedWindowID()
+	patches := r.winSession.focus(win)
+	if len(patches) == 0 {
+		return
+	}
+	r.broadcastPatches(patches)
+	if prev != 0 && prev != win {
+		r.mu.Lock()
+		prevInst := r.byWin[prev]
+		r.mu.Unlock()
+		if prevInst != nil {
+			if err := prevInst.WriteEvt(wire.NewEvtWindowUnfocus(prev)); err != nil {
+				r.log("raise: unfocus relay win=%d: %v", prev, err)
+			}
+		}
+	}
+	if err := inst.WriteEvt(wire.NewEvtWindowFocus(win)); err != nil {
+		r.log("raise: focus relay instance=%s win=%d: %v", inst.InstanceID, win, err)
+	}
+}
+
 // maybeBroadcastCrash inspects the cmd.ProcessState after Wait() has
 // returned and, if the exit looks abnormal (non-zero code or
 // signal-killed), ships a ShellAppCrashed event to every attached
