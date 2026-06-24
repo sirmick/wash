@@ -104,6 +104,28 @@ P2/P3 merges).
 - [ ] **Sidebar e2e order.** 3 fm-related specs pass alone but fail in the
   full suite after M7; not root-caused.
 
+## pty / channel handling  (structural)
+
+- [ ] **Local-term channel-ownership race on peer churn.** Connecting/
+  disconnecting a remote host (or rapid browser open/close) can break an
+  already-open *local* terminal: raw PTY frames get dropped
+  (`drop raw frame on channel N (owned by another shell)`) or control
+  messages land on a vanished instance (`shell app_msg: dropping message for
+  unknown instance=i-N`), and the shell's `/bin/bash` can end up killed.
+  Root: `reattachChannelsToShell` (internal/router/shell_session.go) assigns
+  channel ownership to the *latest* shell; an overlapping/older session keeps
+  ownership and the new session's frames are dropped. Surfaced repeatedly in
+  cluster testing of wash-connect (auto-reconnect cut the frequency by
+  reducing peer churn, but did not fix the race). See memory: wash dev loop.
+- [ ] **Structural fix for wedged ptys (design).** A single dropped/misrouted
+  frame currently wedges a terminal with no recovery path. Options to weigh:
+  an authoritative pty registry (channel → owning shell/instance, looked up
+  on every frame instead of cached, so a stale owner can't strand frames); a
+  pty supervisor that detects a wedged channel and re-binds or restarts it;
+  and/or making channel ownership a lease the newest shell renews rather than
+  a one-shot reassignment. Goal: a term never silently goes black —
+  it either keeps working or visibly recovers.
+
 ## Won't-do / deliberate no-ops (recorded so they don't get re-flagged)
 
 - Hand-rolled insertion sorts (`cmd/wash/main.go`, `runtime_stats.go`) —
