@@ -24,13 +24,16 @@ mountain-twilight scene traced with `vtracer` (`--filter_speckle 6
 ## Dreamtime — `wallpapers/dreamtime.svg`
 Vectorized from an AI-generated (Google Gemini) Australian Aboriginal
 dot-painting of a sunrise over the coast — sun, ocean swirls, golden beach
-with animal tracks, green hinterland. The light frame around the original
-was cropped (~85% of the border removed) before a high-quality `vtracer`
-spline trace (`--mode spline --filter_speckle 3 --color_precision 7
---gradient_step 12`), then minified with `svgo` (~3.5 MB — a deliberate
-quality choice). Cropped source raster kept at
-`design/packs/src/dreamtime-source.png`. Paired with the Dreamtime palette
-(orange sampled from the sun, lighter-orange chrome).
+with animal tracks, green hinterland. The painting region was cropped out of
+the original's light frame, then traced at the highest `vtracer` setting
+(`--mode polygon --filter_speckle 2 --color_precision 8 --gradient_step 4`,
+~39 k shapes). A post-pass (`design/packs/circlify.py`) then replaces every
+small, round, well-filled polygon (~18.8 k of them) with a real SVG
+`<circle>` — so the dots are true vector dots — and frames the painting with
+a sun-orange border on a lighter-ocean-blue field (the field/border colors
+sampled from the sea + sun). Minified with `svgo` (~2.6 MB). Source raster
+(tight painting region) kept at `design/packs/src/dreamtime-source.png`;
+converter at `design/packs/circlify.py`.
 
 ## Seoul — `wallpapers/seoul.svg`
 Composed from three Korean **hwatu** (화투) 광/光 "light" cards — January

@@ -394,56 +394,52 @@ const oslo: Pack = {
 };
 
 // Dreamtime — an Australian Aboriginal dot-painting pack. A LIGHT theme
-// built around the SUN: the window background is a solid orange sampled
-// straight off the sun in the artwork (#e07d1a), and the chrome surfaces
-// (menus, taskbar/start bar, titlebars) are *lighter* solid oranges
-// stepping up from it — no cream / grey / yellow. State + hover colors are
-// solid orange/earth variants rather than washed-out tints. Accents stay
-// lifted from the rest of the painting (turquoise sea, emerald hills,
-// terracotta). Deep-brown text reads across the whole orange ramp. The
-// wallpaper is a high-quality spline trace of the dot-painting (border
-// trimmed). Bundles rounded-geometric **Quicksand** (OFL) for the chrome,
-// echoing the painting's concentric dots.
+// with NEUTRAL chrome so the wallpaper carries the color: the window /
+// menu / taskbar / titlebar surfaces are light greys with a slight blue
+// tint, and the vivid accents (turquoise sea, emerald hills, terracotta,
+// sun-orange) are lifted from the painting. Dark slate text. The wallpaper
+// is the dot-painting traced to real SVG circles, framed by a sun-orange
+// border on a lighter-ocean-blue field. Bundles rounded-geometric
+// **Quicksand** (OFL) for the chrome, echoing the painting's dots.
 const dreamtime: Pack = {
   id: 'dreamtime',
   name: 'Dreamtime',
   appearance: 'light',
   scheme: {
-    // Sun-orange background, with the chrome stepping LIGHTER off it.
-    '--wash-bg-window': '#e07d1a', // the sun (sampled)
-    '--wash-bg-menu': '#ef9233', // lighter — menus / dropdowns / start menu
-    '--wash-bg-inset': '#f2a04a', // lighter sunken field (dark text reads)
-    '--wash-bg-canvas': '#fdf0dd', // editor/terminal content surface (warm, legible)
+    // Light grey, slight blue tint — neutral chrome that lets the wallpaper pop.
+    '--wash-bg-window': '#dde3ec',
+    '--wash-bg-menu': '#e7ebf2', // menus / dropdowns / start menu (a touch lighter)
+    '--wash-bg-inset': '#f1f4f9', // near-white sunken field
+    '--wash-bg-canvas': '#f8fafc', // editor/terminal content surface
     '--wash-bg-row': 'transparent',
-    '--wash-bg-row-hover': '#f4a23f', // solid lighter-orange hover (clearly visible)
-    '--wash-bg-row-selected': '#fbbf4a', // solid bright sun-amber selection (dark text reads)
-    '--wash-bg-backdrop': 'rgba(60,24,0,0.4)',
-    '--wash-bg-drop-target': '#f6b362', // solid light orange
-    '--wash-border-menu': '#bd6610',
-    '--wash-border-window': '#9c520b',
-    '--wash-border-focus': '#7a3206', // deep burnt-orange focus ring
-    '--wash-border-drop-target': '#7a3206',
-    '--wash-fg': '#2e1606', // deep roasted brown (near-black, reads on all the oranges)
-    '--wash-fg-muted': '#6a3a12',
-    '--wash-fg-dim': '#8a521e',
-    // State backgrounds: solid, saturated variants (not pale tints).
-    '--wash-bg-danger': '#e89378',
-    '--wash-border-danger': '#a83a1a',
-    '--wash-fg-danger': '#5e1605',
-    '--wash-bg-success': '#bcd08a',
-    '--wash-fg-success': '#2e5410',
-    '--wash-bg-warning': '#f4bd55',
-    '--wash-fg-warning': '#6e4408',
-    '--wash-bg-info': '#7fc3c0',
-    '--wash-fg-info': '#0c4a4e',
-    '--wash-bg-neutral': '#f0a657', // solid light orange neutral badge
-    '--wash-bg-denied': '#e7a64a',
-    '--wash-border-denied': '#9a6410',
-    '--wash-sev-error': '#a8300f',
-    '--wash-sev-warn': '#7a4e08',
-    '--wash-sev-notice': '#0f6e72',
-    '--wash-sev-info': '#3a1e0a',
-    '--wash-sev-debug': '#7a5224',
+    '--wash-bg-row-hover': '#ccd5e3', // deeper blue-grey hover
+    '--wash-bg-row-selected': '#aac3e0', // soft ocean-blue selection (dark text reads)
+    '--wash-bg-backdrop': 'rgba(20,30,45,0.35)',
+    '--wash-bg-drop-target': '#bcd6ec',
+    '--wash-border-menu': '#bcc5d4',
+    '--wash-border-window': '#a6b1c2',
+    '--wash-border-focus': '#2c7fb0', // ocean blue
+    '--wash-border-drop-target': '#2c7fb0',
+    '--wash-fg': '#1f2733', // dark slate (blue-tinted near-black)
+    '--wash-fg-muted': '#525c6b',
+    '--wash-fg-dim': '#7a8492',
+    '--wash-bg-danger': '#f4d4cc',
+    '--wash-border-danger': '#c0563f',
+    '--wash-fg-danger': '#a52f1c',
+    '--wash-bg-success': '#d8e8c4',
+    '--wash-fg-success': '#3a7a2a',
+    '--wash-bg-warning': '#f6e2b0',
+    '--wash-fg-warning': '#9a6c10',
+    '--wash-bg-info': '#cfe2ef',
+    '--wash-fg-info': '#1f5f86',
+    '--wash-bg-neutral': '#dde3ec',
+    '--wash-bg-denied': '#ece2cf',
+    '--wash-border-denied': '#bd9a4a',
+    '--wash-sev-error': '#b8341d',
+    '--wash-sev-warn': '#9a6c10',
+    '--wash-sev-notice': '#2c7fb0',
+    '--wash-sev-info': '#3a4452',
+    '--wash-sev-debug': '#8a93a0',
     '--wash-accent-red': '#c0392b', // terracotta red
     '--wash-accent-orange': '#e26a12', // burnt orange (sun outer ring)
     '--wash-accent-amber': '#e89a10', // golden sun
@@ -456,18 +452,15 @@ const dreamtime: Pack = {
     '--wash-accent-violet': '#7a4fa3',
     '--wash-accent-magenta': '#b83a7a',
     '--wash-accent-pink': '#d2628f',
-    // Chrome: solid orange captions stepping up from the window bg; the
-    // active caption is brighter so the focused window's sun "rises". One
-    // deep-brown titlebar fg reads on both.
-    '--wash-titlebar-active': '#f59a30',
-    '--wash-titlebar-inactive': '#e88a24',
-    '--wash-titlebar-fg': '#2e1606',
-    // Start bar (taskbar): a solid lighter orange — the "lighter, not
-    // yellow/cream/white/grey" the look calls for.
-    '--wash-taskbar-bg': '#f4a23f',
-    '--wash-taskbar-top': '#ffc985', // 1px raised highlight edge
-    // Desktop info banner sits over the bright wallpaper → dark text reads.
-    '--wash-banner-fg': '#2a1405',
+    // Chrome: light blue-grey captions; one dark-slate titlebar fg reads on both.
+    '--wash-titlebar-active': '#cdd6e3',
+    '--wash-titlebar-inactive': '#dde3ec',
+    '--wash-titlebar-fg': '#1f2733',
+    // Start bar (taskbar): light blue-grey with a near-white raised top edge.
+    '--wash-taskbar-bg': '#d3dae5',
+    '--wash-taskbar-top': '#f2f5fa',
+    // Desktop info banner sits over the wallpaper's light-ocean-blue field → dark text.
+    '--wash-banner-fg': '#1c2735',
     // Rounded chrome to match Quicksand's geometry and the painting's dots.
     '--wash-radius-sm': '5px',
     '--wash-radius-md': '8px',
