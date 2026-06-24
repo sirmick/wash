@@ -223,13 +223,28 @@ func registerAuth(bus *sdk.Bus) {
 		// after one password prompt, BOOTSTRAPPING trust on a host we have no
 		// key on yet (the common case for a freshly-discovered peer). ssh-add
 		// only helps when a key is *already* authorized but locked — useless
-		// for a first connection. We dial the same target string the connect
-		// uses (a name, so the user's ~/.ssh/config picks the identity).
-		argv := []string{"ssh-copy-id"}
-		if req.KeyFile != "" {
-			argv = append(argv, "-i", req.KeyFile)
-		}
-		argv = append(argv, req.Host)
+		// for a first connection. We target the same string connect uses (a
+		// name, so the user's ~/.ssh/config picks the identity).
+		//
+		// But ssh-copy-id can only copy a key that exists: a user with no
+		// keypair (common right after first login — e.g. on a fresh box) gets
+		// "No identities found" and ssh-copy-id exits instantly (the auth
+		// terminal just flashes and closes). So run it via a small shell that
+		// generates a default ed25519 key first when none is present, then
+		// copies it. host/keyfile are passed as positional args ($1/$2) so the
+		// host string is never interpolated into the script.
+		const copyIDScript = `set -e
+host=$1; keyfile=$2
+if [ -n "$keyfile" ]; then exec ssh-copy-id -i "$keyfile" "$host"; fi
+if ! ls "$HOME"/.ssh/id_*.pub >/dev/null 2>&1; then
+  echo "No SSH key on this machine yet — generating one (ed25519)…"
+  mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+  ssh-keygen -t ed25519 -N "" -f "$HOME/.ssh/id_ed25519" -C "wash@$(hostname)"
+  echo
+fi
+echo "Installing your public key on $host — enter its password when asked:"
+exec ssh-copy-id "$host"`
+		argv := []string{"sh", "-c", copyIDScript, "wash-auth", req.Host, req.KeyFile}
 		// OpenChannel can't run on the SDK read goroutine — spawn off it.
 		go func() {
 			sess, err := pty.Open(context.Background(), conn, conn.WindowID(), 80, 24, argv, pty.WithWashEnv,
