@@ -90,6 +90,14 @@ type Options struct {
 	OnEntry func(Entry)
 	// QueryInterval is the browse re-query cadence. Zero defaults to 60s.
 	QueryInterval time.Duration
+	// Logf, if non-nil, receives lifecycle lines (socket join, advertise).
+	// nil silences the package. The caller injects its own logger so mdns
+	// keeps no global logging dependency.
+	Logf func(format string, args ...any)
+	// Debug, when true, also logs the hot path — each query sent, each
+	// response parsed, each self-packet dropped. Gated because a busy LAN
+	// makes this very chatty; the supervisor wires it to WASH_MDNS_DEBUG.
+	Debug bool
 }
 
 // Server is one open mDNS socket running advertise and/or browse.
@@ -106,6 +114,25 @@ type Server struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
+
+// logf emits a lifecycle line if a logger was injected; no-op otherwise.
+func (s *Server) logf(format string, args ...any) {
+	if s.opts.Logf != nil {
+		s.opts.Logf(format, args...)
+	}
+}
+
+// dbgf emits a hot-path line only when Debug is on (and a logger exists).
+func (s *Server) dbgf(format string, args ...any) {
+	if s.opts.Debug && s.opts.Logf != nil {
+		s.opts.Logf(format, args...)
+	}
+}
+
+// Interfaces returns the multicast-capable interfaces the server joined —
+// exposed so the caller can log what link discovery actually runs on (the
+// usual "why didn't it see anything" first question).
+func (s *Server) Interfaces() []net.Interface { return s.ifaces }
 
 // New opens the multicast socket, joins the mDNS group on every
 // multicast-capable interface, and starts the read loop plus (per Options)
@@ -128,6 +155,13 @@ func New(opts Options) (*Server, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
+
+	names := make([]string, len(ifaces))
+	for i, ifi := range ifaces {
+		names[i] = ifi.Name
+	}
+	s.logf("mdns: joined group %s on %d iface(s)=%v browse=%v advertise=%v",
+		mcastIP, len(ifaces), names, opts.OnEntry != nil, opts.Advertise != nil)
 
 	s.wg.Add(1)
 	go s.readLoop(ctx)
@@ -218,6 +252,7 @@ func (s *Server) readLoop(ctx context.Context) {
 			return // socket closed
 		}
 		if ua, ok := src.(*net.UDPAddr); ok && s.localIPs[ua.IP.String()] {
+			s.dbgf("mdns: dropped self packet from %s", ua.IP)
 			continue // our own packet looped back
 		}
 		_ = cm
@@ -227,6 +262,9 @@ func (s *Server) readLoop(ctx context.Context) {
 		}
 		if msg.Header.Response {
 			if s.opts.OnEntry != nil {
+				if ua, ok := src.(*net.UDPAddr); ok {
+					s.dbgf("mdns: response from %s (%d answers, %d additional)", ua.IP, len(msg.Answers), len(msg.Additionals))
+				}
 				s.handleResponse(&msg)
 			}
 		} else if s.advertise != nil {
@@ -360,6 +398,7 @@ func (s *Server) query() {
 	if err != nil {
 		return
 	}
+	s.dbgf("mdns: query sent for %s", fqService())
 	s.send(pkt)
 }
 
@@ -387,6 +426,22 @@ func (s *Server) announceLoop(ctx context.Context) {
 
 func (s *Server) queryLoop(ctx context.Context) {
 	defer s.wg.Done()
+	// Initial burst before settling into the steady cadence. New() already
+	// fired one immediate query; if it (or a peer's already-passed startup
+	// announce) is lost to the wire, that peer would otherwise stay invisible
+	// until the first QueryInterval tick (up to 60s). A short increasing-
+	// interval burst (RFC 6762 §5.2) makes cold-start discovery robust to
+	// packet loss within a few seconds.
+	for _, d := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second} {
+		tm := time.NewTimer(d)
+		select {
+		case <-ctx.Done():
+			tm.Stop()
+			return
+		case <-tm.C:
+			s.query()
+		}
+	}
 	t := time.NewTicker(s.opts.QueryInterval)
 	defer t.Stop()
 	for {
