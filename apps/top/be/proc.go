@@ -271,8 +271,14 @@ func (s *Sampler) readOneProc(pid int32, memTotal uint64) (ProcInfo, bool) {
 // in parens AND may contain spaces / parens of its own, so we cut
 // strictly at the LAST ')' before parsing the rest space-delimited.
 //
-// Field indexing post-comm is 0-based in `rest`, so rest[0] is state
-// (proc(5)'s field 3), rest[1] is ppid (field 4), etc.
+// Field indexing post-comm is 0-based in `rest`, so rest[k] is
+// proc(5)'s field (k+3): rest[0]=state (3), rest[1]=ppid (4),
+// rest[11]=utime (14), rest[12]=stime (15), rest[16]=nice (19),
+// rest[17]=num_threads (20), rest[19]=starttime (22), rest[20]=vsize
+// (23), rest[21]=rss-pages (24). Note field 24 (rss) is immediately
+// followed by field 25 (rsslim) — reading one index too far yields the
+// RSS *limit* (commonly RLIM_INFINITY), which is the classic "funny
+// RSS / %mem" bug this layout guards against.
 func parseStat(b []byte, pi *ProcInfo) error {
 	open := bytes.IndexByte(b, '(')
 	end := bytes.LastIndexByte(b, ')')
@@ -281,10 +287,8 @@ func parseStat(b []byte, pi *ProcInfo) error {
 	}
 	pi.Comm = string(b[open+1 : end])
 	rest := strings.Fields(string(b[end+2:]))
-	// rest[0]=state, [1]=ppid, [11]=utime (14), [12]=stime (15),
-	// [17]=nice (20), [18]=num_threads (21), [20]=starttime (22),
-	// [21]=vsize (23), [22]=rss-pages (24).
-	if len(rest) < 23 {
+	// Highest index read is rest[21] (rss), so we need at least 22 fields.
+	if len(rest) < 22 {
 		return fmt.Errorf("short stat: %d", len(rest))
 	}
 	pi.State = rest[0]
@@ -294,19 +298,19 @@ func parseStat(b []byte, pi *ProcInfo) error {
 	utime, _ := strconv.ParseUint(rest[11], 10, 64)
 	stime, _ := strconv.ParseUint(rest[12], 10, 64)
 	pi.TimeJiff = utime + stime
-	if v, err := strconv.ParseInt(rest[17], 10, 32); err == nil {
+	if v, err := strconv.ParseInt(rest[16], 10, 32); err == nil {
 		pi.Nice = int32(v)
 	}
-	if v, err := strconv.ParseInt(rest[18], 10, 32); err == nil {
+	if v, err := strconv.ParseInt(rest[17], 10, 32); err == nil {
 		pi.Threads = int32(v)
 	}
-	if v, err := strconv.ParseUint(rest[21], 10, 64); err == nil {
+	if v, err := strconv.ParseUint(rest[20], 10, 64); err == nil {
 		pi.VSize = v
 	}
-	if v, err := strconv.ParseUint(rest[22], 10, 64); err == nil {
+	if v, err := strconv.ParseUint(rest[21], 10, 64); err == nil {
 		pi.RSS = v // pages; promoted to bytes by readOneProc
 	}
-	if v, err := strconv.ParseUint(rest[20], 10, 64); err == nil && clockTicks > 0 {
+	if v, err := strconv.ParseUint(rest[19], 10, 64); err == nil && clockTicks > 0 {
 		pi.StartUnix = int64(v) / clockTicks // seconds-since-boot; bootUnix added later
 	}
 	return nil

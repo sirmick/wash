@@ -25,6 +25,33 @@ func singleWinManifest() *Manifest {
 	}
 }
 
+// waitWindowUntil drains shell ctrl frames until the window matching winID
+// satisfies pred, returning that window. Unlike waitWindowUpsert it skips
+// non-matching states, so it tolerates the snapshot-vs-patch double-delivery
+// race (a window can arrive in both the connect snapshot and a follow-up
+// upsert) when asserting on a specific later state.
+func waitWindowUntil(t *testing.T, e wire.FrameTransport, winID uint32, pred func(wire.SessionWindow) bool) wire.SessionWindow {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		switch v := readCtrl(t, e).(type) {
+		case wire.ShellSessionSnapshot:
+			for _, w := range v.Windows {
+				if w.WindowID == winID && pred(w) {
+					return w
+				}
+			}
+		case wire.ShellSessionPatch:
+			for _, p := range v.Patches {
+				if p.Op == wire.SessionPatchWindowUpsert && p.Window != nil && p.Window.WindowID == winID && pred(*p.Window) {
+					return *p.Window
+				}
+			}
+		}
+	}
+	t.Fatalf("window %d never satisfied predicate within 100 frames", winID)
+	return wire.SessionWindow{}
+}
+
 // TestLaunchOrRaiseRaisesExisting exercises the "Open X" foreground fix:
 // launching a single-window app that is already running must NOT spawn a
 // second process — it raises the existing window to the foreground
@@ -64,12 +91,15 @@ func TestLaunchOrRaiseRaisesExisting(t *testing.T) {
 		t.Fatalf("fresh window should start unfocused, got %+v", got)
 	}
 
-	// Minimize it via the shell, so the raise also has to restore it. Drain
-	// the resulting patch.
+	// Minimize it via the shell, so the raise also has to restore it. Poll
+	// until the window reaches minimized: the window can arrive in both the
+	// connect snapshot AND a follow-up create patch (the documented
+	// snapshot-vs-patch race), so we can't assume the very next upsert is
+	// the minimize.
 	writeCtrl(t, shell, wire.NewShellWindowState(win, wire.WindowStateMinimized))
-	if got := waitWindowUpsert(t, shell, win); got.State != wire.WindowStateMinimized {
-		t.Fatalf("expected minimized window, got %+v", got)
-	}
+	waitWindowUntil(t, shell, win, func(w wire.SessionWindow) bool {
+		return w.State == wire.WindowStateMinimized
+	})
 	// The shell-driven minimize also relays a state event to the app; drain
 	// it so the next app event we read is the focus from the raise.
 	if st, ok := readEvt(t, app).(wire.EvtWindowState); !ok || st.State != wire.WindowStateMinimized {
@@ -94,18 +124,11 @@ func TestLaunchOrRaiseRaisesExisting(t *testing.T) {
 
 	// The shell sees the window restored to normal AND focused on top.
 	// The restore emits two upserts (normal-unfocused, then focused), so
-	// drain until the focused one arrives.
-	for i := 0; ; i++ {
-		got := waitWindowUpsert(t, shell, win)
-		if got.Focused {
-			if got.State != wire.WindowStateNormal {
-				t.Fatalf("focused window should be restored to normal, got %+v", got)
-			}
-			break
-		}
-		if i >= 4 {
-			t.Fatalf("window never became focused; last %+v", got)
-		}
+	// poll until the focused one arrives.
+	if got := waitWindowUntil(t, shell, win, func(w wire.SessionWindow) bool {
+		return w.Focused
+	}); got.State != wire.WindowStateNormal {
+		t.Fatalf("focused window should be restored to normal, got %+v", got)
 	}
 
 	appPair.Close()
