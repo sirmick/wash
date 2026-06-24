@@ -23,16 +23,21 @@ mountain-twilight scene traced with `vtracer` (`--filter_speckle 6
 
 ## Dreamtime — `wallpapers/dreamtime.svg`
 Vectorized from an AI-generated Australian Aboriginal dot-painting — sun over
-the water, green hinterland, fish + crocodile, a winding river. Traced at the
-highest `vtracer` setting (`--mode polygon --filter_speckle 1
---color_precision 8 --gradient_step 2`, ~43.5 k shapes). A post-pass
-(`design/packs/circlify.py`) replaces ~90% of the shapes (~39.8 k round blobs) with
-a real SVG `<circle>` — so the dots are true vector dots — protecting only the
-genuinely elongated shapes (the river, the animal outlines/eyes) and the large
-background fills, honoring vtracer's per-shape `translate()` and preserving
-draw order, then frames the painting with a **black border on a black field**
-(a wide margin so the frame reads strongly). Minified
-with `svgo` (~2.9 MB). Source raster at
+the water, green hinterland, fish + crocodile, a winding river. Traced with
+`vtracer` at a clean setting (`--mode polygon --filter_speckle 4
+--color_precision 6 --gradient_step 24`) so each dot is a single solid
+polygon, ~16.3 k shapes — a higher-precision trace fragmented each dot into
+several colour layers, which left polygon slivers showing between the
+circles. A post-pass (`design/packs/circlify.py`) then: (1) replaces every
+round, filled blob with a real SVG `<circle>` (~15 k, 96% of drawn shapes —
+so the dots are true vector dots), shrunk to 0.82 radius so they read as
+distinct dots; (2) PRESERVES the genuinely structural shapes — the large
+fills and the thin/long strokes (the river, the animal outlines/eyes); and
+(3) DROPS the small left-over occlusion slivers entirely (the dot behind
+each is already drawn). It honors vtracer's per-shape `translate()`,
+preserves draw order, and frames the painting with a **black border on a
+black field** (a wide margin so the frame reads strongly). Minified with
+`svgo` (~1.1 MB). Source raster at
 `design/packs/src/dreamtime-source.png`; converter at
 `design/packs/circlify.py`. Paired with the dark Dreamtime palette (black
 chrome, solid bright painting colors).

@@ -910,6 +910,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         taskbarPos={taskbarPosition()}
         taskbarHeight={taskbarHeight}
         onToggle={toggleSidebar}
+        user={sysInfo()?.username}
+        host={sysInfo()?.hostname}
       >
         <Section
           id="viewport"

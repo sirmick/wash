@@ -43,6 +43,11 @@ export interface SidebarProps {
    *  bottom/top inset). */
   taskbarHeight: number;
   onToggle: () => void;
+  /** Logged-in user + hostname, shown in the header as `user@host` —
+   *  a useful at-a-glance "which machine/session am I on" instead of a
+   *  redundant "Sidebar" label. */
+  user?: string;
+  host?: string;
   children?: JSX.Element;
 }
 
@@ -116,8 +121,6 @@ export const Sidebar: Component<SidebarProps> = (props) => {
     'border-bottom': `1px solid ${tokens.borderMenu}`,
     color: tokens.fgMuted,
     font: tokens.type.textSm,
-    'letter-spacing': '0.1em',
-    'text-transform': 'uppercase',
     'flex-shrink': 0,
   };
 
@@ -140,7 +143,12 @@ export const Sidebar: Component<SidebarProps> = (props) => {
         style={panelStyle()}
       >
         <div style={headerStyle}>
-          <span style={{ 'font-weight': 600 }}>sidebar</span>
+          <span
+            style={{ 'font-weight': 600, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}
+            title="Current user @ this session's host"
+          >
+            {props.user && props.host ? `${props.user}@${props.host}` : props.host || props.user || ''}
+          </span>
           <button
             type="button"
             data-testid="sidebar-close"

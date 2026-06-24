@@ -52,8 +52,6 @@ export const Section: Component<SectionProps> = (props) => {
     'user-select': 'none',
     color: tokens.fg,
     font: tokens.type.textMd,
-    'letter-spacing': '0.02em',
-    'text-transform': 'uppercase',
     opacity: 0.9,
   });
 
