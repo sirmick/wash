@@ -1,12 +1,10 @@
 package router
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"sync"
 )
 
 // Spawn launches an app binary. The child dials the router's wash
@@ -51,7 +49,7 @@ func Spawn(binary, appID, display string, extraEnv, extraArgs []string) (*SpawnR
 	cmd.Env = append(cmd.Env, extraEnv...)
 	res := &SpawnResult{
 		Cmd:    cmd,
-		logBuf: newRingBuf(crashLogCap),
+		logBuf: newRingBuffer(crashLogCap),
 	}
 	cmd.Stdout = io.MultiWriter(os.Stdout, res.logBuf)
 	cmd.Stderr = io.MultiWriter(os.Stderr, res.logBuf)
@@ -73,7 +71,7 @@ const crashLogCap = 16 * 1024
 // won't arrive before cmd.Wait() returns.
 type SpawnResult struct {
 	Cmd    *exec.Cmd
-	logBuf *ringBuf
+	logBuf *ringBuffer
 }
 
 // LogTail returns the most-recent crashLogCap bytes of the spawn's
@@ -83,84 +81,4 @@ func (r *SpawnResult) LogTail() string {
 		return ""
 	}
 	return r.logBuf.String()
-}
-
-// ringBuf is a fixed-capacity tail buffer: writes never block, never
-// fail, and silently drop the oldest bytes when full. Concurrent
-// writes (stdout pipe + stderr pipe) are serialised via mu.
-type ringBuf struct {
-	mu    sync.Mutex
-	buf   []byte
-	cap   int
-	full  bool
-	start int
-}
-
-func newRingBuf(cap int) *ringBuf {
-	return &ringBuf{cap: cap, buf: make([]byte, 0, cap)}
-}
-
-func (r *ringBuf) Write(p []byte) (int, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	// ringBuf never rejects input — it accepts every byte and drops
-	// the oldest when full — so Write always reports len(p) consumed.
-	// (io.MultiWriter raises ErrShortWrite if we return anything else.)
-	total := len(p)
-	n := total
-	if n == 0 {
-		return 0, nil
-	}
-	// If p is larger than the whole buffer, only the last cap bytes
-	// matter — drop the prefix.
-	if n >= r.cap {
-		copy(r.buf[:cap(r.buf)], p[n-r.cap:])
-		r.buf = r.buf[:r.cap]
-		r.full = true
-		r.start = 0
-		return n, nil
-	}
-	if !r.full {
-		// Still room: append until we either hit cap or stop.
-		room := r.cap - len(r.buf)
-		if n <= room {
-			r.buf = append(r.buf, p...)
-			return n, nil
-		}
-		r.buf = append(r.buf, p[:room]...)
-		r.full = true
-		r.start = 0
-		p = p[room:]
-		n -= room
-	}
-	// Full: overwrite starting at start, wrapping.
-	for n > 0 {
-		end := r.start + n
-		if end > r.cap {
-			copied := r.cap - r.start
-			copy(r.buf[r.start:], p[:copied])
-			p = p[copied:]
-			n -= copied
-			r.start = 0
-		} else {
-			copy(r.buf[r.start:end], p)
-			r.start = end % r.cap
-			n = 0
-		}
-	}
-	return total, nil
-}
-
-// String returns the buffered bytes in arrival order.
-func (r *ringBuf) String() string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !r.full {
-		return string(r.buf)
-	}
-	var out bytes.Buffer
-	out.Grow(r.cap)
-	out.Write(r.buf[r.start:])
-	out.Write(r.buf[:r.start])
-	return out.String()
 }

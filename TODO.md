@@ -36,9 +36,11 @@ P2/P3 merges).
   `strings.HasSuffix` ladder with a declared mapping.
 - [ ] **`internal/router/control.go controlReq` catch-all union.** One
   struct serves two protocols (launch/msg + priv.run); split.
-- [ ] **Collapse the two ringbuf impls.** `ringBuffer`
-  (`internal/router/ringbuf.go`) and `ringBuf` (`spawn.go`) coexist; the
-  Write-contract fix landed but they were never unified.
+- [x] **Collapse the two ringbuf impls.** Unified into a single
+  `ringBuffer` (`internal/router/ringbuf.go`): added an internal mutex
+  (needed by spawn's two concurrent pipe writers), made `Write` satisfy
+  `io.Writer`, added `String()`; migrated the spawn log-tail buffer and
+  deleted the duplicate `ringBuf`. All tests preserved.
 - [ ] **2.4 `bus.Emit` swallow annotations.** ~14 bare `_ = bus.Emit(...)`
   sites; either an `EmitLogged` helper or per-site "safe to drop" comments.
   Low value, annotation-only.

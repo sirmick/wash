@@ -50,7 +50,7 @@ type AppInstance struct {
 	Cmd        *exec.Cmd // nil for in-process tests
 	// spawnLog captures the BE's stdout+stderr (last ~16 KB) for
 	// crash reporting. nil for in-process tests.
-	spawnLog *ringBuf
+	spawnLog *ringBuffer
 	// startedAt is when the process was spawned; used to compute
 	// uptime for the crash dialog.
 	startedAt time.Time
