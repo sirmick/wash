@@ -64,3 +64,72 @@ test('clicking the lock bar unlock button fires onLock', () => {
   fireEvent.click(getByTestId('priv-lock'));
   expect(locks).toBe(1);
 });
+
+test('in-app request shows approve-app; CLI origin does not', () => {
+  const grantedApps: string[] = [];
+  const { getByTestId, queryByTestId } = render(() => (
+    <PrivWidget
+      locked={() => false}
+      reqs={() => [
+        req({ req_id: 'a', status: 'queued' }),
+        req({
+          req_id: 'cli',
+          status: 'queued',
+          kind: 'run_inline',
+          cli_origin: { pid: 9, uid: 1000, comm: 'sudo', tty: 'pts/0' },
+        }),
+      ]}
+      onApprove={() => {}}
+      onApproveApp={(id) => grantedApps.push(id)}
+      onReject={() => {}}
+      onLock={() => {}}
+    />
+  ));
+  // CLI-origin rows get no standing-grant button.
+  expect(queryByTestId('priv-approve-app-cli')).toBeNull();
+  fireEvent.click(getByTestId('priv-approve-app-a'));
+  expect(grantedApps).toEqual(['a']);
+});
+
+test('rows order active-first and cap at three with an expander', () => {
+  const ids = (root: HTMLElement) =>
+    [...root.querySelectorAll('[data-testid^="priv-req-"]')].map((el) =>
+      el.getAttribute('data-testid'),
+    );
+  const { getByTestId, container } = render(() => (
+    <PrivWidget
+      locked={() => false}
+      reqs={() => [
+        req({ req_id: 'done', status: 'done', created_ms: 50 }),
+        req({ req_id: 'q-old', status: 'queued', created_ms: 10 }),
+        req({ req_id: 'q-new', status: 'queued', created_ms: 40 }),
+        req({ req_id: 'run', status: 'running', created_ms: 20 }),
+      ]}
+      onApprove={() => {}}
+      onReject={() => {}}
+      onLock={() => {}}
+    />
+  ));
+  // running first, then queued newest-first, terminal last — capped to 3.
+  expect(ids(container as HTMLElement)).toEqual(['priv-req-run', 'priv-req-q-new', 'priv-req-q-old']);
+  fireEvent.click(getByTestId('priv-more'));
+  expect(ids(container as HTMLElement)).toContain('priv-req-done');
+});
+
+test('grant chips render and revoke fires by app id', () => {
+  const revoked: string[] = [];
+  const { getByTestId } = render(() => (
+    <PrivWidget
+      locked={() => false}
+      reqs={() => []}
+      grants={() => ['com.wash.journal']}
+      onApprove={() => {}}
+      onReject={() => {}}
+      onRevokeApp={(id) => revoked.push(id)}
+      onLock={() => {}}
+    />
+  ));
+  expect(getByTestId('priv-grant-com.wash.journal')).toBeTruthy();
+  fireEvent.click(getByTestId('priv-revoke-com.wash.journal'));
+  expect(revoked).toEqual(['com.wash.journal']);
+});

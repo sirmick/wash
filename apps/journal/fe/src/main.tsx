@@ -152,8 +152,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const onPickUnit = (name: string) => {
     if (selected() === name) return;
     setSelected(name);
-    // Switching unit always retries unprivileged first.
-    requestStream({ asRoot: false });
+    // Elevation is sticky for the window: once the user has read a unit
+    // with root, switching units stays root rather than re-running the
+    // unprivileged → perm_denied → "Read with root" dance every time.
+    // requestStream() defaults to the current asRoot().
+    requestStream();
   };
 
   const onPickRange = (r: 'boot' | 'hour' | 'day' | 'all') => {

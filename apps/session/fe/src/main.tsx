@@ -259,6 +259,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // Priv queue + lock state — fed by com.wash.priv's broadcasts.
   // need_password drives the unlock overlay.
   const [privReqs, setPrivReqs] = createSignal<PrivReq[]>([]);
+  const [privGrants, setPrivGrants] = createSignal<string[]>([]);
   const [privLocked, setPrivLocked] = createSignal<boolean>(true);
   const [privUnlock, setPrivUnlock] = createSignal<PrivUnlockState | null>(null);
   const [privUnlockErr, setPrivUnlockErr] = createSignal<string>('');
@@ -699,11 +700,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         case 'priv.state': {
           // wash-priv full snapshot — broadcast on subscribe + every
           // queue change. Shape: { locked: bool, queue: [...] }.
-          const next = data.state as { locked?: boolean; queue?: PrivReq[] };
+          const next = data.state as { locked?: boolean; queue?: PrivReq[]; app_grants?: string[] };
           const nextReqs = next?.queue ?? [];
           const seen = new Set(privReqs().map((r) => r.req_id));
           const fresh = nextReqs.find((r) => !seen.has(r.req_id));
           setPrivReqs(nextReqs);
+          setPrivGrants(Array.isArray(next?.app_grants) ? next.app_grants : []);
           setPrivLocked(!!next?.locked);
           if (fresh) {
             autoExpandSection('priv');
@@ -977,8 +979,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           <PrivWidget
             locked={privLocked}
             reqs={privReqs}
+            grants={privGrants}
             onApprove={(id) =>
               window.wash.sendAppMsg(props.instance, { kind: 'priv_approve', req_id: id })
+            }
+            onApproveApp={(id) =>
+              window.wash.sendAppMsg(props.instance, { kind: 'priv_approve_app', req_id: id })
             }
             onReject={(id, reason) =>
               window.wash.sendAppMsg(props.instance, {
@@ -986,6 +992,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 req_id: id,
                 reason: reason ?? '',
               })
+            }
+            onRevokeApp={(appID) =>
+              window.wash.sendAppMsg(props.instance, { kind: 'priv_revoke_app', app_id: appID })
             }
             onLock={() => window.wash.sendAppMsg(props.instance, { kind: 'priv_lock' })}
           />

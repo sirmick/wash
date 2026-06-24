@@ -116,7 +116,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const onPickFile = (path: string) => {
     if (selected() === path) return;
     setSelected(path);
-    requestStream(path, { asRoot: false });
+    // Elevation is sticky for the window: once the user has read a file
+    // with root, switching files stays root rather than re-running the
+    // unprivileged → perm_denied → "Read with root" dance every time.
+    // requestStream() defaults to the current asRoot().
+    requestStream(path);
   };
 
   const retryAsRoot = () => requestStream(selected(), { asRoot: true });

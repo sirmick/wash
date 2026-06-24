@@ -291,6 +291,12 @@ func registerPrivGateway(bus *sdk.Bus) {
 	sdk.HandleVoid(bus, "priv_approve", func(conn *sdk.Conn, _ string, req privReqIDReq) error {
 		return conn.SendAppMsgTo(wire.Recipient{AppID: PrivAppID}, map[string]any{"kind": "approve", "req_id": req.ReqID})
 	})
+	sdk.HandleVoid(bus, "priv_approve_app", func(conn *sdk.Conn, _ string, req privReqIDReq) error {
+		return conn.SendAppMsgTo(wire.Recipient{AppID: PrivAppID}, map[string]any{"kind": "approve_app", "req_id": req.ReqID})
+	})
+	sdk.HandleVoid(bus, "priv_revoke_app", func(conn *sdk.Conn, _ string, req privRevokeAppReq) error {
+		return conn.SendAppMsgTo(wire.Recipient{AppID: PrivAppID}, map[string]any{"kind": "revoke_app", "app_id": req.AppID})
+	})
 	sdk.HandleVoid(bus, "priv_reject", func(conn *sdk.Conn, _ string, req privRejectReq) error {
 		return conn.SendAppMsgTo(wire.Recipient{AppID: PrivAppID}, map[string]any{
 			"kind":   "reject",
@@ -362,6 +368,10 @@ type privReqIDReq struct {
 type privRejectReq struct {
 	ReqID  string `json:"req_id"`
 	Reason string `json:"reason"`
+}
+
+type privRevokeAppReq struct {
+	AppID string `json:"app_id"`
 }
 
 // privUnlockReq carries the ECDH/HKDF/AES-GCM handshake bytes from

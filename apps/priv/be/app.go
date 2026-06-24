@@ -153,6 +153,10 @@ type rejectReq struct {
 	Reason string `json:"reason"`
 }
 
+type revokeAppReq struct {
+	AppID string `json:"app_id"`
+}
+
 type unlockReq struct {
 	Ciphertext any `json:"ciphertext"`
 	FEPubKey   any `json:"fe_pubkey"`
@@ -230,6 +234,14 @@ func registerHandlers(b *sdk.Bus) {
 	// claim com.wash.priv at all.
 	sdk.HandleVoid(b, "approve", func(c *sdk.Conn, _ string, req approveReq) error {
 		st.HandleApprove(c, req.ReqID)
+		return nil
+	})
+	sdk.HandleVoid(b, "approve_app", func(c *sdk.Conn, _ string, req approveReq) error {
+		st.HandleApproveApp(c, req.ReqID)
+		return nil
+	})
+	sdk.HandleVoid(b, "revoke_app", func(c *sdk.Conn, _ string, req revokeAppReq) error {
+		st.HandleRevokeApp(c, req.AppID)
 		return nil
 	})
 	sdk.HandleVoid(b, "reject", func(c *sdk.Conn, _ string, req rejectReq) error {

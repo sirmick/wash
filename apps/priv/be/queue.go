@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -103,6 +104,15 @@ type State struct {
 	password     []byte     // cached; nil when locked
 	lastActivity time.Time  // resets on every approve/unlock; idle timeout reads this
 
+	// appGrants is the set of sender app ids the user gave standing
+	// "approve for app" consent to. A request from a granted app runs
+	// without a fresh Approve click — the credential gate (password
+	// cache / idle / lock) still applies, this only waives the consent
+	// gesture. Keyed by Sender.AppID. CLI origins (wash-sudo) are never
+	// granted — see HandleApproveApp. Cleared on explicit lock; survives
+	// idle (idle drops the password, not standing consent).
+	appGrants map[string]struct{}
+
 	// pendingApproveReq is the req_id whose Approve click triggered
 	// the current need_password modal. On unlock, ONLY this request
 	// runs — entering the password is the implicit approval for the
@@ -175,6 +185,7 @@ func NewState() *State {
 		pendingPrep:  map[uint64]*pendingPrepareSpawn{},
 		inlineProcs:  map[string]*inlineProc{},
 		subs:         map[string]struct{}{},
+		appGrants:    map[string]struct{}{},
 		isRoot:       isRoot,
 		passwordless: !isRoot && detectPasswordlessSudo(cfg.SudoBin),
 	}
@@ -218,9 +229,10 @@ func (s *State) broadcast(c *sdk.Conn, payload map[string]any) {
 // subscribers receive on subscribe and via SendStateSnapshot.
 func (s *State) stateSnapshotLocked() map[string]any {
 	out := map[string]any{
-		"kind":   "state",
-		"locked": s.password == nil,
-		"queue":  renderQueue(s.queue),
+		"kind":       "state",
+		"locked":     s.password == nil,
+		"queue":      renderQueue(s.queue),
+		"app_grants": s.grantsListLocked(),
 	}
 	if s.password != nil {
 		out["idle_remaining_ms"] = idleRemaining(s.lastActivity, cfg.IdleTimeout)
@@ -334,6 +346,17 @@ func (s *State) SendStateSnapshot(c *sdk.Conn) {
 	out := s.stateSnapshotLocked()
 	s.mu.Unlock()
 	s.broadcast(c, out)
+}
+
+// grantsListLocked returns the granted app ids in stable sorted order
+// for the FE snapshot. Caller MUST hold s.mu.
+func (s *State) grantsListLocked() []string {
+	out := make([]string, 0, len(s.appGrants))
+	for a := range s.appGrants {
+		out = append(out, a)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func renderQueue(q []*Request) []map[string]any {
@@ -509,6 +532,19 @@ func (s *State) enqueue(c *sdk.Conn, r *Request) {
 			autoPub = pub
 		}
 	}
+	// Standing per-app consent: if the user previously chose "approve
+	// for app" for this sender, run without a fresh Approve click —
+	// provided credentials are ready (cached password, or none needed).
+	// When the cache is cold we leave it to the auto-prompt above:
+	// entering the password approves this one, and the grant keeps the
+	// rest gesture-free. autoApprove (root) already covers everything,
+	// so this only matters in the non-root case.
+	var grantedRun bool
+	if !s.autoApprove() && r.Sender.AppID != "" && r.CliOrigin == nil {
+		if _, ok := s.appGrants[r.Sender.AppID]; ok && (s.password != nil || s.skipPassword()) {
+			grantedRun = true
+		}
+	}
 	s.mu.Unlock()
 
 	// One ops-friendly line per enqueue so the e2e + ops eyeballs
@@ -535,6 +571,9 @@ func (s *State) enqueue(c *sdk.Conn, r *Request) {
 	// short-circuits the s.password==nil branch).
 	if s.autoApprove() {
 		log.Printf("wash-priv: passthrough auto-approve req_id=%s (isRoot=%v)", r.ReqID, s.isRoot)
+		go s.autoApproveAndExecute(c, r)
+	} else if grantedRun {
+		log.Printf("wash-priv: app-grant auto-approve req_id=%s app=%s", r.ReqID, r.Sender.AppID)
 		go s.autoApproveAndExecute(c, r)
 	}
 }
@@ -611,6 +650,52 @@ func (s *State) HandleApprove(c *sdk.Conn, reqID string) {
 	s.mu.Unlock()
 	s.broadcast(c, map[string]any{"kind": "req.update", "req": view})
 	go s.executeApproved(c, r)
+}
+
+// HandleApproveApp grants standing "approve for app" consent to the
+// request's sender, then approves the request itself. Future requests
+// from that app skip the Approve click (credentials permitting) until
+// the user locks. CLI origins are refused a standing grant — wash-sudo
+// invocations are per-pid and "the app" is just cli.wash.sudo, so an
+// app-wide grant there would silently auto-approve every shell sudo;
+// those fall back to a one-shot approve.
+func (s *State) HandleApproveApp(c *sdk.Conn, reqID string) {
+	s.mu.Lock()
+	r := s.findLocked(reqID)
+	if r == nil {
+		s.mu.Unlock()
+		return
+	}
+	app := r.Sender.AppID
+	granted := app != "" && r.CliOrigin == nil
+	if granted {
+		if s.appGrants == nil {
+			s.appGrants = map[string]struct{}{}
+		}
+		s.appGrants[app] = struct{}{}
+	}
+	s.mu.Unlock()
+	if granted {
+		log.Printf("wash-priv: app-grant added app=%s (req=%s)", app, reqID)
+		s.appendAudit(auditRecord{Decision: "approve_app", SenderApp: app})
+		s.SendStateSnapshot(c)
+	}
+	// Approve the triggering request through the normal path — handles
+	// the password gate + execute.
+	s.HandleApprove(c, reqID)
+}
+
+// HandleRevokeApp drops a standing per-app grant. Idempotent.
+func (s *State) HandleRevokeApp(c *sdk.Conn, appID string) {
+	s.mu.Lock()
+	_, had := s.appGrants[appID]
+	delete(s.appGrants, appID)
+	s.mu.Unlock()
+	if had {
+		log.Printf("wash-priv: app-grant removed app=%s", appID)
+		s.appendAudit(auditRecord{Decision: "revoke_app", SenderApp: appID})
+		s.SendStateSnapshot(c)
+	}
 }
 
 // HandleReject removes a request from the queue and notifies the
@@ -705,6 +790,9 @@ func (s *State) HandleLock(c *sdk.Conn, reason string) {
 	s.mu.Lock()
 	had := s.password != nil
 	s.wipeAllLocked()
+	// Lock means "stop everything" — drop standing per-app grants too,
+	// not just the cached password.
+	s.appGrants = map[string]struct{}{}
 	s.mu.Unlock()
 	if had {
 		log.Printf("wash-priv: password cache cleared (%s)", reason)
