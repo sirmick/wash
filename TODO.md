@@ -58,8 +58,13 @@ unit-test + e2e-test green gate).
 
 ## terminal
 
-- [ ] **Menubar with the basics** — themes, tab color, Edit menu
-  (copy/paste/etc.).
+- [x] **Menubar with the basics** — Edit (Copy/Paste/Select All/Clear), Tab
+  (New/Close + color), and Theme (Follow desktop/Dark/Light) menus across the
+  top of the terminal window, driving the active tab via an extended
+  `TerminalAPI`; appearance override is window-wide + persisted. Also fixed a
+  pre-existing UX race surfaced by it: PuTTY-style select-copy now fires on
+  LEFT mouseup only, so right-click-to-Paste no longer clobbers the clipboard
+  with the live selection. e2e: `term-menubar.spec.ts`.
 
 ## Test suite hygiene  (docs/TECH_DEBT.md P3)
 

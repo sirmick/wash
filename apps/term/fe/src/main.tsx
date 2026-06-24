@@ -11,8 +11,8 @@
 
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Plus, X } from 'lucide-solid';
-import { Menu, MenuItem, Terminal, TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, defineWashApp, tokens } from '@wash/ui';
+import { Check, Plus, X } from 'lucide-solid';
+import { Menu, MenuItem, MenuSeparator, Terminal, TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, defineWashApp, tokens } from '@wash/ui';
 import type { TermModes, TerminalAPI } from '@wash/ui';
 
 interface BEMessage {
@@ -82,6 +82,8 @@ interface PersistedState {
   // Font choice is window-wide: every tab in this window shares it.
   font_id?: string;
   font_size?: number;
+  // Terminal palette override ('dark'/'light'); absent = follow the pack.
+  appearance?: 'dark' | 'light';
 }
 
 // TAB_BAR_HEIGHT — 32 (was 28) leaves 4px of breathing room above the
@@ -98,6 +100,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // apply across all tabs at once.
   const [fontId, setFontId] = createSignal(TERM_DEFAULT_FONT_ID);
   const [fontSize, setFontSize] = createSignal(TERM_DEFAULT_FONT_SIZE);
+  // Window-wide terminal palette override: undefined follows the desktop
+  // pack appearance (default), 'dark'/'light' pins it. Set via the Theme
+  // menu; persisted like the font choice.
+  const [appearance, setAppearance] = createSignal<'dark' | 'light' | undefined>(undefined);
+
+  // Menubar: which top menu is open ('edit' | 'tab' | 'theme' | null) and
+  // the viewport anchor (the clicked button's bottom-left) to paint it at.
+  const [openMenu, setOpenMenu] = createSignal<'edit' | 'tab' | 'theme' | null>(null);
+  const [menuAnchor, setMenuAnchor] = createSignal<{ x: number; y: number }>({ x: 0, y: 0 });
 
   // Per-tab color tag, keyed by channel id. Kept OUT of the TabMeta
   // objects on purpose: the term-host <For> below is keyed by object
@@ -217,6 +228,30 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     persist();
   };
 
+  // ---- appearance (window-wide, persisted) ----
+
+  const changeAppearance = (a: 'dark' | 'light' | undefined) => {
+    setAppearance(a);
+    persist();
+  };
+
+  // ---- menubar ----
+
+  // activeApi is the imperative handle of the focused tab's terminal, or
+  // undefined while a tab is still pending (no xterm mounted yet).
+  const activeApi = (): TerminalAPI | undefined => apis.get(active());
+  // openMenuFor toggles the named top menu, anchoring it under the button.
+  const openMenuFor = (id: 'edit' | 'tab' | 'theme', ev: MouseEvent) => {
+    if (openMenu() === id) { setOpenMenu(null); return; }
+    const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+    setMenuAnchor({ x: r.left, y: r.bottom + 2 });
+    setOpenMenu(id);
+  };
+  const closeMenu = () => setOpenMenu(null);
+  // run wraps a menu action so the menu closes before it fires (and focus
+  // returns to the terminal, so a following paste/type lands in the pty).
+  const run = (fn: () => void) => () => { closeMenu(); fn(); activeApi()?.focus(); };
+
   // ---- BE ----
 
   const handleBE = (m: BEMessage) => {
@@ -303,6 +338,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       active: active() || undefined,
       font_id: fontId(),
       font_size: fontSize(),
+      appearance: appearance(),
     };
     send({ kind: 'save_state', state });
   };
@@ -319,6 +355,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const restoreFrom = (s: PersistedState) => {
     if (s.font_id) setFontId(s.font_id);
     if (s.font_size) setFontSize(s.font_size);
+    if (s.appearance) setAppearance(s.appearance);
     // The restored list may be stale (ptys that died while the
     // browser was detached); ask the BE for the live set and
     // reconcile when the `sessions` reply lands. Restored tabs stay
@@ -396,6 +433,86 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   return (
     <>
+      <div data-testid="term-menubar" style={menuBarStyle}>
+        <button
+          type="button"
+          data-testid="term-menu-edit-btn"
+          style={menuBarBtnStyle(openMenu() === 'edit')}
+          onClick={(ev) => openMenuFor('edit', ev)}
+        >
+          Edit
+        </button>
+        <button
+          type="button"
+          data-testid="term-menu-tab-btn"
+          style={menuBarBtnStyle(openMenu() === 'tab')}
+          onClick={(ev) => openMenuFor('tab', ev)}
+        >
+          Tab
+        </button>
+        <button
+          type="button"
+          data-testid="term-menu-theme-btn"
+          style={menuBarBtnStyle(openMenu() === 'theme')}
+          onClick={(ev) => openMenuFor('theme', ev)}
+        >
+          Theme
+        </button>
+      </div>
+      <Show when={openMenu() === 'edit'}>
+        <Menu x={menuAnchor().x} y={menuAnchor().y} data-testid="term-menu-edit" onDismiss={closeMenu}>
+          <MenuItem label="Copy" data-testid="term-menu-copy" onClick={run(() => activeApi()?.copySelection())} />
+          <MenuItem label="Paste" data-testid="term-menu-paste" onClick={run(() => activeApi()?.paste())} />
+          <MenuItem label="Select All" data-testid="term-menu-selectall" onClick={run(() => activeApi()?.selectAll())} />
+          <MenuSeparator />
+          <MenuItem label="Clear" data-testid="term-menu-clear" onClick={run(() => activeApi()?.clearScreen())} />
+        </Menu>
+      </Show>
+      <Show when={openMenu() === 'tab'}>
+        <Menu x={menuAnchor().x} y={menuAnchor().y} data-testid="term-menu-tab" onDismiss={closeMenu}>
+          <MenuItem label="New Tab" data-testid="term-menu-newtab" onClick={run(openNewTab)} />
+          <MenuItem label="Close Tab" data-testid="term-menu-closetab" onClick={run(() => requestCloseTab(active()))} />
+          <MenuSeparator />
+          <MenuItem
+            label="No color"
+            data-testid="term-menu-tag-none"
+            icon={<span style={swatchStyle('transparent', true)} />}
+            onClick={run(() => setTabColor(active(), undefined))}
+          />
+          <For each={TAG_COLORS}>
+            {(c) => (
+              <MenuItem
+                label={c.label}
+                data-testid={`term-menu-tag-${c.id}`}
+                icon={<span style={swatchStyle(c.value)} />}
+                onClick={run(() => setTabColor(active(), c.id))}
+              />
+            )}
+          </For>
+        </Menu>
+      </Show>
+      <Show when={openMenu() === 'theme'}>
+        <Menu x={menuAnchor().x} y={menuAnchor().y} data-testid="term-menu-theme" onDismiss={closeMenu}>
+          <MenuItem
+            label="Follow desktop"
+            data-testid="term-menu-theme-auto"
+            trailing={appearance() === undefined ? <Check size={12} /> : undefined}
+            onClick={run(() => changeAppearance(undefined))}
+          />
+          <MenuItem
+            label="Dark"
+            data-testid="term-menu-theme-dark"
+            trailing={appearance() === 'dark' ? <Check size={12} /> : undefined}
+            onClick={run(() => changeAppearance('dark'))}
+          />
+          <MenuItem
+            label="Light"
+            data-testid="term-menu-theme-light"
+            trailing={appearance() === 'light' ? <Check size={12} /> : undefined}
+            onClick={run(() => changeAppearance('light'))}
+          />
+        </Menu>
+      </Show>
       <div data-testid="term-tabbar" style={tabBarStyle}>
         <For each={tabs()}>
           {(tab) => {
@@ -556,6 +673,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   customKeyHandler={onTermKey}
                   fontId={fontId()}
                   fontSize={fontSize()}
+                  appearanceOverride={appearance()}
                   onFontIdChange={changeFontId}
                   onFontSizeChange={changeFontSize}
                   initialCols={tab.init?.cols}
@@ -602,6 +720,28 @@ function swatchStyle(color: string, hollow = false): JSX.CSSProperties {
     background: hollow ? 'transparent' : color,
     border: `1px solid ${hollow ? tokens.borderMenu : color}`,
     'box-sizing': 'border-box',
+  };
+}
+
+const menuBarStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'center',
+  background: tokens.bgMenu,
+  'border-bottom': `1px solid ${tokens.borderMenu}`,
+  'min-height': '24px',
+  'flex-shrink': 0,
+  'user-select': 'none',
+};
+
+function menuBarBtnStyle(active: boolean): JSX.CSSProperties {
+  return {
+    background: active ? tokens.bgRowSelected : 'transparent',
+    color: tokens.fg,
+    border: 'none',
+    padding: '2px 10px',
+    height: '24px',
+    cursor: 'pointer',
+    font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
   };
 }
 
