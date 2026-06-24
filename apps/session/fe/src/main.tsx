@@ -1239,7 +1239,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
     position: 'absolute',
     left: '32px',
     top: '28px',
-    font: '600 22px system-ui,sans-serif',
+    font: `600 22px ${tokens.fontSans}`,
     'letter-spacing': '0.05em',
     opacity: 0.35,
     'pointer-events': 'none',
@@ -1268,7 +1268,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
             // the text so the banner stands out against any wallpaper —
             // a light glow on light packs, a dark one on dark packs.
             'text-shadow': `0 1px 6px ${tokens.bgWindow}, 0 0 3px ${tokens.bgWindow}`,
-            font: '14px system-ui,sans-serif',
+            font: `14px ${tokens.fontSans}`,
             'pointer-events': 'none',
             'max-width': '480px',
             'line-height': '1.4',
@@ -1277,7 +1277,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
           <div
             data-testid="desktop-banner-host"
             style={{
-              font: '600 22px system-ui,sans-serif',
+              font: `600 22px ${tokens.fontSans}`,
               'letter-spacing': '0.02em',
               opacity: 0.85,
               'text-shadow': '0 1px 2px rgba(0,0,0,0.6)',
@@ -1292,7 +1292,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
             <span
               data-testid="desktop-banner-user"
               style={{
-                font: '500 14px system-ui,sans-serif',
+                font: `500 14px ${tokens.fontSans}`,
                 opacity: 0.7,
                 'font-weight': 600,
               }}
@@ -1662,7 +1662,7 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
         'border-radius': tokens.radiusMd,
         cursor: 'pointer',
         'max-width': '220px',
-        font: '13px system-ui,sans-serif',
+        font: `13px ${tokens.fontSans}`,
         'flex-shrink': 0,
         opacity: minimized() ? 0.6 : 1,
         'font-style': minimized() ? 'italic' : 'normal',
@@ -1872,7 +1872,7 @@ const Palette: Component<{
             border: 'none',
             'border-bottom': `1px solid ${tokens.borderMenu}`,
             outline: 'none',
-            font: '15px system-ui,sans-serif',
+            font: `15px ${tokens.fontSans}`,
           }}
         />
         <div data-testid="palette-list" style={{ 'max-height': '50vh', overflow: 'auto' }}>
@@ -1928,7 +1928,7 @@ const PaletteRow: Component<{
         border: 'none',
         'text-align': 'left',
         cursor: 'pointer',
-        font: '14px system-ui,sans-serif',
+        font: `14px ${tokens.fontSans}`,
       }}
     >
       <span
@@ -2049,5 +2049,5 @@ const emptyStyle: JSX.CSSProperties = {
 // ---- custom element wrapper ----
 
 defineWashApp('wash-app-session', (props) => <App {...props} />, {
-  style: `display:block;position:absolute;inset:0;background:radial-gradient(circle at 30% 20%, #1a1a32 0, #0a0a18 75%);color:${tokens.fg};font:14px system-ui,sans-serif;overflow:hidden`,
+  style: `display:block;position:absolute;inset:0;background:radial-gradient(circle at 30% 20%, #1a1a32 0, #0a0a18 75%);color:${tokens.fg};font:14px ${tokens.fontSans};overflow:hidden`,
 });

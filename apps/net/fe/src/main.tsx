@@ -10,7 +10,7 @@
 // netd validate → apply (commit-confirm) → the box.
 
 import { createEffect, createMemo, createSignal, onCleanup, onMount, For, Show, Switch, Match } from "solid-js";
-import { defineWashApp, washAssetUrl, type WashAppProps } from "@wash/ui";
+import { defineWashApp, tokens, washAssetUrl, type WashAppProps } from "@wash/ui";
 import { x25519 } from "@noble/curves/ed25519.js";
 
 import { ApplyTerminal, type ApplyEvent } from "./ApplyTerminal.tsx";
@@ -1638,7 +1638,7 @@ function WireGuardWizard(props: { onCancel: () => void; onCreate: (name: string,
 
 const STYLE = `
 .wash-net-app { display:flex; flex-direction:column; height:100%; background:#181828; color:#eee;
-  font:13px ui-sans-serif, system-ui, sans-serif; position:relative; }
+  font:13px ${tokens.fontSans}; position:relative; }
 .wash-net-head { display:flex; align-items:stretch; padding:0 6px; border-bottom:1px solid #2a2a3a; }
 .wash-net-head h1 { font-size:14px; font-weight:600; margin:0; }
 .wash-net-toolbar { display:flex; gap:6px; flex-wrap:wrap; align-items:center; padding:8px 12px; border-bottom:1px solid #2a2a3a; }
@@ -1716,7 +1716,7 @@ const STYLE = `
 .wash-net-l2-vdel { background:none; border:none; color:#777; cursor:pointer; margin-left:5px; font-size:13px; line-height:1; }
 .wash-net-l2-vdel:hover { color:#e06060; }
 .wash-net-l2-legend { font-size:10px; opacity:.6; margin-top:6px; }
-.wash-net-l2-legend code { font-family:ui-monospace,Menlo,monospace; }
+.wash-net-l2-legend code { font-family:${tokens.fontMono}; }
 .wash-net-adv-toggle { cursor:pointer; user-select:none; }
 .wash-net-adv-kind { margin:6px 0 10px; }
 .wash-net-adv-h { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:600; color:#8fb0e0; margin-bottom:4px; }
@@ -1747,7 +1747,7 @@ const STYLE = `
   background:#15152a; color:#eee; border:1px solid #2a2a3a; border-radius:4px; padding:3px 6px; font:inherit; }
 .wash-net-field input:focus, .wash-net-field select:focus, .wash-net-field textarea:focus {
   outline:none; border-color:#3a3a6a; }
-.wash-net-field textarea { resize:vertical; font:12px ui-monospace, Menlo, Consolas, monospace; }
+.wash-net-field textarea { resize:vertical; font:12px ${tokens.fontMono}; }
 .wash-net-reflist { display:flex; flex-wrap:wrap; gap:8px; }
 .wash-net-reflist label { display:flex; gap:4px; align-items:center; font-size:12px; }
 .wash-net-diag { grid-column:2; font-size:11px; color:#d0a040; }
@@ -1769,7 +1769,7 @@ const STYLE = `
 .wash-net-wg-peer { border:1px solid #2a2a3a; border-radius:4px; padding:6px 8px; margin:4px 0; }
 .wash-net-wg-import { display:flex; flex-direction:column; gap:6px; margin:4px 0 8px; padding:8px;
   background:#15151f; border:1px solid #2a2a3a; border-radius:4px; }
-.wash-net-wg-importbox { width:100%; box-sizing:border-box; resize:vertical; font:11px ui-monospace,Menlo,Consolas,monospace;
+.wash-net-wg-importbox { width:100%; box-sizing:border-box; resize:vertical; font:11px ${tokens.fontMono};
   background:#101018; color:#cfd0d4; border:1px solid #2a2a3a; border-radius:3px; padding:5px 6px; }
 .wash-net-wg-importbar { display:flex; align-items:center; gap:6px; }
 .wash-net-wg-importerr { color:#e0a0a0; font-size:11px; }
@@ -1822,7 +1822,7 @@ const STYLE = `
 .wash-net-statdot[data-status="committed"] { background:#3aa050; }
 .wash-net-statdot[data-status="reverted"], .wash-net-statdot[data-status="failed"] { background:#e06060; }
 @keyframes wash-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
-.wash-net-log { max-height:120px; overflow:auto; margin:0 12px; padding:4px 0; font:11px ui-monospace, Menlo, Consolas, monospace; }
+.wash-net-log { max-height:120px; overflow:auto; margin:0 12px; padding:4px 0; font:11px ${tokens.fontMono}; }
 .wash-net-logline { display:flex; gap:8px; padding:1px 0; }
 .wash-net-logphase { color:#6a6d75; min-width:80px; text-transform:uppercase; }
 .wash-net-logline[data-level="warn"] .wash-net-logmsg { color:#d0a040; }
@@ -1840,4 +1840,4 @@ const STYLE = `
 .wash-net-counttext { position:relative; padding:0 8px; font-size:11px; color:#e8c878; }
 `;
 
-defineWashApp("wash-app-net", NetApp, { style: "display:block;height:100%;overflow:hidden;font:13px/1.5 ui-sans-serif,system-ui,sans-serif;color:#cfd0d4;" });
+defineWashApp("wash-app-net", NetApp, { style: `display:block;height:100%;overflow:hidden;font:13px/1.5 ${tokens.fontSans};color:#cfd0d4;` });

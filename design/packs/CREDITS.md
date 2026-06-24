@@ -24,11 +24,13 @@ mountain-twilight scene traced with `vtracer` (`--filter_speckle 6
 ## Dreamtime — `wallpapers/dreamtime.svg`
 Vectorized from an AI-generated (Google Gemini) Australian Aboriginal
 dot-painting of a sunrise over the coast — sun, ocean swirls, golden beach
-with animal tracks, green hinterland. Traced with `vtracer`
-(`--filter_speckle 8 --color_precision 5 --gradient_step 24 --mode polygon`)
-then minified with `svgo` (~640 KB). Source raster kept at
+with animal tracks, green hinterland. The light frame around the original
+was cropped (~85% of the border removed) before a high-quality `vtracer`
+spline trace (`--mode spline --filter_speckle 3 --color_precision 7
+--gradient_step 12`), then minified with `svgo` (~3.5 MB — a deliberate
+quality choice). Cropped source raster kept at
 `design/packs/src/dreamtime-source.png`. Paired with the Dreamtime palette
-(strong painting colors on warm sand).
+(orange sampled from the sun, lighter-orange chrome).
 
 ## Seoul — `wallpapers/seoul.svg`
 Composed from three Korean **hwatu** (화투) 광/光 "light" cards — January
@@ -42,16 +44,18 @@ available under CC BY-SA 4.0.
 
 # Pack font credits
 
-Packs that bundle a web font ship its woff2 + license under
-`web/shell/public/fonts/`. Both below are **SIL Open Font License 1.1**.
+Packs that bundle a web font ship its woff2 (+ license/source note) under
+`web/shell/public/fonts/`.
 
-## Sysfont C — Copland's UI font
-**FA Sysfont C** by Alina Sava (FontsArena, 2021), an OFL revival of the
-original **Chicago** bitmap typeface (Susan Kare, 1984, for Apple's System).
-"Chicago" is an Apple trademark, hence the Sysfont name. Bundled as
-`fonts/Sysfont-Regular.woff2`; license at `fonts/Sysfont-LICENSE.txt`.
+## Chicago — Copland's UI font
+The scalable (TrueType) **Chicago** — Susan Kare's 1984 Macintosh system
+typeface, vectorized by Bigelow & Holmes — converted to woff2 from
+`Chicago v0.5.5.ttf` in <https://github.com/nikdog/chicago-font>. "Chicago"
+is an Apple trademark/design; the upstream repo carries no explicit license,
+so it is bundled on that basis at the maintainer's request. Provenance note
+at `fonts/Chicago-SOURCE.txt`.
 
-## Quicksand — Dreamtime's UI font
+## Quicksand — Dreamtime's UI font (SIL OFL 1.1)
 **Quicksand** by Andrew Paglinawan (OFL), a rounded geometric sans. Static
 Regular/Bold instances generated from the upstream variable font
 (`google/fonts`) via `fonttools varLib.instancer`. Bundled as

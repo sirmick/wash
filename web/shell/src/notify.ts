@@ -66,7 +66,7 @@ export function showToast(t: ToastInput): void {
     'border:1px solid rgba(255,255,255,0.08)',
     `border-radius:${tokens.radiusLg}`,
     'padding:10px 12px',
-    'font:13px system-ui,sans-serif',
+    `font:13px ${tokens.fontSans}`,
     'box-shadow:0 6px 18px rgba(0,0,0,0.5)',
     'cursor:pointer',
     'opacity:0',

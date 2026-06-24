@@ -115,7 +115,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
     padding: '0 10px',
     'border-bottom': `1px solid ${tokens.borderMenu}`,
     color: tokens.fgMuted,
-    font: '11px ui-sans-serif,system-ui,sans-serif',
+    font: `11px ${tokens.fontSans}`,
     'letter-spacing': '0.1em',
     'text-transform': 'uppercase',
     'flex-shrink': 0,

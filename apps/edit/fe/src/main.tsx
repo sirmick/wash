@@ -3371,7 +3371,7 @@ const tabCloseStyle: JSX.CSSProperties = {
   'align-items': 'center',
   'justify-content': 'center',
   'border-radius': '2px',
-  font: '11px ui-monospace,Menlo,Consolas,monospace',
+  font: `11px ${tokens.fontMono}`,
   color: tokens.fgMuted,
 };
 
