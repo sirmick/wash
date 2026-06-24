@@ -28,16 +28,16 @@ the water, green hinterland, fish + crocodile, a winding river. Traced with
 --color_precision 6 --gradient_step 24`) so each dot is a single solid
 polygon, ~16.3 k shapes — a higher-precision trace fragmented each dot into
 several colour layers, which left polygon slivers showing between the
-circles. A post-pass (`design/packs/circlify.py`) then: (1) replaces every
-round, filled blob with a real SVG `<circle>` (~15 k, 96% of drawn shapes —
-so the dots are true vector dots), shrunk to 0.82 radius so they read as
-distinct dots; (2) PRESERVES the genuinely structural shapes — the large
-fills and the thin/long strokes (the river, the animal outlines/eyes); and
-(3) DROPS the small left-over occlusion slivers entirely (the dot behind
-each is already drawn). It honors vtracer's per-shape `translate()`,
-preserves draw order, and frames the painting with a **black border on a
-black field** (a wide margin so the frame reads strongly). Minified with
-`svgo` (~1.1 MB). Source raster at
+circles. A post-pass (`design/packs/circlify.py`) then dotifies it to the EXTREME:
+(1) every blob that is at all round/square becomes a real SVG `<circle>`
+(~16 k — 100% of the drawn shapes bar the background field; the dots are
+true vector dots), shrunk to 0.85 radius so they read as distinct dots;
+(2) the only things NOT circled — very elongated connector strokes and
+over-sized fills — are DROPPED entirely (the surrounding dots already carry
+the shape, so the croc/fish/river still read). It honors vtracer's per-shape
+`translate()`, preserves draw order, and frames the painting with a **black
+border on a black field** (a wide margin so the frame reads strongly).
+Minified with `svgo` (~0.8 MB). Source raster at
 `design/packs/src/dreamtime-source.png`; converter at
 `design/packs/circlify.py`. Paired with the dark Dreamtime palette (black
 chrome, solid bright painting colors).
