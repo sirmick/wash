@@ -335,6 +335,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const launchable = (origin: string): CatalogApp[] =>
     (catalogs()[origin] ?? []).filter((a) => a.surface === 'window' && !a.disabled);
 
+  // Connected vs Disconnected: a host the supervisor still tracks but that has
+  // dropped to "down" moves to its own section, so the Connected list only
+  // ever shows live (coloured-dot) hosts — a grey dot under "Connected" read
+  // as "is this actually connected?". starting/reconnecting stay under
+  // Connected (transient, still attached/recovering).
+  const upHosts = () => hosts().filter((h) => h.status !== 'down');
+  const downHosts = () => hosts().filter((h) => h.status === 'down');
+
   // The Saved section: bookmarks that aren't currently connected.
   const connectedHostNames = () => new Set(hosts().map((h) => h.host));
   const bookmarkedOnly = () => {
@@ -354,6 +362,33 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
 
   const empty = () => hosts().length === 0 && bookmarkedOnly().length === 0 && candidateOnly().length === 0;
+
+  // hostCard renders one supervisor-tracked host (used by both the Connected
+  // and Disconnected sections — HostRow itself adapts to the status).
+  const hostCard = (h: HostState) => (
+    <HostRow
+      host={h}
+      apps={launchable(h.origin)}
+      mounts={mounts().filter((mt) => mt.host === h.host)}
+      bookmark={bookmarkFor(h.host)}
+      moreOpen={moreFor() === h.origin}
+      drawerOpen={drawerFor() === h.host}
+      onToggleMore={() => setMoreFor(moreFor() === h.origin ? null : h.origin)}
+      onCloseMore={() => setMoreFor(null)}
+      onToggleDrawer={() => setDrawerFor(drawerFor() === h.host ? null : h.host)}
+      onLaunch={(appID) => launch(h.origin, appID)}
+      onDisconnect={() => disconnect(h.host)}
+      onReconnect={() => connectHost(h.host)}
+      onAuth={() => beginAuth(h.host)}
+      onToggleBookmark={() => toggleBookmark(h.host)}
+      onSetLabel={(label) => upsertBookmark(h.host, { label })}
+      onToggleAutoApp={(appID) => toggleAutoApp(h.host, appID)}
+      onAddAutoMount={(p) => addAutoMount(h.host, p)}
+      onRemoveAutoMount={(p) => removeAutoMount(h.host, p)}
+      onMount={(root, persist) => send({ kind: 'mount', host: h.host, remote_root: root, persist })}
+      onUnmount={(mp) => send({ kind: 'unmount', mount_point: mp })}
+    />
+  );
 
   return (
     <div style={shellStyle}>
@@ -388,35 +423,20 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           fallback={<div style={emptyStyle}>Enter a host above and Connect. Saved hosts and machines found on your network appear here.</div>}
         >
           {/* Connected hosts — bordered in the host's window-hint colour. */}
-          <Show when={hosts().length > 0}>
+          <Show when={upHosts().length > 0}>
             <div style={sectionLabelStyle}>Connected</div>
             <div style={listStyle} data-testid="connect-hosts">
-              <For each={hosts()}>
-                {(h) => (
-                  <HostRow
-                    host={h}
-                    apps={launchable(h.origin)}
-                    mounts={mounts().filter((mt) => mt.host === h.host)}
-                    bookmark={bookmarkFor(h.host)}
-                    moreOpen={moreFor() === h.origin}
-                    drawerOpen={drawerFor() === h.host}
-                    onToggleMore={() => setMoreFor(moreFor() === h.origin ? null : h.origin)}
-                    onCloseMore={() => setMoreFor(null)}
-                    onToggleDrawer={() => setDrawerFor(drawerFor() === h.host ? null : h.host)}
-                    onLaunch={(appID) => launch(h.origin, appID)}
-                    onDisconnect={() => disconnect(h.host)}
-                    onReconnect={() => connectHost(h.host)}
-                    onAuth={() => beginAuth(h.host)}
-                    onToggleBookmark={() => toggleBookmark(h.host)}
-                    onSetLabel={(label) => upsertBookmark(h.host, { label })}
-                    onToggleAutoApp={(appID) => toggleAutoApp(h.host, appID)}
-                    onAddAutoMount={(p) => addAutoMount(h.host, p)}
-                    onRemoveAutoMount={(p) => removeAutoMount(h.host, p)}
-                    onMount={(root, persist) => send({ kind: 'mount', host: h.host, remote_root: root, persist })}
-                    onUnmount={(mp) => send({ kind: 'unmount', mount_point: mp })}
-                  />
-                )}
-              </For>
+              <For each={upHosts()}>{(h) => hostCard(h)}</For>
+            </div>
+          </Show>
+
+          {/* Hosts the supervisor still tracks but that have dropped — kept
+              here (not in Connected) so the grey dot reads as "offline", and
+              still one Reconnect/Authenticate click away. */}
+          <Show when={downHosts().length > 0}>
+            <div style={sectionLabelStyle}>Disconnected</div>
+            <div style={listStyle} data-testid="connect-hosts-down">
+              <For each={downHosts()}>{(h) => hostCard(h)}</For>
             </div>
           </Show>
 
