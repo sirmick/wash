@@ -164,6 +164,67 @@ interface ShellNotify {
   level?: 'info' | 'warn' | 'error';
 }
 
+// Dev-mode reload signal (LOCAL router only). Carries no payload beyond
+// the discriminant.
+interface ShellReload {
+  t: 'shell.reload';
+}
+
+// asset.read / panel.read replies: the shell fetching its OWN assets +
+// settings panels from its router (local-only). *.ok opens a raw channel
+// carrying the bytes; *.err reports the failure.
+interface ShellAssetReadOK {
+  t: 'asset.read.ok';
+  req_id: number;
+  channel_id: number;
+  size: number;
+  mime?: string;
+}
+
+interface ShellAssetReadErr {
+  t: 'asset.read.err';
+  req_id: number;
+  code: string;
+  msg?: string;
+}
+
+interface ShellPanelReadOK {
+  t: 'panel.read.ok';
+  req_id: number;
+  channel_id: number;
+  size: number;
+}
+
+interface ShellPanelReadErr {
+  t: 'panel.read.err';
+  req_id: number;
+  code: string;
+  msg?: string;
+}
+
+// clipboard.data is the reply to a clipboard.get round-trip (req_id
+// echoed); clipboard.changed broadcasts the router-held clipboard.
+interface ShellClipboardData {
+  t: 'clipboard.data';
+  req_id: number;
+  mime: string;
+  text: string;
+}
+
+interface ShellClipboardChanged {
+  t: 'clipboard.changed';
+  mime: string;
+  text: string;
+}
+
+// Remote-apps relay attach failed (docs/REMOTE.md): the host is "up" but
+// could not be reached/registered.
+interface ShellPeerError {
+  t: 'peer.error';
+  origin: string;
+  msg: string;
+}
+
 export interface ShellAppCrashed {
   t: 'app.crashed';
   instance_id: string;
@@ -174,6 +235,30 @@ export interface ShellAppCrashed {
   uptime: string;
   log: string;
 }
+
+// ShellCtrlMsg is the discriminated union of every control-plane message
+// the shell dispatches on (the `t` field; WIRE.md §8). makeHandlers'
+// onCtrl narrows on `msg.t`, so each case sees a fully-typed shape and
+// the per-case `as` casts are gone. The transport (CtrlHandler in ws.ts)
+// stays `any`; we narrow at this one dispatch point.
+type ShellCtrlMsg =
+  | ShellCatalog
+  | ShellAppDeclared
+  | ShellSessionSnapshot
+  | ShellSessionPatch
+  | ShellAppMsgDeliver
+  | ShellNotify
+  | ShellAppCrashed
+  | ShellReload
+  | ShellChannelBind
+  | ShellAssetReadOK
+  | ShellAssetReadErr
+  | ShellPanelReadOK
+  | ShellPanelReadErr
+  | ShellChannelUnbind
+  | ShellClipboardData
+  | ShellClipboardChanged
+  | ShellPeerError;
 
 // Reactive subs the chrome (mounted via window.wash) listens to.
 // catalogSub is the LOCAL router's catalog (drives the launcher).
@@ -273,13 +358,13 @@ function pickTransport(): string | (() => import('./ws').SocketFactory extends (
 function makeHandlers(client: RouterClient): ClientHandlers {
   const isLocal = client.origin === LOCAL_ORIGIN;
   return {
-  onCtrl: (msg) => {
+  onCtrl: (msg: ShellCtrlMsg) => {
     switch (msg.t) {
       case 'catalog': {
         // The local catalog drives the launcher + settings panels. A
         // remote host's catalog is stored per-origin so wash-connect can
         // list "apps you can launch on B" (docs/REMOTE.md §6.1).
-        const c = msg as ShellCatalog;
+        const c = msg;
         if (isLocal) {
           catalogSub.set(c.apps);
           panelsSub.set(c.panels ?? []);
@@ -290,22 +375,22 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         break;
       }
       case 'app.declared':
-        handleAppDeclared(client, msg as ShellAppDeclared);
+        handleAppDeclared(client, msg);
         break;
       case 'session.snapshot':
-        handleSnapshot(client, msg as ShellSessionSnapshot);
+        handleSnapshot(client, msg);
         break;
       case 'session.patch':
-        handlePatch(client, msg as ShellSessionPatch);
+        handlePatch(client, msg);
         break;
       case 'app_msg.deliver':
-        deliverAppMsg(client, msg as ShellAppMsgDeliver);
+        deliverAppMsg(client, msg);
         break;
       case 'notify': {
         // Remote-host notifications merge into the tray in M4; for now only
         // the local router's toasts show.
         if (!isLocal) break;
-        const n = msg as ShellNotify;
+        const n = msg;
         showToast({
           instanceID: n.instance_id,
           title: n.title,
@@ -315,7 +400,7 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         break;
       }
       case 'app.crashed':
-        handleCrash(client, msg as ShellAppCrashed);
+        handleCrash(client, msg);
         break;
       case 'shell.reload': {
         // Dev-mode signal: only the LOCAL router may bounce the page (a
@@ -328,7 +413,7 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         break;
       }
       case 'channel.bind': {
-        const b = msg as ShellChannelBind;
+        const b = msg;
         if (b.kind === 'bundle' && b.instance_id) {
           // Bundle delivery channel — accumulate (per origin) until the
           // matching channel.unbind triggers the dynamic import.
@@ -367,19 +452,19 @@ function makeHandlers(client: RouterClient): ClientHandlers {
       // asset.read / panel.read are the shell fetching its OWN assets +
       // settings panels from its router — a local-only concern.
       case 'asset.read.ok':
-        if (isLocal) handleAssetReadOK(msg as { req_id: number; channel_id: number; size: number; mime?: string });
+        if (isLocal) handleAssetReadOK(msg);
         break;
       case 'asset.read.err':
-        if (isLocal) handleAssetReadErr(msg as { req_id: number; code: string; msg?: string });
+        if (isLocal) handleAssetReadErr(msg);
         break;
       case 'panel.read.ok':
-        if (isLocal) handlePanelReadOK(msg as { req_id: number; channel_id: number; size: number });
+        if (isLocal) handlePanelReadOK(msg);
         break;
       case 'panel.read.err':
-        if (isLocal) handlePanelReadErr(msg as { req_id: number; code: string; msg?: string });
+        if (isLocal) handlePanelReadErr(msg);
         break;
       case 'channel.unbind': {
-        const u = msg as ShellChannelUnbind;
+        const u = msg;
         // Remote-apps relay channel gone (A tore down the peer): drop the
         // host's RouterClient + windows. Do this before the generic cleanup.
         if (isLocal) {
@@ -408,7 +493,7 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         break;
       }
       case 'clipboard.data': {
-        const d = msg as { req_id: number; mime: string; text: string };
+        const d = msg;
         const wait = client.pendingClipboardGets.get(d.req_id);
         if (wait) {
           client.pendingClipboardGets.delete(d.req_id);
@@ -421,14 +506,14 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         // (forwarded to the router) so a host that's "up" but shows no apps
         // isn't a silent mystery. wash-connect can surface it later.
         if (!isLocal) break;
-        const e = msg as { origin: string; msg: string };
+        const e = msg;
         console.warn(`wash: relay attach failed for ${e.origin}: ${e.msg}`);
         break;
       }
       case 'clipboard.changed': {
         // Cross-host clipboard sync is M5; mirror only the local router's.
         if (!isLocal) break;
-        const c = msg as { mime: string; text: string };
+        const c = msg;
         clipboardSub.set({ mime: c.mime, text: c.text });
         break;
       }

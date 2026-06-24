@@ -57,9 +57,11 @@ P2/P3 merges).
   big one. Its own dedicated effort.
 - [ ] **`createEditState` (Phase 6).** Apply the state+controller split to
   `edit` (it shares the package but keeps an inline store).
-- [ ] **Stringly-typed FE message handlers.** `apps/top/fe/src/main.tsx`
-  `handleBE = (m: any)` and `web/shell/src/main.tsx` `switch (msg.t)` with
-  `as` casts — give them discriminated-union types.
+- [x] **Stringly-typed FE message handlers.** `top` `handleBE` now takes a
+  `TopBEMsg` union; `web/shell` `onCtrl` takes a 17-variant `ShellCtrlMsg`
+  union — 12 `as` casts + 2 `any` params removed. `@wash/ui` `createAppBus`
+  made generic over the message type (default `AppBusMessage`, so existing
+  consumers are unchanged) to let an app pass its own narrowed union.
 - [ ] **(optional) Phase 7** — same playbook for `session` / `top`.
 
 ## window manager / shell
