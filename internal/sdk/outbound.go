@@ -405,22 +405,15 @@ func (c *Conn) ClipboardSet(mime string, data []byte) error {
 // the same read goroutine and would deadlock.
 func (c *Conn) ClipboardGet(ctx context.Context) (string, []byte, error) {
 	reqID := c.nextReqID.Add(1)
-	wait := make(chan clipboardResult, 1)
-	c.clipMu.Lock()
-	c.pendingClipboardGet[reqID] = wait
-	c.clipMu.Unlock()
+	wait := c.pendingClipboardGet.register(reqID)
 
 	if err := c.writeEvt(wire.NewEvtClipboardGet(reqID)); err != nil {
-		c.clipMu.Lock()
-		delete(c.pendingClipboardGet, reqID)
-		c.clipMu.Unlock()
+		c.pendingClipboardGet.cancel(reqID)
 		return "", nil, err
 	}
 	select {
 	case <-ctx.Done():
-		c.clipMu.Lock()
-		delete(c.pendingClipboardGet, reqID)
-		c.clipMu.Unlock()
+		c.pendingClipboardGet.cancel(reqID)
 		return "", nil, ctx.Err()
 	case r := <-wait:
 		return r.mime, r.data, r.err
@@ -441,22 +434,15 @@ func (c *Conn) ClipboardGet(ctx context.Context) (string, []byte, error) {
 // goroutine and would deadlock.
 func (c *Conn) PublishIngress(ctx context.Context, network, addr string) (string, error) {
 	reqID := c.nextReqID.Add(1)
-	wait := make(chan ingressResult, 1)
-	c.ingressMu.Lock()
-	c.pendingIngress[reqID] = wait
-	c.ingressMu.Unlock()
+	wait := c.pendingIngress.register(reqID)
 
 	if err := c.writeEvt(wire.NewEvtIngressPublish(reqID, network, addr)); err != nil {
-		c.ingressMu.Lock()
-		delete(c.pendingIngress, reqID)
-		c.ingressMu.Unlock()
+		c.pendingIngress.cancel(reqID)
 		return "", err
 	}
 	select {
 	case <-ctx.Done():
-		c.ingressMu.Lock()
-		delete(c.pendingIngress, reqID)
-		c.ingressMu.Unlock()
+		c.pendingIngress.cancel(reqID)
 		return "", ctx.Err()
 	case r := <-wait:
 		return r.path, r.err
@@ -501,22 +487,15 @@ func (c *Conn) UnregisterPeer(origin string) error {
 // would deadlock. Spawn a goroutine if you're inside a callback.
 func (c *Conn) RestartApp(ctx context.Context, appID string) (string, error) {
 	reqID := c.nextReqID.Add(1)
-	wait := make(chan restartResult, 1)
-	c.restartMu.Lock()
-	c.pendingRestart[reqID] = wait
-	c.restartMu.Unlock()
+	wait := c.pendingRestart.register(reqID)
 
 	if err := c.writeEvt(wire.NewEvtAppRestart(reqID, appID)); err != nil {
-		c.restartMu.Lock()
-		delete(c.pendingRestart, reqID)
-		c.restartMu.Unlock()
+		c.pendingRestart.cancel(reqID)
 		return "", err
 	}
 	select {
 	case <-ctx.Done():
-		c.restartMu.Lock()
-		delete(c.pendingRestart, reqID)
-		c.restartMu.Unlock()
+		c.pendingRestart.cancel(reqID)
 		return "", ctx.Err()
 	case r := <-wait:
 		return r.instanceID, r.err

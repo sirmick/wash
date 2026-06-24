@@ -114,32 +114,33 @@ type Conn struct {
 	droppedMu    sync.Mutex
 	droppedChans map[uint32]bool
 
+	// The req-id-keyed correlation registries below all share the
+	// generic pendingCalls helper (see pending.go): register a cap-1
+	// waiter under a req id, resolve it once from dispatch, cancel it on
+	// any abandon path. nextReqID mints the uint64 keys for every
+	// writeEvt-based round-trip.
+	nextReqID atomic.Uint64
+
 	// pendingOpens correlates ChannelOpen req_id ↔ the goroutine
 	// waiting for the response (in OpenChannel).
-	openMu       sync.Mutex
-	pendingOpens map[uint64]chan openResult
-	nextReqID    atomic.Uint64
+	pendingOpens *pendingCalls[uint64, openResult]
 
 	// pendingClipboardGet correlates ClipboardGet req_id with the
 	// waiting goroutine in ClipboardGet.
-	clipMu              sync.Mutex
-	pendingClipboardGet map[uint64]chan clipboardResult
+	pendingClipboardGet *pendingCalls[uint64, clipboardResult]
 
 	// pendingIngress correlates PublishIngress req_id with the waiting
 	// goroutine. Resolved by dispatch on ingress.published / ingress.err.
-	ingressMu      sync.Mutex
-	pendingIngress map[uint64]chan ingressResult
+	pendingIngress *pendingCalls[uint64, ingressResult]
 
 	// pendingRestart correlates RestartApp req_id with the waiting
 	// goroutine. Resolved by dispatch on app.restart.ok / app.restart.err.
-	restartMu      sync.Mutex
-	pendingRestart map[uint64]chan restartResult
+	pendingRestart *pendingCalls[uint64, restartResult]
 
 	// pendingWindowCreate correlates CreateWindow req_id with the
 	// waiting goroutine. Resolved by dispatch on window.created /
 	// window.create.err. See docs/DISPLAY.md §4.
-	winCreateMu         sync.Mutex
-	pendingWindowCreate map[uint64]chan windowCreateResult
+	pendingWindowCreate *pendingCalls[uint64, windowCreateResult]
 
 	// privPending tracks in-flight PrivRunInlineSync calls keyed by
 	// req_id. dispatchEvt intercepts incoming app_msgs from com.wash
@@ -351,11 +352,11 @@ func ConnectWith(t wire.FrameTransport, def *AppDef) (*Conn, error) {
 		transport:           t,
 		def:                 def,
 		channels:            make(map[uint32]*RawChannel),
-		pendingOpens:        make(map[uint64]chan openResult),
-		pendingClipboardGet: make(map[uint64]chan clipboardResult),
-		pendingIngress:      make(map[uint64]chan ingressResult),
-		pendingRestart:      make(map[uint64]chan restartResult),
-		pendingWindowCreate: make(map[uint64]chan windowCreateResult),
+		pendingOpens:        newPendingCalls[uint64, openResult](),
+		pendingClipboardGet: newPendingCalls[uint64, clipboardResult](),
+		pendingIngress:      newPendingCalls[uint64, ingressResult](),
+		pendingRestart:      newPendingCalls[uint64, restartResult](),
+		pendingWindowCreate: newPendingCalls[uint64, windowCreateResult](),
 		done:                make(chan struct{}),
 	}
 	if err := c.handshake(); err != nil {

@@ -85,8 +85,7 @@ type Bus struct {
 
 	// pending awaits keyed by req_id for Bus.Call. Each waiter
 	// gets the matching reply data on its one-shot channel.
-	pendMu  sync.Mutex
-	pending map[string]chan map[string]any
+	pending *pendingCalls[string, map[string]any]
 
 	// prevAppMsg / prevAppMsgFrom hold whatever callbacks the app
 	// already installed. The bus chains to them for any kind it
@@ -117,7 +116,7 @@ func NewBus(c *Conn) *Bus {
 	b := &Bus{
 		conn:     c,
 		handlers: map[string]handlerFn{},
-		pending:  map[string]chan map[string]any{},
+		pending:  newPendingCalls[string, map[string]any](),
 	}
 	b.prevAppMsg = c.def.OnAppMsg
 	b.prevAppMsgFrom = c.def.OnAppMsgFrom
@@ -143,17 +142,7 @@ func (b *Bus) dispatch(c *Conn, win uint32, data any, from *wire.Sender) {
 	}
 	// Pending-reply waiter (Bus.Call). Match on req_id; consume.
 	if reqID, _ := m["req_id"].(string); reqID != "" {
-		b.pendMu.Lock()
-		ch, ok := b.pending[reqID]
-		if ok {
-			delete(b.pending, reqID)
-		}
-		b.pendMu.Unlock()
-		if ok {
-			select {
-			case ch <- m:
-			default:
-			}
+		if b.pending.resolve(reqID, m) {
 			return
 		}
 	}
@@ -478,15 +467,8 @@ func Call[Req, Resp any](ctx context.Context, b *Bus, recipient wire.Recipient, 
 	if err != nil {
 		return err
 	}
-	ch := make(chan map[string]any, 1)
-	b.pendMu.Lock()
-	b.pending[reqID] = ch
-	b.pendMu.Unlock()
-	defer func() {
-		b.pendMu.Lock()
-		delete(b.pending, reqID)
-		b.pendMu.Unlock()
-	}()
+	ch := b.pending.register(reqID)
+	defer b.pending.cancel(reqID)
 
 	out, err := envelope(kind, "", req)
 	if err != nil {

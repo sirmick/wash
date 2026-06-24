@@ -28,10 +28,12 @@ P2/P3 merges).
 - [ ] **`internal/sdk/bus.go` struct→`map[string]any`→struct round-trip.**
   The BE↔FE decode path marshals to a map and back; collapse to a typed
   path. Architectural — touches every app's message decode.
-- [ ] **SDK `pendingCall[T]` generic.** Three near-identical pending
-  registries (`pendingOpens`, `pendingClipboardGet`, `requestIDs`/`pending`
-  in bus.go) — collapse into one generic correlation helper. Touches
-  concurrency; add a focused test.
+- [x] **SDK `pendingCall[T]` generic.** Collapsed *six* near-identical
+  correlation registries (channel opens, clipboard get, ingress publish,
+  app restart, window create, and the `bus.Call` reply map) into one
+  generic `pendingCalls[K comparable, T any]` (`internal/sdk/pending.go`)
+  with register/resolve/cancel. Focused concurrency test + `-race`; loopback
+  integration green.
 - [x] **`bus.go classifyKind` hardcoded suffix matching.** Replaced the
   `strings.HasSuffix` ladder with a declared `bulkKindSuffixes` slice
   (source of truth) that the function iterates; test locks the list.

@@ -46,10 +46,7 @@ type windowCreateResult struct {
 // deadlocks. Hand off to a fresh goroutine if you're inside a callback.
 func (c *Conn) CreateWindow(ctx context.Context, opts WindowOpts) (uint32, error) {
 	reqID := c.nextReqID.Add(1)
-	waitCh := make(chan windowCreateResult, 1)
-	c.winCreateMu.Lock()
-	c.pendingWindowCreate[reqID] = waitCh
-	c.winCreateMu.Unlock()
+	waitCh := c.pendingWindowCreate.register(reqID)
 
 	m := wire.EvtWindowCreate{
 		T: wire.TEvtWindowCreate, ReqID: reqID,
@@ -59,17 +56,13 @@ func (c *Conn) CreateWindow(ctx context.Context, opts WindowOpts) (uint32, error
 		Element: opts.Element,
 	}
 	if err := c.writeEvt(m); err != nil {
-		c.winCreateMu.Lock()
-		delete(c.pendingWindowCreate, reqID)
-		c.winCreateMu.Unlock()
+		c.pendingWindowCreate.cancel(reqID)
 		return 0, err
 	}
 
 	select {
 	case <-ctx.Done():
-		c.winCreateMu.Lock()
-		delete(c.pendingWindowCreate, reqID)
-		c.winCreateMu.Unlock()
+		c.pendingWindowCreate.cancel(reqID)
 		return 0, ctx.Err()
 	case r := <-waitCh:
 		return r.win, r.err
@@ -89,17 +82,7 @@ func (c *Conn) DestroyWindow(win uint32) error {
 // outcome to the waiting CreateWindow caller. Returns false if none is
 // waiting (the call was abandoned via ctx).
 func (c *Conn) resolveWindowCreate(reqID uint64, win uint32, err error) bool {
-	c.winCreateMu.Lock()
-	waitCh, ok := c.pendingWindowCreate[reqID]
-	if ok {
-		delete(c.pendingWindowCreate, reqID)
-	}
-	c.winCreateMu.Unlock()
-	if !ok {
-		return false
-	}
-	waitCh <- windowCreateResult{win: win, err: err}
-	return true
+	return c.pendingWindowCreate.resolve(reqID, windowCreateResult{win: win, err: err})
 }
 
 // windowCreateErrFromMsg builds the canonical CreateWindow error.
