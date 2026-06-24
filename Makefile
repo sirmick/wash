@@ -835,6 +835,16 @@ $(1)-package:
 endef
 $(foreach m,$(PKG_MAP),$(eval $(call PKG_LEAF_RULE,$(firstword $(subst =, ,$(m))),$(lastword $(subst =, ,$(m))))))
 
+# debian-packages: the Debian .debs both arches that downstreams actually ship —
+# amd64 (Proxmox LXC template) + arm64 (MikroTik OCI image). The homezone build
+# scripts consume these straight from dist/packages/debian-13-{amd64,arm64}; this
+# is the one verb to (re)build them locally. arm64 runs under qemu (slow but
+# hermetic). riscv64 is intentionally excluded — no downstream consumes it.
+.PHONY: debian-packages
+debian-packages:
+	$(MAKE) amd64-debian13-wash-package
+	$(MAKE) arm64-debian13-wash-package
+
 # openwrt-smoke: the OpenWRT runtime row (no native .ipk — exercises the opkg/
 # procd backends end-to-end in an OpenWRT container). Not a package leaf.
 .PHONY: openwrt-smoke

@@ -86,18 +86,27 @@ jobs:
     name: package
     runs-on: ubuntu-24.04
     needs: [unit, e2e]   # only package a green build
-    timeout-minutes: 30
+    # 60 (not 30) to cover the arm64 deb row, which compiles under qemu emulation.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         target:
           - amd64-ubuntu24-wash-package
           - amd64-debian13-wash-package
+          # arm64 Debian deb: consumed by the MikroTik OCI image downstream. Only
+          # the debian/arm64 row is emulated here (not the full arm64 matrix) — it's
+          # the one a downstream actually ships. Slower (qemu); see setup-qemu below.
+          - arm64-debian13-wash-package
           - amd64-fedora40-wash-package
           - amd64-alpine321-wash-package
           - openwrt-smoke
     steps:
       - uses: actions/checkout@v7
+      # arm64 rows build inside an emulated linux/arm64 container; register the
+      # binfmt handlers first. No-op cost on amd64 rows, so gate it to keep them lean.
+      - if: ${{ contains(matrix.target, 'arm64') }}
+        uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v4
       - name: make ${{ matrix.target }}
         # run_matrix.sh builds the whole package hermetically in Docker — no host
