@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.9.4
+Version:        0.9.5
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,15 @@ fi
 exit 0
 
 %changelog
+* Tue Jun 23 2026 sirmick <sirmick@gmail.com> - 0.9.5-1
+- build: multicall is now the default dev layout (make wash / run / dev); the
+  per-app binaries build via make wash-standalone.
+- router/wire: app-probe rejects --wash-manifest cleanly on non-app binaries;
+  the "no header newline" diagnostic now reports byte count + snippet, captured
+  stderr, and the binary path in the disable reason.
+- notify: fix a StateService snapshot data race; add a -race CI gate.
+- wash-vm: control plane is a single-owner actor (no lock held across I/O).
+
 * Mon Jun 22 2026 sirmick <sirmick@gmail.com> - 0.9.4-1
 - remote: LAN mDNS auto-discovery ("On your network") for wash-connect plus a
   Settings "Remote" panel listing live sessions + mounts with graceful teardown.

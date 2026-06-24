@@ -1,3 +1,17 @@
+wash (0.9.5-1) unstable; urgency=low
+
+  * build: multicall is now the default dev layout (`make wash` / `make run` /
+    `make dev`), so the inner loop exercises the same argv[0]-dispatch and
+    exec-probe paths the packages ship; `make wash-standalone` builds the
+    per-app binaries.
+  * router/wire: app-probe rejects `--wash-manifest` cleanly on non-app
+    binaries and the "no header newline" diagnostic is now self-explanatory
+    (byte count + snippet, captured stderr, binary path in the disable reason).
+  * notify: fix a StateService snapshot data race; add a `-race` CI gate.
+  * wash-vm: control plane is a single-owner actor (no lock held across I/O).
+
+ -- sirmick <sirmick@gmail.com>  Tue, 23 Jun 2026 12:00:00 -0700
+
 wash (0.9.4-1) unstable; urgency=low
 
   * remote: LAN mDNS auto-discovery ("On your network") for wash-connect and a
