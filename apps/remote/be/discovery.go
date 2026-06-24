@@ -88,7 +88,7 @@ func newDiscoverer(svc stateMutator) *discoverer {
 // loop. Failure to open the mDNS socket is logged, not fatal — discovery
 // is best-effort and the rest of wash-remote works without it.
 func (d *discoverer) start() {
-	adv := buildAdvertisement()
+	adv := mdns.HostServiceInfo(defaultSSHPort)
 	srv, err := mdns.New(mdns.Options{
 		Advertise: adv,
 		OnEntry:   d.onMDNS,
@@ -236,82 +236,6 @@ func (d *discoverer) publish() {
 		return out[i].Addr < out[j].Addr
 	})
 	d.svc.Mutate(func(s *State) { s.Candidates = out })
-}
-
-// buildAdvertisement describes this box for mDNS, or returns nil if
-// advertising is disabled (WASH_DISCOVERY_NO_ADVERTISE) or we have no
-// routable address to announce. A settings-UI toggle is a later follow-up;
-// the env var is the escape hatch until then.
-func buildAdvertisement() *mdns.ServiceInfo {
-	if os.Getenv("WASH_DISCOVERY_NO_ADVERTISE") != "" {
-		return nil
-	}
-	host, err := os.Hostname()
-	if err != nil || host == "" {
-		return nil
-	}
-	host = strings.TrimSuffix(host, ".local")
-	ips := routableIPv4()
-	if len(ips) == 0 {
-		return nil
-	}
-	return &mdns.ServiceInfo{
-		Instance: host,
-		Port:     defaultSSHPort,
-		Text:     []string{"wash=1"},
-		IPv4:     ips,
-	}
-}
-
-// routableIPv4 returns this box's non-loopback, non-link-local IPv4
-// addresses on real interfaces — the ones a peer could SSH to. Mirrors the
-// "routable v4" filter AND the docker-plumbing exclusion in
-// apps/session/be/netifaces.go (kept local: single consumer). Skipping
-// docker bridges matters: their 172.17.0.1/172.18.0.1 addresses are
-// unreachable from a peer and every docker host shares them, so advertising
-// them would hand out bogus connect targets.
-func routableIPv4() []net.IP {
-	all, err := net.Interfaces()
-	if err != nil {
-		return nil
-	}
-	var out []net.IP
-	for _, ifc := range all {
-		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 || dockerIface(ifc.Name) {
-			continue
-		}
-		addrs, err := ifc.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, a := range addrs {
-			ipn, ok := a.(*net.IPNet)
-			if !ok {
-				continue
-			}
-			v4 := ipn.IP.To4()
-			if v4 == nil || ipn.IP.IsLoopback() || ipn.IP.IsLinkLocalUnicast() {
-				continue
-			}
-			out = append(out, v4)
-		}
-	}
-	return out
-}
-
-// dockerIface matches container plumbing — the default bridge, veth pairs,
-// and docker's per-network bridges (br-<12 hex>). Mirrors the same-named
-// helper in apps/session/be/netifaces.go; wash's own bridges (br0/br1) and
-// vlans (eth0.10) are intentionally NOT matched.
-func dockerIface(name string) bool {
-	switch {
-	case name == "docker0", strings.HasPrefix(name, "veth"):
-		return true
-	case strings.HasPrefix(name, "br-") && len(name) == 15: // "br-" + 12 hex
-		return true
-	default:
-		return false
-	}
 }
 
 // firstIPv4 returns the first IPv4 address as a string, or "".
