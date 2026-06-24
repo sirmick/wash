@@ -48,6 +48,25 @@ export const TERM_THEME_LIGHT: ITheme = {
 };
 const termThemeFor = (a: 'light' | 'dark'): ITheme => (a === 'light' ? TERM_THEME_LIGHT : TERM_THEME_DARK);
 
+// Double-click word selection: treat a "word" as an identifier run
+// ([A-Za-z0-9_]) and break on every other symbol, so double-clicking
+// `bin` in /usr/local/bin selects just that segment. xterm's default
+// only breaks on whitespace and a few brackets, so it would grab the
+// whole path. This is the full ASCII punctuation set MINUS '_' (kept a
+// word char so snake_case identifiers stay one word).
+const TERM_WORD_SEPARATORS = ' !"#$%&\'()*+,-./:;<=>?@[\\]^`{|}~';
+
+// isMac gates the copy keybinding: on macOS Ctrl+C must always stay
+// SIGINT and Cmd (meta)+C copies; on every other platform Ctrl+C copies
+// when there's a selection and otherwise falls through as SIGINT.
+const isMac =
+  typeof navigator !== 'undefined' &&
+  /Mac|iPhone|iPad|iPod/.test(
+    (navigator as unknown as { userAgentData?: { platform?: string } }).userAgentData?.platform ||
+      navigator.platform ||
+      '',
+  );
+
 // Concrete monospace fallback shown while a bundled woff2 loads. MUST be a
 // real font stack, never a CSS var() — xterm measures cell width on a
 // canvas, which can't resolve var(), so a var() string yields the wrong
@@ -348,6 +367,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
       theme: props.theme ?? termThemeFor(washAppearance()),
       cursorBlink: true,
       allowProposedApi: true,
+      wordSeparator: TERM_WORD_SEPARATORS,
     });
     // When the consumer didn't pin a theme, follow the active pack:
     // flip the xterm palette live as the pack's appearance changes.
@@ -356,23 +376,42 @@ export const Terminal: Component<TerminalProps> = (props) => {
     }
     // Clipboard keys are component-level so every terminal in wash
     // behaves the same; the consumer's customKeyHandler runs after.
-    // Ctrl+Shift+C copies the selection (plain Ctrl+C must stay
-    // SIGINT); Ctrl+Shift+V pastes the wash clipboard (plain Ctrl+V
-    // stays the browser's native system-clipboard paste, which xterm
-    // receives as a paste event).
+    // Ctrl+Shift+C copies the selection; Ctrl+Shift+V pastes the wash
+    // clipboard (plain Ctrl+V stays the browser's native system-clipboard
+    // paste, which xterm receives as a paste event).
+    //
+    // Plain copy without Shift is platform-split: on macOS Cmd+C copies
+    // (Ctrl+C is left alone as SIGINT); elsewhere Ctrl+C copies WHEN a
+    // selection exists and otherwise falls through to xterm as SIGINT.
+    // After a PC Ctrl+C copy we clear the selection so a second Ctrl+C
+    // interrupts (matching Windows Terminal / GNOME-on-selection).
     term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
-      if (ev.type === 'keydown' && ev.ctrlKey && ev.shiftKey) {
-        if (ev.key === 'C' || ev.key === 'c') {
+      if (ev.type === 'keydown' && (ev.key === 'C' || ev.key === 'c')) {
+        if (ev.ctrlKey && ev.shiftKey) {
           const sel = term?.getSelection();
           if (sel) {
             washCopyText(sel);
             return false;
           }
+        } else if (isMac && ev.metaKey && !ev.ctrlKey) {
+          const sel = term?.getSelection();
+          if (sel) {
+            washCopyText(sel);
+            return false;
+          }
+        } else if (!isMac && ev.ctrlKey && !ev.shiftKey && !ev.altKey && !ev.metaKey) {
+          const sel = term?.getSelection();
+          if (sel) {
+            washCopyText(sel);
+            term?.clearSelection();
+            return false;
+          }
+          // No selection: let Ctrl+C through as SIGINT.
         }
-        if (ev.key === 'V' || ev.key === 'v') {
-          pasteWash();
-          return false;
-        }
+      }
+      if (ev.type === 'keydown' && ev.ctrlKey && ev.shiftKey && (ev.key === 'V' || ev.key === 'v')) {
+        pasteWash();
+        return false;
       }
       return props.customKeyHandler ? props.customKeyHandler(ev) : true;
     });

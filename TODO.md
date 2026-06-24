@@ -92,11 +92,13 @@ P2/P3 merges).
 
 ## terminal
 
-- [ ] **Double-click word selection.** Select just a word, breaking on any
-  special char/symbol (not only whitespace).
-- [ ] **Copy keybinding on selection.** On PC, `Ctrl-C` = copy when a
-  selection exists, else pass through as SIGINT (macOS uses `Cmd-C`, no
-  conflict).
+- [x] **Double-click word selection.** Set xterm's `wordSeparator` to the
+  full ASCII-punctuation set (minus `_`), so double-click selects one
+  identifier/path segment instead of stopping only at whitespace.
+- [x] **Copy keybinding on selection.** Plain `Ctrl-C` copies the selection
+  (then clears it so a second press interrupts) and otherwise falls through
+  as SIGINT; on macOS `Cmd-C` copies and `Ctrl-C` stays SIGINT. e2e:
+  `term-select-copy.spec.ts`.
 - [ ] **Menubar with the basics** — themes, tab color, Edit menu
   (copy/paste/etc.).
 
