@@ -89,6 +89,14 @@ P2/P3 merges).
 - [ ] **Expand-folder scroll anchoring.** Expanding a folder inserts rows
   above the viewport so content shifts down; scroll should compensate for
   the added length so the clicked row "stays where it is" visually.
+  - Investigated (2026-06-23): the jump only reproduces with the browser's
+    native `overflow-anchor` disabled — **Chromium/Firefox already pin the
+    content; only WebKit/Safari (no native scroll anchoring) jumps.** A JS
+    polyfill (capture topmost-visible row before a re-list, restore its
+    offset after) fought Solid's async `<For>` render timing + the
+    multiple-`list_ok` ordering of a single fs change and proved fragile —
+    backed out. Revisit (likely via a robust observer-based anchor, or just
+    accept native-only) if Safari/iPad becomes a supported target.
 
 ## terminal
 
