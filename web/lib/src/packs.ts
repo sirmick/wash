@@ -393,74 +393,75 @@ const oslo: Pack = {
   wallpaper: 'wallpapers/oslo.svg',
 };
 
-// Dreamtime — an Australian Aboriginal dot-painting pack. A LIGHT theme
-// with NEUTRAL chrome so the wallpaper carries the color: the window /
-// menu / taskbar / titlebar surfaces are light greys with a slight blue
-// tint, and the vivid accents (turquoise sea, emerald hills, terracotta,
-// sun-orange) are lifted from the painting. Dark slate text. The wallpaper
-// is the dot-painting traced to real SVG circles, framed by a sun-orange
-// border on a lighter-ocean-blue field. Bundles rounded-geometric
-// **Quicksand** (OFL) for the chrome, echoing the painting's dots.
+// Dreamtime — an Australian Aboriginal dot-painting pack. A DARK theme:
+// black chrome carrying solid, bright colors lifted from the painting
+// (sun-orange, bright amber, emerald, turquoise, electric blue). Near-white
+// text. The wallpaper is the dot-painting traced to real SVG circles, framed
+// by a black border on a black field — so it floats on the black desktop.
+// Bundles rounded-geometric **Quicksand** (OFL) for the chrome, echoing the
+// painting's dots.
 const dreamtime: Pack = {
   id: 'dreamtime',
   name: 'Dreamtime',
-  appearance: 'light',
+  appearance: 'dark',
   scheme: {
-    // Light grey, slight blue tint — neutral chrome that lets the wallpaper pop.
-    '--wash-bg-window': '#dde3ec',
-    '--wash-bg-menu': '#e7ebf2', // menus / dropdowns / start menu (a touch lighter)
-    '--wash-bg-inset': '#f1f4f9', // near-white sunken field
-    '--wash-bg-canvas': '#f8fafc', // editor/terminal content surface
+    // Black chrome — the wallpaper + bright accents carry all the color.
+    '--wash-bg-window': '#0c0c0f',
+    '--wash-bg-menu': '#141418', // menus / dropdowns / start menu
+    '--wash-bg-inset': '#050506', // sunken field (darker)
+    '--wash-bg-canvas': '#000000', // editor/terminal — true black
     '--wash-bg-row': 'transparent',
-    '--wash-bg-row-hover': '#ccd5e3', // deeper blue-grey hover
-    '--wash-bg-row-selected': '#aac3e0', // soft ocean-blue selection (dark text reads)
-    '--wash-bg-backdrop': 'rgba(20,30,45,0.35)',
-    '--wash-bg-drop-target': '#bcd6ec',
-    '--wash-border-menu': '#bcc5d4',
-    '--wash-border-window': '#a6b1c2',
-    '--wash-border-focus': '#2c7fb0', // ocean blue
-    '--wash-border-drop-target': '#2c7fb0',
-    '--wash-fg': '#1f2733', // dark slate (blue-tinted near-black)
-    '--wash-fg-muted': '#525c6b',
-    '--wash-fg-dim': '#7a8492',
-    '--wash-bg-danger': '#f4d4cc',
-    '--wash-border-danger': '#c0563f',
-    '--wash-fg-danger': '#a52f1c',
-    '--wash-bg-success': '#d8e8c4',
-    '--wash-fg-success': '#3a7a2a',
-    '--wash-bg-warning': '#f6e2b0',
-    '--wash-fg-warning': '#9a6c10',
-    '--wash-bg-info': '#cfe2ef',
-    '--wash-fg-info': '#1f5f86',
-    '--wash-bg-neutral': '#dde3ec',
-    '--wash-bg-denied': '#ece2cf',
-    '--wash-border-denied': '#bd9a4a',
-    '--wash-sev-error': '#b8341d',
-    '--wash-sev-warn': '#9a6c10',
-    '--wash-sev-notice': '#2c7fb0',
-    '--wash-sev-info': '#3a4452',
-    '--wash-sev-debug': '#8a93a0',
-    '--wash-accent-red': '#c0392b', // terracotta red
-    '--wash-accent-orange': '#e26a12', // burnt orange (sun outer ring)
-    '--wash-accent-amber': '#e89a10', // golden sun
-    '--wash-accent-lime': '#8fae2e',
-    '--wash-accent-green': '#3f8f3a', // emerald hinterland
-    '--wash-accent-teal': '#13988c',
-    '--wash-accent-cyan': '#1497a8', // turquoise sea
-    '--wash-accent-blue': '#1f6f9c', // deep ocean
-    '--wash-accent-indigo': '#3a5a9c',
-    '--wash-accent-violet': '#7a4fa3',
-    '--wash-accent-magenta': '#b83a7a',
-    '--wash-accent-pink': '#d2628f',
-    // Chrome: light blue-grey captions; one dark-slate titlebar fg reads on both.
-    '--wash-titlebar-active': '#cdd6e3',
-    '--wash-titlebar-inactive': '#dde3ec',
-    '--wash-titlebar-fg': '#1f2733',
-    // Start bar (taskbar): light blue-grey with a near-white raised top edge.
-    '--wash-taskbar-bg': '#d3dae5',
-    '--wash-taskbar-top': '#f2f5fa',
-    // Desktop info banner sits over the wallpaper's light-ocean-blue field → dark text.
-    '--wash-banner-fg': '#1c2735',
+    '--wash-bg-row-hover': '#23232c',
+    '--wash-bg-row-selected': '#e8631a', // solid bright sun-orange selection (light text reads)
+    '--wash-bg-backdrop': 'rgba(0,0,0,0.6)',
+    '--wash-bg-drop-target': '#0d3a44',
+    '--wash-border-menu': '#26262e',
+    '--wash-border-window': '#000000',
+    '--wash-border-focus': '#ff6a00', // bright sun-orange focus ring
+    '--wash-border-drop-target': '#1bc4e0',
+    '--wash-fg': '#f1f1f5', // near-white
+    '--wash-fg-muted': '#a2a2ae',
+    '--wash-fg-dim': '#6a6a76',
+    '--wash-bg-danger': '#3a1110',
+    '--wash-border-danger': '#e62b1e',
+    '--wash-fg-danger': '#ff6f60',
+    '--wash-bg-success': '#0f3012',
+    '--wash-fg-success': '#3ed94f',
+    '--wash-bg-warning': '#33260a',
+    '--wash-fg-warning': '#ffc23a',
+    '--wash-bg-info': '#06303a',
+    '--wash-fg-info': '#2ad0ec',
+    '--wash-bg-neutral': '#1c1c24',
+    '--wash-bg-denied': '#33240a',
+    '--wash-border-denied': '#b0791c',
+    '--wash-sev-error': '#ff5e4e',
+    '--wash-sev-warn': '#ffb020',
+    '--wash-sev-notice': '#2ad0ec',
+    '--wash-sev-info': '#c4c4d0',
+    '--wash-sev-debug': '#6a6a76',
+    // Accents — solid + bright, straight off the painting.
+    '--wash-accent-red': '#e62b1e', // bright red
+    '--wash-accent-orange': '#ff6a00', // bright sun-orange
+    '--wash-accent-amber': '#ffb20a', // bright golden sun
+    '--wash-accent-lime': '#9bd61e',
+    '--wash-accent-green': '#2ecc40', // bright emerald
+    '--wash-accent-teal': '#00b3a4',
+    '--wash-accent-cyan': '#1bc4e0', // bright turquoise sea
+    '--wash-accent-blue': '#2a7fff', // electric ocean blue
+    '--wash-accent-indigo': '#5a5af0',
+    '--wash-accent-violet': '#a05cf0',
+    '--wash-accent-magenta': '#e83fa0',
+    '--wash-accent-pink': '#ff5fa0',
+    // Chrome: black captions, near-white fg; a thin bright top edge on the
+    // active caption marks focus.
+    '--wash-titlebar-active': '#1a1a20',
+    '--wash-titlebar-inactive': '#0c0c0f',
+    '--wash-titlebar-fg': '#f1f1f5',
+    // Start bar (taskbar): black.
+    '--wash-taskbar-bg': '#0a0a0d',
+    '--wash-taskbar-top': '#26262e',
+    // Desktop info banner sits over the wallpaper's black frame → light text.
+    '--wash-banner-fg': '#f1f1f5',
     // Rounded chrome to match Quicksand's geometry and the painting's dots.
     '--wash-radius-sm': '5px',
     '--wash-radius-md': '8px',
