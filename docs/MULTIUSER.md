@@ -419,6 +419,20 @@ read args from the single-source env file `/etc/default/wash-login`
 (`/etc/conf.d/wash-login` on apk), so cookie policy / bind / limits are
 configured in one place regardless of init system.
 
+**Capability bounding-set caveat (containers).** The package post-install
+`setcap`s `cap_setuid,cap_setgid,cap_kill+ep` onto the binary, but file
+capabilities only take effect on `exec` if the capability is also present in
+the process's **capability bounding set**. A restricted container runtime
+(e.g. `docker run` without `--cap-add`, or an OCI sandbox that drops caps)
+can have those caps absent from the bounding set, so even a correctly
+`setcap`'d wash-login won't gain them and uid-switching fails. Remedies, in
+order of preference: (1) grant the caps to the container —
+`--cap-add SETUID --cap-add SETGID --cap-add KILL`; (2) run wash-login as
+**root** (the supervisord example does — root holds a full bounding set, no
+`setcap` needed); or (3) stay single-user (`--max-sessions-per-uid=1`,
+target uid == self), which needs no caps at all. The systemd unit
+deliberately leaves `NoNewPrivileges` off so the file-caps survive `exec`.
+
 ## File-system & socket layout
 
 ```

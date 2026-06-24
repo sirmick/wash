@@ -114,10 +114,12 @@ P2/P3 merges).
 
 ## Packaging / deploy  (docs/MULTIUSER.md, deb/rpm/apk)
 
-- [ ] **Move `setcap` into the deb postinst** (env-agnostic; keep the
-  systemd `ExecStartPre` as belt-and-suspenders) so `cap_setuid,cap_setgid,
-  cap_kill` are set at install time under systemd / OpenRC / supervisord /
-  bare container alike. Document the bounding-set caveat.
+- [x] **Move `setcap` into the deb postinst** — already implemented:
+  `debian/wash-login.postinst` and `rpm/wash.spec`'s `%post` both setcap
+  `cap_setuid,cap_setgid,cap_kill+ep` at install time (apk via post-install),
+  with the systemd `ExecStartPre` kept as a self-healing belt-and-suspenders
+  for xattr-dropping delivery channels. The bounding-set caveat (containers
+  with a reduced cap bounding set) is now documented in docs/MULTIUSER.md.
 - [x] **Ship a supervisord drop-in** for no-systemd/container hosts. Example
   program (docs only, not activated) installed at
   `/usr/share/wash-login/supervisord.conf` by all three packagers
