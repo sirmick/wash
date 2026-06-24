@@ -98,6 +98,14 @@ func NewStateService[S any](bus *Bus, initial S) *StateService[S] {
 // reference the same underlying memory, so a caller that mutates
 // those will corrupt the service's view. Treat the snapshot as
 // read-only; use Mutate to modify.
+//
+// Subtler hazard: because the backing storage is shared, even a
+// read-only snapshot holder DATA-RACES a concurrent Mutate that
+// writes a slice/map element IN PLACE (e.g. s.Items[i].Field = x).
+// Mutate fns must therefore be copy-on-write for any slice/map a
+// snapshot may outlive — rebuild the slice rather than poking an
+// element — OR all Snapshot/Mutate calls must stay on one goroutine.
+// `make test-race` catches violations.
 func (s *StateService[S]) Snapshot() S {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
