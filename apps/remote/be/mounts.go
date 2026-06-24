@@ -138,6 +138,14 @@ var (
 		cmd := exec.Command(sshPath,
 			"-o", "BatchMode=yes",
 			"-o", "StrictHostKeyChecking=accept-new",
+			// Surface a silent link death as an ssh error so the FUSE layer
+			// can re-dial (conn.dial), instead of a half-open transport that
+			// wedges every op at the 30s opTimeout. The relay supervisor
+			// already does this; the mount path omitted it
+			// (TODO-sftp-mount-bugs.md High: "op timeout never marks dead").
+			"-o", "ConnectTimeout=10",
+			"-o", "ServerAliveInterval=15",
+			"-o", "ServerAliveCountMax=3",
 			host, "-s", "sftp")
 		wr, err := cmd.StdinPipe()
 		if err != nil {
@@ -184,16 +192,35 @@ func (m *mountManager) mount(host, remoteRoot string, persist bool) {
 	}
 	mp := m.mountPointFor(host, remoteRoot)
 
+	// Reserve mp atomically with a placeholder entry. Concurrent mounts of the
+	// same target are by design (restoreMounts spawns one, a control spawns
+	// another); without the reservation both pass the exists-check, both bring
+	// up a server+ssh child, and the second insert clobbers the first into an
+	// unreachable leak (TODO-sftp-mount-bugs.md Low TOCTOU). A concurrent caller
+	// now sees the placeholder and bails.
 	m.mu.Lock()
-	_, exists := m.entries[mp]
-	m.mu.Unlock()
-	if exists {
+	if _, exists := m.entries[mp]; exists {
+		m.mu.Unlock()
 		return
+	}
+	placeholder := &mountEntry{host: host, remoteRoot: remoteRoot} // server/conn filled on success
+	m.entries[mp] = placeholder
+	m.mu.Unlock()
+
+	// release drops our reservation, but only if it's still the placeholder
+	// (success upgrades it in place; an interleaved unmount may have removed it).
+	release := func() {
+		m.mu.Lock()
+		if m.entries[mp] == placeholder {
+			delete(m.entries, mp)
+		}
+		m.mu.Unlock()
 	}
 
 	m.setMount(MountState{Host: host, RemoteRoot: remoteRoot, MountPoint: mp, Status: MountStarting})
 
 	fail := func(stage string, err error) {
+		release()
 		m.setMount(MountState{Host: host, RemoteRoot: remoteRoot, MountPoint: mp, Status: MountDown, Error: stage + ": " + err.Error()})
 	}
 
@@ -213,7 +240,14 @@ func (m *mountManager) mount(host, remoteRoot string, persist bool) {
 		return
 	}
 	m.mu.Lock()
-	m.entries[mp] = &mountEntry{server: server, conn: conn, host: host, remoteRoot: remoteRoot}
+	if m.entries[mp] != placeholder {
+		// Unmounted while we were dialing — tear down what we just built.
+		m.mu.Unlock()
+		conn.closeCurrent()
+		_ = washmount.Unmount(server, mp)
+		return
+	}
+	placeholder.server, placeholder.conn = server, conn
 	m.mu.Unlock()
 
 	if persist {
@@ -248,10 +282,33 @@ func (m *mountManager) unmount(mp string) {
 			"mount_point": mp,
 		})
 	}
-	_ = washmount.Unmount(e.server, mp)
-	e.conn.closeCurrent()
+	_ = washmount.Unmount(e.server, mp) // nil server (a still-dialing placeholder) is handled
+	if e.conn != nil {
+		e.conn.closeCurrent()
+	}
+	// Remove the now-empty mountpoint (and prune an emptied host dir up to
+	// baseDir). This is the fs-notify wash-fm needs: it watches the parent via
+	// inotify, so the rmdir fires IN_DELETE and fm drops the stale mount icon.
+	// Without it the empty dir lingers and fm keeps showing a mounted volume.
+	// os.Remove fails (EBUSY) on a still-mounted point, so it can't nuke live
+	// data — it only succeeds once the FUSE detach is real.
+	m.pruneMountDir(mp)
 	removeSavedMount(e.host, e.remoteRoot) // an explicit unmount also stops re-mounting at launch
 	m.removeMount(mp)
+}
+
+// pruneMountDir removes the unmounted mountpoint and any now-empty ancestor
+// dirs, stopping at baseDir (never removing the ~/wash/remote root itself).
+// Each rmdir is best-effort: a non-empty or busy dir just stops the walk.
+func (m *mountManager) pruneMountDir(mp string) {
+	dir := filepath.Clean(mp)
+	base := filepath.Clean(m.baseDir)
+	for dir != base && strings.HasPrefix(dir, base+string(filepath.Separator)) {
+		if err := os.Remove(dir); err != nil {
+			return // non-empty / busy / already gone — stop pruning
+		}
+		dir = filepath.Dir(dir)
+	}
 }
 
 func killCmd(cmd *exec.Cmd) {

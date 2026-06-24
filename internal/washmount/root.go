@@ -103,10 +103,14 @@ func (r *sftpRoot) run(ctx context.Context, what string, fn func(cl *sftp.Client
 	cctx, cancel := context.WithTimeout(ctx, r.opTimeout)
 	defer cancel()
 
-	// Bound in-flight ops; never block past the deadline.
+	// Bound in-flight ops; never block past the deadline. The slot is freed
+	// by the worker goroutine below (not here): an abandoned op — one we time
+	// out on — must keep holding its slot until it actually finishes, or
+	// MaxInflight is defeated exactly when the server is congested (N ops time
+	// out, free their slots, the next N are admitted while the first N still
+	// pump the one ssh channel) — TODO-sftp-mount-bugs.md Medium.
 	select {
 	case r.sem <- struct{}{}:
-		defer func() { <-r.sem }()
 	case <-cctx.Done():
 		log.Printf("washmount: op queue full op=%s: returning EIO", what)
 		return syscall.EIO
@@ -115,11 +119,15 @@ func (r *sftpRoot) run(ctx context.Context, what string, fn func(cl *sftp.Client
 	cl, err := r.cli()
 	if err != nil {
 		log.Printf("washmount: connect for op=%s: %v", what, err)
+		<-r.sem // nothing was spawned to release it
 		return toErrno(err)
 	}
 
 	done := make(chan error, 1) // buffered so the abandoned goroutine never leaks on send
-	go func() { done <- fn(cl) }()
+	go func() {
+		defer func() { <-r.sem }() // free the slot only when the op truly completes
+		done <- fn(cl)
+	}()
 
 	select {
 	case err := <-done:
@@ -128,6 +136,15 @@ func (r *sftpRoot) run(ctx context.Context, what string, fn func(cl *sftp.Client
 		}
 		return toErrno(err)
 	case <-cctx.Done():
+		// A timed-out op means the transport is stuck — and a SILENT link
+		// death (NAT/conntrack drop, suspended laptop, cable pull) produces no
+		// error to trip the done arm, only this hang. Drop the client so the
+		// next op re-dials; without this, r.cur keeps handing back the stalled
+		// client and every later op times out the same way, wedging the mount
+		// with no recovery (TODO-sftp-mount-bugs.md High). markDead is
+		// idempotent and also closes the client, which errors out (and so
+		// unblocks) the abandoned goroutine.
+		r.markDead(cl)
 		log.Printf("washmount: op timed out op=%s timeout=%s: returning EIO", what, r.opTimeout)
 		return syscall.EIO
 	}

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sirmick/wash/internal/sdk"
 )
@@ -75,6 +76,7 @@ func buildSSHArgs(host, localSock, remoteSock string, port int) []string {
 		"-o", "BatchMode=yes", // never block on an interactive prompt
 		"-o", "ExitOnForwardFailure=yes", // fail fast if the -L bind can't be set up
 		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "ConnectTimeout=10", // fail fast on an unreachable host so the reconnect loop stays responsive (vs. a multi-minute TCP timeout)
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
 	}
@@ -122,9 +124,14 @@ func (s *supervisor) connect(host string, port int) {
 	go s.run(ctx, host, port)
 }
 
+// run owns one host's connection for its whole lifetime, auto-reconnecting
+// across unexpected drops so a connected host is *solid* — a network blip or
+// a momentary B-side restart heals itself (status → reconnecting → up) instead
+// of going dead until the user clicks Reconnect. It stops only on a user
+// disconnect (ctx cancel) or an auth failure (a key refusal won't fix itself
+// on retry — the user must authenticate, which re-issues connect).
 func (s *supervisor) run(ctx context.Context, host string, port int) {
-	sock := s.sockPath(host)       // A side: in a 0700 temp dir
-	remoteSock := remoteSockPath() // B side: unique per connection, chmod 0600 there
+	sock := s.sockPath(host) // A side: in a 0700 temp dir; reused across attempts
 	defer func() {
 		s.mu.Lock()
 		delete(s.procs, host)
@@ -135,6 +142,65 @@ func (s *supervisor) run(ctx context.Context, host string, port int) {
 		}
 	}()
 
+	const (
+		maxBackoff = 30 * time.Second
+		// A connection up at least this long counts as healthy: a later drop
+		// is a fresh incident, so backoff restarts from the floor. Only a fast
+		// re-drop (a flap) keeps escalating — this is the throttle the SFTP-
+		// mount audit (TODO-sftp-mount-bugs.md, "reconnect storm") calls for:
+		// never reset backoff on a dial that didn't prove healthy.
+		minHealthy = 30 * time.Second
+	)
+	backoff := time.Second
+	for {
+		start := time.Now()
+		code, msg := s.runOnce(ctx, host, port, sock)
+		if ctx.Err() != nil {
+			return // user-initiated disconnect; disconnect() removed the host
+		}
+		if time.Since(start) >= minHealthy {
+			backoff = time.Second // the connection was healthy; a fresh drop reconnects fast
+		}
+		if code == "auth" {
+			// A credential refusal won't change on retry — surface it (the FE
+			// offers the ssh-add widget) and stop. Authenticate re-issues
+			// connect, starting a fresh run.
+			hs := HostState{Host: host, Origin: host, Status: StatusDown, Code: "auth", Error: msg}
+			if hs.Error == "" {
+				hs.Error = "ssh authentication failed"
+			}
+			s.setHost(host, hs)
+			return
+		}
+		// Unexpected drop. Detach the dead peer so the FE drops its now-stale
+		// remote windows, surface "reconnecting…", then retry after a capped
+		// backoff. The host stays in s.procs throughout, so a duplicate
+		// connect() remains a no-op while we recover.
+		if s.conn != nil {
+			_ = s.conn.UnregisterPeer(host)
+		}
+		s.setHost(host, HostState{Host: host, Origin: host, Status: StatusReconnecting, Error: msg})
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		if backoff < maxBackoff {
+			if backoff *= 2; backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+	}
+}
+
+// runOnce performs one ssh bring-up attempt: forward the relay socket, start
+// B's raw router, register the peer with A's router when B reports ready, and
+// block until the ssh process exits. Returns ("auth", msg) for a credential
+// refusal, ("", msg) for any other drop, or ("", "") when ctx was cancelled
+// (user disconnect). The caller decides whether to reconnect.
+func (s *supervisor) runOnce(ctx context.Context, host string, port int, sock string) (code, errMsg string) {
+	remoteSock := remoteSockPath() // B side: unique per attempt, chmod 0600 there
+
 	// ssh -L refuses to bind a unix socket whose file already exists.
 	_ = os.Remove(sock)
 
@@ -142,8 +208,7 @@ func (s *supervisor) run(ctx context.Context, host string, port int) {
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
 	if err := cmd.Start(); err != nil {
-		s.setHost(host, HostState{Host: host, Origin: host, Status: StatusDown, Error: "ssh start: " + err.Error()})
-		return
+		return "", "ssh start: " + err.Error()
 	}
 
 	up := make(chan struct{}, 1)
@@ -177,6 +242,10 @@ func (s *supervisor) run(ctx context.Context, host string, port int) {
 	go scan(stdout)
 	go scan(stderr)
 
+	// The up-watcher must not outlive this attempt, or a late "up" from a
+	// dying connection could mark the host up after we've moved on.
+	upCtx, upCancel := context.WithCancel(ctx)
+	defer upCancel()
 	go func() {
 		select {
 		case <-up:
@@ -192,34 +261,27 @@ func (s *supervisor) run(ctx context.Context, host string, port int) {
 				}
 			}
 			s.setHost(host, HostState{Host: host, Origin: host, Status: StatusUp})
-		case <-ctx.Done():
+		case <-upCtx.Done():
 		}
 	}()
 
 	err := cmd.Wait()
-	select {
-	case <-ctx.Done():
-		return // user-initiated disconnect; disconnect() already removed the host
-	default:
+	if ctx.Err() != nil {
+		return "", "" // user-initiated disconnect
 	}
 	tailMu.Lock()
 	stderrTail := strings.Join(tail, "\n")
 	tailMu.Unlock()
-	msg := ""
 	if err != nil {
-		msg = err.Error()
+		errMsg = err.Error()
 	}
-	hs := HostState{Host: host, Origin: host, Status: StatusDown, Error: msg}
 	// Classify auth refusal so wash-connect can offer the ssh-add widget
 	// (docs/REMOTE.md §6.1). BatchMode never prompts, so a missing/locked
 	// key surfaces as "Permission denied (publickey…)" and ssh exits 255.
 	if isAuthFailure(stderrTail) {
-		hs.Code = "auth"
-		if msg == "" {
-			hs.Error = "ssh authentication failed"
-		}
+		return "auth", errMsg
 	}
-	s.setHost(host, hs)
+	return "", errMsg
 }
 
 // isAuthFailure reports whether ssh's stderr indicates an authentication

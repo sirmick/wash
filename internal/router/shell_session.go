@@ -203,12 +203,24 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 			s.router.log("shell: drop raw frame on unbound channel %d", f.Channel)
 			return nil
 		}
+		// Read head status before taking shellMu (isHead takes r.mu; never
+		// nest the two — reattachChannelsToShell holds them separately).
+		head := s.isHead()
 		b.shellMu.Lock()
 		owner := b.shell
-		if owner == nil && b.peerConn == nil {
-			// Orphaned terminal/raw channel — its shell detached after
-			// the reattach pass (a reconnect race). The shell now
-			// driving it adopts it so input isn't black-holed.
+		if owner != s && b.peerConn == nil && (owner == nil || head) {
+			// Adopt this raw channel to the sending shell when either it's
+			// orphaned (owner==nil — its shell detached after the reattach
+			// pass, a reconnect race) OR we are the current foreground head.
+			// The head is the authoritative driver, so a stale/lingering
+			// owner (a zombie shell that never tore down, or a remote-peer
+			// attach that re-shuffled ownership) must not strand the live
+			// connection's frames — the symptom behind the local terminal
+			// "going black" on connect/disconnect churn (RECONNECT-AUDIT A4:
+			// raw channels bound to a single b.shell, reattach only claimed
+			// *detached* bindings). A non-head background shell still drops
+			// below. Peer (relay) channels are exempt: their pump is pinned
+			// to a specific shell and must not be stolen.
 			b.shell = s
 			owner = s
 		}

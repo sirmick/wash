@@ -10,7 +10,7 @@
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
 import { accentColor, tokens } from '@wash/ui';
 import { registerMountedElement, unregisterMountedElement } from './api';
-import { tagFor, compoundInstanceId } from './clients';
+import { tagFor, compoundInstanceId, LOCAL_ORIGIN, type Origin } from './clients';
 import { hostColor } from './host-colors';
 import {
   VIEWPORTS_PER_AXIS,
@@ -25,6 +25,15 @@ import {
 } from './wm';
 import { AlertOctagon, Copy, Maximize2, Minimize2, Minus, X } from 'lucide-solid';
 import { washAssetUrl } from '@wash/ui';
+
+// originHost is the short host shown after a remote window's title ("Editor
+// @ai"): the part after "user@", or the whole origin if it's a bare host/IP.
+// Empty for LOCAL windows — they get no suffix.
+function originHost(origin: Origin): string {
+  if (origin === LOCAL_ORIGIN) return '';
+  const at = origin.lastIndexOf('@');
+  return at >= 0 ? origin.slice(at + 1) : origin;
+}
 
 export interface WindowProps {
   win: Win;
@@ -433,7 +442,12 @@ export function FloatingWindow(props: WindowProps) {
             <use href={washAssetUrl(`icons.svg#${props.win.icon}`)} />
           </svg>
         )}
-        <span style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{props.win.title}</span>
+        <span style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+          {props.win.title}
+          <Show when={originHost(props.win.origin)}>
+            {(host) => <span style={{ opacity: 0.6, 'margin-left': '6px' }}>@{host()}</span>}
+          </Show>
+        </span>
         <button
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {

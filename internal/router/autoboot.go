@@ -70,33 +70,54 @@ func (r *Router) EnsureSessionRunning(ctx context.Context) error {
 // the next shell connect can succeed.
 func (r *Router) EnsureBackgroundAppsRunning(ctx context.Context) {
 	for _, entry := range r.reg.Entries() {
-		if !entry.Enabled() {
+		if !entry.Enabled() || entry.Manifest.Surface != SurfaceBackground {
 			continue
 		}
-		if entry.Manifest.Surface != SurfaceBackground {
-			continue
-		}
-		appID := entry.Manifest.ID
-		r.backgroundMu.Lock()
-		if r.backgroundStarted[appID] {
-			r.backgroundMu.Unlock()
-			continue
-		}
-		r.backgroundStarted[appID] = true
-		r.backgroundMu.Unlock()
-
-		// Router-lifetime context — background services must outlive
-		// any one shell. Same reasoning as the session app above.
-		e := entry
-		go func() {
-			if _, err := r.spawnAndRun(context.Background(), e, false); err != nil {
-				r.log("background app %s: %v", e.Manifest.ID, err)
-				r.backgroundMu.Lock()
-				delete(r.backgroundStarted, e.Manifest.ID)
-				r.backgroundMu.Unlock()
-			}
-		}()
+		r.startBackgroundApp(entry)
 	}
+}
+
+// EnsureBootAutostartApps spawns the surface=background apps that declare
+// AutostartAtBoot — at router startup, before any shell connects. Today
+// that's the mDNS advertiser (com.wash.remote), so an idle (unbrowsed) host
+// stays discoverable on the LAN. Shares backgroundStarted with
+// EnsureBackgroundAppsRunning, so the first shell connect never double-spawns
+// what booted here.
+func (r *Router) EnsureBootAutostartApps() {
+	for _, entry := range r.reg.Entries() {
+		if !entry.Enabled() || entry.Manifest.Surface != SurfaceBackground {
+			continue
+		}
+		if !entry.Manifest.AutostartAtBoot {
+			continue
+		}
+		r.startBackgroundApp(entry)
+	}
+}
+
+// startBackgroundApp spawns one background entry on a router-lifetime context
+// (background services must outlive any one shell), recording it in
+// backgroundStarted so it spawns at most once; on failure it clears the flag
+// so a later Ensure call can retry. A no-op if the app is already started.
+func (r *Router) startBackgroundApp(entry *Entry) {
+	appID := entry.Manifest.ID
+	r.backgroundMu.Lock()
+	if r.backgroundStarted[appID] {
+		r.backgroundMu.Unlock()
+		return
+	}
+	r.backgroundStarted[appID] = true
+	r.backgroundMu.Unlock()
+
+	e := entry
+	go func() {
+		if _, err := r.spawnAndRun(context.Background(), e, false); err != nil {
+			r.log("background app %s: %v", e.Manifest.ID, err)
+			r.backgroundMu.Lock()
+			delete(r.backgroundStarted, e.Manifest.ID)
+			r.backgroundMu.Unlock()
+		}
+	}()
 }
 
 // EnsureInitialAppRunning spawns Config.InitialAppID, if set, in kiosk

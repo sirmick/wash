@@ -237,6 +237,13 @@ type Manifest struct {
 	// spawn.request) — useful for test/utility apps.
 	Hidden bool `json:"hidden,omitempty"`
 
+	// AutostartAtBoot makes a surface=background app spawn at router
+	// startup, not lazily on the first shell connect. Reserved for
+	// services that must run before anyone browses the box — chiefly the
+	// mDNS advertiser (com.wash.remote), so an idle host is still
+	// discoverable on the LAN. Ignored for non-background surfaces.
+	AutostartAtBoot bool `json:"autostart_at_boot,omitempty"`
+
 	// RootVariant declares that this app has a meaningful "run as
 	// root" variant. When set, the launcher shows an additional
 	// synthetic catalog row alongside the normal one; clicking it

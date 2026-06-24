@@ -429,6 +429,13 @@ func Run(args []string) int {
 	// when we run over fd:3 / unix sockets).
 	r.SetAssets(assets)
 
+	// Start AutostartAtBoot background services now, before any shell
+	// connects — chiefly the mDNS advertiser, so an idle host is still
+	// discoverable on the LAN (otherwise a box only announces itself once
+	// someone has browsed it since the last router restart). Idempotent
+	// with the per-shell EnsureBackgroundAppsRunning.
+	r.EnsureBootAutostartApps()
+
 	// Remote-apps relay endpoint (docs/REMOTE.md): serve the raw shell wire
 	// on a listening socket, one HandleShell per accepted connection. This is
 	// host B's side of the relay — A's com.wash.remote ssh -L's a unix socket

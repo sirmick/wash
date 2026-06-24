@@ -1,19 +1,23 @@
 // wash-app-connect: the windowed front-end for remote hosts
 // (docs/REMOTE.md R2, §6.1).
 //
-// Flow: enter a host → Add (save it) or Launch (connect now). The BE relays
-// to the com.wash.remote supervisor, which SSHes out and reports per-host
-// status + a local endpoint over {kind:"remote.state"}. When a host reaches
-// "up" the FE attaches it as a second RouterClient (window.wash.attachRemote)
-// so its windows composite into this desktop; once attached, the host's
-// catalog arrives (window.wash.catalogFor) and the user picks an app to run
-// from a dropdown (window.wash.launchOn).
+// Mental model — TWO verbs, never overloaded:
+//   • Connect — establish the SSH session to a host (top bar, a saved host,
+//     or a discovered one). One word everywhere.
+//   • Open    — open an app on an already-connected host (the app buttons).
 //
-// The list has two sections: hosts you've connected to (top, bordered in the
-// host's window-hint colour) and saved-but-unconnected bookmarks (below).
-// Every entry has a Launch button whose dropdown lists launchable apps; a
-// connected entry lists its live catalog, so you can launch another app at
-// any time.
+// Flow: Connect a host → the BE relays to the com.wash.remote supervisor,
+// which SSHes out and reports per-host status + a local endpoint over
+// {kind:"remote.state"}. When a host reaches "up" the FE attaches it as a
+// second RouterClient (window.wash.attachRemote) so its windows composite
+// into this desktop; its catalog then arrives (window.wash.catalogFor) and
+// its apps appear on the host card — Terminal / Files / Editor up front, the
+// rest behind "More". Mounting a remote folder and the per-host preferences
+// drawer (favourite ★, auto-open apps, auto-mount folders) live on the card.
+//
+// Three sections, each a clear host state: Connected (top, bordered in the
+// host's window-hint colour) · Saved (favourites not currently connected) ·
+// On your network (LAN auto-discovery). A machine appears in exactly one.
 
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
@@ -35,8 +39,8 @@ interface HostState {
 
 type MountStatus = 'mounting' | 'mounted' | 'error';
 
-// MountState is one remote folder mounted locally over SFTP, surfaced under its
-// host. mount_point is the local path (~/wash/remote/<host>/<base>).
+// MountState is one remote folder mounted locally over SFTP, surfaced under
+// its host. mount_point is the local path (~/wash/remote/<host>/<base>).
 interface MountState {
   host: string;
   remote_root: string;
@@ -63,16 +67,26 @@ interface RemoteState {
   candidates?: Candidate[];
 }
 
-// Bookmark is a saved connect target (persisted on disk by the BE). Host-
-// level: the app to run is chosen from the dropdown at launch time. (app_id
-// is retained in the type for on-disk back-compat but no longer set.)
+// Bookmark is a saved connect target plus per-host preferences. auto_apps /
+// auto_mounts are replayed the moment the host reaches "up". app_id is the
+// legacy single-app field, migrated into auto_apps on load.
 interface Bookmark {
   host: string;
-  app_id?: string;
   label?: string;
+  auto_apps?: string[];
+  auto_mounts?: string[];
+  app_id?: string;
 }
 
 type CatalogApp = ReturnType<typeof window.wash.catalogFor>[number];
+
+// ----- app priority -----
+//
+// A connected host can expose a long, mixed catalog; most of it (background
+// services, the session, panels) isn't something you'd open as a window
+// here. So the card shows the three apps people reach for first, in this
+// order, and tucks everything else behind "More". (User decision.)
+const PRIMARY_APPS = ['com.wash.term', 'com.wash.fm', 'com.wash.edit'];
 
 // ----- host accent colour -----
 //
@@ -119,23 +133,23 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // catalogs is a per-origin snapshot kept in a plain object so a catalog
   // arriving (or emptying) re-renders the matching host's app list.
   const [catalogs, setCatalogs] = createSignal<Record<string, CatalogApp[]>>({});
-  // Interactive SSH auth (mechanism a): when the BE opens an ssh-add pty
-  // it sends the raw channel id; we mount a Terminal on it. auth tracks
-  // the host being authenticated + the channel; null = no auth in flight.
+  // Interactive SSH auth (mechanism a): when the BE opens an ssh-add pty it
+  // sends the raw channel id; we mount a Terminal on it. auth tracks the
+  // host being authenticated + the channel; null = no auth in flight.
   const [auth, setAuth] = createSignal<{ host: string; channel: number } | null>(null);
   const [bookmarks, setBookmarks] = createSignal<Bookmark[]>([]);
-  // menuFor holds the origin whose Launch dropdown is open (one at a time).
-  const [menuFor, setMenuFor] = createSignal<string | null>(null);
-
-  // pendingOpenMenu holds hosts we just connected via a Launch click; when the
-  // host comes up and its catalog lands, its dropdown auto-opens so "Launch"
-  // on a new/bookmarked host ends in the same app-picker as a connected one.
-  const pendingOpenMenu = new Set<string>();
+  // moreFor holds the origin whose "More" app dropdown is open (one at a time).
+  const [moreFor, setMoreFor] = createSignal<string | null>(null);
+  // drawerFor holds the host key whose preferences drawer is open.
+  const [drawerFor, setDrawerFor] = createSignal<string | null>(null);
 
   // attached tracks origins we've called attachRemote for, so a repeated
-  // "up" push (e.g. on reconnect) doesn't open a duplicate connection and
-  // a vanished host gets detached exactly once.
+  // "up" push (e.g. on reconnect) doesn't open a duplicate connection and a
+  // vanished host gets detached exactly once.
   const attached = new Set<string>();
+  // autoDone tracks origins whose saved auto-apps/auto-mounts were already
+  // replayed this session, so a re-pushed "up" doesn't relaunch them.
+  const autoDone = new Set<string>();
 
   const reconcileAttachments = (list: HostState[]) => {
     const live = new Set<string>();
@@ -155,8 +169,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       if (!live.has(origin)) {
         window.wash.detachRemote(origin);
         attached.delete(origin);
+        autoDone.delete(origin);
         setCatalogs((c) => { const n = { ...c }; delete n[origin]; return n; });
-        if (menuFor() === origin) setMenuFor(null);
+        if (moreFor() === origin) setMoreFor(null);
       }
     }
   };
@@ -170,6 +185,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         setMounts(Array.isArray(st.mounts) ? st.mounts : []);
         setCandidates(Array.isArray(st.candidates) ? st.candidates : []);
         reconcileAttachments(list);
+        replayAuto(list);
         break;
       }
       case 'auth_opened':
@@ -177,9 +193,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         setAuth({ host: String(m.host ?? ''), channel: Number(m.channel_id) });
         break;
       case 'auth_closed': {
-        // ssh-add exited (key loaded, or the user gave up). Tear the
-        // terminal down and retry the connect — if the key loaded, the
-        // BatchMode connect now succeeds; if not, we land back on "auth".
+        // ssh-add exited (key loaded, or the user gave up). Tear the terminal
+        // down and retry the connect — if the key loaded, the BatchMode
+        // connect now succeeds; if not, we land back on "auth".
         const a = auth();
         setAuth(null);
         if (a?.host) send({ kind: 'connect', host: a.host });
@@ -189,7 +205,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         setAuth(null);
         break;
       case 'bookmarks':
-        setBookmarks(Array.isArray(m.bookmarks) ? (m.bookmarks as Bookmark[]) : []);
+        setBookmarks(migrateBookmarks(Array.isArray(m.bookmarks) ? (m.bookmarks as Bookmark[]) : []));
         break;
     }
   };
@@ -197,54 +213,94 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const beginAuth = (host: string) => send({ kind: 'auth_begin', host });
   const cancelAuth = () => { send({ kind: 'auth_cancel' }); setAuth(null); };
 
-  // tryAutoOpenMenu fires once a pending host is connected and its catalog
-  // actually lists apps — opening its Launch dropdown.
-  const tryAutoOpenMenu = (origin: string) => {
-    const host = hosts().find((h) => h.origin === origin)?.host ?? origin;
-    if (!pendingOpenMenu.has(host) && !pendingOpenMenu.has(origin)) return;
-    if (launchable(origin).length > 0) {
-      pendingOpenMenu.delete(host);
-      pendingOpenMenu.delete(origin);
-      setMenuFor(origin);
-    }
-  };
-
   const { send } = createAppBus(props, { onMsg: handleBE });
 
-  // ----- bookmarks (host-level) -----
+  // ----- bookmarks + per-host preferences -----
   const persistBookmarks = (next: Bookmark[]) => {
     setBookmarks(next);
     send({ kind: 'bookmarks_save', bookmarks: next });
   };
+  const bookmarkFor = (host: string) => bookmarks().find((b) => b.host === host);
   const isBookmarked = (host: string) => bookmarks().some((b) => b.host === host);
+  // upsertBookmark merges a patch into the bookmark for host, creating it if
+  // absent — so editing any preference (label, auto-app, auto-mount) on an
+  // unsaved host implicitly saves it.
+  const upsertBookmark = (host: string, patch: Partial<Bookmark>) => {
+    if (bookmarkFor(host)) {
+      persistBookmarks(bookmarks().map((b) => (b.host === host ? { ...b, ...patch } : b)));
+    } else {
+      persistBookmarks([...bookmarks(), { host, label: host, ...patch }]);
+    }
+  };
   const addBookmark = (host: string, label?: string) => {
     if (!host || isBookmarked(host)) return;
     persistBookmarks([...bookmarks(), { host, label: label || host }]);
   };
   const removeBookmark = (host: string) => persistBookmarks(bookmarks().filter((b) => b.host !== host));
+  const toggleBookmark = (host: string, label?: string) =>
+    isBookmarked(host) ? removeBookmark(host) : addBookmark(host, label);
 
-  // connectHost connects (the host appears in the connected section when up)
-  // and queues its Launch dropdown to auto-open once apps arrive.
+  const toggleAutoApp = (host: string, appID: string) => {
+    const cur = bookmarkFor(host)?.auto_apps ?? [];
+    const next = cur.includes(appID) ? cur.filter((a) => a !== appID) : [...cur, appID];
+    upsertBookmark(host, { auto_apps: next });
+  };
+  const removeAutoApp = (host: string, appID: string) => {
+    const cur = bookmarkFor(host)?.auto_apps ?? [];
+    upsertBookmark(host, { auto_apps: cur.filter((a) => a !== appID) });
+  };
+  const addAutoMount = (host: string, path: string) => {
+    const p = path.trim();
+    if (!p) return;
+    const cur = bookmarkFor(host)?.auto_mounts ?? [];
+    if (cur.includes(p)) return;
+    upsertBookmark(host, { auto_mounts: [...cur, p] });
+  };
+  const removeAutoMount = (host: string, path: string) => {
+    const cur = bookmarkFor(host)?.auto_mounts ?? [];
+    upsertBookmark(host, { auto_mounts: cur.filter((p) => p !== path) });
+  };
+
+  // replayAuto fires a saved host's auto-open apps + auto-mount folders once
+  // it reaches "up" (and, for apps, once its catalog has arrived so the ids
+  // resolve). Guarded by autoDone so a re-pushed "up" doesn't repeat it.
+  const replayAuto = (list: HostState[]) => {
+    for (const h of list) {
+      if (h.status !== 'up' || autoDone.has(h.origin)) continue;
+      const bm = bookmarkFor(h.host);
+      if (!bm) continue;
+      const apps = bm.auto_apps ?? [];
+      const cat = catalogs()[h.origin];
+      // Wait for the catalog before launching apps; mounts need no catalog.
+      if (apps.length > 0 && (!cat || cat.length === 0)) continue;
+      for (const appID of apps) {
+        if (cat?.some((a) => a.id === appID)) window.wash.launchOn(h.origin, appID);
+      }
+      const mounted = new Set(mounts().filter((mt) => mt.host === h.host).map((mt) => mt.remote_root));
+      for (const root of bm.auto_mounts ?? []) {
+        if (!mounted.has(root)) send({ kind: 'mount', host: h.host, remote_root: root, persist: false });
+      }
+      autoDone.add(h.origin);
+    }
+  };
+
+  // connectHost establishes the session (the host appears under Connected
+  // when up). remote_port is sent only for a non-default port. 0 ⇒ 22.
   const connectHost = (host: string, port?: number) => {
     if (!host) return;
-    // remote_port is only sent for a non-default port (a discovered peer
-    // advertising e.g. 2222); the BE dials it with ssh -p. 0/undefined ⇒ 22.
     send({ kind: 'connect', host, remote_port: port || 0 });
-    pendingOpenMenu.add(host);
   };
 
   onMount(() => {
-    // Subscribe to the supervisor's host state (relayed via our BE) and
-    // load saved bookmarks.
+    // Subscribe to the supervisor's host state (relayed via our BE) and load
+    // saved bookmarks. A freshly-arrived catalog may unblock a pending
+    // auto-launch, so re-run replayAuto when one lands.
     send({ kind: 'subscribe' });
     send({ kind: 'bookmarks_load' });
-    // Seed + track each host's catalog (delivered over the shell's second
-    // RouterClient once attached). A freshly-arrived catalog may satisfy a
-    // pending auto-open.
     setCatalogs({});
     const offCatalog = window.wash.onRemoteCatalog((ev) => {
       setCatalogs((c) => ({ ...c, [ev.origin]: ev.apps }));
-      tryAutoOpenMenu(ev.origin);
+      replayAuto(hosts());
     });
     onCleanup(() => {
       send({ kind: 'unsubscribe' });
@@ -252,41 +308,50 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     });
   });
 
-  const addFromInput = () => {
-    const h = hostInput().trim();
-    if (!h) return;
-    addBookmark(h);
+  // connectFromInput parses "user@host" / "host:port" / "user@host:port" and
+  // connects. (Port can be given inline; a bare host defaults to 22.)
+  const connectFromInput = () => {
+    const raw = hostInput().trim();
+    if (!raw) return;
+    const { target, port } = parseTarget(raw);
+    connectHost(target, port);
     setHostInput('');
   };
-  const launchFromInput = () => {
-    const h = hostInput().trim();
-    if (!h) return;
-    connectHost(h);
+  const saveFromInput = () => {
+    const raw = hostInput().trim();
+    if (!raw) return;
+    addBookmark(parseTarget(raw).target);
     setHostInput('');
   };
 
   const disconnect = (host: string) => send({ kind: 'disconnect', host });
   const launch = (origin: string, appID: string) => {
     window.wash.launchOn(origin, appID);
-    setMenuFor(null);
+    setMoreFor(null);
   };
 
   // launchable filters a host's catalog to window-surface, enabled apps —
-  // the ones it makes sense to open as a window (background services and
-  // the desktop session aren't user-launchable here).
+  // the ones it makes sense to open as a window.
   const launchable = (origin: string): CatalogApp[] =>
     (catalogs()[origin] ?? []).filter((a) => a.surface === 'window' && !a.disabled);
 
-  // The bottom section: bookmarks that aren't currently connected.
+  // Connected vs Disconnected: a host the supervisor still tracks but that has
+  // dropped to "down" moves to its own section, so the Connected list only
+  // ever shows live (coloured-dot) hosts — a grey dot under "Connected" read
+  // as "is this actually connected?". starting/reconnecting stay under
+  // Connected (transient, still attached/recovering).
+  const upHosts = () => hosts().filter((h) => h.status !== 'down');
+  const downHosts = () => hosts().filter((h) => h.status === 'down');
+
+  // The Saved section: bookmarks that aren't currently connected.
   const connectedHostNames = () => new Set(hosts().map((h) => h.host));
   const bookmarkedOnly = () => {
     const live = connectedHostNames();
     return bookmarks().filter((b) => !live.has(b.host));
   };
 
-  // Discovered hosts not already connected (by addr or origin) or saved as a
-  // bookmark — so a candidate disappears from this section the moment you act
-  // on it.
+  // Discovered hosts not already connected (by addr or origin) or saved — so
+  // a candidate disappears from this section the moment you act on it.
   const candidateOnly = () => {
     const live = connectedHostNames();
     const origins = new Set(hosts().map((h) => h.origin));
@@ -295,6 +360,35 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       (c) => !live.has(c.addr) && !origins.has(c.addr) && !saved.has(c.addr),
     );
   };
+
+  const empty = () => hosts().length === 0 && bookmarkedOnly().length === 0 && candidateOnly().length === 0;
+
+  // hostCard renders one supervisor-tracked host (used by both the Connected
+  // and Disconnected sections — HostRow itself adapts to the status).
+  const hostCard = (h: HostState) => (
+    <HostRow
+      host={h}
+      apps={launchable(h.origin)}
+      mounts={mounts().filter((mt) => mt.host === h.host)}
+      bookmark={bookmarkFor(h.host)}
+      moreOpen={moreFor() === h.origin}
+      drawerOpen={drawerFor() === h.host}
+      onToggleMore={() => setMoreFor(moreFor() === h.origin ? null : h.origin)}
+      onCloseMore={() => setMoreFor(null)}
+      onToggleDrawer={() => setDrawerFor(drawerFor() === h.host ? null : h.host)}
+      onLaunch={(appID) => launch(h.origin, appID)}
+      onDisconnect={() => disconnect(h.host)}
+      onReconnect={() => connectHost(h.host)}
+      onAuth={() => beginAuth(h.host)}
+      onToggleBookmark={() => toggleBookmark(h.host)}
+      onSetLabel={(label) => upsertBookmark(h.host, { label })}
+      onToggleAutoApp={(appID) => toggleAutoApp(h.host, appID)}
+      onAddAutoMount={(p) => addAutoMount(h.host, p)}
+      onRemoveAutoMount={(p) => removeAutoMount(h.host, p)}
+      onMount={(root, persist) => send({ kind: 'mount', host: h.host, remote_root: root, persist })}
+      onUnmount={(mp) => send({ kind: 'unmount', mount_point: mp })}
+    />
+  );
 
   return (
     <div style={shellStyle}>
@@ -306,58 +400,62 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             placeholder="user@host"
             value={hostInput()}
             onInput={(e) => setHostInput(e.currentTarget.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') launchFromInput(); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') connectFromInput(); }}
             style={inputStyle}
             data-testid="connect-host-input"
           />
-          <button type="button" onClick={addFromInput} style={addBtnStyle} data-testid="connect-add">
-            Add
+          <button type="button" onClick={connectFromInput} style={primaryBtnStyle} data-testid="connect-submit">
+            Connect
           </button>
-          <button type="button" onClick={launchFromInput} style={launchBtnStyle} data-testid="connect-submit">
-            Launch
+          <button
+            type="button"
+            onClick={saveFromInput}
+            style={iconBtnStyle}
+            title="Save without connecting"
+            data-testid="connect-add"
+          >
+            ☆
           </button>
         </div>
 
         <Show
-          when={hosts().length > 0 || bookmarkedOnly().length > 0 || candidateOnly().length > 0}
-          fallback={<div style={emptyStyle}>No hosts yet. Enter a host above, then Add it or Launch to connect.</div>}
+          when={!empty()}
+          fallback={<div style={emptyStyle}>Enter a host above and Connect. Saved hosts and machines found on your network appear here.</div>}
         >
           {/* Connected hosts — bordered in the host's window-hint colour. */}
-          <Show when={hosts().length > 0}>
+          <Show when={upHosts().length > 0}>
             <div style={sectionLabelStyle}>Connected</div>
             <div style={listStyle} data-testid="connect-hosts">
-              <For each={hosts()}>
-                {(h) => (
-                  <HostRow
-                    host={h}
-                    apps={launchable(h.origin)}
-                    mounts={mounts().filter((mt) => mt.host === h.host)}
-                    bookmarked={isBookmarked(h.host)}
-                    menuOpen={menuFor() === h.origin}
-                    onToggleMenu={() => setMenuFor(menuFor() === h.origin ? null : h.origin)}
-                    onCloseMenu={() => setMenuFor(null)}
-                    onLaunch={(appID) => launch(h.origin, appID)}
-                    onDisconnect={() => disconnect(h.host)}
-                    onAuth={() => beginAuth(h.host)}
-                    onToggleBookmark={() => (isBookmarked(h.host) ? removeBookmark(h.host) : addBookmark(h.host))}
-                    onMount={(root, persist) => send({ kind: 'mount', host: h.host, remote_root: root, persist })}
-                    onUnmount={(mp) => send({ kind: 'unmount', mount_point: mp })}
-                  />
-                )}
-              </For>
+              <For each={upHosts()}>{(h) => hostCard(h)}</For>
+            </div>
+          </Show>
+
+          {/* Hosts the supervisor still tracks but that have dropped — kept
+              here (not in Connected) so the grey dot reads as "offline", and
+              still one Reconnect/Authenticate click away. */}
+          <Show when={downHosts().length > 0}>
+            <div style={sectionLabelStyle}>Disconnected</div>
+            <div style={listStyle} data-testid="connect-hosts-down">
+              <For each={downHosts()}>{(h) => hostCard(h)}</For>
             </div>
           </Show>
 
           {/* Saved but not connected. */}
           <Show when={bookmarkedOnly().length > 0}>
-            <div style={sectionLabelStyle}>Bookmarks</div>
+            <div style={sectionLabelStyle}>Saved</div>
             <div style={listStyle} data-testid="connect-bookmarks">
               <For each={bookmarkedOnly()}>
                 {(bm) => (
                   <BookmarkRow
                     bookmark={bm}
-                    onLaunch={() => connectHost(bm.host)}
+                    drawerOpen={drawerFor() === bm.host}
+                    onToggleDrawer={() => setDrawerFor(drawerFor() === bm.host ? null : bm.host)}
+                    onConnect={() => connectHost(bm.host)}
                     onRemove={() => removeBookmark(bm.host)}
+                    onSetLabel={(label) => upsertBookmark(bm.host, { label })}
+                    onRemoveAutoApp={(appID) => removeAutoApp(bm.host, appID)}
+                    onAddAutoMount={(p) => addAutoMount(bm.host, p)}
+                    onRemoveAutoMount={(p) => removeAutoMount(bm.host, p)}
                   />
                 )}
               </For>
@@ -391,27 +489,75 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   );
 };
 
+// ----- helpers -----
+
+// parseTarget splits "user@host:port" into the SSH target ("user@host") and
+// an optional numeric port. A bare host returns port undefined (⇒ 22).
+function parseTarget(raw: string): { target: string; port?: number } {
+  const at = raw.lastIndexOf('@');
+  const userPart = at >= 0 ? raw.slice(0, at + 1) : '';
+  const hostPart = at >= 0 ? raw.slice(at + 1) : raw;
+  const colon = hostPart.lastIndexOf(':');
+  if (colon > 0) {
+    const p = Number(hostPart.slice(colon + 1));
+    if (Number.isInteger(p) && p > 0) {
+      return { target: userPart + hostPart.slice(0, colon), port: p };
+    }
+  }
+  return { target: raw };
+}
+
+// migrateBookmarks folds the legacy single app_id into auto_apps so old
+// connect.json files keep working under the new per-host preferences.
+function migrateBookmarks(bms: Bookmark[]): Bookmark[] {
+  return bms.map((b) => {
+    if (b.app_id && (!b.auto_apps || b.auto_apps.length === 0)) {
+      return { ...b, auto_apps: [b.app_id], app_id: undefined };
+    }
+    return b;
+  });
+}
+
+// ----- host card (connected) -----
+
 // HostRow is one connected (or connecting) host. Its border carries the
-// host's window-hint colour once up. The Launch dropdown lists the host's
-// live catalog so any app can be launched at any time.
+// host's window-hint colour once up. Terminal / Files / Editor are direct
+// "Open" buttons; everything else hides behind "More". The ⚙ drawer holds
+// favourite + auto-open + auto-mount preferences.
 const HostRow: Component<{
   host: HostState;
   apps: CatalogApp[];
   mounts: MountState[];
-  bookmarked: boolean;
-  menuOpen: boolean;
-  onToggleMenu: () => void;
-  onCloseMenu: () => void;
+  bookmark?: Bookmark;
+  moreOpen: boolean;
+  drawerOpen: boolean;
+  onToggleMore: () => void;
+  onCloseMore: () => void;
+  onToggleDrawer: () => void;
   onLaunch: (appID: string) => void;
   onDisconnect: () => void;
+  onReconnect: () => void;
   onAuth: () => void;
   onToggleBookmark: () => void;
+  onSetLabel: (label: string) => void;
+  onToggleAutoApp: (appID: string) => void;
+  onAddAutoMount: (path: string) => void;
+  onRemoveAutoMount: (path: string) => void;
   onMount: (remoteRoot: string, persist: boolean) => void;
   onUnmount: (mountPoint: string) => void;
 }> = (props) => {
   const color = () => hostColor(props.host.origin);
   const up = () => props.host.status === 'up';
-  const needsAuth = () => props.host.status === 'down' && props.host.code === 'auth';
+  const down = () => props.host.status === 'down';
+  const needsAuth = () => down() && props.host.code === 'auth';
+
+  // Split the catalog into the priority three (in PRIMARY_APPS order) and the
+  // rest (alphabetical, behind More).
+  const primary = () =>
+    PRIMARY_APPS.map((id) => props.apps.find((a) => a.id === id)).filter(Boolean) as CatalogApp[];
+  const more = () =>
+    props.apps.filter((a) => !PRIMARY_APPS.includes(a.id)).sort((a, b) => a.name.localeCompare(b.name));
+
   return (
     <div
       style={{ ...rowStyle, 'border-color': up() ? color() : tokens.borderMenu }}
@@ -419,7 +565,7 @@ const HostRow: Component<{
     >
       <div style={rowMainStyle}>
         <span style={{ ...dotStyle, background: up() ? color() : tokens.fgMuted }} data-testid="connect-host-dot" />
-        <span style={hostNameStyle}>{props.host.host}</span>
+        <span style={hostNameStyle}>{props.bookmark?.label || props.host.host}</span>
         <span style={statusStyle} data-testid="connect-host-status" data-status={props.host.status}>
           {statusLabel(props.host.status)}
         </span>
@@ -428,52 +574,185 @@ const HostRow: Component<{
             Authenticate
           </button>
         </Show>
-        <Show when={up()}>
-          <LaunchMenu
-            apps={props.apps}
-            open={props.menuOpen}
-            onToggle={props.onToggleMenu}
-            onClose={props.onCloseMenu}
-            onPick={props.onLaunch}
-          />
+        <Show when={down() && !needsAuth()}>
+          <button type="button" onClick={props.onReconnect} style={authBtnStyle} data-testid="connect-reconnect">
+            Reconnect
+          </button>
         </Show>
         <button
           type="button"
-          onClick={props.onToggleBookmark}
-          style={iconBtnStyle}
-          title={props.bookmarked ? 'Remove bookmark' : 'Bookmark this host'}
-          data-testid="connect-bookmark-host"
+          onClick={props.onToggleDrawer}
+          style={{ ...iconBtnStyle, color: props.drawerOpen ? tokens.fg : tokens.fgMuted }}
+          title="Host settings"
+          data-testid="connect-host-settings"
+          aria-expanded={props.drawerOpen}
         >
-          {props.bookmarked ? '★' : '☆'}
+          ⚙
         </button>
         <button type="button" onClick={props.onDisconnect} style={iconBtnStyle} title="Disconnect" data-testid="connect-disconnect">
           ✕
         </button>
       </div>
+
+      {/* Apps row — the payoff of connecting. Terminal/Files/Editor up front. */}
+      <Show when={up()}>
+        <div style={appsRowStyle}>
+          <For each={primary()}>
+            {(app) => (
+              <button
+                type="button"
+                style={appBtnStyle}
+                onClick={() => props.onLaunch(app.id)}
+                data-testid={`connect-launch-${app.id}`}
+                title={`Open ${app.name}`}
+              >
+                <AppIcon app={app} size={15} />
+                <span style={appBtnLabelStyle}>{app.name}</span>
+              </button>
+            )}
+          </For>
+          <Show when={primary().length === 0 && more().length === 0}>
+            <span style={appsEmptyStyle} data-testid="connect-apps-empty">no apps</span>
+          </Show>
+          <Show when={more().length > 0}>
+            <MoreMenu
+              apps={more()}
+              open={props.moreOpen}
+              onToggle={props.onToggleMore}
+              onClose={props.onCloseMore}
+              onPick={props.onLaunch}
+            />
+          </Show>
+        </div>
+      </Show>
+
       <Show when={props.host.error && !needsAuth()}>
         <div style={errorStyle}>{props.host.error}</div>
       </Show>
+
       <Show when={up()}>
         <MountsSection mounts={props.mounts} onMount={props.onMount} onUnmount={props.onUnmount} />
+      </Show>
+
+      <Show when={props.drawerOpen}>
+        <HostDrawer
+          bookmarked={!!props.bookmark}
+          bookmark={props.bookmark}
+          apps={props.apps}
+          connected={up()}
+          onToggleBookmark={props.onToggleBookmark}
+          onSetLabel={props.onSetLabel}
+          onToggleAutoApp={props.onToggleAutoApp}
+          onAddAutoMount={props.onAddAutoMount}
+          onRemoveAutoMount={props.onRemoveAutoMount}
+        />
       </Show>
     </div>
   );
 };
 
-// MountsSection lists a host's mounted folders and lets you mount another by
-// remote path. The mounted tree appears at ~/wash/remote/<host>/… and shows up
-// as a volume in the file manager.
+// HostDrawer is the per-host preferences editor: favourite, label, and the
+// "do this automatically when I connect" set (open apps + mount folders).
+// Auto-app checkboxes need the live catalog, so they show only when
+// connected. Editing any field implicitly saves the host.
+const HostDrawer: Component<{
+  bookmarked: boolean;
+  bookmark?: Bookmark;
+  apps: CatalogApp[];
+  connected: boolean;
+  onToggleBookmark: () => void;
+  onSetLabel: (label: string) => void;
+  onToggleAutoApp: (appID: string) => void;
+  onAddAutoMount: (path: string) => void;
+  onRemoveAutoMount: (path: string) => void;
+}> = (props) => {
+  const [mountPath, setMountPath] = createSignal('');
+  const autoApps = () => props.bookmark?.auto_apps ?? [];
+  const autoMounts = () => props.bookmark?.auto_mounts ?? [];
+  const submitMount = () => { props.onAddAutoMount(mountPath()); setMountPath(''); };
+  return (
+    <div style={drawerStyle} data-testid="connect-drawer">
+      <div style={drawerRowStyle}>
+        <button
+          type="button"
+          onClick={props.onToggleBookmark}
+          style={{ ...iconBtnStyle, color: props.bookmarked ? tokens.accentAmber : tokens.fgMuted, 'font-size': '15px' }}
+          title={props.bookmarked ? 'Forget this host' : 'Save this host'}
+          data-testid="connect-bookmark-host"
+        >
+          {props.bookmarked ? '★' : '☆'}
+        </button>
+        <input
+          type="text"
+          value={props.bookmark?.label ?? ''}
+          placeholder="label"
+          onInput={(e) => props.onSetLabel(e.currentTarget.value)}
+          style={drawerLabelInputStyle}
+          data-testid="connect-drawer-label"
+        />
+      </div>
+
+      <div style={drawerSectionStyle}>
+        <div style={drawerHeadStyle}>Open automatically on connect</div>
+        <Show when={props.connected} fallback={<div style={drawerHintStyle}>Connect to choose apps.</div>}>
+          <div style={drawerAppsStyle}>
+            <For each={props.apps.filter((a) => a.surface === 'window' && !a.disabled)}>
+              {(app) => (
+                <label style={drawerCheckStyle} data-testid={`connect-auto-app-${app.id}`}>
+                  <input
+                    type="checkbox"
+                    checked={autoApps().includes(app.id)}
+                    onChange={() => props.onToggleAutoApp(app.id)}
+                  />
+                  <AppIcon app={app} size={14} />
+                  <span>{app.name}</span>
+                </label>
+              )}
+            </For>
+          </div>
+        </Show>
+      </div>
+
+      <div style={drawerSectionStyle}>
+        <div style={drawerHeadStyle}>Mount automatically on connect</div>
+        <For each={autoMounts()}>
+          {(p) => (
+            <div style={drawerChipRowStyle} data-testid="connect-auto-mount">
+              <span style={drawerChipPathStyle} title={p}>{p}</span>
+              <button type="button" onClick={() => props.onRemoveAutoMount(p)} style={iconBtnStyle} title="Remove">✕</button>
+            </div>
+          )}
+        </For>
+        <div style={mountAddStyle}>
+          <input
+            type="text"
+            value={mountPath()}
+            onInput={(e) => setMountPath(e.currentTarget.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') submitMount(); }}
+            placeholder="remote folder (e.g. /home/user)"
+            style={mountInputStyle}
+            data-testid="connect-auto-mount-input"
+          />
+          <button type="button" onClick={submitMount} style={mountBtnStyle} data-testid="connect-auto-mount-add">Add</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// MountsSection lists a host's live mounted folders and lets you mount
+// another by remote path. The mounted tree appears at ~/wash/remote/<host>/…
+// and shows up as a volume in the file manager.
 const MountsSection: Component<{
   mounts: MountState[];
   onMount: (remoteRoot: string, persist: boolean) => void;
   onUnmount: (mountPoint: string) => void;
 }> = (props) => {
   const [path, setPath] = createSignal('');
-  const [persist, setPersist] = createSignal(false);
   const submit = () => {
     const p = path().trim();
     if (!p) return;
-    props.onMount(p, persist());
+    props.onMount(p, false);
     setPath('');
   };
   const statusText = (mt: MountState) =>
@@ -511,44 +790,110 @@ const MountsSection: Component<{
           Mount
         </button>
       </div>
-      <label style={mountPersistStyle} title="Re-establish this mount when wash next starts">
-        <input
-          type="checkbox"
-          checked={persist()}
-          onChange={(e) => setPersist(e.currentTarget.checked)}
-          data-testid="connect-mount-persist"
-        />
-        Reconnect at launch
-      </label>
     </div>
   );
 };
 
-// BookmarkRow is a saved host that isn't currently connected. Launch connects
-// it; its dropdown opens automatically once the catalog arrives.
+// BookmarkRow is a saved host that isn't currently connected. Connect brings
+// it up; auto-apps/mounts then replay. The ⚙ drawer edits its preferences;
+// saved auto-apps show as removable chips (no catalog offline).
 const BookmarkRow: Component<{
   bookmark: Bookmark;
-  onLaunch: () => void;
+  drawerOpen: boolean;
+  onToggleDrawer: () => void;
+  onConnect: () => void;
   onRemove: () => void;
-}> = (props) => (
-  <div style={{ ...rowStyle, 'border-color': tokens.borderMenu }} data-testid="connect-bookmark">
-    <div style={rowMainStyle}>
-      <span style={{ ...dotStyle, background: tokens.fgMuted, opacity: 0.5 }} />
-      <span style={hostNameStyle}>{props.bookmark.label || props.bookmark.host}</span>
-      <button type="button" onClick={props.onLaunch} style={launchBtnStyle} data-testid="connect-bookmark-launch">
-        Launch
-      </button>
-      <button type="button" onClick={props.onRemove} style={iconBtnStyle} title="Remove bookmark" data-testid="connect-bookmark-remove">
-        ✕
-      </button>
+  onSetLabel: (label: string) => void;
+  onRemoveAutoApp: (appID: string) => void;
+  onAddAutoMount: (path: string) => void;
+  onRemoveAutoMount: (path: string) => void;
+}> = (props) => {
+  const [mountPath, setMountPath] = createSignal('');
+  const autoApps = () => props.bookmark.auto_apps ?? [];
+  const autoMounts = () => props.bookmark.auto_mounts ?? [];
+  const submitMount = () => { props.onAddAutoMount(mountPath()); setMountPath(''); };
+  return (
+    <div style={{ ...rowStyle, 'border-color': tokens.borderMenu }} data-testid="connect-bookmark">
+      <div style={rowMainStyle}>
+        <span style={{ ...dotStyle, background: tokens.fgMuted, opacity: 0.5 }} />
+        <span style={hostNameStyle}>{props.bookmark.label || props.bookmark.host}</span>
+        <Show when={autoApps().length > 0}>
+          <span style={autoBadgeStyle} title={`Auto-opens ${autoApps().length} app(s)`}>auto</span>
+        </Show>
+        <button type="button" onClick={props.onConnect} style={primaryBtnStyle} data-testid="connect-bookmark-launch">
+          Connect
+        </button>
+        <button
+          type="button"
+          onClick={props.onToggleDrawer}
+          style={{ ...iconBtnStyle, color: props.drawerOpen ? tokens.fg : tokens.fgMuted }}
+          title="Host settings"
+          aria-expanded={props.drawerOpen}
+        >
+          ⚙
+        </button>
+        <button type="button" onClick={props.onRemove} style={iconBtnStyle} title="Remove bookmark" data-testid="connect-bookmark-remove">
+          ✕
+        </button>
+      </div>
+      <Show when={props.drawerOpen}>
+        <div style={drawerStyle} data-testid="connect-drawer">
+          <input
+            type="text"
+            value={props.bookmark.label ?? ''}
+            placeholder="label"
+            onInput={(e) => props.onSetLabel(e.currentTarget.value)}
+            style={drawerLabelInputStyle}
+            data-testid="connect-drawer-label"
+          />
+          <div style={drawerSectionStyle}>
+            <div style={drawerHeadStyle}>Opens automatically on connect</div>
+            <Show when={autoApps().length > 0} fallback={<div style={drawerHintStyle}>Connect, then ⚙ to choose apps.</div>}>
+              <div style={drawerAppsStyle}>
+                <For each={autoApps()}>
+                  {(id) => (
+                    <span style={drawerChipRowStyle} data-testid="connect-auto-app-chip">
+                      <span style={drawerChipPathStyle}>{id.replace('com.wash.', '')}</span>
+                      <button type="button" onClick={() => props.onRemoveAutoApp(id)} style={iconBtnStyle} title="Remove">✕</button>
+                    </span>
+                  )}
+                </For>
+              </div>
+            </Show>
+          </div>
+          <div style={drawerSectionStyle}>
+            <div style={drawerHeadStyle}>Mount automatically on connect</div>
+            <For each={autoMounts()}>
+              {(p) => (
+                <div style={drawerChipRowStyle} data-testid="connect-auto-mount">
+                  <span style={drawerChipPathStyle} title={p}>{p}</span>
+                  <button type="button" onClick={() => props.onRemoveAutoMount(p)} style={iconBtnStyle} title="Remove">✕</button>
+                </div>
+              )}
+            </For>
+            <div style={mountAddStyle}>
+              <input
+                type="text"
+                value={mountPath()}
+                onInput={(e) => setMountPath(e.currentTarget.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') submitMount(); }}
+                placeholder="remote folder (e.g. /home/user)"
+                style={mountInputStyle}
+                data-testid="connect-auto-mount-input"
+              />
+              <button type="button" onClick={submitMount} style={mountBtnStyle} data-testid="connect-auto-mount-add">Add</button>
+            </div>
+          </div>
+        </div>
+      </Show>
     </div>
-  </div>
-);
+  );
+};
 
 // CandidateRow is a host auto-discovered on the LAN. Connect dials its addr
-// under the current username; the ☆ saves it as a bookmark (addr as target,
+// under the current username; ☆ saves it as a bookmark (addr as target,
 // friendly name as label). A "wash" chip marks a peer that announced itself
-// as a wash box (vs a generic SSH host a future provider might surface).
+// as a wash box.
 const CandidateRow: Component<{
   candidate: Candidate;
   onConnect: () => void;
@@ -566,7 +911,7 @@ const CandidateRow: Component<{
       <Show when={props.candidate.wash}>
         <span style={candidateChipStyle} data-testid="connect-candidate-wash">wash</span>
       </Show>
-      <button type="button" onClick={props.onConnect} style={launchBtnStyle} data-testid="connect-candidate-connect">
+      <button type="button" onClick={props.onConnect} style={primaryBtnStyle} data-testid="connect-candidate-connect">
         Connect
       </button>
       <button type="button" onClick={props.onSave} style={iconBtnStyle} title="Save as bookmark" data-testid="connect-candidate-save">
@@ -576,10 +921,9 @@ const CandidateRow: Component<{
   </div>
 );
 
-// LaunchMenu is the Launch button + its app-picker dropdown: a plain vertical
-// list of apps (icon + name). A transparent backdrop closes it on outside
-// click.
-const LaunchMenu: Component<{
+// MoreMenu is the "More ▾" button + its app-picker dropdown for the non-
+// priority apps. A transparent backdrop closes it on outside click.
+const MoreMenu: Component<{
   apps: CatalogApp[];
   open: boolean;
   onToggle: () => void;
@@ -590,48 +934,46 @@ const LaunchMenu: Component<{
     <button
       type="button"
       onClick={props.onToggle}
-      style={launchBtnStyle}
+      style={moreBtnStyle}
       data-testid="connect-launch"
       aria-haspopup="menu"
       aria-expanded={props.open}
     >
-      Launch ▾
+      More ▾
     </button>
     <Show when={props.open}>
       <div style={backdropStyle} onClick={props.onClose} data-testid="connect-launch-backdrop" />
       <div style={menuStyle} data-testid="connect-apps" role="menu">
-        <Show
-          when={props.apps.length > 0}
-          fallback={<div style={menuEmptyStyle}>loading apps…</div>}
-        >
-          <For each={props.apps}>
-            {(app) => (
-              <button
-                type="button"
-                style={menuItemStyle}
-                onClick={() => props.onPick(app.id)}
-                data-testid={`connect-launch-${app.id}`}
-                role="menuitem"
-                title={app.id}
-              >
-                <span style={menuIconStyle}>
-                  <Show when={app.icon} fallback={<span style={{ opacity: 0.3 }}>·</span>}>
-                    <SpriteIcon name={app.icon!} size={16} />
-                  </Show>
-                </span>
-                <span style={menuNameStyle}>{app.name}</span>
-              </button>
-            )}
-          </For>
-        </Show>
+        <For each={props.apps}>
+          {(app) => (
+            <button
+              type="button"
+              style={menuItemStyle}
+              onClick={() => props.onPick(app.id)}
+              data-testid={`connect-launch-${app.id}`}
+              role="menuitem"
+              title={app.id}
+            >
+              <span style={menuIconStyle}><AppIcon app={app} size={16} /></span>
+              <span style={menuNameStyle}>{app.name}</span>
+            </button>
+          )}
+        </For>
       </div>
     </Show>
   </div>
 );
 
-// AuthOverlay hosts the ssh-add pty terminal (docs/REMOTE.md §6.1). The
-// user types their key passphrase here; ssh-add loads it into the agent
-// and exits, which the BE reports as auth_closed (driving the retry).
+// AppIcon renders an app's sprite icon, or a faint dot if it has none.
+const AppIcon: Component<{ app: CatalogApp; size: number }> = (props) => (
+  <Show when={props.app.icon} fallback={<span style={{ opacity: 0.3 }}>·</span>}>
+    <SpriteIcon name={props.app.icon!} size={props.size} />
+  </Show>
+);
+
+// AuthOverlay hosts the ssh-add pty terminal (docs/REMOTE.md §6.1). The user
+// types their key passphrase here; ssh-add loads it into the agent and exits,
+// which the BE reports as auth_closed (driving the retry).
 const AuthOverlay: Component<{ host: string; channel: number; onCancel: () => void }> = (props) => (
   <div style={authOverlayStyle} data-testid="connect-auth">
     <div style={authHeaderStyle}>
@@ -652,7 +994,7 @@ const Header: Component = () => (
     </div>
     <div style={{ flex: 1, 'min-width': 0 }}>
       <div style={headerTitleStyle}>Connect</div>
-      <div style={headerSubtitleStyle}>Run apps on another host, in this desktop</div>
+      <div style={headerSubtitleStyle}>Run apps and open folders on another machine</div>
     </div>
   </div>
 );
@@ -713,7 +1055,7 @@ const headerSubtitleStyle: JSX.CSSProperties = {
 
 const bodyStyle: JSX.CSSProperties = { overflow: 'auto', padding: '14px 18px 20px' };
 
-const connectRowStyle: JSX.CSSProperties = { display: 'flex', gap: '8px', 'margin-bottom': '16px' };
+const connectRowStyle: JSX.CSSProperties = { display: 'flex', 'align-items': 'center', gap: '8px', 'margin-bottom': '16px' };
 
 const inputStyle: JSX.CSSProperties = {
   flex: 1,
@@ -726,7 +1068,7 @@ const inputStyle: JSX.CSSProperties = {
   'min-width': 0,
 };
 
-const launchBtnStyle: JSX.CSSProperties = {
+const primaryBtnStyle: JSX.CSSProperties = {
   background: tokens.accentBlue,
   color: '#fff',
   border: 'none',
@@ -738,15 +1080,53 @@ const launchBtnStyle: JSX.CSSProperties = {
   'flex-shrink': 0,
 };
 
-const addBtnStyle: JSX.CSSProperties = {
+const appsRowStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'center',
+  'flex-wrap': 'wrap',
+  gap: '6px',
+};
+
+const appBtnStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'center',
+  gap: '6px',
+  background: tokens.bgWindow,
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}`,
+  padding: '5px 10px',
+  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  cursor: 'pointer',
+  'white-space': 'nowrap',
+};
+
+const appBtnLabelStyle: JSX.CSSProperties = { 'line-height': 1 };
+
+const appsEmptyStyle: JSX.CSSProperties = {
+  color: tokens.fgMuted,
+  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  opacity: 0.7,
+};
+
+const moreBtnStyle: JSX.CSSProperties = {
   background: 'transparent',
   color: tokens.fg,
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusSm}`,
-  padding: '7px 14px',
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  padding: '5px 10px',
+  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
   cursor: 'pointer',
   'white-space': 'nowrap',
+};
+
+const autoBadgeStyle: JSX.CSSProperties = {
+  background: 'transparent',
+  color: tokens.accentGreen,
+  border: `1px solid ${tokens.accentGreen}`,
+  'border-radius': `${tokens.radiusSm}`,
+  font: `600 ${tokens.fontSizeSm} ${tokens.fontSans}`,
+  padding: '1px 6px',
   'flex-shrink': 0,
 };
 
@@ -779,15 +1159,6 @@ const mountStatusStyle: JSX.CSSProperties = {
 
 const mountAddStyle: JSX.CSSProperties = { display: 'flex', gap: '6px' };
 
-const mountPersistStyle: JSX.CSSProperties = {
-  display: 'flex',
-  'align-items': 'center',
-  gap: '6px',
-  color: tokens.fgMuted,
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
-  cursor: 'pointer',
-};
-
 const mountInputStyle: JSX.CSSProperties = {
   flex: 1,
   background: tokens.bgWindow,
@@ -809,6 +1180,74 @@ const mountBtnStyle: JSX.CSSProperties = {
   cursor: 'pointer',
   'white-space': 'nowrap',
   'flex-shrink': 0,
+};
+
+// ----- preferences drawer -----
+
+const drawerStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'flex-direction': 'column',
+  gap: '10px',
+  'margin-top': '8px',
+  'padding-top': '10px',
+  'border-top': `1px solid ${tokens.borderMenu}`,
+};
+
+const drawerRowStyle: JSX.CSSProperties = { display: 'flex', 'align-items': 'center', gap: '8px' };
+
+const drawerLabelInputStyle: JSX.CSSProperties = {
+  flex: 1,
+  background: tokens.bgWindow,
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}`,
+  padding: '5px 8px',
+  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  'min-width': 0,
+};
+
+const drawerSectionStyle: JSX.CSSProperties = { display: 'flex', 'flex-direction': 'column', gap: '5px' };
+
+const drawerHeadStyle: JSX.CSSProperties = {
+  font: `600 ${tokens.fontSizeSm} ${tokens.fontSans}`,
+  color: tokens.fgMuted,
+  'text-transform': 'uppercase',
+  'letter-spacing': '0.04em',
+};
+
+const drawerHintStyle: JSX.CSSProperties = {
+  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  color: tokens.fgMuted,
+  opacity: 0.8,
+};
+
+const drawerAppsStyle: JSX.CSSProperties = { display: 'flex', 'flex-wrap': 'wrap', gap: '8px' };
+
+const drawerCheckStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'center',
+  gap: '5px',
+  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  cursor: 'pointer',
+};
+
+const drawerChipRowStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'center',
+  gap: '6px',
+  background: tokens.bgWindow,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}`,
+  padding: '2px 4px 2px 8px',
+};
+
+const drawerChipPathStyle: JSX.CSSProperties = {
+  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  color: tokens.fg,
+  overflow: 'hidden',
+  'text-overflow': 'ellipsis',
+  'white-space': 'nowrap',
+  'max-width': '220px',
 };
 
 const emptyStyle: JSX.CSSProperties = {
@@ -915,7 +1354,7 @@ const backdropStyle: JSX.CSSProperties = {
 const menuStyle: JSX.CSSProperties = {
   position: 'absolute',
   top: 'calc(100% + 4px)',
-  right: '0',
+  left: '0',
   'z-index': 41,
   'min-width': '180px',
   'max-height': '260px',
@@ -960,13 +1399,6 @@ const menuNameStyle: JSX.CSSProperties = {
   overflow: 'hidden',
   'text-overflow': 'ellipsis',
   'white-space': 'nowrap',
-};
-
-const menuEmptyStyle: JSX.CSSProperties = {
-  padding: '8px',
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
-  color: tokens.fgMuted,
-  opacity: 0.7,
 };
 
 const authOverlayStyle: JSX.CSSProperties = {

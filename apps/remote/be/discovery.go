@@ -92,13 +92,21 @@ func (d *discoverer) start() {
 	srv, err := mdns.New(mdns.Options{
 		Advertise: adv,
 		OnEntry:   d.onMDNS,
+		Logf:      log.Printf,
+		Debug:     os.Getenv("WASH_MDNS_DEBUG") != "",
 	})
 	if err != nil {
 		log.Printf("wash-remote: discovery mdns: %v (continuing without it)", err)
 	} else {
 		d.mdnsSrv = srv
 		if adv != nil {
-			log.Printf("wash-remote: discovery advertising %q on _wash._tcp.local", adv.Instance)
+			log.Printf("wash-remote: discovery advertising host=%q ips=%v on _wash._tcp.local", adv.Instance, adv.IPv4)
+		} else {
+			// A box with no advertisement can still browse, but no peer can
+			// find IT. Usual cause: no routable IPv4 (container/link-local
+			// only) or the WASH_DISCOVERY_NO_ADVERTISE opt-out. Logged loudly
+			// because it's a silent half-failure otherwise.
+			log.Printf("wash-remote: discovery NOT advertising — no routable IPv4 or opted out; this box is invisible to peers")
 		}
 	}
 	d.startStatic()
@@ -178,6 +186,9 @@ func (d *discoverer) observe(c Candidate, sticky bool) {
 	prev, existed := d.cands[key]
 	d.cands[key] = seenCandidate{c: c, seen: time.Now(), sticky: sticky}
 	d.mu.Unlock()
+	if !existed {
+		log.Printf("wash-remote: discovered host=%q addr=%s port=%d source=%s wash=%v", c.Host, c.Addr, c.Port, c.Source, c.Wash)
+	}
 	if !existed || prev.c != c {
 		d.publish()
 	}

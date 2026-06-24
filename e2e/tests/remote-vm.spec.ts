@@ -42,9 +42,13 @@ test('connect to a second VM over real ssh and composite its app window', async 
   const status = connect.locator('[data-testid="connect-host-status"]');
   await expect(status).toHaveAttribute('data-status', 'up', { timeout: 90_000 });
 
-  // The top-bar Launch connected the host; its app dropdown auto-opens once
-  // B's catalog arrives over the relay channel. Pick About from the list.
+  // Connect brought the host up; B's catalog arrives over the relay channel.
+  // About isn't one of the always-visible primary apps (Terminal/Files/
+  // Editor), so it lives behind "More" — open that menu, then pick it.
   const aboutItem = connect.locator('[data-testid="connect-launch-com.wash.about"]');
+  for (let i = 0; i < 3 && !(await aboutItem.isVisible().catch(() => false)); i++) {
+    await connect.locator('[data-testid="connect-launch"]').click();
+  }
   await expect(aboutItem).toBeVisible({ timeout: 30_000 });
   await aboutItem.click();
 
@@ -70,10 +74,10 @@ test('a remote wash-term pty round-trips over the relay', async ({ remoteVm, pag
   await connect.locator('[data-testid="connect-submit"]').click();
   await expect(connect.locator('[data-testid="connect-host-status"]')).toHaveAttribute('data-status', 'up', { timeout: 90_000 });
 
-  // Launch wash-term ON B — a RAW-channel app (pty). Its keystrokes and
-  // output ride origin-scoped raw channels over the relay (docs/REMOTE.md §4),
-  // class-aware (keystrokes interactive, output bulk). The Launch dropdown
-  // auto-opens on connect; pick wash-term from the list.
+  // Open wash-term ON B — a RAW-channel app (pty). Its keystrokes and output
+  // ride origin-scoped raw channels over the relay (docs/REMOTE.md §4),
+  // class-aware (keystrokes interactive, output bulk). Terminal is a primary
+  // app, so it's a direct button on the host card (no menu to open).
   const termItem = connect.locator('[data-testid="connect-launch-com.wash.term"]');
   await expect(termItem).toBeVisible({ timeout: 30_000 });
   await termItem.click();
