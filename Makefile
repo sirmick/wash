@@ -244,23 +244,19 @@ go_build = $(GO_ENV) go build $(GOFLAGS) -o $(1) ./$(2) && chmod 0755 $(1)
 
 PNPM    := pnpm
 
-# Per-binary embed stamps. Each binary's go build depends on its stamp
-# so the web stage runs first and updates assets/ if anything changed.
-ROUTER_ASSETS  := internal/runner/router/assets
-ROUTER_STAMP   := $(ROUTER_ASSETS)/.stamp
-
-# wash-login embeds the same shell runtime as wash-router so authed
-# users hitting wash-login's HTTP root get a working desktop without
-# wash-router needing to expose its own HTTP port (it's --listen-unix
-# in multi-user mode). The login package's //go:embed picks up
-# whatever lands under internal/login/assets/shell/.
-LOGIN_SHELL_ASSETS := internal/login/assets/shell
-LOGIN_SHELL_STAMP  := $(LOGIN_SHELL_ASSETS)/.stamp
+# Shared shell-runtime embed stamp. wash-router and wash-login embed the
+# SAME bundle from one package (internal/shellassets), so the web stage
+# stages web/shell/dist there ONCE and both binaries' go builds depend on
+# this single stamp. (Previously the bundle was embedded twice: into
+# internal/runner/router/assets, then copy-staged again into
+# internal/login/assets/shell.)
+SHELL_ASSETS := internal/shellassets/assets
+SHELL_STAMP  := $(SHELL_ASSETS)/.stamp
 
 # Per-app asset/stamp paths are uniform — apps/<app>/be/assets/.stamp — and are
 # computed inline by the app-rule templates below, so no per-app *_ASSETS /
-# *_STAMP variables are needed. (ROUTER_STAMP / LOGIN_SHELL_STAMP above are the
-# two exceptions: they embed the shell runtime, not an app FE bundle.)
+# *_STAMP variables are needed. (SHELL_STAMP above is the
+# exception: it embeds the shell runtime, not an app FE bundle.)
 
 .PHONY: all
 all: $(TARGETS)
@@ -334,11 +330,8 @@ define embed_dist
 	touch $(2)/.stamp
 endef
 
-$(ROUTER_STAMP): web-shell
-	$(call embed_dist,web/shell/dist,$(ROUTER_ASSETS))
-
-$(LOGIN_SHELL_STAMP): $(ROUTER_STAMP)
-	$(call embed_dist,$(ROUTER_ASSETS),$(LOGIN_SHELL_ASSETS))
+$(SHELL_STAMP): web-shell
+	$(call embed_dist,web/shell/dist,$(SHELL_ASSETS))
 
 # ----- app-rule templates (CORE_AUDIT §2.2) -----
 # One $(foreach)/$(eval) pass turns the FE_APPS / FE_PANEL_APPS / SVC_APPS lists
@@ -391,8 +384,9 @@ $(foreach a,$(SVC_APPS),$(eval $(call svc_bin_rule,$(a))))
 #
 # App FE bundles EXTERNALIZE the shared deps (@wash/ui, solid-js,
 # xterm): at runtime the shell's import map resolves them to /vendor/*
-# files that ship inside wash-router (and wash-login's shell copy) —
-# see web/shell/build-vendor.mjs. So a targeted `make out/wash-<app>`
+# files that ship inside wash-router and wash-login (both embed the
+# shared internal/shellassets bundle) — see web/shell/build-vendor.mjs.
+# So a targeted `make out/wash-<app>`
 # that picks up changed web/lib sources pairs a fresh app bundle with
 # a router still serving the OLD vendor chunk, and the app dies at
 # load with "module '@wash/ui' does not provide an export named …".
@@ -416,7 +410,7 @@ $(OUT)/wash-display: vendor-sync
 
 # ----- go stage -----
 
-$(SC)/wash-router: $(ROUTER_STAMP) | $(SC)
+$(SC)/wash-router: $(SHELL_STAMP) | $(SC)
 	$(call go_build,$@,cmd/wash-router)
 
 # The per-app windowed/panel/service binary rules (wash-session, wash-about,
@@ -531,7 +525,7 @@ $(SC)/wash-launch: | $(SC)
 #
 # Set them with `make wash-login-caps` (uses sudo). The dev path
 # (wash-login + target user are the same uid) doesn't need caps.
-$(OUT)/wash-login: $(LOGIN_SHELL_STAMP) | $(OUT)
+$(OUT)/wash-login: $(SHELL_STAMP) | $(OUT)
 	$(call go_build,$@,cmd/wash-login)
 	@caps_have=`getcap $@ 2>/dev/null || true`; \
 	  case "$$caps_have" in \
@@ -593,16 +587,15 @@ test-app: $(OUT)/wash-priv-fakesudo
 # Adding an app: add it to the app roster (FE_APPS / FE_PANEL_APPS / SVC_APPS at
 # the top) and run `make gen-imports`; its multicall import + asset stamp follow
 # automatically — no edits here.
-# Note ROUTER_STAMP + LOGIN_SHELL_STAMP: cmd/wash imports
-# internal/runner/router (which `//go:embed`s internal/runner/
-# router/assets) and internal/runner/login → internal/login
-# (which `//go:embed`s assets/shell). Without these stamps in
-# multicall's dep list, a clean checkout fails to compile with
-# "pattern all:assets: no matching files found" — local dev
-# accidentally works because the standalone wash-router build
-# rule already chains through ROUTER_STAMP. The app stamps are every
-# FE-bundle-embedding app (ASSET_APPS); the gated test app is added below.
-MULTICALL_STAMPS := $(ROUTER_STAMP) $(LOGIN_SHELL_STAMP) \
+# Note SHELL_STAMP: cmd/wash imports internal/runner/router and
+# internal/runner/login → internal/login, both of which now embed the
+# shared internal/shellassets bundle. Without this stamp in multicall's
+# dep list, a clean checkout fails to compile with "pattern all:assets:
+# no matching files found" — local dev accidentally works because the
+# standalone wash-router build rule already chains through SHELL_STAMP.
+# The app stamps are every FE-bundle-embedding app (ASSET_APPS); the
+# gated test app is added below.
+MULTICALL_STAMPS := $(SHELL_STAMP) \
                     $(foreach a,$(ASSET_APPS),apps/$(a)/be/assets/.stamp)
 
 # Adding wash_test_app to the tags pulls the test app's blank-import
@@ -952,7 +945,7 @@ run:
 clean:
 	rm -rf $(OUT)
 	rm -rf web/*/dist apps/*/fe/dist wash-display/fe/dist
-	rm -rf apps/*/be/assets cmd/*/assets internal/apps/*/assets internal/runner/*/assets internal/login/assets/shell
+	rm -rf apps/*/be/assets cmd/*/assets internal/apps/*/assets internal/runner/*/assets internal/login/assets/shell internal/shellassets/assets
 	rm -rf web/shell/public/vendor
 	rm -rf dist packaging/build-ctx
 	rm -rf wash-display/build wash-display/third_party/wlroots/build wash-display/.wlroots

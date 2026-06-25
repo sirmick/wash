@@ -36,6 +36,49 @@ func SetSecurityHeaders(h http.Header) {
 	h.Set("Referrer-Policy", "same-origin")
 }
 
+// Guard wraps next with the two listener-level defenses both wash HTTP
+// fronts (the standalone router and the multi-user login) apply
+// identically: the Host-header allowlist (DNS-rebinding defense) and the
+// baseline security headers — the headers skipped on the /app/<token>/
+// ingress proxy so the embedded backend keeps its own framing/CSP.
+//
+// bindHost is the listener's own host (always accepted; "" if unknown).
+// onReject, if non-nil, is called with the offending Host + RemoteAddr
+// before the 403 so each front can log in its own format.
+func Guard(next http.Handler, bindHost string, allow []string, onReject func(host, remoteAddr string)) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !HostAllowed(r.Host, bindHost, allow) {
+			if onReject != nil {
+				onReject(r.Host, r.RemoteAddr)
+			}
+			http.Error(w, "forbidden host", http.StatusForbidden)
+			return
+		}
+		if !strings.HasPrefix(r.URL.Path, "/app/") {
+			SetSecurityHeaders(w.Header())
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// SetNoCache stamps the no-store revalidation headers used for the
+// unversioned shell-runtime bundles, so a browser always re-fetches on
+// the next navigation instead of serving a stale, incoherent module set
+// after a wash upgrade.
+func SetNoCache(h http.Header) {
+	h.Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	h.Set("Pragma", "no-cache")
+	h.Set("Expires", "0")
+}
+
+// NoCacheStatic wraps a static-asset handler with SetNoCache.
+func NoCacheStatic(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		SetNoCache(w.Header())
+		h.ServeHTTP(w, r)
+	})
+}
+
 // HostAllowed reports whether the request's Host header is acceptable for
 // a TCP listener — a DNS-rebinding defense.
 //
