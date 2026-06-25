@@ -633,7 +633,13 @@ $(OUT)/wash: $(MULTICALL_STAMPS) | $(OUT)
 # are NOT in install-symlinks' name list, so they're left untouched in place — no
 # copy step needed. install-symlinks refuses to clobber a non-symlink anyway.
 .PHONY: multicall
-multicall: $(OUT)/wash
+# Depends on the always-real OUT_ONLY_BINS too: the recipe's comment assumes
+# wash-login/wash-sudo "already sit in out/ from their own rules", but on a
+# CLEAN tree (fresh worktree / fresh CI checkout) nothing has built them yet,
+# so the shipped layout would be incomplete and every login/priv/services/
+# packages e2e test fails with "missing binary: out/wash-login". install-
+# symlinks refuses to clobber a non-symlink, so the real ELFs are left in place.
+multicall: $(OUT)/wash $(OUT)/wash-login $(OUT)/wash-sudo
 	./$(OUT)/wash install-symlinks ./$(OUT)
 
 # Cross-compile-friendly variant: builds the multicall binary but
