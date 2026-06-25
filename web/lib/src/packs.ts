@@ -183,6 +183,10 @@ const tokyo: Pack = {
     '--wash-accent-violet': '#6c71c4', // violet
     '--wash-accent-magenta': '#d33682', // Solarized magenta
     '--wash-accent-pink': '#db5a96',
+    // Darken + blur backdrop behind the desktop info panel so it reads over
+    // the busy neon wallpaper.
+    '--wash-banner-bg': 'rgba(0,15,20,0.42)',
+    '--wash-banner-blur': '8px',
   },
   wallpaper: 'wallpapers/tokyo.svg',
 };
@@ -392,6 +396,10 @@ const oslo: Pack = {
     '--wash-accent-violet': '#b48ead', // nord15
     '--wash-accent-magenta': '#c490b5',
     '--wash-accent-pink': '#d3a0b8',
+    // Darken + blur backdrop behind the desktop info panel so it reads over
+    // the wallpaper.
+    '--wash-banner-bg': 'rgba(20,26,38,0.45)',
+    '--wash-banner-blur': '8px',
   },
   wallpaper: 'wallpapers/oslo.svg',
 };

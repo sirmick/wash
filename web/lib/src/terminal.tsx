@@ -183,13 +183,43 @@ export const TERM_FONTS: TermFont[] = [
     boldUrl: 'fonts/FiraCode-Bold.woff2',
   },
   // System stacks: no bundled woff2, so these render only when the
-  // family is installed on the client and otherwise fall back through
-  // the stack to plain monospace. JetBrains/Fira above are always
-  // available (bundled); these widen the choice at zero download cost.
-  { id: 'cascadia-code', label: 'Cascadia Code', stack: '"Cascadia Code", "Cascadia Mono", ui-monospace, monospace' },
-  { id: 'source-code-pro', label: 'Source Code Pro', stack: '"Source Code Pro", ui-monospace, monospace' },
-  { id: 'ubuntu-mono', label: 'Ubuntu Mono', stack: '"Ubuntu Mono", ui-monospace, monospace' },
-  { id: 'dejavu-mono', label: 'DejaVu Sans Mono', stack: '"DejaVu Sans Mono", ui-monospace, monospace' },
+  // family. These four are now BUNDLED too (latin-subset woff2 under
+  // web/shell/public/fonts; loaded via FontFace on selection like JetBrains/
+  // Fira), so they render even when not installed on the client.
+  {
+    id: 'cascadia-code',
+    label: 'Cascadia Code',
+    stack: '"Cascadia Code", "Cascadia Mono", ui-monospace, monospace',
+    family: 'Cascadia Code',
+    url: 'fonts/Cascadia-Regular.woff2',
+    boldUrl: 'fonts/Cascadia-Bold.woff2',
+  },
+  {
+    id: 'source-code-pro',
+    label: 'Source Code Pro',
+    stack: '"Source Code Pro", ui-monospace, monospace',
+    family: 'Source Code Pro',
+    url: 'fonts/SourceCodePro-Regular.woff2',
+    boldUrl: 'fonts/SourceCodePro-Bold.woff2',
+  },
+  {
+    id: 'ubuntu-mono',
+    label: 'Ubuntu Mono',
+    stack: '"Ubuntu Mono", ui-monospace, monospace',
+    family: 'Ubuntu Mono',
+    url: 'fonts/UbuntuMono-Regular.woff2',
+    boldUrl: 'fonts/UbuntuMono-Bold.woff2',
+  },
+  {
+    id: 'dejavu-mono',
+    label: 'DejaVu Sans Mono',
+    stack: '"DejaVu Sans Mono", ui-monospace, monospace',
+    family: 'DejaVu Sans Mono',
+    url: 'fonts/DejaVuMono-Regular.woff2',
+    boldUrl: 'fonts/DejaVuMono-Bold.woff2',
+  },
+  // Menlo/Consolas are system fonts (Apple/Microsoft) — not bundleable; they
+  // render where installed and otherwise fall back to monospace.
   { id: 'menlo', label: 'Menlo / Consolas', stack: 'Menlo, Consolas, "Liberation Mono", monospace' },
 ];
 
@@ -490,7 +520,15 @@ export const Terminal: Component<TerminalProps> = (props) => {
       onCleanup(onAppearanceChange((a) => setPackAppearance(a)));
       createEffect(() => {
         if (!term) return;
-        term.options.theme = props.theme ?? termThemeFor(props.appearanceOverride ?? packAppearance());
+        const th = props.theme ?? termThemeFor(props.appearanceOverride ?? packAppearance());
+        term.options.theme = th;
+        // The xterm grid is quantized to whole cells, but the host element
+        // is the window's arbitrary height — so a strip below the last row
+        // (and any right-edge remainder) shows hostEl's background. Paint it
+        // the active theme's background so that dead space matches the
+        // terminal instead of showing through. Re-runs on theme/appearance
+        // change, keeping it in sync.
+        if (hostEl && th.background) hostEl.style.background = th.background;
       });
     }
     // Clipboard keys are component-level so every terminal in wash
