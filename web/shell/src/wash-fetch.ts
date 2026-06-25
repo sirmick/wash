@@ -11,12 +11,15 @@
 //   router → shell:  { t: "channel.unbind",  channel_id, reason }
 //   on error:        { t: "asset.read.err",  req_id, code, msg }
 
+import { gunzip } from './gzip';
+
 interface Pending {
   reqID: number;
   channelID?: number;     // set by handleAssetReadOK; bytes/finish keyed off it
   chunks: Uint8Array[];
   mime: string;
   size: number;
+  encoding: string;       // '' | 'gzip' — router-side content-coding to undo
   resolve: (v: { bytes: Uint8Array; mime: string }) => void;
   reject: (err: Error) => void;
 }
@@ -33,7 +36,7 @@ type SendCtrl = (msg: unknown) => void;
 export function washFetch(send: SendCtrl, path: string): Promise<{ bytes: Uint8Array; mime: string }> {
   const reqID = nextReqID++;
   return new Promise((resolve, reject) => {
-    const p: Pending = { reqID, chunks: [], mime: '', size: 0, resolve, reject };
+    const p: Pending = { reqID, chunks: [], mime: '', size: 0, encoding: '', resolve, reject };
     pendingByReqID.set(reqID, p);
     send({ t: 'asset.read', req_id: reqID, path });
   });
@@ -42,13 +45,45 @@ export function washFetch(send: SendCtrl, path: string): Promise<{ bytes: Uint8A
 /** handleAssetReadOK is called by main.tsx's ctrl dispatcher when an
  *  asset.read.ok frame arrives. Records the channel-id mapping so
  *  incoming raw frames flow into the pending accumulator. */
-export function handleAssetReadOK(msg: { req_id: number; channel_id: number; size: number; mime?: string }): void {
+export function handleAssetReadOK(msg: { req_id: number; channel_id: number; size: number; mime?: string; encoding?: string }): void {
   const p = pendingByReqID.get(msg.req_id);
   if (!p) return;
   p.channelID = msg.channel_id;
   p.mime = msg.mime ?? 'application/octet-stream';
   p.size = msg.size;
+  p.encoding = msg.encoding ?? '';
   pendingByChannelID.set(msg.channel_id, p);
+  // Zero-length asset: no data frames will arrive, so complete now.
+  maybeCompleteAsset(p);
+}
+
+function assetBytesSoFar(p: Pending): number {
+  return p.chunks.reduce((n, c) => n + c.byteLength, 0);
+}
+
+// maybeCompleteAsset finalizes the fetch once all `size` bytes have
+// arrived (docs/QOS.md tc reclass): concatenate, inflate if gzip, resolve,
+// and tear down the channel maps. Completion is byte-count driven — NOT
+// Unbind driven — so the asset data can ride the low-priority Background
+// class without the higher-priority Unbind overtaking it and truncating
+// the result. Idempotent: the pending's presence in the maps is the guard.
+function maybeCompleteAsset(p: Pending): void {
+  if (p.channelID == null) return;          // asset.read.ok not seen yet
+  if (assetBytesSoFar(p) < p.size) return;  // more frames still in flight
+  pendingByChannelID.delete(p.channelID);
+  pendingByReqID.delete(p.reqID);
+  const total = assetBytesSoFar(p);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of p.chunks) { out.set(c, off); off += c.byteLength; }
+  if (p.encoding === 'gzip') {
+    gunzip(out).then(
+      (bytes) => p.resolve({ bytes, mime: p.mime }),
+      (err) => p.reject(err instanceof Error ? err : new Error(String(err))),
+    );
+    return;
+  }
+  p.resolve({ bytes: out, mime: p.mime });
 }
 
 /** handleAssetReadErr rejects the matching pending fetch. */
@@ -67,20 +102,17 @@ export function pushAssetBytes(channelID: number, bytes: Uint8Array): boolean {
   const p = pendingByChannelID.get(channelID);
   if (!p) return false;
   p.chunks.push(bytes);
+  maybeCompleteAsset(p);
   return true;
 }
 
-/** finishAsset is called from the channel.unbind handler. If the
- *  channel was an asset stream, concatenates the chunks and resolves
- *  the originating washFetch. No-op for non-asset channels. */
+/** finishAsset is called from the channel.unbind handler. Completion is
+ *  byte-count driven (maybeCompleteAsset), so this is just a backstop: the
+ *  Unbind now routinely overtakes the Background-class data frames, so if
+ *  the bytes aren't all in yet this is a no-op and the remaining frames
+ *  complete the fetch. No-op for non-asset channels. */
 export function finishAsset(channelID: number): void {
   const p = pendingByChannelID.get(channelID);
   if (!p) return;
-  pendingByChannelID.delete(channelID);
-  pendingByReqID.delete(p.reqID);
-  const total = p.chunks.reduce((n, c) => n + c.byteLength, 0);
-  const out = new Uint8Array(total);
-  let off = 0;
-  for (const c of p.chunks) { out.set(c, off); off += c.byteLength; }
-  p.resolve({ bytes: out, mime: p.mime });
+  maybeCompleteAsset(p);
 }

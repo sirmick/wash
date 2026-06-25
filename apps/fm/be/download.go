@@ -142,7 +142,9 @@ func downloadBegin(c *sdk.Conn, req downloadBeginReq) (downloadBeginResp, error)
 func runDownloadWriter(c *sdk.Conn, s *downloadSession) {
 	defer clearDownload(s.id)
 
-	ch, err := c.OpenChannel(context.Background(), c.WindowID())
+	// File channel: bulk + creditless (lossless). A download yields to
+	// interactive traffic but is never frame-dropped (docs/QOS.md).
+	ch, err := c.OpenChannelFile(context.Background(), c.WindowID())
 	if err != nil {
 		s.fail("channel open: " + err.Error())
 		finishDownload(c, s)

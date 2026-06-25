@@ -177,6 +177,14 @@ const (
 	// pixel frames are always ≥45 bytes). The router relays this kind
 	// opaquely — no router/WM change. See docs/DISPLAY.md §12 (M3).
 	ChannelKindVideoPopup = "video-popup"
+	// "file" is an app→FE bulk file transfer (fm download — a file or a
+	// streamed zip). Like generic for the shell (opaque bytes the app's FE
+	// subscribes to), but the router opens it WITHOUT a credit ledger and
+	// the app writes it at Bulk class, so it rides the lossless Bulk path
+	// (blocking backpressure) — NOT the terminal credit-gated path whose
+	// FE-behind suppression drops frames (which would corrupt a file).
+	// docs/QOS.md.
+	ChannelKindFile = "file"
 )
 
 // ChannelOpen — app → router — requests a new raw channel bound to

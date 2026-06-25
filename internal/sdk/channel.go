@@ -18,6 +18,12 @@ type RawChannel struct {
 	id   uint32
 	conn *Conn
 
+	// writeClass is the QoS class stamped on outbound frames. Zero value
+	// is ClassInteractive (the default for a generic channel). A "file"
+	// channel sets ClassBulk so a bulk download yields to interactive
+	// traffic (docs/QOS.md). Set once at open, before any Write.
+	writeClass wire.Class
+
 	queue  chan []byte
 	closed chan struct{}
 
@@ -90,7 +96,7 @@ func (rc *RawChannel) Write(p []byte) (int, error) {
 		Flags:   wire.FlagEnd,
 		Channel: rc.id,
 		Payload: p,
-	})
+	}.WithClass(rc.writeClass))
 	if err != nil {
 		return 0, err
 	}
@@ -159,6 +165,15 @@ func (c *Conn) OpenChannelKind(ctx context.Context, windowID uint32, kind string
 	return c.openChannelKind(ctx, windowID, kind)
 }
 
+// OpenChannelFile opens a channel for a bulk app→FE file transfer (e.g.
+// fm download). The router omits the credit ledger and the channel writes
+// at Bulk class, so the transfer rides the lossless Bulk path: it yields
+// to interactive traffic but is never frame-dropped (docs/QOS.md). Same
+// callback/deadlock caveat as OpenChannel.
+func (c *Conn) OpenChannelFile(ctx context.Context, windowID uint32) (*RawChannel, error) {
+	return c.openChannelKind(ctx, windowID, wire.ChannelKindFile)
+}
+
 // openChannelKind is OpenChannel with an explicit channel kind hint
 // for the router. Internal — bundle channels are the only non-
 // generic kind today.
@@ -176,6 +191,11 @@ func (c *Conn) openChannelKind(ctx context.Context, windowID uint32, kind string
 		c.pendingOpens.cancel(reqID)
 		return nil, ctx.Err()
 	case r := <-waitCh:
+		// A file channel writes at Bulk so a download yields to interactive
+		// traffic (the router opened it creditless → lossless Bulk path).
+		if r.ch != nil && kind == wire.ChannelKindFile {
+			r.ch.writeClass = wire.ClassBulk
+		}
 		return r.ch, r.err
 	}
 }

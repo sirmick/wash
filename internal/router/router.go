@@ -167,6 +167,21 @@ type Router struct {
 	nextInstance atomic.Uint64
 	nextChannel  atomic.Uint32 // starts at 1, returns 2+ via allocChannelID
 
+	// Link-health session totals (docs/QOS.md). linkTotals accumulates
+	// each finished shell connection's counters so the desktop info
+	// panel's MB figures and the About screen survive WS reconnects;
+	// connectCount is the number of shell connections served; started
+	// stamps session (router process) start for the uptime readout.
+	linkTotals   *LinkStats
+	connectCount atomic.Uint64
+	started      time.Time
+
+	// Asset cache (docs/QOS.md): path → cached identity+gzip bytes, so the
+	// asset.read path reads + compresses each file once per process rather
+	// than on every connection. Keyed by path + stat signature (loadAsset).
+	assetCacheMu sync.Mutex
+	assetCache   map[string]*assetEntry
+
 	channelsMu sync.Mutex
 	channels   map[uint32]*channelBinding
 
@@ -282,7 +297,16 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		backgroundStarted: make(map[string]bool),
 		ingress:           newIngressRegistry(log),
 		peers:             make(map[string]peerTarget),
+		linkTotals:        &LinkStats{},
+		started:           time.Now(),
 	}
+}
+
+// sessionLinkTotals folds the live connection's snapshot into the banked
+// session totals for display (the desktop info panel + About). Banked
+// totals come from already-finished connections; live is the current one.
+func (r *Router) sessionLinkTotals(live wire.LinkStatsSnapshot) wire.LinkStatsSnapshot {
+	return r.linkTotals.snapshot([numClasses]int{}).Plus(live)
 }
 
 // SetAssets installs the embedded shell-runtime FS so TShellAssetRead
@@ -1289,30 +1313,40 @@ func (r *Router) replayBundleToShell(s *ShellSession, inst *AppInstance) {
 	s.bundleSent[inst.InstanceID] = true
 	s.writeMu.Unlock()
 
-	bytes := entry.Bundle
+	// Send the gzip copy when it's a win (the shell inflates per the bind's
+	// Encoding); else identity. Big app bundles (edit, washamp) shrink a lot.
+	raw := entry.Bundle
+	payload := raw
+	encoding := ""
+	if gz := entry.bundleGzip(); gz != nil {
+		payload = gz
+		encoding = "gzip"
+	}
 	id := r.allocChannelID()
-	if err := s.WriteCtrl(wire.NewShellChannelBindBundle(id, inst.InstanceID)); err != nil {
+	// Size lets the shell complete the bundle on byte-count, so Bulk-class
+	// data frames can't be overtaken by the higher-priority Unbind.
+	if err := s.WriteCtrl(wire.NewShellChannelBindBundle(id, inst.InstanceID, encoding, int64(len(payload)))); err != nil {
 		r.log("bundle bind %s: %v", inst.InstanceID, err)
 		return
 	}
 	// Chunk the write so very large bundles don't pin a giant
 	// allocation in the WS layer.
 	const chunkSize = 256 * 1024
-	for off := 0; off < len(bytes); off += chunkSize {
+	for off := 0; off < len(payload); off += chunkSize {
 		end := off + chunkSize
-		if end > len(bytes) {
-			end = len(bytes)
+		if end > len(payload) {
+			end = len(payload)
 		}
-		// Interactive class: bundle delivery is a transactional
-		// Bind → data → Unbind sequence. Under Bulk, the strict-
-		// priority scheduler would let the Interactive Unbind
-		// overtake these data frames and the shell would observe
-		// "channel closed" before the bytes arrived.
-		if err := s.WriteRawFrameClass(id, bytes[off:end], wire.ClassInteractive); err != nil {
+		// Bulk class: a bundle gates the window the user just launched, so
+		// it should beat Background assets but yield to interactive input
+		// and control. Safe on Bulk because the shell completes on the
+		// Size in the bind, not on the Unbind (docs/QOS.md tc reclass).
+		if err := s.WriteRawFrameClass(id, payload[off:end], wire.ClassBulk); err != nil {
 			r.log("bundle frame %s: %v", inst.InstanceID, err)
 			return
 		}
 	}
+	s.statsLink().recordCompression(len(raw), len(payload))
 	if err := s.WriteCtrl(wire.NewShellChannelUnbind(id, "bundle complete")); err != nil {
 		r.log("bundle unbind %s: %v", inst.InstanceID, err)
 	}

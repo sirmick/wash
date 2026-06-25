@@ -74,6 +74,7 @@ import './wash-app-display';
 import { showToast } from './notify';
 import { virtioConsoleFactory } from './virtio';
 import { bootStep, bootFinish } from './boot';
+import { ingestLinkStats, linkHealth, onLinkHealth, noteConnState, type RawLinkStatsMsg, type LinkHealth } from './linkstats';
 
 interface ShellCatalog {
   t: 'catalog';
@@ -151,6 +152,11 @@ interface ShellChannelBind {
   instance_id?: string;
   // origin names the remote host for a kind="peer" relay channel.
   origin?: string;
+  // encoding: content-coding of a kind="bundle" channel ('' | 'gzip').
+  encoding?: string;
+  // size: on-the-wire byte count for a kind="bundle" channel (drives
+  // byte-count completion so Bulk-class data isn't truncated by the unbind).
+  size?: number;
 }
 
 interface ShellChannelUnbind {
@@ -189,6 +195,10 @@ interface ShellAssetReadOK {
   channel_id: number;
   size: number;
   mime?: string;
+  // Router-side content-coding of the streamed bytes: absent/'' for
+  // identity, 'gzip' when the asset was pre-compressed (wash-fetch.ts
+  // inflates). See internal/router/assetcache.go.
+  encoding?: string;
 }
 
 interface ShellAssetReadErr {
@@ -269,7 +279,8 @@ type ShellCtrlMsg =
   | ShellChannelResync
   | ShellClipboardData
   | ShellClipboardChanged
-  | ShellPeerError;
+  | ShellPeerError
+  | RawLinkStatsMsg;
 
 // Reactive subs the chrome (mounted via window.wash) listens to.
 // catalogSub is the LOCAL router's catalog (drives the launcher).
@@ -427,8 +438,10 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         const b = msg;
         if (b.kind === 'bundle' && b.instance_id) {
           // Bundle delivery channel — accumulate (per origin) until the
-          // matching channel.unbind triggers the dynamic import.
-          client.bundleReady.set(b.instance_id, beginBundle(b.channel_id, b.instance_id, client.origin));
+          // byte-count completes the import. encoding tells the accumulator
+          // whether to inflate (gzip) first; size drives completion so the
+          // Bulk-class data can't be truncated by the Unbind.
+          client.bundleReady.set(b.instance_id, beginBundle(b.channel_id, b.instance_id, client.origin, b.encoding, b.size));
         } else if (b.kind === 'bundle') {
           // Settings-panel bundle channel (no instance_id): local-only,
           // keyed by channel_id in panels.ts. Nothing to do here.
@@ -470,6 +483,13 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         deliverResync(client.origin, msg.channel_id);
         break;
       }
+      // Link-health telemetry (docs/QOS.md): the LOCAL router's per-class
+      // throughput + session totals, ~1/s. Fold in the live WS send-buffer
+      // backlog the shell reads here; the desktop info panel + About render
+      // it via window.wash.onLinkStats.
+      case 'link.stats':
+        if (isLocal) ingestLinkStats(msg, conn.bufferedAmount());
+        break;
       // asset.read / panel.read are the shell fetching its OWN assets +
       // settings panels from its router — a local-only concern.
       case 'asset.read.ok':
@@ -819,6 +839,9 @@ function onWindowClose(win: Win): void {
 
 const [connState, setConnState] = createSignal<ConnState>('connecting');
 conn.onState(setConnState);
+// Feed connection transitions to the link-health module so the panel can
+// report how many times the link dropped + recovered this page-load.
+conn.onState(noteConnState);
 
 // Boot splash (web/shell/src/boot.ts + the #wash-boot overlay in
 // index.html). The overlay is already showing "loading shell…" from
@@ -1029,6 +1052,11 @@ declare global {
       setViewport(vx: number, vy: number): void;
       onViewport(cb: (vp: { vx: number; vy: number }) => void): () => void;
       onScreenSize(cb: (s: { w: number; h: number }) => void): () => void;
+      // Link-health telemetry (docs/QOS.md): per-class throughput + session
+      // running totals + derived rates/health. The desktop info panel + the
+      // About screen render it. null until the first link.stats arrives.
+      linkStats(): LinkHealth | null;
+      onLinkStats(cb: (h: LinkHealth) => void): () => void;
       log(level: 'error' | 'warn' | 'info' | 'debug', source: string, msg: string, stack?: string): void;
       openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
       writeRaw(channelID: number, bytes: Uint8Array): void;
@@ -1250,6 +1278,8 @@ window.wash = {
   setViewport: (vx, vy) => setViewport(vx, vy),
   onViewport: (cb) => viewportSub.on(cb),
   onScreenSize: (cb) => screenSub.on(cb),
+  linkStats: () => linkHealth(),
+  onLinkStats: (cb) => onLinkHealth(cb),
   log(level, source, msg, stack) {
     shellLog(level, source, msg, stack);
   },

@@ -5,11 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"mime"
 	"path"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sirmick/wash/internal/wire"
 )
@@ -122,11 +121,15 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	// disconnect tears down its ssh -L'd peer connections (and unblocks
 	// their pump goroutines) instead of leaking them.
 	defer sess.closeAllPeers()
+	r.connectCount.Add(1)
 	defer func() {
 		// Stop the drainer first so it doesn't try to write to a
 		// closing transport, then wait for it to exit.
 		sess.scheduler.Close()
 		<-sess.drainerDone
+		// Bank this connection's counters into the session running totals
+		// so the desktop info panel + About survive the disconnect.
+		r.linkTotals.add(sess.scheduler.StatsSnapshot())
 	}()
 	go sess.drainLoop(ctx)
 
@@ -183,7 +186,46 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	if err := r.EnsureInitialAppRunning(ctx); err != nil {
 		r.log("ensure initial: %v", err)
 	}
+	go sess.linkStatsLoop(ctx)
 	return sess.loop(ctx)
+}
+
+// linkStatsLoop pushes a link.stats telemetry frame to the FE ~1/s while
+// the connection is up (the desktop info panel + About read it). Control
+// class via SubmitTelemetry: non-blocking, never counted as an app drop,
+// and reliably delivered so health data still arrives under load.
+func (s *ShellSession) linkStatsLoop(ctx context.Context) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.drainerDone:
+			return
+		case <-t.C:
+			s.emitLinkStats()
+		}
+	}
+}
+
+func (s *ShellSession) emitLinkStats() {
+	if s.router == nil || s.scheduler == nil {
+		return
+	}
+	live := s.scheduler.StatsSnapshot()
+	msg := wire.NewShellLinkStats(
+		live,
+		s.router.sessionLinkTotals(live),
+		s.router.connectCount.Load(),
+		time.Since(s.router.started).Milliseconds(),
+	)
+	data, err := wire.EncodeCtrl(msg)
+	if err != nil {
+		return
+	}
+	f := wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: data}.WithClass(wire.ClassControl)
+	s.scheduler.SubmitTelemetry(f)
 }
 
 func (s *ShellSession) loop(ctx context.Context) error {
@@ -195,6 +237,9 @@ func (s *ShellSession) loop(ctx context.Context) error {
 }
 
 func (s *ShellSession) dispatch(f wire.Frame) error {
+	// Ingress accounting (every inbound frame: keystrokes, window intents,
+	// uploaded file content) for the link-health rx figure.
+	s.statsLink().recordRx(len(f.Payload))
 	if f.Channel != ChannelControl {
 		// Channel ≥ 1 on WS: raw byte stream. Forward to the bound
 		// app verbatim on the same channel id.
@@ -291,8 +336,7 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 // missing, traversal attempt, read failure) a ShellAssetReadErr is
 // sent back and no channel is opened.
 func (s *ShellSession) handleAssetRead(m wire.ShellAssetRead) error {
-	fs := s.router.assets
-	if fs == nil {
+	if s.router.assets == nil {
 		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeInternal, "no asset fs"))
 	}
 	// Normalise: strip leading slashes, reject any segment that's "..".
@@ -302,32 +346,28 @@ func (s *ShellSession) handleAssetRead(m wire.ShellAssetRead) error {
 	if clean == "/" || strings.Contains(clean, "/..") {
 		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeBadRequest, "bad path"))
 	}
-	f, err := fs.Open(clean)
+	// loadAsset returns cached identity+gzip bytes (read + compressed once
+	// per process, keyed by path + stat signature).
+	entry, err := s.router.loadAsset(clean)
 	if err != nil {
-		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeNotFound, err.Error()))
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
+		if err == errAssetIsDir {
+			return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeBadRequest, "is a directory"))
+		}
+		if isNotExist(err) {
+			return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeNotFound, err.Error()))
+		}
 		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeInternal, err.Error()))
 	}
-	if st.IsDir() {
-		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeBadRequest, "is a directory"))
+	// Send compressed when the cache decided gzip is a win; else identity.
+	// The FE inflates per the Encoding field (wash-fetch.ts).
+	payload := entry.raw
+	encoding := ""
+	if entry.gz != nil {
+		payload = entry.gz
+		encoding = "gzip"
 	}
-	// Read the whole file up front, then stream stable, non-overlapping
-	// slices of it. WriteRawFrameClass hands the payload to the scheduler,
-	// which drainLoop flushes ASYNCHRONOUSLY without copying — so a reused
-	// read buffer would be overwritten before its frame is sent, scrambling
-	// any asset larger than one chunk. (The bundle streamer slices one
-	// whole buffer for exactly this reason.) Assets are small, so the
-	// whole-file read is cheap.
-	data, rerr := io.ReadAll(f)
-	if rerr != nil {
-		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeInternal, rerr.Error()))
-	}
-	ct := mime.TypeByExtension(path.Ext(clean))
 	id := s.router.allocChannelID()
-	if err := s.WriteCtrl(wire.NewShellAssetReadOK(m.ReqID, id, int64(len(data)), ct)); err != nil {
+	if err := s.WriteCtrl(wire.NewShellAssetReadOK(m.ReqID, id, int64(len(payload)), entry.mime, encoding)); err != nil {
 		return err
 	}
 	// Bind so the shell knows the channel id maps to an asset stream.
@@ -338,18 +378,24 @@ func (s *ShellSession) handleAssetRead(m wire.ShellAssetRead) error {
 	}); err != nil {
 		return err
 	}
-	// Stream in chunks, slicing the stable buffer. Interactive class so the
-	// strict-priority scheduler can't let the Unbind overtake data.
+	// Stream in chunks, slicing the cached (immutable) buffer. Background
+	// class: assets are behind the desktop's gradient fallback, so they
+	// yield to keystrokes, control, and the bundles that gate a launching
+	// window. The FE completes on byte-count (the Size above), so the
+	// higher-priority Unbind overtaking these frames is harmless
+	// (docs/QOS.md tc reclass).
 	const chunkSize = 64 * 1024
-	for off := 0; off < len(data); off += chunkSize {
+	for off := 0; off < len(payload); off += chunkSize {
 		end := off + chunkSize
-		if end > len(data) {
-			end = len(data)
+		if end > len(payload) {
+			end = len(payload)
 		}
-		if werr := s.WriteRawFrameClass(id, data[off:end], wire.ClassInteractive); werr != nil {
+		if werr := s.WriteRawFrameClass(id, payload[off:end], wire.ClassBackground); werr != nil {
 			return werr
 		}
 	}
+	// Account raw vs on-the-wire bytes for the compression-ratio readout.
+	s.statsLink().recordCompression(len(entry.raw), len(payload))
 	return s.WriteCtrl(wire.NewShellChannelUnbind(id, "asset complete"))
 }
 
@@ -713,8 +759,16 @@ func (s *ShellSession) WriteRawFrameClass(channelID uint32, payload []byte, clas
 	// Credit gate (Bulk only; Interactive is transactional).
 	if class == wire.ClassBulk && s.router != nil {
 		if b := s.router.lookupChannel(channelID); b != nil && b.credit != nil {
-			if err := b.credit.Reserve(context.Background(), uint64(len(payload))); err != nil {
-				return err
+			n := uint64(len(payload))
+			// Fast path: credit available now. Otherwise the FE hasn't
+			// granted enough bytes yet — record the credit stall and time
+			// how long the producer is parked (the backpressure signal).
+			if !b.credit.TryReserve(n) {
+				t0 := time.Now()
+				if err := b.credit.Reserve(context.Background(), n); err != nil {
+					return err
+				}
+				s.statsLink().recordCreditStall(time.Since(t0).Nanoseconds())
 			}
 		}
 	}
@@ -736,6 +790,9 @@ func (s *ShellSession) WriteRawFrameClass(channelID uint32, payload []byte, clas
 func (s *ShellSession) tryWriteRawBulk(b *channelBinding, payload []byte) bool {
 	n := uint64(len(payload))
 	if b.credit != nil && !b.credit.TryReserve(n) {
+		// FE behind: credit exhausted, so this live frame is suppressed
+		// (docs/PTY_ROBUST.md Fix B). Count it as a Bulk drop.
+		s.statsLink().recordDrop(wire.ClassBulk)
 		return false
 	}
 	f := wire.Frame{Flags: wire.FlagEnd, Channel: b.channelID, Payload: payload}.WithClass(wire.ClassBulk)
@@ -813,5 +870,8 @@ func (s *ShellSession) drainLoop(ctx context.Context) {
 			s.scheduler.Close()
 			return
 		}
+		// Frame is on the wire — account it against its class for the
+		// link-health stats (per-class throughput).
+		s.scheduler.Stats.recordTx(f.Class(), len(f.Payload))
 	}
 }

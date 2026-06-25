@@ -526,6 +526,15 @@ type ShellChannelBind struct {
 	// carries (docs/REMOTE.md). The shell routes this channel's bytes to
 	// the matching origin's RouterClient. Empty for all other kinds.
 	Origin string `json:"origin,omitempty"`
+	// Encoding is the content-coding of a Kind="bundle" channel's bytes:
+	// "" identity, "gzip" when the router pre-compressed the FE bundle (the
+	// shell inflates before blob-importing). Unused by other kinds.
+	Encoding string `json:"encoding,omitempty"`
+	// Size is the on-the-wire (post-encoding) byte count for a Kind="bundle"
+	// channel, so the shell can complete the transfer on byte-count rather
+	// than waiting for the Unbind (docs/QOS.md). This lets bundle data ride a
+	// lower-priority class without the Unbind overtaking it.
+	Size int64 `json:"size,omitempty"`
 }
 
 // NewShellChannelBind binds an app-opened raw channel to a window. The
@@ -552,12 +561,14 @@ func NewShellChannelResync(channelID, windowID uint32, kind string) ShellChannel
 	return ShellChannelResync{T: TShellChannelResync, ChannelID: channelID, WindowID: windowID, Kind: kind}
 }
 
-func NewShellChannelBindBundle(channelID uint32, instanceID string) ShellChannelBind {
+func NewShellChannelBindBundle(channelID uint32, instanceID, encoding string, size int64) ShellChannelBind {
 	return ShellChannelBind{
 		T:          TShellChannelBind,
 		ChannelID:  channelID,
 		Kind:       ChannelKindBundle,
 		InstanceID: instanceID,
+		Encoding:   encoding,
+		Size:       size,
 	}
 }
 
@@ -700,10 +711,15 @@ type ShellAssetReadOK struct {
 	ChannelID uint32 `json:"channel_id"`
 	Size      int64  `json:"size"`
 	Mime      string `json:"mime,omitempty"`
+	// Encoding is the content-coding of the bytes that follow: "" for
+	// identity, "gzip" when the router pre-compressed a compressible asset
+	// (the FE inflates via DecompressionStream). Size is the on-the-wire
+	// (post-encoding) byte count.
+	Encoding string `json:"encoding,omitempty"`
 }
 
-func NewShellAssetReadOK(reqID uint64, channelID uint32, size int64, mime string) ShellAssetReadOK {
-	return ShellAssetReadOK{T: TShellAssetReadOK, ReqID: reqID, ChannelID: channelID, Size: size, Mime: mime}
+func NewShellAssetReadOK(reqID uint64, channelID uint32, size int64, mime, encoding string) ShellAssetReadOK {
+	return ShellAssetReadOK{T: TShellAssetReadOK, ReqID: reqID, ChannelID: channelID, Size: size, Mime: mime, Encoding: encoding}
 }
 
 // ShellAssetReadErr: router rejects the pull (typically ErrCodeNotFound

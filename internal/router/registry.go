@@ -71,6 +71,22 @@ type Entry struct {
 	Reason      string // empty when valid
 	Bundle      []byte // FE bundle bytes (may be nil)
 	PanelBundle []byte // settings-panel bundle bytes (may be nil)
+
+	// bundleGz caches a gzip encoding of Bundle, built once on first
+	// delivery (docs/QOS.md). Lazy so router boot isn't taxed gzipping
+	// bundles for apps that never launch. nil after build = identity.
+	bundleGzOnce sync.Once
+	bundleGz     []byte
+}
+
+// bundleGzip returns a gzip encoding of the FE bundle when it's a
+// worthwhile win (built + cached on first call), or nil meaning "send
+// identity". Safe for concurrent callers via sync.Once.
+func (e *Entry) bundleGzip() []byte {
+	e.bundleGzOnce.Do(func() {
+		e.bundleGz = gzipIfSmaller(e.Bundle)
+	})
+	return e.bundleGz
 }
 
 // Enabled reports whether the entry is usable (has a manifest and no

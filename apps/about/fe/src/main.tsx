@@ -160,6 +160,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [catalog, setCatalog] = createSignal<CatalogApp[]>([]);
   const [sortKey, setSortKey] = createSignal<SortKey>('rss');
   const [sortDesc, setSortDesc] = createSignal(true);
+  // Link-health telemetry (docs/QOS.md): the full bag, pushed ~1/s.
+  const [link, setLink] = createSignal<WashLinkHealth | null>(window.wash.linkStats?.() ?? null);
 
   const handleBE = (m: any) => {
     if (m?.kind === 'about.info') setInfo(m as AboutInfo);
@@ -174,9 +176,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     window.addEventListener('resize', onResize);
     setCatalog(window.wash.catalog() ?? []);
     const offCatalog = window.wash.onCatalog((apps) => setCatalog(apps ?? []));
+    const offLink = window.wash.onLinkStats?.(setLink);
     onCleanup(() => {
       window.removeEventListener('resize', onResize);
       offCatalog();
+      offLink?.();
     });
   });
 
@@ -214,6 +218,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           onSort={onSort}
         />
         <RegistrySection apps={catalog()} />
+        <Show when={link()}>
+          <Section title="Link">
+            <LinkStatsPanel h={link()!} />
+          </Section>
+        </Show>
         <Section title="Browser">
           <BrowserPanel browser={browser()} />
         </Section>
@@ -569,6 +578,85 @@ const KVRow: Component<{ k: string; v: JSX.Element | string | number }> = (props
     <div style={kvValStyle}>{props.v}</div>
   </div>
 );
+
+// ----- link-health panel (docs/QOS.md) -----
+
+// Per-class arrays are indexed [Interactive, Bulk, Background, Control].
+const LINK_CLASSES = ['Interactive', 'Bulk', 'Background', 'Control'];
+
+const linkSum = (a: number[] | undefined): number => (a ? a.reduce((x, y) => x + y, 0) : 0);
+
+const linkRate = (bps: number): string => {
+  if (bps >= 1e6) return (bps / 1e6).toFixed(1) + ' MB/s';
+  if (bps >= 1e3) return (bps / 1e3).toFixed(0) + ' kB/s';
+  return Math.round(bps) + ' B/s';
+};
+
+const linkUptime = (ms: number): string => {
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+};
+
+// LinkStatsPanel dumps the whole link-health bag: the session running
+// totals as a per-class table, then the scalar counters + derived rates.
+const LinkStatsPanel: Component<{ h: WashLinkHealth }> = (props) => {
+  const s = () => props.h.session;
+  const live = () => props.h.live;
+  const compRatio = () => {
+    const raw = s().raw_bytes;
+    const wire = s().wire_bytes;
+    return wire > 0 && raw > 0 ? `${(raw / wire).toFixed(2)}× (${fmtBytes(raw - wire)} saved)` : '—';
+  };
+  return (
+    <>
+      <table style={tableStyle}>
+        <thead>
+          <tr>
+            <th style={thStyle}>Class</th>
+            <th style={{ ...thStyle, 'text-align': 'right' }}>Tx</th>
+            <th style={{ ...thStyle, 'text-align': 'right' }}>Frames</th>
+            <th style={{ ...thStyle, 'text-align': 'right' }}>QFull</th>
+            <th style={{ ...thStyle, 'text-align': 'right' }}>Drop</th>
+            <th style={{ ...thStyle, 'text-align': 'right' }}>DepthHi</th>
+          </tr>
+        </thead>
+        <tbody>
+          <For each={LINK_CLASSES}>
+            {(name, i) => (
+              <tr>
+                <td style={tdStyle}>{name}</td>
+                <td style={{ ...tdStyle, 'text-align': 'right' }}>{fmtBytes(s().tx_bytes[i()] ?? 0)}</td>
+                <td style={{ ...tdStyle, 'text-align': 'right' }}>{s().tx_frames[i()] ?? 0}</td>
+                <td style={{ ...tdStyle, 'text-align': 'right' }}>{s().queue_full[i()] ?? 0}</td>
+                <td style={{ ...tdStyle, 'text-align': 'right' }}>{s().dropped[i()] ?? 0}</td>
+                <td style={{ ...tdStyle, 'text-align': 'right' }}>{s().depth_hi[i()] ?? 0}</td>
+              </tr>
+            )}
+          </For>
+        </tbody>
+      </table>
+      <KVList>
+        <KVRow k="Session uptime" v={linkUptime(props.h.uptimeMs)} />
+        <KVRow k="Connections" v={props.h.connects} />
+        <KVRow k="Reconnects (this load)" v={props.h.reconnects} />
+        <KVRow k="↓ Down (session)" v={`${fmtBytes(linkSum(s().tx_bytes))} · ${s().tx_frames ? linkSum(s().tx_frames) : 0} frames`} />
+        <KVRow k="↑ Up (session)" v={`${fmtBytes(s().rx_bytes)} · ${s().rx_frames} frames`} />
+        <KVRow k="Rate now ↓ / peak" v={`${linkRate(props.h.rateDownBps)} / ${linkRate(props.h.peakDownBps)}`} />
+        <KVRow k="Rate now ↑" v={linkRate(props.h.rateUpBps)} />
+        <KVRow k="Send buffer" v={fmtBytes(props.h.bufferedAmount)} />
+        <KVRow k="Credit stalls" v={`${live().credit_stalls} · ${(live().credit_wait_ns / 1e6).toFixed(1)} ms waited`} />
+        <KVRow k="Compression" v={compRatio()} />
+      </KVList>
+    </>
+  );
+};
 
 // ----- styles -----
 
