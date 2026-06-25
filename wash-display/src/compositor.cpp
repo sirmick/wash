@@ -748,13 +748,15 @@ static std::map<uint32_t, PopupTarget> g_popup_reg;
 // popup's offset within the parent content (canvas space = sent_x/sent_y), so
 // parent-window coords convert to popup-local by subtracting it.
 struct PopupGrab {
+    uint32_t parent_win = 0;
     struct wlr_surface* surface = nullptr;
     Server* server = nullptr;
     int off_x = 0, off_y = 0;
 };
 static std::vector<PopupGrab> g_popup_grabs;
-static void push_popup_grab(struct wlr_surface* s, Server* srv, int ox, int oy) {
-    g_popup_grabs.push_back(PopupGrab{s, srv, ox, oy});
+static void push_popup_grab(uint32_t parent_win, struct wlr_surface* s, Server* srv,
+                            int ox, int oy) {
+    g_popup_grabs.push_back(PopupGrab{parent_win, s, srv, ox, oy});
 }
 static void pop_popup_grab(struct wlr_surface* s) {
     for (auto it = g_popup_grabs.begin(); it != g_popup_grabs.end(); ++it) {
@@ -823,7 +825,7 @@ void popup_map(struct wl_listener* listener, void* /*data*/) {
     g_popup_reg[p->chan] = PopupTarget{p->popup->base->surface, p->server};
     // A popup that requested a seat grab (menus, not tooltips) owns the pointer.
     if (p->popup->seat)
-        push_popup_grab(p->popup->base->surface, p->server, ox, oy);
+        push_popup_grab(root, p->popup->base->surface, p->server, ox, oy);
     wlr_log(WLR_INFO, "wash-display: popup mapped parent_win=%u chan=%u off=%d,%d grab=%d",
             root, p->chan, ox, oy, p->popup->seat ? 1 : 0);
 }
@@ -986,6 +988,61 @@ struct XSurface {
 // override-redirect menu that doesn't set transient-for.
 static XSurface* g_active_x_toplevel = nullptr;
 
+static xcb_atom_t xatom(const char* name) {
+    static xcb_connection_t* conn = nullptr;
+    static std::map<std::string, xcb_atom_t> cache;
+    auto it = cache.find(name);
+    if (it != cache.end()) return it->second;
+    if (!conn) {
+        conn = xcb_connect(nullptr, nullptr);
+        if (!conn || xcb_connection_has_error(conn)) {
+            if (conn) xcb_disconnect(conn);
+            conn = nullptr;
+            cache[name] = static_cast<xcb_atom_t>(XCB_ATOM_NONE);
+            return static_cast<xcb_atom_t>(XCB_ATOM_NONE);
+        }
+    }
+    xcb_intern_atom_cookie_t cookie =
+        xcb_intern_atom(conn, 0, (uint16_t)std::strlen(name), name);
+    xcb_intern_atom_reply_t* reply = xcb_intern_atom_reply(conn, cookie, nullptr);
+    xcb_atom_t atom = reply ? reply->atom : static_cast<xcb_atom_t>(XCB_ATOM_NONE);
+    free(reply);
+    cache[name] = atom;
+    return atom;
+}
+
+static bool xsurface_has_type(struct wlr_xwayland_surface* xs, const char* type) {
+    xcb_atom_t atom = xatom(type);
+    if (atom == XCB_ATOM_NONE || !xs || !xs->window_type) return false;
+    for (size_t i = 0; i < xs->window_type_len; i++) {
+        if (xs->window_type[i] == atom) return true;
+    }
+    return false;
+}
+
+static bool xsurface_takes_pointer_grab(struct wlr_xwayland_surface* xs) {
+    if (!xs) return false;
+    // Toolkits also use override-redirect windows for passive helper UI.
+    // Those surfaces must render as overlays, but must not steal all future
+    // parent-window input. Menus/combo dropdowns are the pointer-owning cases.
+    if (xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_TOOLTIP") ||
+        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_NOTIFICATION") ||
+        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_DND") ||
+        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_SPLASH") ||
+        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_UTILITY")) {
+        return false;
+    }
+    if (xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU") ||
+        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_POPUP_MENU") ||
+        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_COMBO") ||
+        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_MENU")) {
+        return true;
+    }
+    // Preserve legacy behavior for untyped override-redirect popups: older
+    // clients may still use them as real grabbed menus.
+    return true;
+}
+
 // xpopup_send_geometry writes the offset control frame (< 45 bytes JSON).
 static void xpopup_send_geometry(XSurface* x) {
     json g = {{"x", x->sent_x}, {"y", x->sent_y}};
@@ -1020,10 +1077,12 @@ static bool xpopup_map(XSurface* x) {
     x->sent_y = x->xsurf->y - parent->xsurf->y;
     xpopup_send_geometry(x);
     g_popup_reg[x->popup_chan] = PopupTarget{x->xsurf->surface, x->server};
-    // X11 override-redirect menus take an X pointer grab — own the pointer.
-    push_popup_grab(x->xsurf->surface, x->server, x->sent_x, x->sent_y);
-    wlr_log(WLR_INFO, "wash-display: X11 popup mapped parent_win=%u chan=%u off=%d,%d",
-            parent->sink.win, x->popup_chan, x->sent_x, x->sent_y);
+    bool grab = xsurface_takes_pointer_grab(x->xsurf);
+    if (grab)
+        push_popup_grab(parent->sink.win, x->xsurf->surface, x->server,
+                        x->sent_x, x->sent_y);
+    wlr_log(WLR_INFO, "wash-display: X11 popup mapped parent_win=%u chan=%u off=%d,%d grab=%d",
+            parent->sink.win, x->popup_chan, x->sent_x, x->sent_y, grab ? 1 : 0);
     return true;
 }
 
@@ -1298,31 +1357,39 @@ static void inject_input(const json& data) {
         surface = it->second.surface;
         srv = it->second.server;
         g_ptr_win = 0; // over a popup → cursor-shape routing skips it (v1)
-    } else if (!g_popup_grabs.empty()) {
-        // A menu holds a pointer grab (M8d): parent-window input is redirected
-        // to it. Parent-canvas coords → popup-local by subtracting the popup's
-        // offset within the parent. A press that lands outside the popup bounds
-        // reaches the menu client as an outside-click → it dismisses itself
-        // (and the parent never sees the stray event that used to kill it).
-        PopupGrab& gr = g_popup_grabs.back();
-        surface = gr.surface;
-        srv = gr.server;
-        g_ptr_win = 0;
-        coord_dx = -gr.off_x;
-        coord_dy = -gr.off_y;
     } else {
         uint32_t win = data.value("win", 0U);
-        if (!resolve_win(win, &surface, &srv)) return;
-        g_ptr_win = win;
-        // The capture is cropped to the xdg window geometry (M5c — drops the
-        // CSD shadow margin), so the FE's canvas coords are relative to the
-        // crop origin. Add it back for true surface-local coords (X11 has no
-        // xdg geometry → zero).
-        if (struct wlr_xdg_surface* xs = wlr_xdg_surface_try_from_wlr_surface(surface)) {
-            struct wlr_box geo{};
-            wlr_xdg_surface_get_geometry(xs, &geo);
-            coord_dx = geo.x;
-            coord_dy = geo.y;
+        PopupGrab* active_grab = nullptr;
+        for (auto it = g_popup_grabs.rbegin(); it != g_popup_grabs.rend(); ++it) {
+            if (it->parent_win == win) {
+                active_grab = &*it;
+                break;
+            }
+        }
+        if (active_grab) {
+            // A menu holds a pointer grab (M8d): parent-window input is
+            // redirected to it. Parent-canvas coords → popup-local by
+            // subtracting the popup's offset within the parent. A press that
+            // lands outside the popup bounds reaches the menu client as an
+            // outside-click → it dismisses itself.
+            surface = active_grab->surface;
+            srv = active_grab->server;
+            g_ptr_win = 0;
+            coord_dx = -active_grab->off_x;
+            coord_dy = -active_grab->off_y;
+        } else {
+            if (!resolve_win(win, &surface, &srv)) return;
+            g_ptr_win = win;
+            // The capture is cropped to the xdg window geometry (M5c — drops the
+            // CSD shadow margin), so the FE's canvas coords are relative to the
+            // crop origin. Add it back for true surface-local coords (X11 has no
+            // xdg geometry → zero).
+            if (struct wlr_xdg_surface* xs = wlr_xdg_surface_try_from_wlr_surface(surface)) {
+                struct wlr_box geo{};
+                wlr_xdg_surface_get_geometry(xs, &geo);
+                coord_dx = geo.x;
+                coord_dy = geo.y;
+            }
         }
     }
     if (!surface || !srv || !srv->seat) return;
