@@ -11,9 +11,9 @@ cmd/*/assets/
 internal/apps/*/assets/
 internal/runner/*/assets/
 apps/*/be/assets/
-# wash-login mirrors the shell runtime via $(LOGIN_SHELL_STAMP); same
-# build-artifact treatment as the router's assets above.
-internal/login/assets/shell/
+# The shared shell-runtime bundle (wash-router + wash-login embed it
+# from one package) is staged here by $(SHELL_STAMP); build artifact.
+internal/shellassets/assets/
 web/shell/public/vendor/
 e2e/test-results/
 e2e/playwright-report/

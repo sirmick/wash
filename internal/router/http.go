@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/coder/websocket"
@@ -73,9 +72,10 @@ shell into <code>cmd/wash-router/assets/</code>.</p>
 // GET /assets/... serve the shell runtime; GET /ws upgrades to the
 // shell WebSocket transport.
 type HTTPServer struct {
-	router *Router
-	assets http.FileSystem
-	mux    *http.ServeMux
+	router  *Router
+	assets  http.FileSystem
+	mux     *http.ServeMux
+	handler http.Handler // mux wrapped with the httpsec.Guard middleware
 }
 
 // NewHTTPServer returns a ready-to-mount handler. assets may be nil.
@@ -93,6 +93,11 @@ func NewHTTPServer(r *Router, assets http.FileSystem) *HTTPServer {
 	// routes it here. See ingress.go.
 	s.mux.HandleFunc("/app/", s.router.handleIngress)
 	s.mux.HandleFunc("/", s.handleRoot)
+	// Host-allowlist + baseline security headers (shared with wash-login).
+	s.handler = httpsec.Guard(s.mux, s.bindHost(), s.router.cfg.HostAllowlist,
+		func(host, remote string) {
+			s.router.log("router: rejected host=%q from=%s: not in HostAllowlist", host, remote)
+		})
 	return s
 }
 
@@ -164,18 +169,7 @@ func (s *HTTPServer) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !httpsec.HostAllowed(r.Host, s.bindHost(), s.router.cfg.HostAllowlist) {
-		s.router.log("router: rejected host=%q from=%s: not in HostAllowlist", r.Host, r.RemoteAddr)
-		http.Error(w, "forbidden host", http.StatusForbidden)
-		return
-	}
-	// Baseline hardening headers on everything we serve ourselves, but
-	// not on the /app/<token>/ ingress proxy — those responses carry the
-	// embedded backend's own framing/CSP policy.
-	if !strings.HasPrefix(r.URL.Path, "/app/") {
-		httpsec.SetSecurityHeaders(w.Header())
-	}
-	s.mux.ServeHTTP(w, r)
+	s.handler.ServeHTTP(w, r)
 }
 
 // bindHost is the host part of cfg.Listen (without :port), used by the
@@ -230,9 +224,7 @@ func (s *HTTPServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 	// Iterating fast: tell browsers not to heuristic-cache the
 	// shell bundle so a regular reload always picks up the latest
 	// build. Add a long-lived cache path later when versioning lands.
-	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-	w.Header().Set("Pragma", "no-cache")
-	w.Header().Set("Expires", "0")
+	httpsec.SetNoCache(w.Header())
 	http.FileServer(s.assets).ServeHTTP(w, r)
 }
 

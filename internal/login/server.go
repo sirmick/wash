@@ -34,19 +34,11 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/httpsec"
+	"github.com/sirmick/wash/internal/shellassets"
 )
 
 //go:embed assets/*.html
 var assetsFS embed.FS
-
-// shellAssetsFS holds the shell-runtime files (index.html, shell.js,
-// icons.svg, vendor/*) that wash-login serves under / for authed
-// users. Copy-staged from internal/runner/router/assets by the
-// Makefile's $(LOGIN_SHELL_STAMP) rule. Tagged all: so the brotli
-// .br siblings come along too.
-//
-//go:embed all:assets/shell
-var shellAssetsFS embed.FS
 
 // Server is the HTTP handler set for wash-login. Construct via
 // NewServer, then call ServeHTTP / mount onto your own listener.
@@ -190,19 +182,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/sessions", s.handleSessionsPage)
 	mux.HandleFunc("/sessions/new", s.handleSessionsNew)
 	mux.HandleFunc("/sessions/end", s.handleSessionsEnd)
-	// Shell-runtime assets that bootstrap the desktop after auth.
-	// Copy-staged from the router's embedded set; served verbatim
-	// here so browsers get them from wash-login (the only HTTP
-	// origin in multi-user deployments — per-user routers are
-	// Unix-socket only). Authed users get the shell page at /.
-	if sub, err := fs.Sub(shellAssetsFS, "assets/shell"); err == nil {
+	// Shell-runtime assets that bootstrap the desktop after auth, served
+	// from the shared shellassets embed (the same bundle wash-router
+	// serves over HTTP/asset.read). wash-login is the only HTTP origin in
+	// multi-user deployments — per-user routers are Unix-socket only — so
+	// browsers get them from here. Authed users get the shell page at /.
+	if sub, err := fs.Sub(shellassets.FS, "assets"); err == nil {
 		// no-cache: these bundles are unversioned and change on every
 		// wash upgrade. Without it a browser keeps a stale module past an
 		// upgrade — e.g. a cached /vendor/wash-ui.js missing a freshly
 		// added export — and apps that import it die with a module
 		// mismatch. Mirrors the router's own shell-asset headers
 		// (router/http.go handleRoot).
-		shellHandler := noCacheStatic(http.FileServer(http.FS(sub)))
+		shellHandler := httpsec.NoCacheStatic(http.FileServer(http.FS(sub)))
 		for _, prefix := range []string{"/shell.js", "/icons.svg", "/wash-logo.svg", "/vendor/"} {
 			mux.Handle(prefix, shellHandler)
 		}
@@ -210,34 +202,13 @@ func (s *Server) Handler() http.Handler {
 	return s.harden(mux)
 }
 
-// harden wraps the login mux with the Host-header allowlist (a DNS-
-// rebinding defense, permissive by default) and the baseline security
-// headers — skipping the headers on /app/<token>/ so the embedded
-// backend keeps its own framing/CSP policy.
+// harden wraps the login mux with the shared Host-allowlist + baseline
+// security-header middleware (httpsec.Guard) — the same defenses the
+// standalone router applies, headers skipped on /app/<token>/ so the
+// embedded backend keeps its own framing/CSP policy.
 func (s *Server) harden(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !httpsec.HostAllowed(r.Host, "", s.hostAllow) {
-			s.log.Printf("login: reject host=%q from=%s reason=not-in-allowlist", r.Host, r.RemoteAddr)
-			http.Error(w, "forbidden host", http.StatusForbidden)
-			return
-		}
-		if !strings.HasPrefix(r.URL.Path, "/app/") {
-			httpsec.SetSecurityHeaders(w.Header())
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// noCacheStatic wraps a static-asset handler so browsers always
-// revalidate the unversioned shell-runtime bundles, picking up a new
-// build on the next navigation instead of serving a stale, incoherent
-// module set after an upgrade.
-func noCacheStatic(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-		w.Header().Set("Pragma", "no-cache")
-		w.Header().Set("Expires", "0")
-		h.ServeHTTP(w, r)
+	return httpsec.Guard(next, "", s.hostAllow, func(host, remote string) {
+		s.log.Printf("login: reject host=%q from=%s reason=not-in-allowlist", host, remote)
 	})
 }
 
@@ -621,7 +592,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	// Serve shell index.html. If the embedded asset is missing
 	// (test build without web-shell), fall back to the picker
 	// redirect so the user has somewhere to go.
-	body, err := shellAssetsFS.ReadFile("assets/shell/index.html")
+	body, err := fs.ReadFile(shellassets.FS, "assets/index.html")
 	if err != nil {
 		http.Redirect(w, r, "/sessions", http.StatusFound)
 		return

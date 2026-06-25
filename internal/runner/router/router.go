@@ -13,7 +13,6 @@ package routerrun
 
 import (
 	"context"
-	"embed"
 	"errors"
 	"flag"
 	"fmt"
@@ -33,6 +32,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/router"
+	"github.com/sirmick/wash/internal/shellassets"
 	"github.com/sirmick/wash/internal/wire"
 )
 
@@ -86,9 +86,6 @@ func (bi buildInfo) String() string {
 	return strings.Join(parts, " ")
 }
 
-//go:embed all:assets
-var assetsFS embed.FS
-
 // resolvedExe returns the EvalSymlinks-resolved path of the running
 // wash-router binary, or "" on failure. The dev-reload watcher and
 // the apps-dir default both want the canonicalised path so their
@@ -121,7 +118,7 @@ func defaultAppsDir() string {
 // a user can drop assets — theme wallpapers, icons — there and have them
 // served live with no rebuild, while built-in chrome stays in the binary.
 func shellAssets() (http.FileSystem, error) {
-	sub, err := fs.Sub(assetsFS, "assets")
+	sub, err := fs.Sub(shellassets.FS, "assets")
 	if err != nil {
 		return nil, err
 	}

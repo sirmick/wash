@@ -168,8 +168,8 @@ func TestAuthSuccess(t *testing.T) {
 	}
 
 	// Follow-up GET / should serve the shell index.html for authed
-	// users. The asset only exists when the Makefile has staged
-	// shell assets under internal/login/assets/shell — in test
+	// users. The asset only exists when the Makefile has staged the
+	// shared shell bundle under internal/shellassets/assets — in test
 	// builds it may be missing, in which case handleRoot falls
 	// back to a /sessions redirect. Accept either outcome.
 	resp2, err := client.Get(ts.URL + "/")
