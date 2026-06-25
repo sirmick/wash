@@ -26,6 +26,7 @@ interface DisplayState {
 }
 
 const DEFAULT_DPI = 96;
+type ScaleMode = 'auto' | '1' | '2';
 const DPI_OPTIONS: [string, string][] = [
   ['72', '72 dpi'],
   ['96', '96 dpi'],
@@ -34,6 +35,11 @@ const DPI_OPTIONS: [string, string][] = [
   ['168', '168 dpi'],
   ['192', '192 dpi'],
 ];
+const SCALE_OPTIONS: [ScaleMode, string][] = [
+  ['auto', 'Automatic'],
+  ['1', '1x'],
+  ['2', '2x HiDPI'],
+];
 
 function parseDpi(v: unknown): number {
   const n = typeof v === 'number' ? v : Number(v);
@@ -41,16 +47,47 @@ function parseDpi(v: unknown): number {
   return Math.max(72, Math.min(240, Math.round(n)));
 }
 
+function parseScaleMode(v: unknown): ScaleMode {
+  return v === '1' || v === '2' || v === 'auto' ? v : 'auto';
+}
+
+function shellDisplayScaleMode(): ScaleMode {
+  const wash = (window as unknown as { wash?: { displayScaleMode?: () => ScaleMode } }).wash;
+  return parseScaleMode(wash?.displayScaleMode?.());
+}
+
+function setShellDisplayScaleMode(mode: ScaleMode): void {
+  const wash = (window as unknown as {
+    wash?: { setDisplayScaleMode?: (mode: ScaleMode) => ScaleMode };
+  }).wash;
+  wash?.setDisplayScaleMode?.(mode);
+}
+
 const Panel = (props: SettingsPanelProps) => {
   const port = props.port;
   const [state, setState] = createSignal<DisplayState | null>(null);
   const [dpi, setDpi] = createSignal(String(DEFAULT_DPI));
+  const [scaleMode, setScaleMode] = createSignal<ScaleMode>(shellDisplayScaleMode());
+  const [config, setConfig] = createSignal<Record<string, unknown>>({});
+
+  const writeConfig = (patch: Record<string, unknown>) => {
+    const next = { ...config(), ...patch };
+    setConfig(next);
+    port.writeConfig('display', next);
+  };
 
   const applyDpi = (next: number, persist: boolean) => {
     const value = parseDpi(next);
     setDpi(String(value));
     port.send({ kind: 'display.set_dpi', dpi: value });
-    if (persist) port.writeConfig('display', { dpi: value });
+    if (persist) writeConfig({ dpi: value });
+  };
+
+  const applyScaleMode = (next: ScaleMode, persist: boolean) => {
+    const value = parseScaleMode(next);
+    setScaleMode(value);
+    setShellDisplayScaleMode(value);
+    if (persist) writeConfig({ scale_mode: value });
   };
 
   onMount(() => {
@@ -70,8 +107,14 @@ const Panel = (props: SettingsPanelProps) => {
       }
     });
     const offCfg = port.readConfig('display', (value) => {
+      setConfig({ ...(value || {}), ...config() });
       if (value && Object.prototype.hasOwnProperty.call(value, 'dpi')) {
         applyDpi(parseDpi(value.dpi), false);
+      }
+      if (value && Object.prototype.hasOwnProperty.call(value, 'scale_mode')) {
+        applyScaleMode(parseScaleMode(value.scale_mode), false);
+      } else {
+        setScaleMode(shellDisplayScaleMode());
       }
     });
     port.send({ kind: 'subscribe' });
@@ -111,6 +154,14 @@ const Panel = (props: SettingsPanelProps) => {
                 options={DPI_OPTIONS}
                 data-testid="display-dpi"
                 onChange={(v) => applyDpi(parseDpi(v), true)}
+              />
+            </Row>
+            <Row label="Scale">
+              <Select
+                value={scaleMode()}
+                options={SCALE_OPTIONS}
+                data-testid="display-scale-mode"
+                onChange={(v) => applyScaleMode(parseScaleMode(v), true)}
               />
             </Row>
             <div>

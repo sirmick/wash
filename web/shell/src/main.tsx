@@ -608,7 +608,23 @@ const pendingClipboardGets = local.pendingClipboardGets;
 
 const DISPLAY_APP_ID = 'com.wash.display';
 const DISPLAY_HIDPI_THRESHOLD = 1.5;
+const DISPLAY_SCALE_MODE_KEY = 'wash.display.scaleMode';
+type DisplayScaleMode = 'auto' | '1' | '2';
+
+function parseDisplayScaleMode(value: unknown): DisplayScaleMode {
+  return value === '1' || value === '2' || value === 'auto' ? value : 'auto';
+}
+
+function initialDisplayScaleMode(): DisplayScaleMode {
+  try {
+    return parseDisplayScaleMode(window.localStorage?.getItem(DISPLAY_SCALE_MODE_KEY));
+  } catch {
+    return 'auto';
+  }
+}
+
 const [displayDpr, setDisplayDpr] = createSignal(window.devicePixelRatio || 1);
+const [displayScaleMode, setDisplayScaleModeSignal] = createSignal<DisplayScaleMode>(initialDisplayScaleMode());
 const sentDisplayMetrics = new Map<Origin, string>();
 
 function refreshDisplayDpr(): void {
@@ -619,17 +635,38 @@ function refreshDisplayDpr(): void {
 window.addEventListener('resize', refreshDisplayDpr);
 window.visualViewport?.addEventListener('resize', refreshDisplayDpr);
 
+function currentDisplayScale(): 1 | 2 {
+  const mode = displayScaleMode();
+  if (mode === '1') return 1;
+  if (mode === '2') return 2;
+  return displayDpr() >= DISPLAY_HIDPI_THRESHOLD ? 2 : 1;
+}
+
+function setDisplayScaleMode(mode: unknown): DisplayScaleMode {
+  const next = parseDisplayScaleMode(mode);
+  setDisplayScaleModeSignal(next);
+  try {
+    window.localStorage?.setItem(DISPLAY_SCALE_MODE_KEY, next);
+  } catch {
+    /* localStorage can be blocked; the live setting still applies */
+  }
+  publishDisplayMetricsToAll();
+  return next;
+}
+
 function currentDisplayMetrics() {
   const s = screenSize();
   const dpr = displayDpr();
-  const scale = dpr >= DISPLAY_HIDPI_THRESHOLD ? 2 : 1;
+  const scale = currentDisplayScale();
   const cssW = Math.max(1, Math.round(s.w));
   const cssH = Math.max(1, Math.round(s.h));
+  (window as unknown as { __washDisplayScale?: number }).__washDisplayScale = scale;
   return {
     kind: 'display.set_metrics',
     css_w: cssW,
     css_h: cssH,
     dpr,
+    scale_mode: displayScaleMode(),
     scale,
     w: cssW * scale,
     h: cssH * scale,
@@ -638,7 +675,7 @@ function currentDisplayMetrics() {
 
 function publishDisplayMetrics(client: RouterClient): void {
   const metrics = currentDisplayMetrics();
-  const key = `${metrics.w}x${metrics.h}@${metrics.scale}:${metrics.css_w}x${metrics.css_h}`;
+  const key = `${metrics.w}x${metrics.h}@${metrics.scale}:${metrics.css_w}x${metrics.css_h}:${metrics.scale_mode}`;
   if (sentDisplayMetrics.get(client.origin) === key) return;
   sentDisplayMetrics.set(client.origin, key);
   client.conn.sendCtrl({
@@ -669,6 +706,7 @@ installDisplayMetricsPublisher(local);
 createEffect(() => {
   screenSize();
   displayDpr();
+  displayScaleMode();
   publishDisplayMetricsToAll();
 });
 
@@ -1106,6 +1144,8 @@ declare global {
       settingsPanels(): PanelDesc[];
       onSettingsPanels(cb: (panels: PanelDesc[]) => void): () => void;
       loadSettingsPanel(appID: string): Promise<void>;
+      displayScaleMode(): DisplayScaleMode;
+      setDisplayScaleMode(mode: DisplayScaleMode): DisplayScaleMode;
       windows(): WindowInfo[];
       onWindowsChanged(cb: (windows: WindowInfo[]) => void): () => void;
       // origin (optional) addresses the WM intent to a specific router:
@@ -1319,6 +1359,8 @@ window.wash = {
   settingsPanels: () => panelsSub.value,
   onSettingsPanels: (cb: (panels: PanelDesc[]) => void) => panelsSub.on(cb),
   loadSettingsPanel: (appID: string) => loadSettingsPanel((m) => conn.sendCtrl(m), appID),
+  displayScaleMode: () => displayScaleMode(),
+  setDisplayScaleMode: (mode) => setDisplayScaleMode(mode),
   windows: () => windowsSub.value,
   onWindowsChanged: (cb) => windowsSub.on(cb),
   focusWindow(id, origin) {

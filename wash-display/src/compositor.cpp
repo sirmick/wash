@@ -150,6 +150,13 @@ static int clamp_scale(int scale) {
 static int output_w() { return g_output_w.load(); }
 static int output_h() { return g_output_h.load(); }
 static int output_scale() { return g_output_scale.load(); }
+static int output_logical_w() { return std::max(1, output_w() / output_scale()); }
+static int output_logical_h() { return std::max(1, output_h() / output_scale()); }
+static uint32_t physical_to_logical(int px) {
+    int scale = output_scale();
+    if (scale <= 1) return (uint32_t)std::max(0, px);
+    return (uint32_t)std::max(1, (px + scale - 1) / scale);
+}
 
 struct Server {
     struct wl_display* display = nullptr;
@@ -322,11 +329,12 @@ static void sink_frame(WindowSink& s, WireConn* conn, struct wlr_surface* surfac
     // the frame entirely, the per-frame win of damage tracking. The crop
     // (when set) is the xdg window geometry, stripping the CSD shadow margin;
     // force_full bypasses the damage skip for tree-driven captures (M7).
-    if (!s.cap.capture(surface, renderer, crop_x, crop_y, crop_w, crop_h, force_full)) return;
+    if (!s.cap.capture(surface, renderer, crop_x, crop_y, crop_w, crop_h,
+                       force_full, false, output_scale())) return;
 
     // Tell the router when the content size changed so the shell frame
     // tracks it (window.geometry). Fire-and-forget; only on actual change.
-    uint32_t cw = (uint32_t)s.cap.width(), ch = (uint32_t)s.cap.height();
+    uint32_t cw = physical_to_logical(s.cap.width()), ch = physical_to_logical(s.cap.height());
     if (cw && ch && (cw != s.sent_w || ch != s.sent_h)) {
         conn->report_geometry(s.win, cw, ch);
         s.sent_w = cw;
@@ -449,7 +457,7 @@ void output_frame(struct wl_listener* listener, void* /*data*/) {
     for (auto& [win, t] : xdgs) {
         if (!t->xdg_toplevel) continue;
         struct wlr_surface* root = t->xdg_toplevel->base->surface;
-        uint64_t sig = tree_signature(root);
+        uint64_t sig = sig_mix(tree_signature(root), (uint64_t)output_scale());
         if (sig == t->sink.tree_sig) continue; // nothing committed → skip
         t->sink.tree_sig = sig;
         // Crop to xdg window geometry (drops the CSD shadow margin); the tree
@@ -483,11 +491,11 @@ static void configure_output_mode(struct wlr_output* output, int dpi) {
     struct wlr_output_state state;
     wlr_output_state_init(&state);
     wlr_output_state_set_enabled(&state, true);
-    // Headless outputs have no fixed modes; set a custom mode. Keep scale at
-    // 1 until full buffer-scale HiDPI lands, otherwise capture/input coords
-    // and the video frame's logical size diverge.
+    // Headless outputs have no fixed modes; set a custom physical mode and
+    // advertise the output scale separately so clients can render HiDPI
+    // buffers while the shell keeps logical wash window coordinates.
     wlr_output_state_set_custom_mode(&state, output_w(), output_h(), 0);
-    wlr_output_state_set_scale(&state, 1.0f);
+    wlr_output_state_set_scale(&state, (float)output_scale());
     wlr_output_commit_state(output, &state);
     wlr_output_state_finish(&state);
 }
@@ -558,8 +566,8 @@ void toplevel_map(struct wl_listener* listener, void* /*data*/) {
 
     struct wlr_box geo{};
     wlr_xdg_surface_get_geometry(t->xdg_toplevel->base, &geo);
-    uint32_t w = geo.width > 0 ? (uint32_t)geo.width : (uint32_t)output_w();
-    uint32_t h = geo.height > 0 ? (uint32_t)geo.height : (uint32_t)output_h();
+    uint32_t w = geo.width > 0 ? (uint32_t)geo.width : (uint32_t)output_logical_w();
+    uint32_t h = geo.height > 0 ? (uint32_t)geo.height : (uint32_t)output_logical_h();
 
     // Blocking wire round-trip; safe here (compositor thread, not the
     // WireConn reader thread). Wayland xdg toplevels are chromeless: every
@@ -596,7 +604,9 @@ void toplevel_request_maximize(struct wl_listener* listener, void* /*data*/) {
     Toplevel* t = wl_container_of(listener, t, request_maximize);
     bool on = t->xdg_toplevel->requested.maximized;
     wlr_xdg_toplevel_set_maximized(t->xdg_toplevel, on);
-    wlr_xdg_toplevel_set_size(t->xdg_toplevel, on ? output_w() : 0, on ? output_h() : 0);
+    wlr_xdg_toplevel_set_size(t->xdg_toplevel,
+                              on ? output_logical_w() : 0,
+                              on ? output_logical_h() : 0);
 }
 
 // toplevel_request_move: the guest asks for an interactive move (its CSD
@@ -632,7 +642,9 @@ void toplevel_request_fullscreen(struct wl_listener* listener, void* /*data*/) {
     Toplevel* t = wl_container_of(listener, t, request_fullscreen);
     bool on = t->xdg_toplevel->requested.fullscreen;
     wlr_xdg_toplevel_set_fullscreen(t->xdg_toplevel, on);
-    wlr_xdg_toplevel_set_size(t->xdg_toplevel, on ? output_w() : 0, on ? output_h() : 0);
+    wlr_xdg_toplevel_set_size(t->xdg_toplevel,
+                              on ? output_logical_w() : 0,
+                              on ? output_logical_h() : 0);
 }
 
 void toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
@@ -842,7 +854,8 @@ void popup_commit(struct wl_listener* listener, void* /*data*/) {
     // Capture → WebP → one framed message (≥45 bytes; the FE distinguishes
     // it from the JSON control frame by length).
     struct wlr_surface* surface = p->popup->base->surface;
-    if (!p->cap.capture(surface, p->server->renderer, 0, 0, 0, 0, false, /*preserve_alpha=*/true)) return;
+    if (!p->cap.capture(surface, p->server->renderer, 0, 0, 0, 0,
+                        false, /*preserve_alpha=*/true, output_scale())) return;
     if (!p->enc_ready || p->enc.width() != p->cap.width() ||
         p->enc.height() != p->cap.height()) {
         p->enc_ready = p->enc.init(p->cap.width(), p->cap.height());
@@ -1031,8 +1044,8 @@ void xsurface_map(struct wl_listener* listener, void* /*data*/) {
     }
     const char* title = x->xsurf->title;
     std::string ttl = title ? title : "X11 Window";
-    uint32_t w = x->xsurf->width  > 0 ? (uint32_t)x->xsurf->width  : (uint32_t)output_w();
-    uint32_t h = x->xsurf->height > 0 ? (uint32_t)x->xsurf->height : (uint32_t)output_h();
+    uint32_t w = x->xsurf->width  > 0 ? (uint32_t)x->xsurf->width  : (uint32_t)output_logical_w();
+    uint32_t h = x->xsurf->height > 0 ? (uint32_t)x->xsurf->height : (uint32_t)output_logical_h();
     // X clients aren't sized implicitly by us — configure them to their
     // own requested geometry so they paint at the expected dimensions.
     wlr_xwayland_surface_configure(x->xsurf, x->xsurf->x, x->xsurf->y,
@@ -1060,7 +1073,8 @@ void xsurface_commit(struct wl_listener* listener, void* /*data*/) {
     XSurface* x = wl_container_of(listener, x, commit);
     if (x->is_popup) {
         if (!x->popup_chan) return;
-        if (!x->sink.cap.capture(x->xsurf->surface, x->server->renderer, 0, 0, 0, 0, false, /*preserve_alpha=*/true)) return;
+        if (!x->sink.cap.capture(x->xsurf->surface, x->server->renderer, 0, 0, 0, 0,
+                                 false, /*preserve_alpha=*/true, output_scale())) return;
         if (!x->sink.enc_ready || x->sink.enc.width() != x->sink.cap.width() ||
             x->sink.enc.height() != x->sink.cap.height()) {
             x->sink.enc_ready = x->sink.enc.init(x->sink.cap.width(), x->sink.cap.height());

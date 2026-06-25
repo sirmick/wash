@@ -132,6 +132,8 @@ interface WashGlobals {
   settingsPanels(): WashPanelDesc[];
   onSettingsPanels(cb: (panels: WashPanelDesc[]) => void): () => void;
   loadSettingsPanel(appID: string): Promise<void>;
+  displayScaleMode(): 'auto' | '1' | '2';
+  setDisplayScaleMode(mode: 'auto' | '1' | '2'): 'auto' | '1' | '2';
   windows(): WashWindowInfo[];
   onWindowsChanged(cb: (windows: WashWindowInfo[]) => void): () => void;
   // origin (optional) addresses the intent to a specific router. Window ids

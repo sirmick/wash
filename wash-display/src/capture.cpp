@@ -67,8 +67,9 @@ namespace {
 // so the browser clears stale pixels from its persistent canvas.
 struct CompositeCtx {
     struct wlr_render_pass* pass;
-    int off_x;   // crop origin x in root-surface coords
-    int off_y;   // crop origin y
+    int off_x;   // logical crop origin x in root-surface coords
+    int off_y;   // logical crop origin y
+    int scale;   // physical pixels per logical surface pixel
     int buf_w;   // target bounds (for clamping damage)
     int buf_h;
     int drawn;   // count of textured surfaces composited
@@ -100,18 +101,38 @@ void add_bounds(CompositeCtx* c, const SurfaceCaptureState& st) {
     add_dirty(c, st.x, st.y, st.x + st.w, st.y + st.h);
 }
 
+int surface_logical_w(struct wlr_surface* s, struct wlr_texture* tex) {
+    if (s->current.width > 0) return s->current.width;
+    int scale = s->current.scale > 0 ? s->current.scale : 1;
+    int w = tex ? (int)tex->width / scale : 0;
+    return w > 0 ? w : (tex ? (int)tex->width : 0);
+}
+
+int surface_logical_h(struct wlr_surface* s, struct wlr_texture* tex) {
+    if (s->current.height > 0) return s->current.height;
+    int scale = s->current.scale > 0 ? s->current.scale : 1;
+    int h = tex ? (int)tex->height / scale : 0;
+    return h > 0 ? h : (tex ? (int)tex->height : 0);
+}
+
 void composite_surface_cb(struct wlr_surface* s, int sx, int sy, void* data) {
     auto* c = static_cast<CompositeCtx*>(data);
     struct wlr_texture* tex = wlr_surface_get_texture(s);
     if (!tex) return;
-    const int ox = sx - c->off_x, oy = sy - c->off_y;
+    const int lw = surface_logical_w(s, tex);
+    const int lh = surface_logical_h(s, tex);
+    if (lw <= 0 || lh <= 0) return;
+    const int ox = (sx - c->off_x) * c->scale;
+    const int oy = (sy - c->off_y) * c->scale;
+    const int dw = lw * c->scale;
+    const int dh = lh * c->scale;
     struct wlr_render_texture_options o;
     std::memset(&o, 0, sizeof o);
     o.texture = tex;
     o.dst_box.x = ox;
     o.dst_box.y = oy;
-    o.dst_box.width = (int)tex->width;
-    o.dst_box.height = (int)tex->height;
+    o.dst_box.width = dw;
+    o.dst_box.height = dh;
     // src-over blend (premultiplied, the default): a surface's transparent
     // pixels let the layer beneath show through. The target is cleared to
     // transparent before the walk, so the bottom surface blends onto nothing
@@ -129,8 +150,8 @@ void composite_surface_cb(struct wlr_surface* s, int sx, int sy, void* data) {
     now.texture = reinterpret_cast<uintptr_t>(tex);
     now.x = ox;
     now.y = oy;
-    now.w = (int)tex->width;
-    now.h = (int)tex->height;
+    now.w = dw;
+    now.h = dh;
     now.order = c->order++;
     (*c->next)[s] = now;
     auto it = c->prev->find(s);
@@ -167,9 +188,12 @@ void composite_surface_cb(struct wlr_surface* s, int sx, int sy, void* data) {
     wlr_surface_get_effective_damage(s, &dmg);
     if (pixman_region32_not_empty(&dmg)) {
         const pixman_box32_t* e = pixman_region32_extents(&dmg);
-        x0 = e->x1 + ox; y0 = e->y1 + oy; x1 = e->x2 + ox; y1 = e->y2 + oy;
+        x0 = (e->x1 + sx - c->off_x) * c->scale;
+        y0 = (e->y1 + sy - c->off_y) * c->scale;
+        x1 = (e->x2 + sx - c->off_x) * c->scale;
+        y1 = (e->y2 + sy - c->off_y) * c->scale;
     } else {
-        x0 = ox; y0 = oy; x1 = ox + (int)tex->width; y1 = oy + (int)tex->height;
+        x0 = ox; y0 = oy; x1 = ox + dw; y1 = oy + dh;
     }
     pixman_region32_fini(&dmg);
 
@@ -179,7 +203,7 @@ void composite_surface_cb(struct wlr_surface* s, int sx, int sy, void* data) {
 
 bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* renderer,
                              int crop_x, int crop_y, int crop_w, int crop_h,
-                             bool force_full, bool preserve_alpha) {
+                             bool force_full, bool preserve_alpha, int output_scale) {
     if (!surface || !renderer) return false;
 
     struct wlr_texture* texture = wlr_surface_get_texture(surface);
@@ -188,17 +212,24 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
     const int tw = (int)texture->width;
     const int th = (int)texture->height;
     if (tw <= 0 || th <= 0) return false;
+    const int scale = output_scale > 0 ? output_scale : 1;
+    const int root_w = surface_logical_w(surface, texture);
+    const int root_h = surface_logical_h(surface, texture);
+    if (root_w <= 0 || root_h <= 0) return false;
 
     // Resolve the capture rect. A caller-supplied crop (xdg window geometry,
     // sans the CSD shadow margin) is clamped to the texture; with no crop we
-    // take the whole buffer. src_{x,y} offsets the read-back into the texture.
-    int src_x = 0, src_y = 0, w = tw, h = th;
+    // take the whole surface. src_{x,y} is logical root-surface space; w/h
+    // are physical frame pixels after applying the output scale.
+    int src_x = 0, src_y = 0, logical_w = root_w, logical_h = root_h;
     if (crop_w > 0 && crop_h > 0) {
-        src_x = crop_x < 0 ? 0 : (crop_x > tw ? tw : crop_x);
-        src_y = crop_y < 0 ? 0 : (crop_y > th ? th : crop_y);
-        w = crop_w > tw - src_x ? tw - src_x : crop_w;
-        h = crop_h > th - src_y ? th - src_y : crop_h;
+        src_x = crop_x < 0 ? 0 : (crop_x > root_w ? root_w : crop_x);
+        src_y = crop_y < 0 ? 0 : (crop_y > root_h ? root_h : crop_y);
+        logical_w = crop_w > root_w - src_x ? root_w - src_x : crop_w;
+        logical_h = crop_h > root_h - src_y ? root_h - src_y : crop_h;
     }
+    int w = logical_w * scale;
+    int h = logical_h * scale;
     if (w <= 0 || h <= 0) return false;
 
     // The texture's own renderer is the one that can read it back.
@@ -266,7 +297,7 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
     wlr_render_pass_add_rect(pass, &clear);
 
     std::map<struct wlr_surface*, SurfaceCaptureState> next;
-    CompositeCtx ctx{ pass, src_x, src_y, w, h, 0, 0, &states_, &next, false, 0, 0, 0, 0 };
+    CompositeCtx ctx{ pass, src_x, src_y, scale, w, h, 0, 0, &states_, &next, false, 0, 0, 0, 0 };
     wlr_surface_for_each_surface(surface, composite_surface_cb, &ctx);
     if (!wlr_render_pass_submit(pass)) return false;
     if (ctx.drawn == 0) return false; // nothing textured yet

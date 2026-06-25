@@ -45,8 +45,9 @@ public:
     // toplevels report their visible bounds via wlr_xdg_surface_get_geometry,
     // and we capture only that rect so the transparent CSD margin (which would
     // flatten to black in the alpha-less XRGB read-back) never reaches the
-    // encoder. Zero/omit for the full surface (X11 apps, popups). Coords are
-    // surface-local = texture pixels at scale 1.0 (DISPLAY.md — DPI fixed 1.0).
+    // encoder. Zero/omit for the full surface (X11 apps, popups). Crop coords
+    // are surface-local logical coordinates; output_scale controls the physical
+    // frame pixels produced for each logical pixel.
     // force_full forces a whole-frame capture (bypasses the root-surface
     // damage skip). Set it when the capture is driven by a tree-change
     // signal rather than a root commit, since subsurface-only repaints leave
@@ -57,7 +58,8 @@ public:
     // which would otherwise show the window behind through the gaps (M8c).
     bool capture(struct wlr_surface* surface, struct wlr_renderer* renderer,
                  int crop_x = 0, int crop_y = 0, int crop_w = 0, int crop_h = 0,
-                 bool force_full = false, bool preserve_alpha = false);
+                 bool force_full = false, bool preserve_alpha = false,
+                 int output_scale = 1);
 
     const uint8_t* data() const { return buf_.data(); }
     int width() const { return w_; }

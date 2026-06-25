@@ -54,6 +54,15 @@ function parseHeader(view: DataView): FrameHeader {
   };
 }
 
+function currentFrameScale(): number {
+  const scale = Number((window as unknown as { __washDisplayScale?: number }).__washDisplayScale || 1);
+  return scale >= 2 ? 2 : 1;
+}
+
+function frameCssPx(px: number): number {
+  return Math.max(1, Math.round(px / currentFrameScale()));
+}
+
 // One input batch flushed to the BE per rAF (motion) or immediately
 // (button/key/wheel). Events are surface-relative ints; see docs/DISPLAY.md §6.
 type InputEvent = Record<string, string | number>;
@@ -303,8 +312,9 @@ export class WashAppDisplay extends HTMLElement {
   }
 
   // queueMotion appends (coalescing) a surface-relative motion event. The
-  // canvas is drawn 1:1 at top-left (DPR 1.0), so surface coords are the
-  // offset into the canvas box. Consecutive motions collapse to the latest.
+  // The canvas backing store may be HiDPI, but its CSS box is logical
+  // surface size. DOM pointer offsets are therefore the logical coordinates
+  // wlroots expects. Consecutive motions collapse to the latest.
   private queueMotion(ev: PointerEvent): void {
     const box = this.canvas && this.canvas.width > 0 ? this.canvas : this;
     const r = box.getBoundingClientRect();
@@ -506,18 +516,20 @@ export class WashAppDisplay extends HTMLElement {
           bitmap.close?.();
           return;
         }
-        // Keep the canvas CSS box equal to its backing-store pixels so the
-        // bitmap is drawn 1:1 (never scaled). The element clips/letterboxes
-        // any difference between this and the current frame size.
+        // Keep the backing store in physical frame pixels while the CSS box
+        // stays in logical surface pixels. On HiDPI this gives the browser a
+        // dense canvas instead of visibly doubling the window size.
         if (header.frameW > 0 && header.frameH > 0) {
           if (canvas.width !== header.frameW) {
             canvas.width = header.frameW;
-            canvas.style.width = header.frameW + 'px';
           }
+          const cssW = frameCssPx(header.frameW);
+          if (canvas.style.width !== cssW + 'px') canvas.style.width = cssW + 'px';
           if (canvas.height !== header.frameH) {
             canvas.height = header.frameH;
-            canvas.style.height = header.frameH + 'px';
           }
+          const cssH = frameCssPx(header.frameH);
+          if (canvas.style.height !== cssH + 'px') canvas.style.height = cssH + 'px';
         }
         // Clear the dirty rect first so transparent pixels REPLACE (not
         // source-over blend onto) the previous frame — required now that
@@ -594,11 +606,17 @@ export class WashAppDisplay extends HTMLElement {
         const cv = live.canvas;
         if (header.frameW > 0 && cv.width !== header.frameW) {
           cv.width = header.frameW;
-          cv.style.width = header.frameW + 'px';
+        }
+        if (header.frameW > 0) {
+          const cssW = frameCssPx(header.frameW);
+          if (cv.style.width !== cssW + 'px') cv.style.width = cssW + 'px';
         }
         if (header.frameH > 0 && cv.height !== header.frameH) {
           cv.height = header.frameH;
-          cv.style.height = header.frameH + 'px';
+        }
+        if (header.frameH > 0) {
+          const cssH = frameCssPx(header.frameH);
+          if (cv.style.height !== cssH + 'px') cv.style.height = cssH + 'px';
         }
         // Clear first so the menu's transparent rounded corners / shadow
         // replace prior pixels rather than blending (M8c alpha).
