@@ -28,12 +28,13 @@ the water, green hinterland, fish + crocodile, a winding river. Traced with
 --color_precision 6 --gradient_step 24`) so each dot is a single solid
 polygon, ~16.3 k shapes — a higher-precision trace fragmented each dot into
 several colour layers, which left polygon slivers showing between the
-circles. A post-pass (`design/packs/circlify.py`) then dotifies it: every round/square
-blob becomes a real SVG `<circle>` (~7.2 k — true vector dots, overlap
-allowed so the dense dot rows stay dense), and the few very-elongated
-connector strokes are dropped. Framed with a **black border on a black
+circles. A post-pass (`design/packs/circlify.py`) then partially dotifies it: each
+shape is scored by circularity (4πA/P²) and the roundest ~60% become real SVG
+`<circle>` dots (overlap allowed so the dense rows stay dense); the remaining
+~40% keep their original traced polygon, so the finer/connected structure
+(river, tree forms) is preserved. Framed with a **black border on a black
 field** (a wide margin so the frame reads strongly). Minified with `svgo`
-(~0.4 MB). Source raster at
+(~0.5 MB). Source raster at
 `design/packs/src/dreamtime-source.png`; converter at
 `design/packs/circlify.py`. Paired with the dark Dreamtime palette (black
 chrome, solid bright painting colors).
