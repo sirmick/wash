@@ -190,6 +190,10 @@ interface ShellAssetReadOK {
   channel_id: number;
   size: number;
   mime?: string;
+  // Router-side content-coding of the streamed bytes: absent/'' for
+  // identity, 'gzip' when the asset was pre-compressed (wash-fetch.ts
+  // inflates). See internal/router/assetcache.go.
+  encoding?: string;
 }
 
 interface ShellAssetReadErr {

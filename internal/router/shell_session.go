@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"mime"
 	"path"
 	"strings"
 	"sync"
@@ -338,8 +336,7 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 // missing, traversal attempt, read failure) a ShellAssetReadErr is
 // sent back and no channel is opened.
 func (s *ShellSession) handleAssetRead(m wire.ShellAssetRead) error {
-	fs := s.router.assets
-	if fs == nil {
+	if s.router.assets == nil {
 		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeInternal, "no asset fs"))
 	}
 	// Normalise: strip leading slashes, reject any segment that's "..".
@@ -349,32 +346,28 @@ func (s *ShellSession) handleAssetRead(m wire.ShellAssetRead) error {
 	if clean == "/" || strings.Contains(clean, "/..") {
 		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeBadRequest, "bad path"))
 	}
-	f, err := fs.Open(clean)
+	// loadAsset returns cached identity+gzip bytes (read + compressed once
+	// per process, keyed by path + stat signature).
+	entry, err := s.router.loadAsset(clean)
 	if err != nil {
-		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeNotFound, err.Error()))
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
+		if err == errAssetIsDir {
+			return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeBadRequest, "is a directory"))
+		}
+		if isNotExist(err) {
+			return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeNotFound, err.Error()))
+		}
 		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeInternal, err.Error()))
 	}
-	if st.IsDir() {
-		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeBadRequest, "is a directory"))
+	// Send compressed when the cache decided gzip is a win; else identity.
+	// The FE inflates per the Encoding field (wash-fetch.ts).
+	payload := entry.raw
+	encoding := ""
+	if entry.gz != nil {
+		payload = entry.gz
+		encoding = "gzip"
 	}
-	// Read the whole file up front, then stream stable, non-overlapping
-	// slices of it. WriteRawFrameClass hands the payload to the scheduler,
-	// which drainLoop flushes ASYNCHRONOUSLY without copying — so a reused
-	// read buffer would be overwritten before its frame is sent, scrambling
-	// any asset larger than one chunk. (The bundle streamer slices one
-	// whole buffer for exactly this reason.) Assets are small, so the
-	// whole-file read is cheap.
-	data, rerr := io.ReadAll(f)
-	if rerr != nil {
-		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeInternal, rerr.Error()))
-	}
-	ct := mime.TypeByExtension(path.Ext(clean))
 	id := s.router.allocChannelID()
-	if err := s.WriteCtrl(wire.NewShellAssetReadOK(m.ReqID, id, int64(len(data)), ct)); err != nil {
+	if err := s.WriteCtrl(wire.NewShellAssetReadOK(m.ReqID, id, int64(len(payload)), entry.mime, encoding)); err != nil {
 		return err
 	}
 	// Bind so the shell knows the channel id maps to an asset stream.
@@ -385,18 +378,22 @@ func (s *ShellSession) handleAssetRead(m wire.ShellAssetRead) error {
 	}); err != nil {
 		return err
 	}
-	// Stream in chunks, slicing the stable buffer. Interactive class so the
-	// strict-priority scheduler can't let the Unbind overtake data.
+	// Stream in chunks, slicing the cached (immutable) buffer. Interactive
+	// class so the strict-priority scheduler can't let the Unbind overtake
+	// data. The buffer is never mutated, so the async drain is safe without
+	// a per-request copy.
 	const chunkSize = 64 * 1024
-	for off := 0; off < len(data); off += chunkSize {
+	for off := 0; off < len(payload); off += chunkSize {
 		end := off + chunkSize
-		if end > len(data) {
-			end = len(data)
+		if end > len(payload) {
+			end = len(payload)
 		}
-		if werr := s.WriteRawFrameClass(id, data[off:end], wire.ClassInteractive); werr != nil {
+		if werr := s.WriteRawFrameClass(id, payload[off:end], wire.ClassInteractive); werr != nil {
 			return werr
 		}
 	}
+	// Account raw vs on-the-wire bytes for the compression-ratio readout.
+	s.statsLink().recordCompression(len(entry.raw), len(payload))
 	return s.WriteCtrl(wire.NewShellChannelUnbind(id, "asset complete"))
 }
 

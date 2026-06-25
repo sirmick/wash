@@ -176,6 +176,12 @@ type Router struct {
 	connectCount atomic.Uint64
 	started      time.Time
 
+	// Asset cache (docs/QOS.md): path → cached identity+gzip bytes, so the
+	// asset.read path reads + compresses each file once per process rather
+	// than on every connection. Keyed by path + stat signature (loadAsset).
+	assetCacheMu sync.Mutex
+	assetCache   map[string]*assetEntry
+
 	channelsMu sync.Mutex
 	channels   map[uint32]*channelBinding
 

@@ -700,10 +700,15 @@ type ShellAssetReadOK struct {
 	ChannelID uint32 `json:"channel_id"`
 	Size      int64  `json:"size"`
 	Mime      string `json:"mime,omitempty"`
+	// Encoding is the content-coding of the bytes that follow: "" for
+	// identity, "gzip" when the router pre-compressed a compressible asset
+	// (the FE inflates via DecompressionStream). Size is the on-the-wire
+	// (post-encoding) byte count.
+	Encoding string `json:"encoding,omitempty"`
 }
 
-func NewShellAssetReadOK(reqID uint64, channelID uint32, size int64, mime string) ShellAssetReadOK {
-	return ShellAssetReadOK{T: TShellAssetReadOK, ReqID: reqID, ChannelID: channelID, Size: size, Mime: mime}
+func NewShellAssetReadOK(reqID uint64, channelID uint32, size int64, mime, encoding string) ShellAssetReadOK {
+	return ShellAssetReadOK{T: TShellAssetReadOK, ReqID: reqID, ChannelID: channelID, Size: size, Mime: mime, Encoding: encoding}
 }
 
 // ShellAssetReadErr: router rejects the pull (typically ErrCodeNotFound

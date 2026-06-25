@@ -17,8 +17,18 @@ interface Pending {
   chunks: Uint8Array[];
   mime: string;
   size: number;
+  encoding: string;       // '' | 'gzip' — router-side content-coding to undo
   resolve: (v: { bytes: Uint8Array; mime: string }) => void;
   reject: (err: Error) => void;
+}
+
+// gunzip inflates a gzip stream via the native DecompressionStream — the
+// router pre-compresses compressible assets (svg wallpapers, fonts'
+// metadata, etc.; see internal/router/assetcache.go) to cut the wire bytes.
+async function gunzip(bytes: Uint8Array): Promise<Uint8Array> {
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+  const buf = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buf);
 }
 
 const pendingByReqID = new Map<number, Pending>();
@@ -33,7 +43,7 @@ type SendCtrl = (msg: unknown) => void;
 export function washFetch(send: SendCtrl, path: string): Promise<{ bytes: Uint8Array; mime: string }> {
   const reqID = nextReqID++;
   return new Promise((resolve, reject) => {
-    const p: Pending = { reqID, chunks: [], mime: '', size: 0, resolve, reject };
+    const p: Pending = { reqID, chunks: [], mime: '', size: 0, encoding: '', resolve, reject };
     pendingByReqID.set(reqID, p);
     send({ t: 'asset.read', req_id: reqID, path });
   });
@@ -42,12 +52,13 @@ export function washFetch(send: SendCtrl, path: string): Promise<{ bytes: Uint8A
 /** handleAssetReadOK is called by main.tsx's ctrl dispatcher when an
  *  asset.read.ok frame arrives. Records the channel-id mapping so
  *  incoming raw frames flow into the pending accumulator. */
-export function handleAssetReadOK(msg: { req_id: number; channel_id: number; size: number; mime?: string }): void {
+export function handleAssetReadOK(msg: { req_id: number; channel_id: number; size: number; mime?: string; encoding?: string }): void {
   const p = pendingByReqID.get(msg.req_id);
   if (!p) return;
   p.channelID = msg.channel_id;
   p.mime = msg.mime ?? 'application/octet-stream';
   p.size = msg.size;
+  p.encoding = msg.encoding ?? '';
   pendingByChannelID.set(msg.channel_id, p);
 }
 
@@ -71,8 +82,9 @@ export function pushAssetBytes(channelID: number, bytes: Uint8Array): boolean {
 }
 
 /** finishAsset is called from the channel.unbind handler. If the
- *  channel was an asset stream, concatenates the chunks and resolves
- *  the originating washFetch. No-op for non-asset channels. */
+ *  channel was an asset stream, concatenates the chunks (inflating first
+ *  when the router sent gzip) and resolves the originating washFetch.
+ *  No-op for non-asset channels. */
 export function finishAsset(channelID: number): void {
   const p = pendingByChannelID.get(channelID);
   if (!p) return;
@@ -82,5 +94,14 @@ export function finishAsset(channelID: number): void {
   const out = new Uint8Array(total);
   let off = 0;
   for (const c of p.chunks) { out.set(c, off); off += c.byteLength; }
+  if (p.encoding === 'gzip') {
+    // Inflate off the resolve path so a decode failure rejects the fetch
+    // rather than throwing into the unbind dispatcher.
+    gunzip(out).then(
+      (bytes) => p.resolve({ bytes, mime: p.mime }),
+      (err) => p.reject(err instanceof Error ? err : new Error(String(err))),
+    );
+    return;
+  }
   p.resolve({ bytes: out, mime: p.mime });
 }
