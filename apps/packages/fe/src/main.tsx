@@ -175,7 +175,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
-  const { send } = createAppBus(props, { onMsg: (m) => handleBE(m as BEMessage) });
+  const { send, saveState } = createAppBus(props, {
+    onMsg: (m) => handleBE(m as BEMessage),
+    // Restore the persisted search on every (re)mount = reconnect. Set
+    // the query and re-fire the search; refireSearch only fires when the
+    // query is non-empty, so an empty/absent blob is a no-op.
+    onState: (state) => {
+      const q = (state as { query?: unknown })?.query;
+      if (typeof q !== 'string') return;
+      setQuery(q);
+      refireSearch();
+    },
+  });
 
   // ---- lifecycle ----
 
@@ -334,6 +345,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             onInput={(e) => {
               setQuery(e.currentTarget.value);
               scheduleSearch(e.currentTarget.value);
+              // Persist the search string (debounced) so a reconnect
+              // reopens the window on the same query.
+              saveState({ query: e.currentTarget.value });
             }}
             style={searchInputStyle}
             disabled={!!backendError()}

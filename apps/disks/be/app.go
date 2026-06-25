@@ -191,6 +191,9 @@ func registerHandlers(b *sdk.Bus) {
 		return nil
 	})
 	registerSmart(b)
+	// Persist the selected device id so reconnect reopens on the same
+	// detail pane instead of snapping back to the first disk.
+	sdk.HandlePersist(b)
 }
 
 // scanPrivManagers collects every detected privileged provider in a SINGLE

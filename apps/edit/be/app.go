@@ -160,10 +160,6 @@ type spawnReq struct {
 	AppID string `json:"app_id"`
 }
 
-type saveStateReq struct {
-	State any `json:"state"`
-}
-
 type termOpenReq struct {
 	Cols uint64 `json:"cols"`
 	Rows uint64 `json:"rows"`
@@ -258,9 +254,7 @@ func registerHandlers(b *sdk.Bus) {
 		return c.SpawnRequest(req.AppID)
 	})
 
-	sdk.HandleVoid(b, "save_state", func(c *sdk.Conn, _ string, req saveStateReq) error {
-		return c.SaveState(req.State)
-	})
+	sdk.HandlePersist(b)
 
 	sdk.HandleVoid(b, "term.open", func(c *sdk.Conn, id string, req termOpenReq) error {
 		cols := req.Cols

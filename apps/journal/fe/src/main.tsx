@@ -130,7 +130,32 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
-  const { send } = createAppBus(props, { onMsg: handleBE });
+  // onState fires on every (re)mount — including reconnect — BEFORE the
+  // BE's units-list reply lands. Restoring `selected`+`asRoot` and
+  // re-issuing the stream is keyed only by the unit name, so it resumes
+  // correctly even though the sidebar hasn't been populated yet. We
+  // persist ONLY the minimal reopen target: the selected unit and the
+  // elevation flag. View filters (range/priority/filterText) are left at
+  // their defaults for the user to re-adjust — by product decision.
+  const onState = (state: unknown) => {
+    if (!state || typeof state !== 'object') return;
+    const s = state as { selected?: unknown; as_root?: unknown };
+    const sel = typeof s.selected === 'string' ? s.selected : SYSTEM_KEY;
+    const root = s.as_root === true;
+    setSelected(sel);
+    setAsRoot(root);
+    // Re-issue the unit stream so the window resumes on the restored
+    // source (mirrors onPickUnit → requestStream). asRoot is passed
+    // explicitly because setAsRoot above hasn't flushed yet.
+    requestStream({ asRoot: root });
+  };
+
+  const { send, saveState } = createAppBus(props, { onMsg: handleBE, onState });
+
+  // persistState snapshots the minimal reopen target. Called from the
+  // unit-select and retry-as-root paths — the two places that change
+  // what the window is reading.
+  const persistState = () => saveState({ selected: selected(), as_root: asRoot() });
 
   // ----- send select / lifecycle -----
 
@@ -157,6 +182,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // unprivileged → perm_denied → "Read with root" dance every time.
     // requestStream() defaults to the current asRoot().
     requestStream();
+    persistState();
   };
 
   const onPickRange = (r: 'boot' | 'hour' | 'day' | 'all') => {
@@ -171,7 +197,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     requestStream();
   };
 
-  const retryAsRoot = () => requestStream({ asRoot: true });
+  const retryAsRoot = () => {
+    requestStream({ asRoot: true });
+    persistState();
+  };
   const refreshUnits = () => send({ kind: 'refresh_units' });
 
   // ----- scroll handling -----

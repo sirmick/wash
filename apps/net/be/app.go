@@ -97,6 +97,11 @@ func run(ctx context.Context) error { return sdk.Run(ctx, def) }
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-net ready instance=%s window=%d", instanceID, windowID)
 	bus := sdk.NewBus(c)
+	// Persist the FE's staged-but-unapplied draft router-side so a reconnect
+	// restores in-progress edits. Registered as an exact-match kind, so it
+	// wins over the catch-all relay pattern below (exact handlers dispatch
+	// before patterns) — save_state is handled here, not forwarded to netd.
+	sdk.HandlePersist(bus)
 	// Transparent relay: every FE request kind is forwarded verbatim to netd as a
 	// request/reply round-trip (correlated by the FE's id). net owns no FE-message
 	// logic of its own — it's a pure typed pipe whose whole job is to carry the

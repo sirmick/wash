@@ -122,6 +122,10 @@ type deeplinkReq struct {
 }
 
 func registerHandlers(b *sdk.Bus) {
+	// Persist the FE's view-state blob ({selected, as_root}) router-side
+	// so a reconnect reopens on the same unit instead of the default
+	// System view. The schema is the FE's; we just store it.
+	sdk.HandlePersist(b)
 	sdk.HandleVoid(b, "select", func(c *sdk.Conn, _ string, req selectReq) error {
 		// Spawning blocks on the stream stop, so off-goroutine.
 		go startStream(c, req)

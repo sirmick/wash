@@ -657,12 +657,21 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         if (t.mode === 'wysiwyg') pt.mode = 'wysiwyg';
         if (t.path) {
           pt.path = t.path;
-          // For wysiwyg tabs we also persist the in-flight markdown
-          // so a reload before save doesn't lose unsaved edits. CM
-          // tabs skip this because the doc lives in liveState (which
-          // is bigger; we'd rather re-read disk + re-apply selection
-          // for them as today).
-          if (t.mode === 'wysiwyg') pt.content = tabContent(t);
+          // For wysiwyg tabs we persist the in-flight markdown so a
+          // reload before save doesn't lose unsaved edits.
+          if (t.mode === 'wysiwyg') {
+            pt.content = tabContent(t);
+          } else if (dirtyIDs().has(t.id)) {
+            // Unsaved edits to a SAVED source file: persist the live
+            // buffer so a reconnect/remount restores the in-progress
+            // text instead of silently reverting to the on-disk version
+            // (the reconnect data-loss this guards against). Clean
+            // source tabs skip this and re-read disk on restore — smaller
+            // blob, identical result. Dirty-buffer content rides the
+            // coarser cadence in scheduleContentPersist(), not the
+            // per-event 250ms debounce.
+            pt.content = liveState ? liveState.doc.toString() : t.baseline;
+          }
         } else {
           pt.display_name = t.displayName;
           if (t.mode === 'wysiwyg') pt.content = tabContent(t);
@@ -707,6 +716,32 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }, 250);
   };
 
+  // Dirty source-buffer content can be large, so we don't ship it on
+  // every keystroke. Instead a doc change schedules a persist on a
+  // trailing "quiet" timer (fires once typing pauses) plus a hard
+  // max-interval cap so a long uninterrupted typing run still
+  // checkpoints. Worst-case unsaved-edit loss on a reconnect is one
+  // CONTENT_MAX_MS window. persist() itself includes the live buffer
+  // for any dirty tab, so we just need to fire it on this cadence.
+  const CONTENT_QUIET_MS = 1500;
+  const CONTENT_MAX_MS = 5000;
+  let contentQuietTimer: number | null = null;
+  let contentMaxTimer: number | null = null;
+  const flushContentPersist = () => {
+    if (contentQuietTimer != null) { window.clearTimeout(contentQuietTimer); contentQuietTimer = null; }
+    if (contentMaxTimer != null) { window.clearTimeout(contentMaxTimer); contentMaxTimer = null; }
+    persist();
+  };
+  const scheduleContentPersist = () => {
+    if (contentQuietTimer != null) window.clearTimeout(contentQuietTimer);
+    contentQuietTimer = window.setTimeout(flushContentPersist, CONTENT_QUIET_MS);
+    // Max-interval cap: started once and left running so continuous
+    // typing (which keeps resetting the quiet timer) can't starve it.
+    if (contentMaxTimer == null) {
+      contentMaxTimer = window.setTimeout(flushContentPersist, CONTENT_MAX_MS);
+    }
+  };
+
   const restoreFrom = async (s: PersistedState) => {
     if (typeof s.split_pct === 'number') {
       setSplitPct(Math.max(15, Math.min(85, s.split_pct)));
@@ -729,8 +764,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           const tab = tabs().find((x) => x.path === pt.path);
           if (tab) {
             const persistedMode: Tab['mode'] | undefined = pt.mode === 'wysiwyg' || pt.mode === 'source' ? pt.mode : undefined;
-            const fresh = (pt.selection || pt.scroll) ? EditorState.create({
-              doc: tab.baseline,
+            // Restore unsaved edits to a saved source file: only dirty
+            // source tabs carry live content, so when it's present seed
+            // the buffer from it instead of the on-disk baseline. The
+            // baseline stays the disk version (dirty detection compares
+            // against it), and we re-mark the tab dirty below so the UI
+            // and next save match the restored buffer.
+            const restoreContent = persistedMode !== 'wysiwyg' && typeof pt.content === 'string';
+            const doc = restoreContent ? pt.content! : tab.baseline;
+            const fresh = (pt.selection || pt.scroll || restoreContent) ? EditorState.create({
+              doc,
               extensions: baseExtensions(),
               selection: pt.selection
                 ? EditorSelection.single(pt.selection.anchor, pt.selection.head)
@@ -742,6 +785,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               ...(pt.scroll ? { scrollTop: pt.scroll } : {}),
               ...(persistedMode ? { mode: persistedMode } : {}),
             } : x));
+            if (restoreContent && pt.content !== tab.baseline) {
+              setDirtyIDs((s) => {
+                if (s.has(tab.id)) return s;
+                const out = new Set(s);
+                out.add(tab.id);
+                return out;
+              });
+            }
           }
         } else {
           // Untitled — reconstruct the buffer in place. untitledCounter
@@ -1592,6 +1643,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       else out.delete(t.id);
       return out;
     });
+    // Checkpoint the live buffer on the coarse content cadence. Covers
+    // both unsaved edits to a saved file and Untitled/wysiwyg buffers,
+    // which pure typing (always docChanged) otherwise wouldn't persist
+    // until some non-doc event fired.
+    scheduleContentPersist();
   });
 
   // searchListener triggers state persist when the find panel

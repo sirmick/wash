@@ -188,10 +188,6 @@ type clipboardFilesSetResp struct {
 	Paths []string `json:"paths"`
 }
 
-type saveStateReq struct {
-	State any `json:"state"`
-}
-
 // fsEvent is the watch-fired message the BE pushes to the FE whenever the
 // com.wash.fswatch service reports a change under a watched path. Unsolicited
 // (Emit), not a reply, so no id.
@@ -333,9 +329,7 @@ func registerHandlers(b *sdk.Bus) {
 		}
 		return b.Emit("list_ok", reply)
 	})
-	sdk.HandleVoid(b, "save_state", func(conn *sdk.Conn, _ string, req saveStateReq) error {
-		return conn.SaveState(req.State)
-	})
+	sdk.HandlePersist(b)
 	sdk.HandleVoid(b, "clipboard_copy_path", func(conn *sdk.Conn, _ string, req clipboardCopyPathReq) error {
 		if req.Path == "" {
 			return nil

@@ -70,10 +70,6 @@ type track struct {
 	Artist string `json:"artist"`
 }
 
-type saveStateReq struct {
-	State any `json:"state"`
-}
-
 // player holds the per-instance ingress state. The FE may ask for the
 // track list before the BE has finished publishing ingress, so the
 // "tracks" reply waits on ready.
@@ -92,9 +88,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	// FE → BE: persist the FE's playback blob (current track, position,
 	// volume, shuffle/repeat) as router-held app_state so a browser
 	// reload resumes where it left off.
-	sdk.HandleVoid(bus, "save_state", func(conn *sdk.Conn, _ string, req saveStateReq) error {
-		return conn.SaveState(req.State)
-	})
+	sdk.HandlePersist(bus)
 
 	// FE → BE: hand back the resolved track list once the file server is
 	// published. Reply from a goroutine because ingress may not be ready

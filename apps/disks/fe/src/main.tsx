@@ -230,13 +230,31 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       }
     }
     setSnapshot(snap);
-    // Default selection: first disk.
+    // Default selection: first disk — but never clobber a restored (or
+    // user-made) selection. A persisted selected_id arrives via onState
+    // before the first snapshot, so this only fires when nothing's selected.
     if (!selectedId() && (snap.disks?.length ?? 0) > 0) {
       setSelectedId(`disk:${snap.disks![0].name}`);
     }
   };
 
-  const { send } = createAppBus(props, { onMsg: handleBE });
+  const { send, saveState } = createAppBus(props, {
+    onMsg: handleBE,
+    // Restore the previously-inspected device on (re)connect. Fires before
+    // the first snapshot, so the default-first-disk fallback above sees a
+    // non-empty selectedId and stands down.
+    onState: (state) => {
+      const id = (state as { selected_id?: string } | null)?.selected_id;
+      if (id) setSelectedId(id);
+    },
+  });
+
+  // Persist the selected device id whenever it changes, so reconnect reopens
+  // on the same detail pane. Blob is intentionally minimal: { selected_id }.
+  const selectRow = (id: string) => {
+    setSelectedId(id);
+    saveState({ selected_id: id });
+  };
 
   onMount(() => {
     send({ kind: 'request_snapshot' });
@@ -269,7 +287,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               <div
                 style={rowStyle(row, selectedId() === row.id)}
                 data-testid={`disks-row-${row.id}`}
-                onClick={() => row.selectable && setSelectedId(row.id)}
+                onClick={() => row.selectable && selectRow(row.id)}
               >
                 <span style={{ display: 'inline-flex', flex: '0 0 auto', width: `${row.depth * 14}px` }} />
                 <span style={{ display: 'inline-flex', flex: '0 0 auto' }}><RowIcon row={row} /></span>

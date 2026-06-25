@@ -127,6 +127,9 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 
 	bus := sdk.NewBus(c)
 
+	// Persist {dir, path} so a reconnect reopens on the same folder/image.
+	sdk.HandlePersist(bus)
+
 	// Image bytes + thumbnails over a raw channel, confined to the fs root.
 	thumbs.RegisterServer(bus, ivFS.Confine)
 

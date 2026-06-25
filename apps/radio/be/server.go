@@ -139,15 +139,9 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	})
 	// Persist the FE's small state blob (favorites + pasted stations +
 	// last-tuned), redelivered as wash:state on the next mount.
-	sdk.HandleVoid(bus, "save_state", func(conn *sdk.Conn, _ string, req saveStateReq) error {
-		return conn.SaveState(req.State)
-	})
+	sdk.HandlePersist(bus)
 
 	go serveAndPublish(c, instanceID, s)
-}
-
-type saveStateReq struct {
-	State any `json:"state"`
 }
 
 // serveAndPublish stands up the /stream proxy on a per-instance unix
