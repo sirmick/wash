@@ -73,7 +73,7 @@ func TestShellRoundTrip(t *testing.T) {
 		NewShellAppMsgDeliver("inst-1", data),
 		NewShellNotify("inst-1", "hello", "world", NotifyLevelWarn),
 		NewShellChannelBind(5, 1, ChannelKindVideo),
-		NewShellChannelBindBundle(9, "inst-1", "gzip"),
+		NewShellChannelBindBundle(9, "inst-1", "gzip", 4096),
 		NewShellChannelUnbind(5, "eof"),
 		NewShellChannelCredit(5, 65536),
 		NewShellLog(LogLevelError, "wash-app-about", "boom", "Error: boom\n    at foo (...)"),

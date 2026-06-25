@@ -530,6 +530,11 @@ type ShellChannelBind struct {
 	// "" identity, "gzip" when the router pre-compressed the FE bundle (the
 	// shell inflates before blob-importing). Unused by other kinds.
 	Encoding string `json:"encoding,omitempty"`
+	// Size is the on-the-wire (post-encoding) byte count for a Kind="bundle"
+	// channel, so the shell can complete the transfer on byte-count rather
+	// than waiting for the Unbind (docs/QOS.md). This lets bundle data ride a
+	// lower-priority class without the Unbind overtaking it.
+	Size int64 `json:"size,omitempty"`
 }
 
 // NewShellChannelBind binds an app-opened raw channel to a window. The
@@ -556,13 +561,14 @@ func NewShellChannelResync(channelID, windowID uint32, kind string) ShellChannel
 	return ShellChannelResync{T: TShellChannelResync, ChannelID: channelID, WindowID: windowID, Kind: kind}
 }
 
-func NewShellChannelBindBundle(channelID uint32, instanceID, encoding string) ShellChannelBind {
+func NewShellChannelBindBundle(channelID uint32, instanceID, encoding string, size int64) ShellChannelBind {
 	return ShellChannelBind{
 		T:          TShellChannelBind,
 		ChannelID:  channelID,
 		Kind:       ChannelKindBundle,
 		InstanceID: instanceID,
 		Encoding:   encoding,
+		Size:       size,
 	}
 }
 

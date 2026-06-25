@@ -1323,7 +1323,9 @@ func (r *Router) replayBundleToShell(s *ShellSession, inst *AppInstance) {
 		encoding = "gzip"
 	}
 	id := r.allocChannelID()
-	if err := s.WriteCtrl(wire.NewShellChannelBindBundle(id, inst.InstanceID, encoding)); err != nil {
+	// Size lets the shell complete the bundle on byte-count, so Bulk-class
+	// data frames can't be overtaken by the higher-priority Unbind.
+	if err := s.WriteCtrl(wire.NewShellChannelBindBundle(id, inst.InstanceID, encoding, int64(len(payload)))); err != nil {
 		r.log("bundle bind %s: %v", inst.InstanceID, err)
 		return
 	}
@@ -1335,12 +1337,11 @@ func (r *Router) replayBundleToShell(s *ShellSession, inst *AppInstance) {
 		if end > len(payload) {
 			end = len(payload)
 		}
-		// Interactive class: bundle delivery is a transactional
-		// Bind → data → Unbind sequence. Under Bulk, the strict-
-		// priority scheduler would let the Interactive Unbind
-		// overtake these data frames and the shell would observe
-		// "channel closed" before the bytes arrived.
-		if err := s.WriteRawFrameClass(id, payload[off:end], wire.ClassInteractive); err != nil {
+		// Bulk class: a bundle gates the window the user just launched, so
+		// it should beat Background assets but yield to interactive input
+		// and control. Safe on Bulk because the shell completes on the
+		// Size in the bind, not on the Unbind (docs/QOS.md tc reclass).
+		if err := s.WriteRawFrameClass(id, payload[off:end], wire.ClassBulk); err != nil {
 			r.log("bundle frame %s: %v", inst.InstanceID, err)
 			return
 		}

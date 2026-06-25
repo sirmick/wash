@@ -18,6 +18,10 @@ interface Pending {
   // Router-side content-coding of the streamed bytes ('' | 'gzip'); the
   // bundle is inflated before blob-import when gzip.
   encoding: string;
+  // On-the-wire (post-encoding) byte count from the bind. The accumulator
+  // completes on byte-count rather than the Unbind, so bundle data can ride
+  // the Bulk class without the higher-priority Unbind overtaking it.
+  size: number;
 }
 
 // Keyed by COMPOUND ids (origin-tagged) — the router announces which
@@ -30,14 +34,14 @@ const instanceByChannel = new Map<string, string>(); // compoundChannelId → co
 // beginBundle registers a fresh accumulator for instanceID waiting on
 // channelID. Returns the promise that resolves once the import has
 // run (or rejects on failure).
-export function beginBundle(channelID: number, instanceID: string, origin: Origin = LOCAL_ORIGIN, encoding = ''): Promise<void> {
+export function beginBundle(channelID: number, instanceID: string, origin: Origin = LOCAL_ORIGIN, encoding = '', size = 0): Promise<void> {
   let resolve!: () => void;
   let reject!: (err: Error) => void;
   const promise = new Promise<void>((res, rej) => {
     resolve = res;
     reject = rej;
   });
-  const p: Pending = { channelID, chunks: [], resolve, reject, promise, origin, encoding };
+  const p: Pending = { channelID, chunks: [], resolve, reject, promise, origin, encoding, size };
   const ik = compoundInstanceId(origin, instanceID);
   pendingByInstance.set(ik, p);
   instanceByChannel.set(compoundChannelId(origin, channelID), ik);
@@ -72,26 +76,39 @@ function runImport(url: string, origin: Origin): Promise<void> {
 // Returns true if the bytes were consumed, false otherwise (which the
 // caller treats as a normal raw-channel frame).
 export function pushBundleBytes(channelID: number, bytes: Uint8Array, origin: Origin = LOCAL_ORIGIN): boolean {
-  const ik = instanceByChannel.get(compoundChannelId(origin, channelID));
+  const ck = compoundChannelId(origin, channelID);
+  const ik = instanceByChannel.get(ck);
   if (ik == null) return false;
   const p = pendingByInstance.get(ik);
   if (!p) return false;
   p.chunks.push(bytes);
+  maybeImportBundle(ik, ck, p);
   return true;
 }
 
-// finishBundle is called from the ChannelUnbind handler when a bundle
-// channel closes. Concatenates the chunks, builds a blob URL, dynamic-
-// imports it (the bundle's customElements.define side effect makes
-// the element tag live), then resolves the waiting promise.
+// finishBundle is the ChannelUnbind backstop. Completion is byte-count
+// driven (maybeImportBundle), so now that bundle data rides the Bulk class
+// the higher-priority Unbind routinely arrives early — this is then a
+// no-op and the remaining Bulk frames complete the import.
 export function finishBundle(channelID: number, origin: Origin = LOCAL_ORIGIN): void {
   const ck = compoundChannelId(origin, channelID);
-  const instanceID = instanceByChannel.get(ck);
-  if (instanceID == null) return;
-  instanceByChannel.delete(ck);
-  const p = pendingByInstance.get(instanceID);
+  const ik = instanceByChannel.get(ck);
+  if (ik == null) return;
+  const p = pendingByInstance.get(ik);
   if (!p) return;
-  pendingByInstance.delete(instanceID);
+  maybeImportBundle(ik, ck, p);
+}
+
+// maybeImportBundle blob-imports the bundle once all `size` bytes have
+// arrived (concatenating, inflating if gzip). Byte-count driven so Bulk-
+// class data can't be truncated by the Unbind. Idempotent: the pending's
+// presence in the maps is the guard.
+function maybeImportBundle(ik: string, ck: string, p: Pending): void {
+  const total = p.chunks.reduce((n, c) => n + c.byteLength, 0);
+  if (total < p.size) return;
+  pendingByInstance.delete(ik);
+  instanceByChannel.delete(ck);
+  const instanceID = ik;
 
   // Assemble the bundle bytes, inflating first when the router gzipped
   // them. gzip needs the contiguous stream, so concat then inflate;
@@ -118,7 +135,7 @@ export function finishBundle(channelID: number, origin: Origin = LOCAL_ORIGIN): 
       // visible without devtools.
       const watchdog = setTimeout(() => {
         if (settled) return;
-        wlog(`bundle PENDING after 5s: inst=${instanceID} ch=${channelID} viz=${document.visibilityState} focus=${document.hasFocus()}`);
+        wlog(`bundle PENDING after 5s: inst=${instanceID} ch=${p.channelID} viz=${document.visibilityState} focus=${document.hasFocus()}`);
       }, 5000);
 
       return runImport(url, p.origin)

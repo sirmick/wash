@@ -154,6 +154,9 @@ interface ShellChannelBind {
   origin?: string;
   // encoding: content-coding of a kind="bundle" channel ('' | 'gzip').
   encoding?: string;
+  // size: on-the-wire byte count for a kind="bundle" channel (drives
+  // byte-count completion so Bulk-class data isn't truncated by the unbind).
+  size?: number;
 }
 
 interface ShellChannelUnbind {
@@ -435,9 +438,10 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         const b = msg;
         if (b.kind === 'bundle' && b.instance_id) {
           // Bundle delivery channel — accumulate (per origin) until the
-          // matching channel.unbind triggers the dynamic import. encoding
-          // tells the accumulator whether to inflate (gzip) first.
-          client.bundleReady.set(b.instance_id, beginBundle(b.channel_id, b.instance_id, client.origin, b.encoding));
+          // byte-count completes the import. encoding tells the accumulator
+          // whether to inflate (gzip) first; size drives completion so the
+          // Bulk-class data can't be truncated by the Unbind.
+          client.bundleReady.set(b.instance_id, beginBundle(b.channel_id, b.instance_id, client.origin, b.encoding, b.size));
         } else if (b.kind === 'bundle') {
           // Settings-panel bundle channel (no instance_id): local-only,
           // keyed by channel_id in panels.ts. Nothing to do here.

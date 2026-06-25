@@ -378,17 +378,19 @@ func (s *ShellSession) handleAssetRead(m wire.ShellAssetRead) error {
 	}); err != nil {
 		return err
 	}
-	// Stream in chunks, slicing the cached (immutable) buffer. Interactive
-	// class so the strict-priority scheduler can't let the Unbind overtake
-	// data. The buffer is never mutated, so the async drain is safe without
-	// a per-request copy.
+	// Stream in chunks, slicing the cached (immutable) buffer. Background
+	// class: assets are behind the desktop's gradient fallback, so they
+	// yield to keystrokes, control, and the bundles that gate a launching
+	// window. The FE completes on byte-count (the Size above), so the
+	// higher-priority Unbind overtaking these frames is harmless
+	// (docs/QOS.md tc reclass).
 	const chunkSize = 64 * 1024
 	for off := 0; off < len(payload); off += chunkSize {
 		end := off + chunkSize
 		if end > len(payload) {
 			end = len(payload)
 		}
-		if werr := s.WriteRawFrameClass(id, payload[off:end], wire.ClassInteractive); werr != nil {
+		if werr := s.WriteRawFrameClass(id, payload[off:end], wire.ClassBackground); werr != nil {
 			return werr
 		}
 	}

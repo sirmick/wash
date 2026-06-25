@@ -39,7 +39,11 @@ var ClassQueueSize = map[wire.Class]int{
 	wire.ClassControl:     64,
 	wire.ClassInteractive: 256,
 	wire.ClassBulk:        64,
-	wire.ClassBackground:  16,
+	// Background now carries multi-frame asset streams (wallpapers/fonts/
+	// icons; docs/QOS.md tc reclass), so it needs more than the original
+	// telemetry-only headroom or a single wallpaper would block the
+	// producer on a full queue.
+	wire.ClassBackground: 64,
 }
 
 // ErrSchedulerClosed is returned by Submit after Close. Producers
