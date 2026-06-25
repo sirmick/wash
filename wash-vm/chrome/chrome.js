@@ -140,6 +140,9 @@ async function bootShell(showTab) {
 
   const parser = new FrameParser();
   let assetCh = -1;
+  let assetSize = -1;       // on-the-wire byte count from asset.read.ok
+  let assetEncoding = '';   // '' | 'gzip' — router-side content-coding to undo
+  let assetDone = false;
   const assetChunks = [];
   const replayChunks = [];
   // gate → asset → buffering → passthrough. The gate phase runs the login
@@ -160,6 +163,28 @@ async function bootShell(showTab) {
   wireLoginForm(sendLogin);
 
   const ready = new Promise((resolve, reject) => {
+    // Complete the shell.js pull on BYTE COUNT, not the channel.unbind. The
+    // asset data rides a low-priority class, so under the router's strict-
+    // priority scheduler the Control-class Unbind routinely overtakes the data
+    // frames — completing on the Unbind would resolve with truncated/empty
+    // bytes (the symptom: a 0-byte shell.js → blank desktop). Mirrors the FE's
+    // own accumulator (web/shell/src/wash-fetch.ts). Inflate when gzip.
+    const assetBytes = () => assetChunks.reduce((n, c) => n + c.length, 0);
+    const tryCompleteAsset = () => {
+      if (assetDone || assetCh < 0 || assetSize < 0 || assetBytes() < assetSize) return false;
+      assetDone = true;
+      phase = 'buffering';
+      const raw = concat(assetChunks);
+      const done = (b) => resolve({ shellBytes: b, replay: concat(replayChunks) });
+      if (assetEncoding === 'gzip') {
+        new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('gzip')))
+          .arrayBuffer()
+          .then((buf) => done(new Uint8Array(buf)), (e) => reject(e instanceof Error ? e : new Error(String(e))));
+      } else {
+        done(raw);
+      }
+      return true;
+    };
     ws.onmessage = (ev) => {
       const bytes = new Uint8Array(ev.data);
       if (phase === 'buffering') { postBuf.push(bytes); return; }
@@ -186,12 +211,13 @@ async function bootShell(showTab) {
           catch { replayChunks.push(encodeFrame(0, f.payload, f.flags)); continue; }
           if (msg.t === 'asset.read.ok' && msg.req_id === 1) {
             assetCh = msg.channel_id ?? -1;
+            assetSize = msg.size ?? -1;
+            assetEncoding = msg.encoding ?? '';
+            if (tryCompleteAsset()) return; // zero-length asset: no data frames
           } else if (msg.t === 'asset.read.err' && msg.req_id === 1) {
             reject(new Error(`asset.read.err [${msg.code}] ${msg.msg ?? ''}`));
           } else if (msg.t === 'channel.unbind' && msg.channel_id === assetCh && assetCh >= 0) {
-            phase = 'buffering';
-            resolve({ shellBytes: concat(assetChunks), replay: concat(replayChunks) });
-            return;
+            if (tryCompleteAsset()) return; // backstop — completion is byte-count driven
           } else if (msg.t === 'channel.bind' && msg.channel_id === assetCh) {
             // no-op — asset.read.ok already told us the channel id
           } else {
@@ -199,6 +225,7 @@ async function bootShell(showTab) {
           }
         } else if (f.channel === assetCh && assetCh >= 0) {
           assetChunks.push(f.payload);
+          if (tryCompleteAsset()) return;
         } else {
           replayChunks.push(encodeFrame(f.channel, f.payload, f.flags));
         }
