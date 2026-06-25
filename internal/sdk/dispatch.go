@@ -154,10 +154,6 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 			return err
 		}
 		c.resolveWindowCreate(m.ReqID, 0, windowCreateErrFromMsg(m))
-	case wire.TEvtShutdown:
-		if c.def.OnShutdown != nil {
-			c.def.OnShutdown(c)
-		}
 	case wire.TEvtAppMsg:
 		var m wire.EvtAppMsg
 		if err := json.Unmarshal(payload, &m); err != nil {

@@ -142,7 +142,6 @@ func TestEvtRoundTrip(t *testing.T) {
 		NewEvtWindowResize(1, 800, 600),
 		NewEvtWindowState(1, WindowStateMinimized),
 		NewEvtWindowCloseRequested(1),
-		NewEvtShutdown(),
 		NewEvtWindowSetTitle(1, "Hello"),
 		NewEvtWindowConfirmClose(1, true),
 		NewEvtWindowConfirmClose(1, false),

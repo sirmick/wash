@@ -153,6 +153,20 @@ func (m *manager) stop() {
 	killTree(proc)
 }
 
+// killChild SIGKILLs the running code-server's whole process group and
+// drops our handle to it. Unlike stop() it does NOT touch the bus — it's
+// the SIGTERM-shutdown path (sdk.OnTerminate), where the router is already
+// tearing us down and an ingress-unpublish round-trip could hang on a
+// closing connection. Pdeathsig only reaps code-server's *direct* process;
+// its node worker children orphan to PID 1 unless we group-kill here.
+func (m *manager) killChild() {
+	m.mu.Lock()
+	proc := m.proc
+	m.proc, m.path = nil, ""
+	m.mu.Unlock()
+	killTree(proc)
+}
+
 // killTree SIGKILLs the child's whole process group, falling back to
 // the bare process.
 func killTree(proc *exec.Cmd) {

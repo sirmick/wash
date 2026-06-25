@@ -115,6 +115,11 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	theManager = m
 	registerHandlers(m)
 
+	// The router stops us with SIGTERM; without a handler we'd die before
+	// killing code-server, orphaning its node workers (Pdeathsig only reaps
+	// the direct child). Group-kill the whole code-server tree on shutdown.
+	sdk.OnTerminate(m.killChild)
+
 	// Best-effort newest-release lookup once at startup (cached, so we
 	// don't hit GitHub's rate limit on every status request).
 	go func() {

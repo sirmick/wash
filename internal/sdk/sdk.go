@@ -88,10 +88,6 @@ type AppDef struct {
 	// mime is the new content type. Apps that care should follow up
 	// with ClipboardGet.
 	OnClipboardChanged func(c *Conn, mime string)
-
-	// OnShutdown fires when the router sends "shutdown". The SDK
-	// continues to receive frames until the underlying socket closes.
-	OnShutdown func(c *Conn)
 }
 
 // Conn is the live connection state for one app process.
@@ -217,11 +213,11 @@ func (c *Conn) LaunchOpenPath() string {
 //     until the socket closes, then returns. On error it prints to
 //     stderr and exits non-zero.
 //
-// Main installs no signal handlers in normal operation — the OS sends
-// SIGTERM at router shutdown, and the SDK lets the runtime tear down
-// naturally. The sole exception is a coverage run (GOCOVERDIR set), where
-// a SIGTERM handler flushes -cover counters before exiting; that path is
-// inert otherwise. See installCoverageFlushOnSignal.
+// Main installs no signal handler unless something asks for one: an app
+// that spawns a child tree registers cleanup with OnTerminate (see
+// terminate.go), and a coverage run installs the handler to flush -cover
+// counters. With neither, the OS sends SIGTERM at router shutdown and the
+// SDK lets the runtime tear the process down naturally.
 func Main(def *AppDef) {
 	if maybePrintManifest(def) {
 		return

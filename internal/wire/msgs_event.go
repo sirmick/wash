@@ -16,7 +16,6 @@ const (
 	TEvtWindowResize         = "window.resize"
 	TEvtWindowState          = "window.state"
 	TEvtWindowCloseRequested = "window.close_requested"
-	TEvtShutdown             = "shutdown"
 
 	// App → router.
 	TEvtWindowSetTitle     = "window.set_title"
@@ -214,13 +213,6 @@ type EvtWindowCloseRequested struct {
 func NewEvtWindowCloseRequested(win uint32) EvtWindowCloseRequested {
 	return EvtWindowCloseRequested{T: TEvtWindowCloseRequested, Win: win}
 }
-
-// EvtShutdown: router → app, "I'm going away, close cleanly".
-type EvtShutdown struct {
-	T string `json:"t"`
-}
-
-func NewEvtShutdown() EvtShutdown { return EvtShutdown{T: TEvtShutdown} }
 
 // EvtWindowSetTitle: app → router, request titlebar text change.
 type EvtWindowSetTitle struct {
@@ -830,9 +822,6 @@ func DecodeEvt(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TEvtWindowCloseRequested:
 		var m EvtWindowCloseRequested
-		return m, json.Unmarshal(data, &m)
-	case TEvtShutdown:
-		var m EvtShutdown
 		return m, json.Unmarshal(data, &m)
 	case TEvtWindowSetTitle:
 		var m EvtWindowSetTitle
