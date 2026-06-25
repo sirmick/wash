@@ -28,19 +28,22 @@ export default defineConfig({
   globalSetup: './global-setup.ts',
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  // 1 retry: the suite runs parallel (WORKER_CAP workers × routers + ~40 BE
-  // apps), so individual specs occasionally lose a timing race (control-socket
-  // round-trip, ingress now-playing propagation) and flake — each passes in
-  // isolation. Playwright re-runs ONLY the failed spec; a genuine failure
-  // still fails both attempts. Without this, one flake fails the whole gate.
-  retries: 1,
+  // No retries. A retry just re-runs a flaked spec and hides the flake; a
+  // timeout under load is far more likely a real bug (a wedged round-trip, a
+  // missing settle/await) that we want to SEE and fix, not paper over. The
+  // job of the timeouts below is to be generous enough that legitimate
+  // under-load latency never trips them — so a timeout that DOES fire is
+  // signal, not noise. Paired with the WORKER_CAP above (no over-subscription)
+  // this keeps the gate honest.
+  retries: 0,
   reporter: process.env.CI ? 'line' : 'list',
-  // 15s per test + 10s per expect under load (WORKER_CAP workers can keep
-  // that many chromium tabs + routers + ~40 BE apps alive simultaneously).
-  // A genuinely-hung assertion still surfaces in ~10s; one slow BE
-  // round-trip doesn't tank the test.
-  timeout: 15_000,
-  expect: { timeout: 10_000 },
+  // 25s per test + 15s per expect: sized for WORKER_CAP workers each driving a
+  // chromium tab + router + ~5-7 BE apps, where a BE list/clipboard/session
+  // round-trip can take a few seconds. Generous on purpose (a genuinely hung
+  // test still fails in ≤25s and the whole suite runs in ~3min), so a fire is
+  // a real bug to investigate — not a too-tight assertion losing a race.
+  timeout: 25_000,
+  expect: { timeout: 15_000 },
   use: {
     headless: true,
     trace: 'retain-on-failure',

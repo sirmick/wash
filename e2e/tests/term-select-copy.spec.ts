@@ -72,7 +72,10 @@ test.describe('terminal selection + copy keybinding', () => {
     // clipboard while the keypress gesture is live) and clears it.
     await page.keyboard.press('Control+c');
     await expect
-      .poll(() => page.evaluate(() => navigator.clipboard.readText()), { timeout: 5_000 })
+      // Inherit the config's expect timeout (15s) rather than a tight 5s: the
+      // Ctrl+C → copy → system-clipboard mirror is a round-trip that's slow
+      // under parallel load (flaked here at 5s, passed on retry).
+      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
       .toContain('ctrl-c-copy-marker');
     await expect
       .poll(() => host.evaluate((h: any) => !!h.__washTerm?.hasSelection()))
