@@ -11,7 +11,7 @@
 // Display section at all (docs/SETTINGS.md).
 
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
-import { Row, Section, ServiceBadge, SmallBtn, defineSettingsPanel, tokens } from '@wash/ui';
+import { Row, Section, Select, ServiceBadge, SmallBtn, defineSettingsPanel, tokens } from '@wash/ui';
 import type { SettingsPanelProps } from '@wash/ui';
 import { RotateCcw } from 'lucide-solid';
 
@@ -19,26 +19,60 @@ interface DisplayState {
   running: boolean;
   wayland_display: string;
   window_count: number;
+  dpi: number;
+}
+
+const DEFAULT_DPI = 96;
+const DPI_OPTIONS: [string, string][] = [
+  ['72', '72 dpi'],
+  ['96', '96 dpi'],
+  ['120', '120 dpi'],
+  ['144', '144 dpi'],
+  ['168', '168 dpi'],
+  ['192', '192 dpi'],
+];
+
+function parseDpi(v: unknown): number {
+  const n = typeof v === 'number' ? v : Number(v);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_DPI;
+  return Math.max(72, Math.min(240, Math.round(n)));
 }
 
 const Panel = (props: SettingsPanelProps) => {
   const port = props.port;
   const [state, setState] = createSignal<DisplayState | null>(null);
+  const [dpi, setDpi] = createSignal(String(DEFAULT_DPI));
+
+  const applyDpi = (next: number, persist: boolean) => {
+    const value = parseDpi(next);
+    setDpi(String(value));
+    port.send({ kind: 'display.set_dpi', dpi: value });
+    if (persist) port.writeConfig('display', { dpi: value });
+  };
 
   onMount(() => {
-    const off = port.onMessage((p) => {
+    const offMsg = port.onMessage((p) => {
       if (p.kind === 'display.state' || p.kind === 'display_ready') {
+        const nextDpi = parseDpi((p as { dpi?: number }).dpi ?? DEFAULT_DPI);
+        setDpi(String(nextDpi));
         setState({
           running: (p as { running?: boolean }).running ?? true,
           wayland_display: (p as { wayland_display?: string }).wayland_display ?? '',
           window_count: (p as { window_count?: number }).window_count ?? 0,
+          dpi: nextDpi,
         });
+      }
+    });
+    const offCfg = port.readConfig('display', (value) => {
+      if (value && Object.prototype.hasOwnProperty.call(value, 'dpi')) {
+        applyDpi(parseDpi(value.dpi), false);
       }
     });
     port.send({ kind: 'subscribe' });
     onCleanup(() => {
       port.send({ kind: 'unsubscribe' });
-      off();
+      offMsg();
+      offCfg();
     });
   });
 
@@ -59,6 +93,14 @@ const Panel = (props: SettingsPanelProps) => {
             </Show>
             <Row label="Native windows">
               <span style={{ font: `${tokens.fontSizeMd} ${tokens.fontMono}` }}>{s()!.window_count}</span>
+            </Row>
+            <Row label="DPI">
+              <Select
+                value={dpi()}
+                options={DPI_OPTIONS}
+                data-testid="display-dpi"
+                onChange={(v) => applyDpi(parseDpi(v), true)}
+              />
             </Row>
             <div>
               <SmallBtn onClick={() => port.restart()} data-testid="display-restart">

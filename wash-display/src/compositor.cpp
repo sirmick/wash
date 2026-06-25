@@ -18,6 +18,9 @@
 // ALL C++/STL headers MUST be included BEFORE the `#define static` hack
 // below — otherwise the macro is in effect while libstdc++ headers parse
 // and corrupts them (e.g. <limits>'s `static constexpr` -> ~600 errors).
+#include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -62,6 +65,7 @@ extern "C" {
 #include <wlr/backend/headless.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
+#include <wlr/render/wlr_texture.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_output.h>
@@ -102,6 +106,20 @@ namespace {
 // so maximized/large apps (IDEs, p4v) have room; HiDPI scaling is M5b.
 constexpr int kScreenW = 1920;
 constexpr int kScreenH = 1080;
+constexpr int kDefaultDpi = 96;
+constexpr int kMinDpi = 72;
+constexpr int kMaxDpi = 240;
+
+static int clamp_dpi(int dpi) {
+    if (dpi <= 0) return kDefaultDpi;
+    return std::max(kMinDpi, std::min(kMaxDpi, dpi));
+}
+
+static int dpi_to_mm(int px, int dpi) {
+    return std::max(1, (int)std::lround((double)px * 25.4 / (double)clamp_dpi(dpi)));
+}
+
+static std::atomic<int> g_output_dpi{kDefaultDpi};
 
 struct Server {
     struct wl_display* display = nullptr;
@@ -111,6 +129,7 @@ struct Server {
     struct wlr_scene* scene = nullptr;
     struct wlr_scene_output_layout* scene_layout = nullptr;
     struct wlr_output_layout* output_layout = nullptr;
+    std::vector<struct wlr_output*> outputs;
     struct wlr_xdg_shell* xdg_shell = nullptr;
 
     struct wl_listener new_output;
@@ -351,20 +370,31 @@ struct Output {
     struct wl_listener destroy;
 };
 
-// tree_signature sums each surface's per-commit seq across the whole tree
-// (root + subsurfaces) and folds in the surface count, so it changes on ANY
-// commit anywhere in the window — including a desynchronized subsurface
-// repaint that never touches the root surface (M7). Cheap: no readback.
-struct SigAcc { uint64_t sum = 0; uint32_t count = 0; };
-static void sig_cb(struct wlr_surface* s, int /*sx*/, int /*sy*/, void* data) {
+// tree_signature folds each surface's commit seq, position, texture size and
+// paint order across the whole tree (root + subsurfaces), so it changes on
+// repaint, moved subsurface, resize, map/unmap and stacking changes. Cheap:
+// no readback.
+static uint64_t sig_mix(uint64_t h, uint64_t v) {
+    h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    return h;
+}
+struct SigAcc { uint64_t h = 1469598103934665603ULL; uint32_t count = 0; };
+static void sig_cb(struct wlr_surface* s, int sx, int sy, void* data) {
     auto* a = static_cast<SigAcc*>(data);
-    a->sum += s->current.seq;
+    struct wlr_texture* tex = wlr_surface_get_texture(s);
+    a->h = sig_mix(a->h, reinterpret_cast<uintptr_t>(s));
+    a->h = sig_mix(a->h, s->current.seq);
+    a->h = sig_mix(a->h, (uint32_t)sx);
+    a->h = sig_mix(a->h, (uint32_t)sy);
+    a->h = sig_mix(a->h, tex ? tex->width : 0);
+    a->h = sig_mix(a->h, tex ? tex->height : 0);
+    a->h = sig_mix(a->h, a->count);
     a->count++;
 }
 static uint64_t tree_signature(struct wlr_surface* root) {
     SigAcc a;
     wlr_surface_for_each_surface(root, sig_cb, &a);
-    return (a.sum << 16) ^ a.count;
+    return sig_mix(a.h, a.count);
 }
 
 void output_frame(struct wl_listener* listener, void* /*data*/) {
@@ -404,9 +434,43 @@ void output_frame(struct wl_listener* listener, void* /*data*/) {
 
 void output_destroy(struct wl_listener* listener, void* /*data*/) {
     Output* out = wl_container_of(listener, out, destroy);
+    auto& outputs = out->server->outputs;
+    outputs.erase(std::remove(outputs.begin(), outputs.end(), out->wlr_output), outputs.end());
     wl_list_remove(&out->frame.link);
     wl_list_remove(&out->destroy.link);
     delete out;
+}
+
+static void set_output_physical_dpi(struct wlr_output* output, int dpi) {
+    if (!output) return;
+    dpi = clamp_dpi(dpi);
+    output->phys_width = dpi_to_mm(kScreenW, dpi);
+    output->phys_height = dpi_to_mm(kScreenH, dpi);
+}
+
+static void configure_output_mode(struct wlr_output* output, int dpi) {
+    set_output_physical_dpi(output, dpi);
+    struct wlr_output_state state;
+    wlr_output_state_init(&state);
+    wlr_output_state_set_enabled(&state, true);
+    // Headless outputs have no fixed modes; set a custom mode. Keep scale at
+    // 1 until full buffer-scale HiDPI lands, otherwise capture/input coords
+    // and the video frame's logical size diverge.
+    wlr_output_state_set_custom_mode(&state, kScreenW, kScreenH, 0);
+    wlr_output_state_set_scale(&state, 1.0f);
+    wlr_output_commit_state(output, &state);
+    wlr_output_state_finish(&state);
+}
+
+static void apply_display_dpi(Server* server, int dpi) {
+    if (!server) return;
+    dpi = clamp_dpi(dpi);
+    g_output_dpi.store(dpi);
+    for (auto* output : server->outputs) set_output_physical_dpi(output, dpi);
+    if (server->conn) {
+        server->conn->publish_env(json{{"WASH_DISPLAY_DPI", std::to_string(dpi)}});
+    }
+    wlr_log(WLR_INFO, "wash-display: display dpi=%d", dpi);
 }
 
 void server_new_output(struct wl_listener* listener, void* data) {
@@ -414,14 +478,8 @@ void server_new_output(struct wl_listener* listener, void* data) {
     auto* wlr_output = static_cast<struct wlr_output*>(data);
 
     wlr_output_init_render(wlr_output, server->allocator, server->renderer);
-
-    struct wlr_output_state state;
-    wlr_output_state_init(&state);
-    wlr_output_state_set_enabled(&state, true);
-    // Headless outputs have no fixed modes; set a custom mode.
-    wlr_output_state_set_custom_mode(&state, kScreenW, kScreenH, 0);
-    wlr_output_commit_state(wlr_output, &state);
-    wlr_output_state_finish(&state);
+    server->outputs.push_back(wlr_output);
+    configure_output_mode(wlr_output, g_output_dpi.load());
 
     auto* out = new Output();
     out->server = server;
@@ -1483,6 +1541,10 @@ static void post_clip_offer(const std::string& mime) {
 // pipe handler), so wlroots calls are safe. Unknown win (already gone) is a
 // no-op.
 static void apply_win_cmd(const WinCmd& c) {
+    if (c.t == "display.dpi") {
+        apply_display_dpi(g_server, (int)c.w);
+        return;
+    }
     wlr_log(WLR_INFO, "wash-display: apply win cmd t=%s win=%u %ux%u",
             c.t.c_str(), c.win, c.w, c.h);
     WinRef ref;
@@ -1581,6 +1643,20 @@ void post_input(const json& data) {
     }
     // Wake the compositor thread via the same self-pipe the window commands
     // use. Byte value is irrelevant — on_cmd_pipe drains both queues.
+    if (g_cmd_pipe[1] >= 0) {
+        char b = 1;
+        ssize_t n = write(g_cmd_pipe[1], &b, 1);
+        (void)n;
+    }
+}
+
+void post_display_dpi(int dpi) {
+    dpi = clamp_dpi(dpi);
+    g_output_dpi.store(dpi);
+    {
+        std::lock_guard<std::mutex> lk(g_cmd_mu);
+        g_cmds.push_back(WinCmd{"display.dpi", 0, (uint32_t)dpi, 0});
+    }
     if (g_cmd_pipe[1] >= 0) {
         char b = 1;
         ssize_t n = write(g_cmd_pipe[1], &b, 1);
@@ -1799,6 +1875,7 @@ int run_compositor(WireConn& conn) {
     {
         json pub;
         pub["WASH_WAYLAND_DISPLAY"] = socket;
+        pub["WASH_DISPLAY_DPI"] = std::to_string(g_output_dpi.load());
         if (const char* xrd = std::getenv("XDG_RUNTIME_DIR"); xrd && *xrd) {
             pub["WASH_XDG_RUNTIME_DIR"] = xrd;
         }

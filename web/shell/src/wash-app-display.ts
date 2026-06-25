@@ -147,6 +147,8 @@ export class WashAppDisplay extends HTMLElement {
       this.canvas = canvas;
       this.ctx = canvas.getContext('2d');
     }
+    this.tabIndex = 0;
+    this.style.outline = 'none';
 
     // Register so the shell can hand us our window's video channel. If the
     // channel.bind already arrived before mount, the registry replays it
@@ -194,6 +196,7 @@ export class WashAppDisplay extends HTMLElement {
   // and forwards them, surface-relative, to the wash-display BE which
   // injects them into the real wlroots surface.
   private setupInput(): void {
+    if (this.inputCleanup) return;
     // Make the element focusable so it can receive key events when its
     // window is active; clicking it (below) gives it DOM focus. The outline
     // would be visual noise over guest pixels.
@@ -219,6 +222,8 @@ export class WashAppDisplay extends HTMLElement {
     const onPointerDown = (ev: PointerEvent) => {
       this.lastClientX = ev.clientX;
       this.lastClientY = ev.clientY;
+      ev.preventDefault();
+      window.wash?.focusWindow(this.windowID, this.origin);
       // Capture so a drag that leaves the element still delivers move/up
       // (dragging a scrollbar, selecting text, etc.). Focus for keys.
       try {
@@ -234,6 +239,7 @@ export class WashAppDisplay extends HTMLElement {
     const onPointerUp = (ev: PointerEvent) => {
       this.lastClientX = ev.clientX;
       this.lastClientY = ev.clientY;
+      ev.preventDefault();
       if (this.moving) {
         this.endMove();
         return;
@@ -252,6 +258,8 @@ export class WashAppDisplay extends HTMLElement {
       // match wlroots' positive-down convention. preventDefault stops the
       // shell scrolling underneath.
       ev.preventDefault();
+      window.wash?.focusWindow(this.windowID, this.origin);
+      this.focus({ preventScroll: true });
       if (ev.deltaY) this.queue({ ev: 'axis', axis: 'v', delta: Math.round(ev.deltaY) });
       if (ev.deltaX) this.queue({ ev: 'axis', axis: 'h', delta: Math.round(ev.deltaX) });
       this.flushNow();
@@ -261,11 +269,14 @@ export class WashAppDisplay extends HTMLElement {
       // the guest owns the keyboard. (Repeat is the client's job, so a
       // synthetic repeat — ev.repeat — still forwards as a fresh down.)
       ev.preventDefault();
+      ev.stopPropagation();
+      window.wash?.focusWindow(this.windowID, this.origin);
       this.queue({ ev: 'key', code: ev.code, state: 'down' });
       this.flushNow();
     };
     const onKeyUp = (ev: KeyboardEvent) => {
       ev.preventDefault();
+      ev.stopPropagation();
       this.queue({ ev: 'key', code: ev.code, state: 'up' });
       this.flushNow();
     };

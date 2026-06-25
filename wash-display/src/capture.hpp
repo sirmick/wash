@@ -23,6 +23,12 @@ struct wlr_renderer;
 
 namespace wash {
 
+struct SurfaceCaptureState {
+    uint32_t seq = 0;
+    uintptr_t texture = 0;
+    int x = 0, y = 0, w = 0, h = 0, order = 0;
+};
+
 class SurfaceCapture {
 public:
     SurfaceCapture() = default;
@@ -60,7 +66,7 @@ public:
 
     // Dirty rectangle for this frame, in cropped-buffer coords. The whole
     // tree is composited, but only the union of the surfaces that actually
-    // changed (see seq_) is encoded/sent — M7 tree-aware damage.
+    // changed, moved, appeared, or vanished is encoded/sent.
     int dirty_x = 0, dirty_y = 0, dirty_w = 0, dirty_h = 0;
 
 private:
@@ -71,11 +77,12 @@ private:
     // (DISPLAY.md §11 — never alloc per frame).
     void* render_buf_ = nullptr;
     int rb_w_ = 0, rb_h_ = 0;
-    // Per-surface last-seen commit seq, keyed by surface pointer. A surface
-    // contributes to the dirty rect only when its seq advances, so a static
-    // surface's stale last-commit damage (e.g. a browser's root/CSD layer,
-    // damaged once at startup) doesn't force a full-frame encode every frame.
-    std::map<struct wlr_surface*, uint32_t> seq_;
+    // Per-surface last-seen commit/geometry state, keyed by surface pointer.
+    // A surface contributes to the dirty rect when its seq advances, when its
+    // texture/bounds/order changes, or when it vanished since the last frame.
+    // This keeps stale last-commit damage from static surfaces out of frames
+    // while still clearing old pixels after moved/removed subsurfaces.
+    std::map<struct wlr_surface*, SurfaceCaptureState> states_;
 };
 
 } // namespace wash

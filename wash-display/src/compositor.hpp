@@ -30,4 +30,9 @@ int run_compositor(WireConn& conn);
 // app_msgs arrive on the instance's primary window).
 void post_input(const json& data);
 
+// post_display_dpi updates the compositor's advertised virtual-output DPI.
+// Like post_input, this is safe from the WireConn reader thread: the actual
+// wlroots output mutation is drained on the compositor thread.
+void post_display_dpi(int dpi);
+
 } // namespace wash

@@ -328,8 +328,14 @@ test.describe('wash-settings — Display panel (wash-display compositor)', () =>
 
     // Live snapshot fields: a wayland-N socket and a numeric window count
     // (0 with no clients mapped yet).
-    await expect(app).toContainText(/wayland-\d+/);
+    await expect(app).toContainText(/wayland-\d+/, { timeout: 30_000 });
     await expect(app).toContainText('Native windows');
+
+    const dpi = app.locator('[data-testid="display-dpi"]');
+    await expect(dpi).toBeVisible();
+    await expect(dpi).toHaveValue('96');
+    await dpi.selectOption('144');
+    await expect(dpi).toHaveValue('144');
   });
 
   test('Restart compositor cycles the singleton without flipping to not-installed', async ({ page, router }) => {

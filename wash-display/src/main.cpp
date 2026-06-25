@@ -35,6 +35,14 @@
 static const char* kAppID = "com.wash.display";
 static const char* kVersion = "0.9.3";
 static const int kProto = 1;
+static const int kDefaultDpi = 96;
+
+static int sanitize_display_dpi(int dpi) {
+    if (dpi <= 0) return kDefaultDpi;
+    if (dpi < 72) return 72;
+    if (dpi > 240) return 240;
+    return dpi;
+}
 
 // crash_handler dumps a native backtrace to stderr on a fatal signal so
 // the cause of a compositor abort/segfault lands in the router log (the
@@ -204,6 +212,7 @@ static int run() {
         return 1;
     }
     std::fprintf(stderr, "wash-display: attached instance=%s\n", instanceID.c_str());
+    conn.note_display_dpi(kDefaultDpi);
 
     // App-msg dispatch (reader thread). Two consumers:
     //   - subscribe: the settings Display panel asks for a state
@@ -223,6 +232,13 @@ static int run() {
             conn.remove_subscriber(from);
         } else if (kind == "display_open") {
             std::thread(handle_display_open, std::ref(conn), data).detach();
+        } else if (kind == "display.set_dpi") {
+            int dpi = sanitize_display_dpi(data.value("dpi", kDefaultDpi));
+            conn.note_display_dpi(dpi);
+            conn.publish_env({{"WASH_DISPLAY_DPI", std::to_string(dpi)}});
+#ifdef WASH_DISPLAY_COMPOSITOR
+            wash::post_display_dpi(dpi);
+#endif
         }
 #ifdef WASH_DISPLAY_COMPOSITOR
         else if (kind == "input") {

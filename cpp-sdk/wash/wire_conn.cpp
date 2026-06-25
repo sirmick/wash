@@ -397,6 +397,12 @@ void WireConn::note_wayland_display(const std::string& wd) {
     emit_display_state();
 }
 
+void WireConn::note_display_dpi(int dpi) {
+    if (dpi <= 0) dpi = 96;
+    display_dpi_.store(dpi);
+    emit_display_state();
+}
+
 void WireConn::note_window_delta(int d) {
     window_count_.fetch_add(d);
     emit_display_state();
@@ -414,7 +420,8 @@ void WireConn::emit_display_state() {
         payload = json{{"kind", "display.state"},
                        {"running", true},
                        {"wayland_display", wayland_display_},
-                       {"window_count", n}};
+                       {"window_count", n},
+                       {"dpi", display_dpi_.load()}};
         targets.assign(subs_.begin(), subs_.end());
     }
     for (const auto& id : targets) send_app_msg_to(id, payload);

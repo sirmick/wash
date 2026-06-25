@@ -62,8 +62,9 @@ namespace {
 // advances since we last saw it (`seq`), so a static layer's stale last-commit
 // damage doesn't inflate every frame. A seq advance with empty effective
 // damage falls back to the surface's full bounds (a buffer swap without an
-// explicit damage request must still be redrawn). A never-before-seen surface
-// flags `any_new` so the caller takes a full frame (layout changed).
+// explicit damage request must still be redrawn). Position/size/order changes
+// dirty both old and new bounds, and vanished surfaces dirty their old bounds
+// so the browser clears stale pixels from its persistent canvas.
 struct CompositeCtx {
     struct wlr_render_pass* pass;
     int off_x;   // crop origin x in root-surface coords
@@ -71,12 +72,34 @@ struct CompositeCtx {
     int buf_w;   // target bounds (for clamping damage)
     int buf_h;
     int drawn;   // count of textured surfaces composited
-    std::map<struct wlr_surface*, uint32_t>* prev; // last frame's seqs (read)
-    std::map<struct wlr_surface*, uint32_t>* next; // this frame's seqs (write)
-    bool any_new;          // a surface not previously seen → full frame
+    int order;   // textured-surface paint order in this tree walk
+    std::map<struct wlr_surface*, SurfaceCaptureState>* prev; // last frame's state (read)
+    std::map<struct wlr_surface*, SurfaceCaptureState>* next; // this frame's state (write)
     bool have_dmg;         // accumulator below is valid
     int dx0, dy0, dx1, dy1; // dirty bbox in buffer coords
 };
+
+void add_dirty(CompositeCtx* c, int x0, int y0, int x1, int y1) {
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > c->buf_w) x1 = c->buf_w;
+    if (y1 > c->buf_h) y1 = c->buf_h;
+    if (x1 <= x0 || y1 <= y0) return;
+    if (!c->have_dmg) {
+        c->have_dmg = true;
+        c->dx0 = x0; c->dy0 = y0; c->dx1 = x1; c->dy1 = y1;
+    } else {
+        if (x0 < c->dx0) c->dx0 = x0;
+        if (y0 < c->dy0) c->dy0 = y0;
+        if (x1 > c->dx1) c->dx1 = x1;
+        if (y1 > c->dy1) c->dy1 = y1;
+    }
+}
+
+void add_bounds(CompositeCtx* c, const SurfaceCaptureState& st) {
+    add_dirty(c, st.x, st.y, st.x + st.w, st.y + st.h);
+}
+
 void composite_surface_cb(struct wlr_surface* s, int sx, int sy, void* data) {
     auto* c = static_cast<CompositeCtx*>(data);
     struct wlr_texture* tex = wlr_surface_get_texture(s);
@@ -101,12 +124,40 @@ void composite_surface_cb(struct wlr_surface* s, int sx, int sy, void* data) {
     // (the caller swaps next→prev, which prunes surfaces no longer in the tree
     // and so is safe against surface-pointer reuse).
     const uint32_t cur = s->current.seq;
-    (*c->next)[s] = cur;
+    SurfaceCaptureState now;
+    now.seq = cur;
+    now.texture = reinterpret_cast<uintptr_t>(tex);
+    now.x = ox;
+    now.y = oy;
+    now.w = (int)tex->width;
+    now.h = (int)tex->height;
+    now.order = c->order++;
+    (*c->next)[s] = now;
     auto it = c->prev->find(s);
-    bool changed;
-    if (it == c->prev->end()) { changed = true; c->any_new = true; }
-    else changed = (it->second != cur);
-    if (!changed) return;
+    if (it == c->prev->end()) {
+        add_bounds(c, now);
+        return;
+    }
+
+    const SurfaceCaptureState& old = it->second;
+    const bool seq_changed = old.seq != cur;
+    const bool multi_commit = seq_changed && (uint32_t)(cur - old.seq) != 1;
+    const bool layout_changed =
+        old.texture != now.texture || old.x != now.x || old.y != now.y ||
+        old.w != now.w || old.h != now.h || old.order != now.order;
+
+    if (!seq_changed && !layout_changed) return;
+
+    // Position/size/order/texture changes need both old and new bounds: the
+    // new pixels must be sent, and old pixels must be cleared/revealed.
+    // If the output frame skipped over multiple client commits, effective
+    // damage only describes the latest one, so fall back to the full current
+    // bounds to avoid dropping earlier partial updates.
+    if (layout_changed || multi_commit) {
+        if (layout_changed) add_bounds(c, old);
+        add_bounds(c, now);
+        return;
+    }
 
     // Its dirty region (surface-local) → buffer coords. Fall back to the
     // surface's full bounds when the client committed without explicit damage.
@@ -122,20 +173,7 @@ void composite_surface_cb(struct wlr_surface* s, int sx, int sy, void* data) {
     }
     pixman_region32_fini(&dmg);
 
-    if (x0 < 0) x0 = 0;
-    if (y0 < 0) y0 = 0;
-    if (x1 > c->buf_w) x1 = c->buf_w;
-    if (y1 > c->buf_h) y1 = c->buf_h;
-    if (x1 <= x0 || y1 <= y0) return;
-    if (!c->have_dmg) {
-        c->have_dmg = true;
-        c->dx0 = x0; c->dy0 = y0; c->dx1 = x1; c->dy1 = y1;
-    } else {
-        if (x0 < c->dx0) c->dx0 = x0;
-        if (y0 < c->dy0) c->dy0 = y0;
-        if (x1 > c->dx1) c->dx1 = x1;
-        if (y1 > c->dy1) c->dy1 = y1;
-    }
+    add_dirty(c, x0, y0, x1, y1);
 }
 } // namespace
 
@@ -227,17 +265,24 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
     clear.blend_mode = WLR_RENDER_BLEND_MODE_NONE;
     wlr_render_pass_add_rect(pass, &clear);
 
-    std::map<struct wlr_surface*, uint32_t> next;
-    CompositeCtx ctx{ pass, src_x, src_y, w, h, 0, &seq_, &next, false, false, 0, 0, 0, 0 };
+    std::map<struct wlr_surface*, SurfaceCaptureState> next;
+    CompositeCtx ctx{ pass, src_x, src_y, w, h, 0, 0, &states_, &next, false, 0, 0, 0, 0 };
     wlr_surface_for_each_surface(surface, composite_surface_cb, &ctx);
     if (!wlr_render_pass_submit(pass)) return false;
     if (ctx.drawn == 0) return false; // nothing textured yet
 
+    // Surfaces present last frame but absent now need their previous bounds
+    // resent after the clear+composite pass, otherwise stale pixels remain on
+    // the FE's persistent canvas.
+    for (const auto& [surf, st] : states_) {
+        if (next.find(surf) == next.end()) add_bounds(&ctx, st);
+    }
+
     // Decide the dirty rect from the tree walk. A resize/first-frame, a
-    // newly-appeared surface, or an explicit force_full means the whole
-    // window; otherwise the union of the surfaces that actually changed. If
+    // forced full capture means the whole window; otherwise the union of the
+    // surfaces that actually changed, moved, appeared, or vanished. If
     // something committed but nothing visibly changed, skip the frame.
-    if (full_capture || ctx.any_new) {
+    if (full_capture) {
         dirty_x = 0; dirty_y = 0; dirty_w = w; dirty_h = h;
     } else if (ctx.have_dmg) {
         dirty_x = ctx.dx0; dirty_y = ctx.dy0;
@@ -301,7 +346,7 @@ bool SurfaceCapture::capture(struct wlr_surface* surface, struct wlr_renderer* r
     // had failed above we keep the old seqs so the changed surfaces are
     // retried next frame instead of being treated as already-encoded (which
     // would drop their update and leave stale pixels). Prunes vanished surfaces.
-    seq_.swap(next);
+    states_.swap(next);
 
     w_ = w;
     h_ = h;
