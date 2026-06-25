@@ -317,7 +317,14 @@ func (inst *AppInstance) handleChannelOpen(m wire.ChannelOpen) error {
 		app:       inst,
 		shell:     shell,
 		windowID:  m.WindowID,
+		kind:      m.Kind,
 		buf:       newRingBuffer(ChannelScrollbackBytes),
+		// A "file" channel (fm download) skips the credit ledger so its
+		// Bulk frames take the LOSSLESS forward path — the credit-gated
+		// path's FE-behind suppression drops frames, which would corrupt a
+		// downloaded file (docs/QOS.md). Backpressure is the blocking
+		// scheduler Submit instead.
+		noCredit: m.Kind == wire.ChannelKindFile,
 	}
 	inst.router.registerChannel(b)
 	if err := shell.WriteCtrl(wire.NewShellChannelBind(id, m.WindowID, m.Kind)); err != nil {
