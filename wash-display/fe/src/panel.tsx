@@ -13,7 +13,7 @@
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
 import { Row, Section, Select, ServiceBadge, SmallBtn, defineSettingsPanel, tokens } from '@wash/ui';
 import type { SettingsPanelProps } from '@wash/ui';
-import { RotateCcw } from 'lucide-solid';
+import { Play, RotateCcw } from 'lucide-solid';
 
 interface DisplayState {
   running: boolean;
@@ -25,7 +25,14 @@ interface DisplayState {
   display_scale: number;
 }
 
+interface RuntimeQueryPayload {
+  kind?: string;
+  rows?: unknown;
+}
+
 const DEFAULT_DPI = 96;
+const ROUTER_APP_ID = 'com.wash.router';
+const STATUS_POLL_MS = 2_000;
 type ScaleMode = 'auto' | '1' | '2';
 const DPI_OPTIONS: [string, string][] = [
   ['72', '72 dpi'],
@@ -51,6 +58,26 @@ function parseScaleMode(v: unknown): ScaleMode {
   return v === '1' || v === '2' || v === 'auto' ? v : 'auto';
 }
 
+function stoppedState(dpi: number): DisplayState {
+  return {
+    running: false,
+    wayland_display: '',
+    window_count: 0,
+    dpi,
+    display_width: 0,
+    display_height: 0,
+    display_scale: 1,
+  };
+}
+
+function hasRuntimeRowForApp(payload: RuntimeQueryPayload, appID: string): boolean {
+  if (payload.kind !== 'runtime.query_ok' || !Array.isArray(payload.rows)) return false;
+  return payload.rows.some((row) => {
+    if (!row || typeof row !== 'object') return false;
+    return (row as { app_id?: unknown }).app_id === appID;
+  });
+}
+
 function shellDisplayScaleMode(): ScaleMode {
   const wash = (window as unknown as { wash?: { displayScaleMode?: () => ScaleMode } }).wash;
   return parseScaleMode(wash?.displayScaleMode?.());
@@ -69,6 +96,12 @@ const Panel = (props: SettingsPanelProps) => {
   const [dpi, setDpi] = createSignal(String(DEFAULT_DPI));
   const [scaleMode, setScaleMode] = createSignal<ScaleMode>(shellDisplayScaleMode());
   const [config, setConfig] = createSignal<Record<string, unknown>>({});
+  const [alive, setAlive] = createSignal<boolean | null>(null);
+  const [op, setOp] = createSignal<'start' | 'restart' | null>(null);
+  const [panelStatus, setPanelStatus] = createSignal('');
+  let subscribed = false;
+  let pollSeq = 0;
+  let pollTimer = 0;
 
   const writeConfig = (patch: Record<string, unknown>) => {
     const next = { ...config(), ...patch };
@@ -79,7 +112,9 @@ const Panel = (props: SettingsPanelProps) => {
   const applyDpi = (next: number, persist: boolean) => {
     const value = parseDpi(next);
     setDpi(String(value));
-    port.send({ kind: 'display.set_dpi', dpi: value });
+    if (alive() === true) {
+      port.send({ kind: 'display.set_dpi', dpi: value });
+    }
     if (persist) writeConfig({ dpi: value });
   };
 
@@ -90,9 +125,66 @@ const Panel = (props: SettingsPanelProps) => {
     if (persist) writeConfig({ scale_mode: value });
   };
 
+  const requestStatus = () => {
+    port.send({ kind: 'runtime.query', id: `display-${++pollSeq}` }, ROUTER_APP_ID);
+  };
+
+  const ensureSubscribed = () => {
+    if (subscribed) return;
+    port.send({ kind: 'subscribe' });
+    subscribed = true;
+    port.send({ kind: 'display.set_dpi', dpi: parseDpi(dpi()) });
+  };
+
+  const markRunning = () => {
+    const wasAlive = alive() === true;
+    setAlive(true);
+    setState((prev) => ({ ...(prev ?? stoppedState(parseDpi(dpi()))), running: true }));
+    if (!wasAlive) ensureSubscribed();
+    if (op() === 'start') {
+      setOp(null);
+      setPanelStatus('');
+    }
+  };
+
+  const markStopped = () => {
+    subscribed = false;
+    setAlive(false);
+    setState((prev) => ({
+      ...(prev ?? stoppedState(parseDpi(dpi()))),
+      running: false,
+      wayland_display: '',
+      window_count: 0,
+      display_width: 0,
+      display_height: 0,
+      display_scale: 1,
+    }));
+  };
+
+  const serviceRunning = () => alive() ?? state()?.running ?? false;
+  const statusTone = () => (op() || alive() === null ? 'busy' : serviceRunning() ? 'on' : 'off') as const;
+  const statusLabel = () => {
+    if (op() === 'start') return 'starting';
+    if (op() === 'restart') return 'restarting';
+    if (alive() === null) return 'checking';
+    return serviceRunning() ? 'running' : 'stopped';
+  };
+
+  const startOrRestart = () => {
+    if (op()) return;
+    const next = serviceRunning() ? 'restart' : 'start';
+    setOp(next);
+    setPanelStatus(next === 'start' ? 'starting compositor...' : 'restarting compositor...');
+    port.restart();
+  };
+
   onMount(() => {
     const offMsg = port.onMessage((p) => {
       if (p.kind === 'display.state' || p.kind === 'display_ready') {
+        subscribed = true;
+        setAlive(true);
+        setOp(null);
+        setPanelStatus('');
         const nextDpi = parseDpi((p as { dpi?: number }).dpi ?? DEFAULT_DPI);
         setDpi(String(nextDpi));
         setState({
@@ -104,8 +196,25 @@ const Panel = (props: SettingsPanelProps) => {
           display_height: (p as { display_height?: number }).display_height ?? 0,
           display_scale: (p as { display_scale?: number }).display_scale ?? 1,
         });
+      } else if (p.kind === 'svc.restart_done') {
+        if ((p as { ok?: boolean }).ok) {
+          setPanelStatus('');
+          setOp(null);
+          requestStatus();
+        } else {
+          setOp(null);
+          setPanelStatus(`error: ${(p as { error?: string }).error || 'restart failed'}`);
+          requestStatus();
+        }
       }
     });
+    const offRouter = port.onMessage((p) => {
+      if (hasRuntimeRowForApp(p as RuntimeQueryPayload, port.appID)) {
+        markRunning();
+      } else if ((p as RuntimeQueryPayload).kind === 'runtime.query_ok') {
+        markStopped();
+      }
+    }, ROUTER_APP_ID);
     const offCfg = port.readConfig('display', (value) => {
       setConfig({ ...(value || {}), ...config() });
       if (value && Object.prototype.hasOwnProperty.call(value, 'dpi')) {
@@ -117,10 +226,12 @@ const Panel = (props: SettingsPanelProps) => {
         setScaleMode(shellDisplayScaleMode());
       }
     });
-    port.send({ kind: 'subscribe' });
+    requestStatus();
+    pollTimer = window.setInterval(requestStatus, STATUS_POLL_MS);
     onCleanup(() => {
-      port.send({ kind: 'unsubscribe' });
+      if (pollTimer) window.clearInterval(pollTimer);
       offMsg();
+      offRouter();
       offCfg();
     });
   });
@@ -133,7 +244,7 @@ const Panel = (props: SettingsPanelProps) => {
         <Show when={s()} fallback={<div style={{ opacity: 0.6 }}>Checking…</div>}>
           <div style={{ display: 'flex', 'flex-direction': 'column', gap: '12px' }}>
             <Row label="Status">
-              <ServiceBadge tone={s()!.running ? 'on' : 'off'} label={s()!.running ? 'running' : 'stopped'} />
+              <ServiceBadge tone={statusTone()} label={statusLabel()} />
             </Row>
             <Show when={s()!.wayland_display}>
               <Row label="Wayland display">
@@ -165,10 +276,20 @@ const Panel = (props: SettingsPanelProps) => {
               />
             </Row>
             <div>
-              <SmallBtn onClick={() => port.restart()} data-testid="display-restart">
-                <RotateCcw size={14} /> Restart compositor
+              <SmallBtn onClick={startOrRestart} data-testid="display-restart">
+                {serviceRunning() ? <RotateCcw size={14} /> : <Play size={14} />}
+                {op() === 'start'
+                  ? ' Starting...'
+                  : op() === 'restart'
+                    ? ' Restarting...'
+                    : serviceRunning()
+                      ? ' Restart compositor'
+                      : ' Start compositor'}
               </SmallBtn>
             </div>
+            <Show when={panelStatus()}>
+              <div style={{ color: tokens.fgDim, font: tokens.type.textSm }}>{panelStatus()}</div>
+            </Show>
           </div>
         </Show>
       </Section>
