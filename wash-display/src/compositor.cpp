@@ -1620,8 +1620,23 @@ static void apply_win_cmd(const WinCmd& c) {
     if (c.t == "window.focus" || c.t == "window.unfocus") {
         Server* srv = winref_server(ref);
         struct wlr_surface* surface = winref_surface(ref);
+        const bool active = c.t == "window.focus";
+        if (ref.kind == WinRef::XDG) {
+            auto* t = static_cast<Toplevel*>(ref.ptr);
+            if (t && t->xdg_toplevel) {
+                wlr_xdg_toplevel_set_activated(t->xdg_toplevel, active);
+            }
+        }
+#ifdef WASH_DISPLAY_XWAYLAND
+        else {
+            auto* x = static_cast<XSurface*>(ref.ptr);
+            if (x && x->xsurf) {
+                wlr_xwayland_surface_activate(x->xsurf, active);
+            }
+        }
+#endif
         if (srv && srv->seat) {
-            if (c.t == "window.focus" && surface) {
+            if (active && surface) {
                 struct wlr_keyboard* kb = wlr_seat_get_keyboard(srv->seat);
                 wlr_seat_keyboard_notify_enter(srv->seat, surface,
                                                kb ? kb->keycodes : nullptr,
