@@ -39,8 +39,11 @@ const APPS: AppBundle[] = [
   // (docs/REMOTE.md): icon list + popup menu.
   // +~1 KB: start-menu brand header (logo + "wash <version>"), the CPU-arch
   // banner field, the radius-token sweep across the sidebar widgets, and the
-  // themeable start-menu offset. Bumped to keep ~9 KB of headroom as a brake.
-  { name: 'session', dir: 'apps/session/fe/dist', maxBytes: 195_000 },
+  // themeable start-menu offset.
+  // +~1.5 KB: the link.stats desktop info panel (LinkWidget — host/cores/iface
+  // /router-version readout), the boot splash + busy cursor, and the shared
+  // createAppBus saveState() persist helper. Bumped to keep ~8 KB headroom.
+  { name: 'session', dir: 'apps/session/fe/dist', maxBytes: 205_000 },
   // about grew into the system-info panel: build/host/Go-runtime
   // process table/registered-apps/browser sections + sortable table.
   // +~0.1 KB from the shared createAppBus saveState()/flushState() persist

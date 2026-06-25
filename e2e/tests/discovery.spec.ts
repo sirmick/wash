@@ -6,6 +6,12 @@
 // the auto-spawned com.wash.remote background app, so a deterministic
 // candidate flows: discoverer → StateService → connect BE relay → connect FE.
 //
+// WASH_DISCOVERY_NO_MDNS disables the live mDNS provider entirely (no browse,
+// no advertise) so ONLY the static seed appears. NO_ADVERTISE alone is not
+// enough — it silences our announcement but still browses the link, so the
+// runner's real LAN peers would bleed into "On your network" and make the
+// assertions non-deterministic on a developer's network.
+//
 // Covered: the candidate renders under "On your network" (name + addr +
 // non-default port), Connect moves it into the connected list (proving the
 // connect op — carrying remote_port — relays all the way to the supervisor),
@@ -30,7 +36,7 @@ test('discovered host renders under "On your network" and Connect dials it', asy
   try {
     a = await startRouter({
       apps: ['session', 'connect', 'remote'],
-      extraEnv: { WASH_DISCOVERY_STATIC: STATIC, WASH_DISCOVERY_NO_ADVERTISE: '1' },
+      extraEnv: { WASH_DISCOVERY_STATIC: STATIC, WASH_DISCOVERY_NO_MDNS: '1' },
       xdgConfig: true,
     });
     await openConnect(page, a);
@@ -43,11 +49,13 @@ test('discovered host renders under "On your network" and Connect dials it', asy
     // A static pin did not announce itself as wash → no "wash" chip.
     await expect(row.locator('[data-testid="connect-candidate-wash"]')).toHaveCount(0);
 
-    // Connect dials the addr (remote_port relayed under the hood). It can't
+    // Connect dials by friendly name (so the remote ssh reads ~/.ssh/config),
+    // carrying the addr as a fallback + remote_port under the hood. It can't
     // succeed against a bogus IP, but the supervisor takes ownership, so the
-    // host appears in the connected list and leaves the candidate list.
+    // host appears in the connected list (keyed by its name) and leaves the
+    // candidate list.
     await row.locator('[data-testid="connect-candidate-connect"]').click();
-    await expect(page.locator('[data-testid="connect-host-10.42.0.9"]')).toBeAttached({ timeout: 10_000 });
+    await expect(page.locator('[data-testid="connect-host-labbox"]')).toBeAttached({ timeout: 10_000 });
     await expect(row).toHaveCount(0, { timeout: 10_000 });
   } finally {
     if (a) await stopRouter(a);
@@ -59,7 +67,7 @@ test('Save turns a discovered host into a bookmark', async ({ page }) => {
   try {
     a = await startRouter({
       apps: ['session', 'connect', 'remote'],
-      extraEnv: { WASH_DISCOVERY_STATIC: STATIC, WASH_DISCOVERY_NO_ADVERTISE: '1' },
+      extraEnv: { WASH_DISCOVERY_STATIC: STATIC, WASH_DISCOVERY_NO_MDNS: '1' },
       xdgConfig: true,
     });
     await openConnect(page, a);

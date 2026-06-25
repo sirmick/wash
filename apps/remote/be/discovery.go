@@ -88,25 +88,35 @@ func newDiscoverer(svc stateMutator) *discoverer {
 // loop. Failure to open the mDNS socket is logged, not fatal — discovery
 // is best-effort and the rest of wash-remote works without it.
 func (d *discoverer) start() {
-	adv := mdns.HostServiceInfo(defaultSSHPort)
-	srv, err := mdns.New(mdns.Options{
-		Advertise: adv,
-		OnEntry:   d.onMDNS,
-		Logf:      log.Printf,
-		Debug:     os.Getenv("WASH_MDNS_DEBUG") != "",
-	})
-	if err != nil {
-		log.Printf("wash-remote: discovery mdns: %v (continuing without it)", err)
+	if os.Getenv("WASH_DISCOVERY_NO_MDNS") != "" {
+		// Full mDNS opt-out: no advertise AND no browse. Unlike
+		// WASH_DISCOVERY_NO_ADVERTISE (which only silences our own
+		// announcement but keeps browsing the link), this leaves the static
+		// provider as the SOLE candidate source. It's the deterministic mode
+		// the e2e drives — without it, a developer's real LAN peers browse
+		// straight into "On your network" and make the suite non-deterministic.
+		log.Printf("wash-remote: discovery mDNS disabled (WASH_DISCOVERY_NO_MDNS) — static seeds only")
 	} else {
-		d.mdnsSrv = srv
-		if adv != nil {
-			log.Printf("wash-remote: discovery advertising host=%q ips=%v on _wash._tcp.local", adv.Instance, adv.IPv4)
+		adv := mdns.HostServiceInfo(defaultSSHPort)
+		srv, err := mdns.New(mdns.Options{
+			Advertise: adv,
+			OnEntry:   d.onMDNS,
+			Logf:      log.Printf,
+			Debug:     os.Getenv("WASH_MDNS_DEBUG") != "",
+		})
+		if err != nil {
+			log.Printf("wash-remote: discovery mdns: %v (continuing without it)", err)
 		} else {
-			// A box with no advertisement can still browse, but no peer can
-			// find IT. Usual cause: no routable IPv4 (container/link-local
-			// only) or the WASH_DISCOVERY_NO_ADVERTISE opt-out. Logged loudly
-			// because it's a silent half-failure otherwise.
-			log.Printf("wash-remote: discovery NOT advertising — no routable IPv4 or opted out; this box is invisible to peers")
+			d.mdnsSrv = srv
+			if adv != nil {
+				log.Printf("wash-remote: discovery advertising host=%q ips=%v on _wash._tcp.local", adv.Instance, adv.IPv4)
+			} else {
+				// A box with no advertisement can still browse, but no peer can
+				// find IT. Usual cause: no routable IPv4 (container/link-local
+				// only) or the WASH_DISCOVERY_NO_ADVERTISE opt-out. Logged loudly
+				// because it's a silent half-failure otherwise.
+				log.Printf("wash-remote: discovery NOT advertising — no routable IPv4 or opted out; this box is invisible to peers")
+			}
 		}
 	}
 	d.startStatic()
