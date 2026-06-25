@@ -946,7 +946,7 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => (
         border: `1px solid ${props.state === 'closed' || props.state === 'unauthenticated' ? tokens.borderDanger : tokens.borderDenied}`,
         'border-radius': '6px',
         padding: '6px 14px',
-        font: '12px ui-sans-serif,system-ui,sans-serif',
+        font: tokens.type.textMd,
         'box-shadow': '0 6px 16px rgba(0,0,0,0.5)',
         'z-index': 100000,
         'pointer-events': 'none',

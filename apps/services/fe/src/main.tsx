@@ -422,7 +422,7 @@ const searchInputStyle: JSX.CSSProperties = {
   border: 'none',
   outline: 'none',
   color: tokens.fg,
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   height: '20px',
 };
 
@@ -444,7 +444,7 @@ const toggleLabelStyle: JSX.CSSProperties = {
   display: 'inline-flex',
   'align-items': 'center',
   gap: '6px',
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   color: tokens.fgDim,
   cursor: 'pointer',
   'user-select': 'none',
@@ -482,7 +482,7 @@ const nameColStyle: JSX.CSSProperties = {
 };
 
 const nameStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeBase} ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
   color: tokens.fg,
   overflow: 'hidden',
   'text-overflow': 'ellipsis',
@@ -490,7 +490,7 @@ const nameStyle: JSX.CSSProperties = {
 };
 
 const descStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   color: tokens.fgDim,
   overflow: 'hidden',
   'text-overflow': 'ellipsis',
@@ -501,7 +501,7 @@ const errStyle: JSX.CSSProperties = {
   display: 'inline-flex',
   'align-items': 'center',
   gap: '4px',
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
   color: tokens.fgDanger,
   'margin-top': '2px',
 };
@@ -511,7 +511,7 @@ const badgeStyle: JSX.CSSProperties = {
   'align-items': 'center',
   padding: '2px 8px',
   'border-radius': `${tokens.radiusSm}`,
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.textSm,
   'white-space': 'nowrap',
 };
 
@@ -521,12 +521,12 @@ const chipStyle: JSX.CSSProperties = {
   'justify-content': 'center',
   padding: '2px 6px',
   'border-radius': `${tokens.radiusSm}`,
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.textSm,
 };
 
 const chipDimStyle: JSX.CSSProperties = {
   color: tokens.fgDim,
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.textSm,
 };
 
 const actionsStyle: JSX.CSSProperties = {
@@ -552,7 +552,7 @@ function iconBtnStyle(active: boolean): JSX.CSSProperties {
 }
 
 const busyTagStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
   color: tokens.fgDim,
   'margin-left': '4px',
 };
@@ -570,5 +570,5 @@ const emptyStateStyle: JSX.CSSProperties = {
 // ---- custom element ----
 
 defineWashApp('wash-app-services', (props) => <App {...props} />, {
-  style: `display:flex;flex-direction:column;position:relative;width:100%;height:100%;overflow:hidden;background:${tokens.bgWindow};color:${tokens.fg};font:${tokens.fontSizeBase} ${tokens.fontSans};box-sizing:border-box`,
+  style: `display:flex;flex-direction:column;position:relative;width:100%;height:100%;overflow:hidden;background:${tokens.bgWindow};color:${tokens.fg};font:${tokens.type.textMd};box-sizing:border-box`,
 });

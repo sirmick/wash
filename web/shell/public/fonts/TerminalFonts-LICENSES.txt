@@ -1,0 +1,13 @@
+Bundled terminal fonts (latin subsets, Regular + Bold woff2):
+
+Cascadia Code      — Microsoft, SIL Open Font License 1.1
+                     https://github.com/microsoft/cascadia-code
+Source Code Pro    — Adobe, SIL Open Font License 1.1
+                     https://github.com/adobe-fonts/source-code-pro
+Ubuntu Mono        — Canonical, Ubuntu Font Licence 1.0
+                     https://design.ubuntu.com/font
+DejaVu Sans Mono   — DejaVu Fonts (Bitstream Vera license, free)
+                     https://dejavu-fonts.github.io/
+
+(JetBrains Mono + Fira Code, also bundled here, are SIL OFL 1.1 — see their
+own LICENSE files.)

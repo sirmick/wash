@@ -67,7 +67,7 @@ export const ClipboardWidget: Component = () => {
   };
 
   const previewStyle: JSX.CSSProperties = {
-    font: `11px ${tokens.fontMono}`,
+    font: tokens.type.monoSm,
     color: text() ? tokens.fg : tokens.fgDim,
     background: tokens.bgInset,
     border: `1px solid ${tokens.borderMenu}`,
@@ -86,7 +86,7 @@ export const ClipboardWidget: Component = () => {
     'border-radius': `${tokens.radiusSm}`,
     padding: '3px 8px',
     cursor: 'pointer',
-    font: `11px ${tokens.fontSans}`,
+    font: tokens.type.textSm,
   };
 
   const importStyle: JSX.CSSProperties = {
@@ -96,7 +96,7 @@ export const ClipboardWidget: Component = () => {
     border: `1px dashed ${tokens.borderMenu}`,
     'border-radius': `${tokens.radiusSm}`,
     padding: '3px 8px',
-    font: `11px ${tokens.fontSans}`,
+    font: tokens.type.textSm,
     'min-width': '0',
   };
 
@@ -131,14 +131,14 @@ export const ClipboardWidget: Component = () => {
         />
       </div>
       <Show when={flash()}>
-        <div data-testid="clipboard-flash" style={{ font: `11px ${tokens.fontSans}`, color: tokens.fgDim }}>
+        <div data-testid="clipboard-flash" style={{ font: tokens.type.textSm, color: tokens.fgDim }}>
           ✓ {flash()}
         </div>
       </Show>
       <Show when={copyBlocked() || insecure}>
         <div
           data-testid="clipboard-warning"
-          style={{ font: `11px ${tokens.fontSans}`, color: tokens.fgWarning }}
+          style={{ font: tokens.type.textSm, color: tokens.fgWarning }}
         >
           {copyBlocked()
             ? '⚠ system copy blocked by the browser'

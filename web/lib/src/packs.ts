@@ -25,6 +25,7 @@
 // `wallpapers/<id>.svg` + a scheme.
 
 import { tokens } from './tokens';
+import { washAssetUrl } from './assets';
 
 export interface Pack {
   /** Stable id stored in desktop.json (`pack` field). */
@@ -56,6 +57,51 @@ export interface Pack {
    * falls back to the served default logo (wash-logo.svg).
    */
   startIconSVG?: string;
+  /**
+   * Optional bundled web fonts this pack wants loaded. Each entry names
+   * a CSS family (the same name the pack's `--wash-font-*` var
+   * references) and the woff2 asset path(s). applyScheme registers them
+   * via the FontFace API — the transport-agnostic path that also works
+   * in the in-browser VM, where a plain CSS `url()` can't reach the
+   * router's asset FS (same reason the terminal loads its fonts this
+   * way). A pack that only references system-installed families omits
+   * this. See web/shell/public/fonts/ for the bundled woff2.
+   */
+  fonts?: PackFont[];
+}
+
+/** A bundled web font a pack loads on apply. */
+export interface PackFont {
+  /** CSS family name — must match what the pack's --wash-font-* var uses. */
+  family: string;
+  /** Regular (400) woff2 asset path, no leading slash (e.g. `fonts/X.woff2`). */
+  url: string;
+  /** Optional bold (700) woff2 asset path. */
+  boldUrl?: string;
+}
+
+// Module-level dedupe so a font loads once across pack switches /
+// multiple applyScheme calls (the same shape the terminal uses for its
+// own bundled fonts). Keyed by family name.
+const loadedPackFonts = new Set<string>();
+
+/**
+ * Register a pack's bundled fonts via the FontFace API. Idempotent and
+ * fire-and-forget: a failed load just leaves the family unregistered, so
+ * the CSS font stack falls through to the next family. No-op under SSR /
+ * where the Font Loading API is absent.
+ */
+function loadPackFonts(pack: Pack): void {
+  if (!pack.fonts || typeof document === 'undefined' || !('fonts' in document)) return;
+  for (const f of pack.fonts) {
+    if (loadedPackFonts.has(f.family)) continue;
+    loadedPackFonts.add(f.family);
+    const faces = [new FontFace(f.family, `url(${washAssetUrl(f.url)})`, { weight: '400' })];
+    if (f.boldUrl) faces.push(new FontFace(f.family, `url(${washAssetUrl(f.boldUrl)})`, { weight: '700' }));
+    Promise.all(faces.map((face) => face.load().then((ld) => document.fonts.add(ld)))).catch(() => {
+      loadedPackFonts.delete(f.family); // allow a later retry
+    });
+  }
 }
 
 // Midnight's palette IS the tokens.ts default: every color token is
@@ -137,6 +183,10 @@ const tokyo: Pack = {
     '--wash-accent-violet': '#6c71c4', // violet
     '--wash-accent-magenta': '#d33682', // Solarized magenta
     '--wash-accent-pink': '#db5a96',
+    // Darken + blur backdrop behind the desktop info panel so it reads over
+    // the busy neon wallpaper.
+    '--wash-banner-bg': 'rgba(0,15,20,0.42)',
+    '--wash-banner-blur': '8px',
   },
   wallpaper: 'wallpapers/tokyo.svg',
 };
@@ -276,7 +326,13 @@ const copland: Pack = {
     '--wash-taskbar-bg': '#cccccc',
     // Desktop info banner sits over the black 1997 wallpaper → light text.
     '--wash-banner-fg': '#e8e8f0',
-    // Classic Mac type + a raised light top edge on the taskbar (3D pop).
+    // Classic Mac type. Chicago — the original Macintosh System UI face
+    // (Susan Kare, 1984; bundled scalable TrueType, see `fonts` below +
+    // web/shell/public/fonts/Chicago-SOURCE.txt) — is used for TITLES only
+    // (the two `type.title*` styles, via --wash-font-title), which is how
+    // the classic Mac used it: window/menu titles in Chicago, body in
+    // Geneva. Body + mono stay on the installed-Mac stacks.
+    '--wash-font-title': 'Chicago, Geneva, "Lucida Grande", Verdana, Helvetica, sans-serif',
     '--wash-font-sans': 'Geneva, "Lucida Grande", Verdana, Helvetica, sans-serif',
     '--wash-font-mono': 'Monaco, "Courier New", monospace',
     '--wash-taskbar-top': '#ffffff',
@@ -286,6 +342,7 @@ const copland: Pack = {
     '--wash-startmenu-bottom': '40px',
   },
   wallpaper: 'wallpapers/copland.svg',
+  fonts: [{ family: 'Chicago', url: 'fonts/Chicago.woff2' }],
 };
 
 // Oslo — the Nord palette (arctic blue-grey) + a vectorized Nordic
@@ -339,12 +396,106 @@ const oslo: Pack = {
     '--wash-accent-violet': '#b48ead', // nord15
     '--wash-accent-magenta': '#c490b5',
     '--wash-accent-pink': '#d3a0b8',
+    // Darken + blur backdrop behind the desktop info panel so it reads over
+    // the wallpaper.
+    '--wash-banner-bg': 'rgba(20,26,38,0.45)',
+    '--wash-banner-blur': '8px',
   },
   wallpaper: 'wallpapers/oslo.svg',
 };
 
+// Dreamtime — an Australian Aboriginal dot-painting pack. A DARK theme:
+// black chrome carrying solid, bright colors lifted from the painting
+// (sun-orange, bright amber, emerald, turquoise, electric blue). Near-white
+// text. The wallpaper is the dot-painting traced to real SVG circles, framed
+// by a black border on a black field — so it floats on the black desktop.
+// Bundles rounded-geometric **Quicksand** (OFL) for the chrome, echoing the
+// painting's dots.
+const dreamtime: Pack = {
+  id: 'dreamtime',
+  name: 'Dreamtime',
+  appearance: 'dark',
+  scheme: {
+    // Black chrome — the wallpaper + bright accents carry all the color.
+    '--wash-bg-window': '#0c0c0f',
+    '--wash-bg-menu': '#141418', // menus / dropdowns / start menu
+    '--wash-bg-inset': '#050506', // sunken field (darker)
+    '--wash-bg-canvas': '#000000', // editor/terminal — true black
+    '--wash-bg-row': 'transparent',
+    '--wash-bg-row-hover': '#23232c',
+    '--wash-bg-row-selected': '#e8631a', // solid bright sun-orange selection (light text reads)
+    '--wash-bg-backdrop': 'rgba(0,0,0,0.6)',
+    '--wash-bg-drop-target': '#0d3a44',
+    '--wash-border-menu': '#26262e',
+    '--wash-border-window': '#000000',
+    '--wash-border-focus': '#ff6a00', // bright sun-orange focus ring
+    '--wash-border-drop-target': '#1bc4e0',
+    '--wash-fg': '#f1f1f5', // near-white
+    '--wash-fg-muted': '#a2a2ae',
+    '--wash-fg-dim': '#6a6a76',
+    '--wash-bg-danger': '#3a1110',
+    '--wash-border-danger': '#e62b1e',
+    '--wash-fg-danger': '#ff6f60',
+    '--wash-bg-success': '#0f3012',
+    '--wash-fg-success': '#3ed94f',
+    '--wash-bg-warning': '#33260a',
+    '--wash-fg-warning': '#ffc23a',
+    '--wash-bg-info': '#06303a',
+    '--wash-fg-info': '#2ad0ec',
+    '--wash-bg-neutral': '#1c1c24',
+    '--wash-bg-denied': '#33240a',
+    '--wash-border-denied': '#b0791c',
+    '--wash-sev-error': '#ff5e4e',
+    '--wash-sev-warn': '#ffb020',
+    '--wash-sev-notice': '#2ad0ec',
+    '--wash-sev-info': '#c4c4d0',
+    '--wash-sev-debug': '#6a6a76',
+    // Accents — solid + bright, straight off the painting.
+    '--wash-accent-red': '#e62b1e', // bright red
+    '--wash-accent-orange': '#ff6a00', // bright sun-orange
+    '--wash-accent-amber': '#ffb20a', // bright golden sun
+    '--wash-accent-lime': '#9bd61e',
+    '--wash-accent-green': '#2ecc40', // bright emerald
+    '--wash-accent-teal': '#00b3a4',
+    '--wash-accent-cyan': '#1bc4e0', // bright turquoise sea
+    '--wash-accent-blue': '#2a7fff', // electric ocean blue
+    '--wash-accent-indigo': '#5a5af0',
+    '--wash-accent-violet': '#a05cf0',
+    '--wash-accent-magenta': '#e83fa0',
+    '--wash-accent-pink': '#ff5fa0',
+    // Chrome: black captions, near-white fg; a thin bright top edge on the
+    // active caption marks focus.
+    '--wash-titlebar-active': '#1a1a20',
+    '--wash-titlebar-inactive': '#0c0c0f',
+    '--wash-titlebar-fg': '#f1f1f5',
+    // Start bar (taskbar): black.
+    '--wash-taskbar-bg': '#0a0a0d',
+    '--wash-taskbar-top': '#26262e',
+    // Desktop info banner sits over the busy dot wallpaper → light text on a
+    // themed darken+blur backdrop so it always reads.
+    '--wash-banner-fg': '#f1f1f5',
+    '--wash-banner-bg': 'rgba(0,0,0,0.42)',
+    '--wash-banner-blur': '8px',
+    // Rounded chrome to match Quicksand's geometry and the painting's dots.
+    '--wash-radius-sm': '5px',
+    '--wash-radius-md': '8px',
+    '--wash-radius-lg': '12px',
+    '--wash-radius-xl': '16px',
+    // Quicksand for the chrome (bundled below).
+    '--wash-font-sans': '"Quicksand", ui-rounded, "Segoe UI", system-ui, sans-serif',
+  },
+  wallpaper: 'wallpapers/dreamtime.svg',
+  fonts: [
+    {
+      family: 'Quicksand',
+      url: 'fonts/Quicksand-Regular.woff2',
+      boldUrl: 'fonts/Quicksand-Bold.woff2',
+    },
+  ],
+};
+
 /** All built-in packs, in gallery order. Midnight is first / default. */
-export const packs: Pack[] = [midnight, tokyo, seoul, copland, oslo];
+export const packs: Pack[] = [midnight, tokyo, seoul, copland, oslo, dreamtime];
 
 export const defaultPackId = 'midnight';
 
@@ -375,6 +526,8 @@ export function applyScheme(el: HTMLElement, pack: Pack): void {
   // own palette, plus native form controls / scrollbars via color-scheme.
   el.style.setProperty('--wash-appearance', pack.appearance);
   el.style.setProperty('color-scheme', pack.appearance);
+  // Kick any bundled web fonts this pack references (fire-and-forget).
+  loadPackFonts(pack);
 }
 
 /** The active pack appearance, read off document.documentElement (set by

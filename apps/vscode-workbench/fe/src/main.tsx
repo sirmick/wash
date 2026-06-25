@@ -151,7 +151,7 @@ const Spinner: Component = () => (
 );
 
 const bodyStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   color: tokens.fg,
   opacity: 0.85,
   'line-height': 1.5,

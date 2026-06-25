@@ -128,8 +128,8 @@ const HostEntry: Component<{
         <span style={{ color: tokens.fg, flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
           {props.host.host}
         </span>
-        <Show when={up()} fallback={<span style={{ opacity: 0.6, font: `10px ${tokens.fontMono}` }}>{statusLabel(props.host.status)}</span>}>
-          <span style={{ opacity: 0.6, font: `10px ${tokens.fontSans}` }}>Launch ▾</span>
+        <Show when={up()} fallback={<span style={{ opacity: 0.6, font: tokens.type.monoSm }}>{statusLabel(props.host.status)}</span>}>
+          <span style={{ opacity: 0.6, font: tokens.type.textSm }}>Launch ▾</span>
         </Show>
       </button>
 
@@ -174,7 +174,7 @@ export const RemoteWidget: Component<RemoteWidgetProps> = (props) => (
     <Show
       when={props.hosts().length > 0}
       fallback={
-        <span data-testid="remote-empty" style={{ opacity: 0.45, font: `10px ${tokens.fontMono}` }}>
+        <span data-testid="remote-empty" style={{ opacity: 0.45, font: tokens.type.monoSm }}>
           no remote sessions
         </span>
       }
@@ -199,7 +199,7 @@ export const RemoteWidget: Component<RemoteWidgetProps> = (props) => (
         'border-radius': tokens.radiusSm,
         padding: '3px 8px',
         cursor: 'pointer',
-        font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+        font: tokens.type.textSm,
         'align-self': 'flex-start',
       }}
     >
@@ -239,7 +239,7 @@ const menuItemStyle = {
   border: 'none',
   'border-radius': tokens.radiusSm,
   cursor: 'pointer',
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.textSm,
   'text-align': 'left' as const,
   width: '100%',
 };
@@ -256,7 +256,7 @@ const menuIconStyle = {
 
 const menuEmptyStyle = {
   padding: '6px 7px',
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.textSm,
   color: tokens.fgMuted,
   opacity: 0.7,
 };

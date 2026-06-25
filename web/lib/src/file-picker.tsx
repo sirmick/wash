@@ -679,7 +679,7 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
 
 const titleStyle: JSX.CSSProperties = {
   padding: '12px 16px 10px',
-  font: `600 ${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.titleSm,
   'border-bottom': `1px solid ${tokens.borderWindow}`,
 };
 
@@ -698,7 +698,7 @@ const iconBtnStyle: JSX.CSSProperties = {
   width: '26px',
   height: '26px',
   cursor: 'pointer',
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
 };
 
 const pathInputStyle: JSX.CSSProperties = {
@@ -708,14 +708,14 @@ const pathInputStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusSm}`,
   padding: '4px 8px',
-  font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
   outline: 'none',
 };
 
 const errorStyle: JSX.CSSProperties = {
   padding: '4px 12px',
   color: tokens.fgDanger,
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.textSm,
 };
 
 const HEADER_ROW_H = 24;
@@ -734,7 +734,7 @@ function headerCellStyle(_k: SortKey): JSX.CSSProperties {
     background: 'transparent',
     border: 'none',
     color: tokens.fgMuted,
-    font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+    font: tokens.type.textSm,
     cursor: 'pointer',
     padding: '0 8px',
     height: `${HEADER_ROW_H}px`,
@@ -755,7 +755,7 @@ const mutedRowStyle: JSX.CSSProperties = {
   padding: '20px 16px',
   color: tokens.fgDim,
   'font-style': 'italic',
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
 };
 
 function rowStyle(selected: boolean): JSX.CSSProperties {
@@ -768,7 +768,7 @@ function rowStyle(selected: boolean): JSX.CSSProperties {
     color: tokens.fg,
     cursor: 'pointer',
     'user-select': 'none',
-    font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+    font: tokens.type.textMd,
   };
 }
 
@@ -781,7 +781,7 @@ const rowNameCellStyle: JSX.CSSProperties = {
 };
 
 const rowNumCellStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
   color: tokens.fgMuted,
   'text-align': 'right',
   'white-space': 'nowrap',
@@ -793,7 +793,7 @@ const nameInputRowStyle: JSX.CSSProperties = {
   gap: '8px',
   padding: '8px 12px',
   'border-top': `1px solid ${tokens.borderMenu}`,
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
 };
 
 const footerStyle: JSX.CSSProperties = {
@@ -811,7 +811,7 @@ const selectStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusSm}`,
   padding: '3px 8px',
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
 };
 
 function actionBtnStyle(primary: boolean): JSX.CSSProperties {
@@ -822,7 +822,7 @@ function actionBtnStyle(primary: boolean): JSX.CSSProperties {
     'border-radius': `${tokens.radiusSm}`,
     padding: '5px 14px',
     cursor: 'pointer',
-    font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+    font: tokens.type.textMd,
   };
 }
 

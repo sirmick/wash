@@ -370,7 +370,7 @@ const RailItem: Component<{ label: string; active: boolean; onClick: () => void 
       color: tokens.fg,
       border: 'none',
       cursor: 'pointer',
-      font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+      font: tokens.type.textMd,
       'border-radius': `${tokens.radiusMd}`,
     }}
   >
@@ -559,7 +559,7 @@ const PackCard: Component<{ pack: Pack; active: boolean; onSelect: () => void }>
         }}
       />
       <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between', gap: '6px' }}>
-        <span style={{ color: tokens.fg, font: `${tokens.fontSizeBase} ${tokens.fontSans}` }}>{props.pack.name}</span>
+        <span style={{ color: tokens.fg, font: tokens.type.textMd }}>{props.pack.name}</span>
         <div style={{ display: 'flex', gap: '3px' }}>
           <Swatch c={swatch('--wash-accent-blue', '#6090e0')} />
           <Swatch c={swatch('--wash-accent-green', '#5fbf85')} />
@@ -617,7 +617,7 @@ const PaletteSwatches: Component<{ packId: string }> = (props) => {
             <span
               style={{
                 color: tokens.fg,
-                font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+                font: tokens.type.monoSm,
                 overflow: 'hidden',
                 'text-overflow': 'ellipsis',
                 'white-space': 'nowrap',
@@ -625,7 +625,7 @@ const PaletteSwatches: Component<{ packId: string }> = (props) => {
             >
               {name.replace('--wash-', '')}
             </span>
-            <span style={{ color: tokens.fgDim, font: `${tokens.fontSizeSm} ${tokens.fontMono}`, 'flex-shrink': 0 }}>
+            <span style={{ color: tokens.fgDim, font: tokens.type.monoSm, 'flex-shrink': 0 }}>
               {val}
             </span>
           </div>
@@ -678,7 +678,7 @@ const galleryStyle: JSX.CSSProperties = {
 };
 
 const pathRowStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
   opacity: 0.85,
   'white-space': 'nowrap',
   overflow: 'hidden',
@@ -699,7 +699,7 @@ const textInputStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusMd}`,
   padding: '4px 8px',
-  font: `${tokens.fontSizeBase} ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
   outline: 'none',
 };
 
@@ -707,7 +707,7 @@ const checkboxStyle: JSX.CSSProperties = {
   display: 'inline-flex',
   'align-items': 'center',
   gap: '4px',
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   cursor: 'pointer',
 };
 
@@ -715,7 +715,7 @@ const statusStyle: JSX.CSSProperties = {
   position: 'absolute',
   right: '12px',
   bottom: '6px',
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   opacity: 0.6,
   'pointer-events': 'none',
 };
@@ -723,5 +723,5 @@ const statusStyle: JSX.CSSProperties = {
 // ---- custom element ----
 
 defineWashApp('wash-app-settings', (props) => <App {...props} />, {
-  style: `display:block;position:relative;width:100%;height:100%;overflow:hidden;background:${tokens.bgWindow};color:${tokens.fg};font:${tokens.fontSizeBase} ${tokens.fontSans};box-sizing:border-box`,
+  style: `display:block;position:relative;width:100%;height:100%;overflow:hidden;background:${tokens.bgWindow};color:${tokens.fg};font:${tokens.type.textMd};box-sizing:border-box`,
 });

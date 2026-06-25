@@ -1,0 +1,8 @@
+Chicago.woff2 — scalable (TrueType) Chicago, converted to woff2 from
+"Chicago v0.5.5.ttf" in https://github.com/nikdog/chicago-font (merged
+Latin/Greek/Cyrillic vector build of the Bigelow & Holmes TrueType Chicago).
+
+Chicago was designed by Susan Kare for Apple (1984) and is an Apple
+trademark; it was the Macintosh system UI typeface 1984–1997. Bundled here
+for the "Copland" Mac-OS-9 theme pack. No explicit license accompanies the
+upstream repo; included on that basis at the user's request.

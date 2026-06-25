@@ -51,9 +51,7 @@ export const Section: Component<SectionProps> = (props) => {
     'border-bottom': `1px solid ${tokens.borderMenu}`,
     'user-select': 'none',
     color: tokens.fg,
-    font: '12px ui-sans-serif,system-ui,sans-serif',
-    'letter-spacing': '0.02em',
-    'text-transform': 'uppercase',
+    font: tokens.type.textMd,
     opacity: 0.9,
   });
 
@@ -129,7 +127,7 @@ export const Section: Component<SectionProps> = (props) => {
             padding: '8px 10px',
             'border-bottom': `1px solid ${tokens.borderMenu}`,
             color: tokens.fg,
-            font: '12px ui-sans-serif,system-ui,sans-serif',
+            font: tokens.type.textMd,
           }}
         >
           {props.children}

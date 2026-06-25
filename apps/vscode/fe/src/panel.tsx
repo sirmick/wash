@@ -100,7 +100,7 @@ const Panel = (props: SettingsPanelProps) => {
             </Row>
             <Show when={s()!.installed}>
               <Row label="Version">
-                <span style={{ font: `${tokens.fontSizeMd} ${tokens.fontMono}` }}>
+                <span style={{ font: tokens.type.monoMd }}>
                   {s()!.version || '—'}
                   <Show when={updatable()}>
                     <span style={{ opacity: 0.6 }}> → {s()!.latest} available</span>
@@ -163,7 +163,7 @@ const logStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusMd}`,
   padding: '8px 10px',
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
   color: tokens.fgDim,
   'white-space': 'pre-wrap',
   'word-break': 'break-word',
@@ -174,7 +174,7 @@ const warnStyle: JSX.CSSProperties = {
   'align-items': 'center',
   gap: '6px',
   color: tokens.fgDanger,
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
 };
 
 defineSettingsPanel('wash-settings-panel-vscode', Panel);

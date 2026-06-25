@@ -18,7 +18,7 @@ export const StatusBar: ParentComponent<StatusBarProps> = (props) => {
       data-testid={props['data-testid']}
       style={{
         padding: '0 10px',
-        font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+        font: tokens.type.monoSm,
         opacity: 0.6,
         display: 'flex',
         'align-items': 'center',

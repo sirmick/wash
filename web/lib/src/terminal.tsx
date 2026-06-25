@@ -182,10 +182,10 @@ export const TERM_FONTS: TermFont[] = [
     url: 'fonts/FiraCode-Regular.woff2',
     boldUrl: 'fonts/FiraCode-Bold.woff2',
   },
-  // Bundled woff2 (web/shell/public/fonts), loaded on demand like the
-  // two above. latin subsets (~12-18KB Reg+Bold) matching the project's
-  // existing bar — xterm.js draws box-drawing/block glyphs itself, so the
-  // font doesn't need them. Licenses ship alongside each woff2.
+  // Bundled woff2 (web/shell/public/fonts), loaded on demand like the two
+  // above — latin subsets (~12-18KB Reg+Bold). xterm.js draws box-drawing/
+  // block glyphs itself, so the fonts don't need them. Licenses ship in
+  // web/shell/public/fonts (per-font LICENSE + TerminalFonts-LICENSES.txt).
   {
     id: 'source-code-pro',
     label: 'Source Code Pro',
@@ -218,10 +218,32 @@ export const TERM_FONTS: TermFont[] = [
     url: 'fonts/RobotoMono-Regular.woff2',
     boldUrl: 'fonts/RobotoMono-Bold.woff2',
   },
-  // System stacks: no bundled woff2 — render only when the family is
-  // installed on the client, else fall back through the stack to plain
-  // monospace. Cheap extras for users who have them.
-  { id: 'cascadia-code', label: 'Cascadia Code', stack: '"Cascadia Code", "Cascadia Mono", ui-monospace, monospace' },
+  {
+    id: 'cascadia-code',
+    label: 'Cascadia Code',
+    stack: '"Cascadia Code", "Cascadia Mono", ui-monospace, monospace',
+    family: 'Cascadia Code',
+    url: 'fonts/Cascadia-Regular.woff2',
+    boldUrl: 'fonts/Cascadia-Bold.woff2',
+  },
+  {
+    id: 'ubuntu-mono',
+    label: 'Ubuntu Mono',
+    stack: '"Ubuntu Mono", ui-monospace, monospace',
+    family: 'Ubuntu Mono',
+    url: 'fonts/UbuntuMono-Regular.woff2',
+    boldUrl: 'fonts/UbuntuMono-Bold.woff2',
+  },
+  {
+    id: 'dejavu-mono',
+    label: 'DejaVu Sans Mono',
+    stack: '"DejaVu Sans Mono", ui-monospace, monospace',
+    family: 'DejaVu Sans Mono',
+    url: 'fonts/DejaVuMono-Regular.woff2',
+    boldUrl: 'fonts/DejaVuMono-Bold.woff2',
+  },
+  // Menlo/Consolas are system fonts (Apple/Microsoft) — not bundleable; they
+  // render where installed and otherwise fall back to monospace.
   { id: 'menlo', label: 'Menlo / Consolas', stack: 'Menlo, Consolas, "Liberation Mono", monospace' },
 ];
 
@@ -522,7 +544,15 @@ export const Terminal: Component<TerminalProps> = (props) => {
       onCleanup(onAppearanceChange((a) => setPackAppearance(a)));
       createEffect(() => {
         if (!term) return;
-        term.options.theme = props.theme ?? termThemeFor(props.appearanceOverride ?? packAppearance());
+        const th = props.theme ?? termThemeFor(props.appearanceOverride ?? packAppearance());
+        term.options.theme = th;
+        // The xterm grid is quantized to whole cells, but the host element
+        // is the window's arbitrary height — so a strip below the last row
+        // (and any right-edge remainder) shows hostEl's background. Paint it
+        // the active theme's background so that dead space matches the
+        // terminal instead of showing through. Re-runs on theme/appearance
+        // change, keeping it in sync.
+        if (hostEl && th.background) hostEl.style.background = th.background;
       });
     }
     // Clipboard keys are component-level so every terminal in wash

@@ -57,7 +57,7 @@ export const Overlay: ParentComponent<OverlayProps> = (props) => {
           'flex-direction': 'column',
           overflow: 'hidden',
           'box-shadow': tokens.shadowModal,
-          font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+          font: tokens.type.textMd,
           color: tokens.fg,
           animation: tokens.animPopIn,
           ...(props.innerStyle ?? {}),
@@ -124,6 +124,6 @@ function confirmBtnStyle(danger: boolean): JSX.CSSProperties {
     'border-radius': `${tokens.radiusSm}`,
     padding: '5px 12px',
     cursor: 'pointer',
-    font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+    font: tokens.type.textMd,
   };
 }

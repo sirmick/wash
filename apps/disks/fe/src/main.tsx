@@ -120,7 +120,7 @@ const FullnessBar: Component<{ used: number; total: number }> = (props) => {
       >
         <div style={{ height: '100%', width: `${pct()}%`, background: color() }} />
       </div>
-      <div style={{ font: `${tokens.fontSizeSm} ${tokens.fontMono}`, opacity: 0.8, 'padding-top': '3px' }}>
+      <div style={{ font: tokens.type.monoSm, opacity: 0.8, 'padding-top': '3px' }}>
         {fmtBytes(props.used)} / {fmtBytes(props.total)} ({pct().toFixed(0)}%)
       </div>
     </div>
@@ -159,7 +159,7 @@ const Spark: Component<{ data: number[]; color: string }> = (props) => {
 const KV: Component<{ k: string; v: JSX.Element | string }> = (props) => (
   <div style={{ display: 'flex', gap: '10px', padding: '3px 0', 'font-size': tokens.fontSizeBase }}>
     <span style={{ width: '110px', flex: '0 0 110px', opacity: 0.6 }}>{props.k}</span>
-    <span style={{ 'word-break': 'break-all', font: `${tokens.fontSizeBase} ${tokens.fontMono}` }}>{props.v}</span>
+    <span style={{ 'word-break': 'break-all', font: tokens.type.monoMd }}>{props.v}</span>
   </div>
 );
 
@@ -340,7 +340,7 @@ const RowTrailing: Component<{ row: Row }> = (props) => {
         return '';
     }
   };
-  return <span style={{ 'margin-left': 'auto', flex: '0 0 auto', 'padding-left': '8px', opacity: 0.55, font: `${tokens.fontSizeSm} ${tokens.fontMono}` }}>{text()}</span>;
+  return <span style={{ 'margin-left': 'auto', flex: '0 0 auto', 'padding-left': '8px', opacity: 0.55, font: tokens.type.monoSm }}>{text()}</span>;
 };
 
 // ---- detail pane (switches on row kind) ----
@@ -380,7 +380,7 @@ const Detail: Component<{
 };
 
 const Title: Component<{ t: string }> = (props) => (
-  <div data-testid="disks-detail-title" style={{ font: `600 ${tokens.fontSizeMd} ${tokens.fontSans}`, 'padding-bottom': '10px' }}>{props.t}</div>
+  <div data-testid="disks-detail-title" style={{ font: tokens.type.titleSm, 'padding-bottom': '10px' }}>{props.t}</div>
 );
 
 const DiskDetail: Component<{
@@ -424,7 +424,7 @@ const SmartPanel: Component<{ disk: Disk; smart: SmartState | undefined; onCheck
   return (
     <div style={{ 'padding-top': '14px', 'border-top': `1px solid ${tokens.borderMenu}`, 'margin-top': '14px' }}>
       <div style={{ display: 'flex', 'align-items': 'center', gap: '10px', 'padding-bottom': '8px' }}>
-        <span style={{ font: `600 ${tokens.fontSizeBase} ${tokens.fontSans}` }}>SMART health</span>
+        <span style={{ font: tokens.type.titleSm }}>SMART health</span>
         <button
           data-testid="disks-smart-check"
           disabled={props.smart?.loading}
@@ -463,7 +463,7 @@ const SmartPanel: Component<{ disk: Disk; smart: SmartState | undefined; onCheck
                 <div style={{ 'padding-top': '8px', overflow: 'auto' }}>
                   <For each={r.attrs ?? []}>
                     {(a) => (
-                      <div style={{ display: 'flex', gap: '10px', font: `${tokens.fontSizeSm} ${tokens.fontMono}`, padding: '2px 0' }}>
+                      <div style={{ display: 'flex', gap: '10px', font: tokens.type.monoSm, padding: '2px 0' }}>
                         <span style={{ width: '210px', flex: '0 0 210px', opacity: 0.8 }}>{a.name}</span>
                         <span style={{ width: '90px', 'text-align': 'right' }}>{a.raw}</span>
                         <Show when={a.when_failed && a.when_failed !== '-'}>
@@ -598,7 +598,7 @@ const rootStyle: JSX.CSSProperties = {
   height: '100%',
   background: tokens.bgWindow,
   color: tokens.fg,
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   'box-sizing': 'border-box',
 };
 
@@ -646,11 +646,11 @@ const smartBtnStyle: JSX.CSSProperties = {
   'border-radius': '3px',
   padding: '2px 10px',
   cursor: 'pointer',
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.textSm,
 };
 
 // ---- custom element ----
 
 defineWashApp('wash-app-disks', (props) => <App {...props} />, {
-  style: `display:block;position:relative;width:100%;height:100%;overflow:hidden;background:${tokens.bgWindow};color:${tokens.fg};font:${tokens.fontSizeBase} ${tokens.fontSans};box-sizing:border-box`,
+  style: `display:block;position:relative;width:100%;height:100%;overflow:hidden;background:${tokens.bgWindow};color:${tokens.fg};font:${tokens.type.textMd};box-sizing:border-box`,
 });

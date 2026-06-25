@@ -132,7 +132,7 @@ export const MenuItem: Component<MenuItemProps> = (props) => {
         padding: '4px 10px',
         cursor: props.disabled ? 'not-allowed' : 'pointer',
         opacity: props.disabled ? 0.5 : 1,
-        font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+        font: tokens.type.textMd,
         transition: 'background 0.05s',
       }}
     >

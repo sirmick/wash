@@ -152,7 +152,7 @@ export const PrivWidget: Component<PrivWidgetProps> = (props) => {
             'border-radius': tokens.radiusSm,
             padding: '3px 8px',
             cursor: 'pointer',
-            font: `10px ${tokens.fontSans}`,
+            font: tokens.type.textSm,
             opacity: 0.8,
           }}
         >
@@ -197,7 +197,7 @@ const LockBar: Component<{ locked: () => boolean; onLock: () => void }> = (props
             'border-radius': tokens.radiusSm,
             padding: '1px 6px',
             cursor: 'pointer',
-            font: `10px ${tokens.fontSans}`,
+            font: tokens.type.textSm,
           }}
         >
           lock now
@@ -222,7 +222,7 @@ const GrantChip: Component<{ appID: string; onRevoke: () => void }> = (props) =>
         background: `color-mix(in srgb, ${tokens.accentRed} 16%, transparent)`,
         border: `1px solid ${tokens.borderDanger}`,
         'border-radius': '999px',
-        font: `10px ${tokens.fontSans}`,
+        font: tokens.type.textSm,
         color: tokens.fg,
       }}
     >
@@ -305,7 +305,7 @@ const PrivRow: Component<{
         </span>
         <span
           style={{
-            font: `10px ${tokens.fontMono}`,
+            font: tokens.type.monoSm,
             opacity: 0.6,
             'flex-shrink': 0,
           }}
@@ -315,7 +315,7 @@ const PrivRow: Component<{
       </div>
       <div
         style={{
-          font: `10px ${tokens.fontMono}`,
+          font: tokens.type.monoSm,
           opacity: 0.55,
           'word-break': 'break-all',
         }}
@@ -340,7 +340,7 @@ const PrivRow: Component<{
               'border-radius': tokens.radiusSm,
               padding: '2px 8px',
               cursor: 'pointer',
-              font: `11px ${tokens.fontSans}`,
+              font: tokens.type.textSm,
               'font-weight': 600,
             }}
           >
@@ -359,7 +359,7 @@ const PrivRow: Component<{
                 'border-radius': tokens.radiusSm,
                 padding: '2px 8px',
                 cursor: 'pointer',
-                font: `11px ${tokens.fontSans}`,
+                font: tokens.type.textSm,
               }}
             >
               approve app
@@ -376,7 +376,7 @@ const PrivRow: Component<{
               'border-radius': tokens.radiusSm,
               padding: '2px 8px',
               cursor: 'pointer',
-              font: `11px ${tokens.fontSans}`,
+              font: tokens.type.textSm,
             }}
           >
             reject
@@ -388,7 +388,7 @@ const PrivRow: Component<{
           style={{
             opacity: 0.85,
             color: tokens.fgDanger,
-            font: `10px ${tokens.fontMono}`,
+            font: tokens.type.monoSm,
           }}
         >
           exit {props.req.exit_code}

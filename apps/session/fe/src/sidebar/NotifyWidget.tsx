@@ -67,7 +67,7 @@ export const NotifyWidget: Component<NotifyWidgetProps> = (props) => {
             'border-radius': tokens.radiusSm,
             padding: '4px 8px',
             cursor: 'pointer',
-            font: `11px ${tokens.fontSans}`,
+            font: tokens.type.textSm,
             'align-self': 'flex-end',
             'margin-top': '4px',
           }}
@@ -151,8 +151,7 @@ const NotifyRow: Component<{ entry: NotifyEntry; onMarkRead: () => void }> = (pr
         style={{
           opacity: 0.4,
           'margin-top': '3px',
-          'font-size': '10px',
-          font: `10px ${tokens.fontMono}`,
+          font: tokens.type.monoSm,
         }}
       >
         {sourceLabel(props.entry.source_app)}

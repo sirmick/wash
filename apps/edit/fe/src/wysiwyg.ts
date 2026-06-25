@@ -196,7 +196,7 @@ function injectStyles() {
   overflow: auto;
   color: ${tokens.fg};
   background: ${tokens.bgWindow};
-  font: ${tokens.fontSizeBase} ${tokens.fontSans};
+  font: ${tokens.type.textMd};
   line-height: 1.55;
   caret-color: ${tokens.fg};
 }
