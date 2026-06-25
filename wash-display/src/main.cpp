@@ -67,7 +67,31 @@ static void term_handler(int sig) {
     (void)!write(STDERR_FILENO, pfx, sizeof pfx - 1);
     (void)!write(STDERR_FILENO, name, std::strlen(name));
     (void)!write(STDERR_FILENO, sfx, sizeof sfx - 1);
+    // Take the child tree (Xwayland + any WASH_DISPLAY_EXEC guest) down with
+    // us. The router signals only our pid and _exit reaps neither, so they'd
+    // orphan to PID 1 and leak (the wash-display compositor-leak). Only safe
+    // if we actually lead our own process group — otherwise a group signal
+    // would hit the router and the rest of the desktop (the router spawns us
+    // without Setpgid). Verify leadership, ignore the signal in ourselves so
+    // the broadcast doesn't re-enter this handler, then signal the group.
+    // kill(0,…)/signal()/getpgrp()/getpid() are all async-signal-safe.
+    if (getpgrp() == getpid()) {
+        std::signal(SIGTERM, SIG_IGN);
+        kill(0, SIGTERM); // 0 = every process in our process group
+    }
     _exit(128 + sig);
+}
+
+// claim_process_group makes wash-display the leader of its own process
+// group, so term_handler's group-kill reaps the child tree (Xwayland + any
+// guest) without signalling the router. The router spawns us without
+// Setpgid, so by default we'd share its group. Best-effort: on failure we
+// simply don't group-kill (term_handler's getpgrp()==getpid() guard).
+static void claim_process_group() {
+    if (setpgid(0, 0) != 0) {
+        std::fprintf(stderr, "wash-display: setpgid failed (%s); child "
+                     "processes may outlive shutdown\n", std::strerror(errno));
+    }
 }
 
 static void install_crash_handler() {
@@ -230,5 +254,6 @@ int main(int argc, char** argv) {
         return print_manifest();
     }
     install_crash_handler();
+    claim_process_group();
     return run();
 }
