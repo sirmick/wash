@@ -1,5 +1,7 @@
 package sdk
 
+import "log"
+
 // HandlePersist installs the canonical "save_state" handler on b.
 //
 // wash keeps per-window view state on the BACKEND so reconnect and
@@ -21,7 +23,13 @@ package sdk
 // registered on b — don't install it twice.
 func HandlePersist(b *Bus) {
 	HandleVoid(b, "save_state", func(c *Conn, _ string, req persistStateReq) error {
-		return c.SaveState(req.State)
+		if err := c.SaveState(req.State); err != nil {
+			return err
+		}
+		// Audit trail of the FE→router persist (previously each app logged
+		// its own ad-hoc line). Debounced FE-side, so not per-keystroke.
+		log.Printf("bus: %s save_state persisted", b.appID())
+		return nil
 	})
 }
 

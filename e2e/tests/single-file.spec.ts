@@ -43,8 +43,9 @@ const APPS: AppBundle[] = [
   { name: 'session', dir: 'apps/session/fe/dist', maxBytes: 195_000 },
   // about grew into the system-info panel: build/host/Go-runtime
   // process table/registered-apps/browser sections + sortable table.
-  // 30 KB headroom keeps a brake on further growth.
-  { name: 'about',   dir: 'apps/about/fe/dist',   maxBytes: 30_000 },
+  // +~0.1 KB from the shared createAppBus saveState()/flushState() persist
+  // helper (in every app's @wash/ui). Headroom still brakes further growth.
+  { name: 'about',   dir: 'apps/about/fe/dist',   maxBytes: 31_000 },
   { name: 'test',    dir: 'apps/test/fe/dist',    maxBytes: 30_000 },
   { name: 'term',    dir: 'apps/term/fe/dist',    maxBytes: 30_000 },
   // fm grew with the image pipeline: folder-grid preview + VirtualGrid +
