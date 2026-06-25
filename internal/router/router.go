@@ -1313,30 +1313,39 @@ func (r *Router) replayBundleToShell(s *ShellSession, inst *AppInstance) {
 	s.bundleSent[inst.InstanceID] = true
 	s.writeMu.Unlock()
 
-	bytes := entry.Bundle
+	// Send the gzip copy when it's a win (the shell inflates per the bind's
+	// Encoding); else identity. Big app bundles (edit, washamp) shrink a lot.
+	raw := entry.Bundle
+	payload := raw
+	encoding := ""
+	if gz := entry.bundleGzip(); gz != nil {
+		payload = gz
+		encoding = "gzip"
+	}
 	id := r.allocChannelID()
-	if err := s.WriteCtrl(wire.NewShellChannelBindBundle(id, inst.InstanceID)); err != nil {
+	if err := s.WriteCtrl(wire.NewShellChannelBindBundle(id, inst.InstanceID, encoding)); err != nil {
 		r.log("bundle bind %s: %v", inst.InstanceID, err)
 		return
 	}
 	// Chunk the write so very large bundles don't pin a giant
 	// allocation in the WS layer.
 	const chunkSize = 256 * 1024
-	for off := 0; off < len(bytes); off += chunkSize {
+	for off := 0; off < len(payload); off += chunkSize {
 		end := off + chunkSize
-		if end > len(bytes) {
-			end = len(bytes)
+		if end > len(payload) {
+			end = len(payload)
 		}
 		// Interactive class: bundle delivery is a transactional
 		// Bind → data → Unbind sequence. Under Bulk, the strict-
 		// priority scheduler would let the Interactive Unbind
 		// overtake these data frames and the shell would observe
 		// "channel closed" before the bytes arrived.
-		if err := s.WriteRawFrameClass(id, bytes[off:end], wire.ClassInteractive); err != nil {
+		if err := s.WriteRawFrameClass(id, payload[off:end], wire.ClassInteractive); err != nil {
 			r.log("bundle frame %s: %v", inst.InstanceID, err)
 			return
 		}
 	}
+	s.statsLink().recordCompression(len(raw), len(payload))
 	if err := s.WriteCtrl(wire.NewShellChannelUnbind(id, "bundle complete")); err != nil {
 		r.log("bundle unbind %s: %v", inst.InstanceID, err)
 	}

@@ -526,6 +526,10 @@ type ShellChannelBind struct {
 	// carries (docs/REMOTE.md). The shell routes this channel's bytes to
 	// the matching origin's RouterClient. Empty for all other kinds.
 	Origin string `json:"origin,omitempty"`
+	// Encoding is the content-coding of a Kind="bundle" channel's bytes:
+	// "" identity, "gzip" when the router pre-compressed the FE bundle (the
+	// shell inflates before blob-importing). Unused by other kinds.
+	Encoding string `json:"encoding,omitempty"`
 }
 
 // NewShellChannelBind binds an app-opened raw channel to a window. The
@@ -552,12 +556,13 @@ func NewShellChannelResync(channelID, windowID uint32, kind string) ShellChannel
 	return ShellChannelResync{T: TShellChannelResync, ChannelID: channelID, WindowID: windowID, Kind: kind}
 }
 
-func NewShellChannelBindBundle(channelID uint32, instanceID string) ShellChannelBind {
+func NewShellChannelBindBundle(channelID uint32, instanceID, encoding string) ShellChannelBind {
 	return ShellChannelBind{
 		T:          TShellChannelBind,
 		ChannelID:  channelID,
 		Kind:       ChannelKindBundle,
 		InstanceID: instanceID,
+		Encoding:   encoding,
 	}
 }
 

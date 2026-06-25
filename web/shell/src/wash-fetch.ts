@@ -11,6 +11,8 @@
 //   router → shell:  { t: "channel.unbind",  channel_id, reason }
 //   on error:        { t: "asset.read.err",  req_id, code, msg }
 
+import { gunzip } from './gzip';
+
 interface Pending {
   reqID: number;
   channelID?: number;     // set by handleAssetReadOK; bytes/finish keyed off it
@@ -20,15 +22,6 @@ interface Pending {
   encoding: string;       // '' | 'gzip' — router-side content-coding to undo
   resolve: (v: { bytes: Uint8Array; mime: string }) => void;
   reject: (err: Error) => void;
-}
-
-// gunzip inflates a gzip stream via the native DecompressionStream — the
-// router pre-compresses compressible assets (svg wallpapers, fonts'
-// metadata, etc.; see internal/router/assetcache.go) to cut the wire bytes.
-async function gunzip(bytes: Uint8Array): Promise<Uint8Array> {
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
-  const buf = await new Response(stream).arrayBuffer();
-  return new Uint8Array(buf);
 }
 
 const pendingByReqID = new Map<number, Pending>();

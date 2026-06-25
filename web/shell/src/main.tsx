@@ -152,6 +152,8 @@ interface ShellChannelBind {
   instance_id?: string;
   // origin names the remote host for a kind="peer" relay channel.
   origin?: string;
+  // encoding: content-coding of a kind="bundle" channel ('' | 'gzip').
+  encoding?: string;
 }
 
 interface ShellChannelUnbind {
@@ -433,8 +435,9 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         const b = msg;
         if (b.kind === 'bundle' && b.instance_id) {
           // Bundle delivery channel — accumulate (per origin) until the
-          // matching channel.unbind triggers the dynamic import.
-          client.bundleReady.set(b.instance_id, beginBundle(b.channel_id, b.instance_id, client.origin));
+          // matching channel.unbind triggers the dynamic import. encoding
+          // tells the accumulator whether to inflate (gzip) first.
+          client.bundleReady.set(b.instance_id, beginBundle(b.channel_id, b.instance_id, client.origin, b.encoding));
         } else if (b.kind === 'bundle') {
           // Settings-panel bundle channel (no instance_id): local-only,
           // keyed by channel_id in panels.ts. Nothing to do here.

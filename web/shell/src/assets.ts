@@ -3,6 +3,7 @@
 // through here, and ChannelUnbind triggers a dynamic import.
 
 import { wlog } from './diag';
+import { gunzip } from './gzip';
 import { type Origin, LOCAL_ORIGIN, compoundInstanceId, compoundChannelId } from './clients';
 
 interface Pending {
@@ -14,6 +15,9 @@ interface Pending {
   // Origin of the router that served this bundle, so the import can be
   // tagged for per-origin element mangling (web/lib defineWashApp).
   origin: Origin;
+  // Router-side content-coding of the streamed bytes ('' | 'gzip'); the
+  // bundle is inflated before blob-import when gzip.
+  encoding: string;
 }
 
 // Keyed by COMPOUND ids (origin-tagged) — the router announces which
@@ -26,14 +30,14 @@ const instanceByChannel = new Map<string, string>(); // compoundChannelId → co
 // beginBundle registers a fresh accumulator for instanceID waiting on
 // channelID. Returns the promise that resolves once the import has
 // run (or rejects on failure).
-export function beginBundle(channelID: number, instanceID: string, origin: Origin = LOCAL_ORIGIN): Promise<void> {
+export function beginBundle(channelID: number, instanceID: string, origin: Origin = LOCAL_ORIGIN, encoding = ''): Promise<void> {
   let resolve!: () => void;
   let reject!: (err: Error) => void;
   const promise = new Promise<void>((res, rej) => {
     resolve = res;
     reject = rej;
   });
-  const p: Pending = { channelID, chunks: [], resolve, reject, promise, origin };
+  const p: Pending = { channelID, chunks: [], resolve, reject, promise, origin, encoding };
   const ik = compoundInstanceId(origin, instanceID);
   pendingByInstance.set(ik, p);
   instanceByChannel.set(compoundChannelId(origin, channelID), ik);
@@ -89,33 +93,54 @@ export function finishBundle(channelID: number, origin: Origin = LOCAL_ORIGIN): 
   if (!p) return;
   pendingByInstance.delete(instanceID);
 
-  const blob = new Blob(p.chunks, { type: 'application/javascript' });
-  const url = URL.createObjectURL(blob);
+  // Assemble the bundle bytes, inflating first when the router gzipped
+  // them. gzip needs the contiguous stream, so concat then inflate;
+  // identity keeps the zero-copy chunk array the Blob accepts directly.
+  const assemble = async (): Promise<BlobPart[]> => {
+    if (p.encoding !== 'gzip') return p.chunks;
+    const total = p.chunks.reduce((n, c) => n + c.byteLength, 0);
+    const merged = new Uint8Array(total);
+    let mo = 0;
+    for (const c of p.chunks) { merged.set(c, mo); mo += c.byteLength; }
+    return [await gunzip(merged)];
+  };
 
-  let settled = false;
-  // Watchdog: if a future regression pauses async module resolution
-  // (e.g. hidden-tab throttling on a Blob-URL `import()`), the
-  // bundle would never define its custom element and the desktop
-  // would silently stay blank. Scream after 5s so the symptom is
-  // visible without devtools.
-  const watchdog = setTimeout(() => {
-    if (settled) return;
-    wlog(`bundle PENDING after 5s: inst=${instanceID} ch=${channelID} viz=${document.visibilityState} focus=${document.hasFocus()}`);
-  }, 5000);
+  assemble()
+    .then((parts) => {
+      const blob = new Blob(parts, { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
 
-  runImport(url, p.origin)
-    .then(() => {
-      settled = true;
-      clearTimeout(watchdog);
-      URL.revokeObjectURL(url);
-      p.resolve();
+      let settled = false;
+      // Watchdog: if a future regression pauses async module resolution
+      // (e.g. hidden-tab throttling on a Blob-URL `import()`), the
+      // bundle would never define its custom element and the desktop
+      // would silently stay blank. Scream after 5s so the symptom is
+      // visible without devtools.
+      const watchdog = setTimeout(() => {
+        if (settled) return;
+        wlog(`bundle PENDING after 5s: inst=${instanceID} ch=${channelID} viz=${document.visibilityState} focus=${document.hasFocus()}`);
+      }, 5000);
+
+      return runImport(url, p.origin)
+        .then(() => {
+          settled = true;
+          clearTimeout(watchdog);
+          URL.revokeObjectURL(url);
+          p.resolve();
+        })
+        .catch((err) => {
+          settled = true;
+          clearTimeout(watchdog);
+          URL.revokeObjectURL(url);
+          const stack = err instanceof Error ? err.stack ?? err.message : String(err);
+          wlog(`bundle FAILED: inst=${instanceID} stack=${stack}`);
+          p.reject(err instanceof Error ? err : new Error(String(err)));
+        });
     })
     .catch((err) => {
-      settled = true;
-      clearTimeout(watchdog);
-      URL.revokeObjectURL(url);
-      const stack = err instanceof Error ? err.stack ?? err.message : String(err);
-      wlog(`bundle FAILED: inst=${instanceID} stack=${stack}`);
+      // Inflate failure (corrupt/garbled gzip) — fail the bundle promise
+      // rather than throwing into the unbind dispatcher.
+      wlog(`bundle INFLATE FAILED: inst=${instanceID} err=${err instanceof Error ? err.message : String(err)}`);
       p.reject(err instanceof Error ? err : new Error(String(err)));
     });
 }
