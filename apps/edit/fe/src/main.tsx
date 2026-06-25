@@ -14,7 +14,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { ConfirmDialog, FilePicker, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
+import { ConfirmDialog, FilePicker, FileTree, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
 import type { TerminalAPI } from '@wash/ui';
 import {
   joinPath, baseName, parentPath,
@@ -1138,14 +1138,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   };
   const onRowDragEnd = () => setDropTargetPath('');
 
-  const onRowDragOver = (ev: DragEvent, rowPath: string) => {
+  // <FileTree> wires these on every row; only folders are valid move targets,
+  // so a drag over a file row early-returns and bubbles to the list container
+  // (onListDragOver/onListDrop), matching the old dir-only wiring.
+  const onRowDragOver = (ev: DragEvent, rowPath: string, entry?: Entry) => {
+    if (entry && entry.type !== 'dir') return;
     if (!hasWashDrag(ev.dataTransfer)) return;
     ev.preventDefault();
     ev.stopPropagation();
     ev.dataTransfer!.dropEffect = dropEffectFor(ev.altKey);
     if (dropTargetPath() !== rowPath) setDropTargetPath(rowPath);
   };
-  const onRowDrop = (ev: DragEvent, rowPath: string) => {
+  const onRowDrop = (ev: DragEvent, rowPath: string, entry?: Entry) => {
+    if (entry && entry.type !== 'dir') return;
     const paths = readDragPaths(ev.dataTransfer);
     if (paths.length === 0) return;
     ev.preventDefault();
@@ -1328,25 +1333,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }),
   );
 
-  // Identity-stabilising layer (same rationale as wash-fm): flattenTree
-  // returns brand-new wrapper+entry objects each recompute, and <For>
-  // keys by reference — so any re-list (incl. a no-op fs.watch refresh)
-  // would tear down and rebuild every row's DOM, racing clicks mid-render
-  // ("element detached from the DOM"). Reuse the prior row object for a
-  // path whose content is unchanged so <For> keeps that row's DOM.
-  let prevRows = new Map<string, { row: EditRow; sig: string }>();
-  const visibleRows = createMemo<EditRow[]>(() => {
-    const next = new Map<string, { row: EditRow; sig: string }>();
-    const out = flatRows().map((row) => {
-      const sig = JSON.stringify(row);
-      const prior = prevRows.get(row.path);
-      const stable = prior && prior.sig === sig ? prior.row : row;
-      next.set(row.path, { row: stable, sig });
-      return stable;
-    });
-    prevRows = next;
-    return out;
-  });
+  // Row-identity stabilisation now lives inside the shared <FileTree>
+  // (@wash/ui); edit just feeds it flatRows().
 
   // ---- row click semantics ----
   //
@@ -2272,113 +2260,39 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               <FolderIcon size={12} />
             </button>
           </div>
-          <div
-            style={sidebarListStyle}
-            onDragOver={onListDragOver}
-            onDrop={onListDrop}
-          >
-            <For each={visibleRows()}>
-              {(row) => {
-                const sel = () => selectedPath() === row.path;
-                const isExpanded = () => !!expanded[row.path];
-                return (
-                  <div
-                    data-testid={`edit-entry-${row.entry.name}`}
-                    data-type={row.entry.type}
-                    data-selected={sel() ? 'true' : undefined}
-                    data-drop-target={dropTargetPath() === row.path ? 'true' : undefined}
-                    draggable="true"
-                    onDragStart={(ev) => onRowDragStart(ev, row.path)}
-                    onDragEnd={onRowDragEnd}
-                    onDragOver={row.entry.type === 'dir' ? (ev) => onRowDragOver(ev, row.path) : undefined}
-                    onDrop={row.entry.type === 'dir' ? (ev) => onRowDrop(ev, row.path) : undefined}
-                    style={rowStyleDropAware(sel(), dropTargetPath() === row.path, row.depth)}
-                    onClick={() => {
-                      if (renaming()?.path === row.path) return;
-                      onRowClick(row);
-                    }}
-                    onDblClick={() => {
-                      if (renaming()?.path === row.path) return;
-                      onRowDblClick(row);
-                    }}
-                    onContextMenu={(ev) => openCtxMenu(ev, row.entry, row.path)}
-                  >
-                    {/* chevron + icon + name — same visual contract as
-                        wash-fm's TreeRow: 12px chevron slot, 14px icon
-                        slot, lucide-solid glyphs. Empty chevron slot
-                        keeps file rows' icons aligned with folders'. */}
-                    <span
-                      data-testid={`edit-chevron-${row.entry.name}`}
-                      style={{
-                        width: '12px',
-                        display: 'inline-flex',
-                        'align-items': 'center',
-                        'justify-content': 'center',
-                        opacity: 0.6,
-                        'flex-shrink': 0,
-                        cursor: row.entry.type === 'dir' ? 'pointer' : 'default',
-                      }}
-                      onClick={(ev) => {
-                        if (row.entry.type === 'dir') {
-                          ev.stopPropagation();
-                          toggleExpand(row.path);
-                        }
-                      }}
-                    >
-                      <Show when={row.entry.type === 'dir'}>
-                        {isExpanded() ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                      </Show>
-                    </span>
-                    <span style={{
-                      width: '14px',
-                      display: 'inline-flex',
-                      'align-items': 'center',
-                      'justify-content': 'center',
-                      opacity: 0.8,
-                      'flex-shrink': 0,
-                    }}>
-                      <EntryIcon type={row.entry.type} />
-                    </span>
-                    <span style={{
-                      flex: 1,
-                      overflow: 'hidden',
-                      'text-overflow': 'ellipsis',
-                      'white-space': 'nowrap',
-                    }}>
-                      <Show
-                        when={renaming()?.path === row.path}
-                        fallback={row.entry.name}
-                      >
-                        <input
-                          data-testid="edit-rename-input"
-                          ref={(el) => setTimeout(() => { el.focus(); el.select(); }, 0)}
-                          type="text"
-                          value={renaming()!.draft}
-                          onInput={(e) => {
-                            const r = renaming();
-                            if (r) setRenaming({ ...r, draft: e.currentTarget.value });
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                          onKeyDown={(e) => {
-                            e.stopPropagation();
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              void commitRenameDraft();
-                            } else if (e.key === 'Escape') {
-                              e.preventDefault();
-                              cancelRename();
-                            }
-                          }}
-                          onBlur={() => void commitRenameDraft()}
-                          style={renameInputStyle}
-                        />
-                      </Show>
-                    </span>
-                  </div>
-                );
-              }}
-            </For>
-          </div>
+          <FileTree
+            rows={flatRows()}
+            testIdPrefix="edit"
+            containerStyle={sidebarListStyle}
+            onContainerDragOver={onListDragOver}
+            onContainerDrop={onListDrop}
+            isSelected={(p) => selectedPath() === p}
+            isExpanded={(p) => !!expanded[p]}
+            isDropTarget={(p) => dropTargetPath() === p}
+            renderIcon={(e) => <EntryIcon type={e.type} />}
+            scrollTarget={() => selectedPath()}
+            onRowClick={(p, e) => {
+              if (renaming()?.path === p) return;
+              onRowClick({ entry: e, path: p });
+            }}
+            onRowDblClick={(p, e) => {
+              if (renaming()?.path === p) return;
+              onRowDblClick({ entry: e, path: p });
+            }}
+            onToggle={(p) => toggleExpand(p)}
+            onRowContextMenu={(ev, e, p) => openCtxMenu(ev, e, p)}
+            onRowDragStart={(ev, p) => onRowDragStart(ev, p)}
+            onRowDragEnd={onRowDragEnd}
+            onRowDragOver={(ev, p, e) => onRowDragOver(ev, p, e)}
+            onRowDrop={(ev, p, e) => onRowDrop(ev, p, e)}
+            renaming={(p) => (renaming()?.path === p ? { draft: renaming()!.draft } : null)}
+            onRenameInput={(v) => {
+              const r = renaming();
+              if (r) setRenaming({ ...r, draft: v });
+            }}
+            onRenameCommit={() => void commitRenameDraft()}
+            onRenameCancel={cancelRename}
+          />
         </div>
 
         <Splitter container={bodyEl} onChange={setSplitPct} data-testid="edit-splitter" />
@@ -3180,51 +3094,14 @@ const sidebarHeaderBtnStyle: JSX.CSSProperties = {
   'flex-shrink': 0,
 };
 
-const renameInputStyle: JSX.CSSProperties = {
-  width: '100%',
-  background: tokens.bgInset,
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderFocus}`,
-  'border-radius': `${tokens.radiusSm}`,
-  padding: '0 4px',
-  font: tokens.type.textMd,
-  outline: 'none',
-};
-
+// The sidebar list IS the shared <FileTree>'s scroll container; this is its
+// outer style (flex child of the sidebar). Row look + indentation now live in
+// FileTree (@wash/ui).
 const sidebarListStyle: JSX.CSSProperties = {
   flex: 1,
   overflow: 'auto',
   padding: '4px 0',
 };
-
-function rowStyleDropAware(selected: boolean, dropTarget: boolean, depth: number): JSX.CSSProperties {
-  // Drop-target highlight takes precedence over selected so the
-  // user always sees where the drop will land. Same colour scheme
-  // wash-fm uses for visual consistency between the two trees.
-  const base = rowStyle(selected, depth);
-  if (!dropTarget) return base;
-  return {
-    ...base,
-    background: tokens.bgRowSelected,
-    outline: `1px solid ${tokens.borderFocus}`,
-  };
-}
-
-function rowStyle(selected: boolean, depth: number): JSX.CSSProperties {
-  // Match wash-fm's TreeRow visual: 4px gap between chevron / icon /
-  // name, depth-indented via padding-left, 3px row vertical pad.
-  return {
-    display: 'flex',
-    'align-items': 'center',
-    gap: '4px',
-    padding: `3px 8px 3px ${8 + depth * 12}px`,
-    background: selected ? tokens.bgRowSelected : 'transparent',
-    color: tokens.fg,
-    cursor: 'pointer',
-    'user-select': 'none',
-    font: tokens.type.textMd,
-  };
-}
 
 const editorPaneStyle: JSX.CSSProperties = {
   background: tokens.bgWindow,

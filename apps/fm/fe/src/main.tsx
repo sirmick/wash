@@ -20,8 +20,8 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { ConfirmDialog, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
-import type { FileClient } from '@wash/ui';
+import { ConfirmDialog, FileTree, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
+import type { FileClient, FileTreeColumn } from '@wash/ui';
 import {
   baseName, extName, formatDate, humanSize, joinPath, octalPerm, parentPath, ancestorChain,
   isThumbableName,
@@ -251,6 +251,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   });
   // cols: which tree columns currently fit (see colsFor).
   const cols = createMemo<ColCfg>(() => colsFor(treeW()));
+  // treeColumns maps the responsive ColCfg into the shared <FileTree>'s
+  // extra-column config (Name is implicit). The tracks match colsFor's
+  // template exactly, so the header + rows line up as before.
+  const treeColumns = createMemo<FileTreeColumn<Entry>[]>(() => {
+    const c = cols();
+    const out: FileTreeColumn<Entry>[] = [];
+    if (c.size) out.push({ key: 'size', header: 'Size', track: `${COL_SIZE_W}px`, align: 'right', cell: (e, ctx) => sizeOrCount(e, ctx.childCount) });
+    if (c.mtime) out.push({ key: 'mtime', header: 'Modified', track: `${COL_DATE_W}px`, align: 'right', cell: (e) => formatDate(e.mod_unix) });
+    if (c.ctime) out.push({ key: 'ctime', header: 'Created', track: `${COL_DATE_W}px`, align: 'right', cell: (e) => formatDate(e.created_unix) });
+    return out;
+  });
   // onSplitChange converts the Splitter's divider-position percent into a
   // dock pixel width (the dock is everything right of the divider) and
   // clamps it so neither pane starves.
@@ -693,7 +704,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     rowPath: string,
     entry: Entry,
     ev: MouseEvent,
-    orderedPaths: string[] = visibleRows().map((r) => r.path),
+    orderedPaths: string[] = flatRows().map((r) => r.path),
   ) => {
     const focusForFile = (p: string) => {
       // For a file, single click DOES update path + preview —
@@ -1858,59 +1869,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }),
   );
 
-  // Identity-stabilising layer. flattenTree returns brand-new wrapper +
-  // entry objects on every recompute, and a plain <For> keys by object
-  // reference — so without this, ANY re-list (even a no-op fs.watch
-  // refresh that produces value-identical entries) tears down and
-  // rebuilds every row's DOM. A click then races the rebuild: the row
-  // is "detached from the DOM" mid-click. That's the source of the
-  // fm/clipboard full-suite flakes. Here we reuse the previous row
-  // object for a path whose visible content is unchanged, so <For>
-  // keeps those rows' DOM and only genuinely-changed rows re-render.
-  let prevRows = new Map<string, { row: VisibleRow; sig: string }>();
-  const visibleRows = createMemo<VisibleRow[]>(() => {
-    const next = new Map<string, { row: VisibleRow; sig: string }>();
-    const out = flatRows().map((row) => {
-      const sig = JSON.stringify(row);
-      const prior = prevRows.get(row.path);
-      const stable = prior && prior.sig === sig ? prior.row : row;
-      next.set(row.path, { row: stable, sig });
-      return stable;
-    });
-    prevRows = next;
-    return out;
-  });
-
-  // visibleCount is the total entries visible right now. Updates
-  // automatically as folders expand/collapse.
-  const visibleCount = createMemo(() => visibleRows().length);
-
-  // Scroll the current row into view when the cursor moves (Home / Back /
-  // Forward / Up / path-bar / double-click). Without this the tree only
-  // re-bolds the current row in place — on a big tree the target is often
-  // off-screen, so a Home click looked like "nothing happened" even though
-  // it navigated. Depends on visibleRows() too so it retries once the row
-  // actually mounts (its listing may still be in flight when path() changes).
-  // block:'nearest' is a no-op when the row is already visible, so ordinary
-  // in-view selections don't jump.
-  //
-  // lastScrolledPath gates the retry: expand/collapse changes visibleRows()
-  // WITHOUT changing path(), and we must not re-scroll then — that would yank
-  // the viewport away from the folder the user just toggled (see treeStyle's
-  // overflow-anchor). So we only scroll when path() differs from the row we
-  // last brought into view, and record success only once that row exists.
-  let lastScrolledPath: string | null = null;
-  createEffect(() => {
-    const cur = path();
-    visibleRows();
-    if (!cur || cur === lastScrolledPath) return;
-    queueMicrotask(() => {
-      const row = props.host.querySelector(`[data-testid="fm-list"] [data-path="${CSS.escape(cur)}"]`);
-      if (!row) return; // not mounted yet — a later visibleRows() change retries
-      (row as HTMLElement).scrollIntoView({ block: 'nearest' });
-      lastScrolledPath = cur;
-    });
-  });
+  // Row-identity stabilisation (the prevRows reuse that keeps <For> from
+  // rebuilding unchanged rows) and scroll-into-view-on-navigate now live inside
+  // the shared <FileTree> (@wash/ui). fm just feeds it flatRows(); callers that
+  // only need the visible PATH order read flatRows() directly.
+  const visibleCount = createMemo(() => flatRows().length);
 
   // gridEntries is the previewed folder's listing, sorted/filtered by the
   // SAME comparator the tree uses (sortedFiltered, @wash/fs-client) so the
@@ -1942,7 +1905,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   let lastGhostSig = '';
   createEffect(() => {
     const sel = selection();
-    const visible = new Set(visibleRows().map((r) => r.path));
+    const visible = new Set(flatRows().map((r) => r.path));
     const ghosts: string[] = [];
     for (const p of sel) if (!visible.has(p)) ghosts.push(p);
     const sig = ghosts.length ? ghosts.slice().sort().join('\n') : '';
@@ -2076,7 +2039,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         if (ev.key === 'a' || ev.key === 'A') {
           // Select-all = every currently-visible row in the tree.
           ev.preventDefault();
-          applySelection(new Set(visibleRows().map((r) => r.path)), 'select-all');
+          applySelection(new Set(flatRows().map((r) => r.path)), 'select-all');
           return;
         }
         if ((ev.key === 'N' || ev.key === 'n') && ev.shiftKey) {
@@ -2261,121 +2224,99 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         ref={bodyEl!}
         style={{ ...bodyStyle, 'grid-template-columns': gridCols() }}
       >
-        <div
-          data-testid="fm-list"
-          data-upload-active={uploadDropActive() ? 'true' : undefined}
-          // External drag over empty list space → the whole pane is the
-          // landing zone (drop = upload into the current dir). A solid
-          // accent ring + faint blue wash makes that obvious, matching
-          // the per-folder-row drop affordance.
-          style={uploadDropActive()
+        <FileTree
+          rows={flatRows()}
+          listTestId="fm-list"
+          testIdPrefix="fm"
+          // External drag over empty list space lights the whole pane (drop =
+          // upload into the current dir); a folder-row hover overrides it.
+          containerStyle={uploadDropActive()
             ? { ...treeStyle, 'box-shadow': `inset 0 0 0 2px ${tokens.borderDropTarget}`, background: tokens.bgDropTarget }
             : treeStyle}
-          onDragOver={onListDragOver}
-          onDragLeave={onListDragLeave}
-          onDrop={onListDrop}
-          onClick={(ev) => {
-            // Background click clears the selection — native FM
-            // convention. Only fire when the click hit the list
-            // container itself (not a row that bubbled up).
-            if (ev.target === ev.currentTarget && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey) {
+          containerAttrs={{ 'data-upload-active': uploadDropActive() ? 'true' : undefined }}
+          onContainerDragOver={onListDragOver}
+          onContainerDragLeave={onListDragLeave}
+          onContainerDrop={onListDrop}
+          onBackgroundClick={(ev) => {
+            // Background click clears the selection — native FM convention.
+            if (!ev.shiftKey && !ev.ctrlKey && !ev.metaKey) {
               applySelection(new Set(), 'background-clear');
               selectionAnchor = null;
             }
           }}
-        >
-          <ColumnHeader
-            sortKey={sortKey()}
-            sortDesc={sortDesc()}
-            cols={cols()}
-            onSort={(k) => {
-              if (sortKey() === k) setSortDesc(!sortDesc());
-              else { setSortKey(k); setSortDesc(false); }
+          columns={treeColumns()}
+          header={{
+            sortKey: sortKey(),
+            sortDesc: sortDesc(),
+            onSort: (k) => {
+              const key = k as SortKey;
+              if (sortKey() === key) setSortDesc(!sortDesc());
+              else { setSortKey(key); setSortDesc(false); }
               persist();
-            }}
-          />
-          <Show when={pendingNew()}>
-            <PendingNewRow
-              kind={pendingNew()!.kind}
-              parent={pendingNew()!.parent}
-              draft={pendingNew()!.draft}
-              onInput={(v) => {
-                const cur = pendingNew();
-                if (cur) setPendingNew({ ...cur, draft: v });
-              }}
-              onCommit={commitNew}
-              onCancel={cancelNew}
-            />
-          </Show>
-          <Show when={rootInitialized() && visibleRows().length === 0 && !pendingNew()}>
-            <div
-              data-testid="fm-empty"
-              style={{
-                padding: '20px 16px',
-                color: tokens.fgDim,
-                'font-style': 'italic',
-                'font-size': '13px',
-              }}
-            >
-              (empty folder)
-            </div>
-          </Show>
-          <For each={visibleRows()}>
-            {(row) => {
-              const isRenaming = () => renaming()?.path === row.path;
-              return <TreeRow
-                entry={row.entry}
-                path={row.path}
-                depth={row.depth}
-                childCount={row.childCount}
-                cols={cols()}
-                selected={selection().has(row.path)}
-                isCurrent={path() === row.path}
-                expanded={!!expanded[row.path]}
-                renaming={isRenaming() ? { draft: renaming()!.draft } : null}
-                onRenameInput={(v) => {
-                  const r = renaming();
-                  if (r) setRenaming({ ...r, draft: v });
+            },
+          }}
+          isSelected={(p) => selection().has(p)}
+          isExpanded={(p) => !!expanded[p]}
+          isCurrent={(p) => path() === p}
+          isDropTarget={(p) => dropTargetPath() === p}
+          renderIcon={(e, p) => <EntryIcon entry={e} path={p} />}
+          rowTint={(e) => entryTint(e)}
+          rowHint={(e) => entryHint(e)}
+          rowTrailing={(e) => <SetidBadge entry={e} />}
+          scrollTarget={() => path()}
+          onRowClick={(p, e, ev) => {
+            if (renaming()?.path === p) return;
+            onRowClick(p, e, ev);
+          }}
+          onRowDblClick={(p, e) => {
+            // Native dblclick — the browser's timing window avoids catching
+            // pairs of intentional single clicks as double-clicks. This is the
+            // only path that calls selectPath for a row.
+            if (e.type === 'symlink') { followSymlink(e, p); return; }
+            if (e.type === 'dir') { selectPath(p, true); return; }
+            // A file: hand it to its registered app via the router's open routing.
+            openFile(p);
+          }}
+          onToggle={(p) => toggleExpand(p)}
+          onRowContextMenu={(ev, e, p) => openContextMenu(ev, e, p)}
+          onRowDragStart={(ev, p) => onDragStart(ev, p)}
+          onRowDragEnd={onDragEnd}
+          // Drop handlers run on every row: an external upload onto a file row
+          // resolves to that file's folder (uploadFolderFor); internal moves
+          // over a file row early-return and bubble to the container.
+          onRowDragOver={(ev, p, e) => onRowDragOver(ev, p, e)}
+          onRowDrop={(ev, p, e) => onRowDrop(ev, p, e)}
+          renaming={(p) => (renaming()?.path === p ? { draft: renaming()!.draft } : null)}
+          onRenameInput={(v) => {
+            const r = renaming();
+            if (r) setRenaming({ ...r, draft: v });
+          }}
+          onRenameCommit={commitRename}
+          onRenameCancel={cancelRename}
+          prepend={<>
+            <Show when={pendingNew()}>
+              <PendingNewRow
+                kind={pendingNew()!.kind}
+                parent={pendingNew()!.parent}
+                draft={pendingNew()!.draft}
+                onInput={(v) => {
+                  const cur = pendingNew();
+                  if (cur) setPendingNew({ ...cur, draft: v });
                 }}
-                onRenameCommit={commitRename}
-                onRenameCancel={cancelRename}
-                onClick={(ev) => {
-                  if (isRenaming()) return;
-                  onRowClick(row.path, row.entry, ev);
-                }}
-                onDblClick={() => {
-                  // Native dblclick — the browser's timing window
-                  // avoids catching pairs of intentional single
-                  // clicks as double-clicks on slow input. Single-click
-                  // navigation never happens here; this is the
-                  // only path that calls selectPath for a row.
-                  if (row.entry.type === 'symlink') {
-                    followSymlink(row.entry, row.path);
-                    return;
-                  }
-                  if (row.entry.type === 'dir') {
-                    selectPath(row.path, true);
-                    return;
-                  }
-                  // A file: hand it to its registered app (image viewer,
-                  // editor, …) via the router's open routing.
-                  openFile(row.path);
-                }}
-                onToggle={() => toggleExpand(row.path)}
-                onContextMenu={(ev) => openContextMenu(ev, row.entry, row.path)}
-                onDragStart={(ev) => onDragStart(ev, row.path)}
-                onDragEnd={onDragEnd}
-                isDropTarget={dropTargetPath() === row.path}
-                // Wired on every row, not just folders: an external upload
-                // onto a file row resolves to that file's folder (see
-                // uploadFolderFor). Internal moves over a file row early-return
-                // and bubble to the list pane, preserving the old behaviour.
-                onDragOver={(ev) => onRowDragOver(ev, row.path, row.entry)}
-                onDrop={(ev) => onRowDrop(ev, row.path, row.entry)}
-              />;
-            }}
-          </For>
-        </div>
+                onCommit={commitNew}
+                onCancel={cancelNew}
+              />
+            </Show>
+            <Show when={rootInitialized() && flatRows().length === 0 && !pendingNew()}>
+              <div
+                data-testid="fm-empty"
+                style={{ padding: '20px 16px', color: tokens.fgDim, 'font-style': 'italic', 'font-size': '13px' }}
+              >
+                (empty folder)
+              </div>
+            </Show>
+          </>}
+        />
         <Show when={previewOpen()}>
           <Splitter
             container={bodyEl}
@@ -2641,225 +2582,6 @@ function colsFor(w: number): ColCfg {
 // toggle so the two top rows line up across the splitter. The 1px
 // border-bottom on each parent adds to this for the visual stripe.
 const HEADER_ROW_H = 22;
-
-// ColumnHeader is the sticky header strip above the tree: Name |
-// Modified | Created | Size. Clicking a header sorts by that
-// column; clicking the active one toggles direction. Stays in
-// sync with the sort menu since both drive the same
-// sortKey/sortDesc state.
-const ColumnHeader: Component<{
-  sortKey: SortKey;
-  sortDesc: boolean;
-  cols: ColCfg;
-  onSort: (k: SortKey) => void;
-}> = (props) => {
-  const arrow = (k: SortKey): JSX.Element => {
-    if (props.sortKey !== k) return null;
-    return props.sortDesc ? <ChevronDown size={11} /> : <ChevronUp size={11} />;
-  };
-  const cell = (label: string, k: SortKey, align: 'left' | 'right'): JSX.Element => (
-    <button
-      type="button"
-      data-testid={`fm-header-${k}`}
-      onClick={() => props.onSort(k)}
-      style={{
-        background: 'transparent',
-        border: 'none',
-        color: tokens.fgMuted,
-        font: tokens.type.textSm,
-        cursor: 'pointer',
-        padding: '0 8px',
-        height: `${HEADER_ROW_H}px`,
-        'box-sizing': 'border-box',
-        display: 'flex',
-        'align-items': 'center',
-        gap: '4px',
-        'justify-content': align === 'right' ? 'flex-end' : 'flex-start',
-      }}
-    >
-      <span>{label}</span>
-      {arrow(k)}
-    </button>
-  );
-  return (
-    <div
-      data-testid="fm-column-header"
-      style={{
-        position: 'sticky',
-        top: 0,
-        background: tokens.bgMenu,
-        'border-bottom': `1px solid ${tokens.borderMenu}`,
-        display: 'grid',
-        'grid-template-columns': props.cols.template,
-        'z-index': 2,
-        'user-select': 'none',
-      }}
-    >
-      {cell('Name', 'name', 'left')}
-      <Show when={props.cols.size}>{cell('Size', 'size', 'right')}</Show>
-      <Show when={props.cols.mtime}>{cell('Modified', 'mtime', 'right')}</Show>
-      <Show when={props.cols.ctime}>{cell('Created', 'ctime', 'right')}</Show>
-    </div>
-  );
-};
-
-const TreeRow: Component<{
-  entry: Entry;
-  path: string;
-  depth: number;
-  childCount?: number;
-  cols: ColCfg;
-  selected: boolean;
-  isCurrent: boolean;
-  expanded: boolean;
-  // When `renaming` is set, the name span becomes a focused input
-  // bound to `renaming.draft`. Enter commits, Escape cancels, blur
-  // commits. Clicks on the row are suppressed while editing.
-  renaming?: { draft: string } | null;
-  onRenameInput?: (val: string) => void;
-  onRenameCommit?: () => void;
-  onRenameCancel?: () => void;
-  onClick: (ev: MouseEvent) => void;
-  onDblClick?: () => void;
-  onToggle: () => void;
-  onContextMenu: (ev: MouseEvent) => void;
-  onDragStart: (ev: DragEvent) => void;
-  onDragEnd?: () => void;
-  // Drop-target handlers, wired on every row. The handlers themselves
-  // decide what a drop means: external uploads resolve to the row's folder,
-  // internal moves only act on folder rows (file rows bubble to the pane).
-  isDropTarget?: boolean;
-  onDragOver?: (ev: DragEvent) => void;
-  onDrop?: (ev: DragEvent) => void;
-}> = (props) => {
-  const [hover, setHover] = createSignal(false);
-  return (
-    <div
-      data-testid={`fm-entry-${props.entry.name}`}
-      data-type={props.entry.type}
-      data-path={props.path}
-      data-hint={entryHint(props.entry)}
-      data-selected={props.selected ? 'true' : undefined}
-      data-drop-target={props.isDropTarget ? 'true' : undefined}
-      draggable="true"
-      onDragStart={props.onDragStart}
-      onDragEnd={props.onDragEnd}
-      onDragOver={props.onDragOver}
-      onDrop={props.onDrop}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      onClick={(ev) => props.onClick(ev)}
-      onDblClick={() => props.onDblClick?.()}
-      onContextMenu={props.onContextMenu}
-      style={{
-        display: 'grid',
-        'grid-template-columns': props.cols.template,
-        'align-items': 'center',
-        padding: '3px 8px',
-        background: props.isDropTarget
-          ? tokens.bgDropTarget
-          : props.selected
-          ? tokens.bgRowSelected
-          : hover()
-          ? tokens.bgRowHover
-          : 'transparent',
-        color: tokens.fg,
-        cursor: 'pointer',
-        'user-select': 'none',
-        font: tokens.type.textMd,
-        // A solid accent ring (inset so it isn't clipped by the row
-        // bounds) makes the landing folder pop out unmistakably from a
-        // merely-selected row during a drag.
-        'box-shadow': props.isDropTarget ? `inset 0 0 0 2px ${tokens.borderDropTarget}` : 'none',
-        outline: 'none',
-      }}
-    >
-      {/* name cell — chevron + icon + name, indented by depth. The tint
-          (exec/read-only/broken-link/hidden) colours both icon (currentColor)
-          and name; default falls back to the row's fg. */}
-      <span style={{
-        display: 'flex',
-        'align-items': 'center',
-        gap: '4px',
-        'padding-left': `${props.depth * 12}px`,
-        overflow: 'hidden',
-        color: entryTint(props.entry) ?? tokens.fg,
-      }}>
-      <span
-        data-testid={`fm-chevron-${props.entry.name}`}
-        style={{ width: '12px', display: 'inline-flex', 'align-items': 'center', 'justify-content': 'center', opacity: 0.6, cursor: 'pointer', 'flex-shrink': 0 }}
-        onClick={(ev) => {
-          if (props.entry.type === 'dir') {
-            ev.stopPropagation();
-            props.onToggle();
-          }
-        }}
-      >
-        <Show when={props.entry.type === 'dir'}>
-          {props.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        </Show>
-      </span>
-      <span style={{ width: '14px', display: 'inline-flex', 'align-items': 'center', 'justify-content': 'center', opacity: 0.8, 'flex-shrink': 0 }}>
-        <EntryIcon entry={props.entry} path={props.path} />
-      </span>
-      <span style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap', 'font-weight': props.isCurrent ? 'bold' : 'normal' }}>
-        <Show
-          when={props.renaming}
-          fallback={props.entry.name}
-        >
-          <input
-            data-testid="fm-rename-input"
-            ref={(el) => setTimeout(() => { el.focus(); el.select(); }, 0)}
-            type="text"
-            value={props.renaming!.draft}
-            onInput={(e) => props.onRenameInput?.(e.currentTarget.value)}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => {
-              e.stopPropagation();
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                props.onRenameCommit?.();
-              } else if (e.key === 'Escape') {
-                e.preventDefault();
-                props.onRenameCancel?.();
-              }
-            }}
-            onBlur={() => props.onRenameCommit?.()}
-            style={inlineInputStyle}
-          />
-        </Show>
-      </span>
-      <SetidBadge entry={props.entry} />
-      </span>
-      {/* Size / item count */}
-      <Show when={props.cols.size}>
-        <span style={cellNumStyle}>
-          {props.renaming ? '' : sizeOrCount(props.entry, props.childCount)}
-        </span>
-      </Show>
-      {/* Modified */}
-      <Show when={props.cols.mtime}>
-        <span style={cellNumStyle}>
-          {!props.renaming ? formatDate(props.entry.mod_unix) : ''}
-        </span>
-      </Show>
-      {/* Created */}
-      <Show when={props.cols.ctime}>
-        <span style={cellNumStyle}>
-          {!props.renaming ? formatDate(props.entry.created_unix) : ''}
-        </span>
-      </Show>
-    </div>
-  );
-};
-
-const cellNumStyle: JSX.CSSProperties = {
-  opacity: 0.6,
-  font: tokens.type.monoSm,
-  'text-align': 'right',
-  'white-space': 'nowrap',
-  overflow: 'hidden',
-};
 
 function sizeOrCount(entry: Entry, childCount?: number): string {
   if (entry.type === 'file') return humanSize(entry.size);
