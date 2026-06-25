@@ -65,6 +65,12 @@ test.describe('terminal selection + copy keybinding', () => {
 
     await host.click();
     await page.keyboard.type('ctrl-c-copy-marker');
+    // Wait for the PTY echo to actually render the typed text into the
+    // xterm buffer BEFORE selecting. Under parallel load the echo
+    // round-trip lags, and selectAll() over a half-rendered line copied
+    // a partial marker (e.g. "…$ c") → the clipboard assertion below
+    // flaked. selectAll is only meaningful once the line is complete.
+    await expect.poll(() => bufferText(page)).toContain('ctrl-c-copy-marker');
     await host.evaluate((h: any) => h.__washTerm?.selectAll());
     await expect.poll(() => host.evaluate((h: any) => !!h.__washTerm?.hasSelection())).toBe(true);
 
