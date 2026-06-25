@@ -1216,11 +1216,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   const onRowDragOver = (ev: DragEvent, rowPath: string, entry?: Entry) => {
     // External OS file drag → mark the enclosing folder as the upload target.
+    // Yield the container-level "drop here" rings (the list pane's
+    // uploadDropActive, the grid pane's gridUploadActive) so the targeted
+    // folder is the SOLE highlight — otherwise both light up and it's
+    // ambiguous whether the drop lands in this folder or the shown/current one.
     if (isExternalFileDrag(ev.dataTransfer)) {
       const folder = uploadFolderFor(rowPath, entry);
       ev.preventDefault();
       ev.stopPropagation();
       ev.dataTransfer!.dropEffect = 'copy';
+      if (uploadDropActive()) setUploadDropActive(false);
+      if (gridUploadActive()) setGridUploadActive(false);
       if (dropTargetPath() !== folder) setDropTargetPath(folder);
       return;
     }
