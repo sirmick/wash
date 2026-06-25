@@ -1,9 +1,7 @@
-import re,sys,math,statistics
+import re,sys
 INP=sys.argv[1]; OUTP=sys.argv[2]
 MARGIN=int(sys.argv[3]) if len(sys.argv)>3 else 360
-RF=float(sys.argv[4]) if len(sys.argv)>4 else 0.95
-RMAX=float(sys.argv[6]) if len(sys.argv)>6 else 9.0
-GAP=float(sys.argv[5]) if len(sys.argv)>5 else 1.0    # 1.0=may touch; >1 leaves a gap
+RF=float(sys.argv[4]) if len(sys.argv)>4 else 0.85
 src=open(INP).read()
 mW=re.search(r'<svg[^>]*width="(\d+)"[^>]*height="(\d+)"',src);PW,PH=int(mW.group(1)),int(mW.group(2))
 path_re=re.compile(r'<path d="([^"]+)"\s+fill="(#[0-9a-fA-F]{6})"\s+transform="translate\(([\-0-9.]+),([\-0-9.]+)\)"\s*/>')
@@ -16,57 +14,35 @@ def subpaths(d):
         n=[float(x) for x in num_re.findall(c)];pts=list(zip(n[0::2],n[1::2]))
         if len(pts)>=3:out.append(pts)
     return out
-# 1) dotify (circle-or-drop), collecting candidate circles (x,y,r,hex)
-cands=[];first=True
+def bbox(pts):
+    xs=[p[0] for p in pts];ys=[p[1] for p in pts]
+    return min(xs),min(ys),max(xs),max(ys)
+elems=[];nc=npth=ndrop=0;first=True
 for m in path_re.finditer(src):
     d,fill,tx,ty=m.group(1),m.group(2),float(m.group(3)),float(m.group(4))
-    if first: first=False; continue   # background handled separately
+    if first:  # full-canvas background — keep
+        elems.append(f'<path d="{d}" fill="{fill}" transform="translate({tx:g},{ty:g})"/>');npth+=1;first=False;continue
     sps=subpaths(d)
-    x0=y0=1e9;x1=y1=-1e9
+    # union bbox across subpaths (handles dot-with-hole as one blob)
+    xs0=ys0=1e9;xs1=ys1=-1e9
     for pts in sps:
-        xs=[p[0] for p in pts];ys=[p[1] for p in pts]
-        x0=min(x0,min(xs));y0=min(y0,min(ys));x1=max(x1,max(xs));y1=max(y1,max(ys))
-    if x1<x0: continue
-    w=x1-x0;h=y1-y0;big=max(w,h);small=min(w,h);asp=small/big if big>0 else 0
+        a,b,c,e=bbox(pts)
+        xs0=min(xs0,a);ys0=min(ys0,b);xs1=max(xs1,c);ys1=max(ys1,e)
+    if xs1<xs0: ndrop+=1; continue
+    w=xs1-xs0;h=ys1-ys0;big=max(w,h);small=min(w,h);asp=small/big if big>0 else 0
+    # EXTREME dotify: almost anything roundish-or-square becomes a dot;
+    # only very elongated strokes (river/outlines) or oversized fills are
+    # dropped. Nothing but the background stays a polygon.
     if 2<=big<=120 and asp>=0.32:
-        cands.append([(x0+x1)/2+tx,(y0+y1)/2+ty,min((w+h)/4*RF,RMAX),fill])
-# 2) greedy keep-or-absorb (largest first) → non-overlapping set; absorbed
-#    colors fold into the keeper's list, final fill = per-channel median.
-cands.sort(key=lambda c:-c[2])
-maxr=cands[0][2] if cands else 1
-CELL=max(8.0,maxr*2)
-grid={}   # cell -> list of kept indices
-kept=[]   # [x,y,r,[hexcolors]]
-def cells_around(x,y,rad):
-    c0=int((x-rad)//CELL);c1=int((x+rad)//CELL);r0=int((y-rad)//CELL);r1=int((y+rad)//CELL)
-    for cx in range(c0,c1+1):
-        for cy in range(r0,r1+1):
-            yield (cx,cy)
-for x,y,r,hexc in cands:
-    hit=-1
-    for cell in cells_around(x,y,r+maxr):
-        for ki in grid.get(cell,()):
-            kx,ky,kr,_=kept[ki]
-            dx=kx-x;dy=ky-y
-            if dx*dx+dy*dy < ((kr+r)*GAP)**2:   # overlap
-                hit=ki;break
-        if hit>=0:break
-    if hit>=0:
-        kept[hit][3].append(hexc)            # absorb color
-    else:
-        ki=len(kept);kept.append([x,y,r,[hexc]])
-        for cell in cells_around(x,y,r):
-            grid.setdefault(cell,[]).append(ki)
-def med(colors):
-    rs=[int(c[1:3],16) for c in colors];gs=[int(c[3:5],16) for c in colors];bs=[int(c[5:7],16) for c in colors]
-    return '#%02x%02x%02x'%(int(statistics.median(rs)),int(statistics.median(gs)),int(statistics.median(bs)))
-# 3) emit
-BW=8;FRAME='#000000';M=MARGIN;W2=PW+2*M;H2=PH+2*M;hb=BW/2
-body=[f'<circle cx="{round(x+0,1)}" cy="{round(y,1)}" r="{round(r,1)}" fill="{med(cs)}"/>' for x,y,r,cs in kept]
+        cx=(xs0+xs1)/2+tx;cy=(ys0+ys1)/2+ty;r=(w+h)/4*RF
+        elems.append(f'<circle cx="{round(cx,1)}" cy="{round(cy,1)}" r="{round(r,1)}" fill="{fill}"/>');nc+=1;continue
+    ndrop+=1
+BW=8;FRAME='#000000';M=MARGIN
+W2=PW+2*M;H2=PH+2*M;hb=BW/2
 out=[f'<svg xmlns="http://www.w3.org/2000/svg" width="{W2}" height="{H2}" viewBox="0 0 {W2} {H2}">',
      f'<rect width="{W2}" height="{H2}" fill="{FRAME}"/>',
-     f'<g transform="translate({M},{M})">', *body, '</g>',
+     f'<g transform="translate({M},{M})">', *elems, '</g>',
      f'<rect x="{M-hb}" y="{M-hb}" width="{PW+BW}" height="{PH+BW}" fill="none" stroke="{FRAME}" stroke-width="{BW}"/>',
      '</svg>']
 open(OUTP,'w').write('\n'.join(out))
-print(f"candidates={len(cands)} kept(non-overlapping)={len(kept)} absorbed={len(cands)-len(kept)}")
+print(f"circles={nc} paths={npth} dropped={ndrop}  circle%={nc/(nc+npth)*100:.1f} of drawn")

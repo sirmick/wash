@@ -28,17 +28,12 @@ the water, green hinterland, fish + crocodile, a winding river. Traced with
 --color_precision 6 --gradient_step 24`) so each dot is a single solid
 polygon, ~16.3 k shapes — a higher-precision trace fragmented each dot into
 several colour layers, which left polygon slivers showing between the
-circles. A post-pass (`design/packs/circlify.py`) then turns it into a clean,
-NON-OVERLAPPING dot field: (1) every round/square blob becomes a circle
-candidate (radius clamped so a big merged region can't dominate); (2) a
-greedy largest-first pass keeps a dot only if it does not overlap an
-already-kept one — otherwise the dot is ABSORBED, folding its colour into
-the keeper, whose final fill is the per-channel MEDIAN of everything it
-absorbed (~16 k candidates → ~6 k mutually non-overlapping dots); (3)
-over-long connector strokes are dropped. So no two circles overlap, the
-colour of a coalesced dot is the median of the dots it merged, and the
-croc/fish/river still read. Framed with a **black border on a black field**.
-Minified with `svgo` (~0.3 MB). Source raster at
+circles. A post-pass (`design/packs/circlify.py`) then dotifies it: every round/square
+blob becomes a real SVG `<circle>` (~7.2 k — true vector dots, overlap
+allowed so the dense dot rows stay dense), and the few very-elongated
+connector strokes are dropped. Framed with a **black border on a black
+field** (a wide margin so the frame reads strongly). Minified with `svgo`
+(~0.4 MB). Source raster at
 `design/packs/src/dreamtime-source.png`; converter at
 `design/packs/circlify.py`. Paired with the dark Dreamtime palette (black
 chrome, solid bright painting colors).
