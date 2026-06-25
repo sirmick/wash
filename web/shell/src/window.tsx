@@ -419,7 +419,8 @@ export function FloatingWindow(props: WindowProps) {
           color: `var(--wash-titlebar-fg, ${tokens.fg})`,
           cursor: 'move',
           'user-select': 'none',
-          'font-size': '13px',
+          // Window title uses the title type style (Chicago in Copland, etc.).
+          font: tokens.type.titleSm,
         }}
       >
         {props.win.icon && (
@@ -561,7 +562,7 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
         display: 'flex',
         'flex-direction': 'column',
         'box-sizing': 'border-box',
-        font: '12px ui-monospace, Menlo, Consolas, monospace',
+        font: tokens.type.monoMd,
       }}
     >
       <div
@@ -573,7 +574,7 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
           background: tokens.bgDanger,
           'border-bottom': `1px solid ${tokens.borderDanger}`,
           color: tokens.fgDanger,
-          font: '13px ui-sans-serif, system-ui, sans-serif',
+          font: tokens.type.textMd,
         }}
       >
         <AlertOctagon size={16} />

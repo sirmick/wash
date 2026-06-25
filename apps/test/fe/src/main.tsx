@@ -20,7 +20,7 @@
 
 import { createSignal } from 'solid-js';
 import { render } from 'solid-js/web';
-import { FilePicker } from '@wash/ui';
+import { FilePicker, tokens } from '@wash/ui';
 
 interface BEMessage {
   kind: string;
@@ -65,7 +65,7 @@ class WashAppTest extends HTMLElement {
       'padding:14px 18px',
       'background:#10101a',
       'color:#eee',
-      'font:13px ui-monospace,Menlo,Consolas,monospace',
+      `font:${tokens.type.monoMd}`,
       'overflow:auto',
       'outline:none',
     ].join(';');
@@ -445,7 +445,7 @@ function actionBtn(name: string, label: string): string {
     padding:5px 10px;
     border-radius:3px;
     cursor:pointer;
-    font:12px ui-monospace,Menlo,Consolas,monospace;
+    font:${tokens.type.monoMd};
   ">${label}</button>`;
 }
 

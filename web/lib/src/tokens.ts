@@ -13,6 +13,20 @@
 // fonts, shadows, z-index, animation) stay literal — they're layout,
 // not palette, and packs don't touch them.
 
+// Font building blocks for the type scale below. Families and sizes are
+// all var()-backed so a pack can re-skin type wholesale. `fontTitle`
+// defaults to the sans family (nested var) unless a pack sets
+// --wash-font-title (Copland → Chicago for titles only).
+const FONT_SANS = 'var(--wash-font-sans, ui-sans-serif, system-ui, sans-serif)';
+const FONT_MONO = 'var(--wash-font-mono, ui-monospace, Menlo, Consolas, monospace)';
+const FONT_TITLE = `var(--wash-font-title, ${FONT_SANS})`;
+// Three shared body/mono sizes (sm/md/lg) + two title sizes.
+const SIZE_SM = 'var(--wash-text-sm, 11px)';
+const SIZE_MD = 'var(--wash-text-md, 13px)';
+const SIZE_LG = 'var(--wash-text-lg, 15px)';
+const SIZE_TITLE_SM = 'var(--wash-title-sm, 13px)';
+const SIZE_TITLE_LG = 'var(--wash-title-lg, 19px)';
+
 export const tokens = {
   // Surfaces.
   bgWindow: 'var(--wash-bg-window, #181828)',
@@ -117,14 +131,45 @@ export const tokens = {
   startMenuLeft: 'var(--wash-startmenu-left, 6px)',
   startMenuBottom: 'var(--wash-startmenu-bottom, 46px)',
 
-  // Font. var()-backed so a pack can swap the family (e.g. NT's
-  // Win9x-ish Tahoma/MS-Sans stack). The comma-bearing fallback is fine —
-  // everything after the var name's first comma is the var() fallback.
-  fontSans: 'var(--wash-font-sans, ui-sans-serif, system-ui, sans-serif)',
-  fontMono: 'var(--wash-font-mono, ui-monospace, Menlo, Consolas, monospace)',
+  // Font families. var()-backed so a pack can swap the family (e.g.
+  // Copland's Chicago, Quicksand for Dreamtime). The comma-bearing
+  // fallback is fine — everything after the var name's first comma is the
+  // var() fallback. `fontTitle` is a SEPARATE family for headings/titles,
+  // defaulting to the sans family unless a pack overrides --wash-font-title
+  // (Copland points it at Chicago while body/mono stay on the Mac stacks).
+  fontSans: FONT_SANS,
+  fontMono: FONT_MONO,
+  fontTitle: FONT_TITLE,
+  // Back-compat raw sizes. Prefer the `type` scale below — these stay for
+  // the handful of non-`font:`-shorthand call sites (icon sizing, etc.).
   fontSizeSm: '11px',
   fontSizeMd: '12px',
   fontSizeBase: '13px',
+
+  // --- The type scale: the ONLY font styles the UI should use. ---
+  // Eight `font:` shorthands so the whole desktop reads from one small set
+  // — two titles + three body sizes + three mono sizes. Every family AND
+  // size is var()-backed, so a pack re-skins type wholesale. Call sites use
+  // `font: ${tokens.type.textMd}` (a complete weight/size/line-height/family
+  // spec) instead of hand-assembling size + family.
+  type: {
+    titleLg: `700 ${SIZE_TITLE_LG}/1.25 ${FONT_TITLE}`,
+    titleSm: `600 ${SIZE_TITLE_SM}/1.3 ${FONT_TITLE}`,
+    textLg: `400 ${SIZE_LG}/1.45 ${FONT_SANS}`,
+    textMd: `400 ${SIZE_MD}/1.45 ${FONT_SANS}`,
+    textSm: `400 ${SIZE_SM}/1.4 ${FONT_SANS}`,
+    monoLg: `400 ${SIZE_LG}/1.5 ${FONT_MONO}`,
+    monoMd: `400 ${SIZE_MD}/1.5 ${FONT_MONO}`,
+    monoSm: `400 ${SIZE_SM}/1.4 ${FONT_MONO}`,
+  },
+
+  // Desktop info-panel (banner) backdrop — a themeable darken + blur drawn
+  // behind the top-left identity panel so it reads over a busy wallpaper.
+  // Default OFF (transparent fill, no blur) so packs that rely on the
+  // text-shadow halo are unchanged; a pack opts in by setting --wash-banner-bg
+  // / --wash-banner-blur (Dreamtime darkens + blurs behind the panel).
+  bannerBg: 'var(--wash-banner-bg, transparent)',
+  bannerBlur: 'var(--wash-banner-blur, 0px)',
 
   // Shadows.
   shadowMenu: '0 6px 16px rgba(0,0,0,0.5)',

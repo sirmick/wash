@@ -3087,12 +3087,12 @@ function menuBarButtonStyle(active: boolean): JSX.CSSProperties {
     padding: '2px 10px',
     height: '24px',
     cursor: 'pointer',
-    font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+    font: tokens.type.textMd,
   };
 }
 
 const kbdStyle: JSX.CSSProperties = {
-  font: `${tokens.fontSizeSm} ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
   color: tokens.fgMuted,
   background: 'transparent',
   padding: '0 4px',
@@ -3114,7 +3114,7 @@ const menuCheckStyle: JSX.CSSProperties = {
 // signals rather than competing with the language label.
 const langHintStyle: JSX.CSSProperties = {
   color: tokens.fgDim,
-  font: `11px ${tokens.fontMono}`,
+  font: tokens.type.monoSm,
 };
 
 const termPaneStyle: JSX.CSSProperties = {
@@ -3146,7 +3146,7 @@ const termNewBtnStyle: JSX.CSSProperties = {
   padding: '0 10px',
   height: '26px',
   cursor: 'pointer',
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
 };
 
 const sidebarStyle: JSX.CSSProperties = {
@@ -3161,7 +3161,7 @@ const sidebarHeaderStyle: JSX.CSSProperties = {
   'align-items': 'center',
   gap: '6px',
   padding: '4px 6px 4px 10px',
-  font: `${tokens.fontSizeSm} ${tokens.fontSans}`,
+  font: tokens.type.textSm,
   color: tokens.fgMuted,
   'border-bottom': `1px solid ${tokens.borderMenu}`,
 };
@@ -3187,7 +3187,7 @@ const renameInputStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderFocus}`,
   'border-radius': `${tokens.radiusSm}`,
   padding: '0 4px',
-  font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   outline: 'none',
 };
 
@@ -3222,7 +3222,7 @@ function rowStyle(selected: boolean, depth: number): JSX.CSSProperties {
     color: tokens.fg,
     cursor: 'pointer',
     'user-select': 'none',
-    font: `${tokens.fontSizeBase} ${tokens.fontSans}`,
+    font: tokens.type.textMd,
   };
 }
 
@@ -3304,13 +3304,13 @@ const findInputStyle: JSX.CSSProperties = {
   height: '22px',
   width: '160px',
   'box-sizing': 'border-box',
-  font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
   outline: 'none',
 };
 
 const findCountStyle: JSX.CSSProperties = {
   color: tokens.fgDim,
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
   'min-width': '34px',
   'text-align': 'right',
   'white-space': 'nowrap',
@@ -3327,9 +3327,9 @@ const findButtonStyle: JSX.CSSProperties = {
   display: 'inline-flex',
   'align-items': 'center',
   'justify-content': 'center',
-  'line-height': 1,
   cursor: 'pointer',
-  font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+  font: tokens.type.textMd,
+  'line-height': 1,
 };
 
 const tabBarStyle: JSX.CSSProperties = {
@@ -3355,7 +3355,7 @@ function tabStyle(active: boolean): JSX.CSSProperties {
     background: active ? tokens.bgWindow : 'transparent',
     color: active ? tokens.fg : tokens.fgMuted,
     cursor: 'pointer',
-    font: `${tokens.fontSizeMd} ${tokens.fontSans}`,
+    font: tokens.type.textMd,
     'user-select': 'none',
     'max-width': '200px',
     overflow: 'hidden',
@@ -3371,7 +3371,7 @@ const tabCloseStyle: JSX.CSSProperties = {
   'align-items': 'center',
   'justify-content': 'center',
   'border-radius': '2px',
-  font: '11px ui-monospace,Menlo,Consolas,monospace',
+  font: tokens.type.monoSm,
   color: tokens.fgMuted,
 };
 
@@ -3384,7 +3384,7 @@ const placeholderOverlayStyle: JSX.CSSProperties = {
   'justify-content': 'center',
   background: tokens.bgWindow,
   color: tokens.fgMuted,
-  font: `${tokens.fontSizeMd} ${tokens.fontMono}`,
+  font: tokens.type.monoMd,
   'pointer-events': 'none',
 };
 

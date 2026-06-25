@@ -949,6 +949,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         taskbarPos={taskbarPosition()}
         taskbarHeight={taskbarHeight}
         onToggle={toggleSidebar}
+        user={sysInfo()?.username}
+        host={sysInfo()?.hostname}
       >
         <Section
           id="viewport"
@@ -1278,7 +1280,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
     position: 'absolute',
     left: '32px',
     top: '28px',
-    font: '600 22px system-ui,sans-serif',
+    font: tokens.type.titleLg,
     'letter-spacing': '0.05em',
     opacity: 0.35,
     'pointer-events': 'none',
@@ -1298,16 +1300,27 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
           data-testid="desktop-banner"
           style={{
             position: 'absolute',
-            left: '32px',
-            top: '24px',
+            // left/top compensated for the padding so the text still starts
+            // at ~32/24 while the backdrop rect extends behind it.
+            left: '20px',
+            top: '14px',
+            padding: '10px 14px',
+            'border-radius': tokens.radiusLg,
+            'box-sizing': 'border-box',
+            width: 'fit-content',
             // Over the wallpaper, not chrome — a pack whose chrome text is
             // dark on a dark wallpaper (NT) overrides --wash-banner-fg.
             color: `var(--wash-banner-fg, ${tokens.fg})`,
+            // Themeable darken + blur backdrop behind the panel (default off;
+            // Dreamtime opts in) so the text reads over a busy wallpaper.
+            background: tokens.bannerBg,
+            'backdrop-filter': `blur(${tokens.bannerBlur})`,
+            '-webkit-backdrop-filter': `blur(${tokens.bannerBlur})`,
             // Themed legibility halo: the pack's own surface color behind
             // the text so the banner stands out against any wallpaper —
             // a light glow on light packs, a dark one on dark packs.
             'text-shadow': `0 1px 6px ${tokens.bgWindow}, 0 0 3px ${tokens.bgWindow}`,
-            font: '14px system-ui,sans-serif',
+            font: tokens.type.textLg,
             'pointer-events': 'none',
             'max-width': '480px',
             'line-height': '1.4',
@@ -1316,7 +1329,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
           <div
             data-testid="desktop-banner-host"
             style={{
-              font: '600 22px system-ui,sans-serif',
+              font: tokens.type.titleLg,
               'letter-spacing': '0.02em',
               opacity: 0.85,
               'text-shadow': '0 1px 2px rgba(0,0,0,0.6)',
@@ -1331,9 +1344,8 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
             <span
               data-testid="desktop-banner-user"
               style={{
-                font: '500 14px system-ui,sans-serif',
+                font: tokens.type.titleSm,
                 opacity: 0.7,
-                'font-weight': 600,
               }}
             >
               {s().username || '?'}
@@ -1342,7 +1354,8 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
               <span
                 data-testid="desktop-banner-session-name"
                 style={{
-                  font: `500 12px ${tokens.fontMono}`,
+                  font: tokens.type.monoMd,
+                  fontWeight: 500,
                   opacity: 0.55,
                 }}
               >
@@ -1354,7 +1367,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
             data-testid="desktop-banner-hw"
             style={{
               'margin-top': '2px',
-              font: `12px ${tokens.fontMono}`,
+              font: tokens.type.monoMd,
               opacity: 0.6,
               'text-shadow': '0 1px 2px rgba(0,0,0,0.6)',
             }}
@@ -1366,7 +1379,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
               data-testid="desktop-banner-ifaces"
               style={{
                 'margin-top': '2px',
-                font: `12px ${tokens.fontMono}`,
+                font: tokens.type.monoMd,
                 opacity: 0.55,
                 'text-shadow': '0 1px 2px rgba(0,0,0,0.6)',
               }}
@@ -1391,7 +1404,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
                 data-testid="desktop-banner-router"
                 style={{
                   'margin-top': '6px',
-                  font: `11px ${tokens.fontMono}`,
+                  font: tokens.type.monoSm,
                   opacity: 0.45,
                   'text-shadow': '0 1px 2px rgba(0,0,0,0.6)',
                   display: 'flex',
@@ -1701,7 +1714,9 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
         'border-radius': tokens.radiusMd,
         cursor: 'pointer',
         'max-width': '220px',
-        font: '13px system-ui,sans-serif',
+        // Window name on the start bar uses the title type (matches the
+        // window's own titlebar — Chicago in Copland, etc.).
+        font: tokens.type.titleSm,
         'flex-shrink': 0,
         opacity: minimized() ? 0.6 : 1,
         'font-style': minimized() ? 'italic' : 'normal',
@@ -1911,7 +1926,7 @@ const Palette: Component<{
             border: 'none',
             'border-bottom': `1px solid ${tokens.borderMenu}`,
             outline: 'none',
-            font: '15px system-ui,sans-serif',
+            font: tokens.type.textLg,
           }}
         />
         <div data-testid="palette-list" style={{ 'max-height': '50vh', overflow: 'auto' }}>
@@ -1967,7 +1982,7 @@ const PaletteRow: Component<{
         border: 'none',
         'text-align': 'left',
         cursor: 'pointer',
-        font: '14px system-ui,sans-serif',
+        font: tokens.type.textLg,
       }}
     >
       <span
@@ -2188,5 +2203,5 @@ const emptyStyle: JSX.CSSProperties = {
 // ---- custom element wrapper ----
 
 defineWashApp('wash-app-session', (props) => <App {...props} />, {
-  style: `display:block;position:absolute;inset:0;background:radial-gradient(circle at 30% 20%, #1a1a32 0, #0a0a18 75%);color:${tokens.fg};font:14px system-ui,sans-serif;overflow:hidden`,
+  style: `display:block;position:absolute;inset:0;background:radial-gradient(circle at 30% 20%, #1a1a32 0, #0a0a18 75%);color:${tokens.fg};font:${tokens.type.textLg};overflow:hidden`,
 });

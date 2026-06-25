@@ -80,7 +80,7 @@ unit-test + e2e-test green gate).
 
 ## Test suite hygiene  (docs/TECH_DEBT.md P3)
 
-- [ ] **8-worker suite timing-race flakes** (fm-be / net-vm / music /
+ - [ ] **8-worker suite timing-race flakes** (fm-be / net-vm / music /
   settings) papered over by `retries:1` + a 12s control-socket timeout —
   root-cause properly. (See memory: e2e load flakes.)
 - [ ] **Sidebar e2e order.** 3 fm-related specs pass alone but fail in the

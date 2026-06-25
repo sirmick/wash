@@ -74,19 +74,19 @@ const ConflictModal: Component<{
     'max-width': '600px',
     'box-shadow': '0 16px 40px rgba(0,0,0,0.6)',
     color: tokens.fg,
-    font: `13px ${tokens.fontSans}`,
+    font: tokens.type.textMd,
     animation: 'wash-pop-in 140ms ease-out',
   };
 
   return (
     <div data-testid="bulk-conflict-overlay" style={backdropStyle}>
       <div data-testid={`bulk-conflict-modal-${c().job_id}`} style={panelStyle}>
-        <div style={{ 'font-weight': 600, 'font-size': '14px', 'margin-bottom': '10px' }}>
+        <div style={{ font: tokens.type.titleSm, 'margin-bottom': '10px' }}>
           {title()}
         </div>
         <div
           style={{
-            font: `12px ${tokens.fontMono}`,
+            font: tokens.type.monoMd,
             opacity: 0.85,
             'word-break': 'break-all',
             'margin-bottom': '14px',

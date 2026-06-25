@@ -23,7 +23,7 @@
   </script>
   <style>
     html, body { margin: 0; height: 100%; background: #111; color: #eee;
-                 font: 13px ui-sans-serif, system-ui, sans-serif; overflow: hidden; }
+                 font: 13px var(--wash-font-sans, ui-sans-serif, system-ui, sans-serif); overflow: hidden; }
     body { display: flex; flex-direction: column; }
     /* Animations the shell + apps reference by name (copied from the shell's
        own index.html so light-DOM-mounted apps can use them). */
@@ -41,7 +41,7 @@
     .pane { position: absolute; inset: 0; }
     #pane-console { background: #000; color: #cfd0d4; margin: 0; padding: 8px;
                     overflow: auto; white-space: pre-wrap; word-break: break-all;
-                    font: 11px ui-monospace, Menlo, Consolas, monospace; }
+                    font: 11px var(--wash-font-mono, ui-monospace, Menlo, Consolas, monospace); }
     /* The shell mounts into #root; give it a positioned box to fill the pane. */
     #root { position: absolute; inset: 0; }
 
