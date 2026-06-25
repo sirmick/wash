@@ -240,6 +240,13 @@ func Run(ctx context.Context, def *AppDef) error {
 		return fmt.Errorf("connect: %w", err)
 	}
 	defer c.Close()
+	// Run any registered terminate hooks on the way out. The signal handler
+	// (OnTerminate) covers a router-driven SIGTERM, but a router that crashes
+	// or restarts just closes our connection — Run returns, no signal — and an
+	// app that spawns a child tree (wash-vscode → code-server) would otherwise
+	// leak it. runTerminateHooks is run-once, so this and the signal path don't
+	// double-fire.
+	defer runTerminateHooks()
 	// Heartbeat: ships runtime.stats every few seconds to the
 	// router for the About panel. ctx-bound so it dies when Run
 	// returns.

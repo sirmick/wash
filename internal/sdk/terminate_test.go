@@ -5,13 +5,14 @@ import (
 	"testing"
 )
 
-// resetTerminateState clears the package-level hook registry so a test
-// starts from a known state. It does NOT reset termInstalled — the signal
-// handler goroutine, once started, is harmless and we never send it a
+// resetTerminateState clears the package-level hook registry + run-once flag
+// so a test starts from a known state. It does NOT reset termInstalled — the
+// signal handler goroutine, once started, is harmless and we never send it a
 // signal in-process (that would os.Exit the test binary).
 func resetTerminateState() {
 	termMu.Lock()
 	termHooks = nil
+	termRan = false
 	termMu.Unlock()
 }
 
@@ -30,6 +31,22 @@ func TestOnTerminateRunsHooksLIFO(t *testing.T) {
 	// child) gets to tear down before earlier hooks.
 	if want := []int{3, 2, 1}; !reflect.DeepEqual(order, want) {
 		t.Fatalf("hook order = %v, want %v", order, want)
+	}
+}
+
+func TestRunTerminateHooksRunsOnce(t *testing.T) {
+	resetTerminateState()
+	t.Cleanup(resetTerminateState)
+
+	// Both the signal handler and Run's exit call runTerminateHooks; a hook
+	// must fire exactly once across both, so a non-idempotent cleanup (e.g.
+	// "publish exited") isn't run twice.
+	var n int
+	OnTerminate(func() { n++ })
+	runTerminateHooks() // e.g. Run's deferred call
+	runTerminateHooks() // e.g. the signal handler racing in afterwards
+	if n != 1 {
+		t.Fatalf("hook ran %d times, want 1", n)
 	}
 }
 

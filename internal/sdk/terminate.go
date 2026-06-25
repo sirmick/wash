@@ -33,6 +33,7 @@ var (
 	termMu        sync.Mutex
 	termHooks     []func()
 	termInstalled bool
+	termRan       bool
 )
 
 // OnTerminate registers fn to run when the app receives SIGINT/SIGTERM,
@@ -58,11 +59,21 @@ func OnTerminate(fn func()) {
 	}()
 }
 
-// runTerminateHooks runs the registered hooks newest-first. Split out so it
-// can be exercised in tests without the signal/os.Exit. A panicking hook is
-// contained so it can't stop the others (or wedge the shutdown).
+// runTerminateHooks runs the registered hooks newest-first, exactly once
+// across all triggers. It fires from two places — the SIGINT/SIGTERM handler
+// AND Run's exit (a router that vanishes without signalling us just closes the
+// connection, which Run returns on; that path skips the signal handler) — so
+// the run-once guard keeps a non-idempotent hook from running twice when both
+// fire. Split out so it can be exercised in tests without the signal/os.Exit.
+// A panicking hook is contained so it can't stop the others (or wedge
+// shutdown).
 func runTerminateHooks() {
 	termMu.Lock()
+	if termRan {
+		termMu.Unlock()
+		return
+	}
+	termRan = true
 	hooks := make([]func(), len(termHooks))
 	copy(hooks, termHooks)
 	termMu.Unlock()

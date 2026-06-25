@@ -56,6 +56,23 @@ static void crash_handler(int sig) {
     std::raise(sig);
 }
 
+// reap_child_group takes the child tree (Xwayland + any WASH_DISPLAY_EXEC
+// guest) down with us by SIGTERM-ing our own process group. Guarded by
+// getpgrp()==getpid(): it only fires if we actually lead our own group, so it
+// never hits the router and the rest of the desktop (the router spawns us
+// without Setpgid). Ignoring SIGTERM in ourselves first means the broadcast
+// neither re-enters term_handler nor kills us before we finish exiting.
+// kill(0,…)/signal()/getpgrp()/getpid() are all async-signal-safe, so this is
+// usable both from the signal handler AND on the normal connection-close exit
+// path — a router that vanishes without SIGTERM-ing us (run_compositor just
+// returns, no signal) would otherwise leak the children.
+static void reap_child_group() {
+    if (getpgrp() == getpid()) {
+        std::signal(SIGTERM, SIG_IGN);
+        kill(0, SIGTERM); // 0 = every process in our process group
+    }
+}
+
 // term_handler logs an orderly termination signal so a router-driven
 // shutdown (SIGTERM) or a hangup is distinguishable in the log from a
 // crash. Uses raw write() (async-signal-safe) and _exit().
@@ -67,18 +84,7 @@ static void term_handler(int sig) {
     (void)!write(STDERR_FILENO, pfx, sizeof pfx - 1);
     (void)!write(STDERR_FILENO, name, std::strlen(name));
     (void)!write(STDERR_FILENO, sfx, sizeof sfx - 1);
-    // Take the child tree (Xwayland + any WASH_DISPLAY_EXEC guest) down with
-    // us. The router signals only our pid and _exit reaps neither, so they'd
-    // orphan to PID 1 and leak (the wash-display compositor-leak). Only safe
-    // if we actually lead our own process group — otherwise a group signal
-    // would hit the router and the rest of the desktop (the router spawns us
-    // without Setpgid). Verify leadership, ignore the signal in ourselves so
-    // the broadcast doesn't re-enter this handler, then signal the group.
-    // kill(0,…)/signal()/getpgrp()/getpid() are all async-signal-safe.
-    if (getpgrp() == getpid()) {
-        std::signal(SIGTERM, SIG_IGN);
-        kill(0, SIGTERM); // 0 = every process in our process group
-    }
+    reap_child_group(); // don't orphan Xwayland/guest (the compositor-leak)
     _exit(128 + sig);
 }
 
@@ -255,5 +261,10 @@ int main(int argc, char** argv) {
     }
     install_crash_handler();
     claim_process_group();
-    return run();
+    int rc = run();
+    // Connection-close exit path: the router went away (crash/restart/e2e
+    // teardown) without SIGTERM-ing us, so run() returned without term_handler
+    // firing. Reap the child tree here too, or Xwayland/guest orphan.
+    reap_child_group();
+    return rc;
 }
