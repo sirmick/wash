@@ -47,6 +47,8 @@ export interface LinkHealth {
   rateUpBps: number;
   displayBitrateBps: number;
   displayPeakBitrateBps: number;
+  displayFps: number;
+  displayPeakFps: number;
   bufferedAmount: number;
   reconnects: number;
   status: 'ok' | 'warn' | 'bad';
@@ -59,9 +61,11 @@ const healthSub = new Sub<LinkHealth | null>(null);
 let prevTxTotal = 0;
 let prevRx = 0;
 let prevDisplayTx = 0;
+let prevDisplayFrames = 0;
 let prevAt = 0;
 let peakDown = 0;
 let peakDisplayBitrate = 0;
+let peakDisplayFps = 0;
 let prevDropped = 0;
 let prevQueueFull = 0;
 let prevStalls = 0;
@@ -106,21 +110,26 @@ export function ingestLinkStats(msg: RawLinkStatsMsg, bufferedAmount: number): v
   const txTotal = sum(msg.live.tx_bytes);
   const rx = msg.live.rx_bytes;
   const displayTx = msg.live.display_tx_bytes ?? 0;
+  const displayFrames = msg.live.display_tx_frames ?? 0;
   let rateDown = 0;
   let rateUp = 0;
   let displayBitrate = 0;
+  let displayFps = 0;
   if (prevAt > 0 && now > prevAt) {
     const dt = (now - prevAt) / 1000;
     rateDown = Math.max(0, (txTotal - prevTxTotal) / dt);
     rateUp = Math.max(0, (rx - prevRx) / dt);
     displayBitrate = Math.max(0, ((displayTx - prevDisplayTx) * 8) / dt);
+    displayFps = Math.max(0, (displayFrames - prevDisplayFrames) / dt);
   }
   prevTxTotal = txTotal;
   prevRx = rx;
   prevDisplayTx = displayTx;
+  prevDisplayFrames = displayFrames;
   prevAt = now;
   if (rateDown > peakDown) peakDown = rateDown;
   if (displayBitrate > peakDisplayBitrate) peakDisplayBitrate = displayBitrate;
+  if (displayFps > peakDisplayFps) peakDisplayFps = displayFps;
 
   healthSub.set({
     live: msg.live,
@@ -132,6 +141,8 @@ export function ingestLinkStats(msg: RawLinkStatsMsg, bufferedAmount: number): v
     rateUpBps: rateUp,
     displayBitrateBps: displayBitrate,
     displayPeakBitrateBps: peakDisplayBitrate,
+    displayFps,
+    displayPeakFps: peakDisplayFps,
     bufferedAmount,
     reconnects,
     status: deriveStatus(msg.live, bufferedAmount),

@@ -604,6 +604,8 @@ const linkBitrate = (bps: number): string => {
   return Math.round(bps) + ' bit/s';
 };
 
+const linkFps = (fps: number): string => `${fps.toFixed(fps >= 10 ? 1 : 2)} fps`;
+
 const linkUptime = (ms: number): string => {
   const s = Math.floor(ms / 1000);
   const d = Math.floor(s / 86400);
@@ -624,6 +626,8 @@ const DisplayStatsPanel: Component<{ h: WashLinkHealth }> = (props) => {
     <KVList>
       <KVRow k="Traffic class" v="Bulk (video, video-popup)" />
       <KVRow k="Session video" v={`${fmtBytes(displayBytes())} · ${displayFrames()} frames`} />
+      <KVRow k="Framerate now" v={linkFps(props.h.displayFps ?? 0)} />
+      <KVRow k="Peak framerate" v={linkFps(props.h.displayPeakFps ?? 0)} />
       <KVRow k="Bitrate now" v={linkBitrate(props.h.displayBitrateBps ?? 0)} />
       <KVRow k="Peak bitrate" v={linkBitrate(props.h.displayPeakBitrateBps ?? 0)} />
     </KVList>

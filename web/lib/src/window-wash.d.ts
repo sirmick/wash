@@ -99,6 +99,8 @@ interface WashLinkHealth {
   rateUpBps: number;   // instant browser→router throughput
   displayBitrateBps: number; // instant display video bitrate, bits/s
   displayPeakBitrateBps: number;
+  displayFps: number; // instant display video frames/s
+  displayPeakFps: number;
   bufferedAmount: number; // WS send-buffer backlog (browser→router)
   reconnects: number;     // FE-observed reconnects this page-load
   status: 'ok' | 'warn' | 'bad';
