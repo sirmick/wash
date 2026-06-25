@@ -1,6 +1,6 @@
 Name:           wash
-Version:        0.9.5
-Release:        2%{?dist}
+Version:        0.9.6
+Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
 License:        AGPL-3.0-or-later
@@ -205,6 +205,18 @@ fi
 exit 0
 
 %changelog
+* Wed Jun 24 2026 sirmick <sirmick@gmail.com> - 0.9.6-1
+- Theme packs: new Dreamtime (dot-painting) + Copland packs; per-theme
+  wallpaper extent/border, configurable taskbar backdrop, bundled fonts.
+- Terminal: more themes + live palette switching, bundled monospace fonts,
+  per-tab user badge/status line, OSC tab titles.
+- Link health: WS link.stats telemetry, gzip+cache on asset/bundle delivery,
+  QoS tc reclassification.
+- Shared <FileTree> in @wash/ui adopted by fm + edit; BE-owned view-state
+  persistence helper.
+- File manager: folder-granular external upload, lossless Bulk download.
+- wash-priv standing per-app grant; remote nesting forbidden; shell boot splash.
+
 * Wed Jun 24 2026 sirmick <sirmick@gmail.com> - 0.9.5-2
 - Package revision bump (no change to installed binaries). Dev build-layout
   reorg: multicall builds into out/, standalone into out/singlecall/, plus a

@@ -1,3 +1,22 @@
+wash (0.9.6-1) unstable; urgency=low
+
+  * Theme packs: new Dreamtime pack (Aboriginal dot-painting wallpaper) and
+    Copland pack; per-theme wallpaper extent + border, configurable taskbar
+    backdrop, bundled pack/title fonts.
+  * Terminal: more themes with live palette switching, bundled monospace fonts,
+    per-tab user badge + status line, OSC tab titles, dead-space colour fixes.
+  * Link health: WS link.stats telemetry (desktop info panel + About dump),
+    gzip + cache on the asset/bundle delivery path, QoS tc reclassification.
+  * Shared <FileTree> extracted into @wash/ui and adopted by fm + edit.
+  * BE-owned view-state persistence helper (reconnect-safe app state).
+  * File manager: folder-granular external drag-drop upload, lossless Bulk
+    download channel, crisp single-folder upload highlight.
+  * wash-priv: standing "approve for app" grant with active-first queue.
+  * remote: forbid nesting — wash-connect refuses on a relayed desktop.
+  * shell: boot splash with load log + busy cursor on app launch.
+
+ -- sirmick <sirmick@gmail.com>  Wed, 24 Jun 2026 13:00:00 -0700
+
 wash (0.9.5-2) unstable; urgency=low
 
   * Package revision bump (no change to installed binaries). Dev build-layout
