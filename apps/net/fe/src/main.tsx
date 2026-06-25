@@ -10,7 +10,7 @@
 // netd validate → apply (commit-confirm) → the box.
 
 import { createEffect, createMemo, createSignal, onCleanup, onMount, For, Show, Switch, Match } from "solid-js";
-import { createAppBus, defineWashApp, tokens, washAssetUrl, type WashAppProps } from "@wash/ui";
+import { defineWashApp, tokens, washAssetUrl, type WashAppProps } from "@wash/ui";
 import { x25519 } from "@noble/curves/ed25519.js";
 
 import { ApplyTerminal, type ApplyEvent } from "./ApplyTerminal.tsx";
@@ -392,32 +392,11 @@ export function NetApp(props: WashAppProps) {
     onCleanup(() => window.clearTimeout(t));
   });
 
-  // Persist STAGED, UNAPPLIED edits across reconnect/remount. The draft is
-  // the user's in-progress work (a VLAN + firewall change they haven't hit
-  // Apply on yet) — losing it on a reconnect is real lost work, so it goes
-  // in the router-side app_state blob. We persist the draft ONLY while it's
-  // dirty: a clean draft equals the committed config, and restoring that
-  // over a freshly-loaded (possibly externally-changed) config would falsely
-  // present the old config as staged edits. View-layer state (active tab,
-  // Advanced expanded) is deliberately NOT persisted — re-adjusting it after
-  // reconnect is acceptable.
-  let restoredDraft: Config | null = null;
-  const persistBus = createAppBus(props, {
-    onState: (s) => {
-      const d = (s as { draft?: Config } | null)?.draft;
-      if (!d || !Array.isArray(d.Interfaces)) return;
-      // Remember it so the mount-time loadCurrent() (which otherwise resets
-      // the draft to the committed config) re-applies it once its async reply
-      // lands; also set it now in case loadCurrent already returned.
-      restoredDraft = d;
-      setDraft(structuredClone(d));
-    },
-  });
-  createEffect(() => {
-    // dirtyCount tracks draft vs config; reading it (and draft) makes this
-    // re-run on every edit. Debounced inside saveState.
-    persistBus.saveState({ draft: dirtyCount() > 0 ? draft() : undefined });
-  });
+  // NOTE: the staged draft is deliberately NOT persisted across reconnect.
+  // netd config goes through a commit-confirm transaction, so unapplied edits
+  // are apply-or-lose by design — below the reconnect bar (the window comes
+  // back; you re-stage). Only applied config (held by netd) survives, and is
+  // re-read by loadCurrent() on mount.
 
   // Router mode needs more room (tabs + the firewall matrix + segment cards) than
   // the workstation default (574w, set in the manifest before caps are known). The
@@ -460,15 +439,7 @@ export function NetApp(props: WashAppProps) {
     if (r.kind === "current_ok") {
       const cfg = (r.config ?? { Interfaces: [], Devices: [] }) as Config;
       setConfig(cfg);
-      // Normally reset the draft to the freshly committed state. But if a
-      // persisted draft is waiting to be restored (reconnect/remount with
-      // unapplied edits), apply it instead so the user's staged work survives.
-      if (restoredDraft) {
-        setDraft(restoredDraft);
-        restoredDraft = null;
-      } else {
-        setDraft(structuredClone(cfg));
-      }
+      setDraft(structuredClone(cfg)); // reset the draft to the freshly committed state
       setCaps(toCaps(r.caps));
       setLinks((r.devices ?? []) as string[]);
       setWifiRadio(!!r.wifi_radio);
