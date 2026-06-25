@@ -22,8 +22,8 @@ mountain-twilight scene traced with `vtracer` (`--filter_speckle 6
 `design/packs/src/nordic-blue-source.jpg`.
 
 ## Dreamtime — `wallpapers/dreamtime.svg`
-Built from an AI-generated Australian Aboriginal dot-painting — sunset over
-water, hillside trees, a winding dotted river. NOT traced: each dot is
+Built from an AI-generated Australian Aboriginal dot-painting — a sunset sky
+swirling over the sea, with a lush dotted forest headland. NOT traced: each dot is
 detected directly from the raster (`design/packs/detect_dots.py`, scipy/PIL).
 The pipeline: (1) mask the painted dots off the dark background; (2) distance
 transform → local maxima = one peak per dot, so every dot is found and split
