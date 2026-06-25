@@ -171,11 +171,11 @@ export const tokens = {
   bannerBg: 'var(--wash-banner-bg, transparent)',
   bannerBlur: 'var(--wash-banner-blur, 0px)',
 
-  // Themeable viewport frame — a thin border drawn over the whole desktop
-  // edge. A full CSS `border` shorthand value; default off so packs that
-  // don't set it are unaffected. Dreamtime uses `5px solid #000` for an
-  // elegant black frame around its full-bleed wallpaper.
-  viewportBorder: 'var(--wash-viewport-border, 0 solid transparent)',
+  // Per-theme border drawn around the wallpaper layer (which may be inset to
+  // stop at the taskbar — see --wash-wallpaper-extent). A full CSS `border`
+  // shorthand value; default off so packs that don't set it are unaffected.
+  // Dreamtime uses `5px solid #000` for an elegant black frame.
+  wallpaperBorder: 'var(--wash-wallpaper-border, 0 solid transparent)',
 
   // Shadows.
   shadowMenu: '0 6px 16px rgba(0,0,0,0.5)',

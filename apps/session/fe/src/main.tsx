@@ -383,11 +383,25 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const AUDIO_ACCENT = tokens.accentGreen;
   let screenshotTimer = 0;
   let currentObjectURL: string | null = null;
+  // Dedicated wallpaper layer — applyWallpaper paints onto this instead of
+  // props.host so the wallpaper can stop at the taskbar's edge.
+  let wallpaperEl: HTMLDivElement | undefined;
   // The active theme pack — drives the start-menu icon (the scheme vars
   // and wallpaper are applied imperatively in applyDesktopConfig). Seeded
   // with the default so the first paint, before desktop.config arrives,
   // is already correct.
   const [activePack, setActivePack] = createSignal<Pack>(getPack(null));
+
+  // Per-theme wallpaper extent: by default the wallpaper fills the whole
+  // window (runs behind the taskbar); a pack can set --wash-wallpaper-extent:
+  // desktop to inset it so it stops at the taskbar's edge (Dreamtime does).
+  // Read off the live CSS var, re-evaluated when the pack changes.
+  const wallpaperExcludesTaskbar = (): boolean => {
+    activePack(); // track pack changes
+    if (typeof document === 'undefined') return false;
+    return getComputedStyle(document.documentElement)
+      .getPropertyValue('--wash-wallpaper-extent').trim() === 'desktop';
+  };
 
   let paletteInputEl: HTMLInputElement | undefined;
 
@@ -511,7 +525,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const gen = ++wallpaperGen;
     const fallback = wp.fallback_color || 'radial-gradient(circle at 30% 20%, #1a1a32 0, #0a0a18 75%)';
     const mode = wp.mode || 'cover';
-    const host = props.host;
+    // The wallpaper paints onto a dedicated layer (wallpaperEl) that is
+    // inset to stop at the taskbar's edge, so the painting's bottom sits at
+    // the top of the taskbar rather than running behind it. props.host keeps
+    // a solid base so the taskbar strip (the translucent taskbar sits over
+    // it) reads cleanly.
+    const baseColor = fallback.startsWith('radial-') ? '#0a0a18' : fallback;
     // paint() applies the resolved background, but only if this is still
     // the latest call; otherwise it revokes the just-made URL and bails.
     const paint = (imageCSS: string, objURL: string | null) => {
@@ -519,10 +538,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         if (objURL) URL.revokeObjectURL(objURL);
         return;
       }
-      host.style.background = `${imageCSS} center/cover no-repeat ${fallback.startsWith('radial-') ? '#0a0a18' : fallback}`;
-      host.style.backgroundSize = mode === 'tile' ? 'auto' : mode === 'center' ? 'auto' : mode; // 'cover' | 'contain'
-      host.style.backgroundRepeat = mode === 'tile' ? 'repeat' : 'no-repeat';
-      host.style.backgroundPosition = 'center';
+      const layer = wallpaperEl ?? props.host;
+      layer.style.background = `${imageCSS} center/cover no-repeat ${baseColor}`;
+      layer.style.backgroundSize = mode === 'tile' ? 'auto' : mode === 'center' ? 'auto' : mode; // 'cover' | 'contain'
+      layer.style.backgroundRepeat = mode === 'tile' ? 'repeat' : 'no-repeat';
+      layer.style.backgroundPosition = 'center';
+      props.host.style.background = baseColor;
       if (currentObjectURL) URL.revokeObjectURL(currentObjectURL);
       currentObjectURL = objURL;
     };
@@ -943,6 +964,26 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   return (
     <>
+      {/* Wallpaper layer — sits behind all desktop content. Two per-theme
+          knobs: --wash-wallpaper-extent (window | desktop) insets it to stop
+          at the taskbar's edge, and --wash-wallpaper-border draws a frame
+          around the painting (Dreamtime: stops at taskbar + 5px black).
+          pointer-events:none; painted by applyWallpaper. */}
+      <div
+        ref={wallpaperEl}
+        data-testid="desktop-wallpaper"
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          top: wallpaperExcludesTaskbar() && taskbarPosition() === 'top' ? `${taskbarHeight}px` : 0,
+          bottom: wallpaperExcludesTaskbar() && taskbarPosition() === 'bottom' ? `${taskbarHeight}px` : 0,
+          border: tokens.wallpaperBorder,
+          'box-sizing': 'border-box',
+          'pointer-events': 'none',
+          'z-index': 0,
+        }}
+      />
       <Banner info={sysInfo} />
       <Sidebar
         mode={sidebarMode()}
@@ -1230,21 +1271,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           onClose={closePalette}
         />
       </Show>
-      {/* Themeable viewport frame: a thin border drawn over the whole
-          desktop edge (windows, taskbar, sidebar included). Default off;
-          a pack opts in via --wash-viewport-border (Dreamtime: 5px black).
-          pointer-events:none so it never intercepts clicks. */}
-      <div
-        data-testid="viewport-frame"
-        style={{
-          position: 'fixed',
-          inset: 0,
-          border: tokens.viewportBorder,
-          'box-sizing': 'border-box',
-          'pointer-events': 'none',
-          'z-index': 2147483000,
-        }}
-      />
     </>
   );
 };
@@ -2052,12 +2078,14 @@ const taskbarStyle: JSX.CSSProperties = {
   right: 0,
   bottom: 0,
   height: '40px',
-  // Sunken surface by default so the bar reads a touch darker than
-  // windows (darker cream on Seoul, deeper on dark packs). A pack can
-  // override --wash-taskbar-bg — NT does, since its inset is white.
-  background: `color-mix(in srgb, var(--wash-taskbar-bg, ${tokens.bgInset}) 88%, transparent)`,
-  'backdrop-filter': 'blur(10px)',
-  '-webkit-backdrop-filter': 'blur(10px)',
+  // Configurable backdrop: a pack sets the color (--wash-taskbar-bg), the
+  // opacity of that color over the surface behind (--wash-taskbar-opacity,
+  // default 88%), and the frost blur (--wash-taskbar-blur, default 10px).
+  // Sunken grey at 88% by default so the bar reads a touch darker than
+  // windows; a pack can make it solid, more transparent, or unblurred.
+  background: `color-mix(in srgb, var(--wash-taskbar-bg, ${tokens.bgInset}) var(--wash-taskbar-opacity, 88%), transparent)`,
+  'backdrop-filter': 'blur(var(--wash-taskbar-blur, 10px))',
+  '-webkit-backdrop-filter': 'blur(var(--wash-taskbar-blur, 10px))',
   // Top edge: a pack can paint a raised highlight here (NT does).
   'border-top': `1px solid var(--wash-taskbar-top, ${tokens.borderMenu})`,
   display: 'flex',
