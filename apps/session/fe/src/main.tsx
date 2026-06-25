@@ -1261,11 +1261,22 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
           data-testid="desktop-banner"
           style={{
             position: 'absolute',
-            left: '32px',
-            top: '24px',
+            // left/top compensated for the padding so the text still starts
+            // at ~32/24 while the backdrop rect extends behind it.
+            left: '20px',
+            top: '14px',
+            padding: '10px 14px',
+            'border-radius': tokens.radiusLg,
+            'box-sizing': 'border-box',
+            width: 'fit-content',
             // Over the wallpaper, not chrome — a pack whose chrome text is
             // dark on a dark wallpaper (NT) overrides --wash-banner-fg.
             color: `var(--wash-banner-fg, ${tokens.fg})`,
+            // Themeable darken + blur backdrop behind the panel (default off;
+            // Dreamtime opts in) so the text reads over a busy wallpaper.
+            background: tokens.bannerBg,
+            'backdrop-filter': `blur(${tokens.bannerBlur})`,
+            '-webkit-backdrop-filter': `blur(${tokens.bannerBlur})`,
             // Themed legibility halo: the pack's own surface color behind
             // the text so the banner stands out against any wallpaper —
             // a light glow on light packs, a dark one on dark packs.

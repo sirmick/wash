@@ -463,8 +463,11 @@ const dreamtime: Pack = {
     // Start bar (taskbar): black.
     '--wash-taskbar-bg': '#0a0a0d',
     '--wash-taskbar-top': '#26262e',
-    // Desktop info banner sits over the wallpaper's black frame → light text.
+    // Desktop info banner sits over the busy dot wallpaper → light text on a
+    // themed darken+blur backdrop so it always reads.
     '--wash-banner-fg': '#f1f1f5',
+    '--wash-banner-bg': 'rgba(0,0,0,0.42)',
+    '--wash-banner-blur': '8px',
     // Rounded chrome to match Quicksand's geometry and the painting's dots.
     '--wash-radius-sm': '5px',
     '--wash-radius-md': '8px',

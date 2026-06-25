@@ -7,6 +7,7 @@ SRC=sys.argv[1]; OUT=sys.argv[2]
 MIN_DIST=float(sys.argv[3]) if len(sys.argv)>3 else 6.0   # min spacing between dot centers (px)
 BGthr=int(sys.argv[4]) if len(sys.argv)>4 else 45         # brightness below this = background gap
 RSCALE=float(sys.argv[5]) if len(sys.argv)>5 else 1.15    # dot radius scale (overlap if >1)
+MARG=int(sys.argv[6]) if len(sys.argv)>6 else 360         # black-frame margin
 
 im=Image.open(SRC).convert('RGB'); a=np.asarray(im); H,W,_=a.shape
 bright=a.max(2)
@@ -46,7 +47,7 @@ for i in range(n):
 nn=tree.query(np.column_stack([cx,cy]),k=2)[0][:,1]
 rad=np.minimum(np.maximum(cr,1.5), nn*0.62)*RSCALE
 # frame + emit
-M=360;BW=8;FRAME='#000000';W2=W+2*M;Hh=H+2*M;hb=BW/2
+M=MARG;BW=8;FRAME='#000000';W2=W+2*M;Hh=H+2*M;hb=BW/2
 body=[f'<circle cx="{x+M:.1f}" cy="{y+M:.1f}" r="{r:.1f}" fill="{f}"/>' for x,y,r,f in zip(cx,cy,rad,fills)]
 svg=[f'<svg xmlns="http://www.w3.org/2000/svg" width="{W2}" height="{Hh}" viewBox="0 0 {W2} {Hh}">',
      f'<rect width="{W2}" height="{Hh}" fill="{FRAME}"/>', *body,

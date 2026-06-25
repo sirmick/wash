@@ -163,6 +163,14 @@ export const tokens = {
     monoSm: `400 ${SIZE_SM}/1.4 ${FONT_MONO}`,
   },
 
+  // Desktop info-panel (banner) backdrop — a themeable darken + blur drawn
+  // behind the top-left identity panel so it reads over a busy wallpaper.
+  // Default OFF (transparent fill, no blur) so packs that rely on the
+  // text-shadow halo are unchanged; a pack opts in by setting --wash-banner-bg
+  // / --wash-banner-blur (Dreamtime darkens + blurs behind the panel).
+  bannerBg: 'var(--wash-banner-bg, transparent)',
+  bannerBlur: 'var(--wash-banner-blur, 0px)',
+
   // Shadows.
   shadowMenu: '0 6px 16px rgba(0,0,0,0.5)',
   shadowModal: '0 12px 28px rgba(0,0,0,0.5)',
