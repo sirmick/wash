@@ -286,6 +286,31 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
     }
   });
 
+  // Monotonic navigation generation. loadDir is async and SEVERAL
+  // calls can be in flight at once: onMount's initial load, the
+  // open-transition effect, the outside_root recovery bounce, a
+  // watch-event refresh, and the user typing a path + Enter. Without
+  // a guard the LAST reply to ARRIVE wins — so a slow initial load of
+  // "/" (which bounces "/" → outside_root → fs.root → sandbox root,
+  // two extra round-trips) could resolve AFTER the user navigated
+  // into a subdir and clobber cwd/pathInput/entries back to the root.
+  // That was a real e2e flake (imageview Open Image landing on the
+  // sandbox root instead of the typed gallery dir). Each loadDir
+  // captures the generation it began in and discards its reply if a
+  // newer navigation has since superseded it.
+  let loadGen = 0;
+
+  // pathDirty tracks whether the user has typed into the path bar
+  // since the last committed navigation. A load the user did NOT
+  // initiate (the initial open load, the outside_root recovery, a
+  // watch-event refresh) must not stomp text the user is mid-typing
+  // — otherwise a fast tester (or user) who types a subdir right as
+  // the picker opens has it erased by the still-in-flight initial
+  // list, and their Enter then navigates to the wrong (reset) path.
+  // Set on input, cleared whenever the user explicitly commits a
+  // navigation (Enter / Up / double-click into a folder).
+  let pathDirty = false;
+
   // loadDir asks wash-fs to list `p`. On success, updates the
   // picker's view to that directory; on outside_root, asks wash-fs
   // for the configured root and retries there so the user lands
@@ -294,13 +319,21 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
   // sandbox). Any other error surfaces beneath the path bar and
   // keeps the previous listing on screen.
   const loadDir = async (p: string, recovering = false) => {
+    const myGen = ++loadGen;
     setLoading(true);
     setErrorMsg('');
     const reply = await send({ kind: 'fs.list', path: p });
+    // Superseded by a newer navigation while we awaited — drop this
+    // reply so it can't overwrite the fresher one (and don't kick off
+    // the outside_root recovery for a directory nobody's viewing).
+    if (myGen !== loadGen) return;
     if (reply.kind === 'fs.list_ok') {
       setLoading(false);
       setCwd(reply.path);
-      setPathInput(reply.path);
+      // Don't overwrite path-bar text the user is actively editing.
+      // Once they commit (Enter/Up/dbl-click) pathDirty is cleared,
+      // so the canonicalized path still lands in the bar then.
+      if (!pathDirty) setPathInput(reply.path);
       setEntries(reply.entries ?? []);
       setSelectedName('');
       return;
@@ -310,6 +343,7 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
       // there. `recovering` guards against an infinite bounce if
       // the root call itself goes wrong.
       const rootReply = await send({ kind: 'fs.root' });
+      if (myGen !== loadGen) return; // superseded while resolving root
       if (rootReply.kind === 'fs.root_ok' && rootReply.root) {
         void loadDir(rootReply.root, true);
         return;
@@ -368,11 +402,13 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
   const goUp = () => {
     const p = cwd();
     if (!p || p === '/') return;
+    pathDirty = false;
     const i = p.lastIndexOf('/');
     void loadDir(i <= 0 ? '/' : p.slice(0, i));
   };
 
   const navigateToInput = () => {
+    pathDirty = false;
     void loadDir(pathInput());
   };
 
@@ -386,6 +422,7 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
   const onRowDblClick = (e: Entry) => {
     const target = joinPath(cwd(), e.name);
     if (e.type === 'dir') {
+      pathDirty = false;
       void loadDir(target);
       return;
     }
@@ -410,6 +447,7 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
       if (!e) return;
       const path = joinPath(cwd(), sel);
       if (e.type === 'dir') {
+        pathDirty = false;
         void loadDir(path);
         return;
       }
@@ -516,7 +554,10 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
               data-testid="fp-path"
               spellcheck={false}
               value={pathInput()}
-              onInput={(e) => setPathInput(e.currentTarget.value)}
+              onInput={(e) => {
+                pathDirty = true;
+                setPathInput(e.currentTarget.value);
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault();
