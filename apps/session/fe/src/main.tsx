@@ -279,6 +279,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // Audio mixer — com.wash.audio's StateService snapshot (sources +
   // master volume), forwarded by the session BE as audio.state.
   const [audioState, setAudioState] = createSignal<AudioState | null>(null);
+  // Link-health telemetry for the desktop info panel (docs/QOS.md). The
+  // shell pushes it ~1/s via window.wash.onLinkStats.
+  const [link, setLink] = createSignal<WashLinkHealth | null>(window.wash.linkStats?.() ?? null);
   // persistSidebar is debounced so a flurry of toggles doesn't
   // hammer the BE's save_state path. Matches the wash-edit cadence.
   let persistTimer: number | null = null;
@@ -671,6 +674,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const offWin = window.wash.onWindowsChanged(setWindows);
     const offVp = window.wash.onViewport(setVp);
     const offScreen = window.wash.onScreenSize(setScreen);
+    const offLink = window.wash.onLinkStats?.(setLink);
 
     // BE → FE: desktop.config arrives once at startup and again
     // on every fswatch fire (wash-settings rewrote the file).
@@ -906,6 +910,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       offWin();
       offVp();
       offScreen();
+      offLink?.();
       props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('wash:state', onState);
       // Cooperative unsubscribe via the session BE gateways. Cheap
@@ -938,6 +943,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   return (
     <>
       <Banner info={sysInfo} />
+      <LinkPanel health={link} taskbarPos={taskbarPosition} />
       <Sidebar
         mode={sidebarMode()}
         taskbarPos={taskbarPosition()}
@@ -1996,6 +2002,106 @@ function formatClock(format: '12h' | '24h', showSeconds: boolean): string {
   if (showSeconds) opts.second = '2-digit';
   return new Date().toLocaleTimeString([], opts);
 }
+
+// ----- desktop link-health info panel (docs/QOS.md) -----
+
+const sumArr = (a: number[] | undefined): number => (a ? a.reduce((x, y) => x + y, 0) : 0);
+
+// Session running totals are shown in MB per the panel's remit.
+const fmtMB = (n: number): string => (n / 1e6).toFixed(n >= 1e8 ? 0 : 1) + ' MB';
+
+const fmtRate = (bps: number): string => {
+  if (bps >= 1e6) return (bps / 1e6).toFixed(1) + ' MB/s';
+  if (bps >= 1e3) return (bps / 1e3).toFixed(0) + ' kB/s';
+  return Math.round(bps) + ' B/s';
+};
+
+const fmtUptime = (ms: number): string => {
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+};
+
+// Green / amber / red health dot. ok = nominal; warn = link straining
+// (send buffer high, or queue/credit stalls climbing); bad = frames
+// actually dropping. Derived shell-side in linkstats.ts.
+const LINK_DOT: Record<'ok' | 'warn' | 'bad', string> = {
+  ok: '#46d39a',
+  warn: '#e6b450',
+  bad: '#e0606d',
+};
+
+// LinkPanel is a translucent conky-style HUD on the desktop wallpaper:
+// session totals in MB (↓ router→browser, ↑ browser→router), live
+// throughput, a health dot, and drop/reconnect badges when non-zero. It
+// sits opposite the taskbar and is click-through (pointer-events:none).
+const LinkPanel: Component<{
+  health: () => WashLinkHealth | null;
+  taskbarPos: () => 'top' | 'bottom';
+}> = (props) => (
+  <Show when={props.health()}>
+    {(h) => (
+      <div
+        data-testid="wash-link-panel"
+        style={{
+          position: 'absolute',
+          right: '14px',
+          ...(props.taskbarPos() === 'bottom' ? { top: '14px' } : { bottom: '52px' }),
+          'pointer-events': 'none',
+          'user-select': 'none',
+          'font-family': 'ui-monospace, SFMono-Regular, monospace',
+          'font-size': '11px',
+          'line-height': '1.55',
+          'text-align': 'right',
+          'min-width': '132px',
+          color: 'rgba(230,232,245,0.78)',
+          background: 'rgba(10,10,24,0.42)',
+          border: '1px solid rgba(255,255,255,0.08)',
+          'border-radius': '8px',
+          padding: '8px 11px',
+          'backdrop-filter': 'blur(6px)',
+          '-webkit-backdrop-filter': 'blur(6px)',
+          'box-shadow': '0 4px 14px rgba(0,0,0,0.30)',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            'align-items': 'center',
+            'justify-content': 'flex-end',
+            gap: '6px',
+            color: '#fff',
+            'font-weight': 600,
+          }}
+        >
+          <span>wash · up {fmtUptime(h().uptimeMs)}</span>
+          <span
+            title={h().status}
+            style={{
+              width: '8px',
+              height: '8px',
+              'border-radius': '50%',
+              background: LINK_DOT[h().status],
+              'box-shadow': `0 0 6px ${LINK_DOT[h().status]}`,
+            }}
+          />
+        </div>
+        <div>
+          ↓ {fmtMB(sumArr(h().session.tx_bytes))}&nbsp;&nbsp;↑ {fmtMB(h().session.rx_bytes)}
+        </div>
+        <div style={{ opacity: 0.82 }}>
+          {fmtRate(h().rateDownBps)}
+          {sumArr(h().live.dropped) > 0 ? ` · ${sumArr(h().live.dropped)} drop` : ''}
+          {h().reconnects > 0 ? ` · ${h().reconnects} rc` : ''}
+        </div>
+      </div>
+    )}
+  </Show>
+);
 
 // decodeBase64 returns a Uint8Array from the router's base64 string
 // form of CBOR byte data (see internal/router/app_session.go toJSON).

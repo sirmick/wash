@@ -68,6 +68,38 @@ interface WashWindowInfo {
 
 type WashLogLevel = 'error' | 'warn' | 'info' | 'debug';
 
+// Link-health telemetry (docs/QOS.md). The router pushes per-class
+// throughput + the session running totals ~1/s; the shell folds in
+// FE-derived rates, the WS send-buffer backlog, and reconnect count.
+// Per-class arrays are indexed [Interactive, Bulk, Background, Control].
+interface WashLinkSnapshot {
+  tx_bytes: number[];
+  tx_frames: number[];
+  queue_full: number[];
+  dropped: number[];
+  depth_hi: number[];
+  depth: number[];
+  credit_stalls: number;
+  credit_wait_ns: number;
+  rx_bytes: number;
+  rx_frames: number;
+  raw_bytes: number;
+  wire_bytes: number;
+}
+
+interface WashLinkHealth {
+  live: WashLinkSnapshot;    // current connection (cumulative)
+  session: WashLinkSnapshot; // session running totals (banked + live)
+  connects: number;
+  uptimeMs: number;
+  rateDownBps: number; // instant router→browser throughput
+  peakDownBps: number;
+  rateUpBps: number;   // instant browser→router throughput
+  bufferedAmount: number; // WS send-buffer backlog (browser→router)
+  reconnects: number;     // FE-observed reconnects this page-load
+  status: 'ok' | 'warn' | 'bad';
+}
+
 interface WashGlobals {
   sendAppMsg(instanceID: string, data: unknown): void;
   sendAppMsgTo(recipient: WashRecipient, data: unknown): void;
@@ -122,6 +154,11 @@ interface WashGlobals {
   setViewport(vx: number, vy: number): void;
   onViewport(cb: (vp: { vx: number; vy: number }) => void): () => void;
   onScreenSize(cb: (s: { w: number; h: number }) => void): () => void;
+  // Link-health telemetry (docs/QOS.md): per-class throughput + session
+  // running totals + derived rates/health. The desktop info panel + the
+  // About screen render it. null until the first link.stats arrives.
+  linkStats(): WashLinkHealth | null;
+  onLinkStats(cb: (h: WashLinkHealth) => void): () => void;
   log(level: WashLogLevel, source: string, msg: string, stack?: string): void;
   openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
   writeRaw(channelID: number, bytes: Uint8Array): void;

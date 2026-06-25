@@ -74,6 +74,7 @@ import './wash-app-display';
 import { showToast } from './notify';
 import { virtioConsoleFactory } from './virtio';
 import { bootStep, bootFinish } from './boot';
+import { ingestLinkStats, linkHealth, onLinkHealth, noteConnState, type RawLinkStatsMsg, type LinkHealth } from './linkstats';
 
 interface ShellCatalog {
   t: 'catalog';
@@ -269,7 +270,8 @@ type ShellCtrlMsg =
   | ShellChannelResync
   | ShellClipboardData
   | ShellClipboardChanged
-  | ShellPeerError;
+  | ShellPeerError
+  | RawLinkStatsMsg;
 
 // Reactive subs the chrome (mounted via window.wash) listens to.
 // catalogSub is the LOCAL router's catalog (drives the launcher).
@@ -470,6 +472,13 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         deliverResync(client.origin, msg.channel_id);
         break;
       }
+      // Link-health telemetry (docs/QOS.md): the LOCAL router's per-class
+      // throughput + session totals, ~1/s. Fold in the live WS send-buffer
+      // backlog the shell reads here; the desktop info panel + About render
+      // it via window.wash.onLinkStats.
+      case 'link.stats':
+        if (isLocal) ingestLinkStats(msg, conn.bufferedAmount());
+        break;
       // asset.read / panel.read are the shell fetching its OWN assets +
       // settings panels from its router — a local-only concern.
       case 'asset.read.ok':
@@ -819,6 +828,9 @@ function onWindowClose(win: Win): void {
 
 const [connState, setConnState] = createSignal<ConnState>('connecting');
 conn.onState(setConnState);
+// Feed connection transitions to the link-health module so the panel can
+// report how many times the link dropped + recovered this page-load.
+conn.onState(noteConnState);
 
 // Boot splash (web/shell/src/boot.ts + the #wash-boot overlay in
 // index.html). The overlay is already showing "loading shell…" from
@@ -1029,6 +1041,11 @@ declare global {
       setViewport(vx: number, vy: number): void;
       onViewport(cb: (vp: { vx: number; vy: number }) => void): () => void;
       onScreenSize(cb: (s: { w: number; h: number }) => void): () => void;
+      // Link-health telemetry (docs/QOS.md): per-class throughput + session
+      // running totals + derived rates/health. The desktop info panel + the
+      // About screen render it. null until the first link.stats arrives.
+      linkStats(): LinkHealth | null;
+      onLinkStats(cb: (h: LinkHealth) => void): () => void;
       log(level: 'error' | 'warn' | 'info' | 'debug', source: string, msg: string, stack?: string): void;
       openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
       writeRaw(channelID: number, bytes: Uint8Array): void;
@@ -1250,6 +1267,8 @@ window.wash = {
   setViewport: (vx, vy) => setViewport(vx, vy),
   onViewport: (cb) => viewportSub.on(cb),
   onScreenSize: (cb) => screenSub.on(cb),
+  linkStats: () => linkHealth(),
+  onLinkStats: (cb) => onLinkHealth(cb),
   log(level, source, msg, stack) {
     shellLog(level, source, msg, stack);
   },
