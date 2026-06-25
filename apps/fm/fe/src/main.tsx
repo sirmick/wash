@@ -1205,15 +1205,34 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // shows the right hint (+copy when Option held, regular move
   // otherwise) — without this, Mac users get no feedback that
   // the modifier is actually doing something.
-  const onRowDragOver = (ev: DragEvent, rowPath: string) => {
-    // External OS file drag → mark the folder row as an upload target.
+  // uploadFolderFor resolves the folder an external drop lands in given the
+  // row it was dropped on: a folder row IS the target; a file (or other
+  // non-dir) row resolves to the folder that CONTAINS it. This gives
+  // per-folder granularity anywhere in the tree — dropping onto a file inside
+  // an expanded subfolder uploads into that subfolder, not the cwd. `entry`
+  // is undefined for grid tiles, which only wire drops on folders.
+  const uploadFolderFor = (rowPath: string, entry?: Entry): string =>
+    !entry || entry.type === 'dir' ? rowPath : parentPath(rowPath);
+
+  const onRowDragOver = (ev: DragEvent, rowPath: string, entry?: Entry) => {
+    // External OS file drag → mark the enclosing folder as the upload target.
+    // Yield the container-level "drop here" rings (the list pane's
+    // uploadDropActive, the grid pane's gridUploadActive) so the targeted
+    // folder is the SOLE highlight — otherwise both light up and it's
+    // ambiguous whether the drop lands in this folder or the shown/current one.
     if (isExternalFileDrag(ev.dataTransfer)) {
+      const folder = uploadFolderFor(rowPath, entry);
       ev.preventDefault();
       ev.stopPropagation();
       ev.dataTransfer!.dropEffect = 'copy';
-      if (dropTargetPath() !== rowPath) setDropTargetPath(rowPath);
+      if (uploadDropActive()) setUploadDropActive(false);
+      if (gridUploadActive()) setGridUploadActive(false);
+      if (dropTargetPath() !== folder) setDropTargetPath(folder);
       return;
     }
+    // Internal move/copy: only folder rows are valid targets. Let a drag over
+    // a file row bubble to the list pane (drop = move into the current dir).
+    if (entry && entry.type !== 'dir') return;
     if (!hasWashDrag(ev.dataTransfer)) return;
     ev.preventDefault();
     ev.stopPropagation();
@@ -1221,15 +1240,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (dropTargetPath() !== rowPath) setDropTargetPath(rowPath);
   };
 
-  const onRowDrop = (ev: DragEvent, rowPath: string) => {
+  const onRowDrop = (ev: DragEvent, rowPath: string, entry?: Entry) => {
     if (isExternalFileDrag(ev.dataTransfer)) {
+      const folder = uploadFolderFor(rowPath, entry);
       ev.preventDefault();
       ev.stopPropagation();
       setDropTargetPath('');
       setUploadDropActive(false);
-      collectFromDrop(ev.dataTransfer!, rowPath);
+      collectFromDrop(ev.dataTransfer!, folder);
       return;
     }
+    // Internal move/copy targets folders only; a drop on a file row bubbles
+    // to the list pane (move into the current dir).
+    if (entry && entry.type !== 'dir') return;
     if (rejectCrossOriginDrop(ev)) return;
     const paths = readDragPaths(ev.dataTransfer);
     if (paths.length === 0) return;
@@ -1870,13 +1893,22 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // actually mounts (its listing may still be in flight when path() changes).
   // block:'nearest' is a no-op when the row is already visible, so ordinary
   // in-view selections don't jump.
+  //
+  // lastScrolledPath gates the retry: expand/collapse changes visibleRows()
+  // WITHOUT changing path(), and we must not re-scroll then — that would yank
+  // the viewport away from the folder the user just toggled (see treeStyle's
+  // overflow-anchor). So we only scroll when path() differs from the row we
+  // last brought into view, and record success only once that row exists.
+  let lastScrolledPath: string | null = null;
   createEffect(() => {
     const cur = path();
     visibleRows();
-    if (!cur) return;
+    if (!cur || cur === lastScrolledPath) return;
     queueMicrotask(() => {
       const row = props.host.querySelector(`[data-testid="fm-list"] [data-path="${CSS.escape(cur)}"]`);
-      (row as HTMLElement | null)?.scrollIntoView({ block: 'nearest' });
+      if (!row) return; // not mounted yet — a later visibleRows() change retries
+      (row as HTMLElement).scrollIntoView({ block: 'nearest' });
+      lastScrolledPath = cur;
     });
   });
 
@@ -2334,8 +2366,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 onDragStart={(ev) => onDragStart(ev, row.path)}
                 onDragEnd={onDragEnd}
                 isDropTarget={dropTargetPath() === row.path}
-                onDragOver={row.entry.type === 'dir' ? (ev) => onRowDragOver(ev, row.path) : undefined}
-                onDrop={row.entry.type === 'dir' ? (ev) => onRowDrop(ev, row.path) : undefined}
+                // Wired on every row, not just folders: an external upload
+                // onto a file row resolves to that file's folder (see
+                // uploadFolderFor). Internal moves over a file row early-return
+                // and bubble to the list pane, preserving the old behaviour.
+                onDragOver={(ev) => onRowDragOver(ev, row.path, row.entry)}
+                onDrop={(ev) => onRowDrop(ev, row.path, row.entry)}
               />;
             }}
           </For>
@@ -2689,8 +2725,9 @@ const TreeRow: Component<{
   onContextMenu: (ev: MouseEvent) => void;
   onDragStart: (ev: DragEvent) => void;
   onDragEnd?: () => void;
-  // Drop-target handlers. Only wired on directory rows; file rows
-  // omit them so the browser auto-rejects drops with not-allowed.
+  // Drop-target handlers, wired on every row. The handlers themselves
+  // decide what a drop means: external uploads resolve to the row's folder,
+  // internal moves only act on folder rows (file rows bubble to the pane).
   isDropTarget?: boolean;
   onDragOver?: (ev: DragEvent) => void;
   onDrop?: (ev: DragEvent) => void;
@@ -3426,6 +3463,13 @@ const bodyStyle: JSX.CSSProperties = {
 
 const treeStyle: JSX.CSSProperties = {
   overflow: 'auto',
+  // Pin the scroll on expand/collapse: with anchoring off, inserting a
+  // folder's children leaves scrollTop unchanged, so the expanded folder
+  // stays put at the top of the viewport and its children push the rows
+  // below it down (and collapse pulls them back up) — instead of the browser
+  // re-scrolling to keep some lower row stable, which would yank the folder
+  // the user just toggled out of view.
+  'overflow-anchor': 'none',
   background: tokens.bgWindow,
   padding: '0 0 4px 0',
 };
