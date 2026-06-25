@@ -22,21 +22,19 @@ mountain-twilight scene traced with `vtracer` (`--filter_speckle 6
 `design/packs/src/nordic-blue-source.jpg`.
 
 ## Dreamtime — `wallpapers/dreamtime.svg`
-Vectorized from an AI-generated Australian Aboriginal dot-painting — sun over
-the water, green hinterland, fish + crocodile, a winding river. Traced with
-`vtracer` at a clean setting (`--mode polygon --filter_speckle 4
---color_precision 6 --gradient_step 24`) so each dot is a single solid
-polygon, ~16.3 k shapes — a higher-precision trace fragmented each dot into
-several colour layers, which left polygon slivers showing between the
-circles. A post-pass (`design/packs/circlify.py`) then partially dotifies it: each
-shape is scored by circularity (4πA/P²) and the roundest ~60% become real SVG
-`<circle>` dots (overlap allowed so the dense rows stay dense); the remaining
-~40% keep their original traced polygon, so the finer/connected structure
-(river, tree forms) is preserved. Framed with a **black border on a black
-field** (a wide margin so the frame reads strongly). Minified with `svgo`
-(~0.5 MB). Source raster at
-`design/packs/src/dreamtime-source.png`; converter at
-`design/packs/circlify.py`. Paired with the dark Dreamtime palette (black
+Built from an AI-generated Australian Aboriginal dot-painting — sunset over
+water, hillside trees, a winding dotted river. NOT traced: each dot is
+detected directly from the raster (`design/packs/detect_dots.py`, scipy/PIL).
+The pipeline: (1) mask the painted dots off the dark background; (2) distance
+transform → local maxima = one peak per dot, so every dot is found and split
+from its touching neighbours; (3) build the Voronoi partition of those
+centres and colour each dot by the **median of its Voronoi cell**; (4) emit a
+real `<circle>` per dot (radius from the dot's own size, clamped by the
+nearest-neighbour spacing). ~5.2 k dots, 100% circles — no polygons at all.
+Framed with a **black border on a black field** (a wide margin so the frame
+reads strongly). Minified with `svgo` (~0.3 MB). Source raster at
+`design/packs/src/dreamtime-source.png`; detector at
+`design/packs/detect_dots.py`. Paired with the dark Dreamtime palette (black
 chrome, solid bright painting colors).
 
 ## Seoul — `wallpapers/seoul.svg`
