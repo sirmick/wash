@@ -476,6 +476,8 @@ const dreamtime: Pack = {
     '--wash-banner-fg': '#f1f1f5',
     '--wash-banner-bg': 'rgba(0,0,0,0.42)',
     '--wash-banner-blur': '8px',
+    // Elegant black frame around the full-bleed dot-painting wallpaper.
+    '--wash-viewport-border': '5px solid #000',
     // Rounded chrome to match Quicksand's geometry and the painting's dots.
     '--wash-radius-sm': '5px',
     '--wash-radius-md': '8px',

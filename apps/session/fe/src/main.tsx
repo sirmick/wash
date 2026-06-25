@@ -24,6 +24,7 @@ import { BulkConflictOverlay, type BulkConflict } from './sidebar/BulkConflictOv
 import { PrivWidget, type PrivReq } from './sidebar/PrivWidget';
 import { NetWidget, type NetState, type NetIface } from './sidebar/NetWidget';
 import { RemoteWidget, type RemoteHost } from './sidebar/RemoteWidget';
+import { LinkWidget } from './sidebar/LinkWidget';
 import { AudioWidget, type AudioState } from './sidebar/AudioWidget';
 import { ClipboardWidget } from './sidebar/ClipboardWidget';
 import { PrivUnlockOverlay, type PrivUnlockState } from './sidebar/PrivUnlockOverlay';
@@ -943,7 +944,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   return (
     <>
       <Banner info={sysInfo} />
-      <LinkPanel health={link} taskbarPos={taskbarPosition} />
       <Sidebar
         mode={sidebarMode()}
         taskbarPos={taskbarPosition()}
@@ -976,6 +976,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             info={() => sysInfo()}
             stats={() => hostStats()}
           />
+          <LinkWidget health={link} />
         </Section>
         <Section
           id="notify"
@@ -1229,6 +1230,21 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           onClose={closePalette}
         />
       </Show>
+      {/* Themeable viewport frame: a thin border drawn over the whole
+          desktop edge (windows, taskbar, sidebar included). Default off;
+          a pack opts in via --wash-viewport-border (Dreamtime: 5px black).
+          pointer-events:none so it never intercepts clicks. */}
+      <div
+        data-testid="viewport-frame"
+        style={{
+          position: 'fixed',
+          inset: 0,
+          border: tokens.viewportBorder,
+          'box-sizing': 'border-box',
+          'pointer-events': 'none',
+          'z-index': 2147483000,
+        }}
+      />
     </>
   );
 };

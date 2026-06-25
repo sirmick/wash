@@ -46,12 +46,16 @@ for i in range(n):
 # radius: image dot radius (dt) blended toward cell size, scaled
 nn=tree.query(np.column_stack([cx,cy]),k=2)[0][:,1]
 rad=np.minimum(np.maximum(cr,1.5), nn*0.62)*RSCALE
-# frame + emit
-M=MARG;BW=8;FRAME='#000000';W2=W+2*M;Hh=H+2*M;hb=BW/2
+# frame + emit. MARG/BW default to 0 → a full-bleed painting (black field +
+# dots, edge to edge) so the wallpaper covers the whole viewport; any black
+# frame is now a theme concern (--wash-viewport-border). Pass MARG>0 (arg 6)
+# and/or BW>0 (arg 7) to bake a margin + border into the SVG instead.
+M=MARG;BW=int(sys.argv[7]) if len(sys.argv)>7 else 0;FRAME='#000000';W2=W+2*M;Hh=H+2*M;hb=BW/2
 body=[f'<circle cx="{x+M:.1f}" cy="{y+M:.1f}" r="{r:.1f}" fill="{f}"/>' for x,y,r,f in zip(cx,cy,rad,fills)]
 svg=[f'<svg xmlns="http://www.w3.org/2000/svg" width="{W2}" height="{Hh}" viewBox="0 0 {W2} {Hh}">',
-     f'<rect width="{W2}" height="{Hh}" fill="{FRAME}"/>', *body,
-     f'<rect x="{M-hb}" y="{M-hb}" width="{W+BW}" height="{H+BW}" fill="none" stroke="{FRAME}" stroke-width="{BW}"/>',
-     '</svg>']
+     f'<rect width="{W2}" height="{Hh}" fill="{FRAME}"/>', *body]
+if BW>0:
+    svg.append(f'<rect x="{M-hb}" y="{M-hb}" width="{W+BW}" height="{H+BW}" fill="none" stroke="{FRAME}" stroke-width="{BW}"/>')
+svg.append('</svg>')
 open(OUT,'w').write('\n'.join(svg))
 print(f"detected dots={n}  median radius={np.median(rad):.1f}px")
