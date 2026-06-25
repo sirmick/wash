@@ -217,6 +217,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           sortDesc={sortDesc()}
           onSort={onSort}
         />
+        <Show when={link()}>
+          <Section title="Display">
+            <DisplayStatsPanel h={link()!} />
+          </Section>
+        </Show>
         <RegistrySection apps={catalog()} />
         <Show when={link()}>
           <Section title="Link">
@@ -592,6 +597,13 @@ const linkRate = (bps: number): string => {
   return Math.round(bps) + ' B/s';
 };
 
+const linkBitrate = (bps: number): string => {
+  if (bps >= 1e9) return (bps / 1e9).toFixed(2) + ' Gbit/s';
+  if (bps >= 1e6) return (bps / 1e6).toFixed(1) + ' Mbit/s';
+  if (bps >= 1e3) return (bps / 1e3).toFixed(0) + ' kbit/s';
+  return Math.round(bps) + ' bit/s';
+};
+
 const linkUptime = (ms: number): string => {
   const s = Math.floor(ms / 1000);
   const d = Math.floor(s / 86400);
@@ -602,6 +614,20 @@ const linkUptime = (ms: number): string => {
   if (h > 0) return `${h}h ${m}m`;
   if (m > 0) return `${m}m ${sec}s`;
   return `${sec}s`;
+};
+
+const DisplayStatsPanel: Component<{ h: WashLinkHealth }> = (props) => {
+  const s = () => props.h.session;
+  const displayBytes = () => s().display_tx_bytes ?? 0;
+  const displayFrames = () => s().display_tx_frames ?? 0;
+  return (
+    <KVList>
+      <KVRow k="Traffic class" v="Bulk (video, video-popup)" />
+      <KVRow k="Session video" v={`${fmtBytes(displayBytes())} · ${displayFrames()} frames`} />
+      <KVRow k="Bitrate now" v={linkBitrate(props.h.displayBitrateBps ?? 0)} />
+      <KVRow k="Peak bitrate" v={linkBitrate(props.h.displayPeakBitrateBps ?? 0)} />
+    </KVList>
+  );
 };
 
 // LinkStatsPanel dumps the whole link-health bag: the session running

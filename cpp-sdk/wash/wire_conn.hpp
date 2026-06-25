@@ -189,6 +189,7 @@ private:
     std::mutex chan_mu_;
     std::condition_variable chan_cv_;
     std::map<uint64_t, Reply> chan_pending_;
+    std::map<uint32_t, FrameClass> chan_class_;
 
     AppMsgHandler app_msg_handler_;
     WindowCmdHandler window_cmd_handler_;

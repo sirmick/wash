@@ -6,10 +6,10 @@
 // backing buffer is POOLED and reused across frames — the Xwayland
 // churn gotcha (DISPLAY.md §11) means we must never alloc per frame.
 //
-// Capture goes through wlr_texture_read_pixels, which works for both
-// wl_shm (software) and dmabuf (GPU) client buffers via the renderer —
-// so a GTK app rendering with hardware accel is captured the same way
-// as a software terminal.
+// Capture draws the surface tree into a pooled render target, then reads
+// pixels back through the renderer. That works for both wl_shm (software)
+// and dmabuf (GPU) client buffers, so a hardware-accelerated GTK app is
+// captured the same way as a software terminal.
 //
 // Needs wlroots; only compiled in the WASH_DISPLAY_COMPOSITOR build.
 #pragma once
@@ -52,10 +52,9 @@ public:
     // damage skip). Set it when the capture is driven by a tree-change
     // signal rather than a root commit, since subsurface-only repaints leave
     // the root surface's damage empty (DISPLAY.md M7).
-    // preserve_alpha keeps the client's transparency (for SHAPED popups —
-    // menus with rounded corners + shadow). For toplevel windows it must be
-    // false: they are opaque, but a browser leaves stray alpha in its chrome,
-    // which would otherwise show the window behind through the gaps (M8c).
+    // preserve_alpha keeps the client's transparency for shaped popups,
+    // rounded menus, shadows, and transparent/shaped toplevel windows.
+    // Pass false only when a caller deliberately wants an opaque surface.
     bool capture(struct wlr_surface* surface, struct wlr_renderer* renderer,
                  int crop_x = 0, int crop_y = 0, int crop_w = 0, int crop_h = 0,
                  bool force_full = false, bool preserve_alpha = false,

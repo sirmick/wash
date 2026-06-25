@@ -873,5 +873,10 @@ func (s *ShellSession) drainLoop(ctx context.Context) {
 		// Frame is on the wire — account it against its class for the
 		// link-health stats (per-class throughput).
 		s.scheduler.Stats.recordTx(f.Class(), len(f.Payload))
+		if s.router != nil && f.Channel != ChannelControl {
+			if b := s.router.lookupChannel(f.Channel); b != nil && isDisplayChannelKind(b.kind) {
+				s.scheduler.Stats.recordDisplayTx(len(f.Payload))
+			}
+		}
 	}
 }

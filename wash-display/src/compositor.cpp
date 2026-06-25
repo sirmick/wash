@@ -327,10 +327,11 @@ static void sink_frame(WindowSink& s, WireConn* conn, struct wlr_surface* surfac
     if (!s.win || !s.video_chan) return; // not mapped / no sink
     // capture returns false when nothing changed (empty damage) — skip
     // the frame entirely, the per-frame win of damage tracking. The crop
-    // (when set) is the xdg window geometry, stripping the CSD shadow margin;
-    // force_full bypasses the damage skip for tree-driven captures (M7).
+    // (when set) is the xdg window geometry, stripping the CSD shadow margin.
+    // Preserve alpha for toplevels as well as popups: transparent/shaped
+    // windows should remain irregular instead of being flattened opaque.
     if (!s.cap.capture(surface, renderer, crop_x, crop_y, crop_w, crop_h,
-                       force_full, false, output_scale())) return;
+                       force_full, true, output_scale())) return;
 
     // Tell the router when the content size changed so the shell frame
     // tracks it (window.geometry). Fire-and-forget; only on actual change.

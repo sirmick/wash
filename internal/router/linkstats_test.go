@@ -17,6 +17,8 @@ func TestLinkStatsRecordAndSnapshot(t *testing.T) {
 	l.recordRx(200)
 	l.recordCreditStall(1500)
 	l.recordCompression(3000, 800)
+	l.recordDisplayTx(4096)
+	l.recordDisplayTx(2048)
 	l.sampleDepth(wire.ClassBulk, 7)
 	l.sampleDepth(wire.ClassBulk, 3) // lower — must not lower the watermark
 
@@ -38,6 +40,9 @@ func TestLinkStatsRecordAndSnapshot(t *testing.T) {
 	}
 	if s.RawBytes != 3000 || s.WireBytes != 800 {
 		t.Fatalf("compression = %d raw / %d wire, want 3000/800", s.RawBytes, s.WireBytes)
+	}
+	if s.DisplayTxBytes != 6144 || s.DisplayTxFrames != 2 {
+		t.Fatalf("display tx = %d bytes / %d frames, want 6144/2", s.DisplayTxBytes, s.DisplayTxFrames)
 	}
 	if s.DepthHi[wire.ClassBulk] != 7 {
 		t.Fatalf("bulk depth_hi = %d, want 7 (later lower sample must not reduce it)", s.DepthHi[wire.ClassBulk])
@@ -74,18 +79,22 @@ func TestSchedulerTrySubmitDropCounted(t *testing.T) {
 func TestLinkStatsSessionFold(t *testing.T) {
 	var totals LinkStats
 	totals.add(wire.LinkStatsSnapshot{
-		TxBytes:      [4]uint64{0, 1000, 0, 0},
-		Dropped:      [4]uint64{0, 2, 0, 0},
-		DepthHi:      [4]uint64{0, 5, 0, 0},
-		RxBytes:      300,
-		CreditStalls: 1,
+		TxBytes:         [4]uint64{0, 1000, 0, 0},
+		Dropped:         [4]uint64{0, 2, 0, 0},
+		DepthHi:         [4]uint64{0, 5, 0, 0},
+		RxBytes:         300,
+		CreditStalls:    1,
+		DisplayTxBytes:  400,
+		DisplayTxFrames: 4,
 	})
 	totals.add(wire.LinkStatsSnapshot{
-		TxBytes:      [4]uint64{0, 500, 0, 0},
-		Dropped:      [4]uint64{0, 1, 0, 0},
-		DepthHi:      [4]uint64{0, 3, 0, 0}, // lower than 5 — watermark must stay 5
-		RxBytes:      200,
-		CreditStalls: 2,
+		TxBytes:         [4]uint64{0, 500, 0, 0},
+		Dropped:         [4]uint64{0, 1, 0, 0},
+		DepthHi:         [4]uint64{0, 3, 0, 0}, // lower than 5 — watermark must stay 5
+		RxBytes:         200,
+		CreditStalls:    2,
+		DisplayTxBytes:  200,
+		DisplayTxFrames: 2,
 	})
 	banked := totals.snapshot([numClasses]int{})
 	if banked.TxBytes[wire.ClassBulk] != 1500 {
@@ -100,15 +109,26 @@ func TestLinkStatsSessionFold(t *testing.T) {
 	if banked.RxBytes != 500 || banked.CreditStalls != 3 {
 		t.Fatalf("banked rx=%d stalls=%d, want 500/3", banked.RxBytes, banked.CreditStalls)
 	}
+	if banked.DisplayTxBytes != 600 || banked.DisplayTxFrames != 6 {
+		t.Fatalf("banked display tx=%d frames=%d, want 600/6", banked.DisplayTxBytes, banked.DisplayTxFrames)
+	}
 
 	// Session total = banked + live current connection.
-	live := wire.LinkStatsSnapshot{TxBytes: [4]uint64{0, 250, 0, 0}, Depth: [4]uint64{0, 7, 0, 0}}
+	live := wire.LinkStatsSnapshot{
+		TxBytes:         [4]uint64{0, 250, 0, 0},
+		Depth:           [4]uint64{0, 7, 0, 0},
+		DisplayTxBytes:  100,
+		DisplayTxFrames: 1,
+	}
 	sess := banked.Plus(live)
 	if sess.TxBytes[wire.ClassBulk] != 1750 {
 		t.Fatalf("session bulk tx = %d, want 1750", sess.TxBytes[wire.ClassBulk])
 	}
 	if sess.Depth[wire.ClassBulk] != 7 {
 		t.Fatalf("session bulk depth = %d, want 7 (live instantaneous)", sess.Depth[wire.ClassBulk])
+	}
+	if sess.DisplayTxBytes != 700 || sess.DisplayTxFrames != 7 {
+		t.Fatalf("session display tx=%d frames=%d, want 700/7", sess.DisplayTxBytes, sess.DisplayTxFrames)
 	}
 }
 

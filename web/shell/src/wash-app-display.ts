@@ -505,10 +505,7 @@ export class WashAppDisplay extends HTMLElement {
     const payload = bytes.subarray(HEADER_BYTES);
     if (payload.length === 0) return;
 
-    // Copy out of the (reused) WS frame buffer so the Blob owns its bytes.
-    const copy = payload.slice();
-
-    createImageBitmap(new Blob([copy]))
+    createImageBitmap(new Blob([payload]))
       .then((bitmap) => {
         const canvas = this.canvas;
         const ctx = this.ctx;
@@ -594,9 +591,8 @@ export class WashAppDisplay extends HTMLElement {
     }
     const payload = bytes.subarray(HEADER_BYTES);
     if (payload.length === 0) return;
-    const copy = payload.slice();
     if (!p.canvas) this.ensurePopupCanvas(p);
-    createImageBitmap(new Blob([copy]))
+    createImageBitmap(new Blob([payload]))
       .then((bitmap) => {
         const live = this.popups.get(channelID);
         if (!live || !live.canvas || !live.ctx) {
