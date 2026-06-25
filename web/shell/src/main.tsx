@@ -21,6 +21,7 @@ import {
   registerTag,
   clientForInstance,
   clientForOrigin,
+  origins,
   parseInstanceId,
   compoundInstanceId,
 } from './clients';
@@ -86,7 +87,7 @@ interface ShellAppDeclared {
   t: 'app.declared';
   instance_id: string;
   element: string;
-  surface: 'desktop' | 'window';
+  surface: 'background' | 'desktop' | 'window';
   manifest: any;
 }
 
@@ -605,6 +606,72 @@ const instances = local.instances;
 const bundleReady = local.bundleReady;
 const pendingClipboardGets = local.pendingClipboardGets;
 
+const DISPLAY_APP_ID = 'com.wash.display';
+const DISPLAY_HIDPI_THRESHOLD = 1.5;
+const [displayDpr, setDisplayDpr] = createSignal(window.devicePixelRatio || 1);
+const sentDisplayMetrics = new Map<Origin, string>();
+
+function refreshDisplayDpr(): void {
+  const next = window.devicePixelRatio || 1;
+  if (Math.abs(next - displayDpr()) > 0.01) setDisplayDpr(next);
+}
+
+window.addEventListener('resize', refreshDisplayDpr);
+window.visualViewport?.addEventListener('resize', refreshDisplayDpr);
+
+function currentDisplayMetrics() {
+  const s = screenSize();
+  const dpr = displayDpr();
+  const scale = dpr >= DISPLAY_HIDPI_THRESHOLD ? 2 : 1;
+  const cssW = Math.max(1, Math.round(s.w));
+  const cssH = Math.max(1, Math.round(s.h));
+  return {
+    kind: 'display.set_metrics',
+    css_w: cssW,
+    css_h: cssH,
+    dpr,
+    scale,
+    w: cssW * scale,
+    h: cssH * scale,
+  };
+}
+
+function publishDisplayMetrics(client: RouterClient): void {
+  const metrics = currentDisplayMetrics();
+  const key = `${metrics.w}x${metrics.h}@${metrics.scale}:${metrics.css_w}x${metrics.css_h}`;
+  if (sentDisplayMetrics.get(client.origin) === key) return;
+  sentDisplayMetrics.set(client.origin, key);
+  client.conn.sendCtrl({
+    t: 'app_msg.send',
+    to: { app_id: DISPLAY_APP_ID },
+    data: metrics,
+  });
+}
+
+function publishDisplayMetricsToAll(): void {
+  for (const origin of origins()) {
+    const client = clientForOrigin(origin);
+    if (client) publishDisplayMetrics(client);
+  }
+}
+
+function installDisplayMetricsPublisher(client: RouterClient): void {
+  client.conn.onState((state) => {
+    if (state === 'open') {
+      sentDisplayMetrics.delete(client.origin);
+      publishDisplayMetrics(client);
+    }
+  });
+}
+
+installDisplayMetricsPublisher(local);
+
+createEffect(() => {
+  screenSize();
+  displayDpr();
+  publishDisplayMetricsToAll();
+});
+
 // Let a remote app bundle report the per-origin mangled element tag it
 // defined (web/lib defineWashApp), so the mount sites instantiate the same
 // tag via clients.tagFor(). No-op for local bundles (which never mangle).
@@ -624,6 +691,8 @@ function addClient(origin: Origin, url: string): RouterClient {
   if (existing) return existing;
   const client = new RouterClient(origin, url, makeHandlers);
   registerClient(origin, client);
+  installDisplayMetricsPublisher(client);
+  publishDisplayMetrics(client);
   void client.conn.ready();
   return client;
 }
@@ -641,6 +710,8 @@ function attachPeerChannel(channelID: number, origin: Origin): void {
   peerSockets.set(channelID, { origin, sock });
   const client = new RouterClient(origin, () => sock, makeHandlers);
   registerClient(origin, client);
+  installDisplayMetricsPublisher(client);
+  publishDisplayMetrics(client);
   void client.conn.ready();
 }
 
@@ -656,6 +727,7 @@ function detachClient(origin: Origin): void {
   client.conn.close();
   dropOrigin(origin);
   clearRemoteCatalog(origin);
+  sentDisplayMetrics.delete(origin);
   unregisterClient(origin);
 }
 
@@ -722,6 +794,10 @@ createEffect(() => {
 });
 
 function handleAppDeclared(client: RouterClient, msg: ShellAppDeclared): void {
+  if ((msg.manifest as { id?: string } | undefined)?.id === DISPLAY_APP_ID) {
+    sentDisplayMetrics.delete(client.origin);
+    publishDisplayMetrics(client);
+  }
   // Background services have no FE — no bundle, no element, no mount.
   // The shell ignores the declaration: the BE talks to other apps via
   // cross-app app_msg, and nothing on this side ever needs to address

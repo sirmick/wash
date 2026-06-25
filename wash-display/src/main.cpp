@@ -36,12 +36,35 @@ static const char* kAppID = "com.wash.display";
 static const char* kVersion = "0.9.3";
 static const int kProto = 1;
 static const int kDefaultDpi = 96;
+static const int kDefaultScreenW = 1920;
+static const int kDefaultScreenH = 1080;
+static const int kDefaultScale = 1;
 
 static int sanitize_display_dpi(int dpi) {
     if (dpi <= 0) return kDefaultDpi;
     if (dpi < 72) return 72;
     if (dpi > 240) return 240;
     return dpi;
+}
+
+static int sanitize_screen_width(int w) {
+    if (w <= 0) return kDefaultScreenW;
+    if (w < 320) return 320;
+    if (w > 7680) return 7680;
+    return w;
+}
+
+static int sanitize_screen_height(int h) {
+    if (h <= 0) return kDefaultScreenH;
+    if (h < 240) return 240;
+    if (h > 4320) return 4320;
+    return h;
+}
+
+static int sanitize_display_scale(int scale) {
+    if (scale <= 0) return kDefaultScale;
+    if (scale > 2) return 2;
+    return scale;
 }
 
 // crash_handler dumps a native backtrace to stderr on a fatal signal so
@@ -213,6 +236,7 @@ static int run() {
     }
     std::fprintf(stderr, "wash-display: attached instance=%s\n", instanceID.c_str());
     conn.note_display_dpi(kDefaultDpi);
+    conn.note_display_metrics(kDefaultScreenW, kDefaultScreenH, kDefaultScale);
 
     // App-msg dispatch (reader thread). Two consumers:
     //   - subscribe: the settings Display panel asks for a state
@@ -238,6 +262,23 @@ static int run() {
             conn.publish_env({{"WASH_DISPLAY_DPI", std::to_string(dpi)}});
 #ifdef WASH_DISPLAY_COMPOSITOR
             wash::post_display_dpi(dpi);
+#endif
+        } else if (kind == "display.set_metrics") {
+            int scale = sanitize_display_scale(data.value("scale", kDefaultScale));
+            int cssW = data.value("css_w", 0);
+            int cssH = data.value("css_h", 0);
+            int w = data.value("w", cssW > 0 ? cssW * scale : kDefaultScreenW);
+            int h = data.value("h", cssH > 0 ? cssH * scale : kDefaultScreenH);
+            w = sanitize_screen_width(w);
+            h = sanitize_screen_height(h);
+            conn.note_display_metrics((uint32_t)w, (uint32_t)h, (uint32_t)scale);
+            conn.publish_env({
+                {"WASH_DISPLAY_WIDTH", std::to_string(w)},
+                {"WASH_DISPLAY_HEIGHT", std::to_string(h)},
+                {"WASH_DISPLAY_SCALE", std::to_string(scale)},
+            });
+#ifdef WASH_DISPLAY_COMPOSITOR
+            wash::post_display_metrics(w, h, scale);
 #endif
         }
 #ifdef WASH_DISPLAY_COMPOSITOR

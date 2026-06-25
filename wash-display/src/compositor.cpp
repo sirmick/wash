@@ -102,13 +102,21 @@ struct wlr_allocator* g_capture_allocator = nullptr;
 
 namespace {
 
-// Default virtual screen the headless output advertises to clients. 1080p
-// so maximized/large apps (IDEs, p4v) have room; HiDPI scaling is M5b.
-constexpr int kScreenW = 1920;
-constexpr int kScreenH = 1080;
+// Default virtual screen until the browser shell publishes its viewport. The
+// shell sends physical framebuffer pixels (CSS viewport × HiDPI scale), so
+// browser-sized windows see a browser-sized display instead of hard-coded
+// 1080p.
+constexpr int kDefaultScreenW = 1920;
+constexpr int kDefaultScreenH = 1080;
+constexpr int kMinScreenW = 320;
+constexpr int kMinScreenH = 240;
+constexpr int kMaxScreenW = 7680;
+constexpr int kMaxScreenH = 4320;
 constexpr int kDefaultDpi = 96;
 constexpr int kMinDpi = 72;
 constexpr int kMaxDpi = 240;
+constexpr int kDefaultScale = 1;
+constexpr int kMaxScale = 2;
 
 static int clamp_dpi(int dpi) {
     if (dpi <= 0) return kDefaultDpi;
@@ -120,6 +128,28 @@ static int dpi_to_mm(int px, int dpi) {
 }
 
 static std::atomic<int> g_output_dpi{kDefaultDpi};
+static std::atomic<int> g_output_w{kDefaultScreenW};
+static std::atomic<int> g_output_h{kDefaultScreenH};
+static std::atomic<int> g_output_scale{kDefaultScale};
+
+static int clamp_screen_w(int w) {
+    if (w <= 0) return kDefaultScreenW;
+    return std::max(kMinScreenW, std::min(kMaxScreenW, w));
+}
+
+static int clamp_screen_h(int h) {
+    if (h <= 0) return kDefaultScreenH;
+    return std::max(kMinScreenH, std::min(kMaxScreenH, h));
+}
+
+static int clamp_scale(int scale) {
+    if (scale <= 0) return kDefaultScale;
+    return std::max(kDefaultScale, std::min(kMaxScale, scale));
+}
+
+static int output_w() { return g_output_w.load(); }
+static int output_h() { return g_output_h.load(); }
+static int output_scale() { return g_output_scale.load(); }
 
 struct Server {
     struct wl_display* display = nullptr;
@@ -228,7 +258,7 @@ static void unregister_win(uint32_t win) {
 
 struct WinCmd {
     std::string t;
-    uint32_t win = 0, w = 0, h = 0;
+    uint32_t win = 0, w = 0, h = 0, scale = 1;
 };
 static std::mutex g_cmd_mu;
 static std::vector<WinCmd> g_cmds;
@@ -444,8 +474,8 @@ void output_destroy(struct wl_listener* listener, void* /*data*/) {
 static void set_output_physical_dpi(struct wlr_output* output, int dpi) {
     if (!output) return;
     dpi = clamp_dpi(dpi);
-    output->phys_width = dpi_to_mm(kScreenW, dpi);
-    output->phys_height = dpi_to_mm(kScreenH, dpi);
+    output->phys_width = dpi_to_mm(output_w(), dpi);
+    output->phys_height = dpi_to_mm(output_h(), dpi);
 }
 
 static void configure_output_mode(struct wlr_output* output, int dpi) {
@@ -456,10 +486,19 @@ static void configure_output_mode(struct wlr_output* output, int dpi) {
     // Headless outputs have no fixed modes; set a custom mode. Keep scale at
     // 1 until full buffer-scale HiDPI lands, otherwise capture/input coords
     // and the video frame's logical size diverge.
-    wlr_output_state_set_custom_mode(&state, kScreenW, kScreenH, 0);
+    wlr_output_state_set_custom_mode(&state, output_w(), output_h(), 0);
     wlr_output_state_set_scale(&state, 1.0f);
     wlr_output_commit_state(output, &state);
     wlr_output_state_finish(&state);
+}
+
+static void publish_display_metrics_env(Server* server) {
+    if (!server || !server->conn) return;
+    server->conn->publish_env(json{
+        {"WASH_DISPLAY_WIDTH", std::to_string(output_w())},
+        {"WASH_DISPLAY_HEIGHT", std::to_string(output_h())},
+        {"WASH_DISPLAY_SCALE", std::to_string(output_scale())},
+    });
 }
 
 static void apply_display_dpi(Server* server, int dpi) {
@@ -471,6 +510,19 @@ static void apply_display_dpi(Server* server, int dpi) {
         server->conn->publish_env(json{{"WASH_DISPLAY_DPI", std::to_string(dpi)}});
     }
     wlr_log(WLR_INFO, "wash-display: display dpi=%d", dpi);
+}
+
+static void apply_display_metrics(Server* server, int w, int h, int scale) {
+    if (!server) return;
+    w = clamp_screen_w(w);
+    h = clamp_screen_h(h);
+    scale = clamp_scale(scale);
+    g_output_w.store(w);
+    g_output_h.store(h);
+    g_output_scale.store(scale);
+    for (auto* output : server->outputs) configure_output_mode(output, g_output_dpi.load());
+    publish_display_metrics_env(server);
+    wlr_log(WLR_INFO, "wash-display: display metrics=%dx%d scale=%d", w, h, scale);
 }
 
 void server_new_output(struct wl_listener* listener, void* data) {
@@ -506,8 +558,8 @@ void toplevel_map(struct wl_listener* listener, void* /*data*/) {
 
     struct wlr_box geo{};
     wlr_xdg_surface_get_geometry(t->xdg_toplevel->base, &geo);
-    uint32_t w = geo.width > 0 ? (uint32_t)geo.width : (uint32_t)kScreenW;
-    uint32_t h = geo.height > 0 ? (uint32_t)geo.height : (uint32_t)kScreenH;
+    uint32_t w = geo.width > 0 ? (uint32_t)geo.width : (uint32_t)output_w();
+    uint32_t h = geo.height > 0 ? (uint32_t)geo.height : (uint32_t)output_h();
 
     // Blocking wire round-trip; safe here (compositor thread, not the
     // WireConn reader thread). Wayland xdg toplevels are chromeless: every
@@ -544,7 +596,7 @@ void toplevel_request_maximize(struct wl_listener* listener, void* /*data*/) {
     Toplevel* t = wl_container_of(listener, t, request_maximize);
     bool on = t->xdg_toplevel->requested.maximized;
     wlr_xdg_toplevel_set_maximized(t->xdg_toplevel, on);
-    wlr_xdg_toplevel_set_size(t->xdg_toplevel, on ? kScreenW : 0, on ? kScreenH : 0);
+    wlr_xdg_toplevel_set_size(t->xdg_toplevel, on ? output_w() : 0, on ? output_h() : 0);
 }
 
 // toplevel_request_move: the guest asks for an interactive move (its CSD
@@ -580,7 +632,7 @@ void toplevel_request_fullscreen(struct wl_listener* listener, void* /*data*/) {
     Toplevel* t = wl_container_of(listener, t, request_fullscreen);
     bool on = t->xdg_toplevel->requested.fullscreen;
     wlr_xdg_toplevel_set_fullscreen(t->xdg_toplevel, on);
-    wlr_xdg_toplevel_set_size(t->xdg_toplevel, on ? kScreenW : 0, on ? kScreenH : 0);
+    wlr_xdg_toplevel_set_size(t->xdg_toplevel, on ? output_w() : 0, on ? output_h() : 0);
 }
 
 void toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
@@ -979,8 +1031,8 @@ void xsurface_map(struct wl_listener* listener, void* /*data*/) {
     }
     const char* title = x->xsurf->title;
     std::string ttl = title ? title : "X11 Window";
-    uint32_t w = x->xsurf->width  > 0 ? (uint32_t)x->xsurf->width  : (uint32_t)kScreenW;
-    uint32_t h = x->xsurf->height > 0 ? (uint32_t)x->xsurf->height : (uint32_t)kScreenH;
+    uint32_t w = x->xsurf->width  > 0 ? (uint32_t)x->xsurf->width  : (uint32_t)output_w();
+    uint32_t h = x->xsurf->height > 0 ? (uint32_t)x->xsurf->height : (uint32_t)output_h();
     // X clients aren't sized implicitly by us — configure them to their
     // own requested geometry so they paint at the expected dimensions.
     wlr_xwayland_surface_configure(x->xsurf, x->xsurf->x, x->xsurf->y,
@@ -1545,6 +1597,10 @@ static void apply_win_cmd(const WinCmd& c) {
         apply_display_dpi(g_server, (int)c.w);
         return;
     }
+    if (c.t == "display.metrics") {
+        apply_display_metrics(g_server, (int)c.w, (int)c.h, (int)c.scale);
+        return;
+    }
     wlr_log(WLR_INFO, "wash-display: apply win cmd t=%s win=%u %ux%u",
             c.t.c_str(), c.win, c.w, c.h);
     WinRef ref;
@@ -1656,6 +1712,29 @@ void post_display_dpi(int dpi) {
     {
         std::lock_guard<std::mutex> lk(g_cmd_mu);
         g_cmds.push_back(WinCmd{"display.dpi", 0, (uint32_t)dpi, 0});
+    }
+    if (g_cmd_pipe[1] >= 0) {
+        char b = 1;
+        ssize_t n = write(g_cmd_pipe[1], &b, 1);
+        (void)n;
+    }
+}
+
+void post_display_metrics(int width, int height, int scale) {
+    width = clamp_screen_w(width);
+    height = clamp_screen_h(height);
+    scale = clamp_scale(scale);
+    g_output_w.store(width);
+    g_output_h.store(height);
+    g_output_scale.store(scale);
+    {
+        std::lock_guard<std::mutex> lk(g_cmd_mu);
+        WinCmd c;
+        c.t = "display.metrics";
+        c.w = (uint32_t)width;
+        c.h = (uint32_t)height;
+        c.scale = (uint32_t)scale;
+        g_cmds.push_back(c);
     }
     if (g_cmd_pipe[1] >= 0) {
         char b = 1;
@@ -1842,7 +1921,7 @@ int run_compositor(WireConn& conn) {
 #endif
 
     // Give the headless backend one virtual output so clients see a display.
-    wlr_headless_add_output(server.backend, kScreenW, kScreenH);
+    wlr_headless_add_output(server.backend, output_w(), output_h());
 
     const char* socket = wl_display_add_socket_auto(server.display);
     if (!socket) {
@@ -1876,6 +1955,9 @@ int run_compositor(WireConn& conn) {
         json pub;
         pub["WASH_WAYLAND_DISPLAY"] = socket;
         pub["WASH_DISPLAY_DPI"] = std::to_string(g_output_dpi.load());
+        pub["WASH_DISPLAY_WIDTH"] = std::to_string(output_w());
+        pub["WASH_DISPLAY_HEIGHT"] = std::to_string(output_h());
+        pub["WASH_DISPLAY_SCALE"] = std::to_string(output_scale());
         if (const char* xrd = std::getenv("XDG_RUNTIME_DIR"); xrd && *xrd) {
             pub["WASH_XDG_RUNTIME_DIR"] = xrd;
         }

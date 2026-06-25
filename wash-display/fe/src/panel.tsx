@@ -20,6 +20,9 @@ interface DisplayState {
   wayland_display: string;
   window_count: number;
   dpi: number;
+  display_width: number;
+  display_height: number;
+  display_scale: number;
 }
 
 const DEFAULT_DPI = 96;
@@ -60,6 +63,9 @@ const Panel = (props: SettingsPanelProps) => {
           wayland_display: (p as { wayland_display?: string }).wayland_display ?? '',
           window_count: (p as { window_count?: number }).window_count ?? 0,
           dpi: nextDpi,
+          display_width: (p as { display_width?: number }).display_width ?? 0,
+          display_height: (p as { display_height?: number }).display_height ?? 0,
+          display_scale: (p as { display_scale?: number }).display_scale ?? 1,
         });
       }
     });
@@ -93,6 +99,11 @@ const Panel = (props: SettingsPanelProps) => {
             </Show>
             <Row label="Native windows">
               <span style={{ font: `${tokens.fontSizeMd} ${tokens.fontMono}` }}>{s()!.window_count}</span>
+            </Row>
+            <Row label="Virtual output">
+              <span style={{ font: `${tokens.fontSizeMd} ${tokens.fontMono}` }}>
+                {s()!.display_width || 0}x{s()!.display_height || 0} @ {s()!.display_scale || 1}x
+              </span>
             </Row>
             <Row label="DPI">
               <Select

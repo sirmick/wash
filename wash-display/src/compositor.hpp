@@ -35,4 +35,10 @@ void post_input(const json& data);
 // wlroots output mutation is drained on the compositor thread.
 void post_display_dpi(int dpi);
 
+// post_display_metrics updates the compositor's advertised virtual-output
+// dimensions. Width/height are physical framebuffer pixels; scale is the
+// shell-selected HiDPI factor (1 or 2 today) and is published for clients
+// that want to map back to CSS-sized wash windows.
+void post_display_metrics(int width, int height, int scale);
+
 } // namespace wash
