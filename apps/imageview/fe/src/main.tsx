@@ -45,6 +45,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const fileClient: FileClient = createFileClient({ instance: props.instance, host: props.host });
   const current = (): ImageItem | null => images()[index()] ?? null;
 
+  // pendingPath: the image path a persisted-state restore (or --open) wants
+  // selected once the scan_ok for its folder lands. onState fires before any
+  // scan_ok, so we stash the target here and consume it in handleBE.
+  let pendingPath: string | null = null;
+
   const resetView = () => {
     setZoom(1);
     setPan({ x: 0, y: 0 });
@@ -114,14 +119,40 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     if (m.dir) setDir(m.dir);
     const imgs = m.images ?? [];
     setImages(imgs);
-    // `open` (set when the router launched us with --open) selects that
-    // image; otherwise start at the first.
-    const openIdx = m.open ? imgs.findIndex((im) => im.path === m.open) : -1;
-    setIndex(openIdx >= 0 ? openIdx : 0);
+    // Selection priority on scan_ok:
+    //   1. pendingPath  — a persisted-state restore (or --open) target
+    //   2. `open`       — set when the router launched us with --open
+    //   3. first image
+    // pendingPath is consumed once; if the file's gone we fall through.
+    let idx = -1;
+    if (pendingPath) {
+      idx = imgs.findIndex((im) => im.path === pendingPath);
+      pendingPath = null;
+    }
+    if (idx < 0 && m.open) idx = imgs.findIndex((im) => im.path === m.open);
+    setIndex(idx >= 0 ? idx : 0);
     resetView();
   };
 
-  const { send } = createAppBus(props, { onMsg: handleBE });
+  // onState fires on every (re)mount with the last persisted blob: stash the
+  // desired image path and re-scan its folder; handleBE selects it on scan_ok.
+  const onState = (state: unknown) => {
+    const s = state as { dir?: string; path?: string } | null;
+    if (!s || typeof s.dir !== 'string' || s.dir === '') return;
+    pendingPath = typeof s.path === 'string' ? s.path : null;
+    send({ kind: 'scan', dir: s.dir });
+  };
+
+  const { send, saveState } = createAppBus(props, { onMsg: handleBE, onState });
+
+  // Persist {dir, path} whenever the listed folder or current image changes,
+  // so a reconnect reopens on the same thing. Tiny blob; no zoom/pan.
+  createEffect(() => {
+    const d = dir();
+    const c = current();
+    if (!d) return;
+    saveState({ dir: d, path: c?.path ?? '' });
+  });
 
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {

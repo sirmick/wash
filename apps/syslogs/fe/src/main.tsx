@@ -99,9 +99,29 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
-  const { send } = createAppBus(props, { onMsg: handleBE });
+  // onState fires on (re)mount BEFORE the BE's files-list reply arrives, so
+  // restoring the selection must re-issue the stream itself: the stream is
+  // keyed by path, not by sidebar-list membership, so the tail resumes even
+  // though the sidebar may still be empty for a beat. We restore only the
+  // minimal { selected, as_root } target; view-layer state (filterText,
+  // follow) is deliberately not persisted and is re-derived on resume.
+  const onState = (state: unknown) => {
+    if (!state || typeof state !== 'object') return;
+    const s = state as { selected?: unknown; as_root?: unknown };
+    const path = typeof s.selected === 'string' ? s.selected : '';
+    if (!path) return;
+    const useRoot = s.as_root === true;
+    setSelected(path);
+    requestStream(path, { asRoot: useRoot });
+  };
+
+  const { send, saveState } = createAppBus(props, { onMsg: handleBE, onState });
 
   // ----- send select / lifecycle -----
+
+  // The persisted target: the file being tailed + the elevation flag, so the
+  // stream reopens on the same thing (with the same access) after reconnect.
+  const persist = () => saveState({ selected: selected(), as_root: asRoot() });
 
   const requestStream = (path: string, opts?: { asRoot?: boolean }) => {
     if (!path) return;
@@ -121,9 +141,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // unprivileged → perm_denied → "Read with root" dance every time.
     // requestStream() defaults to the current asRoot().
     requestStream(path);
+    persist();
   };
 
-  const retryAsRoot = () => requestStream(selected(), { asRoot: true });
+  const retryAsRoot = () => {
+    requestStream(selected(), { asRoot: true });
+    persist();
+  };
   const refreshFiles = () => send({ kind: 'refresh_files' });
 
   // ----- scroll handling -----

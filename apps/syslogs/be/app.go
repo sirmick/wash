@@ -120,6 +120,7 @@ type selectReq struct {
 type emptyReq struct{}
 
 func registerHandlers(b *sdk.Bus) {
+	sdk.HandlePersist(b)
 	sdk.HandleVoid(b, "select", func(c *sdk.Conn, _ string, req selectReq) error {
 		go startStream(c, req)
 		return nil

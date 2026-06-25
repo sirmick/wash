@@ -113,6 +113,9 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	st = &appState{conn: c, backend: backend}
 	bus := sdk.NewBus(c)
 	registerHandlers(bus)
+	// Persist the FE's search query so the window reopens on the same
+	// search after a reconnect (the canonical save_state→SaveState path).
+	sdk.HandlePersist(bus)
 	// Push initial backend status; the FE might miss this if it
 	// connects after onReady fires, so it also re-requests via hello.
 	sendBackendStatus(c, backend)

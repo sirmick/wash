@@ -392,6 +392,12 @@ export function NetApp(props: WashAppProps) {
     onCleanup(() => window.clearTimeout(t));
   });
 
+  // NOTE: the staged draft is deliberately NOT persisted across reconnect.
+  // netd config goes through a commit-confirm transaction, so unapplied edits
+  // are apply-or-lose by design — below the reconnect bar (the window comes
+  // back; you re-stage). Only applied config (held by netd) survives, and is
+  // re-read by loadCurrent() on mount.
+
   // Router mode needs more room (tabs + the firewall matrix + segment cards) than
   // the workstation default (574w, set in the manifest before caps are known). The
   // manifest can't know the backend, so widen the window once when caps reveal a

@@ -31,11 +31,29 @@ export interface AppBusOptions<M extends AppBusMsgBound = AppBusMessage> {
   onMsg?: (m: M) => void;
   /** Invoked for every wash:state CustomEvent (persisted FE-state restore). */
   onState?: (state: unknown) => void;
+  /**
+   * Debounce window (ms) for saveState() coalescing. Bursts of view-state
+   * changes (typing in a filter, dragging a splitter) collapse to one
+   * router round-trip. Default 200. Set 0 to send on the next tick with
+   * no coalescing.
+   */
+  saveDebounceMs?: number;
 }
 
 export interface AppBus {
   /** Fire-and-forget send to this app instance's BE half. */
   send: (msg: unknown) => void;
+  /**
+   * Persist this app's opaque view-state blob router-side (debounced).
+   * The router stores it per instance; the shell redelivers the latest
+   * blob as the wash:state restore event (opts.onState) on every
+   * (re)mount, so reconnect and new streams reconstitute the window from
+   * it. Pair with sdk.HandlePersist on the BE. Last value wins within the
+   * debounce window — build a fresh snapshot at each call site.
+   */
+  saveState: (state: unknown) => void;
+  /** Flush any pending debounced saveState immediately (e.g. before a known teardown). */
+  flushState: () => void;
 }
 
 // createAppBus binds send() to this instance and registers the requested
@@ -60,5 +78,33 @@ export function createAppBus<M extends AppBusMsgBound = AppBusMessage>(
     onCleanup(() => props.host.removeEventListener('wash:state', handler));
   }
 
-  return { send };
+  // Debounced view-state persistence. We hold the latest blob (a sentinel
+  // distinguishes "nothing pending" from a legitimately null/undefined
+  // blob) and emit the canonical { kind: 'save_state', state } envelope
+  // that sdk.HandlePersist consumes on the BE.
+  const debounceMs = opts.saveDebounceMs ?? 200;
+  const NOTHING = Symbol('no-pending-state');
+  let pending: unknown = NOTHING;
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  const flushState = () => {
+    if (saveTimer != null) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    if (pending !== NOTHING) {
+      const state = pending;
+      pending = NOTHING;
+      send({ kind: 'save_state', state });
+    }
+  };
+  const saveState = (state: unknown) => {
+    pending = state;
+    if (saveTimer != null) clearTimeout(saveTimer);
+    saveTimer = setTimeout(flushState, debounceMs);
+  };
+  // Don't leave an unsent blob behind on unmount — a remount restores from
+  // whatever the router last received, so flush the tail.
+  onCleanup(flushState);
+
+  return { send, saveState, flushState };
 }

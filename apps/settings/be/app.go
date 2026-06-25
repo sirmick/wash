@@ -110,6 +110,11 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	sdk.EnableFilePicker(c)
 	bus = sdk.NewBus(c)
 	registerHandlers(bus)
+	// Persist the active-panel navigation (which settings section the
+	// window was on) so reconnect reopens on the same panel instead of
+	// snapping back to Desktop. Settings VALUES persist separately via
+	// settings.write (desktop domain); this is only the window's view-state.
+	sdk.HandlePersist(bus)
 }
 
 type readReq struct {

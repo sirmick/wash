@@ -54,7 +54,7 @@ test.describe('music app playback persistence', () => {
     // Wait for the persist to actually land in the BE (router-logged) before
     // reloading — a fixed timeout races the FE→BE→disk round-trip under load,
     // which is the historical source of this test's full-suite flakiness.
-    await router.waitForLog(/wash-music: save_state/);
+    await router.waitForLog(/com\.wash\.music save_state persisted/);
     await page.reload();
 
     // Restored: the same track is the current one (now-playing shows

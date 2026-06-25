@@ -20,6 +20,7 @@ import {
   Section,
   Select,
   SmallBtn,
+  createAppBus,
   defaultPackId,
   defineWashApp,
   getPack,
@@ -95,7 +96,32 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // it with defaults.
   let hydrated = false;
 
-  const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
+  // Persisted blob = { section } — the active panel id (built-in
+  // 'desktop' or a panel's owning app_id). onState (restore) can fire
+  // before the panels catalog is populated, so stash the desired section
+  // and apply it once we can confirm the panel exists; until then we set
+  // it optimistically and let the renderer no-op a missing panel.
+  let pendingRestore: string | null = null;
+
+  const sectionExists = (id: string) =>
+    id === 'desktop' || panels().some((p) => p.app_id === id);
+
+  // applyRestore selects the persisted section if its panel still exists.
+  // 'desktop' always exists. A section whose panel is gone is dropped.
+  const applyRestore = (id: string) => {
+    if (sectionExists(id)) {
+      setSection(id);
+      pendingRestore = null;
+    } else {
+      pendingRestore = id; // retry once panels load
+    }
+  };
+
+  // navigate switches the active section and persists it (debounced).
+  const navigate = (id: string) => {
+    setSection(id);
+    bus.saveState({ section: id });
+  };
 
   // ---- panel port machinery ----
   // Panels are mounted inside this app's element, so they can't be their
@@ -182,6 +208,19 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
+  // Shared transport + view-state persistence. onState (restore) fires on
+  // every (re)mount = reconnect; onMsg replaces the hand-rolled
+  // 'wash:msg' addEventListener. saveState ships { section } so reconnect
+  // reopens on the same panel (BE: sdk.HandlePersist).
+  const bus = createAppBus(props, {
+    onMsg: (m) => handleBE(m as BEMessage),
+    onState: (state) => {
+      const s = (state as { section?: unknown } | null)?.section;
+      if (typeof s === 'string') applyRestore(s);
+    },
+  });
+  const send = bus.send;
+
   // ---- desktop save (debounced) ----
 
   let saveTimer = 0;
@@ -224,10 +263,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ---- lifecycle ----
 
   onMount(() => {
-    const onMsg = (ev: Event) => handleBE((ev as CustomEvent).detail as BEMessage);
-    props.host.addEventListener('wash:msg', onMsg);
-
-    const offPanels = window.wash.onSettingsPanels(setPanels);
+    // wash:msg/wash:state listeners (+ teardown) are owned by createAppBus.
+    const offPanels = window.wash.onSettingsPanels((p) => {
+      setPanels(p);
+      // A restore that arrived before the panels catalog was ready can
+      // now be re-evaluated against the freshly-loaded panel list.
+      if (pendingRestore) applyRestore(pendingRestore);
+    });
 
     // Ask BE for the desktop config + picker root. Panel domains are
     // requested by each panel via port.readConfig on mount.
@@ -235,7 +277,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     send({ kind: 'fs.root' });
 
     onCleanup(() => {
-      props.host.removeEventListener('wash:msg', onMsg);
       offPanels();
       if (saveTimer) clearTimeout(saveTimer);
     });
@@ -254,13 +295,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     <>
       <div style={layoutStyle}>
         <div style={railStyle}>
-          <RailItem label="Desktop" active={section() === 'desktop'} onClick={() => setSection('desktop')} />
+          <RailItem label="Desktop" active={section() === 'desktop'} onClick={() => navigate('desktop')} />
           <For each={panels()}>
             {(p) => (
               <RailItem
                 label={p.section}
                 active={section() === p.app_id}
-                onClick={() => setSection(p.app_id)}
+                onClick={() => navigate(p.app_id)}
               />
             )}
           </For>

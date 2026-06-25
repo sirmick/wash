@@ -287,10 +287,6 @@ func pollTabStatus(c *sdk.Conn) {
 
 // ----- bus types -----
 
-type saveStateReq struct {
-	State any `json:"state"`
-}
-
 type resizeReq struct {
 	ChannelID uint64 `json:"channel_id"`
 	Cols      uint64 `json:"cols"`
@@ -307,9 +303,7 @@ type closeTabReq struct {
 }
 
 func registerHandlers(b *sdk.Bus) {
-	sdk.HandleVoid(b, "save_state", func(c *sdk.Conn, _ string, req saveStateReq) error {
-		return c.SaveState(req.State)
-	})
+	sdk.HandlePersist(b)
 	sdk.HandleVoid(b, "resize", func(_ *sdk.Conn, _ string, req resizeReq) error {
 		if req.ChannelID == 0 || req.Cols == 0 || req.Rows == 0 {
 			return nil

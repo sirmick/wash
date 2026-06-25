@@ -85,9 +85,7 @@ func onReady(c *sdk.Conn, _ string, _ uint32) {
 	// and we hand it to the SDK's router-side persistence. On every
 	// (re)mount the shell dispatches the blob back as a wash:state
 	// event so the FE can restore.
-	sdk.HandleVoid(bus, "save_state", func(conn *sdk.Conn, _ string, req sessionStateReq) error {
-		return conn.SaveState(req.State)
-	})
+	sdk.HandlePersist(bus)
 
 	// Sidebar widget gateway: the FE can't address other apps with a
 	// trustworthy sender (shell-originated cross-app msgs lack a
@@ -319,13 +317,6 @@ func registerPrivGateway(bus *sdk.Bus) {
 			"nonce":      req.Nonce,
 		})
 	})
-}
-
-// sessionStateReq is the wire envelope for the FE's persistence push.
-// State is opaque (the schema is FE-owned); the SDK marshals it to
-// JSON for router storage.
-type sessionStateReq struct {
-	State any `json:"state"`
 }
 
 // serviceStateMsg captures the `state` field of a StateService push.
