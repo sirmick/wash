@@ -5,7 +5,27 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 )
+
+// inheritedAppEnv returns the router's environment with host GUI display
+// handles stripped. wash-display republishes its own sockets as WASH_* hints;
+// leaking the router process's DISPLAY/WAYLAND_DISPLAY makes GUI clients typed
+// in wash-term open on the host desktop instead of inside wash.
+func inheritedAppEnv() []string {
+	env := os.Environ()
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		key, _, _ := strings.Cut(kv, "=")
+		switch key {
+		case "DISPLAY", "WAYLAND_DISPLAY", "WAYLAND_SOCKET", "XAUTHORITY":
+			continue
+		default:
+			out = append(out, kv)
+		}
+	}
+	return out
+}
 
 // Spawn launches an app binary. The child dials the router's wash
 // socket (passed via WASH_DISPLAY env) and sends an Identity frame.
@@ -35,7 +55,7 @@ func Spawn(binary, appID, display string, extraEnv, extraArgs []string) (*SpawnR
 	// so a terminal can run real shell sessions and a launched
 	// program can find its own files. The wash-specific env vars
 	// are layered on top. Probe.go uses its own stripped env.
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(inheritedAppEnv(),
 		"WASH_DISPLAY="+display,
 		"WASH_PROTO=1",
 		"WASH_APP_ID="+appID,

@@ -268,6 +268,8 @@ func domainFile(domain string) string {
 	switch domain {
 	case "desktop":
 		return filepath.Join(dir, "desktop.json")
+	case "display":
+		return filepath.Join(dir, "display.json")
 	case "network":
 		// The Network pane's renderer choice ({"backend":"auto"|"nm"|"networkd"});
 		// com.wash.netd reads this file at startup (docs/NET.md §2.7).

@@ -28,6 +28,9 @@ type LinkStatsSnapshot struct {
 
 	RawBytes  uint64 `json:"raw_bytes"`  // pre-compression asset bytes
 	WireBytes uint64 `json:"wire_bytes"` // post-compression asset bytes
+
+	DisplayTxBytes  uint64 `json:"display_tx_bytes"`  // video + video-popup payload bytes
+	DisplayTxFrames uint64 `json:"display_tx_frames"` // video + video-popup frames
 }
 
 // Plus returns the element-wise sum of two snapshots, taking the max for
@@ -51,6 +54,8 @@ func (a LinkStatsSnapshot) Plus(b LinkStatsSnapshot) LinkStatsSnapshot {
 	out.RxFrames += b.RxFrames
 	out.RawBytes += b.RawBytes
 	out.WireBytes += b.WireBytes
+	out.DisplayTxBytes += b.DisplayTxBytes
+	out.DisplayTxFrames += b.DisplayTxFrames
 	return out
 }
 

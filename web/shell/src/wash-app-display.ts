@@ -54,6 +54,15 @@ function parseHeader(view: DataView): FrameHeader {
   };
 }
 
+function currentFrameScale(): number {
+  const scale = Number((window as unknown as { __washDisplayScale?: number }).__washDisplayScale || 1);
+  return scale >= 2 ? 2 : 1;
+}
+
+function frameCssPx(px: number): number {
+  return Math.max(1, Math.round(px / currentFrameScale()));
+}
+
 // One input batch flushed to the BE per rAF (motion) or immediately
 // (button/key/wheel). Events are surface-relative ints; see docs/DISPLAY.md §6.
 type InputEvent = Record<string, string | number>;
@@ -147,6 +156,8 @@ export class WashAppDisplay extends HTMLElement {
       this.canvas = canvas;
       this.ctx = canvas.getContext('2d');
     }
+    this.tabIndex = 0;
+    this.style.outline = 'none';
 
     // Register so the shell can hand us our window's video channel. If the
     // channel.bind already arrived before mount, the registry replays it
@@ -194,6 +205,7 @@ export class WashAppDisplay extends HTMLElement {
   // and forwards them, surface-relative, to the wash-display BE which
   // injects them into the real wlroots surface.
   private setupInput(): void {
+    if (this.inputCleanup) return;
     // Make the element focusable so it can receive key events when its
     // window is active; clicking it (below) gives it DOM focus. The outline
     // would be visual noise over guest pixels.
@@ -219,6 +231,8 @@ export class WashAppDisplay extends HTMLElement {
     const onPointerDown = (ev: PointerEvent) => {
       this.lastClientX = ev.clientX;
       this.lastClientY = ev.clientY;
+      ev.preventDefault();
+      window.wash?.focusWindow(this.windowID, this.origin);
       // Capture so a drag that leaves the element still delivers move/up
       // (dragging a scrollbar, selecting text, etc.). Focus for keys.
       try {
@@ -234,6 +248,7 @@ export class WashAppDisplay extends HTMLElement {
     const onPointerUp = (ev: PointerEvent) => {
       this.lastClientX = ev.clientX;
       this.lastClientY = ev.clientY;
+      ev.preventDefault();
       if (this.moving) {
         this.endMove();
         return;
@@ -252,6 +267,8 @@ export class WashAppDisplay extends HTMLElement {
       // match wlroots' positive-down convention. preventDefault stops the
       // shell scrolling underneath.
       ev.preventDefault();
+      window.wash?.focusWindow(this.windowID, this.origin);
+      this.focus({ preventScroll: true });
       if (ev.deltaY) this.queue({ ev: 'axis', axis: 'v', delta: Math.round(ev.deltaY) });
       if (ev.deltaX) this.queue({ ev: 'axis', axis: 'h', delta: Math.round(ev.deltaX) });
       this.flushNow();
@@ -261,11 +278,14 @@ export class WashAppDisplay extends HTMLElement {
       // the guest owns the keyboard. (Repeat is the client's job, so a
       // synthetic repeat — ev.repeat — still forwards as a fresh down.)
       ev.preventDefault();
+      ev.stopPropagation();
+      window.wash?.focusWindow(this.windowID, this.origin);
       this.queue({ ev: 'key', code: ev.code, state: 'down' });
       this.flushNow();
     };
     const onKeyUp = (ev: KeyboardEvent) => {
       ev.preventDefault();
+      ev.stopPropagation();
       this.queue({ ev: 'key', code: ev.code, state: 'up' });
       this.flushNow();
     };
@@ -292,8 +312,9 @@ export class WashAppDisplay extends HTMLElement {
   }
 
   // queueMotion appends (coalescing) a surface-relative motion event. The
-  // canvas is drawn 1:1 at top-left (DPR 1.0), so surface coords are the
-  // offset into the canvas box. Consecutive motions collapse to the latest.
+  // The canvas backing store may be HiDPI, but its CSS box is logical
+  // surface size. DOM pointer offsets are therefore the logical coordinates
+  // wlroots expects. Consecutive motions collapse to the latest.
   private queueMotion(ev: PointerEvent): void {
     const box = this.canvas && this.canvas.width > 0 ? this.canvas : this;
     const r = box.getBoundingClientRect();
@@ -484,10 +505,7 @@ export class WashAppDisplay extends HTMLElement {
     const payload = bytes.subarray(HEADER_BYTES);
     if (payload.length === 0) return;
 
-    // Copy out of the (reused) WS frame buffer so the Blob owns its bytes.
-    const copy = payload.slice();
-
-    createImageBitmap(new Blob([copy]))
+    createImageBitmap(new Blob([payload]))
       .then((bitmap) => {
         const canvas = this.canvas;
         const ctx = this.ctx;
@@ -495,18 +513,20 @@ export class WashAppDisplay extends HTMLElement {
           bitmap.close?.();
           return;
         }
-        // Keep the canvas CSS box equal to its backing-store pixels so the
-        // bitmap is drawn 1:1 (never scaled). The element clips/letterboxes
-        // any difference between this and the current frame size.
+        // Keep the backing store in physical frame pixels while the CSS box
+        // stays in logical surface pixels. On HiDPI this gives the browser a
+        // dense canvas instead of visibly doubling the window size.
         if (header.frameW > 0 && header.frameH > 0) {
           if (canvas.width !== header.frameW) {
             canvas.width = header.frameW;
-            canvas.style.width = header.frameW + 'px';
           }
+          const cssW = frameCssPx(header.frameW);
+          if (canvas.style.width !== cssW + 'px') canvas.style.width = cssW + 'px';
           if (canvas.height !== header.frameH) {
             canvas.height = header.frameH;
-            canvas.style.height = header.frameH + 'px';
           }
+          const cssH = frameCssPx(header.frameH);
+          if (canvas.style.height !== cssH + 'px') canvas.style.height = cssH + 'px';
         }
         // Clear the dirty rect first so transparent pixels REPLACE (not
         // source-over blend onto) the previous frame — required now that
@@ -571,9 +591,8 @@ export class WashAppDisplay extends HTMLElement {
     }
     const payload = bytes.subarray(HEADER_BYTES);
     if (payload.length === 0) return;
-    const copy = payload.slice();
     if (!p.canvas) this.ensurePopupCanvas(p);
-    createImageBitmap(new Blob([copy]))
+    createImageBitmap(new Blob([payload]))
       .then((bitmap) => {
         const live = this.popups.get(channelID);
         if (!live || !live.canvas || !live.ctx) {
@@ -583,11 +602,17 @@ export class WashAppDisplay extends HTMLElement {
         const cv = live.canvas;
         if (header.frameW > 0 && cv.width !== header.frameW) {
           cv.width = header.frameW;
-          cv.style.width = header.frameW + 'px';
+        }
+        if (header.frameW > 0) {
+          const cssW = frameCssPx(header.frameW);
+          if (cv.style.width !== cssW + 'px') cv.style.width = cssW + 'px';
         }
         if (header.frameH > 0 && cv.height !== header.frameH) {
           cv.height = header.frameH;
-          cv.style.height = header.frameH + 'px';
+        }
+        if (header.frameH > 0) {
+          const cssH = frameCssPx(header.frameH);
+          if (cv.style.height !== cssH + 'px') cv.style.height = cssH + 'px';
         }
         // Clear first so the menu's transparent rounded corners / shadow
         // replace prior pixels rather than blending (M8c alpha).

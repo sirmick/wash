@@ -18,6 +18,9 @@
 // ALL C++/STL headers MUST be included BEFORE the `#define static` hack
 // below — otherwise the macro is in effect while libstdc++ headers parse
 // and corrupts them (e.g. <limits>'s `static constexpr` -> ~600 errors).
+#include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -62,6 +65,7 @@ extern "C" {
 #include <wlr/backend/headless.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
+#include <wlr/render/wlr_texture.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_output.h>
@@ -98,10 +102,61 @@ struct wlr_allocator* g_capture_allocator = nullptr;
 
 namespace {
 
-// Default virtual screen the headless output advertises to clients. 1080p
-// so maximized/large apps (IDEs, p4v) have room; HiDPI scaling is M5b.
-constexpr int kScreenW = 1920;
-constexpr int kScreenH = 1080;
+// Default virtual screen until the browser shell publishes its viewport. The
+// shell sends physical framebuffer pixels (CSS viewport × HiDPI scale), so
+// browser-sized windows see a browser-sized display instead of hard-coded
+// 1080p.
+constexpr int kDefaultScreenW = 1920;
+constexpr int kDefaultScreenH = 1080;
+constexpr int kMinScreenW = 320;
+constexpr int kMinScreenH = 240;
+constexpr int kMaxScreenW = 7680;
+constexpr int kMaxScreenH = 4320;
+constexpr int kDefaultDpi = 96;
+constexpr int kMinDpi = 72;
+constexpr int kMaxDpi = 240;
+constexpr int kDefaultScale = 1;
+constexpr int kMaxScale = 2;
+
+static int clamp_dpi(int dpi) {
+    if (dpi <= 0) return kDefaultDpi;
+    return std::max(kMinDpi, std::min(kMaxDpi, dpi));
+}
+
+static int dpi_to_mm(int px, int dpi) {
+    return std::max(1, (int)std::lround((double)px * 25.4 / (double)clamp_dpi(dpi)));
+}
+
+static std::atomic<int> g_output_dpi{kDefaultDpi};
+static std::atomic<int> g_output_w{kDefaultScreenW};
+static std::atomic<int> g_output_h{kDefaultScreenH};
+static std::atomic<int> g_output_scale{kDefaultScale};
+
+static int clamp_screen_w(int w) {
+    if (w <= 0) return kDefaultScreenW;
+    return std::max(kMinScreenW, std::min(kMaxScreenW, w));
+}
+
+static int clamp_screen_h(int h) {
+    if (h <= 0) return kDefaultScreenH;
+    return std::max(kMinScreenH, std::min(kMaxScreenH, h));
+}
+
+static int clamp_scale(int scale) {
+    if (scale <= 0) return kDefaultScale;
+    return std::max(kDefaultScale, std::min(kMaxScale, scale));
+}
+
+static int output_w() { return g_output_w.load(); }
+static int output_h() { return g_output_h.load(); }
+static int output_scale() { return g_output_scale.load(); }
+static int output_logical_w() { return std::max(1, output_w() / output_scale()); }
+static int output_logical_h() { return std::max(1, output_h() / output_scale()); }
+static uint32_t physical_to_logical(int px) {
+    int scale = output_scale();
+    if (scale <= 1) return (uint32_t)std::max(0, px);
+    return (uint32_t)std::max(1, (px + scale - 1) / scale);
+}
 
 struct Server {
     struct wl_display* display = nullptr;
@@ -111,6 +166,7 @@ struct Server {
     struct wlr_scene* scene = nullptr;
     struct wlr_scene_output_layout* scene_layout = nullptr;
     struct wlr_output_layout* output_layout = nullptr;
+    std::vector<struct wlr_output*> outputs;
     struct wlr_xdg_shell* xdg_shell = nullptr;
 
     struct wl_listener new_output;
@@ -209,7 +265,7 @@ static void unregister_win(uint32_t win) {
 
 struct WinCmd {
     std::string t;
-    uint32_t win = 0, w = 0, h = 0;
+    uint32_t win = 0, w = 0, h = 0, scale = 1;
 };
 static std::mutex g_cmd_mu;
 static std::vector<WinCmd> g_cmds;
@@ -271,13 +327,15 @@ static void sink_frame(WindowSink& s, WireConn* conn, struct wlr_surface* surfac
     if (!s.win || !s.video_chan) return; // not mapped / no sink
     // capture returns false when nothing changed (empty damage) — skip
     // the frame entirely, the per-frame win of damage tracking. The crop
-    // (when set) is the xdg window geometry, stripping the CSD shadow margin;
-    // force_full bypasses the damage skip for tree-driven captures (M7).
-    if (!s.cap.capture(surface, renderer, crop_x, crop_y, crop_w, crop_h, force_full)) return;
+    // (when set) is the xdg window geometry, stripping the CSD shadow margin.
+    // Preserve alpha for toplevels as well as popups: transparent/shaped
+    // windows should remain irregular instead of being flattened opaque.
+    if (!s.cap.capture(surface, renderer, crop_x, crop_y, crop_w, crop_h,
+                       force_full, true, output_scale())) return;
 
     // Tell the router when the content size changed so the shell frame
     // tracks it (window.geometry). Fire-and-forget; only on actual change.
-    uint32_t cw = (uint32_t)s.cap.width(), ch = (uint32_t)s.cap.height();
+    uint32_t cw = physical_to_logical(s.cap.width()), ch = physical_to_logical(s.cap.height());
     if (cw && ch && (cw != s.sent_w || ch != s.sent_h)) {
         conn->report_geometry(s.win, cw, ch);
         s.sent_w = cw;
@@ -351,20 +409,31 @@ struct Output {
     struct wl_listener destroy;
 };
 
-// tree_signature sums each surface's per-commit seq across the whole tree
-// (root + subsurfaces) and folds in the surface count, so it changes on ANY
-// commit anywhere in the window — including a desynchronized subsurface
-// repaint that never touches the root surface (M7). Cheap: no readback.
-struct SigAcc { uint64_t sum = 0; uint32_t count = 0; };
-static void sig_cb(struct wlr_surface* s, int /*sx*/, int /*sy*/, void* data) {
+// tree_signature folds each surface's commit seq, position, texture size and
+// paint order across the whole tree (root + subsurfaces), so it changes on
+// repaint, moved subsurface, resize, map/unmap and stacking changes. Cheap:
+// no readback.
+static uint64_t sig_mix(uint64_t h, uint64_t v) {
+    h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    return h;
+}
+struct SigAcc { uint64_t h = 1469598103934665603ULL; uint32_t count = 0; };
+static void sig_cb(struct wlr_surface* s, int sx, int sy, void* data) {
     auto* a = static_cast<SigAcc*>(data);
-    a->sum += s->current.seq;
+    struct wlr_texture* tex = wlr_surface_get_texture(s);
+    a->h = sig_mix(a->h, reinterpret_cast<uintptr_t>(s));
+    a->h = sig_mix(a->h, s->current.seq);
+    a->h = sig_mix(a->h, (uint32_t)sx);
+    a->h = sig_mix(a->h, (uint32_t)sy);
+    a->h = sig_mix(a->h, tex ? tex->width : 0);
+    a->h = sig_mix(a->h, tex ? tex->height : 0);
+    a->h = sig_mix(a->h, a->count);
     a->count++;
 }
 static uint64_t tree_signature(struct wlr_surface* root) {
     SigAcc a;
     wlr_surface_for_each_surface(root, sig_cb, &a);
-    return (a.sum << 16) ^ a.count;
+    return sig_mix(a.h, a.count);
 }
 
 void output_frame(struct wl_listener* listener, void* /*data*/) {
@@ -389,7 +458,7 @@ void output_frame(struct wl_listener* listener, void* /*data*/) {
     for (auto& [win, t] : xdgs) {
         if (!t->xdg_toplevel) continue;
         struct wlr_surface* root = t->xdg_toplevel->base->surface;
-        uint64_t sig = tree_signature(root);
+        uint64_t sig = sig_mix(tree_signature(root), (uint64_t)output_scale());
         if (sig == t->sink.tree_sig) continue; // nothing committed → skip
         t->sink.tree_sig = sig;
         // Crop to xdg window geometry (drops the CSD shadow margin); the tree
@@ -404,9 +473,65 @@ void output_frame(struct wl_listener* listener, void* /*data*/) {
 
 void output_destroy(struct wl_listener* listener, void* /*data*/) {
     Output* out = wl_container_of(listener, out, destroy);
+    auto& outputs = out->server->outputs;
+    outputs.erase(std::remove(outputs.begin(), outputs.end(), out->wlr_output), outputs.end());
     wl_list_remove(&out->frame.link);
     wl_list_remove(&out->destroy.link);
     delete out;
+}
+
+static void set_output_physical_dpi(struct wlr_output* output, int dpi) {
+    if (!output) return;
+    dpi = clamp_dpi(dpi);
+    output->phys_width = dpi_to_mm(output_w(), dpi);
+    output->phys_height = dpi_to_mm(output_h(), dpi);
+}
+
+static void configure_output_mode(struct wlr_output* output, int dpi) {
+    set_output_physical_dpi(output, dpi);
+    struct wlr_output_state state;
+    wlr_output_state_init(&state);
+    wlr_output_state_set_enabled(&state, true);
+    // Headless outputs have no fixed modes; set a custom physical mode and
+    // advertise the output scale separately so clients can render HiDPI
+    // buffers while the shell keeps logical wash window coordinates.
+    wlr_output_state_set_custom_mode(&state, output_w(), output_h(), 0);
+    wlr_output_state_set_scale(&state, (float)output_scale());
+    wlr_output_commit_state(output, &state);
+    wlr_output_state_finish(&state);
+}
+
+static void publish_display_metrics_env(Server* server) {
+    if (!server || !server->conn) return;
+    server->conn->publish_env(json{
+        {"WASH_DISPLAY_WIDTH", std::to_string(output_w())},
+        {"WASH_DISPLAY_HEIGHT", std::to_string(output_h())},
+        {"WASH_DISPLAY_SCALE", std::to_string(output_scale())},
+    });
+}
+
+static void apply_display_dpi(Server* server, int dpi) {
+    if (!server) return;
+    dpi = clamp_dpi(dpi);
+    g_output_dpi.store(dpi);
+    for (auto* output : server->outputs) set_output_physical_dpi(output, dpi);
+    if (server->conn) {
+        server->conn->publish_env(json{{"WASH_DISPLAY_DPI", std::to_string(dpi)}});
+    }
+    wlr_log(WLR_INFO, "wash-display: display dpi=%d", dpi);
+}
+
+static void apply_display_metrics(Server* server, int w, int h, int scale) {
+    if (!server) return;
+    w = clamp_screen_w(w);
+    h = clamp_screen_h(h);
+    scale = clamp_scale(scale);
+    g_output_w.store(w);
+    g_output_h.store(h);
+    g_output_scale.store(scale);
+    for (auto* output : server->outputs) configure_output_mode(output, g_output_dpi.load());
+    publish_display_metrics_env(server);
+    wlr_log(WLR_INFO, "wash-display: display metrics=%dx%d scale=%d", w, h, scale);
 }
 
 void server_new_output(struct wl_listener* listener, void* data) {
@@ -414,14 +539,8 @@ void server_new_output(struct wl_listener* listener, void* data) {
     auto* wlr_output = static_cast<struct wlr_output*>(data);
 
     wlr_output_init_render(wlr_output, server->allocator, server->renderer);
-
-    struct wlr_output_state state;
-    wlr_output_state_init(&state);
-    wlr_output_state_set_enabled(&state, true);
-    // Headless outputs have no fixed modes; set a custom mode.
-    wlr_output_state_set_custom_mode(&state, kScreenW, kScreenH, 0);
-    wlr_output_commit_state(wlr_output, &state);
-    wlr_output_state_finish(&state);
+    server->outputs.push_back(wlr_output);
+    configure_output_mode(wlr_output, g_output_dpi.load());
 
     auto* out = new Output();
     out->server = server;
@@ -448,8 +567,8 @@ void toplevel_map(struct wl_listener* listener, void* /*data*/) {
 
     struct wlr_box geo{};
     wlr_xdg_surface_get_geometry(t->xdg_toplevel->base, &geo);
-    uint32_t w = geo.width > 0 ? (uint32_t)geo.width : (uint32_t)kScreenW;
-    uint32_t h = geo.height > 0 ? (uint32_t)geo.height : (uint32_t)kScreenH;
+    uint32_t w = geo.width > 0 ? (uint32_t)geo.width : (uint32_t)output_logical_w();
+    uint32_t h = geo.height > 0 ? (uint32_t)geo.height : (uint32_t)output_logical_h();
 
     // Blocking wire round-trip; safe here (compositor thread, not the
     // WireConn reader thread). Wayland xdg toplevels are chromeless: every
@@ -486,7 +605,9 @@ void toplevel_request_maximize(struct wl_listener* listener, void* /*data*/) {
     Toplevel* t = wl_container_of(listener, t, request_maximize);
     bool on = t->xdg_toplevel->requested.maximized;
     wlr_xdg_toplevel_set_maximized(t->xdg_toplevel, on);
-    wlr_xdg_toplevel_set_size(t->xdg_toplevel, on ? kScreenW : 0, on ? kScreenH : 0);
+    wlr_xdg_toplevel_set_size(t->xdg_toplevel,
+                              on ? output_logical_w() : 0,
+                              on ? output_logical_h() : 0);
 }
 
 // toplevel_request_move: the guest asks for an interactive move (its CSD
@@ -522,7 +643,9 @@ void toplevel_request_fullscreen(struct wl_listener* listener, void* /*data*/) {
     Toplevel* t = wl_container_of(listener, t, request_fullscreen);
     bool on = t->xdg_toplevel->requested.fullscreen;
     wlr_xdg_toplevel_set_fullscreen(t->xdg_toplevel, on);
-    wlr_xdg_toplevel_set_size(t->xdg_toplevel, on ? kScreenW : 0, on ? kScreenH : 0);
+    wlr_xdg_toplevel_set_size(t->xdg_toplevel,
+                              on ? output_logical_w() : 0,
+                              on ? output_logical_h() : 0);
 }
 
 void toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
@@ -625,13 +748,15 @@ static std::map<uint32_t, PopupTarget> g_popup_reg;
 // popup's offset within the parent content (canvas space = sent_x/sent_y), so
 // parent-window coords convert to popup-local by subtracting it.
 struct PopupGrab {
+    uint32_t parent_win = 0;
     struct wlr_surface* surface = nullptr;
     Server* server = nullptr;
     int off_x = 0, off_y = 0;
 };
 static std::vector<PopupGrab> g_popup_grabs;
-static void push_popup_grab(struct wlr_surface* s, Server* srv, int ox, int oy) {
-    g_popup_grabs.push_back(PopupGrab{s, srv, ox, oy});
+static void push_popup_grab(uint32_t parent_win, struct wlr_surface* s, Server* srv,
+                            int ox, int oy) {
+    g_popup_grabs.push_back(PopupGrab{parent_win, s, srv, ox, oy});
 }
 static void pop_popup_grab(struct wlr_surface* s) {
     for (auto it = g_popup_grabs.begin(); it != g_popup_grabs.end(); ++it) {
@@ -700,7 +825,7 @@ void popup_map(struct wl_listener* listener, void* /*data*/) {
     g_popup_reg[p->chan] = PopupTarget{p->popup->base->surface, p->server};
     // A popup that requested a seat grab (menus, not tooltips) owns the pointer.
     if (p->popup->seat)
-        push_popup_grab(p->popup->base->surface, p->server, ox, oy);
+        push_popup_grab(root, p->popup->base->surface, p->server, ox, oy);
     wlr_log(WLR_INFO, "wash-display: popup mapped parent_win=%u chan=%u off=%d,%d grab=%d",
             root, p->chan, ox, oy, p->popup->seat ? 1 : 0);
 }
@@ -732,7 +857,8 @@ void popup_commit(struct wl_listener* listener, void* /*data*/) {
     // Capture → WebP → one framed message (≥45 bytes; the FE distinguishes
     // it from the JSON control frame by length).
     struct wlr_surface* surface = p->popup->base->surface;
-    if (!p->cap.capture(surface, p->server->renderer, 0, 0, 0, 0, false, /*preserve_alpha=*/true)) return;
+    if (!p->cap.capture(surface, p->server->renderer, 0, 0, 0, 0,
+                        false, /*preserve_alpha=*/true, output_scale())) return;
     if (!p->enc_ready || p->enc.width() != p->cap.width() ||
         p->enc.height() != p->cap.height()) {
         p->enc_ready = p->enc.init(p->cap.width(), p->cap.height());
@@ -862,6 +988,61 @@ struct XSurface {
 // override-redirect menu that doesn't set transient-for.
 static XSurface* g_active_x_toplevel = nullptr;
 
+static xcb_atom_t xatom(const char* name) {
+    static xcb_connection_t* conn = nullptr;
+    static std::map<std::string, xcb_atom_t> cache;
+    auto it = cache.find(name);
+    if (it != cache.end()) return it->second;
+    if (!conn) {
+        conn = xcb_connect(nullptr, nullptr);
+        if (!conn || xcb_connection_has_error(conn)) {
+            if (conn) xcb_disconnect(conn);
+            conn = nullptr;
+            cache[name] = static_cast<xcb_atom_t>(XCB_ATOM_NONE);
+            return static_cast<xcb_atom_t>(XCB_ATOM_NONE);
+        }
+    }
+    xcb_intern_atom_cookie_t cookie =
+        xcb_intern_atom(conn, 0, (uint16_t)std::strlen(name), name);
+    xcb_intern_atom_reply_t* reply = xcb_intern_atom_reply(conn, cookie, nullptr);
+    xcb_atom_t atom = reply ? reply->atom : static_cast<xcb_atom_t>(XCB_ATOM_NONE);
+    free(reply);
+    cache[name] = atom;
+    return atom;
+}
+
+static bool xsurface_has_type(struct wlr_xwayland_surface* xs, const char* type) {
+    xcb_atom_t atom = xatom(type);
+    if (atom == XCB_ATOM_NONE || !xs || !xs->window_type) return false;
+    for (size_t i = 0; i < xs->window_type_len; i++) {
+        if (xs->window_type[i] == atom) return true;
+    }
+    return false;
+}
+
+static bool xsurface_takes_pointer_grab(struct wlr_xwayland_surface* xs) {
+    if (!xs) return false;
+    // Toolkits also use override-redirect windows for passive helper UI.
+    // Those surfaces must render as overlays, but must not steal all future
+    // parent-window input. Menus/combo dropdowns are the pointer-owning cases.
+    if (xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_TOOLTIP") ||
+        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_NOTIFICATION") ||
+        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_DND") ||
+        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_SPLASH") ||
+        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_UTILITY")) {
+        return false;
+    }
+    if (xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU") ||
+        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_POPUP_MENU") ||
+        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_COMBO") ||
+        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_MENU")) {
+        return true;
+    }
+    // Preserve legacy behavior for untyped override-redirect popups: older
+    // clients may still use them as real grabbed menus.
+    return true;
+}
+
 // xpopup_send_geometry writes the offset control frame (< 45 bytes JSON).
 static void xpopup_send_geometry(XSurface* x) {
     json g = {{"x", x->sent_x}, {"y", x->sent_y}};
@@ -896,10 +1077,12 @@ static bool xpopup_map(XSurface* x) {
     x->sent_y = x->xsurf->y - parent->xsurf->y;
     xpopup_send_geometry(x);
     g_popup_reg[x->popup_chan] = PopupTarget{x->xsurf->surface, x->server};
-    // X11 override-redirect menus take an X pointer grab — own the pointer.
-    push_popup_grab(x->xsurf->surface, x->server, x->sent_x, x->sent_y);
-    wlr_log(WLR_INFO, "wash-display: X11 popup mapped parent_win=%u chan=%u off=%d,%d",
-            parent->sink.win, x->popup_chan, x->sent_x, x->sent_y);
+    bool grab = xsurface_takes_pointer_grab(x->xsurf);
+    if (grab)
+        push_popup_grab(parent->sink.win, x->xsurf->surface, x->server,
+                        x->sent_x, x->sent_y);
+    wlr_log(WLR_INFO, "wash-display: X11 popup mapped parent_win=%u chan=%u off=%d,%d grab=%d",
+            parent->sink.win, x->popup_chan, x->sent_x, x->sent_y, grab ? 1 : 0);
     return true;
 }
 
@@ -921,8 +1104,8 @@ void xsurface_map(struct wl_listener* listener, void* /*data*/) {
     }
     const char* title = x->xsurf->title;
     std::string ttl = title ? title : "X11 Window";
-    uint32_t w = x->xsurf->width  > 0 ? (uint32_t)x->xsurf->width  : (uint32_t)kScreenW;
-    uint32_t h = x->xsurf->height > 0 ? (uint32_t)x->xsurf->height : (uint32_t)kScreenH;
+    uint32_t w = x->xsurf->width  > 0 ? (uint32_t)x->xsurf->width  : (uint32_t)output_logical_w();
+    uint32_t h = x->xsurf->height > 0 ? (uint32_t)x->xsurf->height : (uint32_t)output_logical_h();
     // X clients aren't sized implicitly by us — configure them to their
     // own requested geometry so they paint at the expected dimensions.
     wlr_xwayland_surface_configure(x->xsurf, x->xsurf->x, x->xsurf->y,
@@ -950,7 +1133,8 @@ void xsurface_commit(struct wl_listener* listener, void* /*data*/) {
     XSurface* x = wl_container_of(listener, x, commit);
     if (x->is_popup) {
         if (!x->popup_chan) return;
-        if (!x->sink.cap.capture(x->xsurf->surface, x->server->renderer, 0, 0, 0, 0, false, /*preserve_alpha=*/true)) return;
+        if (!x->sink.cap.capture(x->xsurf->surface, x->server->renderer, 0, 0, 0, 0,
+                                 false, /*preserve_alpha=*/true, output_scale())) return;
         if (!x->sink.enc_ready || x->sink.enc.width() != x->sink.cap.width() ||
             x->sink.enc.height() != x->sink.cap.height()) {
             x->sink.enc_ready = x->sink.enc.init(x->sink.cap.width(), x->sink.cap.height());
@@ -1173,31 +1357,39 @@ static void inject_input(const json& data) {
         surface = it->second.surface;
         srv = it->second.server;
         g_ptr_win = 0; // over a popup → cursor-shape routing skips it (v1)
-    } else if (!g_popup_grabs.empty()) {
-        // A menu holds a pointer grab (M8d): parent-window input is redirected
-        // to it. Parent-canvas coords → popup-local by subtracting the popup's
-        // offset within the parent. A press that lands outside the popup bounds
-        // reaches the menu client as an outside-click → it dismisses itself
-        // (and the parent never sees the stray event that used to kill it).
-        PopupGrab& gr = g_popup_grabs.back();
-        surface = gr.surface;
-        srv = gr.server;
-        g_ptr_win = 0;
-        coord_dx = -gr.off_x;
-        coord_dy = -gr.off_y;
     } else {
         uint32_t win = data.value("win", 0U);
-        if (!resolve_win(win, &surface, &srv)) return;
-        g_ptr_win = win;
-        // The capture is cropped to the xdg window geometry (M5c — drops the
-        // CSD shadow margin), so the FE's canvas coords are relative to the
-        // crop origin. Add it back for true surface-local coords (X11 has no
-        // xdg geometry → zero).
-        if (struct wlr_xdg_surface* xs = wlr_xdg_surface_try_from_wlr_surface(surface)) {
-            struct wlr_box geo{};
-            wlr_xdg_surface_get_geometry(xs, &geo);
-            coord_dx = geo.x;
-            coord_dy = geo.y;
+        PopupGrab* active_grab = nullptr;
+        for (auto it = g_popup_grabs.rbegin(); it != g_popup_grabs.rend(); ++it) {
+            if (it->parent_win == win) {
+                active_grab = &*it;
+                break;
+            }
+        }
+        if (active_grab) {
+            // A menu holds a pointer grab (M8d): parent-window input is
+            // redirected to it. Parent-canvas coords → popup-local by
+            // subtracting the popup's offset within the parent. A press that
+            // lands outside the popup bounds reaches the menu client as an
+            // outside-click → it dismisses itself.
+            surface = active_grab->surface;
+            srv = active_grab->server;
+            g_ptr_win = 0;
+            coord_dx = -active_grab->off_x;
+            coord_dy = -active_grab->off_y;
+        } else {
+            if (!resolve_win(win, &surface, &srv)) return;
+            g_ptr_win = win;
+            // The capture is cropped to the xdg window geometry (M5c — drops the
+            // CSD shadow margin), so the FE's canvas coords are relative to the
+            // crop origin. Add it back for true surface-local coords (X11 has no
+            // xdg geometry → zero).
+            if (struct wlr_xdg_surface* xs = wlr_xdg_surface_try_from_wlr_surface(surface)) {
+                struct wlr_box geo{};
+                wlr_xdg_surface_get_geometry(xs, &geo);
+                coord_dx = geo.x;
+                coord_dy = geo.y;
+            }
         }
     }
     if (!surface || !srv || !srv->seat) return;
@@ -1483,6 +1675,14 @@ static void post_clip_offer(const std::string& mime) {
 // pipe handler), so wlroots calls are safe. Unknown win (already gone) is a
 // no-op.
 static void apply_win_cmd(const WinCmd& c) {
+    if (c.t == "display.dpi") {
+        apply_display_dpi(g_server, (int)c.w);
+        return;
+    }
+    if (c.t == "display.metrics") {
+        apply_display_metrics(g_server, (int)c.w, (int)c.h, (int)c.scale);
+        return;
+    }
     wlr_log(WLR_INFO, "wash-display: apply win cmd t=%s win=%u %ux%u",
             c.t.c_str(), c.win, c.w, c.h);
     WinRef ref;
@@ -1502,8 +1702,23 @@ static void apply_win_cmd(const WinCmd& c) {
     if (c.t == "window.focus" || c.t == "window.unfocus") {
         Server* srv = winref_server(ref);
         struct wlr_surface* surface = winref_surface(ref);
+        const bool active = c.t == "window.focus";
+        if (ref.kind == WinRef::XDG) {
+            auto* t = static_cast<Toplevel*>(ref.ptr);
+            if (t && t->xdg_toplevel) {
+                wlr_xdg_toplevel_set_activated(t->xdg_toplevel, active);
+            }
+        }
+#ifdef WASH_DISPLAY_XWAYLAND
+        else {
+            auto* x = static_cast<XSurface*>(ref.ptr);
+            if (x && x->xsurf) {
+                wlr_xwayland_surface_activate(x->xsurf, active);
+            }
+        }
+#endif
         if (srv && srv->seat) {
-            if (c.t == "window.focus" && surface) {
+            if (active && surface) {
                 struct wlr_keyboard* kb = wlr_seat_get_keyboard(srv->seat);
                 wlr_seat_keyboard_notify_enter(srv->seat, surface,
                                                kb ? kb->keycodes : nullptr,
@@ -1581,6 +1796,43 @@ void post_input(const json& data) {
     }
     // Wake the compositor thread via the same self-pipe the window commands
     // use. Byte value is irrelevant — on_cmd_pipe drains both queues.
+    if (g_cmd_pipe[1] >= 0) {
+        char b = 1;
+        ssize_t n = write(g_cmd_pipe[1], &b, 1);
+        (void)n;
+    }
+}
+
+void post_display_dpi(int dpi) {
+    dpi = clamp_dpi(dpi);
+    g_output_dpi.store(dpi);
+    {
+        std::lock_guard<std::mutex> lk(g_cmd_mu);
+        g_cmds.push_back(WinCmd{"display.dpi", 0, (uint32_t)dpi, 0});
+    }
+    if (g_cmd_pipe[1] >= 0) {
+        char b = 1;
+        ssize_t n = write(g_cmd_pipe[1], &b, 1);
+        (void)n;
+    }
+}
+
+void post_display_metrics(int width, int height, int scale) {
+    width = clamp_screen_w(width);
+    height = clamp_screen_h(height);
+    scale = clamp_scale(scale);
+    g_output_w.store(width);
+    g_output_h.store(height);
+    g_output_scale.store(scale);
+    {
+        std::lock_guard<std::mutex> lk(g_cmd_mu);
+        WinCmd c;
+        c.t = "display.metrics";
+        c.w = (uint32_t)width;
+        c.h = (uint32_t)height;
+        c.scale = (uint32_t)scale;
+        g_cmds.push_back(c);
+    }
     if (g_cmd_pipe[1] >= 0) {
         char b = 1;
         ssize_t n = write(g_cmd_pipe[1], &b, 1);
@@ -1766,7 +2018,7 @@ int run_compositor(WireConn& conn) {
 #endif
 
     // Give the headless backend one virtual output so clients see a display.
-    wlr_headless_add_output(server.backend, kScreenW, kScreenH);
+    wlr_headless_add_output(server.backend, output_w(), output_h());
 
     const char* socket = wl_display_add_socket_auto(server.display);
     if (!socket) {
@@ -1799,6 +2051,10 @@ int run_compositor(WireConn& conn) {
     {
         json pub;
         pub["WASH_WAYLAND_DISPLAY"] = socket;
+        pub["WASH_DISPLAY_DPI"] = std::to_string(g_output_dpi.load());
+        pub["WASH_DISPLAY_WIDTH"] = std::to_string(output_w());
+        pub["WASH_DISPLAY_HEIGHT"] = std::to_string(output_h());
+        pub["WASH_DISPLAY_SCALE"] = std::to_string(output_scale());
         if (const char* xrd = std::getenv("XDG_RUNTIME_DIR"); xrd && *xrd) {
             pub["WASH_XDG_RUNTIME_DIR"] = xrd;
         }

@@ -66,6 +66,11 @@ std::vector<uint8_t> b64_decode(const std::string& in) {
     }
     return out;
 }
+
+FrameClass class_for_channel_kind(const std::string& kind) {
+    if (kind == "video" || kind == "video-popup") return FrameClass::Bulk;
+    return FrameClass::Interactive;
+}
 } // namespace
 
 WireConn::~WireConn() {
@@ -153,6 +158,12 @@ void WireConn::reader_loop() {
                 if (it != chan_pending_.end()) {
                     it->second = {true, false, 0};
                     chan_cv_.notify_all();
+                }
+            } else if (t == "channel.closed") {
+                uint32_t cid = m.value("channel_id", 0U);
+                if (cid) {
+                    std::lock_guard<std::mutex> lk(chan_mu_);
+                    chan_class_.erase(cid);
                 }
             }
             continue;
@@ -319,16 +330,21 @@ uint32_t WireConn::open_channel_kind(uint32_t win, const std::string& kind) {
     chan_cv_.wait(lk, [&] { return chan_pending_[req].done || !alive_.load(); });
     Reply r = chan_pending_[req];
     chan_pending_.erase(req);
+    if (r.ok && r.value) {
+        chan_class_[r.value] = class_for_channel_kind(kind);
+    }
     return r.ok ? r.value : 0;
 }
 
 bool WireConn::write_channel(uint32_t channelID, const uint8_t* data, size_t n) {
-    Frame f;
-    f.flags = FLAG_END;
-    f.channel = channelID;
-    f.payload.assign(reinterpret_cast<const char*>(data), n);
+    FrameClass cls = FrameClass::Interactive;
+    {
+        std::lock_guard<std::mutex> lk(chan_mu_);
+        auto it = chan_class_.find(channelID);
+        if (it != chan_class_.end()) cls = it->second;
+    }
     std::lock_guard<std::mutex> lk(write_mu_);
-    return write_frame(fd_, f);
+    return write_raw_frame(fd_, flags_with_class(FLAG_END, cls), channelID, data, n);
 }
 
 bool WireConn::send_app_msg(uint32_t win, const json& data) {
@@ -397,6 +413,22 @@ void WireConn::note_wayland_display(const std::string& wd) {
     emit_display_state();
 }
 
+void WireConn::note_display_dpi(int dpi) {
+    if (dpi <= 0) dpi = 96;
+    display_dpi_.store(dpi);
+    emit_display_state();
+}
+
+void WireConn::note_display_metrics(uint32_t width, uint32_t height, uint32_t scale) {
+    if (width == 0) width = 1920;
+    if (height == 0) height = 1080;
+    if (scale == 0) scale = 1;
+    display_width_.store(width);
+    display_height_.store(height);
+    display_scale_.store(scale);
+    emit_display_state();
+}
+
 void WireConn::note_window_delta(int d) {
     window_count_.fetch_add(d);
     emit_display_state();
@@ -414,7 +446,11 @@ void WireConn::emit_display_state() {
         payload = json{{"kind", "display.state"},
                        {"running", true},
                        {"wayland_display", wayland_display_},
-                       {"window_count", n}};
+                       {"window_count", n},
+                       {"dpi", display_dpi_.load()},
+                       {"display_width", display_width_.load()},
+                       {"display_height", display_height_.load()},
+                       {"display_scale", display_scale_.load()}};
         targets.assign(subs_.begin(), subs_.end());
     }
     for (const auto& id : targets) send_app_msg_to(id, payload);

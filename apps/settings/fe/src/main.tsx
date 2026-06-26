@@ -203,8 +203,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         msgSubs.get(app)?.forEach((cb) => cb(payload));
         return;
       }
-      // svc.restart_done is intentionally ignored: panels drive their own
-      // post-restart UI off the service's next state push.
+      case 'svc.restart_done': {
+        // Restart/start is initiated by a hosted panel but completed by the
+        // settings BE, so fan the completion back through the same per-app
+        // message subscription path as service pushes.
+        const app = (msg as { app?: string }).app || '';
+        if (!app) return;
+        msgSubs.get(app)?.forEach((cb) => cb(msg as Record<string, unknown>));
+        return;
+      }
     }
   };
 

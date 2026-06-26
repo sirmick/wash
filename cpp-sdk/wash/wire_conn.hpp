@@ -147,6 +147,8 @@ public:
     // push on every window open/close. All three are fire-and-forget
     // send_app_msg, safe from either thread.
     void note_wayland_display(const std::string& wd);
+    void note_display_dpi(int dpi);
+    void note_display_metrics(uint32_t width, uint32_t height, uint32_t scale);
     void note_window_delta(int d);
     void emit_display_state();
     // add/remove_subscriber track which instances asked for display.state.
@@ -187,6 +189,7 @@ private:
     std::mutex chan_mu_;
     std::condition_variable chan_cv_;
     std::map<uint64_t, Reply> chan_pending_;
+    std::map<uint32_t, FrameClass> chan_class_;
 
     AppMsgHandler app_msg_handler_;
     WindowCmdHandler window_cmd_handler_;
@@ -209,6 +212,10 @@ private:
     std::mutex state_mu_;
     std::string wayland_display_;
     std::atomic<int> window_count_{0};
+    std::atomic<int> display_dpi_{96};
+    std::atomic<uint32_t> display_width_{1920};
+    std::atomic<uint32_t> display_height_{1080};
+    std::atomic<uint32_t> display_scale_{1};
     std::set<std::string> subs_; // display.state subscribers (guarded by state_mu_)
 };
 

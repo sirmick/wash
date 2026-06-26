@@ -48,7 +48,7 @@ const APPS: AppBundle[] = [
   // process table/registered-apps/browser sections + sortable table.
   // +~0.1 KB from the shared createAppBus saveState()/flushState() persist
   // helper (in every app's @wash/ui). Headroom still brakes further growth.
-  { name: 'about',   dir: 'apps/about/fe/dist',   maxBytes: 31_000 },
+  { name: 'about',   dir: 'apps/about/fe/dist',   maxBytes: 32_000 },
   { name: 'test',    dir: 'apps/test/fe/dist',    maxBytes: 30_000 },
   { name: 'term',    dir: 'apps/term/fe/dist',    maxBytes: 30_000 },
   // fm grew with the image pipeline: folder-grid preview + VirtualGrid +

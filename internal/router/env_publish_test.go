@@ -27,6 +27,16 @@ func hasEnv(env []string, key, val string) bool {
 	return false
 }
 
+func hasEnvKey(env []string, key string) bool {
+	prefix := key + "="
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // drainToIdentityAck performs the app handshake and consumes the initial
 // window.mapped event, leaving the app ready to send further events.
 func drainToIdentityAck(t *testing.T, app wire.FrameTransport) {
@@ -116,4 +126,22 @@ func TestEnvPublishRequiresCapability(t *testing.T) {
 
 	appPair.Close()
 	waitClose(t, appDone)
+}
+
+func TestInheritedAppEnvStripsHostDisplay(t *testing.T) {
+	t.Setenv("DISPLAY", ":99")
+	t.Setenv("WAYLAND_DISPLAY", "wayland-host")
+	t.Setenv("WAYLAND_SOCKET", "7")
+	t.Setenv("XAUTHORITY", "/tmp/host-xauth")
+	t.Setenv("WASH_X_DISPLAY", ":2")
+
+	env := inheritedAppEnv()
+	for _, key := range []string{"DISPLAY", "WAYLAND_DISPLAY", "WAYLAND_SOCKET", "XAUTHORITY"} {
+		if hasEnvKey(env, key) {
+			t.Fatalf("%s leaked into inherited app env: %v", key, env)
+		}
+	}
+	if !hasEnv(env, "WASH_X_DISPLAY", ":2") {
+		t.Fatalf("namespaced wash display hint should remain: %v", env)
+	}
 }

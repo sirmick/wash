@@ -71,8 +71,14 @@ export const Select: Component<{
   value: string;
   options: [string, string][];
   onChange: (v: string) => void;
+  'data-testid'?: string;
 }> = (props) => (
-  <select value={props.value} onInput={(e) => props.onChange(e.currentTarget.value)} style={selectStyle}>
+  <select
+    value={props.value}
+    data-testid={props['data-testid']}
+    onInput={(e) => props.onChange(e.currentTarget.value)}
+    style={selectStyle}
+  >
     <For each={props.options}>{([v, l]) => <option value={v}>{l}</option>}</For>
   </select>
 );

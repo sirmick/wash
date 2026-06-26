@@ -85,6 +85,8 @@ interface WashLinkSnapshot {
   rx_frames: number;
   raw_bytes: number;
   wire_bytes: number;
+  display_tx_bytes: number;
+  display_tx_frames: number;
 }
 
 interface WashLinkHealth {
@@ -95,6 +97,10 @@ interface WashLinkHealth {
   rateDownBps: number; // instant router→browser throughput
   peakDownBps: number;
   rateUpBps: number;   // instant browser→router throughput
+  displayBitrateBps: number; // instant display video bitrate, bits/s
+  displayPeakBitrateBps: number;
+  displayFps: number; // instant display video frames/s
+  displayPeakFps: number;
   bufferedAmount: number; // WS send-buffer backlog (browser→router)
   reconnects: number;     // FE-observed reconnects this page-load
   status: 'ok' | 'warn' | 'bad';
@@ -132,6 +138,8 @@ interface WashGlobals {
   settingsPanels(): WashPanelDesc[];
   onSettingsPanels(cb: (panels: WashPanelDesc[]) => void): () => void;
   loadSettingsPanel(appID: string): Promise<void>;
+  displayScaleMode(): 'auto' | '1' | '2';
+  setDisplayScaleMode(mode: 'auto' | '1' | '2'): 'auto' | '1' | '2';
   windows(): WashWindowInfo[];
   onWindowsChanged(cb: (windows: WashWindowInfo[]) => void): () => void;
   // origin (optional) addresses the intent to a specific router. Window ids

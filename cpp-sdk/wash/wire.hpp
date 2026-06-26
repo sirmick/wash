@@ -18,8 +18,23 @@
 namespace wash {
 
 constexpr uint8_t FLAG_END = 0x01;
+constexpr uint8_t FLAG_CLASS_MASK = 0x06;
+constexpr uint8_t FLAG_CLASS_SHIFT = 1;
 constexpr uint32_t CH_CONTROL = 0;
 constexpr uint32_t CH_EVENT = 1;
+
+enum class FrameClass : uint8_t {
+    Interactive = 0,
+    Bulk = 1,
+    Background = 2,
+    Control = 3,
+};
+
+inline uint8_t flags_with_class(uint8_t flags, FrameClass cls) {
+    return static_cast<uint8_t>((flags & ~FLAG_CLASS_MASK) |
+                                ((static_cast<uint8_t>(cls) << FLAG_CLASS_SHIFT) &
+                                 FLAG_CLASS_MASK));
+}
 
 struct Frame {
     uint8_t flags = FLAG_END;
@@ -63,6 +78,24 @@ inline bool write_frame(int fd, const Frame& f) {
     if (!writen(fd, hdr, 8)) return false;
     if (len == 0) return true;
     return writen(fd, f.payload.data(), len);
+}
+
+inline bool write_raw_frame(int fd, uint8_t flags, uint32_t channel,
+                            const uint8_t* data, size_t n) {
+    if (n > 0xFFFFFFFFu) return false;
+    uint8_t hdr[8];
+    hdr[0] = flags;
+    hdr[1] = static_cast<uint8_t>(channel >> 16);
+    hdr[2] = static_cast<uint8_t>(channel >> 8);
+    hdr[3] = static_cast<uint8_t>(channel);
+    uint32_t len = static_cast<uint32_t>(n);
+    hdr[4] = static_cast<uint8_t>(len >> 24);
+    hdr[5] = static_cast<uint8_t>(len >> 16);
+    hdr[6] = static_cast<uint8_t>(len >> 8);
+    hdr[7] = static_cast<uint8_t>(len);
+    if (!writen(fd, hdr, 8)) return false;
+    if (len == 0) return true;
+    return writen(fd, data, n);
 }
 
 inline bool read_frame(int fd, Frame& f) {

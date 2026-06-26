@@ -41,6 +41,9 @@ type LinkStats struct {
 
 	rawBytes  atomic.Uint64 // pre-compression asset bytes  (set once step (c) lands)
 	wireBytes atomic.Uint64 // post-compression asset bytes  (set once step (c) lands)
+
+	displayTxBytes  atomic.Uint64 // video + video-popup payload bytes
+	displayTxFrames atomic.Uint64
 }
 
 // discardLinkStats is a sink for ShellSessions constructed without a
@@ -101,6 +104,12 @@ func (l *LinkStats) recordCompression(raw, onWire int) {
 	l.wireBytes.Add(uint64(onWire))
 }
 
+// recordDisplayTx counts one FE-bound wash-display video/popup frame.
+func (l *LinkStats) recordDisplayTx(n int) {
+	l.displayTxBytes.Add(uint64(n))
+	l.displayTxFrames.Add(1)
+}
+
 // sampleDepth raises class c's high-watermark to d if d is larger.
 func (l *LinkStats) sampleDepth(c wire.Class, d int) {
 	if d <= 0 {
@@ -139,6 +148,8 @@ func (l *LinkStats) snapshot(depth [numClasses]int) wire.LinkStatsSnapshot {
 	s.RxFrames = l.rxFrames.Load()
 	s.RawBytes = l.rawBytes.Load()
 	s.WireBytes = l.wireBytes.Load()
+	s.DisplayTxBytes = l.displayTxBytes.Load()
+	s.DisplayTxFrames = l.displayTxFrames.Load()
 	return s
 }
 
@@ -159,4 +170,10 @@ func (l *LinkStats) add(s wire.LinkStatsSnapshot) {
 	l.rxFrames.Add(s.RxFrames)
 	l.rawBytes.Add(s.RawBytes)
 	l.wireBytes.Add(s.WireBytes)
+	l.displayTxBytes.Add(s.DisplayTxBytes)
+	l.displayTxFrames.Add(s.DisplayTxFrames)
+}
+
+func isDisplayChannelKind(kind string) bool {
+	return kind == wire.ChannelKindVideo || kind == wire.ChannelKindVideoPopup
 }

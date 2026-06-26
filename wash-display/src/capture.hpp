@@ -6,10 +6,10 @@
 // backing buffer is POOLED and reused across frames — the Xwayland
 // churn gotcha (DISPLAY.md §11) means we must never alloc per frame.
 //
-// Capture goes through wlr_texture_read_pixels, which works for both
-// wl_shm (software) and dmabuf (GPU) client buffers via the renderer —
-// so a GTK app rendering with hardware accel is captured the same way
-// as a software terminal.
+// Capture draws the surface tree into a pooled render target, then reads
+// pixels back through the renderer. That works for both wl_shm (software)
+// and dmabuf (GPU) client buffers, so a hardware-accelerated GTK app is
+// captured the same way as a software terminal.
 //
 // Needs wlroots; only compiled in the WASH_DISPLAY_COMPOSITOR build.
 #pragma once
@@ -22,6 +22,12 @@ struct wlr_surface;
 struct wlr_renderer;
 
 namespace wash {
+
+struct SurfaceCaptureState {
+    uint32_t seq = 0;
+    uintptr_t texture = 0;
+    int x = 0, y = 0, w = 0, h = 0, order = 0;
+};
 
 class SurfaceCapture {
 public:
@@ -39,19 +45,20 @@ public:
     // toplevels report their visible bounds via wlr_xdg_surface_get_geometry,
     // and we capture only that rect so the transparent CSD margin (which would
     // flatten to black in the alpha-less XRGB read-back) never reaches the
-    // encoder. Zero/omit for the full surface (X11 apps, popups). Coords are
-    // surface-local = texture pixels at scale 1.0 (DISPLAY.md — DPI fixed 1.0).
+    // encoder. Zero/omit for the full surface (X11 apps, popups). Crop coords
+    // are surface-local logical coordinates; output_scale controls the physical
+    // frame pixels produced for each logical pixel.
     // force_full forces a whole-frame capture (bypasses the root-surface
     // damage skip). Set it when the capture is driven by a tree-change
     // signal rather than a root commit, since subsurface-only repaints leave
     // the root surface's damage empty (DISPLAY.md M7).
-    // preserve_alpha keeps the client's transparency (for SHAPED popups —
-    // menus with rounded corners + shadow). For toplevel windows it must be
-    // false: they are opaque, but a browser leaves stray alpha in its chrome,
-    // which would otherwise show the window behind through the gaps (M8c).
+    // preserve_alpha keeps the client's transparency for shaped popups,
+    // rounded menus, shadows, and transparent/shaped toplevel windows.
+    // Pass false only when a caller deliberately wants an opaque surface.
     bool capture(struct wlr_surface* surface, struct wlr_renderer* renderer,
                  int crop_x = 0, int crop_y = 0, int crop_w = 0, int crop_h = 0,
-                 bool force_full = false, bool preserve_alpha = false);
+                 bool force_full = false, bool preserve_alpha = false,
+                 int output_scale = 1);
 
     const uint8_t* data() const { return buf_.data(); }
     int width() const { return w_; }
@@ -60,7 +67,7 @@ public:
 
     // Dirty rectangle for this frame, in cropped-buffer coords. The whole
     // tree is composited, but only the union of the surfaces that actually
-    // changed (see seq_) is encoded/sent — M7 tree-aware damage.
+    // changed, moved, appeared, or vanished is encoded/sent.
     int dirty_x = 0, dirty_y = 0, dirty_w = 0, dirty_h = 0;
 
 private:
@@ -71,11 +78,12 @@ private:
     // (DISPLAY.md §11 — never alloc per frame).
     void* render_buf_ = nullptr;
     int rb_w_ = 0, rb_h_ = 0;
-    // Per-surface last-seen commit seq, keyed by surface pointer. A surface
-    // contributes to the dirty rect only when its seq advances, so a static
-    // surface's stale last-commit damage (e.g. a browser's root/CSD layer,
-    // damaged once at startup) doesn't force a full-frame encode every frame.
-    std::map<struct wlr_surface*, uint32_t> seq_;
+    // Per-surface last-seen commit/geometry state, keyed by surface pointer.
+    // A surface contributes to the dirty rect when its seq advances, when its
+    // texture/bounds/order changes, or when it vanished since the last frame.
+    // This keeps stale last-commit damage from static surfaces out of frames
+    // while still clearing old pixels after moved/removed subsurfaces.
+    std::map<struct wlr_surface*, SurfaceCaptureState> states_;
 };
 
 } // namespace wash
