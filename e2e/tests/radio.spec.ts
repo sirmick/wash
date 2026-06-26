@@ -59,20 +59,24 @@ test.describe('radio app (native player)', () => {
     // The curated list renders.
     const list = page.locator('[data-testid="station-list"]');
     await expect(list).toContainText('SomaFM');
+    await expect(page.locator('[data-testid="genre-electronic"]')).toBeVisible();
+    await expect(page.locator('[data-testid="subtype-electronic-downtempo-chill"]')).toBeVisible();
+    await expect(page.locator('[data-testid="subtype-rock-nu-metal"]')).toBeVisible();
 
     // Paste the fake stream URL → it's added as a station.
     await page.locator('[data-testid="add-url"]').fill(streamUrl);
     await page.locator('[data-testid="add-station"]').click();
     await expect(list).toContainText('127.0.0.1');
 
-    // Tune the added station (last row) → proxied over ingress.
+    // Tune the added station → proxied over ingress.
     const rows = list.locator('[data-testid^="media-row-"]');
-    await rows.last().dblclick();
+    const addedRow = rows.filter({ hasText: '127.0.0.1' });
+    await addedRow.dblclick();
     const resp = await streamed;
     expect(resp.status()).toBe(200);
 
     // The tuned row is marked playing.
-    await expect(rows.last()).toHaveAttribute('data-playing', 'true');
+    await expect(addedRow).toHaveAttribute('data-playing', 'true');
 
     // The live ICY StreamTitle propagates to the app + the sidebar.
     await expect(page.locator('[data-testid="radio-nowplaying"]')).toContainText('Now Playing Track');
@@ -105,7 +109,7 @@ test.describe('radio app (native player)', () => {
     // Tuning an unreachable station surfaces an offline state (not silence).
     await page.locator('[data-testid="add-url"]').fill('http://127.0.0.1:1/dead');
     await page.locator('[data-testid="add-station"]').click();
-    const deadRow = list.locator('[data-testid^="media-row-"]').last();
+    const deadRow = list.locator('[data-testid^="media-row-"]').filter({ hasText: '127.0.0.1:1' });
     await deadRow.dblclick();
     await expect(page.locator('[data-testid="radio-nowplaying"]')).toContainText('offline', { timeout: 10_000 });
   });

@@ -6,9 +6,10 @@ stations only — we list public stream URLs operators publish and play
 them; we host no content (VLC/Kodi model).
 
 **Implemented** — shipped in 0.9.0 (`apps/radio/`, `com.wash.radio`),
-e2e-tested, with live ICY now-playing titles + favorites. Sibling of
-`docs/MUSIC.md`; same **list + transport + info** skeleton. Where Music's
-"list" is files in a folder, Radio's "list" is stations.
+e2e-tested, with a broad-genre tree, live ICY now-playing titles,
+stream details, and favorites. Sibling of `docs/MUSIC.md`; same **list +
+transport + info** skeleton. Where Music's "list" is files in a folder,
+Radio's "list" is stations.
 
 **Architecture (decided 2026-06-12):** a **separate thin app over shared
 libraries** (architecture A — see `docs/MUSIC.md`), reusing
@@ -20,12 +21,20 @@ Not a mode of a combined app.
 **In:**
 - Single window. Transport: **play / pause / prev / next** (prev/next step
   the station list). Volume (§6, same as Music).
-- A **station list**: a curated built-in set + an optional "Popular" fetch
-  (§2). Add/remove your own by pasting a stream URL; the set persists.
-- A small **now-playing info** panel: station + live track (ICY).
+- A **nested station tree**: a curated built-in set grouped by broad genres
+  (Electronic, Ambient, Rock, Pop, Hip-Hop/R&B, Country/Americana, Latin/World,
+  Jazz, Classical, Reggae/Ska, Metal, Folk, Oldies/Soul, Lounge, Eclectic)
+  and subtypes where useful. Electronic includes downtempo/chill, deep house,
+  progressive/trance, IDM, drum & bass, dubstep/bass, electropop/synthpop,
+  vaporwave, ambient/space, and techno; Rock includes alternative/modern,
+  indie rock, punk rock, hard rock, and nu-metal. Add/remove your own by
+  pasting a stream URL; the set persists under Custom.
+- A small **now-playing info** panel: station + live track (ICY) plus
+  stream headers when available (`Content-Type`, `icy-br`, `icy-name`,
+  `icy-genre`, `icy-url`, `icy-description`, `icy-metaint`).
 
-**Out (v1):** genre/tag/country search & filters, favorites folders,
-ratings, station logos galleries, HLS. (Filters/search → "later".)
+**Out (v1):** tag/country search & filters, favorites folders, ratings,
+station logos galleries, HLS. (Filters/search → "later".)
 
 ## 2. Station list — sources (DISCUSS)
 
@@ -34,8 +43,8 @@ The whole free/open landscape, best-first, then a recommended mix:
 - **Radio Browser** (`api.radio-browser.info`) — the de-facto open
   directory: free, **no API key**, ~50k stations, CC0, clean JSON,
   mirrored. `/json/stations/topclick/N` (or `/topvote/N`) = **popular**;
-  also search/tags/countries (deferred). Server-side fetch (CORS +
-  `User-Agent` + cache). Best for the dynamic "Popular" list.
+  also search/tags/countries (deferred). Best for a future dynamic
+  directory/search path.
 - **SomaFM** (`somafm.com/channels.json`) — not a directory but a curated
   set of ~40 excellent commercial-free, listener-supported channels with a
   clean JSON + direct streams. Reliable, high-quality, free → ideal as the
@@ -49,19 +58,17 @@ The whole free/open landscape, best-first, then a recommended mix:
 - **internet-radio.com / TuneIn / iHeart** — **no clean API**.
   internet-radio.com only exposes `.pls`/`.m3u` links on HTML pages (scrape
   + playlist-parse, fragile); TuneIn/iHeart are proprietary. We don't pull
-  from these — but we *can* play any `.pls`/`.m3u` a user pastes (the BE
-  resolves the playlist to its stream URL).
+  from these. Direct stream URLs from any source can still be pasted.
 
 **Recommended mix (minimalist):**
 - **Default list = curated**, seeded from **SomaFM** (`channels.json`) +
-  **Radio Paradise** + a handful of hand-picked public stations (FIP, KEXP,
-  etc.). Works offline-ish, reliable, no key.
-- **"Popular" button = Radio Browser** `topclick` (dynamic, optional).
-- **"+URL"** — paste any Icecast/Shoutcast/`.pls`/`.m3u`; persists via
-  `app_state`.
-
-Open question for you: is curated-SomaFM-first the right default, or do you
-want the list to open straight onto Radio Browser "popular"? (See chat.)
+  **Radio Paradise** + a handful of hand-picked public stations from Radio
+  Browser research. Works offline-ish, reliable, no key. Current emphasis:
+  breadth across popular genres, with electronic and rock exposed as nested
+  subtype groups.
+- **"+URL"** — paste a direct Icecast/Shoutcast/native audio stream URL;
+  persists via `app_state`. Playlist URLs (`.pls`, `.m3u`, HLS `.m3u8`) are
+  later work.
 
 ## 3. Layout
 
@@ -75,7 +82,7 @@ want the list to open straight onto Radio Browser "popular"? (See chat.)
 │  ○ Radio Paradise                               │
 │  …                                              │
 ├─────────────────────────────────────────────────┤
-│ [◁◁] [▷/❚❚] [▷▷]   🔊 ▭▭▭▭▭───  [Popular][+URL] │  ← transport + volume + list ops
+│ [◁◁] [▷/❚❚] [▷▷]   🔊 ▭▭▭▭▭───       [+URL] │  ← transport + volume + list ops
 └─────────────────────────────────────────────────┘
 ```
 
@@ -90,16 +97,19 @@ most radio without them), both via the ingress proxy:
    streams are `http` → the browser blocks them as mixed content, and
    cross-origin `<audio>` has no CORS. The BE dials the upstream stream and
    republishes it through `PublishIngress` (same-origin `/app/<token>/…`),
-   so `<audio>` plays a same-origin URL. Also resolves a pasted `.pls`/`.m3u`
-   to its underlying stream.
+   so `<audio>` plays a same-origin URL.
 2. **ICY metadata.** Browsers don't expose Shoutcast/Icecast `StreamTitle`.
    The BE requests upstream with `Icy-MetaData: 1`, reads `icy-metaint`,
    parses the interleaved blocks server-side, **strips them from the bytes
    it forwards** (clean audio to `<audio>`), and reports the current track
    title → control plane → sidebar. This is how live now-playing works.
+3. **Stream details.** When an upstream connects, the BE forwards safe
+   response/header facts to the FE: content type, bitrate, station/genre
+   headers, public station URL/description, and metadata interval. This is
+   best-effort; many stations omit some or all of these fields.
 
-Plus the small **directory proxy** for source B (server-side Radio Browser
-fetch + cache). The curated list (A) is just shipped data.
+The curated list (A) is shipped data. A server-side Radio Browser fetch/cache
+path remains a later directory/search feature.
 
 ## 5. Playback + control plane
 
@@ -120,8 +130,8 @@ Same as `docs/MUSIC.md §6`: in-window per-source volume + sidebar master,
 
 Same as `docs/MUSIC.md §7`: `internal/medialib` (here the "serve" leg is
 the §4 stream-proxy rather than a file server), the `@wash/ui` media kit
-(`TransportControls`/`NowPlaying`/`MediaList`/`VolumeSlider`; `SeekBar` runs
-in non-seekable "live" mode), and `@wash/audio-client`.
+(`TransportControls`/`NowPlaying`/`VolumeSlider`; `SeekBar` runs in
+non-seekable "live" mode), and `@wash/audio-client`.
 
 ## 8. Data path
 
@@ -143,10 +153,24 @@ In-test **fake station server**: serves a short looping MP3/PCM with
 `icy-metaint` + a rotating `StreamTitle`, plus a fake Radio-Browser
 `topclick` endpoint returning it. Assert: the curated list renders; tuning
 a station issues an ingress GET (200/streamed); the info panel shows the
-station then the rotating ICY title; prev/next retunes; "Popular" lists the
-fake station; a pasted URL plays; now-playing reaches the sidebar.
+station then the rotating ICY title; prev/next retunes in tree order; a
+pasted URL plays; now-playing reaches the sidebar.
 
-## 10. Later (not v1)
+## 10. Last.fm
 
-Genre/tag/country search & filters (Radio Browser), favorites, station
-logos, HLS (`hls.js`), sleep timer, click reporting to Radio Browser.
+Possible, but separate from basic playback:
+
+- `track.getInfo` can enrich parsed ICY titles with Last.fm tags/wiki/URLs
+  using a Last.fm API key and no user auth.
+- `track.updateNowPlaying` and `track.scrobble` require an API key, API
+  signature, and authenticated Last.fm session key, and must be POSTed.
+- Good integration point: parse `Artist - Track` from ICY, debounce title
+  changes, then optionally call Last.fm only when a key/session is
+  configured. Keep it opt-in because many radio StreamTitle values are
+  messy and not every transition represents a user-listened scrobble.
+
+## 11. Later (not v1)
+
+Tag/country search & filters (Radio Browser), favorites folders, station
+logos, HLS (`hls.js`), sleep timer, click reporting to Radio Browser, and
+optional Last.fm enrichment/scrobbling.
