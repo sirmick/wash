@@ -6,7 +6,7 @@ from scipy.spatial import cKDTree
 SRC=sys.argv[1]; OUT=sys.argv[2]
 MIN_DIST=float(sys.argv[3]) if len(sys.argv)>3 else 6.0   # min spacing between dot centers (px)
 BGthr=int(sys.argv[4]) if len(sys.argv)>4 else 45         # brightness below this = background gap
-RSCALE=float(sys.argv[5]) if len(sys.argv)>5 else 1.15    # dot radius scale (overlap if >1)
+RSCALE=float(sys.argv[5]) if len(sys.argv)>5 else 1.0     # dot radius scale (applied within the no-overlap cap)
 MARG=int(sys.argv[6]) if len(sys.argv)>6 else 360         # black-frame margin
 
 im=Image.open(SRC).convert('RGB'); a=np.asarray(im); H,W,_=a.shape
@@ -43,9 +43,12 @@ for i in range(n):
     if len(seg)==0: fills.append('#000000'); continue
     r,g,b=int(np.median(seg[:,0])),int(np.median(seg[:,1])),int(np.median(seg[:,2]))
     fills.append('#%02x%02x%02x'%(r,g,b))
-# radius: image dot radius (dt) blended toward cell size, scaled
+# radius: image dot radius (dt), scaled, then HARD-capped just under half the
+# nearest-neighbour distance. Capping at <=0.5*nn guarantees no two dots overlap
+# (for any pair, r_i+r_j <= 0.5*d_i+0.5*d_j <= dist), and the 0.92 leaves a
+# sliver of breathing room so they read as distinct, slightly smaller stones.
 nn=tree.query(np.column_stack([cx,cy]),k=2)[0][:,1]
-rad=np.minimum(np.maximum(cr,1.5), nn*0.62)*RSCALE
+rad=np.minimum(np.maximum(cr,1.5)*RSCALE, nn*0.5*0.92)
 # frame + emit. MARG/BW default to 0 → a full-bleed painting (black field +
 # dots, edge to edge) so the wallpaper covers the whole viewport; any black
 # frame is now a theme concern (--wash-viewport-border). Pass MARG>0 (arg 6)

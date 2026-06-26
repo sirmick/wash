@@ -2080,12 +2080,13 @@ const taskbarStyle: JSX.CSSProperties = {
   height: '40px',
   // Configurable backdrop: a pack sets the color (--wash-taskbar-bg), the
   // opacity of that color over the surface behind (--wash-taskbar-opacity,
-  // default 88%), and the frost blur (--wash-taskbar-blur, default 10px).
-  // Sunken grey at 88% by default so the bar reads a touch darker than
-  // windows; a pack can make it solid, more transparent, or unblurred.
-  background: `color-mix(in srgb, var(--wash-taskbar-bg, ${tokens.bgInset}) var(--wash-taskbar-opacity, 88%), transparent)`,
-  'backdrop-filter': 'blur(var(--wash-taskbar-blur, 10px))',
-  '-webkit-backdrop-filter': 'blur(var(--wash-taskbar-blur, 10px))',
+  // default 80%), and the frost blur (--wash-taskbar-blur, default 6px).
+  // Sunken grey at 80% by default so the bar reads a touch darker than
+  // windows while letting more of the wallpaper through; a pack can make it
+  // solid, more transparent, or unblurred.
+  background: `color-mix(in srgb, var(--wash-taskbar-bg, ${tokens.bgInset}) var(--wash-taskbar-opacity, 80%), transparent)`,
+  'backdrop-filter': 'blur(var(--wash-taskbar-blur, 6px))',
+  '-webkit-backdrop-filter': 'blur(var(--wash-taskbar-blur, 6px))',
   // Top edge: a pack can paint a raised highlight here (NT does).
   'border-top': `1px solid var(--wash-taskbar-top, ${tokens.borderMenu})`,
   display: 'flex',

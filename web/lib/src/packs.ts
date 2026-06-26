@@ -340,6 +340,10 @@ const copland: Pack = {
     // the taskbar (40px) — the classic Win9x/Platinum look, no float gap.
     '--wash-startmenu-left': '0',
     '--wash-startmenu-bottom': '40px',
+    // Old-box menus: appear instantly with no drop shadow, the way a 90s
+    // machine drew them — no slide/pop animation, no float.
+    '--wash-menu-anim': 'none',
+    '--wash-shadow-menu': 'none',
   },
   wallpaper: 'wallpapers/copland.svg',
   fonts: [{ family: 'Chicago', url: 'fonts/Chicago.woff2' }],

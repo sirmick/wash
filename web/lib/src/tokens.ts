@@ -177,8 +177,9 @@ export const tokens = {
   // Dreamtime uses `5px solid #000` for an elegant black frame.
   wallpaperBorder: 'var(--wash-wallpaper-border, 0 solid transparent)',
 
-  // Shadows.
-  shadowMenu: '0 6px 16px rgba(0,0,0,0.5)',
+  // Shadows. shadowMenu is var()-backed so a pack can flatten menu/start-menu
+  // drop shadows — Copland sets `--wash-shadow-menu: none` for an old-box look.
+  shadowMenu: 'var(--wash-shadow-menu, 0 6px 16px rgba(0,0,0,0.5))',
   shadowModal: '0 12px 28px rgba(0,0,0,0.5)',
   shadowPalette: '0 16px 48px rgba(0,0,0,0.6)',
 
@@ -194,10 +195,14 @@ export const tokens = {
   // Animation. Names refer to @keyframes defined in shell/index.html
   // (must live in the document root since shadow-DOM-mounted apps
   // can't reach styles declared in their own bundles).
+  // The two menu open effects are var()-backed via a single
+  // `--wash-menu-anim` so a pack can disable the open effect (set it to
+  // `none`) — Copland does, for an instant old-box menu. Other packs keep
+  // the distinct per-effect defaults below.
   animFadeIn: 'wash-fade-in 120ms ease-out',
   animPopIn: 'wash-pop-in 140ms ease-out',
-  animPopInFast: 'wash-pop-in 100ms ease-out',
-  animSlideUp: 'wash-slide-up 140ms ease-out',
+  animPopInFast: 'var(--wash-menu-anim, wash-pop-in 100ms ease-out)',
+  animSlideUp: 'var(--wash-menu-anim, wash-slide-up 140ms ease-out)',
 } as const;
 
 export type Tokens = typeof tokens;
