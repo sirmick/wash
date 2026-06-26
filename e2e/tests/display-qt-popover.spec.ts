@@ -43,9 +43,16 @@ function buildGuest(): string | { skip: string } {
 
 test.use({ routerOpts: { apps: ['session', 'term', 'display'], showHidden: true } });
 
-test('Qt programmatic menu → popover overlay; dialog → window', async ({ page, router }) => {
+// Skip BEFORE the router fixture is set up — it stages the wash-display binary
+// and throws if absent (router.ts stageApps). CI builds no compositor, so this
+// must short-circuit in a beforeEach: a test.skip() inside the body runs only
+// after the router fixture has already thrown. Mirrors display-input-smoke.
+test.beforeEach(() => {
   const dreason = displaySkipReason();
   test.skip(dreason !== null, dreason ?? '');
+});
+
+test('Qt programmatic menu → popover overlay; dialog → window', async ({ page, router }) => {
   const built = buildGuest();
   if (typeof built !== 'string') { test.skip(true, built.skip); return; }
   const guest = built;
