@@ -1,6 +1,6 @@
 Name:           wash
 Version:        0.9.6
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
 License:        AGPL-3.0-or-later
@@ -205,6 +205,17 @@ fi
 exit 0
 
 %changelog
+* Thu Jun 25 2026 sirmick <sirmick@gmail.com> - 0.9.6-2
+- wash-display: HiDPI display scaling, virtual output sized from shell metrics,
+  guest-surface activation on wash focus, Xwayland popup pointer grabs,
+  link-bitrate tracking + display framerate in About, Settings status polling.
+- Render Qt menu-fallback toplevels as popover overlays.
+- theme: net/services idiom, UI mono cleanup, Copland vintage wallpaper,
+  non-overlapping Dreamtime dots, terminal inset, themeable menu effect/shadow.
+- fix(session): don't let the clipboard widget's mount-time seed clobber a newer
+  paste.
+- fix(router): order bulk-download completion + teardown behind the bytes.
+
 * Wed Jun 24 2026 sirmick <sirmick@gmail.com> - 0.9.6-1
 - Theme packs: new Dreamtime (dot-painting) + Copland packs; per-theme
   wallpaper extent/border, configurable taskbar backdrop, bundled fonts.

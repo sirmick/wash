@@ -1,3 +1,19 @@
+wash (0.9.6-2) unstable; urgency=low
+
+  * wash-display: HiDPI display scaling, virtual output sized from shell
+    metrics, guest-surface activation on wash focus, Xwayland popup pointer
+    grabs, link-bitrate tracking + display framerate in About, display
+    service-status polling in Settings.
+  * Render Qt menu-fallback toplevels as popover overlays.
+  * Theme polish: net/services idiom, UI mono cleanup, Copland vintage
+    wallpaper, non-overlapping Dreamtime dots, terminal inset, themeable
+    menu effect/shadow, softer chrome.
+  * fix(session): don't let the clipboard widget's mount-time seed clobber a
+    newer paste.
+  * fix(router): order bulk-download completion + teardown behind the bytes.
+
+ -- sirmick <sirmick@gmail.com>  Thu, 25 Jun 2026 12:00:00 -0700
+
 wash (0.9.6-1) unstable; urgency=low
 
   * Theme packs: new Dreamtime pack (Aboriginal dot-painting wallpaper) and
