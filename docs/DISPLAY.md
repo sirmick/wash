@@ -445,8 +445,23 @@ in-band as a sub-45-byte JSON control frame; pixel frames are ≥45 bytes.
 - **M3b (X11)**: `xsurface_map` branches on `override_redirect` → same overlay path,
   parented to the transient-for window (else the most-recently-mapped toplevel),
   offset = `menu.xy − parent.xy` in X root coords. This is p4v's / Qt-X11's menu path.
-- Deferred: popup keyboard focus; the X11 clipboard guest→wash leg rides wlroots' xwm
-  X→Wayland selection sync (the wash-side bridge is M2, verified on Wayland).
+- **M3c (Qt menu-fallback toplevels)**: Qt only emits a grabbing `xdg_popup` for a
+  menu when it has a fresh input serial. Opened without one (programmatic
+  `showPopup()`/`QMenu::popup()`, some menus) Qt instead maps a *parented, untitled
+  `xdg_toplevel`* — which would otherwise become a wrong-sized, non-grabbing wash
+  window ("Qt popovers wrong size & no input"). `toplevel_setup_popover` detects
+  these (`xdg_toplevel.parent` set + no real title — empty or `== app_id` — + not
+  near-fullscreen) and routes them through the *same* overlay path (video-popup
+  channel + `g_popup_reg` + `push_popup_grab` on the parent's win), anchored at the
+  last pointer position since a fallback toplevel carries no positioner. A titled
+  `QDialog` keeps a distinct title → stays a real wash window. Real-click menus and
+  submenus already chain as `xdg_popup`s (M3a) and are unaffected. Other wlroots
+  compositors (sway/labwc) instead float these as windows centred on the parent;
+  wash has a purpose-built overlay path, so it gets the correct popover UX. Tested
+  end-to-end against a real Qt6 app (`e2e/tests/display-qt-popover.spec.ts`).
+- Deferred: popup keyboard focus; nested *fallback* submenus (a serial-less submenu
+  of a fallback-toplevel menu) stay windows; the X11 clipboard guest→wash leg rides
+  wlroots' xwm X→Wayland selection sync (the wash-side bridge is M2, verified on Wayland).
 
 ### M4 — cursor shape forwarding ✅
 The guest names its cursor via **cursor-shape-v1**; the compositor

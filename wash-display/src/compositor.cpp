@@ -223,6 +223,16 @@ struct Server {
 // X11 windows): one wash window id, its video channel, and the pooled
 // capture+WebP encoder. Both Toplevel and XSurface embed one so the
 // frame path is written once. (Defined before Toplevel, which embeds it.)
+// Pointer focus + last position, compositor-thread-only. A motion to a new
+// surface re-enters the seat pointer there; buttons/axis without a fresh
+// motion reuse the last position. (Declared up here so toplevel_map can
+// anchor a menu-fallback popover at the pointer; defined once, used below.)
+static struct wlr_surface* g_ptr_surface = nullptr;
+static double g_ptr_x = 0.0, g_ptr_y = 0.0;
+// The wash window the pointer is currently over (0 if over a popup), so a
+// cursor-shape change can be routed to that window's video channel (M4).
+static uint32_t g_ptr_win = 0;
+
 struct WindowSink {
     uint32_t win = 0;        // wash window id (0 until mapped)
     uint32_t video_chan = 0; // per-window video channel (0 until opened)
@@ -234,6 +244,14 @@ struct WindowSink {
     bool enc_ready = false;
     uint64_t tree_sig = ~0ull; // last captured surface-tree signature (M7);
                                // sentinel forces the first capture
+    // Menu-fallback popover (DISPLAY.md §12): a parented, untitled toplevel
+    // that Qt creates instead of an xdg_popup when it has no input serial
+    // (programmatic menus). Streamed as a popup overlay on the parent's win
+    // rather than a standalone wash window. 0/false for a normal window.
+    bool popover = false;
+    uint32_t popover_chan = 0;   // video-popup channel on popover_parent
+    uint32_t popover_parent = 0; // parent toplevel's wash win
+    int popover_off_x = 0, popover_off_y = 0; // anchor in parent canvas coords
 };
 
 // --- window-command registry + cross-thread queue ------------------
@@ -559,8 +577,21 @@ void server_new_output(struct wl_listener* listener, void* data) {
 
 // --- toplevel ------------------------------------------------------
 
+// Menu-fallback popover helpers (defined after the popup-grab machinery,
+// which they reuse). toplevel_setup_popover returns true when the toplevel
+// is a parented, untitled menu that Qt mapped as a toplevel for lack of an
+// input serial — streamed as a grabbing popup overlay instead of a window.
+static bool toplevel_setup_popover(Toplevel* t);
+static void toplevel_teardown_popover(Toplevel* t);
+static void popover_send_frame(Toplevel* t);
+
 void toplevel_map(struct wl_listener* listener, void* /*data*/) {
     Toplevel* t = wl_container_of(listener, t, map);
+
+    // A Qt menu/popover opened without an input serial arrives as a parented
+    // xdg_toplevel (not an xdg_popup). Render it as a popup overlay anchored
+    // to its parent, not as a standalone wash window (DISPLAY.md §12).
+    if (toplevel_setup_popover(t)) return;
 
     const char* title = t->xdg_toplevel->title;
     std::string ttl = title ? title : "Window";
@@ -581,6 +612,10 @@ void toplevel_map(struct wl_listener* listener, void* /*data*/) {
 
 void toplevel_unmap(struct wl_listener* listener, void* /*data*/) {
     Toplevel* t = wl_container_of(listener, t, unmap);
+    if (t->sink.popover) {
+        toplevel_teardown_popover(t);
+        return;
+    }
     unregister_win(t->sink.win);
     sink_close(t->sink, t->server->conn);
 }
@@ -591,6 +626,13 @@ void toplevel_commit(struct wl_listener* listener, void* /*data*/) {
     // its own size by configuring 0x0.
     if (t->xdg_toplevel->base->initial_commit) {
         wlr_xdg_toplevel_set_size(t->xdg_toplevel, 0, 0);
+        return;
+    }
+    // A menu-fallback popover is streamed like an xdg_popup: capture+encode
+    // on each commit (menus are simple surfaces with no desync subsurfaces),
+    // not from output_frame (which only walks registered wash windows).
+    if (t->sink.popover) {
+        popover_send_frame(t);
         return;
     }
     // Capture is driven from output_frame (M7) by a surface-tree change
@@ -650,6 +692,9 @@ void toplevel_request_fullscreen(struct wl_listener* listener, void* /*data*/) {
 
 void toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
     Toplevel* t = wl_container_of(listener, t, destroy);
+    // A popover destroyed while still mapped (no unmap first) must drop its
+    // grab + registry entry so no dangling surface pointer survives.
+    if (t->sink.popover) toplevel_teardown_popover(t);
     unregister_win(t->sink.win);
     sink_close(t->sink, t->server->conn);
     wl_list_remove(&t->map.link);
@@ -762,6 +807,122 @@ static void pop_popup_grab(struct wlr_surface* s) {
     for (auto it = g_popup_grabs.begin(); it != g_popup_grabs.end(); ++it) {
         if (it->surface == s) { g_popup_grabs.erase(it); return; }
     }
+}
+
+// --- menu-fallback popovers (parented xdg_toplevels) -------------------
+//
+// Qt creates a grabbing xdg_popup for a menu ONLY when it has a fresh input
+// serial. Opened without one (programmatic show, some menus), Qt instead maps
+// a parented xdg_toplevel with no real window title. Other wlroots
+// compositors (sway/labwc) float these as windows near the parent; wash has a
+// purpose-built popup-overlay path, so we route a menu-like fallback toplevel
+// through it: a video-popup channel + grab on the parent's win, exactly like
+// an xdg_popup. A dialog (it sets a distinct title) stays a real window.
+
+// toplevel_is_popover: a parented toplevel with no window title of its own
+// (empty, or == app_id — Qt's menu fallback) that is not near-fullscreen.
+// Conservative: anything that looks like a real/dialog window stays a window.
+static bool toplevel_is_popover(struct wlr_xdg_toplevel* tl) {
+    if (!tl || !tl->parent) return false;
+    if (tl->requested.maximized || tl->requested.fullscreen) return false;
+    const char* title = tl->title;
+    const char* app = tl->app_id;
+    const bool untitled = !title || !*title || (app && std::strcmp(title, app) == 0);
+    if (!untitled) return false;
+    // A menu/popover is small; a large parented surface is a dialog/window
+    // even when it carries no title.
+    struct wlr_box geo{};
+    wlr_xdg_surface_get_geometry(tl->base, &geo);
+    if (geo.width > output_logical_w() * 3 / 4 &&
+        geo.height > output_logical_h() * 3 / 4) {
+        return false;
+    }
+    return true;
+}
+
+static void popover_send_geometry(Toplevel* t) {
+    if (!t->sink.popover_chan) return;
+    json g = {{"x", t->sink.popover_off_x}, {"y", t->sink.popover_off_y}};
+    std::string s = g.dump();
+    t->server->conn->write_channel(t->sink.popover_chan, (const uint8_t*)s.data(), s.size());
+}
+
+static void popover_send_frame(Toplevel* t) {
+    if (!t->sink.popover_chan) return;
+    struct wlr_surface* surface = t->xdg_toplevel->base->surface;
+    // Full surface + preserve alpha, exactly like an xdg_popup: a menu's
+    // shadow/rounded corners ride the alpha, and overlay-local input maps 1:1.
+    if (!t->sink.cap.capture(surface, t->server->renderer, 0, 0, 0, 0,
+                             false, /*preserve_alpha=*/true, output_scale())) {
+        return;
+    }
+    if (!t->sink.enc_ready || t->sink.enc.width() != t->sink.cap.width() ||
+        t->sink.enc.height() != t->sink.cap.height()) {
+        t->sink.enc_ready = t->sink.enc.init(t->sink.cap.width(), t->sink.cap.height());
+        if (!t->sink.enc_ready) return;
+    }
+    std::vector<uint8_t> frame = t->sink.enc.encode_frame(
+        t->sink.cap.data(), t->sink.cap.stride(), t->sink.cap.width(), t->sink.cap.height(),
+        t->sink.cap.dirty_x, t->sink.cap.dirty_y, t->sink.cap.dirty_w, t->sink.cap.dirty_h,
+        now_ms());
+    if (!frame.empty())
+        t->server->conn->write_channel(t->sink.popover_chan, frame.data(), frame.size());
+}
+
+static bool toplevel_setup_popover(Toplevel* t) {
+    struct wlr_xdg_toplevel* tl = t->xdg_toplevel;
+    if (!toplevel_is_popover(tl)) return false;
+    Toplevel* pt = (tl->parent && tl->parent->base)
+                       ? static_cast<Toplevel*>(tl->parent->base->data)
+                       : nullptr;
+    // Only chain off a real parent window; nested popover-of-popover would
+    // have no parent win, so fall back to a normal window.
+    if (!pt || !pt->sink.win || pt->sink.popover) return false;
+
+    // Anchor at the last pointer position, converted from the parent's
+    // surface-local space into its canvas (geometry-relative) coords — the
+    // same space the FE overlay positioner and the grab path use. wlroots
+    // gives a fallback menu-toplevel no positioner, so the pointer (where the
+    // menu was triggered) is the best anchor.
+    struct wlr_box pgeo{};
+    wlr_xdg_surface_get_geometry(pt->xdg_toplevel->base, &pgeo);
+    int ox = (int)g_ptr_x - pgeo.x;
+    int oy = (int)g_ptr_y - pgeo.y;
+    if (ox < 0) ox = 0;
+    if (oy < 0) oy = 0;
+
+    uint32_t chan = t->server->conn->open_channel_kind(pt->sink.win, "video-popup");
+    if (!chan) {
+        wlr_log(WLR_INFO, "wash-display: popover channel open failed (no shell?) parent=%u",
+                pt->sink.win);
+        return false; // no shell — let it map as a normal window instead
+    }
+    t->sink.popover = true;
+    t->sink.popover_chan = chan;
+    t->sink.popover_parent = pt->sink.win;
+    t->sink.popover_off_x = ox;
+    t->sink.popover_off_y = oy;
+
+    struct wlr_surface* surf = tl->base->surface;
+    popover_send_geometry(t);
+    g_popup_reg[chan] = PopupTarget{surf, t->server};
+    push_popup_grab(pt->sink.win, surf, t->server, ox, oy);
+    popover_send_frame(t); // paint immediately; the map commit already has a buffer
+    wlr_log(WLR_INFO, "wash-display: menu toplevel as popover parent_win=%u chan=%u off=%d,%d",
+            pt->sink.win, chan, ox, oy);
+    return true;
+}
+
+static void toplevel_teardown_popover(Toplevel* t) {
+    struct wlr_surface* surf = t->xdg_toplevel->base->surface;
+    pop_popup_grab(surf);
+    if (t->sink.popover_chan) {
+        g_popup_reg.erase(t->sink.popover_chan);
+        std::string s = json{{"close", true}}.dump();
+        t->server->conn->write_channel(t->sink.popover_chan, (const uint8_t*)s.data(), s.size());
+        t->sink.popover_chan = 0;
+    }
+    t->sink.popover = false;
 }
 
 // popup_root_and_offset walks the popup parent chain to the owning
@@ -1237,14 +1398,6 @@ void server_new_xwayland_surface(struct wl_listener* listener, void* data) {
 static std::mutex g_input_mu;
 static std::vector<json> g_inputs;
 
-// Pointer focus + last position, compositor-thread-only. A motion to a new
-// surface re-enters the seat pointer there; buttons/axis without a fresh
-// motion reuse the last position.
-static struct wlr_surface* g_ptr_surface = nullptr;
-static double g_ptr_x = 0.0, g_ptr_y = 0.0;
-// The wash window the pointer is currently over (0 if over a popup), so a
-// cursor-shape change can be routed to that window's video channel (M4).
-static uint32_t g_ptr_win = 0;
 
 // winref_surface / winref_server pull the inner wlr_surface and owning
 // Server out of a registry entry. The surface may be null (X11 surface not
