@@ -708,7 +708,18 @@ func (r *Router) closeChannel(id uint32, reason string) {
 		if b.peerConn != nil {
 			sh.untrackPeer(id)
 		}
-		_ = sh.WriteCtrl(wire.NewShellChannelUnbind(id, reason))
+		// A file (bulk download) channel streams its payload at ClassBulk.
+		// The unbind is the channel's teardown and MUST ride the same Bulk
+		// lane so it stays FIFO behind those bytes: a default-Interactive
+		// unbind drains ahead of the still-queued Bulk tail (strict-priority
+		// scheduler) and the FE tears the channel down before its last bytes
+		// arrive — the file-download "empty blob" flake. (download_done is
+		// likewise emitted at Bulk; see apps/fm/be/download.go.)
+		if b.kind == wire.ChannelKindFile {
+			_ = sh.WriteCtrlClass(wire.NewShellChannelUnbind(id, reason), wire.ClassBulk)
+		} else {
+			_ = sh.WriteCtrl(wire.NewShellChannelUnbind(id, reason))
+		}
 	}
 }
 

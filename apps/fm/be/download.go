@@ -177,7 +177,15 @@ func finishDownload(c *sdk.Conn, s *downloadSession) {
 		status = "failed"
 	}
 	log.Printf("wash-fm download id=%s status=%s file=%q zip=%v err=%q", s.id, status, s.filename, s.zip, s.failedMsg())
-	_ = bus.Emit("download_done", map[string]any{"download_id": s.id, "status": status, "error": s.failedMsg()})
+	// EmitBulk, NOT Emit: download_done is the FE's finalize trigger and
+	// MUST arrive after the last file byte. The file channel streams at
+	// ClassBulk, but a plain Emit goes ClassInteractive — and the router's
+	// strict-priority scheduler drains Interactive ahead of Bulk, so an
+	// Interactive download_done overtakes file bytes still queued in the
+	// Bulk lane and the FE saves an empty/truncated blob (a real e2e flake:
+	// fm-download "exact bytes" returned ""). Sent at Bulk it rides the same
+	// FIFO lane behind the bytes, so ordering holds.
+	_ = bus.EmitBulk("download_done", map[string]any{"download_id": s.id, "status": status, "error": s.failedMsg()})
 	switch status {
 	case "done":
 		c.Info("Download ready", s.filename)
