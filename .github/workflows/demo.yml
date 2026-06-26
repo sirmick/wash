@@ -155,8 +155,10 @@ jobs:
           set -euo pipefail
           mkdir -p dist/shell
           cp -a ../../web/shell/dist/. dist/shell/
-          cp ../../internal/runner/router/assets/icons.svg dist/
-          cp ../../internal/runner/router/assets/wash-logo.svg dist/
+          # icons.svg / wash-logo.svg now ship from the shell build output
+          # (web/shell/dist) — the old internal/runner/router/assets path is gone.
+          cp ../../web/shell/dist/icons.svg dist/
+          cp ../../web/shell/dist/wash-logo.svg dist/
           rm -f dist/tinyemu/riscvemu64-wasm.{js,wasm}.{broken-dev,prod}
           rm -f dist/v86.wasm
           rm -f dist/tinyemu/wash-rootfs.ext2
