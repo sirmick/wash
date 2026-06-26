@@ -30,9 +30,24 @@ export const ClipboardWidget: Component = () => {
     flashTimer = setTimeout(() => setFlash(''), 1500);
   };
 
+  // pristine latches false on the first write from a live source (a
+  // paste-import or a clipboard.changed push). The mount-time seed read
+  // (clipboardGetText) is an async BE round-trip; under load it can
+  // resolve AFTER the user has already pasted into the import box (easy:
+  // the section just expanded and they paste at once), so it must not
+  // clobber that newer value with the stale text read at mount. Seed
+  // only while still pristine.
+  let pristine = true;
+  const commit = (t: string) => {
+    pristine = false;
+    setText(t);
+  };
+
   onMount(() => {
-    void window.wash.clipboardGetText().then(setText);
-    const unsub = window.wash.onClipboardChanged((c) => setText(c.text));
+    void window.wash.clipboardGetText().then((t) => {
+      if (pristine) setText(t);
+    });
+    const unsub = window.wash.onClipboardChanged((c) => commit(c.text));
     onCleanup(() => {
       unsub();
       clearTimeout(flashTimer);
@@ -62,7 +77,7 @@ export const ClipboardWidget: Component = () => {
     const t = ev.clipboardData?.getData('text/plain') ?? '';
     if (!t) return;
     window.wash.clipboardSetText(t);
-    setText(t);
+    commit(t);
     showFlash('imported');
   };
 
