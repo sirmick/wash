@@ -22,8 +22,8 @@ import { tokens } from '@wash/ui';
 // Glassy themed surfaces: the pack's menu/hover surface at partial
 // opacity so the wallpaper shows through the blur, but the tint follows
 // the active pack (dark on Midnight/Tokyo, light on Seoul).
-const GLASS_PANEL = `color-mix(in srgb, ${tokens.bgMenu} 92%, transparent)`;
-const GLASS_TAB = `color-mix(in srgb, ${tokens.bgMenu} 78%, transparent)`;
+const GLASS_PANEL = `color-mix(in srgb, ${tokens.bgMenu} 85%, transparent)`;
+const GLASS_TAB = `color-mix(in srgb, ${tokens.bgMenu} 70%, transparent)`;
 const GLASS_TAB_HOVER = `color-mix(in srgb, ${tokens.bgRowHover} 90%, transparent)`;
 
 export type SidebarMode = 'open' | 'hidden';
@@ -60,8 +60,8 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       right: 0,
       width: `${SIDEBAR_OPEN_WIDTH}px`,
       background: GLASS_PANEL,
-      'backdrop-filter': 'blur(10px)',
-      '-webkit-backdrop-filter': 'blur(10px)',
+      'backdrop-filter': 'blur(6px)',
+      '-webkit-backdrop-filter': 'blur(6px)',
       'border-left': `1px solid ${tokens.borderMenu}`,
       display: 'flex',
       'flex-direction': 'column',

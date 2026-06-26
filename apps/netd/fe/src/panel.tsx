@@ -113,7 +113,7 @@ const Panel = (props: SettingsPanelProps) => {
           <Show
             when={uci().trim()}
             fallback={
-              <div style={{ opacity: 0.5, font: tokens.type.monoMd, padding: '8px 0' }}>
+              <div style={{ opacity: 0.5, font: tokens.type.textMd, padding: '8px 0' }}>
                 {active() && active() !== 'fake' ? '(no managed configuration)' : 'loading…'}
               </div>
             }
@@ -160,7 +160,7 @@ const textInputStyle: JSX.CSSProperties = {
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusMd}`,
   padding: '4px 8px',
-  font: tokens.type.monoMd,
+  font: tokens.type.textMd,
   outline: 'none',
 };
 

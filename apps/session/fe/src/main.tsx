@@ -1805,7 +1805,16 @@ const StartMenu: Component<{
       // panel so the diagonal sweep can't escape past the rounded
       // corners. Pointer-events on the shimmer div are off so it
       // doesn't intercept clicks on the rows underneath.
-      style={{ 'min-width': '240px', padding: '4px', overflow: 'hidden' }}
+      // Start-menu surface is themeable independent of other menus
+      // (--wash-startmenu-bg), defaulting to the pack's menu colour. Copland
+      // sets it to a greyer Platinum tone so the menu matches its taskbar/
+      // sidebar instead of reading lighter than the rest of the chrome.
+      style={{
+        'min-width': '240px',
+        padding: '4px',
+        overflow: 'hidden',
+        background: `var(--wash-startmenu-bg, ${tokens.bgMenu})`,
+      }}
     >
       <div class="wash-shimmer-sweep" aria-hidden="true" />
       {/* Brand header: the wash logo + "wash <version>" in a larger
@@ -2080,12 +2089,13 @@ const taskbarStyle: JSX.CSSProperties = {
   height: '40px',
   // Configurable backdrop: a pack sets the color (--wash-taskbar-bg), the
   // opacity of that color over the surface behind (--wash-taskbar-opacity,
-  // default 88%), and the frost blur (--wash-taskbar-blur, default 10px).
-  // Sunken grey at 88% by default so the bar reads a touch darker than
-  // windows; a pack can make it solid, more transparent, or unblurred.
-  background: `color-mix(in srgb, var(--wash-taskbar-bg, ${tokens.bgInset}) var(--wash-taskbar-opacity, 88%), transparent)`,
-  'backdrop-filter': 'blur(var(--wash-taskbar-blur, 10px))',
-  '-webkit-backdrop-filter': 'blur(var(--wash-taskbar-blur, 10px))',
+  // default 80%), and the frost blur (--wash-taskbar-blur, default 6px).
+  // Sunken grey at 80% by default so the bar reads a touch darker than
+  // windows while letting more of the wallpaper through; a pack can make it
+  // solid, more transparent, or unblurred.
+  background: `color-mix(in srgb, var(--wash-taskbar-bg, ${tokens.bgInset}) var(--wash-taskbar-opacity, 80%), transparent)`,
+  'backdrop-filter': 'blur(var(--wash-taskbar-blur, 6px))',
+  '-webkit-backdrop-filter': 'blur(var(--wash-taskbar-blur, 6px))',
   // Top edge: a pack can paint a raised highlight here (NT does).
   'border-top': `1px solid var(--wash-taskbar-top, ${tokens.borderMenu})`,
   display: 'flex',

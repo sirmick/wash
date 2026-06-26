@@ -315,7 +315,7 @@ const PrivRow: Component<{
       </div>
       <div
         style={{
-          font: tokens.type.monoSm,
+          font: tokens.type.textSm,
           opacity: 0.55,
           'word-break': 'break-all',
         }}

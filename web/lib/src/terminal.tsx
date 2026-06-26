@@ -777,7 +777,11 @@ export const Terminal: Component<TerminalProps> = (props) => {
     <>
       <div
         ref={hostEl!}
-        style={{ width: '100%', height: '100%' }}
+        // Small left/right inset so the first/last columns aren't jammed
+        // against the window edge. border-box keeps the host's reported
+        // width as the content width, so FitAddon sizes columns to the
+        // padded area (no overflow, no manual refit needed).
+        style={{ width: '100%', height: '100%', 'box-sizing': 'border-box', padding: '0 10px' }}
         onContextMenu={onCtx}
       />
       <Show when={menu()}>
