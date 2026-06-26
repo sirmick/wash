@@ -344,6 +344,12 @@ const copland: Pack = {
     // machine drew them — no slide/pop animation, no float.
     '--wash-menu-anim': 'none',
     '--wash-shadow-menu': 'none',
+    // Start menu in the same Platinum grey as the taskbar (#cccccc) rather
+    // than the lighter menu tone, so the chrome reads as one piece.
+    '--wash-startmenu-bg': '#cccccc',
+    // Wallpaper stops at the taskbar (window-exclusive-of-taskbar), like
+    // Dreamtime — the vintage art sits in the desktop area, not behind the bar.
+    '--wash-wallpaper-extent': 'desktop',
   },
   wallpaper: 'wallpapers/copland.svg',
   fonts: [{ family: 'Chicago', url: 'fonts/Chicago.woff2' }],

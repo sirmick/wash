@@ -77,7 +77,7 @@ const IdentityRow: Component<{ info: () => AboutSystemInfo | null }> = (props) =
     <div
       data-testid="about-identity"
       style={{
-        font: tokens.type.monoSm,
+        font: tokens.type.textSm,
         opacity: 0.7,
       }}
     >

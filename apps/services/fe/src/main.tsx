@@ -365,17 +365,15 @@ const StatusBadge: Component<{ active: string; sub: string }> = (props) => {
 
 const EnabledChip: Component<{ enabled: string }> = (props) => {
   if (!props.enabled) return <span style={chipDimStyle}>—</span>;
+  // Match the `systemctl` idiom: enabled = green (affirmative, starts at
+  // boot), masked = red (can't run), and every other config state (disabled,
+  // static, alias, linked, indirect, generated) is quiet neutral — no
+  // arbitrary accent hue.
   const map: Record<string, { bg: string; fg: string }> = {
-    enabled:   { bg: tokens.bgInfo, fg: tokens.fgInfo },
-    disabled:  { bg: tokens.bgNeutral, fg: tokens.fgDim },
-    static:    { bg: tokens.bgNeutral, fg: tokens.accentViolet },
-    masked:    { bg: tokens.bgDanger, fg: tokens.fgDanger },
-    alias:     { bg: tokens.bgNeutral, fg: tokens.accentViolet },
-    linked:    { bg: tokens.bgNeutral, fg: tokens.accentViolet },
-    indirect:  { bg: tokens.bgNeutral, fg: tokens.fgDim },
-    generated: { bg: tokens.bgNeutral, fg: tokens.fgDim },
+    enabled: { bg: tokens.bgSuccess, fg: tokens.fgSuccess },
+    masked:  { bg: tokens.bgDanger, fg: tokens.fgDanger },
   };
-  const t = map[props.enabled] ?? { bg: tokens.bgNeutral, fg: tokens.fgDim };
+  const t = map[props.enabled] ?? { bg: tokens.bgNeutral, fg: tokens.fgMuted };
   return <span style={{ ...chipStyle, background: t.bg, color: t.fg }}>{props.enabled}</span>;
 };
 
@@ -482,7 +480,10 @@ const nameColStyle: JSX.CSSProperties = {
 };
 
 const nameStyle: JSX.CSSProperties = {
-  font: tokens.type.monoMd,
+  // Unit names read as the row's primary label in the proportional UI font
+  // (mono made the whole list look heavy / terminal-ish).
+  font: tokens.type.textMd,
+  'font-weight': 600,
   color: tokens.fg,
   overflow: 'hidden',
   'text-overflow': 'ellipsis',
@@ -501,7 +502,7 @@ const errStyle: JSX.CSSProperties = {
   display: 'inline-flex',
   'align-items': 'center',
   gap: '4px',
-  font: tokens.type.monoSm,
+  font: tokens.type.textSm,
   color: tokens.fgDanger,
   'margin-top': '2px',
 };
@@ -552,7 +553,7 @@ function iconBtnStyle(active: boolean): JSX.CSSProperties {
 }
 
 const busyTagStyle: JSX.CSSProperties = {
-  font: tokens.type.monoSm,
+  font: tokens.type.textSm,
   color: tokens.fgDim,
   'margin-left': '4px',
 };

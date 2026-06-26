@@ -1805,7 +1805,16 @@ const StartMenu: Component<{
       // panel so the diagonal sweep can't escape past the rounded
       // corners. Pointer-events on the shimmer div are off so it
       // doesn't intercept clicks on the rows underneath.
-      style={{ 'min-width': '240px', padding: '4px', overflow: 'hidden' }}
+      // Start-menu surface is themeable independent of other menus
+      // (--wash-startmenu-bg), defaulting to the pack's menu colour. Copland
+      // sets it to a greyer Platinum tone so the menu matches its taskbar/
+      // sidebar instead of reading lighter than the rest of the chrome.
+      style={{
+        'min-width': '240px',
+        padding: '4px',
+        overflow: 'hidden',
+        background: `var(--wash-startmenu-bg, ${tokens.bgMenu})`,
+      }}
     >
       <div class="wash-shimmer-sweep" aria-hidden="true" />
       {/* Brand header: the wash logo + "wash <version>" in a larger

@@ -834,7 +834,7 @@ const tableFooterStyle: JSX.CSSProperties = {
   display: 'flex',
   'justify-content': 'flex-end',
   'padding-top': '4px',
-  font: tokens.type.monoSm,
+  font: tokens.type.textSm,
   color: tokens.fgMuted,
 };
 
@@ -895,7 +895,7 @@ const appMetaStyle: JSX.CSSProperties = {
   'flex-wrap': 'wrap',
   'align-items': 'center',
   gap: '4px',
-  font: tokens.type.monoSm,
+  font: tokens.type.textSm,
   color: tokens.fgMuted,
 };
 
@@ -904,7 +904,7 @@ const dotStyle: JSX.CSSProperties = {
 };
 
 const tagStyle: JSX.CSSProperties = {
-  font: tokens.type.monoSm,
+  font: tokens.type.textSm,
   color: tokens.fg,
   opacity: 0.7,
 };

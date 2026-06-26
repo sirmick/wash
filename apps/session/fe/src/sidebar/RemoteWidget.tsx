@@ -128,7 +128,7 @@ const HostEntry: Component<{
         <span style={{ color: tokens.fg, flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
           {props.host.host}
         </span>
-        <Show when={up()} fallback={<span style={{ opacity: 0.6, font: tokens.type.monoSm }}>{statusLabel(props.host.status)}</span>}>
+        <Show when={up()} fallback={<span style={{ opacity: 0.6, font: tokens.type.textSm }}>{statusLabel(props.host.status)}</span>}>
           <span style={{ opacity: 0.6, font: tokens.type.textSm }}>Launch ▾</span>
         </Show>
       </button>
@@ -174,7 +174,7 @@ export const RemoteWidget: Component<RemoteWidgetProps> = (props) => (
     <Show
       when={props.hosts().length > 0}
       fallback={
-        <span data-testid="remote-empty" style={{ opacity: 0.45, font: tokens.type.monoSm }}>
+        <span data-testid="remote-empty" style={{ opacity: 0.45, font: tokens.type.textSm }}>
           no remote sessions
         </span>
       }

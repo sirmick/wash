@@ -89,7 +89,7 @@ export const NetWidget: Component<NetWidgetProps> = (props) => {
 
       {/* Live addressing: the IP of every non-local, non-docker interface. */}
       <Show when={props.ifaces().length > 0} fallback={
-        <span data-testid="net-noaddr" style={{ opacity: 0.45, font: tokens.type.monoSm }}>
+        <span data-testid="net-noaddr" style={{ opacity: 0.45, font: tokens.type.textSm }}>
           no addressed interfaces
         </span>
       }>

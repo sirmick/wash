@@ -58,7 +58,7 @@ export const LinkWidget: Component<LinkWidgetProps> = (props) => (
   <Show
     when={props.health()}
     fallback={
-      <div style={{ font: tokens.type.monoSm, color: tokens.fg, opacity: 0.55 }}>
+      <div style={{ font: tokens.type.textSm, color: tokens.fg, opacity: 0.55 }}>
         waiting for telemetry…
       </div>
     }
