@@ -13,7 +13,7 @@
 
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { createAppBus, defineWashApp, fmtBytes, fmtUptime, tokens } from '@wash/ui';
+import { Button, createAppBus, defineWashApp, fmtBytes, fmtUptime, tokens } from '@wash/ui';
 
 // ----- wire types -----
 
@@ -253,15 +253,15 @@ const Header: Component<{ onRefresh: () => void }> = (props) => (
       <div style={headerTitleStyle}>wash</div>
       <div style={headerSubtitleStyle}>Web Application SHell</div>
     </div>
-    <button
-      type="button"
+    <Button
+      variant="ghost"
       onClick={props.onRefresh}
       style={refreshBtnStyle}
       title="Re-read runtime stats"
       data-testid="about-refresh"
     >
       Refresh
-    </button>
+    </Button>
   </div>
 );
 
@@ -730,14 +730,11 @@ const headerSubtitleStyle: JSX.CSSProperties = {
   'margin-top': '2px',
 };
 
+// Padding override on top of <Button variant="ghost"> (the ghost base
+// supplies the transparent chrome, borderMenu outline, radius, color,
+// font and cursor).
 const refreshBtnStyle: JSX.CSSProperties = {
-  background: 'transparent',
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}`,
   padding: '4px 10px',
-  font: tokens.type.textMd,
-  cursor: 'pointer',
 };
 
 const bodyStyle: JSX.CSSProperties = {

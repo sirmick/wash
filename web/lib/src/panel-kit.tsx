@@ -1,10 +1,12 @@
 // panel-kit — the small set of styled primitives settings panels share:
-// Section, Row, ServiceBadge, SmallBtn, Select. Lifted out of the
-// settings app once vscode + netd (+ display) each needed the same
-// pieces for their app-supplied panels. Framework-Solid, shipped in the
-// @wash/ui vendor bundle so every panel resolves them via the importmap.
+// Section, Row, ServiceBadge, SmallBtn, Select, Input, Checkbox. Lifted out
+// of the settings app once vscode + netd (+ display) each needed the same
+// pieces for their app-supplied panels. Input/Checkbox were later lifted
+// from the identical inline field style every app had copied. Framework-Solid,
+// shipped in the @wash/ui vendor bundle so every panel resolves them via the
+// importmap.
 
-import { For } from 'solid-js';
+import { For, splitProps } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
 
@@ -81,6 +83,58 @@ export const Select: Component<{
   >
     <For each={props.options}>{([v, l]) => <option value={v}>{l}</option>}</For>
   </select>
+);
+
+const inputStyle: JSX.CSSProperties = {
+  background: tokens.bgInset,
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}`,
+  padding: '4px 8px',
+  font: tokens.type.textMd,
+  outline: 'none',
+};
+
+/**
+ * Input is the shared sunken text/number/password/search field — the inline
+ * style that every app had copied verbatim. Spreads native input attributes
+ * (value, type, placeholder, onInput, disabled, data-testid…); callers extend
+ * via `style` (merged last).
+ */
+export const Input: Component<JSX.InputHTMLAttributes<HTMLInputElement>> = (props) => {
+  const [local, rest] = splitProps(props, ['style']);
+  return <input {...rest} style={{ ...inputStyle, ...((local.style as JSX.CSSProperties | undefined) ?? {}) }} />;
+};
+
+const checkboxLabelStyle: JSX.CSSProperties = {
+  display: 'inline-flex',
+  'align-items': 'center',
+  gap: '6px',
+  font: tokens.type.textMd,
+  color: tokens.fg,
+  cursor: 'pointer',
+  'user-select': 'none',
+};
+
+/** Checkbox is the shared label + accent-themed box + text form control. */
+export const Checkbox: Component<{
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label?: JSX.Element;
+  disabled?: boolean;
+  'data-testid'?: string;
+}> = (props) => (
+  <label style={{ ...checkboxLabelStyle, ...(props.disabled ? { opacity: 0.5, cursor: 'default' } : {}) }}>
+    <input
+      type="checkbox"
+      checked={props.checked}
+      disabled={props.disabled}
+      data-testid={props['data-testid']}
+      onChange={(e) => props.onChange(e.currentTarget.checked)}
+      style={{ 'accent-color': tokens.accentBlue, cursor: 'inherit', margin: 0 }}
+    />
+    {props.label != null ? <span>{props.label}</span> : null}
+  </label>
 );
 
 /** ServiceBadge is the small status pill shared by service panels. */

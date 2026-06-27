@@ -13,6 +13,7 @@ import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { Check, Globe, Plus, ShieldAlert, User, X } from 'lucide-solid';
 import {
+  Button,
   Menu, MenuItem, MenuSeparator, Terminal,
   TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, TERM_FONTS,
   TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE, TERM_THEMES, themeById,
@@ -650,9 +651,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               live terminal reflow. */}
           <div style={sizeRowStyle}>
             <span style={{ flex: 1 }}>Size</span>
-            <button type="button" data-testid="term-menu-size-dec" style={stepBtnStyle} onClick={() => stepFontSize(-1)}>−</button>
+            <Button variant="icon" data-testid="term-menu-size-dec" style={stepBtnStyle} onClick={() => stepFontSize(-1)}>−</Button>
             <span data-testid="term-menu-size-val" style={sizeValStyle}>{fontSize()}</span>
-            <button type="button" data-testid="term-menu-size-inc" style={stepBtnStyle} onClick={() => stepFontSize(1)}>+</button>
+            <Button variant="icon" data-testid="term-menu-size-inc" style={stepBtnStyle} onClick={() => stepFontSize(1)}>+</Button>
           </div>
           <MenuSeparator />
           <For each={TERM_FONTS}>
@@ -777,15 +778,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             );
           }}
         </For>
-        <button
-          type="button"
+        <Button
+          variant="icon"
           data-testid="term-new-tab"
           title="New tab (Ctrl+Shift+T)"
           style={addBtnStyle}
           onClick={openNewTab}
         >
           <Plus size={14} />
-        </button>
+        </Button>
       </div>
       <Show when={ctxMenu()}>
         {(menu) => (
@@ -946,13 +947,8 @@ const tabBarStyle: JSX.CSSProperties = {
   'flex-shrink': 0,
 };
 
+// Layout override on top of <Button variant="icon"> (transparent chrome base).
 const addBtnStyle: JSX.CSSProperties = {
-  background: 'transparent',
-  color: tokens.fg,
-  border: 'none',
-  padding: '0 10px',
-  cursor: 'pointer',
-  font: tokens.type.monoLg,
   opacity: 0.8,
 };
 
@@ -967,17 +963,15 @@ const sizeRowStyle: JSX.CSSProperties = {
   font: tokens.type.textMd,
 };
 
+// Layout/fill override on top of <Button variant="icon"> (the icon base
+// supplies the flex-centering, cursor and radius; this carries the filled
+// look and the compact 22px square footprint).
 const stepBtnStyle: JSX.CSSProperties = {
   width: '22px',
   height: '22px',
-  display: 'inline-flex',
-  'align-items': 'center',
-  'justify-content': 'center',
   background: tokens.bgRowSelected,
-  color: tokens.fg,
   border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusMd}`,
-  cursor: 'pointer',
   'font-size': '14px',
   'line-height': '1',
 };

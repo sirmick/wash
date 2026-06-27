@@ -16,7 +16,7 @@
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component } from 'solid-js';
-import { createAppBus, defineWashApp, fmtBytes, fmtClockTime, severityColor, tokens } from '@wash/ui';
+import { Button, createAppBus, defineWashApp, fmtBytes, fmtClockTime, severityColor, tokens } from '@wash/ui';
 import { RefreshCw, ShieldAlert, Search, FileText } from 'lucide-solid';
 
 interface LogFile {
@@ -330,20 +330,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       <aside style={sidebarStyle} data-testid="syslogs-sidebar">
         <div style={sidebarHeadStyle}>
           <span>/var/log</span>
-          <button
+          <Button
+            variant="icon"
             onClick={refreshFiles}
             title="Refresh file list"
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: tokens.fgMuted,
-              cursor: 'pointer',
-              padding: '2px',
-              display: 'flex',
-            }}
+            style={{ color: tokens.fgMuted }}
           >
             <RefreshCw size={13} />
-          </button>
+          </Button>
         </div>
         <div style={{ overflow: 'auto', flex: 1 }}>
           <Show
@@ -386,7 +380,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             <span
               title="Reading via wash-priv"
               style={{
-                color: '#ff8080',
+                color: tokens.sevError,
                 'font-size': tokens.fontSizeSm,
                 display: 'inline-flex',
                 'align-items': 'center',
@@ -430,7 +424,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               data-testid="syslogs-retry-root"
               onClick={retryAsRoot}
               style={{
-                background: '#5a3a12',
+                background: tokens.bgDenied,
                 color: tokens.fg,
                 border: `1px solid ${tokens.borderDenied}`,
                 'border-radius': `${tokens.radiusSm}`,

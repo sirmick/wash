@@ -16,7 +16,7 @@
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component } from 'solid-js';
-import { createAppBus, defineWashApp, fmtClockTime, severityColor, tokens } from '@wash/ui';
+import { Button, createAppBus, defineWashApp, fmtClockTime, severityColor, tokens } from '@wash/ui';
 import { RefreshCw, ShieldAlert, Search } from 'lucide-solid';
 
 // ----- types (mirror cmd/wash-journal wire structs) -----
@@ -401,20 +401,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       <aside style={sidebarStyle} data-testid="journal-sidebar">
         <div style={sidebarHeadStyle}>
           <span>Units</span>
-          <button
+          <Button
+            variant="icon"
             onClick={refreshUnits}
             title="Refresh unit list"
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: tokens.fgMuted,
-              cursor: 'pointer',
-              padding: '2px',
-              display: 'flex',
-            }}
+            style={{ color: tokens.fgMuted }}
           >
             <RefreshCw size={13} />
-          </button>
+          </Button>
         </div>
         <div style={{ overflow: 'auto', flex: 1 }}>
           <div
@@ -491,7 +485,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             <span
               title="Reading via wash-priv"
               style={{
-                color: '#ff8080',
+                color: tokens.sevError,
                 'font-size': tokens.fontSizeSm,
                 display: 'inline-flex',
                 'align-items': 'center',
@@ -536,7 +530,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               data-testid="journal-retry-root"
               onClick={retryAsRoot}
               style={{
-                background: '#5a3a12',
+                background: tokens.bgDenied,
                 color: tokens.fg,
                 border: `1px solid ${tokens.borderDenied}`,
                 'border-radius': `${tokens.radiusSm}`,

@@ -17,7 +17,7 @@
 
 import type { Component, JSX } from 'solid-js';
 import { Show } from 'solid-js';
-import { tokens } from '@wash/ui';
+import { Button, tokens } from '@wash/ui';
 
 // Glassy themed surfaces: the pack's menu/hover surface at partial
 // opacity so the wallpaper shows through the blur, but the tint follows
@@ -124,15 +124,15 @@ export const Sidebar: Component<SidebarProps> = (props) => {
     'flex-shrink': 0,
   };
 
+  // Override layer atop <Button variant="icon"> (transparent, borderless,
+  // radius) — keep the glyph's auto size, dim color, and tight padding.
   const closeBtnStyle: JSX.CSSProperties = {
-    background: 'transparent',
-    border: 'none',
+    width: 'auto',
+    height: 'auto',
     color: tokens.fgDim,
-    cursor: 'pointer',
     'font-size': '14px',
     'line-height': 1,
     padding: '2px 6px',
-    'border-radius': tokens.radiusSm,
   };
 
   return (
@@ -149,15 +149,15 @@ export const Sidebar: Component<SidebarProps> = (props) => {
           >
             {props.user && props.host ? `${props.user}@${props.host}` : props.host || props.user || ''}
           </span>
-          <button
-            type="button"
+          <Button
+            variant="icon"
             data-testid="sidebar-close"
             title="Hide sidebar (Ctrl+Alt+S)"
             onClick={props.onToggle}
             style={closeBtnStyle}
           >
             ›
-          </button>
+          </Button>
         </div>
         <div
           data-testid="sidebar-sections"

@@ -20,7 +20,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { ConfirmDialog, FileTree, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
+import { Button, ConfirmDialog, FileTree, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
 import type { FileClient, FileTreeColumn } from '@wash/ui';
 import {
   baseName, extName, formatDate, humanSize, joinPath, octalPerm, parentPath, ancestorChain,
@@ -2118,18 +2118,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     <>
       {/* toolbar */}
       <div style={toolbarStyle}>
-        <button type="button" data-testid="fm-home" title="Home" style={iconBtnStyle} onClick={goHome}>
+        <Button variant="ghost" data-testid="fm-home" title="Home" style={{ padding: '4px 8px', 'min-width': '30px' }} onClick={goHome}>
           <HomeIcon size={14} />
-        </button>
-        <button type="button" data-testid="fm-back" title="Back" style={iconBtnStyle} onClick={goBack}>
+        </Button>
+        <Button variant="ghost" data-testid="fm-back" title="Back" style={{ padding: '4px 8px', 'min-width': '30px' }} onClick={goBack}>
           <ArrowLeft size={14} />
-        </button>
-        <button type="button" data-testid="fm-forward" title="Forward" style={iconBtnStyle} onClick={goForward}>
+        </Button>
+        <Button variant="ghost" data-testid="fm-forward" title="Forward" style={{ padding: '4px 8px', 'min-width': '30px' }} onClick={goForward}>
           <ArrowRight size={14} />
-        </button>
-        <button type="button" data-testid="fm-up" title="Up" style={iconBtnStyle} onClick={goUp}>
+        </Button>
+        <Button variant="ghost" data-testid="fm-up" title="Up" style={{ padding: '4px 8px', 'min-width': '30px' }} onClick={goUp}>
           <ArrowUp size={14} />
-        </button>
+        </Button>
         <input
           ref={pathInputEl!}
           type="text"
@@ -2142,64 +2142,64 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onKeyDown={onPathKey}
           onBlur={() => setTimeout(closeCompleteDropdown, 100)}
         />
-        <button
-          type="button"
+        <Button
+          variant="ghost"
           data-testid="fm-reload"
           title="Reload"
-          style={iconBtnStyle}
+          style={{ padding: '4px 8px', 'min-width': '30px' }}
           onClick={() => { if (path()) invalidateAndList(parentPath(path())); }}
         >
           <RotateCw size={14} />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
           data-testid="fm-new-file"
           title="New file"
-          style={iconBtnStyle}
+          style={{ padding: '4px 8px', 'min-width': '30px' }}
           onClick={startNewFile}
         >
           <FilePlus size={14} />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
           data-testid="fm-new-folder"
           title="New folder"
-          style={iconBtnStyle}
+          style={{ padding: '4px 8px', 'min-width': '30px' }}
           onClick={startNewFolder}
         >
           <FolderPlus size={14} />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
           data-testid="fm-upload"
           title="Upload files"
-          style={iconBtnStyle}
+          style={{ padding: '4px 8px', 'min-width': '30px' }}
           onClick={() => fileInputEl.click()}
         >
           <Upload size={14} />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
           data-testid="fm-upload-folder"
           title="Upload folder"
-          style={iconBtnStyle}
+          style={{ padding: '4px 8px', 'min-width': '30px' }}
           onClick={() => dirInputEl.click()}
         >
           <FolderUp size={14} />
-        </button>
-        <button type="button" data-testid="fm-sort" title="Sort" style={iconBtnStyle} onClick={openSortMenu}>
+        </Button>
+        <Button variant="ghost" data-testid="fm-sort" title="Sort" style={{ padding: '4px 8px', 'min-width': '30px' }} onClick={openSortMenu}>
           <ArrowUpDown size={14} />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
           data-testid="fm-toggle-preview"
           aria-pressed={previewOpen()}
           title={previewOpen() ? 'Hide preview (Ctrl+I)' : 'Show preview (Ctrl+I)'}
-          style={previewOpen() ? iconBtnStyle : { ...iconBtnStyle, opacity: 0.5 }}
+          style={{ padding: '4px 8px', 'min-width': '30px', opacity: previewOpen() ? 1 : 0.5 }}
           onClick={togglePreview}
         >
           {previewOpen() ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
-        </button>
+        </Button>
         {/* Hidden native pickers backing the Upload buttons — the only
             way to read OS files from the browser. */}
         <input
@@ -3018,33 +3018,19 @@ const UploadConflictOverlay: Component<{
         {props.existing} of {props.total} file{plural(props.total)} already exist at the destination.
       </div>
       <div style={{ display: 'flex', gap: '8px', 'justify-content': 'flex-end', 'margin-top': '14px' }}>
-        <button type="button" data-testid="fm-upload-conflict-cancel" onClick={props.onCancel} style={uploadBtnStyle(false)}>
+        <Button variant="ghost" data-testid="fm-upload-conflict-cancel" onClick={props.onCancel} style={{ padding: '5px 12px' }}>
           Cancel
-        </button>
-        <button type="button" data-testid="fm-upload-conflict-skip" onClick={props.onSkip} style={uploadBtnStyle(false)}>
+        </Button>
+        <Button variant="ghost" data-testid="fm-upload-conflict-skip" onClick={props.onSkip} style={{ padding: '5px 12px' }}>
           Skip existing
-        </button>
-        <button type="button" data-testid="fm-upload-conflict-replace" onClick={props.onReplace} style={uploadBtnStyle(true)}>
+        </Button>
+        <Button variant="danger" data-testid="fm-upload-conflict-replace" onClick={props.onReplace} style={{ padding: '5px 12px' }}>
           Replace all
-        </button>
+        </Button>
       </div>
     </Overlay>
   );
 };
-
-// uploadBtnStyle mirrors overlay.tsx's confirmBtnStyle (kept local —
-// it's not exported from @wash/ui). danger tints the Replace action.
-function uploadBtnStyle(danger: boolean): JSX.CSSProperties {
-  return {
-    background: danger ? tokens.bgDanger : 'transparent',
-    color: tokens.fg,
-    border: `1px solid ${danger ? tokens.borderDanger : tokens.borderMenu}`,
-    'border-radius': `${tokens.radiusSm}`,
-    padding: '5px 12px',
-    cursor: 'pointer',
-    font: tokens.type.textMd,
-  };
-}
 
 // DropMenu — the small context menu that appears when the user
 // holds Alt while dropping a drag. Offers Move and Symlink (copy
@@ -3151,17 +3137,6 @@ const toolbarStyle: JSX.CSSProperties = {
   gap: '4px',
   padding: '0 8px',
   background: tokens.bgWindow,
-};
-
-const iconBtnStyle: JSX.CSSProperties = {
-  background: 'transparent',
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}`,
-  padding: '4px 8px',
-  cursor: 'pointer',
-  font: tokens.type.textMd,
-  'min-width': '30px',
 };
 
 const pathInputStyle: JSX.CSSProperties = {

@@ -13,7 +13,7 @@
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { createAppBus, defineWashApp, StatusBar, tokens } from '@wash/ui';
+import { Button, createAppBus, defineWashApp, Input, StatusBar, tokens } from '@wash/ui';
 import { serviceBadge, isActive as isActiveState, isFailed as isFailedState, type BadgeTone } from './service-status.ts';
 import {
   Check,
@@ -147,7 +147,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       <div data-testid="srv-toolbar" style={toolbarStyle}>
         <div style={searchWrapStyle}>
           <Search size={12} />
-          <input
+          <Input
             type="text"
             placeholder="Filter services…"
             data-testid="srv-search"
@@ -156,15 +156,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             style={searchInputStyle}
           />
         </div>
-        <button
-          type="button"
+        <Button
+          variant="icon"
           data-testid="srv-refresh"
           title="Refresh"
           onClick={requestList}
           style={toolbarBtnStyle}
         >
           <RefreshCcw size={14} />
-        </button>
+        </Button>
         <label style={toggleLabelStyle} data-testid="srv-auto-label">
           <input
             type="checkbox"
@@ -271,8 +271,8 @@ const ServiceRow: Component<{
         <Show
           when={isActive()}
           fallback={
-            <button
-              type="button"
+            <Button
+              variant="ghost"
               data-testid={`srv-start-${s().name}`}
               title="Start"
               disabled={isBusy() || masked()}
@@ -280,11 +280,11 @@ const ServiceRow: Component<{
               style={iconBtnStyle(false)}
             >
               <Play size={14} />
-            </button>
+            </Button>
           }
         >
-          <button
-            type="button"
+          <Button
+            variant="ghost"
             data-testid={`srv-stop-${s().name}`}
             title="Stop"
             disabled={isBusy()}
@@ -292,10 +292,10 @@ const ServiceRow: Component<{
             style={iconBtnStyle(false)}
           >
             <Pause size={14} />
-          </button>
+          </Button>
         </Show>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
           data-testid={`srv-restart-${s().name}`}
           title="Restart"
           disabled={isBusy() || masked()}
@@ -303,9 +303,9 @@ const ServiceRow: Component<{
           style={iconBtnStyle(false)}
         >
           <RotateCcw size={14} />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
           data-testid={`srv-toggle-${s().name}`}
           title={isEnabled() ? 'Disable' : 'Enable'}
           disabled={isBusy() || masked()}
@@ -313,16 +313,16 @@ const ServiceRow: Component<{
           style={iconBtnStyle(isEnabled())}
         >
           <Check size={14} />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
           data-testid={`srv-logs-${s().name}`}
           title="View logs"
           onClick={props.onLogs}
           style={iconBtnStyle(false)}
         >
           <FileText size={14} />
-        </button>
+        </Button>
         <Show when={isBusy()}>
           <span data-testid={`srv-busy-${s().name}`} style={busyTagStyle}>
             {props.busy()}…
@@ -424,18 +424,11 @@ const searchInputStyle: JSX.CSSProperties = {
   height: '20px',
 };
 
+// Footprint override on top of <Button variant="icon"> (the icon base
+// supplies the transparent chrome, flex-centering, radius and cursor).
 const toolbarBtnStyle: JSX.CSSProperties = {
-  display: 'inline-flex',
-  'align-items': 'center',
-  'justify-content': 'center',
   width: '24px',
   height: '22px',
-  background: 'transparent',
-  border: `1px solid transparent`,
-  'border-radius': `${tokens.radiusSm}`,
-  color: tokens.fg,
-  cursor: 'pointer',
-  padding: 0,
 };
 
 const toggleLabelStyle: JSX.CSSProperties = {
@@ -536,6 +529,10 @@ const actionsStyle: JSX.CSSProperties = {
   gap: '4px',
 };
 
+// Footprint + active-fill override on top of <Button variant="ghost">
+// (the ghost base supplies the transparent bg, borderMenu outline, radius,
+// color and cursor; this carries the compact square footprint and the
+// selected-state background when the action is the current state).
 function iconBtnStyle(active: boolean): JSX.CSSProperties {
   return {
     display: 'inline-flex',
@@ -543,12 +540,8 @@ function iconBtnStyle(active: boolean): JSX.CSSProperties {
     'justify-content': 'center',
     width: '26px',
     height: '24px',
-    background: active ? tokens.bgRowSelected : 'transparent',
-    border: `1px solid ${tokens.borderMenu}`,
-    'border-radius': `${tokens.radiusSm}`,
-    color: tokens.fg,
-    cursor: 'pointer',
     padding: 0,
+    ...(active ? { background: tokens.bgRowSelected } : {}),
   };
 }
 

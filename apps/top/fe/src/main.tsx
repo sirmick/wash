@@ -15,7 +15,7 @@
 import { For, Index, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { ConfirmDialog, createAppBus, defineWashApp, fmtBytes, fmtRate, tokens } from '@wash/ui';
+import { Button, ConfirmDialog, createAppBus, defineWashApp, fmtBytes, fmtRate, tokens } from '@wash/ui';
 import { filterSortProcs, type SortKey } from './procsort.ts';
 import {
   ChevronDown,
@@ -173,9 +173,9 @@ function fmtTime(jiffies: number): string {
 }
 
 function cpuColor(used: number): string {
-  if (used > 0.85) return '#d97757';
-  if (used > 0.5) return '#c8a04a';
-  return '#4a8ab0';
+  if (used > 0.85) return tokens.accentOrange;
+  if (used > 0.5) return tokens.accentAmber;
+  return tokens.accentBlue;
 }
 
 // ---- app ----
@@ -569,15 +569,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           </IconBtn>
           <div style={{ flex: 1 }} />
           <Show when={selectedPID() != null}>
-            <button
-              type="button"
+            <Button
+              variant="danger"
               onClick={askKill}
               data-testid="top-kill-btn"
-              style={dangerBtnStyle}
+              style={{ display: 'inline-flex', 'align-items': 'center', gap: '4px', padding: '3px 8px' }}
               title="Send signal to selected process"
             >
               <Skull size={13} /> Kill {selectedPID()}
-            </button>
+            </Button>
           </Show>
           <IconBtn
             title={showDetails() ? 'Hide details' : 'Show details'}
@@ -667,14 +667,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               TERM lets the process clean up. Use Force only if it ignores TERM.
             </div>
             <div style={{ 'margin-top': '8px' }}>
-              <button
-                type="button"
+              <Button
+                variant="danger"
                 onClick={() => doKill(true)}
                 data-testid="top-kill-force"
-                style={dangerBtnStyle}
+                style={{ display: 'inline-flex', 'align-items': 'center', gap: '4px', padding: '3px 8px' }}
               >
                 Force (SIGKILL)
-              </button>
+              </Button>
             </div>
           </div>
         </ConfirmDialog>
@@ -780,7 +780,7 @@ const NetMeter: Component<{ rx: number[]; tx: number[] }> = (props) => {
         ↓{fmtRate(lastRx())} · ↑{fmtRate(lastTx())}
       </span>
       <div style={{ 'grid-column': '1 / -1' }}>
-        <MirrorSparkline up={props.tx} down={props.rx} upColor="#c8a04a" downColor="#4a8ab0" height={22} />
+        <MirrorSparkline up={props.tx} down={props.rx} upColor={tokens.accentAmber} downColor={tokens.accentBlue} height={22} />
       </div>
     </div>
   );
@@ -796,7 +796,7 @@ const DiskMeter: Component<{ r: number[]; w: number[] }> = (props) => {
         r {fmtRate(lastR())} · w {fmtRate(lastW())}
       </span>
       <div style={{ 'grid-column': '1 / -1' }}>
-        <MirrorSparkline up={props.w} down={props.r} upColor="#c2772d" downColor="#7a9d4a" height={22} />
+        <MirrorSparkline up={props.w} down={props.r} upColor={tokens.accentOrange} downColor={tokens.accentLime} height={22} />
       </div>
     </div>
   );
@@ -830,7 +830,7 @@ const NetGrid: Component<{
                 ↓{fmtRate(r.h.rx[r.h.rx.length - 1] ?? 0)} · ↑{fmtRate(r.h.tx[r.h.tx.length - 1] ?? 0)}
               </span>
             </div>
-            <MirrorSparkline up={r.h.tx} down={r.h.rx} upColor="#c8a04a" downColor="#4a8ab0" height={18} />
+            <MirrorSparkline up={r.h.tx} down={r.h.rx} upColor={tokens.accentAmber} downColor={tokens.accentBlue} height={18} />
           </div>
         )}
       </For>
@@ -862,7 +862,7 @@ const DiskGrid: Component<{
                 r {fmtRate(r.h.r[r.h.r.length - 1] ?? 0)} · w {fmtRate(r.h.w[r.h.w.length - 1] ?? 0)}
               </span>
             </div>
-            <MirrorSparkline up={r.h.w} down={r.h.r} upColor="#c2772d" downColor="#7a9d4a" height={18} />
+            <MirrorSparkline up={r.h.w} down={r.h.r} upColor={tokens.accentOrange} downColor={tokens.accentLime} height={18} />
           </div>
         )}
       </For>
@@ -885,16 +885,16 @@ const MemMeter: Component<{ mem?: MemRow; history: number[]; load?: LoadRow }> =
     <div style={{ display: 'flex', 'flex-direction': 'column', gap: '6px' }}>
       <div style={{ display: 'grid', 'grid-template-columns': '40px 1fr 80px', gap: '6px', 'align-items': 'center' }}>
         <span style={cpuLabelStyle}>mem</span>
-        <Bar fraction={used()} color="#7a9d4a" />
+        <Bar fraction={used()} color={tokens.accentLime} />
         <span style={cpuPctStyle}>
           {props.mem ? `${fmtBytes((props.mem.Total - (props.mem.Available || props.mem.Free)))} / ${fmtBytes(props.mem.Total)}` : '—'}
         </span>
       </div>
-      <Sparkline data={props.history} stroke="#7a9d4a" height={20} />
+      <Sparkline data={props.history} stroke={tokens.accentLime} height={20} />
       <Show when={props.mem && props.mem.SwapTotal > 0}>
         <div style={{ display: 'grid', 'grid-template-columns': '40px 1fr 80px', gap: '6px', 'align-items': 'center' }}>
           <span style={cpuLabelStyle}>swap</span>
-          <Bar fraction={swapUsed()} color="#c2772d" />
+          <Bar fraction={swapUsed()} color={tokens.accentOrange} />
           <span style={cpuPctStyle}>
             {props.mem ? `${fmtBytes(props.mem.SwapTotal - props.mem.SwapFree)} / ${fmtBytes(props.mem.SwapTotal)}` : '—'}
           </span>
@@ -1086,10 +1086,10 @@ const ProcRow: Component<{
 
 function stateColor(state: string): string {
   switch (state) {
-    case 'R': return '#7ab06c';
-    case 'D': return '#c8a04a';
-    case 'Z': return '#d97757';
-    case 'T': return '#c8a04a';
+    case 'R': return tokens.accentGreen;
+    case 'D': return tokens.accentAmber;
+    case 'Z': return tokens.accentOrange;
+    case 'T': return tokens.accentAmber;
     case 'I': return tokens.fgMuted;
     default: return tokens.fg;
   }
@@ -1371,19 +1371,6 @@ const selectStyle: JSX.CSSProperties = {
   font: tokens.type.textMd,
 };
 
-const iconBtnStyleBase: JSX.CSSProperties = {
-  display: 'inline-flex',
-  'align-items': 'center',
-  'justify-content': 'center',
-  width: '24px',
-  height: '22px',
-  background: 'transparent',
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}`,
-  cursor: 'pointer',
-};
-
 const IconBtn: Component<{
   onClick: () => void;
   active?: boolean;
@@ -1391,15 +1378,20 @@ const IconBtn: Component<{
   'data-testid'?: string;
   children: JSX.Element;
 }> = (props) => (
-  <button
-    type="button"
+  <Button
+    variant="icon"
     title={props.title}
     onClick={props.onClick}
     data-testid={props['data-testid']}
-    style={{ ...iconBtnStyleBase, background: props.active ? tokens.bgRowSelected : 'transparent' }}
+    style={{
+      width: '24px',
+      height: '22px',
+      border: `1px solid ${tokens.borderMenu}`,
+      background: props.active ? tokens.bgRowSelected : 'transparent',
+    }}
   >
     {props.children}
-  </button>
+  </Button>
 );
 
 const chevronStyle: JSX.CSSProperties = {
@@ -1410,19 +1402,6 @@ const chevronStyle: JSX.CSSProperties = {
   'line-height': 0,
   width: '12px',
   height: '12px',
-  cursor: 'pointer',
-};
-
-const dangerBtnStyle: JSX.CSSProperties = {
-  display: 'inline-flex',
-  'align-items': 'center',
-  gap: '4px',
-  background: tokens.bgDanger,
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderDanger}`,
-  'border-radius': `${tokens.radiusSm}`,
-  padding: '3px 8px',
-  font: tokens.type.textMd,
   cursor: 'pointer',
 };
 

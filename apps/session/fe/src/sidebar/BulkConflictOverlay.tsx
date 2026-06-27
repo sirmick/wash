@@ -67,7 +67,7 @@ const ConflictModal: Component<{
 
   const panelStyle: JSX.CSSProperties = {
     background: tokens.bgWindow,
-    border: '1px solid #3a3a6a',
+    border: `1px solid ${tokens.borderFocus}`,
     'border-radius': tokens.radiusXl,
     padding: '20px 22px',
     'min-width': '420px',

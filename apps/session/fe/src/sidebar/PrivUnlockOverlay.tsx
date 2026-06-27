@@ -105,7 +105,7 @@ const UnlockModal: Component<{
 
   const panelStyle: JSX.CSSProperties = {
     background: tokens.bgWindow,
-    border: '1px solid #6a2a2a', // red accent — root chain
+    border: `1px solid ${tokens.bgDanger}`, // red accent — root chain
     'border-radius': tokens.radiusXl,
     padding: '20px 22px',
     'min-width': '380px',
@@ -123,7 +123,7 @@ const UnlockModal: Component<{
           style={{
             font: tokens.type.titleSm,
             'margin-bottom': '8px',
-            color: '#e8a0a0',
+            color: tokens.fgDanger,
           }}
         >
           🛡 sudo password
@@ -155,7 +155,7 @@ const UnlockModal: Component<{
             padding: '8px 10px',
             background: 'rgba(0,0,0,0.25)',
             color: tokens.fg,
-            border: '1px solid #3a3a5a',
+            border: `1px solid ${tokens.borderFocus}`,
             'border-radius': tokens.radiusMd,
             font: tokens.type.monoMd,
             'margin-bottom': '8px',
