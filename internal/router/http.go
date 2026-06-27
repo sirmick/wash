@@ -267,7 +267,13 @@ func (s *HTTPServer) Run(ctx context.Context) error {
 		Handler:           s,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	listener, err := net.Listen("tcp", srv.Addr)
+	// SO_REUSEADDR so a restarted router can rebind its port immediately
+	// instead of tripping "address already in use" while the previous
+	// process's connections drain through TIME_WAIT. This is the constant
+	// kill→rebuild→restart dev loop (and the e2e reconnect spec restarts a
+	// router on the same port a browser is mid-reconnect to).
+	lc := net.ListenConfig{Control: setReuseAddr}
+	listener, err := lc.Listen(ctx, "tcp", srv.Addr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", srv.Addr, err)
 	}

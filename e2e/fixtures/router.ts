@@ -130,6 +130,12 @@ export interface RouterOptions {
   /** extra wash-router args. */
   extraArgs?: string[];
   /**
+   * Pin the listen port instead of grabbing a fresh ephemeral one. Used by
+   * the reconnect spec to restart a router on the SAME url a browser is
+   * already pointed at, so its FE reconnect loop re-dials the replacement.
+   */
+  port?: number;
+  /**
    * If true, wire the wash-priv fakesudo binary into wash-priv's env
    * via WASH_PRIV_SUDO_BIN, and create a temp FAKESUDO_LOG file the
    * test can read back. Implies apps:['priv', ...]. The fakesudo
@@ -270,7 +276,7 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   const needsTrust = wanted.includes('priv') || wanted.includes('netd');
   const trustForPriv = needsTrust ? appsDir : '';
 
-  const port = await freePort();
+  const port = opts.port ?? await freePort();
   // Each test gets its own control-socket path so concurrent test
   // runs don't trample each other.
   const controlSocket = join(appsDir, 'control.sock');
