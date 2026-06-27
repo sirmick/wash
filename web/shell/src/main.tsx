@@ -9,7 +9,7 @@
 // keeping every browser viewing the session in sync.
 
 import { render } from 'solid-js/web';
-import { For, Show, createEffect, createSignal } from 'solid-js';
+import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js';
 import type { Component } from 'solid-js';
 import { type ConnState } from './ws';
 import { RouterClient, type ClientHandlers } from './router-client';
@@ -957,6 +957,81 @@ conn.onState(setConnState);
 // report how many times the link dropped + recovered this page-load.
 conn.onState(noteConnState);
 
+// ---- connection diagnostics wiring (docs/RECONNECT.md) ----
+//
+// The Conn emits a lifecycle event trail (connect/close/zombie/wake/
+// reconnect/lost-input). Forward it to shellLog so the *why* of every drop
+// is in the router log + About panel — the data you want when chasing a
+// "my laptop closed and wash got stuck" report. lost-input also surfaces in
+// the banner (the user's recent keystrokes during the outage were dropped).
+const [lostInput, setLostInput] = createSignal<string | null>(null);
+conn.onEvent((e) => {
+  const level: LogLevel = e.kind === 'zombie' || e.kind === 'lost-input' ? 'warn' : 'info';
+  shellLog(level, 'conn', `${e.kind}: ${e.msg}`);
+  if (e.kind === 'lost-input') setLostInput(e.msg);
+  if (e.kind === 'open') setLostInput(null);
+});
+
+// connTick drives the banner's live "no contact for Ns / next retry" readout
+// while the link is down. Only ticks when not open, so a healthy desktop
+// pays nothing.
+const [connTick, setConnTick] = createSignal(0);
+createEffect(() => {
+  if (connState() === 'open') return;
+  const h = setInterval(() => setConnTick((n) => n + 1), 1000);
+  onCleanup(() => clearInterval(h));
+});
+
+// Wake handling: laptop-suspend often freezes the WS without delivering a
+// close, so on resume the page can believe it is still connected over a dead
+// socket. These browser signals all mean "we may have just resumed" — hand
+// them to Conn, which probes liveness fast (open) or skips the backoff and
+// redials now (down). See docs/RECONNECT.md.
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') conn.wake('visible');
+  });
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => conn.wake('online'));
+  window.addEventListener('offline', () => shellLog('warn', 'conn', 'browser reports network offline'));
+  // pageshow with persisted=true is a bfcache restore — the socket is
+  // certainly stale. Treat any pageshow as a wake.
+  window.addEventListener('pageshow', () => conn.wake('pageshow'));
+}
+
+// Remote (peer) relay channels do NOT survive a local reconnect: the router
+// tears down every ssh -L'd peer socket when the browser's shell session
+// ends (closeAllPeers), and can't tell us over the by-then-dead socket. So
+// on a *reconnect* (open after we'd been down) the stale peer RouterClients
+// point at defunct channel ids. Scrub them and re-issue peer.attach over the
+// fresh connection so remote windows self-heal instead of going dead.
+let connHadOpen = false;
+conn.onState((s) => {
+  if (s !== 'open') return;
+  if (!connHadOpen) { connHadOpen = true; return; } // first connect: nothing to reattach
+  reattachPeersAfterReconnect();
+});
+
+function reattachPeersAfterReconnect(): void {
+  if (peerSockets.size === 0) return;
+  const origins = new Set<Origin>();
+  for (const { origin } of peerSockets.values()) origins.add(origin);
+  // Drop the dead relay sockets + their RouterClients (windows/catalog).
+  for (const [id, p] of [...peerSockets]) {
+    p.sock.close();
+    peerSockets.delete(id);
+  }
+  for (const origin of origins) detachClient(origin);
+  // Re-dial each remote over the fresh local connection. handlePeerAttach is
+  // idempotent router-side and the host's peer registration outlives the
+  // blip (the supervisor app does), so this stands the windows back up.
+  for (const origin of origins) {
+    shellLog('info', 'conn', `reattach remote origin=${origin} after reconnect`);
+    local.conn.sendCtrl({ t: 'peer.attach', origin });
+  }
+}
+
 // Boot splash (web/shell/src/boot.ts + the #wash-boot overlay in
 // index.html). The overlay is already showing "loading shell…" from
 // static markup; now that this module has parsed, mark it done and start
@@ -1063,43 +1138,101 @@ const App = () => (
   </>
 );
 
-// ConnectionBanner shows a transient status overlay when the WS
-// is anything other than open. Lives in the shell (not in an app)
-// because if the WS is down, the apps are unreachable anyway.
-// Top-center placement so it's visible without covering taskbar
-// or window chrome.
-const ConnectionBanner: Component<{ state: ConnState }> = (props) => (
-  <Show when={props.state !== 'open'}>
-    <div
-      data-testid="wash-connection-banner"
-      data-state={props.state}
-      style={{
-        position: 'fixed',
-        top: '10px',
-        left: '50%',
-        transform: 'translateX(-50%)',
-        background: props.state === 'closed' || props.state === 'unauthenticated' ? tokens.bgDanger : tokens.bgDenied,
-        color: tokens.fg,
-        border: `1px solid ${props.state === 'closed' || props.state === 'unauthenticated' ? tokens.borderDanger : tokens.borderDenied}`,
-        'border-radius': '6px',
-        padding: '6px 14px',
-        font: tokens.type.textMd,
-        'box-shadow': '0 6px 16px rgba(0,0,0,0.5)',
-        'z-index': 100000,
-        'pointer-events': 'none',
-        animation: 'wash-fade-in 200ms ease-out',
-      }}
-    >
-      {props.state === 'connecting' && 'connecting…'}
-      {props.state === 'reconnecting' && 'router unreachable — reconnecting…'}
-      {props.state === 'closed' && 'disconnected'}
-      {props.state === 'unauthenticated' &&
-        (conn.loginRedirect()
+// ConnectionBanner shows a status overlay when the WS is anything other
+// than open. Lives in the shell (not in an app) because if the WS is down,
+// the apps are unreachable anyway. Top-center placement so it's visible
+// without covering taskbar or window chrome. While down it shows live
+// diagnostics (time since last contact, attempt count) and a "Reconnect
+// now" button that skips the backoff — see docs/RECONNECT.md.
+const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
+  const danger = () => props.state === 'closed' || props.state === 'unauthenticated';
+  // Re-read on every connTick so the elapsed-time line counts up live.
+  const detail = (): string => {
+    connTick();
+    if (props.state === 'open') return '';
+    const d = conn.diag();
+    const parts: string[] = [];
+    if (Number.isFinite(d.sinceContactMs) && d.sinceContactMs > 1500) {
+      parts.push(`no contact ${Math.round(d.sinceContactMs / 1000)}s`);
+    }
+    if (d.reconnectAttempts > 0) parts.push(`attempt ${d.reconnectAttempts}`);
+    if (!d.online) parts.push('device offline');
+    return parts.join(' · ');
+  };
+  const label = (): string => {
+    switch (props.state) {
+      case 'connecting': return 'connecting…';
+      case 'reconnecting': return 'router unreachable — reconnecting…';
+      case 'closed': return 'disconnected';
+      case 'unauthenticated':
+        return conn.loginRedirect()
           ? 'session expired — redirecting to log in…'
-          : 'session expired — reopen your token URL to reconnect')}
-    </div>
-  </Show>
-);
+          : 'session expired — reopen your token URL to reconnect';
+      default: return '';
+    }
+  };
+  // The button can only help on a transient drop; an expired session needs
+  // re-auth, and a clean connect is already in flight.
+  const canRetry = () => props.state === 'reconnecting' || props.state === 'closed';
+  return (
+    <Show when={props.state !== 'open' || lostInput()}>
+      <div
+        data-testid="wash-connection-banner"
+        data-state={props.state}
+        style={{
+          position: 'fixed',
+          top: '10px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: danger() ? tokens.bgDanger : tokens.bgDenied,
+          color: tokens.fg,
+          border: `1px solid ${danger() ? tokens.borderDanger : tokens.borderDenied}`,
+          'border-radius': '6px',
+          padding: '6px 14px',
+          font: tokens.type.textMd,
+          'box-shadow': '0 6px 16px rgba(0,0,0,0.5)',
+          'z-index': 100000,
+          // Re-enable pointer events so the Reconnect button is clickable;
+          // the banner is small + top-center so it doesn't block the desktop.
+          'pointer-events': 'auto',
+          display: 'flex',
+          'align-items': 'center',
+          gap: '10px',
+          animation: 'wash-fade-in 200ms ease-out',
+        }}
+      >
+        <span style={{ display: 'flex', 'flex-direction': 'column', 'line-height': '1.3' }}>
+          <Show when={props.state !== 'open'}><span>{label()}</span></Show>
+          <Show when={detail()}>
+            <span data-testid="wash-connection-detail" style={{ opacity: '0.75', font: tokens.type.textSm }}>{detail()}</span>
+          </Show>
+          <Show when={lostInput()}>
+            <span data-testid="wash-connection-lost-input" style={{ opacity: '0.85', font: tokens.type.textSm }}>
+              ⚠ {lostInput()}
+            </span>
+          </Show>
+        </span>
+        <Show when={canRetry()}>
+          <button
+            data-testid="wash-connection-retry"
+            onClick={() => conn.reconnectNow()}
+            style={{
+              font: tokens.type.textSm,
+              color: tokens.fg,
+              background: 'rgba(255,255,255,0.12)',
+              border: `1px solid ${tokens.borderDanger}`,
+              'border-radius': '4px',
+              padding: '2px 8px',
+              cursor: 'pointer',
+            }}
+          >
+            Reconnect now
+          </button>
+        </Show>
+      </div>
+    </Show>
+  );
+};
 
 void conn.ready();
 render(App, document.getElementById('root')!);
@@ -1528,6 +1661,7 @@ interface WashDiagSnapshot {
   loadAgeMs: number;
   visibility: DocumentVisibilityState;
   hasFocus: boolean;
+  conn: ReturnType<typeof conn.diag>;
   desktop: { instanceID: string; element: string } | null;
   declaredInstances: Array<{ id: string; element: string; surface: string }>;
   bundleReady: string[];
@@ -1553,6 +1687,7 @@ window.__washDiag = (): WashDiagSnapshot => {
     loadAgeMs: Math.round(performance.now() - __washLoadT0),
     visibility: document.visibilityState,
     hasFocus: document.hasFocus(),
+    conn: conn.diag(),
     desktop: d ? { instanceID: d.instanceID, element: d.element } : null,
     declaredInstances: [...instances.entries()].map(([id, v]) => ({ id, element: v.element, surface: v.surface })),
     bundleReady: [...bundleReady.keys()],

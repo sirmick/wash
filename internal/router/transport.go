@@ -22,6 +22,23 @@ import (
 // FE-bound frames are 256 KiB bundle chunks).
 const wsWriteTimeout = 30 * time.Second
 
+// readIdleTimeout reaps a shell connection the router has heard nothing
+// from for this long. The FE heartbeats (wire.TShellPing) ~every 15s, so
+// three missed pings (no keystrokes, no pings, no anything) means the
+// socket is a zombie the OS never FIN'd — typically a laptop suspended
+// with the lid shut, or a tab the kernel froze. Reaping it frees the
+// session's resources and, more importantly, surfaces the disconnect in
+// the logs instead of leaving a dead ShellSession pinned forever.
+//
+// The watchdog only ARMS once it has seen at least one ping, so an older
+// FE build that predates the heartbeat (and so never pings) is never
+// falsely reaped during an idle stretch — it simply keeps the legacy
+// "detected only when written to" behaviour.
+const readIdleTimeout = 45 * time.Second
+
+// readIdleCheckInterval is how often the watchdog samples liveness.
+const readIdleCheckInterval = 5 * time.Second
+
 // FrameTransport is an alias for wire.FrameTransport — the router
 // uses it pervasively, so re-exporting keeps call sites readable.
 type FrameTransport = wire.FrameTransport

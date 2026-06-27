@@ -280,6 +280,8 @@ Carries window/lifecycle control and the FE half of app messages.
 - `{"t":"panel.read.err","req_id":…,"code":"…","msg":"…"}`
 - `{"t":"clipboard.data","req_id":…,"mime":"…","text":"…"}` — reply to
   a shell `clipboard.get`.
+- `{"t":"pong","seq":N}` — heartbeat echo of a shell `ping` (above),
+  same `seq`, Control class (docs/RECONNECT.md).
 - `{"t":"clipboard.changed","mime":"…","text":"…"}` — broadcast to
   every shell except the setter on any clipboard change (app- or
   shell-originated). Unlike the §9 notice this carries the content,
@@ -314,6 +316,14 @@ Carries window/lifecycle control and the FE half of app messages.
   (docs/QOS.md §5).
 - `{"t":"log","level":"…","source":"…","msg":"…","stack":"…"?}` — FE
   log lines mirrored to the BE for visibility.
+- `{"t":"ping","seq":N}` — liveness heartbeat (docs/RECONNECT.md). The FE
+  sends one ~every 15s while the socket is open. The router echoes it as
+  `pong` with the same `seq` (Control class, so it never queues behind
+  bulk). The FE force-redials if a pong doesn't return in time — the
+  laptop-suspend "zombie socket" the OS froze without a close. The router
+  uses inbound pings to reap its own dead side after 45s of silence, but
+  only once it has seen at least one ping (so a heartbeat-less FE is never
+  falsely reaped).
 - `{"t":"clipboard.set","mime":"…","text":"…"}` — write the router-held
   clipboard on behalf of an app FE (window.wash.clipboardSetText).
   Text-only on this surface: channel 0 is JSON, where the §9 `data`

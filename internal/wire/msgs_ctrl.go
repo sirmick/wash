@@ -356,6 +356,12 @@ func DecodeCtrl(data []byte) (any, error) {
 	case TShellLog:
 		var m ShellLog
 		return m, json.Unmarshal(data, &m)
+	case TShellPing:
+		var m ShellPing
+		return m, json.Unmarshal(data, &m)
+	case TShellPong:
+		var m ShellPong
+		return m, json.Unmarshal(data, &m)
 	case TShellReload:
 		var m ShellReload
 		return m, json.Unmarshal(data, &m)

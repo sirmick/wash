@@ -8,8 +8,21 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 
-import { Conn } from './ws.ts';
+import { Conn, type ConnEvent } from './ws.ts';
 import type { SocketLike } from './virtio.ts';
+import {
+  CLASS_CONTROL,
+  decodeCtrl,
+  decodeFrame,
+  encodeCtrl,
+  encodeFrame,
+  flagsWithClass,
+  FLAG_END,
+} from './wire.ts';
+
+// Minimal shape of node:test's context we use (its types aren't resolvable
+// under the bundler tsconfig; the runner supplies the real object).
+type TestCtx = { after(fn: () => void): void };
 
 // stubSocket is an inert SocketLike so the Conn constructor's connect()
 // call doesn't touch a real WebSocket. It never fires lifecycle events.
@@ -165,4 +178,138 @@ test('queue overflow drops everything rather than a torn middle', () => {
   conn.sendRaw(1, chunk); // crosses 1MiB
   assert.equal(conn.pendingCount(), 0);
   assert.equal(sent.length, 0);
+});
+
+test('queue overflow emits a lost-input event', () => {
+  const sent: Uint8Array[] = [];
+  const events: ConnEvent[] = [];
+  const conn = new Conn(() => recordingSocket(sent), () => {}, () => {});
+  conn.onEvent((e) => events.push(e));
+  const chunk = new Uint8Array(256 * 1024);
+  for (let i = 0; i < 4; i++) conn.sendRaw(1, chunk); // crosses 1MiB on the 4th
+  const lost = events.filter((e) => e.kind === 'lost-input');
+  assert.equal(lost.length, 1);
+  assert.match(lost[0].msg, /dropped 4 unsent frame/);
+});
+
+// ---- heartbeat + wake + diagnostics ----
+//
+// These drive the heartbeat with tiny timing so a unit test runs in
+// milliseconds. The socket factory hands out recordingSockets the test
+// drives by hand (onopen/onclose/onmessage), so no real WebSocket is used.
+
+function lastCtrl(sent: Uint8Array[]): any {
+  for (let i = sent.length - 1; i >= 0; i--) {
+    const f = decodeFrame(sent[i]);
+    if (f.channel === 0) return decodeCtrl(f.payload);
+  }
+  return null;
+}
+
+function pongBytes(seq: number): ArrayBuffer {
+  const frame = encodeFrame({
+    flags: flagsWithClass(FLAG_END, CLASS_CONTROL),
+    channel: 0,
+    payload: encodeCtrl({ t: 'pong', seq }),
+  });
+  return frame.buffer as ArrayBuffer;
+}
+
+// hbConn builds a heartbeat-enabled Conn over a driveable socket and returns
+// the conn plus the socket list and the captured event/ctrl-handler streams.
+// Registers conn.close() as test cleanup so the heartbeat interval + any
+// armed reconnect timer don't keep the node:test process alive.
+function hbConn(t: { after(fn: () => void): void }, opts?: { pongTimeoutMs?: number; heartbeatMs?: number; wakeProbeMs?: number }) {
+  const sent: Uint8Array[] = [];
+  const socks: SocketLike[] = [];
+  const ctrl: any[] = [];
+  const events: ConnEvent[] = [];
+  const conn = new Conn(
+    () => {
+      const s = recordingSocket(sent);
+      socks.push(s);
+      return s;
+    },
+    (m) => ctrl.push(m),
+    () => {},
+    {
+      heartbeat: true,
+      heartbeatMs: opts?.heartbeatMs ?? 100_000, // periodic beat parked far away by default
+      pongTimeoutMs: opts?.pongTimeoutMs ?? 10_000,
+      wakeProbeMs: opts?.wakeProbeMs ?? 10_000,
+    },
+  );
+  conn.onEvent((e) => events.push(e));
+  t.after(() => conn.close());
+  return { conn, sent, socks, ctrl, events };
+}
+
+test('heartbeat: open sends a ping; matching pong records RTT and clears it', (t: TestCtx) => {
+  const { conn, sent, socks } = hbConn(t);
+  socks[0].onopen!(new Event('open'));
+  const ping = lastCtrl(sent);
+  assert.equal(ping.t, 'ping');
+  assert.equal(typeof ping.seq, 'number');
+  assert.equal(conn.diag().rttMs, null); // no pong yet
+
+  socks[0].onmessage!({ data: pongBytes(ping.seq) } as MessageEvent);
+  const d = conn.diag();
+  assert.ok(d.rttMs !== null && d.rttMs >= 0, 'rtt recorded after pong');
+  assert.notEqual(d.sincePongMs, Infinity);
+});
+
+test('heartbeat: pong is consumed by Conn, never reaches the app handler', (t: TestCtx) => {
+  const { socks, ctrl, sent } = hbConn(t);
+  socks[0].onopen!(new Event('open'));
+  const ping = lastCtrl(sent);
+  socks[0].onmessage!({ data: pongBytes(ping.seq) } as MessageEvent);
+  assert.equal(ctrl.length, 0, 'pong must not be delivered to the ctrl handler');
+});
+
+test('heartbeat: no pong → zombie event + force redial', async (t: TestCtx) => {
+  const { socks, events } = hbConn(t, { pongTimeoutMs: 15 });
+  socks[0].onopen!(new Event('open'));
+  // Wait past the pong deadline without answering.
+  await new Promise((r) => setTimeout(r, 330));
+  assert.ok(events.some((e) => e.kind === 'zombie'), 'zombie event fired');
+  // forceRedial dials a fresh socket without waiting for the dead one's close.
+  assert.ok(socks.length >= 2, 'a replacement socket was dialed');
+});
+
+test('wake while open fires a fresh liveness probe', (t: TestCtx) => {
+  const { conn, socks, sent, events } = hbConn(t);
+  socks[0].onopen!(new Event('open'));
+  const first = lastCtrl(sent).seq;
+  conn.wake('test');
+  const second = lastCtrl(sent);
+  assert.equal(second.t, 'ping');
+  assert.ok(second.seq > first, 'wake sent a new ping');
+  assert.ok(events.some((e) => e.kind === 'wake'));
+});
+
+test('wake while reconnecting redials immediately (skips backoff)', async (t: TestCtx) => {
+  const { conn, socks } = hbConn(t);
+  socks[0].onopen!(new Event('open'));
+  socks[0].onclose!(new Event('close') as CloseEvent); // → reconnecting, 250ms timer armed
+  assert.equal(socks.length, 1);
+  conn.wake('online');
+  await Promise.resolve(); // reconnectTick is async (no auth probe on factory)
+  await Promise.resolve();
+  assert.equal(socks.length, 2, 'redialed without waiting out the backoff');
+});
+
+test('reconnectNow is a no-op while open', (t: TestCtx) => {
+  const { conn, socks } = hbConn(t);
+  socks[0].onopen!(new Event('open'));
+  conn.reconnectNow();
+  assert.equal(socks.length, 1);
+});
+
+test('diag reports total reconnects and last close code', (t: TestCtx) => {
+  const { conn, socks } = hbConn(t);
+  socks[0].onopen!(new Event('open'));
+  const ev = { type: 'close', code: 1006, reason: 'abnormal' } as unknown as CloseEvent;
+  socks[0].onclose!(ev);
+  assert.equal(conn.diag().lastCloseCode, 1006);
+  assert.equal(conn.diag().state, 'reconnecting');
 });

@@ -32,6 +32,16 @@ const (
 	//     (direct)}; router resolves and forwards as EvtAppMsg.
 	TShellAppMsgSend = "app_msg.send"
 	TShellLog        = "log"
+	// Shell ↔ router liveness heartbeat (docs/WIRE.md §8.1). The browser
+	// sends ping ~every HeartbeatInterval while the socket is open; the
+	// router echoes pong with the same Seq. The FE uses the round-trip to
+	// detect a "zombie" socket — one the OS froze on laptop-suspend that
+	// never delivered a close — and force a reconnect; the router uses the
+	// inbound ping as a read-liveness signal to reap silently-dead shells
+	// (the read-idle watchdog). Control class so neither direction queues
+	// behind bulk traffic and falsely trips the watchdog under load.
+	TShellPing = "ping"
+	TShellPong = "pong"
 	// Shell → router, "launch this app id." Used for remote-apps
 	// (docs/REMOTE.md §6.1): host B runs --no-session, so there is no
 	// session BE to route a launcher click through — the shell asks B's
@@ -465,6 +475,28 @@ type ShellPeerError struct {
 
 func NewShellPeerError(origin, msg string) ShellPeerError {
 	return ShellPeerError{T: TShellPeerError, Origin: origin, Msg: msg}
+}
+
+// ShellPing (shell → router) and ShellPong (router → shell) are the
+// liveness heartbeat. Seq lets the FE match a pong to the ping it sent
+// and ignore a stale pong that arrives after it already gave up; the
+// router echoes Seq verbatim and holds no per-ping state of its own.
+type ShellPing struct {
+	T   string `json:"t"`
+	Seq uint64 `json:"seq"`
+}
+
+func NewShellPing(seq uint64) ShellPing {
+	return ShellPing{T: TShellPing, Seq: seq}
+}
+
+type ShellPong struct {
+	T   string `json:"t"`
+	Seq uint64 `json:"seq"`
+}
+
+func NewShellPong(seq uint64) ShellPong {
+	return ShellPong{T: TShellPong, Seq: seq}
 }
 
 // ShellAppMsgDeliver is the reverse: a BE → FE message, relayed to

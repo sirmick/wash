@@ -77,6 +77,8 @@ func TestShellRoundTrip(t *testing.T) {
 		NewShellChannelUnbind(5, "eof"),
 		NewShellChannelCredit(5, 65536),
 		NewShellLog(LogLevelError, "wash-app-about", "boom", "Error: boom\n    at foo (...)"),
+		NewShellPing(7),
+		NewShellPong(7),
 	}
 	for _, c := range cases {
 		c := c

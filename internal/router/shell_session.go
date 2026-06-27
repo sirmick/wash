@@ -8,6 +8,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sirmick/wash/internal/wire"
@@ -50,6 +51,20 @@ type ShellSession struct {
 	// closed, pump unblocked) when the shell disconnects. Guarded by peerMu.
 	peerMu       sync.Mutex
 	peerChannels map[uint32]*channelBinding
+
+	// lastReadAtNanos is the wall-clock time (UnixNano) of the most recent
+	// inbound frame of any kind — keystrokes, window intents, pings. The
+	// read-idle watchdog (readIdleLoop) reaps the connection when this goes
+	// stale. Atomic: written by the read goroutine (dispatch), read by the
+	// watchdog goroutine.
+	lastReadAtNanos atomic.Int64
+	// sawPing arms the watchdog. It flips true on the first wire.TShellPing,
+	// so a heartbeat-less legacy FE is never reaped for idleness. Atomic for
+	// the same cross-goroutine reason as lastReadAtNanos.
+	sawPing atomic.Bool
+	// connID is a short per-connection id for correlating the connect /
+	// disconnect / reap log lines of one browser session.
+	connID uint64
 }
 
 // declareInstance sends ShellAppDeclared (and ShellWindowCreate for
@@ -121,7 +136,10 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	// disconnect tears down its ssh -L'd peer connections (and unblocks
 	// their pump goroutines) instead of leaking them.
 	defer sess.closeAllPeers()
-	r.connectCount.Add(1)
+	sess.connID = r.connectCount.Add(1)
+	sess.lastReadAtNanos.Store(time.Now().UnixNano())
+	connStart := time.Now()
+	r.log("shell: connect conn=%d", sess.connID)
 	defer func() {
 		// Stop the drainer first so it doesn't try to write to a
 		// closing transport, then wait for it to exit.
@@ -129,9 +147,17 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 		<-sess.drainerDone
 		// Bank this connection's counters into the session running totals
 		// so the desktop info panel + About survive the disconnect.
-		r.linkTotals.add(sess.scheduler.StatsSnapshot())
+		snap := sess.scheduler.StatsSnapshot()
+		r.linkTotals.add(snap)
+		// Disconnect summary: the single most useful line for "did my
+		// laptop-suspend drop the connection, and was anything in flight?"
+		r.log("shell: disconnect conn=%d dur=%s rx_frames=%d tx_frames=%d idle=%s",
+			sess.connID, time.Since(connStart).Round(time.Millisecond),
+			snap.RxFrames, sumU64(snap.TxFrames[:]),
+			time.Since(time.Unix(0, sess.lastReadAtNanos.Load())).Round(time.Millisecond))
 	}()
 	go sess.drainLoop(ctx)
+	go sess.readIdleLoop(ctx)
 
 	// Hold writeMu for the whole setup. While we hold it, any
 	// concurrent HandleApp.declareInstance blocks at the same mutex,
@@ -228,6 +254,71 @@ func (s *ShellSession) emitLinkStats() {
 	s.scheduler.SubmitTelemetry(f)
 }
 
+// handlePing echoes a heartbeat. The pong rides ClassControl (like the
+// link-stats telemetry) so it is delivered ahead of any bulk traffic and
+// the FE's round-trip timing reflects liveness, not queueing depth. Seq is
+// echoed verbatim; the router holds no per-ping state. The first ping also
+// arms the read-idle watchdog (see readIdleLoop) — a connection that speaks
+// the heartbeat is one we may reap for silence.
+func (s *ShellSession) handlePing(m wire.ShellPing) error {
+	if s.sawPing.CompareAndSwap(false, true) {
+		s.router.log("shell: heartbeat armed conn=%d", s.connID)
+	}
+	return s.WriteCtrlClass(wire.NewShellPong(m.Seq), wire.ClassControl)
+}
+
+// readIdleLoop reaps a shell connection the OS froze without closing — the
+// laptop-suspend zombie (docs/PTY_ROBUST.md, Fix D). Once the FE has proved
+// it heartbeats (sawPing), a gap longer than readIdleTimeout since the last
+// inbound frame means the socket is dead; we close the transport, which
+// unblocks the read loop and runs the normal teardown. Until the first ping
+// the watchdog is dormant, so a legacy FE is never falsely reaped.
+func (s *ShellSession) readIdleLoop(ctx context.Context) {
+	t := time.NewTicker(readIdleCheckInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.drainerDone:
+			return
+		case <-t.C:
+			if s.idleReapDue(time.Now(), readIdleTimeout) {
+				idle := time.Since(time.Unix(0, s.lastReadAtNanos.Load()))
+				s.router.log("shell: read-idle reap conn=%d idle=%s — closing zombie connection",
+					s.connID, idle.Round(time.Millisecond))
+				_ = s.Transport.Close()
+				return
+			}
+		}
+	}
+}
+
+// idleReapDue is the watchdog's decision, factored out so it can be tested
+// without timing. False until the FE has proved it heartbeats (sawPing) —
+// that guard is what keeps a legacy, ping-less FE from being reaped during a
+// quiet stretch.
+func (s *ShellSession) idleReapDue(now time.Time, timeout time.Duration) bool {
+	if !s.sawPing.Load() {
+		return false
+	}
+	last := s.lastReadAtNanos.Load()
+	if last == 0 {
+		return false
+	}
+	return now.Sub(time.Unix(0, last)) > timeout
+}
+
+// sumU64 totals a slice of counters (the per-class TxFrames array) for a
+// single human-readable figure in the disconnect summary.
+func sumU64(xs []uint64) uint64 {
+	var n uint64
+	for _, x := range xs {
+		n += x
+	}
+	return n
+}
+
 func (s *ShellSession) loop(ctx context.Context) error {
 	err := wire.ReadLoop(ctx, s.Transport, s.dispatch)
 	if errors.Is(err, context.Canceled) {
@@ -240,6 +331,10 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 	// Ingress accounting (every inbound frame: keystrokes, window intents,
 	// uploaded file content) for the link-health rx figure.
 	s.statsLink().recordRx(len(f.Payload))
+	// Liveness: any inbound frame proves the socket is alive. Stamp it for
+	// the read-idle watchdog (readIdleLoop) so a busy connection — even one
+	// sending only bulk uploads — never trips the zombie reaper.
+	s.lastReadAtNanos.Store(time.Now().UnixNano())
 	if f.Channel != ChannelControl {
 		// Channel ≥ 1 on WS: raw byte stream. Forward to the bound
 		// app verbatim on the same channel id.
@@ -312,6 +407,8 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 	case wire.ShellPeerDetach:
 		s.detachPeer(m.Origin)
 		return nil
+	case wire.ShellPing:
+		return s.handlePing(m)
 	case wire.ShellLog:
 		return s.handleShellLog(m)
 	case wire.ShellChannelCredit:
