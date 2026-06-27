@@ -14,7 +14,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { ConfirmDialog, FilePicker, FileTree, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
+import { Button, ConfirmDialog, FilePicker, FileTree, Input, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
 import type { TerminalAPI } from '@wash/ui';
 import {
   joinPath, baseName, parentPath,
@@ -2306,15 +2306,24 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               'text-overflow': 'ellipsis',
               'white-space': 'nowrap',
             }}>{root() || 'loading…'}</span>
-            <button
-              type="button"
+            <Button
+              variant="ghost"
               data-testid="edit-open-in-fm"
               title="Open in fm"
               onClick={openInFm}
-              style={sidebarHeaderBtnStyle}
+              style={{
+                color: tokens.fgMuted,
+                width: '22px',
+                height: '22px',
+                display: 'inline-flex',
+                'align-items': 'center',
+                'justify-content': 'center',
+                padding: 0,
+                'flex-shrink': 0,
+              }}
             >
               <FolderIcon size={12} />
-            </button>
+            </Button>
           </div>
           <FileTree
             rows={flatRows()}
@@ -2775,16 +2784,16 @@ const WysiwygToolbar: Component<{ tab: () => Tab; handle: () => WysiwygHandle | 
     h.editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
   };
   const btn = (id: string, title: string, icon: () => JSX.Element, onClick: () => void) => (
-    <button
-      type="button"
+    <Button
+      variant="icon"
       data-testid={`edit-wf-${id}`}
       title={title}
       onClick={onClick}
       onMouseDown={(e) => e.preventDefault()}
-      style={toolbarBtnStyle}
+      style={{ padding: 0, height: '22px' }}
     >
       {icon()}
-    </button>
+    </Button>
   );
   return (
     <div data-testid="edit-wf-toolbar" style={toolbarStyle}>
@@ -2880,36 +2889,36 @@ const WysFindBar: Component<{
   return (
     <div data-testid="edit-wf-find" style={findBarStyle}>
       <div style={findRowStyle}>
-        <input
+        <Input
           ref={findInput}
           data-testid="edit-wf-find-input"
           placeholder="Find"
           value={query()}
           onInput={(ev) => onQueryInput(ev.currentTarget.value)}
           onKeyDown={onFindKey}
-          style={findInputStyle}
+          style={{ padding: '0 6px', height: '22px', width: '160px', 'box-sizing': 'border-box', font: tokens.type.monoMd }}
         />
         <span data-testid="edit-wf-find-count" style={findCountStyle}>
           {query() ? `${hits().count ? hits().current + 1 : 0}/${hits().count}` : ''}
         </span>
-        <button type="button" data-testid="edit-wf-find-prev" onMouseDown={(e) => e.preventDefault()} title="Previous match (Shift+Enter)" onClick={() => nav('prev')} style={toolbarBtnStyle}>
+        <Button variant="icon" data-testid="edit-wf-find-prev" onMouseDown={(e) => e.preventDefault()} title="Previous match (Shift+Enter)" onClick={() => nav('prev')} style={{ padding: 0, height: '22px' }}>
           <ChevronUp size={14} />
-        </button>
-        <button type="button" data-testid="edit-wf-find-next" onMouseDown={(e) => e.preventDefault()} title="Next match (Enter)" onClick={() => nav('next')} style={toolbarBtnStyle}>
+        </Button>
+        <Button variant="icon" data-testid="edit-wf-find-next" onMouseDown={(e) => e.preventDefault()} title="Next match (Enter)" onClick={() => nav('next')} style={{ padding: 0, height: '22px' }}>
           <ChevronDown size={14} />
-        </button>
-        <button type="button" data-testid="edit-wf-find-close" onMouseDown={(e) => e.preventDefault()} title="Close (Escape)" onClick={props.onClose} style={toolbarBtnStyle}>
+        </Button>
+        <Button variant="icon" data-testid="edit-wf-find-close" onMouseDown={(e) => e.preventDefault()} title="Close (Escape)" onClick={props.onClose} style={{ padding: 0, height: '22px' }}>
           ×
-        </button>
+        </Button>
       </div>
       <div style={findRowStyle}>
-        <input
+        <Input
           data-testid="edit-wf-replace-input"
           placeholder="Replace"
           value={repl()}
           onInput={(ev) => setRepl(ev.currentTarget.value)}
           onKeyDown={onReplKey}
-          style={findInputStyle}
+          style={{ padding: '0 6px', height: '22px', width: '160px', 'box-sizing': 'border-box', font: tokens.type.monoMd }}
         />
         <button type="button" data-testid="edit-wf-replace-one" onMouseDown={(e) => e.preventDefault()} title="Replace current match (Enter)" onClick={() => doReplace(false)} style={findButtonStyle}>
           Replace
@@ -3136,20 +3145,6 @@ const sidebarHeaderStyle: JSX.CSSProperties = {
   'border-bottom': `1px solid ${tokens.borderMenu}`,
 };
 
-const sidebarHeaderBtnStyle: JSX.CSSProperties = {
-  background: 'transparent',
-  color: tokens.fgMuted,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}`,
-  width: '22px',
-  height: '22px',
-  display: 'inline-flex',
-  'align-items': 'center',
-  'justify-content': 'center',
-  cursor: 'pointer',
-  'flex-shrink': 0,
-};
-
 // The sidebar list IS the shared <FileTree>'s scroll container; this is its
 // outer style (flex child of the sidebar). Row look + indentation now live in
 // FileTree (@wash/ui).
@@ -3183,20 +3178,6 @@ const toolbarStyle: JSX.CSSProperties = {
   'min-height': '26px',
 };
 
-const toolbarBtnStyle: JSX.CSSProperties = {
-  display: 'inline-flex',
-  'align-items': 'center',
-  'justify-content': 'center',
-  width: '24px',
-  height: '22px',
-  background: 'transparent',
-  border: `1px solid transparent`,
-  'border-radius': `${tokens.radiusSm}`,
-  color: tokens.fg,
-  cursor: 'pointer',
-  padding: 0,
-};
-
 const toolbarSepStyle: JSX.CSSProperties = {
   width: '1px',
   height: '16px',
@@ -3226,19 +3207,6 @@ const findRowStyle: JSX.CSSProperties = {
   display: 'flex',
   'align-items': 'center',
   gap: '4px',
-};
-
-const findInputStyle: JSX.CSSProperties = {
-  background: tokens.bgInset,
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}`,
-  padding: '0 6px',
-  height: '22px',
-  width: '160px',
-  'box-sizing': 'border-box',
-  font: tokens.type.monoMd,
-  outline: 'none',
 };
 
 const findCountStyle: JSX.CSSProperties = {

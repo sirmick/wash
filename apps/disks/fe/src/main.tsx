@@ -11,7 +11,7 @@
 import { For, Match, Show, Switch, createMemo, createSignal, onMount } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { createAppBus, defineWashApp, fmtBytes, fmtRate, tokens } from '@wash/ui';
+import { Button, createAppBus, defineWashApp, fmtBytes, fmtRate, tokens } from '@wash/ui';
 import {
   HardDrive,
   HardDriveDownload,
@@ -103,8 +103,8 @@ const FullnessBar: Component<{ used: number; total: number }> = (props) => {
   const color = () => {
     const p = pct();
     if (p > 90) return tokens.borderDanger;
-    if (p > 75) return '#c8a04a';
-    return '#3a9d8f';
+    if (p > 75) return tokens.accentAmber;
+    return tokens.accentTeal;
   };
   return (
     <div data-testid="disks-fullness">
@@ -273,9 +273,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       <div style={listStyle} data-testid="disks-list">
         <Show when={canScan()}>
           <div style={{ padding: '4px 12px 8px' }}>
-            <button data-testid="disks-scan" disabled={scanning()} onClick={scanVolumes} style={smartBtnStyle}>
+            <Button
+              variant="default"
+              size="sm"
+              data-testid="disks-scan"
+              disabled={scanning()}
+              onClick={scanVolumes}
+              style={{ padding: '2px 10px', font: tokens.type.textSm }}
+            >
               {scanning() ? 'Scanning…' : 'Scan volumes (root)'}
-            </button>
+            </Button>
           </div>
         </Show>
         <For each={rows()}>
@@ -427,9 +434,9 @@ const DiskDetail: Component<{
         <div style={{ opacity: 0.6, 'padding-bottom': '4px', 'font-size': tokens.fontSizeBase }}>
           I/O — read {fmtRate(lastR())} · write {fmtRate(lastW())}
         </div>
-        <Spark data={hist().r} color="#4a8ab0" />
+        <Spark data={hist().r} color={tokens.accentBlue} />
         <div style={{ height: '4px' }} />
-        <Spark data={hist().w} color="#d97757" />
+        <Spark data={hist().w} color={tokens.accentOrange} />
       </div>
       <Show when={props.smartCap || props.disk.smart_supported}>
         <SmartPanel disk={props.disk} smart={props.smart} onCheck={() => props.onCheckSmart(props.disk.name)} />
@@ -443,23 +450,25 @@ const SmartPanel: Component<{ disk: Disk; smart: SmartState | undefined; onCheck
     <div style={{ 'padding-top': '14px', 'border-top': `1px solid ${tokens.borderMenu}`, 'margin-top': '14px' }}>
       <div style={{ display: 'flex', 'align-items': 'center', gap: '10px', 'padding-bottom': '8px' }}>
         <span style={{ font: tokens.type.titleSm }}>SMART health</span>
-        <button
+        <Button
+          variant="default"
+          size="sm"
           data-testid="disks-smart-check"
           disabled={props.smart?.loading}
           onClick={props.onCheck}
-          style={smartBtnStyle}
+          style={{ padding: '2px 10px', font: tokens.type.textSm }}
         >
           {props.smart?.loading ? 'Checking…' : props.smart?.report ? 'Re-check' : 'Check health'}
-        </button>
+        </Button>
         <Show when={props.smart?.report?.have_status}>
           <span
             data-testid="disks-smart-badge"
             style={{
               padding: '1px 8px',
-              'border-radius': '3px',
+              'border-radius': `${tokens.radiusSm}`,
               'font-size': tokens.fontSizeSm,
-              background: props.smart!.report!.passed ? '#2c5d4f' : tokens.borderDanger,
-              color: '#fff',
+              background: props.smart!.report!.passed ? tokens.bgSuccess : tokens.bgDanger,
+              color: props.smart!.report!.passed ? tokens.fgSuccess : tokens.fgDanger,
             }}
           >
             {props.smart!.report!.passed ? 'PASSED' : 'FAILED'}
@@ -655,16 +664,6 @@ const detailStyle: JSX.CSSProperties = {
   flex: '1 1 auto',
   height: '100%',
   overflow: 'hidden',
-};
-
-const smartBtnStyle: JSX.CSSProperties = {
-  background: tokens.bgMenu,
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': '3px',
-  padding: '2px 10px',
-  cursor: 'pointer',
-  font: tokens.type.textSm,
 };
 
 // ---- custom element ----

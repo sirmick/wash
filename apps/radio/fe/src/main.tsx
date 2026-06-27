@@ -9,6 +9,7 @@
 
 import {
   Button,
+  Input,
   NowPlaying,
   SeekBar,
   TransportControls,
@@ -672,7 +673,7 @@ function RadioApp(props: WashAppProps) {
 
       {/* paste a stream URL */}
       <div style={{ display: 'flex', 'align-items': 'center', gap: `${tokens.spaceMd}px` }}>
-        <input
+        <Input
           data-testid="add-url"
           type="text"
           spellcheck={false}
@@ -685,16 +686,7 @@ function RadioApp(props: WashAppProps) {
               addStation();
             }
           }}
-          style={{
-            flex: 1,
-            background: tokens.bgInset,
-            color: tokens.fg,
-            border: `1px solid ${tokens.borderMenu}`,
-            'border-radius': `${tokens.radiusSm}`,
-            padding: '4px 8px',
-            'font-size': tokens.fontSizeMd,
-            outline: 'none',
-          }}
+          style={{ flex: 1 }}
         />
         <Button data-testid="add-station" onClick={addStation}>
           <Plus size={13} />

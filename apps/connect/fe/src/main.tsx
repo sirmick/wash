@@ -21,7 +21,7 @@
 
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { createAppBus, defineWashApp, tokens, Terminal } from '@wash/ui';
+import { createAppBus, defineWashApp, tokens, Terminal, Button, Input, Checkbox } from '@wash/ui';
 
 // ----- wire types -----
 
@@ -399,27 +399,27 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       <Header />
       <div style={bodyStyle}>
         <div style={connectRowStyle}>
-          <input
+          <Input
             type="text"
             placeholder="user@host"
             value={hostInput()}
             onInput={(e) => setHostInput(e.currentTarget.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') connectFromInput(); }}
-            style={inputStyle}
+            style={{ flex: 1, 'min-width': 0, font: tokens.type.monoMd }}
             data-testid="connect-host-input"
           />
-          <button type="button" onClick={connectFromInput} style={primaryBtnStyle} data-testid="connect-submit">
+          <Button onClick={connectFromInput} style={{ 'white-space': 'nowrap', 'flex-shrink': 0 }} data-testid="connect-submit">
             Connect
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="icon"
             onClick={saveFromInput}
-            style={iconBtnStyle}
+            style={{ color: tokens.fgMuted }}
             title="Save without connecting"
             data-testid="connect-add"
           >
             ☆
-          </button>
+          </Button>
         </div>
 
         <Show
@@ -574,28 +574,28 @@ const HostRow: Component<{
           {statusLabel(props.host.status)}
         </span>
         <Show when={needsAuth()}>
-          <button type="button" onClick={props.onAuth} style={authBtnStyle} data-testid="connect-authenticate">
+          <Button variant="ghost" size="sm" onClick={props.onAuth} style={{ 'white-space': 'nowrap', 'flex-shrink': 0 }} data-testid="connect-authenticate">
             Authenticate
-          </button>
+          </Button>
         </Show>
         <Show when={down() && !needsAuth()}>
-          <button type="button" onClick={props.onReconnect} style={authBtnStyle} data-testid="connect-reconnect">
+          <Button variant="ghost" size="sm" onClick={props.onReconnect} style={{ 'white-space': 'nowrap', 'flex-shrink': 0 }} data-testid="connect-reconnect">
             Reconnect
-          </button>
+          </Button>
         </Show>
-        <button
-          type="button"
+        <Button
+          variant="icon"
           onClick={props.onToggleDrawer}
-          style={{ ...iconBtnStyle, color: props.drawerOpen ? tokens.fg : tokens.fgMuted }}
+          style={{ color: props.drawerOpen ? tokens.fg : tokens.fgMuted }}
           title="Host settings"
           data-testid="connect-host-settings"
           aria-expanded={props.drawerOpen}
         >
           ⚙
-        </button>
-        <button type="button" onClick={props.onDisconnect} style={iconBtnStyle} title="Disconnect" data-testid="connect-disconnect">
+        </Button>
+        <Button variant="icon" onClick={props.onDisconnect} style={{ color: tokens.fgMuted }} title="Disconnect" data-testid="connect-disconnect">
           ✕
-        </button>
+        </Button>
       </div>
 
       {/* Apps row — the payoff of connecting. Terminal/Files/Editor up front. */}
@@ -603,16 +603,16 @@ const HostRow: Component<{
         <div style={appsRowStyle}>
           <For each={primary()}>
             {(app) => (
-              <button
-                type="button"
-                style={appBtnStyle}
+              <Button
+                variant="ghost"
+                style={{ display: 'flex', 'align-items': 'center', gap: '6px', 'white-space': 'nowrap' }}
                 onClick={() => props.onLaunch(app.id)}
                 data-testid={`connect-launch-${app.id}`}
                 title={`Open ${app.name}`}
               >
                 <AppIcon app={app} size={15} />
                 <span style={appBtnLabelStyle}>{app.name}</span>
-              </button>
+              </Button>
             )}
           </For>
           <Show when={primary().length === 0 && more().length === 0}>
@@ -677,21 +677,21 @@ const HostDrawer: Component<{
   return (
     <div style={drawerStyle} data-testid="connect-drawer">
       <div style={drawerRowStyle}>
-        <button
-          type="button"
+        <Button
+          variant="icon"
           onClick={props.onToggleBookmark}
-          style={{ ...iconBtnStyle, color: props.bookmarked ? tokens.accentAmber : tokens.fgMuted, 'font-size': '15px' }}
+          style={{ color: props.bookmarked ? tokens.accentAmber : tokens.fgMuted, 'font-size': '15px' }}
           title={props.bookmarked ? 'Forget this host' : 'Save this host'}
           data-testid="connect-bookmark-host"
         >
           {props.bookmarked ? '★' : '☆'}
-        </button>
-        <input
+        </Button>
+        <Input
           type="text"
           value={props.bookmark?.label ?? ''}
           placeholder="label"
           onInput={(e) => props.onSetLabel(e.currentTarget.value)}
-          style={drawerLabelInputStyle}
+          style={{ flex: 1, 'min-width': 0 }}
           data-testid="connect-drawer-label"
         />
       </div>
@@ -702,15 +702,12 @@ const HostDrawer: Component<{
           <div style={drawerAppsStyle}>
             <For each={props.apps.filter((a) => a.surface === 'window' && !a.disabled)}>
               {(app) => (
-                <label style={drawerCheckStyle} data-testid={`connect-auto-app-${app.id}`}>
-                  <input
-                    type="checkbox"
-                    checked={autoApps().includes(app.id)}
-                    onChange={() => props.onToggleAutoApp(app.id)}
-                  />
-                  <AppIcon app={app} size={14} />
-                  <span>{app.name}</span>
-                </label>
+                <Checkbox
+                  checked={autoApps().includes(app.id)}
+                  onChange={() => props.onToggleAutoApp(app.id)}
+                  data-testid={`connect-auto-app-${app.id}`}
+                  label={<><AppIcon app={app} size={14} /><span>{app.name}</span></>}
+                />
               )}
             </For>
           </div>
@@ -723,21 +720,21 @@ const HostDrawer: Component<{
           {(p) => (
             <div style={drawerChipRowStyle} data-testid="connect-auto-mount">
               <span style={drawerChipPathStyle} title={p}>{p}</span>
-              <button type="button" onClick={() => props.onRemoveAutoMount(p)} style={iconBtnStyle} title="Remove">✕</button>
+              <Button variant="icon" onClick={() => props.onRemoveAutoMount(p)} style={{ color: tokens.fgMuted }} title="Remove">✕</Button>
             </div>
           )}
         </For>
         <div style={mountAddStyle}>
-          <input
+          <Input
             type="text"
             value={mountPath()}
             onInput={(e) => setMountPath(e.currentTarget.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') submitMount(); }}
             placeholder="remote folder (e.g. /home/user)"
-            style={mountInputStyle}
+            style={{ flex: 1, 'min-width': 0, font: tokens.type.monoSm }}
             data-testid="connect-auto-mount-input"
           />
-          <button type="button" onClick={submitMount} style={mountBtnStyle} data-testid="connect-auto-mount-add">Add</button>
+          <Button variant="ghost" onClick={submitMount} style={{ 'white-space': 'nowrap', 'flex-shrink': 0 }} data-testid="connect-auto-mount-add">Add</Button>
         </div>
       </div>
     </div>
@@ -768,31 +765,31 @@ const MountsSection: Component<{
           <div style={mountRowStyle} data-testid="connect-mount" data-status={mt.status} data-mount={mt.mount_point}>
             <span style={mountPathStyle} title={mt.mount_point}>{mt.remote_root}</span>
             <span style={mountStatusStyle}>{statusText(mt)}</span>
-            <button
-              type="button"
+            <Button
+              variant="icon"
               onClick={() => props.onUnmount(mt.mount_point)}
-              style={iconBtnStyle}
+              style={{ color: tokens.fgMuted }}
               title="Unmount"
               data-testid="connect-unmount"
             >
               ✕
-            </button>
+            </Button>
           </div>
         )}
       </For>
       <div style={mountAddStyle}>
-        <input
+        <Input
           type="text"
           value={path()}
           onInput={(e) => setPath(e.currentTarget.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
           placeholder="mount a remote folder (e.g. /home/user)"
-          style={mountInputStyle}
+          style={{ flex: 1, 'min-width': 0, font: tokens.type.monoSm }}
           data-testid="connect-mount-input"
         />
-        <button type="button" onClick={submit} style={mountBtnStyle} data-testid="connect-mount-submit">
+        <Button variant="ghost" onClick={submit} style={{ 'white-space': 'nowrap', 'flex-shrink': 0 }} data-testid="connect-mount-submit">
           Mount
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -824,30 +821,30 @@ const BookmarkRow: Component<{
         <Show when={autoApps().length > 0}>
           <span style={autoBadgeStyle} title={`Auto-opens ${autoApps().length} app(s)`}>auto</span>
         </Show>
-        <button type="button" onClick={props.onConnect} style={primaryBtnStyle} data-testid="connect-bookmark-launch">
+        <Button onClick={props.onConnect} style={{ 'white-space': 'nowrap', 'flex-shrink': 0 }} data-testid="connect-bookmark-launch">
           Connect
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="icon"
           onClick={props.onToggleDrawer}
-          style={{ ...iconBtnStyle, color: props.drawerOpen ? tokens.fg : tokens.fgMuted }}
+          style={{ color: props.drawerOpen ? tokens.fg : tokens.fgMuted }}
           title="Host settings"
           aria-expanded={props.drawerOpen}
         >
           ⚙
-        </button>
-        <button type="button" onClick={props.onRemove} style={iconBtnStyle} title="Remove bookmark" data-testid="connect-bookmark-remove">
+        </Button>
+        <Button variant="icon" onClick={props.onRemove} style={{ color: tokens.fgMuted }} title="Remove bookmark" data-testid="connect-bookmark-remove">
           ✕
-        </button>
+        </Button>
       </div>
       <Show when={props.drawerOpen}>
         <div style={drawerStyle} data-testid="connect-drawer">
-          <input
+          <Input
             type="text"
             value={props.bookmark.label ?? ''}
             placeholder="label"
             onInput={(e) => props.onSetLabel(e.currentTarget.value)}
-            style={drawerLabelInputStyle}
+            style={{ flex: 1, 'min-width': 0 }}
             data-testid="connect-drawer-label"
           />
           <div style={drawerSectionStyle}>
@@ -858,7 +855,7 @@ const BookmarkRow: Component<{
                   {(id) => (
                     <span style={drawerChipRowStyle} data-testid="connect-auto-app-chip">
                       <span style={drawerChipPathStyle}>{id.replace('com.wash.', '')}</span>
-                      <button type="button" onClick={() => props.onRemoveAutoApp(id)} style={iconBtnStyle} title="Remove">✕</button>
+                      <Button variant="icon" onClick={() => props.onRemoveAutoApp(id)} style={{ color: tokens.fgMuted }} title="Remove">✕</Button>
                     </span>
                   )}
                 </For>
@@ -871,21 +868,21 @@ const BookmarkRow: Component<{
               {(p) => (
                 <div style={drawerChipRowStyle} data-testid="connect-auto-mount">
                   <span style={drawerChipPathStyle} title={p}>{p}</span>
-                  <button type="button" onClick={() => props.onRemoveAutoMount(p)} style={iconBtnStyle} title="Remove">✕</button>
+                  <Button variant="icon" onClick={() => props.onRemoveAutoMount(p)} style={{ color: tokens.fgMuted }} title="Remove">✕</Button>
                 </div>
               )}
             </For>
             <div style={mountAddStyle}>
-              <input
+              <Input
                 type="text"
                 value={mountPath()}
                 onInput={(e) => setMountPath(e.currentTarget.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') submitMount(); }}
                 placeholder="remote folder (e.g. /home/user)"
-                style={mountInputStyle}
+                style={{ flex: 1, 'min-width': 0, font: tokens.type.monoSm }}
                 data-testid="connect-auto-mount-input"
               />
-              <button type="button" onClick={submitMount} style={mountBtnStyle} data-testid="connect-auto-mount-add">Add</button>
+              <Button variant="ghost" onClick={submitMount} style={{ 'white-space': 'nowrap', 'flex-shrink': 0 }} data-testid="connect-auto-mount-add">Add</Button>
             </div>
           </div>
         </div>
@@ -915,12 +912,12 @@ const CandidateRow: Component<{
       <Show when={props.candidate.wash}>
         <span style={candidateChipStyle} data-testid="connect-candidate-wash">wash</span>
       </Show>
-      <button type="button" onClick={props.onConnect} style={rowConnectBtnStyle} data-testid="connect-candidate-connect">
+      <Button size="sm" onClick={props.onConnect} style={{ 'white-space': 'nowrap', 'flex-shrink': 0 }} data-testid="connect-candidate-connect">
         Connect
-      </button>
-      <button type="button" onClick={props.onSave} style={iconBtnStyle} title="Save as bookmark" data-testid="connect-candidate-save">
+      </Button>
+      <Button variant="icon" onClick={props.onSave} style={{ color: tokens.fgMuted }} title="Save as bookmark" data-testid="connect-candidate-save">
         ☆
-      </button>
+      </Button>
     </div>
   </div>
 );
@@ -935,16 +932,16 @@ const MoreMenu: Component<{
   onPick: (appID: string) => void;
 }> = (props) => (
   <div style={launchWrapStyle}>
-    <button
-      type="button"
+    <Button
+      variant="ghost"
       onClick={props.onToggle}
-      style={moreBtnStyle}
+      style={{ 'white-space': 'nowrap' }}
       data-testid="connect-launch"
       aria-haspopup="menu"
       aria-expanded={props.open}
     >
       More ▾
-    </button>
+    </Button>
     <Show when={props.open}>
       <div style={backdropStyle} onClick={props.onClose} data-testid="connect-launch-backdrop" />
       <div style={menuStyle} data-testid="connect-apps" role="menu">
@@ -982,7 +979,7 @@ const AuthOverlay: Component<{ host: string; channel: number; onCancel: () => vo
   <div style={authOverlayStyle} data-testid="connect-auth">
     <div style={authHeaderStyle}>
       <span>Authorize this machine on <strong>{props.host}</strong> — enter its password</span>
-      <button type="button" onClick={props.onCancel} style={iconBtnStyle} data-testid="connect-auth-cancel" title="Cancel">✕</button>
+      <Button variant="icon" onClick={props.onCancel} style={{ color: tokens.fgMuted }} data-testid="connect-auth-cancel" title="Cancel">✕</Button>
     </div>
     <div style={authTermStyle}>
       <Terminal channelId={props.channel} initialCols={80} initialRows={24} contextMenu={false} />
@@ -1061,48 +1058,11 @@ const bodyStyle: JSX.CSSProperties = { overflow: 'auto', padding: '14px 18px 20p
 
 const connectRowStyle: JSX.CSSProperties = { display: 'flex', 'align-items': 'center', gap: '8px', 'margin-bottom': '16px' };
 
-const inputStyle: JSX.CSSProperties = {
-  flex: 1,
-  background: tokens.bgWindow,
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}`,
-  padding: '7px 10px',
-  font: tokens.type.monoMd,
-  'min-width': 0,
-};
-
-const primaryBtnStyle: JSX.CSSProperties = {
-  background: tokens.accentBlue,
-  color: '#fff',
-  border: 'none',
-  'border-radius': `${tokens.radiusSm}`,
-  padding: '7px 14px',
-  font: tokens.type.titleSm,
-  cursor: 'pointer',
-  'white-space': 'nowrap',
-  'flex-shrink': 0,
-};
-
 const appsRowStyle: JSX.CSSProperties = {
   display: 'flex',
   'align-items': 'center',
   'flex-wrap': 'wrap',
   gap: '6px',
-};
-
-const appBtnStyle: JSX.CSSProperties = {
-  display: 'flex',
-  'align-items': 'center',
-  gap: '6px',
-  background: tokens.bgWindow,
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}`,
-  padding: '5px 10px',
-  font: tokens.type.textMd,
-  cursor: 'pointer',
-  'white-space': 'nowrap',
 };
 
 const appBtnLabelStyle: JSX.CSSProperties = { 'line-height': 1 };
@@ -1111,17 +1071,6 @@ const appsEmptyStyle: JSX.CSSProperties = {
   color: tokens.fgMuted,
   font: tokens.type.textSm,
   opacity: 0.7,
-};
-
-const moreBtnStyle: JSX.CSSProperties = {
-  background: 'transparent',
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}`,
-  padding: '5px 10px',
-  font: tokens.type.textMd,
-  cursor: 'pointer',
-  'white-space': 'nowrap',
 };
 
 const autoBadgeStyle: JSX.CSSProperties = {
@@ -1163,29 +1112,6 @@ const mountStatusStyle: JSX.CSSProperties = {
 
 const mountAddStyle: JSX.CSSProperties = { display: 'flex', gap: '6px' };
 
-const mountInputStyle: JSX.CSSProperties = {
-  flex: 1,
-  background: tokens.bgWindow,
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}`,
-  padding: '5px 8px',
-  font: tokens.type.monoSm,
-  'min-width': 0,
-};
-
-const mountBtnStyle: JSX.CSSProperties = {
-  background: 'transparent',
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}`,
-  padding: '5px 12px',
-  font: tokens.type.titleSm,
-  cursor: 'pointer',
-  'white-space': 'nowrap',
-  'flex-shrink': 0,
-};
-
 // ----- preferences drawer -----
 
 const drawerStyle: JSX.CSSProperties = {
@@ -1198,17 +1124,6 @@ const drawerStyle: JSX.CSSProperties = {
 };
 
 const drawerRowStyle: JSX.CSSProperties = { display: 'flex', 'align-items': 'center', gap: '8px' };
-
-const drawerLabelInputStyle: JSX.CSSProperties = {
-  flex: 1,
-  background: tokens.bgWindow,
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}`,
-  padding: '5px 8px',
-  font: tokens.type.textSm,
-  'min-width': 0,
-};
 
 const drawerSectionStyle: JSX.CSSProperties = { display: 'flex', 'flex-direction': 'column', gap: '5px' };
 
@@ -1226,14 +1141,6 @@ const drawerHintStyle: JSX.CSSProperties = {
 };
 
 const drawerAppsStyle: JSX.CSSProperties = { display: 'flex', 'flex-wrap': 'wrap', gap: '8px' };
-
-const drawerCheckStyle: JSX.CSSProperties = {
-  display: 'flex',
-  'align-items': 'center',
-  gap: '5px',
-  font: tokens.type.textSm,
-  cursor: 'pointer',
-};
 
 const drawerChipRowStyle: JSX.CSSProperties = {
   display: 'flex',
@@ -1324,47 +1231,6 @@ const candidateChipStyle: JSX.CSSProperties = {
   'flex-shrink': 0,
 };
 
-const iconBtnStyle: JSX.CSSProperties = {
-  background: 'transparent',
-  color: tokens.fgMuted,
-  border: 'none',
-  cursor: 'pointer',
-  font: tokens.type.textMd,
-  padding: '0 4px',
-  'line-height': 1,
-  'flex-shrink': 0,
-};
-
-// rowConnectBtnStyle is the compact, in-row primary action (candidate
-// "Connect"). The full primaryBtnStyle (7×14, the form's submit CTA) is too
-// heavy inline beside an icon button; this matches the row's scale.
-const rowConnectBtnStyle: JSX.CSSProperties = {
-  background: tokens.accentBlue,
-  color: '#fff',
-  border: 'none',
-  'border-radius': `${tokens.radiusSm}`,
-  cursor: 'pointer',
-  font: tokens.type.titleSm,
-  padding: '4px 11px',
-  'white-space': 'nowrap',
-  'flex-shrink': 0,
-};
-// authBtnStyle is the secondary in-row action (Authenticate / Reconnect on a
-// host card). A neutral tokenised button — same shape as the compact connect
-// but outlined rather than filled — so it reads as a secondary affordance and
-// stays inside the design language (no loud standalone amber outline).
-const authBtnStyle: JSX.CSSProperties = {
-  background: 'transparent',
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}`,
-  cursor: 'pointer',
-  font: tokens.type.titleSm,
-  padding: '4px 11px',
-  'white-space': 'nowrap',
-  'flex-shrink': 0,
-};
-
 const launchWrapStyle: JSX.CSSProperties = { position: 'relative', 'flex-shrink': 0 };
 
 const backdropStyle: JSX.CSSProperties = {
@@ -1445,7 +1311,7 @@ const authHeaderStyle: JSX.CSSProperties = {
 const authTermStyle: JSX.CSSProperties = {
   flex: 1,
   'min-height': 0,
-  background: '#000',
+  background: tokens.bgCanvas,
   padding: '6px',
 };
 

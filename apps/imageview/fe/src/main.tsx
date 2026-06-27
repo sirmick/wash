@@ -7,7 +7,7 @@
 import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { ChevronLeft, ChevronRight, FolderOpen, Image as ImageIcon, ImagePlus, Maximize, ZoomIn, ZoomOut } from 'lucide-solid';
-import { FilePicker, VirtualGrid, createAppBus, createFileClient, defineWashApp, tokens } from '@wash/ui';
+import { Button, FilePicker, VirtualGrid, createAppBus, createFileClient, defineWashApp, tokens } from '@wash/ui';
 import type { FileClient } from '@wash/ui';
 import { isThumbableName } from '@wash/fs-client';
 
@@ -198,24 +198,24 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         <div style={listHeaderStyle}>
           <span style={listTitleStyle}>Images</span>
           <div style={{ flex: 1 }} />
-          <button
-            type="button"
+          <Button
+            variant="ghost"
             data-testid="iv-open-folder"
             title="Open folder… (Ctrl+Shift+O)"
             style={openBtnStyle}
             onClick={() => setPicker('directory')}
           >
             <FolderOpen size={15} />
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="ghost"
             data-testid="iv-open-image"
             title="Open image… (Ctrl+O)"
             style={openBtnStyle}
             onClick={() => setPicker('open')}
           >
             <ImagePlus size={15} />
-          </button>
+          </Button>
         </div>
         <Show
           when={images().length > 0}
@@ -261,21 +261,21 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         </Show>
 
         <div style={toolbarStyle}>
-          <button type="button" data-testid="iv-prev" title="Previous (←)" style={tbBtnStyle} onClick={() => step(-1)}>
+          <Button variant="icon" data-testid="iv-prev" title="Previous (←)" style={tbBtnStyle} onClick={() => step(-1)}>
             <ChevronLeft size={16} />
-          </button>
-          <button type="button" data-testid="iv-zoom-out" title="Zoom out (-)" style={tbBtnStyle} onClick={() => zoomBy(1 / 1.2)}>
+          </Button>
+          <Button variant="icon" data-testid="iv-zoom-out" title="Zoom out (-)" style={tbBtnStyle} onClick={() => zoomBy(1 / 1.2)}>
             <ZoomOut size={16} />
-          </button>
-          <button type="button" data-testid="iv-fit" title="Fit / reset (0)" style={tbBtnStyle} onClick={resetView}>
+          </Button>
+          <Button variant="icon" data-testid="iv-fit" title="Fit / reset (0)" style={tbBtnStyle} onClick={resetView}>
             <Maximize size={16} />
-          </button>
-          <button type="button" data-testid="iv-zoom-in" title="Zoom in (+)" style={tbBtnStyle} onClick={() => zoomBy(1.2)}>
+          </Button>
+          <Button variant="icon" data-testid="iv-zoom-in" title="Zoom in (+)" style={tbBtnStyle} onClick={() => zoomBy(1.2)}>
             <ZoomIn size={16} />
-          </button>
-          <button type="button" data-testid="iv-next" title="Next (→)" style={tbBtnStyle} onClick={() => step(1)}>
+          </Button>
+          <Button variant="icon" data-testid="iv-next" title="Next (→)" style={tbBtnStyle} onClick={() => step(1)}>
             <ChevronRight size={16} />
-          </button>
+          </Button>
         </div>
 
         <Show when={current()}>
@@ -380,17 +380,16 @@ const listTitleStyle: JSX.CSSProperties = {
   'letter-spacing': '0.04em',
 };
 
+// Sizing override layered onto <Button variant="ghost"> (which supplies the
+// transparent fill, border, radius, color, cursor) to keep the compact 26×24
+// icon footprint of the original open buttons.
 const openBtnStyle: JSX.CSSProperties = {
   display: 'inline-flex',
   'align-items': 'center',
   'justify-content': 'center',
   width: '26px',
   height: '24px',
-  background: 'transparent',
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}px`,
-  cursor: 'pointer',
+  padding: 0,
 };
 
 // Scroll-container chrome for the windowed list (VirtualGrid owns overflow).
@@ -437,7 +436,7 @@ const mainStyle: JSX.CSSProperties = {
   'align-items': 'center',
   'justify-content': 'center',
   overflow: 'hidden',
-  background: '#0c0c14',
+  background: tokens.bgCanvas,
 };
 
 const toolbarStyle: JSX.CSSProperties = {
@@ -454,17 +453,13 @@ const toolbarStyle: JSX.CSSProperties = {
   'box-shadow': tokens.shadowMenu,
 };
 
+// Sizing override layered onto <Button variant="icon"> (transparent, no border,
+// centered) to keep the 30×28 toolbar footprint and medium radius.
 const tbBtnStyle: JSX.CSSProperties = {
-  display: 'inline-flex',
-  'align-items': 'center',
-  'justify-content': 'center',
   width: '30px',
   height: '28px',
-  background: 'transparent',
-  color: tokens.fg,
-  border: 'none',
-  'border-radius': `${tokens.radiusMd}px`,
-  cursor: 'pointer',
+  'border-radius': `${tokens.radiusMd}`,
+  padding: 0,
 };
 
 const captionStyle: JSX.CSSProperties = {
@@ -484,5 +479,5 @@ const captionStyle: JSX.CSSProperties = {
 };
 
 defineWashApp('wash-app-imageview', (props) => <App {...props} />, {
-  style: `display:grid;grid-template-columns:180px 1fr;width:100%;height:100%;background:#0c0c14;color:${tokens.fg};box-sizing:border-box;overflow:hidden`,
+  style: `display:grid;grid-template-columns:180px 1fr;width:100%;height:100%;background:${tokens.bgCanvas};color:${tokens.fg};box-sizing:border-box;overflow:hidden`,
 });

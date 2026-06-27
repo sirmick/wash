@@ -63,8 +63,8 @@ class WashAppTest extends HTMLElement {
       'height:100%',
       'box-sizing:border-box',
       'padding:14px 18px',
-      'background:#10101a',
-      'color:#eee',
+      `background:${tokens.bgInset}`,
+      `color:${tokens.fg}`,
       `font:${tokens.type.monoMd}`,
       'overflow:auto',
       'outline:none',
@@ -114,7 +114,7 @@ class WashAppTest extends HTMLElement {
 
       <section style="margin:10px 0;display:flex;gap:18px;flex-wrap:wrap;align-items:center;">
         <span>sudo whoami:</span>
-        <code data-testid="sudo-whoami-output" style="background:#10101a;padding:4px 8px;border-radius:3px;min-width:60px;display:inline-block;">(not run)</code>
+        <code data-testid="sudo-whoami-output" style="background:${tokens.bgInset};padding:4px 8px;border-radius:3px;min-width:60px;display:inline-block;">(not run)</code>
       </section>
 
       <section style="margin:10px 0;display:flex;gap:18px;flex-wrap:wrap;">
@@ -144,8 +144,8 @@ class WashAppTest extends HTMLElement {
         <div data-testid="event-log" style="
           height:160px;
           overflow:auto;
-          background:#181828;
-          border:1px solid #2a2a3a;
+          background:${tokens.bgWindow};
+          border:1px solid ${tokens.borderMenu};
           padding:6px 8px;
           font-size:12px;
           line-height:1.55;
@@ -439,9 +439,9 @@ function counterRow(label: string, testid: string): string {
 
 function actionBtn(name: string, label: string): string {
   return `<button type="button" data-testid="action-${name}" style="
-    background:#2a2a4a;
-    color:#eee;
-    border:1px solid #3a3a5a;
+    background:${tokens.bgRowSelected};
+    color:${tokens.fg};
+    border:1px solid ${tokens.borderFocus};
     padding:5px 10px;
     border-radius:3px;
     cursor:pointer;

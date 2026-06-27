@@ -14,7 +14,9 @@
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import {
+  Checkbox,
   FilePicker,
+  Input,
   PANEL_PORT_PROP,
   Row,
   Section,
@@ -396,7 +398,7 @@ const PanelHost: Component<{
   return (
     <div ref={container} style={{ height: '100%' }}>
       <Show when={error()}>
-        <div data-testid="panel-error" style={{ color: '#fca5a5', padding: '4px' }}>
+        <div data-testid="panel-error" style={{ color: tokens.fgDanger, padding: '4px' }}>
           Failed to load panel: {error()}
         </div>
       </Show>
@@ -501,11 +503,11 @@ const DesktopPane: Component<{
             onInput={(e) => props.onFallbackChange(e.currentTarget.value)}
             style={{ width: '32px', height: '24px', border: 'none', background: 'transparent', cursor: 'pointer' }}
           />
-          <input
+          <Input
             type="text"
             value={props.fallback}
             onInput={(e) => props.onFallbackChange(e.currentTarget.value)}
-            style={textInputStyle}
+            style={{ flex: 1 }}
           />
         </div>
       </Row>
@@ -517,14 +519,11 @@ const DesktopPane: Component<{
             options={[['24h', '24-hour'], ['12h', '12-hour']]}
             onChange={(v) => props.onFormatChange(v as '12h' | '24h')}
           />
-          <label style={checkboxStyle}>
-            <input
-              type="checkbox"
-              checked={props.showSeconds}
-              onChange={(e) => props.onShowSecondsChange(e.currentTarget.checked)}
-            />
-            <span>seconds</span>
-          </label>
+          <Checkbox
+            checked={props.showSeconds}
+            onChange={props.onShowSecondsChange}
+            label="seconds"
+          />
         </div>
       </Row>
 
@@ -601,17 +600,17 @@ const PackCard: Component<{ pack: Pack; active: boolean; onSelect: () => void }>
           width: '100%',
           height: '90px',
           background: url()
-            ? `${swatch('--wash-bg-window', '#181828')} url("${url()}") center/cover no-repeat`
-            : swatch('--wash-bg-window', '#181828'),
+            ? `${swatch('--wash-bg-window', tokens.bgWindow)} url("${url()}") center/cover no-repeat`
+            : swatch('--wash-bg-window', tokens.bgWindow),
           'border-radius': `${tokens.radiusMd}`,
         }}
       />
       <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between', gap: '6px' }}>
         <span style={{ color: tokens.fg, font: tokens.type.textMd }}>{props.pack.name}</span>
         <div style={{ display: 'flex', gap: '3px' }}>
-          <Swatch c={swatch('--wash-accent-blue', '#6090e0')} />
-          <Swatch c={swatch('--wash-accent-green', '#5fbf85')} />
-          <Swatch c={swatch('--wash-accent-violet', '#9a90e0')} />
+          <Swatch c={swatch('--wash-accent-blue', tokens.accentBlue)} />
+          <Swatch c={swatch('--wash-accent-green', tokens.accentGreen)} />
+          <Swatch c={swatch('--wash-accent-violet', tokens.accentViolet)} />
         </div>
       </div>
     </button>
@@ -738,25 +737,6 @@ const pathStyle: JSX.CSSProperties = {
   'max-width': '100%',
   overflow: 'hidden',
   'text-overflow': 'ellipsis',
-};
-
-const textInputStyle: JSX.CSSProperties = {
-  flex: 1,
-  background: tokens.bgMenu,
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusMd}`,
-  padding: '4px 8px',
-  font: tokens.type.monoMd,
-  outline: 'none',
-};
-
-const checkboxStyle: JSX.CSSProperties = {
-  display: 'inline-flex',
-  'align-items': 'center',
-  gap: '4px',
-  font: tokens.type.textMd,
-  cursor: 'pointer',
 };
 
 const statusStyle: JSX.CSSProperties = {

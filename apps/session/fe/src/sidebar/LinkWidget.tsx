@@ -37,9 +37,9 @@ const fmtUptime = (ms: number): string => {
 // (send buffer high, or queue/credit stalls climbing); bad = frames
 // actually dropping. Derived shell-side in linkstats.ts.
 const LINK_DOT: Record<'ok' | 'warn' | 'bad', string> = {
-  ok: '#46d39a',
-  warn: '#e6b450',
-  bad: '#e0606d',
+  ok: tokens.accentGreen,
+  warn: tokens.accentAmber,
+  bad: tokens.accentRed,
 };
 const LINK_LABEL: Record<'ok' | 'warn' | 'bad', string> = {
   ok: 'healthy',

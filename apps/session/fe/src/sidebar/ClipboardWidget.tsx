@@ -17,7 +17,7 @@
 
 import type { Component, JSX } from 'solid-js';
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
-import { systemCopyTextChecked, tokens } from '@wash/ui';
+import { Button, Input, systemCopyTextChecked, tokens } from '@wash/ui';
 
 export const ClipboardWidget: Component = () => {
   const [text, setText] = createSignal('');
@@ -94,22 +94,19 @@ export const ClipboardWidget: Component = () => {
     'word-break': 'break-all',
   };
 
+  // Override layer atop <Button variant="ghost"> (transparent fill, border,
+  // radius, cursor, fg) to keep the compact small-text footprint.
   const btnStyle: JSX.CSSProperties = {
-    background: 'transparent',
-    color: tokens.fg,
-    border: `1px solid ${tokens.borderMenu}`,
-    'border-radius': `${tokens.radiusSm}`,
-    padding: '3px 8px',
-    cursor: 'pointer',
     font: tokens.type.textSm,
+    padding: '3px 8px',
   };
 
+  // Override layer atop <Input> (sunken bgInset fill, radius) — the dashed
+  // border + dim text mark this as the deliberate paste-import affordance.
   const importStyle: JSX.CSSProperties = {
     flex: 1,
-    background: tokens.bgInset,
     color: tokens.fgDim,
     border: `1px dashed ${tokens.borderMenu}`,
-    'border-radius': `${tokens.radiusSm}`,
     padding: '3px 8px',
     font: tokens.type.textSm,
     'min-width': '0',
@@ -126,16 +123,16 @@ export const ClipboardWidget: Component = () => {
     <div data-testid="clipboard-widget" style={{ display: 'flex', 'flex-direction': 'column', gap: '6px' }}>
       <div data-testid="clipboard-preview" style={previewStyle}>{preview()}</div>
       <div style={{ display: 'flex', gap: '6px', 'align-items': 'center' }}>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
           data-testid="clipboard-copy-system"
           title="Write the wash clipboard to this machine's clipboard"
           onClick={copyToSystem}
           style={btnStyle}
         >
           Copy to system
-        </button>
-        <input
+        </Button>
+        <Input
           data-testid="clipboard-import"
           placeholder="Click + Ctrl+V to import"
           title="Import this machine's clipboard into wash: click here, then paste"

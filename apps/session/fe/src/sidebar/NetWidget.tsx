@@ -10,7 +10,7 @@
 
 import type { Component } from 'solid-js';
 import { For, Show } from 'solid-js';
-import { tokens } from '@wash/ui';
+import { Button, tokens } from '@wash/ui';
 
 export interface NetDiag {
   path: string;
@@ -114,7 +114,7 @@ export const NetWidget: Component<NetWidgetProps> = (props) => {
           style={{
             padding: '6px 8px',
             background: 'rgba(208,160,64,0.08)',
-            border: '1px solid #4a4030',
+            border: `1px solid ${tokens.borderDenied}`,
             'border-radius': tokens.radiusSm,
             display: 'flex',
             'flex-direction': 'column',
@@ -136,23 +136,18 @@ export const NetWidget: Component<NetWidgetProps> = (props) => {
         </span>
       </Show>
 
-      <button
-        type="button"
+      <Button
+        variant="ghost"
         data-testid="net-configure"
         onClick={() => props.onConfigure()}
         style={{
-          background: 'transparent',
-          color: tokens.fg,
-          border: `1px solid ${tokens.borderMenu}`,
-          'border-radius': tokens.radiusSm,
           padding: '3px 8px',
-          cursor: 'pointer',
           font: tokens.type.textSm,
           'align-self': 'flex-start',
         }}
       >
         Configure…
-      </button>
+      </Button>
     </div>
   );
 };
