@@ -116,6 +116,10 @@ optionally **brotli** for smaller embedded bundles. Linux is the
 target; macOS works for development but not every app (wash-priv, the
 privilege primitive, expects Linux semantics).
 
+On a non-root machine, `scripts/install-local-toolchain.sh` installs Go,
+Node.js/npm, and pnpm under `~/.local/wash-toolchain` and adds the PATH
+setup to `~/.profile` and `~/.bashrc`.
+
 ```bash
 git clone https://github.com/sirmick/wash.git
 cd wash
