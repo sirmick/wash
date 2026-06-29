@@ -120,7 +120,16 @@ install_node() {
 install_pnpm() {
   local root="$1" version="$2"
   mkdir -p "$root/npm-global" "$root/pnpm-home"
-  "$root/node/bin/npm" install -g --prefix "$root/npm-global" "pnpm@${version}"
+  PATH="$root/node/bin:$PATH" "$root/node/bin/npm" install -g --prefix "$root/npm-global" "pnpm@${version}"
+}
+
+activate_toolchain() {
+  local root="$1"
+  export WASH_TOOLCHAIN_DIR="$root"
+  export GOROOT="$root/go"
+  export GOPATH="${GOPATH:-$HOME/go}"
+  export PNPM_HOME="$root/pnpm-home"
+  export PATH="$GOROOT/bin:$GOPATH/bin:$root/node/bin:$root/npm-global/bin:$PNPM_HOME:$PATH"
 }
 
 profile_block() {
@@ -171,6 +180,7 @@ main() {
   mkdir -p "$root"
   install_go "$go_version" "$os" "$arch" "$root"
   install_node "$node_version" "$node_os" "$node_arch_name" "$root"
+  activate_toolchain "$root"
   install_pnpm "$root" "$pnpm_version"
 
   if ! command -v make >/dev/null 2>&1; then
@@ -181,10 +191,10 @@ main() {
   update_profile "$HOME/.bashrc"
 
   printf '\nInstalled:\n'
-  "$root/go/bin/go" version
-  "$root/node/bin/node" --version
-  "$root/node/bin/npm" --version
-  "$root/npm-global/bin/pnpm" --version
+  go version
+  node --version
+  npm --version
+  pnpm --version
   printf '\nRestart your shell, or run:\n  source ~/.profile\n'
 }
 
