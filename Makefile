@@ -1152,6 +1152,7 @@ test-all: all-test
 .PHONY: push
 push:
 	$(MAKE) unit-test
+	$(MAKE) test-race
 	$(MAKE) e2e-test
 	$(MAKE) amd64-ubuntu24-wash-package
 	$(MAKE) amd64-debian13-wash-package
