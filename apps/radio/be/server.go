@@ -51,68 +51,13 @@ type streamInfo struct {
 	MetaInterval   int    `json:"meta_interval,omitempty"`
 }
 
-// curated free/open stations — SomaFM + Radio Paradise + BassDrive
-// (Icecast/HTTP, direct streams; classic Shoutcast "ICY 200" servers need
-// special handling and are out of scope). The Codec field carries a short
-// genre label (handier than the bitrate for browsing). docs/RADIO.md §2.
-var curated = []station{
-	// electronic
-	{Name: "SomaFM — Groove Salad", URL: "https://ice1.somafm.com/groovesalad-128-mp3", Codec: "chill", Genre: "Electronic", Subtype: "Downtempo / Chill", Source: "SomaFM", Description: "Ambient and downtempo beats."},
-	{Name: "SomaFM — Groove Salad 2", URL: "https://ice1.somafm.com/groovesalad2-128-mp3", Codec: "chill", Genre: "Electronic", Subtype: "Downtempo / Chill", Source: "SomaFM", Description: "A different plate of ambient/downtempo beats."},
-	{Name: "SomaFM — Beat Blender", URL: "https://ice1.somafm.com/beatblender-128-mp3", Codec: "deep house", Genre: "Electronic", Subtype: "Deep House", Source: "SomaFM", Description: "Deep-house and downtempo electronic."},
-	{Name: "SomaFM — The Trip", URL: "https://ice1.somafm.com/thetrip-128-mp3", Codec: "progressive / trance", Genre: "Electronic", Subtype: "Progressive / Trance", Source: "SomaFM", Description: "Progressive house and trance."},
-	{Name: "SomaFM — cliqhop idm", URL: "https://ice1.somafm.com/cliqhop-128-mp3", Codec: "IDM", Genre: "Electronic", Subtype: "IDM", Source: "SomaFM", Description: "Blips, bleeps, and intelligent dance music."},
-	{Name: "BassDrive", URL: "http://ice.bassdrive.net/stream", Codec: "drum & bass", Genre: "Electronic", Subtype: "Drum & Bass", Source: "BassDrive", Description: "Drum and bass radio."},
-	{Name: "SomaFM — Fluid", URL: "https://ice1.somafm.com/fluid-128-mp3", Codec: "dnb / future soul", Genre: "Electronic", Subtype: "Drum & Bass", Source: "SomaFM", Description: "Drum and bass, future soul, and liquid beats."},
-	{Name: "SomaFM — Dub Step Beyond", URL: "https://ice1.somafm.com/dubstep-128-mp3", Codec: "dubstep", Genre: "Electronic", Subtype: "Dubstep / Bass", Source: "SomaFM", Description: "Dubstep and bass-forward electronic."},
-	{Name: "SomaFM — PopTron", URL: "https://ice1.somafm.com/poptron-128-mp3", Codec: "electropop", Genre: "Electronic", Subtype: "Electropop / Synthpop", Source: "SomaFM", Description: "Electropop and indie electronic."},
-	{Name: "SomaFM — Underground 80s", URL: "https://ice1.somafm.com/u80s-128-mp3", Codec: "synthpop / new wave", Genre: "Electronic", Subtype: "Electropop / Synthpop", Source: "SomaFM", Description: "Early alternative, synthpop, and new wave."},
-	{Name: "SomaFM — Vaporwaves", URL: "https://ice1.somafm.com/vaporwaves-128-mp3", Codec: "vaporwave", Genre: "Electronic", Subtype: "Vaporwave", Source: "SomaFM", Description: "Vaporwave and late-night retrofuturism."},
-	{Name: "SomaFM — Space Station Soma", URL: "https://ice1.somafm.com/spacestation-128-mp3", Codec: "space electronica", Genre: "Electronic", Subtype: "Ambient / Space", Source: "SomaFM", Description: "Ambient and mid-tempo space electronica."},
-	{Name: "Sunshine Live", URL: "http://stream.sunshine-live.de/live/mp3-192/stream.sunshine-live.de/", Codec: "techno / house", Genre: "Electronic", Subtype: "Techno", Source: "Sunshine Live", Description: "Electronic, house, and techno."},
-	// ambient
-	{Name: "SomaFM — Drone Zone", URL: "https://ice1.somafm.com/dronezone-128-mp3", Codec: "ambient", Genre: "Ambient", Subtype: "Drone", Source: "SomaFM", Description: "Atmospheric ambient space music."},
-	{Name: "SomaFM — Deep Space One", URL: "https://ice1.somafm.com/deepspaceone-128-mp3", Codec: "deep ambient", Genre: "Ambient", Subtype: "Deep Ambient", Source: "SomaFM", Description: "Deep ambient electronic and space music."},
-	{Name: "SomaFM — Synphaera", URL: "https://ice1.somafm.com/synphaera-128-mp3", Codec: "ambient space", Genre: "Ambient", Subtype: "Space Ambient", Source: "SomaFM", Description: "Ambient and electronic space music."},
-	{Name: "SomaFM — The Dark Zone", URL: "https://ice1.somafm.com/darkzone-128-mp3", Codec: "dark ambient", Genre: "Ambient", Subtype: "Dark Ambient", Source: "SomaFM", Description: "Dark ambient music."},
-	// rock
-	{Name: "SomaFM — BAGeL Radio", URL: "https://ice1.somafm.com/bagel-128-mp3", Codec: "alt / modern rock", Genre: "Rock", Subtype: "Alternative / Modern", Source: "SomaFM", Description: "Alternative and modern rock."},
-	{Name: "KEXP", URL: "https://kexp-mp3-128.streamguys1.com/kexp128.mp3", Codec: "indie / alternative", Genre: "Rock", Subtype: "Alternative / Modern", Source: "KEXP", Description: "Seattle listener-powered indie and alternative radio."},
-	{Name: "SomaFM — Indie Pop Rocks", URL: "https://ice1.somafm.com/indiepop-128-mp3", Codec: "indie pop", Genre: "Rock", Subtype: "Indie Rock", Source: "SomaFM", Description: "Indie pop and indie rock."},
-	{Name: "Rock Antenne — Punk Rock", URL: "http://mp3channels.webradio.rockantenne.de/punkrock.aac", Codec: "punk rock", Genre: "Rock", Subtype: "Punk Rock", Source: "Rock Antenne", Description: "Punk rock stream."},
-	{Name: "Hard Rock Heaven", URL: "http://hydra.cdnstream.com/1521_128", Codec: "hard rock", Genre: "Rock", Subtype: "Hard Rock", Source: "Hard Rock Heaven", Description: "Hard rock and heavy rock."},
-	{Name: "Radio BOB — Nu Metal", URL: "https://streams.radiobob.de/numetal/mp3-192/", Codec: "nu-metal", Genre: "Rock", Subtype: "Nu-Metal", Source: "Radio BOB", Description: "Dedicated nu-metal stream."},
-	{Name: "NRJ — Linkin Park", URL: "https://streaming.nrjaudio.fm/ouvfbfoarp52", Codec: "nu-metal", Genre: "Rock", Subtype: "Nu-Metal", Source: "NRJ", Description: "Linkin Park-focused nu-metal stream."},
-	// other popular broad genres
-	{Name: "SWR3", URL: "https://liveradio.swr.de/sw282p3/swr3/play.mp3", Codec: "pop / rock", Genre: "Pop", Subtype: "Pop Rock", Source: "SWR3", Description: "German pop and rock radio."},
-	{Name: "181.FM — Old School HipHop/RnB", URL: "http://listen.181fm.com/181-oldschool_128k.mp3", Codec: "old school", Genre: "Hip-Hop / R&B", Subtype: "Old School", Source: "181.FM", Description: "Old-school hip-hop and R&B."},
-	{Name: ".977 Country", URL: "http://26343.live.streamtheworld.com/977_COUNTRY_SC", Codec: "country", Genre: "Country / Americana", Subtype: "Country", Source: ".977 Music", Description: "Country radio."},
-	{Name: "SomaFM — Boot Liquor", URL: "https://ice1.somafm.com/bootliquor-128-mp3", Codec: "americana", Genre: "Country / Americana", Subtype: "Americana", Source: "SomaFM", Description: "Americana roots music."},
-	{Name: "LOS40 Spain", URL: "https://playerservices.streamtheworld.com/api/livestream-redirect/Los40.mp3", Codec: "latin pop", Genre: "Latin / World", Subtype: "Latin Pop", Source: "LOS40", Description: "Spanish top-40 and Latin pop."},
-	{Name: "SomaFM — Suburbs of Goa", URL: "https://ice1.somafm.com/suburbsofgoa-128-mp3", Codec: "worldbeat", Genre: "Latin / World", Subtype: "Worldbeat", Source: "SomaFM", Description: "Desi-influenced Asian world beats."},
-	{Name: "SomaFM — Bossa Beyond", URL: "https://ice1.somafm.com/bossa-128-mp3", Codec: "bossa nova", Genre: "Latin / World", Subtype: "Bossa Nova", Source: "SomaFM", Description: "Bossa nova, samba, and beyond."},
-	{Name: "SomaFM — Sonic Universe", URL: "https://ice1.somafm.com/sonicuniverse-128-mp3", Codec: "avant jazz", Genre: "Jazz", Subtype: "Avant Jazz", Source: "SomaFM", Description: "Avant-garde jazz and exploratory sounds."},
-	{Name: "101 Smooth Jazz", URL: "http://jking.cdnstream1.com/b22139_128mp3", Codec: "smooth jazz", Genre: "Jazz", Subtype: "Smooth Jazz", Source: "101 Smooth Jazz", Description: "Smooth jazz radio."},
-	{Name: "Classic FM UK", URL: "http://ice-the.musicradio.com/ClassicFMMP3", Codec: "classical", Genre: "Classical", Subtype: "Classical", Source: "Classic FM", Description: "Classical music radio."},
-	{Name: "SomaFM — Heavyweight Reggae", URL: "https://ice1.somafm.com/reggae-128-mp3", Codec: "reggae / ska", Genre: "Reggae / Ska", Subtype: "Reggae / Ska", Source: "SomaFM", Description: "Reggae, dub, ska, and rocksteady."},
-	{Name: "SomaFM — Metal Detector", URL: "https://ice1.somafm.com/metal-128-mp3", Codec: "metal", Genre: "Metal", Subtype: "Metal", Source: "SomaFM", Description: "Classic and current metal."},
-	{Name: "Rock Antenne — Heavy Metal", URL: "http://mp3channels.webradio.rockantenne.de/heavy-metal", Codec: "heavy metal", Genre: "Metal", Subtype: "Heavy Metal", Source: "Rock Antenne", Description: "Heavy metal stream."},
-	{Name: "SomaFM — Folk Forward", URL: "https://ice1.somafm.com/folkfwd-128-mp3", Codec: "folk", Genre: "Folk", Subtype: "Indie Folk", Source: "SomaFM", Description: "Indie folk, alt-folk, and folk classics."},
-	{Name: "SomaFM — Seven Inch Soul", URL: "https://ice1.somafm.com/7soul-128-mp3", Codec: "soul / oldies", Genre: "Oldies / Soul", Subtype: "Soul", Source: "SomaFM", Description: "Vintage soul from original 45 RPM vinyl."},
-	{Name: "SomaFM — The In-Sound", URL: "https://ice1.somafm.com/insound-128-mp3", Codec: "60s / 70s pop", Genre: "Oldies / Soul", Subtype: "Oldies", Source: "SomaFM", Description: "60s and 70s hipster Euro-pop."},
-	{Name: "SomaFM — Secret Agent", URL: "https://ice1.somafm.com/secretagent-128-mp3", Codec: "spy lounge", Genre: "Lounge", Subtype: "Spy Lounge", Source: "SomaFM", Description: "Spy jazz and cinematic lounge."},
-	{Name: "SomaFM — Illinois Street Lounge", URL: "https://ice1.somafm.com/illstreet-128-mp3", Codec: "lounge", Genre: "Lounge", Subtype: "Exotica", Source: "SomaFM", Description: "Classic bachelor-pad exotica and lounge."},
-	{Name: "Radio Paradise — Main", URL: "https://stream.radioparadise.com/mp3-128", Codec: "eclectic", Genre: "Eclectic", Subtype: "Main Mix", Source: "Radio Paradise", Description: "Eclectic listener-supported radio."},
-	{Name: "Radio Paradise — Rock", URL: "https://stream.radioparadise.com/rock-128", Codec: "rock", Genre: "Eclectic", Subtype: "Rock Mix", Source: "Radio Paradise", Description: "Radio Paradise rock mix."},
-}
-
 // streamClient has no overall timeout (the body is an endless stream); the
 // transport's dial timeout still bounds connect.
 var streamClient = &http.Client{Timeout: 0}
 
 type svc struct {
 	mu     sync.Mutex
-	fixed  []station // env + curated (immutable)
+	fixed  []station // env + configured stations (immutable for this app run)
 	custom []station // user-pasted; replaced wholesale by set_custom
 	base   string
 	ready  chan struct{}
@@ -138,8 +83,8 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	audiorelay.Register(bus)
 
 	s := &svc{ready: make(chan struct{})}
-	// env test stations first, then curated.
-	s.fixed = append(envStations(), curated...)
+	// Env test stations first, then the disk-backed user-configurable list.
+	s.fixed = append(envStations(), configuredStations()...)
 
 	reply := func(conn *sdk.Conn, id string) {
 		<-s.ready

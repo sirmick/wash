@@ -1,5 +1,5 @@
 // Native Radio app (docs/RADIO.md) full-stack e2e, hermetic: a local fake
-// Icecast stream stands in for the internet. The curated list renders;
+// Icecast stream stands in for the internet. The seeded list renders;
 // pasting the fake URL adds a station; tuning it reverse-proxies the
 // stream over ingress (200) and now-playing reaches the sidebar.
 import { test, expect } from '../fixtures/router';
@@ -56,12 +56,18 @@ test.describe('radio app (native player)', () => {
     await expect(page.locator('wash-app-session')).toBeVisible();
     await router.controlRequest({ t: 'launch', app_id: 'com.wash.radio' });
 
-    // The curated list renders.
+    // The seeded tree launches compressed; expanding a subtype reveals rows.
     const list = page.locator('[data-testid="station-list"]');
-    await expect(list).toContainText('SomaFM');
-    await expect(page.locator('[data-testid="genre-electronic"]')).toBeVisible();
-    await expect(page.locator('[data-testid="subtype-electronic-downtempo-chill"]')).toBeVisible();
-    await expect(page.locator('[data-testid="subtype-rock-nu-metal"]')).toBeVisible();
+    const electronic = page.locator('[data-testid="genre-electronic"]');
+    await expect(electronic).toBeVisible();
+    await expect(electronic).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.locator('[data-testid="subtype-electronic-hacker-cyberpunk"]')).toHaveCount(0);
+    await electronic.click();
+    const hacker = page.locator('[data-testid="subtype-electronic-hacker-cyberpunk"]');
+    await expect(hacker).toHaveAttribute('aria-expanded', 'false');
+    await hacker.click();
+    await expect(list).toContainText('DEF CON Radio');
+    await expect(list).toContainText('DATAWAVE FM');
 
     // Paste the fake stream URL → it's added as a station.
     await page.locator('[data-testid="add-url"]').fill(streamUrl);
@@ -83,6 +89,13 @@ test.describe('radio app (native player)', () => {
     const nowPlaying = page.locator('[data-testid="audio-nowplaying"]');
     await expect(nowPlaying).toBeVisible();
     await expect(nowPlaying).toContainText('Now Playing Track');
+
+    // Reload → last-played path is the only expanded launch path.
+    await page.reload();
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    await expect(page.locator('[data-testid="genre-custom"]')).toHaveAttribute('aria-expanded', 'true');
+    await expect(electronic).toHaveAttribute('aria-expanded', 'false');
+    await expect(list).toContainText('127.0.0.1');
   });
 
   test('persists pasted stations + favorites across reload; shows offline', async ({ page, router }) => {
@@ -90,20 +103,27 @@ test.describe('radio app (native player)', () => {
     await expect(page.locator('wash-app-session')).toBeVisible();
     await router.controlRequest({ t: 'launch', app_id: 'com.wash.radio' });
     const list = page.locator('[data-testid="station-list"]');
-    await expect(list).toContainText('SomaFM');
+    const electronic = page.locator('[data-testid="genre-electronic"]');
+    await expect(electronic).toHaveAttribute('aria-expanded', 'false');
 
-    // Paste a custom station + favorite the first curated one.
+    // Paste a custom station + favorite the first configured one.
     await page.locator('[data-testid="add-url"]').fill('http://example.invalid/x');
     await page.locator('[data-testid="add-station"]').click();
     await expect(list).toContainText('example.invalid');
+    await electronic.click();
+    await page.locator('[data-testid="subtype-electronic-hacker-cyberpunk"]').click();
     await page.locator('[data-testid="fav-0"]').click();
     await expect(page.locator('[data-testid="fav-0"]')).toHaveAttribute('data-fav', 'true');
 
     // Reload → window remounts, state restored from app_state.
     await page.reload();
     await expect(page.locator('wash-app-session')).toBeVisible();
+    await expect(page.locator('[data-testid="genre-custom"]')).toHaveAttribute('aria-expanded', 'false');
+    await page.locator('[data-testid="genre-custom"]').click();
     await expect(list).toContainText('example.invalid'); // pasted station persisted
     expect(await list.getByText('example.invalid').count()).toBe(1); // not duplicated
+    await electronic.click();
+    await page.locator('[data-testid="subtype-electronic-hacker-cyberpunk"]').click();
     await expect(page.locator('[data-testid="fav-0"]')).toHaveAttribute('data-fav', 'true'); // favorite persisted
 
     // Tuning an unreachable station surfaces an offline state (not silence).

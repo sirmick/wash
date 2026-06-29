@@ -21,14 +21,17 @@ Not a mode of a combined app.
 **In:**
 - Single window. Transport: **play / pause / prev / next** (prev/next step
   the station list). Volume (§6, same as Music).
-- A **nested station tree**: a curated built-in set grouped by broad genres
+- A **nested station tree**: a seeded user-configurable set grouped by broad genres
   (Electronic, Ambient, Rock, Pop, Hip-Hop/R&B, Country/Americana, Latin/World,
   Jazz, Classical, Reggae/Ska, Metal, Folk, Oldies/Soul, Lounge, Eclectic)
   and subtypes where useful. Electronic includes downtempo/chill, deep house,
   progressive/trance, IDM, drum & bass, dubstep/bass, electropop/synthpop,
-  vaporwave, ambient/space, and techno; Rock includes alternative/modern,
-  indie rock, punk rock, hard rock, and nu-metal. Add/remove your own by
-  pasting a stream URL; the set persists under Custom.
+  vaporwave, ambient/space, hacker/cyberpunk, industrial/dark ambient, and
+  techno; Rock includes alternative/modern, indie rock, punk rock, hard rock,
+  and nu-metal. Edit `~/.config/wash/radio-stations.json` for the fixed list,
+  or add/remove your own by pasting a stream URL; pasted stations persist under
+  Custom. On launch the tree starts fully collapsed, except for the saved
+  last-played station's genre/subtype path.
 - A small **now-playing info** panel: station + live track (ICY) plus
   stream headers when available (`Content-Type`, `icy-br`, `icy-name`,
   `icy-genre`, `icy-url`, `icy-description`, `icy-metaint`).
@@ -61,11 +64,13 @@ The whole free/open landscape, best-first, then a recommended mix:
   from these. Direct stream URLs from any source can still be pasted.
 
 **Recommended mix (minimalist):**
-- **Default list = curated**, seeded from **SomaFM** (`channels.json`) +
-  **Radio Paradise** + a handful of hand-picked public stations from Radio
-  Browser research. Works offline-ish, reliable, no key. Current emphasis:
-  breadth across popular genres, with electronic and rock exposed as nested
-  subtype groups.
+- **Default list = user-configurable JSON**, seeded on first run from
+  `apps/radio/be/default-stations.json` into
+  `~/.config/wash/radio-stations.json`. The seed is curated from **SomaFM**,
+  **Radio Paradise**, Nightride FM, and a handful of hand-picked public
+  stations. Works offline-ish, reliable, no key. Current emphasis: breadth
+  across popular genres, with electronic and rock exposed as nested subtype
+  groups. Edit the JSON file to add/remove/reorder fixed stations.
 - **"+URL"** — paste a direct Icecast/Shoutcast/native audio stream URL;
   persists via `app_state`. Playlist URLs (`.pls`, `.m3u`, HLS `.m3u8`) are
   later work.
@@ -108,8 +113,9 @@ most radio without them), both via the ingress proxy:
    headers, public station URL/description, and metadata interval. This is
    best-effort; many stations omit some or all of these fields.
 
-The curated list (A) is shipped data. A server-side Radio Browser fetch/cache
-path remains a later directory/search feature.
+The default station template (A) is shipped data and copied to user config on
+first run. A server-side Radio Browser fetch/cache path remains a later
+directory/search feature.
 
 ## 5. Playback + control plane
 
@@ -151,9 +157,9 @@ upstream Icecast/Shoutcast (http, ICY) ─ BE dials w/ Icy-MetaData:1
 
 In-test **fake station server**: serves a short looping MP3/PCM with
 `icy-metaint` + a rotating `StreamTitle`, plus a fake Radio-Browser
-`topclick` endpoint returning it. Assert: the curated list renders; tuning
-a station issues an ingress GET (200/streamed); the info panel shows the
-station then the rotating ICY title; prev/next retunes in tree order; a
+`topclick` endpoint returning it. Assert: the seeded station list renders;
+tuning a station issues an ingress GET (200/streamed); the info panel shows
+the station then the rotating ICY title; prev/next retunes in tree order; a
 pasted URL plays; now-playing reaches the sidebar.
 
 ## 10. Last.fm

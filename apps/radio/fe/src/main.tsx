@@ -1,5 +1,5 @@
 // wash-radio FE — a minimalist NATIVE internet-radio player
-// (docs/RADIO.md): a station list (curated + your pasted URLs), basic
+// (docs/RADIO.md): a station list (configured defaults + your pasted URLs), basic
 // transport, a now-playing panel with the live ICY track, favorites, and
 // offline feedback. The BE reverse-proxies the upstream stream over
 // ingress (same-origin, so no mixed-content/CORS); the FE plays it with
@@ -86,6 +86,8 @@ const genreOrder = [
 ];
 const subtypeOrder: Record<string, string[]> = {
   Electronic: [
+    'Hacker / Cyberpunk',
+    'Industrial / Dark Ambient',
     'Downtempo / Chill',
     'Deep House',
     'Progressive / Trance',
@@ -114,6 +116,20 @@ const subtypeRank = (genre: string, subtype: string) => {
 };
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 const groupKey = (kind: 'genre' | 'subtype', genre: string, subtype = '') => `${kind}:${genre}:${subtype}`;
+
+function collapsedTree(groups: GenreGroup[], openRow?: Row): Set<string> {
+  const closed = new Set<string>();
+  const openGenre = openRow ? inferredGenre(openRow) : '';
+  const openSubtype = openRow ? inferredSubtype(openRow) : '';
+  for (const group of groups) {
+    const keepGenreOpen = group.genre === openGenre;
+    if (!keepGenreOpen) closed.add(groupKey('genre', group.genre));
+    for (const sub of group.subtypes) {
+      if (!keepGenreOpen || sub.subtype !== openSubtype) closed.add(groupKey('subtype', group.genre, sub.subtype));
+    }
+  }
+  return closed;
+}
 
 function inferredGenre(st: Station): string {
   if (st.genre) return st.genre;
@@ -178,6 +194,9 @@ function RadioApp(props: WashAppProps) {
   let customStations: Custom[] = []; // user-added; persisted + re-added on mount
   let lastName = ''; // last-tuned station name (persisted)
   let registered = false;
+  let treeInitialized = false;
+  let revealedLastName = '';
+  let pendingRevealName = '';
 
   const [stations, setStations] = createSignal<Station[]>([]);
   const [base, setBase] = createSignal('');
@@ -309,11 +328,31 @@ function RadioApp(props: WashAppProps) {
     if (selectedDisplay() >= rows.length) setSelectedDisplay(rows.length ? rows.length - 1 : -1);
   }
 
+  function openPathToRow(row: Row): number {
+    const next = new Set(collapsedGroups());
+    const genre = inferredGenre(row);
+    const subtype = inferredSubtype(row);
+    next.delete(groupKey('genre', genre));
+    if (subtype) next.delete(groupKey('subtype', genre, subtype));
+    setCollapsedGroups(next);
+    const di = visibleRows().findIndex((r) => r.be === row.be);
+    setSelectedDisplay(di);
+    return di;
+  }
+
+  function revealStation(be: number): number {
+    const row = stationRows().find((r) => r.be === be);
+    if (row) return openPathToRow(row);
+    const di = visibleRows().findIndex((r) => r.be === be);
+    setSelectedDisplay(di);
+    return di;
+  }
+
   function tune(be: number) {
     const st = stations()[be];
     if (!st || !base()) return;
     setIndex(be);
-    setSelectedDisplay(visibleRows().findIndex((r) => r.be === be));
+    revealStation(be);
     setIcyTitle('');
     setStreamInfo({});
     setOffline(false);
@@ -393,6 +432,7 @@ function RadioApp(props: WashAppProps) {
     if (!u) return;
     setAddUrl('');
     customStations = [...customStations, { name: u, url: u }];
+    pendingRevealName = u;
     persist();
     sendCustom();
   }
@@ -409,15 +449,39 @@ function RadioApp(props: WashAppProps) {
       const s = m as StationsOk;
       setStations(s.stations);
       setBase(s.base);
+      const rows = stationRows();
+      const pendingRow = pendingRevealName ? rows.find((r) => r.name === pendingRevealName) : undefined;
+      const lastRow = lastName ? rows.find((r) => r.name === lastName) : undefined;
+      const shouldRevealLast = !!lastRow && index() < 0 && revealedLastName !== lastName;
+
+      if (pendingRow) {
+        if (!treeInitialized) {
+          setCollapsedGroups(collapsedTree(groupedRows(), pendingRow));
+          treeInitialized = true;
+        } else {
+          openPathToRow(pendingRow);
+        }
+        setSelectedDisplay(visibleRows().findIndex((r) => r.be === pendingRow.be));
+        pendingRevealName = '';
+      } else if (!treeInitialized || shouldRevealLast) {
+        // Launch default: collapse the whole tree, except the restored
+        // last-played station's genre/subtype path when it exists.
+        setCollapsedGroups(collapsedTree(groupedRows(), lastRow));
+        treeInitialized = true;
+        if (lastRow) {
+          revealedLastName = lastName;
+          setSelectedDisplay(visibleRows().findIndex((r) => r.be === lastRow.be));
+        } else {
+          setSelectedDisplay(-1);
+        }
+      }
+
       if (index() < 0) {
-        // Re-select the last-tuned station once it's present (converges
-        // as persisted custom stations get re-added), else the first row.
-        let di = lastName ? visibleRows().findIndex((r) => r.name === lastName) : -1;
-        if (di < 0) di = s.stations.length ? 0 : -1;
-        setSelectedDisplay(di);
+        const visible = visibleRows();
+        if (selectedDisplay() >= visible.length) setSelectedDisplay(visible.length ? visible.length - 1 : -1);
         if (!registered && s.stations.length) {
           registered = true;
-          audio?.register({ title: visibleRows()[di]?.name ?? '' });
+          audio?.register({ title: lastRow?.name ?? rows[0]?.name ?? '' });
         }
       }
     }
@@ -428,6 +492,9 @@ function RadioApp(props: WashAppProps) {
   const handleState = (st: PersistedRadio | null) => {
     customStations = st?.custom ?? [];
     lastName = st?.last ?? '';
+    treeInitialized = false;
+    revealedLastName = '';
+    pendingRevealName = '';
     setFavs(new Set(st?.favs ?? []));
     if (st?.vol != null) {
       setSrcVol(st.vol);
