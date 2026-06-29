@@ -1,6 +1,6 @@
 Name:           wash
 Version:        0.9.6
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
 License:        AGPL-3.0-or-later
@@ -205,6 +205,14 @@ fi
 exit 0
 
 %changelog
+* Mon Jun 29 2026 sirmick <sirmick@gmail.com> - 0.9.6-3
+- UI: consolidate every app frontend onto the shared @wash/ui design language
+  (Button/Input/Checkbox + tokens); data-viz palettes onto themeable accents;
+  fix white-on-accent buttons invisible on light packs; add make check-design.
+- conn: WebSocket heartbeat + post-sleep wake recovery + disconnect diagnostics,
+  with a full-stack reconnect/banner e2e and SO_REUSEADDR.
+- radio: broad nested genre/subtype station tree + stream details panel.
+
 * Thu Jun 25 2026 sirmick <sirmick@gmail.com> - 0.9.6-2
 - wash-display: HiDPI display scaling, virtual output sized from shell metrics,
   guest-surface activation on wash focus, Xwayland popup pointer grabs,

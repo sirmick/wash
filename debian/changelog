@@ -1,3 +1,16 @@
+wash (0.9.6-3) unstable; urgency=low
+
+  * UI: consolidate every app's frontend onto the shared @wash/ui design
+    language — bespoke buttons/inputs/checkboxes replaced by Button/Input/
+    Checkbox, data-viz palettes moved onto themeable accent tokens, and the
+    white-on-accent buttons that went invisible on light packs fixed. New
+    `make check-design` guard locks against raw-hex re-drift.
+  * conn: WebSocket heartbeat + post-sleep wake recovery + disconnect
+    diagnostics, with a full-stack reconnect/banner e2e and SO_REUSEADDR.
+  * radio: broad nested genre/subtype station tree + stream details panel.
+
+ -- sirmick <sirmick@gmail.com>  Mon, 29 Jun 2026 12:00:00 -0700
+
 wash (0.9.6-2) unstable; urgency=low
 
   * wash-display: HiDPI display scaling, virtual output sized from shell
