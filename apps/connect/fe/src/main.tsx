@@ -137,6 +137,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // sends the raw channel id; we mount a Terminal on it. auth tracks the
   // host being authenticated + the channel; null = no auth in flight.
   const [auth, setAuth] = createSignal<{ host: string; channel: number } | null>(null);
+  const [authError, setAuthError] = createSignal('');
   const [bookmarks, setBookmarks] = createSignal<Bookmark[]>([]);
   // moreFor holds the origin whose "More" app dropdown is open (one at a time).
   const [moreFor, setMoreFor] = createSignal<string | null>(null);
@@ -190,6 +191,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       }
       case 'auth_opened':
         // The ssh-copy-id pty is live on m.channel_id — mount its terminal.
+        setAuthError('');
         setAuth({ host: String(m.host ?? ''), channel: Number(m.channel_id) });
         break;
       case 'auth_closed': {
@@ -203,6 +205,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       }
       case 'auth_error':
         setAuth(null);
+        setAuthError(String(m.msg ?? 'ssh-copy-id could not start'));
         break;
       case 'bookmarks':
         setBookmarks(migrateBookmarks(Array.isArray(m.bookmarks) ? (m.bookmarks as Bookmark[]) : []));
@@ -210,7 +213,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
-  const beginAuth = (host: string) => send({ kind: 'auth_begin', host });
+  const beginAuth = (host: string) => { setAuthError(''); send({ kind: 'auth_begin', host }); };
   const cancelAuth = () => { send({ kind: 'auth_cancel' }); setAuth(null); };
 
   const { send } = createAppBus(props, { onMsg: handleBE });
@@ -421,6 +424,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             ☆
           </Button>
         </div>
+        <Show when={authError()}>
+          <div style={errorStyle} data-testid="connect-auth-error">{authError()}</div>
+        </Show>
 
         <Show
           when={!empty()}
@@ -630,8 +636,8 @@ const HostRow: Component<{
         </div>
       </Show>
 
-      <Show when={props.host.error && !needsAuth()}>
-        <div style={errorStyle}>{props.host.error}</div>
+      <Show when={props.host.error}>
+        <div style={errorStyle} data-testid="connect-host-error">{props.host.error}</div>
       </Show>
 
       <Show when={up()}>
@@ -1326,6 +1332,8 @@ const errorStyle: JSX.CSSProperties = {
   font: tokens.type.monoSm,
   color: tokens.fgWarning,
   'word-break': 'break-word',
+  'white-space': 'pre-wrap',
+  'line-height': 1.35,
 };
 
 defineWashApp('wash-app-connect', (props) => <App {...props} />, {

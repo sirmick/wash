@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -235,8 +236,11 @@ func (s *supervisor) runOnce(ctx context.Context, host, dial string, port int, s
 	cmd := exec.CommandContext(ctx, s.sshPath, buildSSHArgs(dial, sock, remoteSock, port)...)
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
+	log.Printf("wash-remote: connect host=%s dial=%s port=%d local=%s remote=%s", host, dial, port, sock, remoteSock)
 	if err := cmd.Start(); err != nil {
-		return "", "ssh start: " + err.Error()
+		msg := formatSSHAttemptError(dial, port, fmt.Errorf("start: %w", err), nil, false)
+		log.Printf("wash-remote: connect host=%s dial=%s start failed: %s", host, dial, msg)
+		return "", msg
 	}
 
 	up := make(chan struct{}, 1)
@@ -245,14 +249,19 @@ func (s *supervisor) runOnce(ctx context.Context, host, dial string, port int, s
 	// two scan goroutines write it concurrently.
 	var tailMu sync.Mutex
 	var tail []string
+	ready := false
 	// The remote wash-router logs "listening on <addr>" once bound; ssh
 	// forwards that to our stdout/stderr. That line is our readiness
 	// signal — tunnel + router are live, the shell can attach.
-	scan := func(r io.Reader) {
+	scan := func(stream string, r io.Reader) {
 		sc := bufio.NewScanner(r)
 		for sc.Scan() {
 			line := sc.Text()
+			log.Printf("wash-remote: connect host=%s dial=%s %s: %s", host, dial, stream, line)
 			if strings.Contains(line, "listening on ") {
+				tailMu.Lock()
+				ready = true
+				tailMu.Unlock()
 				select {
 				case up <- struct{}{}:
 				default:
@@ -260,15 +269,24 @@ func (s *supervisor) runOnce(ctx context.Context, host, dial string, port int, s
 				continue
 			}
 			tailMu.Lock()
-			tail = append(tail, line)
+			tail = append(tail, stream+": "+line)
 			if len(tail) > 10 {
 				tail = tail[len(tail)-10:]
 			}
 			tailMu.Unlock()
 		}
+		if err := sc.Err(); err != nil {
+			tailMu.Lock()
+			tail = append(tail, stream+" read: "+err.Error())
+			if len(tail) > 10 {
+				tail = tail[len(tail)-10:]
+			}
+			tailMu.Unlock()
+			log.Printf("wash-remote: connect host=%s dial=%s %s scan: %v", host, dial, stream, err)
+		}
 	}
-	go scan(stdout)
-	go scan(stderr)
+	go scan("stdout", stdout)
+	go scan("stderr", stderr)
 
 	// The up-watcher must not outlive this attempt, or a late "up" from a
 	// dying connection could mark the host up after we've moved on.
@@ -299,17 +317,46 @@ func (s *supervisor) runOnce(ctx context.Context, host, dial string, port int, s
 	}
 	tailMu.Lock()
 	stderrTail := strings.Join(tail, "\n")
+	wasReady := ready
+	tailCopy := append([]string(nil), tail...)
 	tailMu.Unlock()
-	if err != nil {
-		errMsg = err.Error()
-	}
+	errMsg = formatSSHAttemptError(dial, port, err, tailCopy, wasReady)
 	// Classify auth refusal so wash-connect can offer the ssh-add widget
 	// (docs/REMOTE.md §6.1). BatchMode never prompts, so a missing/locked
 	// key surfaces as "Permission denied (publickey…)" and ssh exits 255.
 	if isAuthFailure(stderrTail) {
+		log.Printf("wash-remote: connect host=%s dial=%s auth failure ready=%t err=%v detail=%q", host, dial, wasReady, err, errMsg)
 		return "auth", errMsg
 	}
+	log.Printf("wash-remote: connect host=%s dial=%s ended ready=%t err=%v detail=%q", host, dial, wasReady, err, errMsg)
 	return "", errMsg
+}
+
+func formatSSHAttemptError(dial string, port int, err error, tail []string, ready bool) string {
+	target := dial
+	if port != 0 && port != defaultSSHPort {
+		target = fmt.Sprintf("%s port %d", target, port)
+	}
+	var summary string
+	switch {
+	case err != nil:
+		summary = fmt.Sprintf("ssh connection to %s failed: %v", target, err)
+	case !ready:
+		summary = fmt.Sprintf("ssh connection to %s ended before wash-router became ready", target)
+	default:
+		summary = fmt.Sprintf("ssh connection to %s closed", target)
+	}
+	clean := make([]string, 0, len(tail))
+	for _, line := range tail {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			clean = append(clean, line)
+		}
+	}
+	if len(clean) == 0 {
+		return summary
+	}
+	return summary + "\n" + strings.Join(clean, "\n")
 }
 
 // isAuthFailure reports whether ssh's stderr indicates an authentication

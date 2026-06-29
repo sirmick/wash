@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -85,6 +86,7 @@ func TestIsAuthFailure(t *testing.T) {
 		"Received disconnect from 10.0.0.5 port 22:2: Too many authentication failures",
 		"Host key verification failed.",
 		"ssh: No more authentication methods to try.",
+		"stderr: user@host: Permission denied (publickey).",
 	}
 	for _, s := range auth {
 		if !isAuthFailure(s) {
@@ -101,5 +103,27 @@ func TestIsAuthFailure(t *testing.T) {
 		if isAuthFailure(s) {
 			t.Errorf("did not expect auth failure for %q", s)
 		}
+	}
+}
+
+func TestFormatSSHAttemptErrorIncludesTargetAndOutput(t *testing.T) {
+	msg := formatSSHAttemptError("user@host", 2222, errors.New("exit status 255"), []string{
+		"stderr: ssh: connect to host host port 2222: Connection refused",
+	}, false)
+	for _, want := range []string{
+		"user@host port 2222",
+		"exit status 255",
+		"Connection refused",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("diagnostic missing %q\n%s", want, msg)
+		}
+	}
+}
+
+func TestFormatSSHAttemptErrorReportsPreReadyExit(t *testing.T) {
+	msg := formatSSHAttemptError("host", 0, nil, nil, false)
+	if !strings.Contains(msg, "before wash-router became ready") {
+		t.Fatalf("expected pre-ready diagnostic, got %q", msg)
 	}
 }
