@@ -28,6 +28,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -608,17 +609,25 @@ func runRawListener(ctx context.Context, r *router.Router, network, address stri
 		<-ctx.Done()
 		ln.Close() // unblocks Accept
 	}()
+	// Track in-flight sessions so a clean shutdown joins them before returning:
+	// each HandleShell honours ctx and unwinds (logging its disconnect summary)
+	// on cancel, and the caller's "listener stopped" signal must not race ahead
+	// of that teardown.
+	var sessions sync.WaitGroup
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			select {
 			case <-ctx.Done():
+				sessions.Wait()
 				return nil // clean shutdown
 			default:
 				return err
 			}
 		}
+		sessions.Add(1)
 		go func() {
+			defer sessions.Done()
 			defer conn.Close()
 			// One browser session per connection (the ssh -L forwards a fresh
 			// connection per attach). No SessionOpen/Close splitter — that's
