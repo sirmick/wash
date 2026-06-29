@@ -100,7 +100,8 @@ install_go() {
 
 install_node() {
   local version="$1" os="$2" arch="$3" root="$4"
-  local name="node-${version}-${os}-${arch}" target="$root/$name" archive tmp url
+  local name="node-${version}-${os}-${arch}"
+  local target="$root/$name" archive tmp url
   if [[ -x "$target/bin/node" ]]; then
     printf 'Node %s already installed\n' "$version"
   else
