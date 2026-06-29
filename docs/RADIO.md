@@ -23,13 +23,13 @@ Not a mode of a combined app.
   the station list). Volume (§6, same as Music).
 - A **nested station tree**: a seeded user-configurable set grouped by broad genres
   (Electronic, Ambient, Rock, Pop, Hip-Hop/R&B, Country/Americana, Latin/World,
-  Jazz, Classical, Reggae/Ska, Metal, Folk, Oldies/Soul, Lounge, Eclectic)
-  and subtypes where useful. Electronic includes downtempo/chill, deep house,
-  progressive/trance, IDM, drum & bass, dubstep/bass, electropop/synthpop,
-  vaporwave, ambient/space, hacker/cyberpunk, industrial/dark ambient, and
-  techno; Rock includes alternative/modern, indie rock, punk rock, hard rock,
-  and nu-metal. Edit `~/.config/wash/radio-stations.json` for the fixed list,
-  or add/remove your own by pasting a stream URL; pasted stations persist under
+  Jazz, Classical, Reggae/Ska, Metal, Folk, Oldies/Soul, Lounge, Eclectic,
+  Spoken/Scanner). Top-level genres stay broad and non-overlapping: Ambient
+  owns drone, space ambient, dark ambient/industrial, and chill/downtempo;
+  Electronic owns beat/synth-driven streams such as hacker/cyberpunk, house,
+  trance, IDM, drum & bass, dubstep/bass, electropop/synthpop, vaporwave, and
+  techno. Edit `~/.config/wash/radio-stations.json` for the fixed list, or
+  add/remove your own by pasting a stream URL; pasted stations persist under
   Custom. On launch the tree starts fully collapsed, except for the saved
   last-played station's genre/subtype path.
 - A small **now-playing info** panel: station + live track (ICY) plus
@@ -66,11 +66,12 @@ The whole free/open landscape, best-first, then a recommended mix:
 **Recommended mix (minimalist):**
 - **Default list = user-configurable JSON**, seeded on first run from
   `apps/radio/be/default-stations.json` into
-  `~/.config/wash/radio-stations.json`. The seed is curated from **SomaFM**,
-  **Radio Paradise**, Nightride FM, and a handful of hand-picked public
-  stations. Works offline-ish, reliable, no key. Current emphasis: breadth
-  across popular genres, with electronic and rock exposed as nested subtype
-  groups. Edit the JSON file to add/remove/reorder fixed stations.
+  `~/.config/wash/radio-stations.json`. The seed includes the current full
+  **SomaFM** channel set from `somafm.com/channels.json`, plus **Radio
+  Paradise**, Nightride FM, and a handful of hand-picked public stations.
+  Works offline-ish, reliable, no key. Current emphasis: breadth across
+  popular genres, with clear top-level genre boundaries and nested subtypes.
+  Edit the JSON file to add/remove/reorder fixed stations.
 - **"+URL"** — paste a direct Icecast/Shoutcast/native audio stream URL;
   persists via `app_state`. Playlist URLs (`.pls`, `.m3u`, HLS `.m3u8`) are
   later work.

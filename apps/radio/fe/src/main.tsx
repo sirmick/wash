@@ -81,26 +81,41 @@ const genreOrder = [
   'Oldies / Soul',
   'Lounge',
   'Eclectic',
+  'Spoken / Scanner',
   'Custom',
   'Other',
 ];
 const subtypeOrder: Record<string, string[]> = {
   Electronic: [
     'Hacker / Cyberpunk',
-    'Industrial / Dark Ambient',
-    'Downtempo / Chill',
     'Deep House',
     'Progressive / Trance',
     'IDM',
     'Drum & Bass',
+    'Future Soul / Beats',
     'Dubstep / Bass',
     'Electropop / Synthpop',
     'Vaporwave',
-    'Ambient / Space',
     'Techno',
   ],
-  Ambient: ['Drone', 'Deep Ambient', 'Space Ambient', 'Dark Ambient'],
-  Rock: ['Alternative / Modern', 'Indie Rock', 'Punk Rock', 'Hard Rock', 'Nu-Metal'],
+  Ambient: [
+    'Downtempo / Chill',
+    'Drone',
+    'Deep Ambient',
+    'Space Ambient',
+    'Dark Ambient / Industrial',
+    'Ambient / Experimental',
+    'Mission / Field Recordings',
+    'Live Sets',
+  ],
+  Rock: ['Alternative / Modern', 'Indie Rock', 'Classic Rock', 'Punk Rock', 'Hard Rock', 'Nu-Metal'],
+  'Country / Americana': ['Country', 'Americana'],
+  'Latin / World': ['Latin Pop', 'Worldbeat', 'Bossa Nova', 'Celtic'],
+  Jazz: ['Avant Jazz', 'Smooth Jazz'],
+  'Oldies / Soul': ['Soul', 'Oldies'],
+  Lounge: ['Spy Lounge', 'Exotica', 'Tiki'],
+  Eclectic: ['Main Mix', 'Rock Mix', 'Burning Man', 'Covers', 'Live Events', 'Specials'],
+  'Spoken / Scanner': ['Scanner', 'Author Readings'],
   Metal: ['Metal', 'Heavy Metal'],
 };
 const genreRank = (genre: string) => {
@@ -150,19 +165,29 @@ function inferredSubtype(st: Station): string {
   if (genre === 'Electronic') {
     if (label.includes('dnb') || label.includes('drum')) return 'Drum & Bass';
     if (label.includes('dubstep') || label.includes('bass')) return 'Dubstep / Bass';
+    if (label.includes('future') || label.includes('trap') || label.includes('beat')) return 'Future Soul / Beats';
     if (label.includes('idm')) return 'IDM';
     if (label.includes('trance') || label.includes('prog')) return 'Progressive / Trance';
     if (label.includes('house')) return 'Deep House';
     if (label.includes('electropop') || label.includes('synth')) return 'Electropop / Synthpop';
     if (label.includes('vapor')) return 'Vaporwave';
-    if (label.includes('space')) return 'Ambient / Space';
     if (label.includes('techno')) return 'Techno';
-    if (label.includes('chill')) return 'Downtempo / Chill';
+  }
+  if (genre === 'Ambient') {
+    if (label.includes('dark') || label.includes('industrial')) return 'Dark Ambient / Industrial';
+    if (label.includes('drone')) return 'Drone';
+    if (label.includes('deep')) return 'Deep Ambient';
+    if (label.includes('space')) return 'Space Ambient';
+    if (label.includes('experimental')) return 'Ambient / Experimental';
+    if (label.includes('mission') || label.includes('scanner')) return 'Mission / Field Recordings';
+    if (label.includes('live')) return 'Live Sets';
+    if (label.includes('chill') || label.includes('downtempo')) return 'Downtempo / Chill';
   }
   if (genre === 'Rock') {
     if (label.includes('nu')) return 'Nu-Metal';
     if (label.includes('punk')) return 'Punk Rock';
     if (label.includes('hard')) return 'Hard Rock';
+    if (label.includes('70s') || label.includes('classic')) return 'Classic Rock';
     if (label.includes('indie')) return 'Indie Rock';
     if (label.includes('alternative') || label.includes('modern')) return 'Alternative / Modern';
   }

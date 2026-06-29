@@ -8,16 +8,7 @@
       "genre": "Electronic",
       "subtype": "Hacker / Cyberpunk",
       "source": "SomaFM",
-      "description": "Music for hacking. The year-round DEF CON channel."
-    },
-    {
-      "name": "Nightride — DATAWAVE FM",
-      "url": "https://stream.nightride.fm/datawave.mp3",
-      "codec": "datawave",
-      "genre": "Electronic",
-      "subtype": "Hacker / Cyberpunk",
-      "source": "Nightride FM",
-      "description": "Glitchy synthwave, IDM, and retro-computing music."
+      "description": "Music for Hacking. The DEF CON Year-Round Channel."
     },
     {
       "name": "Nightride — DARKSYNTH",
@@ -29,40 +20,22 @@
       "description": "Darksynth, cyberpunk, and synthmetal."
     },
     {
-      "name": "SomaFM — Doomed",
-      "url": "https://ice1.somafm.com/doomed-128-mp3",
-      "codec": "dark industrial",
+      "name": "Nightride — DATAWAVE FM",
+      "url": "https://stream.nightride.fm/datawave.mp3",
+      "codec": "datawave",
       "genre": "Electronic",
-      "subtype": "Industrial / Dark Ambient",
-      "source": "SomaFM",
-      "description": "Dark industrial and ambient music."
-    },
-    {
-      "name": "SomaFM — Groove Salad",
-      "url": "https://ice1.somafm.com/groovesalad-128-mp3",
-      "codec": "chill",
-      "genre": "Electronic",
-      "subtype": "Downtempo / Chill",
-      "source": "SomaFM",
-      "description": "Ambient and downtempo beats."
-    },
-    {
-      "name": "SomaFM — Groove Salad 2",
-      "url": "https://ice1.somafm.com/groovesalad2-128-mp3",
-      "codec": "chill",
-      "genre": "Electronic",
-      "subtype": "Downtempo / Chill",
-      "source": "SomaFM",
-      "description": "A different plate of ambient/downtempo beats."
+      "subtype": "Hacker / Cyberpunk",
+      "source": "Nightride FM",
+      "description": "Glitchy synthwave, IDM, and retro-computing music."
     },
     {
       "name": "SomaFM — Beat Blender",
       "url": "https://ice1.somafm.com/beatblender-128-mp3",
-      "codec": "deep house",
+      "codec": "deep house / downtempo",
       "genre": "Electronic",
       "subtype": "Deep House",
       "source": "SomaFM",
-      "description": "Deep-house and downtempo electronic."
+      "description": "A late night blend of deep-house and downtempo chill."
     },
     {
       "name": "SomaFM — The Trip",
@@ -71,7 +44,7 @@
       "genre": "Electronic",
       "subtype": "Progressive / Trance",
       "source": "SomaFM",
-      "description": "Progressive house and trance."
+      "description": "Progressive house / trance. Tip top tunes."
     },
     {
       "name": "SomaFM — cliqhop idm",
@@ -80,7 +53,7 @@
       "genre": "Electronic",
       "subtype": "IDM",
       "source": "SomaFM",
-      "description": "Blips, bleeps, and intelligent dance music."
+      "description": "Blips'n'beeps backed mostly w/beats. Intelligent Dance Music."
     },
     {
       "name": "BassDrive",
@@ -94,20 +67,20 @@
     {
       "name": "SomaFM — Fluid",
       "url": "https://ice1.somafm.com/fluid-128-mp3",
-      "codec": "dnb / future soul",
+      "codec": "future soul / liquid trap",
       "genre": "Electronic",
-      "subtype": "Drum & Bass",
+      "subtype": "Future Soul / Beats",
       "source": "SomaFM",
-      "description": "Drum and bass, future soul, and liquid beats."
+      "description": "Drown in the electronic sound of instrumental hiphop, future soul and liquid trap."
     },
     {
       "name": "SomaFM — Dub Step Beyond",
       "url": "https://ice1.somafm.com/dubstep-128-mp3",
-      "codec": "dubstep",
+      "codec": "dubstep / bass",
       "genre": "Electronic",
       "subtype": "Dubstep / Bass",
       "source": "SomaFM",
-      "description": "Dubstep and bass-forward electronic."
+      "description": "Dubstep, Dub and Deep Bass. May damage speakers at high volume."
     },
     {
       "name": "SomaFM — PopTron",
@@ -116,7 +89,7 @@
       "genre": "Electronic",
       "subtype": "Electropop / Synthpop",
       "source": "SomaFM",
-      "description": "Electropop and indie electronic."
+      "description": "Electropop and indie dance rock with sparkle and pop."
     },
     {
       "name": "SomaFM — Underground 80s",
@@ -125,7 +98,7 @@
       "genre": "Electronic",
       "subtype": "Electropop / Synthpop",
       "source": "SomaFM",
-      "description": "Early alternative, synthpop, and new wave."
+      "description": "Early 80s UK Synthpop and a bit of New Wave."
     },
     {
       "name": "SomaFM — Vaporwaves",
@@ -134,16 +107,7 @@
       "genre": "Electronic",
       "subtype": "Vaporwave",
       "source": "SomaFM",
-      "description": "Vaporwave and late-night retrofuturism."
-    },
-    {
-      "name": "SomaFM — Space Station Soma",
-      "url": "https://ice1.somafm.com/spacestation-128-mp3",
-      "codec": "space electronica",
-      "genre": "Electronic",
-      "subtype": "Ambient / Space",
-      "source": "SomaFM",
-      "description": "Ambient and mid-tempo space electronica."
+      "description": "All Vaporwave. All the time."
     },
     {
       "name": "Sunshine Live",
@@ -155,13 +119,58 @@
       "description": "Electronic, house, and techno."
     },
     {
+      "name": "SomaFM — Groove Salad",
+      "url": "https://ice1.somafm.com/groovesalad-128-mp3",
+      "codec": "downtempo / chill",
+      "genre": "Ambient",
+      "subtype": "Downtempo / Chill",
+      "source": "SomaFM",
+      "description": "A nicely chilled plate of ambient/downtempo beats and grooves."
+    },
+    {
+      "name": "SomaFM — Groove Salad 2",
+      "url": "https://ice1.somafm.com/groovesalad2-128-mp3",
+      "codec": "downtempo / chill",
+      "genre": "Ambient",
+      "subtype": "Downtempo / Chill",
+      "source": "SomaFM",
+      "description": "A different mix of nicely chilled ambient/downtempo beats and grooves."
+    },
+    {
+      "name": "SomaFM — Groove Salad Classic",
+      "url": "https://ice1.somafm.com/gsclassic-128-mp3",
+      "codec": "downtempo / chill",
+      "genre": "Ambient",
+      "subtype": "Downtempo / Chill",
+      "source": "SomaFM",
+      "description": "The classic (early 2000s) version of a nicely chilled plate of ambient/downtempo beats and grooves."
+    },
+    {
+      "name": "SomaFM — Lush",
+      "url": "https://ice1.somafm.com/lush-128-mp3",
+      "codec": "vocal downtempo",
+      "genre": "Ambient",
+      "subtype": "Downtempo / Chill",
+      "source": "SomaFM",
+      "description": "Sensuous and mellow female vocals, many with an electronic influence."
+    },
+    {
       "name": "SomaFM — Drone Zone",
       "url": "https://ice1.somafm.com/dronezone-128-mp3",
       "codec": "ambient",
       "genre": "Ambient",
       "subtype": "Drone",
       "source": "SomaFM",
-      "description": "Atmospheric ambient space music."
+      "description": "Served best chilled, safe with most medications. Atmospheric textures with minimal beats."
+    },
+    {
+      "name": "SomaFM — Drone Zone 2",
+      "url": "https://ice1.somafm.com/dz2-128-mp3",
+      "codec": "ambient",
+      "genre": "Ambient",
+      "subtype": "Drone",
+      "source": "SomaFM",
+      "description": "A more eclectic alternative mix of atmospheric textures with minimal beats."
     },
     {
       "name": "SomaFM — Deep Space One",
@@ -170,7 +179,16 @@
       "genre": "Ambient",
       "subtype": "Deep Ambient",
       "source": "SomaFM",
-      "description": "Deep ambient electronic and space music."
+      "description": "Deep ambient electronic, experimental and space music. For inner and outer space exploration."
+    },
+    {
+      "name": "SomaFM — Space Station Soma",
+      "url": "https://ice1.somafm.com/spacestation-128-mp3",
+      "codec": "space ambient",
+      "genre": "Ambient",
+      "subtype": "Space Ambient",
+      "source": "SomaFM",
+      "description": "Tune in, turn on, space out. Spaced-out ambient and mid-tempo electronica."
     },
     {
       "name": "SomaFM — Synphaera",
@@ -179,25 +197,61 @@
       "genre": "Ambient",
       "subtype": "Space Ambient",
       "source": "SomaFM",
-      "description": "Ambient and electronic space music."
+      "description": "Featuring the music from an independent record label focused on modern electronic ambient and space music."
+    },
+    {
+      "name": "SomaFM — Doomed",
+      "url": "https://ice1.somafm.com/doomed-128-mp3",
+      "codec": "dark industrial / ambient",
+      "genre": "Ambient",
+      "subtype": "Dark Ambient / Industrial",
+      "source": "SomaFM",
+      "description": "Where every day is Halloween: Dark industrial/ambient music for tortured souls."
     },
     {
       "name": "SomaFM — The Dark Zone",
       "url": "https://ice1.somafm.com/darkzone-128-mp3",
       "codec": "dark ambient",
       "genre": "Ambient",
-      "subtype": "Dark Ambient",
+      "subtype": "Dark Ambient / Industrial",
       "source": "SomaFM",
-      "description": "Dark ambient music."
+      "description": "The darker side of deep ambient. Music for staring into the Abyss."
     },
     {
-      "name": "SomaFM — BAGeL Radio",
-      "url": "https://ice1.somafm.com/bagel-128-mp3",
-      "codec": "alt / modern rock",
-      "genre": "Rock",
-      "subtype": "Alternative / Modern",
+      "name": "SomaFM — n5MD Radio",
+      "url": "https://ice1.somafm.com/n5md-128-mp3",
+      "codec": "ambient / experimental",
+      "genre": "Ambient",
+      "subtype": "Ambient / Experimental",
       "source": "SomaFM",
-      "description": "Alternative and modern rock."
+      "description": "Emotional Experiments in Music: Ambient, modern composition, post-rock, & experimental electronic music"
+    },
+    {
+      "name": "SomaFM — Mission Control",
+      "url": "https://ice1.somafm.com/missioncontrol-128-mp3",
+      "codec": "ambient / NASA",
+      "genre": "Ambient",
+      "subtype": "Mission / Field Recordings",
+      "source": "SomaFM",
+      "description": "Celebrating NASA and Space Explorers everywhere."
+    },
+    {
+      "name": "SomaFM — SF 10-33",
+      "url": "https://ice1.somafm.com/sf1033-128-mp3",
+      "codec": "ambient / scanner",
+      "genre": "Ambient",
+      "subtype": "Mission / Field Recordings",
+      "source": "SomaFM",
+      "description": "Ambient music mixed with the sounds of San Francisco public safety radio traffic."
+    },
+    {
+      "name": "SomaFM — Chillits Radio",
+      "url": "https://ice1.somafm.com/chillits-128-mp3",
+      "codec": "live chill",
+      "genre": "Ambient",
+      "subtype": "Live Sets",
+      "source": "SomaFM",
+      "description": "Celebrating 25 years of music, chilling and camping"
     },
     {
       "name": "KEXP",
@@ -209,13 +263,31 @@
       "description": "Seattle listener-powered indie and alternative radio."
     },
     {
+      "name": "SomaFM — Digitalis",
+      "url": "https://ice1.somafm.com/digitalis-128-mp3",
+      "codec": "alternative / electronic rock",
+      "genre": "Rock",
+      "subtype": "Alternative / Modern",
+      "source": "SomaFM",
+      "description": "Digitally affected analog rock to calm the agitated heart."
+    },
+    {
       "name": "SomaFM — Indie Pop Rocks",
       "url": "https://ice1.somafm.com/indiepop-128-mp3",
-      "codec": "indie pop",
+      "codec": "indie pop / rock",
       "genre": "Rock",
       "subtype": "Indie Rock",
       "source": "SomaFM",
-      "description": "Indie pop and indie rock."
+      "description": "New and classic favorite indie pop tracks."
+    },
+    {
+      "name": "SomaFM — Left Coast 70s",
+      "url": "https://ice1.somafm.com/seventies-128-mp3",
+      "codec": "70s rock",
+      "genre": "Rock",
+      "subtype": "Classic Rock",
+      "source": "SomaFM",
+      "description": "Mellow album rock from the Seventies. Yacht not required."
     },
     {
       "name": "Rock Antenne — Punk Rock",
@@ -236,15 +308,6 @@
       "description": "Hard rock and heavy rock."
     },
     {
-      "name": "Radio BOB — Nu Metal",
-      "url": "https://streams.radiobob.de/numetal/mp3-192/",
-      "codec": "nu-metal",
-      "genre": "Rock",
-      "subtype": "Nu-Metal",
-      "source": "Radio BOB",
-      "description": "Dedicated nu-metal stream."
-    },
-    {
       "name": "NRJ — Linkin Park",
       "url": "https://streaming.nrjaudio.fm/ouvfbfoarp52",
       "codec": "nu-metal",
@@ -252,6 +315,15 @@
       "subtype": "Nu-Metal",
       "source": "NRJ",
       "description": "Linkin Park-focused nu-metal stream."
+    },
+    {
+      "name": "Radio BOB — Nu Metal",
+      "url": "https://streams.radiobob.de/numetal/mp3-192/",
+      "codec": "nu-metal",
+      "genre": "Rock",
+      "subtype": "Nu-Metal",
+      "source": "Radio BOB",
+      "description": "Dedicated nu-metal stream."
     },
     {
       "name": "SWR3",
@@ -287,7 +359,7 @@
       "genre": "Country / Americana",
       "subtype": "Americana",
       "source": "SomaFM",
-      "description": "Americana roots music."
+      "description": "Americana Roots music for Cowhands, Cowpokes and Cowtippers"
     },
     {
       "name": "LOS40 Spain",
@@ -305,7 +377,7 @@
       "genre": "Latin / World",
       "subtype": "Worldbeat",
       "source": "SomaFM",
-      "description": "Desi-influenced Asian world beats."
+      "description": "Desi-influenced Asian world beats and beyond."
     },
     {
       "name": "SomaFM — Bossa Beyond",
@@ -314,7 +386,16 @@
       "genre": "Latin / World",
       "subtype": "Bossa Nova",
       "source": "SomaFM",
-      "description": "Bossa nova, samba, and beyond."
+      "description": "Silky-smooth, laid-back Brazilian-style rhythms of Bossa Nova, Samba and beyond"
+    },
+    {
+      "name": "SomaFM — ThistleRadio",
+      "url": "https://ice1.somafm.com/thistle-128-mp3",
+      "codec": "celtic",
+      "genre": "Latin / World",
+      "subtype": "Celtic",
+      "source": "SomaFM",
+      "description": "Exploring music from Celtic roots and branches"
     },
     {
       "name": "SomaFM — Sonic Universe",
@@ -323,7 +404,7 @@
       "genre": "Jazz",
       "subtype": "Avant Jazz",
       "source": "SomaFM",
-      "description": "Avant-garde jazz and exploratory sounds."
+      "description": "Transcending the world of jazz with eclectic, avant-garde takes on tradition."
     },
     {
       "name": "101 Smooth Jazz",
@@ -350,7 +431,7 @@
       "genre": "Reggae / Ska",
       "subtype": "Reggae / Ska",
       "source": "SomaFM",
-      "description": "Reggae, dub, ska, and rocksteady."
+      "description": "Reggae, Ska, Rocksteady classic and deep tracks."
     },
     {
       "name": "SomaFM — Metal Detector",
@@ -359,7 +440,7 @@
       "genre": "Metal",
       "subtype": "Metal",
       "source": "SomaFM",
-      "description": "Classic and current metal."
+      "description": "From black to doom, prog to sludge, thrash to post, stoner to crossover, punk to industrial."
     },
     {
       "name": "Rock Antenne — Heavy Metal",
@@ -377,7 +458,7 @@
       "genre": "Folk",
       "subtype": "Indie Folk",
       "source": "SomaFM",
-      "description": "Indie folk, alt-folk, and folk classics."
+      "description": "Indie Folk, Alt-folk and the occasional folk classics."
     },
     {
       "name": "SomaFM — Seven Inch Soul",
@@ -386,7 +467,7 @@
       "genre": "Oldies / Soul",
       "subtype": "Soul",
       "source": "SomaFM",
-      "description": "Vintage soul from original 45 RPM vinyl."
+      "description": "Vintage soul tracks from the original 45 RPM vinyl."
     },
     {
       "name": "SomaFM — The In-Sound",
@@ -395,7 +476,7 @@
       "genre": "Oldies / Soul",
       "subtype": "Oldies",
       "source": "SomaFM",
-      "description": "60s and 70s hipster Euro-pop."
+      "description": "60s/70s Hipster Euro Pop where psychedelic melodies meets groovy vibes."
     },
     {
       "name": "SomaFM — Secret Agent",
@@ -404,7 +485,7 @@
       "genre": "Lounge",
       "subtype": "Spy Lounge",
       "source": "SomaFM",
-      "description": "Spy jazz and cinematic lounge."
+      "description": "The soundtrack for your stylish, mysterious, dangerous life. For Spies and PIs too!"
     },
     {
       "name": "SomaFM — Illinois Street Lounge",
@@ -413,7 +494,16 @@
       "genre": "Lounge",
       "subtype": "Exotica",
       "source": "SomaFM",
-      "description": "Classic bachelor-pad exotica and lounge."
+      "description": "Classic bachelor pad, playful exotica and vintage music of tomorrow."
+    },
+    {
+      "name": "SomaFM — Tiki Time",
+      "url": "https://ice1.somafm.com/tikitime-128-mp3",
+      "codec": "tiki / exotica",
+      "genre": "Lounge",
+      "subtype": "Tiki",
+      "source": "SomaFM",
+      "description": "Classic Tiki music and Vintage island rhythms to sip cocktails by."
     },
     {
       "name": "Radio Paradise — Main",
@@ -432,6 +522,60 @@
       "subtype": "Rock Mix",
       "source": "Radio Paradise",
       "description": "Radio Paradise rock mix."
+    },
+    {
+      "name": "SomaFM — Black Rock FM",
+      "url": "https://ice1.somafm.com/brfm-128-mp3",
+      "codec": "burning man",
+      "genre": "Eclectic",
+      "subtype": "Burning Man",
+      "source": "SomaFM",
+      "description": "From the Black Rock Desert playa to the world, year round!"
+    },
+    {
+      "name": "SomaFM — Covers",
+      "url": "https://ice1.somafm.com/covers-128-mp3",
+      "codec": "covers",
+      "genre": "Eclectic",
+      "subtype": "Covers",
+      "source": "SomaFM",
+      "description": "Just covers. Songs you know by artists you don't. We've got you covered."
+    },
+    {
+      "name": "SomaFM — SomaFM Live",
+      "url": "https://ice1.somafm.com/live-128-mp3",
+      "codec": "live",
+      "genre": "Eclectic",
+      "subtype": "Live Events",
+      "source": "SomaFM",
+      "description": "Special Live Events and rebroadcasts of past live events"
+    },
+    {
+      "name": "SomaFM — SomaFM Specials",
+      "url": "https://ice1.somafm.com/specials-128-mp3",
+      "codec": "specials",
+      "genre": "Eclectic",
+      "subtype": "Specials",
+      "source": "SomaFM",
+      "description": "Now featuring Afternoon Jazz, Wavepool, DubX, The Surf Report & More!"
+    },
+    {
+      "name": "SomaFM — SF Police Scanner",
+      "url": "https://ice1.somafm.com/scanner-128-mp3",
+      "codec": "scanner",
+      "genre": "Spoken / Scanner",
+      "subtype": "Scanner",
+      "source": "SomaFM",
+      "description": "San Francisco Public Safety Scanner Feed"
+    },
+    {
+      "name": "SomaFM — SF in SF",
+      "url": "https://ice1.somafm.com/sfinsf-128-mp3",
+      "codec": "author readings",
+      "genre": "Spoken / Scanner",
+      "subtype": "Author Readings",
+      "source": "SomaFM",
+      "description": "Author readings and discussions from the science fiction, fantasy, horror, and genre literary fields."
     }
   ]
 }

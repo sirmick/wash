@@ -65,9 +65,14 @@ test.describe('radio app (native player)', () => {
     await electronic.click();
     const hacker = page.locator('[data-testid="subtype-electronic-hacker-cyberpunk"]');
     await expect(hacker).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.locator('[data-testid="subtype-electronic-ambient-space"]')).toHaveCount(0);
     await hacker.click();
     await expect(list).toContainText('DEF CON Radio');
     await expect(list).toContainText('DATAWAVE FM');
+    const ambient = page.locator('[data-testid="genre-ambient"]');
+    await expect(ambient).toHaveAttribute('aria-expanded', 'false');
+    await ambient.click();
+    await expect(page.locator('[data-testid="subtype-ambient-space-ambient"]')).toHaveAttribute('aria-expanded', 'false');
 
     // Paste the fake stream URL → it's added as a station.
     await page.locator('[data-testid="add-url"]').fill(streamUrl);
