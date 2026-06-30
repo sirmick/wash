@@ -88,10 +88,18 @@ func (r *Router) RunUnixListener(ctx context.Context) error {
 	r.log("ctl listening on %s (allow uid=%d, name=%q, idle=%s)",
 		r.cfg.ListenUnix, r.cfg.AllowUID, r.cfg.Name, r.cfg.IdleTimeout)
 
+	// Track in-flight handoffs so a clean shutdown joins them before
+	// returning: each handleHandoff runs HandleShell, which honours ctx
+	// and unwinds (logging its disconnect summary) on cancel. The
+	// caller's "listener stopped" signal must not race ahead of that
+	// teardown — mirrors runRawListener's session join.
+	var handoffs sync.WaitGroup
+
 	for {
 		c, err := ln.AcceptUnix()
 		if err != nil {
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				handoffs.Wait()
 				return nil
 			}
 			r.log("ctl accept: %v", err)
@@ -99,12 +107,17 @@ func (r *Router) RunUnixListener(ctx context.Context) error {
 			// failure loop doesn't peg a CPU.
 			select {
 			case <-ctx.Done():
+				handoffs.Wait()
 				return nil
 			case <-time.After(50 * time.Millisecond):
 			}
 			continue
 		}
-		go r.handleHandoff(ctx, c)
+		handoffs.Add(1)
+		go func() {
+			defer handoffs.Done()
+			r.handleHandoff(ctx, c)
+		}()
 	}
 }
 

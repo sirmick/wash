@@ -89,5 +89,15 @@ func (w *WSTransport) WriteFrame(f wire.Frame) error {
 }
 
 func (w *WSTransport) Close() error {
+	// A graceful close writes a close frame and waits up to 5s for the
+	// peer to echo one (coder/websocket's fixed handshake timeout). That
+	// politeness is only worth paying for when the peer is still there:
+	// once our context is cancelled we're tearing the session down (router
+	// shutdown / idle reap), so skip the handshake and close immediately
+	// rather than block the listener's shutdown join on a peer that's going
+	// away — or, in tests, a peer that never speaks WebSocket at all.
+	if w.ctx.Err() != nil {
+		return w.ws.CloseNow()
+	}
 	return w.ws.Close(websocket.StatusNormalClosure, "")
 }
