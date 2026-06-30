@@ -1,6 +1,6 @@
 Name:           wash
 Version:        0.9.6
-Release:        3%{?dist}
+Release:        4%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
 License:        AGPL-3.0-or-later
@@ -205,6 +205,16 @@ fi
 exit 0
 
 %changelog
+* Mon Jun 29 2026 sirmick <sirmick@gmail.com> - 0.9.6-4
+- radio: load stations from a user-editable ~/.config/wash/radio-stations.json
+  seeded from embedded defaults; refreshed SomaFM set + hacker/cyberpunk adds;
+  Ambient vs Electronic genre taxonomy cleanup; tree opens collapsed except the
+  last-played station path.
+- router: join in-flight ctl-listener handoffs on shutdown and CloseNow() a
+  cancelled session's WebSocket, fixing a make test-race data race and a 5s
+  shutdown stall.
+- dev: add a non-root local toolchain installer (Go, Node.js/npm, pnpm).
+
 * Mon Jun 29 2026 sirmick <sirmick@gmail.com> - 0.9.6-3
 - UI: consolidate every app frontend onto the shared @wash/ui design language
   (Button/Input/Checkbox + tokens); data-viz palettes onto themeable accents;

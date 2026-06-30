@@ -1,3 +1,18 @@
+wash (0.9.6-4) unstable; urgency=low
+
+  * radio: load stations from a user-editable
+    ~/.config/wash/radio-stations.json seeded from embedded defaults; refreshed
+    the SomaFM channel set with hacker/cyberpunk additions; tidied the top-level
+    genre taxonomy (Ambient owns ambient/space/dark/chill, Electronic owns the
+    beat/synth streams); station tree now opens collapsed except the persisted
+    last-played path.
+  * router: join in-flight ctl-listener handoffs on shutdown and CloseNow() a
+    cancelled session's WebSocket — fixes a make test-race data race and a 5s
+    shutdown stall against a departing peer.
+  * dev: add a non-root local toolchain installer for Go, Node.js/npm, and pnpm.
+
+ -- sirmick <sirmick@gmail.com>  Mon, 29 Jun 2026 14:00:00 -0700
+
 wash (0.9.6-3) unstable; urgency=low
 
   * UI: consolidate every app's frontend onto the shared @wash/ui design
