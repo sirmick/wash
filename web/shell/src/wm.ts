@@ -316,11 +316,24 @@ export function applySessionSnapshot(
   // Reconcile focus to THIS origin's claim. A claim → focus it; no claim →
   // clear focus only if the currently-focused window belongs to this
   // origin (another origin's focus is left intact). See wm-focus.
+  //
+  // But a snapshot arrives on every (re)connect, and a router keeps
+  // attesting its own focused window from its local point of view. If we
+  // honoured that claim unconditionally, a remote host dropping and
+  // reconnecting would re-raise its window to the top of the global stack
+  // and steal focus from whatever the user is actively working in on
+  // another origin — the window "flashes to the foreground" on every blip.
+  // So only adopt the claim when it wouldn't yank focus away from a
+  // different origin; existing remote windows keep their gz (upsertWindow
+  // preserves it) and stay put, while genuinely new windows still land on
+  // top via their first-insert gz.
   const claim = focusFromSnapshot(sessionWins);
-  if (claim != null) {
+  const cur = focused();
+  const otherOriginFocused = cur != null && cur.origin !== origin;
+  if (claim != null && !otherOriginFocused) {
     setFocused({ origin, windowID: claim });
     raiseGz(origin, claim);
-  } else if (focused()?.origin === origin) {
+  } else if (claim == null && cur?.origin === origin) {
     setFocused(null);
   }
 }

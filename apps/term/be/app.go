@@ -349,6 +349,12 @@ func registerHandlers(b *sdk.Bus) {
 				"rows": uint64(sessRows),
 			})
 		}
+		// A window refresh remounts the FE with an empty tab_status map,
+		// but the poll only pushes tab_status on change — so a tab whose
+		// user state hasn't flipped since would never get its badge back.
+		// Forget the dedupe keys here so the next poll tick (≤1s) resends
+		// the current status for every live tab and re-seeds the badges.
+		st.statusSent = make(map[uint32]string)
 		st.mu.Unlock()
 		return c.SendAppMsg(map[string]any{"kind": "sessions", "sessions": rows})
 	})

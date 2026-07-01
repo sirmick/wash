@@ -94,4 +94,26 @@ describe('wm origin-scoped merge', () => {
     await flush();
     expect(focused()).toEqual({ origin: 'hostB', windowID: 5 });
   });
+
+  it("a remote reconnect snapshot doesn't steal focus from the active origin", async () => {
+    // User is working in a local window.
+    applySessionSnapshot('local', [sw(1, 'a', { focused: true })], immediate);
+    applySessionSnapshot('hostB', [sw(5, 'b', { focused: true })], immediate);
+    await flush();
+    // hostB connected first-time here; but focus must stay where the user is.
+    raiseLocal('local', 1);
+    expect(focused()).toEqual({ origin: 'local', windowID: 1 });
+    const gzLocalBefore = windows.find((w) => w.origin === 'local' && w.windowID === 1)!.gz;
+
+    // hostB drops and reconnects: it re-attests its own window as focused.
+    applySessionSnapshot('hostB', [sw(5, 'b', { focused: true })], immediate);
+    await flush();
+
+    // Focus and the global stack must not have been yanked to hostB.
+    expect(focused()).toEqual({ origin: 'local', windowID: 1 });
+    const gzLocalAfter = windows.find((w) => w.origin === 'local' && w.windowID === 1)!.gz;
+    const gzRemote = windows.find((w) => w.origin === 'hostB' && w.windowID === 5)!.gz;
+    expect(gzRemote).toBeLessThan(gzLocalAfter);
+    expect(gzLocalAfter).toBe(gzLocalBefore);
+  });
 });
