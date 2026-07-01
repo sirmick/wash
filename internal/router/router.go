@@ -1482,13 +1482,20 @@ func (r *Router) resyncChannel(b *channelBinding) {
 			replay = realignReplay(replay)
 		}
 	}
-	if !sh.tryWriteCtrl(wire.NewShellChannelResync(b.channelID, b.windowID, b.kind)) {
-		// Control queue full — stay behind, retry later. Logged: if this
+	// Reset + snapshot ride ClassBulk (not Control/Interactive) so they stay
+	// FIFO behind any stale same-channel Bulk frames still queued: strict
+	// priority would drain a Control reset + Interactive snapshot ahead of
+	// that stale tail, which would then redraw AFTER the snapshot and deliver
+	// those bytes twice (REVIEW-DATAPATH F4). The deferral logic below already
+	// tolerates a TrySubmit failure, so staying behind on a full Bulk queue is
+	// safe — the next credit grant or the watchdog retries.
+	if !sh.tryWriteCtrlClass(wire.NewShellChannelResync(b.channelID, b.windowID, b.kind), wire.ClassBulk) {
+		// Bulk queue full — stay behind, retry later. Logged: if this
 		// keeps happening the channel never recovers and the FE stays dark.
-		r.log("channel %d: resync deferred (control queue full) conn=%d", b.channelID, sh.connID)
+		r.log("channel %d: resync deferred (bulk queue full) conn=%d", b.channelID, sh.connID)
 		return
 	}
-	if len(replay) > 0 && !sh.tryWriteRawInteractive(b.channelID, replay) {
+	if len(replay) > 0 && !sh.tryWriteRawClass(b.channelID, replay, wire.ClassBulk) {
 		// Reset went out but the snapshot didn't fit; leave behind set so
 		// the next grant resends reset + snapshot (re-reset is harmless).
 		r.log("channel %d: resync reset sent, snapshot deferred (%d bytes) conn=%d", b.channelID, len(replay), sh.connID)

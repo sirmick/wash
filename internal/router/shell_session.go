@@ -945,26 +945,30 @@ func (s *ShellSession) tryWriteRawBulk(b *channelBinding, payload []byte) bool {
 	return true
 }
 
-// tryWriteCtrl enqueues a control message non-blocking. Returns false if
-// the control queue is full. Used by the resync path (docs/PTY_ROBUST.md)
-// so recovery never blocks a producer holding shellMu.
-func (s *ShellSession) tryWriteCtrl(m any) bool {
+// tryWriteCtrlClass enqueues a control message non-blocking at an explicit
+// priority class. Returns false if the queue is full. Used by the resync
+// path (docs/PTY_ROBUST.md) so recovery never blocks a producer holding
+// shellMu. resync sends its reset at ClassBulk (not Control) so the reset —
+// and the snapshot behind it — stay FIFO behind any stale same-channel Bulk
+// frames still queued, instead of jumping ahead of them via strict priority
+// and letting those stale bytes redraw after the snapshot (REVIEW-DATAPATH F4).
+func (s *ShellSession) tryWriteCtrlClass(m any, class wire.Class) bool {
 	data, err := wire.EncodeCtrl(m)
 	if err != nil {
 		return false
 	}
-	f := wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: data}.WithClass(wire.ClassControl)
+	f := wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: data}.WithClass(class)
 	if s.scheduler == nil {
 		return s.Transport.WriteFrame(f) == nil
 	}
 	return s.scheduler.TrySubmit(f)
 }
 
-// tryWriteRawInteractive enqueues a raw frame at Interactive class
-// non-blocking, bypassing credit (the resync snapshot is a transactional
-// flow, like reattach replay). Returns false if the queue is full.
-func (s *ShellSession) tryWriteRawInteractive(channelID uint32, payload []byte) bool {
-	f := wire.Frame{Flags: wire.FlagEnd, Channel: channelID, Payload: payload}.WithClass(wire.ClassInteractive)
+// tryWriteRawClass enqueues a raw frame at an explicit class non-blocking,
+// bypassing credit (the resync snapshot is a transactional recovery flow,
+// like the reattach replay). Returns false if the queue is full.
+func (s *ShellSession) tryWriteRawClass(channelID uint32, payload []byte, class wire.Class) bool {
+	f := wire.Frame{Flags: wire.FlagEnd, Channel: channelID, Payload: payload}.WithClass(class)
 	if s.scheduler == nil {
 		return s.Transport.WriteFrame(f) == nil
 	}
