@@ -168,7 +168,15 @@ export class Conn {
   private readonly hbIntervalMs: number;
   private readonly pongTimeoutMs: number;
   private readonly wakeProbeMs: number;
+  // Fallback ticker used only when Worker isn't available (test runner /
+  // non-browser environments). The real path is hbWorker below — see
+  // startHeartbeat.
   private hbTimer: ReturnType<typeof setInterval> | null = null;
+  // Ticks the periodic ping from a dedicated thread so a busy or throttled
+  // main thread can't silently starve it (see heartbeat-worker.ts). Created
+  // lazily on first startHeartbeat and reused across reconnects; only
+  // started/stopped per connection.
+  private hbWorker: Worker | null = null;
   private pongTimer: ReturnType<typeof setTimeout> | null = null;
   private pingSeq = 0;
   // Seq of the ping we're awaiting a pong for, or null when none outstanding.
@@ -220,6 +228,8 @@ export class Conn {
   close(): void {
     this.closedByUser = true;
     this.stopHeartbeat();
+    this.hbWorker?.terminate();
+    this.hbWorker = null;
     this.clearReconnectTimer();
     this.clearPending();
     this.setState('closed');
@@ -412,13 +422,36 @@ export class Conn {
     // Ping immediately so the first RTT (and the router's watchdog arming)
     // doesn't wait a whole interval, then settle into the periodic cadence.
     this.sendPing(this.pongTimeoutMs);
-    this.hbTimer = setInterval(() => this.sendPing(this.pongTimeoutMs), this.hbIntervalMs);
+    if (typeof Worker !== 'undefined') {
+      this.ensureHbWorker().postMessage({ type: 'start', intervalMs: this.hbIntervalMs });
+    } else {
+      // No Worker (test runner, or an environment without one) — fall back
+      // to a main-thread interval. Loses the anti-starvation property but
+      // keeps the heartbeat working at all.
+      this.hbTimer = setInterval(() => this.sendPing(this.pongTimeoutMs), this.hbIntervalMs);
+    }
   }
 
   private stopHeartbeat(): void {
     if (this.hbTimer != null) { clearInterval(this.hbTimer); this.hbTimer = null; }
+    this.hbWorker?.postMessage({ type: 'stop' });
     if (this.pongTimer != null) { clearTimeout(this.pongTimer); this.pongTimer = null; }
     this.outstandingPing = null;
+  }
+
+  // ensureHbWorker lazily creates the heartbeat worker once and reuses it
+  // across reconnects (startHeartbeat/stopHeartbeat just start/stop its
+  // internal interval). Each 'tick' message it posts back drives one
+  // sendPing on the main thread — the worker never touches the socket
+  // itself, it only supplies a schedule the main thread's JS can't stall.
+  private ensureHbWorker(): Worker {
+    if (this.hbWorker) return this.hbWorker;
+    const w = new Worker(new URL('./heartbeat-worker.ts', import.meta.url), { type: 'module' });
+    w.onmessage = (ev: MessageEvent) => {
+      if (ev.data?.type === 'tick') this.sendPing(this.pongTimeoutMs);
+    };
+    this.hbWorker = w;
+    return w;
   }
 
   // sendPing emits one heartbeat with a fresh seq and arms a deadline timer.

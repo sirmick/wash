@@ -24,17 +24,27 @@ const wsWriteTimeout = 30 * time.Second
 
 // readIdleTimeout reaps a shell connection the router has heard nothing
 // from for this long. The FE heartbeats (wire.TShellPing) ~every 15s, so
-// three missed pings (no keystrokes, no pings, no anything) means the
-// socket is a zombie the OS never FIN'd — typically a laptop suspended
-// with the lid shut, or a tab the kernel froze. Reaping it frees the
-// session's resources and, more importantly, surfaces the disconnect in
-// the logs instead of leaving a dead ShellSession pinned forever.
+// this is several missed pings (no keystrokes, no pings, no anything),
+// meaning the socket is a zombie the OS never FIN'd — typically a laptop
+// suspended with the lid shut, or a tab the kernel froze. Reaping it frees
+// the session's resources and, more importantly, surfaces the disconnect
+// in the logs instead of leaving a dead ShellSession pinned forever.
+//
+// Kept well above the nominal 3-missed-pings mark (45s) as a backstop for
+// a heartbeat that's merely late rather than truly dead: a foregrounded,
+// actively-used tab can still starve its own main-thread ping for tens of
+// seconds under heavy synchronous work (a big terminal write/reflow), and
+// a backgrounded one can have its timer throttled similarly. The FE's own
+// heartbeat now ticks from a Worker thread precisely to avoid that (see
+// web/shell/src/heartbeat-worker.ts), but this timeout stays generous as
+// defense in depth — reaping too eagerly is what turns a transient stall
+// into a full reconnect + channel resync storm (docs/PTY_ROBUST.md).
 //
 // The watchdog only ARMS once it has seen at least one ping, so an older
 // FE build that predates the heartbeat (and so never pings) is never
 // falsely reaped during an idle stretch — it simply keeps the legacy
 // "detected only when written to" behaviour.
-const readIdleTimeout = 45 * time.Second
+const readIdleTimeout = 90 * time.Second
 
 // readIdleCheckInterval is how often the watchdog samples liveness.
 const readIdleCheckInterval = 5 * time.Second
