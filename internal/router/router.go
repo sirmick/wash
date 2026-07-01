@@ -1465,8 +1465,9 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 // the lock and no live byte can interleave between the snapshot and the
 // resumed stream: no gap, no torn stream. All enqueues are non-blocking
 // (TrySubmit); if the scheduler can't take them right now the channel
-// stays behind and the next credit grant or the watchdog retries. A
-// retry that re-sends a reset is harmless (idempotent).
+// stays behind and the next credit grant or the per-shell behind watchdog
+// (behindWatchdogLoop → resyncBehindChannels) retries. A retry that
+// re-sends a reset is harmless (idempotent).
 func (r *Router) resyncChannel(b *channelBinding) {
 	b.shellMu.Lock()
 	defer b.shellMu.Unlock()
@@ -1495,6 +1496,33 @@ func (r *Router) resyncChannel(b *channelBinding) {
 	}
 	r.log("channel %d: resync complete (%d bytes replayed) conn=%d", b.channelID, len(replay), sh.connID)
 	b.behind = false
+}
+
+// resyncBehindChannels re-runs resyncChannel for every channel currently
+// bound to s that is still marked behind. The per-shell watchdog
+// (behindWatchdogLoop) calls this on a ticker so a suppressed channel
+// recovers even when no credit grant ever arrives to drive the credit-based
+// resync — the non-self-healing wedge (scheduler-full with credit remaining):
+// with output suppressed the FE absorbs nothing, so its grant never crosses
+// the threshold and handleChannelCredit never fires (REVIEW-RECONNECT M1 /
+// REVIEW-DATAPATH F2). resyncChannel re-checks behind/shell/peer under
+// shellMu and is idempotent, so the pre-filter here is only to skip the
+// common not-behind case cheaply.
+func (r *Router) resyncBehindChannels(s *ShellSession) {
+	r.channelsMu.Lock()
+	bindings := make([]*channelBinding, 0, len(r.channels))
+	for _, b := range r.channels {
+		bindings = append(bindings, b)
+	}
+	r.channelsMu.Unlock()
+	for _, b := range bindings {
+		b.shellMu.Lock()
+		due := b.behind && b.shell == s && b.peerConn == nil
+		b.shellMu.Unlock()
+		if due {
+			r.resyncChannel(b)
+		}
+	}
 }
 
 // declareAppToAllShells announces inst to every attached shell via

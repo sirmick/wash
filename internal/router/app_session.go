@@ -251,8 +251,9 @@ func (inst *AppInstance) dispatch(f wire.Frame) error {
 		// Interactive (transactional) forwards keep the lossless path.
 		if class == wire.ClassBulk && b.credit != nil && b.peerConn == nil {
 			if behind {
-				// Already desynced: ring holds the bytes; a resync
-				// (credit recovery, reattach, or the watchdog) replays.
+				// Already desynced: ring holds the bytes; a resync replays
+				// them — driven by credit recovery, reattach, or the per-shell
+				// behind watchdog (behindWatchdogLoop → resyncBehindChannels).
 				return nil
 			}
 			if !sh.tryWriteRawBulk(b, f.Payload) {

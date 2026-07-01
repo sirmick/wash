@@ -158,6 +158,7 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	}()
 	go sess.drainLoop(ctx)
 	go sess.readIdleLoop(ctx)
+	go sess.behindWatchdogLoop(ctx)
 
 	// Hold writeMu for the whole setup. While we hold it, any
 	// concurrent HandleApp.declareInstance blocks at the same mutex,
@@ -265,6 +266,39 @@ func (s *ShellSession) handlePing(m wire.ShellPing) error {
 		s.router.log("shell: heartbeat armed conn=%d", s.connID)
 	}
 	return s.WriteCtrlClass(wire.NewShellPong(m.Seq), wire.ClassControl)
+}
+
+// behindWatchdogInterval is how often the per-shell behind-watchdog scans
+// for suppressed channels to resync. A channel goes "behind" when a live
+// forward can't reach the FE (docs/PTY_ROBUST.md, Fix B) and stays there
+// until a resync. The self-healing path is a credit grant → resyncChannel,
+// but a suppressed channel ships NO bytes, so the FE's absorption-driven
+// grant may never cross its threshold and no grant — hence no resync — ever
+// arrives (REVIEW-RECONNECT M1 / REVIEW-DATAPATH F2). This ticker is the
+// backstop that always retries, so a watch-only terminal (tail -f, a build)
+// recovers on its own without the user typing.
+const behindWatchdogInterval = 3 * time.Second
+
+// behindWatchdogLoop periodically resyncs any channel bound to this shell
+// that is still marked behind. resyncChannel is idempotent and tolerates a
+// full scheduler (it leaves the channel behind and the next tick retries),
+// so the scan can call it unconditionally.
+func (s *ShellSession) behindWatchdogLoop(ctx context.Context) {
+	if s.router == nil {
+		return
+	}
+	t := time.NewTicker(behindWatchdogInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.drainerDone:
+			return
+		case <-t.C:
+			s.router.resyncBehindChannels(s)
+		}
+	}
 }
 
 // readIdleLoop reaps a shell connection the OS froze without closing — the
