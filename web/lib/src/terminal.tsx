@@ -391,6 +391,12 @@ export interface TerminalProps {
   // onModesChanged fires whenever the tracked mode state changes;
   // consumers persist it (debounced) for the next remount.
   onModesChanged?: (m: TermModes) => void;
+  // onStalled fires when this terminal typed input but got no output back
+  // for several seconds under an otherwise-live channel (docs/PTY_ROBUST.md,
+  // Fix D). The component already self-heals with a resync nudge; consumers
+  // can use this to show a "terminal stalled — recovering…" affordance
+  // instead of leaving the user staring at an unexplained black screen.
+  onStalled?: () => void;
 }
 
 export const Terminal: Component<TerminalProps> = (props) => {
@@ -405,6 +411,23 @@ export const Terminal: Component<TerminalProps> = (props) => {
   const [menu, setMenu] = createSignal<{ x: number; y: number } | null>(null);
   const [hasSel, setHasSel] = createSignal(false);
 
+  // ---- stall watchdog (docs/PTY_ROBUST.md, Fix D — FE half) ----
+  // Every network-layer wedge (credit stall, dead-but-open client, stale
+  // ownership) is already fixed router-side (Fix A-C) and recovers via a
+  // channel.resync the moment the FE grants credit again. The one gap the
+  // design doc leaves open is an FE that never notices it's stuck — a
+  // socket that looks "up" (heartbeat fine, other channels/tabs fine)
+  // while this one terminal went dark. We only flag "typed something,
+  // heard nothing back for STALL_MS" — a plain idle shell (no input, no
+  // output) is normal and must never trip this. On trip we log it (was
+  // previously silent), notify the consumer so it can show an affordance,
+  // and self-heal by nudging the router with a harmless zero-byte credit
+  // grant: a no-op on the ledger, but it makes handleChannelCredit
+  // re-check `behind` and resync this channel if it was suppressed.
+  const STALL_MS = 8000;
+  let lastTxAt = 0;
+  let awaitingOutput = false;
+  let lastNudgeAt = 0;
 
   // Subscribe synchronously when in raw-channel mode so bytes the
   // router has already buffered (pendingRaw) flush into our local
@@ -415,6 +438,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
   // handle and decide when to feed bytes.
   let pending: Uint8Array[] | null = [];
   const writeOrBuffer = (bytes: Uint8Array) => {
+    awaitingOutput = false;
     if (pending) pending.push(bytes);
     else term?.write(bytes);
   };
@@ -477,23 +501,38 @@ export const Terminal: Component<TerminalProps> = (props) => {
   const emitModes = () => props.onModesChanged?.({ dec: { ...decModes }, keypad });
   // noteDec records CSI ? … h/l. Always returns false so xterm's own
   // handler still runs — we observe the stream, never consume it.
+  // Both handlers run inside xterm's escape-sequence parser (during
+  // term.write()'s async parse loop). An uncaught throw here would
+  // otherwise propagate into the parser and can leave it wedged for the
+  // rest of the session with no trace — silent, permanent "no more
+  // output" for this one terminal while the socket stays healthy
+  // (docs/PTY_ROBUST.md). Always resolve to false (never consume the
+  // sequence) even on error.
   const noteDec = (params: (number | number[])[], on: boolean): boolean => {
-    let changed = false;
-    for (const p of params) {
-      const n = Array.isArray(p) ? p[0] : p;
-      if (typeof n !== 'number' || n <= 0) continue;
-      if (decModes[n] === on) continue;
-      if (!(n in decModes) && Object.keys(decModes).length >= MAX_TRACKED_MODES) continue;
-      decModes[n] = on;
-      changed = true;
+    try {
+      let changed = false;
+      for (const p of params) {
+        const n = Array.isArray(p) ? p[0] : p;
+        if (typeof n !== 'number' || n <= 0) continue;
+        if (decModes[n] === on) continue;
+        if (!(n in decModes) && Object.keys(decModes).length >= MAX_TRACKED_MODES) continue;
+        decModes[n] = on;
+        changed = true;
+      }
+      if (changed) emitModes();
+    } catch (e) {
+      window.wash.log('error', 'terminal', `noteDec threw: ${e}`, (e as Error)?.stack);
     }
-    if (changed) emitModes();
     return false;
   };
   const noteKeypad = (on: boolean): boolean => {
-    if (keypad !== on) {
-      keypad = on;
-      emitModes();
+    try {
+      if (keypad !== on) {
+        keypad = on;
+        emitModes();
+      }
+    } catch (e) {
+      window.wash.log('error', 'terminal', `noteKeypad threw: ${e}`, (e as Error)?.stack);
     }
     return false;
   };
@@ -567,6 +606,17 @@ export const Terminal: Component<TerminalProps> = (props) => {
     // After a PC Ctrl+C copy we clear the selection so a second Ctrl+C
     // interrupts (matching Windows Terminal / GNOME-on-selection).
     term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
+      try {
+        return handleCustomKeyEvent(ev);
+      } catch (e) {
+        // Never let a throw here (ours or props.customKeyHandler's) escape
+        // into xterm's key handling — treat it as "let xterm handle it"
+        // rather than risk wedging this terminal's input silently.
+        window.wash.log('error', 'terminal', `customKeyHandler threw: ${e}`, (e as Error)?.stack);
+        return true;
+      }
+    });
+    const handleCustomKeyEvent = (ev: KeyboardEvent): boolean => {
       if (ev.type === 'keydown' && (ev.key === 'C' || ev.key === 'c')) {
         if (ev.ctrlKey && ev.shiftKey) {
           const sel = term?.getSelection();
@@ -595,7 +645,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
         return false;
       }
       return props.customKeyHandler ? props.customKeyHandler(ev) : true;
-    });
+    };
     if (props.onModesChanged || props.initialModes) {
       term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (p) => noteDec(p, true));
       term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, (p) => noteDec(p, false));
@@ -606,11 +656,22 @@ export const Terminal: Component<TerminalProps> = (props) => {
     term.loadAddon(fit);
     term.open(hostEl);
     term.onData((s) => {
-      const bytes = encoder.encode(s);
-      if (channelId > 0) {
-        window.wash.writeRawFor(origin, channelId, bytes);
-      } else {
-        props.onInput?.(bytes);
+      try {
+        const bytes = encoder.encode(s);
+        if (channelId > 0) {
+          // interactive=true: keystrokes must not queue behind another
+          // app's bulk traffic (ws.ts sendRaw) on the way to the router,
+          // and must classify correctly in link-health stats.
+          window.wash.writeRawFor(origin, channelId, bytes, true);
+          lastTxAt = Date.now();
+          awaitingOutput = true;
+        } else {
+          props.onInput?.(bytes);
+        }
+      } catch (e) {
+        // An exception here would otherwise silently wedge this
+        // terminal's input path with no trace (docs/PTY_ROBUST.md).
+        window.wash.log('error', 'terminal', `onData threw: ${e}`, (e as Error)?.stack);
       }
     });
     // OSC window title (set by the shell's PROMPT_COMMAND, vim, ssh, …)
@@ -633,6 +694,24 @@ export const Terminal: Component<TerminalProps> = (props) => {
     onCleanup(() => {
       hostEl.removeEventListener('mouseup', onMouseUp);
     });
+
+    if (channelId > 0) {
+      const stallCheck = window.setInterval(() => {
+        if (!awaitingOutput) return;
+        const now = Date.now();
+        if (now - lastTxAt < STALL_MS) return;
+        if (now - lastNudgeAt < STALL_MS) return; // already nudged; don't spam
+        lastNudgeAt = now;
+        window.wash.log(
+          'warn',
+          'terminal',
+          `channel ${channelId} stalled: no output ${Math.round((now - lastTxAt) / 1000)}s after input — nudging resync`,
+        );
+        props.onStalled?.();
+        window.wash.nudgeChannelFor(origin, channelId);
+      }, 2000);
+      onCleanup(() => window.clearInterval(stallCheck));
+    }
 
     // Test hook: expose the live Terminal on the host element so
     // playwright specs can read the buffer without traversing
@@ -809,4 +888,3 @@ export const Terminal: Component<TerminalProps> = (props) => {
     </>
   );
 };
-

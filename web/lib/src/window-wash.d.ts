@@ -169,7 +169,11 @@ interface WashGlobals {
   onLinkStats(cb: (h: WashLinkHealth) => void): () => void;
   log(level: WashLogLevel, source: string, msg: string, stack?: string): void;
   openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
-  writeRaw(channelID: number, bytes: Uint8Array): void;
+  // interactive=true tags the frame CLASS_INTERACTIVE instead of the
+  // default CLASS_BULK — use for latency-sensitive writes (terminal
+  // keystrokes) so they don't queue behind another app's bulk traffic and
+  // so link-health stats classify them correctly.
+  writeRaw(channelID: number, bytes: Uint8Array, interactive?: boolean): void;
   // Origin-scoped raw API (docs/REMOTE.md §4): an app that can run on a
   // remote host routes its raw channels (pty, file stream) to that host's
   // connection via these, passing its props.origin — bare openRawChannel/
@@ -179,8 +183,14 @@ interface WashGlobals {
   // when the router asks to reset this channel's terminal before replaying
   // a scrollback snapshot. Returns an unsubscribe fn.
   subscribeResyncFor(origin: string, channelID: number, onResync: () => void): () => void;
-  writeRawFor(origin: string, channelID: number, bytes: Uint8Array): void;
+  writeRawFor(origin: string, channelID: number, bytes: Uint8Array, interactive?: boolean): void;
   rawBufferedAmountFor(origin: string): number;
+  // Sends a zero-byte credit grant for channelID. Harmless no-op on the
+  // credit ledger, but it makes the router re-check whether the channel is
+  // "behind" and, if so, resync it (docs/PTY_ROBUST.md, Fix B) — a safe
+  // self-heal nudge for a terminal that looks stalled under a healthy
+  // socket (Fix D). See terminal.tsx's stall watchdog.
+  nudgeChannelFor(origin: string, channelID: number): void;
   // Bytes queued in the shell socket's send buffer. A bulk producer
   // streaming over writeRaw (e.g. fm's upload) polls this to pace
   // itself, so it doesn't head-of-line block control frames (like a

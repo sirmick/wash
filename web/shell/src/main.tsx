@@ -12,6 +12,7 @@ import { render } from 'solid-js/web';
 import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js';
 import type { Component } from 'solid-js';
 import { type ConnState } from './ws';
+import { CLASS_INTERACTIVE } from './wire';
 import { RouterClient, type ClientHandlers } from './router-client';
 import {
   type Origin,
@@ -481,6 +482,10 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         // Fix B). Run the channel's resync callback synchronously, BEFORE
         // the snapshot bytes that follow on the raw channel (same WS
         // message order), so they render into a reset terminal.
+        // Logged (was silent): a resync means this channel was suppressed
+        // and just recovered — the trail you want when chasing a terminal
+        // that "went black" under an otherwise-healthy socket.
+        shellLog('info', 'resync', `channel ${msg.channel_id} resync (origin=${client.origin})`);
         deliverResync(client.origin, msg.channel_id);
         break;
       }
@@ -1308,7 +1313,11 @@ declare global {
       onLinkStats(cb: (h: LinkHealth) => void): () => void;
       log(level: 'error' | 'warn' | 'info' | 'debug', source: string, msg: string, stack?: string): void;
       openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
-      writeRaw(channelID: number, bytes: Uint8Array): void;
+      // interactive=true tags the frame CLASS_INTERACTIVE instead of the
+      // default CLASS_BULK — use for latency-sensitive writes (terminal
+      // keystrokes) so they don't queue behind another app's bulk traffic
+      // (ws.ts sendRaw) and so link-health stats classify them correctly.
+      writeRaw(channelID: number, bytes: Uint8Array, interactive?: boolean): void;
       rawBufferedAmount(): number;
       // Origin-scoped raw API (docs/REMOTE.md §4): route a channel to a
       // specific host's connection so a remote app's pty/file stream isn't
@@ -1319,8 +1328,12 @@ declare global {
       // runs when the router asks to reset this channel's terminal before
       // replaying a scrollback snapshot. Returns an unsubscribe fn.
       subscribeResyncFor(origin: string, channelID: number, onResync: () => void): () => void;
-      writeRawFor(origin: string, channelID: number, bytes: Uint8Array): void;
+      writeRawFor(origin: string, channelID: number, bytes: Uint8Array, interactive?: boolean): void;
       rawBufferedAmountFor(origin: string): number;
+      // Sends a zero-byte credit grant for channelID — harmless on the
+      // ledger, but makes the router re-check/resync a "behind" channel.
+      // Self-heal nudge for terminal.tsx's stall watchdog (Fix D).
+      nudgeChannelFor(origin: string, channelID: number): void;
       // Router-held clipboard (the wash-internal clipboard every app
       // shares). Text-only on this surface; see clipboard.ts in
       // @wash/ui for the system-clipboard mirroring helpers.
@@ -1541,8 +1554,8 @@ window.wash = {
   openRawChannel(channelID, onBytes) {
     return subscribeRaw(LOCAL_ORIGIN, channelID, onBytes);
   },
-  writeRaw(channelID, bytes) {
-    conn.sendRaw(channelID, bytes);
+  writeRaw(channelID, bytes, interactive) {
+    conn.sendRaw(channelID, bytes, interactive ? CLASS_INTERACTIVE : undefined);
   },
   rawBufferedAmount() {
     return conn.bufferedAmount();
@@ -1553,8 +1566,11 @@ window.wash = {
   subscribeResyncFor(origin, channelID, onResync) {
     return subscribeResync(origin, channelID, onResync);
   },
-  writeRawFor(origin, channelID, bytes) {
-    (clientForOrigin(origin) ?? local).conn.sendRaw(channelID, bytes);
+  writeRawFor(origin, channelID, bytes, interactive) {
+    (clientForOrigin(origin) ?? local).conn.sendRaw(channelID, bytes, interactive ? CLASS_INTERACTIVE : undefined);
+  },
+  nudgeChannelFor(origin, channelID) {
+    (clientForOrigin(origin) ?? local).conn.sendCtrl({ t: 'channel.credit', ch: channelID, n: 0 });
   },
   rawBufferedAmountFor(origin) {
     return (clientForOrigin(origin) ?? local).conn.bufferedAmount();

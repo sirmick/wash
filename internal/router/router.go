@@ -1460,13 +1460,18 @@ func (r *Router) resyncChannel(b *channelBinding) {
 		}
 	}
 	if !sh.tryWriteCtrl(wire.NewShellChannelResync(b.channelID, b.windowID, b.kind)) {
-		return // control queue full — stay behind, retry later
+		// Control queue full — stay behind, retry later. Logged: if this
+		// keeps happening the channel never recovers and the FE stays dark.
+		r.log("channel %d: resync deferred (control queue full) conn=%d", b.channelID, sh.connID)
+		return
 	}
 	if len(replay) > 0 && !sh.tryWriteRawInteractive(b.channelID, replay) {
 		// Reset went out but the snapshot didn't fit; leave behind set so
 		// the next grant resends reset + snapshot (re-reset is harmless).
+		r.log("channel %d: resync reset sent, snapshot deferred (%d bytes) conn=%d", b.channelID, len(replay), sh.connID)
 		return
 	}
+	r.log("channel %d: resync complete (%d bytes replayed) conn=%d", b.channelID, len(replay), sh.connID)
 	b.behind = false
 }
 
