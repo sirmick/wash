@@ -1416,10 +1416,31 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 		}
 		id := b.channelID
 		win := b.windowID
-		b.shellMu.Unlock()
-		if err := s.WriteCtrl(wire.NewShellChannelBind(id, win, b.kind)); err != nil {
+		kind := b.kind
+		// Enqueue Bind + resync + replay while STILL holding shellMu. The
+		// forward path (app_session.go) samples b.shell under this same
+		// lock before writing, so holding it here serialises this replay
+		// ahead of any live frame the new head might otherwise slip onto
+		// the wire first (REVIEW-RECONNECT L1 / REVIEW-DATAPATH F4). All
+		// three ride Interactive class, so scheduler FIFO preserves the
+		// Bind→resync→replay order once enqueued. WriteCtrl/WriteRawFrameClass
+		// at Interactive never take shellMu and the drainer runs
+		// independently, so a blocking Submit here cannot deadlock.
+		if err := s.WriteCtrl(wire.NewShellChannelBind(id, win, kind)); err != nil {
 			r.log("reattach bind: %v", err)
+			b.shellMu.Unlock()
 			continue
+		}
+		// Generic (terminal) channels: reset the FE terminal BEFORE the
+		// replay so a LIVE-page reconnect (suspend/wake, blip, idle-reap)
+		// doesn't append the scrollback snapshot to an xterm that already
+		// shows it (REVIEW-RECONNECT H1 / REVIEW-DATAPATH F3). deliverResync
+		// is a no-op for an unsubscribed channel, so a fresh page reload is
+		// unaffected. Video-kind resync is handled separately (Phase D).
+		if kind == wire.ChannelKindGeneric {
+			if err := s.WriteCtrl(wire.NewShellChannelResync(id, win, kind)); err != nil {
+				r.log("reattach resync channel %d: %v", id, err)
+			}
 		}
 		if len(replay) > 0 {
 			// Interactive class so the replay arrives in the same
@@ -1429,6 +1450,7 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 				r.log("reattach replay channel %d: %v", id, err)
 			}
 		}
+		b.shellMu.Unlock()
 	}
 }
 

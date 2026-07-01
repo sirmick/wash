@@ -537,6 +537,17 @@ export class Conn {
     }
   }
 
+  /**
+   * dropSocketForTest simulates a transient network drop of the live
+   * socket: it closes the current socket WITHOUT nulling its handlers, so
+   * the real onclose fires and drives the normal scheduleReconnect path —
+   * exactly a same-router live-page reconnect (no page reload). Used by the
+   * term-live-reconnect e2e (REVIEW-RECONNECT H1). No-op if already down.
+   */
+  dropSocketForTest(): void {
+    try { this.ws?.close(); } catch { /* already dead */ }
+  }
+
   /** Point-in-time connection diagnostics (banner + __washDiag + tests). */
   diag(): ConnDiag {
     const now = this.now();

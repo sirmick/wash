@@ -1715,3 +1715,12 @@ window.__washDiag = (): WashDiagSnapshot => {
   console.info(`[wash-diag] snapshot: ${JSON.stringify(snap)}`);
   return snap;
 };
+
+// window.__washDropSocket — test-only handle to force a transient WS drop
+// without a page reload, exercising the same-router live-reconnect path
+// (reattachChannelsToShell → channel.resync + replay). See the
+// term-live-reconnect e2e (REVIEW-RECONNECT H1).
+declare global {
+  interface Window { __washDropSocket?: () => void; }
+}
+window.__washDropSocket = (): void => { conn.dropSocketForTest(); };
