@@ -313,3 +313,60 @@ test('diag reports total reconnects and last close code', (t: TestCtx) => {
   assert.equal(conn.diag().lastCloseCode, 1006);
   assert.equal(conn.diag().state, 'reconnecting');
 });
+
+// ---- concurrent-dial race (REVIEW-RECONNECT H2) ----
+
+// countChannel returns how many sent frames rode a given channel.
+function countChannel(sent: Uint8Array[], channel: number): number {
+  let n = 0;
+  for (const b of sent) {
+    if (decodeFrame(b).channel === channel) n++;
+  }
+  return n;
+}
+
+test('wake/reconnectNow while a dial is in flight: one socket, queued frame flushes once', async (t: TestCtx) => {
+  const { conn, socks, sent } = hbConn(t);
+  socks[0].onopen!(new Event('open'));
+  socks[0].onclose!(new Event('close') as CloseEvent); // → reconnecting, 250ms backoff
+  // A keystroke typed during the outage queues.
+  conn.sendRaw(7, new Uint8Array([1, 2, 3]));
+  assert.equal(conn.pendingCount(), 1);
+
+  // Backoff fires → socket #1 is dialed but has NOT opened (CONNECTING).
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(socks.length, 2, 'backoff dialed socket #1');
+
+  // wake + an explicit Reconnect-now click WHILE #1 is still in flight must
+  // not spawn a second concurrent socket (the H2 flap).
+  conn.wake('online');
+  conn.reconnectNow();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(socks.length, 2, 'no concurrent second dial while one is in flight');
+
+  // #1 opens and flushes the queued frame — exactly once.
+  socks[1].onopen!(new Event('open'));
+  assert.equal(conn.pendingCount(), 0);
+  assert.equal(conn.diag().state, 'open');
+  assert.equal(countChannel(sent, 7), 1, 'queued frame flushed exactly once');
+});
+
+test("a superseded socket's late onclose does not schedule another reconnect", async (t: TestCtx) => {
+  const { conn, socks } = hbConn(t);
+  socks[0].onopen!(new Event('open'));
+  socks[0].onclose!(new Event('close') as CloseEvent); // → reconnecting, backoff armed
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(socks.length, 2, 'backoff dialed socket #1');
+  socks[1].onopen!(new Event('open')); // #1 is now the current, open socket
+  assert.equal(conn.diag().state, 'open');
+
+  // A late / duplicate close from the OLD socket #0 (a zombie firing after
+  // the replacement is live) must be ignored — not re-arm reconnect, not
+  // knock the live socket out of 'open'.
+  socks[0].onclose!({ type: 'close', code: 1006 } as unknown as CloseEvent);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(conn.diag().state, 'open', 'stale close ignored');
+  assert.equal(socks.length, 2, 'stale close did not trigger a new dial');
+});

@@ -121,6 +121,18 @@ export class Conn {
   private state: ConnState = 'connecting';
   private reconnectAttempts = 0;
   private closedByUser = false;
+  // dialing is true from when connect() creates a socket until that socket
+  // settles (its onopen or onclose fires) or is torn down. While a dial is in
+  // flight a second connect() must NOT run: the first socket's late onopen
+  // would flushPending() against the replacement (still CONNECTING →
+  // InvalidStateError → every queued keystroke/save_state lost), and its
+  // onclose would re-arm reconnect over a now-live socket — a self-sustaining
+  // flap (REVIEW-RECONNECT H2). reconnectNow()/reconnectTick() bail while set.
+  private dialing = false;
+  // tickInFlight guards the async reconnectTick against reentrancy across its
+  // authGone() await: two wake/timer triggers must not both pass the probe
+  // and each spawn a socket (REVIEW-RECONNECT H2).
+  private tickInFlight = false;
   // Only HTTP(S)-backed sockets (real WebSocket from a URL) get the
   // /auth/check preflight; a virtio/serial factory has no same-origin
   // auth endpoint to probe, so it keeps the plain backoff loop.
@@ -270,9 +282,17 @@ export class Conn {
     const attempt = this.reconnectAttempts;
     this.setState(attempt === 0 ? 'connecting' : 'reconnecting');
     this.emit({ kind: 'connecting', msg: attempt === 0 ? 'dialing router' : `redial (attempt ${attempt})` });
-    this.ws = this.factory();
-    this.ws.binaryType = 'arraybuffer';
-    this.ws.onopen = () => {
+    // Capture the socket this closure owns. Every handler bails when it is no
+    // longer the current socket (sock !== this.ws) so a superseded dial can't
+    // flush pending frames against the wrong socket or re-drive the reconnect
+    // state machine (REVIEW-RECONNECT H2).
+    const sock = this.factory();
+    this.ws = sock;
+    this.dialing = true;
+    sock.binaryType = 'arraybuffer';
+    sock.onopen = () => {
+      if (sock !== this.ws) return;
+      this.dialing = false;
       const wasReconnect = this.reconnectAttempts > 0;
       this.reconnectAttempts = 0;
       if (wasReconnect) this.totalReconnects += 1;
@@ -282,13 +302,19 @@ export class Conn {
       this.startHeartbeat();
       resolveReady?.();
     };
-    this.ws.onerror = () => {
+    sock.onerror = () => {
+      if (sock !== this.ws) return;
       if (this.reconnectAttempts === 0) {
         rejectReady?.(new Error('socket error'));
       }
     };
-    this.ws.onmessage = (ev) => this.onMessage(ev);
-    this.ws.onclose = (ev) => {
+    sock.onmessage = (ev) => {
+      if (sock !== this.ws) return;
+      this.onMessage(ev);
+    };
+    sock.onclose = (ev) => {
+      if (sock !== this.ws) return;
+      this.dialing = false;
       this.lastCloseCode = ev?.code ?? null;
       this.lastCloseReason = ev?.reason ?? '';
       this.stopHeartbeat();
@@ -340,13 +366,22 @@ export class Conn {
   // reconnecting".
   private async reconnectTick(): Promise<void> {
     if (this.closedByUser) return;
-    if (this.wantAuthProbe && (await this.authGone())) {
-      this.clearPending();
-      this.setState('unauthenticated');
-      return;
+    // A dial or a prior tick is already in flight — don't spawn a second
+    // socket (H2). connect() keeps `dialing` set until the socket settles, so
+    // this also blocks a tick that fires while an earlier dial is connecting.
+    if (this.dialing || this.tickInFlight) return;
+    this.tickInFlight = true;
+    try {
+      if (this.wantAuthProbe && (await this.authGone())) {
+        this.clearPending();
+        this.setState('unauthenticated');
+        return;
+      }
+      if (this.closedByUser) return;
+      this.connect();
+    } finally {
+      this.tickInFlight = false;
     }
-    if (this.closedByUser) return;
-    this.connect();
   }
 
   // authGone probes /auth/check. Returns true only on a definitive
@@ -497,6 +532,8 @@ export class Conn {
   }
 
   private teardownSocket(): void {
+    // The socket is being abandoned — no handler will fire to clear `dialing`.
+    this.dialing = false;
     const ws = this.ws;
     if (!ws) return;
     ws.onopen = null;
@@ -514,6 +551,10 @@ export class Conn {
    */
   reconnectNow(): void {
     if (this.closedByUser || this.state === 'open' || this.state === 'connecting') return;
+    // A dial/tick is already in flight — re-dialing now would spawn a second
+    // socket and lose queued input to the flap (REVIEW-RECONNECT H2). The
+    // in-flight dial will settle (open) or fail (onclose → scheduleReconnect).
+    if (this.dialing || this.tickInFlight) return;
     this.emit({ kind: 'reconnect-now', msg: 'immediate reconnect requested' });
     this.clearReconnectTimer();
     this.reconnectAttempts = 0;
