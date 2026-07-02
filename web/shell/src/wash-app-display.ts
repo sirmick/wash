@@ -284,10 +284,16 @@ export class WashAppDisplay extends HTMLElement {
     };
     const onKeyDown = (ev: KeyboardEvent) => {
       // Keep browser shortcuts/scroll from firing while a guest is focused;
-      // the guest owns the keyboard. (Repeat is the client's job, so a
-      // synthetic repeat — ev.repeat — still forwards as a fresh down.)
+      // the guest owns the keyboard.
       ev.preventDefault();
       ev.stopPropagation();
+      // Drop browser autorepeat: Wayland clients repeat held keys themselves
+      // via repeat_info, and re-sending a press for an already-pressed key is
+      // both a double-repeat (browser timer + client timer) and a protocol
+      // violation. Let the client be the single repeat authority
+      // (REVIEW-X11-WAYLAND #11). Xwayland/X clients see the initial press and
+      // do X autorepeat as usual.
+      if (ev.repeat) return;
       window.wash?.focusWindow(this.windowID, this.origin);
       this.queue({ ev: 'key', code: ev.code, state: 'down' });
       this.flushNow();
