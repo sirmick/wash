@@ -89,6 +89,11 @@ public:
     // tracks the new size. Send only on actual size change.
     void report_geometry(uint32_t win, uint32_t w, uint32_t h);
 
+    // report_title updates a window's titlebar text after map (window.set_title
+    // on CH_EVENT, fire-and-forget) — xterm/Chromium/editor dynamic titles
+    // (REVIEW-X11-WAYLAND #12).
+    void report_title(uint32_t win, const std::string& title);
+
     // confirm_close replies to a router window.close_requested. We pass
     // allow=false to VETO the router's auto-destroy: the compositor asks
     // the guest client to close politely and drives the real teardown via

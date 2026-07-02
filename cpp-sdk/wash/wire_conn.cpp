@@ -301,6 +301,12 @@ void WireConn::destroy_window(uint32_t win) {
     note_window_delta(-1);
 }
 
+void WireConn::report_title(uint32_t win, const std::string& title) {
+    if (!win) return;
+    json m = {{"t", "window.set_title"}, {"win", win}, {"title", title}};
+    write_json(CH_EVENT, m);
+}
+
 void WireConn::report_geometry(uint32_t win, uint32_t w, uint32_t h) {
     json m = {{"t", "window.geometry"}, {"win", win}, {"w", w}, {"h", h}};
     write_json(CH_EVENT, m);

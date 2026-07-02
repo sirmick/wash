@@ -321,6 +321,7 @@ struct Toplevel {
     struct wl_listener request_fullscreen;
     struct wl_listener request_move;
     struct wl_listener request_resize;
+    struct wl_listener set_title;
 
     // Set when the client created an xdg-decoration object for this toplevel.
     // A real/dialog window negotiates decoration; a menu-fallback popover
@@ -717,6 +718,15 @@ void toplevel_request_fullscreen(struct wl_listener* listener, void* /*data*/) {
                               on ? output_logical_h() : 0);
 }
 
+// toplevel_set_title propagates a post-map title change to the wash window —
+// xterm dynamic titles, Chromium tab titles, editors' "file — modified"
+// markers (the title was otherwise snapshotted only at map) — RX-W #12.
+void toplevel_set_title(struct wl_listener* listener, void* /*data*/) {
+    Toplevel* t = wl_container_of(listener, t, set_title);
+    const char* title = t->xdg_toplevel ? t->xdg_toplevel->title : nullptr;
+    t->server->conn->report_title(t->sink.win, title ? title : "");
+}
+
 void toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
     Toplevel* t = wl_container_of(listener, t, destroy);
     // A popover destroyed while still mapped (no unmap first) must drop its
@@ -732,6 +742,7 @@ void toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
     wl_list_remove(&t->request_fullscreen.link);
     wl_list_remove(&t->request_move.link);
     wl_list_remove(&t->request_resize.link);
+    wl_list_remove(&t->set_title.link);
     delete t;
 }
 
@@ -1196,6 +1207,8 @@ void server_new_xdg_toplevel(struct wl_listener* listener, void* data) {
     wl_signal_add(&xdg_toplevel->events.request_move, &t->request_move);
     t->request_resize.notify = toplevel_request_resize;
     wl_signal_add(&xdg_toplevel->events.request_resize, &t->request_resize);
+    t->set_title.notify = toplevel_set_title;
+    wl_signal_add(&xdg_toplevel->events.set_title, &t->set_title);
 }
 
 #ifdef WASH_DISPLAY_XWAYLAND
@@ -1220,6 +1233,7 @@ struct XSurface {
     struct wl_listener commit;
     struct wl_listener destroy;
     struct wl_listener request_configure;
+    struct wl_listener set_title;
     bool surface_listeners = false; // map/unmap/commit currently wired
 
     WindowSink sink;
@@ -1450,6 +1464,7 @@ void xsurface_destroy(struct wl_listener* listener, void* /*data*/) {
     wl_list_remove(&x->dissociate.link);
     wl_list_remove(&x->destroy.link);
     wl_list_remove(&x->request_configure.link);
+    wl_list_remove(&x->set_title.link);
     delete x;
 }
 
@@ -1466,6 +1481,14 @@ void xsurface_request_configure(struct wl_listener* listener, void* data) {
     XSurface* x = wl_container_of(listener, x, request_configure);
     auto* ev = static_cast<struct wlr_xwayland_surface_configure_event*>(data);
     wlr_xwayland_surface_configure(x->xsurf, ev->x, ev->y, ev->width, ev->height);
+}
+
+// xsurface_set_title propagates an X client's post-map title change to the
+// wash window (xterm dynamic titles etc.) — REVIEW-X11-WAYLAND #12.
+void xsurface_set_title(struct wl_listener* listener, void* /*data*/) {
+    XSurface* x = wl_container_of(listener, x, set_title);
+    const char* title = x->xsurf ? x->xsurf->title : nullptr;
+    x->server->conn->report_title(x->sink.win, title ? title : "");
 }
 
 void server_new_xwayland_surface(struct wl_listener* listener, void* data) {
@@ -1490,6 +1513,8 @@ void server_new_xwayland_surface(struct wl_listener* listener, void* data) {
     wl_signal_add(&xsurf->events.destroy, &x->destroy);
     x->request_configure.notify = xsurface_request_configure;
     wl_signal_add(&xsurf->events.request_configure, &x->request_configure);
+    x->set_title.notify = xsurface_set_title;
+    wl_signal_add(&xsurf->events.set_title, &x->set_title);
 }
 #endif // WASH_DISPLAY_XWAYLAND
 
