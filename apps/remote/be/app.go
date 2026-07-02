@@ -159,6 +159,16 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 
 	mounts := newMountManager(svc, c)
 	mounts.restoreMounts() // re-establish "reconnect at launch" mounts
+
+	// Tear down every ssh tunnel + mount on service termination so a router
+	// SIGTERM (Settings restart, devreload) or conn-close doesn't orphan the
+	// ssh processes — and, for the relay tunnels, host B's idle-timeout-less
+	// --listen-raw routers — to PID 1 (REVIEW-RECONNECT H5). Dual-triggered
+	// (signal + conn-close), run-once, panic-guarded by the sdk.
+	sdk.OnTerminate(func() {
+		sup.shutdown()
+		mounts.shutdown()
+	})
 	sdk.HandleFromVoid(bus, "mount", func(_ *sdk.Conn, _ string, req mountCtlReq, _ wire.Sender) error {
 		if req.Host == "" {
 			return nil

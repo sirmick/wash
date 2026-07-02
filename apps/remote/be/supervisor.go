@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/sirmick/wash/internal/sdk"
@@ -135,6 +136,25 @@ func (s *supervisor) connect(host, addr string, port int) {
 	go s.run(ctx, host, addr, port)
 }
 
+// shutdown cancels every live host connection's context, killing its ssh
+// tunnel (and, with it, host B's --listen-raw router, which has no idle
+// timeout). Registered on sdk.OnTerminate so a router SIGTERM (Settings
+// restart, devreload) or conn-close teardown doesn't orphan the ssh
+// processes to PID 1 — one live B-side session would otherwise accumulate
+// per A-side restart (REVIEW-RECONNECT H5).
+func (s *supervisor) shutdown() {
+	s.mu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(s.procs))
+	for host, cancel := range s.procs {
+		cancels = append(cancels, cancel)
+		delete(s.procs, host)
+	}
+	s.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+}
+
 // run owns one host's connection for its whole lifetime, auto-reconnecting
 // across unexpected drops so a connected host is *solid* — a network blip or
 // a momentary B-side restart heals itself (status → reconnecting → up) instead
@@ -234,6 +254,11 @@ func (s *supervisor) runOnce(ctx context.Context, host, dial string, port int, s
 	_ = os.Remove(sock)
 
 	cmd := exec.CommandContext(ctx, s.sshPath, buildSSHArgs(dial, sock, remoteSock, port)...)
+	// Backstop the ctx cancel: if wash-remote dies abruptly (SIGKILL, panic)
+	// before OnTerminate/ctx can reap it, Pdeathsig has the kernel SIGTERM the
+	// ssh — and with it B's --listen-raw router — instead of orphaning the
+	// tunnel to PID 1 (REVIEW-RECONNECT H5).
+	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
 	log.Printf("wash-remote: connect host=%s dial=%s port=%d local=%s remote=%s", host, dial, port, sock, remoteSock)

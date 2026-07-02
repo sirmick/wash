@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/pkg/sftp"
 
@@ -147,6 +148,9 @@ var (
 			"-o", "ServerAliveInterval=15",
 			"-o", "ServerAliveCountMax=3",
 			host, "-s", "sftp")
+		// Backstop: if wash-remote dies abruptly, the kernel SIGTERMs this
+		// sftp ssh instead of orphaning it (REVIEW-RECONNECT H5).
+		cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
 		wr, err := cmd.StdinPipe()
 		if err != nil {
 			return nil, nil, err
@@ -268,6 +272,26 @@ func (m *mountManager) mount(host, remoteRoot string, persist bool) {
 }
 
 // unmount detaches a mount (escalating escape hatch) and releases its watch.
+// shutdown tears down every live mount's ssh subprocess (and best-effort
+// FUSE-unmounts) on service termination, so a router SIGTERM / conn-close
+// doesn't leak the sftp ssh processes (REVIEW-RECONNECT H5). Unlike unmount()
+// it does NOT forget persisted mounts — they re-establish on the next launch.
+func (m *mountManager) shutdown() {
+	m.mu.Lock()
+	entries := m.entries
+	m.entries = map[string]*mountEntry{}
+	m.mu.Unlock()
+	for mp, e := range entries {
+		if e == nil {
+			continue
+		}
+		_ = washmount.Unmount(e.server, mp) // nil server (still dialing) is handled
+		if e.conn != nil {
+			e.conn.closeCurrent() // kills the sftp ssh subprocess
+		}
+	}
+}
+
 func (m *mountManager) unmount(mp string) {
 	m.mu.Lock()
 	e := m.entries[mp]
