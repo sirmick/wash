@@ -1006,10 +1006,45 @@ func (inst *AppInstance) WriteEvtClass(m any, class wire.Class) error {
 	return inst.writeFrame(f)
 }
 
+// appWriteTimeout bounds a single router→app frame write. A var (not const)
+// so tests can shorten it. Matches wsWriteTimeout: generous enough that a
+// merely slow app never trips it, tight enough that a genuinely wedged one
+// (deadlocked, SIGSTOP'd, NFS-hung — not reading its socket) can't block the
+// shell dispatch loop for long (REVIEW-DATAPATH F5/F6 / REVIEW-RECONNECT H3).
+var appWriteTimeout = wsWriteTimeout
+
+// deadlineFrameWriter is a transport that can bound a write (StreamTransport
+// over the app's unix socket). In-process test pipes don't implement it and
+// fall back to the plain, unbounded WriteFrame.
+type deadlineFrameWriter interface {
+	WriteFrameDeadline(wire.Frame, time.Time) error
+}
+
 func (inst *AppInstance) writeFrame(f wire.Frame) error {
 	inst.writeMu.Lock()
-	defer inst.writeMu.Unlock()
-	return inst.Transport.WriteFrame(f)
+	dw, ok := inst.Transport.(deadlineFrameWriter)
+	if !ok {
+		err := inst.Transport.WriteFrame(f)
+		inst.writeMu.Unlock()
+		return err
+	}
+	err := dw.WriteFrameDeadline(f, time.Now().Add(appWriteTimeout))
+	inst.writeMu.Unlock()
+	if err == nil {
+		return nil
+	}
+	// The write timed out (or the conn is dead): treat the app as wedged and
+	// tear the instance down the same way a dead conn is — close its transport
+	// so its read loop exits and HandleApp runs tearDown. Crucially we DON'T
+	// propagate the error to the caller: a stuck app must not reap the healthy
+	// shell connection that was merely relaying to it (the shell dispatch loop
+	// would otherwise return this error and tear itself down). The frame is
+	// dropped, which is fine — the app is going away.
+	if inst.router != nil {
+		inst.router.log("app %s inst=%s: write wedged (%v) — tearing down instance", inst.AppID, inst.InstanceID, err)
+	}
+	_ = inst.Transport.Close()
+	return nil
 }
 
 // writeRawFrame forwards bare bytes back to the app on a dynamic

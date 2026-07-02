@@ -3,6 +3,7 @@ package wire
 import (
 	"io"
 	"sync"
+	"time"
 )
 
 // FrameTransport carries wash frames in both directions. The router
@@ -51,6 +52,31 @@ func (s *StreamTransport) ReadFrameRaw() ([]byte, error) {
 func (s *StreamTransport) WriteFrame(f Frame) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	return EncodeFrame(s.rwc, f)
+}
+
+// writeDeadliner is any stream that supports write deadlines — a net.Conn
+// (the app-side inherited-fd unix socket, net.Pipe in tests) does; an
+// in-memory io.Pipe does not.
+type writeDeadliner interface {
+	SetWriteDeadline(time.Time) error
+}
+
+// WriteFrameDeadline is WriteFrame with a bound on how long the underlying
+// stream write may block. If the stream supports deadlines, a write that
+// can't complete by `deadline` fails with an i/o timeout instead of blocking
+// the caller forever; a stream that doesn't just writes normally. The router
+// uses this so a wedged app BE (not reading its socket, SO_SNDBUF full) can't
+// freeze the shell's single dispatch loop (REVIEW-DATAPATH F5/F6 /
+// REVIEW-RECONNECT H3). The deadline is cleared after the write so it never
+// leaks onto a later one.
+func (s *StreamTransport) WriteFrameDeadline(f Frame, deadline time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if d, ok := s.rwc.(writeDeadliner); ok {
+		_ = d.SetWriteDeadline(deadline)
+		defer func() { _ = d.SetWriteDeadline(time.Time{}) }()
+	}
 	return EncodeFrame(s.rwc, f)
 }
 

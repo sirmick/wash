@@ -498,6 +498,13 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 // when the file is fully written. On error (no FS configured, path
 // missing, traversal attempt, read failure) a ShellAssetReadErr is
 // sent back and no channel is opened.
+//
+// TODO(review F5): this streams the whole file through blocking Submit calls
+// inline on the shell dispatch loop, so a large asset over a slow link keeps
+// dispatch inside one call for seconds — no keystrokes read meanwhile. The
+// read-side liveness stamp (livenessTransport) keeps this from false-tripping
+// the idle reaper, but the desktop's input still stalls. Moving it to its own
+// goroutine (it's already transaction-framed) is deferred to a later pass.
 func (s *ShellSession) handleAssetRead(m wire.ShellAssetRead) error {
 	if s.router.assets == nil {
 		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeInternal, "no asset fs"))
