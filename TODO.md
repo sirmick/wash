@@ -147,8 +147,12 @@ Display / X11-Wayland (REVIEW-X11-WAYLAND.md) — protocol-coverage gaps:
   when a video channel goes behind, so the FE canvas repaints promptly after
   its resync-clear. Needs a NEW app-directed wire message (router → app
   channel-behind notification) — a design decision, not yet built.
-- [ ] **#5 deferred** — nested serial-less submenu chaining (a popover parenting
-  another popover); `TODO` in `toplevel_setup_popover`.
+- [ ] **#5 unresolved** — the popover classifier over-matches an UNTITLED GTK
+  message dialog (renders it as a pointer-grabbing overlay, not a movable
+  window). The review's proposed discriminators (no xdg-decoration / no min-max
+  / recent-pointer) each break real Qt menus and were reverted; needs a signal
+  the toolkits don't expose here. A TITLED dialog already stays a window. Plus
+  nested serial-less submenu chaining (`TODO` in `toplevel_setup_popover`).
 
 Out of scope entirely: VP9/WebRTC transport work.
 
