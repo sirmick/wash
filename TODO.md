@@ -103,6 +103,55 @@ only as a pointer; full design + rationale in docs/PTY_ROBUST.md.
 - Deliberately deferred (documented): a periodic router-wide resync sweep
   (only covers an FE that drains but never grants credit — an FE bug).
 
+## 2026-07-01 correctness-review leftovers (out of scope for the fix pass)
+
+The reliability/data-path/display fix pass (Phases A–D) landed the confirmed
+high/medium bugs. These lower-priority items from the same three reviews were
+explicitly deferred; each references the review doc + finding id.
+
+Data plane (REVIEW-DATAPATH.md):
+- [ ] **F9** — `wire.ReadLoop` can leak its reader goroutine at teardown
+  (select the buffered send against a `done` channel closed on return).
+- [ ] **F10** — a max-size (16 MiB) B-frame overflows the peer relay's A-frame
+  wrapper; split oversized relay payloads or cap B producers at `MaxPayload−8`.
+- [ ] **F11** — notes: `ChannelCredit.Reserve` single-waiter wakeup constraint;
+  `DecodeFrameRaw` not covered by the frame fuzzer; `Scheduler.TrySubmit`
+  enqueues after `Close`.
+
+Reconnect (REVIEW-RECONNECT.md):
+- [ ] **M5** — deferred `mountWhenReady` can resurrect a router-deleted window
+  as an unclosable ghost (per-origin snapshot epoch).
+- [ ] **M6** — a self-closed relay socket wedges a remote client forever (treat
+  a non-detach relay-socket close as fatal for the origin → detach + re-attach).
+- [ ] **M7** — post-confirm window close SIGTERMs with no escalation →
+  permanently unopenable app (arm a grace→`Process.Kill()` ladder).
+- [ ] **L2** — queued input silently dropped on `unauthenticated` (emit
+  `lost-input`); multi-tab head-steal is silent (wants a UI affordance).
+- [ ] **L3** — teardown gated on `cmd.Wait` while a grandchild holds the stdout
+  pipe (use `cmd.WaitDelay` / don't gate teardown on Wait).
+- [ ] **B1 deferred half** — move `handleAssetRead` streaming off the shell
+  dispatch loop (`TODO(review F5)` in `shell_session.go`); the read-side
+  liveness stamp already prevents the false idle-reap.
+- [ ] Smaller notes list (5523ef3 residual focus gaps; login first-spawn flock
+  doesn't re-`List`; bundles re-shipped every reconnect; …).
+
+Display / X11-Wayland (REVIEW-X11-WAYLAND.md) — protocol-coverage gaps:
+- [ ] wl_data_device **drag-and-drop** (in-app DnD dead), **primary selection**
+  (middle-click paste), **wp_viewporter**, **presentation-time**,
+  **xdg-activation**, **min/max size**, Xwayland **-auth** (cross-uid X access;
+  pair with the D4 runtime-dir work), **request_minimize/set_app_id/icons**.
+- [ ] **#13** — keymap hard-coded to the server default (non-US host layouts
+  type wrong chars; needs a layout hint from the FE); `handle_set_selection`
+  reader thread can block forever if the selection owner exits without writing.
+- [ ] **#6 deferred half (D5 part 2)** — compositor "force full frame" nudge
+  when a video channel goes behind, so the FE canvas repaints promptly after
+  its resync-clear. Needs a NEW app-directed wire message (router → app
+  channel-behind notification) — a design decision, not yet built.
+- [ ] **#5 deferred** — nested serial-less submenu chaining (a popover parenting
+  another popover); `TODO` in `toplevel_setup_popover`.
+
+Out of scope entirely: VP9/WebRTC transport work.
+
 ## Won't-do / deliberate no-ops (recorded so they don't get re-flagged)
 
 - Hand-rolled insertion sorts (`cmd/wash/main.go`, `runtime_stats.go`) —
