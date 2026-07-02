@@ -24,6 +24,7 @@ import { BulkConflictOverlay, type BulkConflict } from './sidebar/BulkConflictOv
 import { PrivWidget, type PrivReq } from './sidebar/PrivWidget';
 import { NetWidget, type NetState, type NetIface } from './sidebar/NetWidget';
 import { RemoteWidget, type RemoteHost } from './sidebar/RemoteWidget';
+import { reconcileRemoteAttachments } from './remote-reconcile';
 import { LinkWidget } from './sidebar/LinkWidget';
 import { AudioWidget, type AudioState } from './sidebar/AudioWidget';
 import { ClipboardWidget } from './sidebar/ClipboardWidget';
@@ -270,6 +271,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // Remote-host sessions, fed by the session BE's remote.state forwarder
   // (com.wash.remote supervisor). Glanceable list; wash-connect manages.
   const [remoteHosts, setRemoteHosts] = createSignal<RemoteHost[]>([]);
+  // attachedRemotes tracks origins this always-alive session FE has asked the
+  // shell to attach. wash-connect runs the same reconcile, but only while its
+  // window is open; the session FE keeps remote windows re-attaching after an
+  // SSH blip even with Connect closed (REVIEW-RECONNECT M4). See
+  // remote-reconcile.ts.
+  const attachedRemotes = new Set<string>();
   // Bumped on every remote-catalog change so the sidebar's per-host launch
   // dropdowns re-render; the catalogs themselves live in the shell (a
   // connected host stays attached even after wash-connect closes, so
@@ -784,11 +791,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           return;
         }
         case 'remote.state': {
-          // com.wash.remote's StateService snapshot: {hosts:[…]}. Just
-          // mirror it into the sidebar's glanceable list — wash-connect
-          // owns connect/auth/launch, so no auto-expand here.
+          // com.wash.remote's StateService snapshot: {hosts:[…]}. Mirror it
+          // into the sidebar's glanceable list, and reconcile attachments so
+          // remote windows re-attach after an SSH blip even with wash-connect
+          // closed (REVIEW-RECONNECT M4). wash-connect still owns
+          // connect/auth/launch — this only re-issues attach/detach.
           const st = data.state as unknown as { hosts?: RemoteHost[] };
-          setRemoteHosts(Array.isArray(st?.hosts) ? st.hosts : []);
+          const hostList = Array.isArray(st?.hosts) ? st.hosts : [];
+          setRemoteHosts(hostList);
+          reconcileRemoteAttachments(hostList, attachedRemotes, {
+            attach: (o) => window.wash.attachRemote(o),
+            detach: (o) => window.wash.detachRemote(o),
+          });
           return;
         }
         case 'audio.state': {

@@ -549,12 +549,20 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         break;
       }
       case 'peer.error': {
-        // Remote-apps relay attach failed (no registration / dial). Log it
-        // (forwarded to the router) so a host that's "up" but shows no apps
-        // isn't a silent mystery. wash-connect can surface it later.
+        // Remote-apps relay attach failed (no registration / dial). Surface it
+        // as a toast so a host that's "up" but shows no apps isn't a silent
+        // mystery — the auto-reconciler (session FE) re-issues attach on every
+        // remote.state, so a transient failure self-heals, but a persistent one
+        // is now visible (REVIEW-RECONNECT M4). Still logged to the router.
         if (!isLocal) break;
         const e = msg;
-        console.warn(`wash: relay attach failed for ${e.origin}: ${e.msg}`);
+        shellLog('warn', 'conn', `relay attach failed for ${e.origin}: ${e.msg}`);
+        showToast({
+          instanceID: 'com.wash.remote',
+          title: 'Remote host',
+          body: `Couldn’t attach ${e.origin}: ${e.msg}`,
+          level: 'warn',
+        });
         break;
       }
       case 'clipboard.changed': {
