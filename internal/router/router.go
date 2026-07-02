@@ -784,6 +784,30 @@ func (r *Router) bringUp(ctx context.Context, inst *AppInstance) {
 // persisted app-state, and tell shells the window is gone. Shared by
 // all three loop-finished paths. Idempotent for windowless apps.
 func (r *Router) tearDown(inst *AppInstance) {
+	// A crashed (unexpected-exit) session app or background service must be
+	// respawnable: clear its one-shot "started" latch so the next
+	// EnsureSessionRunning / EnsureBackgroundAppsRunning brings it back
+	// (REVIEW-RECONNECT M2/M3). Without this a session-app crash leaves every
+	// new shell with a chromeless desktop, and a crashed push-only service
+	// (e.g. the mDNS advertiser) silently vanishes until router restart.
+	//
+	// Gate on !expectedExit so an INTENTIONAL exit doesn't clear the latch out
+	// from under the code managing it: restartBackgroundApp sets expectedExit
+	// then re-claims the latch itself, and clearing here would open a window
+	// for a concurrent autoboot to spawn a duplicate. Placed before
+	// unregisterApp so it can't race restartBackgroundApp's waitSingletonGone.
+	if !inst.expectedExit.Load() {
+		if !r.cfg.NoSession && inst.AppID == r.cfg.SessionAppID {
+			r.sessionMu.Lock()
+			r.session.started = false
+			r.sessionMu.Unlock()
+		}
+		if inst.Manifest != nil && inst.Manifest.Surface == SurfaceBackground {
+			r.backgroundMu.Lock()
+			delete(r.backgroundStarted, inst.AppID)
+			r.backgroundMu.Unlock()
+		}
+	}
 	r.unregisterApp(inst)
 	r.closeChannelsForApp(inst, "app exited")
 	r.dropAppMsgWatchers(inst.InstanceID)
