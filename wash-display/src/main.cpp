@@ -319,9 +319,12 @@ int main(int argc, char** argv) {
     install_crash_handler();
     claim_process_group();
     int rc = run();
-    // Connection-close exit path: the router went away (crash/restart/e2e
-    // teardown) without SIGTERM-ing us, so run() returned without term_handler
-    // firing. Reap the child tree here too, or Xwayland/guest orphan.
+    // Connection-close exit path (now reachable — REVIEW-X11-WAYLAND #3): the
+    // router went away (crash/SIGKILL/e2e teardown) without SIGTERM-ing us.
+    // WireConn's on_disconnect marshals a "terminate" onto the compositor's
+    // self-pipe → wl_display_terminate, so wl_display_run (and thus run())
+    // returns without term_handler firing. Reap the child tree here too, or
+    // Xwayland/guest orphan.
     reap_child_group();
     return rc;
 }

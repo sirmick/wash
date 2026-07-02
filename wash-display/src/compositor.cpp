@@ -1847,6 +1847,14 @@ static void post_clip_offer(const std::string& mime) {
 // pipe handler), so wlroots calls are safe. Unknown win (already gone) is a
 // no-op.
 static void apply_win_cmd(const WinCmd& c) {
+    if (c.t == "terminate") {
+        // The wire connection died — leave the wlroots loop so wl_display_run
+        // returns and main() can reap Xwayland + the guest process group
+        // instead of orphaning them (REVIEW-X11-WAYLAND #3).
+        wlr_log(WLR_INFO, "wash-display: wire closed — terminating compositor");
+        if (g_server && g_server->display) wl_display_terminate(g_server->display);
+        return;
+    }
     if (c.t == "display.dpi") {
         apply_display_dpi(g_server, (int)c.w);
         return;
@@ -2096,6 +2104,19 @@ int run_compositor(WireConn& conn) {
             {
                 std::lock_guard<std::mutex> lk(g_cmd_mu);
                 g_cmds.push_back(WinCmd{t, win, w, h});
+            }
+            char b = 1;
+            ssize_t n = write(g_cmd_pipe[1], &b, 1);
+            (void)n;
+        });
+        // When the wire dies (router gone), marshal a "terminate" onto the
+        // same self-pipe so on_cmd_pipe → apply_win_cmd calls
+        // wl_display_terminate on the compositor thread — the only thread
+        // where touching wlroots is safe (REVIEW-X11-WAYLAND #3).
+        conn.on_disconnect([]() {
+            {
+                std::lock_guard<std::mutex> lk(g_cmd_mu);
+                g_cmds.push_back(WinCmd{"terminate", 0, 0, 0});
             }
             char b = 1;
             ssize_t n = write(g_cmd_pipe[1], &b, 1);

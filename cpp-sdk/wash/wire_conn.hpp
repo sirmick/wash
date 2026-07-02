@@ -159,6 +159,10 @@ public:
 
     void on_app_msg(AppMsgHandler h) { app_msg_handler_ = std::move(h); }
     void on_window_cmd(WindowCmdHandler h) { window_cmd_handler_ = std::move(h); }
+    // Called once, on the reader thread, when the wire connection dies (socket
+    // closed / router gone / shutdown). The compositor uses it to terminate
+    // its wlroots loop so it doesn't outlive the router (REVIEW-X11-WAYLAND #3).
+    void on_disconnect(std::function<void()> h) { disconnect_handler_ = std::move(h); }
 
     // alive is false once the socket closed or a shutdown arrived.
     bool alive() const { return alive_.load(); }
@@ -194,6 +198,7 @@ private:
     AppMsgHandler app_msg_handler_;
     WindowCmdHandler window_cmd_handler_;
     ClipboardChangedHandler clipboard_changed_handler_;
+    std::function<void()> disconnect_handler_;
 
     // clipboard.get req/reply, mirroring win_pending_/chan_pending_.
     struct ClipReply {

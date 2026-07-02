@@ -257,6 +257,10 @@ void WireConn::reader_loop() {
     { std::lock_guard<std::mutex> lk(win_mu_); win_cv_.notify_all(); }
     { std::lock_guard<std::mutex> lk(chan_mu_); chan_cv_.notify_all(); }
     { std::lock_guard<std::mutex> lk(clip_mu_); clip_cv_.notify_all(); }
+    // The wire is gone (router crash/SIGKILL/e2e teardown, or a clean
+    // shutdown). Tell the owner so a compositor can terminate its wlroots loop
+    // instead of running forever as an orphan (REVIEW-X11-WAYLAND #3).
+    if (disconnect_handler_) disconnect_handler_();
 }
 
 uint32_t WireConn::create_window(const std::string& title, uint32_t w, uint32_t h,
