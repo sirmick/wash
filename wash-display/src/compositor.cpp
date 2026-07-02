@@ -1133,6 +1133,7 @@ struct XSurface {
     struct wl_listener unmap;
     struct wl_listener commit;
     struct wl_listener destroy;
+    struct wl_listener request_configure;
     bool surface_listeners = false; // map/unmap/commit currently wired
 
     WindowSink sink;
@@ -1362,7 +1363,23 @@ void xsurface_destroy(struct wl_listener* listener, void* /*data*/) {
     wl_list_remove(&x->associate.link);
     wl_list_remove(&x->dissociate.link);
     wl_list_remove(&x->destroy.link);
+    wl_list_remove(&x->request_configure.link);
     delete x;
+}
+
+// xsurface_request_configure honours an X client resizing/repositioning
+// itself. wlroots' xwm only EMITS request_configure; if no listener calls
+// wlr_xwayland_surface_configure the managed (substructure-redirected) window
+// never gets its ConfigureNotify and keeps its creation-time geometry — so
+// xterm's Ctrl+RightClick font-size change, Java pack()/setSize(), Tk wm
+// geometry, and any X dialog that autosizes after mapping all do nothing
+// (REVIEW-X11-WAYLAND #2). Accepting the request is enough to propagate to the
+// wash frame: the client repaints at the new size and sink_frame reports the
+// changed content size (window.geometry) on the next commit.
+void xsurface_request_configure(struct wl_listener* listener, void* data) {
+    XSurface* x = wl_container_of(listener, x, request_configure);
+    auto* ev = static_cast<struct wlr_xwayland_surface_configure_event*>(data);
+    wlr_xwayland_surface_configure(x->xsurf, ev->x, ev->y, ev->width, ev->height);
 }
 
 void server_new_xwayland_surface(struct wl_listener* listener, void* data) {
@@ -1385,6 +1402,8 @@ void server_new_xwayland_surface(struct wl_listener* listener, void* data) {
     wl_signal_add(&xsurf->events.dissociate, &x->dissociate);
     x->destroy.notify = xsurface_destroy;
     wl_signal_add(&xsurf->events.destroy, &x->destroy);
+    x->request_configure.notify = xsurface_request_configure;
+    wl_signal_add(&xsurf->events.request_configure, &x->request_configure);
 }
 #endif // WASH_DISPLAY_XWAYLAND
 
