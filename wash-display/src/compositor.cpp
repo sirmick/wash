@@ -1593,6 +1593,18 @@ static uint32_t code_to_keycode(const std::string& c) {
         {"F1", KEY_F1}, {"F2", KEY_F2}, {"F3", KEY_F3}, {"F4", KEY_F4},
         {"F5", KEY_F5}, {"F6", KEY_F6}, {"F7", KEY_F7}, {"F8", KEY_F8},
         {"F9", KEY_F9}, {"F10", KEY_F10}, {"F11", KEY_F11}, {"F12", KEY_F12},
+        // Numpad (matters for spreadsheets/CAD), the ISO extra key, and the
+        // context-menu key — all previously dead in guests (REVIEW-X11-WAYLAND
+        // #13). xkb applies NumLock, so Numpad0-9 give digits/nav as expected.
+        {"Numpad0", KEY_KP0}, {"Numpad1", KEY_KP1}, {"Numpad2", KEY_KP2},
+        {"Numpad3", KEY_KP3}, {"Numpad4", KEY_KP4}, {"Numpad5", KEY_KP5},
+        {"Numpad6", KEY_KP6}, {"Numpad7", KEY_KP7}, {"Numpad8", KEY_KP8},
+        {"Numpad9", KEY_KP9},
+        {"NumpadAdd", KEY_KPPLUS}, {"NumpadSubtract", KEY_KPMINUS},
+        {"NumpadMultiply", KEY_KPASTERISK}, {"NumpadDivide", KEY_KPSLASH},
+        {"NumpadDecimal", KEY_KPDOT}, {"NumpadEnter", KEY_KPENTER},
+        {"NumpadEqual", KEY_KPEQUAL}, {"NumLock", KEY_NUMLOCK},
+        {"IntlBackslash", KEY_102ND}, {"ContextMenu", KEY_COMPOSE},
     };
     auto it = m.find(c);
     return it == m.end() ? 0 : it->second;
