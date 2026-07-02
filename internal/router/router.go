@@ -1478,6 +1478,13 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 	}
 }
 
+// isVideoKind reports whether a channel carries a WebP video stream
+// (per-window pixels or a positioned popup overlay) rather than a terminal
+// byte stream — the two need different resync recovery (REVIEW-X11-WAYLAND #6).
+func isVideoKind(kind string) bool {
+	return kind == wire.ChannelKindVideo || kind == wire.ChannelKindVideoPopup
+}
+
 // resyncChannel recovers a terminal channel that went "behind"
 // (docs/PTY_ROBUST.md, Fix B): it sends a channel.resync control so the
 // FE resets that terminal to a clean state, then the realigned
@@ -1500,7 +1507,14 @@ func (r *Router) resyncChannel(b *channelBinding) {
 	}
 	sh := b.shell
 	var replay []byte
-	if b.buf != nil {
+	// Video kinds are a WebP frame stream, NOT a terminal byte stream: the
+	// ring is a concatenation of framed WebP payloads, and realignReplay's
+	// UTF-8/CSI trimming would corrupt them — replaying it hands the FE
+	// garbage (at best one frame decodes, the rest are discarded). Send the
+	// reset ONLY; the FE clears its canvas on channel.resync and waits for the
+	// next frame (REVIEW-X11-WAYLAND #6). Terminal (generic) channels keep the
+	// realigned scrollback replay.
+	if b.buf != nil && !isVideoKind(b.kind) {
 		replay = b.buf.Snapshot()
 		if b.buf.Truncated() {
 			replay = realignReplay(replay)

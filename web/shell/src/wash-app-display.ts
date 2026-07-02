@@ -14,7 +14,7 @@
 // a 45-byte little-endian header followed by an image payload — WebP or
 // PNG, auto-detected by createImageBitmap from the magic bytes.
 
-import { registerDisplayWindow, subscribeRaw, unregisterDisplayWindow } from './api';
+import { registerDisplayWindow, subscribeRaw, subscribeResync, unregisterDisplayWindow } from './api';
 import { type Origin, LOCAL_ORIGIN } from './clients';
 import { moveLocal, resizeLocal, windowById, screenSize, VIEWPORTS_PER_AXIS } from './wm';
 
@@ -93,6 +93,7 @@ export class WashAppDisplay extends HTMLElement {
   private origin: Origin = LOCAL_ORIGIN;
   private instanceID = '';
   private unsubscribe?: () => void;
+  private unsubscribeResync?: () => void;
   private errorCount = 0;
 
   // Pending input batch + rAF handle. Motion coalesces (one per frame);
@@ -183,6 +184,14 @@ export class WashAppDisplay extends HTMLElement {
         /* ignore */
       }
       this.unsubscribe = undefined;
+    }
+    if (this.unsubscribeResync) {
+      try {
+        this.unsubscribeResync();
+      } catch {
+        /* ignore */
+      }
+      this.unsubscribeResync = undefined;
     }
     for (const ch of [...this.popups.keys()]) this.removePopup(ch);
     if (this.inputCleanup) {
@@ -464,11 +473,29 @@ export class WashAppDisplay extends HTMLElement {
         /* ignore */
       }
     }
+    if (this.unsubscribeResync) {
+      try {
+        this.unsubscribeResync();
+      } catch {
+        /* ignore */
+      }
+    }
     // Subscribe on the window's own origin so a remote display window reads
     // its host's relayed video channel, not a local channel of the same id.
     // (Remote video frames don't flow until the bind is un-gated in main.tsx;
     // this keeps the path origin-correct for when they do.)
     this.unsubscribe = subscribeRaw(this.origin, channelID, (bytes) => this.onFrame(bytes));
+    // The router resets this channel (channel.resync) after it went "behind".
+    // For a WebP frame stream the ring replay is meaningless (the router now
+    // skips it), so clear the canvas to a known-blank state instead of leaving
+    // stale/torn regions on screen forever (REVIEW-X11-WAYLAND #6).
+    this.unsubscribeResync = subscribeResync(this.origin, channelID, () => this.onResync());
+  }
+
+  private onResync(): void {
+    if (this.canvas && this.ctx) {
+      this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    }
   }
 
   private onFrame(bytes: Uint8Array): void {
