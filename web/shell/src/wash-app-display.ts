@@ -276,15 +276,26 @@ export class WashAppDisplay extends HTMLElement {
       this.flushNow();
     };
     const onWheel = (ev: WheelEvent) => {
-      // Forward both axes; deltaMode 0 (pixels) is the common case, the BE
-      // treats the value as a ~120-per-notch hi-res wheel delta. Negate to
-      // match wlroots' positive-down convention. preventDefault stops the
-      // shell scrolling underneath.
+      // Normalize deltaMode before forwarding: Firefox delivers LINE deltas
+      // (±3 per notch), not pixels, so passing deltaY raw scrolled guests ~40×
+      // too slow (REVIEW-X11-WAYLAND #10). Convert lines→px (~40px/line) and
+      // pages→viewport height, then send BOTH a pixel delta (the BE derives a
+      // continuous value for smooth trackpad scroll) and an integer notch count
+      // so the BE emits a clean value120 = notches*120 — Xwayland accumulates
+      // value120 into buttons 4/5 and ragged values make discrete-consuming
+      // clients (xterm, Qt list views) skip/lag.
       ev.preventDefault();
       window.wash?.focusWindow(this.windowID, this.origin);
       this.focus({ preventScroll: true });
-      if (ev.deltaY) this.queue({ ev: 'axis', axis: 'v', delta: Math.round(ev.deltaY) });
-      if (ev.deltaX) this.queue({ ev: 'axis', axis: 'h', delta: Math.round(ev.deltaX) });
+      const LINE_PX = 40;
+      const NOTCH_PX = 120;
+      const scale = ev.deltaMode === 1 ? LINE_PX
+                  : ev.deltaMode === 2 ? (this.clientHeight || 800)
+                  : 1;
+      const py = ev.deltaY * scale;
+      const px = ev.deltaX * scale;
+      if (py) this.queue({ ev: 'axis', axis: 'v', delta: Math.round(py), notches: Math.round(py / NOTCH_PX) });
+      if (px) this.queue({ ev: 'axis', axis: 'h', delta: Math.round(px), notches: Math.round(px / NOTCH_PX) });
       this.flushNow();
     };
     const onKeyDown = (ev: KeyboardEvent) => {

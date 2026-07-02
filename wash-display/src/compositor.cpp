@@ -1706,15 +1706,19 @@ static void inject_input(const json& data) {
         } else if (ev == "axis") {
             focus_child(g_ptr_x, g_ptr_y);
             const std::string ax = e.value("axis", std::string("v"));
+            // delta is the FE's deltaMode-normalized PIXEL delta (~120px/notch);
+            // notches is its integer notch count (REVIEW-X11-WAYLAND #10).
             double delta = e.value("delta", 0.0);
+            int notches = e.value("notches", 0);
             enum wlr_axis_orientation orient =
                 ax == "h" ? WLR_AXIS_ORIENTATION_HORIZONTAL
                           : WLR_AXIS_ORIENTATION_VERTICAL;
-            // The FE forwards a 120-per-notch high-resolution delta (the
-            // wheel convention). wlroots wants a continuous `value` plus the
-            // discrete hi-res step; ~15 units per notch matches a real wheel.
+            // Continuous `value` from the pixel delta (smooth trackpad scroll,
+            // ~15 units per 120px notch); discrete value120 straight from the
+            // integer notch count so Xwayland's value120→button-4/5 accumulation
+            // stays clean (a ragged value120 makes xterm/Qt list stepping lag).
             double value = delta / 120.0 * 15.0;
-            wlr_seat_pointer_notify_axis(seat, t, orient, value, (int32_t)delta,
+            wlr_seat_pointer_notify_axis(seat, t, orient, value, notches * 120,
                                          WLR_AXIS_SOURCE_WHEEL);
             ptr_touched = true;
         } else if (ev == "key") {
