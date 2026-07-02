@@ -944,8 +944,21 @@ static bool popup_root_and_offset(struct wlr_xdg_popup* popup, uint32_t* root_wi
             Toplevel* t = static_cast<Toplevel*>(pxs->data);
             if (!t || !t->sink.win) return false;
             *root_win = t->sink.win;
-            *ox = x;
-            *oy = y;
+            // The capture sends the FULL popup surface, INCLUDING its CSD
+            // shadow margin, so shift by the popup's own window-geometry origin
+            // — wlroots' scene helper positions the surface at -geo.x,-geo.y
+            // (types/scene/xdg_shell.c:52-68). Without this GTK4/Qt menus
+            // render shifted down-right by their shadow margin (~24-32px),
+            // submenus misalign with their parent item, and the grab-path
+            // outside-click hitbox (off_x/off_y) is off by the same amount
+            // (REVIEW-X11-WAYLAND #7b). Only the mapped (leaf) popup's own geo
+            // applies — an intermediate popup's tree is positioned within its
+            // parent's tree, not its parent's surface_tree, so its geo does not
+            // enter this popup's offset.
+            struct wlr_box geo = {0, 0, 0, 0};
+            wlr_xdg_surface_get_geometry(popup->base, &geo);
+            *ox = x - geo.x;
+            *oy = y - geo.y;
             return true;
         }
         if (pxs->role == WLR_XDG_SURFACE_ROLE_POPUP) {
@@ -967,6 +980,15 @@ static void popup_send_geometry(Popup* p) {
 
 void popup_map(struct wl_listener* listener, void* /*data*/) {
     Popup* p = wl_container_of(listener, p, map);
+    // Constrain the popup to the virtual output so a menu opened near the
+    // bottom/right edge flips/slides to stay on-screen. GTK/Qt rely on the
+    // compositor for edge avoidance via constraint_adjustment; with no
+    // unconstrain call the popup keeps its natural placement and the FE overlay
+    // (position:fixed) extends past the browser viewport → unreachable menu
+    // items (REVIEW-X11-WAYLAND #7a). The reconfigure lands on the next commit;
+    // popup_commit recomputes + re-sends the geometry.
+    struct wlr_box out_box = {0, 0, output_logical_w(), output_logical_h()};
+    wlr_xdg_popup_unconstrain_from_box(p->popup, &out_box);
     uint32_t root = 0;
     int ox = 0, oy = 0;
     if (!popup_root_and_offset(p->popup, &root, &ox, &oy)) {
