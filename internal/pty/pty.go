@@ -255,7 +255,10 @@ func parseSSHTarget(args []string) string {
 // Must NOT be called from an SDK callback — OpenChannel can't run on
 // the read goroutine. Callers should `go pty.Open(...)`.
 func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint16, argv []string, envFn func([]string) []string, onClose func(s *Session, reason string)) (*Session, error) {
-	ch, err := conn.OpenChannel(ctx, windowID)
+	// Bulk class (docs/QOS.md): terminal output rides the credit / behind /
+	// resync path and yields to interactive traffic, instead of sharing the
+	// Interactive queue with window ops and other apps (REVIEW-DATAPATH F1).
+	ch, err := conn.OpenChannelBulk(ctx, windowID)
 	if err != nil {
 		return nil, err
 	}

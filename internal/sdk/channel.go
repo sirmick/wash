@@ -165,6 +165,30 @@ func (c *Conn) OpenChannelKind(ctx context.Context, windowID uint32, kind string
 	return c.openChannelKind(ctx, windowID, kind)
 }
 
+// OpenChannelBulk opens a GENERIC raw channel whose output writes at Bulk
+// class. Used by the PTY/terminal stream (docs/QOS.md: "raw channels default
+// to Bulk at OPEN time") so a chatty terminal (a `yes`, a big `cat`) yields
+// to interactive traffic and rides the credit / behind / resync machinery
+// (docs/PTY_ROBUST.md Fix B) instead of sharing the 256-slot Interactive
+// queue with window ops, app_msgs, and every other app's lifecycle traffic.
+//
+// Unlike OpenChannelFile the router KEEPS the credit ledger (generic kind),
+// so the stream is credit-gated + resyncable — correct for a terminal, whose
+// realigned scrollback snapshot recovers a suppressed stream. A binary blob
+// with no reassembly recovery must NOT use this (the resync's realignReplay
+// would corrupt it) — use OpenChannelFile for lossless bulk instead. Same
+// callback/deadlock caveat as OpenChannel.
+func (c *Conn) OpenChannelBulk(ctx context.Context, windowID uint32) (*RawChannel, error) {
+	ch, err := c.openChannelKind(ctx, windowID, wire.ChannelKindGeneric)
+	if err != nil {
+		return nil, err
+	}
+	// Set before returning — no Write can race, the caller hasn't started
+	// streaming yet.
+	ch.writeClass = wire.ClassBulk
+	return ch, nil
+}
+
 // OpenChannelFile opens a channel for a bulk app→FE file transfer (e.g.
 // fm download). The router omits the credit ledger and the channel writes
 // at Bulk class, so the transfer rides the lossless Bulk path: it yields
