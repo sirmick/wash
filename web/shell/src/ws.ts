@@ -14,6 +14,7 @@ import {
   CLASS_CONTROL,
   CLASS_INTERACTIVE,
   type Class,
+  classOf,
   decodeFrame,
   encodeCtrl,
   encodeFrame,
@@ -24,7 +25,7 @@ import {
 import type { SocketLike } from './virtio.ts';
 
 export type CtrlHandler = (msg: any) => void;
-export type RawHandler = (channelID: number, bytes: Uint8Array) => void;
+export type RawHandler = (channelID: number, bytes: Uint8Array, cls: Class) => void;
 export type StateHandler = (state: ConnState) => void;
 // 'unauthenticated' is terminal: the reconnect loop stops because the
 // server refused the handshake on auth grounds (expired wash-login
@@ -424,7 +425,11 @@ export class Conn {
     this.lastContactAt = this.now();
     const f = decodeFrame(new Uint8Array(ev.data as ArrayBuffer));
     if (f.channel !== 0) {
-      this.rawHandler(f.channel, f.payload);
+      // Plumb the QoS class through so the shell only grants credit for
+      // Bulk-class frames — the only class the router debits (REVIEW-DATAPATH
+      // F8). Interactive replays/resync snapshots bypass Reserve, so granting
+      // for them would inflate the router's per-channel window indefinitely.
+      this.rawHandler(f.channel, f.payload, classOf(f.flags));
       return;
     }
     let msg: any;

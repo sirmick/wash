@@ -3,7 +3,7 @@
 // (catalog, open windows) and to request actions (spawn via app_msg,
 // focus, close).
 
-import { type Origin, parseInstanceId, compoundInstanceId, compoundChannelId } from './clients';
+import { type Origin, parseInstanceId, compoundInstanceId, compoundChannelId } from './clients.ts';
 
 export interface CatalogApp {
   id: string;
@@ -108,6 +108,18 @@ const rawSubscribers = new Map<string, (bytes: Uint8Array) => void>();
 // moment the router binds the channel, ahead of the BE → FE
 // app_msg that tells the FE the channel id). Same origin-scoped key.
 const pendingRaw = new Map<string, Uint8Array[]>();
+// pendingRawBytes mirrors pendingRaw's per-channel byte total so the cap
+// check is O(1) per push instead of re-summing the queue.
+const pendingRawBytes = new Map<string, number>();
+
+// PENDING_RAW_CAP_BYTES bounds bytes parked for a channel that never gets a
+// subscriber — e.g. an app whose bundle failed to import (element never
+// mounts → no subscribeRaw) while its BE keeps streaming. Without a cap the
+// queue grows for as long as the BE writes (REVIEW-DATAPATH F7). Drop-oldest:
+// a torn tail is more useful than an OOM, and a Bulk stream that overflows
+// here is also going "behind" router-side, which resyncs from the ring on
+// subscribe.
+const PENDING_RAW_CAP_BYTES = 1 << 20; // 1 MiB per channel
 
 export function registerMountedElement(instanceID: string, el: HTMLElement): void {
   mountedElements.set(instanceID, el);
@@ -189,12 +201,17 @@ export function deliverToInstance(instanceID: string, data: unknown): void {
 // writeRaw. v0.1 uses one-callback-per-channel; if a future need
 // arises we can move to a small EventTarget per channel.
 
-export function deliverRaw(origin: Origin, channelID: number, bytes: Uint8Array): void {
+// deliverRaw routes bytes to the channel's subscriber, or parks them (capped)
+// if none has registered yet. Returns true when a subscriber CONSUMED the
+// bytes — the caller grants router credit only then (never for parked bytes),
+// so a channel that never gets a subscriber can't keep the router streaming
+// into an unbounded queue (REVIEW-DATAPATH F7).
+export function deliverRaw(origin: Origin, channelID: number, bytes: Uint8Array): boolean {
   const key = compoundChannelId(origin, channelID);
   const cb = rawSubscribers.get(key);
   if (cb) {
     cb(bytes);
-    return;
+    return true;
   }
   let q = pendingRaw.get(key);
   if (!q) {
@@ -202,6 +219,18 @@ export function deliverRaw(origin: Origin, channelID: number, bytes: Uint8Array)
     pendingRaw.set(key, q);
   }
   q.push(bytes);
+  let total = (pendingRawBytes.get(key) ?? 0) + bytes.length;
+  if (total > PENDING_RAW_CAP_BYTES) {
+    let dropped = 0;
+    while (q.length > 1 && total > PENDING_RAW_CAP_BYTES) {
+      const old = q.shift()!;
+      total -= old.length;
+      dropped += old.length;
+    }
+    console.warn(`wash: pendingRaw channel ${channelID} over ${PENDING_RAW_CAP_BYTES}B cap — dropped ${dropped}B oldest (no subscriber)`);
+  }
+  pendingRawBytes.set(key, total);
+  return false;
 }
 
 export function subscribeRaw(origin: Origin, channelID: number, cb: (bytes: Uint8Array) => void): () => void {
@@ -210,6 +239,7 @@ export function subscribeRaw(origin: Origin, channelID: number, cb: (bytes: Uint
   const q = pendingRaw.get(key);
   if (q) {
     pendingRaw.delete(key);
+    pendingRawBytes.delete(key);
     for (const b of q) cb(b);
   }
   return () => {
@@ -223,6 +253,7 @@ export function closeRawSubscriber(origin: Origin, channelID: number): void {
   const key = compoundChannelId(origin, channelID);
   rawSubscribers.delete(key);
   pendingRaw.delete(key);
+  pendingRawBytes.delete(key);
 }
 
 // resyncSubscribers maps an origin-scoped channel key → a callback that

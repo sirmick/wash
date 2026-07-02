@@ -12,7 +12,7 @@ import { render } from 'solid-js/web';
 import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js';
 import type { Component } from 'solid-js';
 import { type ConnState } from './ws';
-import { CLASS_INTERACTIVE } from './wire';
+import { CLASS_BULK, CLASS_INTERACTIVE } from './wire';
 import { RouterClient, type ClientHandlers } from './router-client';
 import {
   type Origin,
@@ -574,7 +574,7 @@ function makeHandlers(client: RouterClient): ClientHandlers {
       }
     }
   },
-  onRaw: (channelID, bytes) => {
+  onRaw: (channelID, bytes, cls) => {
     // Remote-apps relay: a peer channel's bytes are host B's wire — feed
     // them to its RelayChannelSocket (which deframes + drives B's Conn).
     // Peer channels only ever bind on the local connection. The peer channel
@@ -598,10 +598,16 @@ function makeHandlers(client: RouterClient): ClientHandlers {
       if (pushAssetBytes(channelID, bytes)) return;
       if (pushPanelBytes(channelID, bytes)) return;
     }
-    deliverRaw(client.origin, channelID, bytes);
-    // Bulk-class raw flows drain the router-side credit window — replenish
-    // via channel.credit as we absorb. Bundle bytes returned early above.
-    client.credit.absorbed(channelID, bytes.length);
+    const consumed = deliverRaw(client.origin, channelID, bytes);
+    // Replenish the router-side credit window ONLY for Bulk-class frames a
+    // real subscriber consumed. Only Bulk frames debit credit router-side
+    // (REVIEW-DATAPATH F8), so crediting Interactive replays/resync snapshots
+    // would inflate the window indefinitely. And crediting bytes merely PARKED
+    // in pendingRaw (no subscriber) would keep the router streaming into an
+    // unbounded queue (F7) — grant on real consumption instead.
+    if (consumed && cls === CLASS_BULK) {
+      client.credit.absorbed(channelID, bytes.length);
+    }
   },
   };
 }
