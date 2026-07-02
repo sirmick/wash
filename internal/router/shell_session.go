@@ -432,6 +432,14 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		// the ssh -L'd socket, not an app. Write the browser's bytes (host
 		// B's wire) verbatim — A never decodes them.
 		if b.peerConn != nil {
+			// Bound the write: a black-holed SSH tunnel (ssh stops draining the
+			// -L socket, its send buffer fills) would otherwise block the
+			// shell's single dispatch loop — and every terminal and window op
+			// on this connection with it — until ssh's keepalive gives up
+			// ~45s later (REVIEW-RECONNECT H3 / REVIEW-DATAPATH F5). On timeout
+			// close the peer channel (its pump unblocks, B's windows detach)
+			// instead of freezing the whole desktop.
+			_ = b.peerConn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
 			if _, err := b.peerConn.Write(f.Payload); err != nil {
 				s.router.closeChannel(f.Channel, "peer write: "+err.Error())
 			}
