@@ -2031,6 +2031,22 @@ int run_compositor(WireConn& conn) {
     wlr_data_device_manager_create(server.display);
 
     server.output_layout = wlr_output_layout_create();
+    // Disable wlroots scene occlusion culling BEFORE creating the scene (the
+    // flag is read once in wlr_scene_create). wash is NOT a stacked desktop:
+    // every window is captured per-surface and composited INDEPENDENTLY in the
+    // browser, all simultaneously visible. But all surfaces scene at the output
+    // origin, so wlroots' culling gives a window covered by a newer one an
+    // empty visible region → wlr_scene_output_send_frame_done never fires for
+    // it → the covered-but-visible window freezes (Chromium's rAF stalls, GTK
+    // stops repainting) even as the user types into it (REVIEW-X11-WAYLAND #1).
+    // Spreading windows apart in scene space can't fix it here — the virtual
+    // output is a single normal-sized screen, so a spread-out window falls
+    // outside the output and loses frame-done just the same. Disabling culling
+    // is one of the review's sanctioned fixes and is near-free: the composited
+    // scene output isn't what wash ships (capture reads surfaces directly), so
+    // "render everything, cull nothing" costs nothing and unfreezes every
+    // occluded window.
+    setenv("WLR_SCENE_DISABLE_VISIBILITY", "1", /*overwrite=*/1);
     server.scene = wlr_scene_create();
     server.scene_layout =
         wlr_scene_attach_output_layout(server.scene, server.output_layout);
