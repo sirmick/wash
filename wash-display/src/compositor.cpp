@@ -229,6 +229,10 @@ struct Server {
 // anchor a menu-fallback popover at the pointer; defined once, used below.)
 static struct wlr_surface* g_ptr_surface = nullptr;
 static double g_ptr_x = 0.0, g_ptr_y = 0.0;
+// Monotonic ms of the last forwarded pointer event. A menu-fallback popover
+// maps shortly after the click/hover that opened it; a keyboard-triggered
+// dialog does not — used by the popover classifier (REVIEW-X11-WAYLAND #5).
+static uint64_t g_last_pointer_ms = 0;
 // The wash window the pointer is currently over (0 if over a popup), so a
 // cursor-shape change can be routed to that window's video channel (M4).
 static uint32_t g_ptr_win = 0;
@@ -305,6 +309,12 @@ struct Toplevel {
     struct wl_listener request_fullscreen;
     struct wl_listener request_move;
     struct wl_listener request_resize;
+
+    // Set when the client created an xdg-decoration object for this toplevel.
+    // A real/dialog window negotiates decoration; a menu-fallback popover
+    // (Qt serial-less menu) does not — used to keep the popover classifier
+    // from swallowing dialogs (REVIEW-X11-WAYLAND #5).
+    bool has_decoration = false;
 
     WindowSink sink;         // shared window + capture/encode pipeline
 };
@@ -739,6 +749,13 @@ void decoration_destroy(struct wl_listener* listener, void* /*data*/) {
 
 void server_new_toplevel_decoration(struct wl_listener* /*listener*/, void* data) {
     auto* deco = static_cast<struct wlr_xdg_toplevel_decoration_v1*>(data);
+    // Record that this toplevel negotiates decoration — evidence it's a real
+    // window/dialog, not a menu-fallback popover (REVIEW-X11-WAYLAND #5).
+    if (deco->toplevel && deco->toplevel->base) {
+        if (auto* t = static_cast<Toplevel*>(deco->toplevel->base->data)) {
+            t->has_decoration = true;
+        }
+    }
     auto* d = new Decoration();
     d->deco = deco;
     d->request_mode.notify = decoration_request_mode;
@@ -837,6 +854,31 @@ static bool toplevel_is_popover(struct wlr_xdg_toplevel* tl) {
         geo.height > output_logical_h() * 3 / 4) {
         return false;
     }
+    // "Untitled + parented + small" over-matched: GNOME/GTK message dialogs
+    // (gedit's "Save changes?", GTK4 AlertDialog/MessageDialog, many Qt
+    // tool/progress windows) are also parented, untitled and small, and were
+    // being rendered as chromeless pointer-grabbing overlays anchored at a
+    // stale pointer position — unmovable, with the parent mouse-dead for the
+    // dialog's life (REVIEW-X11-WAYLAND #5). Require positive menu-like
+    // evidence so those dialogs fall through to normal window handling:
+    //
+    //  - no xdg-decoration object: a menu doesn't negotiate decoration; a
+    //    real window/dialog does.
+    Toplevel* t = static_cast<Toplevel*>(tl->base->data);
+    if (t && t->has_decoration) return false;
+    //  - no fixed/min/max size: menus size to content; dialogs often pin a
+    //    minimum.
+    if (tl->current.min_width || tl->current.min_height ||
+        tl->current.max_width || tl->current.max_height) {
+        return false;
+    }
+    //  - mapped shortly after a pointer event: a menu opens on click/hover; a
+    //    keyboard-triggered dialog has no recent pointer. (Generous window so a
+    //    legitimately pointer-opened menu is never misclassified as a window.)
+    constexpr uint64_t kPopoverPointerWindowMs = 2000;
+    if (g_last_pointer_ms == 0 || now_ms() - g_last_pointer_ms > kPopoverPointerWindowMs) {
+        return false;
+    }
     return true;
 }
 
@@ -877,6 +919,11 @@ static bool toplevel_setup_popover(Toplevel* t) {
                        : nullptr;
     // Only chain off a real parent window; nested popover-of-popover would
     // have no parent win, so fall back to a normal window.
+    // TODO(REVIEW-X11-WAYLAND #5): let a popover parent another popover
+    // (chain offsets off the parent popover's win) so a Qt programmatic
+    // menu→submenu chain overlays correctly instead of the submenu becoming a
+    // standalone "Window". Deferred — the classifier tightening above is the
+    // higher-value half of the fix.
     if (!pt || !pt->sink.win || pt->sink.popover) return false;
 
     // Anchor at the last pointer position, converted from the parent's
@@ -1675,7 +1722,10 @@ static void inject_input(const json& data) {
         // "motion_rel" (pointer-lock / relative) is deferred — needs
         // wlr_relative_pointer + a locked-pointer constraint.
     }
-    if (ptr_touched) wlr_seat_pointer_notify_frame(seat);
+    if (ptr_touched) {
+        wlr_seat_pointer_notify_frame(seat);
+        g_last_pointer_ms = now_ms(); // for the popover classifier's recency check
+    }
 }
 
 // --- virtual-keyboard → seat forwarding ----------------------------
