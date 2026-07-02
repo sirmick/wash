@@ -563,6 +563,16 @@ func validSessionName(n string) bool {
 	return true
 }
 
+// sessionExists reports whether any listed session has the given SessID.
+func sessionExists(list []Session, sessID string) bool {
+	for _, s := range list {
+		if s.SessID == sessID {
+			return true
+		}
+	}
+	return false
+}
+
 // handleRoot serves the shell-runtime page for authed users.
 // Unauthed → /login. Authed visitors take one of three paths:
 //
@@ -583,8 +593,20 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
-	if r.URL.Query().Get("s") == "" && s.sessions != nil {
-		if list, err := s.sessions.List(payload.UID); err == nil && len(list) >= 2 {
+	sessID := r.URL.Query().Get("s")
+	if s.sessions != nil {
+		if sessID != "" {
+			// Validate the named session still exists. A dead ?s= is otherwise
+			// a permanent, illegible reconnect loop: /ws/s/<dead> 404s but
+			// /auth/check stays 204 (still authed), so the FE loops
+			// "reconnecting…" forever, and reloading keeps the same ?s=. Bounce
+			// to the picker with a legible message (REVIEW-RECONNECT H4). Fail
+			// open on a List error — we can't prove it's dead.
+			if list, err := s.sessions.List(payload.UID); err == nil && !sessionExists(list, sessID) {
+				http.Redirect(w, r, "/sessions?err=session+ended", http.StatusFound)
+				return
+			}
+		} else if list, err := s.sessions.List(payload.UID); err == nil && len(list) >= 2 {
 			http.Redirect(w, r, "/sessions", http.StatusFound)
 			return
 		}
