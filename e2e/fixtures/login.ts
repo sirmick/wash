@@ -158,6 +158,10 @@ export async function startLogin(opts: LoginOptions = {}): Promise<LoginHandle> 
 
   const args = [
     '--listen', `127.0.0.1:${port}`,
+    // Plain HTTP: wash-login defaults to self-signed HTTPS, but the tests
+    // drive it over http://127.0.0.1 (trusted loopback). HTTPS-by-default
+    // is covered by the runner unit tests.
+    '--http',
     '--secret-key', secretKey,
     '--secret-generate',
     '--auth-test', `${user}:${password}`,

@@ -359,7 +359,16 @@ func (s *Server) handoffToSession(w http.ResponseWriter, r *http.Request, target
 		s.log.Printf("ws hijack: %v", err)
 		return
 	}
-	if err := Handoff(r, conn, brw, target.Sock); err != nil {
+	// A conn that can hand its raw fd to the kernel (a plain TCP socket,
+	// or the nginx→login socket) takes the zero-copy SCM_RIGHTS handoff.
+	// A *tls.Conn — wash-login terminating its own self-signed TLS — has
+	// no passable plaintext fd, so it falls back to the proxying handoff
+	// that pumps decrypted bytes to the router over a socketpair.
+	handoff := Handoff
+	if _, ok := conn.(syscall.Conn); !ok {
+		handoff = ProxyHandoff
+	}
+	if err := handoff(r, conn, brw, target.Sock); err != nil {
 		s.log.Printf("ws handoff to %s: %v", target.Sock, err)
 		_, _ = conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\nhandoff failed\n"))
 		_ = conn.Close()

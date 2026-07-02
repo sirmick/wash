@@ -8,6 +8,7 @@ package loginrun
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/sirmick/wash/internal/login"
 	"github.com/sirmick/wash/internal/mdns"
+	"github.com/sirmick/wash/internal/tlsutil"
 )
 
 const (
@@ -72,6 +74,27 @@ func defaultRunRoot() string {
 	return fmt.Sprintf("/tmp/wash-%d", os.Getuid())
 }
 
+// defaultLoginTLSCertKey is where the self-signed HTTPS cert/key are
+// cached when the operator didn't pass --tls-cert/--tls-key. It sits
+// beside the secret key (/etc/wash/tls for a privileged production
+// install, else $XDG_CONFIG_HOME/wash/tls or ~/.config/wash/tls) so a
+// restart reuses the same cert and the browser's one-time trust decision
+// keeps holding. Never per-pid — the cert must be stable.
+func defaultLoginTLSCertKey() (certPath, keyPath string) {
+	var dir string
+	switch {
+	case canWriteTo(filepath.Dir(systemSecretPath)):
+		dir = filepath.Join(filepath.Dir(systemSecretPath), "tls")
+	case os.Getenv("XDG_CONFIG_HOME") != "":
+		dir = filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "wash", "tls")
+	case os.Getenv("HOME") != "":
+		dir = filepath.Join(os.Getenv("HOME"), ".config", "wash", "tls")
+	default:
+		dir = filepath.Join(filepath.Dir(systemSecretPath), "tls")
+	}
+	return filepath.Join(dir, "login-cert.pem"), filepath.Join(dir, "login-key.pem")
+}
+
 // canWriteTo reports whether the calling uid can create files
 // under dir. Used for the "where do I land my secret key by
 // default" decision. A missing dir but writable parent counts as
@@ -111,7 +134,10 @@ func Run(args []string) int {
 	insecureListen := fs.Bool("insecure-listen", false, "deprecated; no-op now that non-loopback binds are allowed by default. Kept for compatibility.")
 	secretKey := fs.String("secret-key", "", fmt.Sprintf("path to the HMAC secret used to sign session cookies. Empty picks %s when writable, else $XDG_CONFIG_HOME/wash/secret.key (or ~/.config/wash/secret.key).", systemSecretPath))
 	secretGenerate := fs.Bool("secret-generate", true, "generate the secret-key file if it doesn't exist (mode 0600). Default on for OOTB; pass --secret-generate=false to fail noisily on production installs that expect a pre-provisioned key.")
-	cookieSecure := fs.Bool("cookie-secure", false, "set the Secure flag on session cookies. Required when a TLS terminator is in front; leave off for plain-HTTP loopback dev.")
+	cookieSecure := fs.Bool("cookie-secure", false, "force the Secure flag on session cookies. Implied when wash-login terminates its own TLS (the default); set it explicitly when a TLS terminator is in front and --http is used. Leave off only for plain-HTTP loopback dev.")
+	noTLS := fs.Bool("http", false, "serve plain HTTP instead of the default self-signed HTTPS. Browser secure-context features (clipboard copy/paste) need HTTPS, so this is only for a TLS-terminating front (nginx/Caddy/Tailscale-serve) or trusted-loopback dev.")
+	tlsCert := fs.String("tls-cert", "", "PEM certificate for the HTTPS listener. Empty ⇒ a cached self-signed cert under /etc/wash/tls (when writable) or $XDG_CONFIG_HOME/wash/tls, minted on first run and reused across restarts. Ignored with --http.")
+	tlsKey := fs.String("tls-key", "", "PEM private key matching --tls-cert. Empty ⇒ the cached self-signed key. Ignored with --http.")
 	allowInsecureCookie := fs.Bool("allow-insecure-cookie", false, "permit the production auth backend to bind a non-loopback address WITHOUT --cookie-secure. Off by default: an unguarded public bind ships session cookies + passwords over plain HTTP. Only pass this when something else (a tunnel you trust) terminates TLS but can't set Secure.")
 	trustedProxies := fs.String("trusted-proxies", "", "comma-separated CIDRs of TLS terminators whose X-Forwarded-For header is believed (for audit logs + the per-IP /auth rate-limit key). Empty ⇒ XFF ignored, RemoteAddr used.")
 	maxAuthFails := fs.Int("auth-max-fails", 0, "failed /auth attempts (per username and per client IP) within --auth-window before lockout. Zero uses the built-in default (5).")
@@ -144,13 +170,21 @@ func Run(args []string) int {
 
 	logger := log.New(os.Stderr, "wash-login ", log.LstdFlags|log.Lmsgprefix)
 
+	// wash-login terminates its own self-signed TLS by default, so
+	// cookies + credentials are encrypted and get the Secure flag.
+	// --http opts out for a front-terminated / loopback deploy, which
+	// re-arms the plain-HTTP safety checks below.
+	tlsEnabled := !*noTLS
+	secureCookie := *cookieSecure || tlsEnabled
+
 	// Non-loopback bind on plain HTTP means credentials + session
 	// cookies cross the wire unencrypted. For the production su
 	// backend that's a hard error — refuse to start rather than ship
-	// a silently-insecure service. The dev/CI --auth-test backend is
-	// exempt (e2e binds non-loopback freely), and --allow-insecure-cookie
-	// is the explicit escape hatch for a trusted external tunnel.
-	if !isLoopback(*listen) && !*cookieSecure {
+	// a silently-insecure service. This only applies to --http (no
+	// local TLS): the default HTTPS listener is always safe. The dev/CI
+	// --auth-test backend is exempt (e2e binds non-loopback freely), and
+	// --allow-insecure-cookie is the escape hatch for a trusted tunnel.
+	if !tlsEnabled && !isLoopback(*listen) && !secureCookie {
 		switch {
 		case *authTest != "":
 			logger.Printf("WARNING: --listen %s on plain HTTP (--auth-test dev backend) — cookies cross the wire unencrypted.", *listen)
@@ -158,7 +192,8 @@ func Run(args []string) int {
 			logger.Printf("WARNING: --listen %s on plain HTTP with --allow-insecure-cookie — credentials + cookies cross the wire unencrypted.", *listen)
 		default:
 			logger.Printf("refusing to bind %s on plain HTTP: session cookies + passwords would cross the wire unencrypted.", *listen)
-			logger.Printf("  Front wash-login with nginx/Caddy/Tailscale-serve for TLS and pass --cookie-secure,")
+			logger.Printf("  Drop --http to serve the built-in self-signed HTTPS,")
+			logger.Printf("  front wash-login with nginx/Caddy/Tailscale-serve for TLS and pass --cookie-secure,")
 			logger.Printf("  restrict --listen to 127.0.0.1 and tunnel (SSH -L / WireGuard),")
 			logger.Printf("  or pass --allow-insecure-cookie if a trusted tunnel already terminates TLS.")
 			return 2
@@ -231,7 +266,7 @@ func Run(args []string) int {
 		Auth:           auth,
 		Signer:         signer,
 		TTL:            *cookieTTL,
-		CookieSecure:   *cookieSecure,
+		CookieSecure:   secureCookie,
 		Logger:         logger,
 		Users:          lister,
 		ShowUsers:      showUsers,
@@ -271,8 +306,28 @@ func Run(args []string) int {
 		return 1
 	}
 
-	logger.Printf("wash-login %s listening on %s (cookie-secure=%v cookie-ttl=%s)",
-		version.Version, *listen, *cookieSecure, *cookieTTL)
+	// Load the self-signed cert (or the operator's --tls-cert) before we
+	// announce readiness, so a cert failure aborts before the listener.
+	var tlsCfg *tls.Config
+	if tlsEnabled {
+		certPath, keyPath := *tlsCert, *tlsKey
+		if certPath == "" && keyPath == "" {
+			certPath, keyPath = defaultLoginTLSCertKey()
+		}
+		cert, terr := tlsutil.LoadOrGenerate(certPath, keyPath, logger.Printf)
+		if terr != nil {
+			logger.Printf("tls: %v", terr)
+			return 1
+		}
+		tlsCfg = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+	}
+
+	scheme := "https"
+	if !tlsEnabled {
+		scheme = "http"
+	}
+	logger.Printf("wash-login %s listening on %s://%s (cookie-secure=%v cookie-ttl=%s)",
+		version.Version, scheme, *listen, secureCookie, *cookieTTL)
 
 	// Advertise this box on the LAN so a peer's wash-connect can discover it
 	// even with nobody logged in. The per-session router (com.wash.remote)
@@ -301,6 +356,7 @@ func Run(args []string) int {
 		Addr:              *listen,
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
+		TLSConfig:         tlsCfg,
 	}
 
 	listener, err := net.Listen("tcp", *listen)
@@ -310,7 +366,15 @@ func Run(args []string) int {
 	}
 
 	errs := make(chan error, 1)
-	go func() { errs <- httpSrv.Serve(listener) }()
+	// ServeTLS with empty cert/key paths uses httpSrv.TLSConfig, which we
+	// populated above with the self-signed (or operator-supplied) cert.
+	go func() {
+		if tlsCfg != nil {
+			errs <- httpSrv.ServeTLS(listener, "", "")
+		} else {
+			errs <- httpSrv.Serve(listener)
+		}
+	}()
 	select {
 	case <-ctx.Done():
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)

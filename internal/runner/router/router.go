@@ -13,6 +13,7 @@ package routerrun
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -34,6 +35,7 @@ import (
 
 	"github.com/sirmick/wash/internal/router"
 	"github.com/sirmick/wash/internal/shellassets"
+	"github.com/sirmick/wash/internal/tlsutil"
 	"github.com/sirmick/wash/internal/wire"
 )
 
@@ -195,6 +197,9 @@ func Run(args []string) int {
 	noAuth := fs.Bool("no-auth", false, "serve the --transport=ws listener with NO token gate. The bound address then hands a full session to anyone who can reach it — only for trusted-loopback dev.")
 	allowCrossOrigin := fs.Bool("allow-cross-origin", false, "relax the /ws same-origin check so a browser can open a shell connection from a different origin. Needed for remote apps (docs/REMOTE.md R2): a desktop served by router A opens a second connection to this router (B) over an ssh -L tunnel. Gate it with the tunnel/loopback bind, not the same-origin policy.")
 	authTokenFile := fs.String("auth-token-file", "", "path the gate token is written to (mode 0600) and recovered from. Empty ⇒ a per-pid file under $XDG_RUNTIME_DIR/wash (or /tmp/wash-<uid>), removed on clean exit. An explicit path that already holds a token is reused as-is, so the token (and existing browser cookies) survive a restart.")
+	noTLS := fs.Bool("http", false, "serve plain HTTP instead of the default self-signed HTTPS. Browser secure-context features (clipboard copy/paste, service workers) need HTTPS, so this is only for a TLS-terminating front (nginx/Caddy/Tailscale-serve) or trusted-loopback dev. Only affects the --transport=ws TCP listener.")
+	tlsCert := fs.String("tls-cert", "", "PEM certificate for the HTTPS listener. Empty ⇒ a cached self-signed cert under $XDG_CONFIG_HOME/wash/tls (minted on first run, reused across restarts). Ignored with --http, --listen-unix, --listen-raw, and byte-stream transports.")
+	tlsKey := fs.String("tls-key", "", "PEM private key matching --tls-cert. Empty ⇒ the cached self-signed key. Ignored with --http and the non-ws transports.")
 	listenRaw := fs.String("listen-raw", "", `serve the shell wire (raw length-prefixed frames, NO HTTP/WebSocket) on a listening socket: "unix:/path" or "tcp:host:port". Each accepted connection is one shell (HandleShell over a StreamTransport). This is host B's endpoint for the remote-apps relay (docs/REMOTE.md): A's com.wash.remote ssh -L's a unix socket to here, and A's router splices a browser's muxed channel to it. Replaces --listen for that role; gated by the ssh tunnel + socket perms, so no token/origin check applies.`)
 	logFile := fs.String("log-file", "", "redirect stdout+stderr to this file (created mode 0640, parent dir made on demand). Used by wash-login for per-session router logs: the router runs as the target user, so the log is owned by them and readable without privilege. Empty leaves stdout/stderr inherited from the parent.")
 	showVersion := fs.Bool("version", false, "print version and exit")
@@ -340,7 +345,14 @@ func Run(args []string) int {
 	logger := log.New(os.Stderr, "wash-router ", log.LstdFlags|log.Lmsgprefix)
 	logf := func(format string, args ...any) { logger.Printf(format, args...) }
 
-	tokenURL := fmt.Sprintf("http://%s/?token=%s", cfg.Listen, authTokenVal)
+	// The default ws listener terminates self-signed TLS, so the URL the
+	// operator opens is https unless --http was passed. Only the TCP ws
+	// listener has a URL at all (authTokenVal is set only for it).
+	urlScheme := "https"
+	if *noTLS {
+		urlScheme = "http"
+	}
+	tokenURL := fmt.Sprintf("%s://%s/?token=%s", urlScheme, cfg.Listen, authTokenVal)
 	switch {
 	case authTokenVal != "":
 		logger.Printf("auth token enabled — open: %s", tokenURL)
@@ -490,6 +502,27 @@ func Run(args []string) int {
 		// upgraded WS fds via SCM_RIGHTS on the ctl socket.
 	case transportScheme == "ws":
 		srv = router.NewHTTPServer(r, assets)
+		// Default to self-signed HTTPS so browser secure-context features
+		// (clipboard copy/paste, service workers) work with no reverse
+		// proxy. --http opts out for a TLS-terminating front or loopback
+		// dev. The cert is cached under $XDG_CONFIG_HOME/wash/tls so it —
+		// and the browser's one-time trust decision — survive a restart.
+		if !*noTLS {
+			certPath, keyPath := *tlsCert, *tlsKey
+			if certPath == "" && keyPath == "" {
+				certPath, keyPath = defaultTLSCertKey()
+			}
+			cert, terr := tlsutil.LoadOrGenerate(certPath, keyPath, logf)
+			if terr != nil {
+				logger.Printf("tls: %v", terr)
+				return 1
+			}
+			srv.TLS = &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				MinVersion:   tls.VersionTLS12,
+			}
+			logf("serving self-signed HTTPS (pass --http for plain HTTP)")
+		}
 		if !strings.HasPrefix(cfg.Listen, "127.0.0.1:") && !strings.HasPrefix(cfg.Listen, "[::1]:") {
 			host, _, splitErr := net.SplitHostPort(cfg.Listen)
 			if splitErr == nil && host != "localhost" {

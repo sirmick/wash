@@ -39,6 +39,27 @@ func defaultTokenFilePath(pid int) string {
 	return filepath.Join(routerRuntimeDir(), fmt.Sprintf("router-%d.token", pid))
 }
 
+// defaultTLSCertKey is where the self-signed HTTPS cert/key are cached
+// when the operator didn't pass --tls-cert/--tls-key. Unlike the token
+// file this is NOT per-pid and lives in the config dir, not the runtime
+// dir: the cert must be stable across restarts so a browser's one-time
+// "trust this self-signed cert" decision keeps holding. Falls back to
+// the runtime dir only when no config home is resolvable.
+func defaultTLSCertKey() (certPath, keyPath string) {
+	var dir string
+	switch {
+	case os.Getenv("XDG_CONFIG_HOME") != "":
+		dir = filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "wash", "tls")
+	default:
+		if h, err := os.UserHomeDir(); err == nil && h != "" {
+			dir = filepath.Join(h, ".config", "wash", "tls")
+		} else {
+			dir = filepath.Join(routerRuntimeDir(), "tls")
+		}
+	}
+	return filepath.Join(dir, "router-cert.pem"), filepath.Join(dir, "router-key.pem")
+}
+
 // writeTokenFile writes token to path with mode 0600, creating the
 // parent directory (0700) if needed. The trailing newline makes the
 // file friendly to `cat` and `$(...)` capture.
