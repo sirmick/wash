@@ -55,3 +55,4 @@ export type { FileClient, FileClientOptions, FileUrlOptions } from './file-clien
 export { washAssetUrl } from './assets';
 export { IngressFrame } from './ingress-frame';
 export type { IngressFrameProps } from './ingress-frame';
+export { installIngressClipboardBridge } from './ingress-clipboard';

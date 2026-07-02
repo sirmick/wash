@@ -1,6 +1,7 @@
 import { createMemo, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { washAssetUrl } from './assets';
+import { installIngressClipboardBridge } from './ingress-clipboard';
 
 // IngressFrame embeds a web app published through the router's
 // generic ingress (/app/<token>/*) in a full-bleed iframe. It is the
@@ -66,7 +67,13 @@ export const IngressFrame: Component<IngressFrameProps> = (props) => {
       // Same-origin embed of our own trusted backend — no sandbox.
       // Allow the capabilities a full IDE/web app expects.
       allow="clipboard-read; clipboard-write; fullscreen; cross-origin-isolated"
-      onLoad={() => props.onLoad?.()}
+      onLoad={() => {
+        // On the insecure LAN origin wash ships on, the embedded app's
+        // navigator.clipboard is missing, so its copy/paste breaks (#9).
+        // Same-origin lets us bridge it to the wash clipboard in place.
+        installIngressClipboardBridge(frame?.contentWindow);
+        props.onLoad?.();
+      }}
       style={{
         display: 'block',
         width: '100%',
