@@ -248,6 +248,18 @@ struct WindowSink {
     bool enc_ready = false;
     uint64_t tree_sig = ~0ull; // last captured surface-tree signature (M7);
                                // sentinel forces the first capture
+
+    // reset_delta forces the next capture to be a full frame: unmap keeps the
+    // WindowSink alive (states_, tree_sig, sent_w/h persist), so on remap the
+    // first captures would compute damage against the pre-unmap state and send
+    // only what changed while hidden — a mostly-blank window (GTK
+    // hide+present, X11 withdraw/remap) — REVIEW-X11-WAYLAND #8. Call on map.
+    void reset_delta() {
+        tree_sig = ~0ull;
+        sent_w = 0;
+        sent_h = 0;
+        cap.reset();
+    }
     // Menu-fallback popover (DISPLAY.md §12): a parented, untitled toplevel
     // that Qt creates instead of an xdg_popup when it has no input serial
     // (programmatic menus). Streamed as a popup overlay on the parent's win
@@ -333,6 +345,11 @@ static uint64_t now_ms() {
 // get 0 — capture still runs but frames drop until a shell binds.
 static void sink_open(WindowSink& s, WireConn* conn, const std::string& title,
                       uint32_t w, uint32_t h, bool chromeless) {
+    // Force a full first frame: on a REMAP the sink's delta state survived the
+    // unmap and would otherwise send only what changed while hidden, leaving
+    // the window mostly blank (REVIEW-X11-WAYLAND #8). Harmless on a fresh map
+    // (state is already empty).
+    s.reset_delta();
     s.win = conn->create_window(title, w, h, "toplevel", 0, chromeless);
     wlr_log(WLR_INFO, "wash-display: mapped \"%s\" %ux%u -> win=%u chromeless=%d",
             title.c_str(), w, h, s.win, (int)chromeless);

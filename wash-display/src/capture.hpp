@@ -65,6 +65,12 @@ public:
     int height() const { return h_; }
     int stride() const { return stride_; }
 
+    // reset clears the per-surface delta state so the next capture recomputes
+    // full damage. Used on window (re)map (REVIEW-X11-WAYLAND #8) and after a
+    // video-channel resync — a stale states_ would otherwise send only the
+    // regions that changed while hidden, leaving a remapped window blank.
+    void reset() { states_.clear(); }
+
     // Dirty rectangle for this frame, in cropped-buffer coords. The whole
     // tree is composited, but only the union of the surfaces that actually
     // changed, moved, appeared, or vanished is encoded/sent.
