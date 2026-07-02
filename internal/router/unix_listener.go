@@ -29,6 +29,29 @@ import (
 	"github.com/coder/websocket"
 )
 
+// ensureXDGRuntimeDir creates dir 0700 if it doesn't exist, and pins a dir we
+// created to 0700 (MkdirAll's mode is umask-masked). Called in the router's
+// setuid (target-uid) startup so the per-user XDG_RUNTIME_DIR wash-login points
+// us at (<runRoot>/<uid>/xdg) is owned by the user at 0700 — what libwayland
+// requires for wash-display's wayland socket (REVIEW-X11-WAYLAND #4). Empty
+// path is a no-op; an already-provisioned logind /run/user/<uid> is left as-is.
+func ensureXDGRuntimeDir(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	_, statErr := os.Stat(dir)
+	created := os.IsNotExist(statErr)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	if created {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return fmt.Errorf("chmod %s: %w", dir, err)
+		}
+	}
+	return nil
+}
+
 // MaxHandoffReplay caps the size of the replay-byte payload on the
 // ctl socket. wash-login peeks the HTTP upgrade request (a few
 // hundred bytes typically — a few cookies plus headers), so 16 KiB
@@ -55,6 +78,15 @@ func (r *Router) RunUnixListener(ctx context.Context) error {
 	}
 	if err := os.MkdirAll(filepath.Dir(r.cfg.ListenUnix), 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", filepath.Dir(r.cfg.ListenUnix), err)
+	}
+	// Provision the per-user XDG_RUNTIME_DIR (wash-login points us at
+	// <runRoot>/<uid>/xdg via childEnv). We run AS the target uid here, so it
+	// lands owned by the user at 0700 — satisfying libwayland's same-uid 0700
+	// requirement so wash-display's wayland socket binds, and isolating it per
+	// user (REVIEW-X11-WAYLAND #4). Best-effort: the display layer is optional,
+	// so a failure here must not stop the router serving terminals.
+	if err := ensureXDGRuntimeDir(os.Getenv("XDG_RUNTIME_DIR")); err != nil {
+		r.log("xdg runtime dir: %v", err)
 	}
 
 	addr := &net.UnixAddr{Name: r.cfg.ListenUnix, Net: "unix"}

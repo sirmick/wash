@@ -192,7 +192,7 @@ func (s *Spawner) Spawn(id Identity, name string) (Session, error) {
 	// resolves ~/.config/wash, ~/.cache, and the fm/edit start dir to a path
 	// the user can't write (perm denied; wash-vscode's code-server download
 	// was the visible failure). Mirrors the vmlogin launcher's childEnv.
-	cmd.Env = childEnv(id)
+	cmd.Env = childEnv(id, s.runRoot())
 
 	// Setuid only when target differs from self. Avoids the
 	// "Operation not permitted" surface in dev where wash-login
@@ -329,17 +329,28 @@ func generateSessID() (string, error) {
 // target uid but env is NOT uid-derived, so without this it would resolve ~ to
 // wash-system's home — unwritable by the user. The home comes from the user's
 // passwd entry, falling back to /home/<name>. Mirrors vmlogin's childEnv.
-func childEnv(id Identity) []string {
+func childEnv(id Identity, runRoot string) []string {
 	home := ""
 	if u, err := user.Lookup(id.Name); err == nil && u.HomeDir != "" {
 		home = u.HomeDir
 	} else if id.Name != "" {
 		home = "/home/" + id.Name
 	}
+	// Per-uid XDG_RUNTIME_DIR. wash-login runs as wash-system, so its own
+	// XDG_RUNTIME_DIR (or none, under a system service) would otherwise pass
+	// through to the setuid router and every user's wash-display would try to
+	// bind its wayland socket in wash-system's runtime dir — or, unset, fail to
+	// start at all (libwayland requires XDG_RUNTIME_DIR), so there's no display
+	// layer behind wash-login, and a shared dir lets sessions dial each other's
+	// compositors (REVIEW-X11-WAYLAND #4). Point it at a per-uid path; the
+	// router (running AS the target uid) creates it 0700-owned-by-user in its
+	// setuid context, the same way it creates the sessions dir.
+	xdgRuntime := PerUserRuntimeDir(runRoot, id.UID)
 	parent := os.Environ()
-	env := make([]string, 0, len(parent)+3)
+	env := make([]string, 0, len(parent)+4)
 	for _, kv := range parent {
-		if strings.HasPrefix(kv, "HOME=") || strings.HasPrefix(kv, "USER=") || strings.HasPrefix(kv, "LOGNAME=") {
+		if strings.HasPrefix(kv, "HOME=") || strings.HasPrefix(kv, "USER=") ||
+			strings.HasPrefix(kv, "LOGNAME=") || strings.HasPrefix(kv, "XDG_RUNTIME_DIR=") {
 			continue // replaced below with the authed user's values
 		}
 		env = append(env, kv)
@@ -350,7 +361,16 @@ func childEnv(id Identity) []string {
 	if id.Name != "" {
 		env = append(env, "USER="+id.Name, "LOGNAME="+id.Name)
 	}
+	env = append(env, "XDG_RUNTIME_DIR="+xdgRuntime)
 	return env
+}
+
+// PerUserRuntimeDir is the per-uid XDG_RUNTIME_DIR wash-login points a spawned
+// router at: <runRoot>/<uid>/xdg. The router creates it 0700 as the target uid
+// (see ensureXDGRuntimeDir), so it satisfies libwayland's same-uid 0700
+// requirement and isolates each user's wayland/compositor sockets.
+func PerUserRuntimeDir(runRoot string, uid uint32) string {
+	return filepath.Join(runRoot, strconv.FormatUint(uint64(uid), 10), "xdg")
 }
 
 // processAlive reports whether pid exists in the process table.
