@@ -964,11 +964,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   return (
     <>
-      {/* Wallpaper layer — sits behind all desktop content. Two per-theme
-          knobs: --wash-wallpaper-extent (window | desktop) insets it to stop
-          at the taskbar's edge, and --wash-wallpaper-border draws a frame
-          around the painting (Dreamtime: stops at taskbar + 5px black).
-          pointer-events:none; painted by applyWallpaper. */}
+      {/* Wallpaper layer — sits behind all desktop content. Per-theme
+          knob: --wash-wallpaper-extent (window | desktop) insets it to stop
+          at the taskbar's edge. pointer-events:none; painted by
+          applyWallpaper. */}
       <div
         ref={wallpaperEl}
         data-testid="desktop-wallpaper"
@@ -978,10 +977,28 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           right: 0,
           top: wallpaperExcludesTaskbar() && taskbarPosition() === 'top' ? `${taskbarHeight}px` : 0,
           bottom: wallpaperExcludesTaskbar() && taskbarPosition() === 'bottom' ? `${taskbarHeight}px` : 0,
+          'pointer-events': 'none',
+          'z-index': 0,
+        }}
+      />
+      {/* Frame for the wallpaper border (--wash-wallpaper-border; Dreamtime:
+          5px black). Its own TOPMOST layer, not a border on the z-index:0
+          wallpaper: content that reaches the screen edge — a maximized
+          window, the sidebar — would otherwise paint over the frame (#5).
+          Same inset as the wallpaper so the frame keeps hugging the
+          painting; pointer-events:none so it never intercepts clicks. */}
+      <div
+        data-testid="viewport-frame"
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          top: wallpaperExcludesTaskbar() && taskbarPosition() === 'top' ? `${taskbarHeight}px` : 0,
+          bottom: wallpaperExcludesTaskbar() && taskbarPosition() === 'bottom' ? `${taskbarHeight}px` : 0,
           border: tokens.wallpaperBorder,
           'box-sizing': 'border-box',
           'pointer-events': 'none',
-          'z-index': 0,
+          'z-index': 2147483000,
         }}
       />
       <Banner info={sysInfo} />

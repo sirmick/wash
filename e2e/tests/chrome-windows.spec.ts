@@ -211,6 +211,43 @@ test.describe('chrome (test app via --show-hidden)', () => {
     expect(box.y + box.height).toBeLessThanOrEqual(innerH - 39);
   });
 
+  test('wallpaper frame border stacks above a maximized window (#5)', async ({ page, router }) => {
+    await page.goto(router.url);
+    await launchTestApp(page);
+    const app = page.locator('wash-app-test');
+    await expect(app).toBeVisible();
+
+    // Packs default the frame off (0 solid transparent); give it a width
+    // so the layer that draws it is present and measurable.
+    await page.evaluate(() =>
+      document.documentElement.style.setProperty('--wash-wallpaper-border', '5px solid #ff0066'),
+    );
+
+    // Maximize so the window reaches the screen edges the frame occupies.
+    await page.getByRole('button', { name: 'Maximize window' }).click();
+    await expect(app.locator('[data-testid="window-state"] b')).toHaveText('maximized');
+
+    // Whichever desktop layer draws the frame border must stack above the
+    // window plane; otherwise an edge-touching window paints over the
+    // frame (the border "draws below the outermost content", #5).
+    const frameZ = await page.evaluate(() => {
+      const layers = document.querySelectorAll(
+        '[data-testid="desktop-wallpaper"], [data-testid="viewport-frame"]',
+      );
+      for (const el of layers) {
+        const cs = getComputedStyle(el);
+        if (parseFloat(cs.borderTopWidth) > 0) return Number(cs.zIndex);
+      }
+      return null;
+    });
+    expect(frameZ).not.toBeNull();
+    const winZ = await page
+      .locator('.wash-window')
+      .first()
+      .evaluate((el) => Number(getComputedStyle(el).zIndex));
+    expect(frameZ!).toBeGreaterThan(winZ);
+  });
+
   test('maximized window tracks a browser resize', async ({ page, router }) => {
     await page.goto(router.url);
     await launchTestApp(page);
