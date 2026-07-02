@@ -1995,6 +1995,12 @@ static void apply_win_cmd(const WinCmd& c) {
                                                kb ? &kb->modifiers : nullptr);
             } else {
                 wlr_seat_keyboard_notify_clear_focus(srv->seat);
+                // Also drop pointer focus: no pointer-leave is otherwise sent
+                // when the cursor leaves the wash window, so hover highlights
+                // and tooltips stick (REVIEW-X11-WAYLAND #9). Reset g_ptr_surface
+                // so the next motion re-enters cleanly.
+                wlr_seat_pointer_notify_clear_focus(srv->seat);
+                g_ptr_surface = nullptr;
             }
         }
         return;

@@ -101,6 +101,11 @@ export class WashAppDisplay extends HTMLElement {
   private pending: InputEvent[] = [];
   private rafID = 0;
   private inputCleanup?: () => void;
+  // Physical codes currently held down, so they can be released on blur /
+  // tab-hide — otherwise a modifier latched when the host browser is
+  // Alt-Tabbed away stays depressed in the guest's xkb state and is re-sent on
+  // the next focus (REVIEW-X11-WAYLAND #9).
+  private heldKeys = new Set<string>();
 
   // Active popup overlays, keyed by their video-popup channel id.
   private popups = new Map<number, PopupOverlay>();
@@ -295,15 +300,27 @@ export class WashAppDisplay extends HTMLElement {
       // do X autorepeat as usual.
       if (ev.repeat) return;
       window.wash?.focusWindow(this.windowID, this.origin);
+      this.heldKeys.add(ev.code);
       this.queue({ ev: 'key', code: ev.code, state: 'down' });
       this.flushNow();
     };
     const onKeyUp = (ev: KeyboardEvent) => {
       ev.preventDefault();
       ev.stopPropagation();
+      this.heldKeys.delete(ev.code);
       this.queue({ ev: 'key', code: ev.code, state: 'up' });
       this.flushNow();
     };
+    // Release every held key when we lose focus or the tab is hidden — the
+    // host browser eats the keyup that would otherwise arrive (Alt-Tab, tab
+    // switch), leaving modifiers latched in the guest (REVIEW-X11-WAYLAND #9).
+    const releaseHeld = () => {
+      if (this.heldKeys.size === 0) return;
+      for (const code of this.heldKeys) this.queue({ ev: 'key', code, state: 'up' });
+      this.heldKeys.clear();
+      this.flushNow();
+    };
+    const onVisibility = () => { if (document.hidden) releaseHeld(); };
     // Right-click must reach the guest, not pop the browser menu.
     const onContextMenu = (ev: Event) => ev.preventDefault();
 
@@ -313,7 +330,9 @@ export class WashAppDisplay extends HTMLElement {
     this.addEventListener('wheel', onWheel, { passive: false });
     this.addEventListener('keydown', onKeyDown);
     this.addEventListener('keyup', onKeyUp);
+    this.addEventListener('blur', releaseHeld);
     this.addEventListener('contextmenu', onContextMenu);
+    document.addEventListener('visibilitychange', onVisibility);
 
     this.inputCleanup = () => {
       this.removeEventListener('pointermove', onPointerMove);
@@ -322,7 +341,9 @@ export class WashAppDisplay extends HTMLElement {
       this.removeEventListener('wheel', onWheel);
       this.removeEventListener('keydown', onKeyDown);
       this.removeEventListener('keyup', onKeyUp);
+      this.removeEventListener('blur', releaseHeld);
       this.removeEventListener('contextmenu', onContextMenu);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }
 
