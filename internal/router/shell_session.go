@@ -353,8 +353,30 @@ func sumU64(xs []uint64) uint64 {
 	return n
 }
 
+// livenessTransport wraps the shell transport so every successful frame READ
+// stamps lastReadAtNanos — not only dispatch does (REVIEW-DATAPATH F5 /
+// REVIEW-RECONNECT H3). wire.ReadLoop reads one frame ahead of the handler,
+// so even while dispatch is blocked on a slow app/peer write the next inbound
+// frame still refreshes liveness — keeping readIdleLoop from reaping a socket
+// whose FE is plainly still sending. WriteFrame/Close pass through unchanged.
+type livenessTransport struct {
+	FrameTransport
+	stamp func()
+}
+
+func (t livenessTransport) ReadFrame() (wire.Frame, error) {
+	f, err := t.FrameTransport.ReadFrame()
+	if err == nil {
+		t.stamp()
+	}
+	return f, err
+}
+
 func (s *ShellSession) loop(ctx context.Context) error {
-	err := wire.ReadLoop(ctx, s.Transport, s.dispatch)
+	t := livenessTransport{FrameTransport: s.Transport, stamp: func() {
+		s.lastReadAtNanos.Store(time.Now().UnixNano())
+	}}
+	err := wire.ReadLoop(ctx, t, s.dispatch)
 	if errors.Is(err, context.Canceled) {
 		return nil
 	}
@@ -365,9 +387,11 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 	// Ingress accounting (every inbound frame: keystrokes, window intents,
 	// uploaded file content) for the link-health rx figure.
 	s.statsLink().recordRx(len(f.Payload))
-	// Liveness: any inbound frame proves the socket is alive. Stamp it for
-	// the read-idle watchdog (readIdleLoop) so a busy connection — even one
-	// sending only bulk uploads — never trips the zombie reaper.
+	// Liveness: any inbound frame proves the socket is alive. The
+	// authoritative stamp is now at the transport read (livenessTransport) so
+	// a dispatch blocked on a slow app/peer write can't stall liveness while
+	// the FE keeps sending; this second stamp is a cheap belt-and-braces for
+	// the fast path.
 	s.lastReadAtNanos.Store(time.Now().UnixNano())
 	if f.Channel != ChannelControl {
 		// Channel ≥ 1 on WS: raw byte stream. Forward to the bound
