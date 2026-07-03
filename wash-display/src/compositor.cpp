@@ -79,6 +79,9 @@ extern "C" {
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_pointer.h>
 #include <wlr/types/wlr_cursor_shape_v1.h>
+#include <wlr/types/wlr_primary_selection.h>
+#include <wlr/types/wlr_primary_selection_v1.h>
+#include <wlr/types/wlr_viewporter.h>
 #include <wlr/interfaces/wlr_keyboard.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
@@ -204,6 +207,11 @@ struct Server {
     struct wl_listener req_set_selection;
     struct wl_listener set_selection;
     struct wlr_data_source* wash_source = nullptr;
+
+    // Primary selection (middle-click paste). We only need to accept a guest
+    // taking the primary selection so paste works between guests; wlroots' xwm
+    // bridges X11↔Wayland primary through the same seat selection (H2).
+    struct wl_listener req_set_primary_selection;
 
     // cursor-shape-v1: clients name their cursor (text/pointer/resize/…); we
     // forward the NAME to the focused window's element, which sets it as the
@@ -1967,6 +1975,15 @@ void handle_request_set_selection(struct wl_listener* listener, void* data) {
     wlr_seat_set_selection(s->seat, ev->source, ev->serial);
 }
 
+// handle_request_set_primary_selection: a guest claims the PRIMARY selection
+// (a text selection, for middle-click paste). Accept it on the seat so other
+// guests — and X11 clients via wlroots' xwm bridge — can paste it (H2).
+void handle_request_set_primary_selection(struct wl_listener* listener, void* data) {
+    Server* s = wl_container_of(listener, s, req_set_primary_selection);
+    auto* ev = static_cast<struct wlr_seat_request_set_primary_selection_event*>(data);
+    wlr_seat_set_primary_selection(s->seat, ev->source, ev->serial);
+}
+
 // wash→guest: a data source backed by wash's clipboard. Its bytes are pulled
 // lazily (clipboard.get) only when a guest actually pastes.
 struct WashClipSource {
@@ -2295,6 +2312,15 @@ int run_compositor(WireConn& conn) {
         wlr_compositor_create(server.display, 5, server.renderer);
     wlr_subcompositor_create(server.display);
     wlr_data_device_manager_create(server.display);
+    // wp_viewporter: SDL2/mpv and other fractional/scaled clients use it to
+    // present a differently-sized buffer; advertising it lets them take the
+    // efficient path instead of falling back (REVIEW-X11-WAYLAND H3).
+    wlr_viewporter_create(server.display);
+    // Primary selection (middle-click paste): advertise the manager so
+    // native-Wayland terminals can own the PRIMARY selection; the seat
+    // request handler is wired after the seat is created below. wlroots' xwm
+    // bridges X11 primary through the same seat selection (H2).
+    wlr_primary_selection_v1_device_manager_create(server.display);
 
     server.output_layout = wlr_output_layout_create();
     // Disable wlroots scene occlusion culling BEFORE creating the scene (the
@@ -2415,6 +2441,13 @@ int run_compositor(WireConn& conn) {
         server.set_selection.notify = handle_set_selection;
         wl_signal_add(&server.seat->events.set_selection, &server.set_selection);
         conn.on_clipboard_changed([](const std::string& mime) { post_clip_offer(mime); });
+
+        // Primary selection (middle-click paste, H2): accept a guest taking
+        // PRIMARY so guests can middle-click-paste between each other and
+        // to/from X11 (bridged by xwm through the same seat).
+        server.req_set_primary_selection.notify = handle_request_set_primary_selection;
+        wl_signal_add(&server.seat->events.request_set_primary_selection,
+                      &server.req_set_primary_selection);
 
         // cursor-shape-v1: forward named cursors to the focused window's
         // element as a CSS cursor (M4). Modern toolkits + recent Xwayland
