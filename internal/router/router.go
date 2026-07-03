@@ -1438,10 +1438,23 @@ func (r *Router) replayBundleToShell(s *ShellSession, inst *AppInstance) {
 // Called once per shell session, immediately after the snapshot.
 func (r *Router) reattachChannelsToShell(s *ShellSession) {
 	// This shell is now the foreground head: new channels bind here and
-	// terminal channels migrate here below.
+	// terminal channels migrate here below. Capture the outgoing head under
+	// the same lock so a still-live predecessor can be told it was superseded
+	// (REVIEW-RECONNECT L2) — otherwise its terminals just go quiet as their
+	// channels migrate away, with no signal to the user.
 	r.mu.Lock()
+	prev := r.headShell
+	_, prevLive := r.shells[prev]
 	r.headShell = s
 	r.mu.Unlock()
+	if prev != nil && prev != s && prevLive {
+		// Best-effort: if prev is actually a dying/zombie connection the write
+		// just fails and no banner is shown. A genuine second tab is live and
+		// gets it. Sent WITHOUT r.mu held (WriteCtrl goes to the scheduler).
+		if err := prev.WriteCtrl(wire.NewShellSuperseded("This session was opened in another window.")); err != nil {
+			r.log("superseded notice to prior head: %v", err)
+		}
+	}
 
 	r.channelsMu.Lock()
 	bindings := make([]*channelBinding, 0, len(r.channels))

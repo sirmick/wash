@@ -247,6 +247,11 @@ interface ShellPeerError {
   msg: string;
 }
 
+interface ShellSuperseded {
+  t: 'shell.superseded';
+  msg: string;
+}
+
 export interface ShellAppCrashed {
   t: 'app.crashed';
   instance_id: string;
@@ -282,6 +287,7 @@ type ShellCtrlMsg =
   | ShellClipboardData
   | ShellClipboardChanged
   | ShellPeerError
+  | ShellSuperseded
   | RawLinkStatsMsg;
 
 // Reactive subs the chrome (mounted via window.wash) listens to.
@@ -403,6 +409,9 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         break;
       case 'session.snapshot':
         handleSnapshot(client, msg);
+        // A fresh snapshot from the LOCAL router means this tab just (re)attached
+        // as the foreground head, so any prior "opened elsewhere" notice is stale.
+        if (isLocal) setSuperseded(null);
         break;
       case 'session.patch':
         handlePatch(client, msg);
@@ -563,6 +572,17 @@ function makeHandlers(client: RouterClient): ClientHandlers {
           body: `Couldn’t attach ${e.origin}: ${e.msg}`,
           level: 'warn',
         });
+        break;
+      }
+      case 'shell.superseded': {
+        // This tab lost the foreground head to a newer connection (another
+        // tab/window/device took over the session); its terminals go quiet as
+        // their channels migrate. Raise a persistent banner so the tab isn't
+        // silently dark (REVIEW-RECONNECT L2). LOCAL only — head is a
+        // local-router concept.
+        if (!isLocal) break;
+        shellLog('warn', 'conn', `superseded: ${msg.msg}`);
+        setSuperseded(msg.msg);
         break;
       }
       case 'clipboard.changed': {
@@ -996,6 +1016,13 @@ conn.onEvent((e) => {
   if (e.kind === 'open') setLostInput(null);
 });
 
+// superseded holds the "opened elsewhere" notice: the router tells a still-
+// live shell it lost the foreground head to a newer connection, so its
+// terminals go quiet (REVIEW-RECONNECT L2). Set by the shell.superseded ctrl
+// message; cleared when this tab (re)attaches as head (its own fresh
+// session.snapshot) or reconnects.
+const [superseded, setSuperseded] = createSignal<string | null>(null);
+
 // connTick drives the banner's live "no contact for Ns / next retry" readout
 // while the link is down. Only ticks when not open, so a healthy desktop
 // pays nothing.
@@ -1199,7 +1226,7 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
   // re-auth, and a clean connect is already in flight.
   const canRetry = () => props.state === 'reconnecting' || props.state === 'closed';
   return (
-    <Show when={props.state !== 'open' || lostInput()}>
+    <Show when={props.state !== 'open' || lostInput() || superseded()}>
       <div
         data-testid="wash-connection-banner"
         data-state={props.state}
@@ -1235,6 +1262,11 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
               ⚠ {lostInput()}
             </span>
           </Show>
+          <Show when={superseded()}>
+            <span data-testid="wash-connection-superseded" style={{ opacity: '0.9', font: tokens.type.textSm }}>
+              ⚠ {superseded()}
+            </span>
+          </Show>
         </span>
         <Show when={canRetry()}>
           <button
@@ -1251,6 +1283,23 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
             }}
           >
             Reconnect now
+          </button>
+        </Show>
+        <Show when={superseded() && props.state === 'open'}>
+          <button
+            data-testid="wash-connection-use-here"
+            onClick={() => location.reload()}
+            style={{
+              font: tokens.type.textSm,
+              color: tokens.fg,
+              background: 'rgba(255,255,255,0.12)',
+              border: `1px solid ${tokens.borderDenied}`,
+              'border-radius': '4px',
+              padding: '2px 8px',
+              cursor: 'pointer',
+            }}
+          >
+            Use here
           </button>
         </Show>
       </div>
