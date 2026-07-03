@@ -24,12 +24,14 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <cerrno>
 #include <cstring>
 #include <ctime>
 #include <fcntl.h>
 #include <linux/input-event-codes.h>
 #include <map>
 #include <mutex>
+#include <poll.h>
 #include <string>
 #include <thread>
 #include <unistd.h>
@@ -878,11 +880,26 @@ static bool toplevel_is_popover(struct wlr_xdg_toplevel* tl) {
     //     menus (the exact case this fallback exists for) open with no fresh
     //     pointer event.
     // All three were implemented and each turned the tested Qt programmatic
-    // menu (display-qt-popover.spec.ts) into a window. Distinguishing an
-    // untitled menu from an untitled dialog needs a signal the toolkits don't
-    // expose here; left as a known limitation (TODO.md) rather than shipped
-    // with a regression. A TITLED dialog (the common case) already stays a
-    // window via the untitled check above.
+    // menu (display-qt-popover.spec.ts) into a window. A second investigation
+    // pass (REVIEW-FIX-PROMPT-2 G5) considered the remaining candidates and
+    // rejected each as non-robust:
+    //   - GTK app_id allowlist: GTK *menus* are real xdg_popups and never
+    //     reach this fallback, so the misclassified case is a GTK message
+    //     DIALOG — indistinguishable from a Qt menu by app_id; and any Qt-vs-
+    //     GTK keying breaks a Qt app that opens a real dialog.
+    //   - decoration mode (SSD vs CSD): Qt uses SSD for BOTH its menus and its
+    //     dialogs, so it can't separate a Qt untitled menu from a Qt untitled
+    //     dialog; keying on SSD-presence still misclassifies Qt untitled
+    //     dialogs.
+    //   - min/max size: both an auto-sized menu and a fixed message dialog are
+    //     non-resizable, so size flags don't separate them.
+    //   - surface-commit timing / content probing: xdg-shell exposes no menu-
+    //     vs-dialog role, and pixel probing isn't robust (and the serial-less
+    //     programmatic-menu case has no distinguishing commit pattern).
+    // Distinguishing an untitled menu from an untitled dialog needs a signal
+    // the toolkits don't expose here; left as a known limitation (TODO.md)
+    // rather than shipped with a regression. A TITLED dialog (the common case)
+    // already stays a window via the untitled check above.
     return true;
 }
 
@@ -1858,11 +1875,40 @@ void handle_set_selection(struct wl_listener* listener, void* /*data*/) {
     std::thread([conn, washmime, rfd] {
         std::vector<uint8_t> buf;
         char tmp[4096];
-        ssize_t n;
-        while ((n = read(rfd, tmp, sizeof tmp)) > 0)
+        // Bound the read with poll(): a selection owner that takes the write
+        // end but never feeds it — it exited but a forked child still holds
+        // the fd, or it's simply wedged — would otherwise block this thread
+        // and leak its fd forever (REVIEW-X11-WAYLAND #13, selection half).
+        // The 5s timeout is per-quiet-period (it resets on every chunk), so a
+        // slow-but-live transfer isn't cut off; only a truly stalled one is.
+        struct pollfd pfd{rfd, POLLIN, 0};
+        constexpr int kQuietMs = 5000;
+        bool complete = false;
+        for (;;) {
+            int pr = poll(&pfd, 1, kQuietMs);
+            if (pr < 0) {
+                if (errno == EINTR) continue;
+                break;
+            }
+            if (pr == 0) {
+                wlr_log(WLR_ERROR, "wash-display: clipboard read stalled — abandoning transfer");
+                break;
+            }
+            ssize_t n = read(rfd, tmp, sizeof tmp);
+            if (n < 0) {
+                if (errno == EINTR) continue;
+                break;
+            }
+            if (n == 0) { // EOF — the owner finished writing
+                complete = true;
+                break;
+            }
             buf.insert(buf.end(), tmp, tmp + n);
+        }
         close(rfd);
-        if (conn && !buf.empty()) conn->clipboard_set(washmime, buf);
+        // Only publish a fully-received selection; a stalled/aborted read
+        // must not paste a truncated clipboard.
+        if (complete && conn && !buf.empty()) conn->clipboard_set(washmime, buf);
     }).detach();
 }
 
