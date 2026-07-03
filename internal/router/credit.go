@@ -79,6 +79,17 @@ func NewChannelCredit(initial uint64) *ChannelCredit {
 // Reserve does NOT split a large n across credit grants — it waits
 // for the full n to be available in one go. Callers chunk their
 // writes upstream if they want partial-progress behavior.
+//
+// Single-producer assumption (REVIEW-DATAPATH F11): the notify channel is
+// a 1-slot edge, and Grant wakes exactly one parked Reserve per grant. With
+// two goroutines reserving on the SAME channel, a grant that wakes the
+// large-n waiter (whose n still isn't covered) has it re-park after
+// consuming the wake, leaving a small-n waiter that the grant WOULD have
+// satisfied still asleep until the next grant. This is safe today only
+// because every channel has a single producer (one goroutine calls Reserve
+// per channel), so at most one waiter is ever parked. If a channel ever
+// gains concurrent reservers, replace the 1-slot notify with a broadcast
+// (close-and-replace, or sync.Cond) so every waiter re-checks on each grant.
 func (c *ChannelCredit) Reserve(ctx context.Context, n uint64) error {
 	for {
 		c.mu.Lock()

@@ -125,6 +125,14 @@ func (s *Scheduler) Submit(ctx context.Context, f wire.Frame) error {
 // is full. Useful for emitters that prefer drop to block (e.g.
 // telemetry, future Background traffic).
 func (s *Scheduler) TrySubmit(f wire.Frame) bool {
+	// Closed check on the fast path: after Close no consumer drains the
+	// queues, so an enqueue here would strand the frame. Report it as
+	// undelivered (same shape as a full queue) instead (REVIEW-DATAPATH F11).
+	select {
+	case <-s.closed:
+		return false
+	default:
+	}
 	c := f.Class()
 	q := s.queues[c]
 	if q == nil {
@@ -147,6 +155,13 @@ func (s *Scheduler) TrySubmit(f wire.Frame) bool {
 // health figure (Background will carry real bulk traffic after the tc
 // reclass). Best-effort: silently skipped if the class queue is full.
 func (s *Scheduler) SubmitTelemetry(f wire.Frame) {
+	// Closed check: after Close no consumer drains, so skip rather than
+	// strand a telemetry frame in an undrained queue (REVIEW-DATAPATH F11).
+	select {
+	case <-s.closed:
+		return
+	default:
+	}
 	q := s.queues[f.Class()]
 	if q == nil {
 		q = s.queues[wire.ClassInteractive]
