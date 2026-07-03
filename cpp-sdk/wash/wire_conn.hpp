@@ -96,6 +96,12 @@ public:
     // (REVIEW-X11-WAYLAND #12).
     void report_title(uint32_t win, const std::string& title);
 
+    // report_window_state asks the router to set a window's state ("normal" |
+    // "minimized" | "maximized") — e.g. a guest's CSD minimize button
+    // (window.state on CH_EVENT, fire-and-forget). The router gates it to
+    // windows this app owns (REVIEW-X11-WAYLAND H7).
+    void report_window_state(uint32_t win, const std::string& state);
+
     // confirm_close replies to a router window.close_requested. We pass
     // allow=false to VETO the router's auto-destroy: the compositor asks
     // the guest client to close politely and drives the real teardown via

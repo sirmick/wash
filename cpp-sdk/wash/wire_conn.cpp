@@ -323,6 +323,12 @@ void WireConn::report_title(uint32_t win, const std::string& title) {
     write_json(CH_EVENT, m);
 }
 
+void WireConn::report_window_state(uint32_t win, const std::string& state) {
+    if (!win) return;
+    json m = {{"t", "window.state"}, {"win", win}, {"state", state}};
+    write_json(CH_EVENT, m);
+}
+
 void WireConn::report_geometry(uint32_t win, uint32_t w, uint32_t h) {
     json m = {{"t", "window.geometry"}, {"win", win}, {"w", w}, {"h", h}};
     write_json(CH_EVENT, m);
