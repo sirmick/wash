@@ -43,7 +43,7 @@ fix-reliability-a/b). Commit hashes are the local-main merge commits.
 | **M6** self-closed relay socket wedges a remote client | ✅ Fixed | `2d772a2` (F4): a fatal relay desync fires `onFatalClose` → `detachClient` instead of firing onclose (which redialed the dead socket forever). Composes with E2. |
 | **M7** post-confirm close has no kill escalation | ✅ Fixed | `49608f6` (F1): `terminateWindowedApp` SIGTERM→SIGKILL after `windowCloseKillGrace`, mirroring `restartBackgroundApp`. |
 | **L1** reattach migration ordering window | ✅ Fixed | `b5cf1c1` (A1): bind+resync+replay enqueued under `shellMu`. |
-| **L2** queued input dropped on `unauthenticated`; silent head-steal | ⚠️ Partial | `bea9372` (F5): auth-loss queue clear now emits `lost-input`. Head-steal banner still deferred — needs a net-new BE→FE "opened elsewhere" message (`reattachChannelsToShell` silently reassigns ownership). |
+| **L2** queued input dropped on `unauthenticated`; silent head-steal | ✅ Fixed | `bea9372` (F5): auth-loss queue clear emits `lost-input`. `9abf7e8`: head-steal now sends a new `shell.superseded` BE→FE message → FE "opened elsewhere" banner + "Use here". |
 | **L3** teardown gated on `cmd.Wait` | ✅ Fixed | `5285788` (F2): `cmd.WaitDelay` so Wait returns after the process exits even if a grandchild holds the stdout pipe. |
 | Smaller notes | ⏸ Deferred | Out of scope — TODO.md. |
 

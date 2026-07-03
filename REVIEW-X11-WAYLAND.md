@@ -48,8 +48,9 @@ are the local-main merge commits.
 | **10** wheel deltaMode ignored | ✅ Fixed | `f1df0fe` (D8): FE normalizes deltaMode + sends notch count; BE emits clean value120. |
 | **11** browser autorepeat forwarded | ✅ Fixed | `aeb7c33` (D8): FE drops `ev.repeat`; the Wayland client is the single repeat authority. |
 | **12** title changes after map | ✅ Fixed | `bacc312` (D8): `set_title` listeners (xdg + xwayland) → new `report_title`. |
-| **13** keycode gaps + keymap/selection notes | ⚠️ Partial | `b97ec33` (D8): numpad, `IntlBackslash`, `ContextMenu`. Selection blocking-thread leak fixed `261c147` (G3): `handle_set_selection` read bounded by a poll() quiet-period timeout. **Keymap-layout hint** (non-US host) still open — needs a new wire message (stop-and-ask) — TODO.md. |
-| Protocol-coverage gaps (DnD, primary selection, viewporter, presentation-time, xdg-activation, min/max, Xwayland `-auth`, minimize/icons, touch) | ⏸ Deferred | Out of scope — TODO.md. |
+| **13** keycode gaps + keymap/selection notes | ✅ Fixed | `b97ec33` (D8): numpad, `IntlBackslash`, `ContextMenu`. Selection thread leak `261c147` (G3): poll()-bounded read. Keymap-layout hint `f2ad961` (G2): FE `getLayoutMap` → new `display.set_keymap` app_msg → compositor recompiles xkb keymap (conservative fr/de/us; full per-key remap a future note). |
+| **min/max size** | ✅ Fixed | `6e2c272` (G4): xdg toplevel min/max → `create_window` → `SessionWindow.{Min,Max}{W,H}` → FE clamps `applyResize` to [min,max]. |
+| Protocol-coverage gaps (DnD, primary selection, viewporter, presentation-time, xdg-activation, Xwayland `-auth`, minimize/icons, touch) | 🚧 In progress (Phase H) | Net-new protocol support, user-approved; H6 (Xwayland `-auth`, security) first. |
 
 "What looks solid" below was verified and left unchanged.
 

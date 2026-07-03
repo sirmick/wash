@@ -128,9 +128,9 @@ Reconnect (REVIEW-RECONNECT.md): **M5–M7, L3 FIXED — Phase F, merge fd0a077.
   window (`terminateWindowedApp`) `49608f6`.
 - [x] **L3** — teardown no longer gated on a grandchild holding the pipe
   (`cmd.WaitDelay`) `5285788`.
-- [~] **L2** — auth-loss queue clear now emits `lost-input` `bea9372`. STILL OPEN:
-  the multi-tab head-steal UI affordance needs a net-new BE→FE "opened
-  elsewhere" message (`reattachChannelsToShell` silently reassigns ownership).
+- [x] **L2** — auth-loss `lost-input` `bea9372`; head-steal banner DONE
+  `9abf7e8` (new `shell.superseded` BE→FE message + FE "opened elsewhere"
+  banner). Merge 968903d.
 - [ ] **B1 deferred half** — move `handleAssetRead` streaming off the shell
   dispatch loop (`TODO(review F5)` in `shell_session.go`); the read-side
   liveness stamp already prevents the false idle-reap.
@@ -145,12 +145,13 @@ Display / X11-Wayland (REVIEW-X11-WAYLAND.md). **G1/G3/G5 done — Phase G, merg
 - [x] **G5 / #5** — re-investigated; no robust untitled-menu-vs-dialog signal
   exists (GTK app_id / decoration mode / min-max / commit timing / content
   probing all rejected). Left as a known limitation, recorded in-code `ec89a8d`.
-- [ ] **G2 / #13 keymap half** — keymap hard-coded to the server default (non-US
-  host layouts type wrong chars). STOP-AND-ASK: needs a new FE→BE layout-hint
-  wire message. Awaiting user go-ahead.
-- [ ] **G4 / min-max size** — interactive resize clamps only to 100×60; honour the
-  toplevel's min/max. STOP-AND-ASK: needs BE to report min/max to the FE (wire
-  addition) + FE clamp. Awaiting user go-ahead.
+- [x] **G2 / #13 keymap half** — DONE `f2ad961`: FE detects host layout
+  (getLayoutMap) → new `display.set_keymap` app_msg → compositor recompiles the
+  xkb keymap. Conservative (fr/de/us); full per-key remap is a future note.
+  Manual verification pending (non-US typing).
+- [x] **G4 / min-max size** — DONE `6e2c272`: xdg toplevel min/max → SessionWindow
+  → FE clamps applyResize to [min,max]. Manual verification pending (Qt hard-min
+  resize feel).
 - [ ] Remaining protocol-coverage gaps (Phase H, all net-new, per-item confirm):
   wl_data_device **drag-and-drop**, **primary selection**, **wp_viewporter**,
   **presentation-time**, **xdg-activation**, Xwayland **-auth** (SECURITY; do
