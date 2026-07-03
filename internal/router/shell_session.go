@@ -681,9 +681,12 @@ func (s *ShellSession) handleWindowCloseClicked(m wire.ShellWindowCloseClicked) 
 			inst.expectedExit.Store(true)
 			if inst.Cmd != nil && inst.Cmd.Process != nil {
 				// Spawn-completion branch: router forked the child
-				// directly and owns *exec.Cmd. SIGTERM gracefully;
-				// the app's read loop sees EOF after the signal.
-				_ = inst.Cmd.Process.Signal(stopSignal())
+				// directly and owns *exec.Cmd. SIGTERM gracefully — the
+				// app's read loop sees EOF after the signal — then
+				// escalate to SIGKILL if it hangs past the grace window,
+				// so a confirm-then-wedge app can't stay pinned in r.apps
+				// with its window gone (REVIEW-RECONNECT M7).
+				s.router.terminateWindowedApp(inst)
 			} else {
 				// Token-attach branch: the child was forked by an
 				// external spawner (e.g. wash-priv under sudo). We

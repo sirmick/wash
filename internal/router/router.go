@@ -1219,6 +1219,50 @@ func (r *Router) restartBackgroundApp(appID string) (string, string, error) {
 	return inst.InstanceID, "", nil
 }
 
+// windowCloseKillGrace is how long a confirmed-close app has to exit on
+// SIGTERM before the router escalates to SIGKILL (REVIEW-RECONNECT M7).
+// A package var so tests can shorten it. Mirrors restartBackgroundApp's
+// 5s grace.
+var windowCloseKillGrace = 5 * time.Second
+
+// terminateWindowedApp stops inst after a user-confirmed window close:
+// SIGTERM, then SIGKILL if the app hangs past windowCloseKillGrace. Without
+// the escalation an app that confirms the close but then wedges in shutdown
+// stays pinned in r.apps with its window already destroyed — launchOrRaise
+// would "raise" the gone window and requestClose's in-progress guard blocks
+// a retry, so the app is unopenable until router restart (REVIEW-RECONNECT
+// M7). Only the spawn-completion branch (router owns *exec.Cmd) can escalate;
+// the token-attach branch has no Process to signal (handled by its caller).
+// Blocks up to the grace window — callers run it on their own goroutine.
+func (r *Router) terminateWindowedApp(inst *AppInstance) {
+	if inst.Cmd == nil || inst.Cmd.Process == nil {
+		return
+	}
+	_ = inst.Cmd.Process.Signal(stopSignal())
+	if r.waitInstanceGone(inst.InstanceID, windowCloseKillGrace) {
+		return
+	}
+	r.log("close window: app %s ignored SIGTERM after confirm — SIGKILL", inst.InstanceID)
+	_ = inst.Cmd.Process.Kill()
+}
+
+// waitInstanceGone polls until inst is no longer registered in r.apps (its
+// loop goroutine ran tearDown on process exit) or the timeout elapses.
+// Returns true if the instance is gone. Same poll shape as waitSingletonGone
+// but keyed by instance id, so it works for non-singleton windowed apps.
+func (r *Router) waitInstanceGone(instanceID string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if r.appByInstance(instanceID) == nil {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // waitSingletonGone polls until the singleton slot for appID is empty
 // (the terminated instance's loop goroutine ran tearDown) or the
 // timeout elapses. Returns true if the slot is clear. A short poll is
