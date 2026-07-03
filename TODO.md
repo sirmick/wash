@@ -109,14 +109,15 @@ The reliability/data-path/display fix pass (Phases A–D) landed the confirmed
 high/medium bugs. These lower-priority items from the same three reviews were
 explicitly deferred; each references the review doc + finding id.
 
-Data plane (REVIEW-DATAPATH.md):
-- [ ] **F9** — `wire.ReadLoop` can leak its reader goroutine at teardown
-  (select the buffered send against a `done` channel closed on return).
-- [ ] **F10** — a max-size (16 MiB) B-frame overflows the peer relay's A-frame
-  wrapper; split oversized relay payloads or cap B producers at `MaxPayload−8`.
-- [ ] **F11** — notes: `ChannelCredit.Reserve` single-waiter wakeup constraint;
-  `DecodeFrameRaw` not covered by the frame fuzzer; `Scheduler.TrySubmit`
-  enqueues after `Close`.
+Data plane (REVIEW-DATAPATH.md): **ALL FIXED — Phase E, merge dbce705.**
+- [x] **F9** — `wire.ReadLoop` reader-goroutine leak: the buffered send now
+  selects against a `done` channel closed on return (80f8fbb).
+- [x] **F10** — max-size B-frame on the peer relay: oversized frames are now
+  split across relay frames (pieces sent at ClassControl so the strict-priority
+  scheduler can't interleave them; FE `send` mirrors the split) (99b53ab).
+- [x] **F11** — `DecodeFrameRaw` cross-checked in `FuzzDecodeFrame`;
+  `Scheduler.TrySubmit`/`SubmitTelemetry` no-op after `Close`;
+  `ChannelCredit.Reserve` single-producer assumption documented (c2f975e).
 
 Reconnect (REVIEW-RECONNECT.md):
 - [ ] **M5** — deferred `mountWhenReady` can resurrect a router-deleted window

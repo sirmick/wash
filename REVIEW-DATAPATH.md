@@ -45,9 +45,9 @@ MEDIUM finding here. Commit hashes are the local-main merge commits.
 | **F6** SDK deliver blocks the app read loop | ✅ Mitigated | The whole-desktop freeze chain is broken by B1's app-write deadline (`6ad3e7f`): a wedged app is torn down instead of blocking dispatch. The suggested drop-oldest in `RawChannel.deliver` was not needed and not done. |
 | **F7** pendingRaw unbounded + credits unconsumed bytes | ✅ Fixed | `8ecbe0a` (C2): `pendingRaw` capped (drop-oldest); credit granted only on real consumption. |
 | **F8** credit-ledger drift | ✅ Fixed | `8ecbe0a` (C2): FE grants only for Bulk-class frames a subscriber consumed. |
-| **F9** ReadLoop reader-goroutine leak | ⏸ Deferred | Out of scope — TODO.md. |
-| **F10** max-size frame kills the peer relay | ⏸ Deferred | Out of scope — TODO.md. |
-| **F11** minor notes (Reserve wakeup, DecodeFrameRaw fuzz, TrySubmit-after-Close) | ⏸ Deferred | Out of scope — TODO.md. |
+| **F9** ReadLoop reader-goroutine leak | ✅ Fixed | `80f8fbb` (E1): the buffered send selects against a `done` channel closed on return; unit test asserts the reader exits at teardown. |
+| **F10** max-size frame kills the peer relay | ✅ Fixed | `99b53ab` (E2): oversized frames split across relay frames — pieces sent at ClassControl so the strict-priority scheduler can't interleave them (FE `send` mirrors the split). Chose split over capping B producers. |
+| **F11** minor notes (Reserve wakeup, DecodeFrameRaw fuzz, TrySubmit-after-Close) | ✅ Fixed | `c2f975e` (E3): `FuzzDecodeFrame` cross-checks `DecodeFrameRaw`; `TrySubmit`/`SubmitTelemetry` no-op after `Close`; `Reserve` single-producer assumption documented. |
 
 "What looks solid" below was verified and left unchanged.
 
