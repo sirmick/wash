@@ -44,9 +44,13 @@ func TestAssetReadDoesNotBlockDispatch(t *testing.T) {
 	defer func() {
 		sess.scheduler.Close()
 		cancel()
+		// Close the pipe BEFORE waiting for the drainer: EndB is deliberately
+		// never read, so the drainLoop is wedged in WriteFrame (which
+		// scheduler.Close does NOT unblock). Closing the pipe returns
+		// ErrClosedPipe from that write so the drainer can exit; otherwise the
+		// <-drainerDone wait deadlocks the test teardown.
+		pp.Close()
 		<-sess.drainerDone
-		_ = pp.EndA().Close()
-		_ = pp.EndB().Close()
 	}()
 
 	done := make(chan error, 1)
