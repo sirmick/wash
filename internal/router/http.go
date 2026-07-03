@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"crypto/subtle"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -76,6 +77,10 @@ type HTTPServer struct {
 	assets  http.FileSystem
 	mux     *http.ServeMux
 	handler http.Handler // mux wrapped with the httpsec.Guard middleware
+	// TLS, when non-nil, makes Run serve HTTPS with this config (the
+	// zero-config self-signed default; see internal/tlsutil). Nil ⇒
+	// plain HTTP, used by --http and by the httptest-based unit tests.
+	TLS *tls.Config
 }
 
 // NewHTTPServer returns a ready-to-mount handler. assets may be nil.
@@ -196,6 +201,10 @@ func (s *HTTPServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 				Value:    q,
 				Path:     "/",
 				HttpOnly: true,
+				// Secure only when we terminate TLS ourselves (the default
+				// self-signed HTTPS listener). Under --http the cookie must
+				// still be sent over plain HTTP, so no Secure flag there.
+				Secure:   s.TLS != nil,
 				SameSite: http.SameSiteStrictMode,
 			})
 			u := *r.URL
@@ -278,7 +287,14 @@ func (s *HTTPServer) Run(ctx context.Context) error {
 		return fmt.Errorf("listen %s: %w", srv.Addr, err)
 	}
 	errs := make(chan error, 1)
-	go func() { errs <- srv.Serve(listener) }()
+	if s.TLS != nil {
+		// The cert lives in srv.TLSConfig; ServeTLS with empty paths uses
+		// it directly. This is the zero-config self-signed default.
+		srv.TLSConfig = s.TLS
+		go func() { errs <- srv.ServeTLS(listener, "", "") }()
+	} else {
+		go func() { errs <- srv.Serve(listener) }()
+	}
 	select {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

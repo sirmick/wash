@@ -1,6 +1,8 @@
 import { createMemo, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { washAssetUrl } from './assets';
+import { installIngressClipboardBridge } from './ingress-clipboard';
+import { installIngressFocusBridge } from './ingress-focus';
 
 // IngressFrame embeds a web app published through the router's
 // generic ingress (/app/<token>/*) in a full-bleed iframe. It is the
@@ -43,7 +45,25 @@ export const IngressFrame: Component<IngressFrameProps> = (props) => {
 
   let frame: HTMLIFrameElement | undefined;
 
+  // Detach the focus bridge from the previous document before the iframe
+  // navigates (each load is a fresh document with its own listeners).
+  let detachFocus: (() => void) | undefined;
+
+  // raiseWindow makes an interaction inside the (event-swallowing) iframe
+  // behave as if the user clicked the window frame: synthesize a bubbling
+  // pointerdown on the iframe element so the shell's per-window
+  // onWindowPointerDown handler runs and raises the window (#12). Keeping
+  // it a plain DOM event means IngressFrame stays agnostic of the WM — it
+  // reuses the exact focus-raise path every other wash surface already
+  // uses, rather than reaching for window.wash here.
+  const raiseWindow = () => {
+    // composed:true so it crosses any shadow boundary the shell wraps the
+    // frame in, matching a real user pointer event (which is composed).
+    frame?.dispatchEvent(new Event('pointerdown', { bubbles: true, composed: true }));
+  };
+
   onMount(() => {
+    onCleanup(() => detachFocus?.());
     if (!props.host) return;
     const onMessage = (ev: MessageEvent) => {
       // Only relay messages from our own iframe, and only those that
@@ -66,7 +86,18 @@ export const IngressFrame: Component<IngressFrameProps> = (props) => {
       // Same-origin embed of our own trusted backend — no sandbox.
       // Allow the capabilities a full IDE/web app expects.
       allow="clipboard-read; clipboard-write; fullscreen; cross-origin-isolated"
-      onLoad={() => props.onLoad?.()}
+      onLoad={() => {
+        // On the insecure LAN origin wash ships on, the embedded app's
+        // navigator.clipboard is missing, so its copy/paste breaks (#9).
+        // Same-origin lets us bridge it to the wash clipboard in place.
+        installIngressClipboardBridge(frame?.contentWindow);
+        // Forward interactions inside the iframe up to the WM so clicking
+        // the embedded surface raises the window (#12). Re-arm on every
+        // load: each navigation is a new document.
+        detachFocus?.();
+        detachFocus = installIngressFocusBridge(frame?.contentWindow, raiseWindow);
+        props.onLoad?.();
+      }}
       style={{
         display: 'block',
         width: '100%',

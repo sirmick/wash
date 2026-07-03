@@ -100,8 +100,13 @@ if [[ ! -e "$router_bin" ]]; then
   exit 1
 fi
 
+# Plain HTTP for the dev loop: the router now defaults to self-signed
+# HTTPS, but a dev opens the desktop at http://localhost:$port, which
+# browsers already treat as a secure context (so clipboard etc. work)
+# without the self-signed-cert warning. Production/LAN runs drop --http.
 args=(
   --listen "$listen"
+  --http
   --dev
   --show-hidden
   --screenshot-dir "${WASH_SCREENSHOT_DIR:-/tmp/wash-screenshots}"

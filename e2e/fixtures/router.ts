@@ -291,6 +291,12 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
     // and the auth gate itself is covered by auth-harden.spec.ts via
     // the login fixture's per-user routers.
     '--no-auth',
+    // Serve plain HTTP: the router defaults to self-signed HTTPS, but this
+    // per-test harness is the documented trusted-loopback case (127.0.0.1,
+    // ephemeral port, torn down with the test) and the specs fetch the
+    // desktop over http://. HTTPS-by-default is exercised by tls.spec / the
+    // runner unit tests.
+    '--http',
     '--apps-dir',
     appsDir,
     '--control-socket',

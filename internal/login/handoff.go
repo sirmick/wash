@@ -18,6 +18,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"syscall"
 )
@@ -43,13 +44,6 @@ func Handoff(req *http.Request, conn net.Conn, brw *bufio.ReadWriter, ctlPath st
 		return fmt.Errorf("build replay: %w", err)
 	}
 
-	// Open Unix conn to the per-user router's ctl socket.
-	ctl, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: ctlPath, Net: "unix"})
-	if err != nil {
-		return fmt.Errorf("dial %s: %w", ctlPath, err)
-	}
-	defer ctl.Close()
-
 	// Get the raw fd of the hijacked TCP conn. net.FileConn-style
 	// SyscallConn lets us read the fd inside a Control closure
 	// without race-y dup logic on our side; the kernel will dup it
@@ -63,24 +57,102 @@ func Handoff(req *http.Request, conn net.Conn, brw *bufio.ReadWriter, ctlPath st
 		return fmt.Errorf("hijacked SyscallConn: %w", err)
 	}
 
-	// Same dance for the ctl socket so we can call Sendmsg directly.
+	var ctlErr error
+	if err := raw.Control(func(connFD uintptr) {
+		ctlErr = sendFDToRouter(int(connFD), replay, ctlPath)
+	}); err != nil {
+		return fmt.Errorf("raw Control: %w", err)
+	}
+	return ctlErr
+}
+
+// ProxyHandoff is the handoff variant for a wash-login that terminates
+// TLS itself (the default self-signed HTTPS listener). A *tls.Conn's
+// plaintext lives inside wash-login's process — the encryption keys
+// can't ride an SCM_RIGHTS fd — so the raw-fd Handoff can't be used.
+//
+// Instead we create a Unix socketpair, SCM_RIGHTS one end (plus the
+// replayed upgrade request) into the per-user router — which reads it
+// exactly as it would a browser TCP fd — and keep the other end here,
+// pumping decrypted bytes between the browser's TLS conn and the router.
+// wash-login stays in the data path only for this TLS case; the
+// plaintext / nginx-front deployments keep the zero-copy fd handoff.
+//
+// Blocks until either side closes, so callers run it in the hijacked
+// handler's own goroutine.
+func ProxyHandoff(req *http.Request, conn net.Conn, brw *bufio.ReadWriter, ctlPath string) error {
+	defer conn.Close()
+
+	replay, err := buildReplay(req, brw)
+	if err != nil {
+		return fmt.Errorf("build replay: %w", err)
+	}
+
+	// AF_UNIX stream socketpair: fds[0] stays here, fds[1] goes to the
+	// router. Both behave like a connected stream socket, so the router's
+	// net.FileConn + http.ReadRequest path is unchanged.
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		return fmt.Errorf("socketpair: %w", err)
+	}
+	// Send the router's end, then close our copy of it (the kernel dup'd
+	// it into the router during Sendmsg).
+	if err := sendFDToRouter(fds[1], replay, ctlPath); err != nil {
+		_ = syscall.Close(fds[0])
+		_ = syscall.Close(fds[1])
+		return err
+	}
+	_ = syscall.Close(fds[1])
+
+	localFile := os.NewFile(uintptr(fds[0]), "ws-proxy")
+	if localFile == nil {
+		_ = syscall.Close(fds[0])
+		return fmt.Errorf("os.NewFile for socketpair fd failed")
+	}
+	local, err := net.FileConn(localFile)
+	_ = localFile.Close() // FileConn dup'd the fd
+	if err != nil {
+		return fmt.Errorf("FileConn socketpair: %w", err)
+	}
+	defer local.Close()
+
+	// Pump both directions. When either finishes (browser hangup or the
+	// session ending on the router side), close both conns so the other
+	// copy unblocks, then wait for it. io.Copy errors are expected on the
+	// closing side and not surfaced.
+	done := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(local, conn); done <- struct{}{} }() // browser → router
+	go func() { _, _ = io.Copy(conn, local); done <- struct{}{} }() // router → browser
+	<-done
+	_ = conn.Close()
+	_ = local.Close()
+	<-done
+	return nil
+}
+
+// sendFDToRouter dials the per-user router's ctl socket and sends fd
+// (a browser-facing stream socket) plus the replay payload — the
+// original HTTP upgrade request bytes the router re-parses — via
+// SCM_RIGHTS. The kernel dup's fd into the router during Sendmsg;
+// the caller still owns its own copy and closes it.
+func sendFDToRouter(fd int, replay []byte, ctlPath string) error {
+	ctl, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: ctlPath, Net: "unix"})
+	if err != nil {
+		return fmt.Errorf("dial %s: %w", ctlPath, err)
+	}
+	defer ctl.Close()
+
 	ctlSysconn, err := ctl.SyscallConn()
 	if err != nil {
 		return fmt.Errorf("ctl SyscallConn: %w", err)
 	}
 
+	oob := syscall.UnixRights(fd)
 	var sendErr error
-	err = raw.Control(func(connFD uintptr) {
-		oob := syscall.UnixRights(int(connFD))
-		ctlErr := ctlSysconn.Control(func(ctlFD uintptr) {
-			sendErr = syscall.Sendmsg(int(ctlFD), replay, oob, nil, 0)
-		})
-		if sendErr == nil && ctlErr != nil {
-			sendErr = ctlErr
-		}
-	})
-	if err != nil {
-		return fmt.Errorf("raw Control: %w", err)
+	if err := ctlSysconn.Control(func(ctlFD uintptr) {
+		sendErr = syscall.Sendmsg(int(ctlFD), replay, oob, nil, 0)
+	}); err != nil {
+		return fmt.Errorf("ctl Control: %w", err)
 	}
 	if sendErr != nil {
 		return fmt.Errorf("sendmsg: %w", sendErr)

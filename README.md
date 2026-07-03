@@ -471,12 +471,27 @@ distro backends and install layout are documented in
 --show-hidden               # include manifest.hidden apps in the catalog
 --control-socket PATH       # default /tmp/wash-<uid>.sock (or "none")
 --screenshot-dir DIR        # default /tmp/wash-screenshots (or "none")
+--http                      # serve plain HTTP (default is self-signed HTTPS)
+--tls-cert PATH             # PEM cert for the HTTPS listener (default: cached self-signed)
+--tls-key PATH              # PEM key matching --tls-cert
 --dev                       # watch binaries; auto-reload on rebuild
 --listen-unix PATH          # ctl socket for SCM_RIGHTS handoff (multi-user)
 --name NAME                 # human-readable session name (multi-user)
 --idle-timeout DUR          # self-exit when idle (default 30m under --listen-unix)
 --version
 ```
+
+**HTTPS by default.** The `--transport=ws` listener serves **self-signed
+HTTPS** out of the box so browser secure-context features — clipboard
+copy/paste, service workers — work with no reverse proxy. The cert is
+minted on first run and cached under `$XDG_CONFIG_HOME/wash/tls`, so a
+restart reuses it (and the browser's one-time "trust this certificate"
+decision sticks). Pass `--http` when a TLS terminator (nginx, Caddy,
+Tailscale-serve) already fronts the router, or for trusted-loopback dev
+(browsers treat `http://localhost` as a secure context, so copy/paste
+works there over plain HTTP too). `wash-login` has the same `--http` /
+`--tls-cert` / `--tls-key` flags and defaults to self-signed HTTPS as
+well.
 
 ---
 
