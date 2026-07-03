@@ -62,4 +62,4 @@ trap cleanup INT TERM EXIT
 echo "▸ $ROW ($IMG): installing $pkgbase, then serving the packaged desktop"
 echo "▸ → http://localhost:${PORT}/   (-no-auth, apps-dir /usr/bin; Ctrl-C to stop)"
 docker run --rm --name "$NAME" -p "${PORT}:11000" -v "$(dirname "$pkgfile")":/pkg:ro "$IMG" \
-  sh -c "$INST >/dev/null 2>&1 && echo '── wash $pkgbase serving on :11000 ──' && exec /usr/bin/wash-router -no-auth -listen 0.0.0.0:11000 -apps-dir /usr/bin"
+  sh -c "$INST >/dev/null 2>&1 && echo '── wash $pkgbase serving on :11000 ──' && exec /usr/bin/wash-router -http -no-auth -listen 0.0.0.0:11000 -apps-dir /usr/bin"

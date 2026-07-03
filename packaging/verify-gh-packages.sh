@@ -81,7 +81,7 @@ test -d /etc/wash
 echo "  -version"; /usr/bin/wash-router -version
 echo "  boot: serve HTTP on loopback"
 mkdir -p /tmp/empty-apps
-/usr/bin/wash-router -no-auth -listen 127.0.0.1:11000 -apps-dir /tmp/empty-apps >/tmp/router.log 2>&1 &
+/usr/bin/wash-router -http -no-auth -listen 127.0.0.1:11000 -apps-dir /tmp/empty-apps >/tmp/router.log 2>&1 &
 R=$!
 ok=0
 for _ in $(seq 1 15); do

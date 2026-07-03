@@ -123,7 +123,7 @@ RUN if [ "$RUN_DISTRO_TESTS" = "1" ]; then \
 RUN set -eux; \
     /usr/bin/wash-router -version; \
     mkdir -p /tmp/empty-apps; \
-    /usr/bin/wash-router -no-auth -listen 127.0.0.1:11000 -apps-dir /tmp/empty-apps > /tmp/router.log 2>&1 & \
+    /usr/bin/wash-router -http -no-auth -listen 127.0.0.1:11000 -apps-dir /tmp/empty-apps > /tmp/router.log 2>&1 & \
     ROUTER=$!; \
     ok=0; \
     for i in 1 2 3 4 5 6 7 8 9 10; do \
@@ -140,4 +140,4 @@ RUN set -eux; \
     fi; \
     echo "boot smoke OK"
 
-CMD ["/usr/bin/wash-router", "-listen", "0.0.0.0:11000", "-apps-dir", "/usr/bin"]
+CMD ["/usr/bin/wash-router", "-http", "-listen", "0.0.0.0:11000", "-apps-dir", "/usr/bin"]
