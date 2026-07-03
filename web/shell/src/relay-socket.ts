@@ -31,6 +31,14 @@ export class RelayChannelSocket implements SocketLike {
 
   // onmessage uses a setter so any frames fed before the consumer (B's
   // Conn) attached still get delivered when it does (mirrors virtio).
+  // onFatalClose fires when the relay stream desyncs unrecoverably (a frame
+  // length past the cap — corruption). The owner (main.tsx) wires it to
+  // detach the origin: the RouterClient's redial returns THIS same closed
+  // socket, whose events never fire again, so reconnecting would wedge B's
+  // client in 'reconnecting' forever with frozen windows and no banner
+  // (REVIEW-RECONNECT M6). A detach scrubs the origin cleanly instead.
+  onFatalClose: (() => void) | null = null;
+
   private _onmessage: ((ev: MessageEvent) => unknown) | null = null;
   get onmessage(): ((ev: MessageEvent) => unknown) | null { return this._onmessage; }
   set onmessage(fn: ((ev: MessageEvent) => unknown) | null) {
@@ -78,6 +86,21 @@ export class RelayChannelSocket implements SocketLike {
     });
   }
 
+  // fatal handles an unrecoverable stream desync. Unlike close(), it does NOT
+  // fire onclose (which would send the owning RouterClient into a reconnect
+  // that redials this same dead socket and hangs forever). Instead it hands
+  // off to onFatalClose so the owner detaches the origin (REVIEW-RECONNECT
+  // M6). Falls back to a plain close() if no owner is wired.
+  private fatal(): void {
+    if (this.closed) return;
+    if (this.onFatalClose) {
+      this.closed = true;
+      this.onFatalClose();
+      return;
+    }
+    this.close();
+  }
+
   /** feed accepts a chunk of B's byte stream (A's relay-channel raw bytes). */
   feed(chunk: Uint8Array): void {
     if (this.closed || chunk.length === 0) return;
@@ -97,7 +120,7 @@ export class RelayChannelSocket implements SocketLike {
       if (length > MAX_PAYLOAD) {
         console.error(`wash: relay frame length ${length} exceeds ${MAX_PAYLOAD} — closing`);
         this.onerror?.({ type: 'error' } as unknown as Event);
-        this.close();
+        this.fatal();
         return;
       }
       const total = HEADER_BYTES + length;

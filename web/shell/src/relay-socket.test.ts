@@ -83,6 +83,28 @@ test('send splits an oversized frame across raw frames within the payload cap', 
   assert.deepEqual(reassembled, whole, 'pieces reassemble to the original bytes in order');
 });
 
+test('a fatal desync invokes onFatalClose and does NOT fire onclose', async () => {
+  const conn = fakeConn();
+  const sock = new RelayChannelSocket(conn as never, 5);
+  let fatal = 0;
+  let closed = 0;
+  sock.onFatalClose = () => { fatal++; };
+  sock.onclose = () => { closed++; };
+
+  // An 8-byte header declaring a payload length past the 16 MiB cap — an
+  // unrecoverable stream desync. It must detach the origin (onFatalClose),
+  // NOT fire onclose (which would send the RouterClient reconnecting into
+  // this same dead socket forever — REVIEW-RECONNECT M6).
+  const bad = new Uint8Array(8);
+  bad[0] = 0x01;
+  new DataView(bad.buffer).setUint32(4, 16 * 1024 * 1024 + 1, false);
+  sock.feed(bad);
+
+  await Promise.resolve(); // let any (unwanted) queued onclose microtask run
+  assert.equal(fatal, 1, 'fatal desync detaches the origin');
+  assert.equal(closed, 0, 'onclose must not fire on a fatal desync');
+});
+
 test('frames fed before onmessage attaches are held, then flushed on attach', () => {
   const conn = fakeConn();
   const sock = new RelayChannelSocket(conn as never, 1);
