@@ -224,6 +224,26 @@ func TestSchedulerTrySubmitFullReturnsFalse(t *testing.T) {
 	}
 }
 
+// TestSchedulerSubmitAfterClose — after Close no consumer drains the
+// queues, so the non-blocking submit paths must NOT enqueue a frame that
+// would then be stranded (REVIEW-DATAPATH F11). TrySubmit reports false and
+// SubmitTelemetry is a no-op; the queues stay empty.
+func TestSchedulerSubmitAfterClose(t *testing.T) {
+	s := NewScheduler()
+	s.Close()
+
+	if s.TrySubmit(frameOf(wire.ClassBulk, 1, 'a')) {
+		t.Fatalf("TrySubmit after Close should return false")
+	}
+	s.SubmitTelemetry(frameOf(wire.ClassBackground, 1, 'b'))
+
+	for _, c := range []wire.Class{wire.ClassControl, wire.ClassInteractive, wire.ClassBulk, wire.ClassBackground} {
+		if d := s.Depth(c); d != 0 {
+			t.Fatalf("class %v queue depth %d after post-Close submits, want 0 (frame stranded)", c, d)
+		}
+	}
+}
+
 // TestSchedulerCloseUnblocksSubmit — Close releases producers stuck
 // on a full queue with ErrSchedulerClosed.
 func TestSchedulerCloseUnblocksSubmit(t *testing.T) {

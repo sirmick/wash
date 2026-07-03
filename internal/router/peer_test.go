@@ -238,6 +238,135 @@ func TestPeerRelayNoHeadOfLineBlocking(t *testing.T) {
 	<-done
 }
 
+// TestPeerRelayMaxSizeFrameSurvives is the regression for REVIEW-DATAPATH
+// F10. Host B sends a maximum-size frame (16 MiB payload → 16 MiB + 8 bytes
+// on the wire). Wrapped whole as one relay-frame payload it would exceed
+// MaxPayload, fail EncodeFrame, and tear the relay channel down; a marker
+// frame sent right after would then never arrive. With the A-side split the
+// oversized frame is chunked across relay frames, B's bytes are delivered
+// intact, and the relay stays up so the marker still arrives.
+func TestPeerRelayMaxSizeFrameSurvives(t *testing.T) {
+	reg := NewRegistry()
+	r := NewRouter(Config{NoSession: true}, reg, func(f string, a ...any) { t.Logf("router: "+f, a...) })
+
+	// A maximum legal B payload (exactly MaxPayload bytes), filled with a
+	// position-dependent pattern so a reassembly bug can't pass by accident.
+	maxPayload := make([]byte, wire.MaxPayload)
+	for i := range maxPayload {
+		maxPayload[i] = byte(i * 7)
+	}
+	sock := filepath.Join(t.TempDir(), "b.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				bt := wire.NewStreamTransport(c)
+				_ = bt.WriteFrame(wire.Frame{Flags: wire.FlagEnd | byte(wire.ClassBulk)<<1, Channel: 0, Payload: maxPayload})
+				_ = bt.WriteFrame(bframe(wire.ClassInteractive, "AFTER_MAX"))
+				<-make(chan struct{}) // hold the conn open
+			}()
+		}
+	}()
+
+	r.registerPeer("B", "unix", sock)
+
+	shellPair := wiretest.NewPipePair()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); _ = r.HandleShell(ctx, shellPair.EndA()) }()
+	end := shellPair.EndB()
+
+	if _, ok := readCtrl(t, end).(wire.ShellCatalog); !ok {
+		t.Fatalf("expected ShellCatalog first")
+	}
+	writeCtrl(t, end, wire.NewShellPeerAttach("B"))
+
+	var ch uint32
+	deadline := time.Now().Add(5 * time.Second)
+	for ch == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("never received peer channel.bind")
+		}
+		f, err := end.ReadFrame()
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if f.Channel != ChannelControl {
+			continue
+		}
+		if m, _ := wire.DecodeCtrl(f.Payload); m != nil {
+			if b, ok := m.(wire.ShellChannelBind); ok && b.Kind == wire.ChannelKindPeer {
+				ch = b.ChannelID
+			}
+		}
+	}
+
+	// Reassemble B's byte stream from the relay-channel frames (as the FE's
+	// relay-socket does) and decode B-frames out of it. The split max frame
+	// spans several relay frames; the marker proves the relay wasn't torn down.
+	type decoded struct {
+		class   wire.Class
+		payload []byte
+	}
+	got := make(chan decoded, 4)
+	go func() {
+		var buf []byte
+		for {
+			f, err := end.ReadFrame()
+			if err != nil {
+				return
+			}
+			if f.Channel != ch {
+				continue
+			}
+			buf = append(buf, f.Payload...)
+			for {
+				bf, derr := wire.DecodeFrame(bytes.NewReader(buf))
+				if derr != nil {
+					break // incomplete B-frame — wait for more relay bytes
+				}
+				n := 8 + len(bf.Payload)
+				buf = buf[n:]
+				got <- decoded{class: bf.Class(), payload: bf.Payload}
+			}
+		}
+	}()
+
+	// First B-frame: the max-size payload, intact.
+	select {
+	case d := <-got:
+		if len(d.payload) != wire.MaxPayload {
+			t.Fatalf("max frame: len %d, want %d", len(d.payload), wire.MaxPayload)
+		}
+		if !bytes.Equal(d.payload, maxPayload) {
+			t.Fatal("max frame payload not delivered intact (split pieces reordered)")
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("max-size frame never arrived — relay torn down by oversize wrap")
+	}
+	// Second B-frame: the marker, proving the relay survived.
+	select {
+	case d := <-got:
+		if d.class != wire.ClassInteractive || string(d.payload) != "AFTER_MAX" {
+			t.Fatalf("marker: class %v payload %q, want interactive AFTER_MAX", d.class, d.payload)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("marker never arrived — relay torn down after the max frame")
+	}
+
+	cancel()
+	<-done
+}
+
 // nextOnChannel reads frames until one arrives on channel ch.
 func nextOnChannel(t *testing.T, e wire.FrameTransport, ch uint32) wire.Frame {
 	t.Helper()
