@@ -7,6 +7,8 @@
 // fake "display_open" reference path otherwise.
 #pragma once
 
+#include <string>
+
 #include <wash/wire_conn.hpp>
 
 namespace wash {
@@ -40,5 +42,12 @@ void post_display_dpi(int dpi);
 // shell-selected HiDPI factor (1 or 2 today) and is published for clients
 // that want to map back to CSS-sized wash windows.
 void post_display_metrics(int width, int height, int scale);
+
+// post_display_keymap recompiles the virtual keyboard's xkb keymap to the
+// FE-supplied host layout (e.g. "fr"), so a non-US user's physical key codes
+// produce the right characters in guests (REVIEW-X11-WAYLAND #13). "" resets
+// to the server default. Safe from the reader thread (marshalled to the
+// compositor thread like post_display_dpi).
+void post_display_keymap(const std::string& layout);
 
 } // namespace wash

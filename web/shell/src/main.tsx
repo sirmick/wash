@@ -738,11 +738,56 @@ function publishDisplayMetricsToAll(): void {
   }
 }
 
+// Keyboard-layout hint (REVIEW-X11-WAYLAND #13). The FE forwards physical
+// KeyboardEvent.code to wash-display, whose keymap defaults to the server
+// layout — so a non-US host types wrong chars. Detect the host layout via the
+// Keyboard Map API (Chromium) and tell the compositor to match. Conservative:
+// only switch on a confident signature (a wrong guess would type wrong chars),
+// so unrecognised layouts stay on the server default (us-like).
+let detectedLayout: string | null = null; // null = detection not finished
+const layoutSentTo = new Set<Origin>();
+
+async function detectKeyboardLayout(): Promise<string> {
+  try {
+    const kb = (navigator as unknown as { keyboard?: { getLayoutMap?: () => Promise<Map<string, string>> } }).keyboard;
+    if (!kb?.getLayoutMap) return '';
+    const map = await kb.getLayoutMap();
+    const q = map.get('KeyQ'), a = map.get('KeyA'), y = map.get('KeyY');
+    if (q === 'a' && a === 'q') return 'fr'; // AZERTY
+    if (y === 'z') return 'de'; // QWERTZ (German/Swiss)
+    return ''; // unrecognised → keep the server default
+  } catch {
+    return '';
+  }
+}
+
+function publishKeymap(client: RouterClient): void {
+  if (!detectedLayout || layoutSentTo.has(client.origin)) return;
+  layoutSentTo.add(client.origin);
+  client.conn.sendCtrl({
+    t: 'app_msg.send',
+    to: { app_id: DISPLAY_APP_ID },
+    data: { kind: 'display.set_keymap', layout: detectedLayout },
+  });
+}
+
+void detectKeyboardLayout().then((l) => {
+  if (!l) return;
+  detectedLayout = l;
+  for (const origin of origins()) {
+    const client = clientForOrigin(origin);
+    if (client) publishKeymap(client);
+  }
+});
+
 function installDisplayMetricsPublisher(client: RouterClient): void {
   client.conn.onState((state) => {
     if (state === 'open') {
       sentDisplayMetrics.delete(client.origin);
       publishDisplayMetrics(client);
+      // Re-send the layout too: the compositor may have restarted.
+      layoutSentTo.delete(client.origin);
+      publishKeymap(client);
     }
   });
 }

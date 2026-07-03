@@ -298,6 +298,7 @@ static void unregister_win(uint32_t win) {
 struct WinCmd {
     std::string t;
     uint32_t win = 0, w = 0, h = 0, scale = 1;
+    std::string s; // string payload (e.g. keyboard layout for display.keymap)
 };
 static std::mutex g_cmd_mu;
 static std::vector<WinCmd> g_cmds;
@@ -549,6 +550,38 @@ static void publish_display_metrics_env(Server* server) {
         {"WASH_DISPLAY_HEIGHT", std::to_string(output_h())},
         {"WASH_DISPLAY_SCALE", std::to_string(output_scale())},
     });
+}
+
+// apply_keymap (re)compiles the virtual keyboard's xkb keymap for a layout
+// name ("" → the server default). The FE forwards its HOST layout so a non-US
+// user's physical KeyboardEvent.code produces the right character in the guest
+// (REVIEW-X11-WAYLAND #13, keymap half): host and guest then agree — e.g.
+// evdev KEY_Q → 'a' under "fr". Runs on the compositor thread (same thread as
+// init + input injection), so no locking around vkbd is needed.
+static void apply_keymap(Server* server, const std::string& layout) {
+    if (!server) return;
+    struct xkb_context* xkb = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    if (!xkb) {
+        wlr_log(WLR_ERROR, "wash-display: xkb context alloc failed");
+        return;
+    }
+    struct xkb_rule_names rules{};
+    if (!layout.empty()) rules.layout = layout.c_str();
+    struct xkb_keymap* keymap =
+        xkb_keymap_new_from_names(xkb, &rules, XKB_KEYMAP_COMPILE_NO_FLAGS);
+    if (keymap) {
+        wlr_keyboard_set_keymap(&server->vkbd, keymap);
+        xkb_keymap_unref(keymap);
+        server->vkbd_inited = true;
+        wlr_log(WLR_INFO, "wash-display: keymap layout=%s",
+                layout.empty() ? "(default)" : layout.c_str());
+    } else {
+        // Keep the previous keymap on a bad layout string so a typo from the FE
+        // can't disable the keyboard.
+        wlr_log(WLR_ERROR, "wash-display: keymap compile failed for layout=%s — keeping previous",
+                layout.empty() ? "(default)" : layout.c_str());
+    }
+    xkb_context_unref(xkb);
 }
 
 static void apply_display_dpi(Server* server, int dpi) {
@@ -2036,6 +2069,10 @@ static void apply_win_cmd(const WinCmd& c) {
         apply_display_metrics(g_server, (int)c.w, (int)c.h, (int)c.scale);
         return;
     }
+    if (c.t == "display.keymap") {
+        apply_keymap(g_server, c.s);
+        return;
+    }
     wlr_log(WLR_INFO, "wash-display: apply win cmd t=%s win=%u %ux%u",
             c.t.c_str(), c.win, c.w, c.h);
     WinRef ref;
@@ -2176,6 +2213,21 @@ void post_display_dpi(int dpi) {
     {
         std::lock_guard<std::mutex> lk(g_cmd_mu);
         g_cmds.push_back(WinCmd{"display.dpi", 0, (uint32_t)dpi, 0});
+    }
+    if (g_cmd_pipe[1] >= 0) {
+        char b = 1;
+        ssize_t n = write(g_cmd_pipe[1], &b, 1);
+        (void)n;
+    }
+}
+
+void post_display_keymap(const std::string& layout) {
+    {
+        std::lock_guard<std::mutex> lk(g_cmd_mu);
+        WinCmd c;
+        c.t = "display.keymap";
+        c.s = layout;
+        g_cmds.push_back(c);
     }
     if (g_cmd_pipe[1] >= 0) {
         char b = 1;
@@ -2336,24 +2388,12 @@ int run_compositor(WireConn& conn) {
             /*name*/ "wash-vkbd", /*led_update*/ nullptr};
         wlr_keyboard_init(&server.vkbd, &vkbd_impl, "wash-vkbd");
 
-        // Default xkb keymap (all-NULL rules → system default, typically
-        // evdev/us). The keymap is layout authority; the FE only forwards
-        // physical-key identity (KeyboardEvent.code → evdev keycode).
-        struct xkb_context* xkb = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-        struct xkb_rule_names rules{};
-        struct xkb_keymap* keymap =
-            xkb ? xkb_keymap_new_from_names(xkb, &rules, XKB_KEYMAP_COMPILE_NO_FLAGS)
-                : nullptr;
-        if (keymap) {
-            wlr_keyboard_set_keymap(&server.vkbd, keymap);
-            xkb_keymap_unref(keymap);
-        } else {
-            wlr_log(WLR_ERROR, "wash-display: xkb keymap compile failed — keys disabled");
-        }
-        if (xkb) xkb_context_unref(xkb);
-
+        // Compile the initial keymap (server default). The FE later sends its
+        // host layout via display.set_keymap → apply_keymap re-compiles. The
+        // keymap is layout authority; the FE only forwards physical-key
+        // identity (KeyboardEvent.code → evdev keycode).
+        apply_keymap(&server, "");
         wlr_seat_set_keyboard(server.seat, &server.vkbd);
-        server.vkbd_inited = (keymap != nullptr);
 
         // Forward the virtual keyboard's key/modifier signals to the seat so
         // injected keys carry correct modifier state (tinywl pattern).

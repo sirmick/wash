@@ -263,6 +263,22 @@ static int run() {
 #ifdef WASH_DISPLAY_COMPOSITOR
             wash::post_display_dpi(dpi);
 #endif
+        } else if (kind == "display.set_keymap") {
+#ifdef WASH_DISPLAY_COMPOSITOR
+            // Sanitise: xkb layout names are short and [a-z0-9,_-] (comma joins
+            // multiple layouts). Reject anything else so a hostile FE can't feed
+            // xkb junk; an empty/invalid value resets to the server default.
+            std::string layout = data.value("layout", std::string());
+            if (layout.size() > 32) layout.clear();
+            for (char ch : layout) {
+                if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') ||
+                      ch == ',' || ch == '_' || ch == '-')) {
+                    layout.clear();
+                    break;
+                }
+            }
+            wash::post_display_keymap(layout);
+#endif
         } else if (kind == "display.set_metrics") {
             int scale = sanitize_display_scale(data.value("scale", kDefaultScale));
             int cssW = data.value("css_w", 0);
