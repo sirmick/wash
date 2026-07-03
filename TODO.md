@@ -119,17 +119,18 @@ Data plane (REVIEW-DATAPATH.md): **ALL FIXED — Phase E, merge dbce705.**
   `Scheduler.TrySubmit`/`SubmitTelemetry` no-op after `Close`;
   `ChannelCredit.Reserve` single-producer assumption documented (c2f975e).
 
-Reconnect (REVIEW-RECONNECT.md):
-- [ ] **M5** — deferred `mountWhenReady` can resurrect a router-deleted window
-  as an unclosable ghost (per-origin snapshot epoch).
-- [ ] **M6** — a self-closed relay socket wedges a remote client forever (treat
-  a non-detach relay-socket close as fatal for the origin → detach + re-attach).
-- [ ] **M7** — post-confirm window close SIGTERMs with no escalation →
-  permanently unopenable app (arm a grace→`Process.Kill()` ladder).
-- [ ] **L2** — queued input silently dropped on `unauthenticated` (emit
-  `lost-input`); multi-tab head-steal is silent (wants a UI affordance).
-- [ ] **L3** — teardown gated on `cmd.Wait` while a grandchild holds the stdout
-  pipe (use `cmd.WaitDelay` / don't gate teardown on Wait).
+Reconnect (REVIEW-RECONNECT.md): **M5–M7, L3 FIXED — Phase F, merge fd0a077.**
+- [x] **M5** — deferred `mountWhenReady` ghost window fixed (per-origin snapshot
+  epoch + per-record cancelled flag drop a superseded deferred upsert) `193f864`.
+- [x] **M6** — self-closed relay socket wedge fixed (a fatal desync detaches the
+  origin via `onFatalClose` instead of redialing the dead socket) `2d772a2`.
+- [x] **M7** — post-confirm close now escalates SIGTERM→SIGKILL after a grace
+  window (`terminateWindowedApp`) `49608f6`.
+- [x] **L3** — teardown no longer gated on a grandchild holding the pipe
+  (`cmd.WaitDelay`) `5285788`.
+- [~] **L2** — auth-loss queue clear now emits `lost-input` `bea9372`. STILL OPEN:
+  the multi-tab head-steal UI affordance needs a net-new BE→FE "opened
+  elsewhere" message (`reattachChannelsToShell` silently reassigns ownership).
 - [ ] **B1 deferred half** — move `handleAssetRead` streaming off the shell
   dispatch loop (`TODO(review F5)` in `shell_session.go`); the read-side
   liveness stamp already prevents the false idle-reap.

@@ -39,12 +39,12 @@ fix-reliability-a/b). Commit hashes are the local-main merge commits.
 | **M2** crashed session app never respawns | ✅ Fixed | `00d9b3e` (B3): `tearDown` clears the started latch on unexpected exit. |
 | **M3** crashed background service never respawns | ✅ Fixed | `00d9b3e` (B3): same, for `backgroundStarted`. |
 | **M4** remote windows don't re-attach after SSH blip | ✅ Fixed | `d01d352` (B5): reconcile moved into the always-alive session FE; `peer.error` → toast. |
-| **M5** deferred mountWhenReady ghost window | ⏸ Deferred | Out of scope — TODO.md. |
-| **M6** self-closed relay socket wedges a remote client | ⏸ Deferred | Out of scope — TODO.md. |
-| **M7** post-confirm close has no kill escalation | ⏸ Deferred | Out of scope — TODO.md. |
+| **M5** deferred mountWhenReady ghost window | ✅ Fixed | `193f864` (F3): per-origin snapshot epoch + a per-record cancelled flag drop a superseded deferred upsert. |
+| **M6** self-closed relay socket wedges a remote client | ✅ Fixed | `2d772a2` (F4): a fatal relay desync fires `onFatalClose` → `detachClient` instead of firing onclose (which redialed the dead socket forever). Composes with E2. |
+| **M7** post-confirm close has no kill escalation | ✅ Fixed | `49608f6` (F1): `terminateWindowedApp` SIGTERM→SIGKILL after `windowCloseKillGrace`, mirroring `restartBackgroundApp`. |
 | **L1** reattach migration ordering window | ✅ Fixed | `b5cf1c1` (A1): bind+resync+replay enqueued under `shellMu`. |
-| **L2** queued input dropped on `unauthenticated`; silent head-steal | ⏸ Deferred | Out of scope — TODO.md. |
-| **L3** teardown gated on `cmd.Wait` | ⏸ Deferred | Out of scope — TODO.md. |
+| **L2** queued input dropped on `unauthenticated`; silent head-steal | ⚠️ Partial | `bea9372` (F5): auth-loss queue clear now emits `lost-input`. Head-steal banner still deferred — needs a net-new BE→FE "opened elsewhere" message (`reattachChannelsToShell` silently reassigns ownership). |
+| **L3** teardown gated on `cmd.Wait` | ✅ Fixed | `5285788` (F2): `cmd.WaitDelay` so Wait returns after the process exits even if a grandchild holds the stdout pipe. |
 | Smaller notes | ⏸ Deferred | Out of scope — TODO.md. |
 
 "What looks solid" and the test-gap list below were verified; the listed test
