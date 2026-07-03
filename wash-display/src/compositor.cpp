@@ -24,12 +24,14 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <cerrno>
 #include <cstring>
 #include <ctime>
 #include <fcntl.h>
 #include <linux/input-event-codes.h>
 #include <map>
 #include <mutex>
+#include <poll.h>
 #include <string>
 #include <thread>
 #include <unistd.h>
@@ -1858,11 +1860,40 @@ void handle_set_selection(struct wl_listener* listener, void* /*data*/) {
     std::thread([conn, washmime, rfd] {
         std::vector<uint8_t> buf;
         char tmp[4096];
-        ssize_t n;
-        while ((n = read(rfd, tmp, sizeof tmp)) > 0)
+        // Bound the read with poll(): a selection owner that takes the write
+        // end but never feeds it — it exited but a forked child still holds
+        // the fd, or it's simply wedged — would otherwise block this thread
+        // and leak its fd forever (REVIEW-X11-WAYLAND #13, selection half).
+        // The 5s timeout is per-quiet-period (it resets on every chunk), so a
+        // slow-but-live transfer isn't cut off; only a truly stalled one is.
+        struct pollfd pfd{rfd, POLLIN, 0};
+        constexpr int kQuietMs = 5000;
+        bool complete = false;
+        for (;;) {
+            int pr = poll(&pfd, 1, kQuietMs);
+            if (pr < 0) {
+                if (errno == EINTR) continue;
+                break;
+            }
+            if (pr == 0) {
+                wlr_log(WLR_ERROR, "wash-display: clipboard read stalled — abandoning transfer");
+                break;
+            }
+            ssize_t n = read(rfd, tmp, sizeof tmp);
+            if (n < 0) {
+                if (errno == EINTR) continue;
+                break;
+            }
+            if (n == 0) { // EOF — the owner finished writing
+                complete = true;
+                break;
+            }
             buf.insert(buf.end(), tmp, tmp + n);
+        }
         close(rfd);
-        if (conn && !buf.empty()) conn->clipboard_set(washmime, buf);
+        // Only publish a fully-received selection; a stalled/aborted read
+        // must not paste a truncated clipboard.
+        if (complete && conn && !buf.empty()) conn->clipboard_set(washmime, buf);
     }).detach();
 }
 
