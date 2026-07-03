@@ -170,6 +170,15 @@ func (r *Router) pumpPeerToShell(b *channelBinding) {
 		// One B-frame → the payload of one relay frame, scheduled at B's own
 		// class (byte 0). Verbatim: no decode/re-encode, no credit gate.
 		//
+		// A legal B-frame is up to MaxPayload+headerSize bytes (a 16 MiB
+		// payload + 8-byte header); wrapping that whole blob as ONE relay
+		// frame's payload would exceed MaxPayload, fail EncodeFrame, and tear
+		// the relay down (REVIEW-DATAPATH F10). The relay is a byte conduit —
+		// the FE reassembles B's wire from arbitrarily-chunked relay bytes
+		// (relay-socket.ts) — so an oversized frame is split across successive
+		// relay frames on the SAME channel at the SAME class; single channel +
+		// single class keeps them FIFO, so B's deframer sees the bytes intact.
+		//
 		// b.shell is read without shellMu, and that is safe BY INVARIANT, not
 		// by luck: a peer binding (peerConn != nil) has its shell pinned at
 		// creation, before this goroutine starts (a happens-before edge), and
@@ -179,11 +188,41 @@ func (r *Router) pumpPeerToShell(b *channelBinding) {
 		// stops the pump) is the only teardown. If you ever make a peer
 		// binding's shell mutable mid-pump, this read becomes a real data race —
 		// take shellMu here (and add a -race test that reattaches under load).
-		if werr := b.shell.WriteRawFrameClass(b.channelID, raw, wire.ClassOfFlags(raw[0])); werr != nil {
+		if werr := writeRelayFrame(b.shell, b.channelID, raw, wire.ClassOfFlags(raw[0])); werr != nil {
 			break
 		}
 	}
 	r.closeChannel(b.channelID, "peer socket closed")
+}
+
+// writeRelayFrame forwards one B-frame's raw bytes on the peer channel. A
+// frame that fits in one relay frame — every producer today — is sent whole
+// at B's own class, so B's interactive frames still jump its bulk.
+//
+// An oversized B-frame (a 16 MiB payload is 16 MiB + 8 on the wire) must be
+// split, and its pieces MUST reach the FE contiguously: relay-socket.ts
+// reassembles B's wire by byte position, so any peer-channel frame slipped
+// between two pieces would be parsed as part of B's frame and corrupt it.
+// The scheduler is strict-priority (qos.go), so a following higher-class
+// B-frame would preempt a trailing piece — the pieces are therefore sent at
+// ClassControl, the top class: FIFO within a class keeps the pump's back-to-
+// back pieces adjacent, and nothing outranks Control to slip between them.
+// (Cross-channel Control frames are demuxed by channel at the FE before byte
+// reassembly, so only another peer-channel frame could corrupt — and the
+// pump is the sole peer-channel producer.) A max B-frame yields exactly two
+// pieces; oversized frames don't occur today (REVIEW-DATAPATH F10), so the
+// brief top-priority burst is a non-issue.
+func writeRelayFrame(s *ShellSession, channelID uint32, raw []byte, class wire.Class) error {
+	if len(raw) <= wire.MaxPayload {
+		return s.WriteRawFrameClass(channelID, raw, class)
+	}
+	for len(raw) > wire.MaxPayload {
+		if err := s.WriteRawFrameClass(channelID, raw[:wire.MaxPayload], wire.ClassControl); err != nil {
+			return err
+		}
+		raw = raw[wire.MaxPayload:]
+	}
+	return s.WriteRawFrameClass(channelID, raw, wire.ClassControl)
 }
 
 // ---- per-shell peer-channel tracking (teardown on disconnect) ----

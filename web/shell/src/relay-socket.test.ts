@@ -59,6 +59,30 @@ test('send forwards bytes as a raw frame on the relay channel', () => {
   assert.deepEqual(conn.sent[0].bytes, payload);
 });
 
+test('send splits an oversized frame across raw frames within the payload cap', () => {
+  const MAX_PAYLOAD = 16 * 1024 * 1024; // mirrors wire.MaxPayload
+  const conn = fakeConn();
+  const sock = new RelayChannelSocket(conn as never, 9);
+  // A max B-frame is MAX_PAYLOAD + 8 bytes on the wire — too big for one raw
+  // frame (encodeFrame rejects >MAX_PAYLOAD). It must be split (REVIEW-DATAPATH
+  // F10). Pattern the bytes so a reordering/loss bug can't pass by accident.
+  const whole = new Uint8Array(MAX_PAYLOAD + 8);
+  for (let i = 0; i < whole.length; i++) whole[i] = (i * 7) & 0xff;
+  sock.send(whole);
+
+  assert.ok(conn.sent.length >= 2, 'oversized frame must be split into 2+ raw frames');
+  const reassembled = new Uint8Array(whole.length);
+  let off = 0;
+  for (const s of conn.sent) {
+    assert.equal(s.ch, 9, 'every piece on the relay channel');
+    assert.ok(s.bytes.length <= MAX_PAYLOAD, 'no piece exceeds the payload cap');
+    reassembled.set(s.bytes, off);
+    off += s.bytes.length;
+  }
+  assert.equal(off, whole.length, 'pieces reassemble to the whole frame length');
+  assert.deepEqual(reassembled, whole, 'pieces reassemble to the original bytes in order');
+});
+
 test('frames fed before onmessage attaches are held, then flushed on attach', () => {
   const conn = fakeConn();
   const sock = new RelayChannelSocket(conn as never, 1);

@@ -57,9 +57,17 @@ export class RelayChannelSocket implements SocketLike {
   send(data: ArrayBuffer | Uint8Array): void {
     if (this.closed) return;
     const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
-    // One B frame → one raw frame on A's relay channel. A writes its bytes
-    // to the ssh socket; B reassembles its own wire there.
-    this.local.sendRaw(this.channelID, bytes);
+    // One B frame → raw frame(s) on A's relay channel. A writes their bytes
+    // to the ssh socket; B reassembles its own wire there. A legal B frame
+    // can be up to MAX_PAYLOAD + 8 bytes (16 MiB payload + header), which
+    // won't fit in one raw frame (encodeFrame rejects >MAX_PAYLOAD) — so an
+    // oversized frame is split across successive raw frames on the same
+    // channel; A splices bytes verbatim, so B's deframer reassembles it
+    // (mirrors the A-side split in router/peer.go, REVIEW-DATAPATH F10).
+    for (let off = 0; off < bytes.length; off += MAX_PAYLOAD) {
+      this.local.sendRaw(this.channelID, bytes.subarray(off, off + MAX_PAYLOAD));
+    }
+    if (bytes.length === 0) this.local.sendRaw(this.channelID, bytes);
   }
 
   close(): void {
