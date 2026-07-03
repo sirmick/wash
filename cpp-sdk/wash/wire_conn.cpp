@@ -247,6 +247,15 @@ void WireConn::reader_loop() {
                 uint32_t win = m.value("win", 0U);
                 window_cmd_handler_(t, win, 0, 0);
             }
+        } else if (t == "window.force_frame") {
+            // Router → app: a video channel that went "behind" resynced; the FE
+            // cleared its canvas, so the compositor must clear its per-surface
+            // delta state and re-emit a whole frame (REVIEW-X11-WAYLAND #6).
+            // Marshalled onto the wlroots thread like the other window commands.
+            if (window_cmd_handler_) {
+                uint32_t win = m.value("win", 0U);
+                window_cmd_handler_(t, win, 0, 0);
+            }
         } else if (t == "shutdown") {
             break;
         }

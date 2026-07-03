@@ -1541,6 +1541,22 @@ func (r *Router) resyncChannel(b *channelBinding) {
 	}
 	r.log("channel %d: resync complete (%d bytes replayed) conn=%d", b.channelID, len(replay), sh.connID)
 	b.behind = false
+
+	// Video kinds carry a DELTA stream that assumes lossless delivery, and the
+	// resync above sent NO ring replay for them (isVideoKind) — the FE just
+	// cleared its canvas on channel.resync. Nudge the owning app (wash-display)
+	// to clear its per-surface delta state and re-emit a whole frame, or the
+	// canvas stays blank until natural damage (REVIEW-X11-WAYLAND #6). On its
+	// own goroutine so the app write — bounded by appWriteTimeout but still a
+	// network write — never blocks the forward path holding shellMu here.
+	if isVideoKind(b.kind) && b.app != nil {
+		app, win, ch := b.app, b.windowID, b.channelID
+		go func() {
+			if err := app.WriteEvt(wire.NewEvtWindowForceFrame(win)); err != nil {
+				r.log("channel %d: force-frame nudge failed: %v", ch, err)
+			}
+		}()
+	}
 }
 
 // resyncBehindChannels re-runs resyncChannel for every channel currently

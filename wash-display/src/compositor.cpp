@@ -1530,6 +1530,17 @@ static Server* winref_server(const WinRef& ref) {
 #endif
 }
 
+// winref_sink pulls the per-window capture/encode sink from a WinRef, shared
+// by both surface kinds (both embed a WindowSink).
+static WindowSink* winref_sink(const WinRef& ref) {
+    if (ref.kind == WinRef::XDG) return &static_cast<Toplevel*>(ref.ptr)->sink;
+#ifdef WASH_DISPLAY_XWAYLAND
+    return &static_cast<XSurface*>(ref.ptr)->sink;
+#else
+    return nullptr;
+#endif
+}
+
 // resolve_win looks up a wash window id and returns its surface + server.
 static bool resolve_win(uint32_t win, struct wlr_surface** surf, Server** srv) {
     WinRef ref;
@@ -2017,6 +2028,14 @@ static void apply_win_cmd(const WinCmd& c) {
                 g_ptr_surface = nullptr;
             }
         }
+        return;
+    }
+    if (c.t == "window.force_frame") {
+        // The router reports this window's video channel went behind and
+        // resynced; clear the per-surface delta state so the NEXT capture is a
+        // full frame, repainting the FE canvas it cleared on channel.resync
+        // (REVIEW-X11-WAYLAND #6). Works for both surface kinds.
+        if (WindowSink* s = winref_sink(ref)) s->reset_delta();
         return;
     }
     if (ref.kind == WinRef::XDG) {

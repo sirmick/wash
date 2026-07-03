@@ -13,6 +13,7 @@ const (
 	TEvtWindowMapped         = "window.mapped"
 	TEvtWindowFocus          = "window.focus"
 	TEvtWindowUnfocus        = "window.unfocus"
+	TEvtWindowForceFrame     = "window.force_frame"
 	TEvtWindowResize         = "window.resize"
 	TEvtWindowState          = "window.state"
 	TEvtWindowCloseRequested = "window.close_requested"
@@ -174,6 +175,21 @@ type EvtWindowUnfocus struct {
 
 func NewEvtWindowUnfocus(win uint32) EvtWindowUnfocus {
 	return EvtWindowUnfocus{T: TEvtWindowUnfocus, Win: win}
+}
+
+// EvtWindowForceFrame: router → app, "resend a full frame for this window".
+// The router sends it after a video channel that went "behind" resyncs: a
+// video stream is a delta protocol that assumes lossless delivery, so the
+// compositor must clear its per-surface delta state and re-emit a whole frame
+// or the FE canvas (which cleared itself on channel.resync) stays blank until
+// natural damage (REVIEW-X11-WAYLAND #6). Non-video apps can ignore it.
+type EvtWindowForceFrame struct {
+	T   string `json:"t"`
+	Win uint32 `json:"win"`
+}
+
+func NewEvtWindowForceFrame(win uint32) EvtWindowForceFrame {
+	return EvtWindowForceFrame{T: TEvtWindowForceFrame, Win: win}
 }
 
 // EvtWindowResize: router → app, the window's pixel size changed
@@ -813,6 +829,9 @@ func DecodeEvt(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TEvtWindowUnfocus:
 		var m EvtWindowUnfocus
+		return m, json.Unmarshal(data, &m)
+	case TEvtWindowForceFrame:
+		var m EvtWindowForceFrame
 		return m, json.Unmarshal(data, &m)
 	case TEvtWindowResize:
 		var m EvtWindowResize
