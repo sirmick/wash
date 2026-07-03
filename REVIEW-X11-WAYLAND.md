@@ -50,7 +50,9 @@ are the local-main merge commits.
 | **12** title changes after map | ✅ Fixed | `bacc312` (D8): `set_title` listeners (xdg + xwayland) → new `report_title`. |
 | **13** keycode gaps + keymap/selection notes | ✅ Fixed | `b97ec33` (D8): numpad, `IntlBackslash`, `ContextMenu`. Selection thread leak `261c147` (G3): poll()-bounded read. Keymap-layout hint `f2ad961` (G2): FE `getLayoutMap` → new `display.set_keymap` app_msg → compositor recompiles xkb keymap (conservative fr/de/us; full per-key remap a future note). |
 | **min/max size** | ✅ Fixed | `6e2c272` (G4): xdg toplevel min/max → `create_window` → `SessionWindow.{Min,Max}{W,H}` → FE clamps `applyResize` to [min,max]. |
-| Protocol-coverage gaps (DnD, primary selection, viewporter, presentation-time, xdg-activation, Xwayland `-auth`, minimize/icons, touch) | 🚧 In progress (Phase H) | Net-new protocol support, user-approved; H6 (Xwayland `-auth`, security) first. |
+| Protocol gaps — viewporter / primary selection / minimize | ✅ Fixed | Phase H (merge `f29323f`): H3 `wlr_viewporter_create`, H2 primary-selection manager + seat handler, H7 `request_minimize` → `window.state`. |
+| Protocol gaps — Xwayland `-auth` (H6) | ❌ Infeasible as described | Build links SYSTEM wlroots; its Xwayland argv has no `-auth` and binds an abstract (netns-global) socket, so a compositor flag can't gate access. Real fix = per-user network-namespace isolation at the privileged spawn layer (pairs with D4). Needs a product decision. |
+| Protocol gaps — DnD (H1) / xdg-activation (H5) / presentation-time (H4) / set_app_id+icons+parent (H7 rest) / touch | ⏸ Deferred | Net-new features needing FE work / new wire messages / manual verification — TODO.md. H1 is the highest-value remainder. |
 
 "What looks solid" below was verified and left unchanged.
 

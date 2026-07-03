@@ -152,11 +152,26 @@ Display / X11-Wayland (REVIEW-X11-WAYLAND.md). **G1/G3/G5 done — Phase G, merg
 - [x] **G4 / min-max size** — DONE `6e2c272`: xdg toplevel min/max → SessionWindow
   → FE clamps applyResize to [min,max]. Manual verification pending (Qt hard-min
   resize feel).
-- [ ] Remaining protocol-coverage gaps (Phase H, all net-new, per-item confirm):
-  wl_data_device **drag-and-drop**, **primary selection**, **wp_viewporter**,
-  **presentation-time**, **xdg-activation**, Xwayland **-auth** (SECURITY; do
-  first), **request_minimize/set_app_id/icons**; plus nested serial-less submenu
-  chaining (`TODO` in `toplevel_setup_popover`).
+- Protocol-coverage gaps (Phase H, net-new). Merge f29323f:
+  - [x] **H3 wp_viewporter** — `wlr_viewporter_create` `c694e1b`.
+  - [x] **H2 primary selection** — manager + seat `request_set_primary_selection`
+    (middle-click paste, X11 via xwm) `c694e1b`.
+  - [x] **H7 request_minimize** — guest CSD minimize → `window.state` → wash WM
+    `5ebf47d`. (set_app_id/icons + parent-stacking half still open.)
+  - [ ] **H6 Xwayland -auth** — INFEASIBLE as described: build links SYSTEM
+    wlroots (pkg-config), whose Xwayland argv has no `-auth` and binds an
+    abstract socket (netns-global). Real fix = network-namespace isolation at
+    the privileged spawn layer (D4-adjacent), NOT a compositor flag. Needs a
+    product decision before starting.
+  - [ ] **H1 wl_data_device drag-and-drop** — large (seat `request_start_drag`
+    + a new FE drag surface + wire); highest UX blast radius.
+  - [ ] **H5 xdg-activation** — `wlr_xdg_activation_v1_create` + a new
+    focus-request message (compositor→router→FE).
+  - [ ] **H4 presentation-time** — low value (wash captures surfaces, not the
+    scene; Chromium/Firefox already fall back fine); risky to half-advertise.
+  - [ ] **H7 set_app_id/icons + parent stacking** — cosmetic; new report
+    messages + FE icon/stacking work.
+  - [ ] Nested serial-less submenu chaining (`TODO` in `toplevel_setup_popover`).
 
 Out of scope entirely: VP9/WebRTC transport work.
 
