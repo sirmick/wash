@@ -366,6 +366,12 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 			return err
 		}
 		return inst.relayWindowGeometry(m)
+	case wire.TEvtWindowState:
+		var m wire.EvtWindowState
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.relayWindowState(m)
 	case wire.TEvtWindowConfirmClose:
 		var m wire.EvtWindowConfirmClose
 		if err := json.Unmarshal(payload, &m); err != nil {
@@ -642,6 +648,18 @@ func (inst *AppInstance) relayWindowGeometry(m wire.EvtWindowGeometry) error {
 		return nil
 	}
 	inst.router.broadcastPatches(inst.router.winSession.resize(m.Win, m.W, m.H))
+	return nil
+}
+
+// relayWindowState applies an app-requested window state change (e.g. a CSD
+// minimize button in a wash-display guest → "minimized"), gated to windows the
+// app owns. setState validates the target and no-ops an unknown one
+// (REVIEW-X11-WAYLAND H7).
+func (inst *AppInstance) relayWindowState(m wire.EvtWindowState) error {
+	if !inst.ownsWindow(m.Win) {
+		return nil
+	}
+	inst.router.broadcastPatches(inst.router.winSession.setState(m.Win, m.State))
 	return nil
 }
 
