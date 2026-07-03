@@ -24,10 +24,22 @@ func ReadLoop(ctx context.Context, t FrameTransport, handle func(Frame) error) e
 		err error
 	}
 	ch := make(chan rr, 1)
+	// done is closed when ReadLoop returns; the reader goroutine selects
+	// its send against it so a result buffered in ch (which ReadLoop will
+	// never drain after it returns) can't wedge the goroutine's next send
+	// forever. Without this, a handler error / ctx cancel while one result
+	// is already buffered leaks the goroutine and pins its frame — under
+	// every app and shell session teardown (REVIEW-DATAPATH F9).
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
 		for {
 			f, err := t.ReadFrame()
-			ch <- rr{f, err}
+			select {
+			case ch <- rr{f, err}:
+			case <-done:
+				return
+			}
 			if err != nil {
 				return
 			}
