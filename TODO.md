@@ -143,10 +143,6 @@ Display / X11-Wayland (REVIEW-X11-WAYLAND.md) — protocol-coverage gaps:
 - [ ] **#13** — keymap hard-coded to the server default (non-US host layouts
   type wrong chars; needs a layout hint from the FE); `handle_set_selection`
   reader thread can block forever if the selection owner exits without writing.
-- [ ] **#6 deferred half (D5 part 2)** — compositor "force full frame" nudge
-  when a video channel goes behind, so the FE canvas repaints promptly after
-  its resync-clear. Needs a NEW app-directed wire message (router → app
-  channel-behind notification) — a design decision, not yet built.
 - [ ] **#5 unresolved** — the popover classifier over-matches an UNTITLED GTK
   message dialog (renders it as a pointer-grabbing overlay, not a movable
   window). The review's proposed discriminators (no xdg-decoration / no min-max
