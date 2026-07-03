@@ -260,6 +260,40 @@ function fromSessionWindow(sw: SessionWindow, origin: Origin): Win {
   };
 }
 
+// A bundle-backed window's mount is deferred until its bundle arrives (up to
+// ~10s). Meanwhile a reconnect snapshot or a delete can supersede it — but
+// the deferred window isn't in the store yet, so applySessionSnapshot's
+// synchronous filter and window.delete's filter both miss it, and the late
+// upsert lands an unclosable ghost the router no longer knows about
+// (REVIEW-RECONNECT M5). We guard the deferred upsert two ways:
+//
+//   - snapshotEpoch: a per-origin counter bumped on every snapshot (an
+//     authoritative reset). A deferred mount captures the epoch it was
+//     scheduled under; if the live epoch has since advanced, a newer snapshot
+//     superseded it — and that snapshot re-scheduled the window if it still
+//     wanted it — so the stale mount is dropped.
+//   - pendingMounts + a per-record cancelled flag: a window.delete for a
+//     still-pending window flips its record's cancelled bit so the resolve
+//     drops the upsert. Keyed by (origin,windowID); the closure holds its own
+//     record so a re-schedule for the same key can't cross wires.
+const snapshotEpoch = new Map<Origin, number>();
+interface PendingMount {
+  epoch: number;
+  cancelled: boolean;
+}
+const pendingMounts = new Map<string, PendingMount>();
+
+function winKey(origin: Origin, windowID: number): string {
+  return `${origin}:${windowID}`;
+}
+
+// cancelPendingMount marks a still-deferred mount for (origin,windowID) so its
+// resolve won't land it. No-op if nothing is pending for that key.
+function cancelPendingMount(origin: Origin, windowID: number): void {
+  const rec = pendingMounts.get(winKey(origin, windowID));
+  if (rec) rec.cancelled = true;
+}
+
 // mountWhenReady upserts a window once its element is available. Built-in
 // elements — custom elements the shell registers itself at startup, e.g.
 // <wash-app-display> for wash-display's video surfaces — ship no app
@@ -280,11 +314,25 @@ function mountWhenReady(
   // Element isn't defined yet — its bundle is in flight. Show the busy
   // cursor (index.html `.wash-launching`) until the window mounts, so a
   // freshly-launched app gives immediate "starting…" feedback.
+  const key = winKey(w.origin, w.windowID);
+  const rec: PendingMount = { epoch: snapshotEpoch.get(w.origin) ?? 0, cancelled: false };
+  pendingMounts.set(key, rec); // overwrites any prior pending mount for this key
   beginWindowLoad();
   waitForBundle(w.instanceID)
-    .then(() => upsertWindow(w))
+    .then(() => {
+      // Only mount if THIS scheduling is still the current one for the key,
+      // wasn't cancelled by a delete, and its snapshot epoch is still live —
+      // otherwise it's a superseded ghost (REVIEW-RECONNECT M5).
+      if (pendingMounts.get(key) !== rec) return; // a newer schedule replaced us
+      if (rec.cancelled) return; // deleted while the bundle was in flight
+      if ((snapshotEpoch.get(w.origin) ?? 0) !== rec.epoch) return; // newer snapshot
+      upsertWindow(w);
+    })
     .catch((err) => console.error(`wash: ${where} window mount:`, err))
-    .finally(() => endWindowLoad());
+    .finally(() => {
+      if (pendingMounts.get(key) === rec) pendingMounts.delete(key);
+      endWindowLoad();
+    });
 }
 
 // applySessionSnapshot replaces the store with the router's full
@@ -298,6 +346,12 @@ export function applySessionSnapshot(
   sessionWins: SessionWindow[],
   waitForBundle: (instanceID: string) => Promise<void>,
 ): void {
+  // A snapshot is an authoritative reset for this origin: bump its epoch so
+  // any mount still deferred under the old epoch is treated as superseded
+  // when it resolves (REVIEW-RECONNECT M5). Windows the snapshot still wants
+  // are re-scheduled below under the new epoch.
+  snapshotEpoch.set(origin, (snapshotEpoch.get(origin) ?? 0) + 1);
+
   const keep = new Set<number>();
   for (const sw of sessionWins) {
     keep.add(sw.window_id);
@@ -372,6 +426,10 @@ export function applySessionPatch(
       // hold the geometry + crash info until the user is done.
       const w = windows.find((x) => x.origin === origin && x.windowID === id);
       if (w?.crashed) continue;
+      // A window whose bundle is still in flight isn't in the store yet, so
+      // the filter below misses it — cancel its pending mount so the late
+      // upsert can't resurrect it as a ghost (REVIEW-RECONNECT M5).
+      cancelPendingMount(origin, id);
       setWindows((prev) => prev.filter((x) => !(x.origin === origin && x.windowID === id)));
       if (isFocused({ origin, windowID: id })) setFocused(null);
     }
