@@ -764,6 +764,11 @@ function attachPeerChannel(channelID: number, origin: Origin): void {
   if (!origin || origin === LOCAL_ORIGIN) return;
   if (clientForOrigin(origin)) return; // already attached
   const sock = new RelayChannelSocket(local.conn, channelID);
+  // An unrecoverable relay desync must detach the origin, not let the
+  // RouterClient reconnect into this same dead socket forever (M6). Detaching
+  // scrubs B's frozen windows/catalog; the user re-opens via wash-connect
+  // (which re-sends peer.attach) rather than us auto-retrying a corrupt link.
+  sock.onFatalClose = () => detachClient(origin);
   peerSockets.set(channelID, { origin, sock });
   const client = new RouterClient(origin, () => sock, makeHandlers);
   registerClient(origin, client);

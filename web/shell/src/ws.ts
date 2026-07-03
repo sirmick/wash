@@ -374,7 +374,11 @@ export class Conn {
     this.tickInFlight = true;
     try {
       if (this.wantAuthProbe && (await this.authGone())) {
-        this.clearPending();
+        // The session is gone and won't reconnect: any input queued during
+        // the outage will never be sent. Surface it instead of dropping it
+        // silently (REVIEW-RECONNECT L2) — the overflow path already emits
+        // lost-input; auth loss must too.
+        this.dropPendingWithNotice('signed out');
         this.setState('unauthenticated');
         return;
       }
@@ -668,6 +672,19 @@ export class Conn {
   private clearPending(): void {
     this.pending = [];
     this.pendingBytes = 0;
+  }
+
+  // dropPendingWithNotice discards the outbound queue and, if it held
+  // anything, emits lost-input first so queued input isn't dropped silently
+  // (REVIEW-RECONNECT L2). Used on terminal auth loss, where the queue will
+  // never flush.
+  private dropPendingWithNotice(why: string): void {
+    const n = this.pending.length;
+    if (n > 0) {
+      const bytes = this.pendingBytes;
+      this.emit({ kind: 'lost-input', msg: `dropped ${n} unsent frame(s) (${bytes} bytes) — ${why}` });
+    }
+    this.clearPending();
   }
 
   /** Frames currently queued awaiting reconnect (tests/diagnostics). */

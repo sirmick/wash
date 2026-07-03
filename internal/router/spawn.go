@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // inheritedAppEnv returns the router's environment with host GUI display
@@ -73,11 +74,28 @@ func Spawn(binary, appID, display string, extraEnv, extraArgs []string) (*SpawnR
 	}
 	cmd.Stdout = io.MultiWriter(os.Stdout, res.logBuf)
 	cmd.Stderr = io.MultiWriter(os.Stderr, res.logBuf)
+	// Because Stdout/Stderr are io.Writers (not *os.File), exec routes them
+	// through an OS pipe with a copy goroutine, and cmd.Wait blocks until the
+	// pipe's write end is closed by EVERY inheritor — including a grandchild
+	// that outlives the app. Without a bound, such a grandchild pins Wait, and
+	// every tearDown gated on it, indefinitely: the window lingers and the
+	// singleton slot stays claimed (REVIEW-RECONNECT L3). WaitDelay caps the
+	// post-exit wait — once the process itself exits (its own output already
+	// flushed), Wait force-closes the pipes and returns after spawnWaitDelay.
+	cmd.WaitDelay = spawnWaitDelay
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start %s: %w", binary, err)
 	}
 	return res, nil
 }
+
+// spawnWaitDelay bounds how long Cmd.Wait blocks after a spawned app's
+// process has exited, waiting for the tee'd stdout/stderr pipes to close.
+// It caps the grandchild-holds-the-pipe teardown hang (REVIEW-RECONNECT L3).
+// A package var so tests can shorten it. Generous by default so a normal
+// app's final output isn't truncated — the wait only starts once the
+// process has already exited.
+var spawnWaitDelay = 10 * time.Second
 
 // crashLogCap is the per-spawn ring-buffer size. Big enough for a
 // Go panic with GOTRACEBACK=all on a normal app (~dozens of

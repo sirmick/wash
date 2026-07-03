@@ -5,8 +5,8 @@
 // origin, and focus is tracked per (origin,windowID).
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { applySessionSnapshot, raiseLocal, windows, focused } from './wm.ts';
-import type { SessionWindow } from './main.ts';
+import { applySessionSnapshot, applySessionPatch, raiseLocal, windows, focused } from './wm.ts';
+import type { SessionWindow, SessionPatch } from './main.ts';
 
 // Elements aren't registered in the test, so mountWhenReady takes the
 // waitForBundle path; an immediately-resolving stub lets the upsert run on
@@ -115,5 +115,81 @@ describe('wm origin-scoped merge', () => {
     const gzRemote = windows.find((w) => w.origin === 'hostB' && w.windowID === 5)!.gz;
     expect(gzRemote).toBeLessThan(gzLocalAfter);
     expect(gzLocalAfter).toBe(gzLocalBefore);
+  });
+});
+
+// REVIEW-RECONNECT M5: a window whose bundle is still in flight isn't in the
+// store yet, so a superseding snapshot or delete can't filter it — the late
+// upsert would land an unclosable ghost. A controllable waitForBundle lets us
+// hold the mount pending, supersede it, then resolve and assert no ghost.
+describe('wm deferred-mount ghost guard (M5)', () => {
+  function deferred(): { promise: Promise<void>; resolve: () => void } {
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => { resolve = r; });
+    return { promise, resolve };
+  }
+  // waitForBundle that blocks only the named instance; everything else is ready.
+  const gateFor = (instance: string, p: Promise<void>) =>
+    (id: string) => (id === instance ? p : Promise.resolve());
+
+  beforeEach(async () => {
+    // Clear BOTH origins — module state persists across describe blocks, so a
+    // lingering hostB window with a colliding id would confuse origin-agnostic
+    // checks.
+    applySessionSnapshot('local', [], immediate);
+    applySessionSnapshot('hostB', [], immediate);
+    await flush();
+  });
+
+  it('drops a deferred mount superseded by a reconnect snapshot that omits it', async () => {
+    const gate = deferred();
+    applySessionSnapshot('local', [sw(5, 'ghost')], gateFor('ghost', gate.promise));
+    await flush();
+    expect(windows.some((w) => w.origin === 'local' && w.windowID === 5)).toBe(false); // still pending
+
+    applySessionSnapshot('local', [], immediate); // reconnect omits window 5
+    await flush();
+    gate.resolve(); // bundle finally arrives
+    await flush();
+
+    expect(windows.some((w) => w.origin === 'local' && w.windowID === 5)).toBe(false);
+  });
+
+  it('drops a deferred mount cancelled by a window.delete', async () => {
+    const gate = deferred();
+    applySessionSnapshot('local', [sw(6, 'ghost')], gateFor('ghost', gate.promise));
+    await flush();
+
+    const del: SessionPatch = { op: 'window.delete', window_id: 6 };
+    applySessionPatch('local', [del], immediate);
+    await flush();
+    gate.resolve();
+    await flush();
+
+    expect(windows.some((w) => w.origin === 'local' && w.windowID === 6)).toBe(false);
+  });
+
+  it('still mounts a deferred window when nothing supersedes it', async () => {
+    const gate = deferred();
+    applySessionSnapshot('local', [sw(7, 'late')], gateFor('late', gate.promise));
+    await flush();
+    gate.resolve();
+    await flush();
+
+    expect(windows.some((w) => w.origin === 'local' && w.windowID === 7)).toBe(true);
+  });
+
+  it('re-mounts a window a reconnect snapshot still wants (new schedule wins)', async () => {
+    const gate1 = deferred();
+    applySessionSnapshot('local', [sw(8, 'keep')], gateFor('keep', gate1.promise));
+    await flush();
+    // Reconnect snapshot still includes window 8, with its bundle now ready.
+    applySessionSnapshot('local', [sw(8, 'keep')], immediate);
+    await flush();
+    // The stale first schedule resolves late — must not double-insert or drop.
+    gate1.resolve();
+    await flush();
+
+    expect(windows.filter((w) => w.origin === 'local' && w.windowID === 8).length).toBe(1);
   });
 });
