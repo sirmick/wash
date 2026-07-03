@@ -282,6 +282,15 @@ type SessionWindow struct {
 	RestoreY int32  `json:"restore_y,omitempty"`
 	RestoreW uint32 `json:"restore_w,omitempty"`
 	RestoreH uint32 `json:"restore_h,omitempty"`
+	// Client size hints (0 = unset). The shell's interactive resize clamps
+	// to these so a window can't be dragged below a toolkit's hard minimum
+	// or above its maximum (REVIEW-X11-WAYLAND min/max gap). Sourced from the
+	// app's WindowOpts (native apps) or the guest toplevel's xdg min/max
+	// (wash-display).
+	MinW uint32 `json:"min_w,omitempty"`
+	MinH uint32 `json:"min_h,omitempty"`
+	MaxW uint32 `json:"max_w,omitempty"`
+	MaxH uint32 `json:"max_h,omitempty"`
 }
 
 // ShellSessionSnapshot is the router's "here is everything you need

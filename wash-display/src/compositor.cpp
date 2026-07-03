@@ -337,13 +337,16 @@ static uint64_t now_ms() {
 // (browser); without one the router replies "no shell attached" and we
 // get 0 — capture still runs but frames drop until a shell binds.
 static void sink_open(WindowSink& s, WireConn* conn, const std::string& title,
-                      uint32_t w, uint32_t h, bool chromeless) {
+                      uint32_t w, uint32_t h, bool chromeless,
+                      uint32_t min_w = 0, uint32_t min_h = 0,
+                      uint32_t max_w = 0, uint32_t max_h = 0) {
     // Force a full first frame: on a REMAP the sink's delta state survived the
     // unmap and would otherwise send only what changed while hidden, leaving
     // the window mostly blank (REVIEW-X11-WAYLAND #8). Harmless on a fresh map
     // (state is already empty).
     s.reset_delta();
-    s.win = conn->create_window(title, w, h, "toplevel", 0, chromeless);
+    s.win = conn->create_window(title, w, h, "toplevel", 0, chromeless,
+                                min_w, min_h, max_w, max_h);
     wlr_log(WLR_INFO, "wash-display: mapped \"%s\" %ux%u -> win=%u chromeless=%d",
             title.c_str(), w, h, s.win, (int)chromeless);
     if (s.win) {
@@ -621,12 +624,22 @@ void toplevel_map(struct wl_listener* listener, void* /*data*/) {
     uint32_t w = geo.width > 0 ? (uint32_t)geo.width : (uint32_t)output_logical_w();
     uint32_t h = geo.height > 0 ? (uint32_t)geo.height : (uint32_t)output_logical_h();
 
+    // Client size hints from the xdg toplevel (0 = unset); the shell clamps
+    // interactive resize to them so a Qt/GTK app with a hard minimum doesn't
+    // rubber-band (REVIEW-X11-WAYLAND min/max gap).
+    const struct wlr_xdg_toplevel_state& st = t->xdg_toplevel->current;
+    uint32_t min_w = st.min_width > 0 ? (uint32_t)st.min_width : 0;
+    uint32_t min_h = st.min_height > 0 ? (uint32_t)st.min_height : 0;
+    uint32_t max_w = st.max_width > 0 ? (uint32_t)st.max_width : 0;
+    uint32_t max_h = st.max_height > 0 ? (uint32_t)st.max_height : 0;
+
     // Blocking wire round-trip; safe here (compositor thread, not the
     // WireConn reader thread). Wayland xdg toplevels are chromeless: every
     // modern toolkit (GTK/Qt/Chromium/Firefox) draws its own decorations
     // (CSD), so a wash frame on top would double the titlebar (M8). The
     // guest's own button closes it; Super+drag in the shell moves it.
-    sink_open(t->sink, t->server->conn, ttl, w, h, /*chromeless=*/true);
+    sink_open(t->sink, t->server->conn, ttl, w, h, /*chromeless=*/true,
+              min_w, min_h, max_w, max_h);
     register_win(t->sink.win, WinRef::XDG, t);
 }
 

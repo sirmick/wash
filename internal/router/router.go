@@ -754,14 +754,18 @@ func (r *Router) bringUp(ctx context.Context, inst *AppInstance) {
 	r.registerApp(inst)
 	var patches []wire.SessionPatch
 	if inst.WindowID != 0 {
-		var defW, defH uint32
+		var defW, defH, minW, minH uint32
 		var chromeless bool
 		if inst.Manifest.Window != nil {
 			defW = inst.Manifest.Window.DefaultWidth
 			defH = inst.Manifest.Window.DefaultHeight
+			minW = inst.Manifest.Window.MinWidth
+			minH = inst.Manifest.Window.MinHeight
 			chromeless = inst.Manifest.Window.Chromeless
 		}
-		patches = r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon, inst.Manifest.Accent, inst.Manifest.Name, defW, defH, inst.IsRoot(), chromeless)
+		// WindowHints carries a min but no max; leave max unset (0) for the
+		// primary window.
+		patches = r.winSession.createWindow(inst.WindowID, inst.InstanceID, inst.Manifest.Element, inst.Manifest.Icon, inst.Manifest.Accent, inst.Manifest.Name, defW, defH, minW, minH, 0, 0, inst.IsRoot(), chromeless)
 	}
 	// The one "this instance exists" line — without it the registered
 	// set can't be reconstructed from the log.

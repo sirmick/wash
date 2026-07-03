@@ -111,6 +111,13 @@ export interface SessionWindow {
   restore_y?: number;
   restore_w?: number;
   restore_h?: number;
+  // Client size hints (0/absent = unset). The interactive resize clamps to
+  // these so a window can't be dragged below a toolkit's hard minimum or
+  // above its maximum. Sourced from the app manifest / guest xdg toplevel.
+  min_w?: number;
+  min_h?: number;
+  max_w?: number;
+  max_h?: number;
   // is_root is router-attested (SO_PEERCRED uid==0, or app_id is in
   // the privilege-chain reserved set). When true the WM paints a red
   // stripe + ROOT label on the titlebar. Never set by the app itself.
