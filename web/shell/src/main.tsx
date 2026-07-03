@@ -111,6 +111,13 @@ export interface SessionWindow {
   restore_y?: number;
   restore_w?: number;
   restore_h?: number;
+  // Client size hints (0/absent = unset). The interactive resize clamps to
+  // these so a window can't be dragged below a toolkit's hard minimum or
+  // above its maximum. Sourced from the app manifest / guest xdg toplevel.
+  min_w?: number;
+  min_h?: number;
+  max_w?: number;
+  max_h?: number;
   // is_root is router-attested (SO_PEERCRED uid==0, or app_id is in
   // the privilege-chain reserved set). When true the WM paints a red
   // stripe + ROOT label on the titlebar. Never set by the app itself.
@@ -247,6 +254,11 @@ interface ShellPeerError {
   msg: string;
 }
 
+interface ShellSuperseded {
+  t: 'shell.superseded';
+  msg: string;
+}
+
 export interface ShellAppCrashed {
   t: 'app.crashed';
   instance_id: string;
@@ -282,6 +294,7 @@ type ShellCtrlMsg =
   | ShellClipboardData
   | ShellClipboardChanged
   | ShellPeerError
+  | ShellSuperseded
   | RawLinkStatsMsg;
 
 // Reactive subs the chrome (mounted via window.wash) listens to.
@@ -403,6 +416,9 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         break;
       case 'session.snapshot':
         handleSnapshot(client, msg);
+        // A fresh snapshot from the LOCAL router means this tab just (re)attached
+        // as the foreground head, so any prior "opened elsewhere" notice is stale.
+        if (isLocal) setSuperseded(null);
         break;
       case 'session.patch':
         handlePatch(client, msg);
@@ -565,6 +581,17 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         });
         break;
       }
+      case 'shell.superseded': {
+        // This tab lost the foreground head to a newer connection (another
+        // tab/window/device took over the session); its terminals go quiet as
+        // their channels migrate. Raise a persistent banner so the tab isn't
+        // silently dark (REVIEW-RECONNECT L2). LOCAL only — head is a
+        // local-router concept.
+        if (!isLocal) break;
+        shellLog('warn', 'conn', `superseded: ${msg.msg}`);
+        setSuperseded(msg.msg);
+        break;
+      }
       case 'clipboard.changed': {
         // Cross-host clipboard sync is M5; mirror only the local router's.
         if (!isLocal) break;
@@ -711,11 +738,56 @@ function publishDisplayMetricsToAll(): void {
   }
 }
 
+// Keyboard-layout hint (REVIEW-X11-WAYLAND #13). The FE forwards physical
+// KeyboardEvent.code to wash-display, whose keymap defaults to the server
+// layout — so a non-US host types wrong chars. Detect the host layout via the
+// Keyboard Map API (Chromium) and tell the compositor to match. Conservative:
+// only switch on a confident signature (a wrong guess would type wrong chars),
+// so unrecognised layouts stay on the server default (us-like).
+let detectedLayout: string | null = null; // null = detection not finished
+const layoutSentTo = new Set<Origin>();
+
+async function detectKeyboardLayout(): Promise<string> {
+  try {
+    const kb = (navigator as unknown as { keyboard?: { getLayoutMap?: () => Promise<Map<string, string>> } }).keyboard;
+    if (!kb?.getLayoutMap) return '';
+    const map = await kb.getLayoutMap();
+    const q = map.get('KeyQ'), a = map.get('KeyA'), y = map.get('KeyY');
+    if (q === 'a' && a === 'q') return 'fr'; // AZERTY
+    if (y === 'z') return 'de'; // QWERTZ (German/Swiss)
+    return ''; // unrecognised → keep the server default
+  } catch {
+    return '';
+  }
+}
+
+function publishKeymap(client: RouterClient): void {
+  if (!detectedLayout || layoutSentTo.has(client.origin)) return;
+  layoutSentTo.add(client.origin);
+  client.conn.sendCtrl({
+    t: 'app_msg.send',
+    to: { app_id: DISPLAY_APP_ID },
+    data: { kind: 'display.set_keymap', layout: detectedLayout },
+  });
+}
+
+void detectKeyboardLayout().then((l) => {
+  if (!l) return;
+  detectedLayout = l;
+  for (const origin of origins()) {
+    const client = clientForOrigin(origin);
+    if (client) publishKeymap(client);
+  }
+});
+
 function installDisplayMetricsPublisher(client: RouterClient): void {
   client.conn.onState((state) => {
     if (state === 'open') {
       sentDisplayMetrics.delete(client.origin);
       publishDisplayMetrics(client);
+      // Re-send the layout too: the compositor may have restarted.
+      layoutSentTo.delete(client.origin);
+      publishKeymap(client);
     }
   });
 }
@@ -996,6 +1068,13 @@ conn.onEvent((e) => {
   if (e.kind === 'open') setLostInput(null);
 });
 
+// superseded holds the "opened elsewhere" notice: the router tells a still-
+// live shell it lost the foreground head to a newer connection, so its
+// terminals go quiet (REVIEW-RECONNECT L2). Set by the shell.superseded ctrl
+// message; cleared when this tab (re)attaches as head (its own fresh
+// session.snapshot) or reconnects.
+const [superseded, setSuperseded] = createSignal<string | null>(null);
+
 // connTick drives the banner's live "no contact for Ns / next retry" readout
 // while the link is down. Only ticks when not open, so a healthy desktop
 // pays nothing.
@@ -1199,7 +1278,7 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
   // re-auth, and a clean connect is already in flight.
   const canRetry = () => props.state === 'reconnecting' || props.state === 'closed';
   return (
-    <Show when={props.state !== 'open' || lostInput()}>
+    <Show when={props.state !== 'open' || lostInput() || superseded()}>
       <div
         data-testid="wash-connection-banner"
         data-state={props.state}
@@ -1235,6 +1314,11 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
               ⚠ {lostInput()}
             </span>
           </Show>
+          <Show when={superseded()}>
+            <span data-testid="wash-connection-superseded" style={{ opacity: '0.9', font: tokens.type.textSm }}>
+              ⚠ {superseded()}
+            </span>
+          </Show>
         </span>
         <Show when={canRetry()}>
           <button
@@ -1251,6 +1335,23 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
             }}
           >
             Reconnect now
+          </button>
+        </Show>
+        <Show when={superseded() && props.state === 'open'}>
+          <button
+            data-testid="wash-connection-use-here"
+            onClick={() => location.reload()}
+            style={{
+              font: tokens.type.textSm,
+              color: tokens.fg,
+              background: 'rgba(255,255,255,0.12)',
+              border: `1px solid ${tokens.borderDenied}`,
+              'border-radius': '4px',
+              padding: '2px 8px',
+              cursor: 'pointer',
+            }}
+          >
+            Use here
           </button>
         </Show>
       </div>

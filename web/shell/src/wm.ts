@@ -63,6 +63,12 @@ export interface Win {
   restoreY?: number;
   restoreW?: number;
   restoreH?: number;
+  // Client size hints (0/absent = unset); the interactive resize clamps to
+  // them. Mirror of SessionWindow.min_w/… (router-owned).
+  minW?: number;
+  minH?: number;
+  maxW?: number;
+  maxH?: number;
   // isRoot is router-attested; renders the red ROOT stripe in the
   // titlebar. See SessionWindow.is_root in main.tsx.
   isRoot?: boolean;
@@ -255,6 +261,10 @@ function fromSessionWindow(sw: SessionWindow, origin: Origin): Win {
     restoreY: sw.restore_y,
     restoreW: sw.restore_w,
     restoreH: sw.restore_h,
+    minW: sw.min_w,
+    minH: sw.min_h,
+    maxW: sw.max_w,
+    maxH: sw.max_h,
     isRoot: sw.is_root,
     chromeless: sw.chromeless,
   };

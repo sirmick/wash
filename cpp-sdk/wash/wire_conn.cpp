@@ -273,7 +273,8 @@ void WireConn::reader_loop() {
 }
 
 uint32_t WireConn::create_window(const std::string& title, uint32_t w, uint32_t h,
-                                 const std::string& role, uint32_t parent, bool chromeless) {
+                                 const std::string& role, uint32_t parent, bool chromeless,
+                                 uint32_t min_w, uint32_t min_h, uint32_t max_w, uint32_t max_h) {
     if (!alive_.load()) return 0;
     uint64_t req = next_req();
     { std::lock_guard<std::mutex> lk(win_mu_); win_pending_[req] = Reply{}; }
@@ -284,6 +285,12 @@ uint32_t WireConn::create_window(const std::string& title, uint32_t w, uint32_t 
     };
     if (parent) m["parent_win"] = parent;
     if (chromeless) m["chromeless"] = true;
+    // Client size hints (0 = unset); the shell clamps interactive resize to
+    // them so a toolkit's hard min/max is honoured (REVIEW-X11-WAYLAND).
+    if (min_w) m["min_w"] = min_w;
+    if (min_h) m["min_h"] = min_h;
+    if (max_w) m["max_w"] = max_w;
+    if (max_h) m["max_h"] = max_h;
     if (!write_json(CH_EVENT, m)) {
         std::lock_guard<std::mutex> lk(win_mu_);
         win_pending_.erase(req);

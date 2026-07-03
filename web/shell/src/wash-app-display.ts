@@ -437,17 +437,28 @@ export class WashAppDisplay extends HTMLElement {
   private applyResize(ev: PointerEvent): void {
     const a = this.resizeAnchor;
     if (!a || this.windowID < 0) return;
+    // Clamp to the window's client size hints (min_w/…): never below the
+    // WM floor, and never past a declared maximum — so a Qt/GTK app with a
+    // hard minimum doesn't rubber-band and a fixed-size window can't be
+    // stretched (REVIEW-X11-WAYLAND min/max gap).
+    const win = windowById(this.origin, this.windowID);
+    const minW = Math.max(MIN_W, win?.minW ?? 0);
+    const minH = Math.max(MIN_H, win?.minH ?? 0);
+    const maxW = win?.maxW && win.maxW > 0 ? win.maxW : Infinity;
+    const maxH = win?.maxH && win.maxH > 0 ? win.maxH : Infinity;
+    const clampW = (v: number) => Math.min(maxW, Math.max(minW, v));
+    const clampH = (v: number) => Math.min(maxH, Math.max(minH, v));
     const dx = ev.clientX - a.px;
     const dy = ev.clientY - a.py;
     let x = a.ox, y = a.oy, w = a.ow, h = a.oh;
-    if (a.edges & EDGE_RIGHT) w = Math.max(MIN_W, a.ow + dx);
+    if (a.edges & EDGE_RIGHT) w = clampW(a.ow + dx);
     if (a.edges & EDGE_LEFT) {
-      w = Math.max(MIN_W, a.ow - dx);
+      w = clampW(a.ow - dx);
       x = a.ox + (a.ow - w); // keep the right edge fixed
     }
-    if (a.edges & EDGE_BOTTOM) h = Math.max(MIN_H, a.oh + dy);
+    if (a.edges & EDGE_BOTTOM) h = clampH(a.oh + dy);
     if (a.edges & EDGE_TOP) {
-      h = Math.max(MIN_H, a.oh - dy);
+      h = clampH(a.oh - dy);
       y = a.oy + (a.oh - h); // keep the bottom edge fixed
     }
     w = Math.round(w);

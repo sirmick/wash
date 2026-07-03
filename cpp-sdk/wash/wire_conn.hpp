@@ -79,7 +79,9 @@ public:
     // their own). Blocking: never call from the AppMsgHandler.
     uint32_t create_window(const std::string& title, uint32_t w, uint32_t h,
                            const std::string& role = "toplevel", uint32_t parent = 0,
-                           bool chromeless = false);
+                           bool chromeless = false,
+                           uint32_t min_w = 0, uint32_t min_h = 0,
+                           uint32_t max_w = 0, uint32_t max_h = 0);
 
     // destroy_window is fire-and-forget (window.destroy on CH_EVENT).
     void destroy_window(uint32_t win);

@@ -127,6 +127,13 @@ const (
 	// so consumers (sidebar widget) don't need a follow-up get.
 	TShellClipboardChanged = "clipboard.changed"
 
+	// Router → shell, sent to a still-live shell that just lost the
+	// foreground "head" to a newer connection (another tab/window/device
+	// took over the session). Terminal channels migrate to the new head, so
+	// this shell's terminals go quiet; the FE raises an "opened elsewhere"
+	// banner instead of leaving the tab silently dark (REVIEW-RECONNECT L2).
+	TShellSuperseded = "shell.superseded"
+
 	// Shell → router, settings-panel bundle pull. Read the cached
 	// panel.js bytes (Entry.PanelBundle) for an app that declared a
 	// SettingsPanel. Mirrors asset.read but keyed by app id and served
@@ -275,6 +282,15 @@ type SessionWindow struct {
 	RestoreY int32  `json:"restore_y,omitempty"`
 	RestoreW uint32 `json:"restore_w,omitempty"`
 	RestoreH uint32 `json:"restore_h,omitempty"`
+	// Client size hints (0 = unset). The shell's interactive resize clamps
+	// to these so a window can't be dragged below a toolkit's hard minimum
+	// or above its maximum (REVIEW-X11-WAYLAND min/max gap). Sourced from the
+	// app's WindowOpts (native apps) or the guest toplevel's xdg min/max
+	// (wash-display).
+	MinW uint32 `json:"min_w,omitempty"`
+	MinH uint32 `json:"min_h,omitempty"`
+	MaxW uint32 `json:"max_w,omitempty"`
+	MaxH uint32 `json:"max_h,omitempty"`
 }
 
 // ShellSessionSnapshot is the router's "here is everything you need
@@ -475,6 +491,17 @@ type ShellPeerError struct {
 
 func NewShellPeerError(origin, msg string) ShellPeerError {
 	return ShellPeerError{T: TShellPeerError, Origin: origin, Msg: msg}
+}
+
+// ShellSuperseded tells a still-live shell it lost the foreground head to a
+// newer connection. BE→FE only (no DecodeCtrl case): the FE JSON-parses it.
+type ShellSuperseded struct {
+	T   string `json:"t"`
+	Msg string `json:"msg"`
+}
+
+func NewShellSuperseded(msg string) ShellSuperseded {
+	return ShellSuperseded{T: TShellSuperseded, Msg: msg}
 }
 
 // ShellPing (shell → router) and ShellPong (router → shell) are the
