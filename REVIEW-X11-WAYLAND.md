@@ -40,7 +40,7 @@ are the local-main merge commits.
 | **2** X11 `request_configure` unhandled | ✅ Fixed | `014f460` (D2): listener → `wlr_xwayland_surface_configure`; size propagates via `sink_frame`. |
 | **3** compositor never exits when the wire dies | ✅ Fixed | `3d5caa5` (D3): `WireConn::on_disconnect` → self-pipe → `wl_display_terminate`. Also fixes the orphan-compositor leak. |
 | **4** no per-user XDG_RUNTIME_DIR behind login | ✅ Fixed | `dd0b1af` (D4): `childEnv` sets `<runRoot>/<uid>/xdg`; router creates it 0700 in the setuid context. |
-| **5** popover classifier over-matches untitled dialogs | ❌ Reverted / unresolved | `d06c51f` (D7) tightening REVERTED in `4f978bc` — every candidate signal (no-decoration / no-min-max / recent-pointer) misclassifies real Qt menus (Qt sets decoration+min/max, and serial-less programmatic menus have no pointer event). A **titled** dialog already stays a window. Known limitation — TODO.md. |
+| **5** popover classifier over-matches untitled dialogs | ❌ Unresolved (investigated ×2, no robust signal) | `d06c51f` (D7) tightening REVERTED in `4f978bc`; a second pass (`ec89a8d`, G5) also rejected GTK-app_id / decoration-mode / min-max / commit-timing / content-probing — the toolkits expose no menu-vs-dialog role on a Wayland xdg_toplevel. A **titled** dialog already stays a window. Known limitation — TODO.md. |
 | **6** video resync corruption | ✅ Fixed | `590434e` (D5 pt1): router skips the ring replay for video kinds + FE clears its canvas. `f4a372f` (D5 pt2): new `window.force_frame` router→app event → compositor `reset_delta()` re-emits a full frame. |
 | **7** popup positioning + no unconstrain | ✅ Fixed | `9931764` (D6): subtract the popup's geometry origin + `wlr_xdg_popup_unconstrain_from_box`. |
 | **8** unmap→remap staleness | ✅ Fixed | `f125c91` (D8): `sink_open` calls `WindowSink::reset_delta()` → full first frame. |
@@ -48,7 +48,7 @@ are the local-main merge commits.
 | **10** wheel deltaMode ignored | ✅ Fixed | `f1df0fe` (D8): FE normalizes deltaMode + sends notch count; BE emits clean value120. |
 | **11** browser autorepeat forwarded | ✅ Fixed | `aeb7c33` (D8): FE drops `ev.repeat`; the Wayland client is the single repeat authority. |
 | **12** title changes after map | ✅ Fixed | `bacc312` (D8): `set_title` listeners (xdg + xwayland) → new `report_title`. |
-| **13** keycode gaps + keymap/selection notes | ⚠️ Partial | `b97ec33` (D8): numpad, `IntlBackslash`, `ContextMenu` added. **Keymap-layout hint** (non-US host) and **`handle_set_selection` blocking-thread** still open — TODO.md. |
+| **13** keycode gaps + keymap/selection notes | ⚠️ Partial | `b97ec33` (D8): numpad, `IntlBackslash`, `ContextMenu`. Selection blocking-thread leak fixed `261c147` (G3): `handle_set_selection` read bounded by a poll() quiet-period timeout. **Keymap-layout hint** (non-US host) still open — needs a new wire message (stop-and-ask) — TODO.md. |
 | Protocol-coverage gaps (DnD, primary selection, viewporter, presentation-time, xdg-activation, min/max, Xwayland `-auth`, minimize/icons, touch) | ⏸ Deferred | Out of scope — TODO.md. |
 
 "What looks solid" below was verified and left unchanged.

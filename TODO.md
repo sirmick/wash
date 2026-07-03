@@ -137,20 +137,25 @@ Reconnect (REVIEW-RECONNECT.md): **M5–M7, L3 FIXED — Phase F, merge fd0a077.
 - [ ] Smaller notes list (5523ef3 residual focus gaps; login first-spawn flock
   doesn't re-`List`; bundles re-shipped every reconnect; …).
 
-Display / X11-Wayland (REVIEW-X11-WAYLAND.md) — protocol-coverage gaps:
-- [ ] wl_data_device **drag-and-drop** (in-app DnD dead), **primary selection**
-  (middle-click paste), **wp_viewporter**, **presentation-time**,
-  **xdg-activation**, **min/max size**, Xwayland **-auth** (cross-uid X access;
-  pair with the D4 runtime-dir work), **request_minimize/set_app_id/icons**.
-- [ ] **#13** — keymap hard-coded to the server default (non-US host layouts
-  type wrong chars; needs a layout hint from the FE); `handle_set_selection`
-  reader thread can block forever if the selection owner exits without writing.
-- [ ] **#5 unresolved** — the popover classifier over-matches an UNTITLED GTK
-  message dialog (renders it as a pointer-grabbing overlay, not a movable
-  window). The review's proposed discriminators (no xdg-decoration / no min-max
-  / recent-pointer) each break real Qt menus and were reverted; needs a signal
-  the toolkits don't expose here. A TITLED dialog already stays a window. Plus
-  nested serial-less submenu chaining (`TODO` in `toplevel_setup_popover`).
+Display / X11-Wayland (REVIEW-X11-WAYLAND.md). **G1/G3/G5 done — Phase G, merge 15414ef.**
+- [x] **G1** (== DATAPATH F5 input-stall half) — asset streaming moved off the
+  shell dispatch loop (`streamAssetChunks`) `8bb9635`.
+- [x] **G3 / #13 selection half** — `handle_set_selection` read now poll()-bounded
+  (quiet-period timeout), no more leaked reader thread/fd `261c147`.
+- [x] **G5 / #5** — re-investigated; no robust untitled-menu-vs-dialog signal
+  exists (GTK app_id / decoration mode / min-max / commit timing / content
+  probing all rejected). Left as a known limitation, recorded in-code `ec89a8d`.
+- [ ] **G2 / #13 keymap half** — keymap hard-coded to the server default (non-US
+  host layouts type wrong chars). STOP-AND-ASK: needs a new FE→BE layout-hint
+  wire message. Awaiting user go-ahead.
+- [ ] **G4 / min-max size** — interactive resize clamps only to 100×60; honour the
+  toplevel's min/max. STOP-AND-ASK: needs BE to report min/max to the FE (wire
+  addition) + FE clamp. Awaiting user go-ahead.
+- [ ] Remaining protocol-coverage gaps (Phase H, all net-new, per-item confirm):
+  wl_data_device **drag-and-drop**, **primary selection**, **wp_viewporter**,
+  **presentation-time**, **xdg-activation**, Xwayland **-auth** (SECURITY; do
+  first), **request_minimize/set_app_id/icons**; plus nested serial-less submenu
+  chaining (`TODO` in `toplevel_setup_popover`).
 
 Out of scope entirely: VP9/WebRTC transport work.
 

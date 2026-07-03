@@ -41,7 +41,7 @@ MEDIUM finding here. Commit hashes are the local-main merge commits.
 | **F2** behind channel can never resync | ✅ Fixed | `638df86` (A3): per-shell behind-watchdog (`behindWatchdogLoop`). Same as REVIEW-RECONNECT M1. |
 | **F3** reattach duplicates scrollback | ✅ Fixed | `b5cf1c1` (A1): `channel.resync` before replay. Same as RECONNECT H1. |
 | **F4** resync overtakes queued Bulk | ✅ Fixed | `024da1d` (A4): resync reset+snapshot ride ClassBulk (FIFO). |
-| **F5** read-loop head-of-line blocking | ⚠️ Partial | `36ef6c9`/`2810606`/`6ad3e7f` (B1): liveness stamp at the read + peer/app write deadlines. **Asset streaming still runs inline on dispatch** — deferred, `TODO(review F5)` in `shell_session.go` + TODO.md. |
+| **F5** read-loop head-of-line blocking | ✅ Fixed | `36ef6c9`/`2810606`/`6ad3e7f` (B1): liveness stamp + peer/app write deadlines. Input-stall half closed by `8bb9635` (G1): asset streaming moved off the dispatch loop onto its own goroutine (`streamAssetChunks`). |
 | **F6** SDK deliver blocks the app read loop | ✅ Mitigated | The whole-desktop freeze chain is broken by B1's app-write deadline (`6ad3e7f`): a wedged app is torn down instead of blocking dispatch. The suggested drop-oldest in `RawChannel.deliver` was not needed and not done. |
 | **F7** pendingRaw unbounded + credits unconsumed bytes | ✅ Fixed | `8ecbe0a` (C2): `pendingRaw` capped (drop-oldest); credit granted only on real consumption. |
 | **F8** credit-ledger drift | ✅ Fixed | `8ecbe0a` (C2): FE grants only for Bulk-class frames a subscriber consumed. |
