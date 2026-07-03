@@ -499,12 +499,15 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 // missing, traversal attempt, read failure) a ShellAssetReadErr is
 // sent back and no channel is opened.
 //
-// TODO(review F5): this streams the whole file through blocking Submit calls
-// inline on the shell dispatch loop, so a large asset over a slow link keeps
-// dispatch inside one call for seconds — no keystrokes read meanwhile. The
-// read-side liveness stamp (livenessTransport) keeps this from false-tripping
-// the idle reaper, but the desktop's input still stalls. Moving it to its own
-// goroutine (it's already transaction-framed) is deferred to a later pass.
+// The chunk stream runs on its own goroutine (streamAssetChunks): the whole
+// file would otherwise flow through blocking Submit calls inline on the shell
+// dispatch loop, freezing the desktop's input for seconds on a large asset
+// over a slow link (REVIEW-DATAPATH F5, input-stall half; the read-side
+// liveness stamp already prevents the false idle-reap). Safe to defer: the
+// stream is transaction-framed and size-completed — the FE finishes on the
+// announced byte count, so the higher-priority Unbind overtaking the
+// Background data frames can't truncate it — and each chunk slices the
+// immutable cached buffer, so there's no shared-state race with the caller.
 func (s *ShellSession) handleAssetRead(m wire.ShellAssetRead) error {
 	if s.router.assets == nil {
 		return s.WriteCtrl(wire.NewShellAssetReadErr(m.ReqID, wire.ErrCodeInternal, "no asset fs"))
@@ -548,12 +551,20 @@ func (s *ShellSession) handleAssetRead(m wire.ShellAssetRead) error {
 	}); err != nil {
 		return err
 	}
-	// Stream in chunks, slicing the cached (immutable) buffer. Background
-	// class: assets are behind the desktop's gradient fallback, so they
-	// yield to keystrokes, control, and the bundles that gate a launching
-	// window. The FE completes on byte-count (the Size above), so the
-	// higher-priority Unbind overtaking these frames is harmless
-	// (docs/QOS.md tc reclass).
+	// Stream the body off the dispatch loop so a multi-MB asset on a slow
+	// link doesn't freeze input (see the doc comment). The OK + Bind above
+	// were already enqueued, so the FE has the channel + size before the data.
+	go s.streamAssetChunks(id, payload, len(entry.raw))
+	return nil
+}
+
+// streamAssetChunks writes an asset body in chunks and unbinds the channel.
+// Runs on its own goroutine (see handleAssetRead). Slices the immutable
+// cached buffer; Background class so it yields to keystrokes, control, and
+// the bundles that gate a launching window. A Submit error (shell gone /
+// scheduler closed mid-stream) just ends the stream — the channel is
+// transient and unregistered, so there's nothing to clean up.
+func (s *ShellSession) streamAssetChunks(id uint32, payload []byte, rawLen int) {
 	const chunkSize = 64 * 1024
 	for off := 0; off < len(payload); off += chunkSize {
 		end := off + chunkSize
@@ -561,12 +572,14 @@ func (s *ShellSession) handleAssetRead(m wire.ShellAssetRead) error {
 			end = len(payload)
 		}
 		if werr := s.WriteRawFrameClass(id, payload[off:end], wire.ClassBackground); werr != nil {
-			return werr
+			return
 		}
 	}
 	// Account raw vs on-the-wire bytes for the compression-ratio readout.
-	s.statsLink().recordCompression(len(entry.raw), len(payload))
-	return s.WriteCtrl(wire.NewShellChannelUnbind(id, "asset complete"))
+	s.statsLink().recordCompression(rawLen, len(payload))
+	if err := s.WriteCtrl(wire.NewShellChannelUnbind(id, "asset complete")); err != nil {
+		s.router.log("asset stream %d: unbind: %v", id, err)
+	}
 }
 
 // handlePanelRead streams an app's cached settings-panel bundle
