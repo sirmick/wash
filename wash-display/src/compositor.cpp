@@ -880,11 +880,26 @@ static bool toplevel_is_popover(struct wlr_xdg_toplevel* tl) {
     //     menus (the exact case this fallback exists for) open with no fresh
     //     pointer event.
     // All three were implemented and each turned the tested Qt programmatic
-    // menu (display-qt-popover.spec.ts) into a window. Distinguishing an
-    // untitled menu from an untitled dialog needs a signal the toolkits don't
-    // expose here; left as a known limitation (TODO.md) rather than shipped
-    // with a regression. A TITLED dialog (the common case) already stays a
-    // window via the untitled check above.
+    // menu (display-qt-popover.spec.ts) into a window. A second investigation
+    // pass (REVIEW-FIX-PROMPT-2 G5) considered the remaining candidates and
+    // rejected each as non-robust:
+    //   - GTK app_id allowlist: GTK *menus* are real xdg_popups and never
+    //     reach this fallback, so the misclassified case is a GTK message
+    //     DIALOG — indistinguishable from a Qt menu by app_id; and any Qt-vs-
+    //     GTK keying breaks a Qt app that opens a real dialog.
+    //   - decoration mode (SSD vs CSD): Qt uses SSD for BOTH its menus and its
+    //     dialogs, so it can't separate a Qt untitled menu from a Qt untitled
+    //     dialog; keying on SSD-presence still misclassifies Qt untitled
+    //     dialogs.
+    //   - min/max size: both an auto-sized menu and a fixed message dialog are
+    //     non-resizable, so size flags don't separate them.
+    //   - surface-commit timing / content probing: xdg-shell exposes no menu-
+    //     vs-dialog role, and pixel probing isn't robust (and the serial-less
+    //     programmatic-menu case has no distinguishing commit pattern).
+    // Distinguishing an untitled menu from an untitled dialog needs a signal
+    // the toolkits don't expose here; left as a known limitation (TODO.md)
+    // rather than shipped with a regression. A TITLED dialog (the common case)
+    // already stays a window via the untitled check above.
     return true;
 }
 
