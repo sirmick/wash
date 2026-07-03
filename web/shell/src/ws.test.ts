@@ -192,6 +192,36 @@ test('queue overflow emits a lost-input event', () => {
   assert.match(lost[0].msg, /dropped 4 unsent frame/);
 });
 
+test('going unauthenticated with queued frames emits lost-input', async () => {
+  const events: ConnEvent[] = [];
+  // 401 preflight → authGone true → the reconnect tick declares the session
+  // dead and clears the queue. Queued input must surface, not vanish (L2).
+  const conn = new Conn(
+    () => stubSocket(),
+    () => {},
+    () => {},
+    { fetchImpl: async () => fakeResp({ status: 401, body: { authenticated: false, login_url: '/login' } }) },
+  );
+  conn.onEvent((e) => events.push(e));
+
+  // State is 'connecting' (stub never opens), so sends queue.
+  conn.sendRaw(1, new Uint8Array([1, 2, 3]));
+  conn.sendRaw(1, new Uint8Array([4, 5, 6]));
+  assert.equal(conn.pendingCount(), 2);
+
+  // The stub never opens, so the constructor's connect() left dialing set;
+  // clear it (as a real socket close would) so the reconnect tick runs.
+  (conn as any).dialing = false;
+  (conn as any).wantAuthProbe = true;
+  await (conn as any).reconnectTick();
+
+  assert.equal((conn as any).state, 'unauthenticated');
+  assert.equal(conn.pendingCount(), 0, 'queue cleared on auth loss');
+  const lost = events.filter((e) => e.kind === 'lost-input');
+  assert.equal(lost.length, 1, 'lost-input emitted on auth loss');
+  assert.match(lost[0].msg, /dropped 2 unsent frame/);
+});
+
 // ---- heartbeat + wake + diagnostics ----
 //
 // These drive the heartbeat with tiny timing so a unit test runs in
