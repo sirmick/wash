@@ -29,6 +29,13 @@ func TestAssetReadDoesNotBlockDispatch(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
 	rng.Read(body)
 	r.SetAssets(http.FS(fstest.MapFS{"big.bin": &fstest.MapFile{Data: body}}))
+	// Pre-warm the asset cache: the first loadAsset gzips the whole 10 MiB at
+	// BestCompression, which under -race on a slow runner can eat most of the
+	// 3 s deadline below. That one-time cache fill isn't what this test guards
+	// (an inline stream never returns at all), so pay it before the timer.
+	if _, err := r.loadAsset("/big.bin"); err != nil {
+		t.Fatalf("warm asset cache: %v", err)
+	}
 
 	// Warm the asset cache OUTSIDE the timed section. loadAsset gzips the file
 	// on first read; a 10 MiB incompressible payload gzips slowly under -race
