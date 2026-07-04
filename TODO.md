@@ -158,11 +158,11 @@ Display / X11-Wayland (REVIEW-X11-WAYLAND.md). **G1/G3/G5 done — Phase G, merg
     (middle-click paste, X11 via xwm) `c694e1b`.
   - [x] **H7 request_minimize** — guest CSD minimize → `window.state` → wash WM
     `5ebf47d`. (set_app_id/icons + parent-stacking half still open.)
-  - [ ] **H6 Xwayland -auth** — INFEASIBLE as described: build links SYSTEM
-    wlroots (pkg-config), whose Xwayland argv has no `-auth` and binds an
-    abstract socket (netns-global). Real fix = network-namespace isolation at
-    the privileged spawn layer (D4-adjacent), NOT a compositor flag. Needs a
-    product decision before starting.
+  - 🚫 **H6 Xwayland -auth — WON'T FIX (decided 2026-07-03).** Inherited wlroots
+    limitation (shared with sway); not an Xwayland bug. Only bites shared-host-
+    shared-netns multi-user; a compositor patch can't close it (abstract socket).
+    Mitigable wash-side via per-user netns isolation IF that deployment is ever
+    real — deliberately not built.
   - [ ] **H1 wl_data_device drag-and-drop** — large (seat `request_start_drag`
     + a new FE drag surface + wire); highest UX blast radius.
   - [ ] **H5 xdg-activation** — `wlr_xdg_activation_v1_create` + a new
