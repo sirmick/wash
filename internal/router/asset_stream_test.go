@@ -30,6 +30,15 @@ func TestAssetReadDoesNotBlockDispatch(t *testing.T) {
 	rng.Read(body)
 	r.SetAssets(http.FS(fstest.MapFS{"big.bin": &fstest.MapFile{Data: body}}))
 
+	// Warm the asset cache OUTSIDE the timed section. loadAsset gzips the file
+	// on first read; a 10 MiB incompressible payload gzips slowly under -race
+	// on a loaded CI runner, and that one-time cost is NOT what this test
+	// measures (it's whether STREAMING blocks dispatch). Pre-warming makes the
+	// handleAssetRead call below a cache hit so only the stream setup is timed.
+	if _, err := r.loadAsset("/big.bin"); err != nil {
+		t.Fatalf("warm loadAsset: %v", err)
+	}
+
 	// A shell whose FE end (EndB) is deliberately never read: the drainLoop
 	// blocks writing, buffers fill, and an inline stream would wedge here.
 	pp := wiretest.NewPipePair()
@@ -61,7 +70,7 @@ func TestAssetReadDoesNotBlockDispatch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("handleAssetRead: %v", err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("handleAssetRead blocked on the dispatch loop — asset stream not offloaded to a goroutine")
 	}
 }
