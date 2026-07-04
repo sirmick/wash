@@ -36,7 +36,7 @@ These invariants are non-negotiable. The design works around them.
 ## Topology
 
 ```
-browser ──HTTPS/WSS──▶ nginx :443 ──HTTP/WS──▶ wash-login :11000
+browser ──HTTPS/WSS──▶ nginx :443 ──HTTP/WS──▶ wash-login :10000
                        (TLS terminator,                │
                         rate limit, ACL)               │  HTTP: serves shell, lib, login page,
                                                        │        validates cookie, picks sessid
@@ -375,7 +375,7 @@ in attack surface, not a magic sandbox.
 2. **seccomp-bpf** (TODO, DEPLOY.md) denies syscalls beyond what
    wash-login actually uses: fork, execve, sendmsg, kill, socket,
    accept, read, write — nothing exotic.
-3. **No outbound network.** wash-login listens on :11000 only;
+3. **No outbound network.** wash-login listens on :10000 only;
    never opens outbound sockets.
 
 ### Privilege separation (v2)
@@ -496,7 +496,7 @@ app-declared event, sending close, observing graceful shutdown.
 
 ### M2 — wash-login skeleton + login
 
-- New `cmd/wash-login/` binary running on TCP :11000.
+- New `cmd/wash-login/` binary running on TCP :10000.
 - HTTP server with login page, embedded shell + login assets,
   `/etc/shadow` auth.
 - HMAC cookie at `/etc/wash/secret.key`.
@@ -507,7 +507,7 @@ app-declared event, sending close, observing graceful shutdown.
 - WS upgrade at `/ws` serves greeter locally (a hard-coded
   one-app wash session).
 
-**Exit criterion:** browser hits `http://localhost:11000/`, sees
+**Exit criterion:** browser hits `http://localhost:10000/`, sees
 login form, posts credentials, gets cookie, sees a "you are authed"
 greeter window.
 

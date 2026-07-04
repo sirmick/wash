@@ -1,18 +1,18 @@
-# Implementation prompt: the 2026-07-01 review LEFTOVERS, pass 3 (Phase H features)
+# wash-display Phase-H features — implementation guide
 
-Passes 1 (`REVIEW-FIX-PROMPT.md`) and 2 (`REVIEW-FIX-PROMPT-2.md`) are COMPLETE.
-Between them, every confirmed correctness bug in `REVIEW-DATAPATH.md`,
-`REVIEW-RECONNECT.md`, and `REVIEW-X11-WAYLAND.md` is fixed and merged to local
-`main`, plus the tractable Phase-H protocol gaps (H2 primary selection, H3
-viewporter, H7 request_minimize) and the three wire-additions (F5 head-steal
-banner, G4 min/max clamp, G2 keymap hint). The resolution-status tables in each
-review doc and `TODO.md` are authoritative for what's done.
+Passes 1–2 of the 2026-07-01 correctness reviews are COMPLETE: every confirmed
+correctness bug is fixed and merged to local `main`, plus the tractable Phase-H
+protocol gaps (H2 primary selection, H3 viewporter, H7 request_minimize) and
+the three wire-additions (F5 head-steal banner, G4 min/max clamp, G2 keymap
+hint). The retired review docs and their resolution tables live in git history
+(deleted 2026-07-03 in the docs consolidation); `TODO.md` §Display tracks what
+remains — this file is the implementation guide for those items.
 
-**This pass is NET-NEW FEATURES, not bug fixes** — the remaining
-`REVIEW-X11-WAYLAND.md` "Protocol-coverage gaps". Each is additive and
-independently shippable; **confirm scope/priority with the user before starting
-each** (this is the phase most likely to be trimmed). Do the items in the order
-below (value-ranked); do NOT start one not listed here without asking.
+**This pass is NET-NEW FEATURES, not bug fixes** — the remaining X11/Wayland
+protocol-coverage gaps. Each is additive and independently shippable;
+**confirm scope/priority with the user before starting each** (this is the
+phase most likely to be trimmed). Do the items in the order below
+(value-ranked); do NOT start one not listed here without asking.
 
 ## Ground rules (unchanged from pass 2 — do not skip)
 
@@ -125,8 +125,7 @@ it.
   shared-host-shared-netns multi-user and NOT closeable by a compositor patch
   (one X socket is abstract/netns-global). Mitigable wash-side via per-user
   network-namespace isolation at the privileged spawn layer IF that deployment
-  ever materializes — that's a login/spawn feature, not a display fix. See the
-  `REVIEW-X11-WAYLAND.md` row.
+  ever materializes — that's a login/spawn feature, not a display fix.
 - Nested serial-less Qt submenu chaining (`TODO` in `toplevel_setup_popover`) —
   low value; the primary popover classifier already works for the common case.
 - Popover classifier over-match (#5) — investigated twice, no robust menu-vs-
@@ -150,8 +149,8 @@ Automated gates can't cover these — run each once and report:
 - **H7 minimize**: a guest's CSD minimize button hides the wash window.
 - **H1/H5/H7-rest**: the drag/activate/icon/stacking behaviors added here.
 
-When an item merges green, flip its `TODO.md` line and the matching
-`REVIEW-X11-WAYLAND.md` row (with the commit), as passes 1–2 did.
+When an item merges green, delete its `TODO.md` line (the merge commit is the
+record; resolved items are not kept as history).
 
 ## Reference: code landmarks (mapped in pass 3 — start here, don't re-discover)
 
