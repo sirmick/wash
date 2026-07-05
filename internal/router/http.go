@@ -291,7 +291,9 @@ func (s *HTTPServer) Run(ctx context.Context) error {
 		// The cert lives in srv.TLSConfig; ServeTLS with empty paths uses
 		// it directly. This is the zero-config self-signed default.
 		srv.TLSConfig = s.TLS
-		go func() { errs <- srv.ServeTLS(listener, "", "") }()
+		// Wrap the listener so a plain-HTTP hit on the HTTPS port gets a
+		// redirect to https:// instead of Go's opaque 400 (issue #18).
+		go func() { errs <- srv.ServeTLS(newTLSRedirectListener(listener, s.router.log), "", "") }()
 	} else {
 		go func() { errs <- srv.Serve(listener) }()
 	}
