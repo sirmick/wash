@@ -257,7 +257,12 @@ handle_issues() {
   local num who body prompt out analysis br landed
   while IFS=$'\t' read -r num who; do
     [ -n "$num" ] || continue
-    seen "issue:$num" issues_done && continue
+    if seen "issue:$num" issues_done; then
+      # Labelled but already worked once. Silent skipping here cost a
+      # confused afternoon — say what would re-queue it.
+      log "issue #$num: labelled '$ISSUE_LABEL' but already worked — to re-queue, remove 'issue:$num' from $STATE/issues_done"
+      continue
+    fi
     # Same trust boundary as PRs: the issue text becomes the agent's prompt, so a
     # non-owner author is a direct prompt-injection vector even before any code runs.
     if ! is_owner "$who"; then
