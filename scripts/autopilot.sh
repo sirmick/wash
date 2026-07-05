@@ -5,10 +5,20 @@
 #       (`make push`) so a green PR lands on remote main automatically;
 #   (b) for each new labelled GH issue: branches, hands it to a headless
 #       Claude agent to reproduce + fix, and if the fix is genuinely green
-#       lands it on main through the same gate.
+#       lands it on main through the same gate. The agent is TENACIOUS:
+#       one issue = one agent session worked in bounded wall-clock slices
+#       (ISSUE_ROUNDS × CLAUDE_TIMEOUT, capped by ISSUE_BUDGET). A slice
+#       that dies without a verdict is resumed (--continue), a FIXED claim
+#       is audited against actual commits, and a landing-gate failure is
+#       fed back into the same session as evidence for another round. Only
+#       an explicit reasoned GAVEUP — or budget exhaustion — parks an
+#       issue for a human.
 #
 # The agent's self-report is advisory — the TESTS are the fitness function.
 # Nothing lands unless the real gate passes; failures roll main back.
+#
+# To RE-QUEUE a parked issue for another autopilot run: re-add the pickup
+# label AND delete its "issue:<num>" line from $STATE/issues_done.
 #
 # RUN THIS AGAINST A DEDICATED CLONE, NOT YOUR WORKING TREE.
 #   gh auth status               # must be logged in (issues/PRs + git push creds)
@@ -35,7 +45,10 @@ OWNER_EMAIL_SUBSTR="${OWNER_EMAIL_SUBSTR:-mcloonan sirmick}"
 PUSH="${PUSH:-1}"                                   # 1 = push green landings to origin/main; 0 = local-only gate
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 CLAUDE_FLAGS="${CLAUDE_FLAGS:---dangerously-skip-permissions}"
-CLAUDE_TIMEOUT="${CLAUDE_TIMEOUT:-1800}"            # per-issue wall clock for the agent (seconds)
+CLAUDE_TIMEOUT="${CLAUDE_TIMEOUT:-1800}"            # per-SLICE wall clock for the agent (seconds); slices resume, so this is a checkpoint interval, not a deadline
+ISSUE_ROUNDS="${ISSUE_ROUNDS:-6}"                   # max agent slices per issue before parking it for a human
+ISSUE_BUDGET="${ISSUE_BUDGET:-14400}"               # total per-issue wall clock (seconds) across all slices
+CI_ROUNDS="${CI_ROUNDS:-3}"                         # max slices for a CI-fix attempt (resume-on-interrupt only)
 # Lean, deterministic landing gate — TESTS ONLY, no push (land_on_main does the
 # push itself when PUSH=1). Default is `make unit-test`: fast and green every run.
 # The full `make push` matrix (e2e + compositor + packaging) is too flaky under
@@ -76,7 +89,7 @@ done
 exec 9>"$STATE/.lock"
 flock -n 9 || { echo "another autopilot is already running on $REPO_DIR"; exit 1; }
 
-log "autopilot up | repo=$REPO_DIR push=$PUSH owner-logins='$OWNER_LOGINS' issue-label=$ISSUE_LABEL poll=${POLL_SECONDS}s"
+log "autopilot up | repo=$REPO_DIR push=$PUSH owner-logins='$OWNER_LOGINS' issue-label=$ISSUE_LABEL poll=${POLL_SECONDS}s rounds=$ISSUE_ROUNDS×${CLAUDE_TIMEOUT}s budget=${ISSUE_BUDGET}s"
 
 # is_owner <login> : true ONLY if login is in the hard OWNER_LOGINS allowlist.
 # This is the trust boundary — a PR/issue from anyone else is never built,
@@ -102,6 +115,21 @@ pr_commits_owned() {
   done
   log "  no commit author email contains any of: $OWNER_EMAIL_SUBSTR"
   return 1
+}
+
+# run_slice <new|continue> <text> : one bounded agent invocation. "new" starts a
+# fresh session with <text> as the task prompt; "continue" resumes the most
+# recent session in this checkout (the one "new" just made — we hold the
+# single-instance flock) with <text> as feedback. TERM first so the CLI can
+# flush a final message and its session file; KILL only 60s later. The session
+# surviving the timeout is what makes resume-instead-of-restart possible.
+run_slice() {
+  local mode="$1" text="$2"
+  if [ "$mode" = continue ]; then
+    timeout --signal=TERM --kill-after=60 "$CLAUDE_TIMEOUT" "$CLAUDE_BIN" $CLAUDE_FLAGS -p --continue "$text" 2>&1
+  else
+    timeout --signal=TERM --kill-after=60 "$CLAUDE_TIMEOUT" "$CLAUDE_BIN" $CLAUDE_FLAGS -p "$text" 2>&1
+  fi
 }
 
 # ---------------------- shared landing path --------------------------
@@ -164,6 +192,9 @@ land_on_main() {
     else
       log "$ctx: gate failed twice — rolling back"
       file_flake_issue "$ctx" "$log2" "failed again"
+      # Keep the evidence: the issue loop feeds this back to the agent
+      # as the next round's prompt.
+      cp -f "$log2" "$STATE/last_gate_fail.log" 2>/dev/null || true
       git reset --hard "$base" --quiet
       rm -f "$log1" "$log2"
       return 1
@@ -249,21 +280,29 @@ handle_issues() {
 GitHub issue #$num:
 $body
 
-You are a BUG-FIX agent. DEFAULT TO ATTEMPTING the fix. The safety net is the
-automated test gate plus a human reviewing your diff before it ships — so a
-wrong or incomplete fix is caught and rolled back, never released. That means
-you should try, not bail: a reasonable, test-backed attempt is far more useful
-than a premature GAVEUP.
+You are a FIX agent. DEFAULT TO ATTEMPTING the change. This project is HEAVILY
+tested: the safety net is the automated test gate plus a human reviewing your
+diff before it ships — so a wrong or incomplete attempt is caught and rolled
+back, never released. That means you should try, not bail: a reasonable,
+test-backed attempt is far more useful than a premature GAVEUP. Be tenacious —
+use the tests as your feedback loop and iterate until they are genuinely green.
+
+You may be interrupted by a wall-clock limit and RESUMED in the same session,
+possibly several times. Work so it survives that: investigate, then make
+incremental progress in the checkout, and commit as soon as the change is
+complete and tested (don't hold everything uncommitted while a long gate runs).
 
 INVESTIGATE before deciding — read the relevant code and try to reproduce.
-Decline (make NO commits, report GAVEUP) ONLY if, after actually investigating,
-one of these is clearly true:
-  - it's a feature request / design change (a new capability or UX/product
-    decision), not a defect in existing behaviour; or
-  - it needs information you cannot find or reasonably infer from the repo; or
-  - you cannot form ANY plausible root cause after looking.
-Scope is NOT a reason to decline — a multi-file but well-understood fix is fine.
-Being less than 100% certain is NOT a reason to decline — make your best
+Clearly-specified behaviour changes and small feature requests (e.g. \"X should
+redirect to Y\", \"add a flag for Z\") ARE in scope — implement them test-backed
+like any fix. Decline (make NO commits, report GAVEUP) ONLY if, after actually
+investigating, one of these is clearly true:
+  - it needs a product/UX decision the issue does not specify and no safe,
+    obvious default can be inferred from the repo's conventions; or
+  - it needs information or hardware you cannot access from this checkout; or
+  - you cannot form ANY plausible approach after looking.
+Scope is NOT a reason to decline — a multi-file but well-understood change is
+fine. Being less than 100% certain is NOT a reason to decline — make your best
 test-backed attempt and let the gate judge it.
 
 When you proceed:
@@ -280,36 +319,81 @@ End your final message with exactly one line, either:
 AUTOPILOT_RESULT: FIXED
 AUTOPILOT_RESULT: GAVEUP"
 
-    out="$(timeout "$CLAUDE_TIMEOUT" "$CLAUDE_BIN" $CLAUDE_FLAGS -p "$prompt" 2>&1)" || true
-    printf '%s\n' "$out" | tail -n 40
-    # The agent's own write-up (root cause, what it changed / why it declined) —
-    # everything except the machine-readable verdict line. Posted to the issue so
-    # a human sees the reasoning, not just the label.
-    analysis="$(printf '%s\n' "$out" | grep -avxE 'AUTOPILOT_RESULT: (FIXED|GAVEUP)')"
-    [ -n "$analysis" ] || analysis="(no analysis captured)"
+    # ---- tenacity loop -------------------------------------------------
+    # One issue = one agent SESSION, worked in bounded slices. A slice that
+    # ends without a verdict (wall-clock TERM, crash) is RESUMED, not
+    # abandoned; a FIXED claim is audited against actual commits; a landing
+    # -gate failure is fed back into the same session as evidence for the
+    # next round. Only an explicit reasoned GAVEUP — or the round /
+    # wall-clock budget — parks the issue for a human.
+    local round=1 outcome=exhausted mode=new text="$prompt"
+    local deadline=$(( $(date +%s) + ISSUE_BUDGET )) commits=0 gate_tail a
+    analysis="(no analysis captured)"
+    while [ "$round" -le "$ISSUE_ROUNDS" ]; do
+      if [ "$(date +%s)" -ge "$deadline" ]; then
+        log "issue #$num: per-issue budget (${ISSUE_BUDGET}s) exhausted at round $round"
+        break
+      fi
+      log "issue #$num: agent round $round/$ISSUE_ROUNDS ($mode)"
+      out="$(run_slice "$mode" "$text")" || true
+      printf '%s\n' "$out" | tail -n 40
+      mode=continue
+      # The agent's own write-up (root cause, what it changed / why it
+      # declined) — everything except the machine-readable verdict line.
+      # Posted to the issue so a human sees the reasoning, not just the label.
+      a="$(printf '%s\n' "$out" | grep -avxE 'AUTOPILOT_RESULT: (FIXED|GAVEUP)')"
+      [ -n "$a" ] && analysis="$a"
 
-    if [ "$(git rev-list --count "origin/$MAIN..HEAD")" -gt 0 ]; then
-      if land_on_main "$br" "issue #$num"; then
+      if printf '%s\n' "$out" | grep -aqxE 'AUTOPILOT_RESULT: GAVEUP'; then
+        outcome=gaveup; break
+      fi
+      commits="$(git rev-list --count "origin/$MAIN..HEAD" 2>/dev/null || echo 0)"
+      if printf '%s\n' "$out" | grep -aqxE 'AUTOPILOT_RESULT: FIXED'; then
+        if [ "$commits" -gt 0 ]; then
+          if land_on_main "$br" "issue #$num"; then
+            outcome=landed; break
+          fi
+          # Failed TWICE inside land_on_main → almost certainly the change,
+          # not flake. Put the agent back on its branch with the evidence.
+          git checkout "$br" --quiet
+          gate_tail="$(tail -n 80 "$STATE/last_gate_fail.log" 2>/dev/null)"
+          text="$(printf 'Your fix for issue #%s merged, but the landing gate (%s) failed twice on the merged result — treat this as a real regression from your change, not flake. Failing tail:\n------\n%s\n------\nFix the regression on this branch, re-run the tests until genuinely green, commit, and end with the AUTOPILOT_RESULT line.' "$num" "$GATE" "$gate_tail")"
+        else
+          text="You reported FIXED but branch $br has no commits. Commit your completed work (message referencing #$num), re-run the tests, and end with the AUTOPILOT_RESULT line."
+        fi
+      else
+        # No verdict at all: the slice hit its wall clock (or crashed) mid-work.
+        text="You were interrupted by a wall-clock limit; the checkout and any staged work are intact. Continue exactly where you left off — re-run whatever build/test was in flight rather than assuming its result. When the change is complete and tests are green, commit and end with AUTOPILOT_RESULT: FIXED (or AUTOPILOT_RESULT: GAVEUP only per the original decline rules)."
+      fi
+      round=$((round + 1))
+    done
+
+    case "$outcome" in
+      landed)
         if [ "$PUSH" = 1 ]; then
           # Landed on origin, but the local gate isn't CI. Don't close yet —
           # mark it landed and let handle_pending_closes close it only once CI
           # passes on this commit (or flip it to agent-ci-failed if CI fails).
           landed="$(git rev-parse HEAD)"
           gh issue edit "$num" --remove-label agent-working --add-label agent-landed >/dev/null 2>&1 || true
-          gh issue comment "$num" --body "$(printf '**autopilot: fix landed on `%s` as %s — awaiting CI before closing.**\n\n---\n### Analysis\n%s' "$MAIN" "${landed:0:8}" "$analysis")"
+          gh issue comment "$num" --body "$(printf '**autopilot: fix landed on `%s` as %s (round %s/%s) — awaiting CI before closing.**\n\n---\n### Analysis\n%s' "$MAIN" "${landed:0:8}" "$round" "$ISSUE_ROUNDS" "$analysis")"
           mark "issue:$num $landed" pending_close
         else
           gh issue edit "$num" --remove-label agent-working --add-label agent-done >/dev/null 2>&1 || true
           gh issue comment "$num" --body "$(printf '**autopilot: fix verified on local `%s` (PUSH=0, not pushed, not closed).**\n\n---\n### Analysis\n%s' "$MAIN" "$analysis")"
-        fi
-      else
-        gh issue edit "$num" --remove-label agent-working --add-label agent-failed >/dev/null 2>&1 || true
-        gh issue comment "$num" --body "$(printf '**autopilot: produced a fix but the gate failed on merge — rolled back, left for a human.**\n\n---\n### Analysis\n%s' "$analysis")"
-      fi
-    else
-      gh issue edit "$num" --remove-label agent-working --add-label agent-couldnt-fix >/dev/null 2>&1 || true
-      gh issue comment "$num" --body "$(printf '**autopilot: no automatic fix — leaving for a human.**\n\n---\n### Analysis\n%s' "$analysis")"
-    fi
+        fi ;;
+      gaveup)
+        gh issue edit "$num" --remove-label agent-working --add-label agent-couldnt-fix >/dev/null 2>&1 || true
+        gh issue comment "$num" --body "$(printf '**autopilot: agent investigated and explicitly declined (round %s/%s) — leaving for a human.**\n\n---\n### Analysis\n%s' "$round" "$ISSUE_ROUNDS" "$analysis")" ;;
+      exhausted)
+        if [ "${commits:-0}" -gt 0 ]; then
+          gh issue edit "$num" --remove-label agent-working --add-label agent-failed >/dev/null 2>&1 || true
+          gh issue comment "$num" --body "$(printf '**autopilot: budget exhausted after %s round(s) — produced commits but never got the gate green. Rolled back, left for a human.**\n\n---\n### Analysis\n%s' "$((round - 1))" "$analysis")"
+        else
+          gh issue edit "$num" --remove-label agent-working --add-label agent-couldnt-fix >/dev/null 2>&1 || true
+          gh issue comment "$num" --body "$(printf '**autopilot: budget exhausted after %s round(s) with no committed fix — leaving for a human.**\n\n---\n### Analysis\n%s' "$((round - 1))" "$analysis")"
+        fi ;;
+    esac
     git checkout "$MAIN" --quiet && git reset --hard "origin/$MAIN" --quiet
     mark "issue:$num" issues_done
   done <<<"$issues"
@@ -389,8 +473,18 @@ If clear and obvious:
 Constraints: stay in this repo; do NOT push; do NOT touch unrelated files.
 End with exactly one line: AUTOPILOT_RESULT: FIXED  or  AUTOPILOT_RESULT: GAVEUP"
 
-  out="$(timeout "$CLAUDE_TIMEOUT" "$CLAUDE_BIN" $CLAUDE_FLAGS -p "$prompt" 2>&1)" || true
+  # Judgment stays conservative (flaky/infra failures are declined), but an
+  # interrupted slice is resumed rather than scored as couldn't-fix.
+  local ci_round=1
+  out="$(run_slice new "$prompt")" || true
   printf '%s\n' "$out" | tail -n 40
+  while [ "$ci_round" -lt "$CI_ROUNDS" ] \
+      && ! printf '%s\n' "$out" | grep -aqxE 'AUTOPILOT_RESULT: (FIXED|GAVEUP)'; do
+    ci_round=$((ci_round + 1))
+    log "CI-fix ${sha:0:8}: no verdict — resuming (round $ci_round/$CI_ROUNDS)"
+    out="$(run_slice continue "You were interrupted by a wall-clock limit; the checkout is intact. Continue exactly where you left off — re-run whatever build/test was in flight. End with the AUTOPILOT_RESULT line.")" || true
+    printf '%s\n' "$out" | tail -n 40
+  done
   analysis="$(printf '%s\n' "$out" | grep -avxE 'AUTOPILOT_RESULT: (FIXED|GAVEUP)')"
   [ -n "$analysis" ] || analysis="(no analysis captured)"
 
