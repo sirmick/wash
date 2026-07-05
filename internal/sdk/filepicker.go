@@ -61,12 +61,19 @@ func dispatchPicker(c *Conn, fsa *wfs.FS, wc *WatchClient, data any) bool {
 		})
 	case "fs.list":
 		path, _ := m["path"].(string)
-		// Unconfined picker boots with "/", which would dump the
-		// user at the filesystem root. Resolve to $HOME instead so
-		// the picker opens somewhere useful. Sandboxed apps already
-		// have fsa.Root() set and the Confine path handles that.
-		if path == "/" && fsa.Root() == "" {
-			path = wfs.DefaultStart()
+		// An empty path is the picker's "default start" request:
+		// land at the sandbox root when confined, else the user's
+		// home so the picker opens somewhere useful. Explicit paths
+		// — including "/" — are honored literally; rewriting "/" to
+		// $HOME here (as this used to) made every Up-navigation to
+		// the filesystem root silently bounce back home, so the
+		// picker could never climb above $HOME (issue #17).
+		if path == "" {
+			if r := fsa.Root(); r != "" {
+				path = r
+			} else {
+				path = wfs.DefaultStart()
+			}
 		}
 		entries, abs, truncated, err := fsa.List(path, 0)
 		if err != nil {

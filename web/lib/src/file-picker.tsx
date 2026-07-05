@@ -56,9 +56,9 @@ export interface FilePickerProps {
   // internal/fs and replies via c.SendAppMsg back to this element.
   // No cross-app routing, no separate service.
   hostInstanceID: string;
-  // Initial directory. Empty / undefined falls back to "/" which
-  // the host's confine downshifts to the sandbox root automatically
-  // via the outside_root recovery path.
+  // Initial directory. Empty / undefined sends the empty path,
+  // which the host BE resolves to its default start: the sandbox
+  // root when confined, else the user's home directory.
   start?: string;
   // Save-mode default filename, prefilled into the name input.
   defaultName?: string;
@@ -138,8 +138,11 @@ const REFRESH_DEBOUNCE_MS = 100;
 
 export const FilePicker: Component<FilePickerProps> = (props) => {
   // ---- reactive state ----
-  const [cwd, setCwd] = createSignal(props.start || '/');
-  const [pathInput, setPathInput] = createSignal(props.start || '/');
+  // Empty cwd is the "default start" sentinel: the BE resolves it
+  // to the sandbox root (confined) or the user's home (unconfined).
+  // The first fs.list_ok replaces it with the resolved absolute path.
+  const [cwd, setCwd] = createSignal(props.start || '');
+  const [pathInput, setPathInput] = createSignal(props.start || '');
   const [entries, setEntries] = createSignal<Entry[]>([]);
   const [loading, setLoading] = createSignal(true);
   const [errorMsg, setErrorMsg] = createSignal<string>('');
@@ -311,6 +314,18 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
   // navigation (Enter / Up / double-click into a folder).
   let pathDirty = false;
 
+  // history is the Back button's trail of previously-displayed
+  // directories, most recent last. Only user-committed navigations
+  // (Up / Root / Home / Enter / double-click) record — the initial
+  // load, watch refreshes, and outside_root recovery all pass
+  // record=false so they can't pollute the trail, and Back itself
+  // doesn't record or Back/Back would ping-pong between two dirs.
+  // canGoBack mirrors history.length into the reactive graph so the
+  // button's disabled state tracks it.
+  const history: string[] = [];
+  const [canGoBack, setCanGoBack] = createSignal(false);
+  const HISTORY_MAX = 100;
+
   // loadDir asks wash-fs to list `p`. On success, updates the
   // picker's view to that directory; on outside_root, asks wash-fs
   // for the configured root and retries there so the user lands
@@ -318,7 +333,7 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
   // common case when the picker starts at "/" but wash-fs has a
   // sandbox). Any other error surfaces beneath the path bar and
   // keeps the previous listing on screen.
-  const loadDir = async (p: string, recovering = false) => {
+  const loadDir = async (p: string, opts: { recovering?: boolean; record?: boolean } = {}) => {
     const myGen = ++loadGen;
     setLoading(true);
     setErrorMsg('');
@@ -329,6 +344,14 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
     if (myGen !== loadGen) return;
     if (reply.kind === 'fs.list_ok') {
       setLoading(false);
+      if (opts.record) {
+        const prev = cwd();
+        if (prev && prev !== reply.path) {
+          history.push(prev);
+          if (history.length > HISTORY_MAX) history.shift();
+          setCanGoBack(true);
+        }
+      }
       setCwd(reply.path);
       // Don't overwrite path-bar text the user is actively editing.
       // Once they commit (Enter/Up/dbl-click) pathDirty is cleared,
@@ -338,14 +361,17 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
       setSelectedName('');
       return;
     }
-    if (reply.kind === 'fs.list_err' && reply.code === 'outside_root' && !recovering) {
+    if (reply.kind === 'fs.list_err' && reply.code === 'outside_root' && !opts.recovering) {
       // Ask wash-fs where the sandbox actually is, then re-list
       // there. `recovering` guards against an infinite bounce if
-      // the root call itself goes wrong.
+      // the root call itself goes wrong. The recovery load keeps
+      // the caller's record flag: a user-committed jump that gets
+      // downshifted to the sandbox root is still a navigation the
+      // Back button should be able to undo.
       const rootReply = await send({ kind: 'fs.root' });
       if (myGen !== loadGen) return; // superseded while resolving root
       if (rootReply.kind === 'fs.root_ok' && rootReply.root) {
-        void loadDir(rootReply.root, true);
+        void loadDir(rootReply.root, { recovering: true, record: opts.record });
         return;
       }
     }
@@ -399,17 +425,43 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
 
   // ---- actions ----
 
+  // Back pops the history trail — the inverse of whatever committed
+  // navigation the user last made. No record: see history's comment.
+  const goBack = () => {
+    const prev = history.pop();
+    setCanGoBack(history.length > 0);
+    if (!prev) return;
+    pathDirty = false;
+    void loadDir(prev);
+  };
+
+  // Up goes strictly one level up the directory tree (contrast with
+  // Back, which retraces the user's own steps).
   const goUp = () => {
     const p = cwd();
     if (!p || p === '/') return;
     pathDirty = false;
     const i = p.lastIndexOf('/');
-    void loadDir(i <= 0 ? '/' : p.slice(0, i));
+    void loadDir(i <= 0 ? '/' : p.slice(0, i), { record: true });
+  };
+
+  const goRoot = () => {
+    if (cwd() === '/') return;
+    pathDirty = false;
+    void loadDir('/', { record: true });
+  };
+
+  // Home requests the empty path — the BE's "default start" — so the
+  // FE never needs to learn where home actually is. Confined hosts
+  // resolve it to the sandbox root, unconfined ones to $HOME.
+  const goHome = () => {
+    pathDirty = false;
+    void loadDir('', { record: true });
   };
 
   const navigateToInput = () => {
     pathDirty = false;
-    void loadDir(pathInput());
+    void loadDir(pathInput(), { record: true });
   };
 
   const onRowClick = (e: Entry) => {
@@ -423,7 +475,7 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
     const target = joinPath(cwd(), e.name);
     if (e.type === 'dir') {
       pathDirty = false;
-      void loadDir(target);
+      void loadDir(target, { record: true });
       return;
     }
     if (e.type === 'file' && props.mode === 'open') {
@@ -448,7 +500,7 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
       const path = joinPath(cwd(), sel);
       if (e.type === 'dir') {
         pathDirty = false;
-        void loadDir(path);
+        void loadDir(path, { record: true });
         return;
       }
       props.onConfirm(path);
@@ -542,12 +594,40 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
           <div style={pathBarStyle}>
             <button
               type="button"
+              data-testid="fp-back"
+              onClick={goBack}
+              disabled={!canGoBack()}
+              style={{ ...iconBtnStyle, opacity: canGoBack() ? 1 : 0.35 }}
+              title="Back to previous directory"
+            >
+              ←
+            </button>
+            <button
+              type="button"
               data-testid="fp-up"
               onClick={goUp}
               style={iconBtnStyle}
               title="Up one directory"
             >
               ↑
+            </button>
+            <button
+              type="button"
+              data-testid="fp-root"
+              onClick={goRoot}
+              style={iconBtnStyle}
+              title="Go to filesystem root"
+            >
+              /
+            </button>
+            <button
+              type="button"
+              data-testid="fp-home"
+              onClick={goHome}
+              style={iconBtnStyle}
+              title="Go to home directory"
+            >
+              ~
             </button>
             <input
               type="text"

@@ -41,9 +41,9 @@ test.describe('FilePicker', () => {
     // Pre-condition: picker-result starts blank.
     await expect(app.locator('[data-testid="picker-result"]')).toHaveText('(none)');
 
-    // Open the dialog. The picker initially lists "/" — the host
-    // BE's EnableFilePicker honors Session.Root, so the outside_root
-    // recovery path downshifts to fmRoot automatically.
+    // Open the dialog. The picker boots with the empty "default
+    // start" path — the host BE's EnableFilePicker resolves it to
+    // Session.Root, so the picker lands at fmRoot automatically.
     await app.locator('[data-testid="action-picker-open"]').click();
     const picker = page.locator('[data-testid="picker"]').last();
     await expect(picker).toBeVisible();
@@ -131,6 +131,47 @@ test.describe('FilePicker', () => {
 
     // Up button → back to fmRoot.
     await picker.locator('[data-testid="fp-up"]').click();
+    await expect(pathInput).toHaveValue(router.fmRoot);
+    await expect(picker.locator('[data-testid="fp-entry-docs"]')).toBeVisible();
+  });
+
+  test('Open: Back retraces navigation; Up / "/" / "~" respect the sandbox root', async ({ page, router }) => {
+    await page.goto(router.url);
+    // wash-test in kiosk mode currently mounts twice (pre-existing
+    // shell issue): one as the kiosk root + one as a windowed
+    // instance. The windowed one sits on top and intercepts pointer
+    // events, so the test drives that one (`.last()` in DOM order).
+    const app = page.locator('wash-app-test').last();
+    await app.locator('[data-testid="action-picker-open"]').click();
+    const picker = page.locator('[data-testid="picker"]').last();
+    const pathInput = picker.locator('[data-testid="fp-path"]');
+
+    // The picker boots at the BE default start = Session.Root.
+    await expect(pathInput).toHaveValue(router.fmRoot);
+    const back = picker.locator('[data-testid="fp-back"]');
+    await expect(back).toBeDisabled();
+
+    // Step into docs/, then Back retraces to fmRoot and disables
+    // again (the trail is spent).
+    await picker.locator('[data-testid="fp-entry-docs"]').dblclick();
+    await expect(pathInput).toHaveValue(join(router.fmRoot, 'docs'));
+    await back.click();
+    await expect(pathInput).toHaveValue(router.fmRoot);
+    await expect(back).toBeDisabled();
+
+    // Up at the sandbox root: the parent is outside_root, so the
+    // recovery path re-lists the root — the picker stays put rather
+    // than erroring.
+    await picker.locator('[data-testid="fp-up"]').click();
+    await expect(pathInput).toHaveValue(router.fmRoot);
+    await expect(picker.locator('[data-testid="fp-error"]')).not.toBeVisible();
+
+    // "/" and "~" both downshift to the sandbox root on a confined
+    // host ("/" via outside_root recovery, "~" via the BE's
+    // default-start resolution).
+    await picker.locator('[data-testid="fp-root"]').click();
+    await expect(pathInput).toHaveValue(router.fmRoot);
+    await picker.locator('[data-testid="fp-home"]').click();
     await expect(pathInput).toHaveValue(router.fmRoot);
     await expect(picker.locator('[data-testid="fp-entry-docs"]')).toBeVisible();
   });
