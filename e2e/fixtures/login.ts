@@ -178,7 +178,13 @@ export async function startLogin(opts: LoginOptions = {}): Promise<LoginHandle> 
     ...(opts.extraArgs ?? []),
   ];
 
-  const proc = spawn(LOGIN_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  // WASH_LOGIN_ENV=off: --listen-unix routers otherwise auto-adopt the
+  // login-shell env (running the developer's real ~/.profile per spawned
+  // session) — veto for determinism; wash-login passes it through.
+  const proc = spawn(LOGIN_BIN, args, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, WASH_LOGIN_ENV: 'off' },
+  });
   let logBuf = '';
   proc.stdout.on('data', (c: Buffer) => { logBuf += c.toString('utf8'); });
   proc.stderr.on('data', (c: Buffer) => { logBuf += c.toString('utf8'); });

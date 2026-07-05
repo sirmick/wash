@@ -33,6 +33,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sirmick/wash/internal/loginenv"
 	"github.com/sirmick/wash/internal/router"
 	"github.com/sirmick/wash/internal/shellassets"
 	"github.com/sirmick/wash/internal/tlsutil"
@@ -201,6 +202,7 @@ func Run(args []string) int {
 	tlsCert := fs.String("tls-cert", "", "PEM certificate for the HTTPS listener. Empty ⇒ a cached self-signed cert under $XDG_CONFIG_HOME/wash/tls (minted on first run, reused across restarts). Ignored with --http, --listen-unix, --listen-raw, and byte-stream transports.")
 	tlsKey := fs.String("tls-key", "", "PEM private key matching --tls-cert. Empty ⇒ the cached self-signed key. Ignored with --http and the non-ws transports.")
 	listenRaw := fs.String("listen-raw", "", `serve the shell wire (raw length-prefixed frames, NO HTTP/WebSocket) on a listening socket: "unix:/path" or "tcp:host:port". Each accepted connection is one shell (HandleShell over a StreamTransport). This is host B's endpoint for the remote-apps relay (docs/REMOTE.md): A's com.wash.remote ssh -L's a unix socket to here, and A's router splices a browser's muxed channel to it. Replaces --listen for that role; gated by the ssh tunnel + socket perms, so no token/origin check applies.`)
+	loginEnv := fs.String("login-env", "auto", `source the user's login-shell environment into the router at startup: "on", "off", or "auto". The router runs the user's shell once with -l and adopts the env it exports (~/.profile PATH edits et al), so wash-term/wash-edit shells and every spawned app see the user's real PATH instead of the spawner's. "auto" enables it only for --listen-unix routers — the wash-login-spawned sessions whose inherited env is systemd's minimal one — and honors WASH_LOGIN_ENV=off as a kill-switch (tests). Identity/session vars (HOME, USER, XDG_RUNTIME_DIR, WASH_*, …) are never overridden; failures log and fall back to the inherited env.`)
 	logFile := fs.String("log-file", "", "redirect stdout+stderr to this file (created mode 0640, parent dir made on demand). Used by wash-login for per-session router logs: the router runs as the target user, so the log is owned by them and readable without privilege. Empty leaves stdout/stderr inherited from the parent.")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
@@ -224,6 +226,22 @@ func Run(args []string) int {
 	if *logFile != "" {
 		if err := redirectOutput(*logFile); err != nil {
 			log.New(os.Stderr, "wash-router ", 0).Printf("log-file %s: %v (falling back to inherited stderr)", *logFile, err)
+		}
+	}
+
+	// --login-env: adopt the user's login-shell environment before
+	// anything reads PATH or spawns. Done here — after the log-file
+	// redirect so the outcome lands in the session log, before app
+	// probing/spawning so every child inherits the result.
+	if adoptLoginEnv(*loginEnv, *listenUnix != "") {
+		lg := log.New(os.Stderr, "wash-router ", log.LstdFlags)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		n, err := loginenv.Adopt(ctx)
+		cancel()
+		if err != nil {
+			lg.Printf("loginenv: adopt failed (continuing with inherited env): %v", err)
+		} else {
+			lg.Printf("loginenv: adopted %d vars from login shell: PATH=%s", n, os.Getenv("PATH"))
 		}
 	}
 
@@ -846,6 +864,26 @@ func writeReadyToken(path string) error {
 	defer f.Close()
 	_, err = f.Write([]byte("WASH_READY\n"))
 	return err
+}
+
+// adoptLoginEnv resolves the --login-env tri-state. "auto" means: only
+// multi-user routers (--listen-unix, spawned by wash-login with
+// systemd's minimal env) — a standalone/dev router already inherits
+// the env of whoever launched it. WASH_LOGIN_ENV=off (or 0) vetoes
+// auto so test harnesses stay deterministic and don't run the
+// developer's real profile per spawned session. Unknown values are
+// treated as auto rather than aborting a production session boot.
+func adoptLoginEnv(mode string, multiUser bool) bool {
+	switch mode {
+	case "on":
+		return true
+	case "off":
+		return false
+	}
+	if v := os.Getenv("WASH_LOGIN_ENV"); v == "off" || v == "0" {
+		return false
+	}
+	return multiUser
 }
 
 func firstNonEmpty(s ...string) string {

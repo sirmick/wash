@@ -23,6 +23,7 @@ import (
 	"embed"
 	"flag"
 	"fmt"
+	"github.com/sirmick/wash/internal/loginenv"
 	"github.com/sirmick/wash/internal/version"
 	"io"
 	"io/fs"
@@ -50,44 +51,12 @@ var execArgv []string
 var loginShell bool
 
 // loginShellPath picks the shell for --login. It does NOT trust
-// $SHELL — when wash-term has been exec'd by sudo, $SHELL is the
-// invoking user's shell, not the current uid's. We look up the
-// effective uid in /etc/passwd via os/user.Current to get the
-// right shell (and HOME / USER, see fixupLoginEnv).
-//
-// Fallback is /bin/bash; on a stripped distro it's still the
-// least-surprising default.
+// $SHELL first — when wash-term has been exec'd by sudo, $SHELL is
+// the invoking user's shell, not the current uid's — so
+// loginenv.UserShell resolves the effective uid's passwd entry
+// before falling back to $SHELL, then /bin/bash.
 func loginShellPath() string {
-	if u, err := osuser.Current(); err == nil {
-		// LookupShell isn't a real call; passwd's shell field is
-		// in u.Username's underlying record but Go's os/user doesn't
-		// expose it. Read /etc/passwd directly.
-		if sh := lookupShellFromPasswd(u.Uid); sh != "" {
-			return sh
-		}
-	}
-	if s := os.Getenv("SHELL"); s != "" {
-		return s
-	}
-	return "/bin/bash"
-}
-
-// lookupShellFromPasswd parses /etc/passwd for the row with
-// matching uid and returns its shell field. Used by --login mode
-// when sudo's env has left us with the invoking user's $SHELL but
-// we want root's.
-func lookupShellFromPasswd(uid string) string {
-	data, err := os.ReadFile("/etc/passwd")
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		fields := strings.Split(line, ":")
-		if len(fields) >= 7 && fields[2] == uid {
-			return fields[6]
-		}
-	}
-	return ""
+	return loginenv.UserShell()
 }
 
 // fixupLoginEnv mutates env (in-place over the os.Setenv side) so
@@ -109,7 +78,7 @@ func fixupLoginEnv() {
 		_ = os.Setenv("USER", u.Username)
 		_ = os.Setenv("LOGNAME", u.Username)
 	}
-	if sh := lookupShellFromPasswd(u.Uid); sh != "" {
+	if sh := loginenv.ShellFromPasswd(u.Uid); sh != "" {
 		_ = os.Setenv("SHELL", sh)
 	}
 }

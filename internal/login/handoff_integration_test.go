@@ -43,6 +43,11 @@ var (
 // `go build`; subsequent calls reuse the result.
 func testRouterBinary(t *testing.T) string {
 	t.Helper()
+	// Spawned routers use --listen-unix, which auto-enables login-env
+	// adoption (running the invoking user's real shell profile per
+	// spawn). Veto it so tests stay deterministic and profile-free;
+	// the Spawner's childEnv passes this through to the router.
+	t.Setenv("WASH_LOGIN_ENV", "off")
 	testRouterBinOnce.Do(func() {
 		dir, err := os.MkdirTemp("", "wash-router-test-bin-")
 		if err != nil {
