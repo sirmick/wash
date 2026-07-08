@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -31,6 +32,19 @@ import (
 // the cache, so a long life avoids a surprise expiry on a long-running
 // box, while a self-signed cert already carries no CA trust to protect.
 const certValidity = 10 * 365 * 24 * time.Hour
+
+// HTTP1Only returns the protocol set wash's HTTP fronts must serve:
+// HTTP/1.1 with HTTP/2 left off. Go's net/http enables h2 automatically
+// on any TLS listener, but an h2 stream's ResponseWriter does not
+// implement http.Hijacker — and every wash front hijacks: the router's
+// WebSocket upgrades and ingress proxying, wash-login's /ws fd-handoff
+// and /app ingress. A browser that negotiated h2 via ALPN then hit
+// "hijacker not supported" on all of those paths.
+func HTTP1Only() *http.Protocols {
+	p := new(http.Protocols)
+	p.SetHTTP1(true)
+	return p
+}
 
 // LoadOrGenerate returns a TLS certificate for a wash HTTP front.
 //

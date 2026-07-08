@@ -15,6 +15,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/sirmick/wash/internal/httpsec"
+	"github.com/sirmick/wash/internal/tlsutil"
 )
 
 // routerCookieName holds the token presented on the first ?token= load
@@ -275,6 +276,9 @@ func (s *HTTPServer) Run(ctx context.Context) error {
 		Addr:              s.router.cfg.Listen,
 		Handler:           s,
 		ReadHeaderTimeout: 5 * time.Second,
+		// HTTP/1.1 only: WS upgrades and ingress proxying hijack the
+		// conn, which h2 streams can't do ("hijacker not supported").
+		Protocols: tlsutil.HTTP1Only(),
 	}
 	// SO_REUSEADDR so a restarted router can rebind its port immediately
 	// instead of tripping "address already in use" while the previous

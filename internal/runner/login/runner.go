@@ -357,6 +357,9 @@ func Run(args []string) int {
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		TLSConfig:         tlsCfg,
+		// HTTP/1.1 only: the /ws fd-handoff and /app ingress hijack the
+		// conn, which h2 streams can't do ("hijacker not supported").
+		Protocols: tlsutil.HTTP1Only(),
 	}
 
 	listener, err := net.Listen("tcp", *listen)

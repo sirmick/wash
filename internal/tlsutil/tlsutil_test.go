@@ -3,6 +3,8 @@ package tlsutil
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -108,6 +110,58 @@ func TestLoadOrGenerateServes(t *testing.T) {
 		t.Fatalf("tls.Dial validating self-signed cert: %v", err)
 	}
 	_ = conn.Close()
+}
+
+// TestHTTP1OnlyKeepsHijackOverTLS proves an ALPN client offering h2
+// (every real browser against wash's self-signed HTTPS) is steered to
+// HTTP/1.1 and gets a hijackable ResponseWriter. Without HTTP1Only,
+// Go's ServeTLS auto-enables h2, whose streams have no http.Hijacker —
+// the "hijacker not supported" failure that broke the vscode /app
+// ingress and the /ws fd-handoff behind an HTTPS wash-login.
+func TestHTTP1OnlyKeepsHijackOverTLS(t *testing.T) {
+	dir := t.TempDir()
+	cert, err := LoadOrGenerate(filepath.Join(dir, "c.pem"), filepath.Join(dir, "k.pem"), t.Logf)
+	if err != nil {
+		t.Fatalf("LoadOrGenerate: %v", err)
+	}
+
+	hijackable := make(chan bool, 1)
+	srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, ok := w.(http.Hijacker)
+			hijackable <- ok
+			w.WriteHeader(http.StatusNoContent)
+		}),
+		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
+		Protocols: HTTP1Only(),
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer srv.Close()
+	go func() { _ = srv.ServeTLS(ln, "", "") }()
+
+	// Offer h2 first, exactly like a browser's ALPN.
+	client := &http.Client{Transport: &http.Transport{
+		ForceAttemptHTTP2: true,
+		TLSClientConfig: &tls.Config{
+			ServerName: "127.0.0.1",
+			RootCAs:    poolFrom(t, cert),
+			NextProtos: []string{"h2", "http/1.1"},
+		},
+	}}
+	resp, err := client.Get("https://" + ln.Addr().String())
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	resp.Body.Close()
+	if resp.ProtoMajor != 1 {
+		t.Errorf("negotiated %s; want HTTP/1.x (h2 must stay disabled)", resp.Proto)
+	}
+	if ok := <-hijackable; !ok {
+		t.Errorf("ResponseWriter does not implement http.Hijacker")
+	}
 }
 
 func poolFrom(t *testing.T, cert tls.Certificate) *x509.CertPool {
