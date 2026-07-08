@@ -609,15 +609,22 @@ func NewEvtIngressPublished(reqID uint64, path, token string) EvtIngressPublishe
 // the remote-apps relay. Network is "unix" (Addr is a socket path) or "tcp"
 // (Addr is host:port on loopback). The router dials this socket when a shell
 // peer.attaches the origin and splices a muxed channel to it. Fire-and-forget.
+//
+// IngressAddr, when non-empty, is a local UNIX socket the peer's router
+// serves its /app/ ingress HTTP on (--listen-ingress, forwarded over the
+// same ssh as the relay socket). The router proxies /app/<token>/ requests
+// whose token no local backend owns to this socket, so a remote app's
+// ingress iframe resolves against the local origin (issue #15).
 type EvtPeerRegister struct {
-	T       string `json:"t"`
-	Origin  string `json:"origin"`
-	Network string `json:"network"`
-	Addr    string `json:"addr"`
+	T           string `json:"t"`
+	Origin      string `json:"origin"`
+	Network     string `json:"network"`
+	Addr        string `json:"addr"`
+	IngressAddr string `json:"ingress_addr,omitempty"`
 }
 
-func NewEvtPeerRegister(origin, network, addr string) EvtPeerRegister {
-	return EvtPeerRegister{T: TEvtPeerRegister, Origin: origin, Network: network, Addr: addr}
+func NewEvtPeerRegister(origin, network, addr, ingressAddr string) EvtPeerRegister {
+	return EvtPeerRegister{T: TEvtPeerRegister, Origin: origin, Network: network, Addr: addr, IngressAddr: ingressAddr}
 }
 
 // EvtPeerUnregister — app → router — drop an origin's relay registration.

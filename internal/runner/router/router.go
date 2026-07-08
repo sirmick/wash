@@ -202,6 +202,8 @@ func Run(args []string) int {
 	tlsCert := fs.String("tls-cert", "", "PEM certificate for the HTTPS listener. Empty ⇒ a cached self-signed cert under $XDG_CONFIG_HOME/wash/tls (minted on first run, reused across restarts). Ignored with --http, --listen-unix, --listen-raw, and byte-stream transports.")
 	tlsKey := fs.String("tls-key", "", "PEM private key matching --tls-cert. Empty ⇒ the cached self-signed key. Ignored with --http and the non-ws transports.")
 	listenRaw := fs.String("listen-raw", "", `serve the shell wire (raw length-prefixed frames, NO HTTP/WebSocket) on a listening socket: "unix:/path" or "tcp:host:port". Each accepted connection is one shell (HandleShell over a StreamTransport). This is host B's endpoint for the remote-apps relay (docs/REMOTE.md): A's com.wash.remote ssh -L's a unix socket to here, and A's router splices a browser's muxed channel to it. Replaces --listen for that role; gated by the ssh tunnel + socket perms, so no token/origin check applies.`)
+	listenIngress := fs.String("listen-ingress", "", `serve the /app/ ingress registry as plain HTTP on a unix socket: "unix:/path". Host B's side of remote ingress (docs/REMOTE.md §17, issue #15): com.wash.remote forwards this socket over the same ssh as the relay socket and registers it on A, whose router proxies locally-unknown /app/<token>/ requests here. Requires --listen-raw; gated by socket perms + the ssh tunnel, like the relay socket.`)
+	peerIngress := fs.String("peer-ingress", "", `register a peer's forwarded ingress socket at startup: "<origin>=<unix-socket-path>". Dev/test seam mirroring what com.wash.remote registers via EvtPeerRegister — locally-unknown /app/<token>/ requests are resolved against (and proxied to) this peer. The e2e remote harness uses it in place of the ssh supervisor.`)
 	loginEnv := fs.String("login-env", "auto", `source the user's login-shell environment into the router at startup: "on", "off", or "auto". The router runs the user's shell once with -l and adopts the env it exports (~/.profile PATH edits et al), so wash-term/wash-edit shells and every spawned app see the user's real PATH instead of the spawner's. "auto" enables it only for --listen-unix routers — the wash-login-spawned sessions whose inherited env is systemd's minimal one — and honors WASH_LOGIN_ENV=off as a kill-switch (tests). Identity/session vars (HOME, USER, XDG_RUNTIME_DIR, WASH_*, …) are never overridden; failures log and fall back to the inherited env.`)
 	logFile := fs.String("log-file", "", "redirect stdout+stderr to this file (created mode 0640, parent dir made on demand). Used by wash-login for per-session router logs: the router runs as the target user, so the log is owned by them and readable without privilege. Empty leaves stdout/stderr inherited from the parent.")
 	showVersion := fs.Bool("version", false, "print version and exit")
@@ -467,6 +469,37 @@ func Run(args []string) int {
 	// with the per-shell EnsureBackgroundAppsRunning.
 	r.EnsureBootAutostartApps()
 
+	// A-side remote-ingress seam: pre-register a peer's forwarded ingress
+	// socket, exactly as com.wash.remote does via EvtPeerRegister. The e2e
+	// remote harness (?peer= two local routers, no ssh) is the consumer.
+	if *peerIngress != "" {
+		origin, sock, ok := strings.Cut(*peerIngress, "=")
+		if !ok || origin == "" || sock == "" {
+			logger.Printf("--peer-ingress: want <origin>=<unix-socket-path>, got %q", *peerIngress)
+			return 2
+		}
+		r.AddPeer(origin, "", "", sock)
+	}
+
+	// Remote ingress (issue #15): serve the /app/ registry as plain HTTP on
+	// its own unix socket. Host B pairs it with --listen-raw — bound HERE,
+	// before the raw listener's readiness line, so "listening on" implies
+	// both sockets are up. It also runs alongside the ws transport, which
+	// is how the e2e harness stands in for a relayed peer without ssh.
+	if *listenIngress != "" {
+		inet, iaddr, ierr := parseListenRaw(*listenIngress)
+		if ierr != nil || inet != "unix" {
+			logger.Printf(`--listen-ingress: want "unix:/path", got %q (%v)`, *listenIngress, ierr)
+			return 2
+		}
+		ictx, icancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer icancel()
+		if err := runIngressListener(ictx, r, iaddr, logf); err != nil {
+			logger.Printf("listen-ingress: %v", err)
+			return 1
+		}
+	}
+
 	// Remote-apps relay endpoint (docs/REMOTE.md): serve the raw shell wire
 	// on a listening socket, one HandleShell per accepted connection. This is
 	// host B's side of the relay — A's com.wash.remote ssh -L's a unix socket
@@ -628,6 +661,37 @@ func parseListenRaw(s string) (network, address string, err error) {
 	default:
 		return "", "", fmt.Errorf("unknown scheme %q (want unix or tcp)", scheme)
 	}
+}
+
+// runIngressListener binds the --listen-ingress unix socket and serves the
+// /app/ ingress registry (plus the peer-resolution endpoint) on it as plain
+// HTTP. Binding is synchronous — the caller starts the raw listener (and its
+// readiness line) only after this returns — while serving runs in the
+// background for the listener's lifetime. 0600 for the same reason as the
+// relay socket: the ssh -L from A must be the only way in.
+func runIngressListener(ctx context.Context, r *router.Router, address string, logf func(string, ...any)) error {
+	_ = os.Remove(address) // clear a stale socket from a previous run
+	ln, err := net.Listen("unix", address)
+	if err != nil {
+		return err
+	}
+	if cerr := os.Chmod(address, 0o600); cerr != nil {
+		ln.Close()
+		return fmt.Errorf("chmod ingress socket: %w", cerr)
+	}
+	srv := &http.Server{Handler: router.NewIngressServer(r)}
+	go func() {
+		<-ctx.Done()
+		_ = srv.Close() // unblocks Serve; in-flight proxies drop with the relay
+		_ = os.Remove(address)
+	}()
+	go func() {
+		if serr := srv.Serve(ln); serr != nil && !errors.Is(serr, http.ErrServerClosed) {
+			logf("ingress listener: %v", serr)
+		}
+	}()
+	logf("ingress listening on unix://%s", address)
+	return nil
 }
 
 // runRawListener serves the raw shell wire on a listening socket: each

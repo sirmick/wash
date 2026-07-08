@@ -16,16 +16,19 @@ func indexOf(ss []string, want string) int {
 }
 
 func TestBuildSSHArgs(t *testing.T) {
-	args := buildSSHArgs("user@host", "/tmp/a/A.sock", "/tmp/wash-relay-deadbeef.sock", 0)
+	args := buildSSHArgs("user@host", "/tmp/a/A.sock", "/tmp/wash-relay-deadbeef.sock", "/tmp/a/A.i.sock", "/tmp/wash-relay-deadbeef.sock.i", 0)
 	joined := strings.Join(args, " ")
 
 	for _, want := range []string{
-		"/tmp/a/A.sock:/tmp/wash-relay-deadbeef.sock", // -L unix→unix forward
+		"/tmp/a/A.sock:/tmp/wash-relay-deadbeef.sock",     // -L unix→unix forward
+		"/tmp/a/A.i.sock:/tmp/wash-relay-deadbeef.sock.i", // -L ingress forward (remote ingress, #15)
 		"BatchMode=yes",
 		"ExitOnForwardFailure=yes",
 		"wash-router",
 		"--listen-raw",
 		"unix:/tmp/wash-relay-deadbeef.sock", // raw-wire UNIX listener on B (chmod 0600 there)
+		"--listen-ingress",
+		"unix:/tmp/wash-relay-deadbeef.sock.i", // B's /app/ HTTP endpoint, reached only via the tunnel
 		"--no-session",
 		"--no-auth",
 		"--control-socket", "/tmp/wash-relay-deadbeef.sock.ctl", // unique ctl socket (spawn needs it; avoids B-desktop collision)
@@ -52,7 +55,7 @@ func TestBuildSSHArgs(t *testing.T) {
 	if i := indexOf(args, "-p"); i >= 0 {
 		t.Errorf("default port must not emit -p: %v", args)
 	}
-	p := buildSSHArgs("user@host", "/tmp/a/A.sock", "/tmp/b.sock", 2222)
+	p := buildSSHArgs("user@host", "/tmp/a/A.sock", "/tmp/b.sock", "/tmp/a/A.i.sock", "/tmp/b.sock.i", 2222)
 	if i := indexOf(p, "-p"); i < 0 || i+1 >= len(p) || p[i+1] != "2222" {
 		t.Errorf("non-default port must emit -p 2222: %v", p)
 	}

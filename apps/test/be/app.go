@@ -17,7 +17,11 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
+	"net/http"
+	"os"
 	"sync"
+	"time"
 
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/sdk"
@@ -148,7 +152,52 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	st.conn = c
 	st.mu.Unlock()
 	sdk.EnableFilePicker(c)
+	// Own goroutine: PublishIngress blocks on the router's reply, which the
+	// dispatch loop can't deliver while an SDK callback (this one) runs.
+	go maybePublishTestIngress(c)
 	log.Printf("wash-test ready instance=%s window=%d", instanceID, windowID)
+}
+
+// maybePublishTestIngress is the e2e seam for ingress routing (incl. remote
+// ingress, issue #15): when WASH_TEST_INGRESS_FILE is set (inherited from
+// the router the harness started), serve a trivial HTTP backend on a unix
+// socket, publish it, and write the minted /app/<token>/ path to that file
+// so the spec can fetch it through any front — no FE involvement needed.
+func maybePublishTestIngress(c *sdk.Conn) {
+	outFile := os.Getenv("WASH_TEST_INGRESS_FILE")
+	if outFile == "" {
+		return
+	}
+	sock := outFile + ".sock"
+	_ = os.Remove(sock)
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		log.Printf("wash-test ingress: listen %s: %v", sock, err)
+		return
+	}
+	go func() {
+		_ = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprintf(w, "wash-test-ingress %s", r.URL.Path)
+		}))
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	path, err := c.PublishIngress(ctx, "unix", sock)
+	if err != nil {
+		log.Printf("wash-test ingress: publish: %v", err)
+		return
+	}
+	// Write-then-rename so the polling spec never reads a partial path.
+	tmp := outFile + ".tmp"
+	if err := os.WriteFile(tmp, []byte(path), 0o644); err != nil {
+		log.Printf("wash-test ingress: write %s: %v", tmp, err)
+		return
+	}
+	if err := os.Rename(tmp, outFile); err != nil {
+		log.Printf("wash-test ingress: rename: %v", err)
+		return
+	}
+	log.Printf("wash-test ingress: published %s -> %s", path, sock)
 }
 
 func onMapped(c *sdk.Conn, win uint32) {

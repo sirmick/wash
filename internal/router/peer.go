@@ -2,6 +2,7 @@ package router
 
 import (
 	"net"
+	"net/http/httputil"
 
 	"github.com/sirmick/wash/internal/wire"
 )
@@ -30,6 +31,12 @@ const remoteSupervisorAppID = "com.wash.remote"
 type peerTarget struct {
 	network string // "unix" | "tcp"
 	addr    string
+	// ingressAddr, when non-empty, is a local unix socket forwarded to the
+	// peer router's --listen-ingress HTTP endpoint; ingressProxy dials it.
+	// Locally-unknown /app/<token>/ requests are resolved against peers and
+	// proxied here (remote ingress, issue #15 / docs/REMOTE.md §17).
+	ingressAddr  string
+	ingressProxy *httputil.ReverseProxy
 }
 
 // handlePeerRegister records (origin → socket) for the relay, but only from
@@ -50,24 +57,39 @@ func (inst *AppInstance) handlePeerRegister(m wire.EvtPeerRegister) error {
 	if m.Origin == "" || m.Addr == "" {
 		return nil
 	}
-	inst.router.registerPeer(m.Origin, m.Network, m.Addr)
+	inst.router.registerPeer(m.Origin, m.Network, m.Addr, m.IngressAddr)
 	return nil
 }
 
-func (r *Router) registerPeer(origin, network, addr string) {
+func (r *Router) registerPeer(origin, network, addr, ingressAddr string) {
 	if network == "" {
 		network = "unix"
 	}
+	t := peerTarget{network: network, addr: addr, ingressAddr: ingressAddr}
+	if ingressAddr != "" {
+		t.ingressProxy = newPeerIngressProxy(origin, ingressAddr, r.ingress)
+	}
 	r.peersMu.Lock()
-	r.peers[origin] = peerTarget{network: network, addr: addr}
+	r.peers[origin] = t
 	r.peersMu.Unlock()
-	r.log("peer register origin=%s %s://%s", origin, network, addr)
+	r.log("peer register origin=%s %s://%s ingress=%q", origin, network, addr, ingressAddr)
+}
+
+// AddPeer is the exported registration used by the runner's --peer-ingress
+// dev/test seam — the same record the com.wash.remote supervisor creates via
+// EvtPeerRegister. addr may be empty for an ingress-only registration (the
+// e2e harness attaches the peer's shell wire directly, not via the relay).
+func (r *Router) AddPeer(origin, network, addr, ingressAddr string) {
+	r.registerPeer(origin, network, addr, ingressAddr)
 }
 
 func (r *Router) unregisterPeer(origin string) {
 	r.peersMu.Lock()
 	delete(r.peers, origin)
 	r.peersMu.Unlock()
+	// A vanished peer takes its ingress tokens with it: drop the cached
+	// token→origin routes so a reconnected peer re-resolves fresh.
+	r.ingress.dropRemoteOrigin(origin)
 	r.log("peer unregister origin=%s", origin)
 }
 

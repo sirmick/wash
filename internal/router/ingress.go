@@ -50,13 +50,21 @@ type ingressRegistry struct {
 	log     Logger
 	mu      sync.RWMutex
 	byToken map[string]*ingressBackend
+	// remote caches token → owning peer origin for tokens minted by a
+	// peer's router (remote ingress, ingress_remote.go). Same lock: both
+	// maps are read on the /app/ hot path and written rarely.
+	remote map[string]string
 }
 
 func newIngressRegistry(log Logger) *ingressRegistry {
 	if log == nil {
 		log = func(string, ...any) {}
 	}
-	return &ingressRegistry{log: log, byToken: make(map[string]*ingressBackend)}
+	return &ingressRegistry{
+		log:     log,
+		byToken: make(map[string]*ingressBackend),
+		remote:  make(map[string]string),
+	}
 }
 
 // MintToken exposes mintToken to callers outside the package (the
@@ -208,6 +216,11 @@ func (r *Router) handleIngress(w http.ResponseWriter, req *http.Request) {
 	}
 	be := r.ingress.lookup(token)
 	if be == nil {
+		// Not a local backend — maybe a peer's (remote ingress, issue #15).
+		// The un-stripped request goes to the peer's own handleIngress.
+		if r.serveRemoteIngress(w, req, token) {
+			return
+		}
 		http.Error(w, "unknown or expired ingress", http.StatusGone)
 		return
 	}

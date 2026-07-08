@@ -652,3 +652,48 @@ architecture. WebRTC is an optimization on top, not a prerequisite.
    spawner (SSH already authenticated the user).
 4. **Host colour palette source** (§11): which `@wash/ui` slots; hash vs manual.
 5. **B router teardown policy** (§9): linger duration / idle timeout.
+
+---
+
+## 17. Remote ingress: /app/ over the relay (issue #15)
+
+**Shipped 2026-07-08.** An app published via `PublishIngress` on host B
+(vscode's code-server, music/radio/washamp's backends) is reachable through
+host A's origin — which is the only origin its iframe can load from
+(`web/lib/src/ingress-frame.tsx` resolves same-origin against the shell).
+
+### The gap it closes
+
+B's tokens lived only in B's registry; A answered `410 unknown or expired
+ingress`, and the relay couldn't help: it is a **verbatim byte splice**
+(browser ↔ B) that A never injects into — the FE reassembles B's wire by
+byte position, so A-origin frames on the peer channel would corrupt it (§7,
+`internal/router/peer.go`). B's `--listen-raw` router served no HTTP at all.
+
+### Design (Approach A of the issue: general, all apps)
+
+- **B side:** `wash-router --listen-ingress unix:/path` serves the shared
+  `/app/` ingress body (`internal/router/ingress_remote.go
+  NewIngressServer`) plus `GET /ingress/resolve?token=` (204 = mine / 404)
+  as plain HTTP on a 0600 unix socket. Same boundary story as the relay
+  socket: ssh + socket perms, no token gate of its own (§10).
+- **Tunnel:** `com.wash.remote` forwards it with a second `-L` on the SAME
+  ssh as the relay socket (one auth, one lifetime) and includes it in
+  `EvtPeerRegister.ingress_addr`.
+- **A side:** `handleIngress`, on a local-registry miss, resolves the token
+  against each ingress-capable peer (read-only probe, first 204 wins),
+  caches token→origin, and reverse-proxies the request — path unchanged;
+  B's own `handleIngress` does the strip, so the token stays B-minted end
+  to end. WS upgrades splice through both proxy hops. The cache drops on
+  peer unregister and on a proxied 410 (B expired the token).
+- **Seam:** `--peer-ingress <origin>=<socket>` pre-registers a peer's
+  ingress socket without the ssh supervisor — used by
+  `e2e/tests/remote-ingress.spec.ts` (two local routers).
+
+No wire channel kind was added: an A-originated HTTP conduit cannot ride
+the existing peer channel (splice invariant above), so it would have needed
+a second dialed connection regardless — at which point plain HTTP on a
+dedicated forwarded socket is the same topology with none of the framing.
+
+Not folded in (separate TODO item): the single-host stale-token self-heal
+after a wash-login restart — re-`ensure` on 401/410 in the workbench FE.

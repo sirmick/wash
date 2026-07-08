@@ -66,6 +66,13 @@ func (s *supervisor) sockPath(host string) string {
 	return filepath.Join(s.sockDir, hex.EncodeToString(sum[:8])+".sock")
 }
 
+// ingressSockPath is the second forwarded socket for host: B's --listen-
+// ingress HTTP endpoint (remote ingress, issue #15). Sibling of sockPath.
+func (s *supervisor) ingressSockPath(host string) string {
+	sum := sha256.Sum256([]byte(host))
+	return filepath.Join(s.sockDir, hex.EncodeToString(sum[:8])+".i.sock")
+}
+
 // buildSSHArgs builds the argv for the bring-up ssh: forward a LOCAL UNIX
 // SOCKET to host B's loopback router port, then run wash-router there in
 // raw-wire mode (--listen-raw, no HTTP/WebSocket) bound to that port. A's
@@ -73,7 +80,13 @@ func (s *supervisor) sockPath(host string) string {
 // it (the "one port" relay, docs/REMOTE.md) — nothing binds a TCP port on
 // A's loopback, and B's router is reached solely through this tunnel, so
 // SSH is the access boundary (§10).
-func buildSSHArgs(host, localSock, remoteSock string, port int) []string {
+//
+// A second -L forwards B's --listen-ingress socket (remote ingress, §17 /
+// issue #15): B's router serves its /app/ registry as plain HTTP there, and
+// A's router proxies locally-unknown ingress tokens to it, so a remote
+// app's iframe (vscode et al) loads through A's origin. Both forwards ride
+// ONE ssh — one auth, one lifetime, one teardown.
+func buildSSHArgs(host, localSock, remoteSock, localIngressSock, remoteIngressSock string, port int) []string {
 	args := []string{
 		"-o", "BatchMode=yes", // never block on an interactive prompt
 		"-o", "ExitOnForwardFailure=yes", // fail fast if the -L bind can't be set up
@@ -95,9 +108,11 @@ func buildSSHArgs(host, localSock, remoteSock string, port int) []string {
 		// §10). The unix socket makes "reaching it requires the SSH session"
 		// actually true.
 		"-L", fmt.Sprintf("%s:%s", localSock, remoteSock),
+		"-L", fmt.Sprintf("%s:%s", localIngressSock, remoteIngressSock),
 		host,
 		"wash-router",
 		"--listen-raw", "unix:"+remoteSock,
+		"--listen-ingress", "unix:"+remoteIngressSock,
 		"--no-session",
 		"--no-auth",
 		// A UNIQUE control socket (not the default /tmp/wash-<uid>.sock, which
@@ -163,11 +178,13 @@ func (s *supervisor) shutdown() {
 // on retry — the user must authenticate, which re-issues connect).
 func (s *supervisor) run(ctx context.Context, host, addr string, port int) {
 	sock := s.sockPath(host) // A side: in a 0700 temp dir; reused across attempts
+	ingressSock := s.ingressSockPath(host)
 	defer func() {
 		s.mu.Lock()
 		delete(s.procs, host)
 		s.mu.Unlock()
 		_ = os.Remove(sock)
+		_ = os.Remove(ingressSock)
 		if s.conn != nil {
 			_ = s.conn.UnregisterPeer(host)
 		}
@@ -190,7 +207,7 @@ func (s *supervisor) run(ctx context.Context, host, addr string, port int) {
 	canFallback := addr != "" && addr != host
 	for {
 		start := time.Now()
-		code, msg := s.runOnce(ctx, host, dial, port, sock)
+		code, msg := s.runOnce(ctx, host, dial, port, sock, ingressSock)
 		if ctx.Err() != nil {
 			return // user-initiated disconnect; disconnect() removed the host
 		}
@@ -247,13 +264,15 @@ func (s *supervisor) run(ctx context.Context, host, addr string, port int) {
 // dial is the ssh target for this attempt — the name (so ssh reads
 // ~/.ssh/config) or, on fallback, the announced IP. host stays the connect
 // identity used for peer registration and published state.
-func (s *supervisor) runOnce(ctx context.Context, host, dial string, port int, sock string) (code, errMsg string) {
+func (s *supervisor) runOnce(ctx context.Context, host, dial string, port int, sock, ingressSock string) (code, errMsg string) {
 	remoteSock := remoteSockPath() // B side: unique per attempt, chmod 0600 there
+	remoteIngressSock := remoteSock + ".i"
 
 	// ssh -L refuses to bind a unix socket whose file already exists.
 	_ = os.Remove(sock)
+	_ = os.Remove(ingressSock)
 
-	cmd := exec.CommandContext(ctx, s.sshPath, buildSSHArgs(dial, sock, remoteSock, port)...)
+	cmd := exec.CommandContext(ctx, s.sshPath, buildSSHArgs(dial, sock, remoteSock, ingressSock, remoteIngressSock, port)...)
 	// Backstop the ctx cancel: if wash-remote dies abruptly (SIGKILL, panic)
 	// before OnTerminate/ctx can reap it, Pdeathsig has the kernel SIGTERM the
 	// ssh — and with it B's --listen-raw router — instead of orphaning the
@@ -326,7 +345,7 @@ func (s *supervisor) runOnce(ctx context.Context, host, dial string, port int, s
 			// triggers attach is sent after this, on the same conn — causal
 			// order holds). The FE attaches via the relay; no ws endpoint.
 			if s.conn != nil {
-				if err := s.conn.RegisterPeer(host, "unix", sock); err != nil {
+				if err := s.conn.RegisterPeer(host, "unix", sock, ingressSock); err != nil {
 					s.setHost(host, HostState{Host: host, Origin: host, Status: StatusDown, Error: "register peer: " + err.Error()})
 					return
 				}

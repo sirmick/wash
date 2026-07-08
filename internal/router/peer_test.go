@@ -56,7 +56,7 @@ func TestPeerRelaySplice(t *testing.T) {
 		}
 	}()
 
-	r.registerPeer("B", "unix", sock)
+	r.registerPeer("B", "unix", sock, "")
 
 	shellPair := wiretest.NewPipePair()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -172,7 +172,7 @@ func TestPeerRelayNoHeadOfLineBlocking(t *testing.T) {
 		}
 	}()
 
-	r.registerPeer("B", "unix", sock)
+	r.registerPeer("B", "unix", sock, "")
 
 	shellPair := wiretest.NewPipePair()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -276,7 +276,7 @@ func TestPeerRelayMaxSizeFrameSurvives(t *testing.T) {
 		}
 	}()
 
-	r.registerPeer("B", "unix", sock)
+	r.registerPeer("B", "unix", sock, "")
 
 	shellPair := wiretest.NewPipePair()
 	ctx, cancel := context.WithCancel(context.Background())

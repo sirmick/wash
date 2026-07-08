@@ -27,13 +27,13 @@ bug list — all fully landed; see `git log` if you need their content.)
 
 ## Ingress & remote apps  (docs/REMOTE.md)
 
-- [ ] **Remote `/app/` ingress over the relay** — **issue #15** (full
-  implementation prompt is a comment there). vscode launched on host B 410s
-  on A ("unknown or expired ingress"): the relay is a shell-wire byte
-  conduit, B's `--listen-raw` router serves no HTTP, and A's registry never
-  learns B's tokens. Design-then-build; decide Approach A (HTTP-over-relay
-  channel kind — general, benefits music/radio/washamp too) vs B (ssh-`-L`
-  B's socket into A's registry — lighter, vscode-shaped) with the user first.
+- [x] **Remote `/app/` ingress over the relay** — **issue #15** — DONE
+  2026-07-08 (Approach A, user-confirmed; design record in docs/REMOTE.md
+  §17). B serves its ingress registry over `--listen-ingress` (unix socket,
+  second `-L` on the same ssh); A resolves locally-unknown tokens against
+  peers and reverse-proxies (`internal/router/ingress_remote.go`). Covered
+  by unit tests + `e2e/tests/remote-ingress.spec.ts` (two local routers via
+  the `--peer-ingress` seam).
 - [ ] **Single-host ingress self-heal after a wash-login restart** (separate
   from #15). A restart tears down sessions + per-launch ingress tokens; the
   shell's `/ws` reconnects fine but the vscode-workbench iframe keeps
