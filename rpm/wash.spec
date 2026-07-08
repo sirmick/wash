@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.9.6
+Version:        0.9.7
 Release:        4%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,12 @@ fi
 exit 0
 
 %changelog
+* Wed Jul 08 2026 sirmick <sirmick@gmail.com> - 0.9.7-1
+- router: disable HTTP/2 on the HTTPS fronts (h2 has no Hijacker; broke the
+  vscode /app/ ingress + /ws fd-handoff: "hijacker not supported").
+- remote: serve a peer's /app/ ingress through the local origin (issue 15);
+  new --listen-ingress/--peer-ingress; remote vscode/music/radio/washamp work.
+- router: redirect plain-HTTP hits on the HTTPS listener to https://.
 * Mon Jun 29 2026 sirmick <sirmick@gmail.com> - 0.9.6-4
 - radio: load stations from a user-editable ~/.config/wash/radio-stations.json
   seeded from embedded defaults; refreshed SomaFM set + hacker/cyberpunk adds;

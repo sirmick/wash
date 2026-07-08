@@ -1,3 +1,17 @@
+wash (0.9.7-1) unstable; urgency=low
+
+  * router: disable HTTP/2 on the HTTPS fronts — h2 streams have no
+    http.Hijacker, which broke the vscode /app/ ingress, the /ws fd-handoff
+    behind an HTTPS wash-login, and WS upgrades ("hijacker not supported").
+  * remote: serve a peer's /app/ ingress through the local origin (issue #15).
+    New wash-router --listen-ingress / --peer-ingress; com.wash.remote
+    forwards the socket over the same ssh; A resolves unknown tokens against
+    peers and reverse-proxies. vscode/music/radio/washamp now work on remote
+    hosts.
+  * router: redirect plain-HTTP hits on the HTTPS listener to https://.
+
+ -- sirmick <sirmick@gmail.com>  Wed, 08 Jul 2026 16:00:00 -0700
+
 wash (0.9.6-4) unstable; urgency=low
 
   * radio: load stations from a user-editable
