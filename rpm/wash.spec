@@ -1,6 +1,6 @@
 Name:           wash
 Version:        0.9.7
-Release:        4%{?dist}
+Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
 License:        AGPL-3.0-or-later
