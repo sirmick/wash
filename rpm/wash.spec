@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.9.7
+Version:        0.10.0
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,16 @@ fi
 exit 0
 
 %changelog
+* Thu Jul 09 2026 sirmick <sirmick@gmail.com> - 0.10.0-1
+- clipboard: converge the wash + system clipboards behind HTTPS (pastes
+  prefer readText where readable, wash-clipboard fallback; native pastes +
+  field copies mirror in; BE-originated changes mirror out).
+- term: right-click copies the selection / pastes when there is none;
+  Shift+right-click keeps the Copy/Paste menu.
+- fm: context menu gains Cut / Copy / Paste for files.
+- ui: context menus clamp into the viewport (no off-screen items).
+- net/netd/edit/crash-pane copy buttons ride the shared clipboard helpers.
+- top: process rows are text-selectable.
 * Wed Jul 08 2026 sirmick <sirmick@gmail.com> - 0.9.7-1
 - router: disable HTTP/2 on the HTTPS fronts (h2 has no Hijacker; broke the
   vscode /app/ ingress + /ws fd-handoff: "hijacker not supported").

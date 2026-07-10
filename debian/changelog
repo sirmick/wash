@@ -1,3 +1,21 @@
+wash (0.10.0-1) unstable; urgency=low
+
+  * clipboard: converge the wash + system clipboards behind HTTPS. Pastes
+    (terminal right-click, editor menus) prefer navigator.clipboard.readText
+    where readable and fall back to the wash clipboard; native pastes and
+    input-field copies mirror into the wash clipboard; BE-originated
+    clipboard changes mirror outward to the system clipboard.
+  * term: right-click copies the selection / pastes when there is none
+    (PuTTY semantics); Shift+right-click keeps the Copy/Paste menu.
+  * fm: context menu gains Cut / Copy / Paste for files.
+  * ui: context menus clamp into the viewport instead of rendering
+    off-screen items near the bottom/right edges.
+  * net/netd/edit/crash-pane copy buttons ride the shared clipboard helpers
+    (visible to wash paste surfaces, working on plain-HTTP origins).
+  * top: process rows are text-selectable for copying names/PIDs.
+
+ -- sirmick <sirmick@gmail.com>  Thu, 09 Jul 2026 12:00:00 -0700
+
 wash (0.9.7-1) unstable; urgency=low
 
   * router: disable HTTP/2 on the HTTPS fronts — h2 streams have no
