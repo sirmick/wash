@@ -81,6 +81,10 @@ test.describe('fm folder-grid preview', () => {
     await page.locator('[data-testid="fm-entry-pics"]').click();
     await expect(page.locator('[data-testid="fm-folder-grid"]')).toBeVisible();
 
+    // Tiles race the listing under parallel-worker load — wait for all
+    // three before reading their order (docs/TEST_FLAKES.md remedy).
+    await expect(page.locator('[data-testid^="fm-tile-"]')).toHaveCount(3);
+
     // sortedFiltered orders the grid the same as the tree: dirs first, then
     // case-insensitive name. cat.png < dog.png < notes.txt.
     const names = await page.locator('[data-testid^="fm-tile-"]').evaluateAll((els) =>

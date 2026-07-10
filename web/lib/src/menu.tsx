@@ -1,4 +1,4 @@
-import { Show, createSignal, onCleanup, onMount } from 'solid-js';
+import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import type { Component, JSX, ParentComponent } from 'solid-js';
 import { tokens } from './tokens';
@@ -42,6 +42,25 @@ export const Menu: ParentComponent<MenuProps> = (props) => {
     setTimeout(() => document.addEventListener('mousedown', onDocDown), 0);
     onCleanup(() => document.removeEventListener('mousedown', onDocDown));
   });
+  // Cursor-positioned menus clamp into the viewport: a right-click near
+  // the bottom/right edge would otherwise push items off-screen where
+  // they render but can't be clicked. The effect re-runs when x/y
+  // change (the same mounted Menu can be re-opened at new coords under
+  // a non-keyed <Show>), measuring the rendered size post-layout.
+  const [clamped, setClamped] = createSignal<{ left: number; top: number } | null>(null);
+  createEffect(() => {
+    const x = props.x ?? 0;
+    const y = props.y ?? 0;
+    if (props.anchor || !menuEl) {
+      setClamped(null);
+      return;
+    }
+    const r = menuEl.getBoundingClientRect();
+    const margin = 4;
+    const left = Math.max(margin, Math.min(x, window.innerWidth - r.width - margin));
+    const top = Math.max(margin, Math.min(y, window.innerHeight - r.height - margin));
+    setClamped(left !== x || top !== y ? { left, top } : null);
+  });
   return (
     <Portal mount={document.body}>
       <div
@@ -58,6 +77,7 @@ export const Menu: ParentComponent<MenuProps> = (props) => {
           'box-shadow': tokens.shadowMenu,
           'z-index': props.zIndex ?? tokens.zMenu,
           ...positionFor(props),
+          ...(clamped() ? { left: `${clamped()!.left}px`, top: `${clamped()!.top}px` } : {}),
           ...animFor(props),
           ...(props.style ?? {}),
         }}

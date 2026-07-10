@@ -134,6 +134,37 @@ test.describe('clipboard over TLS (secure context)', () => {
     });
     await cdp.detach();
     await expect.poll(() => termBuffer(termHost)).toContain('sys-paste-2468');
+
+    // The shell's paste mirror folds the pasted text into the wash
+    // clipboard, so both clipboards agree after a native paste.
+    await expect
+      .poll(() => page.evaluate(() => (window as any).wash.clipboardGetText()))
+      .toBe('sys-paste-2468');
+  });
+
+  test('terminal right-click paste prefers the system clipboard over a stale wash clipboard', async ({ page, router, context }) => {
+    proxy = await startTlsProxy(router.url);
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: proxy.url });
+    await page.goto(proxy.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+
+    await page.locator('button[title="Apps"]').click();
+    await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Terminal', exact: true }).click();
+    const termHost = page.locator('[data-testid="term-host"]').first();
+    await expect(termHost).toBeVisible();
+    await expect.poll(() => termBuffer(termHost), { timeout: 8_000 }).toMatch(/[$#%>][ ]?/);
+
+    // Diverge the two clipboards: wash holds older text, system newer —
+    // the shape after copying in an OS app or a secure-context embed
+    // (code-server). Paste must resolve the system side.
+    await page.evaluate(() => (window as any).wash.clipboardSetText('stale-wash-11'));
+    await page.evaluate(() => navigator.clipboard.writeText('fresh-system-22'));
+    await termHost.click({ button: 'right' }); // no selection → direct paste
+    await expect.poll(() => termBuffer(termHost)).toContain('fresh-system-22');
+    // …and the system read is folded back into the wash clipboard.
+    await expect
+      .poll(() => page.evaluate(() => (window as any).wash.clipboardGetText()))
+      .toBe('fresh-system-22');
   });
 
   test('widget "Copy to system" writes the OS clipboard', async ({ page, router, context }) => {
@@ -155,5 +186,38 @@ test.describe('clipboard over TLS (secure context)', () => {
 
     await page.locator('[data-testid="clipboard-copy-system"]').click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('widget-sys-99');
+  });
+});
+
+// Separate describe: wash-test is a hidden app, so the start menu only
+// lists it under routerOpts.showHidden.
+test.describe('clipboard over TLS — BE-originated set', () => {
+  test.setTimeout(30_000);
+  test.use({ ignoreHTTPSErrors: true, routerOpts: { showHidden: true } });
+
+  let proxy: TlsProxyHandle | null = null;
+  test.afterEach(async () => {
+    await proxy?.close();
+    proxy = null;
+  });
+
+  test('BE-set wash clipboard mirrors outward to the system clipboard', async ({ page, router, context }) => {
+    proxy = await startTlsProxy(router.url);
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: proxy.url });
+    await page.goto(proxy.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+
+    // wash-test's "Set clipboard" round-trips through its BE
+    // (conn.ClipboardSet) — no browser gesture anywhere in that path.
+    // The shell's clipboard.changed mirror must still land it in the
+    // system clipboard so a later native Ctrl+V agrees with wash menus.
+    await page.locator('button[title="Apps"]').click();
+    await page.getByRole('button', { name: /wash test/ }).click();
+    const t = page.locator('wash-app-test');
+    await expect(t).toBeVisible();
+    await t.locator('[data-testid="action-clipboard-set"]').click();
+    await expect
+      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+      .toBe('hello from wash-test');
   });
 });

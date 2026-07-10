@@ -138,8 +138,10 @@ test.describe('clipboard on an insecure origin (plain HTTP, non-localhost)', () 
     const termHost = editor.locator('[data-testid^="edit-term-host-"]').locator('visible=true');
     await expect(termHost).toBeVisible();
     await expect.poll(() => termBuffer(termHost), { timeout: 8_000 }).toMatch(/[$#%>][ ]?/);
+    // Right-click with no selection pastes directly — on this insecure
+    // origin navigator.clipboard.readText is absent, so the paste is
+    // pure wash-clipboard fallback.
     await termHost.click({ button: 'right' });
-    await page.locator('[data-testid="term-ctx-paste"]').click();
     await expect.poll(() => termBuffer(termHost)).toContain('insec-edit-1212');
   });
 

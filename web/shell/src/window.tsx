@@ -24,7 +24,7 @@ import {
   Win,
 } from './wm';
 import { AlertOctagon, Copy, Maximize2, Minimize2, Minus, X } from 'lucide-solid';
-import { washAssetUrl } from '@wash/ui';
+import { systemCopyTextChecked, washAssetUrl } from '@wash/ui';
 
 // originHost is the short host shown after a remote window's title ("Editor
 // @ai"): the part after "user@", or the whole origin if it's a bare host/IP.
@@ -542,13 +542,14 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
     return parts.join(' • ');
   };
   const onCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(props.info.log);
+    // Wash clipboard first — that write can't fail and makes the log
+    // pasteable into a wash terminal even where the system write is
+    // blocked (insecure context, no permission); the system copy's
+    // real verdict drives the "copied" feedback.
+    window.wash.clipboardSetText(props.info.log);
+    if (await systemCopyTextChecked(props.info.log)) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1_500);
-    } catch {
-      // clipboard blocked (insecure context, no permission) — the
-      // textarea is still selectable, so this is just a nicety.
     }
   };
   return (

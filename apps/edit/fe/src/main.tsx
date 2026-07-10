@@ -1457,15 +1457,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   };
   const closeCtxMenu = () => setCtxMenu(null);
 
-  // ctxCopyPath drops the selected row's path on the host
-  // clipboard so the user can paste it elsewhere (terminal,
-  // chat, etc). Mirrors fm's "Copy path" item.
-  const ctxCopyPath = async (p: string) => {
-    try {
-      await navigator.clipboard.writeText(p);
-    } catch {
-      /* ignore — best effort, no UX feedback needed in v1 */
-    }
+  // ctxCopyPath drops the selected row's path on the wash + system
+  // clipboards so the user can paste it anywhere (terminal, chat,
+  // etc). Mirrors fm's "Copy path" item — and unlike the old direct
+  // navigator.clipboard call, works on insecure origins too and is
+  // visible to wash-clipboard consumers (terminal right-click paste).
+  const ctxCopyPath = (p: string) => {
+    washCopyText(p);
   };
 
   // ---- CodeMirror ----
@@ -2646,7 +2644,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             onClick={() => {
               const c = ctxMenu()!;
               closeCtxMenu();
-              void ctxCopyPath(c.path);
+              ctxCopyPath(c.path);
             }}
             data-testid="edit-ctx-copy-path"
           />

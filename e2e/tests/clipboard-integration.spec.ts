@@ -5,8 +5,8 @@
 //   - editor right-click → Paste inserts it into CodeMirror,
 //   - editor native copy (Ctrl+C) is mirrored into the wash clipboard
 //     by the shell's copy listener,
-//   - terminal right-click pastes the wash clipboard into the pty
-//     (PuTTY semantics, native context menu suppressed),
+//   - terminal right-click (no selection) pastes the wash clipboard
+//     into the pty directly (PuTTY semantics, no menu),
 //   - the widget's paste-import box folds a system-clipboard paste
 //     event into the wash clipboard.
 
@@ -119,10 +119,12 @@ test.describe('clipboard integration', () => {
     await expect(termHost).toBeVisible();
     await expect.poll(() => termBuffer(termHost), { timeout: 8_000 }).toMatch(/[$#%>][ ]?/);
 
-    // Right-click opens the terminal context menu; its Paste rides
-    // the wash clipboard into the pty; bash echoes it on the prompt.
+    // Right-click with no selection pastes directly (PuTTY semantics —
+    // no menu detour); the wash clipboard rides into the pty and bash
+    // echoes it on the prompt. (localhost is a secure context, but the
+    // un-granted clipboard-read permission rejects readText and paste
+    // falls back to the wash clipboard.)
     await termHost.click({ button: 'right' });
-    await page.locator('[data-testid="term-ctx-paste"]').click();
     await expect.poll(() => termBuffer(termHost)).toContain('edit-clip-4242');
   });
 

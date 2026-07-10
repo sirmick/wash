@@ -12,7 +12,7 @@
 
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { JSX } from 'solid-js';
-import { Section, Row, ServiceBadge, SmallBtn, defineSettingsPanel, tokens } from '@wash/ui';
+import { Section, Row, ServiceBadge, SmallBtn, defineSettingsPanel, tokens, washCopyText } from '@wash/ui';
 import type { SettingsPanelProps } from '@wash/ui';
 
 const NET_APP = 'com.wash.net'; // the dedicated network window the panel opens
@@ -120,7 +120,7 @@ const Panel = (props: SettingsPanelProps) => {
           >
             <pre data-testid="net-uci" style={uciPreStyle}>{uci()}</pre>
             <div>
-              <SmallBtn onClick={() => navigator.clipboard?.writeText(uci())} data-testid="net-uci-copy">
+              <SmallBtn onClick={() => washCopyText(uci())} data-testid="net-uci-copy">
                 Copy
               </SmallBtn>
             </div>

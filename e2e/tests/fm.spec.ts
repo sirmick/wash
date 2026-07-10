@@ -86,7 +86,7 @@ test.describe('file manager', () => {
     await expect(page.locator('[data-testid="fm-preview"]')).toHaveText(/\(binary,/);
   });
 
-  test('right-click row opens context menu with Open / Copy path / Show info', async ({ page, router }) => {
+  test('right-click row opens context menu with Open / Cut / Copy / Paste / Copy path / Show info', async ({ page, router }) => {
     const root = mkdtempSync(join(tmpdir(), 'wash-fm-ctx-'));
     writeFileSync(join(root, 'foo.txt'), 'hi\n');
 
@@ -100,7 +100,12 @@ test.describe('file manager', () => {
     const menu = page.locator('[data-testid="fm-context-menu"]');
     await expect(menu).toBeVisible();
     await expect(page.locator('[data-testid="fm-ctx-open"]')).toBeVisible();
+    await expect(page.locator('[data-testid="fm-ctx-cut"]')).toBeVisible();
     await expect(page.locator('[data-testid="fm-ctx-copy"]')).toBeVisible();
+    // Files clipboard is empty → Paste greyed out (visible, not clickable).
+    await expect(page.locator('[data-testid="fm-ctx-paste"]')).toBeVisible();
+    await expect(page.locator('[data-testid="fm-ctx-paste"]')).toHaveCSS('cursor', 'not-allowed');
+    await expect(page.locator('[data-testid="fm-ctx-copy-path"]')).toBeVisible();
     await expect(page.locator('[data-testid="fm-ctx-info"]')).toBeVisible();
 
     await page.locator('[data-testid="fm-ctx-info"]').click();

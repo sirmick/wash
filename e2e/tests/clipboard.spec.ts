@@ -77,7 +77,7 @@ test.describe('clipboard service', () => {
 
     // Right-click the file → Copy path.
     await page.locator('[data-testid="fm-entry-paste-me.txt"]').click({ button: 'right' });
-    await page.locator('[data-testid="fm-ctx-copy"]').click();
+    await page.locator('[data-testid="fm-ctx-copy-path"]').click();
 
     // wash-test (the observer) sees the change and reads the path.
     await expect(t.locator('[data-testid="clipboard-changes"]')).toHaveText('1');
@@ -86,5 +86,35 @@ test.describe('clipboard service', () => {
     await testPill.click();
     await t.locator('[data-testid="action-clipboard-get"]').click();
     await expect(t.locator('[data-testid="clipboard-text"]')).toHaveText(join(root, 'paste-me.txt'));
+  });
+
+  test('Ctrl+C in an <input> field mirrors into the wash clipboard', async ({ page, router, context }) => {
+    // document.getSelection() doesn't see field selections in every
+    // browser, so the shell mirror reads selectionStart/End directly —
+    // regression cover via the fm path bar. keyboard.press synthesizes
+    // the keystroke but Chromium doesn't run the copy editing command
+    // for synthetic events, so send the command itself over CDP.
+    await page.goto(router.url);
+    await page.locator('button[title="Apps"]').click();
+    await page.getByRole('button', { name: /Files/ }).click();
+    await expect(page.locator('wash-app-fm')).toBeVisible();
+
+    const input = page.locator('[data-testid="fm-path"]');
+    await expect(input).not.toHaveValue('');
+    const pathValue = await input.inputValue();
+    await input.click();
+    await input.selectText();
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      key: 'c',
+      code: 'KeyC',
+      modifiers: 2, // Ctrl
+      commands: ['copy'],
+    });
+    await cdp.detach();
+    await expect
+      .poll(() => page.evaluate(() => (window as any).wash.clipboardGetText()))
+      .toBe(pathValue);
   });
 });

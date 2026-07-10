@@ -1,15 +1,21 @@
 // Clipboard helpers bridging the wash-internal clipboard (router-held,
 // window.wash.clipboard*) and the browser's system clipboard.
 //
-// The asymmetry these helpers encode: wash is usually served over
-// plain HTTP on the LAN, an insecure context where navigator.clipboard
-// is undefined. Writing OUT to the system clipboard still works via
-// execCommand('copy') inside a user gesture; reading IN is impossible
-// programmatically — system text only enters wash through real paste
-// gestures (Ctrl+V / browser-menu paste), whose events carry the text.
+// Two origins, two capability tiers:
 //
-// Where navigator.clipboard exists (localhost today, HTTPS later) the
-// async API is preferred automatically.
+// Secure context (HTTPS — the default since the TLS fronts landed —
+// or localhost): navigator.clipboard has both halves. Copies mirror
+// out via writeText; pastes PREFER readText, so text copied anywhere
+// (an OS app, code-server's iframe, another browser profile) pastes
+// correctly through wash's menus — the wash clipboard is the fallback,
+// not a shadow world.
+//
+// Insecure context (plain HTTP on the LAN): navigator.clipboard is
+// undefined. Writing OUT still works via execCommand('copy') inside a
+// user gesture; reading IN is impossible programmatically — system
+// text only enters wash through real paste gestures (Ctrl+V /
+// browser-menu paste), whose events the shell mirrors into the wash
+// clipboard.
 
 // systemCopyText best-effort writes text to the SYSTEM clipboard.
 // Must be called from within a user-gesture handler (click, mouseup,
@@ -68,8 +74,31 @@ export function washCopyText(text: string): void {
   systemCopyText(text);
 }
 
-// washPasteText resolves the wash clipboard's current text. Plain
-// wrapper today; the indirection point for richer mimes later.
-export function washPasteText(): Promise<string> {
-  return window.wash.clipboardGetText();
+// systemReadText best-effort reads the SYSTEM clipboard. Resolves ''
+// when the API is missing (insecure context, Firefox <125), the user
+// denied the clipboard-read permission, or the clipboard holds no
+// text — every failure means "fall back to the wash clipboard".
+function systemReadText(): Promise<string> {
+  const c = navigator.clipboard;
+  if (typeof c?.readText !== 'function') return Promise.resolve('');
+  return c.readText().catch(() => '');
+}
+
+// washPasteText is THE paste entry point for app code (terminal
+// right-click, editor menus). The system clipboard wins when it's
+// readable and non-empty: it is the only clipboard that OS apps and
+// secure-context embeds (code-server) write to, so preferring it makes
+// Ctrl+V and menu-Paste resolve the same text. A successful system
+// read is folded back into the wash clipboard so BE consumers (X apps
+// via wash-display, the sidebar widget) converge on what was pasted.
+// The wash clipboard remains the source of truth whenever the system
+// side is unreadable.
+export async function washPasteText(): Promise<string> {
+  const sys = await systemReadText();
+  const washText = await window.wash.clipboardGetText();
+  if (sys) {
+    if (sys !== washText) window.wash.clipboardSetText(sys);
+    return sys;
+  }
+  return washText;
 }

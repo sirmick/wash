@@ -597,6 +597,20 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         if (!isLocal) break;
         const c = msg;
         clipboardSub.set({ mime: c.mime, text: c.text });
+        // Best-effort outward mirror: this change came from somewhere
+        // with no browser gesture to ride — an app BE (fm "Copy path"),
+        // an X app via wash-display's clipboard bridge, another attached
+        // shell — so without this push a native Ctrl+V would paste the
+        // system clipboard's STALE text right after a wash-side copy.
+        // Chrome permits writeText on a focused document without a
+        // gesture; browsers that refuse (Firefox needs transient
+        // activation) reject silently and the wash clipboard still wins
+        // through washPasteText's fallback. Skipped when unfocused: the
+        // user is outside this browser and may be copying there — a
+        // deferred overwrite would clobber that.
+        if (c.text && document.hasFocus()) {
+          void navigator.clipboard?.writeText(c.text).catch(() => { /* no gesture / permission — best effort */ });
+        }
         break;
       }
     }
@@ -1731,18 +1745,49 @@ window.wash = {
 // system clipboard untouched. Guarded for the synthetic copies our
 // own mirror helper fires (data-wash-clipboard-mirror) so a wash→
 // system mirror doesn't echo back as a second set.
-document.addEventListener('copy', (ev) => {
+//
+// document.getSelection() doesn't cover <input>/<textarea> selections
+// in every browser (Firefox keeps field selections out of the document
+// selection entirely), so a focused field's selectionStart/End range is
+// read directly — otherwise Ctrl+C in a path bar or rename field leaves
+// the wash clipboard stale. Password fields are skipped: their content
+// must not leak into a clipboard every app can read.
+function nativeCopySelection(): string {
+  const el = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+    if ((el as HTMLInputElement).type === 'password') return '';
+    const { selectionStart, selectionEnd } = el;
+    if (selectionStart != null && selectionEnd != null && selectionEnd > selectionStart) {
+      return el.value.slice(selectionStart, selectionEnd);
+    }
+    return '';
+  }
+  return String(document.getSelection() ?? '');
+}
+function mirrorCopyEvent(ev: ClipboardEvent): void {
   const t = ev.target as HTMLElement | null;
   if (t && t.closest?.('[data-wash-clipboard-mirror]')) return;
-  const sel = String(document.getSelection() ?? '');
+  const sel = nativeCopySelection();
   if (sel) window.wash.clipboardSetText(sel);
-});
-document.addEventListener('cut', (ev) => {
+}
+document.addEventListener('copy', mirrorCopyEvent);
+document.addEventListener('cut', mirrorCopyEvent);
+
+// Mirror every native paste's text into the wash clipboard too. A
+// Ctrl+V carries the SYSTEM clipboard (the paste event's clipboardData)
+// straight into xterm/CodeMirror; without this fold the wash clipboard
+// — and everything that reads it (right-click Paste, X apps via
+// wash-display, the sidebar widget) — silently diverges from what the
+// user just demonstrably pasted. Skipped when the text already matches
+// (the common case now that washPasteText folds system reads itself).
+// CAPTURE phase: xterm stopPropagation()s paste events on its textarea,
+// so a bubble listener would miss exactly the terminal pastes.
+document.addEventListener('paste', (ev) => {
   const t = ev.target as HTMLElement | null;
   if (t && t.closest?.('[data-wash-clipboard-mirror]')) return;
-  const sel = String(document.getSelection() ?? '');
-  if (sel) window.wash.clipboardSetText(sel);
-});
+  const text = ev.clipboardData?.getData('text/plain') ?? '';
+  if (text && text !== clipboardSub.value.text) window.wash.clipboardSetText(text);
+}, { capture: true });
 
 // Auto-capture browser errors so they show up server-side.
 window.addEventListener('error', (ev: ErrorEvent) => {

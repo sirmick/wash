@@ -1317,7 +1317,10 @@ function rowStyle(header: boolean, selected: boolean): JSX.CSSProperties {
     'border-bottom': header ? `1px solid ${tokens.borderMenu}` : 'none',
     background: header ? tokens.bgMenu : selected ? tokens.bgRowSelected : 'transparent',
     cursor: header ? 'default' : 'pointer',
-    'user-select': 'none',
+    // Data rows stay selectable so process names/PIDs can be copied
+    // (Ctrl+C rides the shell's copy mirror); only the header — all
+    // sort buttons — opts out.
+    'user-select': header ? 'none' : 'text',
     position: header ? 'sticky' : 'static',
     top: header ? 0 : undefined,
     'z-index': header ? 1 : undefined,

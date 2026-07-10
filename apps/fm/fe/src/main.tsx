@@ -1698,6 +1698,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     return p ? [p] : [];
   };
 
+  // menuActionPaths is the context-menu counterpart: a 2+ selection
+  // that includes the right-clicked row acts on the whole selection
+  // (matching Delete/Download), otherwise just the clicked row.
+  const menuActionPaths = (p: string): string[] => {
+    const sel = selection();
+    return sel.size >= 2 && sel.has(p) ? Array.from(sel) : [p];
+  };
+
   // putFilesOnClipboard tells the BE to set the router clipboard
   // with `op` + `paths`. The BE echoes back a clipboard_files_state
   // event which updates filesClipboard reactively — so the status
@@ -2416,7 +2424,30 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             else if (m.entry.type === 'dir') selectPath(m.path, true);
             else openFile(m.path);
           }}
-          onCopy={() => {
+          onCut={() => {
+            const m = menu() as { path: string };
+            closeMenu();
+            const paths = menuActionPaths(m.path);
+            putFilesOnClipboard('cut', paths);
+            setStatusInfo(`cut ${paths.length} to clipboard`);
+          }}
+          onFileCopy={() => {
+            const m = menu() as { path: string };
+            closeMenu();
+            const paths = menuActionPaths(m.path);
+            putFilesOnClipboard('copy', paths);
+            setStatusInfo(`copied ${paths.length} to clipboard`);
+          }}
+          canPaste={(filesClipboard()?.paths.length ?? 0) > 0}
+          onPaste={() => {
+            closeMenu();
+            // Right-clicking already moved the selection to the clicked
+            // row (openContextMenu), so pasteFilesClipboard's
+            // dirOfSelection targets the clicked folder — or the clicked
+            // file's parent — matching the Ctrl+V semantics.
+            pasteFilesClipboard();
+          }}
+          onCopyPath={() => {
             const m = menu() as { path: string };
             closeMenu();
             send({ kind: 'clipboard_copy_path', path: m.path });
@@ -2893,7 +2924,15 @@ const ContextMenu: Component<{
   entry: Entry;
   path: string;
   onOpen: () => void;
-  onCopy: () => void;
+  // Files-clipboard trio — Cut/Copy mirror the Ctrl+X/C shortcuts on
+  // the clicked row (or the whole selection when it contains the row);
+  // Paste mirrors Ctrl+V into the row's directory. canPaste greys
+  // Paste out while the files clipboard is empty.
+  onCut: () => void;
+  onFileCopy: () => void;
+  onPaste: () => void;
+  canPaste: boolean;
+  onCopyPath: () => void;
   onInfo: () => void;
   onDownload: () => void;
   downloadLabel: string;
@@ -2904,7 +2943,12 @@ const ContextMenu: Component<{
   return (
     <Menu data-testid="fm-context-menu" x={props.left} y={props.top} onDismiss={props.onDismiss}>
       <MenuItem data-testid="fm-ctx-open" label="Open" onClick={props.onOpen} />
-      <MenuItem data-testid="fm-ctx-copy" label="Copy path" onClick={props.onCopy} />
+      <MenuSeparator />
+      <MenuItem data-testid="fm-ctx-cut" label="Cut" onClick={props.onCut} />
+      <MenuItem data-testid="fm-ctx-copy" label="Copy" onClick={props.onFileCopy} />
+      <MenuItem data-testid="fm-ctx-paste" label="Paste" disabled={!props.canPaste} onClick={props.onPaste} />
+      <MenuSeparator />
+      <MenuItem data-testid="fm-ctx-copy-path" label="Copy path" onClick={props.onCopyPath} />
       <MenuItem data-testid="fm-ctx-download" label={props.downloadLabel} onClick={props.onDownload} />
       <MenuItem data-testid="fm-ctx-info" label="Show info" onClick={props.onInfo} />
       <MenuSeparator />

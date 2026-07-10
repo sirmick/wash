@@ -138,6 +138,43 @@ test.describe('fm files clipboard (cut/copy/paste)', () => {
     expect(existsSync(join(router.fmRoot, 'moveme-b.txt'))).toBe(false);
   });
 
+  test('context-menu Copy → Paste on a folder row copies into that folder', async ({ page, router }) => {
+    mkdirSync(join(router.fmRoot, 'ctx-target'));
+    await openFm(page, router);
+
+    // Right-click hello.txt → Copy (files clipboard, same as Ctrl+C).
+    await page.locator('[data-testid="fm-entry-hello.txt"]').click({ button: 'right' });
+    await page.locator('[data-testid="fm-ctx-copy"]').click();
+    await expect(page.locator('[data-testid="fm-status"]')).toContainText(/copied 1/);
+
+    // Right-click the target FOLDER → Paste. Right-click re-selects the
+    // clicked row, so the paste dest resolves to the folder itself.
+    await page.locator('[data-testid="fm-entry-ctx-target"]').click({ button: 'right' });
+    await page.locator('[data-testid="fm-ctx-paste"]').click();
+
+    await router.waitForLog(/bulk-ops job=\S+ op=copy status=done/, 5_000);
+    expect(existsSync(join(router.fmRoot, 'ctx-target', 'hello.txt'))).toBe(true);
+    // Source still exists (copy, not move).
+    expect(existsSync(join(router.fmRoot, 'hello.txt'))).toBe(true);
+  });
+
+  test('context-menu Cut → Paste moves via bulk-ops', async ({ page, router }) => {
+    mkdirSync(join(router.fmRoot, 'ctx-move-target'));
+    writeFileSync(join(router.fmRoot, 'ctx-moveme.txt'), 'mmm');
+    await openFm(page, router);
+
+    await page.locator('[data-testid="fm-entry-ctx-moveme.txt"]').click({ button: 'right' });
+    await page.locator('[data-testid="fm-ctx-cut"]').click();
+    await expect(page.locator('[data-testid="fm-status"]')).toContainText(/cut 1/);
+
+    await page.locator('[data-testid="fm-entry-ctx-move-target"]').click({ button: 'right' });
+    await page.locator('[data-testid="fm-ctx-paste"]').click();
+
+    await router.waitForLog(/bulk-ops job=\S+ op=move status=done/, 5_000);
+    expect(existsSync(join(router.fmRoot, 'ctx-move-target', 'ctx-moveme.txt'))).toBe(true);
+    expect(existsSync(join(router.fmRoot, 'ctx-moveme.txt'))).toBe(false);
+  });
+
   test('Ctrl+V with empty clipboard is a no-op', async ({ page, router }) => {
     await openFm(page, router);
     // No prior C/X — clipboard is empty.

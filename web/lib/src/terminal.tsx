@@ -681,10 +681,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
     // PuTTY-style select = copy: xterm keeps its own selection model
     // (not a DOM selection), so on selection-end we push the selected
     // text into the wash clipboard + mirror it to the system clipboard
-    // while the mouseup gesture is live. LEFT button only — a right-click
-    // opens the context menu (Copy/Paste + font controls) and must NOT
-    // re-copy the live selection, or right-click-to-Paste would clobber
-    // the clipboard with the selection right before reading it.
+    // while the mouseup gesture is live. LEFT button only — right-click
+    // has its own copy/paste semantics in onCtx below.
     const onMouseUp = (ev: MouseEvent) => {
       if (ev.button !== 0) return;
       const sel = term?.getSelection();
@@ -825,21 +823,41 @@ export const Terminal: Component<TerminalProps> = (props) => {
     });
   });
 
-  // ---- right-click menu ----
-
+  // ---- right-click: direct copy/paste (menu on Shift) ----
+  //
+  // Plain right-click acts immediately, PuTTY-style: with a live
+  // selection it copies (and clears the selection, so the next
+  // right-click pastes); with none it pastes. Ctrl+C is taken by
+  // SIGINT half the time, so right-click is the terminal's primary
+  // mouse clipboard gesture — a menu in the middle just adds a click.
+  // Shift+right-click keeps the Copy/Paste menu for discoverability.
+  // (Firefox quirk: it shows its native menu on Shift+right-click
+  // regardless of preventDefault — there the wash menu may double up;
+  // the term app's Edit menubar remains the clean path.)
   const onCtx = (ev: MouseEvent) => {
     if (props.contextMenu === false) return;
     ev.preventDefault();
-    setHasSel(!!term?.hasSelection());
-    setMenu({ x: ev.clientX, y: ev.clientY });
+    if (ev.shiftKey) {
+      setHasSel(!!term?.hasSelection());
+      setMenu({ x: ev.clientX, y: ev.clientY });
+      return;
+    }
+    const sel = term?.getSelection();
+    if (sel) {
+      washCopyText(sel);
+      term?.clearSelection();
+    } else {
+      term?.focus();
+      pasteWash();
+    }
   };
 
-  // Menu Copy/Paste ride the wash clipboard, not navigator.clipboard:
-  // on the plain-HTTP LAN origin wash ships on, navigator.clipboard is
-  // undefined and would silently no-op. washCopyText still mirrors to
-  // the system clipboard while the click gesture is live; pasteWash
-  // goes through term.paste(), so the text rides the same path as
-  // typed input and honors bracketed-paste mode.
+  // Menu Copy/Paste ride the wash clipboard helpers: washCopyText
+  // mirrors to the system clipboard while the click gesture is live;
+  // pasteWash prefers the system clipboard where readable (HTTPS) and
+  // falls back to the wash clipboard, then goes through term.paste()
+  // so the text rides the same path as typed input and honors
+  // bracketed-paste mode.
   const doCopy = () => {
     const sel = term?.getSelection() ?? '';
     if (sel) washCopyText(sel);

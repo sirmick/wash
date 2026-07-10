@@ -10,7 +10,7 @@
 // netd validate → apply (commit-confirm) → the box.
 
 import { createEffect, createMemo, createSignal, onCleanup, onMount, For, Show, Switch, Match } from "solid-js";
-import { defineWashApp, tokens, washAssetUrl, type WashAppProps } from "@wash/ui";
+import { defineWashApp, tokens, washAssetUrl, washCopyText, type WashAppProps } from "@wash/ui";
 import { x25519 } from "@noble/curves/ed25519.js";
 
 import { ApplyTerminal, type ApplyEvent } from "./ApplyTerminal.tsx";
@@ -1597,7 +1597,7 @@ function WireGuardWizard(props: { onCancel: () => void; onCreate: (name: string,
         <span class="wash-net-label">Public key</span>
         <span class="wash-net-wg-key">
           <input data-testid="wg-pubkey" readOnly value={pubKey()} placeholder="(derived from the private key)" />
-          <button type="button" class="wash-net-btn ghost" data-testid="wg-copy-pubkey" disabled={!pubKey()} onClick={() => void navigator.clipboard?.writeText(pubKey())}>Copy</button>
+          <button type="button" class="wash-net-btn ghost" data-testid="wg-copy-pubkey" disabled={!pubKey()} onClick={() => washCopyText(pubKey())}>Copy</button>
         </span>
       </label>
       <label class="wash-net-field">
