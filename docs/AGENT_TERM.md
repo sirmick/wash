@@ -22,8 +22,10 @@ Decisions already made (discussion 2026-07-28):
   tray, click-to-focus). No parallel channel.
 - **Approval is a policy engine, not `y`-typing.** Claude Code's PreToolUse
   hook can return a programmatic allow/deny; wash answers from per-session
-  policy. Issue #19 item 2 lands here. (Item 3, paste line-escape fixup, is
-  unrelated wash-term plumbing — tracked separately.)
+  policy. Issue #19 item 2 lands here.
+- **Smart paste (issue #19 item 3) rides along as M5** — pure FE, no shared
+  mechanism with the agent work, but same theme (AI-workflow terminal ergonomics)
+  and same milestone train. See §10.
 - **Prompt library: out of scope.** If it earns existence later it's a
   files-based fm/edit-adjacent surface, not terminal chrome.
 
@@ -220,10 +222,51 @@ sessions without restart.
   legacy typed-`y` mode ships OFF).
 - **M4 — roster.** agentd + session gateway + AgentsWidget + liveness.
   Remote merge deferred to REMOTE §6.2 scheduling.
+- **M5 — smart paste** (§10). Closes #19 item 3 and with it the whole issue.
+  Independent of M1–M4; can be built at any point in the train.
 
 Each milestone ships standalone value; M1 is small and immediately visible.
 
-## 10. Non-goals / later
+## 10. Smart paste (M5, issue #19 item 3)
+
+Pastes copied out of AI chats arrive broken in two ways, and every paste path
+already funnels through one choke point (`TerminalAPI.paste` in the shared
+terminal component — menu, right-click, Ctrl+Shift+V), so both are fixed
+there, FE-only:
+
+- **Wrap artifacts**: the chat's soft line-wrap becomes hard newlines, so one
+  logical command pastes as N lines and the shell runs each separately.
+  Fingerprint of "one wrapped command" (vs a genuine multi-line script):
+  line lengths clustered near the longest (a common wrap column), breaks
+  landing mid-token or before a `--flag`, no shell structure at line starts
+  (`if`/`for`/`#`/`&&`/trailing `\`). Repair = join the lines back into one
+  (the newlines are artifacts; joining ≡ the issue's trailing-`\` ask, minus
+  the noise). Real scripts are left structurally intact.
+- **Smuggled junk**, which bites single lines too: leading `$ ` prompt
+  markers, curly quotes where the shell needs straight ones, non-breaking
+  spaces (U+00A0 — the invisible "command not found" generator), zero-width
+  chars, stray code-fence backticks. Mechanical normalization, always safe.
+
+UX — never silently rewrite structure:
+
+- Single-line pastes with junk: cleaned silently (stripping U+00A0 is never
+  wrong).
+- Multi-line or ambiguous: a small preview overlay — cleaned result with the
+  original diff-highlighted — **Paste cleaned / Paste as-is / Cancel**, plus
+  a term-menu setting `Smart paste: ask · always · off`.
+- Paste-jacking guard for free: `TermModes` already tracks the shell's
+  bracketed-paste state (DEC 2004), so the overlay warns specifically when a
+  multi-line paste is about to hit a shell that will execute it line-by-line
+  immediately.
+
+Implementation: pure `analyzePaste(text) → {verdict, cleaned, issues}` kernel
+(decision-kernel pattern, exhaustively unit-tested — wrap detection is all
+heuristics and the tests ARE the spec), overlay in the term FE, hook into
+`paste()`. No BE/protocol change. e2e: clipboard-inject wrapped and junked
+payloads, assert overlay verdicts and what actually reached the pty
+(router-log side).
+
+## 11. Non-goals / later
 
 - Prompt library / context feed (send selection/diff to a session) — future,
   files-based, outside terminal chrome.
