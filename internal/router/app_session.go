@@ -581,7 +581,16 @@ func (inst *AppInstance) relayAppMsgToShell(m wire.EvtAppMsg, class wire.Class) 
 // which keeps the cold-start window narrow.
 func (inst *AppInstance) relayNotify(m wire.EvtNotify) error {
 	if inst.AppID == NotifyAppID {
-		out := wire.NewShellNotify(inst.InstanceID, m.Title, m.Body, m.Level)
+		// The toast names the instance it is ABOUT so the shell can focus
+		// that window when it is clicked. The service re-emits other apps'
+		// notifications, so it passes the original sender through in
+		// Source; only it is trusted to do so (every other app's notify
+		// takes the forward path below, which never reads Source).
+		src := m.Source
+		if src == "" {
+			src = inst.InstanceID
+		}
+		out := wire.NewShellNotify(src, m.Title, m.Body, m.Level)
 		var firstErr error
 		for _, s := range inst.router.shellList() {
 			if err := s.WriteCtrl(out); err != nil && firstErr == nil {

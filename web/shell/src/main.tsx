@@ -326,6 +326,25 @@ function clearRemoteCatalog(origin: Origin): void {
   if (remoteCatalogs.delete(origin)) remoteCatalogSub.set({ origin, apps: [] });
 }
 const windowsSub = new Sub<WindowInfo[]>([]);
+
+// focusInstance raises the window belonging to an app instance, restoring
+// it first if it was minimized. Toast click-to-focus uses it: a
+// notification names the instance that raised it (ShellNotify carries
+// instance_id), and clicking "Claude needs your input" should land on the
+// terminal that said so. Silently does nothing for an instance with no
+// window (a background service's toast) — the toast still dismisses.
+function focusInstance(instanceID: string): void {
+  const w = windowsSub.value.find((x) => x.instanceID === instanceID);
+  if (!w) return;
+  // Snap the camera to the window's viewport cell first — focusing a
+  // window one cell over would otherwise "work" with nothing visible
+  // happening. Same move the taskbar pill's dblclick makes.
+  const cell = viewportFor(w);
+  setViewport(cell.vx, cell.vy);
+  // restoreWindow raises + focuses on its own; focusWindow for the rest.
+  if (w.state === 'minimized') window.wash.restoreWindow(w.windowID, w.origin);
+  else window.wash.focusWindow(w.windowID, w.origin);
+}
 // viewportSub mirrors the Solid viewport signal into the cross-element
 // pub/sub the session app subscribes to via window.wash.onViewport.
 // We also publish per-window viewport assignments here so the pager
@@ -436,6 +455,7 @@ function makeHandlers(client: RouterClient): ClientHandlers {
           title: n.title,
           body: n.body,
           level: n.level,
+          onActivate: focusInstance,
         });
         break;
       }

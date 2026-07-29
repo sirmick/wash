@@ -514,10 +514,24 @@ type EvtNotify struct {
 	Title string `json:"title"`
 	Body  string `json:"body,omitempty"`
 	Level string `json:"level,omitempty"`
+	// Source is the instance the notification is ABOUT, when that isn't
+	// the sender: the notify service re-emits other apps' notifications,
+	// and without this the toast would name the service and click-to-focus
+	// would have nothing to focus. The router honours it ONLY from the
+	// notify service (which fills it from the router-attested sender of
+	// the original), so an app cannot pin its toast on another app's
+	// window.
+	Source string `json:"source,omitempty"`
 }
 
 func NewEvtNotify(title, body, level string) EvtNotify {
 	return EvtNotify{T: TEvtNotify, Title: title, Body: body, Level: level}
+}
+
+// NewEvtNotifyFrom is NewEvtNotify with the originating instance carried
+// through — the notify service's re-emit path.
+func NewEvtNotifyFrom(source, title, body, level string) EvtNotify {
+	return EvtNotify{T: TEvtNotify, Title: title, Body: body, Level: level, Source: source}
 }
 
 // EvtClipboardSet writes new content to the router-held clipboard.
