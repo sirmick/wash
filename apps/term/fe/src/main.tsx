@@ -9,7 +9,7 @@
 // handle from each <Terminal> via onReady so tab activation can
 // trigger focus/fit.
 
-import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { Check, Globe, Plus, ShieldAlert, User, X } from 'lucide-solid';
 import {
@@ -73,6 +73,25 @@ interface TabStatus {
   host: string; // short box name, e.g. "ai"
   target: string; // ssh destination host (for the "ssh" state)
 }
+
+// AgentStatus is the BE's per-tab `agent_status` push (docs/AGENT_TERM.md
+// §5): a coding agent detected in this tab, and what it's doing. Drives the
+// tab's state dot and the "· claude working 4m" clause in the status line.
+// Ephemeral — never persisted, re-seeded by the BE after a reattach.
+interface AgentStatus {
+  agent: string; // slug: "claude", "codex", …
+  // running: detected in the foreground but not reporting (tier T0, or an
+  // agent that has started but isn't in a turn). The other three come
+  // from the agent's own hooks.
+  state: 'running' | 'working' | 'needs-input' | 'done';
+  // startedAt: local clock anchor for the elapsed counter, derived once
+  // from the BE's since_ms so the FE can tick without further messages.
+  startedAt: number;
+  sessionId: string;
+  reason: string; // qualifies needs-input: "permission" | "idle"
+}
+
+const AGENT_STATES = ['running', 'working', 'needs-input', 'done'] as const;
 
 // The on-the-wire/saved schema uses snake_case to match the rest of
 // wash's JSON conventions.
@@ -142,6 +161,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const [tabTitles, setTabTitles] = createSignal<Map<number, string>>(new Map());
   // Per-tab user badge/status from the BE poll (see TabStatus).
   const [tabStatus, setTabStatus] = createSignal<Map<number, TabStatus>>(new Map());
+  // Per-tab agent status (see AgentStatus). Same side-map discipline as
+  // tabStatus/tagColors — the term-host <For> is keyed by object identity,
+  // so anything that changes per tab lives OUTSIDE the TabMeta objects or
+  // the xterm remounts and scrollback is lost.
+  const [agentStatus, setAgentStatus] = createSignal<Map<number, AgentStatus>>(new Map());
+  // Coarse clock for the agent elapsed counter ("working 4m"). Ticks once
+  // a second and only while some tab has an agent, so an ordinary terminal
+  // window costs nothing.
+  const [now, setNow] = createSignal(Date.now());
 
   // Per-tab color tag, keyed by channel id. Kept OUT of the TabMeta
   // objects on purpose: the term-host <For> below is keyed by object
@@ -198,6 +226,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       const next = new Map(tabStatus());
       next.delete(channelID);
       setTabStatus(next);
+    }
+    if (agentStatus().has(channelID)) {
+      const next = new Map(agentStatus());
+      next.delete(channelID);
+      setAgentStatus(next);
     }
     const remaining = tabs().filter((t) => t.channelID !== channelID);
     setTabs(remaining);
@@ -344,6 +377,59 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const activeStatus = (): TabStatus | undefined => tabStatus().get(active());
   const isRootActive = (): boolean => activeStatus()?.state === 'root';
 
+  // ---- agent status (tab dot + status-line clause) ----
+
+  // agentDot is the small filled circle beside the user badge: blue while
+  // the agent works, amber when it wants the human, green when it's done,
+  // muted grey for "running but not reporting" (tier T0, no hooks). It is
+  // the whole of M1's visible surface, so it carries the state in a data
+  // attribute for e2e to assert on.
+  const agentDot = (a: AgentStatus | undefined, testid: string): JSX.Element => {
+    if (!a) return null;
+    return (
+      <span
+        data-testid={testid}
+        data-agent={a.agent}
+        data-agent-state={a.state}
+        title={agentTitle(a)}
+        style={{
+          width: '7px',
+          height: '7px',
+          'border-radius': '50%',
+          background: agentColor(a.state),
+          'flex-shrink': 0,
+          display: 'inline-block',
+        }}
+      />
+    );
+  };
+
+  const agentTitle = (a: AgentStatus): string => {
+    const what = a.state === 'needs-input' && a.reason
+      ? `needs input (${a.reason})`
+      : a.state;
+    return `${a.agent} ${what} · ${elapsed(a.startedAt)}`;
+  };
+
+  // agentText is the status-line clause appended after the shell sentence:
+  // "bash as mick on ai · claude working 4m".
+  const agentText = (a: AgentStatus | undefined): string => {
+    if (!a) return '';
+    const what = a.state === 'needs-input' ? 'needs input' : a.state;
+    return `· ${a.agent} ${what} ${elapsed(a.startedAt)}`;
+  };
+
+  // elapsed renders a duration the way a glanceable status line wants it:
+  // seconds under a minute, then minutes, then hours. now() makes it live.
+  const elapsed = (startedAt: number): string => {
+    const secs = Math.max(0, Math.floor((now() - startedAt) / 1000));
+    if (secs < 60) return `${secs}s`;
+    if (secs < 3600) return `${Math.floor(secs / 60)}m`;
+    return `${Math.floor(secs / 3600)}h`;
+  };
+
+  const activeAgent = (): AgentStatus | undefined => agentStatus().get(active());
+
   // statusText composes the bottom-bar sentence for the active tab:
   //   ssh  → "ssh to ‘xyz’"
   //   root → "bash as root on ai"
@@ -388,6 +474,29 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           target: String(m.target ?? ''),
         });
         setTabStatus(next);
+        return;
+      }
+      case 'agent_status': {
+        const id = Number(m.channel_id);
+        const state = String(m.state ?? '');
+        const next = new Map(agentStatus());
+        if (!AGENT_STATES.includes(state as AgentStatus['state'])) {
+          // Empty state = "no agent in this tab any more" (the agent
+          // exited, or its SessionEnd hook fired).
+          next.delete(id);
+        } else {
+          next.set(id, {
+            agent: String(m.agent ?? 'agent'),
+            state: state as AgentStatus['state'],
+            // since_ms is how long the BE has held this state; anchor the
+            // local clock to it so the counter keeps running between
+            // messages (they only arrive on change).
+            startedAt: Date.now() - Math.max(0, Number(m.since_ms ?? 0)),
+            sessionId: String(m.session_id ?? ''),
+            reason: String(m.reason ?? ''),
+          });
+        }
+        setAgentStatus(next);
         return;
       }
     }
@@ -545,11 +654,27 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     props.host.addEventListener('wash:msg', onMsg);
     props.host.addEventListener('wash:state', onState);
 
+    // Elapsed-time ticker for the agent clause. Runs only while a tab
+    // actually has an agent — createEffect re-evaluates when the agent map
+    // changes, so an ordinary terminal never holds an interval.
+    let tick: ReturnType<typeof setInterval> | undefined;
+    createEffect(() => {
+      const wanted = agentStatus().size > 0;
+      if (wanted && tick === undefined) {
+        setNow(Date.now());
+        tick = setInterval(() => setNow(Date.now()), 1000);
+      } else if (!wanted && tick !== undefined) {
+        clearInterval(tick);
+        tick = undefined;
+      }
+    });
+
     onCleanup(() => {
       props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('wash:state', onState);
       if (pendingFallback) clearTimeout(pendingFallback);
       if (modesTimer) clearTimeout(modesTimer);
+      if (tick !== undefined) clearInterval(tick);
       apis.clear();
       sizes.clear();
     });
@@ -744,9 +869,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               >
                 <span
                   data-testid={`term-tab-badge-${tab.channelID}`}
-                  style={{ display: 'inline-flex', 'align-items': 'center', 'flex-shrink': 0 }}
+                  style={{ display: 'inline-flex', 'align-items': 'center', gap: '5px', 'flex-shrink': 0 }}
                 >
                   {statusBadge(tabStatus().get(tab.channelID))}
+                  {agentDot(agentStatus().get(tab.channelID), `term-tab-agent-${tab.channelID}`)}
                 </span>
                 <span
                   title={fullLabel(tab)}
@@ -884,12 +1010,43 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           {statusBadge(activeStatus(), isRootActive() ? '#ffffff' : undefined)}
         </span>
         <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis' }}>{statusText()}</span>
+        <Show when={activeAgent()}>
+          {(a) => (
+            <span
+              data-testid="term-status-agent"
+              data-agent-state={a().state}
+              style={{
+                display: 'inline-flex',
+                'align-items': 'center',
+                gap: '5px',
+                'flex-shrink': 0,
+                // The red root bar owns the whole line's colour; elsewhere
+                // the clause carries its own state hue.
+                color: isRootActive() ? '#ffffff' : agentColor(a().state),
+              }}
+            >
+              {agentText(a())}
+            </span>
+          )}
+        </Show>
       </div>
     </>
   );
 };
 
 // ---- helpers / styles ----
+
+// agentColor maps an agent state to its dot hue (docs/AGENT_TERM.md §5):
+// blue working / amber needs-input / green done, with a muted dot for a
+// T0-detected agent that isn't reporting state.
+function agentColor(state: AgentStatus['state']): string {
+  switch (state) {
+    case 'working': return tokens.accentBlue;
+    case 'needs-input': return tokens.accentAmber;
+    case 'done': return tokens.accentGreen;
+    default: return tokens.fgMuted;
+  }
+}
 
 function shortShellName(p: string): string {
   const i = p.lastIndexOf('/');

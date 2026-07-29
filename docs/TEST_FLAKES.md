@@ -21,6 +21,12 @@ cross-checked against CI history and local stress runs.
 Local stress otherwise green: `go test -shuffle=on` ×2 (only TestSpine fired, load-induced not
 order-induced), `-race -count=3` over the 14 concurrency-dense packages, fe-unit ×5, vitest ×2.
 
+**Later sightings are logged in `docs/FLAKE_LOG.md`** (dated, with the pre-change baseline
+each was A/B'd against). The 2026-07-29 entry adds a mechanism for `display-term-xclock` that
+C5 below does not have: the failure is `DISPLAY` missing at pty spawn, because the spec's
+`env.publish` wait is satisfied by a stale pre-Xwayland match (the A10 cursor problem), not a
+lost keystroke.
+
 ## Ground rules (do not skip)
 
 1. **One worktree branch per phase** under `branches/` (`git -C /home/mick/wash worktree add

@@ -129,7 +129,11 @@ idempotent, marked entries so removal only touches ours):
 
 - **Settings → Agents panel** (define-settings-panel): opt-in toggle per
   agent CLI; shows exactly what will be written to `~/.claude/settings.json`.
+  Deferred to M3 (§9.1), where the same panel carries the policy rules.
 - **`wash agent-hooks install|remove|status` CLI** for headless/remote boxes.
+  Shipped in M1: `--dry-run` prints the merged file, `--path` targets a
+  non-default settings file, and the first write leaves a `.wash-bak` copy
+  of the original.
 
 Claude Code hot-reloads settings files, so install applies to running
 sessions without restart.
@@ -210,9 +214,11 @@ sessions without restart.
 
 ## 9. Milestones
 
-- **M1 — status channel.** `internal/pty/agentosc.go` + T0 agent table in
+- **M1 — status channel. DONE** (see §9.1 for what shipped).
+  `internal/pty/agentosc.go` + T0 agent table in
   the foreground poll; `agent_status` app_msg; term FE tab dots + status
-  line; `wash-agent-hook status`; Claude Code hook install (panel + CLI).
+  line; `wash-agent-hook status`; Claude Code hook install (CLI; the
+  panel moved to M3 — see §9.1).
   Acceptance: run Claude Code in a wash term → dot flips working /
   needs-input / done live; `vi` alone → plain T0 "agent: none".
 - **M2 — notifications.** Transition toasts + rate limit + taskbar badge;
@@ -226,6 +232,46 @@ sessions without restart.
   Independent of M1–M4; can be built at any point in the train.
 
 Each milestone ships standalone value; M1 is small and immediately visible.
+
+### 9.1 M1 as built
+
+Map of the shipped code, and the few places the implementation pinned down
+a detail the design left open:
+
+| Piece | Where |
+|---|---|
+| OSC 7770 scanner + T0 agent table | `internal/pty/agentosc.go` (+ `pty.Session.SetAgentHandler`, the tee in `pty.Open`) |
+| per-tab merge, `agent_status` push | `apps/term/be/agent.go` |
+| tab dot + status-line clause | `apps/term/fe/src/main.tsx` (`agentStatus` side map) |
+| hook helper (`status` mode) | `internal/agenthook/agenthook.go`, `cmd/wash-agent-hook/` |
+| hook install/remove/status | `internal/agenthook/settings.go` + `cli.go` (`wash agent-hooks …`) |
+| tests | `internal/pty/agentosc_test.go` (+ fuzz), `internal/agenthook/*_test.go`, `apps/term/be/agent_test.go`, `e2e/tests/term-agent.spec.ts` |
+
+- **Wire states are four, not five.** `agent_status.state` is
+  `running | working | needs-input | done`; `ev=start` maps to `running`,
+  which is also what T0 alone reports. `ev=end` clears the record (an
+  empty `state` on the wire = "no agent here"), and the FE colours
+  running with a muted dot, so "an agent is here but not reporting" reads
+  differently from all three live states.
+- **T0 is the liveness signal for T1.** An agent killed with SIGKILL never
+  fires `SessionEnd`, so an OSC state whose agent has been absent from the
+  foreground for 30s is dropped — except while the foreground is ssh,
+  where T0 can't see a remote agent by construction.
+- **The FE keeps a side map keyed by channel id** (like `tabStatus`),
+  never a field on `TabMeta`: the term-host `<For>` is keyed by object
+  identity, so touching a tab object remounts its xterm.
+- **Hook entries are marked by their command string** containing
+  `wash-agent-hook`, not by a custom JSON key — agent settings schemas
+  validate hook entries, and an unknown field risks the whole block being
+  rejected. Removal only ever touches marked entries.
+- **The Settings → Agents panel is deferred to M3**, where it has the
+  policy rules to render as well; `wash agent-hooks install|remove|status`
+  is the M1 install path and the panel will call the same
+  `agenthook.Install/Remove/Status` functions.
+- **e2e stand-ins**: a shell script printf'ing OSC 7770 for T1, and an
+  executable named `claude` for T0 (comm of a shebang script is the
+  script's own name) — plus the negative case (`sleep` is not an agent),
+  which is where a loose agent table would show up.
 
 ## 10. Smart paste (M5, issue #19 item 3)
 

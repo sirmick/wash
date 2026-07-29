@@ -88,6 +88,13 @@ bug list — all fully landed; see `git log` if you need their content.)
 
 ## Test stability  (docs/TEST_FLAKES.md — the 2026-07-03 full-suite audit)
 
+- [ ] **Keep `docs/FLAKE_LOG.md` current** — the dated record of flakes actually
+  seen, each A/B'd against its pre-change baseline so "my branch broke it" is a
+  finding, not a guess. 2026-07-29: the display capstone tier fails ~2 runs in 3
+  under parallel load on BOTH sides of a feature branch (C5 / issue #7), and the
+  `display-term-xclock` mechanism turns out to be A10 (a stale `env.publish`
+  match → no `DISPLAY` at pty spawn), not C5's lost-keystroke diagnosis.
+
 - [ ] **Execute the phased plan in docs/TEST_FLAKES.md** (~75 verified items,
   written for a smaller LLM): Phase A e2e harness/process lifecycle
   (readiness lines logged before bind, leak-on-throw, no process-group kill,
@@ -131,6 +138,13 @@ bug list — all fully landed; see `git log` if you need their content.)
   t.Logf-panic class.
 
 ## Apps / UX
+
+- [ ] **Agent-aware terminals M2–M5** — docs/AGENT_TERM.md. M1 (the OSC
+  7770 status channel, tab dots, `wash-agent-hook`, `wash agent-hooks`
+  install) is DONE. Next: **M2** transition toasts + taskbar badge; **M3**
+  the approval socket, policy rules and the Settings → Agents panel
+  (deferred from M1 — the panel and the policy rules render together);
+  **M4** agentd + sidebar roster; **M5** smart paste (issue #19 item 3).
 
 - [ ] **fm/edit: surface access-denied + "relaunch as root"** — **issue #6**
   (full implementation prompt is a comment there). Part A: status-bar

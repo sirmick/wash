@@ -48,6 +48,15 @@ type Session struct {
 
 	closeOnce sync.Once
 	onClose   func(s *Session, reason string)
+
+	// agentMu guards the OSC 7770 tee (agentosc.go): the handler and
+	// the resumable scanner. Nil handler = no agent parsing at all, so
+	// a PTY host that doesn't care (wash-edit's embedded terminal)
+	// pays one nil check per read.
+	// SetAgentHandler / feedAgent / agentTee live in agentosc.go.
+	agentMu   sync.Mutex
+	agentFn   func(AgentEvent)
+	agentScan *agentOSCScanner
 }
 
 // Size returns the last cols/rows applied to the PTY.
@@ -83,6 +92,11 @@ type ForegroundUser struct {
 	State  string // "user" | "root" | "ssh"
 	User   string // login name of the foreground program's euid
 	Target string // ssh destination host, when State == "ssh"
+	// Agent is the coding-agent slug ("claude", "codex", …) when the
+	// foreground program is one — tier T0 of docs/AGENT_TERM.md §2.
+	// Empty for everything else, which is most things: a shell, vi, a
+	// build. Independent of State (an agent can run as root).
+	Agent string
 }
 
 // sshComms are the foreground program names treated as an outbound ssh
@@ -112,14 +126,31 @@ func (s *Session) ForegroundUser() ForegroundUser {
 	}
 	euid := procEUID(fg)
 	out.User = userName(euid)
+	comm := procComm(fg)
 	switch {
 	case euid == 0:
 		out.State = "root"
-	case sshComms[procComm(fg)]:
+	case sshComms[comm]:
 		out.State = "ssh"
 		out.Target = sshTarget(fg)
 	}
+	// T0 agent detection rides the same /proc read: argv is only
+	// fetched for the handful of interpreter comms that need it.
+	if _, ok := agentComms[comm]; ok {
+		out.Agent = agentComms[comm]
+	} else if runtimeComms[comm] {
+		out.Agent = matchAgent(comm, procCmdline(fg))
+	}
 	return out
+}
+
+// procCmdline reads /proc/<pid>/cmdline as argv (NUL-separated).
+func procCmdline(pid int) []string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return nil
+	}
+	return strings.Split(strings.TrimRight(string(data), "\x00"), "\x00")
 }
 
 // foregroundPgrp returns the foreground process group of pid's
@@ -198,12 +229,7 @@ func userName(uid int) string {
 // first positional argument, and strips a leading user@. Best-effort:
 // an exotic invocation just yields "".
 func sshTarget(pid int) string {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
-	if err != nil {
-		return ""
-	}
-	args := strings.Split(strings.TrimRight(string(data), "\x00"), "\x00")
-	return parseSSHTarget(args)
+	return parseSSHTarget(procCmdline(pid))
 }
 
 // parseSSHTarget pulls the destination host out of an ssh argv: skip
@@ -294,9 +320,10 @@ func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint1
 		onClose: onClose,
 	}
 
-	// pty → channel
+	// pty → channel, teed through the OSC 7770 agent scanner (inert
+	// until someone calls SetAgentHandler).
 	go func() {
-		_, copyErr := io.Copy(ch, f)
+		_, copyErr := io.Copy(ch, &agentTee{r: f, s: s})
 		if !isPtyTerm(copyErr) {
 			// Real I/O error, not the normal EOF/EIO of a closing pty —
 			// without this line the session just goes dark.

@@ -29,4 +29,5 @@ wash-audio
 wash-fswatch
 wash-launch
 wash-fswatchd
+wash-agent-hook
 wash-sudo
