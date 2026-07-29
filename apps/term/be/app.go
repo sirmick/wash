@@ -93,6 +93,20 @@ type state struct {
 	// pushed per channel, so an idle tab stays off the wire (we only
 	// send when root/ssh/user actually flips). Cleared on tab close.
 	statusSent map[uint32]string
+	// agents holds each tab's merged agent status (T0 poll + OSC 7770
+	// events); agentSent is its send-on-change dedupe, same shape as
+	// statusSent. See agent.go.
+	agents    map[uint32]*agentRec
+	agentSent map[uint32]string
+}
+
+// initState allocates the per-window maps. Both entrypoints (Def for the
+// standalone shim, run for the multicall dispatch) start here.
+func initState() {
+	st.sessions = make(map[uint32]*pty.Session)
+	st.statusSent = make(map[uint32]string)
+	st.agents = make(map[uint32]*agentRec)
+	st.agentSent = make(map[uint32]string)
 }
 
 var st state
@@ -157,8 +171,7 @@ func init() {
 // execArgv / loginShell before it spawns the first openTab.
 func Def() *sdk.AppDef {
 	parseFlags()
-	st.sessions = make(map[uint32]*pty.Session)
-	st.statusSent = make(map[uint32]string)
+	initState()
 	return def
 }
 
@@ -166,8 +179,7 @@ func Def() *sdk.AppDef {
 // sequence as Def + sdk.Main, but plumbed through registry.App.Run.
 func run(ctx context.Context) error {
 	parseFlags()
-	st.sessions = make(map[uint32]*pty.Session)
-	st.statusSent = make(map[uint32]string)
+	initState()
 	return sdk.Run(ctx, def)
 }
 
@@ -228,6 +240,7 @@ func pollTabStatus(c *sdk.Conn) {
 				sessions = append(sessions, s)
 			}
 			st.mu.Unlock()
+			now := time.Now()
 			for i, sess := range sessions {
 				id := ids[i]
 				fu := sess.ForegroundUser()
@@ -237,7 +250,22 @@ func pollTabStatus(c *sdk.Conn) {
 				if !unchanged {
 					st.statusSent[id] = key
 				}
+				// T0 agent detection rides this same sample (agent.go).
+				// The record is created lazily but kept while EITHER tier
+				// has something, so an OSC-reported agent survives a poll
+				// tick that sees no agent in the foreground.
+				rec := st.agents[id]
+				if rec == nil && fu.Agent != "" {
+					rec = &agentRec{}
+					st.agents[id] = rec
+				}
+				if rec != nil {
+					rec.applyPoll(fu, now)
+				}
 				st.mu.Unlock()
+				// Agent status has its own dedupe and its own message, so
+				// it publishes whether or not the user badge flipped.
+				publishAgent(c, id)
 				if unchanged {
 					continue
 				}
@@ -323,7 +351,10 @@ func registerHandlers(b *sdk.Bus) {
 		// user state hasn't flipped since would never get its badge back.
 		// Forget the dedupe keys here so the next poll tick (≤1s) resends
 		// the current status for every live tab and re-seeds the badges.
+		// Agent status is ephemeral in exactly the same way (never
+		// persisted, never replayed), so it re-seeds off the same tick.
 		st.statusSent = make(map[uint32]string)
+		st.agentSent = make(map[uint32]string)
 		st.mu.Unlock()
 		return c.SendAppMsg(map[string]any{"kind": "sessions", "sessions": rows})
 	})
@@ -368,6 +399,8 @@ func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
 		_, found := st.sessions[s.ID()]
 		delete(st.sessions, s.ID())
 		delete(st.statusSent, s.ID())
+		delete(st.agents, s.ID())
+		delete(st.agentSent, s.ID())
 		empty := len(st.sessions) == 0
 		st.mu.Unlock()
 		if !found {
@@ -392,6 +425,10 @@ func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
 	st.mu.Lock()
 	st.sessions[sess.ID()] = sess
 	st.mu.Unlock()
+	// Tee this pty's output through the OSC 7770 scanner (agent.go). The
+	// bytes are only read — the sequence stays in the stream, so the
+	// scrollback ring is untouched and replays never re-fire events.
+	sess.SetAgentHandler(func(ev pty.AgentEvent) { onAgentEvent(c, sess.ID(), ev) })
 
 	log.Printf("wash-term tab opened ch=%d shell=%s pid=%d", sess.ID(), sess.Shell, sess.Cmd().Process.Pid)
 	_ = c.SendAppMsg(map[string]any{

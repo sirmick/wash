@@ -132,6 +132,13 @@ bug list — all fully landed; see `git log` if you need their content.)
 
 ## Apps / UX
 
+- [ ] **Agent-aware terminals M2–M5** — docs/AGENT_TERM.md. M1 (the OSC
+  7770 status channel, tab dots, `wash-agent-hook`, `wash agent-hooks`
+  install) is DONE. Next: **M2** transition toasts + taskbar badge; **M3**
+  the approval socket, policy rules and the Settings → Agents panel
+  (deferred from M1 — the panel and the policy rules render together);
+  **M4** agentd + sidebar roster; **M5** smart paste (issue #19 item 3).
+
 - [ ] **fm/edit: surface access-denied + "relaunch as root"** — **issue #6**
   (full implementation prompt is a comment there). Part A: status-bar
   surfacing (edit has no error surface at all; fm misses `read_err`); Part
