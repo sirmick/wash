@@ -62,11 +62,11 @@ func TestInstallOnEmptySettings(t *testing.T) {
 		if !st.Installed {
 			t.Errorf("%s [%s] not reported installed", st.Spec.Event, st.Spec.Matcher)
 		}
-		if !st.Async {
-			t.Errorf("%s [%s] installed without async — it would block turns", st.Spec.Event, st.Spec.Matcher)
+		if st.Async != st.Spec.Async {
+			t.Errorf("%s [%s]: async=%v, want %v", st.Spec.Event, st.Spec.Matcher, st.Async, st.Spec.Async)
 		}
-		if st.Command != "/usr/bin/wash-agent-hook status" {
-			t.Errorf("command = %q", st.Command)
+		if want := "/usr/bin/wash-agent-hook " + st.Spec.Mode; st.Command != want {
+			t.Errorf("command = %q, want %q", st.Command, want)
 		}
 	}
 	if len(stray) != 0 {
@@ -131,9 +131,23 @@ func TestInstallIsAdditive(t *testing.T) {
 	if n := len(groupHooks(starts[0].(map[string]any))); n != 2 {
 		t.Errorf("SessionStart group has %d hooks, want 2 (theirs + ours)", n)
 	}
-	// PreToolUse is not in the M1 matrix and must be untouched.
-	if n := len(hooks["PreToolUse"].([]any)); n != 1 {
-		t.Errorf("PreToolUse groups = %d, want 1", n)
+	// PreToolUse: the user's own matcher:"Bash" group is left alone and
+	// wash's decide hook joins as a separate matcher:"*" group — the
+	// policy callback must see every tool, not just theirs.
+	pre := hooks["PreToolUse"].([]any)
+	if len(pre) != 2 {
+		t.Fatalf("PreToolUse groups = %d, want 2 (theirs + ours)", len(pre))
+	}
+	theirs := pre[0].(map[string]any)
+	if matcherOf(theirs) != "Bash" || len(groupHooks(theirs)) != 1 {
+		t.Errorf("the user's PreToolUse group was modified: %+v", theirs)
+	}
+	ours := pre[1].(map[string]any)
+	if matcherOf(ours) != "*" || !isWashEntry(groupHooks(ours)[0]) {
+		t.Errorf("wash's PreToolUse group = %+v", ours)
+	}
+	if _, hasAsync := groupHooks(ours)[0].(map[string]any)["async"]; hasAsync {
+		t.Error("the decide hook must not be async — the agent waits for its answer")
 	}
 }
 
@@ -250,7 +264,7 @@ func TestCommandQuoting(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 	// However it is written, it must still be recognisable as ours.
-	if !isWashEntry(newEntry(commandFor("/opt/my wash/wash-agent-hook", "status"))) {
+	if !isWashEntry(newEntry(commandFor("/opt/my wash/wash-agent-hook", "status"), true)) {
 		t.Error("quoted entry no longer matches the marker")
 	}
 }

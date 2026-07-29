@@ -223,9 +223,9 @@ sessions without restart.
   needs-input / done live; `vi` alone → plain T0 "agent: none".
 - **M2 — notifications. DONE** (see §9.2). Transition toasts + rate limit +
   taskbar badge; click-to-focus verified e2e.
-- **M3 — approval policy.** Socket + `decide` mode + policy rules +
-  Agents settings panel + audit logging. Closes #19 item 2 (the right way;
-  legacy typed-`y` mode ships OFF).
+- **M3 — approval policy. DONE** (see §9.3). Socket + `decide` mode +
+  policy rules + Agents settings pane + audit logging. Closes #19 item 2
+  (the right way; legacy typed-`y` mode ships OFF).
 - **M4 — roster.** agentd + session gateway + AgentsWidget + liveness.
   Remote merge deferred to REMOTE §6.2 scheduling.
 - **M5 — smart paste** (§10). Closes #19 item 3 and with it the whole issue.
@@ -308,6 +308,52 @@ a detail the design left open:
   needs-input warn may interrupt a preceding info — the human is blocked,
   and "it finished" must not swallow "it needs you". The limit is
   per-tab, so one chatty agent can't mute another.
+
+### 9.3 M3 as built
+
+| Piece | Where |
+|---|---|
+| policy model + matcher | `apps/term/be/policy.go` |
+| per-tab decision socket | `apps/term/be/agentsock.go` (+ `WASH_AGENT_SOCK` via `withAgentSock`) |
+| `decide` helper mode | `internal/agenthook/decide.go` |
+| legacy typed-`y` (opt-in, off) | `apps/term/be/autoapprove.go` (+ `pty.Session.SetOutputTap` / `Inject`) |
+| Agents settings pane | `apps/settings/fe/src/AgentsPane.tsx` + the `agents` domain in `apps/settings/be` |
+| tests | `apps/term/be/{policy,agentsock,autoapprove}_test.go`, `internal/agenthook/decide_test.go`, `e2e/tests/term-agent-policy.spec.ts` |
+
+- **The fail-open answer is silence, not `defer`.** §4 specified
+  `permissionDecision:"defer"`; Claude Code 2.1 accepts that in print mode
+  only and logs *"returned permissionDecision=defer in interactive mode;
+  ignoring (defer is print-mode only)"* — interactive being exactly the
+  wash-terminal case. The helper therefore prints **nothing** for ask / no
+  socket / timeout / garbled answer, which leaves the agent's own prompt
+  precisely as it would have been without wash. Printing `"ask"` was
+  rejected as the alternative: it would override the user's own allowlist
+  and make wash's presence more annoying than its absence.
+- **PreToolUse is installed with the status hooks** (matcher `*`, NOT
+  async — the agent is blocked on the answer), because it is inert without
+  a policy: no file, or `enabled:false`, and the helper says nothing.
+- **Policy lives in a settings domain, not a service.** `agents.json` is
+  written by the pane through the settings host and read by every
+  wash-term with a 500ms mtime cache, so a rule change applies to running
+  terminals with no restart and no IPC.
+- **The Agents surface is a native settings pane, not a
+  define-settings-panel bundle.** The settings host addresses panels by
+  app id, and the router only resolves an app id to an instance for
+  *singletons* — wash-term is `InstancingMulti`, so a term-owned panel
+  could never receive a message. M4's agentd is a singleton and can host a
+  real panel later; the domain file doesn't change, so that is a UI move.
+  Hook install stays the CLI (`wash agent-hooks install`), which the pane
+  shows with a copy button.
+- **Auto-deny toasts.** A denial is the case where an agent looks stuck
+  for a reason the user can't see, so `deny` raises a warn toast beside
+  the audit line.
+- **Legacy typed-`y` has a fourth gate the design didn't ask for**: it
+  fires only while a T0-detected agent is the tab's *foreground* program.
+  A `(y/n)` printed by a shell, a build, or `cat`ting a source file can
+  never be typed into. Together with the opt-in flag, the policy kill
+  switch, and end-of-output anchoring, that is what keeps a
+  spoofable-by-design feature from being reckless — and every injection is
+  logged and toasted.
 
 ## 10. Smart paste (M5, issue #19 item 3)
 

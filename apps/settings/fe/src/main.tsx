@@ -31,6 +31,8 @@ import {
 } from '@wash/ui';
 import type { Pack, SettingsPanelPort } from '@wash/ui';
 import { Image as ImageIcon } from 'lucide-solid';
+import { AgentsPane } from './AgentsPane';
+import type { AgentPolicy } from './AgentsPane';
 
 // DesktopConfig mirrors cmd/wash-session/config.go schema. Optional
 // everywhere — defaults are applied for missing fields so an empty
@@ -106,7 +108,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   let pendingRestore: string | null = null;
 
   const sectionExists = (id: string) =>
-    id === 'desktop' || panels().some((p) => p.app_id === id);
+    id === 'desktop' || id === 'agents' || panels().some((p) => p.app_id === id);
 
   // applyRestore selects the persisted section if its panel still exists.
   // 'desktop' always exists. A section whose panel is gone is dropped.
@@ -171,6 +173,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         // Fan a panel-owned domain (e.g. 'network') out to its readConfig
         // subscribers; the desktop pane is handled inline below.
         cfgSubs.get(domain)?.forEach((cb) => cb(value));
+        if (domain === 'agents') {
+          setAgentPolicy(value as AgentPolicy);
+          return;
+        }
         if (domain !== 'desktop') return;
         const v = value as DesktopConfig;
         setPack(v.pack ?? defaultPackId);
@@ -261,6 +267,24 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     scheduleSave();
   });
 
+  // ---- agents policy (own domain, own debounce) ----
+  // Kept separate from the desktop save above: it is a different file,
+  // and a half-typed rule shouldn't ride along with a wallpaper change.
+  const [agentPolicy, setAgentPolicy] = createSignal<AgentPolicy>({});
+  let agentsTimer = 0;
+  const saveAgents = (p: AgentPolicy) => {
+    setAgentPolicy(p);
+    if (agentsTimer) clearTimeout(agentsTimer);
+    agentsTimer = window.setTimeout(() => {
+      agentsTimer = 0;
+      send({ kind: 'settings.write', domain: 'agents', value: p });
+      setStatus('saving…');
+    }, 400);
+  };
+  onCleanup(() => {
+    if (agentsTimer) clearTimeout(agentsTimer);
+  });
+
   // Picking a pack clears any custom wallpaper override so the pack's
   // own wallpaper shows — the gallery is the "give me this whole look"
   // path; "Choose image…" is the escape hatch that re-overrides.
@@ -283,6 +307,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // Ask BE for the desktop config + picker root. Panel domains are
     // requested by each panel via port.readConfig on mount.
     send({ kind: 'settings.read', domain: 'desktop' });
+    // The agents policy is small and read once at mount, like desktop —
+    // the pane is a plain editor over it, not a live subscriber.
+    send({ kind: 'settings.read', domain: 'agents' });
     send({ kind: 'fs.root' });
 
     onCleanup(() => {
@@ -305,6 +332,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       <div style={layoutStyle}>
         <div style={railStyle}>
           <RailItem label="Desktop" active={section() === 'desktop'} onClick={() => navigate('desktop')} />
+          <RailItem label="Agents" active={section() === 'agents'} onClick={() => navigate('agents')} />
           <For each={panels()}>
             {(p) => (
               <RailItem
@@ -334,6 +362,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               onShowSecondsChange={setShowSeconds}
               onPositionChange={setPosition}
             />
+          </Show>
+          <Show when={section() === 'agents'}>
+            <AgentsPane policy={agentPolicy()} onChange={saveAgents} />
           </Show>
           <For each={panels()}>
             {(p) => (
