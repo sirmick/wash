@@ -174,11 +174,16 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		// Under burst (or a slow shell), an inline write can fill the
 		// router's bounded send queue and block intake of the next
 		// inbound notify — head-of-line stalling the queue.
-		go func(title, body, lvl string) {
-			if err := conn.Notify(title, body, lvl); err != nil {
+		//
+		// NotifyFrom (not Notify): the toast must name the app that
+		// raised it, not this service, or the shell's click-to-focus has
+		// no window to land on. The source is the router-attested sender
+		// of the original — we never take it from the payload.
+		go func(source, title, body, lvl string) {
+			if err := conn.NotifyFrom(source, title, body, lvl); err != nil {
 				log.Printf("wash-notify: re-emit failed: %v", err)
 			}
-		}(req.Title, req.Body, level)
+		}(n.SourceInst, req.Title, req.Body, level)
 		return nil
 	})
 

@@ -12,6 +12,14 @@ export interface ToastInput {
   title: string;
   body?: string;
   level?: 'info' | 'warn' | 'error';
+  /**
+   * Click-to-focus: called with the toast's instance id when the card is
+   * clicked, before it dismisses. A toast is a pointer at the thing that
+   * wants you ("Claude needs your input"), so clicking it should land on
+   * that window rather than merely making the card go away. Omitted (or a
+   * no-op for an instance with no window) leaves click = dismiss.
+   */
+  onActivate?: (instanceID: string) => void;
 }
 
 const TOAST_TTL_MS = 4500;
@@ -96,7 +104,12 @@ export function showToast(t: ToastInput): void {
     card.style.transform = 'translateY(6px)';
     setTimeout(() => card.remove(), 200);
   };
-  card.addEventListener('click', dismiss);
+  card.addEventListener('click', () => {
+    // Activate first: dismiss() starts a 200ms fade and removes the card,
+    // and the focus intent must not depend on that finishing.
+    if (t.onActivate) t.onActivate(t.instanceID);
+    dismiss();
+  });
 
   host.appendChild(card);
   // Trigger transition.

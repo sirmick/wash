@@ -342,6 +342,18 @@ func (c *Conn) Notify(title, body, level string) error {
 	return c.writeEvt(wire.NewEvtNotify(title, body, level))
 }
 
+// NotifyFrom is Notify with the instance the notification is ABOUT
+// attached, so the shell's click-to-focus lands on that app's window
+// rather than the sender's. It exists for the notify service's re-emit
+// path (the service speaks for other apps); the router ignores the field
+// from anyone else, so ordinary apps should call Notify/Info/Warn.
+func (c *Conn) NotifyFrom(sourceInstance, title, body, level string) error {
+	if level == "" {
+		level = wire.NotifyLevelInfo
+	}
+	return c.writeEvt(wire.NewEvtNotifyFrom(sourceInstance, title, body, level))
+}
+
 // Info / Warn / Fail are the ergonomic, one-liner toast helpers built on
 // Notify. Unlike Notify they are best-effort and fire-and-forget: each
 // dispatches on a fresh goroutine and logs (rather than returns) any

@@ -195,3 +195,80 @@ func readNotifyForward(t *testing.T, pp *wiretest.PipePair, timeout time.Duratio
 	t.Fatalf("no notify forward arrived within %v", timeout)
 	return "", nil
 }
+
+// TestRelayNotifyStampsSourceInstance covers the click-to-focus contract
+// (docs/AGENT_TERM.md §5): the toast the shell renders must name the app
+// the notification is ABOUT, not the notify service that re-emitted it —
+// otherwise "Claude needs your input" has no window to focus.
+//
+// Trust: the Source field is honoured only on the notify service's own
+// emit. Any other app's Notify takes the forward-to-service path, which
+// builds its payload from scratch, so an app cannot pin its toast on a
+// window it doesn't own.
+func TestRelayNotifyStampsSourceInstance(t *testing.T) {
+	reg := NewRegistry()
+	reg.RegisterEntry(&Entry{Path: "/unused/wash-notify", Manifest: notifyManifest()})
+	r := NewRouter(Config{}, reg, nil)
+
+	shellPair := wiretest.NewPipePair()
+	shellDone := make(chan struct{})
+	go func() { defer close(shellDone); _ = r.HandleShell(context.Background(), shellPair.EndA()) }()
+	// The catalog is the first thing a shell is sent, and it is written
+	// after registerShell — reading it proves this shell is in shellList()
+	// before we emit, so the toast can't race registration.
+	if _, ok := readCtrl(t, shellPair.EndB()).(wire.ShellCatalog); !ok {
+		t.Fatal("expected ShellCatalog first")
+	}
+
+	notifyPair := wiretest.NewPipePair()
+	notifyDone := make(chan struct{})
+	go func() {
+		defer close(notifyDone)
+		_ = r.HandleApp(context.Background(), notifyPair.EndA(), notifyManifest(), nil)
+	}()
+	notifyInst := connectApp(t, notifyPair, NotifyAppID)
+
+	// Re-emit on behalf of some other app's instance.
+	writeEvtFrame(t, notifyPair.EndB(), wire.NewEvtNotifyFrom("i-42", "Claude needs your input", "wash", wire.NotifyLevelWarn))
+	got := waitShellNotify(t, shellPair, 2*time.Second)
+	if got.InstanceID != "i-42" {
+		t.Errorf("toast instance_id = %q, want the originating instance i-42", got.InstanceID)
+	}
+	if got.Title != "Claude needs your input" || got.Level != wire.NotifyLevelWarn {
+		t.Errorf("toast = %+v", got)
+	}
+
+	// Without a Source the service still speaks for itself.
+	writeEvtFrame(t, notifyPair.EndB(), wire.NewEvtNotify("self", "", wire.NotifyLevelInfo))
+	got = waitShellNotify(t, shellPair, 2*time.Second)
+	if got.InstanceID != notifyInst {
+		t.Errorf("unsourced toast instance_id = %q, want the service's own %q", got.InstanceID, notifyInst)
+	}
+
+	shellPair.Close()
+	notifyPair.Close()
+	waitClose(t, notifyDone)
+	waitClose(t, shellDone)
+}
+
+// waitShellNotify reads until a ShellNotify arrives on the shell pipe,
+// skipping the session/window traffic the router also sends.
+func waitShellNotify(t *testing.T, pp *wiretest.PipePair, timeout time.Duration) wire.ShellNotify {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		f, err := pp.EndB().ReadFrame()
+		if err != nil {
+			t.Fatalf("read shell frame: %v", err)
+		}
+		m, err := wire.DecodeCtrl(f.Payload)
+		if err != nil {
+			continue
+		}
+		if n, ok := m.(wire.ShellNotify); ok {
+			return n
+		}
+	}
+	t.Fatalf("no ShellNotify within %v", timeout)
+	return wire.ShellNotify{}
+}

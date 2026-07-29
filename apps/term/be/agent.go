@@ -54,12 +54,24 @@ type agentRec struct {
 	oscAgent   string
 	oscSession string
 	oscReason  string
+	oscCwd     string    // last reported cwd; names the tab in a toast
 	oscSince   time.Time // when the CURRENT state began (drives since_ms)
 	oscSeen    time.Time // last OSC event of any kind (drives staleness)
+
+	// prevState / prevSince are what the OSC half was BEFORE the last
+	// change — the notification path needs "working, for 43s" after the
+	// record has already moved on to "done" (M2, §5).
+	prevState string
+	prevSince time.Time
 
 	pollAgent string    // T0 slug, "" when the foreground isn't an agent
 	pollSince time.Time // when T0 first saw this agent
 	pollSSH   bool      // foreground is an ssh client (see agentOSCStale)
+
+	// lastToastAt / lastToastLevel implement the per-tab toast rate limit
+	// (see agentToastGap).
+	lastToastAt    time.Time
+	lastToastLevel string
 }
 
 // agentView is the merged, FE-facing shape. ok=false means "no agent
@@ -123,6 +135,9 @@ func (r *agentRec) applyOSC(ev pty.AgentEvent, now time.Time) bool {
 	if ev.Session != "" {
 		r.oscSession = ev.Session
 	}
+	if ev.Cwd != "" {
+		r.oscCwd = ev.Cwd
+	}
 	r.oscSeen = now
 
 	var state, reason string
@@ -148,6 +163,7 @@ func (r *agentRec) applyOSC(ev pty.AgentEvent, now time.Time) bool {
 		// keep the original since_ms so the elapsed clock doesn't reset.
 		return false
 	}
+	r.prevState, r.prevSince = r.oscState, r.oscSince
 	r.oscState, r.oscReason, r.oscSince = state, reason, now
 	return true
 }
@@ -245,8 +261,21 @@ func onAgentEvent(c *sdk.Conn, id uint32, ev pty.AgentEvent) {
 		st.agents[id] = rec
 	}
 	changed := rec.applyOSC(ev, now)
+	// Decide the toast under the same lock that made the transition, so
+	// two events racing in from different tabs can't both claim the same
+	// tab's rate-limit slot. Sending happens outside it (agenttoast.go).
+	var toast agentToast
+	var notify bool
+	if changed {
+		if v, ok := rec.view(now); ok {
+			toast, notify = rec.toastFor(v, now)
+		}
+	}
 	st.mu.Unlock()
 	if changed {
 		publishAgent(c, id)
+	}
+	if notify {
+		notifyAgent(c, id, toast)
 	}
 }

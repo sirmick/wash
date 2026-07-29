@@ -221,8 +221,8 @@ sessions without restart.
   panel moved to M3 — see §9.1).
   Acceptance: run Claude Code in a wash term → dot flips working /
   needs-input / done live; `vi` alone → plain T0 "agent: none".
-- **M2 — notifications.** Transition toasts + rate limit + taskbar badge;
-  click-to-focus verified e2e.
+- **M2 — notifications. DONE** (see §9.2). Transition toasts + rate limit +
+  taskbar badge; click-to-focus verified e2e.
 - **M3 — approval policy.** Socket + `decide` mode + policy rules +
   Agents settings panel + audit logging. Closes #19 item 2 (the right way;
   legacy typed-`y` mode ships OFF).
@@ -272,6 +272,42 @@ a detail the design left open:
   executable named `claude` for T0 (comm of a shebang script is the
   script's own name) — plus the negative case (`sleep` is not an agent),
   which is where a loose agent table would show up.
+
+### 9.2 M2 as built
+
+| Piece | Where |
+|---|---|
+| toast decision + rate limit | `apps/term/be/agenttoast.go` |
+| click-to-focus | `web/shell/src/notify.ts` (`onActivate`) + `focusInstance` in `web/shell/src/main.tsx` |
+| toast source attribution | `wire.EvtNotify.Source` → `relayNotify` → `sdk.Conn.NotifyFrom` → `apps/notify/be` |
+| taskbar attention badge | `apps/session/fe/src/main.tsx` (`wantsAttention` / `WindowPill`) |
+| tests | `apps/term/be/agenttoast_test.go`, `internal/router/notify_forward_test.go`, `e2e/tests/term-agent-notify.spec.ts` |
+
+- **The toast's instance id was wrong before this milestone.** §5 assumed
+  click-to-focus fell out of the existing `instance_id`, but the notify
+  service is the single authority for toasts and its re-emit stamped *its
+  own* instance — every toast in wash pointed at `com.wash.notify`. Fixed
+  at the source: `EvtNotify` gained an optional `Source`, honoured **only**
+  on the notify service's own emit (every other app's notify takes the
+  forward-to-service path, which rebuilds the payload), so an app cannot
+  pin its toast on a window it doesn't own. Click-to-focus now works for
+  every app's notifications, not just agents'.
+- **Click-to-focus snaps the viewport** to the window's cell before
+  focusing — focusing a window one cell over is otherwise invisible.
+- **The taskbar badge is generic, not agent-specific.** A pill wears the
+  amber dot while its instance has an unread warn/error notification, and
+  visiting the window marks those read. That is the same event §5 asks for
+  (the needs-input toast) without inventing plumbing M4 would replace:
+  `com.wash.session` is `InstancingSingle`, so a term BE *cannot* address
+  it by app id — the agent-shaped roster feed genuinely needs M4's agentd
+  singleton. The badge outliving the toast is the point: a toast fades in
+  4.5s, an agent waiting on you does not.
+- **Toast rules**: needs-input (warn) on arrival at that state from
+  anywhere; done (info, with the turn length) only from `working`, so a
+  session tidying up is silent. One toast per tab per 5s, except a
+  needs-input warn may interrupt a preceding info — the human is blocked,
+  and "it finished" must not swallow "it needs you". The limit is
+  per-tab, so one chatty agent can't mute another.
 
 ## 10. Smart paste (M5, issue #19 item 3)
 

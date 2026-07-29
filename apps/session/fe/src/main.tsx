@@ -343,6 +343,30 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const unread = notifications().filter((n) => !n.read).length;
     return unread > 0 ? String(unread) : '';
   };
+  // wantsAttention — the instances with an unread warn/error notification.
+  // A window whose app has said something urgent and unread wears an amber
+  // dot on its taskbar pill, which is the standing version of the toast
+  // that has already faded (docs/AGENT_TERM.md §5: an agent waiting on you
+  // must still be findable a minute later). Generic on purpose: it is the
+  // notification level that earns the badge, not the app that sent it.
+  const wantsAttention = createMemo(() => {
+    const out = new Set<string>();
+    for (const n of notifications()) {
+      if (!n.read && (n.level === 'warn' || n.level === 'error') && n.source_instance) {
+        out.add(n.source_instance);
+      }
+    }
+    return out;
+  });
+  // Visiting the window is the acknowledgement — clear its unread warns so
+  // the badge doesn't outlive the reason for it.
+  const clearAttention = (instanceID: string) => {
+    for (const n of notifications()) {
+      if (!n.read && n.source_instance === instanceID) {
+        window.wash.sendAppMsg(props.instance, { kind: 'notify_mark_read', id: n.id });
+      }
+    }
+  };
   // bulkBadge — show the count of in-flight (queued + running) jobs.
   // Terminal-state rows don't count (they're informational, auto-
   // evicting). Conflicts also count — they're blocking work.
@@ -1226,7 +1250,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         </IconButton>
         <div style={separatorStyle} />
         <div style={windowListStyle}>
-          <For each={windows()}>{(w) => <WindowPill win={w} />}</For>
+          <For each={windows()}>
+            {(w) => (
+              <WindowPill
+                win={w}
+                attention={wantsAttention().has(w.instanceID)}
+                onVisit={() => clearAttention(w.instanceID)}
+              />
+            )}
+          </For>
         </div>
         <span
           data-testid="screenshot-status"
@@ -1753,17 +1785,26 @@ const IconButton: Component<{
   );
 };
 
-const WindowPill: Component<{ win: WindowInfo }> = (props) => {
+const WindowPill: Component<{
+  win: WindowInfo;
+  /** the window's app has an unread warn/error — wear the amber dot */
+  attention?: boolean;
+  /** called when the user visits the window, so the badge can clear */
+  onVisit?: () => void;
+}> = (props) => {
   const minimized = () => props.win.state === 'minimized';
+  const visit = () => {
+    if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID, props.win.origin);
+    else window.wash.focusWindow(props.win.windowID, props.win.origin);
+    props.onVisit?.();
+  };
   return (
     <button
       type="button"
       data-testid="taskbar-pill"
-      title={`${minimized() ? '[minimized] ' : ''}${props.win.title} — dblclick to jump to its viewport, right-click to close`}
-      onClick={() => {
-        if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID, props.win.origin);
-        else window.wash.focusWindow(props.win.windowID, props.win.origin);
-      }}
+      data-attention={props.attention ? 'true' : undefined}
+      title={`${minimized() ? '[minimized] ' : ''}${props.win.title}${props.attention ? ' — wants your attention' : ''} — dblclick to jump to its viewport, right-click to close`}
+      onClick={visit}
       onDblClick={() => {
         // Snap the camera to the cell holding this window, then focus
         // (or restore-and-focus if minimized). Single-click already
@@ -1771,8 +1812,7 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
         // both end states converge on "focused & visible".
         const v = props.win.viewport;
         window.wash.setViewport(v.vx, v.vy);
-        if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID, props.win.origin);
-        else window.wash.focusWindow(props.win.windowID, props.win.origin);
+        visit();
       }}
       onContextMenu={(ev) => {
         ev.preventDefault();
@@ -1802,6 +1842,20 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
         <SpriteIcon name={props.win.icon!} size={14} />
       </Show>
       <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{props.win.title}</span>
+      {/* Amber dot = this window said something urgent you haven't read.
+          Placed after the title so it reads as a status, not an icon. */}
+      <Show when={props.attention}>
+        <span
+          data-testid="taskbar-pill-attention"
+          style={{
+            width: '7px',
+            height: '7px',
+            'border-radius': '50%',
+            background: tokens.accentAmber,
+            'flex-shrink': 0,
+          }}
+        />
+      </Show>
     </button>
   );
 };

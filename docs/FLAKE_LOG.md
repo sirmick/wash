@@ -76,3 +76,11 @@ log for the merged `WASH_X_DISPLAY` value before launching the terminal.
 **Not reproduced here, still open:** why the compositor stalls in the first
 place when several run concurrently. The 21s-vs-8s split says the stall is
 the primary event and the timeouts are downstream of it.
+
+**Recurrence, same day, `agent-term-m2` gate:** `make e2e-test` red again
+with `display-guest` (wayland) + `display-term-xclock`; both pass in
+isolation (2.4s for all three). Same tier, same signature, a branch that
+touches notifications and the session/shell FE. No new baseline run needed —
+the failing set is inside the set the A/B above already cleared. Treat any
+red confined to `display-*` as this entry until the C5/A10 fixes land; a
+failure outside that tier deserves its own baseline.
