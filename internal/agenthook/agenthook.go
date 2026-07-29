@@ -50,10 +50,7 @@ func Run(args []string) int {
 	case "status":
 		return runStatus(args[1:], os.Stdin)
 	case "decide":
-		// M3. Print the fail-open answer so an early adopter who wires it
-		// up gets Claude's own prompt rather than a broken turn.
-		fmt.Println(`{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"defer"}}`)
-		return 0
+		return runDecide(args[1:], os.Stdin, os.Stdout)
 	case "-h", "--help", "help":
 		usage(os.Stdout)
 		return 0
@@ -72,8 +69,11 @@ Usage (from an agent's hook config; see `+"`wash agent-hooks install`"+`):
       Read the hook event JSON on stdin and write one OSC 7770 status
       sequence to the controlling terminal. Always exits 0.
 
-  wash-agent-hook decide     PreToolUse policy callback (wash M3; currently
-                             always defers to the agent's own prompt).`)
+  wash-agent-hook decide [--sock=PATH]
+      Read a PreToolUse event on stdin, ask the wash terminal that owns
+      this pty ($WASH_AGENT_SOCK) what its policy says, and print the
+      allow/deny decision. Prints nothing — leaving the agent's own
+      prompt untouched — for "ask", no socket, or any error.`)
 }
 
 // runStatus maps one hook payload to an OSC 7770 sequence and writes it

@@ -53,10 +53,12 @@ type Session struct {
 	// the resumable scanner. Nil handler = no agent parsing at all, so
 	// a PTY host that doesn't care (wash-edit's embedded terminal)
 	// pays one nil check per read.
-	// SetAgentHandler / feedAgent / agentTee live in agentosc.go.
+	// SetAgentHandler / SetOutputTap / feedAgent / agentTee live in
+	// agentosc.go.
 	agentMu   sync.Mutex
 	agentFn   func(AgentEvent)
 	agentScan *agentOSCScanner
+	outputTap func([]byte)
 }
 
 // Size returns the last cols/rows applied to the PTY.

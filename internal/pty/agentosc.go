@@ -46,16 +46,44 @@ func (s *Session) SetAgentHandler(fn func(AgentEvent)) {
 	}
 }
 
+// SetOutputTap installs fn to receive a COPY of every byte the pty
+// produces, on the copy goroutine, before the bytes reach the channel.
+// Nil (the default) means no tap and no cost beyond one nil check.
+//
+// It exists for the opt-in legacy auto-approve path (docs/AGENT_TERM.md
+// §6), which has to read what an agent printed in order to answer a
+// prompt that has no hook behind it. The slice is only valid for the
+// duration of the call — copy anything you keep — and fn must not block.
+func (s *Session) SetOutputTap(fn func([]byte)) {
+	s.agentMu.Lock()
+	defer s.agentMu.Unlock()
+	s.outputTap = fn
+}
+
+// Inject writes bytes into the pty as if the user had typed them.
+//
+// This is the ONE path in wash that can put input into a terminal on a
+// program's behalf, so it is deliberately small, explicit, and used by
+// exactly one caller (the legacy auto-approve mode, which ships off).
+// The advisory OSC channel (agentosc.go) must never reach it.
+func (s *Session) Inject(p []byte) (int, error) {
+	return s.pty.Write(p)
+}
+
 // feedAgent tees one pty read into the scanner. The bytes are only read,
 // never rewritten — the caller passes the same slice on to the channel.
 func (s *Session) feedAgent(p []byte) {
 	s.agentMu.Lock()
 	fn := s.agentFn
+	tap := s.outputTap
 	var evs []AgentEvent
 	if fn != nil {
 		s.agentScan.Feed(p, func(ev AgentEvent) { evs = append(evs, ev) })
 	}
 	s.agentMu.Unlock()
+	if tap != nil {
+		tap(p)
+	}
 	// Dispatch outside the lock: a handler that calls back into the
 	// session (or into SetAgentHandler) would otherwise deadlock.
 	for _, ev := range evs {

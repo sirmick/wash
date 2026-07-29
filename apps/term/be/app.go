@@ -98,6 +98,10 @@ type state struct {
 	// statusSent. See agent.go.
 	agents    map[uint32]*agentRec
 	agentSent map[uint32]string
+	// autoApprove holds each tab's trailing-output window for the opt-in
+	// legacy auto-approve path (autoapprove.go). Absent for every tab
+	// until the feature is switched on.
+	autoApprove map[uint32]*autoApproveState
 }
 
 // initState allocates the per-window maps. Both entrypoints (Def for the
@@ -107,6 +111,7 @@ func initState() {
 	st.statusSent = make(map[uint32]string)
 	st.agents = make(map[uint32]*agentRec)
 	st.agentSent = make(map[uint32]string)
+	st.autoApprove = make(map[uint32]*autoApproveState)
 }
 
 var st state
@@ -391,16 +396,22 @@ func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
 		// instead of inheriting wash-priv's parent env.
 		argv = []string{loginShellPath(), "-l"}
 	}
-	sess, err := pty.Open(context.Background(), c, windowID, cols, rows, argv, pty.WithWashEnv, func(s *pty.Session, reason string) {
+	// The decision socket has to exist BEFORE the shell is exec'd — its
+	// path goes into the child's environment as $WASH_AGENT_SOCK — so it
+	// is created here and handed to the env transform (agentsock.go).
+	sock := newAgentSock()
+	sess, err := pty.Open(context.Background(), c, windowID, cols, rows, argv, withAgentSock(sock), func(s *pty.Session, reason string) {
 		// onClose runs from the pty goroutine when the session ends.
 		// Drop from the session map, tell the FE, dismiss the window
 		// if no tabs remain.
+		sock.close()
 		st.mu.Lock()
 		_, found := st.sessions[s.ID()]
 		delete(st.sessions, s.ID())
 		delete(st.statusSent, s.ID())
 		delete(st.agents, s.ID())
 		delete(st.agentSent, s.ID())
+		delete(st.autoApprove, s.ID())
 		empty := len(st.sessions) == 0
 		st.mu.Unlock()
 		if !found {
@@ -418,6 +429,7 @@ func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
 		}
 	})
 	if err != nil {
+		sock.close()
 		log.Printf("wash-term open: %v", err)
 		_ = c.SendAppMsg(map[string]any{"kind": "tab_error", "msg": err.Error()})
 		return
@@ -425,10 +437,19 @@ func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
 	st.mu.Lock()
 	st.sessions[sess.ID()] = sess
 	st.mu.Unlock()
+	// Answer policy questions for this tab until it closes (§6). The
+	// channel id is read lazily so the audit log can name the tab.
+	if sock != nil {
+		go sock.serve(sockDeps{chanID: sess.ID, warn: c.Warn})
+	}
 	// Tee this pty's output through the OSC 7770 scanner (agent.go). The
 	// bytes are only read — the sequence stays in the stream, so the
 	// scrollback ring is untouched and replays never re-fire events.
 	sess.SetAgentHandler(func(ev pty.AgentEvent) { onAgentEvent(c, sess.ID(), ev) })
+	// The output tap feeds the opt-in legacy auto-approve path. It checks
+	// the switch first, so a tab with the feature off does a policy-cache
+	// read and returns (autoapprove.go).
+	sess.SetOutputTap(func(p []byte) { onTabOutput(sess.ID(), sess.Inject, c.Warn, p) })
 
 	log.Printf("wash-term tab opened ch=%d shell=%s pid=%d", sess.ID(), sess.Shell, sess.Cmd().Process.Pid)
 	_ = c.SendAppMsg(map[string]any{

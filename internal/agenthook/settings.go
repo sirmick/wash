@@ -37,8 +37,12 @@ type HookSpec struct {
 	// Matcher narrows the event. Empty means the entry carries no
 	// matcher key at all (the event has nothing to match on).
 	Matcher string
-	// Mode is the helper mode the entry runs ("status").
+	// Mode is the helper mode the entry runs ("status" | "decide").
 	Mode string
+	// Async runs the hook in the background so it can never block a turn.
+	// True for every status hook; false for decide, which is inherently
+	// synchronous — the agent is waiting for the answer.
+	Async bool
 }
 
 // ClaudeHooks is the Claude Code matrix from docs/AGENT_TERM.md §4,
@@ -46,12 +50,18 @@ type HookSpec struct {
 // selects on notification_type, and every status hook is async so it can
 // never block a turn.
 var ClaudeHooks = []HookSpec{
-	{Event: "SessionStart", Matcher: "*", Mode: "status"},
-	{Event: "UserPromptSubmit", Mode: "status"},
-	{Event: "Notification", Matcher: "permission_prompt", Mode: "status"},
-	{Event: "Notification", Matcher: "idle_prompt", Mode: "status"},
-	{Event: "Stop", Mode: "status"},
-	{Event: "SessionEnd", Mode: "status"},
+	{Event: "SessionStart", Matcher: "*", Mode: "status", Async: true},
+	{Event: "UserPromptSubmit", Mode: "status", Async: true},
+	{Event: "Notification", Matcher: "permission_prompt", Mode: "status", Async: true},
+	{Event: "Notification", Matcher: "idle_prompt", Mode: "status", Async: true},
+	{Event: "Stop", Mode: "status", Async: true},
+	{Event: "SessionEnd", Mode: "status", Async: true},
+	// The policy callback (§6). Installed unconditionally, and inert
+	// until a policy exists: with no rules the helper prints nothing and
+	// the agent's own prompt appears exactly as before. Sync by nature —
+	// the agent is blocked on the answer — so it is NOT async, and the
+	// helper's own 3s deadline is what bounds it.
+	{Event: "PreToolUse", Matcher: "*", Mode: "decide"},
 }
 
 // HookState is one matrix row's installed state, for `agent-hooks status`
@@ -87,17 +97,21 @@ func Install(settings map[string]any, command string, matrix []HookSpec) (added,
 				entry["command"] = want
 				updated++
 			}
-			if b, _ := entry["async"].(bool); !b {
-				entry["async"] = true
+			if b, _ := entry["async"].(bool); b != spec.Async {
+				if spec.Async {
+					entry["async"] = true
+				} else {
+					delete(entry, "async")
+				}
 				updated++
 			}
 		case group != nil:
 			// Someone else already hooks this event+matcher; add ours
 			// alongside rather than making a second group.
-			group["hooks"] = append(groupHooks(group), newEntry(want))
+			group["hooks"] = append(groupHooks(group), newEntry(want, spec.Async))
 			added++
 		default:
-			g := map[string]any{"hooks": []any{newEntry(want)}}
+			g := map[string]any{"hooks": []any{newEntry(want, spec.Async)}}
 			if spec.Matcher != "" {
 				g["matcher"] = spec.Matcher
 			}
@@ -200,10 +214,16 @@ func Status(settings map[string]any, matrix []HookSpec) ([]HookState, []string) 
 
 // ---- entry helpers ----
 
-func newEntry(command string) map[string]any {
-	// async: the helper writes one short sequence to a tty and exits; it
-	// must never sit in the agent's critical path.
-	return map[string]any{"type": "command", "command": command, "async": true}
+func newEntry(command string, async bool) map[string]any {
+	// async: a status helper writes one short sequence to a tty and
+	// exits, so it must never sit in the agent's critical path. The
+	// decide helper is the exception — the agent is waiting for its
+	// answer, so it cannot be backgrounded.
+	e := map[string]any{"type": "command", "command": command}
+	if async {
+		e["async"] = true
+	}
+	return e
 }
 
 // commandFor renders the command string for a mode, quoting a path that

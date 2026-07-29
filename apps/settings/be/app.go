@@ -274,6 +274,12 @@ func domainFile(domain string) string {
 		// The Network pane's renderer choice ({"backend":"auto"|"nm"|"networkd"});
 		// com.wash.netd reads this file at startup (docs/NET.md §2.7).
 		return filepath.Join(dir, "network.json")
+	case "agents":
+		// The Agents pane's coding-agent approval policy (enabled +
+		// ordered rules); every wash-term BE reads this file when an
+		// agent's PreToolUse hook asks it a question (docs/AGENT_TERM.md
+		// §6). Desktop-wide on purpose: one policy, not one per window.
+		return filepath.Join(dir, "agents.json")
 	}
 	return ""
 }

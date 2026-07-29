@@ -56,7 +56,8 @@ type AppName = keyof typeof APP_BINS;
 // settings all relay watch to com.wash.fswatch, which the router auto-spawns on
 // first reference — so it must be staged in every router or watching is dead.
 const REQUIRED = ['wash-router', 'wash-session', 'wash-about', 'wash-test',
-  'wash-term', 'wash-fm', 'wash-bulk', 'wash-edit', 'wash-launch', 'wash-fswatch'];
+  'wash-term', 'wash-fm', 'wash-bulk', 'wash-edit', 'wash-launch', 'wash-fswatch',
+  'wash-agent-hook'];
 
 // Binaries referenced directly (not via the apps table): the spawn target, the
 // launch CLI, the compositor skip-check, fakesudo wiring, and the exported
@@ -267,6 +268,11 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   // first reference — so its binary must be present in every router's apps dir,
   // independent of which apps a test requested.
   bins.push(binPath('wash-fswatch'));
+  // wash-agent-hook is the coding-agent hook helper (docs/AGENT_TERM.md §4).
+  // It is a CLI, not an app: terminals reach it through WASH_BIN_DIR on
+  // PATH, so it has to be in every router's apps dir for the policy specs
+  // (and for anyone typing it in a test terminal) to find it.
+  bins.push(binPath('wash-agent-hook'));
   const appsDir = stageApps(bins);
   // wash-priv claims a reservedID (com.wash.priv) which the registry
   // refuses from a non-root-owned binary by default. The e2e dir is
