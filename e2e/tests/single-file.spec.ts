@@ -50,7 +50,10 @@ const APPS: AppBundle[] = [
   // helper (in every app's @wash/ui). Headroom still brakes further growth.
   { name: 'about',   dir: 'apps/about/fe/dist',   maxBytes: 32_000 },
   { name: 'test',    dir: 'apps/test/fe/dist',    maxBytes: 30_000 },
-  { name: 'term',    dir: 'apps/term/fe/dist',    maxBytes: 30_000 },
+  // term: +~1 KB for the agent status surface (docs/AGENT_TERM.md M1) —
+  // the per-tab agent side map, the tab-chip state dot and the status-line
+  // clause with its elapsed ticker. Bumped to keep ~3 KB headroom.
+  { name: 'term',    dir: 'apps/term/fe/dist',    maxBytes: 34_000 },
   // fm grew with the image pipeline: folder-grid preview + VirtualGrid +
   // file-client, the ~360-extension lucide icon map (~20 new glyphs), the
   // uid-aware display-hint colours/badges, and the cross-origin DnD guard.
