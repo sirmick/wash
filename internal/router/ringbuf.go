@@ -113,21 +113,40 @@ func (r *ringBuffer) Truncated() bool {
 // realignReplay trims the head of a TRUNCATED scrollback snapshot so
 // the replay does not start mid-UTF-8 rune or mid-escape-sequence.
 // A wrapped ring buffer cuts the stream at an arbitrary byte; feeding
-// xterm a torn CSI tail (e.g. `8;2;120m`) or a dangling continuation
-// byte renders as garbage. Only called after data loss has already
-// happened, so dropping a few more leading bytes is strictly an
-// improvement; never call it on an un-wrapped buffer.
+// xterm a torn CSI tail (e.g. `8;2;120m`), the tail of a torn OSC
+// title string, or a dangling continuation byte renders as garbage.
+// Only called after data loss has already happened, so dropping a few
+// more leading bytes is strictly an improvement; never call it on an
+// un-wrapped buffer.
 //
-// Two cheap repairs, no full VT parser:
+// Primary repair: cut through the first newline. The bytes before it
+// are the tail of a line that lost its head to the wrap anyway, and a
+// cut inside ANY escape sequence — CSI, OSC/DCS string, or a bare
+// ESC pair — is healed wholesale because string terminators (BEL/ST)
+// and CSI finals for one line's sequences precede that line's \n in
+// practice. Bounded to realignScanBytes so alt-screen output that
+// redraws with \r or cursor motion (a progress bar, htop) can't make
+// the trim swallow an arbitrary slice of the replay.
+//
+// Fallback (no newline within the bound) — the old cheap repairs,
+// no full VT parser:
 //   - drop leading UTF-8 continuation bytes (0x80–0xBF)
 //   - if the head reads as the tail of a torn CSI — parameter bytes
 //     (digits ; : ?) immediately followed by a final byte — drop
 //     through the final byte. Bounded scan; plain text bails out at
 //     the first non-parameter, non-final character.
-//
-// Torn OSC tails (title strings ending in BEL/ST) are not detectable
-// without real parsing and are left alone.
+const realignScanBytes = 4096
+
 func realignReplay(b []byte) []byte {
+	limit := len(b)
+	if limit > realignScanBytes {
+		limit = realignScanBytes
+	}
+	for i := 0; i < limit; i++ {
+		if b[i] == '\n' {
+			return b[i+1:]
+		}
+	}
 	i := 0
 	for i < len(b) && i < 3 && b[i]&0xC0 == 0x80 {
 		i++

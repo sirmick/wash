@@ -13,7 +13,7 @@ import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { Check, Globe, Plus, ShieldAlert, User, X } from 'lucide-solid';
 import {
-  Button,
+  Button, ConfirmDialog,
   Menu, MenuItem, MenuSeparator, Terminal,
   TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, TERM_FONTS,
   TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE, TERM_THEMES, themeById,
@@ -153,6 +153,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // Per-tab right-click menu (color picker): the tab it targets and
   // the viewport coords to open at, or null when closed.
   const [ctxMenu, setCtxMenu] = createSignal<{ id: number; x: number; y: number } | null>(null);
+  // Close-confirm dialog (issue #19): the BE vetoed a titlebar-✕ close
+  // because shells are live, and asks us to confirm with the user. Holds
+  // the live tab count for the dialog body; null = closed.
+  const [closeConfirm, setCloseConfirm] = createSignal<number | null>(null);
   // Drag-to-reorder state: the tab being dragged and the tab it would
   // drop in front of (for the insertion cue). Both null when idle.
   const [dragId, setDragId] = createSignal<number | null>(null);
@@ -376,6 +380,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       }
       case 'sessions':
         reconcile((m.sessions ?? []) as SessionRow[]);
+        return;
+      case 'close_requested':
+        setCloseConfirm(Number(m.tabs) || tabs().length || 1);
         return;
       case 'tab_status': {
         const id = Number(m.channel_id);
@@ -788,6 +795,27 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           <Plus size={14} />
         </Button>
       </div>
+      <Show when={closeConfirm() !== null}>
+        <ConfirmDialog
+          title="Close Terminal?"
+          confirmLabel="Close Terminal"
+          danger={true}
+          data-testid="term-close-confirm"
+          confirmTestid="term-close-confirm-yes"
+          cancelTestid="term-close-confirm-no"
+          onCancel={() => setCloseConfirm(null)}
+          onConfirm={() => {
+            setCloseConfirm(null);
+            send({ kind: 'close_window' });
+          }}
+        >
+          <div>
+            {closeConfirm() === 1
+              ? 'The running shell will be killed.'
+              : `${closeConfirm()} tabs are open; their shells will be killed.`}
+          </div>
+        </ConfirmDialog>
+      </Show>
       <Show when={ctxMenu()}>
         {(menu) => (
           <Menu x={menu().x} y={menu().y} data-testid="term-tab-ctx" onDismiss={() => setCtxMenu(null)}>

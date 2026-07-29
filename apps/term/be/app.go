@@ -339,6 +339,22 @@ func registerHandlers(b *sdk.Bus) {
 		}
 		return nil
 	})
+	// close_window is the FE's answer to the close_requested app_msg:
+	// the user confirmed the dialog, so kill every shell. The last
+	// session's onClose sees the map empty and sends the unsolicited
+	// ConfirmClose(true) that actually tears the window down.
+	sdk.HandleVoid(b, "close_window", func(_ *sdk.Conn, _ string, _ struct{}) error {
+		st.mu.Lock()
+		sessions := make([]*pty.Session, 0, len(st.sessions))
+		for _, s := range st.sessions {
+			sessions = append(sessions, s)
+		}
+		st.mu.Unlock()
+		for _, s := range sessions {
+			s.CloseWithReason("window closed")
+		}
+		return nil
+	})
 }
 
 // openTab forks a shell (or --exec argv), opens a raw channel, and
@@ -401,18 +417,22 @@ func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
 	})
 }
 
+// onCloseRequested runs when the user clicks the titlebar ✕ (issue #19):
+// with live shells we VETO the close and bounce the decision to the FE,
+// which shows a confirm dialog; its close_window reply kills the shells
+// and the empty-map path sends ConfirmClose(true) to really close. The
+// veto must be immediate — the router force-kills the app if the close
+// handshake isn't answered within its grace window, so the dialog can't
+// ride the handshake itself. An empty window (no shells) closes at once.
 func onCloseRequested(c *sdk.Conn, win uint32) bool {
-	// Kill every shell before letting the window go.
 	st.mu.Lock()
-	sessions := make([]*pty.Session, 0, len(st.sessions))
-	for _, s := range st.sessions {
-		sessions = append(sessions, s)
-	}
+	n := len(st.sessions)
 	st.mu.Unlock()
-	for _, s := range sessions {
-		s.CloseWithReason("window closed")
+	if n == 0 {
+		return true
 	}
-	return true
+	_ = c.SendAppMsg(map[string]any{"kind": "close_requested", "tabs": uint64(n)})
+	return false
 }
 
 // termIcon — Lucide sprite symbol name. The shell renders this via
