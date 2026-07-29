@@ -43,7 +43,9 @@ const APPS: AppBundle[] = [
   // +~1.5 KB: the link.stats desktop info panel (LinkWidget — host/cores/iface
   // /router-version readout), the boot splash + busy cursor, and the shared
   // createAppBus saveState() persist helper. Bumped to keep ~8 KB headroom.
-  { name: 'session', dir: 'apps/session/fe/dist', maxBytes: 205_000 },
+  // +~5 KB: the Agents sidebar widget + roster wiring (docs/AGENT_TERM.md
+  // §7 — per-agent rows, state colours, elapsed clock, click-to-focus).
+  { name: 'session', dir: 'apps/session/fe/dist', maxBytes: 215_000 },
   // about grew into the system-info panel: build/host/Go-runtime
   // process table/registered-apps/browser sections + sortable table.
   // +~0.1 KB from the shared createAppBus saveState()/flushState() persist

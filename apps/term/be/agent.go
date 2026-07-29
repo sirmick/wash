@@ -21,6 +21,7 @@ import (
 
 	"github.com/sirmick/wash/internal/pty"
 	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/internal/wire"
 )
 
 // Wire states for agent_status.state. "running" is what T0 alone can say;
@@ -32,6 +33,42 @@ const (
 	agentStateNeedsInput = "needs-input"
 	agentStateDone       = "done"
 )
+
+// rosterKeepalive is how often a tab with a live agent re-states itself
+// to com.wash.agentd, comfortably inside the service's 60s stale window
+// (§7). Changes publish immediately; this is only the "still here" tick.
+const rosterKeepalive = 15 * time.Second
+
+// agentdAppID is the roster service. Addressed by app id, which the
+// router resolves for singletons and spawns on first reference — so the
+// roster comes up the first time any terminal sees an agent, and a box
+// that never runs one never pays for it.
+const agentdAppID = "com.wash.agentd"
+
+// publishRoster states one tab's agent to the roster service, or retracts
+// it when the tab no longer has one. Fire-and-forget by design: agentd is
+// a second consumer of an event the FE already got, and nothing in the
+// terminal depends on the answer.
+func publishRoster(c *sdk.Conn, id uint32, v agentView, ok bool, cwd string, now time.Time) {
+	if !ok {
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind":       "agent_gone",
+			"channel_id": uint64(id),
+		})
+		return
+	}
+	_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+		"kind":       "agent_status",
+		"channel_id": uint64(id),
+		"window_id":  uint64(c.WindowID()),
+		"agent":      v.Agent,
+		"state":      v.State,
+		"reason":     v.Reason,
+		"session_id": v.Session,
+		"cwd":        cwd,
+		"since_ms":   uint64(elapsedMS(v.Since, now)),
+	})
+}
 
 // agentOSCStale bounds how long an OSC-reported state outlives its agent.
 // An agent killed with SIGKILL never fires its SessionEnd hook, so without
@@ -72,6 +109,10 @@ type agentRec struct {
 	// (see agentToastGap).
 	lastToastAt    time.Time
 	lastToastLevel string
+
+	// rosterAt is when this tab was last stated to com.wash.agentd —
+	// the keepalive clock, not the FE's (see rosterKeepalive).
+	rosterAt time.Time
 }
 
 // agentView is the merged, FE-facing shape. ok=false means "no agent
@@ -207,12 +248,30 @@ func publishAgent(c *sdk.Conn, id uint32) {
 		delete(st.agents, id)
 	}
 	key := agentKey(v, ok)
-	if st.agentSent[id] == key {
+	unchanged := st.agentSent[id] == key
+	// The roster service needs a heartbeat, not just changes: it ages a
+	// row out after 60s of silence so a crashed terminal can't leave a
+	// ghost (§7). A tab with a live agent therefore re-states it
+	// periodically even when nothing moved.
+	rosterDue := ok && now.Sub(rec.rosterAt) >= rosterKeepalive
+	if unchanged && !rosterDue {
 		st.mu.Unlock()
 		return
 	}
 	st.agentSent[id] = key
+	if ok {
+		rec.rosterAt = now
+	}
+	cwd := rec.oscCwd
 	st.mu.Unlock()
+
+	// Second consumer, same event (§7): the roster service. Fire and
+	// forget — the roster is a convenience, and a box without agentd
+	// installed must behave exactly as it did before.
+	publishRoster(c, id, v, ok, cwd, now)
+	if unchanged {
+		return
+	}
 
 	if ok {
 		log.Printf("term: agent-status ch=%d agent=%s state=%s session=%s reason=%s",

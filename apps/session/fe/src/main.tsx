@@ -19,6 +19,7 @@ import { Section, type SectionState } from './sidebar/Section';
 import { ViewportWidget } from './sidebar/ViewportWidget';
 import { AboutWidget, type AboutHostStats } from './sidebar/AboutWidget';
 import { NotifyWidget, type NotifyEntry } from './sidebar/NotifyWidget';
+import { AgentsWidget, type AgentRow } from './sidebar/AgentsWidget';
 import { BulkWidget, type BulkJob } from './sidebar/BulkWidget';
 import { BulkConflictOverlay, type BulkConflict } from './sidebar/BulkConflictOverlay';
 import { PrivWidget, type PrivReq } from './sidebar/PrivWidget';
@@ -245,6 +246,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     net: 'collapsed',
     remote: 'collapsed',
     audio: 'collapsed',
+    agents: 'collapsed',
     clipboard: 'collapsed',
   });
   // Host stats (CPU% / mem%) — pushed by the session BE every 5s as
@@ -284,6 +286,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [remoteCatVer, setRemoteCatVer] = createSignal(0);
   // Live interface IPs from the session BE's host-stats ticker (host.ifaces).
   const [netIfaces, setNetIfaces] = createSignal<NetIface[]>([]);
+  // Coding-agent roster — com.wash.agentd's StateService snapshot
+  // (docs/AGENT_TERM.md §7), forwarded by the session BE as agent.state.
+  // Rows arrive pre-sorted (needs-input first); we only anchor each row's
+  // elapsed clock locally, the way the terminal's own status line does.
+  const [agentRows, setAgentRows] = createSignal<AgentRow[]>([]);
+  const agentStartedAt = new Map<string, number>();
+  const [agentNow, setAgentNow] = createSignal(Date.now());
+
   // Audio mixer — com.wash.audio's StateService snapshot (sources +
   // master volume), forwarded by the session BE as audio.state.
   const [audioState, setAudioState] = createSignal<AudioState | null>(null);
@@ -404,6 +414,23 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     return up > 0 ? String(up) : '';
   };
   const REMOTE_ACCENT = tokens.accentViolet;
+  // agentBadge — the count of agents waiting on the human. That is the
+  // only number worth interrupting for; working agents are visible in the
+  // section, not on its header.
+  const agentBadge = (): string => {
+    const waiting = agentRows().filter((r) => r.state === 'needs-input').length;
+    return waiting > 0 ? String(waiting) : '';
+  };
+  // focusAgent goes to the terminal window that owns a roster row. The
+  // row carries its terminal's instance id, which is what the WM keys on.
+  const focusAgent = (row: AgentRow) => {
+    const w = windows().find((x) => x.instanceID === row.term_instance);
+    if (!w) return;
+    window.wash.setViewport(w.viewport.vx, w.viewport.vy);
+    if (w.state === 'minimized') window.wash.restoreWindow(w.windowID, w.origin);
+    else window.wash.focusWindow(w.windowID, w.origin);
+  };
+
   // audioBadge — show a play glyph while something is actively playing,
   // empty otherwise. Mirrors the other section badges' "needs attention"
   // semantics (here: "sound is on").
@@ -412,6 +439,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     return playing ? '♪' : '';
   };
   const AUDIO_ACCENT = tokens.accentGreen;
+  const AGENTS_ACCENT = tokens.accentTeal;
   let screenshotTimer = 0;
   let currentObjectURL: string | null = null;
   // Dedicated wallpaper layer — applyWallpaper paints onto this instead of
@@ -829,6 +857,28 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           });
           return;
         }
+        case 'agent.state': {
+          // com.wash.agentd's roster snapshot. Anchor each row's clock on
+          // arrival (since_ms is elapsed at push time, so no cross-clock
+          // comparison), and auto-expand when an agent first wants the
+          // human — the one case worth pulling the section open.
+          const next = ((data.state as unknown as { rows?: AgentRow[] })?.rows ?? []) as AgentRow[];
+          const arrival = Date.now();
+          const live = new Set<string>();
+          let waiting = false;
+          for (const r of next) {
+            live.add(r.key);
+            agentStartedAt.set(r.key, arrival - Math.max(0, r.since_ms || 0));
+            if (r.state === 'needs-input') waiting = true;
+          }
+          for (const key of [...agentStartedAt.keys()]) {
+            if (!live.has(key)) agentStartedAt.delete(key);
+          }
+          const wasWaiting = agentRows().some((r) => r.state === 'needs-input');
+          setAgentRows(next);
+          if (waiting && !wasWaiting) autoExpandSection('agents');
+          return;
+        }
         case 'audio.state': {
           // com.wash.audio's StateService snapshot: {sources, master_volume,
           // master_mute}. Auto-expand when a source first appears so the
@@ -897,6 +947,23 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     window.wash.sendAppMsg(props.instance, { kind: 'net_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'remote_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'audio_subscribe' });
+    window.wash.sendAppMsg(props.instance, { kind: 'agent_subscribe' });
+    // Elapsed clock for the roster rows — only ticks while there are
+    // agents, so an ordinary desktop holds no interval.
+    let agentTick: ReturnType<typeof setInterval> | undefined;
+    createEffect(() => {
+      const wanted = agentRows().length > 0;
+      if (wanted && agentTick === undefined) {
+        setAgentNow(Date.now());
+        agentTick = setInterval(() => setAgentNow(Date.now()), 1000);
+      } else if (!wanted && agentTick !== undefined) {
+        clearInterval(agentTick);
+        agentTick = undefined;
+      }
+    });
+    onCleanup(() => {
+      if (agentTick !== undefined) clearInterval(agentTick);
+    });
     props.host.addEventListener('wash:msg', onMsg);
 
     // wash:state restores the persisted sidebar config on (re)mount.
@@ -977,6 +1044,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       // fire-and-forget; gateways forward with proper sender
       // attestation.
       try {
+        window.wash.sendAppMsg(props.instance, { kind: 'agent_unsubscribe' });
         window.wash.sendAppMsg(props.instance, { kind: 'notify_unsubscribe' });
         window.wash.sendAppMsg(props.instance, { kind: 'bulk_unsubscribe' });
         window.wash.sendAppMsg(props.instance, { kind: 'priv_unsubscribe' });
@@ -1181,6 +1249,22 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             onMasterVolume={(value) =>
               window.wash.sendAppMsg(props.instance, { kind: 'audio_set_master_volume', value })
             }
+          />
+        </Section>
+        <Section
+          id="agents"
+          title="Agents"
+          icon="bot"
+          accent={AGENTS_ACCENT}
+          state={sectionStates().agents ?? 'collapsed'}
+          onToggle={() => toggleSection('agents')}
+          badge={agentBadge()}
+        >
+          <AgentsWidget
+            rows={agentRows}
+            startedAt={(key) => agentStartedAt.get(key) ?? Date.now()}
+            now={agentNow}
+            onFocus={focusAgent}
           />
         </Section>
         <Section

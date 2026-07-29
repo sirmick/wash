@@ -101,6 +101,7 @@ func onReady(c *sdk.Conn, _ string, _ uint32) {
 	registerNetGateway(bus)
 	registerAudioGateway(bus)
 	registerRemoteGateway(bus)
+	registerAgentGateway(bus)
 	// state forwarder: notify, bulk, and priv all push
 	// {kind:"state", state:...} cross-app. Branch on the sender's
 	// AppID to re-brand for the FE under a service-specific kind.
@@ -155,6 +156,7 @@ const (
 	NetdAppID   = "com.wash.netd"
 	AudioAppID  = "com.wash.audio"
 	RemoteAppID = "com.wash.remote"
+	AgentdAppID = "com.wash.agentd"
 )
 
 // serviceFEKind maps a service app id to the FE-side kind we
@@ -174,6 +176,8 @@ func serviceFEKind(appID string) string {
 		return "audio.state"
 	case RemoteAppID:
 		return "remote.state"
+	case AgentdAppID:
+		return "agent.state"
 	}
 	return ""
 }
@@ -213,6 +217,22 @@ func registerAudioGateway(bus *sdk.Bus) {
 		return conn.SendAppMsgTo(wire.Recipient{AppID: AudioAppID}, map[string]any{
 			"kind": "set_master_volume", "value": req.Value,
 		})
+	})
+}
+
+// registerAgentGateway forwards the sidebar's subscribe/unsubscribe to
+// the com.wash.agentd coding-agent roster (docs/AGENT_TERM.md §7). Its
+// state pushes return as {kind:"state"} and are re-branded to
+// "agent.state" by the shared state forwarder. Nothing else flows through
+// here: clicking a roster row focuses a window, which the FE does
+// directly through the WM — the roster is read-only from the sidebar's
+// point of view.
+func registerAgentGateway(bus *sdk.Bus) {
+	sdk.HandleVoid(bus, "agent_subscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
+		return conn.SendAppMsgTo(wire.Recipient{AppID: AgentdAppID}, map[string]any{"kind": "subscribe"})
+	})
+	sdk.HandleVoid(bus, "agent_unsubscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
+		return conn.SendAppMsgTo(wire.Recipient{AppID: AgentdAppID}, map[string]any{"kind": "unsubscribe"})
 	})
 }
 

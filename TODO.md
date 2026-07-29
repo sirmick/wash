@@ -139,16 +139,17 @@ bug list — all fully landed; see `git log` if you need their content.)
 
 ## Apps / UX
 
-- [ ] **Agent-aware terminals M4–M5** — docs/AGENT_TERM.md. M1 (OSC 7770
+- [ ] **Agent-aware terminals M5** — docs/AGENT_TERM.md. M1 (OSC 7770
   status channel, tab dots, `wash-agent-hook`, `wash agent-hooks` install),
   M2 (transition toasts + rate limit, toast click-to-focus, taskbar
   attention badge) and M3 (per-tab decision socket, `decide` mode, policy
   rules + Agents settings pane, audit logging, opt-in legacy typed-`y`)
-  are DONE — **#19 item 2 closed**. Next: **M4** agentd + sidebar roster,
-  which is also where an agent-shaped taskbar feed can replace M2's generic
-  unread-warn badge and where the Agents pane can become a real
-  define-settings-panel with a hook-install toggle (§9.3); **M5** smart
-  paste (issue #19 item 3).
+  and M4 (com.wash.agentd roster + session gateway + sidebar AgentsWidget +
+  liveness) are DONE — **#19 item 2 closed**. Next: **M5** smart paste
+  (issue #19 item 3, which closes the issue). Deferred, not forgotten:
+  the Agents settings pane could become a real define-settings-panel owned
+  by agentd with a hook-install toggle (§9.3), and the remote roster merge
+  rides REMOTE.md §6.2.
 
 - [ ] **fm/edit: surface access-denied + "relaunch as root"** — **issue #6**
   (full implementation prompt is a comment there). Part A: status-bar
