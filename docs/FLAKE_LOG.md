@@ -77,7 +77,13 @@ log for the merged `WASH_X_DISPLAY` value before launching the terminal.
 place when several run concurrently. The 21s-vs-8s split says the stall is
 the primary event and the timeouts are downstream of it.
 
-**Recurrence, same day, `agent-term-m2` gate:** `make e2e-test` red again
+**Recurrences (all inside the cleared set above, all green in isolation):**
+`agent-term-m4` gate — clean. `agent-term-m5` gate — clean. Post-merge
+verification of main at `ba5b065` — `display-qt-popover` failed in the full
+suite, passed alone in 8.2s. Six full-suite runs across M1–M5: four clean,
+two red on display specs only.
+
+**Earlier recurrence, `agent-term-m2` gate:** `make e2e-test` red again
 with `display-guest` (wayland) + `display-term-xclock`; both pass in
 isolation (2.4s for all three). Same tier, same signature, a branch that
 touches notifications and the session/shell FE. No new baseline run needed —
