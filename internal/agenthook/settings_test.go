@@ -170,6 +170,15 @@ func TestInstallCorrectsExistingEntry(t *testing.T) {
 		t.Error("old helper path still present")
 	}
 
+	// `status` must not cry wolf about the decide hook, which is
+	// synchronous on purpose.
+	states, _ := Status(m, ClaudeHooks)
+	for _, st := range states {
+		if st.Spec.Mode == "decide" && st.Async {
+			t.Errorf("%s installed async; the agent waits for its answer", st.Spec.Event)
+		}
+	}
+
 	// A user who stripped async gets it put back.
 	hooks := m["hooks"].(map[string]any)
 	stop := hooks["Stop"].([]any)[0].(map[string]any)

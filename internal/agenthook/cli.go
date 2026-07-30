@@ -152,7 +152,10 @@ func cliStatus(path string) int {
 	for _, st := range states {
 		mark := "not installed"
 		switch {
-		case st.Installed && !st.Async:
+		case st.Installed && st.Spec.Async && !st.Async:
+			// A status hook that lost its async flag WOULD stall a turn.
+			// (decide is synchronous by design — the agent waits for the
+			// answer — so its missing flag is correct, not a warning.)
 			mark = "installed (WARNING: not async — it will block turns)"
 			installed++
 		case st.Installed:
