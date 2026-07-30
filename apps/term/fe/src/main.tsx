@@ -19,7 +19,9 @@ import {
   TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE, TERM_THEMES, themeById,
   defineWashApp, tokens,
 } from '@wash/ui';
-import type { TermModes, TerminalAPI } from '@wash/ui';
+import type { PasteAnalysis, TermModes, TerminalAPI } from '@wash/ui';
+import { analyzePaste } from '@wash/ui';
+import { PasteOverlay } from './PasteOverlay';
 
 interface BEMessage {
   kind: string;
@@ -111,6 +113,13 @@ interface SessionRow {
   rows?: number;
 }
 
+// SmartPaste is the window-wide policy for the paste filter
+// (docs/AGENT_TERM.md §10):
+//   ask    — clean the invisible junk silently, ask before changing structure
+//   always — apply the repair without asking
+//   off    — don't analyze at all; paste exactly what was copied
+type SmartPaste = 'ask' | 'always' | 'off';
+
 interface PersistedState {
   tabs?: PersistedTabRow[];
   active?: number;
@@ -122,6 +131,7 @@ interface PersistedState {
   // Legacy: the old binary palette override, read on restore and
   // migrated to theme_id. No longer written.
   appearance?: 'dark' | 'light';
+  smart_paste?: SmartPaste;
 }
 
 // TAB_BAR_HEIGHT — 32 (was 28) leaves 4px of breathing room above the
@@ -148,9 +158,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // the font choice.
   const [themeId, setThemeId] = createSignal<string | undefined>(undefined);
 
+  // Smart paste (docs/AGENT_TERM.md §10): window-wide policy, and the
+  // pending analysis while its preview overlay is open. resolve is the
+  // Terminal's beforePaste promise — exactly one of the three buttons
+  // settles it, and dismissing counts as Cancel.
+  const [smartPaste, setSmartPaste] = createSignal<SmartPaste>('ask');
+  const [pendingPaste, setPendingPaste] = createSignal<{
+    analysis: PasteAnalysis;
+    resolve: (text: string | null) => void;
+  } | null>(null);
+
   // Menubar: which top menu is open and the viewport anchor (the clicked
   // button's bottom-left) to paint it at.
-  const [openMenu, setOpenMenu] = createSignal<'edit' | 'tab' | 'theme' | 'font' | null>(null);
+  const [openMenu, setOpenMenu] = createSignal<'edit' | 'tab' | 'theme' | 'font' | 'paste' | null>(null);
   const [menuAnchor, setMenuAnchor] = createSignal<{ x: number; y: number }>({ x: 0, y: 0 });
 
   // Per-tab live OSC title (set by the program via ESC]0;…), keyed by
@@ -320,7 +340,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // undefined while a tab is still pending (no xterm mounted yet).
   const activeApi = (): TerminalAPI | undefined => apis.get(active());
   // openMenuFor toggles the named top menu, anchoring it under the button.
-  const openMenuFor = (id: 'edit' | 'tab' | 'theme' | 'font', ev: MouseEvent) => {
+  const openMenuFor = (id: 'edit' | 'tab' | 'theme' | 'font' | 'paste', ev: MouseEvent) => {
     if (openMenu() === id) { setOpenMenu(null); return; }
     const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
     setMenuAnchor({ x: r.left, y: r.bottom + 2 });
@@ -337,6 +357,49 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const stepFontSize = (delta: number) => {
     const next = Math.max(TERM_MIN_FONT_SIZE, Math.min(TERM_MAX_FONT_SIZE, fontSize() + delta));
     changeFontSize(next);
+  };
+
+  // ---- smart paste ----
+
+  // beforePaste is the filter every paste path in the terminal component
+  // funnels through (§10). It resolves with the text to send, or null to
+  // send nothing. The three outcomes:
+  //   off / nothing found → the original, untouched
+  //   junk only, one line → cleaned, silently (an invisible character is
+  //                         not worth a dialog)
+  //   structure or multi-line → the overlay, and the user picks
+  const beforePaste = (text: string, ctx: { bracketedPaste?: boolean }): Promise<string | null> => {
+    if (smartPaste() === 'off') return Promise.resolve(text);
+    const analysis = analyzePaste(text, { bracketedPaste: ctx.bracketedPaste });
+    if (analysis.verdict === 'as-is') return Promise.resolve(text);
+    if (analysis.verdict === 'clean' || smartPaste() === 'always') {
+      return Promise.resolve(analysis.cleaned);
+    }
+    // Only one preview at a time: a second paste while the overlay is open
+    // cancels the first rather than stacking dialogs.
+    const prev = pendingPaste();
+    if (prev) {
+      prev.resolve(null);
+      setPendingPaste(null);
+    }
+    return new Promise<string | null>((resolve) => {
+      setPendingPaste({ analysis, resolve });
+    });
+  };
+
+  // settlePaste answers the open preview and closes it. Focus goes back to
+  // the terminal so the next keystroke lands in the pty, not the chrome.
+  const settlePaste = (text: string | null) => {
+    const p = pendingPaste();
+    setPendingPaste(null);
+    p?.resolve(text);
+    activeApi()?.focus();
+  };
+
+  const changeSmartPaste = (mode: SmartPaste) => {
+    if (smartPaste() === mode) return;
+    setSmartPaste(mode);
+    persist();
   };
 
   // ---- tab title (live OSC title, ephemeral) ----
@@ -568,6 +631,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       font_id: fontId(),
       font_size: fontSize(),
       theme_id: themeId(),
+      smart_paste: smartPaste(),
     };
     send({ kind: 'save_state', state });
   };
@@ -589,6 +653,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // saved before named themes keep their palette.
     if (s.theme_id) setThemeId(s.theme_id);
     else if (s.appearance) setThemeId(s.appearance);
+    if (s.smart_paste === 'ask' || s.smart_paste === 'always' || s.smart_paste === 'off') {
+      setSmartPaste(s.smart_paste);
+    }
     // The restored list may be stale (ptys that died while the
     // browser was detached); ask the BE for the live set and
     // reconcile when the `sessions` reply lands. Restored tabs stay
@@ -709,6 +776,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         </button>
         <button
           type="button"
+          data-testid="term-menu-paste-btn"
+          style={menuBarBtnStyle(openMenu() === 'paste')}
+          onClick={(ev) => openMenuFor('paste', ev)}
+        >
+          Paste
+        </button>
+        <button
+          type="button"
           data-testid="term-menu-font-btn"
           style={menuBarBtnStyle(openMenu() === 'font')}
           onClick={(ev) => openMenuFor('font', ev)}
@@ -767,6 +842,30 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               />
             )}
           </For>
+        </Menu>
+      </Show>
+      <Show when={openMenu() === 'paste'}>
+        <Menu x={menuAnchor().x} y={menuAnchor().y} data-testid="term-menu-paste" onDismiss={closeMenu}>
+          {/* Smart paste policy (§10). "ask" is the default: silent for the
+              invisible fixes, a preview for anything structural. */}
+          <MenuItem
+            label="Smart paste: ask"
+            data-testid="term-menu-paste-ask"
+            trailing={smartPaste() === 'ask' ? <Check size={12} /> : undefined}
+            onClick={run(() => changeSmartPaste('ask'))}
+          />
+          <MenuItem
+            label="Smart paste: always"
+            data-testid="term-menu-paste-always"
+            trailing={smartPaste() === 'always' ? <Check size={12} /> : undefined}
+            onClick={run(() => changeSmartPaste('always'))}
+          />
+          <MenuItem
+            label="Smart paste: off"
+            data-testid="term-menu-paste-off"
+            trailing={smartPaste() === 'off' ? <Check size={12} /> : undefined}
+            onClick={run(() => changeSmartPaste('off'))}
+          />
         </Menu>
       </Show>
       <Show when={openMenu() === 'font'}>
@@ -967,6 +1066,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   initialRows={tab.init?.rows}
                   initialModes={tab.modes}
                   onModesChanged={(m) => onTabModes(tab, m)}
+                  beforePaste={beforePaste}
                   onReady={(api) => {
                     apis.set(tab.channelID, api);
                     if (active() === tab.channelID) api.focus();
@@ -986,6 +1086,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           }}
         </For>
       </div>
+      <Show when={pendingPaste()}>
+        {(p) => (
+          <PasteOverlay
+            analysis={p().analysis}
+            onCleaned={() => settlePaste(p().analysis.cleaned)}
+            onAsIs={() => settlePaste(p().analysis.original)}
+            onCancel={() => settlePaste(null)}
+          />
+        )}
+      </Show>
       <div
         data-testid="term-statusbar"
         style={{

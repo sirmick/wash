@@ -391,6 +391,13 @@ export interface TerminalProps {
   // onModesChanged fires whenever the tracked mode state changes;
   // consumers persist it (debounced) for the next remount.
   onModesChanged?: (m: TermModes) => void;
+  // beforePaste is the smart-paste hook (docs/AGENT_TERM.md §10). Every
+  // paste path in this component funnels through it: the context menu, the
+  // Ctrl+Shift+V binding, the imperative api.paste(), and the browser's own
+  // paste event on the xterm textarea. Return the text to paste (possibly
+  // repaired), or null to cancel. Omit it and pastes go through untouched —
+  // this component holds no policy of its own.
+  beforePaste?: (text: string, ctx: { bracketedPaste?: boolean }) => Promise<string | null>;
   // onStalled fires when this terminal typed input but got no output back
   // for several seconds under an otherwise-live channel (docs/PTY_ROBUST.md,
   // Fix D). The component already self-heals with a resync nudge; consumers
@@ -487,11 +494,30 @@ export const Terminal: Component<TerminalProps> = (props) => {
   const effectiveSize = () => clampSize(props.fontSize ?? TERM_DEFAULT_FONT_SIZE);
 
   // pasteWash inserts the wash clipboard at the cursor through
-  // xterm's paste path (bracketed-paste aware, CR-normalized).
+  // xterm's paste path (bracketed-paste aware, CR-normalized), after the
+  // consumer's beforePaste filter has had its say.
   const pasteWash = () => {
     void washPasteText().then((text) => {
-      if (text && term) term.paste(text);
+      if (text) void pasteFiltered(text);
     });
+  };
+
+  // pasteFiltered is the one place text enters the pty from the clipboard.
+  // With no beforePaste hook it is a straight term.paste(); with one, the
+  // hook decides what (if anything) lands.
+  const pasteFiltered = async (text: string) => {
+    if (!props.beforePaste) {
+      term?.paste(text);
+      return;
+    }
+    let out: string | null = text;
+    try {
+      out = await props.beforePaste(text, { bracketedPaste: decModes[2004] });
+    } catch {
+      // A broken filter must never eat the user's paste.
+      out = text;
+    }
+    if (out) term?.paste(out);
   };
 
   // ---- terminal-mode tracking (see TermModes) ----
@@ -692,6 +718,24 @@ export const Terminal: Component<TerminalProps> = (props) => {
     onCleanup(() => {
       hostEl.removeEventListener('mouseup', onMouseUp);
     });
+
+    // Native paste (Ctrl+V, the browser's own Edit▸Paste, middle-click on
+    // X11) goes straight to xterm's textarea and would bypass the smart-paste
+    // filter — so when a consumer installs one, we intercept the DOM event in
+    // the capture phase and re-enter through the same choke point. Only wired
+    // when beforePaste exists: with no filter, xterm's own handling is left
+    // exactly as it was.
+    if (props.beforePaste) {
+      const onNativePaste = (ev: ClipboardEvent) => {
+        const text = ev.clipboardData?.getData('text/plain') ?? '';
+        if (!text) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        void pasteFiltered(text);
+      };
+      hostEl.addEventListener('paste', onNativePaste, true);
+      onCleanup(() => hostEl.removeEventListener('paste', onNativePaste, true));
+    }
 
     if (channelId > 0) {
       const stallCheck = window.setInterval(() => {

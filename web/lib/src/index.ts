@@ -37,6 +37,8 @@ export {
 } from './terminal';
 export type { TerminalProps, TerminalAPI, TermFont, TermModes, TermTheme } from './terminal';
 export { washCopyText, washPasteText, systemCopyText, systemCopyTextChecked } from './clipboard';
+export { analyzePaste, joinWrapped } from './paste-analyze';
+export type { PasteAnalysis, PasteIssue, PasteOptions } from './paste-analyze';
 export { defineWashApp } from './define-app';
 export type { WashAppProps, DefineWashAppOptions } from './define-app';
 export { defineSettingsPanel, PANEL_PORT_PROP } from './define-settings-panel';

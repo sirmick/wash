@@ -229,8 +229,8 @@ sessions without restart.
 - **M4 — roster. DONE** (see §9.4). agentd + session gateway +
   AgentsWidget + liveness. Remote merge deferred to REMOTE §6.2
   scheduling.
-- **M5 — smart paste** (§10). Closes #19 item 3 and with it the whole issue.
-  Independent of M1–M4; can be built at any point in the train.
+- **M5 — smart paste. DONE** (§10, see §9.5). Closes #19 item 3 and with it
+  the whole issue. Independent of M1–M4.
 
 Each milestone ships standalone value; M1 is small and immediately visible.
 
@@ -432,6 +432,46 @@ heuristics and the tests ARE the spec), overlay in the term FE, hook into
 `paste()`. No BE/protocol change. e2e: clipboard-inject wrapped and junked
 payloads, assert overlay verdicts and what actually reached the pty
 (router-log side).
+
+### 9.5 M5 as built
+
+| Piece | Where |
+|---|---|
+| `analyzePaste` kernel | `web/lib/src/paste-analyze.ts` (exported from `@wash/ui`) |
+| paste choke point | `beforePaste` prop + `pasteFiltered` in `web/lib/src/terminal.tsx` |
+| preview overlay + policy menu | `apps/term/fe/src/PasteOverlay.tsx`, `apps/term/fe/src/main.tsx` |
+| tests | `web/lib/src/paste-analyze.test.ts` (21 cases), `e2e/tests/term-smart-paste.spec.ts` |
+
+- **The kernel's verdict is three-valued**, which is what makes the UX rule
+  from §10 expressible: `as-is` (nothing found), `clean` (invisible junk on
+  a single line — applied silently, because showing a dialog for a
+  non-breaking space is worse than fixing it), `ask` (anything structural,
+  or multi-line, or a paste-jacking warning).
+- **Wrap detection says no by default.** Four independent vetoes — shell
+  structure at a line start, a trailing continuation/operator, no wrap
+  column (lines not clustered, or under 40 chars), and a too-short tail
+  line — because joining a real two-command script is a much worse failure
+  than leaving a wrapped command unjoined. The "must never join" table in
+  the tests is the specification.
+- **Two join rules, not one**: a line that stopped exactly at the wrap
+  column and continues a token rejoins with nothing (a URL cut mid-path);
+  anything else rejoins with a space (word wrap replaced the space). The
+  wrap column is derived from the head lines only — with two lines, the
+  last one says nothing about the width.
+- **The component holds no policy.** `beforePaste` is a prop; with it
+  absent (wash-edit's embedded terminal) every paste goes through
+  untouched. wash-term owns the analysis, the overlay and the
+  ask/always/off setting, which persists with the rest of its window state.
+- **Native paste is intercepted too.** §10 said all paste paths funnel
+  through `TerminalAPI.paste`, but a plain Ctrl+V (or the browser's own
+  Edit▸Paste, or middle-click) is delivered straight to xterm's hidden
+  textarea and would have bypassed the filter. When (and only when) a
+  `beforePaste` is installed, the component takes the DOM paste event in
+  the capture phase and re-enters through the same choke point — covered
+  by its own e2e case.
+- **The e2e asserts bytes, not dialogs**: every case pastes into
+  `cat > file` and reads the file back, so what is being checked is
+  literally what the shell would have run.
 
 ## 11. Non-goals / later
 
