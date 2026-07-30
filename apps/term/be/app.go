@@ -422,6 +422,10 @@ func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
 			"channel_id": uint64(s.ID()),
 			"reason":     reason,
 		})
+		// Retract the roster row now rather than leaving it to agentd's
+		// stale sweep — a tab the user closed should leave the sidebar
+		// with it (§7: explicit remove on tab close, TTL as the net).
+		publishRoster(c, s.ID(), agentView{}, false, "", time.Now())
 		if empty {
 			// Last tab gone — ask the router to close the window so
 			// the user doesn't sit looking at an empty terminal.

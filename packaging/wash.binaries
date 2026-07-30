@@ -27,6 +27,7 @@ wash-priv
 wash-notify
 wash-audio
 wash-fswatch
+wash-agentd
 wash-launch
 wash-fswatchd
 wash-agent-hook

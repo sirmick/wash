@@ -193,8 +193,19 @@ async function freePort(): Promise<number> {
   });
 }
 
-function stageApps(binaries: string[]): string {
+function stageApps(paths: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), 'wash-e2e-apps-'));
+  // Dedupe by basename: infrastructure binaries (fswatch, agentd,
+  // agent-hook) are staged unconditionally AND may be named by a test's
+  // apps list, and staging one twice used to fail with an EEXIST from
+  // symlinkSync — an opaque fixture error for a harmless duplicate.
+  const seen = new Set<string>();
+  const binaries = paths.filter((p) => {
+    const name = p.split('/').pop()!;
+    if (seen.has(name)) return false;
+    seen.add(name);
+    return true;
+  });
   // Multi-call mode (WASH_E2E_MULTICALL=1): copy out/wash once and
   // create a symlink per requested app pointing at it. Exercises the
   // busybox-style layout end-to-end through the same e2e suite as
@@ -273,6 +284,11 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   // PATH, so it has to be in every router's apps dir for the policy specs
   // (and for anyone typing it in a test terminal) to find it.
   bins.push(binPath('wash-agent-hook'));
+  // wash-agentd is the coding-agent roster singleton: wash-term addresses
+  // it by app id, so the router spawns it the first time any terminal sees
+  // an agent. Staged everywhere for the same reason as wash-fswatch — a
+  // missing binary would silently drop every roster event.
+  bins.push(binPath('wash-agentd'));
   const appsDir = stageApps(bins);
   // wash-priv claims a reservedID (com.wash.priv) which the registry
   // refuses from a non-root-owned binary by default. The e2e dir is

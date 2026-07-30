@@ -226,8 +226,9 @@ sessions without restart.
 - **M3 — approval policy. DONE** (see §9.3). Socket + `decide` mode +
   policy rules + Agents settings pane + audit logging. Closes #19 item 2
   (the right way; legacy typed-`y` mode ships OFF).
-- **M4 — roster.** agentd + session gateway + AgentsWidget + liveness.
-  Remote merge deferred to REMOTE §6.2 scheduling.
+- **M4 — roster. DONE** (see §9.4). agentd + session gateway +
+  AgentsWidget + liveness. Remote merge deferred to REMOTE §6.2
+  scheduling.
 - **M5 — smart paste** (§10). Closes #19 item 3 and with it the whole issue.
   Independent of M1–M4; can be built at any point in the train.
 
@@ -354,6 +355,44 @@ a detail the design left open:
   switch, and end-of-output anchoring, that is what keeps a
   spoofable-by-design feature from being reckless — and every injection is
   logged and toasted.
+
+### 9.4 M4 as built
+
+| Piece | Where |
+|---|---|
+| roster service | `apps/agentd/be/{app,service,git}.go` (+ `cmd/`, `SVC_APPS`) |
+| terminal → roster | `publishRoster` in `apps/term/be/agent.go` |
+| session gateway | `registerAgentGateway` + `serviceFEKind` in `apps/session/be/app.go` |
+| sidebar widget | `apps/session/fe/src/sidebar/AgentsWidget.tsx` (+ Agents section) |
+| tests | `apps/agentd/be/{service,git}_test.go`, `AgentsWidget.ctest.tsx`, `e2e/tests/term-agent-roster.spec.ts` |
+
+- **Terminals heartbeat, they don't just report.** §7's liveness only
+  works if silence means death, so a tab with a live agent re-states it to
+  agentd every 15s (`rosterKeepalive`) on top of every change — inside the
+  60s stale window. A same-state keepalive must NOT restart the elapsed
+  clock, or "waiting 5 minutes" would read as "waiting 15 seconds"
+  forever, which is the number the roster exists to show.
+- **Three liveness layers, in order of speed**: `ev=end` clears the row,
+  tab close retracts it explicitly, and the sweep (stale at 60s, dropped
+  at 2m) catches a terminal that died without saying either.
+- **Rows are sorted server-side** into attention order (needs-input,
+  longest-waiting first) so every consumer — sidebar today, anything else
+  later — agrees on what matters most without re-deriving it.
+- **The row key is `<term instance>:<channel id>`** with the instance
+  taken from the router-attested sender, so one terminal can never
+  describe another's tabs.
+- **git runs in the service, never in a hook**: `git -C <cwd>` for branch
+  + dirty, cached 30s per directory, collapsed across concurrent tabs in
+  one repo, off the dispatch path, and best-effort (a non-repo renders as
+  just the directory name).
+- **The Agents settings pane stays where M3 put it.** agentd is a
+  singleton and could host a real define-settings-panel now, but the
+  policy file is already the contract and moving the UI buys nothing this
+  milestone — the note in §9.3 stands as the follow-up.
+- **The M2 taskbar badge also stays generic.** With agentd in place an
+  agent-specific taskbar feed is now possible; the unread-warn badge
+  covers the same case and is one fewer moving part, so it survives until
+  something wants more.
 
 ## 10. Smart paste (M5, issue #19 item 3)
 
