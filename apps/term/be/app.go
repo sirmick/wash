@@ -301,6 +301,15 @@ type newTabReq struct {
 	Rows uint64 `json:"rows"`
 }
 
+// execTabReq is the resume path's tab request (§13). Exec is the argv to
+// run instead of the user's shell.
+type execTabReq struct {
+	Cols uint64   `json:"cols"`
+	Rows uint64   `json:"rows"`
+	Exec []string `json:"exec"`
+	Cwd  string   `json:"cwd,omitempty"`
+}
+
 type closeTabReq struct {
 	ChannelID uint64 `json:"channel_id"`
 }
@@ -319,6 +328,10 @@ func registerHandlers(b *sdk.Bus) {
 		}
 		return sess.Resize(uint16(req.Cols), uint16(req.Rows))
 	})
+	// new_tab is the FE's own verb: open a tab running the user's shell.
+	// (The privileged "open a tab running THIS command" verb is exec_tab
+	// below — a separate kind, because HandleFromVoid drops own-FE
+	// messages and because one caller deserves one door.)
 	sdk.HandleVoid(b, "new_tab", func(c *sdk.Conn, _ string, req newTabReq) error {
 		cols := req.Cols
 		rows := req.Rows
@@ -329,6 +342,34 @@ func registerHandlers(b *sdk.Bus) {
 			rows = 24
 		}
 		go openTab(c, c.WindowID(), uint16(cols), uint16(rows))
+		return nil
+	})
+	// exec_tab opens a tab running a specific command — the session-resume
+	// path (docs/AGENT_TERM.md §13). Honoured ONLY from com.wash.agentd,
+	// and only because a human clicked Resume in the sidebar. The sender is
+	// router-attested, so this is a real boundary rather than a convention.
+	//
+	// (agentd is not a privileged id: an app that could impersonate it is
+	// already a process on the user's box and could run the command
+	// itself. The check keeps the capability narrow, it does not contain an
+	// attacker who is already inside.)
+	sdk.HandleFromVoid(b, "exec_tab", func(c *sdk.Conn, _ string, req execTabReq, from wire.Sender) error {
+		if from.AppID != agentdAppID {
+			log.Printf("term: exec_tab refused from=%s", from.AppID)
+			return nil
+		}
+		if len(req.Exec) == 0 {
+			return nil
+		}
+		cols, rows := req.Cols, req.Rows
+		if cols == 0 {
+			cols = 80
+		}
+		if rows == 0 {
+			rows = 24
+		}
+		log.Printf("term: exec_tab from=%s argv=%q", from.AppID, req.Exec)
+		go openTabExec(c, c.WindowID(), uint16(cols), uint16(rows), req.Exec)
 		return nil
 	})
 	// list_sessions is the FE's mount-time reconcile: a `tab_closed`
@@ -388,8 +429,17 @@ func registerHandlers(b *sdk.Bus) {
 // hands both to internal/pty.Open which wires them with io.Copy
 // pairs. Reports tab_opened / tab_closed app_msgs to the FE.
 func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
+	openTabExec(c, windowID, cols, rows, nil)
+}
+
+// openTabExec is openTab with an optional argv override — the resume path
+// (§13) runs a specific command instead of the user's shell. An overridden
+// tab autocloses when the command exits, matching --exec semantics.
+func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []string) {
 	var argv []string
 	switch {
+	case len(override) > 0:
+		argv = override
 	case len(execArgv) > 0:
 		// --exec mode: run the requested argv. argv[0] is resolved
 		// via $PATH (exec.Command does that). The tab autocloses on

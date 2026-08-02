@@ -45,7 +45,8 @@ var rows = map[string]*row{}
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-agentd ready instance=%s", instanceID)
 	bus := sdk.NewBus(c)
-	svc = sdk.NewStateService(bus, State{})
+	loadHistory()
+	svc = sdk.NewStateService(bus, State{Recent: publishHistory()})
 
 	// agent_status: a terminal states (or re-states) one tab's agent. The
 	// sender is router-attested, so the key can't be forged and a
@@ -89,7 +90,13 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 			if r.Cwd != "" {
 				wantGit = r.Cwd
 			}
+			// Remember it too: the roster is "now", the history is "what
+			// I lost" (§13).
+			if rememberSession(req.Agent, req.SessionID, req.Cwd, now) {
+				historyDirty = true
+			}
 			s.Rows = publish(now)
+			s.Recent = publishHistory()
 		})
 		if changedState {
 			// One line per roster transition: the roster is also the audit
@@ -115,7 +122,20 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		svc.Mutate(func(s *State) {
 			delete(rows, key)
 			s.Rows = publish(time.Now())
+			// The row is gone but the session is now exactly what the
+			// Recent list is for.
+			s.Recent = publishHistory()
 		})
+		saveHistory()
+		return nil
+	})
+
+	// agent_resume: a Resume/Fork click in the sidebar (§13).
+	sdk.HandleFromVoid(bus, "agent_resume", func(conn *sdk.Conn, _ string, req resumeReq, _ wire.Sender) error {
+		if req.SessionID == "" {
+			return nil
+		}
+		resumeSession(conn, req.SessionID, req.Fork)
 		return nil
 	})
 
@@ -261,4 +281,9 @@ type statusReq struct {
 
 type goneReq struct {
 	ChannelID uint64 `json:"channel_id"`
+}
+
+type resumeReq struct {
+	SessionID string `json:"session_id"`
+	Fork      bool   `json:"fork"`
 }

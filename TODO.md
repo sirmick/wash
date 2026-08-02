@@ -139,8 +139,8 @@ bug list — all fully landed; see `git log` if you need their content.)
 
 ## Apps / UX
 
-- [ ] **Agent-aware terminals: follow-ups** — docs/AGENT_TERM.md. **M1–M5
-  are all DONE**, which closes **issue #19** (item 1 close-confirm shipped
+- [ ] **Agent-aware terminals: follow-ups** — docs/AGENT_TERM.md. **M1–M7
+  are all DONE** (M6 answer-from-the-desktop, M7 session resume), which closes **issue #19** (item 1 close-confirm shipped
   earlier, item 2 by M3's policy engine, item 3 by M5's smart paste). What
   is deliberately left: the Agents settings pane could become a real
   define-settings-panel owned by agentd, with a hook-install toggle

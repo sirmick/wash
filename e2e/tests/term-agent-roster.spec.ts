@@ -60,9 +60,14 @@ async function run(page: Page, cmd: string) {
 }
 
 // The Agents section starts collapsed; open it to render rows.
+// Idempotent: sidebar section state is persisted, so after a reload the
+// section may already be open and a blind click would CLOSE it.
 async function openAgentsSection(page: Page) {
-  await page.locator('[data-testid="sidebar-section-header-agents"]').click();
-  await expect(page.locator('[data-testid="sidebar-section-body-agents"]')).toBeVisible();
+  const body = page.locator('[data-testid="sidebar-section-body-agents"]');
+  if ((await body.count()) === 0) {
+    await page.locator('[data-testid="sidebar-section-header-agents"]').click();
+  }
+  await expect(body).toBeVisible();
 }
 
 async function focusedElement(page: Page): Promise<string> {

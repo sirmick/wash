@@ -47,6 +47,18 @@ export interface AgentAsk {
   age_ms: number;
 }
 
+/** A remembered agent session (docs/AGENT_TERM.md §13). */
+export interface AgentSession {
+  session_id: string;
+  agent: string;
+  cwd?: string;
+  dir?: string;
+  /** unix seconds */
+  last_seen: number;
+  /** running right now — it's in the roster above, so don't offer resume */
+  live?: boolean;
+}
+
 export interface AgentsWidgetProps {
   rows: () => AgentRow[];
   /** local clock anchor per row key, so elapsed keeps counting between pushes */
@@ -59,6 +71,12 @@ export interface AgentsWidgetProps {
   asks?: () => AgentAsk[];
   /** answer one: decision allow|deny, remember writes the named rule */
   onAnswer?: (ask: AgentAsk, decision: 'allow' | 'deny', remember: boolean) => void;
+  /** remembered sessions, most recent first */
+  recent?: () => AgentSession[];
+  /** reopen one: fork branches off it instead of continuing it */
+  onResume?: (session: AgentSession, fork: boolean) => void;
+  /** put the session id on the clipboard */
+  onCopyID?: (session: AgentSession) => void;
 }
 
 // stateColor is the same language as the terminal's own tab dot: blue
@@ -124,8 +142,88 @@ export const AgentsWidget: Component<AgentsWidgetProps> = (props) => {
           />
         )}
       </For>
+      {/* Sessions that are no longer running, but could be. */}
+      <Show when={(props.recent?.() ?? []).some((s) => !s.live)}>
+        <div data-testid="agents-recent" style={recentHeadStyle}>Recent</div>
+        <For each={(props.recent?.() ?? []).filter((s) => !s.live)}>
+          {(s) => (
+            <RecentRow
+              session={s}
+              now={props.now()}
+              onResume={(fork) => props.onResume?.(s, fork)}
+              onCopyID={() => props.onCopyID?.(s)}
+            />
+          )}
+        </For>
+      </Show>
     </div>
   );
+};
+
+// RecentRow is a session you could reopen: what it was and where, and the
+// two ways back in. Resume continues it; Fork branches off it, leaving the
+// original untouched for when you want to go back to that point.
+const RecentRow: Component<{
+  session: AgentSession;
+  now: number;
+  onResume: (fork: boolean) => void;
+  onCopyID: () => void;
+}> = (props) => (
+  <div
+    data-testid="agents-recent-row"
+    data-session-id={props.session.session_id}
+    style={{
+      padding: '5px 8px',
+      'border-radius': tokens.radiusSm,
+      background: 'rgba(255,255,255,0.02)',
+      'font-size': '11px',
+      display: 'flex',
+      'flex-direction': 'column',
+      gap: '3px',
+      opacity: 0.85,
+    }}
+  >
+    <div style={{ display: 'flex', 'align-items': 'baseline', gap: '6px' }}>
+      <span style={{ 'font-weight': 600 }}>{props.session.agent}</span>
+      <Show when={props.session.dir}>
+        <span style={{ opacity: 0.7, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+          {props.session.dir}
+        </span>
+      </Show>
+      <span style={{ 'margin-left': 'auto', opacity: 0.6, 'flex-shrink': 0 }}>
+        {fmtAgo(props.now, props.session.last_seen)}
+      </span>
+    </div>
+    <div style={{ display: 'flex', gap: '4px' }}>
+      <AskBtn testid="agents-resume" title={`Continue this session in a new terminal`} onClick={() => props.onResume(false)}>
+        Resume
+      </AskBtn>
+      <AskBtn testid="agents-fork" title="Branch off this session, leaving it as it was" onClick={() => props.onResume(true)}>
+        Fork
+      </AskBtn>
+      <AskBtn testid="agents-copy-id" title={props.session.session_id} onClick={props.onCopyID}>
+        Copy id
+      </AskBtn>
+    </div>
+  </div>
+);
+
+// fmtAgo renders "just now / 5m ago / 3h ago / 2d ago" from unix seconds.
+export function fmtAgo(nowMS: number, unixSec: number): string {
+  if (!unixSec) return '';
+  const secs = Math.max(0, Math.floor(nowMS / 1000) - unixSec);
+  if (secs < 45) return 'just now';
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+  if (secs < 86_400) return `${Math.floor(secs / 3600)}h ago`;
+  return `${Math.floor(secs / 86_400)}d ago`;
+}
+
+const recentHeadStyle: JSX.CSSProperties = {
+  font: tokens.type.titleSm,
+  opacity: 0.55,
+  'text-transform': 'uppercase',
+  'letter-spacing': '0.04em',
+  'margin-top': '4px',
 };
 
 // AskRow is the actionable half of the roster: what the agent wants to do,

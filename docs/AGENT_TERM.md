@@ -234,7 +234,7 @@ sessions without restart.
   Always allow \<rule\> / Deny, and "always" writes the rule it names. The
   policy stops being something you configure and becomes something you
   teach.
-- **M7 — resume a session** (§13). Roster rows outlive their agents in a
+- **M7 — resume a session. DONE** (§13, as-built in §9.7). Roster rows outlive their agents in a
   small persisted history, so a reboot, a closed window or a crashed
   terminal costs a `--resume`, not the context.
 - **M5 — smart paste. DONE** (§10, see §9.5). Closes #19 item 3 and with it
@@ -480,6 +480,46 @@ payloads, assert overlay verdicts and what actually reached the pty
 - **The e2e asserts bytes, not dialogs**: every case pastes into
   `cat > file` and reads the file back, so what is being checked is
   literally what the shell would have run.
+
+### 9.7 M7 as built
+
+| Piece | Where |
+|---|---|
+| history, persistence, resume launch | `apps/agentd/be/history.go` |
+| exec'd tab | `new_tab{exec}` in `apps/term/be/app.go` (agentd-only) |
+| resume gateway | `agent_resume` in `apps/session/be/app.go` |
+| Recent rows | `apps/session/fe/src/sidebar/AgentsWidget.tsx` |
+| tests | `apps/agentd/be/history_test.go`, `AgentsWidget.ctest.tsx`, `e2e/tests/term-agent-resume.spec.ts` |
+
+- **Everything the roster sees is remembered**, not just sessions that end
+  politely — a terminal killed outright never says goodbye, and that is
+  precisely the case resume exists for.
+- **A normal spawn carries no argv**, so resume is two steps: agentd asks
+  the router for a terminal, and `OnSpawnResult` hands back the instance id
+  it then tells what to run. No wire change, no new capability shape —
+  agentd just declares `spawn`.
+- **The privileged verb is its own kind, `exec_tab`.** The first attempt
+  bolted an `exec` field onto the FE's `new_tab` and switched that handler
+  to the cross-app form — which silently broke the FE's own new-tab
+  button, because `HandleFromVoid` drops messages with no attested sender.
+  A verb with one caller gets its own door. It is honoured only from
+  `com.wash.agentd`; not because agentd is privileged (an app that could
+  impersonate it is already a process on your box and could run the
+  command itself) but because a capability this sharp should have exactly
+  one caller.
+- **A NON-login shell** (`-c`, not `-lc`). A login shell re-runs the
+  profile and can rebuild `PATH` from scratch, dropping the entry the agent
+  lives in; the terminal's inherited environment already has the user's
+  real PATH (the router resolves it once with `--login-env`). This also
+  matches what an ordinary wash terminal is.
+- **History is state, not config**: `$XDG_STATE_HOME/wash/agent-sessions.json`,
+  0600, atomic, capped at 20, debounced 30s against keepalives but written
+  immediately when a session ends. It holds ids, directories and
+  timestamps — never transcript content.
+- **The e2e shadows `claude` on PATH.** The first version of the spec
+  launched the REAL Claude Code, which sat at its trust prompt — a good
+  demonstration that the feature works, and a bad test. `PATH` now starts
+  with a stand-in that records its argv.
 
 ## 11. Non-goals / later
 

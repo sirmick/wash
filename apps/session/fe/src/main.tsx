@@ -10,7 +10,17 @@
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Menu, MenuItem, accentColor, applyScheme, defineWashApp, getPack, tokens, washAssetUrl } from '@wash/ui';
+import {
+  Menu,
+  MenuItem,
+  accentColor,
+  applyScheme,
+  defineWashApp,
+  getPack,
+  tokens,
+  washAssetUrl,
+  washCopyText,
+} from '@wash/ui';
 import type { Pack } from '@wash/ui';
 import { toBlob } from 'html-to-image';
 import { Camera, Search, PanelRightOpen } from 'lucide-solid';
@@ -19,7 +29,7 @@ import { Section, type SectionState } from './sidebar/Section';
 import { ViewportWidget } from './sidebar/ViewportWidget';
 import { AboutWidget, type AboutHostStats } from './sidebar/AboutWidget';
 import { NotifyWidget, type NotifyEntry } from './sidebar/NotifyWidget';
-import { AgentsWidget, type AgentAsk, type AgentRow } from './sidebar/AgentsWidget';
+import { AgentsWidget, type AgentAsk, type AgentRow, type AgentSession } from './sidebar/AgentsWidget';
 import { BulkWidget, type BulkJob } from './sidebar/BulkWidget';
 import { BulkConflictOverlay, type BulkConflict } from './sidebar/BulkConflictOverlay';
 import { PrivWidget, type PrivReq } from './sidebar/PrivWidget';
@@ -295,6 +305,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // roster push. An agent blocked on a human is the one thing in the
   // sidebar worth opening the section for on its own.
   const [agentAsks, setAgentAsks] = createSignal<AgentAsk[]>([]);
+  // Remembered sessions (docs/AGENT_TERM.md §13) — what a reboot or a
+  // closed window would otherwise have cost.
+  const [agentRecent, setAgentRecent] = createSignal<AgentSession[]>([]);
   const agentStartedAt = new Map<string, number>();
   const [agentNow, setAgentNow] = createSignal(Date.now());
 
@@ -868,7 +881,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           // arrival (since_ms is elapsed at push time, so no cross-clock
           // comparison), and auto-expand when an agent first wants the
           // human — the one case worth pulling the section open.
-          const state = data.state as unknown as { rows?: AgentRow[]; asks?: AgentAsk[] };
+          const state = data.state as unknown as {
+            rows?: AgentRow[];
+            asks?: AgentAsk[];
+            recent?: AgentSession[];
+          };
+          setAgentRecent((state?.recent ?? []) as AgentSession[]);
           const next = (state?.rows ?? []) as AgentRow[];
           const asks = (state?.asks ?? []) as AgentAsk[];
           const hadAsks = agentAsks().length > 0;
@@ -1277,6 +1295,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             now={agentNow}
             onFocus={focusAgent}
             asks={agentAsks}
+            recent={agentRecent}
+            onResume={(session, fork) =>
+              window.wash.sendAppMsg(props.instance, {
+                kind: 'agent_resume',
+                session_id: session.session_id,
+                fork,
+              })
+            }
+            onCopyID={(session) => void washCopyText(session.session_id)}
             onAnswer={(ask, decision, remember) =>
               window.wash.sendAppMsg(props.instance, {
                 kind: 'agent_answer',
