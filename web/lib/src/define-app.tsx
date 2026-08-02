@@ -15,6 +15,7 @@
 // customElements.get).
 
 import { render } from 'solid-js/web';
+import { ensureScrollbarStyles } from './scrollbars';
 import type { Component } from 'solid-js';
 
 /** Props every wash app component receives. */
@@ -70,6 +71,11 @@ export function defineWashApp(
     realTag = `${tag}-${slug}` as `wash-app-${string}`;
     g.__washRegisterTag?.(importOrigin, tag, realTag);
   }
+
+  // Every app gets the wash scrollbar treatment (scrollbars.ts): native
+  // overlay bars otherwise paint over content — and get painted over by
+  // it — most visibly in the terminal.
+  ensureScrollbarStyles();
 
   if (customElements.get(realTag)) return;
 

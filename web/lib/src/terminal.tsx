@@ -13,6 +13,7 @@
 
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { ensureScrollbarStyles } from './scrollbars';
 import type { ITheme } from '@xterm/xterm';
 import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component } from 'solid-js';
@@ -252,6 +253,11 @@ export const TERM_FONTS: TermFont[] = [
 // would silently discard a reattach replay, keeping much more costs
 // browser memory per tab for history nobody scrolls back to.
 export const TERM_SCROLLBACK_LINES = 20_000;
+
+// TERM_INSET_PX is the breathing room on each side of the character grid.
+// Applied to the .xterm element (see term.open below) because that is what
+// FitAddon's column arithmetic accounts for.
+const TERM_INSET_PX = 10;
 
 export const TERM_DEFAULT_FONT_ID = 'system';
 export const TERM_DEFAULT_FONT_SIZE = 12;
@@ -594,6 +600,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
       (props.initialCols ?? 0) > 1 && (props.initialRows ?? 0) > 1
         ? { cols: props.initialCols, rows: props.initialRows }
         : undefined;
+    ensureScrollbarStyles();
     term = new XTerm({
       ...restoredGrid,
       fontFamily: initialFamily,
@@ -694,6 +701,19 @@ export const Terminal: Component<TerminalProps> = (props) => {
     fit = new FitAddon();
     term.loadAddon(fit);
     term.open(hostEl);
+    // The left/right inset (so the first and last columns aren't jammed
+    // against the window edge) goes on the .xterm ELEMENT, not on the host
+    // div. FitAddon computes the grid from the host's computed width MINUS
+    // the xterm element's padding — a host that is padded instead is
+    // invisible to that arithmetic, and `box-sizing: border-box` makes the
+    // host report its full outer width anyway. The old placement sized the
+    // grid ~20px too wide, and the surplus column painted over the
+    // scrollbar (scrollbars.ts).
+    //
+    // .xterm is position:relative, so .xterm-viewport (absolute, inset 0)
+    // still spans the padding box: the scrollbar sits at the true right
+    // edge while the text is inset. That is the layout we want.
+    term.element!.style.padding = `0 ${TERM_INSET_PX}px`;
     term.onData((s) => {
       try {
         const bytes = encoder.encode(s);
@@ -931,11 +951,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
     <>
       <div
         ref={hostEl!}
-        // Small left/right inset so the first/last columns aren't jammed
-        // against the window edge. border-box keeps the host's reported
-        // width as the content width, so FitAddon sizes columns to the
-        // padded area (no overflow, no manual refit needed).
-        style={{ width: '100%', height: '100%', 'box-sizing': 'border-box', padding: '0 10px' }}
+        // NO padding here — see TERM_INSET_PX. The inset lives on the
+        // .xterm element itself, because that is the one FitAddon
+        // subtracts when it sizes the grid.
+        style={{ width: '100%', height: '100%', 'box-sizing': 'border-box' }}
         onContextMenu={onCtx}
       />
       <Show when={menu()}>
