@@ -119,6 +119,8 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		return nil
 	})
 
+	registerAskHandlers(bus, c)
+
 	go sweepLoop(c)
 }
 

@@ -37,6 +37,7 @@ import (
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/pty"
 	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/internal/wire"
 )
 
 // execArgv is the user-supplied --exec ARGS... When non-nil, openTab
@@ -363,6 +364,12 @@ func registerHandlers(b *sdk.Bus) {
 		st.mu.Unlock()
 		return c.SendAppMsg(map[string]any{"kind": "sessions", "sessions": rows})
 	})
+	// ask_result: agentd relaying the human's answer to a permission
+	// question this terminal asked (§12). Cross-app, so HandleFromVoid.
+	sdk.HandleFromVoid(b, "ask_result", func(_ *sdk.Conn, _ string, req askResultMsg, _ wire.Sender) error {
+		onAskResult(req)
+		return nil
+	})
 	sdk.HandleVoid(b, "close_tab", func(_ *sdk.Conn, _ string, req closeTabReq) error {
 		if req.ChannelID == 0 {
 			return nil
@@ -444,7 +451,7 @@ func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
 	// Answer policy questions for this tab until it closes (§6). The
 	// channel id is read lazily so the audit log can name the tab.
 	if sock != nil {
-		go sock.serve(sockDeps{chanID: sess.ID, warn: c.Warn})
+		go sock.serve(sockDeps{chanID: sess.ID, warn: c.Warn, conn: c})
 	}
 	// Tee this pty's output through the OSC 7770 scanner (agent.go). The
 	// bytes are only read — the sequence stays in the stream, so the

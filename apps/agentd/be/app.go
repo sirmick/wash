@@ -47,6 +47,9 @@ const AppID = "com.wash.agentd"
 // the sidebar is a queue of things to attend to, not a table.
 type State struct {
 	Rows []Row `json:"rows"`
+	// Asks are permission questions waiting for a human (§12). They ride
+	// the roster's own push so the sidebar needs no second subscription.
+	Asks []Ask `json:"asks,omitempty"`
 }
 
 // Row is one agent in one terminal tab.

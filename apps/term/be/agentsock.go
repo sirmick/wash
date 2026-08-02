@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/pty"
+	"github.com/sirmick/wash/internal/sdk"
 )
 
 // decideDeadline bounds one request/response exchange. The helper runs
@@ -94,6 +95,9 @@ func newAgentSock() *agentSock {
 type sockDeps struct {
 	chanID func() uint32
 	warn   func(title, body string)
+	// conn is the app connection, used to ask the desktop (§12). Nil in
+	// tests that only exercise the table.
+	conn *sdk.Conn
 }
 
 // serve accepts decide requests until the listener closes. One goroutine
@@ -125,7 +129,17 @@ func (a *agentSock) handle(deps sockDeps, conn net.Conn) {
 		return
 	}
 	policy := policyStore.current(time.Now())
-	resp := policy.evaluate(req)
+	resp := evaluate(policy, req)
+	// No answer from the table? Ask the human where they already are
+	// (§12). Only when the policy is on and the desktop ask is enabled;
+	// otherwise this is M3 exactly. The connection deadline has to grow
+	// to cover the wait — it was sized for a table lookup.
+	if resp.Decision == DecisionAsk && policy.AskDesktopOrDefault() {
+		_ = conn.SetDeadline(time.Now().Add(askWait + 5*time.Second))
+		if d := askDesktop(deps.conn, deps.chanID(), req, toolSubject(req.ToolName, req.ToolInput)); d != DecisionDefer {
+			resp = decideResponse{Decision: d, Rule: "you (desktop)"}
+		}
+	}
 	writeDecision(conn, resp)
 
 	// Audit: every non-ask decision is a thing wash did on the user's

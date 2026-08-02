@@ -23,52 +23,29 @@
 package term
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sirmick/wash/internal/agentpolicy"
 )
 
 // Decisions wash can return. They are Claude Code's PreToolUse
-// permissionDecision values; "ask" is also our universal fallback.
+// permissionDecision values; "ask" is also our universal fallback. Aliased
+// from internal/agentpolicy, which owns the file schema now that agentd
+// writes to it too (docs/AGENT_TERM.md §12).
 const (
-	DecisionAllow = "allow"
-	DecisionDeny  = "deny"
-	DecisionAsk   = "ask"
+	DecisionAllow = agentpolicy.DecisionAllow
+	DecisionDeny  = agentpolicy.DecisionDeny
+	DecisionAsk   = agentpolicy.DecisionAsk
 )
 
-// agentPolicy is the on-disk policy document (~/.config/wash/agents.json).
-type agentPolicy struct {
-	// Enabled is the kill switch. False (the zero value, and the state of
-	// a box that has never opened the Agents pane) means wash answers
-	// "ask" to everything.
-	Enabled bool `json:"enabled"`
-	// Default is the decision for a request no rule matched. Anything
-	// other than allow/deny is read as "ask", so a typo cannot open the
-	// door.
-	Default string `json:"default,omitempty"`
-	// Rules are evaluated in order; the first match wins.
-	Rules []policyRule `json:"rules,omitempty"`
-	// LegacyAutoApprove turns on the hookless "watch for (y/n) and type
-	// y" path (autoapprove.go). Spoofable by construction, opt-in, and
-	// gated by Enabled as well — see docs/AGENT_TERM.md §6.
-	LegacyAutoApprove bool `json:"legacy_autoapprove,omitempty"`
-}
-
-// policyRule is one line of the table.
-type policyRule struct {
-	// Match is `Tool` or `Tool(pattern)`. The pattern is a glob over the
-	// tool's subject — the command for Bash, the path for file tools, the
-	// url for WebFetch.
-	Match string `json:"match"`
-	// Decision is allow | deny | ask. Unrecognized reads as "ask".
-	Decision string `json:"decision"`
-	// Cwd scopes the rule to requests whose cwd is at or under this
-	// path. Empty = the rule is global.
-	Cwd string `json:"cwd,omitempty"`
-}
+// agentPolicy / policyRule are the shared schema; the matcher below is
+// this package's own.
+type agentPolicy = agentpolicy.Policy
+type policyRule = agentpolicy.Rule
 
 // decideRequest is what the hook helper asks about (docs/AGENT_TERM.md §4).
 type decideRequest struct {
@@ -92,8 +69,8 @@ type decideResponse struct {
 //
 // Never returns anything but allow/deny/ask, and only returns allow when
 // an enabled policy said so explicitly.
-func (p *agentPolicy) evaluate(req decideRequest) decideResponse {
-	if p == nil || !p.Enabled {
+func evaluate(p agentPolicy, req decideRequest) decideResponse {
+	if !p.Enabled {
 		return decideResponse{Decision: DecisionAsk, Rule: "policy off"}
 	}
 	if req.ToolName == "" {
@@ -101,10 +78,10 @@ func (p *agentPolicy) evaluate(req decideRequest) decideResponse {
 	}
 	subject := toolSubject(req.ToolName, req.ToolInput)
 	for _, r := range p.Rules {
-		if !r.scopeMatches(req.Cwd) {
+		if !scopeMatches(r, req.Cwd) {
 			continue
 		}
-		if !r.matches(req.ToolName, subject) {
+		if !ruleMatches(r, req.ToolName, subject) {
 			continue
 		}
 		return decideResponse{Decision: normalizeDecision(r.Decision), Rule: r.Match}
@@ -130,7 +107,7 @@ func normalizeDecision(d string) string {
 // lexical on cleaned paths (no symlink resolution — the agent's cwd and
 // the user's rule are both plain strings, and resolving would make the
 // answer depend on the filesystem's state at decide time).
-func (r policyRule) scopeMatches(cwd string) bool {
+func scopeMatches(r policyRule, cwd string) bool {
 	if r.Cwd == "" {
 		return true
 	}
@@ -150,7 +127,7 @@ func (r policyRule) scopeMatches(cwd string) bool {
 //	"Read"              → any Read
 //	"Bash(git status*)" → Bash whose command globs
 //	"Bash()"            → Bash with an empty subject only
-func (r policyRule) matches(tool, subject string) bool {
+func ruleMatches(r policyRule, tool, subject string) bool {
 	name, pattern, hasPattern := splitMatch(r.Match)
 	if !strings.EqualFold(name, tool) {
 		return false
@@ -261,26 +238,25 @@ func globHere(p, s string) bool {
 // agentPolicyFile is where the Agents settings pane persists the policy.
 // It is a settings *domain* (apps/settings/be domainFile), so the pane
 // writes it through the same atomic path as every other wash config.
-const agentPolicyDomain = "agents"
+const agentPolicyDomain = agentpolicy.Domain
 
-// policyCache re-reads the policy file when its mtime moves. Decisions
-// are rare (a handful per turn) but must never use a stale table: a user
-// who has just tightened a rule in the settings pane expects the next
-// tool call to obey it, with no restart.
+// policyCache re-reads the policy file when its mtime moves. Decisions are
+// rare — a handful per turn — so the file is stat'ed on EVERY decision and
+// re-parsed only when it actually changed.
+//
+// There was a 500ms "don't stat too often" window here. It was wrong: a
+// human who clicks "always allow" (§12) makes the very next tool call test
+// the rule they just created, and agentd writes it milliseconds earlier.
+// One stat per permission request is not a cost worth a stale answer.
 type policyCache struct {
 	mu      sync.Mutex
 	loaded  agentPolicy
 	modTime time.Time
 	size    int64
-	checked time.Time
 	path    string
 }
 
 var policyStore policyCache
-
-// policyRecheck bounds how often the file is stat'ed. A burst of tool
-// calls in one turn shares a stat.
-const policyRecheck = 500 * time.Millisecond
 
 // current returns the policy in force, reloading if the file changed.
 // Any error (missing file, bad JSON) yields the zero policy — disabled,
@@ -288,10 +264,6 @@ const policyRecheck = 500 * time.Millisecond
 func (c *policyCache) current(now time.Time) agentPolicy {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if now.Sub(c.checked) < policyRecheck {
-		return c.loaded
-	}
-	c.checked = now
 	path := c.path
 	if path == "" {
 		path = agentPolicyPath()
@@ -315,28 +287,7 @@ func (c *policyCache) current(now time.Time) agentPolicy {
 
 // readPolicyFile decodes the policy, degrading to "disabled" on any
 // problem rather than half-applying a broken table.
-func readPolicyFile(path string) agentPolicy {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return agentPolicy{}
-	}
-	var p agentPolicy
-	if err := json.Unmarshal(data, &p); err != nil {
-		return agentPolicy{}
-	}
-	return p
-}
+func readPolicyFile(path string) agentPolicy { return agentpolicy.Load(path) }
 
-// agentPolicyPath is ~/.config/wash/agents.json (XDG_CONFIG_HOME aware),
-// matching apps/settings/be's domain file layout.
-func agentPolicyPath() string {
-	dir := os.Getenv("XDG_CONFIG_HOME")
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ""
-		}
-		dir = filepath.Join(home, ".config")
-	}
-	return filepath.Join(dir, "wash", agentPolicyDomain+".json")
-}
+// agentPolicyPath is ~/.config/wash/agents.json (XDG_CONFIG_HOME aware).
+func agentPolicyPath() string { return agentpolicy.Path() }

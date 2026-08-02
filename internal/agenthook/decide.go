@@ -31,10 +31,17 @@ import (
 	"time"
 )
 
-// decideTimeout bounds the whole exchange. The hook runs inside the
-// agent's turn — a wedged terminal must not stall it, so we give up fast
-// and let the agent prompt.
-const decideTimeout = 3 * time.Second
+// decideTimeout bounds the whole exchange. The terminal answers from its
+// rule table in microseconds, but since M6 (§12) it may also put the
+// question to the human at the desktop — so this is sized to outlast that
+// (agentd holds an ask 30s, the terminal 35s, we wait 45s), while still
+// being far inside Claude Code's own 600s hook budget. A terminal that
+// died closes the socket and we return immediately; only a HUNG one costs
+// the full wait.
+//
+// A var, not a const, so tests can shorten it — a unit test should not
+// have to burn 45 seconds to prove a deadline works.
+var decideTimeout = 45 * time.Second
 
 // maxDecideReply caps the answer we'll read. It is a two-field object.
 const maxDecideReply = 64 << 10

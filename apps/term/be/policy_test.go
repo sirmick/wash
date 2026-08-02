@@ -18,18 +18,19 @@ func req(tool string, input map[string]any, cwd string) decideRequest {
 func TestPolicyOffAlwaysAsks(t *testing.T) {
 	cases := []struct {
 		name string
-		p    *agentPolicy
+		p    agentPolicy
 	}{
-		{"nil policy", nil},
-		{"zero value", &agentPolicy{}},
-		{"disabled with allow rules", &agentPolicy{
+		// (A nil policy isn't in the table: the cache hands out values,
+		// so "no policy" IS the zero value.)
+		{"zero value", agentPolicy{}},
+		{"disabled with allow rules", agentPolicy{
 			Default: DecisionAllow,
 			Rules:   []policyRule{{Match: "Bash", Decision: DecisionAllow}},
 		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := c.p.evaluate(req("Bash", map[string]any{"command": "rm -rf /"}, "/home/mick"))
+			got := evaluate(c.p, req("Bash", map[string]any{"command": "rm -rf /"}, "/home/mick"))
 			if got.Decision != DecisionAsk {
 				t.Errorf("decision = %q, want ask (rule %q)", got.Decision, got.Rule)
 			}
@@ -38,7 +39,7 @@ func TestPolicyOffAlwaysAsks(t *testing.T) {
 }
 
 func TestPolicyFirstMatchWins(t *testing.T) {
-	p := &agentPolicy{
+	p := agentPolicy{
 		Enabled: true,
 		Rules: []policyRule{
 			{Match: "Bash(rm *)", Decision: DecisionDeny},
@@ -57,24 +58,24 @@ func TestPolicyFirstMatchWins(t *testing.T) {
 		{"make test", DecisionAsk, "Bash"},
 	}
 	for _, c := range cases {
-		got := p.evaluate(req("Bash", map[string]any{"command": c.cmd}, "/w"))
+		got := evaluate(p, req("Bash", map[string]any{"command": c.cmd}, "/w"))
 		if got.Decision != c.want || got.Rule != c.wantRule {
 			t.Errorf("%q → %+v, want %s via %s", c.cmd, got, c.want, c.wantRule)
 		}
 	}
 	// A bare tool rule matches regardless of input.
-	if got := p.evaluate(req("Read", map[string]any{"file_path": "/etc/shadow"}, "/w")); got.Decision != DecisionAllow {
+	if got := evaluate(p, req("Read", map[string]any{"file_path": "/etc/shadow"}, "/w")); got.Decision != DecisionAllow {
 		t.Errorf("Read → %+v, want allow", got)
 	}
 	// An unmatched tool falls through to the default (ask, unset here).
-	if got := p.evaluate(req("WebFetch", map[string]any{"url": "https://x"}, "/w")); got.Decision != DecisionAsk || got.Rule != "default" {
+	if got := evaluate(p, req("WebFetch", map[string]any{"url": "https://x"}, "/w")); got.Decision != DecisionAsk || got.Rule != "default" {
 		t.Errorf("WebFetch → %+v, want ask via default", got)
 	}
 }
 
 // A typo in the file must never become an allow.
 func TestPolicyUnknownDecisionsDegradeToAsk(t *testing.T) {
-	p := &agentPolicy{
+	p := agentPolicy{
 		Enabled: true,
 		Default: "yes-please",
 		Rules: []policyRule{
@@ -83,26 +84,26 @@ func TestPolicyUnknownDecisionsDegradeToAsk(t *testing.T) {
 			{Match: "Edit", Decision: ""},        // missing → ask
 		},
 	}
-	if got := p.evaluate(req("Read", nil, "")); got.Decision != DecisionAllow {
+	if got := evaluate(p, req("Read", nil, "")); got.Decision != DecisionAllow {
 		t.Errorf("uppercase ALLOW → %+v, want allow", got)
 	}
 	for _, tool := range []string{"Write", "Edit", "Bash"} {
-		if got := p.evaluate(req(tool, nil, "")); got.Decision != DecisionAsk {
+		if got := evaluate(p, req(tool, nil, "")); got.Decision != DecisionAsk {
 			t.Errorf("%s → %+v, want ask", tool, got)
 		}
 	}
 }
 
 func TestPolicyDefaultDeny(t *testing.T) {
-	p := &agentPolicy{
+	p := agentPolicy{
 		Enabled: true,
 		Default: DecisionDeny,
 		Rules:   []policyRule{{Match: "Read", Decision: DecisionAllow}},
 	}
-	if got := p.evaluate(req("Read", nil, "")); got.Decision != DecisionAllow {
+	if got := evaluate(p, req("Read", nil, "")); got.Decision != DecisionAllow {
 		t.Errorf("Read → %+v, want allow", got)
 	}
-	if got := p.evaluate(req("Bash", map[string]any{"command": "ls"}, "")); got.Decision != DecisionDeny {
+	if got := evaluate(p, req("Bash", map[string]any{"command": "ls"}, "")); got.Decision != DecisionDeny {
 		t.Errorf("Bash → %+v, want deny", got)
 	}
 }
@@ -110,7 +111,7 @@ func TestPolicyDefaultDeny(t *testing.T) {
 // Rules can be scoped to a directory tree — "allow this inside my repo,
 // ask everywhere else".
 func TestPolicyCwdScope(t *testing.T) {
-	p := &agentPolicy{
+	p := agentPolicy{
 		Enabled: true,
 		Rules: []policyRule{
 			{Match: "Bash(git *)", Decision: DecisionAllow, Cwd: "/home/mick/wash"},
@@ -128,7 +129,7 @@ func TestPolicyCwdScope(t *testing.T) {
 		{"", DecisionAsk}, // an unscoped request can't satisfy a scoped rule
 	}
 	for _, c := range cases {
-		got := p.evaluate(req("Bash", map[string]any{"command": "git log"}, c.cwd))
+		got := evaluate(p, req("Bash", map[string]any{"command": "git log"}, c.cwd))
 		if got.Decision != c.want {
 			t.Errorf("cwd %q → %+v, want %s", c.cwd, got, c.want)
 		}
@@ -163,14 +164,14 @@ func TestToolSubject(t *testing.T) {
 	}
 	// …and the consequence: a pattern rule cannot match a tool wash
 	// doesn't know the subject of.
-	p := &agentPolicy{Enabled: true, Rules: []policyRule{{Match: "SomeFutureTool(*)", Decision: DecisionAllow}}}
-	if got := p.evaluate(req("SomeFutureTool", map[string]any{"cmd": "anything"}, "")); got.Decision != DecisionAllow {
+	p := agentPolicy{Enabled: true, Rules: []policyRule{{Match: "SomeFutureTool(*)", Decision: DecisionAllow}}}
+	if got := evaluate(p, req("SomeFutureTool", map[string]any{"cmd": "anything"}, "")); got.Decision != DecisionAllow {
 		// "*" matches the empty subject — that IS a match, and the rule
 		// author asked for it explicitly. Documented, not accidental.
 		t.Errorf("SomeFutureTool(*) → %+v, want allow (\"*\" matches empty)", got)
 	}
 	p.Rules = []policyRule{{Match: "SomeFutureTool(danger*)", Decision: DecisionAllow}}
-	if got := p.evaluate(req("SomeFutureTool", map[string]any{"cmd": "danger"}, "")); got.Decision != DecisionAsk {
+	if got := evaluate(p, req("SomeFutureTool", map[string]any{"cmd": "danger"}, "")); got.Decision != DecisionAsk {
 		t.Errorf("a real pattern against an unknown tool → %+v, want ask", got)
 	}
 }
@@ -253,8 +254,8 @@ func TestGlobMatchPathological(t *testing.T) {
 }
 
 func TestEmptyToolAsks(t *testing.T) {
-	p := &agentPolicy{Enabled: true, Rules: []policyRule{{Match: "", Decision: DecisionAllow}}}
-	if got := p.evaluate(req("", nil, "")); got.Decision != DecisionAsk {
+	p := agentPolicy{Enabled: true, Rules: []policyRule{{Match: "", Decision: DecisionAllow}}}
+	if got := evaluate(p, req("", nil, "")); got.Decision != DecisionAsk {
 		t.Errorf("empty tool → %+v, want ask", got)
 	}
 }
@@ -282,18 +283,15 @@ func TestPolicyCacheReload(t *testing.T) {
 	}
 	write(agentPolicy{Enabled: true, Rules: []policyRule{{Match: "Read", Decision: DecisionAllow}}})
 
-	// Inside the recheck window the cache holds; past it, the new file
-	// is picked up without a restart.
+	// A change is visible on the very NEXT decision — no window, because
+	// clicking "always allow" (§12) is immediately followed by the tool
+	// call that tests the rule.
 	now := time.Now()
-	if p := c.current(now); p.Enabled {
-		t.Error("reloaded inside the recheck window")
-	}
-	now = now.Add(policyRecheck + time.Second)
 	p := c.current(now)
 	if !p.Enabled || len(p.Rules) != 1 {
 		t.Fatalf("policy not reloaded: %+v", p)
 	}
-	if got := p.evaluate(req("Read", nil, "")); got.Decision != DecisionAllow {
+	if got := evaluate(p, req("Read", nil, "")); got.Decision != DecisionAllow {
 		t.Errorf("reloaded policy → %+v", got)
 	}
 
@@ -301,21 +299,18 @@ func TestPolicyCacheReload(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{oops"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(policyRecheck + time.Second)
 	if p := c.current(now); p.Enabled {
 		t.Errorf("malformed file yielded an enabled policy: %+v", p)
 	}
 
 	// …and the file going away disables it again.
 	write(agentPolicy{Enabled: true})
-	now = now.Add(policyRecheck + time.Second)
 	if p := c.current(now); !p.Enabled {
 		t.Fatal("policy not re-enabled")
 	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(policyRecheck + time.Second)
 	if p := c.current(now); p.Enabled {
 		t.Error("removed file left the policy enabled")
 	}
@@ -343,13 +338,13 @@ func TestPolicyFileShape(t *testing.T) {
 	if !p.Enabled || len(p.Rules) != 3 {
 		t.Fatalf("decoded %+v", p)
 	}
-	if got := p.evaluate(req("Bash", map[string]any{"command": "git status -s"}, "/home/mick/wash")); got.Decision != DecisionAllow {
+	if got := evaluate(p, req("Bash", map[string]any{"command": "git status -s"}, "/home/mick/wash")); got.Decision != DecisionAllow {
 		t.Errorf("scoped git rule → %+v", got)
 	}
-	if got := p.evaluate(req("Bash", map[string]any{"command": "git status -s"}, "/tmp")); got.Decision != DecisionAsk {
+	if got := evaluate(p, req("Bash", map[string]any{"command": "git status -s"}, "/tmp")); got.Decision != DecisionAsk {
 		t.Errorf("outside the scope → %+v, want ask", got)
 	}
-	if got := p.evaluate(req("Bash", map[string]any{"command": "rm -rf /"}, "/tmp")); got.Decision != DecisionDeny {
+	if got := evaluate(p, req("Bash", map[string]any{"command": "rm -rf /"}, "/tmp")); got.Decision != DecisionDeny {
 		t.Errorf("rm rule → %+v", got)
 	}
 }
