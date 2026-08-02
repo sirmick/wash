@@ -50,6 +50,9 @@ type State struct {
 	// Asks are permission questions waiting for a human (§12). They ride
 	// the roster's own push so the sidebar needs no second subscription.
 	Asks []Ask `json:"asks,omitempty"`
+	// Recent is the remembered session history (§13) — what a reboot or a
+	// closed window would otherwise have cost you.
+	Recent []Session `json:"recent,omitempty"`
 }
 
 // Row is one agent in one terminal tab.
@@ -99,8 +102,15 @@ func init() {
 			ProtocolVersion: sdk.ProtocolVersion,
 			Surface:         sdk.SurfaceBackground,
 			Instancing:      sdk.InstancingSingleton,
+			// Resume opens a terminal for a remembered session (§13).
+			// That is the only thing this service spawns, and only when a
+			// human clicked the button.
+			Capabilities: []string{sdk.CapSpawn},
 		},
 		OnReady: onReady,
+		// The router's reply to the terminal spawn a Resume click asks
+		// for (§13); the new instance is then told what to run.
+		OnSpawnResult: onSpawnResult,
 	}
 	registry.Register(&registry.App{
 		Name:     "wash-agentd",

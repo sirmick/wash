@@ -7,7 +7,7 @@
 
 import { test, expect, afterEach } from 'vitest';
 import { render, fireEvent, cleanup } from '@solidjs/testing-library';
-import { AgentsWidget, fmtElapsed, stateColor, stateLabel, type AgentAsk, type AgentRow } from './AgentsWidget.tsx';
+import { AgentsWidget, fmtAgo, fmtElapsed, stateColor, stateLabel, type AgentAsk, type AgentRow, type AgentSession } from './AgentsWidget.tsx';
 
 afterEach(cleanup);
 
@@ -160,4 +160,59 @@ test('questions render above the status rows — blocked beats informational', (
   ));
   const ids = [...container.querySelectorAll('[data-testid]')].map((el) => el.getAttribute('data-testid'));
   expect(ids.indexOf('agents-ask')).toBeLessThan(ids.indexOf('agents-row-r1'));
+});
+
+// ---- M7: the Recent list (docs/AGENT_TERM.md §13) ----
+
+const sess = (over: Partial<AgentSession> = {}): AgentSession => ({
+  session_id: 'sess-1',
+  agent: 'claude',
+  cwd: '/home/mick/wash',
+  dir: 'wash',
+  last_seen: Math.floor(Date.now() / 1000) - 300,
+  ...over,
+});
+
+test('a remembered session offers Resume, Fork and its id', () => {
+  const { getByTestId } = render(() => (
+    <AgentsWidget rows={() => []} startedAt={at} now={() => Date.now()} onFocus={noop} recent={() => [sess()]} />
+  ));
+  const row = getByTestId('agents-recent-row');
+  expect(row.getAttribute('data-session-id')).toBe('sess-1');
+  expect(row.textContent).toContain('claude');
+  expect(row.textContent).toContain('wash');
+  expect(getByTestId('agents-resume')).toBeTruthy();
+  expect(getByTestId('agents-fork')).toBeTruthy();
+  expect(getByTestId('agents-copy-id')).toBeTruthy();
+});
+
+test('a session that is running right now is not offered for resume', () => {
+  // It's in the roster above; resuming it would duplicate it.
+  const { queryByTestId } = render(() => (
+    <AgentsWidget rows={() => []} startedAt={at} now={() => Date.now()} onFocus={noop}
+      recent={() => [sess({ live: true })]} />
+  ));
+  expect(queryByTestId('agents-recent-row')).toBeNull();
+  expect(queryByTestId('agents-recent')).toBeNull();
+});
+
+test('Resume and Fork are distinct intents', () => {
+  const seen: string[] = [];
+  const { getByTestId } = render(() => (
+    <AgentsWidget rows={() => []} startedAt={at} now={() => Date.now()} onFocus={noop}
+      recent={() => [sess()]} onResume={(s, fork) => seen.push(`${s.session_id}:${fork}`)} />
+  ));
+  fireEvent.click(getByTestId('agents-resume'));
+  fireEvent.click(getByTestId('agents-fork'));
+  expect(seen).toEqual(['sess-1:false', 'sess-1:true']);
+});
+
+test('fmtAgo reads like a human said it', () => {
+  const now = 1_000_000_000_000; // ms
+  const sec = now / 1000;
+  expect(fmtAgo(now, sec - 5)).toBe('just now');
+  expect(fmtAgo(now, sec - 300)).toBe('5m ago');
+  expect(fmtAgo(now, sec - 7200)).toBe('2h ago');
+  expect(fmtAgo(now, sec - 2 * 86_400)).toBe('2d ago');
+  expect(fmtAgo(now, 0)).toBe('');
 });

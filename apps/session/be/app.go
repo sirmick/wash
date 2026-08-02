@@ -102,6 +102,7 @@ func onReady(c *sdk.Conn, _ string, _ uint32) {
 	registerAudioGateway(bus)
 	registerRemoteGateway(bus)
 	registerAgentGateway(bus)
+	registerAgentResume(bus)
 	// state forwarder: notify, bulk, and priv all push
 	// {kind:"state", state:...} cross-app. Branch on the sender's
 	// AppID to re-brand for the FE under a service-specific kind.
@@ -251,6 +252,27 @@ func registerAgentGateway(bus *sdk.Bus) {
 			"rule":     req.Rule,
 		})
 	})
+}
+
+// agent_resume asks the roster service to reopen a remembered session
+// (docs/AGENT_TERM.md §13) — Resume, or Fork for branching off one
+// without disturbing it.
+func registerAgentResume(bus *sdk.Bus) {
+	sdk.HandleVoid(bus, "agent_resume", func(conn *sdk.Conn, _ string, req agentResumeReq) error {
+		if req.SessionID == "" {
+			return nil
+		}
+		return conn.SendAppMsgTo(wire.Recipient{AppID: AgentdAppID}, map[string]any{
+			"kind":       "agent_resume",
+			"session_id": req.SessionID,
+			"fork":       req.Fork,
+		})
+	})
+}
+
+type agentResumeReq struct {
+	SessionID string `json:"session_id"`
+	Fork      bool   `json:"fork"`
 }
 
 type agentAnswerReq struct {
