@@ -1,3 +1,42 @@
+wash (0.11.0-1) unstable; urgency=low
+
+  * term: agent-aware terminals. A coding agent (Claude Code and friends)
+    running in a wash terminal is now visible to the desktop: a state dot on
+    the tab chip and a clause in the status line (blue working / amber needs
+    input / green done), driven by an OSC 7770 status channel parsed in the
+    pty layer plus a foreground-process check that needs no install.
+  * term: transition notifications. A toast when an agent wants your input
+    or finishes a turn, rate-limited per tab, with click-to-focus landing on
+    the terminal that raised it, and an amber attention dot on its taskbar
+    pill until you visit it.
+  * term: agent approval policy. Each pty gets a decision socket; an agent's
+    PreToolUse hook asks it, and wash answers from an ordered rule table
+    edited in Settings -> Agents. Off by default, and every failure resolves
+    to the agent's own prompt — never to an allow.
+  * agentd: new com.wash.agentd roster service. One sidebar row per agent
+    across every terminal window — state, repo, branch, elapsed — sorted
+    needs-input first, click to focus. Rows age out so a crashed terminal
+    leaves no ghost.
+  * agentd: answer permission requests from the sidebar (Allow / Always
+    <rule> / Deny). "Always" writes the rule it names into the policy, so
+    the table is taught rather than configured.
+  * agentd: session history. Recent sessions survive a closed window or a
+    reboot; Resume or Fork reopens one in a terminal in the right directory.
+  * term: smart paste. Text copied out of a chat is repaired on the way in —
+    invisible junk (non-breaking spaces, curly quotes, copied "$ " prompts,
+    code fences) silently, and a soft-wrapped command offered as a preview
+    before it changes structure. Includes a warning when a multi-line paste
+    is about to hit a shell with bracketed paste off.
+  * router: the per-channel scrollback ring grows to 4 MiB while nobody is
+    attached and shrinks back afterwards, so work done with the lid shut is
+    still there when you return. The terminal keeps 20,000 lines to match.
+  * term: content no longer paints over the terminal scrollbar; the bar is
+    themed with the rest of the chrome.
+  * cli: new wash-agent-hook helper and `wash agent-hooks install|remove|
+    status` for wiring the agent hooks into ~/.claude/settings.json.
+
+ -- sirmick <sirmick@gmail.com>  Sun, 02 Aug 2026 14:38:14 -0700
+
 wash (0.10.0-1) unstable; urgency=low
 
   * clipboard: converge the wash + system clipboards behind HTTPS. Pastes

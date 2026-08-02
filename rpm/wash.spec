@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.10.0
+Version:        0.11.0
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,22 @@ fi
 exit 0
 
 %changelog
+* Sun Aug 02 2026 sirmick <sirmick@gmail.com> - 0.11.0-1
+- term: agent-aware terminals — tab state dot + status line driven by an OSC
+  7770 status channel and a foreground-process check.
+- term: transition toasts (needs-input / finished) with click-to-focus and a
+  taskbar attention dot.
+- term: agent approval policy over a per-pty decision socket, edited in
+  Settings -> Agents; off by default, fails open to the agent's own prompt.
+- agentd: new com.wash.agentd roster service — one sidebar row per agent,
+  answer permission requests inline, "always allow" writes the rule.
+- agentd: session history with Resume / Fork after a reboot or closed window.
+- term: smart paste — silent repair of invisible junk, preview before a
+  wrapped command is rejoined, paste-jacking warning.
+- router: scrollback ring grows to 4 MiB while detached (20,000 lines kept
+  client-side) so output written with the lid shut survives.
+- term: content no longer paints over the scrollbar; the bar is themed.
+- cli: wash-agent-hook + `wash agent-hooks install|remove|status`.
 * Thu Jul 09 2026 sirmick <sirmick@gmail.com> - 0.10.0-1
 - clipboard: converge the wash + system clipboards behind HTTPS (pastes
   prefer readText where readable, wash-clipboard fallback; native pastes +
