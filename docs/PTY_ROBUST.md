@@ -15,7 +15,7 @@ model. Those narrowed the ownership race but left output-path wedges and the
 
 Terminal output is a **real-time stream**, not a reliable byte pipe. The
 consumer is a human watching a screen, and the router already keeps a
-per-channel scrollback ring (`ringbuf.go`, 64 KiB) that is replayed on every
+per-channel scrollback ring (`ringbuf.go`) that is replayed on every
 reattach. Therefore:
 
 > When the FE can't keep up or is wedged, the correct behaviour is to **drop
@@ -64,6 +64,16 @@ SGR reset) is exactly how a terminal ends up stuck in the wrong mode. So
 
 - The scrollback **ring is always maintained byte-exact** — it is the
   authoritative recent history and is never dropped-into incrementally.
+- The ring is **256 KiB while a shell is attached and keeping up, and grows
+  to 4 MiB while nobody is taking delivery** (detached, or so far behind
+  that forwarding stopped) — see `ChannelScrollbackMaxBytes`. Since the
+  producer is never stalled to preserve output, buffering is the only lever
+  there is; the buffer shrinks back to 256 KiB as soon as a shell has taken
+  the history (reattach replay or resync), so idle tabs cost the base size,
+  not the ceiling. Past the ceiling it goes back to overwriting the oldest
+  bytes: bounded memory, never a blocked write. The FE's xterm keeps 20,000
+  lines to match — at the old 1,000-line default it would have discarded
+  most of a replay on arrival.
 - The router's per-app read goroutine hands output to the ring + a small
   bounded live-queue and **returns immediately** — it never blocks on credit.
   `Reserve` loses `context.Background()`: cancellable on detach/rebind and

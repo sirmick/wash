@@ -10,7 +10,8 @@
 
 import { test, expect } from '../fixtures/router';
 import type { Page } from '@playwright/test';
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 function payload(tool: string, input: Record<string, unknown>): string {
@@ -27,8 +28,18 @@ function payload(tool: string, input: Record<string, unknown>): string {
 
 // The command a hook would run, with its answer captured to a file so the
 // test can read exactly what the agent would have received.
-function decideCmd(tool: string, input: Record<string, unknown>, out: string): string {
-  return `printf '%s' '${payload(tool, input)}' | wash-agent-hook decide > ${out}; echo DECIDED`;
+//
+// It goes in a SCRIPT rather than being typed: a 250-character line of
+// JSON is a lot of keystrokes to inject into a pty, and a single dropped
+// one turns into a mysterious timeout further down the test.
+function decideScript(dir: string, name: string, tool: string, input: Record<string, unknown>, out: string): string {
+  const path = join(dir, `${name}.sh`);
+  writeFileSync(
+    path,
+    `#!/bin/sh\nprintf '%s' '${payload(tool, input)}' | wash-agent-hook decide > ${out}\necho DECIDED\n`,
+    { mode: 0o755 },
+  );
+  return `sh ${path}`;
 }
 
 async function bufferText(page: Page): Promise<string> {
@@ -56,11 +67,15 @@ async function openTerminal(page: Page, url: string) {
   await page.locator('[data-testid="term-host"]').first().click();
 }
 
-// run types into the TERMINAL — clicking the sidebar moves focus out of
-// the pty, so every command re-focuses first.
+// run types into the TERMINAL. The click matters: expanding a sidebar
+// section moves keyboard focus out of the pty, so without re-focusing the
+// keystrokes land in the chrome instead. The echo assertion turns a
+// dropped keystroke into an immediate, legible failure rather than a 15s
+// timeout waiting for the effect of a command that never ran.
 async function run(page: Page, cmd: string) {
   await page.locator('[data-testid="term-host"]').first().click();
   await page.keyboard.type(cmd);
+  await expect.poll(() => bufferText(page), { timeout: 10_000 }).toContain(cmd.slice(0, 20));
   await page.keyboard.press('Enter');
 }
 
@@ -94,6 +109,11 @@ test.use({ routerOpts: { xdgConfig: true } });
 test.describe('answering from the desktop (M6)', () => {
   test.setTimeout(60_000);
 
+  let scriptDir = '';
+  test.beforeEach(() => {
+    scriptDir = mkdtempSync(join(tmpdir(), 'wash-e2e-ask-'));
+  });
+
   test('an unmatched request appears in the sidebar and Allow reaches the agent', async ({ page, router }) => {
     // Policy on, but with nothing that covers Bash.
     writePolicy(router.xdgConfigHome, { enabled: true, rules: [{ match: 'Read', decision: 'allow' }] });
@@ -101,7 +121,7 @@ test.describe('answering from the desktop (M6)', () => {
     await openAgentsSection(page);
 
     const out = join(router.appsDir, 'decision.json');
-    await run(page, decideCmd('Bash', { command: 'git push origin main' }, out));
+    await run(page, decideScript(scriptDir, 'allow', 'Bash', { command: 'git push origin main' }, out));
 
     const ask = page.locator('[data-testid="agents-ask"]');
     await expect(ask).toBeVisible({ timeout: 15_000 });
@@ -128,7 +148,7 @@ test.describe('answering from the desktop (M6)', () => {
     await openAgentsSection(page);
 
     const first = join(router.appsDir, 'first.json');
-    await run(page, decideCmd('Bash', { command: 'git status --short' }, first));
+    await run(page, decideScript(scriptDir, 'first', 'Bash', { command: 'git status --short' }, first));
     const ask = page.locator('[data-testid="agents-ask"]');
     await expect(ask).toBeVisible({ timeout: 15_000 });
     await ask.locator('[data-testid="agents-ask-always"]').click();
@@ -143,7 +163,7 @@ test.describe('answering from the desktop (M6)', () => {
 
     // …and the SAME request is now answered with no sidebar round-trip.
     const second = join(router.appsDir, 'second.json');
-    await run(page, decideCmd('Bash', { command: 'git status --porcelain' }, second));
+    await run(page, decideScript(scriptDir, 'second', 'Bash', { command: 'git status --porcelain' }, second));
     await expect.poll(() => decided(second), { timeout: 15_000 }).toContain('"permissionDecision":"allow"');
     await expect(page.locator('[data-testid="agents-ask"]')).toHaveCount(0);
     await router.waitForLog(/term: agent-decide .*tool=Bash decision=allow rule="Bash\(git status\*\)"/, 10_000);
@@ -155,7 +175,7 @@ test.describe('answering from the desktop (M6)', () => {
     await openAgentsSection(page);
 
     const out = join(router.appsDir, 'deny.json');
-    await run(page, decideCmd('Bash', { command: 'rm -rf /' }, out));
+    await run(page, decideScript(scriptDir, 'deny', 'Bash', { command: 'rm -rf /' }, out));
     const ask = page.locator('[data-testid="agents-ask"]');
     await expect(ask).toBeVisible({ timeout: 15_000 });
     await ask.locator('[data-testid="agents-ask-deny"]').click();
@@ -167,7 +187,7 @@ test.describe('answering from the desktop (M6)', () => {
     await openTerminal(page, router.url);
     await openAgentsSection(page);
     const out = join(router.appsDir, 'off.json');
-    await run(page, decideCmd('Bash', { command: 'rm -rf /' }, out));
+    await run(page, decideScript(scriptDir, 'off', 'Bash', { command: 'rm -rf /' }, out));
     await expect.poll(() => bufferText(page), { timeout: 15_000 }).toContain('DECIDED');
     expect(decided(out)).toBe('');
     await expect(page.locator('[data-testid="agents-ask"]')).toHaveCount(0);
@@ -178,7 +198,7 @@ test.describe('answering from the desktop (M6)', () => {
     await openTerminal(page, router.url);
     await openAgentsSection(page);
     const out = join(router.appsDir, 'noask.json');
-    await run(page, decideCmd('Bash', { command: 'git push' }, out));
+    await run(page, decideScript(scriptDir, 'noask', 'Bash', { command: 'git push' }, out));
     await expect.poll(() => bufferText(page), { timeout: 15_000 }).toContain('DECIDED');
     // Deferred silently — the agent's own prompt would appear.
     expect(decided(out)).toBe('');

@@ -51,11 +51,14 @@ async function openTerminal(page: Page, url: string) {
 }
 
 // run types into the TERMINAL. The click matters: expanding a sidebar
-// section moves keyboard focus out of the pty, and without re-focusing the
-// keystrokes land in the chrome instead.
+// section moves keyboard focus out of the pty, so without re-focusing the
+// keystrokes land in the chrome instead. The echo assertion turns a
+// dropped keystroke into an immediate, legible failure rather than a 15s
+// timeout waiting for the effect of a command that never ran.
 async function run(page: Page, cmd: string) {
   await page.locator('[data-testid="term-host"]').first().click();
   await page.keyboard.type(cmd);
+  await expect.poll(() => bufferText(page), { timeout: 10_000 }).toContain(cmd.slice(0, 20));
   await page.keyboard.press('Enter');
 }
 
