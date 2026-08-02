@@ -225,7 +225,25 @@ the panic and fixed itself with a no-op logger; the fix never propagated.
 - Verify: `go test -race -count=10 ./internal/router ./internal/runner/router ./internal/loopback`
   and the B2 repro command no longer panics.
 
-### B2 [P0] loopback TestSpine asserts a wire ordering the product explicitly does not guarantee (reproduced)
+### B2 [P0] loopback TestSpine asserts a wire ordering the product explicitly does not guarantee (reproduced) — **FIXED 2026-08-02**
+
+> Landed as described (complete on byte-count) plus three things this entry did not foresee,
+> all found by hammering `-race -count=20`:
+> 1. **The hang, not just the mismatch.** Completing on byte-count is not enough on its own:
+>    `frameReader.nextCtrl` blocks until the next *control* frame, and the bundle's last Bulk
+>    data frame can legitimately be the last thing on the wire — so the wait loop never
+>    re-tested its condition after the bytes landed. Split into `readOne` (returns after ANY
+>    frame) and `nextCtrl` (loops `readOne` until a ctrl frame); the bundle wait uses `readOne`.
+> 2. **Raw frames before their bind** were dropped by the `continue` in the raw branch when
+>    `bundleChannelID == 0`. They are now held in `pendingRaw` per channel and adopted when the
+>    bind names the channel — same reason as above, data need not follow its own control frame.
+> 3. **Unmodelled ctrl frames are no longer fatal.** The router ships `link.stats` telemetry the
+>    harness does not model, and `DecodeCtrl` returned a plain error → `t.Fatalf("decode: …")`.
+>    Added `wire.ErrUnknownCtrl` (product side) so forward-compatible receivers can skip an
+>    unknown `t` while still failing on genuine corruption; the harness skips.
+>
+> Verified: `go test -race -count=20 ./internal/loopback` green (was 5/5 red under `-race` on
+> this box, at `origin/main` too). Original entry below.
 - `internal/loopback/spine_test.go:295-298`: `frameReader` sets `bundleDone` on
   `ShellChannelUnbind`. The router sends bundle payload at **ClassBulk** but bind/unbind at
   control class; `internal/router/router.go:1362-1364` documents "Size lets the shell complete
