@@ -108,3 +108,29 @@ touches notifications and the session/shell FE. No new baseline run needed —
 the failing set is inside the set the A/B above already cleared. Treat any
 red confined to `display-*` as this entry until the C5/A10 fixes land; a
 failure outside that tier deserves its own baseline.
+
+## 2026-08-02 — `internal/loopback` TestSpine: fixed, not flaky any more
+
+Hit as a hard `make push` blocker during the 0.11.0 release gate:
+`--- FAIL: TestSpine … bundle bytes mismatch: ""`, reproducing **5/5** under
+`-race` (this box makes the race deterministic rather than occasional).
+
+**A/B against baseline:** fails identically in a temp worktree at
+`origin/main` (4f393db), i.e. before any of the M1–M7 agent-terminal work.
+Pre-existing — the tracked issue #8 / TEST_FLAKES **B2**.
+
+**Root cause (three layers, all harness-side except one product addition):**
+the test completed the bundle on the `ChannelUnbind`, but bundle payload is
+Bulk class and the unbind is a ctrl frame, so under strict priority the
+unbind legitimately overtakes the data (`replayBundleToShell` says so in a
+comment). Completing on the bind's `Size` exposed a second bug — the wait
+loop called `nextCtrl()`, which blocks until a *ctrl* frame, so once the
+final Bulk frame was the last thing on the wire the loop never re-tested and
+hung to the package timeout. A third: raw frames arriving before their bind
+were dropped outright. Fixed by `readOne`/`nextCtrl` split, `pendingRaw`
+buffering, and byte-count completion. Product side gained
+`wire.ErrUnknownCtrl` so a receiver can skip an unmodelled ctrl type
+(`link.stats`) without treating it as corruption.
+
+**Result:** `-race -count=20` green. B2 is closed rather than logged as a
+recurrence — this one had a mechanism, not a load window.
