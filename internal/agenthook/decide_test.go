@@ -180,6 +180,12 @@ func TestDecideTimesOut(t *testing.T) {
 		conn.Close()
 	}()
 
+	// Shorten the deadline for the test; the production value is sized
+	// for a human answering at the desktop (§12).
+	restore := decideTimeout
+	decideTimeout = 700 * time.Millisecond
+	defer func() { decideTimeout = restore }()
+
 	start := time.Now()
 	out := runDecideStr(t, path, preToolUse)
 	elapsed := time.Since(start)

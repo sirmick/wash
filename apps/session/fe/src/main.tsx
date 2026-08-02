@@ -19,7 +19,7 @@ import { Section, type SectionState } from './sidebar/Section';
 import { ViewportWidget } from './sidebar/ViewportWidget';
 import { AboutWidget, type AboutHostStats } from './sidebar/AboutWidget';
 import { NotifyWidget, type NotifyEntry } from './sidebar/NotifyWidget';
-import { AgentsWidget, type AgentRow } from './sidebar/AgentsWidget';
+import { AgentsWidget, type AgentAsk, type AgentRow } from './sidebar/AgentsWidget';
 import { BulkWidget, type BulkJob } from './sidebar/BulkWidget';
 import { BulkConflictOverlay, type BulkConflict } from './sidebar/BulkConflictOverlay';
 import { PrivWidget, type PrivReq } from './sidebar/PrivWidget';
@@ -291,6 +291,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // Rows arrive pre-sorted (needs-input first); we only anchor each row's
   // elapsed clock locally, the way the terminal's own status line does.
   const [agentRows, setAgentRows] = createSignal<AgentRow[]>([]);
+  // Pending permission questions (docs/AGENT_TERM.md §12) ride the same
+  // roster push. An agent blocked on a human is the one thing in the
+  // sidebar worth opening the section for on its own.
+  const [agentAsks, setAgentAsks] = createSignal<AgentAsk[]>([]);
   const agentStartedAt = new Map<string, number>();
   const [agentNow, setAgentNow] = createSignal(Date.now());
 
@@ -418,7 +422,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // only number worth interrupting for; working agents are visible in the
   // section, not on its header.
   const agentBadge = (): string => {
-    const waiting = agentRows().filter((r) => r.state === 'needs-input').length;
+    // A question waiting on you counts the same as an agent waiting on
+    // you — both mean "someone is blocked until you look".
+    const waiting = agentRows().filter((r) => r.state === 'needs-input').length + agentAsks().length;
     return waiting > 0 ? String(waiting) : '';
   };
   // focusAgent goes to the terminal window that owns a roster row. The
@@ -862,7 +868,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           // arrival (since_ms is elapsed at push time, so no cross-clock
           // comparison), and auto-expand when an agent first wants the
           // human — the one case worth pulling the section open.
-          const next = ((data.state as unknown as { rows?: AgentRow[] })?.rows ?? []) as AgentRow[];
+          const state = data.state as unknown as { rows?: AgentRow[]; asks?: AgentAsk[] };
+          const next = (state?.rows ?? []) as AgentRow[];
+          const asks = (state?.asks ?? []) as AgentAsk[];
+          const hadAsks = agentAsks().length > 0;
+          setAgentAsks(asks);
+          if (asks.length > 0 && !hadAsks) autoExpandSection('agents');
           const arrival = Date.now();
           const live = new Set<string>();
           let waiting = false;
@@ -1265,6 +1276,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             startedAt={(key) => agentStartedAt.get(key) ?? Date.now()}
             now={agentNow}
             onFocus={focusAgent}
+            asks={agentAsks}
+            onAnswer={(ask, decision, remember) =>
+              window.wash.sendAppMsg(props.instance, {
+                kind: 'agent_answer',
+                id: ask.id,
+                decision,
+                remember,
+                rule: ask.suggested_rule ?? '',
+              })
+            }
           />
         </Section>
         <Section

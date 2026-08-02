@@ -40,6 +40,8 @@ export interface AgentPolicy {
   rules?: AgentRule[];
   /** opt-in: watch hookless agents for (y/n) prompts and type y */
   legacy_autoapprove?: boolean;
+  /** ask the desktop when no rule matches (default true while enabled) */
+  ask_desktop?: boolean;
 }
 
 const DECISIONS: [string, string][] = [
@@ -92,10 +94,11 @@ export const AgentsPane: Component<{
       <Section title="Coding agents">
         <div style={proseStyle}>
           A coding agent (Claude Code, Codex, …) running in a wash terminal
-          asks before it uses a tool. With the policy on, wash can answer
-          some of those questions for you from the table below. It is off
-          until you turn it on, and anything it doesn't have a rule for
-          still goes to you.
+          asks before it uses a tool. With the policy on, wash answers the
+          questions the table below covers, and brings the rest to you in
+          the sidebar — where “always allow” writes the rule so you never
+          answer it twice. It is off until you turn it on, and anything it
+          can't answer still ends up in front of you.
         </div>
         <Row label="Answer for me">
           <Checkbox
@@ -111,6 +114,15 @@ export const AgentsPane: Component<{
             value={props.policy.default === 'deny' ? 'deny' : 'ask'}
             options={DEFAULTS}
             onChange={(v) => patch({ default: v })}
+          />
+        </Row>
+        <Row label="Ask me here">
+          <Checkbox
+            data-testid="agents-ask-desktop"
+            checked={props.policy.ask_desktop !== false}
+            onChange={(v) => patch({ ask_desktop: v })}
+            disabled={props.policy.enabled !== true}
+            label="show the question in the sidebar, with an “always allow” that writes the rule"
           />
         </Row>
       </Section>

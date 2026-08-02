@@ -7,7 +7,7 @@
 
 import { test, expect, afterEach } from 'vitest';
 import { render, fireEvent, cleanup } from '@solidjs/testing-library';
-import { AgentsWidget, fmtElapsed, stateColor, stateLabel, type AgentRow } from './AgentsWidget.tsx';
+import { AgentsWidget, fmtElapsed, stateColor, stateLabel, type AgentAsk, type AgentRow } from './AgentsWidget.tsx';
 
 afterEach(cleanup);
 
@@ -100,4 +100,64 @@ test('fmtElapsed reads like a status line', () => {
   expect(fmtElapsed(90_000)).toBe('1m');
   expect(fmtElapsed(3 * 3_600_000)).toBe('3h');
   expect(fmtElapsed(-5_000)).toBe('0s');
+});
+
+// ---- M6: the question rows (docs/AGENT_TERM.md §12) ----
+
+const ask = (over: Partial<AgentAsk> = {}): AgentAsk => ({
+  id: 'ask-1',
+  agent: 'claude',
+  tool: 'Bash',
+  subject: 'git push origin main',
+  dir: 'wash',
+  suggested_rule: 'Bash(git push*)',
+  row_key: 'i-1:5',
+  term_instance: 'i-1',
+  age_ms: 0,
+  ...over,
+});
+
+test('a pending question renders what the agent wants and three ways out', () => {
+  const { getByTestId } = render(() => (
+    <AgentsWidget rows={() => []} startedAt={at} now={() => 0} onFocus={noop} asks={() => [ask()]} />
+  ));
+  const row = getByTestId('agents-ask');
+  expect(row.getAttribute('data-tool')).toBe('Bash');
+  expect(row.getAttribute('data-ask-id')).toBe('ask-1');
+  expect(getByTestId('agents-ask-what').textContent).toContain('git push origin main');
+  // The rule "always" would write is named ON the button — what you
+  // clicked is what gets saved.
+  expect(getByTestId('agents-ask-always').textContent).toContain('Bash(git push*)');
+  expect(getByTestId('agents-ask-allow')).toBeTruthy();
+  expect(getByTestId('agents-ask-deny')).toBeTruthy();
+});
+
+test('each button answers with its own decision + remember flag', () => {
+  const seen: string[] = [];
+  const onAnswer = (_a: AgentAsk, d: string, r: boolean) => seen.push(`${d}:${r}`);
+  const { getByTestId, unmount } = render(() => (
+    <AgentsWidget rows={() => []} startedAt={at} now={() => 0} onFocus={noop} asks={() => [ask()]} onAnswer={onAnswer} />
+  ));
+  fireEvent.click(getByTestId('agents-ask-allow'));
+  fireEvent.click(getByTestId('agents-ask-always'));
+  fireEvent.click(getByTestId('agents-ask-deny'));
+  expect(seen).toEqual(['allow:false', 'allow:true', 'deny:false']);
+  unmount();
+});
+
+test('a question with no suggestion still offers allow and deny', () => {
+  const { getByTestId, queryByTestId } = render(() => (
+    <AgentsWidget rows={() => []} startedAt={at} now={() => 0} onFocus={noop}
+      asks={() => [ask({ suggested_rule: undefined })]} />
+  ));
+  expect(queryByTestId('agents-ask-always')).toBeNull();
+  expect(getByTestId('agents-ask-allow')).toBeTruthy();
+});
+
+test('questions render above the status rows — blocked beats informational', () => {
+  const { container } = render(() => (
+    <AgentsWidget rows={() => [row({ key: 'r1' })]} startedAt={at} now={() => 0} onFocus={noop} asks={() => [ask()]} />
+  ));
+  const ids = [...container.querySelectorAll('[data-testid]')].map((el) => el.getAttribute('data-testid'));
+  expect(ids.indexOf('agents-ask')).toBeLessThan(ids.indexOf('agents-row-r1'));
 });

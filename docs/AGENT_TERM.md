@@ -229,6 +229,14 @@ sessions without restart.
 - **M4 — roster. DONE** (see §9.4). agentd + session gateway +
   AgentsWidget + liveness. Remote merge deferred to REMOTE §6.2
   scheduling.
+- **M6 — answer from the desktop. DONE** (§12, as-built in §9.6). An unmatched PreToolUse request asks
+  the human where they already are (§12): the sidebar offers Allow /
+  Always allow \<rule\> / Deny, and "always" writes the rule it names. The
+  policy stops being something you configure and becomes something you
+  teach.
+- **M7 — resume a session** (§13). Roster rows outlive their agents in a
+  small persisted history, so a reboot, a closed window or a crashed
+  terminal costs a `--resume`, not the context.
 - **M5 — smart paste. DONE** (§10, see §9.5). Closes #19 item 3 and with it
   the whole issue. Independent of M1–M4.
 
@@ -482,3 +490,102 @@ payloads, assert overlay verdicts and what actually reached the pty
   once the roster knows session ids; not committed yet.
 - Cross-agent fleet orchestration (autopilot.sh integration) — separate
   discussion.
+
+## 12. Answering from the desktop (M6)
+
+M3 made the terminal able to answer a permission request from a static
+table. The table is the hard part: nobody writes one up front, and the
+questions arrive when you are somewhere else in the desktop. M6 closes
+that: when the policy has no answer, wash asks **you**, wherever you are,
+and offers to remember what you said.
+
+The chain, entirely over seams that already exist:
+
+```
+agent → wash-agent-hook decide → per-tab socket → wash-term BE
+                                                      │ policy says "ask"
+                                                      ▼
+                          com.wash.agentd  ← agent_ask (attested sender)
+                                │  pending approval joins the roster state
+                                ▼
+                       session BE gateway → sidebar: [Allow] [Always allow
+                                             Bash(git push*)] [Deny]
+                                │  agent_answer
+                                ▼
+        agentd → (by term instance id) → wash-term BE → socket → the agent
+```
+
+Rules the design turns on:
+
+- **Nobody home ⇒ don't stall the agent.** agentd answers `defer`
+  immediately when it has no subscribers (`StateService.SubscriberCount`),
+  so a headless box, or a desktop with no browser attached, behaves exactly
+  as it did in M3: the agent's own prompt appears in the terminal.
+- **Three nested deadlines, innermost first**: agentd holds a pending ask
+  for 30s, the terminal waits 35s, the helper waits 45s. Every expiry is a
+  `defer` — i.e. the agent's own prompt, unchanged. Claude Code's own hook
+  budget is 600s (verified against 2.1), so none of this is close to its
+  limit; the bound exists for the human, not the protocol.
+- **No double prompt.** A blocking PreToolUse hook runs *before* Claude's
+  own permission UI, so the terminal prompt only appears if wash defers.
+- **"Always allow" names its rule on the button.** The suggestion is
+  conservative and derived from the request: `Bash(git push*)` from
+  `git push origin main` (two tokens, not one — `Bash(git *)` would also
+  buy `git reset --hard`), a bare `Read` for read-only tools, and a
+  cwd-scoped `Edit(/home/mick/wash/*)` for writing ones. What you clicked
+  is what gets written.
+- **agentd owns the write** to `~/.config/wash/agents.json` — it is the
+  singleton, so concurrent terminals can't race each other. The Agents
+  settings pane is the other writer; it saves debounced, so the losing
+  window is small and documented rather than locked.
+- **Still only answers questions.** The socket cannot initiate anything,
+  the OSC channel still has no path into a decision, and a pty process
+  that spams asks is rate-limited per tab and then deferred.
+
+### 9.6 M6 as built
+
+| Piece | Where |
+|---|---|
+| shared policy schema + rule text | `internal/agentpolicy/` (extracted: the file has three parties now) |
+| pending questions, relay, remember | `apps/agentd/be/ask.go` |
+| terminal side of the ask | `apps/term/be/askdesktop.go` (+ the ask branch in `agentsock.go`) |
+| answer gateway | `agent_answer` in `apps/session/be/app.go` |
+| the question rows | `apps/session/fe/src/sidebar/AgentsWidget.tsx` |
+| tests | `internal/agentpolicy/*_test.go`, `apps/agentd/be/ask_test.go`, `AgentsWidget.ctest.tsx`, `e2e/tests/term-agent-ask.spec.ts` |
+
+- **The schema moved to `internal/agentpolicy`** the moment agentd became a
+  second writer of `agents.json` — the repo's own "second consumer →
+  extract a library" rule. The *matcher* deliberately stayed in wash-term
+  with its tests: what a rule MEANS is one package's business; what the
+  file LOOKS like is everyone's.
+- **The 500ms policy-recheck window is gone.** It made "always allow"
+  lose a race with the very next tool call — the rule was on disk,
+  the terminal was still holding a cached copy. One `stat` per permission
+  request is not a cost worth a stale answer, and this is the one moment a
+  user is watching for the rule to take effect.
+- **`ask_desktop` defaults to true, but only bites when the policy is
+  enabled**, so a box that never opened the Agents pane is untouched by
+  M6. Turning the policy on is the opt-in; asking is the safe half of it
+  (it can only ever produce a question, never an allow).
+- **Every non-answer is a defer**: no subscribers, expired, too many
+  pending for one tab, no roster service, no app connection, service
+  restarted. The agent's own prompt is always the fallback, never an
+  allow — the same invariant M3 established, extended across a longer
+  chain.
+
+## 13. Resuming a session (M7)
+
+A roster row disappears when its agent ends — correct for "what is running
+now", useless for "put back what I lost". M7 gives agentd a small
+**persisted session history**: the last N (agent, session id, cwd, ended)
+tuples, written to `$XDG_STATE_HOME/wash/agent-sessions.json`, deduped by
+session id. The sidebar grows a Recent list whose rows offer:
+
+- **Resume** — a terminal in that cwd running `claude --resume <id>`;
+- **Fork** — the same with `--fork-session`, for branching off a session
+  without disturbing it;
+- **Copy session id** — for anything wash doesn't do for you.
+
+The launch rides wash-term's existing `--exec` path (`sh -lc 'cd <cwd> &&
+…'`), so no new spawn mechanism is invented. History is per-user, local,
+and holds no transcript content — just enough to reopen the door.

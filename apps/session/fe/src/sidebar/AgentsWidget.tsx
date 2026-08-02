@@ -32,6 +32,21 @@ export interface AgentRow {
   since_ms: number;
 }
 
+/** A permission question waiting for a human (docs/AGENT_TERM.md §12). */
+export interface AgentAsk {
+  id: string;
+  agent: string;
+  tool: string;
+  subject?: string;
+  cwd?: string;
+  dir?: string;
+  /** what "Always allow" would write — shown ON the button */
+  suggested_rule?: string;
+  row_key: string;
+  term_instance: string;
+  age_ms: number;
+}
+
 export interface AgentsWidgetProps {
   rows: () => AgentRow[];
   /** local clock anchor per row key, so elapsed keeps counting between pushes */
@@ -40,6 +55,10 @@ export interface AgentsWidgetProps {
   now: () => number;
   /** go to the terminal that owns this agent */
   onFocus: (row: AgentRow) => void;
+  /** permission questions waiting on the human */
+  asks?: () => AgentAsk[];
+  /** answer one: decision allow|deny, remember writes the named rule */
+  onAnswer?: (ask: AgentAsk, decision: 'allow' | 'deny', remember: boolean) => void;
 }
 
 // stateColor is the same language as the terminal's own tab dot: blue
@@ -77,6 +96,11 @@ export const AgentsWidget: Component<AgentsWidgetProps> = (props) => {
       data-testid="agents-widget"
       style={{ display: 'flex', 'flex-direction': 'column', gap: '6px' }}
     >
+      {/* Questions first: an agent blocked on a human outranks every
+          status line below it. */}
+      <For each={props.asks?.() ?? []}>
+        {(a) => <AskRow ask={a} onAnswer={(d, r) => props.onAnswer?.(a, d, r)} />}
+      </For>
       <Show when={empty()}>
         <div
           data-testid="agents-empty"
@@ -103,6 +127,105 @@ export const AgentsWidget: Component<AgentsWidgetProps> = (props) => {
     </div>
   );
 };
+
+// AskRow is the actionable half of the roster: what the agent wants to do,
+// and the three answers. "Always allow" names the exact rule it will write
+// — what you clicked is what gets saved.
+const AskRow: Component<{
+  ask: AgentAsk;
+  onAnswer: (decision: 'allow' | 'deny', remember: boolean) => void;
+}> = (props) => {
+  const what = () => {
+    const s = props.ask.subject ?? '';
+    return s ? `${props.ask.tool}: ${s}` : props.ask.tool;
+  };
+  return (
+    <div
+      // Identity goes in a data attribute, NOT the testid: the buttons
+      // below are testid'd agents-ask-allow/-always/-deny, so an
+      // id-suffixed container testid would make [data-testid^="agents-ask-"]
+      // match five elements per question (it did, twice).
+      data-testid="agents-ask"
+      data-ask-id={props.ask.id}
+      data-tool={props.ask.tool}
+      style={{
+        'border-left': `3px solid ${tokens.accentAmber}`,
+        background: 'rgba(224,178,95,0.14)',
+        padding: '7px 8px',
+        'border-radius': tokens.radiusSm,
+        'font-size': '11px',
+        display: 'flex',
+        'flex-direction': 'column',
+        gap: '5px',
+      }}
+    >
+      <div>
+        <span style={{ 'font-weight': 600 }}>{props.ask.agent}</span>
+        <span style={{ opacity: 0.8 }}> wants to run</span>
+        <Show when={props.ask.dir}>
+          <span style={{ opacity: 0.6 }}> in {props.ask.dir}</span>
+        </Show>
+      </div>
+      <div
+        data-testid="agents-ask-what"
+        style={{
+          font: tokens.type.monoSm,
+          background: tokens.bgInset,
+          border: `1px solid ${tokens.borderMenu}`,
+          'border-radius': tokens.radiusSm,
+          padding: '3px 5px',
+          'word-break': 'break-all',
+          'max-height': '54px',
+          overflow: 'hidden',
+        }}
+      >
+        {what()}
+      </div>
+      <div style={{ display: 'flex', gap: '4px', 'flex-wrap': 'wrap' }}>
+        <AskBtn testid="agents-ask-allow" onClick={() => props.onAnswer('allow', false)}>Allow</AskBtn>
+        <Show when={props.ask.suggested_rule}>
+          <AskBtn
+            testid="agents-ask-always"
+            title={`Writes the rule ${props.ask.suggested_rule} to your agent policy`}
+            onClick={() => props.onAnswer('allow', true)}
+          >
+            Always {props.ask.suggested_rule}
+          </AskBtn>
+        </Show>
+        <AskBtn testid="agents-ask-deny" onClick={() => props.onAnswer('deny', false)}>Deny</AskBtn>
+      </div>
+    </div>
+  );
+};
+
+const AskBtn: Component<{
+  testid: string;
+  title?: string;
+  onClick: () => void;
+  children: JSX.Element;
+}> = (props) => (
+  <button
+    type="button"
+    data-testid={props.testid}
+    title={props.title}
+    onClick={props.onClick}
+    style={{
+      background: tokens.bgMenu,
+      color: tokens.fg,
+      border: `1px solid ${tokens.borderMenu}`,
+      'border-radius': tokens.radiusSm,
+      padding: '3px 8px',
+      cursor: 'pointer',
+      'font-size': '11px',
+      'max-width': '100%',
+      overflow: 'hidden',
+      'text-overflow': 'ellipsis',
+      'white-space': 'nowrap',
+    }}
+  >
+    {props.children}
+  </button>
+);
 
 const AgentRowView: Component<{ row: AgentRow; elapsed: string; onFocus: () => void }> = (props) => {
   // Where it's working: "wash · main*" — repo, branch, and a star when the

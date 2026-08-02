@@ -234,6 +234,30 @@ func registerAgentGateway(bus *sdk.Bus) {
 	sdk.HandleVoid(bus, "agent_unsubscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
 		return conn.SendAppMsgTo(wire.Recipient{AppID: AgentdAppID}, map[string]any{"kind": "unsubscribe"})
 	})
+	// agent_answer carries a human's click on a pending permission
+	// question (docs/AGENT_TERM.md §12) to the roster service, which
+	// relays it to the terminal holding the agent's turn open. The
+	// session BE is the desktop speaking for the person in front of it —
+	// it adds no policy of its own.
+	sdk.HandleVoid(bus, "agent_answer", func(conn *sdk.Conn, _ string, req agentAnswerReq) error {
+		if req.ID == "" {
+			return nil
+		}
+		return conn.SendAppMsgTo(wire.Recipient{AppID: AgentdAppID}, map[string]any{
+			"kind":     "agent_answer",
+			"id":       req.ID,
+			"decision": req.Decision,
+			"remember": req.Remember,
+			"rule":     req.Rule,
+		})
+	})
+}
+
+type agentAnswerReq struct {
+	ID       string `json:"id"`
+	Decision string `json:"decision"`
+	Remember bool   `json:"remember"`
+	Rule     string `json:"rule"`
 }
 
 // registerRemoteGateway forwards the Hosts widget's subscribe + connect/
