@@ -247,6 +247,12 @@ export const TERM_FONTS: TermFont[] = [
   { id: 'menlo', label: 'Menlo / Consolas', stack: 'Menlo, Consolas, "Liberation Mono", monospace' },
 ];
 
+// TERM_SCROLLBACK_LINES is how much output a terminal keeps client-side.
+// Paired with the router's ChannelScrollbackMaxBytes: keeping less here
+// would silently discard a reattach replay, keeping much more costs
+// browser memory per tab for history nobody scrolls back to.
+export const TERM_SCROLLBACK_LINES = 20_000;
+
 export const TERM_DEFAULT_FONT_ID = 'system';
 export const TERM_DEFAULT_FONT_SIZE = 12;
 export const TERM_MIN_FONT_SIZE = 9;
@@ -279,7 +285,7 @@ async function ensureFontLoaded(f: TermFont): Promise<void> {
 }
 
 // TermModes is the terminal-mode state a reattaching consumer
-// persists and re-seeds. The 256KB scrollback replay only carries the
+// persists and re-seeds. The scrollback replay only carries the
 // byte TAIL of a session, so mode-setting sequences emitted once at
 // app start (alt-screen 1049, bracketed paste 2004, mouse 1000/1002/
 // 1006, application cursor keys 1, cursor visibility 25, …) can fall
@@ -594,6 +600,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
       fontSize: effectiveSize(),
       theme: props.theme ?? termThemeFor(props.appearanceOverride ?? washAppearance()),
       cursorBlink: true,
+      // The router keeps up to 4 MiB of output for a channel nobody is
+      // reading (a closed lid, a refreshed tab), and replays it on
+      // reattach. xterm's default of 1000 lines would throw most of that
+      // away on arrival — ~80 KB at 80 columns — so the retained history
+      // is raised to match. Lines are allocated as they arrive, so an
+      // idle terminal pays nothing for the higher ceiling.
+      scrollback: TERM_SCROLLBACK_LINES,
       allowProposedApi: true,
       wordSeparator: TERM_WORD_SEPARATORS,
     });

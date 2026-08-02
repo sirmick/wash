@@ -601,10 +601,25 @@ func (r *Router) spawnEnv() []string {
 }
 
 // ChannelScrollbackBytes is the per-channel ring-buffer capacity for
-// bytes flowing app → shell. Sized to comfortably hold a few
-// thousand lines of terminal output so a reattaching shell can replay
-// the recent scrollback.
+// bytes flowing app → shell while a shell is attached and keeping up.
+// Sized to comfortably hold a few thousand lines of terminal output so a
+// reattaching shell can replay the recent scrollback.
 const ChannelScrollbackBytes = 256 * 1024
+
+// ChannelScrollbackMaxBytes is the ceiling the ring grows to while NOBODY
+// is taking delivery — a detached shell (closed lid, refreshed tab) or one
+// so far behind it has stopped granting credit. Those bytes have nowhere
+// else to go, and the alternative to buffering them is stalling the
+// process that wrote them, which wash does not do: the pty keeps running
+// with the lid shut, and the agent hooks that write to that same tty keep
+// working (docs/AGENT_TERM.md §3).
+//
+// 4 MiB is roughly 50k lines of 80-column output — a long build or a
+// couple of agent turns. The cost is bounded and only paid while
+// disconnected: the buffer shrinks back to ChannelScrollbackBytes as soon
+// as a shell has taken the history (reattach replay or resync), so N idle
+// tabs cost N × 256 KiB, not N × 4 MiB.
+const ChannelScrollbackMaxBytes = 4 * 1024 * 1024
 
 // channelBinding is a router-side raw channel — paired writers on
 // each transport plus enough state to clean up when either end goes
@@ -1498,6 +1513,13 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 				// replay doesn't open with garbage.
 				replay = realignReplay(replay)
 			}
+			// This shell is taking delivery of the history, so a ring
+			// grown during the disconnection has done its job — hand the
+			// memory back rather than carrying it for the session's life.
+			if b.buf.Shrink(ChannelScrollbackBytes) {
+				r.log("channel %d: scrollback shrunk to %d after replay of %d bytes",
+					b.channelID, ChannelScrollbackBytes, len(replay))
+			}
 		}
 		id := b.channelID
 		win := b.windowID
@@ -1580,6 +1602,9 @@ func (r *Router) resyncChannel(b *channelBinding) {
 		if b.buf.Truncated() {
 			replay = realignReplay(replay)
 		}
+		// The FE is being handed the whole history, so a ring grown while
+		// it was behind can return to the steady-state size.
+		b.buf.Shrink(ChannelScrollbackBytes)
 	}
 	// Reset + snapshot ride ClassBulk (not Control/Interactive) so they stay
 	// FIFO behind any stale same-channel Bulk frames still queued: strict

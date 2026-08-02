@@ -73,6 +73,24 @@ Fix shape (belongs with C5/A10, not with a feature branch): give
 line, or better, assert the fact rather than the event — poll the router
 log for the merged `WASH_X_DISPLAY` value before launching the terminal.
 
+## 2026-08-02 — my own agent specs, once, under full-suite load
+
+`term-agent-roster` ("closing the tab retracts its row immediately") timed
+out waiting for its first roster row during a full `make e2e-test`; 3/3
+green when run alone, and the artifact was cleaned by the passing re-runs
+before it could be read. Unconfirmed but the mechanism fits **C5**: these
+specs expand a sidebar section (moving keyboard focus off the pty) and then
+type a command, so a click landing mid-re-render can swallow the leading
+keystrokes — after which the test waits 15s for the effect of a command
+that never ran.
+
+Hardened rather than retried: `run()` now asserts the command echoed before
+pressing Enter (a dropped keystroke fails immediately and legibly instead
+of as a timeout), and the M6 spec's ~250-character JSON payload moved into
+a script file so the typed line is short. A first attempt at *retyping* on
+failure was backed out — it could type over a line whose Ctrl+U had not
+landed yet, which is a worse failure than the one it was fixing.
+
 **Not reproduced here, still open:** why the compositor stalls in the first
 place when several run concurrently. The 21s-vs-8s split says the stall is
 the primary event and the timeouts are downstream of it.

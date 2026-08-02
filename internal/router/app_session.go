@@ -226,11 +226,20 @@ func (inst *AppInstance) dispatch(f wire.Frame) error {
 		// recent history that every recovery path (reattach, resync)
 		// replays from.
 		b.shellMu.Lock()
-		if b.buf != nil {
-			b.buf.Write(f.Payload)
-		}
 		sh := b.shell
 		behind := b.behind
+		if b.buf != nil {
+			// While nobody is taking delivery — detached, or so far behind
+			// that we've stopped forwarding — grow the ring rather than
+			// overwrite history at the steady-state size. The process is
+			// never stalled to preserve bytes, so buffering is the only
+			// lever we have; it shrinks again once a shell takes the
+			// history (see the reattach/resync paths).
+			if sh == nil || behind {
+				b.buf.GrowFor(len(f.Payload), ChannelScrollbackMaxBytes)
+			}
+			b.buf.Write(f.Payload)
+		}
 		b.shellMu.Unlock()
 		if sh == nil {
 			// Shell detached — bytes already captured in the buffer;
