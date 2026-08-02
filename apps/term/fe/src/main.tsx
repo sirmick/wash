@@ -17,7 +17,7 @@ import {
   Menu, MenuItem, MenuSeparator, Terminal,
   TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, TERM_FONTS,
   TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE, TERM_THEMES, themeById,
-  defineWashApp, tokens,
+  defineWashApp, tokens, WASH_SCROLL_CLASS,
 } from '@wash/ui';
 import type { PasteAnalysis, TermModes, TerminalAPI } from '@wash/ui';
 import { analyzePaste } from '@wash/ui';
@@ -892,7 +892,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           </For>
         </Menu>
       </Show>
-      <div data-testid="term-tabbar" style={tabBarStyle}>
+      <div data-testid="term-tabbar" class={WASH_SCROLL_CLASS} style={tabBarStyle}>
         <For each={tabs()}>
           {(tab) => {
             const isActive = () => active() === tab.channelID;

@@ -9,7 +9,7 @@
 
 import { For, Show } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Button, Overlay, tokens } from '@wash/ui';
+import { Button, Overlay, tokens, WASH_SCROLL_CLASS } from '@wash/ui';
 import type { PasteAnalysis } from '@wash/ui';
 
 export interface PasteOverlayProps {
@@ -55,7 +55,7 @@ export const PasteOverlay: Component<PasteOverlayProps> = (props) => {
           </div>
         </Show>
         <div style={labelStyle}>Will paste</div>
-        <pre data-testid="term-paste-preview" style={preStyle}>{cleaned().shown}</pre>
+        <pre data-testid="term-paste-preview" class={WASH_SCROLL_CLASS} style={preStyle}>{cleaned().shown}</pre>
         <Show when={cleaned().hidden > 0}>
           <div style={moreStyle}>…and {cleaned().hidden} more line(s)</div>
         </Show>
