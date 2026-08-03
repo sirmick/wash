@@ -1,17 +1,25 @@
-// wash-app-term: tabbed xterm.js wrapper. One floating window can
-// host many PTY tabs; each tab is a separate raw channel + Terminal
-// instance. Tab bar at top, terminals stack below with display:none
-// on inactive ones so state and scrollback survive switching.
+// wash-app-term: tabbed xterm.js wrapper with split panes. One floating
+// window hosts a TREE of tab groups (docs/TERM_LAYOUT.md): each leaf group
+// has its own tab strip and controls, each tab is a separate raw channel +
+// Terminal instance, and an unsplit window is a single group — which is
+// exactly what wash-term was before splits existed.
+//
+// Layout is computed rects, not nested DOM: every terminal host is a flat,
+// absolutely-positioned child of the stage for its whole life, and a layout
+// change writes only left/top/width/height. Reparenting a mounted xterm
+// loses its buffer, so the flat host list is load-bearing, not a style
+// choice (docs/TERM_LAYOUT.md §2). The tree lives in layout.ts as a pure
+// kernel; this file is its renderer and command surface.
 //
 // xterm construction and raw-channel wiring live in @wash/ui's
 // <Terminal>. This file owns the tab orchestration (open, close,
-// switch, persist, keyboard shortcuts) and forwards an imperative
+// switch, split, persist, keyboard shortcuts) and forwards an imperative
 // handle from each <Terminal> via onReady so tab activation can
 // trigger focus/fit.
 
-import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Check, Globe, Plus, ShieldAlert, User, X } from 'lucide-solid';
+import { Check, Columns2, Globe, Plus, Rows2, ShieldAlert, User, X } from 'lucide-solid';
 import {
   Button,
   Menu, MenuItem, MenuSeparator, Terminal,
@@ -22,6 +30,14 @@ import {
 import type { PasteAnalysis, TermModes, TerminalAPI } from '@wash/ui';
 import { analyzePaste } from '@wash/ui';
 import { PasteOverlay } from './PasteOverlay';
+import {
+  DEFAULT_GUTTER, ROOT,
+  addTab as treeAddTab, canSplit, channels as treeChannels, closeTab as treeCloseTab,
+  focusNeighbor, fromPersisted, groupAt, groupPaths, layout as layoutTree,
+  moveTabBefore, pathOfChannel, pruneToChannels, setActiveTab, singleGroup,
+  splitGroup, toPersisted,
+} from './layout';
+import type { Dir, FocusDir, LayoutNode, PersistedNode, PlacedGroup, Rect } from './layout';
 
 interface BEMessage {
   kind: string;
@@ -113,6 +129,9 @@ interface SessionRow {
   rows?: number;
 }
 
+// Menubar menus, in bar order.
+type MenuId = 'edit' | 'tab' | 'split' | 'theme' | 'font' | 'paste';
+
 // SmartPaste is the window-wide policy for the paste filter
 // (docs/AGENT_TERM.md §10):
 //   ask    — clean the invisible junk silently, ask before changing structure
@@ -121,7 +140,12 @@ interface SessionRow {
 type SmartPaste = 'ask' | 'always' | 'off';
 
 interface PersistedState {
+  // v2 carries a layout tree; a blob without it is v1 (one group, in the
+  // saved tab order) and migrates on restore. See docs/TERM_LAYOUT.md §7.
+  v?: number;
   tabs?: PersistedTabRow[];
+  layout?: PersistedNode;
+  // v1 only: the single bar's active tab. v2 keeps activation per group.
   active?: number;
   // Font choice is window-wide: every tab in this window shares it.
   font_id?: string;
@@ -134,19 +158,61 @@ interface PersistedState {
   smart_paste?: SmartPaste;
 }
 
-// TAB_BAR_HEIGHT — 32 (was 28) leaves 4px of breathing room above the
-// tab buttons; the bar's padding-top puts it there. Without the gap
-// the tabs render flush against the window titlebar and read as one
-// flat block rather than a row of pickable controls.
-const TAB_BAR_HEIGHT = 32;
+// STRIP_HEIGHT — every group carries its own tab strip, so this is paid
+// once per pane. 26px is the compromise the mock settled on: tall enough
+// for a tab with a badge and the control icons, slim enough that a
+// three-way split doesn't eat a fifth of the window. (The old single bar
+// was 32 with a 4px gap above; there is no window titlebar to separate
+// from any more once strips sit inside the stage.)
+const STRIP_HEIGHT = 26;
+// Divider thickness between sibling panes.
+const GUTTER = DEFAULT_GUTTER;
 
 // Tab labels cap here (chars) before ellipsis — a shell sets the OSC
 // title to "user@host: /long/cwd", which would otherwise stretch the tab.
 const TAB_LABEL_MAX = 12;
 
 const App: Component<{ instance: string; host: HTMLElement; origin: string }> = (props) => {
+  // tabs is the channel INVENTORY — one entry per live pty, in no
+  // particular order. Placement lives in the tree; these objects only carry
+  // per-channel facts (shell, restore grid, modes). The terminal-host <For>
+  // below is keyed by these objects, so they are never replaced except by
+  // reconcile()'s pending→live promotion.
   const [tabs, setTabs] = createSignal<TabMeta[]>([]);
-  const [active, setActive] = createSignal(0);
+  // The layout tree (docs/TERM_LAYOUT.md §3) and the focused group's path.
+  // Every placement question goes through these two.
+  const [tree, setTree] = createSignal<LayoutNode>(singleGroup([]));
+  const [focusPath, setFocusPath] = createSignal<string>(ROOT);
+  // Live stage size, from a ResizeObserver on the pane container. Rects are
+  // computed in px, so the layout has to be recomputed when the window
+  // resizes; each <Terminal> then refits itself off its own observer.
+  const [stage, setStage] = createSignal<{ w: number; h: number }>({ w: 0, h: 0 });
+
+  // placement is the whole render contract: where every group and divider
+  // goes. Recomputed when the tree or the stage changes, nothing else.
+  const placement = createMemo(() => {
+    const s = stage();
+    return layoutTree(tree(), { x: 0, y: 0, w: s.w, h: s.h }, { gutter: GUTTER, strip: STRIP_HEIGHT });
+  });
+  // Group paths are stable strings, so <For> reuses strip rows across a
+  // relayout instead of rebuilding them on every resize tick.
+  const placedPaths = createMemo(() => placement().groups.map((g) => g.path));
+  const placedAt = (path: string): PlacedGroup | undefined =>
+    placement().groups.find((g) => g.path === path);
+
+  // focusedGroup falls back to the first group when the focused path went
+  // stale (its group collapsed) — there is always exactly one focus.
+  const focusedGroup = (): PlacedGroup | undefined =>
+    placedAt(focusPath()) ?? placement().groups[0];
+
+  // active is the focused group's visible tab — the channel every
+  // window-level surface (status bar, Edit menu, paste) talks about.
+  const active = (): number => focusedGroup()?.group.active ?? 0;
+
+  // A pending split: the BE round-trip for a new tab is asynchronous, so a
+  // split records where the tab should land and applies it when tab_opened
+  // arrives. FIFO, so two fast Ctrl+Shift+D presses land in order.
+  let splitIntents: Array<{ path: string; dir: Dir }> = [];
   // Window-wide font choice, driven into every <Terminal>. The
   // right-click menu reports changes back here so they persist and
   // apply across all tabs at once.
@@ -170,7 +236,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   // Menubar: which top menu is open and the viewport anchor (the clicked
   // button's bottom-left) to paint it at.
-  const [openMenu, setOpenMenu] = createSignal<'edit' | 'tab' | 'theme' | 'font' | 'paste' | null>(null);
+  const [openMenu, setOpenMenu] = createSignal<MenuId | null>(null);
   const [menuAnchor, setMenuAnchor] = createSignal<{ x: number; y: number }>({ x: 0, y: 0 });
 
   // Per-tab live OSC title (set by the program via ESC]0;…), keyed by
@@ -212,6 +278,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // Last reported size per channel so resize messages have a value
   // even when called outside a fit() tick.
   const sizes = new Map<number, { cols: number; rows: number }>();
+  // The pane container. Its size drives every rect; each <Terminal> then
+  // refits off its OWN observer once its host's rect changes, so this
+  // observer never has to talk to xterm.
+  let stageEl: HTMLDivElement | undefined;
 
   const send = (m: unknown) => window.wash.sendAppMsg(props.instance, m);
 
@@ -221,10 +291,21 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   // ---- tab lifecycle ----
 
+  // addTab records the channel and places it in the tree: into the group a
+  // pending split named, else into the focused group. A tab that arrives
+  // for a split takes focus in its new pane, which is what "split right"
+  // means — you end up typing in the new one.
   const addTab = (channelID: number, shellPath: string, extra?: Partial<TabMeta>) => {
     if (tabs().some((t) => t.channelID === channelID)) return;
     setTabs([...tabs(), { channelID, shell: shellPath, ...extra }]);
-    setActive(channelID);
+
+    const intent = splitIntents.shift();
+    const next = intent && groupAt(tree(), intent.path)
+      ? splitGroup(tree(), intent.path, intent.dir, channelID)
+      : treeAddTab(tree(), focusPath(), channelID);
+    setTree(next);
+    const landed = pathOfChannel(next, channelID);
+    if (landed !== undefined) setFocusPath(landed);
     persist();
     // xterm setup happens in the per-tab onMount below.
   };
@@ -254,10 +335,36 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }
     const remaining = tabs().filter((t) => t.channelID !== channelID);
     setTabs(remaining);
-    if (active() === channelID) {
-      setActive(remaining[0]?.channelID ?? 0);
-    }
+    // The tree decides what happens to the pane: the group activates a
+    // neighbouring tab, or — if that was its last — collapses and hands its
+    // space back to its siblings.
+    const next = treeCloseTab(tree(), channelID);
+    setTree(next);
+    refocusAfterCollapse(next);
     persist();
+  };
+
+  // adoptOrphans places any inventoried channel the tree doesn't hold. It
+  // covers two real cases: a restore where the saved tree and the saved tab
+  // list disagree, and a tab opened by another surface entirely (agentd's
+  // exec_tab, docs/AGENT_TERM.md §13).
+  const adoptOrphans = () => {
+    let next = tree();
+    let changed = false;
+    for (const t of tabs()) {
+      if (pathOfChannel(next, t.channelID) !== undefined) continue;
+      next = treeAddTab(next, focusPath(), t.channelID);
+      changed = true;
+    }
+    if (changed) setTree(next);
+  };
+
+  // refocusAfterCollapse keeps the focus on a group that still exists.
+  // Paths move when the tree changes, so this is by path validity, not by
+  // remembering an object.
+  const refocusAfterCollapse = (next: LayoutNode) => {
+    if (groupAt(next, focusPath())) return;
+    setFocusPath(groupPaths(next)[0] ?? ROOT);
   };
 
   // ---- color tag (per tab, persisted) ----
@@ -275,26 +382,32 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   // ---- drag to reorder (persisted) ----
 
-  // moveTab drops the dragged tab in front of `beforeID`. It reuses the
-  // existing tab objects (filter + splice keep references intact), so
-  // the term-host <For> sees the same identities and no xterm remounts.
+  // moveTab drops the dragged tab in front of `beforeID` — a reorder inside
+  // one strip, or a move between groups when the strips differ. The tab
+  // INVENTORY is untouched either way: only the tree changes, so the
+  // terminal's DOM node never moves and its buffer is never at risk.
   const moveTab = (fromID: number, beforeID: number) => {
     if (fromID === beforeID) return;
-    const cur = tabs();
-    const dragged = cur.find((t) => t.channelID === fromID);
-    if (!dragged) return;
-    const rest = cur.filter((t) => t.channelID !== fromID);
-    const at = rest.findIndex((t) => t.channelID === beforeID);
-    if (at < 0) return;
-    rest.splice(at, 0, dragged);
-    setTabs(rest);
+    const next = moveTabBefore(tree(), fromID, beforeID);
+    if (next === tree()) return;
+    setTree(next);
+    const landed = pathOfChannel(next, fromID);
+    if (landed !== undefined) setFocusPath(landed);
+    refocusAfterCollapse(next);
     persist();
   };
 
+  // activate makes a channel the visible tab of its group AND focuses that
+  // group — clicking a tab in an unfocused pane moves you there.
   const activate = (channelID: number) => {
-    if (active() === channelID) return;
-    setActive(channelID);
-    persist();
+    const path = pathOfChannel(tree(), channelID);
+    if (path === undefined) return;
+    const already = active() === channelID && focusPath() === path;
+    if (!already) {
+      setTree(setActiveTab(tree(), channelID));
+      setFocusPath(path);
+      persist();
+    }
     requestAnimationFrame(() => {
       const api = apis.get(channelID);
       if (api) {
@@ -304,12 +417,63 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     });
   };
 
+  // focusGroup moves the focus ring without changing which tab is visible.
+  const focusGroup = (path: string) => {
+    if (focusPath() === path || !groupAt(tree(), path)) return;
+    setFocusPath(path);
+    persist();
+    apis.get(groupAt(tree(), path)!.active)?.focus();
+  };
+
   const sendResize = (channelID: number, cols: number, rows: number) => {
     send({ kind: 'resize', channel_id: channelID, cols, rows });
   };
 
   const openNewTab = () => send({ kind: 'new_tab' });
-  const requestCloseTab = (channelID: number) => send({ kind: 'close_tab', channel_id: channelID });
+  const requestCloseTab = (channelID: number) => {
+    if (channelID) send({ kind: 'close_tab', channel_id: channelID });
+  };
+
+  // ---- split commands (docs/TERM_LAYOUT.md §5) ----
+  //
+  // The strip buttons, the Split menu and the keybindings all land here, so
+  // "split the focused pane" has exactly one implementation.
+
+  // splitFocused asks the BE for a pty and records where its tab should go.
+  // A split that would leave either half unusable is refused outright rather
+  // than opening a pane you can't read — canSplit measures the pane the user
+  // is actually looking at, so the answer changes with the window size.
+  const splitAt = (path: string, dir: Dir) => {
+    const g = placedAt(path);
+    if (!g || !canSplit(g.rect, dir, { gutter: GUTTER })) return;
+    focusGroup(path);
+    splitIntents.push({ path: g.path, dir });
+    openNewTab();
+  };
+  const splitFocused = (dir: Dir) => splitAt(focusedGroup()?.path ?? ROOT, dir);
+
+  // openNewTabIn puts the next tab in a named group — the `+` on a strip
+  // means "another tab HERE", not "another tab wherever the focus is".
+  const openNewTabIn = (path: string) => {
+    focusGroup(path);
+    openNewTab();
+  };
+
+  const canSplitFocused = (dir: Dir): boolean => {
+    const g = focusedGroup();
+    return !!g && canSplit(g.rect, dir, { gutter: GUTTER });
+  };
+
+  const paneCount = (): number => placement().groups.length;
+
+  // focusDir moves the focus ring geometrically — the pane under the arrow,
+  // which in a nested tree is routinely not the tree-order neighbour.
+  const focusDir = (dir: FocusDir) => {
+    const from = focusedGroup();
+    if (!from) return;
+    const to = focusNeighbor(placement().groups, from.path, dir);
+    if (to !== undefined) focusGroup(to);
+  };
 
   // ---- font choice (window-wide, persisted) ----
 
@@ -340,7 +504,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // undefined while a tab is still pending (no xterm mounted yet).
   const activeApi = (): TerminalAPI | undefined => apis.get(active());
   // openMenuFor toggles the named top menu, anchoring it under the button.
-  const openMenuFor = (id: 'edit' | 'tab' | 'theme' | 'font' | 'paste', ev: MouseEvent) => {
+  const openMenuFor = (id: MenuId, ev: MouseEvent) => {
     if (openMenu() === id) { setOpenMenu(null); return; }
     const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
     setMenuAnchor({ x: r.left, y: r.bottom + 2 });
@@ -580,8 +744,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }
     const live = new Map(rows.map((r) => [Number(r.channel_id), r]));
     const wasActive = active();
+    const wasFocused = focusPath();
     for (const t of tabs()) {
       if (!live.has(t.channelID)) removeTab(t.channelID);
+    }
+    // Prune the tree to what the BE still has. removeTab above already
+    // walked the live tabs, but a saved tree can name channels that never
+    // made it into the inventory at all — this is the one place that
+    // guarantees no pane refers to a dead pty.
+    const pruned = pruneToChannels(tree(), new Set(live.keys()));
+    if (pruned !== tree()) {
+      setTree(pruned);
+      refocusAfterCollapse(pruned);
     }
     // Unblock pending tabs with their pty's grid. Only pending tabs
     // get fresh objects — replacing a mounted tab's object would
@@ -608,11 +782,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         });
       }
     }
-    // addTab steals activation; put it back if the original
-    // active tab is still alive.
-    if (wasActive && live.has(wasActive) && active() !== wasActive) {
-      setActive(wasActive);
-      persist();
+    // addTab steals focus and activation; put both back if the tab that
+    // had them is still alive.
+    if (wasActive && live.has(wasActive)) {
+      const path = pathOfChannel(tree(), wasActive);
+      if (path !== undefined) {
+        setTree(setActiveTab(tree(), wasActive));
+        setFocusPath(groupAt(tree(), wasFocused) ? wasFocused : path);
+        persist();
+      }
     }
   };
 
@@ -621,13 +799,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const persist = () => {
     if (!props.instance) return;
     const state: PersistedState = {
+      v: 2,
       tabs: tabs().map((t) => ({
         channel_id: t.channelID,
         shell: t.shell,
         modes: t.modes,
         color: tagColors().get(t.channelID),
       })),
-      active: active() || undefined,
+      layout: toPersisted(tree()),
       font_id: fontId(),
       font_size: fontSize(),
       theme_id: themeId(),
@@ -671,9 +850,22 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       if (t.color) tags.set(Number(t.channel_id), t.color);
     }
     if (tags.size) setTagColors(tags);
-    if (s.active && tabs().some((t) => t.channelID === s.active)) {
-      setActive(s.active);
+    // Placement: a v2 blob restores its tree; a v1 blob (no layout, just an
+    // ordered tab list and one active id) migrates to a single group, which
+    // is the same window it was saved from. Either way the tree is then
+    // pruned to what the BE actually still has, in reconcile().
+    const restored = s.layout ? fromPersisted(s.layout) : undefined;
+    const known = new Set(tabs().map((t) => t.channelID));
+    if (restored && treeChannels(restored).every((c) => known.has(c))) {
+      setTree(restored);
+    } else {
+      setTree(singleGroup(s.tabs.map((t) => Number(t.channel_id)), s.active));
     }
+    setFocusPath(groupPaths(tree())[0] ?? ROOT);
+    // A tab in the inventory that the tree doesn't place would be a mounted
+    // terminal with nowhere to draw. Adopt any straggler rather than
+    // trusting the two halves of the blob to agree.
+    adoptOrphans();
     pendingFallback = setTimeout(() => {
       pendingFallback = undefined;
       if (tabs().some((t) => t.pending)) {
@@ -684,15 +876,24 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   // ---- keyboard shortcuts ----
 
+  // Ctrl+Shift+<letter> has no distinct control code, so none of these are
+  // stolen from the shell (or from an agent running in it). Returning false
+  // keeps the event out of the pty entirely.
   const onTermKey = (ev: KeyboardEvent): boolean => {
     if (ev.type !== 'keydown') return true;
-    if (ev.ctrlKey && ev.shiftKey && (ev.key === 'T' || ev.key === 't')) {
-      openNewTab();
-      return false;
-    }
-    if (ev.ctrlKey && ev.shiftKey && (ev.key === 'W' || ev.key === 'w')) {
-      if (active()) requestCloseTab(active());
-      return false;
+    if (ev.ctrlKey && ev.shiftKey) {
+      const k = ev.key.toLowerCase();
+      if (k === 't') { openNewTab(); return false; }
+      // Closes the TAB; when it is the last one in its group the pane goes
+      // with it and the tree hands the space back (docs/TERM_LAYOUT.md §5).
+      if (k === 'w') { requestCloseTab(active()); return false; }
+      if (k === 'd') { splitFocused('row'); return false; }
+      if (k === 'e') { splitFocused('col'); return false; }
+      const arrows: Record<string, FocusDir> = {
+        arrowleft: 'left', arrowright: 'right', arrowup: 'up', arrowdown: 'down',
+      };
+      const dir = arrows[k];
+      if (dir) { ev.preventDefault(); focusDir(dir); return false; }
     }
     if (ev.ctrlKey && ev.key === 'Tab') {
       ev.preventDefault();
@@ -702,12 +903,132 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     return true;
   };
 
+  // cycleTabs walks the FOCUSED GROUP's strip — Ctrl+Tab is a tab gesture,
+  // not a pane gesture (that is Ctrl+Shift+arrows).
   const cycleTabs = (dir: number) => {
-    const ids = tabs().map((t) => t.channelID);
+    const ids = focusedGroup()?.group.tabs ?? [];
     if (ids.length < 2) return;
     const i = ids.indexOf(active());
     if (i < 0) return;
     activate(ids[(i + dir + ids.length) % ids.length]);
+  };
+
+  // ---- tab button (one per tab, inside its group's strip) ----
+
+  // tabButton renders a strip entry. Identity is the CHANNEL id, and the
+  // group is passed in rather than looked up, so a click activates the tab
+  // in the right pane even while another one holds focus.
+  const tabButton = (channelID: number, path: string): JSX.Element => {
+    const tab = () => tabs().find((t) => t.channelID === channelID);
+    const isActive = () => groupAt(tree(), path)?.active === channelID;
+    // Tag hue for the top strip: a tagged tab shows its color
+    // always (active or not); untagged falls back to the blue
+    // active-accent / transparent idle pair.
+    const tagHex = () => colorHex(tagColors().get(channelID));
+    const isDragging = () => dragId() === channelID;
+    const isDropBefore = () => dropTarget() === channelID && dragId() !== channelID;
+    return (
+      <Show when={tab()}>
+        <button
+          type="button"
+          draggable={true}
+          data-testid={`term-tab-${channelID}`}
+          style={{
+            background: isActive() ? tokens.bgRowSelected : 'transparent',
+            color: tokens.fg,
+            border: 'none',
+            'border-top': isActive()
+              ? `2px solid ${tagHex() ?? tokens.accentBlue}`
+              : tagHex()
+                ? `2px solid ${tagHex()}`
+                : '2px solid transparent',
+            // Rounded only on top — the bottom meets the strip's
+            // border-bottom flush, matching browser-tab idiom.
+            'border-radius': `${tokens.radiusLg} ${tokens.radiusLg} 0 0`,
+            padding: '0 4px 0 8px',
+            cursor: 'pointer',
+            font: tokens.type.monoMd,
+            display: 'flex',
+            'align-items': 'center',
+            gap: '6px',
+            'max-width': '200px',
+            'flex-shrink': 0,
+            // Dim while dragged; left rule marks the drop slot.
+            opacity: isDragging() ? 0.4 : 1,
+            'box-shadow': isDropBefore() ? `inset 3px 0 0 ${tokens.accentBlue}` : undefined,
+          }}
+          onClick={() => activate(channelID)}
+          onContextMenu={(ev) => {
+            ev.preventDefault();
+            setCtxMenu({ id: channelID, x: ev.clientX, y: ev.clientY });
+          }}
+          onDragStart={(ev) => {
+            setDragId(channelID);
+            if (ev.dataTransfer) {
+              ev.dataTransfer.effectAllowed = 'move';
+              // Some browsers refuse to start a drag without data.
+              ev.dataTransfer.setData('text/plain', String(channelID));
+            }
+          }}
+          onDragEnd={() => {
+            setDragId(null);
+            setDropTarget(null);
+          }}
+          onDragEnter={(ev) => {
+            if (dragId() === null || dragId() === channelID) return;
+            ev.preventDefault();
+            setDropTarget(channelID);
+          }}
+          onDragOver={(ev) => {
+            if (dragId() === null || dragId() === channelID) return;
+            ev.preventDefault();
+            if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
+          }}
+          onDrop={(ev) => {
+            const from = dragId();
+            if (from === null) return;
+            ev.preventDefault();
+            moveTab(from, channelID);
+            setDragId(null);
+            setDropTarget(null);
+          }}
+        >
+          <span
+            data-testid={`term-tab-badge-${channelID}`}
+            style={{ display: 'inline-flex', 'align-items': 'center', gap: '5px', 'flex-shrink': 0 }}
+          >
+            {statusBadge(tabStatus().get(channelID))}
+            {agentDot(agentStatus().get(channelID), `term-tab-agent-${channelID}`)}
+          </span>
+          <span
+            title={fullLabel(tab()!)}
+            style={{
+              overflow: 'hidden',
+              'text-overflow': 'ellipsis',
+              'white-space': 'nowrap',
+            }}
+          >
+            {tabLabel(tab()!)}
+          </span>
+          <span
+            data-testid={`term-tab-close-${channelID}`}
+            style={{
+              opacity: 0.6,
+              cursor: 'pointer',
+              padding: '0 2px',
+              display: 'inline-flex',
+              'align-items': 'center',
+            }}
+            onClick={(ev) => {
+              ev.stopPropagation();
+              requestCloseTab(channelID);
+            }}
+          >
+            <X size={12} />
+          </span>
+        </button>
+      </Show>
+    );
   };
 
   // ---- lifecycle ----
@@ -720,6 +1041,22 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     };
     props.host.addEventListener('wash:msg', onMsg);
     props.host.addEventListener('wash:state', onState);
+
+    // Stage size → rects. Seeded synchronously so the first paint has a
+    // real layout rather than a 0×0 one (which would leave every pane
+    // hidden until the first observer tick).
+    const measure = () => {
+      if (!stageEl) return;
+      const r = stageEl.getBoundingClientRect();
+      const w = Math.round(r.width);
+      const h = Math.round(r.height);
+      const cur = stage();
+      if (cur.w === w && cur.h === h) return;
+      setStage({ w, h });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    if (stageEl) ro.observe(stageEl);
 
     // Elapsed-time ticker for the agent clause. Runs only while a tab
     // actually has an agent — createEffect re-evaluates when the agent map
@@ -737,6 +1074,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     });
 
     onCleanup(() => {
+      ro.disconnect();
       props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('wash:state', onState);
       if (pendingFallback) clearTimeout(pendingFallback);
@@ -765,6 +1103,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onClick={(ev) => openMenuFor('tab', ev)}
         >
           Tab
+        </button>
+        <button
+          type="button"
+          data-testid="term-menu-split-btn"
+          style={menuBarBtnStyle(openMenu() === 'split')}
+          onClick={(ev) => openMenuFor('split', ev)}
+        >
+          Split
         </button>
         <button
           type="button"
@@ -821,6 +1167,41 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               />
             )}
           </For>
+        </Menu>
+      </Show>
+      <Show when={openMenu() === 'split'}>
+        <Menu x={menuAnchor().x} y={menuAnchor().y} data-testid="term-menu-split" onDismiss={closeMenu}>
+          {/* Disabled means "this pane is too small to halve", which is
+              why the split items grey out as a window shrinks. */}
+          <MenuItem
+            label="Split Right"
+            data-testid="term-menu-split-right"
+            trailing={<span style={shortcutStyle}>Ctrl+Shift+D</span>}
+            disabled={!canSplitFocused('row')}
+            onClick={run(() => splitFocused('row'))}
+          />
+          <MenuItem
+            label="Split Down"
+            data-testid="term-menu-split-down"
+            trailing={<span style={shortcutStyle}>Ctrl+Shift+E</span>}
+            disabled={!canSplitFocused('col')}
+            onClick={run(() => splitFocused('col'))}
+          />
+          <MenuSeparator />
+          <MenuItem
+            label="Next Pane"
+            data-testid="term-menu-next-pane"
+            trailing={<span style={shortcutStyle}>Ctrl+Shift+→</span>}
+            disabled={paneCount() < 2}
+            onClick={run(() => focusDir('right'))}
+          />
+          <MenuItem
+            label="Close Pane"
+            data-testid="term-menu-close-pane"
+            trailing={<span style={shortcutStyle}>Ctrl+Shift+W</span>}
+            disabled={paneCount() < 2}
+            onClick={run(() => requestCloseTab(active()))}
+          />
         </Menu>
       </Show>
       <Show when={openMenu() === 'theme'}>
@@ -892,127 +1273,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           </For>
         </Menu>
       </Show>
-      <div data-testid="term-tabbar" class={WASH_SCROLL_CLASS} style={tabBarStyle}>
-        <For each={tabs()}>
-          {(tab) => {
-            const isActive = () => active() === tab.channelID;
-            // Tag hue for the top strip: a tagged tab shows its color
-            // always (active or not); untagged falls back to the blue
-            // active-accent / transparent idle pair.
-            const tagHex = () => colorHex(tagColors().get(tab.channelID));
-            const isDragging = () => dragId() === tab.channelID;
-            const isDropBefore = () => dropTarget() === tab.channelID && dragId() !== tab.channelID;
-            return (
-              <button
-                type="button"
-                draggable={true}
-                data-testid={`term-tab-${tab.channelID}`}
-                style={{
-                  background: isActive() ? tokens.bgRowSelected : 'transparent',
-                  color: tokens.fg,
-                  border: 'none',
-                  'border-top': isActive()
-                    ? `2px solid ${tagHex() ?? tokens.accentBlue}`
-                    : tagHex()
-                      ? `2px solid ${tagHex()}`
-                      : '2px solid transparent',
-                  // Rounded only on top — the bottom meets the bar's
-                  // border-bottom flush, matching browser-tab idiom.
-                  'border-radius': `${tokens.radiusLg} ${tokens.radiusLg} 0 0`,
-                  padding: '0 6px 0 10px',
-                  cursor: 'pointer',
-                  font: tokens.type.monoMd,
-                  display: 'flex',
-                  'align-items': 'center',
-                  gap: '8px',
-                  'max-width': '200px',
-                  // Dim while dragged; left rule marks the drop slot.
-                  opacity: isDragging() ? 0.4 : 1,
-                  'box-shadow': isDropBefore() ? `inset 3px 0 0 ${tokens.accentBlue}` : undefined,
-                }}
-                onClick={() => activate(tab.channelID)}
-                onContextMenu={(ev) => {
-                  ev.preventDefault();
-                  setCtxMenu({ id: tab.channelID, x: ev.clientX, y: ev.clientY });
-                }}
-                onDragStart={(ev) => {
-                  setDragId(tab.channelID);
-                  if (ev.dataTransfer) {
-                    ev.dataTransfer.effectAllowed = 'move';
-                    // Some browsers refuse to start a drag without data.
-                    ev.dataTransfer.setData('text/plain', String(tab.channelID));
-                  }
-                }}
-                onDragEnd={() => {
-                  setDragId(null);
-                  setDropTarget(null);
-                }}
-                onDragEnter={(ev) => {
-                  if (dragId() === null || dragId() === tab.channelID) return;
-                  ev.preventDefault();
-                  setDropTarget(tab.channelID);
-                }}
-                onDragOver={(ev) => {
-                  if (dragId() === null || dragId() === tab.channelID) return;
-                  ev.preventDefault();
-                  if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
-                }}
-                onDrop={(ev) => {
-                  const from = dragId();
-                  if (from === null) return;
-                  ev.preventDefault();
-                  moveTab(from, tab.channelID);
-                  setDragId(null);
-                  setDropTarget(null);
-                }}
-              >
-                <span
-                  data-testid={`term-tab-badge-${tab.channelID}`}
-                  style={{ display: 'inline-flex', 'align-items': 'center', gap: '5px', 'flex-shrink': 0 }}
-                >
-                  {statusBadge(tabStatus().get(tab.channelID))}
-                  {agentDot(agentStatus().get(tab.channelID), `term-tab-agent-${tab.channelID}`)}
-                </span>
-                <span
-                  title={fullLabel(tab)}
-                  style={{
-                    overflow: 'hidden',
-                    'text-overflow': 'ellipsis',
-                    'white-space': 'nowrap',
-                  }}
-                >
-                  {tabLabel(tab)}
-                </span>
-                <span
-                  data-testid={`term-tab-close-${tab.channelID}`}
-                  style={{
-                    opacity: 0.6,
-                    cursor: 'pointer',
-                    padding: '0 4px',
-                    display: 'inline-flex',
-                    'align-items': 'center',
-                  }}
-                  onClick={(ev) => {
-                    ev.stopPropagation();
-                    requestCloseTab(tab.channelID);
-                  }}
-                >
-                  <X size={12} />
-                </span>
-              </button>
-            );
-          }}
-        </For>
-        <Button
-          variant="icon"
-          data-testid="term-new-tab"
-          title="New tab (Ctrl+Shift+T)"
-          style={addBtnStyle}
-          onClick={openNewTab}
-        >
-          <Plus size={14} />
-        </Button>
-      </div>
       <Show when={ctxMenu()}>
         {(menu) => (
           <Menu x={menu().x} y={menu().y} data-testid="term-tab-ctx" onDismiss={() => setCtxMenu(null)}>
@@ -1035,20 +1295,42 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           </Menu>
         )}
       </Show>
-      <div style={{ flex: 1, position: 'relative', 'min-height': 0 }}>
+      {/* The stage. Everything below is positioned from placement():
+          terminal hosts first (flat siblings, keyed by channel id, NEVER
+          reparented — docs/TERM_LAYOUT.md §2), then one strip per group,
+          then the dividers. Two independent <For>s over the same tree. */}
+      <div
+        data-testid="term-stage"
+        ref={(el) => { stageEl = el; }}
+        style={{ flex: 1, position: 'relative', 'min-height': 0, overflow: 'hidden' }}
+      >
         <For each={tabs()}>
           {(tab) => {
             let hostEl: HTMLDivElement | undefined;
+            // The rect this channel occupies: its group's content box when
+            // it is that group's visible tab, hidden otherwise. Only the
+            // style changes — the element itself never moves.
+            const place = () => {
+              const g = placement().groups.find((pg) => pg.group.tabs.includes(tab.channelID));
+              return g && g.group.active === tab.channelID ? g.content : undefined;
+            };
             return (
               <div
                 data-testid="term-host"
                 data-channel={tab.channelID}
                 style={{
                   position: 'absolute',
-                  inset: 0,
-                  display: active() === tab.channelID ? 'block' : 'none',
+                  display: place() ? 'block' : 'none',
+                  left: `${place()?.x ?? 0}px`,
+                  top: `${place()?.y ?? 0}px`,
+                  width: `${place()?.w ?? 0}px`,
+                  height: `${place()?.h ?? 0}px`,
                 }}
                 ref={(el) => { hostEl = el; }}
+                onMouseDown={() => {
+                  const path = pathOfChannel(tree(), tab.channelID);
+                  if (path !== undefined) focusGroup(path);
+                }}
               >
                 {/* Pending tabs (restored, awaiting the `sessions`
                     reply) mount no xterm yet: reconcile() replaces
@@ -1084,6 +1366,88 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               </div>
             );
           }}
+        </For>
+        {/* Group strips. Keyed by path (a stable string), so a relayout
+            repositions rows instead of rebuilding them. */}
+        <For each={placedPaths()}>
+          {(path) => {
+            const place = () => placedAt(path);
+            const group = () => place()?.group;
+            const focused = () => focusPath() === path;
+            return (
+              <Show when={place()}>
+                <div
+                  data-testid="term-tabbar"
+                  data-path={path}
+                  data-focused={focused() ? 'true' : 'false'}
+                  class={WASH_SCROLL_CLASS}
+                  style={{
+                    ...stripStyle,
+                    left: `${place()!.rect.x}px`,
+                    top: `${place()!.rect.y}px`,
+                    width: `${place()!.rect.w}px`,
+                    // The focused pane is ringed rather than bordered: a
+                    // border would resize the content box and refit the
+                    // grid underneath it (docs/TERM_LAYOUT.md §6).
+                    'box-shadow': focused() && paneCount() > 1
+                      ? `inset 0 2px 0 ${tokens.accentBlue}`
+                      : undefined,
+                  }}
+                  onMouseDown={() => focusGroup(path)}
+                >
+                  <For each={group()!.tabs}>{(id) => tabButton(id, path)}</For>
+                  <span style={{ flex: 1, 'min-width': '4px' }} />
+                  <Button
+                    variant="icon"
+                    data-testid="term-new-tab"
+                    title="New tab (Ctrl+Shift+T)"
+                    style={ctlBtnStyle}
+                    onClick={() => openNewTabIn(path)}
+                  >
+                    <Plus size={14} />
+                  </Button>
+                  <Button
+                    variant="icon"
+                    data-testid="term-split-right"
+                    title="Split right (Ctrl+Shift+D)"
+                    style={ctlBtnStyle}
+                    disabled={!place() || !canSplit(place()!.rect, 'row', { gutter: GUTTER })}
+                    onClick={() => splitAt(path, 'row')}
+                  >
+                    <Columns2 size={13} />
+                  </Button>
+                  <Button
+                    variant="icon"
+                    data-testid="term-split-down"
+                    title="Split down (Ctrl+Shift+E)"
+                    style={ctlBtnStyle}
+                    disabled={!place() || !canSplit(place()!.rect, 'col', { gutter: GUTTER })}
+                    onClick={() => splitAt(path, 'col')}
+                  >
+                    <Rows2 size={13} />
+                  </Button>
+                </div>
+              </Show>
+            );
+          }}
+        </For>
+        {/* Dividers. Static rules in M1; M2 makes them draggable (the
+            kernel's resizeSplit is already there and tested). */}
+        <For each={placement().dividers}>
+          {(d) => (
+            <div
+              data-testid="term-divider"
+              data-dir={d.dir}
+              style={{
+                position: 'absolute',
+                left: `${d.rect.x}px`,
+                top: `${d.rect.y}px`,
+                width: `${d.rect.w}px`,
+                height: `${d.rect.h}px`,
+                background: tokens.borderMenu,
+              }}
+            />
+          )}
         </For>
       </div>
       <Show when={pendingPaste()}>
@@ -1198,8 +1562,11 @@ function menuBarBtnStyle(active: boolean): JSX.CSSProperties {
   };
 }
 
-const tabBarStyle: JSX.CSSProperties = {
-  height: `${TAB_BAR_HEIGHT}px`,
+// One strip per group, positioned absolutely from the group's rect. The
+// left/top/width come from placement(); everything else is fixed.
+const stripStyle: JSX.CSSProperties = {
+  position: 'absolute',
+  height: `${STRIP_HEIGHT}px`,
   background: tokens.bgWindow,
   'border-bottom': `1px solid ${tokens.borderMenu}`,
   display: 'flex',
@@ -1207,16 +1574,26 @@ const tabBarStyle: JSX.CSSProperties = {
   gap: '2px',
   // padding-top creates the gap above the tabs; tabs round into the
   // border-bottom line, matching how browser tabs sit on a bar.
-  padding: '4px 4px 0',
+  padding: '3px 3px 0',
   'overflow-x': 'auto',
   'overflow-y': 'hidden',
   font: tokens.type.monoMd,
-  'flex-shrink': 0,
+  'box-sizing': 'border-box',
 };
 
-// Layout override on top of <Button variant="icon"> (transparent chrome base).
-const addBtnStyle: JSX.CSSProperties = {
+// Layout override on top of <Button variant="icon"> (transparent chrome base)
+// for the per-strip controls: new tab, split right, split down.
+const ctlBtnStyle: JSX.CSSProperties = {
   opacity: 0.8,
+  'flex-shrink': 0,
+  padding: '0 3px',
+};
+
+// Shortcut hint in the Split menu's trailing slot.
+const shortcutStyle: JSX.CSSProperties = {
+  color: tokens.fgDim,
+  'font-size': '11px',
+  'padding-left': '18px',
 };
 
 // Font menu size-stepper row (moved here from the terminal's old
