@@ -57,10 +57,10 @@ const APPS: AppBundle[] = [
   // with its elapsed ticker. +~3 KB for smart paste (M5): the preview overlay
   // and the policy menu (the analyzePaste kernel itself lives in @wash/ui,
   // which is an import-map external and doesn't count here).
-  // 58k: split panes (docs/TERM_LAYOUT.md) added the layout kernel (~6k
-  // minified) plus a strip and control set per group. M2's divider drag
-  // will want a little more.
-  { name: 'term',    dir: 'apps/term/fe/dist',    maxBytes: 58_000 },
+  // 68k: split panes (docs/TERM_LAYOUT.md) — the layout kernel (~6k
+  // minified), a strip and control set per group (M1), then divider drag,
+  // zoom and the pane context menu (M2).
+  { name: 'term',    dir: 'apps/term/fe/dist',    maxBytes: 68_000 },
   // fm grew with the image pipeline: folder-grid preview + VirtualGrid +
   // file-client, the ~360-extension lucide icon map (~20 new glyphs), the
   // uid-aware display-hint colours/badges, and the cross-origin DnD guard.

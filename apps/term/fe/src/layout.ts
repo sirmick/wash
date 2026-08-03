@@ -51,6 +51,10 @@ export interface PlacedDivider {
   index: number;
   dir: Dir;
   rect: Rect;
+  // The split's inner span in px along its axis (its extent less the
+  // gutters). A drag converts pixels to fractions with this, so the
+  // renderer never has to reconstruct the parent's geometry.
+  span: number;
 }
 
 export interface LayoutOpts {
@@ -350,6 +354,28 @@ export function equalize(tree: LayoutNode, path: string): LayoutNode {
   }));
 }
 
+// equalizeAll rebalances EVERY split in the tree, not just one level.
+// "Equalize" means the window looks even afterwards; evening one split
+// while a nested one stays lopsided is not what anyone is asking for.
+export function equalizeAll(tree: LayoutNode): LayoutNode {
+  const walk = (n: LayoutNode): LayoutNode => {
+    if (n.kind === 'group') return n;
+    const children = n.children.map(walk);
+    return { kind: 'split', dir: n.dir, children, sizes: children.map(() => 1 / children.length) };
+  };
+  return normalize(walk(tree));
+}
+
+// minFractionFor converts the pixel minimum into the fraction a divider
+// drag may not cross, given the span it is dividing. A pane can't be
+// dragged below a readable grid — the same rule canSplit enforces up
+// front, applied continuously.
+export function minFractionFor(dir: Dir, span: number): number {
+  if (span <= 0) return 0.08;
+  const px = dir === 'row' ? MIN_PANE_W : MIN_PANE_H;
+  return Math.min(0.45, px / span);
+}
+
 // pruneToChannels drops every tab whose channel is no longer live and
 // repairs the tree around the holes. This is the restore path: a persisted
 // leaf whose pty died while the browser was away must not leave a blank
@@ -407,6 +433,7 @@ export function layout(tree: LayoutNode, rect: Rect, opts: LayoutOpts = {}): {
           path,
           index: i,
           dir: n.dir,
+          span: inner,
           rect: horizontal
             ? { x: at, y: r.y, w: gutter, h: r.h }
             : { x: r.x, y: at, w: r.w, h: gutter },

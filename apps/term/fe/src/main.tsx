@@ -19,7 +19,7 @@
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Check, Columns2, Globe, Plus, Rows2, ShieldAlert, User, X } from 'lucide-solid';
+import { Check, Columns2, Globe, Maximize2, Minimize2, Plus, Rows2, ShieldAlert, User, X } from 'lucide-solid';
 import {
   Button,
   Menu, MenuItem, MenuSeparator, Terminal,
@@ -33,11 +33,14 @@ import { PasteOverlay } from './PasteOverlay';
 import {
   DEFAULT_GUTTER, ROOT,
   addTab as treeAddTab, canSplit, channels as treeChannels, closeTab as treeCloseTab,
-  focusNeighbor, fromPersisted, groupAt, groupPaths, layout as layoutTree,
-  moveTabBefore, pathOfChannel, pruneToChannels, setActiveTab, singleGroup,
-  splitGroup, toPersisted,
+  equalizeAll, focusNeighbor, fromPersisted, groupAt, groupPaths, layout as layoutTree,
+  minFractionFor, moveTabBefore, pathOfChannel, pruneToChannels, resizeSplit,
+  setActiveTab, singleGroup, splitGroup, toPersisted,
 } from './layout';
-import type { Dir, FocusDir, LayoutNode, PersistedNode, PlacedGroup, Rect } from './layout';
+import { nodeAt } from './layout';
+import type {
+  Dir, FocusDir, LayoutNode, PersistedNode, PlacedDivider, PlacedGroup, Rect,
+} from './layout';
 
 interface BEMessage {
   kind: string;
@@ -187,12 +190,38 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // computed in px, so the layout has to be recomputed when the window
   // resizes; each <Terminal> then refits itself off its own observer.
   const [stage, setStage] = createSignal<{ w: number; h: number }>({ w: 0, h: 0 });
+  // Zoom is VIEW state, not tree state: the zoomed group takes the whole
+  // stage and the others are simply not placed. Nothing in the tree moves,
+  // so unzoom is exact — and it deliberately does not persist.
+  const [zoomPath, setZoomPath] = createSignal<string | null>(null);
+  // A divider drag in flight. Rects commit on RELEASE: refitting every
+  // pane on every mousemove is an xterm reflow storm plus a resize frame
+  // per pty per tick (docs/TERM_LAYOUT.md §6). While dragging, only this
+  // preview moves.
+  const [drag, setDrag] = createSignal<{
+    path: string; index: number; dir: Dir; span: number; rect: Rect; delta: number;
+  } | null>(null);
 
   // placement is the whole render contract: where every group and divider
   // goes. Recomputed when the tree or the stage changes, nothing else.
   const placement = createMemo(() => {
     const s = stage();
-    return layoutTree(tree(), { x: 0, y: 0, w: s.w, h: s.h }, { gutter: GUTTER, strip: STRIP_HEIGHT });
+    const rect = { x: 0, y: 0, w: s.w, h: s.h };
+    const full = layoutTree(tree(), rect, { gutter: GUTTER, strip: STRIP_HEIGHT });
+    const zoom = zoomPath();
+    if (zoom === null) return full;
+    const target = full.groups.find((g) => g.path === zoom);
+    // A stale zoom path (its group collapsed under it) falls back to the
+    // real layout rather than showing nothing.
+    if (!target) return full;
+    return {
+      groups: [{
+        ...target,
+        rect,
+        content: { x: rect.x, y: rect.y + STRIP_HEIGHT, w: rect.w, h: Math.max(0, rect.h - STRIP_HEIGHT) },
+      }],
+      dividers: [],
+    };
   });
   // Group paths are stable strings, so <For> reuses strip rows across a
   // relayout instead of rebuilding them on every resize tick.
@@ -444,6 +473,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // than opening a pane you can't read — canSplit measures the pane the user
   // is actually looking at, so the answer changes with the window size.
   const splitAt = (path: string, dir: Dir) => {
+    // Splitting a zoomed pane would put the new one somewhere invisible.
+    // Unzoom first: the user asked to see two things.
+    setZoomPath(null);
     const g = placedAt(path);
     if (!g || !canSplit(g.rect, dir, { gutter: GUTTER })) return;
     focusGroup(path);
@@ -464,7 +496,72 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     return !!g && canSplit(g.rect, dir, { gutter: GUTTER });
   };
 
-  const paneCount = (): number => placement().groups.length;
+  // paneCount is the number of panes the TREE has, not the number
+  // currently placed — while zoomed only one is placed, and "Close Pane"
+  // must not grey out just because the others are hidden.
+  const paneCount = (): number => groupPaths(tree()).length;
+
+  // toggleZoom fills the stage with one pane and hides the rest. tmux's
+  // Ctrl-b z: a temporary "let me see this one properly", not a layout
+  // change — the tree is untouched, so unzoom restores it exactly.
+  const toggleZoom = (path?: string) => {
+    const target = path ?? focusedGroup()?.path;
+    if (target === undefined) return;
+    if (zoomPath() === target) { setZoomPath(null); return; }
+    if (paneCount() < 2) return;
+    setFocusPath(target);
+    setZoomPath(target);
+    requestAnimationFrame(() => apis.get(active())?.focus());
+  };
+
+  const isZoomed = (): boolean => zoomPath() !== null;
+
+  // equalizeFocused rebalances every split in the window, not just the one
+  // under the focus — "equalize" means the whole thing looks even.
+  const equalizeFocused = () => {
+    if (paneCount() < 2) return;
+    setZoomPath(null);
+    setTree(equalizeAll(tree()));
+    persist();
+  };
+
+  // ---- divider drag ----
+
+  // beginDividerDrag tracks the pointer and commits ONCE on release.
+  // The clamp uses the same pixel minimum canSplit enforces up front, so a
+  // pane can never be dragged narrower than it could have been created.
+  const beginDividerDrag = (d: PlacedDivider, ev: MouseEvent) => {
+    ev.preventDefault();
+    const horizontal = d.dir === 'row';
+    const start = horizontal ? ev.clientX : ev.clientY;
+    const minFrac = minFractionFor(d.dir, d.span);
+    const node = nodeAt(tree(), d.path);
+    const pair = node && node.kind === 'split'
+      ? node.sizes[d.index] + node.sizes[d.index + 1]
+      : 1;
+    const leading = node && node.kind === 'split' ? node.sizes[d.index] : 0.5;
+    // Pixel bounds for the preview, from the fraction bounds.
+    const lo = (minFrac - leading) * d.span;
+    const hi = (pair - minFrac - leading) * d.span;
+
+    setDrag({ path: d.path, index: d.index, dir: d.dir, span: d.span, rect: d.rect, delta: 0 });
+    const move = (m: MouseEvent) => {
+      const raw = (horizontal ? m.clientX : m.clientY) - start;
+      const cur = drag();
+      if (cur) setDrag({ ...cur, delta: Math.max(lo, Math.min(hi, raw)) });
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      const cur = drag();
+      setDrag(null);
+      if (!cur || cur.delta === 0) return;
+      setTree(resizeSplit(tree(), cur.path, cur.index, cur.delta / cur.span, minFrac));
+      persist();
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
 
   // focusDir moves the focus ring geometrically — the pane under the arrow,
   // which in a nested tree is routinely not the tree-order neighbour.
@@ -889,6 +986,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       if (k === 'w') { requestCloseTab(active()); return false; }
       if (k === 'd') { splitFocused('row'); return false; }
       if (k === 'e') { splitFocused('col'); return false; }
+      if (k === 'z') { toggleZoom(); return false; }
       const arrows: Record<string, FocusDir> = {
         arrowleft: 'left', arrowright: 'right', arrowup: 'up', arrowdown: 'down',
       };
@@ -1189,6 +1287,20 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           />
           <MenuSeparator />
           <MenuItem
+            label={isZoomed() ? 'Unzoom Pane' : 'Zoom Pane'}
+            data-testid="term-menu-zoom"
+            trailing={<span style={shortcutStyle}>Ctrl+Shift+Z</span>}
+            disabled={paneCount() < 2}
+            onClick={run(() => toggleZoom())}
+          />
+          <MenuItem
+            label="Equalize"
+            data-testid="term-menu-equalize"
+            disabled={paneCount() < 2}
+            onClick={run(equalizeFocused)}
+          />
+          <MenuSeparator />
+          <MenuItem
             label="Next Pane"
             data-testid="term-menu-next-pane"
             trailing={<span style={shortcutStyle}>Ctrl+Shift+→</span>}
@@ -1349,6 +1461,40 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   initialModes={tab.modes}
                   onModesChanged={(m) => onTabModes(tab, m)}
                   beforePaste={beforePaste}
+                  menuExtras={(close) => {
+                    // Shift+right-click inside a pane: the pane verbs, in
+                    // the menu the terminal already owns. Plain
+                    // right-click stays the direct copy/paste gesture.
+                    const path = () => pathOfChannel(tree(), tab.channelID) ?? ROOT;
+                    return (
+                      <>
+                        <MenuItem
+                          label="Split Right"
+                          data-testid="term-ctx-split-right"
+                          disabled={!placedAt(path()) || !canSplit(placedAt(path())!.rect, 'row', { gutter: GUTTER })}
+                          onClick={() => { close(); splitAt(path(), 'row'); }}
+                        />
+                        <MenuItem
+                          label="Split Down"
+                          data-testid="term-ctx-split-down"
+                          disabled={!placedAt(path()) || !canSplit(placedAt(path())!.rect, 'col', { gutter: GUTTER })}
+                          onClick={() => { close(); splitAt(path(), 'col'); }}
+                        />
+                        <MenuItem
+                          label={zoomPath() === path() ? 'Unzoom Pane' : 'Zoom Pane'}
+                          data-testid="term-ctx-zoom"
+                          disabled={paneCount() < 2}
+                          onClick={() => { close(); toggleZoom(path()); }}
+                        />
+                        <MenuItem
+                          label="Close Pane"
+                          data-testid="term-ctx-close-pane"
+                          disabled={paneCount() < 2}
+                          onClick={() => { close(); requestCloseTab(tab.channelID); }}
+                        />
+                      </>
+                    );
+                  }}
                   onReady={(api) => {
                     apis.set(tab.channelID, api);
                     if (active() === tab.channelID) api.focus();
@@ -1418,6 +1564,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   </Button>
                   <Button
                     variant="icon"
+                    data-testid="term-zoom"
+                    title={zoomPath() === path ? 'Unzoom (Ctrl+Shift+Z)' : 'Zoom pane (Ctrl+Shift+Z)'}
+                    style={ctlBtnStyle}
+                    disabled={paneCount() < 2}
+                    onClick={() => toggleZoom(path)}
+                  >
+                    {zoomPath() === path ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                  </Button>
+                  <Button
+                    variant="icon"
                     data-testid="term-split-down"
                     title="Split down (Ctrl+Shift+E)"
                     style={ctlBtnStyle}
@@ -1431,24 +1587,55 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             );
           }}
         </For>
-        {/* Dividers. Static rules in M1; M2 makes them draggable (the
-            kernel's resizeSplit is already there and tested). */}
+        {/* Dividers. The hit area is padded well beyond the 4px rule —
+            a 4px grab target is a bad mouse target — but only the rule
+            itself is painted. */}
         <For each={placement().dividers}>
+          {(d) => {
+            const horizontal = () => d.dir === 'row';
+            const dragging = () => drag()?.path === d.path && drag()?.index === d.index;
+            return (
+              <div
+                data-testid="term-divider"
+                data-dir={d.dir}
+                data-dragging={dragging() ? 'true' : 'false'}
+                style={{
+                  position: 'absolute',
+                  left: `${horizontal() ? d.rect.x - 2 : d.rect.x}px`,
+                  top: `${horizontal() ? d.rect.y : d.rect.y - 2}px`,
+                  width: `${horizontal() ? d.rect.w + 4 : d.rect.w}px`,
+                  height: `${horizontal() ? d.rect.h : d.rect.h + 4}px`,
+                  background: dragging() ? 'transparent' : tokens.borderMenu,
+                  'background-clip': 'content-box',
+                  padding: horizontal() ? '0 2px' : '2px 0',
+                  'box-sizing': 'border-box',
+                  cursor: horizontal() ? 'col-resize' : 'row-resize',
+                  'z-index': 2,
+                }}
+                onMouseDown={(ev) => beginDividerDrag(d, ev)}
+              />
+            );
+          }}
+        </For>
+        {/* Drag preview: the only thing that moves until the mouse comes
+            up, at which point the rects commit in one step. */}
+        <Show when={drag()}>
           {(d) => (
             <div
-              data-testid="term-divider"
-              data-dir={d.dir}
+              data-testid="term-divider-preview"
               style={{
                 position: 'absolute',
-                left: `${d.rect.x}px`,
-                top: `${d.rect.y}px`,
-                width: `${d.rect.w}px`,
-                height: `${d.rect.h}px`,
-                background: tokens.borderMenu,
+                left: `${d().rect.x + (d().dir === 'row' ? d().delta : 0)}px`,
+                top: `${d().rect.y + (d().dir === 'col' ? d().delta : 0)}px`,
+                width: `${d().rect.w}px`,
+                height: `${d().rect.h}px`,
+                background: tokens.accentBlue,
+                'z-index': 3,
+                'pointer-events': 'none',
               }}
             />
           )}
-        </For>
+        </Show>
       </div>
       <Show when={pendingPaste()}>
         {(p) => (
