@@ -134,6 +134,12 @@ export const MenuItem: Component<MenuItemProps> = (props) => {
     <button
       type="button"
       data-testid={props['data-testid']}
+      // Disabled for real, not just dimmed: without the attribute the item
+      // stays keyboard-focusable and assistive tech announces it as
+      // available. The onClick guard below stays as the belt to this
+      // braces (a click can still be dispatched programmatically).
+      disabled={props.disabled}
+      aria-disabled={props.disabled ? 'true' : undefined}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       onClick={() => {
