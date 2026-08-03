@@ -139,6 +139,17 @@ bug list — all fully landed; see `git log` if you need their content.)
 
 ## Apps / UX
 
+- [ ] **wash-term split panes** — docs/TERM_LAYOUT.md, designed 2026-08-02,
+  not started. A window becomes a tree of tab *groups*: each leaf has its own
+  24px tab strip and split/zoom controls, splits nest, and there is no
+  window-level tab bar (tabs live only in strips). Layout is computed rects
+  over flat, never-reparented terminal hosts — that is the load-bearing
+  choice, since reparenting a mounted xterm loses its buffer. FE-only: no wire
+  or router change, and the persisted blob is already opaque to the BE. M1 is
+  kernel + strips + menu + keys + persistence at fixed 50/50; drag, zoom and
+  cross-group tab drag are M2. Note `Ctrl+Shift+W` changes meaning to
+  close-pane.
+
 - [ ] **Agent-aware terminals: follow-ups** — docs/AGENT_TERM.md. **M1–M7
   are all DONE** (M6 answer-from-the-desktop, M7 session resume), which closes **issue #19** (item 1 close-confirm shipped
   earlier, item 2 by M3's policy engine, item 3 by M5's smart paste). What
