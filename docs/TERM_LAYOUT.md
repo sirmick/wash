@@ -281,9 +281,26 @@ under the minimum; close-collapse and redistribution; same-dir flattening;
   divider drag, no zoom. Acceptance: split right and down, nest one inside the
   other, type in every pane, close panes back to one, reload and get the same
   layout.
-- **M2 — direct manipulation.** Draggable dividers (commit-on-release), zoom,
-  equalize, geometric focus keys, drag a tab between strips, pane context menu
-  (`menuExtras` on `<Terminal>`).
+- **M2 — direct manipulation. DONE.** Draggable dividers (commit-on-release),
+  zoom, equalize, drag a tab between strips, pane context menu. As built:
+  - The divider **hit area is padded to 8px** while only the 4px rule paints —
+    a 4px grab target is a bad mouse target.
+  - `PlacedDivider` gained `span` (the split's inner extent in px) so a drag
+    converts pixels to fractions without the renderer reconstructing the
+    parent's geometry, and `minFractionFor()` applies the same pixel minimum
+    `canSplit` enforces up front, continuously.
+  - **Zoom is view state** (`zoomPath`), never tree state: the zoomed group is
+    placed over the whole stage and the others are simply not placed. Unzoom is
+    therefore exact, a stale path falls back to the real layout, and splitting
+    while zoomed unzooms first. It deliberately does not persist.
+  - **Equalize rebalances every split**, not just the focused one
+    (`equalizeAll`) — evening one level while a nested split stays lopsided is
+    not what the word means.
+  - `<Terminal>` gained `menuExtras(close)`, an additive seam: the Shift+
+    right-click menu keeps Copy/Paste and appends the host's items. Plain
+    right-click is untouched.
+  - Cross-strip tab drag needed no new code — M1's `moveTabBefore` already
+    handled it, and the e2e proves the moved terminal keeps its scrollback.
 - **M3 — drop-zone splitting.** Drag a tab to a pane edge to split there; drag
   a pane out to its own window.
 - **M4 — layouts as objects.** Named/preset layouts, and the agent tie-in:

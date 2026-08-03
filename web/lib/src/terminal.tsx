@@ -16,11 +16,11 @@ import { FitAddon } from '@xterm/addon-fit';
 import { ensureScrollbarStyles } from './scrollbars';
 import type { ITheme } from '@xterm/xterm';
 import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
-import type { Component } from 'solid-js';
+import type { Component, JSX } from 'solid-js';
 
 import { tokens } from './tokens';
 import { washAssetUrl } from './assets';
-import { Menu, MenuItem } from './menu';
+import { Menu, MenuItem, MenuSeparator } from './menu';
 import { washCopyText, washPasteText } from './clipboard';
 import { washAppearance, onAppearanceChange } from './packs';
 
@@ -388,6 +388,12 @@ export interface TerminalProps {
   onTitle?: (title: string) => void;
   // contextMenu enables the right-click Copy/Paste menu (default on).
   contextMenu?: boolean;
+  // menuExtras appends host-supplied items to that menu (below a
+  // separator) — e.g. wash-term's pane verbs. It is handed a close
+  // callback so an item can dismiss the menu after acting. Plain
+  // Copy/Paste stays the default; consumers that pass nothing are
+  // unaffected.
+  menuExtras?: (close: () => void) => JSX.Element;
   // initialCols/initialRows open the fresh xterm at a specific grid
   // instead of fitting to the container — set them to the pty's
   // current size on reattach so the scrollback replay renders at the
@@ -976,6 +982,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
               data-testid="term-ctx-paste"
               onClick={doPaste}
             />
+            <Show when={props.menuExtras}>
+              <MenuSeparator />
+              {props.menuExtras!(() => setMenu(null))}
+            </Show>
           </Menu>
         )}
       </Show>

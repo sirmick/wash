@@ -1,4 +1,4 @@
-// wash-term split panes, M1 (docs/TERM_LAYOUT.md §9): a window is a tree
+// wash-term split panes, M1 + M2 (docs/TERM_LAYOUT.md §9): a window is a tree
 // of tab groups, each with its own strip, and the panes are laid out as
 // computed rects over flat terminal hosts.
 //
@@ -87,7 +87,7 @@ async function colsOf(page: Page, host: Locator): Promise<number> {
   return cols;
 }
 
-test.describe('term split panes (M1)', () => {
+test.describe('term split panes (M1 + M2)', () => {
   test.setTimeout(60_000);
 
   test('Ctrl+Shift+D splits right: two panes, two strips, both ptys resized', async ({ page, router }) => {
@@ -255,5 +255,154 @@ test.describe('term split panes (M1)', () => {
     expect(Math.abs(after[0].w - before[0].w)).toBeLessThan(8);
     expect(Math.abs(after[1].x - before[1].x)).toBeLessThan(8);
     await expect(page.locator('[data-testid="term-tabbar"]')).toHaveCount(2);
+  });
+
+  // ---- M2: direct manipulation ----
+
+  test('dragging a divider resizes both panes, and commits on release', async ({ page, router }) => {
+    await openTerminal(page, router.url);
+    await page.keyboard.press('Control+Shift+D');
+    await expect(page.locator('[data-testid="term-host"]:visible')).toHaveCount(2, { timeout: 10_000 });
+    const before = await panes(page);
+
+    const divider = page.locator('[data-testid="term-divider"]');
+    const box = (await divider.boundingBox())!;
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.mouse.move(cx - 120, cy, { steps: 8 });
+
+    // Mid-drag: the preview has moved but the PANES have not. This is the
+    // whole point of commit-on-release — no reflow storm, no resize frame
+    // per pty per tick.
+    await expect(page.locator('[data-testid="term-divider-preview"]')).toBeVisible();
+    const during = await panes(page);
+    expect(Math.abs(during[0].w - before[0].w)).toBeLessThan(2);
+
+    await page.mouse.up();
+    await expect(page.locator('[data-testid="term-divider-preview"]')).toHaveCount(0);
+
+    // Released: the left pane is ~120px narrower and the right one has it.
+    await expect.poll(async () => (await panes(page))[0].w, { timeout: 5_000 })
+      .toBeLessThan(before[0].w - 100);
+    const after = await panes(page);
+    expect(after[1].w).toBeGreaterThan(before[1].w + 100);
+    expect(Math.abs((after[0].w + after[1].w) - (before[0].w + before[1].w))).toBeLessThan(4);
+
+    // The narrowed pty learned its new width too.
+    const cols = await colsOf(page, after[0].host);
+    expect(cols).toBeLessThan(60);
+  });
+
+  test('a divider drag cannot squeeze a pane below a readable width', async ({ page, router }) => {
+    await openTerminal(page, router.url);
+    await page.keyboard.press('Control+Shift+D');
+    await expect(page.locator('[data-testid="term-host"]:visible')).toHaveCount(2, { timeout: 10_000 });
+
+    const divider = page.locator('[data-testid="term-divider"]');
+    const box = (await divider.boundingBox())!;
+    const cy = box.y + box.height / 2;
+    await page.mouse.move(box.x + box.width / 2, cy);
+    await page.mouse.down();
+    // Way past the left edge of the window.
+    await page.mouse.move(box.x - 2000, cy, { steps: 10 });
+    await page.mouse.up();
+
+    const after = await panes(page);
+    expect(after).toHaveLength(2);
+    expect(after[0].w).toBeGreaterThanOrEqual(120);
+  });
+
+  test('zoom fills the stage with one pane and restores exactly', async ({ page, router }) => {
+    await openTerminal(page, router.url);
+    await page.keyboard.press('Control+Shift+D');
+    await expect(page.locator('[data-testid="term-host"]:visible')).toHaveCount(2, { timeout: 10_000 });
+    const before = await panes(page);
+
+    await page.keyboard.press('Control+Shift+Z');
+    await expect(page.locator('[data-testid="term-host"]:visible')).toHaveCount(1, { timeout: 5_000 });
+    const zoomed = (await panes(page))[0];
+    expect(zoomed.w).toBeGreaterThan(before[0].w * 1.8);
+    // No divider to drag while one pane owns the stage.
+    await expect(page.locator('[data-testid="term-divider"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="term-tabbar"]')).toHaveCount(1);
+
+    await page.keyboard.press('Control+Shift+Z');
+    await expect(page.locator('[data-testid="term-host"]:visible')).toHaveCount(2, { timeout: 5_000 });
+    const after = await panes(page);
+    // Restored EXACTLY: zoom never touched the tree.
+    expect(Math.abs(after[0].w - before[0].w)).toBeLessThan(2);
+    expect(Math.abs(after[1].x - before[1].x)).toBeLessThan(2);
+  });
+
+  test('Equalize evens a lopsided window', async ({ page, router }) => {
+    await openTerminal(page, router.url);
+    await page.keyboard.press('Control+Shift+D');
+    await expect(page.locator('[data-testid="term-host"]:visible')).toHaveCount(2, { timeout: 10_000 });
+
+    const divider = page.locator('[data-testid="term-divider"]');
+    const box = (await divider.boundingBox())!;
+    const cy = box.y + box.height / 2;
+    await page.mouse.move(box.x + box.width / 2, cy);
+    await page.mouse.down();
+    await page.mouse.move(box.x - 150, cy, { steps: 6 });
+    await page.mouse.up();
+    await expect.poll(async () => {
+      const p = await panes(page);
+      return Math.abs(p[0].w - p[1].w);
+    }, { timeout: 5_000 }).toBeGreaterThan(200);
+
+    await page.locator('[data-testid="term-menu-split-btn"]').click();
+    await page.locator('[data-testid="term-menu-equalize"]').click();
+
+    await expect.poll(async () => {
+      const p = await panes(page);
+      return Math.abs(p[0].w - p[1].w);
+    }, { timeout: 5_000 }).toBeLessThan(8);
+  });
+
+  test('the pane context menu carries the split verbs', async ({ page, router }) => {
+    const host = await openTerminal(page, router.url);
+    // Shift+right-click is the terminal's own menu; the pane verbs are
+    // appended to it. Plain right-click stays copy/paste.
+    const box = (await host.boundingBox())!;
+    await page.keyboard.down('Shift');
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: 'right' });
+    await page.keyboard.up('Shift');
+
+    await expect(page.locator('[data-testid="term-context-menu"]')).toBeVisible();
+    await expect(page.locator('[data-testid="term-ctx-copy"]')).toBeVisible();
+    await expect(page.locator('[data-testid="term-ctx-zoom"]')).toBeDisabled();
+    await page.locator('[data-testid="term-ctx-split-right"]').click();
+    await expect(page.locator('[data-testid="term-host"]:visible')).toHaveCount(2, { timeout: 10_000 });
+  });
+
+  test('a tab dragged to another strip moves panes without losing its buffer', async ({ page, router }) => {
+    const first = await openTerminal(page, router.url);
+    // Two tabs in one group, then split so there are two strips.
+    await runIn(page, first, 'echo ORIGINALPANE');
+    await expect.poll(() => bufferOf(first), { timeout: 10_000 }).toContain('ORIGINALPANE');
+    await page.keyboard.press('Control+Shift+D');
+    await expect(page.locator('[data-testid="term-host"]:visible')).toHaveCount(2, { timeout: 10_000 });
+
+    const leftStrip = page.locator('[data-testid="term-tabbar"]').first();
+    const rightStrip = page.locator('[data-testid="term-tabbar"]').nth(1);
+    const leftTab = leftStrip.locator('button[data-testid^="term-tab-"]').first();
+    const rightTab = rightStrip.locator('button[data-testid^="term-tab-"]').first();
+
+    await leftTab.dragTo(rightTab);
+
+    // The left group is empty, so its pane collapsed and the right one
+    // owns the window — with BOTH tabs in one strip.
+    await expect(page.locator('[data-testid="term-tabbar"]')).toHaveCount(1, { timeout: 10_000 });
+    await expect(page.locator('[data-testid="term-divider"]')).toHaveCount(0);
+    await expect(page.locator('button[data-testid^="term-tab-"]')).toHaveCount(2);
+
+    // The moved terminal kept its scrollback — the DOM node never moved,
+    // which is the whole reason the layout is rects (docs/TERM_LAYOUT.md §2).
+    const moved = page.locator('[data-testid="term-host"]:visible');
+    await expect.poll(() => bufferOf(moved), { timeout: 5_000 }).toContain('ORIGINALPANE');
   });
 });

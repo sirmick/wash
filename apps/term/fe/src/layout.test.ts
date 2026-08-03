@@ -11,11 +11,13 @@ import {
   channels,
   closeTab,
   equalize,
+  equalizeAll,
   focusNeighbor,
   fromPersisted,
   groupAt,
   groupPaths,
   layout,
+  minFractionFor,
   moveTabBefore,
   normalize,
   pathOfChannel,
@@ -351,4 +353,48 @@ test('normalize is idempotent', () => {
   let t: LayoutNode = splitGroup(singleGroup([1, 2], 1), ROOT, 'row', 3);
   t = splitGroup(t, '1', 'col', 4);
   assert.deepEqual(normalize(normalize(t)), normalize(t));
+});
+
+test('dividers carry the span a drag needs to work in fractions', () => {
+  const t = splitGroup(singleGroup([1]), ROOT, 'row', 2);
+  const { dividers } = layout(t, STAGE, { gutter: 4, strip: 24 });
+  assert.equal(dividers[0].span, 996, 'the split span less its one gutter');
+  // A 100px drag on a 996px span is ~10 points of fraction.
+  const moved = resizeSplit(t, dividers[0].path, dividers[0].index, 100 / dividers[0].span) as Split;
+  assert.ok(Math.abs(moved.sizes[0] - (0.5 + 100 / 996)) < 1e-9);
+});
+
+test('divider span accounts for every gutter in an n-ary split', () => {
+  let t: LayoutNode = singleGroup([1]);
+  t = splitGroup(t, ROOT, 'row', 2);
+  t = splitGroup(t, '1', 'row', 3);
+  const { dividers } = layout(t, STAGE, { gutter: 4, strip: 24 });
+  assert.equal(dividers.length, 2);
+  for (const d of dividers) assert.equal(d.span, 992, '1000 less two gutters');
+});
+
+test('minFractionFor keeps a dragged pane readable', () => {
+  // A 1000px-wide row: the floor is the 140px minimum as a fraction.
+  assert.ok(Math.abs(minFractionFor('row', 1000) - 0.14) < 1e-9);
+  // A narrow split can't demand more than it has: capped, never absurd.
+  assert.equal(minFractionFor('row', 200), 0.45);
+  assert.ok(Math.abs(minFractionFor('col', 600) - 0.12) < 1e-9);
+});
+
+test('equalizeAll rebalances nested splits, not just the top level', () => {
+  let t: LayoutNode = singleGroup([1]);
+  t = splitGroup(t, ROOT, 'row', 2);          // 0.5 / 0.5
+  t = splitGroup(t, '1', 'col', 3);           // right becomes a column
+  t = resizeSplit(t, ROOT, 0, 0.25);          // 0.75 / 0.25
+  t = resizeSplit(t, '1', 0, 0.3);            // the nested column: 0.8 / 0.2
+  const even = equalizeAll(t) as Split;
+  assertInvariants(even, 'equalizeAll');
+  assert.deepEqual(even.sizes, [0.5, 0.5]);
+  const nested = even.children[1] as Split;
+  assert.deepEqual(nested.sizes, [0.5, 0.5], 'the nested column evened too');
+});
+
+test('equalizeAll leaves an unsplit window alone', () => {
+  const t = singleGroup([1, 2], 2);
+  assert.deepEqual(equalizeAll(t), t);
 });
