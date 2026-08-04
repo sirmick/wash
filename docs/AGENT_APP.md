@@ -294,6 +294,37 @@ loss bites, is **T0 alone** — a foreground-comm check that puts a muted dot
 on a tab and nothing else, ~30 lines, no hooks and no install. Recorded here
 so that decision stays deliberate rather than nostalgic.
 
+## 12b. Protocol risk — v2 is drafted, and is not a superset
+
+**v1 is the current stable version** and what `internal/acp` implements.
+A v2 schema exists upstream and restructures precisely the message this
+design leans on:
+
+| | v1 (implemented) | v2 (drafted) |
+|---|---|---|
+| permission request | `toolCall` + `options[{optionId,name,kind}]` | `title` / `description` / `subject` + `options[{id,label}]` |
+| option kinds | `allow_once`, `allow_always`, `reject_once`, `reject_always` | *(gone)* |
+| outcome | `selected` / `cancelled` | `accept` / `decline` / `cancel` |
+| `ToolCall` | `toolCallId,title,kind,status,content,locations,rawInput` | `{id, toolUse}` |
+| `sessionUpdate` | `agent_message_chunk`, `tool_call_update`, `plan` | `agent_message`, `message_chunk`, `state_update`, … |
+
+So §5's claim that ACP hands us a **durable-allow affordance for free** is
+a *v1* claim. Under v2 the "Always allow \<rule\>" button may go back to
+being wash's own derivation through `agentpolicy.SuggestRule` — which is
+survivable, because that code exists and is what the terminal tier uses
+today.
+
+Mitigation is structural, not hopeful: the version is negotiated in
+`initialize`, `Client.Initialize` **hard-errors** on any version it does
+not speak rather than proceeding half-wrong, and `types.go` holds exactly
+one version's shapes. v2 becomes a sibling file and a switch on the
+negotiated number.
+
+Second, smaller risk: **the v1 wire types are transcribed from the spec,
+not observed on a wire.** The first run against a real adapter is what
+confirms them. Budget a fix-up pass at the start of M3 — the transport
+underneath is independently tested and is not the part that will be wrong.
+
 ## 13. Testing
 
 The pivot makes testing strictly easier, which is corroboration. Today's
