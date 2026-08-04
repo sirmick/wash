@@ -35,10 +35,16 @@ import (
 // bounded by the one outside it.
 const askTTL = 30 * time.Second
 
-// maxPendingPerTab caps outstanding questions from one terminal tab. A
-// pty-resident process that spams asks gets deferred rather than turning
-// the sidebar into a queue of its own making.
-const maxPendingPerTab = 3
+// maxPendingPerRow caps outstanding questions from one roster row. A
+// process that spams asks gets deferred rather than turning the sidebar
+// into a queue of its own making.
+const maxPendingPerRow = 3
+
+// replyFn delivers a verdict to whoever asked. The queue deliberately does
+// not know whether that is a terminal across the router or a session this
+// process is hosting itself — it only knows how to call back. Every
+// producer supplies its own route at enqueue time (docs/AGENT_APP.md §4).
+type replyFn func(decision, why string) error
 
 // Ask is one question waiting for a human. It rides the roster's own
 // state push, so the sidebar needs no second subscription.
@@ -56,9 +62,15 @@ type Ask struct {
 	// button — what you clicked is what gets saved.
 	SuggestedRule string `json:"suggested_rule,omitempty"`
 	// RowKey ties the question to its roster row (same "<instance>:<chan>"
-	// key), so the sidebar can render it against the right agent.
-	RowKey       string `json:"row_key"`
-	TermInstance string `json:"term_instance"`
+	// key for terminals; hosted sessions mint their own), so the sidebar
+	// can render it against the right agent.
+	RowKey string `json:"row_key"`
+	// SourceApp / SourceInstance name the producer, for display and
+	// attribution only. The reply route is the closure on `pending`, never
+	// these — a question from a session agentd hosts itself has no
+	// instance to message.
+	SourceApp      string `json:"source_app,omitempty"`
+	SourceInstance string `json:"source_instance,omitempty"`
 	// AgeMS is how long it has been waiting, as of the push.
 	AgeMS int64 `json:"age_ms"`
 }
@@ -68,13 +80,29 @@ type Ask struct {
 type pending struct {
 	Ask
 	asked time.Time
-	// reqID is the terminal's own id for the request; the answer carries
-	// it back so the terminal can match its waiting socket handler.
-	reqID string
+	// reply is how this particular requester hears the verdict.
+	reply replyFn
 	timer *time.Timer
 }
 
+// askSpec is what a producer knows about a question before the queue gives
+// it an id.
+type askSpec struct {
+	Agent, Tool, Subject, Cwd string
+	RowKey                    string
+	SourceApp, SourceInstance string
+}
+
 var asks = map[string]*pending{}
+
+// The queue's two touches on the state service, indirected so its decision
+// logic — nobody-home, the per-row cap, and the promise that every path
+// answers exactly once — is unit-testable without a live StateService
+// (which needs a Bus, which needs a Conn).
+var (
+	stateSubscribers = func() int { return svc.SubscriberCount() }
+	mutateState      = func(fn func(*State)) { svc.Mutate(fn) }
+)
 
 // askSeq numbers questions within this process. Ids are opaque to
 // everyone else.
@@ -87,48 +115,15 @@ func registerAskHandlers(bus *sdk.Bus, c *sdk.Conn) {
 		if from.InstanceID == "" || req.ReqID == "" {
 			return nil
 		}
-		rowKey := rowKey(from.InstanceID, req.ChannelID)
-
-		// Nobody watching ⇒ answer now. This is the difference between
-		// "wash asks you" and "wash stalls your agent".
-		if svc.SubscriberCount() == 0 {
-			return answerTerminal(conn, from.InstanceID, req.ReqID, DecisionDefer, "no desktop")
-		}
-
-		now := time.Now()
-		var over bool
-		svc.Mutate(func(s *State) {
-			if countForRow(rowKey) >= maxPendingPerTab {
-				over = true
-				return
-			}
-			askSeq++
-			id := "ask-" + itoa(askSeq)
-			p := &pending{
-				Ask: Ask{
-					ID:            id,
-					Agent:         req.Agent,
-					Tool:          req.Tool,
-					Subject:       req.Subject,
-					Cwd:           req.Cwd,
-					Dir:           dirLabel(req.Cwd),
-					SuggestedRule: agentpolicy.SuggestRule(req.Tool, req.Subject, req.Cwd),
-					RowKey:        rowKey,
-					TermInstance:  from.InstanceID,
-				},
-				asked: now,
-				reqID: req.ReqID,
-			}
-			// Expiry is the safety net for a human who never answers.
-			p.timer = time.AfterFunc(askTTL, func() { expireAsk(conn, id) })
-			asks[id] = p
-			s.Asks = publishAsks(now)
-		})
-		if over {
-			log.Printf("agentd: ask rejected row=%s tool=%s reason=too-many-pending", rowKey, req.Tool)
-			return answerTerminal(conn, from.InstanceID, req.ReqID, DecisionDefer, "too many pending")
-		}
-		log.Printf("agentd: ask row=%s agent=%s tool=%s subject=%q", rowKey, req.Agent, req.Tool, req.Subject)
+		enqueueAsk(askSpec{
+			Agent:          req.Agent,
+			Tool:           req.Tool,
+			Subject:        req.Subject,
+			Cwd:            req.Cwd,
+			RowKey:         rowKey(from.InstanceID, req.ChannelID),
+			SourceApp:      termAppID,
+			SourceInstance: from.InstanceID,
+		}, replyToInstance(conn, from.InstanceID, req.ReqID))
 		return nil
 	})
 
@@ -136,7 +131,7 @@ func registerAskHandlers(bus *sdk.Bus, c *sdk.Conn) {
 	// which is the desktop speaking for the person in front of it.
 	sdk.HandleFromVoid(bus, "agent_answer", func(conn *sdk.Conn, _ string, req answerReq, _ wire.Sender) error {
 		var p *pending
-		svc.Mutate(func(s *State) {
+		mutateState(func(s *State) {
 			p = asks[req.ID]
 			if p == nil {
 				return
@@ -166,14 +161,65 @@ func registerAskHandlers(bus *sdk.Bus, c *sdk.Conn) {
 			}
 		}
 		log.Printf("agentd: answer id=%s tool=%s decision=%s remember=%v", req.ID, p.Tool, decision, req.Remember)
-		return answerTerminal(conn, p.TermInstance, p.reqID, decision, "desktop")
+		return p.reply(decision, "desktop")
 	})
 }
 
+// enqueueAsk puts a question in front of the human. It returns false when
+// it could not — nobody watching, or this row is already at its cap — in
+// which case `reply` has *already* been called with a defer. Every path
+// out of this function has answered the requester exactly once.
+func enqueueAsk(spec askSpec, reply replyFn) bool {
+	// Nobody watching ⇒ answer now. This is the difference between
+	// "wash asks you" and "wash stalls your agent".
+	if stateSubscribers() == 0 {
+		_ = reply(DecisionDefer, "no desktop")
+		return false
+	}
+
+	now := time.Now()
+	var over bool
+	mutateState(func(s *State) {
+		if countForRow(spec.RowKey) >= maxPendingPerRow {
+			over = true
+			return
+		}
+		askSeq++
+		id := "ask-" + itoa(askSeq)
+		p := &pending{
+			Ask: Ask{
+				ID:             id,
+				Agent:          spec.Agent,
+				Tool:           spec.Tool,
+				Subject:        spec.Subject,
+				Cwd:            spec.Cwd,
+				Dir:            dirLabel(spec.Cwd),
+				SuggestedRule:  agentpolicy.SuggestRule(spec.Tool, spec.Subject, spec.Cwd),
+				RowKey:         spec.RowKey,
+				SourceApp:      spec.SourceApp,
+				SourceInstance: spec.SourceInstance,
+			},
+			asked: now,
+			reply: reply,
+		}
+		// Expiry is the safety net for a human who never answers.
+		p.timer = time.AfterFunc(askTTL, func() { expireAsk(id) })
+		asks[id] = p
+		s.Asks = publishAsks(now)
+	})
+	if over {
+		log.Printf("agentd: ask rejected row=%s tool=%s reason=too-many-pending", spec.RowKey, spec.Tool)
+		_ = reply(DecisionDefer, "too many pending")
+		return false
+	}
+	log.Printf("agentd: ask row=%s agent=%s tool=%s subject=%q", spec.RowKey, spec.Agent, spec.Tool, spec.Subject)
+	return true
+}
+
 // expireAsk resolves a question nobody answered in time.
-func expireAsk(conn *sdk.Conn, id string) {
+func expireAsk(id string) {
 	var p *pending
-	svc.Mutate(func(s *State) {
+	mutateState(func(s *State) {
 		p = asks[id]
 		if p == nil {
 			return
@@ -185,17 +231,22 @@ func expireAsk(conn *sdk.Conn, id string) {
 		return
 	}
 	log.Printf("agentd: ask expired id=%s tool=%s after=%s", id, p.Tool, askTTL)
-	_ = answerTerminal(conn, p.TermInstance, p.reqID, DecisionDefer, "timeout")
+	_ = p.reply(DecisionDefer, "timeout")
 }
 
-// answerTerminal sends the verdict back to the terminal that asked.
-func answerTerminal(conn *sdk.Conn, instance, reqID, decision, why string) error {
-	return conn.SendAppMsgTo(wire.Recipient{InstanceID: instance}, map[string]any{
-		"kind":     "ask_result",
-		"req_id":   reqID,
-		"decision": decision,
-		"rule":     why,
-	})
+// replyToInstance is the reply route for a question that arrived over the
+// router: an ask_result app_msg back to the instance that asked. The
+// terminal tier's route today; any future app that asks on someone's
+// behalf uses the same one.
+func replyToInstance(conn *sdk.Conn, instance, reqID string) replyFn {
+	return func(decision, why string) error {
+		return conn.SendAppMsgTo(wire.Recipient{InstanceID: instance}, map[string]any{
+			"kind":     "ask_result",
+			"req_id":   reqID,
+			"decision": decision,
+			"rule":     why,
+		})
+	}
 }
 
 // publishAsks renders the pending list for the sidebar, oldest first —

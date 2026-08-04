@@ -43,7 +43,9 @@ export interface AgentAsk {
   /** what "Always allow" would write — shown ON the button */
   suggested_rule?: string;
   row_key: string;
-  term_instance: string;
+  /** who asked — attribution only; the answer routes by `id` in agentd */
+  source_app?: string;
+  source_instance?: string;
   age_ms: number;
 }
 
