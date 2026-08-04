@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -26,13 +27,21 @@ func addAsk(id, rowKey, tool string, asked time.Time) *pending {
 }
 
 // withState stands in for the live StateService: `subs` subscribers, and a
-// Mutate that just runs the function. Restores the real hooks on cleanup.
+// Mutate that runs the function under a lock. The lock is not incidental —
+// the real StateService.Mutate serializes every touch of the `asks` and
+// `rows` maps, and a stub without it would let a test race on state that
+// production never races on. Restores the real hooks on cleanup.
 func withState(t *testing.T, subs int) {
 	t.Helper()
 	oldSubs, oldMutate := stateSubscribers, mutateState
 	var st State
+	var mu sync.Mutex
 	stateSubscribers = func() int { return subs }
-	mutateState = func(fn func(*State)) { fn(&st) }
+	mutateState = func(fn func(*State)) {
+		mu.Lock()
+		defer mu.Unlock()
+		fn(&st)
+	}
 	t.Cleanup(func() { stateSubscribers, mutateState = oldSubs, oldMutate })
 }
 

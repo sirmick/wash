@@ -1,0 +1,382 @@
+// The ACP session host (docs/AGENT_APP.md §7, M3).
+//
+// agentd launches an adapter, owns the session, and answers what the agent
+// asks. The permission request is the whole point: it lands in the *same*
+// queue a terminal's request lands in (ask.go), so the sidebar renders it
+// with no idea which tier produced it.
+//
+// Three properties, in order of importance:
+//
+//   - **Defer is still the floor.** Every failure — no policy, no desktop,
+//     an expired question, a dead adapter — answers ACP's `cancelled`,
+//     which hands the decision back to the agent. This host never invents
+//     an allow, exactly as the terminal tier never did.
+//   - **One rule language.** ACP describes a tool call in its own
+//     vocabulary; §"toolRequest" translates it into the matcher's, so a
+//     user's existing `Bash(git push*)` rule governs both tiers.
+//   - **Liveness is a fact, not an inference.** We own the process, so a
+//     session ends when it ends. The roster sweep stays as a backstop for
+//     the terminal tier, not for this one.
+package agentd
+
+import (
+	"context"
+	"encoding/json"
+	"log"
+	"sync"
+	"time"
+
+	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/agentpolicy"
+	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/internal/wire"
+)
+
+// hostedAskTTL bounds how long the agent waits on a human. Slightly longer
+// than the queue's own askTTL so the queue's expiry is what fires, and the
+// agent hears "cancelled" once rather than racing two deadlines.
+const hostedAskTTL = askTTL + 5*time.Second
+
+// hosted is one ACP session this process owns.
+type hosted struct {
+	// key is the roster key, "acp:<n>". Deliberately not shaped like the
+	// terminal tier's "<instance>:<channel>" so the two can never collide.
+	key   string
+	agent string
+	cwd   string
+
+	client *acp.Client
+	// sessionID is the agent's own id — what history stores and what
+	// session/load resumes.
+	sessionID string
+	stop      func()
+}
+
+var (
+	hostedMu  sync.Mutex
+	hostedAll = map[string]*hosted{}
+	hostedSeq uint64
+)
+
+// register puts a started session in the registry and on the roster.
+func (h *hosted) register() {
+	hostedMu.Lock()
+	hostedAll[h.key] = h
+	hostedMu.Unlock()
+	h.setState("running", "")
+}
+
+// retire ends a session: off the roster, out of the registry, adapter
+// stopped. Safe to call twice.
+func (h *hosted) retire() {
+	hostedMu.Lock()
+	_, live := hostedAll[h.key]
+	delete(hostedAll, h.key)
+	hostedMu.Unlock()
+	if !live {
+		return
+	}
+	if h.stop != nil {
+		h.stop()
+	}
+	now := time.Now()
+	mutateState(func(s *State) {
+		delete(rows, h.key)
+		s.Rows = publish(now)
+		s.Recent = publishHistory()
+	})
+	saveHistory()
+	log.Printf("agentd: acp session ended key=%s agent=%s session=%s", h.key, h.agent, h.sessionID)
+}
+
+// setState upserts this session's roster row. Same four wire states the
+// terminal tier publishes, so the sidebar cannot tell the tiers apart —
+// which is the M3 acceptance criterion.
+func (h *hosted) setState(state, reason string) {
+	now := time.Now()
+	var wantGit string
+	var changed bool
+	mutateState(func(s *State) {
+		r := rows[h.key]
+		if r == nil {
+			r = &row{}
+			rows[h.key] = r
+		}
+		if r.State != state || r.Reason != reason {
+			r.stateSince = now
+			changed = true
+		}
+		r.lastSeen = now
+		r.Stale = false
+		r.Key = h.key
+		r.Agent = h.agent
+		r.State = state
+		r.Reason = reason
+		r.SessionID = h.sessionID
+		if h.cwd != "" && h.cwd != r.Cwd {
+			r.Cwd = h.cwd
+			r.Dir = dirLabel(h.cwd)
+			r.Branch, r.Dirty = "", false
+		}
+		if r.Cwd != "" {
+			wantGit = r.Cwd
+		}
+		if rememberSession(h.agent, h.sessionID, h.cwd, now) {
+			historyDirty = true
+		}
+		s.Rows = publish(now)
+		s.Recent = publishHistory()
+	})
+	if changed {
+		log.Printf("agentd: acp row key=%s agent=%s state=%s session=%s dir=%s",
+			h.key, h.agent, state, h.sessionID, dirLabel(h.cwd))
+	}
+	if wantGit != "" {
+		go resolveGit(wantGit)
+	}
+}
+
+// ---- acp.SessionHandler ----
+
+// SessionUpdate maps the agent's narration onto the roster. The transcript
+// consumes the same notifications in M4; this milestone renders none of
+// them, which is what makes it testable without a frontend.
+func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
+	switch n.Update.SessionUpdate {
+	case acp.UpdateAgentMessageChunk, acp.UpdateAgentThoughtChunk,
+		acp.UpdateToolCall, acp.UpdateToolCallUpdate, acp.UpdatePlan:
+		// Anything the agent says or does means it is working. A pending
+		// permission overrides this from RequestPermission, and the turn
+		// ending overrides it from prompt().
+		h.setState("working", "")
+	case "":
+		// A variant that did not decode. Logged rather than dropped: on a
+		// protocol under active development this is the early warning
+		// that a payload shape moved (AGENT_APP.md §12b).
+		log.Printf("agentd: acp update undecoded key=%s raw=%s", h.key, truncate(n.Update.Raw, 200))
+	}
+}
+
+// RequestPermission is the reason this file exists.
+//
+// Order: policy first (an allow/deny rule answers without troubling
+// anyone), then the human via the shared queue, then defer. The agent is
+// blocked throughout, which is why every branch below terminates.
+func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
+	pol := hostedPolicy()
+	preq := toolRequest(req.ToolCall, h.cwd)
+	res := agentpolicy.Evaluate(pol, preq)
+
+	switch res.Decision {
+	case agentpolicy.DecisionAllow:
+		log.Printf("agentd: acp decide key=%s tool=%s decision=allow rule=%q", h.key, preq.ToolName, res.Rule)
+		return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
+	case agentpolicy.DecisionDeny:
+		log.Printf("agentd: acp decide key=%s tool=%s decision=deny rule=%q", h.key, preq.ToolName, res.Rule)
+		return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
+	}
+
+	// No rule: ask the human where they already are. ask_desktop only
+	// bites when the policy is enabled, so a box that never opened the
+	// Agents pane is untouched — same opt-in as the terminal tier.
+	if !pol.Enabled || !pol.AskDesktopOrDefault() {
+		return acp.Cancelled(), nil
+	}
+
+	h.setState("needs-input", "permission")
+	defer h.setState("working", "")
+
+	answer := make(chan string, 1)
+	queued := enqueueAsk(askSpec{
+		Agent:          h.agent,
+		Tool:           preq.ToolName,
+		Subject:        agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput),
+		Cwd:            h.cwd,
+		RowKey:         h.key,
+		SourceApp:      AppID,
+		SourceInstance: "",
+	}, func(decision, _ string) error {
+		select {
+		case answer <- decision:
+		default:
+		}
+		return nil
+	})
+	if !queued {
+		// enqueueAsk already answered with defer; drain it so the channel
+		// send above cannot leak, then hand the decision back.
+		return acp.Cancelled(), nil
+	}
+
+	select {
+	case <-ctx.Done():
+		return acp.Cancelled(), nil
+	case d := <-answer:
+		switch d {
+		case DecisionAllow:
+			return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
+		case DecisionDeny:
+			return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
+		}
+		return acp.Cancelled(), nil
+	case <-time.After(hostedAskTTL):
+		return acp.Cancelled(), nil
+	}
+}
+
+// pick chooses the option to select for a decision, preferring the
+// one-shot kind over the durable one.
+//
+// wash deliberately never picks `allow_always`: "remember this" is already
+// recorded on OUR side, as a rule in agents.json written by the answer
+// handler. Selecting the agent's durable option too would put the same
+// consent in two places that can then disagree — and only one of them is
+// visible in the Agents pane.
+//
+// An agent that offered neither kind gets `cancelled`, which is honest:
+// we could not express the answer in the options it gave us.
+func pick(options []acp.PermissionOption, want, fallback string) acp.RequestPermissionResponse {
+	for _, o := range options {
+		if o.Kind == want {
+			return acp.Selected(o.OptionID)
+		}
+	}
+	for _, o := range options {
+		if o.Kind == fallback {
+			return acp.Selected(o.OptionID)
+		}
+	}
+	return acp.Cancelled()
+}
+
+// toolRequest translates ACP's description of a tool call into the
+// matcher's vocabulary, so one rule file governs both tiers and a user's
+// existing `Bash(git push*)` keeps working when the session moves to ACP.
+//
+// Lossy on purpose: ACP classifies by *kind* (what sort of thing this is)
+// where the rule language names a *tool* (Claude Code's own names, which
+// the syntax was built to mirror). The mapping is the obvious one, and an
+// unmapped kind becomes a tool name no rule will match — so a new ACP kind
+// can only ever fall through to asking, never to allowing.
+func toolRequest(tc acp.ToolCall, cwd string) agentpolicy.Request {
+	name := map[string]string{
+		acp.ToolKindExecute: "Bash",
+		acp.ToolKindRead:    "Read",
+		acp.ToolKindEdit:    "Edit",
+		acp.ToolKindDelete:  "Delete",
+		acp.ToolKindMove:    "Move",
+		acp.ToolKindSearch:  "Grep",
+		acp.ToolKindFetch:   "WebFetch",
+	}[tc.Kind]
+	if name == "" {
+		// Unmapped kind: a tool name no rule can match, so a new ACP
+		// kind falls through to asking rather than to allowing.
+		name = "Acp:" + tc.Kind
+	}
+
+	// The subject is what a rule's pattern matches. rawInput is the real
+	// thing when the adapter sends it; the title is a human-facing string
+	// and only a fallback.
+	input := map[string]any{}
+	if len(tc.RawInput) > 0 {
+		_ = json.Unmarshal(tc.RawInput, &input)
+	}
+	if agentpolicy.ToolSubject(name, input) == "" && tc.Title != "" {
+		input = map[string]any{subjectKeyFor(name): tc.Title}
+	}
+	return agentpolicy.Request{ToolName: name, ToolInput: input, Cwd: cwd}
+}
+
+// subjectKeyFor is the input key ToolSubject reads for a given tool, used
+// when falling back to the title.
+func subjectKeyFor(tool string) string {
+	switch tool {
+	case "Read", "Edit", "Delete", "Move":
+		return "file_path"
+	case "Grep":
+		return "pattern"
+	case "WebFetch":
+		return "url"
+	}
+	return "command"
+}
+
+// hostedPolicy reads the rule file fresh. One stat per permission request
+// is not a cost worth a stale answer — this is the moment a user is
+// watching for a rule to take effect (AGENT_TERM §9.6).
+// Indirected like the queue's state hooks, so the decision logic above is
+// reachable in a unit test without a policy file on disk.
+var hostedPolicy = func() agentpolicy.Policy {
+	return agentpolicy.Load(agentpolicy.Path())
+}
+
+func truncate(b []byte, n int) string {
+	if len(b) <= n {
+		return string(b)
+	}
+	return string(b[:n]) + "…"
+}
+
+// ---- bus verbs ----
+
+// registerACPHandlers installs the verbs the agent app drives. They exist
+// in M3, before the app does, because the milestone's acceptance is that
+// the *backend* works — a Codex permission request reaching the sidebar
+// with no frontend change at all.
+func registerACPHandlers(bus *sdk.Bus) {
+	// agent_start: launch an adapter and open a session.
+	sdk.HandleFromVoid(bus, "agent_start", func(conn *sdk.Conn, _ string, req startReq, from wire.Sender) error {
+		h, err := startHosted(req.Agent, req.Cwd)
+		if err != nil {
+			log.Printf("agentd: acp start agent=%s cwd=%s: %v", req.Agent, req.Cwd, err)
+			if from.InstanceID != "" {
+				return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
+					"kind":  "agent_started",
+					"error": err.Error(),
+				})
+			}
+			return nil
+		}
+		if req.Prompt != "" {
+			go promptHosted(h, req.Prompt)
+		}
+		if from.InstanceID == "" {
+			return nil
+		}
+		return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
+			"kind":       "agent_started",
+			"key":        h.key,
+			"session_id": h.sessionID,
+		})
+	})
+
+	// agent_prompt: another turn on a live session.
+	sdk.HandleFromVoid(bus, "agent_prompt", func(_ *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
+		h := lookupHosted(req.Key)
+		if h == nil {
+			log.Printf("agentd: acp prompt for unknown session key=%s", req.Key)
+			return nil
+		}
+		go promptHosted(h, req.Text)
+		return nil
+	})
+
+	// agent_stop: end a session and its adapter.
+	sdk.HandleFromVoid(bus, "agent_stop", func(_ *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
+		if h := lookupHosted(req.Key); h != nil {
+			h.retire()
+		}
+		return nil
+	})
+}
+
+type startReq struct {
+	Agent  string `json:"agent"`
+	Cwd    string `json:"cwd"`
+	Prompt string `json:"prompt,omitempty"`
+}
+
+type promptReq struct {
+	Key  string `json:"key"`
+	Text string `json:"text,omitempty"`
+}

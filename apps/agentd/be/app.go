@@ -53,6 +53,11 @@ type State struct {
 	// Recent is the remembered session history (§13) — what a reboot or a
 	// closed window would otherwise have cost you.
 	Recent []Session `json:"recent,omitempty"`
+	// Adapters is which agents this box can actually launch over ACP
+	// (docs/AGENT_APP.md §6). The launcher renders unavailable ones greyed
+	// with their reason rather than hiding them, so "why can I not pick
+	// Claude here" has an answer on screen.
+	Adapters []Adapter `json:"adapters,omitempty"`
 }
 
 // Row is one agent in one terminal tab.
