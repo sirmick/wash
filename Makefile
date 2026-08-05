@@ -63,7 +63,7 @@ SC      := $(OUT)/singlecall
 # compositor; the gated `test` app is woven in where TEST_APP applies.
 FE_APPS := session about connect imageview term fm edit vscode-workbench \
            settings top disks journal syslogs services packages net \
-           washamp music radio
+           washamp music radio ai
 FE_PANEL_APPS := vscode netd remote
 SVC_APPS := bulk priv notify audio fswatch agentd
 

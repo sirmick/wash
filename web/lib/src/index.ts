@@ -39,6 +39,8 @@ export type { TerminalProps, TerminalAPI, TermFont, TermModes, TermTheme } from 
 export { washCopyText, washPasteText, systemCopyText, systemCopyTextChecked } from './clipboard';
 export { analyzePaste, joinWrapped } from './paste-analyze';
 export type { PasteAnalysis, PasteIssue, PasteOptions } from './paste-analyze';
+export { AgentSession } from './agent-session';
+export type { AgentSessionProps, AgentEvent, AgentAsk, AgentStatus } from './agent-session';
 export { defineWashApp } from './define-app';
 export { ensureScrollbarStyles, WASH_SCROLL_CLASS, WASH_SCROLL_GUTTER_CLASS } from './scrollbars';
 export type { WashAppProps, DefineWashAppOptions } from './define-app';
