@@ -1,6 +1,17 @@
-// `wash agent-hooks install|remove|status` — the headless face of the
-// hook installer (docs/AGENT_TERM.md §4). The Settings → Agents panel
-// will call the same Install/Remove/Status functions; this exists so a
+// `wash agent-hooks remove|status` — the CLEANUP face of the retired hook
+// installer (docs/AGENT_APP.md §10).
+//
+// The intercept tier is gone: wash no longer installs hooks into a
+// vendor's settings file, because agentd hosts sessions over ACP instead.
+// But anyone who ran `wash agent-hooks install` on an older build still
+// has entries in ~/.claude/settings.json pointing at a wash-agent-hook
+// binary this build no longer ships, and a stale hook command is an error
+// on every tool call inside their agent.
+//
+// So `remove` and `status` survive one release as a cleanup path, and
+// `install` is gone. This whole file goes with the next release.
+//
+// (The original doc comment: the headless face of the hook installer; a
 // remote box with no browser in front of it is one ssh command away from
 // agent-aware terminals.
 package agenthook
@@ -46,7 +57,13 @@ func RunCLI(args []string) int {
 
 	switch verb {
 	case "install":
-		return cliInstall(*path, *command, *dryRun)
+		fmt.Fprintln(os.Stderr, "wash agent-hooks install: removed.\n\n"+
+			"wash no longer intercepts an agent's hooks. Start agents from the\n"+
+			"Agent app instead, which runs them over the Agent Client Protocol\n"+
+			"and answers their permission requests from the desktop.\n\n"+
+			"Run `wash agent-hooks remove` to clean up entries an older wash\n"+
+			"installed — they point at a binary this build no longer ships.")
+		return 2
 	case "remove", "uninstall":
 		return cliRemove(*path, *dryRun)
 	case "status", "":
@@ -65,7 +82,7 @@ func cliUsage(w io.Writer) {
 	fmt.Fprintln(w, `wash agent-hooks — teach Claude Code to report its state to wash terminals
 
   wash agent-hooks status     show which hooks are installed (default)
-  wash agent-hooks install    merge wash's hook entries into the settings file
+  wash agent-hooks remove     delete the hook entries an older wash installed
   wash agent-hooks remove     take them back out again
 
 Flags:
@@ -78,37 +95,6 @@ The merge is additive and idempotent: other hooks and settings are left
 alone, and remove only deletes entries wash added. Claude Code re-reads
 its settings file live, so running sessions pick this up without a
 restart.`)
-}
-
-func cliInstall(path, command string, dryRun bool) int {
-	settings, err := LoadSettings(path)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "wash agent-hooks:", err)
-		return 1
-	}
-	added, updated := Install(settings, command, ClaudeHooks)
-	if dryRun {
-		data, err := EncodeSettings(settings)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "wash agent-hooks:", err)
-			return 1
-		}
-		fmt.Printf("# %s (dry run: %d to add, %d to correct)\n", path, added, updated)
-		os.Stdout.Write(data)
-		return 0
-	}
-	if added == 0 && updated == 0 {
-		fmt.Printf("already installed: %d hooks in %s\n", len(ClaudeHooks), path)
-		return 0
-	}
-	if err := SaveSettings(path, settings); err != nil {
-		fmt.Fprintln(os.Stderr, "wash agent-hooks:", err)
-		return 1
-	}
-	fmt.Printf("installed %d hook(s), corrected %d, in %s\n", added, updated, path)
-	fmt.Printf("  helper: %s\n", command)
-	fmt.Println("  Claude Code reloads settings live — running sessions are covered.")
-	return 0
 }
 
 func cliRemove(path string, dryRun bool) int {

@@ -1,3 +1,19 @@
+> **SUPERSEDED (2026-08-04).** The mechanism in this document — hook
+> installation into a vendor's settings file, the OSC 7770 status channel,
+> the per-tab decision socket and the typed-`y` output tap — has been
+> **removed**. wash now launches agents itself over the Agent Client
+> Protocol and reads their tool calls and permission requests off a
+> JSON-RPC wire. See `docs/AGENT_APP.md`.
+>
+> What survives, and is still described accurately here: the approval
+> queue's semantics (§12), the roster's liveness and sort order (§7), the
+> session history behind Resume/Fork (§13), and the notification plumbing
+> (§9.2) — all of it now fed by agentd's ACP host instead of by terminals.
+>
+> **§10 / §9.5 (smart paste) is NOT superseded** and remains live.
+>
+> Kept as the record of why the approval centre is shaped the way it is.
+
 # Agent-aware terminals — design + implementation plan
 
 Goal, in one line: **wash terminals know when a coding agent is running in

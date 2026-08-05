@@ -352,22 +352,40 @@ func TestLoadSettingsMissingAndEmpty(t *testing.T) {
 	}
 }
 
-// The CLI is the M1 install path, so its verbs are covered end to end
-// (both argument orders, since `--path X install` is what muscle memory
-// produces).
+// The CLI is now the CLEANUP path (docs/AGENT_APP.md §10): install is
+// gone, remove and status survive one release so anyone who ran the old
+// installer can unwind it. The install entries are still written directly
+// here — that is what a stale file on a user's disk looks like, and
+// removing it is the only thing this CLI is still for.
 func TestRunCLI(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
 	if rc := RunCLI([]string{"status", "--path", path}); rc != 1 {
 		t.Errorf("status on a fresh file: rc=%d, want 1 (not installed)", rc)
 	}
-	if rc := RunCLI([]string{"install", "--path", path, "--command", "/usr/bin/wash-agent-hook"}); rc != 0 {
-		t.Fatalf("install: rc=%d", rc)
+
+	// install must refuse, and say so loudly enough to be actionable.
+	if rc := RunCLI([]string{"install", "--path", path}); rc == 0 {
+		t.Error("install still succeeded — the hook tier is retired")
+	}
+
+	// Stand in for a file an older wash wrote.
+	settings, err := LoadSettings(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added, _ := Install(settings, "/usr/bin/wash-agent-hook", ClaudeHooks); added == 0 {
+		t.Fatal("could not stage a legacy install to clean up")
+	}
+	if err := SaveSettings(path, settings); err != nil {
+		t.Fatal(err)
 	}
 	if rc := RunCLI([]string{"status", "--path", path}); rc != 0 {
-		t.Errorf("status after install: rc=%d, want 0", rc)
+		t.Errorf("status with legacy entries: rc=%d, want 0 (found)", rc)
 	}
-	// Flags before the verb.
+
+	// Flags before the verb — `--path X remove` is what muscle memory
+	// produces.
 	if rc := RunCLI([]string{"--path", path, "remove"}); rc != 0 {
 		t.Fatalf("remove: rc=%d", rc)
 	}
@@ -376,13 +394,5 @@ func TestRunCLI(t *testing.T) {
 	}
 	if rc := RunCLI([]string{"frobnicate", "--path", path}); rc != 2 {
 		t.Errorf("unknown verb: rc=%d, want 2", rc)
-	}
-	// --dry-run must not create or modify anything.
-	fresh := filepath.Join(dir, "fresh.json")
-	if rc := RunCLI([]string{"install", "--path", fresh, "--dry-run"}); rc != 0 {
-		t.Errorf("dry-run install: rc=%d", rc)
-	}
-	if _, err := os.Stat(fresh); !os.IsNotExist(err) {
-		t.Error("--dry-run wrote the file")
 	}
 }
