@@ -235,9 +235,10 @@ desktop-operating AI). This app is `com.wash.ai` unless that doc is renamed.
 
 Deleted outright:
 
-- `internal/agenthook/` (981 lines + 798 test) — `settings.go`, `decide.go`,
-  `agenthook.go`, `cli.go`
-- `cmd/wash-agent-hook/`, its multicall registry entry and Makefile `.PHONY`
+- `internal/agenthook/` in full (~1,400 lines + tests) — the hook payload
+  types, the decide socket, the settings-file merge and the CLI
+- `cmd/wash-agent-hook/`, its multicall case, its Makefile rule and its
+  BINS entry
 - `internal/pty/agentosc.go` (466) + `SetAgentHandler` + the tee in `pty.Open`
 - `apps/term/be/agentsock.go` (201), `askdesktop.go` (128),
   `autoapprove.go` (209) — and `SetOutputTap` / `Inject` if nothing else
@@ -247,19 +248,16 @@ Deleted outright:
 - e2e: `term-agent{,-notify,-policy,-roster,-ask,-resume}.spec.ts`,
   replaced by fake-adapter equivalents
 
-**The obligation:** anyone who ran `wash agent-hooks install` has entries in
-`~/.claude/settings.json` pointing at a binary that is about to stop
-existing. A stale hook command is a per-tool-call error inside their agent.
-So:
+**No migration path.** Decided 2026-08-04: hook entries an older wash
+wrote into `~/.claude/settings.json` are left where they are, and the
+`wash agent-hooks` CLI goes with everything else.
 
-1. **M3 ships the unwind**: `wash agent-hooks install` prints a deprecation
-   warning, `remove` keeps working, and wash logs a one-line warning at
-   startup if marked entries are still present.
-2. **M7 deletes the code**, but `wash agent-hooks remove` survives one
-   further release as a cleanup-only command before it goes too.
-
-Removal only ever touches entries marked by their `wash-agent-hook` command
-string, exactly as install did.
+The cost is real and accepted — a settings file naming a binary that no
+longer exists produces an error on every tool call inside that agent,
+until the user deletes the block by hand. The judgement is that the
+feature's install base is this repo, and carrying a cleanup CLI plus a
+startup warning plus a silent multicall stub through a release is more
+code than the problem is worth.
 
 `docs/AGENT_TERM.md` gains a header pointing here, and keeps §10/§9.5
 (smart paste) live.

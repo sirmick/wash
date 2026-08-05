@@ -26,7 +26,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sirmick/wash/internal/agenthook"
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/runner/fswatchd"
 	"github.com/sirmick/wash/internal/runner/launch"
@@ -63,15 +62,6 @@ func main() {
 		if vmloginRun != nil {
 			os.Exit(vmloginRun(os.Args[1:]))
 		}
-	case "wash-agent-hook":
-		// Retired (docs/AGENT_APP.md §10). It still answers, because a
-		// settings file an older wash wrote still names it and a missing
-		// binary is an error on every tool call. Printing nothing and
-		// exiting 0 is precisely what the hook contract calls "no
-		// opinion", so an un-cleaned install degrades to the agent's own
-		// behaviour instead of an error banner. `wash agent-hooks remove`
-		// is the actual fix, and this case goes with the next release.
-		os.Exit(0)
 	case "wash-fswatchd":
 		// Reject the router's app-probe cleanly (exit 2, matching the
 		// other non-app binaries) instead of starting the daemon, which
@@ -159,8 +149,6 @@ func runSubcommand(args []string) {
 		os.Exit(routerrun.Run(rest))
 	case "launch":
 		os.Exit(launch.Run(rest))
-	case "agent-hooks":
-		os.Exit(agenthook.RunCLI(rest))
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 	default:
@@ -208,8 +196,6 @@ Subcommands:
   wash list-apps                  list registered apps
   wash router [flags...]          run the router host (see wash router --help)
   wash launch [flags...]          run the wash-launch CLI (see wash launch --help)
-  wash agent-hooks remove         clean up hook entries an older wash installed
-                                  (the hook tier is retired; see AGENT_APP.md)
   wash <name> [args...]           shorthand for wash-<name> [args...]
   wash --wash-manifest            (not valid — manifests are per-app)`)
 }

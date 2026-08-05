@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
-	"github.com/sirmick/wash/internal/agenthook"
 	"github.com/sirmick/wash/internal/agentpolicy"
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/wire"
@@ -404,33 +403,4 @@ type startReq struct {
 type promptReq struct {
 	Key  string `json:"key"`
 	Text string `json:"text,omitempty"`
-}
-
-// warnLegacyHooks tells anyone who ran the retired `wash agent-hooks
-// install` that their settings file still points at a binary this build
-// no longer ships (docs/AGENT_APP.md §10).
-//
-// The multicall entry still exists and exits 0 silently, so a stale entry
-// degrades to "no opinion" rather than an error on every tool call — but
-// it is dead weight in a file wash wrote, and wash should be the one to
-// mention it. Once, at startup, and never again.
-func warnLegacyHooks(c *sdk.Conn) {
-	path := agenthook.SettingsPath()
-	settings, err := agenthook.LoadSettings(path)
-	if err != nil {
-		return // no file, or unreadable — nothing to say
-	}
-	states, _ := agenthook.Status(settings, agenthook.ClaudeHooks)
-	n := 0
-	for _, st := range states {
-		if st.Installed {
-			n++
-		}
-	}
-	if n == 0 {
-		return
-	}
-	log.Printf("agentd: %d legacy wash hook(s) still in %s — run `wash agent-hooks remove`", n, path)
-	c.Warn("Old wash agent hooks are still installed",
-		"Run `wash agent-hooks remove` — wash now runs agents itself instead of hooking them.")
 }

@@ -139,8 +139,6 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		return nil
 	})
 
-	go warnLegacyHooks(c)
-
 	registerAskHandlers(bus, c)
 	registerACPHandlers(bus, c)
 	registerTranscriptHandlers(bus)
