@@ -24,6 +24,7 @@ import (
 	"embed"
 	"io/fs"
 	"log"
+	"os"
 
 	agentd "github.com/sirmick/wash/apps/agentd/be"
 	"github.com/sirmick/wash/internal/apps/registry"
@@ -39,6 +40,10 @@ var assetsFS embed.FS
 const aiIcon = "bot"
 
 const agentdAppID = agentd.AppID
+
+// aiDebug traces the roster subscription, which is what drives the status
+// line and the working spinner. Off unless WASH_AGENT_DEBUG is set.
+var aiDebug = os.Getenv("WASH_AGENT_DEBUG") != ""
 
 var def *sdk.AppDef
 
@@ -148,6 +153,9 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 			return
 		}
 		session.key = str(m["key"])
+		if aiDebug {
+			log.Printf("wash-ai: session started key=%s", session.key)
+		}
 		// Watch this session's transcript — a separate subscription from
 		// the roster, deliberately (see agentd/transcript.go).
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
@@ -169,6 +177,9 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 		c.SendAppMsg(map[string]any{"kind": "event", "event": m["event"]})
 
 	case sdk.StateServiceKindState:
+		if aiDebug {
+			log.Printf("wash-ai: roster push key=%q state=%T", session.key, m["state"])
+		}
 		// The roster push carries adapters (for the launcher), this
 		// session's row (for the status line) and the pending questions.
 		c.SendAppMsg(map[string]any{

@@ -14,6 +14,7 @@
 import { For, Show, createEffect, createSignal, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
+import { Markdown } from './markdown';
 
 /** One line in a transcript, as agentd publishes it. */
 export interface AgentEvent {
@@ -314,7 +315,12 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                     : {}),
                 }}
               >
-                {e.text}
+                {/* Agents answer in Markdown; what you typed is literal.
+                    Rendering your own prompt as Markdown would eat the
+                    asterisks and backticks you meant to send. */}
+                <Show when={e.kind === 'message'} fallback={<>{e.text}</>}>
+                  <Markdown text={e.text ?? ''} />
+                </Show>
               </div>
             </Show>
           )}
