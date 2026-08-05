@@ -361,10 +361,30 @@ Three things real traffic taught that the spec pages did not:
 - `authMethods` advertises what is *available*, not what is *required*
   (§6).
 
-Still unverified because no turn has needed one: **`session/request_permission`
-has not been seen on a real wire.** It is the payload v2 restructures and
-the one this design leans on hardest, so it stays the top conformance
-target — a prompt that provokes a tool call is the next thing to run.
+**`session/request_permission` is now verified too**, provoked by a prompt
+that forces a shell write against claude-agent-acp 0.64.2. It matches
+`types.go` field for field:
+
+```json
+{"sessionId":"…",
+ "toolCall":{"toolCallId":"toolu_…","title":"echo hello > /tmp/…","kind":"execute",
+             "rawInput":{"command":"echo hello > /tmp/…","description":"…"}},
+ "options":[{"optionId":"reject","name":"Deny","kind":"reject_once"},
+            {"optionId":"allow","name":"Allow Once","kind":"allow_once"},
+            {"optionId":"allow_always","name":"Always Allow","kind":"allow_always"}]}
+```
+
+`rawInput.command` is exactly what agentd's `toolRequest` reads to build a
+`Bash(…)` subject, and answering `cancelled` left the file uncreated — so
+the defer floor holds against a real agent, not just a fake one.
+
+The one real bug this whole exercise found: **`content` is a single block
+on an `agent_message_chunk` and an ARRAY on a `tool_call`.** Decoding it as
+one shape dropped every `tool_call` notification, silently, with a log line
+as the only evidence. `SessionUpdate` now decodes field-by-field and never
+fails — one bad field costs that field, not the message — and keeps `Raw`
+so there is something left to diagnose with. That failure mode, not the
+field names, is what a young protocol actually costs you.
 
 ## 13. Testing
 

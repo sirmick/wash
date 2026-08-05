@@ -218,8 +218,8 @@ func TestNoiseOnStdoutIsSkipped(t *testing.T) {
 			if got[0].Update.SessionUpdate != UpdateAgentMessageChunk {
 				t.Fatalf("update kind = %q", got[0].Update.SessionUpdate)
 			}
-			if got[0].Update.Content.Text != "hello" {
-				t.Fatalf("text = %q", got[0].Update.Content.Text)
+			if got[0].Update.Content.String() != "hello" {
+				t.Fatalf("text = %q", got[0].Update.Content.String())
 			}
 			return
 		}
@@ -287,5 +287,68 @@ func TestAdapterExitUnblocksPendingCall(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Prompt hung after the adapter exited")
+	}
+}
+
+// The same `content` key is a single block on an agent_message_chunk and an
+// array on a tool_call. Decoding it as one shape dropped every tool_call
+// notification against claude-agent-acp 0.64.2 — silently, because the only
+// evidence was a log line.
+func TestContentDecodesBothShapes(t *testing.T) {
+	h := &recordingHandler{}
+	_, agent := newPair(t, h)
+
+	agent.send(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"one"}}}}`)
+	agent.send(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"t1","kind":"execute","status":"pending","content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}}}`)
+
+	got := waitFor(t, h, 2)
+	if got[0].Update.Content.String() != "one" {
+		t.Errorf("single block = %q", got[0].Update.Content.String())
+	}
+	if got[1].Update.SessionUpdate != UpdateToolCall {
+		t.Fatalf("second update = %q, want tool_call", got[1].Update.SessionUpdate)
+	}
+	if got[1].Update.Content.String() != "ab" {
+		t.Errorf("array content = %q, want %q", got[1].Update.Content.String(), "ab")
+	}
+	if got[1].Update.ToolCall.Kind != ToolKindExecute {
+		t.Errorf("tool kind lost: %+v", got[1].Update.ToolCall)
+	}
+}
+
+// One field with an unexpected shape must cost that field, not the whole
+// notification. Dropping the message is data loss in a transcript, and
+// invisible — which is how the array-content bug survived until a real
+// adapter was run.
+func TestOneBadFieldDoesNotDropTheUpdate(t *testing.T) {
+	h := &recordingHandler{}
+	_, agent := newPair(t, h)
+
+	agent.send(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"t9","kind":"execute","content":42}}}`)
+
+	got := waitFor(t, h, 1)
+	if got[0].Update.SessionUpdate != UpdateToolCall {
+		t.Errorf("discriminator lost: %q", got[0].Update.SessionUpdate)
+	}
+	if got[0].Update.ToolCall.ToolCallID != "t9" {
+		t.Errorf("sibling field lost: %+v", got[0].Update.ToolCall)
+	}
+	if len(got[0].Update.Raw) == 0 {
+		t.Error("Raw not preserved — nothing left to diagnose with")
+	}
+}
+
+func waitFor(t *testing.T, h *recordingHandler, n int) []SessionNotification {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		if got := h.seen(); len(got) >= n {
+			return got
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("only %d of %d updates arrived", len(h.seen()), n)
+		case <-time.After(5 * time.Millisecond):
+		}
 	}
 }

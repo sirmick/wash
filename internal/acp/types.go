@@ -13,7 +13,11 @@
 // conformance note in AGENT_APP.md §13.
 package acp
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+	"strings"
+)
 
 // ProtocolVersion is the version this client asks for.
 const ProtocolVersion = 1
@@ -111,6 +115,45 @@ type ContentBlock struct {
 
 func Text(s string) ContentBlock { return ContentBlock{Type: "text", Text: s} }
 
+// Content is one-or-many content blocks.
+//
+// The same `content` key is a single block on an agent_message_chunk and an
+// ARRAY on a tool_call — observed 2026-08-04 against claude-agent-acp
+// 0.64.2, where decoding it as a single block dropped every tool_call
+// notification on the floor. Accepting both is not defensive coding; it is
+// the shape.
+type Content []ContentBlock
+
+func (c *Content) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	if b[0] == '[' {
+		var many []ContentBlock
+		if err := json.Unmarshal(b, &many); err != nil {
+			return err
+		}
+		*c = many
+		return nil
+	}
+	var one ContentBlock
+	if err := json.Unmarshal(b, &one); err != nil {
+		return err
+	}
+	*c = Content{one}
+	return nil
+}
+
+// String joins the blocks' text, which is what a transcript line wants.
+func (c Content) String() string {
+	var sb strings.Builder
+	for _, b := range c {
+		sb.WriteString(b.Text)
+	}
+	return sb.String()
+}
+
 type PromptRequest struct {
 	SessionID string         `json:"sessionId"`
 	Prompt    []ContentBlock `json:"prompt"`
@@ -186,10 +229,37 @@ type ToolCall struct {
 // know about can still be logged rather than lost. A protocol under active
 // development will grow variants faster than we consume them.
 type SessionUpdate struct {
-	SessionUpdate string       `json:"sessionUpdate"`
-	Content       ContentBlock `json:"content,omitempty"`
+	SessionUpdate string  `json:"sessionUpdate"`
+	Content       Content `json:"content,omitempty"`
 	ToolCall
 	Raw json.RawMessage `json:"-"`
+}
+
+// UnmarshalJSON decodes what it can and never fails.
+//
+// The strict version dropped a whole notification when one field had an
+// unexpected shape, which is data loss in a transcript and — worse —
+// invisible, because the only evidence was a log line. On a protocol under
+// active development the right failure is a partly-populated update with
+// its Raw intact, not silence.
+func (u *SessionUpdate) UnmarshalJSON(b []byte) error {
+	type plain SessionUpdate
+	var p plain
+	if err := json.Unmarshal(b, &p); err == nil {
+		*u = SessionUpdate(p)
+		u.Raw = append([]byte(nil), b...)
+		return nil
+	}
+	// Field-by-field, so one bad shape costs one field.
+	var loose map[string]json.RawMessage
+	if err := json.Unmarshal(b, &loose); err != nil {
+		return err
+	}
+	*u = SessionUpdate{Raw: append([]byte(nil), b...)}
+	_ = json.Unmarshal(loose["sessionUpdate"], &u.SessionUpdate)
+	_ = json.Unmarshal(loose["content"], &u.Content)
+	_ = json.Unmarshal(b, &u.ToolCall)
+	return nil
 }
 
 type SessionNotification struct {

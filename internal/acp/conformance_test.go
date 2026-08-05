@@ -113,9 +113,20 @@ func TestConformanceAgainstRealAdapter(t *testing.T) {
 	}
 	t.Logf("session=%s", sid)
 
-	// One trivial turn. What matters is not the answer but that updates
-	// arrive and decode into the shapes the roster and transcript read.
-	if _, err := c.Prompt(ctx, sid, Text("Reply with the single word: ok")); err != nil {
+	// One turn. What matters is not the answer but that updates arrive and
+	// decode into the shapes the roster and transcript read.
+	//
+	// WASH_ACP_PROMPT overrides it — set it to something that forces a tool
+	// call to exercise session/request_permission, which is the payload
+	// this design leans on hardest and the one v2 restructures:
+	//
+	//	WASH_ACP_PROMPT='Run the shell command `git status --short` and summarise.' \
+	//	WASH_ACP_WANT_PERMISSION=1 ...
+	prompt := os.Getenv("WASH_ACP_PROMPT")
+	if prompt == "" {
+		prompt = "Reply with the single word: ok"
+	}
+	if _, err := c.Prompt(ctx, sid, Text(prompt)); err != nil {
 		t.Fatalf("session/prompt: %v", err)
 	}
 
@@ -123,6 +134,9 @@ func TestConformanceAgainstRealAdapter(t *testing.T) {
 	t.Logf("session/update kinds seen: %v", seen)
 	if len(seen) == 0 {
 		t.Error("a whole prompt turn produced no session/update — the notification shape has moved")
+	}
+	if os.Getenv("WASH_ACP_WANT_PERMISSION") != "" && h.perms() == 0 {
+		t.Error("the turn provoked no session/request_permission — either the prompt did not force a tool call, or the agent is in a mode that does not ask")
 	}
 	if h.undecoded() > 0 {
 		t.Errorf("%d updates decoded with an empty sessionUpdate discriminator — check the notification field names", h.undecoded())
@@ -134,13 +148,23 @@ type conformanceHandler struct {
 	mu sync.Mutex
 	ks map[string]int
 	un int
+	pr int
 }
 
 func (h *conformanceHandler) RequestPermission(_ context.Context, req RequestPermissionRequest) (RequestPermissionResponse, error) {
 	// Log it in full: this is the single most important payload in the
 	// design, and the one v2 restructures.
+	h.mu.Lock()
+	h.pr++
+	h.mu.Unlock()
 	b, _ := json.Marshal(req)
 	h.t.Logf("session/request_permission: %s", b)
+	for _, o := range req.Options {
+		h.t.Logf("  option id=%q name=%q kind=%q", o.OptionID, o.Name, o.Kind)
+		if o.OptionID == "" || o.Kind == "" {
+			h.t.Errorf("option decoded empty (%+v) — PermissionOption field names may have moved", o)
+		}
+	}
 	if req.ToolCall.Kind == "" && req.ToolCall.Title == "" {
 		h.t.Error("permission request carried no toolCall fields — v1 shape may not be what this adapter speaks")
 	}
@@ -168,6 +192,12 @@ func (h *conformanceHandler) kinds() map[string]int {
 		out[k] = v
 	}
 	return out
+}
+
+func (h *conformanceHandler) perms() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.pr
 }
 
 func (h *conformanceHandler) undecoded() int {
