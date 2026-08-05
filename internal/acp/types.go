@@ -162,6 +162,13 @@ const (
 	UpdateToolCall          = "tool_call"
 	UpdateToolCallUpdate    = "tool_call_update"
 	UpdatePlan              = "plan"
+
+	// Observed on the wire but deliberately not consumed (2026-08-04,
+	// claude-agent-acp 0.64.2 and codex-acp 1.1.9). Named so that seeing
+	// one is a decision rather than a surprise.
+	UpdateAvailableCommands = "available_commands_update"
+	UpdateUsage             = "usage_update"
+	UpdateSessionInfo       = "session_info_update"
 )
 
 // ToolCall is both the `tool_call` update and (partially populated) the

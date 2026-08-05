@@ -131,20 +131,38 @@ hand. Read its types; hand-roll the client.
 
 ## 6. Adapters and packaging
 
-- **Codex** — `codex-acp` (ACP org), drives `codex app-server`. Static
-  binary, no runtime.
-- **Claude** — `claude-agent-acp` (Apache-2.0, Zed-maintained, wraps the
-  official Claude Agent SDK). **Requires Node.**
-- **Gemini CLI, Copilot CLI** — native ACP, free.
+*Verified 2026-08-04 by running both against `internal/acp`:*
 
-The Node requirement is the one packaging decision. Follow the wash-display
-precedent: the Claude adapter is **opt-in in deb/rpm/apk**; the base package
-gains nothing mandatory. An absent adapter is a greyed launcher row with a
-reason, never a failed spawn — so discovery is a probe table, not a
-hardcoded list.
+- **Codex** — `@agentclientprotocol/codex-acp` 1.1.9, drives
+  `codex app-server`. **An npm package, not a Rust binary** — the earlier
+  claim here was wrong.
+- **Claude** — `@agentclientprotocol/claude-agent-acp` 0.64.2, wraps the
+  official Claude Agent SDK. Renamed from `@zed-industries/claude-code-acp`,
+  which now only prints a deprecation warning.
+- **Gemini CLI, Copilot CLI** — native ACP, no adapter.
 
-This ordering is why **Codex is the M2 vehicle** even though Claude is the
-agent we use most.
+**So Node is a prerequisite for the managed tier as a whole**, not just for
+Claude, and the "Codex first because its adapter is static" argument does
+not survive contact. Ordering is now a preference, not a constraint.
+
+Packaging follows the wash-display precedent regardless: the managed tier
+is **opt-in in deb/rpm/apk**, the base package gains nothing mandatory, and
+an absent adapter is a greyed launcher row with a reason rather than a
+failed spawn. `Adapter.launch()` prefers a globally-installed binary and
+falls back to `npx --yes <package>`, which is how most boxes will have it.
+
+Two operational notes from the same session:
+
+- **Codex needs a usable sandbox.** `codex app-server` refuses to start on
+  Ubuntu 24.04+ where `kernel.apparmor_restrict_unprivileged_userns=1`
+  blocks bubblewrap, even with `bwrap` installed. Surfaces as an adapter
+  that dies during the handshake; the stderr pump is what makes it
+  diagnosable instead of a mystery hang.
+- **`authMethods` is not "auth required".** codex-acp advertises `api-key`
+  and `chat-gpt` *and opens sessions fine*. Refusing on a non-empty list —
+  which the first cut of `startHosted` did — would reject every working
+  install. The real signal is `session/new` failing; the list is then what
+  makes the error actionable.
 
 ## 7. agentd as session host
 
@@ -320,10 +338,29 @@ not speak rather than proceeding half-wrong, and `types.go` holds exactly
 one version's shapes. v2 becomes a sibling file and a switch on the
 negotiated number.
 
-Second, smaller risk: **the v1 wire types are transcribed from the spec,
-not observed on a wire.** The first run against a real adapter is what
-confirms them. Budget a fix-up pass at the start of M3 — the transport
-underneath is independently tested and is not the part that will be wrong.
+**Resolved 2026-08-04: the v1 types are now observed, not transcribed.**
+`internal/acp` completed a full handshake, `session/new` and a prompt turn
+against two independent adapters (claude-agent-acp 0.64.2, codex-acp 1.1.9)
+with zero undecoded notifications. Confirmed on the wire: newline-delimited
+framing, `initialize` in both directions, `session/new` → `sessionId`,
+`session/prompt` → `stopReason`, and the `session/update` discriminator.
+
+Three things real traffic taught that the spec pages did not:
+
+- `codex app-server` omits `"jsonrpc"` from its responses entirely. The
+  decoder classifies on "has id, no method" rather than validating the
+  version field, so that leniency is load-bearing rather than sloppy.
+- Adapters emit update variants beyond the documented set —
+  `available_commands_update`, `usage_update`, `session_info_update`. All
+  decoded; none consumed. They are named in `types.go` so that ignoring
+  one is a decision rather than a surprise.
+- `authMethods` advertises what is *available*, not what is *required*
+  (§6).
+
+Still unverified because no turn has needed one: **`session/request_permission`
+has not been seen on a real wire.** It is the payload v2 restructures and
+the one this design leans on hardest, so it stays the top conformance
+target — a prompt that provokes a tool call is the next thing to run.
 
 ## 13. Testing
 

@@ -6,9 +6,14 @@
 // is a *table* rather than a pile of per-vendor code.
 //
 // Discovery is a probe, never a hardcoded assumption: a missing adapter is
-// a greyed row in the launcher with a reason, not a failed spawn. Codex
-// first because its adapter is a static binary; Claude's needs Node, which
-// is why the Claude tier is opt-in in packaging.
+// a greyed row in the launcher with a reason, not a failed spawn.
+//
+// Both current adapters are npm packages (verified 2026-08-04 against
+// claude-agent-acp 0.64.2 and codex-acp 1.1.9) — the earlier belief that
+// Codex's was a static Rust binary was wrong, so **Node is a prerequisite
+// for the managed tier as a whole**, not just for Claude. A globally
+// installed binary is preferred when present; otherwise the package is run
+// through npx, which is how most people will actually have it.
 package agentd
 
 import (
@@ -19,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,9 +42,12 @@ type Adapter struct {
 	ID string `json:"id"`
 	// Name is what a human reads.
 	Name string `json:"name"`
-	// Command / Args launch the adapter. Probed on PATH.
+	// Command / Args launch the adapter when it is installed as a binary.
 	Command string   `json:"-"`
 	Args    []string `json:"-"`
+	// Package is the npm package to fall back to via npx when Command is
+	// not on PATH. Empty means there is no fallback.
+	Package string `json:"-"`
 	// Note explains a greyed row: why this one cannot be used here.
 	Note string `json:"note,omitempty"`
 	// Available is filled in by Probe.
@@ -51,11 +60,15 @@ var adapters = []Adapter{
 		ID:      "codex",
 		Name:    "Codex",
 		Command: "codex-acp",
+		Package: "@agentclientprotocol/codex-acp",
 	},
 	{
 		ID:      "claude",
 		Name:    "Claude Code",
-		Command: "claude-code-acp",
+		Command: "claude-agent-acp",
+		// Renamed from @zed-industries/claude-code-acp, which now only
+		// prints a deprecation warning.
+		Package: "@agentclientprotocol/claude-agent-acp",
 	},
 	{
 		ID:      "gemini",
@@ -66,17 +79,34 @@ var adapters = []Adapter{
 	},
 }
 
+// launch resolves how to actually start an adapter: its own binary if
+// installed, else npx with the package. Returns ok=false when neither is
+// possible, with a note a human can act on.
+func (a Adapter) launch() (cmd string, args []string, note string, ok bool) {
+	if p, err := exec.LookPath(a.Command); err == nil {
+		return p, a.Args, "", true
+	}
+	if a.Package == "" {
+		return "", nil, a.Command + " not on PATH", false
+	}
+	npx, err := exec.LookPath("npx")
+	if err != nil {
+		return "", nil, "needs " + a.Command + " on PATH, or node/npx to run " + a.Package, false
+	}
+	// --yes so a first run does not sit at npm's install prompt with its
+	// stdout — which is the ACP wire — waiting on a human.
+	return npx, append([]string{"--yes", a.Package}, a.Args...), "via npx " + a.Package, true
+}
+
 // Probe reports which adapters this box can actually launch. Cheap enough
 // to call whenever the launcher opens — it is a PATH lookup per row.
 func Probe() []Adapter {
 	out := make([]Adapter, 0, len(adapters))
 	for _, a := range adapters {
-		p, err := exec.LookPath(a.Command)
-		a.Available = err == nil
-		if !a.Available {
-			a.Note = a.Command + " not on PATH"
-		} else {
-			log.Printf("agentd: adapter %s -> %s", a.ID, p)
+		cmd, _, note, ok := a.launch()
+		a.Available, a.Note = ok, note
+		if ok {
+			log.Printf("agentd: adapter %s -> %s %s", a.ID, cmd, note)
 		}
 		out = append(out, a)
 	}
@@ -118,7 +148,11 @@ func startHosted(agentID, cwd string) (*hosted, error) {
 		cwd = abs
 	}
 
-	cmd := exec.Command(a.Command, a.Args...)
+	bin, args, _, ok := a.launch()
+	if !ok {
+		return nil, fmt.Errorf("agent %q is not installed here: %s", agentID, a.Note)
+	}
+	cmd := exec.Command(bin, args...)
 	cmd.Dir = cwd
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -133,7 +167,7 @@ func startHosted(agentID, cwd string) (*hosted, error) {
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start %s: %w", a.Command, err)
+		return nil, fmt.Errorf("start %s: %w", bin, err)
 	}
 
 	// The adapter's own diagnostics. Without this, "needs authentication"
@@ -178,14 +212,19 @@ func startHosted(agentID, cwd string) (*hosted, error) {
 		stop()
 		return nil, fmt.Errorf("initialize %s: %w", a.ID, err)
 	}
-	if len(res.AuthMethods) > 0 {
-		stop()
-		return nil, fmt.Errorf("%s needs authentication (%d methods) — log in with its own CLI first", a.ID, len(res.AuthMethods))
-	}
-
 	sid, err := h.client.NewSession(ctx, cwd, nil)
 	if err != nil {
 		stop()
+		// authMethods advertises what auth is AVAILABLE, not that it is
+		// required: claude-agent-acp lists `claude-login` even when the
+		// user is already logged in, so refusing on a non-empty list
+		// would refuse every working install. The real signal is
+		// session/new failing — and then the list is what makes the
+		// error actionable.
+		if len(res.AuthMethods) > 0 {
+			return nil, fmt.Errorf("%s could not open a session; it offers %s — log in with its own CLI first: %w",
+				a.ID, authNames(res.AuthMethods), err)
+		}
 		return nil, fmt.Errorf("session/new %s: %w", a.ID, err)
 	}
 	h.sessionID = sid
@@ -215,6 +254,20 @@ func promptHosted(h *hosted, text string) {
 	default:
 		h.setState("done", res.StopReason)
 	}
+}
+
+// authNames renders the auth methods an adapter offers, for an error a
+// human can act on.
+func authNames(ms []acp.AuthMethod) string {
+	out := make([]string, 0, len(ms))
+	for _, m := range ms {
+		if m.Description != "" {
+			out = append(out, m.Description)
+			continue
+		}
+		out = append(out, m.ID)
+	}
+	return strings.Join(out, "; ")
 }
 
 func lookupHosted(key string) *hosted {

@@ -93,16 +93,19 @@ func TestConformanceAgainstRealAdapter(t *testing.T) {
 		t.Error("agentInfo.name empty — InitializeResponse field names may have moved")
 	}
 
-	if len(res.AuthMethods) > 0 {
-		t.Skipf("adapter requires authentication (%v); log in and re-run", res.AuthMethods)
-	}
-
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
 	sid, err := c.NewSession(ctx, cwd, nil)
 	if err != nil {
+		// authMethods advertises what auth is AVAILABLE, not that it is
+		// required — an adapter with usable credentials lists them and
+		// opens sessions anyway. So the honest test for "needs login" is
+		// session/new failing, not the list being non-empty.
+		if len(res.AuthMethods) > 0 {
+			t.Skipf("session/new failed and the adapter offers auth %v — log in with its own CLI and re-run: %v", res.AuthMethods, err)
+		}
 		t.Fatalf("session/new: %v", err)
 	}
 	if sid == "" {
