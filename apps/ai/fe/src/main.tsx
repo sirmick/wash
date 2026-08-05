@@ -7,7 +7,7 @@
 
 import { For, Show, createMemo, createSignal } from 'solid-js';
 import type { Component } from 'solid-js';
-import { AgentSession, Button, createAppBus, defineWashApp, tokens } from '@wash/ui';
+import { AgentSession, Button, FilePicker, createAppBus, defineWashApp, tokens } from '@wash/ui';
 import type { AgentAsk, AgentEvent, AgentStatus } from '@wash/ui';
 
 interface Adapter {
@@ -42,6 +42,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [agent, setAgent] = createSignal('');
   const [cwd, setCwd] = createSignal('');
   const [starting, setStarting] = createSignal(false);
+  const [picking, setPicking] = createSignal(false);
 
   const handleBE = (m: Record<string, unknown>) => {
     switch (m.kind) {
@@ -126,15 +127,41 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         </select>
       </label>
 
-      <label style={{ display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceXs}px` }}>
+      <div style={{ display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceXs}px` }}>
         <span style={labelStyle}>folder</span>
-        <input
-          value={cwd()}
-          placeholder="~"
-          onInput={(e) => setCwd(e.currentTarget.value)}
-          style={{ ...fieldStyle, font: tokens.type.monoMd }}
-        />
-      </label>
+        <div style={{ display: 'flex', gap: `${tokens.spaceSm}px`, 'align-items': 'stretch' }}>
+          <div
+            style={{
+              ...fieldStyle,
+              font: tokens.type.monoMd,
+              flex: 1,
+              'min-width': 0,
+              overflow: 'hidden',
+              'text-overflow': 'ellipsis',
+              'white-space': 'nowrap',
+              color: cwd() ? tokens.fg : tokens.fgDim,
+            }}
+            title={cwd() || 'Home'}
+          >
+            {cwd() || 'Home'}
+          </div>
+          <Button onClick={() => setPicking(true)}>Choose…</Button>
+        </div>
+      </div>
+
+      <FilePicker
+        open={picking()}
+        mode="directory"
+        host={props.host}
+        hostInstanceID={props.instance}
+        start={cwd()}
+        onConfirm={(p) => {
+          setCwd(p);
+          setPicking(false);
+        }}
+        onCancel={() => setPicking(false)}
+        data-testid="ai-folder-picker"
+      />
 
       <Show when={error()}>
         <div

@@ -87,6 +87,11 @@ var session struct {
 
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-ai ready instance=%s", instanceID)
+	// The launcher picks a working directory with the shared
+	// <FilePicker mode="directory">, which talks to its own BE rather than
+	// a service. Typing a path into a text field was the placeholder, and
+	// it produced the first real bug of the branch (an unexpanded ~).
+	sdk.EnableFilePicker(c)
 	// Subscribe to the roster so the window can show adapters in the
 	// launcher and its own row's state in the status line.
 	_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": sdk.StateServiceKindSubscribe})
