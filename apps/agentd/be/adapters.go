@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/version"
 )
 
@@ -129,7 +130,7 @@ func adapterByID(id string) (Adapter, bool) {
 // Every early failure kills the process before returning — a half-started
 // adapter is a stray child that outlives the desktop, which is the bug
 // class the child-process audit already cost us once.
-func startHosted(agentID, cwd string) (*hosted, error) {
+func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	a, ok := adapterByID(agentID)
 	if !ok {
 		return nil, fmt.Errorf("unknown agent %q", agentID)
@@ -195,7 +196,7 @@ func startHosted(agentID, cwd string) (*hosted, error) {
 	key := "acp:" + itoa(hostedSeq)
 	hostedMu.Unlock()
 
-	h := &hosted{key: key, agent: a.ID, cwd: cwd, stop: stop}
+	h := &hosted{key: key, agent: a.ID, cwd: cwd, stop: stop, conn: svcConn}
 	h.client = acp.NewClient(stdout, stdin, h)
 
 	ctx, cancel := context.WithTimeout(context.Background(), initTimeout)

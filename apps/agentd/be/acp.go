@@ -39,6 +39,9 @@ const hostedAskTTL = askTTL + 5*time.Second
 
 // hosted is one ACP session this process owns.
 type hosted struct {
+	// conn is the service connection, used to push transcript events to
+	// the windows watching this session.
+	conn *sdk.Conn
 	// key is the roster key, "acp:<n>". Deliberately not shaped like the
 	// terminal tier's "<instance>:<channel>" so the two can never collide.
 	key   string
@@ -79,6 +82,7 @@ func (h *hosted) retire() {
 	if h.stop != nil {
 		h.stop()
 	}
+	dropTranscript(h.key)
 	now := time.Now()
 	mutateState(func(s *State) {
 		delete(rows, h.key)
@@ -142,6 +146,12 @@ func (h *hosted) setState(state, reason string) {
 // consumes the same notifications in M4; this milestone renders none of
 // them, which is what makes it testable without a frontend.
 func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
+	// The transcript first: it is what the app renders, and it must record
+	// what the agent said even for variants the roster ignores.
+	if e := appendUpdate(h.key, n.Update, time.Now()); e != nil && h.conn != nil {
+		pushEvent(h.conn, h.key, *e)
+	}
+
 	switch n.Update.SessionUpdate {
 	case acp.UpdateAgentMessageChunk, acp.UpdateAgentThoughtChunk,
 		acp.UpdateToolCall, acp.UpdateToolCallUpdate, acp.UpdatePlan:
@@ -323,10 +333,10 @@ func truncate(b []byte, n int) string {
 // in M3, before the app does, because the milestone's acceptance is that
 // the *backend* works — a Codex permission request reaching the sidebar
 // with no frontend change at all.
-func registerACPHandlers(bus *sdk.Bus) {
+func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	// agent_start: launch an adapter and open a session.
 	sdk.HandleFromVoid(bus, "agent_start", func(conn *sdk.Conn, _ string, req startReq, from wire.Sender) error {
-		h, err := startHosted(req.Agent, req.Cwd)
+		h, err := startHosted(req.Agent, req.Cwd, svcConn)
 		if err != nil {
 			log.Printf("agentd: acp start agent=%s cwd=%s: %v", req.Agent, req.Cwd, err)
 			if from.InstanceID != "" {

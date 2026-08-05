@@ -140,7 +140,8 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	})
 
 	registerAskHandlers(bus, c)
-	registerACPHandlers(bus)
+	registerACPHandlers(bus, c)
+	registerTranscriptHandlers(bus)
 
 	go sweepLoop(c)
 }
