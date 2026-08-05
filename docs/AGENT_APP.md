@@ -6,8 +6,11 @@ JSON-RPC wire — retiring the hook-install / OSC / pty-socket machinery that
 inferred the same things by intercepting an agent harness we do not own.**
 
 This supersedes the mechanism in `docs/AGENT_TERM.md` M1–M4, M6 and M7.
-That document's M5 (smart paste) is independent and unaffected. Design only —
-nothing here is built.
+That document's M5 (smart paste) is independent and unaffected.
+
+Status: **M0–M3 built** (source-agnostic ask queue, `internal/acp`, shared
+matcher, agentd hosting sessions), verified against two real adapters.
+M4 onward is design.
 
 Decisions already made (discussion 2026-08-03):
 
@@ -22,8 +25,9 @@ Decisions already made (discussion 2026-08-03):
   and a panel in wash-edit — all rendering one `@wash/ui` component that owns
   no session state. Same promotion path the file tree took when edit became
   its second consumer.
-- **Codex first.** Its adapter is a static binary; Claude's needs Node. The
-  packaging decision drives the order.
+- **Codex first** — as a preference, not a constraint. The original reason
+  ("its adapter is a static binary") turned out to be false: both adapters
+  are npm packages, so Node gates the whole managed tier (§6).
 
 ## 1. Why the mechanism changes
 
