@@ -3,6 +3,9 @@ package agentd
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -230,5 +233,48 @@ func TestUnmatchedRequestReachesTheSharedQueue(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("the answer never reached the agent — its turn would hang")
+	}
+}
+
+// The launcher is a text field, and "~/wash" is what people type. Go's
+// filepath does not expand it, so the first real run resolved it against
+// the ROUTER's working directory and failed with a path nobody
+// recognised: /home/mick/wash/branches/agent-app/~/wash.
+func TestResolveCwdExpandsTilde(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home directory in this environment")
+	}
+
+	if got, err := resolveCwd("~"); err != nil || got != home {
+		t.Errorf("resolveCwd(\"~\") = %q, %v — want %q", got, err, home)
+	}
+	if got, err := resolveCwd(""); err != nil || got != home {
+		t.Errorf("resolveCwd(\"\") = %q, %v — want %q", got, err, home)
+	}
+
+	// A tilde path that exists resolves under home, not under the cwd.
+	dir := t.TempDir()
+	if got, err := resolveCwd(dir); err != nil || got != dir {
+		t.Errorf("resolveCwd(abs) = %q, %v", got, err)
+	}
+
+	// A path that does not exist must name what it RESOLVED to — the
+	// original bug was unreadable precisely because that was hidden.
+	_, err = resolveCwd("~/definitely-not-a-real-directory-xyzzy")
+	if err == nil {
+		t.Fatal("a missing folder was accepted")
+	}
+	if !strings.Contains(err.Error(), home) {
+		t.Errorf("error does not name the resolved path: %v", err)
+	}
+
+	// A file is not a folder.
+	f := filepath.Join(dir, "afile")
+	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveCwd(f); err == nil {
+		t.Error("a regular file was accepted as a working directory")
 	}
 }

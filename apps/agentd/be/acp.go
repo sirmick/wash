@@ -190,6 +190,16 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 	// bites when the policy is enabled, so a box that never opened the
 	// Agents pane is untouched — same opt-in as the terminal tier.
 	if !pol.Enabled || !pol.AskDesktopOrDefault() {
+		// Log it anyway. A silent auto-defer is indistinguishable from
+		// "wash never saw the request", which is exactly the question a
+		// user asks when the sidebar stays empty while their agent
+		// prompts them in its own UI.
+		why := "policy off"
+		if pol.Enabled {
+			why = "ask_desktop off"
+		}
+		log.Printf("agentd: acp decide key=%s tool=%s decision=defer reason=%q subject=%q",
+			h.key, preq.ToolName, why, agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput))
 		return acp.Cancelled(), nil
 	}
 

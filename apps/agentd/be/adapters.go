@@ -135,18 +135,9 @@ func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown agent %q", agentID)
 	}
-	if cwd == "" {
-		cwd = os.Getenv("HOME")
-	}
-	if !filepath.IsAbs(cwd) {
-		// The spec is explicit that cwd MUST be absolute, and a relative
-		// one fails inside the agent in a way that reads like a missing
-		// directory rather than a protocol error.
-		abs, err := filepath.Abs(cwd)
-		if err != nil {
-			return nil, fmt.Errorf("cwd %q: %w", cwd, err)
-		}
-		cwd = abs
+	cwd, err := resolveCwd(cwd)
+	if err != nil {
+		return nil, err
 	}
 
 	bin, args, _, ok := a.launch()
@@ -239,6 +230,46 @@ func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 		h.retire()
 	}()
 	return h, nil
+}
+
+// resolveCwd turns what a human typed into the absolute path the protocol
+// demands.
+//
+// Tilde expansion is not a nicety: the launcher is a text field, "~/wash"
+// is what people type, and Go's filepath does not expand it — so without
+// this it resolved against the ROUTER's working directory and failed with
+// a path nobody recognised (observed on the first real run). A relative
+// path is still resolved against the router's cwd, which is at least an
+// honest interpretation of what was typed; the failure mode that mattered
+// was the one that looked absolute and was not.
+func resolveCwd(cwd string) (string, error) {
+	home, _ := os.UserHomeDir()
+	switch {
+	case cwd == "", cwd == "~":
+		if home == "" {
+			return "", fmt.Errorf("no home directory to start in")
+		}
+		return home, nil
+	case strings.HasPrefix(cwd, "~/"):
+		if home == "" {
+			return "", fmt.Errorf("cannot expand %q: no home directory", cwd)
+		}
+		cwd = filepath.Join(home, cwd[2:])
+	}
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		return "", fmt.Errorf("cwd %q: %w", cwd, err)
+	}
+	st, err := os.Stat(abs)
+	if err != nil {
+		// Say what we resolved to, not just what failed — the original bug
+		// was unreadable precisely because the resolved path was hidden.
+		return "", fmt.Errorf("folder %q (resolved to %s): %w", cwd, abs, err)
+	}
+	if !st.IsDir() {
+		return "", fmt.Errorf("folder %q (resolved to %s) is not a directory", cwd, abs)
+	}
+	return abs, nil
 }
 
 // promptHosted runs one turn. Returns when the agent stops; the roster
