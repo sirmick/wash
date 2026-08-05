@@ -275,6 +275,9 @@ func resolveCwd(cwd string) (string, error) {
 // promptHosted runs one turn. Returns when the agent stops; the roster
 // follows along from SessionUpdate underneath.
 func promptHosted(h *hosted, text string) {
+	if h.conn != nil {
+		pushEvent(h.conn, h.key, appendPrompt(h.key, text, time.Now()))
+	}
 	h.setState("working", "")
 	res, err := h.client.Prompt(context.Background(), h.sessionID, acp.Text(text))
 	switch {

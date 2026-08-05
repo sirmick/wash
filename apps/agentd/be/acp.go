@@ -186,20 +186,24 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 		return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
 	}
 
-	// No rule: ask the human where they already are. ask_desktop only
-	// bites when the policy is enabled, so a box that never opened the
-	// Agents pane is untouched — same opt-in as the terminal tier.
-	if !pol.Enabled || !pol.AskDesktopOrDefault() {
-		// Log it anyway. A silent auto-defer is indistinguishable from
-		// "wash never saw the request", which is exactly the question a
-		// user asks when the sidebar stays empty while their agent
-		// prompts them in its own UI.
-		why := "policy off"
-		if pol.Enabled {
-			why = "ask_desktop off"
-		}
+	// No rule: ask the human.
+	//
+	// **Asking is the floor for a hosted session, not an opt-in.** The
+	// terminal tier could safely decline to answer because deferring
+	// returned control to an agent with its own prompt in a pty. A hosted
+	// session has no such UI — wash IS the UI — so declining means the
+	// tool silently never runs and the turn ends. Observed on the first
+	// real Codex session: `decision=defer reason="policy off"` followed
+	// immediately by `state=done`, with nothing on screen to explain it.
+	//
+	// So an absent policy file no longer disables asking here. A policy
+	// that exists and explicitly turns ask_desktop off still means what it
+	// says, and "nobody home" (§ask.go) is still a defer — that one is
+	// unavoidable, and the agent hears `cancelled` rather than waiting on
+	// a desktop that is not attached.
+	if pol.Enabled && !pol.AskDesktopOrDefault() {
 		log.Printf("agentd: acp decide key=%s tool=%s decision=defer reason=%q subject=%q",
-			h.key, preq.ToolName, why, agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput))
+			h.key, preq.ToolName, "ask_desktop off", agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput))
 		return acp.Cancelled(), nil
 	}
 

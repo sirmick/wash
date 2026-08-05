@@ -38,6 +38,11 @@ const (
 	EventMessage = "message"
 	EventThought = "thought"
 	EventTool    = "tool"
+	// EventUser is what the human typed. ACP has a user_message_chunk
+	// variant, but an agent does not echo the prompt its client just sent
+	// it — so a transcript built purely from notifications shows the
+	// answers with none of the questions. wash records its own side.
+	EventUser = "user"
 )
 
 // Event is one line in a transcript.
@@ -81,6 +86,21 @@ var (
 
 func newTranscript() *transcript {
 	return &transcript{toolAt: map[string]int{}, openMessage: -1}
+}
+
+// appendPrompt records what the human sent, so the transcript reads as a
+// conversation rather than a monologue.
+func appendPrompt(key, text string, now time.Time) Event {
+	transMu.Lock()
+	defer transMu.Unlock()
+	t := trans[key]
+	if t == nil {
+		t = newTranscript()
+		trans[key] = t
+	}
+	// A prompt always closes any open agent message: the turn is over.
+	t.openMessage = -1
+	return t.push(Event{Kind: EventUser, Text: text, AtMS: now.UnixMilli()})
 }
 
 // appendUpdate folds one ACP notification into a session's transcript and

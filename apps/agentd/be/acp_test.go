@@ -13,6 +13,8 @@ import (
 	"github.com/sirmick/wash/internal/agentpolicy"
 )
 
+func boolPtr(b bool) *bool { return &b }
+
 func withPolicy(t *testing.T, p agentpolicy.Policy) {
 	t.Helper()
 	old := hostedPolicy
@@ -122,14 +124,22 @@ func TestRequestPermissionNeverInventsAnAllow(t *testing.T) {
 		want   string // option id, or "" for cancelled
 	}{
 		{
-			name:   "no policy at all",
+			// Nobody attached: the only honest answer. The agent hears
+			// cancelled rather than blocking on a desktop that is not there.
+			name:   "no policy, nobody watching",
 			policy: agentpolicy.Policy{},
-			subs:   1,
+			subs:   0,
 		},
 		{
 			name:   "policy on, no matching rule, nobody watching",
 			policy: agentpolicy.Policy{Enabled: true, Default: agentpolicy.DecisionAsk},
 			subs:   0,
+		},
+		{
+			// An explicit opt-out still means what it says.
+			name:   "policy on with ask_desktop off",
+			policy: agentpolicy.Policy{Enabled: true, Default: agentpolicy.DecisionAsk, AskDesktop: boolPtr(false)},
+			subs:   1,
 		},
 		{
 			name: "a deny rule",
@@ -277,4 +287,42 @@ func TestResolveCwdExpandsTilde(t *testing.T) {
 	if _, err := resolveCwd(f); err == nil {
 		t.Error("a regular file was accepted as a working directory")
 	}
+}
+
+// Asking is the FLOOR for a hosted session, not an opt-in.
+//
+// The terminal tier could decline to answer because deferring returned
+// control to an agent with its own prompt in a pty. A hosted session has
+// no such UI, so declining means the tool silently never runs. Observed
+// on the first real Codex session: decision=defer reason="policy off"
+// followed immediately by state=done, with nothing on screen to explain
+// it.
+func TestHostedSessionAsksEvenWithNoPolicyFile(t *testing.T) {
+	resetAsks()
+	withState(t, 1)
+	withPolicy(t, agentpolicy.Policy{}) // exactly what an absent agents.json decodes to
+
+	h := &hosted{key: "acp:1", agent: "codex"}
+	go h.RequestPermission(context.Background(), acp.RequestPermissionRequest{
+		SessionID: "s1",
+		ToolCall:  acp.ToolCall{Kind: acp.ToolKindExecute, RawInput: json.RawMessage(`{"command":"rm -rf /"}`)},
+		Options:   stdOptions,
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var found bool
+		mutateState(func(*State) {
+			for _, q := range asks {
+				if q.RowKey == "acp:1" {
+					found = true
+				}
+			}
+		})
+		if found {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal("with no policy file a hosted session did not ask — its tool call would silently never run")
 }

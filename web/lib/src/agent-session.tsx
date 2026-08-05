@@ -283,6 +283,16 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                   'font-style': e.kind === 'thought' ? 'italic' : 'normal',
                   'white-space': 'pre-wrap',
                   'overflow-wrap': 'anywhere',
+                  // What you typed gets a rule down its left edge. Without
+                  // it a transcript is a wall of prose with no way to see
+                  // where your turn ended and the agent's began.
+                  ...(e.kind === 'user'
+                    ? {
+                        'border-left': `2px solid ${tokens.borderFocus}`,
+                        'padding-left': `${tokens.spaceMd}px`,
+                        color: tokens.fgMuted,
+                      }
+                    : {}),
                 }}
               >
                 {e.text}
