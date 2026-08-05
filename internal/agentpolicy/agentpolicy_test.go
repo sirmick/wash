@@ -132,11 +132,10 @@ func TestAppendPreservesTheRestOfTheFile(t *testing.T) {
 	path := filepath.Join(dir, "agents.json")
 	no := false
 	orig := Policy{
-		Enabled:           true,
-		Default:           DecisionDeny,
-		LegacyAutoApprove: true,
-		AskDesktop:        &no,
-		Rules:             []Rule{{Match: "Bash(rm *)", Decision: DecisionDeny, Cwd: "/srv"}},
+		Enabled:    true,
+		Default:    DecisionDeny,
+		AskDesktop: &no,
+		Rules:      []Rule{{Match: "Bash(rm *)", Decision: DecisionDeny, Cwd: "/srv"}},
 	}
 	if err := Save(path, orig); err != nil {
 		t.Fatal(err)
@@ -145,7 +144,7 @@ func TestAppendPreservesTheRestOfTheFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := Load(path)
-	if p.Default != DecisionDeny || !p.LegacyAutoApprove || p.AskDesktop == nil || *p.AskDesktop {
+	if p.Default != DecisionDeny || p.AskDesktop == nil || *p.AskDesktop {
 		t.Errorf("append clobbered other settings: %+v", p)
 	}
 	if len(p.Rules) != 2 || p.Rules[0].Match != "Bash(rm *)" || p.Rules[0].Cwd != "/srv" {
@@ -194,7 +193,7 @@ func TestSaveShape(t *testing.T) {
 	}
 	// Absent optional fields stay absent rather than writing false/null
 	// noise into a file people hand-edit.
-	for _, k := range []string{"legacy_autoapprove", "ask_desktop", "default"} {
+	for _, k := range []string{"ask_desktop", "default"} {
 		if _, ok := raw[k]; ok {
 			t.Errorf("unset field %q was written: %s", k, data)
 		}
