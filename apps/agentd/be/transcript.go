@@ -18,6 +18,7 @@ package agentd
 
 import (
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -76,6 +77,11 @@ type transcript struct {
 	openMessage int
 }
 
+// transcriptDebug logs every streamed chunk with %q. Off unless
+// WASH_AGENT_DEBUG is set — this is one line per chunk, which is many
+// lines per sentence.
+var transcriptDebug = os.Getenv("WASH_AGENT_DEBUG") != ""
+
 var (
 	transMu sync.Mutex
 	trans   = map[string]*transcript{}
@@ -125,6 +131,11 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) *Event {
 		text := u.Content.String()
 		if text == "" {
 			return nil
+		}
+		if transcriptDebug {
+			// %q so a chunk that is exactly " " is visible as such. Chunk
+			// boundaries are precisely where lost whitespace hides.
+			log.Printf("agentd: chunk key=%s kind=%s text=%q", key, kind, text)
 		}
 		// Continue the open message when it is the same kind; a tool call
 		// in between closes it, because the agent has moved on.

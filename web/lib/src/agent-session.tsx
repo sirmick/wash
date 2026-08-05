@@ -81,6 +81,25 @@ function dotColor(status?: string): string {
   return tokens.fgDim;
 }
 
+/** Indeterminate "the agent is thinking" ring. */
+const Spinner: Component<{ size?: number }> = (p) => (
+  <span
+    data-wash-spin
+    aria-label="working"
+    role="status"
+    style={{
+      width: `${p.size ?? 12}px`,
+      height: `${p.size ?? 12}px`,
+      flex: 'none',
+      display: 'inline-block',
+      'border-radius': '50%',
+      border: `2px solid ${tokens.borderMenu}`,
+      'border-top-color': tokens.accentBlue,
+      animation: tokens.animSpin,
+    }}
+  />
+);
+
 const Dot: Component<{ color: string }> = (p) => (
   <span
     aria-hidden="true"
@@ -302,6 +321,18 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
         </For>
 
         <For each={props.asks?.() ?? []}>{(a) => <AskRow ask={a} onAnswer={props.onAnswer} />}</For>
+
+        {/* The tail spinner is the answer to "did it hear me?" — a turn can
+            think for many seconds before its first chunk arrives, and an
+            empty transcript is indistinguishable from a broken one. Hidden
+            while a question is pending, because then the thing waiting is
+            you, not the agent. */}
+        <Show when={props.status?.().state === 'working' && (props.asks?.() ?? []).length === 0}>
+          <div style={{ display: 'flex', 'align-items': 'center', gap: `${tokens.spaceMd}px`, color: tokens.fgDim, font: tokens.type.textSm }}>
+            <Spinner />
+            <span>working…</span>
+          </div>
+        </Show>
       </div>
 
       <div
@@ -357,8 +388,15 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           'font-variant-numeric': 'tabular-nums',
         }}
       >
-        <Show when={st().state}>
-          <Dot color={st().state === 'needs-input' ? tokens.accentAmber : st().state === 'working' ? tokens.accentBlue : st().state === 'done' ? tokens.accentGreen : tokens.fgDim} />
+        <Show
+          when={st().state === 'working'}
+          fallback={
+            <Show when={st().state}>
+              <Dot color={st().state === 'needs-input' ? tokens.accentAmber : st().state === 'done' ? tokens.accentGreen : tokens.fgDim} />
+            </Show>
+          }
+        >
+          <Spinner size={9} />
         </Show>
         <Show when={st().agent}>
           <span>{st().agent}</span>
