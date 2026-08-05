@@ -87,6 +87,21 @@ type Conn struct {
 	closeMu sync.Once
 	done    chan struct{}
 	err     error
+
+	// notes serializes inbound notifications.
+	//
+	// Requests are answered on their own goroutines — a permission
+	// question blocks on a human for 30s and must not stall the wire —
+	// but NOTIFICATIONS ARE A STREAM AND MUST STAY IN ORDER. Dispatching
+	// each on its own goroutine let two session/update messages race, so
+	// a streamed reply could append its chunks out of order and come out
+	// scrambled. One queue, one worker, arrival order preserved.
+	notes chan noteMsg
+}
+
+type noteMsg struct {
+	method string
+	params json.RawMessage
 }
 
 // NewConn wires a peer to an already-started adapter's stdout/stdin. The
@@ -97,8 +112,10 @@ func NewConn(r io.Reader, w io.Writer, h Handler) *Conn {
 		h:       h,
 		pending: map[string]chan *message{},
 		done:    make(chan struct{}),
+		notes:   make(chan noteMsg, 256),
 	}
 	go c.readLoop(r)
+	go c.noteLoop()
 	return c
 }
 
@@ -201,6 +218,21 @@ func (c *Conn) write(m *message) error {
 	return err
 }
 
+// noteLoop delivers notifications one at a time, in arrival order. A slow
+// handler backs up this queue rather than reordering the stream; the read
+// loop keeps running, so requests (and their own goroutines) are
+// unaffected.
+func (c *Conn) noteLoop() {
+	for {
+		select {
+		case <-c.done:
+			return
+		case n := <-c.notes:
+			c.h.Notify(context.Background(), n.method, n.params)
+		}
+	}
+}
+
 func (c *Conn) readLoop(r io.Reader) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64<<10), maxLine)
@@ -251,10 +283,15 @@ func (c *Conn) dispatch(m *message) {
 		}
 		return
 	}
-	// A notification: method, no id.
+	// A notification: method, no id. Queued rather than spawned, so the
+	// stream stays in the order it arrived.
 	if m.ID == nil {
-		if c.h != nil {
-			go c.h.Notify(context.Background(), m.Method, m.Params)
+		if c.h == nil {
+			return
+		}
+		select {
+		case c.notes <- noteMsg{method: m.Method, params: m.Params}:
+		case <-c.done:
 		}
 		return
 	}

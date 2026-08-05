@@ -352,3 +352,41 @@ func waitFor(t *testing.T, h *recordingHandler, n int) []SessionNotification {
 		}
 	}
 }
+
+// Notifications are a stream and must arrive in the order they were sent.
+//
+// The first cut dispatched each on its own goroutine, so two session/update
+// messages could race — and a streamed reply would then append its chunks
+// out of order and come out scrambled. Caught by TestContentDecodesBothShapes
+// failing intermittently, which is the only reason it was found at all.
+func TestNotificationsStayInOrder(t *testing.T) {
+	h := &recordingHandler{}
+	_, agent := newPair(t, h)
+
+	const n = 60
+	for i := 0; i < n; i++ {
+		agent.send(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"` + itoa(i) + ` "}}}}`)
+	}
+
+	got := waitFor(t, h, n)
+	for i := 0; i < n; i++ {
+		want := itoa(i) + " "
+		if got[i].Update.Content.String() != want {
+			t.Fatalf("update %d = %q, want %q — the stream was reordered", i, got[i].Update.Content.String(), want)
+		}
+	}
+}
+
+func itoa(v int) string {
+	if v == 0 {
+		return "0"
+	}
+	var b [20]byte
+	i := len(b)
+	for v > 0 {
+		i--
+		b[i] = byte('0' + v%10)
+		v /= 10
+	}
+	return string(b[i:])
+}
