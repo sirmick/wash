@@ -31,5 +31,4 @@ wash-fswatch
 wash-agentd
 wash-launch
 wash-fswatchd
-wash-agent-hook
 wash-sudo
