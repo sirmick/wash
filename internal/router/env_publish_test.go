@@ -2,8 +2,11 @@ package router
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/sirmick/wash/internal/wire"
 	"github.com/sirmick/wash/internal/wiretest"
@@ -93,6 +96,64 @@ func TestEnvPublishMergedIntoSpawnEnv(t *testing.T) {
 		if strings.HasPrefix(kv, "PATH=/evil") {
 			t.Errorf("disallowed PATH key leaked into spawnEnv: %v", env)
 		}
+	}
+
+	appPair.Close()
+	waitClose(t, appDone)
+}
+
+// TestEnvPublishLogsKeys: the env.publish log line names the keys it
+// accepted. wash-display publishes more than once (geometry first, socket
+// names once Xwayland is up), so "an env.publish happened" does not mean
+// DISPLAY is in spawnEnv — and the display e2e specs sequence a terminal
+// launch behind exactly that fact by grepping this line for
+// WASH_X_DISPLAY (e2e/tests/display-*.spec.ts, docs/FLAKE_LOG.md
+// 2026-07-29). Keep the key names in the line.
+func TestEnvPublishLogsKeys(t *testing.T) {
+	var mu sync.Mutex
+	var logged strings.Builder
+	reg := NewRegistry()
+	r := NewRouter(Config{}, reg, func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		fmt.Fprintf(&logged, format+"\n", args...)
+	})
+
+	appPair := wiretest.NewPipePair()
+	app := appPair.EndB()
+	appDone := make(chan struct{})
+	go func() {
+		defer close(appDone)
+		_ = r.HandleApp(context.Background(), appPair.EndA(), envManifest(CapEnvPublish), nil)
+	}()
+	drainToIdentityAck(t, app)
+
+	writeEvt(t, app, wire.NewEvtEnvPublish(map[string]string{
+		"WASH_X_DISPLAY":       ":2",
+		"WASH_WAYLAND_DISPLAY": "wayland-0",
+	}))
+
+	var line string
+	for i := 0; i < 200; i++ {
+		mu.Lock()
+		out := logged.String()
+		mu.Unlock()
+		for _, l := range strings.Split(out, "\n") {
+			if strings.Contains(l, "env.publish from ") && strings.Contains(l, "keys=") {
+				line = l
+			}
+		}
+		if line != "" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if line == "" {
+		t.Fatal("no env.publish log line with keys=")
+	}
+	// Sorted, comma-joined — a stable line a log-grepping test can key on.
+	if !strings.Contains(line, "keys=WASH_WAYLAND_DISPLAY,WASH_X_DISPLAY") {
+		t.Errorf("env.publish line should name its keys, got: %s", line)
 	}
 
 	appPair.Close()

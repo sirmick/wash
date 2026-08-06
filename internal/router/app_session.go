@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -718,7 +720,16 @@ func (inst *AppInstance) handleEnvPublish(m wire.EvtEnvPublish) error {
 		inst.router.publishedEnv[k] = v
 	}
 	inst.router.publishedEnvMu.Unlock()
-	inst.router.log("env.publish from %s: %d key(s)", inst.InstanceID, len(clean))
+	// Name the keys, not just the count. wash-display publishes more than once
+	// (geometry early, then the socket names once Xwayland is up), so "some
+	// env.publish happened" tells a reader — or a test — nothing about whether
+	// DISPLAY is in spawnEnv yet. Sorted for a stable line.
+	keys := make([]string, 0, len(clean))
+	for k := range clean {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	inst.router.log("env.publish from %s: %d key(s) keys=%s", inst.InstanceID, len(clean), strings.Join(keys, ","))
 	return nil
 }
 
