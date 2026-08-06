@@ -67,6 +67,12 @@ type hosted struct {
 	// blanket allow wash keeps to itself.
 	modes []acp.SessionMode
 	mode  string
+	// configs is the agent's generic settings block — model, reasoning
+	// effort, plan mode, and whatever an adapter adds. One shape, so one
+	// control renders all of them.
+	configs []acp.ConfigOption
+	// commands are the agent's own slash commands.
+	commands []acp.AvailableCommand
 	// detached means no window is pointing at this session. It keeps
 	// running; the roster row is how the user gets back to it.
 	detached bool
@@ -138,6 +144,8 @@ func (h *hosted) setState(state, reason string) {
 		r.Used, r.Size = h.used, h.size
 		r.Title = h.title
 		r.Mode, r.Modes = h.mode, publicModes(h.modes)
+		r.Configs = publicConfigs(h.configs)
+		r.Commands = publicCommands(h.commands)
 		if h.cwd != "" && h.cwd != r.Cwd {
 			r.Cwd = h.cwd
 			r.Dir = dirLabel(h.cwd)
@@ -176,6 +184,20 @@ func (h *hosted) applyModes(m acp.SessionModes) {
 	hostedMu.Unlock()
 }
 
+// applyConfigs records the agent's settings block. The agent's answer is
+// authoritative: setting one option can change another (a model that does
+// not support an effort level resets it), so a set replaces the whole
+// list rather than patching one entry.
+func (h *hosted) applyConfigs(in []acp.ConfigOption) {
+	if len(in) == 0 {
+		return
+	}
+	hostedMu.Lock()
+	h.configs = in
+	hostedMu.Unlock()
+	h.republish()
+}
+
 // republish refreshes this session's roster row without changing its
 // state — used when only the detached flag moved.
 func (h *hosted) republish() {
@@ -186,6 +208,10 @@ func (h *hosted) republish() {
 			r.Used, r.Size = h.used, h.size
 			r.Title = h.title
 			r.Mode, r.Modes = h.mode, publicModes(h.modes)
+			r.Configs = publicConfigs(h.configs)
+			r.Commands = publicCommands(h.commands)
+			r.Configs = publicConfigs(h.configs)
+			r.Commands = publicCommands(h.commands)
 			r.lastSeen = now
 		}
 		s.Rows = publish(now)
@@ -231,6 +257,18 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 			hostedMu.Unlock()
 			h.republish()
 		}
+
+	case acp.UpdateConfigOption:
+		// The agent changed a setting itself; follow the wire.
+		if len(n.Update.ConfigOptions) > 0 {
+			h.applyConfigs(n.Update.ConfigOptions)
+		}
+
+	case acp.UpdateAvailableCommands:
+		hostedMu.Lock()
+		h.commands = n.Update.AvailableCommands
+		hostedMu.Unlock()
+		h.republish()
 
 	case acp.UpdateSessionInfo:
 		// The agent names its own session once it knows what it is about.
@@ -525,6 +563,25 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		return nil
 	})
 
+	// agent_set_config: change one of the agent's own settings (model,
+	// reasoning effort, plan mode, …).
+	sdk.HandleFromVoid(bus, "agent_set_config", func(_ *sdk.Conn, _ string, req configReq, _ wire.Sender) error {
+		h := lookupHosted(req.Key)
+		if h == nil || req.ID == "" {
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		res, err := h.client.SetConfigOption(ctx, h.sessionID, req.ID, req.Value)
+		if err != nil {
+			log.Printf("agentd: acp set_config key=%s id=%s value=%s: %v", h.key, req.ID, req.Value, err)
+			return nil
+		}
+		log.Printf("agentd: acp config key=%s %s=%s", h.key, req.ID, req.Value)
+		h.applyConfigs(res.ConfigOptions)
+		return nil
+	})
+
 	// agent_cancel: abort the running turn. A notification, not a request:
 	// the agent acknowledges by ending the turn with stopReason=cancelled,
 	// which promptHosted already handles. Without this there is no stop
@@ -552,6 +609,62 @@ type startReq struct {
 	Agent  string `json:"agent"`
 	Cwd    string `json:"cwd"`
 	Prompt string `json:"prompt,omitempty"`
+}
+
+// Elicit answers elicitation/create — the agent asking the HUMAN a
+// structured question ("which of these?"), not permission ("may I?").
+//
+// Answering properly needs a form renderer for the requested JSON schema,
+// which does not exist yet. So this shows the question in the transcript
+// and declines: the human at least SEES what was asked, and the agent
+// learns the answer was no rather than that the client is broken.
+//
+// The alternative — not implementing it at all — returns -32601 and lets
+// the agent ask in prose instead, which for some agents is a better
+// outcome. That is the trade being made here, and it should be revisited
+// the moment a form renderer exists.
+func (h *hosted) Elicit(_ context.Context, req acp.ElicitRequest) (acp.ElicitResponse, error) {
+	log.Printf("agentd: acp elicitation key=%s message=%q (declining — no form renderer)", h.key, req.Message)
+	if h.conn != nil {
+		e := appendPrompt(h.key, "The agent asked: "+req.Message+"\n(wash cannot answer structured questions yet, so it declined.)", time.Now())
+		e.Kind = EventMessage
+		pushEvent(h.conn, h.key, e)
+	}
+	return acp.ElicitResponse{Action: acp.ElicitDecline}, nil
+}
+
+type configReq struct {
+	Key   string `json:"key"`
+	ID    string `json:"id"`
+	Value string `json:"value"`
+}
+
+// publicConfigs / publicCommands copy for the wire (copy-on-write: a
+// snapshot may outlive this call).
+func publicConfigs(in []acp.ConfigOption) []Config {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Config, 0, len(in))
+	for _, o := range in {
+		vals := make([]ConfigValue, 0, len(o.Options))
+		for _, v := range o.Options {
+			vals = append(vals, ConfigValue{Value: v.Value, Name: v.Name, Description: v.Description})
+		}
+		out = append(out, Config{ID: o.ID, Name: o.Name, Description: o.Description, Current: o.CurrentValue, Values: vals})
+	}
+	return out
+}
+
+func publicCommands(in []acp.AvailableCommand) []Command {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Command, 0, len(in))
+	for _, c := range in {
+		out = append(out, Command{Name: c.Name, Description: c.Description})
+	}
+	return out
 }
 
 type modeReq struct {

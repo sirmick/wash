@@ -107,6 +107,22 @@ test.describe('managed agent sessions', () => {
     await expect(mode).toHaveValue('agent-full-access', { timeout: 15_000 });
   });
 
+  test("the agent's own settings render as controls and changing one reaches it", async ({ page, router }) => {
+    const win = await openAgent(page, router.url, 'say something');
+    await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
+
+    // One generic control per option the agent exposes — model here, but
+    // the same renderer covers reasoning effort and plan mode.
+    const model = win.locator('[data-testid="agent-config-model"]');
+    await expect(model).toHaveValue('fast');
+
+    await model.selectOption('smart');
+
+    // The agent returns its full config state, which is authoritative;
+    // this asserts the change round-tripped rather than stuck locally.
+    await expect(model).toHaveValue('smart', { timeout: 15_000 });
+  });
+
   test('closing a session window asks what to do with the agent', async ({ page, router }) => {
     const win = await openAgent(page, router.url, 'say something');
     await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });

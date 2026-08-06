@@ -8,7 +8,7 @@
 import { For, Show, createMemo, createSignal } from 'solid-js';
 import type { Component } from 'solid-js';
 import { AgentSession, Button, FilePicker, Overlay, createAppBus, defineWashApp, tokens } from '@wash/ui';
-import type { AgentAsk, AgentEvent, AgentStatus } from '@wash/ui';
+import type { AgentAsk, AgentConfig, AgentEvent, AgentStatus } from '@wash/ui';
 
 interface Adapter {
   id: string;
@@ -29,6 +29,8 @@ interface RosterRow {
   title?: string;
   mode?: string;
   modes?: { id: string; name: string; description?: string }[];
+  configs?: AgentConfig[];
+  commands?: { name: string; description?: string }[];
 }
 
 interface RosterState {
@@ -119,6 +121,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       title: r?.title,
       mode: r?.mode,
       modes: r?.modes,
+      configs: r?.configs,
+      commands: r?.commands,
     };
   });
 
@@ -283,6 +287,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         onAnswer={(id, decision, rule) => send({ kind: 'answer', id, decision, rule: rule ?? '' })}
         onCancel={() => send({ kind: 'cancel' })}
         onSetMode={(mode) => send({ kind: 'set_mode', mode })}
+        onSetConfig={(id, value) => send({ kind: 'set_config', id, value })}
       />
     </Show>
     </>

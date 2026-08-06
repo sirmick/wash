@@ -124,11 +124,78 @@ type SessionModels struct {
 
 type NewSessionResponse struct {
 	SessionID string `json:"sessionId"`
+	// ConfigOptions is the generic settings block (model, reasoning
+	// effort, plan mode, …). Observed on codex-acp 1.1.9.
+	ConfigOptions []ConfigOption `json:"configOptions,omitempty"`
 	// Modes and Models are what the agent will let you change mid-session.
 	// Observed on codex-acp 1.1.9; absent from adapters that offer neither,
 	// which is why nothing here is required.
 	Modes  SessionModes  `json:"modes,omitempty"`
 	Models SessionModels `json:"models,omitempty"`
+}
+
+// ConfigOption is a per-session setting the agent exposes generically:
+// model, reasoning effort, collaboration/plan mode, fast mode. One shape
+// covers all of them and whatever an adapter adds later, which is why
+// this is rendered by a single control rather than four bespoke ones.
+type ConfigOption struct {
+	ID           string              `json:"id"`
+	Name         string              `json:"name"`
+	Description  string              `json:"description,omitempty"`
+	Category     string              `json:"category,omitempty"`
+	Type         string              `json:"type,omitempty"`
+	CurrentValue string              `json:"currentValue,omitempty"`
+	Options      []ConfigOptionValue `json:"options,omitempty"`
+}
+
+type ConfigOptionValue struct {
+	Value       string `json:"value"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+type SetConfigOptionRequest struct {
+	SessionID string `json:"sessionId"`
+	ConfigID  string `json:"configId"`
+	Value     string `json:"value"`
+}
+
+type SetConfigOptionResponse struct {
+	ConfigOptions []ConfigOption `json:"configOptions,omitempty"`
+}
+
+// AvailableCommand is one slash command the agent offers.
+type AvailableCommand struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Input       *struct {
+		Hint string `json:"hint,omitempty"`
+	} `json:"input,omitempty"`
+}
+
+// ---- elicitation ----
+//
+// The agent asking YOU a structured question, distinct from a permission
+// request: "which of these?", not "may I?". Answering needs a form, so
+// wash's minimum honest behaviour is to show the question and let the
+// human decline — never to answer on their behalf.
+
+type ElicitRequest struct {
+	SessionID string          `json:"sessionId,omitempty"`
+	Message   string          `json:"message"`
+	Mode      string          `json:"mode,omitempty"`
+	Schema    json.RawMessage `json:"requestedSchema,omitempty"`
+}
+
+const (
+	ElicitAccept  = "accept"
+	ElicitDecline = "decline"
+	ElicitCancel  = "cancel"
+)
+
+type ElicitResponse struct {
+	Action  string          `json:"action"`
+	Content json.RawMessage `json:"content,omitempty"`
 }
 
 type SetModeRequest struct {
@@ -268,10 +335,11 @@ const (
 	// Observed on the wire but deliberately not consumed (2026-08-04,
 	// claude-agent-acp 0.64.2 and codex-acp 1.1.9). Named so that seeing
 	// one is a decision rather than a surprise.
-	UpdateAvailableCommands = "available_commands_update"
 	UpdateUsage             = "usage_update"
 	UpdateSessionInfo       = "session_info_update"
 	UpdateCurrentMode       = "current_mode_update"
+	UpdateConfigOption      = "config_option_update"
+	UpdateAvailableCommands = "available_commands_update"
 )
 
 // ToolCall is both the `tool_call` update and (partially populated) the
@@ -296,6 +364,10 @@ type SessionUpdate struct {
 	// {"sessionUpdate":"usage_update","used":14689,"size":258400}.
 	Used int64 `json:"used,omitempty"`
 	Size int64 `json:"size,omitempty"`
+	// AvailableCommands rides available_commands_update; ConfigOptions
+	// rides config_option_update.
+	AvailableCommands []AvailableCommand `json:"availableCommands,omitempty"`
+	ConfigOptions     []ConfigOption     `json:"configOptions,omitempty"`
 	// ModeID rides current_mode_update when the agent changes mode on its
 	// own (a slash command, its own policy) — so the UI follows the wire
 	// rather than assuming its last set_mode stuck.
@@ -453,6 +525,8 @@ const (
 	MethodSessionPrompt     = "session/prompt"
 	MethodSessionCancel     = "session/cancel"
 	MethodSessionSetMode    = "session/set_mode"
+	MethodSessionSetConfig  = "session/set_config_option"
+	MethodElicitationCreate = "elicitation/create"
 	MethodSessionUpdate     = "session/update"
 	MethodRequestPermission = "session/request_permission"
 	MethodReadTextFile      = "fs/read_text_file"

@@ -100,6 +100,10 @@ type Row struct {
 	// (docs/AGENT_APP.md §9). Empty for an agent with no such notion.
 	Mode  string `json:"mode,omitempty"`
 	Modes []Mode `json:"modes,omitempty"`
+	// Configs is the agent's generic settings block (model, reasoning
+	// effort, plan mode…). Commands are its own slash commands.
+	Configs  []Config  `json:"configs,omitempty"`
+	Commands []Command `json:"commands,omitempty"`
 	// Detached marks a session still running with no window pointing at
 	// it — the sidebar offers Reattach rather than focus.
 	Detached bool `json:"detached,omitempty"`
@@ -111,6 +115,27 @@ type Row struct {
 // Mode is one approval/sandbox preset an agent offers.
 type Mode struct {
 	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// Config is one agent setting the session can change.
+type Config struct {
+	ID          string        `json:"id"`
+	Name        string        `json:"name"`
+	Description string        `json:"description,omitempty"`
+	Current     string        `json:"current,omitempty"`
+	Values      []ConfigValue `json:"values,omitempty"`
+}
+
+type ConfigValue struct {
+	Value       string `json:"value"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// Command is one slash command the agent offers.
+type Command struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 }

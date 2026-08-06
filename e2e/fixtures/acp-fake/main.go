@@ -80,7 +80,16 @@ func main() {
 						map[string]any{"id": "agent-full-access", "name": "Agent (full access)", "description": "No approval required."},
 					},
 				},
+				"configOptions": []any{configState("model", "fast")["configOptions"].([]any)[0]},
 			})
+
+		case "session/set_config_option":
+			params, _ := m["params"].(map[string]any)
+			cfgID, _ := params["configId"].(string)
+			val, _ := params["value"].(string)
+			// The agent's answer is authoritative and returns the WHOLE
+			// list, which is why the client replaces rather than patches.
+			reply(out, id, configState(cfgID, val))
 
 		case "session/set_mode":
 			params, _ := m["params"].(map[string]any)
@@ -223,6 +232,22 @@ func outcomeOf(res any) string {
 		return "none"
 	}
 	return kind
+}
+
+// configState keeps the set_config reply the same shape the real adapter
+// returns: the full option list, with the new value applied.
+func configState(configID, value string) map[string]any {
+	return map[string]any{
+		"configOptions": []any{
+			map[string]any{
+				"id": configID, "name": "Model", "type": "select", "currentValue": value,
+				"options": []any{
+					map[string]any{"value": "fast", "name": "Fast"},
+					map[string]any{"value": "smart", "name": "Smart"},
+				},
+			},
+		},
+	}
 }
 
 func promptText(m map[string]any) string {

@@ -31,6 +31,13 @@ type FileSystem interface {
 	WriteTextFile(ctx context.Context, req WriteTextFileRequest) error
 }
 
+// Elicitations is optional: implement it to answer elicitation/create,
+// the agent asking the human a structured question. A host that does not
+// implement it answers -32601 and the agent asks in prose instead.
+type Elicitations interface {
+	Elicit(ctx context.Context, req ElicitRequest) (ElicitResponse, error)
+}
+
 // Terminals is optional: implement it and advertise
 // ClientCapabilities.Terminal to have the agent's shell commands run in
 // wash terminals (§8) rather than inside the adapter.
@@ -121,6 +128,17 @@ func (c *Client) SetMode(ctx context.Context, sessionID, modeID string) error {
 	return c.conn.Call(ctx, MethodSessionSetMode, SetModeRequest{SessionID: sessionID, ModeID: modeID}, nil)
 }
 
+// SetConfigOption changes one of the agent's generic per-session
+// settings. Returns the agent's full config state, which is authoritative
+// — a set can change more than the one option (picking a model can reset
+// the reasoning effort it supports).
+func (c *Client) SetConfigOption(ctx context.Context, sessionID, configID, value string) (SetConfigOptionResponse, error) {
+	var res SetConfigOptionResponse
+	err := c.conn.Call(ctx, MethodSessionSetConfig,
+		SetConfigOptionRequest{SessionID: sessionID, ConfigID: configID, Value: value}, &res)
+	return res, err
+}
+
 // LoadSession resumes a previous session by id. The agent replays the
 // whole conversation as session/update notifications *before* answering,
 // so the handler sees the history arrive first — which is exactly what a
@@ -198,6 +216,17 @@ func (d *dispatch) Handle(ctx context.Context, method string, params json.RawMes
 			return nil, err
 		}
 		return nil, fs.WriteTextFile(ctx, req)
+
+	case MethodElicitationCreate:
+		e, ok := d.h.(Elicitations)
+		if !ok {
+			return nil, ErrMethodNotFound
+		}
+		var req ElicitRequest
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, err
+		}
+		return e.Elicit(ctx, req)
 
 	case MethodTerminalCreate:
 		t, ok := d.h.(Terminals)

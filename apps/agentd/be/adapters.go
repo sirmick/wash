@@ -150,6 +150,10 @@ func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	h.sessionID = res2.SessionID
 	h.applyModes(res2.Modes)
 	h.register()
+	// The settings block arrives with the session, not only on later
+	// updates — without this the controls were empty until the agent
+	// happened to change something itself.
+	h.applyConfigs(res2.ConfigOptions)
 	log.Printf("agentd: acp session started key=%s agent=%s session=%s cwd=%s mode=%s modes=%d",
 		h.key, agentID, res2.SessionID, h.cwd, res2.Modes.CurrentModeID, len(res2.Modes.AvailableModes))
 	return h, nil

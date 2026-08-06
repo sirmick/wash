@@ -59,6 +59,18 @@ export interface AgentStatus {
   /** the agent's active approval preset, and what it offers */
   mode?: string;
   modes?: { id: string; name: string; description?: string }[];
+  /** the agent's generic settings: model, reasoning effort, plan mode… */
+  configs?: AgentConfig[];
+  /** the agent's own slash commands */
+  commands?: { name: string; description?: string }[];
+}
+
+export interface AgentConfig {
+  id: string;
+  name: string;
+  description?: string;
+  current?: string;
+  values?: { value: string; name: string; description?: string }[];
 }
 
 export interface AgentSessionProps {
@@ -75,6 +87,8 @@ export interface AgentSessionProps {
   onCancel?: () => void;
   /** Switch the agent's approval preset. Absent hides the control. */
   onSetMode?: (modeID: string) => void;
+  /** Change one of the agent's own settings. Absent hides the controls. */
+  onSetConfig?: (id: string, value: string) => void;
   /** Rendered above the transcript; the launcher uses it for its form. */
   header?: JSX.Element;
   placeholder?: string;
@@ -440,6 +454,42 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           padding: `${tokens.spaceMd}px`,
         }}
       >
+        <Show when={(props.status?.().commands?.length ?? 0) > 0}>
+          <div
+            data-testid="agent-commands"
+            style={{
+              display: 'flex',
+              gap: `${tokens.spaceSm}px`,
+              'flex-wrap': 'wrap',
+              'margin-bottom': `${tokens.spaceXs}px`,
+            }}
+          >
+            <For each={props.status?.().commands ?? []}>
+              {(cmd) => (
+                <button
+                  type="button"
+                  title={cmd.description}
+                  onClick={() => {
+                    setDraft('/' + cmd.name + ' ');
+                    input?.focus();
+                  }}
+                  style={{
+                    font: tokens.type.monoSm,
+                    padding: `2px ${tokens.spaceSm}px`,
+                    'border-radius': tokens.radiusSm,
+                    border: `1px solid ${tokens.borderMenu}`,
+                    background: tokens.bgInset,
+                    color: tokens.fgMuted,
+                    cursor: 'pointer',
+                  }}
+                >
+                  /{cmd.name}
+                </button>
+              )}
+            </For>
+          </div>
+        </Show>
+
         <textarea
           ref={input}
           rows={2}
@@ -503,13 +553,49 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           <span style={{ color: tokens.fgDim }}>·</span>
           <span>{st().dir}</span>
         </Show>
+        {/* The agent's own settings — model, reasoning effort, plan mode
+            — all arrive in one generic shape, so ONE control renders
+            them and whatever an adapter adds later. When the agent
+            exposes `mode` here too, this replaces the dedicated mode
+            select rather than showing it twice. */}
+        <For each={props.status?.().configs ?? []}>
+          {(cfg) => (
+            <>
+              <select
+                data-testid={`agent-config-${cfg.id}`}
+                value={cfg.current ?? ''}
+                title={cfg.description || cfg.name}
+                onChange={(e) => props.onSetConfig?.(cfg.id, e.currentTarget.value)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: tokens.fgMuted,
+                  font: tokens.type.monoSm,
+                  cursor: 'pointer',
+                  outline: 'none',
+                  'max-width': '16ch',
+                }}
+              >
+                <For each={cfg.values ?? []}>
+                  {(v) => (
+                    <option value={v.value} title={v.description}>
+                      {v.name}
+                    </option>
+                  )}
+                </For>
+              </select>
+              <span style={{ color: tokens.fgDim }}>·</span>
+            </>
+          )}
+        </For>
+
         {/* The approval preset lives HERE, on the session it governs,
             rather than in Settings: it is a per-session decision about
             this piece of work, and the agent owns it — wash is only
             asking. Changing it is visible to the agent and reversible
             from either side, unlike a blanket allow wash keeps to
             itself. */}
-        <Show when={(st().modes?.length ?? 0) > 0 && props.onSetMode}>
+        <Show when={(st().modes?.length ?? 0) > 0 && props.onSetMode && !(st().configs ?? []).some((c) => c.id === 'mode')}>
           <select
             data-testid="agent-mode"
             value={st().mode ?? ''}
