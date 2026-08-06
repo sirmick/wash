@@ -390,3 +390,24 @@ func itoa(v int) string {
 	}
 	return string(b[i:])
 }
+
+// usage_update and session_info_update carry the two facts a status bar
+// wants — how much context is gone, and what the agent decided this
+// session is about. Both were arriving and being dropped on the floor.
+//
+// Shapes observed 2026-08-05 against codex-acp 1.1.9, not guessed.
+func TestUsageAndTitleDecode(t *testing.T) {
+	h := &recordingHandler{}
+	_, agent := newPair(t, h)
+
+	agent.send(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"usage_update","used":14689,"size":258400}}}`)
+	agent.send(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"session_info_update","title":"Reply with the single word: ok"}}}`)
+
+	got := waitFor(t, h, 2)
+	if got[0].Update.Used != 14689 || got[0].Update.Size != 258400 {
+		t.Errorf("usage = %d/%d, want 14689/258400", got[0].Update.Used, got[0].Update.Size)
+	}
+	if got[1].Update.Title != "Reply with the single word: ok" {
+		t.Errorf("title = %q", got[1].Update.Title)
+	}
+}

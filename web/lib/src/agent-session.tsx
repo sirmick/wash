@@ -49,6 +49,11 @@ export interface AgentStatus {
   dirty?: boolean;
   /** running | working | needs-input | done */
   state?: string;
+  /** context tokens used / window size, from the agent's usage_update */
+  used?: number;
+  size?: number;
+  /** the agent's own name for this session */
+  title?: string;
 }
 
 export interface AgentSessionProps {
@@ -61,9 +66,20 @@ export interface AgentSessionProps {
   onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string) => void;
   /** Click on a tool row — the host decides what that opens. */
   onOpenTool?: (e: AgentEvent) => void;
+  /** Abort the running turn. Absent means the session cannot be stopped. */
+  onCancel?: () => void;
   /** Rendered above the transcript; the launcher uses it for its form. */
   header?: JSX.Element;
   placeholder?: string;
+}
+
+// fmtTokens renders a context count the way a status bar wants it: two
+// significant figures and a k, because the exact token count is never the
+// question — "how close am I to the wall" is.
+function fmtTokens(n: number): string {
+  if (n < 1000) return String(n);
+  const k = n / 1000;
+  return (k < 10 ? k.toFixed(1) : Math.round(k).toString()) + 'k';
 }
 
 // State dot colours, the same vocabulary the roster established: blue
@@ -378,6 +394,16 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           <div style={{ display: 'flex', 'align-items': 'center', gap: `${tokens.spaceMd}px`, color: tokens.fgDim, font: tokens.type.textSm }}>
             <Spinner />
             <span>working…</span>
+            <Show when={props.onCancel}>
+              <button
+                type="button"
+                data-testid="agent-stop"
+                onClick={() => props.onCancel?.()}
+                style={askBtn(tokens.bgNeutral, tokens.fgMuted)}
+              >
+                Stop
+              </button>
+            </Show>
           </div>
         </Show>
       </div>
@@ -451,6 +477,10 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
         <Show when={st().dir}>
           <span style={{ color: tokens.fgDim }}>·</span>
           <span>{st().dir}</span>
+        </Show>
+        <Show when={st().used && st().size}>
+          <span style={{ color: tokens.fgDim }}>·</span>
+          <span title="context used / window">{fmtTokens(st().used!)}/{fmtTokens(st().size!)}</span>
         </Show>
         <Show when={st().branch}>
           <span style={{ color: tokens.fgDim }}>·</span>

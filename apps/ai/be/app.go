@@ -225,6 +225,15 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		})
 		_ = c.ConfirmClose(c.WindowID(), true)
 
+	case "cancel":
+		if session.key == "" {
+			return
+		}
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind": "agent_cancel",
+			"key":  session.key,
+		})
+
 	case "answer":
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
 			"kind":     "agent_answer",

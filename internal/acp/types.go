@@ -231,6 +231,15 @@ type ToolCall struct {
 type SessionUpdate struct {
 	SessionUpdate string  `json:"sessionUpdate"`
 	Content       Content `json:"content,omitempty"`
+	// Used / Size ride usage_update: context tokens consumed out of the
+	// window. Observed 2026-08-05 on codex-acp as
+	// {"sessionUpdate":"usage_update","used":14689,"size":258400}.
+	Used int64 `json:"used,omitempty"`
+	Size int64 `json:"size,omitempty"`
+	// Title is the agent's own name for the session on
+	// session_info_update — and the tool's label on tool_call, since both
+	// arrive under the same key. Which one it means is the discriminator's
+	// business, not this struct's.
 	ToolCall
 	Raw json.RawMessage `json:"-"`
 }

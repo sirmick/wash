@@ -91,6 +91,11 @@ type Row struct {
 	// SinceMS is how long the row has been in this state, as of the push.
 	// The FE anchors its own clock to it (no cross-clock comparison).
 	SinceMS int64 `json:"since_ms"`
+	// Used / Size are the agent's context accounting (usage_update), and
+	// Title is its own name for the session (session_info_update).
+	Used  int64  `json:"used,omitempty"`
+	Size  int64  `json:"size,omitempty"`
+	Title string `json:"title,omitempty"`
 	// Detached marks a session still running with no window pointing at
 	// it — the sidebar offers Reattach rather than focus.
 	Detached bool `json:"detached,omitempty"`

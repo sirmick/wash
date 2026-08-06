@@ -56,6 +56,11 @@ type hosted struct {
 	// session/load resumes.
 	sessionID string
 	stop      func()
+	// used / size are the agent's context accounting; title is its own
+	// name for the session. Both arrive as session/update variants that
+	// nothing else consumes.
+	used, size int64
+	title      string
 	// detached means no window is pointing at this session. It keeps
 	// running; the roster row is how the user gets back to it.
 	detached bool
@@ -124,6 +129,8 @@ func (h *hosted) setState(state, reason string) {
 		r.Reason = reason
 		r.SessionID = h.sessionID
 		r.Detached = h.detached
+		r.Used, r.Size = h.used, h.size
+		r.Title = h.title
 		if h.cwd != "" && h.cwd != r.Cwd {
 			r.Cwd = h.cwd
 			r.Dir = dirLabel(h.cwd)
@@ -159,6 +166,8 @@ func (h *hosted) republish() {
 	mutateState(func(s *State) {
 		if r := rows[h.key]; r != nil {
 			r.Detached = h.detached
+			r.Used, r.Size = h.used, h.size
+			r.Title = h.title
 			r.lastSeen = now
 		}
 		s.Rows = publish(now)
@@ -184,6 +193,23 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 		// permission overrides this from RequestPermission, and the turn
 		// ending overrides it from prompt().
 		h.setState("working", "")
+	case acp.UpdateUsage:
+		if n.Update.Size > 0 || n.Update.Used > 0 {
+			hostedMu.Lock()
+			h.used, h.size = n.Update.Used, n.Update.Size
+			hostedMu.Unlock()
+			h.republish()
+		}
+
+	case acp.UpdateSessionInfo:
+		// The agent names its own session once it knows what it is about.
+		if n.Update.Title != "" {
+			hostedMu.Lock()
+			h.title = n.Update.Title
+			hostedMu.Unlock()
+			h.republish()
+		}
+
 	case "":
 		// A variant that did not decode. Logged rather than dropped: on a
 		// protocol under active development this is the early warning
@@ -444,6 +470,20 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		hostedMu.Unlock()
 		h.republish()
 		return nil
+	})
+
+	// agent_cancel: abort the running turn. A notification, not a request:
+	// the agent acknowledges by ending the turn with stopReason=cancelled,
+	// which promptHosted already handles. Without this there is no stop
+	// button at all — a runaway turn could only be waited out or killed
+	// along with its session.
+	sdk.HandleFromVoid(bus, "agent_cancel", func(_ *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
+		h := lookupHosted(req.Key)
+		if h == nil {
+			return nil
+		}
+		log.Printf("agentd: acp cancel key=%s session=%s", h.key, h.sessionID)
+		return h.client.Cancel(h.sessionID)
 	})
 
 	// agent_stop: end a session and its adapter.
