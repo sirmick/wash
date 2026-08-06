@@ -175,6 +175,12 @@ type Router struct {
 	linkTotals   *LinkStats
 	connectCount atomic.Uint64
 	started      time.Time
+	// shellID is a per-router-run identity included in session snapshots.
+	// reloadEpoch bumps when dev-reload broadcasts a page reload for changed
+	// app binaries. Together they let a live page detect a missed reload after
+	// reconnect and refresh before app/vendor module versions diverge.
+	shellID     string
+	reloadEpoch atomic.Uint64
 
 	// Asset cache (docs/QOS.md): path → cached identity+gzip bytes, so the
 	// asset.read path reads + compresses each file once per process rather
@@ -281,6 +287,7 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 	if log == nil {
 		log = func(string, ...any) {}
 	}
+	now := time.Now()
 	return &Router{
 		cfg:               cfg,
 		reg:               reg,
@@ -298,7 +305,8 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		ingress:           newIngressRegistry(log),
 		peers:             make(map[string]peerTarget),
 		linkTotals:        &LinkStats{},
-		started:           time.Now(),
+		started:           now,
+		shellID:           fmt.Sprintf("%x", now.UnixNano()),
 	}
 }
 
@@ -307,6 +315,13 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 // totals come from already-finished connections; live is the current one.
 func (r *Router) sessionLinkTotals(live wire.LinkStatsSnapshot) wire.LinkStatsSnapshot {
 	return r.linkTotals.snapshot([numClasses]int{}).Plus(live)
+}
+
+func (r *Router) shellCoherenceID() string {
+	if r.shellID == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d", r.shellID, r.reloadEpoch.Load())
 }
 
 // SetAssets installs the embedded shell-runtime FS so TShellAssetRead

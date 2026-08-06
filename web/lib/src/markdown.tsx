@@ -32,7 +32,7 @@ type Block =
 export type Align = 'left' | 'center' | 'right';
 
 const H_RE = /^(#{1,6})\s+(.*)$/;
-const FENCE_RE = /^\s*```(\w*)\s*$/;
+const FENCE_OPEN_RE = /^\s*(`{3,}|~{3,})(.*)$/;
 const UL_RE = /^\s*[-*+]\s+(.*)$/;
 const OL_RE = /^\s*\d+[.)]\s+(.*)$/;
 const QUOTE_RE = /^\s*>\s?(.*)$/;
@@ -59,6 +59,26 @@ function alignOf(sep: string): Align[] {
   });
 }
 
+function fenceOpen(line: string): { marker: string; lang: string } | null {
+  const m = FENCE_OPEN_RE.exec(line);
+  if (!m) return null;
+  const info = (m[2] ?? '').trim();
+  // Backtick info strings cannot themselves contain backticks. Treat that
+  // as literal text rather than guessing where the fence should end.
+  if (m[1][0] === '`' && info.includes('`')) return null;
+  return { marker: m[1], lang: info.split(/\s+/, 1)[0] ?? '' };
+}
+
+function fenceClose(line: string, open: { marker: string }): boolean {
+  const s = line.trim();
+  const ch = open.marker[0];
+  if (!s.startsWith(ch.repeat(open.marker.length))) return false;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] !== ch) return false;
+  }
+  return true;
+}
+
 /** parseBlocks splits text into block-level chunks. */
 export function parseBlocks(src: string): Block[] {
   const lines = src.split('\n');
@@ -74,16 +94,16 @@ export function parseBlocks(src: string): Block[] {
   while (i < lines.length) {
     const line = lines[i];
 
-    const fence = FENCE_RE.exec(line);
+    const fence = fenceOpen(line);
     if (fence) {
       flushPara(para);
       const body: string[] = [];
       i++;
       // An unterminated fence runs to the end — which is exactly what a
       // half-streamed code block looks like, and it must still render.
-      while (i < lines.length && !FENCE_RE.test(lines[i])) body.push(lines[i++]);
+      while (i < lines.length && !fenceClose(lines[i], fence)) body.push(lines[i++]);
       i++; // consume the closing fence if present
-      out.push({ t: 'code', lang: fence[1] ?? '', lines: body });
+      out.push({ t: 'code', lang: fence.lang, lines: body });
       continue;
     }
 

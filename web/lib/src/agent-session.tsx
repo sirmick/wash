@@ -424,10 +424,10 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                     : {}),
                 }}
               >
-                {/* Agents answer in Markdown; what you typed is literal.
+                {/* Agent-authored prose is Markdown; what you typed is literal.
                     Rendering your own prompt as Markdown would eat the
                     asterisks and backticks you meant to send. */}
-                <Show when={e.kind === 'message'} fallback={<>{e.text}</>}>
+                <Show when={e.kind === 'message' || e.kind === 'thought'} fallback={<>{e.text}</>}>
                   <Markdown text={e.text ?? ''} />
                 </Show>
               </div>

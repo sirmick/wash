@@ -358,6 +358,7 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 			"key":  session.key,
 		})
 		c.SendAppMsg(map[string]any{"kind": "started", "key": session.key, "session_id": str(m["session_id"])})
+		go keepWatching(c)
 
 	case "transcript_snapshot":
 		if str(m["key"]) != session.key {

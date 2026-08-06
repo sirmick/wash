@@ -213,6 +213,7 @@ func (r *Router) killInstancesByBinary(binaryPath string) int {
 // browser. Best-effort: a busy/closed shell just times out and
 // the new one (post-reload) reconnects.
 func (r *Router) broadcastReload(reason string) {
+	r.reloadEpoch.Add(1)
 	msg := wire.NewShellReload(reason)
 	for _, s := range r.shellList() {
 		_ = s.WriteCtrl(msg)

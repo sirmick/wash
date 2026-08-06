@@ -132,6 +132,7 @@ interface ShellSessionSnapshot {
   t: 'session.snapshot';
   windows: SessionWindow[];
   app_state?: Record<string, unknown>;
+  shell_id?: string;
 }
 
 export interface SessionPatch {
@@ -301,6 +302,7 @@ type ShellCtrlMsg =
 // catalogSub is the LOCAL router's catalog (drives the launcher).
 const catalogSub = new Sub<CatalogApp[]>([]);
 const panelsSub = new Sub<PanelDesc[]>([]);
+let localShellID = '';
 
 // Remote routers' catalogs, keyed by origin (docs/REMOTE.md §6.1). A
 // remote host's catalog arrives on connect exactly like the local one;
@@ -434,7 +436,7 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         handleAppDeclared(client, msg);
         break;
       case 'session.snapshot':
-        handleSnapshot(client, msg);
+        handleSnapshot(client, msg, isLocal);
         // A fresh snapshot from the LOCAL router means this tab just (re)attached
         // as the foreground head, so any prior "opened elsewhere" notice is stale.
         if (isLocal) setSuperseded(null);
@@ -997,7 +999,15 @@ function handleAppDeclared(client: RouterClient, msg: ShellAppDeclared): void {
 // handleSnapshot rebuilds a router's WM state from its canonical view.
 // Sent on connect/reconnect. The app_state cache is replaced per-origin so
 // stale entries from no-longer-running instances don't linger.
-function handleSnapshot(client: RouterClient, msg: ShellSessionSnapshot): void {
+function handleSnapshot(client: RouterClient, msg: ShellSessionSnapshot, isLocal: boolean): void {
+  if (isLocal && msg.shell_id) {
+    if (localShellID && localShellID !== msg.shell_id) {
+      console.info('wash shell: router asset identity changed; reloading page');
+      window.location.reload();
+      return;
+    }
+    localShellID = msg.shell_id;
+  }
   replaceSavedStates(client.origin, msg.app_state);
   applySessionSnapshot(client.origin, msg.windows, (id) => client.waitForBundle(id));
 }
