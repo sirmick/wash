@@ -584,8 +584,18 @@ $(OUT)/wash-priv-fakesudo: | $(OUT)
 
 # Convenience target: build the test app + everything else.
 .PHONY: test-app
-test-app: $(OUT)/wash-priv-fakesudo
+test-app: $(OUT)/wash-priv-fakesudo $(OUT)/e2e/codex-acp
 	$(MAKE) TEST_APP=1 all
+
+# acp-fake stands in for an ACP adapter in the e2e suite. Built under the
+# NAME OF THE ADAPTER IT REPLACES so the production probe finds it on a
+# PATH the test controls — nothing in production knows it exists. Its
+# frames were captured from real adapters with the conformance tracer, and
+# it passes the same conformance test they do.
+.PHONY: $(OUT)/e2e/codex-acp
+$(OUT)/e2e/codex-acp:
+	@mkdir -p $(OUT)/e2e
+	$(call go_build,$@,e2e/fixtures/acp-fake)
 
 # Multi-call build. Compiles cmd/wash with -tags=multicall — the
 # resulting binary dispatches by argv[0] to whatever apps are

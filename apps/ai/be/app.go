@@ -210,20 +210,10 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 	case "detach":
 		// Leave the session running. agentd keeps its roster row, which
 		// is where the user gets back to it.
-		closing = true
-		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
-			"kind": "agent_detach",
-			"key":  session.key,
-		})
-		_ = c.ConfirmClose(c.WindowID(), true)
+		finishClose(c, "agent_detach")
 
 	case "terminate":
-		closing = true
-		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
-			"kind": "agent_stop",
-			"key":  session.key,
-		})
-		_ = c.ConfirmClose(c.WindowID(), true)
+		finishClose(c, "agent_stop")
 
 	case "cancel":
 		if session.key == "" {
@@ -322,7 +312,7 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 //
 // With no session there is nothing to ask about, so the close is allowed.
 func onCloseRequested(c *sdk.Conn, win uint32) bool {
-	if session.key == "" || closing {
+	if session.key == "" {
 		return true
 	}
 	c.SendAppMsg(map[string]any{"kind": "confirm_close"})
@@ -354,9 +344,33 @@ func keepWatching(c *sdk.Conn) {
 	}
 }
 
-// closing is set once the user has answered, so the second close request
-// (the one we ask for ourselves) goes straight through.
-var closing bool
+// finishClose tells agentd what to do with the session, then ends this
+// process — which is what actually closes the window.
+//
+// ConfirmClose(true) does not work here: the close request was already
+// answered (with a veto) before the dialog was shown, so a later
+// confirmation has nothing to answer and the window stays until the user
+// clicks the X a second time. DestroyWindow is documented as a no-op for
+// an app's primary window, which "dies with the instance" — so ending the
+// instance IS the close.
+//
+// The message is written synchronously and its error checked before
+// exiting, so the bytes are in the socket before this process goes away.
+// Nothing local needs cleaning up: agentd owns the adapter, not us.
+func finishClose(c *sdk.Conn, verb string) {
+	if err := c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+		"kind": verb,
+		"key":  session.key,
+	}); err != nil {
+		// Could not tell agentd — better to leave the window open than to
+		// vanish having neither detached nor terminated.
+		log.Printf("wash-ai: %s: %v", verb, err)
+		c.Warn("Could not close this session", err.Error())
+		return
+	}
+	log.Printf("wash-ai: %s key=%s, exiting", verb, session.key)
+	os.Exit(0)
+}
 
 func str(v any) string {
 	s, _ := v.(string)
