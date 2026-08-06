@@ -424,7 +424,12 @@ func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []str
 		// instead of inheriting wash-priv's parent env.
 		argv = []string{loginShellPath(), "-l"}
 	}
-	sess, err := pty.Open(context.Background(), c, windowID, cols, rows, argv, nil, func(s *pty.Session, reason string) {
+	// WithWashEnv is what makes a wash terminal a wash terminal: TERM
+	// pinned for xterm.js, $WASH_BIN_DIR prepended to PATH so `wash ai`
+	// and friends resolve without an absolute path, and the router's
+	// WASH_*-namespaced display hints mapped to the real DISPLAY /
+	// WAYLAND_DISPLAY a GUI client needs.
+	sess, err := pty.Open(context.Background(), c, windowID, cols, rows, argv, pty.WithWashEnv, func(s *pty.Session, reason string) {
 		// onClose runs from the pty goroutine when the session ends.
 		// Drop from the session map, tell the FE, dismiss the window
 		// if no tabs remain.
