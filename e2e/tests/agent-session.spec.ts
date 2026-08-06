@@ -123,6 +123,30 @@ test.describe('managed agent sessions', () => {
     await expect(model).toHaveValue('smart', { timeout: 15_000 });
   });
 
+  test('slash commands stay out of the way until you type one', async ({ page, router }) => {
+    const win = await openAgent(page, router.url, 'say something');
+    await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
+
+    const list = win.locator('[data-testid="agent-commands"]');
+    const composer = win.locator('textarea');
+
+    // The agent offers commands, but an idle composer shows none of them.
+    await expect(list).toBeHidden();
+
+    await composer.fill('/');
+    await expect(list).toBeVisible();
+    await expect(list.getByRole('button', { name: '/review' })).toBeVisible();
+
+    // Typing narrows it.
+    await composer.fill('/re');
+    await expect(list.getByRole('button', { name: '/review' })).toBeVisible();
+    await expect(list.getByRole('button', { name: '/compact' })).toBeHidden();
+
+    // A completed command is no longer a search.
+    await composer.fill('/review the diff');
+    await expect(list).toBeHidden();
+  });
+
   test('closing a session window asks what to do with the agent', async ({ page, router }) => {
     const win = await openAgent(page, router.url, 'say something');
     await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });

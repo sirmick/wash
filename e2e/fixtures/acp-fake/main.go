@@ -185,6 +185,14 @@ func runTurn(out *bufio.Writer, m map[string]any) {
 		"content": []any{map[string]any{"type": "text", "text": "ok"}},
 	}))
 	notify(out, update(map[string]any{"sessionUpdate": "session_info_update", "title": "Fake conversation"}))
+	notify(out, update(map[string]any{
+		"sessionUpdate": "available_commands_update",
+		"availableCommands": []any{
+			map[string]any{"name": "review", "description": "Review the diff"},
+			map[string]any{"name": "reset", "description": "Start over"},
+			map[string]any{"name": "compact", "description": "Compact the context"},
+		},
+	}))
 	reply(out, id, map[string]any{"stopReason": "end_turn"})
 }
 

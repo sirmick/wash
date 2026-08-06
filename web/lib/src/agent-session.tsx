@@ -214,6 +214,9 @@ const ToolRow: Component<{ e: AgentEvent; onOpen?: (e: AgentEvent) => void }> = 
 // focused most of the time, and a bare A must stay a letter you can type.
 // Alt+A / Alt+D collide with nothing in the terminal-adjacent muscle
 // memory this desktop already trains.
+// How many command suggestions fit before the list stops being a help.
+const MAX_SLASH = 8;
+
 const ALLOW_HINT = '⌥A';
 const DENY_HINT = '⌥D';
 
@@ -329,6 +332,19 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
     window.addEventListener('keydown', onKey);
     onCleanup(() => window.removeEventListener('keydown', onKey));
   });
+
+  // Commands offered for what is currently typed. Empty unless the draft
+  // starts with "/", so the composer is bare the rest of the time.
+  const slashMatches = () => {
+    const d = draft();
+    if (!d.startsWith('/')) return [];
+    const typed = d.slice(1).split(/\s/)[0].toLowerCase();
+    // A completed command followed by a space is no longer a search.
+    if (d.slice(1).includes(' ')) return [];
+    const all = props.status?.().commands ?? [];
+    if (typed === '') return all;
+    return all.filter((c) => c.name.toLowerCase().startsWith(typed));
+  };
 
   const send = () => {
     const text = draft().trim();
@@ -454,7 +470,11 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           padding: `${tokens.spaceMd}px`,
         }}
       >
-        <Show when={(props.status?.().commands?.length ?? 0) > 0}>
+        {/* Slash commands appear only while you are typing one. An agent
+            can offer dozens, and a permanent wall of chips above the
+            composer costs more attention than it saves — the list is an
+            autocomplete, not a toolbar. */}
+        <Show when={slashMatches().length > 0}>
           <div
             data-testid="agent-commands"
             style={{
@@ -462,9 +482,10 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
               gap: `${tokens.spaceSm}px`,
               'flex-wrap': 'wrap',
               'margin-bottom': `${tokens.spaceXs}px`,
+              'align-items': 'baseline',
             }}
           >
-            <For each={props.status?.().commands ?? []}>
+            <For each={slashMatches().slice(0, MAX_SLASH)}>
               {(cmd) => (
                 <button
                   type="button"
@@ -487,6 +508,11 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                 </button>
               )}
             </For>
+            <Show when={slashMatches().length > MAX_SLASH}>
+              <span style={{ font: tokens.type.monoSm, color: tokens.fgDim }}>
+                +{slashMatches().length - MAX_SLASH} more
+              </span>
+            </Show>
           </div>
         </Show>
 
