@@ -53,7 +53,6 @@ var aiDebug = os.Getenv("WASH_AGENT_DEBUG") != ""
 var def *sdk.AppDef
 
 func init() {
-	parseFlags()
 	sub, err := fs.Sub(assetsFS, "assets")
 	if err != nil {
 		panic("wash-ai: assets: " + err.Error())
@@ -160,6 +159,12 @@ var session struct {
 }
 
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
+	// Parsed HERE, not in init(): the multicall binary links every app
+	// into one process, so an init() that reads os.Args interprets the
+	// DISPATCHER's argv. `wash list-apps` was being read as
+	// `wash-ai list-apps` — which then ran an adapter probe, shelling out
+	// and logging, on every multicall invocation of every app.
+	parseFlags()
 	log.Printf("wash-ai ready instance=%s", instanceID)
 	// The launcher picks a working directory with the shared
 	// <FilePicker mode="directory">, which talks to its own BE rather than
