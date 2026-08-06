@@ -11,6 +11,8 @@ export type { AppBus, AppBusMessage, AppBusMsgBound, AppBusOptions } from './app
 export { Button } from './button';
 export type { ButtonProps, ButtonVariant, ButtonSize } from './button';
 export { Menu, MenuItem, MenuSeparator } from './menu';
+export { MenuBar, kbdStyle } from './menubar';
+export type { MenuBarProps, MenuBarMenu } from './menubar';
 export type { MenuProps, MenuItemProps } from './menu';
 export { Overlay, ConfirmDialog } from './overlay';
 export type { OverlayProps, ConfirmDialogProps } from './overlay';
