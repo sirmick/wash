@@ -50,7 +50,8 @@ test.describe('terminal robustness soak', () => {
   });
 
   test('heavy output burst drains without hanging the terminal', async ({ page, router }) => {
-    test.setTimeout(60_000);
+    // 45s drain + 15s probe has to fit, with room for the terminal to open.
+    test.setTimeout(90_000);
     await page.goto(router.url);
     const term = await openTerminal(page);
 
@@ -59,16 +60,32 @@ test.describe('terminal robustness soak', () => {
     // child shell would stall and the final line would never appear.
     const tag = `burst-${Date.now()}`;
     await term.click();
-    await page.keyboard.type(`for i in $(seq 1 20000); do echo ${tag}-$i; done; echo ${tag}-END`);
+    // E''ND, not END: the shell echoes the command line back, and
+    // toContainText reads xterm's RENDERED ROWS — so a plain end marker is
+    // matched by the echo of the very command that starts the burst, and the
+    // barrier below passes before a single line has drained. Whether it does
+    // is a race with the burst scrolling that line out of the viewport, which
+    // is why this spec failed two different ways: on CI the barrier passed
+    // early and the interactivity probe then ran into a terminal that was
+    // still flooding; locally under CPU contention the line had already
+    // scrolled off, so the barrier waited for the real marker and timed out.
+    // Splitting the literal in the shell keeps typed text and output distinct
+    // (docs/FLAKE_LOG.md 2026-08-06).
+    await page.keyboard.type(`for i in $(seq 1 20000); do echo ${tag}-$i; done; echo ${tag}-E''ND`);
     await page.keyboard.press('Enter');
 
-    // The terminating marker proves the whole burst drained.
-    await expect(term).toContainText(`${tag}-END`, { timeout: 30_000 });
+    // The terminating marker proves the whole burst drained. 20000 lines is
+    // ~8x the credit window and the FE has to RENDER them, so this is the
+    // slowest barrier in the suite on a loaded 2-core runner — budgeted well
+    // clear of the observed worst case rather than tuned to the median.
+    await expect(term).toContainText(`${tag}-END`, { timeout: 45_000 });
 
-    // And the terminal is still fully interactive after the burst.
+    // And the terminal is still fully interactive after the burst — same
+    // split-marker trick, so this proves the shell RAN the command, not
+    // merely that the keystrokes echoed.
     const after = `wash-after-burst-${Date.now()}`;
-    await page.keyboard.type(`echo ${after}`);
+    await page.keyboard.type(`echo ${after}-O''K`);
     await page.keyboard.press('Enter');
-    await expect(term).toContainText(after, { timeout: 10_000 });
+    await expect(term).toContainText(`${after}-OK`, { timeout: 15_000 });
   });
 });

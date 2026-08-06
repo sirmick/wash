@@ -16,6 +16,60 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-08-06 — `term-wedge-recovery` burst soak: the barrier was vacuous
+
+**Seen during:** CI on **PR #20** (`outstanding-agent-app-fixes`), the first
+branch to run the gate after the three fixes below landed. One red spec out
+of 459 — which is the point: with three specs permanently red, this would
+have been waved through as the usual noise.
+
+```
+1 failed  tests/term-wedge-recovery.spec.ts:52 › heavy output burst drains
+          without hanging the terminal
+22 skipped, 436 passed (8.2m)
+```
+
+**Verdict: pre-existing, NOT the PR.** Under a deliberately CI-like squeeze
+(pinned to 2 cores + a busy-loop hog on each, 2 workers, 10 repeats) both
+trees fail at the same rate:
+
+| Tree | Result |
+|---|---|
+| PR #20 (`edb3e14`) | 1 failed / 19 passed |
+| main (`962d57e`), same stress | **1 failed / 19 passed** |
+
+The PR touches `shell_session.go` and the terminal FE, so it looked like a
+prime suspect; it isn't.
+
+**Mechanism.** The drain barrier asserted `toContainText(`${tag}-END`)` —
+but `${tag}-END` is *inside the command the test types*, and the shell
+echoes that command line back. `toContainText` reads xterm's **rendered
+rows**, so whether the barrier matches the echo or the real output is a race
+with the burst scrolling that line out of the viewport. Both outcomes are
+wrong, and we saw both:
+
+- **CI:** the echo was still on screen → the barrier passed with zero lines
+  drained → the interactivity probe ran into a terminal still flooding and
+  timed out at 10s. The captured DOM shows the viewport at burst line ~340
+  of 20000 — the terminal was healthy, just busy.
+- **Local, under contention:** the echo had already scrolled off → the
+  barrier waited for the genuine marker and blew its 30s budget with the
+  viewport at line ~621.
+
+**Fix:** split the marker in the shell (`echo ${tag}-E''ND`) so the typed
+line and the output are textually distinct, and apply the same trick to the
+post-burst probe so it proves the shell *ran* the command rather than that
+the keystrokes echoed. Drain budget 30s → 45s (and the test 60s → 90s):
+20000 lines is ~8x the credit window and the FE has to render them, so this
+is the slowest barrier in the suite on a loaded small runner — sized clear
+of the observed worst case, not tuned to the median.
+
+**Worth keeping in mind:** every `toContainText` against a terminal has this
+hazard. Asserting on a string the test itself typed proves nothing about
+what the shell did.
+
+---
+
 ## 2026-08-06 — all three standing failures: root-caused and fixed
 
 **Tree:** `branches/e2e-flakes` off main `350654b`. Host: buzz, 32 cores,
