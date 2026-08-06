@@ -75,7 +75,7 @@ export interface AgentsWidgetProps {
   onAnswer?: (ask: AgentAsk, decision: 'allow' | 'deny', remember: boolean) => void;
   /** remembered sessions, most recent first */
   recent?: () => AgentSession[];
-  /** reopen one: fork branches off it instead of continuing it */
+  /** reopen one — agentd loads it and opens an Agent window */
   onResume?: (session: AgentSession, fork: boolean) => void;
   /** put the session id on the clipboard */
   onCopyID?: (session: AgentSession) => void;
@@ -162,9 +162,13 @@ export const AgentsWidget: Component<AgentsWidgetProps> = (props) => {
   );
 };
 
-// RecentRow is a session you could reopen: what it was and where, and the
-// two ways back in. Resume continues it; Fork branches off it, leaving the
-// original untouched for when you want to go back to that point.
+// RecentRow is a session you could reopen: what it was and where.
+//
+// Fork was removed with the intercept tier. It used to mean `claude
+// --resume <id> --fork-session` in a terminal; under ACP a fork would be
+// session/fork, which lives in an UNSTABLE capability whose method shape
+// this build has not verified against a real adapter. A button that
+// guesses a wire format is worse than one that is absent.
 const RecentRow: Component<{
   session: AgentSession;
   now: number;
@@ -197,11 +201,8 @@ const RecentRow: Component<{
       </span>
     </div>
     <div style={{ display: 'flex', gap: '4px' }}>
-      <AskBtn testid="agents-resume" title={`Continue this session in a new terminal`} onClick={() => props.onResume(false)}>
+      <AskBtn testid="agents-resume" title="Reopen this session, with its conversation" onClick={() => props.onResume(false)}>
         Resume
-      </AskBtn>
-      <AskBtn testid="agents-fork" title="Branch off this session, leaving it as it was" onClick={() => props.onResume(true)}>
-        Fork
       </AskBtn>
       <AskBtn testid="agents-copy-id" title={props.session.session_id} onClick={props.onCopyID}>
         Copy id

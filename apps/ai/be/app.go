@@ -227,6 +227,17 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 		return
 	}
 	switch str(m["kind"]) {
+	case "attach":
+		// A reopened session (Resume): agentd already loaded it and is
+		// handing us the key. The transcript is already populated
+		// service-side by the replay, so subscribing fetches it whole.
+		session.key = str(m["key"])
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind": "transcript_subscribe",
+			"key":  session.key,
+		})
+		c.SendAppMsg(map[string]any{"kind": "started", "key": session.key})
+
 	case "agent_started":
 		if e := str(m["error"]); e != "" {
 			c.SendAppMsg(map[string]any{"kind": "start_failed", "error": e})

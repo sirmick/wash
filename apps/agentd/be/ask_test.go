@@ -18,7 +18,7 @@ func resetAsks() {
 
 func addAsk(id, rowKey, tool string, asked time.Time) *pending {
 	p := &pending{
-		Ask:   Ask{ID: id, RowKey: rowKey, Tool: tool, SourceApp: termAppID, SourceInstance: "i-1"},
+		Ask:   Ask{ID: id, RowKey: rowKey, Tool: tool, SourceApp: "com.wash.term", SourceInstance: "i-1"},
 		asked: asked,
 		reply: func(string, string) error { return nil },
 	}

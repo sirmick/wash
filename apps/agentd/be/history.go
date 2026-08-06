@@ -154,7 +154,7 @@ func shQuote(s string) string {
 // Two steps, because a normal spawn carries no argv: the router replies
 // with the new instance id (OnSpawnResult), and the terminal accepts an
 // exec'd tab only from this service (see wash-term's exec_tab handler).
-func resumeSession(c *sdk.Conn, sessionID string, fork bool) {
+func resumeSession(c *sdk.Conn, sessionID string, _ bool) {
 	var s *Session
 	for i := range history {
 		if history[i].SessionID == sessionID {
@@ -166,56 +166,63 @@ func resumeSession(c *sdk.Conn, sessionID string, fork bool) {
 		log.Printf("agentd: resume unknown session=%s", sessionID)
 		return
 	}
-	pendingResumeMu.Lock()
-	pendingResume = append(pendingResume, resumeReqState{
-		argv: resumeArgv(os.Getenv("SHELL"), s.Agent, s.SessionID, s.Cwd, fork),
-		cwd:  s.Cwd,
-	})
-	pendingResumeMu.Unlock()
+	agent, cwd, sid := s.Agent, s.Cwd, s.SessionID
 
-	if err := c.SpawnRequest(termAppID); err != nil {
-		log.Printf("agentd: resume spawn session=%s: %v", sessionID, err)
-		popResume()
-		return
-	}
-	log.Printf("agentd: resume session=%s agent=%s fork=%v cwd=%s", sessionID, s.Agent, fork, s.Cwd)
+	// Reopen on our own goroutine: session/load replays the whole
+	// conversation before it answers, which can take a while on a long
+	// history, and the service must keep dispatching meanwhile.
+	go func() {
+		hs, err := resumeHosted(agent, cwd, sid, c)
+		if err != nil {
+			log.Printf("agentd: resume session=%s: %v", sid, err)
+			c.Warn("Could not reopen that session", err.Error())
+			// A session the agent no longer knows is not coming back, and
+			// leaving it in the list invites the same failed click
+			// forever.
+			forgetSession(sid)
+			return
+		}
+		pendingAttachMu.Lock()
+		pendingAttach = append(pendingAttach, hs.key)
+		pendingAttachMu.Unlock()
+		if err := c.SpawnRequest(aiAppID); err != nil {
+			log.Printf("agentd: resume spawn session=%s: %v", sid, err)
+			popAttach()
+		}
+	}()
 }
 
-// termAppID is the terminal the resume opens into.
-const termAppID = "com.wash.term"
-
-type resumeReqState struct {
-	argv []string
-	cwd  string
-}
+// aiAppID is the window a reopened session appears in. Resume used to
+// open a TERMINAL running `claude --resume` — which, once the intercept
+// tier was deleted, produced an agent wash could no longer see at all
+// (docs/AGENT_APP.md §10).
+const aiAppID = "com.wash.ai"
 
 var (
-	pendingResumeMu sync.Mutex
-	pendingResume   []resumeReqState
+	pendingAttachMu sync.Mutex
+	pendingAttach   []string
 )
 
-// popResume takes the oldest queued resume. Spawn replies arrive in the
-// order they were requested; a click is a rare event, so a FIFO of one is
-// almost always what this is.
-func popResume() (resumeReqState, bool) {
-	pendingResumeMu.Lock()
-	defer pendingResumeMu.Unlock()
-	if len(pendingResume) == 0 {
-		return resumeReqState{}, false
+// popAttach takes the oldest queued attach. Spawn replies arrive in the
+// order they were requested, and a click is a rare event.
+func popAttach() (string, bool) {
+	pendingAttachMu.Lock()
+	defer pendingAttachMu.Unlock()
+	if len(pendingAttach) == 0 {
+		return "", false
 	}
-	s := pendingResume[0]
-	pendingResume = pendingResume[1:]
-	return s, true
+	k := pendingAttach[0]
+	pendingAttach = pendingAttach[1:]
+	return k, true
 }
 
-// onSpawnResult fires when the router has started the terminal a resume
-// asked for. The tab request carries the argv; wash-term only honours an
-// exec'd tab from this service.
+// onSpawnResult fires when the router has started the window a resume
+// asked for; it is then told which live session to attach to.
 func onSpawnResult(c *sdk.Conn, appID, instanceID string, err error) {
-	if appID != termAppID {
+	if appID != aiAppID {
 		return
 	}
-	st, ok := popResume()
+	key, ok := popAttach()
 	if !ok {
 		return
 	}
@@ -224,12 +231,28 @@ func onSpawnResult(c *sdk.Conn, appID, instanceID string, err error) {
 		return
 	}
 	if e := c.SendAppMsgTo(wire.Recipient{InstanceID: instanceID}, map[string]any{
-		"kind": "exec_tab",
-		"exec": st.argv,
-		"cwd":  st.cwd,
+		"kind": "attach",
+		"key":  key,
 	}); e != nil {
-		log.Printf("agentd: resume tab instance=%s: %v", instanceID, e)
+		log.Printf("agentd: resume attach instance=%s: %v", instanceID, e)
 	}
+}
+
+// forgetSession drops one entry from the remembered list.
+func forgetSession(sessionID string) {
+	changed := false
+	for i := range history {
+		if history[i].SessionID == sessionID {
+			history = append(history[:i], history[i+1:]...)
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		return
+	}
+	mutateState(func(s *State) { s.Recent = publishHistory() })
+	saveHistory()
 }
 
 // ---- persistence ----

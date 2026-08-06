@@ -131,6 +131,31 @@ func adapterByID(id string) (Adapter, bool) {
 // adapter is a stray child that outlives the desktop, which is the bug
 // class the child-process audit already cost us once.
 func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
+	h, err := dialAdapter(agentID, cwd, svcConn)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), initTimeout)
+	defer cancel()
+
+	sid, err := h.client.NewSession(ctx, h.cwd, nil)
+	if err != nil {
+		h.stop()
+		if len(h.authMethods) > 0 {
+			return nil, fmt.Errorf("%s could not open a session; it offers %s — log in with its own CLI first: %w",
+				agentID, authNames(h.authMethods), err)
+		}
+		return nil, fmt.Errorf("session/new %s: %w", agentID, err)
+	}
+	h.sessionID = sid
+	h.register()
+	log.Printf("agentd: acp session started key=%s agent=%s session=%s cwd=%s", h.key, agentID, sid, h.cwd)
+	return h, nil
+}
+
+// dialAdapter launches an adapter and completes the handshake. Shared by
+// start and resume, which differ only in session/new vs session/load.
+func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	a, ok := adapterByID(agentID)
 	if !ok {
 		return nil, fmt.Errorf("unknown agent %q", agentID)
@@ -204,72 +229,11 @@ func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 		stop()
 		return nil, fmt.Errorf("initialize %s: %w", a.ID, err)
 	}
-	sid, err := h.client.NewSession(ctx, cwd, nil)
-	if err != nil {
-		stop()
-		// authMethods advertises what auth is AVAILABLE, not that it is
-		// required: claude-agent-acp lists `claude-login` even when the
-		// user is already logged in, so refusing on a non-empty list
-		// would refuse every working install. The real signal is
-		// session/new failing — and then the list is what makes the
-		// error actionable.
-		if len(res.AuthMethods) > 0 {
-			return nil, fmt.Errorf("%s could not open a session; it offers %s — log in with its own CLI first: %w",
-				a.ID, authNames(res.AuthMethods), err)
-		}
-		return nil, fmt.Errorf("session/new %s: %w", a.ID, err)
-	}
-	h.sessionID = sid
-	h.register()
-	log.Printf("agentd: acp session started key=%s agent=%s session=%s cwd=%s", key, a.ID, sid, cwd)
-
-	// The adapter dying is the session ending. Owning the process is what
-	// makes this a fact rather than a 60s inference.
-	go func() {
-		<-h.client.Done()
-		h.retire()
-	}()
+	// The adapter's auth methods are kept for the error message the
+	// caller may need: authMethods advertises what is AVAILABLE, not what
+	// is required, so it is only meaningful once a session call fails.
+	h.authMethods = res.AuthMethods
 	return h, nil
-}
-
-// resolveCwd turns what a human typed into the absolute path the protocol
-// demands.
-//
-// Tilde expansion is not a nicety: the launcher is a text field, "~/wash"
-// is what people type, and Go's filepath does not expand it — so without
-// this it resolved against the ROUTER's working directory and failed with
-// a path nobody recognised (observed on the first real run). A relative
-// path is still resolved against the router's cwd, which is at least an
-// honest interpretation of what was typed; the failure mode that mattered
-// was the one that looked absolute and was not.
-func resolveCwd(cwd string) (string, error) {
-	home, _ := os.UserHomeDir()
-	switch {
-	case cwd == "", cwd == "~":
-		if home == "" {
-			return "", fmt.Errorf("no home directory to start in")
-		}
-		return home, nil
-	case strings.HasPrefix(cwd, "~/"):
-		if home == "" {
-			return "", fmt.Errorf("cannot expand %q: no home directory", cwd)
-		}
-		cwd = filepath.Join(home, cwd[2:])
-	}
-	abs, err := filepath.Abs(cwd)
-	if err != nil {
-		return "", fmt.Errorf("cwd %q: %w", cwd, err)
-	}
-	st, err := os.Stat(abs)
-	if err != nil {
-		// Say what we resolved to, not just what failed — the original bug
-		// was unreadable precisely because the resolved path was hidden.
-		return "", fmt.Errorf("folder %q (resolved to %s): %w", cwd, abs, err)
-	}
-	if !st.IsDir() {
-		return "", fmt.Errorf("folder %q (resolved to %s) is not a directory", cwd, abs)
-	}
-	return abs, nil
 }
 
 // promptHosted runs one turn. Returns when the agent stops; the roster
@@ -309,4 +273,73 @@ func lookupHosted(key string) *hosted {
 	hostedMu.Lock()
 	defer hostedMu.Unlock()
 	return hostedAll[key]
+}
+
+// resolveCwd turns what a human typed into the absolute path the protocol
+// demands.
+//
+// Tilde expansion is not a nicety: the launcher is a text field, "~/wash"
+// is what people type, and Go's filepath does not expand it — so without
+// this it resolved against the ROUTER's working directory and failed with
+// a path nobody recognised (observed on the first real run).
+func resolveCwd(cwd string) (string, error) {
+	home, _ := os.UserHomeDir()
+	switch {
+	case cwd == "", cwd == "~":
+		if home == "" {
+			return "", fmt.Errorf("no home directory to start in")
+		}
+		return home, nil
+	case strings.HasPrefix(cwd, "~/"):
+		if home == "" {
+			return "", fmt.Errorf("cannot expand %q: no home directory", cwd)
+		}
+		cwd = filepath.Join(home, cwd[2:])
+	}
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		return "", fmt.Errorf("cwd %q: %w", cwd, err)
+	}
+	st, err := os.Stat(abs)
+	if err != nil {
+		// Say what we resolved to, not just what failed — the original bug
+		// was unreadable precisely because the resolved path was hidden.
+		return "", fmt.Errorf("folder %q (resolved to %s): %w", cwd, abs, err)
+	}
+	if !st.IsDir() {
+		return "", fmt.Errorf("folder %q (resolved to %s) is not a directory", cwd, abs)
+	}
+	return abs, nil
+}
+
+// resumeHosted reopens a remembered session.
+//
+// This is what the terminal tier could never do: ACP's session/load makes
+// the agent replay the ENTIRE conversation as session/update
+// notifications before it answers, so the transcript is repopulated by
+// the same handler that fills it live. The history comes back on screen,
+// rather than as a terminal scrolled to wherever it happened to be.
+func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, error) {
+	h, err := dialAdapter(agentID, cwd, svcConn)
+	if err != nil {
+		return nil, err
+	}
+	if !h.client.Capabilities().LoadSession {
+		h.stop()
+		return nil, fmt.Errorf("%s cannot reopen sessions (no loadSession capability)", agentID)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), initTimeout)
+	defer cancel()
+
+	h.sessionID = sessionID
+	// Register BEFORE loading: the replay arrives as notifications, and
+	// they need a roster row and a transcript to land in.
+	h.register()
+	if err := h.client.LoadSession(ctx, sessionID, h.cwd, nil); err != nil {
+		h.retire()
+		return nil, fmt.Errorf("reopen %s: %w", sessionID, err)
+	}
+	log.Printf("agentd: acp session resumed key=%s agent=%s session=%s cwd=%s", h.key, agentID, sessionID, h.cwd)
+	h.setState("done", "resumed")
+	return h, nil
 }

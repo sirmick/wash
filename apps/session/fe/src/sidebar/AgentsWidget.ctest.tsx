@@ -182,7 +182,6 @@ test('a remembered session offers Resume, Fork and its id', () => {
   expect(row.textContent).toContain('claude');
   expect(row.textContent).toContain('wash');
   expect(getByTestId('agents-resume')).toBeTruthy();
-  expect(getByTestId('agents-fork')).toBeTruthy();
   expect(getByTestId('agents-copy-id')).toBeTruthy();
 });
 
@@ -196,15 +195,17 @@ test('a session that is running right now is not offered for resume', () => {
   expect(queryByTestId('agents-recent')).toBeNull();
 });
 
-test('Resume and Fork are distinct intents', () => {
+test('Resume names the session it reopens', () => {
   const seen: string[] = [];
-  const { getByTestId } = render(() => (
+  const { getByTestId, queryByTestId } = render(() => (
     <AgentsWidget rows={() => []} startedAt={at} now={() => Date.now()} onFocus={noop}
       recent={() => [sess()]} onResume={(s, fork) => seen.push(`${s.session_id}:${fork}`)} />
   ));
   fireEvent.click(getByTestId('agents-resume'));
-  fireEvent.click(getByTestId('agents-fork'));
-  expect(seen).toEqual(['sess-1:false', 'sess-1:true']);
+  expect(seen).toEqual(['sess-1:false']);
+  // Fork went with the intercept tier: under ACP it would be
+  // session/fork, an unstable capability whose shape is unverified.
+  expect(queryByTestId('agents-fork')).toBeNull();
 });
 
 test('fmtAgo reads like a human said it', () => {

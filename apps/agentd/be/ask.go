@@ -121,7 +121,7 @@ func registerAskHandlers(bus *sdk.Bus, c *sdk.Conn) {
 			Subject:        req.Subject,
 			Cwd:            req.Cwd,
 			RowKey:         rowKey(from.InstanceID, req.ChannelID),
-			SourceApp:      termAppID,
+			SourceApp:      "com.wash.term",
 			SourceInstance: from.InstanceID,
 		}, replyToInstance(conn, from.InstanceID, req.ReqID))
 		return nil

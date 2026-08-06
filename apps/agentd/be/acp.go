@@ -49,6 +49,9 @@ type hosted struct {
 	cwd   string
 
 	client *acp.Client
+	// authMethods is what the adapter said it offers, kept only so a
+	// failed session call can name them in its error.
+	authMethods []acp.AuthMethod
 	// sessionID is the agent's own id — what history stores and what
 	// session/load resumes.
 	sessionID string
