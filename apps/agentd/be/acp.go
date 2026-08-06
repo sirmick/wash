@@ -274,10 +274,18 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 		// The agent names its own session once it works out what the work
 		// is — which is the summary a human would otherwise have to write.
 		// Nothing extra is asked of any model for this; it arrives.
-		if n.Update.Title != "" {
-			hostedMu.Lock()
+		// FIRST title wins. Verified against codex-acp 1.1.9 that it does
+		// not re-title on later turns — but an adapter that did would
+		// otherwise rename the window and the history entry after every
+		// exchange, which is precisely what makes a name useless. The
+		// session is named for what it set out to do.
+		hostedMu.Lock()
+		fresh := h.title == "" && n.Update.Title != ""
+		if fresh {
 			h.title = n.Update.Title
-			hostedMu.Unlock()
+		}
+		hostedMu.Unlock()
+		if fresh {
 			h.republish()
 			// Remembered immediately: a title that only reached the
 			// history when the session ended would be missing from

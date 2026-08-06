@@ -88,7 +88,15 @@ func init() {
 	registry.Register(&registry.App{
 		Name:     "wash-ai",
 		Manifest: def.Manifest,
-		Run:      run,
+		// Assets is what the MULTICALL build serves the FE bundle from:
+		// a linked-in app skips the exec-probe, so the router reads
+		// index.js out of this fs.FS rather than from a probe envelope.
+		// Omitting it registered the app, started it, created its window
+		// — and then served no bundle, so the custom element was never
+		// defined and nothing rendered. Standalone builds probe and were
+		// unaffected, which is why only the multicall e2e failed.
+		Assets: def.Assets,
+		Run:    run,
 	})
 }
 
