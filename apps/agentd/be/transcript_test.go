@@ -10,7 +10,7 @@ import (
 func resetTranscripts() {
 	transMu.Lock()
 	trans = map[string]*transcript{}
-	transSubs = map[string]map[string]struct{}{}
+	transSubs = map[string]map[string]time.Time{}
 	transMu.Unlock()
 }
 
@@ -147,7 +147,7 @@ func TestTranscriptSubscribersAreNotRosterSubscribers(t *testing.T) {
 	withState(t, 0) // no roster subscribers: nobody home
 
 	transMu.Lock()
-	transSubs["acp:1"] = map[string]struct{}{"i-9": {}}
+	transSubs["acp:1"] = map[string]time.Time{"i-9": time.Now()}
 	transMu.Unlock()
 
 	if transcriptSubscriberCount("acp:1") != 1 {
@@ -171,8 +171,8 @@ func TestTranscriptSubscribersAreNotRosterSubscribers(t *testing.T) {
 func TestForgetInstanceDropsItsSubscriptions(t *testing.T) {
 	resetTranscripts()
 	transMu.Lock()
-	transSubs["acp:1"] = map[string]struct{}{"i-1": {}, "i-2": {}}
-	transSubs["acp:2"] = map[string]struct{}{"i-1": {}}
+	transSubs["acp:1"] = map[string]time.Time{"i-1": time.Now(), "i-2": time.Now()}
+	transSubs["acp:2"] = map[string]time.Time{"i-1": time.Now()}
 	transMu.Unlock()
 
 	forgetInstanceTranscripts("i-1")
@@ -182,5 +182,27 @@ func TestForgetInstanceDropsItsSubscriptions(t *testing.T) {
 	}
 	if got := transcriptWatchers("acp:2"); len(got) != 0 {
 		t.Errorf("acp:2 watchers = %v, want none", got)
+	}
+}
+
+// A watcher that stops re-affirming is dropped. There is no app-gone
+// signal and SendAppMsgTo does not fail for a dead instance, so a closed
+// window cannot be noticed at send time — agentd re-sent to one forever
+// (`no instance "i-11"` on every event in the router log) until this.
+func TestSilentWatchersExpire(t *testing.T) {
+	resetTranscripts()
+	transMu.Lock()
+	transSubs["acp:1"] = map[string]time.Time{
+		"fresh": time.Now(),
+		"gone":  time.Now().Add(-watcherTTL - time.Second),
+	}
+	transMu.Unlock()
+
+	got := transcriptWatchers("acp:1")
+	if len(got) != 1 || got[0] != "fresh" {
+		t.Fatalf("watchers = %v, want just the one still re-affirming", got)
+	}
+	if transcriptSubscriberCount("acp:1") != 1 {
+		t.Error("the expired watcher was returned but not removed — it would be re-checked forever")
 	}
 }

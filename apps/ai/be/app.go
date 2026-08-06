@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	agentd "github.com/sirmick/wash/apps/agentd/be"
 	"github.com/sirmick/wash/internal/apps/registry"
@@ -71,10 +72,11 @@ func init() {
 			Capabilities:    []string{},
 			Window:          &sdk.WindowHints{DefaultWidth: 620, DefaultHeight: 720},
 		},
-		Assets:       sub,
-		OnReady:      onReady,
-		OnAppMsg:     onAppMsg,
-		OnAppMsgFrom: onAppMsgFrom,
+		Assets:           sub,
+		OnReady:          onReady,
+		OnAppMsg:         onAppMsg,
+		OnAppMsgFrom:     onAppMsgFrom,
+		OnCloseRequested: onCloseRequested,
 	}
 	registry.Register(&registry.App{
 		Name:     "wash-ai",
@@ -255,6 +257,7 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 			"key":  session.key,
 		})
 		c.SendAppMsg(map[string]any{"kind": "started", "key": session.key})
+		go keepWatching(c)
 
 	case "agent_started":
 		if e := str(m["error"]); e != "" {
@@ -315,6 +318,31 @@ func onCloseRequested(c *sdk.Conn, win uint32) bool {
 	}
 	c.SendAppMsg(map[string]any{"kind": "confirm_close"})
 	return false
+}
+
+// keepWatching re-affirms this window's transcript subscription.
+//
+// agentd expires a watcher it has not heard from, because a closed window
+// cannot be detected at send time — there is no app-gone signal and
+// SendAppMsgTo does not fail for a dead instance. Same TTL+keepalive
+// shape the roster's own rows use.
+func keepWatching(c *sdk.Conn) {
+	t := time.NewTicker(agentd.WatcherRefresh)
+	defer t.Stop()
+	for {
+		select {
+		case <-c.Done():
+			return
+		case <-t.C:
+			if session.key == "" {
+				continue
+			}
+			_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+				"kind": "transcript_subscribe",
+				"key":  session.key,
+			})
+		}
+	}
 }
 
 // closing is set once the user has answered, so the second close request

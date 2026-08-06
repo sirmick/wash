@@ -32,6 +32,17 @@ import (
 // service without bound. Oldest events fall off the front.
 const maxTranscript = 500
 
+// Watcher liveness. There is no app-gone signal in the SDK and
+// SendAppMsgTo does not fail for a dead instance — the router discovers
+// that later and logs it — so a closed window cannot be detected at send
+// time. Watchers therefore re-affirm, exactly as the roster's own rows
+// do, and one that goes quiet is dropped. Without this, agentd re-sent to
+// a dead instance on every event forever.
+const (
+	watcherTTL     = 60 * time.Second
+	WatcherRefresh = 15 * time.Second
+)
+
 // Event kinds. Deliberately fewer than ACP's update variants: the
 // transcript renders messages and tool calls, and everything else
 // (usage, available commands, session info) is roster or nothing.
@@ -85,9 +96,10 @@ var transcriptDebug = os.Getenv("WASH_AGENT_DEBUG") != ""
 var (
 	transMu sync.Mutex
 	trans   = map[string]*transcript{}
-	// transSubs maps a session key to the instances watching it. Separate
-	// from the StateService's own subscriber set — see the file comment.
-	transSubs = map[string]map[string]struct{}{}
+	// transSubs maps a session key to the instances watching it, and when
+	// each was last heard from. Separate from the StateService's own
+	// subscriber set — see the file comment.
+	transSubs = map[string]map[string]time.Time{}
 )
 
 func newTranscript() *transcript {
@@ -241,9 +253,18 @@ func transcriptWatchers(key string) []string {
 	if len(subs) == 0 {
 		return nil
 	}
+	now := time.Now()
 	out := make([]string, 0, len(subs))
-	for id := range subs {
+	for id, seen := range subs {
+		if now.Sub(seen) > watcherTTL {
+			delete(subs, id)
+			log.Printf("agentd: transcript watcher expired instance=%s key=%s", id, key)
+			continue
+		}
 		out = append(out, id)
+	}
+	if len(subs) == 0 {
+		delete(transSubs, key)
 	}
 	return out
 }
@@ -259,22 +280,16 @@ func transcriptSubscriberCount(key string) int {
 
 // pushEvent fans one event out to the windows watching that session.
 //
-// A window that has gone away without unsubscribing — a closed tab, a
-// crashed browser — makes the send fail, and that failure is the only
-// signal we get that it is gone. Dropping the subscriber there is what
-// stops agentd re-sending to a dead instance on every tick forever
-// (observed: `no instance "i-12"` every 10s in the router log).
+// Liveness is the watcher's job, not this function's: SendAppMsgTo does
+// not fail for a dead instance (the router notices later and logs it), so
+// there is nothing to check here. transcriptWatchers expires the silent.
 func pushEvent(conn *sdk.Conn, key string, e Event) {
 	for _, inst := range transcriptWatchers(key) {
-		err := conn.SendAppMsgTo(wire.Recipient{InstanceID: inst}, map[string]any{
+		_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: inst}, map[string]any{
 			"kind":  "transcript_event",
 			"key":   key,
 			"event": e,
 		})
-		if err != nil {
-			log.Printf("agentd: transcript push instance=%s key=%s: %v (dropping subscriber)", inst, key, err)
-			forgetInstanceTranscripts(inst)
-		}
 	}
 }
 
@@ -286,10 +301,16 @@ func registerTranscriptHandlers(bus *sdk.Bus) {
 		}
 		transMu.Lock()
 		if transSubs[req.Key] == nil {
-			transSubs[req.Key] = map[string]struct{}{}
+			transSubs[req.Key] = map[string]time.Time{}
 		}
-		transSubs[req.Key][from.InstanceID] = struct{}{}
+		fresh := transSubs[req.Key][from.InstanceID].IsZero()
+		transSubs[req.Key][from.InstanceID] = time.Now()
 		transMu.Unlock()
+		if !fresh {
+			// A keepalive from a window that already has the history.
+			// Re-sending a whole transcript every 15s would be absurd.
+			return nil
+		}
 
 		// Reply with the history so a reload, or a second window, starts
 		// where the session actually is rather than empty.
