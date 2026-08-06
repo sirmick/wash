@@ -258,13 +258,23 @@ func transcriptSubscriberCount(key string) int {
 }
 
 // pushEvent fans one event out to the windows watching that session.
+//
+// A window that has gone away without unsubscribing — a closed tab, a
+// crashed browser — makes the send fail, and that failure is the only
+// signal we get that it is gone. Dropping the subscriber there is what
+// stops agentd re-sending to a dead instance on every tick forever
+// (observed: `no instance "i-12"` every 10s in the router log).
 func pushEvent(conn *sdk.Conn, key string, e Event) {
 	for _, inst := range transcriptWatchers(key) {
-		_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: inst}, map[string]any{
+		err := conn.SendAppMsgTo(wire.Recipient{InstanceID: inst}, map[string]any{
 			"kind":  "transcript_event",
 			"key":   key,
 			"event": e,
 		})
+		if err != nil {
+			log.Printf("agentd: transcript push instance=%s key=%s: %v (dropping subscriber)", inst, key, err)
+			forgetInstanceTranscripts(inst)
+		}
 	}
 }
 

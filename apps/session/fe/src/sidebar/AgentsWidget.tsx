@@ -20,6 +20,8 @@ export interface AgentRow {
   /** running | working | needs-input | done | stale */
   state: string;
   reason?: string;
+  /** still running, no window pointing at it — clicking reattaches */
+  detached?: boolean;
   session_id?: string;
   cwd?: string;
   dir?: string;
@@ -69,6 +71,8 @@ export interface AgentsWidgetProps {
   now: () => number;
   /** go to the terminal that owns this agent */
   onFocus: (row: AgentRow) => void;
+  /** a detached session is still running with no window — open one */
+  onReattach?: (row: AgentRow) => void;
   /** permission questions waiting on the human */
   asks?: () => AgentAsk[];
   /** answer one: decision allow|deny, remember writes the named rule */
@@ -140,7 +144,8 @@ export const AgentsWidget: Component<AgentsWidgetProps> = (props) => {
           <AgentRowView
             row={r}
             elapsed={fmtElapsed(props.now() - props.startedAt(r.key))}
-            onFocus={() => props.onFocus(r)}
+            onFocus={() => (r.detached ? props.onReattach?.(r) : props.onFocus(r))}
+            detached={r.detached === true}
           />
         )}
       </For>
@@ -328,7 +333,7 @@ const AskBtn: Component<{
   </button>
 );
 
-const AgentRowView: Component<{ row: AgentRow; elapsed: string; onFocus: () => void }> = (props) => {
+const AgentRowView: Component<{ row: AgentRow; elapsed: string; onFocus: () => void; detached?: boolean }> = (props) => {
   // Where it's working: "wash · main*" — repo, branch, and a star when the
   // tree is dirty. Absent for an agent outside a checkout.
   const place = (): string => {
@@ -356,6 +361,7 @@ const AgentRowView: Component<{ row: AgentRow; elapsed: string; onFocus: () => v
       data-agent-state={props.row.state}
       style={rowStyle()}
       onClick={props.onFocus}
+      title={props.detached ? 'Detached — click to open a window on it' : undefined}
       title={`${props.row.agent} in ${props.row.cwd || 'unknown directory'} — click to go to its terminal`}
     >
       <div style={{ display: 'flex', 'align-items': 'baseline', gap: '6px' }}>

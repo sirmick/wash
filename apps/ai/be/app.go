@@ -205,6 +205,24 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			"key":  session.key,
 			"text": str(m["text"]),
 		})
+	case "detach":
+		// Leave the session running. agentd keeps its roster row, which
+		// is where the user gets back to it.
+		closing = true
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind": "agent_detach",
+			"key":  session.key,
+		})
+		_ = c.ConfirmClose(c.WindowID(), true)
+
+	case "terminate":
+		closing = true
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind": "agent_stop",
+			"key":  session.key,
+		})
+		_ = c.ConfirmClose(c.WindowID(), true)
+
 	case "answer":
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
 			"kind":     "agent_answer",
@@ -280,6 +298,28 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 		})
 	}
 }
+
+// onCloseRequested vetoes the close and asks the FE what to do with the
+// session behind it.
+//
+// Closing this window does NOT end the session — agentd owns the adapter
+// process, not this app — so silently letting the window go would leave
+// an agent running with nothing pointing at it. The choice is the user's:
+// detach (it keeps working, reattach from the sidebar) or terminate (it
+// ends and joins the history).
+//
+// With no session there is nothing to ask about, so the close is allowed.
+func onCloseRequested(c *sdk.Conn, win uint32) bool {
+	if session.key == "" || closing {
+		return true
+	}
+	c.SendAppMsg(map[string]any{"kind": "confirm_close"})
+	return false
+}
+
+// closing is set once the user has answered, so the second close request
+// (the one we ask for ourselves) goes straight through.
+var closing bool
 
 func str(v any) string {
 	s, _ := v.(string)

@@ -7,7 +7,7 @@
 
 import { For, Show, createMemo, createSignal } from 'solid-js';
 import type { Component } from 'solid-js';
-import { AgentSession, Button, FilePicker, createAppBus, defineWashApp, tokens } from '@wash/ui';
+import { AgentSession, Button, FilePicker, Overlay, createAppBus, defineWashApp, tokens } from '@wash/ui';
 import type { AgentAsk, AgentEvent, AgentStatus } from '@wash/ui';
 
 interface Adapter {
@@ -46,6 +46,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // Launched with --agent/--cwd: show what is starting rather than an
   // empty form that is about to be replaced.
   const [autostart, setAutostart] = createSignal<{ agent: string; cwd: string } | null>(null);
+  // Closing the window does not end the session — agentd owns the adapter
+  // — so the user chooses what happens to it.
+  const [confirmClose, setConfirmClose] = createSignal(false);
 
   const handleBE = (m: Record<string, unknown>) => {
     switch (m.kind) {
@@ -82,6 +85,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         });
         break;
       }
+      case 'confirm_close':
+        setConfirmClose(true);
+        break;
       case 'roster':
         setRoster((m.state as RosterState) ?? {});
         break;
@@ -212,7 +218,52 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     </div>
   );
 
+  // Three outcomes, not two: dismissing the dialog must ABORT the close,
+  // not pick one of the destructive options for you. That is why this is
+  // an Overlay rather than a ConfirmDialog — the latter maps dismiss onto
+  // its cancel action, which here would mean "terminate".
+  const closeDialog = (
+    <Show when={confirmClose()}>
+      <Overlay onDismiss={() => setConfirmClose(false)} data-testid="ai-close-confirm">
+        <div style={{ 'font-weight': 600, 'margin-bottom': `${tokens.spaceSm}px` }}>
+          Leave this session running?
+        </div>
+        <div style={{ font: tokens.type.textMd, opacity: 0.75, 'max-width': '46ch', 'margin-bottom': `${tokens.spaceLg}px` }}>
+          The agent keeps working after this window closes. Detach to come back to it
+          from the Agents sidebar, or terminate it and keep it in your history.
+        </div>
+        <div style={{ display: 'flex', gap: `${tokens.spaceMd}px`, 'justify-content': 'flex-end' }}>
+          <Button data-testid="ai-close-cancel" onClick={() => setConfirmClose(false)}>
+            Keep open
+          </Button>
+          <Button
+            data-testid="ai-close-terminate"
+            variant="danger"
+            onClick={() => {
+              setConfirmClose(false);
+              send({ kind: 'terminate' });
+            }}
+          >
+            Terminate
+          </Button>
+          <Button
+            data-testid="ai-close-detach"
+            variant="primary"
+            onClick={() => {
+              setConfirmClose(false);
+              send({ kind: 'detach' });
+            }}
+          >
+            Detach
+          </Button>
+        </div>
+      </Overlay>
+    </Show>
+  );
+
   return (
+    <>
+    {closeDialog}
     <Show when={sessionKey()} fallback={<Show when={autostart()} fallback={launcher}>{booting}</Show>}>
       <AgentSession
         events={events}
@@ -222,6 +273,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         onAnswer={(id, decision, rule) => send({ kind: 'answer', id, decision, rule: rule ?? '' })}
       />
     </Show>
+    </>
   );
 };
 

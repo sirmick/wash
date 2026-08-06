@@ -56,6 +56,9 @@ type hosted struct {
 	// session/load resumes.
 	sessionID string
 	stop      func()
+	// detached means no window is pointing at this session. It keeps
+	// running; the roster row is how the user gets back to it.
+	detached bool
 }
 
 var (
@@ -120,6 +123,7 @@ func (h *hosted) setState(state, reason string) {
 		r.State = state
 		r.Reason = reason
 		r.SessionID = h.sessionID
+		r.Detached = h.detached
 		if h.cwd != "" && h.cwd != r.Cwd {
 			r.Cwd = h.cwd
 			r.Dir = dirLabel(h.cwd)
@@ -141,6 +145,24 @@ func (h *hosted) setState(state, reason string) {
 	if wantGit != "" {
 		go resolveGit(wantGit)
 	}
+	if changed {
+		// Persist on every state change. Waiting for the session to end
+		// meant a detached session — or a reboot — was never remembered.
+		saveHistorySoon()
+	}
+}
+
+// republish refreshes this session's roster row without changing its
+// state — used when only the detached flag moved.
+func (h *hosted) republish() {
+	now := time.Now()
+	mutateState(func(s *State) {
+		if r := rows[h.key]; r != nil {
+			r.Detached = h.detached
+			r.lastSeen = now
+		}
+		s.Rows = publish(now)
+	})
 }
 
 // ---- acp.SessionHandler ----
@@ -385,6 +407,42 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 			return nil
 		}
 		go promptHosted(h, req.Text)
+		return nil
+	})
+
+	// agent_detach: the window closed but the session is to keep running.
+	// The roster row stays and gains a Reattach affordance.
+	sdk.HandleFromVoid(bus, "agent_detach", func(_ *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
+		h := lookupHosted(req.Key)
+		if h == nil {
+			return nil
+		}
+		hostedMu.Lock()
+		h.detached = true
+		hostedMu.Unlock()
+		log.Printf("agentd: acp detached key=%s agent=%s session=%s", h.key, h.agent, h.sessionID)
+		h.republish()
+		return nil
+	})
+
+	// agent_reattach: open a window onto a session that is still running.
+	sdk.HandleFromVoid(bus, "agent_reattach", func(conn *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
+		h := lookupHosted(req.Key)
+		if h == nil {
+			return nil
+		}
+		pendingAttachMu.Lock()
+		pendingAttach = append(pendingAttach, h.key)
+		pendingAttachMu.Unlock()
+		if err := conn.SpawnRequest(aiAppID); err != nil {
+			log.Printf("agentd: reattach spawn key=%s: %v", h.key, err)
+			popAttach()
+			return nil
+		}
+		hostedMu.Lock()
+		h.detached = false
+		hostedMu.Unlock()
+		h.republish()
 		return nil
 	})
 

@@ -91,6 +91,9 @@ type Row struct {
 	// SinceMS is how long the row has been in this state, as of the push.
 	// The FE anchors its own clock to it (no cross-clock comparison).
 	SinceMS int64 `json:"since_ms"`
+	// Detached marks a session still running with no window pointing at
+	// it — the sidebar offers Reattach rather than focus.
+	Detached bool `json:"detached,omitempty"`
 	// Stale marks a row whose terminal stopped reporting: shown greyed,
 	// then dropped. See staleAfter / dropAfter.
 	Stale bool `json:"stale,omitempty"`

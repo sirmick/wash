@@ -239,6 +239,17 @@ func onSpawnResult(c *sdk.Conn, appID, instanceID string, err error) {
 }
 
 // forgetSession drops one entry from the remembered list.
+// saveHistorySoon persists the remembered list. Called whenever it
+// changes rather than only when a session ends: a session that never ends
+// (detached, or the box rebooted) would otherwise never be written at
+// all, which is exactly the case history exists for.
+func saveHistorySoon() {
+	if !historyDirty {
+		return
+	}
+	saveHistory()
+}
+
 func forgetSession(sessionID string) {
 	changed := false
 	for i := range history {
