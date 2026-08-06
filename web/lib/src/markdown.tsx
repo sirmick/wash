@@ -25,13 +25,39 @@ type Block =
   | { t: 'h'; level: number; text: string }
   | { t: 'code'; lang: string; lines: string[] }
   | { t: 'quote'; lines: string[] }
-  | { t: 'list'; ordered: boolean; items: string[] };
+  | { t: 'list'; ordered: boolean; items: string[] }
+  | { t: 'table'; head: string[]; rows: string[][]; align: Align[] };
+
+/** Column alignment, from the separator row's colons. */
+export type Align = 'left' | 'center' | 'right';
 
 const H_RE = /^(#{1,6})\s+(.*)$/;
 const FENCE_RE = /^\s*```(\w*)\s*$/;
 const UL_RE = /^\s*[-*+]\s+(.*)$/;
 const OL_RE = /^\s*\d+[.)]\s+(.*)$/;
 const QUOTE_RE = /^\s*>\s?(.*)$/;
+// A table row is any line with a pipe in it; what MAKES it a table is the
+// separator underneath, so detection always needs two lines.
+const TABLE_SEP_RE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+
+// splitRow cuts a pipe row into cells, tolerating the optional leading and
+// trailing pipes GFM allows.
+function splitRow(line: string): string[] {
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|')) s = s.slice(0, -1);
+  return s.split('|').map((c) => c.trim());
+}
+
+function alignOf(sep: string): Align[] {
+  return splitRow(sep).map((c) => {
+    const l = c.startsWith(':');
+    const r = c.endsWith(':');
+    if (l && r) return 'center';
+    if (r) return 'right';
+    return 'left';
+  });
+}
 
 /** parseBlocks splits text into block-level chunks. */
 export function parseBlocks(src: string): Block[] {
@@ -79,6 +105,21 @@ export function parseBlocks(src: string): Block[] {
         i++;
       }
       out.push({ t: 'quote', lines: body });
+      continue;
+    }
+
+    // A table: this line has pipes and the NEXT one is a separator.
+    if (line.includes('|') && i + 1 < lines.length && TABLE_SEP_RE.test(lines[i + 1])) {
+      flushPara(para);
+      const head = splitRow(line);
+      const align = alignOf(lines[i + 1]);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim() !== '') {
+        rows.push(splitRow(lines[i]));
+        i++;
+      }
+      out.push({ t: 'table', head, rows, align });
       continue;
     }
 
@@ -241,6 +282,66 @@ export const Markdown: Component<MarkdownProps> = (props) => (
               }}
             >
               <Inline text={(b as { lines: string[] }).lines.join('\n')} />
+            </div>
+          </Show>
+
+          <Show when={b.t === 'table'}>
+            {/* Its own scroll container. A wide table must not make the
+                whole transcript scroll sideways — the same rule the code
+                blocks follow. */}
+            <div style={{ 'overflow-x': 'auto', 'max-width': '100%' }}>
+              <table
+                style={{
+                  'border-collapse': 'collapse',
+                  font: tokens.type.textSm,
+                  // Digits in a column only read as a column when they
+                  // line up.
+                  'font-variant-numeric': 'tabular-nums',
+                }}
+              >
+                <thead>
+                  <tr>
+                    <For each={(b as { head: string[] }).head}>
+                      {(h, ci) => (
+                        <th
+                          style={{
+                            'text-align': (b as { align: Align[] }).align[ci()] ?? 'left',
+                            padding: `${tokens.spaceXs}px ${tokens.spaceMd}px`,
+                            'border-bottom': `1px solid ${tokens.borderMenu}`,
+                            color: tokens.fg,
+                            'font-weight': '600',
+                            'white-space': 'nowrap',
+                          }}
+                        >
+                          <Inline text={h} />
+                        </th>
+                      )}
+                    </For>
+                  </tr>
+                </thead>
+                <tbody>
+                  <For each={(b as { rows: string[][] }).rows}>
+                    {(row) => (
+                      <tr>
+                        <For each={row}>
+                          {(cell, ci) => (
+                            <td
+                              style={{
+                                'text-align': (b as { align: Align[] }).align[ci()] ?? 'left',
+                                padding: `${tokens.spaceXs}px ${tokens.spaceMd}px`,
+                                'border-bottom': `1px solid ${tokens.borderMenu}`,
+                                'vertical-align': 'top',
+                              }}
+                            >
+                              <Inline text={cell} />
+                            </td>
+                          )}
+                        </For>
+                      </tr>
+                    )}
+                  </For>
+                </tbody>
+              </table>
             </div>
           </Show>
 

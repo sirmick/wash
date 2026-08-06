@@ -182,8 +182,10 @@ func (h *hosted) republish() {
 func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 	// The transcript first: it is what the app renders, and it must record
 	// what the agent said even for variants the roster ignores.
-	if e := appendUpdate(h.key, n.Update, time.Now()); e != nil && h.conn != nil {
-		pushEvent(h.conn, h.key, *e)
+	if h.conn != nil {
+		for _, e := range appendUpdate(h.key, n.Update, time.Now()) {
+			pushEvent(h.conn, h.key, e)
+		}
 	}
 
 	switch n.Update.SessionUpdate {

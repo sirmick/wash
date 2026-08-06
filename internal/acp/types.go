@@ -107,10 +107,33 @@ type LoadSessionRequest struct {
 	AdditionalDirectories []string    `json:"additionalDirectories,omitempty"`
 }
 
-// ContentBlock is MCP-shaped: {"type":"text","text":"…"}.
+// ContentBlock is MCP-shaped: {"type":"text","text":"…"}, or an image
+// block carrying base64 bytes and their mime type. Both adapters
+// advertise promptCapabilities.image, so images travel in BOTH
+// directions — an agent can show you one, and you can paste a screenshot
+// into the composer.
 type ContentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
+	// Data is base64 for type=="image"; MimeType names it.
+	Data     string `json:"data,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
+}
+
+// Image builds an image block for a prompt.
+func Image(mime, b64 string) ContentBlock {
+	return ContentBlock{Type: "image", Data: b64, MimeType: mime}
+}
+
+// Images returns the image blocks in this content, if any.
+func (c Content) Images() []ContentBlock {
+	var out []ContentBlock
+	for _, b := range c {
+		if b.Type == "image" && b.Data != "" {
+			out = append(out, b)
+		}
+	}
+	return out
 }
 
 func Text(s string) ContentBlock { return ContentBlock{Type: "text", Text: s} }

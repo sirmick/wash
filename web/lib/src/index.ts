@@ -40,7 +40,7 @@ export { washCopyText, washPasteText, systemCopyText, systemCopyTextChecked } fr
 export { analyzePaste, joinWrapped } from './paste-analyze';
 export type { PasteAnalysis, PasteIssue, PasteOptions } from './paste-analyze';
 export { Markdown, parseBlocks, parseInline } from './markdown';
-export type { MarkdownProps } from './markdown';
+export type { MarkdownProps, Align } from './markdown';
 export { AgentSession } from './agent-session';
 export type { AgentSessionProps, AgentEvent, AgentAsk, AgentStatus } from './agent-session';
 export { defineWashApp } from './define-app';

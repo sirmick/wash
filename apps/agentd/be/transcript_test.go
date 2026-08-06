@@ -26,7 +26,7 @@ func TestMessageChunksCoalesce(t *testing.T) {
 	now := time.Unix(0, 0)
 
 	for _, s := range []string{"Hello", ", ", "world"} {
-		if e := appendUpdate("acp:1", chunk(s), now); e == nil {
+		if e := appendUpdate("acp:1", chunk(s), now); len(e) == 0 {
 			t.Fatal("a message chunk produced no event")
 		}
 	}
@@ -204,5 +204,53 @@ func TestSilentWatchersExpire(t *testing.T) {
 	}
 	if transcriptSubscriberCount("acp:1") != 1 {
 		t.Error("the expired watcher was returned but not removed — it would be re-checked forever")
+	}
+}
+
+// One notification can be several transcript lines: a content block list
+// carrying an image and text is one update and two entries. Returning a
+// single event stored the image but never pushed it, so it appeared only
+// after a reload — which looks exactly like a rendering bug.
+func TestImageAndTextFromOneUpdate(t *testing.T) {
+	resetTranscripts()
+	now := time.Unix(0, 0)
+
+	got := appendUpdate("acp:1", acp.SessionUpdate{
+		SessionUpdate: acp.UpdateAgentMessageChunk,
+		Content: acp.Content{
+			{Type: "image", MimeType: "image/png", Data: "AAAA"},
+			{Type: "text", Text: "and some words"},
+		},
+	}, now)
+
+	if len(got) != 2 {
+		t.Fatalf("%d events, want 2 (the image AND the text): %+v", len(got), got)
+	}
+	if got[0].Kind != EventImage || got[0].Mime != "image/png" || got[0].Text != "AAAA" {
+		t.Errorf("image event = %+v", got[0])
+	}
+	if got[1].Kind != EventMessage || got[1].Text != "and some words" {
+		t.Errorf("text event = %+v", got[1])
+	}
+}
+
+// An image too large to show is dropped with a note rather than held in
+// memory and pushed over the router.
+func TestOversizeImageIsDropped(t *testing.T) {
+	resetTranscripts()
+	big := make([]byte, maxImageBytes+1)
+	for i := range big {
+		big[i] = 'A'
+	}
+	got := appendUpdate("acp:1", acp.SessionUpdate{
+		SessionUpdate: acp.UpdateAgentMessageChunk,
+		Content:       acp.Content{{Type: "image", MimeType: "image/png", Data: string(big)}},
+	}, time.Unix(0, 0))
+
+	if len(got) != 1 || got[0].Kind != EventMessage {
+		t.Fatalf("events = %+v, want one note", got)
+	}
+	if len(got[0].Text) > 100 {
+		t.Error("the oversize image was kept after all")
 	}
 }

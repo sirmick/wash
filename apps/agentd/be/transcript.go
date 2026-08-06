@@ -55,7 +55,17 @@ const (
 	// it — so a transcript built purely from notifications shows the
 	// answers with none of the questions. wash records its own side.
 	EventUser = "user"
+	// EventImage is one image the agent showed. Its own event rather than
+	// a field on a message, so it renders in the order it arrived without
+	// restructuring everything else.
+	EventImage = "image"
 )
+
+// maxImageBytes bounds one inline image. The transcript is held in memory
+// and pushed over the router, so a multi-megabyte screenshot would cost
+// both — and an image too big to show is better dropped with a note than
+// silently wedging the session.
+const maxImageBytes = 2 << 20
 
 // Event is one line in a transcript.
 //
@@ -71,6 +81,8 @@ type Event struct {
 	ToolKind string `json:"tool_kind,omitempty"`
 	Title    string `json:"title,omitempty"`
 	Status   string `json:"status,omitempty"`
+	// Mime is set on EventImage; Text then holds the base64 bytes.
+	Mime string `json:"mime,omitempty"`
 	// AtMS is wall-clock at first append, for the FE's own clock anchoring.
 	AtMS int64 `json:"at_ms"`
 }
@@ -122,9 +134,15 @@ func appendPrompt(key, text string, now time.Time) Event {
 }
 
 // appendUpdate folds one ACP notification into a session's transcript and
-// returns the event to push, or nil when the update is not transcript
-// material. Called on the ACP read path, so it must not block.
-func appendUpdate(key string, u acp.SessionUpdate, now time.Time) *Event {
+// returns the events to push, in order. Called on the ACP read path, so
+// it must not block.
+//
+// Plural because one notification can produce several lines: a content
+// block list carrying both an image and text is one update and two
+// transcript entries. Returning a single event silently dropped the
+// image from the LIVE push while still storing it, so it appeared only
+// after a reload — the kind of bug that looks like a rendering problem.
+func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 	transMu.Lock()
 	defer transMu.Unlock()
 
@@ -140,9 +158,21 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) *Event {
 		if u.SessionUpdate == acp.UpdateAgentThoughtChunk {
 			kind = EventThought
 		}
+		// Images arrive alongside text in the same content block list.
+		// They are pushed as their own events, in order.
+		var out []Event
+		for _, img := range u.Content.Images() {
+			if len(img.Data) > maxImageBytes {
+				log.Printf("agentd: image dropped key=%s mime=%s bytes=%d (over %d)", key, img.MimeType, len(img.Data), maxImageBytes)
+				out = append(out, t.push(Event{Kind: EventMessage, Text: "[image too large to show]", AtMS: now.UnixMilli()}))
+				continue
+			}
+			t.openMessage = -1
+			out = append(out, t.push(Event{Kind: EventImage, Mime: img.MimeType, Text: img.Data, AtMS: now.UnixMilli()}))
+		}
 		text := u.Content.String()
 		if text == "" {
-			return nil
+			return out
 		}
 		if transcriptDebug {
 			// %q so a chunk that is exactly " " is visible as such. Chunk
@@ -153,12 +183,11 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) *Event {
 		// in between closes it, because the agent has moved on.
 		if t.openMessage >= 0 && t.events[t.openMessage].Kind == kind {
 			t.events[t.openMessage].Text += text
-			e := t.events[t.openMessage]
-			return &e
+			return append(out, t.events[t.openMessage])
 		}
 		e := t.push(Event{Kind: kind, Text: text, AtMS: now.UnixMilli()})
 		t.openMessage = len(t.events) - 1
-		return &e
+		return append(out, e)
 
 	case acp.UpdateToolCall, acp.UpdateToolCallUpdate:
 		t.openMessage = -1
@@ -179,8 +208,7 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) *Event {
 			if txt := u.Content.String(); txt != "" {
 				ev.Text = txt
 			}
-			e := *ev
-			return &e
+			return []Event{*ev}
 		}
 		e := t.push(Event{
 			Kind:     EventTool,
@@ -194,7 +222,7 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) *Event {
 		if id != "" {
 			t.toolAt[id] = len(t.events) - 1
 		}
-		return &e
+		return []Event{e}
 	}
 	return nil
 }

@@ -28,6 +28,8 @@ export interface AgentEvent {
   title?: string;
   /** pending | in_progress | completed | failed */
   status?: string;
+  /** set on kind==="image"; text then holds the base64 bytes */
+  mime?: string;
   at_ms: number;
 }
 
@@ -347,9 +349,26 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
       >
         <For each={props.events()}>
           {(e) => (
+            <>
+            <Show when={e.kind === 'image'}>
+              {/* A data: URI, so the image never leaves the machine and
+                  no request is made for it. Bounded by agentd before it
+                  ever reaches here. */}
+              <img
+                src={`data:${e.mime || 'image/png'};base64,${e.text ?? ''}`}
+                alt="image from the agent"
+                style={{
+                  'max-width': '100%',
+                  height: 'auto',
+                  'border-radius': tokens.radiusMd,
+                  border: `1px solid ${tokens.borderMenu}`,
+                }}
+              />
+            </Show>
+
             <Show
-              when={e.kind !== 'tool'}
-              fallback={<ToolRow e={e} onOpen={props.onOpenTool} />}
+              when={e.kind !== 'tool' && e.kind !== 'image'}
+              fallback={<Show when={e.kind === 'tool'}><ToolRow e={e} onOpen={props.onOpenTool} /></Show>}
             >
               <div
                 style={{
@@ -378,6 +397,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                 </Show>
               </div>
             </Show>
+            </>
           )}
         </For>
 

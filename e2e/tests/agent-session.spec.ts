@@ -66,6 +66,17 @@ test.describe('managed agent sessions', () => {
 
     // A tool call is one line, not a wall of output.
     await expect(win.getByText('README.md')).toBeVisible();
+
+    // A GFM table becomes a real table, not a row of pipes.
+    await expect(win.locator('table')).toBeVisible();
+    await expect(win.locator('th', { hasText: 'Adapter' })).toBeVisible();
+    await expect(win.locator('td', { hasText: 'claude' })).toBeVisible();
+
+    // An inline image is DECODED, not merely present: a broken <img>
+    // would still satisfy toBeVisible, which is the trap here.
+    const img = win.locator('img[alt="image from the agent"]');
+    await expect(img).toBeVisible();
+    await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
   });
 
   test('a permission request can be answered, and the answer reaches the agent', async ({ page, router }) => {

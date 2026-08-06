@@ -32,6 +32,11 @@ import (
 
 var sessionID = "fake-session-1"
 
+// A 1x1 transparent PNG. Small enough to inline, real enough that the
+// browser decodes it — a broken <img> would still "be visible" to a
+// naive assertion, so the test checks naturalWidth instead.
+const onePixelPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
 func main() {
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(make([]byte, 0, 64<<10), 8<<20)
@@ -138,6 +143,15 @@ func runTurn(out *bufio.Writer, m map[string]any) {
 		}
 		notify(out, chunk(part))
 	}
+	// A table and an image, so the renderer's two richest paths are
+	// covered by something other than looking at them.
+	notify(out, chunk("\n| Adapter | Kind |\n| --- | ---: |\n| codex | npm |\n| claude | npm |\n"))
+	notify(out, update(map[string]any{
+		"sessionUpdate": "agent_message_chunk",
+		"content": []any{map[string]any{
+			"type": "image", "mimeType": "image/png", "data": onePixelPNG,
+		}},
+	}))
 	notify(out, update(map[string]any{
 		"sessionUpdate": "tool_call", "toolCallId": "t-1", "kind": "read",
 		"title": "README.md", "status": "completed",
