@@ -38,10 +38,12 @@ export interface Rect { x: number; y: number; w: number; h: number }
 export interface PlacedGroup {
   path: string;
   group: Group;
-  // rect covers the whole group (strip + content); content is what the
-  // terminal gets, i.e. rect less the strip along the top.
+  // rect covers the whole group (strip + content + status); content is what
+  // the terminal gets, i.e. rect less the strip along the top and the status
+  // bar along the bottom.
   rect: Rect;
   content: Rect;
+  status: Rect;
 }
 
 export interface PlacedDivider {
@@ -63,17 +65,21 @@ export interface LayoutOpts {
   gutter?: number;
   // Group tab-strip height in px, taken off the top of every group rect.
   strip?: number;
+  // Group status-bar height in px, taken off the bottom of every group rect.
+  status?: number;
 }
 
 export const DEFAULT_GUTTER = 4;
 export const DEFAULT_STRIP = 24;
+export const DEFAULT_STATUS = 0;
 
 // A pane must keep a usable grid. Splits that would go under this are
 // refused rather than producing an unreadable pane, and divider drags
 // clamp to it. Expressed in px because that is what the kernel sees; the
-// numbers are ~20 cols x 3 rows at the default cell size, plus the strip.
+// numbers are ~20 cols x 3 rows at the default cell size, plus the strip and
+// per-pane status bar.
 export const MIN_PANE_W = 140;
-export const MIN_PANE_H = 72;
+export const MIN_PANE_H = 92;
 
 // ---- paths ----
 //
@@ -396,24 +402,27 @@ export function pruneToChannels(tree: LayoutNode, live: Set<number>): LayoutNode
 // layout assigns a rect to every group and every divider. Gutters come off
 // a split's span before the fractions are applied, so children never
 // overlap their dividers; each group's content rect is its rect less the
-// strip along the top.
+// strip along the top and the status bar along the bottom.
 export function layout(tree: LayoutNode, rect: Rect, opts: LayoutOpts = {}): {
   groups: PlacedGroup[];
   dividers: PlacedDivider[];
 } {
   const gutter = opts.gutter ?? DEFAULT_GUTTER;
   const strip = opts.strip ?? DEFAULT_STRIP;
+  const status = opts.status ?? DEFAULT_STATUS;
   const groups: PlacedGroup[] = [];
   const dividers: PlacedDivider[] = [];
 
   const walk = (n: LayoutNode, r: Rect, path: string) => {
     if (n.kind === 'group') {
-      const h = Math.max(0, r.h - strip);
+      const usable = Math.max(0, r.h - strip);
+      const statusH = Math.min(status, usable);
       groups.push({
         path,
         group: n,
         rect: r,
-        content: { x: r.x, y: r.y + strip, w: r.w, h },
+        content: { x: r.x, y: r.y + strip, w: r.w, h: Math.max(0, usable - statusH) },
+        status: { x: r.x, y: r.y + r.h - statusH, w: r.w, h: statusH },
       });
       return;
     }

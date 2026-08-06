@@ -96,6 +96,7 @@ test.describe('term split panes (M1 + M2)', () => {
     const fullBox = (await panes(page))[0];
 
     await expect(page.locator('[data-testid="term-tabbar"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid="term-statusbar"]')).toHaveCount(1);
     await expect(page.locator('[data-testid="term-divider"]')).toHaveCount(0);
 
     await page.keyboard.press('Control+Shift+D');
@@ -113,6 +114,7 @@ test.describe('term split panes (M1 + M2)', () => {
 
     // Chrome followed: a strip per group and one divider between them.
     await expect(page.locator('[data-testid="term-tabbar"]')).toHaveCount(2);
+    await expect(page.locator('[data-testid="term-statusbar"]')).toHaveCount(2);
     await expect(page.locator('[data-testid="term-divider"]')).toHaveCount(1);
     await expect(page.locator('[data-testid="term-divider"]')).toHaveAttribute('data-dir', 'row');
 

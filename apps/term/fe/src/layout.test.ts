@@ -206,16 +206,17 @@ test('moving a tab out of a group re-activates a survivor', () => {
 
 test('layout assigns disjoint rects and takes gutters off the span', () => {
   const t = splitGroup(singleGroup([1]), ROOT, 'row', 2);
-  const { groups, dividers } = layout(t, STAGE, { gutter: 4, strip: 24 });
+  const { groups, dividers } = layout(t, STAGE, { gutter: 4, strip: 24, status: 20 });
   assert.equal(groups.length, 2);
   assert.equal(dividers.length, 1);
   assert.equal(groups[0].rect.w, 498, '(1000 - 4) / 2');
   assert.equal(groups[1].rect.x, 502);
   assert.equal(dividers[0].rect.x, 498);
   assert.equal(dividers[0].rect.w, 4);
-  // Content is the rect less the strip.
+  // Content is the rect less the strip and status bar.
   assert.equal(groups[0].content.y, 24);
-  assert.equal(groups[0].content.h, 576);
+  assert.equal(groups[0].content.h, 556);
+  assert.deepEqual(groups[0].status, { x: 0, y: 580, w: 498, h: 20 });
   // Disjoint: right edge of one is the divider, not the next pane.
   assert.ok(groups[0].rect.x + groups[0].rect.w <= groups[1].rect.x);
 });
@@ -378,7 +379,7 @@ test('minFractionFor keeps a dragged pane readable', () => {
   assert.ok(Math.abs(minFractionFor('row', 1000) - 0.14) < 1e-9);
   // A narrow split can't demand more than it has: capped, never absurd.
   assert.equal(minFractionFor('row', 200), 0.45);
-  assert.ok(Math.abs(minFractionFor('col', 600) - 0.12) < 1e-9);
+  assert.ok(Math.abs(minFractionFor('col', 600) - (92 / 600)) < 1e-9);
 });
 
 test('equalizeAll rebalances nested splits, not just the top level', () => {

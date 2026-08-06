@@ -168,6 +168,9 @@ interface PersistedState {
 // was 32 with a 4px gap above; there is no window titlebar to separate
 // from any more once strips sit inside the stage.)
 const STRIP_HEIGHT = 26;
+// Each split pane carries its own status bar. A single window-level bar made
+// the unfocused panes' ssh/root/agent state invisible.
+const STATUS_HEIGHT = 20;
 // Divider thickness between sibling panes.
 const GUTTER = DEFAULT_GUTTER;
 
@@ -207,18 +210,25 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const placement = createMemo(() => {
     const s = stage();
     const rect = { x: 0, y: 0, w: s.w, h: s.h };
-    const full = layoutTree(tree(), rect, { gutter: GUTTER, strip: STRIP_HEIGHT });
+    const full = layoutTree(tree(), rect, { gutter: GUTTER, strip: STRIP_HEIGHT, status: STATUS_HEIGHT });
     const zoom = zoomPath();
     if (zoom === null) return full;
     const target = full.groups.find((g) => g.path === zoom);
     // A stale zoom path (its group collapsed under it) falls back to the
     // real layout rather than showing nothing.
     if (!target) return full;
+    const statusH = Math.min(STATUS_HEIGHT, Math.max(0, rect.h - STRIP_HEIGHT));
     return {
       groups: [{
         ...target,
         rect,
-        content: { x: rect.x, y: rect.y + STRIP_HEIGHT, w: rect.w, h: Math.max(0, rect.h - STRIP_HEIGHT) },
+        content: { x: rect.x, y: rect.y + STRIP_HEIGHT, w: rect.w, h: Math.max(0, rect.h - STRIP_HEIGHT - statusH) },
+        status: {
+          x: rect.x,
+          y: rect.y + rect.h - statusH,
+          w: rect.w,
+          h: statusH,
+        },
       }],
       dividers: [],
     };
@@ -686,7 +696,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     return s.length > TAB_LABEL_MAX ? s.slice(0, TAB_LABEL_MAX - 1) + '…' : s;
   };
 
-  // ---- per-tab user badge + status line ----
+  // ---- per-tab user badge + per-pane status line ----
 
   // statusBadge is the small icon shown in a tab and in the status bar:
   // red shield = root, blue globe = ssh, muted user = normal. color
@@ -698,8 +708,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     return <User size={12} color={color} style={{ opacity: 0.55 }} />;
   };
 
-  const activeStatus = (): TabStatus | undefined => tabStatus().get(active());
-  const isRootActive = (): boolean => activeStatus()?.state === 'root';
+  const statusFor = (channelID: number): TabStatus | undefined => tabStatus().get(channelID);
+  const isRootChannel = (channelID: number): boolean => statusFor(channelID)?.state === 'root';
 
   // ---- agent status (tab dot + status-line clause) ----
 
@@ -752,21 +762,70 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     return `${Math.floor(secs / 3600)}h`;
   };
 
-  const activeAgent = (): AgentStatus | undefined => agentStatus().get(active());
+  const agentFor = (channelID: number): AgentStatus | undefined => agentStatus().get(channelID);
 
-  // statusText composes the bottom-bar sentence for the active tab:
+  // statusText composes the pane-bar sentence for that pane's visible tab:
   //   ssh  → "ssh to ‘xyz’"
   //   root → "bash as root on ai"
   //   user → "bash as mick on ai"
-  const statusText = (): string => {
-    const tab = tabs().find((t) => t.channelID === active());
+  const statusText = (channelID: number): string => {
+    const tab = tabs().find((t) => t.channelID === channelID);
     if (!tab) return '';
     const shell = shortShellName(tab.shell);
-    const s = activeStatus();
+    const s = statusFor(channelID);
     if (!s) return shell;
     if (s.state === 'ssh') return s.target ? `ssh to ‘${s.target}’` : 'ssh session';
     const who = s.state === 'root' ? 'root' : s.user || 'user';
     return s.host ? `${shell} as ${who} on ${s.host}` : `${shell} as ${who}`;
+  };
+
+  const paneStatusBar = (path: string, channelID: number): JSX.Element => {
+    const root = () => isRootChannel(channelID);
+    const agent = () => agentFor(channelID);
+    const place = () => placedAt(path);
+    return (
+      <Show when={place()}>
+        <div
+          data-testid="term-statusbar"
+          data-path={path}
+          data-channel={channelID}
+          style={{
+            ...statusBarStyle,
+            left: `${place()!.status.x}px`,
+            top: `${place()!.status.y}px`,
+            width: `${place()!.status.w}px`,
+            height: `${place()!.status.h}px`,
+            background: root() ? tokens.accentRed : tokens.bgMenu,
+            color: root() ? '#ffffff' : tokens.fg,
+          }}
+          onMouseDown={() => focusGroup(path)}
+        >
+          <span style={{ display: 'inline-flex', 'align-items': 'center', 'flex-shrink': 0 }}>
+            {statusBadge(statusFor(channelID), root() ? '#ffffff' : undefined)}
+          </span>
+          <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis' }}>{statusText(channelID)}</span>
+          <Show when={agent()}>
+            {(a) => (
+              <span
+                data-testid="term-status-agent"
+                data-agent-state={a().state}
+                style={{
+                  display: 'inline-flex',
+                  'align-items': 'center',
+                  gap: '5px',
+                  'flex-shrink': 0,
+                  // The red root bar owns the whole line's colour; elsewhere
+                  // the clause carries its own state hue.
+                  color: root() ? '#ffffff' : agentColor(a().state),
+                }}
+              >
+                {agentText(a())}
+              </span>
+            )}
+          </Show>
+        </div>
+      </Show>
+    );
   };
 
   // ---- BE ----
@@ -1587,6 +1646,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             );
           }}
         </For>
+        {/* One status bar per pane. It follows the same group placement as
+            the tab strip, so split panes keep their own user/root/ssh and
+            agent state visible even when they are not focused. */}
+        <For each={placedPaths()}>
+          {(path) => {
+            const group = () => placedAt(path)?.group;
+            return (
+              <Show when={group()}>
+                {(g) => paneStatusBar(path, g().active)}
+              </Show>
+            );
+          }}
+        </For>
         {/* Dividers. The hit area is padded well beyond the 4px rule —
             a 4px grab target is a bad mouse target — but only the rule
             itself is painted. */}
@@ -1647,50 +1719,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           />
         )}
       </Show>
-      <div
-        data-testid="term-statusbar"
-        style={{
-          display: 'flex',
-          'align-items': 'center',
-          gap: '6px',
-          height: '20px',
-          padding: '0 8px',
-          'flex-shrink': 0,
-          'border-top': `1px solid ${tokens.borderMenu}`,
-          // Splash of red when the active tab is root — a standing
-          // "you are root here" cue, not just the badge.
-          background: isRootActive() ? tokens.accentRed : tokens.bgMenu,
-          color: isRootActive() ? '#ffffff' : tokens.fg,
-          font: tokens.type.textMd,
-          'white-space': 'nowrap',
-          overflow: 'hidden',
-          'user-select': 'none',
-        }}
-      >
-        <span style={{ display: 'inline-flex', 'align-items': 'center', 'flex-shrink': 0 }}>
-          {statusBadge(activeStatus(), isRootActive() ? '#ffffff' : undefined)}
-        </span>
-        <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis' }}>{statusText()}</span>
-        <Show when={activeAgent()}>
-          {(a) => (
-            <span
-              data-testid="term-status-agent"
-              data-agent-state={a().state}
-              style={{
-                display: 'inline-flex',
-                'align-items': 'center',
-                gap: '5px',
-                'flex-shrink': 0,
-                // The red root bar owns the whole line's colour; elsewhere
-                // the clause carries its own state hue.
-                color: isRootActive() ? '#ffffff' : agentColor(a().state),
-              }}
-            >
-              {agentText(a())}
-            </span>
-          )}
-        </Show>
-      </div>
     </>
   );
 };
@@ -1765,6 +1793,20 @@ const stripStyle: JSX.CSSProperties = {
   'overflow-x': 'auto',
   'overflow-y': 'hidden',
   font: tokens.type.monoMd,
+  'box-sizing': 'border-box',
+};
+
+const statusBarStyle: JSX.CSSProperties = {
+  position: 'absolute',
+  display: 'flex',
+  'align-items': 'center',
+  gap: '6px',
+  padding: '0 8px',
+  'border-top': `1px solid ${tokens.borderMenu}`,
+  font: tokens.type.textMd,
+  'white-space': 'nowrap',
+  overflow: 'hidden',
+  'user-select': 'none',
   'box-sizing': 'border-box',
 };
 
