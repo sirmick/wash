@@ -1185,9 +1185,17 @@ createEffect(() => {
       bootWsSettled = true;
       bootStep('ws', 'connected', 'done');
     }
-  } else if (s === 'closed' || s === 'unauthenticated') {
-    // Couldn't reach the router on boot — fail the step and drop the
-    // splash so the ConnectionBanner's error shows through underneath.
+  } else if (s === 'closed' || s === 'unauthenticated' || s === 'reconnecting') {
+    // Lost (or never had) the router — fail the step and drop the splash so
+    // the ConnectionBanner's error shows through underneath.
+    //
+    // 'reconnecting' belongs here too: the splash is a full-screen, opaque,
+    // z-index-999999 overlay that swallows pointer events until it is torn
+    // down, and it is normally torn down by wash:desktop-painted. If the
+    // connection drops BEFORE the desktop paints, that signal never comes —
+    // so without this the splash sat on top of the banner for the full 12s
+    // backstop, hiding the outage and eating clicks on "Reconnect now"
+    // exactly when the user needs it (e2e/tests/reconnect.spec.ts).
     bootStep('ws', s === 'unauthenticated' ? 'session expired' : 'router unreachable', 'fail');
     bootFinish();
   }
@@ -1328,7 +1336,10 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
           padding: '6px 14px',
           font: tokens.type.textMd,
           'box-shadow': '0 6px 16px rgba(0,0,0,0.5)',
-          'z-index': 100000,
+          // Above the boot splash (#wash-boot, z 999999) as well as every
+          // window: a connection outage is the one thing that must never be
+          // covered by chrome the user then cannot dismiss.
+          'z-index': 1000000,
           // Re-enable pointer events so the Reconnect button is clickable;
           // the banner is small + top-center so it doesn't block the desktop.
           'pointer-events': 'auto',

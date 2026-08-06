@@ -16,6 +16,101 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-08-06 — all three standing failures: root-caused and fixed
+
+**Tree:** `branches/e2e-flakes` off main `350654b`. Host: buzz, 32 cores,
+8 workers, `WASH_E2E_MULTICALL=1`. This closes the entry below (reconnect)
+and the 2026-07-29 entry (display tier) — both were real product/harness
+bugs, neither was load.
+
+### 1. `reconnect` — the boot splash was eating the click
+
+Not a bind failure and not a failed re-dial, which were the two hypotheses:
+the replacement router came up fine and the shell reconnected on its own
+every time. What timed out was the **click on "Reconnect now"**. Playwright
+said so all along, in the call log rather than the error line:
+
+```
+- element is visible, enabled and stable
+- <div role="status" id="wash-boot" aria-live="polite">…</div> intercepts pointer events
+```
+
+`#wash-boot` is the boot splash: `position:fixed; inset:0; z-index:999999`,
+opaque, and only `pointer-events:none` once it's marked done. It's torn
+down by `wash:desktop-painted` from the session app — so if the connection
+drops *before* the desktop has painted, that signal never comes and the
+splash sits on top of the connection banner until its 12s backstop fires.
+The spec kills the router as soon as `wash-app-session` is visible, which
+is exactly that window (instrumented: splash still live at t=0.15s, gone by
+t=2.15s). By the time the splash cleared, the backoff loop had already
+reconnected and the button was detached — so the click waited out the full
+30s for a button that would never come back.
+
+A **real bug, not a test artifact**: during any outage that starts before
+first paint, a user sees an opaque "starting wash…" splash instead of the
+banner, and cannot click the retry button underneath it.
+
+Fixed in `web/shell/src/main.tsx`: `'reconnecting'` joins `'closed'` /
+`'unauthenticated'` in the boot-step effect that fails the ws step and
+tears the splash down, and the banner's `z-index` moves above the splash so
+no future full-screen overlay can swallow the one piece of chrome an outage
+makes essential.
+
+**A/B, both directions** (`reconnect.spec.ts`, multicall layout, verified by
+bundle byte-size which build was loaded):
+
+| Shell bundle | Result |
+|---|---|
+| unfixed (73346 B) | fails in 5s at the new trial-click, naming `#wash-boot` as the interceptor |
+| fixed (73367 B) | 10/10 and 20/20 green, whole spec ~1s |
+
+The spec now asserts *reachability* while the port is still dead
+(`retry.click({ trial: true })` — the actionability chain including
+hit-target, no click), which is what actually regressed; and it tolerates
+the backoff loop beating the click to the recovery, but only if the banner
+really did clear.
+
+### 2 & 3. `display-term-xclock` / `display-guest` — the A10 stale-match race
+
+The 2026-07-29 entry had the mechanism right and the fix shape right; it
+just never landed. Confirmed here: the compositor publishes env **more than
+once** (geometry early, socket names once Xwayland is up), `waitForLog`
+scans from t=0, so the specs' `env.publish from` wait was satisfied by the
+*earlier* publish and the terminal was launched before `spawnEnv` carried
+`WASH_X_DISPLAY` — `xclock` then exits with `Can't open display:` and no
+window ever maps.
+
+Fixed by making the fact assertable rather than the event:
+`internal/router/app_session.go` now logs `keys=…` (sorted, comma-joined)
+on the env.publish line, and the four display specs wait for
+`env.publish from .*keys=.*WASH_X_DISPLAY`. Guarded by a new
+`TestEnvPublishLogsKeys` so the line a spec greps can't be quietly reworded.
+`waitForLog` also gained the A10 cursor (`from` + `logCursor()`) for the
+next spec that needs "after this point" rather than "ever".
+
+**A/B, `playwright test display` (13 specs, whole tier in parallel):**
+
+| Tree | 5 runs |
+|---|---|
+| before | 4 red / 1 green — 21.5s, 21.5s, 21.5s, **8.2s**, 27.9s |
+| after | **5 green** — 9.5s, 9.0s, 8.4s, 8.4s, 9.0s |
+
+Note the wall-clock: every red run sat in the 21–27s band the 2026-07-29
+entry identified as the signature, and every green one in the 8–9s band.
+
+**The "compositor stall" was never a stall.** That entry's open question —
+*why does the compositor stall when several run concurrently* — rested on
+that 21s-vs-8s split. The 21s is just the spec's own 20s `waitFor` for a
+window that a dead `xclock` was never going to map. Nothing stalls;
+concurrency only widens the window the race needs. Also picked up the C5
+prompt barrier for the same four specs (xterm mounted ≠ shell ready) since
+they type into a pty; it is not what was failing.
+
+**Verdict:** all three fixed, none quarantined. `make push`'s e2e gate can
+gate again.
+
+---
+
 ## 2026-08-06 — `reconnect` same-port restart, on the agent-app branch
 
 Full suite on `branches/agent-app` (30 commits: the ACP pivot) came back

@@ -90,10 +90,14 @@ bug list — all fully landed; see `git log` if you need their content.)
 
 - [ ] **Keep `docs/FLAKE_LOG.md` current** — the dated record of flakes actually
   seen, each A/B'd against its pre-change baseline so "my branch broke it" is a
-  finding, not a guess. 2026-07-29: the display capstone tier fails ~2 runs in 3
-  under parallel load on BOTH sides of a feature branch (C5 / issue #7), and the
-  `display-term-xclock` mechanism turns out to be A10 (a stale `env.publish`
-  match → no `DISPLAY` at pty spawn), not C5's lost-keystroke diagnosis.
+  finding, not a guess. 2026-08-06: the three standing failures (`reconnect` +
+  the display pair, which between them had blocked `make push`'s e2e gate for
+  weeks) are **root-caused and fixed** — the boot splash swallowing the
+  connection banner's retry click, and A10's stale `env.publish` match launching
+  terminals before `WASH_X_DISPLAY` existed. Neither was load, and C5's
+  "compositor stalls under concurrency" premise was wrong. Issue **#7**
+  (display-input-smoke timing out on `wash-app-display`, which blocked #5) is
+  the same symptom from the same cause and should be closed with this.
 
 - [ ] **Execute the phased plan in docs/TEST_FLAKES.md** (~75 verified items,
   written for a smaller LLM): Phase A e2e harness/process lifecycle
@@ -104,8 +108,8 @@ bug list — all fully landed; see `git log` if you need their content.)
   (stale timeout overrides, fs-assert barriers, persist-before-reload);
   Phase D FE unit; Phase E the **test event bus** (control-socket
   `wait_event` + FE settle hook + guest `WASH-EVENT` lines) so tests drive
-  state machines instead of timing. Open flake trackers: **#7**
-  (display-input-smoke), **#8** (TestSpine).
+  state machines instead of timing. Open flake trackers: **#8** (TestSpine).
+  (**#7**, display-input-smoke, was fixed 2026-08-06 — see above.)
 - [ ] After phases B1–B3: trial dropping `-p 1` from the unit gate (it exists
   to dampen the loopback scheduling race).
 - [ ] After phase A6 (hardlink staging): measure control-socket RTTs and walk

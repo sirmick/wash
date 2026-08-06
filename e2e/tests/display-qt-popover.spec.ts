@@ -64,10 +64,22 @@ test('Qt programmatic menu → popover overlay; dialog → window', async ({ pag
   // (DISPLAY_ENV.md §5), so a Qt guest started too early sees no WAYLAND_DISPLAY
   // and never maps (mirrors display-guest.spec.ts / display-term-xclock).
   await router.waitForLog(/Xwayland ready on DISPLAY=/, 25_000);
-  await router.waitForLog(/env\.publish from /, 25_000);
+  // Wait for the publish that actually CARRIES the display env, not for "an
+  // env.publish happened". The compositor publishes more than once (geometry
+  // early, socket names once Xwayland is up) and waitForLog scans from t=0, so
+  // the bare event was satisfied by the earlier publish and the terminal was
+  // spawned before spawnEnv had WASH_X_DISPLAY — the `xclock → Can't open
+  // display:` flake (docs/FLAKE_LOG.md 2026-07-29, TEST_FLAKES.md A10).
+  // WASH_X_DISPLAY sorts last in the line, so matching it means the whole
+  // publish landed.
+  await router.waitForLog(/env\.publish from .*keys=.*WASH_X_DISPLAY/, 25_000);
   const launched = await router.controlRequest({ t: 'launch', app_id: 'com.wash.term' });
   expect(launched.t).toBe('launched');
   await page.waitForSelector('wash-app-term .xterm-rows', { timeout: 10_000 });
+  // xterm mounted != shell ready — without this the keystrokes below can be
+  // typed into a pty that has not drawn its prompt yet, and the first ones
+  // are swallowed (docs/TEST_FLAKES.md C5).
+  await expect(page.locator('wash-app-term')).toContainText(/\$|#|>/, { timeout: 10_000 });
   await page.locator('wash-app-term').click();
   await page.keyboard.type(`QT_QPA_PLATFORM=wayland ${guest}\n`);
 
