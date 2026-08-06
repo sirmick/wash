@@ -11,7 +11,7 @@
 // queue — this component's job is to be the thing that points at them,
 // not to reimplement any of them.
 
-import { For, Show, createEffect, createSignal, onMount } from 'solid-js';
+import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
 import { Markdown } from './markdown';
@@ -173,9 +173,24 @@ const ToolRow: Component<{ e: AgentEvent; onOpen?: (e: AgentEvent) => void }> = 
   );
 };
 
+// Keyboard answers use Alt rather than a bare letter: the composer is
+// focused most of the time, and a bare A must stay a letter you can type.
+// Alt+A / Alt+D collide with nothing in the terminal-adjacent muscle
+// memory this desktop already trains.
+const ALLOW_HINT = '⌥A';
+const DENY_HINT = '⌥D';
+
+const hintStyle: JSX.CSSProperties = {
+  font: tokens.type.monoSm,
+  opacity: 0.7,
+  'margin-left': `${tokens.spaceXs}px`,
+};
+
 /** A pending question, rendered inline as a second view of agentd's queue. */
 const AskRow: Component<{
   ask: AgentAsk;
+  /** only the row a keystroke would answer advertises the shortcut */
+  keyed?: boolean;
   onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string) => void;
 }> = (p) => (
   <div
@@ -199,6 +214,9 @@ const AskRow: Component<{
       style={askBtn(tokens.bgSuccess, tokens.fgSuccess)}
     >
       Allow
+      <Show when={p.keyed}>
+        <span style={hintStyle}>{ALLOW_HINT}</span>
+      </Show>
     </button>
     <Show when={p.ask.suggested_rule}>
       <button
@@ -215,6 +233,9 @@ const AskRow: Component<{
       style={askBtn(tokens.bgDanger, tokens.fgDanger)}
     >
       Deny
+      <Show when={p.keyed}>
+        <span style={hintStyle}>{DENY_HINT}</span>
+      </Show>
     </button>
   </div>
 );
@@ -253,6 +274,24 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
     if (pinned() && scroller) queueMicrotask(() => scroller!.scrollTo({ top: scroller!.scrollHeight }));
   });
   onMount(() => input?.focus());
+
+  // Answer the oldest pending question from the keyboard. agentd sorts
+  // asks oldest-first, so "the one the shortcut answers" is the one at
+  // the top — and it is the only row that advertises the keys, because a
+  // shortcut that silently picks among several is worse than none.
+  onMount(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.altKey || e.ctrlKey || e.metaKey) return;
+      const pending = props.asks?.() ?? [];
+      if (pending.length === 0) return;
+      const k = e.key.toLowerCase();
+      if (k !== 'a' && k !== 'd') return;
+      e.preventDefault();
+      props.onAnswer?.(pending[0].id, k === 'a' ? 'allow' : 'deny');
+    };
+    window.addEventListener('keydown', onKey);
+    onCleanup(() => window.removeEventListener('keydown', onKey));
+  });
 
   const send = () => {
     const text = draft().trim();
@@ -326,7 +365,9 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           )}
         </For>
 
-        <For each={props.asks?.() ?? []}>{(a) => <AskRow ask={a} onAnswer={props.onAnswer} />}</For>
+        <For each={props.asks?.() ?? []}>
+          {(a, i) => <AskRow ask={a} keyed={i() === 0} onAnswer={props.onAnswer} />}
+        </For>
 
         {/* The tail spinner is the answer to "did it hear me?" — a turn can
             think for many seconds before its first chunk arrives, and an
