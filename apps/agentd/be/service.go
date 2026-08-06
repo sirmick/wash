@@ -92,7 +92,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 			}
 			// Remember it too: the roster is "now", the history is "what
 			// I lost" (§13).
-			if rememberSession(req.Agent, req.SessionID, req.Cwd, now) {
+			if rememberSession(req.Agent, req.SessionID, req.Cwd, "", now) {
 				historyDirty = true
 			}
 			s.Rows = publish(now)

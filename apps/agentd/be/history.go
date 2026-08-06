@@ -42,6 +42,11 @@ type Session struct {
 	Agent     string `json:"agent"`
 	Cwd       string `json:"cwd,omitempty"`
 	Dir       string `json:"dir,omitempty"`
+	// Title is what this session was ABOUT, in the agent's own words —
+	// it names its sessions on session_info_update once it works out what
+	// the work is. "codex · mick" tells you nothing a week later; "Fix
+	// the reconnect banner race" does.
+	Title string `json:"title,omitempty"`
 	// LastSeen is unix seconds — an absolute the FE renders as "2h ago",
 	// and the only field a keepalive touches.
 	LastSeen int64 `json:"last_seen"`
@@ -62,13 +67,18 @@ var (
 // that end by having their terminal killed, which never say goodbye.
 //
 // Returns true when something worth persisting changed.
-func rememberSession(agent, sessionID, cwd string, now time.Time) bool {
+func rememberSession(agent, sessionID, cwd, title string, now time.Time) bool {
 	if sessionID == "" {
 		return false
 	}
 	for i := range history {
 		if history[i].SessionID != sessionID {
 			continue
+		}
+		if title != "" && history[i].Title != title {
+			history[i].Title = title
+			history[i].LastSeen = now.Unix()
+			return true
 		}
 		changed := history[i].Cwd != cwd && cwd != ""
 		if cwd != "" {
@@ -91,6 +101,7 @@ func rememberSession(agent, sessionID, cwd string, now time.Time) bool {
 		Agent:     agent,
 		Cwd:       cwd,
 		Dir:       dirLabel(cwd),
+		Title:     title,
 		LastSeen:  now.Unix(),
 	}}, history...)
 	if len(history) > historyCap {

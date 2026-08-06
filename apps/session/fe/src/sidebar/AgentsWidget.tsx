@@ -23,6 +23,8 @@ export interface AgentRow {
   /** still running, no window pointing at it — clicking reattaches */
   detached?: boolean;
   session_id?: string;
+  /** the agent's own name for this session, when it has one */
+  title?: string;
   cwd?: string;
   dir?: string;
   branch?: string;
@@ -374,6 +376,18 @@ const AgentRowView: Component<{ row: AgentRow; elapsed: string; onFocus: () => v
           </span>
         </Show>
       </div>
+      {/* What the session is ABOUT, in the agent's own words. It names
+          itself once it works out what the work is, so this costs no
+          extra model call — and a sidebar of "codex · wash" rows tells
+          you nothing the moment there are three of them. */}
+      <Show when={props.row.title}>
+        <div
+          data-testid="agents-title"
+          style={{ opacity: 0.75, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}
+        >
+          {props.row.title}
+        </div>
+      </Show>
       <div style={{ display: 'flex', 'justify-content': 'space-between', gap: '6px', opacity: 0.8 }}>
         <span data-testid="agents-state">{stateLabel(props.row)}</span>
         <span style={{ 'font-variant-numeric': 'tabular-nums', 'flex-shrink': 0 }}>{props.elapsed}</span>

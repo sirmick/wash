@@ -154,7 +154,7 @@ func (h *hosted) setState(state, reason string) {
 		if r.Cwd != "" {
 			wantGit = r.Cwd
 		}
-		if rememberSession(h.agent, h.sessionID, h.cwd, now) {
+		if rememberSession(h.agent, h.sessionID, h.cwd, h.title, now) {
 			historyDirty = true
 		}
 		s.Rows = publish(now)
@@ -271,12 +271,24 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 		h.republish()
 
 	case acp.UpdateSessionInfo:
-		// The agent names its own session once it knows what it is about.
+		// The agent names its own session once it works out what the work
+		// is — which is the summary a human would otherwise have to write.
+		// Nothing extra is asked of any model for this; it arrives.
 		if n.Update.Title != "" {
 			hostedMu.Lock()
 			h.title = n.Update.Title
 			hostedMu.Unlock()
 			h.republish()
+			// Remembered immediately: a title that only reached the
+			// history when the session ended would be missing from
+			// exactly the sessions you most want to find again.
+			mutateState(func(s *State) {
+				if rememberSession(h.agent, h.sessionID, h.cwd, h.title, time.Now()) {
+					historyDirty = true
+				}
+				s.Recent = publishHistory()
+			})
+			saveHistorySoon()
 		}
 
 	case "":

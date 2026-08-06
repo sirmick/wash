@@ -166,6 +166,13 @@ test.describe('managed agent sessions', () => {
     // History: earlier sessions live here now, not in the sidebar.
     await win.locator('[data-testid="ai-menubar-history"]').click();
     await expect(page.locator('[data-testid="ai-menu-history"]')).toBeVisible();
+    await page.keyboard.press('Escape');
+
+    // The agent names its own session on session_info_update, and that
+    // name becomes the WINDOW title — no extra model call, it arrives.
+    // Asserted on the chrome rather than the sidebar, whose Agents
+    // section may be collapsed.
+    await expect(page.getByText('Fake conversation').first()).toBeVisible({ timeout: 15_000 });
   });
 
   test('closing a session window asks what to do with the agent', async ({ page, router }) => {

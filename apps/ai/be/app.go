@@ -164,6 +164,22 @@ func firstAvailableAgent() string {
 var session struct {
 	key   string
 	agent string
+	title string
+}
+
+// rosterTitle digs this session's title out of the roster push. Defensive
+// about shape because the payload crosses the router as generic maps.
+func rosterTitle(state any, key string) string {
+	s, _ := state.(map[string]any)
+	rows, _ := s["rows"].([]any)
+	for _, r := range rows {
+		row, _ := r.(map[string]any)
+		if str(row["key"]) != key {
+			continue
+		}
+		return str(row["title"])
+	}
+	return ""
 }
 
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
@@ -348,6 +364,13 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 		c.SendAppMsg(map[string]any{"kind": "event", "event": m["event"]})
 
 	case sdk.StateServiceKindState:
+		// The window title follows the agent's own name for the session.
+		// A taskbar full of "Agent" is unreadable the moment there are
+		// three of them; "Fix the reconnect banner race" is not.
+		if t := rosterTitle(m["state"], session.key); t != "" && t != session.title {
+			session.title = t
+			_ = c.SetTitle(t)
+		}
 		if aiDebug {
 			log.Printf("wash-ai: roster push key=%q state=%T", session.key, m["state"])
 		}

@@ -40,6 +40,8 @@ interface RecentSession {
   session_id: string;
   agent: string;
   dir?: string;
+  /** the agent's own one-line name for what the session was about */
+  title?: string;
   last_seen: number;
   live?: boolean;
 }
@@ -375,7 +377,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           <For each={recent()}>
             {(s) => (
               <MenuItem
-                label={`${s.agent} · ${s.dir ?? ''}`}
+                label={s.title ? `${s.title}  —  ${s.dir ?? ''}` : `${s.agent} · ${s.dir ?? ''}`}
                 onClick={run(() => send({ kind: 'resume', session_id: s.session_id }))}
                 data-testid="ai-menu-resume"
               />
