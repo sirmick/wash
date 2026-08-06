@@ -7,7 +7,10 @@
 
 import { For, Show, createMemo, createSignal } from 'solid-js';
 import type { Component } from 'solid-js';
-import { AgentSession, Button, FilePicker, Overlay, createAppBus, defineWashApp, tokens } from '@wash/ui';
+import {
+  AgentSession, Button, FilePicker, Menu, MenuItem, MenuSeparator, Overlay,
+  createAppBus, defineWashApp, tokens, washCopyText,
+} from '@wash/ui';
 import type { AgentAsk, AgentConfig, AgentEvent, AgentStatus } from '@wash/ui';
 
 interface Adapter {
@@ -33,11 +36,22 @@ interface RosterRow {
   commands?: { name: string; description?: string }[];
 }
 
+interface RecentSession {
+  session_id: string;
+  agent: string;
+  dir?: string;
+  last_seen: number;
+  live?: boolean;
+}
+
 interface RosterState {
   rows?: RosterRow[];
   asks?: (AgentAsk & { row_key: string })[];
   adapters?: Adapter[];
+  recent?: RecentSession[];
 }
+
+type MenuID = '' | 'file' | 'edit' | 'session' | 'history';
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [events, setEvents] = createSignal<AgentEvent[]>([]);
@@ -56,6 +70,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // Closing the window does not end the session — agentd owns the adapter
   // — so the user chooses what happens to it.
   const [confirmClose, setConfirmClose] = createSignal(false);
+  const [openMenu, setOpenMenu] = createSignal<MenuID>('');
+  const [menuAt, setMenuAt] = createSignal({ x: 0, y: 0 });
+  const [saving, setSaving] = createSignal(false);
 
   const handleBE = (m: Record<string, unknown>) => {
     switch (m.kind) {
@@ -125,6 +142,39 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       commands: r?.commands,
     };
   });
+
+  // The transcript as plain text: what Copy and Save both produce. Tool
+  // rows keep their kind so a saved log reads like the session did, and
+  // images are named rather than dumped as base64 — a transcript you can
+  // read beats one you can round-trip.
+  const transcriptText = () =>
+    events()
+      .map((e) => {
+        if (e.kind === 'user') return '> ' + (e.text ?? '');
+        if (e.kind === 'tool') return `[${e.tool_kind ?? 'tool'}] ${e.title ?? e.text ?? ''}`;
+        if (e.kind === 'image') return `[image ${e.mime ?? 'image'}]`;
+        return e.text ?? '';
+      })
+      .join('\n\n');
+
+  const lastReply = () => {
+    const msgs = events().filter((e) => e.kind === 'message');
+    return msgs.length ? (msgs[msgs.length - 1].text ?? '') : '';
+  };
+
+  const openMenuFor = (id: MenuID, ev: MouseEvent) => {
+    const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+    setMenuAt({ x: r.left, y: r.bottom });
+    setOpenMenu((cur) => (cur === id ? '' : id));
+  };
+  const closeMenu = () => setOpenMenu('');
+  const run = (fn: () => void) => () => {
+    closeMenu();
+    fn();
+  };
+
+  const recent = () => (roster().recent ?? []).filter((s) => !s.live);
+  const configs = () => row()?.configs ?? [];
 
   const start = () => {
     const a = agent() || adapters().find((x) => x.available)?.id;
@@ -198,6 +248,20 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       </div>
 
       <FilePicker
+        open={saving()}
+        mode="save"
+        host={props.host}
+        hostInstanceID={props.instance}
+        defaultName={(row()?.title || 'transcript').replace(/[^\w.-]+/g, '-').slice(0, 60) + '.md'}
+        onConfirm={(p) => {
+          setSaving(false);
+          send({ kind: 'save_transcript', path: p, text: transcriptText() });
+        }}
+        onCancel={() => setSaving(false)}
+        data-testid="ai-save-picker"
+      />
+
+      <FilePicker
         open={picking()}
         mode="directory"
         host={props.host}
@@ -236,6 +300,92 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // not pick one of the destructive options for you. That is why this is
   // an Overlay rather than a ConfirmDialog — the latter maps dismiss onto
   // its cancel action, which here would mean "terminate".
+  const menubar = (
+    <div
+      style={{
+        display: 'flex',
+        'align-items': 'center',
+        gap: '2px',
+        flex: 'none',
+        padding: `2px ${tokens.spaceXs}px`,
+        background: tokens.bgMenu,
+        'border-bottom': `1px solid ${tokens.borderMenu}`,
+      }}
+    >
+      <MenuBarButton id="file" label="File" active={openMenu() === 'file'} onClick={openMenuFor} />
+      <MenuBarButton id="edit" label="Edit" active={openMenu() === 'edit'} onClick={openMenuFor} />
+      <MenuBarButton id="session" label="Session" active={openMenu() === 'session'} onClick={openMenuFor} />
+      <MenuBarButton id="history" label="History" active={openMenu() === 'history'} onClick={openMenuFor} />
+
+      <Show when={openMenu() === 'file'}>
+        <Menu x={menuAt().x} y={menuAt().y} onDismiss={closeMenu} data-testid="ai-menu-file">
+          <MenuItem label="Save transcript…" disabled={events().length === 0}
+            onClick={run(() => setSaving(true))} data-testid="ai-menu-save" />
+          <MenuSeparator />
+          <MenuItem label="Detach" disabled={!sessionKey()}
+            onClick={run(() => send({ kind: 'detach' }))} data-testid="ai-menu-detach" />
+          <MenuItem label="Terminate" disabled={!sessionKey()}
+            onClick={run(() => send({ kind: 'terminate' }))} data-testid="ai-menu-terminate" />
+        </Menu>
+      </Show>
+
+      <Show when={openMenu() === 'edit'}>
+        <Menu x={menuAt().x} y={menuAt().y} onDismiss={closeMenu} data-testid="ai-menu-edit">
+          <MenuItem label="Copy last reply" disabled={!lastReply()}
+            onClick={run(() => void washCopyText(lastReply()))} data-testid="ai-menu-copy-last" />
+          <MenuItem label="Copy transcript" disabled={events().length === 0}
+            onClick={run(() => void washCopyText(transcriptText()))} data-testid="ai-menu-copy-all" />
+        </Menu>
+      </Show>
+
+      <Show when={openMenu() === 'session'}>
+        <Menu x={menuAt().x} y={menuAt().y} onDismiss={closeMenu} data-testid="ai-menu-session">
+          <Show when={configs().length === 0}>
+            <MenuItem label="No settings offered" disabled onClick={() => {}} />
+          </Show>
+          {/* One group per setting the agent exposes — model, reasoning
+              effort, plan mode. The same generic block the status bar
+              renders, given room to show its descriptions. */}
+          <For each={configs()}>
+            {(cfg, ci) => (
+              <>
+                <Show when={ci() > 0}><MenuSeparator /></Show>
+                <MenuItem label={cfg.name} disabled onClick={() => {}} />
+                <For each={cfg.values ?? []}>
+                  {(v) => (
+                    <MenuItem
+                      label={'   ' + v.name}
+                      trailing={v.value === cfg.current ? <span>✓</span> : undefined}
+                      onClick={run(() => send({ kind: 'set_config', id: cfg.id, value: v.value }))}
+                      data-testid={`ai-menu-config-${cfg.id}-${v.value}`}
+                    />
+                  )}
+                </For>
+              </>
+            )}
+          </For>
+        </Menu>
+      </Show>
+
+      <Show when={openMenu() === 'history'}>
+        <Menu x={menuAt().x} y={menuAt().y} onDismiss={closeMenu} data-testid="ai-menu-history">
+          <Show when={recent().length === 0}>
+            <MenuItem label="No earlier sessions" disabled onClick={() => {}} />
+          </Show>
+          <For each={recent()}>
+            {(s) => (
+              <MenuItem
+                label={`${s.agent} · ${s.dir ?? ''}`}
+                onClick={run(() => send({ kind: 'resume', session_id: s.session_id }))}
+                data-testid="ai-menu-resume"
+              />
+            )}
+          </For>
+        </Menu>
+      </Show>
+    </div>
+  );
+
   const closeDialog = (
     <Show when={confirmClose()}>
       <Overlay onDismiss={() => setConfirmClose(false)} data-testid="ai-close-confirm">
@@ -280,6 +430,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     {closeDialog}
     <Show when={sessionKey()} fallback={<Show when={autostart()} fallback={launcher}>{booting}</Show>}>
       <AgentSession
+        header={menubar}
         events={events}
         asks={asks}
         status={status}
@@ -293,6 +444,30 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     </>
   );
 };
+
+const MenuBarButton: Component<{
+  id: MenuID;
+  label: string;
+  active: boolean;
+  onClick: (id: MenuID, ev: MouseEvent) => void;
+}> = (props) => (
+  <button
+    type="button"
+    data-testid={`ai-menubar-${props.id}`}
+    onClick={(ev) => props.onClick(props.id, ev)}
+    style={{
+      font: tokens.type.textSm,
+      padding: `2px ${tokens.spaceMd}px`,
+      'border-radius': tokens.radiusSm,
+      border: '1px solid transparent',
+      background: props.active ? tokens.bgRowSelected : 'transparent',
+      color: tokens.fg,
+      cursor: 'pointer',
+    }}
+  >
+    {props.label}
+  </button>
+);
 
 const labelStyle = {
   font: tokens.type.monoSm,

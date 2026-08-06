@@ -147,6 +147,27 @@ test.describe('managed agent sessions', () => {
     await expect(list).toBeHidden();
   });
 
+  test('the menus carry the settings, the transcript and the history', async ({ page, router }) => {
+    const win = await openAgent(page, router.url, 'say something');
+    await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
+
+    // Session: one group per setting the agent exposes, current marked.
+    await win.locator('[data-testid="ai-menubar-session"]').click();
+    const sessionMenu = page.locator('[data-testid="ai-menu-session"]');
+    await expect(sessionMenu).toBeVisible();
+    await sessionMenu.locator('[data-testid="ai-menu-config-model-smart"]').click();
+    await expect(win.locator('[data-testid="agent-config-model"]')).toHaveValue('smart', { timeout: 15_000 });
+
+    // Edit: copying the transcript is a real action, not a stub.
+    await win.locator('[data-testid="ai-menubar-edit"]').click();
+    await expect(page.locator('[data-testid="ai-menu-copy-all"]')).toBeVisible();
+    await page.keyboard.press('Escape');
+
+    // History: earlier sessions live here now, not in the sidebar.
+    await win.locator('[data-testid="ai-menubar-history"]').click();
+    await expect(page.locator('[data-testid="ai-menu-history"]')).toBeVisible();
+  });
+
   test('closing a session window asks what to do with the agent', async ({ page, router }) => {
     const win = await openAgent(page, router.url, 'say something');
     await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });

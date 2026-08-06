@@ -33,6 +33,7 @@ import (
 
 	agentd "github.com/sirmick/wash/apps/agentd/be"
 	"github.com/sirmick/wash/internal/apps/registry"
+	wfs "github.com/sirmick/wash/internal/fs"
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/version"
 	"github.com/sirmick/wash/internal/wire"
@@ -49,6 +50,13 @@ const agentdAppID = agentd.AppID
 // aiDebug traces the roster subscription, which is what drives the status
 // line and the working spinner. Off unless WASH_AGENT_DEBUG is set.
 var aiDebug = os.Getenv("WASH_AGENT_DEBUG") != ""
+
+// maxTranscriptBytes bounds a saved transcript. Generous — a long
+// session with images is large — but finite, because the FE hands us the
+// bytes and a bound is cheaper than trusting it.
+const maxTranscriptBytes = 32 << 20
+
+var aiFS *wfs.FS
 
 var def *sdk.AppDef
 
@@ -171,6 +179,9 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	// a service. Typing a path into a text field was the placeholder, and
 	// it produced the first real bug of the branch (an unexpanded ~).
 	sdk.EnableFilePicker(c)
+	// Empty root = unconfined, matching fm/edit/imageview. NOT "/", which
+	// is a degenerate sandbox that rejects every real path.
+	aiFS = wfs.New(c.Session().Root)
 	// Subscribe to the roster so the window can show adapters in the
 	// launcher and its own row's state in the status line.
 	_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": sdk.StateServiceKindSubscribe})
@@ -228,6 +239,29 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			"kind": "agent_set_mode",
 			"key":  session.key,
 			"mode": str(m["mode"]),
+		})
+
+	case "save_transcript":
+		// Written through internal/fs, so the sandbox root the router
+		// handed this app is what bounds it — the same fence the file
+		// picker that chose the path obeys.
+		path, text := str(m["path"]), str(m["text"])
+		if path == "" {
+			return
+		}
+		abs, n, err := aiFS.Write(path, []byte(text), maxTranscriptBytes)
+		if err != nil {
+			log.Printf("wash-ai: save transcript %q: %v", path, err)
+			c.Fail("Could not save the transcript", err)
+			return
+		}
+		log.Printf("wash-ai: transcript saved path=%s bytes=%d", abs, n)
+		c.Info("Transcript saved", abs)
+
+	case "resume":
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind":       "agent_resume",
+			"session_id": str(m["session_id"]),
 		})
 
 	case "set_config":

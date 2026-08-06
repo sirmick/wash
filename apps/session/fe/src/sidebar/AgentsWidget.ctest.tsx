@@ -173,41 +173,6 @@ const sess = (over: Partial<AgentSession> = {}): AgentSession => ({
   ...over,
 });
 
-test('a remembered session offers Resume, Fork and its id', () => {
-  const { getByTestId } = render(() => (
-    <AgentsWidget rows={() => []} startedAt={at} now={() => Date.now()} onFocus={noop} recent={() => [sess()]} />
-  ));
-  const row = getByTestId('agents-recent-row');
-  expect(row.getAttribute('data-session-id')).toBe('sess-1');
-  expect(row.textContent).toContain('claude');
-  expect(row.textContent).toContain('wash');
-  expect(getByTestId('agents-resume')).toBeTruthy();
-  expect(getByTestId('agents-copy-id')).toBeTruthy();
-});
-
-test('a session that is running right now is not offered for resume', () => {
-  // It's in the roster above; resuming it would duplicate it.
-  const { queryByTestId } = render(() => (
-    <AgentsWidget rows={() => []} startedAt={at} now={() => Date.now()} onFocus={noop}
-      recent={() => [sess({ live: true })]} />
-  ));
-  expect(queryByTestId('agents-recent-row')).toBeNull();
-  expect(queryByTestId('agents-recent')).toBeNull();
-});
-
-test('Resume names the session it reopens', () => {
-  const seen: string[] = [];
-  const { getByTestId, queryByTestId } = render(() => (
-    <AgentsWidget rows={() => []} startedAt={at} now={() => Date.now()} onFocus={noop}
-      recent={() => [sess()]} onResume={(s, fork) => seen.push(`${s.session_id}:${fork}`)} />
-  ));
-  fireEvent.click(getByTestId('agents-resume'));
-  expect(seen).toEqual(['sess-1:false']);
-  // Fork went with the intercept tier: under ACP it would be
-  // session/fork, an unstable capability whose shape is unverified.
-  expect(queryByTestId('agents-fork')).toBeNull();
-});
-
 test('fmtAgo reads like a human said it', () => {
   const now = 1_000_000_000_000; // ms
   const sec = now / 1000;
@@ -216,4 +181,16 @@ test('fmtAgo reads like a human said it', () => {
   expect(fmtAgo(now, sec - 7200)).toBe('2h ago');
   expect(fmtAgo(now, sec - 2 * 86_400)).toBe('2d ago');
   expect(fmtAgo(now, 0)).toBe('');
+});
+
+// Earlier sessions moved to the Agent app's History menu: the sidebar
+// answers "what is running", and a list of things that are NOT running
+// was answering a different question in the same space.
+test('the sidebar no longer lists sessions that ended', () => {
+  const { queryByTestId } = render(() => (
+    <AgentsWidget rows={() => []} startedAt={at} now={() => Date.now()} onFocus={noop}
+      recent={() => [sess()]} />
+  ));
+  expect(queryByTestId('agents-recent')).toBeNull();
+  expect(queryByTestId('agents-recent-row')).toBeNull();
 });

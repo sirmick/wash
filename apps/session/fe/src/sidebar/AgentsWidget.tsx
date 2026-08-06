@@ -149,20 +149,10 @@ export const AgentsWidget: Component<AgentsWidgetProps> = (props) => {
           />
         )}
       </For>
-      {/* Sessions that are no longer running, but could be. */}
-      <Show when={(props.recent?.() ?? []).some((s) => !s.live)}>
-        <div data-testid="agents-recent" style={recentHeadStyle}>Recent</div>
-        <For each={(props.recent?.() ?? []).filter((s) => !s.live)}>
-          {(s) => (
-            <RecentRow
-              session={s}
-              now={props.now()}
-              onResume={(fork) => props.onResume?.(s, fork)}
-              onCopyID={() => props.onCopyID?.(s)}
-            />
-          )}
-        </For>
-      </Show>
+      {/* Earlier sessions live in the Agent app's History menu now. The
+          sidebar answers "what is running"; a list of things that are
+          NOT running was answering a different question in the same
+          space. */}
     </div>
   );
 };
