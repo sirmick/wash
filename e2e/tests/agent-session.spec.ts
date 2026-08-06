@@ -10,16 +10,20 @@
 // and it passes the same conformance test they do; a shape that drifts
 // upstream fails there first.
 
-import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/router';
 
-const FAKE_DIR = join(process.cwd(), '..', 'out', 'e2e');
+// Resolved from this file, not from process.cwd(): playwright can be
+// invoked from the repo root or from e2e/, and a cwd-relative path
+// silently found NO fake — so the suite quietly ran the real agent, cost
+// real tokens, and failed on text a model had actually written.
+const FAKE_DIR = fileURLToPath(new URL('../../out/e2e', import.meta.url));
 
 test.use({
   routerOpts: {
-    apps: ['session', 'agentd', 'ai', 'notify', 'fswatch'],
-    env: { PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}` },
+    apps: ['session', 'agentd', 'ai', 'notify'],
+    extraEnv: { PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}` },
   },
 });
 

@@ -45,6 +45,7 @@ const APP_BINS = {
   music: ['wash-music'], radio: ['wash-radio'], audio: ['wash-audio'],
   connect: ['wash-connect'], remote: ['wash-remote'],
   imageview: ['wash-imageview'],
+  agentd: ['wash-agentd'], ai: ['wash-ai'],
   vscode: ['wash-vscode', 'wash-vscode-workbench'],
   display: ['wash-display'],
 } satisfies Record<string, readonly string[]>;
@@ -56,8 +57,7 @@ type AppName = keyof typeof APP_BINS;
 // settings all relay watch to com.wash.fswatch, which the router auto-spawns on
 // first reference — so it must be staged in every router or watching is dead.
 const REQUIRED = ['wash-router', 'wash-session', 'wash-about', 'wash-test',
-  'wash-term', 'wash-fm', 'wash-bulk', 'wash-edit', 'wash-launch', 'wash-fswatch',
-  'wash-agent-hook'];
+  'wash-term', 'wash-fm', 'wash-bulk', 'wash-edit', 'wash-launch', 'wash-fswatch'];
 
 // Binaries referenced directly (not via the apps table): the spawn target, the
 // launch CLI, the compositor skip-check, fakesudo wiring, and the exported
