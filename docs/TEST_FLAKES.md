@@ -178,6 +178,13 @@ loop and make startup event-driven. Biggest blast radius; do them first, in orde
 - Verify: `mv out/washvm-run{,.bak}; cd e2e && pnpm exec playwright test tests/net-vm-gate.spec.ts --workers=1` → clean skip; restore.
 
 ### A10 [P2] `waitForLog` matches from t=0 — add a cursor so "the save I just triggered" is expressible
+> **PARTLY DONE (2026-08-06).** The cursor shipped, under different names than
+> proposed below: `waitForLog(re, timeout, from?)` plus `logCursor(): number`
+> (`e2e/fixtures/router.ts`) — C3 should use those instead of
+> `logMark`/`waitForLogSince`. `logCount` is still unwritten. The display half of
+> this item is fixed a different and better way: the router now logs *which* env
+> keys it accepted, so the specs assert the fact (`keys=…WASH_X_DISPLAY`) rather
+> than sequencing behind an event at all. See `docs/FLAKE_LOG.md` 2026-08-06.
 - `router.ts:407` scans the whole buffer; every "wait for MY persist" barrier silently matches
   the first stale occurrence (bites C3 below). Until Phase E replaces log-greps entirely:
 - Fix: add to the handle: `logMark: () => number` (returns `logBuf.length`) and
@@ -569,6 +576,15 @@ Replace bare snapshots with polls (readFileSync/existsSync inside `expect.poll`)
 - Verify: `pnpm exec playwright test tests/term-fonts.spec.ts tests/term-menubar.spec.ts tests/term-wedge-recovery.spec.ts tests/term-modes-resize.spec.ts tests/term-reconcile.spec.ts --repeat-each=10`.
 
 ### C5 [P1] display family (today's only red + 2 of the 5 CI flakes live here)
+> **DONE (2026-08-06)** — the tier is green 5/5 in parallel, was 1/5. The
+> shell-ready barrier below landed on all four specs, but it was **not** the
+> cause: the cause was the A10 stale `env.publish` match launching terminals
+> before `WASH_X_DISPLAY` reached `spawnEnv`, so `xclock` died with `Can't open
+> display:` and no window ever mapped. The "compositor stalls under concurrency"
+> premise was wrong — the 21s red runs were the specs' own 20s `waitFor` for a
+> window that was never coming. Mechanism, A/B and fix: `docs/FLAKE_LOG.md`
+> 2026-08-06. The `display.spec.ts:80` and `display-qt-popover.spec.ts:89`
+> one-shot-count items below are still unwritten.
 - `display.spec.ts:80-81`: replace waitForSelector + one-shot `count()` with
   `await expect(page.locator('wash-app-display')).toHaveCount(2, { timeout: 10_000 });`
 - `display-term-xclock.spec.ts:38`, `display-guest.spec.ts:54-59`,

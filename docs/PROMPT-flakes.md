@@ -1,5 +1,15 @@
 # Session prompt — the e2e failures that outlive every branch
 
+> **DONE (2026-08-06, branch `e2e-flakes`).** All three fixed, none
+> quarantined; `make e2e-test` is green and `make push` gates again. Both were
+> real bugs, not load: `reconnect` was the boot splash sitting on top of the
+> connection banner and eating the "Reconnect now" click (a user-visible fault,
+> not a test artifact), and the display pair was the A10 stale-`env.publish`
+> match launching terminals before `WASH_X_DISPLAY` was published. The
+> "compositor stalls under parallel load" hypothesis in §2 below was wrong —
+> see `docs/FLAKE_LOG.md` 2026-08-06 for the mechanisms, the A/B tables, and
+> that dead end. Kept for the method (baseline-before-blame, the harness traps).
+
 Paste this as the opening prompt for a dedicated session. It is self-contained.
 
 ---
