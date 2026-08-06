@@ -221,6 +221,11 @@ type ContentBlock struct {
 	// Data is base64 for type=="image"; MimeType names it.
 	Data     string `json:"data,omitempty"`
 	MimeType string `json:"mimeType,omitempty"`
+	// Nested is the wrapper form a tool_call uses: its content items are
+	// ToolCallContent, which carry the real block under `content` rather
+	// than being one themselves. Accepting both shapes is why an image
+	// produced by a TOOL (a screenshot, a chart) is not silently lost.
+	Nested *ContentBlock `json:"content,omitempty"`
 }
 
 // Image builds an image block for a prompt.
@@ -228,13 +233,31 @@ func Image(mime, b64 string) ContentBlock {
 	return ContentBlock{Type: "image", Data: b64, MimeType: mime}
 }
 
-// Images returns the image blocks in this content, if any.
+// Images returns the image blocks in this content, unwrapping the
+// tool_call nesting on the way.
 func (c Content) Images() []ContentBlock {
 	var out []ContentBlock
 	for _, b := range c {
 		if b.Type == "image" && b.Data != "" {
 			out = append(out, b)
 		}
+		if b.Nested != nil && b.Nested.Type == "image" && b.Nested.Data != "" {
+			out = append(out, *b.Nested)
+		}
+	}
+	return out
+}
+
+// Kinds lists the block types present, for the debug log — "an image
+// never appeared" and "no image was ever sent" look identical without it.
+func (c Content) Kinds() []string {
+	out := make([]string, 0, len(c))
+	for _, b := range c {
+		k := b.Type
+		if b.Nested != nil {
+			k += "/" + b.Nested.Type
+		}
+		out = append(out, k)
 	}
 	return out
 }
@@ -276,6 +299,9 @@ func (c Content) String() string {
 	var sb strings.Builder
 	for _, b := range c {
 		sb.WriteString(b.Text)
+		if b.Nested != nil {
+			sb.WriteString(b.Nested.Text)
+		}
 	}
 	return sb.String()
 }

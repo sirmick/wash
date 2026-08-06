@@ -411,3 +411,32 @@ func TestUsageAndTitleDecode(t *testing.T) {
 		t.Errorf("title = %q", got[1].Update.Title)
 	}
 }
+
+// A tool_call's content is nested one level deeper than a message's: its
+// items are ToolCallContent wrappers carrying the real block under
+// `content`. Only unwrapping the message form silently lost every image a
+// TOOL produced — a screenshot, a chart — which looks like a rendering
+// fault rather than a decoding one.
+func TestToolCallImagesAreUnwrapped(t *testing.T) {
+	h := &recordingHandler{}
+	_, agent := newPair(t, h)
+
+	agent.send(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{` +
+		`"sessionUpdate":"tool_call","toolCallId":"t1","kind":"execute","status":"completed",` +
+		`"content":[{"type":"content","content":{"type":"image","mimeType":"image/png","data":"QUJD"}},` +
+		`{"type":"content","content":{"type":"text","text":"done"}}]}}}`)
+
+	got := waitFor(t, h, 1)
+	imgs := got[0].Update.Content.Images()
+	if len(imgs) != 1 {
+		t.Fatalf("%d images unwrapped, want 1 — a tool's image was lost", len(imgs))
+	}
+	if imgs[0].Data != "QUJD" || imgs[0].MimeType != "image/png" {
+		t.Errorf("image = %+v", imgs[0])
+	}
+	// The nested text still reads through, so a tool's output is not lost
+	// either.
+	if got[0].Update.Content.String() != "done" {
+		t.Errorf("text = %q", got[0].Update.Content.String())
+	}
+}

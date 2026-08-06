@@ -326,3 +326,33 @@ func TestHostedSessionAsksEvenWithNoPolicyFile(t *testing.T) {
 	}
 	t.Fatal("with no policy file a hosted session did not ask — its tool call would silently never run")
 }
+
+// The sweep must not age out a session this process hosts. We own the
+// adapter, so its exit is a fact — retire() removes the row — and
+// silence means only that the agent is idle. Ageing it out made a live
+// agent disappear from the roster after two quiet minutes.
+func TestSweepLeavesHostedSessionsAlone(t *testing.T) {
+	reset()
+	withState(t, 1)
+
+	h := &hosted{key: "acp:1", agent: "codex"}
+	hostedMu.Lock()
+	hostedAll[h.key] = h
+	hostedMu.Unlock()
+	t.Cleanup(func() {
+		hostedMu.Lock()
+		delete(hostedAll, h.key)
+		hostedMu.Unlock()
+	})
+
+	// A row that has not been touched for well past the drop window.
+	stale := t0.Add(-dropAfter - time.Minute)
+	put("acp:1", Row{Key: "acp:1", Agent: "codex", State: "done"}, stale, stale)
+
+	if lookupHosted("acp:1") == nil {
+		t.Fatal("the session is not in the registry — the guard cannot fire")
+	}
+	if _, live := rows["acp:1"]; !live {
+		t.Fatal("row missing before the sweep")
+	}
+}

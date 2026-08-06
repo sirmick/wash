@@ -160,6 +160,17 @@ func sweepLoop(c *sdk.Conn) {
 			svc.Mutate(func(s *State) {
 				changed := false
 				for key, r := range rows {
+					// A session this process HOSTS cannot go silent: we
+					// own the adapter, so its exit is a fact (retire()
+					// removes the row) rather than something to infer from
+					// silence. Ageing it out expired live agents that were
+					// simply idle — observed: `row dropped key=acp:1
+					// agent=claude age=2m0s` while the session was still
+					// running. The sweep exists for the terminal tier,
+					// which reports and can therefore stop reporting.
+					if lookupHosted(key) != nil {
+						continue
+					}
 					switch age := now.Sub(r.lastSeen); {
 					case age > dropAfter:
 						log.Printf("agentd: row dropped key=%s agent=%s age=%s", key, r.Agent, age.Round(time.Second))

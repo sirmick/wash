@@ -174,6 +174,9 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 		if text == "" {
 			return out
 		}
+		if transcriptDebug && len(u.Content) > 0 {
+			log.Printf("agentd: content key=%s kinds=%v", key, u.Content.Kinds())
+		}
 		if transcriptDebug {
 			// %q so a chunk that is exactly " " is visible as such. Chunk
 			// boundaries are precisely where lost whitespace hides.
@@ -191,6 +194,17 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 
 	case acp.UpdateToolCall, acp.UpdateToolCallUpdate:
 		t.openMessage = -1
+		// A tool can produce an image too — a screenshot, a chart. Its
+		// content is nested one level deeper than a message's, which is
+		// why Images() unwraps.
+		var imgs []Event
+		for _, img := range u.Content.Images() {
+			if len(img.Data) > maxImageBytes {
+				log.Printf("agentd: image dropped key=%s mime=%s bytes=%d (over %d)", key, img.MimeType, len(img.Data), maxImageBytes)
+				continue
+			}
+			imgs = append(imgs, t.push(Event{Kind: EventImage, Mime: img.MimeType, Text: img.Data, AtMS: now.UnixMilli()}))
+		}
 		id := u.ToolCallID
 		if at, ok := t.toolAt[id]; ok && id != "" {
 			// Update in place: a tool row moves pending → in_progress →
@@ -208,7 +222,7 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 			if txt := u.Content.String(); txt != "" {
 				ev.Text = txt
 			}
-			return []Event{*ev}
+			return append(imgs, *ev)
 		}
 		e := t.push(Event{
 			Kind:     EventTool,
@@ -222,7 +236,7 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 		if id != "" {
 			t.toolAt[id] = len(t.events) - 1
 		}
-		return []Event{e}
+		return append(imgs, e)
 	}
 	return nil
 }
