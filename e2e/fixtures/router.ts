@@ -103,7 +103,18 @@ export interface RouterHandle {
    */
   fakesudoLog: string;
   log(): string;
-  waitForLog(pattern: RegExp, timeout?: number): Promise<string>;
+  /**
+   * Wait for `pattern` to appear in the router's captured output.
+   *
+   * Matching starts at `from` (default 0 — the whole log). Pass logCursor()
+   * when the line you're waiting for is one a router emits REPEATEDLY, or the
+   * wait is satisfied instantly by an earlier occurrence and you race whatever
+   * you were trying to sequence behind it (docs/TEST_FLAKES.md A10 — this is
+   * how the display specs launched terminals before DISPLAY was published).
+   */
+  waitForLog(pattern: RegExp, timeout?: number, from?: number): Promise<string>;
+  /** Current length of the captured log; pass to waitForLog's `from`. */
+  logCursor(): number;
   /**
    * Round-trip a single JSON request over the control socket. Used
    * by BE-driven tests to launch/spawn apps and drive APP_MSGs into
@@ -421,7 +432,8 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
     xdgConfigHome,
     fakesudoLog,
     log: () => logBuf,
-    waitForLog: (re, timeout = 5_000) => waitForRegex(() => logBuf, re, timeout),
+    waitForLog: (re, timeout = 5_000, from = 0) => waitForRegex(() => logBuf.slice(from), re, timeout),
+    logCursor: () => logBuf.length,
     // 12s (was 5s): a BE→router control round-trip can exceed 5s under the
     // full-parallel e2e load (8 workers × routers + ~40 BE apps), flaking
     // fm-be etc. with "control socket timeout". 12s stays under the 15s
