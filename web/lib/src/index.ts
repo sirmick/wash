@@ -11,6 +11,8 @@ export type { AppBus, AppBusMessage, AppBusMsgBound, AppBusOptions } from './app
 export { Button } from './button';
 export type { ButtonProps, ButtonVariant, ButtonSize } from './button';
 export { Menu, MenuItem, MenuSeparator } from './menu';
+export { MenuBar, kbdStyle } from './menubar';
+export type { MenuBarProps, MenuBarMenu } from './menubar';
 export type { MenuProps, MenuItemProps } from './menu';
 export { Overlay, ConfirmDialog } from './overlay';
 export type { OverlayProps, ConfirmDialogProps } from './overlay';
@@ -39,6 +41,10 @@ export type { TerminalProps, TerminalAPI, TermFont, TermModes, TermTheme } from 
 export { washCopyText, washPasteText, systemCopyText, systemCopyTextChecked } from './clipboard';
 export { analyzePaste, joinWrapped } from './paste-analyze';
 export type { PasteAnalysis, PasteIssue, PasteOptions } from './paste-analyze';
+export { Markdown, parseBlocks, parseInline } from './markdown';
+export type { MarkdownProps, Align } from './markdown';
+export { AgentSession } from './agent-session';
+export type { AgentSessionProps, AgentEvent, AgentAsk, AgentStatus, AgentConfig } from './agent-session';
 export { defineWashApp } from './define-app';
 export { ensureScrollbarStyles, WASH_SCROLL_CLASS, WASH_SCROLL_GUTTER_CLASS } from './scrollbars';
 export type { WashAppProps, DefineWashAppOptions } from './define-app';

@@ -1294,6 +1294,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             startedAt={(key) => agentStartedAt.get(key) ?? Date.now()}
             now={agentNow}
             onFocus={focusAgent}
+            onReattach={(row) =>
+              window.wash.sendAppMsg(props.instance, { kind: 'agent_reattach', key: row.key })
+            }
             asks={agentAsks}
             recent={agentRecent}
             onResume={(session, fork) =>

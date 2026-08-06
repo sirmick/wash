@@ -20,7 +20,11 @@ export interface AgentRow {
   /** running | working | needs-input | done | stale */
   state: string;
   reason?: string;
+  /** still running, no window pointing at it — clicking reattaches */
+  detached?: boolean;
   session_id?: string;
+  /** the agent's own name for this session, when it has one */
+  title?: string;
   cwd?: string;
   dir?: string;
   branch?: string;
@@ -43,7 +47,9 @@ export interface AgentAsk {
   /** what "Always allow" would write — shown ON the button */
   suggested_rule?: string;
   row_key: string;
-  term_instance: string;
+  /** who asked — attribution only; the answer routes by `id` in agentd */
+  source_app?: string;
+  source_instance?: string;
   age_ms: number;
 }
 
@@ -67,13 +73,15 @@ export interface AgentsWidgetProps {
   now: () => number;
   /** go to the terminal that owns this agent */
   onFocus: (row: AgentRow) => void;
+  /** a detached session is still running with no window — open one */
+  onReattach?: (row: AgentRow) => void;
   /** permission questions waiting on the human */
   asks?: () => AgentAsk[];
   /** answer one: decision allow|deny, remember writes the named rule */
   onAnswer?: (ask: AgentAsk, decision: 'allow' | 'deny', remember: boolean) => void;
   /** remembered sessions, most recent first */
   recent?: () => AgentSession[];
-  /** reopen one: fork branches off it instead of continuing it */
+  /** reopen one — agentd loads it and opens an Agent window */
   onResume?: (session: AgentSession, fork: boolean) => void;
   /** put the session id on the clipboard */
   onCopyID?: (session: AgentSession) => void;
@@ -138,31 +146,26 @@ export const AgentsWidget: Component<AgentsWidgetProps> = (props) => {
           <AgentRowView
             row={r}
             elapsed={fmtElapsed(props.now() - props.startedAt(r.key))}
-            onFocus={() => props.onFocus(r)}
+            onFocus={() => (r.detached ? props.onReattach?.(r) : props.onFocus(r))}
+            detached={r.detached === true}
           />
         )}
       </For>
-      {/* Sessions that are no longer running, but could be. */}
-      <Show when={(props.recent?.() ?? []).some((s) => !s.live)}>
-        <div data-testid="agents-recent" style={recentHeadStyle}>Recent</div>
-        <For each={(props.recent?.() ?? []).filter((s) => !s.live)}>
-          {(s) => (
-            <RecentRow
-              session={s}
-              now={props.now()}
-              onResume={(fork) => props.onResume?.(s, fork)}
-              onCopyID={() => props.onCopyID?.(s)}
-            />
-          )}
-        </For>
-      </Show>
+      {/* Earlier sessions live in the Agent app's History menu now. The
+          sidebar answers "what is running"; a list of things that are
+          NOT running was answering a different question in the same
+          space. */}
     </div>
   );
 };
 
-// RecentRow is a session you could reopen: what it was and where, and the
-// two ways back in. Resume continues it; Fork branches off it, leaving the
-// original untouched for when you want to go back to that point.
+// RecentRow is a session you could reopen: what it was and where.
+//
+// Fork was removed with the intercept tier. It used to mean `claude
+// --resume <id> --fork-session` in a terminal; under ACP a fork would be
+// session/fork, which lives in an UNSTABLE capability whose method shape
+// this build has not verified against a real adapter. A button that
+// guesses a wire format is worse than one that is absent.
 const RecentRow: Component<{
   session: AgentSession;
   now: number;
@@ -195,11 +198,8 @@ const RecentRow: Component<{
       </span>
     </div>
     <div style={{ display: 'flex', gap: '4px' }}>
-      <AskBtn testid="agents-resume" title={`Continue this session in a new terminal`} onClick={() => props.onResume(false)}>
+      <AskBtn testid="agents-resume" title="Reopen this session, with its conversation" onClick={() => props.onResume(false)}>
         Resume
-      </AskBtn>
-      <AskBtn testid="agents-fork" title="Branch off this session, leaving it as it was" onClick={() => props.onResume(true)}>
-        Fork
       </AskBtn>
       <AskBtn testid="agents-copy-id" title={props.session.session_id} onClick={props.onCopyID}>
         Copy id
@@ -325,7 +325,7 @@ const AskBtn: Component<{
   </button>
 );
 
-const AgentRowView: Component<{ row: AgentRow; elapsed: string; onFocus: () => void }> = (props) => {
+const AgentRowView: Component<{ row: AgentRow; elapsed: string; onFocus: () => void; detached?: boolean }> = (props) => {
   // Where it's working: "wash · main*" — repo, branch, and a star when the
   // tree is dirty. Absent for an agent outside a checkout.
   const place = (): string => {
@@ -353,6 +353,7 @@ const AgentRowView: Component<{ row: AgentRow; elapsed: string; onFocus: () => v
       data-agent-state={props.row.state}
       style={rowStyle()}
       onClick={props.onFocus}
+      title={props.detached ? 'Detached — click to open a window on it' : undefined}
       title={`${props.row.agent} in ${props.row.cwd || 'unknown directory'} — click to go to its terminal`}
     >
       <div style={{ display: 'flex', 'align-items': 'baseline', gap: '6px' }}>
@@ -375,6 +376,18 @@ const AgentRowView: Component<{ row: AgentRow; elapsed: string; onFocus: () => v
           </span>
         </Show>
       </div>
+      {/* What the session is ABOUT, in the agent's own words. It names
+          itself once it works out what the work is, so this costs no
+          extra model call — and a sidebar of "codex · wash" rows tells
+          you nothing the moment there are three of them. */}
+      <Show when={props.row.title}>
+        <div
+          data-testid="agents-title"
+          style={{ opacity: 0.75, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}
+        >
+          {props.row.title}
+        </div>
+      </Show>
       <div style={{ display: 'flex', 'justify-content': 'space-between', gap: '6px', opacity: 0.8 }}>
         <span data-testid="agents-state">{stateLabel(props.row)}</span>
         <span style={{ 'font-variant-numeric': 'tabular-nums', 'flex-shrink': 0 }}>{props.elapsed}</span>

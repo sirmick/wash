@@ -46,7 +46,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-agentd ready instance=%s", instanceID)
 	bus := sdk.NewBus(c)
 	loadHistory()
-	svc = sdk.NewStateService(bus, State{Recent: publishHistory()})
+	svc = sdk.NewStateService(bus, State{Recent: publishHistory(), Adapters: Probe()})
 
 	// agent_status: a terminal states (or re-states) one tab's agent. The
 	// sender is router-attested, so the key can't be forged and a
@@ -92,7 +92,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 			}
 			// Remember it too: the roster is "now", the history is "what
 			// I lost" (§13).
-			if rememberSession(req.Agent, req.SessionID, req.Cwd, now) {
+			if rememberSession(req.Agent, req.SessionID, req.Cwd, "", now) {
 				historyDirty = true
 			}
 			s.Rows = publish(now)
@@ -140,6 +140,8 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	})
 
 	registerAskHandlers(bus, c)
+	registerACPHandlers(bus, c)
+	registerTranscriptHandlers(bus)
 
 	go sweepLoop(c)
 }
@@ -158,6 +160,17 @@ func sweepLoop(c *sdk.Conn) {
 			svc.Mutate(func(s *State) {
 				changed := false
 				for key, r := range rows {
+					// A session this process HOSTS cannot go silent: we
+					// own the adapter, so its exit is a fact (retire()
+					// removes the row) rather than something to infer from
+					// silence. Ageing it out expired live agents that were
+					// simply idle — observed: `row dropped key=acp:1
+					// agent=claude age=2m0s` while the session was still
+					// running. The sweep exists for the terminal tier,
+					// which reports and can therefore stop reporting.
+					if lookupHosted(key) != nil {
+						continue
+					}
 					switch age := now.Sub(r.lastSeen); {
 					case age > dropAfter:
 						log.Printf("agentd: row dropped key=%s agent=%s age=%s", key, r.Agent, age.Round(time.Second))

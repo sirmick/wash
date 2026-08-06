@@ -19,6 +19,7 @@ wash-net
 wash-washamp
 wash-music
 wash-radio
+wash-ai
 wash-vscode
 wash-netd
 wash-remote
@@ -30,5 +31,4 @@ wash-fswatch
 wash-agentd
 wash-launch
 wash-fswatchd
-wash-agent-hook
 wash-sudo

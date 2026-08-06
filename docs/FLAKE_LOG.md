@@ -16,6 +16,36 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-08-06 — `reconnect` same-port restart, on the agent-app branch
+
+Full suite on `branches/agent-app` (30 commits: the ACP pivot) came back
+448 passed / 3 failed. Two were the standing display-tier pair below.
+The third was new to me:
+
+| spec | isolated runs |
+|---|---|
+| `reconnect.spec.ts` › router drops → banner + Reconnect-now → same-port restart recovers | 3/3 failed |
+
+Deterministic, so not a flake — and the branch touches the pty
+environment and the session FE, both plausible. **A/B against baseline
+`1cba66a` (main, the branch point), same spec, freshly built worktree:
+also fails.**
+
+Verdict: **pre-existing, not the branch.** Test times out at 30s waiting
+for the banner to clear after the replacement router binds the same port;
+whether the second router fails to bind or the shell fails to re-dial is
+not yet established. Nothing on agent-app goes near it.
+
+Fix lives: unassigned. Worth its own look — a deterministic red is
+cheaper to chase than the load-dependent ones above, and this one costs a
+merge gate every time.
+
+Cleaned up in passing: the e2e fixture staged `wash-agent-hook` into
+every router's apps dir, which M5 deleted, so every router logged
+`disabled …/wash-agent-hook (?): probe…` at startup. Not the cause.
+
+---
+
 ## 2026-07-29 — display capstone tier, under parallel load
 
 **Tree:** `agent-term-m1` (AGENT_TERM.md M1) vs baseline `3f37903`

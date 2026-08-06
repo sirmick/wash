@@ -41,9 +41,6 @@ type Policy struct {
 	Default string `json:"default,omitempty"`
 	// Rules are evaluated in order; first match wins.
 	Rules []Rule `json:"rules,omitempty"`
-	// LegacyAutoApprove turns on the hookless "watch for (y/n) and type
-	// y" path. Spoofable by construction, opt-in, and gated by Enabled.
-	LegacyAutoApprove bool `json:"legacy_autoapprove,omitempty"`
 	// AskDesktop lets an unmatched request ask the human through the
 	// desktop before falling back to the agent's own prompt (§12). Only
 	// consulted when Enabled. Defaults to true via AskDesktopOrDefault —

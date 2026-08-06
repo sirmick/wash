@@ -49,16 +49,6 @@ type Session struct {
 	closeOnce sync.Once
 	onClose   func(s *Session, reason string)
 
-	// agentMu guards the OSC 7770 tee (agentosc.go): the handler and
-	// the resumable scanner. Nil handler = no agent parsing at all, so
-	// a PTY host that doesn't care (wash-edit's embedded terminal)
-	// pays one nil check per read.
-	// SetAgentHandler / SetOutputTap / feedAgent / agentTee live in
-	// agentosc.go.
-	agentMu   sync.Mutex
-	agentFn   func(AgentEvent)
-	agentScan *agentOSCScanner
-	outputTap func([]byte)
 }
 
 // Size returns the last cols/rows applied to the PTY.
@@ -135,13 +125,6 @@ func (s *Session) ForegroundUser() ForegroundUser {
 	case sshComms[comm]:
 		out.State = "ssh"
 		out.Target = sshTarget(fg)
-	}
-	// T0 agent detection rides the same /proc read: argv is only
-	// fetched for the handful of interpreter comms that need it.
-	if _, ok := agentComms[comm]; ok {
-		out.Agent = agentComms[comm]
-	} else if runtimeComms[comm] {
-		out.Agent = matchAgent(comm, procCmdline(fg))
 	}
 	return out
 }
@@ -322,10 +305,9 @@ func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint1
 		onClose: onClose,
 	}
 
-	// pty → channel, teed through the OSC 7770 agent scanner (inert
-	// until someone calls SetAgentHandler).
+	// pty → channel.
 	go func() {
-		_, copyErr := io.Copy(ch, &agentTee{r: f, s: s})
+		_, copyErr := io.Copy(ch, f)
 		if !isPtyTerm(copyErr) {
 			// Real I/O error, not the normal EOF/EIO of a closing pty —
 			// without this line the session just goes dark.

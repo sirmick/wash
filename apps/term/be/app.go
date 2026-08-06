@@ -97,12 +97,9 @@ type state struct {
 	// agents holds each tab's merged agent status (T0 poll + OSC 7770
 	// events); agentSent is its send-on-change dedupe, same shape as
 	// statusSent. See agent.go.
-	agents    map[uint32]*agentRec
-	agentSent map[uint32]string
 	// autoApprove holds each tab's trailing-output window for the opt-in
 	// legacy auto-approve path (autoapprove.go). Absent for every tab
 	// until the feature is switched on.
-	autoApprove map[uint32]*autoApproveState
 }
 
 // initState allocates the per-window maps. Both entrypoints (Def for the
@@ -110,9 +107,6 @@ type state struct {
 func initState() {
 	st.sessions = make(map[uint32]*pty.Session)
 	st.statusSent = make(map[uint32]string)
-	st.agents = make(map[uint32]*agentRec)
-	st.agentSent = make(map[uint32]string)
-	st.autoApprove = make(map[uint32]*autoApproveState)
 }
 
 var st state
@@ -246,7 +240,6 @@ func pollTabStatus(c *sdk.Conn) {
 				sessions = append(sessions, s)
 			}
 			st.mu.Unlock()
-			now := time.Now()
 			for i, sess := range sessions {
 				id := ids[i]
 				fu := sess.ForegroundUser()
@@ -256,22 +249,7 @@ func pollTabStatus(c *sdk.Conn) {
 				if !unchanged {
 					st.statusSent[id] = key
 				}
-				// T0 agent detection rides this same sample (agent.go).
-				// The record is created lazily but kept while EITHER tier
-				// has something, so an OSC-reported agent survives a poll
-				// tick that sees no agent in the foreground.
-				rec := st.agents[id]
-				if rec == nil && fu.Agent != "" {
-					rec = &agentRec{}
-					st.agents[id] = rec
-				}
-				if rec != nil {
-					rec.applyPoll(fu, now)
-				}
 				st.mu.Unlock()
-				// Agent status has its own dedupe and its own message, so
-				// it publishes whether or not the user badge flipped.
-				publishAgent(c, id)
 				if unchanged {
 					continue
 				}
@@ -354,6 +332,8 @@ func registerHandlers(b *sdk.Bus) {
 	// itself. The check keeps the capability narrow, it does not contain an
 	// attacker who is already inside.)
 	sdk.HandleFromVoid(b, "exec_tab", func(c *sdk.Conn, _ string, req execTabReq, from wire.Sender) error {
+		// agentdAppID is declared beside the verb it guards now that the
+		// rest of the agent tier has gone (docs/AGENT_APP.md §10).
 		if from.AppID != agentdAppID {
 			log.Printf("term: exec_tab refused from=%s", from.AppID)
 			return nil
@@ -398,18 +378,9 @@ func registerHandlers(b *sdk.Bus) {
 		// user state hasn't flipped since would never get its badge back.
 		// Forget the dedupe keys here so the next poll tick (≤1s) resends
 		// the current status for every live tab and re-seeds the badges.
-		// Agent status is ephemeral in exactly the same way (never
-		// persisted, never replayed), so it re-seeds off the same tick.
 		st.statusSent = make(map[uint32]string)
-		st.agentSent = make(map[uint32]string)
 		st.mu.Unlock()
 		return c.SendAppMsg(map[string]any{"kind": "sessions", "sessions": rows})
-	})
-	// ask_result: agentd relaying the human's answer to a permission
-	// question this terminal asked (§12). Cross-app, so HandleFromVoid.
-	sdk.HandleFromVoid(b, "ask_result", func(_ *sdk.Conn, _ string, req askResultMsg, _ wire.Sender) error {
-		onAskResult(req)
-		return nil
 	})
 	sdk.HandleVoid(b, "close_tab", func(_ *sdk.Conn, _ string, req closeTabReq) error {
 		if req.ChannelID == 0 {
@@ -453,22 +424,19 @@ func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []str
 		// instead of inheriting wash-priv's parent env.
 		argv = []string{loginShellPath(), "-l"}
 	}
-	// The decision socket has to exist BEFORE the shell is exec'd — its
-	// path goes into the child's environment as $WASH_AGENT_SOCK — so it
-	// is created here and handed to the env transform (agentsock.go).
-	sock := newAgentSock()
-	sess, err := pty.Open(context.Background(), c, windowID, cols, rows, argv, withAgentSock(sock), func(s *pty.Session, reason string) {
+	// WithWashEnv is what makes a wash terminal a wash terminal: TERM
+	// pinned for xterm.js, $WASH_BIN_DIR prepended to PATH so `wash ai`
+	// and friends resolve without an absolute path, and the router's
+	// WASH_*-namespaced display hints mapped to the real DISPLAY /
+	// WAYLAND_DISPLAY a GUI client needs.
+	sess, err := pty.Open(context.Background(), c, windowID, cols, rows, argv, pty.WithWashEnv, func(s *pty.Session, reason string) {
 		// onClose runs from the pty goroutine when the session ends.
 		// Drop from the session map, tell the FE, dismiss the window
 		// if no tabs remain.
-		sock.close()
 		st.mu.Lock()
 		_, found := st.sessions[s.ID()]
 		delete(st.sessions, s.ID())
 		delete(st.statusSent, s.ID())
-		delete(st.agents, s.ID())
-		delete(st.agentSent, s.ID())
-		delete(st.autoApprove, s.ID())
 		empty := len(st.sessions) == 0
 		st.mu.Unlock()
 		if !found {
@@ -479,10 +447,6 @@ func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []str
 			"channel_id": uint64(s.ID()),
 			"reason":     reason,
 		})
-		// Retract the roster row now rather than leaving it to agentd's
-		// stale sweep — a tab the user closed should leave the sidebar
-		// with it (§7: explicit remove on tab close, TTL as the net).
-		publishRoster(c, s.ID(), agentView{}, false, "", time.Now())
 		if empty {
 			// Last tab gone — ask the router to close the window so
 			// the user doesn't sit looking at an empty terminal.
@@ -490,7 +454,6 @@ func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []str
 		}
 	})
 	if err != nil {
-		sock.close()
 		log.Printf("wash-term open: %v", err)
 		_ = c.SendAppMsg(map[string]any{"kind": "tab_error", "msg": err.Error()})
 		return
@@ -498,19 +461,6 @@ func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []str
 	st.mu.Lock()
 	st.sessions[sess.ID()] = sess
 	st.mu.Unlock()
-	// Answer policy questions for this tab until it closes (§6). The
-	// channel id is read lazily so the audit log can name the tab.
-	if sock != nil {
-		go sock.serve(sockDeps{chanID: sess.ID, warn: c.Warn, conn: c})
-	}
-	// Tee this pty's output through the OSC 7770 scanner (agent.go). The
-	// bytes are only read — the sequence stays in the stream, so the
-	// scrollback ring is untouched and replays never re-fire events.
-	sess.SetAgentHandler(func(ev pty.AgentEvent) { onAgentEvent(c, sess.ID(), ev) })
-	// The output tap feeds the opt-in legacy auto-approve path. It checks
-	// the switch first, so a tab with the feature off does a policy-cache
-	// read and returns (autoapprove.go).
-	sess.SetOutputTap(func(p []byte) { onTabOutput(sess.ID(), sess.Inject, c.Warn, p) })
 
 	log.Printf("wash-term tab opened ch=%d shell=%s pid=%d", sess.ID(), sess.Shell, sess.Cmd().Process.Pid)
 	_ = c.SendAppMsg(map[string]any{
@@ -538,3 +488,9 @@ func onCloseRequested(c *sdk.Conn, win uint32) bool {
 // <svg><use href="/icons.svg#terminal"/></svg>; the sprite is built
 // from lucide-static at shell build time.
 const termIcon = "terminal"
+
+// agentdAppID is the roster service. The only thing wash-term still owes
+// it is the exec_tab verb behind a Resume click — the rest of the agent
+// tier (hooks, OSC, the decision socket) was retired when agentd started
+// hosting sessions itself (docs/AGENT_APP.md §10).
+const agentdAppID = "com.wash.agentd"

@@ -63,7 +63,7 @@ SC      := $(OUT)/singlecall
 # compositor; the gated `test` app is woven in where TEST_APP applies.
 FE_APPS := session about connect imageview term fm edit vscode-workbench \
            settings top disks journal syslogs services packages net \
-           washamp music radio
+           washamp music radio ai
 FE_PANEL_APPS := vscode netd remote
 SVC_APPS := bulk priv notify audio fswatch agentd
 
@@ -79,7 +79,7 @@ BINS := wash-router wash-login \
         $(addprefix wash-,$(FE_APPS)) \
         $(addprefix wash-,$(FE_PANEL_APPS)) \
         $(addprefix wash-,$(SVC_APPS)) \
-        wash-launch wash-fswatchd wash-agent-hook
+        wash-launch wash-fswatchd
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -497,15 +497,6 @@ endif
 $(SC)/wash-fswatchd: | $(SC)
 	$(call go_build,$@,cmd/wash-fswatchd)
 
-# wash-agent-hook is the coding-agent hook helper (docs/AGENT_TERM.md §4):
-# an agent runs it on each hook event, it writes one OSC 7770 sequence to
-# /dev/tty, and wash-term's pty tee turns that into a tab dot. FE-less Go
-# CLI, so .PHONY for the same reason as wash-fswatchd — the stamp-less rule
-# would otherwise never relink on a source change.
-.PHONY: $(SC)/wash-agent-hook
-$(SC)/wash-agent-hook: | $(SC)
-	$(call go_build,$@,cmd/wash-agent-hook)
-
 # wash-mount is the OPTIONAL standalone FUSE mount CLI (needs the FUSE kmod +
 # fusermount3 at runtime — absent in the in-browser VM and locked-down hosts).
 # Kept out of BINS/packaging like wash-display; the mount LIBRARY ships inside
@@ -593,8 +584,18 @@ $(OUT)/wash-priv-fakesudo: | $(OUT)
 
 # Convenience target: build the test app + everything else.
 .PHONY: test-app
-test-app: $(OUT)/wash-priv-fakesudo
+test-app: $(OUT)/wash-priv-fakesudo $(OUT)/e2e/codex-acp
 	$(MAKE) TEST_APP=1 all
+
+# acp-fake stands in for an ACP adapter in the e2e suite. Built under the
+# NAME OF THE ADAPTER IT REPLACES so the production probe finds it on a
+# PATH the test controls — nothing in production knows it exists. Its
+# frames were captured from real adapters with the conformance tracer, and
+# it passes the same conformance test they do.
+.PHONY: $(OUT)/e2e/codex-acp
+$(OUT)/e2e/codex-acp:
+	@mkdir -p $(OUT)/e2e
+	$(call go_build,$@,e2e/fixtures/acp-fake)
 
 # Multi-call build. Compiles cmd/wash with -tags=multicall — the
 # resulting binary dispatches by argv[0] to whatever apps are

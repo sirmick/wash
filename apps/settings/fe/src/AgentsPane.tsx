@@ -22,7 +22,7 @@
 
 import { For, Show, createSignal } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Checkbox, Input, Row, Section, Select, SmallBtn, tokens, washCopyText } from '@wash/ui';
+import { Checkbox, Input, Row, Section, Select, SmallBtn, tokens } from '@wash/ui';
 
 /** One row of the policy table. */
 export interface AgentRule {
@@ -39,7 +39,6 @@ export interface AgentPolicy {
   default?: string;
   rules?: AgentRule[];
   /** opt-in: watch hookless agents for (y/n) prompts and type y */
-  legacy_autoapprove?: boolean;
   /** ask the desktop when no rule matches (default true while enabled) */
   ask_desktop?: boolean;
 }
@@ -58,13 +57,11 @@ const DEFAULTS: [string, string][] = [
   ['deny', 'deny'],
 ];
 
-const INSTALL_CMD = 'wash agent-hooks install';
 
 export const AgentsPane: Component<{
   policy: AgentPolicy;
   onChange: (p: AgentPolicy) => void;
 }> = (props) => {
-  const [copied, setCopied] = createSignal(false);
   const rules = (): AgentRule[] => props.policy.rules ?? [];
 
   const patch = (p: Partial<AgentPolicy>) => props.onChange({ ...props.policy, ...p });
@@ -83,11 +80,6 @@ export const AgentsPane: Component<{
     setRules(next);
   };
 
-  const copyInstall = () => {
-    void washCopyText(INSTALL_CMD);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1_200);
-  };
 
   return (
     <div data-testid="settings-agents" style={{ display: 'flex', 'flex-direction': 'column', gap: '18px' }}>
@@ -177,47 +169,17 @@ export const AgentsPane: Component<{
         </div>
       </Section>
 
-      <Section title="Agents without hooks">
+      <Section title="How agents get here">
         <div style={proseStyle}>
-          Some agents have no hooks to install. For those, wash can watch the
-          terminal for a <code style={codeStyle}>(y/n)</code> question and type{' '}
-          <code style={codeStyle}>y</code>. It only ever does this while an agent
-          is the program running in that tab, but it is still pattern-matching
-          text: anything printed in the terminal can imitate a prompt. Prefer the
-          rules above wherever the agent supports hooks.
-        </div>
-        <Row label="Type y for me">
-          <Checkbox
-            data-testid="agents-legacy"
-            checked={props.policy.legacy_autoapprove === true}
-            onChange={(v) => patch({ legacy_autoapprove: v })}
-            disabled={props.policy.enabled !== true}
-            label={
-              props.policy.enabled !== true
-                ? 'needs "Answer for me" on'
-                : props.policy.legacy_autoapprove
-                  ? 'on — spoofable by design'
-                  : 'off'
-            }
-          />
-        </Row>
-      </Section>
-
-      <Section title="Hooks">
-        <div style={proseStyle}>
-          Agents report their state — and ask these questions — through hooks
-          wash installs into the agent's own config. Run this once per box:
-        </div>
-        <div style={cmdRowStyle}>
-          <code data-testid="agents-install-cmd" style={{ ...codeStyle, flex: 1 }}>{INSTALL_CMD}</code>
-          <SmallBtn data-testid="agents-install-copy" onClick={copyInstall}>
-            {copied() ? 'copied' : 'copy'}
-          </SmallBtn>
+          These rules apply to sessions wash runs itself — started from the
+          Agent app, which launches the agent over the Agent Client Protocol
+          and reads its tool calls off a structured wire. wash no longer
+          installs hooks into an agent's own config, and no longer watches
+          terminal output for prompts to answer.
         </div>
         <div style={{ ...proseStyle, opacity: 0.6 }}>
-          <code style={codeStyle}>wash agent-hooks status</code> shows what is installed;{' '}
-          <code style={codeStyle}>remove</code> takes it back out. The merge only ever touches
-          entries wash added.
+          An agent you start yourself in a terminal is not governed by this
+          table: wash is not in that conversation.
         </div>
       </Section>
     </div>
@@ -247,10 +209,3 @@ const ruleRowStyle: JSX.CSSProperties = {
   'align-items': 'center',
 };
 
-const cmdRowStyle: JSX.CSSProperties = {
-  display: 'flex',
-  'align-items': 'center',
-  gap: '8px',
-  'margin-bottom': '10px',
-  'max-width': '58ch',
-};

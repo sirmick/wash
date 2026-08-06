@@ -103,6 +103,7 @@ func onReady(c *sdk.Conn, _ string, _ uint32) {
 	registerRemoteGateway(bus)
 	registerAgentGateway(bus)
 	registerAgentResume(bus)
+	registerAgentReattach(bus)
 	// state forwarder: notify, bulk, and priv all push
 	// {kind:"state", state:...} cross-app. Branch on the sender's
 	// AppID to re-brand for the FE under a service-specific kind.
@@ -254,9 +255,28 @@ func registerAgentGateway(bus *sdk.Bus) {
 	})
 }
 
+// agent_reattach opens a window onto a session that is STILL RUNNING but
+// has no window pointing at it — the detach half of the close dialog
+// (docs/AGENT_APP.md §9). Distinct from resume, which reopens one that
+// ended.
+func registerAgentReattach(bus *sdk.Bus) {
+	sdk.HandleVoid(bus, "agent_reattach", func(conn *sdk.Conn, _ string, req agentReattachReq) error {
+		if req.Key == "" {
+			return nil
+		}
+		return conn.SendAppMsgTo(wire.Recipient{AppID: AgentdAppID}, map[string]any{
+			"kind": "agent_reattach",
+			"key":  req.Key,
+		})
+	})
+}
+
+type agentReattachReq struct {
+	Key string `json:"key"`
+}
+
 // agent_resume asks the roster service to reopen a remembered session
-// (docs/AGENT_TERM.md §13) — Resume, or Fork for branching off one
-// without disturbing it.
+// that has ENDED (docs/AGENT_APP.md §9).
 func registerAgentResume(bus *sdk.Bus) {
 	sdk.HandleVoid(bus, "agent_resume", func(conn *sdk.Conn, _ string, req agentResumeReq) error {
 		if req.SessionID == "" {

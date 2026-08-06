@@ -45,6 +45,7 @@ const APP_BINS = {
   music: ['wash-music'], radio: ['wash-radio'], audio: ['wash-audio'],
   connect: ['wash-connect'], remote: ['wash-remote'],
   imageview: ['wash-imageview'],
+  agentd: ['wash-agentd'], ai: ['wash-ai'],
   vscode: ['wash-vscode', 'wash-vscode-workbench'],
   display: ['wash-display'],
 } satisfies Record<string, readonly string[]>;
@@ -56,8 +57,7 @@ type AppName = keyof typeof APP_BINS;
 // settings all relay watch to com.wash.fswatch, which the router auto-spawns on
 // first reference — so it must be staged in every router or watching is dead.
 const REQUIRED = ['wash-router', 'wash-session', 'wash-about', 'wash-test',
-  'wash-term', 'wash-fm', 'wash-bulk', 'wash-edit', 'wash-launch', 'wash-fswatch',
-  'wash-agent-hook'];
+  'wash-term', 'wash-fm', 'wash-bulk', 'wash-edit', 'wash-launch', 'wash-fswatch'];
 
 // Binaries referenced directly (not via the apps table): the spawn target, the
 // launch CLI, the compositor skip-check, fakesudo wiring, and the exported
@@ -279,11 +279,6 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   // first reference — so its binary must be present in every router's apps dir,
   // independent of which apps a test requested.
   bins.push(binPath('wash-fswatch'));
-  // wash-agent-hook is the coding-agent hook helper (docs/AGENT_TERM.md §4).
-  // It is a CLI, not an app: terminals reach it through WASH_BIN_DIR on
-  // PATH, so it has to be in every router's apps dir for the policy specs
-  // (and for anyone typing it in a test terminal) to find it.
-  bins.push(binPath('wash-agent-hook'));
   // wash-agentd is the coding-agent roster singleton: wash-term addresses
   // it by app id, so the router spawns it the first time any terminal sees
   // an agent. Staged everywhere for the same reason as wash-fswatch — a

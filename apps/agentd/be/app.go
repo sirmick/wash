@@ -53,6 +53,11 @@ type State struct {
 	// Recent is the remembered session history (§13) — what a reboot or a
 	// closed window would otherwise have cost you.
 	Recent []Session `json:"recent,omitempty"`
+	// Adapters is which agents this box can actually launch over ACP
+	// (docs/AGENT_APP.md §6). The launcher renders unavailable ones greyed
+	// with their reason rather than hiding them, so "why can I not pick
+	// Claude here" has an answer on screen.
+	Adapters []Adapter `json:"adapters,omitempty"`
 }
 
 // Row is one agent in one terminal tab.
@@ -86,9 +91,53 @@ type Row struct {
 	// SinceMS is how long the row has been in this state, as of the push.
 	// The FE anchors its own clock to it (no cross-clock comparison).
 	SinceMS int64 `json:"since_ms"`
+	// Used / Size are the agent's context accounting (usage_update), and
+	// Title is its own name for the session (session_info_update).
+	Used  int64  `json:"used,omitempty"`
+	Size  int64  `json:"size,omitempty"`
+	Title string `json:"title,omitempty"`
+	// Mode is the agent's active approval preset and Modes what it offers
+	// (docs/AGENT_APP.md §9). Empty for an agent with no such notion.
+	Mode  string `json:"mode,omitempty"`
+	Modes []Mode `json:"modes,omitempty"`
+	// Configs is the agent's generic settings block (model, reasoning
+	// effort, plan mode…). Commands are its own slash commands.
+	Configs  []Config  `json:"configs,omitempty"`
+	Commands []Command `json:"commands,omitempty"`
+	// Detached marks a session still running with no window pointing at
+	// it — the sidebar offers Reattach rather than focus.
+	Detached bool `json:"detached,omitempty"`
 	// Stale marks a row whose terminal stopped reporting: shown greyed,
 	// then dropped. See staleAfter / dropAfter.
 	Stale bool `json:"stale,omitempty"`
+}
+
+// Mode is one approval/sandbox preset an agent offers.
+type Mode struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// Config is one agent setting the session can change.
+type Config struct {
+	ID          string        `json:"id"`
+	Name        string        `json:"name"`
+	Description string        `json:"description,omitempty"`
+	Current     string        `json:"current,omitempty"`
+	Values      []ConfigValue `json:"values,omitempty"`
+}
+
+type ConfigValue struct {
+	Value       string `json:"value"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// Command is one slash command the agent offers.
+type Command struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }
 
 var def *sdk.AppDef

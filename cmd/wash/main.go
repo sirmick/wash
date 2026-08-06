@@ -26,7 +26,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sirmick/wash/internal/agenthook"
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/runner/fswatchd"
 	"github.com/sirmick/wash/internal/runner/launch"
@@ -63,15 +62,6 @@ func main() {
 		if vmloginRun != nil {
 			os.Exit(vmloginRun(os.Args[1:]))
 		}
-	case "wash-agent-hook":
-		// The agent hook helper (docs/AGENT_TERM.md §4). Like
-		// wash-fswatchd it is a CLI, not an app — reject the router's
-		// manifest probe cleanly rather than reading its empty stdin as
-		// a hook payload.
-		if len(os.Args) >= 2 && os.Args[1] == "--wash-manifest" {
-			os.Exit(2)
-		}
-		os.Exit(agenthook.Run(os.Args[1:]))
 	case "wash-fswatchd":
 		// Reject the router's app-probe cleanly (exit 2, matching the
 		// other non-app binaries) instead of starting the daemon, which
@@ -159,8 +149,6 @@ func runSubcommand(args []string) {
 		os.Exit(routerrun.Run(rest))
 	case "launch":
 		os.Exit(launch.Run(rest))
-	case "agent-hooks":
-		os.Exit(agenthook.RunCLI(rest))
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 	default:
@@ -208,8 +196,8 @@ Subcommands:
   wash list-apps                  list registered apps
   wash router [flags...]          run the router host (see wash router --help)
   wash launch [flags...]          run the wash-launch CLI (see wash launch --help)
-  wash agent-hooks <verb>         install/remove the coding-agent status hooks
-                                  (see wash agent-hooks help)
+  wash ai [--agent X] [dir]       open an agent session (default: first
+                                  installed adapter, $HOME)
   wash <name> [args...]           shorthand for wash-<name> [args...]
   wash --wash-manifest            (not valid — manifests are per-app)`)
 }
