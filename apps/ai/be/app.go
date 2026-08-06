@@ -22,9 +22,13 @@ package ai
 import (
 	"context"
 	"embed"
+	"flag"
+	"io"
 	"io/fs"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
 
 	agentd "github.com/sirmick/wash/apps/agentd/be"
 	"github.com/sirmick/wash/internal/apps/registry"
@@ -48,6 +52,7 @@ var aiDebug = os.Getenv("WASH_AGENT_DEBUG") != ""
 var def *sdk.AppDef
 
 func init() {
+	parseFlags()
 	sub, err := fs.Sub(assetsFS, "assets")
 	if err != nil {
 		panic("wash-ai: assets: " + err.Error())
@@ -83,6 +88,68 @@ func Def() *sdk.AppDef { return def }
 
 func run(ctx context.Context) error { return sdk.Run(ctx, def) }
 
+// Launch flags (see parseFlags). Set once at startup, read in onReady.
+var (
+	flagAgent string
+	flagCwd   string
+)
+
+// parseFlags reads --agent / --cwd so a session can be started straight
+// from a shell:
+//
+//	wash ai --agent claude --cwd ~/wash
+//	wash ai ~/wash                       (agent = first available adapter)
+//
+// ContinueOnError and a discarded output, matching wash-term: the SDK's
+// own argv (--wash-manifest, --open) must pass through unscathed.
+//
+// The directory is resolved to an absolute path HERE, in the process the
+// user launched, because "." and "~" mean something in this cwd and
+// nothing in the router's — resolving them later cost a bug already.
+func parseFlags() {
+	flags := flag.NewFlagSet("wash-ai", flag.ContinueOnError)
+	agent := flags.String("agent", "", "which agent to start (claude, codex, gemini)")
+	cwd := flags.String("cwd", "", "working directory for the session (default: $HOME)")
+	flags.SetOutput(io.Discard)
+	_ = flags.Parse(os.Args[1:])
+
+	flagAgent = *agent
+	dir := *cwd
+	if dir == "" && flags.NArg() > 0 {
+		dir = flags.Arg(0)
+	}
+	if dir == "" {
+		return
+	}
+	if strings.HasPrefix(dir, "~") {
+		if home, err := os.UserHomeDir(); err == nil {
+			dir = filepath.Join(home, strings.TrimPrefix(dir, "~"))
+		}
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	flagCwd = dir
+	if flagAgent == "" {
+		// A bare directory still means "start something here" — the
+		// launcher would otherwise open with the folder filled in and
+		// nothing chosen, which is a worse answer than picking the first
+		// adapter that is actually installed.
+		flagAgent = firstAvailableAgent()
+	}
+}
+
+// firstAvailableAgent is the adapter probe's first usable row, so
+// `wash ai ~/wash` starts something rather than asking.
+func firstAvailableAgent() string {
+	for _, a := range agentd.Probe() {
+		if a.Available {
+			return a.ID
+		}
+	}
+	return ""
+}
+
 // session is what this window is currently attached to. One window, one
 // session — hence a package-level value rather than a map.
 var session struct {
@@ -100,6 +167,19 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	// Subscribe to the roster so the window can show adapters in the
 	// launcher and its own row's state in the status line.
 	_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": sdk.StateServiceKindSubscribe})
+
+	if flagAgent == "" {
+		return
+	}
+	// Launched with flags: skip the launcher entirely. The FE is told
+	// first so it shows what is starting instead of flashing an empty
+	// form that is about to be replaced.
+	c.SendAppMsg(map[string]any{"kind": "autostart", "agent": flagAgent, "cwd": flagCwd})
+	_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+		"kind":  "agent_start",
+		"agent": flagAgent,
+		"cwd":   flagCwd,
+	})
 }
 
 // onAppMsg handles messages from this window's own FE.

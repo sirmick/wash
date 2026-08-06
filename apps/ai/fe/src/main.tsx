@@ -43,15 +43,25 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [cwd, setCwd] = createSignal('');
   const [starting, setStarting] = createSignal(false);
   const [picking, setPicking] = createSignal(false);
+  // Launched with --agent/--cwd: show what is starting rather than an
+  // empty form that is about to be replaced.
+  const [autostart, setAutostart] = createSignal<{ agent: string; cwd: string } | null>(null);
 
   const handleBE = (m: Record<string, unknown>) => {
     switch (m.kind) {
+      case 'autostart':
+        setAutostart({ agent: String(m.agent ?? ''), cwd: String(m.cwd ?? '') });
+        setAgent(String(m.agent ?? ''));
+        setCwd(String(m.cwd ?? ''));
+        setStarting(true);
+        break;
       case 'started':
         setSessionKey(String(m.key ?? ''));
         setStarting(false);
         setError('');
         break;
       case 'start_failed':
+        setAutostart(null);
         setStarting(false);
         setError(String(m.error ?? 'could not start'));
         break;
@@ -103,6 +113,24 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     setError('');
     send({ kind: 'start', agent: a, cwd: cwd() });
   };
+
+  const booting = (
+    <div
+      style={{
+        padding: `${tokens.spaceXl}px`,
+        display: 'flex',
+        'flex-direction': 'column',
+        gap: `${tokens.spaceMd}px`,
+        color: tokens.fgMuted,
+        font: tokens.type.textMd,
+      }}
+    >
+      <div style={{ color: tokens.fg, font: tokens.type.titleSm }}>
+        Starting {autostart()?.agent}…
+      </div>
+      <div style={{ font: tokens.type.monoMd }}>{autostart()?.cwd || 'Home'}</div>
+    </div>
+  );
 
   const launcher = (
     <div style={{ padding: `${tokens.spaceXl}px`, display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceLg}px` }}>
@@ -185,7 +213,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   );
 
   return (
-    <Show when={sessionKey()} fallback={launcher}>
+    <Show when={sessionKey()} fallback={<Show when={autostart()} fallback={launcher}>{booting}</Show>}>
       <AgentSession
         events={events}
         asks={asks}
