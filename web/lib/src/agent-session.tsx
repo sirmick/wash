@@ -56,6 +56,9 @@ export interface AgentStatus {
   size?: number;
   /** the agent's own name for this session */
   title?: string;
+  /** the agent's active approval preset, and what it offers */
+  mode?: string;
+  modes?: { id: string; name: string; description?: string }[];
 }
 
 export interface AgentSessionProps {
@@ -70,6 +73,8 @@ export interface AgentSessionProps {
   onOpenTool?: (e: AgentEvent) => void;
   /** Abort the running turn. Absent means the session cannot be stopped. */
   onCancel?: () => void;
+  /** Switch the agent's approval preset. Absent hides the control. */
+  onSetMode?: (modeID: string) => void;
   /** Rendered above the transcript; the launcher uses it for its form. */
   header?: JSX.Element;
   placeholder?: string;
@@ -498,6 +503,39 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           <span style={{ color: tokens.fgDim }}>·</span>
           <span>{st().dir}</span>
         </Show>
+        {/* The approval preset lives HERE, on the session it governs,
+            rather than in Settings: it is a per-session decision about
+            this piece of work, and the agent owns it — wash is only
+            asking. Changing it is visible to the agent and reversible
+            from either side, unlike a blanket allow wash keeps to
+            itself. */}
+        <Show when={(st().modes?.length ?? 0) > 0 && props.onSetMode}>
+          <select
+            data-testid="agent-mode"
+            value={st().mode ?? ''}
+            title={st().modes?.find((m) => m.id === st().mode)?.description ?? 'Approval mode'}
+            onChange={(e) => props.onSetMode?.(e.currentTarget.value)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: tokens.fgMuted,
+              font: tokens.type.monoSm,
+              cursor: 'pointer',
+              outline: 'none',
+              'max-width': '14ch',
+            }}
+          >
+            <For each={st().modes}>
+              {(m) => (
+                <option value={m.id} title={m.description}>
+                  {m.name}
+                </option>
+              )}
+            </For>
+          </select>
+          <span style={{ color: tokens.fgDim }}>·</span>
+        </Show>
+
         <Show when={st().used && st().size}>
           <span style={{ color: tokens.fgDim }}>·</span>
           <span title="context used / window">{fmtTokens(st().used!)}/{fmtTokens(st().size!)}</span>

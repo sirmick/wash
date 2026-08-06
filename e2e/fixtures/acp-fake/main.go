@@ -70,7 +70,25 @@ func main() {
 			})
 
 		case "session/new":
-			reply(out, id, map[string]any{"sessionId": sessionID})
+			reply(out, id, map[string]any{
+				"sessionId": sessionID,
+				"modes": map[string]any{
+					"currentModeId": "agent",
+					"availableModes": []any{
+						map[string]any{"id": "read-only", "name": "Read-only", "description": "Requires approval."},
+						map[string]any{"id": "agent", "name": "Agent", "description": "Read and edit, run commands."},
+						map[string]any{"id": "agent-full-access", "name": "Agent (full access)", "description": "No approval required."},
+					},
+				},
+			})
+
+		case "session/set_mode":
+			params, _ := m["params"].(map[string]any)
+			mode, _ := params["modeId"].(string)
+			reply(out, id, nil)
+			// A real agent confirms with current_mode_update, so the UI
+			// follows the wire rather than its own optimism.
+			notify(out, update(map[string]any{"sessionUpdate": "current_mode_update", "currentModeId": mode}))
 
 		case "session/load":
 			// A load MUST replay the conversation before it answers.

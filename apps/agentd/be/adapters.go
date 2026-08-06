@@ -138,7 +138,7 @@ func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), initTimeout)
 	defer cancel()
 
-	sid, err := h.client.NewSession(ctx, h.cwd, nil)
+	res2, err := h.client.NewSession(ctx, h.cwd, nil)
 	if err != nil {
 		h.stop()
 		if len(h.authMethods) > 0 {
@@ -147,9 +147,11 @@ func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 		}
 		return nil, fmt.Errorf("session/new %s: %w", agentID, err)
 	}
-	h.sessionID = sid
+	h.sessionID = res2.SessionID
+	h.applyModes(res2.Modes)
 	h.register()
-	log.Printf("agentd: acp session started key=%s agent=%s session=%s cwd=%s", h.key, agentID, sid, h.cwd)
+	log.Printf("agentd: acp session started key=%s agent=%s session=%s cwd=%s mode=%s modes=%d",
+		h.key, agentID, res2.SessionID, h.cwd, res2.Modes.CurrentModeID, len(res2.Modes.AvailableModes))
 	return h, nil
 }
 

@@ -92,6 +92,21 @@ test.describe('managed agent sessions', () => {
     await expect(win.getByText('Permission outcome: allow')).toBeVisible({ timeout: 20_000 });
   });
 
+  test('the approval mode is on the window, and changing it reaches the agent', async ({ page, router }) => {
+    const win = await openAgent(page, router.url, 'say something');
+    await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
+
+    // The preset lives on the session it governs, not in Settings.
+    const mode = win.locator('[data-testid="agent-mode"]');
+    await expect(mode).toHaveValue('agent');
+
+    await mode.selectOption('agent-full-access');
+
+    // The agent confirms with current_mode_update, so this asserts the
+    // change reached it — not that a <select> changed locally.
+    await expect(mode).toHaveValue('agent-full-access', { timeout: 15_000 });
+  });
+
   test('closing a session window asks what to do with the agent', async ({ page, router }) => {
     const win = await openAgent(page, router.url, 'say something');
     await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });

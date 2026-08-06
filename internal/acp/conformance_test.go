@@ -97,7 +97,7 @@ func TestConformanceAgainstRealAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sid, err := c.NewSession(ctx, cwd, nil)
+	sess, err := c.NewSession(ctx, cwd, nil)
 	if err != nil {
 		// authMethods advertises what auth is AVAILABLE, not that it is
 		// required — an adapter with usable credentials lists them and
@@ -107,6 +107,10 @@ func TestConformanceAgainstRealAdapter(t *testing.T) {
 			t.Skipf("session/new failed and the adapter offers auth %v — log in with its own CLI and re-run: %v", res.AuthMethods, err)
 		}
 		t.Fatalf("session/new: %v", err)
+	}
+	sid := sess.SessionID
+	if len(sess.Modes.AvailableModes) > 0 {
+		t.Logf("modes: current=%q available=%d", sess.Modes.CurrentModeID, len(sess.Modes.AvailableModes))
 	}
 	if sid == "" {
 		t.Fatal("session/new returned an empty sessionId — the response field name may have moved")

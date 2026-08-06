@@ -27,6 +27,8 @@ interface RosterRow {
   used?: number;
   size?: number;
   title?: string;
+  mode?: string;
+  modes?: { id: string; name: string; description?: string }[];
 }
 
 interface RosterState {
@@ -115,6 +117,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       used: r?.used,
       size: r?.size,
       title: r?.title,
+      mode: r?.mode,
+      modes: r?.modes,
     };
   });
 
@@ -278,6 +282,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         onSend={(text) => send({ kind: 'prompt', text })}
         onAnswer={(id, decision, rule) => send({ kind: 'answer', id, decision, rule: rule ?? '' })}
         onCancel={() => send({ kind: 'cancel' })}
+        onSetMode={(mode) => send({ kind: 'set_mode', mode })}
       />
     </Show>
     </>

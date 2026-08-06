@@ -96,8 +96,44 @@ type NewSessionRequest struct {
 	McpServers []McpServer `json:"mcpServers"`
 }
 
+// SessionMode is one approval/sandbox preset the agent offers. Codex ships
+// read-only / agent / agent-full-access; the last is the honest place for
+// "stop asking me", because it is the AGENT's own setting rather than a
+// bypass bolted onto wash's rules.
+type SessionMode struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+type SessionModes struct {
+	AvailableModes []SessionMode `json:"availableModes,omitempty"`
+	CurrentModeID  string        `json:"currentModeId,omitempty"`
+}
+
+type SessionModel struct {
+	ModelID     string `json:"modelId"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+type SessionModels struct {
+	AvailableModels []SessionModel `json:"availableModels,omitempty"`
+	CurrentModelID  string         `json:"currentModelId,omitempty"`
+}
+
 type NewSessionResponse struct {
 	SessionID string `json:"sessionId"`
+	// Modes and Models are what the agent will let you change mid-session.
+	// Observed on codex-acp 1.1.9; absent from adapters that offer neither,
+	// which is why nothing here is required.
+	Modes  SessionModes  `json:"modes,omitempty"`
+	Models SessionModels `json:"models,omitempty"`
+}
+
+type SetModeRequest struct {
+	SessionID string `json:"sessionId"`
+	ModeID    string `json:"modeId"`
 }
 
 type LoadSessionRequest struct {
@@ -235,6 +271,7 @@ const (
 	UpdateAvailableCommands = "available_commands_update"
 	UpdateUsage             = "usage_update"
 	UpdateSessionInfo       = "session_info_update"
+	UpdateCurrentMode       = "current_mode_update"
 )
 
 // ToolCall is both the `tool_call` update and (partially populated) the
@@ -259,6 +296,10 @@ type SessionUpdate struct {
 	// {"sessionUpdate":"usage_update","used":14689,"size":258400}.
 	Used int64 `json:"used,omitempty"`
 	Size int64 `json:"size,omitempty"`
+	// ModeID rides current_mode_update when the agent changes mode on its
+	// own (a slash command, its own policy) — so the UI follows the wire
+	// rather than assuming its last set_mode stuck.
+	ModeID string `json:"currentModeId,omitempty"`
 	// Title is the agent's own name for the session on
 	// session_info_update — and the tool's label on tool_call, since both
 	// arrive under the same key. Which one it means is the discriminator's
@@ -411,6 +452,7 @@ const (
 	MethodSessionLoad       = "session/load"
 	MethodSessionPrompt     = "session/prompt"
 	MethodSessionCancel     = "session/cancel"
+	MethodSessionSetMode    = "session/set_mode"
 	MethodSessionUpdate     = "session/update"
 	MethodRequestPermission = "session/request_permission"
 	MethodReadTextFile      = "fs/read_text_file"

@@ -215,6 +215,16 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 	case "terminate":
 		finishClose(c, "agent_stop")
 
+	case "set_mode":
+		if session.key == "" {
+			return
+		}
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind": "agent_set_mode",
+			"key":  session.key,
+			"mode": str(m["mode"]),
+		})
+
 	case "cancel":
 		if session.key == "" {
 			return

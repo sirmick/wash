@@ -98,14 +98,27 @@ func (c *Client) Authenticate(ctx context.Context, methodID string) error {
 	return c.conn.Call(ctx, MethodAuthenticate, map[string]string{"methodId": methodID}, nil)
 }
 
-// NewSession opens a session rooted at an absolute cwd.
-func (c *Client) NewSession(ctx context.Context, cwd string, mcp []McpServer) (string, error) {
+// NewSession opens a session rooted at an absolute cwd. The response
+// carries what the agent will let you change later (modes, models), which
+// is why the whole thing is returned rather than just the id.
+func (c *Client) NewSession(ctx context.Context, cwd string, mcp []McpServer) (NewSessionResponse, error) {
 	if mcp == nil {
 		mcp = []McpServer{}
 	}
 	var res NewSessionResponse
 	err := c.conn.Call(ctx, MethodSessionNew, NewSessionRequest{Cwd: cwd, McpServers: mcp}, &res)
-	return res.SessionID, err
+	return res, err
+}
+
+// SetMode switches the session's approval/sandbox preset.
+//
+// This is ACP's own answer to "stop asking me": it changes what the AGENT
+// requires approval for, rather than teaching wash to auto-answer on its
+// behalf. The two are different in a way that matters — a mode change is
+// visible to the agent and reversible from either side, where a blanket
+// wash-side allow is invisible to it.
+func (c *Client) SetMode(ctx context.Context, sessionID, modeID string) error {
+	return c.conn.Call(ctx, MethodSessionSetMode, SetModeRequest{SessionID: sessionID, ModeID: modeID}, nil)
 }
 
 // LoadSession resumes a previous session by id. The agent replays the

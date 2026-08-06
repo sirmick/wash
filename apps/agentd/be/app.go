@@ -96,12 +96,23 @@ type Row struct {
 	Used  int64  `json:"used,omitempty"`
 	Size  int64  `json:"size,omitempty"`
 	Title string `json:"title,omitempty"`
+	// Mode is the agent's active approval preset and Modes what it offers
+	// (docs/AGENT_APP.md §9). Empty for an agent with no such notion.
+	Mode  string `json:"mode,omitempty"`
+	Modes []Mode `json:"modes,omitempty"`
 	// Detached marks a session still running with no window pointing at
 	// it — the sidebar offers Reattach rather than focus.
 	Detached bool `json:"detached,omitempty"`
 	// Stale marks a row whose terminal stopped reporting: shown greyed,
 	// then dropped. See staleAfter / dropAfter.
 	Stale bool `json:"stale,omitempty"`
+}
+
+// Mode is one approval/sandbox preset an agent offers.
+type Mode struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }
 
 var def *sdk.AppDef

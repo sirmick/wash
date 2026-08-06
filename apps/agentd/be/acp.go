@@ -61,6 +61,12 @@ type hosted struct {
 	// nothing else consumes.
 	used, size int64
 	title      string
+	// modes are the agent's own approval presets, and mode is the one in
+	// force. Changing it is ACP's answer to "stop asking me" — the AGENT's
+	// setting, visible to it and reversible from either side, rather than a
+	// blanket allow wash keeps to itself.
+	modes []acp.SessionMode
+	mode  string
 	// detached means no window is pointing at this session. It keeps
 	// running; the roster row is how the user gets back to it.
 	detached bool
@@ -131,6 +137,7 @@ func (h *hosted) setState(state, reason string) {
 		r.Detached = h.detached
 		r.Used, r.Size = h.used, h.size
 		r.Title = h.title
+		r.Mode, r.Modes = h.mode, publicModes(h.modes)
 		if h.cwd != "" && h.cwd != r.Cwd {
 			r.Cwd = h.cwd
 			r.Dir = dirLabel(h.cwd)
@@ -159,6 +166,16 @@ func (h *hosted) setState(state, reason string) {
 	}
 }
 
+// applyModes records what the agent will let us switch between.
+func (h *hosted) applyModes(m acp.SessionModes) {
+	hostedMu.Lock()
+	h.modes = m.AvailableModes
+	if m.CurrentModeID != "" {
+		h.mode = m.CurrentModeID
+	}
+	hostedMu.Unlock()
+}
+
 // republish refreshes this session's roster row without changing its
 // state — used when only the detached flag moved.
 func (h *hosted) republish() {
@@ -168,6 +185,7 @@ func (h *hosted) republish() {
 			r.Detached = h.detached
 			r.Used, r.Size = h.used, h.size
 			r.Title = h.title
+			r.Mode, r.Modes = h.mode, publicModes(h.modes)
 			r.lastSeen = now
 		}
 		s.Rows = publish(now)
@@ -199,6 +217,17 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 		if n.Update.Size > 0 || n.Update.Used > 0 {
 			hostedMu.Lock()
 			h.used, h.size = n.Update.Used, n.Update.Size
+			hostedMu.Unlock()
+			h.republish()
+		}
+
+	case acp.UpdateCurrentMode:
+		// The agent can change its own mode (a slash command, its own
+		// policy), so the UI follows the wire rather than assuming the
+		// last set_mode stuck.
+		if n.Update.ModeID != "" {
+			hostedMu.Lock()
+			h.mode = n.Update.ModeID
 			hostedMu.Unlock()
 			h.republish()
 		}
@@ -474,6 +503,28 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		return nil
 	})
 
+	// agent_set_mode: switch the session's approval preset.
+	sdk.HandleFromVoid(bus, "agent_set_mode", func(_ *sdk.Conn, _ string, req modeReq, _ wire.Sender) error {
+		h := lookupHosted(req.Key)
+		if h == nil || req.Mode == "" {
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := h.client.SetMode(ctx, h.sessionID, req.Mode); err != nil {
+			log.Printf("agentd: acp set_mode key=%s mode=%s: %v", h.key, req.Mode, err)
+			return nil
+		}
+		// Optimistic: current_mode_update confirms it if the agent sends
+		// one, and this is what the UI shows meanwhile.
+		hostedMu.Lock()
+		h.mode = req.Mode
+		hostedMu.Unlock()
+		h.republish()
+		log.Printf("agentd: acp mode key=%s mode=%s", h.key, req.Mode)
+		return nil
+	})
+
 	// agent_cancel: abort the running turn. A notification, not a request:
 	// the agent acknowledges by ending the turn with stopReason=cancelled,
 	// which promptHosted already handles. Without this there is no stop
@@ -501,6 +552,24 @@ type startReq struct {
 	Agent  string `json:"agent"`
 	Cwd    string `json:"cwd"`
 	Prompt string `json:"prompt,omitempty"`
+}
+
+type modeReq struct {
+	Key  string `json:"key"`
+	Mode string `json:"mode"`
+}
+
+// publicModes copies the mode list for the wire (copy-on-write: a
+// snapshot may outlive this call).
+func publicModes(in []acp.SessionMode) []Mode {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Mode, 0, len(in))
+	for _, m := range in {
+		out = append(out, Mode{ID: m.ID, Name: m.Name, Description: m.Description})
+	}
+	return out
 }
 
 type promptReq struct {
