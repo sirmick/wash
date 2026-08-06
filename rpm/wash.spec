@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.11.0
+Version:        0.12.0
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,20 @@ fi
 exit 0
 
 %changelog
+* Thu Aug 06 2026 sirmick <sirmick@gmail.com> - 0.12.0-1
+- agent: wash runs coding agents itself over the Agent Client Protocol; new
+  Agent app (com.wash.ai) with a launcher, a streaming transcript, markdown,
+  tables and inline images.
+- agent: permission requests arrive as structured data and land in the same
+  approval queue the sidebar already rendered; answer from either view.
+- agent: the agent's own settings on the window — approval mode, model,
+  reasoning effort, plan mode — so an org's pinned policy still holds.
+- agent: stop a turn, see context used, slash-command completion, and
+  sessions named by the title the agent writes itself.
+- agent: removed the previous hook/OSC/decision-socket mechanism and the
+  wash-agent-hook helper.
+- ui: shared MenuBar in @wash/ui.
+- term: restored TERM / $WASH_BIN_DIR / display-hint env for terminals.
 * Sun Aug 02 2026 sirmick <sirmick@gmail.com> - 0.11.0-1
 - term: agent-aware terminals — tab state dot + status line driven by an OSC
   7770 status channel and a foreground-process check.

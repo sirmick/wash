@@ -1,3 +1,38 @@
+wash (0.12.0-1) unstable; urgency=low
+
+  * agent: wash runs coding agents itself, over the Agent Client Protocol.
+    A new Agent app (com.wash.ai) opens a session in a chosen folder with a
+    chosen agent, streams the conversation, and renders markdown, tables and
+    inline images. The empty window is the launcher; one window per session.
+  * agent: permission requests arrive as structured data rather than being
+    inferred from terminal output, and land in the same approval queue the
+    sidebar already rendered. Answer from the transcript or the sidebar —
+    both are views of one queue — with keyboard shortcuts on the buttons.
+  * agent: the agent's OWN settings are on the window: approval mode (for
+    Codex, read-only / agent / full-access), model, reasoning effort and
+    plan mode, all through session/set_config_option. wash asks the agent to
+    change its policy rather than routing around it, so an organisation's
+    pinned mode still holds.
+  * agent: Stop a running turn, see the context it has burned, and pick from
+    the agent's own slash commands as you type one.
+  * agent: sessions are named by what they are about, using the title the
+    agent writes itself — shown as the window title, in the sidebar and in
+    the History menu. Closing a window asks whether to detach (it keeps
+    working, reattach from the sidebar) or terminate (it joins the history).
+  * agent: File / Edit / Session / History menus, including saving the
+    transcript and copying the last reply.
+  * agent: REMOVED the previous mechanism — hook installation into a
+    vendor's settings file, the OSC 7770 status channel, the per-tab
+    decision socket and the typed-`y` output tap, along with the
+    wash-agent-hook helper and `wash agent-hooks`. A settings file an older
+    wash wrote still names that binary; delete the wash entries by hand.
+  * ui: shared <MenuBar> in @wash/ui, extracted from wash-edit now that a
+    second app wants one.
+  * term: restored the wash environment for terminals (TERM, $WASH_BIN_DIR
+    on PATH, display hints), lost when the agent decision socket was removed.
+
+ -- sirmick <sirmick@gmail.com>  Thu, 06 Aug 2026 06:44:26 -0700
+
 wash (0.11.0-1) unstable; urgency=low
 
   * term: agent-aware terminals. A coding agent (Claude Code and friends)
