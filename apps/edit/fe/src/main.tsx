@@ -1399,12 +1399,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   };
 
   const onRowDblClick = (row: { entry: Entry; path: string }) => {
-    if (isDirLike(row.entry)) {
-      toggleExpand(row.path);
-      return;
-    }
+    // Symlinks are checked BEFORE the dir test: edit follows a link to its
+    // canonical target rather than expanding it in place, so the tree shows
+    // where the thing actually lives. isDirLike would short-circuit that.
     if (row.entry.type === 'symlink') {
       followSymlink(row.entry, row.path);
+      return;
+    }
+    if (row.entry.type === 'dir') {
+      toggleExpand(row.path);
       return;
     }
     if (row.entry.type === 'file') {
@@ -1422,15 +1425,25 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       ? e.link_to
       : joinPath(parentPath(p), e.link_to);
     setSelectedPath(target);
-    // We don't know the target's type without statting. Try as
-    // both: openInTab is a no-op for dirs (the read returns
-    // is_dir and openInTab silently exits) and loadDir is a
-    // no-op for files. One of them lands.
-    void openInTab(target);
-    if (!listings[target]) {
-      void loadDir(target);
+    // The BE resolves the link for us now (Entry.link_type), so this no
+    // longer has to fire both barrels and let one miss. Fall back to the
+    // old try-both only when the type is unknown — a link listed by an
+    // older BE, or one whose target vanished between list and click.
+    switch (e.link_type) {
+      case 'dir':
+        if (!listings[target]) void loadDir(target);
+        setExpanded(target, true);
+        return;
+      case 'file':
+        void openInTab(target);
+        return;
+      default:
+        void openInTab(target);
+        if (!listings[target]) {
+          void loadDir(target);
+        }
+        setExpanded(target, true);
     }
-    setExpanded(target, true);
   };
 
   // dirOfSelection picks the target directory for an empty-pane
