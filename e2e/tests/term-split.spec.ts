@@ -194,6 +194,8 @@ test.describe('term split panes (M1 + M2)', () => {
     // Ctrl+Shift+W closes the focused tab; it is the only one in its group,
     // so the pane goes with it (docs/TERM_LAYOUT.md §5).
     await page.keyboard.press('Control+Shift+W');
+    // Every close is confirmed now (docs/TERM_LAYOUT.md) — answer the dialog.
+    await page.locator('[data-testid="term-close-confirm-ok"]').click();
     await expect(page.locator('[data-testid="term-host"]:visible')).toHaveCount(1, { timeout: 10_000 });
     await expect(page.locator('[data-testid="term-divider"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="term-tabbar"]')).toHaveCount(1);

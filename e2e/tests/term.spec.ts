@@ -112,6 +112,8 @@ test.describe('terminal app', () => {
     const closeButtons = page.locator('span[data-testid^="term-tab-close-"]');
     await expect(closeButtons).toHaveCount(2);
     await closeButtons.last().click();
+    // Every close is confirmed now (docs/TERM_LAYOUT.md) — answer the dialog.
+    await page.locator('[data-testid="term-close-confirm-ok"]').click();
 
     await expect(page.locator('[data-testid="term-host"]')).toHaveCount(1);
     // Window still there.
