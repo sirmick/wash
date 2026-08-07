@@ -4,8 +4,10 @@ Launch an agent from the editor the way you launch a terminal: a tab in the
 bottom pane, working in the folder already open, with its tool rows wired to
 the buffers beside it.
 
-Status: **design + M0 landed** (the agentd correlation id below). M1–M3 are
-not written yet.
+Status: **M0–M3 shipped.** You can launch an agent in wash-edit the way you
+launch a terminal. What is left is persistence (§7.2) and adopting an
+agent's own ACP terminals as tabs — the same tab-kind work, tracked in
+`docs/AGENT_TERMINAL.md` M4.
 
 ## 1. Why the bottom pane, and not the editor pane
 
@@ -72,7 +74,7 @@ indistinguishable, and a failed start cannot be attributed to the tab that
 asked. So `startReq` gained an opaque `ReqID`, echoed on both the success and
 the error reply. agentd never interprets it.
 
-## 4. M1 — a keyed client, shared by both hosts
+## 4. M1 — a keyed client, shared by both hosts — **DONE**
 
 wash-ai's relay is the second copy waiting to happen. Factor it into
 `internal/agentclient`:
@@ -93,14 +95,14 @@ exactly one entry, and stops being a special case.
 Verify: unit tests over `Handle` (right session gets the event; an event for
 an unknown key is dropped, not broadcast).
 
-## 5. M2 — edit's BE
+## 5. M2 — edit's BE — **DONE**
 
 `apps/edit/be` becomes the second host. New FE verbs mirror ai's, each
 carrying `key` except `agent_start`, which carries `req_id`. `cwd` defaults to
 the editor's current root — the reason this is nicer in the editor than in the
 Agent app is that nobody has to pick a folder.
 
-## 6. M3 — edit's FE
+## 6. M3 — edit's FE — **DONE**
 
 `termTabs` → `paneTabs`, each `{id, kind: 'pty' | 'agent'}`; a pty tab keeps
 its channel id, an agent tab its agentd session key. The pane body switches on
@@ -125,6 +127,12 @@ kind: `<Terminal/>` or `<AgentSession/>`. The `+` button becomes a small menu �
    `Ctrl+P` and friends while focused. The terminal pane has this already, but
    a composer invites long typing, so the editor's shortcuts need an explicit
    escape.
-4. **Roster identity.** An editor-hosted session must appear in the Agents
-   sidebar like any other, or you will have agents running that the roster does
-   not show.
+4. **Roster identity — ANSWERED.** Free, and for a structural reason: agentd
+   owns the session, so an editor-hosted one is on the roster exactly like a
+   window-hosted one. Hosting was never ownership.
+
+5. **Where the ✦ button cannot live.** The strip is inside the pane, so a
+   button there cannot open the pane — you would have had to start a shell
+   before you could start an agent. Starting a session is in the Terminal
+   menu for that reason; the strip button is the shortcut once the pane is
+   already up. Found by writing the spec, not by using it.
