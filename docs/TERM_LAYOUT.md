@@ -165,14 +165,14 @@ split-right, split-down, zoom. Icons from `lucide-solid`, already imported by
 others — four always-on close buttons in a 24px strip is noise, and in a narrow
 pane it eats the label.
 
-**Closing asks only when it would cost something.** Killing a tab kills its
-shell, and killing the window kills every shell in it, with no undo — so a
-close that would lose work puts up one confirmation naming what is about to
-die. "Would lose work" is `ForegroundUser.Busy` (`internal/pty`): something
-other than the login shell holds the pty's foreground process group — a
-build, an editor, `ssh`, an agent. A shell at its prompt closes silently.
-That asymmetry is the whole design: a dialog on every `Ctrl+W` is a dialog
-people learn to dismiss without reading, which protects nothing.
+**Closing always asks.** Killing a tab kills its shell, and killing the
+window kills every shell in it, with no undo — so both put up one
+confirmation first. Every close, not just the ones that look expensive: a
+shell at a prompt still holds scrollback, a half-typed command, an ssh
+session between commands, and the FE cannot tell which of those matter. The
+dialog names the foreground program per tab when there is one (from
+`ForegroundUser.Command`, already polled for the status bar) and says "at a
+prompt" when there isn't, so the cost is on screen either way.
 
 The tab path is a refusal (`close_blocked`) the FE turns into a dialog and
 answers with `close_tab{force:true}`. The window path can't work that way —

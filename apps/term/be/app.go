@@ -405,19 +405,18 @@ func registerHandlers(b *sdk.Bus) {
 		if sess == nil {
 			return nil
 		}
-		// A tab sitting at its prompt closes silently — there is nothing
-		// to lose and a dialog on every Ctrl+W teaches people to hit
-		// Enter without reading. A tab with work in the foreground gets
-		// one question, naming what is about to die.
+		// Every close asks. Closing kills the shell outright, and a shell
+		// that looks idle is not necessarily disposable — scrollback, a
+		// half-typed command, an ssh session between commands. The dialog
+		// names the foreground program when there is one.
 		if !req.Force {
-			if fu := sess.ForegroundUser(); fu.Busy {
-				return c.SendAppMsg(map[string]any{
-					"kind":       "close_blocked",
-					"scope":      "tab",
-					"channel_id": uint64(sess.ID()),
-					"command":    fu.Command,
-				})
-			}
+			fu := sess.ForegroundUser()
+			return c.SendAppMsg(map[string]any{
+				"kind":       "close_blocked",
+				"scope":      "tab",
+				"channel_id": uint64(sess.ID()),
+				"command":    fu.Command,
+			})
 		}
 		sess.CloseWithReason("user requested")
 		return nil
@@ -508,35 +507,31 @@ func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []str
 // answer "no" immediately and, if the user confirms, close ourselves with an
 // unsolicited confirm_close(allow=true) — see closeWindowConfirmed.
 func onCloseRequested(c *sdk.Conn, win uint32) bool {
-	busy := busyTabs()
-	if len(busy) > 0 {
-		if err := c.SendAppMsg(map[string]any{
-			"kind":  "close_blocked",
-			"scope": "window",
-			"tabs":  busy,
-		}); err != nil {
-			// The FE can't be asked, so it can't answer — closing is
-			// still what the user clicked for. Better to honour the
-			// click than to leave a window that refuses to shut.
-			log.Printf("wash-term close prompt: %v", err)
-			killAllSessions()
-			return true
-		}
-		return false
+	if err := c.SendAppMsg(map[string]any{
+		"kind":  "close_blocked",
+		"scope": "window",
+		"tabs":  liveTabs(),
+	}); err != nil {
+		// The FE can't be asked, so it can't answer — closing is still
+		// what the user clicked for. Better to honour the click than to
+		// leave a window that refuses to shut.
+		log.Printf("wash-term close prompt: %v", err)
+		killAllSessions()
+		return true
 	}
-	killAllSessions()
-	return true
+	return false
 }
 
-// busyTab describes one tab that would lose work, for the confirmation.
-type busyTab struct {
+// tabInfo describes one tab for the close confirmation. Command is the
+// foreground program when the tab is running something, empty at a prompt.
+type tabInfo struct {
 	ChannelID uint64 `json:"channel_id"`
 	Command   string `json:"command"`
 }
 
-// busyTabs lists the tabs with something other than an idle shell in the
-// foreground. Empty means the window can close without asking.
-func busyTabs() []busyTab {
+// liveTabs lists every tab the window would take down, so the dialog can
+// say how many and name whichever are running something.
+func liveTabs() []tabInfo {
 	st.mu.Lock()
 	ids := make([]uint32, 0, len(st.sessions))
 	sessions := make([]*pty.Session, 0, len(st.sessions))
@@ -545,11 +540,9 @@ func busyTabs() []busyTab {
 		sessions = append(sessions, s)
 	}
 	st.mu.Unlock()
-	var out []busyTab
+	out := make([]tabInfo, 0, len(sessions))
 	for i, s := range sessions {
-		if fu := s.ForegroundUser(); fu.Busy {
-			out = append(out, busyTab{ChannelID: uint64(ids[i]), Command: fu.Command})
-		}
+		out = append(out, tabInfo{ChannelID: uint64(ids[i]), Command: s.ForegroundUser().Command})
 	}
 	// Stable order so the dialog doesn't reshuffle between polls.
 	sort.Slice(out, func(i, j int) bool { return out[i].ChannelID < out[j].ChannelID })

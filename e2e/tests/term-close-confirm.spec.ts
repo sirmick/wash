@@ -1,25 +1,26 @@
 // wash-term close confirmation (issue #19).
 //
 // Closing a tab kills its shell, and closing the window kills every shell
-// in it — irreversibly, with no undo. So a close that would lose work asks
-// first. "Would lose work" means something other than the login shell holds
-// the pty's foreground process group (internal/pty ForegroundUser.Busy): a
-// build, an editor, ssh, an agent. A shell sitting at its prompt closes
-// silently, because a dialog on every Ctrl+W is a dialog people learn to
-// dismiss without reading, which is worse than no dialog at all.
+// in it, with no undo — so both ask first, ALWAYS. Not only when something
+// is running: a shell at a prompt still holds scrollback, a half-typed
+// command, an ssh session between commands, and nothing in the FE can tell
+// which of those the user cares about. The dialog names the foreground
+// program per tab when there is one and says "at a prompt" when there is
+// not, so the cost of confirming is on screen either way.
 //
 // The window path also covers the router's app-initiated close: the BE
 // cannot hold the close handshake open while a human reads a question (the
 // router force-kills at 5s), so it VETOES the handshake and, on confirm,
 // closes itself with an unsolicited confirm_close(allow=true). The last
 // test pins that same router path from the other direction — `exit` in the
-// last tab must take the window down with no dialog at all.
+// last tab must take the window down with no dialog at all, because the
+// user did not ask to close anything, the shell just ended.
 
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/router';
 
-// A command that occupies the foreground without producing output, so the
-// tab is unambiguously "busy" and nothing races the buffer assertions.
+// Occupies the foreground without producing output, so "running something"
+// is unambiguous and nothing races the buffer assertions.
 const BUSY_CMD = 'sleep 30';
 
 async function openTerminal(page: Page) {
@@ -33,11 +34,6 @@ async function openTerminal(page: Page) {
   return term;
 }
 
-// runBusy starts BUSY_CMD in the focused tab and waits until the BE agrees
-// the tab is busy. The status poll is ~1Hz, and Busy is read live at close
-// time, so the only real barrier is the command actually being in the
-// foreground: assert its echoed line, then give the fork a moment by
-// waiting for the prompt to stop being the last thing on screen.
 async function runBusy(page: Page, term = page.locator('wash-app-term')) {
   await term.click();
   await page.keyboard.type(BUSY_CMD);
@@ -48,20 +44,34 @@ async function runBusy(page: Page, term = page.locator('wash-app-term')) {
 test.describe('terminal close confirmation', () => {
   test.setTimeout(45_000);
 
-  test('an idle tab closes without asking', async ({ page, router }) => {
+  test('closing an idle tab still asks, and says it is at a prompt', async ({ page, router }) => {
     await page.goto(router.url);
     const term = await openTerminal(page);
     await page.locator('[data-testid="term-new-tab"]').click();
     await expect(page.locator('[data-testid="term-host"]')).toHaveCount(2);
 
-    // Nothing running in it — the × just closes it.
-    await page.locator('span[data-testid^="term-tab-close-"]').last().click();
+    const dialog = page.locator('[data-testid="term-close-confirm"]');
+    const closeSecondTab = page.locator('span[data-testid^="term-tab-close-"]').last();
+
+    await closeSecondTab.click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('at a prompt');
+    await expect(page.locator('[data-testid="term-host"]')).toHaveCount(2);
+
+    // Cancel keeps it.
+    await page.locator('[data-testid="term-close-confirm-cancel"]').click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator('[data-testid="term-host"]')).toHaveCount(2);
+
+    // Confirm closes it; the window and the other tab stay.
+    await closeSecondTab.click();
+    await expect(dialog).toBeVisible();
+    await page.locator('[data-testid="term-close-confirm-ok"]').click();
     await expect(page.locator('[data-testid="term-host"]')).toHaveCount(1);
-    await expect(page.locator('[data-testid="term-close-confirm"]')).toHaveCount(0);
     await expect(term).toBeVisible();
   });
 
-  test('a busy tab asks; cancel keeps it, confirm closes it', async ({ page, router }) => {
+  test('a busy tab names what it is running', async ({ page, router }) => {
     await page.goto(router.url);
     await openTerminal(page);
     await page.locator('[data-testid="term-new-tab"]').click();
@@ -69,28 +79,15 @@ test.describe('terminal close confirmation', () => {
     await runBusy(page);
 
     const dialog = page.locator('[data-testid="term-close-confirm"]');
-    const closeSecondTab = page.locator('span[data-testid^="term-tab-close-"]').last();
-
-    // × → asks, names what is running, and the tab is still there.
-    await closeSecondTab.click();
+    await page.locator('span[data-testid^="term-tab-close-"]').last().click();
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText('sleep');
-    await expect(page.locator('[data-testid="term-host"]')).toHaveCount(2);
 
-    // Cancel → dialog gone, tab still alive.
-    await page.locator('[data-testid="term-close-confirm-cancel"]').click();
-    await expect(dialog).toHaveCount(0);
-    await expect(page.locator('[data-testid="term-host"]')).toHaveCount(2);
-
-    // × again → confirm → the tab goes, the window stays.
-    await closeSecondTab.click();
-    await expect(dialog).toBeVisible();
     await page.locator('[data-testid="term-close-confirm-ok"]').click();
     await expect(page.locator('[data-testid="term-host"]')).toHaveCount(1);
-    await expect(page.locator('wash-app-term')).toBeVisible();
   });
 
-  test('the titlebar ✕ asks when a tab is busy; cancel keeps the window', async ({ page, router }) => {
+  test('the titlebar ✕ asks, and a cancelled close outlives the router grace', async ({ page, router }) => {
     await page.goto(router.url);
     const term = await openTerminal(page);
     await runBusy(page, term);
@@ -107,8 +104,6 @@ test.describe('terminal close confirmation', () => {
     await expect(dialog).toContainText('sleep');
     await expect(term).toBeVisible();
 
-    // Cancel → still there, and still there a moment later (a delayed
-    // force-kill would show up here).
     await page.locator('[data-testid="term-close-confirm-cancel"]').click();
     await expect(dialog).toHaveCount(0);
     await page.waitForTimeout(6_000); // > the router's 5s close grace
@@ -121,14 +116,20 @@ test.describe('terminal close confirmation', () => {
     await expect(term).toHaveCount(0, { timeout: 10_000 });
   });
 
-  test('the titlebar ✕ closes an idle terminal without asking', async ({ page, router }) => {
+  test('the titlebar ✕ asks even when every tab is idle', async ({ page, router }) => {
     await page.goto(router.url);
     const term = await openTerminal(page);
 
     const win = page.locator('.wash-window', { has: term });
+    const dialog = page.locator('[data-testid="term-close-confirm"]');
+
     await win.locator('[data-testid="window-close"]').click();
-    await expect(term).toHaveCount(0, { timeout: 10_000 });
-    await expect(page.locator('[data-testid="term-close-confirm"]')).toHaveCount(0);
+    await expect(dialog).toBeVisible();
+    await expect(term).toBeVisible();
+
+    await page.locator('[data-testid="term-close-confirm-cancel"]').click();
+    await expect(dialog).toHaveCount(0);
+    await expect(term).toBeVisible();
   });
 
   test('exit in the last tab closes the window, with no dialog', async ({ page, router }) => {
@@ -141,7 +142,7 @@ test.describe('terminal close confirmation', () => {
 
     // The pty dies → the BE's empty-session path sends an unsolicited
     // confirm_close(true) → the router runs the approved-close teardown.
-    // Before that router fix this hung a dead, empty window on screen.
+    // Nothing to confirm: the user ended the shell themselves.
     await expect(term).toHaveCount(0, { timeout: 10_000 });
     await expect(page.locator('[data-testid="term-close-confirm"]')).toHaveCount(0);
   });
