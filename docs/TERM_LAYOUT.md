@@ -165,6 +165,21 @@ split-right, split-down, zoom. Icons from `lucide-solid`, already imported by
 others — four always-on close buttons in a 24px strip is noise, and in a narrow
 pane it eats the label.
 
+**Closing asks only when it would cost something.** Killing a tab kills its
+shell, and killing the window kills every shell in it, with no undo — so a
+close that would lose work puts up one confirmation naming what is about to
+die. "Would lose work" is `ForegroundUser.Busy` (`internal/pty`): something
+other than the login shell holds the pty's foreground process group — a
+build, an editor, `ssh`, an agent. A shell at its prompt closes silently.
+That asymmetry is the whole design: a dialog on every `Ctrl+W` is a dialog
+people learn to dismiss without reading, which protects nothing.
+
+The tab path is a refusal (`close_blocked`) the FE turns into a dialog and
+answers with `close_tab{force:true}`. The window path can't work that way —
+the router force-kills an app that leaves the close handshake unanswered for
+5s — so the BE vetoes the handshake, asks, and then closes itself via an
+app-initiated `confirm_close(allow:true)` (docs/WIRE.md §10).
+
 **`Split` menubar menu** — a sixth button after `Tab`, same `openMenuFor`
 pattern. `MenuItem` already has `disabled` and a `trailing` slot, so greying
 out and shortcut hints need no new component work:

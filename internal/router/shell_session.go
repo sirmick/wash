@@ -683,39 +683,43 @@ func (s *ShellSession) handleWindowCloseClicked(m wire.ShellWindowCloseClicked) 
 			return
 		}
 		if allowed {
-			// Tell shells the window is gone now. The app's loop
-			// teardown will also call destroyWindow when it exits;
-			// the second call is a no-op (already deleted).
-			s.router.broadcastPatches(s.router.winSession.destroyWindow(m.WindowID))
-			// expectedExit suppresses the crash-broadcast in the
-			// cleanup goroutine — a user-clicked close the app
-			// confirmed is an orderly exit, not a tombstone-worthy
-			// crash. Set BEFORE signalling.
-			inst.expectedExit.Store(true)
-			if inst.Cmd != nil && inst.Cmd.Process != nil {
-				// Spawn-completion branch: router forked the child
-				// directly and owns *exec.Cmd. SIGTERM gracefully — the
-				// app's read loop sees EOF after the signal — then
-				// escalate to SIGKILL if it hangs past the grace window,
-				// so a confirm-then-wedge app can't stay pinned in r.apps
-				// with its window gone (REVIEW-RECONNECT M7).
-				s.router.terminateWindowedApp(inst)
-			} else {
-				// Token-attach branch: the child was forked by an
-				// external spawner (e.g. wash-priv under sudo). We
-				// don't have an *exec.Cmd to signal, and in the
-				// non-embedded case wouldn't have permission to
-				// SIGTERM the root child anyway. Closing the
-				// transport is the unprivileged equivalent: the
-				// app's read loop sees EOF, sdk.Run returns, main()
-				// returns, the process exits, and the spawner's
-				// cmd.Wait unblocks (so wash-priv's queue row
-				// transitions Running → Done).
-				_ = inst.Transport.Close()
-			}
+			s.router.approveWindowClose(inst, m.WindowID)
 		}
 	}()
 	return nil
+}
+
+// approveWindowClose runs the teardown for a close the app has agreed to.
+// Factored out of handleWindowCloseClicked because an app can also reach
+// this state without a click — by sending an unsolicited
+// window.confirm_close(allow=true), i.e. "close me now" (see
+// AppInstance.deliverCloseConfirm). Both paths must tear down identically.
+func (r *Router) approveWindowClose(inst *AppInstance, win uint32) {
+	// Tell shells the window is gone now. The app's loop teardown will
+	// also call destroyWindow when it exits; the second call is a no-op
+	// (already deleted).
+	r.broadcastPatches(r.winSession.destroyWindow(win))
+	// expectedExit suppresses the crash-broadcast in the cleanup
+	// goroutine — a close the app confirmed is an orderly exit, not a
+	// tombstone-worthy crash. Set BEFORE signalling.
+	inst.expectedExit.Store(true)
+	if inst.Cmd != nil && inst.Cmd.Process != nil {
+		// Spawn-completion branch: router forked the child directly and
+		// owns *exec.Cmd. SIGTERM gracefully — the app's read loop sees
+		// EOF after the signal — then escalate to SIGKILL if it hangs
+		// past the grace window, so a confirm-then-wedge app can't stay
+		// pinned in r.apps with its window gone (REVIEW-RECONNECT M7).
+		r.terminateWindowedApp(inst)
+		return
+	}
+	// Token-attach branch: the child was forked by an external spawner
+	// (e.g. wash-priv under sudo). We don't have an *exec.Cmd to signal,
+	// and in the non-embedded case wouldn't have permission to SIGTERM the
+	// root child anyway. Closing the transport is the unprivileged
+	// equivalent: the app's read loop sees EOF, sdk.Run returns, main()
+	// returns, the process exits, and the spawner's cmd.Wait unblocks (so
+	// wash-priv's queue row transitions Running → Done).
+	_ = inst.Transport.Close()
 }
 
 // handleWindowFocus updates router state and tells the affected apps

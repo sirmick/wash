@@ -30,6 +30,7 @@ import (
 	"log"
 	"os"
 	osuser "os/user"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -290,6 +291,10 @@ type execTabReq struct {
 
 type closeTabReq struct {
 	ChannelID uint64 `json:"channel_id"`
+	// Force skips the busy check — set by the FE when the user has
+	// answered the confirmation dialog. An unforced close of a busy tab
+	// is refused with a close_blocked app_msg instead.
+	Force bool `json:"force"`
 }
 
 func registerHandlers(b *sdk.Bus) {
@@ -382,16 +387,39 @@ func registerHandlers(b *sdk.Bus) {
 		st.mu.Unlock()
 		return c.SendAppMsg(map[string]any{"kind": "sessions", "sessions": rows})
 	})
-	sdk.HandleVoid(b, "close_tab", func(_ *sdk.Conn, _ string, req closeTabReq) error {
+	// close_window_confirmed: the user answered the window-close dialog
+	// with "close anyway". Kill every shell, then ask the router to take
+	// the window down — an unsolicited confirm_close(allow=true), which
+	// the router runs the same teardown for as a confirmed titlebar click.
+	sdk.HandleVoid(b, "close_window_confirmed", func(c *sdk.Conn, _ string, _ struct{}) error {
+		killAllSessions()
+		return c.ConfirmClose(c.WindowID(), true)
+	})
+	sdk.HandleVoid(b, "close_tab", func(c *sdk.Conn, _ string, req closeTabReq) error {
 		if req.ChannelID == 0 {
 			return nil
 		}
 		st.mu.Lock()
 		sess := st.sessions[uint32(req.ChannelID)]
 		st.mu.Unlock()
-		if sess != nil {
-			sess.CloseWithReason("user requested")
+		if sess == nil {
+			return nil
 		}
+		// A tab sitting at its prompt closes silently — there is nothing
+		// to lose and a dialog on every Ctrl+W teaches people to hit
+		// Enter without reading. A tab with work in the foreground gets
+		// one question, naming what is about to die.
+		if !req.Force {
+			if fu := sess.ForegroundUser(); fu.Busy {
+				return c.SendAppMsg(map[string]any{
+					"kind":       "close_blocked",
+					"scope":      "tab",
+					"channel_id": uint64(sess.ID()),
+					"command":    fu.Command,
+				})
+			}
+		}
+		sess.CloseWithReason("user requested")
 		return nil
 	})
 }
@@ -470,8 +498,65 @@ func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []str
 	})
 }
 
+// onCloseRequested answers the router's close handshake for the terminal
+// window (WIRE.md §10). Closing the window kills every shell in it, so when
+// any tab has work in the foreground we VETO and ask first.
+//
+// The veto is what makes the dialog possible at all: the router force-kills
+// an app that leaves the handshake unanswered past its 5s grace, which is
+// far too short to hold a window open while someone reads a question. So we
+// answer "no" immediately and, if the user confirms, close ourselves with an
+// unsolicited confirm_close(allow=true) — see closeWindowConfirmed.
 func onCloseRequested(c *sdk.Conn, win uint32) bool {
-	// Kill every shell before letting the window go.
+	busy := busyTabs()
+	if len(busy) > 0 {
+		if err := c.SendAppMsg(map[string]any{
+			"kind":  "close_blocked",
+			"scope": "window",
+			"tabs":  busy,
+		}); err != nil {
+			// The FE can't be asked, so it can't answer — closing is
+			// still what the user clicked for. Better to honour the
+			// click than to leave a window that refuses to shut.
+			log.Printf("wash-term close prompt: %v", err)
+			killAllSessions()
+			return true
+		}
+		return false
+	}
+	killAllSessions()
+	return true
+}
+
+// busyTab describes one tab that would lose work, for the confirmation.
+type busyTab struct {
+	ChannelID uint64 `json:"channel_id"`
+	Command   string `json:"command"`
+}
+
+// busyTabs lists the tabs with something other than an idle shell in the
+// foreground. Empty means the window can close without asking.
+func busyTabs() []busyTab {
+	st.mu.Lock()
+	ids := make([]uint32, 0, len(st.sessions))
+	sessions := make([]*pty.Session, 0, len(st.sessions))
+	for id, s := range st.sessions {
+		ids = append(ids, id)
+		sessions = append(sessions, s)
+	}
+	st.mu.Unlock()
+	var out []busyTab
+	for i, s := range sessions {
+		if fu := s.ForegroundUser(); fu.Busy {
+			out = append(out, busyTab{ChannelID: uint64(ids[i]), Command: fu.Command})
+		}
+	}
+	// Stable order so the dialog doesn't reshuffle between polls.
+	sort.Slice(out, func(i, j int) bool { return out[i].ChannelID < out[j].ChannelID })
+	return out
+}
+
+func killAllSessions() {
 	st.mu.Lock()
 	sessions := make([]*pty.Session, 0, len(st.sessions))
 	for _, s := range st.sessions {
@@ -481,7 +566,6 @@ func onCloseRequested(c *sdk.Conn, win uint32) bool {
 	for _, s := range sessions {
 		s.CloseWithReason("window closed")
 	}
-	return true
 }
 
 // termIcon — Lucide sprite symbol name. The shell renders this via

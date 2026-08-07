@@ -89,6 +89,17 @@ type ForegroundUser struct {
 	// Empty for everything else, which is most things: a shell, vi, a
 	// build. Independent of State (an agent can run as root).
 	Agent string
+	// Busy reports that something other than the login shell holds the
+	// foreground — a build, an editor, ssh, an agent. False means the
+	// shell is sitting at its prompt, so closing the tab loses nothing the
+	// user hasn't already finished with. This is what close-confirmation
+	// asks about: prompting on every close would train people to dismiss
+	// the dialog, which is worse than not having one.
+	Busy bool
+	// Command is the foreground program's comm ("vim", "make", "ssh"),
+	// empty when idle or unreadable. Named in the confirmation so the
+	// dialog says what is about to be killed.
+	Command string
 }
 
 // sshComms are the foreground program names treated as an outbound ssh
@@ -119,6 +130,13 @@ func (s *Session) ForegroundUser() ForegroundUser {
 	euid := procEUID(fg)
 	out.User = userName(euid)
 	comm := procComm(fg)
+	// Anything but the login shell itself in the foreground means work is
+	// in flight. Free here: the pgrp and comm are already read for the
+	// badge, so nothing extra is spent to answer "is this tab busy".
+	if fg != shellPid {
+		out.Busy = true
+		out.Command = comm
+	}
 	switch {
 	case euid == 0:
 		out.State = "root"

@@ -388,7 +388,7 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
-		inst.deliverCloseConfirm(m.Allow)
+		inst.deliverCloseConfirm(m.Win, m.Allow)
 		return nil
 	case wire.TEvtWindowCreate:
 		var m wire.EvtWindowCreate
@@ -1013,7 +1013,23 @@ func (inst *AppInstance) requestClose(ctx context.Context, win uint32) (allowed 
 	}
 }
 
-func (inst *AppInstance) deliverCloseConfirm(allow bool) {
+// deliverCloseConfirm routes a window.confirm_close.
+//
+// Solicited — a close handshake is pending — hands the answer to
+// requestClose's channel, and that's the whole story.
+//
+// UNSOLICITED with allow=true is the app asking to close ITSELF: wash-term
+// when its last shell exits, or any app that vetoed the handshake to put a
+// confirmation dialog on screen and now has its answer. This used to be
+// dropped on the floor, so `exit` in a terminal's last tab left a dead empty
+// window, and an app that wanted to ask before closing had no way to finish
+// the job — apps/ai/be/app.go worked around it by ending its own process.
+// Run the same teardown a confirmed titlebar click runs.
+//
+// Unsolicited allow=false is a no-op: "don't close me" answers nothing when
+// nothing asked. (wash-display's guest vetoes are the only such traffic
+// today, so nothing depends on it doing more.)
+func (inst *AppInstance) deliverCloseConfirm(win uint32, allow bool) {
 	inst.closeMu.Lock()
 	ch := inst.closeConfirm
 	inst.closeMu.Unlock()
@@ -1022,7 +1038,15 @@ func (inst *AppInstance) deliverCloseConfirm(allow bool) {
 		case ch <- allow:
 		default:
 		}
+		return
 	}
+	if !allow || inst.router == nil {
+		return
+	}
+	if win == 0 {
+		win = inst.WindowID
+	}
+	inst.router.approveWindowClose(inst, win)
 }
 
 // writeCtrl encodes m as JSON and writes a control-channel frame.
