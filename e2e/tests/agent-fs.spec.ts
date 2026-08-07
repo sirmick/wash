@@ -66,6 +66,36 @@ async function ask(win: ReturnType<Page['locator']>, page: Page, text: string) {
   await composer.press('Enter');
 }
 
+test.describe('agent terminal capability', () => {
+  test.setTimeout(60_000);
+
+  // The agent hands wash the command instead of forking it, then blocks on
+  // wait_for_exit and reads the output AFTER exit — the sequence that only
+  // works if a terminal outlives its process.
+  test('the agent runs a command through wash and reads its result', async ({ page, router }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'wash-agentterm-'));
+    writeFileSync(join(dir, 'marker.txt'), 'x');
+    const win = await startAgentIn(page, router.url, dir);
+
+    await ask(win, page, 'runcmd echo hello-from-wash-terminal; exit 7');
+    await expect(win).toContainText('RAN<<id=', { timeout: 30_000 });
+    // The output came back after the process was gone, with its status.
+    await expect(win).toContainText('exit=7', { timeout: 10_000 });
+    await expect(win).toContainText('hello-from-wash-terminal', { timeout: 10_000 });
+  });
+
+  // The command runs in the session's folder, not agentd's — the cd happens
+  // inside the child, so this is the assertion that the wrapper works.
+  test('the command runs in the session folder', async ({ page, router }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'wash-agentterm-cwd-'));
+    writeFileSync(join(dir, 'only-here.txt'), 'x');
+    const win = await startAgentIn(page, router.url, dir);
+
+    await ask(win, page, 'runcmd ls');
+    await expect(win).toContainText('only-here.txt', { timeout: 30_000 });
+  });
+});
+
 test.describe('agent filesystem capability', () => {
   test.setTimeout(60_000);
 

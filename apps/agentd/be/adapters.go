@@ -230,11 +230,14 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 		// layer the desktop watches, and is logged in one place. Without
 		// this the agent uses its own I/O and the desktop finds out later.
 		Fs: acp.FsCapability{ReadTextFile: true, WriteTextFile: true},
-		// terminal: still off. Advertising it means the agent hands its
-		// shell commands to us, which is only an improvement once they
-		// land as real wash tabs rather than captured text (§8, and
-		// docs/AGENT_TABS.md — the same work from the other end).
-		Terminal: false,
+		// terminal: the agent hands us its shell commands (acpterm.go)
+		// instead of forking them inside the adapter, so the process is
+		// wash's — confined to the session cwd, its output captured and
+		// answerable after exit, and killable by us. Rendering it as a
+		// visible tab is a further step (docs/AGENT_TERMINAL.md M3/M4);
+		// the capability is worth having before that, because it moves
+		// execution behind wash's boundary rather than the adapter's.
+		Terminal: true,
 	}, acp.Implementation{Name: "wash", Title: "wash", Version: version.Version})
 	if err != nil {
 		stop()

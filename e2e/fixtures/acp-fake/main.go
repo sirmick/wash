@@ -172,6 +172,59 @@ func runTurn(out *bufio.Writer, m map[string]any) {
 		return
 	}
 
+	if strings.HasPrefix(text, "runcmd ") {
+		// Exercise the terminal capability: hand the command to wash
+		// rather than forking it here, then report what came back. This
+		// is the whole point of the capability — the process is wash's,
+		// and we only hold a reference to it.
+		cmdline := strings.TrimSpace(strings.TrimPrefix(raw, "runcmd "))
+		rid := reqSeq.Add(1) + 4000
+		request(out, rid, "terminal/create", map[string]any{
+			"sessionId": sessionID,
+			"command":   "sh",
+			"args":      []any{"-c", cmdline},
+		})
+		res, _ := await(fmt.Sprint(rid)).(map[string]any)
+		tid, _ := res["terminalId"].(string)
+		if tid == "" {
+			notify(out, chunk("RAN<<REFUSED>>"))
+			reply(out, id, map[string]any{"stopReason": "end_turn"})
+			return
+		}
+		// Block until it exits, exactly as a real adapter does — the
+		// handle came back immediately, the result did not.
+		wid := reqSeq.Add(1) + 5000
+		request(out, wid, "terminal/wait_for_exit", map[string]any{
+			"sessionId": sessionID, "terminalId": tid,
+		})
+		exit, _ := await(fmt.Sprint(wid)).(map[string]any)
+		// Then read the output, AFTER exit — the case that only works if
+		// the terminal outlives its process.
+		oid := reqSeq.Add(1) + 6000
+		request(out, oid, "terminal/output", map[string]any{
+			"sessionId": sessionID, "terminalId": tid,
+		})
+		outp, _ := await(fmt.Sprint(oid)).(map[string]any)
+		body, _ := outp["output"].(string)
+		code := "?"
+		if exit != nil {
+			if c, ok := exit["exitCode"].(float64); ok {
+				code = fmt.Sprintf("%d", int(c))
+			} else if sg, ok := exit["signal"].(string); ok && sg != "" {
+				code = "signal:" + sg
+			}
+		}
+		notify(out, chunk("RAN<<id="+tid+" exit="+code+" out="+strings.TrimSpace(body)+">>"))
+		// Release it: the agent is done, and the record should go.
+		relid := reqSeq.Add(1) + 7000
+		request(out, relid, "terminal/release", map[string]any{
+			"sessionId": sessionID, "terminalId": tid,
+		})
+		await(fmt.Sprint(relid))
+		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
+	}
+
 	if strings.HasPrefix(text, "readfile ") {
 		// Exercise the client's fs capability: ask wash for the file
 		// rather than opening it ourselves, and report what came back.
