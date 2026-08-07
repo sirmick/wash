@@ -3,7 +3,7 @@
 Turning on ACP's `terminal` capability, so an agent's `npm test` becomes a
 real wash terminal instead of captured text in a transcript.
 
-Status: **analysis + plan.** Nothing built. `adapters.go` advertises
+Status: **analysis + plan, with the load-bearing spike proven** (§4). `adapters.go` advertises
 `Terminal: false` and the client-side handlers in `internal/acp` have no
 implementation behind them.
 
@@ -103,14 +103,23 @@ raw channel to the SHELL (`router.go:1469`, "channel binding, sending
 ShellChannelBind + a scrollback replay"), which suggests window 0 is fine
 and the bind is shell-wide. That is an inference, not a fact.
 
-**Spike (≈20 lines, half an hour):** agentd opens a pty on window 0 running
-`echo hi`, sends the channel id in an app_msg, and the Agent window mounts a
-`<Terminal channelId=…>` on it. If bytes appear, Option B is confirmed
-end to end and everything below is plumbing. If they do not, the fallback
-is to give agentd a hidden window (wash-display already creates windows
-from a background surface) — or Option A.
+**Spike: DONE, and it passes** (`e2e/tests/agent-pty-spike.spec.ts`, 513ms).
+agentd opens a pty on window 0 and logs the channel id; the page mounts that
+channel with `window.wash.openRawChannel` and the bytes arrive. Option B is
+confirmed end to end — the bind really is shell-wide, and a windowless
+service can own a pty the browser renders.
 
-**Do this before writing anything else.**
+Two things fell out of it that shape the milestones below:
+
+- **The router replays a channel's buffered bytes at subscribe time.** The
+  first attempt at the spike crashed on a temporal dead zone because the
+  callback fired *during* `openRawChannel` — output produced before anyone
+  was watching was not lost. That is exactly what `terminal/output` needs
+  (create, then poll), and it largely answers §6.5: the ring is not
+  wash-term-specific.
+- **The handle problem solves itself.** `sess.ID()` — the channel id — is
+  the natural `terminalId`, and it is already the one thing an FE needs in
+  order to render the terminal.
 
 ## 5. Milestones
 
