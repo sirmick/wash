@@ -21,7 +21,7 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount }
 import type { Component, JSX } from 'solid-js';
 import { Check, Columns2, Globe, Maximize2, Minimize2, Plus, Rows2, ShieldAlert, User, X } from 'lucide-solid';
 import {
-  Button,
+  Button, ConfirmDialog,
   Menu, MenuItem, MenuSeparator, Terminal,
   TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, TERM_FONTS,
   TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE, TERM_THEMES, themeById,
@@ -271,6 +271,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const [pendingPaste, setPendingPaste] = createSignal<{
     analysis: PasteAnalysis;
     resolve: (text: string | null) => void;
+  } | null>(null);
+
+  // A close the BE refused because work is in the foreground, awaiting the
+  // user's answer. scope 'tab' carries the one tab; scope 'window' carries
+  // every busy tab, so the dialog can name them.
+  const [pendingClose, setPendingClose] = createSignal<{
+    scope: 'tab' | 'window';
+    tabs: { channelID: number; command: string }[];
   } | null>(null);
 
   // Menubar: which top menu is open and the viewport anchor (the clicked
@@ -695,6 +703,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const s = fullLabel(tab);
     return s.length > TAB_LABEL_MAX ? s.slice(0, TAB_LABEL_MAX - 1) + '…' : s;
   };
+  // Same label by channel id, for callers that only carry the id (the
+  // close-confirmation names each busy tab). A tab that has already gone
+  // falls back to its id rather than rendering an empty bullet.
+  const labelOfChannel = (channelID: number): string => {
+    const tab = tabs().find((t) => t.channelID === channelID);
+    return tab ? tabLabel(tab) : `tab ${channelID}`;
+  };
 
   // ---- per-tab user badge + per-pane status line ----
 
@@ -838,6 +853,25 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       case 'tab_closed':
         removeTab(Number(m.channel_id));
         return;
+      case 'close_blocked': {
+        // The BE refuses every unforced close and hands back what the
+        // close would end, so the user can confirm it. Same message for
+        // both scopes; the dialog differs in what it names and what
+        // confirming sends.
+        if (String(m.scope) === 'window') {
+          setPendingClose({
+            scope: 'window',
+            tabs: ((m.tabs ?? []) as { channel_id: number; command: string }[])
+              .map((t) => ({ channelID: Number(t.channel_id), command: String(t.command ?? '') })),
+          });
+        } else {
+          setPendingClose({
+            scope: 'tab',
+            tabs: [{ channelID: Number(m.channel_id), command: String(m.command ?? '') }],
+          });
+        }
+        return;
+      }
       case 'tab_error': {
         const api = apis.get(active());
         if (api) api.write('\r\n\x1b[31mwash-term: ' + String(m.msg) + '\x1b[0m\r\n');
@@ -1717,6 +1751,49 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             onAsIs={() => settlePaste(p().analysis.original)}
             onCancel={() => settlePaste(null)}
           />
+        )}
+      </Show>
+      <Show when={pendingClose()}>
+        {(p) => (
+          <ConfirmDialog
+            data-testid="term-close-confirm"
+            confirmTestid="term-close-confirm-ok"
+            cancelTestid="term-close-confirm-cancel"
+            title={p().scope === 'window' ? 'Close this terminal?' : 'Close this tab?'}
+            confirmLabel={p().scope === 'window' ? 'Close terminal' : 'Close tab'}
+            cancelLabel="Keep it open"
+            danger
+            onCancel={() => setPendingClose(null)}
+            onConfirm={() => {
+              const pc = p();
+              setPendingClose(null);
+              if (pc.scope === 'window') send({ kind: 'close_window_confirmed' });
+              else send({ kind: 'close_tab', channel_id: pc.tabs[0]?.channelID, force: true });
+            }}
+          >
+            <div style={{ font: tokens.type.textMd, 'line-height': '1.45' }}>
+              {p().scope === 'window'
+                ? `This ends ${p().tabs.length === 1 ? 'its shell' : `all ${p().tabs.length} shells`}:`
+                : "This ends the tab's shell:"}
+              <ul style={{ margin: '8px 0 0', padding: '0 0 0 18px' }}>
+                <For each={p().tabs}>
+                  {(t) => (
+                    <li data-testid="term-close-confirm-item">
+                      <Show when={p().scope === 'window'}>
+                        <span>{labelOfChannel(t.channelID)}</span>
+                      </Show>
+                      {/* Name the foreground program when there is one; an
+                          idle shell says so rather than showing a blank. */}
+                      <Show when={t.command} fallback={<span style={{ opacity: '0.7' }}>{p().scope === 'window' ? ' — at a prompt' : 'at a prompt'}</span>}>
+                        <span style={{ opacity: '0.7' }}>{p().scope === 'window' ? ' — running ' : 'running '}</span>
+                        <code>{t.command}</code>
+                      </Show>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </div>
+          </ConfirmDialog>
         )}
       </Show>
     </>

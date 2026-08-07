@@ -83,3 +83,11 @@ __pycache__/
 # kept locally, not committed — packs reference the embedded copies under
 # web/shell/public/wallpapers/.
 /imagery/
+
+# Per-developer Claude Code settings, and the .wash-bak backups a hook
+# installer leaves beside them. One of those backups WAS committed, and
+# deleting it locally then broke `make push` at the source tarball —
+# packaging tars git's file list, so a tracked file that isn't on disk is
+# a hard failure a long way from its cause.
+/.claude/settings.local.json
+/.claude/settings.local.json.*

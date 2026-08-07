@@ -1,3 +1,23 @@
+wash (0.12.1-1) unstable; urgency=low
+
+  * shell: a connection lost before the desktop finished painting no longer
+    hides behind the boot splash. The splash is a full-screen opaque overlay
+    torn down when the session app reports the desktop painted; if the router
+    dropped first that signal never arrived, so "starting wash…" sat on top of
+    the connection banner for up to 12 seconds and swallowed clicks on
+    "Reconnect now" — exactly when a user needs it. The splash now stands down
+    as soon as the connection is lost, and the banner outranks it.
+  * router: the env.publish log line names the keys it accepted rather than
+    only counting them, so "the compositor published its display" is legible
+    in a log instead of being inferred.
+  * test: the e2e gate gates again. The three specs that had been red on every
+    branch for weeks — reconnect and the two display capstones — were real
+    defects, not load, and are fixed; a fourth latent false-pass in the
+    terminal burst soak (an assertion that matched the command it had just
+    typed) is fixed with them. See docs/FLAKE_LOG.md 2026-08-06.
+
+ -- sirmick <sirmick@gmail.com>  Thu, 06 Aug 2026 17:09:28 -0700
+
 wash (0.12.0-1) unstable; urgency=low
 
   * agent: wash runs coding agents itself, over the Agent Client Protocol.
