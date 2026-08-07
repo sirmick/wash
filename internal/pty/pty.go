@@ -49,6 +49,89 @@ type Session struct {
 	closeOnce sync.Once
 	onClose   func(s *Session, reason string)
 
+	// cap is the optional output capture (WithCapture). Nil unless a
+	// caller asked for one: wash-term does not need it — the browser is
+	// its buffer — but a caller that must ANSWER for the output later
+	// does. ACP's terminal/output is that caller.
+	cap *capture
+
+	// done closes when the child has been reaped, after exit is stored,
+	// so a waiter that wakes on it always sees the status. The reaper is
+	// the authority: it runs whether the process exited on its own or
+	// because Close killed it.
+	done     chan struct{}
+	exitMu   sync.Mutex
+	exitCode int
+	exitSig  string
+	exited   bool
+}
+
+// capture is a bounded tail of a session's output. Same bargain as the
+// router's scrollback ring (internal/router/ringbuf.go): keep the most
+// recent bytes, say so when older ones were dropped. ACP names both halves
+// — outputByteLimit on create, truncated on read.
+type capture struct {
+	mu        sync.Mutex
+	buf       []byte
+	max       int
+	truncated bool
+}
+
+func (c *capture) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.buf = append(c.buf, p...)
+	if over := len(c.buf) - c.max; over > 0 {
+		c.buf = c.buf[over:]
+		c.truncated = true
+	}
+	return len(p), nil
+}
+
+func (c *capture) snapshot() (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return string(c.buf), c.truncated
+}
+
+// Option tweaks a session at Open time. Variadic so the existing callers —
+// wash-term, wash-edit, wash-connect — are untouched.
+type Option func(*Session)
+
+// WithCapture keeps the last max bytes of output for Output() to answer
+// with. Off by default: a session nobody will query should not pay for a
+// second copy of its bytes.
+func WithCapture(max int) Option {
+	return func(s *Session) {
+		if max > 0 {
+			s.cap = &capture{max: max}
+		}
+	}
+}
+
+// Output returns the captured tail and whether older bytes were dropped.
+// Empty and false when the session was opened without WithCapture.
+func (s *Session) Output() (text string, truncated bool) {
+	if s.cap == nil {
+		return "", false
+	}
+	return s.cap.snapshot()
+}
+
+// Done closes once the child has been reaped. A caller blocking on it —
+// ACP's wait_for_exit — is guaranteed to see ExitStatus afterwards.
+func (s *Session) Done() <-chan struct{} { return s.done }
+
+// ExitStatus reports how the child ended: an exit code, or a signal name
+// when it was killed. exited is false while it is still running.
+//
+// The reaper always had this — it called cmd.Wait(), logged the result and
+// threw it away — which was fine while "why did my terminal die" was a
+// human question asked of a log. An agent asks it programmatically.
+func (s *Session) ExitStatus() (code int, signal string, exited bool) {
+	s.exitMu.Lock()
+	defer s.exitMu.Unlock()
+	return s.exitCode, s.exitSig, s.exited
 }
 
 // Size returns the last cols/rows applied to the PTY.
@@ -283,7 +366,7 @@ func parseSSHTarget(args []string) string {
 //
 // Must NOT be called from an SDK callback — OpenChannel can't run on
 // the read goroutine. Callers should `go pty.Open(...)`.
-func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint16, argv []string, envFn func([]string) []string, onClose func(s *Session, reason string)) (*Session, error) {
+func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint16, argv []string, envFn func([]string) []string, onClose func(s *Session, reason string), opts ...Option) (*Session, error) {
 	// Bulk class (docs/QOS.md): terminal output rides the credit / behind /
 	// resync path and yields to interactive traffic, instead of sharing the
 	// Interactive queue with window ops and other apps (REVIEW-DATAPATH F1).
@@ -321,11 +404,23 @@ func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint1
 		cols:    cols,
 		rows:    rows,
 		onClose: onClose,
+		done:    make(chan struct{}),
+	}
+	// Before the copy goroutines start, so a capture cannot miss the
+	// first bytes a fast command writes.
+	for _, o := range opts {
+		o(s)
 	}
 
-	// pty → channel.
+	// pty → channel, teed into the capture when one was asked for. The
+	// tee is on the READ side of the pty so the bytes captured are the
+	// bytes sent, byte for byte.
+	var sink io.Writer = ch
+	if s.cap != nil {
+		sink = io.MultiWriter(ch, s.cap)
+	}
 	go func() {
-		_, copyErr := io.Copy(ch, f)
+		_, copyErr := io.Copy(sink, f)
 		if !isPtyTerm(copyErr) {
 			// Real I/O error, not the normal EOF/EIO of a closing pty —
 			// without this line the session just goes dark.
@@ -350,7 +445,10 @@ func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint1
 	// closure next. The exit status is the one fact a "my terminal
 	// died" report needs, so it is always logged.
 	go func() {
-		if err := cmd.Wait(); err != nil {
+		err := cmd.Wait()
+		s.recordExit(cmd.ProcessState)
+		close(s.done)
+		if err != nil {
 			log.Printf("pty: win=%d shell=%s exited: %v", windowID, shellPath, err)
 		} else {
 			log.Printf("pty: win=%d shell=%s exited cleanly", windowID, shellPath)
@@ -517,4 +615,21 @@ func prependPath(path, dir string) string {
 		}
 	}
 	return strings.Join(out, sep)
+}
+
+// recordExit stores how the child ended. Signals and codes are distinct
+// facts — a command killed by SIGKILL did not "exit 137" as far as the
+// caller reporting it is concerned — so both are kept.
+func (s *Session) recordExit(ps *os.ProcessState) {
+	s.exitMu.Lock()
+	defer s.exitMu.Unlock()
+	s.exited = true
+	if ps == nil {
+		return
+	}
+	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		s.exitSig = ws.Signal().String()
+		return
+	}
+	s.exitCode = ps.ExitCode()
 }
