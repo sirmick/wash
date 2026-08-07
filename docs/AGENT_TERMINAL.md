@@ -3,9 +3,9 @@
 Turning on ACP's `terminal` capability, so an agent's `npm test` becomes a
 real wash terminal instead of captured text in a transcript.
 
-Status: **analysis + plan, with the load-bearing spike proven** (§4). `adapters.go` advertises
-`Terminal: false` and the client-side handlers in `internal/acp` have no
-implementation behind them.
+Status: **M1–M3 shipped.** The capability is advertised, agentd owns the
+ptys, and the transcript renders them live. M4 (adopting one as a tab in
+wash-term or wash-edit) is not built; §6's decisions bite then, not before.
 
 ## 1. What the protocol asks for
 
@@ -123,7 +123,7 @@ Two things fell out of it that shape the milestones below:
 
 ## 5. Milestones
 
-### M1 — pty capture + exit status (no protocol)
+### M1 — pty capture + exit status (no protocol) — **DONE**
 
 `internal/pty` gains what ACP needs and nothing else:
 
@@ -138,7 +138,7 @@ Two things fell out of it that shape the milestones below:
 Testable alone, useful alone (wash-term's own "why did my shell die" story
 improves), and no agent involved.
 
-### M2 — agentd's `Terminals` implementation
+### M2 — agentd's `Terminals` implementation — **DONE**
 
 `CreateTerminal` → `pty.Open` with argv/env/cwd from the request and the
 capture buffer sized by `outputByteLimit`; the terminal id is
@@ -149,18 +149,39 @@ signal. `Kill` closes the pty; `Release` drops the record.
 Confinement mirrors the fs capability just shipped: `cwd` resolves through
 the session root, so an agent cannot spawn a shell somewhere it cannot read.
 
-Flip `Terminal: true` in `adapters.go` **only at the end of M2**, with the
-transcript rendering terminal tool-calls, because a half-built
-implementation is worse than none: the agent stops having its own fallback.
+`Terminal: true` was flipped at the end of M2, with M3 following
+immediately — a half-built implementation is worse than none, because the
+agent gives up its own fallback the moment we claim the capability.
 
-### M3 — see it
+Shipped as described, plus two things the writing did not anticipate:
 
-The channel id goes on the transcript event for the tool call, and the
-Agent window mounts a `<Terminal>` inline — connect's proven pattern, zero
-new tab plumbing. This is the first point a human watches an agent's
-command run live.
+- **The terminal id IS the channel id.** No second identifier, so there is
+  no mapping to get out of sync, and the id an agent holds is already the
+  one an FE needs to render it.
+- **The cd happens inside the child**, via an `sh -c 'cd … && exec …'`
+  wrapper. agentd hosts several sessions and must not chdir on behalf of
+  one; `exec` keeps signals and exit codes coming from the command rather
+  than from a shell standing in front of it.
 
-### M4 — adopt it as a tab
+### M3 — see it — **DONE**
+
+The channel id goes on a transcript event (`EventTerminal`) and
+`AgentSession` mounts a real `<Terminal>` on it — the same component
+wash-term uses, so it scrolls and takes Ctrl+C. Input is deliberately left
+enabled: it is a real pty, and interrupting a runaway command is the point.
+
+Watching matters more than it looks. Moving execution behind wash's
+boundary is worth having on its own, but "I can see what it did" is the
+fallback for not reading every approval — and host-side yolo made that
+fallback load-bearing.
+
+One bug fell out of it: these callers built events with `appendPrompt`,
+which stores `Kind=user`, then mutated only the pushed copy — so a live
+window and a reloaded one disagreed about what the event was. Invisible for
+a note, destructive for a terminal, whose channel id was simply lost on
+reload. `appendEvent` stores what wash actually originated.
+
+### M4 — adopt it as a tab — **not started**
 
 wash-term learns to mount a channel it did not open: a tab whose pty
 belongs to someone else. Needs a tab kind (`owner: 'agent'`), provenance in
