@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sirmick/wash/internal/acp"
 	"github.com/sirmick/wash/internal/pty"
@@ -102,6 +103,19 @@ func (h *hosted) CreateTerminal(ctx context.Context, req acp.CreateTerminalReque
 	termAll[id] = t
 	termMu.Unlock()
 	log.Printf("agentd: terminal/create key=%s id=%s argv=%q cwd=%s limit=%d", h.key, id, argv, cwd, limit)
+	// Put it in the transcript with its channel, so anything watching this
+	// session can mount a live terminal on it. Without this the capability
+	// is invisible: the command runs behind wash's boundary, which is
+	// better, but nobody can see it happen — and "I can see what it did" is
+	// the fallback for not reading every approval.
+	if h.conn != nil {
+		pushEvent(h.conn, h.key, appendEvent(h.key, Event{
+			Kind:    EventTerminal,
+			Title:   req.Command,
+			Text:    strings.Join(append([]string{req.Command}, req.Args...), " "),
+			Channel: sess.ID(),
+		}, time.Now()))
+	}
 	return acp.CreateTerminalResponse{TerminalID: id}, nil
 }
 

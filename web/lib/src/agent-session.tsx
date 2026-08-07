@@ -15,6 +15,7 @@ import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid
 import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
 import { Markdown } from './markdown';
+import { Terminal } from './terminal';
 
 /** One line in a transcript, as agentd publishes it. */
 export interface AgentEvent {
@@ -30,6 +31,8 @@ export interface AgentEvent {
   status?: string;
   /** set on kind==="image"; text then holds the base64 bytes */
   mime?: string;
+  /** set on kind==="terminal": the raw channel its pty writes to */
+  channel?: number;
   at_ms: number;
 }
 
@@ -405,8 +408,43 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
               />
             </Show>
 
+            <Show when={e.kind === 'terminal' && e.channel}>
+              {/* A command the agent handed to wash, rendered LIVE on the
+                  channel its pty writes to. Not a transcript of what
+                  happened — the actual terminal, mid-run: it scrolls, it
+                  takes Ctrl+C, and it is the same component wash-term
+                  uses. Watching is the whole point; a captured blob after
+                  the fact is what this capability replaced. */}
+              <div
+                data-testid="agent-terminal"
+                data-channel={e.channel}
+                style={{
+                  border: `1px solid ${tokens.borderMenu}`,
+                  'border-radius': tokens.radiusMd,
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    font: tokens.type.monoSm,
+                    color: tokens.fgMuted,
+                    padding: '3px 8px',
+                    background: tokens.bgMenu,
+                    'white-space': 'nowrap',
+                    overflow: 'hidden',
+                    'text-overflow': 'ellipsis',
+                  }}
+                >
+                  $ {e.text ?? e.title ?? ''}
+                </div>
+                <div style={{ height: '220px' }}>
+                  <Terminal channelId={e.channel} />
+                </div>
+              </div>
+            </Show>
+
             <Show
-              when={e.kind !== 'tool' && e.kind !== 'image'}
+              when={e.kind !== 'tool' && e.kind !== 'image' && e.kind !== 'terminal'}
               fallback={<Show when={e.kind === 'tool'}><ToolRow e={e} onOpen={props.onOpenTool} /></Show>}
             >
               <div

@@ -84,6 +84,24 @@ test.describe('agent terminal capability', () => {
     await expect(win).toContainText('hello-from-wash-terminal', { timeout: 10_000 });
   });
 
+  // The transcript mounts a LIVE terminal on the pty's channel — the point
+  // of the capability is watching the command, not reading about it.
+  test('the transcript shows the command running, live', async ({ page, router }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'wash-agentterm-live-'));
+    const win = await startAgentIn(page, router.url, dir);
+
+    // Long enough that the assertions below land WHILE it is still running.
+    await ask(win, page, 'runcmd echo watch-me-live; sleep 8');
+
+    const term = win.locator('[data-testid="agent-terminal"]');
+    await expect(term).toBeVisible({ timeout: 30_000 });
+    // The command line is named, and the pty's own output is on screen
+    // before the process has exited.
+    await expect(term).toContainText('watch-me-live', { timeout: 20_000 });
+    // It is a real terminal on the pty's channel, not a text blob.
+    await expect(term.locator('.xterm-rows')).toBeVisible();
+  });
+
   // The command runs in the session's folder, not agentd's — the cd happens
   // inside the child, so this is the assertion that the wrapper works.
   test('the command runs in the session folder', async ({ page, router }) => {

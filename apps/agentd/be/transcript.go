@@ -55,6 +55,11 @@ const (
 	// it — so a transcript built purely from notifications shows the
 	// answers with none of the questions. wash records its own side.
 	EventUser = "user"
+	// EventTerminal is a command the agent handed to wash to run
+	// (acpterm.go). Channel carries the raw channel its pty writes to, so
+	// a transcript can mount a live terminal on it — the difference
+	// between watching the command and reading about it afterwards.
+	EventTerminal = "terminal"
 	// EventImage is one image the agent showed. Its own event rather than
 	// a field on a message, so it renders in the order it arrived without
 	// restructuring everything else.
@@ -83,6 +88,8 @@ type Event struct {
 	Status   string `json:"status,omitempty"`
 	// Mime is set on EventImage; Text then holds the base64 bytes.
 	Mime string `json:"mime,omitempty"`
+	// Channel is set on EventTerminal: the raw channel id to render.
+	Channel uint32 `json:"channel,omitempty"`
 	// AtMS is wall-clock at first append, for the FE's own clock anchoring.
 	AtMS int64 `json:"at_ms"`
 }
@@ -131,6 +138,33 @@ func appendPrompt(key, text string, now time.Time) Event {
 	// A prompt always closes any open agent message: the turn is over.
 	t.openMessage = -1
 	return t.push(Event{Kind: EventUser, Text: text, AtMS: now.UnixMilli()})
+}
+
+// appendEvent stores an event wash itself originated — a terminal it
+// opened, a note about its own behaviour — and returns it stamped with a
+// sequence number.
+//
+// Distinct from appendPrompt, which stores what the HUMAN typed and is what
+// these callers used to borrow. Borrowing it meant the stored event kept
+// Kind=user while only the pushed copy carried the real kind, so a live
+// window showed one thing and a reloaded one showed another. That is
+// invisible for a note and destructive for a terminal, whose channel id
+// would be lost on reload.
+func appendEvent(key string, e Event, now time.Time) Event {
+	transMu.Lock()
+	defer transMu.Unlock()
+	t := trans[key]
+	if t == nil {
+		t = newTranscript()
+		trans[key] = t
+	}
+	// Anything wash says closes an open agent message, for the same reason
+	// a prompt does: the thread of that message is over.
+	t.openMessage = -1
+	if e.AtMS == 0 {
+		e.AtMS = now.UnixMilli()
+	}
+	return t.push(e)
 }
 
 // appendUpdate folds one ACP notification into a session's transcript and
