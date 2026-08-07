@@ -92,6 +92,34 @@ test.describe('managed agent sessions', () => {
     await expect(win.getByText('Permission outcome: allow')).toBeVisible({ timeout: 20_000 });
   });
 
+  // Host-side yolo: wash stops asking and answers "allow" itself. The
+  // hazard of the feature is forgetting it is on, so the test asserts the
+  // visible half as hard as the functional one.
+  test('yolo auto-approves what would have been asked, and says so', async ({ page, router }) => {
+    const win = await openAgent(page, router.url, 'say something');
+    await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
+    // Off by default — no badge.
+    await expect(win.locator('[data-testid="agent-yolo-badge"]')).toHaveCount(0);
+
+    await win.getByRole('button', { name: 'Session' }).click();
+    await page.locator('[data-testid="ai-menu-yolo"]').click();
+
+    // The badge is permanent while it is on, and the transcript records
+    // the moment the guard came off.
+    await expect(win.locator('[data-testid="agent-yolo-badge"]')).toBeVisible({ timeout: 10_000 });
+    await expect(win.getByText(/Auto-approval \(yolo\) is ON/)).toBeVisible({ timeout: 10_000 });
+
+    // The same prompt that produced a permission question above now runs
+    // without one: no Allow button, and the agent hears the outcome.
+    const composer = win.locator('textarea');
+    await composer.fill('please ask before running');
+    await composer.press('Enter');
+    await expect(win.getByText('Permission outcome: allow')).toBeVisible({ timeout: 20_000 });
+    await expect(win.getByRole('button', { name: /^Allow(\s|$)/ })).toHaveCount(0);
+    // Every auto-approval is announced, not silent.
+    await expect(win.getByText(/Auto-approved \(yolo\)/)).toBeVisible({ timeout: 10_000 });
+  });
+
   test('the approval mode is on the window, and changing it reaches the agent', async ({ page, router }) => {
     const win = await openAgent(page, router.url, 'say something');
     await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });

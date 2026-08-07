@@ -288,6 +288,17 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			"session_id": str(m["session_id"]),
 		})
 
+	case "set_yolo":
+		if session.key == "" {
+			return
+		}
+		on, _ := m["on"].(bool)
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind": "agent_set_yolo",
+			"key":  session.key,
+			"on":   on,
+		})
+
 	case "set_config":
 		if session.key == "" {
 			return

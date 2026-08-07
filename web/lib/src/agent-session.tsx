@@ -63,6 +63,10 @@ export interface AgentStatus {
   configs?: AgentConfig[];
   /** the agent's own slash commands */
   commands?: { name: string; description?: string }[];
+  /** wash is auto-approving this session's permission requests (host-side
+   *  yolo). Rendered as a standing badge, never as a quiet flag: an agent
+   *  nobody is vetting must not look like one that is being watched. */
+  yolo?: boolean;
 }
 
 export interface AgentConfig {
@@ -614,6 +618,33 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             </>
           )}
         </For>
+
+        {/* Host-side auto-approval, when it is on. Loud on purpose — red,
+            first in the bar, and permanently present — because the whole
+            hazard of the feature is forgetting it is on. It sits NEXT TO
+            the agent's own mode rather than replacing it: they are
+            different decisions by different parties (the agent's policy
+            vs wash's willingness to ask). */}
+        <Show when={st().yolo}>
+          <span
+            data-testid="agent-yolo-badge"
+            title="wash is approving this session's tool requests without asking"
+            style={{
+              display: 'inline-flex',
+              'align-items': 'center',
+              gap: '4px',
+              padding: '0 6px',
+              'border-radius': '3px',
+              background: tokens.accentRed,
+              color: '#ffffff',
+              font: tokens.type.textSm,
+              'flex-shrink': 0,
+            }}
+          >
+            YOLO
+          </span>
+          <span style={{ color: tokens.fgDim }}>·</span>
+        </Show>
 
         {/* The approval preset lives HERE, on the session it governs,
             rather than in Settings: it is a per-session decision about

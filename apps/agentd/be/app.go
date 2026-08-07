@@ -100,6 +100,12 @@ type Row struct {
 	// (docs/AGENT_APP.md §9). Empty for an agent with no such notion.
 	Mode  string `json:"mode,omitempty"`
 	Modes []Mode `json:"modes,omitempty"`
+	// Yolo is wash answering this session's permission questions with
+	// "allow" instead of asking. Host-side and per-session; it is on the
+	// row so every surface that shows the session can SAY so — an
+	// auto-approving agent that looks like any other is the failure mode
+	// this flag exists to prevent.
+	Yolo bool `json:"yolo,omitempty"`
 	// Configs is the agent's generic settings block (model, reasoning
 	// effort, plan mode…). Commands are its own slash commands.
 	Configs  []Config  `json:"configs,omitempty"`

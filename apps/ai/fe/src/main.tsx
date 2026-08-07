@@ -34,6 +34,7 @@ interface RosterRow {
   modes?: { id: string; name: string; description?: string }[];
   configs?: AgentConfig[];
   commands?: { name: string; description?: string }[];
+  yolo?: boolean;
 }
 
 interface RecentSession {
@@ -139,6 +140,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       modes: r?.modes,
       configs: r?.configs,
       commands: r?.commands,
+      yolo: r?.yolo,
     };
   });
 
@@ -318,6 +320,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 onClick={() => { close(); send({ kind: 'detach' }); }} data-testid="ai-menu-detach" />
               <MenuItem label="Terminate" disabled={!sessionKey()}
                 onClick={() => { close(); send({ kind: 'terminate' }); }} data-testid="ai-menu-terminate" />
+
             </Menu>
           ),
         },
@@ -339,6 +342,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           label: 'Session',
           render: (at, close) => (
             <Menu x={at.x} y={at.y} onDismiss={close} data-testid="ai-menu-session">
+              {/* Host-side auto-approval, next to the agent's own settings
+                  because that is what it governs — but named for what it
+                  does rather than dressed up. Turning it on stops wash
+                  asking; the transcript records the switch and every
+                  approval it then makes. */}
+              <MenuItem
+                label={status().yolo ? 'Stop auto-approving (yolo)' : 'Auto-approve everything (yolo)'}
+                disabled={!sessionKey()}
+                onClick={() => { close(); send({ kind: 'set_yolo', on: !status().yolo }); }}
+                data-testid="ai-menu-yolo"
+              />
+              <MenuSeparator />
               <Show when={configs().length === 0}>
                 <MenuItem label="No settings offered" disabled onClick={() => {}} />
               </Show>

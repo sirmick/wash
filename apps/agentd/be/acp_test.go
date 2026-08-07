@@ -356,3 +356,79 @@ func TestSweepLeavesHostedSessionsAlone(t *testing.T) {
 		t.Fatal("row missing before the sweep")
 	}
 }
+
+// Host-side yolo (agent_set_yolo): wash answers the session's permission
+// questions with "allow" instead of asking. The two properties worth pinning
+// are what it replaces and what it must not touch.
+func TestYoloAnswersInsteadOfAsking(t *testing.T) {
+	cases := []struct {
+		name   string
+		yolo   bool
+		policy agentpolicy.Policy
+		subs   int
+		want   string // option id, or "" for cancelled
+	}{
+		{
+			// The point of the feature: no rule, nobody watching — which
+			// would otherwise be a cancel — becomes an allow.
+			name: "yolo answers what would have been asked",
+			yolo: true,
+			subs: 0,
+			want: "once",
+		},
+		{
+			// Off, it changes nothing: same case, still cancelled.
+			name: "off leaves the floor where it was",
+			yolo: false,
+			subs: 0,
+		},
+		{
+			// The line that must not move. A standing deny is a decision
+			// the user already made; a convenience toggle does not reverse
+			// it, however loudly it is switched on.
+			name: "an explicit deny still denies",
+			yolo: true,
+			policy: agentpolicy.Policy{Enabled: true, Rules: []agentpolicy.Rule{
+				{Match: "Bash(git push*)", Decision: agentpolicy.DecisionDeny},
+			}},
+			subs: 1,
+			want: "no",
+		},
+		{
+			// ask_desktop off is an explicit "do not ask me" — yolo is an
+			// explicit "do not ask me, and allow it". The second wins only
+			// because the user turned it on for this session.
+			name:   "yolo overrides ask_desktop off",
+			yolo:   true,
+			policy: agentpolicy.Policy{Enabled: true, Default: agentpolicy.DecisionAsk, AskDesktop: boolPtr(false)},
+			subs:   1,
+			want:   "once",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			resetAsks()
+			withState(t, c.subs)
+			withPolicy(t, c.policy)
+
+			h := &hosted{key: "acp:1", agent: "codex", yolo: c.yolo}
+			res, err := h.RequestPermission(context.Background(), acp.RequestPermissionRequest{
+				SessionID: "s1",
+				ToolCall:  acp.ToolCall{Kind: acp.ToolKindExecute, RawInput: json.RawMessage(`{"command":"git push origin main"}`)},
+				Options:   stdOptions,
+			})
+			if err != nil {
+				t.Fatalf("RequestPermission: %v", err)
+			}
+			if c.want == "" {
+				if res.Outcome.Outcome != acp.OutcomeCancelled {
+					t.Fatalf("outcome = %+v, want cancelled", res.Outcome)
+				}
+				return
+			}
+			if res.Outcome.Outcome != acp.OutcomeSelected || res.Outcome.OptionID != c.want {
+				t.Fatalf("outcome = %+v, want selected %q", res.Outcome, c.want)
+			}
+		})
+	}
+}

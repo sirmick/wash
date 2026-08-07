@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/pty"
 	"github.com/sirmick/wash/internal/agentpolicy"
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/wire"
@@ -67,6 +68,18 @@ type hosted struct {
 	// blanket allow wash keeps to itself.
 	modes []acp.SessionMode
 	mode  string
+	// yolo is HOST-side auto-approval: wash answers this session's
+	// permission questions with "allow" rather than asking. Deliberately
+	// separate from `mode` above, which is the agent's own setting —
+	// visible to it and reversible from either side. This one is a blanket
+	// allow wash keeps to itself, which is why it is per-session, off by
+	// default, announced in the transcript every time it fires, and shown
+	// on the roster row rather than hidden in a menu.
+	//
+	// It replaces ASKING, not deciding: an explicit deny rule still denies.
+	// A standing "never let anything run rm -rf" is a decision the user
+	// already made, and a convenience toggle must not quietly reverse it.
+	yolo bool
 	// configs is the agent's generic settings block — model, reasoning
 	// effort, plan mode, and whatever an adapter adds. One shape, so one
 	// control renders all of them.
@@ -144,6 +157,7 @@ func (h *hosted) setState(state, reason string) {
 		r.Used, r.Size = h.used, h.size
 		r.Title = h.title
 		r.Mode, r.Modes = h.mode, publicModes(h.modes)
+		r.Yolo = h.yolo
 		r.Configs = publicConfigs(h.configs)
 		r.Commands = publicCommands(h.commands)
 		if h.cwd != "" && h.cwd != r.Cwd {
@@ -208,6 +222,7 @@ func (h *hosted) republish() {
 			r.Used, r.Size = h.used, h.size
 			r.Title = h.title
 			r.Mode, r.Modes = h.mode, publicModes(h.modes)
+			r.Yolo = h.yolo
 			r.Configs = publicConfigs(h.configs)
 			r.Commands = publicCommands(h.commands)
 			r.Configs = publicConfigs(h.configs)
@@ -324,6 +339,26 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 	case agentpolicy.DecisionDeny:
 		log.Printf("agentd: acp decide key=%s tool=%s decision=deny rule=%q", h.key, preq.ToolName, res.Rule)
 		return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
+	}
+
+	// Host-side yolo: the user asked wash to stop asking. Checked AFTER the
+	// policy, never before — an explicit deny rule is a decision the user
+	// already made, and a convenience toggle must not quietly reverse it.
+	// Announced in the transcript every time, because an agent that is
+	// being auto-approved must not look like one that is being watched.
+	hostedMu.Lock()
+	yolo := h.yolo
+	hostedMu.Unlock()
+	if yolo {
+		subject := agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput)
+		log.Printf("agentd: acp decide key=%s tool=%s decision=allow reason=yolo subject=%q",
+			h.key, preq.ToolName, subject)
+		if h.conn != nil {
+			e := appendPrompt(h.key, "Auto-approved (yolo): "+preq.ToolName+" "+subject, time.Now())
+			e.Kind = EventMessage
+			pushEvent(h.conn, h.key, e)
+		}
+		return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
 	}
 
 	// No rule: ask the human.
@@ -495,8 +530,9 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 			log.Printf("agentd: acp start agent=%s cwd=%s: %v", req.Agent, req.Cwd, err)
 			if from.InstanceID != "" {
 				return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
-					"kind":  "agent_started",
-					"error": err.Error(),
+					"kind":   "agent_started",
+					"error":  err.Error(),
+					"req_id": req.ReqID,
 				})
 			}
 			return nil
@@ -511,6 +547,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 			"kind":       "agent_started",
 			"key":        h.key,
 			"session_id": h.sessionID,
+			"req_id":     req.ReqID,
 		})
 	})
 
@@ -557,6 +594,59 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		hostedMu.Lock()
 		h.detached = false
 		hostedMu.Unlock()
+		h.republish()
+		return nil
+	})
+
+	// agent_pty_spike: SPIKE ONLY (docs/AGENT_TERMINAL.md §4). Opens a pty
+	// from this background service — no window, WindowID()==0 — and logs
+	// the channel id, so a test can mount that channel from the page and
+	// prove a windowless app's pty reaches the shell. If it does, agentd
+	// can own ACP terminals; if not, the design changes. Delete once M2
+	// replaces it with the real CreateTerminal.
+	sdk.HandleVoid(bus, "agent_pty_spike", func(c *sdk.Conn, _ string, _ struct{}) error {
+		go func() {
+			sess, err := pty.Open(context.Background(), c, 0, 80, 24,
+				[]string{"sh", "-c", "echo wash-spike-ok; sleep 5"}, nil,
+				func(_ *pty.Session, reason string) {
+					log.Printf("agentd: pty spike closed reason=%s", reason)
+				})
+			if err != nil {
+				log.Printf("agentd: pty spike FAILED: %v", err)
+				return
+			}
+			log.Printf("agentd: pty spike channel=%d", sess.ID())
+		}()
+		return nil
+	})
+
+	// agent_set_yolo: turn HOST-side auto-approval on or off for one
+	// session. Not persisted and not global — it dies with the session, so
+	// "yolo for this one job" cannot silently become how the desktop
+	// behaves tomorrow. The transition itself is announced in the
+	// transcript, so the record shows when the guard came off.
+	sdk.HandleFromVoid(bus, "agent_set_yolo", func(_ *sdk.Conn, _ string, req yoloReq, _ wire.Sender) error {
+		h := lookupHosted(req.Key)
+		if h == nil {
+			return nil
+		}
+		hostedMu.Lock()
+		changed := h.yolo != req.On
+		h.yolo = req.On
+		hostedMu.Unlock()
+		if !changed {
+			return nil
+		}
+		log.Printf("agentd: acp yolo key=%s on=%v", h.key, req.On)
+		if h.conn != nil {
+			msg := "Auto-approval (yolo) is OFF — wash will ask before tools run."
+			if req.On {
+				msg = "Auto-approval (yolo) is ON — wash will approve tool requests without asking."
+			}
+			e := appendPrompt(h.key, msg, time.Now())
+			e.Kind = EventMessage
+			pushEvent(h.conn, h.key, e)
+		}
 		h.republish()
 		return nil
 	})
@@ -629,6 +719,13 @@ type startReq struct {
 	Agent  string `json:"agent"`
 	Cwd    string `json:"cwd"`
 	Prompt string `json:"prompt,omitempty"`
+	// ReqID is opaque to agentd and echoed back on agent_started, success
+	// or failure. A host with ONE session per process (wash-ai) never needs
+	// it — the reply can only be about the one thing it asked for. A host
+	// with several (wash-edit's agent tabs) cannot tell two concurrent
+	// starts apart without it, and a FAILED start carries no key at all, so
+	// there would be nothing to attribute the error to.
+	ReqID string `json:"req_id,omitempty"`
 }
 
 // Elicit answers elicitation/create — the agent asking the HUMAN a
@@ -651,6 +748,11 @@ func (h *hosted) Elicit(_ context.Context, req acp.ElicitRequest) (acp.ElicitRes
 		pushEvent(h.conn, h.key, e)
 	}
 	return acp.ElicitResponse{Action: acp.ElicitDecline}, nil
+}
+
+type yoloReq struct {
+	Key string `json:"key"`
+	On  bool   `json:"on"`
 }
 
 type configReq struct {

@@ -225,10 +225,15 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	defer cancel()
 
 	res, err := h.client.Initialize(ctx, acp.ClientCapabilities{
-		// Neither advertised yet: M3 has no terminal or filesystem
-		// implementation, so the agent does that work itself and reports
-		// the output in session/update. M6 turns these on (§8).
-		Fs:       acp.FsCapability{},
+		// fs: the agent reads and writes through wash (acpfs.go), so its
+		// file access is confined to the session's cwd, goes through the
+		// layer the desktop watches, and is logged in one place. Without
+		// this the agent uses its own I/O and the desktop finds out later.
+		Fs: acp.FsCapability{ReadTextFile: true, WriteTextFile: true},
+		// terminal: still off. Advertising it means the agent hands its
+		// shell commands to us, which is only an improvement once they
+		// land as real wash tabs rather than captured text (§8, and
+		// docs/AGENT_TABS.md — the same work from the other end).
 		Terminal: false,
 	}, acp.Implementation{Name: "wash", Title: "wash", Version: version.Version})
 	if err != nil {
