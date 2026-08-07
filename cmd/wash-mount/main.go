@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -54,19 +55,14 @@ func main() {
 	}
 	mountpoint := flag.Arg(1)
 
-	sshClient, err := dial(user, host, *insecure)
-	if err != nil {
-		log.Fatalf("ssh connect %s: %v", host, err)
-	}
-	defer sshClient.Close()
-
-	client, err := sftp.NewClient(sshClient)
-	if err != nil {
-		log.Fatalf("sftp: %v", err)
-	}
-	defer client.Close()
-
-	server, err := washmount.Mount(client, washmount.Options{
+	// A reconnecting, owned dialer: MountWithDialer re-dials on a drop instead of
+	// handing back the same dead client forever (which a fixed-client Mount does
+	// — it can only EIO), and because the client is owned the FUSE layer closes
+	// it on a drop, unblocking any op parked in the sftp transport. Paired with
+	// the per-connection keepalive below, a silent link death recovers rather
+	// than wedging the mount.
+	d := &sshDialer{user: user, host: host, insecure: *insecure}
+	server, err := washmount.MountWithDialer(d.dial, washmount.Options{
 		MountPoint: mountpoint,
 		RemoteRoot: remotePath,
 		OpTimeout:  *timeout,
@@ -75,6 +71,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer d.close()
 	log.Printf("mounted %s:%s at %s", host, remotePath, mountpoint)
 
 	// Unmount cleanly on signal so we never leave a wedged mountpoint behind.
@@ -90,6 +87,83 @@ func main() {
 		}
 	}()
 	server.Wait()
+}
+
+// sshDialer establishes an SFTP client for washmount, reconnecting on demand.
+// Each dial closes the previous ssh connection (so a re-dial after a drop doesn't
+// leak the dead one) and starts a keepalive so a silent link death surfaces as an
+// error promptly instead of blocking forever in the sftp transport.
+type sshDialer struct {
+	user, host string
+	insecure   bool
+
+	mu   sync.Mutex
+	prev *ssh.Client // the connection behind the last-returned client
+}
+
+func (d *sshDialer) dial() (*sftp.Client, error) {
+	sshClient, err := dial(d.user, d.host, d.insecure)
+	if err != nil {
+		return nil, err
+	}
+	client, err := sftp.NewClient(sshClient)
+	if err != nil {
+		sshClient.Close()
+		return nil, err
+	}
+	go keepalive(sshClient)
+
+	d.mu.Lock()
+	prev := d.prev
+	d.prev = sshClient
+	d.mu.Unlock()
+	if prev != nil {
+		prev.Close() // drop the superseded connection (and stop its keepalive)
+	}
+	return client, nil
+}
+
+// close tears down the current connection on unmount.
+func (d *sshDialer) close() {
+	d.mu.Lock()
+	prev := d.prev
+	d.prev = nil
+	d.mu.Unlock()
+	if prev != nil {
+		prev.Close()
+	}
+}
+
+// keepalive pings the server every interval and, if a ping isn't answered in
+// time, closes the connection. A dead reply is the only signal a SILENTLY
+// dropped link (NAT/conntrack expiry, suspended laptop, cable pull) ever gives:
+// without it, a request blocks in the ssh transport until the kernel TCP timeout
+// (many minutes), which — with washmount's per-op timeout abandoning the parked
+// goroutine — would leak a concurrency slot per hung op and eventually wedge the
+// mount. SendRequest itself can block on a silent link (it waits for the reply
+// through the same stuck transport), so it runs in its own goroutine bounded by
+// a timeout.
+func keepalive(c *ssh.Client) {
+	const interval = 15 * time.Second
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for range t.C {
+		errc := make(chan error, 1) // buffered: the ping goroutine never leaks on send
+		go func() {
+			_, _, err := c.SendRequest("keepalive@openssh.com", true, nil)
+			errc <- err
+		}()
+		select {
+		case err := <-errc:
+			if err != nil {
+				c.Close()
+				return
+			}
+		case <-time.After(interval):
+			c.Close() // no reply in time → link is dead; unblock any parked op
+			return
+		}
+	}
 }
 
 // parseTarget splits "[user@]host[:port]:/remote/path" into its parts.

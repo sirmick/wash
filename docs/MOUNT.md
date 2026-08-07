@@ -196,14 +196,17 @@ FUSE; it fails at mount time, surfaced as a `MountState{status:"error"}`.
 - **Multiple ssh connections per host.** Data (`ssh -s sftp`), watch
   (`ssh wash-fswatchd`), and the wash-remote desktop relay are separate ssh
   sessions on the shared agent. ControlMaster consolidation is deferred.
-- **Partial reconnect.** The **data path self-heals**: a dropped ssh re-dials on
-  the next op without unmounting (`washmount.MountWithDialer`; the supervisor
-  re-execs `ssh -s sftp`), and in-flight ops are bounded by a concurrency
-  semaphore. The **watch path does not yet reconnect** — if the `wash-fswatchd`
-  ssh drops, live updates stop until remount (data stays correct; the kernel
-  attr-timeout gives eventual consistency). Reconnect is proven by a Go-level
-  chaos test (kill the connection → recover); a **UI-driven two-VM chaos gate**
-  (kill ssh in the VM, assert the fm recovers) is not yet built.
+- **Reconnect.** Both channels self-heal. The **data path** re-dials on the next
+  op without unmounting (`washmount.MountWithDialer`; the supervisor re-execs
+  `ssh -s sftp`, the `wash-mount` CLI re-dials in-process), with in-flight ops
+  bounded by a concurrency semaphore. The **watch path** re-dials `wash-fswatchd`
+  and re-subscribes the active watches (`remotewatch.NewReconnectingClient`).
+  Both ssh sessions run keepalives (`ServerAliveInterval`, and the CLI an
+  in-process ping) so a **silent** link death (NAT/conntrack drop, suspend, cable
+  pull) surfaces as an error and triggers the re-dial rather than parking a reader
+  forever; without keepalive nothing errors and neither loop would fire. Proven by
+  a Go-level chaos test (kill the connection → recover); a **UI-driven two-VM
+  chaos gate** (kill ssh in the VM, assert the fm recovers) is not yet built.
 - **Single-uid visibility.** The mount is not `allow_other`, so only the mounting
   user's processes see it (true "every process" within that user's session, not
   cross-user).
