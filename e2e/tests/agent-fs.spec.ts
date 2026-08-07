@@ -120,6 +120,15 @@ test.describe('agent terminal capability', () => {
       'unmistakable.txt', { timeout: 20_000 });
     // …and so does how it ended.
     await expect(term).toContainText('exit 0', { timeout: 10_000 });
+
+    // And it is actually LOOKABLE-AT: a transcript is a flex column, so a
+    // box with no flex-shrink:0 gets squeezed to nothing in a short pane.
+    // It measured 2px tall in wash-edit while holding a full directory
+    // listing — present, correct, and invisible, which is exactly how it
+    // was reported.
+    const geo = await term.boundingBox();
+    expect(geo, 'the terminal box has no geometry').not.toBeNull();
+    expect(geo!.height, 'the terminal box collapsed').toBeGreaterThan(40);
   });
 
   // The command runs in the session's folder, not agentd's — the cd happens

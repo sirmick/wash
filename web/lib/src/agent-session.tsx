@@ -423,6 +423,12 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                   border: `1px solid ${tokens.borderMenu}`,
                   'border-radius': tokens.radiusMd,
                   overflow: 'hidden',
+                  // The transcript is a flex column, so without this the box
+                  // is squeezed to nothing in a short container — which is
+                  // exactly what wash-edit's pane is. It measured 2px tall
+                  // there while holding a full directory listing: present,
+                  // correct, and invisible.
+                  'flex-shrink': 0,
                 }}
               >
                 <div
@@ -455,7 +461,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                       style={{
                         margin: 0,
                         padding: '6px 8px',
-                        'max-height': '220px',
+                        'max-height': 'min(220px, 30vh)',
                         overflow: 'auto',
                         font: tokens.type.monoSm,
                         'white-space': 'pre-wrap',
@@ -464,7 +470,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                     >{e.text ?? ''}</pre>
                   }
                 >
-                  <div style={{ height: '220px' }}>
+                  <div style={{ height: 'min(220px, 30vh)', 'min-height': '96px' }}>
                     <Terminal channelId={e.channel} />
                   </div>
                 </Show>

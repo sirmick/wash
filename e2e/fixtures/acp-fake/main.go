@@ -214,7 +214,15 @@ func runTurn(out *bufio.Writer, m map[string]any) {
 				code = "signal:" + sg
 			}
 		}
-		notify(out, chunk("RAN<<id="+tid+" exit="+code+" out="+strings.TrimSpace(body)+">>"))
+		// Report a SUMMARY, not the whole output. wash already shows the
+		// output in the terminal box; repeating it as prose buried that box
+		// under a wall of text and auto-scrolled past it, which read as
+		// "the terminal is not there".
+		trimmed := strings.TrimSpace(body)
+		if len(trimmed) > 120 {
+			trimmed = trimmed[:120] + "…"
+		}
+		notify(out, chunk("RAN<<id="+tid+" exit="+code+" out="+trimmed+">>"))
 		// Release it: the agent is done, and the record should go.
 		relid := reqSeq.Add(1) + 7000
 		request(out, relid, "terminal/release", map[string]any{
