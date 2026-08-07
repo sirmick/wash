@@ -495,8 +495,9 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 			log.Printf("agentd: acp start agent=%s cwd=%s: %v", req.Agent, req.Cwd, err)
 			if from.InstanceID != "" {
 				return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
-					"kind":  "agent_started",
-					"error": err.Error(),
+					"kind":   "agent_started",
+					"error":  err.Error(),
+					"req_id": req.ReqID,
 				})
 			}
 			return nil
@@ -511,6 +512,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 			"kind":       "agent_started",
 			"key":        h.key,
 			"session_id": h.sessionID,
+			"req_id":     req.ReqID,
 		})
 	})
 
@@ -629,6 +631,13 @@ type startReq struct {
 	Agent  string `json:"agent"`
 	Cwd    string `json:"cwd"`
 	Prompt string `json:"prompt,omitempty"`
+	// ReqID is opaque to agentd and echoed back on agent_started, success
+	// or failure. A host with ONE session per process (wash-ai) never needs
+	// it — the reply can only be about the one thing it asked for. A host
+	// with several (wash-edit's agent tabs) cannot tell two concurrent
+	// starts apart without it, and a FAILED start carries no key at all, so
+	// there would be nothing to attribute the error to.
+	ReqID string `json:"req_id,omitempty"`
 }
 
 // Elicit answers elicitation/create — the agent asking the HUMAN a
