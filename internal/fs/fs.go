@@ -58,6 +58,11 @@ type Entry struct {
 	LinkTo      string `json:"link_to,omitempty"`
 	LinkErr     string `json:"link_err,omitempty"`
 	Broken      bool   `json:"broken,omitempty"` // symlink whose target can't be reached
+	// LinkType is what a symlink RESOLVES to — same vocabulary as Type,
+	// empty for non-symlinks and for broken ones. Type stays the link's own
+	// kind ("symlink") so the FE can still render it as a link; LinkType is
+	// how it decides whether the thing behaves as a directory.
+	LinkType string `json:"link_type,omitempty"`
 
 	// Display hints, computed for the *calling* process's identity
 	// (uid + supplementary groups). Each is omitempty with the polarity
@@ -303,8 +308,16 @@ func entryFor(absDir string, fi os.FileInfo, owners, groups map[uint32]string) E
 			// target string). Follow it with Stat to learn if the target is
 			// actually reachable; a failure (missing target, ELOOP) means
 			// the link is broken.
-			if _, serr := os.Stat(full); serr != nil {
+			//
+			// The same Stat also says WHAT the link points at, which the
+			// caller needs: a link to a directory is a directory to anyone
+			// using it, and a FE that switches on Type alone would file it
+			// with the regular files — un-enterable, and dropped entirely
+			// by a directory-only picker.
+			if tst, serr := os.Stat(full); serr != nil {
 				e.Broken = true
+			} else {
+				e.LinkType = kindFromMode(tst.Mode())
 			}
 		} else {
 			e.LinkErr = err.Error()

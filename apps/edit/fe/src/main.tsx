@@ -14,7 +14,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { Button, ConfirmDialog, FilePicker, FileTree, Input, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
+import { Button, ConfirmDialog, FilePicker, FileTree, Input, isDirLike, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
 import type { TerminalAPI } from '@wash/ui';
 import {
   joinPath, baseName, parentPath,
@@ -1399,7 +1399,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   };
 
   const onRowDblClick = (row: { entry: Entry; path: string }) => {
-    if (row.entry.type === 'dir') {
+    if (isDirLike(row.entry)) {
       toggleExpand(row.path);
       return;
     }
@@ -1443,7 +1443,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const par = parentPath(p);
     const entries = listings[par];
     const entry = entries?.find((x) => x.name === baseName(p));
-    if (entry?.type === 'dir') return p;
+    if (entry && isDirLike(entry)) return p;
     return par || root();
   };
 
@@ -2631,7 +2631,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           data-testid="edit-ctx-menu"
         >
           <MenuItem
-            label={ctxMenu()!.entry.type === 'dir' ? 'Expand' : 'Open'}
+            label={isDirLike(ctxMenu()!.entry) ? 'Expand' : 'Open'}
             onClick={() => {
               const c = ctxMenu()!;
               closeCtxMenu();

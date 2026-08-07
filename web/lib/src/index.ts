@@ -24,7 +24,7 @@ export { Splitter } from './splitter';
 export type { SplitterProps, SplitterOrientation } from './splitter';
 export { VirtualGrid } from './virtual-grid';
 export type { VirtualGridProps } from './virtual-grid';
-export { FileTree } from './file-tree';
+export { FileTree, isDirLike } from './file-tree';
 export type { FileTreeProps, FileTreeRow, FileTreeColumn, FileTreeEntry } from './file-tree';
 export {
   Terminal,

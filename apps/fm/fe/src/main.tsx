@@ -20,7 +20,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { Button, ConfirmDialog, FileTree, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
+import { Button, ConfirmDialog, FileTree, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
 import type { FileClient, FileTreeColumn } from '@wash/ui';
 import {
   baseName, extName, formatDate, humanSize, joinPath, octalPerm, parentPath, ancestorChain,
@@ -122,6 +122,9 @@ interface Entry {
   group?: string;
   link_to?: string;
   link_err?: string;
+  // What a symlink resolves to (see isDirLike): a link to a folder must
+  // navigate, sort and drop-target like a folder.
+  link_type?: string;
   broken?: boolean; // symlink whose target can't be reached
   // BE-computed display hints (uid-aware; see internal/fs Entry). Each is
   // present only in its notable state (omitempty on the wire).
@@ -730,12 +733,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     setSelectedPath(rowPath);
     // A folder row drives the dock to its grid; a file row drives the file
     // preview. (Grid tile clicks use gridClick, which leaves gridDir alone.)
-    setGridDir(entry.type === 'dir' ? rowPath : '');
+    setGridDir(isDirLike(entry) ? rowPath : '');
     if (isPlain) setStatusOverride(null);
     if (entry.type === 'file') {
       focusForFile(rowPath);
       if (isPlain) sendRead(rowPath);
-    } else if (entry.type === 'dir' && isPlain && !listings[rowPath]) {
+    } else if (isDirLike(entry) && isPlain && !listings[rowPath]) {
       // Selecting a folder previews its contents as a grid; make sure its
       // listing is loaded (a plain select doesn't expand the tree row).
       sendList(rowPath);
@@ -838,14 +841,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       const p = Array.from(sel)[0];
       if (listings[p]) return p;
       const entry = findEntry(p);
-      if (entry?.type === 'dir') return p;
+      if (entry && isDirLike(entry)) return p;
       return parentPath(p);
     }
     const p = path();
     if (!p) return home();
     if (listings[p]) return p;
     const entry = findEntry(p);
-    if (entry?.type === 'dir') return p;
+    if (entry && isDirLike(entry)) return p;
     return parentPath(p);
   };
 
@@ -1223,7 +1226,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // an expanded subfolder uploads into that subfolder, not the cwd. `entry`
   // is undefined for grid tiles, which only wire drops on folders.
   const uploadFolderFor = (rowPath: string, entry?: Entry): string =>
-    !entry || entry.type === 'dir' ? rowPath : parentPath(rowPath);
+    !entry || isDirLike(entry) ? rowPath : parentPath(rowPath);
 
   const onRowDragOver = (ev: DragEvent, rowPath: string, entry?: Entry) => {
     // External OS file drag → mark the enclosing folder as the upload target.
@@ -2281,7 +2284,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             // pairs of intentional single clicks as double-clicks. This is the
             // only path that calls selectPath for a row.
             if (e.type === 'symlink') { followSymlink(e, p); return; }
-            if (e.type === 'dir') { selectPath(p, true); return; }
+            if (isDirLike(e)) { selectPath(p, true); return; }
             // A file: hand it to its registered app via the router's open routing.
             openFile(p);
           }}
@@ -2358,7 +2361,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 isDropTarget={(p) => dropTargetPath() === p}
                 uploadActive={gridUploadActive()}
                 onClick={gridClick}
-                onActivate={(p, e) => (e.type === 'dir' ? selectPath(p, true) : openFile(p))}
+                onActivate={(p, e) => (isDirLike(e) ? selectPath(p, true) : openFile(p))}
                 onContextMenu={openContextMenu}
                 onDragStart={onDragStart}
                 onDragEnd={onDragEnd}
@@ -2421,7 +2424,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             const m = menu() as { entry: Entry; path: string };
             closeMenu();
             if (m.entry.type === 'symlink') followSymlink(m.entry, m.path);
-            else if (m.entry.type === 'dir') selectPath(m.path, true);
+            else if (isDirLike(m.entry)) selectPath(m.path, true);
             else openFile(m.path);
           }}
           onCut={() => {
@@ -2616,7 +2619,7 @@ const HEADER_ROW_H = 22;
 
 function sizeOrCount(entry: Entry, childCount?: number): string {
   if (entry.type === 'file') return humanSize(entry.size);
-  if (entry.type === 'dir') {
+  if (isDirLike(entry)) {
     if (childCount === undefined) return '';
     return childCount === 1 ? '1 item' : `${childCount} items`;
   }
@@ -3519,7 +3522,7 @@ const FolderTile: Component<{
     io.observe(el);
     onCleanup(() => io.disconnect());
   });
-  const isDir = () => props.entry.type === 'dir';
+  const isDir = () => isDirLike(props.entry);
   return (
     <div
       ref={el}
