@@ -53,7 +53,17 @@ func main() {
 		// A response to something WE asked (the permission request). The
 		// turn is blocked on it, exactly as a real agent's turn is.
 		if hasID && method == "" {
-			deliver(fmt.Sprint(id), m["result"])
+			// Distinguish "worked, no body" from "refused". A successful
+			// fs/write_text_file replies with a null result, so a nil
+			// value alone cannot tell the two apart — an error is tagged
+			// instead, and a bodyless success becomes an empty map.
+			v := m["result"]
+			if e, bad := m["error"]; bad {
+				v = map[string]any{"__error": e}
+			} else if v == nil {
+				v = map[string]any{}
+			}
+			deliver(fmt.Sprint(id), v)
 			continue
 		}
 
@@ -127,6 +137,7 @@ var (
 func runTurn(out *bufio.Writer, m map[string]any) {
 	cancelled.Store(false)
 	text := promptText(m)
+	raw := promptTextRaw(m)
 	id := m["id"]
 
 	notify(out, update(map[string]any{
@@ -157,6 +168,56 @@ func runTurn(out *bufio.Writer, m map[string]any) {
 		// just that a button disappeared.
 		res := await(fmt.Sprint(rid))
 		notify(out, chunk("Permission outcome: "+outcomeOf(res)+"."))
+		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
+	}
+
+	if strings.HasPrefix(text, "readfile ") {
+		// Exercise the client's fs capability: ask wash for the file
+		// rather than opening it ourselves, and report what came back.
+		// A refusal (outside the session cwd) arrives as an error, which
+		// deliver turns into a nil result — reported as REFUSED so a spec
+		// can assert the sandbox held.
+		path := strings.TrimSpace(strings.TrimPrefix(raw, "readfile "))
+		rid := reqSeq.Add(1) + 2000
+		request(out, rid, "fs/read_text_file", map[string]any{
+			"sessionId": sessionID,
+			"path":      path,
+		})
+		body := "REFUSED"
+		if r, ok := await(fmt.Sprint(rid)).(map[string]any); ok {
+			if c, ok := r["content"].(string); ok {
+				body = c
+			} else if e, bad := r["__error"]; bad {
+				// Carry the reason: a spec asserting the sandbox held is
+				// more useful when it can see WHY, and a bare REFUSED hid
+				// a bug in the client half during development.
+				body = fmt.Sprintf("REFUSED:%v", e)
+			}
+		}
+		notify(out, chunk("READ<<"+body+">>"))
+		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
+	}
+
+	if strings.HasPrefix(text, "writefile ") {
+		// "writefile <path> <content>" — the write half of the same
+		// capability. An error likewise becomes REFUSED.
+		rest := strings.TrimSpace(strings.TrimPrefix(raw, "writefile "))
+		path, content, _ := strings.Cut(rest, " ")
+		rid := reqSeq.Add(1) + 3000
+		request(out, rid, "fs/write_text_file", map[string]any{
+			"sessionId": sessionID,
+			"path":      path,
+			"content":   content + "\n",
+		})
+		body := "REFUSED"
+		if r, ok := await(fmt.Sprint(rid)).(map[string]any); ok {
+			if _, bad := r["__error"]; !bad {
+				body = "OK"
+			}
+		}
+		notify(out, chunk("WROTE<<"+body+">>"))
 		reply(out, id, map[string]any{"stopReason": "end_turn"})
 		return
 	}
@@ -258,7 +319,16 @@ func configState(configID, value string) map[string]any {
 	}
 }
 
+// promptText is lowercased because every keyword check below is a
+// case-insensitive contains/prefix. Anything that takes an ARGUMENT out of
+// the prompt — a path — must use promptTextRaw instead: lowercasing a path
+// silently asks for a different file, which the fs sandbox then refuses,
+// and the refusal looks like a bug in the sandbox rather than in here.
 func promptText(m map[string]any) string {
+	return strings.ToLower(promptTextRaw(m))
+}
+
+func promptTextRaw(m map[string]any) string {
 	params, _ := m["params"].(map[string]any)
 	blocks, _ := params["prompt"].([]any)
 	var sb strings.Builder
@@ -269,7 +339,7 @@ func promptText(m map[string]any) string {
 			}
 		}
 	}
-	return strings.ToLower(sb.String())
+	return sb.String()
 }
 
 func chunk(text string) map[string]any {
