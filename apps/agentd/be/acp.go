@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/pty"
 	"github.com/sirmick/wash/internal/agentpolicy"
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/wire"
@@ -594,6 +595,28 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		h.detached = false
 		hostedMu.Unlock()
 		h.republish()
+		return nil
+	})
+
+	// agent_pty_spike: SPIKE ONLY (docs/AGENT_TERMINAL.md §4). Opens a pty
+	// from this background service — no window, WindowID()==0 — and logs
+	// the channel id, so a test can mount that channel from the page and
+	// prove a windowless app's pty reaches the shell. If it does, agentd
+	// can own ACP terminals; if not, the design changes. Delete once M2
+	// replaces it with the real CreateTerminal.
+	sdk.HandleVoid(bus, "agent_pty_spike", func(c *sdk.Conn, _ string, _ struct{}) error {
+		go func() {
+			sess, err := pty.Open(context.Background(), c, 0, 80, 24,
+				[]string{"sh", "-c", "echo wash-spike-ok; sleep 5"}, nil,
+				func(_ *pty.Session, reason string) {
+					log.Printf("agentd: pty spike closed reason=%s", reason)
+				})
+			if err != nil {
+				log.Printf("agentd: pty spike FAILED: %v", err)
+				return
+			}
+			log.Printf("agentd: pty spike channel=%d", sess.ID())
+		}()
 		return nil
 	})
 
