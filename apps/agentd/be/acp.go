@@ -67,6 +67,18 @@ type hosted struct {
 	// blanket allow wash keeps to itself.
 	modes []acp.SessionMode
 	mode  string
+	// yolo is HOST-side auto-approval: wash answers this session's
+	// permission questions with "allow" rather than asking. Deliberately
+	// separate from `mode` above, which is the agent's own setting —
+	// visible to it and reversible from either side. This one is a blanket
+	// allow wash keeps to itself, which is why it is per-session, off by
+	// default, announced in the transcript every time it fires, and shown
+	// on the roster row rather than hidden in a menu.
+	//
+	// It replaces ASKING, not deciding: an explicit deny rule still denies.
+	// A standing "never let anything run rm -rf" is a decision the user
+	// already made, and a convenience toggle must not quietly reverse it.
+	yolo bool
 	// configs is the agent's generic settings block — model, reasoning
 	// effort, plan mode, and whatever an adapter adds. One shape, so one
 	// control renders all of them.
@@ -144,6 +156,7 @@ func (h *hosted) setState(state, reason string) {
 		r.Used, r.Size = h.used, h.size
 		r.Title = h.title
 		r.Mode, r.Modes = h.mode, publicModes(h.modes)
+		r.Yolo = h.yolo
 		r.Configs = publicConfigs(h.configs)
 		r.Commands = publicCommands(h.commands)
 		if h.cwd != "" && h.cwd != r.Cwd {
@@ -208,6 +221,7 @@ func (h *hosted) republish() {
 			r.Used, r.Size = h.used, h.size
 			r.Title = h.title
 			r.Mode, r.Modes = h.mode, publicModes(h.modes)
+			r.Yolo = h.yolo
 			r.Configs = publicConfigs(h.configs)
 			r.Commands = publicCommands(h.commands)
 			r.Configs = publicConfigs(h.configs)
@@ -324,6 +338,26 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 	case agentpolicy.DecisionDeny:
 		log.Printf("agentd: acp decide key=%s tool=%s decision=deny rule=%q", h.key, preq.ToolName, res.Rule)
 		return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
+	}
+
+	// Host-side yolo: the user asked wash to stop asking. Checked AFTER the
+	// policy, never before — an explicit deny rule is a decision the user
+	// already made, and a convenience toggle must not quietly reverse it.
+	// Announced in the transcript every time, because an agent that is
+	// being auto-approved must not look like one that is being watched.
+	hostedMu.Lock()
+	yolo := h.yolo
+	hostedMu.Unlock()
+	if yolo {
+		subject := agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput)
+		log.Printf("agentd: acp decide key=%s tool=%s decision=allow reason=yolo subject=%q",
+			h.key, preq.ToolName, subject)
+		if h.conn != nil {
+			e := appendPrompt(h.key, "Auto-approved (yolo): "+preq.ToolName+" "+subject, time.Now())
+			e.Kind = EventMessage
+			pushEvent(h.conn, h.key, e)
+		}
+		return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
 	}
 
 	// No rule: ask the human.
@@ -563,6 +597,37 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		return nil
 	})
 
+	// agent_set_yolo: turn HOST-side auto-approval on or off for one
+	// session. Not persisted and not global — it dies with the session, so
+	// "yolo for this one job" cannot silently become how the desktop
+	// behaves tomorrow. The transition itself is announced in the
+	// transcript, so the record shows when the guard came off.
+	sdk.HandleFromVoid(bus, "agent_set_yolo", func(_ *sdk.Conn, _ string, req yoloReq, _ wire.Sender) error {
+		h := lookupHosted(req.Key)
+		if h == nil {
+			return nil
+		}
+		hostedMu.Lock()
+		changed := h.yolo != req.On
+		h.yolo = req.On
+		hostedMu.Unlock()
+		if !changed {
+			return nil
+		}
+		log.Printf("agentd: acp yolo key=%s on=%v", h.key, req.On)
+		if h.conn != nil {
+			msg := "Auto-approval (yolo) is OFF — wash will ask before tools run."
+			if req.On {
+				msg = "Auto-approval (yolo) is ON — wash will approve tool requests without asking."
+			}
+			e := appendPrompt(h.key, msg, time.Now())
+			e.Kind = EventMessage
+			pushEvent(h.conn, h.key, e)
+		}
+		h.republish()
+		return nil
+	})
+
 	// agent_set_mode: switch the session's approval preset.
 	sdk.HandleFromVoid(bus, "agent_set_mode", func(_ *sdk.Conn, _ string, req modeReq, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
@@ -660,6 +725,11 @@ func (h *hosted) Elicit(_ context.Context, req acp.ElicitRequest) (acp.ElicitRes
 		pushEvent(h.conn, h.key, e)
 	}
 	return acp.ElicitResponse{Action: acp.ElicitDecline}, nil
+}
+
+type yoloReq struct {
+	Key string `json:"key"`
+	On  bool   `json:"on"`
 }
 
 type configReq struct {
