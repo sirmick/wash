@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.12.1
+Version:        0.13.0
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,18 @@ fi
 exit 0
 
 %changelog
+* Fri Aug 07 2026 sirmick <sirmick@gmail.com> - 0.13.0-1
+- agent: ACP filesystem and terminal capabilities. An agent that opts in reads
+  and writes through wash, confined to its session folder, and hands wash its
+  shell commands — which run as real ptys you can watch and interrupt.
+- agent: wash-edit hosts agent sessions in its terminal pane, in the folder the
+  editor has open, with tool rows opening files in the buffer above.
+- agent: per-session host-side auto-approval (yolo), badged and recorded in the
+  transcript, unable to reverse an explicit deny.
+- terminal: closing a tab or window asks first and names what is running;
+  per-pane status bars.
+- files: a symlink to a folder behaves as a folder in pickers, trees and fm.
+- test: the three long-standing e2e failures are fixed; the push gate gates.
 * Thu Aug 06 2026 sirmick <sirmick@gmail.com> - 0.12.1-1
 - shell: a connection lost before the desktop finished painting no longer hides
   behind the boot splash; the splash stands down on connection loss and the

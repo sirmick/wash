@@ -1,3 +1,34 @@
+wash (0.13.0-1) unstable; urgency=low
+
+  * agent: wash now offers coding agents its own filesystem and terminals
+    over ACP. An agent that opts in reads and writes files THROUGH wash —
+    confined to the folder you started it in, through the layer the desktop
+    watches — and hands wash its shell commands instead of forking them
+    inside the adapter. Those commands run as real wash ptys: you watch them
+    scroll in the transcript, interrupt them, and keep their output and exit
+    status after they finish.
+  * agent: sessions can run in the editor. wash-edit hosts an agent in the
+    pane its terminals already live in, starting in the folder you have open
+    — nobody is asked which folder — and a tool row naming a file opens that
+    file in the buffer above the transcript.
+  * agent: a per-session "yolo" mode lets wash approve tool requests without
+    asking. Deliberately loud: a standing badge, every auto-approval written
+    into the transcript, dead when the session ends, and unable to reverse an
+    explicit deny rule.
+  * terminal: closing a tab or a window now asks first, naming what is still
+    running. Closing killed shells outright on one keystroke, with no undo.
+  * terminal: each split pane carries its own status bar, so an unfocused
+    pane's ssh/root/agent state is visible rather than implied.
+  * files: a symlink to a folder behaves as a folder — it can be chosen in a
+    folder picker, entered in the file tree, and sorted with the directories.
+    It was previously filtered out of directory pickers entirely.
+  * test: the three e2e specs that had been red on every branch for weeks are
+    fixed, so `make push` gates honestly again. Two were real defects — the
+    boot splash swallowing the connection banner's retry click, and a stale
+    log match launching terminals before DISPLAY was published — not load.
+
+ -- sirmick <sirmick@gmail.com>  Fri, 07 Aug 2026 14:25:27 -0700
+
 wash (0.12.1-1) unstable; urgency=low
 
   * shell: a connection lost before the desktop finished painting no longer
