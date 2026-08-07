@@ -97,12 +97,34 @@ type sshDialer struct {
 	user, host string
 	insecure   bool
 
+	// connect establishes the ssh transport; nil selects the agent-based dial.
+	// A test seam so the reconnect/keepalive behaviour can be exercised against
+	// an in-process server without an ssh agent or known_hosts.
+	connect func() (*ssh.Client, error)
+	// keepaliveEvery is the ping period; zero selects the default. Overridable
+	// so tests don't wait real seconds.
+	keepaliveEvery time.Duration
+
 	mu   sync.Mutex
 	prev *ssh.Client // the connection behind the last-returned client
 }
 
+func (d *sshDialer) keepaliveInterval() time.Duration {
+	if d.keepaliveEvery > 0 {
+		return d.keepaliveEvery
+	}
+	return 15 * time.Second
+}
+
+func (d *sshDialer) sshConnect() (*ssh.Client, error) {
+	if d.connect != nil {
+		return d.connect()
+	}
+	return dial(d.user, d.host, d.insecure)
+}
+
 func (d *sshDialer) dial() (*sftp.Client, error) {
-	sshClient, err := dial(d.user, d.host, d.insecure)
+	sshClient, err := d.sshConnect()
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +133,7 @@ func (d *sshDialer) dial() (*sftp.Client, error) {
 		sshClient.Close()
 		return nil, err
 	}
-	go keepalive(sshClient)
+	go keepalive(sshClient, d.keepaliveInterval())
 
 	d.mu.Lock()
 	prev := d.prev
@@ -143,8 +165,8 @@ func (d *sshDialer) close() {
 // mount. SendRequest itself can block on a silent link (it waits for the reply
 // through the same stuck transport), so it runs in its own goroutine bounded by
 // a timeout.
-func keepalive(c *ssh.Client) {
-	const interval = 15 * time.Second
+// keepalive pings every interval; interval is also the per-ping reply deadline.
+func keepalive(c *ssh.Client, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for range t.C {
