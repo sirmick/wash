@@ -167,6 +167,27 @@ func appendEvent(key string, e Event, now time.Time) Event {
 	return t.push(e)
 }
 
+// updateEvent rewrites a stored event in place and returns it, so a caller
+// can push the result. Both hosts replace by seq, so an updated event lands
+// where the original was rather than appearing twice.
+func updateEvent(key string, seq uint64, mutate func(*Event)) (Event, bool) {
+	transMu.Lock()
+	defer transMu.Unlock()
+	t := trans[key]
+	if t == nil {
+		return Event{}, false
+	}
+	for i := range t.events {
+		if t.events[i].Seq == seq {
+			mutate(&t.events[i])
+			return t.events[i], true
+		}
+	}
+	// Fell off the front of the bounded history: nothing to update, and
+	// nothing to say about it.
+	return Event{}, false
+}
+
 // appendUpdate folds one ACP notification into a session's transcript and
 // returns the events to push, in order. Called on the ACP read path, so
 // it must not block.

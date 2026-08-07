@@ -50,6 +50,14 @@ type terminal struct {
 	// and also the handle an FE needs to render it, which is why the id
 	// is not invented separately.
 	chID uint32
+	// evSeq is the transcript event announcing this terminal. Kept so the
+	// event can be COMPLETED when the process ends: the live channel dies
+	// with the pty, so without this a command that finishes quickly — or
+	// one the agent releases straight away — leaves an empty frame where
+	// its output should be. The agent can still read the output through
+	// terminal/output; the human has only the transcript.
+	evSeq uint64
+	key   string
 }
 
 var (
@@ -92,6 +100,7 @@ func (h *hosted) CreateTerminal(ctx context.Context, req acp.CreateTerminalReque
 			code, sig, _ := s.ExitStatus()
 			log.Printf("agentd: terminal exited key=%s ch=%d reason=%s code=%d signal=%s",
 				h.key, s.ID(), reason, code, sig)
+			h.completeTerminalEvent(strconv.FormatUint(uint64(s.ID()), 10))
 		},
 		pty.WithCapture(limit))
 	if err != nil {
@@ -109,12 +118,16 @@ func (h *hosted) CreateTerminal(ctx context.Context, req acp.CreateTerminalReque
 	// better, but nobody can see it happen — and "I can see what it did" is
 	// the fallback for not reading every approval.
 	if h.conn != nil {
-		pushEvent(h.conn, h.key, appendEvent(h.key, Event{
+		ev := appendEvent(h.key, Event{
 			Kind:    EventTerminal,
-			Title:   req.Command,
-			Text:    strings.Join(append([]string{req.Command}, req.Args...), " "),
+			Title:   strings.Join(append([]string{req.Command}, req.Args...), " "),
 			Channel: sess.ID(),
-		}, time.Now()))
+			Status:  "running",
+		}, time.Now())
+		termMu.Lock()
+		t.evSeq, t.key = ev.Seq, h.key
+		termMu.Unlock()
+		pushEvent(h.conn, h.key, ev)
 	}
 	return acp.CreateTerminalResponse{TerminalID: id}, nil
 }
@@ -187,6 +200,38 @@ func (h *hosted) ReleaseTerminal(_ context.Context, ref acp.TerminalRef) error {
 	log.Printf("agentd: terminal/release key=%s id=%s", h.key, t.id)
 	t.sess.CloseWithReason("agent released it")
 	return nil
+}
+
+// completeTerminalEvent turns the live terminal in the transcript into its
+// result: the captured output and how it ended. Called when the process
+// exits, whatever ended it — the agent releasing it, a kill, or the command
+// simply finishing.
+func (h *hosted) completeTerminalEvent(id string) {
+	termMu.Lock()
+	t := termAll[id]
+	termMu.Unlock()
+	if t == nil || t.evSeq == 0 || h.conn == nil {
+		return
+	}
+	text, truncated := t.sess.Output()
+	if truncated {
+		text = "…(earlier output dropped)\n" + text
+	}
+	code, sig, _ := t.sess.ExitStatus()
+	status := fmt.Sprintf("exit %d", code)
+	if sig != "" {
+		status = "killed by " + sig
+	}
+	ev, ok := updateEvent(t.key, t.evSeq, func(e *Event) {
+		e.Text = text
+		e.Status = status
+		// The channel is gone with the pty; leaving it set would have the
+		// FE mount a terminal on a dead id and show nothing.
+		e.Channel = 0
+	})
+	if ok {
+		pushEvent(h.conn, t.key, ev)
+	}
 }
 
 func lookupTerminal(ref acp.TerminalRef) (*terminal, error) {

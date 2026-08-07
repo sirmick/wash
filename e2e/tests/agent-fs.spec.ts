@@ -102,6 +102,26 @@ test.describe('agent terminal capability', () => {
     await expect(term.locator('.xterm-rows')).toBeVisible();
   });
 
+  // A command that finishes immediately — the common case, and the one
+  // that looked broken: the pty and its channel are gone before anyone can
+  // watch, so the transcript must keep the RESULT rather than an empty
+  // frame. Reported from real use: "it works perfectly, but not as
+  // described".
+  test('a finished command leaves its output in the transcript', async ({ page, router }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'wash-agentterm-done-'));
+    writeFileSync(join(dir, 'unmistakable.txt'), 'x');
+    const win = await startAgentIn(page, router.url, dir);
+
+    await ask(win, page, 'runcmd ls');
+    const term = win.locator('[data-testid="agent-terminal"]');
+    await expect(term).toBeVisible({ timeout: 30_000 });
+    // The output survives the pty it came from…
+    await expect(term.locator('[data-testid="agent-terminal-output"]')).toContainText(
+      'unmistakable.txt', { timeout: 20_000 });
+    // …and so does how it ended.
+    await expect(term).toContainText('exit 0', { timeout: 10_000 });
+  });
+
   // The command runs in the session's folder, not agentd's — the cd happens
   // inside the child, so this is the assertion that the wrapper works.
   test('the command runs in the session folder', async ({ page, router }) => {

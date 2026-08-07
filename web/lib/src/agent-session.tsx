@@ -16,6 +16,7 @@ import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
 import { Markdown } from './markdown';
 import { Terminal } from './terminal';
+import { WASH_SCROLL_CLASS } from './scrollbars';
 
 /** One line in a transcript, as agentd publishes it. */
 export interface AgentEvent {
@@ -408,7 +409,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
               />
             </Show>
 
-            <Show when={e.kind === 'terminal' && e.channel}>
+            <Show when={e.kind === 'terminal'}>
               {/* A command the agent handed to wash, rendered LIVE on the
                   channel its pty writes to. Not a transcript of what
                   happened — the actual terminal, mid-run: it scrolls, it
@@ -435,11 +436,38 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                     'text-overflow': 'ellipsis',
                   }}
                 >
-                  $ {e.text ?? e.title ?? ''}
+                  $ {e.title ?? ''}
+                  <Show when={e.status && e.status !== 'running'}>
+                    <span style={{ opacity: '0.8' }}> — {e.status}</span>
+                  </Show>
                 </div>
-                <div style={{ height: '220px' }}>
-                  <Terminal channelId={e.channel} />
-                </div>
+                <Show
+                  when={e.channel}
+                  fallback={
+                    /* Finished: the pty is gone and so is its channel, so
+                       show what it PRODUCED. A command that ends quickly —
+                       or one the agent releases straight away — would
+                       otherwise leave an empty frame where its output
+                       should be. */
+                    <pre
+                      data-testid="agent-terminal-output"
+                      class={WASH_SCROLL_CLASS}
+                      style={{
+                        margin: 0,
+                        padding: '6px 8px',
+                        'max-height': '220px',
+                        overflow: 'auto',
+                        font: tokens.type.monoSm,
+                        'white-space': 'pre-wrap',
+                        'overflow-wrap': 'anywhere',
+                      }}
+                    >{e.text ?? ''}</pre>
+                  }
+                >
+                  <div style={{ height: '220px' }}>
+                    <Terminal channelId={e.channel} />
+                  </div>
+                </Show>
               </div>
             </Show>
 
