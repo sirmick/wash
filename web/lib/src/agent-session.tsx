@@ -560,6 +560,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
 
         <textarea
           ref={input}
+          data-testid="agent-composer"
           rows={2}
           value={draft()}
           disabled={!props.onSend}
