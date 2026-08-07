@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.12.0
+Version:        0.12.1
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,14 @@ fi
 exit 0
 
 %changelog
+* Thu Aug 06 2026 sirmick <sirmick@gmail.com> - 0.12.1-1
+- shell: a connection lost before the desktop finished painting no longer hides
+  behind the boot splash; the splash stands down on connection loss and the
+  connection banner outranks it, so "Reconnect now" is reachable.
+- router: the env.publish log line names the keys it accepted, not just a count.
+- test: the three long-standing e2e failures (reconnect + the two display
+  capstones) were real defects and are fixed, along with a false-pass in the
+  terminal burst soak; the e2e gate blocks pushes honestly again.
 * Thu Aug 06 2026 sirmick <sirmick@gmail.com> - 0.12.0-1
 - agent: wash runs coding agents itself over the Agent Client Protocol; new
   Agent app (com.wash.ai) with a launcher, a streaming transcript, markdown,
