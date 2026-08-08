@@ -1520,13 +1520,21 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 		b.behind = false
 		var replay []byte
 		if b.buf != nil {
-			replay = b.buf.Snapshot()
-			if b.buf.Truncated() {
-				// The ring wrapped while detached: the snapshot
-				// starts at an arbitrary byte, possibly mid-rune
-				// or mid-escape. Trim to a clean boundary so the
-				// replay doesn't open with garbage.
-				replay = realignReplay(replay)
+			// Video kinds get NO ring replay — the ring is a concatenation
+			// of framed WebP payloads and realignReplay's terminal-escape
+			// trimming would corrupt them; the app is nudged for a whole
+			// frame below (same rule as resyncChannel, REVIEW-X11-WAYLAND
+			// #6). Their ring still shrinks below: it grew while detached
+			// like any other.
+			if !isVideoKind(b.kind) {
+				replay = b.buf.Snapshot()
+				if b.buf.Truncated() {
+					// The ring wrapped while detached: the snapshot
+					// starts at an arbitrary byte, possibly mid-rune
+					// or mid-escape. Trim to a clean boundary so the
+					// replay doesn't open with garbage.
+					replay = realignReplay(replay)
+				}
 			}
 			// This shell is taking delivery of the history, so a ring
 			// grown during the disconnection has done its job — hand the
@@ -1561,7 +1569,13 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 		// unaffected. Video-kind resync is handled separately (Phase D).
 		if kind == wire.ChannelKindGeneric {
 			if err := s.WriteCtrl(wire.NewShellChannelResync(id, win, kind)); err != nil {
+				// Reset never reached the FE — leave the channel marked
+				// behind so the per-shell watchdog retries a full resync
+				// instead of live output resuming mid-stream.
+				b.behind = true
 				r.log("reattach resync channel %d: %v", id, err)
+				b.shellMu.Unlock()
+				continue
 			}
 		}
 		if len(replay) > 0 {
@@ -1569,10 +1583,32 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 			// transactional window as the Bind that preceded it —
 			// see replayBundleToShell for the same rule.
 			if err := s.WriteRawFrameClass(id, replay, wire.ClassInteractive); err != nil {
-				r.log("reattach replay channel %d: %v", id, err)
+				// The FE just got a reset (channel.resync) but the
+				// scrollback snapshot behind it was lost — without a
+				// retry the terminal sits WIPED until new output
+				// arrives. Mark the channel behind so the watchdog
+				// (behindWatchdogLoop → resyncChannel) re-sends
+				// reset + snapshot; a duplicate reset is harmless.
+				b.behind = true
+				r.log("reattach replay channel %d: %v — marked behind for watchdog resync", id, err)
+			} else if kind == wire.ChannelKindGeneric {
+				r.log("reattach replay channel %d: %d bytes conn=%d", id, len(replay), s.connID)
 			}
 		}
+		app := b.app
 		b.shellMu.Unlock()
+		// Video kinds got no replay — nudge the owning app (wash-display)
+		// to clear its per-surface delta state and re-emit a whole frame so
+		// the reattached canvas repaints instead of waiting for natural
+		// damage. Own goroutine: the app write is a network write and must
+		// not block the reattach sweep (same rule as resyncChannel).
+		if isVideoKind(kind) && app != nil {
+			go func(win, ch uint32) {
+				if err := app.WriteEvt(wire.NewEvtWindowForceFrame(win)); err != nil {
+					r.log("channel %d: reattach force-frame nudge failed: %v", ch, err)
+				}
+			}(win, id)
+		}
 	}
 }
 

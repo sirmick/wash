@@ -81,11 +81,29 @@ func TestRealignReplay(t *testing.T) {
 		{"utf8 then csi", "\x80\x800;31mred", "red"},
 		// Parameter run longer than the scan bound: untouched.
 		{"long digits", "12345678901234567890m", "12345678901234567890m"},
+		// Newline within the bound: cut through it — heals tears the
+		// heuristics can't see (torn OSC titles, a cut between ESC and
+		// '[', a lone final byte).
+		{"newline cut", "tail of torn line\nnext line", "next line"},
+		{"torn osc", "user@host: ~/src\x07$ ls\nclean", "clean"},
+		{"torn csi bracket head", "[38;2;120mtext\nok", "ok"},
+		{"newline first byte", "\nafter", "after"},
 	}
 	for _, c := range cases {
 		if got := realignReplay([]byte(c.in)); string(got) != c.want {
 			t.Errorf("%s: realignReplay(%q) = %q, want %q", c.name, c.in, got, c.want)
 		}
+	}
+}
+
+// A newline beyond the scan bound must NOT be cut to — alt-screen
+// output that redraws with \r or cursor motion could push the first
+// \n arbitrarily deep, and swallowing that much replay would trade a
+// garbage line for missing content. The fallback heuristics apply.
+func TestRealignReplayNewlineOutOfBound(t *testing.T) {
+	in := append(bytes.Repeat([]byte{'x'}, realignScanBytes), []byte("\nrest")...)
+	if got := realignReplay(in); !bytes.Equal(got, in) {
+		t.Errorf("out-of-bound newline: got %d bytes, want untouched %d", len(got), len(in))
 	}
 }
 
