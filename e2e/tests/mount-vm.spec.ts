@@ -236,6 +236,46 @@ test('chaos: killing the data ssh self-heals — a post-kill change still reache
   await expect(localFm.locator('[data-testid="fm-entry-chaos_30.txt"]')).toBeVisible({ timeout: 120_000 });
 });
 
+test('chaos: killing the watch ssh self-heals — B-side changes resume in the fm', async ({ remoteVm, page }) => {
+  test.setTimeout(300_000);
+  const connect = await connectToB(page, remoteVm.url);
+
+  await mountFolder(connect, REMOTE_DIR);
+
+  // Background a slow touch loop on B so files keep appearing across the kill —
+  // a file created AFTER the watch ssh dies proves the WATCH channel (not the
+  // data path) re-dialed `ssh wash-fswatchd` and re-subscribed the active watch.
+  await launchOnB(connect, 'com.wash.term');
+  const bterm = page.locator('.xterm').last();
+  await expect(bterm).toBeVisible({ timeout: 60_000 });
+  await expect(bterm).toContainText(/[$#>]/, { timeout: 30_000 });
+  await page.keyboard.type('for i in $(seq 1 60); do touch /home/wash/watch_$i.txt; sleep 1; done &');
+  await page.keyboard.press('Enter');
+
+  // Local fm on the mount; an early file confirms the watch channel is live.
+  await openLocalApp(page, /^Files$/);
+  const localFm = localFmWindow(page);
+  await expect(localFm).toBeVisible({ timeout: 30_000 });
+  await navFm(localFm, MOUNT_POINT);
+  await expect(localFm.locator('[data-testid="fm-entry-watch_3.txt"]')).toBeVisible({ timeout: 40_000 });
+
+  // Kill the watch ssh on A (the `ssh … wash-fswatchd` the fswatch service spawned)
+  // via a LOCAL terminal. The data path (a separate ssh -s sftp) survives, so
+  // recovery must come from the reconnecting remotewatch client re-dialing and
+  // re-subscribing — after which B-side creates surface in the fm again.
+  await openLocalApp(page, /^Terminal$/);
+  const aterm = page.locator('.xterm').last();
+  await expect(aterm).toBeVisible({ timeout: 30_000 });
+  await expect(aterm).toContainText(/[$#>]/, { timeout: 30_000 });
+  await page.keyboard.type('pkill -f wash-fswatchd');
+  await page.keyboard.press('Enter');
+
+  // A file created well after the kill must still surface live → the watch
+  // channel re-subscribed. (Without reconnect the fm would go stale until a
+  // manual re-list; this asserts push-based recovery.)
+  await expect(localFm.locator('[data-testid="fm-entry-watch_45.txt"]')).toBeVisible({ timeout: 120_000 });
+});
+
 // Lifecycle through the Settings "Remote" panel (the supervisor-vended panel,
 // docs/SETTINGS.md / docs/REMOTE.md §6.1): mount two of B's folders, assert the
 // panel lists the live session + both mounts, then tear them down FROM THE PANEL

@@ -50,7 +50,7 @@ type unmountCtlReq struct {
 // and tells com.wash.fswatch to stream that mountpoint's changes; the watch
 // channel is the service's to own (one per host, shared across watchers).
 type mountManager struct {
-	svc     *sdk.StateService[State]
+	svc     stateMutator // narrow slice of StateService (see supervisor.svc)
 	conn    *sdk.Conn
 	sshPath string
 	baseDir string
@@ -342,21 +342,31 @@ func killCmd(cmd *exec.Cmd) {
 	}
 }
 
+// setMount/removeMount are copy-on-write for the same reason as setHost: a
+// prior Mutate's shallow snapshot may still be marshaling st.Mounts' backing
+// array, so rebuild rather than overwrite an element / compact in place.
 func (m *mountManager) setMount(ms MountState) {
 	m.svc.Mutate(func(st *State) {
-		for i := range st.Mounts {
-			if st.Mounts[i].MountPoint == ms.MountPoint {
-				st.Mounts[i] = ms
-				return
+		out := make([]MountState, len(st.Mounts), len(st.Mounts)+1)
+		copy(out, st.Mounts)
+		replaced := false
+		for i := range out {
+			if out[i].MountPoint == ms.MountPoint {
+				out[i] = ms
+				replaced = true
+				break
 			}
 		}
-		st.Mounts = append(st.Mounts, ms)
+		if !replaced {
+			out = append(out, ms)
+		}
+		st.Mounts = out
 	})
 }
 
 func (m *mountManager) removeMount(mp string) {
 	m.svc.Mutate(func(st *State) {
-		out := st.Mounts[:0]
+		out := make([]MountState, 0, len(st.Mounts))
 		for _, x := range st.Mounts {
 			if x.MountPoint != mp {
 				out = append(out, x)

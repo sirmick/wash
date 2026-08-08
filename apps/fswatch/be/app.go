@@ -164,6 +164,13 @@ var openWatchChannel = func(host string) (io.ReadWriteCloser, error) {
 	cmd := exec.Command("ssh",
 		"-o", "BatchMode=yes",
 		"-o", "StrictHostKeyChecking=accept-new",
+		// Without keepalive a SILENT link death (NAT/conntrack drop, suspended
+		// laptop, cable pull) never errors: the far end just goes quiet, so the
+		// reconnecting Client's serve() scanner parks in read() forever and the
+		// connect loop never re-dials — live updates stop with no recovery. The
+		// data path (dialSFTP) already sets these; the watch path omitted them.
+		"-o", "ServerAliveInterval=15",
+		"-o", "ServerAliveCountMax=3",
 		host, "wash-fswatchd")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

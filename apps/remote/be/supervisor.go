@@ -34,7 +34,11 @@ func remoteSockPath() string {
 // the StateService the FE subscribes to. It also registers each host's
 // local relay socket with A's router (so a browser can attach it).
 type supervisor struct {
-	svc     *sdk.StateService[State]
+	// svc is the published-state mutator. Kept as the narrow stateMutator
+	// interface (like the discoverer) so a test can inject a fake that
+	// reproduces StateService's shallow-snapshot-then-marshal and prove the
+	// mutators below are copy-on-write safe.
+	svc     stateMutator
 	conn    *sdk.Conn // for RegisterPeer/UnregisterPeer with A's router
 	sshPath string    // injectable for tests
 	sockDir string    // dir holding per-host ssh -L unix sockets
@@ -433,21 +437,34 @@ func (s *supervisor) disconnect(host string) {
 }
 
 // setHost upserts a host's state (keyed by Host) and publishes.
+//
+// Copy-on-write: a prior Mutate's snapshot is a SHALLOW copy (StateService
+// doc) that may still be marshaling this slice's backing array on another
+// goroutine, so we rebuild the slice rather than write st.Hosts[i] in place —
+// an in-place write would data-race that concurrent marshal. Discovery's
+// publish already does this; setHost/removeHost/setMount/removeMount must too.
 func (s *supervisor) setHost(host string, hs HostState) {
 	s.svc.Mutate(func(st *State) {
-		for i := range st.Hosts {
-			if st.Hosts[i].Host == host {
-				st.Hosts[i] = hs
-				return
+		out := make([]HostState, len(st.Hosts), len(st.Hosts)+1)
+		copy(out, st.Hosts)
+		replaced := false
+		for i := range out {
+			if out[i].Host == host {
+				out[i] = hs
+				replaced = true
+				break
 			}
 		}
-		st.Hosts = append(st.Hosts, hs)
+		if !replaced {
+			out = append(out, hs)
+		}
+		st.Hosts = out
 	})
 }
 
 func (s *supervisor) removeHost(host string) {
 	s.svc.Mutate(func(st *State) {
-		out := st.Hosts[:0]
+		out := make([]HostState, 0, len(st.Hosts))
 		for _, h := range st.Hosts {
 			if h.Host != host {
 				out = append(out, h)

@@ -110,6 +110,12 @@ func (s *ShellSession) handlePeerAttach(m wire.ShellPeerAttach) error {
 	}
 	// Idempotent: one relay channel per (shell, origin). A repeated attach
 	// (buggy FE, reconnect) must not dial another socket + leak a channel.
+	// The check and the reservation happen under one lock hold: without the
+	// peerAttaching reservation, two concurrent attaches for one origin would
+	// both pass the peerChannels scan (the channel isn't tracked until after
+	// the dial) and both bind — the dial sits OUTSIDE the lock, so the scan
+	// alone is a TOCTOU. The reservation is released once the channel is
+	// tracked (or on any failure).
 	s.peerMu.Lock()
 	for _, b := range s.peerChannels {
 		if b.origin == m.Origin {
@@ -117,7 +123,17 @@ func (s *ShellSession) handlePeerAttach(m wire.ShellPeerAttach) error {
 			return nil
 		}
 	}
+	if _, attaching := s.peerAttaching[m.Origin]; attaching {
+		s.peerMu.Unlock()
+		return nil
+	}
+	s.peerAttaching[m.Origin] = struct{}{}
 	s.peerMu.Unlock()
+	defer func() {
+		s.peerMu.Lock()
+		delete(s.peerAttaching, m.Origin)
+		s.peerMu.Unlock()
+	}()
 	target, ok := s.router.lookupPeer(m.Origin)
 	if !ok {
 		s.router.log("peer attach %s: no registration", m.Origin)
