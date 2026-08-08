@@ -325,10 +325,12 @@ var (
 )
 
 func await(id string) any {
-	ch := make(chan any, 1)
 	pendingMu.Lock()
-	pending[id] = ch
+	ch := pending[id]
 	pendingMu.Unlock()
+	if ch == nil {
+		return nil
+	}
 	select {
 	case v := <-ch:
 		return v
@@ -441,6 +443,15 @@ func notify(out *bufio.Writer, params any) {
 	write(out, map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": params})
 }
 
+// request registers the reply slot BEFORE the bytes leave, so a response
+// that comes back faster than this goroutine gets rescheduled still finds
+// a waiter. Send-then-register (await after request) lost that race on a
+// loaded runner: deliver() saw no channel, dropped the reply, and the turn
+// hung its full 60s — the "stuck at working…" CI flake.
 func request(out *bufio.Writer, id int64, method string, params any) {
+	ch := make(chan any, 1)
+	pendingMu.Lock()
+	pending[fmt.Sprint(id)] = ch
+	pendingMu.Unlock()
 	write(out, map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
 }

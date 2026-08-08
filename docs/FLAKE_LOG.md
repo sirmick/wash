@@ -16,6 +16,70 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-08-08 — agent-spec trio: two send/complete races, root-caused and fixed
+
+**Seen during:** four consecutive CI `ci` runs on main/tags (0.13.0 →
+0.13.1). Never the same spec twice in a row, always an agent spec stuck
+with the fake adapter mid-turn:
+
+```
+0.13.0 main:  agent-fs.spec.ts:110  (terminal output never in transcript)
+mount-merge:  agent-session.spec.ts:98 + agent-fs.spec.ts:168  (stuck "working…")
+0.13.1 main:  term-wedge-recovery (see entry below)
+0.13.1 tag:   agent-fs.spec.ts:110 again
+```
+
+The v0.13.0 *tag* run — same tree as the failing main run — was green,
+which said "load window" from the start.
+
+**Mechanism 1 — agentd `ReleaseTerminal` deleted the record before closing
+the pty** (`apps/agentd/be/acpterm.go`). The transcript event is completed
+by the pty's `onClose`, which fires from the pty→channel copy goroutine's
+EOF drain — but `wait_for_exit` wakes on the *reaper's* `Done()`, which
+closes earlier. An agent that runs `wait_for_exit → output → release`
+(three fast local round trips) can beat the EOF drain; release then deleted
+`termAll[id]` and the late `completeTerminalEvent` found nil and returned
+silently. The event kept its dead channel, the FE mounted a live terminal
+on it, and `agent-terminal-output` never rendered. Fix: close *then*
+delete, plus a `termEarly` marker for the symmetric window where a command
+exits before `CreateTerminal` has registered the event's seq.
+
+**Mechanism 2 — the fake adapter sent before it listened**
+(`e2e/fixtures/acp-fake/main.go`). Every `request(...)` + `await(id)` pair
+wrote the JSON-RPC request first and registered the pending-reply channel
+after; `deliver()` drops a response with no waiter. agentd answers in
+sub-millisecond, so a preempted adapter goroutine lost the reply and the
+turn hung its full 60s — the spec's "working…" screenshot. Fix: `request`
+registers the slot before the bytes leave.
+
+**Result:** agent-fs + agent-session at `--repeat-each=3` green (42/42).
+Both were genuine races with mechanisms, not load noise — logged here
+because the *presentation* (early-position specs failing on a busy runner,
+green in isolation) looked exactly like the display-tier standing finding.
+
+---
+
+## 2026-08-08 — `term-wedge-recovery` burst soak: NEW signature, open
+
+**Seen during:** CI on the 0.13.1 main-branch run (the tag run failed on
+agent-fs instead — same tree). One red out of 477.
+
+Distinct from the 2026-08-06 vacuous-barrier entry (that fix held: the
+marker discipline worked). This time the terminal genuinely dropped the
+tail: rendered rows froze at burst line **~18003 of 20000** for the full
+45s barrier — 88 identical polls — while the **shell prompt, which comes
+after the burst, did render**. So frames between ~18003 and the prompt
+(including `${tag}-END`) were dropped between router and xterm and nothing
+repaired the gap. END should have been well inside the 256KB scrollback
+ring, so the open question is why no resync replayed it: either the channel
+never got marked `behind` for the drop window, or the watchdog resync never
+fired. That is the live-path cousin of the reattach-path fix that merged in
+`term-close-19` (c06a2d5). Not reproduced locally yet; one occurrence.
+Next hit: pull the router.log attachment and look for `behind`/resync lines
+around the freeze.
+
+---
+
 ## 2026-08-06 — `term-wedge-recovery` burst soak: the barrier was vacuous
 
 **Seen during:** CI on **PR #20** (`outstanding-agent-app-fixes`), the first

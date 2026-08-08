@@ -63,6 +63,11 @@ type terminal struct {
 var (
 	termMu  sync.Mutex
 	termAll = map[string]*terminal{}
+	// termEarly marks terminals whose pty died before CreateTerminal
+	// finished registering their transcript event — a command can exit in
+	// that gap. Registration checks it and completes the event it would
+	// otherwise have left "running" forever.
+	termEarly = map[string]bool{}
 )
 
 // CreateTerminal answers terminal/create.
@@ -126,8 +131,16 @@ func (h *hosted) CreateTerminal(ctx context.Context, req acp.CreateTerminalReque
 		}, time.Now())
 		termMu.Lock()
 		t.evSeq, t.key = ev.Seq, h.key
+		early := termEarly[id]
+		delete(termEarly, id)
 		termMu.Unlock()
 		pushEvent(h.conn, h.key, ev)
+		if early {
+			// The command already finished while the event was being
+			// registered — complete it now or it stays "running" with a
+			// dead channel.
+			h.completeTerminalEvent(id)
+		}
 	}
 	return acp.CreateTerminalResponse{TerminalID: id}, nil
 }
@@ -192,13 +205,22 @@ func (h *hosted) KillTerminal(_ context.Context, ref acp.TerminalRef) error {
 func (h *hosted) ReleaseTerminal(_ context.Context, ref acp.TerminalRef) error {
 	termMu.Lock()
 	t := termAll[ref.TerminalID]
-	delete(termAll, ref.TerminalID)
 	termMu.Unlock()
 	if t == nil {
 		return nil
 	}
 	log.Printf("agentd: terminal/release key=%s id=%s", h.key, t.id)
+	// Close BEFORE dropping the record. Close fires onClose →
+	// completeTerminalEvent (unless the pty's EOF path already did), and
+	// that needs the record to find the transcript event. Delete-first
+	// left the event stuck "running" on a dead channel whenever the
+	// agent's release outran the pty's EOF drain — an agent that runs
+	// wait_for_exit → output → release loses that race under load.
 	t.sess.CloseWithReason("agent released it")
+	termMu.Lock()
+	delete(termAll, ref.TerminalID)
+	delete(termEarly, ref.TerminalID)
+	termMu.Unlock()
 	return nil
 }
 
@@ -207,12 +229,20 @@ func (h *hosted) ReleaseTerminal(_ context.Context, ref acp.TerminalRef) error {
 // exits, whatever ended it — the agent releasing it, a kill, or the command
 // simply finishing.
 func (h *hosted) completeTerminalEvent(id string) {
-	termMu.Lock()
-	t := termAll[id]
-	termMu.Unlock()
-	if t == nil || t.evSeq == 0 || h.conn == nil {
+	if h.conn == nil {
 		return
 	}
+	termMu.Lock()
+	t := termAll[id]
+	if t == nil || t.evSeq == 0 {
+		// The pty beat CreateTerminal's registration to the finish line.
+		// Leave a marker so registration completes the event instead of
+		// dropping this exit on the floor.
+		termEarly[id] = true
+		termMu.Unlock()
+		return
+	}
+	termMu.Unlock()
 	text, truncated := t.sess.Output()
 	if truncated {
 		text = "…(earlier output dropped)\n" + text
