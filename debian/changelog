@@ -1,3 +1,27 @@
+wash (0.13.2-1) unstable; urgency=low
+
+  * term: a terminal no longer stops following its own output after a heavy
+    burst. The scrollback resync reset the xterm out of band, which jumped
+    xterm's asynchronous parse queue and detached the viewport — every byte
+    arrived and was parsed, but the screen stayed frozen thousands of lines
+    above the cursor until you scrolled. The reset now travels in band with
+    the data it is ordered against.
+  * agent: a finished session no longer sits on "working…" with a live Stop
+    button until the next turn. The response that ends a turn can overtake
+    the tail of that turn's own notification stream, and the late chunks were
+    re-marking the session busy after it had already finished.
+  * agent: an agent that runs a command, reads its output and releases the
+    terminal in quick succession keeps that command's output in the
+    transcript. Release dropped the record before the pty's exit could
+    complete the transcript entry, leaving a dead live-terminal frame.
+  * router: reconnect replay robustness — a truncated scrollback replay is
+    cut through its first newline, so a reattached terminal no longer opens
+    with a torn escape sequence rendered as garbage; a failed resync write
+    now retries via the watchdog instead of leaving the terminal wiped; and
+    video channels are nudged for a fresh frame rather than replayed.
+
+ -- sirmick <sirmick@gmail.com>  Sat, 08 Aug 2026 07:30:00 -0700
+
 wash (0.13.1-1) unstable; urgency=low
 
   * remote-fs: recover from a silent SSH link death on both the mount data

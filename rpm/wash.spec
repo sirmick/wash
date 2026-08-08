@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.13.1
+Version:        0.13.2
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,19 @@ fi
 exit 0
 
 %changelog
+* Sat Aug 08 2026 sirmick <sirmick@gmail.com> - 0.13.2-1
+- term: a terminal keeps following its own output after a heavy burst. The
+  resync reset the xterm out of band, jumping xterm's async parse queue and
+  detaching the viewport; it now travels in band with the data.
+- agent: a finished session no longer sits on "working..." until the next turn
+  (late notifications were re-marking it busy after the turn had ended).
+- agent: a command run, read and released in quick succession keeps its output
+  in the transcript (release dropped the record before the pty could complete
+  the entry).
+- router: reconnect replay robustness — truncated replays cut through the first
+  newline, failed resyncs retry via the watchdog, video channels get a fresh
+  frame instead of a corrupting ring replay.
+
 * Fri Aug 07 2026 sirmick <sirmick@gmail.com> - 0.13.1-1
 - remote-fs: recover from a silent SSH link death on both the mount data path
   and the shared watch channel (NAT/conntrack drop, suspend, cable pull now
