@@ -588,11 +588,28 @@ export const Terminal: Component<TerminalProps> = (props) => {
   // from the byte stream, so the snapshot bytes that arrive next (on the
   // same channel, in WS order) render correctly instead of being
   // concatenated mid-stream and leaving the terminal in a wrong mode.
+  //
+  // The reset goes through term.write() as RIS (ESC c) rather than
+  // term.reset(). Both end in the same Terminal.reset() — xterm wires the
+  // RIS escape to it — but the escape travels IN THE WRITE QUEUE, and
+  // that is the whole point. xterm's write() is asynchronous: it buffers
+  // and parses in timed chunks. term.reset() is synchronous, so a resync
+  // arriving while a large replay is still parsing jumped the queue and
+  // tore the buffer out from under the parser mid-drain. The visible
+  // result was a terminal that stopped following its own output: ydisp
+  // frozen near the top while ybase climbed to ~15k, so the viewport
+  // showed a stale window forever, with every byte present and parsed
+  // (docs/FLAKE_LOG.md 2026-08-08, term-wedge-recovery). Under a burst
+  // heavy enough to trigger several resyncs in a second this happened
+  // roughly one run in three.
+  //
+  // In-band, the reset lands exactly where it belongs in the stream: after
+  // the live bytes that preceded it, before the snapshot that follows.
+  // Which is the ordering this function's contract always claimed.
   const onResync = () => {
     if (!term) return;
-    term.reset();
     const seq = modesToSeq({ dec: { ...decModes }, keypad });
-    if (seq) term.write(seq);
+    term.write('\x1bc' + (seq ?? ''));
   };
   const unsubResync = channelId > 0
     ? window.wash.subscribeResyncFor(origin, channelId, onResync)

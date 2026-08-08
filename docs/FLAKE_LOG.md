@@ -59,7 +59,77 @@ green in isolation) looked exactly like the display-tier standing finding.
 
 ---
 
-## 2026-08-08 (later) — the burst failure has a mechanism: resync thrash
+## 2026-08-08 (resolved) — the burst failure: a synchronous `term.reset()` jumping xterm's write queue
+
+**Root-caused and fixed.** The two entries below were both looking at the
+wrong half of the system — the router was never losing anything.
+
+**Reproduced locally** (the squeeze the 2026-08-06 entry called for, turned
+up: *one* core, three busy-loop hogs, everything `taskset -c 0`):
+**7 failures in 21 runs (~33%)**. In isolation on an idle box it never
+fails, which is why it only ever showed up on 2-core CI.
+
+**The measurement that ended it.** Instrumenting the terminal FE to count
+bytes in, bytes handed to `term.write()`, and bytes the write-callback
+reported as parsed:
+
+```
+rendered:false   rx: 1067213   written: 1067213   parsed: 1067213
+buf: { length: 16292, baseY: 16263, viewportY: 542, rows: 29 }
+```
+
+Every byte arrived, was written, and was fully parsed — and the last chunk
+was the shell prompt that comes *after* the end marker. Nothing was lost
+anywhere. Across runs the split is perfectly clean:
+
+| | viewportY vs baseY |
+|---|---|
+| every passing run | `viewportY == baseY` (pinned to the bottom) |
+| every failing run | `viewportY` ≈ 46–542 while `baseY` ≈ 14k–16k |
+
+**The terminal was scrolled up, not wedged.** `toContainText` reads
+xterm's rendered rows, i.e. the viewport — so the spec sat watching a
+stale 29-row window ~15,000 lines above the output for its full 45s.
+
+**Mechanism.** `xterm.write()` is asynchronous — it buffers and parses in
+timed chunks. `term.reset()` is synchronous. The resync handler called
+`term.reset()` directly, so a resync landing while a large replay was
+still parsing **jumped the write queue** and reinitialised the buffer out
+from under the parser mid-drain; `ydisp` then stopped tracking `ybase` and
+the viewport never followed output again. A burst big enough to trigger
+several resyncs in one second hit that window about a third of the time.
+The FE comment claimed the ordering it needed ("run the resync callback
+synchronously, BEFORE the snapshot bytes that follow") — true at the
+dispatch layer, false inside xterm.
+
+**Fix** (`web/lib/src/terminal.tsx`): issue the reset **in band**, as the
+RIS escape `\x1bc` written through the same queue as the data, with the
+mode re-seed concatenated onto it. xterm wires RIS to the same
+`Terminal.reset()`, so the semantics are identical — but it now applies at
+its true position in the stream, after the bytes before it and before the
+snapshot after it. **20/20 green under the same squeeze** (10 probe runs
+with the viewport instrumented, all `viewportY == baseY`; 10 runs of the
+real spec, all ~4s where failures used to stall for 47s).
+
+**Adjacent, unfixed:** `clearScreen: () => term?.clear()` (Edit → Clear)
+is the same defect class — a synchronous xterm mutation that can jump the
+queue. It is user-paced rather than machine-paced so it is much harder to
+hit, and it has no e2e coverage, so it is left alone rather than changed
+blind. The in-band equivalent would be writing `\x1b[3J\x1b[H\x1b[2J`.
+
+**The lesson worth keeping:** never mutate xterm from outside the write
+stream. `write()` is a queue; `reset()`, `clear()` and friends are not.
+Anything that must be ordered with respect to the bytes has to travel
+*as* bytes.
+
+## 2026-08-08 (superseded) — the burst failure has a mechanism: resync thrash
+
+> **Superseded by the entry above.** The router-side reading here was
+> wrong: nothing was dropped, and the "contiguous hole" was a viewport
+> that had stopped following output. The resync *thrash* below is real and
+> still worth tuning — replaying a grown ring to an FE that is behind
+> because it is saturated is poor medicine — but it is a performance
+> smell, not the failure. Kept for the log.
 
 Third occurrence (CI run 31243202190, the agentd-fix push). Got the
 router.log out of the trace artifact this time, and it names the shape:
@@ -98,7 +168,14 @@ Worth noting the fix direction regardless of where the hole is: replaying
 a grown ring to an FE that is behind *because it is saturated* is the
 wrong medicine. A resync should replay a bounded tail, or back off.
 
-## 2026-08-08 — `term-wedge-recovery` burst soak: NEW signature, open
+## 2026-08-08 — `term-wedge-recovery` burst soak: NEW signature (CLOSED)
+
+> **Closed** by the `term.reset()` / write-queue fix at the top of this
+> file. The guesses in this entry ("frames dropped between router and
+> xterm", "no resync replayed it") were wrong in an instructive way: the
+> reading assumed that content missing from the DOM was content that never
+> arrived. For a terminal, the DOM is the *viewport* — absence there says
+> nothing about the buffer. That is what cost two entries and three CI runs.
 
 **Seen during:** CI on the 0.13.1 main-branch run (the tag run failed on
 agent-fs instead — same tree). One red out of 477.

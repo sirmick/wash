@@ -89,6 +89,15 @@ SGR reset) is exactly how a terminal ends up stuck in the wrong mode. So
   > **resync = terminal reset + the B2-tracked DECSET/keypad modes re-seeded +
   > the `realignReplay`-trimmed ring snapshot.**
 
+  The reset half must be issued **in band** — the FE writes RIS (`\x1bc`)
+  through `term.write()` rather than calling `term.reset()`. `write()` is a
+  queue that parses asynchronously; `reset()` is synchronous and jumps it,
+  so under a burst that triggers several resyncs a second it reinitialised
+  the buffer mid-parse and the viewport stopped following output — every
+  byte present and parsed, screen frozen ~15k lines above the cursor
+  (docs/FLAKE_LOG.md 2026-08-08). "Self-consistent" is a claim about
+  *ordering*, and ordering only holds for things that travel as bytes.
+
 This is *exactly the reattach replay path* (B2 mode re-seed + `realignReplay`
 torn-head trim + B3 reflow), promoted to a first-class operation the
 wedge-recovery path can trigger without a full reconnect. The only thing ever
@@ -138,7 +147,7 @@ work. A few terminal-shaped things are off that path and get an explicit call:
   terminal channel; supersedes the A4 band-aids.
 - **M2 — Fix B (non-blocking output + resync). ✓** The forward never blocks the
   child shell; a wedged channel is held byte-exact in the ring and recovered by
-  a `channel.resync` (FE `term.reset()` + mode re-seed + realigned snapshot) on
+  a `channel.resync` (FE in-band RIS reset + mode re-seed + realigned snapshot) on
   the next credit grant — no torn stream, no manual reload.
 - **M4 — Fix C/D (watchdog + visible recovery). ✓** `wsWriteTimeout` bounds
   every FE-bound write, so a dead-but-open client can't pin the per-shell

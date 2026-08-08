@@ -519,7 +519,11 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         // the FE was behind, to avoid a torn stream — docs/PTY_ROBUST.md,
         // Fix B). Run the channel's resync callback synchronously, BEFORE
         // the snapshot bytes that follow on the raw channel (same WS
-        // message order), so they render into a reset terminal.
+        // message order), so they render into a reset terminal. Dispatch
+        // order is only half of it — the subscriber has to keep that order
+        // inside its own renderer too, which is why the terminal issues
+        // the reset as an in-band escape rather than calling term.reset()
+        // (see web/lib/src/terminal.tsx onResync).
         // Logged (was silent): a resync means this channel was suppressed
         // and just recovered — the trail you want when chasing a terminal
         // that "went black" under an otherwise-healthy socket.
