@@ -41,6 +41,10 @@ test('top', async ({ page, router }) => {
   a slightly emptier shot instead of a hard failure — **except** a `.click()`
   on an element that may never exist, which blocks until the 60 s test timeout
   (this is exactly how the imageview "No images" bug manifested).
+- An app whose content is short leaves the frame half empty at the default
+  window size. Either give it more to say (the Agent shots) or drag the
+  bottom-right grip (`[data-testid="window-resize"]`) down to the content —
+  `resizeWinTo(page, w, width, height)` in the montage does this.
 
 ## Non-obvious things (read before you debug a blank shot)
 
@@ -68,6 +72,33 @@ root, so every open window re-skins. The five packs: `midnight` (default dark),
 `tokyo`, `seoul` (light), `copland` (Mac OS 9 light), `oslo` (dark slate). The
 `THEME` map in the capture assigns one per app so the README grid shows the
 range — same desktop, different packs.
+
+### The Agent shots run a real agent — with scripted words
+
+`agent.png` and the Agent window in the montage drive the **real**
+`com.wash.ai` + `agentd` stack against the e2e fake ACP adapter
+(`e2e/fixtures/acp-fake`, staged by `make` at `out/e2e/codex-acp` — hence
+`screenshots:` depends on that target). Everything in the frame is genuine:
+the transcript renderer, the markdown/table paths, the status bar, the
+session folder. Only the replies are posed.
+
+The seam is **`ACP_FAKE_SCRIPT=<file>`**, a JSON array of strings; the
+adapter streams the next entry per turn instead of its fixed test text. It
+is env-gated and off by default, so `make e2e-test` — which asserts on that
+fixed text — is unaffected. Keyword turns (`runcmd`, `readfile`, `writefile`,
+anything containing "ask") still take their own paths, so a script can mix
+posed prose with real capability exercises.
+
+Two rules learned the hard way:
+
+- **Wait for the turn to END** (`agent-stop` gone), not just for the reply
+  text. Shooting mid-turn puts a "working… / Stop" row in the frame, which
+  reads as a hung agent.
+- The Agent capture lives in its **own `test.describe`** with no
+  `WASH_FM_ROOT`. The folder picked in the launcher becomes the adapter's
+  real working directory, so it has to be a genuine host path — under the
+  shared sandbox root the session starts in a confined path that the
+  adapter process cannot actually chdir into.
 
 ### Deterministic discovery for the Connect shot
 

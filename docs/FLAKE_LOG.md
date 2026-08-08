@@ -59,6 +59,45 @@ green in isolation) looked exactly like the display-tier standing finding.
 
 ---
 
+## 2026-08-08 (later) — the burst failure has a mechanism: resync thrash
+
+Third occurrence (CI run 31243202190, the agentd-fix push). Got the
+router.log out of the trace artifact this time, and it names the shape:
+
+```
+channel 6: FE behind — suppressing live output until resync
+channel 6: resync complete ( 40712 bytes replayed)
+channel 6: FE behind — suppressing live output until resync
+channel 6: resync complete ( 95312 bytes replayed)
+… behind → resync ×7, replay growing 40K → 95K → 146K → 226K → 328K → 355K
+channel 6: resync complete (277170 bytes replayed)   ← last line, then silence
+```
+
+**The recovery is feeding the problem.** The FE falls behind, so the
+router suppresses live output and replays the WHOLE ring; the ring has
+grown (GrowFor fires while `behind`) so each replay is bigger than the
+last; a 300KB replay is itself more than the FE can absorb, so it is
+behind again the moment it lands. Seven rounds in ~1.5s, each replaying
+more than the one before.
+
+What lands in the DOM matches: the viewport sits at burst line ~19113 of
+20000 **with the shell prompt after it** — so the tail of the burst
+(19114…20000 and `-END`) was dropped, while output produced *later* (the
+prompt) was forwarded live. A contiguous mid-stream hole with the stream
+healthy on both sides of it.
+
+Not yet pinned: exactly which window drops that hole.
+`resyncChannel` holds `b.shellMu` across snapshot → send → `behind=false`,
+and the forward path takes the same lock, so the obvious
+snapshot-vs-clear gap should not exist. Candidates: the credit-gated
+suppression path dropping without re-arming `behind`; or FE-side loss
+under a 300KB replay. Reproducing needs the CPU squeeze from the
+2026-08-06 entry (2 cores + hogs), not a healthy dev box.
+
+Worth noting the fix direction regardless of where the hole is: replaying
+a grown ring to an FE that is behind *because it is saturated* is the
+wrong medicine. A resync should replay a bounded tail, or back off.
+
 ## 2026-08-08 — `term-wedge-recovery` burst soak: NEW signature, open
 
 **Seen during:** CI on the 0.13.1 main-branch run (the tag run failed on

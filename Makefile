@@ -1098,7 +1098,7 @@ e2e-test: test-app
 # an X client (xclock) on the host — run `make wash` first to build the
 # compositor, otherwise that one shot self-skips.
 .PHONY: screenshots
-screenshots: test-app
+screenshots: test-app $(OUT)/e2e/codex-acp
 	cd e2e && $(PNPM) install --ignore-workspace --silent
 	cd e2e && $(PNPM) exec playwright install chromium
 	cd e2e && $(PNPM) exec playwright test -c playwright.screenshots.config.ts

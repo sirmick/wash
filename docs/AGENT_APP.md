@@ -177,6 +177,15 @@ New `apps/agentd/be/acp.go`:
 - **`session/update` → the existing four wire states**
   (`running | working | needs-input | done`). Deliberate: the pivot must be
   invisible in the sidebar on day one.
+  - **Narration only implies `working` inside an open turn** (`hosted.turnMu`
+    / `beginTurn` / `endTurn` / `narrated`). The ACP conn hands a response
+    straight from the read loop while notifications go through an ordering
+    queue, so the response that ends a turn routinely overtakes the tail of
+    that turn's own `session/update` stream. An unconditional
+    "the agent spoke, so it is working" write therefore fired *after* `done`
+    and left finished sessions pinned on "working…" with a live Stop button
+    until the next turn. Late chunks still reach the transcript; they no
+    longer claim the agent is busy.
 - **`session/request_permission` → `ask.go`** through M0's source route.
 - **Liveness is real now.** We own the process, so exit is a fact rather
   than a 60s inference. The TTL sweep stays only as a backstop.

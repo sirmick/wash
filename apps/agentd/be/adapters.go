@@ -256,16 +256,16 @@ func promptHosted(h *hosted, text string) {
 	if h.conn != nil {
 		pushEvent(h.conn, h.key, appendPrompt(h.key, text, time.Now()))
 	}
-	h.setState("working", "")
+	h.beginTurn()
 	res, err := h.client.Prompt(context.Background(), h.sessionID, acp.Text(text))
 	switch {
 	case err != nil:
 		log.Printf("agentd: acp prompt key=%s: %v", h.key, err)
-		h.setState("done", "error")
+		h.endTurn("done", "error")
 	case res.StopReason == acp.StopCancelled:
-		h.setState("done", "cancelled")
+		h.endTurn("done", "cancelled")
 	default:
-		h.setState("done", res.StopReason)
+		h.endTurn("done", res.StopReason)
 	}
 }
 

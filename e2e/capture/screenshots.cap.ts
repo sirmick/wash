@@ -85,6 +85,13 @@ function seedShowcase(root: string): void {
   writeFileSync(join(root, 'Projects', 'hello.go'),
     'package main\n\nimport "fmt"\n\nfunc main() {\n\tfmt.Println("hello from wash")\n}\n');
   writeFileSync(join(root, 'Music', 'playlist.m3u'), '#EXTM3U\n');
+  // Tracks for the native Music player shot: medialib titles are filename
+  // stems, so empty files with good names are a full library to the list.
+  for (const t of [
+    '01 Neon Skyline.mp3', '02 Cassette Sunset.mp3', '03 Midnight Drive.mp3',
+    '04 Signal Path.mp3', '05 Copper Wire.flac', '06 Terminal Velocity.mp3',
+    '07 Low Orbit.ogg', '08 Afterglow.mp3',
+  ]) writeFileSync(join(root, 'Music', t), '');
   writeFileSync(join(root, '.profile'), 'export EDITOR=wash-edit\n');
   seedPictures(join(root, 'Pictures'));
 }
@@ -137,14 +144,41 @@ mkdirSync(ROOT, { recursive: true });
 seedShowcase(ROOT);
 const PICS = join(ROOT, 'Pictures');
 
+// The Agent shots drive the real com.wash.ai window against the e2e fake
+// ACP adapter (staged on PATH as codex-acp), with its replies posed via the
+// ACP_FAKE_SCRIPT seam — the UI, transcript renderer, status bar and agentd
+// plumbing in the shot are all real; only the words are scripted.
+const FAKE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'out', 'e2e');
+const AGENT_SCRIPTS = join(tmpdir(), 'wash-shot-agent');
+mkdirSync(AGENT_SCRIPTS, { recursive: true });
+const MONTAGE_SCRIPT = join(AGENT_SCRIPTS, 'montage.json');
+writeFileSync(MONTAGE_SCRIPT, JSON.stringify([
+  'Tidied **Downloads** — 34 files, 2.1 GB reclaimed:\n\n' +
+  '- 21 stale installers → `Archive/2026-07/`\n' +
+  '- 9 duplicate images removed (kept the largest of each)\n' +
+  '- 4 PDFs you opened this week left in place\n\n' +
+  'Nothing was deleted outside `~/Downloads`. Want me to do this weekly?\n',
+]));
+const AGENT_SCRIPT = join(AGENT_SCRIPTS, 'agent.json');
+writeFileSync(AGENT_SCRIPT, JSON.stringify([
+  'The flake is in `checkout_test.go` — the test asserts on wall-clock order:\n\n' +
+  '```go\nif events[0].At.After(events[1].At) {\n\tt.Fatal("out of order")\n}\n```\n\n' +
+  '- Both events are stamped in the same millisecond on fast runners\n' +
+  '- The queue only guarantees *delivery* order, not timestamp order\n\n' +
+  'Comparing sequence numbers instead of timestamps fixes it.\n',
+  'Done — `checkout_test.go` now compares `events[i].Seq`. ' +
+  'The full package is green:\n\n' +
+  '| Package | Result |\n| --- | ---: |\n| store/checkout | ok · 41 tests |\n| store/cart | ok · 17 tests |\n',
+]));
+
 // Every app to stage into the per-test apps dir. NOTE: passing `apps` REPLACES
 // the fixture's default core set, so the shell's own apps (session/about/notify)
 // must be listed explicitly or the desktop never mounts. netd is the net app's
 // backend singleton (auto-spawned when its binary is present).
 const STAGE = ['session', 'about', 'test', 'notify',
-  'fm', 'term', 'edit', 'washamp', 'net', 'netd', 'settings', 'top',
+  'fm', 'term', 'edit', 'washamp', 'music', 'audio', 'net', 'netd', 'settings', 'top',
   'services', 'packages', 'disks', 'journal', 'display',
-  'radio', 'imageview', 'connect', 'remote'] as const;
+  'radio', 'imageview', 'connect', 'remote', 'ai', 'agentd'] as const;
 
 // Theme each app shot with a different pack so the README grid shows the
 // range. The montage + a few apps stay on the default (Midnight) dark.
@@ -152,7 +186,7 @@ const STAGE = ['session', 'about', 'test', 'notify',
 // copland (Mac OS 9), oslo (cool slate). See web/lib/src/packs.ts.
 const THEME: Record<string, string> = {
   edit: 'tokyo', about: 'tokyo', radio: 'tokyo',
-  settings: 'seoul', services: 'seoul', imageview: 'seoul',
+  settings: 'seoul', services: 'seoul', imageview: 'seoul', music: 'seoul',
   packages: 'copland', connect: 'copland',
   net: 'oslo', top: 'oslo', disks: 'oslo',
 };
@@ -165,6 +199,12 @@ test.describe('screenshots', () => {
       // imageview can be pointed at a known folder inside it.
       WASH_FM_ROOT: ROOT,
       WASH_IMAGEVIEW_DIR: PICS,
+      // The native Music player's library root (medialib.DefaultDir) — it
+      // auto-scans this on first launch, so the shot needs no picker dance.
+      WASH_MUSIC_DIR: join(ROOT, 'Music'),
+      // The montage's Agent window: fake adapter on PATH + posed replies.
+      PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}`,
+      ACP_FAKE_SCRIPT: MONTAGE_SCRIPT,
       // Deterministic LAN peers for the Connect "On your network" shot; the
       // no-advertise flag keeps headless runs from broadcasting mDNS. Only the
       // remote/connect apps read these — harmless for every other shot.
@@ -202,6 +242,19 @@ test.describe('screenshots', () => {
   async function settle(page: Page, ms = 700): Promise<void> {
     await page.waitForTimeout(ms);
   }
+  // Drag the bottom-right grip so the window ends up width × height. Used
+  // where a default-sized window would leave the shot mostly empty pane.
+  async function resizeWinTo(page: Page, w: Locator, width: number, height: number): Promise<void> {
+    const grip = w.locator('[data-testid="window-resize"]');
+    const g = await grip.boundingBox();
+    const b = await w.boundingBox();
+    if (!g || !b) return;
+    await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(b.x + width, b.y + height, { steps: 12 });
+    await page.mouse.up();
+  }
+
   // Drag a window so its top-left lands at (x, y). No-op for chromeless
   // windows (washamp) — they have no .wash-titlebar to grab.
   async function moveWinTo(page: Page, w: Locator, x: number, y: number): Promise<void> {
@@ -243,6 +296,24 @@ test.describe('screenshots', () => {
     await expect(win(page, 'wash-app-fm')).toBeVisible();
     await settle(page, 300);
     await moveWinTo(page, win(page, 'wash-app-fm'), 612 + jit(48), 452 + jit(34));
+
+    // The Agent — wash's day-one AI seat — lower-left, mid-conversation
+    // (the fake adapter on PATH answers with the posed MONTAGE_SCRIPT reply).
+    await openApp(page, 'com.wash.ai');
+    const ai = win(page, 'wash-app-ai');
+    await expect(ai).toBeVisible();
+    await ai.locator('select').first().selectOption('codex');
+    await ai.getByRole('button', { name: 'Start session' }).click();
+    const composer = ai.locator('textarea');
+    await expect(composer).toBeVisible({ timeout: 20_000 });
+    await composer.fill('Tidy my Downloads folder — archive anything older than a month.');
+    await composer.press('Enter');
+    await expect(ai.getByText(/Want me to do this weekly\?/)).toBeVisible({ timeout: 20_000 });
+    // Let the turn finish before posing it — a "working… / Stop" composer
+    // in the hero shot reads as a hung agent.
+    await expect(ai.locator('[data-testid="agent-stop"]')).toHaveCount(0, { timeout: 20_000 });
+    await resizeWinTo(page, ai, 680, 340);
+    await moveWinTo(page, ai, 40 + jit(24), 596 + jit(18));
 
     // Washamp last → frontmost & fully visible at its top-left spawn
     // (chromeless, can't be moved).
@@ -318,12 +389,24 @@ test.describe('screenshots', () => {
     await w.screenshot({ path: join(SHOTS, 'edit.png') });
   });
 
-  test('music', async ({ page, router }) => {
+  test('washamp', async ({ page, router }) => {
     await bootDesktop(page, router.url);
     await openApp(page, 'com.wash.washamp');
     const w = win(page, 'wash-app-washamp');
     await expect(w).toBeVisible();
     await settle(page, 1200); // let Webamp paint its skin
+    await w.screenshot({ path: join(SHOTS, 'washamp.png') });
+  });
+
+  test('music', async ({ page, router }) => {
+    await bootThemed(page, router, 'music');
+    await openApp(page, 'com.wash.music');
+    const w = win(page, 'wash-app-music');
+    await expect(w).toBeVisible();
+    // WASH_MUSIC_DIR points at the seeded library; the first-launch scan
+    // fills the track list on its own.
+    await expect(w.locator('[data-testid="track-list"]')).toContainText('Neon Skyline');
+    await settle(page);
     await w.screenshot({ path: join(SHOTS, 'music.png') });
   });
 
@@ -508,5 +591,76 @@ test.describe('screenshots', () => {
     // No in-test cleanup: router teardown kills wash-term, whose PTY hangup
     // takes the backgrounded chromium with it. The next run's `rm -rf` +
     // --hide-crash-restore-bubble handle any dirty-profile leftover.
+  });
+});
+
+// --- the Agent window, in its own router -------------------------------------
+// Separate describe: this one must NOT be confined by WASH_FM_ROOT — the
+// folder picked in the launcher becomes the adapter's real working
+// directory, so it has to be a genuine host path.
+test.describe('agent screenshot', () => {
+  const PROJ = join(tmpdir(), 'wash-shot-agent', 'webshop');
+  rmSync(PROJ, { recursive: true, force: true });
+  mkdirSync(join(PROJ, 'store'), { recursive: true });
+  writeFileSync(join(PROJ, 'go.mod'), 'module example.com/webshop\n\ngo 1.24\n');
+  writeFileSync(join(PROJ, 'store', 'checkout_test.go'),
+    'package store\n\n// posed fixture for the screenshot\n');
+
+  test.use({ routerOpts: {
+    apps: ['session', 'about', 'notify', 'ai', 'agentd'],
+    extraEnv: {
+      PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}`,
+      ACP_FAKE_SCRIPT: AGENT_SCRIPT,
+    },
+  } });
+
+  test('agent', async ({ page, router }) => {
+    test.setTimeout(60_000);
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    await page.locator('button[title="Apps"]').click();
+    await page.locator('[data-testid="start-menu-com.wash.ai"]').click();
+    const w = page.locator('.wash-window', { has: page.locator('wash-app-ai') });
+    await expect(w).toBeVisible();
+
+    // Point the session at the posed project folder, then start.
+    await w.getByRole('button', { name: 'Choose…' }).click();
+    const picker = page.locator('[data-testid="ai-folder-picker"]');
+    await expect(picker).toBeVisible();
+    const bar = picker.locator('[data-testid="fp-path"]');
+    await bar.click();
+    await bar.fill(PROJ);
+    await bar.press('Enter');
+    await picker.locator('[data-testid="fp-confirm"]').click();
+    await expect(picker).toBeHidden();
+    await w.locator('select').first().selectOption('codex');
+    await w.getByRole('button', { name: 'Start session' }).click();
+    const composer = w.locator('textarea');
+    await expect(composer).toBeVisible({ timeout: 20_000 });
+
+    // Two posed turns (AGENT_SCRIPT replies): diagnose, then fix + verify.
+    await composer.fill('Why is the checkout test flaky?');
+    await composer.press('Enter');
+    await expect(w.getByText('Comparing sequence numbers')).toBeVisible({ timeout: 20_000 });
+    await composer.fill('Fix it and re-run the tests.');
+    await composer.press('Enter');
+    await expect(w.getByText('store/checkout')).toBeVisible({ timeout: 20_000 });
+    // The turn must be OVER before the shot — otherwise the composer row
+    // shows the "working… / Stop" state, which reads as a hung agent.
+    await expect(w.locator('[data-testid="agent-stop"]')).toHaveCount(0, { timeout: 20_000 });
+
+    // Size the window to the conversation: at the default height the
+    // transcript is half empty pane.
+    const grip = w.locator('[data-testid="window-resize"]');
+    const g = await grip.boundingBox();
+    const b = await w.boundingBox();
+    if (g && b) {
+      await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(b.x + 760, b.y + 530, { steps: 12 });
+      await page.mouse.up();
+    }
+    await page.waitForTimeout(700);
+    await w.screenshot({ path: join(SHOTS, 'agent.png') });
   });
 });

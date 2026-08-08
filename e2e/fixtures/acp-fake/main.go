@@ -132,7 +132,33 @@ func main() {
 var (
 	cancelled atomic.Bool
 	reqSeq    atomic.Int64
+	// scriptN indexes into the ACP_FAKE_SCRIPT replies (see runTurn).
+	scriptN atomic.Int64
 )
+
+// scriptedReply returns the next canned reply from the JSON string array in
+// $ACP_FAKE_SCRIPT, if the env is set — the seam the screenshot capture uses
+// to pose a natural-looking conversation without touching what the e2e
+// suite asserts on. Returns "", false in normal (test) runs.
+func scriptedReply() (string, bool) {
+	path := os.Getenv("ACP_FAKE_SCRIPT")
+	if path == "" {
+		return "", false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	var replies []string
+	if json.Unmarshal(raw, &replies) != nil || len(replies) == 0 {
+		return "", false
+	}
+	n := int(scriptN.Add(1)) - 1
+	if n >= len(replies) {
+		n = len(replies) - 1
+	}
+	return replies[n], true
+}
 
 func runTurn(out *bufio.Writer, m map[string]any) {
 	cancelled.Store(false)
@@ -280,6 +306,26 @@ func runTurn(out *bufio.Writer, m map[string]any) {
 		}
 		notify(out, chunk("WROTE<<"+body+">>"))
 		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
+	}
+
+	// Scripted mode (screenshot capture only): stream the next canned
+	// reply instead of the fixed test text. Keywords above still work, so
+	// a script can mix prose turns with runcmd/readfile turns.
+	if scripted, ok := scriptedReply(); ok {
+		for _, line := range strings.SplitAfter(scripted, "\n") {
+			if cancelled.Load() {
+				break
+			}
+			if line != "" {
+				notify(out, chunk(line))
+			}
+		}
+		stop := "end_turn"
+		if cancelled.Load() {
+			stop = "cancelled"
+		}
+		reply(out, id, map[string]any{"stopReason": stop})
 		return
 	}
 

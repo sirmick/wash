@@ -89,6 +89,52 @@ type hosted struct {
 	// detached means no window is pointing at this session. It keeps
 	// running; the roster row is how the user gets back to it.
 	detached bool
+
+	// turnMu guards turnLive, and — crucially — is held ACROSS the
+	// state write that depends on it, so the two orderings below cannot
+	// interleave.
+	//
+	// The ACP conn delivers a response straight from the read loop while
+	// notifications go through an ordering queue, so the response that
+	// ends a turn can (and in practice does) overtake the tail of that
+	// turn's own session/update stream. Since "the agent said something"
+	// means working, those late chunks used to flip the row back to
+	// working AFTER the turn had finished — the session then sat on
+	// "working…" with a Stop button forever, until the next turn.
+	//
+	// So working is only inferred from narration while a turn is
+	// actually open. Late chunks still land in the transcript; they just
+	// no longer claim the agent is busy.
+	turnMu   sync.Mutex
+	turnLive bool
+}
+
+// beginTurn opens a turn: narration counts as "working" from here.
+func (h *hosted) beginTurn() {
+	h.turnMu.Lock()
+	defer h.turnMu.Unlock()
+	h.turnLive = true
+	h.setState("working", "")
+}
+
+// endTurn closes a turn and records how it ended. Holding turnMu across
+// the write is what makes it final: a SessionUpdate racing this either
+// runs entirely before (and is overwritten here) or sees a closed turn.
+func (h *hosted) endTurn(state, reason string) {
+	h.turnMu.Lock()
+	defer h.turnMu.Unlock()
+	h.turnLive = false
+	h.setState(state, reason)
+}
+
+// narrated reports that the agent said or did something. It only moves the
+// row to working inside an open turn.
+func (h *hosted) narrated() {
+	h.turnMu.Lock()
+	defer h.turnMu.Unlock()
+	if h.turnLive {
+		h.setState("working", "")
+	}
 }
 
 var (
@@ -250,10 +296,11 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 	switch n.Update.SessionUpdate {
 	case acp.UpdateAgentMessageChunk, acp.UpdateAgentThoughtChunk,
 		acp.UpdateToolCall, acp.UpdateToolCallUpdate, acp.UpdatePlan:
-		// Anything the agent says or does means it is working. A pending
-		// permission overrides this from RequestPermission, and the turn
-		// ending overrides it from prompt().
-		h.setState("working", "")
+		// Anything the agent says or does means it is working — but only
+		// while a turn is open. A response can overtake the tail of its
+		// own notification stream, so an unconditional write here left
+		// finished sessions stuck on "working…" (see turnMu).
+		h.narrated()
 	case acp.UpdateUsage:
 		if n.Update.Size > 0 || n.Update.Used > 0 {
 			hostedMu.Lock()
@@ -383,7 +430,9 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 	}
 
 	h.setState("needs-input", "permission")
-	defer h.setState("working", "")
+	// Back to working once answered — but through the turn gate, so an
+	// answer that lands after the turn already ended cannot resurrect it.
+	defer h.narrated()
 
 	answer := make(chan string, 1)
 	queued := enqueueAsk(askSpec{

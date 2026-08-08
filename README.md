@@ -10,7 +10,7 @@ home server, a Raspberry Pi, or a RISC-V emulator compiled to WASM.**
 > in ~3 seconds. The whole thing is ~24 MiB of static assets served
 > straight from GitHub Pages — no backend, no relay, no account.
 
-![A wash desktop: a Washamp audio player, a Terminal, and the Files window open over the wallpaper, with the system sidebar (workspace pager + widgets) on the right and a taskbar along the bottom](docs/screenshots/desktop-montage.png)
+![A wash desktop: a Washamp audio player, a Terminal, the Files window and an Agent session open over the wallpaper, with the system sidebar (workspace pager + widgets) on the right and a taskbar along the bottom](docs/screenshots/desktop-montage.png)
 
 wash is **not** pixel-streamed remote desktop (no VNC, no RDP, no video
 codec). Every surface is HTML the desktop owns and renders locally;
@@ -20,7 +20,7 @@ windows, a workspace pager, a system sidebar — where the window
 manager runs *in the browser* and each application is an independent,
 one-file program that a transport-only **router** supervises.
 
-License: **AGPL-3.0**. Current version: **0.9.4**.
+License: **AGPL-3.0**. Current version: **0.13.1**.
 
 ---
 
@@ -71,6 +71,12 @@ turns it into a **single static binary plus a browser**:
   monitor reads `/proc`, the package manager drives `apt`/`dnf`/`apk`,
   the service manager drives `systemd`/`openrc`/`procd`. No
   reimplemented userland.
+- **AI is a seat at the desk, not a chat box.** The **Agent** app speaks
+  [ACP](https://agentclientprotocol.com) to a local adapter (Claude Code,
+  Codex, Gemini CLI), and wash — not the agent — owns what it touches:
+  the files it reads and writes are confined to the folder you picked,
+  and the commands it runs are wash PTYs you can watch live and type
+  into. Sessions outlive their window and show up on the sidebar roster.
 - **Other machines, too.** Point the **Connect** app at `user@host`
   and that machine's apps composite into your desktop over plain SSH —
   one connection, no extra ports, each host colour-tinted. See
@@ -86,12 +92,14 @@ turns it into a **single static binary plus a browser**:
 
 | | |
 |---|---|
-| **Files** — tree + preview, live watch, mutations · *Midnight theme* | **Terminal** — tabbed xterm.js over real local PTYs · *Midnight theme* |
-| ![file manager](docs/screenshots/fm.png) | ![terminal](docs/screenshots/term.png) |
-| **Editor** — CodeMirror 6, file tree, tabs, embedded terminal · *Tokyo theme* | **Image Viewer** — thumbnail list + zoom/pan, bytes over the wire · *Seoul theme* |
-| ![editor](docs/screenshots/edit.png) | ![image viewer](docs/screenshots/imageview.png) |
+| **Agent** — an ACP agent with a seat on the desktop · *Midnight theme* | **Files** — tree + preview, live watch, mutations · *Midnight theme* |
+| ![agent](docs/screenshots/agent.png) | ![file manager](docs/screenshots/fm.png) |
+| **Terminal** — tabbed xterm.js over real local PTYs · *Midnight theme* | **Editor** — CodeMirror 6, file tree, tabs, embedded terminal · *Tokyo theme* |
+| ![terminal](docs/screenshots/term.png) | ![editor](docs/screenshots/edit.png) |
+| **Image Viewer** — thumbnail list + zoom/pan, bytes over the wire · *Seoul theme* | **Music** — native player, one folder, recursive list · *Seoul theme* |
+| ![image viewer](docs/screenshots/imageview.png) | ![music](docs/screenshots/music.png) |
 | **Washamp** — a Webamp (Winamp-skinned) audio player · *Midnight theme* | **Radio** — curated SomaFM + Radio Browser, ICY metadata · *Tokyo theme* |
-| ![washamp](docs/screenshots/music.png) | ![radio](docs/screenshots/radio.png) |
+| ![washamp](docs/screenshots/washamp.png) | ![radio](docs/screenshots/radio.png) |
 | **System Monitor** — live `/proc` CPU/mem/net, per-process kill · *Oslo theme* | **Disks** — partitions, md/LVM/btrfs/ZFS, SMART · *Oslo theme* |
 | ![system monitor](docs/screenshots/top.png) | ![disks](docs/screenshots/disks.png) |
 | **Services** — systemd/openrc/procd units, start/stop · *Seoul theme* | **Packages** — apt/dnf/apk search, install, upgrade · *Copland theme* |
@@ -271,6 +279,7 @@ Windowed apps (open from the launcher):
 
 | App | ID | Surface | What it does |
 |---|---|---|---|
+| **ai** — Agent | `com.wash.ai` | window | AI agent session — talks [ACP](https://agentclientprotocol.com) to a local adapter (Claude Code, Codex, Gemini CLI…), so the agent is a *desktop app*, not a tab in a browser. Streamed transcript with markdown / tables / images / tool calls, inline permission prompts (or per-session yolo), the agent's own modes, settings and slash commands rendered as real controls, a folder picker that becomes the session's sandbox, and session resume from history. Files run, read and written go through wash — see the `agentd` service below. |
 | **fm** — Files | `com.wash.fm` | window | File manager — tree + preview, plus a thumbnail **folder-grid** for image folders. List, read, write, rename, delete, chmod/chown, symlink, live `fswatch`. Per-extension icons and display hints (executable / read-only / broken-link colours, setuid badge, mount-point & device icons). Double-click opens a file in its registered app (images → Image Viewer, text/code → Editor) or falls back to the preview pane. Upload from the OS (picker + external drag-drop, recursive dirs). Cut/copy/paste + drag-drop move synced across windows via the router clipboard (cross-host moves are rejected for now). Sandboxable with `--fs-root`. |
 | **term** — Terminal | `com.wash.term` | window | Terminal emulator — tabbed xterm.js over local PTYs (`internal/pty`). `--exec ARGS` runs a one-shot command; `--login` starts a login shell (used by the Root Terminal). |
 | **edit** — Editor | `com.wash.edit` | window | Text editor — CodeMirror 6 with a sidebar tree, tabs, an embedded terminal pane, and a file picker. Reloads on external change. "Open in fm" spawns the file manager (uses `spawn`). Registered to open text/code files (`--open`). |
@@ -283,9 +292,9 @@ Windowed apps (open from the launcher):
 | **net** — Network | `com.wash.net` | window | Networking — interfaces, networks/VLANs, firewall, hosts & DNS, routing, Wi-Fi. A UCI-shaped model rendered to **NetworkManager / systemd-networkd / UCI** backends by capability, with a plan → render → apply → verify → confirm flow and automatic rollback. Drives the `netd` daemon. |
 | **disks** — Disks | `com.wash.disks` | window | Storage manager — disks, partitions, md-RAID, LVM, btrfs, ZFS, and SMART health. Privileged operations go through wash-priv. |
 | **washamp** — Washamp | `com.wash.washamp` | window | Audio player — a chromeless [Webamp](https://webamp.org) (Winamp 2.x) player with the classic skins, playlist, and a skin switcher. Reports now-playing/transport to the `audio` service for the sidebar widget. |
-| **music** — Music | `com.wash.music` | window | Minimalist native music player — point it at one folder, get a recursive track list with tags. The lightweight counterpart to Washamp. |
+| **music** — Music | `com.wash.music` | window | Minimalist native music player — point it at one folder, get a recursive track list. Transport, seek and volume, now-playing to the `audio` service. The lightweight counterpart to Washamp. |
 | **radio** — Radio | `com.wash.radio` | window | Internet radio — curated SomaFM + Radio Browser "popular" + paste-a-URL. The BE proxies the stream and surfaces ICY now-playing metadata. |
-| **vscode** — VS Code | `com.wash.vscode` | window | Full VS Code (code-server) embedded in a wash window via the per-instance HTTP/WS **ingress** proxy. Backed by the `vscode` service (below). |
+| **vscode-workbench** — VS Code | `com.wash.vscode.workbench` | window | Full VS Code (code-server) embedded in a wash window via the per-instance HTTP/WS **ingress** proxy. One window per folder; backed by the `vscode` service (below). |
 | **connect** — Remote | `com.wash.connect` | window | Connect to another host over SSH and run **its** apps in this desktop — their windows composite in, tinted with the host's colour, over your single existing connection (no extra ports opened). Per-host app-launch dropdown, bookmarks, and an `ssh-add` unlock flow for passphrased keys. Fronts the `remote` supervisor (below). See [Remote apps](#remote-apps). |
 | **settings** | `com.wash.settings` | window | Desktop preferences — wallpaper, clock format, taskbar position. Writes `~/.config/wash/desktop.json` atomically; session fswatches and reloads. |
 | **about** — About wash | `com.wash.about` | window | Build / router / host facts plus a live Go-runtime process table polled from the router. The launch-flow smoke test. |
@@ -295,11 +304,13 @@ Background services (no window — they feed sidebar widgets and back the apps a
 
 | App | ID | Surface | What it does |
 |---|---|---|---|
+| **agentd** — Agents | `com.wash.agentd` | background | The agent host. Owns every ACP adapter process (so a session outlives the window that started it and shows on the roster + sidebar widget), enforces the approval policy, and serves ACP's own capabilities from wash rather than the agent's own hands: `fs/read_text_file` + `fs/write_text_file` confined to the session folder, and `terminal/*` on wash PTYs — so a command the agent runs appears as a live terminal in the transcript, and its output survives the process. Also watches wash terminals for agent CLIs and puts those on the same roster. |
 | **bulk** — Bulk Ops | `com.wash.bulk` | background | Singleton job queue + worker for recursive delete / move / copy. fm enqueues jobs; conflicts block until the user resolves them in the sidebar widget. |
 | **notify** — Notifications | `com.wash.notify` | background | Notification service — any app posts notifications; notify keeps capped history and feeds the sidebar widget; the router also fans them out as transient toasts. |
 | **priv** — Privileged Actions | `com.wash.priv` | background | The single privilege primitive. Other apps ask priv to run / spawn a registered binary as root; the user approves in a queue UI; the sudo password lives only in BE memory with an idle timeout. Windows backed by root wear a red **ROOT** stripe. |
 | **netd** | `com.wash.netd` | background | The privileged networking backend — validates and applies the net app's plan through NM / networkd / UCI. Reserved-id singleton; the net app relays to it cross-app. |
 | **audio** | `com.wash.audio` | background | Audio control-plane — aggregates now-playing/transport state from Washamp / Music / Radio and feeds the sidebar Audio widget. |
+| **fswatch** — FS Watch | `com.wash.fswatch` | background | Filesystem-watch service — one watch per path, shared by every app that asks (fm, session, remote) through `sdk.WatchClient`, so N windows on a directory don't cost N inotify instances. Fans changes back out as `app_msg`. |
 | **vscode** (service) | `com.wash.vscode` | background | Manages the code-server process + the ingress route that the VS Code window connects through. |
 | **remote** | `com.wash.remote` | background | Remote-host supervisor — opens and superintends the SSH connections wash-connect drives, reports per-host status (incl. auth-needed), and registers the multiplexed "peer" wire the shell splices to each host. See [Remote apps](#remote-apps). |
 
@@ -311,9 +322,10 @@ X11/Wayland clients launched from a wash terminal map as
 **Cross-app wiring:** services → journal/syslogs (log deep-links);
 packages / services / journal / syslogs → priv (privileged actions);
 fm → bulk (file jobs); net → netd (apply); Washamp / Music / Radio →
-audio (now-playing); connect → remote (SSH supervision); session →
-notify / bulk / priv / audio / net / remote (sidebar widgets). All of
-it travels as router-attested `app_msg` —
+audio (now-playing); connect → remote (SSH supervision); ai / edit /
+term → agentd (agent sessions, transcripts, approvals); session →
+notify / bulk / priv / audio / net / remote / agentd (sidebar widgets).
+All of it travels as router-attested `app_msg` —
 apps never hold references to each other, only the router does.
 
 ## CLI tools
@@ -682,6 +694,8 @@ docs/               see below
 | [DISCOVERY.md](docs/DISCOVERY.md) | LAN mDNS auto-discovery ("On your network") for Connect, and the Settings Remote panel. |
 | [MOUNT.md](docs/MOUNT.md) | Mounting another host's filesystem over SFTP (FUSE), surfaced through the Remote panel. |
 | [STORAGE.md](docs/STORAGE.md) | The Disks app — block devices, md/LVM/btrfs/ZFS, SMART, the real-kernel VM gate. |
+| [AGENT_APP.md](docs/AGENT_APP.md) | Agent sessions over ACP — `wash-ai` + `agentd`, the approval policy, why the intercept tier was retired. |
+| [AGENT_TERMINAL.md](docs/AGENT_TERMINAL.md) / [AGENT_TABS.md](docs/AGENT_TABS.md) | ACP's terminal + filesystem capabilities served from wash, and agent tabs inside the editor. |
 | [AUDIO.md](docs/AUDIO.md) | The audio control-plane service that aggregates now-playing for the sidebar widget. |
 | [MUSIC.md](docs/MUSIC.md) / [RADIO.md](docs/RADIO.md) | The native Music player and the internet Radio app. |
 | [IMAGES.md](docs/IMAGES.md) | The image pipeline — thumbnails over wire raw channels, fm folder preview, the viewer. |
