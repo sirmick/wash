@@ -953,6 +953,14 @@ browser-run-vm: browser-image-vm
 qemu-run-vm:
 	wash-vm/run-qemu.sh
 
+# browser-vm-test: headless boot gate for the in-browser (WASM RISC-V) wash-vm —
+# boots it in chromium and asserts the wash desktop mounts (regression guard for
+# the asset-bootstrap; see wash-vm/browser-vm-smoke.mjs). Self-skips when the
+# RISC-V image isn't built. Build it first: `make browser-image-vm`.
+.PHONY: browser-vm-test
+browser-vm-test:
+	sh wash-vm/browser-vm-test.sh
+
 # ----- run verb -----  (dev = HMR loop, below; run = built standalone router :11000)
 # run does NOT rebuild — it execs whatever `make wash` last produced, so it's
 # instant and `make wash && make run` doesn't build twice. Run `make wash` to
