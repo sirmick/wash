@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.13.0
+Version:        0.13.1
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,15 @@ fi
 exit 0
 
 %changelog
+* Fri Aug 07 2026 sirmick <sirmick@gmail.com> - 0.13.1-1
+- remote-fs: recover from a silent SSH link death on both the mount data path
+  and the shared watch channel (NAT/conntrack drop, suspend, cable pull now
+  reconnect instead of wedging).
+- remote: fix a data race on the wash-remote supervisor's published host/mount
+  state (copy-on-write the status slices).
+- wash-vm: the in-browser WASM VM inflates the gzip shell bundle so the desktop
+  mounts again; adds a headless boot gate (make browser-vm-test).
+
 * Fri Aug 07 2026 sirmick <sirmick@gmail.com> - 0.13.0-1
 - agent: ACP filesystem and terminal capabilities. An agent that opts in reads
   and writes through wash, confined to its session folder, and hands wash its

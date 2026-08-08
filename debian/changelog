@@ -1,3 +1,19 @@
+wash (0.13.1-1) unstable; urgency=low
+
+  * remote-fs: recover from a silent SSH link death on both the mount data
+    path and the shared watch channel. A NAT/conntrack drop, a suspended
+    laptop, or a pulled cable now surfaces as an error and reconnects instead
+    of silently wedging the mount or stalling live updates.
+  * remote: the wash-remote supervisor no longer data-races its published
+    host and mount state — the status slices are rebuilt copy-on-write so a
+    concurrent state push can't read a half-mutated slice.
+  * wash-vm: the in-browser (WASM RISC-V) VM inflates the gzip-compressed
+    shell bundle in its bootstrap, so the desktop mounts again instead of
+    hanging on "wash-router up" with an empty screen. Adds a headless boot
+    gate (make browser-vm-test) so it can't regress unseen.
+
+ -- sirmick <sirmick@gmail.com>  Fri, 07 Aug 2026 21:33:00 -0700
+
 wash (0.13.0-1) unstable; urgency=low
 
   * agent: wash now offers coding agents its own filesystem and terminals
