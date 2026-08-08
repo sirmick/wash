@@ -39,14 +39,33 @@ test.describe('websocket reconnect + banner', () => {
       await expect(banner).toBeVisible({ timeout: 10_000 });
       const state = await banner.getAttribute('data-state');
       expect(['reconnecting', 'closed']).toContain(state);
-      await expect(page.locator('[data-testid="wash-connection-retry"]')).toBeVisible();
+      const retry = page.locator('[data-testid="wash-connection-retry"]');
+      await expect(retry).toBeVisible();
+
+      // Visible is not enough — it has to be REACHABLE. A trial click runs the
+      // whole actionability chain (including hit-target) without clicking, and
+      // is the regression guard for the boot splash: #wash-boot is a
+      // full-screen opaque overlay torn down by wash:desktop-painted, so a drop
+      // that happens BEFORE the desktop paints used to leave it sitting on top
+      // of this banner for its whole 12s backstop — button visible, enabled,
+      // and completely un-clickable (main.tsx, connState 'reconnecting').
+      // Asserted while the port is still dead, so nothing can race it.
+      await retry.click({ trial: true, timeout: 5_000 });
 
       // Bring a replacement router up on the SAME port the browser is
       // reconnecting to (relies on SO_REUSEADDR for the immediate rebind).
       r2 = await startRouter({ apps: [...APPS], port });
 
       // Skip the backoff: the "Reconnect now" button re-dials immediately.
-      await page.locator('[data-testid="wash-connection-retry"]').click();
+      try {
+        await retry.click({ timeout: 5_000 });
+      } catch {
+        // Now that the port answers again the backoff loop (250ms→4s, ws.ts)
+        // can beat us to it and detach the button mid-click. That is the
+        // recovery, not a failure — but only if the banner really did go:
+        // otherwise the button genuinely refused the click.
+        await expect(banner).toHaveCount(0);
+      }
 
       // Recovered: banner gone, desktop back. (.first() — a reconnect can
       // briefly leave the pre-drop session element in the DOM beside the

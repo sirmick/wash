@@ -420,6 +420,18 @@ torn down so apps can degrade gracefully.
 6. When the router shuts down, it asks the session app to close, which
    cascades to its children via the supervision tree.
 
+**App-initiated close.** A `window.confirm_close{allow:true}` sent with NO
+handshake pending means "close me now", and the router runs the same
+teardown as step 4. Two things need it:
+
+- An app whose work is simply over — wash-term when its last shell exits.
+- An app that must ASK before closing. The 5s grace is far too short to
+  hold the handshake open while a human reads a dialog, so the app answers
+  `allow:false` at step 3, puts the question on screen, and closes itself
+  this way if the user confirms. Vetoing is not "no" — it is "not yet".
+
+`allow:false` with nothing pending is a no-op.
+
 ## 11. Dynamic raw channels
 
 Either side can open a raw channel for opaque byte streaming (terminal

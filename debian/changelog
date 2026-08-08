@@ -1,3 +1,144 @@
+wash (0.13.1-1) unstable; urgency=low
+
+  * remote-fs: recover from a silent SSH link death on both the mount data
+    path and the shared watch channel. A NAT/conntrack drop, a suspended
+    laptop, or a pulled cable now surfaces as an error and reconnects instead
+    of silently wedging the mount or stalling live updates.
+  * remote: the wash-remote supervisor no longer data-races its published
+    host and mount state — the status slices are rebuilt copy-on-write so a
+    concurrent state push can't read a half-mutated slice.
+  * wash-vm: the in-browser (WASM RISC-V) VM inflates the gzip-compressed
+    shell bundle in its bootstrap, so the desktop mounts again instead of
+    hanging on "wash-router up" with an empty screen. Adds a headless boot
+    gate (make browser-vm-test) so it can't regress unseen.
+
+ -- sirmick <sirmick@gmail.com>  Fri, 07 Aug 2026 21:33:00 -0700
+
+wash (0.13.0-1) unstable; urgency=low
+
+  * agent: wash now offers coding agents its own filesystem and terminals
+    over ACP. An agent that opts in reads and writes files THROUGH wash —
+    confined to the folder you started it in, through the layer the desktop
+    watches — and hands wash its shell commands instead of forking them
+    inside the adapter. Those commands run as real wash ptys: you watch them
+    scroll in the transcript, interrupt them, and keep their output and exit
+    status after they finish.
+  * agent: sessions can run in the editor. wash-edit hosts an agent in the
+    pane its terminals already live in, starting in the folder you have open
+    — nobody is asked which folder — and a tool row naming a file opens that
+    file in the buffer above the transcript.
+  * agent: a per-session "yolo" mode lets wash approve tool requests without
+    asking. Deliberately loud: a standing badge, every auto-approval written
+    into the transcript, dead when the session ends, and unable to reverse an
+    explicit deny rule.
+  * terminal: closing a tab or a window now asks first, naming what is still
+    running. Closing killed shells outright on one keystroke, with no undo.
+  * terminal: each split pane carries its own status bar, so an unfocused
+    pane's ssh/root/agent state is visible rather than implied.
+  * files: a symlink to a folder behaves as a folder — it can be chosen in a
+    folder picker, entered in the file tree, and sorted with the directories.
+    It was previously filtered out of directory pickers entirely.
+  * test: the three e2e specs that had been red on every branch for weeks are
+    fixed, so `make push` gates honestly again. Two were real defects — the
+    boot splash swallowing the connection banner's retry click, and a stale
+    log match launching terminals before DISPLAY was published — not load.
+
+ -- sirmick <sirmick@gmail.com>  Fri, 07 Aug 2026 14:25:27 -0700
+
+wash (0.12.1-1) unstable; urgency=low
+
+  * shell: a connection lost before the desktop finished painting no longer
+    hides behind the boot splash. The splash is a full-screen opaque overlay
+    torn down when the session app reports the desktop painted; if the router
+    dropped first that signal never arrived, so "starting wash…" sat on top of
+    the connection banner for up to 12 seconds and swallowed clicks on
+    "Reconnect now" — exactly when a user needs it. The splash now stands down
+    as soon as the connection is lost, and the banner outranks it.
+  * router: the env.publish log line names the keys it accepted rather than
+    only counting them, so "the compositor published its display" is legible
+    in a log instead of being inferred.
+  * test: the e2e gate gates again. The three specs that had been red on every
+    branch for weeks — reconnect and the two display capstones — were real
+    defects, not load, and are fixed; a fourth latent false-pass in the
+    terminal burst soak (an assertion that matched the command it had just
+    typed) is fixed with them. See docs/FLAKE_LOG.md 2026-08-06.
+
+ -- sirmick <sirmick@gmail.com>  Thu, 06 Aug 2026 17:09:28 -0700
+
+wash (0.12.0-1) unstable; urgency=low
+
+  * agent: wash runs coding agents itself, over the Agent Client Protocol.
+    A new Agent app (com.wash.ai) opens a session in a chosen folder with a
+    chosen agent, streams the conversation, and renders markdown, tables and
+    inline images. The empty window is the launcher; one window per session.
+  * agent: permission requests arrive as structured data rather than being
+    inferred from terminal output, and land in the same approval queue the
+    sidebar already rendered. Answer from the transcript or the sidebar —
+    both are views of one queue — with keyboard shortcuts on the buttons.
+  * agent: the agent's OWN settings are on the window: approval mode (for
+    Codex, read-only / agent / full-access), model, reasoning effort and
+    plan mode, all through session/set_config_option. wash asks the agent to
+    change its policy rather than routing around it, so an organisation's
+    pinned mode still holds.
+  * agent: Stop a running turn, see the context it has burned, and pick from
+    the agent's own slash commands as you type one.
+  * agent: sessions are named by what they are about, using the title the
+    agent writes itself — shown as the window title, in the sidebar and in
+    the History menu. Closing a window asks whether to detach (it keeps
+    working, reattach from the sidebar) or terminate (it joins the history).
+  * agent: File / Edit / Session / History menus, including saving the
+    transcript and copying the last reply.
+  * agent: REMOVED the previous mechanism — hook installation into a
+    vendor's settings file, the OSC 7770 status channel, the per-tab
+    decision socket and the typed-`y` output tap, along with the
+    wash-agent-hook helper and `wash agent-hooks`. A settings file an older
+    wash wrote still names that binary; delete the wash entries by hand.
+  * ui: shared <MenuBar> in @wash/ui, extracted from wash-edit now that a
+    second app wants one.
+  * term: restored the wash environment for terminals (TERM, $WASH_BIN_DIR
+    on PATH, display hints), lost when the agent decision socket was removed.
+
+ -- sirmick <sirmick@gmail.com>  Thu, 06 Aug 2026 06:44:26 -0700
+
+wash (0.11.0-1) unstable; urgency=low
+
+  * term: agent-aware terminals. A coding agent (Claude Code and friends)
+    running in a wash terminal is now visible to the desktop: a state dot on
+    the tab chip and a clause in the status line (blue working / amber needs
+    input / green done), driven by an OSC 7770 status channel parsed in the
+    pty layer plus a foreground-process check that needs no install.
+  * term: transition notifications. A toast when an agent wants your input
+    or finishes a turn, rate-limited per tab, with click-to-focus landing on
+    the terminal that raised it, and an amber attention dot on its taskbar
+    pill until you visit it.
+  * term: agent approval policy. Each pty gets a decision socket; an agent's
+    PreToolUse hook asks it, and wash answers from an ordered rule table
+    edited in Settings -> Agents. Off by default, and every failure resolves
+    to the agent's own prompt — never to an allow.
+  * agentd: new com.wash.agentd roster service. One sidebar row per agent
+    across every terminal window — state, repo, branch, elapsed — sorted
+    needs-input first, click to focus. Rows age out so a crashed terminal
+    leaves no ghost.
+  * agentd: answer permission requests from the sidebar (Allow / Always
+    <rule> / Deny). "Always" writes the rule it names into the policy, so
+    the table is taught rather than configured.
+  * agentd: session history. Recent sessions survive a closed window or a
+    reboot; Resume or Fork reopens one in a terminal in the right directory.
+  * term: smart paste. Text copied out of a chat is repaired on the way in —
+    invisible junk (non-breaking spaces, curly quotes, copied "$ " prompts,
+    code fences) silently, and a soft-wrapped command offered as a preview
+    before it changes structure. Includes a warning when a multi-line paste
+    is about to hit a shell with bracketed paste off.
+  * router: the per-channel scrollback ring grows to 4 MiB while nobody is
+    attached and shrinks back afterwards, so work done with the lid shut is
+    still there when you return. The terminal keeps 20,000 lines to match.
+  * term: content no longer paints over the terminal scrollbar; the bar is
+    themed with the rest of the chrome.
+  * cli: new wash-agent-hook helper and `wash agent-hooks install|remove|
+    status` for wiring the agent hooks into ~/.claude/settings.json.
+
+ -- sirmick <sirmick@gmail.com>  Sun, 02 Aug 2026 14:38:14 -0700
+
 wash (0.10.0-1) unstable; urgency=low
 
   * clipboard: converge the wash + system clipboards behind HTTPS. Pastes

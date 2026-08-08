@@ -101,6 +101,9 @@ func onReady(c *sdk.Conn, _ string, _ uint32) {
 	registerNetGateway(bus)
 	registerAudioGateway(bus)
 	registerRemoteGateway(bus)
+	registerAgentGateway(bus)
+	registerAgentResume(bus)
+	registerAgentReattach(bus)
 	// state forwarder: notify, bulk, and priv all push
 	// {kind:"state", state:...} cross-app. Branch on the sender's
 	// AppID to re-brand for the FE under a service-specific kind.
@@ -155,6 +158,7 @@ const (
 	NetdAppID   = "com.wash.netd"
 	AudioAppID  = "com.wash.audio"
 	RemoteAppID = "com.wash.remote"
+	AgentdAppID = "com.wash.agentd"
 )
 
 // serviceFEKind maps a service app id to the FE-side kind we
@@ -174,6 +178,8 @@ func serviceFEKind(appID string) string {
 		return "audio.state"
 	case RemoteAppID:
 		return "remote.state"
+	case AgentdAppID:
+		return "agent.state"
 	}
 	return ""
 }
@@ -214,6 +220,86 @@ func registerAudioGateway(bus *sdk.Bus) {
 			"kind": "set_master_volume", "value": req.Value,
 		})
 	})
+}
+
+// registerAgentGateway forwards the sidebar's subscribe/unsubscribe to
+// the com.wash.agentd coding-agent roster (docs/AGENT_TERM.md §7). Its
+// state pushes return as {kind:"state"} and are re-branded to
+// "agent.state" by the shared state forwarder. Nothing else flows through
+// here: clicking a roster row focuses a window, which the FE does
+// directly through the WM — the roster is read-only from the sidebar's
+// point of view.
+func registerAgentGateway(bus *sdk.Bus) {
+	sdk.HandleVoid(bus, "agent_subscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
+		return conn.SendAppMsgTo(wire.Recipient{AppID: AgentdAppID}, map[string]any{"kind": "subscribe"})
+	})
+	sdk.HandleVoid(bus, "agent_unsubscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
+		return conn.SendAppMsgTo(wire.Recipient{AppID: AgentdAppID}, map[string]any{"kind": "unsubscribe"})
+	})
+	// agent_answer carries a human's click on a pending permission
+	// question (docs/AGENT_TERM.md §12) to the roster service, which
+	// relays it to the terminal holding the agent's turn open. The
+	// session BE is the desktop speaking for the person in front of it —
+	// it adds no policy of its own.
+	sdk.HandleVoid(bus, "agent_answer", func(conn *sdk.Conn, _ string, req agentAnswerReq) error {
+		if req.ID == "" {
+			return nil
+		}
+		return conn.SendAppMsgTo(wire.Recipient{AppID: AgentdAppID}, map[string]any{
+			"kind":     "agent_answer",
+			"id":       req.ID,
+			"decision": req.Decision,
+			"remember": req.Remember,
+			"rule":     req.Rule,
+		})
+	})
+}
+
+// agent_reattach opens a window onto a session that is STILL RUNNING but
+// has no window pointing at it — the detach half of the close dialog
+// (docs/AGENT_APP.md §9). Distinct from resume, which reopens one that
+// ended.
+func registerAgentReattach(bus *sdk.Bus) {
+	sdk.HandleVoid(bus, "agent_reattach", func(conn *sdk.Conn, _ string, req agentReattachReq) error {
+		if req.Key == "" {
+			return nil
+		}
+		return conn.SendAppMsgTo(wire.Recipient{AppID: AgentdAppID}, map[string]any{
+			"kind": "agent_reattach",
+			"key":  req.Key,
+		})
+	})
+}
+
+type agentReattachReq struct {
+	Key string `json:"key"`
+}
+
+// agent_resume asks the roster service to reopen a remembered session
+// that has ENDED (docs/AGENT_APP.md §9).
+func registerAgentResume(bus *sdk.Bus) {
+	sdk.HandleVoid(bus, "agent_resume", func(conn *sdk.Conn, _ string, req agentResumeReq) error {
+		if req.SessionID == "" {
+			return nil
+		}
+		return conn.SendAppMsgTo(wire.Recipient{AppID: AgentdAppID}, map[string]any{
+			"kind":       "agent_resume",
+			"session_id": req.SessionID,
+			"fork":       req.Fork,
+		})
+	})
+}
+
+type agentResumeReq struct {
+	SessionID string `json:"session_id"`
+	Fork      bool   `json:"fork"`
+}
+
+type agentAnswerReq struct {
+	ID       string `json:"id"`
+	Decision string `json:"decision"`
+	Remember bool   `json:"remember"`
+	Rule     string `json:"rule"`
 }
 
 // registerRemoteGateway forwards the Hosts widget's subscribe + connect/

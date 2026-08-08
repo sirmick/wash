@@ -114,3 +114,66 @@ func TestMountPointsIncludesRoot(t *testing.T) {
 		t.Error("a tmpdir should not be reported as a mount point")
 	}
 }
+
+// TestListSymlinkTargetType: a symlink's Type stays "symlink" (the FE still
+// renders it as a link) but LinkType says what it resolves to, so a link to
+// a directory can be treated as one. Without it every FE that switches on
+// Type alone files a linked folder with the regular files: un-enterable in
+// fm and the file tree, and dropped outright by the directory picker.
+func TestListSymlinkTargetType(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "target"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "plain.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range [][2]string{
+		{"target", "to-dir"},
+		{"plain.txt", "to-file"},
+		{"nope", "dangling"},
+	} {
+		if err := os.Symlink(filepath.Join(dir, l[0]), filepath.Join(dir, l[1])); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	entries, _, _, err := New(dir).List(dir, 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	got := map[string]Entry{}
+	for _, e := range entries {
+		got[e.Name] = e
+	}
+
+	for _, tc := range []struct {
+		name     string
+		wantType string
+		wantLink string
+		broken   bool
+	}{
+		{"target", "dir", "", false},
+		{"plain.txt", "file", "", false},
+		{"to-dir", "symlink", "dir", false},
+		{"to-file", "symlink", "file", false},
+		// A dangling link resolves to nothing, so LinkType stays empty —
+		// callers must not treat "unknown" as "directory".
+		{"dangling", "symlink", "", true},
+	} {
+		e, ok := got[tc.name]
+		if !ok {
+			t.Errorf("%s missing from listing", tc.name)
+			continue
+		}
+		if e.Type != tc.wantType {
+			t.Errorf("%s: type = %q, want %q", tc.name, e.Type, tc.wantType)
+		}
+		if e.LinkType != tc.wantLink {
+			t.Errorf("%s: link_type = %q, want %q", tc.name, e.LinkType, tc.wantLink)
+		}
+		if e.Broken != tc.broken {
+			t.Errorf("%s: broken = %v, want %v", tc.name, e.Broken, tc.broken)
+		}
+	}
+}

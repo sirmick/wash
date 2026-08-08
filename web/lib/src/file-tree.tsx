@@ -30,11 +30,32 @@ export interface FileTreeRow<E> {
 }
 
 // The minimal entry shape FileTree needs to render a row. Consumers pass their
-// own richer Entry; only name + type are read here (everything else is reached
-// through the render hooks, which receive the full entry).
+// own richer Entry; only name + type (and link_type, to classify a symlink)
+// are read here — everything else is reached through the render hooks, which
+// receive the full entry.
 export interface FileTreeEntry {
   name: string;
   type: string;
+  /** what a symlink resolves to; see isDirLike */
+  link_type?: string;
+}
+
+/**
+ * isDirLike — does this entry behave as a directory?
+ *
+ * A symlink to a folder IS a folder to the person using it: you expect to
+ * open it, to see it in a folder picker, to have it sort with the
+ * directories. But `type` is the LINK's own kind, so every `type === 'dir'`
+ * test silently excluded them — they were filed with the regular files,
+ * un-enterable in fm and the tree, and dropped outright by the directory
+ * picker. The BE resolves the target for us (internal/fs Entry.LinkType);
+ * this is the one place that decision is written down.
+ *
+ * A broken link has no link_type, so it is never dir-like — "unknown" must
+ * not read as "directory".
+ */
+export function isDirLike(e: { type: string; link_type?: string }): boolean {
+  return e.type === 'dir' || (e.type === 'symlink' && e.link_type === 'dir');
 }
 
 // An extra column beyond the implicit Name column (which always holds the
@@ -309,16 +330,16 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
                     'justify-content': 'center',
                     opacity: 0.6,
                     'flex-shrink': 0,
-                    cursor: entry().type === 'dir' ? 'pointer' : 'default',
+                    cursor: isDirLike(entry()) ? 'pointer' : 'default',
                   }}
                   onClick={(ev) => {
-                    if (entry().type === 'dir') {
+                    if (isDirLike(entry())) {
                       ev.stopPropagation();
                       props.onToggle(row.path, entry());
                     }
                   }}
                 >
-                  <Show when={entry().type === 'dir'}>
+                  <Show when={isDirLike(entry())}>
                     {props.isExpanded(row.path) ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                   </Show>
                 </span>

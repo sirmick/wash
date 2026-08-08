@@ -1,0 +1,446 @@
+// acp-fake — a deterministic ACP agent for the e2e suite.
+//
+// The real thing needs an API key, a network, money and patience, and it
+// answers differently every time — none of which belongs in a test. This
+// speaks the same wire instead, from a recorded script.
+//
+// The frames it replays were CAPTURED from real adapters (claude-agent-acp
+// 0.64.2 and codex-acp 1.1.9) with the conformance test's tracer, not
+// invented — so a shape that drifts upstream fails the conformance check
+// first, and this fixture is updated from a fresh capture rather than
+// from someone's memory of the spec.
+//
+// Installed on PATH under the name of the adapter it stands in for
+// (`codex-acp`), so nothing in production has to know it exists.
+//
+// Behaviour is driven by the prompt text, which keeps the e2e readable:
+//
+//	"ask"    → requests permission, then reports what was answered
+//	anything → a short markdown reply with a tool call
+package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+var sessionID = "fake-session-1"
+
+// A 1x1 transparent PNG. Small enough to inline, real enough that the
+// browser decodes it — a broken <img> would still "be visible" to a
+// naive assertion, so the test checks naturalWidth instead.
+const onePixelPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
+func main() {
+	in := bufio.NewScanner(os.Stdin)
+	in.Buffer(make([]byte, 0, 64<<10), 8<<20)
+	out := bufio.NewWriter(os.Stdout)
+
+	for in.Scan() {
+		var m map[string]any
+		if err := json.Unmarshal(in.Bytes(), &m); err != nil {
+			continue
+		}
+		method, _ := m["method"].(string)
+		id, hasID := m["id"]
+
+		// A response to something WE asked (the permission request). The
+		// turn is blocked on it, exactly as a real agent's turn is.
+		if hasID && method == "" {
+			// Distinguish "worked, no body" from "refused". A successful
+			// fs/write_text_file replies with a null result, so a nil
+			// value alone cannot tell the two apart — an error is tagged
+			// instead, and a bodyless success becomes an empty map.
+			v := m["result"]
+			if e, bad := m["error"]; bad {
+				v = map[string]any{"__error": e}
+			} else if v == nil {
+				v = map[string]any{}
+			}
+			deliver(fmt.Sprint(id), v)
+			continue
+		}
+
+		switch method {
+		case "initialize":
+			reply(out, id, map[string]any{
+				"protocolVersion": 1,
+				"agentCapabilities": map[string]any{
+					"loadSession":        true,
+					"promptCapabilities": map[string]any{"image": true, "embeddedContext": true},
+				},
+				"agentInfo":   map[string]any{"name": "acp-fake", "title": "Fake Agent", "version": "1.0.0"},
+				"authMethods": []any{},
+			})
+
+		case "session/new":
+			reply(out, id, map[string]any{
+				"sessionId": sessionID,
+				"modes": map[string]any{
+					"currentModeId": "agent",
+					"availableModes": []any{
+						map[string]any{"id": "read-only", "name": "Read-only", "description": "Requires approval."},
+						map[string]any{"id": "agent", "name": "Agent", "description": "Read and edit, run commands."},
+						map[string]any{"id": "agent-full-access", "name": "Agent (full access)", "description": "No approval required."},
+					},
+				},
+				"configOptions": []any{configState("model", "fast")["configOptions"].([]any)[0]},
+			})
+
+		case "session/set_config_option":
+			params, _ := m["params"].(map[string]any)
+			cfgID, _ := params["configId"].(string)
+			val, _ := params["value"].(string)
+			// The agent's answer is authoritative and returns the WHOLE
+			// list, which is why the client replaces rather than patches.
+			reply(out, id, configState(cfgID, val))
+
+		case "session/set_mode":
+			params, _ := m["params"].(map[string]any)
+			mode, _ := params["modeId"].(string)
+			reply(out, id, nil)
+			// A real agent confirms with current_mode_update, so the UI
+			// follows the wire rather than its own optimism.
+			notify(out, update(map[string]any{"sessionUpdate": "current_mode_update", "currentModeId": mode}))
+
+		case "session/load":
+			// A load MUST replay the conversation before it answers.
+			// Reproducing that ordering is the point of covering it here.
+			notify(out, chunk("Earlier in this session we discussed **resuming**."))
+			reply(out, id, nil)
+
+		case "session/prompt":
+			go runTurn(out, m)
+
+		case "session/cancel":
+			cancelled.Store(true)
+
+		default:
+			if hasID {
+				replyErr(out, id, -32601, "method not found: "+method)
+			}
+		}
+	}
+}
+
+var (
+	cancelled atomic.Bool
+	reqSeq    atomic.Int64
+)
+
+func runTurn(out *bufio.Writer, m map[string]any) {
+	cancelled.Store(false)
+	text := promptText(m)
+	raw := promptTextRaw(m)
+	id := m["id"]
+
+	notify(out, update(map[string]any{
+		"sessionUpdate": "usage_update", "used": 14689, "size": 258400,
+	}))
+
+	if strings.Contains(text, "ask") {
+		// A permission request, with the option kinds a real adapter
+		// sends — this is what the sidebar and the inline row render.
+		rid := reqSeq.Add(1) + 1000
+		request(out, rid, "session/request_permission", map[string]any{
+			"sessionId": sessionID,
+			"toolCall": map[string]any{
+				"toolCallId": "call-1",
+				"title":      "echo hello > /tmp/wash-e2e-fake",
+				"kind":       "execute",
+				"rawInput":   map[string]any{"command": "echo hello > /tmp/wash-e2e-fake"},
+			},
+			"options": []any{
+				map[string]any{"optionId": "reject", "name": "Deny", "kind": "reject_once"},
+				map[string]any{"optionId": "allow", "name": "Allow Once", "kind": "allow_once"},
+				map[string]any{"optionId": "allow_always", "name": "Always Allow", "kind": "allow_always"},
+			},
+		})
+		// Block until answered, like a real turn does. Reporting the
+		// outcome back into the transcript is what lets an e2e assert
+		// that clicking Allow actually reached the agent, rather than
+		// just that a button disappeared.
+		res := await(fmt.Sprint(rid))
+		notify(out, chunk("Permission outcome: "+outcomeOf(res)+"."))
+		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
+	}
+
+	if strings.HasPrefix(text, "runcmd ") {
+		// Exercise the terminal capability: hand the command to wash
+		// rather than forking it here, then report what came back. This
+		// is the whole point of the capability — the process is wash's,
+		// and we only hold a reference to it.
+		cmdline := strings.TrimSpace(strings.TrimPrefix(raw, "runcmd "))
+		rid := reqSeq.Add(1) + 4000
+		request(out, rid, "terminal/create", map[string]any{
+			"sessionId": sessionID,
+			"command":   "sh",
+			"args":      []any{"-c", cmdline},
+		})
+		res, _ := await(fmt.Sprint(rid)).(map[string]any)
+		tid, _ := res["terminalId"].(string)
+		if tid == "" {
+			notify(out, chunk("RAN<<REFUSED>>"))
+			reply(out, id, map[string]any{"stopReason": "end_turn"})
+			return
+		}
+		// Block until it exits, exactly as a real adapter does — the
+		// handle came back immediately, the result did not.
+		wid := reqSeq.Add(1) + 5000
+		request(out, wid, "terminal/wait_for_exit", map[string]any{
+			"sessionId": sessionID, "terminalId": tid,
+		})
+		exit, _ := await(fmt.Sprint(wid)).(map[string]any)
+		// Then read the output, AFTER exit — the case that only works if
+		// the terminal outlives its process.
+		oid := reqSeq.Add(1) + 6000
+		request(out, oid, "terminal/output", map[string]any{
+			"sessionId": sessionID, "terminalId": tid,
+		})
+		outp, _ := await(fmt.Sprint(oid)).(map[string]any)
+		body, _ := outp["output"].(string)
+		code := "?"
+		if exit != nil {
+			if c, ok := exit["exitCode"].(float64); ok {
+				code = fmt.Sprintf("%d", int(c))
+			} else if sg, ok := exit["signal"].(string); ok && sg != "" {
+				code = "signal:" + sg
+			}
+		}
+		// Report a SUMMARY, not the whole output. wash already shows the
+		// output in the terminal box; repeating it as prose buried that box
+		// under a wall of text and auto-scrolled past it, which read as
+		// "the terminal is not there".
+		trimmed := strings.TrimSpace(body)
+		if len(trimmed) > 120 {
+			trimmed = trimmed[:120] + "…"
+		}
+		notify(out, chunk("RAN<<id="+tid+" exit="+code+" out="+trimmed+">>"))
+		// Release it: the agent is done, and the record should go.
+		relid := reqSeq.Add(1) + 7000
+		request(out, relid, "terminal/release", map[string]any{
+			"sessionId": sessionID, "terminalId": tid,
+		})
+		await(fmt.Sprint(relid))
+		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
+	}
+
+	if strings.HasPrefix(text, "readfile ") {
+		// Exercise the client's fs capability: ask wash for the file
+		// rather than opening it ourselves, and report what came back.
+		// A refusal (outside the session cwd) arrives as an error, which
+		// deliver turns into a nil result — reported as REFUSED so a spec
+		// can assert the sandbox held.
+		path := strings.TrimSpace(strings.TrimPrefix(raw, "readfile "))
+		rid := reqSeq.Add(1) + 2000
+		request(out, rid, "fs/read_text_file", map[string]any{
+			"sessionId": sessionID,
+			"path":      path,
+		})
+		body := "REFUSED"
+		if r, ok := await(fmt.Sprint(rid)).(map[string]any); ok {
+			if c, ok := r["content"].(string); ok {
+				body = c
+			} else if e, bad := r["__error"]; bad {
+				// Carry the reason: a spec asserting the sandbox held is
+				// more useful when it can see WHY, and a bare REFUSED hid
+				// a bug in the client half during development.
+				body = fmt.Sprintf("REFUSED:%v", e)
+			}
+		}
+		notify(out, chunk("READ<<"+body+">>"))
+		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
+	}
+
+	if strings.HasPrefix(text, "writefile ") {
+		// "writefile <path> <content>" — the write half of the same
+		// capability. An error likewise becomes REFUSED.
+		rest := strings.TrimSpace(strings.TrimPrefix(raw, "writefile "))
+		path, content, _ := strings.Cut(rest, " ")
+		rid := reqSeq.Add(1) + 3000
+		request(out, rid, "fs/write_text_file", map[string]any{
+			"sessionId": sessionID,
+			"path":      path,
+			"content":   content + "\n",
+		})
+		body := "REFUSED"
+		if r, ok := await(fmt.Sprint(rid)).(map[string]any); ok {
+			if _, bad := r["__error"]; !bad {
+				body = "OK"
+			}
+		}
+		notify(out, chunk("WROTE<<"+body+">>"))
+		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
+	}
+
+	// Streamed in pieces, deliberately: chunk boundaries mid-word are
+	// where ordering bugs and lost whitespace hide.
+	for _, part := range []string{"## Heading\n\nHello ", "from the ", "fake agent.\n\n- one\n- two\n"} {
+		if cancelled.Load() {
+			reply(out, id, map[string]any{"stopReason": "cancelled"})
+			return
+		}
+		notify(out, chunk(part))
+	}
+	// A table and an image, so the renderer's two richest paths are
+	// covered by something other than looking at them.
+	notify(out, chunk("\n| Adapter | Kind |\n| --- | ---: |\n| codex | npm |\n| claude | npm |\n"))
+	notify(out, update(map[string]any{
+		"sessionUpdate": "agent_message_chunk",
+		"content": []any{map[string]any{
+			"type": "image", "mimeType": "image/png", "data": onePixelPNG,
+		}},
+	}))
+	notify(out, update(map[string]any{
+		"sessionUpdate": "tool_call", "toolCallId": "t-1", "kind": "read",
+		"title": "README.md", "status": "completed",
+		"content": []any{map[string]any{"type": "text", "text": "ok"}},
+	}))
+	notify(out, update(map[string]any{"sessionUpdate": "session_info_update", "title": "Fake conversation"}))
+	notify(out, update(map[string]any{
+		"sessionUpdate": "available_commands_update",
+		"availableCommands": []any{
+			map[string]any{"name": "review", "description": "Review the diff"},
+			map[string]any{"name": "reset", "description": "Start over"},
+			map[string]any{"name": "compact", "description": "Compact the context"},
+		},
+	}))
+	reply(out, id, map[string]any{"stopReason": "end_turn"})
+}
+
+// pending correlates our outbound requests with their answers.
+var (
+	pendingMu sync.Mutex
+	pending   = map[string]chan any{}
+)
+
+func await(id string) any {
+	ch := make(chan any, 1)
+	pendingMu.Lock()
+	pending[id] = ch
+	pendingMu.Unlock()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(60 * time.Second):
+		return nil
+	}
+}
+
+func deliver(id string, result any) {
+	pendingMu.Lock()
+	ch := pending[id]
+	delete(pending, id)
+	pendingMu.Unlock()
+	if ch != nil {
+		ch <- result
+	}
+}
+
+// outcomeOf renders what the client chose, so it lands in the transcript
+// where a test can see it.
+func outcomeOf(res any) string {
+	m, _ := res.(map[string]any)
+	o, _ := m["outcome"].(map[string]any)
+	kind, _ := o["outcome"].(string)
+	if kind == "selected" {
+		if id, ok := o["optionId"].(string); ok {
+			return id
+		}
+	}
+	if kind == "" {
+		return "none"
+	}
+	return kind
+}
+
+// configState keeps the set_config reply the same shape the real adapter
+// returns: the full option list, with the new value applied.
+func configState(configID, value string) map[string]any {
+	return map[string]any{
+		"configOptions": []any{
+			map[string]any{
+				"id": configID, "name": "Model", "type": "select", "currentValue": value,
+				"options": []any{
+					map[string]any{"value": "fast", "name": "Fast"},
+					map[string]any{"value": "smart", "name": "Smart"},
+				},
+			},
+		},
+	}
+}
+
+// promptText is lowercased because every keyword check below is a
+// case-insensitive contains/prefix. Anything that takes an ARGUMENT out of
+// the prompt — a path — must use promptTextRaw instead: lowercasing a path
+// silently asks for a different file, which the fs sandbox then refuses,
+// and the refusal looks like a bug in the sandbox rather than in here.
+func promptText(m map[string]any) string {
+	return strings.ToLower(promptTextRaw(m))
+}
+
+func promptTextRaw(m map[string]any) string {
+	params, _ := m["params"].(map[string]any)
+	blocks, _ := params["prompt"].([]any)
+	var sb strings.Builder
+	for _, b := range blocks {
+		if bm, ok := b.(map[string]any); ok {
+			if s, ok := bm["text"].(string); ok {
+				sb.WriteString(s)
+			}
+		}
+	}
+	return sb.String()
+}
+
+func chunk(text string) map[string]any {
+	return update(map[string]any{
+		"sessionUpdate": "agent_message_chunk",
+		"content":       map[string]any{"type": "text", "text": text},
+	})
+}
+
+func update(u map[string]any) map[string]any {
+	return map[string]any{"sessionId": sessionID, "update": u}
+}
+
+// One writer, one line per frame: the transport's whole framing rule.
+var wmu = make(chan struct{}, 1)
+
+func write(out *bufio.Writer, v any) {
+	wmu <- struct{}{}
+	defer func() { <-wmu }()
+	b, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(out, "%s\n", b)
+	_ = out.Flush()
+}
+
+func reply(out *bufio.Writer, id any, result any) {
+	write(out, map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+}
+
+func replyErr(out *bufio.Writer, id any, code int, msg string) {
+	write(out, map[string]any{"jsonrpc": "2.0", "id": id,
+		"error": map[string]any{"code": code, "message": msg}})
+}
+
+func notify(out *bufio.Writer, params any) {
+	write(out, map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": params})
+}
+
+func request(out *bufio.Writer, id int64, method string, params any) {
+	write(out, map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+}

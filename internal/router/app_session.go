@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -226,11 +228,20 @@ func (inst *AppInstance) dispatch(f wire.Frame) error {
 		// recent history that every recovery path (reattach, resync)
 		// replays from.
 		b.shellMu.Lock()
-		if b.buf != nil {
-			b.buf.Write(f.Payload)
-		}
 		sh := b.shell
 		behind := b.behind
+		if b.buf != nil {
+			// While nobody is taking delivery — detached, or so far behind
+			// that we've stopped forwarding — grow the ring rather than
+			// overwrite history at the steady-state size. The process is
+			// never stalled to preserve bytes, so buffering is the only
+			// lever we have; it shrinks again once a shell takes the
+			// history (see the reattach/resync paths).
+			if sh == nil || behind {
+				b.buf.GrowFor(len(f.Payload), ChannelScrollbackMaxBytes)
+			}
+			b.buf.Write(f.Payload)
+		}
 		b.shellMu.Unlock()
 		if sh == nil {
 			// Shell detached — bytes already captured in the buffer;
@@ -377,18 +388,7 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
-		if inst.deliverCloseConfirm(m.Allow) {
-			return nil
-		}
-		// No close handshake pending: an allow=true confirm on the app's
-		// PRIMARY window is the app asking to close itself — wash-term's
-		// last tab exited, or a close the FE approved after the app vetoed
-		// the original close_requested to ask the user first. Extra windows
-		// (wash-display guests) use window.destroy instead; a stray deny is
-		// meaningless without a pending request and stays a no-op.
-		if m.Allow && m.Win == inst.WindowID && m.Win != 0 {
-			inst.router.approveWindowClose(inst, m.Win)
-		}
+		inst.deliverCloseConfirm(m.Win, m.Allow)
 		return nil
 	case wire.TEvtWindowCreate:
 		var m wire.EvtWindowCreate
@@ -592,7 +592,16 @@ func (inst *AppInstance) relayAppMsgToShell(m wire.EvtAppMsg, class wire.Class) 
 // which keeps the cold-start window narrow.
 func (inst *AppInstance) relayNotify(m wire.EvtNotify) error {
 	if inst.AppID == NotifyAppID {
-		out := wire.NewShellNotify(inst.InstanceID, m.Title, m.Body, m.Level)
+		// The toast names the instance it is ABOUT so the shell can focus
+		// that window when it is clicked. The service re-emits other apps'
+		// notifications, so it passes the original sender through in
+		// Source; only it is trusted to do so (every other app's notify
+		// takes the forward path below, which never reads Source).
+		src := m.Source
+		if src == "" {
+			src = inst.InstanceID
+		}
+		out := wire.NewShellNotify(src, m.Title, m.Body, m.Level)
 		var firstErr error
 		for _, s := range inst.router.shellList() {
 			if err := s.WriteCtrl(out); err != nil && firstErr == nil {
@@ -711,7 +720,16 @@ func (inst *AppInstance) handleEnvPublish(m wire.EvtEnvPublish) error {
 		inst.router.publishedEnv[k] = v
 	}
 	inst.router.publishedEnvMu.Unlock()
-	inst.router.log("env.publish from %s: %d key(s)", inst.InstanceID, len(clean))
+	// Name the keys, not just the count. wash-display publishes more than once
+	// (geometry early, then the socket names once Xwayland is up), so "some
+	// env.publish happened" tells a reader — or a test — nothing about whether
+	// DISPLAY is in spawnEnv yet. Sorted for a stable line.
+	keys := make([]string, 0, len(clean))
+	for k := range clean {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	inst.router.log("env.publish from %s: %d key(s) keys=%s", inst.InstanceID, len(clean), strings.Join(keys, ","))
 	return nil
 }
 
@@ -995,10 +1013,23 @@ func (inst *AppInstance) requestClose(ctx context.Context, win uint32) (allowed 
 	}
 }
 
-// deliverCloseConfirm hands the app's confirm_close answer to a pending
-// requestClose, reporting whether one was waiting. false means the
-// confirm was unsolicited (no close handshake in flight).
-func (inst *AppInstance) deliverCloseConfirm(allow bool) bool {
+// deliverCloseConfirm routes a window.confirm_close.
+//
+// Solicited — a close handshake is pending — hands the answer to
+// requestClose's channel, and that's the whole story.
+//
+// UNSOLICITED with allow=true is the app asking to close ITSELF: wash-term
+// when its last shell exits, or any app that vetoed the handshake to put a
+// confirmation dialog on screen and now has its answer. This used to be
+// dropped on the floor, so `exit` in a terminal's last tab left a dead empty
+// window, and an app that wanted to ask before closing had no way to finish
+// the job — apps/ai/be/app.go worked around it by ending its own process.
+// Run the same teardown a confirmed titlebar click runs.
+//
+// Unsolicited allow=false is a no-op: "don't close me" answers nothing when
+// nothing asked. (wash-display's guest vetoes are the only such traffic
+// today, so nothing depends on it doing more.)
+func (inst *AppInstance) deliverCloseConfirm(win uint32, allow bool) {
 	inst.closeMu.Lock()
 	ch := inst.closeConfirm
 	inst.closeMu.Unlock()
@@ -1007,43 +1038,15 @@ func (inst *AppInstance) deliverCloseConfirm(allow bool) bool {
 		case ch <- allow:
 		default:
 		}
-		return true
+		return
 	}
-	return false
-}
-
-// approveWindowClose performs the teardown of an app whose primary-window
-// close was approved — either the app answered a close_requested handshake
-// with allow=true (handleWindowCloseClicked) or it sent an unsolicited
-// confirm_close asking to close itself (wash-term after its last tab
-// exits, or after its FE confirmed a close it had earlier vetoed).
-func (r *Router) approveWindowClose(inst *AppInstance, win uint32) {
-	// Tell shells the window is gone now. The app's loop teardown will
-	// also call destroyWindow when it exits; the second call is a no-op
-	// (already deleted).
-	r.broadcastPatches(r.winSession.destroyWindow(win))
-	// expectedExit suppresses the crash-broadcast in the cleanup
-	// goroutine — an approved close is an orderly exit, not a
-	// tombstone-worthy crash. Set BEFORE signalling.
-	inst.expectedExit.Store(true)
-	if inst.Cmd != nil && inst.Cmd.Process != nil {
-		// Spawn-completion branch: router forked the child directly and
-		// owns *exec.Cmd. SIGTERM gracefully — the app's read loop sees
-		// EOF after the signal — then escalate to SIGKILL if it hangs
-		// past the grace window, so a confirm-then-wedge app can't stay
-		// pinned in r.apps with its window gone (REVIEW-RECONNECT M7).
-		r.terminateWindowedApp(inst)
-	} else {
-		// Token-attach branch: the child was forked by an external
-		// spawner (e.g. wash-priv under sudo). We don't have an
-		// *exec.Cmd to signal, and in the non-embedded case wouldn't
-		// have permission to SIGTERM the root child anyway. Closing the
-		// transport is the unprivileged equivalent: the app's read loop
-		// sees EOF, sdk.Run returns, main() returns, the process exits,
-		// and the spawner's cmd.Wait unblocks (so wash-priv's queue row
-		// transitions Running → Done).
-		_ = inst.Transport.Close()
+	if !allow || inst.router == nil {
+		return
 	}
+	if win == 0 {
+		win = inst.WindowID
+	}
+	inst.router.approveWindowClose(inst, win)
 }
 
 // writeCtrl encodes m as JSON and writes a control-channel frame.

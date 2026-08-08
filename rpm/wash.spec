@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.10.0
+Version:        0.13.1
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,65 @@ fi
 exit 0
 
 %changelog
+* Fri Aug 07 2026 sirmick <sirmick@gmail.com> - 0.13.1-1
+- remote-fs: recover from a silent SSH link death on both the mount data path
+  and the shared watch channel (NAT/conntrack drop, suspend, cable pull now
+  reconnect instead of wedging).
+- remote: fix a data race on the wash-remote supervisor's published host/mount
+  state (copy-on-write the status slices).
+- wash-vm: the in-browser WASM VM inflates the gzip shell bundle so the desktop
+  mounts again; adds a headless boot gate (make browser-vm-test).
+
+* Fri Aug 07 2026 sirmick <sirmick@gmail.com> - 0.13.0-1
+- agent: ACP filesystem and terminal capabilities. An agent that opts in reads
+  and writes through wash, confined to its session folder, and hands wash its
+  shell commands — which run as real ptys you can watch and interrupt.
+- agent: wash-edit hosts agent sessions in its terminal pane, in the folder the
+  editor has open, with tool rows opening files in the buffer above.
+- agent: per-session host-side auto-approval (yolo), badged and recorded in the
+  transcript, unable to reverse an explicit deny.
+- terminal: closing a tab or window asks first and names what is running;
+  per-pane status bars.
+- files: a symlink to a folder behaves as a folder in pickers, trees and fm.
+- test: the three long-standing e2e failures are fixed; the push gate gates.
+* Thu Aug 06 2026 sirmick <sirmick@gmail.com> - 0.12.1-1
+- shell: a connection lost before the desktop finished painting no longer hides
+  behind the boot splash; the splash stands down on connection loss and the
+  connection banner outranks it, so "Reconnect now" is reachable.
+- router: the env.publish log line names the keys it accepted, not just a count.
+- test: the three long-standing e2e failures (reconnect + the two display
+  capstones) were real defects and are fixed, along with a false-pass in the
+  terminal burst soak; the e2e gate blocks pushes honestly again.
+* Thu Aug 06 2026 sirmick <sirmick@gmail.com> - 0.12.0-1
+- agent: wash runs coding agents itself over the Agent Client Protocol; new
+  Agent app (com.wash.ai) with a launcher, a streaming transcript, markdown,
+  tables and inline images.
+- agent: permission requests arrive as structured data and land in the same
+  approval queue the sidebar already rendered; answer from either view.
+- agent: the agent's own settings on the window — approval mode, model,
+  reasoning effort, plan mode — so an org's pinned policy still holds.
+- agent: stop a turn, see context used, slash-command completion, and
+  sessions named by the title the agent writes itself.
+- agent: removed the previous hook/OSC/decision-socket mechanism and the
+  wash-agent-hook helper.
+- ui: shared MenuBar in @wash/ui.
+- term: restored TERM / $WASH_BIN_DIR / display-hint env for terminals.
+* Sun Aug 02 2026 sirmick <sirmick@gmail.com> - 0.11.0-1
+- term: agent-aware terminals — tab state dot + status line driven by an OSC
+  7770 status channel and a foreground-process check.
+- term: transition toasts (needs-input / finished) with click-to-focus and a
+  taskbar attention dot.
+- term: agent approval policy over a per-pty decision socket, edited in
+  Settings -> Agents; off by default, fails open to the agent's own prompt.
+- agentd: new com.wash.agentd roster service — one sidebar row per agent,
+  answer permission requests inline, "always allow" writes the rule.
+- agentd: session history with Resume / Fork after a reboot or closed window.
+- term: smart paste — silent repair of invisible junk, preview before a
+  wrapped command is rejoined, paste-jacking warning.
+- router: scrollback ring grows to 4 MiB while detached (20,000 lines kept
+  client-side) so output written with the lid shut survives.
+- term: content no longer paints over the scrollbar; the bar is themed.
+- cli: wash-agent-hook + `wash agent-hooks install|remove|status`.
 * Thu Jul 09 2026 sirmick <sirmick@gmail.com> - 0.10.0-1
 - clipboard: converge the wash + system clipboards behind HTTPS (pastes
   prefer readText where readable, wash-clipboard fallback; native pastes +

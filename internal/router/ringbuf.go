@@ -63,6 +63,82 @@ func (r *ringBuffer) Write(p []byte) (int, error) {
 	return total, nil
 }
 
+// GrowFor raises capacity so that n more bytes fit without overwriting
+// history, doubling until they do, and never past max. It is the
+// "nobody is reading this right now" path: a detached (or wedged-behind)
+// channel keeps more history than the steady-state buffer would, because
+// the bytes have nowhere else to go and the process must not be stalled
+// to preserve them (docs/PTY_ROBUST.md — writes never block).
+//
+// Returns true if the capacity changed. Contents are preserved in order.
+func (r *ringBuffer) GrowFor(n, max int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	capacity := len(r.data)
+	if capacity >= max {
+		return false
+	}
+	used := r.head
+	if r.full {
+		used = capacity
+	}
+	need := used + n
+	if need <= capacity {
+		return false
+	}
+	next := capacity
+	for next < need {
+		next *= 2
+	}
+	if next > max {
+		next = max
+	}
+	if next <= capacity {
+		return false
+	}
+	kept := r.snapshotLocked()
+	r.data = make([]byte, next)
+	r.head = copy(r.data, kept)
+	r.full = r.head >= next
+	if r.full {
+		r.head = 0
+	}
+	return true
+}
+
+// Shrink returns capacity to target, keeping the most recent bytes —
+// called once a shell has taken delivery of the history (reattach replay
+// or resync), so the grown buffer doesn't outlive the disconnection that
+// justified it. A no-op when already at or below target.
+func (r *ringBuffer) Shrink(target int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if target < 1 {
+		target = 1
+	}
+	if len(r.data) <= target {
+		return false
+	}
+	kept := r.snapshotLocked()
+	if len(kept) > target {
+		kept = kept[len(kept)-target:]
+	}
+	r.data = make([]byte, target)
+	r.head = copy(r.data, kept)
+	r.full = r.head >= target
+	if r.full {
+		r.head = 0
+	}
+	return true
+}
+
+// Cap reports the current capacity.
+func (r *ringBuffer) Cap() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.data)
+}
+
 // Snapshot returns the current contents in chronological order. Caller
 // owns the returned slice.
 func (r *ringBuffer) Snapshot() []byte {

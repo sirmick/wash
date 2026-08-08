@@ -13,13 +13,14 @@
 
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { ensureScrollbarStyles } from './scrollbars';
 import type { ITheme } from '@xterm/xterm';
 import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
-import type { Component } from 'solid-js';
+import type { Component, JSX } from 'solid-js';
 
 import { tokens } from './tokens';
 import { washAssetUrl } from './assets';
-import { Menu, MenuItem } from './menu';
+import { Menu, MenuItem, MenuSeparator } from './menu';
 import { washCopyText, washPasteText } from './clipboard';
 import { washAppearance, onAppearanceChange } from './packs';
 
@@ -247,6 +248,17 @@ export const TERM_FONTS: TermFont[] = [
   { id: 'menlo', label: 'Menlo / Consolas', stack: 'Menlo, Consolas, "Liberation Mono", monospace' },
 ];
 
+// TERM_SCROLLBACK_LINES is how much output a terminal keeps client-side.
+// Paired with the router's ChannelScrollbackMaxBytes: keeping less here
+// would silently discard a reattach replay, keeping much more costs
+// browser memory per tab for history nobody scrolls back to.
+export const TERM_SCROLLBACK_LINES = 20_000;
+
+// TERM_INSET_PX is the breathing room on each side of the character grid.
+// Applied to the .xterm element (see term.open below) because that is what
+// FitAddon's column arithmetic accounts for.
+const TERM_INSET_PX = 10;
+
 export const TERM_DEFAULT_FONT_ID = 'system';
 export const TERM_DEFAULT_FONT_SIZE = 12;
 export const TERM_MIN_FONT_SIZE = 9;
@@ -279,7 +291,7 @@ async function ensureFontLoaded(f: TermFont): Promise<void> {
 }
 
 // TermModes is the terminal-mode state a reattaching consumer
-// persists and re-seeds. The 256KB scrollback replay only carries the
+// persists and re-seeds. The scrollback replay only carries the
 // byte TAIL of a session, so mode-setting sequences emitted once at
 // app start (alt-screen 1049, bracketed paste 2004, mouse 1000/1002/
 // 1006, application cursor keys 1, cursor visibility 25, …) can fall
@@ -376,6 +388,12 @@ export interface TerminalProps {
   onTitle?: (title: string) => void;
   // contextMenu enables the right-click Copy/Paste menu (default on).
   contextMenu?: boolean;
+  // menuExtras appends host-supplied items to that menu (below a
+  // separator) — e.g. wash-term's pane verbs. It is handed a close
+  // callback so an item can dismiss the menu after acting. Plain
+  // Copy/Paste stays the default; consumers that pass nothing are
+  // unaffected.
+  menuExtras?: (close: () => void) => JSX.Element;
   // initialCols/initialRows open the fresh xterm at a specific grid
   // instead of fitting to the container — set them to the pty's
   // current size on reattach so the scrollback replay renders at the
@@ -391,6 +409,13 @@ export interface TerminalProps {
   // onModesChanged fires whenever the tracked mode state changes;
   // consumers persist it (debounced) for the next remount.
   onModesChanged?: (m: TermModes) => void;
+  // beforePaste is the smart-paste hook (docs/AGENT_TERM.md §10). Every
+  // paste path in this component funnels through it: the context menu, the
+  // Ctrl+Shift+V binding, the imperative api.paste(), and the browser's own
+  // paste event on the xterm textarea. Return the text to paste (possibly
+  // repaired), or null to cancel. Omit it and pastes go through untouched —
+  // this component holds no policy of its own.
+  beforePaste?: (text: string, ctx: { bracketedPaste?: boolean }) => Promise<string | null>;
   // onStalled fires when this terminal typed input but got no output back
   // for several seconds under an otherwise-live channel (docs/PTY_ROBUST.md,
   // Fix D). The component already self-heals with a resync nudge; consumers
@@ -487,11 +512,30 @@ export const Terminal: Component<TerminalProps> = (props) => {
   const effectiveSize = () => clampSize(props.fontSize ?? TERM_DEFAULT_FONT_SIZE);
 
   // pasteWash inserts the wash clipboard at the cursor through
-  // xterm's paste path (bracketed-paste aware, CR-normalized).
+  // xterm's paste path (bracketed-paste aware, CR-normalized), after the
+  // consumer's beforePaste filter has had its say.
   const pasteWash = () => {
     void washPasteText().then((text) => {
-      if (text && term) term.paste(text);
+      if (text) void pasteFiltered(text);
     });
+  };
+
+  // pasteFiltered is the one place text enters the pty from the clipboard.
+  // With no beforePaste hook it is a straight term.paste(); with one, the
+  // hook decides what (if anything) lands.
+  const pasteFiltered = async (text: string) => {
+    if (!props.beforePaste) {
+      term?.paste(text);
+      return;
+    }
+    let out: string | null = text;
+    try {
+      out = await props.beforePaste(text, { bracketedPaste: decModes[2004] });
+    } catch {
+      // A broken filter must never eat the user's paste.
+      out = text;
+    }
+    if (out) term?.paste(out);
   };
 
   // ---- terminal-mode tracking (see TermModes) ----
@@ -562,12 +606,20 @@ export const Terminal: Component<TerminalProps> = (props) => {
       (props.initialCols ?? 0) > 1 && (props.initialRows ?? 0) > 1
         ? { cols: props.initialCols, rows: props.initialRows }
         : undefined;
+    ensureScrollbarStyles();
     term = new XTerm({
       ...restoredGrid,
       fontFamily: initialFamily,
       fontSize: effectiveSize(),
       theme: props.theme ?? termThemeFor(props.appearanceOverride ?? washAppearance()),
       cursorBlink: true,
+      // The router keeps up to 4 MiB of output for a channel nobody is
+      // reading (a closed lid, a refreshed tab), and replays it on
+      // reattach. xterm's default of 1000 lines would throw most of that
+      // away on arrival — ~80 KB at 80 columns — so the retained history
+      // is raised to match. Lines are allocated as they arrive, so an
+      // idle terminal pays nothing for the higher ceiling.
+      scrollback: TERM_SCROLLBACK_LINES,
       allowProposedApi: true,
       wordSeparator: TERM_WORD_SEPARATORS,
     });
@@ -655,6 +707,19 @@ export const Terminal: Component<TerminalProps> = (props) => {
     fit = new FitAddon();
     term.loadAddon(fit);
     term.open(hostEl);
+    // The left/right inset (so the first and last columns aren't jammed
+    // against the window edge) goes on the .xterm ELEMENT, not on the host
+    // div. FitAddon computes the grid from the host's computed width MINUS
+    // the xterm element's padding — a host that is padded instead is
+    // invisible to that arithmetic, and `box-sizing: border-box` makes the
+    // host report its full outer width anyway. The old placement sized the
+    // grid ~20px too wide, and the surplus column painted over the
+    // scrollbar (scrollbars.ts).
+    //
+    // .xterm is position:relative, so .xterm-viewport (absolute, inset 0)
+    // still spans the padding box: the scrollbar sits at the true right
+    // edge while the text is inset. That is the layout we want.
+    term.element!.style.padding = `0 ${TERM_INSET_PX}px`;
     term.onData((s) => {
       try {
         const bytes = encoder.encode(s);
@@ -692,6 +757,24 @@ export const Terminal: Component<TerminalProps> = (props) => {
     onCleanup(() => {
       hostEl.removeEventListener('mouseup', onMouseUp);
     });
+
+    // Native paste (Ctrl+V, the browser's own Edit▸Paste, middle-click on
+    // X11) goes straight to xterm's textarea and would bypass the smart-paste
+    // filter — so when a consumer installs one, we intercept the DOM event in
+    // the capture phase and re-enter through the same choke point. Only wired
+    // when beforePaste exists: with no filter, xterm's own handling is left
+    // exactly as it was.
+    if (props.beforePaste) {
+      const onNativePaste = (ev: ClipboardEvent) => {
+        const text = ev.clipboardData?.getData('text/plain') ?? '';
+        if (!text) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        void pasteFiltered(text);
+      };
+      hostEl.addEventListener('paste', onNativePaste, true);
+      onCleanup(() => hostEl.removeEventListener('paste', onNativePaste, true));
+    }
 
     if (channelId > 0) {
       const stallCheck = window.setInterval(() => {
@@ -874,11 +957,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
     <>
       <div
         ref={hostEl!}
-        // Small left/right inset so the first/last columns aren't jammed
-        // against the window edge. border-box keeps the host's reported
-        // width as the content width, so FitAddon sizes columns to the
-        // padded area (no overflow, no manual refit needed).
-        style={{ width: '100%', height: '100%', 'box-sizing': 'border-box', padding: '0 10px' }}
+        // NO padding here — see TERM_INSET_PX. The inset lives on the
+        // .xterm element itself, because that is the one FitAddon
+        // subtracts when it sizes the grid.
+        style={{ width: '100%', height: '100%', 'box-sizing': 'border-box' }}
         onContextMenu={onCtx}
       />
       <Show when={menu()}>
@@ -900,6 +982,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
               data-testid="term-ctx-paste"
               onClick={doPaste}
             />
+            <Show when={props.menuExtras}>
+              <MenuSeparator />
+              {props.menuExtras!(() => setMenu(null))}
+            </Show>
           </Menu>
         )}
       </Show>

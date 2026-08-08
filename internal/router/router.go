@@ -175,6 +175,12 @@ type Router struct {
 	linkTotals   *LinkStats
 	connectCount atomic.Uint64
 	started      time.Time
+	// shellID is a per-router-run identity included in session snapshots.
+	// reloadEpoch bumps when dev-reload broadcasts a page reload for changed
+	// app binaries. Together they let a live page detect a missed reload after
+	// reconnect and refresh before app/vendor module versions diverge.
+	shellID     string
+	reloadEpoch atomic.Uint64
 
 	// Asset cache (docs/QOS.md): path → cached identity+gzip bytes, so the
 	// asset.read path reads + compresses each file once per process rather
@@ -281,6 +287,7 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 	if log == nil {
 		log = func(string, ...any) {}
 	}
+	now := time.Now()
 	return &Router{
 		cfg:               cfg,
 		reg:               reg,
@@ -298,7 +305,8 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		ingress:           newIngressRegistry(log),
 		peers:             make(map[string]peerTarget),
 		linkTotals:        &LinkStats{},
-		started:           time.Now(),
+		started:           now,
+		shellID:           fmt.Sprintf("%x", now.UnixNano()),
 	}
 }
 
@@ -307,6 +315,13 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 // totals come from already-finished connections; live is the current one.
 func (r *Router) sessionLinkTotals(live wire.LinkStatsSnapshot) wire.LinkStatsSnapshot {
 	return r.linkTotals.snapshot([numClasses]int{}).Plus(live)
+}
+
+func (r *Router) shellCoherenceID() string {
+	if r.shellID == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d", r.shellID, r.reloadEpoch.Load())
 }
 
 // SetAssets installs the embedded shell-runtime FS so TShellAssetRead
@@ -601,10 +616,25 @@ func (r *Router) spawnEnv() []string {
 }
 
 // ChannelScrollbackBytes is the per-channel ring-buffer capacity for
-// bytes flowing app → shell. Sized to comfortably hold a few
-// thousand lines of terminal output so a reattaching shell can replay
-// the recent scrollback.
+// bytes flowing app → shell while a shell is attached and keeping up.
+// Sized to comfortably hold a few thousand lines of terminal output so a
+// reattaching shell can replay the recent scrollback.
 const ChannelScrollbackBytes = 256 * 1024
+
+// ChannelScrollbackMaxBytes is the ceiling the ring grows to while NOBODY
+// is taking delivery — a detached shell (closed lid, refreshed tab) or one
+// so far behind it has stopped granting credit. Those bytes have nowhere
+// else to go, and the alternative to buffering them is stalling the
+// process that wrote them, which wash does not do: the pty keeps running
+// with the lid shut, and the agent hooks that write to that same tty keep
+// working (docs/AGENT_TERM.md §3).
+//
+// 4 MiB is roughly 50k lines of 80-column output — a long build or a
+// couple of agent turns. The cost is bounded and only paid while
+// disconnected: the buffer shrinks back to ChannelScrollbackBytes as soon
+// as a shell has taken the history (reattach replay or resync), so N idle
+// tabs cost N × 256 KiB, not N × 4 MiB.
+const ChannelScrollbackMaxBytes = 4 * 1024 * 1024
 
 // channelBinding is a router-side raw channel — paired writers on
 // each transport plus enough state to clean up when either end goes
@@ -1489,18 +1519,29 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 		// live forwarding resumes.
 		b.behind = false
 		var replay []byte
-		// Video kinds get NO ring replay — the ring is a concatenation of
-		// framed WebP payloads and realignReplay's terminal-escape trimming
-		// would corrupt them; the app is nudged for a whole frame below
-		// (same rule as resyncChannel, REVIEW-X11-WAYLAND #6).
-		if b.buf != nil && !isVideoKind(b.kind) {
-			replay = b.buf.Snapshot()
-			if b.buf.Truncated() {
-				// The ring wrapped while detached: the snapshot
-				// starts at an arbitrary byte, possibly mid-rune
-				// or mid-escape. Trim to a clean boundary so the
-				// replay doesn't open with garbage.
-				replay = realignReplay(replay)
+		if b.buf != nil {
+			// Video kinds get NO ring replay — the ring is a concatenation
+			// of framed WebP payloads and realignReplay's terminal-escape
+			// trimming would corrupt them; the app is nudged for a whole
+			// frame below (same rule as resyncChannel, REVIEW-X11-WAYLAND
+			// #6). Their ring still shrinks below: it grew while detached
+			// like any other.
+			if !isVideoKind(b.kind) {
+				replay = b.buf.Snapshot()
+				if b.buf.Truncated() {
+					// The ring wrapped while detached: the snapshot
+					// starts at an arbitrary byte, possibly mid-rune
+					// or mid-escape. Trim to a clean boundary so the
+					// replay doesn't open with garbage.
+					replay = realignReplay(replay)
+				}
+			}
+			// This shell is taking delivery of the history, so a ring
+			// grown during the disconnection has done its job — hand the
+			// memory back rather than carrying it for the session's life.
+			if b.buf.Shrink(ChannelScrollbackBytes) {
+				r.log("channel %d: scrollback shrunk to %d after replay of %d bytes",
+					b.channelID, ChannelScrollbackBytes, len(replay))
 			}
 		}
 		id := b.channelID
@@ -1612,6 +1653,9 @@ func (r *Router) resyncChannel(b *channelBinding) {
 		if b.buf.Truncated() {
 			replay = realignReplay(replay)
 		}
+		// The FE is being handed the whole history, so a ring grown while
+		// it was behind can return to the steady-state size.
+		b.buf.Shrink(ChannelScrollbackBytes)
 	}
 	// Reset + snapshot ride ClassBulk (not Control/Interactive) so they stay
 	// FIFO behind any stale same-channel Bulk frames still queued: strict

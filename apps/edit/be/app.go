@@ -35,6 +35,7 @@ import (
 	wfs "github.com/sirmick/wash/internal/fs"
 	"github.com/sirmick/wash/internal/pty"
 	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/internal/wire"
 )
 
 //go:embed all:assets
@@ -106,6 +107,13 @@ func init() {
 		},
 		Assets:  sub,
 		OnReady: onReady,
+		// Installed BEFORE the bus, so NewBus captures it as the chain
+		// target: agentd's replies (transcript_snapshot, transcript_event,
+		// agent_started, state) have no bus handler of their own and fall
+		// through to here, where the keyed relay routes them.
+		OnAppMsgFrom: func(_ *sdk.Conn, _ uint32, data any, from wire.Sender) {
+			onAgentMsgFrom(data, from)
+		},
 	}
 	registry.Register(&registry.App{
 		Name:     "wash-edit",
@@ -134,8 +142,12 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	// through the bus.
 	sdk.EnableFilePicker(c)
 
+	// The relay must exist before the bus, since the bus chains unhandled
+	// messages into it.
+	initAgent(c)
 	bus = sdk.NewBus(c)
 	registerHandlers(bus)
+	registerAgentHandlers(bus)
 
 	if root == "" {
 		log.Printf("wash-edit ready instance=%s window=%d (unconfined)", instanceID, windowID)

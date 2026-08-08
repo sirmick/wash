@@ -203,6 +203,10 @@ export const tokens = {
   animPopIn: 'wash-pop-in 140ms ease-out',
   animPopInFast: 'var(--wash-menu-anim, wash-pop-in 100ms ease-out)',
   animSlideUp: 'var(--wash-menu-anim, wash-slide-up 140ms ease-out)',
+  // Indeterminate progress. Mark the element `data-wash-spin` too, so the
+  // reduced-motion rule in shell/index.html can still it without losing
+  // the state it conveys.
+  animSpin: 'wash-spin 900ms linear infinite',
 } as const;
 
 export type Tokens = typeof tokens;

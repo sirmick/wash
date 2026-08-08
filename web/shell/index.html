@@ -43,6 +43,14 @@
       from { opacity: 0; transform: translateY(8px); }
       to   { opacity: 1; transform: translateY(0); }
     }
+    /* Indeterminate "working" spinner. Apps reference it as
+       tokens.animSpin; defined here for the same light-DOM reason as
+       the enter animations above. */
+    @keyframes wash-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      /* Still legible as a state, just not moving. */
+      [data-wash-spin] { animation: none !important; opacity: 0.6; }
+    }
 
     /* Single-pass diagonal highlight that sweeps across an element
        once on mount. Used by the start menu on open. The overlay

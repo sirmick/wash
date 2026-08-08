@@ -2,6 +2,7 @@ package wire
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -411,8 +412,14 @@ func DecodeCtrl(data []byte) (any, error) {
 		var m ShellPanelReadErr
 		return m, json.Unmarshal(data, &m)
 	}
-	return nil, fmt.Errorf("ctrl decode: unknown t %q", t)
+	return nil, fmt.Errorf("%w: %q", ErrUnknownCtrl, t)
 }
+
+// ErrUnknownCtrl is returned by DecodeCtrl for a well-formed frame whose "t"
+// is not known to this build. Receivers that are meant to be forward
+// compatible (test harnesses, older peers) should skip such frames rather
+// than treat them as protocol corruption.
+var ErrUnknownCtrl = errors.New("ctrl decode: unknown t")
 
 // EncodeCtrl marshals any of the JSON control message types defined in
 // this package, asserting the t field is set on the value.

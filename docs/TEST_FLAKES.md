@@ -21,6 +21,12 @@ cross-checked against CI history and local stress runs.
 Local stress otherwise green: `go test -shuffle=on` ×2 (only TestSpine fired, load-induced not
 order-induced), `-race -count=3` over the 14 concurrency-dense packages, fe-unit ×5, vitest ×2.
 
+**Later sightings are logged in `docs/FLAKE_LOG.md`** (dated, with the pre-change baseline
+each was A/B'd against). The 2026-07-29 entry adds a mechanism for `display-term-xclock` that
+C5 below does not have: the failure is `DISPLAY` missing at pty spawn, because the spec's
+`env.publish` wait is satisfied by a stale pre-Xwayland match (the A10 cursor problem), not a
+lost keystroke.
+
 ## Ground rules (do not skip)
 
 1. **One worktree branch per phase** under `branches/` (`git -C /home/mick/wash worktree add
@@ -172,6 +178,13 @@ loop and make startup event-driven. Biggest blast radius; do them first, in orde
 - Verify: `mv out/washvm-run{,.bak}; cd e2e && pnpm exec playwright test tests/net-vm-gate.spec.ts --workers=1` → clean skip; restore.
 
 ### A10 [P2] `waitForLog` matches from t=0 — add a cursor so "the save I just triggered" is expressible
+> **PARTLY DONE (2026-08-06).** The cursor shipped, under different names than
+> proposed below: `waitForLog(re, timeout, from?)` plus `logCursor(): number`
+> (`e2e/fixtures/router.ts`) — C3 should use those instead of
+> `logMark`/`waitForLogSince`. `logCount` is still unwritten. The display half of
+> this item is fixed a different and better way: the router now logs *which* env
+> keys it accepted, so the specs assert the fact (`keys=…WASH_X_DISPLAY`) rather
+> than sequencing behind an event at all. See `docs/FLAKE_LOG.md` 2026-08-06.
 - `router.ts:407` scans the whole buffer; every "wait for MY persist" barrier silently matches
   the first stale occurrence (bites C3 below). Until Phase E replaces log-greps entirely:
 - Fix: add to the handle: `logMark: () => number` (returns `logBuf.length`) and
@@ -219,7 +232,25 @@ the panic and fixed itself with a no-op logger; the fix never propagated.
 - Verify: `go test -race -count=10 ./internal/router ./internal/runner/router ./internal/loopback`
   and the B2 repro command no longer panics.
 
-### B2 [P0] loopback TestSpine asserts a wire ordering the product explicitly does not guarantee (reproduced)
+### B2 [P0] loopback TestSpine asserts a wire ordering the product explicitly does not guarantee (reproduced) — **FIXED 2026-08-02**
+
+> Landed as described (complete on byte-count) plus three things this entry did not foresee,
+> all found by hammering `-race -count=20`:
+> 1. **The hang, not just the mismatch.** Completing on byte-count is not enough on its own:
+>    `frameReader.nextCtrl` blocks until the next *control* frame, and the bundle's last Bulk
+>    data frame can legitimately be the last thing on the wire — so the wait loop never
+>    re-tested its condition after the bytes landed. Split into `readOne` (returns after ANY
+>    frame) and `nextCtrl` (loops `readOne` until a ctrl frame); the bundle wait uses `readOne`.
+> 2. **Raw frames before their bind** were dropped by the `continue` in the raw branch when
+>    `bundleChannelID == 0`. They are now held in `pendingRaw` per channel and adopted when the
+>    bind names the channel — same reason as above, data need not follow its own control frame.
+> 3. **Unmodelled ctrl frames are no longer fatal.** The router ships `link.stats` telemetry the
+>    harness does not model, and `DecodeCtrl` returned a plain error → `t.Fatalf("decode: …")`.
+>    Added `wire.ErrUnknownCtrl` (product side) so forward-compatible receivers can skip an
+>    unknown `t` while still failing on genuine corruption; the harness skips.
+>
+> Verified: `go test -race -count=20 ./internal/loopback` green (was 5/5 red under `-race` on
+> this box, at `origin/main` too). Original entry below.
 - `internal/loopback/spine_test.go:295-298`: `frameReader` sets `bundleDone` on
   `ShellChannelUnbind`. The router sends bundle payload at **ClassBulk** but bind/unbind at
   control class; `internal/router/router.go:1362-1364` documents "Size lets the shell complete
@@ -545,6 +576,15 @@ Replace bare snapshots with polls (readFileSync/existsSync inside `expect.poll`)
 - Verify: `pnpm exec playwright test tests/term-fonts.spec.ts tests/term-menubar.spec.ts tests/term-wedge-recovery.spec.ts tests/term-modes-resize.spec.ts tests/term-reconcile.spec.ts --repeat-each=10`.
 
 ### C5 [P1] display family (today's only red + 2 of the 5 CI flakes live here)
+> **DONE (2026-08-06)** — the tier is green 5/5 in parallel, was 1/5. The
+> shell-ready barrier below landed on all four specs, but it was **not** the
+> cause: the cause was the A10 stale `env.publish` match launching terminals
+> before `WASH_X_DISPLAY` reached `spawnEnv`, so `xclock` died with `Can't open
+> display:` and no window ever mapped. The "compositor stalls under concurrency"
+> premise was wrong — the 21s red runs were the specs' own 20s `waitFor` for a
+> window that was never coming. Mechanism, A/B and fix: `docs/FLAKE_LOG.md`
+> 2026-08-06. The `display.spec.ts:80` and `display-qt-popover.spec.ts:89`
+> one-shot-count items below are still unwritten.
 - `display.spec.ts:80-81`: replace waitForSelector + one-shot `count()` with
   `await expect(page.locator('wash-app-display')).toHaveCount(2, { timeout: 10_000 });`
 - `display-term-xclock.spec.ts:38`, `display-guest.spec.ts:54-59`,

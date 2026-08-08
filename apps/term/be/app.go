@@ -30,6 +30,7 @@ import (
 	"log"
 	"os"
 	osuser "os/user"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,7 @@ import (
 	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/pty"
 	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/internal/wire"
 )
 
 // execArgv is the user-supplied --exec ARGS... When non-nil, openTab
@@ -93,6 +95,19 @@ type state struct {
 	// pushed per channel, so an idle tab stays off the wire (we only
 	// send when root/ssh/user actually flips). Cleared on tab close.
 	statusSent map[uint32]string
+	// agents holds each tab's merged agent status (T0 poll + OSC 7770
+	// events); agentSent is its send-on-change dedupe, same shape as
+	// statusSent. See agent.go.
+	// autoApprove holds each tab's trailing-output window for the opt-in
+	// legacy auto-approve path (autoapprove.go). Absent for every tab
+	// until the feature is switched on.
+}
+
+// initState allocates the per-window maps. Both entrypoints (Def for the
+// standalone shim, run for the multicall dispatch) start here.
+func initState() {
+	st.sessions = make(map[uint32]*pty.Session)
+	st.statusSent = make(map[uint32]string)
 }
 
 var st state
@@ -157,8 +172,7 @@ func init() {
 // execArgv / loginShell before it spawns the first openTab.
 func Def() *sdk.AppDef {
 	parseFlags()
-	st.sessions = make(map[uint32]*pty.Session)
-	st.statusSent = make(map[uint32]string)
+	initState()
 	return def
 }
 
@@ -166,8 +180,7 @@ func Def() *sdk.AppDef {
 // sequence as Def + sdk.Main, but plumbed through registry.App.Run.
 func run(ctx context.Context) error {
 	parseFlags()
-	st.sessions = make(map[uint32]*pty.Session)
-	st.statusSent = make(map[uint32]string)
+	initState()
 	return sdk.Run(ctx, def)
 }
 
@@ -267,8 +280,21 @@ type newTabReq struct {
 	Rows uint64 `json:"rows"`
 }
 
+// execTabReq is the resume path's tab request (§13). Exec is the argv to
+// run instead of the user's shell.
+type execTabReq struct {
+	Cols uint64   `json:"cols"`
+	Rows uint64   `json:"rows"`
+	Exec []string `json:"exec"`
+	Cwd  string   `json:"cwd,omitempty"`
+}
+
 type closeTabReq struct {
 	ChannelID uint64 `json:"channel_id"`
+	// Force skips the busy check — set by the FE when the user has
+	// answered the confirmation dialog. An unforced close of a busy tab
+	// is refused with a close_blocked app_msg instead.
+	Force bool `json:"force"`
 }
 
 func registerHandlers(b *sdk.Bus) {
@@ -285,6 +311,10 @@ func registerHandlers(b *sdk.Bus) {
 		}
 		return sess.Resize(uint16(req.Cols), uint16(req.Rows))
 	})
+	// new_tab is the FE's own verb: open a tab running the user's shell.
+	// (The privileged "open a tab running THIS command" verb is exec_tab
+	// below — a separate kind, because HandleFromVoid drops own-FE
+	// messages and because one caller deserves one door.)
 	sdk.HandleVoid(b, "new_tab", func(c *sdk.Conn, _ string, req newTabReq) error {
 		cols := req.Cols
 		rows := req.Rows
@@ -295,6 +325,36 @@ func registerHandlers(b *sdk.Bus) {
 			rows = 24
 		}
 		go openTab(c, c.WindowID(), uint16(cols), uint16(rows))
+		return nil
+	})
+	// exec_tab opens a tab running a specific command — the session-resume
+	// path (docs/AGENT_TERM.md §13). Honoured ONLY from com.wash.agentd,
+	// and only because a human clicked Resume in the sidebar. The sender is
+	// router-attested, so this is a real boundary rather than a convention.
+	//
+	// (agentd is not a privileged id: an app that could impersonate it is
+	// already a process on the user's box and could run the command
+	// itself. The check keeps the capability narrow, it does not contain an
+	// attacker who is already inside.)
+	sdk.HandleFromVoid(b, "exec_tab", func(c *sdk.Conn, _ string, req execTabReq, from wire.Sender) error {
+		// agentdAppID is declared beside the verb it guards now that the
+		// rest of the agent tier has gone (docs/AGENT_APP.md §10).
+		if from.AppID != agentdAppID {
+			log.Printf("term: exec_tab refused from=%s", from.AppID)
+			return nil
+		}
+		if len(req.Exec) == 0 {
+			return nil
+		}
+		cols, rows := req.Cols, req.Rows
+		if cols == 0 {
+			cols = 80
+		}
+		if rows == 0 {
+			rows = 24
+		}
+		log.Printf("term: exec_tab from=%s argv=%q", from.AppID, req.Exec)
+		go openTabExec(c, c.WindowID(), uint16(cols), uint16(rows), req.Exec)
 		return nil
 	})
 	// list_sessions is the FE's mount-time reconcile: a `tab_closed`
@@ -327,32 +387,38 @@ func registerHandlers(b *sdk.Bus) {
 		st.mu.Unlock()
 		return c.SendAppMsg(map[string]any{"kind": "sessions", "sessions": rows})
 	})
-	sdk.HandleVoid(b, "close_tab", func(_ *sdk.Conn, _ string, req closeTabReq) error {
+	// close_window_confirmed: the user answered the window-close dialog
+	// with "close anyway". Kill every shell, then ask the router to take
+	// the window down — an unsolicited confirm_close(allow=true), which
+	// the router runs the same teardown for as a confirmed titlebar click.
+	sdk.HandleVoid(b, "close_window_confirmed", func(c *sdk.Conn, _ string, _ struct{}) error {
+		killAllSessions()
+		return c.ConfirmClose(c.WindowID(), true)
+	})
+	sdk.HandleVoid(b, "close_tab", func(c *sdk.Conn, _ string, req closeTabReq) error {
 		if req.ChannelID == 0 {
 			return nil
 		}
 		st.mu.Lock()
 		sess := st.sessions[uint32(req.ChannelID)]
 		st.mu.Unlock()
-		if sess != nil {
-			sess.CloseWithReason("user requested")
+		if sess == nil {
+			return nil
 		}
-		return nil
-	})
-	// close_window is the FE's answer to the close_requested app_msg:
-	// the user confirmed the dialog, so kill every shell. The last
-	// session's onClose sees the map empty and sends the unsolicited
-	// ConfirmClose(true) that actually tears the window down.
-	sdk.HandleVoid(b, "close_window", func(_ *sdk.Conn, _ string, _ struct{}) error {
-		st.mu.Lock()
-		sessions := make([]*pty.Session, 0, len(st.sessions))
-		for _, s := range st.sessions {
-			sessions = append(sessions, s)
+		// Every close asks. Closing kills the shell outright, and a shell
+		// that looks idle is not necessarily disposable — scrollback, a
+		// half-typed command, an ssh session between commands. The dialog
+		// names the foreground program when there is one.
+		if !req.Force {
+			fu := sess.ForegroundUser()
+			return c.SendAppMsg(map[string]any{
+				"kind":       "close_blocked",
+				"scope":      "tab",
+				"channel_id": uint64(sess.ID()),
+				"command":    fu.Command,
+			})
 		}
-		st.mu.Unlock()
-		for _, s := range sessions {
-			s.CloseWithReason("window closed")
-		}
+		sess.CloseWithReason("user requested")
 		return nil
 	})
 }
@@ -361,8 +427,17 @@ func registerHandlers(b *sdk.Bus) {
 // hands both to internal/pty.Open which wires them with io.Copy
 // pairs. Reports tab_opened / tab_closed app_msgs to the FE.
 func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
+	openTabExec(c, windowID, cols, rows, nil)
+}
+
+// openTabExec is openTab with an optional argv override — the resume path
+// (§13) runs a specific command instead of the user's shell. An overridden
+// tab autocloses when the command exits, matching --exec semantics.
+func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []string) {
 	var argv []string
 	switch {
+	case len(override) > 0:
+		argv = override
 	case len(execArgv) > 0:
 		// --exec mode: run the requested argv. argv[0] is resolved
 		// via $PATH (exec.Command does that). The tab autocloses on
@@ -376,6 +451,11 @@ func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
 		// instead of inheriting wash-priv's parent env.
 		argv = []string{loginShellPath(), "-l"}
 	}
+	// WithWashEnv is what makes a wash terminal a wash terminal: TERM
+	// pinned for xterm.js, $WASH_BIN_DIR prepended to PATH so `wash ai`
+	// and friends resolve without an absolute path, and the router's
+	// WASH_*-namespaced display hints mapped to the real DISPLAY /
+	// WAYLAND_DISPLAY a GUI client needs.
 	sess, err := pty.Open(context.Background(), c, windowID, cols, rows, argv, pty.WithWashEnv, func(s *pty.Session, reason string) {
 		// onClose runs from the pty goroutine when the session ends.
 		// Drop from the session map, tell the FE, dismiss the window
@@ -417,25 +497,77 @@ func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
 	})
 }
 
-// onCloseRequested runs when the user clicks the titlebar ✕ (issue #19):
-// with live shells we VETO the close and bounce the decision to the FE,
-// which shows a confirm dialog; its close_window reply kills the shells
-// and the empty-map path sends ConfirmClose(true) to really close. The
-// veto must be immediate — the router force-kills the app if the close
-// handshake isn't answered within its grace window, so the dialog can't
-// ride the handshake itself. An empty window (no shells) closes at once.
+// onCloseRequested answers the router's close handshake for the terminal
+// window (WIRE.md §10). Closing the window kills every shell in it, so when
+// any tab has work in the foreground we VETO and ask first.
+//
+// The veto is what makes the dialog possible at all: the router force-kills
+// an app that leaves the handshake unanswered past its 5s grace, which is
+// far too short to hold a window open while someone reads a question. So we
+// answer "no" immediately and, if the user confirms, close ourselves with an
+// unsolicited confirm_close(allow=true) — see closeWindowConfirmed.
 func onCloseRequested(c *sdk.Conn, win uint32) bool {
-	st.mu.Lock()
-	n := len(st.sessions)
-	st.mu.Unlock()
-	if n == 0 {
+	if err := c.SendAppMsg(map[string]any{
+		"kind":  "close_blocked",
+		"scope": "window",
+		"tabs":  liveTabs(),
+	}); err != nil {
+		// The FE can't be asked, so it can't answer — closing is still
+		// what the user clicked for. Better to honour the click than to
+		// leave a window that refuses to shut.
+		log.Printf("wash-term close prompt: %v", err)
+		killAllSessions()
 		return true
 	}
-	_ = c.SendAppMsg(map[string]any{"kind": "close_requested", "tabs": uint64(n)})
 	return false
+}
+
+// tabInfo describes one tab for the close confirmation. Command is the
+// foreground program when the tab is running something, empty at a prompt.
+type tabInfo struct {
+	ChannelID uint64 `json:"channel_id"`
+	Command   string `json:"command"`
+}
+
+// liveTabs lists every tab the window would take down, so the dialog can
+// say how many and name whichever are running something.
+func liveTabs() []tabInfo {
+	st.mu.Lock()
+	ids := make([]uint32, 0, len(st.sessions))
+	sessions := make([]*pty.Session, 0, len(st.sessions))
+	for id, s := range st.sessions {
+		ids = append(ids, id)
+		sessions = append(sessions, s)
+	}
+	st.mu.Unlock()
+	out := make([]tabInfo, 0, len(sessions))
+	for i, s := range sessions {
+		out = append(out, tabInfo{ChannelID: uint64(ids[i]), Command: s.ForegroundUser().Command})
+	}
+	// Stable order so the dialog doesn't reshuffle between polls.
+	sort.Slice(out, func(i, j int) bool { return out[i].ChannelID < out[j].ChannelID })
+	return out
+}
+
+func killAllSessions() {
+	st.mu.Lock()
+	sessions := make([]*pty.Session, 0, len(st.sessions))
+	for _, s := range st.sessions {
+		sessions = append(sessions, s)
+	}
+	st.mu.Unlock()
+	for _, s := range sessions {
+		s.CloseWithReason("window closed")
+	}
 }
 
 // termIcon — Lucide sprite symbol name. The shell renders this via
 // <svg><use href="/icons.svg#terminal"/></svg>; the sprite is built
 // from lucide-static at shell build time.
 const termIcon = "terminal"
+
+// agentdAppID is the roster service. The only thing wash-term still owes
+// it is the exec_tab verb behind a Resume click — the rest of the agent
+// tier (hooks, OSC, the decision socket) was retired when agentd started
+// hosting sessions itself (docs/AGENT_APP.md §10).
+const agentdAppID = "com.wash.agentd"

@@ -43,14 +43,24 @@ const APPS: AppBundle[] = [
   // +~1.5 KB: the link.stats desktop info panel (LinkWidget — host/cores/iface
   // /router-version readout), the boot splash + busy cursor, and the shared
   // createAppBus saveState() persist helper. Bumped to keep ~8 KB headroom.
-  { name: 'session', dir: 'apps/session/fe/dist', maxBytes: 205_000 },
+  // +~5 KB: the Agents sidebar widget + roster wiring (docs/AGENT_TERM.md
+  // §7 — per-agent rows, state colours, elapsed clock, click-to-focus).
+  { name: 'session', dir: 'apps/session/fe/dist', maxBytes: 215_000 },
   // about grew into the system-info panel: build/host/Go-runtime
   // process table/registered-apps/browser sections + sortable table.
   // +~0.1 KB from the shared createAppBus saveState()/flushState() persist
   // helper (in every app's @wash/ui). Headroom still brakes further growth.
   { name: 'about',   dir: 'apps/about/fe/dist',   maxBytes: 32_000 },
   { name: 'test',    dir: 'apps/test/fe/dist',    maxBytes: 30_000 },
-  { name: 'term',    dir: 'apps/term/fe/dist',    maxBytes: 30_000 },
+  // term: +~1 KB for the agent status surface (docs/AGENT_TERM.md M1) — the
+  // per-tab agent side map, the tab-chip state dot and the status-line clause
+  // with its elapsed ticker. +~3 KB for smart paste (M5): the preview overlay
+  // and the policy menu (the analyzePaste kernel itself lives in @wash/ui,
+  // which is an import-map external and doesn't count here).
+  // 68k: split panes (docs/TERM_LAYOUT.md) — the layout kernel (~6k
+  // minified), a strip and control set per group (M1), then divider drag,
+  // zoom and the pane context menu (M2).
+  { name: 'term',    dir: 'apps/term/fe/dist',    maxBytes: 68_000 },
   // fm grew with the image pipeline: folder-grid preview + VirtualGrid +
   // file-client, the ~360-extension lucide icon map (~20 new glyphs), the
   // uid-aware display-hint colours/badges, and the cross-origin DnD guard.

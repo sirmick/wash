@@ -70,6 +70,21 @@ class FrameParser {
 const enc = new TextEncoder();
 const dec = new TextDecoder('utf-8');
 
+// Native gzip inflate — mirrors web/shell/src/gzip.ts. The router pre-
+// compresses compressible assets (incl. shell.js) and flags them with
+// encoding="gzip" on asset.read.ok (internal/router/assetcache.go); the real
+// shell FE inflates via wash-fetch.ts, and this bootstrap must too, or it
+// hands still-gzipped bytes to import() and dies on "Invalid or unexpected
+// token" — the desktop then never mounts.
+async function gunzip(bytes: Uint8Array): Promise<Uint8Array> {
+  // .slice().buffer → a fresh, exactly-sized ArrayBuffer (a valid BlobPart;
+  // Blob's TS types reject a bare Uint8Array under strict mode — same dance as
+  // the shell-import blob in tinyemu-bridge.ts).
+  const stream = new Blob([bytes.slice().buffer]).stream().pipeThrough(new DecompressionStream('gzip'));
+  const buf = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buf);
+}
+
 export interface BootstrapResult {
   /** The shell.js bundle bytes, ready for Blob URL + dynamic import. */
   bytes: Uint8Array;
@@ -113,6 +128,7 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
   const parser = new FrameParser();
   let assetChannelID = -1;
   let assetSize = 0;
+  let assetEncoding = ''; // '' | 'gzip' — router content-coding to undo before import
   const assetChunks: Uint8Array[] = [];
   const replayChunks: Uint8Array[] = [];
   // Phase tracks the bootstrap state:
@@ -222,7 +238,7 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
       }
       if (f.channel === 0) {
         // JSON ctrl frame — peek `t` to dispatch.
-        let msg: { t?: string; req_id?: number; channel_id?: number; size?: number; code?: string; msg?: string } | null = null;
+        let msg: { t?: string; req_id?: number; channel_id?: number; size?: number; encoding?: string; code?: string; msg?: string } | null = null;
         try { msg = JSON.parse(dec.decode(f.payload)); }
         catch (e) {
           log(`bootstrap: bad ctrl frame: ${(e as Error).message}`);
@@ -232,7 +248,8 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
         if (msg?.t === 'asset.read.ok' && msg.req_id === reqID) {
           assetChannelID = msg.channel_id ?? -1;
           assetSize = msg.size ?? 0;
-          log(`bootstrap: asset.read.ok ch=${assetChannelID} size=${assetSize}`);
+          assetEncoding = msg.encoding ?? '';
+          log(`bootstrap: asset.read.ok ch=${assetChannelID} size=${assetSize} encoding=${assetEncoding || 'identity'}`);
         } else if (msg?.t === 'asset.read.err' && msg.req_id === reqID) {
           reject(new Error(`asset.read.err [${msg.code}]: ${msg.msg ?? ''}`));
         } else if (msg?.t === 'channel.unbind' && msg.channel_id === assetChannelID && assetChannelID >= 0) {
@@ -245,13 +262,18 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
           const replay = new Uint8Array(replayTotal);
           let roff = 0;
           for (const c of replayChunks) { replay.set(c, roff); roff += c.length; }
-          log(`bootstrap: shell.js ${total} bytes, replay ${replayTotal} bytes`);
+          log(`bootstrap: shell.js ${total} bytes (encoding=${assetEncoding || 'identity'}), replay ${replayTotal} bytes`);
           // Switch to buffering — capture any bytes that arrive while
           // the caller is loading shell.js so finish() can flush them
           // after the replay.
           phase = 'buffering';
-          resolve({
-            bytes: out,
+          // The router gzips compressible assets (asset.read.ok encoding=gzip);
+          // inflate before handing bytes to import(), exactly as the real shell
+          // FE does (wash-fetch.ts). Gunzip is async, so resolve from its
+          // callback; a decode failure rejects the bootstrap (surfaced by the
+          // caller) rather than silently stalling in 'buffering'.
+          const buildResult = (finalBytes: Uint8Array): BootstrapResult => ({
+            bytes: finalBytes,
             replay,
             finish: (forward) => {
               log(`bs: finish() called, replay=${replay.length}B, buffered=${postAssetBuffer.length} chunks`);
@@ -286,6 +308,14 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
               log(`bs: phase=passthrough (after replay+buffered flush)`);
             },
           });
+          if (assetEncoding === 'gzip') {
+            gunzip(out).then(
+              (inflated) => { log(`bootstrap: inflated shell.js ${out.length}→${inflated.length} bytes`); resolve(buildResult(inflated)); },
+              (e) => { log(`bootstrap: gunzip failed: ${(e as Error).message}`); reject(e instanceof Error ? e : new Error(String(e))); },
+            );
+          } else {
+            resolve(buildResult(out));
+          }
           return; // stop processing more frames in this batch
         } else if (msg?.t === 'channel.bind' && msg.channel_id === assetChannelID) {
           // No-op: the asset.read.ok already told us about the channel.

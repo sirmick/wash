@@ -2,6 +2,7 @@ package loopback
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"testing/fstest"
@@ -191,8 +192,8 @@ func TestSpine(t *testing.T) {
 	// concurrently with whatever ctrl frames OnMapped's SetTitle
 	// produces. fr handles raw bundle frames transparently; we just
 	// loop until both signals (title patch + bundle done) arrive.
-	for !fr.bundleDone || !fr.titlePatchSeen(winID, mappedTitle) {
-		fr.nextCtrl()
+	for !fr.bundleComplete() || !fr.titlePatchSeen(winID, mappedTitle) {
+		fr.readOne()
 	}
 	if string(fr.bundleBytes) != bundleBody {
 		t.Fatalf("bundle bytes mismatch: %q", string(fr.bundleBytes))
@@ -243,7 +244,7 @@ deletePatchFound:
 // raw frame arriving "early" (during phase 1's catalog/declared/
 // window drain, say) doesn't fatal the test on "expected channel 0".
 // Bundle bind/unbind ctrl frames are also tracked so phase 4 can
-// just check bundleDone instead of running its own mixed reader.
+// just check bundleComplete() instead of running its own mixed reader.
 //
 // targetInstance is set once phase 1 learns the app's instance id;
 // before then any ShellChannelBind{kind:bundle} is ignored (there
@@ -255,7 +256,19 @@ type frameReader struct {
 
 	bundleChannelID uint32
 	bundleBytes     []byte
-	bundleDone      bool
+	// bundleSize is the byte count the bind announced (post-encoding).
+	// The bundle is complete when bundleBytes reaches it — NOT when the
+	// unbind arrives. Bundle payload is Bulk class while the unbind is a
+	// ctrl frame, so under strict-priority scheduling the unbind can
+	// legitimately overtake the data it terminates; completing on the
+	// unbind made this test assert an ordering the router explicitly does
+	// not promise (see replayBundleToShell, docs/TEST_FLAKES.md B2).
+	bundleSize int
+	// bundleUnbound records the unbind for diagnostics only.
+	bundleUnbound bool
+	// pendingRaw holds raw frames seen before the bind that names their
+	// channel, for the same reason: data may precede its own bind.
+	pendingRaw map[uint32][]byte
 
 	titlePatches []wire.ShellSessionPatch
 	// snapshotWindows captures any window upsert that lands in a
@@ -266,12 +279,34 @@ type frameReader struct {
 	snapshotWindows []wire.SessionWindow
 }
 
+// nextCtrl reads until the next CONTROL frame and returns it. Raw frames
+// encountered on the way are still accounted (see readOne).
+//
+// Callers waiting on a condition that raw frames can satisfy (bundle
+// bytes) must use readOne instead: nextCtrl blocks until a ctrl frame
+// shows up, and the bundle's last data frame can legitimately be the
+// last thing on the wire — waiting for a ctrl frame after it hangs.
 func (fr *frameReader) nextCtrl() any {
 	fr.t.Helper()
 	for {
+		if m := fr.readOne(); m != nil {
+			return m
+		}
+	}
+}
+
+// readOne reads exactly one frame and accounts it: raw frames append to
+// the bundle (or to pendingRaw until the bind names their channel),
+// control frames update the title/snapshot/bundle bookkeeping. Returns
+// the decoded ctrl message, or nil for a raw or unmodelled frame — so a
+// caller can re-test its wait condition after EVERY frame.
+func (fr *frameReader) readOne() any {
+	fr.t.Helper()
+	{
 		f, err := readFrameWithDeadline(fr.shell, 10*time.Second, func() string {
-			return fmt.Sprintf("bundleDone=%v titlePatches=%d snapshotWindows=%d bundleBytes=%d",
-				fr.bundleDone, len(fr.titlePatches), len(fr.snapshotWindows), len(fr.bundleBytes))
+			return fmt.Sprintf("bundleBytes=%d/%d unbound=%v titlePatches=%d snapshotWindows=%d",
+				len(fr.bundleBytes), fr.bundleSize, fr.bundleUnbound,
+				len(fr.titlePatches), len(fr.snapshotWindows))
 		})
 		if err != nil {
 			fr.t.Fatalf("read: %v", err)
@@ -279,10 +314,21 @@ func (fr *frameReader) nextCtrl() any {
 		if f.Channel != 0 {
 			if fr.bundleChannelID != 0 && f.Channel == fr.bundleChannelID {
 				fr.bundleBytes = append(fr.bundleBytes, f.Payload...)
+			} else {
+				// Not bound yet: hold rather than drop.
+				if fr.pendingRaw == nil {
+					fr.pendingRaw = map[uint32][]byte{}
+				}
+				fr.pendingRaw[f.Channel] = append(fr.pendingRaw[f.Channel], f.Payload...)
 			}
-			continue
+			return nil
 		}
 		m, err := wire.DecodeCtrl(f.Payload)
+		if errors.Is(err, wire.ErrUnknownCtrl) {
+			// Forward compatible: the router ships ctrl frames this test
+			// does not model (link.stats, …). Skip, don't fail.
+			return nil
+		}
 		if err != nil {
 			fr.t.Fatalf("decode: %v", err)
 		}
@@ -291,10 +337,15 @@ func (fr *frameReader) nextCtrl() any {
 			if v.Kind == wire.ChannelKindBundle &&
 				fr.targetInstance != "" && v.InstanceID == fr.targetInstance {
 				fr.bundleChannelID = v.ChannelID
+				fr.bundleSize = int(v.Size)
+				if held := fr.pendingRaw[v.ChannelID]; len(held) > 0 {
+					fr.bundleBytes = append(fr.bundleBytes, held...)
+					delete(fr.pendingRaw, v.ChannelID)
+				}
 			}
 		case wire.ShellChannelUnbind:
 			if fr.bundleChannelID != 0 && v.ChannelID == fr.bundleChannelID {
-				fr.bundleDone = true
+				fr.bundleUnbound = true
 			}
 		case wire.ShellSessionPatch:
 			fr.titlePatches = append(fr.titlePatches, v)
@@ -338,4 +389,14 @@ func writeCtrl(t *testing.T, e wire.FrameTransport, m any) {
 	if err := e.WriteFrame(wire.Frame{Flags: wire.FlagEnd, Channel: 0, Payload: b}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+}
+
+// bundleComplete reports whether every announced bundle byte has arrived.
+// The bind's Size is authoritative; before a bind is seen there is nothing
+// to be complete about.
+func (fr *frameReader) bundleComplete() bool {
+	if fr.bundleChannelID == 0 || fr.bundleSize == 0 {
+		return false
+	}
+	return len(fr.bundleBytes) >= fr.bundleSize
 }

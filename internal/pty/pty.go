@@ -48,6 +48,90 @@ type Session struct {
 
 	closeOnce sync.Once
 	onClose   func(s *Session, reason string)
+
+	// cap is the optional output capture (WithCapture). Nil unless a
+	// caller asked for one: wash-term does not need it — the browser is
+	// its buffer — but a caller that must ANSWER for the output later
+	// does. ACP's terminal/output is that caller.
+	cap *capture
+
+	// done closes when the child has been reaped, after exit is stored,
+	// so a waiter that wakes on it always sees the status. The reaper is
+	// the authority: it runs whether the process exited on its own or
+	// because Close killed it.
+	done     chan struct{}
+	exitMu   sync.Mutex
+	exitCode int
+	exitSig  string
+	exited   bool
+}
+
+// capture is a bounded tail of a session's output. Same bargain as the
+// router's scrollback ring (internal/router/ringbuf.go): keep the most
+// recent bytes, say so when older ones were dropped. ACP names both halves
+// — outputByteLimit on create, truncated on read.
+type capture struct {
+	mu        sync.Mutex
+	buf       []byte
+	max       int
+	truncated bool
+}
+
+func (c *capture) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.buf = append(c.buf, p...)
+	if over := len(c.buf) - c.max; over > 0 {
+		c.buf = c.buf[over:]
+		c.truncated = true
+	}
+	return len(p), nil
+}
+
+func (c *capture) snapshot() (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return string(c.buf), c.truncated
+}
+
+// Option tweaks a session at Open time. Variadic so the existing callers —
+// wash-term, wash-edit, wash-connect — are untouched.
+type Option func(*Session)
+
+// WithCapture keeps the last max bytes of output for Output() to answer
+// with. Off by default: a session nobody will query should not pay for a
+// second copy of its bytes.
+func WithCapture(max int) Option {
+	return func(s *Session) {
+		if max > 0 {
+			s.cap = &capture{max: max}
+		}
+	}
+}
+
+// Output returns the captured tail and whether older bytes were dropped.
+// Empty and false when the session was opened without WithCapture.
+func (s *Session) Output() (text string, truncated bool) {
+	if s.cap == nil {
+		return "", false
+	}
+	return s.cap.snapshot()
+}
+
+// Done closes once the child has been reaped. A caller blocking on it —
+// ACP's wait_for_exit — is guaranteed to see ExitStatus afterwards.
+func (s *Session) Done() <-chan struct{} { return s.done }
+
+// ExitStatus reports how the child ended: an exit code, or a signal name
+// when it was killed. exited is false while it is still running.
+//
+// The reaper always had this — it called cmd.Wait(), logged the result and
+// threw it away — which was fine while "why did my terminal die" was a
+// human question asked of a log. An agent asks it programmatically.
+func (s *Session) ExitStatus() (code int, signal string, exited bool) {
+	s.exitMu.Lock()
+	defer s.exitMu.Unlock()
+	return s.exitCode, s.exitSig, s.exited
 }
 
 // Size returns the last cols/rows applied to the PTY.
@@ -83,6 +167,22 @@ type ForegroundUser struct {
 	State  string // "user" | "root" | "ssh"
 	User   string // login name of the foreground program's euid
 	Target string // ssh destination host, when State == "ssh"
+	// Agent is the coding-agent slug ("claude", "codex", …) when the
+	// foreground program is one — tier T0 of docs/AGENT_TERM.md §2.
+	// Empty for everything else, which is most things: a shell, vi, a
+	// build. Independent of State (an agent can run as root).
+	Agent string
+	// Busy reports that something other than the login shell holds the
+	// foreground — a build, an editor, ssh, an agent. False means the
+	// shell is sitting at its prompt, so closing the tab loses nothing the
+	// user hasn't already finished with. This is what close-confirmation
+	// asks about: prompting on every close would train people to dismiss
+	// the dialog, which is worse than not having one.
+	Busy bool
+	// Command is the foreground program's comm ("vim", "make", "ssh"),
+	// empty when idle or unreadable. Named in the confirmation so the
+	// dialog says what is about to be killed.
+	Command string
 }
 
 // sshComms are the foreground program names treated as an outbound ssh
@@ -112,14 +212,31 @@ func (s *Session) ForegroundUser() ForegroundUser {
 	}
 	euid := procEUID(fg)
 	out.User = userName(euid)
+	comm := procComm(fg)
+	// Anything but the login shell itself in the foreground means work is
+	// in flight. Free here: the pgrp and comm are already read for the
+	// badge, so nothing extra is spent to answer "is this tab busy".
+	if fg != shellPid {
+		out.Busy = true
+		out.Command = comm
+	}
 	switch {
 	case euid == 0:
 		out.State = "root"
-	case sshComms[procComm(fg)]:
+	case sshComms[comm]:
 		out.State = "ssh"
 		out.Target = sshTarget(fg)
 	}
 	return out
+}
+
+// procCmdline reads /proc/<pid>/cmdline as argv (NUL-separated).
+func procCmdline(pid int) []string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return nil
+	}
+	return strings.Split(strings.TrimRight(string(data), "\x00"), "\x00")
 }
 
 // foregroundPgrp returns the foreground process group of pid's
@@ -198,12 +315,7 @@ func userName(uid int) string {
 // first positional argument, and strips a leading user@. Best-effort:
 // an exotic invocation just yields "".
 func sshTarget(pid int) string {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
-	if err != nil {
-		return ""
-	}
-	args := strings.Split(strings.TrimRight(string(data), "\x00"), "\x00")
-	return parseSSHTarget(args)
+	return parseSSHTarget(procCmdline(pid))
 }
 
 // parseSSHTarget pulls the destination host out of an ssh argv: skip
@@ -254,7 +366,7 @@ func parseSSHTarget(args []string) string {
 //
 // Must NOT be called from an SDK callback — OpenChannel can't run on
 // the read goroutine. Callers should `go pty.Open(...)`.
-func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint16, argv []string, envFn func([]string) []string, onClose func(s *Session, reason string)) (*Session, error) {
+func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint16, argv []string, envFn func([]string) []string, onClose func(s *Session, reason string), opts ...Option) (*Session, error) {
 	// Bulk class (docs/QOS.md): terminal output rides the credit / behind /
 	// resync path and yields to interactive traffic, instead of sharing the
 	// Interactive queue with window ops and other apps (REVIEW-DATAPATH F1).
@@ -292,11 +404,23 @@ func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint1
 		cols:    cols,
 		rows:    rows,
 		onClose: onClose,
+		done:    make(chan struct{}),
+	}
+	// Before the copy goroutines start, so a capture cannot miss the
+	// first bytes a fast command writes.
+	for _, o := range opts {
+		o(s)
 	}
 
-	// pty → channel
+	// pty → channel, teed into the capture when one was asked for. The
+	// tee is on the READ side of the pty so the bytes captured are the
+	// bytes sent, byte for byte.
+	var sink io.Writer = ch
+	if s.cap != nil {
+		sink = io.MultiWriter(ch, s.cap)
+	}
 	go func() {
-		_, copyErr := io.Copy(ch, f)
+		_, copyErr := io.Copy(sink, f)
 		if !isPtyTerm(copyErr) {
 			// Real I/O error, not the normal EOF/EIO of a closing pty —
 			// without this line the session just goes dark.
@@ -321,7 +445,10 @@ func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint1
 	// closure next. The exit status is the one fact a "my terminal
 	// died" report needs, so it is always logged.
 	go func() {
-		if err := cmd.Wait(); err != nil {
+		err := cmd.Wait()
+		s.recordExit(cmd.ProcessState)
+		close(s.done)
+		if err != nil {
 			log.Printf("pty: win=%d shell=%s exited: %v", windowID, shellPath, err)
 		} else {
 			log.Printf("pty: win=%d shell=%s exited cleanly", windowID, shellPath)
@@ -488,4 +615,21 @@ func prependPath(path, dir string) string {
 		}
 	}
 	return strings.Join(out, sep)
+}
+
+// recordExit stores how the child ended. Signals and codes are distinct
+// facts — a command killed by SIGKILL did not "exit 137" as far as the
+// caller reporting it is concerned — so both are kept.
+func (s *Session) recordExit(ps *os.ProcessState) {
+	s.exitMu.Lock()
+	defer s.exitMu.Unlock()
+	s.exited = true
+	if ps == nil {
+		return
+	}
+	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		s.exitSig = ws.Signal().String()
+		return
+	}
+	s.exitCode = ps.ExitCode()
 }

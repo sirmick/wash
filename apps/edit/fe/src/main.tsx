@@ -14,8 +14,24 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { Button, ConfirmDialog, FilePicker, FileTree, Input, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
-import type { TerminalAPI } from '@wash/ui';
+import { AgentSession, Button, ConfirmDialog, FilePicker, FileTree, Input, isDirLike, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
+import type { AgentAsk, AgentEvent, AgentStatus, TerminalAPI } from '@wash/ui';
+
+// One roster row as agentd publishes it; only the fields this pane reads.
+interface AgentRow {
+  key: string;
+  agent?: string;
+  state?: string;
+  dir?: string;
+  title?: string;
+  used?: number;
+  size?: number;
+  mode?: string;
+  modes?: { id: string; name: string; description?: string }[];
+  configs?: AgentStatus['configs'];
+  commands?: { name: string; description?: string }[];
+  yolo?: boolean;
+}
 import {
   joinPath, baseName, parentPath,
   createBus,
@@ -189,6 +205,14 @@ interface TermTab {
   id: string;
   channelID: number;
   title: string;
+  // 'pty' is a shell this app opened; 'agent' is a coding-agent session
+  // agentd hosts and this pane renders (docs/AGENT_TABS.md). The pane is
+  // the same, the body differs — and so does the lifetime: a pty dies with
+  // the editor, an agent session outlives it.
+  kind?: 'pty' | 'agent';
+  // Agent tabs: the agentd session key, once it has started.
+  agentKey?: string;
+  agentName?: string;
   // Map state, not class members — xterm is imperative so we
   // keep references outside Solid's reactive system. Filled in
   // by mountTerm.
@@ -273,6 +297,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // vertical share when the terminal panel is visible.
   const [termTabs, setTermTabs] = createSignal<TermTab[]>([]);
   const [activeTermID, setActiveTermID] = createSignal('');
+  // Per-agent-tab transcript state, keyed by agentd session key. Kept
+  // outside TermTab so an arriving event does not replace the tab object
+  // and remount the pane.
+  const [agentEvents, setAgentEvents] = createSignal<Record<string, AgentEvent[]>>({});
+  const [agentRoster, setAgentRoster] = createSignal<{ rows?: AgentRow[]; asks?: AgentAsk[]; adapters?: { id: string; name?: string }[] }>({});
+  const [agentMenu, setAgentMenu] = createSignal<{ x: number; y: number } | null>(null);
   const [termOpen, setTermOpen] = createSignal(false);
   const [editPct, setEditPct] = createSignal(70);
   // Pending term.open requests waiting for term.opened so we can
@@ -1087,6 +1117,41 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       void maybeReloadFromDisk(evPath);
       return;
     }
+    // ---- agent tabs (docs/AGENT_TABS.md) ----
+    if (m.kind === 'agent.started') {
+      const tab = String(m.tab ?? '');
+      const key = String(m.key ?? '');
+      setTermTabs(termTabs().map((t) => (t.id === tab ? { ...t, agentKey: key } : t)));
+      return;
+    }
+    if (m.kind === 'agent.start_failed') {
+      const tab = String(m.tab ?? '');
+      // Name the failure in the tab rather than leaving it "starting…"
+      // forever — a failed start carries no session key, which is why
+      // the request id exists at all.
+      setTermTabs(termTabs().map((t) => (t.id === tab ? { ...t, title: `agent failed: ${String(m.error ?? '')}` } : t)));
+      return;
+    }
+    if (m.kind === 'agent.snapshot') {
+      const key = String(m.key ?? '');
+      setAgentEvents({ ...agentEvents(), [key]: (m.events ?? []) as AgentEvent[] });
+      return;
+    }
+    if (m.kind === 'agent.event') {
+      const key = String(m.key ?? '');
+      const ev = m.event as AgentEvent;
+      const cur = agentEvents()[key] ?? [];
+      // Same seq means the BE updated a row in place (a tool going
+      // pending → completed), not a new line.
+      const at = cur.findIndex((e) => e.seq === ev.seq);
+      const next = at >= 0 ? cur.map((e, i) => (i === at ? ev : e)) : [...cur, ev];
+      setAgentEvents({ ...agentEvents(), [key]: next });
+      return;
+    }
+    if (m.kind === 'agent.state') {
+      setAgentRoster((m.state ?? {}) as { rows?: AgentRow[]; asks?: AgentAsk[] });
+      return;
+    }
     // Terminal lifecycle messages: term.opened pairs the
     // server-assigned channel with a pending local term tab;
     // term.closed cleans up state when a PTY ends (user typed
@@ -1143,9 +1208,54 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     send({ kind: 'term.open', id: replyID, cols: 80, rows: 24 });
   };
 
+  // openAgentTab starts a coding-agent session in the pane, in the folder
+  // the editor already has open — the reason hosting one here beats the
+  // standalone Agent app, where the first question is always "which
+  // folder". The tab exists immediately so the user sees it starting.
+  const openAgentTab = (agentID: string) => {
+    setTermOpen(true);
+    nextTermLocalID += 1;
+    const localID = `t-${nextTermLocalID}`;
+    setTermTabs([...termTabs(), {
+      id: localID, channelID: 0, kind: 'agent',
+      agentName: agentID, title: `${agentID}…`,
+    }]);
+    setActiveTermID(localID);
+    send({ kind: 'agent.start', tab: localID, agent: agentID });
+  };
+
+  // Adapters agentd found, for the + menu. Empty until the roster push
+  // arrives, which is why the menu says so rather than looking broken.
+  const agentAdapters = (): { id: string; name?: string }[] => agentRoster().adapters ?? [];
+
+  // The roster row backing an agent tab: its state, context usage, mode,
+  // and the agent's own settings. Same shape the Agent app renders.
+  const agentStatusFor = (key: string): AgentStatus => {
+    const r = (agentRoster().rows ?? []).find((x) => x.key === key);
+    return {
+      agent: r?.agent, dir: r?.dir, state: r?.state, used: r?.used, size: r?.size,
+      title: r?.title, mode: r?.mode, modes: r?.modes, configs: r?.configs,
+      commands: r?.commands, yolo: r?.yolo,
+    };
+  };
+  const agentAsksFor = (key: string): AgentAsk[] =>
+    (agentRoster().asks ?? []).filter((a) => (a as { row_key?: string }).row_key === key);
+
   const closeTerm = (id: string) => {
     const tab = termTabs().find((t) => t.id === id);
     if (!tab) return;
+    if (tab.kind === 'agent') {
+      // The tab goes; the SESSION does not. agentd outlives its hosts —
+      // that is what Resume is — so closing a tab detaches rather than
+      // killing, and the agent stays on the roster to come back to.
+      if (tab.agentKey) send({ kind: 'agent.close', key: tab.agentKey });
+      setTermTabs(termTabs().filter((t) => t.id !== tab.id));
+      if (activeTermID() === tab.id) {
+        const remaining = termTabs().filter((t) => t.id !== tab.id);
+        setActiveTermID(remaining[0]?.id ?? '');
+      }
+      return;
+    }
     if (tab.channelID) {
       // BE will fire term.closed once the pty winds down; handleBE
       // handles the tab removal there to keep the path single.
@@ -1399,12 +1509,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   };
 
   const onRowDblClick = (row: { entry: Entry; path: string }) => {
-    if (row.entry.type === 'dir') {
-      toggleExpand(row.path);
-      return;
-    }
+    // Symlinks are checked BEFORE the dir test: edit follows a link to its
+    // canonical target rather than expanding it in place, so the tree shows
+    // where the thing actually lives. isDirLike would short-circuit that.
     if (row.entry.type === 'symlink') {
       followSymlink(row.entry, row.path);
+      return;
+    }
+    if (row.entry.type === 'dir') {
+      toggleExpand(row.path);
       return;
     }
     if (row.entry.type === 'file') {
@@ -1422,15 +1535,25 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       ? e.link_to
       : joinPath(parentPath(p), e.link_to);
     setSelectedPath(target);
-    // We don't know the target's type without statting. Try as
-    // both: openInTab is a no-op for dirs (the read returns
-    // is_dir and openInTab silently exits) and loadDir is a
-    // no-op for files. One of them lands.
-    void openInTab(target);
-    if (!listings[target]) {
-      void loadDir(target);
+    // The BE resolves the link for us now (Entry.link_type), so this no
+    // longer has to fire both barrels and let one miss. Fall back to the
+    // old try-both only when the type is unknown — a link listed by an
+    // older BE, or one whose target vanished between list and click.
+    switch (e.link_type) {
+      case 'dir':
+        if (!listings[target]) void loadDir(target);
+        setExpanded(target, true);
+        return;
+      case 'file':
+        void openInTab(target);
+        return;
+      default:
+        void openInTab(target);
+        if (!listings[target]) {
+          void loadDir(target);
+        }
+        setExpanded(target, true);
     }
-    setExpanded(target, true);
   };
 
   // dirOfSelection picks the target directory for an empty-pane
@@ -1443,7 +1566,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const par = parentPath(p);
     const entries = listings[par];
     const entry = entries?.find((x) => x.name === baseName(p));
-    if (entry?.type === 'dir') return p;
+    if (entry && isDirLike(entry)) return p;
     return par || root();
   };
 
@@ -2211,6 +2334,26 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               data-testid="edit-menu-term-close"
             />
             <MenuSeparator />
+            {/* Agents live in the Terminal menu because they live in the
+                terminal PANE. Reachable from here whether or not that pane
+                is open — the ✦ button in the tab strip cannot be, and
+                needing to open a shell first before you can start an agent
+                is a silly gate. */}
+            <Show
+              when={agentAdapters().length > 0}
+              fallback={<MenuItem label="No agents installed" disabled onClick={() => {}} data-testid="edit-menu-agent-none" />}
+            >
+              <For each={agentAdapters()}>
+                {(a) => (
+                  <MenuItem
+                    label={`New ${a.name || a.id} session`}
+                    onClick={run(() => openAgentTab(a.id))}
+                    data-testid={`edit-menu-agent-${a.id}`}
+                  />
+                )}
+              </For>
+            </Show>
+            <MenuSeparator />
             <MenuItem
               label={termOpen() ? 'Hide Panel' : 'Show Panel'}
               trailing={<kbd style={kbdStyle}>Ctrl+`</kbd>}
@@ -2482,6 +2625,26 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onCommit={persist}
           data-testid="edit-vsplit"
         />
+        <Show when={agentMenu()}>
+          {(at) => (
+            <Menu x={at().x} y={at().y} onDismiss={() => setAgentMenu(null)} data-testid="edit-agent-menu">
+              <Show
+                when={agentAdapters().length > 0}
+                fallback={<MenuItem label="No agents installed" disabled onClick={() => {}} />}
+              >
+                <For each={agentAdapters()}>
+                  {(a) => (
+                    <MenuItem
+                      label={a.name || a.id}
+                      data-testid={`edit-agent-start-${a.id}`}
+                      onClick={() => { setAgentMenu(null); openAgentTab(a.id); }}
+                    />
+                  )}
+                </For>
+              </Show>
+            </Menu>
+          )}
+        </Show>
         <div data-testid="edit-term-pane" style={termPaneStyle}>
           {/* tab bar */}
           <div data-testid="edit-term-tabs" style={termTabBarStyle}>
@@ -2519,6 +2682,21 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             >
               +
             </button>
+            {/* Agents open in the same strip as terminals, deliberately:
+                both are a process working on your behalf that you watch
+                and interrupt. */}
+            <button
+              type="button"
+              data-testid="edit-agent-new"
+              onClick={(ev) => {
+                const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+                setAgentMenu({ x: r.left, y: r.bottom });
+              }}
+              style={termNewBtnStyle}
+              title="New agent session in this folder"
+            >
+              ✦
+            </button>
           </div>
           {/* terminal hosts — one DOM element per channel, only
               the active one is visible. We keep them mounted (not
@@ -2538,7 +2716,29 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                     }}
                     ref={(el) => { hostEl = el; }}
                   >
-                    <Show when={t.channelID > 0}>
+                    <Show when={t.kind === 'agent'}>
+                      {/* The transcript, in the pane the terminals live in.
+                          onOpenTool is why hosting an agent HERE is worth
+                          doing at all: a tool row naming a file opens that
+                          file in the buffer above, which the standalone
+                          Agent app cannot do. */}
+                      <AgentSession
+                        events={() => agentEvents()[t.agentKey ?? ''] ?? []}
+                        asks={() => agentAsksFor(t.agentKey ?? '')}
+                        status={() => agentStatusFor(t.agentKey ?? '')}
+                        placeholder={t.agentKey ? 'Ask the agent…' : 'starting…'}
+                        onSend={t.agentKey ? ((text) => send({ kind: 'agent.prompt', key: t.agentKey, text })) : undefined}
+                        onAnswer={(id, decision, rule) => send({ kind: 'agent.answer', key: t.agentKey, id, decision, rule: rule ?? '' })}
+                        onCancel={() => send({ kind: 'agent.cancel', key: t.agentKey })}
+                        onSetMode={(mode) => send({ kind: 'agent.set_mode', key: t.agentKey, mode })}
+                        onSetConfig={(id, value) => send({ kind: 'agent.set_config', key: t.agentKey, id, value })}
+                        onOpenTool={(e) => {
+                          const path = (e.title ?? '').trim();
+                          if (path) void openInTab(path.startsWith('/') ? path : joinPath(root(), path));
+                        }}
+                      />
+                    </Show>
+                    <Show when={t.kind !== 'agent' && t.channelID > 0}>
                       <Terminal
                         channelId={t.channelID}
                         origin={props.origin}
@@ -2631,7 +2831,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           data-testid="edit-ctx-menu"
         >
           <MenuItem
-            label={ctxMenu()!.entry.type === 'dir' ? 'Expand' : 'Open'}
+            label={isDirLike(ctxMenu()!.entry) ? 'Expand' : 'Open'}
             onClick={() => {
               const c = ctxMenu()!;
               closeCtxMenu();

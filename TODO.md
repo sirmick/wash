@@ -88,6 +88,17 @@ bug list — all fully landed; see `git log` if you need their content.)
 
 ## Test stability  (docs/TEST_FLAKES.md — the 2026-07-03 full-suite audit)
 
+- [ ] **Keep `docs/FLAKE_LOG.md` current** — the dated record of flakes actually
+  seen, each A/B'd against its pre-change baseline so "my branch broke it" is a
+  finding, not a guess. 2026-08-06: the three standing failures (`reconnect` +
+  the display pair, which between them had blocked `make push`'s e2e gate for
+  weeks) are **root-caused and fixed** — the boot splash swallowing the
+  connection banner's retry click, and A10's stale `env.publish` match launching
+  terminals before `WASH_X_DISPLAY` existed. Neither was load, and C5's
+  "compositor stalls under concurrency" premise was wrong. Issue **#7**
+  (display-input-smoke timing out on `wash-app-display`, which blocked #5) is
+  the same symptom from the same cause and should be closed with this.
+
 - [ ] **Execute the phased plan in docs/TEST_FLAKES.md** (~75 verified items,
   written for a smaller LLM): Phase A e2e harness/process lifecycle
   (readiness lines logged before bind, leak-on-throw, no process-group kill,
@@ -97,8 +108,8 @@ bug list — all fully landed; see `git log` if you need their content.)
   (stale timeout overrides, fs-assert barriers, persist-before-reload);
   Phase D FE unit; Phase E the **test event bus** (control-socket
   `wait_event` + FE settle hook + guest `WASH-EVENT` lines) so tests drive
-  state machines instead of timing. Open flake trackers: **#7**
-  (display-input-smoke), **#8** (TestSpine).
+  state machines instead of timing. Open flake trackers: **#8** (TestSpine).
+  (**#7**, display-input-smoke, was fixed 2026-08-06 — see above.)
 - [ ] After phases B1–B3: trial dropping `-p 1` from the unit gate (it exists
   to dampen the loopback scheduling race).
 - [ ] After phase A6 (hardlink staging): measure control-socket RTTs and walk
@@ -131,6 +142,27 @@ bug list — all fully landed; see `git log` if you need their content.)
   t.Logf-panic class.
 
 ## Apps / UX
+
+- [ ] **wash-term split panes** — docs/TERM_LAYOUT.md, designed 2026-08-02,
+  not started. A window becomes a tree of tab *groups*: each leaf has its own
+  24px tab strip and split/zoom controls, splits nest, and there is no
+  window-level tab bar (tabs live only in strips). Layout is computed rects
+  over flat, never-reparented terminal hosts — that is the load-bearing
+  choice, since reparenting a mounted xterm loses its buffer. FE-only: no wire
+  or router change, and the persisted blob is already opaque to the BE. M1 is
+  kernel + strips + menu + keys + persistence at fixed 50/50; drag, zoom and
+  cross-group tab drag are M2. Note `Ctrl+Shift+W` changes meaning to
+  close-pane.
+
+- [ ] **Agent-aware terminals: follow-ups** — docs/AGENT_TERM.md. **M1–M7
+  are all DONE** (M6 answer-from-the-desktop, M7 session resume), which closes **issue #19** (item 1 close-confirm shipped
+  earlier, item 2 by M3's policy engine, item 3 by M5's smart paste). What
+  is deliberately left: the Agents settings pane could become a real
+  define-settings-panel owned by agentd, with a hook-install toggle
+  replacing the CLI-only path (§9.3); the remote roster merge rides
+  REMOTE.md §6.2; hook adapters for Codex/Gemini/Aider (§11) now that the
+  shape is proven on Claude Code; and the wider §11 non-goals (prompt
+  library, `--resume` orchestration) remain non-goals until asked for.
 
 - [ ] **fm/edit: surface access-denied + "relaunch as root"** — **issue #6**
   (full implementation prompt is a comment there). Part A: status-bar

@@ -63,9 +63,9 @@ SC      := $(OUT)/singlecall
 # compositor; the gated `test` app is woven in where TEST_APP applies.
 FE_APPS := session about connect imageview term fm edit vscode-workbench \
            settings top disks journal syslogs services packages net \
-           washamp music radio
+           washamp music radio ai
 FE_PANEL_APPS := vscode netd remote
-SVC_APPS := bulk priv notify audio fswatch
+SVC_APPS := bulk priv notify audio fswatch agentd
 
 # Every app that embeds an FE asset bundle (windowed + panel). Drives the
 # embed-stamp / vendor-sync / multicall-stamp derivations. The gated `test` app
@@ -584,8 +584,18 @@ $(OUT)/wash-priv-fakesudo: | $(OUT)
 
 # Convenience target: build the test app + everything else.
 .PHONY: test-app
-test-app: $(OUT)/wash-priv-fakesudo
+test-app: $(OUT)/wash-priv-fakesudo $(OUT)/e2e/codex-acp
 	$(MAKE) TEST_APP=1 all
+
+# acp-fake stands in for an ACP adapter in the e2e suite. Built under the
+# NAME OF THE ADAPTER IT REPLACES so the production probe finds it on a
+# PATH the test controls — nothing in production knows it exists. Its
+# frames were captured from real adapters with the conformance tracer, and
+# it passes the same conformance test they do.
+.PHONY: $(OUT)/e2e/codex-acp
+$(OUT)/e2e/codex-acp:
+	@mkdir -p $(OUT)/e2e
+	$(call go_build,$@,e2e/fixtures/acp-fake)
 
 # Multi-call build. Compiles cmd/wash with -tags=multicall — the
 # resulting binary dispatches by argv[0] to whatever apps are
@@ -942,6 +952,14 @@ browser-run-vm: browser-image-vm
 # qemu (wemu) surface: run-qemu.sh builds vm-image+chrome+washvm-run itself → :13000.
 qemu-run-vm:
 	wash-vm/run-qemu.sh
+
+# browser-vm-test: headless boot gate for the in-browser (WASM RISC-V) wash-vm —
+# boots it in chromium and asserts the wash desktop mounts (regression guard for
+# the asset-bootstrap; see wash-vm/browser-vm-smoke.mjs). Self-skips when the
+# RISC-V image isn't built. Build it first: `make browser-image-vm`.
+.PHONY: browser-vm-test
+browser-vm-test:
+	sh wash-vm/browser-vm-test.sh
 
 # ----- run verb -----  (dev = HMR loop, below; run = built standalone router :11000)
 # run does NOT rebuild — it execs whatever `make wash` last produced, so it's

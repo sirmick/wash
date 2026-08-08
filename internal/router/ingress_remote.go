@@ -25,6 +25,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"time"
 )
 
@@ -128,8 +129,10 @@ func (r *Router) resolveRemoteIngress(ctx context.Context, token string) (string
 func (r *Router) peerOwnsToken(ctx context.Context, addr, token string) bool {
 	ctx, cancel := context.WithTimeout(ctx, resolveTimeout)
 	defer cancel()
+	// Escape the token: it comes from the request path (/app/<token>/), so a
+	// stray & or # would otherwise malform the resolve query.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		"http://wash-peer"+resolvePath+"?token="+token, nil)
+		"http://wash-peer"+resolvePath+"?token="+url.QueryEscape(token), nil)
 	if err != nil {
 		return false
 	}

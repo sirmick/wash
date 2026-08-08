@@ -304,6 +304,11 @@ type ShellSessionSnapshot struct {
 	T        string                     `json:"t"`
 	Windows  []SessionWindow            `json:"windows"`
 	AppState map[string]json.RawMessage `json:"app_state,omitempty"`
+	// ShellID changes when the router process or its dev-reload epoch changes.
+	// A live browser tab that reconnects across that boundary must reload its
+	// page, because already-imported ESM vendor modules cannot be swapped in
+	// place and can mismatch freshly delivered app bundles.
+	ShellID string `json:"shell_id,omitempty"`
 }
 
 func NewShellSessionSnapshot(wins []SessionWindow, appState map[string]json.RawMessage) ShellSessionSnapshot {

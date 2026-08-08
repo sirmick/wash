@@ -132,6 +132,7 @@ interface ShellSessionSnapshot {
   t: 'session.snapshot';
   windows: SessionWindow[];
   app_state?: Record<string, unknown>;
+  shell_id?: string;
 }
 
 export interface SessionPatch {
@@ -301,6 +302,7 @@ type ShellCtrlMsg =
 // catalogSub is the LOCAL router's catalog (drives the launcher).
 const catalogSub = new Sub<CatalogApp[]>([]);
 const panelsSub = new Sub<PanelDesc[]>([]);
+let localShellID = '';
 
 // Remote routers' catalogs, keyed by origin (docs/REMOTE.md §6.1). A
 // remote host's catalog arrives on connect exactly like the local one;
@@ -326,6 +328,25 @@ function clearRemoteCatalog(origin: Origin): void {
   if (remoteCatalogs.delete(origin)) remoteCatalogSub.set({ origin, apps: [] });
 }
 const windowsSub = new Sub<WindowInfo[]>([]);
+
+// focusInstance raises the window belonging to an app instance, restoring
+// it first if it was minimized. Toast click-to-focus uses it: a
+// notification names the instance that raised it (ShellNotify carries
+// instance_id), and clicking "Claude needs your input" should land on the
+// terminal that said so. Silently does nothing for an instance with no
+// window (a background service's toast) — the toast still dismisses.
+function focusInstance(instanceID: string): void {
+  const w = windowsSub.value.find((x) => x.instanceID === instanceID);
+  if (!w) return;
+  // Snap the camera to the window's viewport cell first — focusing a
+  // window one cell over would otherwise "work" with nothing visible
+  // happening. Same move the taskbar pill's dblclick makes.
+  const cell = viewportFor(w);
+  setViewport(cell.vx, cell.vy);
+  // restoreWindow raises + focuses on its own; focusWindow for the rest.
+  if (w.state === 'minimized') window.wash.restoreWindow(w.windowID, w.origin);
+  else window.wash.focusWindow(w.windowID, w.origin);
+}
 // viewportSub mirrors the Solid viewport signal into the cross-element
 // pub/sub the session app subscribes to via window.wash.onViewport.
 // We also publish per-window viewport assignments here so the pager
@@ -415,7 +436,7 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         handleAppDeclared(client, msg);
         break;
       case 'session.snapshot':
-        handleSnapshot(client, msg);
+        handleSnapshot(client, msg, isLocal);
         // A fresh snapshot from the LOCAL router means this tab just (re)attached
         // as the foreground head, so any prior "opened elsewhere" notice is stale.
         if (isLocal) setSuperseded(null);
@@ -436,6 +457,7 @@ function makeHandlers(client: RouterClient): ClientHandlers {
           title: n.title,
           body: n.body,
           level: n.level,
+          onActivate: focusInstance,
         });
         break;
       }
@@ -977,7 +999,15 @@ function handleAppDeclared(client: RouterClient, msg: ShellAppDeclared): void {
 // handleSnapshot rebuilds a router's WM state from its canonical view.
 // Sent on connect/reconnect. The app_state cache is replaced per-origin so
 // stale entries from no-longer-running instances don't linger.
-function handleSnapshot(client: RouterClient, msg: ShellSessionSnapshot): void {
+function handleSnapshot(client: RouterClient, msg: ShellSessionSnapshot, isLocal: boolean): void {
+  if (isLocal && msg.shell_id) {
+    if (localShellID && localShellID !== msg.shell_id) {
+      console.info('wash shell: router asset identity changed; reloading page');
+      window.location.reload();
+      return;
+    }
+    localShellID = msg.shell_id;
+  }
   replaceSavedStates(client.origin, msg.app_state);
   applySessionSnapshot(client.origin, msg.windows, (id) => client.waitForBundle(id));
 }
@@ -1165,9 +1195,17 @@ createEffect(() => {
       bootWsSettled = true;
       bootStep('ws', 'connected', 'done');
     }
-  } else if (s === 'closed' || s === 'unauthenticated') {
-    // Couldn't reach the router on boot — fail the step and drop the
-    // splash so the ConnectionBanner's error shows through underneath.
+  } else if (s === 'closed' || s === 'unauthenticated' || s === 'reconnecting') {
+    // Lost (or never had) the router — fail the step and drop the splash so
+    // the ConnectionBanner's error shows through underneath.
+    //
+    // 'reconnecting' belongs here too: the splash is a full-screen, opaque,
+    // z-index-999999 overlay that swallows pointer events until it is torn
+    // down, and it is normally torn down by wash:desktop-painted. If the
+    // connection drops BEFORE the desktop paints, that signal never comes —
+    // so without this the splash sat on top of the banner for the full 12s
+    // backstop, hiding the outage and eating clicks on "Reconnect now"
+    // exactly when the user needs it (e2e/tests/reconnect.spec.ts).
     bootStep('ws', s === 'unauthenticated' ? 'session expired' : 'router unreachable', 'fail');
     bootFinish();
   }
@@ -1308,7 +1346,10 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
           padding: '6px 14px',
           font: tokens.type.textMd,
           'box-shadow': '0 6px 16px rgba(0,0,0,0.5)',
-          'z-index': 100000,
+          // Above the boot splash (#wash-boot, z 999999) as well as every
+          // window: a connection outage is the one thing that must never be
+          // covered by chrome the user then cannot dismiss.
+          'z-index': 1000000,
           // Re-enable pointer events so the Reconnect button is clickable;
           // the banner is small + top-center so it doesn't block the desktop.
           'pointer-events': 'auto',

@@ -10,7 +10,17 @@
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Menu, MenuItem, accentColor, applyScheme, defineWashApp, getPack, tokens, washAssetUrl } from '@wash/ui';
+import {
+  Menu,
+  MenuItem,
+  accentColor,
+  applyScheme,
+  defineWashApp,
+  getPack,
+  tokens,
+  washAssetUrl,
+  washCopyText,
+} from '@wash/ui';
 import type { Pack } from '@wash/ui';
 import { toBlob } from 'html-to-image';
 import { Camera, Search, PanelRightOpen } from 'lucide-solid';
@@ -19,6 +29,7 @@ import { Section, type SectionState } from './sidebar/Section';
 import { ViewportWidget } from './sidebar/ViewportWidget';
 import { AboutWidget, type AboutHostStats } from './sidebar/AboutWidget';
 import { NotifyWidget, type NotifyEntry } from './sidebar/NotifyWidget';
+import { AgentsWidget, type AgentAsk, type AgentRow, type AgentSession } from './sidebar/AgentsWidget';
 import { BulkWidget, type BulkJob } from './sidebar/BulkWidget';
 import { BulkConflictOverlay, type BulkConflict } from './sidebar/BulkConflictOverlay';
 import { PrivWidget, type PrivReq } from './sidebar/PrivWidget';
@@ -245,6 +256,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     net: 'collapsed',
     remote: 'collapsed',
     audio: 'collapsed',
+    agents: 'collapsed',
     clipboard: 'collapsed',
   });
   // Host stats (CPU% / mem%) — pushed by the session BE every 5s as
@@ -284,6 +296,21 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [remoteCatVer, setRemoteCatVer] = createSignal(0);
   // Live interface IPs from the session BE's host-stats ticker (host.ifaces).
   const [netIfaces, setNetIfaces] = createSignal<NetIface[]>([]);
+  // Coding-agent roster — com.wash.agentd's StateService snapshot
+  // (docs/AGENT_TERM.md §7), forwarded by the session BE as agent.state.
+  // Rows arrive pre-sorted (needs-input first); we only anchor each row's
+  // elapsed clock locally, the way the terminal's own status line does.
+  const [agentRows, setAgentRows] = createSignal<AgentRow[]>([]);
+  // Pending permission questions (docs/AGENT_TERM.md §12) ride the same
+  // roster push. An agent blocked on a human is the one thing in the
+  // sidebar worth opening the section for on its own.
+  const [agentAsks, setAgentAsks] = createSignal<AgentAsk[]>([]);
+  // Remembered sessions (docs/AGENT_TERM.md §13) — what a reboot or a
+  // closed window would otherwise have cost.
+  const [agentRecent, setAgentRecent] = createSignal<AgentSession[]>([]);
+  const agentStartedAt = new Map<string, number>();
+  const [agentNow, setAgentNow] = createSignal(Date.now());
+
   // Audio mixer — com.wash.audio's StateService snapshot (sources +
   // master volume), forwarded by the session BE as audio.state.
   const [audioState, setAudioState] = createSignal<AudioState | null>(null);
@@ -343,6 +370,30 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const unread = notifications().filter((n) => !n.read).length;
     return unread > 0 ? String(unread) : '';
   };
+  // wantsAttention — the instances with an unread warn/error notification.
+  // A window whose app has said something urgent and unread wears an amber
+  // dot on its taskbar pill, which is the standing version of the toast
+  // that has already faded (docs/AGENT_TERM.md §5: an agent waiting on you
+  // must still be findable a minute later). Generic on purpose: it is the
+  // notification level that earns the badge, not the app that sent it.
+  const wantsAttention = createMemo(() => {
+    const out = new Set<string>();
+    for (const n of notifications()) {
+      if (!n.read && (n.level === 'warn' || n.level === 'error') && n.source_instance) {
+        out.add(n.source_instance);
+      }
+    }
+    return out;
+  });
+  // Visiting the window is the acknowledgement — clear its unread warns so
+  // the badge doesn't outlive the reason for it.
+  const clearAttention = (instanceID: string) => {
+    for (const n of notifications()) {
+      if (!n.read && n.source_instance === instanceID) {
+        window.wash.sendAppMsg(props.instance, { kind: 'notify_mark_read', id: n.id });
+      }
+    }
+  };
   // bulkBadge — show the count of in-flight (queued + running) jobs.
   // Terminal-state rows don't count (they're informational, auto-
   // evicting). Conflicts also count — they're blocking work.
@@ -380,6 +431,25 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     return up > 0 ? String(up) : '';
   };
   const REMOTE_ACCENT = tokens.accentViolet;
+  // agentBadge — the count of agents waiting on the human. That is the
+  // only number worth interrupting for; working agents are visible in the
+  // section, not on its header.
+  const agentBadge = (): string => {
+    // A question waiting on you counts the same as an agent waiting on
+    // you — both mean "someone is blocked until you look".
+    const waiting = agentRows().filter((r) => r.state === 'needs-input').length + agentAsks().length;
+    return waiting > 0 ? String(waiting) : '';
+  };
+  // focusAgent goes to the terminal window that owns a roster row. The
+  // row carries its terminal's instance id, which is what the WM keys on.
+  const focusAgent = (row: AgentRow) => {
+    const w = windows().find((x) => x.instanceID === row.term_instance);
+    if (!w) return;
+    window.wash.setViewport(w.viewport.vx, w.viewport.vy);
+    if (w.state === 'minimized') window.wash.restoreWindow(w.windowID, w.origin);
+    else window.wash.focusWindow(w.windowID, w.origin);
+  };
+
   // audioBadge — show a play glyph while something is actively playing,
   // empty otherwise. Mirrors the other section badges' "needs attention"
   // semantics (here: "sound is on").
@@ -388,6 +458,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     return playing ? '♪' : '';
   };
   const AUDIO_ACCENT = tokens.accentGreen;
+  const AGENTS_ACCENT = tokens.accentTeal;
   let screenshotTimer = 0;
   let currentObjectURL: string | null = null;
   // Dedicated wallpaper layer — applyWallpaper paints onto this instead of
@@ -805,6 +876,38 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           });
           return;
         }
+        case 'agent.state': {
+          // com.wash.agentd's roster snapshot. Anchor each row's clock on
+          // arrival (since_ms is elapsed at push time, so no cross-clock
+          // comparison), and auto-expand when an agent first wants the
+          // human — the one case worth pulling the section open.
+          const state = data.state as unknown as {
+            rows?: AgentRow[];
+            asks?: AgentAsk[];
+            recent?: AgentSession[];
+          };
+          setAgentRecent((state?.recent ?? []) as AgentSession[]);
+          const next = (state?.rows ?? []) as AgentRow[];
+          const asks = (state?.asks ?? []) as AgentAsk[];
+          const hadAsks = agentAsks().length > 0;
+          setAgentAsks(asks);
+          if (asks.length > 0 && !hadAsks) autoExpandSection('agents');
+          const arrival = Date.now();
+          const live = new Set<string>();
+          let waiting = false;
+          for (const r of next) {
+            live.add(r.key);
+            agentStartedAt.set(r.key, arrival - Math.max(0, r.since_ms || 0));
+            if (r.state === 'needs-input') waiting = true;
+          }
+          for (const key of [...agentStartedAt.keys()]) {
+            if (!live.has(key)) agentStartedAt.delete(key);
+          }
+          const wasWaiting = agentRows().some((r) => r.state === 'needs-input');
+          setAgentRows(next);
+          if (waiting && !wasWaiting) autoExpandSection('agents');
+          return;
+        }
         case 'audio.state': {
           // com.wash.audio's StateService snapshot: {sources, master_volume,
           // master_mute}. Auto-expand when a source first appears so the
@@ -873,6 +976,23 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     window.wash.sendAppMsg(props.instance, { kind: 'net_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'remote_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'audio_subscribe' });
+    window.wash.sendAppMsg(props.instance, { kind: 'agent_subscribe' });
+    // Elapsed clock for the roster rows — only ticks while there are
+    // agents, so an ordinary desktop holds no interval.
+    let agentTick: ReturnType<typeof setInterval> | undefined;
+    createEffect(() => {
+      const wanted = agentRows().length > 0;
+      if (wanted && agentTick === undefined) {
+        setAgentNow(Date.now());
+        agentTick = setInterval(() => setAgentNow(Date.now()), 1000);
+      } else if (!wanted && agentTick !== undefined) {
+        clearInterval(agentTick);
+        agentTick = undefined;
+      }
+    });
+    onCleanup(() => {
+      if (agentTick !== undefined) clearInterval(agentTick);
+    });
     props.host.addEventListener('wash:msg', onMsg);
 
     // wash:state restores the persisted sidebar config on (re)mount.
@@ -953,6 +1073,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       // fire-and-forget; gateways forward with proper sender
       // attestation.
       try {
+        window.wash.sendAppMsg(props.instance, { kind: 'agent_unsubscribe' });
         window.wash.sendAppMsg(props.instance, { kind: 'notify_unsubscribe' });
         window.wash.sendAppMsg(props.instance, { kind: 'bulk_unsubscribe' });
         window.wash.sendAppMsg(props.instance, { kind: 'priv_unsubscribe' });
@@ -1160,6 +1281,44 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           />
         </Section>
         <Section
+          id="agents"
+          title="Agents"
+          icon="bot"
+          accent={AGENTS_ACCENT}
+          state={sectionStates().agents ?? 'collapsed'}
+          onToggle={() => toggleSection('agents')}
+          badge={agentBadge()}
+        >
+          <AgentsWidget
+            rows={agentRows}
+            startedAt={(key) => agentStartedAt.get(key) ?? Date.now()}
+            now={agentNow}
+            onFocus={focusAgent}
+            onReattach={(row) =>
+              window.wash.sendAppMsg(props.instance, { kind: 'agent_reattach', key: row.key })
+            }
+            asks={agentAsks}
+            recent={agentRecent}
+            onResume={(session, fork) =>
+              window.wash.sendAppMsg(props.instance, {
+                kind: 'agent_resume',
+                session_id: session.session_id,
+                fork,
+              })
+            }
+            onCopyID={(session) => void washCopyText(session.session_id)}
+            onAnswer={(ask, decision, remember) =>
+              window.wash.sendAppMsg(props.instance, {
+                kind: 'agent_answer',
+                id: ask.id,
+                decision,
+                remember,
+                rule: ask.suggested_rule ?? '',
+              })
+            }
+          />
+        </Section>
+        <Section
           id="clipboard"
           title="Clipboard"
           icon="clipboard"
@@ -1226,7 +1385,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         </IconButton>
         <div style={separatorStyle} />
         <div style={windowListStyle}>
-          <For each={windows()}>{(w) => <WindowPill win={w} />}</For>
+          <For each={windows()}>
+            {(w) => (
+              <WindowPill
+                win={w}
+                attention={wantsAttention().has(w.instanceID)}
+                onVisit={() => clearAttention(w.instanceID)}
+              />
+            )}
+          </For>
         </div>
         <span
           data-testid="screenshot-status"
@@ -1753,17 +1920,26 @@ const IconButton: Component<{
   );
 };
 
-const WindowPill: Component<{ win: WindowInfo }> = (props) => {
+const WindowPill: Component<{
+  win: WindowInfo;
+  /** the window's app has an unread warn/error — wear the amber dot */
+  attention?: boolean;
+  /** called when the user visits the window, so the badge can clear */
+  onVisit?: () => void;
+}> = (props) => {
   const minimized = () => props.win.state === 'minimized';
+  const visit = () => {
+    if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID, props.win.origin);
+    else window.wash.focusWindow(props.win.windowID, props.win.origin);
+    props.onVisit?.();
+  };
   return (
     <button
       type="button"
       data-testid="taskbar-pill"
-      title={`${minimized() ? '[minimized] ' : ''}${props.win.title} — dblclick to jump to its viewport, right-click to close`}
-      onClick={() => {
-        if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID, props.win.origin);
-        else window.wash.focusWindow(props.win.windowID, props.win.origin);
-      }}
+      data-attention={props.attention ? 'true' : undefined}
+      title={`${minimized() ? '[minimized] ' : ''}${props.win.title}${props.attention ? ' — wants your attention' : ''} — dblclick to jump to its viewport, right-click to close`}
+      onClick={visit}
       onDblClick={() => {
         // Snap the camera to the cell holding this window, then focus
         // (or restore-and-focus if minimized). Single-click already
@@ -1771,8 +1947,7 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
         // both end states converge on "focused & visible".
         const v = props.win.viewport;
         window.wash.setViewport(v.vx, v.vy);
-        if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID, props.win.origin);
-        else window.wash.focusWindow(props.win.windowID, props.win.origin);
+        visit();
       }}
       onContextMenu={(ev) => {
         ev.preventDefault();
@@ -1802,6 +1977,20 @@ const WindowPill: Component<{ win: WindowInfo }> = (props) => {
         <SpriteIcon name={props.win.icon!} size={14} />
       </Show>
       <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{props.win.title}</span>
+      {/* Amber dot = this window said something urgent you haven't read.
+          Placed after the title so it reads as a status, not an icon. */}
+      <Show when={props.attention}>
+        <span
+          data-testid="taskbar-pill-attention"
+          style={{
+            width: '7px',
+            height: '7px',
+            'border-radius': '50%',
+            background: tokens.accentAmber,
+            'flex-shrink': 0,
+          }}
+        />
+      </Show>
     </button>
   );
 };

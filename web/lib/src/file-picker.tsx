@@ -34,6 +34,7 @@ import type { Component, JSX } from 'solid-js';
 import { File as FileIcon, Folder as FolderIcon, Link2 } from 'lucide-solid';
 import { tokens } from './tokens';
 import { Overlay, ConfirmDialog } from './overlay';
+import { isDirLike } from './file-tree';
 
 // FilterSpec is the user-facing filter shape. `re` is a JavaScript
 // regex source string (no slashes); the picker compiles it once per
@@ -77,6 +78,8 @@ export interface FilePickerProps {
 interface Entry {
   name: string;
   type: 'dir' | 'file' | 'symlink' | 'other';
+  // What a symlink resolves to — a link to a folder must behave as one.
+  link_type?: string;
   size: number;
   mod_unix: number;
 }
@@ -396,16 +399,17 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
   const visibleEntries = createMemo<Entry[]>(() => {
     const re = filterRE();
     let list = entries();
-    // Directory mode is a folder chooser — only dirs are relevant.
-    if (props.mode === 'directory') list = list.filter((e) => e.type === 'dir');
-    if (re) list = list.filter((e) => e.type === 'dir' || re.test(e.name));
+    // Directory mode is a folder chooser — only dirs are relevant. A
+    // symlink to a folder counts: it is a folder to whoever picks it.
+    if (props.mode === 'directory') list = list.filter(isDirLike);
+    if (re) list = list.filter((e) => isDirLike(e) || re.test(e.name));
     const out = list.slice();
     const desc = sortDesc();
     const key = sortKey();
     out.sort((a, b) => {
       // Folders first regardless of column, then within-type sort.
-      if (a.type === 'dir' && b.type !== 'dir') return -1;
-      if (a.type !== 'dir' && b.type === 'dir') return 1;
+      if (isDirLike(a) && !isDirLike(b)) return -1;
+      if (!isDirLike(a) && isDirLike(b)) return 1;
       let cmp = 0;
       switch (key) {
         case 'name':
@@ -473,7 +477,7 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
 
   const onRowDblClick = (e: Entry) => {
     const target = joinPath(cwd(), e.name);
-    if (e.type === 'dir') {
+    if (isDirLike(e)) {
       pathDirty = false;
       void loadDir(target, { record: true });
       return;
@@ -489,7 +493,7 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
       // the current directory ("use this folder").
       const sel = selectedName();
       const e = sel ? entries().find((x) => x.name === sel) : null;
-      props.onConfirm(e && e.type === 'dir' ? joinPath(cwd(), sel) : cwd());
+      props.onConfirm(e && isDirLike(e) ? joinPath(cwd(), sel) : cwd());
       return;
     }
     if (props.mode === 'open') {
@@ -498,7 +502,7 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
       const e = entries().find((x) => x.name === sel);
       if (!e) return;
       const path = joinPath(cwd(), sel);
-      if (e.type === 'dir') {
+      if (isDirLike(e)) {
         pathDirty = false;
         void loadDir(path, { record: true });
         return;

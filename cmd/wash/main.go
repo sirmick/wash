@@ -196,6 +196,8 @@ Subcommands:
   wash list-apps                  list registered apps
   wash router [flags...]          run the router host (see wash router --help)
   wash launch [flags...]          run the wash-launch CLI (see wash launch --help)
+  wash ai [--agent X] [dir]       open an agent session (default: first
+                                  installed adapter, $HOME)
   wash <name> [args...]           shorthand for wash-<name> [args...]
   wash --wash-manifest            (not valid — manifests are per-app)`)
 }

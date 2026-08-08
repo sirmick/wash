@@ -45,6 +45,7 @@ const APP_BINS = {
   music: ['wash-music'], radio: ['wash-radio'], audio: ['wash-audio'],
   connect: ['wash-connect'], remote: ['wash-remote'],
   imageview: ['wash-imageview'],
+  agentd: ['wash-agentd'], ai: ['wash-ai'],
   vscode: ['wash-vscode', 'wash-vscode-workbench'],
   display: ['wash-display'],
 } satisfies Record<string, readonly string[]>;
@@ -102,7 +103,18 @@ export interface RouterHandle {
    */
   fakesudoLog: string;
   log(): string;
-  waitForLog(pattern: RegExp, timeout?: number): Promise<string>;
+  /**
+   * Wait for `pattern` to appear in the router's captured output.
+   *
+   * Matching starts at `from` (default 0 — the whole log). Pass logCursor()
+   * when the line you're waiting for is one a router emits REPEATEDLY, or the
+   * wait is satisfied instantly by an earlier occurrence and you race whatever
+   * you were trying to sequence behind it (docs/TEST_FLAKES.md A10 — this is
+   * how the display specs launched terminals before DISPLAY was published).
+   */
+  waitForLog(pattern: RegExp, timeout?: number, from?: number): Promise<string>;
+  /** Current length of the captured log; pass to waitForLog's `from`. */
+  logCursor(): number;
   /**
    * Round-trip a single JSON request over the control socket. Used
    * by BE-driven tests to launch/spawn apps and drive APP_MSGs into
@@ -192,8 +204,19 @@ async function freePort(): Promise<number> {
   });
 }
 
-function stageApps(binaries: string[]): string {
+function stageApps(paths: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), 'wash-e2e-apps-'));
+  // Dedupe by basename: infrastructure binaries (fswatch, agentd,
+  // agent-hook) are staged unconditionally AND may be named by a test's
+  // apps list, and staging one twice used to fail with an EEXIST from
+  // symlinkSync — an opaque fixture error for a harmless duplicate.
+  const seen = new Set<string>();
+  const binaries = paths.filter((p) => {
+    const name = p.split('/').pop()!;
+    if (seen.has(name)) return false;
+    seen.add(name);
+    return true;
+  });
   // Multi-call mode (WASH_E2E_MULTICALL=1): copy out/wash once and
   // create a symlink per requested app pointing at it. Exercises the
   // busybox-style layout end-to-end through the same e2e suite as
@@ -267,6 +290,11 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   // first reference — so its binary must be present in every router's apps dir,
   // independent of which apps a test requested.
   bins.push(binPath('wash-fswatch'));
+  // wash-agentd is the coding-agent roster singleton: wash-term addresses
+  // it by app id, so the router spawns it the first time any terminal sees
+  // an agent. Staged everywhere for the same reason as wash-fswatch — a
+  // missing binary would silently drop every roster event.
+  bins.push(binPath('wash-agentd'));
   const appsDir = stageApps(bins);
   // wash-priv claims a reservedID (com.wash.priv) which the registry
   // refuses from a non-root-owned binary by default. The e2e dir is
@@ -404,7 +432,8 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
     xdgConfigHome,
     fakesudoLog,
     log: () => logBuf,
-    waitForLog: (re, timeout = 5_000) => waitForRegex(() => logBuf, re, timeout),
+    waitForLog: (re, timeout = 5_000, from = 0) => waitForRegex(() => logBuf.slice(from), re, timeout),
+    logCursor: () => logBuf.length,
     // 12s (was 5s): a BE→router control round-trip can exceed 5s under the
     // full-parallel e2e load (8 workers × routers + ~40 BE apps), flaking
     // fm-be etc. with "control socket timeout". 12s stays under the 15s
