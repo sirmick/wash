@@ -51,6 +51,11 @@ type ShellSession struct {
 	// closed, pump unblocked) when the shell disconnects. Guarded by peerMu.
 	peerMu       sync.Mutex
 	peerChannels map[uint32]*channelBinding
+	// peerAttaching reserves an origin while its attach is dialing (before the
+	// channel lands in peerChannels), so two concurrent attaches for one origin
+	// don't both dial + bind — the "one relay channel per (shell,origin)"
+	// invariant. Guarded by peerMu.
+	peerAttaching map[string]struct{}
 
 	// lastReadAtNanos is the wall-clock time (UnixNano) of the most recent
 	// inbound frame of any kind — keystrokes, window intents, pings. The
@@ -125,11 +130,12 @@ func (s *ShellSession) undeclareInstance(instanceID string) {
 // the world), then runs the frame loop.
 func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	sess := &ShellSession{
-		Transport:    t,
-		router:       r,
-		scheduler:    NewScheduler(),
-		drainerDone:  make(chan struct{}),
-		peerChannels: make(map[uint32]*channelBinding),
+		Transport:     t,
+		router:        r,
+		scheduler:     NewScheduler(),
+		drainerDone:   make(chan struct{}),
+		peerChannels:  make(map[uint32]*channelBinding),
+		peerAttaching: make(map[string]struct{}),
 	}
 	defer t.Close()
 	// Close any remote-apps relay sockets this shell opened, so a browser
