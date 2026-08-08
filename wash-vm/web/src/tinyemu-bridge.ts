@@ -1071,7 +1071,10 @@ declare global {
     });
     dbg.log('wash', `shell.js fetched: ${bootResult.bytes.length}B (replay queued: ${bootResult.replay.length}B)`);
   } catch (e) {
+    // Surface to the title bar (terminal red) instead of leaving the VM sitting
+    // on "wash-router up" forever — a silent stall reads as "slow boot".
     dbg.log('wash', `shell bootstrap failed: ${(e as Error).message}`);
+    setStage(`shell bootstrap failed: ${(e as Error).message}`, 'error');
   }
 
   if (bootResult) {
@@ -1084,7 +1087,10 @@ declare global {
       finally { URL.revokeObjectURL(url); }
       dbg.log('wash', 'shell bundle loaded');
     } catch (e) {
+      // A bad bundle (e.g. gzipped bytes reaching import()) otherwise hangs the
+      // desktop silently in 'buffering'. Make it a visible terminal error.
       dbg.log('wash', `shell import failed: ${(e as Error).message}`);
+      setStage(`shell import failed: ${(e as Error).message}`, 'error');
     }
     // Replay + post-asset bytes are flushed by bootResult.finish(),
     // which is invoked from bus.register when the shell registers
