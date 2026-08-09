@@ -341,17 +341,17 @@ func Run(args []string) int {
 	}
 
 	cfg := router.Config{
-		Listen:           firstNonEmpty(*listen, os.Getenv("WASH_LISTEN"), defaultListen),
-		AppsDirs:         router.SplitAppsDir(firstNonEmpty(*appsDir, os.Getenv("WASH_APPS_DIR"), defaultAppsDir())),
-		SessionAppID:     firstNonEmpty(*sessionID, os.Getenv("WASH_SESSION_APP_ID"), defaultSessionAppID),
-		NoSession:        *noSession,
-		InitialAppID:     *initialApp,
-		ShowHidden:       *showHidden,
-		ControlSocket:    cs,
-		ScreenshotDir:    sd,
-		Dev:              *dev || os.Getenv("WASH_DEV") != "",
-		FSRoot:           normRoot,
-		ListenUnix:       *listenUnix,
+		Listen:        firstNonEmpty(*listen, os.Getenv("WASH_LISTEN"), defaultListen),
+		AppsDirs:      router.SplitAppsDir(firstNonEmpty(*appsDir, os.Getenv("WASH_APPS_DIR"), defaultAppsDir())),
+		SessionAppID:  firstNonEmpty(*sessionID, os.Getenv("WASH_SESSION_APP_ID"), defaultSessionAppID),
+		NoSession:     *noSession,
+		InitialAppID:  *initialApp,
+		ShowHidden:    *showHidden,
+		ControlSocket: cs,
+		ScreenshotDir: sd,
+		Dev:           *dev || os.Getenv("WASH_DEV") != "",
+		FSRoot:        normRoot,
+		ListenUnix:    *listenUnix,
 		// A --listen-raw router is a remote-apps relay endpoint (host B):
 		// mark it so the remote-family apps refuse to nest here.
 		Relayed:          *listenRaw != "",
