@@ -45,8 +45,6 @@ import (
 
 	"github.com/sirmick/wash/apps/netd/be/backendsel"
 	"github.com/sirmick/wash/apps/netd/be/wifi"
-	"github.com/sirmick/wash/internal/apps/registry"
-	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/washnet/backend"
 	"github.com/sirmick/wash/internal/washnet/caps"
 	"github.com/sirmick/wash/internal/washnet/change"
@@ -56,7 +54,9 @@ import (
 	"github.com/sirmick/wash/internal/washnet/txn"
 	"github.com/sirmick/wash/internal/washnet/ucibuf"
 	"github.com/sirmick/wash/internal/washnet/validate"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/apps/registry"
+	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // AppID is the reserved id this service claims. The registry refuses any

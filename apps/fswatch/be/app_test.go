@@ -14,9 +14,9 @@ import (
 
 	"github.com/sirmick/wash/internal/fswatch"
 	"github.com/sirmick/wash/internal/remotewatch"
-	"github.com/sirmick/wash/internal/sdk"
-	"github.com/sirmick/wash/internal/wire"
 	"github.com/sirmick/wash/internal/wiretest"
+	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // connectFswatch binds the service's onReady to a freshly-handshaken Conn and

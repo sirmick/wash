@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // TestSupersededNotifiesPriorLiveHead is the regression for REVIEW-RECONNECT

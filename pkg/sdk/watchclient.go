@@ -5,7 +5,7 @@ import (
 	"sync"
 
 	"github.com/sirmick/wash/internal/fswatchproto"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // WatchEvent is a filesystem change delivered to a WatchClient callback.

@@ -25,7 +25,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // ClassQueueSize is the per-class outgoing frame queue capacity. The

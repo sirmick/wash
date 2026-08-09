@@ -3,7 +3,7 @@ package main
 
 import (
 	priv "github.com/sirmick/wash/apps/priv/be"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 func main() { sdk.Main(priv.Def()) }

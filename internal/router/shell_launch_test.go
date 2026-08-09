@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
 	"github.com/sirmick/wash/internal/wiretest"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // logCapture is a thread-safe sink for the router's injectable logger so

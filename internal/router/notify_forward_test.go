@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
 	"github.com/sirmick/wash/internal/wiretest"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // notifyManifest is a minimal manifest for a background-surface

@@ -23,7 +23,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // HeartbeatInterval is the default cadence between runtime.stats

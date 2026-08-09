@@ -2,7 +2,7 @@
 
 package router
 
-import "github.com/sirmick/wash/internal/apps/registry"
+import "github.com/sirmick/wash/pkg/apps/registry"
 
 // selfApp is a no-op in standalone builds — every app binary is its
 // own executable; nothing is a self-symlink. The real implementation

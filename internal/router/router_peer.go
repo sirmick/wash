@@ -23,7 +23,7 @@ package router
 import (
 	"encoding/json"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // RouterPeerAppID is the synthetic app id apps address to reach the

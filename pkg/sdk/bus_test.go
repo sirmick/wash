@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
 	"github.com/sirmick/wash/internal/wiretest"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // busTestConn spins up a Conn against a fake router and returns the

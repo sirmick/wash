@@ -3,7 +3,7 @@ package main
 
 import (
 	agentd "github.com/sirmick/wash/apps/agentd/be"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 func main() { sdk.Main(agentd.Def()) }

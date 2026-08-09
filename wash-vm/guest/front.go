@@ -25,7 +25,7 @@ import (
 	"io"
 	"log"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // Identity is the resolved Unix account the front forks wash-router under. It

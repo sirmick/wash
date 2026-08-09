@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/proc"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 // HostStatsInterval is the sample cadence. Exported so a future

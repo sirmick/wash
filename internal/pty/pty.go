@@ -24,7 +24,7 @@ import (
 	"syscall"
 
 	creackpty "github.com/creack/pty"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 // Session is one PTY + raw-channel pair. Methods are safe to call

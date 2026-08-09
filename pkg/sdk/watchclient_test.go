@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/fswatchproto"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // readToService reads the next outbound EvtAppMsg, asserts it is addressed to

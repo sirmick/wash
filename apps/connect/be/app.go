@@ -38,10 +38,10 @@ import (
 	"os"
 	"sync"
 
-	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/pty"
-	"github.com/sirmick/wash/internal/sdk"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/apps/registry"
+	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 //go:embed all:assets

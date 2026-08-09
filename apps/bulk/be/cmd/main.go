@@ -3,7 +3,7 @@ package main
 
 import (
 	bulk "github.com/sirmick/wash/apps/bulk/be"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 func main() { sdk.Main(bulk.Def()) }

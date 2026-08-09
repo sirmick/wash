@@ -18,8 +18,8 @@ import (
 	"sync"
 
 	"github.com/sirmick/wash/internal/agentclient"
-	"github.com/sirmick/wash/internal/sdk"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 var (

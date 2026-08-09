@@ -16,8 +16,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sirmick/wash/internal/sdk"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // scrollback is how many entries journalctl pre-loads before tailing.

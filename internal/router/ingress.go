@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // Ingress is wash's generic embed-a-web-app facility, modeled on Home

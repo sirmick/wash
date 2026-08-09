@@ -10,7 +10,7 @@ import (
 	"log"
 	"sync"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // PrivAppID is wash-priv's reserved app id. Sender for the privilege

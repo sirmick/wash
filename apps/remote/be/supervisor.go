@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 // remoteSockPath returns a unique B-side socket path for one connection.

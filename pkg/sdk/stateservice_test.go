@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // jobsState is the per-test payload — a small struct exercising both

@@ -7,8 +7,8 @@
 package audiorelay
 
 import (
-	"github.com/sirmick/wash/internal/sdk"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // AudioAppID is the audio control plane. Declared as a string (not an

@@ -28,7 +28,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // pageSize is the kernel's reported page size. /proc/<pid>/statm

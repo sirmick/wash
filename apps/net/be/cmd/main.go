@@ -3,7 +3,7 @@ package main
 
 import (
 	net "github.com/sirmick/wash/apps/net/be"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 func main() { sdk.Main(net.Def()) }

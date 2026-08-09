@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"syscall"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // Channel ids — must match router and WIRE.md §3.

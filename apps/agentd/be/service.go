@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sirmick/wash/internal/sdk"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // Liveness (docs/AGENT_TERM.md §7). A terminal re-states each of its

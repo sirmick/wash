@@ -3,7 +3,7 @@ package router
 import (
 	"testing"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // TestPanelCatalog asserts panelCatalog surfaces exactly the enabled

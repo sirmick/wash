@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/washnet/model"
-	"github.com/sirmick/wash/internal/wire"
 	"github.com/sirmick/wash/internal/wiretest"
+	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // connectNetd handshakes a Conn against netd's def (running onReady, which wires

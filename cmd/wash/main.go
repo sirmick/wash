@@ -26,11 +26,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/runner/fswatchd"
 	"github.com/sirmick/wash/internal/runner/launch"
 	routerrun "github.com/sirmick/wash/internal/runner/router"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/apps/registry"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // vmloginRun dispatches `wash-vmlogin` when the washvmlogin build tag is set

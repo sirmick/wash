@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 func frameOf(class wire.Class, ch uint32, tag byte) wire.Frame {

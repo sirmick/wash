@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // Channel IDs (WIRE.md §3). v0.0 fixes them; OPEN-time discipline

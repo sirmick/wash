@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // drainAll pulls every currently-queued frame out of the scheduler in

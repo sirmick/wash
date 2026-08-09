@@ -39,8 +39,8 @@ import (
 	"context"
 	"github.com/sirmick/wash/internal/version"
 
-	"github.com/sirmick/wash/internal/apps/registry"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/apps/registry"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 // AppID is the reserved app id for the audio control plane.

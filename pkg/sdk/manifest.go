@@ -1,6 +1,6 @@
 package sdk
 
-import "github.com/sirmick/wash/internal/wire"
+import "github.com/sirmick/wash/pkg/wire"
 
 // ProtocolVersion is the wire protocol version this SDK speaks.
 const ProtocolVersion = wire.ProtocolVersion

@@ -33,7 +33,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // readPeerUID returns the kernel-attested uid of the connected peer,

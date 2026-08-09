@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 // MaxTracks caps a scan so a huge folder can't blow up the message/list.

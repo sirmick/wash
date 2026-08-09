@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	wfs "github.com/sirmick/wash/internal/fs"
-	"github.com/sirmick/wash/internal/wire"
 	"github.com/sirmick/wash/internal/wiretest"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // pickerConn returns a minimally-wired Conn whose SendAppMsg replies

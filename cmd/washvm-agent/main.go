@@ -13,7 +13,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/sirmick/wash/internal/washvm/proto"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 func main() {

@@ -6,7 +6,7 @@ package main
 
 import (
 	imageview "github.com/sirmick/wash/apps/imageview/be"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 func main() { sdk.Main(imageview.Def()) }

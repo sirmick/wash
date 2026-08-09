@@ -3,7 +3,7 @@ package router
 import (
 	"testing"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // TestCreateWindowThreadsMinMax is the regression for the REVIEW-X11-WAYLAND

@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/sirmick/wash/internal/apps/registry"
+	"github.com/sirmick/wash/pkg/apps/registry"
 )
 
 // runInstallSymlinks materializes wash-<app> symlinks pointing at

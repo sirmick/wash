@@ -7,7 +7,7 @@ import (
 	"os"
 
 	disks "github.com/sirmick/wash/apps/disks/be"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 func main() {

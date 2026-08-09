@@ -29,7 +29,7 @@ import (
 	"syscall"
 
 	"github.com/sirmick/wash/internal/login"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 	"github.com/sirmick/wash/wash-vm/guest"
 )
 

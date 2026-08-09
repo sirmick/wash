@@ -30,7 +30,7 @@ package sdk
 import (
 	"sync"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // StateServiceKind* constants are the wire vocabulary. Exported so

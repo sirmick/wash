@@ -11,7 +11,7 @@ package router
 import (
 	"testing"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 func TestRuntimeRowGoKindCarriesGoFields(t *testing.T) {

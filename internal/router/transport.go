@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // wsWriteTimeout bounds a single FE-bound frame write (docs/PTY_ROBUST.md,

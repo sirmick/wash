@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // TestDispatch_WedgedAppWriteDoesNotBlockShell — (REVIEW-DATAPATH F5/F6 /

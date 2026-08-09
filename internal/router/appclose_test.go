@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/sirmick/wash/internal/wire"
 	"github.com/sirmick/wash/internal/wiretest"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // TestAppInitiatedWindowClose: an UNSOLICITED confirm_close(allow=true)

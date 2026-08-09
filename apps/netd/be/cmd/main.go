@@ -3,7 +3,7 @@ package main
 
 import (
 	netd "github.com/sirmick/wash/apps/netd/be"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 func main() { sdk.Main(netd.Def()) }

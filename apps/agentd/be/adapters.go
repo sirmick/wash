@@ -29,8 +29,8 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
-	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/version"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 // initTimeout bounds the handshake. An adapter that has not answered

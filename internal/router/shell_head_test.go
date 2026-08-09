@@ -4,7 +4,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // TestTerminalChannelMigratesToHeadShell: when a second shell attaches

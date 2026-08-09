@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // envelopedManifest wraps a bare manifest JSON in the framed probe

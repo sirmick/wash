@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/router"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // TestRunRawListenerServesWire proves --listen-raw (host B's relay endpoint,

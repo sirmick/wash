@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 // LogFile is one row in the sidebar — a regular file directly under

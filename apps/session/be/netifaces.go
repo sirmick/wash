@@ -17,7 +17,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 // netIface is one non-local, non-docker interface and its addresses.

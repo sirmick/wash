@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/washvm/proto"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // Opts configures a microvm launch. Kernel and Initramfs are required.

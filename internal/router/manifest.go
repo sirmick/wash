@@ -3,7 +3,7 @@ package router
 import (
 	"fmt"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // ProtocolVersion is the wash wire protocol version this router speaks.

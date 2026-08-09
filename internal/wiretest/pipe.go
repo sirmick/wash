@@ -10,7 +10,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // PipePair is a bidirectional in-memory channel of wash frames. Each

@@ -8,7 +8,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 func itoa(n int) string { return strconv.Itoa(n) }

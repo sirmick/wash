@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/sirmick/wash/internal/apps/registry"
+	"github.com/sirmick/wash/pkg/apps/registry"
 )
 
 // selfApp returns the in-process app registration when bin resolves

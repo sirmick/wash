@@ -34,10 +34,10 @@ import (
 	"io/fs"
 	"log"
 
-	"github.com/sirmick/wash/internal/apps/registry"
-	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/version"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/apps/registry"
+	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // AppID is the reserved-DNS id of the remote-hosts service.

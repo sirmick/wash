@@ -25,8 +25,8 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/agentpolicy"
-	"github.com/sirmick/wash/internal/sdk"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // askTTL is how long a question waits for a human before it gives up and

@@ -41,7 +41,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // Err is the canonical error type returned from handlers. Code maps

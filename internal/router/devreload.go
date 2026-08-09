@@ -27,7 +27,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // devReloadDebounce is the window during which repeated

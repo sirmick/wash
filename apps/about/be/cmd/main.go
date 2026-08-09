@@ -7,7 +7,7 @@ package main
 
 import (
 	about "github.com/sirmick/wash/apps/about/be"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 func main() { sdk.Main(about.Def()) }

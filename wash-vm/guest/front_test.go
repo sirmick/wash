@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // fakeAuth accepts exactly one (user, pass) and resolves it to a fixed

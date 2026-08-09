@@ -28,10 +28,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sirmick/wash/internal/apps/registry"
 	wfs "github.com/sirmick/wash/internal/fs"
-	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/thumbs"
+	"github.com/sirmick/wash/pkg/apps/registry"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 //go:embed all:assets

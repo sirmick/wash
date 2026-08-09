@@ -3,7 +3,7 @@ package main
 
 import (
 	washamp "github.com/sirmick/wash/apps/washamp/be"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 func main() { sdk.Main(washamp.Def()) }

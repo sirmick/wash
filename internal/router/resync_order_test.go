@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // TestResync_StaysBehindStaleBulk — (REVIEW-DATAPATH F4) resync must not

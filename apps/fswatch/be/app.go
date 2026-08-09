@@ -32,12 +32,12 @@ import (
 	"os/exec"
 	"sync"
 
-	"github.com/sirmick/wash/internal/apps/registry"
 	"github.com/sirmick/wash/internal/fswatch"
 	"github.com/sirmick/wash/internal/fswatchproto"
 	"github.com/sirmick/wash/internal/remotewatch"
-	"github.com/sirmick/wash/internal/sdk"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/apps/registry"
+	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // The wire vocabulary is owned by internal/fswatchproto (a dependency-free

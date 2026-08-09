@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/audiorelay"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 // skinsFS holds the bundled classic-skin .wsz files, served over ingress

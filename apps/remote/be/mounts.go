@@ -12,9 +12,9 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/sirmick/wash/internal/fswatchproto"
-	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/washmount"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // Mount status values, surfaced to the FE under each host.

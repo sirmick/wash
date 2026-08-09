@@ -3,7 +3,7 @@ package main
 
 import (
 	fswatchsvc "github.com/sirmick/wash/apps/fswatch/be"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 func main() { sdk.Main(fswatchsvc.Def()) }

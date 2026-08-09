@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // readEvtFrame is readEvt's class-aware sibling: returns the raw

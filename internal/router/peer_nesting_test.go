@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // TestRelayedRouterRefusesNestedPeer proves the no-nesting guard: a router that

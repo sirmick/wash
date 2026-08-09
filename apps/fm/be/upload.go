@@ -49,8 +49,8 @@ import (
 	"sync/atomic"
 
 	wfs "github.com/sirmick/wash/internal/fs"
-	"github.com/sirmick/wash/internal/sdk"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // bulkAppID is wash-bulk's reserved singleton app id (mirrors

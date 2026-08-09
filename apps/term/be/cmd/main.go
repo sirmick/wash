@@ -3,7 +3,7 @@ package main
 
 import (
 	term "github.com/sirmick/wash/apps/term/be"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 func main() { sdk.Main(term.Def()) }

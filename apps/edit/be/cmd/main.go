@@ -3,7 +3,7 @@ package main
 
 import (
 	edit "github.com/sirmick/wash/apps/edit/be"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 func main() { sdk.Main(edit.Def()) }

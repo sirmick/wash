@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/audiorelay"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 // station is one entry. URL is the upstream stream (kept BE-side; the FE

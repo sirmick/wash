@@ -3,7 +3,7 @@ package main
 
 import (
 	audio "github.com/sirmick/wash/apps/audio/be"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 func main() { sdk.Main(audio.Def()) }

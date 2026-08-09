@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // frameOf (class, ch, tag) is shared with qos_test.go.

@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 // maxWallpaperBytes caps inline image payload. Frames are 16 MiB

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // fakeRaw is a controllable FrameTransport: tests push frames it should yield

@@ -24,8 +24,8 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
-	"github.com/sirmick/wash/internal/sdk"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // Transcripts are intentionally unbounded in agentd memory for the router's

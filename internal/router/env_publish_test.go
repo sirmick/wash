@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
 	"github.com/sirmick/wash/internal/wiretest"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // envManifest builds a surface=window manifest with the given caps,

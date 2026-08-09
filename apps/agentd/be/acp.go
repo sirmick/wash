@@ -29,8 +29,8 @@ import (
 	"github.com/sirmick/wash/internal/acp"
 	"github.com/sirmick/wash/internal/agentpolicy"
 	"github.com/sirmick/wash/internal/pty"
-	"github.com/sirmick/wash/internal/sdk"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // hostedAskTTL bounds how long the agent waits on a human. Slightly longer

@@ -9,7 +9,7 @@ import (
 
 	"github.com/sirmick/wash/internal/audiorelay"
 	"github.com/sirmick/wash/internal/medialib"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 // player holds the per-instance scan root + ingress base. The FE asks for
@@ -111,4 +111,3 @@ type trackMsg struct {
 	URL   string `json:"url"`
 	Title string `json:"title"`
 }
-

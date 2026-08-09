@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/sirmick/wash/internal/apps/registry"
+	"github.com/sirmick/wash/pkg/apps/registry"
 )
 
 // spritePath is the icon sprite source, relative to this package dir

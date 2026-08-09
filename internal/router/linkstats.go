@@ -14,7 +14,7 @@ package router
 import (
 	"sync/atomic"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // numClasses is the QoS priority-class count (wire.Class is 0..3). Every

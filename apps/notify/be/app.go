@@ -50,9 +50,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/sirmick/wash/internal/apps/registry"
-	"github.com/sirmick/wash/internal/sdk"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/apps/registry"
+	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // AppID is the reserved app id for the notify service. Exposed so the

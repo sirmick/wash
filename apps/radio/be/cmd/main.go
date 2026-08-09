@@ -3,7 +3,7 @@ package main
 
 import (
 	radio "github.com/sirmick/wash/apps/radio/be"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 func main() { sdk.Main(radio.Def()) }

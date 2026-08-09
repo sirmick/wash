@@ -3,7 +3,7 @@ package main
 
 import (
 	remote "github.com/sirmick/wash/apps/remote/be"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 func main() { sdk.Main(remote.Def()) }

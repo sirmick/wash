@@ -6,7 +6,7 @@ package main
 
 import (
 	connect "github.com/sirmick/wash/apps/connect/be"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 func main() { sdk.Main(connect.Def()) }

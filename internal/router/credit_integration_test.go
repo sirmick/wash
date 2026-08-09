@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // TestCreditBulkRawBlocksWithoutGrant — a Bulk raw write that would

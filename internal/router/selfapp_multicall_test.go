@@ -9,8 +9,8 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/sirmick/wash/internal/apps/registry"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/apps/registry"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // makeValidApp builds a minimally-valid registry.App named after this

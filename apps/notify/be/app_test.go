@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirmick/wash/internal/sdk"
-	"github.com/sirmick/wash/internal/wire"
 	"github.com/sirmick/wash/internal/wiretest"
+	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // connectNotify mirrors the SDK's busTestConn pattern (internal/sdk/

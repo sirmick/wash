@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // Run is the Tier-2 event loop: reads frames from the router and

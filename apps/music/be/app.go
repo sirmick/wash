@@ -14,8 +14,8 @@ import (
 	"io/fs"
 	"log"
 
-	"github.com/sirmick/wash/internal/apps/registry"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/apps/registry"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 //go:embed all:assets

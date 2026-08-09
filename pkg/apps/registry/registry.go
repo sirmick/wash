@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"io/fs"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // App is one compiled-in wash app. The fields mirror what a registry

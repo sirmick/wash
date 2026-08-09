@@ -12,7 +12,7 @@ import (
 	"io/fs"
 	"log"
 
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 // The FE bundle lives in assets/index.js (vanilla JS, no build step) and

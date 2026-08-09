@@ -37,7 +37,7 @@ import (
 	"github.com/sirmick/wash/internal/router"
 	"github.com/sirmick/wash/internal/shellassets"
 	"github.com/sirmick/wash/internal/tlsutil"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 const (

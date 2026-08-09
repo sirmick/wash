@@ -42,7 +42,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // defaultMsgAwaitTimeout is the wait cap when a `msg` request set

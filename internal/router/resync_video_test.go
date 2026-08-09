@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // TestResync_VideoKindSkipsRingReplay — (REVIEW-X11-WAYLAND #6) a video

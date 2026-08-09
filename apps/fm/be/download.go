@@ -35,7 +35,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 var (

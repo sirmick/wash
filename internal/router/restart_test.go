@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirmick/wash/internal/wire"
 	"github.com/sirmick/wash/internal/wiretest"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // bgManifest builds a surface=background singleton manifest — the shape

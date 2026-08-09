@@ -4,7 +4,7 @@ import (
 	"net"
 	"net/http/httputil"
 
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // Remote-apps relay (docs/REMOTE.md). The browser keeps ONE connection to

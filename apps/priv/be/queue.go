@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sirmick/wash/internal/sdk"
-	"github.com/sirmick/wash/internal/wire"
+	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // Request lifecycle. The state machine is deliberately minimal — the

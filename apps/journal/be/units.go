@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 // Unit is one row in the sidebar. Description matches systemctl's

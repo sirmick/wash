@@ -3,7 +3,7 @@ package main
 
 import (
 	syslogs "github.com/sirmick/wash/apps/syslogs/be"
-	"github.com/sirmick/wash/internal/sdk"
+	"github.com/sirmick/wash/pkg/sdk"
 )
 
 func main() { sdk.Main(syslogs.Def()) }
