@@ -147,15 +147,39 @@ jobs:
       # dpkg/rpm/apk names and those URLs would 404. The artifact layout is
       # artifacts/<row>/<distro>-<arch>/<pkg>, so the package's parent dir
       # is exactly "<distro>-<arch>".
+      #
+      # Every <distro>-<arch> dir holds TWO packages — wash and wash-login —
+      # so the stable name has to carry the package identity as well as the
+      # slug. Keying it on the slug alone let the second package clobber the
+      # first, and which one survived was down to `find` order: v0.13.0
+      # shipped wash-login as wash-fedora-40-amd64.rpm, v0.13.2 shipped it as
+      # wash-ubuntu-24.04-amd64.deb. Both made the README's install one-liner
+      # fail on an unmet `Depends: wash`.
       - name: Stage release assets (stable + versioned names)
         run: |
           set -euo pipefail
           mkdir -p release
-          find artifacts -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' -o -name '*.tgz' \) | while read -r f; do
+          find artifacts -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' -o -name '*.tgz' \) \
+            | sort | while read -r f; do
             slug=$(basename "$(dirname "$f")")     # e.g. ubuntu-24.04-amd64
+            base=$(basename "$f")
             ext=${f##*.}
-            cp "$f" "release/wash-$slug.$ext"      # stable: wash-ubuntu-24.04-amd64.deb
-            cp "$f" "release/$(basename "$f")"     # native: wash_0.9.3-1_amd64.deb
+            # deb separates name from version with '_', rpm/apk with '-'.
+            case "$base" in
+              wash-login[-_]*) stem="wash-login-$slug" ;;   # wash-login-ubuntu-24.04-amd64.deb
+              *)               stem="wash-$slug" ;;         # wash-ubuntu-24.04-amd64.deb
+            esac
+            cp "$f" "release/$stem.$ext"
+            # Native names are not unique across distros of the same arch —
+            # ubuntu-24.04-amd64 and debian-13-amd64 both build
+            # wash_<ver>-1_amd64.deb. Publish the first (sorted: debian) and
+            # say out loud which ones were dropped, rather than silently
+            # overwriting. The stable names above carry every row unambiguously.
+            if [ -e "release/$base" ]; then
+              echo "note: native name $base already staged; not overwriting with $f"
+            else
+              cp "$f" "release/$base"              # native: wash_0.9.3-1_amd64.deb
+            fi
           done
           echo "── release assets ──"; ls -1 release
       - name: Publish packages to the GitHub Release
