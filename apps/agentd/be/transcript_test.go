@@ -90,51 +90,71 @@ func TestToolCallClosesTheOpenMessage(t *testing.T) {
 	}
 }
 
-// The buffer is bounded, and trimming must not leave a tool index pointing
-// at the wrong line — an update for a dropped row has to append, never
-// corrupt an unrelated one.
-func TestTranscriptIsBoundedAndReindexes(t *testing.T) {
+func TestTranscriptIsUnboundedInMemory(t *testing.T) {
 	resetTranscripts()
 	now := time.Unix(0, 0)
 
-	for i := 0; i < maxTranscript+50; i++ {
+	const total = 600
+	for i := 0; i < total; i++ {
 		appendUpdate("acp:1", acp.SessionUpdate{
 			SessionUpdate: acp.UpdateToolCall,
 			ToolCall:      acp.ToolCall{ToolCallID: "t" + itoa(uint64(i)), Kind: acp.ToolKindRead, Status: acp.ToolStatusPending},
 		}, now)
 	}
 	got := snapshot("acp:1")
-	if len(got) != maxTranscript {
-		t.Fatalf("%d events, want the bound of %d", len(got), maxTranscript)
+	if len(got) != total {
+		t.Fatalf("%d events, want all %d", len(got), total)
+	}
+	if got[0].Seq != 1 || got[len(got)-1].Seq != total {
+		t.Fatalf("seq range = %d..%d, want 1..%d", got[0].Seq, got[len(got)-1].Seq, total)
 	}
 
-	// An update for a long-dropped tool must not mutate a survivor.
 	appendUpdate("acp:1", acp.SessionUpdate{
 		SessionUpdate: acp.UpdateToolCallUpdate,
 		ToolCall:      acp.ToolCall{ToolCallID: "t0", Status: acp.ToolStatusFailed},
 	}, now)
 	after := snapshot("acp:1")
-	for i, e := range after[:len(after)-1] {
-		if e.Status == acp.ToolStatusFailed {
-			t.Fatalf("event %d was corrupted by an update for a dropped row: %+v", i, e)
-		}
+	if len(after) != total || after[0].Status != acp.ToolStatusFailed {
+		t.Fatalf("oldest event was not retained and updated in place: len=%d first=%+v", len(after), after[0])
 	}
+}
 
-	// A survivor's update still lands in place.
-	last := got[len(got)-1].ToolID
-	appendUpdate("acp:1", acp.SessionUpdate{
-		SessionUpdate: acp.UpdateToolCallUpdate,
-		ToolCall:      acp.ToolCall{ToolCallID: last, Status: acp.ToolStatusCompleted},
-	}, now)
-	final := snapshot("acp:1")
-	var found bool
-	for _, e := range final {
-		if e.ToolID == last && e.Status == acp.ToolStatusCompleted {
-			found = true
-		}
+func TestTranscriptSnapshotReplayIsChunked(t *testing.T) {
+	resetTranscripts()
+	events := []Event{
+		{Seq: 1, Kind: EventMessage, Text: "a"},
+		{Seq: 2, Kind: EventMessage, Text: "b"},
 	}
-	if !found {
-		t.Error("a surviving tool row lost its index after the trim")
+	old := maxTranscriptSnapshotBytes
+	maxTranscriptSnapshotBytes = 1
+	defer func() { maxTranscriptSnapshotBytes = old }()
+
+	msgs := transcriptSnapshotMsgs("acp:1", events)
+	if len(msgs) != len(events) {
+		t.Fatalf("%d snapshot chunks, want %d", len(msgs), len(events))
+	}
+	if !msgs[0].Reset {
+		t.Fatal("first snapshot chunk must reset the client")
+	}
+	if msgs[1].Reset {
+		t.Fatal("later snapshot chunks must append")
+	}
+}
+
+func TestForgetTranscriptWatchersKeepsHistory(t *testing.T) {
+	resetTranscripts()
+	appendEvent("acp:1", Event{Kind: EventMessage, Text: "kept"}, time.Unix(0, 0))
+	transMu.Lock()
+	transSubs["acp:1"] = map[string]time.Time{"i-1": time.Now()}
+	transMu.Unlock()
+
+	forgetTranscriptWatchers("acp:1")
+
+	if got := transcriptSubscriberCount("acp:1"); got != 0 {
+		t.Fatalf("watchers=%d, want 0", got)
+	}
+	if got := snapshot("acp:1"); len(got) != 1 || got[0].Text != "kept" {
+		t.Fatalf("history = %+v, want retained transcript", got)
 	}
 }
 
@@ -185,10 +205,8 @@ func TestForgetInstanceDropsItsSubscriptions(t *testing.T) {
 	}
 }
 
-// A watcher that stops re-affirming is dropped. There is no app-gone
-// signal and SendAppMsgTo does not fail for a dead instance, so a closed
-// window cannot be noticed at send time — agentd re-sent to one forever
-// (`no instance "i-11"` on every event in the router log) until this.
+// A watcher that stops re-affirming is dropped. Router instance.gone is the
+// fast path, but the TTL remains a backstop for any missed lifecycle path.
 func TestSilentWatchersExpire(t *testing.T) {
 	resetTranscripts()
 	transMu.Lock()

@@ -17,6 +17,7 @@
 package agentd
 
 import (
+	"encoding/json"
 	"log"
 	"os"
 	"sync"
@@ -27,17 +28,18 @@ import (
 	"github.com/sirmick/wash/internal/wire"
 )
 
-// maxTranscript bounds one session's history. Generous enough to scroll
-// back through a long turn, finite so a runaway agent cannot grow the
-// service without bound. Oldest events fall off the front.
-const maxTranscript = 500
+// Transcripts are intentionally unbounded in agentd memory for the router's
+// lifetime: if the viewer or session app crashes, the hosted agent keeps
+// running and a later window should be able to replay everything agentd saw.
+//
+// Snapshot replay is still chunked below so one reattach cannot exceed the
+// wire's per-frame limit.
+var maxTranscriptSnapshotBytes = wire.MaxPayload / 4
 
-// Watcher liveness. There is no app-gone signal in the SDK and
-// SendAppMsgTo does not fail for a dead instance — the router discovers
-// that later and logs it — so a closed window cannot be detected at send
-// time. Watchers therefore re-affirm, exactly as the roster's own rows
-// do, and one that goes quiet is dropped. Without this, agentd re-sent to
-// a dead instance on every event forever.
+// Watcher liveness. The router sends instance.gone when it tears down an app,
+// and the TTL remains as a backstop for any older or missed lifecycle path.
+// Watchers therefore re-affirm, exactly as the roster's own rows do, and one
+// that goes quiet is dropped.
 const (
 	watcherTTL     = 60 * time.Second
 	WatcherRefresh = 15 * time.Second
@@ -296,30 +298,11 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 	return nil
 }
 
-// push appends, trims to the bound, and stamps a sequence number.
+// push appends and stamps a sequence number.
 func (t *transcript) push(e Event) Event {
 	t.seq++
 	e.Seq = t.seq
 	t.events = append(t.events, e)
-	if len(t.events) > maxTranscript {
-		drop := len(t.events) - maxTranscript
-		t.events = append([]Event(nil), t.events[drop:]...)
-		// Indices shift; rebuild the ones that still exist and forget the
-		// rest, so an update for a dropped tool row appends rather than
-		// corrupting an unrelated line.
-		t.toolAt = map[string]int{}
-		for i := range t.events {
-			if t.events[i].Kind == EventTool && t.events[i].ToolID != "" {
-				t.toolAt[t.events[i].ToolID] = i
-			}
-		}
-		if t.openMessage >= 0 {
-			t.openMessage -= drop
-			if t.openMessage < 0 {
-				t.openMessage = -1
-			}
-		}
-	}
 	return e
 }
 
@@ -334,10 +317,69 @@ func snapshot(key string) []Event {
 	return append([]Event(nil), t.events...)
 }
 
-// dropTranscript forgets a finished session's history and its watchers.
-func dropTranscript(key string) {
+type transcriptSnapshotMsg struct {
+	Kind   string  `json:"kind"`
+	Key    string  `json:"key"`
+	Reset  bool    `json:"reset"`
+	Events []Event `json:"events"`
+}
+
+func sendTranscriptSnapshot(conn *sdk.Conn, instanceID, key string) error {
+	for _, msg := range transcriptSnapshotMsgs(key, snapshot(key)) {
+		if err := conn.SendAppMsgTo(wire.Recipient{InstanceID: instanceID}, msg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func transcriptSnapshotMsgs(key string, events []Event) []transcriptSnapshotMsg {
+	if len(events) == 0 {
+		return []transcriptSnapshotMsg{{Kind: "transcript_snapshot", Key: key, Reset: true}}
+	}
+	var out []transcriptSnapshotMsg
+	var batch []Event
+	var bytes int
+	reset := true
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		out = append(out, transcriptSnapshotMsg{
+			Kind:   "transcript_snapshot",
+			Key:    key,
+			Reset:  reset,
+			Events: append([]Event(nil), batch...),
+		})
+		reset = false
+		batch = batch[:0]
+		bytes = 0
+	}
+	for _, e := range events {
+		n := encodedEventSize(e)
+		if len(batch) > 0 && bytes+n > maxTranscriptSnapshotBytes {
+			flush()
+		}
+		batch = append(batch, e)
+		bytes += n
+	}
+	flush()
+	return out
+}
+
+func encodedEventSize(e Event) int {
+	b, err := json.Marshal(e)
+	if err != nil {
+		return len(e.Text) + 256
+	}
+	return len(b) + 64
+}
+
+// forgetTranscriptWatchers drops live subscriptions for a session without
+// deleting the buffered transcript. Ending or detaching a viewer is not data
+// loss; a later reattach replays from trans.
+func forgetTranscriptWatchers(key string) {
 	transMu.Lock()
-	delete(trans, key)
 	delete(transSubs, key)
 	transMu.Unlock()
 }
@@ -377,9 +419,9 @@ func transcriptSubscriberCount(key string) int {
 
 // pushEvent fans one event out to the windows watching that session.
 //
-// Liveness is the watcher's job, not this function's: SendAppMsgTo does
-// not fail for a dead instance (the router notices later and logs it), so
-// there is nothing to check here. transcriptWatchers expires the silent.
+// Liveness is the watcher's job, not this function's: SendAppMsgTo's error
+// path is the local transport, not per-recipient delivery. Router
+// instance.gone and transcriptWatchers expire stale recipients.
 func pushEvent(conn *sdk.Conn, key string, e Event) {
 	for _, inst := range transcriptWatchers(key) {
 		_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: inst}, map[string]any{
@@ -410,12 +452,9 @@ func registerTranscriptHandlers(bus *sdk.Bus) {
 		}
 
 		// Reply with the history so a reload, or a second window, starts
-		// where the session actually is rather than empty.
-		return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
-			"kind":   "transcript_snapshot",
-			"key":    req.Key,
-			"events": snapshot(req.Key),
-		})
+		// where the session actually is rather than empty. The history is
+		// unbounded server-side, so replay is chunked into bounded frames.
+		return sendTranscriptSnapshot(conn, from.InstanceID, req.Key)
 	})
 
 	sdk.HandleFromVoid(bus, "transcript_unsubscribe", func(_ *sdk.Conn, _ string, req transReq, from wire.Sender) error {

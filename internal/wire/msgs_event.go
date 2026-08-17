@@ -99,6 +99,12 @@ const (
 	//   - cross-app delivery: From set by router (router-attested)
 	TEvtAppMsg = "app_msg"
 
+	// Router -> app lifecycle notification. Emitted after an instance has
+	// been torn down so long-lived services can drop per-instance
+	// subscriptions without waiting for keepalive TTLs or noisy failed
+	// sends.
+	TEvtInstanceGone = "instance.gone"
+
 	// Clipboard — router holds a single in-memory entry. Apps set,
 	// fetch, and observe changes.
 	TEvtClipboardSet     = "clipboard.set"
@@ -738,6 +744,19 @@ func NewEvtAppMsgTo(to Recipient, data any) EvtAppMsg {
 	return EvtAppMsg{T: TEvtAppMsg, Data: mustJSON(data), To: &to}
 }
 
+// EvtInstanceGone tells live apps that another app instance is no longer
+// routable. It is a lifecycle hint for cleaning recipient sets only; it
+// does not imply the dead instance's server-side state should be discarded.
+type EvtInstanceGone struct {
+	T          string `json:"t"`
+	AppID      string `json:"app_id,omitempty"`
+	InstanceID string `json:"instance_id"`
+}
+
+func NewEvtInstanceGone(appID, instanceID string) EvtInstanceGone {
+	return EvtInstanceGone{T: TEvtInstanceGone, AppID: appID, InstanceID: instanceID}
+}
+
 // Recipient is the address used by cross-app EvtAppMsg and the
 // shell's ShellAppMsgSend. Exactly one of AppID / InstanceID should
 // be set: AppID resolves via the singleton table (failing if the
@@ -913,6 +932,9 @@ func DecodeEvt(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TEvtAppMsg:
 		var m EvtAppMsg
+		return m, json.Unmarshal(data, &m)
+	case TEvtInstanceGone:
+		var m EvtInstanceGone
 		return m, json.Unmarshal(data, &m)
 	case TEvtNotify:
 		var m EvtNotify

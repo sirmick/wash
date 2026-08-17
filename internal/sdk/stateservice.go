@@ -20,11 +20,10 @@
 //	svc.Mutate(func(s *JobsState) { s.Jobs[id] = job })
 //
 // Mutate fans the current snapshot to every registered subscriber via
-// SendAppMsgTo. Dead subscribers (a subscriber instance that
-// disappeared without sending unsubscribe) accumulate harmlessly —
-// the router silently drops messages addressed to gone instances. For
-// wash's expected pattern (one session FE per shell, ~handful of
-// subscribers ever), the cost is negligible.
+// SendAppMsgTo. Cooperative subscribers send unsubscribe when they stop
+// watching; services that opt into AppDef.OnInstanceGone can also call
+// ForgetSubscriber to remove a crashed or disconnected instance as soon as
+// the router tears it down.
 
 package sdk
 
@@ -134,11 +133,24 @@ func (s *StateService[S]) Mutate(fn func(*S)) {
 	for _, inst := range subs {
 		// SendAppMsgTo's error path is "could not write to local
 		// socket" — a transport failure that affects everything, not
-		// per-recipient. The router silently drops messages for gone
-		// instances, so we don't get a NACK we could use to GC dead
-		// subscribers. Cooperative unsubscribe is the contract.
+		// per-recipient. The router reports gone instances through
+		// AppDef.OnInstanceGone; services that install that callback can
+		// drop stale subscribers there.
 		_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: inst}, payload)
 	}
+}
+
+// ForgetSubscriber removes a subscriber instance without changing the
+// service's state. It is for router lifecycle cleanup: a dead viewer should
+// stop receiving pushes, but the background service's server-side buffer or
+// roster stays intact.
+func (s *StateService[S]) ForgetSubscriber(instanceID string) {
+	if instanceID == "" {
+		return
+	}
+	s.mu.Lock()
+	delete(s.subs, instanceID)
+	s.mu.Unlock()
 }
 
 // SubscriberCount returns the number of currently-registered

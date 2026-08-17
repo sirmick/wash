@@ -27,8 +27,8 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
-	"github.com/sirmick/wash/internal/pty"
 	"github.com/sirmick/wash/internal/agentpolicy"
+	"github.com/sirmick/wash/internal/pty"
 	"github.com/sirmick/wash/internal/sdk"
 	"github.com/sirmick/wash/internal/wire"
 )
@@ -164,7 +164,7 @@ func (h *hosted) retire() {
 	if h.stop != nil {
 		h.stop()
 	}
-	dropTranscript(h.key)
+	forgetTranscriptWatchers(h.key)
 	now := time.Now()
 	mutateState(func(s *State) {
 		delete(rows, h.key)

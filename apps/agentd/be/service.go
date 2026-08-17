@@ -146,6 +146,16 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	go sweepLoop(c)
 }
 
+func onInstanceGone(_ *sdk.Conn, _ string, instanceID string) {
+	if instanceID == "" {
+		return
+	}
+	if svc != nil {
+		svc.ForgetSubscriber(instanceID)
+	}
+	forgetInstanceTranscripts(instanceID)
+}
+
 // sweepLoop ages rows out: a terminal that died without saying goodbye
 // leaves a row that greys and then goes. Runs until the conn closes.
 func sweepLoop(c *sdk.Conn) {

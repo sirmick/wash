@@ -71,6 +71,12 @@ type AppDef struct {
 	// services) where the requester's identity matters.
 	OnAppMsgFrom func(c *Conn, win uint32, data any, from wire.Sender)
 
+	// OnInstanceGone fires after the router tears down another app
+	// instance. Long-lived services use this to remove subscriptions
+	// addressed to that instance while keeping their own server-side
+	// state intact.
+	OnInstanceGone func(c *Conn, appID, instanceID string)
+
 	// OnSpawnResult delivers the router's reply to a SpawnRequest.
 	// instanceID is non-empty on success; err is non-nil on failure.
 	OnSpawnResult func(c *Conn, appID, instanceID string, err error)

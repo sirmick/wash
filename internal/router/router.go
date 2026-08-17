@@ -843,6 +843,7 @@ func (r *Router) tearDown(inst *AppInstance) {
 		}
 	}
 	r.unregisterApp(inst)
+	r.broadcastInstanceGone(inst)
 	r.closeChannelsForApp(inst, "app exited")
 	r.dropAppMsgWatchers(inst.InstanceID)
 	r.dropRuntimeStats(inst.InstanceID)
@@ -863,6 +864,24 @@ func (r *Router) tearDown(inst *AppInstance) {
 	inst.winMu.Unlock()
 	for _, w := range extra {
 		r.broadcastPatches(r.winSession.destroyWindow(w))
+	}
+}
+
+// broadcastInstanceGone lets long-lived services clean subscription sets
+// keyed by app instance id. It is intentionally separate from app_msg
+// routing: there is no recipient to resolve after unregisterApp, and the
+// notification must never mean "delete that instance's durable/server-side
+// data".
+func (r *Router) broadcastInstanceGone(dead *AppInstance) {
+	if dead == nil || dead.InstanceID == "" {
+		return
+	}
+	targets := r.appInstancesExcept(dead.InstanceID)
+	msg := wire.NewEvtInstanceGone(dead.AppID, dead.InstanceID)
+	for _, target := range targets {
+		if err := target.WriteEvt(msg); err != nil {
+			r.log("app %s instance=%s: instance.gone lost for %s: %v", target.AppID, target.InstanceID, dead.InstanceID, err)
+		}
 	}
 }
 
@@ -1190,6 +1209,19 @@ func (r *Router) unregisterApp(inst *AppInstance) {
 			delete(r.singletons, inst.Manifest.ID)
 		}
 	}
+}
+
+func (r *Router) appInstancesExcept(instanceID string) []*AppInstance {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*AppInstance, 0, len(r.apps))
+	for id, inst := range r.apps {
+		if id == instanceID {
+			continue
+		}
+		out = append(out, inst)
+	}
+	return out
 }
 
 // singletonInstance returns the currently-running instance for a

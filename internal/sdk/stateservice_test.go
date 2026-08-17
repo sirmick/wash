@@ -170,6 +170,38 @@ func TestStateServiceUnsubscribeStops(t *testing.T) {
 	}
 }
 
+func TestStateServiceForgetSubscriberStops(t *testing.T) {
+	bus, router, cleanup := busTestConn(t)
+	defer cleanup()
+
+	svc := NewStateService(bus, jobsState{})
+
+	go func() { _ = bus.conn.Run(context.Background()) }()
+
+	writeEvt(t, router, wire.NewEvtAppMsgFrom(0, map[string]any{
+		"kind": StateServiceKindSubscribe,
+	}, wire.Sender{InstanceID: "i-sub"}))
+	_ = readStateMsgToInstance(t, router, "i-sub")
+
+	svc.ForgetSubscriber("i-sub")
+	if svc.SubscriberCount() != 0 {
+		t.Fatalf("SubscriberCount=%d after forget, want 0", svc.SubscriberCount())
+	}
+
+	svc.Mutate(func(s *jobsState) { s.Count = 99 })
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = router.ReadFrame()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("Mutate after ForgetSubscriber still produced a frame")
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
 // TestStateServiceFansToMultipleSubscribers confirms two subscribers
 // both receive each Mutate. Catches a regression where the iteration
 // order or lock holding might drop a recipient.

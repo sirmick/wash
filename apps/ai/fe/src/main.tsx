@@ -54,6 +54,12 @@ interface RosterState {
   recent?: RecentSession[];
 }
 
+function mergeEvents(prev: AgentEvent[], next: AgentEvent[]): AgentEvent[] {
+  const bySeq = new Map<number, AgentEvent>();
+  for (const e of prev) bySeq.set(e.seq, e);
+  for (const e of next) bySeq.set(e.seq, e);
+  return Array.from(bySeq.values()).sort((a, b) => a.seq - b.seq);
+}
 
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [events, setEvents] = createSignal<AgentEvent[]>([]);
@@ -84,6 +90,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         break;
       case 'started':
         setSessionKey(String(m.key ?? ''));
+        setEvents([]);
         setStarting(false);
         setError('');
         break;
@@ -93,20 +100,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         setError(String(m.error ?? 'could not start'));
         break;
       case 'snapshot':
-        setEvents((m.events as AgentEvent[]) ?? []);
+        if (typeof m.reset === 'boolean') {
+          setEvents((prev) => mergeEvents(prev, (m.events as AgentEvent[]) ?? []));
+        } else {
+          setEvents(mergeEvents([], (m.events as AgentEvent[]) ?? []));
+        }
         break;
       case 'event': {
         const e = m.event as AgentEvent | undefined;
         if (!e) break;
         // agentd mutates a tool row in place, so an event with a seq we
         // already hold replaces it rather than appending a duplicate.
-        setEvents((prev) => {
-          const at = prev.findIndex((p) => p.seq === e.seq);
-          if (at < 0) return [...prev, e];
-          const next = prev.slice();
-          next[at] = e;
-          return next;
-        });
+        setEvents((prev) => mergeEvents(prev, [e]));
         break;
       }
       case 'confirm_close':

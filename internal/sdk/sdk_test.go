@@ -209,6 +209,41 @@ func TestCallbackOnMappedAndCloseConfirm(t *testing.T) {
 	}
 }
 
+func TestCallbackOnInstanceGone(t *testing.T) {
+	pp := wiretest.NewPipePair()
+	def := aboutDef(nil)
+	type gone struct {
+		appID      string
+		instanceID string
+	}
+	gotGone := make(chan gone, 1)
+	def.OnInstanceGone = func(_ *Conn, appID, instanceID string) {
+		gotGone <- gone{appID: appID, instanceID: instanceID}
+	}
+
+	go func() {
+		c, err := ConnectWith(pp.EndA(), def)
+		if err != nil {
+			t.Errorf("connect: %v", err)
+			return
+		}
+		_ = c.Run(context.Background())
+	}()
+
+	_ = readCtrl(t, pp.EndB())
+	writeCtrl(t, pp.EndB(), wire.NewIdentityAck("i-1", 9))
+	writeEvt(t, pp.EndB(), wire.NewEvtInstanceGone("com.wash.ai", "i-dead"))
+
+	select {
+	case g := <-gotGone:
+		if g.appID != "com.wash.ai" || g.instanceID != "i-dead" {
+			t.Fatalf("gone = %+v", g)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnInstanceGone didn't fire")
+	}
+}
+
 func TestPrintManifestEnvelope(t *testing.T) {
 	// Just exercise the marshal step.
 	def := aboutDef(nil)

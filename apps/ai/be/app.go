@@ -375,7 +375,7 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 		if str(m["key"]) != session.key {
 			return
 		}
-		c.SendAppMsg(map[string]any{"kind": "snapshot", "events": m["events"]})
+		c.SendAppMsg(map[string]any{"kind": "snapshot", "reset": m["reset"], "events": m["events"]})
 
 	case "transcript_event":
 		if str(m["key"]) != session.key {
@@ -424,10 +424,9 @@ func onCloseRequested(c *sdk.Conn, win uint32) bool {
 
 // keepWatching re-affirms this window's transcript subscription.
 //
-// agentd expires a watcher it has not heard from, because a closed window
-// cannot be detected at send time — there is no app-gone signal and
-// SendAppMsgTo does not fail for a dead instance. Same TTL+keepalive
-// shape the roster's own rows use.
+// agentd removes watchers on router instance.gone, and also expires one it
+// has not heard from as a backstop. Same TTL+keepalive shape the roster's
+// own rows use.
 func keepWatching(c *sdk.Conn) {
 	t := time.NewTicker(agentd.WatcherRefresh)
 	defer t.Stop()

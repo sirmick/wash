@@ -159,6 +159,7 @@ func TestEvtRoundTrip(t *testing.T) {
 		NewEvtAppRestartOk(9, "inst-3"),
 		NewEvtAppRestartErr(9, ErrCodeNotFound, "com.wash.display"),
 		NewEvtNotify("hello", "world", NotifyLevelInfo),
+		NewEvtInstanceGone("com.wash.ai", "inst-dead"),
 		NewEvtClipboardSet("text/plain", []byte("hi")),
 		NewEvtClipboardGet(42),
 		NewEvtClipboardData(42, "text/plain", []byte("hi")),

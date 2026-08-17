@@ -162,7 +162,8 @@ func init() {
 			// human clicked the button.
 			Capabilities: []string{sdk.CapSpawn},
 		},
-		OnReady: onReady,
+		OnReady:        onReady,
+		OnInstanceGone: onInstanceGone,
 		// The router's reply to the terminal spawn a Resume click asks
 		// for (§13); the new instance is then told what to run.
 		OnSpawnResult: onSpawnResult,

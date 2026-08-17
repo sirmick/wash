@@ -182,6 +182,14 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 		} else if c.def.OnAppMsg != nil {
 			c.def.OnAppMsg(c, m.Win, data)
 		}
+	case wire.TEvtInstanceGone:
+		var m wire.EvtInstanceGone
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		if c.def.OnInstanceGone != nil {
+			c.def.OnInstanceGone(c, m.AppID, m.InstanceID)
+		}
 	case wire.TEvtSpawnOk:
 		var m wire.EvtSpawnOk
 		if err := json.Unmarshal(payload, &m); err != nil {
