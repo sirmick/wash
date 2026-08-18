@@ -775,3 +775,88 @@ func sessionRecency(m SessionMeta) int64 {
 	}
 	return m.StartedMS
 }
+
+// searchTranscript reports whether a stored conversation contains q,
+// case-insensitively. The point of searching history is that you
+// remember what a session was ABOUT, not what it was called — "that one
+// where I was chasing the reconnect race" is a content query, and title
+// matching alone would miss it.
+//
+// Streamed line by line so a long conversation costs a buffer rather
+// than its whole size in memory, and stops at the first hit.
+func searchTranscript(sessionID, q string) bool {
+	if q == "" {
+		return true
+	}
+	path := transcriptPath(sessionID)
+	if path == "" {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	needle := strings.ToLower(q)
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), maxImageBytes+(1<<16))
+	for sc.Scan() {
+		// Match on the decoded text, not the raw line: a JSON line
+		// carries escapes and base64 image data, and searching that
+		// finds nothing a human typed and plenty they didn't.
+		var e Event
+		if json.Unmarshal(sc.Bytes(), &e) != nil {
+			continue
+		}
+		if e.Kind == EventImage {
+			continue // Text is base64 here
+		}
+		if e.Text != "" && strings.Contains(strings.ToLower(e.Text), needle) {
+			return true
+		}
+		if e.Title != "" && strings.Contains(strings.ToLower(e.Title), needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesMeta is the cheap half of a history query: the fields already in
+// the index. Tried before opening the transcript, so a search for an
+// agent or a directory never reads a conversation at all.
+func matchesMeta(m SessionMeta, q string) bool {
+	if q == "" {
+		return true
+	}
+	q = strings.ToLower(q)
+	for _, f := range []string{m.Title, m.Agent, m.Model, m.Dir, m.Cwd, m.SessionID} {
+		if f != "" && strings.Contains(strings.ToLower(f), q) {
+			return true
+		}
+	}
+	return false
+}
+
+// historyQuery lists stored sessions, newest first, optionally filtered.
+// limit <= 0 means every match.
+func historyQuery(q string, limit int) []SessionMeta {
+	all := listSessionMeta()
+	if q == "" {
+		if limit > 0 && len(all) > limit {
+			all = all[:limit]
+		}
+		return all
+	}
+	out := make([]SessionMeta, 0, len(all))
+	for _, m := range all {
+		// Metadata first: it is already in hand, and a query that
+		// matches there saves reading the conversation.
+		if matchesMeta(m, q) || searchTranscript(m.SessionID, q) {
+			out = append(out, m)
+			if limit > 0 && len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out
+}

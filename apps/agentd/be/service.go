@@ -139,6 +139,30 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		return nil
 	})
 
+	// agent_history: the History panel's list. Answers to the asker
+	// rather than broadcasting, because a history query is one window's
+	// question and its results are large — pushing them through the
+	// roster's StateService would send every session's metadata to the
+	// sidebar on every keystroke.
+	sdk.HandleFromVoid(bus, "agent_history", func(conn *sdk.Conn, _ string, req historyReq, from wire.Sender) error {
+		if from.InstanceID == "" {
+			return nil
+		}
+		limit := req.Limit
+		if limit <= 0 || limit > historyQueryCap {
+			limit = historyQueryCap
+		}
+		sessions := historyQuery(req.Query, limit)
+		if sessions == nil {
+			sessions = []SessionMeta{}
+		}
+		return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
+			"kind":     "history",
+			"query":    req.Query,
+			"sessions": sessions,
+		})
+	})
+
 	registerAskHandlers(bus, c)
 	registerACPHandlers(bus, c)
 	registerTranscriptHandlers(bus)
@@ -309,4 +333,14 @@ type goneReq struct {
 type resumeReq struct {
 	SessionID string `json:"session_id"`
 	Fork      bool   `json:"fork"`
+}
+
+// historyQueryCap bounds one history answer. A panel shows a page at a
+// time, and an unbounded reply would be one frame carrying every session
+// the machine has ever run.
+const historyQueryCap = 200
+
+type historyReq struct {
+	Query string `json:"query,omitempty"`
+	Limit int    `json:"limit,omitempty"`
 }

@@ -6,6 +6,7 @@
 // launcher, which is why there is no separate "new session" dialog.
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { HistoryPanel, type SessionMeta } from './HistoryPanel.tsx';
 import type { Component } from 'solid-js';
 import {
   AgentSession, Button, FilePicker, Menu, MenuBar, MenuItem, MenuSeparator, Overlay, Select,
@@ -79,6 +80,30 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // — so the user chooses what happens to it.
   const [confirmClose, setConfirmClose] = createSignal(false);
   const [saving, setSaving] = createSignal(false);
+  // History panel (HistoryPanel.tsx). The query round-trips through
+  // agentd rather than filtering here: it searches the stored
+  // CONVERSATIONS, which the FE has never seen.
+  const [historyOpen, setHistoryOpen] = createSignal(false);
+  const [historyQuery, setHistoryQuery] = createSignal('');
+  const [historySessions, setHistorySessions] = createSignal<SessionMeta[]>([]);
+  const [historyLoading, setHistoryLoading] = createSignal(false);
+  let historyTimer: ReturnType<typeof setTimeout> | undefined;
+  const askHistory = (q: string) => {
+    setHistoryLoading(true);
+    send({ kind: 'history', query: q });
+  };
+  // Debounced: every keystroke would otherwise grep every transcript on
+  // the machine.
+  const onHistoryQuery = (q: string) => {
+    setHistoryQuery(q);
+    if (historyTimer) clearTimeout(historyTimer);
+    historyTimer = setTimeout(() => askHistory(q), 150);
+  };
+  const openHistory = () => {
+    setHistoryOpen(true);
+    askHistory(historyQuery());
+  };
+  onCleanup(() => { if (historyTimer) clearTimeout(historyTimer); });
 
   const handleBE = (m: Record<string, unknown>) => {
     switch (m.kind) {
@@ -117,6 +142,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       case 'confirm_close':
         setConfirmClose(true);
         break;
+      case 'history':
+        // Ignore an answer to a query we have already moved past, or the
+        // list flickers back to stale results as you type.
+        if (String(m.query ?? '') === historyQuery()) {
+          setHistorySessions((m.sessions as SessionMeta[]) ?? []);
+          setHistoryLoading(false);
+        }
+        break;
+
       case 'roster':
         setRoster((m.state as RosterState) ?? {});
         break;
@@ -391,6 +425,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           label: 'History',
           render: (at, close) => (
             <Menu x={at.x} y={at.y} onDismiss={close} data-testid="ai-menu-history">
+              {/* The menu keeps the fast path — reopen one of the last
+                  few — and hands everything else to the panel, which is
+                  searchable and can carry the metadata a menu item
+                  cannot. */}
+              <MenuItem
+                label="Browse all history…"
+                data-testid="ai-menu-history-browse"
+                onClick={() => { close(); openHistory(); }}
+              />
+              <MenuSeparator />
               <Show when={recent().length === 0}>
                 <MenuItem label="No earlier sessions" disabled onClick={() => {}} />
               </Show>
@@ -408,6 +452,22 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         },
       ]}
     />
+  );
+
+  const historyPanel = (
+    <Show when={historyOpen()}>
+      <HistoryPanel
+        sessions={historySessions}
+        query={historyQuery}
+        loading={historyLoading}
+        onQuery={onHistoryQuery}
+        onClose={() => setHistoryOpen(false)}
+        onResume={(s) => {
+          setHistoryOpen(false);
+          send({ kind: 'resume', session_id: s.session_id });
+        }}
+      />
+    </Show>
   );
 
   const closeDialog = (
@@ -452,6 +512,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   return (
     <>
     {closeDialog}
+    {historyPanel}
     <Show when={sessionKey()} fallback={<Show when={autostart()} fallback={launcher}>{booting}</Show>}>
       <AgentSession
         header={menubar}

@@ -288,6 +288,15 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			"session_id": str(m["session_id"]),
 		})
 
+	// history: the panel's query. agentd answers this window directly
+	// (see agent_history), and the reply is forwarded below.
+	case "history":
+		req := map[string]any{"kind": "agent_history", "query": str(m["query"])}
+		if n, ok := m["limit"].(float64); ok {
+			req["limit"] = int(n)
+		}
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, req)
+
 	case "set_yolo":
 		if session.key == "" {
 			return
@@ -370,6 +379,16 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 		})
 		c.SendAppMsg(map[string]any{"kind": "started", "key": session.key, "session_id": str(m["session_id"])})
 		go keepWatching(c)
+
+	// history: agentd's answer to a panel query, forwarded verbatim. No
+	// session key involved — history is about sessions this window is
+	// NOT running.
+	case "history":
+		c.SendAppMsg(map[string]any{
+			"kind":     "history",
+			"query":    m["query"],
+			"sessions": m["sessions"],
+		})
 
 	case "transcript_snapshot":
 		if str(m["key"]) != session.key {

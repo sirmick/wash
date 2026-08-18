@@ -474,3 +474,76 @@ func TestModelNameReadsTheSettingsBlock(t *testing.T) {
 		})
 	}
 }
+
+// History search is what makes an archive usable: you remember what a
+// session was ABOUT, not what it was called.
+func TestHistoryQuerySearchesContentAndMetadata(t *testing.T) {
+	withStateDir(t)
+	now := time.Unix(1_700_000_000, 0)
+
+	bindTranscript("acp:1", "s-reconnect", "codex", "/home/mick/wash", now)
+	writeSummary("s-reconnect", transcriptSummary{Agent: "codex", Model: "gpt-5", Cwd: "/home/mick/wash"})
+	appendPrompt("acp:1", "why does the banner race on reconnect", now)
+
+	bindTranscript("acp:2", "s-radio", "claude", "/home/mick/radio", now.Add(time.Minute))
+	writeSummary("s-radio", transcriptSummary{Agent: "claude", Model: "Claude Opus 4.5", Cwd: "/home/mick/radio",
+		Title: "Station list"})
+	appendPrompt("acp:2", "add somafm stations", now.Add(time.Minute))
+	waitForTranscriptWrites()
+
+	// Content: the word appears only in the conversation, never in any
+	// metadata field.
+	got := historyQuery("banner race", 0)
+	if len(got) != 1 || got[0].SessionID != "s-reconnect" {
+		t.Errorf("content search = %+v, want just s-reconnect", ids(got))
+	}
+	// Title.
+	if got := historyQuery("station list", 0); len(got) != 1 || got[0].SessionID != "s-radio" {
+		t.Errorf("title search = %v", ids(got))
+	}
+	// Agent, and model — both index fields, matched without opening a file.
+	if got := historyQuery("claude", 0); len(got) != 1 || got[0].SessionID != "s-radio" {
+		t.Errorf("agent search = %v", ids(got))
+	}
+	if got := historyQuery("gpt-5", 0); len(got) != 1 || got[0].SessionID != "s-reconnect" {
+		t.Errorf("model search = %v", ids(got))
+	}
+	// Case-insensitive, because nobody types history queries carefully.
+	if got := historyQuery("SOMAFM", 0); len(got) != 1 {
+		t.Errorf("case-insensitive search = %v", ids(got))
+	}
+	// An empty query is "everything", newest first.
+	if got := historyQuery("", 0); len(got) != 2 || got[0].SessionID != "s-radio" {
+		t.Errorf("empty query = %v, want both newest-first", ids(got))
+	}
+	// A miss is empty, not everything.
+	if got := historyQuery("nothing matches this", 0); len(got) != 0 {
+		t.Errorf("miss = %v, want none", ids(got))
+	}
+	// The limit bounds the answer.
+	if got := historyQuery("", 1); len(got) != 1 {
+		t.Errorf("limit=1 returned %d", len(got))
+	}
+}
+
+// An image's Text field is base64. Searching it would match noise no
+// human ever typed.
+func TestHistorySearchIgnoresImageBytes(t *testing.T) {
+	withStateDir(t)
+	now := time.Unix(1_700_000_000, 0)
+	bindTranscript("acp:1", "s-img", "codex", "/tmp", now)
+	appendEvent("acp:1", Event{Kind: EventImage, Mime: "image/png", Text: "iVBORw0KGgoAAAANSUhEUg"}, now)
+	waitForTranscriptWrites()
+
+	if got := historyQuery("iVBORw0", 0); len(got) != 0 {
+		t.Errorf("matched base64 image bytes: %v", ids(got))
+	}
+}
+
+func ids(ms []SessionMeta) []string {
+	out := make([]string, 0, len(ms))
+	for _, m := range ms {
+		out = append(out, m.SessionID)
+	}
+	return out
+}
