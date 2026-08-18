@@ -63,6 +63,10 @@ type AppInstance struct {
 	// OOM-kill, or a signal from an external party leaves this
 	// false and the dialog fires as intended.
 	expectedExit atomic.Bool
+	// shellGoneLogged keeps the "browser went away mid-write" note to one
+	// line per instance. Without it a chatty app would log per dropped
+	// frame, which is a log flood at exactly the moment the log matters.
+	shellGoneLogged atomic.Bool
 
 	// PeerUID is the kernel-attested uid of the connected app process,
 	// read via SO_PEERCRED at attach time. Zero means root; uidNoPeer
@@ -208,7 +212,41 @@ func (inst *AppInstance) loop(ctx context.Context) error {
 	return err
 }
 
+// dispatch handles one frame from the app. It is the boundary where a
+// DEAD BROWSER stops being an error.
+//
+// AppInstance.loop is wire.ReadLoop, which ends on any dispatch error —
+// so an error returned from here tears the app down and kills the
+// process. Forwarding to a shell whose scheduler has closed must
+// therefore fail the FRAME, never the app: the browser leaving is a fact
+// about the browser, and the whole reattach/replay design exists so
+// backend apps outlive it (GH #23, where com.wash.session was killed by
+// a browser disconnect and respawned with none of its window state).
+//
+// Dropping is safe because the raw path writes to the channel's ring
+// buffer BEFORE forwarding, and every recovery path — reattach, resync,
+// session.snapshot — replays from there. Nothing addressed to a departed
+// shell could have been delivered anyway.
+//
+// Note this is only reachable when the outgoing queue was FULL: Submit's
+// fast path enqueues (and returns nil) even on a closed scheduler. That
+// is why it takes a stalled browser — a network stall, a sleeping laptop
+// — rather than an ordinary reload, and why it survived this long.
 func (inst *AppInstance) dispatch(f wire.Frame) error {
+	err := inst.dispatchFrame(f)
+	if errors.Is(err, ErrSchedulerClosed) {
+		// router is nil in tests that drive an AppInstance in isolation,
+		// the same guard drainLoop carries.
+		if inst.router != nil && inst.shellGoneLogged.CompareAndSwap(false, true) {
+			inst.router.log("app %s instance=%s: shell gone mid-write — dropping frames until one reattaches",
+				inst.AppID, inst.InstanceID)
+		}
+		return nil
+	}
+	return err
+}
+
+func (inst *AppInstance) dispatchFrame(f wire.Frame) error {
 	switch f.Channel {
 	case ChannelControl:
 		return inst.handleCtrl(f.Payload)

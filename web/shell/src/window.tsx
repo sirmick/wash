@@ -425,6 +425,8 @@ export function FloatingWindow(props: WindowProps) {
       >
         {props.win.icon && (
           <svg
+            data-testid="window-icon"
+            data-icon={props.win.icon}
             width="13"
             height="13"
             fill="none"
