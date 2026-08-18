@@ -104,6 +104,7 @@ func onReady(c *sdk.Conn, _ string, _ uint32) {
 	registerAgentGateway(bus)
 	registerAgentResume(bus)
 	registerAgentReattach(bus)
+	registerAgentKeyVerbs(bus)
 	// state forwarder: notify, bulk, and priv all push
 	// {kind:"state", state:...} cross-app. Branch on the sender's
 	// AppID to re-brand for the FE under a service-specific kind.
@@ -273,6 +274,45 @@ func registerAgentReattach(bus *sdk.Bus) {
 
 type agentReattachReq struct {
 	Key string `json:"key"`
+}
+
+// registerAgentKeyVerbs forwards the rest of the roster's per-session
+// verbs. agentd has had all three since the ACP tier landed; until now
+// nothing could reach them, because the sidebar was the only caller and
+// the gateway stopped at reattach (GH #21 — the rail logged no backend
+// request because it had no button, not because it lost its state).
+//
+// Each is keyed by the roster key rather than the session id: these act
+// on a session that is RUNNING, and the key is what the roster row
+// carries. agentd no-ops on a key it no longer hosts, so a click that
+// races a session ending is harmless.
+func registerAgentKeyVerbs(bus *sdk.Bus) {
+	// agent_detach: keep the session running, let its window go. The
+	// roster row stays and gains a Reattach affordance.
+	forward(bus, "agent_detach")
+	// agent_cancel: end the current TURN, not the session. The agent
+	// acknowledges with stopReason=cancelled and stays available.
+	forward(bus, "agent_cancel")
+	// agent_stop: end the session and its adapter process. The
+	// destructive one — the FE confirms before sending it.
+	forward(bus, "agent_stop")
+}
+
+// forward registers one key-addressed passthrough to agentd. The session
+// BE adds no policy of its own here: it is the desktop speaking for the
+// person in front of it, and its only job is to make the sender
+// attestation correct (shell-originated sends carry no router-attested
+// From, so the service would reject a direct sendAppMsgTo).
+func forward(bus *sdk.Bus, kind string) {
+	sdk.HandleVoid(bus, kind, func(conn *sdk.Conn, _ string, req agentReattachReq) error {
+		if req.Key == "" {
+			return nil
+		}
+		return conn.SendAppMsgTo(wire.Recipient{AppID: AgentdAppID}, map[string]any{
+			"kind": kind,
+			"key":  req.Key,
+		})
+	})
 }
 
 // agent_resume asks the roster service to reopen a remembered session

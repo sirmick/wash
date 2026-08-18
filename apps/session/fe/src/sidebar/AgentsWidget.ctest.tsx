@@ -6,7 +6,7 @@
 // term-agent-roster.spec.ts; that's the integration seam.
 
 import { test, expect, afterEach } from 'vitest';
-import { render, fireEvent, cleanup } from '@solidjs/testing-library';
+import { render, fireEvent, cleanup, screen } from '@solidjs/testing-library';
 import { AgentsWidget, fmtAgo, fmtElapsed, stateColor, stateLabel, type AgentAsk, type AgentRow, type AgentSession } from './AgentsWidget.tsx';
 
 afterEach(cleanup);
@@ -193,4 +193,138 @@ test('the sidebar no longer lists sessions that ended', () => {
   ));
   expect(queryByTestId('agents-recent')).toBeNull();
   expect(queryByTestId('agents-recent-row')).toBeNull();
+});
+
+// ── per-session verbs (GH #21) ──────────────────────────────────────────
+//
+// agentd has handled agent_detach / agent_cancel / agent_stop since the
+// ACP tier landed; the rail never offered them, so a user who wanted to
+// terminate a session found nothing to click and no request in the log.
+// The verbs live in a per-row menu: the set grows, a sidebar row is
+// narrow, and a menu can render an inapplicable verb DISABLED rather
+// than vanishing.
+
+// Menu portals into document.body so an overflow:auto ancestor can't
+// clip it, which puts it OUTSIDE render()'s container — menu queries are
+// document-scoped (screen), row queries are not.
+const openRowMenu = (getByTestId: (id: string) => HTMLElement) => {
+  fireEvent.click(getByTestId('agents-row-menu'));
+  return screen.getByTestId('agents-row-actions');
+};
+
+test('verbs: the row offers a menu, and right-click opens the same one', () => {
+  const { getByTestId, queryByTestId } = render(() => (
+    <AgentsWidget rows={() => [row({ key: 'a', state: 'working' })]} startedAt={at} now={() => 0}
+      onFocus={noop} onDetach={noop} onCancel={noop} onStop={noop} />
+  ));
+  expect(screen.queryByTestId('agents-row-actions')).toBeNull();
+  fireEvent.contextMenu(getByTestId('agents-row-a'));
+  expect(screen.queryByTestId('agents-row-actions')).toBeTruthy();
+});
+
+test('verbs: an inapplicable verb is disabled, not missing', () => {
+  const { getByTestId } = render(() => (
+    <AgentsWidget rows={() => [row({ key: 'a', state: 'done' })]} startedAt={at} now={() => 0}
+      onFocus={noop} onDetach={noop} onCancel={noop} onStop={noop} />
+  ));
+  openRowMenu(getByTestId);
+  // A finished turn has nothing to stop — but the verb still shows, so
+  // you learn it exists and why it does not apply.
+  expect(screen.getByTestId('agents-menu-cancel')).toBeTruthy();
+  expect(screen.getByTestId('agents-menu-cancel').hasAttribute('disabled')).toBe(true);
+  expect(screen.getByTestId('agents-menu-detach').hasAttribute('disabled')).toBe(false);
+});
+
+test('verbs: a working agent can have its turn stopped', () => {
+  let cancelled = 0;
+  const { getByTestId } = render(() => (
+    <AgentsWidget rows={() => [row({ key: 'a', state: 'working' })]} startedAt={at} now={() => 0}
+      onFocus={noop} onCancel={() => { cancelled++; }} />
+  ));
+  openRowMenu(getByTestId);
+  expect(screen.getByTestId('agents-menu-cancel').hasAttribute('disabled')).toBe(false);
+  fireEvent.click(screen.getByTestId('agents-menu-cancel'));
+  expect(cancelled).toBe(1);
+});
+
+test('verbs: an already-detached row cannot detach again, and offers to attach', () => {
+  const { getByTestId } = render(() => (
+    <AgentsWidget rows={() => [row({ key: 'a', state: 'done', detached: true })]} startedAt={at}
+      now={() => 0} onFocus={noop} onDetach={noop} onStop={noop} />
+  ));
+  openRowMenu(getByTestId);
+  expect(screen.getByTestId('agents-menu-detach').hasAttribute('disabled')).toBe(true);
+  expect(screen.getByTestId('agents-menu-attach').textContent).toContain('Attach');
+});
+
+test('verbs: a host that passes no handler gets no menu at all', () => {
+  const { queryByTestId } = render(() => (
+    <AgentsWidget rows={() => [row({ key: 'a', state: 'working' })]} startedAt={at} now={() => 0}
+      onFocus={noop} />
+  ));
+  expect(queryByTestId('agents-row-menu')).toBeNull();
+});
+
+// End kills the adapter and everything it held, and it sits one row from
+// Detach in a small list. Picking it must ask.
+test('verbs: End asks before it ends, and Cancel backs out', () => {
+  let stopped = 0;
+  const { getByTestId, queryByTestId } = render(() => (
+    <AgentsWidget rows={() => [row({ key: 'a', state: 'done' })]} startedAt={at} now={() => 0}
+      onFocus={noop} onStop={() => { stopped++; }} />
+  ));
+  openRowMenu(getByTestId);
+  fireEvent.click(screen.getByTestId('agents-menu-end'));
+  expect(stopped).toBe(0);
+  // The confirm REPLACES the list — the destructive item must not stay
+  // under the pointer that just landed on it.
+  expect(screen.queryByTestId('agents-menu-end')).toBeNull();
+  fireEvent.click(screen.getByTestId('agents-menu-end-cancel'));
+  expect(stopped).toBe(0);
+  expect(screen.queryByTestId('agents-row-actions')).toBeNull();
+
+  openRowMenu(getByTestId);
+  fireEvent.click(screen.getByTestId('agents-menu-end'));
+  fireEvent.click(screen.getByTestId('agents-menu-end-confirm'));
+  expect(stopped).toBe(1);
+  // And the menu closes, so a stray second click ends nothing else.
+  expect(screen.queryByTestId('agents-row-actions')).toBeNull();
+});
+
+// Reopening must not resume where it left off: a menu that remembered
+// the armed confirm would fire on the next row you opened it from.
+test('verbs: reopening the menu forgets a pending confirm', () => {
+  const { getByTestId, queryByTestId } = render(() => (
+    <AgentsWidget rows={() => [row({ key: 'a', state: 'done' })]} startedAt={at} now={() => 0}
+      onFocus={noop} onStop={noop} />
+  ));
+  openRowMenu(getByTestId);
+  fireEvent.click(screen.getByTestId('agents-menu-end'));
+  expect(screen.queryByTestId('agents-menu-end-confirm')).toBeTruthy();
+  fireEvent.click(screen.getByTestId('agents-menu-end-cancel'));
+  openRowMenu(getByTestId);
+  expect(screen.queryByTestId('agents-menu-end-confirm')).toBeNull();
+  expect(screen.queryByTestId('agents-menu-end')).toBeTruthy();
+});
+
+// The row itself is a focus target. A menu trigger that also focused the
+// window would fight the action the user asked for.
+test('verbs: opening the menu does not also focus the row', () => {
+  let focused = 0;
+  const { getByTestId } = render(() => (
+    <AgentsWidget rows={() => [row({ key: 'a', state: 'working' })]} startedAt={at} now={() => 0}
+      onFocus={() => { focused++; }} onDetach={noop} />
+  ));
+  openRowMenu(getByTestId);
+  expect(focused).toBe(0);
+});
+
+// There used to be two `title` attributes on the row div; JSX kept the
+// last, so a detached row advertised a terminal it does not have.
+test('verbs: a detached row says it is detached', () => {
+  const { getByTestId } = render(() => (
+    <AgentsWidget rows={() => [row({ key: 'a', state: 'done', detached: true })]} startedAt={at}
+      now={() => 0} onFocus={noop} />
+  ));
+  expect(getByTestId('agents-row-a').getAttribute('title')).toContain('Detached');
 });

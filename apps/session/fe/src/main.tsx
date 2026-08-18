@@ -1289,6 +1289,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           onToggle={() => toggleSection('agents')}
           badge={agentBadge()}
         >
+          {/* onDetach/onCancel/onStop are key-addressed passthroughs to
+              agentd via our own BE: a shell-originated send carries no
+              router-attested From, so the service would reject it. */}
           <AgentsWidget
             rows={agentRows}
             startedAt={(key) => agentStartedAt.get(key) ?? Date.now()}
@@ -1307,6 +1310,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               })
             }
             onCopyID={(session) => void washCopyText(session.session_id)}
+            onDetach={(row) =>
+              window.wash.sendAppMsg(props.instance, { kind: 'agent_detach', key: row.key })
+            }
+            onCancel={(row) =>
+              window.wash.sendAppMsg(props.instance, { kind: 'agent_cancel', key: row.key })
+            }
+            onStop={(row) =>
+              window.wash.sendAppMsg(props.instance, { kind: 'agent_stop', key: row.key })
+            }
             onAnswer={(ask, decision, remember) =>
               window.wash.sendAppMsg(props.instance, {
                 kind: 'agent_answer',

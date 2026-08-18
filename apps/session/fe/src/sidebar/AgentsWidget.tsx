@@ -11,8 +11,8 @@
 // Pure renderer; subscription wiring lives in the App.
 
 import type { Component, JSX } from 'solid-js';
-import { For, Show } from 'solid-js';
-import { tokens } from '@wash/ui';
+import { For, Show, createSignal } from 'solid-js';
+import { Menu, MenuItem, MenuSeparator, tokens } from '@wash/ui';
 
 export interface AgentRow {
   key: string;
@@ -85,6 +85,12 @@ export interface AgentsWidgetProps {
   onResume?: (session: AgentSession, fork: boolean) => void;
   /** put the session id on the clipboard */
   onCopyID?: (session: AgentSession) => void;
+  /** let the window go, keep the session running */
+  onDetach?: (row: AgentRow) => void;
+  /** end the current turn; the session stays available */
+  onCancel?: (row: AgentRow) => void;
+  /** end the session and its adapter process */
+  onStop?: (row: AgentRow) => void;
 }
 
 // stateColor is the same language as the terminal's own tab dot: blue
@@ -148,6 +154,9 @@ export const AgentsWidget: Component<AgentsWidgetProps> = (props) => {
             elapsed={fmtElapsed(props.now() - props.startedAt(r.key))}
             onFocus={() => (r.detached ? props.onReattach?.(r) : props.onFocus(r))}
             detached={r.detached === true}
+            onDetach={props.onDetach ? () => props.onDetach?.(r) : undefined}
+            onCancel={props.onCancel ? () => props.onCancel?.(r) : undefined}
+            onStop={props.onStop ? () => props.onStop?.(r) : undefined}
           />
         )}
       </For>
@@ -325,7 +334,45 @@ const AskBtn: Component<{
   </button>
 );
 
-const AgentRowView: Component<{ row: AgentRow; elapsed: string; onFocus: () => void; detached?: boolean }> = (props) => {
+const AgentRowView: Component<{
+  row: AgentRow;
+  elapsed: string;
+  onFocus: () => void;
+  detached?: boolean;
+  onDetach?: () => void;
+  onCancel?: () => void;
+  onStop?: () => void;
+}> = (props) => {
+  // The verbs live in a menu rather than a strip of buttons: the set
+  // grows (resume and fork are still to come) and a sidebar row is 190px
+  // wide, so buttons would either wrap into a block or start hiding
+  // themselves. A menu also lets an unavailable verb render DISABLED
+  // instead of vanishing — "Stop turn" greyed out teaches that the verb
+  // exists and why it doesn't apply, which a missing button cannot.
+  const [menuAt, setMenuAt] = createSignal<{ x: number; y: number } | null>(null);
+  // Ending a session kills the adapter and everything it was holding,
+  // and it sits next to Detach in the list. Opening a menu is already
+  // deliberate, but picking the wrong row of a small list is not, so the
+  // item asks once inside the menu it was picked from.
+  const [confirmEnd, setConfirmEnd] = createSignal(false);
+  const openMenu = (e: MouseEvent) => {
+    // Both triggers must stop the row's own click, which focuses.
+    e.preventDefault();
+    e.stopPropagation();
+    setConfirmEnd(false);
+    setMenuAt({ x: e.clientX, y: e.clientY });
+  };
+  const closeMenu = () => {
+    setMenuAt(null);
+    setConfirmEnd(false);
+  };
+  // Menu coords are viewport coords: Menu portals to document.body and
+  // lays out position:fixed, so clientX/clientY is what it wants.
+  const run = (fn?: () => void) => () => {
+    closeMenu();
+    fn?.();
+  };
+  const hasVerbs = () => Boolean(props.onDetach || props.onCancel || props.onStop);
   // Where it's working: "wash · main*" — repo, branch, and a star when the
   // tree is dirty. Absent for an agent outside a checkout.
   const place = (): string => {
@@ -353,8 +400,16 @@ const AgentRowView: Component<{ row: AgentRow; elapsed: string; onFocus: () => v
       data-agent-state={props.row.state}
       style={rowStyle()}
       onClick={props.onFocus}
-      title={props.detached ? 'Detached — click to open a window on it' : undefined}
-      title={`${props.row.agent} in ${props.row.cwd || 'unknown directory'} — click to go to its terminal`}
+      onContextMenu={(e) => hasVerbs() && openMenu(e)}
+      // One title, chosen. There used to be two attributes here and JSX
+      // kept the last, so the detached hint never rendered — a detached
+      // row claimed clicking went "to its terminal", which is the one
+      // thing it does not have.
+      title={
+        props.detached
+          ? 'Detached — click to open a window on it'
+          : `${props.row.agent} in ${props.row.cwd || 'unknown directory'} — click to go to its terminal`
+      }
     >
       <div style={{ display: 'flex', 'align-items': 'baseline', gap: '6px' }}>
         <span
@@ -388,10 +443,94 @@ const AgentRowView: Component<{ row: AgentRow; elapsed: string; onFocus: () => v
           {props.row.title}
         </div>
       </Show>
-      <div style={{ display: 'flex', 'justify-content': 'space-between', gap: '6px', opacity: 0.8 }}>
+      <div style={{ display: 'flex', 'align-items': 'baseline', gap: '6px', opacity: 0.8 }}>
         <span data-testid="agents-state">{stateLabel(props.row)}</span>
-        <span style={{ 'font-variant-numeric': 'tabular-nums', 'flex-shrink': 0 }}>{props.elapsed}</span>
+        <span
+          style={{ 'font-variant-numeric': 'tabular-nums', 'flex-shrink': 0, 'margin-left': 'auto' }}
+        >
+          {props.elapsed}
+        </span>
+        {/* Right-click works on the whole row, but a right-click-only
+            verb is a verb nobody finds. The ellipsis is the discoverable
+            half of the same menu. */}
+        <Show when={hasVerbs()}>
+          <button
+            type="button"
+            data-testid="agents-row-menu"
+            title="Session actions"
+            aria-label="Session actions"
+            aria-haspopup="menu"
+            onClick={openMenu}
+            style={{
+              background: 'transparent',
+              color: tokens.fg,
+              border: 'none',
+              padding: '0 2px',
+              cursor: 'pointer',
+              'font-size': '12px',
+              'line-height': 1,
+              'flex-shrink': 0,
+            }}
+          >
+            ⋯
+          </button>
+        </Show>
       </div>
+      <Show when={menuAt()}>
+        {(at) => (
+          <Menu
+            x={at().x}
+            y={at().y}
+            onDismiss={closeMenu}
+            data-testid="agents-row-actions"
+          >
+            <Show
+              when={!confirmEnd()}
+              fallback={
+                <>
+                  {/* The confirm replaces the list rather than nesting:
+                      the destructive item must not stay one pixel from
+                      the pointer that just landed on it. */}
+                  <MenuItem
+                    label="Confirm — end this session"
+                    data-testid="agents-menu-end-confirm"
+                    onClick={run(props.onStop)}
+                  />
+                  <MenuItem label="Cancel" data-testid="agents-menu-end-cancel" onClick={closeMenu} />
+                </>
+              }
+            >
+              <MenuItem
+                label={props.detached ? 'Attach a window' : 'Go to its window'}
+                data-testid="agents-menu-attach"
+                onClick={run(props.onFocus)}
+              />
+              <MenuItem
+                label="Stop turn"
+                data-testid="agents-menu-cancel"
+                // Disabled rather than absent: it says the verb exists
+                // and that there is simply no turn to stop.
+                disabled={!props.onCancel || props.row.state !== 'working'}
+                onClick={run(props.onCancel)}
+              />
+              <MenuItem
+                label="Detach"
+                data-testid="agents-menu-detach"
+                disabled={!props.onDetach || props.detached === true}
+                onClick={run(props.onDetach)}
+              />
+              <MenuSeparator />
+              <MenuItem
+                label="End session…"
+                data-testid="agents-menu-end"
+                disabled={!props.onStop}
+                onClick={() => setConfirmEnd(true)}
+              />
+            </Show>
+          </Menu>
+        )}
+      </Show>
     </div>
   );
 };
+
