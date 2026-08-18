@@ -157,6 +157,10 @@ func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	// updates — without this the controls were empty until the agent
 	// happened to change something itself.
 	h.applyConfigs(res2.ConfigOptions)
+	// Record the model now, while the session is young: the index reads
+	// the LAST summary, so a session the router outlives still says what
+	// it was running rather than only cleanly-retired ones.
+	h.noteSession("", time.Now())
 	log.Printf("agentd: acp session started key=%s agent=%s session=%s cwd=%s mode=%s modes=%d",
 		h.key, agentID, res2.SessionID, h.cwd, res2.Modes.CurrentModeID, len(res2.Modes.AvailableModes))
 	return h, nil

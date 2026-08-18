@@ -256,18 +256,18 @@ func TestTranscriptFileIsPrivate(t *testing.T) {
 	}
 }
 
-// listTranscripts reads the id from the meta line rather than the file
-// name, because the name is sanitised and may not round-trip.
-func TestListTranscriptsReadsTheRealID(t *testing.T) {
+// The index reads each id from the meta line rather than the file name,
+// because the name is sanitised for the filesystem and may not round-trip.
+func TestListSessionMetaReadsTheRealID(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
 	bindTranscript("acp:1", "has/slash", "codex", "/tmp", now)
 	appendPrompt("acp:1", "x", now)
 	waitForTranscriptWrites()
 
-	ids := listTranscripts()
-	if len(ids) != 1 || ids[0] != "has/slash" {
-		t.Fatalf("listTranscripts = %v, want [has/slash]", ids)
+	got := listSessionMeta()
+	if len(got) != 1 || got[0].SessionID != "has/slash" {
+		t.Fatalf("listSessionMeta ids = %+v, want [has/slash]", got)
 	}
 }
 
@@ -338,5 +338,139 @@ func TestStreamedMessagePersistsEveryChunk(t *testing.T) {
 	}
 	if got[0].Text != "Hello from the fake agent." {
 		t.Errorf("text = %q, want the whole sentence", got[0].Text)
+	}
+}
+
+// The index is what the history panel lists, so it must be assembled
+// from a file's head and tail — never by reading the conversation. These
+// pin the fields the panel needs and the two ways they arrive.
+func TestSessionMetaCarriesModelAndEnding(t *testing.T) {
+	withStateDir(t)
+	now := time.Unix(1_700_000_000, 0)
+	bindTranscript("acp:1", "sess-m", "codex", "/home/mick/wash", now)
+	// Start-of-session summary: model known, ending not.
+	writeSummary("sess-m", transcriptSummary{
+		Agent: "codex", Model: "Claude Opus 4.5", Cwd: "/home/mick/wash", AtMS: now.UnixMilli(),
+	})
+	appendPrompt("acp:1", "do the thing", now)
+	// End-of-session summary: adds the title, count and ending, and must
+	// not erase the model the earlier record carried.
+	writeSummary("sess-m", transcriptSummary{
+		Title: "Do the thing", Events: 1, EndedMS: now.Add(time.Minute).UnixMilli(),
+		EndReason: "ended", AtMS: now.Add(time.Minute).UnixMilli(),
+	})
+	waitForTranscriptWrites()
+
+	all := listSessionMeta()
+	if len(all) != 1 {
+		t.Fatalf("want 1 session, got %d", len(all))
+	}
+	m := all[0]
+	if m.SessionID != "sess-m" {
+		t.Errorf("session_id = %q", m.SessionID)
+	}
+	if m.Model != "Claude Opus 4.5" {
+		t.Errorf("model = %q — the later summary erased it", m.Model)
+	}
+	if m.Title != "Do the thing" {
+		t.Errorf("title = %q", m.Title)
+	}
+	if m.Agent != "codex" {
+		t.Errorf("agent = %q", m.Agent)
+	}
+	if m.Dir == "" {
+		t.Errorf("dir is empty; the panel needs somewhere to say where it ran")
+	}
+	if m.Events != 1 {
+		t.Errorf("events = %d, want 1", m.Events)
+	}
+	if m.EndReason != "ended" || m.EndedMS == 0 {
+		t.Errorf("ending = %q/%d", m.EndReason, m.EndedMS)
+	}
+	if m.Bytes <= 0 {
+		t.Errorf("bytes = %d; history cannot offer to prune what it cannot size", m.Bytes)
+	}
+}
+
+// A session the router outlived never gets a final summary. It must still
+// appear, still name its model, and still sort by when it was last active
+// rather than stacking at the epoch.
+func TestSessionMetaSurvivesASessionThatNeverEnded(t *testing.T) {
+	withStateDir(t)
+	now := time.Unix(1_700_000_000, 0)
+	bindTranscript("acp:1", "sess-crash", "codex", "/tmp", now)
+	writeSummary("sess-crash", transcriptSummary{Agent: "codex", Model: "gpt-5", AtMS: now.UnixMilli()})
+	appendEvent("acp:1", Event{Kind: EventMessage, Text: "mid-sentence"}, now.Add(5*time.Minute))
+	waitForTranscriptWrites()
+
+	all := listSessionMeta()
+	if len(all) != 1 {
+		t.Fatalf("want 1 session, got %d", len(all))
+	}
+	m := all[0]
+	if m.Model != "gpt-5" {
+		t.Errorf("model = %q, want the one recorded at start", m.Model)
+	}
+	if m.EndReason != "" {
+		t.Errorf("end_reason = %q, want empty — it never ended", m.EndReason)
+	}
+	// Dated by its last event, not left at zero.
+	if want := now.Add(5 * time.Minute).UnixMilli(); m.EndedMS != want {
+		t.Errorf("last activity = %d, want %d (the last event)", m.EndedMS, want)
+	}
+}
+
+// History lists newest-first, mixing ended and never-ended sessions.
+func TestListSessionMetaSortsByRecency(t *testing.T) {
+	withStateDir(t)
+	base := time.Unix(1_700_000_000, 0)
+	for i, id := range []string{"old", "newest", "middle"} {
+		bindTranscript("acp:"+id, id, "codex", "/tmp", base)
+		at := base.Add(time.Duration(map[int]int{0: 1, 1: 30, 2: 10}[i]) * time.Minute)
+		appendEvent("acp:"+id, Event{Kind: EventMessage, Text: id}, at)
+	}
+	waitForTranscriptWrites()
+
+	got := listSessionMeta()
+	if len(got) != 3 {
+		t.Fatalf("want 3, got %d", len(got))
+	}
+	if got[0].SessionID != "newest" || got[2].SessionID != "old" {
+		t.Errorf("order = %s,%s,%s want newest,middle,old",
+			got[0].SessionID, got[1].SessionID, got[2].SessionID)
+	}
+}
+
+// The model comes off the agent's own settings block, where the id is
+// spelled differently by different adapters — and history should show the
+// readable name, not the wire value.
+func TestModelNameReadsTheSettingsBlock(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []acp.ConfigOption
+		want string
+	}{
+		{"exact id, readable name", []acp.ConfigOption{{
+			ID: "model", CurrentValue: "claude-opus-4-5",
+			Options: []acp.ConfigOptionValue{{Value: "claude-opus-4-5", Name: "Claude Opus 4.5"}},
+		}}, "Claude Opus 4.5"},
+		{"no options list falls back to the value", []acp.ConfigOption{
+			{ID: "model", CurrentValue: "gpt-5"},
+		}, "gpt-5"},
+		{"prefixed id still matches", []acp.ConfigOption{
+			{ID: "openai.model", CurrentValue: "o4"},
+		}, "o4"},
+		{"unrelated settings only", []acp.ConfigOption{
+			{ID: "reasoning_effort", CurrentValue: "high"},
+		}, ""},
+		{"none at all", nil, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := &hosted{key: "acp:1", configs: c.in}
+			if got := h.modelName(); got != c.want {
+				t.Errorf("modelName() = %q, want %q", got, c.want)
+			}
+		})
 	}
 }

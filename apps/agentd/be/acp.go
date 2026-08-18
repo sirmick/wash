@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -165,6 +166,9 @@ func (h *hosted) retire() {
 		h.stop()
 	}
 	forgetTranscriptWatchers(h.key)
+	// Seal the history entry before the events are freed: the count comes
+	// from the in-memory transcript, which is about to go.
+	h.noteSession("ended", time.Now())
 	// The conversation is on disk, so it no longer has to be held in
 	// memory. Nothing used to free these: `trans` grew for the router's
 	// lifetime, which on a long-lived box is every transcript it ever saw.
@@ -863,4 +867,60 @@ func publicModes(in []acp.SessionMode) []Mode {
 type promptReq struct {
 	Key  string `json:"key"`
 	Text string `json:"text,omitempty"`
+}
+
+// modelName is the agent's current model, read out of its generic
+// settings block. Adapters name the option differently (claude-agent-acp
+// calls it "model"; others prefix or title-case it), so the id is matched
+// first and the display name second rather than assuming one spelling.
+// Empty when the adapter exposes no model setting at all, which is a fact
+// about that agent and not an error.
+func (h *hosted) modelName() string {
+	hostedMu.Lock()
+	defer hostedMu.Unlock()
+	for _, c := range h.configs {
+		if strings.EqualFold(c.ID, "model") {
+			return configLabel(c)
+		}
+	}
+	for _, c := range h.configs {
+		if strings.Contains(strings.ToLower(c.ID), "model") ||
+			strings.Contains(strings.ToLower(c.Name), "model") {
+			return configLabel(c)
+		}
+	}
+	return ""
+}
+
+// configLabel prefers the human name of the selected value over its id:
+// history should say "Claude Opus 4.5", not "claude-opus-4-5-20260101".
+func configLabel(c acp.ConfigOption) string {
+	for _, o := range c.Options {
+		if o.Value == c.CurrentValue && o.Name != "" {
+			return o.Name
+		}
+	}
+	return c.CurrentValue
+}
+
+// noteSession appends what is known about a session right now: the model
+// and title at the start, the ending at the end. The index reads the last
+// summary, so a session killed with the router still carries its model.
+func (h *hosted) noteSession(endReason string, now time.Time) {
+	hostedMu.Lock()
+	agent, sid, cwd, title := h.agent, h.sessionID, h.cwd, h.title
+	hostedMu.Unlock()
+	if sid == "" {
+		return
+	}
+	s := transcriptSummary{
+		Agent: agent, Model: h.modelName(), Cwd: cwd, Dir: dirLabel(cwd),
+		Title: title, AtMS: now.UnixMilli(),
+	}
+	if endReason != "" {
+		s.EndReason = endReason
+		s.EndedMS = now.UnixMilli()
+		s.Events = transcriptLen(h.key)
+	}
+	writeSummary(sid, s)
 }

@@ -37,6 +37,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -402,47 +403,6 @@ func loadTranscript(sessionID string) ([]Event, error) {
 	return out, nil
 }
 
-// listTranscripts returns the session ids that have a stored transcript.
-func listTranscripts() []string {
-	dir := transcriptDir()
-	if dir == "" {
-		return nil
-	}
-	ents, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, e := range ents {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
-		}
-		// The file is named by the SANITISED id, so the id is read from
-		// the meta line rather than inferred from the name.
-		if id := metaSessionID(filepath.Join(dir, e.Name())); id != "" {
-			out = append(out, id)
-		}
-	}
-	return out
-}
-
-func metaSessionID(path string) string {
-	f, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	if !sc.Scan() {
-		return ""
-	}
-	var m transcriptMeta
-	if err := json.Unmarshal(sc.Bytes(), &m); err != nil || m.Kind != metaKind {
-		return ""
-	}
-	return m.SessionID
-}
-
 // reconcileResume settles the stored transcript against what the adapter
 // replayed, and is the reason resume is not simply "append from now on".
 //
@@ -596,4 +556,222 @@ func waitForTranscriptWrites() {
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
+}
+
+// ── session metadata ────────────────────────────────────────────────────
+//
+// The meta header names a session at its birth, when almost nothing is
+// known: not the model (the agent's settings arrive just after), not the
+// title (the agent names its own work once it has worked out what the
+// work is), and obviously not how it ended.
+//
+// So metadata is a SUMMARY record appended like any other line, and the
+// last one in the file wins. Appending rather than rewriting the header
+// is what keeps the format append-only; writing it more than once is
+// what lets a session that was killed with the router still carry the
+// model it was using, instead of only sessions lucky enough to retire
+// cleanly.
+type transcriptSummary struct {
+	Kind      string `json:"kind"`
+	SessionID string `json:"session_id,omitempty"`
+	Agent     string `json:"agent,omitempty"`
+	Model     string `json:"model,omitempty"`
+	Cwd       string `json:"cwd,omitempty"`
+	Dir       string `json:"dir,omitempty"`
+	// Title is the agent's own name for the work. "codex · wash" tells
+	// you nothing a week later; "Fix the reconnect banner race" does.
+	Title string `json:"title,omitempty"`
+	// Events is the folded event count, known only when we write this at
+	// the end. Zero means "not counted yet", not "empty".
+	Events int `json:"events,omitempty"`
+	// EndedMS is set only by the final summary. Its absence is how the
+	// index tells a session that ended from one the router outlived.
+	EndedMS int64 `json:"ended_ms,omitempty"`
+	// EndReason is why it stopped: retired by the user, or unknown when
+	// the process went away without saying.
+	EndReason string `json:"end_reason,omitempty"`
+	AtMS      int64  `json:"at_ms,omitempty"`
+}
+
+const summaryKind = "summary"
+
+// writeSummary appends one summary record for a session.
+func writeSummary(sessionID string, s transcriptSummary) {
+	if sessionID == "" {
+		return
+	}
+	s.Kind = summaryKind
+	s.SessionID = sessionID
+	line, err := json.Marshal(s)
+	if err != nil {
+		return
+	}
+	enqueue(sessionID, line)
+}
+
+// SessionMeta is what the history panel lists. Assembled from a
+// transcript's head and tail without reading the conversation in
+// between — a history list must not cost the sum of every transcript.
+type SessionMeta struct {
+	SessionID string `json:"session_id"`
+	Agent     string `json:"agent,omitempty"`
+	Model     string `json:"model,omitempty"`
+	Cwd       string `json:"cwd,omitempty"`
+	Dir       string `json:"dir,omitempty"`
+	Title     string `json:"title,omitempty"`
+	StartedMS int64  `json:"started_ms,omitempty"`
+	EndedMS   int64  `json:"ended_ms,omitempty"`
+	EndReason string `json:"end_reason,omitempty"`
+	Events    int    `json:"events,omitempty"`
+	// Bytes is the transcript's size on disk, so the UI can say what
+	// history costs and offer to prune the expensive ones.
+	Bytes int64 `json:"bytes,omitempty"`
+}
+
+// summaryTailBytes is how much of the end of a file is scanned for the
+// last summary record. Summaries are small and written last, so a few KB
+// finds them; a session whose final line is a huge inline image may push
+// its summary out of this window, which costs metadata, never events.
+const summaryTailBytes = 8 << 10
+
+// readSessionMeta assembles one session's metadata from its file's head
+// and tail. Cheap by construction: two small reads, no matter how long
+// the conversation is.
+func readSessionMeta(path string) (SessionMeta, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return SessionMeta{}, false
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return SessionMeta{}, false
+	}
+
+	var out SessionMeta
+	out.Bytes = fi.Size()
+
+	// Head: the meta line names the session.
+	head := bufio.NewScanner(f)
+	head.Buffer(make([]byte, 0, 8<<10), 1<<20)
+	if head.Scan() {
+		var m transcriptMeta
+		if err := json.Unmarshal(head.Bytes(), &m); err == nil && m.Kind == metaKind {
+			out.SessionID = m.SessionID
+			out.Agent = m.Agent
+			out.Cwd = m.Cwd
+			out.Dir = dirLabel(m.Cwd)
+			out.StartedMS = m.StartedMS
+		}
+	}
+	if out.SessionID == "" {
+		return SessionMeta{}, false
+	}
+
+	// Tail: the last summary wins, and the last event dates the session
+	// when no summary was ever written (the router died mid-conversation).
+	start := fi.Size() - summaryTailBytes
+	if start < 0 {
+		start = 0
+	}
+	if _, err := f.Seek(start, 0); err != nil {
+		return out, true
+	}
+	tail := bufio.NewScanner(f)
+	tail.Buffer(make([]byte, 0, 8<<10), 1<<20)
+	if start > 0 {
+		tail.Scan() // discard the partial first line
+	}
+	var lastEventAt int64
+	for tail.Scan() {
+		b := tail.Bytes()
+		if len(b) == 0 {
+			continue
+		}
+		var probe struct {
+			Kind string `json:"kind"`
+			AtMS int64  `json:"at_ms"`
+		}
+		if json.Unmarshal(b, &probe) != nil {
+			continue
+		}
+		if probe.Kind != summaryKind {
+			if probe.AtMS > lastEventAt {
+				lastEventAt = probe.AtMS
+			}
+			continue
+		}
+		var s transcriptSummary
+		if json.Unmarshal(b, &s) != nil {
+			continue
+		}
+		// Later summaries overwrite earlier ones field by field, but only
+		// where they actually say something: the start-of-session summary
+		// carries the model, the final one carries the ending, and a
+		// blank field in the later record must not erase the earlier.
+		if s.Agent != "" {
+			out.Agent = s.Agent
+		}
+		if s.Model != "" {
+			out.Model = s.Model
+		}
+		if s.Title != "" {
+			out.Title = s.Title
+		}
+		if s.Cwd != "" {
+			out.Cwd, out.Dir = s.Cwd, dirLabel(s.Cwd)
+		}
+		if s.Dir != "" {
+			out.Dir = s.Dir
+		}
+		if s.Events > 0 {
+			out.Events = s.Events
+		}
+		if s.EndedMS > 0 {
+			out.EndedMS = s.EndedMS
+		}
+		if s.EndReason != "" {
+			out.EndReason = s.EndReason
+		}
+	}
+	// A session with no final summary still gets a last-activity time, so
+	// history can sort it sensibly instead of stacking every crashed
+	// session at the epoch.
+	if out.EndedMS == 0 && lastEventAt > 0 {
+		out.EndedMS = lastEventAt
+	}
+	return out, true
+}
+
+// listSessionMeta is the history index: every stored transcript, newest
+// activity first.
+func listSessionMeta() []SessionMeta {
+	dir := transcriptDir()
+	if dir == "" {
+		return nil
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	out := make([]SessionMeta, 0, len(ents))
+	for _, e := range ents {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		if m, ok := readSessionMeta(filepath.Join(dir, e.Name())); ok {
+			out = append(out, m)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return sessionRecency(out[i]) > sessionRecency(out[j])
+	})
+	return out
+}
+
+func sessionRecency(m SessionMeta) int64 {
+	if m.EndedMS > 0 {
+		return m.EndedMS
+	}
+	return m.StartedMS
 }

@@ -350,6 +350,17 @@ func snapshot(key string) []Event {
 	return events
 }
 
+// transcriptLen is how many folded events a session has, for the history
+// summary. Cheap: the count is the slice length, not a re-read.
+func transcriptLen(key string) int {
+	transMu.Lock()
+	defer transMu.Unlock()
+	if t := trans[key]; t != nil {
+		return len(t.events)
+	}
+	return 0
+}
+
 // releaseTranscript frees a finished session's events. The conversation
 // is not lost — it is on disk, and snapshot() reads it back on demand.
 // The key→session binding deliberately SURVIVES, because that is what
