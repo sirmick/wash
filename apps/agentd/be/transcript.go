@@ -97,6 +97,10 @@ type Event struct {
 }
 
 type transcript struct {
+	// key is the roster key these events belong to. Held so push() can
+	// persist without every call site threading it through — the store
+	// maps key → session id, which is what the file is named for.
+	key    string
 	seq    uint64
 	events []Event
 	// toolAt indexes tool events by their ACP tool-call id, so a
@@ -123,8 +127,8 @@ var (
 	transSubs = map[string]map[string]time.Time{}
 )
 
-func newTranscript() *transcript {
-	return &transcript{toolAt: map[string]int{}, openMessage: -1}
+func newTranscript(key string) *transcript {
+	return &transcript{key: key, toolAt: map[string]int{}, openMessage: -1}
 }
 
 // appendPrompt records what the human sent, so the transcript reads as a
@@ -134,7 +138,7 @@ func appendPrompt(key, text string, now time.Time) Event {
 	defer transMu.Unlock()
 	t := trans[key]
 	if t == nil {
-		t = newTranscript()
+		t = newTranscript(key)
 		trans[key] = t
 	}
 	// A prompt always closes any open agent message: the turn is over.
@@ -157,7 +161,7 @@ func appendEvent(key string, e Event, now time.Time) Event {
 	defer transMu.Unlock()
 	t := trans[key]
 	if t == nil {
-		t = newTranscript()
+		t = newTranscript(key)
 		trans[key] = t
 	}
 	// Anything wash says closes an open agent message, for the same reason
@@ -182,6 +186,9 @@ func updateEvent(key string, seq uint64, mutate func(*Event)) (Event, bool) {
 	for i := range t.events {
 		if t.events[i].Seq == seq {
 			mutate(&t.events[i])
+			// Append the new version under the same seq; loading folds
+			// last-write-wins, so the reloaded row matches the live one.
+			persistEvent(t.key, t.events[i])
 			return t.events[i], true
 		}
 	}
@@ -205,7 +212,7 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 
 	t := trans[key]
 	if t == nil {
-		t = newTranscript()
+		t = newTranscript(key)
 		trans[key] = t
 	}
 
@@ -243,6 +250,13 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 		// in between closes it, because the agent has moved on.
 		if t.openMessage >= 0 && t.events[t.openMessage].Kind == kind {
 			t.events[t.openMessage].Text += text
+			// Persist the accumulated message, not just its first chunk.
+			// Continuation grows an existing event in place instead of
+			// pushing a new one, so without this a streamed reply reached
+			// disk as only the words in its first chunk. One line per
+			// chunk is chatty and folds away on load, which is the trade
+			// the append-only format exists to make.
+			persistEvent(t.key, t.events[t.openMessage])
 			return append(out, t.events[t.openMessage])
 		}
 		e := t.push(Event{Kind: kind, Text: text, AtMS: now.UnixMilli()})
@@ -303,18 +317,50 @@ func (t *transcript) push(e Event) Event {
 	t.seq++
 	e.Seq = t.seq
 	t.events = append(t.events, e)
+	// Persist as it happens (transcript_store.go). Safe under transMu:
+	// this only appends to a channel, and the disk write is a different
+	// goroutine's problem.
+	persistEvent(t.key, e)
 	return e
 }
 
-// snapshot copies a session's transcript for a new subscriber.
+// snapshot copies a session's transcript for a new subscriber, falling
+// back to the stored copy for a session that has been retired out of
+// memory (transcript_store.go). That fallback is what lets retire() free
+// the events at all: before persistence they had to be held forever,
+// because agentd was the only place they existed.
 func snapshot(key string) []Event {
 	transMu.Lock()
-	defer transMu.Unlock()
 	t := trans[key]
-	if t == nil {
+	if t != nil {
+		out := append([]Event(nil), t.events...)
+		transMu.Unlock()
+		return out
+	}
+	transMu.Unlock()
+
+	sid := transcriptSessionID(key)
+	if sid == "" {
 		return nil
 	}
-	return append([]Event(nil), t.events...)
+	events, err := loadTranscript(sid)
+	if err != nil {
+		log.Printf("agentd: transcript load key=%s session=%s: %v", key, sid, err)
+	}
+	return events
+}
+
+// releaseTranscript frees a finished session's events. The conversation
+// is not lost — it is on disk, and snapshot() reads it back on demand.
+// The key→session binding deliberately SURVIVES, because that is what
+// makes the fallback possible; it is two strings against a transcript
+// that can run to megabytes.
+func releaseTranscript(key string) {
+	// Let queued writes land before dropping the only other copy.
+	waitForTranscriptWrites()
+	transMu.Lock()
+	delete(trans, key)
+	transMu.Unlock()
 }
 
 type transcriptSnapshotMsg struct {

@@ -148,6 +148,9 @@ func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 		return nil, fmt.Errorf("session/new %s: %w", agentID, err)
 	}
 	h.sessionID = res2.SessionID
+	// Name the transcript now: before the adapter answers there is no
+	// session id to file it under, and every event from here on persists.
+	bindTranscript(h.key, h.sessionID, agentID, h.cwd, time.Now())
 	h.applyModes(res2.Modes)
 	h.register()
 	// The settings block arrives with the session, not only on later
@@ -353,6 +356,9 @@ func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, e
 		h.retire()
 		return nil, fmt.Errorf("reopen %s: %w", sessionID, err)
 	}
+	// The replay has landed by the time LoadSession answers, so this is
+	// the moment the stored and replayed records can be settled.
+	reconcileResume(h.key, sessionID, time.Now())
 	log.Printf("agentd: acp session resumed key=%s agent=%s session=%s cwd=%s", h.key, agentID, sessionID, h.cwd)
 	h.setState("done", "resumed")
 	return h, nil

@@ -165,6 +165,10 @@ func (h *hosted) retire() {
 		h.stop()
 	}
 	forgetTranscriptWatchers(h.key)
+	// The conversation is on disk, so it no longer has to be held in
+	// memory. Nothing used to free these: `trans` grew for the router's
+	// lifetime, which on a long-lived box is every transcript it ever saw.
+	releaseTranscript(h.key)
 	now := time.Now()
 	mutateState(func(s *State) {
 		delete(rows, h.key)
