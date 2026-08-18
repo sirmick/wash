@@ -97,6 +97,15 @@ export interface RouterHandle {
    *  Empty when xdgConfig wasn't requested. */
   xdgConfigHome: string;
   /**
+   * per-test XDG_STATE_HOME. ALWAYS set, unlike xdgConfigHome — agentd
+   * writes agent-sessions.json and a full transcript per session under
+   * <here>/wash/, so without this every agent spec would append to the
+   * developer's real history. It also made specs contaminate each OTHER:
+   * the acp-fake uses a fixed session id, so a second run reopened the
+   * first run's transcript and saw its lines twice.
+   */
+  xdgStateHome: string;
+  /**
    * Path to the fakesudo audit log when fakesudo:true was set;
    * empty otherwise. Tests read this to assert which targets
    * wash-priv invoked, with what argv, after which password.
@@ -373,6 +382,13 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
     xdgConfigHome = mkdtempSync(join(tmpdir(), 'wash-e2e-xdg-'));
     env.XDG_CONFIG_HOME = xdgConfigHome;
   }
+  // Isolate the user's real ~/.local/state/wash. Unconditional, because
+  // there is no version of "correct" where a test appends to the
+  // developer's agent history — and because a shared state dir made the
+  // agent specs fail each other (see xdgStateHome above). A test that
+  // wants to READ what agentd wrote uses router.xdgStateHome.
+  const xdgStateHome = mkdtempSync(join(tmpdir(), 'wash-e2e-state-'));
+  env.XDG_STATE_HOME = xdgStateHome;
   // fakesudo wiring: WASH_PRIV_SUDO_BIN is read by wash-priv at
   // startup; FAKESUDO_LOG is read by fakesudo on every invocation
   // so tests can prove which targets it was asked to exec. We add
@@ -430,6 +446,7 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
     screenshotDir,
     fmRoot,
     xdgConfigHome,
+    xdgStateHome,
     fakesudoLog,
     log: () => logBuf,
     waitForLog: (re, timeout = 5_000, from = 0) => waitForRegex(() => logBuf.slice(from), re, timeout),
@@ -612,7 +629,7 @@ export async function stopRouter(h: RouterHandle): Promise<void> {
   // staged apps dir is a full copy of the binary set; thousands of
   // runs otherwise pile up to hundreds of GB. force:true ignores a
   // still-dying child's open files.
-  for (const d of [h.appsDir, h.fmRoot, h.xdgConfigHome]) {
+  for (const d of [h.appsDir, h.fmRoot, h.xdgConfigHome, h.xdgStateHome]) {
     if (d) {
       try {
         rmSync(d, { recursive: true, force: true });
