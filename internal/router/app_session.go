@@ -66,7 +66,13 @@ type AppInstance struct {
 	// shellGoneLogged keeps the "browser went away mid-write" note to one
 	// line per instance. Without it a chatty app would log per dropped
 	// frame, which is a log flood at exactly the moment the log matters.
+	//
+	// shellGoneDrops counts what was dropped in that stretch, so the
+	// recovery line can say how much the browser missed. Both are only
+	// touched from the app's single read goroutine (dispatch), with
+	// atomics so a reader elsewhere is not a data race.
 	shellGoneLogged atomic.Bool
+	shellGoneDrops  atomic.Int64
 
 	// PeerUID is the kernel-attested uid of the connected app process,
 	// read via SO_PEERCRED at attach time. Zero means root; uidNoPeer
@@ -235,13 +241,31 @@ func (inst *AppInstance) loop(ctx context.Context) error {
 func (inst *AppInstance) dispatch(f wire.Frame) error {
 	err := inst.dispatchFrame(f)
 	if errors.Is(err, ErrSchedulerClosed) {
+		inst.shellGoneDrops.Add(1)
+		// One line per stretch, not per frame: a chatty app would flood
+		// the log at exactly the moment it needs to be readable. The
+		// count is reported on recovery instead.
+		//
 		// router is nil in tests that drive an AppInstance in isolation,
 		// the same guard drainLoop carries.
 		if inst.router != nil && inst.shellGoneLogged.CompareAndSwap(false, true) {
-			inst.router.log("app %s instance=%s: shell gone mid-write — dropping frames until one reattaches",
-				inst.AppID, inst.InstanceID)
+			inst.router.log("app %s instance=%s: shell gone mid-write ch=%d class=%s — dropping frames, buffered for replay",
+				inst.AppID, inst.InstanceID, f.Channel, f.Class())
 		}
 		return nil
+	}
+	// Recovery. Without this the log shows a session going dark and never
+	// says it came back, so "did it recover?" is unanswerable after the
+	// fact — and the drop count is the size of what the reattaching shell
+	// had to replay.
+	if err == nil && inst.shellGoneLogged.Load() {
+		if n := inst.shellGoneDrops.Swap(0); n > 0 {
+			inst.shellGoneLogged.Store(false)
+			if inst.router != nil {
+				inst.router.log("app %s instance=%s: shell back — resumed after dropping %d frame(s)",
+					inst.AppID, inst.InstanceID, n)
+			}
+		}
 	}
 	return err
 }

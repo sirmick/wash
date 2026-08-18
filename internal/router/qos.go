@@ -66,6 +66,20 @@ type Scheduler struct {
 
 	closeOnce sync.Once
 	closed    chan struct{}
+
+	// onStall fires when Submit is about to BLOCK on a full queue —
+	// the leading indicator for GH #23. A producer parked here is a
+	// producer that will see ErrSchedulerClosed if the browser then
+	// dies, so a log at this moment is the difference between "the
+	// desktop died for no reason" and "the browser stopped reading 40
+	// seconds earlier". Set by the ShellSession; nil in tests.
+	onStall func(c wire.Class, depth, capacity int)
+}
+
+// SetStallHook installs the saturation callback. Called once at setup,
+// before any producer exists.
+func (s *Scheduler) SetStallHook(fn func(c wire.Class, depth, capacity int)) {
+	s.onStall = fn
 }
 
 // NewScheduler builds a Scheduler with per-class queue capacities
@@ -110,6 +124,9 @@ func (s *Scheduler) Submit(ctx context.Context, f wire.Frame) error {
 	// backpressure signal). The count is the diagnostic: a climbing
 	// queue_full means a producer is outrunning the FE on that class.
 	s.Stats.recordQueueFull(c)
+	if s.onStall != nil {
+		s.onStall(c, len(q), cap(q))
+	}
 	select {
 	case q <- f:
 		s.Stats.sampleDepth(c, len(q))
@@ -230,6 +247,29 @@ var drainOrder = []wire.Class{
 // ErrSchedulerClosed; Next returns ErrSchedulerClosed once the queues
 // are drained (callers typically drain-then-stop or just stop).
 // Idempotent.
+// Depths is the current per-class queue occupancy. Read at the moment a
+// shell dies, it names who was blocked behind the departing browser: a
+// saturated Interactive queue is the precondition for Submit blocking at
+// all, and therefore for GH #23's "app killed by a browser" chain.
+func (s *Scheduler) Depths() map[wire.Class]int {
+	out := make(map[wire.Class]int, len(s.queues))
+	for c, q := range s.queues {
+		if q != nil {
+			out[wire.Class(c)] = len(q)
+		}
+	}
+	return out
+}
+
+// Cap is the configured capacity for a class, so a depth can be reported
+// as a fraction rather than a bare number nobody can calibrate.
+func (s *Scheduler) Cap(c wire.Class) int {
+	if int(c) >= len(s.queues) || s.queues[c] == nil {
+		return 0
+	}
+	return cap(s.queues[c])
+}
+
 func (s *Scheduler) Close() {
 	s.closeOnce.Do(func() { close(s.closed) })
 }

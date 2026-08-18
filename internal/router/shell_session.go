@@ -146,6 +146,7 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	sess.lastReadAtNanos.Store(time.Now().UnixNano())
 	connStart := time.Now()
 	r.log("shell: connect conn=%d", sess.connID)
+	sess.installStallLog()
 	defer func() {
 		// Stop the drainer first so it doesn't try to write to a
 		// closing transport, then wait for it to exit.
@@ -1047,6 +1048,46 @@ func (s *ShellSession) tryWriteRawClass(channelID uint32, payload []byte, class 
 // Transport. Exits on scheduler.Close (graceful) or transport write
 // error (FE disconnect / network failure). On exit, drainerDone is
 // closed so HandleShell's teardown can wait.
+// stallLogEvery bounds the saturation log. A saturated queue stays
+// saturated for as long as the browser is behind, so an unthrottled line
+// would be a flood — and the fact worth recording is that a class has
+// been full since some moment, not that it is still full now.
+const stallLogEvery = 5 * time.Second
+
+// installStallLog reports a producer parking on a full queue.
+//
+// This is the leading indicator for GH #23: Submit only returns
+// ErrSchedulerClosed from the BLOCKING path, so a producer stalled here
+// is precisely the one that gets killed if the browser then dies. Before
+// this, saturation was a counter in the link stats and nothing in the
+// log — a session could spend a minute backed up and the first written
+// evidence was an app exiting.
+func (s *ShellSession) installStallLog() {
+	if s.router == nil {
+		return
+	}
+	var mu sync.Mutex
+	last := map[wire.Class]time.Time{}
+	firstAt := map[wire.Class]time.Time{}
+	s.scheduler.SetStallHook(func(c wire.Class, depth, capacity int) {
+		now := time.Now()
+		mu.Lock()
+		if _, ok := firstAt[c]; !ok {
+			firstAt[c] = now
+		}
+		since := now.Sub(firstAt[c])
+		if t, ok := last[c]; ok && now.Sub(t) < stallLogEvery {
+			mu.Unlock()
+			return
+		}
+		last[c] = now
+		mu.Unlock()
+		s.router.log("shell: queue saturated conn=%d class=%s depth=%d/%d stalled_for=%s — "+
+			"producers are blocking; if the browser dies now their frames are dropped",
+			s.connID, c, depth, capacity, since.Round(time.Millisecond))
+	})
+}
+
 func (s *ShellSession) drainLoop(ctx context.Context) {
 	defer close(s.drainerDone)
 	count := 0
@@ -1069,6 +1110,21 @@ func (s *ShellSession) drainLoop(ctx context.Context) {
 			// Transport write failed — FE gone. Close the
 			// scheduler so any blocked producers unblock with
 			// ErrSchedulerClosed and the shell tears down.
+			//
+			// This is the ROOT EVENT of a browser going away, and it
+			// used to be silent: the function returns here, so not even
+			// the drainLoop-exit line above fires. The first thing the
+			// log showed was an app dying with "qos scheduler closed",
+			// which reads like an app fault and is not one (GH #23).
+			// Say what actually happened, with the queue depths that
+			// explain who was blocked behind it.
+			if s.router != nil {
+				d := s.scheduler.Depths()
+				s.router.log("shell: transport write failed conn=%d wrote=%d frames class=%s bytes=%d "+
+					"queued(ctrl/inter/bulk/bg)=%d/%d/%d/%d — closing scheduler, apps keep running: %v",
+					s.connID, count, f.Class(), len(f.Payload),
+					d[wire.ClassControl], d[wire.ClassInteractive], d[wire.ClassBulk], d[wire.ClassBackground], err)
+			}
 			s.scheduler.Close()
 			return
 		}
