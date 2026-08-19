@@ -51,6 +51,23 @@ async function openHistory(page: Page, win: ReturnType<Page['locator']>) {
 }
 
 test.describe('agent history panel', () => {
+  test('is available before starting a new session', async ({ page, router }) => {
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    await page.locator('button[title="Apps"]').click();
+    await page
+      .locator('[data-testid="start-menu"]')
+      .getByRole('button', { name: 'Agent', exact: true })
+      .click();
+
+    const win = page.locator('wash-app-ai').first();
+    await expect(win.getByRole('button', { name: 'Start session' })).toBeVisible();
+    const panel = await openHistory(page, win);
+    await expect(panel.locator('[data-testid="ai-history-search"]')).toBeFocused();
+    // Browsing did not create an adapter session behind the panel.
+    await expect(win.getByRole('button', { name: 'Start session' })).toBeVisible();
+  });
+
   test('lists the session that just ran, with its metadata', async ({ page, router }) => {
     test.setTimeout(60_000);
     const win = await startAgent(page, router.url, 'the quokka protocol');

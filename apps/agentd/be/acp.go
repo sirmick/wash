@@ -144,6 +144,34 @@ var (
 	hostedSeq uint64
 )
 
+// claimDetached atomically reserves a detached session for one reattach.
+// Browser dblclick dispatches two click events before its dblclick event;
+// frontend guards improve the interaction, but this service is the final
+// authority that prevents two Agent windows from being spawned.
+func claimDetached(key string) *hosted {
+	hostedMu.Lock()
+	defer hostedMu.Unlock()
+	h := hostedAll[key]
+	if h == nil || !h.detached {
+		return nil
+	}
+	h.detached = false
+	return h
+}
+
+// restoreDetached makes a failed reattach actionable again in the rail.
+func restoreDetached(key string) {
+	hostedMu.Lock()
+	h := hostedAll[key]
+	if h != nil {
+		h.detached = true
+	}
+	hostedMu.Unlock()
+	if h != nil {
+		h.republish()
+	}
+}
+
 // register puts a started session in the registry and on the roster.
 func (h *hosted) register() {
 	hostedMu.Lock()
@@ -621,7 +649,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 
 	// agent_detach: the window closed but the session is to keep running.
 	// The roster row stays and gains a Reattach affordance.
-	sdk.HandleFromVoid(bus, "agent_detach", func(_ *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_detach", func(conn *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
 		if h == nil {
 			return nil
@@ -631,12 +659,21 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		hostedMu.Unlock()
 		log.Printf("agentd: acp detached key=%s agent=%s session=%s", h.key, h.agent, h.sessionID)
 		h.republish()
+		// A detach requested from the desktop rail must also close the window.
+		// Transcript subscribers are the authoritative set of Agent windows
+		// currently rendering this hosted session.
+		for _, instanceID := range transcriptWatchers(h.key) {
+			_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: instanceID}, map[string]any{
+				"kind": "detach",
+				"key":  h.key,
+			})
+		}
 		return nil
 	})
 
 	// agent_reattach: open a window onto a session that is still running.
 	sdk.HandleFromVoid(bus, "agent_reattach", func(conn *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
-		h := lookupHosted(req.Key)
+		h := claimDetached(req.Key)
 		if h == nil {
 			return nil
 		}
@@ -646,11 +683,9 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		if err := conn.SpawnRequest(aiAppID); err != nil {
 			log.Printf("agentd: reattach spawn key=%s: %v", h.key, err)
 			popAttach()
+			restoreDetached(h.key)
 			return nil
 		}
-		hostedMu.Lock()
-		h.detached = false
-		hostedMu.Unlock()
 		h.republish()
 		return nil
 	})

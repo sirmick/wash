@@ -357,6 +357,25 @@ func TestSweepLeavesHostedSessionsAlone(t *testing.T) {
 	}
 }
 
+func TestClaimDetachedAllowsOnlyOneReattach(t *testing.T) {
+	h := &hosted{key: "acp:reattach-once", agent: "codex", detached: true}
+	hostedMu.Lock()
+	hostedAll[h.key] = h
+	hostedMu.Unlock()
+	t.Cleanup(func() {
+		hostedMu.Lock()
+		delete(hostedAll, h.key)
+		hostedMu.Unlock()
+	})
+
+	if got := claimDetached(h.key); got != h {
+		t.Fatalf("first claim = %p, want %p", got, h)
+	}
+	if got := claimDetached(h.key); got != nil {
+		t.Fatalf("second claim = %p, want nil", got)
+	}
+}
+
 // Host-side yolo (agent_set_yolo): wash answers the session's permission
 // questions with "allow" instead of asking. The two properties worth pinning
 // are what it replaces and what it must not touch.

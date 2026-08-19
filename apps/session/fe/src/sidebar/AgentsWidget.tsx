@@ -20,7 +20,7 @@ export interface AgentRow {
   /** running | working | needs-input | done | stale */
   state: string;
   reason?: string;
-  /** still running, no window pointing at it — clicking reattaches */
+  /** still running, no window pointing at it — double-clicking reattaches */
   detached?: boolean;
   session_id?: string;
   /** the agent's own name for this session, when it has one */
@@ -152,7 +152,8 @@ export const AgentsWidget: Component<AgentsWidgetProps> = (props) => {
           <AgentRowView
             row={r}
             elapsed={fmtElapsed(props.now() - props.startedAt(r.key))}
-            onFocus={() => (r.detached ? props.onReattach?.(r) : props.onFocus(r))}
+            onFocus={() => props.onFocus(r)}
+            onReattach={r.detached ? () => props.onReattach?.(r) : undefined}
             detached={r.detached === true}
             onDetach={props.onDetach ? () => props.onDetach?.(r) : undefined}
             onCancel={props.onCancel ? () => props.onCancel?.(r) : undefined}
@@ -338,6 +339,7 @@ const AgentRowView: Component<{
   row: AgentRow;
   elapsed: string;
   onFocus: () => void;
+  onReattach?: () => void;
   detached?: boolean;
   onDetach?: () => void;
   onCancel?: () => void;
@@ -399,7 +401,11 @@ const AgentRowView: Component<{
       data-agent={props.row.agent}
       data-agent-state={props.row.state}
       style={rowStyle()}
-      onClick={props.onFocus}
+      // Attached rows retain their fast single-click focus. Detached rows
+      // wait for dblclick so the two click events preceding it cannot spawn
+      // two Agent windows for the same session.
+      onClick={() => { if (!props.detached) props.onFocus(); }}
+      onDblClick={() => { if (props.detached) props.onReattach?.(); }}
       onContextMenu={(e) => hasVerbs() && openMenu(e)}
       // One title, chosen. There used to be two attributes here and JSX
       // kept the last, so the detached hint never rendered — a detached
@@ -407,7 +413,7 @@ const AgentRowView: Component<{
       // thing it does not have.
       title={
         props.detached
-          ? 'Detached — click to open a window on it'
+          ? 'Detached — double-click to open a window on it'
           : `${props.row.agent} in ${props.row.cwd || 'unknown directory'} — click to go to its terminal`
       }
     >
@@ -503,7 +509,7 @@ const AgentRowView: Component<{
               <MenuItem
                 label={props.detached ? 'Attach a window' : 'Go to its window'}
                 data-testid="agents-menu-attach"
-                onClick={run(props.onFocus)}
+                onClick={run(props.detached ? props.onReattach : props.onFocus)}
               />
               <MenuItem
                 label="Stop turn"
@@ -533,4 +539,3 @@ const AgentRowView: Component<{
     </div>
   );
 };
-

@@ -502,7 +502,7 @@ func registerTranscriptHandlers(bus *sdk.Bus) {
 		fresh := transSubs[req.Key][from.InstanceID].IsZero()
 		transSubs[req.Key][from.InstanceID] = time.Now()
 		transMu.Unlock()
-		if !fresh {
+		if !fresh && !req.Replay {
 			// A keepalive from a window that already has the history.
 			// Re-sending a whole transcript every 15s would be absurd.
 			return nil
@@ -547,5 +547,6 @@ func forgetInstanceTranscripts(instance string) {
 }
 
 type transReq struct {
-	Key string `json:"key"`
+	Key    string `json:"key"`
+	Replay bool   `json:"replay,omitempty"`
 }

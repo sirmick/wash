@@ -175,6 +175,16 @@ var session struct {
 	title string
 }
 
+// persistSessionView records which agentd session this window renders. This
+// is backend-owned attachment state, so persist it when agentd confirms the
+// attachment rather than relying on a later debounced FE callback. The shell
+// returns it as wash:state whenever the browser remounts this instance.
+func persistSessionView(c *sdk.Conn) {
+	if err := c.SaveState(map[string]any{"session_key": session.key}); err != nil {
+		log.Printf("wash-ai: persist session key=%s: %v", session.key, err)
+	}
+}
+
 // rosterTitle digs this session's title out of the roster push. Defensive
 // about shape because the payload crosses the router as generic maps.
 func rosterTitle(state any, key string) string {
@@ -209,7 +219,6 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	// Subscribe to the roster so the window can show adapters in the
 	// launcher and its own row's state in the status line.
 	_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": sdk.StateServiceKindSubscribe})
-
 	if flagAgent == "" {
 		return
 	}
@@ -231,6 +240,27 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		return
 	}
 	switch str(m["kind"]) {
+	case "restore":
+		// A browser reload remounts only the FE; this process and agentd keep
+		// running. The persisted key tells the new FE which view it had, while
+		// this backend remains authoritative about whether that attachment is
+		// still valid.
+		key := str(m["key"])
+		if key == "" || key != session.key {
+			_ = c.SaveState(nil)
+			c.SendAppMsg(map[string]any{"kind": "restore_failed"})
+			return
+		}
+		// Establish the FE's session before requesting replay: a snapshot can
+		// return over the agentd connection immediately, and started clears the
+		// old event list by design.
+		c.SendAppMsg(map[string]any{"kind": "started", "key": session.key})
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind":   "transcript_subscribe",
+			"key":    session.key,
+			"replay": true,
+		})
+
 	case "start":
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
 			"kind":   "agent_start",
@@ -350,16 +380,26 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 		return
 	}
 	switch str(m["kind"]) {
+	case "detach":
+		// The desktop rail detached this live session. agentd addressed every
+		// transcript watcher, so this is the window being detached rather than
+		// an unrelated Agent instance.
+		if str(m["key"]) == session.key {
+			log.Printf("wash-ai: detached by agentd key=%s, exiting", session.key)
+			os.Exit(0)
+		}
+
 	case "attach":
 		// A reopened session (Resume): agentd already loaded it and is
 		// handing us the key. The transcript is already populated
 		// service-side by the replay, so subscribing fetches it whole.
 		session.key = str(m["key"])
+		persistSessionView(c)
+		c.SendAppMsg(map[string]any{"kind": "started", "key": session.key})
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
 			"kind": "transcript_subscribe",
 			"key":  session.key,
 		})
-		c.SendAppMsg(map[string]any{"kind": "started", "key": session.key})
 		go keepWatching(c)
 
 	case "agent_started":
@@ -368,16 +408,17 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 			return
 		}
 		session.key = str(m["key"])
+		persistSessionView(c)
 		if aiDebug {
 			log.Printf("wash-ai: session started key=%s", session.key)
 		}
+		c.SendAppMsg(map[string]any{"kind": "started", "key": session.key, "session_id": str(m["session_id"])})
 		// Watch this session's transcript — a separate subscription from
 		// the roster, deliberately (see agentd/transcript.go).
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
 			"kind": "transcript_subscribe",
 			"key":  session.key,
 		})
-		c.SendAppMsg(map[string]any{"kind": "started", "key": session.key, "session_id": str(m["session_id"])})
 		go keepWatching(c)
 
 	// history: agentd's answer to a panel query, forwarded verbatim. No

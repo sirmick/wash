@@ -55,6 +55,10 @@ interface RosterState {
   recent?: RecentSession[];
 }
 
+interface PersistedState {
+  session_key?: string;
+}
+
 function mergeEvents(prev: AgentEvent[], next: AgentEvent[]): AgentEvent[] {
   const bySeq = new Map<number, AgentEvent>();
   for (const e of prev) bySeq.set(e.seq, e);
@@ -119,6 +123,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         setStarting(false);
         setError('');
         break;
+      case 'restore_failed':
+        setSessionKey('');
+        setEvents([]);
+        break;
       case 'start_failed':
         setAutostart(null);
         setStarting(false);
@@ -157,7 +165,19 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
   };
 
-  const { send } = createAppBus(props, { onMsg: handleBE });
+  const { send } = createAppBus(props, {
+    onMsg: handleBE,
+    onState: (state) => {
+      const saved = state as PersistedState | null;
+      const key = typeof saved?.session_key === 'string' ? saved.session_key : '';
+      if (!key) return;
+      // wash:state lands before queued wash:msg events on every remount.
+      // Restore the view immediately, then ask the still-running backend
+      // for an authoritative transcript snapshot.
+      setSessionKey(key);
+      send({ kind: 'restore', key });
+    },
+  });
 
   const adapters = () => roster().adapters ?? [];
   const row = createMemo(() => (roster().rows ?? []).find((r) => r.key === sessionKey()));
@@ -513,7 +533,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     <>
     {closeDialog}
     {historyPanel}
-    <Show when={sessionKey()} fallback={<Show when={autostart()} fallback={launcher}>{booting}</Show>}>
+    <Show
+      when={sessionKey()}
+      fallback={
+        <div style={{ height: '100%', display: 'flex', 'flex-direction': 'column' }}>
+          {menubar}
+          <div style={{ flex: 1, 'min-height': 0, overflow: 'auto' }}>
+            <Show when={autostart()} fallback={launcher}>{booting}</Show>
+          </div>
+        </div>
+      }
+    >
       <AgentSession
         header={menubar}
         events={events}

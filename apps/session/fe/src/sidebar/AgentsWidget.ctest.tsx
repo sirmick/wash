@@ -328,3 +328,16 @@ test('verbs: a detached row says it is detached', () => {
   ));
   expect(getByTestId('agents-row-a').getAttribute('title')).toContain('Detached');
 });
+
+test('verbs: a detached row reattaches once on double-click', () => {
+  let reattached = 0;
+  const { getByTestId } = render(() => (
+    <AgentsWidget rows={() => [row({ key: 'a', state: 'done', detached: true })]} startedAt={at}
+      now={() => 0} onFocus={noop} onReattach={() => { reattached++; }} />
+  ));
+  const target = getByTestId('agents-row-a');
+  fireEvent.click(target);
+  expect(reattached).toBe(0);
+  fireEvent.dblClick(target);
+  expect(reattached).toBe(1);
+});

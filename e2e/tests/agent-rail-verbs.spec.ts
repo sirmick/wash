@@ -124,5 +124,21 @@ test.describe('agents rail per-session verbs', () => {
     // And it now says what it is, rather than advertising a terminal it
     // does not have — the duplicate-`title` bug this shipped with.
     await expect(row).toHaveAttribute('title', /Detached/);
+
+    // Reload discards component-local state. The new roster snapshot must
+    // still identify the session as detached, and one double-click must
+    // open one window with the existing transcript.
+    await expect(page.locator('wash-app-ai')).toHaveCount(0, { timeout: 15_000 });
+    await page.reload();
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    const restoredBody = await openRail(page);
+    const restoredRow = restoredBody.locator('[data-testid^="agents-row-"]').first();
+    await expect(restoredRow).toHaveAttribute('title', /Detached/, { timeout: 15_000 });
+    await restoredRow.dblclick();
+
+    const reopened = page.locator('wash-app-ai');
+    await expect(reopened).toHaveCount(1, { timeout: 15_000 });
+    await expect(reopened.locator('textarea')).toBeVisible({ timeout: 20_000 });
+    await expect(reopened.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
   });
 });

@@ -199,6 +199,7 @@ func resumeSession(c *sdk.Conn, sessionID string, _ bool) {
 		if err := c.SpawnRequest(aiAppID); err != nil {
 			log.Printf("agentd: resume spawn session=%s: %v", sid, err)
 			popAttach()
+			restoreDetached(hs.key)
 		}
 	}()
 }
@@ -239,6 +240,7 @@ func onSpawnResult(c *sdk.Conn, appID, instanceID string, err error) {
 	}
 	if err != nil {
 		log.Printf("agentd: resume spawn failed: %v", err)
+		restoreDetached(key)
 		return
 	}
 	if e := c.SendAppMsgTo(wire.Recipient{InstanceID: instanceID}, map[string]any{
@@ -246,6 +248,7 @@ func onSpawnResult(c *sdk.Conn, appID, instanceID string, err error) {
 		"key":  key,
 	}); e != nil {
 		log.Printf("agentd: resume attach instance=%s: %v", instanceID, e)
+		restoreDetached(key)
 	}
 }
 

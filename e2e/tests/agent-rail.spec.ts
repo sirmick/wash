@@ -86,7 +86,7 @@ async function expectRailHasAgent(page: Page) {
 }
 
 test.describe('agents rail survives the reconnect paths', () => {
-  test('a reload rehydrates the roster for a session that is done', async ({ page, router }) => {
+  test('a reload rehydrates the window and roster for a session that is done', async ({ page, router }) => {
     test.setTimeout(60_000);
     await startSession(page, router.url);
     await expectRailHasAgent(page);
@@ -97,6 +97,14 @@ test.describe('agents rail survives the reconnect paths', () => {
     await page.reload();
     await expect(page.locator('wash-app-session')).toBeVisible();
     await expectRailHasAgent(page);
+
+    // The window instance survives the browser. Its FE must restore which
+    // agentd session it was showing and request the transcript again,
+    // rather than falling back to a misleading new-session launcher.
+    const win = page.locator('wash-app-ai').first();
+    await expect(win.locator('textarea')).toBeVisible({ timeout: 15_000 });
+    await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 15_000 });
+    await expect(win.getByRole('button', { name: 'Start session' })).toHaveCount(0);
 
     // And the backend really was asked again — the snapshot came from a
     // fresh subscribe, not from FE state that happened to survive.
