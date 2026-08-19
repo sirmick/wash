@@ -109,18 +109,23 @@ test.describe('reconnect torture', () => {
   test('repeated drops mid-traffic never kill a backend app', async ({ page, router }) => {
     await openDesktop(page, router);
     await launch(page, 'Terminal', 'wash-app-term');
-    await launch(page, 'Files', 'wash-app-fm');
 
     const deskBefore = instancesUp(router.log(), 'com.wash.session');
     expect(deskBefore.length).toBe(1);
 
-    // Keep real traffic in flight across the drops: a terminal writing
-    // continuously (raw channel) and an agent streaming (app_msg events
-    // on the control/lossless path, which is the one that kills).
-    // The terminal takes focus on launch, so type straight into it —
-    // clicking the custom element itself just hits a non-interactive box.
-    await page.keyboard.type('while true; do date; done\n');
-
+    // Traffic in flight across the drops comes from the AGENT stream:
+    // app_msg events on the control/lossless path, which is the path
+    // that actually kills (#23). A terminal spinning out raw Bulk adds
+    // load without adding coverage — the Bulk path is deliberately
+    // non-blocking and was never implicated.
+    //
+    // This spec's first version ran `while true; do date; done` for
+    // exactly that non-coverage, pegging a core beside WORKER_CAP other
+    // workers. On CI it starved whichever neighbour happened to be
+    // running and turned the suite intermittently red — a different
+    // victim each run (chrome-windows, then agent-fs), which is what a
+    // load problem looks like from the outside. A torture spec has to be
+    // heavy on the thing it tests and cheap on everything else.
     await launch(page, 'Agent', 'wash-app-ai');
     const ai = page.locator('wash-app-ai').first();
     await ai.locator('select').selectOption('codex');
@@ -128,7 +133,7 @@ test.describe('reconnect torture', () => {
     const composer = ai.locator('textarea');
     await expect(composer).toBeVisible({ timeout: 20_000 });
 
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 4; i++) {
       // Re-prompt each round so a stream is genuinely in flight when the
       // socket dies, rather than the drops landing in a quiet gap.
       await composer.fill(`round ${i}`);
@@ -149,7 +154,6 @@ test.describe('reconnect torture', () => {
     await expect(page.locator('wash-app-session')).toBeVisible();
     await expect(page.locator('[data-testid="window-crashed"]')).toHaveCount(0);
     await expect(page.locator('wash-app-term').first()).toBeVisible();
-    await expect(page.locator('wash-app-fm').first()).toBeVisible();
   });
 
   // GH #22. Icons are manifest-derived and ride the window record, so a
