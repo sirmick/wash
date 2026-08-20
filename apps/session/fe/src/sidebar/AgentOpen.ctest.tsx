@@ -58,7 +58,8 @@ test('a remote host waiting on you is named and badged', () => {
   const btn = getByTestId('agents-open-build01');
   expect(btn.textContent).toContain('2 waiting');
   expect(btn.textContent).toContain('build01');
-  expect(btn.getAttribute('data-waiting')).toBe('2');
+  // data-badge since M3c, when the button became the shared <HostOpen>.
+  expect(btn.getAttribute('data-badge')).toBe('2');
   expect(getByTestId('agents-open-badge-build01').textContent).toBe('2');
 });
 

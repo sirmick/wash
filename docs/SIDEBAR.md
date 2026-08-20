@@ -519,6 +519,31 @@ launch-the-owning-app** — the bulk service has no window to focus. Any fm on
 the host may answer; `resolve_conflict` is idempotent by job id, first answer
 wins.
 
+#### As built (2026-08-20)
+
+M3a moved the queue and cancel into fm; M3b moved the conflict answer and
+added the toast's launch-the-owning-app fallback; **M3c** took the rail down to
+a glance plus a door, completing the milestone.
+
+Two things worth recording from M3c:
+
+- **The rail keeps a copy of bulk state after all — but only to know when to
+  pop open.** Removing `<BulkJobs>` should have removed the rail's need for
+  `bulk.state` entirely, and it nearly did: badges and host groups read hostgw,
+  and the queue is fm's. What remained is the LOCAL auto-expand, because
+  hostgw's rise-detector deliberately skips `LOCAL_ORIGIN`
+  (`apps/session/fe/src/main.tsx:857`) to avoid doubling with the legacy
+  per-service handlers. So the legacy handler stays, reduced from a rendered
+  signal to a set of ids replaced wholesale each push. Folding local into the
+  hostgw detector is M6 cleanup, not M3's business.
+- **The door became shared, and that is the shape of every remaining
+  milestone.** `AgentOpen`'s button was extracted to `<HostOpen>` on its second
+  consumer; `AgentOpen` keeps only what is about agents (how a host is
+  described, and that local always has a door). Bulk deliberately does *not*
+  give a quiet host a door: an empty queue has nothing to manage, whereas
+  com.wash.ai is where a new session starts. M4/M5 should reuse `<HostOpen>`
+  and decide that same question per section.
+
 ### M4 — Priv prompt as a window app on the requesting host
 
 The only widget where relocation makes the **security** story simpler, which is

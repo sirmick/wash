@@ -12,7 +12,6 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount }
 import type { Component, JSX } from 'solid-js';
 import {
   AgentAsks,
-  BulkJobs,
   Menu,
   MenuItem,
   accentColor,
@@ -71,6 +70,7 @@ import {
 } from './sidebar/awareness';
 import { HostGroups } from './sidebar/HostGroups';
 import { AgentOpen } from './sidebar/AgentOpen';
+import { HostOpen } from './sidebar/HostOpen';
 import { hostHue } from './sidebar/host-hue';
 
 interface CatalogApp {
@@ -300,7 +300,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [notifications, setNotifications] = createSignal<NotifyEntry[]>([]);
   // Bulk queue + active conflicts — fed by com.wash.bulk's StateService.
   // First pending conflict (if any) pops as a screen-anchored overlay.
-  const [bulkJobs, setBulkJobs] = createSignal<BulkJob[]>([]);
+  // Previous push's job ids, kept only to spot a NEW one and pop the
+  // section open. Nothing renders the rail's copy of the queue since M3c —
+  // fm owns it — and hostgw's rise-detector skips LOCAL to avoid doubling
+  // with handlers like this one, so the local pop-open still lives here.
+  // Replaced wholesale each push, so a long-lived desktop can't accrete ids.
+  let prevBulkJobIDs = new Set<string>();
   // Priv queue + lock state — fed by com.wash.priv's broadcasts.
   // need_password drives the unlock overlay.
   const [privReqs, setPrivReqs] = createSignal<PrivReq[]>([]);
@@ -912,9 +917,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           // Auto-expand the bulk section on a NEW job (id not seen).
           // Cancelled / failed terminal-state additions are still
           // "new" — they're a state change the user might want to see.
-          const seenJobs = new Set(bulkJobs().map((j) => j.job_id));
-          const fresh = nextJobs.find((j) => !seenJobs.has(j.job_id));
-          setBulkJobs(nextJobs);
+          const fresh = nextJobs.find((j) => !prevBulkJobIDs.has(j.job_id));
+          prevBulkJobIDs = new Set(nextJobs.map((j) => j.job_id));
           if (fresh) {
             autoExpandSection('bulk');
           }
@@ -1262,18 +1266,34 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           onToggle={() => toggleSection('bulk')}
           badge={bulkBadge()}
         >
-          <BulkJobs
-            jobs={bulkJobs}
-            onCancel={(jobID) =>
-              window.wash.sendAppMsg(props.instance, { kind: 'bulk_cancel', job_id: jobID })
-            }
-          />
-          {/* A remote job gets a count, not a cancel button: cancelling on
-              B is M3's move into fm, where host addressing already works. */}
           <HostGroups
             section="bulk"
             rows={() => hostRows(SERVICE_BULK, countBadge(activeBulkJobs), bulkSummary)}
             {...groupProps}
+          />
+          {/* The queue and its cancel button live in com.wash.fm now
+              (docs/SIDEBAR.md M3a). They had to: cancelling is a send, and
+              the rail's sends gateway through the session BE, which
+              resolves inside its own router — so the rail's cancel could
+              never reach a job on B. fm subscribes to the bulk singleton
+              directly, so any fm window on a host commands every job on it.
+
+              No door for a host with nothing in flight, unlike Agents: an
+              empty queue has nothing to manage, and "open a file manager"
+              is what the launcher is for. */}
+          <HostOpen
+            testid="bulk-open"
+            what="file manager"
+            doors={() =>
+              countByHost(hostgw(), SERVICE_BULK, activeBulkJobs).map(({ origin, count }) => ({
+                origin,
+                label:
+                  origin === LOCAL_ORIGIN
+                    ? `${count} in flight`
+                    : `${count} in flight · ${origin}`,
+              }))
+            }
+            onOpen={(origin) => window.wash.launchOn(origin, 'com.wash.fm')}
           />
         </Section>
         <Section

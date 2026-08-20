@@ -85,8 +85,14 @@ bug list — all fully landed; see `git log` if you need their content.)
     Permission asks stay in the rail by decision (§3.2(8)); the session BE
     gateway keeps only subscribe/unsubscribe + agent_answer. As-built
     notes and the four surprises: SIDEBAR.md M2 "As built".
-  - [ ] **M3 — Bulk into fm** (sole consumer is `apps/fm/be/upload.go`; jobs
-    outlive the fm window, so M1 is a hard prerequisite).
+  - [x] **M3 — Bulk into fm** — DONE 2026-08-20. M3a the host's job queue
+    (fm subscribes to the bulk singleton, so any fm window commands every
+    job on its host), M3b the conflict answered where the job is — plus the
+    toast's focus→launch-the-owning-app fallback a windowless service needs
+    — and M3c the rail down to a host-grouped glance plus a per-host door
+    into fm. The rail still holds bulk ids for the LOCAL pop-open only,
+    because hostgw's rise-detector skips LOCAL; folding that in is M6.
+    As-built notes: SIDEBAR.md M3 "As built".
   - [ ] **M4 — priv prompt as a window app on the requesting host** (priv's
     face app, the wash-connect precedent; producers untouched). §10's
     encryption becomes priv-internal (FE→its own BE) instead of a
