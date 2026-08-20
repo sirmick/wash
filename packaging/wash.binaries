@@ -29,6 +29,7 @@ wash-notify
 wash-audio
 wash-fswatch
 wash-agentd
+wash-hostgw
 wash-launch
 wash-fswatchd
 wash-sudo

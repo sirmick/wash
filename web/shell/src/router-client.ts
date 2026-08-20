@@ -30,6 +30,15 @@ export class RouterClient {
   // the namespace, so channel 5 here ≠ channel 5 on another client). ----
   readonly channelOwner = new Map<number, number>(); // channel_id → window_id
   readonly instances = new Map<string, { element: string; surface: string }>();
+  /**
+   * Bare instance id → owning app id, recorded from every app.declared
+   * (background surfaces included, unlike `instances`). The shell routes
+   * chrome-bound traffic from windowless apps on this — hostgw's state
+   * republishes (docs/SIDEBAR.md M1). Routing on the SENDER's identity is
+   * the point: the router attests it and the app cannot forge it, whereas
+   * a payload-shaped route would be spoofable by any app on the host.
+   */
+  readonly appIDs = new Map<string, string>();
   readonly bundleReady = new Map<string, Promise<void>>();
   readonly seenWindowIDs = new Set<number>();
   readonly pendingClipboardGets = new Map<number, (text: string) => void>();

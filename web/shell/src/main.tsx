@@ -77,6 +77,14 @@ import { showToast } from './notify';
 import { virtioConsoleFactory } from './virtio';
 import { bootStep, bootFinish } from './boot';
 import { ingestLinkStats, linkHealth, onLinkHealth, noteConnState, type RawLinkStatsMsg, type LinkHealth } from './linkstats';
+import {
+  HOSTGW_APP_ID,
+  dropHostgwOrigin,
+  hostgwState,
+  ingestHostgwMsg,
+  onHostgwState,
+  type HostgwMap,
+} from './hostgw';
 
 interface ShellCatalog {
   t: 'catalog';
@@ -864,6 +872,7 @@ function addClient(origin: Origin, url: string): RouterClient {
   const client = new RouterClient(origin, url, makeHandlers);
   registerClient(origin, client);
   installDisplayMetricsPublisher(client);
+  installHostgwSubscriber(client);
   publishDisplayMetrics(client);
   void client.conn.ready();
   return client;
@@ -888,6 +897,7 @@ function attachPeerChannel(channelID: number, origin: Origin): void {
   const client = new RouterClient(origin, () => sock, makeHandlers);
   registerClient(origin, client);
   installDisplayMetricsPublisher(client);
+  installHostgwSubscriber(client);
   publishDisplayMetrics(client);
   void client.conn.ready();
 }
@@ -904,6 +914,9 @@ function detachClient(origin: Origin): void {
   client.conn.close();
   dropOrigin(origin);
   clearRemoteCatalog(origin);
+  // Awareness state for a host that is gone is not stale, it is wrong —
+  // drop the whole cell so no badge outlives its host (SIDEBAR.md §3.2(4)).
+  dropHostgwOrigin(origin);
   sentDisplayMetrics.delete(origin);
   unregisterClient(origin);
 }
@@ -929,8 +942,37 @@ function detachClient(origin: Origin): void {
 // deliverAppMsg routes a BE→FE message to its element, queuing if the
 // element hasn't mounted yet (Solid's onMount can run after the next
 // WS message is processed).
+//
+// hostgw is intercepted BEFORE deliverToInstance (docs/SIDEBAR.md M1): it
+// is a background app with no element, and deliverToInstance parks
+// messages for element-less instances in pendingMessages — so routing its
+// state pushes down that path would queue them unboundedly for the life
+// of the tab. The intercept keys on the app id the router attested in
+// app.declared, never on the payload's shape.
 function deliverAppMsg(client: RouterClient, msg: ShellAppMsgDeliver) {
+  if (client.appIDs.get(msg.instance_id) === HOSTGW_APP_ID) {
+    ingestHostgwMsg(client.origin, msg.data);
+    return;
+  }
   deliverToInstance(compoundInstanceId(client.origin, msg.instance_id), msg.data);
+}
+
+// installHostgwSubscriber asks a router's awareness gateway for its host's
+// state, now and on every reconnect.
+// Addressed by app id, which resolveRecipient spawns on demand. Sent on
+// every transition to 'open', which covers the first attach AND every
+// reconnect: snapshots are full-replace, so a redundant subscribe is free,
+// whereas a missed one leaves the rail quietly stale — the gateway is
+// already running by then and has no reason to re-push on its own.
+function installHostgwSubscriber(client: RouterClient): void {
+  client.conn.onState((state) => {
+    if (state !== 'open') return;
+    client.conn.sendCtrl({
+      t: 'app_msg.send',
+      to: { app_id: HOSTGW_APP_ID },
+      data: { kind: 'subscribe' },
+    });
+  });
 }
 
 // Mirror Solid's windows store into the cross-element Sub so vanilla
@@ -971,14 +1013,21 @@ createEffect(() => {
 });
 
 function handleAppDeclared(client: RouterClient, msg: ShellAppDeclared): void {
-  if ((msg.manifest as { id?: string } | undefined)?.id === DISPLAY_APP_ID) {
+  const appID = (msg.manifest as { id?: string } | undefined)?.id ?? '';
+  if (appID === DISPLAY_APP_ID) {
     sentDisplayMetrics.delete(client.origin);
     publishDisplayMetrics(client);
   }
+  // Record the owning app id for EVERY declared instance, background
+  // included — this is how deliverAppMsg recognises chrome-bound traffic
+  // from a windowless app (docs/SIDEBAR.md M1). app.declared fires for
+  // every instance, and a late-connecting shell is told about the ones
+  // already running, so this map is complete for both.
+  if (appID) client.appIDs.set(msg.instance_id, appID);
   // Background services have no FE — no bundle, no element, no mount.
-  // The shell ignores the declaration: the BE talks to other apps via
-  // cross-app app_msg, and nothing on this side ever needs to address
-  // it by element name.
+  // The shell ignores the rest of the declaration: the BE talks to other
+  // apps via cross-app app_msg, and nothing on this side ever needs to
+  // address it by element name.
   if ((msg.surface as string) === 'background') {
     return;
   }
@@ -1493,6 +1542,12 @@ declare global {
       // About screen render it. null until the first link.stats arrives.
       linkStats(): LinkHealth | null;
       onLinkStats(cb: (h: LinkHealth) => void): () => void;
+      // Host-awareness state, merged across origins (docs/SIDEBAR.md M1):
+      // origin → service → that service's latest snapshot, fed by each
+      // host's com.wash.hostgw. Read-only by design — the rail routes
+      // attention with this and deep-links to an app for control.
+      hostgwState(): HostgwMap;
+      onHostgwState(cb: (m: HostgwMap) => void): () => void;
       log(level: 'error' | 'warn' | 'info' | 'debug', source: string, msg: string, stack?: string): void;
       openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
       // interactive=true tags the frame CLASS_INTERACTIVE instead of the
@@ -1726,6 +1781,8 @@ window.wash = {
   onScreenSize: (cb) => screenSub.on(cb),
   linkStats: () => linkHealth(),
   onLinkStats: (cb) => onLinkHealth(cb),
+  hostgwState: () => hostgwState(),
+  onHostgwState: (cb) => onHostgwState(cb),
   log(level, source, msg, stack) {
     shellLog(level, source, msg, stack);
   },

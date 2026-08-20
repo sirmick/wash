@@ -45,7 +45,7 @@ const APP_BINS = {
   music: ['wash-music'], radio: ['wash-radio'], audio: ['wash-audio'],
   connect: ['wash-connect'], remote: ['wash-remote'],
   imageview: ['wash-imageview'],
-  agentd: ['wash-agentd'], ai: ['wash-ai'],
+  agentd: ['wash-agentd'], ai: ['wash-ai'], hostgw: ['wash-hostgw'],
   vscode: ['wash-vscode', 'wash-vscode-workbench'],
   display: ['wash-display'],
 } satisfies Record<string, readonly string[]>;
@@ -304,6 +304,13 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   // an agent. Staged everywhere for the same reason as wash-fswatch — a
   // missing binary would silently drop every roster event.
   bins.push(binPath('wash-agentd'));
+  // wash-hostgw is the host-awareness gateway (docs/SIDEBAR.md M1): the shell
+  // subscribes to it by app id on every attach, so the router spawns it on
+  // first reference. Staged everywhere for the same reason as the two above —
+  // and specifically so a router that was never asked for it doesn't answer
+  // the shell's subscribe with an "app_id not registered" log line that reads
+  // like a failure in whatever spec happens to be running.
+  bins.push(binPath('wash-hostgw'));
   const appsDir = stageApps(bins);
   // wash-priv claims a reservedID (com.wash.priv) which the registry
   // refuses from a non-root-owned binary by default. The e2e dir is
