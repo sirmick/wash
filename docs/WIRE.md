@@ -164,10 +164,26 @@ app with no bundles emits just `header\n`.
 - `element` — the custom-element tag the app's web component registers.
   MUST start with `wash-app-` so the global custom-element registry stays
   namespaced.
-- `surface` — `"window"` (default; the app appears as a floating window)
-  or `"desktop"` (the app's element mounts as the root desktop surface).
-  Exactly one running app may declare `surface:"desktop"` — the session
-  app.
+- `surface` — one of:
+  - `"window"` (default) — the app appears as a floating window.
+  - `"desktop"` — the app's element mounts as the root desktop surface.
+    Exactly one running app may declare it: the session app.
+  - `"background"` — a service tier app: no window, no launcher entry, no
+    FE bundle. Autoboots on first shell connect; other apps consume it via
+    cross-app `app_msg`.
+  - `"modal"` — a service that *paints* (docs/SIDEBAR.md M4). Autoboots
+    and stays out of the launcher like `background`, but ships an FE that
+    the **shell** draws in its own layer above every window, desktop
+    blurred behind it. `element` is required; `icon` is not, since it
+    never reaches a launcher.
+
+    A modal **never opens itself**: the service raises a toast and a rail
+    badge, and the modal appears only when the user summons it. That rule
+    is the anti-phishing property — an ordinary window cannot blur the
+    desktop or draw chrome's host label, so a prompt appearing unbidden is
+    by construction a forgery. Singleton by nature: the blur claims the
+    whole seat's attention and two at once would misrepresent that.
+    `com.wash.priv` is the first.
 - `icon` — inline data URI, ≤ 64 KiB. SVG strongly preferred.
 - `instancing` — `"multi"` (one process per window, the default) or
   `"singleton"` (at most one running instance globally, addressable by
@@ -259,7 +275,7 @@ Carries window/lifecycle control and the FE half of app messages.
 **Router → shell:**
 
 - `{"t":"catalog","apps":[…]}` — initial app listing on connect.
-- `{"t":"app.declared","instance_id":"…","element":"wash-app-about","surface":"desktop|window","manifest":{…}}`
+- `{"t":"app.declared","instance_id":"…","element":"wash-app-about","surface":"desktop|window|background|modal","manifest":{…}}`
 - `{"t":"session.snapshot","windows":[…],"app_state":{…}}` — the WM
   snapshot the shell rebuilds its window list from.
 - `{"t":"session.patch","patches":[…]}` — incremental WM updates

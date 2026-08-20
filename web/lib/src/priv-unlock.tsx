@@ -12,8 +12,9 @@
 
 import type { Component, JSX } from 'solid-js';
 import { Show, createSignal } from 'solid-js';
-import { Button, tokens } from '@wash/ui';
-import { b64decode, b64encode, encryptPassword } from './privCrypto';
+import { Button } from './button';
+import { tokens } from './tokens';
+import { b64decode, b64encode, encryptPassword } from './priv-crypto';
 
 export interface PrivUnlockState {
   /** Base64-encoded BE pubkey from the need_password event. */

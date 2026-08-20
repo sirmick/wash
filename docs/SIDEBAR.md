@@ -145,7 +145,7 @@ The M2 rework cost (§M2, the GH #21 verb set) was accepted on this basis.
 |---|---|---|---|
 | **Agents** | → `com.wash.ai` — **DONE** (M2) | running count + pending-ask count + a per-host door; asks stay answerable here (§3.2(8)) | the app grew a roster pane and the key-addressed verbs |
 | **Bulk** | → `com.wash.fm` (M3) | active jobs + aggregate progress, per host | **only** consumer is `apps/fm/be/upload.go` — single-app today |
-| **Priv** | → prompt-as-window-app on the requesting host (M4) | pending escalation count, per host | irreducibly cross-app on the *producing* side: `journal`, `syslogs`, `packages` |
+| **Priv** | → wash-priv's own **modal surface** — **DONE** (M4) | pending escalation count, per host; local yes/no stays (§3.2(8)) | irreducibly cross-app on the *producing* side: `journal`, `syslogs`, `packages` — but the *prompt* is one thing, so only where it renders moved |
 | **Notify** | stays chrome | merged, host-tinted — **DONE** (M0/M1) | cross-app by definition; transport already works (§1.1) |
 | **Net** | → `com.wash.net` (M5) | per-host status | app already is the control surface |
 | **About** | per-host | A's by default | a machine's identity; optional B card |
@@ -590,6 +590,69 @@ answered by the summon rule above):
   semantics, and what the requesting app sees);
 - multi-seat races: two of the user's seats summon the same ask — first answer
   wins, but the second window must degrade honestly.
+
+#### As built (2026-08-20)
+
+Two commits, and the first was not in the plan at all.
+
+**M4a — wash-priv had never raised a toast.** The plan assumed the problem
+was that a remote escalation could not be *answered*. It was worse: a pending
+request announced itself only through the rail's priv widget, which reads this
+host's queue through the session BE gateway, so an escalation raised on a
+remote host was **invisible** — an app blocked on a question nobody was shown.
+One `c.Warn` at the point a request is about to wait closes it. Placed there
+and not at the top of `enqueue`, because auto-approved and app-granted requests
+never involve a human and toasting those would train the user to dismiss the
+ones that matter.
+
+**M4b — `surface: "modal"`, and priv became one.** The plan said "a window app
+on the requesting host", following the wash-connect precedent. The user's
+refinement was better: no launcher icon, starts with the session, single
+window, and it **blurs the desktop and presents itself** — which turns out to
+be the anti-phishing mechanism the plan was still missing. An ordinary window
+cannot blur the desktop or draw chrome's host label, so a chrome-drawn modal is
+something an app is structurally unable to forge.
+
+That made a separate face app unnecessary: `modal` is "a service that can
+paint", so **`com.wash.priv` changed surface** rather than gaining a sibling.
+It still autoboots, still has no launcher entry, and the escalation pipeline is
+untouched — it just paints its own queue now.
+
+Notes worth keeping:
+
+- **The summon rule is the security property, so it lives in chrome.**
+  `web/shell/src/modal.tsx` registers a modal on `app.declared` and renders
+  nothing until summoned; the toast's activation path summons rather than
+  launches. A modal that could open itself would be a modal an attacker could
+  imitate.
+- **No `WindowID`.** A modal is not WM-managed — no taskbar entry, no
+  geometry, no focus ring — so the shell mounts its element directly in its own
+  layer. That kept the router side to three branches (autoboot, catalog,
+  respawn bookkeeping) and needed no wire verb.
+- **`<Show>` unkeyed hands back a *stale accessor*** once the condition goes
+  falsy; reading it during teardown throws, which dismiss-on-detach hit every
+  time. `keyed` fixes it and gives the right identity semantics too — summoning
+  a different host's modal rebuilds the frame instead of mutating the one on
+  screen.
+- **The FE cannot use priv's `subscribe` handler.** It is `HandleFromVoid`,
+  and an own-FE message carries no attested sender, so it would be dropped
+  silently — the same trap M1 recorded. Priv's `broadcast` now also sends to its
+  own FE, which needs no subscription and which `relayAppMsgToShell` fans to
+  every attached shell, so a remote priv's queue reaches the desktop that
+  summoned it. `get_state` was added for the same reason as a `HandleVoid`:
+  the modal is summoned long after the escalation was enqueued, so without a
+  snapshot it would render empty until the next event happened to arrive.
+- **The password stopped transiting the session app.** `PrivWidget`,
+  `PrivUnlockOverlay` and the crypto moved to `@wash/ui` (shared with the rail,
+  as `BulkJobs` was in M3a), and the plaintext now lives only in wash-priv's
+  own bundle — a trust hop the old sidebar overlay's header comment flagged.
+- **priv moved `SVC_APPS` → `FE_APPS`** in the Makefile, which reorders `BINS`,
+  so `packaging/wash.binaries` needed regenerating; `check-pkg-binaries` caught
+  it. The `@noble/*` crypto deps moved to `@wash/ui` with the components.
+
+Still open from the original M4 list: ask expiry, and the multi-seat race
+(two seats summoning the same ask — first answer wins, second must degrade
+honestly).
 
 ### M5 — Net, About per-host
 

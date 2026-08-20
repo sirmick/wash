@@ -10,6 +10,7 @@ const (
 	SurfaceWindow     = wire.SurfaceWindow
 	SurfaceDesktop    = wire.SurfaceDesktop
 	SurfaceBackground = wire.SurfaceBackground
+	SurfaceModal      = wire.SurfaceModal
 
 	InstancingMulti     = wire.InstancingMulti
 	InstancingSingle    = wire.InstancingSingle

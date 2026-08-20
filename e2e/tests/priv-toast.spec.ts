@@ -69,4 +69,29 @@ test('a request that needs a human raises a toast naming who wants what', async 
   // Warn, not info: a blocked escalation is a claim on attention, the
   // same call bulk makes for a stalled copy.
   await expect(toast).toHaveAttribute('data-level', 'warn');
+
+  // Nothing is on screen yet. wash-priv autoboots with the session, so
+  // its modal has been READY this whole time and has still not painted —
+  // that is the anti-phishing rule holding (docs/SIDEBAR.md M4): a prompt
+  // that appears unbidden is, by construction, not this one.
+  await expect(page.locator('[data-testid="modal-layer"]')).toHaveCount(0);
+
+  // Summon it. The toast's activation resolves the owning app from
+  // app.declared — the router's word — and finds a modal there, so it
+  // summons rather than launching a window.
+  await toast.click();
+
+  const modal = page.locator('[data-testid="modal-layer"]');
+  await expect(modal).toBeVisible({ timeout: 10_000 });
+  await expect(modal).toHaveAttribute('data-app', PRIV_APP_ID);
+  // Chrome draws the host line, not the app: this is the part an
+  // impersonating window cannot reproduce.
+  await expect(page.locator('[data-testid="modal-host"]')).toContainText('this machine');
+  // And the queue rendered inside it is wash-priv's own FE, so the
+  // request is answerable here.
+  await expect(page.locator('[data-testid="modal-body"] wash-app-priv')).toBeAttached({ timeout: 10_000 });
+
+  // Escape puts it away without answering — the request stays queued.
+  await page.keyboard.press('Escape');
+  await expect(modal).toHaveCount(0);
 });

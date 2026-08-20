@@ -31,6 +31,8 @@
 package priv
 
 import (
+	"embed"
+	"io/fs"
 	"context"
 	"github.com/sirmick/wash/internal/version"
 	"log"
@@ -47,6 +49,9 @@ import (
 // shadow the real wash-priv to inherit its trust signal.
 const AppID = "com.wash.priv"
 
+//go:embed all:assets
+var assetsFS embed.FS
+
 var (
 	st  *State
 	cfg Config
@@ -54,23 +59,48 @@ var (
 )
 
 func init() {
+	sub, err := fs.Sub(assetsFS, "assets")
+	if err != nil {
+		panic("wash-priv: assets: " + err.Error())
+	}
 	def = &sdk.AppDef{
 		Manifest: sdk.Manifest{
 			ID:              AppID,
 			Name:            "Privileged Actions",
 			Version:         version.Version,
 			ProtocolVersion: sdk.ProtocolVersion,
-			Surface:         sdk.SurfaceBackground,
+			// Modal, not background (docs/SIDEBAR.md M4). wash-priv is
+			// still a service — it autoboots, it has no launcher entry,
+			// nothing about the escalation pipeline changes — but it now
+			// PAINTS its own approval queue, in a layer the shell draws
+			// with the desktop blurred behind it.
+			//
+			// That is what makes the prompt answerable on the host that
+			// raised it, and it is also the security story: an ordinary
+			// window cannot blur the desktop or draw chrome's host label,
+			// so a chrome-drawn modal is something an app is structurally
+			// unable to forge. The password now transits priv's OWN FE
+			// rather than the session app's — a trust hop the old
+			// sidebar overlay's own comment flagged.
+			Element:         "wash-app-priv",
+			Surface:         sdk.SurfaceModal,
 			Instancing:      sdk.InstancingSingleton,
 			Capabilities:    []string{sdk.CapPrepareSpawn},
 		},
+		Assets:               sub,
 		OnReady:              onReady,
 		OnPrepareSpawnResult: onPrepareSpawnResult,
 	}
 	registry.Register(&registry.App{
 		Name:     "wash-priv",
 		Manifest: def.Manifest,
-		Run:      run,
+		// Assets is what the MULTICALL build serves the FE bundle from —
+		// omitting it registers the app, starts it, and then serves no
+		// bundle, so the element is never defined and the modal renders
+		// nothing. Standalone builds probe and are unaffected, which is
+		// why that failure mode only ever shows up in the multicall e2e.
+		Assets: def.Assets,
+		Run:    run,
 	})
 }
 
@@ -232,6 +262,22 @@ func registerHandlers(b *sdk.Bus) {
 	// the BE-level guard is the registry's reserved-id check at
 	// internal/router/registry.go:162, which still gates who can
 	// claim com.wash.priv at all.
+	// get_state: the modal's own-FE snapshot request (docs/SIDEBAR.md M4).
+	// HandleVoid, not HandleFromVoid — an own-FE message carries no
+	// attested sender, so the From variant would drop it silently. That
+	// is safe here precisely because it is read-only; every mutating verb
+	// below stays exactly as it was.
+	//
+	// It exists because the modal is summoned long AFTER the service
+	// booted: the escalation that raised the toast has already been
+	// enqueued, so without a snapshot the queue would render empty until
+	// the next event happened to arrive.
+	sdk.HandleVoid(b, "get_state", func(c *sdk.Conn, _ string, _ emptyReq) error {
+		st.mu.Lock()
+		snap := st.stateSnapshotLocked()
+		st.mu.Unlock()
+		return c.SendAppMsg(snap)
+	})
 	sdk.HandleVoid(b, "approve", func(c *sdk.Conn, _ string, req approveReq) error {
 		st.HandleApprove(c, req.ReqID)
 		return nil

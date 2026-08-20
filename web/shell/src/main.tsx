@@ -26,6 +26,7 @@ import {
   parseInstanceId,
   compoundInstanceId,
 } from './clients';
+import { ModalLayer, registerModal, summonModal, hasModal, forgetModalsFor } from './modal';
 import { beginBundle, finishBundle, pushBundleBytes } from './assets';
 import { RelayChannelSocket } from './relay-socket';
 import { tokens } from '@wash/ui';
@@ -96,7 +97,7 @@ interface ShellAppDeclared {
   t: 'app.declared';
   instance_id: string;
   element: string;
-  surface: 'background' | 'desktop' | 'window';
+  surface: 'background' | 'desktop' | 'window' | 'modal';
   manifest: any;
 }
 
@@ -387,14 +388,30 @@ function launchOwningApp(instanceID: string): void {
   // no element to mount), so the check would silently never fire — it
   // didn't, and the toast launched the service instead of the file
   // manager. The explicit table is the whole test.
-  window.wash.launchOn(origin, notifyOpeners[appID] ?? appID);
+  const target = notifyOpeners[appID] ?? appID;
+  // A service that fronts a MODAL summons it instead of launching a
+  // window — this is the user-summon half of the anti-phishing rule
+  // (docs/SIDEBAR.md M4): the modal never opens itself, and the only way
+  // it ever appears is a gesture that starts here. Falls through to a
+  // normal launch when the host has no such modal declared, so a mixed
+  // fleet (an older host without it) still lands somewhere useful.
+  if (hasModal(origin, target)) {
+    summonModal(origin, target);
+    return;
+  }
+  window.wash.launchOn(origin, target);
 }
 
 // notifyOpeners maps a windowless service to the app that speaks for it,
 // so activating its toast lands somewhere useful. Deliberately a tiny
-// explicit table rather than a manifest field: there are two entries, and
-// a service claiming its own opener would be a service choosing what the
-// desktop launches.
+// explicit table rather than a manifest field, and the reasoning got
+// sharper with modals: a field on the SERVICE would let a service choose
+// what the desktop launches, and a field on the FACE ("I speak for
+// com.wash.priv") would let any app claim the one surface where being
+// impersonated matters most. A table in the shell can do neither.
+//
+// A service that fronts a modal needs no entry: the modal is the service's
+// OWN app id, so the ?? fallback resolves it and hasModal summons it.
 const notifyOpeners: Record<string, string> = {
   'com.wash.bulk': 'com.wash.fm',
 };
@@ -967,6 +984,9 @@ function detachClient(origin: Origin): void {
   // Awareness state for a host that is gone is not stale, it is wrong —
   // drop the whole cell so no badge outlives its host (SIDEBAR.md §3.2(4)).
   dropHostgwOrigin(origin);
+  // Same reasoning for a summoned modal: a blur belonging to a host that
+  // is gone would trap the seat behind a question nobody can answer.
+  forgetModalsFor(origin);
   sentDisplayMetrics.delete(origin);
   unregisterClient(origin);
 }
@@ -1082,6 +1102,15 @@ function handleAppDeclared(client: RouterClient, msg: ShellAppDeclared): void {
     return;
   }
   client.instances.set(msg.instance_id, { element: msg.element, surface: msg.surface });
+  if ((msg.surface as string) === 'modal') {
+    // Registered, not shown. A modal boots with the session so it is
+    // READY when an escalation lands, but it paints only on summon —
+    // that rule is what makes an unbidden prompt provably a forgery
+    // (docs/SIDEBAR.md M4). The bundle is fetched lazily on first
+    // summon, via the same waitForBundle the window path uses.
+    if (appID) registerModal({ origin: client.origin, instanceID: msg.instance_id, element: msg.element, appID });
+    return;
+  }
   if (msg.surface === 'desktop') {
     // Only the LOCAL router owns the desktop chrome; a remote host's
     // desktop surface is ignored (we composite its windows, not its shell).
@@ -1395,6 +1424,9 @@ const App = () => (
     <div data-testid="wash-cam" style={camStyle()}>
       <For each={windows}>{(w) => <FloatingWindow win={w} onClose={onWindowClose} />}</For>
     </div>
+    {/* Above the camera, so the blur covers every window rather than
+        riding along with the viewport transform. */}
+    <ModalLayer />
     <ConnectionBanner state={connState()} />
   </>
 );
@@ -1751,6 +1783,13 @@ window.wash = {
   fetchAsset: (path) => washFetch((msg) => conn.sendCtrl(msg), path),
   catalogFor: (origin) => catalogFor(origin),
   onRemoteCatalog: (cb) => remoteCatalogSub.on((ev) => { if (ev) cb(ev); }),
+  // summonModal raises a modal-surface app the user asked for, on the host
+  // that owns it. Returns false when that host has no such modal, so the
+  // caller can fall back rather than blur the screen over nothing. The
+  // modal never appears any other way (docs/SIDEBAR.md M4).
+  summonModal(origin: string, appID: string): boolean {
+    return summonModal(origin, appID);
+  },
   launchOn(origin, appID) {
     const client = clientForOrigin(origin);
     if (!client) {

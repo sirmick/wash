@@ -146,6 +146,21 @@ const (
 	// are the v1 background services; future audio mixer / clipboard
 	// daemon / network agent take the same slot.
 	SurfaceBackground = "background"
+	// SurfaceModal is a session-modal app (docs/SIDEBAR.md M4): a
+	// service that can PAINT. It autoboots and stays out of the
+	// launcher like a background app, but ships an FE, and the shell
+	// draws it in its own layer above every window with the desktop
+	// blurred behind it — chrome-drawn modality an ordinary window
+	// cannot fake, which is the whole point for wash-priv.
+	//
+	// Never opens itself. The service raises a toast + a rail badge;
+	// the modal appears only when the user summons it. That rule IS
+	// the anti-phishing property: a real prompt structurally cannot
+	// appear unbidden, so one that does is a forgery.
+	//
+	// Singleton by nature — the blur claims the whole seat's
+	// attention, and two of them at once would be a lie about that.
+	SurfaceModal = "modal"
 )
 
 // Instancing values (WIRE.md §5.1, extended).
@@ -374,7 +389,7 @@ func ValidateManifest(m *Manifest) error {
 		}
 	}
 	switch m.Surface {
-	case SurfaceWindow, SurfaceDesktop, SurfaceBackground:
+	case SurfaceWindow, SurfaceDesktop, SurfaceBackground, SurfaceModal:
 	default:
 		return fmt.Errorf("invalid surface %q", m.Surface)
 	}
@@ -383,7 +398,10 @@ func ValidateManifest(m *Manifest) error {
 	default:
 		return fmt.Errorf("invalid instancing %q", m.Instancing)
 	}
-	if m.Surface != SurfaceBackground {
+	// A modal never reaches the launcher, so an icon would have nowhere
+	// to render — same reasoning that exempts background. It still needs
+	// an Element (checked above), because unlike background it paints.
+	if m.Surface != SurfaceBackground && m.Surface != SurfaceModal {
 		if m.Icon == "" {
 			return errors.New("icon is empty (must be inline data URI)")
 		}

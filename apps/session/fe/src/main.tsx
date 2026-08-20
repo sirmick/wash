@@ -21,7 +21,8 @@ import {
   tokens,
   washAssetUrl,
 } from '@wash/ui';
-import type { BulkJob, Pack, RosterAsk, RosterRow } from '@wash/ui';
+import { PrivWidget, PrivUnlockOverlay } from '@wash/ui';
+import type { BulkJob, Pack, PrivReq, PrivUnlockState, RosterAsk, RosterRow } from '@wash/ui';
 import { toBlob } from 'html-to-image';
 import { Camera, Search, PanelRightOpen } from 'lucide-solid';
 import { Sidebar, type SidebarMode } from './sidebar/Sidebar';
@@ -30,14 +31,12 @@ import { ViewportWidget } from './sidebar/ViewportWidget';
 import { AboutWidget, type AboutHostStats } from './sidebar/AboutWidget';
 import { NotifyWidget, type NotifyEntry } from './sidebar/NotifyWidget';
 
-import { PrivWidget, type PrivReq } from './sidebar/PrivWidget';
 import { NetWidget, type NetState, type NetIface } from './sidebar/NetWidget';
 import { RemoteWidget, type RemoteHost } from './sidebar/RemoteWidget';
 import { reconcileRemoteAttachments } from './remote-reconcile';
 import { LinkWidget } from './sidebar/LinkWidget';
 import { AudioWidget, type AudioState } from './sidebar/AudioWidget';
 import { ClipboardWidget } from './sidebar/ClipboardWidget';
-import { PrivUnlockOverlay, type PrivUnlockState } from './sidebar/PrivUnlockOverlay';
 import {
   SERVICE_AGENT,
   SERVICE_BULK,

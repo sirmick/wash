@@ -5,7 +5,7 @@
 
 import { test, expect, afterEach } from 'vitest';
 import { render, fireEvent, cleanup } from '@solidjs/testing-library';
-import { PrivWidget, type PrivReq } from './PrivWidget.tsx';
+import { PrivWidget, type PrivReq } from './priv-queue.tsx';
 
 afterEach(cleanup);
 

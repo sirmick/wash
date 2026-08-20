@@ -93,12 +93,15 @@ bug list — all fully landed; see `git log` if you need their content.)
     into fm. The rail still holds bulk ids for the LOCAL pop-open only,
     because hostgw's rise-detector skips LOCAL; folding that in is M6.
     As-built notes: SIDEBAR.md M3 "As built".
-  - [ ] **M4 — priv prompt as a window app on the requesting host** (priv's
-    face app, the wash-connect precedent; producers untouched). §10's
-    encryption becomes priv-internal (FE→its own BE) instead of a
-    cross-component protocol — NOT unnecessary: app FEs run in the seat's
-    browser. Prompts are user-summoned (badge/toast → launchOn), never
-    self-opening — itself the anti-phishing answer.
+  - [x] **M4 — priv answers where the escalation is** — DONE 2026-08-20.
+    M4a: wash-priv had never toasted at all, so a remote escalation was
+    invisible, not merely unanswerable. M4b: a new `surface: "modal"` —
+    autoboots and hides like a service, but the SHELL draws it above every
+    window with the desktop blurred, which is the anti-phishing mechanism
+    (a window cannot blur the desktop or draw chrome's host label). No
+    separate face app needed: com.wash.priv changed surface. Prompts are
+    user-summoned, never self-opening. The password now transits priv's
+    own FE, not the session app's. As-built: SIDEBAR.md M4 "As built".
   - [ ] **M5/M6 — Net + About per-host; delete the dead gateways.**
 - [ ] **Clipboard sync hub; cross-origin z-band** (focused-host windows on
   top, below chrome z 9999/10000) — the rest of the old M4/M5 entry.

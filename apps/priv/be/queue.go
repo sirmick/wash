@@ -222,6 +222,15 @@ func (s *State) broadcast(c *sdk.Conn, payload map[string]any) {
 	for _, inst := range subs {
 		_ = c.SendAppMsgTo(wire.Recipient{InstanceID: inst}, payload)
 	}
+	// ...and to our own FE, which is the modal (docs/SIDEBAR.md M4).
+	//
+	// It cannot go through the subscribe handler above: that is
+	// HandleFromVoid, and an own-FE message carries no attested sender,
+	// so it would be dropped silently — the same trap M1 hit. The own-FE
+	// channel needs no subscription anyway, and the router fans it to
+	// every attached shell, so a REMOTE priv's queue reaches the desktop
+	// that summoned it over the connection already open.
+	_ = c.SendAppMsg(payload)
 }
 
 // stateSnapshotLocked returns the current full state in wire shape.

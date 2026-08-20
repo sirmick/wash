@@ -20,7 +20,8 @@
 
 import type { Component } from 'solid-js';
 import { For, Show, createMemo, createSignal } from 'solid-js';
-import { tokens, washAssetUrl } from '@wash/ui';
+import { tokens } from './tokens';
+import { washAssetUrl } from './assets';
 
 export type PrivStatus = 'queued' | 'running' | 'done' | 'rejected' | 'error';
 export type PrivKind = 'run' | 'spawn' | 'run_inline';

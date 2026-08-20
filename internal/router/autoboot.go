@@ -70,7 +70,12 @@ func (r *Router) EnsureSessionRunning(ctx context.Context) error {
 // the next shell connect can succeed.
 func (r *Router) EnsureBackgroundAppsRunning(ctx context.Context) {
 	for _, entry := range r.reg.Entries() {
-		if !entry.Enabled() || entry.Manifest.Surface != SurfaceBackground {
+		// Modal apps boot here too (docs/SIDEBAR.md M4): wash-priv's face
+		// must already be running when an escalation arrives, or the
+		// summon would spawn a process while the user waits — and a
+		// prompt that takes a second to appear is a prompt people learn
+		// to click through.
+		if !entry.Enabled() || !startsWithSession(entry.Manifest.Surface) {
 			continue
 		}
 		r.startBackgroundApp(entry)
@@ -152,4 +157,11 @@ func (r *Router) EnsureInitialAppRunning(ctx context.Context) error {
 		}
 	}()
 	return nil
+}
+
+// startsWithSession reports whether a surface autoboots on first shell
+// connect. Background and modal both do; they differ only in whether
+// they can paint.
+func startsWithSession(surface string) bool {
+	return surface == SurfaceBackground || surface == SurfaceModal
 }

@@ -470,7 +470,12 @@ func (r *Router) catalog() []wire.ShellCatalogApp {
 			// have no name to render.
 			continue
 		}
-		if e.Manifest.Surface == SurfaceDesktop || e.Manifest.Surface == SurfaceBackground {
+		// Desktop is the session itself; background can't paint; modal
+		// paints only when summoned by the service it fronts, never from
+		// a launcher click — that unbidden-is-forgery rule is the whole
+		// anti-phishing property, and a launcher row would break it.
+		if e.Manifest.Surface == SurfaceDesktop || e.Manifest.Surface == SurfaceBackground ||
+			e.Manifest.Surface == SurfaceModal {
 			continue
 		}
 		if e.Manifest.Hidden && !r.cfg.ShowHidden {
@@ -836,7 +841,7 @@ func (r *Router) tearDown(inst *AppInstance) {
 			r.session.started = false
 			r.sessionMu.Unlock()
 		}
-		if inst.Manifest != nil && inst.Manifest.Surface == SurfaceBackground {
+		if inst.Manifest != nil && startsWithSession(inst.Manifest.Surface) {
 			r.backgroundMu.Lock()
 			delete(r.backgroundStarted, inst.AppID)
 			r.backgroundMu.Unlock()

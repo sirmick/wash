@@ -63,9 +63,12 @@ SC      := $(OUT)/singlecall
 # compositor; the gated `test` app is woven in where TEST_APP applies.
 FE_APPS := session about connect imageview term fm edit vscode-workbench \
            settings top disks journal syslogs services packages net \
-           washamp music radio ai
+           washamp music radio ai priv
 FE_PANEL_APPS := vscode netd remote
-SVC_APPS := bulk priv notify audio fswatch agentd hostgw
+# priv left SVC_APPS in docs/SIDEBAR.md M4: it is still a service (autoboots,
+# no launcher entry) but now ships an FE for its session-modal approval queue,
+# so it needs the web/embed rules the FE apps get.
+SVC_APPS := bulk notify audio fswatch agentd hostgw
 
 # Every app that embeds an FE asset bundle (windowed + panel). Drives the
 # embed-stamp / vendor-sync / multicall-stamp derivations. The gated `test` app

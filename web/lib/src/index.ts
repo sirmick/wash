@@ -56,6 +56,14 @@ export { BulkJobs } from './bulk-jobs';
 export type { BulkJobsProps, BulkJob } from './bulk-jobs';
 export { BulkConflictOverlay } from './bulk-conflict';
 export type { BulkConflictOverlayProps, BulkConflict } from './bulk-conflict';
+// wash-priv's queue + password modal. Shared since docs/SIDEBAR.md M4:
+// the rail renders them for THIS host, and com.wash.priv's own modal
+// renders them for whichever host raised the escalation.
+export { PrivWidget } from './priv-queue';
+export type { PrivWidgetProps, PrivReq, PrivStatus, PrivKind } from './priv-queue';
+export { PrivUnlockOverlay } from './priv-unlock';
+export type { PrivUnlockOverlayProps, PrivUnlockState } from './priv-unlock';
+export { b64encode, b64decode, encryptPassword } from './priv-crypto';
 export type { AgentRosterProps, RosterRow, RosterAsk, RosterSession } from './agent-roster';
 export { defineWashApp } from './define-app';
 export { ensureScrollbarStyles, WASH_SCROLL_CLASS, WASH_SCROLL_GUTTER_CLASS } from './scrollbars';
