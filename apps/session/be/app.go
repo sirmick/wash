@@ -101,10 +101,13 @@ func onReady(c *sdk.Conn, _ string, _ uint32) {
 	registerNetGateway(bus)
 	registerAudioGateway(bus)
 	registerRemoteGateway(bus)
+	// The agent gateway is down to subscribe/unsubscribe + answer: the
+	// roster's per-session verbs moved into com.wash.ai (docs/SIDEBAR.md
+	// M2c), where the sender is attested by construction and the app can
+	// therefore act on ANY host. answer stays because the rail still
+	// answers permission questions — a named exception (§3.2(8)): one
+	// click to unblock an agent is the thing the rail exists for.
 	registerAgentGateway(bus)
-	registerAgentResume(bus)
-	registerAgentReattach(bus)
-	registerAgentKeyVerbs(bus)
 	// state forwarder: notify, bulk, and priv all push
 	// {kind:"state", state:...} cross-app. Branch on the sender's
 	// AppID to re-brand for the FE under a service-specific kind.
@@ -226,10 +229,14 @@ func registerAudioGateway(bus *sdk.Bus) {
 // registerAgentGateway forwards the sidebar's subscribe/unsubscribe to
 // the com.wash.agentd coding-agent roster (docs/AGENT_TERM.md §7). Its
 // state pushes return as {kind:"state"} and are re-branded to
-// "agent.state" by the shared state forwarder. Nothing else flows through
-// here: clicking a roster row focuses a window, which the FE does
-// directly through the WM — the roster is read-only from the sidebar's
-// point of view.
+// "agent.state" by the shared state forwarder.
+//
+// Since docs/SIDEBAR.md M2c the rail no longer renders the roster — that
+// moved into com.wash.ai, which reaches its own host's agentd with a
+// router-attested sender and can therefore act on any host, which this
+// gateway never could. What the rail still needs from agentd is the state
+// (for its per-host counts) and agent_answer (§3.2(8): answering a
+// permission question stays one click, from the rail).
 func registerAgentGateway(bus *sdk.Bus) {
 	sdk.HandleVoid(bus, "agent_subscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
 		return conn.SendAppMsgTo(wire.Recipient{AppID: AgentdAppID}, map[string]any{"kind": "subscribe"})
@@ -254,85 +261,6 @@ func registerAgentGateway(bus *sdk.Bus) {
 			"rule":     req.Rule,
 		})
 	})
-}
-
-// agent_reattach opens a window onto a session that is STILL RUNNING but
-// has no window pointing at it — the detach half of the close dialog
-// (docs/AGENT_APP.md §9). Distinct from resume, which reopens one that
-// ended.
-func registerAgentReattach(bus *sdk.Bus) {
-	sdk.HandleVoid(bus, "agent_reattach", func(conn *sdk.Conn, _ string, req agentReattachReq) error {
-		if req.Key == "" {
-			return nil
-		}
-		return conn.SendAppMsgTo(wire.Recipient{AppID: AgentdAppID}, map[string]any{
-			"kind": "agent_reattach",
-			"key":  req.Key,
-		})
-	})
-}
-
-type agentReattachReq struct {
-	Key string `json:"key"`
-}
-
-// registerAgentKeyVerbs forwards the rest of the roster's per-session
-// verbs. agentd has had all three since the ACP tier landed; until now
-// nothing could reach them, because the sidebar was the only caller and
-// the gateway stopped at reattach (GH #21 — the rail logged no backend
-// request because it had no button, not because it lost its state).
-//
-// Each is keyed by the roster key rather than the session id: these act
-// on a session that is RUNNING, and the key is what the roster row
-// carries. agentd no-ops on a key it no longer hosts, so a click that
-// races a session ending is harmless.
-func registerAgentKeyVerbs(bus *sdk.Bus) {
-	// agent_detach: keep the session running, let its window go. The
-	// roster row stays and gains a Reattach affordance.
-	forward(bus, "agent_detach")
-	// agent_cancel: end the current TURN, not the session. The agent
-	// acknowledges with stopReason=cancelled and stays available.
-	forward(bus, "agent_cancel")
-	// agent_stop: end the session and its adapter process. The
-	// destructive one — the FE confirms before sending it.
-	forward(bus, "agent_stop")
-}
-
-// forward registers one key-addressed passthrough to agentd. The session
-// BE adds no policy of its own here: it is the desktop speaking for the
-// person in front of it, and its only job is to make the sender
-// attestation correct (shell-originated sends carry no router-attested
-// From, so the service would reject a direct sendAppMsgTo).
-func forward(bus *sdk.Bus, kind string) {
-	sdk.HandleVoid(bus, kind, func(conn *sdk.Conn, _ string, req agentReattachReq) error {
-		if req.Key == "" {
-			return nil
-		}
-		return conn.SendAppMsgTo(wire.Recipient{AppID: AgentdAppID}, map[string]any{
-			"kind": kind,
-			"key":  req.Key,
-		})
-	})
-}
-
-// agent_resume asks the roster service to reopen a remembered session
-// that has ENDED (docs/AGENT_APP.md §9).
-func registerAgentResume(bus *sdk.Bus) {
-	sdk.HandleVoid(bus, "agent_resume", func(conn *sdk.Conn, _ string, req agentResumeReq) error {
-		if req.SessionID == "" {
-			return nil
-		}
-		return conn.SendAppMsgTo(wire.Recipient{AppID: AgentdAppID}, map[string]any{
-			"kind":       "agent_resume",
-			"session_id": req.SessionID,
-			"fork":       req.Fork,
-		})
-	})
-}
-
-type agentResumeReq struct {
-	SessionID string `json:"session_id"`
-	Fork      bool   `json:"fork"`
 }
 
 type agentAnswerReq struct {

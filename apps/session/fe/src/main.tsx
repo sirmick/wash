@@ -11,7 +11,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import {
-  AgentRoster,
+  AgentAsks,
   Menu,
   MenuItem,
   accentColor,
@@ -47,6 +47,7 @@ import {
   SERVICE_NOTIFY,
   SERVICE_PRIV,
   activeBulkJobs,
+  agentHostSummary,
   agentSummary,
   badgeText,
   bulkSummary,
@@ -70,6 +71,7 @@ import {
   type HostgwMap,
 } from './sidebar/awareness';
 import { HostGroups } from './sidebar/HostGroups';
+import { AgentOpen } from './sidebar/AgentOpen';
 import { hostHue } from './sidebar/host-hue';
 
 interface CatalogApp {
@@ -336,8 +338,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // roster push. An agent blocked on a human is the one thing in the
   // sidebar worth opening the section for on its own.
   const [agentAsks, setAgentAsks] = createSignal<RosterAsk[]>([]);
-  const agentStartedAt = new Map<string, number>();
-  const [agentNow, setAgentNow] = createSignal(Date.now());
 
   // Audio mixer — com.wash.audio's StateService snapshot (sources +
   // master volume), forwarded by the session BE as audio.state.
@@ -508,16 +508,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // being local-only (docs/SIDEBAR.md §1.2).
     return badgeText(totalCount(hostgw(), SERVICE_AGENT, waitingAgents));
   };
-  // focusAgent goes to the terminal window that owns a roster row. The
-  // row carries its terminal's instance id, which is what the WM keys on.
-  const focusAgent = (row: RosterRow) => {
-    const w = windows().find((x) => x.instanceID === row.term_instance);
-    if (!w) return;
-    window.wash.setViewport(w.viewport.vx, w.viewport.vy);
-    if (w.state === 'minimized') window.wash.restoreWindow(w.windowID, w.origin);
-    else window.wash.focusWindow(w.windowID, w.origin);
-  };
-
   // audioBadge — show a play glyph while something is actively playing,
   // empty otherwise. Mirrors the other section badges' "needs attention"
   // semantics (here: "sound is on").
@@ -986,17 +976,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           const hadAsks = agentAsks().length > 0;
           setAgentAsks(asks);
           if (asks.length > 0 && !hadAsks) autoExpandSection('agents');
-          const arrival = Date.now();
-          const live = new Set<string>();
-          let waiting = false;
-          for (const r of next) {
-            live.add(r.key);
-            agentStartedAt.set(r.key, arrival - Math.max(0, r.since_ms || 0));
-            if (r.state === 'needs-input') waiting = true;
-          }
-          for (const key of [...agentStartedAt.keys()]) {
-            if (!live.has(key)) agentStartedAt.delete(key);
-          }
+          const waiting = next.some((r) => r.state === 'needs-input');
           const wasWaiting = agentRows().some((r) => r.state === 'needs-input');
           setAgentRows(next);
           if (waiting && !wasWaiting) autoExpandSection('agents');
@@ -1071,22 +1051,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     window.wash.sendAppMsg(props.instance, { kind: 'remote_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'audio_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'agent_subscribe' });
-    // Elapsed clock for the roster rows — only ticks while there are
-    // agents, so an ordinary desktop holds no interval.
-    let agentTick: ReturnType<typeof setInterval> | undefined;
-    createEffect(() => {
-      const wanted = agentRows().length > 0;
-      if (wanted && agentTick === undefined) {
-        setAgentNow(Date.now());
-        agentTick = setInterval(() => setAgentNow(Date.now()), 1000);
-      } else if (!wanted && agentTick !== undefined) {
-        clearInterval(agentTick);
-        agentTick = undefined;
-      }
-    });
-    onCleanup(() => {
-      if (agentTick !== undefined) clearInterval(agentTick);
-    });
     props.host.addEventListener('wash:msg', onMsg);
 
     // wash:state restores the persisted sidebar config on (re)mount.
@@ -1414,27 +1378,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           onToggle={() => toggleSection('agents')}
           badge={agentBadge()}
         >
-          {/* onDetach/onCancel/onStop are key-addressed passthroughs to
-              agentd via our own BE: a shell-originated send carries no
-              router-attested From, so the service would reject it. */}
-          <AgentRoster
-            rows={agentRows}
-            startedAt={(key) => agentStartedAt.get(key) ?? Date.now()}
-            now={agentNow}
-            onActivate={focusAgent}
-            onReattach={(row) =>
-              window.wash.sendAppMsg(props.instance, { kind: 'agent_reattach', key: row.key })
-            }
+          {/* Questions stay here — a NAMED exception to the relocation
+              (docs/SIDEBAR.md §3.2(8)). Everything else moved because you
+              were opening the app anyway; answering yes/no is the one case
+              where opening a window is pure overhead, and an agent blocked
+              on a human is the thing this rail exists to surface.
+              agent_answer still routes through our own BE, because a
+              shell-originated send carries no router-attested From. */}
+          <AgentAsks
             asks={agentAsks}
-            onDetach={(row) =>
-              window.wash.sendAppMsg(props.instance, { kind: 'agent_detach', key: row.key })
-            }
-            onCancel={(row) =>
-              window.wash.sendAppMsg(props.instance, { kind: 'agent_cancel', key: row.key })
-            }
-            onStop={(row) =>
-              window.wash.sendAppMsg(props.instance, { kind: 'agent_stop', key: row.key })
-            }
             onAnswer={(ask, decision, remember) =>
               window.wash.sendAppMsg(props.instance, {
                 kind: 'agent_answer',
@@ -1444,6 +1396,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 rule: ask.suggested_rule ?? '',
               })
             }
+          />
+          {/* The roster and its verbs live in com.wash.ai now. The rail
+              says how many and where, and opens the app on the right
+              host — which is the whole point: launchOn carries an origin,
+              and the verbs it used to hold could not. */}
+          <AgentOpen
+            hosts={() => agentHostSummary(hostgw())}
+            onOpen={(origin) => window.wash.launchOn(origin, 'com.wash.ai')}
           />
           {/* The sharpest case in the whole plan (§1.2): an agent on B was
               invisible here. It now has a host, a count and a summary that

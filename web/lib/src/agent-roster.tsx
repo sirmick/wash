@@ -146,6 +146,30 @@ export function fmtElapsed(ms: number): string {
   return `${Math.floor(secs / 3600)}h`;
 }
 
+/**
+ * AgentAsks is the questions half on its own.
+ *
+ * It exists because the desktop rail keeps answering permission questions
+ * after docs/SIDEBAR.md M2c moved everything else into com.wash.ai — a
+ * named exception to "mutation belongs in the app" (§3), decided
+ * deliberately. Everything else that moved, you were opening the app for
+ * anyway: to read the transcript, to reply, to watch it work. Answering
+ * yes/no is the one case where opening a window is pure overhead, and an
+ * agent blocked on a human is the single thing the rail exists to
+ * surface. One click stays one click.
+ *
+ * The roster renders this too, so an Agent window can answer without
+ * going back to the rail.
+ */
+export const AgentAsks: Component<{
+  asks: () => RosterAsk[];
+  onAnswer?: (ask: RosterAsk, decision: 'allow' | 'deny', remember: boolean) => void;
+}> = (props) => (
+  <For each={props.asks()}>
+    {(a) => <AskRow ask={a} onAnswer={(d, r) => props.onAnswer?.(a, d, r)} />}
+  </For>
+);
+
 export const AgentRoster: Component<AgentRosterProps> = (props) => {
   const empty = () => props.rows().length === 0;
   return (
@@ -155,9 +179,7 @@ export const AgentRoster: Component<AgentRosterProps> = (props) => {
     >
       {/* Questions first: an agent blocked on a human outranks every
           status line below it. */}
-      <For each={props.asks?.() ?? []}>
-        {(a) => <AskRow ask={a} onAnswer={(d, r) => props.onAnswer?.(a, d, r)} />}
-      </For>
+      <AgentAsks asks={() => props.asks?.() ?? []} onAnswer={props.onAnswer} />
       <Show when={empty()}>
         <div
           data-testid="agents-empty"

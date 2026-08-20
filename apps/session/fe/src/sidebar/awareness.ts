@@ -344,3 +344,40 @@ export const AWARENESS_COUNTERS: ReadonlyArray<readonly [string, (state: unknown
   [SERVICE_AGENT, waitingAgents],
   [SERVICE_NET, netUrgency],
 ];
+
+/** runningAgents counts every live session on a host, blocked or not. */
+export function runningAgents(state: unknown): number {
+  return ((state as AgentStateView | null)?.rows ?? []).length;
+}
+
+/** One host's agent picture, for the Agents section's door (M2c). */
+export interface AgentHostSummary {
+  origin: string;
+  /** blocked on a human: needs-input rows plus pending questions */
+  waiting: number;
+  /** live sessions, blocked or not */
+  running: number;
+}
+
+/**
+ * agentHostSummary lists the hosts with any agent activity at all, in rail
+ * order.
+ *
+ * Deliberately not "hosts with someone waiting": an agent working away on
+ * build01 is a reason to open the app there — to watch it, to steer it, to
+ * stop it — and the first cut of this keyed the door off waiting alone, so
+ * a busy host had no way in. Waiting still WINS the label; it just isn't
+ * the entry condition.
+ */
+export function agentHostSummary(map: HostgwMap): AgentHostSummary[] {
+  const out: AgentHostSummary[] = [];
+  for (const origin of orderOrigins(map)) {
+    const state = stateFor(map, origin, SERVICE_AGENT);
+    if (state === undefined) continue;
+    const waiting = waitingAgents(state);
+    const running = runningAgents(state);
+    if (waiting === 0 && running === 0) continue;
+    out.push({ origin, waiting, running });
+  }
+  return out;
+}

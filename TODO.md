@@ -77,8 +77,14 @@ bug list — all fully landed; see `git log` if you need their content.)
     touched — control still moves in-app in M2–M6. Two-router e2e proves B→A
     flow, origin isolation, the rendered badge and the group. As-built
     corrections to the plan's pinned mechanics: SIDEBAR.md M1 "As built".
-  - [ ] **M2 — Agents into `com.wash.ai`.** Roster pane + verbs; rail keeps
-    counts. Reworks the GH #21 resume/fork/terminate verb set — known cost.
+  - [x] **M2 — Agents into `com.wash.ai`** — DONE 2026-08-20. Roster pane
+    (master-detail, shared `<AgentRoster>` in @wash/ui), the per-session
+    verbs key-addressed through the app's own BE, and the rail down to
+    counts + a per-host door via `launchOn`. Two-router e2e proves the
+    payoff: the Agent app opened on B shows B's sessions and not A's.
+    Permission asks stay in the rail by decision (§3.2(8)); the session BE
+    gateway keeps only subscribe/unsubscribe + agent_answer. As-built
+    notes and the four surprises: SIDEBAR.md M2 "As built".
   - [ ] **M3 — Bulk into fm** (sole consumer is `apps/fm/be/upload.go`; jobs
     outlive the fm window, so M1 is a hard prerequisite).
   - [ ] **M4 — priv prompt as a window app on the requesting host** (priv's

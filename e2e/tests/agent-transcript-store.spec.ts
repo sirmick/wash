@@ -120,12 +120,12 @@ test('the transcript outlives the session it came from', async ({ page, router }
     .toBeGreaterThan(0);
   const before = readdirSync(transcriptsDir(router.xdgStateHome)).filter((f) => f.endsWith('.jsonl'));
 
-  // End the session from the rail. retire() now frees the in-memory
-  // transcript — which is only safe BECAUSE the file is the other copy.
-  const header = page.locator('[data-testid="sidebar-section-header-agents"]');
-  const body = page.locator('[data-testid="sidebar-section-body-agents"]');
-  if ((await body.count()) === 0) await header.click();
-  const row = body.locator('[data-testid^="agents-row-"]').first();
+  // End the session from the Agent app's roster (it moved there in
+  // SIDEBAR.md M2c). retire() frees the in-memory transcript — which is
+  // only safe BECAUSE the file is the other copy.
+  const pane = win.locator('[data-testid="ai-roster-pane"]');
+  if ((await pane.count()) === 0) await win.locator('[data-testid="ai-roster-toggle"]').click();
+  const row = pane.locator('[data-testid^="agents-row-"]').first();
   await expect(row).toBeVisible({ timeout: 15_000 });
   const cursor = router.logCursor();
   await row.locator('[data-testid="agents-verbs-btn"]').click();

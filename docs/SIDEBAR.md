@@ -215,6 +215,19 @@ of them look open-and-shut from the outside and are not.
    re-cut M3–M5 toward richer rail widgets over `hostgw` instead. Written down
    now so sunk cost cannot argue past it later.
 
+8. **Permission asks stay in the rail — a named exception** (settled
+   2026-08-20, during M2c). Every other agent verb moved into
+   `com.wash.ai` under §3's invariant, and answering an ask *is* a
+   mutation, so by the rule it should have moved too. It didn't, and the
+   reason is worth keeping: everything else that moved, you were opening
+   the app for anyway — to read the transcript, to reply, to watch it
+   work. Answering allow/deny is the one case where opening a window is
+   pure overhead, and an agent blocked on a human is the single thing the
+   rail exists to surface. One click stays one click. The ask renderer is
+   therefore `AgentAsks` in `@wash/ui`, used by both the rail and the
+   roster, and `agent_answer` is the one control verb the session BE
+   gateway keeps.
+
 ---
 
 ## 4. Milestones
@@ -425,6 +438,38 @@ where the pain actually is. It is also the honest test of whether
 *Cost, stated plainly:* the rail's resume/fork/terminate verb set was **just**
 built for GH #21. M2 reworks recent code. Not an argument against — but do not
 discover it halfway.
+
+#### As built (2026-08-20)
+
+Landed as M2a (roster pane), M2b (verbs), M2c (rail down to awareness).
+Four things the build found that the plan did not say:
+
+- **`agentd` publishes more per row than the rail ever read** — mode,
+  modes, yolo, configs, commands, used, size. The app had been
+  redeclaring a near-duplicate row type to get at them; sharing the
+  renderer forced them onto one type.
+- **A door keyed on "waiting" is the wrong door.** The first cut offered
+  a way into a host only when something there was blocked on you, so a
+  host with an agent working away was unreachable. Watching or stopping a
+  working agent is a reason to open the app; waiting still wins the
+  label, but it is not the entry condition. Caught by the two-router e2e,
+  which is the point of having one.
+- **Detaching your own session closes its window**, so the way back to a
+  detached session is the rail's door → the app → its roster. That makes
+  the deep-link load-bearing rather than a convenience, and it is now the
+  path `agent-roster-verbs.spec.ts` walks.
+- **Reattaching from a roster spawns a second window**, leaving the one
+  you opened to find the roster sitting empty behind it. Minor, and the
+  §3.2(5) note ("launching from the roster may open a dedicated window")
+  anticipated the shape — but it is the kind of friction the §3.2(7)
+  tripwire is watching for, so it is written down rather than shrugged
+  off.
+
+The tripwire itself is not yet answerable: it asks how the deep-link
+feels in daily use, which needs daily use. What can be said is that the
+glance survived — the rail still answers "2 waiting on build01" without
+opening anything (M1c), so what the door costs is the price of *acting*,
+not of *knowing*.
 
 ### M3 — Bulk into `com.wash.fm`
 

@@ -1,18 +1,16 @@
-// The Agents rail's per-session verbs, end to end (GH #21).
+// The per-session verbs, end to end (GH #21, relocated by SIDEBAR.md M2c).
 //
 // agentd has handled agent_detach / agent_cancel / agent_stop since the
-// ACP tier landed. What #21 hit is that nothing could reach them: the
-// rail rendered live rows with no actions, and the session BE gateway
-// stopped at reattach. So the rail logged no backend request — not
-// because state was lost (agent-rail.spec.ts proves it isn't), but
-// because there was no button to send one.
+// ACP tier landed. What #21 hit is that nothing could reach them; #21's
+// fix put buttons in the desktop rail, and M2c moved them into
+// com.wash.ai — because the rail's sends gateway through the session BE
+// and resolve inside its own router, so they could never have worked on a
+// remote host. This is the same chain with one hop removed: a click in
+// the app → agentd → the ACP session actually ending.
 //
-// This drives the whole chain the issue said was missing: a click in the
-// sidebar → the session BE gateway → agentd → the ACP session actually
-// ending. Both halves are asserted, because either alone can pass while
-// the feature is broken: the row could vanish from an FE that never
-// reached the backend, and agentd could end a session the rail still
-// shows.
+// Both halves are still asserted, because either alone can pass while the
+// feature is broken: the row could vanish from an FE that never reached
+// the backend, and agentd could end a session the roster still shows.
 
 import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
@@ -47,23 +45,25 @@ async function startSession(page: Page, url: string) {
   return win;
 }
 
-async function openRail(page: Page) {
-  const header = page.locator('[data-testid="sidebar-section-header-agents"]');
-  await expect(header).toBeVisible();
-  const body = page.locator('[data-testid="sidebar-section-body-agents"]');
-  if ((await body.count()) === 0) await header.click();
-  await expect(body).toBeVisible();
-  return body;
+// openRoster opens the Agent window's roster pane. It stays shut with a
+// single session (a list of one restates the window you're looking at),
+// so the tests ask for it.
+async function openRoster(page: Page) {
+  const win = page.locator('wash-app-ai').first();
+  const pane = win.locator('[data-testid="ai-roster-pane"]');
+  if ((await pane.count()) === 0) await win.locator('[data-testid="ai-roster-toggle"]').click();
+  await expect(pane).toBeVisible();
+  return pane;
 }
 
-test.describe('agents rail per-session verbs', () => {
+test.describe('agent roster per-session verbs', () => {
   test('End ends the session — the menu asks first, then reaches agentd', async ({
     page,
     router,
   }) => {
     test.setTimeout(60_000);
     await startSession(page, router.url);
-    const body = await openRail(page);
+    const body = await openRoster(page);
     const row = body.locator('[data-testid^="agents-row-"]').first();
     await expect(row).toBeVisible({ timeout: 15_000 });
 
@@ -83,13 +83,14 @@ test.describe('agents rail per-session verbs', () => {
     await menu.locator('[data-testid="agents-menu-end"]').click();
     expect(router.log().slice(cursor)).not.toMatch(/acp session ended/);
 
-    // Confirming fires: FE → session BE gateway → agentd → the adapter.
+    // Confirming fires: FE → this app's BE → agentd → the adapter. One
+    // hop shorter than the rail's, and correct on any host.
     await menu.locator('[data-testid="agents-menu-end-confirm"]').click();
 
     // BE half: agentd really retired the session.
     await router.waitForLog(/agentd: acp session ended key=/, 15_000, cursor);
 
-    // FE half: the roster reflects it. A rail that only *looked* right
+    // FE half: the roster reflects it. A pane that only *looked* right
     // would pass the BE assertion on its own.
     await expect(body.locator('[data-testid^="agents-row-"]')).toHaveCount(0, { timeout: 15_000 });
     await expect(body.locator('[data-testid="agents-empty"]')).toBeVisible();
@@ -98,7 +99,7 @@ test.describe('agents rail per-session verbs', () => {
   test('Detach keeps the session running and offers it back', async ({ page, router }) => {
     test.setTimeout(60_000);
     await startSession(page, router.url);
-    const body = await openRail(page);
+    const body = await openRoster(page);
     const row = body.locator('[data-testid^="agents-row-"]').first();
     await expect(row).toBeVisible({ timeout: 15_000 });
 
@@ -112,33 +113,43 @@ test.describe('agents rail per-session verbs', () => {
     await router.waitForLog(/agentd: acp detached key=/, 15_000, cursor);
     expect(router.log().slice(cursor)).not.toMatch(/acp session ended/);
 
-    // The row stays (that is the whole point of detach) and Detach goes
-    // disabled, because there is no longer a window to let go of.
-    await expect(row).toBeVisible();
-    await row.locator('[data-testid="agents-verbs-btn"]').click();
-    await expect(page.locator('[data-testid="agents-menu-detach"]')).toBeDisabled({
-      timeout: 15_000,
-    });
-    await page.keyboard.press('Escape');
-    await page.mouse.click(5, 5);
-    // And it now says what it is, rather than advertising a terminal it
-    // does not have — the duplicate-`title` bug this shipped with.
-    await expect(row).toHaveAttribute('title', /Detached/);
-
-    // Reload discards component-local state. The new roster snapshot must
-    // still identify the session as detached, and one double-click must
-    // open one window with the existing transcript.
+    // Detaching your OWN session closes the window — that is what detach
+    // means, and it is the same path the close dialog takes. So the
+    // session now has no window at all, which is precisely the state the
+    // rail has to be able to get you out of.
     await expect(page.locator('wash-app-ai')).toHaveCount(0, { timeout: 15_000 });
+
+    // Reload first, so nothing below can be satisfied by FE state that
+    // happened to survive.
     await page.reload();
     await expect(page.locator('wash-app-session')).toBeVisible();
-    const restoredBody = await openRail(page);
+
+    // The way back is the rail's door: it still knows an agent is running
+    // (M1's awareness channel never depended on a window), and opening the
+    // app is one click. This is the deep-link the §3.2(7) tripwire judges.
+    const railHeader = page.locator('[data-testid="sidebar-section-header-agents"]');
+    if ((await page.locator('[data-testid="sidebar-section-body-agents"]').count()) === 0) {
+      await railHeader.click();
+    }
+    await page.locator('[data-testid="agents-open-local"]').click();
+    await expect(page.locator('wash-app-ai')).toHaveCount(1, { timeout: 20_000 });
+
+    // The fresh window's roster carries the detached session, described as
+    // what it is rather than advertising a terminal it does not have (the
+    // duplicate-`title` bug this shipped with).
+    const restoredBody = await openRoster(page);
     const restoredRow = restoredBody.locator('[data-testid^="agents-row-"]').first();
     await expect(restoredRow).toHaveAttribute('title', /Detached/, { timeout: 15_000 });
-    await restoredRow.dblclick();
 
-    const reopened = page.locator('wash-app-ai');
-    await expect(reopened).toHaveCount(1, { timeout: 15_000 });
-    await expect(reopened.locator('textarea')).toBeVisible({ timeout: 20_000 });
-    await expect(reopened.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
+    // Detach is disabled on it — there is no window left to let go of.
+    await restoredRow.locator('[data-testid="agents-verbs-btn"]').click();
+    await expect(page.locator('[data-testid="agents-menu-detach"]')).toBeDisabled({ timeout: 15_000 });
+    await page.keyboard.press('Escape');
+    await page.mouse.click(5, 5);
+
+    // And one double-click brings it back, transcript and all.
+    await restoredRow.dblclick();
+    await expect(page.getByText('Hello from the fake agent.').first())
+      .toBeVisible({ timeout: 20_000 });
   });
 });

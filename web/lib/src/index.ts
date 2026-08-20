@@ -49,7 +49,7 @@ export type { AgentSessionProps, AgentEvent, AgentAsk, AgentStatus, AgentConfig 
 // desktop rail's Agents section until M2c retires that use. Types are
 // Roster* rather than Agent* because agent-session already owns AgentAsk
 // (a narrower ask) and AgentSession (the component).
-export { AgentRoster, stateColor, stateLabel, fmtElapsed, fmtAgo } from './agent-roster';
+export { AgentAsks, AgentRoster, stateColor, stateLabel, fmtElapsed, fmtAgo } from './agent-roster';
 export type { AgentRosterProps, RosterRow, RosterAsk, RosterSession } from './agent-roster';
 export { defineWashApp } from './define-app';
 export { ensureScrollbarStyles, WASH_SCROLL_CLASS, WASH_SCROLL_GUTTER_CLASS } from './scrollbars';

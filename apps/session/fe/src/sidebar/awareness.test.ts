@@ -15,6 +15,7 @@ import {
   SERVICE_NOTIFY,
   SERVICE_PRIV,
   activeBulkJobs,
+  agentHostSummary,
   agentSummary,
   badgeText,
   bulkSummary,
@@ -30,6 +31,7 @@ import {
   pendingPrivReqs,
   privSummary,
   remoteHostRows,
+  runningAgents,
   sectionForService,
   stateFor,
   totalCount,
@@ -263,4 +265,29 @@ test('every watched counter has a section to expand', () => {
     AWARENESS_COUNTERS.map(([s]) => s).sort(),
     [SERVICE_AGENT, SERVICE_BULK, SERVICE_NET, SERVICE_NOTIFY, SERVICE_PRIV].sort(),
   );
+});
+
+test('agent host summary includes a host whose agents are merely busy', () => {
+  // Keying the door off "waiting" alone left a working agent unreachable.
+  const m = mk({
+    local: { agent: { rows: [], asks: [] } },
+    busy01: { agent: { rows: [{ state: 'working' }], asks: [] } },
+    blocked02: { agent: { rows: [{ state: 'needs-input' }], asks: [] } },
+  });
+  // Remotes are alphabetical, as everywhere else in the rail — a host
+  // must not jump around because another host got busy.
+  assert.deepEqual(agentHostSummary(m), [
+    { origin: 'blocked02', waiting: 1, running: 1 },
+    { origin: 'busy01', waiting: 0, running: 1 },
+  ]);
+});
+
+test('agent host summary skips hosts with nothing at all', () => {
+  const m = mk({ quiet: { agent: { rows: [], asks: [] } } });
+  assert.deepEqual(agentHostSummary(m), []);
+});
+
+test('running counts every live session, blocked or not', () => {
+  assert.equal(runningAgents({ rows: [{ state: 'working' }, { state: 'needs-input' }] }), 2);
+  assert.equal(runningAgents({}), 0);
 });

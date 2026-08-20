@@ -74,18 +74,29 @@ async function openRail(page: Page) {
   return body;
 }
 
-// A live agent shows up as a roster row; "no agents running" is the empty
-// state we must NOT see.
+// A live agent shows up in the rail as a count and a door, and in the
+// Agent window as a roster row. Both are asserted: since SIDEBAR.md M2c
+// the rail keeps awareness and the app keeps the roster, so a reconnect
+// that restored only one of them would be half-broken in a way a single
+// assertion could not see.
 async function expectRailHasAgent(page: Page) {
   const body = await openRail(page);
-  await expect(body.locator('[data-testid="agents-widget"]')).toBeVisible();
-  await expect(body.locator('[data-testid^="agents-row-"]').first()).toBeVisible({
+  // Awareness half: the rail knows an agent is running HERE.
+  const door = body.locator('[data-testid="agents-open-local"]');
+  await expect(door).toBeVisible({ timeout: 15_000 });
+  await expect(door).toContainText(/running|waiting/, { timeout: 15_000 });
+
+  // Roster half: the app lists the session itself.
+  const win = page.locator('wash-app-ai').first();
+  const pane = win.locator('[data-testid="ai-roster-pane"]');
+  if ((await pane.count()) === 0) await win.locator('[data-testid="ai-roster-toggle"]').click();
+  await expect(pane.locator('[data-testid^="agents-row-"]').first()).toBeVisible({
     timeout: 15_000,
   });
-  await expect(body.locator('[data-testid="agents-empty"]')).toHaveCount(0);
+  await expect(pane.locator('[data-testid="agents-empty"]')).toHaveCount(0);
 }
 
-test.describe('agents rail survives the reconnect paths', () => {
+test.describe('agent awareness + roster survive the reconnect paths', () => {
   test('a reload rehydrates the window and roster for a session that is done', async ({ page, router }) => {
     test.setTimeout(60_000);
     await startSession(page, router.url);
