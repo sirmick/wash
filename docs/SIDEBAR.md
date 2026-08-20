@@ -122,6 +122,23 @@ So the seam to cut along is not *which apps produce this event*. It is:
 answers "what needs me, and where", then hands off to something that already
 knows how to live on a host.
 
+Stated as an invariant rather than a split (settled 2026-08-19, after M1):
+**state mutation belongs in the app; chrome is read-only.** That is the load-
+bearing version of §3, and it is worth preferring to "awareness vs control"
+because it explains more:
+
+- it is why the gateway can be *deleted* rather than ported — an app talking
+  to its own host's service has a router-attested `From` already, so the
+  attestation problem the gateway exists to solve stops existing;
+- it is why `hostgw` is safe to expose unattested (§3.2's whole trick): there
+  is no write to protect;
+- it *predicts* the local-case regression in §5 instead of excusing it. Bulk's
+  cancel going from one click to two is the doctrine's price, not a flaw in
+  the cut. Which means the §3.2(7) tripwire is not "did control get further
+  away" — it will have — but "is awareness still enough to act on."
+
+The M2 rework cost (§M2, the GH #21 verb set) was accepted on this basis.
+
 ### 3.1 Revised per-widget disposition (supersedes REMOTE.md §6.2)
 
 | Widget | Control | Awareness in rail | Notes |
