@@ -1,5 +1,14 @@
 # Session prompt — implement M1: `com.wash.hostgw`
 
+> **Spent (2026-08-20). Kept as a record of how the work was framed, not as
+> instructions.** M1 and M2 are both built; see [SIDEBAR.md](SIDEBAR.md)'s
+> "As built" notes under each milestone. Two of the "pinned mechanics" below
+> turned out to be wrong or imprecise — notably that M1a could be remote-only
+> at the data layer (every background app autoboots on shell connect, so the
+> local gateway republishes unprompted), and the shell-facing subscribe needs
+> `sdk.HandleVoid`, since `HandleFromVoid` silently drops a message with no
+> attested sender. Trust SIDEBAR.md over this file wherever they disagree.
+
 Paste this as the opening prompt for a dedicated implementation session. The
 planning is **done**: docs/SIDEBAR.md is the plan of record, §3.2 records the
 seven settled design decisions with reasoning, and the M1 section carries the

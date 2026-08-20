@@ -143,10 +143,10 @@ The M2 rework cost (§M2, the GH #21 verb set) was accepted on this basis.
 
 | Widget | Control | Awareness in rail | Notes |
 |---|---|---|---|
-| **Agents** | → `com.wash.ai` (M2) | running count + pending-ask count, per host | app already exists as a one-session window; grows a roster pane |
+| **Agents** | → `com.wash.ai` — **DONE** (M2) | running count + pending-ask count + a per-host door; asks stay answerable here (§3.2(8)) | the app grew a roster pane and the key-addressed verbs |
 | **Bulk** | → `com.wash.fm` (M3) | active jobs + aggregate progress, per host | **only** consumer is `apps/fm/be/upload.go` — single-app today |
 | **Priv** | → prompt-as-window-app on the requesting host (M4) | pending escalation count, per host | irreducibly cross-app on the *producing* side: `journal`, `syslogs`, `packages` |
-| **Notify** | stays chrome | merged, host-tinted | cross-app by definition; transport already works (§1.1) |
+| **Notify** | stays chrome | merged, host-tinted — **DONE** (M0/M1) | cross-app by definition; transport already works (§1.1) |
 | **Net** | → `com.wash.net` (M5) | per-host status | app already is the control surface |
 | **About** | per-host | A's by default | a machine's identity; optional B card |
 | **Audio** | deferred | — | sound exits B's speakers; needs a stream, not a widget (REMOTE.md §7) |

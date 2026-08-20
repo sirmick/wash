@@ -219,7 +219,7 @@ when wash-edit became its second consumer.
 
 | Surface | Shape | Notes |
 |---|---|---|
-| **`com.wash.ai`** | standalone window, `InstancingMulti`, one per session | empty state **is** the launcher; the default surface |
+| **`com.wash.ai`** | standalone window, `InstancingMulti`, one per session + a roster pane | empty state **is** the launcher; the default surface. Since [SIDEBAR.md](SIDEBAR.md) M2 the window is master-detail: `<AgentRoster>` lists every session agentd holds, and the per-session verbs live here rather than in the desktop rail |
 | **wash-term** | a pane in the layout tree | `Group.tabs` is `number[]` — the tree never asks what a channel is, so `layout.ts` needs **no change**. Needs a non-colliding id space, a renderer branch in `main.tsx`, and a prune rule matching TERM_LAYOUT §238 |
 | **wash-edit** | a side panel | third consumer; already embeds `terminal.tsx`, so the seam exists |
 
@@ -235,7 +235,17 @@ Two rules that must be designed in, not discovered:
   approval behaviour, and closing the last pane defer a live question.
 - **N renderers, zero affinity.** With three surfaces plus the sidebar, a
   pending ask is pure state in agentd with no per-view ownership. Answering
-  anywhere resolves everywhere.
+  anywhere resolves everywhere. This is what let SIDEBAR.md §3.2(8) keep
+  answering in the rail while every other verb moved into the app: the two
+  renderers are peers, not a surface and its remote control.
+
+- **Why the verbs live in the app** (SIDEBAR.md M2): a shell-originated
+  cross-app send carries no router-attested `From`, so the desktop rail had
+  to route every verb through the session BE gateway — which resolves
+  inside its own router, and therefore could never act on a remote host. An
+  app talking to its own host's agentd is attested by construction, so
+  `launchOn(origin, 'com.wash.ai')` yields working verbs on any host with
+  no new addressing.
 
 Naming: `com.wash.agent` is claimed by `docs/AGENT.md` (the
 desktop-operating AI). This app is `com.wash.ai` unless that doc is renamed.

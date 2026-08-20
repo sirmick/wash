@@ -79,6 +79,16 @@ program plus an embedded frontend (FE) web-component bundle.
   shell-originated cross-app sends lack). Modal overlays (bulk
   conflicts, priv password handshake) are anchored at the screen
   level, not nested in the sidebar — too dense for ~300px.
+- **The rail is read-only; state mutation belongs in the owning app**
+  ([SIDEBAR.md](SIDEBAR.md) §3). The gateway above is exactly why: it
+  exists to lend the chrome an attested sender, and it resolves inside its
+  own router — so a chrome button can only ever act on THIS host. An app
+  talking to its own host's service is attested by construction, which is
+  what makes `launchOn(origin, appID)` a complete answer for control and
+  leaves the rail with awareness: a count, a host, and a door. Awareness
+  for every attached host arrives through `com.wash.hostgw`, a background
+  app on each router that republishes its own host's service state to
+  every attached shell.
 - App contract = a **web component** (in-process, Shadow DOM CSS isolation,
   framework-agnostic internally), defined transport-agnostically so a future
   untrusted app could be moved to an iframe binding of the same contract. Not a

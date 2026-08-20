@@ -34,6 +34,12 @@ Decisions already made (discussion 2026-07-28):
 - **Roster is a sidebar widget** (the audio/net pattern), fed by a small
   background service, built *as we go* (M4) — the bus events it consumes are
   designed in from M1 so it's a renderer, never a rework.
+  *Superseded 2026-08-20 by [SIDEBAR.md](SIDEBAR.md) M2:* the roster and its
+  verbs moved into `com.wash.ai`, because a sidebar widget reaches services
+  through the session BE gateway and so can only ever act on the LOCAL host.
+  The renderer itself was right and survived the move intact — it is
+  `<AgentRoster>` in `@wash/ui` now. The rail keeps the counts and a
+  per-host door.
 - **Notifications ride the existing notify service** (sdk.Info/Warn helpers,
   tray, click-to-focus). No parallel channel.
 - **Approval is a policy engine, not `y`-typing.** Claude Code's PreToolUse
@@ -211,8 +217,16 @@ sessions without restart.
   each with brand dot, repo dir + branch, state + elapsed; click →
   focusWindow on the owning terminal. Git branch/±diff comes from agentd
   shelling `git -C cwd` lazily (never from hooks).
+  *As built, after [SIDEBAR.md](SIDEBAR.md) M2:* this renderer is
+  `<AgentRoster>` in `@wash/ui`, rendered by `com.wash.ai`'s roster pane.
+  Activating a row points that window's detail pane at the session rather
+  than focusing a terminal — an ACP-hosted row has no terminal to focus.
 - Remote: the widget is REMOTE.md §6.2 "merge" class — A's session FE
   subscribes to B's agentd over the B RouterClient, rows host-coloured.
+  *Superseded:* §6.2's merge was never built and is no longer the plan.
+  Awareness reaches A through `com.wash.hostgw` (SIDEBAR.md M1); control
+  reaches B by opening `com.wash.ai` there (M2), which needs no cross-host
+  subscribe at all.
   Local-first; the merge lands with the wider §6.2 work, not before.
 
 ## 8. Testing
@@ -387,8 +401,8 @@ a detail the design left open:
 | roster service | `apps/agentd/be/{app,service,git}.go` (+ `cmd/`, `SVC_APPS`) |
 | terminal → roster | `publishRoster` in `apps/term/be/agent.go` |
 | session gateway | `registerAgentGateway` + `serviceFEKind` in `apps/session/be/app.go` |
-| sidebar widget | `apps/session/fe/src/sidebar/AgentsWidget.tsx` (+ Agents section) |
-| tests | `apps/agentd/be/{service,git}_test.go`, `AgentsWidget.ctest.tsx`, `e2e/tests/term-agent-roster.spec.ts` |
+| roster renderer | `web/lib/src/agent-roster.tsx` (was the sidebar's `AgentsWidget.tsx`; moved by SIDEBAR.md M2a) |
+| tests | `apps/agentd/be/{service,git}_test.go`, `agent-roster.ctest.tsx`, `e2e/tests/term-agent-roster.spec.ts` |
 
 - **Terminals heartbeat, they don't just report.** §7's liveness only
   works if silence means death, so a tab with a live agent re-states it to
@@ -503,9 +517,9 @@ payloads, assert overlay verdicts and what actually reached the pty
 |---|---|
 | history, persistence, resume launch | `apps/agentd/be/history.go` |
 | exec'd tab | `new_tab{exec}` in `apps/term/be/app.go` (agentd-only) |
-| resume gateway | `agent_resume` in `apps/session/be/app.go` |
-| Recent rows | `apps/session/fe/src/sidebar/AgentsWidget.tsx` |
-| tests | `apps/agentd/be/history_test.go`, `AgentsWidget.ctest.tsx`, `e2e/tests/term-agent-resume.spec.ts` |
+| resume | `resume` in `apps/ai/be/app.go` (the session BE gateway's `agent_resume` was deleted by SIDEBAR.md M2c) |
+| Recent rows | `apps/ai/fe/src/HistoryPanel.tsx` + the History menu (the roster stopped listing ended sessions) |
+| tests | `apps/agentd/be/history_test.go`, `agent-roster.ctest.tsx`, `e2e/tests/term-agent-resume.spec.ts` |
 
 - **Everything the roster sees is remembered**, not just sessions that end
   politely — a terminal killed outright never says goodbye, and that is
@@ -606,8 +620,8 @@ Rules the design turns on:
 | pending questions, relay, remember | `apps/agentd/be/ask.go` |
 | terminal side of the ask | `apps/term/be/askdesktop.go` (+ the ask branch in `agentsock.go`) |
 | answer gateway | `agent_answer` in `apps/session/be/app.go` |
-| the question rows | `apps/session/fe/src/sidebar/AgentsWidget.tsx` |
-| tests | `internal/agentpolicy/*_test.go`, `apps/agentd/be/ask_test.go`, `AgentsWidget.ctest.tsx`, `e2e/tests/term-agent-ask.spec.ts` |
+| the question rows | `AgentAsks` in `web/lib/src/agent-roster.tsx` — rendered by BOTH the rail and the app (SIDEBAR.md §3.2(8): answering stays one click from the rail) |
+| tests | `internal/agentpolicy/*_test.go`, `apps/agentd/be/ask_test.go`, `agent-roster.ctest.tsx`, `e2e/tests/term-agent-ask.spec.ts` |
 
 - **The schema moved to `internal/agentpolicy`** the moment agentd became a
   second writer of `agents.json` — the repo's own "second consumer →

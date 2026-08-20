@@ -331,6 +331,13 @@ hosts (docs/SETTINGS.md §2 revised).
 > into apps, which are already host-portable. The per-widget table below is
 > superseded by SIDEBAR.md §3.1 — which also covers Agents, added after this
 > section was written.
+>
+> **As built (2026-08-20):** awareness reaches A through `com.wash.hostgw`, a
+> background app on every router that republishes its own host's service state
+> to every attached shell — so no cross-host subscribe was needed, and no new
+> wire protocol (SIDEBAR.md M1). Agents' control moved into `com.wash.ai`,
+> reached with `launchOn(origin, …)` (M2). Notify merged into the tray in M0.
+> Bulk, Priv and Net still read as described here and are M3–M5.
 
 
 Today each widget's data flows: service `StateService` → **session BE gateway**
@@ -514,7 +521,8 @@ colour is the single thread tying the experience together:
 
 - **Window stripe** in the host colour (§5).
 - **`wash-connect` app** host entries and status dots in the host colour (§6.1).
-- **Merged-widget entries** (notify/bulk/priv) tinted/tagged by host colour (§6.2).
+- **Merged-widget entries** (notify/bulk/priv) tinted/tagged by host colour (§6.2;
+  as built, per-host groups in the rail — SIDEBAR.md M1c).
 - **priv modal** banded in the host colour (§10).
 
 Colour assignment (deterministic hash of hostname → palette slot, with manual
