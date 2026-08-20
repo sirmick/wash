@@ -77,9 +77,12 @@ bug list — all fully landed; see `git log` if you need their content.)
     counts. Reworks the GH #21 resume/fork/terminate verb set — known cost.
   - [ ] **M3 — Bulk into fm** (sole consumer is `apps/fm/be/upload.go`; jobs
     outlive the fm window, so M1 is a hard prerequisite).
-  - [ ] **M4 — priv prompt as a window app on the requesting host.** Makes
-    REMOTE.md §10's encrypt-to-B's-pubkey dance unnecessary — the password
-    never traverses A. Needs an anti-phishing answer first.
+  - [ ] **M4 — priv prompt as a window app on the requesting host** (priv's
+    face app, the wash-connect precedent; producers untouched). §10's
+    encryption becomes priv-internal (FE→its own BE) instead of a
+    cross-component protocol — NOT unnecessary: app FEs run in the seat's
+    browser. Prompts are user-summoned (badge/toast → launchOn), never
+    self-opening — itself the anti-phishing answer.
   - [ ] **M5/M6 — Net + About per-host; delete the dead gateways.**
 - [ ] **Clipboard sync hub; cross-origin z-band** (focused-host windows on
   top, below chrome z 9999/10000) — the rest of the old M4/M5 entry.

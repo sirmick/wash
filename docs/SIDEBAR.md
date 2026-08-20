@@ -377,6 +377,25 @@ window**. Close fm and control disappears while the job runs on. Bulk's awarenes
 half must therefore be real — aggregate progress in the rail, deep-linking to
 (or re-launching) fm on the owning host.
 
+How the outlive case resolves (settled 2026-08-19): fm's Jobs surface binds to
+the **bulk service singleton**, not to the window's own operations — the job
+never belonged to the window (that is why closing fm doesn't kill a copy
+today). Any fm window on host X lists and can cancel *all* of X's jobs,
+including ones whose originating window is gone. Chain: job outlives fm → rail
+badge persists (hostgw feeds it; awareness never depended on fm) → click →
+`launchOn(origin, com.wash.fm)` → cancel in the jobs panel. Cancel costs two
+clicks where the rail's X cost one — a real local-case regression, and exactly
+the class of cost the §3.2(7) tripwire judges; bulk is the first candidate for
+a re-cut if it fails.
+
+A conflict firing with **no fm open** stalls that item and raises a
+notification (merged + host-tinted since M0); activating it opens fm on the
+owning host with the conflict modal up. This needs one small shell affordance:
+**toast activation must fall back from focus-the-instance to
+launch-the-owning-app** — the bulk service has no window to focus. Any fm on
+the host may answer; `resolve_conflict` is idempotent by job id, first answer
+wins.
+
 ### M4 — Priv prompt as a window app on the requesting host
 
 The only widget where relocation makes the **security** story simpler, which is
@@ -386,22 +405,43 @@ Producers are irreducibly cross-app (`journal`, `syslogs`, `packages`, and
 background services with no window at all) — but the *prompt* is one thing, and
 as a window it composites to A for free.
 
-The payoff: REMOTE.md §10 currently requires the password be encrypted to B's
-priv `be_pubkey` so A's seat cannot read it. If the prompt is **B's own window**,
-the password is typed into B and never traverses A at all — the encryption dance
-becomes unnecessary rather than merely correct.
+The payoff needs stating carefully — the first draft of this section
+overclaimed it. A wash app's FE runs **in the seat's browser**: a "window on B"
+is B's BE plus B's bundle executing in A's page, so the password field is still
+DOM in A and the submitted secret still transits the relay. What the window-app
+move actually buys is that REMOTE.md §10's encryption stops being a
+**cross-component protocol** (session chrome handling a foreign service's
+pubkey) and becomes an implementation detail **inside one app** — priv's own FE
+encrypts to its own BE's key, shipped with the ask. Same wire protection, no
+key distribution across trust boundaries, and the prompt's provenance is
+chrome-attested (§3.2(6)). Simpler, not unnecessary.
+
+Two further properties (settled 2026-08-19):
+
+- **The prompt app is priv's face**, exactly as wash-connect is the face of
+  `com.wash.remote` (REMOTE.md §6.1's precedent): pending asks, the
+  granted-apps list, revoke. The producers — `journal`, `syslogs`, `packages`,
+  windowless services — change **not at all**; priv's cross-app ask API is
+  untouched, and the multi-app-ness stays behind it. Only where the ask is
+  *rendered* moves.
+- **Prompts are user-summoned, never self-opening.** The ask surfaces as a
+  rail badge + toast (both chrome-owned); the window opens only when the user
+  clicks through, via plain `launchOn(origin, …)` — no new BE-spawns-window
+  path. This is an anti-phishing property in itself: the real priv prompt
+  structurally *cannot* appear unbidden, so a "priv prompt" that does is by
+  definition fake.
 
 Decided (§3.2(6)): the trust indicator is chrome-drawn from `app.declared`
 metadata — never from window content.
 
-Remaining questions to settle before coding:
-- a background service with no window requests escalation — who owns the prompt
-  window's lifecycle, and what focuses it?
-- prompt provenance/anti-phishing: a window claiming to be a priv prompt is
-  exactly what an attacker would draw. Chrome-drawn trust indicator? This is the
-  reason M4 sits after M2/M3 rather than before.
-- does the rail's pending-count deep-link *raise* the existing prompt, or can it
-  spawn one?
+Remaining questions to settle before coding (lifecycle and raise-vs-spawn are
+answered by the summon rule above):
+- the trust stripe's visual design — how chrome renders "com.wash.priv @ host"
+  so it reads as chrome and cannot be mistaken for window content;
+- ask expiry: what happens to an escalation that is never summoned (timeout
+  semantics, and what the requesting app sees);
+- multi-seat races: two of the user's seats summon the same ask — first answer
+  wins, but the second window must degrade honestly.
 
 ### M5 — Net, About per-host
 
