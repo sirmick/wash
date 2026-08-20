@@ -138,6 +138,66 @@ knows how to live on a host.
 | **Clipboard** | A-only | — | system clipboard is the seat's; sync is REMOTE.md §7 |
 | **Remote/Hosts** | already host-aware | — | unchanged |
 
+
+### 3.2 Decisions (settled 2026-08-19, planning session)
+
+Seven questions the first draft left open. Recorded with reasoning because two
+of them look open-and-shut from the outside and are not.
+
+1. **Merged awareness, focus-aware presentation** — not follow-the-focused-host.
+   A rail whose remaining job is awareness must see all hosts at once: the
+   interrupts worth surfacing are precisely the ones from hosts you are *not*
+   looking at, and the focused host's state is already on screen in its own
+   windows. Follow-focus re-creates the original defect with the axis flipped
+   ("follows A always" becomes "follows wherever you are"). M0 also already
+   merged the toast tray; a follow-focus rail under a merged tray is two
+   theories of attention in one column of pixels. Follow-focus's one good idea
+   survives in presentation: sections group by host, local first, remote groups
+   collapsed-but-badged, auto-expanding on events (the existing
+   `autoExpandSection` machinery), with the focused window's host emphasised.
+2. **`hostgw` is symmetric from day one, staged.** It runs on every router —
+   including A's — and owns awareness *reads* for all origins uniformly. The
+   session BE gateway keeps the control verbs, which die milestone by milestone
+   as control moves in-app (M6 deletes the remainder). That is not two
+   implementations of one thing: each owns a different thing, and one is on a
+   planned path to zero. Staged (remote-only first, local flip second) so a
+   local-rail regression bisects cleanly. Until the control milestones land,
+   local services simply have two subscribers (hostgw + session BE) — harmless,
+   `StateService` fans to both.
+3. **Multi-user B dissolves into the router boundary.** A router is per-user by
+   construction: the unix listener accepts SCM_RIGHTS handoffs only from one
+   SO_PEERCRED-verified uid (`--allow-uid`,
+   `internal/runner/router/router.go:196`), and the remote supervisor brings
+   B's router up as the SSH user. "Every attached shell" therefore means *your
+   own other seats* — exactly the audience M0's toast broadcast already
+   reaches via `shellList()`. `hostgw`'s privacy model **is** the router's
+   attach model. What survives into M6 is an audit, not a design: confirm no
+   cross-uid attach path exists (raw-router token gate, login cookie). If that
+   audit ever fails, toasts already leak today; hostgw is not the new problem.
+4. **Badges recompute from snapshots, never increment from events.** `hostgw`
+   pushes full snapshots per (origin, service); each delivered message replaces
+   that cell wholesale; everything is re-pushed on every (re)subscribe.
+   Flapping origins: grey the host group on `reconnecting`, drop it on `down`
+   (RemoteWidget already tracks per-host status). A greyed stale count is
+   honest; a confident stale count is a lie.
+5. **M2 is roster-as-second-pane** in the existing `com.wash.ai` window
+   (master–detail), not a multi-instance restructuring — `HistoryPanel` is
+   already half a roster. Launching from the roster may open a dedicated
+   window; the default single window is roster+session. Keeps M2 additive: an
+   experiment that requires restructuring first is not an experiment.
+6. **M4's trust indicator comes from router metadata, never window content.**
+   The shell knows a window's owning app id from `app.declared`, and the app
+   cannot forge it; chrome draws "com.wash.priv @ host" in its own stripe, in
+   the host hue. An attacker can render a pixel-perfect prompt *inside* a
+   window; they cannot make the chrome say it is priv. This also retitles the
+   plan's biggest security question: it is M4's prompt provenance, not §3.2(3)'s
+   broadcast audience.
+7. **Sequencing holds (M3→M4→M5), with a named tripwire after M2**: if the
+   deep-link feels like a toll rather than a doorway — you keep opening
+   `com.wash.ai` for things the rail used to answer in one glance — stop and
+   re-cut M3–M5 toward richer rail widgets over `hostgw` instead. Written down
+   now so sunk cost cannot argue past it later.
+
 ---
 
 ## 4. Milestones
@@ -204,6 +264,60 @@ The local path keeps using the session BE gateway unchanged — this is for
 there is one implementation instead of two; that is an M6 cleanup, not a
 prerequisite.)
 
+#### Implementation staging
+
+- **M1a — `hostgw` + shell plumbing, remote origins only.** New FE-less app
+  `apps/hostgw/be` (`com.wash.hostgw`, surface=background, singleton,
+  spawn-on-demand). Shell: instance→app-id map from `app.declared`; intercept
+  hostgw traffic in `deliverAppMsg`; a cross-element Sub keyed
+  (origin, service); subscribe on peer attach, re-subscribe on reattach.
+  Proof: two-router e2e — B's badge state reaches A.
+- **M1b — flip local awareness reads.** A's shell subscribes to A's own
+  `hostgw` identically; rail badges and host groups read the hostgw map for
+  LOCAL too; the widgets' interactive internals keep their legacy
+  `notify.state`/`bulk.state`/… feeds until their control milestone moves them
+  in-app. Do **not** delete any session BE gateway here.
+- **M1c — rail presentation.** Host groups per §3.2(1): merged, local first,
+  remote collapsed-but-badged, `autoExpandSection` on remote events,
+  grey-on-reconnecting / drop-on-down per §3.2(4).
+
+#### Pinned mechanics (verified 2026-08-19 — do not re-derive)
+
+- `app.declared` fires for **every** instance, background included
+  (`declareInstanceLocked`, `internal/router/shell_session.go:93`), and a
+  late-connecting shell is told about already-running instances
+  (`internal/router/router.go:1766`). The declare carries the manifest, so the
+  shell can map instance→app id. Route hostgw traffic on that map, **never**
+  on payload shape (a payload-shaped route is spoofable by any app).
+- The shell-side intercept must happen in `deliverAppMsg`
+  (`web/shell/src/main.tsx:932`) **before** `deliverToInstance`:
+  `deliverToInstance` parks messages for unmounted elements in
+  `pendingMessages` (`web/shell/src/api.ts:186`), and hostgw has no element —
+  mis-routed pushes would queue unboundedly.
+- Shell→session-FE surface: a cross-element Sub plus a `window.wash` accessor —
+  the exact `windowsSub` / `linkStats` pattern the session chrome already
+  consumes (`apps/session/fe/src/main.tsx:319`).
+- The shell's first subscribe addresses `{app_id: "com.wash.hostgw"}` over the
+  owning origin's conn; `handleAppMsgSend` resolves via `resolveRecipient`,
+  which spawns the singleton on demand. No new ctrl verb.
+- `hostgw` accepts **unattested** subscribes from shells deliberately: it is
+  read-only, so there is nothing to protect the verb with. The asymmetry is
+  the whole trick — services demand attestation, and hostgw provides it by
+  *being an app*; it is the attestation boundary.
+- State stays `any` end to end, mirroring `serviceStateMsg`
+  (`apps/session/be/app.go:448`). Never `json.RawMessage`/`[]byte` — the
+  router base64-encodes byte strings.
+- Service set and naming mirror `serviceFEKind` (`apps/session/be/app.go:168`):
+  the same services the session gateways subscribe to today. Envelope:
+  `{kind:"hostgw.state", service:"notify"|"bulk"|"priv"|…, state:<verbatim>}`.
+- FE-less service app checklist: add to `SVC_APPS` (`Makefile:68`), rerun
+  `gen-pkg-binaries` (`packaging/wash.binaries` is guarded by
+  `check-pkg-binaries`), `gen-imports`, and remember the `.PHONY` hazard for
+  FE-less Go binaries.
+- `hostgw` subscribing at startup spawns its host's services on first shell
+  attach — parity with what A's session BE already does at session start.
+  Accepted cost.
+
 #### Why not a shell→router ctrl verb
 
 The obvious alternative — a `ShellSubscribe` verb modelled on `ShellLaunch`,
@@ -240,6 +354,9 @@ session metadata. Promote it from one-session to **roster + session**:
   addressing — this is the whole point;
 - rail keeps running-count + pending-ask-count per host, deep-linking to the app.
 
+Decided shape (§3.2(5)): a second pane in the existing window — master–detail
+— not a multi-instance restructuring.
+
 Do this one first among the relocations: single-app, the app exists, and it is
 where the pain actually is. It is also the honest test of whether
 "rail as router of attention" feels right before four more widgets commit to it.
@@ -274,7 +391,10 @@ priv `be_pubkey` so A's seat cannot read it. If the prompt is **B's own window**
 the password is typed into B and never traverses A at all — the encryption dance
 becomes unnecessary rather than merely correct.
 
-Open questions to settle before coding:
+Decided (§3.2(6)): the trust indicator is chrome-drawn from `app.declared`
+metadata — never from window content.
+
+Remaining questions to settle before coding:
 - a background service with no window requests escalation — who owns the prompt
   window's lifecycle, and what focuses it?
 - prompt provenance/anti-phishing: a window claiming to be a priv prompt is
@@ -322,11 +442,10 @@ in-app makes the 90% case slightly worse to make the 10% case work at all. The
 mitigation is a one-click deep-link plus room for a real UI — but it is a
 regression, not a pure win, and it should be felt in M2 before M3–M5 follow.
 
-**Merge vs follow-the-focused-host.** This plan assumes awareness is **merged and
-host-tagged** (§6.2's assumption). The alternative — the rail follows whichever
-host owns the focused window — is a materially different design that may suit
-daily remote use better. M2 is small enough to be the experiment; settle this
-before M3.
+**Merge vs follow-the-focused-host — SETTLED (§3.2(1)): merged data,
+focus-aware presentation.** The M2 tripwire (§3.2(7)) is the remaining guard:
+if the awareness/control split feels wrong in daily use, re-cut M3–M5 rather
+than pushing four more widgets through it.
 
 ---
 
