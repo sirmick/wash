@@ -575,7 +575,41 @@ func (s *State) enqueue(c *sdk.Conn, r *Request) {
 	} else if grantedRun {
 		log.Printf("wash-priv: app-grant auto-approve req_id=%s app=%s", r.ReqID, r.Sender.AppID)
 		go s.autoApproveAndExecute(c, r)
+	} else {
+		// Nothing is going to run this without a human, so say so out
+		// loud (docs/SIDEBAR.md M4). Until now an escalation announced
+		// itself ONLY through the rail's priv widget, which reads this
+		// host's queue through the session BE gateway — so a request
+		// raised on a remote host was not merely unanswerable there, it
+		// was invisible. A toast broadcasts to every attached shell, and
+		// since M0 a remote one arrives named and tinted for its host.
+		//
+		// Warn, not Info: a blocked escalation is a claim on attention,
+		// the same call bulk makes for a stalled copy.
+		//
+		// Placed here rather than at the top of enqueue deliberately —
+		// auto-approved and app-granted requests never wait for anyone,
+		// and toasting those would train the user to dismiss the ones
+		// that matter.
+		c.Warn("Approval needed", requestSummary(r))
 	}
+}
+
+// requestSummary is the one-line "who wants what" a toast carries. The
+// asking app comes first because it is the part a person judges: sudo
+// for the package manager is routine, sudo for something you did not
+// start is the whole reason this queue exists. CLI requests (wash-sudo)
+// have no app id, so they name the binary instead.
+func requestSummary(r *Request) string {
+	what := strings.Join(r.Argv, " ")
+	if what == "" {
+		what = string(r.Kind)
+	}
+	who := r.Sender.AppID
+	if who == "" {
+		who = "wash-sudo"
+	}
+	return who + ": " + what
 }
 
 // autoApproveAndExecute promotes a queued request to Running without
