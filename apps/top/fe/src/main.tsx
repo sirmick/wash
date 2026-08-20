@@ -1015,6 +1015,7 @@ const ProcHeader: Component<{
       onClick={() => props.onSort(p.k)}
       data-testid={`top-sort-${p.k}`}
       data-active={props.sortKey === p.k}
+      title={`Sort by ${p.label}`}
       style={{
         ...headerCellStyle,
         'text-align': p.align ?? 'left',
@@ -1073,6 +1074,7 @@ const ProcRow: Component<{
               onClick={(e) => { e.stopPropagation(); props.onToggle?.(); }}
               style={chevronStyle}
               data-testid={`top-tree-toggle-${props.proc.PID}`}
+              title={props.collapsed ? 'Expand children' : 'Collapse children'}
             >
               {props.collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
             </button>

@@ -1461,9 +1461,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               live terminal reflow. */}
           <div style={sizeRowStyle}>
             <span style={{ flex: 1 }}>Size</span>
-            <Button variant="icon" data-testid="term-menu-size-dec" style={stepBtnStyle} onClick={() => stepFontSize(-1)}>−</Button>
+            <Button variant="icon" data-testid="term-menu-size-dec" title="Smaller font" style={stepBtnStyle} onClick={() => stepFontSize(-1)}>−</Button>
             <span data-testid="term-menu-size-val" style={sizeValStyle}>{fontSize()}</span>
-            <Button variant="icon" data-testid="term-menu-size-inc" style={stepBtnStyle} onClick={() => stepFontSize(1)}>+</Button>
+            <Button variant="icon" data-testid="term-menu-size-inc" title="Larger font" style={stepBtnStyle} onClick={() => stepFontSize(1)}>+</Button>
           </div>
           <MenuSeparator />
           <For each={TERM_FONTS}>

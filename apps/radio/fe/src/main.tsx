@@ -660,6 +660,7 @@ function RadioApp(props: WashAppProps) {
                   type="button"
                   data-testid={`genre-${slug(entry.genre)}`}
                   aria-expanded={!entry.collapsed}
+                  title={`${entry.collapsed ? 'Expand' : 'Collapse'} ${entry.genre}`}
                   onClick={() => toggleGroup(entry.key)}
                   style={{
                     width: '100%',
@@ -685,6 +686,7 @@ function RadioApp(props: WashAppProps) {
                   type="button"
                   data-testid={`subtype-${slug(entry.genre)}-${slug(entry.subtype)}`}
                   aria-expanded={!entry.collapsed}
+                  title={`${entry.collapsed ? 'Expand' : 'Collapse'} ${entry.subtype}`}
                   onClick={() => toggleGroup(entry.key)}
                   style={{
                     width: '100%',
@@ -780,7 +782,7 @@ function RadioApp(props: WashAppProps) {
           }}
           style={{ flex: 1 }}
         />
-        <Button data-testid="add-station" onClick={addStation}>
+        <Button data-testid="add-station" title="Add station from URL" onClick={addStation}>
           <Plus size={13} />
         </Button>
       </div>

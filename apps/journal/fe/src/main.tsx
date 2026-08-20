@@ -452,31 +452,31 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         {/* toolbar */}
         <div style={toolbarStyle} data-testid="journal-toolbar">
           <div style={segGroupStyle}>
-            <button style={segBtn(range() === 'boot')} onClick={() => onPickRange('boot')}>
+            <button style={segBtn(range() === 'boot')} onClick={() => onPickRange('boot')} title="Since last boot">
               boot
             </button>
-            <button style={segBtn(range() === 'hour')} onClick={() => onPickRange('hour')}>
+            <button style={segBtn(range() === 'hour')} onClick={() => onPickRange('hour')} title="Last hour">
               1h
             </button>
-            <button style={segBtn(range() === 'day')} onClick={() => onPickRange('day')}>
+            <button style={segBtn(range() === 'day')} onClick={() => onPickRange('day')} title="Last 24 hours">
               1d
             </button>
-            <button style={segBtn(range() === 'all')} onClick={() => onPickRange('all')}>
+            <button style={segBtn(range() === 'all')} onClick={() => onPickRange('all')} title="All retained history">
               all
             </button>
           </div>
 
           <div style={segGroupStyle}>
-            <button style={segBtn(priority() === 0)} onClick={() => onPickPriority(0)}>
+            <button style={segBtn(priority() === 0)} onClick={() => onPickPriority(0)} title="All priorities">
               all
             </button>
-            <button style={segBtn(priority() === 6)} onClick={() => onPickPriority(6)}>
+            <button style={segBtn(priority() === 6)} onClick={() => onPickPriority(6)} title="Info and above">
               ≥info
             </button>
-            <button style={segBtn(priority() === 4)} onClick={() => onPickPriority(4)}>
+            <button style={segBtn(priority() === 4)} onClick={() => onPickPriority(4)} title="Warning and above">
               ≥warn
             </button>
-            <button style={segBtn(priority() === 3)} onClick={() => onPickPriority(3)}>
+            <button style={segBtn(priority() === 3)} onClick={() => onPickPriority(3)} title="Error and above">
               ≥err
             </button>
           </div>
