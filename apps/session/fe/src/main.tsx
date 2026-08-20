@@ -40,6 +40,20 @@ import { LinkWidget } from './sidebar/LinkWidget';
 import { AudioWidget, type AudioState } from './sidebar/AudioWidget';
 import { ClipboardWidget } from './sidebar/ClipboardWidget';
 import { PrivUnlockOverlay, type PrivUnlockState } from './sidebar/PrivUnlockOverlay';
+import {
+  SERVICE_AGENT,
+  SERVICE_BULK,
+  SERVICE_NOTIFY,
+  SERVICE_PRIV,
+  activeBulkJobs,
+  badgeText,
+  netBadge as netBadgeFor,
+  pendingPrivReqs,
+  totalCount,
+  unreadNotifications,
+  waitingAgents,
+  type HostgwMap,
+} from './sidebar/awareness';
 
 interface CatalogApp {
   id: string;
@@ -317,6 +331,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // Link-health telemetry for the desktop info panel (docs/QOS.md). The
   // shell pushes it ~1/s via window.wash.onLinkStats.
   const [link, setLink] = createSignal<WashLinkHealth | null>(window.wash.linkStats?.() ?? null);
+  // Merged host-awareness state (docs/SIDEBAR.md M1): origin → service →
+  // snapshot, from a com.wash.hostgw on every attached router. This is the
+  // SINGLE source for the section badges below, LOCAL included — the same
+  // local state also still arrives on the legacy per-service kinds, which
+  // the widget BODIES read, so counting both would double every local
+  // number. Seeded synchronously in case state landed before we mounted.
+  const [hostgw, setHostgw] = createSignal<HostgwMap>(
+    window.wash.hostgwState?.() ?? new Map(),
+  );
   // persistSidebar is debounced so a flurry of toggles doesn't
   // hammer the BE's save_state path. Matches the wash-edit cadence.
   let persistTimer: number | null = null;
@@ -364,12 +387,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     if (cur === 'expanded') return;
     setSectionState(id, 'expanded');
   };
-  // notifyBadge — show the unread count in the section header. Empty
-  // string hides the badge (Section's Show guard treats it as falsy).
-  const notifyBadge = (): string => {
-    const unread = notifications().filter((n) => !n.read).length;
-    return unread > 0 ? String(unread) : '';
-  };
+  // notifyBadge — unread count in the section header, merged across every
+  // attached host (docs/SIDEBAR.md M1b). Reads the hostgw map, NOT
+  // notifications(): that signal is this host's feed only, and it is what
+  // the widget body renders until notify's own relocation. Empty string
+  // hides the badge (Section's Show guard treats it as falsy).
+  const notifyBadge = (): string =>
+    badgeText(totalCount(hostgw(), SERVICE_NOTIFY, unreadNotifications));
   // wantsAttention — the instances with an unread warn/error notification.
   // A window whose app has said something urgent and unread wears an amber
   // dot on its taskbar pill, which is the standing version of the toast
@@ -394,35 +418,28 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       }
     }
   };
-  // bulkBadge — show the count of in-flight (queued + running) jobs.
-  // Terminal-state rows don't count (they're informational, auto-
-  // evicting). Conflicts also count — they're blocking work.
-  const bulkBadge = (): string => {
-    const active = bulkJobs().filter(
-      (j) => j.status === 'queued' || j.status === 'running',
-    ).length;
-    return active > 0 ? String(active) : '';
-  };
-  // privBadge — count pending approval requests. Empty when the queue
-  // is settled (everything either approved-and-done or already
-  // rejected — those don't demand the user's attention).
-  const privBadge = (): string => {
-    const pending = privReqs().filter((r) => r.status === 'queued').length;
-    return pending > 0 ? String(pending) : '';
-  };
+  // bulkBadge — in-flight (queued + running) jobs across every host.
+  // Terminal-state rows don't count (informational, auto-evicting). This
+  // badge is why M1 is a hard prerequisite for M3: a long copy outlives
+  // the fm window, so awareness cannot depend on any window being open.
+  const bulkBadge = (): string =>
+    badgeText(totalCount(hostgw(), SERVICE_BULK, activeBulkJobs));
+  // privBadge — pending approval requests across every host. Empty when
+  // every queue is settled (approved-and-done or already rejected — those
+  // demand nothing). Answering still happens on the requesting host,
+  // which is M4's business; this only says where to look.
+  const privBadge = (): string =>
+    badgeText(totalCount(hostgw(), SERVICE_PRIV, pendingPrivReqs));
   // privAccent — red trust tint used on the priv section header,
   // matching the (now-removed) priv window's titlebar stripe and the
   // ROOT-flagged window treatment in window.tsx.
   const PRIV_ACCENT = tokens.accentRed;
-  // netBadge — flag when netd wants attention: "!" while a change awaits
-  // confirmation (the lock-out window), the status verb on a terminal
-  // outcome, empty when idle/committed.
-  const netBadge = (): string => {
-    const s = netState()?.status;
-    if (s === 'await-confirm') return '!';
-    if (s === 'failed' || s === 'reverted') return s;
-    return '';
-  };
+  // netBadge — flag when any host's netd wants attention: "!" while a
+  // change awaits confirmation (the lock-out window), the status verb on a
+  // terminal outcome, empty when every host is idle/committed. An
+  // await-confirm anywhere outranks the rest — that host is one timeout
+  // from locking someone out.
+  const netBadge = (): string => netBadgeFor(hostgw());
   const NET_ACCENT = tokens.accentBlue;
   // remoteBadge — count of currently-connected remote hosts ("up"),
   // empty when none. The glanceable "how many sessions are open."
@@ -436,9 +453,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // section, not on its header.
   const agentBadge = (): string => {
     // A question waiting on you counts the same as an agent waiting on
-    // you — both mean "someone is blocked until you look".
-    const waiting = agentRows().filter((r) => r.state === 'needs-input').length + agentAsks().length;
-    return waiting > 0 ? String(waiting) : '';
+    // you — both mean "someone is blocked until you look". Merged across
+    // hosts: an agent on build01 was the sharpest symptom of the rail
+    // being local-only (docs/SIDEBAR.md §1.2).
+    return badgeText(totalCount(hostgw(), SERVICE_AGENT, waitingAgents));
   };
   // focusAgent goes to the terminal window that owns a roster row. The
   // row carries its terminal's instance id, which is what the WM keys on.
@@ -775,6 +793,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const offVp = window.wash.onViewport(setVp);
     const offScreen = window.wash.onScreenSize(setScreen);
     const offLink = window.wash.onLinkStats?.(setLink);
+    // Host awareness (docs/SIDEBAR.md M1b). Fires immediately with the
+    // current map, then on every (origin, service) change. Nothing is sent
+    // from here: the shell owns the subscribe to each host's hostgw,
+    // because it owns the connections and has to re-ask on every reconnect.
+    const offHostgw = window.wash.onHostgwState?.(setHostgw);
 
     // BE → FE: desktop.config arrives once at startup and again
     // on every fswatch fire (wash-settings rewrote the file).
@@ -1067,6 +1090,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       offVp();
       offScreen();
       offLink?.();
+      offHostgw?.();
       props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('wash:state', onState);
       // Cooperative unsubscribe via the session BE gateways. Cheap

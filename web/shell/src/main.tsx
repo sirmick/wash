@@ -844,6 +844,13 @@ function installDisplayMetricsPublisher(client: RouterClient): void {
 }
 
 installDisplayMetricsPublisher(local);
+// LOCAL is just another origin for awareness (docs/SIDEBAR.md §3.2(2)): A's
+// own hostgw feeds the same merged map B's does. Its state already arrives
+// unprompted — every background app autoboots on shell connect — but the
+// explicit subscribe is what a REFRESH depends on: the gateway is already
+// running by then, so without a catch-up request this tab would show no
+// local state until something happened to change it.
+installHostgwSubscriber(local);
 
 createEffect(() => {
   screenSize();

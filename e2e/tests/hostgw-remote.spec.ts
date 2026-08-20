@@ -120,6 +120,14 @@ test('a remote host\'s service state reaches the seat, tagged to that host', asy
     // staged in every test router, so B's hostgw subscribed to it at
     // startup and got a snapshot back with nobody having touched it.
     expect(Object.keys(snap.remoteB).sort()).toContain('agent');
+
+    // (4) And the rail actually renders the merged number (M1b). Three
+    // unread: A's two plus B's one. This is also the double-count guard —
+    // local state reaches the FE twice now (via hostgw AND via the legacy
+    // notify.state kind the widget body still reads), so a badge sourced
+    // from both would read five here.
+    await expect(page.locator('[data-testid="sidebar-section-badge-notify"]'))
+      .toHaveText('3', { timeout: 10_000 });
   } finally {
     if (a) await stopRouter(a);
     if (b) await stopRouter(b);

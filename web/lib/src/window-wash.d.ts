@@ -106,6 +106,16 @@ interface WashLinkHealth {
   status: 'ok' | 'warn' | 'bad';
 }
 
+/**
+ * One host's awareness state: service name ("notify" | "bulk" | "priv" |
+ * "net" | "audio" | "agent") → that service's latest snapshot. Bodies are
+ * opaque at this layer; each rail widget knows its own service's shape.
+ */
+type WashHostServices = ReadonlyMap<string, unknown>;
+
+/** The merged awareness map: origin → service → snapshot. */
+type WashHostgwMap = ReadonlyMap<string, WashHostServices>;
+
 interface WashGlobals {
   sendAppMsg(instanceID: string, data: unknown): void;
   sendAppMsgTo(recipient: WashRecipient, data: unknown): void;
@@ -167,6 +177,19 @@ interface WashGlobals {
   // About screen render it. null until the first link.stats arrives.
   linkStats(): WashLinkHealth | null;
   onLinkStats(cb: (h: WashLinkHealth) => void): () => void;
+  // Host-awareness state, merged across hosts (docs/SIDEBAR.md M1): every
+  // router runs com.wash.hostgw, which republishes its own host's
+  // background-service snapshots; the shell tags each by the origin it
+  // arrived from. The right rail reads this to answer "what needs me, and
+  // where" for LOCAL and remote hosts alike.
+  //
+  // Read-only, and full-replace: each push replaces one (origin, service)
+  // cell wholesale, so consumers recompute from the snapshot rather than
+  // incrementing counters. A host that detaches loses its whole entry.
+  // Control is NOT here — it lives in the owning app, reached with
+  // launchOn(origin, appID).
+  hostgwState(): WashHostgwMap;
+  onHostgwState(cb: (m: WashHostgwMap) => void): () => void;
   log(level: WashLogLevel, source: string, msg: string, stack?: string): void;
   openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
   // interactive=true tags the frame CLASS_INTERACTIVE instead of the
