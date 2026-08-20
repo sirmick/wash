@@ -323,6 +323,16 @@ hosts (docs/SETTINGS.md §2 revised).
 
 ### 6.2 Existing widgets become multi-host aware
 
+> **Superseded (2026-08-19) by [SIDEBAR.md](SIDEBAR.md).** The merge-everything
+> approach below is right for *awareness* and wrong for *control*: it needs a
+> second cross-host addressing tier for every verb, and has no attestation story
+> on B (which runs `--no-session`, so the session BE gateway it assumes does not
+> exist there). SIDEBAR.md keeps awareness in the rail and relocates control
+> into apps, which are already host-portable. The per-widget table below is
+> superseded by SIDEBAR.md §3.1 — which also covers Agents, added after this
+> section was written.
+
+
 Today each widget's data flows: service `StateService` → **session BE gateway**
 (re-brands to `notify.state`/`bulk.state`/…) → session FE signal → widget. B has
 no session app, so that gateway does not exist on B. Therefore **A's session FE

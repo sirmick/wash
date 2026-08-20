@@ -57,9 +57,29 @@ bug list — all fully landed; see `git log` if you need their content.)
   B's router to the `ssh` pid (`apps/remote/be/supervisor.go`); a blip kills
   B's apps. Start B's router detached; re-dial with backoff, report
   `reconnecting`, freeze→thaw windows (docs/REMOTE.md §2/§9).
-- [ ] **M4/M5 — multi-host services**: notify/bulk/priv merge + priv host
-  attribution; clipboard sync hub; cross-origin z-band (focused-host windows
-  on top, below chrome z 9999/10000).
+- [ ] **M4/M5 — multi-host services** — plan of record:
+  **docs/SIDEBAR.md** (supersedes REMOTE.md §6.2). The right rail is
+  local-only in 8 of 11 sections: widgets reach services through the session
+  BE gateway, whose `SendAppMsgTo` has no origin (`sendAppMsgTo` always uses
+  the local conn). Fix is by *relocation*, not by merging every verb — control
+  moves in-app (apps are host-portable), the rail keeps awareness only.
+  - [ ] **M0 — remote toasts.** B's toasts already reach A's shell via
+    `shellList()` and are dropped by one guard (`web/shell/src/main.tsx:450`).
+    Delete it, tag + tint by host. Cheapest win here.
+  - [ ] **M1 — awareness channel.** Read-only shell→router ctrl verb to
+    subscribe to a background singleton's state, modelled on `ShellLaunch`
+    (`internal/router/shell_session.go:830`) — B runs `--no-session` so there
+    is no BE to gateway through, and the router does the attestation.
+  - [ ] **M2 — Agents into `com.wash.ai`.** Roster pane + verbs; rail keeps
+    counts. Reworks the GH #21 resume/fork/terminate verb set — known cost.
+  - [ ] **M3 — Bulk into fm** (sole consumer is `apps/fm/be/upload.go`; jobs
+    outlive the fm window, so M1 is a hard prerequisite).
+  - [ ] **M4 — priv prompt as a window app on the requesting host.** Makes
+    REMOTE.md §10's encrypt-to-B's-pubkey dance unnecessary — the password
+    never traverses A. Needs an anti-phishing answer first.
+  - [ ] **M5/M6 — Net + About per-host; delete the dead gateways.**
+- [ ] **Clipboard sync hub; cross-origin z-band** (focused-host windows on
+  top, below chrome z 9999/10000) — the rest of the old M4/M5 entry.
 - [ ] **M6 — remote hardening pass**: multi-tenancy, provenance/priv-phishing
   review, reconnect-audit alignment, B-router teardown/linger policy.
 - [ ] **Un-diagnosed report from the R2 bug bash**: "something serious funky
