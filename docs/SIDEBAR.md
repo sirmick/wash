@@ -215,6 +215,16 @@ of them look open-and-shut from the outside and are not.
    re-cut M3–M5 toward richer rail widgets over `hostgw` instead. Written down
    now so sunk cost cannot argue past it later.
 
+   **Tripwire checked 2026-08-20, after M2 and M3 had both crossed the door:
+   doorway. M4–M6 proceed as designed.** The verdict came with a better
+   statement of what the rail is for than this document had managed —
+   *"a 30k overview of where attention needs to go"* — and with the reason the
+   click-count cost is worth paying: the relocation *"fixes, partly by design,
+   the broken experience using remote."* That is the trade stated exactly
+   right. The single-host cost (two clicks to cancel where there was one) is
+   the price; the remote case working at all is the purchase. Anyone reopening
+   this should be arguing about that trade, not rediscovering it.
+
 8. **Permission asks stay in the rail — a named exception** (settled
    2026-08-20, during M2c). Every other agent verb moved into
    `com.wash.ai` under §3's invariant, and answering an ask *is* a
