@@ -1,10 +1,12 @@
-// fm upload cancel: cancelling an in-flight upload from the wash-bulk
-// sidebar widget. The committed fm-upload.spec couldn't cover this —
+// fm upload cancel: cancelling an in-flight upload from fm's jobs strip
+// (the wash-bulk sidebar widget until docs/SIDEBAR.md M3a moved it, since
+// the rail's cancel could only ever reach the LOCAL host). The committed
+// fm-upload.spec couldn't cover this —
 // a local upload finishes sub-second, so there's no window to click
 // cancel. Here we THROTTLE the connection via CDP so the transfer
 // stays in-flight, then assert the cancel propagates end-to-end:
 //
-//   sidebar cancel → session bulk_cancel → bulk cancel → fm
+//   fm strip cancel → bulk cancel → fm
 //   upload_cancel → abort + report status=cancelled
 //
 // Regression guard for the head-of-line bug: writeRaw queues into the
@@ -49,8 +51,12 @@ test('sidebar cancel aborts an in-flight upload', async ({ page, router }) => {
 
   // BE: the upload job reaches a terminal cancelled state.
   await router.waitForLog(new RegExp(`bulk-ops job=${jobId} op=upload status=cancelled`), 10_000);
-  // FE: the row reflects it.
-  await expect(row).toHaveAttribute('data-status', 'cancelled', { timeout: 5_000 });
+  // FE: the row LEAVES the strip. fm lists work still in flight
+  // (docs/SIDEBAR.md M3a), so a cancelled job going away IS the strip
+  // reflecting it — there is no terminal row to inspect any more, and the
+  // rail that used to keep one is gone as of M3c. The BE log above is the
+  // authority on WHY it left; this asserts the user stops seeing it.
+  await expect(row).toHaveCount(0, { timeout: 5_000 });
   // FS: the upload wasn't completed (temp discarded, no full file left).
   const dest = join(router.fmRoot, 'huge.bin');
   if (existsSync(dest)) {

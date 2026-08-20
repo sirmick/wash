@@ -192,8 +192,12 @@ test.describe('fm upload: external drop', () => {
   });
 });
 
-test.describe('fm upload: sidebar progress', () => {
-  test('upload appears as a bulk job row and reaches a terminal state', async ({ page, router }) => {
+test.describe('fm upload: the rail notices', () => {
+  test('an upload pops the rail\'s Bulk section open and runs to completion', async ({ page, router }) => {
+    // The job row lives in fm's own strip since docs/SIDEBAR.md M3a, and
+    // left the rail in M3c. What the rail keeps is "something started" —
+    // the pop-open — which is the part worth guarding here; the row is
+    // fm-jobs.spec.ts's business.
     await openFm(page, router);
     // Bulk section starts collapsed; a new job auto-expands it.
     await expect(page.locator('[data-testid="sidebar-section-bulk"]')).toHaveAttribute('data-state', 'collapsed');
@@ -205,8 +209,8 @@ test.describe('fm upload: sidebar progress', () => {
     await expect(page.locator('[data-testid="sidebar-section-bulk"]')).toHaveAttribute('data-state', 'expanded', {
       timeout: 5_000,
     });
-    const row = page.locator('[data-testid^="bulk-job-up-"]').first();
-    await expect(row).toBeVisible({ timeout: 5_000 });
-    await expect(row).toHaveAttribute('data-status', /done|running/, { timeout: 5_000 });
+    // Terminal state on the BE: a two-byte upload is done before a strip
+    // that lists only in-flight work could render it.
+    await router.waitForLog(/bulk-ops job=up-\S+ op=upload status=done/, 10_000);
   });
 });

@@ -174,10 +174,13 @@ test.describe('fm: bulk delete via multi-select', () => {
     expect(existsSync(dir)).toBe(false);
   });
 
-  test('sidebar bulk widget shows job row + auto-expands on enqueue', async ({ page, router }) => {
-    // Multi-select delete should produce a bulk-job-* row in the
-    // sidebar's Bulk Ops section. The auto-expand rule (M5) flips
-    // the section from collapsed → expanded on a new job.
+  test('a new job pops the rail\'s Bulk section open', async ({ page, router }) => {
+    // The job ROW moved to fm in docs/SIDEBAR.md M3a and left the rail
+    // entirely in M3c — cancelling is a send, and the rail's sends resolve
+    // inside their own router, so its button could never reach host B.
+    // What the rail kept is the pop-open, and it is worth guarding: it
+    // rides the legacy bulk.state handler, because hostgw's rise-detector
+    // deliberately skips LOCAL. fm-jobs.spec.ts covers the row itself.
     writeFileSync(join(router.fmRoot, 'sb-a.txt'), 'a');
     writeFileSync(join(router.fmRoot, 'sb-b.txt'), 'b');
     await openFm(page, router);
@@ -192,13 +195,13 @@ test.describe('fm: bulk delete via multi-select', () => {
     await page.locator('[data-testid="fm-ctx-delete"]').click();
     await page.locator('[data-testid="fm-confirm-delete-yes"]').click();
 
-    // Auto-expand + a row arrives. Row test-id includes the job_id
-    // (we don't know it ahead of time — match the prefix).
+    // The section flips collapsed → expanded on the new job.
     await expect(page.locator('[data-testid="sidebar-section-bulk"]')).toHaveAttribute('data-state', 'expanded', { timeout: 5_000 });
-    await expect(page.locator('[data-testid^="bulk-job-"]').first()).toBeVisible({ timeout: 5_000 });
-    // Job completes (fs side already covered by other tests; here we
-    // just check the row reaches a terminal state).
-    await expect(page.locator('[data-testid^="bulk-job-"]').first()).toHaveAttribute('data-status', /done|cancelled|failed/, { timeout: 5_000 });
+    // And the job runs to completion. Asserted on the BE, not on a row:
+    // a delete of two small files is terminal almost immediately, and fm's
+    // strip lists only work still in flight, so there is nothing left on
+    // screen to inspect by the time we could look.
+    await router.waitForLog(/bulk-ops job=\S+ op=delete status=done/, 10_000);
   });
 
   test('fm\'s bulk conflict overlay pops on copy-onto-existing', async ({ page, router }) => {

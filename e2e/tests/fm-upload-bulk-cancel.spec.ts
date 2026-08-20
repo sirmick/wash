@@ -40,7 +40,7 @@ function manyFiles() {
   }));
 }
 
-test('a bulk upload of many small files can be cancelled from the sidebar mid-stream', async ({ page, router }) => {
+test('a bulk upload of many small files can be cancelled mid-stream', async ({ page, router }) => {
   await openFm(page, router);
   await page.locator('[data-testid="fm-upload-input"]').setInputFiles(manyFiles());
 
@@ -54,6 +54,12 @@ test('a bulk upload of many small files can be cancelled from the sidebar mid-st
   await expect
     .poll(
       async () => {
+        // Gone from the strip counts as terminal: fm lists only work in
+        // flight, so a cancelled job vanishes rather than going grey
+        // (docs/SIDEBAR.md M3a). Checked FIRST — getAttribute on a
+        // detached row yields null, which would otherwise read as
+        // 'running' forever and time out.
+        if ((await row.count()) === 0) return 'gone';
         const st = await row.getAttribute('data-status').catch(() => null);
         if (st && st !== 'running') return st;
         await page.getByTestId(`bulk-cancel-${jobId}`).dispatchEvent('click').catch(() => {});
@@ -61,8 +67,9 @@ test('a bulk upload of many small files can be cancelled from the sidebar mid-st
       },
       { timeout: 20_000, intervals: [100] },
     )
-    .toBe('cancelled');
+    .not.toBe('running');
 
+  // The BE is the authority on why it left flight: cancelled, not finished.
   await router.waitForLog(new RegExp(`bulk-ops job=${jobId} op=upload status=cancelled`), 10_000);
   // Cancel landed mid-stream → not every file made it to disk.
   expect(readdirSync(router.fmRoot).filter((n) => n.startsWith('f-')).length).toBeLessThan(N);
