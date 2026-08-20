@@ -73,7 +73,7 @@ test.describe('agents rail per-session verbs', () => {
 
     // The verbs live in a per-row menu. It portals to document.body, so
     // it is addressed from the page, not from inside the row.
-    await row.locator('[data-testid="agents-row-menu"]').click();
+    await row.locator('[data-testid="agents-verbs-btn"]').click();
     const menu = page.locator('[data-testid="agents-row-actions"]');
     await expect(menu).toBeVisible();
 
@@ -103,7 +103,7 @@ test.describe('agents rail per-session verbs', () => {
     await expect(row).toBeVisible({ timeout: 15_000 });
 
     const cursor = router.logCursor();
-    await row.locator('[data-testid="agents-row-menu"]').click();
+    await row.locator('[data-testid="agents-verbs-btn"]').click();
     const menu = page.locator('[data-testid="agents-row-actions"]');
     await expect(menu).toBeVisible();
     await menu.locator('[data-testid="agents-menu-detach"]').click();
@@ -115,7 +115,7 @@ test.describe('agents rail per-session verbs', () => {
     // The row stays (that is the whole point of detach) and Detach goes
     // disabled, because there is no longer a window to let go of.
     await expect(row).toBeVisible();
-    await row.locator('[data-testid="agents-row-menu"]').click();
+    await row.locator('[data-testid="agents-verbs-btn"]').click();
     await expect(page.locator('[data-testid="agents-menu-detach"]')).toBeDisabled({
       timeout: 15_000,
     });

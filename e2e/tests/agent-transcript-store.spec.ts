@@ -128,7 +128,7 @@ test('the transcript outlives the session it came from', async ({ page, router }
   const row = body.locator('[data-testid^="agents-row-"]').first();
   await expect(row).toBeVisible({ timeout: 15_000 });
   const cursor = router.logCursor();
-  await row.locator('[data-testid="agents-row-menu"]').click();
+  await row.locator('[data-testid="agents-verbs-btn"]').click();
   await page.locator('[data-testid="agents-menu-end"]').click();
   await page.locator('[data-testid="agents-menu-end-confirm"]').click();
   await router.waitForLog(/agentd: acp session ended key=/, 15_000, cursor);

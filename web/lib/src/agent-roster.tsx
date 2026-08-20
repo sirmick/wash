@@ -106,12 +106,10 @@ export interface AgentRosterProps {
   asks?: () => RosterAsk[];
   /** answer one: decision allow|deny, remember writes the named rule */
   onAnswer?: (ask: RosterAsk, decision: 'allow' | 'deny', remember: boolean) => void;
-  /** remembered sessions, most recent first */
-  recent?: () => RosterSession[];
-  /** reopen one — agentd loads it and opens an Agent window */
-  onResume?: (session: RosterSession, fork: boolean) => void;
-  /** put the session id on the clipboard */
-  onCopyID?: (session: RosterSession) => void;
+  // recent / onResume / onCopyID used to live here. They went with
+  // RecentRow: the roster answers "what is running", and reopening
+  // something that ISN'T is com.wash.ai's History menu and HistoryPanel,
+  // which can search transcripts and carry metadata a roster row cannot.
   /** let the window go, keep the session running */
   onDetach?: (row: RosterRow) => void;
   /** end the current turn; the session stays available */
@@ -441,7 +439,13 @@ const AgentRowView: Component<{
         <Show when={hasVerbs()}>
           <button
             type="button"
-            data-testid="agents-row-menu"
+            // Named to collide with nothing: "agents-row-menu" made a
+            // prefix query for rows (agents-row-<key>) match this button
+            // too, and "agents-menu" would have been a prefix of the
+            // agents-menu-* items below. Same trap the ask block
+            // documents; it caught the M2b roster e2e counting two rows
+            // for one session.
+            data-testid="agents-verbs-btn"
             title="Session actions"
             aria-label="Session actions"
             aria-haspopup="menu"

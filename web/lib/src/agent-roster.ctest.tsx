@@ -7,7 +7,7 @@
 
 import { test, expect, afterEach } from 'vitest';
 import { render, fireEvent, cleanup, screen } from '@solidjs/testing-library';
-import { AgentRoster, fmtAgo, fmtElapsed, stateColor, stateLabel, type RosterAsk, type RosterRow, type RosterSession } from './agent-roster.tsx';
+import { AgentRoster, fmtAgo, fmtElapsed, stateColor, stateLabel, type RosterAsk, type RosterRow } from './agent-roster.tsx';
 
 afterEach(cleanup);
 
@@ -164,15 +164,6 @@ test('questions render above the status rows — blocked beats informational', (
 
 // ---- M7: the Recent list (docs/AGENT_TERM.md §13) ----
 
-const sess = (over: Partial<RosterSession> = {}): RosterSession => ({
-  session_id: 'sess-1',
-  agent: 'claude',
-  cwd: '/home/mick/wash',
-  dir: 'wash',
-  last_seen: Math.floor(Date.now() / 1000) - 300,
-  ...over,
-});
-
 test('fmtAgo reads like a human said it', () => {
   const now = 1_000_000_000_000; // ms
   const sec = now / 1000;
@@ -183,13 +174,14 @@ test('fmtAgo reads like a human said it', () => {
   expect(fmtAgo(now, 0)).toBe('');
 });
 
-// Earlier sessions moved to the Agent app's History menu: the sidebar
-// answers "what is running", and a list of things that are NOT running
-// was answering a different question in the same space.
-test('the sidebar no longer lists sessions that ended', () => {
+// Earlier sessions live in the Agent app's History menu: the roster
+// answers "what is running", and a list of things that are NOT running was
+// answering a different question in the same space. The props that fed
+// them are gone too (M2b) — this pins the scope, so a future "just add
+// recent to the roster" has to argue with a test first.
+test('the roster does not list sessions that ended', () => {
   const { queryByTestId } = render(() => (
-    <AgentRoster rows={() => []} startedAt={at} now={() => Date.now()} onActivate={noop}
-      recent={() => [sess()]} />
+    <AgentRoster rows={() => []} startedAt={at} now={() => Date.now()} onActivate={noop} />
   ));
   expect(queryByTestId('agents-recent')).toBeNull();
   expect(queryByTestId('agents-recent-row')).toBeNull();
@@ -208,7 +200,7 @@ test('the sidebar no longer lists sessions that ended', () => {
 // clip it, which puts it OUTSIDE render()'s container — menu queries are
 // document-scoped (screen), row queries are not.
 const openRowMenu = (getByTestId: (id: string) => HTMLElement) => {
-  fireEvent.click(getByTestId('agents-row-menu'));
+  fireEvent.click(getByTestId('agents-verbs-btn'));
   return screen.getByTestId('agents-row-actions');
 };
 
@@ -262,7 +254,7 @@ test('verbs: a host that passes no handler gets no menu at all', () => {
     <AgentRoster rows={() => [row({ key: 'a', state: 'working' })]} startedAt={at} now={() => 0}
       onActivate={noop} />
   ));
-  expect(queryByTestId('agents-row-menu')).toBeNull();
+  expect(queryByTestId('agents-verbs-btn')).toBeNull();
 });
 
 // End kills the adapter and everything it held, and it sits one row from

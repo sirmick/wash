@@ -97,3 +97,50 @@ test('the roster pane lists agentd\'s sessions and switches the detail pane', as
   await expect(topPane.locator('[data-testid^="agents-row-"][data-active="true"]')).toHaveCount(1);
   await expect(topPane.locator(`[data-testid="${otherKey}"]`)).toHaveAttribute('data-active', 'true');
 });
+
+test('a roster verb acts on the row, not on the window it was clicked in', async ({ page, router }) => {
+  // The claim M2b makes: verbs are key-addressed, so a window can end a
+  // session it is not showing — including one with no window at all. The
+  // rail could only ever do this for the LOCAL host, and only by
+  // gatewaying through the session BE.
+  await page.goto(router.url);
+  await expect(page.locator('wash-app-session')).toBeVisible();
+
+  const first = await openAgentWindow(page, 0);
+  await startSession(first, 'session to be ended');
+  const second = await openAgentWindow(page, 1);
+  await startSession(second, 'the window doing the ending');
+
+  // Work from the top window, which shows ITS OWN session. Its roster
+  // lists both.
+  const pane = second.locator('[data-testid="ai-roster-pane"]');
+  await expect(pane).toBeVisible({ timeout: 20_000 });
+  await expect(pane.locator('[data-testid^="agents-row-"]')).toHaveCount(2, { timeout: 20_000 });
+
+  // The OTHER row — the session this window is not showing.
+  const otherRow = pane.locator('[data-testid^="agents-row-"][data-active="false"]').first();
+  await expect(otherRow).toBeVisible();
+  const otherKey = (await otherRow.getAttribute('data-testid'))!.replace('agents-row-', '');
+
+  // The verbs live behind the row's menu (a rail row was too narrow for a
+  // button strip, and a menu can render an inapplicable verb disabled
+  // rather than vanishing). It portals to document.body, so it is
+  // addressed from the page rather than from inside the row — same idiom
+  // as agent-rail-verbs.spec.ts, which drives the identical component.
+  const from = router.logCursor();
+  await otherRow.locator('[data-testid="agents-verbs-btn"]').click();
+  const menu = page.locator('[data-testid="agents-row-actions"]');
+  await expect(menu).toBeVisible();
+  await menu.locator('[data-testid="agents-menu-detach"]').click();
+
+  // agentd acted on the key it was given, which is the row's — not the
+  // clicking window's session.
+  await router.waitForLog(new RegExp(`wash-ai: roster detach key=${otherKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), 10_000, from);
+
+  // And the row says so: detached is "still running, no window on it".
+  await expect(pane.locator(`[data-testid="agents-row-${otherKey}"]`))
+    .toBeVisible({ timeout: 10_000 });
+
+  // The window that issued it is untouched — its own session still shows.
+  await expect(second.getByText('the window doing the ending')).toBeVisible();
+});

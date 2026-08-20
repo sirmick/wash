@@ -20,9 +20,8 @@ import {
   getPack,
   tokens,
   washAssetUrl,
-  washCopyText,
 } from '@wash/ui';
-import type { Pack, RosterAsk, RosterRow, RosterSession } from '@wash/ui';
+import type { Pack, RosterAsk, RosterRow } from '@wash/ui';
 import { toBlob } from 'html-to-image';
 import { Camera, Search, PanelRightOpen } from 'lucide-solid';
 import { Sidebar, type SidebarMode } from './sidebar/Sidebar';
@@ -337,9 +336,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // roster push. An agent blocked on a human is the one thing in the
   // sidebar worth opening the section for on its own.
   const [agentAsks, setAgentAsks] = createSignal<RosterAsk[]>([]);
-  // Remembered sessions (docs/AGENT_TERM.md §13) — what a reboot or a
-  // closed window would otherwise have cost.
-  const [agentRecent, setAgentRecent] = createSignal<RosterSession[]>([]);
   const agentStartedAt = new Map<string, number>();
   const [agentNow, setAgentNow] = createSignal(Date.now());
 
@@ -984,9 +980,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           const state = data.state as unknown as {
             rows?: RosterRow[];
             asks?: RosterAsk[];
-            recent?: RosterSession[];
           };
-          setAgentRecent((state?.recent ?? []) as RosterSession[]);
           const next = (state?.rows ?? []) as RosterRow[];
           const asks = (state?.asks ?? []) as RosterAsk[];
           const hadAsks = agentAsks().length > 0;
@@ -1432,15 +1426,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               window.wash.sendAppMsg(props.instance, { kind: 'agent_reattach', key: row.key })
             }
             asks={agentAsks}
-            recent={agentRecent}
-            onResume={(session, fork) =>
-              window.wash.sendAppMsg(props.instance, {
-                kind: 'agent_resume',
-                session_id: session.session_id,
-                fork,
-              })
-            }
-            onCopyID={(session) => void washCopyText(session.session_id)}
             onDetach={(row) =>
               window.wash.sendAppMsg(props.instance, { kind: 'agent_detach', key: row.key })
             }

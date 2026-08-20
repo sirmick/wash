@@ -513,6 +513,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           padding: `${tokens.spaceSm}px`,
         }}
       >
+        {/* The verbs are key-addressed, so they act on the row rather than
+            on whatever this window happens to be showing — including a
+            session with no window at all. That is the whole difference
+            between here and the rail: an app talking to its own host's
+            agentd has a router-attested sender, so it may act. */}
         <AgentRoster
           rows={rows}
           asks={() => roster().asks ?? []}
@@ -520,6 +525,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           now={now}
           activeKey={sessionKey}
           onActivate={(r) => send({ kind: 'select', key: r.key })}
+          onReattach={(r) => send({ kind: 'row_reattach', key: r.key })}
+          onDetach={(r) => send({ kind: 'row_detach', key: r.key })}
+          onCancel={(r) => send({ kind: 'row_cancel', key: r.key })}
+          onStop={(r) => send({ kind: 'row_stop', key: r.key })}
+          onAnswer={(a, decision, remember) => send({
+            kind: 'answer',
+            id: a.id,
+            decision,
+            rule: remember ? (a.suggested_rule ?? '') : '',
+          })}
         />
       </div>
     </Show>

@@ -272,6 +272,27 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			"replay": true,
 		})
 
+	// Row-addressed verbs from the roster pane (docs/SIDEBAR.md M2b). The
+	// detach / terminate cases below are this WINDOW closing itself and end
+	// the process; these act on any session agentd holds, including ones no
+	// window is showing — which is the capability the desktop rail could
+	// never have for a remote host.
+	//
+	// Acting on the session this window happens to be showing needs no
+	// special case: agentd tells every transcript watcher when a session
+	// detaches, and onAppMsgFrom already exits on that for our own key.
+	case "row_detach", "row_cancel", "row_stop", "row_reattach":
+		rowKey := str(m["key"])
+		if rowKey == "" {
+			return
+		}
+		verb := strings.TrimPrefix(str(m["kind"]), "row_")
+		log.Printf("wash-ai: roster %s key=%s", verb, rowKey)
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind": "agent_" + verb,
+			"key":  rowKey,
+		})
+
 	case "select":
 		// Master-detail: point this window at another of agentd's sessions.
 		// Same three steps as the agentd-initiated `attach` below — set the
