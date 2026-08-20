@@ -63,16 +63,23 @@ test('the Agent app opened on a remote host shows THAT host\'s sessions', async 
     // Cross it. launchOn carries the origin; nothing else had to change.
     await openB.click();
 
-    // The window that opens is B's app, and its roster is B's roster.
-    const remoteWin = page.locator('wash-app-ai-remoteb');
-    await expect(remoteWin).toBeAttached({ timeout: 20_000 });
-    await expect(remoteWin.locator('[data-testid="ai-roster-pane"], [data-testid="ai-roster-toggle"]'))
-      .toBeVisible({ timeout: 20_000 });
-    await expect(remoteWin.getByText('work happening on B')).toBeVisible({ timeout: 20_000 });
+    // A window opens on B. com.wash.ai is InstancingMulti, so the door
+    // ADDS one rather than focusing the session window already open there
+    // — which means B now has two, and anything that says "the remote
+    // window" has to say WHICH.
+    await expect(page.locator('wash-app-ai-remoteb').first()).toBeAttached({ timeout: 20_000 });
 
-    // And NOT A's. This is the regression the plan was written around:
-    // the rail used to answer for A no matter which host you meant.
-    await expect(remoteWin.getByText('work happening on A')).toHaveCount(0);
+    // B's session is on screen, in a window served by B's bundle (the
+    // per-origin mangled tag is the proof it is B's code, not A's).
+    const showingB = page.locator('wash-app-ai-remoteb').filter({ hasText: 'work happening on B' });
+    await expect(showingB).toHaveCount(1, { timeout: 20_000 });
+    await expect(showingB.locator('[data-testid="ai-roster-toggle"]')).toBeVisible();
+
+    // And A's session is nowhere in a remote window. This is the
+    // regression the plan was written around: the rail used to answer for
+    // A no matter which host you meant.
+    await expect(page.locator('wash-app-ai-remoteb').filter({ hasText: 'work happening on A' }))
+      .toHaveCount(0);
   } finally {
     if (a) await stopRouter(a);
     if (b) await stopRouter(b);

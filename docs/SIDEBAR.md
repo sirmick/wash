@@ -458,12 +458,19 @@ Four things the build found that the plan did not say:
   detached session is the rail's door → the app → its roster. That makes
   the deep-link load-bearing rather than a convenience, and it is now the
   path `agent-roster-verbs.spec.ts` walks.
-- **Reattaching from a roster spawns a second window**, leaving the one
-  you opened to find the roster sitting empty behind it. Minor, and the
-  §3.2(5) note ("launching from the roster may open a dedicated window")
-  anticipated the shape — but it is the kind of friction the §3.2(7)
-  tripwire is watching for, so it is written down rather than shrugged
-  off.
+- **The door always opens a NEW window**, because `com.wash.ai` is
+  `InstancingMulti` and `launchOn` spawns rather than raises. So clicking
+  through to a host that already has an Agent window open gives you a
+  second, empty one; the same root cause makes reattaching from a roster
+  leave the window you opened to find the roster sitting empty behind it.
+  §3.2(5) anticipated the shape ("launching from the roster may open a
+  dedicated window"), and it is not wrong so much as unhelpful in the
+  common case. A raise-or-launch door — focus an existing window on that
+  host, spawn only when there is none — is the obvious fix and is the
+  first thing to weigh in the §3.2(7) tripwire review, because it is
+  exactly the "deep-link feels like a toll" symptom the tripwire names.
+  It also bit the two-router e2e, which asserted against "the remote
+  window" while there were two.
 
 The tripwire itself is not yet answerable: it asks how the deep-link
 feels in daily use, which needs daily use. What can be said is that the
