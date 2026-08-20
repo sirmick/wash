@@ -45,7 +45,11 @@ const APPS: AppBundle[] = [
   // createAppBus saveState() persist helper. Bumped to keep ~8 KB headroom.
   // +~5 KB: the Agents sidebar widget + roster wiring (docs/AGENT_TERM.md
   // §7 — per-agent rows, state colours, elapsed clock, click-to-focus).
-  { name: 'session', dir: 'apps/session/fe/dist', maxBytes: 215_000 },
+  // +~8.5 KB (212.4k → 220.8k): the host-awareness layer (docs/SIDEBAR.md
+  // M1b/M1c) — the merged-map badge maths, the per-host summaries, and the
+  // HostGroups renderer with its per-host collapse. Bumped to 229k to
+  // restore the ~8 KB headroom the cap is here to defend.
+  { name: 'session', dir: 'apps/session/fe/dist', maxBytes: 229_000 },
   // about grew into the system-info panel: build/host/Go-runtime
   // process table/registered-apps/browser sections + sortable table.
   // +~0.1 KB from the shared createAppBus saveState()/flushState() persist
