@@ -6,6 +6,7 @@
 // session chrome (DE owns the UX), but for now the shell renders.
 
 import { tokens } from '@wash/ui';
+import { hostColor } from './host-colors.ts';
 
 export interface ToastInput {
   instanceID: string;
@@ -20,6 +21,13 @@ export interface ToastInput {
    * no-op for an instance with no window) leaves click = dismiss.
    */
   onActivate?: (instanceID: string) => void;
+  /**
+   * Origin the toast came from. A remote host's toast is indistinguishable
+   * from a local one without this — and "the build box finished" reads very
+   * differently from "this machine finished". LOCAL renders unchanged (no
+   * stripe, no label), so the common case is untouched.
+   */
+  origin?: string;
 }
 
 const TOAST_TTL_MS = 4500;
@@ -67,6 +75,8 @@ export function showToast(t: ToastInput): void {
   card.dataset.testid = 'notification';
   card.dataset.level = t.level ?? 'info';
   card.dataset.instance = t.instanceID;
+  const hue = t.origin ? hostColor(t.origin) : null;
+  if (t.origin) card.dataset.origin = t.origin;
   card.style.cssText = [
     'pointer-events:auto',
     `background:${colorFor(t.level)}`,
@@ -81,6 +91,18 @@ export function showToast(t: ToastInput): void {
     'transform:translateY(6px)',
     'transition:opacity 120ms, transform 120ms',
   ].join(';');
+  // Host stripe down the left edge, same hue the window top-stripe and the
+  // Hosts widget use, so one glance ties the toast to its machine. Set after
+  // cssText, as a deliberate override of the `border` shorthand above.
+  if (hue) card.style.borderLeft = `3px solid ${hue}`;
+
+  if (hue) {
+    const who = document.createElement('div');
+    who.dataset.testid = 'notification-host';
+    who.textContent = t.origin!;
+    who.style.cssText = `color:${hue};font-size:11px;font-weight:600;margin-bottom:1px;`;
+    card.appendChild(who);
+  }
 
   const title = document.createElement('div');
   title.dataset.testid = 'notification-title';

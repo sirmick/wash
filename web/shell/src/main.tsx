@@ -448,15 +448,18 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         deliverAppMsg(client, msg);
         break;
       case 'notify': {
-        // Remote-host notifications merge into the tray in M4; for now only
-        // the local router's toasts show.
-        if (!isLocal) break;
+        // Every attached router's toasts show, host-tinted (docs/SIDEBAR.md
+        // M0). A remote router already broadcasts to us — its shell is this
+        // one — so nothing new is subscribed here; the frames were simply
+        // being dropped. The id is compounded because B names its own bare
+        // instance and focusInstance matches against origin-tagged windows.
         const n = msg;
         showToast({
-          instanceID: n.instance_id,
+          instanceID: compoundInstanceId(client.origin, n.instance_id),
           title: n.title,
           body: n.body,
           level: n.level,
+          origin: client.origin,
           onActivate: focusInstance,
         });
         break;
