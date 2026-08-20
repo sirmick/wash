@@ -341,6 +341,50 @@ audience than a targeted push would be; the pseudo-instance design could have
 targeted one shell, and this one cannot. Gate `hostgw`'s state on the same
 ownership rule that governs which shells may attach at all.
 
+#### As built (2026-08-19) — corrections to the pinned mechanics
+
+The pinned facts held, with one exception and two clarifications worth
+carrying into M2+.
+
+**Wrong: M1a cannot be "remote origins only" at the data layer.**
+`EnsureBackgroundAppsRunning` spawns **every** registered background app
+on **every** shell connect (`internal/router/autoboot.go:71`), so A's own
+`hostgw` boots unprompted and its republishes land under `local` before
+anything asks. The staging still bisects cleanly, because what M1a
+changed is what *arrives*, and M1b is what changed what the rail
+**reads** — but "remote-only" describes the reads, not the channel.
+
+The subscribe is still load-bearing, for a different reason than assumed:
+autoboot covers the *first* fan-out only. On a page refresh the gateway is
+already running and has no reason to re-push, so without an explicit
+catch-up the new shell sees nothing until state happens to change. Same
+argument for a reconnect. `Conn.onState` fires on every transition to
+`open`, so one `installHostgwSubscriber` per client covers first attach
+and every redial — `reconcileRemoteAttachments` needed no hook.
+
+**Sharper: `subscribe` must be `sdk.HandleVoid`, not `HandleFromVoid`.**
+The plan said hostgw accepts unattested subscribes; the trap is that
+`HandleFromVoid`'s handler returns early when `from` is nil
+(`pkg/sdk/bus.go`), and the router relays a shell's cross-app send as a
+plain `EvtAppMsg` with no sender (`handleAppMsgSend`,
+`internal/router/shell_session.go:811`). Getting this wrong drops every
+shell subscribe **silently** — no error, no log. Relatedly, hostgw must
+**not** install `sdk.NewStateService`: that registers `subscribe` itself,
+and `Bus.register` panics on a duplicate kind.
+
+**Also true:** `serviceFEKind` covers seven services; hostgw watches six.
+`com.wash.remote` is excluded — the Hosts widget is already host-aware,
+and B republishing its own host list says nothing true about B's place in
+A's desktop. `audio` is watched but deliberately unread: sound exits B's
+speakers, so per-host audio needs a stream, not a badge (REMOTE.md §7).
+
+**Cost noted for the §3.2(7) tripwire:** M1c's host hue is a fourth copy
+of the palette+hash collapsed back to a second (the rail's own module and
+the shell's). An app FE bundle cannot import the shell's, so the shell's
+user overrides (`setHostColor`) are invisible to the rail — a pinned
+colour shows in the window stripe and not in the group. Folding host hues
+into a shell-exposed accessor is M6's.
+
 ### M2 — Agents into `com.wash.ai`  (the proving ground)
 
 `com.wash.ai` (`apps/ai/be/app.go:70`) is today "a window onto **one** managed

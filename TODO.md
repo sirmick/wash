@@ -66,13 +66,17 @@ bug list — all fully landed; see `git log` if you need their content.)
   - [x] **M0 — remote toasts** — DONE 2026-08-19. B's toasts already reached
     A's shell via `shellList()` and were dropped by one guard; deleted, and
     the toast is now host-tinted + origin-named.
-  - [ ] **M1 — awareness channel** (`com.wash.hostgw`). Design settled
-    2026-08-19 — SIDEBAR.md §3.2 records all seven decisions (merged awareness
-    with focus-aware presentation; hostgw symmetric from day one; multi-user
-    dissolves into the per-uid router boundary; snapshot-replace badges).
-    Staged M1a (hostgw + shell plumbing, remote) → M1b (local reads flip;
-    gateways stay) → M1c (rail host groups). Impl work order:
-    docs/PROMPT-sidebar.md.
+  - [x] **M1 — awareness channel** (`com.wash.hostgw`) — DONE 2026-08-19.
+    A background singleton on every router subscribes to its own host's
+    services and republishes their state; `relayAppMsgToShell` carries it to
+    every attached shell, and A's is one of B's. All three stages landed:
+    M1a channel + shell plumbing, M1b the five badges recomputed from the
+    merged map (one source, so local state arriving twice can't double-count),
+    M1c per-host groups (named in the host hue, collapsed-but-badged,
+    auto-expanding on a rise, greyed on reconnecting). No session BE gateway
+    touched — control still moves in-app in M2–M6. Two-router e2e proves B→A
+    flow, origin isolation, the rendered badge and the group. As-built
+    corrections to the plan's pinned mechanics: SIDEBAR.md M1 "As built".
   - [ ] **M2 — Agents into `com.wash.ai`.** Roster pane + verbs; rail keeps
     counts. Reworks the GH #21 resume/fork/terminate verb set — known cost.
   - [ ] **M3 — Bulk into fm** (sole consumer is `apps/fm/be/upload.go`; jobs
