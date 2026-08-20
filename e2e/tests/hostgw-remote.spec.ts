@@ -128,6 +128,29 @@ test('a remote host\'s service state reaches the seat, tagged to that host', asy
     // from both would read five here.
     await expect(page.locator('[data-testid="sidebar-section-badge-notify"]'))
       .toHaveText('3', { timeout: 10_000 });
+
+    // (5) And B has its own group in the rail (M1c): named, badged with
+    // ITS count alone, and collapsed — the remote host is visible without
+    // pushing this seat's own list off screen. The local host gets no
+    // group: it is the section body, and saying "this machine" twice is
+    // how the rail stopped being glanceable.
+    const group = page.locator('[data-testid="host-group-notify-remoteB"]');
+    await expect(group).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-testid="host-group-badge-notify-remoteB"]')).toHaveText('1');
+    await expect(page.locator('[data-testid="host-group-notify-local"]')).toHaveCount(0);
+
+    // It arrived OPEN, and that is the auto-expand working (§3.2(1)): B's
+    // unread count rose from nothing to one, which is exactly the event
+    // worth pulling a collapsed group open for. Collapsed is the resting
+    // default — asserted in HostGroups.ctest.tsx, where a group can be
+    // rendered without an event having just fired.
+    await expect(group).toHaveAttribute('data-state', 'expanded');
+    await expect(page.locator('[data-testid="host-group-body-notify-remoteB"]'))
+      .toHaveText('1 unread');
+
+    // And the user still outranks the auto-expand.
+    await page.locator('[data-testid="host-group-header-notify-remoteB"]').click();
+    await expect(group).toHaveAttribute('data-state', 'collapsed');
   } finally {
     if (a) await stopRouter(a);
     if (b) await stopRouter(b);

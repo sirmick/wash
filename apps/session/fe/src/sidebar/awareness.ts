@@ -197,3 +197,150 @@ export function netHostsNeedingAttention(map: HostgwMap): Array<{ origin: string
   }
   return out;
 }
+
+// ---- per-host summaries (the host-grouped rail, M1c) ----
+//
+// A badge says "something", a summary says "what". §3 of the plan sets the
+// bar with its own example — "2 agents on build01, 1 waiting on you" — so
+// these render the smallest sentence that answers it. Empty string means
+// "this host has nothing to say", which is what keeps a quiet host out of
+// the rail entirely.
+//
+// Awareness only, by construction: a summary is text. Acting on it means
+// opening the owning app on that host, which is what M2–M5 move in-app.
+
+/** plural renders "1 job" / "2 jobs" without a library. */
+export function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? '' : 's'}`;
+}
+
+export function notifySummary(state: unknown): string {
+  const n = unreadNotifications(state);
+  return n > 0 ? `${n} unread` : '';
+}
+
+export function bulkSummary(state: unknown): string {
+  const n = activeBulkJobs(state);
+  return n > 0 ? `${plural(n, 'job')} in flight` : '';
+}
+
+export function privSummary(state: unknown): string {
+  const n = pendingPrivReqs(state);
+  return n > 0 ? `${plural(n, 'request')} awaiting approval` : '';
+}
+
+/**
+ * agentSummary splits waiting from working, because they mean opposite
+ * things: one is a claim on your attention, the other is reassurance.
+ */
+export function agentSummary(state: unknown): string {
+  const s = state as AgentStateView | null;
+  const rows = s?.rows ?? [];
+  const waiting = rows.filter((r) => r.state === 'needs-input').length + (s?.asks ?? []).length;
+  const working = rows.filter((r) => r.state !== 'needs-input').length;
+  const parts: string[] = [];
+  if (waiting > 0) parts.push(`${waiting} waiting on you`);
+  if (working > 0) parts.push(`${plural(working, 'agent')} working`);
+  return parts.join(' · ');
+}
+
+/**
+ * netSummary reports a host's network state whenever it is not simply
+ * fine — including the terminal outcomes, which the collapsed badge
+ * folds away.
+ */
+export function netSummary(state: unknown): string {
+  const s = state as NetStateView | null;
+  if (!s?.status) return '';
+  if (s.status === 'await-confirm') return 'awaiting confirmation';
+  if (s.status === 'failed' || s.status === 'reverted') return s.status;
+  return '';
+}
+
+/** How a host's link is doing, as the Hosts widget reports it. */
+export type HostLinkStatus = 'up' | 'reconnecting' | 'down';
+
+/** One remote host's row inside a section. */
+export interface HostGroupRow {
+  origin: string;
+  /** Badge text; '' hides it. */
+  badge: string;
+  /** One-line answer to "what about this host?"; '' when nothing. */
+  summary: string;
+  status: HostLinkStatus;
+}
+
+/**
+ * remoteHostRows builds the per-host rows for one section: every REMOTE
+ * host with something to say, in rail order.
+ *
+ * LOCAL is excluded — the seat's own state is the section's main body, and
+ * repeating it as a group would say "this machine" twice.
+ *
+ * A host reported `down` is dropped rather than greyed: its counts are no
+ * longer about anything (§3.2(4)). `reconnecting` is kept, and the caller
+ * greys it — a greyed stale count is honest, a confident one is a lie.
+ * (The shell also drops a detached origin from the map outright; this
+ * covers the window where the supervisor has reported `down` but the
+ * connection has not been torn down yet.)
+ */
+export function remoteHostRows(
+  map: HostgwMap,
+  service: string,
+  badgeOf: (state: unknown) => string,
+  summaryOf: (state: unknown) => string,
+  statusOf: (origin: string) => HostLinkStatus,
+): HostGroupRow[] {
+  const out: HostGroupRow[] = [];
+  for (const origin of orderOrigins(map)) {
+    if (origin === LOCAL_ORIGIN) continue;
+    const status = statusOf(origin);
+    if (status === 'down') continue;
+    const state = stateFor(map, origin, service);
+    if (state === undefined) continue;
+    const badge = badgeOf(state);
+    const summary = summaryOf(state);
+    if (badge === '' && summary === '') continue;
+    out.push({ origin, badge, summary, status });
+  }
+  return out;
+}
+
+/** countBadge adapts a counter into a badgeOf for remoteHostRows. */
+export function countBadge(count: (state: unknown) => number): (state: unknown) => string {
+  return (state) => badgeText(count(state));
+}
+
+// ---- service → section, and the counters the rail watches ----
+
+/**
+ * netUrgency turns net's verb into a number so it can ride the same
+ * rise-detection as the counts: 1 while a change awaits confirmation (the
+ * lock-out window — the one net state that must interrupt), 0 otherwise.
+ * A failure or a revert is already over; it earns a badge, not a pop-open.
+ */
+export function netUrgency(state: unknown): number {
+  return (state as NetStateView | null)?.status === 'await-confirm' ? 1 : 0;
+}
+
+/**
+ * sectionForService maps a hostgw service key to its rail section id. They
+ * mostly match, and "agent" → "agents" is exactly why this is a function
+ * and not string interpolation at the call site.
+ */
+export function sectionForService(service: string): string {
+  return service === SERVICE_AGENT ? 'agents' : service;
+}
+
+/**
+ * AWARENESS_COUNTERS is every (service, counter) pair the rail watches for
+ * a rise. One list, so a new service is one entry rather than a new branch
+ * in the auto-expand logic.
+ */
+export const AWARENESS_COUNTERS: ReadonlyArray<readonly [string, (state: unknown) => number]> = [
+  [SERVICE_NOTIFY, unreadNotifications],
+  [SERVICE_BULK, activeBulkJobs],
+  [SERVICE_PRIV, pendingPrivReqs],
+  [SERVICE_AGENT, waitingAgents],
+  [SERVICE_NET, netUrgency],
+];

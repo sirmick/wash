@@ -43,17 +43,34 @@ import { PrivUnlockOverlay, type PrivUnlockState } from './sidebar/PrivUnlockOve
 import {
   SERVICE_AGENT,
   SERVICE_BULK,
+  SERVICE_NET,
   SERVICE_NOTIFY,
   SERVICE_PRIV,
   activeBulkJobs,
+  agentSummary,
   badgeText,
+  bulkSummary,
+  countBadge,
   netBadge as netBadgeFor,
+  netBadgeForHost,
+  netSummary,
+  notifySummary,
   pendingPrivReqs,
+  privSummary,
+  remoteHostRows,
   totalCount,
   unreadNotifications,
   waitingAgents,
+  AWARENESS_COUNTERS,
+  countByHost,
+  LOCAL_ORIGIN,
+  sectionForService,
+  type HostGroupRow,
+  type HostLinkStatus,
   type HostgwMap,
 } from './sidebar/awareness';
+import { HostGroups } from './sidebar/HostGroups';
+import { hostHue } from './sidebar/host-hue';
 
 interface CatalogApp {
   id: string;
@@ -430,6 +447,42 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // which is M4's business; this only says where to look.
   const privBadge = (): string =>
     badgeText(totalCount(hostgw(), SERVICE_PRIV, pendingPrivReqs));
+  // ---- per-host awareness groups (docs/SIDEBAR.md M1c) ----
+  //
+  // hostLinkStatus reads the Hosts widget's own feed, which is the only
+  // thing that knows whether a host is up, blipping or gone. A host the
+  // supervisor has not mentioned is treated as up: its state reached us,
+  // so something is connected — better to show it plainly than to grey a
+  // host on the strength of a missing record.
+  const hostLinkStatus = (origin: string): HostLinkStatus => {
+    const h = remoteHosts().find((x) => x.origin === origin);
+    if (!h) return 'up';
+    if (h.status === 'down' || h.status === 'error') return 'down';
+    if (h.status === 'up') return 'up';
+    // starting / reconnecting / anything mid-flight: the numbers are from
+    // before the interruption, so they get the honest treatment.
+    return 'reconnecting';
+  };
+  // The focused window's host reads as "where you are" (§3.2(1)) — the one
+  // concession to follow-the-focused-host, kept in presentation only.
+  const focusedOrigin = (): string | undefined => windows().find((w) => w.focused)?.origin;
+  // hostRows builds one section's remote rows. Each section supplies how to
+  // badge and how to summarise its own service; the ordering, the
+  // local-exclusion and the down/reconnecting policy are shared.
+  const hostRows = (
+    service: string,
+    badgeOf: (state: unknown) => string,
+    summaryOf: (state: unknown) => string,
+  ): HostGroupRow[] => remoteHostRows(hostgw(), service, badgeOf, summaryOf, hostLinkStatus);
+  // groupProps is the boilerplate every section's <HostGroups> shares:
+  // collapse rides the section-state machinery, so a host group persists
+  // and auto-expands exactly as a section does.
+  const groupProps = {
+    stateFor: (id: string) => sectionStates()[id] ?? ('collapsed' as SectionState),
+    onToggle: (id: string) => toggleSection(id),
+    hostColor: (origin: string) => hostHue(origin),
+    focusedOrigin,
+  };
   // privAccent — red trust tint used on the priv section header,
   // matching the (now-removed) priv window's titlebar stripe and the
   // ROOT-flagged window treatment in window.tsx.
@@ -797,7 +850,30 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // current map, then on every (origin, service) change. Nothing is sent
     // from here: the shell owns the subscribe to each host's hostgw,
     // because it owns the connections and has to re-ask on every reconnect.
-    const offHostgw = window.wash.onHostgwState?.(setHostgw);
+    // Auto-expand on a REMOTE event (§3.2(1)): when a host's count for a
+    // service goes UP, open that section and that host's group, so the
+    // thing that just started needing you is on screen rather than folded
+    // away. Only on a rise — a count falling means something resolved, and
+    // pulling the rail open to announce that is noise.
+    //
+    // Keyed by (service, origin) against the previous counts, which is the
+    // same "recompute from snapshots" discipline as the badges: no event
+    // stream to miss, no counter to drift.
+    const lastCounts = new Map<string, number>();
+    const offHostgw = window.wash.onHostgwState?.((next) => {
+      setHostgw(next);
+      for (const [service, count] of AWARENESS_COUNTERS) {
+        for (const { origin, count: n } of countByHost(next, service, count)) {
+          if (origin === LOCAL_ORIGIN) continue;
+          const key = `${service}:${origin}`;
+          if (n > (lastCounts.get(key) ?? 0)) {
+            autoExpandSection(sectionForService(service));
+            autoExpandSection(key);
+          }
+          lastCounts.set(key, n);
+        }
+      }
+    });
 
     // BE → FE: desktop.config arrives once at startup and again
     // on every fswatch fire (wash-settings rewrote the file).
@@ -1209,6 +1285,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             onMarkRead={(id) => window.wash.sendAppMsg(props.instance, { kind: 'notify_mark_read', id })}
             onClearAll={() => window.wash.sendAppMsg(props.instance, { kind: 'notify_clear_all' })}
           />
+          {/* Remote hosts' unread counts, below this seat's own list. The
+              list itself stays local until notify's relocation — a remote
+              notification is actionable on its own host, not from here. */}
+          <HostGroups
+            section="notify"
+            rows={() => hostRows(SERVICE_NOTIFY, countBadge(unreadNotifications), notifySummary)}
+            {...groupProps}
+          />
         </Section>
         <Section
           id="bulk"
@@ -1224,6 +1308,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             onCancel={(jobID) =>
               window.wash.sendAppMsg(props.instance, { kind: 'bulk_cancel', job_id: jobID })
             }
+          />
+          {/* A remote job gets a count, not a cancel button: cancelling on
+              B is M3's move into fm, where host addressing already works. */}
+          <HostGroups
+            section="bulk"
+            rows={() => hostRows(SERVICE_BULK, countBadge(activeBulkJobs), bulkSummary)}
+            {...groupProps}
           />
         </Section>
         <Section
@@ -1257,6 +1348,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             }
             onLock={() => window.wash.sendAppMsg(props.instance, { kind: 'priv_lock' })}
           />
+          {/* Deliberately count-only: approving B's escalation from A is
+              exactly what M4 moves to a prompt window on the requesting
+              host, so the rail says where to go and nothing more. */}
+          <HostGroups
+            section="priv"
+            rows={() => hostRows(SERVICE_PRIV, countBadge(pendingPrivReqs), privSummary)}
+            {...groupProps}
+          />
         </Section>
         <Section
           id="net"
@@ -1268,6 +1367,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           badge={netBadge()}
         >
           <NetWidget state={netState} ifaces={netIfaces} onConfigure={() => launchApp('com.wash.net')} />
+          {/* Per-host network status. The collapsed badge folds hosts
+              together by severity; here each host speaks for itself. */}
+          <HostGroups
+            section="net"
+            rows={() => hostRows(SERVICE_NET, netBadgeForHost, netSummary)}
+            {...groupProps}
+          />
         </Section>
         <Section
           id="remote"
@@ -1352,6 +1458,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 rule: ask.suggested_rule ?? '',
               })
             }
+          />
+          {/* The sharpest case in the whole plan (§1.2): an agent on B was
+              invisible here. It now has a host, a count and a summary that
+              distinguishes "waiting on you" from "working". The roster and
+              its verbs move into com.wash.ai in M2. */}
+          <HostGroups
+            section="agents"
+            rows={() => hostRows(SERVICE_AGENT, countBadge(waitingAgents), agentSummary)}
+            {...groupProps}
           />
         </Section>
         <Section

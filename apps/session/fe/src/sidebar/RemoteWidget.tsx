@@ -14,6 +14,7 @@
 import type { Component } from 'solid-js';
 import { For, Show, createSignal } from 'solid-js';
 import { tokens } from '@wash/ui';
+import { hostHue } from './host-hue';
 
 export interface RemoteHost {
   host: string;
@@ -29,22 +30,9 @@ export interface RemoteApp {
   icon?: string;
 }
 
-// Host accent palette + hash, mirroring web/shell/src/host-colors.ts and
-// the wash-connect FE so a host's dot here is the same hue as its window
-// stripe and its wash-connect entry (the constant per-host colour).
-const PALETTE = [
-  tokens.accentBlue,
-  tokens.accentGreen,
-  tokens.accentViolet,
-  tokens.accentAmber,
-  tokens.accentCyan,
-  tokens.accentRed,
-];
-function hostColor(origin: string): string {
-  let h = 0;
-  for (let i = 0; i < origin.length; i++) h = ((h << 5) - h + origin.charCodeAt(i)) | 0;
-  return PALETTE[Math.abs(h) % PALETTE.length];
-}
+// A host's dot is the same hue as its window stripe, its toast and its
+// awareness groups — see host-hue.ts, which the rail shares.
+const hostColor = hostHue;
 
 function statusLabel(s: string): string {
   switch (s) {

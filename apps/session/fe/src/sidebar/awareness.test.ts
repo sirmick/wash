@@ -7,18 +7,30 @@ import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 
 import {
+  AWARENESS_COUNTERS,
   LOCAL_ORIGIN,
   SERVICE_AGENT,
   SERVICE_BULK,
+  SERVICE_NET,
   SERVICE_NOTIFY,
   SERVICE_PRIV,
   activeBulkJobs,
+  agentSummary,
   badgeText,
+  bulkSummary,
+  countBadge,
   countByHost,
   netBadge,
+  netBadgeForHost,
   netHostsNeedingAttention,
+  netSummary,
+  netUrgency,
+  notifySummary,
   orderOrigins,
   pendingPrivReqs,
+  privSummary,
+  remoteHostRows,
+  sectionForService,
   stateFor,
   totalCount,
   unreadNotifications,
@@ -155,4 +167,100 @@ test('net: the per-host list does not collapse the way the badge does', () => {
     { origin: LOCAL_ORIGIN, badge: 'failed' },
     { origin: 'build01', badge: '!' },
   ]);
+});
+
+// ---- per-host rows + summaries (M1c) ----
+
+const upEverywhere = () => 'up' as const;
+
+test('summaries answer "what", and stay silent when there is nothing', () => {
+  assert.equal(notifySummary({ notifications: [{ read: false }] }), '1 unread');
+  assert.equal(notifySummary({ notifications: [{ read: true }] }), '');
+  assert.equal(bulkSummary({ jobs: [{ status: 'running' }] }), '1 job in flight');
+  assert.equal(bulkSummary({ jobs: [{ status: 'running' }, { status: 'queued' }] }), '2 jobs in flight');
+  assert.equal(privSummary({ queue: [{ status: 'queued' }] }), '1 request awaiting approval');
+  assert.equal(privSummary({ queue: [] }), '');
+});
+
+test('agent summary separates a claim on your attention from reassurance', () => {
+  const state = { rows: [{ state: 'needs-input' }, { state: 'working' }, { state: 'working' }], asks: [] };
+  assert.equal(agentSummary(state), '1 waiting on you · 2 agents working');
+  assert.equal(agentSummary({ rows: [{ state: 'working' }], asks: [] }), '1 agent working');
+  assert.equal(agentSummary({ rows: [], asks: [{ id: 'q' }] }), '1 waiting on you');
+  assert.equal(agentSummary({ rows: [], asks: [] }), '');
+});
+
+test('net summary speaks up for the states that matter, not the healthy one', () => {
+  assert.equal(netSummary({ status: 'await-confirm' }), 'awaiting confirmation');
+  assert.equal(netSummary({ status: 'failed' }), 'failed');
+  assert.equal(netSummary({ status: 'committed' }), '');
+  assert.equal(netSummary(null), '');
+});
+
+test('host rows exclude LOCAL — the seat is the section body, not a group', () => {
+  const m = mk({
+    local: { notify: { notifications: [{ read: false }] } },
+    build01: { notify: { notifications: [{ read: false }] } },
+  });
+  const rows = remoteHostRows(m, SERVICE_NOTIFY, countBadge(unreadNotifications), notifySummary, upEverywhere);
+  assert.deepEqual(rows.map((r) => r.origin), ['build01']);
+});
+
+test('a quiet remote host earns no row', () => {
+  const m = mk({ build01: { notify: { notifications: [{ read: true }] } } });
+  assert.deepEqual(remoteHostRows(m, SERVICE_NOTIFY, countBadge(unreadNotifications), notifySummary, upEverywhere), []);
+});
+
+test('a down host is dropped: its counts are no longer about anything', () => {
+  const m = mk({
+    build01: { notify: { notifications: [{ read: false }] } },
+    gone02: { notify: { notifications: [{ read: false }] } },
+  });
+  const rows = remoteHostRows(
+    m, SERVICE_NOTIFY, countBadge(unreadNotifications), notifySummary,
+    (o) => (o === 'gone02' ? 'down' : 'up'),
+  );
+  assert.deepEqual(rows.map((r) => r.origin), ['build01']);
+});
+
+test('a reconnecting host is KEPT, carrying its status for the greying', () => {
+  const m = mk({ build01: { notify: { notifications: [{ read: false }] } } });
+  const rows = remoteHostRows(
+    m, SERVICE_NOTIFY, countBadge(unreadNotifications), notifySummary, () => 'reconnecting',
+  );
+  assert.deepEqual(rows, [{ origin: 'build01', badge: '1', summary: '1 unread', status: 'reconnecting' }]);
+});
+
+test('net rows appear on a verb, with no count to speak of', () => {
+  const m = mk({ build01: { net: { status: 'await-confirm' } }, build02: { net: { status: 'committed' } } });
+  const rows = remoteHostRows(m, SERVICE_NET, netBadgeForHost, netSummary, upEverywhere);
+  assert.deepEqual(rows, [
+    { origin: 'build01', badge: '!', summary: 'awaiting confirmation', status: 'up' },
+  ]);
+});
+
+test('service keys map to their section ids, agent → agents included', () => {
+  assert.equal(sectionForService(SERVICE_NOTIFY), 'notify');
+  assert.equal(sectionForService(SERVICE_NET), 'net');
+  assert.equal(sectionForService(SERVICE_AGENT), 'agents');
+});
+
+test('net urgency fires only for the lock-out window', () => {
+  // A failure is already over: it earns a badge, not a section popping open.
+  assert.equal(netUrgency({ status: 'await-confirm' }), 1);
+  assert.equal(netUrgency({ status: 'failed' }), 0);
+  assert.equal(netUrgency({ status: 'committed' }), 0);
+  assert.equal(netUrgency(null), 0);
+});
+
+test('every watched counter has a section to expand', () => {
+  for (const [service] of AWARENESS_COUNTERS) {
+    assert.ok(sectionForService(service).length > 0, `no section for ${service}`);
+  }
+  // And the five awareness services are all covered — a missing entry
+  // means that service never auto-expands anything.
+  assert.deepEqual(
+    AWARENESS_COUNTERS.map(([s]) => s).sort(),
+    [SERVICE_AGENT, SERVICE_BULK, SERVICE_NET, SERVICE_NOTIFY, SERVICE_PRIV].sort(),
+  );
 });
