@@ -1,14 +1,24 @@
-// BulkWidget renders the wash-bulk queue inside the sidebar. Each
-// active or recent job appears as a row with op label, progress bar,
-// status, and a Cancel button while running. Conflicts are NOT
-// rendered inline (they're too dense for a 300px column); the parent
-// App opens BulkConflictOverlay when state.conflicts is non-empty.
+// BulkJobs renders the wash-bulk queue. Each active or recent job appears
+// as a row with op label, progress bar, status, and a Cancel button while
+// running. Conflicts are NOT rendered inline (too dense for a narrow
+// column); the host opens a conflict surface when state.conflicts is
+// non-empty.
 //
-// Pure renderer — subscription wiring lives in the App.
+// It lives in @wash/ui because it has two homes (docs/SIDEBAR.md M3):
+// com.wash.fm's Jobs strip, which is where CANCEL belongs — an app
+// talking to its own host's bulk service has a router-attested sender, so
+// it can act on any host — and, until M3c, the desktop rail.
+//
+// The jobs it lists are the SERVICE's, not the window's. A copy outlives
+// the fm window that started it (that is why closing fm doesn't kill one),
+// so any fm on host X lists and can cancel all of X's jobs, including ones
+// whose originating window is gone.
+//
+// Pure renderer — subscription wiring lives in the host.
 
 import type { Component } from 'solid-js';
 import { For, Show } from 'solid-js';
-import { tokens } from '@wash/ui';
+import { tokens } from './tokens';
 
 export interface BulkJob {
   job_id: string;
@@ -21,12 +31,12 @@ export interface BulkJob {
   error: string;
 }
 
-export interface BulkWidgetProps {
+export interface BulkJobsProps {
   jobs: () => BulkJob[];
   onCancel: (jobID: string) => void;
 }
 
-export const BulkWidget: Component<BulkWidgetProps> = (props) => {
+export const BulkJobs: Component<BulkJobsProps> = (props) => {
   const empty = () => props.jobs().length === 0;
   return (
     <div

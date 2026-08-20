@@ -115,6 +115,10 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 
 	bus = sdk.NewBus(c)
 	registerHandlers(bus)
+	// The host's bulk queue (docs/SIDEBAR.md M3a). fm renders the SERVICE's
+	// jobs, not this window's: a copy outlives the window that started it.
+	registerJobHandlers(bus)
+	subscribeToBulk(c)
 
 	// Initial paint: ship a list_ok for the root path the FE will land on.
 	// Use the bus.Emit path with the same shape the list handler produces;

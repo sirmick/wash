@@ -12,6 +12,7 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount }
 import type { Component, JSX } from 'solid-js';
 import {
   AgentAsks,
+  BulkJobs,
   Menu,
   MenuItem,
   accentColor,
@@ -21,7 +22,7 @@ import {
   tokens,
   washAssetUrl,
 } from '@wash/ui';
-import type { Pack, RosterAsk, RosterRow } from '@wash/ui';
+import type { BulkJob, Pack, RosterAsk, RosterRow } from '@wash/ui';
 import { toBlob } from 'html-to-image';
 import { Camera, Search, PanelRightOpen } from 'lucide-solid';
 import { Sidebar, type SidebarMode } from './sidebar/Sidebar';
@@ -30,7 +31,6 @@ import { ViewportWidget } from './sidebar/ViewportWidget';
 import { AboutWidget, type AboutHostStats } from './sidebar/AboutWidget';
 import { NotifyWidget, type NotifyEntry } from './sidebar/NotifyWidget';
 
-import { BulkWidget, type BulkJob } from './sidebar/BulkWidget';
 import { BulkConflictOverlay, type BulkConflict } from './sidebar/BulkConflictOverlay';
 import { PrivWidget, type PrivReq } from './sidebar/PrivWidget';
 import { NetWidget, type NetState, type NetIface } from './sidebar/NetWidget';
@@ -1262,7 +1262,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           onToggle={() => toggleSection('bulk')}
           badge={bulkBadge()}
         >
-          <BulkWidget
+          <BulkJobs
             jobs={bulkJobs}
             onCancel={(jobID) =>
               window.wash.sendAppMsg(props.instance, { kind: 'bulk_cancel', job_id: jobID })

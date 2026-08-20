@@ -5,7 +5,7 @@
 
 import { test, expect, afterEach } from 'vitest';
 import { render, fireEvent, cleanup } from '@solidjs/testing-library';
-import { BulkWidget, type BulkJob } from './BulkWidget.tsx';
+import { BulkJobs, type BulkJob } from './bulk-jobs.tsx';
 
 afterEach(cleanup);
 
@@ -22,14 +22,14 @@ const job = (over: Partial<BulkJob> = {}): BulkJob => ({
 });
 
 test('empty: shows the empty hint, no job rows', () => {
-  const { queryByTestId } = render(() => <BulkWidget jobs={() => []} onCancel={() => {}} />);
+  const { queryByTestId } = render(() => <BulkJobs jobs={() => []} onCancel={() => {}} />);
   expect(queryByTestId('bulk-empty')).toBeTruthy();
   expect(queryByTestId('bulk-job-j1')).toBeNull();
 });
 
 test('a running job shows a cancel button + progress fraction', () => {
   const { getByTestId, queryByTestId } = render(() => (
-    <BulkWidget jobs={() => [job({ job_id: 'r', status: 'running', done: 2, total: 4 })]} onCancel={() => {}} />
+    <BulkJobs jobs={() => [job({ job_id: 'r', status: 'running', done: 2, total: 4 })]} onCancel={() => {}} />
   ));
   expect(getByTestId('bulk-cancel-r')).toBeTruthy();
   expect(queryByTestId('bulk-status-r')).toBeNull();
@@ -38,7 +38,7 @@ test('a running job shows a cancel button + progress fraction', () => {
 
 test('a terminal job shows status text, no cancel button', () => {
   const { getByTestId, queryByTestId } = render(() => (
-    <BulkWidget jobs={() => [job({ job_id: 'd', status: 'done', done: 4, total: 4 })]} onCancel={() => {}} />
+    <BulkJobs jobs={() => [job({ job_id: 'd', status: 'done', done: 4, total: 4 })]} onCancel={() => {}} />
   ));
   expect(queryByTestId('bulk-cancel-d')).toBeNull();
   expect(getByTestId('bulk-status-d').textContent).toContain('done');
@@ -47,7 +47,7 @@ test('a terminal job shows status text, no cancel button', () => {
 test('clicking cancel fires onCancel with the job id', () => {
   const cancelled: string[] = [];
   const { getByTestId } = render(() => (
-    <BulkWidget jobs={() => [job({ job_id: 'x', status: 'running' })]} onCancel={(id) => cancelled.push(id)} />
+    <BulkJobs jobs={() => [job({ job_id: 'x', status: 'running' })]} onCancel={(id) => cancelled.push(id)} />
   ));
   fireEvent.click(getByTestId('bulk-cancel-x'));
   expect(cancelled).toEqual(['x']);

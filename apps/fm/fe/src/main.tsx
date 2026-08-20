@@ -20,7 +20,8 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { Button, ConfirmDialog, FileTree, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
+import { BulkJobs, Button, ConfirmDialog, FileTree, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
+import type { BulkJob } from '@wash/ui';
 import type { FileClient, FileTreeColumn } from '@wash/ui';
 import {
   baseName, extName, formatDate, humanSize, joinPath, octalPerm, parentPath, ancestorChain,
@@ -291,6 +292,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // full opacity so they read as failure, not as casual chatter.
   type StatusOverride = { kind: 'error' | 'info'; text: string };
   const [statusOverride, setStatusOverrideRaw] = createSignal<StatusOverride | null>(null);
+  // The host's bulk queue (docs/SIDEBAR.md M3a). Rendered as a strip above
+  // the status bar whenever there is work in flight, so a running copy is
+  // visible in the window you'd act on rather than only in the desktop
+  // rail — which could never have cancelled a REMOTE host's job.
+  const [bulkJobs, setBulkJobs] = createSignal<BulkJob[]>([]);
+  // Terminal rows (done/failed/cancelled) age out of the service's state
+  // on their own; the strip shows only work still happening, so a finished
+  // copy stops taking space in a file manager.
+  const activeJobs = createMemo(() =>
+    bulkJobs().filter((j) => j.status === 'queued' || j.status === 'running'),
+  );
   // Default helper: setStatusOverride(string) is an error; nulls clear.
   // Most failure paths predate the kind distinction and stay one-arg.
   const setStatusOverride = (text: string | null) => {
@@ -470,6 +482,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // fs_event).
     if (bus.tryResolve(m)) return;
     switch (m.kind) {
+      case 'bulk.state': {
+        // The HOST's queue, not this window's (docs/SIDEBAR.md M3a): a
+        // copy outlives the fm window that started it, so these rows
+        // routinely describe work no open window owns.
+        const st = m.state as { jobs?: BulkJob[] } | undefined;
+        setBulkJobs(st?.jobs ?? []);
+        return;
+      }
       case 'open_exts': {
         // The session file-association table — normalize to dot-less,
         // lowercase extensions for the extName() comparison in openFile.
@@ -2403,6 +2423,26 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           </div>
         </Show>
       </div>
+
+      {/* the host's bulk queue — only while something is in flight */}
+      <Show when={activeJobs().length > 0}>
+        <div
+          data-testid="fm-jobs"
+          style={{
+            'border-top': `1px solid ${tokens.borderMenu}`,
+            background: tokens.bgInset,
+            padding: `${tokens.spaceSm}px ${tokens.spaceMd}px`,
+            'max-height': '30%',
+            overflow: 'auto',
+            'flex-shrink': 0,
+          }}
+        >
+          <BulkJobs
+            jobs={activeJobs}
+            onCancel={(jobID) => send({ kind: 'bulk_cancel', job_id: jobID })}
+          />
+        </div>
+      </Show>
 
       {/* status */}
       <StatusBar data-testid="fm-status">{statusBar()}</StatusBar>

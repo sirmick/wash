@@ -50,6 +50,10 @@ export type { AgentSessionProps, AgentEvent, AgentAsk, AgentStatus, AgentConfig 
 // Roster* rather than Agent* because agent-session already owns AgentAsk
 // (a narrower ask) and AgentSession (the component).
 export { AgentAsks, AgentRoster, stateColor, stateLabel, fmtElapsed, fmtAgo } from './agent-roster';
+// The bulk queue (docs/SIDEBAR.md M3): com.wash.fm's Jobs strip, and the
+// desktop rail until M3c retires that use.
+export { BulkJobs } from './bulk-jobs';
+export type { BulkJobsProps, BulkJob } from './bulk-jobs';
 export type { AgentRosterProps, RosterRow, RosterAsk, RosterSession } from './agent-roster';
 export { defineWashApp } from './define-app';
 export { ensureScrollbarStyles, WASH_SCROLL_CLASS, WASH_SCROLL_GUTTER_CLASS } from './scrollbars';
