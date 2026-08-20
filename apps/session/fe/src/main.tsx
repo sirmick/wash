@@ -31,7 +31,6 @@ import { ViewportWidget } from './sidebar/ViewportWidget';
 import { AboutWidget, type AboutHostStats } from './sidebar/AboutWidget';
 import { NotifyWidget, type NotifyEntry } from './sidebar/NotifyWidget';
 
-import { BulkConflictOverlay, type BulkConflict } from './sidebar/BulkConflictOverlay';
 import { PrivWidget, type PrivReq } from './sidebar/PrivWidget';
 import { NetWidget, type NetState, type NetIface } from './sidebar/NetWidget';
 import { RemoteWidget, type RemoteHost } from './sidebar/RemoteWidget';
@@ -302,7 +301,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // Bulk queue + active conflicts — fed by com.wash.bulk's StateService.
   // First pending conflict (if any) pops as a screen-anchored overlay.
   const [bulkJobs, setBulkJobs] = createSignal<BulkJob[]>([]);
-  const [bulkConflicts, setBulkConflicts] = createSignal<BulkConflict[]>([]);
   // Priv queue + lock state — fed by com.wash.priv's broadcasts.
   // need_password drives the unlock overlay.
   const [privReqs, setPrivReqs] = createSignal<PrivReq[]>([]);
@@ -905,16 +903,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         }
         case 'bulk.state': {
           // wash-bulk's StateService payload: { jobs: [...], conflicts: [...] }.
-          const next = data.state as { jobs?: BulkJob[]; conflicts?: BulkConflict[] };
+          // conflicts ride the same push but are answered in com.wash.fm
+          // now (docs/SIDEBAR.md M3b) — a blocked worker asks a file
+          // manager's question, and only an app can answer it for the host
+          // the job is actually running on.
+          const next = data.state as { jobs?: BulkJob[] };
           const nextJobs = next?.jobs ?? [];
-          const nextConflicts = next?.conflicts ?? [];
           // Auto-expand the bulk section on a NEW job (id not seen).
           // Cancelled / failed terminal-state additions are still
           // "new" — they're a state change the user might want to see.
           const seenJobs = new Set(bulkJobs().map((j) => j.job_id));
           const fresh = nextJobs.find((j) => !seenJobs.has(j.job_id));
           setBulkJobs(nextJobs);
-          setBulkConflicts(nextConflicts);
           if (fresh) {
             autoExpandSection('bulk');
           }
@@ -1426,16 +1426,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           <ClipboardWidget />
         </Section>
       </Sidebar>
-      <BulkConflictOverlay
-        conflict={() => bulkConflicts()[0] ?? null}
-        onResolve={(jobID, action) =>
-          window.wash.sendAppMsg(props.instance, {
-            kind: 'bulk_resolve_conflict',
-            job_id: jobID,
-            action,
-          })
-        }
-      />
       <PrivUnlockOverlay
         state={privUnlock}
         error={privUnlockErr}

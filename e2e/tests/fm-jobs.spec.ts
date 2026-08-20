@@ -10,9 +10,15 @@
 // ANY fm window on this host lists the SERVICE's jobs, including one
 // started somewhere else entirely, and can cancel it.
 
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test, expect } from '../fixtures/router';
 
-test.use({ routerOpts: { apps: ['session', 'fm', 'bulk'], fmRoot: true } });
+// wash-notify is staged deliberately: the router does not broadcast an
+// app's notify itself — it forwards to com.wash.notify, whose re-emit is
+// the single authority for toasts. Without the service there is no toast,
+// which is what the conflict case below depends on.
+test.use({ routerOpts: { apps: ['session', 'fm', 'bulk', 'notify'], fmRoot: true } });
 
 test('fm lists the host\'s bulk jobs, not just its own, and cancels them', async ({ page, router }) => {
   test.setTimeout(60_000);
@@ -100,4 +106,45 @@ test('cancelling from fm reaches the service, with fm as the attested sender', a
   });
   await expect(fm.locator('[data-testid="bulk-job-e2e-cancel-me"]'))
     .toHaveCount(0, { timeout: 20_000 });
+});
+
+test('a conflict with no fm open raises a toast that opens one', async ({ page, router }) => {
+  // The case that made M1 a hard prerequisite for M3. A copy outlives the
+  // window that started it, so a conflict can stall a worker when there is
+  // no file manager on screen at all — and the answer lives in fm now. The
+  // toast has to be the way in, which needs the shell's activation to fall
+  // back from focus-the-instance (there is no window) to launch-the-app.
+  test.setTimeout(60_000);
+  mkdirSync(join(router.fmRoot, 'src'), { recursive: true });
+  writeFileSync(join(router.fmRoot, 'src', 'clash.txt'), 'src');
+  writeFileSync(join(router.fmRoot, 'clash.txt'), 'existing');
+
+  await page.goto(router.url);
+  await expect(page.locator('wash-app-session')).toBeVisible();
+  // Deliberately NO fm window.
+  await expect(page.locator('wash-app-fm')).toHaveCount(0);
+
+  const bulk = await router.controlRequest({ t: 'launch', app_id: 'com.wash.bulk' });
+  await router.sendAppMsg(String(bulk.instance_id), {
+    kind: 'enqueue', id: 'cf-toast', op: 'copy',
+    paths: [join(router.fmRoot, 'src', 'clash.txt')],
+    dest: router.fmRoot,
+  });
+
+  // The stalled worker says so.
+  const toast = page.locator('[data-testid="notification"]').filter({ hasText: 'File exists' });
+  await expect(toast).toBeVisible({ timeout: 20_000 });
+
+  // Activating it opens a file manager, because wash-bulk has no window of
+  // its own to focus.
+  await toast.click();
+  const fm = page.locator('wash-app-fm').first();
+  await expect(fm).toBeVisible({ timeout: 20_000 });
+
+  // And the question is waiting in it.
+  const overlay = fm.locator('[data-testid="bulk-conflict-overlay"]');
+  await expect(overlay).toBeVisible({ timeout: 20_000 });
+  await overlay.locator('[data-testid^="bulk-conflict-skip-"]').first().click();
+  await expect(overlay).toBeHidden({ timeout: 10_000 });
+  expect(readFileSync(join(router.fmRoot, 'clash.txt'), 'utf8')).toBe('existing');
 });

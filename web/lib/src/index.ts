@@ -54,6 +54,8 @@ export { AgentAsks, AgentRoster, stateColor, stateLabel, fmtElapsed, fmtAgo } fr
 // desktop rail until M3c retires that use.
 export { BulkJobs } from './bulk-jobs';
 export type { BulkJobsProps, BulkJob } from './bulk-jobs';
+export { BulkConflictOverlay } from './bulk-conflict';
+export type { BulkConflictOverlayProps, BulkConflict } from './bulk-conflict';
 export type { AgentRosterProps, RosterRow, RosterAsk, RosterSession } from './agent-roster';
 export { defineWashApp } from './define-app';
 export { ensureScrollbarStyles, WASH_SCROLL_CLASS, WASH_SCROLL_GUTTER_CLASS } from './scrollbars';

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"github.com/sirmick/wash/internal/version"
 	"log"
+	"path/filepath"
 	"sync"
 
 	"github.com/sirmick/wash/internal/bulkops"
@@ -237,13 +238,28 @@ func conflictHandler(c *sdk.Conn) func(bulkops.ConflictInfo) bulkops.ConflictAct
 		pendingConflictsMu.Lock()
 		pendingConflicts[info.Job.ID] = ch
 		pendingConflictsMu.Unlock()
-		// Add to public state so the sidebar widget pops its overlay.
+		// Add to public state so a file manager pops its overlay.
+		//
+		// Copy-on-write, like every Mutate here: StateService.Snapshot is a
+		// shallow copy, so appending in place could write into a backing
+		// array a subscriber still holds.
 		svc.Mutate(func(s *State) {
-			s.Conflicts = append(s.Conflicts, ConflictView{
+			next := make([]ConflictView, len(s.Conflicts), len(s.Conflicts)+1)
+			copy(next, s.Conflicts)
+			s.Conflicts = append(next, ConflictView{
 				JobID: info.Job.ID, Src: info.Src, SrcType: info.SrcType,
 				Dst: info.Dst, DstType: info.DstType,
 			})
 		})
+		// And say so out loud. The worker is BLOCKED until a human
+		// answers, and since docs/SIDEBAR.md M3b the answer lives in a file
+		// manager — which may not be open, and on a remote host may be a
+		// window the user has never opened. The toast is the way in:
+		// activating it launches com.wash.fm on THIS host (the shell's
+		// focus-then-launch fallback), where the overlay is waiting.
+		//
+		// Warn, not Info: a stalled copy is not progress.
+		c.Warn("File exists", conflictSummary(info))
 		// Block until the FE answers (or jobUpdateHandler cancels us
 		// from a terminal-state transition).
 		action := <-ch
@@ -252,7 +268,11 @@ func conflictHandler(c *sdk.Conn) func(bulkops.ConflictInfo) bulkops.ConflictAct
 		delete(pendingConflicts, info.Job.ID)
 		pendingConflictsMu.Unlock()
 		svc.Mutate(func(s *State) {
-			out := s.Conflicts[:0]
+			// NOT s.Conflicts[:0] — that reuses the backing array, so a
+			// subscriber holding an earlier snapshot would see its
+			// elements rewritten underneath it. `make test-race` catches
+			// this class; the fix is to build a new slice.
+			out := make([]ConflictView, 0, len(s.Conflicts))
 			for _, c := range s.Conflicts {
 				if c.JobID != info.Job.ID {
 					out = append(out, c)
@@ -262,6 +282,17 @@ func conflictHandler(c *sdk.Conn) func(bulkops.ConflictInfo) bulkops.ConflictAct
 		})
 		return action
 	}
+}
+
+// conflictSummary is the one-line "what is stuck" for the toast. Names
+// the destination, because that is the thing that already exists and the
+// thing the user is about to overwrite or keep.
+func conflictSummary(info bulkops.ConflictInfo) string {
+	name := filepath.Base(info.Dst)
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		name = info.Dst
+	}
+	return name + " already exists — open Files to choose"
 }
 
 // jobUpdateHandler builds the onUpdate callback that pushes every

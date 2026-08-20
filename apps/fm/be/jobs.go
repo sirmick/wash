@@ -72,6 +72,22 @@ func registerJobHandlers(b *sdk.Bus) {
 			"job_id": req.JobID,
 		})
 	})
+
+	// A conflict BLOCKS its worker until somebody answers, which is what
+	// makes answering it a file manager's job rather than the desktop's.
+	// Idempotent by job id and first-answer-wins on the service side, so
+	// two fm windows racing on one conflict is safe.
+	sdk.HandleVoid(b, "bulk_resolve_conflict", func(c *sdk.Conn, _ string, req bulkResolveReq) error {
+		if req.JobID == "" || req.Action == "" {
+			return nil
+		}
+		log.Printf("wash-fm: resolve conflict job=%s action=%s", req.JobID, req.Action)
+		return c.SendAppMsgTo(wire.Recipient{AppID: bulkAppID}, map[string]any{
+			"kind":   "resolve_conflict",
+			"job_id": req.JobID,
+			"action": req.Action,
+		})
+	})
 }
 
 // bulkStateMsg captures the `state` field of a StateService push. Opaque
@@ -83,4 +99,9 @@ type bulkStateMsg struct {
 
 type bulkJobReq struct {
 	JobID string `json:"job_id"`
+}
+
+type bulkResolveReq struct {
+	JobID  string `json:"job_id"`
+	Action string `json:"action"`
 }

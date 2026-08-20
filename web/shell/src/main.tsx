@@ -345,7 +345,16 @@ const windowsSub = new Sub<WindowInfo[]>([]);
 // window (a background service's toast) — the toast still dismisses.
 function focusInstance(instanceID: string): void {
   const w = windowsSub.value.find((x) => x.instanceID === instanceID);
-  if (!w) return;
+  if (!w) {
+    // No window to focus. That is the NORMAL case for a background
+    // service's toast (docs/SIDEBAR.md M3b): wash-bulk stalls a copy on a
+    // conflict and says so, and the thing you need is a file manager on
+    // the host the job is running on — which may be a host you have no
+    // window open on at all. Falling back to launching the owning app
+    // turns an inert toast into the way in.
+    launchOwningApp(instanceID);
+    return;
+  }
   // Snap the camera to the window's viewport cell first — focusing a
   // window one cell over would otherwise "work" with nothing visible
   // happening. Same move the taskbar pill's dblclick makes.
@@ -355,6 +364,40 @@ function focusInstance(instanceID: string): void {
   if (w.state === 'minimized') window.wash.restoreWindow(w.windowID, w.origin);
   else window.wash.focusWindow(w.windowID, w.origin);
 }
+
+// launchOwningApp opens the app that raised a windowless notification, on
+// the host that raised it.
+//
+// The app id comes from the instance→app-id map the shell records from
+// app.declared — the router's word, which the app cannot forge — so a
+// service cannot use a toast to make the desktop launch something else.
+// Windowed apps whose window has since closed resolve the same way.
+function launchOwningApp(instanceID: string): void {
+  const { origin, bare } = parseInstanceId(instanceID);
+  const client = clientForOrigin(origin);
+  const appID = client?.appIDs.get(bare);
+  if (!client || !appID) return;
+  // A windowless service's toast should land on the app that speaks for
+  // it, not on the service — opening com.wash.bulk shows you nothing.
+  // notifyOpeners names that app; everything else opens itself, which is
+  // the right answer for a windowed app whose window has since closed.
+  //
+  // Note this deliberately does NOT consult client.instances to detect a
+  // background surface: that map skips background apps entirely (they have
+  // no element to mount), so the check would silently never fire — it
+  // didn't, and the toast launched the service instead of the file
+  // manager. The explicit table is the whole test.
+  window.wash.launchOn(origin, notifyOpeners[appID] ?? appID);
+}
+
+// notifyOpeners maps a windowless service to the app that speaks for it,
+// so activating its toast lands somewhere useful. Deliberately a tiny
+// explicit table rather than a manifest field: there are two entries, and
+// a service claiming its own opener would be a service choosing what the
+// desktop launches.
+const notifyOpeners: Record<string, string> = {
+  'com.wash.bulk': 'com.wash.fm',
+};
 // viewportSub mirrors the Solid viewport signal into the cross-element
 // pub/sub the session app subscribes to via window.wash.onViewport.
 // We also publish per-window viewport assignments here so the pager

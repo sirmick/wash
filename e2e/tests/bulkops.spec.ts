@@ -201,7 +201,7 @@ test.describe('fm: bulk delete via multi-select', () => {
     await expect(page.locator('[data-testid^="bulk-job-"]').first()).toHaveAttribute('data-status', /done|cancelled|failed/, { timeout: 5_000 });
   });
 
-  test('sidebar bulk conflict overlay pops on copy-onto-existing', async ({ page, router }) => {
+  test('fm\'s bulk conflict overlay pops on copy-onto-existing', async ({ page, router }) => {
     // Set up a target file + a source we'll copy onto it.
     mkdirSync(join(router.fmRoot, 'src'));
     writeFileSync(join(router.fmRoot, 'src', 'conflict.txt'), 'src');
@@ -211,7 +211,9 @@ test.describe('fm: bulk delete via multi-select', () => {
     // Trigger a copy via the cross-app bulk wire — fm's UI doesn't
     // ship a copy-with-conflict path in M6 (separate UX), but bulk's
     // BE accepts copy enqueues directly. Use control socket to
-    // enqueue. The conflict overlay will pop in the session FE.
+    // enqueue. The overlay pops in the fm WINDOW since SIDEBAR.md M3b:
+    // a blocked worker is asking a file manager's question, and only an
+    // app can answer it for the host the job is running on.
     const launched = await router.controlRequest({ t: 'launch', app_id: 'com.wash.bulk' });
     const inst = launched.instance_id as string;
     const ack = await router.sendAppMsg(inst, {
@@ -222,11 +224,11 @@ test.describe('fm: bulk delete via multi-select', () => {
     expect(ack.kind).toBe('enqueue_ok');
 
     // The overlay appears with the conflict prompt + a Replace button.
-    const overlay = page.locator('[data-testid="bulk-conflict-overlay"]');
+    const overlay = page.locator('wash-app-fm').first().locator('[data-testid="bulk-conflict-overlay"]');
     await expect(overlay).toBeVisible({ timeout: 5_000 });
     await expect(overlay).toContainText(/Replace|Merge/);
     // Skip — leaves the existing file intact.
-    await page.locator('[data-testid^="bulk-conflict-skip-"]').first().click();
+    await overlay.locator('[data-testid^="bulk-conflict-skip-"]').first().click();
     await expect(overlay).toBeHidden({ timeout: 3_000 });
     // Existing content unchanged.
     expect(existsSync(join(router.fmRoot, 'conflict.txt'))).toBe(true);

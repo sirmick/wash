@@ -1,6 +1,15 @@
 // BulkConflictOverlay is a screen-anchored modal that pops when the
 // bulk service reports a pending conflict.
 //
+// It lives in @wash/ui because it has two homes (docs/SIDEBAR.md M3b):
+// com.wash.fm, which is where answering it can WORK — an app talking to
+// its own host's bulk service has a router-attested sender — and, until
+// M3c, the desktop rail, whose answer routes through the session BE
+// gateway and so only ever reaches the local host.
+//
+// resolve_conflict is idempotent by job id and first answer wins, so two
+// surfaces racing on one conflict is safe rather than merely unlikely.
+//
 // UI shape mirrors Windows Explorer / GNOME Files conventions:
 //
 //   - dir vs dir   → Merge / Merge All / Replace / Skip / Skip All / Cancel
@@ -14,7 +23,8 @@
 
 import type { Component, JSX } from 'solid-js';
 import { Show } from 'solid-js';
-import { Button, tokens } from '@wash/ui';
+import { Button } from './button';
+import { tokens } from './tokens';
 
 export interface BulkConflict {
   job_id: string;

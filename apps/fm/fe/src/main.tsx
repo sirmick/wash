@@ -20,8 +20,8 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { BulkJobs, Button, ConfirmDialog, FileTree, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
-import type { BulkJob } from '@wash/ui';
+import { BulkConflictOverlay, BulkJobs, Button, ConfirmDialog, FileTree, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
+import type { BulkConflict, BulkJob } from '@wash/ui';
 import type { FileClient, FileTreeColumn } from '@wash/ui';
 import {
   baseName, extName, formatDate, humanSize, joinPath, octalPerm, parentPath, ancestorChain,
@@ -297,6 +297,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // visible in the window you'd act on rather than only in the desktop
   // rail — which could never have cancelled a REMOTE host's job.
   const [bulkJobs, setBulkJobs] = createSignal<BulkJob[]>([]);
+  // A conflict BLOCKS its worker until answered, so it is the one part of
+  // the queue that demands the user rather than merely informing them.
+  // Answering it is a file manager's question — "this file exists, now
+  // what" — which is why it moved here (docs/SIDEBAR.md M3b).
+  const [bulkConflicts, setBulkConflicts] = createSignal<BulkConflict[]>([]);
   // Terminal rows (done/failed/cancelled) age out of the service's state
   // on their own; the strip shows only work still happening, so a finished
   // copy stops taking space in a file manager.
@@ -486,8 +491,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         // The HOST's queue, not this window's (docs/SIDEBAR.md M3a): a
         // copy outlives the fm window that started it, so these rows
         // routinely describe work no open window owns.
-        const st = m.state as { jobs?: BulkJob[] } | undefined;
+        const st = m.state as { jobs?: BulkJob[]; conflicts?: BulkConflict[] } | undefined;
         setBulkJobs(st?.jobs ?? []);
+        setBulkConflicts(st?.conflicts ?? []);
         return;
       }
       case 'open_exts': {
@@ -2443,6 +2449,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           />
         </div>
       </Show>
+
+      {/* A blocked worker, waiting on an answer only this window can give
+          correctly for this host. */}
+      <BulkConflictOverlay
+        conflict={() => bulkConflicts()[0] ?? null}
+        onResolve={(jobID, action) =>
+          send({ kind: 'bulk_resolve_conflict', job_id: jobID, action })
+        }
+      />
 
       {/* status */}
       <StatusBar data-testid="fm-status">{statusBar()}</StatusBar>
