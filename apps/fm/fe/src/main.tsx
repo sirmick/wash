@@ -59,6 +59,7 @@ import {
   Cpu,
   Database,
   Disc,
+  Download,
   File as FileIcon,
   FileArchive,
   FileCode,
@@ -1596,6 +1597,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }
   };
 
+  // Toolbar tooltip doubles as the affordance's only label: with nothing
+  // selected the button is disabled, so the title has to say why.
+  const downloadTitle = createMemo(() => {
+    const n = selection().size;
+    if (n === 0) return 'Download — select files first';
+    if (n === 1) return 'Download';
+    return `Download ${n} items (zip)`;
+  });
+
   // runDownload asks the BE to stream one-or-more confined paths back to
   // the browser. A lone file comes as-is; a directory or a multi-select
   // arrives as a single zip. We open the raw channel the BE announces,
@@ -2197,6 +2207,24 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onClick={() => dirInputEl.click()}
         >
           <FolderUp size={14} />
+        </Button>
+        <Button
+          variant="ghost"
+          data-testid="fm-download"
+          title={downloadTitle()}
+          disabled={selection().size === 0}
+          style={{
+            padding: '4px 8px',
+            'min-width': '30px',
+            opacity: selection().size === 0 ? 0.4 : 1,
+            cursor: selection().size === 0 ? 'default' : 'pointer',
+          }}
+          onClick={() => {
+            const sel = selection();
+            if (sel.size) void runDownload(Array.from(sel));
+          }}
+        >
+          <Download size={14} />
         </Button>
         <Button variant="ghost" data-testid="fm-sort" title="Sort" style={{ padding: '4px 8px', 'min-width': '30px' }} onClick={openSortMenu}>
           <ArrowUpDown size={14} />
