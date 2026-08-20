@@ -145,7 +145,7 @@ knows how to live on a host.
 Ordered so that each lands independently and the riskiest design work happens
 after the cheap wins have validated the shape.
 
-### M0 — remote toasts  (small, independent, do first)
+### M0 — remote toasts  (small, independent, do first) — **DONE** 2026-08-19
 
 Delete the `!isLocal` guard (`web/shell/src/main.tsx:450`); tag the toast with
 its origin and tint by host colour (REMOTE.md §11); make the toast's
@@ -163,26 +163,69 @@ mitigation; per-host mute is out of scope.
 Everything after this depends on the rail being able to see B without being able
 to *act* on B.
 
-**Mechanism: a shell→router ctrl verb for subscribing to a background
-singleton's state.** This follows the precedent already set for exactly this
-situation: `ShellLaunch` was added because B has no session BE to route a
-launcher click through (`internal/router/shell_session.go:830` — *"This is the
-no-session-BE launch path"*). `handleLaunch` is the template — resolve the
-singleton via `resolveRecipient`, let the **router** perform the attestation
-(it stamps the shell), refuse anything that is not a background-surface app.
+**Mechanism: a background gateway app on every router.** B gets a small
+background singleton — working name `com.wash.hostgw` — that does exactly what
+A's session BE gateway does today: subscribe to its own host's background
+services, and republish their state. A's shell reads B's gateway over the
+connection it already holds.
+
+Three facts already in the tree make this work with **no new wire protocol**:
+
+1. `relayAppMsgToShell` fans an app's message to **every attached shell**
+   (`internal/router/app_session.go:627`) — and A's shell *is* an attached shell
+   on B. This is the mechanism REMOTE.md §7 already names as the presentation
+   half: *"presentation services already broadcast to the connected shell
+   (`shellList()`), and A's tunnelled shell is connected."*
+2. `deliverAppMsg` compounds the incoming id with the delivering client's origin
+   (`web/shell/src/main.tsx:933`), so B's state arrives already tagged as B's.
+3. An **app**-originated cross-app send carries router-attested `From`
+   automatically. That is the whole reason the session BE gateway exists
+   (`apps/session/be/app.go:90`), and a gateway app on B inherits it for free.
+
+So the flow is: A's shell asks B's gateway to subscribe → the gateway subscribes
+to B's services as a properly attested app → each `state` push is republished to
+the gateway's own FE → the router fans it to every attached shell → A's shell
+receives it tagged `origin=B` and merges it into the rail.
+
+Two small additions are needed on A's side:
+
+- an **origin-aware `sendAppMsgTo`**. Today it always uses the local `conn`
+  (`main.tsx:1633`); the remote variant picks the client by origin, exactly as
+  `launchOn` already does.
+- a **shell-level listener** for gateway messages. `deliverAppMsg` routes to a
+  registered app element, and a windowless background app has none, so gateway
+  traffic needs somewhere to land.
 
 Scope it deliberately narrow: **subscribe and receive state, no writes.** Control
-is moving in-app, so the shell never needs to send a service a command. A
-read-only verb is far easier to reason about in the M6 hardening review than a
-general shell→service channel would be.
+is moving in-app, so the shell never needs to send a service a command.
 
-The session FE then merges each origin's state into the widgets, tagged by host.
-The local path keeps using the existing gateway — this verb is for *remote*
-origins, not a replacement for A's gateway.
+The local path keeps using the session BE gateway unchanged — this is for
+*remote* origins. (A tidier end-state folds A's gateway into `hostgw` too, so
+there is one implementation instead of two; that is an M6 cleanup, not a
+prerequisite.)
 
-*Security:* a shell subscribing to B's priv state can see pending-escalation
-metadata. That is the intent (awareness), but it must be named in the M6
-provenance/priv-phishing review, and the state must carry no secret material.
+#### Why not a shell→router ctrl verb
+
+The obvious alternative — a `ShellSubscribe` verb modelled on `ShellLaunch`,
+letting the router subscribe on the shell's behalf — was designed and rejected
+during M0. `ShellLaunch` is a fire-and-forget *command*; a subscription needs a
+**return path**, and that is where it falls apart. `StateService` keys its
+subscribers by `from.InstanceID` and pushes with
+`SendAppMsgTo(wire.Recipient{InstanceID: …})` (`pkg/sdk/stateservice.go`). A
+shell is not an app instance, so the router would have to mint pseudo-instances
+for shells and intercept `resolveRecipient` to redirect them — surgery on the
+router's addressing core, to reach a place a normal app already stands.
+
+The gateway app also generalises: one subscriber serves every widget, so M3 and
+M5 add a state shape rather than new plumbing each.
+
+*Security:* two things for the M6 provenance/priv-phishing review. A shell
+subscribing to B's priv state can see pending-escalation metadata — that is the
+intent (awareness), but the state must carry no secret material. And `hostgw`
+republishes to **every** shell attached to B, which on a multi-user B is a wider
+audience than a targeted push would be; the pseudo-instance design could have
+targeted one shell, and this one cannot. Gate `hostgw`'s state on the same
+ownership rule that governs which shells may attach at all.
 
 ### M2 — Agents into `com.wash.ai`  (the proving ground)
 
@@ -252,6 +295,8 @@ needs an audio *stream*, not a widget).
 - delete the session BE gateways that no longer have a caller
   (`register*Gateway` in `apps/session/be/app.go`) — relocation should *remove*
   code, and if it does not, the seam was cut wrong;
+- fold A's remaining gateway into `hostgw` so there is one implementation of
+  "subscribe to this host's services" rather than two that must agree;
 - rewrite REMOTE.md §6.2 to point here; update §10 if M4 lands;
 - fold the new ctrl verb into the M6 remote hardening pass already in TODO.md
   (multi-tenancy, provenance/priv-phishing review).
@@ -293,10 +338,11 @@ before M3.
   rather than being rewritten.
 - **e2e, two routers:** the `?peer=` `startRouter` fixture already used by
   `e2e/tests/remote-apps.spec.ts` is the harness. Per milestone: M0 asserts a B
-  toast appears in A's tray; M1 asserts a B badge count; M2 asserts
+  toast appears in A's tray; M1 asserts a B badge count reaching A's rail through `hostgw`; M2 asserts
   `launchOn(B, com.wash.ai)` shows B's roster and *not* A's.
-- **Router unit:** the new ctrl verb needs the `handleLaunch` treatment —
-  refuse non-background surfaces, unknown apps, protocol mismatch — alongside
-  `internal/router/shell_session.go`'s existing tests.
+- **Go unit:** `hostgw` gets the service-gateway treatment — it is a normal app,
+  so it tests like one (`apps/session/be/gateway_test.go` is the model). The
+  interesting case is republish fan-out: a state push must reach a shell that
+  attached *after* the subscribe.
 - **The rail must be asserted local-only until it isn't:** a regression test that
   A's rail shows A's agents while a B agent runs would have caught this defect.

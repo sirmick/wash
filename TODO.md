@@ -63,13 +63,16 @@ bug list — all fully landed; see `git log` if you need their content.)
   BE gateway, whose `SendAppMsgTo` has no origin (`sendAppMsgTo` always uses
   the local conn). Fix is by *relocation*, not by merging every verb — control
   moves in-app (apps are host-portable), the rail keeps awareness only.
-  - [ ] **M0 — remote toasts.** B's toasts already reach A's shell via
-    `shellList()` and are dropped by one guard (`web/shell/src/main.tsx:450`).
-    Delete it, tag + tint by host. Cheapest win here.
-  - [ ] **M1 — awareness channel.** Read-only shell→router ctrl verb to
-    subscribe to a background singleton's state, modelled on `ShellLaunch`
-    (`internal/router/shell_session.go:830`) — B runs `--no-session` so there
-    is no BE to gateway through, and the router does the attestation.
+  - [x] **M0 — remote toasts** — DONE 2026-08-19. B's toasts already reached
+    A's shell via `shellList()` and were dropped by one guard; deleted, and
+    the toast is now host-tinted + origin-named.
+  - [ ] **M1 — awareness channel.** A background gateway app (`com.wash.hostgw`)
+    on every router subscribes to its own host's services with proper app
+    attestation and republishes; `relayAppMsgToShell` already fans that to
+    every attached shell, A included. Needs no new wire protocol — only an
+    origin-aware `sendAppMsgTo` and a shell-level listener. (The shell→router
+    ctrl-verb alternative was rejected: a subscription needs a return path,
+    and `StateService` keys subscribers by instance id.)
   - [ ] **M2 — Agents into `com.wash.ai`.** Roster pane + verbs; rail keeps
     counts. Reworks the GH #21 resume/fork/terminate verb set — known cost.
   - [ ] **M3 — Bulk into fm** (sole consumer is `apps/fm/be/upload.go`; jobs
