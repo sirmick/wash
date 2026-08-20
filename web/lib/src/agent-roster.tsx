@@ -1,20 +1,27 @@
-// AgentsWidget renders the coding-agent roster fed by com.wash.agentd
+// AgentRoster renders the coding-agent roster fed by com.wash.agentd
 // (docs/AGENT_TERM.md §7). One row per agent wash can see, across every
-// terminal window: what it is, where it's working, what it's doing, and
-// for how long.
+// window: what it is, where it's working, what it's doing, and for how
+// long.
 //
 // The roster's job is to answer "who needs me?" without hunting through
 // windows, so the service sorts needs-input first and this renders that
-// order as given. Clicking a row goes to the terminal that owns it —
-// that's the whole interaction.
+// order as given.
 //
-// Pure renderer; subscription wiring lives in the App.
+// It lives in @wash/ui because it has two homes (docs/SIDEBAR.md M2):
+// com.wash.ai's roster pane, which is where the VERBS belong — an app
+// talking to its own host's agentd has a router-attested sender, so it can
+// act — and, until M2c, the desktop rail. Same renderer either way; the
+// difference is which callbacks the host passes.
+//
+// Pure renderer; subscription wiring lives in the consumer.
 
 import type { Component, JSX } from 'solid-js';
 import { For, Show, createSignal } from 'solid-js';
-import { Menu, MenuItem, MenuSeparator, tokens } from '@wash/ui';
+import { Menu, MenuItem, MenuSeparator } from './menu';
+import { tokens } from './tokens';
+import type { AgentConfig } from './agent-session';
 
-export interface AgentRow {
+export interface RosterRow {
   key: string;
   agent: string;
   /** running | working | needs-input | done | stale */
@@ -34,10 +41,26 @@ export interface AgentRow {
   channel_id: number;
   /** elapsed in this state as of the push; anchored locally by the App */
   since_ms: number;
+  // The rest of what agentd publishes per row (apps/agentd/be/app.go).
+  // The rail never read these; com.wash.ai's status line and Session menu
+  // do, which is why they belong on the shared type rather than on a
+  // near-duplicate one in the app.
+  /** the agent's context accounting, from its usage_update */
+  used?: number;
+  size?: number;
+  /** the agent's active approval preset, and what it offers */
+  mode?: string;
+  modes?: { id: string; name: string; description?: string }[];
+  /** wash answering this session's permission questions on its own */
+  yolo?: boolean;
+  /** the agent's generic settings block (model, reasoning effort, …) */
+  configs?: AgentConfig[];
+  /** the agent's own slash commands */
+  commands?: { name: string; description?: string }[];
 }
 
 /** A permission question waiting for a human (docs/AGENT_TERM.md §12). */
-export interface AgentAsk {
+export interface RosterAsk {
   id: string;
   agent: string;
   tool: string;
@@ -54,7 +77,7 @@ export interface AgentAsk {
 }
 
 /** A remembered agent session (docs/AGENT_TERM.md §13). */
-export interface AgentSession {
+export interface RosterSession {
   session_id: string;
   agent: string;
   cwd?: string;
@@ -65,32 +88,36 @@ export interface AgentSession {
   live?: boolean;
 }
 
-export interface AgentsWidgetProps {
-  rows: () => AgentRow[];
+export interface AgentRosterProps {
+  rows: () => RosterRow[];
   /** local clock anchor per row key, so elapsed keeps counting between pushes */
   startedAt: (key: string) => number;
   /** ticking "now" from the App, so every row's clock advances together */
   now: () => number;
-  /** go to the terminal that owns this agent */
-  onFocus: (row: AgentRow) => void;
+  /** activate a row. The host decides what that means: the desktop rail
+   *  went to the owning terminal; com.wash.ai points its detail pane at
+   *  the session. */
+  onActivate: (row: RosterRow) => void;
+  /** the session the host is currently showing, marked as current */
+  activeKey?: () => string;
   /** a detached session is still running with no window — open one */
-  onReattach?: (row: AgentRow) => void;
+  onReattach?: (row: RosterRow) => void;
   /** permission questions waiting on the human */
-  asks?: () => AgentAsk[];
+  asks?: () => RosterAsk[];
   /** answer one: decision allow|deny, remember writes the named rule */
-  onAnswer?: (ask: AgentAsk, decision: 'allow' | 'deny', remember: boolean) => void;
+  onAnswer?: (ask: RosterAsk, decision: 'allow' | 'deny', remember: boolean) => void;
   /** remembered sessions, most recent first */
-  recent?: () => AgentSession[];
+  recent?: () => RosterSession[];
   /** reopen one — agentd loads it and opens an Agent window */
-  onResume?: (session: AgentSession, fork: boolean) => void;
+  onResume?: (session: RosterSession, fork: boolean) => void;
   /** put the session id on the clipboard */
-  onCopyID?: (session: AgentSession) => void;
+  onCopyID?: (session: RosterSession) => void;
   /** let the window go, keep the session running */
-  onDetach?: (row: AgentRow) => void;
+  onDetach?: (row: RosterRow) => void;
   /** end the current turn; the session stays available */
-  onCancel?: (row: AgentRow) => void;
+  onCancel?: (row: RosterRow) => void;
   /** end the session and its adapter process */
-  onStop?: (row: AgentRow) => void;
+  onStop?: (row: RosterRow) => void;
 }
 
 // stateColor is the same language as the terminal's own tab dot: blue
@@ -106,7 +133,7 @@ export function stateColor(state: string): string {
   }
 }
 
-export function stateLabel(row: AgentRow): string {
+export function stateLabel(row: RosterRow): string {
   switch (row.state) {
     case 'needs-input': return row.reason ? `needs input · ${row.reason}` : 'needs input';
     case 'stale': return 'not responding';
@@ -121,7 +148,7 @@ export function fmtElapsed(ms: number): string {
   return `${Math.floor(secs / 3600)}h`;
 }
 
-export const AgentsWidget: Component<AgentsWidgetProps> = (props) => {
+export const AgentRoster: Component<AgentRosterProps> = (props) => {
   const empty = () => props.rows().length === 0;
   return (
     <div
@@ -152,7 +179,8 @@ export const AgentsWidget: Component<AgentsWidgetProps> = (props) => {
           <AgentRowView
             row={r}
             elapsed={fmtElapsed(props.now() - props.startedAt(r.key))}
-            onFocus={() => props.onFocus(r)}
+            onActivate={() => props.onActivate(r)}
+            active={props.activeKey?.() === r.key}
             onReattach={r.detached ? () => props.onReattach?.(r) : undefined}
             detached={r.detached === true}
             onDetach={props.onDetach ? () => props.onDetach?.(r) : undefined}
@@ -169,55 +197,6 @@ export const AgentsWidget: Component<AgentsWidgetProps> = (props) => {
   );
 };
 
-// RecentRow is a session you could reopen: what it was and where.
-//
-// Fork was removed with the intercept tier. It used to mean `claude
-// --resume <id> --fork-session` in a terminal; under ACP a fork would be
-// session/fork, which lives in an UNSTABLE capability whose method shape
-// this build has not verified against a real adapter. A button that
-// guesses a wire format is worse than one that is absent.
-const RecentRow: Component<{
-  session: AgentSession;
-  now: number;
-  onResume: (fork: boolean) => void;
-  onCopyID: () => void;
-}> = (props) => (
-  <div
-    data-testid="agents-recent-row"
-    data-session-id={props.session.session_id}
-    style={{
-      padding: '5px 8px',
-      'border-radius': tokens.radiusSm,
-      background: 'rgba(255,255,255,0.02)',
-      'font-size': '11px',
-      display: 'flex',
-      'flex-direction': 'column',
-      gap: '3px',
-      opacity: 0.85,
-    }}
-  >
-    <div style={{ display: 'flex', 'align-items': 'baseline', gap: '6px' }}>
-      <span style={{ 'font-weight': 600 }}>{props.session.agent}</span>
-      <Show when={props.session.dir}>
-        <span style={{ opacity: 0.7, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
-          {props.session.dir}
-        </span>
-      </Show>
-      <span style={{ 'margin-left': 'auto', opacity: 0.6, 'flex-shrink': 0 }}>
-        {fmtAgo(props.now, props.session.last_seen)}
-      </span>
-    </div>
-    <div style={{ display: 'flex', gap: '4px' }}>
-      <AskBtn testid="agents-resume" title="Reopen this session, with its conversation" onClick={() => props.onResume(false)}>
-        Resume
-      </AskBtn>
-      <AskBtn testid="agents-copy-id" title={props.session.session_id} onClick={props.onCopyID}>
-        Copy id
-      </AskBtn>
-    </div>
-  </div>
-);
-
 // fmtAgo renders "just now / 5m ago / 3h ago / 2d ago" from unix seconds.
 export function fmtAgo(nowMS: number, unixSec: number): string {
   if (!unixSec) return '';
@@ -228,19 +207,11 @@ export function fmtAgo(nowMS: number, unixSec: number): string {
   return `${Math.floor(secs / 86_400)}d ago`;
 }
 
-const recentHeadStyle: JSX.CSSProperties = {
-  font: tokens.type.titleSm,
-  opacity: 0.55,
-  'text-transform': 'uppercase',
-  'letter-spacing': '0.04em',
-  'margin-top': '4px',
-};
-
 // AskRow is the actionable half of the roster: what the agent wants to do,
 // and the three answers. "Always allow" names the exact rule it will write
 // — what you clicked is what gets saved.
 const AskRow: Component<{
-  ask: AgentAsk;
+  ask: RosterAsk;
   onAnswer: (decision: 'allow' | 'deny', remember: boolean) => void;
 }> = (props) => {
   const what = () => {
@@ -336,11 +307,13 @@ const AskBtn: Component<{
 );
 
 const AgentRowView: Component<{
-  row: AgentRow;
+  row: RosterRow;
   elapsed: string;
-  onFocus: () => void;
+  onActivate: () => void;
   onReattach?: () => void;
   detached?: boolean;
+  /** this row is the session the host is showing right now */
+  active?: boolean;
   onDetach?: () => void;
   onCancel?: () => void;
   onStop?: () => void;
@@ -385,7 +358,12 @@ const AgentRowView: Component<{
   };
   const rowStyle = (): JSX.CSSProperties => ({
     'border-left': `3px solid ${stateColor(props.row.state)}`,
-    background: props.row.state === 'needs-input' ? 'rgba(224,178,95,0.10)' : 'rgba(255,255,255,0.02)',
+    // The row the host is showing reads as selected. Kept subtle: the
+    // state colour on the left edge is the row's primary signal and a
+    // strong selection fill would out-shout it.
+    background: props.active
+      ? 'rgba(255,255,255,0.09)'
+      : props.row.state === 'needs-input' ? 'rgba(224,178,95,0.10)' : 'rgba(255,255,255,0.02)',
     padding: '6px 8px',
     'border-radius': tokens.radiusSm,
     cursor: 'pointer',
@@ -400,11 +378,12 @@ const AgentRowView: Component<{
       data-testid={`agents-row-${props.row.key}`}
       data-agent={props.row.agent}
       data-agent-state={props.row.state}
+      data-active={props.active ? 'true' : 'false'}
       style={rowStyle()}
       // Attached rows retain their fast single-click focus. Detached rows
       // wait for dblclick so the two click events preceding it cannot spawn
       // two Agent windows for the same session.
-      onClick={() => { if (!props.detached) props.onFocus(); }}
+      onClick={() => { if (!props.detached) props.onActivate(); }}
       onDblClick={() => { if (props.detached) props.onReattach?.(); }}
       onContextMenu={(e) => hasVerbs() && openMenu(e)}
       // One title, chosen. There used to be two attributes here and JSX
@@ -414,7 +393,7 @@ const AgentRowView: Component<{
       title={
         props.detached
           ? 'Detached — double-click to open a window on it'
-          : `${props.row.agent} in ${props.row.cwd || 'unknown directory'} — click to go to its terminal`
+          : `${props.row.agent} in ${props.row.cwd || 'unknown directory'}`
       }
     >
       <div style={{ display: 'flex', 'align-items': 'baseline', gap: '6px' }}>
@@ -509,7 +488,7 @@ const AgentRowView: Component<{
               <MenuItem
                 label={props.detached ? 'Attach a window' : 'Go to its window'}
                 data-testid="agents-menu-attach"
-                onClick={run(props.detached ? props.onReattach : props.onFocus)}
+                onClick={run(props.detached ? props.onReattach : props.onActivate)}
               />
               <MenuItem
                 label="Stop turn"

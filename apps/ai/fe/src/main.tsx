@@ -1,41 +1,32 @@
-// wash-app-ai — one window onto one managed agent session.
+// wash-app-ai — roster + session, master-detail (docs/SIDEBAR.md M2).
 //
 // The window is a thin host around <AgentSession> from @wash/ui: agentd
 // owns the session, the transcript and the approval queue, so everything
 // here is a subscription and a form. An unstarted window renders the
 // launcher, which is why there is no separate "new session" dialog.
+//
+// The left pane is <AgentRoster> — every session agentd knows about, the
+// same renderer the desktop rail used. Picking a row re-points the detail
+// pane at that session. The roster data was already arriving here (the
+// window subscribes for its own status line and the launcher's adapter
+// list); M2 renders it and, in M2b, acts on it.
 
-import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { HistoryPanel, type SessionMeta } from './HistoryPanel.tsx';
 import type { Component } from 'solid-js';
 import {
-  AgentSession, Button, FilePicker, Menu, MenuBar, MenuItem, MenuSeparator, Overlay, Select,
+  AgentRoster, AgentSession, Button, FilePicker, Menu, MenuBar, MenuItem, MenuSeparator, Overlay, Select,
   createAppBus, defineWashApp, kbdStyle, tokens, washCopyText,
 } from '@wash/ui';
-import type { AgentAsk, AgentConfig, AgentEvent, AgentStatus } from '@wash/ui';
+import type {
+  AgentAsk, AgentEvent, AgentStatus, RosterAsk, RosterRow,
+} from '@wash/ui';
 
 interface Adapter {
   id: string;
   name: string;
   available: boolean;
   note?: string;
-}
-
-interface RosterRow {
-  key: string;
-  agent: string;
-  state: string;
-  dir?: string;
-  branch?: string;
-  dirty?: boolean;
-  used?: number;
-  size?: number;
-  title?: string;
-  mode?: string;
-  modes?: { id: string; name: string; description?: string }[];
-  configs?: AgentConfig[];
-  commands?: { name: string; description?: string }[];
-  yolo?: boolean;
 }
 
 interface RecentSession {
@@ -50,7 +41,7 @@ interface RecentSession {
 
 interface RosterState {
   rows?: RosterRow[];
-  asks?: (AgentAsk & { row_key: string })[];
+  asks?: RosterAsk[];
   adapters?: Adapter[];
   recent?: RecentSession[];
 }
@@ -177,6 +168,38 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       setSessionKey(key);
       send({ kind: 'restore', key });
     },
+  });
+
+  // ---- roster pane (docs/SIDEBAR.md M2) ----
+  // Show/hide is local: the pane is a view of this window, not state agentd
+  // or anyone else owns. Open by default when there is more than one
+  // session to choose between, because that is when a list earns its width.
+  const [rosterOpen, setRosterOpen] = createSignal(false);
+  const rows = () => roster().rows ?? [];
+  // Elapsed per row, anchored on arrival: since_ms is measured at PUSH
+  // time, so it can't be compared against a local clock directly. Same
+  // trick the rail used, and the reason the roster takes startedAt/now
+  // rather than reading a clock itself.
+  const startedAt = new Map<string, number>();
+  const [now, setNow] = createSignal(Date.now());
+  createEffect(() => {
+    const arrival = Date.now();
+    const live = new Set<string>();
+    for (const r of rows()) {
+      live.add(r.key);
+      startedAt.set(r.key, arrival - Math.max(0, r.since_ms || 0));
+    }
+    for (const key of [...startedAt.keys()]) if (!live.has(key)) startedAt.delete(key);
+    // A second session appearing is what makes the list worth its width.
+    if (rows().length > 1) setRosterOpen(true);
+  });
+  // The clock only ticks while rows are on screen, so an idle window holds
+  // no interval.
+  createEffect(() => {
+    if (!rosterOpen() || rows().length === 0) return;
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    onCleanup(() => clearInterval(t));
   });
 
   const adapters = () => roster().adapters ?? [];
@@ -474,6 +497,51 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     />
   );
 
+  // rosterPane is the master half. Verbs arrive in M2b; for now it lists
+  // and selects, which is already the thing the rail could not do for a
+  // remote host.
+  const rosterPane = (
+    <Show when={rosterOpen()}>
+      <div
+        data-testid="ai-roster-pane"
+        style={{
+          width: '230px',
+          'flex-shrink': 0,
+          'border-right': `1px solid ${tokens.borderMenu}`,
+          background: tokens.bgInset,
+          overflow: 'auto',
+          padding: `${tokens.spaceSm}px`,
+        }}
+      >
+        <AgentRoster
+          rows={rows}
+          asks={() => roster().asks ?? []}
+          startedAt={(key) => startedAt.get(key) ?? Date.now()}
+          now={now}
+          activeKey={sessionKey}
+          onActivate={(r) => send({ kind: 'select', key: r.key })}
+        />
+      </div>
+    </Show>
+  );
+
+  // The toggle lives in the window's own chrome rather than the desktop's:
+  // it is this window's layout, and the rail is no longer in the business
+  // of driving what an app shows.
+  //
+  // Labelled "Roster", not "Sessions": the menubar next to it already has a
+  // Session menu, and two adjacent controls whose names differ by an "s"
+  // is a coin toss for the reader. It is also the word the docs use.
+  const rosterToggle = (
+    <Button
+      data-testid="ai-roster-toggle"
+      title={rosterOpen() ? 'Hide the roster' : 'Show every agent session on this host'}
+      onClick={() => setRosterOpen(!rosterOpen())}
+    >
+      {rosterOpen() ? '\u25c0 Roster' : '\u25b6 Roster'}
+    </Button>
+  );
+
   const historyPanel = (
     <Show when={historyOpen()}>
       <HistoryPanel
@@ -529,33 +597,49 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     </Show>
   );
 
+  // Master-detail. The menubar and the roster toggle sit in one header
+  // ABOVE the split, so the roster survives every detail state — including
+  // the launcher, which is what makes "new session while three are
+  // running" a coherent thing to do rather than a mode you leave the list
+  // to enter.
+  const header = (
+    <div style={{ display: 'flex', 'align-items': 'center', gap: `${tokens.spaceSm}px` }}>
+      <div style={{ flex: 1, 'min-width': 0 }}>{menubar}</div>
+      {rosterToggle}
+    </div>
+  );
+
   return (
     <>
     {closeDialog}
     {historyPanel}
-    <Show
-      when={sessionKey()}
-      fallback={
-        <div style={{ height: '100%', display: 'flex', 'flex-direction': 'column' }}>
-          {menubar}
-          <div style={{ flex: 1, 'min-height': 0, overflow: 'auto' }}>
-            <Show when={autostart()} fallback={launcher}>{booting}</Show>
-          </div>
+    <div style={{ height: '100%', display: 'flex', 'flex-direction': 'column' }}>
+      {header}
+      <div style={{ flex: 1, 'min-height': 0, display: 'flex' }}>
+        {rosterPane}
+        <div style={{ flex: 1, 'min-width': 0, display: 'flex', 'flex-direction': 'column' }}>
+          <Show
+            when={sessionKey()}
+            fallback={
+              <div style={{ flex: 1, 'min-height': 0, overflow: 'auto' }}>
+                <Show when={autostart()} fallback={launcher}>{booting}</Show>
+              </div>
+            }
+          >
+            <AgentSession
+              events={events}
+              asks={asks}
+              status={status}
+              onSend={(text) => send({ kind: 'prompt', text })}
+              onAnswer={(id, decision, rule) => send({ kind: 'answer', id, decision, rule: rule ?? '' })}
+              onCancel={() => send({ kind: 'cancel' })}
+              onSetMode={(mode) => send({ kind: 'set_mode', mode })}
+              onSetConfig={(id, value) => send({ kind: 'set_config', id, value })}
+            />
+          </Show>
         </div>
-      }
-    >
-      <AgentSession
-        header={menubar}
-        events={events}
-        asks={asks}
-        status={status}
-        onSend={(text) => send({ kind: 'prompt', text })}
-        onAnswer={(id, decision, rule) => send({ kind: 'answer', id, decision, rule: rule ?? '' })}
-        onCancel={() => send({ kind: 'cancel' })}
-        onSetMode={(mode) => send({ kind: 'set_mode', mode })}
-        onSetConfig={(id, value) => send({ kind: 'set_config', id, value })}
-      />
-    </Show>
+      </div>
+    </div>
     </>
   );
 };

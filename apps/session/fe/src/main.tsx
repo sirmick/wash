@@ -11,6 +11,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import {
+  AgentRoster,
   Menu,
   MenuItem,
   accentColor,
@@ -21,7 +22,7 @@ import {
   washAssetUrl,
   washCopyText,
 } from '@wash/ui';
-import type { Pack } from '@wash/ui';
+import type { Pack, RosterAsk, RosterRow, RosterSession } from '@wash/ui';
 import { toBlob } from 'html-to-image';
 import { Camera, Search, PanelRightOpen } from 'lucide-solid';
 import { Sidebar, type SidebarMode } from './sidebar/Sidebar';
@@ -29,7 +30,7 @@ import { Section, type SectionState } from './sidebar/Section';
 import { ViewportWidget } from './sidebar/ViewportWidget';
 import { AboutWidget, type AboutHostStats } from './sidebar/AboutWidget';
 import { NotifyWidget, type NotifyEntry } from './sidebar/NotifyWidget';
-import { AgentsWidget, type AgentAsk, type AgentRow, type AgentSession } from './sidebar/AgentsWidget';
+
 import { BulkWidget, type BulkJob } from './sidebar/BulkWidget';
 import { BulkConflictOverlay, type BulkConflict } from './sidebar/BulkConflictOverlay';
 import { PrivWidget, type PrivReq } from './sidebar/PrivWidget';
@@ -331,14 +332,14 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // (docs/AGENT_TERM.md §7), forwarded by the session BE as agent.state.
   // Rows arrive pre-sorted (needs-input first); we only anchor each row's
   // elapsed clock locally, the way the terminal's own status line does.
-  const [agentRows, setAgentRows] = createSignal<AgentRow[]>([]);
+  const [agentRows, setAgentRows] = createSignal<RosterRow[]>([]);
   // Pending permission questions (docs/AGENT_TERM.md §12) ride the same
   // roster push. An agent blocked on a human is the one thing in the
   // sidebar worth opening the section for on its own.
-  const [agentAsks, setAgentAsks] = createSignal<AgentAsk[]>([]);
+  const [agentAsks, setAgentAsks] = createSignal<RosterAsk[]>([]);
   // Remembered sessions (docs/AGENT_TERM.md §13) — what a reboot or a
   // closed window would otherwise have cost.
-  const [agentRecent, setAgentRecent] = createSignal<AgentSession[]>([]);
+  const [agentRecent, setAgentRecent] = createSignal<RosterSession[]>([]);
   const agentStartedAt = new Map<string, number>();
   const [agentNow, setAgentNow] = createSignal(Date.now());
 
@@ -513,7 +514,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
   // focusAgent goes to the terminal window that owns a roster row. The
   // row carries its terminal's instance id, which is what the WM keys on.
-  const focusAgent = (row: AgentRow) => {
+  const focusAgent = (row: RosterRow) => {
     const w = windows().find((x) => x.instanceID === row.term_instance);
     if (!w) return;
     window.wash.setViewport(w.viewport.vx, w.viewport.vy);
@@ -981,13 +982,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           // comparison), and auto-expand when an agent first wants the
           // human — the one case worth pulling the section open.
           const state = data.state as unknown as {
-            rows?: AgentRow[];
-            asks?: AgentAsk[];
-            recent?: AgentSession[];
+            rows?: RosterRow[];
+            asks?: RosterAsk[];
+            recent?: RosterSession[];
           };
-          setAgentRecent((state?.recent ?? []) as AgentSession[]);
-          const next = (state?.rows ?? []) as AgentRow[];
-          const asks = (state?.asks ?? []) as AgentAsk[];
+          setAgentRecent((state?.recent ?? []) as RosterSession[]);
+          const next = (state?.rows ?? []) as RosterRow[];
+          const asks = (state?.asks ?? []) as RosterAsk[];
           const hadAsks = agentAsks().length > 0;
           setAgentAsks(asks);
           if (asks.length > 0 && !hadAsks) autoExpandSection('agents');
@@ -1422,11 +1423,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           {/* onDetach/onCancel/onStop are key-addressed passthroughs to
               agentd via our own BE: a shell-originated send carries no
               router-attested From, so the service would reject it. */}
-          <AgentsWidget
+          <AgentRoster
             rows={agentRows}
             startedAt={(key) => agentStartedAt.get(key) ?? Date.now()}
             now={agentNow}
-            onFocus={focusAgent}
+            onActivate={focusAgent}
             onReattach={(row) =>
               window.wash.sendAppMsg(props.instance, { kind: 'agent_reattach', key: row.key })
             }

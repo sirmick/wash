@@ -1,4 +1,4 @@
-// Component test (Tier B) for the coding-agent roster widget — the pure
+// Component test (Tier B) for the shared coding-agent roster — the pure
 // renderer of com.wash.agentd's snapshot. Covers empty/populated
 // rendering, the state language (colour + label), the "dir · branch*"
 // place line, and the click-to-focus callback. The cross-process flow (a
@@ -7,11 +7,11 @@
 
 import { test, expect, afterEach } from 'vitest';
 import { render, fireEvent, cleanup, screen } from '@solidjs/testing-library';
-import { AgentsWidget, fmtAgo, fmtElapsed, stateColor, stateLabel, type AgentAsk, type AgentRow, type AgentSession } from './AgentsWidget.tsx';
+import { AgentRoster, fmtAgo, fmtElapsed, stateColor, stateLabel, type RosterAsk, type RosterRow, type RosterSession } from './agent-roster.tsx';
 
 afterEach(cleanup);
 
-const row = (over: Partial<AgentRow> = {}): AgentRow => ({
+const row = (over: Partial<RosterRow> = {}): RosterRow => ({
   key: 'i-1:5',
   agent: 'claude',
   state: 'working',
@@ -27,7 +27,7 @@ const at = (_key: string) => 0;
 
 test('empty: says so rather than rendering an empty box', () => {
   const { queryByTestId } = render(() => (
-    <AgentsWidget rows={() => []} startedAt={at} now={() => 0} onFocus={noop} />
+    <AgentRoster rows={() => []} startedAt={at} now={() => 0} onActivate={noop} />
   ));
   expect(queryByTestId('agents-empty')).toBeTruthy();
 });
@@ -35,7 +35,7 @@ test('empty: says so rather than rendering an empty box', () => {
 test('populated: one row per agent, state on the element for the chrome to read', () => {
   const rows = [row({ key: 'a', state: 'needs-input', reason: 'permission' }), row({ key: 'b', agent: 'codex' })];
   const { queryByTestId, getByTestId } = render(() => (
-    <AgentsWidget rows={() => rows} startedAt={at} now={() => 0} onFocus={noop} />
+    <AgentRoster rows={() => rows} startedAt={at} now={() => 0} onActivate={noop} />
   ));
   expect(queryByTestId('agents-empty')).toBeNull();
   expect(getByTestId('agents-row-a').getAttribute('data-agent-state')).toBe('needs-input');
@@ -52,7 +52,7 @@ test('place line: repo, branch, and a star when the tree is dirty', () => {
     row({ key: 'nogit', dir: 'tmp' }),
   ];
   const { getByTestId } = render(() => (
-    <AgentsWidget rows={() => rows} startedAt={at} now={() => 0} onFocus={noop} />
+    <AgentRoster rows={() => rows} startedAt={at} now={() => 0} onActivate={noop} />
   ));
   expect(getByTestId('agents-row-clean').textContent).toContain('wash · main');
   expect(getByTestId('agents-row-dirty').textContent).toContain('wash · main*');
@@ -64,7 +64,7 @@ test('place line: repo, branch, and a star when the tree is dirty', () => {
 test('elapsed counts from the row anchor, not the push', () => {
   const rows = [row({ key: 'a' })];
   const { getByTestId } = render(() => (
-    <AgentsWidget rows={() => rows} startedAt={() => 1_000} now={() => 91_000} onFocus={noop} />
+    <AgentRoster rows={() => rows} startedAt={() => 1_000} now={() => 91_000} onActivate={noop} />
   ));
   expect(getByTestId('agents-row-a').textContent).toContain('1m');
 });
@@ -73,7 +73,7 @@ test('clicking a row asks to focus that agent’s terminal', () => {
   const rows = [row({ key: 'a' }), row({ key: 'b', term_instance: 'i-2' })];
   const seen: string[] = [];
   const { getByTestId } = render(() => (
-    <AgentsWidget rows={() => rows} startedAt={at} now={() => 0} onFocus={(r) => seen.push(r.term_instance)} />
+    <AgentRoster rows={() => rows} startedAt={at} now={() => 0} onActivate={(r) => seen.push(r.term_instance)} />
   ));
   fireEvent.click(getByTestId('agents-row-b'));
   expect(seen).toEqual(['i-2']);
@@ -104,7 +104,7 @@ test('fmtElapsed reads like a status line', () => {
 
 // ---- M6: the question rows (docs/AGENT_TERM.md §12) ----
 
-const ask = (over: Partial<AgentAsk> = {}): AgentAsk => ({
+const ask = (over: Partial<RosterAsk> = {}): RosterAsk => ({
   id: 'ask-1',
   agent: 'claude',
   tool: 'Bash',
@@ -119,7 +119,7 @@ const ask = (over: Partial<AgentAsk> = {}): AgentAsk => ({
 
 test('a pending question renders what the agent wants and three ways out', () => {
   const { getByTestId } = render(() => (
-    <AgentsWidget rows={() => []} startedAt={at} now={() => 0} onFocus={noop} asks={() => [ask()]} />
+    <AgentRoster rows={() => []} startedAt={at} now={() => 0} onActivate={noop} asks={() => [ask()]} />
   ));
   const row = getByTestId('agents-ask');
   expect(row.getAttribute('data-tool')).toBe('Bash');
@@ -134,9 +134,9 @@ test('a pending question renders what the agent wants and three ways out', () =>
 
 test('each button answers with its own decision + remember flag', () => {
   const seen: string[] = [];
-  const onAnswer = (_a: AgentAsk, d: string, r: boolean) => seen.push(`${d}:${r}`);
+  const onAnswer = (_a: RosterAsk, d: string, r: boolean) => seen.push(`${d}:${r}`);
   const { getByTestId, unmount } = render(() => (
-    <AgentsWidget rows={() => []} startedAt={at} now={() => 0} onFocus={noop} asks={() => [ask()]} onAnswer={onAnswer} />
+    <AgentRoster rows={() => []} startedAt={at} now={() => 0} onActivate={noop} asks={() => [ask()]} onAnswer={onAnswer} />
   ));
   fireEvent.click(getByTestId('agents-ask-allow'));
   fireEvent.click(getByTestId('agents-ask-always'));
@@ -147,7 +147,7 @@ test('each button answers with its own decision + remember flag', () => {
 
 test('a question with no suggestion still offers allow and deny', () => {
   const { getByTestId, queryByTestId } = render(() => (
-    <AgentsWidget rows={() => []} startedAt={at} now={() => 0} onFocus={noop}
+    <AgentRoster rows={() => []} startedAt={at} now={() => 0} onActivate={noop}
       asks={() => [ask({ suggested_rule: undefined })]} />
   ));
   expect(queryByTestId('agents-ask-always')).toBeNull();
@@ -156,7 +156,7 @@ test('a question with no suggestion still offers allow and deny', () => {
 
 test('questions render above the status rows — blocked beats informational', () => {
   const { container } = render(() => (
-    <AgentsWidget rows={() => [row({ key: 'r1' })]} startedAt={at} now={() => 0} onFocus={noop} asks={() => [ask()]} />
+    <AgentRoster rows={() => [row({ key: 'r1' })]} startedAt={at} now={() => 0} onActivate={noop} asks={() => [ask()]} />
   ));
   const ids = [...container.querySelectorAll('[data-testid]')].map((el) => el.getAttribute('data-testid'));
   expect(ids.indexOf('agents-ask')).toBeLessThan(ids.indexOf('agents-row-r1'));
@@ -164,7 +164,7 @@ test('questions render above the status rows — blocked beats informational', (
 
 // ---- M7: the Recent list (docs/AGENT_TERM.md §13) ----
 
-const sess = (over: Partial<AgentSession> = {}): AgentSession => ({
+const sess = (over: Partial<RosterSession> = {}): RosterSession => ({
   session_id: 'sess-1',
   agent: 'claude',
   cwd: '/home/mick/wash',
@@ -188,7 +188,7 @@ test('fmtAgo reads like a human said it', () => {
 // was answering a different question in the same space.
 test('the sidebar no longer lists sessions that ended', () => {
   const { queryByTestId } = render(() => (
-    <AgentsWidget rows={() => []} startedAt={at} now={() => Date.now()} onFocus={noop}
+    <AgentRoster rows={() => []} startedAt={at} now={() => Date.now()} onActivate={noop}
       recent={() => [sess()]} />
   ));
   expect(queryByTestId('agents-recent')).toBeNull();
@@ -214,8 +214,8 @@ const openRowMenu = (getByTestId: (id: string) => HTMLElement) => {
 
 test('verbs: the row offers a menu, and right-click opens the same one', () => {
   const { getByTestId, queryByTestId } = render(() => (
-    <AgentsWidget rows={() => [row({ key: 'a', state: 'working' })]} startedAt={at} now={() => 0}
-      onFocus={noop} onDetach={noop} onCancel={noop} onStop={noop} />
+    <AgentRoster rows={() => [row({ key: 'a', state: 'working' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onDetach={noop} onCancel={noop} onStop={noop} />
   ));
   expect(screen.queryByTestId('agents-row-actions')).toBeNull();
   fireEvent.contextMenu(getByTestId('agents-row-a'));
@@ -224,8 +224,8 @@ test('verbs: the row offers a menu, and right-click opens the same one', () => {
 
 test('verbs: an inapplicable verb is disabled, not missing', () => {
   const { getByTestId } = render(() => (
-    <AgentsWidget rows={() => [row({ key: 'a', state: 'done' })]} startedAt={at} now={() => 0}
-      onFocus={noop} onDetach={noop} onCancel={noop} onStop={noop} />
+    <AgentRoster rows={() => [row({ key: 'a', state: 'done' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onDetach={noop} onCancel={noop} onStop={noop} />
   ));
   openRowMenu(getByTestId);
   // A finished turn has nothing to stop — but the verb still shows, so
@@ -238,8 +238,8 @@ test('verbs: an inapplicable verb is disabled, not missing', () => {
 test('verbs: a working agent can have its turn stopped', () => {
   let cancelled = 0;
   const { getByTestId } = render(() => (
-    <AgentsWidget rows={() => [row({ key: 'a', state: 'working' })]} startedAt={at} now={() => 0}
-      onFocus={noop} onCancel={() => { cancelled++; }} />
+    <AgentRoster rows={() => [row({ key: 'a', state: 'working' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onCancel={() => { cancelled++; }} />
   ));
   openRowMenu(getByTestId);
   expect(screen.getByTestId('agents-menu-cancel').hasAttribute('disabled')).toBe(false);
@@ -249,8 +249,8 @@ test('verbs: a working agent can have its turn stopped', () => {
 
 test('verbs: an already-detached row cannot detach again, and offers to attach', () => {
   const { getByTestId } = render(() => (
-    <AgentsWidget rows={() => [row({ key: 'a', state: 'done', detached: true })]} startedAt={at}
-      now={() => 0} onFocus={noop} onDetach={noop} onStop={noop} />
+    <AgentRoster rows={() => [row({ key: 'a', state: 'done', detached: true })]} startedAt={at}
+      now={() => 0} onActivate={noop} onDetach={noop} onStop={noop} />
   ));
   openRowMenu(getByTestId);
   expect(screen.getByTestId('agents-menu-detach').hasAttribute('disabled')).toBe(true);
@@ -259,8 +259,8 @@ test('verbs: an already-detached row cannot detach again, and offers to attach',
 
 test('verbs: a host that passes no handler gets no menu at all', () => {
   const { queryByTestId } = render(() => (
-    <AgentsWidget rows={() => [row({ key: 'a', state: 'working' })]} startedAt={at} now={() => 0}
-      onFocus={noop} />
+    <AgentRoster rows={() => [row({ key: 'a', state: 'working' })]} startedAt={at} now={() => 0}
+      onActivate={noop} />
   ));
   expect(queryByTestId('agents-row-menu')).toBeNull();
 });
@@ -270,8 +270,8 @@ test('verbs: a host that passes no handler gets no menu at all', () => {
 test('verbs: End asks before it ends, and Cancel backs out', () => {
   let stopped = 0;
   const { getByTestId, queryByTestId } = render(() => (
-    <AgentsWidget rows={() => [row({ key: 'a', state: 'done' })]} startedAt={at} now={() => 0}
-      onFocus={noop} onStop={() => { stopped++; }} />
+    <AgentRoster rows={() => [row({ key: 'a', state: 'done' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onStop={() => { stopped++; }} />
   ));
   openRowMenu(getByTestId);
   fireEvent.click(screen.getByTestId('agents-menu-end'));
@@ -295,8 +295,8 @@ test('verbs: End asks before it ends, and Cancel backs out', () => {
 // the armed confirm would fire on the next row you opened it from.
 test('verbs: reopening the menu forgets a pending confirm', () => {
   const { getByTestId, queryByTestId } = render(() => (
-    <AgentsWidget rows={() => [row({ key: 'a', state: 'done' })]} startedAt={at} now={() => 0}
-      onFocus={noop} onStop={noop} />
+    <AgentRoster rows={() => [row({ key: 'a', state: 'done' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onStop={noop} />
   ));
   openRowMenu(getByTestId);
   fireEvent.click(screen.getByTestId('agents-menu-end'));
@@ -312,8 +312,8 @@ test('verbs: reopening the menu forgets a pending confirm', () => {
 test('verbs: opening the menu does not also focus the row', () => {
   let focused = 0;
   const { getByTestId } = render(() => (
-    <AgentsWidget rows={() => [row({ key: 'a', state: 'working' })]} startedAt={at} now={() => 0}
-      onFocus={() => { focused++; }} onDetach={noop} />
+    <AgentRoster rows={() => [row({ key: 'a', state: 'working' })]} startedAt={at} now={() => 0}
+      onActivate={() => { focused++; }} onDetach={noop} />
   ));
   openRowMenu(getByTestId);
   expect(focused).toBe(0);
@@ -323,8 +323,8 @@ test('verbs: opening the menu does not also focus the row', () => {
 // last, so a detached row advertised a terminal it does not have.
 test('verbs: a detached row says it is detached', () => {
   const { getByTestId } = render(() => (
-    <AgentsWidget rows={() => [row({ key: 'a', state: 'done', detached: true })]} startedAt={at}
-      now={() => 0} onFocus={noop} />
+    <AgentRoster rows={() => [row({ key: 'a', state: 'done', detached: true })]} startedAt={at}
+      now={() => 0} onActivate={noop} />
   ));
   expect(getByTestId('agents-row-a').getAttribute('title')).toContain('Detached');
 });
@@ -332,12 +332,55 @@ test('verbs: a detached row says it is detached', () => {
 test('verbs: a detached row reattaches once on double-click', () => {
   let reattached = 0;
   const { getByTestId } = render(() => (
-    <AgentsWidget rows={() => [row({ key: 'a', state: 'done', detached: true })]} startedAt={at}
-      now={() => 0} onFocus={noop} onReattach={() => { reattached++; }} />
+    <AgentRoster rows={() => [row({ key: 'a', state: 'done', detached: true })]} startedAt={at}
+      now={() => 0} onActivate={noop} onReattach={() => { reattached++; }} />
   ));
   const target = getByTestId('agents-row-a');
   fireEvent.click(target);
   expect(reattached).toBe(0);
   fireEvent.dblClick(target);
   expect(reattached).toBe(1);
+});
+
+// ---- master-detail (docs/SIDEBAR.md M2) ----
+
+test('the host\'s current session is marked, so the pane reads as selected', () => {
+  const rows = [row({ key: 'a' }), row({ key: 'b' })];
+  const { getByTestId } = render(() => (
+    <AgentRoster rows={() => rows} startedAt={at} now={() => 0} onActivate={noop} activeKey={() => 'b'} />
+  ));
+  expect(getByTestId('agents-row-b').getAttribute('data-active')).toBe('true');
+  expect(getByTestId('agents-row-a').getAttribute('data-active')).toBe('false');
+});
+
+test('with no activeKey nothing is marked — the rail has no "current" row', () => {
+  const rows = [row({ key: 'a' })];
+  const { getByTestId } = render(() => (
+    <AgentRoster rows={() => rows} startedAt={at} now={() => 0} onActivate={noop} />
+  ));
+  expect(getByTestId('agents-row-a').getAttribute('data-active')).toBe('false');
+});
+
+test('activating a row hands the host the row, not an interpretation of it', () => {
+  // The rail went to the owning terminal; the app points its detail pane
+  // at the session. The roster must not decide which.
+  const rows = [row({ key: 'a' }), row({ key: 'b' })];
+  let got = '';
+  const { getByTestId } = render(() => (
+    <AgentRoster rows={() => rows} startedAt={at} now={() => 0} onActivate={(r) => { got = r.key; }} />
+  ));
+  fireEvent.click(getByTestId('agents-row-b'));
+  expect(got).toBe('b');
+});
+
+test('a detached row still ignores a single click', () => {
+  // Two clicks preceding a dblclick would otherwise spawn two windows for
+  // one session — the reason detached rows wait for the double.
+  const rows = [row({ key: 'd', detached: true })];
+  let activated = 0;
+  const { getByTestId } = render(() => (
+    <AgentRoster rows={() => rows} startedAt={at} now={() => 0} onActivate={() => { activated++; }} />
+  ));
+  fireEvent.click(getByTestId('agents-row-d'));
+  expect(activated).toBe(0);
 });

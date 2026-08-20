@@ -14,9 +14,20 @@
 // The empty window is the launcher: an app with no session yet renders the
 // form. That is why there is no separate "new session" dialog anywhere.
 //
-// InstancingMulti on purpose — one window per session. The desktop is the
-// session switcher (taskbar pills, the attention badge, the roster), so
-// this app has no tab strip and no session list of its own.
+// InstancingMulti on purpose — one window per session, and the taskbar is
+// still the window switcher.
+//
+// Since docs/SIDEBAR.md M2 the window also carries a ROSTER pane: every
+// session agentd knows about, not just this window's. That is where the
+// per-session verbs live, because this is where they can be correct — an
+// app talking to its own host's agentd carries a router-attested sender,
+// so it may act, whereas the desktop rail had to gateway through the
+// session BE and could only ever reach the LOCAL host. The rail keeps the
+// counts and deep-links here (§3.1).
+//
+// Master-detail: picking a roster row re-points THIS window's detail pane
+// at that session (`select`). agentd supports several transcript watchers
+// per session by design, so two windows on one session is fine.
 package ai
 
 import (
@@ -254,6 +265,29 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		// Establish the FE's session before requesting replay: a snapshot can
 		// return over the agentd connection immediately, and started clears the
 		// old event list by design.
+		c.SendAppMsg(map[string]any{"kind": "started", "key": session.key})
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind":   "transcript_subscribe",
+			"key":    session.key,
+			"replay": true,
+		})
+
+	case "select":
+		// Master-detail: point this window at another of agentd's sessions.
+		// Same three steps as the agentd-initiated `attach` below — set the
+		// key, tell the FE (which clears the old transcript), then subscribe
+		// with replay so the pane fills with where that session actually is.
+		//
+		// Re-selecting the session we already show would clear the
+		// transcript and re-fetch it for nothing.
+		key := str(m["key"])
+		if key == "" || key == session.key {
+			return
+		}
+		log.Printf("wash-ai: select key=%s (was %s)", key, session.key)
+		session.key = key
+		session.title = ""
+		persistSessionView(c)
 		c.SendAppMsg(map[string]any{"kind": "started", "key": session.key})
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
 			"kind":   "transcript_subscribe",
