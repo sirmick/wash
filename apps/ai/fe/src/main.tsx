@@ -13,6 +13,7 @@
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { HistoryPanel, historyAction, type SessionMeta } from './HistoryPanel.tsx';
+import { defaultAgent } from './default-agent.ts';
 import type { Component } from 'solid-js';
 import {
   AgentRoster, AgentSession, Button, FilePicker, Menu, MenuBar, MenuItem, MenuSeparator, Overlay, Select,
@@ -68,7 +69,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [roster, setRoster] = createSignal<RosterState>({});
   const [error, setError] = createSignal('');
 
-  // Launcher form.
+  // Launcher form. agentDefaulted latches N5a's one-shot preselect so
+  // later roster pushes can't overwrite a deliberate "Choose…".
+  let agentDefaulted = false;
   const [agent, setAgent] = createSignal('');
   const [cwd, setCwd] = createSignal('');
   const [starting, setStarting] = createSignal(false);
@@ -157,6 +160,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
       case 'roster':
         setRoster((m.state as RosterState) ?? {});
+        // Preselect the launcher's agent on the first roster that names
+        // the adapters (docs/AGENT_UX.md N5a). Once only, and only while
+        // the untouched launcher is what's showing — a user who set the
+        // select (or a window that's already a session) is never fought.
+        if (!agentDefaulted && !sessionKey() && !autostart() && agent() === '') {
+          const d = defaultAgent(roster().adapters ?? []);
+          if (d) {
+            agentDefaulted = true;
+            setAgent(d);
+          }
+        }
         break;
     }
   };
@@ -305,7 +319,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   });
 
   const start = () => {
-    const a = agent() || adapters().find((x) => x.available)?.id;
+    // Same preference the preselect uses (N5a), so a submit from
+    // "Choose…" and the visible default cannot disagree about the agent.
+    const a = agent() || defaultAgent(adapters());
     if (!a) return;
     setStarting(true);
     setError('');

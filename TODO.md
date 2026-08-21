@@ -199,8 +199,28 @@ bug list — all fully landed; see `git log` if you need their content.)
   per-connection handler goroutines on shutdown — same hazard class as the
   fixed `runRawListener` (42d6698); latent today, one log line away from the
   t.Logf-panic class.
+- [ ] **Control-socket last-binder-wins collision — pre-0.14 gate.** Every
+  router defaults to `/tmp/wash-<uid>.sock`; `ListenControl` blindly
+  `os.Remove`s on bind (steals a live socket) and on shutdown (unlinks
+  whoever owns it now). Spawned apps dial `WASH_DISPLAY`, so a stolen
+  socket sends them to the *wrong* router, whose registry rejects them
+  ("binary does not match registered app_id") and every launch times out;
+  the loser router is left listening on an orphaned inode. LIFETIME makes
+  concurrent same-uid routers the normal case, so this bites real sessions
+  (observed 2026-08-21 on the live desktop). Fix: per-session socket path
+  (`$XDG_RUNTIME_DIR/wash/ctl-<sessid>.sock`), refuse to steal a socket
+  that answers a probe connect, and unlink on shutdown only if still the
+  owner.
 
 ## Apps / UX
+
+- [ ] **Agent UX phase Now (N1–N6)** — docs/AGENT_UX.md, plan of record
+  2026-08-21. N5a (Claude-preferred launcher default) landed with the doc;
+  N1 focus-or-launch primitive, N2 agentd needs-input toasts, N3 hidden-
+  sidebar chevron badge, N4 idempotent single-click reattach, N5b last-used
+  agent+folder persist, N6 taskbar attention flag remain (impl planned with
+  Opus). Phase Next (0.15 messenger consolidation) needs its own design doc
+  first.
 
 - [ ] **wash-term split panes** — docs/TERM_LAYOUT.md, designed 2026-08-02,
   not started. A window becomes a tree of tab *groups*: each leaf has its own
