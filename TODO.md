@@ -102,7 +102,18 @@ bug list — all fully landed; see `git log` if you need their content.)
     separate face app needed: com.wash.priv changed surface. Prompts are
     user-summoned, never self-opening. The password now transits priv's
     own FE, not the session app's. As-built: SIDEBAR.md M4 "As built".
-  - [ ] **M5/M6 — Net + About per-host; delete the dead gateways.**
+  - [x] **M5 — Net per-host** — DONE 2026-08-20. A door per remote host
+    into `com.wash.net`, keyed on HAVING netd rather than having a
+    problem (`hostsWithService`) — a network that is quietly fine is
+    still a thing you open settings for. **About's B card is deferred
+    with a reason**: its data comes from the session BE's own ticker and
+    B runs --no-session, so it needs a stats service on B published via
+    hostgw — a new state shape, not launch-addressing. Its own milestone.
+  - [ ] **M6 — cleanup + hardening.** Delete the session BE gateways that
+    no longer have callers; fold LOCAL into hostgw's rise-detector (the
+    rail still keeps a legacy bulk.state handler only for the local
+    pop-open); provenance/priv-phishing review, now including the modal
+    surface; confirm no cross-uid attach path (SIDEBAR.md §3.2(3)).
 - [ ] **Clipboard sync hub; cross-origin z-band** (focused-host windows on
   top, below chrome z 9999/10000) — the rest of the old M4/M5 entry.
 - [ ] **M6 — remote hardening pass**: multi-tenancy, provenance/priv-phishing

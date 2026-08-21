@@ -147,8 +147,8 @@ The M2 rework cost (§M2, the GH #21 verb set) was accepted on this basis.
 | **Bulk** | → `com.wash.fm` (M3) | active jobs + aggregate progress, per host | **only** consumer is `apps/fm/be/upload.go` — single-app today |
 | **Priv** | → wash-priv's own **modal surface** — **DONE** (M4) | pending escalation count, per host; local yes/no stays (§3.2(8)) | irreducibly cross-app on the *producing* side: `journal`, `syslogs`, `packages` — but the *prompt* is one thing, so only where it renders moved |
 | **Notify** | stays chrome | merged, host-tinted — **DONE** (M0/M1) | cross-app by definition; transport already works (§1.1) |
-| **Net** | → `com.wash.net` (M5) | per-host status | app already is the control surface |
-| **About** | per-host | A's by default | a machine's identity; optional B card |
+| **Net** | → `com.wash.net` — **DONE** (M5) | per-host status + a door per host | app already is the control surface; netd manages its own machine, so this is per-host by nature |
+| **About** | A's only — B card **deferred** (M5) | — | needs a stats producer on B; see M5 "As built" |
 | **Audio** | deferred | — | sound exits B's speakers; needs a stream, not a widget (REMOTE.md §7) |
 | **Link** | A-only | — | link health *is* the seat's connection |
 | **Viewport** | A-only | — | the virtual desktop is the seat's |
@@ -660,6 +660,31 @@ Mostly launch-addressing once M1 exists. `com.wash.net` is already the control
 surface, so the widget only needs its "Configure" to launch on the right host.
 About gains an optional per-host card. Audio stays deferred (REMOTE.md §7 — it
 needs an audio *stream*, not a widget).
+
+#### As built (2026-08-20)
+
+**Net done; About's per-host card deferred, with a reason.**
+
+Net was the launch-addressing the plan predicted: a `<HostOpen>` row per
+remote host opening `com.wash.net` there. The one judgement call was the door
+*predicate*. Bulk earns a door by having work in flight, so `countByHost`
+suited it. Keying net off the same thing would have hidden the door on exactly
+the hosts whose network was quietly fine — so M5 added `hostsWithService`,
+which asks whether a host HAS the service rather than whether it currently has
+a problem. A network always exists; "configure the network" is meaningless
+without saying whose, but it is never irrelevant.
+
+**About cannot be per-host yet, and it is not a launch-addressing problem.**
+The widget's data is `system.info` and `host.stats`, both produced by the
+**session BE's own 5s ticker** (`apps/session/be/hoststats.go`). B runs
+`--no-session`, so there is no producer there to read. A B card therefore needs
+a new stats service on B published through hostgw — a new state shape and a new
+service, not a door. That is real work with real value (a remote host's load is
+worth seeing), but it belongs to its own milestone rather than being smuggled
+into this one. Recorded rather than quietly dropped.
+
+Audio stays deferred on the original grounds: sound leaves B's speakers, so it
+needs an audio *stream*, not a widget (REMOTE.md §7).
 
 ### M6 — cleanup + hardening
 

@@ -257,6 +257,25 @@ export function netSummary(state: unknown): string {
   return '';
 }
 
+/**
+ * hostsWithService lists every origin that has state for a service at
+ * all, in rail order — regardless of whether it currently has anything
+ * to SAY.
+ *
+ * This is the right predicate for a door where the count is not the
+ * point. Bulk earns a door by having jobs in flight; a network always
+ * exists, so netd's door is warranted by the host being there. Keying
+ * that off countByHost would have hidden the door on exactly the hosts
+ * whose network is quietly fine.
+ */
+export function hostsWithService(map: HostgwMap, service: string): string[] {
+  const out: string[] = [];
+  for (const origin of orderOrigins(map)) {
+    if (stateFor(map, origin, service) !== undefined) out.push(origin);
+  }
+  return out;
+}
+
 /** How a host's link is doing, as the Hosts widget reports it. */
 export type HostLinkStatus = 'up' | 'reconnecting' | 'down';
 

@@ -61,6 +61,8 @@ import {
   waitingAgents,
   AWARENESS_COUNTERS,
   countByHost,
+  hostsWithService,
+  stateFor,
   LOCAL_ORIGIN,
   sectionForService,
   type HostGroupRow,
@@ -1351,6 +1353,30 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             section="net"
             rows={() => hostRows(SERVICE_NET, netBadgeForHost, netSummary)}
             {...groupProps}
+          />
+          {/* netd manages the network of the machine it runs on, so this
+              is per-host by nature rather than merged: "configure the
+              network" is meaningless without saying whose. The widget
+              above still opens the local one; these open a remote host's,
+              which the rail could never do — its sends resolve inside
+              their own router (docs/SIDEBAR.md M5).
+
+              Every host with netd gets a door, not just the ones with
+              something wrong: a network that is quietly fine is still a
+              thing you open settings for. */}
+          <HostOpen
+            testid="net-open"
+            what="network settings"
+            doors={() =>
+              hostsWithService(hostgw(), SERVICE_NET)
+                .filter((origin) => origin !== LOCAL_ORIGIN)
+                .map((origin) => ({
+                  origin,
+                  label: `Configure · ${origin}`,
+                  badge: netBadgeForHost(stateFor(hostgw(), origin, SERVICE_NET)) === '!' ? 1 : 0,
+                }))
+            }
+            onOpen={(origin) => window.wash.launchOn(origin, 'com.wash.net')}
           />
         </Section>
         <Section

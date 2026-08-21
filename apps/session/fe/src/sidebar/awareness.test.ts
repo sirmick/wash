@@ -21,6 +21,7 @@ import {
   bulkSummary,
   countBadge,
   countByHost,
+  hostsWithService,
   netBadge,
   netBadgeForHost,
   netHostsNeedingAttention,
@@ -84,6 +85,39 @@ test('per-host breakdown keeps only the hosts with something to say', () => {
   assert.deepEqual(countByHost(m, SERVICE_PRIV, pendingPrivReqs), [
     { origin: 'build01', count: 1 },
   ]);
+});
+
+test('a door predicate counts HAVING a service, not having a problem', () => {
+  // The distinction M5 turns on. netd's door is warranted by the host
+  // existing — a network that is quietly fine is still a thing you open
+  // settings for — whereas bulk's door is warranted by work in flight.
+  // Keying net off countByHost would have hidden the door on exactly the
+  // hosts whose network was working.
+  const m = mk({
+    local: { net: { status: 'committed' } },
+    build01: { net: { status: 'await-confirm' } },
+    idle02: { net: { status: 'committed' } },
+  });
+  assert.deepEqual(hostsWithService(m, SERVICE_NET), [LOCAL_ORIGIN, 'build01', 'idle02']);
+  // ...while the badge maths still names only the host in trouble.
+  assert.deepEqual(countByHost(m, SERVICE_NET, netUrgency), [{ origin: 'build01', count: 1 }]);
+});
+
+test('hosts with a service come back local-first, then sorted', () => {
+  const m = mk({
+    zeta: { net: { status: 'committed' } },
+    alpha: { net: { status: 'committed' } },
+    local: { net: { status: 'committed' } },
+  });
+  assert.deepEqual(hostsWithService(m, SERVICE_NET), [LOCAL_ORIGIN, 'alpha', 'zeta']);
+});
+
+test('a host without the service gets no door', () => {
+  const m = mk({
+    local: { net: { status: 'committed' } },
+    build01: { bulk: { jobs: [] } },
+  });
+  assert.deepEqual(hostsWithService(m, SERVICE_NET), [LOCAL_ORIGIN]);
 });
 
 test('a service no host reports is simply absent, not zero-crashing', () => {
