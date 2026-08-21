@@ -155,8 +155,12 @@ who is by definition absent — and also the state that could pin a session
 forever. This is not hypothetical: on 2026-08-20 ten consecutive asks expired
 unanswered (`askTTL = 30s`, `apps/agentd/be/ask.go:36`, a wall-clock
 `time.AfterFunc` that keeps running while nobody can see the prompt). Recommend a
-high-but-finite ceiling for `needs-input`, and separately consider pausing
-`askTTL` when no viewer is attached.
+high-but-finite ceiling for `needs-input`.
+
+The `askTTL` half of that is **not this doc's work**.
+`docs/PROMPT-ask-timeout.md` owns `apps/agentd/be/ask.go` and covers why an
+expired ask silently becomes a denial; pausing the TTL while no viewer is
+attached belongs there. Coordinate before both branches edit that file.
 
 ### M4 — mid-turn checkpoint and resume (separate piece of work)
 

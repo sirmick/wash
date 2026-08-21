@@ -214,9 +214,13 @@ Plan, incremental (✅ = landed on wash-friction):
   get request/reply correlation via fs-client `createBus()`. One
   shared wrapper (host listener + cleanup + reqid correlation)
   eliminates a class of leak/lost-message bugs.
-- **Overlay adoption**: `apps/session/fe/src/sidebar/PrivUnlockOverlay.tsx`
-  and `BulkConflictOverlay.tsx` hand-roll backdrop/z-index/animation
-  that `@wash/ui.Overlay` already provides.
+- **Overlay adoption**: `web/lib/src/priv-unlock.tsx` and
+  `web/lib/src/bulk-conflict.tsx` hand-roll backdrop/z-index/animation
+  that `@wash/ui.Overlay` already provides. (Both moved out of the
+  session sidebar into `@wash/ui` in docs/SIDEBAR.md M3/M4 — still
+  shared, still hand-rolled, so the finding stands. Note priv's now
+  also renders inside the `modal` surface, which supplies its own
+  backdrop; that one may want the Overlay treatment least.)
 - **Sparkline component**: top (`Sparkline`, `MirrorSparkline`) and
   disks (`Spark`) duplicate ring-buffer + SVG path logic →
   `@wash/ui/sparkline`.

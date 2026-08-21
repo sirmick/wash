@@ -274,7 +274,9 @@ the widget code; it just needs more data, tagged by host.
 self-contained (its own BE+FE), has room for a real UI, follows the standard
 wash pattern, and avoids the session-FE coupling + BE-gateway + cross-element
 subscribe dance a sidebar widget needs. (The session BE gateway built in
-`fda1d8b` becomes unused — leave harmless or revert.)
+`fda1d8b` becomes unused — leave harmless or revert.) **Reverted in
+SIDEBAR.md M6:** `remote_connect`/`remote_disconnect` had no callers left and
+are gone; `remote_subscribe` stays, because the rail still reads host status.
 
 `wash-connect` is the user-facing face of the **`com.wash.remote` background
 supervisor** (§3/§9 — already built):
@@ -378,7 +380,7 @@ and A's tunnelled shell *is* connected.
 | **bulk** (file ops) | resource | Runs on B against B's files. Correct, zero bridging. Progress shown in A's bulk widget. |
 | **(spawn capability)** | resource | B's router spawns the child on B; its window composites into A. "Open with" within B works. |
 | **wash-term pty** | resource→presentation | pty on B (B's shell/processes); glyphs stream to A's xterm. Literally ssh-as-a-composited-window. Long-running processes survive an SSH blip (tmux-like). |
-| **priv** (escalation) | resource + sensitive prompt | Escalates on B (B's sudo). Prompt rendered by A's shell; password **encrypted to B's priv `be_pubkey`** so A's seat can't read it. See §10. |
+| **priv** (escalation) | resource + sensitive prompt | Escalates on B (B's sudo). Since SIDEBAR.md M4 the prompt is **B's own `modal`-surface app**, drawn by A's shell in a blurred layer it labels with B's name; the password is encrypted to B's priv `be_pubkey` by **B's own FE**, so it never passes through the session app. See §10. |
 | **notify** | presentation | B's notify broadcasts; A's shell receives over the tunnel and merges into the tray, host-coloured. |
 | **clipboard** | presentation (split) | Two router-held clipboards (A's + B's). A's shell is the sync hub: mirror the single browser system clipboard into both routers, bidirectionally, so copy-in-A/paste-in-B works. |
 | **netd** | machine-global | Manages a specific host's network; show/edit per-host. Two sessions on one host contend over one stack (inherent to sharing a box). |
@@ -507,6 +509,25 @@ reconnect loop is the existing shell reconnect logic, instantiated per origin.
   the password is encrypted to B's priv `be_pubkey`, so A's shell and A's router
   never see B's plaintext sudo password — R2 priv is as safe as local priv against
   the seat harvesting credentials.
+
+  **Delivered by SIDEBAR.md M4, and the threat model sharpened.** The prompt is
+  a `modal`-surface app owned by wash-priv itself, so:
+  - the host label and app id are drawn by **chrome**, from `app.declared` —
+    the router's word, which the app cannot forge. An impersonating window can
+    draw a convincing prompt inside itself; it cannot draw that line.
+  - it **cannot appear unbidden**. wash-priv raises a toast and a rail badge;
+    the modal opens only on a user summon. So an unbidden "priv prompt" is by
+    construction a forgery — which is a stronger guarantee than attribution
+    alone, because it does not depend on the user reading carefully.
+  - the encryption stopped being a cross-component protocol. B's own FE
+    encrypts to its own BE's key, so the plaintext never enters the session
+    app at all — closing a trust hop the old sidebar overlay's header comment
+    flagged. Note the FE still runs in A's browser: this is one less component
+    handling the secret, not zero.
+
+  Still open: **ask expiry** (an escalation nobody ever summons) and the
+  **multi-seat race** (two seats summon the same ask; first answer wins, and
+  the loser must degrade honestly rather than sit there looking answerable).
 - **Input attribution generally.** Keyboard focus, global shortcuts, and clipboard
   shortcuts must route to the focused window's origin; the host stripe + colour are
   the user's constant cue for which machine they are acting on.

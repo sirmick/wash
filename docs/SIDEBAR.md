@@ -1,6 +1,12 @@
 # The sidebar — host-aware by relocation
 
-Status: **plan of record** (2026-08-19). This document supersedes
+Status: **complete** (M0–M6 built and merged, 2026-08-20). Kept as the
+design record: each milestone below carries an "As built" note, including
+where the plan turned out to be wrong. The two follow-ups it deliberately did
+not close are About's per-host card (needs a stats producer on B — see M5) and
+M4's ask-expiry / multi-seat-race questions.
+
+Originally the **plan of record** (2026-08-19). This document supersedes
 [REMOTE.md](REMOTE.md) §6.2, which specified the sidebar's multi-host story as
 "merge every widget's state and actions over B's RouterClient". That approach is
 still correct for *awareness* and wrong for *control*; §3 explains why, and the
@@ -258,7 +264,7 @@ cheapest legibility win in the whole plan.
 *Risk:* a chatty remote host can now interrupt the seat. Host tinting is the
 mitigation; per-host mute is out of scope.
 
-### M1 — the awareness channel  (load-bearing infrastructure)
+### M1 — the awareness channel  (load-bearing infrastructure) — **DONE** 2026-08-19
 
 Everything after this depends on the rail being able to see B without being able
 to *act* on B.
@@ -425,7 +431,7 @@ user overrides (`setHostColor`) are invisible to the rail — a pinned
 colour shows in the window stripe and not in the group. Folding host hues
 into a shell-exposed accessor is M6's.
 
-### M2 — Agents into `com.wash.ai`  (the proving ground)
+### M2 — Agents into `com.wash.ai`  (the proving ground) — **DONE** 2026-08-20
 
 `com.wash.ai` (`apps/ai/be/app.go:70`) is today "a window onto **one** managed
 agent session" — a thin host around `<AgentSession>` that already talks to agentd
@@ -488,7 +494,7 @@ glance survived — the rail still answers "2 waiting on build01" without
 opening anything (M1c), so what the door costs is the price of *acting*,
 not of *knowing*.
 
-### M3 — Bulk into `com.wash.fm`
+### M3 — Bulk into `com.wash.fm` — **DONE** 2026-08-20
 
 Only consumer is `apps/fm/be/upload.go`, so this is single-app despite appearing
 cross-cutting. Job list + cancel + conflict resolution move into fm (which
@@ -544,7 +550,10 @@ Two things worth recording from M3c:
   com.wash.ai is where a new session starts. M4/M5 should reuse `<HostOpen>`
   and decide that same question per section.
 
-### M4 — Priv prompt as a window app on the requesting host
+### M4 — Priv answers where the escalation is — **DONE** 2026-08-20
+
+*(Planned as "a window app on the requesting host"; built as a `modal`
+surface instead — see "As built".)*
 
 The only widget where relocation makes the **security** story simpler, which is
 unusual enough to suggest it is the real design.
@@ -654,7 +663,7 @@ Still open from the original M4 list: ask expiry, and the multi-seat race
 (two seats summoning the same ask — first answer wins, second must degrade
 honestly).
 
-### M5 — Net, About per-host
+### M5 — Net, About per-host — **Net DONE** 2026-08-20; About deferred
 
 Mostly launch-addressing once M1 exists. `com.wash.net` is already the control
 surface, so the widget only needs its "Configure" to launch on the right host.
@@ -686,7 +695,7 @@ into this one. Recorded rather than quietly dropped.
 Audio stays deferred on the original grounds: sound leaves B's speakers, so it
 needs an audio *stream*, not a widget (REMOTE.md §7).
 
-### M6 — cleanup + hardening
+### M6 — cleanup + hardening — **DONE** 2026-08-20
 
 - delete the session BE gateways that no longer have a caller
   (`register*Gateway` in `apps/session/be/app.go`) — relocation should *remove*

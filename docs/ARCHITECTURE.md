@@ -153,7 +153,7 @@ flushed FIFO on reconnect — `web/shell/src/ws.ts`), so keystrokes and
 
 ## Services vs. apps
 
-Three tiers, distinguished by `manifest.surface`:
+Four tiers, distinguished by `manifest.surface`:
 
 - **`window` apps** — windowed processes the user launches from the
   start menu / palette. fm, term, edit, about, top, journal, syslogs,
@@ -169,8 +169,24 @@ Three tiers, distinguished by `manifest.surface`:
   subscribe-with-snapshot pattern (`sdk.StateService`). The v1
   background services are wash-notify (notification authority,
   persistence + transient toast emit), wash-bulk (queued file ops),
-  wash-priv (privilege gateway). Future audio mixer, clipboard
-  daemon, network/battery agent take the same slot.
+  wash-priv (privilege gateway, since moved to `modal` below). Future
+  audio mixer, clipboard daemon, network/battery agent take the same
+  slot. `com.wash.hostgw` also lives here: it subscribes to its own
+  host's services and republishes, which is how a remote host's
+  awareness reaches the desktop (docs/SIDEBAR.md M1).
+- **`modal` apps** — a service that *paints* (docs/SIDEBAR.md M4).
+  Autoboots and stays out of the launcher like `background`, but ships
+  an FE that the **shell** draws in its own layer above every window,
+  desktop blurred behind it. Singleton by nature: the blur claims the
+  seat's whole attention.
+
+  It never opens itself — the service raises a toast and a rail badge,
+  and the modal appears only on a user summon. That rule is a security
+  property, not a UX preference: an ordinary window cannot blur the
+  desktop or draw chrome's host label, so a prompt that appears unbidden
+  is by construction a forgery. wash-priv is the first, and the reason
+  the tier exists: an escalation raised on a REMOTE host has to be
+  answerable, and the rail's sends resolve inside their own router.
 - The **router service** option (in-router goroutine bound by the
   same wire contract) is still on the table for things that
   fundamentally need router-process visibility — but the background

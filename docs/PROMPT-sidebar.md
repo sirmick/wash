@@ -1,8 +1,8 @@
 # Session prompt — implement M1: `com.wash.hostgw`
 
 > **Spent (2026-08-20). Kept as a record of how the work was framed, not as
-> instructions.** M1 and M2 are both built; see [SIDEBAR.md](SIDEBAR.md)'s
-> "As built" notes under each milestone. Two of the "pinned mechanics" below
+> instructions.** The whole plan, M0–M6, is built and merged; see
+> [SIDEBAR.md](SIDEBAR.md)'s "As built" notes under each milestone. Two of the "pinned mechanics" below
 > turned out to be wrong or imprecise — notably that M1a could be remote-only
 > at the data layer (every background app autoboots on shell connect, so the
 > local gateway republishes unprompted), and the shell-facing subscribe needs
