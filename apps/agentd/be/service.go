@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"fmt"
 	"log"
 	"path"
 	"sort"
@@ -191,6 +192,7 @@ func sweepLoop(c *sdk.Conn) {
 			return
 		case <-t.C:
 			now := time.Now()
+			var wantHold string
 			svc.Mutate(func(s *State) {
 				changed := false
 				for key, r := range rows {
@@ -215,6 +217,11 @@ func sweepLoop(c *sdk.Conn) {
 						changed = true
 					}
 				}
+				// Computed on every tick, not only when a row moved: the
+				// needs-input ceiling expires with the clock, not with a
+				// state change, so a hold has to be able to lapse on its
+				// own.
+				wantHold = holdReason(now)
 				if !changed {
 					// Republish anyway only if something moved; a quiet
 					// roster stays off the wire.
@@ -222,6 +229,10 @@ func sweepLoop(c *sdk.Conn) {
 				}
 				s.Rows = publish(now)
 			})
+			// Outside Mutate: the router is a different lock than the
+			// state service, and nothing good comes of holding one while
+			// waiting on the other.
+			applyIdleHold(c, wantHold)
 		}
 	}
 }
@@ -343,4 +354,64 @@ const historyQueryCap = 200
 type historyReq struct {
 	Query string `json:"query,omitempty"`
 	Limit int    `json:"limit,omitempty"`
+}
+
+// needsInputHold caps how long a row blocked on a human keeps the whole
+// session alive.
+//
+// needs-input cuts both ways, which is why it needs a number rather than
+// a rule. It is the state you MOST want to survive a disconnect — the
+// agent is blocked on a person who is by definition absent — and also the
+// one state that could pin a session forever, because nothing about it
+// resolves on its own. Twelve hours survives the overnight disconnect
+// this was written for and still lets a forgotten session go.
+const needsInputHold = 12 * time.Hour
+
+// lastHold is the reason most recently sent to the router. The inhibit is
+// level-triggered, so re-sending is harmless, but the router logs every
+// hold and release — sending only on change keeps that log readable.
+var lastHold string
+
+// holdReason returns why this session must not be reaped for idleness, or
+// "" if it may be. Called inside Mutate.
+//
+// An agent mid-turn is the whole point: the router's idea of idle is
+// "no browser attached", which is precisely the moment an agent's work is
+// least interruptible and most likely to be lost.
+func holdReason(now time.Time) string {
+	working, waiting := 0, 0
+	for _, r := range rows {
+		switch r.State {
+		case "working":
+			working++
+		case "needs-input":
+			if now.Sub(r.stateSince) < needsInputHold {
+				waiting++
+			}
+		}
+	}
+	switch {
+	case working > 0 && waiting > 0:
+		return fmt.Sprintf("%d agent(s) working, %d waiting on you", working, waiting)
+	case working > 0:
+		return fmt.Sprintf("%d agent(s) working", working)
+	case waiting > 0:
+		return fmt.Sprintf("%d agent(s) waiting on you", waiting)
+	}
+	return ""
+}
+
+// applyIdleHold pushes a changed hold to the router.
+func applyIdleHold(c *sdk.Conn, reason string) {
+	if reason == lastHold {
+		return
+	}
+	lastHold = reason
+	if reason == "" {
+		log.Printf("agentd: idle hold released — no agent needs this session kept alive")
+		_ = c.IdleInhibit(false, "")
+		return
+	}
+	log.Printf("agentd: idle hold %q — this session will not be reaped while it stands", reason)
+	_ = c.IdleInhibit(true, reason)
 }

@@ -220,6 +220,21 @@ const (
 	// than CapSpawn: the caller can't pick the target app, only hand off a
 	// file to its declared handler. The file manager is the canonical holder.
 	CapOpen = "open"
+
+	// CapIdleInhibit lets an app tell the router "do not self-exit for
+	// being idle right now, I am doing something".
+	//
+	// It exists because zero attached shells means "no browser", which is
+	// a sound proxy for "nothing of value is happening" for a desktop and
+	// the exact inverse for an agent: nobody attached is precisely when
+	// an agent's work matters most. Without a veto the router treats
+	// disconnecting the screen as powering off the machine.
+	//
+	// Deliberately narrow. An inhibitor cannot keep a router alive that
+	// was never attached to in the first place — an app cannot conjure a
+	// session out of a port scan — and it is dropped when the instance
+	// goes away, so a crashed app cannot pin a session forever.
+	CapIdleInhibit = "idle_inhibit"
 )
 
 // MaxIconBytes is the cap on the inline icon data URI per WIRE.md §5.1.

@@ -523,18 +523,67 @@ func (r *Router) ShellCount() int {
 // observer pattern onto register/unregisterShell.
 const idleReapTickInterval = 5 * time.Second
 
-// ReapWhenIdle blocks until either ctx is cancelled or the router
-// has been continuously idle (zero attached shells) for timeout.
+// IdlePolicy is the reaper's two thresholds.
+//
+// One timer used to serve two populations with opposite needs, and the
+// leak case set the policy for both:
+//
+//   - Never-attached: wash-login listens on a public port and spawns a
+//     full session per hit, so every port scan and abandoned login would
+//     otherwise leak a compositor and a dozen processes. This population
+//     wants an aggressive timeout; it has nothing to lose.
+//   - Established: ran for hours, did real work, is momentarily unwatched
+//     because someone shut a laptop. This one wants a long timeout, or
+//     none at all.
+//
+// Collapsing them is what let a lid closed at 23:09 destroy a session —
+// wash-display, wash-netd, agentd, both live agent sessions — at 23:39,
+// with nothing left to reconnect to in the morning.
+//
+// What the split does NOT fix: zero attached shells means "no browser",
+// which is a sound proxy for "nothing of value is happening" for a
+// desktop and the exact inverse for an agent, which matters most
+// precisely when nobody is watching. That is what the agent veto is for.
+type IdlePolicy struct {
+	// Unattached is the threshold while no shell has EVER attached.
+	// Zero disables reaping for this population too, which is almost
+	// certainly wrong on a router that listens for handoffs.
+	Unattached time.Duration
+	// Established is the threshold once at least one shell has attached
+	// at some point in this router's life. Zero disables reaping: a
+	// session that did real work is not destroyed for being unwatched.
+	Established time.Duration
+}
+
+// threshold picks the applicable timeout for a router that has seen
+// `seen` shell attachments over its lifetime, and names the population
+// so a log line can say which rule it is applying.
+func (p IdlePolicy) threshold(seen uint64) (time.Duration, string) {
+	if seen == 0 {
+		return p.Unattached, "never-attached"
+	}
+	return p.Established, "established"
+}
+
+// ReapWhenIdle blocks until either ctx is cancelled or the router has
+// been continuously idle (zero attached shells) for the threshold its
+// population earns under pol.
 //
 // Returns ctx.Err() when ctx cancels (normal shutdown via SIGINT /
-// SIGTERM); returns nil when the idle threshold is hit and the
-// caller should drive a graceful exit.
+// SIGTERM); returns nil when the idle threshold is hit and the caller
+// should drive a graceful exit.
 //
-// A router that never receives a handoff is considered idle from
-// t=0 — wash-login spawning a router that no browser connects to
-// must not leak indefinitely. timeout==0 disables reaping.
-func (r *Router) ReapWhenIdle(ctx context.Context, timeout time.Duration) error {
-	if timeout <= 0 {
+// A router that never receives a handoff is idle from t=0 — wash-login
+// spawning a router that no browser connects to must not leak
+// indefinitely. A router that HAS been attached to gets pol.Established,
+// which may be zero for "never".
+//
+// The countdown lines exist because the old exit line — "idle for 30m0s
+// — exiting" — said what happened but never what it had been waiting
+// for, and wrote it to a log file that died with the session. Tracing one
+// destroyed session took an hour of comparing file mtimes.
+func (r *Router) ReapWhenIdle(ctx context.Context, pol IdlePolicy) error {
+	if pol.Unattached <= 0 && pol.Established <= 0 {
 		<-ctx.Done()
 		return ctx.Err()
 	}
@@ -544,21 +593,67 @@ func (r *Router) ReapWhenIdle(ctx context.Context, timeout time.Duration) error 
 	if r.ShellCount() == 0 {
 		idleSince = time.Now()
 	}
+	// announced is the highest countdown percentage already logged for
+	// the current idle stretch, so each warning fires once per stretch
+	// rather than once per tick.
+	var announced int
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case now := <-tick.C:
 			if r.ShellCount() > 0 {
+				if !idleSince.IsZero() && announced > 0 {
+					r.log("idle countdown cleared — a shell attached after %s", now.Sub(idleSince).Round(time.Second))
+				}
 				idleSince = time.Time{}
+				announced = 0
 				continue
 			}
+			seen := r.ShellsSeen()
+			timeout, population := pol.threshold(seen)
 			if idleSince.IsZero() {
 				idleSince = now
+				announced = 0
 				continue
 			}
-			if now.Sub(idleSince) >= timeout {
-				r.log("idle for %s — exiting", timeout)
+			if timeout <= 0 {
+				// This population does not reap. Said once, so a log
+				// reader never has to guess whether the reaper is armed.
+				if announced == 0 {
+					announced = 100
+					r.log("idle since %s population=%s — reaping disabled for this population, staying up",
+						idleSince.Format(time.RFC3339), population)
+				}
+				continue
+			}
+			// An app doing real work vetoes the reap. Checked after the
+			// idle bookkeeping so the countdown still resets correctly,
+			// and BEFORE the exit so a held session simply never reaches
+			// its threshold.
+			if held := r.IdleInhibitors(); len(held) > 0 {
+				if announced != 99 {
+					announced = 99
+					r.log("idle since %s population=%s — held by %s, not exiting",
+						idleSince.Format(time.RFC3339), population, strings.Join(held, " "))
+				}
+				continue
+			}
+			if announced == 99 {
+				// The hold just went away; let the countdown speak again.
+				announced = 0
+			}
+			idle := now.Sub(idleSince)
+			for _, pct := range []int{50, 80} {
+				if announced < pct && idle >= timeout*time.Duration(pct)/100 {
+					announced = pct
+					r.log("idle %s of %s (%d%%) population=%s shells=0 last_disconnect=%s — will exit unless a shell attaches",
+						idle.Round(time.Second), timeout, pct, population, idleSince.Format(time.RFC3339))
+				}
+			}
+			if idle >= timeout {
+				r.log("idle for %s (limit %s) population=%s shells_seen=%d last_disconnect=%s — exiting",
+					idle.Round(time.Second), timeout, population, seen, idleSince.Format(time.RFC3339))
 				return nil
 			}
 		}

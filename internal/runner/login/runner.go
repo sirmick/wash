@@ -155,7 +155,8 @@ func Run(args []string) int {
 	routerBinary := fs.String("router-binary", "", "path to wash-router. Empty means look in the directory of wash-login's own binary, then PATH.")
 	appsDir := fs.String("apps-dir", "", "apps-dir forwarded to spawned wash-router processes. Empty means let the router default to its own binary's directory.")
 	runRoot := fs.String("run-root", "", "root for per-uid runtime state (sessions sockets, spawn flock). Empty picks /run/wash when writable (production install), else $XDG_RUNTIME_DIR/wash (typical user session) or /tmp/wash-<uid>.")
-	idleTimeout := fs.Duration("idle-timeout", 0, "--idle-timeout forwarded to spawned wash-router processes. Zero forwards no flag (router default 30m).")
+	idleTimeout := fs.Duration("idle-timeout", 0, "--idle-timeout forwarded to spawned wash-router processes. Passing it forwards it verbatim, INCLUDING zero, which disables idle reaping. Not passing it forwards nothing and lets the router pick.")
+	idleTimeoutUnattached := fs.Duration("idle-timeout-unattached", 0, "--idle-timeout-unattached forwarded to spawned wash-router processes: the timeout for a router no browser ever reached. Same pass-it-to-mean-it rule as --idle-timeout.")
 	maxSessions := fs.Int("max-sessions-per-uid", 8, "cap on concurrent live wash-router processes per user. 0 disables; embedded deployments typically set to 1.")
 	noHandoff := fs.Bool("no-handoff", false, "disable the /ws handoff path (M2-only mode for auth-flow inspection). Implied off when --auth-test is set.")
 	showVersion := fs.Bool("version", false, "print version and exit")
@@ -163,6 +164,11 @@ func Run(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	// Which flags the operator actually passed. `--idle-timeout=0` is a
+	// real instruction ("never reap"), not an absence, and forwarding it
+	// only when non-zero is what made that instruction inexpressible.
+	setFlags := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
 	if *showVersion {
 		fmt.Printf("wash-login %s\n", version.Version)
 		return 0
@@ -287,13 +293,16 @@ func Run(args []string) int {
 		sessions := login.NewProcRegistry()
 		cfg.Sessions = sessions
 		cfg.Spawner = &login.Spawner{
-			RouterBinary: routerBin,
-			AllowUID:     uint32(os.Getuid()),
-			RunRoot:      runRootPath,
-			AppsDir:      *appsDir,
-			IdleTimeout:  *idleTimeout,
-			MaxPerUID:    *maxSessions,
-			Sessions:     sessions,
+			RouterBinary:             routerBin,
+			AllowUID:                 uint32(os.Getuid()),
+			RunRoot:                  runRootPath,
+			AppsDir:                  *appsDir,
+			IdleTimeout:              *idleTimeout,
+			IdleTimeoutSet:           setFlags["idle-timeout"],
+			IdleTimeoutUnattached:    *idleTimeoutUnattached,
+			IdleTimeoutUnattachedSet: setFlags["idle-timeout-unattached"],
+			MaxPerUID:                *maxSessions,
+			Sessions:                 sessions,
 		}
 		logger.Printf("handoff enabled: router=%s run-root=%s allow-uid=%d max-sessions-per-uid=%d", routerBin, runRootPath, os.Getuid(), *maxSessions)
 	} else {

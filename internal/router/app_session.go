@@ -479,6 +479,12 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 			return err
 		}
 		return inst.handleOpenRequest(m)
+	case wire.TEvtIdleInhibit:
+		var m wire.EvtIdleInhibit
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.handleIdleInhibit(m)
 	case wire.TEvtEnvPublish:
 		var m wire.EvtEnvPublish
 		if err := json.Unmarshal(payload, &m); err != nil {
@@ -900,6 +906,26 @@ func (inst *AppInstance) handleOpenRequest(m wire.EvtOpenRequest) error {
 		return nil
 	}
 	go inst.router.spawnForOpen(target, m.Path)
+	return nil
+}
+
+// handleIdleInhibit records this instance's request that the router not
+// self-exit for idleness.
+//
+// A release is honoured even without the capability: refusing to let an
+// app STOP inhibiting could only ever pin a session longer, which is the
+// failure mode with no upside.
+func (inst *AppInstance) handleIdleInhibit(m wire.EvtIdleInhibit) error {
+	if m.On && !inst.Manifest.HasCapability(CapIdleInhibit) {
+		inst.router.log("idle-inhibit: instance=%s app=%s lacks CapIdleInhibit", inst.InstanceID, inst.Manifest.ID)
+		return nil
+	}
+	inst.router.SetIdleInhibit(inst.InstanceID, m.On, m.Reason)
+	if m.On {
+		inst.router.log("idle-inhibit: held by app=%s instance=%s reason=%q", inst.Manifest.ID, inst.InstanceID, m.Reason)
+	} else {
+		inst.router.log("idle-inhibit: released by app=%s instance=%s", inst.Manifest.ID, inst.InstanceID)
+	}
 	return nil
 }
 

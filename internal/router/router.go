@@ -94,10 +94,17 @@ type Config struct {
 	// the router never makes routing decisions on it. Immutable
 	// once set.
 	Name string
-	// IdleTimeout is the period of no-attached-shell after which
-	// the router self-exits. Zero disables idle reaping. Default
-	// applied by the runner is 30 minutes when ListenUnix is set.
+	// IdleTimeout is the period of no-attached-shell after which a
+	// router that HAS been attached to self-exits. Zero disables idle
+	// reaping for it. Runner default is 24 hours when ListenUnix is set,
+	// and an app holding an idle-inhibit suspends it entirely — so the
+	// timer only ever collects sessions with nothing in flight.
 	IdleTimeout time.Duration
+	// IdleTimeoutUnattached is the same period for a router no shell has
+	// ever reached. It wants to be short — this is the population the
+	// reaper was built for, and it has nothing to lose. Zero disables.
+	// Runner default is 2 minutes when ListenUnix is set.
+	IdleTimeoutUnattached time.Duration
 	// AllowUID is the uid whose handoffs the SCM_RIGHTS listener
 	// accepts (verified via SO_PEERCRED on the ctl socket). Zero
 	// defaults to the router's own uid (the normal single-tenant
@@ -162,6 +169,17 @@ type Router struct {
 	// connection across reconnects / stacked WS connections. Guarded
 	// by mu; nil when no shell is attached. See reattachChannelsToShell.
 	headShell *ShellSession
+
+	// idleInhibits is instance id → reason for every app currently
+	// asking the reaper to hold off. Guarded by mu. Level-triggered, so
+	// a re-send overwrites rather than stacking, and instance teardown
+	// deletes — a crashed app cannot pin a session forever.
+	idleInhibits map[string]string
+
+	// shellsSeen counts every shell ever registered. Monotonic, never
+	// decremented on disconnect — "has anyone ever been here" is a
+	// different question from "is anyone here now".
+	shellsSeen atomic.Uint64
 
 	nextWindow   atomic.Uint32
 	nextInstance atomic.Uint64
@@ -1200,6 +1218,10 @@ func (r *Router) unregisterApp(inst *AppInstance) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.apps, inst.InstanceID)
+	// An app that is gone is not doing work. Dropping its hold here is
+	// what keeps a crashed inhibitor from pinning the session forever —
+	// the veto must not outlive the thing it was vetoing for.
+	delete(r.idleInhibits, inst.InstanceID)
 	// Drop every window→instance entry pointing at inst: the primary
 	// handshake window plus any created via window.create. A scan
 	// (not delete(byWin, WindowID)) so multi-window instances leave no
@@ -1401,10 +1423,58 @@ func (r *Router) appByInstance(id string) *AppInstance {
 
 // registerShell records a freshly-connected shell.
 func (r *Router) registerShell(s *ShellSession) {
+	r.shellsSeen.Add(1)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.shells[s] = struct{}{}
 }
+
+// SetIdleInhibit records or clears one app's request that the router not
+// self-exit for idleness. Empty reason is stored as a placeholder so the
+// map key still marks the instance as inhibiting.
+func (r *Router) SetIdleInhibit(instanceID string, on bool, reason string) {
+	if instanceID == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !on {
+		delete(r.idleInhibits, instanceID)
+		return
+	}
+	if r.idleInhibits == nil {
+		r.idleInhibits = map[string]string{}
+	}
+	if reason == "" {
+		reason = "unspecified"
+	}
+	r.idleInhibits[instanceID] = reason
+}
+
+// IdleInhibitors returns "<instance>=<reason>" for every current
+// inhibitor, sorted so the log line is stable between ticks.
+func (r *Router) IdleInhibitors() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.idleInhibits) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(r.idleInhibits))
+	for id, why := range r.idleInhibits {
+		out = append(out, id+"="+why)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ShellsSeen is how many shells have attached over this router's whole
+// life, not how many are attached now (that is ShellCount).
+//
+// The reaper needs the lifetime figure to tell a router nobody ever
+// reached — a port scan, an abandoned login — from one whose person has
+// merely shut their laptop. ShellCount cannot distinguish them: both read
+// zero, and treating them alike is what destroyed a night's work.
+func (r *Router) ShellsSeen() uint64 { return r.shellsSeen.Load() }
 
 func (r *Router) unregisterShell(s *ShellSession) {
 	r.mu.Lock()

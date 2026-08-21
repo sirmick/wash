@@ -20,7 +20,7 @@ func TestHelperIgnoreSIGTERM(t *testing.T) {
 		return
 	}
 	signal.Ignore(syscall.SIGTERM)
-	fmt.Println("READY") // os.Stdout is unbuffered — the parent gates on this
+	fmt.Println("READY")  // os.Stdout is unbuffered — the parent gates on this
 	time.Sleep(time.Hour) // a timer keeps the runtime off the deadlock detector
 }
 

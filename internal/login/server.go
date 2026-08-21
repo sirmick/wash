@@ -245,7 +245,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		target = spawned
-		s.log.Printf("ws: spawned new session sessid=%s pid=%d for uid=%d", spawned.SessID, spawned.Pid, payload.UID)
+		s.log.Printf("ws: spawned new session sessid=%s pid=%d for uid=%d predecessor=%s",
+			spawned.SessID, spawned.Pid, payload.UID, s.spawner.Predecessor(payload.UID, spawned.SessID))
 	case len(sessions) == 1:
 		target = sessions[0]
 		s.log.Printf("ws: attaching to existing sessid=%s pid=%d for uid=%d", target.SessID, target.Pid, payload.UID)

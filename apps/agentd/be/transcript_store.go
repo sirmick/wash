@@ -41,6 +41,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sirmick/wash/internal/acp"
 )
 
 // storeQueue is deep enough that overflow means the disk has genuinely
@@ -462,6 +464,7 @@ func reconcileResume(key, sessionID string, now time.Time) {
 
 	log.Printf("agentd: transcript reconciled key=%s session=%s replayed=%d stored=%d kept=%d",
 		key, sessionID, replayed, len(stored), len(events))
+	logInFlight(key, sessionID, stored, events, now)
 
 	// Bind before rewriting so subsequent live events persist, and
 	// rewrite so the file matches what the window is showing.
@@ -859,4 +862,69 @@ func historyQuery(q string, limit int) []SessionMeta {
 		}
 	}
 	return out
+}
+
+// logInFlight says out loud whether this session was mid-turn when it
+// died, and whether the resume got that turn back.
+//
+// This is the distinction that matters and the one nothing logged. A
+// disconnect is survivable if the agent happened to be idle when you
+// walked away and destructive if it was mid-task — which is backwards,
+// since mid-task is exactly when walking away is the point. Until the
+// difference is stated, "your agent came back" and "your agent came back
+// without the thing it was doing" look identical in the log.
+//
+// A turn was in flight if the last thing the stored transcript knows
+// about is unfinished: a tool call still pending or in progress, or the
+// human's prompt with nothing after it. Recovery means the agent's own
+// replay produced something past that point; anything else is a drop.
+func logInFlight(key, sessionID string, stored, replayed []Event, now time.Time) {
+	tool, at := lastUnfinished(stored)
+	if at < 0 {
+		log.Printf("agentd: resume in-flight key=%s session=%s state=idle-at-exit — nothing was running, nothing to lose", key, sessionID)
+		return
+	}
+	age := "unknown"
+	if ms := stored[at].AtMS; ms > 0 {
+		age = now.Sub(time.UnixMilli(ms)).Round(time.Second).String()
+	}
+	if _, stillAt := lastUnfinished(replayed); stillAt < 0 {
+		log.Printf("agentd: resume in-flight key=%s session=%s state=recovered what=%q age=%s — the agent replayed past it",
+			key, sessionID, tool, age)
+		return
+	}
+	log.Printf("agentd: resume in-flight key=%s session=%s state=DROPPED what=%q age=%s — the turn was executing at exit and did not come back",
+		key, sessionID, tool, age)
+}
+
+// lastUnfinished returns a label for the trailing unfinished work in evs
+// and its index, or ("", -1) when the transcript ends cleanly.
+func lastUnfinished(evs []Event) (string, int) {
+	for i := len(evs) - 1; i >= 0; i-- {
+		e := evs[i]
+		switch e.Kind {
+		case EventTool:
+			if e.Status == acp.ToolStatusPending || e.Status == acp.ToolStatusInProgress {
+				label := e.Title
+				if label == "" {
+					label = e.ToolKind
+				}
+				return "tool: " + label, i
+			}
+			return "", -1
+		case EventUser:
+			// A prompt with nothing after it: the agent was asked and
+			// never answered.
+			t := e.Text
+			if len(t) > 60 {
+				t = t[:60] + "…"
+			}
+			return "prompt: " + t, i
+		case EventMessage, EventThought, EventTerminal, EventImage:
+			// The agent said something after the prompt, so whatever was
+			// in flight got at least partway out.
+			return "", -1
+		}
+	}
+	return "", -1
 }

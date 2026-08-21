@@ -160,7 +160,12 @@ func init() {
 			// Resume opens a terminal for a remembered session (§13).
 			// That is the only thing this service spawns, and only when a
 			// human clicked the button.
-			Capabilities: []string{sdk.CapSpawn},
+			// CapIdleInhibit is why a session survives a closed lid. Zero
+			// attached shells reads as "nothing of value is happening",
+			// which is true of a desktop and false of an agent — an agent
+			// matters most exactly when nobody is watching. This service
+			// is the only thing on the box that knows the difference.
+			Capabilities: []string{sdk.CapSpawn, sdk.CapIdleInhibit},
 		},
 		OnReady:        onReady,
 		OnInstanceGone: onInstanceGone,

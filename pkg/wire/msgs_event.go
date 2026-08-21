@@ -76,6 +76,9 @@ const (
 	// spawn. Fire-and-forget (no ok/err reply); unresolved paths are logged.
 	TEvtOpenRequest = "open.request"
 
+	// TEvtIdleInhibit: app → router, hold off / release the idle reaper.
+	TEvtIdleInhibit = "idle.inhibit"
+
 	// EvtAppRestart / Ok / Err — cycle a background singleton service
 	// (docs/SETTINGS.md §5). app → router app.restart{app_id} with a
 	// req_id; router → app app.restart.ok{instance_id} (the freshly
@@ -412,6 +415,24 @@ type EvtOpenRequest struct {
 
 func NewEvtOpenRequest(path string) EvtOpenRequest {
 	return EvtOpenRequest{T: TEvtOpenRequest, Path: path}
+}
+
+// EvtIdleInhibit: app → router, "do not reap me for idleness" (On=true)
+// or "you may again" (On=false). Requires CapIdleInhibit.
+//
+// Level-triggered, not edge-triggered: the router stores the latest value
+// per instance rather than counting. An app that loses track of its own
+// state can always re-send the truth, and a duplicate release is not an
+// error. Reason is for the log line that explains why a session outlived
+// its timeout — an unexplained immortal session is its own bug report.
+type EvtIdleInhibit struct {
+	T      string `json:"t"`
+	On     bool   `json:"on"`
+	Reason string `json:"reason,omitempty"`
+}
+
+func NewEvtIdleInhibit(on bool, reason string) EvtIdleInhibit {
+	return EvtIdleInhibit{T: TEvtIdleInhibit, On: on, Reason: reason}
 }
 
 // EvtSpawnOk: router → app, spawn succeeded.

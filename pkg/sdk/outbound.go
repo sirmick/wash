@@ -303,6 +303,22 @@ func (c *Conn) SpawnRequest(appID string) error {
 	return c.writeEvt(wire.NewEvtSpawnRequest(appID))
 }
 
+// IdleInhibit tells the router not to self-exit for idleness while this
+// app is doing something that outlives the browser — or releases that
+// hold. Requires the "idle_inhibit" capability in the app's manifest.
+//
+// Level-triggered: send the truth, as often as you like. The router keeps
+// the latest value per instance rather than a count, so a duplicate hold
+// is a no-op and a duplicate release is not an error. The hold is dropped
+// automatically when the instance goes away.
+//
+// reason shows up in the router's log line explaining why a session
+// outlived its idle timeout. Supply one — an immortal session with no
+// stated cause is indistinguishable from a leak.
+func (c *Conn) IdleInhibit(on bool, reason string) error {
+	return c.writeEvt(wire.NewEvtIdleInhibit(on, reason))
+}
+
 // OpenPath asks the router to open path in whichever app registered for its
 // extension (manifest Opens), launching it with `--open <path>`. The caller
 // doesn't choose the target. Requires the CapOpen capability. Fire-and-forget

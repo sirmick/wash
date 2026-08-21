@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -51,9 +52,23 @@ type Spawner struct {
 	// installs that colocate wash-router + per-app binaries.
 	AppsDir string
 
-	// IdleTimeout is forwarded to the spawned router as
-	// --idle-timeout. Zero forwards no flag (router default 30m).
+	// IdleTimeout is forwarded to the spawned router as --idle-timeout,
+	// but only when IdleTimeoutSet says the operator actually chose it.
 	IdleTimeout time.Duration
+	// IdleTimeoutSet distinguishes "unset" from "explicitly zero".
+	//
+	// Without it, `wash-login --idle-timeout=0` forwarded NOTHING, the
+	// router fell through to its own zero, saw --listen-unix and applied
+	// a default anyway — so the router's documented "zero disables idle
+	// reaping" escape hatch was unreachable through the only process that
+	// spawns those routers. The one value meaning "never reap" was the
+	// one value that could not be expressed, and the workaround was to
+	// forward an absurd duration that contradicted the flag's help text.
+	IdleTimeoutSet bool
+	// IdleTimeoutUnattached is forwarded as --idle-timeout-unattached
+	// when IdleTimeoutUnattachedSet. Same reasoning.
+	IdleTimeoutUnattached    time.Duration
+	IdleTimeoutUnattachedSet bool
 
 	// SocketWaitTimeout bounds how long Spawn waits for the
 	// child's ctl socket to appear before declaring failure.
@@ -167,18 +182,7 @@ func (s *Spawner) Spawn(id Identity, name string) (Session, error) {
 	// anyway). A failure to open is best-effort inside the router (output then
 	// falls back to the inherited fds → wash-login's journal).
 	logPath := filepath.Join(uidDir, "router-"+sessid+".log")
-	args := []string{
-		"--listen-unix", sock,
-		"--name", name,
-		"--allow-uid", strconv.FormatUint(uint64(s.AllowUID), 10),
-		"--log-file", logPath,
-	}
-	if s.AppsDir != "" {
-		args = append(args, "--apps-dir", s.AppsDir)
-	}
-	if s.IdleTimeout > 0 {
-		args = append(args, "--idle-timeout", s.IdleTimeout.String())
-	}
+	args := s.routerArgs(sock, name, logPath)
 
 	cmd := exec.Command(bin, args...)
 	// Until the router opens its --log-file, its earliest startup output
@@ -385,4 +389,117 @@ func processAlive(pid int) bool {
 		return true
 	}
 	return !errors.Is(err, syscall.ESRCH)
+}
+
+// Predecessor describes the previous wash session for uid — its id, how
+// it ended, and how long ago — or "first-boot" when there was none.
+//
+// It exists because a session that dies takes its own log with it and the
+// replacement starts with no reference to what preceded it. Working out
+// that s-8364ed00 became s-394818dc was an hour of comparing file mtimes;
+// this does that inference once, in code, and writes the answer where the
+// next person will find it.
+//
+// Best-effort by construction. The per-uid dir belongs to the target user
+// and wash-login may not be able to read it; an unreadable predecessor is
+// reported as unknown, never as an error that blocks a spawn.
+func (s *Spawner) Predecessor(uid uint32, excludeSessID string) string {
+	uidDir := filepath.Join(s.runRoot(), strconv.FormatUint(uint64(uid), 10))
+	entries, err := os.ReadDir(uidDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "first-boot"
+		}
+		return "unknown (" + err.Error() + ")"
+	}
+	var newestName string
+	var newestAt time.Time
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, "router-") || !strings.HasSuffix(name, ".log") {
+			continue
+		}
+		sessid := strings.TrimSuffix(strings.TrimPrefix(name, "router-"), ".log")
+		if sessid == excludeSessID {
+			continue
+		}
+		info, ierr := e.Info()
+		if ierr != nil {
+			continue
+		}
+		if info.ModTime().After(newestAt) {
+			newestAt, newestName = info.ModTime(), name
+		}
+	}
+	if newestName == "" {
+		return "first-boot"
+	}
+	sessid := strings.TrimSuffix(strings.TrimPrefix(newestName, "router-"), ".log")
+	return sessid + " ended " + endReason(filepath.Join(uidDir, newestName)) +
+		" " + time.Since(newestAt).Round(time.Second).String() + " ago"
+}
+
+// endReasonTail is how much of a router log to read when classifying its
+// death. The interesting lines are the last few; a router that ran all
+// day should not cost a full-file read to explain.
+const endReasonTail = 4 << 10
+
+// endReason classifies how the router that owned this log stopped, from
+// the last thing it managed to say.
+//
+// "no exit line" is the interesting one and deliberately not called
+// "crash": a SIGKILL, an OOM, and a host reboot all look identical from
+// here, and saying "crash" would assert more than the evidence supports.
+func endReason(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return "unknown"
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return "unknown"
+	}
+	off := info.Size() - endReasonTail
+	if off < 0 {
+		off = 0
+	}
+	buf := make([]byte, info.Size()-off)
+	if _, err := f.ReadAt(buf, off); err != nil && err != io.EOF {
+		return "unknown"
+	}
+	tail := string(buf)
+	switch {
+	case strings.Contains(tail, "— exiting"):
+		return "idle-exit"
+	case strings.Contains(tail, "shutdown complete"):
+		return "shutdown"
+	}
+	return "no exit line (killed, OOM, or host reboot)"
+}
+
+// routerArgs builds the spawned router's argv. Split out from Spawn so
+// the forwarding rules are testable without forking a process — the
+// --idle-timeout rule in particular was wrong for a long time in a way no
+// test could have seen.
+func (s *Spawner) routerArgs(sock, name, logPath string) []string {
+	args := []string{
+		"--listen-unix", sock,
+		"--name", name,
+		"--allow-uid", strconv.FormatUint(uint64(s.AllowUID), 10),
+		"--log-file", logPath,
+	}
+	if s.AppsDir != "" {
+		args = append(args, "--apps-dir", s.AppsDir)
+	}
+	// Forward on "was it set", NOT on "is it non-zero". Zero is the value
+	// that means "never reap", and gating on non-zero made that the one
+	// instruction wash-login could not pass on.
+	if s.IdleTimeoutSet {
+		args = append(args, "--idle-timeout", s.IdleTimeout.String())
+	}
+	if s.IdleTimeoutUnattachedSet {
+		args = append(args, "--idle-timeout-unattached", s.IdleTimeoutUnattached.String())
+	}
+	return args
 }

@@ -192,7 +192,8 @@ func Run(args []string) int {
 	sessionPreopened := fs.Bool("session-preopened", false, `the leading SessionOpen frame was already consumed by an upstream login front (wash-vm/guest), so synthesize the first viewer session immediately instead of waiting for SessionOpen. Subsequent SessionOpen/SessionClose (reconnects) flow normally. Only meaningful with a non-ws --transport.`)
 	listenUnix := fs.String("listen-unix", "", `multi-user ctl socket path. When set, the router does not bind --listen; instead it listens on this Unix socket for SCM_RIGHTS handoffs from wash-login (see docs/MULTIUSER.md). Mutually exclusive with --transport=virtio-console / --transport=serial / --transport=fd.`)
 	name := fs.String("name", "", "human-readable session name; surfaced in stat RPC and /proc/<pid>/cmdline. Informational; immutable.")
-	idleTimeout := fs.Duration("idle-timeout", 0, "self-exit after this duration with no attached shell. Zero disables; default 30m when --listen-unix is set.")
+	idleTimeout := fs.Duration("idle-timeout", 0, "self-exit after this duration with no attached shell, once a shell has attached at least once. Zero disables; default 24h when --listen-unix is set. An app holding an idle-inhibit (e.g. a running agent) suspends it.")
+	idleTimeoutUnattached := fs.Duration("idle-timeout-unattached", 0, "self-exit after this duration when NO shell has ever attached — the abandoned-spawn case. Zero disables; default 2m when --listen-unix is set.")
 	allowUID := fs.Uint("allow-uid", 0, "uid whose SCM_RIGHTS handoffs the --listen-unix listener accepts (SO_PEERCRED-verified). When UNSET, defaults to the router's own uid; pass it explicitly (including 0 for root — the production wash-login runs as root) to override.")
 	authToken := fs.String("auth-token", "", "explicit token gating the --transport=ws TCP listener (/, /ws, /screenshot). Empty ⇒ a random 128-bit token is generated and logged at startup. Ignored for --listen-unix and byte-stream transports, which are gated by OS perms / device ownership.")
 	noAuth := fs.Bool("no-auth", false, "serve the --transport=ws listener with NO token gate. The bound address then hands a full session to anyone who can reach it — only for trusted-loopback dev.")
@@ -268,9 +269,37 @@ func Run(args []string) int {
 		}
 	}
 
+	// Defaults apply only when the flag was not passed AT ALL. An
+	// explicit `--idle-timeout 0` must mean "never reap" — the router has
+	// always documented that escape hatch, and silently overriding it
+	// with a default made the one value meaning "never" the one value
+	// that could not be expressed.
+	setFlags := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
 	idleTimeoutVal := *idleTimeout
-	if *listenUnix != "" && idleTimeoutVal == 0 {
-		idleTimeoutVal = 30 * time.Minute
+	idleUnattachedVal := *idleTimeoutUnattached
+	if *listenUnix != "" {
+		// A session someone actually used gets a day, not half an hour.
+		//
+		// The number is a compromise between two real failure modes. Too
+		// short destroys work: the reported case was a lid closed at 23:09
+		// and reopened at 06:28, which 30m ate and 24h survives. Too long
+		// (or never) leaks: wash-login spawns a full session per hit on a
+		// public port, and a user who logs in once and closes the tab
+		// would otherwise hold a compositor and a dozen processes forever.
+		//
+		// 24h is not the real protection — the agent veto is. A session
+		// with work in flight holds itself alive past this, so the timer
+		// only ever collects sessions that are genuinely finished. Set
+		// --idle-timeout 0 to disable it outright; that now works.
+		if !setFlags["idle-timeout"] {
+			idleTimeoutVal = 24 * time.Hour
+		}
+		// A router nobody ever reached is a leak. Two minutes is
+		// generous for a handoff that takes hundreds of milliseconds.
+		if !setFlags["idle-timeout-unattached"] {
+			idleUnattachedVal = 2 * time.Minute
+		}
 	}
 	// allow-uid: honor an explicitly-passed value literally — including 0,
 	// which is root. The production wash-login runs as root and is the
@@ -354,12 +383,13 @@ func Run(args []string) int {
 		ListenUnix:    *listenUnix,
 		// A --listen-raw router is a remote-apps relay endpoint (host B):
 		// mark it so the remote-family apps refuse to nest here.
-		Relayed:          *listenRaw != "",
-		Name:             *name,
-		IdleTimeout:      idleTimeoutVal,
-		AllowUID:         allowUIDVal,
-		AuthToken:        authTokenVal,
-		AllowCrossOrigin: *allowCrossOrigin,
+		Relayed:               *listenRaw != "",
+		Name:                  *name,
+		IdleTimeout:           idleTimeoutVal,
+		IdleTimeoutUnattached: idleUnattachedVal,
+		AllowUID:              allowUIDVal,
+		AuthToken:             authTokenVal,
+		AllowCrossOrigin:      *allowCrossOrigin,
 	}
 
 	logger := log.New(os.Stderr, "wash-router ", log.LstdFlags|log.Lmsgprefix)
@@ -587,8 +617,8 @@ func Run(args []string) int {
 
 	switch {
 	case cfg.ListenUnix != "":
-		logf("ctl socket %s (name=%q allow-uid=%d idle=%s apps=%s session=%s)",
-			cfg.ListenUnix, cfg.Name, cfg.AllowUID, cfg.IdleTimeout,
+		logf("ctl socket %s (name=%q allow-uid=%d idle=%s idle-unattached=%s apps=%s session=%s)",
+			cfg.ListenUnix, cfg.Name, cfg.AllowUID, fmtIdle(cfg.IdleTimeout), fmtIdle(cfg.IdleTimeoutUnattached),
 			strings.Join(cfg.AppsDirs, ":"), cfg.SessionAppID)
 	case transportScheme == "ws":
 		logf("listening on %s (apps dirs: %s; session: %s)", cfg.Listen, strings.Join(cfg.AppsDirs, ":"), cfg.SessionAppID)
@@ -621,7 +651,8 @@ func Run(args []string) int {
 		// HandleShell goroutines drain naturally.
 		listenCtx, listenCancel := context.WithCancel(ctx)
 		go func() {
-			if err := r.ReapWhenIdle(listenCtx, cfg.IdleTimeout); err == nil {
+			pol := router.IdlePolicy{Unattached: cfg.IdleTimeoutUnattached, Established: cfg.IdleTimeout}
+			if err := r.ReapWhenIdle(listenCtx, pol); err == nil {
 				listenCancel()
 			}
 		}()
@@ -985,4 +1016,14 @@ func redirectOutput(path string) error {
 		return err
 	}
 	return nil
+}
+
+// fmtIdle renders an idle threshold for a log line. Zero is spelled
+// "never" rather than "0s", because a reader scanning for why a session
+// died should not have to know that zero is the disabling value.
+func fmtIdle(d time.Duration) string {
+	if d <= 0 {
+		return "never"
+	}
+	return d.String()
 }
