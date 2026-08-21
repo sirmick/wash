@@ -21,6 +21,11 @@ const (
 	// App → router.
 	TEvtWindowSetTitle     = "window.set_title"
 	TEvtWindowConfirmClose = "window.confirm_close"
+	// TEvtWindowRaise / TEvtWindowAttention: app → router, acting on the
+	// app's OWN window — come forward now, or ask for the human quietly.
+	// Same ownership check as set_title. See docs/AGENT_UX.md §4.
+	TEvtWindowRaise     = "window.raise"
+	TEvtWindowAttention = "window.attention"
 	// TEvtWindowGeometry: app → router, the app's own content changed
 	// size (e.g. a wash-display guest surface resized). Distinct from
 	// TEvtWindowResize, which is router → app (a command to resize). The
@@ -248,6 +253,43 @@ type EvtWindowSetTitle struct {
 
 func NewEvtWindowSetTitle(win uint32, title string) EvtWindowSetTitle {
 	return EvtWindowSetTitle{T: TEvtWindowSetTitle, Win: win, Title: title}
+}
+
+// EvtWindowRaise: app → router, "bring my own window to the front".
+// Honored only for windows the sender owns, exactly like set_title — an
+// app can raise itself, never anyone else.
+//
+// This exists so a service can complete a gesture the USER started
+// somewhere else (docs/AGENT_UX.md N1): the desktop activates an agentd
+// toast, agentd resolves which Agent window is showing that session, and
+// that window comes forward. Nothing here is a licence to steal focus
+// unprompted; an app that wants attention without a user gesture behind
+// it should set EvtWindowAttention and let the taskbar say so quietly.
+type EvtWindowRaise struct {
+	T   string `json:"t"`
+	Win uint32 `json:"win"`
+}
+
+func NewEvtWindowRaise(win uint32) EvtWindowRaise {
+	return EvtWindowRaise{T: TEvtWindowRaise, Win: win}
+}
+
+// EvtWindowAttention: app → router, "this window needs the human".
+// Honored only for owned windows. The router flags the window
+// (SessionWindow.Attention) and the shell's taskbar pill pulses.
+//
+// The router clears the flag when the window takes focus, so the app
+// cannot leave a pill blinking at a window you have already read — the
+// "seen it" half of the state is the desktop's to decide, not the app's
+// (docs/AGENT_UX.md N6).
+type EvtWindowAttention struct {
+	T   string `json:"t"`
+	Win uint32 `json:"win"`
+	On  bool   `json:"on"`
+}
+
+func NewEvtWindowAttention(win uint32, on bool) EvtWindowAttention {
+	return EvtWindowAttention{T: TEvtWindowAttention, Win: win, On: on}
 }
 
 // EvtWindowGeometry: app → router, the app's own window content changed
@@ -549,16 +591,42 @@ type EvtNotify struct {
 	// the original), so an app cannot pin its toast on another app's
 	// window.
 	Source string `json:"source,omitempty"`
+	// Key names WHAT this notification is about, in the sender's own
+	// vocabulary — an agent session key, a job id, a document path.
+	// Opaque to the router and to the shell: neither parses it, and the
+	// only thing the desktop ever does with it is hand it straight back
+	// to the app that raised the toast, when the user activates it
+	// ("you said something about K, the human wants K").
+	//
+	// That asymmetry is the whole safety argument. A key cannot make the
+	// desktop open something else — what opens is resolved from the
+	// router-attested app id (see the shell's notifyOpeners) — so the
+	// worst a lying app can do with this field is point at its own
+	// nonsense. See docs/AGENT_UX.md N2.
+	Key string `json:"key,omitempty"`
 }
 
 func NewEvtNotify(title, body, level string) EvtNotify {
 	return EvtNotify{T: TEvtNotify, Title: title, Body: body, Level: level}
 }
 
+// NewEvtNotifyKeyed is NewEvtNotify with the sender's own subject key
+// attached, so activating the toast can land on the thing it is about
+// rather than merely on the app that mentioned it.
+func NewEvtNotifyKeyed(title, body, level, key string) EvtNotify {
+	return EvtNotify{T: TEvtNotify, Title: title, Body: body, Level: level, Key: key}
+}
+
 // NewEvtNotifyFrom is NewEvtNotify with the originating instance carried
 // through — the notify service's re-emit path.
 func NewEvtNotifyFrom(source, title, body, level string) EvtNotify {
 	return EvtNotify{T: TEvtNotify, Title: title, Body: body, Level: level, Source: source}
+}
+
+// NewEvtNotifyFromKeyed is the notify service's re-emit with both the
+// original sender and its subject key preserved.
+func NewEvtNotifyFromKeyed(source, title, body, level, key string) EvtNotify {
+	return EvtNotify{T: TEvtNotify, Title: title, Body: body, Level: level, Source: source, Key: key}
 }
 
 // EvtClipboardSet writes new content to the router-held clipboard.
@@ -908,6 +976,12 @@ func DecodeEvt(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TEvtWindowGeometry:
 		var m EvtWindowGeometry
+		return m, json.Unmarshal(data, &m)
+	case TEvtWindowRaise:
+		var m EvtWindowRaise
+		return m, json.Unmarshal(data, &m)
+	case TEvtWindowAttention:
+		var m EvtWindowAttention
 		return m, json.Unmarshal(data, &m)
 	case TEvtWindowConfirmClose:
 		var m EvtWindowConfirmClose

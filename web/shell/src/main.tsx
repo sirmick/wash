@@ -86,6 +86,7 @@ import {
   onHostgwState,
   type HostgwMap,
 } from './hostgw';
+import { pickWindow } from './focus-or-launch';
 
 interface ShellCatalog {
   t: 'catalog';
@@ -135,6 +136,10 @@ export interface SessionWindow {
   // draws its own chrome (e.g. Webamp's Winamp UI). Mirrors the app
   // manifest's WindowHints.Chromeless.
   chromeless?: boolean;
+  // attention: the owning app asked for the human (EvtWindowAttention).
+  // Router-owned — it clears the flag on focus, so the shell only has to
+  // render it (docs/AGENT_UX.md N6).
+  attention?: boolean;
 }
 
 interface ShellSessionSnapshot {
@@ -197,6 +202,8 @@ interface ShellNotify {
   title: string;
   body?: string;
   level?: 'info' | 'warn' | 'error';
+  // Sender's own subject key, opaque here (wire.ShellNotify.Key).
+  key?: string;
 }
 
 // Dev-mode reload signal (LOCAL router only). Carries no payload beyond
@@ -344,6 +351,89 @@ const windowsSub = new Sub<WindowInfo[]>([]);
 // instance_id), and clicking "Claude needs your input" should land on the
 // terminal that said so. Silently does nothing for an instance with no
 // window (a background service's toast) — the toast still dismisses.
+// raiseWindow brings one known window to the front: snap the camera to
+// its viewport cell first, because focusing a window one cell over would
+// otherwise "work" with nothing visible happening. Same move the taskbar
+// pill's dblclick makes.
+function raiseWindow(w: WindowInfo): void {
+  const cell = viewportFor(w);
+  setViewport(cell.vx, cell.vy);
+  // restoreWindow raises + focuses on its own; focusWindow for the rest.
+  if (w.state === 'minimized') window.wash.restoreWindow(w.windowID, w.origin);
+  else window.wash.focusWindow(w.windowID, w.origin);
+}
+
+// appIDForWindow resolves a window's app id from the router-attested
+// instance→app-id map (app.declared). The app cannot forge it, which is
+// what makes it safe to route navigation off.
+function appIDForWindow(w: WindowInfo): string {
+  const { origin, bare } = parseInstanceId(w.instanceID);
+  return clientForOrigin(origin)?.appIDs.get(bare) ?? '';
+}
+
+// focusOrLaunch is the one door primitive (docs/AGENT_UX.md N1): raise this
+// app's window on that host if it has one, and only launch when it does
+// not. Every rail door and roster row that used to call launchOn — and so
+// spawned a fresh window on every click — goes through here.
+//
+// Navigation, not control: this mutates no app state, which is why the
+// rail's awareness-only doctrine (docs/SIDEBAR.md §3.2) permits it.
+function focusOrLaunch(origin: Origin, appID: string): void {
+  const target = pickWindow(
+    windowsSub.value.map((w) => ({
+      windowID: w.windowID,
+      origin: w.origin,
+      appID: appIDForWindow(w),
+      focused: w.focused,
+    })),
+    origin,
+    appID,
+  );
+  if (!target) {
+    // A modal is summoned, never launched (docs/SIDEBAR.md M4); falls
+    // through to a normal launch on a host that has no such modal.
+    if (hasModal(origin, appID)) summonModal(origin, appID);
+    else window.wash.launchOn(origin, appID);
+    return;
+  }
+  const w = windowsSub.value.find((x) => x.origin === target.origin && x.windowID === target.windowID);
+  if (w) raiseWindow(w);
+}
+
+// FOCUS_KIND is the cross-app message a toast's activation sends back to
+// the app that raised it, when that toast named a subject
+// (docs/AGENT_UX.md N2). "You told the desktop this was about K; the
+// human has now asked for K."
+//
+// Sending a keyed notification is a promise to handle this — the shell
+// hands the whole gesture over, because only the sender knows whether K
+// already has a window, needs one, or lives somewhere else entirely.
+const FOCUS_KIND = 'wash.focus';
+
+// activateToast is what clicking a notification does.
+//
+// Two shapes. A keyed toast goes back to its own app on its own host,
+// which resolves the subject (agentd: raise the Agent window showing that
+// session, or open one for a detached session). An unkeyed toast keeps
+// the original behaviour: focus the window that raised it, falling back
+// to opening the app that speaks for a windowless service.
+//
+// The app id comes from the router-attested app.declared map, never from
+// the notification, so a toast can only ever hand its key to the app that
+// actually sent it.
+function activateToast(instanceID: string, key?: string): void {
+  if (key) {
+    const { origin, bare } = parseInstanceId(instanceID);
+    const client = clientForOrigin(origin);
+    const appID = client?.appIDs.get(bare);
+    if (client && appID) {
+      client.conn.sendCtrl({ t: 'app_msg.send', to: { app_id: appID }, data: { kind: FOCUS_KIND, key } });
+      return;
+    }
+  }
+  focusInstance(instanceID);
+}
+
 function focusInstance(instanceID: string): void {
   const w = windowsSub.value.find((x) => x.instanceID === instanceID);
   if (!w) {
@@ -356,14 +446,7 @@ function focusInstance(instanceID: string): void {
     launchOwningApp(instanceID);
     return;
   }
-  // Snap the camera to the window's viewport cell first — focusing a
-  // window one cell over would otherwise "work" with nothing visible
-  // happening. Same move the taskbar pill's dblclick makes.
-  const cell = viewportFor(w);
-  setViewport(cell.vx, cell.vy);
-  // restoreWindow raises + focuses on its own; focusWindow for the rest.
-  if (w.state === 'minimized') window.wash.restoreWindow(w.windowID, w.origin);
-  else window.wash.focusWindow(w.windowID, w.origin);
+  raiseWindow(w);
 }
 
 // launchOwningApp opens the app that raised a windowless notification, on
@@ -389,17 +472,12 @@ function launchOwningApp(instanceID: string): void {
   // didn't, and the toast launched the service instead of the file
   // manager. The explicit table is the whole test.
   const target = notifyOpeners[appID] ?? appID;
-  // A service that fronts a MODAL summons it instead of launching a
-  // window — this is the user-summon half of the anti-phishing rule
-  // (docs/SIDEBAR.md M4): the modal never opens itself, and the only way
-  // it ever appears is a gesture that starts here. Falls through to a
-  // normal launch when the host has no such modal declared, so a mixed
-  // fleet (an older host without it) still lands somewhere useful.
-  if (hasModal(origin, target)) {
-    summonModal(origin, target);
-    return;
-  }
-  window.wash.launchOn(origin, target);
+  // focusOrLaunch, not launchOn: a service that toasts twice should take
+  // you back to the window the first toast opened, not stack up a second
+  // one (docs/AGENT_UX.md N1). It also handles the modal case — a service
+  // that fronts a MODAL summons it instead of launching a window, the
+  // user-summon half of the anti-phishing rule (docs/SIDEBAR.md M4).
+  focusOrLaunch(origin, target);
 }
 
 // notifyOpeners maps a windowless service to the app that speaks for it,
@@ -528,7 +606,8 @@ function makeHandlers(client: RouterClient): ClientHandlers {
           body: n.body,
           level: n.level,
           origin: client.origin,
-          onActivate: focusInstance,
+          key: n.key,
+          onActivate: activateToast,
         });
         break;
       }
@@ -1061,6 +1140,7 @@ createEffect(() => {
       // isFocused() reads the focused signal, so this effect re-runs on
       // focus change.
       focused: isFocused(w),
+      attention: w.attention ?? false,
       state: w.state,
       x: w.x,
       y: w.y,
@@ -1582,6 +1662,12 @@ declare global {
       // launch path — there is no session BE there. Fire-and-forget: the
       // launched window composites in via the normal app.declared flow.
       launchOn(origin: string, appID: string): void;
+      // focusOrLaunch is launchOn's door-shaped sibling (docs/AGENT_UX.md
+      // N1): raise that host's window for the app if one is open, and only
+      // spawn when none is. Sidebar doors and per-host rows use this —
+      // clicking "open X on B" four times should show you X on B, not four
+      // copies of it. With several open it cycles, newest first.
+      focusOrLaunch(origin: string, appID: string): void;
       // attachRemote opens a second connection to a remote host's router
       // (the local end of an ssh -L tunnel the com.wash.remote supervisor
       // set up) and composites its windows into this desktop, tagged by
@@ -1797,6 +1883,9 @@ window.wash = {
       return;
     }
     client.conn.sendCtrl({ t: 'shell.launch', app_id: appID });
+  },
+  focusOrLaunch(origin, appID) {
+    focusOrLaunch(origin, appID);
   },
   attachRemote(origin, url) {
     if (origin === LOCAL_ORIGIN) return;

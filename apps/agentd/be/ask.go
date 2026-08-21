@@ -157,6 +157,14 @@ var (
 	// read the policy fresh (acp.go), and for the same reason: a rule
 	// written thirty seconds ago should count.
 	policyRuleCount = func() int { return len(agentpolicy.Load(agentpolicy.Path()).Rules) }
+	// notifyAsk raises the desktop toast for a question that is now on
+	// screen (docs/AGENT_UX.md N2). Indirected for the same reason as the
+	// two above — and because the real one needs a *sdk.Conn, which this
+	// package-level queue does not carry.
+	//
+	// Installed in onReady; the default no-op keeps the queue usable (and
+	// testable) before, and without, a connection.
+	notifyAsk = func(Ask) {}
 )
 
 // softTTLNow picks the window for a question about to be asked.
@@ -243,6 +251,7 @@ func enqueueAsk(spec askSpec, reply replyFn) bool {
 	now := time.Now()
 	soft := softTTLNow()
 	var over bool
+	var queued Ask
 	mutateState(func(s *State) {
 		if countForRow(spec.RowKey) >= maxPendingPerRow {
 			over = true
@@ -273,6 +282,7 @@ func enqueueAsk(spec askSpec, reply replyFn) bool {
 		// there is nobody who could have answered.
 		p.timer = time.AfterFunc(soft, func() { expireAsk(id) })
 		asks[id] = p
+		queued = p.Ask
 		s.Asks = publishAsks(now)
 	})
 	if over {
@@ -281,6 +291,16 @@ func enqueueAsk(spec askSpec, reply replyFn) bool {
 		return false
 	}
 	log.Printf("agentd: ask row=%s agent=%s tool=%s subject=%q ttl=%s", spec.RowKey, spec.Agent, spec.Tool, spec.Subject, soft)
+	// Toast AFTER the state push, and only here: this is the one path
+	// where a question actually reaches a human, so it is the one place a
+	// toast is honest. The deferred paths above answered without ever
+	// putting anything on screen; toasting there would train people to
+	// dismiss (the same argument wash-priv's queue makes).
+	//
+	// Once per question, never on a re-arm: expireAsk can extend an
+	// unanswered ask many times over a closed lid, and a toast per
+	// extension would be a machine nagging about its own patience.
+	notifyAsk(queued)
 	return true
 }
 

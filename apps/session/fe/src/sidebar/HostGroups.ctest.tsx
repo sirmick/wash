@@ -28,8 +28,14 @@ const row = (over: Partial<HostGroupRow> = {}): HostGroupRow => ({
 
 // mount renders the groups with a mutable per-id collapse state, so a
 // click can be observed the way the real section-state machinery behaves.
-function mount(rows: HostGroupRow[], states: Record<string, SectionState> = {}, focused?: string) {
+function mount(
+  rows: HostGroupRow[],
+  states: Record<string, SectionState> = {},
+  focused?: string,
+  withOpen = false,
+) {
   const toggled: string[] = [];
+  const opened: string[] = [];
   const view = render(() => (
     <HostGroups
       section="agents"
@@ -38,9 +44,11 @@ function mount(rows: HostGroupRow[], states: Record<string, SectionState> = {}, 
       onToggle={(id) => { toggled.push(id); }}
       hostColor={(o) => hostHue(o)}
       focusedOrigin={() => focused}
+      onOpen={withOpen ? (o) => { opened.push(o); } : undefined}
+      openTitle={withOpen ? (o) => `Open Agent on ${o}` : undefined}
     />
   ));
-  return { ...view, toggled };
+  return { ...view, toggled, opened };
 }
 
 test('no remote hosts: nothing rendered at all, not an empty box', () => {
@@ -125,4 +133,33 @@ test('each host resolves to a hue, and keeps it', () => {
 test('groups are keyed per section, so two sections do not collide', () => {
   expect(groupID('notify', 'build01')).toBe('notify:build01');
   expect(groupID('agents', 'build01')).toBe('agents:build01');
+});
+
+// --- the ↗ door (docs/AGENT_UX.md N1) ---
+
+test('no onOpen: the row stays inert, exactly as before', () => {
+  const { queryByTestId } = mount([row()]);
+  expect(queryByTestId('host-group-open-agents-build01')).toBeNull();
+});
+
+test('the ↗ travels to that host, and says where it goes', () => {
+  const { getByTestId, opened } = mount([row()], {}, undefined, true);
+  const door = getByTestId('host-group-open-agents-build01');
+  expect(door.getAttribute('title')).toBe('Open Agent on build01');
+  fireEvent.click(door);
+  expect(opened).toEqual(['build01']);
+});
+
+test('travelling does not also fold the group you were reading', () => {
+  const { getByTestId, toggled, opened } = mount([row()], {}, undefined, true);
+  fireEvent.click(getByTestId('host-group-open-agents-build01'));
+  expect(opened).toEqual(['build01']);
+  expect(toggled).toEqual([]);
+});
+
+test('the header still owns the disclosure', () => {
+  const { getByTestId, toggled, opened } = mount([row()], {}, undefined, true);
+  fireEvent.click(getByTestId('host-group-header-agents-build01'));
+  expect(toggled).toEqual(['agents:build01']);
+  expect(opened).toEqual([]);
 });

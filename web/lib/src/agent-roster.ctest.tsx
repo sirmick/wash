@@ -321,16 +321,13 @@ test('verbs: a detached row says it is detached', () => {
   expect(getByTestId('agents-row-a').getAttribute('title')).toContain('Detached');
 });
 
-test('verbs: a detached row reattaches once on double-click', () => {
+test('verbs: a detached row reattaches on a single click (docs/AGENT_UX.md N4)', () => {
   let reattached = 0;
   const { getByTestId } = render(() => (
     <AgentRoster rows={() => [row({ key: 'a', state: 'done', detached: true })]} startedAt={at}
       now={() => 0} onActivate={noop} onReattach={() => { reattached++; }} />
   ));
-  const target = getByTestId('agents-row-a');
-  fireEvent.click(target);
-  expect(reattached).toBe(0);
-  fireEvent.dblClick(target);
+  fireEvent.click(getByTestId('agents-row-a'));
   expect(reattached).toBe(1);
 });
 
@@ -365,9 +362,24 @@ test('activating a row hands the host the row, not an interpretation of it', () 
   expect(got).toBe('b');
 });
 
-test('a detached row still ignores a single click', () => {
-  // Two clicks preceding a dblclick would otherwise spawn two windows for
-  // one session — the reason detached rows wait for the double.
+test('a detached row reattaches rather than activating — one gesture, two meanings', () => {
+  // Clicking a detached row cannot "go to its window": it has none. The
+  // double-spawn this used to guard against is agentd's problem, and
+  // claimDetached solves it atomically (TestClaimDetachedAllowsOnlyOne-
+  // Reattach), so the row is free to answer the first click.
+  const rows = [row({ key: 'd', detached: true })];
+  let activated = 0;
+  let reattached = 0;
+  const { getByTestId } = render(() => (
+    <AgentRoster rows={() => rows} startedAt={at} now={() => 0}
+      onActivate={() => { activated++; }} onReattach={() => { reattached++; }} />
+  ));
+  fireEvent.click(getByTestId('agents-row-d'));
+  expect(activated).toBe(0);
+  expect(reattached).toBe(1);
+});
+
+test('a detached row with no reattach handler is simply inert', () => {
   const rows = [row({ key: 'd', detached: true })];
   let activated = 0;
   const { getByTestId } = render(() => (

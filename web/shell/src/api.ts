@@ -40,6 +40,8 @@ export interface WindowInfo {
   icon?: string;
   title: string;
   focused: boolean;
+  /** The owning app asked for the human; cleared by the router on focus. */
+  attention: boolean;
   state: 'normal' | 'minimized' | 'maximized';
   // Global (3W×3H plane) coords and dimensions. The pager renders
   // window outlines from these; the rest of the chrome ignores them.

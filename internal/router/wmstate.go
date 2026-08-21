@@ -155,6 +155,29 @@ func (s *windowSession) setTitle(windowID uint32, title string) []wire.SessionPa
 	return []wire.SessionPatch{{Op: wire.SessionPatchWindowUpsert, Window: &cp}}
 }
 
+// setAttention flags (or clears) "this window needs the human"
+// (docs/AGENT_UX.md N6). Setting it on the window that already has focus
+// is a no-op: the human is looking at it, so there is nothing to call
+// them back to, and a pill that pulses at the window you are typing in
+// teaches people to ignore the pulse.
+func (s *windowSession) setAttention(windowID uint32, on bool) []wire.SessionPatch {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w := s.windows[windowID]
+	if w == nil {
+		return nil
+	}
+	if on && w.Focused {
+		on = false
+	}
+	if w.Attention == on {
+		return nil
+	}
+	w.Attention = on
+	cp := *w
+	return []wire.SessionPatch{{Op: wire.SessionPatchWindowUpsert, Window: &cp}}
+}
+
 // move updates a window's position. State==maximized/minimized
 // windows ignore moves (the FE doesn't let you drag them anyway).
 func (s *windowSession) move(windowID uint32, x, y int32) []wire.SessionPatch {
@@ -216,6 +239,11 @@ func (s *windowSession) focus(windowID uint32) []wire.SessionPatch {
 		s.nextZ++
 		target.Z = s.nextZ
 	}
+	// Looking at a window settles what it was asking for. Clearing here
+	// rather than in the app keeps "seen it" a fact about the desktop:
+	// however the window came forward — taskbar, toast, alt-tab, an app
+	// raising itself — the pulse stops (docs/AGENT_UX.md N6).
+	target.Attention = false
 	cp := *target
 	patches = append(patches, wire.SessionPatch{Op: wire.SessionPatchWindowUpsert, Window: &cp})
 	return patches

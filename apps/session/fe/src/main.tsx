@@ -1188,6 +1188,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         onToggle={toggleSidebar}
         user={sysInfo()?.username}
         host={sysInfo()?.hostname}
+        // The same number the Agents section wears, so a hidden rail can
+        // still say an agent is blocked (docs/AGENT_UX.md N3). Agents
+        // only: the other sections' counts are news, not a question
+        // holding someone up.
+        badge={agentBadge()}
       >
         <Section
           id="viewport"
@@ -1425,10 +1430,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           {/* The roster and its verbs live in com.wash.ai now. The rail
               says how many and where, and opens the app on the right
               host — which is the whole point: launchOn carries an origin,
-              and the verbs it used to hold could not. */}
+              and the verbs it used to hold could not.
+
+              focusOrLaunch, not launchOn (docs/AGENT_UX.md N1): this door
+              was spawning a fresh Agent window on every click, so the way
+              back to the agent you were watching was the way to lose it
+              among four identical windows. */}
           <AgentOpen
             hosts={() => agentHostSummary(hostgw())}
-            onOpen={(origin) => window.wash.launchOn(origin, 'com.wash.ai')}
+            onOpen={(origin) => window.wash.focusOrLaunch(origin, 'com.wash.ai')}
           />
           {/* The sharpest case in the whole plan (§1.2): an agent on B was
               invisible here. It now has a host, a count and a summary that
@@ -1438,6 +1448,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             section="agents"
             rows={() => hostRows(SERVICE_AGENT, countBadge(waitingAgents), agentSummary)}
             {...groupProps}
+            onOpen={(origin) => window.wash.focusOrLaunch(origin, 'com.wash.ai')}
+            openTitle={(origin) => `Open Agent on ${origin}`}
           />
         </Section>
         <Section
@@ -1499,9 +1511,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         <div style={windowListStyle}>
           <For each={windows()}>
             {(w) => (
+              // Two roads to the same dot. The notification one is
+              // after-the-fact ("something warned and you haven't read
+              // it"); w.attention is the window's own live claim, which
+              // the router drops the moment you look at it
+              // (docs/AGENT_UX.md N6). An agent blocked on a question
+              // needs the second: its toast may be long gone, and there is
+              // no unread notification to point at when the ask came from
+              // a session this window is showing.
               <WindowPill
                 win={w}
-                attention={wantsAttention().has(w.instanceID)}
+                attention={w.attention || wantsAttention().has(w.instanceID)}
                 onVisit={() => clearAttention(w.instanceID)}
               />
             )}

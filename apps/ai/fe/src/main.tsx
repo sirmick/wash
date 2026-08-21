@@ -13,7 +13,7 @@
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { HistoryPanel, historyAction, type SessionMeta } from './HistoryPanel.tsx';
-import { defaultAgent } from './default-agent.ts';
+import { defaultAgent, defaultCwd } from './default-agent.ts';
 import type { Component } from 'solid-js';
 import {
   AgentRoster, AgentSession, Button, FilePicker, Menu, MenuBar, MenuItem, MenuSeparator, Overlay, Select,
@@ -33,6 +33,9 @@ interface Adapter {
 interface RecentSession {
   session_id: string;
   agent: string;
+  /** full working directory — what the launcher refills (N5b) */
+  cwd?: string;
+  /** short label for display ("wash"), not a path to start in */
   dir?: string;
   /** the agent's own one-line name for what the session was about */
   title?: string;
@@ -160,15 +163,19 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
       case 'roster':
         setRoster((m.state as RosterState) ?? {});
-        // Preselect the launcher's agent on the first roster that names
-        // the adapters (docs/AGENT_UX.md N5a). Once only, and only while
-        // the untouched launcher is what's showing — a user who set the
+        // Fill the launcher in on the first roster that names the
+        // adapters (docs/AGENT_UX.md N5a/N5b): the agent you used last,
+        // in the folder you used it in. Once only, and only while the
+        // untouched launcher is what's showing — a user who set the
         // select (or a window that's already a session) is never fought.
         if (!agentDefaulted && !sessionKey() && !autostart() && agent() === '') {
-          const d = defaultAgent(roster().adapters ?? []);
+          const d = defaultAgent(roster().adapters ?? [], roster().recent ?? []);
           if (d) {
             agentDefaulted = true;
             setAgent(d);
+            // Only if the user hasn't typed/picked one — the folder field
+            // is editable from the moment the window opens.
+            if (cwd() === '') setCwd(defaultCwd(roster().recent ?? []));
           }
         }
         break;
@@ -321,7 +328,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const start = () => {
     // Same preference the preselect uses (N5a), so a submit from
     // "Choose…" and the visible default cannot disagree about the agent.
-    const a = agent() || defaultAgent(adapters());
+    const a = agent() || defaultAgent(adapters(), roster().recent ?? []);
     if (!a) return;
     setStarting(true);
     setError('');

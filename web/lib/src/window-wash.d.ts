@@ -58,6 +58,12 @@ interface WashWindowInfo {
   icon?: string;
   title: string;
   focused: boolean;
+  // attention: this window's app says it needs the human — an agent
+  // blocked on a permission question, a job that stopped. The router
+  // clears it as soon as the window is focused, so a pill can pulse for
+  // it without the app having to remember to switch it off
+  // (docs/AGENT_UX.md N6).
+  attention: boolean;
   state: 'normal' | 'minimized' | 'maximized';
   x: number;
   y: number;
@@ -139,6 +145,12 @@ interface WashGlobals {
   catalogFor(origin: string): WashCatalogApp[];
   onRemoteCatalog(cb: (ev: { origin: string; apps: WashCatalogApp[] }) => void): () => void;
   launchOn(origin: string, appID: string): void;
+  // focusOrLaunch is launchOn's door-shaped sibling (docs/AGENT_UX.md N1):
+  // raise that host's window for the app if one is open, and only spawn
+  // when none is. Sidebar doors and per-host rows use this — clicking
+  // "open X on B" four times should show you X on B, not four copies of
+  // it. With several open it cycles, newest first.
+  focusOrLaunch(origin: string, appID: string): void;
   attachRemote(origin: string, url?: string): void;
   detachRemote(origin: string): void;
   // App-supplied settings panels. loadSettingsPanel fetches+imports the

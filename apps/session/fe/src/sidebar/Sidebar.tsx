@@ -43,6 +43,14 @@ export interface SidebarProps {
    *  bottom/top inset). */
   taskbarHeight: number;
   onToggle: () => void;
+  /**
+   * What is waiting behind a hidden sidebar, as text ('' = nothing). The
+   * 14px tab is the last rung of the interrupt ladder (docs/AGENT_UX.md
+   * §4): with the rail hidden, an agent blocked on a question had no way
+   * of saying so short of a toast that has already faded. Rendered only
+   * in hidden mode — an open sidebar shows its own section badges.
+   */
+  badge?: string;
   /** Logged-in user + hostname, shown in the header as `user@host` —
    *  a useful at-a-glance "which machine/session am I on" instead of a
    *  redundant "Sidebar" label. */
@@ -174,13 +182,35 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       <Show when={!isOpen()}>
         <div
           data-testid="sidebar-tab"
-          title="Show sidebar (Ctrl+Alt+S)"
+          title={
+            props.badge
+              ? `${props.badge} waiting on you — show sidebar (Ctrl+Alt+S)`
+              : 'Show sidebar (Ctrl+Alt+S)'
+          }
           onClick={props.onToggle}
           style={tabStyle()}
           onMouseEnter={(ev) => (ev.currentTarget.style.background = GLASS_TAB_HOVER)}
           onMouseLeave={(ev) => (ev.currentTarget.style.background = GLASS_TAB)}
         >
-          ‹
+          <Show when={props.badge} fallback={'‹'}>
+            {/* A count, not a glyph: at 14px there is no room for both,
+                and "2" beside a chevron reads as a chevron with a number
+                on it — which is exactly what it is. */}
+            <span
+              data-testid="sidebar-tab-badge"
+              style={{
+                'font-size': '9px',
+                padding: '1px 2px',
+                'border-radius': tokens.radiusXl,
+                background: tokens.accentAmber,
+                color: '#fff',
+                'font-weight': 700,
+                'line-height': 1.1,
+              }}
+            >
+              {props.badge}
+            </span>
+          </Show>
         </div>
       </Show>
     </>

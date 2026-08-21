@@ -9,10 +9,18 @@
 // remote host, collapsed but badged, auto-expanding when that host says
 // something new, with the focused window's host emphasised.
 //
-// Awareness only, deliberately. There are no buttons: a group states what
-// is happening on that host and stops. Acting on it means opening the
-// owning app THERE, which is what M2–M5 relocate — a control affordance
-// here would be the original defect wearing a host label.
+// Awareness only, deliberately: a group states what is happening on that
+// host and stops. Acting on it means opening the owning app THERE, which
+// is what M2–M5 relocate — a control affordance here would be the original
+// defect wearing a host label.
+//
+// docs/AGENT_UX.md §1 sharpens that rule rather than breaking it: what the
+// doctrine forbids is chrome that MUTATES app state, and opening a window
+// mutates nothing. A section may therefore pass `onOpen` to put a single ↗
+// door on each host row — navigation, not control. Sections that don't
+// pass it stay exactly as inert as before, which is most of them; the ↗ is
+// deliberately separate from the header so the disclosure gesture and the
+// travel gesture can never be confused for one another.
 //
 // Group collapse rides the section-state machinery (ids are
 // "<section>:<origin>"), so it persists and auto-expands exactly as a
@@ -35,6 +43,14 @@ export interface HostGroupsProps {
   hostColor: (origin: string) => string | null;
   /** Origin of the focused window, so its host reads as the current one. */
   focusedOrigin?: () => string | undefined;
+  /**
+   * Optional ↗ door per host row: go to this host's window for the section's
+   * app, opening it if there is none (docs/AGENT_UX.md N1). Omit and the
+   * rows stay inert.
+   */
+  onOpen?: (origin: string) => void;
+  /** Tooltip for the ↗, e.g. "Open Agent on build01". */
+  openTitle?: (origin: string) => string;
 }
 
 /** groupID is the section-state key for one host's group. */
@@ -132,6 +148,30 @@ export const HostGroups: Component<HostGroupsProps> = (props) => {
                       }}
                     >
                       {row.badge}
+                    </span>
+                  </Show>
+                  {/* stopPropagation: the header owns the disclosure, this
+                      owns the travel. Without it every trip to a host would
+                      also fold the group you just looked at. */}
+                  <Show when={props.onOpen}>
+                    <span
+                      data-testid={`host-group-open-${props.section}-${row.origin}`}
+                      title={props.openTitle?.(row.origin) ?? `Open on ${row.origin}`}
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        props.onOpen?.(row.origin);
+                      }}
+                      style={{
+                        'flex-shrink': 0,
+                        'font-size': '10px',
+                        padding: '0 3px',
+                        color: tokens.fgMuted,
+                        cursor: 'pointer',
+                      }}
+                      onMouseEnter={(ev) => (ev.currentTarget.style.color = tokens.fg)}
+                      onMouseLeave={(ev) => (ev.currentTarget.style.color = tokens.fgMuted)}
+                    >
+                      ↗
                     </span>
                   </Show>
                 </div>

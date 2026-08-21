@@ -172,6 +172,8 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		})
 	})
 
+	installAskToasts(c)
+	registerFocusHandler(bus, c)
 	registerAskHandlers(bus, c)
 	registerACPHandlers(bus, c)
 	registerTranscriptHandlers(bus)

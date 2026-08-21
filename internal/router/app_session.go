@@ -439,6 +439,18 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 			return err
 		}
 		return inst.relayWindowGeometry(m)
+	case wire.TEvtWindowRaise:
+		var m wire.EvtWindowRaise
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.relayWindowRaise(m)
+	case wire.TEvtWindowAttention:
+		var m wire.EvtWindowAttention
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.relayWindowAttention(m)
 	case wire.TEvtWindowState:
 		var m wire.EvtWindowState
 		if err := json.Unmarshal(payload, &m); err != nil {
@@ -669,7 +681,10 @@ func (inst *AppInstance) relayNotify(m wire.EvtNotify) error {
 		if src == "" {
 			src = inst.InstanceID
 		}
-		out := wire.NewShellNotify(src, m.Title, m.Body, m.Level)
+		// Key rides through untouched: it is the source app's own word
+		// for what the toast is about, and the shell only ever hands it
+		// back to that app (wire.EvtNotify.Key).
+		out := wire.NewShellNotifyKeyed(src, m.Title, m.Body, m.Level, m.Key)
 		var firstErr error
 		for _, s := range inst.router.shellList() {
 			if err := s.WriteCtrl(out); err != nil && firstErr == nil {
@@ -714,6 +729,9 @@ func (r *Router) forwardNotifyToService(sourceAppID, sourceInstID string, m wire
 		"body":  m.Body,
 		"level": m.Level,
 	}
+	if m.Key != "" {
+		payload["key"] = m.Key
+	}
 	from := wire.Sender{AppID: sourceAppID, InstanceID: sourceInstID}
 	if err := target.WriteEvt(wire.NewEvtAppMsgFrom(target.WindowID, payload, from)); err != nil {
 		r.log("notify forward: write: %v", err)
@@ -725,6 +743,33 @@ func (inst *AppInstance) relayWindowTitle(m wire.EvtWindowSetTitle) error {
 		return nil
 	}
 	inst.router.broadcastPatches(inst.router.winSession.setTitle(m.Win, m.Title))
+	return nil
+}
+
+// relayWindowRaise brings an app's own window forward — the tail of a
+// gesture the user made elsewhere (docs/AGENT_UX.md N1). Only for owned
+// windows: an app may raise itself, never a neighbour.
+//
+// focusWindow is the same call the shell's own click path makes, so the
+// window rises, takes focus, and drops its attention flag by the usual
+// route rather than a second special case.
+func (inst *AppInstance) relayWindowRaise(m wire.EvtWindowRaise) error {
+	if !inst.ownsWindow(m.Win) {
+		return nil
+	}
+	inst.router.broadcastPatches(inst.router.winSession.focus(m.Win))
+	return nil
+}
+
+// relayWindowAttention flags (or clears) "this window needs the human".
+// Only for owned windows. The clear-on-focus half lives in the window
+// session's focus path, so a window the user has actually looked at
+// cannot stay lit no matter what the app claims.
+func (inst *AppInstance) relayWindowAttention(m wire.EvtWindowAttention) error {
+	if !inst.ownsWindow(m.Win) {
+		return nil
+	}
+	inst.router.broadcastPatches(inst.router.winSession.setAttention(m.Win, m.On))
 	return nil
 }
 

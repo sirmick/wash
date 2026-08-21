@@ -19,8 +19,12 @@ export interface ToastInput {
    * wants you ("Claude needs your input"), so clicking it should land on
    * that window rather than merely making the card go away. Omitted (or a
    * no-op for an instance with no window) leaves click = dismiss.
+   *
+   * `key` is the sender's own subject key when the notification carried
+   * one (wire.EvtNotify.Key) — "this is about agent session acp:3" — so
+   * the click can land on the thing rather than on the app in general.
    */
-  onActivate?: (instanceID: string) => void;
+  onActivate?: (instanceID: string, key?: string) => void;
   /**
    * Origin the toast came from. A remote host's toast is indistinguishable
    * from a local one without this — and "the build box finished" reads very
@@ -28,6 +32,11 @@ export interface ToastInput {
    * stripe, no label), so the common case is untouched.
    */
   origin?: string;
+  /**
+   * Opaque subject key from the notification, handed back to onActivate.
+   * The shell never parses it; see wire.EvtNotify.Key.
+   */
+  key?: string;
 }
 
 const TOAST_TTL_MS = 4500;
@@ -129,7 +138,7 @@ export function showToast(t: ToastInput): void {
   card.addEventListener('click', () => {
     // Activate first: dismiss() starts a 200ms fade and removes the card,
     // and the focus intent must not depend on that finishing.
-    if (t.onActivate) t.onActivate(t.instanceID);
+    if (t.onActivate) t.onActivate(t.instanceID, t.key);
     dismiss();
   });
 

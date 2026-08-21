@@ -184,6 +184,10 @@ var session struct {
 	key   string
 	agent string
 	title string
+	// attention mirrors what we last told the router, so a roster push
+	// every second doesn't become a wire frame every second (docs/
+	// AGENT_UX.md N6).
+	attention bool
 }
 
 // persistSessionView records which agentd session this window renders. This
@@ -209,6 +213,38 @@ func rosterTitle(state any, key string) string {
 		return str(row["title"])
 	}
 	return ""
+}
+
+// waitingOn reports whether the roster push carries a question against
+// this window's session. Defensive about shape for the same reason
+// rosterTitle is: the payload crosses the router as generic maps.
+func waitingOn(state any, key string) bool {
+	if key == "" {
+		return false
+	}
+	s, _ := state.(map[string]any)
+	asks, _ := s["asks"].([]any)
+	for _, a := range asks {
+		ask, _ := a.(map[string]any)
+		if str(ask["row_key"]) == key {
+			return true
+		}
+	}
+	return false
+}
+
+// markAttention keeps the taskbar pill honest about this window: pulsing
+// while its agent is blocked on a person, quiet otherwise. The router
+// clears the flag by itself the moment the window is focused, so this
+// only ever has to raise it — and only when the answer changed.
+func markAttention(c *sdk.Conn, on bool) {
+	if session.attention == on {
+		return
+	}
+	session.attention = on
+	if err := c.Attention(on); err != nil {
+		log.Printf("wash-ai: attention key=%s on=%v: %v", session.key, on, err)
+	}
 }
 
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
@@ -457,6 +493,22 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 		})
 		go keepWatching(c)
 
+	case agentd.FocusKind:
+		// The human activated a notification about this session and agentd
+		// resolved it to us (docs/AGENT_UX.md N1). Come forward — and drop
+		// any attention flag we were carrying, which raising does anyway
+		// via the router's focus path.
+		//
+		// The key check is not ceremony: agentd addresses every transcript
+		// watcher of a session, and this window may since have been
+		// re-pointed at a different one.
+		if str(m["key"]) != session.key {
+			return
+		}
+		if err := c.Raise(); err != nil {
+			log.Printf("wash-ai: raise key=%s: %v", session.key, err)
+		}
+
 	case "agent_started":
 		if e := str(m["error"]); e != "" {
 			c.SendAppMsg(map[string]any{"kind": "start_failed", "error": e})
@@ -506,6 +558,7 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 			session.title = t
 			_ = c.SetTitle(t)
 		}
+		markAttention(c, waitingOn(m["state"], session.key))
 		if aiDebug {
 			log.Printf("wash-ai: roster push key=%q state=%T", session.key, m["state"])
 		}

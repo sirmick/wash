@@ -76,6 +76,10 @@ export interface Win {
   // (e.g. Webamp) fills the frame and draws its own chrome. Mirrors
   // the app manifest's WindowHints.Chromeless.
   chromeless?: boolean;
+  // attention is router-owned: the owning app said this window needs the
+  // human, and the router clears it the moment the window takes focus.
+  // The taskbar pill pulses for it (docs/AGENT_UX.md N6).
+  attention?: boolean;
   // crashed is set when the BE process exited abnormally. The window
   // stays mounted (geometry intact) but FloatingWindow swaps in the
   // crash tombstone instead of the dead custom element. Router-side
@@ -267,6 +271,7 @@ function fromSessionWindow(sw: SessionWindow, origin: Origin): Win {
     maxH: sw.max_h,
     isRoot: sw.is_root,
     chromeless: sw.chromeless,
+    attention: sw.attention,
   };
 }
 

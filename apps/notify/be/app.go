@@ -86,6 +86,9 @@ type Notification struct {
 	Level      string `json:"level"`
 	CreatedSec int64  `json:"created_sec"`
 	Read       bool   `json:"read"`
+	// Key: see notifyReq.Key. Kept in history so a stored notification
+	// stays as actionable as the transient toast was.
+	Key string `json:"key,omitempty"`
 }
 
 var def *sdk.AppDef
@@ -155,6 +158,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 			Title:      req.Title,
 			Body:       req.Body,
 			Level:      level,
+			Key:        req.Key,
 			CreatedSec: time.Now().Unix(),
 		}
 		svc.Mutate(func(s *State) {
@@ -179,11 +183,11 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		// raised it, not this service, or the shell's click-to-focus has
 		// no window to land on. The source is the router-attested sender
 		// of the original — we never take it from the payload.
-		go func(source, title, body, lvl string) {
-			if err := conn.NotifyFrom(source, title, body, lvl); err != nil {
+		go func(source, title, body, lvl, key string) {
+			if err := conn.NotifyFromAbout(source, key, title, body, lvl); err != nil {
 				log.Printf("wash-notify: re-emit failed: %v", err)
 			}
-		}(n.SourceInst, req.Title, req.Body, level)
+		}(n.SourceInst, req.Title, req.Body, level, req.Key)
 		return nil
 	})
 
@@ -226,6 +230,11 @@ type notifyReq struct {
 	Title string `json:"title"`
 	Body  string `json:"body"`
 	Level string `json:"level"`
+	// Key is the producer's own word for what the notification is about,
+	// relayed untouched (wire.EvtNotify.Key). This service neither reads
+	// nor validates it — it carries it back out on the re-emit so the
+	// desktop can hand it to the producer on activation.
+	Key string `json:"key"`
 }
 
 type markReadReq struct {

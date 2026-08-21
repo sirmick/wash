@@ -264,6 +264,12 @@ type SessionWindow struct {
 	Z       uint32 `json:"z"`
 	State   string `json:"state"` // normal | minimized | maximized
 	Focused bool   `json:"focused"`
+	// Attention is "this window needs the human" — set by the owning app
+	// via EvtWindowAttention, cleared by the router the moment the window
+	// takes focus. The shell pulses the taskbar pill for it. An app can
+	// ask to be noticed; only looking at it can settle the matter
+	// (docs/AGENT_UX.md N6).
+	Attention bool `json:"attention,omitempty"`
 	// IsRoot is true when the owning app process runs as uid 0, or
 	// when the app id is reserved as part of the privilege chain
 	// (com.wash.priv). The shell's WM paints a red stripe and ROOT
@@ -554,10 +560,21 @@ type ShellNotify struct {
 	Title      string `json:"title"`
 	Body       string `json:"body,omitempty"`
 	Level      string `json:"level,omitempty"`
+	// Key is the sender's own subject key, passed through untouched from
+	// EvtNotify.Key (see its doc for why this is safe to relay blind).
+	// The shell hands it back to the source app on activation so the
+	// click lands on the thing the toast was about.
+	Key string `json:"key,omitempty"`
 }
 
 func NewShellNotify(instanceID, title, body, level string) ShellNotify {
 	return ShellNotify{T: TShellNotify, InstanceID: instanceID, Title: title, Body: body, Level: level}
+}
+
+// NewShellNotifyKeyed is NewShellNotify carrying the source app's
+// subject key (docs/AGENT_UX.md N2).
+func NewShellNotifyKeyed(instanceID, title, body, level, key string) ShellNotify {
+	return ShellNotify{T: TShellNotify, InstanceID: instanceID, Title: title, Body: body, Level: level, Key: key}
 }
 
 // ShellReload is the router → shell "reload your page" signal,

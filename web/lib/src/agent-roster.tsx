@@ -27,7 +27,7 @@ export interface RosterRow {
   /** running | working | needs-input | done | stale */
   state: string;
   reason?: string;
-  /** still running, no window pointing at it — double-clicking reattaches */
+  /** still running, no window pointing at it — clicking opens one */
   detached?: boolean;
   session_id?: string;
   /** the agent's own name for this session, when it has one */
@@ -400,11 +400,13 @@ const AgentRowView: Component<{
       data-agent-state={props.row.state}
       data-active={props.active ? 'true' : 'false'}
       style={rowStyle()}
-      // Attached rows retain their fast single-click focus. Detached rows
-      // wait for dblclick so the two click events preceding it cannot spawn
-      // two Agent windows for the same session.
-      onClick={() => { if (!props.detached) props.onActivate(); }}
-      onDblClick={() => { if (props.detached) props.onReattach?.(); }}
+      // One click, every row (docs/AGENT_UX.md N4). Detached rows used to
+      // insist on a dblclick, on the theory that the two click events
+      // preceding it could spawn two Agent windows — but agentd's
+      // claimDetached is atomic and was always the real guard (see
+      // TestClaimDetachedAllowsOnlyOneReattach), so the dblclick bought
+      // nothing except a row that ignored the first click people gave it.
+      onClick={() => (props.detached ? props.onReattach?.() : props.onActivate())}
       onContextMenu={(e) => hasVerbs() && openMenu(e)}
       // One title, chosen. There used to be two attributes here and JSX
       // kept the last, so the detached hint never rendered — a detached
@@ -412,7 +414,7 @@ const AgentRowView: Component<{
       // thing it does not have.
       title={
         props.detached
-          ? 'Detached — double-click to open a window on it'
+          ? 'Detached — click to open a window on it'
           : `${props.row.agent} in ${props.row.cwd || 'unknown directory'}`
       }
     >

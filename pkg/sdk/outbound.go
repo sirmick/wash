@@ -73,6 +73,30 @@ func (c *Conn) SetTitle(title string) error {
 	return c.writeEvt(wire.NewEvtWindowSetTitle(c.windowID, title))
 }
 
+// Raise brings this app's window to the front (and out of minimized).
+//
+// For finishing a gesture the user made elsewhere — the desktop
+// activated a notification about something this window is showing, so
+// this window should be what they end up looking at (docs/AGENT_UX.md
+// N1). Not for announcing yourself: an app that wants noticing without a
+// user gesture behind it should call Attention instead, which asks
+// quietly and lets the human decide when to come.
+//
+// No-op for an app with no window.
+func (c *Conn) Raise() error {
+	return c.writeEvt(wire.NewEvtWindowRaise(c.windowID))
+}
+
+// Attention flags this app's window as needing the human: the taskbar
+// pill pulses until the window is focused, at which point the ROUTER
+// clears the flag — you cannot leave it lit at a window someone has
+// already read, and you do not have to remember to turn it off.
+//
+// Setting it on the focused window does nothing, by design.
+func (c *Conn) Attention(on bool) error {
+	return c.writeEvt(wire.NewEvtWindowAttention(c.windowID, on))
+}
+
 // ConfirmClose answers a window.close_requested. allow=true tears the
 // window down; allow=false vetoes the close (e.g. an unsaved-changes
 // dialog said "cancel").
@@ -368,6 +392,36 @@ func (c *Conn) NotifyFrom(sourceInstance, title, body, level string) error {
 		level = wire.NotifyLevelInfo
 	}
 	return c.writeEvt(wire.NewEvtNotifyFrom(sourceInstance, title, body, level))
+}
+
+// NotifyFromAbout is NotifyFrom carrying the producer's subject key
+// through as well (see NotifyAbout). The notify service's re-emit path;
+// ordinary apps want NotifyAbout.
+func (c *Conn) NotifyFromAbout(sourceInstance, key, title, body, level string) error {
+	if level == "" {
+		level = wire.NotifyLevelInfo
+	}
+	return c.writeEvt(wire.NewEvtNotifyFromKeyed(sourceInstance, title, body, level, key))
+}
+
+// NotifyAbout is Notify plus the sender's own key for WHAT the toast is
+// about — an agent session, a job, a document. When the user activates
+// the toast the desktop hands that key back to this app
+// (kind:"wash.focus", key) so the click can land on the thing itself
+// rather than merely on the app. Handle that message if you send these;
+// ignoring it just means the desktop falls back to opening you.
+//
+// Best-effort and fire-and-forget, like Info/Warn: a toast raised from
+// inside a dispatch callback must not write inline (see notifyBG).
+func (c *Conn) NotifyAbout(key, title, body, level string) {
+	if level == "" {
+		level = wire.NotifyLevelInfo
+	}
+	go func() {
+		if err := c.writeEvt(wire.NewEvtNotifyKeyed(title, body, level, key)); err != nil {
+			log.Printf("wash sdk: notify about %q: %v", key, err)
+		}
+	}()
 }
 
 // Info / Warn / Fail are the ergonomic, one-liner toast helpers built on
