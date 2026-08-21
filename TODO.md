@@ -214,13 +214,21 @@ bug list — all fully landed; see `git log` if you need their content.)
 
 ## Apps / UX
 
-- [ ] **Agent UX phase Now (N1–N6)** — docs/AGENT_UX.md, plan of record
-  2026-08-21. N5a (Claude-preferred launcher default) landed with the doc;
-  N1 focus-or-launch primitive, N2 agentd needs-input toasts, N3 hidden-
-  sidebar chevron badge, N4 idempotent single-click reattach, N5b last-used
-  agent+folder persist, N6 taskbar attention flag remain (impl planned with
-  Opus). Phase Next (0.15 messenger consolidation) needs its own design doc
-  first.
+- [x] **Agent UX phase Now (N1–N6)** — docs/AGENT_UX.md, shipped
+  2026-08-21. Focus-or-launch everywhere, agentd needs-input toasts keyed
+  to their session, hidden-sidebar badge, single-click reattach, launcher
+  defaults (last-used, else claude), window attention flag. See §5 for the
+  as-built notes, including the two places the plan was wrong.
+- [ ] **Agent UX phase Next (0.15)** — messenger consolidation:
+  docs/AGENT_UX.md §6. Needs a SIDEBAR-grade design doc BEFORE any code;
+  it changes `Instancing` semantics for com.wash.ai and has to reconcile
+  with window-restore and launchOn.
+- [ ] wash-term does not answer `wash.focus` (the desktop's "the human
+  asked for your thing K" verb), so agentd deliberately leaves
+  terminal-tier permission toasts unkeyed — clicking one opens the Agent
+  app rather than raising the terminal tab that asked. Teaching term the
+  verb (raise the window, select the channel's tab) closes the last gap in
+  the interrupt ladder. docs/AGENT_UX.md §5 N2, apps/agentd/be/focus.go.
 
 - [ ] **wash-term split panes** — docs/TERM_LAYOUT.md, designed 2026-08-02,
   not started. A window becomes a tree of tab *groups*: each leaf has its own

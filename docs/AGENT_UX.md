@@ -1,10 +1,10 @@
 # Agent UX — one mental model, every door opens
 
-Status: **plan of record** (2026-08-21). Grounded audit of the agent
+Status: **phase Now shipped** (2026-08-21). Grounded audit of the agent
 feature's navigation layer + a two-phase plan. Phase "Now" (§5) is
-polish-release scope; phase "Next" (§6) is a 0.15 design effort that gets
-its own doc before any code. N5a (launcher default agent) landed with this
-doc; everything else is open.
+polish-release scope and is **done** — see §5 for what each item became;
+phase "Next" (§6) is a 0.15 design effort that gets its own doc before
+any code, and is untouched.
 
 Related: [SIDEBAR.md](SIDEBAR.md) (the relocation that put the roster in
 `com.wash.ai`), [AGENT_APP.md](AGENT_APP.md) (the app's contract),
@@ -63,7 +63,10 @@ or launching a window mutates nothing. Navigation is not control.
   case that genuinely wants multi-window; must stay possible, must not be
   the default outcome of ordinary clicks.
 
-## 3. Audit (as of 2026-08-21, v0.13.2+51)
+## 3. Audit (as of 2026-08-21, v0.13.2+51 — the state phase Now fixed)
+
+Kept as written, in the present tense of the day it was made: it is the
+record of what was wrong, and §5 says what each line became.
 
 | Entry point | Today | Expected | Verdict |
 |---|---|---|---|
@@ -91,38 +94,48 @@ one is already on screen. agentd's ask TTL already re-arms while no
 desktop could answer (ASK M2) — the machine side is honest; this ladder is
 the human side.
 
-## 5. Phase Now — polish-release scope
+## 5. Phase Now — polish-release scope (shipped)
 
-- **N1 — focus-or-launch, the one primitive.** Shell-side helper: given
-  `(origin, sessionKey?)` → focus the window attached to that session,
-  else re-use an existing `com.wash.ai` window on that origin (select),
-  else `launchOn`. Wire into: the AgentOpen door, host-group rows (make
-  clickable), roster activation, and N2's toasts. Kills the duplicate-
-  window class entirely.
-- **N2 — agentd toasts needs-input.** Once per ask (respecting
-  `ask_desktop` off), body = truncated question, carrying the session
-  key; `notifyOpeners['com.wash.agentd'] = 'com.wash.ai'`; activation
-  routes through N1. Term-embedded agents keep their existing path.
-- **N3 — badge the hidden-sidebar chevron** with the merged waiting count
-  (same number as the Agents section badge).
-- **N4 — single-click reattach.** Make `row_reattach` idempotent in
-  agentd (a second reattach for an already-attaching session is a no-op,
-  not a second window), then drop the dblclick guard in agent-roster.
-- **N5 — launcher defaults.**
-  - **N5a (done, landed with this doc):** default the agent select to
-    the first *available* adapter, preferring `claude`; the submit
-    fallback uses the same kernel (apps/ai/fe/src/default-agent.ts).
-  - **N5b:** remember last-used agent + folder per user. BE-owned via the
-    existing persist seam (`persistSessionView`,
-    docs pattern: BE-owned FE view-state) — last-used beats the static
-    preference when both are available.
-- **N6 — taskbar attention.** needs-input sets the window's
-  attention/urgency flag → pill flash, cleared on focus. (If the wire has
-  no attention bit yet, that is the work.)
+- **N1 — focus-or-launch, the one primitive.** ✅
+  `web/shell/src/focus-or-launch.ts` is the pure decision (raise this
+  app's window on that host; cycle when there are several; return null =
+  launch), exposed as `window.wash.focusOrLaunch`. Wired into the rail's
+  Agent door, the host-group rows (which gained an optional ↗), and the
+  windowless-toast fallback. The *keyed* half turned out to belong in
+  agentd rather than the shell: only the service knows whether a session
+  has a window, lost one, or never had one, so the desktop hands the key
+  back (`wash.focus`) and agentd raises or opens. That also gave the
+  History panel's live rows a verb — they were inert (§ below).
+- **N2 — agentd toasts needs-input.** ✅ One toast at the single point
+  where a question actually reaches a human (never on a re-arm, never on
+  the paths that deferred without showing anything), carrying the session
+  key. `wire.EvtNotify.Key` / `ShellNotify.Key` are opaque to router and
+  shell and only ever handed back to the app that raised the toast, which
+  is what makes them safe. Terminal-tier asks are deliberately unkeyed
+  until wash-term can answer `wash.focus`; they keep the generic
+  fallback, which opens the Agent app with the question visible.
+- **N3 — badge the hidden-sidebar chevron.** ✅ The 14px tab carries the
+  merged waiting count and says so in its tooltip.
+- **N4 — single-click reattach.** ✅ Dropped the dblclick guard; agentd's
+  `claimDetached` was always the real double-spawn guard and is atomic
+  (`TestClaimDetachedAllowsOnlyOneReattach`), so nothing needed changing
+  service-side.
+- **N5 — launcher defaults.** ✅
+  - **N5a:** the agent select opens on the first *available* adapter,
+    preferring `claude`; the submit fallback uses the same kernel.
+  - **N5b:** last-used agent + folder win over the static preference,
+    read from the session history agentd already persists and publishes
+    as `recent` — no new store, so nothing can disagree with it.
+- **N6 — taskbar attention.** ✅ New `EvtWindowAttention` +
+  `SessionWindow.Attention`: the app raises the flag, the *router* clears
+  it on focus, so no app can leave a pill pulsing at a window you have
+  read. wash-ai sets it while its session is blocked; the pill ORs it
+  with the pre-existing unread-notification dot.
 
-N1 is the keystone; N2/N3/N6 are rungs of §4; N4/N5 are affordance fixes.
-Each lands with component tests; N1+N2 get a full-stack e2e (test app +
-Playwright + router-log assertions) since they cross shell↔app↔service.
+Tests: pure kernels under `node --test`, component tests for the rail and
+roster, Go tests for the attention state machine and the toast rules, and
+`e2e/tests/agent-focus.spec.ts` for N1+N2 end to end (both halves — FE
+window state and BE router log).
 
 ## 6. Phase Next — 0.15, messenger consolidation (design doc first)
 
