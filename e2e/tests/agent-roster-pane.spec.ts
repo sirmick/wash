@@ -46,15 +46,15 @@ test('the roster pane lists agentd\'s sessions and switches the detail pane', as
   await page.goto(router.url);
   await expect(page.locator('wash-app-session')).toBeVisible();
 
-  // One session: the pane stays shut. A list of one is width spent to say
-  // nothing you can't already see in the window you're looking at.
+  // The pane is furniture: always there, resizable, never toggled. It
+  // used to appear on rules (more than one session, a question elsewhere,
+  // an empty window) and each rule was a guess about when a list earns
+  // its width — which is what made the way back to your own agent depend
+  // on knowing a button existed.
   const first = await openAgentWindow(page, 0);
   await startSession(first, 'first session');
-  await expect(first.locator('[data-testid="ai-roster-pane"]')).toHaveCount(0);
-
-  // It is reachable on demand even so.
-  await first.locator('[data-testid="ai-roster-toggle"]').click();
   const pane = first.locator('[data-testid="ai-roster-pane"]');
+  await expect(pane).toBeVisible();
   await expect(pane).toBeVisible();
   await expect(pane.locator('[data-testid^="agents-row-"]')).toHaveCount(1);
 
@@ -159,7 +159,6 @@ test('an empty Agent window shows the sessions you already have', async ({ page,
 
   // Detach it: the session keeps running with no window on it.
   const pane = first.locator('[data-testid="ai-roster-pane"]');
-  if ((await pane.count()) === 0) await first.locator('[data-testid="ai-roster-toggle"]').click();
   const row = pane.locator('[data-testid^="agents-row-"]').first();
   await row.locator('[data-testid="agents-verbs-btn"]').click();
   await page.locator('[data-testid="agents-row-actions"] [data-testid="agents-menu-detach"]').click();
@@ -181,7 +180,6 @@ test('New session opens another window rather than hijacking this one', async ({
   const first = await openAgentWindow(page, 0);
   await startSession(first, 'keep me');
   const pane = first.locator('[data-testid="ai-roster-pane"]');
-  if ((await pane.count()) === 0) await first.locator('[data-testid="ai-roster-toggle"]').click();
 
   await pane.locator('[data-testid="ai-roster-new"]').click();
 
@@ -190,4 +188,42 @@ test('New session opens another window rather than hijacking this one', async ({
   // still streaming the old transcript into a "new" session.
   await expect(page.locator('wash-app-ai')).toHaveCount(2, { timeout: 20_000 });
   await expect(first.locator('textarea')).toBeVisible();
+});
+
+test('the sessions pane is dragged, not toggled, and the width survives a reload', async ({
+  page,
+  router,
+}) => {
+  test.setTimeout(60_000);
+  await page.goto(router.url);
+  await expect(page.locator('wash-app-session')).toBeVisible();
+
+  const win = await openAgentWindow(page, 0);
+  await startSession(win, 'a session to look at');
+  const pane = win.locator('[data-testid="ai-roster-pane"]');
+  await expect(pane).toBeVisible();
+
+  const before = (await pane.boundingBox())!.width;
+  const bar = win.locator('[data-testid="ai-splitter"]');
+  const grip = (await bar.boundingBox())!;
+
+  // Drag the divider right. Mouse move in two steps: one is sometimes
+  // coalesced away before the listener attaches.
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(grip.x + 120, grip.y + grip.height / 2, { steps: 2 });
+  await page.mouse.up();
+
+  const after = (await pane.boundingBox())!.width;
+  expect(after).toBeGreaterThan(before + 40);
+
+  // The width is backend-owned view state (persistSessionView), so it
+  // comes back with the window rather than dying with the tab.
+  await page.reload();
+  await expect(page.locator('wash-app-session')).toBeVisible();
+  const restored = page.locator('wash-app-ai').first().locator('[data-testid="ai-roster-pane"]');
+  await expect(restored).toBeVisible({ timeout: 20_000 });
+  await expect
+    .poll(async () => (await restored.boundingBox())!.width, { timeout: 15_000 })
+    .toBeGreaterThan(before + 40);
 });

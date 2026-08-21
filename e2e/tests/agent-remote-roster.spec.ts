@@ -73,7 +73,7 @@ test('the Agent app opened on a remote host shows THAT host\'s sessions', async 
     // per-origin mangled tag is the proof it is B's code, not A's).
     const showingB = page.locator('wash-app-ai-remoteb').filter({ hasText: 'work happening on B' });
     await expect(showingB).toHaveCount(1, { timeout: 20_000 });
-    await expect(showingB.locator('[data-testid="ai-roster-toggle"]')).toBeVisible();
+    await expect(showingB.locator('[data-testid="ai-roster-pane"]')).toBeVisible();
 
     // And A's session is nowhere in a remote window. This is the
     // regression the plan was written around: the rail used to answer for

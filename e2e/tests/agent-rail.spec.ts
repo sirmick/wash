@@ -89,7 +89,6 @@ async function expectRailHasAgent(page: Page) {
   // Roster half: the app lists the session itself.
   const win = page.locator('wash-app-ai').first();
   const pane = win.locator('[data-testid="ai-roster-pane"]');
-  if ((await pane.count()) === 0) await win.locator('[data-testid="ai-roster-toggle"]').click();
   await expect(pane.locator('[data-testid^="agents-row-"]').first()).toBeVisible({
     timeout: 15_000,
   });

@@ -51,7 +51,6 @@ async function startSession(page: Page, url: string) {
 async function openRoster(page: Page) {
   const win = page.locator('wash-app-ai').first();
   const pane = win.locator('[data-testid="ai-roster-pane"]');
-  if ((await pane.count()) === 0) await win.locator('[data-testid="ai-roster-toggle"]').click();
   await expect(pane).toBeVisible();
   return pane;
 }

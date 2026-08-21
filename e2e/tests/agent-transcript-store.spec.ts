@@ -124,7 +124,6 @@ test('the transcript outlives the session it came from', async ({ page, router }
   // SIDEBAR.md M2c). retire() frees the in-memory transcript — which is
   // only safe BECAUSE the file is the other copy.
   const pane = win.locator('[data-testid="ai-roster-pane"]');
-  if ((await pane.count()) === 0) await win.locator('[data-testid="ai-roster-toggle"]').click();
   const row = pane.locator('[data-testid^="agents-row-"]').first();
   await expect(row).toBeVisible({ timeout: 15_000 });
   const cursor = router.logCursor();

@@ -15,9 +15,10 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount }
 import { HistoryPanel, historyAction, type SessionMeta } from './HistoryPanel.tsx';
 import { defaultAgent, defaultCwd } from './default-agent.ts';
 import type { Component } from 'solid-js';
-import { PanelLeftClose, PanelLeftOpen, Plus } from 'lucide-solid';
+import { Plus } from 'lucide-solid';
 import {
   AgentRoster, AgentSession, Button, FilePicker, Menu, MenuBar, MenuItem, MenuSeparator, Overlay, Select,
+  Splitter,
   createAppBus, defineWashApp, kbdStyle, tokens, washCopyText,
 } from '@wash/ui';
 import type {
@@ -58,7 +59,13 @@ interface RosterState {
 
 interface PersistedState {
   session_key?: string;
+  /** Sessions-pane width, percent of the window (see set_split). */
+  split_pct?: number;
 }
+
+// defaultSplitPct — wide enough for "claude · wash" plus a state dot,
+// narrow enough that the transcript still reads on a small window.
+const defaultSplitPct = 26;
 
 function mergeEvents(prev: AgentEvent[], next: AgentEvent[]): AgentEvent[] {
   const bySeq = new Map<number, AgentEvent>();
@@ -72,6 +79,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const [sessionKey, setSessionKey] = createSignal('');
   const [roster, setRoster] = createSignal<RosterState>({});
   const [error, setError] = createSignal('');
+  // Sessions-pane width (see the pane below). Declared up here because
+  // onState restores it, and a signal declared after createAppBus would be
+  // in the temporal dead zone if the bus ever replayed state synchronously.
+  const [splitPct, setSplitPct] = createSignal(defaultSplitPct);
+  let bodyEl!: HTMLDivElement;
 
   // Launcher form. agentDefaulted latches N5a's one-shot preselect so
   // later roster pushes can't overwrite a deliberate "Choose…".
@@ -187,6 +199,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     onMsg: handleBE,
     onState: (state) => {
       const saved = state as PersistedState | null;
+      // Width first, and unconditionally: it is this window's furniture,
+      // and it must come back even for a window with no session in it.
+      if (typeof saved?.split_pct === 'number' && saved.split_pct > 0) {
+        setSplitPct(saved.split_pct);
+      }
       const key = typeof saved?.session_key === 'string' ? saved.session_key : '';
       if (!key) return;
       // wash:state lands before queued wash:msg events on every remount.
@@ -197,11 +214,21 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     },
   });
 
-  // ---- roster pane (docs/SIDEBAR.md M2) ----
-  // Show/hide is local: the pane is a view of this window, not state agentd
-  // or anyone else owns. Open by default when there is more than one
-  // session to choose between, because that is when a list earns its width.
-  const [rosterOpen, setRosterOpen] = createSignal(false);
+  // ---- sessions pane (docs/SIDEBAR.md M2) ----
+  // Always there, and resizable — the same split every other two-pane wash
+  // app uses (fm's preview, edit's file tree): a <Splitter> over a grid,
+  // width in percent, dragged not toggled.
+  //
+  // It used to hide behind a button that opened it on rules — more than
+  // one session, a question on another row, an empty window. Every one of
+  // those rules was a guess about when the list was worth its width, and
+  // the guesses were what made the app hard to predict: the way back to
+  // your own agent depended on knowing a toggle existed. A list you can
+  // drag to nothing is a better answer than a list that appears on
+  // conditions.
+  //
+  // Width is per window and BE-persisted (see set_split), so a pane you
+  // sized stays sized across a browser reload.
   const rows = () => roster().rows ?? [];
   // Elapsed per row, anchored on arrival: since_ms is measured at PUSH
   // time, so it can't be compared against a local clock directly. Same
@@ -217,42 +244,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       startedAt.set(r.key, arrival - Math.max(0, r.since_ms || 0));
     }
     for (const key of [...startedAt.keys()]) if (!live.has(key)) startedAt.delete(key);
-    // A second session appearing is what makes the list worth its width.
-    //
-    // So does an EMPTY window with any session at all behind it: opening
-    // the Agent app while one of your sessions is detached used to give a
-    // blank new-session form, with the way back to your own work hidden
-    // behind a toggle you had to know about. A window with nothing to
-    // show should show you what there is (docs/AGENT_UX.md N1).
-    // `starting()` is not belt-and-braces: a roster push carrying your
-    // OWN new row lands in the gap between clicking Start and the key
-    // coming back, and without the guard the pane pops open on the one
-    // session you are already looking at.
-    const empty = !sessionKey() && !starting() && !autostart();
-    if (rows().length > 1 || (rows().length > 0 && empty)) setRosterOpen(true);
   });
-  // A question on another row opens the pane that can show it — but only
-  // once per question, so a pane the user deliberately closed stays closed
-  // until something genuinely new needs an answer. Same rule the desktop
-  // rail follows when it auto-expands its agents section on a new ask.
-  const openedFor = new Set<string>();
-  createEffect(() => {
-    let fresh = false;
-    const live = new Set<string>();
-    for (const a of offRowAsks()) {
-      live.add(a.id);
-      if (!openedFor.has(a.id)) {
-        openedFor.add(a.id);
-        fresh = true;
-      }
-    }
-    for (const id of [...openedFor]) if (!live.has(id)) openedFor.delete(id);
-    if (fresh) setRosterOpen(true);
-  });
+  // A question on another row needed to OPEN the pane once. There is no
+  // pane to open now — it is already showing, with the question in it.
+  //
   // The clock only ticks while rows are on screen, so an idle window holds
   // no interval.
   createEffect(() => {
-    if (!rosterOpen() || rows().length === 0) return;
+    if (rows().length === 0) return;
     setNow(Date.now());
     const t = setInterval(() => setNow(Date.now()), 1000);
     onCleanup(() => clearInterval(t));
@@ -331,12 +330,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       if (k === 'c' && e.shiftKey && lastReply()) {
         e.preventDefault();
         void washCopyText(lastReply());
-      }
-      // Ctrl+B — the sessions pane. The key every editor uses for its
-      // side panel, and the tooltip says so.
-      if (k === 'b' && !e.shiftKey) {
-        e.preventDefault();
-        setRosterOpen(!rosterOpen());
       }
     };
     window.addEventListener('keydown', onKey);
@@ -608,18 +601,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // and selects, which is already the thing the rail could not do for a
   // remote host.
   const rosterPane = (
-    <Show when={rosterOpen()}>
-      <div
-        data-testid="ai-roster-pane"
-        style={{
-          width: '230px',
-          'flex-shrink': 0,
-          'border-right': `1px solid ${tokens.borderMenu}`,
-          background: tokens.bgInset,
-          overflow: 'auto',
-          padding: `${tokens.spaceSm}px`,
-        }}
-      >
+    <div
+      data-testid="ai-roster-pane"
+      style={{
+        // No width here: the grid column owns it, so dragging the
+        // splitter is the only thing that decides how wide this is.
+        'min-width': 0,
+        background: tokens.bgInset,
+        overflow: 'auto',
+        padding: `${tokens.spaceSm}px`,
+      }}
+    >
         {/* The verbs are key-addressed, so they act on the row rather than
             on whatever this window happens to be showing — including a
             session with no window at all. That is the whole difference
@@ -654,7 +646,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         </Button>
         <AgentRoster
           rows={rows}
-          asks={() => roster().asks ?? []}
+          // Off-row questions only. The detail pane on the right already
+          // renders the question for the session it is showing, and with
+          // the list always open the two were printing the same question
+          // twice in one window. The list's job is what you can't see.
+          asks={offRowAsks}
           startedAt={(key) => startedAt.get(key) ?? Date.now()}
           now={now}
           activeKey={sessionKey}
@@ -670,66 +666,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             rule: remember ? (a.suggested_rule ?? '') : '',
           })}
         />
-      </div>
-    </Show>
-  );
-
-  // The toggle lives in the window's own chrome rather than the desktop's:
-  // it is this window's layout, and the rail is no longer in the business
-  // of driving what an app shows.
-  //
-  // Shaped like every other pane toggle in wash (fm's preview pane, the
-  // desktop's own sidebar): a ghost icon button carrying the panel glyph
-  // for the side it opens, pressed-state via aria-pressed and opacity,
-  // and the shortcut in the tooltip. It used to be a text button reading
-  // "▶ Roster" — a noun nothing else in the product uses, punctuated by a
-  // glyph that read as an action rather than a disclosure.
-  const rosterToggle = (
-    <Button
-      variant="ghost"
-      data-testid="ai-roster-toggle"
-      aria-pressed={rosterOpen()}
-      style={{
-        padding: '4px 8px',
-        'min-width': '30px',
-        opacity: rosterOpen() ? 1 : 0.5,
-        position: 'relative',
-      }}
-      title={
-        rosterOpen()
-          ? 'Hide sessions (Ctrl+B)'
-          : offRowAsks().length > 0
-            ? `${offRowAsks().length} question(s) waiting on another session (Ctrl+B)`
-            : 'Show every agent session on this host (Ctrl+B)'
-      }
-      onClick={() => setRosterOpen(!rosterOpen())}
-    >
-      {rosterOpen() ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
-      {/* A closed pane must still say that something is blocked behind it.
-          An agent waiting on a human is the one status worth a badge — and
-          on the icon, because the label is gone. */}
-      <Show when={!rosterOpen() && offRowAsks().length > 0}>
-        <span
-          data-testid="ai-roster-ask-badge"
-          style={{
-            position: 'absolute',
-            top: '-2px',
-            right: '-2px',
-            'min-width': '13px',
-            padding: '0 3px',
-            'border-radius': tokens.radiusXl,
-            background: tokens.accentAmber,
-            color: tokens.bgCanvas,
-            'font-size': '9px',
-            'font-weight': '700',
-            'line-height': '13px',
-            'text-align': 'center',
-          }}
-        >
-          {offRowAsks().length}
-        </span>
-      </Show>
-    </Button>
+    </div>
   );
 
   const historyPanel = (
@@ -794,27 +731,40 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     </Show>
   );
 
-  // Master-detail. The menubar and the roster toggle sit in one header
-  // ABOVE the split, so the roster survives every detail state — including
-  // the launcher, which is what makes "new session while three are
-  // running" a coherent thing to do rather than a mode you leave the list
-  // to enter.
-  const header = (
-    <div style={{ display: 'flex', 'align-items': 'center', gap: `${tokens.spaceSm}px` }}>
-      <div style={{ flex: 1, 'min-width': 0 }}>{menubar}</div>
-      {rosterToggle}
-    </div>
-  );
-
+  // Master-detail. The menubar sits ABOVE the split, so the sessions pane
+  // survives every detail state — including the launcher, which is what
+  // makes "new session while three are running" a coherent thing to do
+  // rather than a mode you leave the list to enter.
+  //
+  // A grid, not a flex row, for the same reason wash-edit uses one: the
+  // splitter's percentage is a column width, and a grid can express
+  // "<pct>% | handle | rest" directly. The 4px middle column IS the
+  // <Splitter>.
   return (
     <>
     {closeDialog}
     {historyPanel}
     <div style={{ height: '100%', display: 'flex', 'flex-direction': 'column' }}>
-      {header}
-      <div style={{ flex: 1, 'min-height': 0, display: 'flex' }}>
+      {menubar}
+      <div
+        ref={bodyEl!}
+        style={{
+          flex: 1,
+          'min-height': 0,
+          display: 'grid',
+          'grid-template-columns': `${splitPct()}% 4px 1fr`,
+        }}
+      >
         {rosterPane}
-        <div style={{ flex: 1, 'min-width': 0, display: 'flex', 'flex-direction': 'column' }}>
+        <Splitter
+          container={bodyEl}
+          min={12}
+          max={60}
+          onChange={setSplitPct}
+          onCommit={() => send({ kind: 'set_split', pct: Math.round(splitPct()) })}
+          data-testid="ai-splitter"
+        />
+        <div style={{ 'min-width': 0, display: 'flex', 'flex-direction': 'column' }}>
           <Show
             when={sessionKey()}
             fallback={

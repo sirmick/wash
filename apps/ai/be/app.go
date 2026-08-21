@@ -184,6 +184,12 @@ var session struct {
 	key   string
 	agent string
 	title string
+	// splitPct is the sessions-pane width this window was left at. FE
+	// view-state, backend-owned like the session key beside it, so the
+	// two cannot be saved separately and clobber each other. Zero means
+	// "never set" — the FE keeps its own default rather than being told
+	// to be 0% wide.
+	splitPct int
 	// attention mirrors what we last told the router, so a roster push
 	// every second doesn't become a wire frame every second (docs/
 	// AGENT_UX.md N6).
@@ -195,7 +201,11 @@ var session struct {
 // attachment rather than relying on a later debounced FE callback. The shell
 // returns it as wash:state whenever the browser remounts this instance.
 func persistSessionView(c *sdk.Conn) {
-	if err := c.SaveState(map[string]any{"session_key": session.key}); err != nil {
+	view := map[string]any{"session_key": session.key}
+	if session.splitPct > 0 {
+		view["split_pct"] = session.splitPct
+	}
+	if err := c.SaveState(view); err != nil {
 		log.Printf("wash-ai: persist session key=%s: %v", session.key, err)
 	}
 }
@@ -328,6 +338,18 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			"kind": "agent_" + verb,
 			"key":  rowKey,
 		})
+
+	case "set_split":
+		// The sessions pane was dragged to a new width. Persisted with
+		// the session key rather than beside it, because SaveState
+		// replaces the whole blob — two writers with two halves of the
+		// view would each erase the other's.
+		pct, _ := m["pct"].(float64)
+		if pct <= 0 || pct >= 100 {
+			return
+		}
+		session.splitPct = int(pct)
+		persistSessionView(c)
 
 	case "row_focus":
 		// History picked a session that is live and already has a window
