@@ -101,7 +101,10 @@ test.describe('managed agent sessions', () => {
     // Off by default — no badge.
     await expect(win.locator('[data-testid="agent-yolo-badge"]')).toHaveCount(0);
 
-    await win.getByRole('button', { name: 'Session' }).click();
+    // The menubar by testid, not by accessible name: the roster pane's
+    // "New session" button is also a button whose name contains
+    // "Session", and a loose name match picks up both.
+    await win.locator('[data-testid="ai-menubar-session"]').click();
     await page.locator('[data-testid="ai-menu-yolo"]').click();
 
     // The badge is permanent while it is on, and the transcript records
@@ -217,5 +220,47 @@ test.describe('managed agent sessions', () => {
     await expect(dialog.getByRole('button', { name: 'Detach' })).toBeVisible();
     await expect(dialog.getByRole('button', { name: 'Terminate' })).toBeVisible();
     await expect(dialog.getByRole('button', { name: 'Keep open' })).toBeVisible();
+  });
+
+  test('Detach from the close dialog actually closes the window', async ({ page, router }) => {
+    // The path a user takes — the window's X, then Detach — had no
+    // coverage past "the dialog appeared", and a detach that leaves the
+    // window on screen reads as a dead app: the session IS detached, so
+    // every button in the window now talks about something that is no
+    // longer there.
+    test.setTimeout(60_000);
+    const win = await openAgent(page, router.url, 'say something');
+    await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
+
+    const cursor = router.logCursor();
+    await page.locator('[data-testid="window-close"]').first().click();
+    const dialog = page.locator('[data-testid="ai-close-confirm"]');
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    await dialog.getByRole('button', { name: 'Detach' }).click();
+
+    // BE half: the session detached rather than ending.
+    await router.waitForLog(/agentd: acp detached key=/, 15_000, cursor);
+    expect(router.log().slice(cursor)).not.toMatch(/acp session ended/);
+
+    // FE half: the window is gone from the desktop.
+    await expect(page.locator('wash-app-ai')).toHaveCount(0, { timeout: 15_000 });
+  });
+
+  test('Terminate from the close dialog closes the window and ends the session', async ({
+    page,
+    router,
+  }) => {
+    test.setTimeout(60_000);
+    const win = await openAgent(page, router.url, 'say something');
+    await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
+
+    const cursor = router.logCursor();
+    await page.locator('[data-testid="window-close"]').first().click();
+    const dialog = page.locator('[data-testid="ai-close-confirm"]');
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    await dialog.getByRole('button', { name: 'Terminate' }).click();
+
+    await router.waitForLog(/agentd: acp session ended key=/, 15_000, cursor);
+    await expect(page.locator('wash-app-ai')).toHaveCount(0, { timeout: 15_000 });
   });
 });

@@ -15,6 +15,7 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount }
 import { HistoryPanel, historyAction, type SessionMeta } from './HistoryPanel.tsx';
 import { defaultAgent, defaultCwd } from './default-agent.ts';
 import type { Component } from 'solid-js';
+import { PanelLeftClose, PanelLeftOpen, Plus } from 'lucide-solid';
 import {
   AgentRoster, AgentSession, Button, FilePicker, Menu, MenuBar, MenuItem, MenuSeparator, Overlay, Select,
   createAppBus, defineWashApp, kbdStyle, tokens, washCopyText,
@@ -66,7 +67,7 @@ function mergeEvents(prev: AgentEvent[], next: AgentEvent[]): AgentEvent[] {
   return Array.from(bySeq.values()).sort((a, b) => a.seq - b.seq);
 }
 
-const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
+const App: Component<{ instance: string; host: HTMLElement; origin: string }> = (props) => {
   const [events, setEvents] = createSignal<AgentEvent[]>([]);
   const [sessionKey, setSessionKey] = createSignal('');
   const [roster, setRoster] = createSignal<RosterState>({});
@@ -217,7 +218,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     }
     for (const key of [...startedAt.keys()]) if (!live.has(key)) startedAt.delete(key);
     // A second session appearing is what makes the list worth its width.
-    if (rows().length > 1) setRosterOpen(true);
+    //
+    // So does an EMPTY window with any session at all behind it: opening
+    // the Agent app while one of your sessions is detached used to give a
+    // blank new-session form, with the way back to your own work hidden
+    // behind a toggle you had to know about. A window with nothing to
+    // show should show you what there is (docs/AGENT_UX.md N1).
+    // `starting()` is not belt-and-braces: a roster push carrying your
+    // OWN new row lands in the gap between clicking Start and the key
+    // coming back, and without the guard the pane pops open on the one
+    // session you are already looking at.
+    const empty = !sessionKey() && !starting() && !autostart();
+    if (rows().length > 1 || (rows().length > 0 && empty)) setRosterOpen(true);
   });
   // A question on another row opens the pane that can show it — but only
   // once per question, so a pane the user deliberately closed stays closed
@@ -319,6 +331,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       if (k === 'c' && e.shiftKey && lastReply()) {
         e.preventDefault();
         void washCopyText(lastReply());
+      }
+      // Ctrl+B — the sessions pane. The key every editor uses for its
+      // side panel, and the tooltip says so.
+      if (k === 'b' && !e.shiftKey) {
+        e.preventDefault();
+        setRosterOpen(!rosterOpen());
       }
     };
     window.addEventListener('keydown', onKey);
@@ -607,6 +625,33 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             session with no window at all. That is the whole difference
             between here and the rail: an app talking to its own host's
             agentd has a router-attested sender, so it may act. */}
+        {/* New session — the way back to the launcher from a window that
+            is showing one. Without it the roster is a one-way door: the
+            launcher is only ever the EMPTY state of a window, so a window
+            with a session had no route to starting another.
+
+            A new WINDOW, not a new view: this app is one window per
+            conversation by design, and clearing the view in place would
+            leave this window's backend still watching the old session,
+            streaming its events into what looks like a fresh one.
+            launchOn is the explicit spawn verb — focusOrLaunch, its
+            sibling, would just re-raise this very window — and
+            props.origin keeps it on the host this window belongs to,
+            which is the whole point on a remote one. */}
+        <Button
+          variant="ghost"
+          data-testid="ai-roster-new"
+          title="Start another session on this host"
+          style={{
+            width: '100%',
+            'margin-bottom': `${tokens.spaceSm}px`,
+            'justify-content': 'flex-start',
+            gap: `${tokens.spaceSm}px`,
+          }}
+          onClick={() => window.wash.launchOn(props.origin, 'com.wash.ai')}
+        >
+          <Plus size={13} /> New session
+        </Button>
         <AgentRoster
           rows={rows}
           asks={() => roster().asks ?? []}
@@ -633,35 +678,52 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // it is this window's layout, and the rail is no longer in the business
   // of driving what an app shows.
   //
-  // Labelled "Roster", not "Sessions": the menubar next to it already has a
-  // Session menu, and two adjacent controls whose names differ by an "s"
-  // is a coin toss for the reader. It is also the word the docs use.
+  // Shaped like every other pane toggle in wash (fm's preview pane, the
+  // desktop's own sidebar): a ghost icon button carrying the panel glyph
+  // for the side it opens, pressed-state via aria-pressed and opacity,
+  // and the shortcut in the tooltip. It used to be a text button reading
+  // "▶ Roster" — a noun nothing else in the product uses, punctuated by a
+  // glyph that read as an action rather than a disclosure.
   const rosterToggle = (
     <Button
+      variant="ghost"
       data-testid="ai-roster-toggle"
+      aria-pressed={rosterOpen()}
+      style={{
+        padding: '4px 8px',
+        'min-width': '30px',
+        opacity: rosterOpen() ? 1 : 0.5,
+        position: 'relative',
+      }}
       title={
         rosterOpen()
-          ? 'Hide the roster'
+          ? 'Hide sessions (Ctrl+B)'
           : offRowAsks().length > 0
-            ? `${offRowAsks().length} question(s) waiting on another session`
-            : 'Show every agent session on this host'
+            ? `${offRowAsks().length} question(s) waiting on another session (Ctrl+B)`
+            : 'Show every agent session on this host (Ctrl+B)'
       }
       onClick={() => setRosterOpen(!rosterOpen())}
     >
-      {rosterOpen() ? '\u25c0 Roster' : '\u25b6 Roster'}
+      {rosterOpen() ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
       {/* A closed pane must still say that something is blocked behind it.
-          An agent waiting on a human is the one status worth a badge. */}
+          An agent waiting on a human is the one status worth a badge — and
+          on the icon, because the label is gone. */}
       <Show when={!rosterOpen() && offRowAsks().length > 0}>
         <span
           data-testid="ai-roster-ask-badge"
           style={{
-            'margin-left': '6px',
-            padding: '0 5px',
-            'border-radius': '8px',
+            position: 'absolute',
+            top: '-2px',
+            right: '-2px',
+            'min-width': '13px',
+            padding: '0 3px',
+            'border-radius': tokens.radiusXl,
             background: tokens.accentAmber,
             color: tokens.bgCanvas,
-            'font-size': '10px',
-            'font-weight': '600',
+            'font-size': '9px',
+            'font-weight': '700',
+            'line-height': '13px',
+            'text-align': 'center',
           }}
         >
           {offRowAsks().length}

@@ -227,9 +227,27 @@ func (r *Router) broadcastReload(reason string) {
 // see EOF on the wash socket and exit. Browsers auto-reconnect
 // when the new instance starts accepting.
 func (r *Router) execSelf(routerExe string) {
-	argv := append([]string{routerExe}, os.Args[1:]...)
-	if err := syscall.Exec(routerExe, argv, os.Environ()); err != nil {
+	if err := syscall.Exec(routerExe, reexecArgv(os.Args), os.Environ()); err != nil {
 		r.log("dev-reload: re-exec failed: %v", err)
 		os.Exit(1)
 	}
+}
+
+// reexecArgv keeps the name we were INVOKED as while running the file we
+// resolved.
+//
+// Dev runs the multicall layout: `out/wash-router` is a symlink to
+// `out/wash`, and the dispatcher picks its verb from argv[0]'s basename.
+// Re-execing with argv[0] set to the resolved target made the new process
+// read its own flags as a subcommand — `wash: unknown verb "--listen"` —
+// print usage and exit, so the FIRST rebuild of a `--dev` session silently
+// killed the router instead of reloading it.
+//
+// exec's two arguments exist precisely for this: the path says which file
+// runs, argv[0] says who it thinks it is.
+func reexecArgv(args []string) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	return append([]string{args[0]}, args[1:]...)
 }

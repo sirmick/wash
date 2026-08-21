@@ -144,3 +144,50 @@ test('a roster verb acts on the row, not on the window it was clicked in', async
   // The window that issued it is untouched — its own session still shows.
   await expect(second.getByText('the window doing the ending')).toBeVisible();
 });
+
+test('an empty Agent window shows the sessions you already have', async ({ page, router }) => {
+  // Opening the app while a session of yours is detached used to give a
+  // blank new-session form, with the way back hidden behind a toggle you
+  // had to know about (docs/AGENT_UX.md N1). A window with nothing to
+  // show should show you what there is.
+  test.setTimeout(60_000);
+  await page.goto(router.url);
+  await expect(page.locator('wash-app-session')).toBeVisible();
+
+  const first = await openAgentWindow(page, 0);
+  await startSession(first, 'something to come back to');
+
+  // Detach it: the session keeps running with no window on it.
+  const pane = first.locator('[data-testid="ai-roster-pane"]');
+  if ((await pane.count()) === 0) await first.locator('[data-testid="ai-roster-toggle"]').click();
+  const row = pane.locator('[data-testid^="agents-row-"]').first();
+  await row.locator('[data-testid="agents-verbs-btn"]').click();
+  await page.locator('[data-testid="agents-row-actions"] [data-testid="agents-menu-detach"]').click();
+  await expect(page.locator('wash-app-ai')).toHaveCount(0, { timeout: 15_000 });
+
+  // Now open the app fresh. The launcher is there, but so is the list —
+  // and one click on the row is the whole way back.
+  const fresh = await openAgentWindow(page, 0);
+  const freshPane = fresh.locator('[data-testid="ai-roster-pane"]');
+  await expect(freshPane).toBeVisible({ timeout: 20_000 });
+  await expect(freshPane.locator('[data-testid^="agents-row-"]')).toHaveCount(1, { timeout: 20_000 });
+});
+
+test('New session opens another window rather than hijacking this one', async ({ page, router }) => {
+  test.setTimeout(60_000);
+  await page.goto(router.url);
+  await expect(page.locator('wash-app-session')).toBeVisible();
+
+  const first = await openAgentWindow(page, 0);
+  await startSession(first, 'keep me');
+  const pane = first.locator('[data-testid="ai-roster-pane"]');
+  if ((await pane.count()) === 0) await first.locator('[data-testid="ai-roster-toggle"]').click();
+
+  await pane.locator('[data-testid="ai-roster-new"]').click();
+
+  // Two windows: the session survives in the first, the launcher is the
+  // second. Clearing the view in place would have left this window's BE
+  // still streaming the old transcript into a "new" session.
+  await expect(page.locator('wash-app-ai')).toHaveCount(2, { timeout: 20_000 });
+  await expect(first.locator('textarea')).toBeVisible();
+});
