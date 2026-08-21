@@ -544,26 +544,39 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               <For each={recent()}>
                 {(s) => {
                   const base = s.title ? `${s.title}  —  ${s.dir ?? ''}` : `${s.agent} · ${s.dir ?? ''}`;
-                  // Two verbs, never confused: a detached session is
-                  // already running and must be reattached to by row key,
-                  // and reattach is key-addressed rather than
-                  // session-id-addressed. Sending `resume` here would
-                  // start a second copy of a session you already have.
-                  return historyAction(s) === 'reattach'
-                    ? (
+                  // Three verbs, never confused, and the difference is
+                  // not cosmetic. A detached session is already running
+                  // and must be reattached BY ROW KEY; a live one already
+                  // has a window and only wants focusing; only a finished
+                  // one is resumed by session id. Sending `resume` for
+                  // either of the first two starts a second copy of a
+                  // conversation you already have.
+                  const act = historyAction(s);
+                  if (act === 'reattach') {
+                    return (
                       <MenuItem
                         label={`Reattach — ${base}`}
                         onClick={() => { close(); send({ kind: 'row_reattach', key: s.row_key }); }}
                         data-testid="ai-menu-reattach"
                       />
-                    )
-                    : (
+                    );
+                  }
+                  if (act === 'focus') {
+                    return (
                       <MenuItem
-                        label={base}
-                        onClick={() => { close(); send({ kind: 'resume', session_id: s.session_id }); }}
-                        data-testid="ai-menu-resume"
+                        label={`Go to — ${base}`}
+                        onClick={() => { close(); send({ kind: 'row_focus', key: s.row_key }); }}
+                        data-testid="ai-menu-focus"
                       />
                     );
+                  }
+                  return (
+                    <MenuItem
+                      label={base}
+                      onClick={() => { close(); send({ kind: 'resume', session_id: s.session_id }); }}
+                      data-testid="ai-menu-resume"
+                    />
+                  );
                 }}
               </For>
             </Menu>
@@ -671,7 +684,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           // send `resume` unconditionally, which for an already-running
           // session meant duplicating it — the exact outcome the menu's
           // filter existed to prevent, in the view that had no filter.
-          if (historyAction(s) === 'reattach') send({ kind: 'row_reattach', key: s.row_key });
+          const act = historyAction(s);
+          if (act === 'reattach') send({ kind: 'row_reattach', key: s.row_key });
+          else if (act === 'focus') send({ kind: 'row_focus', key: s.row_key });
           else send({ kind: 'resume', session_id: s.session_id });
         }}
       />

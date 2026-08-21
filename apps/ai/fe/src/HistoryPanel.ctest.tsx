@@ -164,12 +164,15 @@ test('fmtAgo reads as recency, and says nothing about a session with no time', (
 // to resume a session that was already running — duplicating it. That is
 // exactly what the History MENU's live-filter exists to prevent, in the
 // view that had no filter. Both views now ask the same question.
-test('historyAction tells resume from reattach from neither', () => {
+test('historyAction tells resume from reattach from focus from neither', () => {
   expect(historyAction(sess())).toBe('resume');
-  expect(historyAction(sess({ live: true }))).toBe('none');
   expect(historyAction(sess({ live: true, detached: true, row_key: 'acp:2' }))).toBe('reattach');
-  // Detached with no row key is not reattachable — reattach is
-  // key-addressed, and resuming would start a second copy.
+  // Live with a window: go to it. Resuming would fork a second adapter
+  // onto one conversation (docs/AGENT_UX.md N1).
+  expect(historyAction(sess({ live: true, row_key: 'acp:2' }))).toBe('focus');
+  // Live but unaddressable — no row key, so there is nothing to name in
+  // either a reattach or a focus, and resuming would start a second copy.
+  expect(historyAction(sess({ live: true }))).toBe('none');
   expect(historyAction(sess({ live: true, detached: true }))).toBe('none');
 });
 
@@ -179,8 +182,10 @@ test('a running session does not act like one more thing to open', () => {
     <HistoryPanel
       sessions={() => [
         sess({ session_id: 's-gone' }),
+        // Live with no row key: nothing to address, so nothing to click.
         sess({ session_id: 's-live', live: true }),
         sess({ session_id: 's-det', live: true, detached: true, row_key: 'acp:2' }),
+        sess({ session_id: 's-here', live: true, row_key: 'acp:3' }),
       ]}
       query={() => ''}
       loading={() => false}
@@ -190,9 +195,11 @@ test('a running session does not act like one more thing to open', () => {
     />
   ));
   const rows = getAllByTestId('ai-history-row');
-  expect(rows.map((r) => r.getAttribute('data-action'))).toEqual(['resume', 'none', 'reattach']);
+  expect(rows.map((r) => r.getAttribute('data-action')))
+    .toEqual(['resume', 'none', 'reattach', 'focus']);
 
   rows.forEach((r) => fireEvent.click(r));
-  // The live-and-attached one is inert; the other two report up.
-  expect(clicked).toEqual(['s-gone', 's-det']);
+  // Only the unaddressable one is inert; the rest all report up, each
+  // for the host to turn into its own verb.
+  expect(clicked).toEqual(['s-gone', 's-det', 's-here']);
 });

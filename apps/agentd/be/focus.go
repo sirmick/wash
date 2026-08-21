@@ -78,8 +78,15 @@ func installAskToasts(c *sdk.Conn) {
 }
 
 // registerFocusHandler installs FocusKind.
+//
+// HandleVoid, not HandleFromVoid: this message comes from the SHELL, which
+// is not an app and so carries no router-attested sender —
+// HandleFromVoid drops exactly that shape. Nothing here needs a caller
+// identity anyway. The verb only opens or raises a window onto a session
+// this service already holds; it starts nothing, answers nothing, and
+// discloses nothing that is not already on the roster.
 func registerFocusHandler(bus *sdk.Bus, _ *sdk.Conn) {
-	sdk.HandleFromVoid(bus, FocusKind, func(conn *sdk.Conn, _ string, req focusReq, _ wire.Sender) error {
+	sdk.HandleVoid(bus, FocusKind, func(conn *sdk.Conn, _ string, req focusReq) error {
 		if req.Key == "" {
 			return nil
 		}

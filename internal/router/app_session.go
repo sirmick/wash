@@ -750,14 +750,17 @@ func (inst *AppInstance) relayWindowTitle(m wire.EvtWindowSetTitle) error {
 // gesture the user made elsewhere (docs/AGENT_UX.md N1). Only for owned
 // windows: an app may raise itself, never a neighbour.
 //
-// focusWindow is the same call the shell's own click path makes, so the
-// window rises, takes focus, and drops its attention flag by the usual
-// route rather than a second special case.
+// raiseInstanceWindow is the same helper launchOrRaise uses, so a raise
+// ends in exactly the state a taskbar-pill click does: un-minimized,
+// top of the stack, focused, with the focus/unfocus events relayed to
+// the apps either side of the change. Focusing alone was not enough —
+// it left a minimized window minimized, which is precisely the case a
+// toast has to rescue you from.
 func (inst *AppInstance) relayWindowRaise(m wire.EvtWindowRaise) error {
 	if !inst.ownsWindow(m.Win) {
 		return nil
 	}
-	inst.router.broadcastPatches(inst.router.winSession.focus(m.Win))
+	inst.router.raiseWindow(inst, m.Win)
 	return nil
 }
 

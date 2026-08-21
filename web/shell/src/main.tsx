@@ -427,9 +427,11 @@ function activateToast(instanceID: string, key?: string): void {
     const client = clientForOrigin(origin);
     const appID = client?.appIDs.get(bare);
     if (client && appID) {
+      shellLog('info', 'notify', `activate ${appID} key=${key}`);
       client.conn.sendCtrl({ t: 'app_msg.send', to: { app_id: appID }, data: { kind: FOCUS_KIND, key } });
       return;
     }
+    shellLog('warn', 'notify', `activate: no app for instance ${instanceID}`);
   }
   focusInstance(instanceID);
 }

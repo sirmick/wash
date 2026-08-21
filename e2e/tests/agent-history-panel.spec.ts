@@ -103,19 +103,28 @@ test.describe('agent history panel', () => {
     await expect(panel.locator('[data-testid="ai-history-empty"]')).toContainText('Nothing matches');
   });
 
-  test('picking a session resumes it', async ({ page, router }) => {
+  test('picking a session that is still running goes to it', async ({ page, router }) => {
+    // It used to do nothing at all: the row was live, so it was neither
+    // resumable (that would fork a second adapter onto one conversation)
+    // nor reattachable (it has a window already), and an inert row in a
+    // list you opened to get somewhere is its own defect
+    // (docs/AGENT_UX.md N1).
     test.setTimeout(60_000);
     const win = await startAgent(page, router.url, 'resume me later');
     const panel = await openHistory(page, win);
     const rows = panel.locator('[data-testid="ai-history-row"]');
     await expect(rows).toHaveCount(1, { timeout: 15_000 });
+    // The row says which of the three it is, and it is not "resume".
+    await expect(rows.first()).toHaveAttribute('data-action', 'focus');
 
     const cursor = router.logCursor();
     await rows.first().click();
 
-    // The panel closes and agentd is asked to reopen it. Asserted on the
-    // router log because that is the hop the FE cannot fake.
+    // The panel closes and agentd raises the window showing that session.
+    // Asserted on the router log because that is the hop the FE cannot
+    // fake — and specifically NOT on a resume, which would be the bug.
     await expect(panel).toHaveCount(0);
-    await router.waitForLog(/agentd: (acp session resumed|resume )/, 20_000, cursor);
+    await router.waitForLog(/agentd: focus key=acp:\d+ raising 1 window/, 20_000, cursor);
+    expect(router.log().slice(cursor)).not.toMatch(/acp session resumed/);
   });
 });

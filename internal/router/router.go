@@ -1071,7 +1071,17 @@ func (r *Router) raiseInstanceWindow(inst *AppInstance) {
 	if inst == nil || inst.WindowID == 0 {
 		return
 	}
-	win := inst.WindowID
+	r.raiseWindow(inst, inst.WindowID)
+}
+
+// raiseWindow is raiseInstanceWindow for one NAMED window of an
+// instance. Multi-window apps (wash-display, and any app answering a
+// keyed notification) have to be able to say WHICH window comes forward;
+// the primary is only the right answer for the single-window case.
+func (r *Router) raiseWindow(inst *AppInstance, win uint32) {
+	if inst == nil || win == 0 {
+		return
+	}
 	// Un-minimize first so the raise is actually visible.
 	r.broadcastPatches(r.winSession.setState(win, wire.WindowStateNormal))
 	prev := r.winSession.focusedWindowID()

@@ -84,6 +84,10 @@ export function showToast(t: ToastInput): void {
   card.dataset.testid = 'notification';
   card.dataset.level = t.level ?? 'info';
   card.dataset.instance = t.instanceID;
+  // The subject key on the card, so a test can see which thing a toast
+  // claims to be about — the difference between "a toast appeared" and
+  // "a toast that can take you somewhere appeared".
+  if (t.key) card.dataset.key = t.key;
   const hue = t.origin ? hostColor(t.origin) : null;
   if (t.origin) card.dataset.origin = t.origin;
   card.style.cssText = [

@@ -329,6 +329,22 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			"key":  rowKey,
 		})
 
+	case "row_focus":
+		// History picked a session that is live and already has a window
+		// (docs/AGENT_UX.md N1): go to it. Not a row_* passthrough,
+		// because the verb agentd answers here is the desktop's generic
+		// focus one — the same message a toast activation sends — rather
+		// than an agent_* of its own.
+		rowKey := str(m["key"])
+		if rowKey == "" {
+			return
+		}
+		log.Printf("wash-ai: roster focus key=%s", rowKey)
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind": agentd.FocusKind,
+			"key":  rowKey,
+		})
+
 	case "select":
 		// Master-detail: point this window at another of agentd's sessions.
 		// Same three steps as the agentd-initiated `attach` below — set the

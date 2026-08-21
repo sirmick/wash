@@ -52,8 +52,14 @@ export interface SessionMeta {
  * the view that had no filter. The two views may differ in presentation;
  * they may not differ about what is safe to click.
  */
-export function historyAction(s: SessionMeta): 'resume' | 'reattach' | 'none' {
+export function historyAction(s: SessionMeta): 'resume' | 'reattach' | 'focus' | 'none' {
   if (s.detached && s.row_key) return 'reattach';
+  // Live with a window: picking it goes THERE (docs/AGENT_UX.md N1).
+  // Resuming would fork a second adapter onto one conversation, which is
+  // why this used to be inert — but an inert row in a list you opened to
+  // get somewhere is its own defect, and "go to it" is the answer the
+  // list was always implying.
+  if (s.live && s.row_key) return 'focus';
   if (s.live) return 'none';
   return 'resume';
 }
@@ -208,7 +214,7 @@ export const HistoryPanel: Component<{
                         color: historyAction(s) === 'reattach' ? tokens.accentAmber : tokens.fgMuted,
                       }}
                     >
-                      {historyAction(s) === 'reattach' ? 'running — open' : 'running here'}
+                      {historyAction(s) === 'reattach' ? 'running — open' : 'running — go to it'}
                     </span>
                   </Show>
                   <span style={{ ...metaStyle, 'margin-left': 'auto', 'flex-shrink': 0 }}>
