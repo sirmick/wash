@@ -193,6 +193,24 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // A second session appearing is what makes the list worth its width.
     if (rows().length > 1) setRosterOpen(true);
   });
+  // A question on another row opens the pane that can show it — but only
+  // once per question, so a pane the user deliberately closed stays closed
+  // until something genuinely new needs an answer. Same rule the desktop
+  // rail follows when it auto-expands its agents section on a new ask.
+  const openedFor = new Set<string>();
+  createEffect(() => {
+    let fresh = false;
+    const live = new Set<string>();
+    for (const a of offRowAsks()) {
+      live.add(a.id);
+      if (!openedFor.has(a.id)) {
+        openedFor.add(a.id);
+        fresh = true;
+      }
+    }
+    for (const id of [...openedFor]) if (!live.has(id)) openedFor.delete(id);
+    if (fresh) setRosterOpen(true);
+  });
   // The clock only ticks while rows are on screen, so an idle window holds
   // no interval.
   createEffect(() => {
@@ -206,6 +224,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const row = createMemo(() => (roster().rows ?? []).find((r) => r.key === sessionKey()));
   const asks = createMemo<AgentAsk[]>(() =>
     (roster().asks ?? []).filter((a) => a.row_key === sessionKey()),
+  );
+  // Questions on a row this window is not showing. The session pane above
+  // can only render its own — a window is one session's view — but the
+  // roster pane renders every row's, and answering is key-addressed, so
+  // this window can answer them perfectly well. The gap is purely that the
+  // roster pane can be closed, and a closed pane says nothing about what
+  // is waiting behind it.
+  const offRowAsks = createMemo<AgentAsk[]>(() =>
+    (roster().asks ?? []).filter((a) => a.row_key !== sessionKey()),
   );
   const status = createMemo<AgentStatus>(() => {
     const r = row();
@@ -550,10 +577,34 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const rosterToggle = (
     <Button
       data-testid="ai-roster-toggle"
-      title={rosterOpen() ? 'Hide the roster' : 'Show every agent session on this host'}
+      title={
+        rosterOpen()
+          ? 'Hide the roster'
+          : offRowAsks().length > 0
+            ? `${offRowAsks().length} question(s) waiting on another session`
+            : 'Show every agent session on this host'
+      }
       onClick={() => setRosterOpen(!rosterOpen())}
     >
       {rosterOpen() ? '\u25c0 Roster' : '\u25b6 Roster'}
+      {/* A closed pane must still say that something is blocked behind it.
+          An agent waiting on a human is the one status worth a badge. */}
+      <Show when={!rosterOpen() && offRowAsks().length > 0}>
+        <span
+          data-testid="ai-roster-ask-badge"
+          style={{
+            'margin-left': '6px',
+            padding: '0 5px',
+            'border-radius': '8px',
+            background: tokens.accentAmber,
+            color: tokens.bgCanvas,
+            'font-size': '10px',
+            'font-weight': '600',
+          }}
+        >
+          {offRowAsks().length}
+        </span>
+      </Show>
     </Button>
   );
 
