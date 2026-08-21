@@ -35,9 +35,19 @@ import (
 )
 
 // hostedAskTTL bounds how long the agent waits on a human. Slightly longer
-// than the queue's own askTTL so the queue's expiry is what fires, and the
+// than the queue's own ceiling so the queue's expiry is what fires, and the
 // agent hears "cancelled" once rather than racing two deadlines.
-const hostedAskTTL = askTTL + 5*time.Second
+//
+// It tracks askHardTTL rather than askTTL because askTTL now pauses while
+// no desktop is attached (§ask.go). Keeping this at askTTL+5s would put the
+// backstop *inside* the pause and hand the agent a cancel at 35 seconds
+// regardless — the exact behaviour the pause exists to remove.
+const hostedAskTTL = askHardTTL + 5*time.Second
+
+// reasonAskOff is the hosted tier's own defer reason, alongside ask.go's
+// three. Kept distinct because it is the one refusal the user configured
+// on purpose, and telling them "nobody answered" would be a lie.
+const reasonAskOff = "ask_desktop off"
 
 // hosted is one ACP session this process owns.
 type hosted struct {
@@ -436,11 +446,7 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 		subject := agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput)
 		log.Printf("agentd: acp decide key=%s tool=%s decision=allow reason=yolo subject=%q",
 			h.key, preq.ToolName, subject)
-		if h.conn != nil {
-			e := appendPrompt(h.key, "Auto-approved (yolo): "+preq.ToolName+" "+subject, time.Now())
-			e.Kind = EventMessage
-			pushEvent(h.conn, h.key, e)
-		}
+		h.note("Auto-approved (yolo): " + preq.ToolName + " " + subject)
 		return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
 	}
 
@@ -460,8 +466,7 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 	// unavoidable, and the agent hears `cancelled` rather than waiting on
 	// a desktop that is not attached.
 	if pol.Enabled && !pol.AskDesktopOrDefault() {
-		log.Printf("agentd: acp decide key=%s tool=%s decision=defer reason=%q subject=%q",
-			h.key, preq.ToolName, "ask_desktop off", agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput))
+		h.narrateUnanswered(reasonAskOff, preq.ToolName, agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput))
 		return acp.Cancelled(), nil
 	}
 
@@ -470,7 +475,7 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 	// answer that lands after the turn already ended cannot resurrect it.
 	defer h.narrated()
 
-	answer := make(chan string, 1)
+	answer := make(chan verdict, 1)
 	queued := enqueueAsk(askSpec{
 		Agent:          h.agent,
 		Tool:           preq.ToolName,
@@ -479,33 +484,110 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 		RowKey:         h.key,
 		SourceApp:      AppID,
 		SourceInstance: "",
-	}, func(decision, _ string) error {
+	}, func(decision, why string) error {
 		select {
-		case answer <- decision:
+		case answer <- verdict{decision: decision, why: why}:
 		default:
 		}
 		return nil
 	})
+	subject := agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput)
 	if !queued {
-		// enqueueAsk already answered with defer; drain it so the channel
-		// send above cannot leak, then hand the decision back.
+		// enqueueAsk already answered with defer, and the buffered channel
+		// is holding *which* defer. Read it so the refusal can say which
+		// one rather than becoming an anonymous cancel.
+		v := verdict{decision: DecisionDefer, why: ReasonNoDesktop}
+		select {
+		case v = <-answer:
+		default:
+		}
+		h.narrateUnanswered(v.why, preq.ToolName, subject)
 		return acp.Cancelled(), nil
 	}
 
 	select {
 	case <-ctx.Done():
+		// The turn was cancelled out from under the question. That is a
+		// real cancel, so it needs no explaining — the human did it.
+		log.Printf("agentd: acp decide key=%s tool=%s decision=cancelled reason=%q", h.key, preq.ToolName, "turn ended")
 		return acp.Cancelled(), nil
-	case d := <-answer:
-		switch d {
+	case v := <-answer:
+		switch v.decision {
 		case DecisionAllow:
 			return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
 		case DecisionDeny:
 			return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
 		}
+		h.narrateUnanswered(v.why, preq.ToolName, subject)
 		return acp.Cancelled(), nil
 	case <-time.After(hostedAskTTL):
+		// Backstop only: the queue owns expiry and should always have
+		// answered by now. Reaching here means the queue lost the ask.
+		h.narrateUnanswered(ReasonTimeout, preq.ToolName, subject)
 		return acp.Cancelled(), nil
 	}
+}
+
+// verdict is an answer plus why it is that answer. The `why` is the whole
+// difference between "the user said no" and "a timer said no", which the
+// wire cannot carry: ACP v1's outcome discriminator is `selected` or
+// `cancelled` and nothing else (internal/acp/types.go), so an unanswered
+// question is *indistinguishable to the agent* from the user hitting
+// cancel. Since the protocol cannot tell them apart, the transcript must.
+type verdict struct{ decision, why string }
+
+// unansweredReasons turns an internal defer reason into something a human
+// reading the transcript can act on. Anything unmapped falls through
+// verbatim rather than being swallowed — an unexplained refusal is the bug
+// this function exists to prevent, so a clumsy explanation beats none.
+func unansweredReason(why string) string {
+	switch why {
+	case ReasonTimeout:
+		return "nobody answered in time"
+	case ReasonNoDesktop:
+		return "no desktop was attached to ask"
+	case ReasonTooMany:
+		return "too many questions already waiting on this agent"
+	case reasonAskOff:
+		return "asking is switched off in agents.json"
+	}
+	if why == "" {
+		return "no answer"
+	}
+	return why
+}
+
+// note is wash speaking in its own transcript — an auto-approval, a
+// refusal nobody chose, a capability it does not have.
+//
+// It uses appendEvent rather than appendPrompt on purpose. These callers
+// all used to borrow appendPrompt, which stores what the HUMAN typed: the
+// stored event kept Kind=user while only the pushed copy carried
+// EventMessage, so a live window and a reloaded one showed the same note
+// differently. appendEvent's own doc comment names that trap; these were
+// the callers still in it.
+func (h *hosted) note(text string) {
+	if h.conn == nil {
+		return
+	}
+	pushEvent(h.conn, h.key, appendEvent(h.key, Event{Kind: EventMessage, Text: text}, time.Now()))
+}
+
+// narrateUnanswered puts a refusal nobody chose into the transcript.
+//
+// It mirrors the yolo line above deliberately. That path narrates itself
+// on the principle that "an agent that is being auto-approved must not
+// look like one that is being watched"; the inverse was never written, so
+// an auto-refused tool call simply failed with nothing on screen to say
+// why. The loud path was narrated and the silent one was not.
+func (h *hosted) narrateUnanswered(why, tool, subject string) {
+	log.Printf("agentd: acp decide key=%s tool=%s decision=cancelled reason=%q subject=%q",
+		h.key, tool, why, subject)
+	text := "Not approved — " + unansweredReason(why) + ": " + tool
+	if subject != "" {
+		text += " " + subject
+	}
+	h.note(text)
 }
 
 // pick chooses the option to select for a decision, preferring the
@@ -730,15 +812,11 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 			return nil
 		}
 		log.Printf("agentd: acp yolo key=%s on=%v", h.key, req.On)
-		if h.conn != nil {
-			msg := "Auto-approval (yolo) is OFF — wash will ask before tools run."
-			if req.On {
-				msg = "Auto-approval (yolo) is ON — wash will approve tool requests without asking."
-			}
-			e := appendPrompt(h.key, msg, time.Now())
-			e.Kind = EventMessage
-			pushEvent(h.conn, h.key, e)
+		msg := "Auto-approval (yolo) is OFF — wash will ask before tools run."
+		if req.On {
+			msg = "Auto-approval (yolo) is ON — wash will approve tool requests without asking."
 		}
+		h.note(msg)
 		h.republish()
 		return nil
 	})
@@ -834,11 +912,7 @@ type startReq struct {
 // the moment a form renderer exists.
 func (h *hosted) Elicit(_ context.Context, req acp.ElicitRequest) (acp.ElicitResponse, error) {
 	log.Printf("agentd: acp elicitation key=%s message=%q (declining — no form renderer)", h.key, req.Message)
-	if h.conn != nil {
-		e := appendPrompt(h.key, "The agent asked: "+req.Message+"\n(wash cannot answer structured questions yet, so it declined.)", time.Now())
-		e.Kind = EventMessage
-		pushEvent(h.conn, h.key, e)
-	}
+	h.note("The agent asked: " + req.Message + "\n(wash cannot answer structured questions yet, so it declined.)")
 	return acp.ElicitResponse{Action: acp.ElicitDecline}, nil
 }
 

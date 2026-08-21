@@ -33,7 +33,49 @@ import (
 // lets the agent's own prompt take over. The terminal waits a little
 // longer than this, and the hook helper longer still (§12) — each layer
 // bounded by the one outside it.
+//
+// It is *desktop time*, not wall time. A question asked thirty seconds
+// before someone closed the lid must not be denied while they are away:
+// the clock only runs when there is a desktop that could plausibly answer
+// (see expireAsk). Without that, a wall-clock fuse guarantees the
+// questions asked at the worst moment are the ones nobody ever sees.
 const askTTL = 30 * time.Second
+
+// askFirstRunTTL is askTTL for a user who has no rules yet.
+//
+// With no ~/.config/wash/agents.json, agentpolicy matches nothing and
+// *every* tool call asks a human — which is exactly when a thirty-second
+// budget per question is least survivable, and when the person answering
+// has the least practice at it. Rules only accumulate as they click
+// "always", so friction is highest on the first session and falls from
+// there; that is the wrong direction for a first impression. The window
+// tightens to askTTL as soon as they have taught it anything at all.
+//
+// This is a timing change only. It deliberately does not seed a policy:
+// what wash may do unasked is the user's decision to make, not a default
+// to inherit.
+const askFirstRunTTL = 3 * time.Minute
+
+// askHardTTL is the wall-clock ceiling that survives the pause above.
+// Something must be finite: RequestPermission blocks the agent for the
+// whole duration, so an ask that waits forever wedges the turn instead of
+// failing it. This is the "high but finite" end of that trade — long
+// enough to cover a lunch break or an overnight disconnect, short enough
+// that a forgotten session eventually lets go.
+const askHardTTL = 30 * time.Minute
+
+// Why an ask resolved without a human. These are the `why` half of
+// replyFn, and they exist because the three producers of DecisionDefer
+// mean genuinely different things: nobody was home, this row is shouting,
+// or the human had their chance and did not take it. Collapsing them is
+// what made "auto-reject everything" look like a policy rather than a
+// timer.
+const (
+	ReasonNoDesktop = "no desktop"
+	ReasonTooMany   = "too many pending"
+	ReasonTimeout   = "timeout"
+	ReasonDesktop   = "desktop"
+)
 
 // maxPendingPerRow caps outstanding questions from one roster row. A
 // process that spams asks gets deferred rather than turning the sidebar
@@ -83,6 +125,14 @@ type pending struct {
 	// reply is how this particular requester hears the verdict.
 	reply replyFn
 	timer *time.Timer
+	// softTTL is this question's own askTTL — longer on a machine with no
+	// rules yet. Held per-ask so a re-arm uses the same window the
+	// question started with rather than whatever the policy says now.
+	softTTL time.Duration
+	// hardDeadline is the wall-clock ceiling. The soft askTTL timer
+	// re-arms across periods with no desktop attached; this one does not
+	// move, so a question cannot outlive the turn it is blocking.
+	hardDeadline time.Time
 }
 
 // askSpec is what a producer knows about a question before the queue gives
@@ -102,7 +152,20 @@ var asks = map[string]*pending{}
 var (
 	stateSubscribers = func() int { return svc.SubscriberCount() }
 	mutateState      = func(fn func(*State)) { svc.Mutate(fn) }
+	// policyRuleCount is how many rules the human has taught wash. One
+	// stat per question, the same price the hosted tier already pays to
+	// read the policy fresh (acp.go), and for the same reason: a rule
+	// written thirty seconds ago should count.
+	policyRuleCount = func() int { return len(agentpolicy.Load(agentpolicy.Path()).Rules) }
 )
+
+// softTTLNow picks the window for a question about to be asked.
+func softTTLNow() time.Duration {
+	if policyRuleCount() == 0 {
+		return askFirstRunTTL
+	}
+	return askTTL
+}
 
 // askSeq numbers questions within this process. Ids are opaque to
 // everyone else.
@@ -161,7 +224,7 @@ func registerAskHandlers(bus *sdk.Bus, c *sdk.Conn) {
 			}
 		}
 		log.Printf("agentd: answer id=%s tool=%s decision=%s remember=%v", req.ID, p.Tool, decision, req.Remember)
-		return p.reply(decision, "desktop")
+		return p.reply(decision, ReasonDesktop)
 	})
 }
 
@@ -173,11 +236,12 @@ func enqueueAsk(spec askSpec, reply replyFn) bool {
 	// Nobody watching ⇒ answer now. This is the difference between
 	// "wash asks you" and "wash stalls your agent".
 	if stateSubscribers() == 0 {
-		_ = reply(DecisionDefer, "no desktop")
+		_ = reply(DecisionDefer, ReasonNoDesktop)
 		return false
 	}
 
 	now := time.Now()
+	soft := softTTLNow()
 	var over bool
 	mutateState(func(s *State) {
 		if countForRow(spec.RowKey) >= maxPendingPerRow {
@@ -199,39 +263,76 @@ func enqueueAsk(spec askSpec, reply replyFn) bool {
 				SourceApp:      spec.SourceApp,
 				SourceInstance: spec.SourceInstance,
 			},
-			asked: now,
-			reply: reply,
+			asked:        now,
+			reply:        reply,
+			softTTL:      soft,
+			hardDeadline: now.Add(askHardTTL),
 		}
-		// Expiry is the safety net for a human who never answers.
-		p.timer = time.AfterFunc(askTTL, func() { expireAsk(id) })
+		// Expiry is the safety net for a human who never answers. It is a
+		// safety net, not a deadline: expireAsk re-arms it for as long as
+		// there is nobody who could have answered.
+		p.timer = time.AfterFunc(soft, func() { expireAsk(id) })
 		asks[id] = p
 		s.Asks = publishAsks(now)
 	})
 	if over {
 		log.Printf("agentd: ask rejected row=%s tool=%s reason=too-many-pending", spec.RowKey, spec.Tool)
-		_ = reply(DecisionDefer, "too many pending")
+		_ = reply(DecisionDefer, ReasonTooMany)
 		return false
 	}
-	log.Printf("agentd: ask row=%s agent=%s tool=%s subject=%q", spec.RowKey, spec.Agent, spec.Tool, spec.Subject)
+	log.Printf("agentd: ask row=%s agent=%s tool=%s subject=%q ttl=%s", spec.RowKey, spec.Agent, spec.Tool, spec.Subject, soft)
 	return true
 }
 
-// expireAsk resolves a question nobody answered in time.
+// expireAsk resolves a question nobody answered in time — or, if nobody
+// *could* have answered it, gives it another askTTL to be seen.
+//
+// The pause is the whole point. A wall-clock fuse denies the questions
+// asked while the user is away, which is precisely when they are least
+// able to answer and most likely to care: on 2026-08-20 ten consecutive
+// asks expired unanswered because the lid was shut for the entire window.
+// Subscriber count is the right signal rather than a per-row one, because
+// the sidebar rail renders every row's asks — one attached desktop can
+// answer any of them.
+//
+// hardDeadline is the floor under the pause: past it the ask resolves
+// whether or not anyone was watching, so a blocked agent turn is bounded.
 func expireAsk(id string) {
 	var p *pending
+	var paused bool
+	now := time.Now()
+	// Read the subscriber count BEFORE entering Mutate: fn must not call
+	// back into the state service, which takes the same lock and would
+	// deadlock (pkg/sdk/stateservice.go). A count one instant stale is
+	// harmless here — the next timer window re-reads it.
+	watching := stateSubscribers()
 	mutateState(func(s *State) {
 		p = asks[id]
 		if p == nil {
 			return
 		}
+		if p.timer != nil && watching == 0 && now.Before(p.hardDeadline) {
+			// Nobody could have seen this. Give it another window and
+			// republish, so the age the sidebar shows stays honest.
+			paused = true
+			p.timer.Reset(p.softTTL)
+			s.Asks = publishAsks(now)
+			return
+		}
 		delete(asks, id)
-		s.Asks = publishAsks(time.Now())
+		s.Asks = publishAsks(now)
 	})
 	if p == nil {
 		return
 	}
-	log.Printf("agentd: ask expired id=%s tool=%s after=%s", id, p.Tool, askTTL)
-	_ = p.reply(DecisionDefer, "timeout")
+	if paused {
+		log.Printf("agentd: ask waiting id=%s tool=%s age=%s reason=no-desktop hard_deadline_in=%s",
+			id, p.Tool, now.Sub(p.asked).Round(time.Second), p.hardDeadline.Sub(now).Round(time.Second))
+		return
+	}
+	log.Printf("agentd: ask expired id=%s row=%s tool=%s after=%s age=%s subscribers=%d",
+		id, p.RowKey, p.Tool, p.softTTL, now.Sub(p.asked).Round(time.Second), watching)
+	_ = p.reply(DecisionDefer, ReasonTimeout)
 }
 
 // replyToInstance is the reply route for a question that arrived over the

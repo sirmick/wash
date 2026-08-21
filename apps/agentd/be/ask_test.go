@@ -227,3 +227,167 @@ func TestAnsweredAskStopsItsTimer(t *testing.T) {
 	case <-time.After(150 * time.Millisecond):
 	}
 }
+
+// withVaryingState is withState for tests that need the desktop to come and
+// go mid-test — the case the pause exists for. The returned setter changes
+// what stateSubscribers() reports.
+func withVaryingState(t *testing.T, subs int) func(int) {
+	t.Helper()
+	oldSubs, oldMutate := stateSubscribers, mutateState
+	var st State
+	var mu sync.Mutex
+	n := subs
+	stateSubscribers = func() int { mu.Lock(); defer mu.Unlock(); return n }
+	mutateState = func(fn func(*State)) {
+		mu.Lock()
+		defer mu.Unlock()
+		fn(&st)
+	}
+	t.Cleanup(func() { stateSubscribers, mutateState = oldSubs, oldMutate })
+	return func(v int) { mu.Lock(); n = v; mu.Unlock() }
+}
+
+// enqueueOne queues a question and returns its id and a channel carrying
+// whatever the producer is eventually told.
+func enqueueOne(t *testing.T) (string, chan [2]string) {
+	t.Helper()
+	answered := make(chan [2]string, 4)
+	if ok := enqueueAsk(askSpec{Agent: "codex", Tool: "Bash", RowKey: "row-1"},
+		func(decision, why string) error { answered <- [2]string{decision, why}; return nil }); !ok {
+		t.Fatal("enqueue refused with a subscriber present")
+	}
+	var id string
+	for k := range asks {
+		id = k
+	}
+	return id, answered
+}
+
+// The bug this file's askTTL comment describes: a question asked just
+// before someone shut their laptop must still be there when they open it.
+// Expiry while nobody is attached is a denial nobody chose, delivered to
+// an agent that cannot tell it from a human clicking cancel.
+func TestExpiryPausesWhileNoDesktopIsAttached(t *testing.T) {
+	resetAsks()
+	setSubs := withVaryingState(t, 1)
+	id, answered := enqueueOne(t)
+
+	setSubs(0) // the lid closes
+	expireAsk(id)
+
+	if _, still := asks[id]; !still {
+		t.Fatal("question dropped while nobody could answer it — that is the auto-reject bug")
+	}
+	select {
+	case got := <-answered:
+		t.Fatalf("producer was told %v with no desktop attached", got)
+	default:
+	}
+
+	setSubs(1) // and opens again
+	expireAsk(id)
+
+	select {
+	case got := <-answered:
+		if got[0] != DecisionDefer || got[1] != ReasonTimeout {
+			t.Errorf("expiry reported %q/%q, want %q/%q", got[0], got[1], DecisionDefer, ReasonTimeout)
+		}
+	default:
+		t.Fatal("expiry with a desktop attached did not answer — the agent would hang")
+	}
+	if _, still := asks[id]; still {
+		t.Error("expired question left in the queue")
+	}
+}
+
+// The pause is bounded. RequestPermission blocks the agent for as long as
+// the question lives, so "wait for a desktop" cannot mean "wait forever".
+func TestExpiryHonoursTheHardCeiling(t *testing.T) {
+	resetAsks()
+	setSubs := withVaryingState(t, 1)
+	id, answered := enqueueOne(t)
+
+	asks[id].hardDeadline = time.Now().Add(-time.Second)
+	setSubs(0)
+	expireAsk(id)
+
+	select {
+	case got := <-answered:
+		if got[0] != DecisionDefer {
+			t.Errorf("decision = %q, want %q", got[0], DecisionDefer)
+		}
+	default:
+		t.Fatal("past the hard ceiling the question must resolve even with nobody watching")
+	}
+	if _, still := asks[id]; still {
+		t.Error("question survived its hard deadline")
+	}
+}
+
+// Three producers of DecisionDefer, three meanings. They shared one code
+// path and one silent outcome, which is how a timer came to look like a
+// policy; keeping them distinguishable is what lets the transcript say
+// which one happened.
+func TestDeferReasonsStayDistinct(t *testing.T) {
+	seen := map[string]string{}
+	for _, why := range []string{ReasonTimeout, ReasonNoDesktop, ReasonTooMany, reasonAskOff} {
+		text := unansweredReason(why)
+		if text == "" || text == why {
+			t.Errorf("reason %q has no human explanation (%q)", why, text)
+		}
+		if prev, dup := seen[text]; dup {
+			t.Errorf("reasons %q and %q both explain themselves as %q", prev, why, text)
+		}
+		seen[text] = why
+	}
+	// An unmapped reason must still say something rather than vanish.
+	if got := unansweredReason("weather"); got != "weather" {
+		t.Errorf("unmapped reason = %q, want it passed through verbatim", got)
+	}
+	if got := unansweredReason(""); got == "" {
+		t.Error("empty reason produced an empty explanation — a refusal with no words is the bug")
+	}
+}
+
+// withRuleCount stands in for the policy file's rule table.
+func withRuleCount(t *testing.T, n int) {
+	t.Helper()
+	old := policyRuleCount
+	policyRuleCount = func() int { return n }
+	t.Cleanup(func() { policyRuleCount = old })
+}
+
+// A machine with no agents.json asks about everything, because
+// agentpolicy matches nothing. That is the session where a 30-second
+// budget per question is least survivable and the human has the least
+// practice answering — so it gets a longer one, which tightens as soon as
+// they have taught wash anything.
+func TestFirstRunGetsALongerWindow(t *testing.T) {
+	cases := []struct {
+		name  string
+		rules int
+		want  time.Duration
+	}{
+		{name: "no rules yet", rules: 0, want: askFirstRunTTL},
+		{name: "one rule taught", rules: 1, want: askTTL},
+		{name: "well trained", rules: 20, want: askTTL},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resetAsks()
+			withState(t, 1)
+			withRuleCount(t, tc.rules)
+
+			id, _ := enqueueOne(t)
+			if got := asks[id].softTTL; got != tc.want {
+				t.Errorf("softTTL = %s, want %s", got, tc.want)
+			}
+		})
+	}
+	if askFirstRunTTL <= askTTL {
+		t.Error("the first-run window must be the longer one")
+	}
+	if askFirstRunTTL >= askHardTTL {
+		t.Error("the first-run window must still sit under the hard ceiling")
+	}
+}
