@@ -629,6 +629,17 @@ type SessionMeta struct {
 	// Bytes is the transcript's size on disk, so the UI can say what
 	// history costs and offer to prune the expensive ones.
 	Bytes int64 `json:"bytes,omitempty"`
+	// Live / Detached / RowKey are stamped on the way out from the
+	// roster, not read from the file — the transcript index knows what a
+	// session WAS, and only the roster knows what it is doing now.
+	//
+	// The panel did not have these at all, so it would happily offer to
+	// resume a session that was already running: the precise duplication
+	// the menu's filter exists to prevent, in the view that had no
+	// filter. Same predicate, both views (see rosterIndex).
+	Live     bool   `json:"live,omitempty"`
+	Detached bool   `json:"detached,omitempty"`
+	RowKey   string `json:"row_key,omitempty"`
 }
 
 // summaryTailBytes is how much of the end of a file is scanned for the

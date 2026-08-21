@@ -157,6 +157,14 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		if sessions == nil {
 			sessions = []SessionMeta{}
 		}
+		// Stamp liveness from the roster. Snapshot, not Mutate: this is a
+		// read, and Mutate would push the whole state to every subscriber
+		// on somebody's keystroke.
+		idx := rosterIndex(svc.Snapshot().Rows)
+		for i := range sessions {
+			st := idx[sessions[i].SessionID]
+			sessions[i].Live, sessions[i].Detached, sessions[i].RowKey = st.Live, st.Detached, st.RowKey
+		}
 		return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
 			"kind":     "history",
 			"query":    req.Query,

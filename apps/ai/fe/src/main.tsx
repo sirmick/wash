@@ -12,7 +12,7 @@
 // list); M2 renders it and, in M2b, acts on it.
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
-import { HistoryPanel, type SessionMeta } from './HistoryPanel.tsx';
+import { HistoryPanel, historyAction, type SessionMeta } from './HistoryPanel.tsx';
 import type { Component } from 'solid-js';
 import {
   AgentRoster, AgentSession, Button, FilePicker, Menu, MenuBar, MenuItem, MenuSeparator, Overlay, Select,
@@ -36,7 +36,12 @@ interface RecentSession {
   /** the agent's own one-line name for what the session was about */
   title?: string;
   last_seen: number;
+  /** running right now — in the roster above, not something to resume */
   live?: boolean;
+  /** running, but with no window pointing at it: reattach, do not resume */
+  detached?: boolean;
+  /** the roster key a reattach names; present only while it has a row */
+  row_key?: string;
 }
 
 interface RosterState {
@@ -272,7 +277,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     return msgs.length ? (msgs[msgs.length - 1].text ?? '') : '';
   };
 
-  const recent = () => (roster().recent ?? []).filter((s) => !s.live);
+  // Live and REACHABLE are not the same thing. Hiding live sessions is
+  // right — offering to resume one that is already running would be
+  // offering to duplicate it — but a DETACHED session is live and is
+  // exactly what you opened this menu to get back. It gets listed with a
+  // reattach verb instead of a resume one.
+  const recent = () => (roster().recent ?? []).filter((s) => historyAction(s) !== 'none');
   const configs = () => row()?.configs ?? [];
 
   // The menus advertise these, so they have to exist. A menu that shows a
@@ -509,13 +519,29 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 <MenuItem label="No earlier sessions" disabled onClick={() => {}} />
               </Show>
               <For each={recent()}>
-                {(s) => (
-                  <MenuItem
-                    label={s.title ? `${s.title}  —  ${s.dir ?? ''}` : `${s.agent} · ${s.dir ?? ''}`}
-                    onClick={() => { close(); send({ kind: 'resume', session_id: s.session_id }); }}
-                    data-testid="ai-menu-resume"
-                  />
-                )}
+                {(s) => {
+                  const base = s.title ? `${s.title}  —  ${s.dir ?? ''}` : `${s.agent} · ${s.dir ?? ''}`;
+                  // Two verbs, never confused: a detached session is
+                  // already running and must be reattached to by row key,
+                  // and reattach is key-addressed rather than
+                  // session-id-addressed. Sending `resume` here would
+                  // start a second copy of a session you already have.
+                  return historyAction(s) === 'reattach'
+                    ? (
+                      <MenuItem
+                        label={`Reattach — ${base}`}
+                        onClick={() => { close(); send({ kind: 'row_reattach', key: s.row_key }); }}
+                        data-testid="ai-menu-reattach"
+                      />
+                    )
+                    : (
+                      <MenuItem
+                        label={base}
+                        onClick={() => { close(); send({ kind: 'resume', session_id: s.session_id }); }}
+                        data-testid="ai-menu-resume"
+                      />
+                    );
+                }}
               </For>
             </Menu>
           ),
@@ -618,7 +644,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         onClose={() => setHistoryOpen(false)}
         onResume={(s) => {
           setHistoryOpen(false);
-          send({ kind: 'resume', session_id: s.session_id });
+          // Same predicate as the menu, same two verbs. The panel used to
+          // send `resume` unconditionally, which for an already-running
+          // session meant duplicating it — the exact outcome the menu's
+          // filter existed to prevent, in the view that had no filter.
+          if (historyAction(s) === 'reattach') send({ kind: 'row_reattach', key: s.row_key });
+          else send({ kind: 'resume', session_id: s.session_id });
         }}
       />
     </Show>

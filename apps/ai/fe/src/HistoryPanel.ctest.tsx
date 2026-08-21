@@ -9,7 +9,7 @@
 
 import { test, expect, afterEach } from 'vitest';
 import { render, fireEvent, cleanup } from '@solidjs/testing-library';
-import { HistoryPanel, fmtAgo, fmtSpan, sessionLabel, type SessionMeta } from './HistoryPanel.tsx';
+import { HistoryPanel, fmtAgo, fmtSpan, historyAction, sessionLabel, type SessionMeta } from './HistoryPanel.tsx';
 
 afterEach(cleanup);
 
@@ -158,4 +158,41 @@ test('fmtAgo reads as recency, and says nothing about a session with no time', (
   expect(fmtAgo(now, now - 7_200_000)).toBe('2h ago');
   expect(fmtAgo(now, now - 172_800_000)).toBe('2d ago');
   expect(fmtAgo(now, 0)).toBe('');
+});
+
+// The panel had no notion of liveness at all, so it would happily offer
+// to resume a session that was already running — duplicating it. That is
+// exactly what the History MENU's live-filter exists to prevent, in the
+// view that had no filter. Both views now ask the same question.
+test('historyAction tells resume from reattach from neither', () => {
+  expect(historyAction(sess())).toBe('resume');
+  expect(historyAction(sess({ live: true }))).toBe('none');
+  expect(historyAction(sess({ live: true, detached: true, row_key: 'acp:2' }))).toBe('reattach');
+  // Detached with no row key is not reattachable — reattach is
+  // key-addressed, and resuming would start a second copy.
+  expect(historyAction(sess({ live: true, detached: true }))).toBe('none');
+});
+
+test('a running session does not act like one more thing to open', () => {
+  const clicked: string[] = [];
+  const { getAllByTestId } = render(() => (
+    <HistoryPanel
+      sessions={() => [
+        sess({ session_id: 's-gone' }),
+        sess({ session_id: 's-live', live: true }),
+        sess({ session_id: 's-det', live: true, detached: true, row_key: 'acp:2' }),
+      ]}
+      query={() => ''}
+      loading={() => false}
+      onQuery={noop}
+      onClose={noop}
+      onResume={(s) => clicked.push(s.session_id)}
+    />
+  ));
+  const rows = getAllByTestId('ai-history-row');
+  expect(rows.map((r) => r.getAttribute('data-action'))).toEqual(['resume', 'none', 'reattach']);
+
+  rows.forEach((r) => fireEvent.click(r));
+  // The live-and-attached one is inert; the other two report up.
+  expect(clicked).toEqual(['s-gone', 's-det']);
 });

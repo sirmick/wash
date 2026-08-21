@@ -27,9 +27,23 @@ import (
 	"github.com/sirmick/wash/pkg/wire"
 )
 
-// historyCap bounds the remembered sessions. Twenty is more than a day's
-// work and keeps the sidebar list glanceable.
-const historyCap = 20
+// historyCap bounds the remembered sessions.
+//
+// Twenty was "more than a day's work", and on the machine this was
+// reported from it was saturated at 20/20 spanning 344 hours — a
+// fortnight on a quiet box and about two days on a busy one, with real
+// work competing for slots against throwaways. The store is a few hundred
+// bytes an entry; there is no reason for it to be the scarce thing.
+const historyCap = 100
+
+// recentPublishCap is how many of those ride the roster's state push.
+//
+// The store and the MENU want different sizes, and conflating them is why
+// raising one used to mean bloating the other. Recent goes to every
+// subscriber on every roster mutate, and a menu is for the last few
+// things you touched — browsing the rest is the History panel's job,
+// which searches transcripts and carries metadata a menu item cannot.
+const recentPublishCap = 15
 
 // historyFlush is the longest the on-disk copy lags memory. Keepalives
 // touch last-seen constantly; only a real change (a new session, a moved
@@ -54,6 +68,50 @@ type Session struct {
 	// running right now is in the roster above, so the Recent list greys
 	// it rather than offering to resume what is already here.
 	Live bool `json:"live,omitempty"`
+	// Detached is a live session with no window pointing at it.
+	//
+	// Live and REACHABLE are not the same thing, and treating them as one
+	// is what made the History menu useless in exactly the case you open
+	// it for. agent_detach sets the flag and closes the window but never
+	// retires the row, so a detached session is still "live" — and the
+	// menu, which hides live sessions to avoid offering to duplicate a
+	// running one, hid the one thing you were trying to get back.
+	//
+	// A detached session is not something to resume. It is something to
+	// reattach to, which is a different verb with a different outcome.
+	Detached bool `json:"detached,omitempty"`
+	// RowKey is the roster key this session is running as, present only
+	// while it has a row. Reattach is key-addressed, not session-id
+	// addressed, so the menu needs this to offer the verb at all.
+	RowKey string `json:"row_key,omitempty"`
+}
+
+// rosterState is what the roster knows about one stored session id.
+type rosterState struct {
+	Live     bool
+	Detached bool
+	RowKey   string
+}
+
+// rosterIndex maps agent session ids to what the roster currently says
+// about them.
+//
+// One function, two consumers: the History MENU (via publishHistory) and
+// the History PANEL (via the agent_history handler). They read different
+// stores — in-memory history vs the transcript index — and used to
+// disagree about what was safe to click: the menu filtered live sessions
+// and the panel did not, so one of them hid sessions you wanted and the
+// other offered to duplicate ones you already had. The presentation may
+// differ; the predicate may not.
+func rosterIndex(rs []Row) map[string]rosterState {
+	out := map[string]rosterState{}
+	for _, r := range rs {
+		if r.SessionID == "" {
+			continue
+		}
+		out[r.SessionID] = rosterState{Live: true, Detached: r.Detached, RowKey: r.Key}
+	}
+	return out
 }
 
 var (
@@ -110,22 +168,26 @@ func rememberSession(agent, sessionID, cwd, title string, now time.Time) bool {
 	return true
 }
 
-// publishHistory renders the Recent list, marking the sessions that are
-// running right now (they're in the roster above; offering to resume them
-// would be offering to duplicate them).
+// publishHistory renders the Recent list, marking what the roster knows
+// about each entry: running-and-attached (offering to resume it would be
+// offering to duplicate it), running-but-detached (offer to reattach), or
+// gone (offer to resume).
 func publishHistory() []Session {
-	live := map[string]bool{}
+	live := make([]Row, 0, len(rows))
 	for _, r := range rows {
-		if r.SessionID != "" {
-			live[r.SessionID] = true
-		}
+		live = append(live, r.Row)
 	}
+	idx := rosterIndex(live)
 	out := make([]Session, 0, len(history))
 	for _, s := range history {
-		s.Live = live[s.SessionID]
+		st := idx[s.SessionID]
+		s.Live, s.Detached, s.RowKey = st.Live, st.Detached, st.RowKey
 		out = append(out, s)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].LastSeen > out[j].LastSeen })
+	if len(out) > recentPublishCap {
+		out = out[:recentPublishCap]
+	}
 	return out
 }
 

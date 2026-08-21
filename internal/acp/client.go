@@ -143,14 +143,19 @@ func (c *Client) SetConfigOption(ctx context.Context, sessionID, configID, value
 // whole conversation as session/update notifications *before* answering,
 // so the handler sees the history arrive first — which is exactly what a
 // transcript wants, and why this call can take a while.
-func (c *Client) LoadSession(ctx context.Context, sessionID, cwd string, mcp []McpServer) error {
+func (c *Client) LoadSession(ctx context.Context, sessionID, cwd string, mcp []McpServer) (LoadSessionResponse, error) {
+	var res LoadSessionResponse
 	if !c.init.AgentCapabilities.LoadSession {
-		return fmt.Errorf("acp: agent %q cannot load sessions", c.init.AgentInfo.Name)
+		return res, fmt.Errorf("acp: agent %q cannot load sessions", c.init.AgentInfo.Name)
 	}
 	if mcp == nil {
 		mcp = []McpServer{}
 	}
-	return c.conn.Call(ctx, MethodSessionLoad, LoadSessionRequest{SessionID: sessionID, Cwd: cwd, McpServers: mcp}, nil)
+	// The response destination used to be nil, which threw away the
+	// settings block a resumed session needs. An adapter that sends
+	// nothing leaves res zero, so this is strictly additive.
+	err := c.conn.Call(ctx, MethodSessionLoad, LoadSessionRequest{SessionID: sessionID, Cwd: cwd, McpServers: mcp}, &res)
+	return res, err
 }
 
 // Prompt runs one turn and returns when the agent stops. Everything the

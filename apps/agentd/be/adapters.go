@@ -356,14 +356,27 @@ func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, e
 	// Register BEFORE loading: the replay arrives as notifications, and
 	// they need a roster row and a transcript to land in.
 	h.register()
-	if err := h.client.LoadSession(ctx, sessionID, h.cwd, nil); err != nil {
+	res, err := h.client.LoadSession(ctx, sessionID, h.cwd, nil)
+	if err != nil {
 		h.retire()
 		return nil, fmt.Errorf("reopen %s: %w", sessionID, err)
 	}
+	// The same two calls session/new makes. Without them h.modes and
+	// h.configs stayed nil, publicModes(nil)/publicConfigs(nil) produced
+	// nothing, omitempty dropped Modes and Configs off the roster row,
+	// and the FE rendered an empty Session menu — no model, no thinking
+	// level — on every resumed session.
+	h.applyModes(res.Modes)
+	h.applyConfigs(res.ConfigOptions)
 	// The replay has landed by the time LoadSession answers, so this is
 	// the moment the stored and replayed records can be settled.
 	reconcileResume(h.key, sessionID, time.Now())
-	log.Printf("agentd: acp session resumed key=%s agent=%s session=%s cwd=%s", h.key, agentID, sessionID, h.cwd)
+	// Logged like the started path, so "resumed with settings" and
+	// "resumed without" are visible rather than inferred. A started
+	// session reported mode=default modes=6 and a resumed one reported
+	// nothing at all, which is how the missing calls stayed missing.
+	log.Printf("agentd: acp session resumed key=%s agent=%s session=%s cwd=%s mode=%s modes=%d configs=%d",
+		h.key, agentID, sessionID, h.cwd, res.Modes.CurrentModeID, len(res.Modes.AvailableModes), len(res.ConfigOptions))
 	h.setState("done", "resumed")
 	return h, nil
 }

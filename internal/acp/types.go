@@ -210,6 +210,32 @@ type LoadSessionRequest struct {
 	AdditionalDirectories []string    `json:"additionalDirectories,omitempty"`
 }
 
+// LoadSessionResponse is what session/load answers with.
+//
+// It mirrors NewSessionResponse minus the id (the caller supplied that),
+// because a resumed session needs the same settings block a fresh one
+// gets — model, reasoning effort, plan mode, the modes it will let you
+// switch between. wash used to discard this response entirely (the call
+// passed nil as the destination and there was no type to decode into), so
+// a resumed session came back with an empty Session menu: no model, no
+// thinking level, nothing to change.
+//
+// VERIFIED against @agentclientprotocol/claude-agent-acp: session/load
+// answers modes=6 current="default" configs=5 — byte-for-byte what
+// session/new offers for the same session. Not inferred from the
+// symmetry with NewSessionResponse; see loadsession_real_test.go, which
+// re-checks it whenever an adapter is installed or upgraded.
+//
+// Every field is optional. An adapter that returns a bare result leaves
+// this zero, which is exactly what the old code assumed unconditionally —
+// so decoding can only ever add information, never break a working
+// adapter.
+type LoadSessionResponse struct {
+	ConfigOptions []ConfigOption `json:"configOptions,omitempty"`
+	Modes         SessionModes   `json:"modes,omitempty"`
+	Models        SessionModels  `json:"models,omitempty"`
+}
+
 // ContentBlock is MCP-shaped: {"type":"text","text":"…"}, or an image
 // block carrying base64 bytes and their mime type. Both adapters
 // advertise promptCapabilities.image, so images travel in BOTH

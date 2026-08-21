@@ -35,6 +35,27 @@ export interface SessionMeta {
   end_reason?: string;
   events?: number;
   bytes?: number;
+  /** running right now, per the roster — not something to start again */
+  live?: boolean;
+  /** running with no window on it: reattach, do not resume */
+  detached?: boolean;
+  /** the roster key a reattach names */
+  row_key?: string;
+}
+
+/**
+ * What clicking a row should do.
+ *
+ * The panel used to have exactly one answer — resume — including for
+ * sessions that were already running, which duplicates them. That is the
+ * outcome the History MENU's live-filter exists to prevent, happening in
+ * the view that had no filter. The two views may differ in presentation;
+ * they may not differ about what is safe to click.
+ */
+export function historyAction(s: SessionMeta): 'resume' | 'reattach' | 'none' {
+  if (s.detached && s.row_key) return 'reattach';
+  if (s.live) return 'none';
+  return 'resume';
 }
 
 /** "just now / 5m ago / 3h ago / 2d ago" — same language as the sidebar. */
@@ -126,7 +147,7 @@ export const HistoryPanel: Component<{
             setSelected((i) => Math.max(0, i - 1));
           } else if (e.key === 'Enter') {
             const s = rows()[selected()];
-            if (s) props.onResume(s);
+            if (s && historyAction(s) !== 'none') props.onResume(s);
           }
         }}
       />
@@ -153,15 +174,17 @@ export const HistoryPanel: Component<{
               <div
                 data-testid="ai-history-row"
                 data-session-id={s.session_id}
+                data-action={historyAction(s)}
                 onMouseEnter={() => setSelected(i())}
-                onClick={() => props.onResume(s)}
+                onClick={() => { if (historyAction(s) !== 'none') props.onResume(s); }}
                 style={{
                   display: 'flex',
                   'flex-direction': 'column',
                   gap: '2px',
                   padding: `${tokens.spaceSm}px ${tokens.spaceMd}px`,
                   'border-radius': tokens.radiusSm,
-                  cursor: 'pointer',
+                  cursor: historyAction(s) === 'none' ? 'default' : 'pointer',
+                  opacity: historyAction(s) === 'none' ? 0.55 : 1,
                   background: selected() === i() ? tokens.bgRowSelected : 'transparent',
                 }}
               >
@@ -172,6 +195,22 @@ export const HistoryPanel: Component<{
                   >
                     {sessionLabel(s)}
                   </span>
+                  {/* A running session says so rather than looking like
+                      one more thing to open. "Open" is the honest word
+                      for a detached one: it is still running, and this
+                      puts a window back on it. */}
+                  <Show when={historyAction(s) !== 'resume'}>
+                    <span
+                      data-testid="ai-history-state"
+                      style={{
+                        ...metaStyle,
+                        'flex-shrink': 0,
+                        color: historyAction(s) === 'reattach' ? tokens.accentAmber : tokens.fgMuted,
+                      }}
+                    >
+                      {historyAction(s) === 'reattach' ? 'running — open' : 'running here'}
+                    </span>
+                  </Show>
                   <span style={{ ...metaStyle, 'margin-left': 'auto', 'flex-shrink': 0 }}>
                     {fmtAgo(now, s.ended_ms || s.started_ms || 0)}
                   </span>

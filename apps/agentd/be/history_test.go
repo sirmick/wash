@@ -215,3 +215,78 @@ func TestFlushHistoryDebounces(t *testing.T) {
 		t.Error("still dirty after a successful save")
 	}
 }
+
+// Live and REACHABLE are not the same thing, and one predicate has to
+// serve both History views or they drift apart again — the menu hiding
+// what you wanted, the panel offering to duplicate what you had.
+func TestRosterIndexSeparatesLiveFromDetached(t *testing.T) {
+	idx := rosterIndex([]Row{
+		{Key: "acp:1", SessionID: "s-attached"},
+		{Key: "acp:2", SessionID: "s-detached", Detached: true},
+		{Key: "acp:3", SessionID: ""}, // a row with no agent session id yet
+	})
+
+	if got := idx["s-attached"]; !got.Live || got.Detached || got.RowKey != "acp:1" {
+		t.Errorf("attached session = %+v, want live, not detached, keyed acp:1", got)
+	}
+	// The case the menu got wrong: detached is still LIVE (the row exists,
+	// agent_detach never retires it), so a plain live-filter hid exactly
+	// the session you opened the menu to recover.
+	got := idx["s-detached"]
+	if !got.Live {
+		t.Error("a detached session is still live — its row and its adapter are both still there")
+	}
+	if !got.Detached || got.RowKey != "acp:2" {
+		t.Errorf("detached session = %+v, want detached and keyed acp:2 — reattach is key-addressed", got)
+	}
+	if _, ok := idx[""]; ok {
+		t.Error("a row with no session id was indexed under the empty key")
+	}
+	if _, ok := idx["s-never-seen"]; ok {
+		t.Error("index invented an entry for a session the roster has never seen")
+	}
+}
+
+// publishHistory is the menu's half of that predicate.
+func TestPublishHistoryMarksDetached(t *testing.T) {
+	reset()
+	history = []Session{
+		{SessionID: "s-gone", Agent: "codex", LastSeen: t0.Unix()},
+		{SessionID: "s-detached", Agent: "claude", LastSeen: t0.Unix()},
+		{SessionID: "s-attached", Agent: "claude", LastSeen: t0.Unix()},
+	}
+	t.Cleanup(func() { history = nil })
+	rows["acp:2"] = &row{Row: Row{Key: "acp:2", SessionID: "s-detached", Detached: true}}
+	rows["acp:3"] = &row{Row: Row{Key: "acp:3", SessionID: "s-attached"}}
+
+	byID := map[string]Session{}
+	for _, s := range publishHistory() {
+		byID[s.SessionID] = s
+	}
+	if s := byID["s-gone"]; s.Live || s.Detached {
+		t.Errorf("a session with no row = %+v, want neither live nor detached", s)
+	}
+	if s := byID["s-detached"]; !s.Live || !s.Detached || s.RowKey != "acp:2" {
+		t.Errorf("detached = %+v, want live+detached with its row key so reattach can name it", s)
+	}
+	if s := byID["s-attached"]; !s.Live || s.Detached {
+		t.Errorf("attached = %+v, want live and NOT detached — resuming it would duplicate it", s)
+	}
+}
+
+// The store and the menu want different sizes; only the menu's share
+// rides the roster push.
+func TestRecentPublishCapIsSmallerThanTheStore(t *testing.T) {
+	reset()
+	t.Cleanup(func() { history = nil })
+	history = nil
+	for i := 0; i < historyCap; i++ {
+		history = append(history, Session{SessionID: "s-" + itoa(uint64(i)), LastSeen: t0.Unix() - int64(i)})
+	}
+	if got := len(publishHistory()); got != recentPublishCap {
+		t.Errorf("published %d entries, want %d — Recent goes to every subscriber on every mutate", got, recentPublishCap)
+	}
+	if recentPublishCap >= historyCap {
+		t.Error("the published slice must be the smaller of the two, or raising the store bloats every push")
+	}
+}
