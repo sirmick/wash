@@ -22,7 +22,7 @@ import {
   washAssetUrl,
 } from '@wash/ui';
 import { PrivWidget, PrivUnlockOverlay } from '@wash/ui';
-import type { BulkJob, Pack, PrivReq, PrivUnlockState, RosterAsk, RosterRow } from '@wash/ui';
+import type { Pack, PrivReq, PrivUnlockState, RosterAsk, RosterRow } from '@wash/ui';
 import { toBlob } from 'html-to-image';
 import { Camera, Search, PanelRightOpen } from 'lucide-solid';
 import { Sidebar, type SidebarMode } from './sidebar/Sidebar';
@@ -301,12 +301,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [notifications, setNotifications] = createSignal<NotifyEntry[]>([]);
   // Bulk queue + active conflicts — fed by com.wash.bulk's StateService.
   // First pending conflict (if any) pops as a screen-anchored overlay.
-  // Previous push's job ids, kept only to spot a NEW one and pop the
-  // section open. Nothing renders the rail's copy of the queue since M3c —
-  // fm owns it — and hostgw's rise-detector skips LOCAL to avoid doubling
-  // with handlers like this one, so the local pop-open still lives here.
-  // Replaced wholesale each push, so a long-lived desktop can't accrete ids.
-  let prevBulkJobIDs = new Set<string>();
   // Priv queue + lock state — fed by com.wash.priv's broadcasts.
   // need_password drives the unlock overlay.
   const [privReqs, setPrivReqs] = createSignal<PrivReq[]>([]);
@@ -855,7 +849,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       setHostgw(next);
       for (const [service, count] of AWARENESS_COUNTERS) {
         for (const { origin, count: n } of countByHost(next, service, count)) {
-          if (origin === LOCAL_ORIGIN) continue;
+          // LOCAL included since M6. It was skipped to avoid doubling with
+          // the legacy per-service handlers, but autoExpandSection early-
+          // returns when a section is already open, so a double call is a
+          // no-op — and the skip meant local and remote hosts interrupted
+          // on DIFFERENT rules, which is a wart in the one behaviour the
+          // rail exists for.
           const key = `${service}:${origin}`;
           if (n > (lastCounts.get(key) ?? 0)) {
             autoExpandSection(sectionForService(service));
@@ -904,24 +903,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           setNotifications(next);
           if (fresh) {
             autoExpandSection('notify');
-          }
-          return;
-        }
-        case 'bulk.state': {
-          // wash-bulk's StateService payload: { jobs: [...], conflicts: [...] }.
-          // conflicts ride the same push but are answered in com.wash.fm
-          // now (docs/SIDEBAR.md M3b) — a blocked worker asks a file
-          // manager's question, and only an app can answer it for the host
-          // the job is actually running on.
-          const next = data.state as { jobs?: BulkJob[] };
-          const nextJobs = next?.jobs ?? [];
-          // Auto-expand the bulk section on a NEW job (id not seen).
-          // Cancelled / failed terminal-state additions are still
-          // "new" — they're a state change the user might want to see.
-          const fresh = nextJobs.find((j) => !prevBulkJobIDs.has(j.job_id));
-          prevBulkJobIDs = new Set(nextJobs.map((j) => j.job_id));
-          if (fresh) {
-            autoExpandSection('bulk');
           }
           return;
         }
@@ -1050,7 +1031,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     // makes the sender attestation correct (the router stamps the
     // session instance as From).
     window.wash.sendAppMsg(props.instance, { kind: 'notify_subscribe' });
-    window.wash.sendAppMsg(props.instance, { kind: 'bulk_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'priv_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'net_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'remote_subscribe' });

@@ -95,8 +95,27 @@ func onReady(c *sdk.Conn, _ string, _ uint32) {
 	// sender; the service replies cross-app to this BE; we forward
 	// to our FE under a service-specific kind so the wash:msg dispatch
 	// stays unambiguous.
+	// What remains here after docs/SIDEBAR.md M2-M5 is deliberate, and
+	// each survivor has a different reason:
+	//
+	//   subscribe/unsubscribe — the rail still READS every service for
+	//     its badges and its local widgets. Awareness stayed in chrome;
+	//     only control moved.
+	//   notify mark_read / clear_all — notify is chrome by disposition
+	//     (§3.1): there is no app to move a tray to.
+	//   priv approve / reject / unlock — the §3.2(8) exception. A yes/no
+	//     from someone already blocked is the one case where opening a
+	//     window is pure overhead. Remote escalations answer in
+	//     wash-priv's own modal instead (M4).
+	//   audio — deferred: sound leaves the host's speakers, so it needs a
+	//     stream, not a widget (REMOTE.md §7).
+	//
+	// The control verbs that DID move are gone: bulk's cancel and
+	// conflict answer (M3, now fm's), the agent key verbs (M2, now
+	// com.wash.ai's), and remote's connect/disconnect (wash-connect's,
+	// which REMOTE.md §6.1 predicted when it said this gateway would
+	// become unused).
 	registerNotifyGateway(bus)
-	registerBulkGateway(bus)
 	registerPrivGateway(bus)
 	registerNetGateway(bus)
 	registerAudioGateway(bus)
@@ -172,8 +191,6 @@ func serviceFEKind(appID string) string {
 	switch appID {
 	case NotifyAppID:
 		return "notify.state"
-	case BulkAppID:
-		return "bulk.state"
 	case PrivAppID:
 		return "priv.state"
 	case NetdAppID:
@@ -282,21 +299,6 @@ func registerRemoteGateway(bus *sdk.Bus) {
 	sdk.HandleVoid(bus, "remote_unsubscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
 		return conn.SendAppMsgTo(wire.Recipient{AppID: RemoteAppID}, map[string]any{"kind": "unsubscribe"})
 	})
-	sdk.HandleVoid(bus, "remote_connect", func(conn *sdk.Conn, _ string, req remoteHostReq) error {
-		return conn.SendAppMsgTo(wire.Recipient{AppID: RemoteAppID}, map[string]any{
-			"kind": "connect", "host": req.Host, "remote_port": req.RemotePort,
-		})
-	})
-	sdk.HandleVoid(bus, "remote_disconnect", func(conn *sdk.Conn, _ string, req remoteHostReq) error {
-		return conn.SendAppMsgTo(wire.Recipient{AppID: RemoteAppID}, map[string]any{
-			"kind": "disconnect", "host": req.Host,
-		})
-	})
-}
-
-type remoteHostReq struct {
-	Host       string `json:"host"`
-	RemotePort int    `json:"remote_port"`
 }
 
 func registerNotifyGateway(bus *sdk.Bus) {
@@ -314,24 +316,6 @@ func registerNotifyGateway(bus *sdk.Bus) {
 	})
 }
 
-func registerBulkGateway(bus *sdk.Bus) {
-	sdk.HandleVoid(bus, "bulk_subscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
-		return conn.SendAppMsgTo(wire.Recipient{AppID: BulkAppID}, map[string]any{"kind": "subscribe"})
-	})
-	sdk.HandleVoid(bus, "bulk_unsubscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
-		return conn.SendAppMsgTo(wire.Recipient{AppID: BulkAppID}, map[string]any{"kind": "unsubscribe"})
-	})
-	sdk.HandleVoid(bus, "bulk_cancel", func(conn *sdk.Conn, _ string, req bulkCancelReq) error {
-		return conn.SendAppMsgTo(wire.Recipient{AppID: BulkAppID}, map[string]any{"kind": "cancel", "job_id": req.JobID})
-	})
-	sdk.HandleVoid(bus, "bulk_resolve_conflict", func(conn *sdk.Conn, _ string, req bulkResolveConflictReq) error {
-		return conn.SendAppMsgTo(wire.Recipient{AppID: BulkAppID}, map[string]any{
-			"kind":   "resolve_conflict",
-			"job_id": req.JobID,
-			"action": req.Action,
-		})
-	})
-}
 
 func registerPrivGateway(bus *sdk.Bus) {
 	sdk.HandleVoid(bus, "priv_subscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
@@ -380,21 +364,11 @@ type serviceStateMsg struct {
 	State any `json:"state"`
 }
 
-// idReq / bulkCancelReq / bulkResolveConflictReq are the FE-bound
-// wire shapes for the gateway forwarders. Inlining them as anonymous
-// struct types in the handler signatures would make the json tags
-// less greppable; pulling them out makes the contract obvious.
+// idReq is the FE-bound wire shape for the gateway forwarders. Inlining
+// it as an anonymous struct in the handler signature would make the json
+// tag less greppable; pulling it out makes the contract obvious.
 type idReq struct {
 	ID string `json:"id"`
-}
-
-type bulkCancelReq struct {
-	JobID string `json:"job_id"`
-}
-
-type bulkResolveConflictReq struct {
-	JobID  string `json:"job_id"`
-	Action string `json:"action"`
 }
 
 type audioControlReq struct {

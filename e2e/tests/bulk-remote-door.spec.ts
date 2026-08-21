@@ -64,16 +64,16 @@ test('the bulk door opens fm on the host that owns the job', async ({ page }) =>
     // The rail knows B has work in flight — that is M1's awareness channel
     // reaching across, with no subscribe of the rail's own.
     //
-    // Open the section only if it isn't already: a NEW local job pops it
-    // open on its own (the legacy bulk.state handler the rail keeps for
-    // exactly this, since hostgw's rise-detector skips LOCAL), and A has
-    // one. Clicking unconditionally would CLOSE it — which is how this
-    // spec failed first time round.
+    // No click: A's own running job pops the section open by itself. Since
+    // M6 that rise-detection comes from hostgw for LOCAL as well as remote
+    // hosts, so this doubles as the regression test for the fold.
+    //
+    // The earlier version clicked when the body was missing, which raced —
+    // between the count() and the click the section could auto-open, and
+    // the click then TOGGLED IT SHUT. Waiting is both simpler and a
+    // stronger assertion.
     const body = page.locator('[data-testid="sidebar-section-body-bulk"]');
-    if ((await body.count()) === 0) {
-      await page.locator('[data-testid="sidebar-section-header-bulk"]').click();
-    }
-    await expect(body).toBeVisible();
+    await expect(body).toBeVisible({ timeout: 20_000 });
 
     // A door to B specifically, and one to A — the rail names both because
     // both have work. A quiet host would have neither.

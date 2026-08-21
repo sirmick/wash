@@ -109,11 +109,14 @@ bug list — all fully landed; see `git log` if you need their content.)
     with a reason**: its data comes from the session BE's own ticker and
     B runs --no-session, so it needs a stats service on B published via
     hostgw — a new state shape, not launch-addressing. Its own milestone.
-  - [ ] **M6 — cleanup + hardening.** Delete the session BE gateways that
-    no longer have callers; fold LOCAL into hostgw's rise-detector (the
-    rail still keeps a legacy bulk.state handler only for the local
-    pop-open); provenance/priv-phishing review, now including the modal
-    surface; confirm no cross-uid attach path (SIDEBAR.md §3.2(3)).
+  - [x] **M6 — cleanup + hardening** — DONE 2026-08-20. Removed bulk's
+    and remote's dead gateway verbs (and bulk's serviceFEKind entry);
+    folded LOCAL into hostgw's rise-detection so local and remote hosts
+    interrupt on the same rule, deleting the legacy bulk.state handler;
+    audited §3.2(3) — unix attach is SO_PEERCRED per-uid, TCP /ws is a
+    bearer token, and hostgw's audience is exactly the audience that
+    already gets toasts and window state, so it adds no new exposure.
+    As-built: SIDEBAR.md M6 "As built".
 - [ ] **Clipboard sync hub; cross-origin z-band** (focused-host windows on
   top, below chrome z 9999/10000) — the rest of the old M4/M5 entry.
 - [ ] **M6 — remote hardening pass**: multi-tenancy, provenance/priv-phishing

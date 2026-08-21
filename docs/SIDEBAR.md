@@ -699,6 +699,45 @@ needs an audio *stream*, not a widget (REMOTE.md §7).
 
 ---
 
+#### As built (2026-08-20)
+
+**Dead gateways removed.** Bulk's `cancel`/`resolve_conflict` (now fm's) and
+remote's `connect`/`disconnect` (wash-connect's — REMOTE.md §6.1 predicted this
+exact obsolescence when it said the gateway would "become unused"). The agent
+key verbs had already gone with M2. Bulk lost its gateway entirely, including
+its `serviceFEKind` entry: the rail's badge reads hostgw, and nothing consumed
+`bulk.state` any more. `apps/session/be/app.go` now carries a comment naming
+each *surviving* verb and why, so the next reader does not have to re-derive
+which absences are deliberate.
+
+**LOCAL folded into hostgw's rise-detection.** The skip existed to avoid
+doubling with the legacy per-service handlers, but `autoExpandSection` early-
+returns when a section is already open, so a double call was always a no-op.
+The skip's real cost was that local and remote hosts interrupted you on
+*different rules* — a wart in the one behaviour the rail exists for. Bulk's
+legacy handler is gone with it; notify, priv and agents keep theirs because
+they still carry the widget data, and their now-doubled auto-expand is free.
+
+One deliberate behaviour change: a job that arrives already-terminal no longer
+pops the Bulk section. It used to, locally only. Now nothing does, on any host —
+a finished job is not a claim on attention, and it toasts.
+
+**§3.2(3) audit — the claim holds, with one nuance worth stating.** Two attach
+paths, both gated:
+
+- the unix listener enforces `SO_PEERCRED` against `--allow-uid`
+  (`internal/router/unix_listener.go:256`) — kernel-enforced, genuinely per-uid;
+- the TCP `/ws` listener is gated by a constant-time token compare, cookie or
+  `?token=` (`internal/router/http.go:44`). That is a **bearer** credential, so
+  "your own other seats" holds exactly as far as the token does. `--no-auth`
+  removes it and is documented as trusted-loopback dev only.
+
+Either way `hostgw`'s audience is *whoever can attach*, which is the same
+audience that already receives toasts (M0), window state, and the whole desktop.
+So the plan's claim stands as verified: hostgw adds **no new exposure**, and its
+privacy model is the router's attach model. The modal surface inherits the same
+boundary — it renders in a shell that had to attach first.
+
 ## 5. What could go wrong
 
 **Two places must agree.** A badge in the rail and the truth in the app can

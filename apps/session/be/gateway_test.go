@@ -9,7 +9,10 @@ import "testing"
 func TestServiceFEKind(t *testing.T) {
 	cases := map[string]string{
 		NotifyAppID:        "notify.state",
-		BulkAppID:          "bulk.state",
+		// bulk lost its gateway in SIDEBAR M6: the queue and its verbs
+		// live in com.wash.fm, and the rail's badge reads hostgw, so the
+		// session BE no longer speaks for it.
+		BulkAppID:          "",
 		PrivAppID:          "priv.state",
 		NetdAppID:          "net.state",
 		"com.wash.unknown": "", // non-gatewayed app — we don't speak for it
