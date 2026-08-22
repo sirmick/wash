@@ -41,6 +41,49 @@ export interface SessionMeta {
   detached?: boolean;
   /** the roster key a reattach names */
   row_key?: string;
+  /**
+   * The line that matched, with a little either side. Present only for a
+   * content match — a metadata hit quotes nothing back, because the row
+   * already shows the title and directory.
+   */
+  snippet?: string;
+}
+
+/**
+ * highlightParts splits a snippet into alternating plain / matched runs
+ * so the row can mark what was searched for.
+ *
+ * Case-insensitive and term-wise, matching the backend: a query is words,
+ * all of them required, order irrelevant. Overlapping and repeated hits
+ * collapse into one run each, so "race race" does not produce nested
+ * marks or drop a character between two adjacent matches.
+ *
+ * Pure, and exported for the test — it is the only part of this with
+ * anything to get wrong.
+ */
+export function highlightParts(text: string, query: string): { t: string; hit: boolean }[] {
+  const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 0);
+  if (text === '' || terms.length === 0) return [{ t: text, hit: false }];
+  const low = text.toLowerCase();
+  // Mark every matched byte first, then run-length the flags. Simpler
+  // than merging intervals, and immune to the overlap cases.
+  const marked = new Array<boolean>(text.length).fill(false);
+  for (const term of terms) {
+    let at = low.indexOf(term);
+    while (at >= 0) {
+      for (let i = at; i < at + term.length; i++) marked[i] = true;
+      at = low.indexOf(term, at + 1);
+    }
+  }
+  const out: { t: string; hit: boolean }[] = [];
+  let start = 0;
+  for (let i = 1; i <= text.length; i++) {
+    if (i === text.length || marked[i] !== marked[start]) {
+      out.push({ t: text.slice(start, i), hit: marked[start] });
+      start = i;
+    }
+  }
+  return out;
 }
 
 /**
@@ -247,6 +290,34 @@ export const HistoryPanel: Component<{
                     </Show>
                   </span>
                 </div>
+                {/* Why this row is in the list. Without it a search
+                    result is a title you still have to open to identify,
+                    which is the thing searching was meant to save. */}
+                <Show when={s.snippet}>
+                  <div
+                    data-testid="ai-history-snippet"
+                    style={{
+                      ...metaStyle,
+                      'margin-top': '2px',
+                      overflow: 'hidden',
+                      'text-overflow': 'ellipsis',
+                      'white-space': 'nowrap',
+                    }}
+                  >
+                    <For each={highlightParts(s.snippet ?? '', props.query())}>
+                      {(part) => (
+                        <Show when={part.hit} fallback={<span>{part.t}</span>}>
+                          <span
+                            data-testid="ai-history-hit"
+                            style={{ color: tokens.accentAmber, 'font-weight': 600 }}
+                          >
+                            {part.t}
+                          </span>
+                        </Show>
+                      )}
+                    </For>
+                  </div>
+                </Show>
               </div>
             )}
           </For>

@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -13,10 +14,19 @@ import (
 // withNotify records the toasts the ask queue raises.
 func withNotify(t *testing.T) *[]Ask {
 	t.Helper()
-	old := notifyAsk
+	old, _ := notifyAskFn.Load().(func(Ask))
+	// Recorded under a lock: an ask raised by ANOTHER test's still-running
+	// goroutine (the hosted tier blocks inside RequestPermission until its
+	// question is answered) would otherwise append concurrently with this
+	// test reading the slice.
+	var mu sync.Mutex
 	var got []Ask
-	notifyAsk = func(a Ask) { got = append(got, a) }
-	t.Cleanup(func() { notifyAsk = old })
+	setNotifyAsk(func(a Ask) {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, a)
+	})
+	t.Cleanup(func() { setNotifyAsk(old) })
 	return &got
 }
 

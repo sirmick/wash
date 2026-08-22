@@ -41,6 +41,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sirmick/wash/internal/acp"
 )
@@ -629,6 +630,11 @@ type SessionMeta struct {
 	// Bytes is the transcript's size on disk, so the UI can say what
 	// history costs and offer to prune the expensive ones.
 	Bytes int64 `json:"bytes,omitempty"`
+	// Snippet is the line that matched, with a little either side. Absent
+	// when the query matched metadata instead (the row already shows the
+	// title and directory, so quoting them back is noise) or when there
+	// was no query at all.
+	Snippet string `json:"snippet,omitempty"`
 	// Live / Detached / RowKey are stamped on the way out from the
 	// roster, not read from the file — the transcript index knows what a
 	// session WAS, and only the roster knows what it is doing now.
@@ -790,28 +796,42 @@ func sessionRecency(m SessionMeta) int64 {
 	return m.StartedMS
 }
 
-// searchTranscript reports whether a stored conversation contains q,
-// case-insensitively. The point of searching history is that you
-// remember what a session was ABOUT, not what it was called — "that one
-// where I was chasing the reconnect race" is a content query, and title
-// matching alone would miss it.
+// searchTranscript reports whether a stored conversation contains every
+// term, case-insensitively, and returns the line that proves it. The
+// point of searching history is that you remember what a session was
+// ABOUT, not what it was called — "that one where I was chasing the
+// reconnect race" is a content query, and title matching alone would
+// miss it.
+//
+// All terms must appear, but not in one line and not in order: a
+// conversation is the unit, so "reconnect race" finds the session that
+// discussed both even if the two words are ten minutes apart. The
+// snippet comes from the FIRST term to match anywhere, which is the line
+// most likely to be the one being remembered.
 //
 // Streamed line by line so a long conversation costs a buffer rather
-// than its whole size in memory, and stops at the first hit.
-func searchTranscript(sessionID, q string) bool {
-	if q == "" {
-		return true
+// than its whole size in memory. Unlike the old single-term version it
+// cannot stop at the first hit — "did every term appear?" is only
+// answerable at the end — but it stops as soon as the last outstanding
+// term lands.
+func searchTranscript(sessionID string, terms []string) (string, bool) {
+	if len(terms) == 0 {
+		return "", true
 	}
 	path := transcriptPath(sessionID)
 	if path == "" {
-		return false
+		return "", false
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return false
+		return "", false
 	}
 	defer f.Close()
-	needle := strings.ToLower(q)
+	need := make(map[string]bool, len(terms))
+	for _, t := range terms {
+		need[strings.ToLower(t)] = true
+	}
+	snippet := ""
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), maxImageBytes+(1<<16))
 	for sc.Scan() {
@@ -825,51 +845,134 @@ func searchTranscript(sessionID, q string) bool {
 		if e.Kind == EventImage {
 			continue // Text is base64 here
 		}
-		if e.Text != "" && strings.Contains(strings.ToLower(e.Text), needle) {
-			return true
+		for _, field := range [2]string{e.Text, e.Title} {
+			if field == "" {
+				continue
+			}
+			low := strings.ToLower(field)
+			for t := range need {
+				at := strings.Index(low, t)
+				if at < 0 {
+					continue
+				}
+				delete(need, t)
+				if snippet == "" {
+					snippet = excerpt(field, at, len(t))
+				}
+			}
 		}
-		if e.Title != "" && strings.Contains(strings.ToLower(e.Title), needle) {
-			return true
+		if len(need) == 0 {
+			return snippet, true
 		}
 	}
-	return false
+	return "", false
+}
+
+// snippetRadius is how much of the line either side of a hit rides along.
+// Enough to place the phrase in a sentence, short enough for a list row.
+const snippetRadius = 60
+
+// excerpt lifts a readable window around a match, with ellipses where it
+// cut. Byte offsets from the caller's Index, so the cut points are nudged
+// off multi-byte runes rather than splitting them into mojibake.
+func excerpt(s string, at, n int) string {
+	start := at - snippetRadius
+	if start < 0 {
+		start = 0
+	}
+	end := at + n + snippetRadius
+	if end > len(s) {
+		end = len(s)
+	}
+	for start > 0 && !utf8.RuneStart(s[start]) {
+		start--
+	}
+	for end < len(s) && !utf8.RuneStart(s[end]) {
+		end++
+	}
+	out := strings.TrimSpace(collapseSpace(s[start:end]))
+	if start > 0 {
+		out = "…" + out
+	}
+	if end < len(s) {
+		out += "…"
+	}
+	return out
+}
+
+// collapseSpace folds newlines and runs of whitespace into single spaces:
+// a transcript line can be a code block, and a snippet is one line in a
+// list.
+func collapseSpace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// queryTerms splits a query the way a person means it: whitespace
+// separated, all of them required. Empty query = no terms = match all.
+func queryTerms(q string) []string {
+	return strings.Fields(strings.ToLower(q))
 }
 
 // matchesMeta is the cheap half of a history query: the fields already in
 // the index. Tried before opening the transcript, so a search for an
 // agent or a directory never reads a conversation at all.
-func matchesMeta(m SessionMeta, q string) bool {
-	if q == "" {
+func matchesMeta(m SessionMeta, terms []string) bool {
+	if len(terms) == 0 {
 		return true
 	}
-	q = strings.ToLower(q)
-	for _, f := range []string{m.Title, m.Agent, m.Model, m.Dir, m.Cwd, m.SessionID} {
-		if f != "" && strings.Contains(strings.ToLower(f), q) {
-			return true
+	fields := [...]string{m.Title, m.Agent, m.Model, m.Dir, m.Cwd, m.SessionID}
+	for _, t := range terms {
+		hit := false
+		for _, f := range fields {
+			if f != "" && strings.Contains(strings.ToLower(f), t) {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 // historyQuery lists stored sessions, newest first, optionally filtered.
 // limit <= 0 means every match.
 func historyQuery(q string, limit int) []SessionMeta {
 	all := listSessionMeta()
-	if q == "" {
+	terms := queryTerms(q)
+	if len(terms) == 0 {
 		if limit > 0 && len(all) > limit {
 			all = all[:limit]
 		}
 		return all
 	}
+	// The index says who COULD match, so the confirm pass below opens a
+	// handful of transcripts instead of all of them. ok=false means it
+	// can't narrow this query (a term shorter than a trigram), and every
+	// session is a candidate — correct, just not accelerated.
+	cand, narrowed := searchCandidates(terms)
 	out := make([]SessionMeta, 0, len(all))
 	for _, m := range all {
-		// Metadata first: it is already in hand, and a query that
-		// matches there saves reading the conversation.
-		if matchesMeta(m, q) || searchTranscript(m.SessionID, q) {
+		// Metadata first: it is already in hand, and a query that matches
+		// there saves reading the conversation — and matters more now,
+		// because metadata is NOT in the trigram index, so a session
+		// whose only match is its title would be narrowed away.
+		if matchesMeta(m, terms) {
 			out = append(out, m)
-			if limit > 0 && len(out) >= limit {
-				break
+		} else {
+			if narrowed && !cand[m.SessionID] {
+				continue
 			}
+			snip, ok := searchTranscript(m.SessionID, terms)
+			if !ok {
+				continue
+			}
+			m.Snippet = snip
+			out = append(out, m)
+		}
+		if limit > 0 && len(out) >= limit {
+			break
 		}
 	}
 	return out

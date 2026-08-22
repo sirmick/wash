@@ -65,7 +65,7 @@ func askToastBody(a Ask) string {
 // installAskToasts wires the ask queue's notify seam to this connection.
 // Called once, from onReady.
 func installAskToasts(c *sdk.Conn) {
-	notifyAsk = func(a Ask) {
+	setNotifyAsk(func(a Ask) {
 		title := "Agent needs you"
 		if a.Agent != "" {
 			title = a.Agent + " needs you"
@@ -74,7 +74,7 @@ func installAskToasts(c *sdk.Conn) {
 		// because this runs on the ask queue's path, which is itself on
 		// the SDK dispatch path for terminal-tier asks.
 		c.NotifyAbout(askKey(a), title, askToastBody(a), wire.NotifyLevelWarn)
-	}
+	})
 }
 
 // registerFocusHandler installs FocusKind.

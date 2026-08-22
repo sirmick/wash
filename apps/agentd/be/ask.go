@@ -22,6 +22,7 @@ package agentd
 import (
 	"log"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/sirmick/wash/internal/agentpolicy"
@@ -157,15 +158,34 @@ var (
 	// read the policy fresh (acp.go), and for the same reason: a rule
 	// written thirty seconds ago should count.
 	policyRuleCount = func() int { return len(agentpolicy.Load(agentpolicy.Path()).Rules) }
-	// notifyAsk raises the desktop toast for a question that is now on
-	// screen (docs/AGENT_UX.md N2). Indirected for the same reason as the
-	// two above — and because the real one needs a *sdk.Conn, which this
-	// package-level queue does not carry.
-	//
-	// Installed in onReady; the default no-op keeps the queue usable (and
-	// testable) before, and without, a connection.
-	notifyAsk = func(Ask) {}
 )
+
+// notifyAsk raises the desktop toast for a question that is now on screen
+// (docs/AGENT_UX.md N2). Indirected for the same reason as the hooks
+// above — and because the real one needs a *sdk.Conn, which this
+// package-level queue does not carry.
+//
+// Held in an atomic rather than a plain var, unlike its neighbours,
+// because it is the one hook a TEST swaps while another goroutine may
+// still be inside enqueueAsk: the hosted tier's RequestPermission blocks
+// on its ask, so a test that leaves that call outstanding is still
+// reading this when the next test installs its recorder. Production
+// writes once from onReady and only ever reads after, but "safe by
+// ordering we happen to have" is exactly what the race gate exists to
+// stop us relying on.
+var notifyAskFn atomic.Value // func(Ask)
+
+// setNotifyAsk installs the toast hook. Called once from onReady, and by
+// tests.
+func setNotifyAsk(f func(Ask)) { notifyAskFn.Store(f) }
+
+// notifyAsk fires the hook if one is installed. The default is silence:
+// the queue has to work before, and without, a connection.
+func notifyAsk(a Ask) {
+	if f, ok := notifyAskFn.Load().(func(Ask)); ok && f != nil {
+		f(a)
+	}
+}
 
 // softTTLNow picks the window for a question about to be asked.
 func softTTLNow() time.Duration {

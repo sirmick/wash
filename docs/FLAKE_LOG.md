@@ -496,8 +496,9 @@ recurrence — this one had a mechanism, not a load window.
 
 ## 2026-08-21 — `agent-roster-pane` "a roster verb acts on the row": load-only
 
-Seen twice during the AGENT_UX phase-Now work, both times only in the FULL
-`make e2e-test` run (6 workers, 500+ tests) and never on its own.
+Seen three times during the AGENT_UX phase-Now work (the third on the
+history-search branch), every time only in the FULL `make e2e-test` run
+(6 workers, 500+ tests) and never on its own.
 
 **Isolation:** passes 3/3 alone, 5/5 running its own spec file serially,
 and 5/5 with `--workers=4`. The two full-suite failures straddle unrelated
@@ -508,6 +509,7 @@ pointerdown fix), so nothing in the branch lines up with it.
 menu and a cross-window verb, so the plausible mechanisms are the usual
 load-window ones — a roster push arriving between the menu opening and the
 click, or the second window's bundle landing late. Logged rather than
-chased: it has cost two full-suite reds and no user-visible symptom, and
+chased: it has cost three full-suite reds and no user-visible symptom, and
 the honest next step is a run with `--repeat-each` under load rather than
-a guess.
+a guess. It is now the only test that reds a full run on this box, so it
+is also the next one worth actually fixing.

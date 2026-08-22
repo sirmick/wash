@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sirmick/wash/internal/acp"
 )
@@ -18,6 +19,11 @@ func withStateDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", dir)
+	// The search index is a package singleton keyed on that env var, so a
+	// test inheriting the previous one's entries would be searching a
+	// directory that no longer exists.
+	resetIndexForTest()
+	t.Cleanup(resetIndexForTest)
 	storeMu.Lock()
 	storeSession = map[string]string{}
 	storeMu.Unlock()
@@ -25,6 +31,23 @@ func withStateDir(t *testing.T) string {
 	trans = map[string]*transcript{}
 	transMu.Unlock()
 	t.Cleanup(func() {
+		waitForTranscriptWrites()
+		// Close this test's files before dropping the bindings. The
+		// writer goroutine outlives every test and caches one open fd per
+		// SESSION ID, so a later test reusing an id would append to this
+		// test's deleted TempDir through the stale handle — its own
+		// transcripts would then silently not exist. (The same unlinked-
+		// inode hazard rewriteTranscript documents, arrived at from the
+		// other direction.)
+		storeMu.Lock()
+		ids := make([]string, 0, len(storeSession))
+		for _, id := range storeSession {
+			ids = append(ids, id)
+		}
+		storeMu.Unlock()
+		for _, id := range ids {
+			closeTranscriptFile(id)
+		}
 		waitForTranscriptWrites()
 		storeMu.Lock()
 		storeSession = map[string]string{}
@@ -546,4 +569,121 @@ func ids(ms []SessionMeta) []string {
 		out = append(out, m.SessionID)
 	}
 	return out
+}
+
+// --- multi-term search + snippets ---
+
+// A query is words, all of them required, and a conversation is the unit
+// they have to appear in — not a line. "reconnect race" should find the
+// session that discussed both even when the two came up ten minutes
+// apart, which is exactly how you remember a conversation.
+func TestHistoryQueryRequiresEveryTermAcrossTheConversation(t *testing.T) {
+	withStateDir(t)
+	now := time.Unix(1_700_000_000, 0)
+
+	bindTranscript("acp:1", "s-both", "codex", "/tmp/a", now)
+	appendPrompt("acp:1", "the banner flickers on reconnect", now)
+	appendPrompt("acp:1", "and later: it is a race in the scheduler", now.Add(time.Minute))
+
+	bindTranscript("acp:2", "s-one", "codex", "/tmp/b", now.Add(time.Hour))
+	appendPrompt("acp:2", "just a plain reconnect question", now.Add(time.Hour))
+	waitForTranscriptWrites()
+
+	got := historyQuery("reconnect race", 0)
+	if len(got) != 1 || got[0].SessionID != "s-both" {
+		t.Errorf("two-term search = %v, want just s-both", ids(got))
+	}
+	// Order is not significance: the words are a set.
+	if got := historyQuery("race reconnect", 0); len(got) != 1 || got[0].SessionID != "s-both" {
+		t.Errorf("reversed terms = %v, want just s-both", ids(got))
+	}
+	// A term that appears nowhere rules the session out even though the
+	// other term matches.
+	if got := historyQuery("reconnect wombat", 0); len(got) != 0 {
+		t.Errorf("unmatched term still returned %v", ids(got))
+	}
+}
+
+// The row has to say WHY it matched. Without it the list is a set of
+// session titles and you are back to guessing which one you meant.
+func TestHistoryQueryReturnsTheLineThatMatched(t *testing.T) {
+	withStateDir(t)
+	now := time.Unix(1_700_000_000, 0)
+	bindTranscript("acp:1", "s-snip", "codex", "/tmp/a", now)
+	appendPrompt("acp:1", "unrelated opening line", now)
+	appendPrompt("acp:1", "the quokka protocol is what broke the parser", now.Add(time.Minute))
+	waitForTranscriptWrites()
+
+	got := historyQuery("quokka", 0)
+	if len(got) != 1 {
+		t.Fatalf("search = %v, want one", ids(got))
+	}
+	if !strings.Contains(got[0].Snippet, "quokka protocol") {
+		t.Errorf("snippet = %q, want the matching line", got[0].Snippet)
+	}
+	if strings.Contains(got[0].Snippet, "unrelated opening") {
+		t.Errorf("snippet came from the wrong line: %q", got[0].Snippet)
+	}
+}
+
+// A metadata match quotes nothing back: the row already shows the title
+// and the directory, so repeating them as a "snippet" is noise.
+func TestMetadataMatchCarriesNoSnippet(t *testing.T) {
+	withStateDir(t)
+	now := time.Unix(1_700_000_000, 0)
+	bindTranscript("acp:1", "s-meta", "codex", "/home/mick/radio", now)
+	writeSummary("s-meta", transcriptSummary{Agent: "codex", Cwd: "/home/mick/radio", Title: "Station list"})
+	appendPrompt("acp:1", "nothing relevant here", now)
+	waitForTranscriptWrites()
+
+	got := historyQuery("station", 0)
+	if len(got) != 1 {
+		t.Fatalf("search = %v, want one", ids(got))
+	}
+	if got[0].Snippet != "" {
+		t.Errorf("metadata match carried snippet %q", got[0].Snippet)
+	}
+}
+
+// Snippets are one line in a list, so a match inside a code block must
+// not drag a wall of newlines into the row, and a long line is trimmed
+// around the hit rather than sent whole.
+func TestSnippetIsOneTidyLine(t *testing.T) {
+	withStateDir(t)
+	now := time.Unix(1_700_000_000, 0)
+	bindTranscript("acp:1", "s-code", "codex", "/tmp/a", now)
+	appendPrompt("acp:1", "```go\nfunc main() {\n\tprintln(\"quokka\")\n}\n```\n"+strings.Repeat("tail ", 200), now)
+	waitForTranscriptWrites()
+
+	got := historyQuery("quokka", 0)
+	if len(got) != 1 {
+		t.Fatalf("search = %v", ids(got))
+	}
+	s := got[0].Snippet
+	if strings.ContainsAny(s, "\n\t") {
+		t.Errorf("snippet carries raw whitespace: %q", s)
+	}
+	if !strings.Contains(s, "quokka") {
+		t.Errorf("snippet lost the term: %q", s)
+	}
+	if len(s) > 4*snippetRadius {
+		t.Errorf("snippet is %d bytes, want a row-sized excerpt: %q", len(s), s)
+	}
+	if !strings.HasSuffix(s, "…") {
+		t.Errorf("a trimmed snippet should say it was trimmed: %q", s)
+	}
+}
+
+// excerpt cuts on byte offsets, so a multi-byte rune at the boundary
+// must not become mojibake.
+func TestExcerptDoesNotSplitRunes(t *testing.T) {
+	s := strings.Repeat("é", 200) + "quokka" + strings.Repeat("ü", 200)
+	at := strings.Index(s, "quokka")
+	out := excerpt(s, at, len("quokka"))
+	if !utf8.ValidString(out) {
+		t.Errorf("excerpt produced invalid utf-8: %q", out)
+	}
+	if !strings.Contains(out, "quokka") {
+		t.Errorf("excerpt lost the match: %q", out)
+	}
 }

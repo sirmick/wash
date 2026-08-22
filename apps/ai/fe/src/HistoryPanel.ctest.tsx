@@ -9,7 +9,7 @@
 
 import { test, expect, afterEach } from 'vitest';
 import { render, fireEvent, cleanup } from '@solidjs/testing-library';
-import { HistoryPanel, fmtAgo, fmtSpan, historyAction, sessionLabel, type SessionMeta } from './HistoryPanel.tsx';
+import { HistoryPanel, fmtAgo, fmtSpan, highlightParts, historyAction, sessionLabel, type SessionMeta } from './HistoryPanel.tsx';
 
 afterEach(cleanup);
 
@@ -202,4 +202,63 @@ test('a running session does not act like one more thing to open', () => {
   // Only the unaddressable one is inert; the rest all report up, each
   // for the host to turn into its own verb.
   expect(clicked).toEqual(['s-gone', 's-det', 's-here']);
+});
+
+// --- snippets (full-text search) ---
+
+test('highlightParts marks every occurrence, case-insensitively', () => {
+  expect(highlightParts('the Race is a race', 'race')).toEqual([
+    { t: 'the ', hit: false },
+    { t: 'Race', hit: true },
+    { t: ' is a ', hit: false },
+    { t: 'race', hit: true },
+  ]);
+});
+
+test('highlightParts handles every term of a multi-word query', () => {
+  const parts = highlightParts('banner race on reconnect', 'race reconnect');
+  expect(parts.filter((p) => p.hit).map((p) => p.t)).toEqual(['race', 'reconnect']);
+  // The plain runs still reconstruct the original exactly.
+  expect(parts.map((p) => p.t).join('')).toBe('banner race on reconnect');
+});
+
+test('highlightParts does not nest or drop on overlapping matches', () => {
+  // "aa" in "aaa" matches at 0 and 1; the marked runs must merge rather
+  // than emit two overlapping spans or lose the middle character.
+  const parts = highlightParts('aaa', 'aa');
+  expect(parts).toEqual([{ t: 'aaa', hit: true }]);
+});
+
+test('highlightParts with no query is one plain run', () => {
+  expect(highlightParts('nothing to mark', '')).toEqual([{ t: 'nothing to mark', hit: false }]);
+  expect(highlightParts('', 'race')).toEqual([{ t: '', hit: false }]);
+});
+
+test('a row shows the matching line, with the term marked', () => {
+  const { getByTestId, getAllByTestId } = render(() => (
+    <HistoryPanel
+      sessions={() => [sess({ session_id: 's1', snippet: 'the quokka protocol broke it' })]}
+      query={() => 'quokka'}
+      loading={() => false}
+      onQuery={noop}
+      onClose={noop}
+      onResume={noop}
+    />
+  ));
+  expect(getByTestId('ai-history-snippet').textContent).toBe('the quokka protocol broke it');
+  expect(getAllByTestId('ai-history-hit').map((e) => e.textContent)).toEqual(['quokka']);
+});
+
+test('a row with no snippet renders none — a metadata match quotes nothing back', () => {
+  const { queryByTestId } = render(() => (
+    <HistoryPanel
+      sessions={() => [sess({ session_id: 's1' })]}
+      query={() => 'codex'}
+      loading={() => false}
+      onQuery={noop}
+      onClose={noop}
+      onResume={noop}
+    />
+  ));
+  expect(queryByTestId('ai-history-snippet')).toBeNull();
 });
