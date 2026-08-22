@@ -16,9 +16,25 @@ import { tokens } from './tokens';
 // getBoundingClientRect()-derived) — host-relative offsets would
 // land in the wrong place.
 //
-// Menu installs its own document-mousedown listener to dismiss
+// Menu installs its own document-pointerdown listener to dismiss
 // on click-outside (one-tick deferred so the click that opened
 // the menu doesn't immediately close it).
+//
+// pointerdown, in the CAPTURE phase, for two reasons that both showed up
+// as the same bug — a menu left hanging in mid-air while the window slid
+// out from under it:
+//
+//   - the shell's titlebar drag calls preventDefault() on pointerdown,
+//     and that suppresses the compatibility mousedown entirely, so a
+//     mousedown listener never hears the gesture that moves the window.
+//     Resize handles do the same.
+//   - window chrome stops pointerdown from propagating (so the titlebar's
+//     drag doesn't start under its own buttons), which a bubbling-phase
+//     listener would also miss. Capture runs before any of it.
+//
+// A menu is anchored to viewport coordinates, so anything that moves what
+// it is anchored to has to close it; catching the gesture at its earliest
+// point is what makes that reliable.
 export interface MenuProps {
   x?: number;
   y?: number;
@@ -34,13 +50,13 @@ export interface MenuProps {
 export const Menu: ParentComponent<MenuProps> = (props) => {
   let menuEl!: HTMLDivElement;
   onMount(() => {
-    const onDocDown = (ev: MouseEvent) => {
+    const onDocDown = (ev: Event) => {
       if (!menuEl || !menuEl.contains(ev.target as Node)) {
         props.onDismiss();
       }
     };
-    setTimeout(() => document.addEventListener('mousedown', onDocDown), 0);
-    onCleanup(() => document.removeEventListener('mousedown', onDocDown));
+    setTimeout(() => document.addEventListener('pointerdown', onDocDown, true), 0);
+    onCleanup(() => document.removeEventListener('pointerdown', onDocDown, true));
   });
   // Cursor-positioned menus clamp into the viewport: a right-click near
   // the bottom/right edge would otherwise push items off-screen where

@@ -493,3 +493,21 @@ buffering, and byte-count completion. Product side gained
 
 **Result:** `-race -count=20` green. B2 is closed rather than logged as a
 recurrence — this one had a mechanism, not a load window.
+
+## 2026-08-21 — `agent-roster-pane` "a roster verb acts on the row": load-only
+
+Seen twice during the AGENT_UX phase-Now work, both times only in the FULL
+`make e2e-test` run (6 workers, 500+ tests) and never on its own.
+
+**Isolation:** passes 3/3 alone, 5/5 running its own spec file serially,
+and 5/5 with `--workers=4`. The two full-suite failures straddle unrelated
+changes (before the sessions-pane rework and after the Menu
+pointerdown fix), so nothing in the branch lines up with it.
+
+**Not root-caused.** The test drives two Agent windows, a portalled row
+menu and a cross-window verb, so the plausible mechanisms are the usual
+load-window ones — a roster push arriving between the menu opening and the
+click, or the second window's bundle landing late. Logged rather than
+chased: it has cost two full-suite reds and no user-visible symptom, and
+the honest next step is a run with `--repeat-each` under load rather than
+a guess.

@@ -204,3 +204,29 @@ test.describe('file manager', () => {
     await expect(page.locator('[data-testid="fm-path"]')).toHaveValue(root);
   });
 });
+
+// A menu is anchored to viewport coordinates, so anything that moves the
+// window under it has to close it — otherwise it hangs in mid-air over
+// whatever is now there. The shell's titlebar drag calls preventDefault()
+// on pointerdown, which suppresses the compatibility mousedown, so a menu
+// watching for mousedown never heard the gesture at all.
+test('dragging a window closes an open menu', async ({ page, router }) => {
+  test.setTimeout(20_000);
+  await page.goto(router.url);
+  await page.locator('button[title="Apps"]').click();
+  await page.getByRole('button', { name: /Files/ }).click();
+  await expect(page.locator('wash-app-fm')).toBeVisible();
+
+  await page.locator('[data-testid="fm-sort"]').click();
+  const menu = page.locator('[data-testid="fm-sort-menu"]');
+  await expect(menu).toBeVisible();
+
+  const titlebar = page.locator('.wash-window').first().locator('.wash-titlebar');
+  const bar = (await titlebar.boundingBox())!;
+  await page.mouse.move(bar.x + 80, bar.y + 6);
+  await page.mouse.down();
+  await page.mouse.move(bar.x + 180, bar.y + 60, { steps: 4 });
+  await page.mouse.up();
+
+  await expect(menu).toHaveCount(0);
+});
