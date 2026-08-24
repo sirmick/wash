@@ -255,6 +255,14 @@ func Run(args []string) int {
 	if cs == "none" {
 		cs = ""
 	}
+	// Settle the path BEFORE anything spawns. The default is per-UID and
+	// a user routinely has several routers alive at once (a session that
+	// outlived its browser, a dev router, an e2e run); taking a name
+	// somebody is still answering on would send THEIR apps to US. Every
+	// app we start is told this path, and background apps come up during
+	// bring-up, so deciding any later leaves a window where an app is
+	// handed a path we are about to abandon.
+	cs = router.ResolveControlSocket(cs, log.New(os.Stderr, "wash-router ", log.LstdFlags).Printf)
 
 	sd := firstNonEmpty(*screenshotDir, os.Getenv("WASH_SCREENSHOT_DIR"), "/tmp/wash-screenshots")
 	if sd == "none" {

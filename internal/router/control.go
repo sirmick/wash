@@ -40,10 +40,51 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/sirmick/wash/pkg/wire"
 )
+
+// ResolveControlSocket settles WHICH control-socket path this router will
+// own, before anything is spawned.
+//
+// It must happen this early because the path is handed to every app the
+// router starts (WASH_DISPLAY), and background apps come up during
+// bring-up — deciding inside ListenControl left a window where an app
+// could be told the path we were about to step away from, and it would
+// then attach to the OTHER router.
+//
+// Returns path unchanged when it is free or merely stale; returns a
+// per-pid sibling when a live router is already answering there.
+func ResolveControlSocket(path string, log Logger) string {
+	if path == "" || !peerAlive(path) {
+		return path
+	}
+	alt := strings.TrimSuffix(path, ".sock") + "." + strconv.Itoa(os.Getpid()) + ".sock"
+	if log != nil {
+		log("control socket %s is owned by a live router — using %s instead", path, alt)
+	}
+	return alt
+}
+
+// peerAlive reports whether something is still accepting on this unix
+// socket path — i.e. whether taking the name would steal it from a live
+// owner. A refused connection (or no file at all) means the path is
+// stale and safe to rebind.
+//
+// The dial is immediately closed: the control protocol tolerates a
+// connection that says nothing, and this asks a question about the
+// listener, not about the protocol.
+func peerAlive(path string) bool {
+	c, err := net.DialTimeout("unix", path, 250*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
+}
 
 // defaultMsgAwaitTimeout is the wait cap when a `msg` request set
 // await_id without an explicit timeout_ms. Keep it tight so a
@@ -57,7 +98,30 @@ func (r *Router) ListenControl(ctx context.Context) error {
 	if path == "" {
 		return nil
 	}
-	// Best-effort: remove any stale socket from a previous run.
+	// Never steal a socket somebody is still answering on.
+	//
+	// The default path is per-UID (/tmp/wash-<uid>.sock), and since
+	// LIFETIME a user routinely has several routers alive at once — an
+	// old session outliving its browser, a dev router, an e2e run. The
+	// unlink-then-bind below used to make the newest router the owner,
+	// and every app the OTHER routers spawned then dialled it, failed the
+	// registered-binary check, and timed out with "binary does not match
+	// registered app_id". Observed on a real desktop, where it broke app
+	// launching for a session that had done nothing wrong.
+	//
+	// A socket that ACCEPTS a connection has a live owner, so we step
+	// aside onto a per-pid path instead. Everything the router spawns
+	// learns the path from WASH_DISPLAY, so its apps are unaffected; what
+	// is lost is a bare `wash launch` from an unrelated shell finding
+	// THIS router by the well-known name — which is the right thing to
+	// lose, because that name belongs to whoever got there first.
+	// Normally a no-op: the runner resolved this before bring-up, so the
+	// path is already ours. Kept because ListenControl is callable on its
+	// own (tests, embedders), and stepping aside is always safer than
+	// stealing.
+	path = ResolveControlSocket(path, r.log)
+	// Best-effort: remove any stale socket from a previous run. Stale by
+	// now means "nothing answered on it", checked immediately above.
 	_ = os.Remove(path)
 	lis, err := net.Listen("unix", path)
 	if err != nil {
@@ -68,12 +132,29 @@ func (r *Router) ListenControl(ctx context.Context) error {
 		_ = os.Remove(path)
 		return fmt.Errorf("chmod control: %w", err)
 	}
+	// Deliberately NOT written back to r.cfg: spawns read that field from
+	// other goroutines, so mutating it here would be a data race for the
+	// benefit of a case the runner has already handled — it resolves the
+	// path before the Router is built, precisely so this value is settled
+	// before anything can be spawned. A direct caller that lands on the
+	// fallback gets it in the log line below.
+	//
+	// Remember WHICH FILE it is. On shutdown we unlink only if the
+	// path still names this socket: unlinking by name alone is how a
+	// router that exits deletes a NEWER router's socket, leaving that one
+	// listening on an inode nothing can reach.
+	mine, statErr := os.Stat(path)
 
 	r.log("control socket listening on %s", path)
 	go func() {
 		<-ctx.Done()
 		_ = lis.Close()
-		_ = os.Remove(path)
+		if statErr != nil {
+			return
+		}
+		if now, err := os.Stat(path); err == nil && os.SameFile(mine, now) {
+			_ = os.Remove(path)
+		}
 	}()
 
 	for {
